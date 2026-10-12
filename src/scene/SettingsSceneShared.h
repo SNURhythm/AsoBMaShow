@@ -40,6 +40,7 @@ struct SafeAreaInsets {
 struct LayoutMetrics {
   SafeAreaInsets safe;
   bool compact = false;
+  bool flatSections = false;
   bool ultraCompact = false;
   bool stackBody = false;
   bool useDualCardRow = true;
@@ -480,11 +481,21 @@ inline View *makeCard(const LayoutMetrics &metrics, const i18n::Text &title,
   card->setFlexDirection(FlexDirection::Column);
   card->setGap(metrics.cardGap);
   card->setPadding(Edge::All, static_cast<float>(metrics.cardPadding));
-  card->setThemedBackgroundColor(app_theme::panel);
-  card->setCornerRadius(app_theme::panelRadius());
-  card->setThemedBorderColor(app_theme::hairline);
-  card->setBorderWidth(1);
-  card->setMinHeight(static_cast<float>(minHeight));
+  if (metrics.flatSections) {
+    card->setName("settingsSection");
+    auto *rule = new View();
+    rule->setPositionType(YGPositionTypeAbsolute);
+    rule->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
+    rule->setWidthPercent(100)->setHeight(1);
+    rule->setThemedBackgroundColor(app_theme::hairline);
+    card->addView(rule);
+  } else {
+    card->setThemedBackgroundColor(app_theme::panel);
+    card->setCornerRadius(app_theme::panelRadius());
+    card->setThemedBorderColor(app_theme::hairline);
+    card->setBorderWidth(1);
+    card->setMinHeight(static_cast<float>(minHeight));
+  }
   if (width > 0) {
     card->setWidth(static_cast<float>(width));
   }

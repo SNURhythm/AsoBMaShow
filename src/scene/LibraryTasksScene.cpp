@@ -46,13 +46,15 @@ void LibraryTasksScene::buildView() {
       new View(0, 0, rendering::window_width, rendering::window_height);
   rootLayout_->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
-      ->setGap(12)
-      ->setPadding(Edge::All, 24)
+      ->setGap(0)
+      ->setPadding(Edge::All, 0)
       ->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
   addView(rootLayout_);
 
   auto *header = new View();
-  header->setHeight(64)
+  header->setHeight(80)
+      ->setPadding(Edge::Left, 24)
+      ->setPadding(Edge::Right, 24)
       ->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignCenter)
       ->setGap(14);
@@ -62,11 +64,14 @@ void LibraryTasksScene::buildView() {
                                   app_theme::controlPressed);
   back->setContentView(makeText(i18n::tr("library.tasks.back.label"), 20, app_theme::textPrimary));
   back->setOnClickListener([this] { goBack(); });
-  header->addView(back);
   auto *title = makeText(i18n::tr("library.tasks.library_tasks.label"), 34, app_theme::textPrimary);
   title->setFlex(1)->setHeight(52);
   header->addView(title);
+  header->addView(back);
   rootLayout_->addView(header);
+  auto *headerRule = new View();
+  headerRule->setHeight(1)->setFlexShrink(0)->setThemedBackgroundColor(app_theme::hairline);
+  rootLayout_->addView(headerRule);
 
   taskScroll_ = new ScrollView();
   taskScroll_->setFlex(1)->setMinHeight(0);
@@ -74,7 +79,9 @@ void LibraryTasksScene::buildView() {
   taskList_
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
-      ->setGap(12);
+      ->setGap(0)
+      ->setPadding(Edge::Left, 24)
+      ->setPadding(Edge::Right, 24);
   taskScroll_->setContentView(taskList_);
   rootLayout_->addView(taskScroll_);
   refreshTasks();
@@ -107,22 +114,21 @@ void LibraryTasksScene::refreshTasks() {
       }
       if (!task.detail.empty()) detail << " · " << task.detail.resolve();
       auto *row = new View();
-      row->setMinHeight(74)
+      row->setMinHeight(100)
           ->setFlexDirection(FlexDirection::Column)
-          ->setGap(2)
-          ->setPadding(Edge::All, 12)
-          ->setThemedBackgroundColor(app_theme::panel)
-          ->setThemedBorderColor(app_theme::hairline)
-          ->setBorderWidth(1)
-          ->setCornerRadius(app_theme::panelRadius());
-      auto *taskTitle = makeText(task.title.resolve(), 21, app_theme::textPrimary);
-      taskTitle->setHeight(30);
+          ->setGap(4)
+          ->setPadding(Edge::Top, 18)
+          ->setPadding(Edge::Bottom, 18);
+      auto *taskTitle = makeText(task.title.resolve(), 28, app_theme::textPrimary);
+      taskTitle->setMinHeight(36);
       row->addView(taskTitle);
-      auto *taskDetail =
-          makeText(detail.str(), 17, app_theme::textSecondary);
-      taskDetail->setHeight(26);
+      auto *taskDetail = makeText(detail.str(), 20, app_theme::textSecondary);
+      taskDetail->setMinHeight(28);
       row->addView(taskDetail);
       taskList_->addView(row);
+      auto *rule = new View();
+      rule->setHeight(1)->setFlexShrink(0)->setThemedBackgroundColor(app_theme::hairline);
+      taskList_->addView(rule);
     }
   }
   if (rootLayout_ != nullptr) rootLayout_->applyYogaLayout();

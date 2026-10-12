@@ -878,7 +878,11 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
       applySemanticButtonStyle(button, text, SettingsButtonTone::Primary);
     } else {
       applySemanticButtonStyle(button, text, SettingsButtonTone::Neutral);
+      button->setThemedBackgroundColors(
+          [] { return Color(0, 0, 0, 0); }, app_theme::controlHover,
+          app_theme::controlPressed);
     }
+    button->setStyledBorderWidth(0);
   };
   applyTabStyle(profileTabButton, profileTabText, SettingsTab::Profile);
   applyTabStyle(timingTabButton, timingTabText, SettingsTab::Timing);

@@ -129,12 +129,19 @@ struct SettingsScene : Scene {
 struct IntroScene {
   MainMenuScene::Context &context;
   View *rootLayout_ = nullptr, *startButton_ = nullptr;
+  View *content_ = nullptr, *menu_ = nullptr, *title_ = nullptr;
   View *settingsButton_ = nullptr, *tutorialButton_ = nullptr;
   int layoutWidth_ = -1, layoutHeight_ = -1;
   bool pendingStart_ = false;
   int navigations = 0;
   void processNavigationInput() { ++navigations; }
   void stopInputListening() {}
+  void layoutView() {
+    layoutWidth_ = rendering::window_width;
+    layoutHeight_ = rendering::window_height;
+    rootLayout_->setSize(layoutWidth_, layoutHeight_);
+    rootLayout_->applyYogaLayout();
+  }
   void start() INTRO_START_BODY
   void update(float) INTRO_UPDATE_BODY
   void openSettings() INTRO_SETTINGS_BODY

@@ -10,6 +10,7 @@
 
 class Button;
 class View;
+class TextView;
 
 class IntroScene final : public Scene {
 public:
@@ -31,12 +32,16 @@ private:
   void startTutorial();
   void openSettings();
   void buildView();
+  void layoutView();
   void startInputListening();
   void stopInputListening();
   void syncNavigationSelection();
   void processNavigationInput();
 
   View *rootLayout_ = nullptr;
+  View *content_ = nullptr;
+  View *menu_ = nullptr;
+  TextView *title_ = nullptr;
   Button *startButton_ = nullptr;
   Button *settingsButton_ = nullptr;
   Button *tutorialButton_ = nullptr;

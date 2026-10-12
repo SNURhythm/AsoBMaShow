@@ -2018,7 +2018,7 @@ void ResultScene::addRetryButtons() {
                            bool replay, Color normal, Color hover,
                            Color pressed, Color border) {
     auto button = new Button();
-    auto text = new TextView(app_theme::font, 24);
+    auto text = new TextView(app_theme::boldFont, 24);
     text->setText(label);
     text->setAlign(TextView::CENTER);
     text->setVAlign(TextView::MIDDLE);
@@ -4242,14 +4242,13 @@ void ResultScene::buildResultView() {
     auto *gaugeLabel = new TextView(app_theme::font, 15);
     gaugeLabel->setAlign(TextView::CENTER);
     gaugeLabel->setVAlign(TextView::MIDDLE);
-    gaugeLabel->setPositionType(YGPositionTypeAbsolute);
-    gaugeLabel->setPosition(Edge::Left, 12);
-    gaugeLabel->setPosition(Edge::Top, 12);
+    gaugeLabel->setAlignSelf(YGAlignFlexStart);
+    gaugeLabel->setFlexShrink(0);
     gaugeLabel->setWidth(142);
     gaugeLabel->setHeight(30);
     gaugeLabel->setCornerRadius(app_theme::controlRadius());
     gaugeLabel->setZIndex(2);
-    graphPlaceHolder->addView(gaugeLabel);
+    graphPlaceHolder->insertViewBefore(gaugeLabel, graphView);
 
     const auto updateGaugeLabel = [graphView, gaugeLabel]() {
       const auto &graph = graphView->graph();

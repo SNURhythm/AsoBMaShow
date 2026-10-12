@@ -66,20 +66,28 @@ void ChartRecordsScene::buildView() {
       ->setGap(14);
   auto *back = makeButton(i18n::tr("records.back.label"));
   back->setOnClickListener([this] { goBack(); });
-  header->addView(back);
+
   auto *title = makeText(i18n::tr("records.records.label"), 34, app_theme::textPrimary);
   title->setWidth(160)->setHeight(52)->setFlexShrink(0);
   header->addView(title);
-  auto *chartTitle = makeText(record_.meta.Title, 20, app_theme::textSecondary);
-  chartTitle->setFlex(1)->setHeight(52)->setMinWidth(0);
-  header->addView(chartTitle);
+  auto *headerSpace = new View();
+  headerSpace->setFlex(1);
+  header->addView(headerSpace);
+  header->addView(back);
   rootLayout_->addView(header);
+  auto *chartTitle = makeText(record_.meta.Title, 48, app_theme::textPrimary);
+  chartTitle->setHeight(64)->setMinWidth(0);
+  chartTitle->setOverflow(TextView::TextOverflow::Marquee);
+  rootLayout_->addView(chartTitle);
+  auto *rule = new View();
+  rule->setHeight(1)->setThemedBackgroundColor(app_theme::hairlineStrong);
+  rootLayout_->addView(rule);
 
   recordsView_ = new ResultRecordListView();
   recordsView_->setFlex(1)->setMinHeight(0);
   recordsView_->clearBackgroundColor();
   recordsView_->setThemedBorderColor(app_theme::hairline);
-  recordsView_->setBorderWidth(1);
+  recordsView_->setBorderWidth(0);
   rootLayout_->addView(recordsView_);
 
   emptyText_ = makeText(i18n::tr("records.no_records.message"), 20, app_theme::textSecondary);

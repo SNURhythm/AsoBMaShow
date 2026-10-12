@@ -408,10 +408,8 @@ void PracticeAnalyticsView::build() {
   setAlignItems(YGAlignStretch);
   setGap(6);
   setPadding(Edge::All, 10);
-  setBackgroundColor(app_theme::resultPanel());
-  setCornerRadius(app_theme::panelRadius());
-  setBorderColor(app_theme::hairlineSubtle());
-  setBorderWidth(1);
+  clearBackgroundColor();
+  setBorderWidth(0);
 
   modeControlsRow = new View();
   modeControlsRow->setHeight(44);
@@ -457,11 +455,10 @@ void PracticeAnalyticsView::build() {
   nextChoiceButton = makeButton(">", 48);
   nextChoiceButton->setOnClickListener([this]() { moveSelection(1); });
   choiceRow->addView(nextChoiceButton);
-  addView(choiceRow);
 
   summaryText = makeText("", 15, app_theme::textPrimary());
   summaryText->setHeight(26);
-  summaryText->setAlign(TextView::CENTER);
+  summaryText->setAlign(TextView::LEFT);
   addView(summaryText);
 
   chartView = new AnalyticsChartView(
@@ -475,13 +472,14 @@ void PracticeAnalyticsView::build() {
   chartView->setWidthPercent(100.0f);
   chartView->setCornerRadius(app_theme::controlRadius());
   chartView->setBorderColor(app_theme::hairlineSubtle());
-  chartView->setBorderWidth(1);
+  chartView->setBorderWidth(0);
   addView(chartView);
 
   detailText = makeText("", 13, app_theme::textSecondary());
   detailText->setHeight(24);
-  detailText->setAlign(TextView::CENTER);
+  detailText->setAlign(TextView::LEFT);
   addView(detailText);
+  addView(choiceRow);
 }
 
 void PracticeAnalyticsView::setAttemptSelection(

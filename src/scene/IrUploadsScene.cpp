@@ -9,6 +9,7 @@
 #include "../view/IrUploadCandidateListView.h"
 #include "../view/TextView.h"
 #include "../view/AppTheme.h"
+#include "../view/MainMenuTheme.h"
 #include "SceneManager.h"
 #include "SettingsScene.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -155,13 +156,18 @@ void IrUploadsScene::updateLayoutInsets() {
   if (embeddedTab) safe.top = 0;
   rootLayout->setSize(rendering::window_width, rendering::window_height);
   rootLayout->setPadding(Edge::Top, embeddedTab ? tabTopInset : 0);
+  headerLayout->setDisplay(embeddedTab ? YGDisplayNone : YGDisplayFlex);
   headerLayout->setHeight(safe.top + kHeaderHeight)
       ->setPadding(Edge::Top, safe.top + 10)
       ->setPadding(Edge::Left, safe.left + kScreenPadding)
       ->setPadding(Edge::Right, safe.right + kScreenPadding);
-  contentLayout->setPadding(Edge::Bottom, safe.bottom + 16)
-      ->setPadding(Edge::Left, safe.left + kScreenPadding)
-      ->setPadding(Edge::Right, safe.right + kScreenPadding);
+  contentLayout->setPadding(Edge::Bottom, safe.bottom)
+      ->setPadding(Edge::Left, safe.left)
+      ->setPadding(Edge::Right, safe.right);
+  const float width = rendering::window_width - safe.left - safe.right;
+  if (auto *rail = rootLayout->findViewByName("irProviderRail")) {
+    rail->setWidth(width < 1100 ? width * 0.28F : 350);
+  }
   rootLayout->applyYogaLayout();
 }
 
@@ -253,6 +259,7 @@ void IrUploadsScene::buildView() {
   auto *header = new View();
   headerLayout = header;
   header->setFlexShrink(0);
+  header->setDisplay(embeddedTab ? YGDisplayNone : YGDisplayFlex);
   header->setHeight(safe.top + kHeaderHeight)
       ->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignCenter)
@@ -283,7 +290,7 @@ void IrUploadsScene::buildView() {
   candidateCountText->setHeight(32);
   candidateCountText->setAlign(TextView::RIGHT);
   candidateCountText->setVAlign(TextView::MIDDLE);
-  header->addView(candidateCountText);
+  if (!embeddedTab) header->addView(candidateCountText);
 
   refreshButton = makeButton(i18n::message("ir.upload.refresh.label"), 20);
   refreshButton->setWidth(132);
@@ -292,49 +299,66 @@ void IrUploadsScene::buildView() {
       reloadCandidates();
     }
   });
-  header->addView(refreshButton);
+  if (!embeddedTab) header->addView(refreshButton);
   rootLayout->addView(header);
 
   auto *content = new View();
   contentLayout = content;
   content->setFlex(1)
-      ->setFlexDirection(FlexDirection::Column)
+      ->setMinHeight(0)
+      ->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignStretch)
-      ->setGap(12)
-      ->setPadding(Edge::Top, 16)
-      ->setPadding(Edge::Bottom, safe.bottom + 16)
-      ->setPadding(Edge::Left, safe.left + kScreenPadding)
-      ->setPadding(Edge::Right, safe.right + kScreenPadding);
+      ->setPadding(Edge::Bottom, safe.bottom)
+      ->setPadding(Edge::Left, safe.left)
+      ->setPadding(Edge::Right, safe.right);
 
   auto *providerCard = new View();
-  providerCard->setHeight(94)
+  providerCard->setName("irProviderRail");
+  providerCard->setWidth(350)
       ->setFlexShrink(0)
-      ->setFlexDirection(FlexDirection::Row)
-      ->setAlignItems(YGAlignCenter)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)
       ->setGap(16)
-      ->setPadding(Edge::All, 16)
-      ->setThemedBackgroundColor(app_theme::panel)
-      ->setThemedBorderColor(app_theme::hairline)
-      ->setBorderWidth(1)
-      ->setCornerRadius(app_theme::panelRadius());
+      ->setPadding(Edge::All, 24);
+  auto *railRule = new View();
+  railRule->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Right, 0)->setPosition(Edge::Top, 0)
+      ->setPosition(Edge::Bottom, 0)->setWidth(1)
+      ->setThemedBackgroundColor(main_menu_theme::rule);
+  providerCard->addView(railRule);
   auto *providerColumn = new View();
-  providerColumn->setFlex(1)
-      ->setMinWidth(0)
+  providerColumn->setMinWidth(0)
       ->setFlexDirection(FlexDirection::Column)
       ->setGap(4);
-  auto *providerTitle = makeText("Bokutachi", 24, app_theme::textPrimary);
-  providerTitle->setHeight(32);
+  auto *providerTitle = makeText("Bokutachi", 32, app_theme::textPrimary);
+  providerTitle->setHeight(46);
   providerColumn->addView(providerTitle);
   providerStatusText =
       makeText(i18n::message("ir.upload.checking_configuration.progress"), 17, app_theme::textSecondary);
-  providerStatusText->setHeight(26);
+  providerStatusText->setMinHeight(100);
+  providerStatusText->setWrap(true);
   providerColumn->addView(providerStatusText);
   providerCard->addView(providerColumn);
   openIrSettingsButton = makeButton(i18n::message("ir.upload.open_ir_settings.label"), 18);
-  openIrSettingsButton->setWidth(204);
+  openIrSettingsButton->setWidthPercent(100);
   openIrSettingsButton->setOnClickListener([this]() { openIrSettings(); });
   providerCard->addView(openIrSettingsButton);
   content->addView(providerCard);
+
+  auto *workspace = new View();
+  workspace->setFlex(1)->setMinWidth(0)->setMinHeight(0)
+      ->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignStretch)->setGap(12)
+      ->setPadding(Edge::All, 24);
+  auto *workspaceTitle = makeText(
+      i18n::message("ir.upload.ir_uploads.label"), 32, main_menu_theme::ink);
+  workspaceTitle->setHeight(44)->setFlexShrink(0);
+  workspace->addView(workspaceTitle);
+  auto *workspaceRule = new View();
+  workspaceRule->setHeight(1)->setFlexShrink(0)
+      ->setThemedBackgroundColor(main_menu_theme::rule);
+  workspace->addView(workspaceRule);
+  content->addView(workspace);
 
   auto *selectionToolbar = new View();
   selectionToolbar->setHeight(58)
@@ -359,19 +383,23 @@ void IrUploadsScene::buildView() {
   selectionCountText = makeText(i18n::message("ir.upload.selection_count.empty"), 18, app_theme::textSecondary);
   selectionCountText->setHeight(32);
   selectionCountText->setVAlign(TextView::MIDDLE);
+  selectionCountText->setFlex(1)->setMinWidth(0);
   selectionToolbar->addView(selectionCountText);
-  content->addView(selectionToolbar);
+  if (embeddedTab) {
+    candidateCountText->setAlign(TextView::LEFT);
+    candidateCountText->setWidthPercent(100);
+    providerCard->addView(candidateCountText);
+    refreshButton->setWidthPercent(100);
+    providerCard->addView(refreshButton);
+  }
+  workspace->addView(selectionToolbar);
 
   auto *listPanel = new View();
   listPanel->setFlex(1)
       ->setMinHeight(0)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
-      ->setPadding(Edge::All, 10)
-      ->setThemedBackgroundColor(app_theme::mainMenuPanel)
-      ->setThemedBorderColor(app_theme::hairline)
-      ->setBorderWidth(1)
-      ->setCornerRadius(app_theme::panelRadius());
+      ->setThemedBackgroundColor(main_menu_theme::surface);
   candidateList = new IrUploadCandidateListView();
   candidateList->setFlex(1);
   candidateList->clearBackgroundColor();
@@ -393,16 +421,16 @@ void IrUploadsScene::buildView() {
   stateText->setAlign(TextView::CENTER);
   stateText->setVAlign(TextView::MIDDLE);
   listPanel->addView(stateText);
-  content->addView(listPanel);
+  workspace->addView(listPanel);
 
   auto *footer = new View();
-  footer->setHeight(70)
+  footer->setHeight(88)
       ->setFlexShrink(0)
       ->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignCenter)
       ->setGap(14)
-      ->setPadding(Edge::Top, 8)
-      ->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
+      ->setPadding(Edge::Left, 16)
+      ->setThemedBackgroundColor(main_menu_theme::surface);
   progressText = makeText("", 18, app_theme::textSecondary);
   progressText->setFlex(1);
   progressText->setHeight(48);
@@ -410,13 +438,18 @@ void IrUploadsScene::buildView() {
   progressText->setVAlign(TextView::MIDDLE);
   footer->addView(progressText);
   uploadButton = makeButton(i18n::message("ir.upload.upload_0_scores.label"), 20, &uploadButtonText);
-  uploadButton->setWidth(238);
+  uploadButton->setWidth(280)->setHeight(88);
+  uploadButton->setThemedBackgroundColors(main_menu_theme::action,
+                                          main_menu_theme::actionHover,
+                                          main_menu_theme::actionPressed);
+  uploadButton->setStyledBorderWidth(0);
+  uploadButtonText->setThemedColor(main_menu_theme::onAction);
   uploadButton->setOnClickListener([this]() { startUpload(); });
   footer->addView(uploadButton);
-  content->addView(footer);
+  workspace->addView(footer);
 
   rootLayout->addView(content);
-  rootLayout->applyYogaLayout();
+  updateLayoutInsets();
 }
 
 std::string IrUploadsScene::serverOrigin() const {

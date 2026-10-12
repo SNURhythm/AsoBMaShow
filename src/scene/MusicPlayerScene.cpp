@@ -14,9 +14,11 @@
 #include "../view/ImageView.h"
 #include "../view/OverlayPortal.h"
 #include "../view/SnappedSlider.h"
+#include "../view/ScrollView.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #include "../view/AppTheme.h"
+#include "../view/MainMenuTheme.h"
 #include "SceneManager.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../iOSNatives.hpp"
@@ -40,8 +42,8 @@ namespace {
 constexpr const char *kFontPath = app_theme::font;
 constexpr float kScreenPadding = 18.0f;
 constexpr float kHeaderHeight = 82.0f;
-constexpr float kRailWidth = 180.0f;
-constexpr int kTrackRowHeight = 82;
+constexpr float kRailWidth = 350.0f;
+constexpr int kTrackRowHeight = 68;
 constexpr int kPlaylistRowHeight = 58;
 constexpr int kNowPlayingPlaylistId = -1;
 constexpr long long kRelativeSeekEndGuardMicros = 250000LL;
@@ -390,17 +392,24 @@ class MusicTrackRowView : public View {
 public:
   MusicTrackRowView() {
     setHeight(kTrackRowHeight)
-        ->setPadding(Edge::All, 12)
+        ->setPadding(Edge::All, 8)
         ->setFlexDirection(FlexDirection::Row)
         ->setAlignItems(YGAlignCenter)
         ->setJustifyContent(YGJustifyCenter)
         ->setGap(12)
         ->setCornerRadius(app_theme::controlRadius())
-        ->setBorderWidth(1);
+        ->setBorderWidth(0);
+
+    auto *rule = new View();
+    rule->setPositionType(YGPositionTypeAbsolute)
+        ->setPosition(Edge::Left, 0)->setPosition(Edge::Right, 0)
+        ->setPosition(Edge::Bottom, 0)->setHeight(1)
+        ->setThemedBackgroundColor(main_menu_theme::rule);
+    addView(rule);
 
     auto *artworkFrame = new View();
-    artworkFrame->setWidth(58)
-        ->setHeight(58)
+    artworkFrame->setWidth(48)
+        ->setHeight(48)
         ->setFlexShrink(0)
         ->setFlexDirection(FlexDirection::Column)
         ->setAlignItems(YGAlignStretch)
@@ -419,8 +428,8 @@ public:
     artworkFrame->addView(artworkFallback);
 
     artwork = new ImageView(0, 0, 0, 0);
-    artwork->setWidth(58)
-        ->setHeight(58)
+    artwork->setWidth(48)
+        ->setHeight(48)
         ->setPositionType(YGPositionTypeAbsolute)
         ->setPosition(Edge::Left, 0)
         ->setPosition(Edge::Top, 0)
@@ -436,7 +445,7 @@ public:
         ->setJustifyContent(YGJustifyCenter)
         ->setGap(4);
 
-    title = new TextView(kFontPath, 19);
+    title = new TextView(app_theme::boldFont, 19);
     title->setHeight(26);
     title->setThemedColor(app_theme::textPrimary);
     title->setOverflow(TextView::TextOverflow::Hidden);
@@ -474,6 +483,7 @@ public:
                 bool favorite, std::function<void()> onFavoriteToggle) {
     title->setText(trackTitle(track));
     detail->setText(trackDetail(track));
+    isFavorite_ = favorite;
     favoriteText->setText(favorite ? "★" : "☆");
     favoriteText->setThemedColor(favorite ? app_theme::amber
                                           : app_theme::textSecondary);
@@ -494,16 +504,25 @@ public:
   }
 
   void onSelected() override {
-    setThemedBackgroundColor(app_theme::mainMenuItemSelected);
-    setThemedBorderColor(app_theme::accentBorderStrong);
+    setThemedBackgroundColor(main_menu_theme::selected);
+    title->setThemedColor(main_menu_theme::onSelected);
+    detail->setThemedColor(main_menu_theme::selectedSecondary);
+    favoriteText->setThemedColor(isFavorite_ ? main_menu_theme::selectedAccent
+                                           : main_menu_theme::onSelected);
+    artworkFallback->setThemedColor(main_menu_theme::selectedSecondary);
   }
 
   void onUnselected() override {
-    setThemedBackgroundColor(app_theme::mainMenuItem);
-    setThemedBorderColor(app_theme::hairlineSubtle);
+    setThemedBackgroundColor(main_menu_theme::control);
+    title->setThemedColor(main_menu_theme::ink);
+    detail->setThemedColor(main_menu_theme::secondary);
+    favoriteText->setThemedColor(isFavorite_ ? app_theme::amber
+                                           : main_menu_theme::secondary);
+    artworkFallback->setThemedColor(main_menu_theme::muted);
   }
 
 private:
+  bool isFavorite_ = false;
   ImageView *artwork = nullptr;
   TextView *artworkFallback = nullptr;
   TextView *title = nullptr;
@@ -594,13 +613,15 @@ public:
   }
 
   void onSelected() override {
-    setThemedBackgroundColor(app_theme::mainMenuItemSelected);
-    setThemedBorderColor(app_theme::accentBorderStrong);
+    setThemedBackgroundColor(main_menu_theme::selected);
+    title->setThemedColor(main_menu_theme::onSelected);
+    detail->setThemedColor(main_menu_theme::selectedSecondary);
   }
 
   void onUnselected() override {
-    setThemedBackgroundColor(app_theme::mainMenuItem);
-    setThemedBorderColor(app_theme::hairlineSubtle);
+    setThemedBackgroundColor(main_menu_theme::control);
+    title->setThemedColor(main_menu_theme::ink);
+    detail->setThemedColor(main_menu_theme::secondary);
   }
 
 private:
@@ -680,13 +701,67 @@ void MusicPlayerScene::updateLayoutInsets() {
   if (embeddedTab) safe.top = 0;
   rootLayout->setSize(rendering::window_width, rendering::window_height);
   rootLayout->setPadding(Edge::Top, embeddedTab ? tabTopInset : 0);
+  headerLayout->setDisplay(embeddedTab ? YGDisplayNone : YGDisplayFlex);
   headerLayout->setHeight(safe.top + kHeaderHeight)
       ->setPadding(Edge::Top, safe.top + 10)
       ->setPadding(Edge::Left, safe.left + kScreenPadding)
       ->setPadding(Edge::Right, safe.right + kScreenPadding);
-  contentLayout->setPadding(Edge::Bottom, safe.bottom + 16)
-      ->setPadding(Edge::Left, safe.left + kScreenPadding)
-      ->setPadding(Edge::Right, safe.right + kScreenPadding);
+  contentLayout->setPadding(Edge::Bottom, safe.bottom)
+      ->setPadding(Edge::Left, safe.left)
+      ->setPadding(Edge::Right, safe.right);
+  const float width = rendering::window_width - safe.left - safe.right;
+  const bool compactNavigation = width < 900;
+  contentLayout->setFlexDirection(compactNavigation ? FlexDirection::Column
+                                                    : FlexDirection::Row);
+  if (auto *rail = rootLayout->findViewByName("musicNavigationRail")) {
+    rail->setWidth(compactNavigation ? width
+                                    : (width < 1100 ? width * 0.24F : kRailWidth));
+    rail->setHeight(compactNavigation ? 76 : YGUndefined);
+    rail->setFlexDirection(compactNavigation ? FlexDirection::Row
+                                             : FlexDirection::Column);
+    rail->setPadding(Edge::All, compactNavigation ? 8 : 24);
+    for (auto *button : {libraryNavButton, favoritesNavButton,
+                         playlistsNavButton, playerNavButton}) {
+      button->setFlex(compactNavigation ? 1 : 0);
+      button->setMinWidth(0);
+    }
+  }
+  if (auto *spacer = rootLayout->findViewByName("musicNavigationSpacer")) {
+    spacer->setDisplay(compactNavigation ? YGDisplayNone : YGDisplayFlex);
+  }
+  if (embeddedTab && statusText != nullptr) {
+    statusText->setDisplay(compactNavigation ? YGDisplayNone : YGDisplayFlex);
+  }
+  for (const auto *name : {"musicLibraryDetail", "musicFavoritesDetail"}) {
+    if (auto *detail = rootLayout->findViewByName(name)) {
+      detail->setWidth(width < 1100 ? 250 : 320);
+    }
+  }
+  const float availableHeight = rendering::window_height - safe.bottom -
+      (embeddedTab ? tabTopInset : safe.top + kHeaderHeight) -
+      (compactNavigation ? 76 : 0) - 150;
+  for (const auto *name : {"musicPlayerViewport", "musicPlaylistsViewport"}) {
+    auto *viewport = dynamic_cast<ScrollView *>(rootLayout->findViewByName(name));
+    if (viewport == nullptr) continue;
+    auto *workspace = viewport->getContentView();
+    const bool player = std::string_view(name) == "musicPlayerViewport";
+    const bool stacked = width < (player ? 1250 : 1000);
+    workspace->setFlexDirection(stacked ? FlexDirection::Column
+                                        : FlexDirection::Row);
+    workspace->setHeight(std::max(availableHeight,
+                                  stacked ? (player ? 1420.0F : 1100.0F)
+                                          : (player ? 780.0F : 600.0F)));
+    auto *leading = workspace->findViewByName(
+        player ? "musicPlayerControls" : "musicPlaylistDirectory");
+    if (stacked) {
+      leading->setWidthPercent(100)->setHeight(player ? 780 : 500);
+    } else {
+      leading->setHeight(YGUndefined);
+      if (player) leading->setWidth(400);
+      else leading->setWidthPercent(34);
+    }
+    viewport->refreshContentLayout();
+  }
   rootLayout->applyYogaLayout();
   if (videoOverlayRoot != nullptr) {
     videoOverlayRoot->setPadding(Edge::Left, safe.left + 24)
@@ -927,6 +1002,7 @@ void MusicPlayerScene::buildView() {
   auto *header = new View();
   headerLayout = header;
   header->setFlexShrink(0);
+  header->setDisplay(embeddedTab ? YGDisplayNone : YGDisplayFlex);
   header->setHeight(safe.top + kHeaderHeight)
       ->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignCenter)
@@ -956,7 +1032,7 @@ void MusicPlayerScene::buildView() {
   statusText->setHeight(26);
   statusText->setThemedColor(app_theme::textSecondary);
   statusText->setOverflow(TextView::TextOverflow::Hidden);
-  titleColumn->addView(statusText);
+  if (!embeddedTab) titleColumn->addView(statusText);
   header->addView(titleColumn);
 
   TextView *backText = nullptr;
@@ -974,31 +1050,26 @@ void MusicPlayerScene::buildView() {
   auto *content = new View();
   contentLayout = content;
   content->setFlex(1)
+      ->setMinHeight(0)
       ->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignStretch)
-      ->setGap(14)
-      ->setPadding(Edge::Top, 16)
-      ->setPadding(Edge::Bottom, safe.bottom + 16)
-      ->setPadding(Edge::Left, safe.left + kScreenPadding)
-      ->setPadding(Edge::Right, safe.right + kScreenPadding);
+      ->setPadding(Edge::Bottom, safe.bottom)
+      ->setPadding(Edge::Left, safe.left)
+      ->setPadding(Edge::Right, safe.right);
 
   auto *rail = new View();
+  rail->setName("musicNavigationRail");
   rail->setWidth(kRailWidth)
       ->setFlexShrink(0)
       ->setFlexDirection(FlexDirection::Column)
-      ->setGap(10)
-      ->setPadding(Edge::All, 12)
-      ->setThemedBackgroundColor(app_theme::panel)
-      ->setThemedBorderColor(app_theme::hairline)
-      ->setBorderWidth(1)
-      ->setCornerRadius(app_theme::panelRadius());
-
-  auto *railTitle = new TextView(kFontPath, 18);
-  railTitle->setLocalizedText(i18n::message("music_player.music.label"));
-  railTitle->setHeight(26);
-  railTitle->setThemedColor(app_theme::textSecondary);
-  railTitle->setOverflow(TextView::TextOverflow::Hidden);
-  rail->addView(railTitle);
+      ->setGap(8)
+      ->setPadding(Edge::All, 24);
+  auto *railRule = new View();
+  railRule->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Right, 0)->setPosition(Edge::Top, 0)
+      ->setPosition(Edge::Bottom, 0)->setWidth(1)
+      ->setThemedBackgroundColor(main_menu_theme::rule);
+  rail->addView(railRule);
 
   libraryNavButton = makeNavButton(i18n::message("music_player.navigation.library.label"), &libraryNavText);
   libraryNavButton->setOnClickListener(
@@ -1018,8 +1089,14 @@ void MusicPlayerScene::buildView() {
   rail->addView(playerNavButton);
 
   auto *railSpacer = new View();
+  railSpacer->setName("musicNavigationSpacer");
   railSpacer->setFlex(1);
   rail->addView(railSpacer);
+  if (embeddedTab) {
+    statusText->setHeight(72);
+    statusText->setWrap(true);
+    rail->addView(statusText);
+  }
   content->addView(rail);
 
   auto *pageStack = new View();
@@ -1055,6 +1132,7 @@ void MusicPlayerScene::buildView() {
   rootLayout->addView(overlayPortal);
   refreshNavigation();
   rootLayout->applyYogaLayout();
+  updateLayoutInsets();
   buildVideoOverlay();
 }
 
@@ -1331,15 +1409,26 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   };
   workspace->addView(trackList);
 
+  auto *actionsScroll = new ScrollView();
+  actionsScroll->setName(isLibrary ? "musicLibraryDetail" : "musicFavoritesDetail");
+  actionsScroll->setWidth(320)->setFlexShrink(0)->setMinHeight(0);
   auto *actions = new View();
-  actions->setWidth(390)
+  actions->setWidthPercent(100)
       ->setFlexShrink(0)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
-      ->setGap(12);
+      ->setGap(8)
+      ->setPadding(Edge::Left, 16);
+  auto *detailRule = new View();
+  detailRule->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0)
+      ->setPosition(Edge::Bottom, 0)->setWidth(1)
+      ->setThemedBackgroundColor(main_menu_theme::rule);
+  actions->addView(detailRule);
 
   auto *libraryArtFrame = new View();
-  libraryArtFrame->setHeight(250)
+  libraryArtFrame->setWidth(210)->setHeight(210)
+      ->setAlignSelf(YGAlignCenter)
       ->setFlexShrink(0)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
@@ -1366,8 +1455,8 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   } else {
     favoritesArtworkImage = artworkImage;
   }
-  artworkImage->setWidth(388)
-      ->setHeight(248)
+  artworkImage->setWidth(210)
+      ->setHeight(210)
       ->setPositionType(YGPositionTypeAbsolute)
       ->setPosition(Edge::Left, 0)
       ->setPosition(Edge::Top, 0)
@@ -1375,13 +1464,7 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   libraryArtFrame->addView(artworkImage);
   actions->addView(libraryArtFrame);
 
-  auto *selectionTitle = new TextView(kFontPath, 18);
-  selectionTitle->setLocalizedText(i18n::message("music_player.selected.label"));
-  selectionTitle->setHeight(28);
-  selectionTitle->setThemedColor(app_theme::textSecondary);
-  actions->addView(selectionTitle);
-
-  auto *selectionTitleText = new TextView(kFontPath, 24);
+  auto *selectionTitleText = new TextView(app_theme::boldFont, 28);
   if (isLibrary) {
     librarySelectionTitleText = selectionTitleText;
   } else {
@@ -1404,10 +1487,11 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   actions->addView(selectionDetailText);
 
   auto *primaryRow = new View();
-  primaryRow->setHeight(52)->setFlexDirection(FlexDirection::Row)->setGap(10);
+  primaryRow->setHeight(116)->setFlexShrink(0)
+      ->setFlexDirection(FlexDirection::Column)->setGap(4);
   TextView *playTrackText = nullptr;
-  auto *playTrackButton = makeButton(i18n::message("music_player.library.play.label"), 17, &playTrackText);
-  playTrackButton->setFlex(1);
+  auto *playTrackButton = makeButton(i18n::message("music_player.library.play.label"), 28, &playTrackText);
+  playTrackButton->setHeight(64);
   styleButton(playTrackButton, playTrackText, app_theme::primaryAction,
               app_theme::primaryActionHover, app_theme::primaryActionPressed,
               app_theme::accentBorderStrong);
@@ -1415,7 +1499,7 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
       [this, kind]() { playTrackBrowserTrack(kind); });
   TextView *addText = nullptr;
   auto *addButton = makeButton(i18n::message("music_player.add.label"), 15, &addText);
-  addButton->setFlex(1);
+  addButton->setHeight(48);
   styleButton(addButton, addText, app_theme::control, app_theme::controlHover,
               app_theme::controlPressed, app_theme::hairlineStrong);
   addButton->setOnClickListener(
@@ -1429,9 +1513,9 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   TextView *randomText = nullptr;
   auto *randomButton = makeButton(i18n::message("music_player.shuffle.label"), 17, &randomText);
   randomButton->setFlex(1);
-  styleButton(randomButton, randomText, app_theme::successAction,
-              app_theme::successActionHover, app_theme::successActionPressed,
-              app_theme::accentBorder);
+  styleButton(randomButton, randomText, app_theme::control,
+              app_theme::controlHover, app_theme::controlPressed,
+              app_theme::hairlineStrong);
   randomButton->setOnClickListener(
       [this, kind]() { playRandomTrackBrowser(kind); });
   TextView *reloadText = nullptr;
@@ -1494,7 +1578,9 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
     }
   };
   actions->addView(addToPlaylistList);
-  workspace->addView(actions);
+  addToPlaylistList->setMinHeight(120);
+  actionsScroll->setContentView(actions);
+  workspace->addView(actionsScroll);
 }
 
 void MusicPlayerScene::buildPlaylistsPage(View *page) {
@@ -1502,15 +1588,20 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
   panel->setFlex(1);
   page->addView(panel);
 
+  auto *viewport = new ScrollView();
+  viewport->setName("musicPlaylistsViewport");
+  viewport->setFlex(1)->setMinHeight(0);
+  panel->addView(viewport);
   auto *workspace = new View();
-  workspace->setFlex(1)
+  workspace->setHeight(780)
       ->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignStretch)
       ->setGap(16);
-  panel->addView(workspace);
+  viewport->setContentView(workspace);
 
   auto *directoryColumn = new View();
-  directoryColumn->setWidth(360)
+  directoryColumn->setName("musicPlaylistDirectory");
+  directoryColumn->setWidthPercent(34)
       ->setFlexShrink(0)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
@@ -1599,7 +1690,7 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
       [](const PlaylistInfo &a, const PlaylistInfo &b) {
         return a.id == b.id;
       });
-  playlistDirectoryList->setFlex(1);
+  playlistDirectoryList->setFlex(1)->setMinHeight(174);
   playlistDirectoryList->itemHeight = kPlaylistRowHeight;
   playlistDirectoryList->reserveScrollbarGutter = true;
   playlistDirectoryList->onCreateView = [](const PlaylistInfo &) {
@@ -1627,6 +1718,7 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
   workspace->addView(directoryColumn);
 
   auto *editorColumn = new View();
+  editorColumn->setName("musicPlaylistEditor");
   editorColumn->setFlex(1)
       ->setMinWidth(0)
       ->setFlexDirection(FlexDirection::Column)
@@ -1653,7 +1745,7 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
 
   playlistList =
       new RecyclerView<MusicTrack>(music_playlist::SameTrackIdentity);
-  playlistList->setFlex(1);
+  playlistList->setFlex(1)->setMinHeight(204);
   playlistList->itemHeight = kTrackRowHeight;
   playlistList->reserveScrollbarGutter = true;
   playlistList->onCreateView = [](const MusicTrack &) {
@@ -1732,22 +1824,29 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   panel->setFlex(1);
   page->addView(panel);
 
+  auto *viewport = new ScrollView();
+  viewport->setName("musicPlayerViewport");
+  viewport->setFlex(1)->setMinHeight(0);
+  panel->addView(viewport);
   auto *workspace = new View();
-  workspace->setFlex(1)
+  workspace->setHeight(780)
       ->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignStretch)
       ->setGap(16);
-  panel->addView(workspace);
+  viewport->setContentView(workspace);
 
   auto *nowColumn = new View();
-  nowColumn->setWidth(420)
+  nowColumn->setName("musicPlayerControls");
+  nowColumn->setWidth(400)
       ->setFlexShrink(0)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setGap(12);
 
   auto *artFrame = new View();
-  artFrame->setHeight(330)
+  artFrame->setWidth(260)->setHeight(260)
+      ->setAlignSelf(YGAlignCenter)
+      ->setFlexShrink(0)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setJustifyContent(YGJustifyCenter)
@@ -1763,8 +1862,8 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   artworkFallbackText->setThemedColor(app_theme::textMuted);
   artFrame->addView(artworkFallbackText);
   artworkImage = new ImageView(0, 0, 0, 0);
-  artworkImage->setWidth(418)
-      ->setHeight(328)
+  artworkImage->setWidth(260)
+      ->setHeight(260)
       ->setPositionType(YGPositionTypeAbsolute)
       ->setPosition(Edge::Left, 0)
       ->setPosition(Edge::Top, 0)
@@ -1807,7 +1906,7 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   nowColumn->addView(seekProgressTrack);
 
   auto *transport = new View();
-  transport->setHeight(308)->setFlexDirection(FlexDirection::Column)->setGap(9);
+  transport->setHeight(308)->setFlexShrink(0)->setFlexDirection(FlexDirection::Column)->setGap(9);
   auto *transportRow = new View();
   transportRow->setHeight(64)
       ->setFlexDirection(FlexDirection::Row)
@@ -1966,6 +2065,7 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   workspace->addView(nowColumn);
 
   auto *queueColumn = new View();
+  queueColumn->setName("musicPlayerQueue");
   queueColumn->setFlex(1)
       ->setMinWidth(0)
       ->setFlexDirection(FlexDirection::Column)
@@ -1980,7 +2080,7 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
 
   playerQueueList =
       new RecyclerView<MusicTrack>(music_playlist::SameTrackIdentity);
-  playerQueueList->setFlex(1);
+  playerQueueList->setFlex(1)->setMinHeight(204);
   playerQueueList->itemHeight = kTrackRowHeight;
   playerQueueList->reserveScrollbarGutter = true;
   playerQueueList->onCreateView = [](const MusicTrack &) {
@@ -2032,15 +2132,17 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   queueColumn->addView(queueButtons);
 
   auto *sleepCard = new View();
-  sleepCard->setHeight(112)
+  sleepCard->setHeight(112)->setFlexShrink(0)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setGap(10)
-      ->setPadding(Edge::All, 12)
-      ->setThemedBackgroundColor(app_theme::insetSurface)
-      ->setThemedBorderColor(app_theme::hairlineSubtle)
-      ->setBorderWidth(1)
-      ->setCornerRadius(app_theme::controlRadius());
+      ->setPadding(Edge::Top, 12);
+  auto *sleepCardRule = new View();
+  sleepCardRule->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Left, 0)->setPosition(Edge::Right, 0)
+      ->setPosition(Edge::Top, 0)->setHeight(1)
+      ->setThemedBackgroundColor(main_menu_theme::rule);
+  sleepCard->addView(sleepCardRule);
   auto *sleepHeader = new View();
   sleepHeader->setHeight(26)
       ->setFlexDirection(FlexDirection::Row)
@@ -2092,15 +2194,17 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   queueColumn->addView(sleepCard);
 
   auto *privacyCard = new View();
-  privacyCard->setHeight(112)
+  privacyCard->setHeight(112)->setFlexShrink(0)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setGap(10)
-      ->setPadding(Edge::All, 12)
-      ->setThemedBackgroundColor(app_theme::insetSurface)
-      ->setThemedBorderColor(app_theme::hairlineSubtle)
-      ->setBorderWidth(1)
-      ->setCornerRadius(app_theme::controlRadius());
+      ->setPadding(Edge::Top, 12);
+  auto *privacyCardRule = new View();
+  privacyCardRule->setPositionType(YGPositionTypeAbsolute)
+      ->setPosition(Edge::Left, 0)->setPosition(Edge::Right, 0)
+      ->setPosition(Edge::Top, 0)->setHeight(1)
+      ->setThemedBackgroundColor(main_menu_theme::rule);
+  privacyCard->addView(privacyCardRule);
   auto *privacyTitle = new TextView(kFontPath, 18);
   privacyTitle->setLocalizedText(i18n::message("music_player.lock_screen.label"));
   privacyTitle->setHeight(26);
@@ -2137,12 +2241,8 @@ View *MusicPlayerScene::makePanel(const i18n::Text &title,
   auto *panel = new View();
   panel->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
-      ->setGap(12)
-      ->setPadding(Edge::All, 16)
-      ->setThemedBackgroundColor(app_theme::mainMenuPanel)
-      ->setThemedBorderColor(app_theme::hairline)
-      ->setBorderWidth(1)
-      ->setCornerRadius(app_theme::panelRadius());
+      ->setGap(10)
+      ->setPadding(Edge::All, 24);
 
   auto *titleText = new TextView(app_theme::boldFont, 26);
   titleText->setLocalizedText(title);
@@ -2158,6 +2258,10 @@ View *MusicPlayerScene::makePanel(const i18n::Text &title,
     (*subtitleText)->setOverflow(TextView::TextOverflow::Hidden);
     panel->addView(*subtitleText);
   }
+  auto *rule = new View();
+  rule->setHeight(1)->setFlexShrink(0)
+      ->setThemedBackgroundColor(main_menu_theme::rule);
+  panel->addView(rule);
   return panel;
 }
 
@@ -2167,7 +2271,7 @@ Button *MusicPlayerScene::makeButton(const i18n::Text &label, int fontSize,
   button->setHeight(52);
   button->setCornerRadius(app_theme::controlRadius());
 
-  auto *text = new TextView(kFontPath, fontSize);
+  auto *text = new TextView(fontSize >= 26 ? app_theme::boldFont : kFontPath, fontSize);
   text->setLocalizedText(label);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
@@ -2244,8 +2348,11 @@ Button *MusicPlayerScene::makeDualIconButton(uint32_t leadingIconCodepoint,
 
 Button *MusicPlayerScene::makeNavButton(const i18n::Text &label,
                                         TextView **textOut) {
-  auto *button = makeButton(label, 18, textOut);
+  auto *button = makeButton(label, 28, textOut);
   button->setHeight(58);
+  (*textOut)->setAlign(TextView::LEFT);
+  (*textOut)->setAutoFitText(true);
+  (*textOut)->setPadding(Edge::Left, 12);
   return button;
 }
 
@@ -2757,14 +2864,14 @@ void MusicPlayerScene::refreshNavigation() {
     if (button == nullptr) {
       return;
     }
-    if (activeTab == tab) {
-      styleButton(button, text, app_theme::primaryAction,
-                  app_theme::primaryActionHover, app_theme::primaryActionPressed,
-                  app_theme::accentBorderStrong);
-    } else {
-      styleButton(button, text, app_theme::control, app_theme::controlHover,
-                  app_theme::controlPressed, app_theme::hairlineStrong);
-    }
+    const bool selected = activeTab == tab;
+    button->setThemedBackgroundColors(
+        selected ? main_menu_theme::action : main_menu_theme::control,
+        selected ? main_menu_theme::actionHover : main_menu_theme::hover,
+        selected ? main_menu_theme::actionPressed : main_menu_theme::pressed);
+    button->setStyledBorderWidth(0);
+    text->setThemedColor(selected ? main_menu_theme::onAction
+                                 : main_menu_theme::ink);
   };
   styleNav(libraryNavButton, libraryNavText, MusicPlayerTab::Library);
   styleNav(favoritesNavButton, favoritesNavText, MusicPlayerTab::Favorites);

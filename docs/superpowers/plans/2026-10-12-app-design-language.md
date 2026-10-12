@@ -59,3 +59,34 @@ Final verification: full desktop build passed. Full parallel CTest passed
 481/483; the two affected tests passed on focused reruns after the reviewed
 HUD golden update and Guided Access instruction theme migration (483/483
 verified across the full run and focused reruns). `git diff --check` passed.
+
+## Structural alignment
+
+Extended the selector's composition across the remaining built-in screens:
+
+- Landing screen uses a large left wordmark and a flat right action menu,
+  stacking vertically in portrait with safe-area padding.
+- Settings uses a compact title band, flat left navigation and content-height
+  sections separated by rules. Portrait section navigation is one dropdown.
+- Music and IR share the selector's rail/workspace boundaries without duplicate
+  embedded headers. Music uses inverse selected rows, square artwork and a
+  full-width primary action; player and playlist workspaces scroll and stack
+  at narrower widths. IR separates provider controls from the upload workspace.
+- Results prioritize the current score and use open ruled sections. Records
+  separate the title, tools and list. Practice keeps Start outside the scroll
+  area; analytics places charts ahead of attempt navigation.
+- Play options and rankings use compact headers, ruled sections and fixed
+  action footers.
+
+Added a localized settings density/layout check and updated result hierarchy
+assertions and lifecycle fixtures. Removed four unused translations belonging
+to the redundant labels. Native samples for this pass cover dark landing,
+Settings/Profile, Music library and IR, plus light IR. The IR status message
+wraps within its provider rail. Restored the original dark theme after QA.
+Portrait layouts and every modal/result state still need hands-on visual
+coverage; desktop pointer automation remains unreliable. The gameplay lane
+viewport is untouched by this structural pass.
+
+Structural-pass verification: desktop build passed; a fresh full parallel CTest
+run passed all 483 tests after the fixture/catalog fixes. `git diff --check`
+passed.

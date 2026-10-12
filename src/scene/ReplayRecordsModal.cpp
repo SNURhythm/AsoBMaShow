@@ -48,7 +48,7 @@ constexpr ClearMarkFilterDefinition kDifficultyClearMarkFilters[] = {
 
 TextView *makeText(i18n::Text text, int size,
                    View::ThemeColorProvider color) {
-  auto *view = new TextView(kFontPath, size);
+  auto *view = new TextView(size >= 26 ? app_theme::boldFont : kFontPath, size);
   view->setLocalizedText(text);
   view->setThemedColor(std::move(color));
   view->setVAlign(TextView::MIDDLE);
@@ -198,7 +198,7 @@ ReplayRecordsModal::Create(View *parent,
       ->setAlignItems(YGAlignCenter)
       ->setGap(10)
       ->setHeight(54);
-  auto *title = new TextView(app_theme::boldFont, 30);
+  auto *title = new TextView(app_theme::boldFont, 42);
   title->setLocalizedText(i18n::message("records.records.label"));
   title->setThemedColor(app_theme::textPrimary);
   title->setHeight(54);
@@ -226,11 +226,17 @@ ReplayRecordsModal::Create(View *parent,
   closeButton->setWidth(54);
   closeButton->setHeight(54);
   closeButton->setFlexShrink(0.0f);
-  header->addView(shareButton);
-  header->addView(deleteButton);
+
   header->addView(filterButton);
   header->addView(closeButton);
   panel->addView(header);
+  auto *headerRule = new View();
+  headerRule->setPositionType(YGPositionTypeAbsolute);
+  headerRule->setPosition(Edge::Top, 86);
+  headerRule->setPosition(Edge::Left, kModalPanelPadding);
+  headerRule->setPosition(Edge::Right, kModalPanelPadding);
+  headerRule->setHeight(1)->setThemedBackgroundColor(app_theme::hairlineStrong);
+  panel->addView(headerRule);
 
   auto *status = makeText({}, 18, app_theme::textSecondary);
   status->setHeight(30);
@@ -253,6 +259,15 @@ ReplayRecordsModal::Create(View *parent,
       ->setWidth(kModalContentWidth)
       ->setHeight(kModalContentHeight)
       ->setGap(10);
+  auto *recordTools = new View();
+  recordTools->setFlexDirection(FlexDirection::Row);
+  recordTools->setHeight(54)->setFlexShrink(0)->setGap(8);
+  auto *toolsSpace = new View();
+  toolsSpace->setFlex(1);
+  recordTools->addView(toolsSpace);
+  recordTools->addView(shareButton);
+  recordTools->addView(deleteButton);
+  listContent->addView(recordTools);
   auto *list = new ResultRecordListView();
   list->setIrUploadAvailable(static_cast<bool>(modal->callbacks_.irUpload));
   list->onSelectionChanged = [raw = modal.get()](int idx) {
@@ -277,7 +292,7 @@ ReplayRecordsModal::Create(View *parent,
   list->setFlex(1);
   list->clearBackgroundColor();
   list->setThemedBorderColor(app_theme::hairline);
-  list->setBorderWidth(1);
+  list->setBorderWidth(0);
   listContent->addView(list);
   contentFrame->addView(listContent);
 

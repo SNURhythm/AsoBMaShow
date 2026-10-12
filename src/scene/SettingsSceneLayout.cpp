@@ -2535,22 +2535,49 @@ void SettingsScene::initView() {
     return;
   }
 
+  // The settings workspace shares the selector's compact band and ruled regions.
+  // Preview keeps its own metrics and viewport above.
+  metrics.flatSections = true;
+  metrics.horizontalPadding = metrics.compact ? 18 : 28;
+  metrics.contentWidth = std::max(0, rendering::window_width - metrics.safe.left -
+      metrics.safe.right - metrics.horizontalPadding * 2);
+  metrics.titleSize = metrics.compact ? 28 : 34;
+  metrics.sectionTitleSize = metrics.compact ? 24 : 28;
+  metrics.cardPadding = metrics.compact ? 14 : 18;
+  metrics.cardGap = metrics.compact ? 12 : 16;
+  metrics.secondaryGap = 0;
+  metrics.bodyGap = metrics.compact ? 18 : 28;
+  metrics.actionButtonHeight = metrics.compact ? 48 : 54;
+  metrics.backButtonHeight = metrics.actionButtonHeight;
+  metrics.backButtonWidth = metrics.compact ? 110 : 132;
+  rootLayout->setPadding(Edge::All, 0);
+  rootLayout->setPadding(Edge::Top, 0)->setPadding(Edge::Bottom, 0)
+      ->setPadding(Edge::Left, 0)->setPadding(Edge::Right, 0);
+  rootLayout->setGap(0);
   rootLayout->setThemedBackgroundColor(app_theme::backdrop);
 
   auto *header = new View();
+  header->setName("settingsTopBar");
   header->setFlexDirection(FlexDirection::Row);
   header->setAlignItems(YGAlignCenter);
   header->setJustifyContent(YGJustifySpaceBetween);
+  header->setPadding(Edge::Top, metrics.safe.top + 10);
+  header->setPadding(Edge::Bottom, 10);
+  header->setPadding(Edge::Left, metrics.safe.left + metrics.horizontalPadding);
+  header->setPadding(Edge::Right, metrics.safe.right + metrics.horizontalPadding);
+  header->setFlexShrink(0);
+  auto *headerRule = new View();
+  headerRule->setPositionType(YGPositionTypeAbsolute);
+  headerRule->setPosition(Edge::Left, 0)->setPosition(Edge::Bottom, 0);
+  headerRule->setWidthPercent(100)->setHeight(1);
+  headerRule->setThemedBackgroundColor(app_theme::hairline);
+  header->addView(headerRule);
 
   auto *headerText = new View();
   headerText->setFlexDirection(FlexDirection::Column);
   headerText->setGap(static_cast<float>(metrics.headerGap));
   headerText->addView(
       makeHeading(i18n::message("settings.navigation.settings.label"), metrics.titleSize));
-  headerText->addView(makeText(i18n::message(
-      context.settings.activePresentationOrientation() == player_settings::PresentationOrientation::Portrait
-          ? "settings.presentation.portrait.label" : "settings.presentation.landscape.label"),
-      metrics.smallTextSize, app_theme::textSecondary()));
   header->addView(headerText);
 
   auto *backLabel =
@@ -2584,7 +2611,7 @@ void SettingsScene::initView() {
   rootLayout->addView(header);
 
   const bool portrait = rendering::window_height > rendering::window_width;
-  const int tabColumnWidth = portrait ? (metrics.contentWidth - 16) / 3 : std::min(
+  const int tabColumnWidth = portrait ? metrics.contentWidth : std::min(
       metrics.contentWidth,
       metrics.compact ? std::clamp(metrics.contentWidth / 4, 150, 190)
                       : std::clamp(metrics.contentWidth / 6, 220, 280));
@@ -2601,60 +2628,73 @@ void SettingsScene::initView() {
   content->setFlexDirection(portrait ? FlexDirection::Column : FlexDirection::Row);
   content->setGap(static_cast<float>(metrics.bodyGap));
   content->setFlex(1.0f);
+  content->setMinHeight(0);
+  content->setPadding(Edge::Top, 16);
+  content->setPadding(Edge::Left, metrics.safe.left + metrics.horizontalPadding);
+  content->setPadding(Edge::Right, metrics.safe.right + metrics.horizontalPadding);
+  content->setPadding(Edge::Bottom, metrics.safe.bottom);
   content->setAlignItems(YGAlignStretch);
 
   auto *tabControls = new View();
-  tabControls->setFlexDirection(portrait ? FlexDirection::Row : FlexDirection::Column);
-  tabControls->setFlexWrap(portrait ? YGWrapWrap : YGWrapNoWrap);
-  tabControls->setGap(metrics.compact ? 8.0f : 12.0f);
+  tabControls->setFlexDirection(FlexDirection::Column);
+  tabControls->setGap(0);
   tabControls->setWidth(static_cast<float>(portrait ? metrics.contentWidth : tabColumnWidth));
   tabControls->setFlexShrink(0.0f);
+  auto selectTab = [this](SettingsTab tab) {
+    if (activeTab == tab) {
+      return;
+    }
+    if (activeTab == SettingsTab::Display) {
+      cancelDisplayPreviewForTabExit();
+    }
+    if (activeTab == SettingsTab::Input &&
+        inputCaptureController != nullptr) {
+      inputCaptureController->cancel();
+      inputCaptureAction.reset();
+      inputViewRebuildGate.reset();
+      inputLastViewSignature.clear();
+    }
+    if (activeTab == SettingsTab::Profile && profileController != nullptr) {
+      const auto phase = profileController->phase();
+      if (phase == ProfileSettingsPhase::PickingImport ||
+          phase == ProfileSettingsPhase::Importing ||
+          phase == ProfileSettingsPhase::PreparingExport ||
+          phase == ProfileSettingsPhase::PickingExport) {
+        return;
+      }
+      profileInlineEditor.clear();
+      profileController->cancelConfirmation();
+    }
+    activeTab = tab;
+    if (activeTab == SettingsTab::GameplaySkins) {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+      ensureGameplaySkinSettingsController();
+#endif
+    }
+    lastLayoutWidth = -1;
+  };
+  std::vector<DropdownView::Option> navigationOptions;
   auto makeTabButton = [&](SettingsTab tab, const i18n::Text &label,
                            TextView **labelOut) {
+    navigationOptions.push_back({.id = std::to_string(static_cast<int>(tab)), .label = label});
     auto *labelText =
-        makeText(label, metrics.bodyTextSize + 4, app_theme::textPrimary(),
-                 TextView::CENTER, TextView::MIDDLE);
+        makeText(label, metrics.bodyTextSize, app_theme::textPrimary(),
+                 TextView::LEFT, TextView::MIDDLE, TextView::FontWeight::Bold);
     if (labelOut != nullptr) {
       *labelOut = labelText;
     }
     auto *button =
-        makeButton(tabColumnWidth, metrics.actionButtonHeight, labelText,
+        makeButton(kFitContentWidth, metrics.actionButtonHeight, labelText,
                    app_theme::control(), app_theme::controlHover(),
                    app_theme::controlPressed(), app_theme::hairline(),
                    app_theme::accentBorder(), app_theme::accentBorderStrong());
-    button->setOnClickListener([this, tab]() {
-      if (activeTab == tab) {
-        return;
-      }
-      if (activeTab == SettingsTab::Display) {
-        cancelDisplayPreviewForTabExit();
-      }
-      if (activeTab == SettingsTab::Input &&
-          inputCaptureController != nullptr) {
-        inputCaptureController->cancel();
-        inputCaptureAction.reset();
-        inputViewRebuildGate.reset();
-        inputLastViewSignature.clear();
-      }
-      if (activeTab == SettingsTab::Profile && profileController != nullptr) {
-        const auto phase = profileController->phase();
-        if (phase == ProfileSettingsPhase::PickingImport ||
-            phase == ProfileSettingsPhase::Importing ||
-            phase == ProfileSettingsPhase::PreparingExport ||
-            phase == ProfileSettingsPhase::PickingExport) {
-          return;
-        }
-        profileInlineEditor.clear();
-        profileController->cancelConfirmation();
-      }
-      activeTab = tab;
-      if (activeTab == SettingsTab::GameplaySkins) {
-#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
-        ensureGameplaySkinSettingsController();
-#endif
-      }
-      lastLayoutWidth = -1;
-    });
+    labelText->setAlign(TextView::LEFT);
+    labelText->setWidthPercent(100)->setMinWidth(0);
+    labelText->setAutoFitText(true);
+    button->setWidth(tabColumnWidth);
+    button->setPadding(Edge::Left, 14);
+    button->setPadding(Edge::Right, 14);
+    button->setOnClickListener([selectTab, tab]() { selectTab(tab); });
     return button;
   };
   profileTabButton =
@@ -2695,13 +2735,14 @@ void SettingsScene::initView() {
   auto *tabRail = new ScrollView();
   tabRailScrollView = tabRail;
   tabRail->setWidth(static_cast<float>(portrait ? metrics.contentWidth : tabColumnWidth));
-  if (portrait) tabRail->setHeight(metrics.actionButtonHeight * 4.0F + 24.0F);
+  if (portrait) tabRail->setDisplay(YGDisplayNone);
   tabRail->setFlexShrink(0.0f);
   tabRail->setContentView(tabControls);
   content->addView(tabRail);
 
   scrollView = new ScrollView();
   scrollView->setFlex(1.0f);
+  scrollView->setMinHeight(0)->setMinWidth(0);
   scrollView->setContentPadding(Edge::Right,
                                 static_cast<float>(scrollRightPadding));
 
@@ -2715,6 +2756,20 @@ void SettingsScene::initView() {
   overlayPortal->setPosition(Edge::Left, 0);
   overlayPortal->setPosition(Edge::Top, 0);
   overlayPortal->setZIndex(900);
+
+  if (portrait) {
+    auto *navigation = new DropdownView(
+        {.onOptionSelected = [selectTab](const std::string &id) {
+          selectTab(static_cast<SettingsTab>(std::stoi(id)));
+        }}, overlayPortal);
+    navigation->setName("settingsSectionNavigation");
+    navigation->setWidthPercent(100)->setHeight(metrics.actionButtonHeight);
+    navigation->setFlexShrink(0);
+    navigation->refresh({.selectedId = std::to_string(static_cast<int>(activeTab)),
+                         .options = std::move(navigationOptions),
+                         .enabled = !profilePipelineBusy, .maxVisibleItems = 8});
+    content->addView(navigation);
+  }
 
   View *cardsColumn = nullptr;
   switch (activeTab) {

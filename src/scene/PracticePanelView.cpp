@@ -111,12 +111,12 @@ PracticePanelView::PracticePanelView(
   setAlignItems(YGAlignStretch);
   setBackgroundColor(app_theme::panelStrong());
   setBorderColor(app_theme::hairline());
-  setBorderWidth(1);
+  setBorderWidth(0);
   build(portal);
 }
 
 void PracticePanelView::build(OverlayPortal *portal) {
-  auto *header = makeText(i18n::tr("practice.controls.practice.label"), 26, app_theme::textPrimary());
+  auto *header = makeText(i18n::tr("practice.controls.practice.label"), 34, app_theme::textPrimary());
   header->setHeight(54);
   header->setPadding(Edge::Left, 18);
   addView(header);
@@ -327,10 +327,15 @@ void PracticePanelView::build(OverlayPortal *portal) {
       callbacks.onStart();
     }
   });
-  content->addView(startButton);
-
   scroll->setContentView(content);
   addView(scroll);
+
+  auto *actionDock = new View();
+  actionDock->setName("practiceActionDock");
+  actionDock->setPadding(Edge::All, 16);
+  actionDock->setFlexShrink(0);
+  actionDock->addView(startButton);
+  addView(actionDock);
 }
 
 void PracticePanelView::refresh(

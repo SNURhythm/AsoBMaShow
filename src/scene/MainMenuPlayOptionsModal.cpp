@@ -20,7 +20,7 @@ Color modalPanelBorder() {
 }
 
 Button *makeCloseButton() {
-  auto *button = new Button(0, 0, 160, 58);
+  auto *button = new Button(0, 0, 132, 48);
   auto *text = new TextView(kFontPath, 20);
   text->setLocalizedText(i18n::message("menu.play_options.close.label"));
   text->setAlign(TextView::CENTER);
@@ -49,7 +49,7 @@ MainMenuPlayOptionsModal::Create(View *parent,
   const float availablePanelWidth =
       std::max(300.0f, static_cast<float>(rendering::window_width) - 48.0f);
   const float panelWidth = std::min(760.0f, availablePanelWidth);
-  constexpr float kPanelPadding = 22.0f;
+  constexpr float kPanelPadding = 18.0f;
   constexpr float kScrollRightPadding = 18.0f;
   const float contentWidth = panelWidth - kPanelPadding * 2.0f;
   const float optionWidth = std::max(0.0f, contentWidth - kScrollRightPadding);
@@ -76,23 +76,42 @@ MainMenuPlayOptionsModal::Create(View *parent,
       ->setHeight(panelHeight)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
-      ->setGap(12)
-      ->setPadding(Edge::All, kPanelPadding)
+      ->setGap(0)
+      ->setPadding(Edge::All, 0)
       ->setThemedBackgroundColor(app_theme::panelStrong)
       ->setCornerRadius(app_theme::panelRadius())
-      ->setThemedShadow(app_theme::shadow, app_theme::kModalShadow)
       ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
-  auto *title = new TextView(app_theme::boldFont, 30);
+  const auto addRule = [](View *region, Edge edge) {
+    auto *rule = new View();
+    rule->setPositionType(YGPositionTypeAbsolute);
+    rule->setPosition(Edge::Left, 0)->setPosition(edge, 0);
+    rule->setWidthPercent(100)->setHeight(1);
+    rule->setThemedBackgroundColor(app_theme::hairline);
+    region->addView(rule);
+  };
+  auto *header = new View();
+  header->setHeight(64)->setFlexShrink(0);
+  header->setPadding(Edge::Left, kPanelPadding);
+  header->setPadding(Edge::Right, kPanelPadding);
+  header->setJustifyContent(YGJustifyCenter);
+  auto *title = new TextView(app_theme::boldFont, 26, TextView::FontWeight::Bold);
   title->setLocalizedText(i18n::message("menu.play_options.play_options.label"));
   title->setThemedColor(app_theme::textPrimary);
-  title->setHeight(42);
-  panel->addView(title);
+  title->setHeight(36);
+  header->addView(title);
+  addRule(header, Edge::Bottom);
+  panel->addView(header);
 
   auto *scrollView = new ScrollView(0, 0, static_cast<int>(contentWidth), 1);
   scrollView->setWidth(contentWidth);
   scrollView->setFlex(1.0f);
+  scrollView->setMinHeight(0);
+  scrollView->setMargin(Edge::Left, kPanelPadding);
+  scrollView->setMargin(Edge::Right, kPanelPadding);
+  scrollView->setContentPadding(Edge::Top, 12);
+  scrollView->setContentPadding(Edge::Bottom, 12);
   scrollView->setContentPadding(Edge::Right, kScrollRightPadding);
 
   auto *optionsContent = new View();
@@ -117,8 +136,11 @@ MainMenuPlayOptionsModal::Create(View *parent,
   auto *footer = new View();
   footer->setFlexDirection(FlexDirection::Row);
   footer->setJustifyContent(YGJustifyFlexEnd);
-  footer->setAlignItems(YGAlignStretch);
-  footer->setHeight(58);
+  footer->setAlignItems(YGAlignCenter);
+  footer->setHeight(72)->setFlexShrink(0);
+  footer->setPadding(Edge::Left, kPanelPadding);
+  footer->setPadding(Edge::Right, kPanelPadding);
+  addRule(footer, Edge::Top);
   auto *close = makeCloseButton();
   close->setOnClickListener([raw = modal.get()] { raw->hide(); });
   footer->addView(close);

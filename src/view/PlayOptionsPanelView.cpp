@@ -21,15 +21,29 @@ namespace {
 constexpr const char *kFont = app_theme::font;
 
 TextView *makeLabel(const i18n::Text &label) {
-  auto *text = new TextView(kFont, 20);
+  auto *text = new TextView(app_theme::boldFont, 20, TextView::FontWeight::Bold);
   text->setLocalizedText(label);
-  text->setThemedColor(app_theme::textSecondary);
+  text->setThemedColor(app_theme::textPrimary);
   text->setVAlign(TextView::MIDDLE);
   text->setHeight(28);
   return text;
 }
 
-View *makeRow(float height = 58.0f) {
+View *makeSectionHeader(TextView *label) {
+  auto *header = new View();
+  header->setFlexDirection(FlexDirection::Column);
+  header->setPadding(Edge::Top, 10);
+  auto *rule = new View();
+  rule->setPositionType(YGPositionTypeAbsolute);
+  rule->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
+  rule->setWidthPercent(100)->setHeight(1);
+  rule->setThemedBackgroundColor(app_theme::hairline);
+  header->addView(rule);
+  header->addView(label);
+  return header;
+}
+
+View *makeRow(float height = 48.0f) {
   auto *row = new View();
   row->setFlexDirection(FlexDirection::Row);
   row->setAlignItems(YGAlignStretch);
@@ -39,7 +53,7 @@ View *makeRow(float height = 58.0f) {
 }
 
 Button *makeButton(const i18n::Text &label, int fontSize, TextView **textOut) {
-  auto *button = new Button(0, 0, 0, 54);
+  auto *button = new Button(0, 0, 0, 48);
   button->setFlexGrow(1.0f);
   button->setFlexBasis(0.0f);
   button->setFlexShrink(1.0f);
@@ -124,11 +138,11 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   setWidth(layout.width);
   setFlexDirection(FlexDirection::Column);
   setAlignItems(YGAlignStretch);
-  setGap(12);
+  setGap(8);
 
   auto *rulesetSectionLabel = makeLabel(i18n::message("play_options.ruleset.label"));
   rulesetSectionLabel->setName("ruleset-section-label");
-  addView(rulesetSectionLabel);
+  addView(makeSectionHeader(rulesetSectionLabel));
   auto *rulesetRow = makeRow();
   for (const GameplayRuleset ruleset : {GameplayRuleset::LR2,
                                         GameplayRuleset::Beatoraja}) {
@@ -152,7 +166,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   if (layout.showGauge) {
     gaugeSectionLabel = makeLabel(i18n::message("play_options.gauge.label"));
     gaugeSectionLabel->setName("gauge-section-label");
-    addView(gaugeSectionLabel);
+    addView(makeSectionHeader(gaugeSectionLabel));
     auto addGaugeButton = [this](View *row, GaugeType type) {
       TextView *text = nullptr;
       const std::string label = gaugeLabel(type, GaugeAutoShiftMode::None);
@@ -180,7 +194,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
     addGaugeButton(gaugeRowB, GaugeType::Hazard);
     addView(gaugeRowB);
 
-    addView(makeLabel(i18n::message("play_options.auto_shift.label")));
+    addView(makeSectionHeader(makeLabel(i18n::message("play_options.auto_shift.label"))));
     auto addAutoShiftButton = [this](View *row, GaugeAutoShiftMode mode) {
       TextView *text = nullptr;
       const std::string label = gaugeAutoShiftMenuLabel(mode);
@@ -212,10 +226,10 @@ PlayOptionsPanelView::PlayOptionsPanelView(
     gaugeAutoShiftBoundsSection = new View();
     gaugeAutoShiftBoundsSection->setFlexDirection(FlexDirection::Column);
     gaugeAutoShiftBoundsSection->setAlignItems(YGAlignStretch);
-    gaugeAutoShiftBoundsSection->setGap(12);
+    gaugeAutoShiftBoundsSection->setGap(8);
     gaugeAutoShiftBoundsSection->setDisplay(YGDisplayNone);
     gaugeAutoShiftBoundsSection->setVisible(false);
-    gaugeAutoShiftBoundsSection->addView(makeLabel(i18n::message("play_options.auto_shift_lower_bound.label")));
+    gaugeAutoShiftBoundsSection->addView(makeSectionHeader(makeLabel(i18n::message("play_options.auto_shift_lower_bound.label"))));
     auto addLowerBoundButton = [this](View *row, GaugeType type) {
       TextView *text = nullptr;
       const std::string label = gaugeLabel(type, GaugeAutoShiftMode::None);
@@ -261,13 +275,13 @@ PlayOptionsPanelView::PlayOptionsPanelView(
                     callbacks.isPlayOptionAllowed(option);
            }},
       {.columns = layout.playOptionColumns,
-       .rowHeight = 58,
+       .rowHeight = 48,
        .buttonFontSize = 15,
        .showLaneOrder = layout.showLaneOrder});
   playOptionSection->setWidth(layout.width);
   addView(playOptionSection);
 
-  addView(makeLabel(i18n::message("play_options.long_note_mode.label")));
+  addView(makeSectionHeader(makeLabel(i18n::message("play_options.long_note_mode.label"))));
   auto *longNoteModeRow = makeRow();
   for (const char *mode : long_note_mode::kPlayableIds) {
     TextView *text = nullptr;
@@ -283,7 +297,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   addView(longNoteModeRow);
 
   assistOptionLabel = makeLabel(i18n::message("play_options.assist_option.label"));
-  addView(assistOptionLabel);
+  addView(makeSectionHeader(assistOptionLabel));
   auto *assistRow = makeRow();
   for (const char *option : {assist_options::kOff, assist_options::kDrag,
                              assist_options::kBpmGuide}) {
@@ -300,7 +314,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   }
   addView(assistRow);
 
-  addView(makeLabel(i18n::message("settings.lane.covers.title")));
+  addView(makeSectionHeader(makeLabel(i18n::message("settings.lane.covers.title"))));
   laneCoverControls = new LaneCoverControlsView([this](const lane_cover::State &covers) {
     state.laneCovers = covers;
     if (callbacks.onLaneCoversChanged) callbacks.onLaneCoversChanged(covers);
@@ -310,14 +324,8 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   auto *playbackGroup = new View();
   playbackGroup->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
-      ->setGap(10)
-      ->setMargin(Edge::Left, 20)
-      ->setPadding(Edge::All, 12)
-      ->setThemedBackgroundColor(app_theme::panelSubtle)
-      ->setThemedBorderColor(app_theme::hairlineSubtle)
-      ->setBorderWidth(1)
-      ->setCornerRadius(app_theme::controlRadius());
-  playbackGroup->addView(makeLabel(i18n::message("play_options.playback_rate.label")));
+      ->setGap(8);
+  playbackGroup->addView(makeSectionHeader(makeLabel(i18n::message("play_options.playback_rate.label"))));
   auto *playbackRateRow = makeRow();
   playbackRateSlider = new SnappedSlider([this](int percent) {
     if (callbacks.onPlaybackRateSelected) {
@@ -351,7 +359,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   playbackGroup->addView(playbackModeDropdown);
   addView(playbackGroup);
 
-  addView(makeLabel(i18n::message("play_options.club_mode.label")));
+  addView(makeSectionHeader(makeLabel(i18n::message("play_options.club_mode.label"))));
   clubModeButton = makeButton("", 18, nullptr);
   clubModeButton->setName("club-mode");
   clubModeButtonContent = new CheckboxButtonContent("", 18, 17);
@@ -366,7 +374,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   addView(clubModeButton);
 
   if (layout.showPacemaker) {
-    addView(makeLabel(i18n::message("play_options.pacemaker.label")));
+    addView(makeSectionHeader(makeLabel(i18n::message("play_options.pacemaker.label"))));
     View *row = nullptr;
     for (size_t i = 0; i < pacemaker::kSelectableTargets.size(); ++i) {
       if (i % 3 == 0) {

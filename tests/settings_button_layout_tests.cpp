@@ -61,6 +61,32 @@ void requireFits(const SDL_FRect &text, int x, int y, int width, int height) {
           "Japanese button text fits its allocated content without clipping");
 }
 
+void testFlatSettingsSectionUsesContentHeight() {
+  settings_scene::LayoutMetrics metrics;
+  metrics.flatSections = true;
+  metrics.cardPadding = 14;
+  metrics.cardGap = 12;
+  for (const auto language : {i18n::Language::English, i18n::Language::Japanese,
+                              i18n::Language::Korean}) {
+    i18n::setLanguage(language);
+    View root(0, 0, 600, 900);
+    root.setFlexDirection(FlexDirection::Column);
+    auto *body = new View();
+    body->setHeight(48);
+    auto *section = settings_scene::makeCard(
+        metrics, i18n::message("settings.navigation.audio.label"), "", body, 500, 600);
+    root.addView(section);
+    root.applyYogaLayout();
+    require(section->getHeight() < 200,
+            "flat settings sections discard legacy oversized card minimums");
+    require(body->getHeight() == 48 && body->getY() >= section->getY() + 14,
+            "section density preserves controls and localized heading space");
+    require(section->getChildren().front()->getHeight() == 1,
+            "flat settings groups use a single hairline divider");
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
 void testApplicationThemePreservesGameplayPalette() {
   const auto originalMode = ui_theme::activeMode();
   const auto same = [](Color a, Color b) { return a.toABGR() == b.toABGR(); };
@@ -180,6 +206,7 @@ int main() {
   init.resolution.width = 64;
   init.resolution.height = 64;
   assert(bgfx::init(init));
+  testFlatSettingsSectionUsesContentHeight();
   testFixedJapaneseButtonsShrinkOnlyTheirRenderedText();
   testNestedButtonLabelsFitButOrdinaryTextKeepsItsOverflow();
   testButtonFittingRespondsToLanguageAndAvailableHeight();

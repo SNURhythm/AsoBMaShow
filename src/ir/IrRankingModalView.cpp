@@ -77,6 +77,15 @@ TextView *makeText(int size, TextView::TextAlign align = TextView::LEFT) {
   return text;
 }
 
+void addRegionRule(View *region, Edge edge = Edge::Bottom) {
+  auto *rule = new View();
+  rule->setPositionType(YGPositionTypeAbsolute);
+  rule->setPosition(Edge::Left, 0)->setPosition(edge, 0);
+  rule->setWidthPercent(100)->setHeight(1);
+  rule->setThemedBackgroundColor(app_theme::hairline);
+  region->addView(rule);
+}
+
 TextView *makeRankingLampBadge() {
   auto *lamp = makeText(15, TextView::CENTER);
   lamp->setWidth(kLampColumnWidth)->setHeight(32);
@@ -136,8 +145,7 @@ View *makeMetricCardWithValue(i18n::Text label, TextView *&value,
   card->setFlexDirection(FlexDirection::Column);
   card->setPadding(Edge::All, 10);
   card->setGap(4);
-  card->setThemedBackgroundColor(app_theme::panelSubtle);
-  card->setCornerRadius(app_theme::controlRadius());
+  addRegionRule(card, Edge::Top);
   auto *caption = makeText(14);
   caption->setLocalizedText(label);
   caption->setThemedColor(app_theme::textMuted);
@@ -179,8 +187,6 @@ public:
     setPadding(Edge::Top, 5);
     setPadding(Edge::Bottom, 5);
     setGap(2);
-    setCornerRadius(app_theme::controlRadius());
-    setBorderWidth(1);
 
     primary_ = new View();
     primary_->setFlexDirection(FlexDirection::Row);
@@ -212,6 +218,7 @@ public:
     primary_->addView(combo_);
     primary_->addView(time_);
     addView(primary_);
+    addRegionRule(this);
   }
 
   void bind(const IrRankingRowPresentation &row) {
@@ -232,8 +239,6 @@ public:
     setBackgroundColor(row.highlighted
                            ? app_theme::withAlpha(app_theme::cyan(), 42)
                            : app_theme::panelSubtle());
-    setBorderColor(row.highlighted ? app_theme::accentBorderStrong()
-                                   : app_theme::hairlineSubtle());
     player_->setThemedColor(row.highlighted ? app_theme::cyan
                                             : app_theme::textPrimary);
 
@@ -413,8 +418,8 @@ struct IrRankingModal::Impl {
 
     panel->setFlexDirection(FlexDirection::Column);
     panel->setAlignItems(YGAlignStretch);
-    panel->setPadding(Edge::All, 22);
-    panel->setGap(12);
+    panel->setPadding(Edge::All, 18);
+    panel->setGap(8);
     panel->setThemedBackgroundColor(app_theme::panelStrong);
     panel->setCornerRadius(app_theme::panelRadius());
     panel->setThemedBorderColor(app_theme::hairlineStrong);
@@ -427,7 +432,11 @@ struct IrRankingModal::Impl {
     header->setGap(10);
     header->setHeight(52);
     header->setFlexShrink(0);
-    headerTitle = makeText(28);
+    headerTitle = new TextView(app_theme::boldFont, 26, TextView::FontWeight::Bold);
+    headerTitle->setVAlign(TextView::MIDDLE);
+    headerTitle->setOverflow(TextView::TextOverflow::Hidden);
+    headerTitle->setMinWidth(0);
+    headerTitle->setThemedColor(app_theme::textPrimary);
     headerTitle->setLocalizedText(i18n::message("ir.ranking.bokutachi_ranking.label"));
     headerTitle->setFlex(1);
     fetchedAt = makeText(15, TextView::RIGHT);
@@ -437,9 +446,8 @@ struct IrRankingModal::Impl {
     closeButton =
         makeIconActionButton(kIconXmark, [this]() { requestClose(); });
     header->addView(headerTitle);
-    header->addView(fetchedAt);
-    header->addView(refreshButton);
     header->addView(closeButton);
+    addRegionRule(header);
     panel->addView(header);
 
     chartTitle = makeText(21);
@@ -449,14 +457,11 @@ struct IrRankingModal::Impl {
     panel->addView(chartTitle);
 
     comparisonCard = new View();
-    comparisonCard->setHeight(54);
+    comparisonCard->setHeight(42);
     comparisonCard->setFlexShrink(0);
     comparisonCard->setPadding(Edge::Left, 14);
     comparisonCard->setPadding(Edge::Right, 14);
-    comparisonCard->setThemedBackgroundColor(app_theme::panelSubtle);
-    comparisonCard->setCornerRadius(app_theme::controlRadius());
-    comparisonCard->setThemedBorderColor(app_theme::accentBorder);
-    comparisonCard->setBorderWidth(1);
+    addRegionRule(comparisonCard);
     comparison = makeText(17);
     comparisonCard->addView(comparison);
     panel->addView(comparisonCard);
@@ -500,7 +505,7 @@ struct IrRankingModal::Impl {
     auto *tableContent = new View();
     tableContent->setFlexDirection(FlexDirection::Column);
     tableContent->setAlignItems(YGAlignStretch);
-    tableContent->setGap(4);
+    tableContent->setGap(0);
     rankingTable->setContentView(tableContent);
     tableHeader = new RankingTableHeaderView();
     tableContent->addView(tableHeader);
@@ -513,12 +518,10 @@ struct IrRankingModal::Impl {
     list->setFlexShrink(1);
     list->setFlexBasis(0);
     list->setMinHeight(0);
-    list->itemHeight = 74;
+    list->itemHeight = 60;
     list->reserveScrollbarGutter = true;
     list->clearBackgroundColor();
-    list->setCornerRadius(app_theme::controlRadius());
-    list->setThemedBorderColor(app_theme::hairlineSubtle);
-    list->setBorderWidth(1);
+    list->setBorderWidth(0);
     list->onCreateView = [](const auto &) { return new RankingRowView(); };
     list->onBind = [this](View *view, const auto &, int index, bool) {
       auto *row = dynamic_cast<RankingRowView *>(view);
@@ -538,6 +541,16 @@ struct IrRankingModal::Impl {
     paginationStatus->setFlexShrink(0);
     paginationStatus->setDisplay(YGDisplayNone);
     panel->addView(paginationStatus);
+    auto *actionFooter = new View();
+    actionFooter->setFlexDirection(FlexDirection::Row);
+    actionFooter->setAlignItems(YGAlignCenter);
+    actionFooter->setGap(12)->setHeight(60)->setFlexShrink(0);
+    fetchedAt->setFlex(1)->setMinWidth(0);
+    fetchedAt->setAlign(TextView::LEFT);
+    actionFooter->addView(fetchedAt);
+    actionFooter->addView(refreshButton);
+    addRegionRule(actionFooter, Edge::Top);
+    panel->addView(actionFooter);
     root->addView(panel);
     root->setVisible(false);
     buildScoreDetail();
@@ -569,7 +582,11 @@ struct IrRankingModal::Impl {
     detailHeader->setFlexDirection(FlexDirection::Row);
     detailHeader->setAlignItems(YGAlignCenter);
     detailHeader->setGap(10)->setHeight(52)->setFlexShrink(0);
-    scoreDetailTitle = makeText(25);
+    scoreDetailTitle = new TextView(app_theme::boldFont, 25, TextView::FontWeight::Bold);
+    scoreDetailTitle->setVAlign(TextView::MIDDLE);
+    scoreDetailTitle->setOverflow(TextView::TextOverflow::Hidden);
+    scoreDetailTitle->setMinWidth(0);
+    scoreDetailTitle->setThemedColor(app_theme::textPrimary);
     scoreDetailTitle->setFlex(1);
     detailHeader->addView(scoreDetailTitle);
     detailHeader->addView(
@@ -692,6 +709,7 @@ struct IrRankingModal::Impl {
     metadata->addView(
         makeMetricCard(i18n::message("ir.ranking.score_detail.achieved.label"), scoreDetailAchievementTime, 16));
 
+    addRegionRule(detailHeader);
     scoreDetailPanel->addView(detailHeader);
     scoreDetailPanel->addView(summary);
     scoreDetailPanel->addView(scoreDetailJudgements);
@@ -839,7 +857,7 @@ struct IrRankingModal::Impl {
     root->setPadding(Edge::Right, safe.right + kPanelMargin);
     panel->setWidth(static_cast<float>(geometry.width));
     panel->setHeight(static_cast<float>(geometry.height));
-    list->itemHeight = 74;
+    list->itemHeight = 60;
     fetchedAt->setVisible(!geometry.compact);
     fetchedAt->setDisplay(geometry.compact ? YGDisplayNone : YGDisplayFlex);
     root->applyYogaLayout();

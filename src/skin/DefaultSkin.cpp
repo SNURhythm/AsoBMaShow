@@ -140,6 +140,7 @@ void DefaultSkin::resizeResultLayout(View *root, int width, int height) {
     details->setHeight(portrait ? metrics.detailsHeight * 2 + 2 : metrics.detailsHeight);
     details->setFlexShrink(0);
     for (auto *tile : details->getChildren()) {
+      if (tile->getName() == "resultSectionRule") continue;
       if (tile->getName() == "resultMetricDivider") {
         tile->setVisible(!portrait);
         tile->setDisplay(portrait ? YGDisplayNone : YGDisplayFlex);
@@ -244,20 +245,23 @@ void DefaultSkin::buildPresentationResultLayout(
   }
 
   const auto makeLabel = [](const std::string &text, int size, Color color) {
-    auto *label = new TextView(app_theme::font, size);
+    auto *label = new TextView(size >= 26 ? app_theme::boldFont : app_theme::font, size);
     label->setText(text);
     label->setColor(app_theme::sdl(color));
     label->setVAlign(TextView::MIDDLE);
     return label;
   };
 
-  const auto makePanel = [](Color fill, Color border) {
+  const auto makePanel = [](Color, Color border) {
     auto *panel = new View();
-    panel->setBackgroundColor(fill);
-    panel->setCornerRadius(app_theme::panelRadius());
-    panel->setShadow(app_theme::cardShadow(), app_theme::kCardShadow);
-    panel->setBorderColor(border);
-    panel->setBorderWidth(1);
+    // Match the selector's open regions: a single rule, no enclosing card.
+    auto *rule = new View();
+    rule->setName("resultSectionRule");
+    rule->setPositionType(YGPositionTypeAbsolute);
+    rule->setPosition(Edge::Left, 0)->setPosition(Edge::Right, 0);
+    rule->setPosition(Edge::Top, 0)->setHeight(1);
+    rule->setBackgroundColor(border);
+    panel->addView(rule);
     return panel;
   };
 
@@ -289,7 +293,7 @@ void DefaultSkin::buildPresentationResultLayout(
     titleRow->setGap(14);
     titleRow->setHeight(58);
 
-    auto *titleText = new TextView(app_theme::font, 46, TextView::FontWeight::Bold);
+    auto *titleText = new TextView(app_theme::boldFont, 46);
     titleText->setText(presentation.title);
     titleText->setColor(app_theme::sdl(app_theme::textPrimary()));
     titleText->setOverflow(TextView::TextOverflow::Marquee);
@@ -312,14 +316,18 @@ void DefaultSkin::buildPresentationResultLayout(
     }
 
     if (presentation.difficulty.has_value()) {
-      auto *difficultyText = new TextView(app_theme::font, 46, TextView::FontWeight::Bold);
+      auto *difficultyText = new TextView(app_theme::boldFont, 46);
       difficultyText->setText(*presentation.difficulty);
-      difficultyText->setColor(app_theme::sdl(app_theme::amber()));
+      difficultyText->setColor(app_theme::sdl(app_theme::onAction()));
+      difficultyText->setBackgroundColor(app_theme::primaryAction());
+      difficultyText->setAlign(TextView::CENTER);
+      difficultyText->setPadding(Edge::Left, 12);
+      difficultyText->setPadding(Edge::Right, 12);
       difficultyText->setOverflow(TextView::TextOverflow::Hidden);
       difficultyText->setHeight(58);
       difficultyText->setFlexShrink(0);
       difficultyText->setWidth(
-          std::min(440, std::max(1, difficultyText->textureWidth() + 8)));
+          std::min(440, std::max(1, difficultyText->textureWidth() + 24)));
       difficultyText->setName("difficulty");
       titleRow->addView(difficultyText);
     }
@@ -351,7 +359,7 @@ void DefaultSkin::buildPresentationResultLayout(
     if (authoritativePresentation) {
       panel->setWidth(0.0f);
     }
-    panel->setFlexGrow(1.0f);
+    panel->setFlexGrow(semanticName == "score" ? 1.5f : 1.0f);
     panel->setFlexBasis(0.0f);
     panel->setMinWidth(0.0f);
     panel->setFlexDirection(FlexDirection::Column);
@@ -446,13 +454,15 @@ void DefaultSkin::buildPresentationResultLayout(
     comparisonRow->setGap(10);
     comparisonRow->setFlexGrow(1);
     comparisonRow->setName("resultSummaryComparison:" + semanticName);
+    auto *current = makeComparisonColumn(
+        card.current, semanticName + ":current", valueSize, lampStyle);
+    current->setFlexGrow(1.5f);
+    comparisonRow->addView(current);
     if (card.target.has_value()) {
-      comparisonRow->addView(makeComparisonColumn(
-          *card.target, semanticName + ":target", valueSize, lampStyle));
       comparisonRow->addView(makeDivider());
+      comparisonRow->addView(makeComparisonColumn(
+          *card.target, semanticName + ":target", lampStyle ? 20 : 26, lampStyle));
     }
-    comparisonRow->addView(makeComparisonColumn(
-        card.current, semanticName + ":current", valueSize, lampStyle));
     panel->addView(comparisonRow);
 
     if (card.delta.has_value()) {
@@ -499,7 +509,7 @@ void DefaultSkin::buildPresentationResultLayout(
     gradeLabel->setName("resultSummaryTitle:grade");
     gradePanel->addView(gradeLabel);
 
-    auto *gradeText = new TextView(app_theme::font, 96, TextView::FontWeight::Bold);
+    auto *gradeText = new TextView(app_theme::boldFont, 96);
     gradeText->setText(grade->grade);
     gradeText->setColor(app_theme::sdl(grade->accent));
     gradeText->setAlign(TextView::CENTER);
@@ -566,7 +576,7 @@ void DefaultSkin::buildPresentationResultLayout(
     infoGrid->setName("resultInfoGrid");
 
     const auto addInfoTile = [&](const ResultInfoTile &info) {
-      if (!authoritativePresentation && !infoGrid->getChildren().empty()) {
+      if (!authoritativePresentation && infoGrid->getChildren().size() > 1) {
         infoGrid->addView(makeDivider());
       }
       const auto semanticName = resultInfoTileSemanticName(info.kind);
@@ -715,7 +725,7 @@ void DefaultSkin::buildPresentationResultLayout(
     detailsGrid->setName("detailsGrid");
 
     const auto addSeparator = [&]() {
-      if (!authoritativePresentation && !detailsGrid->getChildren().empty()) {
+      if (!authoritativePresentation && detailsGrid->getChildren().size() > 1) {
         auto *divider = makeDivider();
         divider->setName("resultMetricDivider");
         detailsGrid->addView(divider);
@@ -864,11 +874,8 @@ void DefaultSkin::buildPresentationResultLayout(
   View *graphPlaceHolder = nullptr;
   if (showGraph) {
     graphPlaceHolder = new Button();
-    graphPlaceHolder->setBackgroundColor(app_theme::resultPanelSubtle());
-    graphPlaceHolder->setCornerRadius(app_theme::panelRadius());
-    graphPlaceHolder->setShadow(app_theme::cardShadow(), app_theme::kCardShadow);
-    graphPlaceHolder->setBorderColor(app_theme::hairlineSubtle());
-    graphPlaceHolder->setBorderWidth(1);
+    graphPlaceHolder->setFlexDirection(FlexDirection::Column);
+    graphPlaceHolder->setBorderWidth(0);
     graphPlaceHolder->setName("graph");
   }
 
@@ -926,7 +933,7 @@ void DefaultSkin::buildPresentationResultLayout(
   actionsRow->setName("resultActions");
 
   auto *button = new Button(0, 0, 232, 64);
-  auto *buttonText = new TextView(app_theme::font, 24);
+  auto *buttonText = new TextView(app_theme::boldFont, 24);
   buttonText->setText(i18n::tr("result.builtin.back_menu.label"));
   buttonText->setAlign(TextView::CENTER);
   buttonText->setVAlign(TextView::MIDDLE);
