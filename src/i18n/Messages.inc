@@ -530,7 +530,7 @@
 {"menu.details.select_chart.label", "Select a chart", "채보를 선택하세요", "譜面を選択", "选择谱面", "選擇譜面"},
 {"menu.details.total.label", "TOTAL", "TOTAL", "TOTAL", "TOTAL", "TOTAL"},
 {"menu.details.total_auto.label", "TOTAL · AUTO", "TOTAL · 자동", "TOTAL · 自動", "TOTAL · 自动", "TOTAL · 自動"},
-{"menu.details.unplayed.label", "Not played", "플레이 기록 없음", "未プレイ", "未演奏", "尚未演奏"},
+{"menu.details.unplayed.label", "Not played", "미플레이", "未プレイ", "未演奏", "尚未演奏"},
 {"menu.export_log.label", "Export Log", "로그 내보내기", "ログを書き出す", "导出日志", "匯出記錄"},
 {"menu.exported.label", "Exported", "내보내기 완료", "書き出し完了", "已导出", "已匯出"},
 {"menu.exporting.progress", "Exporting...", "내보내는 중...", "書き出し中...", "正在导出...", "正在匯出..."},

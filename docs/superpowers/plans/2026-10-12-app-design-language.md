@@ -205,3 +205,8 @@ including geometry at resized tablet/phone window sizes, option-cell bounds,
 empty text clipping, tab behavior, IR logic, and text/font lifetime. Desktop,
 iOS simulator, and Android restricted-file release builds passed. No fresh
 hands-on visual pass was performed.
+
+The remaining Music top-header container and per-page summary rows are also
+removed. Standalone Music keeps its Back action in the navigation rail, and
+safe-area layout no longer reserves header height. The Korean unplayed label
+is now “미플레이”. Desktop build and six focused tests passed for this follow-up.

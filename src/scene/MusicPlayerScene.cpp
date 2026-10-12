@@ -42,7 +42,6 @@ namespace {
 
 constexpr const char *kFontPath = app_theme::font;
 constexpr float kScreenPadding = 18.0f;
-constexpr float kHeaderHeight = 82.0f;
 constexpr float kRailWidth = 350.0f;
 constexpr int kTrackRowHeight = 68;
 constexpr int kPlaylistRowHeight = 58;
@@ -701,12 +700,7 @@ void MusicPlayerScene::updateLayoutInsets() {
   auto safe = getSafeAreaInsetsUi();
   if (embeddedTab) safe.top = 0;
   rootLayout->setSize(rendering::window_width, rendering::window_height);
-  rootLayout->setPadding(Edge::Top, embeddedTab ? tabTopInset : 0);
-  headerLayout->setDisplay(embeddedTab ? YGDisplayNone : YGDisplayFlex);
-  headerLayout->setHeight(safe.top + kHeaderHeight)
-      ->setPadding(Edge::Top, safe.top + 10)
-      ->setPadding(Edge::Left, safe.left + kScreenPadding)
-      ->setPadding(Edge::Right, safe.right + kScreenPadding);
+  rootLayout->setPadding(Edge::Top, embeddedTab ? tabTopInset : safe.top);
   contentLayout->setPadding(Edge::Bottom, safe.bottom)
       ->setPadding(Edge::Left, safe.left)
       ->setPadding(Edge::Right, safe.right);
@@ -730,7 +724,7 @@ void MusicPlayerScene::updateLayoutInsets() {
   if (auto *spacer = rootLayout->findViewByName("musicNavigationSpacer")) {
     spacer->setDisplay(compactNavigation ? YGDisplayNone : YGDisplayFlex);
   }
-  if (embeddedTab && statusText != nullptr) {
+  if (statusText != nullptr) {
     statusText->setDisplay(compactNavigation ? YGDisplayNone : YGDisplayFlex);
   }
   const bool phoneStack = rendering::compactMenuCanvasActive && width < 900;
@@ -754,7 +748,7 @@ void MusicPlayerScene::updateLayoutInsets() {
     if (auto *art = rootLayout->findViewByName(name)) art->setDisplay(phoneStack ? YGDisplayNone : YGDisplayFlex);
   }
   const float availableHeight = rendering::window_height - safe.bottom -
-      (embeddedTab ? tabTopInset : safe.top + kHeaderHeight) -
+      (embeddedTab ? tabTopInset : safe.top) -
       (compactNavigation ? 76 : 0) - 150;
   for (const auto *name : {"musicPlayerViewport", "musicPlaylistsViewport"}) {
     auto *viewport = dynamic_cast<ScrollView *>(rootLayout->findViewByName(name));
@@ -894,7 +888,6 @@ void MusicPlayerScene::cleanupScene() {
     context.jukebox.setVisualsEnabled(videoPreviousVisualsEnabled);
   }
   rootLayout = nullptr;
-  headerLayout = nullptr;
   contentLayout = nullptr;
   overlayPortal = nullptr;
   videoOverlayRoot = nullptr;
@@ -1004,7 +997,7 @@ void MusicPlayerScene::buildView() {
       new View(0, 0, rendering::window_width, rendering::window_height);
   rootLayout->setFlexDirection(FlexDirection::Column);
   rootLayout->setAlignItems(YGAlignStretch);
-  rootLayout->setPadding(Edge::Top, embeddedTab ? tabTopInset : 0);
+  rootLayout->setPadding(Edge::Top, embeddedTab ? tabTopInset : safe.top);
   rootLayout->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
   addView(rootLayout);
 
@@ -1015,41 +1008,10 @@ void MusicPlayerScene::buildView() {
   overlayPortal->setPosition(Edge::Top, 0);
   overlayPortal->setZIndex(900);
 
-  auto *header = new View();
-  headerLayout = header;
-  header->setFlexShrink(0);
-  header->setDisplay(embeddedTab ? YGDisplayNone : YGDisplayFlex);
-  header->setHeight(safe.top + kHeaderHeight)
-      ->setFlexDirection(FlexDirection::Row)
-      ->setAlignItems(YGAlignCenter)
-      ->setGap(14)
-      ->setPadding(Edge::Top, safe.top + 10)
-      ->setPadding(Edge::Left, safe.left + kScreenPadding)
-      ->setPadding(Edge::Right, safe.right + kScreenPadding)
-      ->setPadding(Edge::Bottom, 10)
-      ->setThemedBackgroundColor(app_theme::panel)
-      ->setThemedShadow(app_theme::shadow, app_theme::kHeaderShadow)
-      ->setThemedBorderColor(app_theme::hairline)
-      ->setBorderWidth(1);
-
-  auto *titleColumn = new View();
-  titleColumn->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setFlex(1)
-      ->setMinWidth(0);
-
-  auto *title = new TextView(app_theme::boldFont, 34);
-  title->setLocalizedText(i18n::message("music_player.music_player.label"));
-  title->setHeight(42);
-  title->setThemedColor(app_theme::textPrimary);
-  titleColumn->addView(title);
-
   statusText = new TextView(kFontPath, 17);
   statusText->setHeight(26);
   statusText->setThemedColor(app_theme::textSecondary);
   statusText->setOverflow(TextView::TextOverflow::Hidden);
-  if (!embeddedTab) titleColumn->addView(statusText);
-  header->addView(titleColumn);
 
   TextView *backText = nullptr;
   auto *backButton = makeButton(i18n::message("music_player.back.label"), 20, &backText);
@@ -1060,8 +1022,6 @@ void MusicPlayerScene::buildView() {
   backButton->setOnClickListener([this]() { goBack(); });
   backButton->setVisible(!embeddedTab);
   backButton->setDisplay(embeddedTab ? YGDisplayNone : YGDisplayFlex);
-  header->addView(backButton);
-  rootLayout->addView(header);
 
   auto *content = new View();
   contentLayout = content;
@@ -1099,6 +1059,8 @@ void MusicPlayerScene::buildView() {
   playerNavButton = makeNavButton(i18n::message("music_player.navigation.player.label"), &playerNavText);
   playerNavButton->setOnClickListener(
       [this]() { switchTab(MusicPlayerTab::Player); });
+  if (!embeddedTab) rail->addView(backButton);
+  else delete backButton;
   rail->addView(libraryNavButton);
   rail->addView(favoritesNavButton);
   rail->addView(playlistsNavButton);
@@ -1108,11 +1070,9 @@ void MusicPlayerScene::buildView() {
   railSpacer->setName("musicNavigationSpacer");
   railSpacer->setFlex(1);
   rail->addView(railSpacer);
-  if (embeddedTab) {
-    statusText->setHeight(72);
-    statusText->setWrap(true);
-    rail->addView(statusText);
-  }
+  statusText->setHeight(72);
+  statusText->setWrap(true);
+  rail->addView(statusText);
   content->addView(rail);
 
   auto *pageStack = new View();
@@ -2262,17 +2222,7 @@ View *MusicPlayerScene::makePanel(const i18n::Text &,
       ->setGap(10)
       ->setPadding(Edge::All, 24);
 
-  if (subtitleText != nullptr) {
-    *subtitleText = new TextView(kFontPath, 16);
-    (*subtitleText)->setHeight(24);
-    (*subtitleText)->setThemedColor(app_theme::textSecondary);
-    (*subtitleText)->setOverflow(TextView::TextOverflow::Hidden);
-    panel->addView(*subtitleText);
-  }
-  auto *rule = new View();
-  rule->setHeight(1)->setFlexShrink(0)
-      ->setThemedBackgroundColor(main_menu_theme::rule);
-  panel->addView(rule);
+  if (subtitleText != nullptr) *subtitleText = nullptr;
   return panel;
 }
 

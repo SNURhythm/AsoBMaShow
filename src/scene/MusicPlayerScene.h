@@ -233,7 +233,6 @@ private:
   void goBack();
 
   View *rootLayout = nullptr;
-  View *headerLayout = nullptr;
   View *contentLayout = nullptr;
   OverlayPortal *overlayPortal = nullptr;
   View *videoOverlayRoot = nullptr;
