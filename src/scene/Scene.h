@@ -51,6 +51,7 @@ public:
   virtual void updateReplayExportProgress() {}
   virtual bool pausesBackgroundTasksForPerformance() const { return false; }
   virtual bool locksOrientation() const { return false; }
+  virtual bool usesResponsiveMenuCanvas() const { return false; }
   virtual EventHandleResult handleEvents(SDL_Event &event) {
     for (auto view : views) {
       if (!view->handleEvents(event)) {

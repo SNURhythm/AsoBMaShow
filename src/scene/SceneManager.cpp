@@ -28,6 +28,9 @@ void SceneManager::cleanupSceneInstance(Scene *scene) {
 }
 
 void SceneManager::updateForegroundSceneState() {
+  if (context.setResponsiveMenuCanvas) {
+    context.setResponsiveMenuCanvas(currentScene && currentScene->usesResponsiveMenuCanvas());
+  }
   const bool lockOrientation = currentScene && currentScene->locksOrientation();
   if (lockOrientation != orientationLocked_) {
     orientationLocked_ = lockOrientation;

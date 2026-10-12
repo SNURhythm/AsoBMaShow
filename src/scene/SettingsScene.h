@@ -79,6 +79,7 @@ enum class SettingsDestination { Profile, Ir };
 
 class SettingsScene : public Scene, public IRhythmControl {
 public:
+  bool usesResponsiveMenuCanvas() const override { return true; }
   explicit SettingsScene(
       ApplicationContext &context,
       SettingsDestination destination = SettingsDestination::Profile,

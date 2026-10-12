@@ -1,3 +1,4 @@
+#include "../rendering/ResponsiveUi.h"
 #include "../i18n/Localization.h"
 #include "IrUploadsScene.h"
 
@@ -165,9 +166,25 @@ void IrUploadsScene::updateLayoutInsets() {
       ->setPadding(Edge::Left, safe.left)
       ->setPadding(Edge::Right, safe.right);
   const float width = rendering::window_width - safe.left - safe.right;
+  const bool phoneStack = rendering::phoneMenuCanvasActive && width < 900;
+  contentLayout->setFlexDirection(phoneStack ? FlexDirection::Column : FlexDirection::Row);
   if (auto *rail = rootLayout->findViewByName("irProviderRail")) {
-    rail->setWidth(width < 1100 ? width * 0.28F : 350);
+    rail->setWidth(phoneStack ? width : (width < 1100 ? width * 0.28F : 350));
+    rail->setHeight(phoneStack ? 112 : YGUndefined);
+    rail->setFlexDirection(phoneStack ? FlexDirection::Row : FlexDirection::Column);
+    rail->setPadding(Edge::All, phoneStack ? 12 : 24);
   }
+  if (auto *provider = rootLayout->findViewByName("irProviderIdentity")) {
+    provider->setFlex(phoneStack ? 1 : 0);
+  }
+  providerStatusText->setMinHeight(phoneStack ? 36 : 100);
+  openIrSettingsButton->setWidth(phoneStack ? 160 : YGUndefined);
+  if (!phoneStack) openIrSettingsButton->setWidthPercent(100);
+  if (rendering::phoneMenuCanvasActive) {
+    for (auto *button : {openIrSettingsButton, selectAllButton, clearButton, refreshButton})
+      button->setHeight(rendering::phoneTouchTarget);
+  }
+
   rootLayout->applyYogaLayout();
 }
 
@@ -327,6 +344,7 @@ void IrUploadsScene::buildView() {
       ->setThemedBackgroundColor(main_menu_theme::ruleStrong);
   providerCard->addView(railRule);
   auto *providerColumn = new View();
+  providerColumn->setName("irProviderIdentity");
   providerColumn->setMinWidth(0)
       ->setFlexDirection(FlexDirection::Column)
       ->setGap(4);

@@ -19,6 +19,7 @@
 #include "view/TextInputBox.h"
 #include "i18n/Localization.h"
 #include "rendering/UniformCache.h"
+#include "rendering/ResponsiveUi.h"
 #include "scene/SettingsSceneInputLayout.h"
 
 #include <SDL3/SDL.h>
@@ -325,6 +326,39 @@ void testLanguageRefreshPreservesPlayOptionsEditingAndScroll() {
   i18n::setLanguage(i18n::Language::English);
 }
 
+void testPhoneOptionsReflowWithoutLosingSelection() {
+  rendering::phoneMenuCanvasActive = true;
+  {
+    GameplayRuleset selected = GameplayRuleset::LR2;
+    ScrollView scroll(0, 0, 420, 240);
+    auto *panel = new PlayOptionsPanelView(
+        {.onRulesetSelected = [&](GameplayRuleset value) { selected = value; }},
+        {.width = 420, .playOptionColumns = 2}, nullptr);
+    scroll.setContentView(panel);
+    panel->refresh({.ruleset = selected});
+    for (const int width : {420, 700, 420}) {
+      scroll.setWidth(width);
+      panel->setWidth(width);
+      scroll.refreshContentLayout();
+      scroll.applyYogaLayout();
+      for (const char *name : {"ruleset-lr2", "ruleset-beatoraja"}) {
+        auto *button = dynamic_cast<Button *>(panel->findViewByName(name));
+        require(button && button->getHeight() >= rendering::phoneTouchTarget,
+                "phone ruleset buttons retain 44-point touch height after rotation");
+        require(button->getX() >= panel->getX() &&
+                    button->getX() + button->getWidth() <= panel->getX() + width,
+                "phone option buttons stay inside the resized panel");
+      }
+    }
+    click(*static_cast<Button *>(panel->findViewByName("ruleset-beatoraja")));
+    require(selected == GameplayRuleset::Beatoraja,
+            "phone options remain interactive after rotating twice");
+    scroll.scrollToBottom();
+    require(scroll.getScrollOffset() > 0, "short phone option panes remain scrollable");
+  }
+  rendering::phoneMenuCanvasActive = false;
+}
+
 void testLaneCoverControlsAreAvailableInPlayOptions() {
   lane_cover::State selected;
   int changes = 0;
@@ -556,6 +590,7 @@ int main() {
   testColorPickerDragAndRelease();
   testSliderReleaseConsumedByDisabledSiblingEndsOnlyItsGesture();
   testLanguageRefreshPreservesPlayOptionsEditingAndScroll();
+  testPhoneOptionsReflowWithoutLosingSelection();
   testLaneCoverControlsAreAvailableInPlayOptions();
   testLaneOrderDraftTracksAuthoritativeSelectionAndProfile();
   testScrollViewUsesPreciseWheelDeltaAndNaturalDirection();

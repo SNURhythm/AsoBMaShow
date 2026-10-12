@@ -31,6 +31,7 @@ class View;
 
 class MusicPlayerScene : public Scene {
 public:
+  bool usesResponsiveMenuCanvas() const override { return true; }
   explicit MusicPlayerScene(
       ApplicationContext &context,
       SceneReturnTarget returnTarget =

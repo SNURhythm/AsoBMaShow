@@ -18,15 +18,18 @@ class UiScaleTests(unittest.TestCase):
                              "void MainMenuScene::updateMenuPresentation(bool portrait)") + "\n" + extract(
                                  (root / "src/scene/MainMenuScene.cpp").read_text(),
                                  "float MainMenuScene::portraitDetailsHeight(float availableHeight) const")
+        method += "\n" + extract((root / "src/scene/MainMenuScene.cpp").read_text(), "void MainMenuScene::updatePhonePanelLayout()")
         for signature in ("void MainMenuScene::refreshPrimaryActionVisibility()",
                           "void MainMenuScene::setFindBmsButtonVisible(bool visible)",
                           "void MainMenuScene::setUnzipButtonVisible(bool visible)"):
             method += "\n" + extract((root / "src/scene/MainMenuScene.cpp").read_text(), signature)
         source = r'''
 #include <yoga/Yoga.h>
+#include "rendering/ResponsiveUi.h"
 #include <array>
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -85,6 +88,8 @@ struct MainMenuScene {
   Button *replayButton,*rankingsButton,*startButton,*unzipButton,*findBmsButton;
   View *searchBox,*chartFilterButton,*chartSortButton,*replayButtonText,*rankingsButtonText;
   void updatePanelLayout(); void updateMenuPresentation(bool portrait);
+  void updatePhonePanelLayout();
+  bool phoneLibraryOpen_=false,phoneDetailsOpen_=false;
   float portraitDetailsHeight(float) const;
   View *primaryActionSlot_=nullptr;
   bool unzipButtonAvailable_=false,findBmsAvailableWithoutTutorial_=false;
@@ -101,6 +106,8 @@ int main() {
   ScrollView scroll("mainMenuDetailsScroll"),controlsScroll("controlsScroll");
   ChartDetails chart;
   Button settings("mainMenuSettings"),options("options"),replay("replay"),ranking("ranking"),start("start"),unzip("unzip"),find("find");
+  View phoneLibrary("mainMenuPhoneLibrary"),phoneDetails("mainMenuPhoneDetails");
+  toolbar.add(phoneLibrary);toolbar.add(phoneDetails);
   root.setPadding(Edge::All,0)->setGap(0)->setAlignItems(YGAlignStretch);
   browser.setFlexDirection(FlexDirection::Row)->setGap(0)->setMinWidth(0)->setMinHeight(0);
   root.add(header);header.setHeight(80)->setFlexShrink(0)->setFlexDirection(FlexDirection::Row);header.add(wordmark);header.add(tabs);tabs.setWidth(320);header.add(toolbar);
@@ -227,13 +234,36 @@ int main() {
     assert(YGNodeLayoutGetTop(primary.node)+YGNodeLayoutGetHeight(primary.node)<=YGNodeLayoutGetHeight(controls.node)+1);
     assert(YGNodeLayoutGetLeft(controls.node)+YGNodeLayoutGetWidth(controls.node)<=YGNodeLayoutGetWidth(details.node)+1);
   }
+  rendering::phoneMenuCanvasActive=true;
+  for (const auto dimensions : {std::pair{585,1266},std::pair{1266,585}}) {
+    rendering::window_width=dimensions.first;rendering::window_height=dimensions.second;
+    root.setWidth(dimensions.first)->setHeight(dimensions.second);
+    scene.phoneLibraryOpen_=false;scene.phoneDetailsOpen_=false;
+    scene.updatePanelLayout();root.applyYogaLayout();
+    assert(YGNodeStyleGetDisplay(library.node)==YGDisplayNone);
+    assert(YGNodeStyleGetDisplay(details.node)==YGDisplayNone);
+    assert(YGNodeLayoutGetWidth(songs.node)==YGNodeLayoutGetWidth(browser.node));
+    assert(YGNodeLayoutGetHeight(actionSlot.node)==80);
+    assert(YGNodeLayoutGetTop(dock.node)+YGNodeLayoutGetHeight(dock.node)<=dimensions.second-20);
+    scene.phoneLibraryOpen_=true;
+    scene.updatePanelLayout();root.applyYogaLayout();
+    assert(YGNodeStyleGetDisplay(songs.node)==YGDisplayNone);
+    assert(YGNodeLayoutGetWidth(library.node)==YGNodeLayoutGetWidth(browser.node));
+    scene.phoneLibraryOpen_=false;scene.phoneDetailsOpen_=true;
+    scene.updatePanelLayout();root.applyYogaLayout();
+    assert(YGNodeStyleGetDisplay(browser.node)==YGDisplayNone);
+    assert(YGNodeStyleGetDisplay(details.node)==YGDisplayFlex);
+    assert(YGNodeLayoutGetHeight(scroll.node)>0);
+    assert(YGNodeLayoutGetWidth(actionSlot.node)==YGNodeLayoutGetWidth(dock.node));
+  }
+
 }
 '''.replace("PRODUCTION_METHOD", method)
         with tempfile.TemporaryDirectory(prefix="asobmashow-menu-yoga-") as temp:
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             path.write_text(source)
-            subprocess.run(["c++", "-std=c++20", "-I", str(root / "yoga"), str(path),
+            subprocess.run(["c++", "-std=c++20", "-I", str(root / "yoga"), "-I", str(root / "src"), str(path),
                             os.environ.get("ASOBMASHOW_TEST_YOGA_LIBRARY", str(root / "cmake-build-debug/yoga/yoga/libyogacore.a")), "-o", str(binary)], check=True)
             subprocess.run([str(binary)], check=True)
 
@@ -691,6 +721,34 @@ int main() {
 }
 '''.replace("PRODUCTION_METHOD", method)
         with tempfile.TemporaryDirectory(prefix="asobmashow-portrait-camera-") as temp:
+            path = Path(temp) / "test.cpp"
+            binary = Path(temp) / "test"
+            path.write_text(source)
+            subprocess.run(["c++", "-std=c++23", "-I", str(root / "src"), str(path), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
+    def test_phone_menu_canvas_preserves_tablet_and_gameplay_coordinates(self):
+        root = Path(__file__).resolve().parents[1]
+        source = r"""
+#include "rendering/ResponsiveUi.h"
+#include <cassert>
+int main() {
+  using rendering::responsiveMenuCanvasWidth;
+  assert(responsiveMenuCanvasWidth(1170, 2532, 390, true) == 585);
+  assert(responsiveMenuCanvasWidth(2532, 1170, 844, true) == 1266);
+  assert(responsiveMenuCanvasWidth(2048, 2732, 1024, false) == 1080);
+  assert(responsiveMenuCanvasWidth(2732, 2048, 1366, false) == 1920);
+  assert(responsiveMenuCanvasWidth(1170, 2532, 390, false) == 1080);
+  assert(responsiveMenuCanvasWidth(2532, 1170, 844, false) == 1920);
+  // A 66-unit phone control occupies 44 logical points at either pixel density.
+  for (const int density : {2, 3}) {
+    const int drawable = 390 * density;
+    const auto canvas = responsiveMenuCanvasWidth(drawable, 844 * density, 390, true);
+    assert(66.0 * drawable / canvas / density == 44.0);
+  }
+}
+"""
+        with tempfile.TemporaryDirectory(prefix="asobmashow-phone-canvas-") as temp:
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             path.write_text(source)

@@ -273,6 +273,7 @@ public:
   std::function<void()> requestRebuildChartLibrary;
   std::function<void()> notifyBackgroundTaskPauseStateChanged;
   std::function<void(bool)> setGameplayOrientationLocked;
+  std::function<void(bool)> setResponsiveMenuCanvas;
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::optional<skin::SkinStorageRoots> skinStorageRoots;

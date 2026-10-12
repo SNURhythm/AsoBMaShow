@@ -1,3 +1,5 @@
+#include "rendering/ResponsiveUi.h"
+#include "view/ScrollView.h"
 #include "rendering/UniformCache.h"
 #include "rendering/common.h"
 #include "scene/ReplayRecordsModal.h"
@@ -146,6 +148,9 @@ Button *findVisibleButton(View *view, const std::string &label) {
     if (!text && content)
       text = dynamic_cast<TextView *>(content->findViewByName("actionCaption"));
     if (text && text->getText() == label) return button;
+  }
+  if (auto *scroll = dynamic_cast<ScrollView *>(view)) {
+    if (auto *found = findVisibleButton(scroll->getContentView(), label)) return found;
   }
   for (auto *child : view->getChildren()) {
     if (auto *found = findVisibleButton(child, label)) return found;
@@ -329,6 +334,40 @@ void testCourseTargetsHaveIndependentIdentity() {
 
 } // namespace
 
+void testPhoneRecordDialogFitsAndRotates() {
+  rendering::phoneMenuCanvasActive = true;
+  const int oldWidth = rendering::window_width;
+  const int oldHeight = rendering::window_height;
+  rendering::window_width = 585;
+  rendering::window_height = 1266;
+  View root(0, 0, 585, 1266);
+  const auto record = modernChartRecord();
+  auto modal = ReplayRecordsModal::Create(&root, {
+      .loadRecords = [&](const ChartMetaRecord &) { return std::vector<ResultRecordSummary>{record}; }});
+  modal->showChart({});
+  modal->selectRecord(record);
+  for (const auto size : {std::pair{585, 1266}, std::pair{1266, 585}, std::pair{480, 1000}}) {
+    rendering::window_width = size.first;
+    rendering::window_height = size.second;
+    root.setSize(size.first, size.second);
+    modal->resize(size.first, size.second);
+    modal->root()->applyYogaLayout();
+    auto *panel = modal->root()->findViewByName("recordsPanel");
+    expect(panel->getX() >= 0 && panel->getY() >= 0 &&
+               panel->getX() + panel->getWidth() <= size.first &&
+               panel->getY() + panel->getHeight() <= size.second,
+           "phone records panel stays inside both orientations");
+    auto *watch = findVisibleButton(modal->root(), i18n::tr("records.watch.label"));
+    auto *exportVideo = findVisibleButton(modal->root(), i18n::tr("records.export_video.label"));
+    expect(watch && exportVideo && watch->getY() + watch->getHeight() <= size.second &&
+               exportVideo->getX() + exportVideo->getWidth() <= size.first,
+           "phone replay actions remain reachable inside the panel");
+  }
+  rendering::phoneMenuCanvasActive = false;
+  rendering::window_width = oldWidth;
+  rendering::window_height = oldHeight;
+}
+
 int main() {
   bgfx::Init init;
   init.type = bgfx::RendererType::Noop;
@@ -338,6 +377,7 @@ int main() {
     std::cerr << "FAIL: headless bgfx did not initialize\n";
     return 1;
   }
+  testPhoneRecordDialogFitsAndRotates();
   testReplayPreferencesRestoreAcrossModalInstances();
   testKeysoundSelectionFlowsThroughWatchAndExport();
   testCourseTargetsHaveIndependentIdentity();

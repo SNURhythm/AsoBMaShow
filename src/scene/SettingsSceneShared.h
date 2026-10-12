@@ -1,3 +1,4 @@
+#include "../rendering/ResponsiveUi.h"
 #pragma once
 #include "../i18n/Localization.h"
 
@@ -155,6 +156,12 @@ inline LayoutMetrics resolveLayoutMetrics() {
     metrics.modeCardHeight = 156;
   }
 
+  if (rendering::phoneMenuCanvasActive) {
+    metrics.actionButtonHeight = rendering::phoneTouchTarget;
+    metrics.backButtonHeight = rendering::phoneTouchTarget;
+    metrics.bodyTextSize = 24;
+    metrics.smallTextSize = 21;
+  }
   const int availableWidth =
       std::max(0, rendering::window_width - metrics.safe.left -
                       metrics.safe.right - metrics.horizontalPadding * 2);

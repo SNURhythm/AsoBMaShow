@@ -159,3 +159,24 @@ Verification: desktop build passed; both focused tests passed. Rendered caption
 and glyph bounds are checked at compact widths in English, Japanese, and Korean,
 and replay tests exercise the actual button clicks through the new content.
 `git diff --check` passed. Native preview was blocked by the locked Mac.
+
+## iPhone menu responsiveness
+
+Built-in iPhone menus use a canvas derived from logical device width, at 1.5 UI
+units per point. Main actions and dropdown rows use 66-unit (44-point) touch
+targets. Scene transitions select this canvas before initialization/resume;
+iPad and gameplay/skin scenes retain their existing design coordinates.
+
+The phone selector shows songs, library, or details one at a time, with Library
+and Details controls in the header and Play docked above the bottom safe area.
+Music library details stack below the list on narrow phones, and IR provider
+information moves above the upload workspace. Settings adopts phone control
+metrics. Replay and play-options dialogs fit the safe area after rotation;
+replay actions wrap into two columns and option pages scroll on short screens.
+
+Validation: desktop and iOS simulator builds passed. Nine focused tests cover
+phone/iPad canvas policy, selector rotation, replay modal bounds, play-options
+resizing and selection, dropdown behavior, settings layout/lifetime, scene
+transitions, and result layout/skin lifecycle. Native launch succeeded, but the
+iPhone Duo display/input bridge returned black frames or an incomplete stream,
+so hands-on visual verification remains outstanding. No distribution was run.

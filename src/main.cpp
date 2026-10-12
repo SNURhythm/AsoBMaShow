@@ -1,3 +1,4 @@
+#include "rendering/ResponsiveUi.h"
 #include "rendering/PortraitPlayfieldFraming.h"
 #include "rendering/UiSafeArea.h"
 #include "settings/PresentationOrientationState.h"
@@ -328,6 +329,13 @@ void rendering::updateUIScale(int renderW, int renderH) {
   render_width = renderW;
   render_height = renderH;
   window_width = renderW < renderH ? design_height : design_width;
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  int logicalWidth = 0;
+  int logicalHeight = 0;
+  platform::windowSize(s_window, &logicalWidth, &logicalHeight);
+  window_width = responsiveMenuCanvasWidth(renderW, renderH, logicalWidth,
+                                            phoneMenuCanvasActive);
+#endif
   ui_scale_x = static_cast<float>(renderW) / static_cast<float>(window_width);
   ui_scale_y = ui_scale_x;
   window_height = static_cast<int>(renderH / ui_scale_y);
@@ -835,6 +843,15 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       context.sceneManager->setPresentationOrientation(presentationOrientation.orientation());
     appliedOrientation = context.settings.screenOrientation;
     screen_orientation::apply(appliedOrientation, locked);
+  };
+  context.setResponsiveMenuCanvas = [](bool menu) {
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+    const bool phoneMenu = menu && !IsIOSPad();
+    if (rendering::phoneMenuCanvasActive != phoneMenu) {
+      rendering::phoneMenuCanvasActive = phoneMenu;
+      rendering::updateUIScale(rendering::render_width, rendering::render_height);
+    }
+#endif
   };
   screen_orientation::apply(appliedOrientation, false);
   context.bgfxResetFlags.store(s_bgfxResetFlags, std::memory_order_relaxed);
@@ -1914,6 +1931,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   }
   sceneManager.cleanup();
   context.setGameplayOrientationLocked = {};
+  context.setResponsiveMenuCanvas = {};
   if (context.displaySettingsManager) {
     const auto shutdownResult = context.displaySettingsManager->shutdown();
     if (!shutdownResult.message.empty()) {

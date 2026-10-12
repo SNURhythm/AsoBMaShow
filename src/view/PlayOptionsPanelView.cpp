@@ -13,6 +13,7 @@
 #include "SnappedSlider.h"
 #include "TextView.h"
 #include "AppTheme.h"
+#include "../rendering/ResponsiveUi.h"
 
 #include <algorithm>
 #include <utility>
@@ -48,14 +49,17 @@ View *makeRow(float height = 48.0f) {
   row->setFlexDirection(FlexDirection::Row);
   row->setAlignItems(YGAlignStretch);
   row->setGap(10);
-  row->setHeight(height);
+  row->setHeight(rendering::phoneMenuCanvasActive ? YGUndefined : height);
+  if (rendering::phoneMenuCanvasActive) {
+    row->setFlexWrap(YGWrapWrap)->setMinHeight(rendering::phoneTouchTarget);
+  }
   return row;
 }
 
 Button *makeButton(const i18n::Text &label, int fontSize, TextView **textOut) {
-  auto *button = new Button(0, 0, 0, 48);
+  auto *button = new Button(0, 0, 0, rendering::phoneMenuCanvasActive ? rendering::phoneTouchTarget : 48);
   button->setFlexGrow(1.0f);
-  button->setFlexBasis(0.0f);
+  button->setFlexBasis(rendering::phoneMenuCanvasActive ? 120.0f : 0.0f);
   button->setFlexShrink(1.0f);
   button->setCornerRadius(app_theme::controlRadius());
   button->setStyledBorderWidth(1);
@@ -275,10 +279,10 @@ PlayOptionsPanelView::PlayOptionsPanelView(
                     callbacks.isPlayOptionAllowed(option);
            }},
       {.columns = layout.playOptionColumns,
-       .rowHeight = 48,
+       .rowHeight = rendering::phoneMenuCanvasActive ? rendering::phoneTouchTarget : 48.0f,
        .buttonFontSize = 15,
        .showLaneOrder = layout.showLaneOrder});
-  playOptionSection->setWidth(layout.width);
+  playOptionSection->setWidthPercent(100);
   addView(playOptionSection);
 
   addView(makeSectionHeader(makeLabel(i18n::message("play_options.long_note_mode.label"))));

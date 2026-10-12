@@ -1,3 +1,4 @@
+#include "../rendering/ResponsiveUi.h"
 #include "../i18n/Localization.h"
 #include "MusicPlayerScene.h"
 
@@ -732,10 +733,25 @@ void MusicPlayerScene::updateLayoutInsets() {
   if (embeddedTab && statusText != nullptr) {
     statusText->setDisplay(compactNavigation ? YGDisplayNone : YGDisplayFlex);
   }
+  const bool phoneStack = rendering::phoneMenuCanvasActive && width < 900;
+  for (const auto *name : {"musicLibraryWorkspace", "musicFavoritesWorkspace"}) {
+    if (auto *workspace = rootLayout->findViewByName(name)) {
+      workspace->setFlexDirection(phoneStack ? FlexDirection::Column : FlexDirection::Row);
+      workspace->setMinHeight(0);
+    }
+  }
+  for (auto *list : {libraryList, favoritesList}) {
+    if (list) list->setMinHeight(phoneStack ? 160 : 0);
+  }
   for (const auto *name : {"musicLibraryDetail", "musicFavoritesDetail"}) {
     if (auto *detail = rootLayout->findViewByName(name)) {
-      detail->setWidth(width < 1100 ? 250 : 320);
+      if (phoneStack) detail->setWidthPercent(100)->setHeight(260)->setFlexShrink(0);
+      else detail->setWidth(width < 1100 ? 250 : 320)->setHeight(YGUndefined);
+
     }
+  }
+  for (const auto *name : {"musicLibraryArtwork", "musicFavoritesArtwork"}) {
+    if (auto *art = rootLayout->findViewByName(name)) art->setDisplay(phoneStack ? YGDisplayNone : YGDisplayFlex);
   }
   const float availableHeight = rendering::window_height - safe.bottom -
       (embeddedTab ? tabTopInset : safe.top + kHeaderHeight) -
@@ -1373,6 +1389,7 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   panel->addView(searchRow);
 
   auto *workspace = new View();
+  workspace->setName(isLibrary ? "musicLibraryWorkspace" : "musicFavoritesWorkspace");
   workspace->setFlex(1)
       ->setFlexDirection(FlexDirection::Row)
       ->setAlignItems(YGAlignStretch)
@@ -1462,6 +1479,7 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
       ->setPosition(Edge::Top, 0)
       ->setCornerRadius(app_theme::controlRadius());
   libraryArtFrame->addView(artworkImage);
+  libraryArtFrame->setName(isLibrary ? "musicLibraryArtwork" : "musicFavoritesArtwork");
   actions->addView(libraryArtFrame);
 
   auto *selectionTitleText = new TextView(app_theme::boldFont, 28);

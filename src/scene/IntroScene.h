@@ -14,6 +14,7 @@ class TextView;
 
 class IntroScene final : public Scene {
 public:
+  bool usesResponsiveMenuCanvas() const override { return true; }
   explicit IntroScene(ApplicationContext &context)
       : Scene(context),
         navigation_(musicSelectKeyLayoutForConfig(

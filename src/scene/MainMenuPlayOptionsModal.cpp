@@ -1,3 +1,5 @@
+#include "../rendering/ResponsiveUi.h"
+#include "../rendering/UiSafeArea.h"
 #include "../i18n/Localization.h"
 #include "MainMenuPlayOptionsModal.h"
 
@@ -20,7 +22,7 @@ Color modalPanelBorder() {
 }
 
 Button *makeCloseButton() {
-  auto *button = new Button(0, 0, 132, 48);
+  auto *button = new Button(0, 0, 132, rendering::phoneMenuCanvasActive ? rendering::phoneTouchTarget : 48);
   auto *text = new TextView(kFontPath, 20);
   text->setLocalizedText(i18n::message("menu.play_options.close.label"));
   text->setAlign(TextView::CENTER);
@@ -72,6 +74,7 @@ MainMenuPlayOptionsModal::Create(View *parent,
   root->setThemedBackgroundColor(app_theme::scrim);
 
   auto *panel = new View();
+  panel->setName("playOptionsModalPanel");
   panel->setWidth(panelWidth)
       ->setHeight(panelHeight)
       ->setFlexDirection(FlexDirection::Column)
@@ -105,6 +108,7 @@ MainMenuPlayOptionsModal::Create(View *parent,
   panel->addView(header);
 
   auto *scrollView = new ScrollView(0, 0, static_cast<int>(contentWidth), 1);
+  scrollView->setName("playOptionsModalScroll");
   scrollView->setWidth(contentWidth);
   scrollView->setFlex(1.0f);
   scrollView->setMinHeight(0);
@@ -120,7 +124,7 @@ MainMenuPlayOptionsModal::Create(View *parent,
   optionsContent->setGap(12);
   optionsContent->setWidth(optionWidth);
 
-  const std::size_t columns = optionWidth >= 620.0f ? 4U : 2U;
+  const std::size_t columns = !rendering::phoneMenuCanvasActive && optionWidth >= 620.0f ? 4U : 2U;
   auto *options = new PlayOptionsPanelView(
       std::move(callbacks),
       {.width = optionWidth,
@@ -137,7 +141,7 @@ MainMenuPlayOptionsModal::Create(View *parent,
   footer->setFlexDirection(FlexDirection::Row);
   footer->setJustifyContent(YGJustifyFlexEnd);
   footer->setAlignItems(YGAlignCenter);
-  footer->setHeight(72)->setFlexShrink(0);
+  footer->setHeight(rendering::phoneMenuCanvasActive ? 82 : 72)->setFlexShrink(0);
   footer->setPadding(Edge::Left, kPanelPadding);
   footer->setPadding(Edge::Right, kPanelPadding);
   addRule(footer, Edge::Top);
@@ -171,5 +175,18 @@ void MainMenuPlayOptionsModal::hide() {
 }
 
 void MainMenuPlayOptionsModal::resize(int width, int height) {
-  if (root_ != nullptr) root_->setSize(width, height);
+  if (root_ == nullptr) return;
+  root_->setSize(width, height);
+  if (!rendering::phoneMenuCanvasActive) return;
+  const auto safe = rendering::uiSafeAreaInsets();
+  root_->setPadding(Edge::Top, safe.top)->setPadding(Edge::Bottom, safe.bottom);
+  root_->setPadding(Edge::Left, safe.left)->setPadding(Edge::Right, safe.right);
+  const float panelWidth = std::max(240.0f, std::min(760.0f, float(width - safe.left - safe.right - 24)));
+  const float panelHeight = std::max(200.0f, std::min(820.0f, float(height - safe.top - safe.bottom - 24)));
+  root_->findViewByName("playOptionsModalPanel")->setWidth(panelWidth)->setHeight(panelHeight);
+  auto *scroll = static_cast<ScrollView *>(root_->findViewByName("playOptionsModalScroll"));
+  scroll->setWidth(panelWidth - 36);
+  scroll->getContentView()->setWidth(panelWidth - 54);
+  panel_->setWidth(panelWidth - 54);
+  scroll->refreshContentLayout();
 }

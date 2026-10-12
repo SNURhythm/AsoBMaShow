@@ -9,6 +9,7 @@
 #include "../music_select/MusicSelectLaunchPolicy.h"
 #include "../rendering/common.h"
 #include "../rendering/UiSafeArea.h"
+#include "../rendering/ResponsiveUi.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
 #include "../view/AppTheme.h"
@@ -106,6 +107,7 @@ void IntroScene::layoutView() {
   menu_->setWidthPercent(portrait ? 100 : 38);
   menu_->setFlexShrink(0);
   title_->setVAlign(portrait ? TextView::BOTTOM : TextView::MIDDLE);
+  title_->setAutoFitText(rendering::phoneMenuCanvasActive);
   rootLayout_->applyYogaLayout();
 }
 

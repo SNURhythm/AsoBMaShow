@@ -6,6 +6,7 @@
 #include "ScrollView.h"
 #include "TextView.h"
 #include "AppTheme.h"
+#include "../rendering/ResponsiveUi.h"
 
 #include <algorithm>
 #include <cmath>
@@ -15,8 +16,8 @@ namespace {
 
 constexpr uint32_t kIconCaretUp = 0xf0d8;
 constexpr uint32_t kIconCaretDown = 0xf0d7;
-constexpr float kTriggerHeight = 42.0f;
-constexpr float kOptionHeight = 38.0f;
+float triggerHeight() { return rendering::phoneMenuCanvasActive ? rendering::phoneTouchTarget : 42.0f; }
+float optionHeight() { return rendering::phoneMenuCanvasActive ? rendering::phoneTouchTarget : 38.0f; }
 constexpr float kMenuPadding = 4.0f;
 constexpr float kMenuGap = 4.0f;
 constexpr float kWindowMargin = 10.0f;
@@ -107,8 +108,8 @@ DropdownView::DropdownView(Callbacks callbacks, OverlayPortal *portal)
   setFlexDirection(FlexDirection::Column);
   setAlignItems(YGAlignStretch);
   setWidth(kDefaultWidth);
-  setHeight(kTriggerHeight);
-  setMinHeight(kTriggerHeight);
+  setHeight(triggerHeight());
+  setMinHeight(triggerHeight());
   setFlexShrink(1.0f);
   setZIndex(0);
   buildView();
@@ -128,8 +129,8 @@ DropdownView::~DropdownView() {
 }
 
 void DropdownView::buildView() {
-  triggerButton = new Button(0, 0, 160, static_cast<int>(kTriggerHeight));
-  triggerButton->setHeight(kTriggerHeight);
+  triggerButton = new Button(0, 0, 160, static_cast<int>(triggerHeight()));
+  triggerButton->setHeight(triggerHeight());
   triggerButton->setWidthPercent(100.0f);
   triggerButton->setFlexGrow(1.0f);
   triggerButton->setFlexBasis(0.0f);
@@ -176,8 +177,8 @@ void DropdownView::buildView() {
   menuContent->setAlignItems(YGAlignStretch);
   menuContent->setGap(4);
 
-  menuScroll = new ScrollView(0, static_cast<int>(kTriggerHeight + kMenuGap),
-                              160, static_cast<int>(kOptionHeight));
+  menuScroll = new ScrollView(0, static_cast<int>(triggerHeight() + kMenuGap),
+                              160, static_cast<int>(optionHeight()));
   menuScroll->setPositionType(YGPositionTypeAbsolute);
   menuScroll->setContentPadding(Edge::All, kMenuPadding);
   menuScroll->setThemedBackgroundColor(app_theme::panelStrong);
@@ -244,8 +245,8 @@ void DropdownView::rebuildOptions() {
   }
 
   for (const auto &option : current.options) {
-    auto *button = new Button(0, 0, 160, static_cast<int>(kOptionHeight));
-    button->setHeight(kOptionHeight);
+    auto *button = new Button(0, 0, 160, static_cast<int>(optionHeight()));
+    button->setHeight(optionHeight());
     button->setWidthPercent(100.0f);
     button->setMinWidth(0);
     button->setFlexGrow(0.0f);
@@ -392,10 +393,10 @@ void DropdownView::updateMenuPlacement() {
   const int visibleOptions =
       std::clamp(optionCount, 1, std::max(1, current.maxVisibleItems));
   const int desiredHeight = static_cast<int>(
-      std::round(static_cast<float>(visibleOptions) * kOptionHeight +
+      std::round(static_cast<float>(visibleOptions) * optionHeight() +
                  kMenuPadding * 2.0f));
   const int minimumHeight =
-      static_cast<int>(std::round(kOptionHeight + kMenuPadding * 2.0f));
+      static_cast<int>(std::round(optionHeight() + kMenuPadding * 2.0f));
 
   const int menuWidth =
       static_cast<int>(std::round(std::max(1.0f, resolvedWidth)));

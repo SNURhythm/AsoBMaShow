@@ -658,6 +658,7 @@
 {"menu.selected_chart.label", "Selected chart", "선택한 채보", "選択中の譜面", "所选谱面", "所選譜面"},
 {"menu.selected_chart_unable_played_as_music.message", "Selected chart cannot be played as music.", "선택한 채보를 음악으로 재생할 수 없습니다.", "選択した譜面は音楽として再生できません。", "无法将所选谱面作为音乐播放。", "無法將所選譜面作為音樂播放。"},
 {"menu.selected_music_select_skin_service_unavailable.message", "The selected music-select skin service is unavailable.", "선택한 곡 선택 스킨 서비스를 사용할 수 없습니다.", "選択した選曲スキンのサービスを利用できません。", "所选选曲皮肤服务不可用。", "所選選曲皮膚服務無法使用。"},
+{"menu.selector.details.label", "Details", "상세", "詳細", "详情", "詳情"},
 {"menu.selector.assist.label", "ASSIST", "보조 옵션", "アシスト", "辅助", "輔助"},
 {"menu.selector.difficulty_tables.label", "DIFFICULTY TABLES", "난이도표", "難易度表", "难度表", "難度表"},
 {"menu.selector.filter.label", "Filter", "필터", "フィルター", "筛选", "篩選"},
