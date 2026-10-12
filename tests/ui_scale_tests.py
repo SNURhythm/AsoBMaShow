@@ -105,6 +105,8 @@ int main() {
   ScrollView scroll("mainMenuDetailsScroll"),controlsScroll("controlsScroll");
   ChartDetails chart;
   Button settings("mainMenuSettings"),options("options"),replay("replay"),ranking("ranking"),start("start"),unzip("unzip"),find("find");
+  std::array<View,6> summaryCells={View("heading"),View("assist"),View("gauge"),View("random"),View("speed"),View("target")};
+  for(auto &cell:summaryCells) options.content.add(cell);
   root.setPadding(Edge::All,0)->setGap(0)->setAlignItems(YGAlignStretch);
   browser.setFlexDirection(FlexDirection::Row)->setGap(0)->setMinWidth(0)->setMinHeight(0);
   root.add(header);header.setHeight(80)->setFlexShrink(0)->setFlexDirection(FlexDirection::Row);header.add(wordmark);header.add(tabs);tabs.setWidth(320);header.add(toolbar);
@@ -232,30 +234,43 @@ int main() {
     assert(YGNodeLayoutGetLeft(controls.node)+YGNodeLayoutGetWidth(controls.node)<=YGNodeLayoutGetWidth(details.node)+1);
   }
   rendering::compactMenuCanvasActive=true;
-  for (const auto dimensions : {std::pair{585,1266},std::pair{1266,585}}) {
+  for (const auto dimensions : {std::pair{585,1266},std::pair{1266,585},std::pair{1470,750},std::pair{1020,600},std::pair{585,1266}}) {
     rendering::window_width=dimensions.first;rendering::window_height=dimensions.second;
     root.setWidth(dimensions.first)->setHeight(dimensions.second);
     scene.updatePanelLayout();root.applyYogaLayout();
+    options.content.setWidth(YGNodeLayoutGetWidth(options.node))->setHeight(YGNodeLayoutGetHeight(options.node));
+    options.content.applyYogaLayout();
     assert(YGNodeStyleGetDisplay(library.node)==YGDisplayFlex);
     assert(YGNodeStyleGetDisplay(songs.node)==YGDisplayFlex);
     assert(YGNodeStyleGetDisplay(details.node)==YGDisplayFlex);
     assert(YGNodeLayoutGetWidth(songs.node)>180);
     assert(YGNodeLayoutGetHeight(browser.node)>200);
-    assert(YGNodeLayoutGetHeight(start.node)==66);
+    assert(YGNodeLayoutGetHeight(start.node)==(dimensions.second>dimensions.first ? 66 : YGNodeLayoutGetHeight(dock.node)));
     assert(YGNodeLayoutGetHeight(search.node)==66);
     assert(YGNodeLayoutGetWidth(search.node)>100);
     assert(YGNodeLayoutGetHeight(scroll.node)>0);
     assert(root.findViewByName("mainMenuPhoneLibrary")==nullptr);
     assert(root.findViewByName("mainMenuPhoneDetails")==nullptr);
     if (dimensions.second > dimensions.first) {
+      assert(YGNodeStyleGetDisplay(summaryCells[0].node)==YGDisplayFlex);
       assert(YGNodeLayoutGetHeight(details.node)<=380);
       assert(primary.parent==&controls && options.parent==&controlsContent);
       assert(YGNodeStyleGetDisplay(dock.node)==YGDisplayNone);
     } else {
-      assert(YGNodeLayoutGetWidth(library.node)==180);
+      assert(YGNodeLayoutGetWidth(library.node)>=250);
+      assert(YGNodeStyleGetDisplay(summaryCells[0].node)==YGDisplayNone);
+      for (size_t i=1;i<summaryCells.size();++i) {
+        const auto cell=summaryCells[i].node;
+        assert(YGNodeLayoutGetWidth(cell)>=120);
+        assert(YGNodeLayoutGetTop(cell)+YGNodeLayoutGetHeight(cell)<=YGNodeLayoutGetHeight(options.node)-20);
+        assert(YGNodeLayoutGetLeft(cell)+YGNodeLayoutGetWidth(cell)<=YGNodeLayoutGetWidth(options.node)+1);
+      }
+      assert(YGNodeLayoutGetHeight(options.node)==YGNodeLayoutGetHeight(dock.node));
+      assert(YGNodeLayoutGetHeight(actionSlot.node)==YGNodeLayoutGetHeight(dock.node));
+      assert(YGNodeLayoutGetWidth(options.node)+YGNodeLayoutGetWidth(actionSlot.node)==dimensions.first);
       assert(YGNodeLayoutGetWidth(details.node)<=350);
       assert(primary.parent==&details && actionSlot.parent==&dock && options.parent==&dock);
-      assert(YGNodeLayoutGetTop(dock.node)+YGNodeLayoutGetHeight(dock.node)<=dimensions.second-20);
+      assert(YGNodeLayoutGetTop(dock.node)+YGNodeLayoutGetHeight(dock.node)==dimensions.second);
     }
   }
 
@@ -267,6 +282,56 @@ int main() {
             path.write_text(source)
             subprocess.run(["c++", "-std=c++20", "-I", str(root / "yoga"), "-I", str(root / "src"), str(path),
                             os.environ.get("ASOBMASHOW_TEST_YOGA_LIBRARY", str(root / "cmake-build-debug/yoga/yoga/libyogacore.a")), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
+    def test_empty_marquee_viewport_does_not_draw_unclipped_text(self):
+        root = Path(__file__).resolve().parents[1]
+        method = extract((root / "src/view/TextView.cpp").read_text(),
+                         "void TextView::renderImpl(RenderContext &context)")
+        # Exercise production geometry/overflow decisions before GPU submission.
+        method = method[:method.index("  const auto submitText")] + "  ++draws; if (!clip) ++unclippedDraws; }"
+        source = r"""
+#include <cmath>
+#include <optional>
+struct SDL_Rect { int x,y,w,h; };
+struct RenderContext {};
+namespace bgfx { bool isValid(int value) { return value != 0; } }
+struct TextView {
+  enum class TextOverflow { Visible, Hidden, Marquee };
+  TextOverflow overflow = TextOverflow::Marquee;
+  int texture=1, width=0, height=30, draws=0, unclippedDraws=0;
+  bool wrapEnabled=false;
+  SDL_Rect rect{0,0,200,30};
+  SDL_Rect resolvedTextRect() { return rect; }
+  void createTexture() { texture=1; }
+  int getContentWidth() { return width; }
+  int getContentHeight() { return height; }
+  int getContentX() { return 0; }
+  float getRotationDegrees() { return 0; }
+  std::optional<int> textFitBounds() { return std::nullopt; }
+  float marqueeOffset(int) { return 40; }
+  void renderImpl(RenderContext &);
+};
+PRODUCTION_METHOD
+#include <cassert>
+int main() {
+  RenderContext context;
+  for(auto overflow : {TextView::TextOverflow::Marquee, TextView::TextOverflow::Hidden}) {
+    TextView text; text.overflow=overflow;
+    text.renderImpl(context);
+    assert(text.draws==0 && "zero-width clipped labels must not draw across neighbouring columns");
+    text.width=2; text.renderImpl(context);
+    assert(text.draws==1 && text.unclippedDraws==0);
+    text.height=0; text.renderImpl(context);
+    assert(text.draws==1 && "zero-height clipped labels must not draw across neighbouring rows");
+  }
+}
+""".replace("PRODUCTION_METHOD", method)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-marquee-") as temp:
+            path = Path(temp) / "test.cpp"
+            binary = Path(temp) / "test"
+            path.write_text(source)
+            subprocess.run(["c++", "-std=c++23", str(path), "-o", str(binary)], check=True)
             subprocess.run([str(binary)], check=True)
 
     def test_preview_actions_share_a_row_in_both_orientations(self):

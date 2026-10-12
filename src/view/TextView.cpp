@@ -477,6 +477,12 @@ void TextView::setDeferredTextureMaterialization(bool deferred) {
 }
 
 void TextView::renderImpl(RenderContext &context) {
+  // A flex row can give a label no space. Empty clip bounds must suppress
+  // drawing, not turn a hidden/marquee label into unbounded visible text.
+  if (overflow != TextOverflow::Visible &&
+      (getContentWidth() <= 0 || getContentHeight() <= 0)) {
+    return;
+  }
   if (!bgfx::isValid(texture)) {
     createTexture();
   }

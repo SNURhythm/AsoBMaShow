@@ -184,3 +184,24 @@ modal bounds, and settings/scene regression checks.
 Android restricted-file release APK and iOS simulator builds passed. This
 correction has automated layout coverage; no fresh hands-on visual pass was
 performed. No distribution was run.
+
+## Compact dock and overflow corrections
+
+The compact landscape dock uses one shared height for options and all primary
+actions, extending its backgrounds through the bottom safe area while keeping
+content padded above it. Five equally sized option cells replace the redundant
+Play Options heading in that row. Compact library width grows with the window
+(250–350 UI units in landscape; 33% in portrait). Rotation restores the heading
+and ordinary padding when leaving this layout.
+
+A zero-width or zero-height hidden/marquee TextView now skips rendering instead
+of disabling its clip and drawing text across nearby views. Music page titles
+and the IR workspace title are removed in both compact and wide layouts;
+existing tabs, status counts, and actions remain.
+
+Regression checks first reproduced the mismatched dock heights and the empty
+marquee viewport leak, then passed with the fixes. Ten focused tests passed,
+including geometry at resized tablet/phone window sizes, option-cell bounds,
+empty text clipping, tab behavior, IR logic, and text/font lifetime. Desktop,
+iOS simulator, and Android restricted-file release builds passed. No fresh
+hands-on visual pass was performed.

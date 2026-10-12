@@ -368,14 +368,6 @@ void IrUploadsScene::buildView() {
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)->setGap(12)
       ->setPadding(Edge::All, 24);
-  auto *workspaceTitle = makeText(
-      i18n::message("ir.upload.ir_uploads.label"), 32, main_menu_theme::ink);
-  workspaceTitle->setHeight(44)->setFlexShrink(0);
-  workspace->addView(workspaceTitle);
-  auto *workspaceRule = new View();
-  workspaceRule->setHeight(1)->setFlexShrink(0)
-      ->setThemedBackgroundColor(main_menu_theme::rule);
-  workspace->addView(workspaceRule);
   content->addView(workspace);
 
   auto *selectionToolbar = new View();

@@ -2254,20 +2254,13 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   workspace->addView(queueColumn);
 }
 
-View *MusicPlayerScene::makePanel(const i18n::Text &title,
+View *MusicPlayerScene::makePanel(const i18n::Text &,
                                   TextView **subtitleText) {
   auto *panel = new View();
   panel->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setGap(10)
       ->setPadding(Edge::All, 24);
-
-  auto *titleText = new TextView(app_theme::boldFont, 26);
-  titleText->setLocalizedText(title);
-  titleText->setHeight(34);
-  titleText->setThemedColor(app_theme::textPrimary);
-  titleText->setOverflow(TextView::TextOverflow::Hidden);
-  panel->addView(titleText);
 
   if (subtitleText != nullptr) {
     *subtitleText = new TextView(kFontPath, 16);

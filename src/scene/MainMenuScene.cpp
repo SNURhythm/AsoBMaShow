@@ -2332,7 +2332,7 @@ void MainMenuScene::updatePhonePanelLayout() {
   const bool portrait = rendering::window_height > rendering::window_width;
   const auto safe = getSafeAreaInsetsUi();
   const float width = rendering::window_width - safe.left - safe.right;
-  rootLayout->setPadding(Edge::Bottom, safe.bottom);
+  rootLayout->setPadding(Edge::Bottom, portrait ? safe.bottom : 0);
   auto *browser = rootLayout->findViewByName("mainMenuBrowser");
   auto *library = rootLayout->findViewByName("mainMenuLibrary");
   auto *songs = rootLayout->findViewByName("mainMenuSongs");
@@ -2342,7 +2342,7 @@ void MainMenuScene::updatePhonePanelLayout() {
   auto *scroll = rootLayout->findViewByName("mainMenuDetailsScroll");
   auto *controls = rootLayout->findViewByName("mainMenuControls");
   const float detailsWidth = std::min(350.0f, width * 0.29f);
-  library->setWidth(portrait ? width * 0.25f : 180.0f);
+  library->setWidth(portrait ? width * 0.33f : std::clamp(width * 0.23f, 250.0f, 350.0f));
   library->setPadding(Edge::Left, 6)->setPadding(Edge::Right, 6);
   songs->setPadding(Edge::Left, 8)->setPadding(Edge::Right, 8);
   details->setPadding(Edge::All, 8);
@@ -2374,16 +2374,29 @@ void MainMenuScene::updatePhonePanelLayout() {
   for (auto *view : std::array<View *, 3>{replayButtonSlot, replayButton, rankingsButton}) view->setHeight(height);
   for (auto *view : chartActionsRow->getChildren()) view->setHeight(height);
   auto *dock = rootLayout->findViewByName("mainMenuPlayDock");
-  dock->setHeight(80);
-  primaryActionSlot_->setWidth(portrait ? YGUndefined : detailsWidth)->setHeight(height);
+  const int dockHeight = 96 + safe.bottom;
+  const int primaryHeight = portrait ? height : dockHeight;
+  dock->setHeight(dockHeight);
+  primaryActionSlot_->setWidth(portrait ? YGUndefined : detailsWidth)->setHeight(primaryHeight);
   if (portrait) primaryActionSlot_->setWidthPercent(100);
-  for (auto *view : std::array<View *, 3>{startButton, findBmsButton, unzipButton}) view->setWidthPercent(100)->setHeight(height);
-  findBmsButtonSlot->setHeight(findBmsButtonSlot->getVisible() ? height : 0);
-  unzipButtonSlot->setHeight(unzipButtonSlot->getVisible() ? height : 0);
-  if (!portrait) readyPlayOptionsButton->setHeight(80);
+  for (auto *button : {startButton, findBmsButton, unzipButton}) {
+    button->setWidthPercent(100)->setHeight(primaryHeight);
+    button->getContentView()->setPadding(Edge::Bottom, portrait ? 0 : safe.bottom);
+  }
+  findBmsButtonSlot->setHeight(findBmsButtonSlot->getVisible() ? primaryHeight : 0);
+  unzipButtonSlot->setHeight(unzipButtonSlot->getVisible() ? primaryHeight : 0);
+  if (!portrait) readyPlayOptionsButton->setHeight(dockHeight);
   auto *summary = readyPlayOptionsButton->getContentView();
+  summary->setPadding(Edge::Bottom, portrait ? 8 : 8 + safe.bottom);
+  size_t cellIndex = 0;
   for (auto *cell : summary->getChildren()) {
+    // The redundant heading costs one sixth of a narrow options bar.
+    const bool visible = portrait || cellIndex != 0;
+    cell->setVisible(visible);
+    cell->setDisplay(visible ? YGDisplayFlex : YGDisplayNone);
+    cell->setHeight(portrait ? 72 : 80);
     cell->setPadding(Edge::Left, 6)->setPadding(Edge::Right, 6);
+    ++cellIndex;
   }
   static_cast<ScrollView *>(scroll)->refreshContentLayout();
   detailsControlsScroll_->refreshContentLayout();
@@ -2429,6 +2442,8 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
   const int detailActionHeight = portrait ? 64 : 76;
   records->setHeight(detailActionHeight);
   const int primaryHeight = portrait ? height : kPlayDockHeight;
+  for (auto *button : {startButton, findBmsButton, unzipButton})
+    button->getContentView()->setPadding(Edge::Bottom, 0);
   primaryActionSlot_->setHeight(primaryHeight);
   startButton->setHeight(primaryHeight);
   findBmsButton->setHeight(primaryHeight);
@@ -2480,6 +2495,8 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
   summary->setAlignItems(YGAlignCenter)->setGap(0);
   summary->setPadding(Edge::Top, 8)->setPadding(Edge::Bottom, 8);
   for (auto *cell : summary->getChildren()) {
+    cell->setVisible(true);
+    cell->setDisplay(YGDisplayFlex);
     cell->setFlex(portrait ? 0 : 1)->setMinWidth(0)->setHeight(72);
     if (portrait) cell->setWidthPercent(50);
     else cell->setWidth(YGUndefined);
