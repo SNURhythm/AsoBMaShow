@@ -104,9 +104,17 @@ void testApplicationThemePreservesGameplayPalette() {
     require(app_theme::panelRadius() == 0 && app_theme::controlRadius() == 0 &&
                 app_theme::shadow().a == 0 && app_theme::cardShadow().a == 0,
             "application chrome uses square surfaces without decorative shadows");
-    require(app_theme::backdrop().a < 255 && app_theme::control().a < 255 &&
+    for (const auto surface : {app_theme::backdrop(), app_theme::panel(),
+                               app_theme::panelStrong(), app_theme::panelSubtle(),
+                               app_theme::resultBackdrop(), app_theme::resultPanelStrong(),
+                               app_theme::mainMenuBackdrop()}) {
+      require(surface.a == 255, "scene and modal backgrounds block content behind them");
+    }
+    require(main_menu_theme::backdrop().a < 255 && main_menu_theme::surface().a < 255 &&
+                main_menu_theme::control().a < 255 && app_theme::hudPanel().a < 255 &&
+                app_theme::hudPanelStrong().a < 255 && app_theme::hudPanelSubtle().a < 255 &&
                 app_theme::textPrimary().a == 255,
-            "application surfaces remain translucent while text stays opaque");
+            "only BGA-facing selector and HUD surfaces retain translucent backgrounds");
     require(same(ui_theme::cyan(), gameplayAccent) && gameplayRadius == 8 &&
                 ui_theme::controlRadius() == gameplayRadius &&
                 !same(app_theme::primaryAction(), ui_theme::primaryAction()),

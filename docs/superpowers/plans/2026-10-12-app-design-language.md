@@ -110,3 +110,20 @@ outside those HUD rectangles is unchanged, including the lane viewport.
 
 Palette verification: desktop build and fresh full parallel CTest passed
 (483/483); `git diff --check` passed.
+
+## Opaque scene and modal backgrounds
+
+Transparency exists to reveal BGA, not as a general application surface style.
+Application scene backdrops and all panel strengths are now opaque in both
+color modes. Dialogs, dropdowns, settings, results and utility scenes inherit
+those opaque backgrounds. Modal scrims still dim the surrounding scene.
+Selector surfaces retain their existing transparency. Gameplay HUD panels use
+explicit translucent tokens with identical colors/alpha to the prior rendering,
+so the gameplay presentation does not change as a side effect.
+
+The theme contract now checks opaque scene/modal surfaces and translucent
+BGA-facing selector/HUD surfaces separately in both modes.
+
+Opacity correction verification: desktop build and full parallel CTest passed
+(483/483), including the unchanged gameplay renderer golden. Fresh native visual
+inspection was unavailable because the Mac was locked. `git diff --check` passed.

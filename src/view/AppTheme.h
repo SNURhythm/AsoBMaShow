@@ -56,12 +56,17 @@ inline Color hairlineStrong() { return main_menu_theme::ruleStrong(); }
 inline Color accentBorder() { return withAlpha(cyan(), 160); }
 inline Color accentBorderStrong() { return cyan(); }
 
-inline Color backdrop() { return main_menu_theme::backdrop(); }
+// Scene and modal surfaces are opaque; only BGA-facing chrome opts into alpha.
+inline Color backdrop() { return main_menu_theme::canvas(); }
 inline Color backdropTop() { return backdrop(); }
 inline Color backdropBottom() { return backdrop(); }
-inline Color panel() { return withAlpha(main_menu_theme::canvas(), 112); }
-inline Color panelStrong() { return withAlpha(main_menu_theme::canvas(), 232); }
-inline Color panelSubtle() { return main_menu_theme::surface(); }
+inline Color panel() { return main_menu_theme::light() ? Color(255, 255, 255, 255) : Color(24, 29, 39, 255); }
+inline Color panelStrong() { return main_menu_theme::light() ? Color(255, 255, 255, 255) : Color(28, 34, 46, 255); }
+inline Color panelSubtle() { return main_menu_theme::light() ? Color(238, 242, 248, 255) : Color(22, 27, 36, 255); }
+// Gameplay HUD overlays remain transparent to the BGA behind them.
+inline Color hudPanel() { return withAlpha(main_menu_theme::canvas(), 112); }
+inline Color hudPanelStrong() { return withAlpha(main_menu_theme::canvas(), 232); }
+inline Color hudPanelSubtle() { return main_menu_theme::surface(); }
 inline Color glassTop() { return panel(); }
 inline Color glassBottom() { return panel(); }
 inline Color glassStrongTop() { return panelStrong(); }
@@ -72,7 +77,7 @@ inline Color fieldTeal() { return panelSubtle(); }
 inline Color insetSurface() { return panelSubtle(); }
 inline Color resultBackdrop() { return backdrop(); }
 inline Color resultPanel() { return panel(); }
-inline Color resultPanelStrong() { return withAlpha(main_menu_theme::canvas(), 160); }
+inline Color resultPanelStrong() { return panelStrong(); }
 inline Color resultPanelSubtle() { return panelSubtle(); }
 inline Color mainMenuBackdrop() { return backdrop(); }
 inline Color mainMenuPanel() { return panel(); }

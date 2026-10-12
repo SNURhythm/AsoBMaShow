@@ -185,9 +185,9 @@ gameplay_scroll_geometry::NoteRectangleClip noteRenderClip(
 }
 
 // These panels are screen-space chrome; lane feedback keeps its own palette.
-Color hudPanelFill() { return app_theme::panel(); }
+Color hudPanelFill() { return app_theme::hudPanel(); }
 
-Color hudPanelStrongFill() { return app_theme::panelStrong(); }
+Color hudPanelStrongFill() { return app_theme::hudPanelStrong(); }
 
 Color hudPanelBorder() { return app_theme::hairlineSubtle(); }
 
@@ -201,9 +201,9 @@ Color hudCounterAccent(size_t index) {
 Color hudCounterFill(size_t index, bool active, bool topPosition) {
   if (active) {
     if (topPosition) {
-      return app_theme::panelSubtle();
+      return app_theme::hudPanelSubtle();
     }
-    return app_theme::panelStrong();
+    return app_theme::hudPanelStrong();
   }
 
   const Color accent = hudCounterAccent(index);
@@ -862,7 +862,7 @@ std::unique_ptr<TextView> BMSRenderer::createAutoPlayMarkText() {
   text->setVAlign(TextView::MIDDLE);
   text->setOverflow(TextView::TextOverflow::Hidden);
   text->setColor(app_theme::sdl(app_theme::textPrimary()));
-  text->setBackgroundColor(app_theme::panelStrong());
+  text->setBackgroundColor(app_theme::hudPanelStrong());
   text->setBorderColor(app_theme::cyan());
   text->setBorderWidth(1);
   text->setCornerRadius(app_theme::controlRadius());
