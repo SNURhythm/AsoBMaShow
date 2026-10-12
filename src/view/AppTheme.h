@@ -13,13 +13,7 @@ using ui_theme::perceivedBrightness;
 using ui_theme::sdl;
 using ui_theme::childRadiusForInset;
 using ui_theme::insetRadius;
-// Preserve semantic warning/danger and gameplay feedback/rank colors.
-using ui_theme::dangerAction;
-using ui_theme::dangerActionHover;
-using ui_theme::dangerActionPressed;
-using ui_theme::warningAction;
-using ui_theme::warningActionHover;
-using ui_theme::warningActionPressed;
+// Preserve gameplay feedback and rank colors.
 using ui_theme::fastFeedback;
 using ui_theme::slowFeedback;
 using ui_theme::scoreRankColor;
@@ -87,18 +81,61 @@ inline Color mainMenuItemSelected() { return withAlpha(action(), 64); }
 inline Color control() { return main_menu_theme::control(); }
 inline Color controlHover() { return main_menu_theme::hover(); }
 inline Color controlPressed() { return main_menu_theme::pressed(); }
-inline Color primaryAction() { return action(); }
-inline Color primaryActionHover() { return actionHover(); }
-inline Color primaryActionPressed() { return actionPressed(); }
-inline Color successAction() { return action(); }
-inline Color successActionHover() { return actionHover(); }
-inline Color successActionPressed() { return actionPressed(); }
-inline Color infoAction() { return action(); }
-inline Color infoActionHover() { return actionHover(); }
-inline Color infoActionPressed() { return actionPressed(); }
-inline Color violetAction() { return action(); }
-inline Color violetActionHover() { return actionHover(); }
-inline Color violetActionPressed() { return actionPressed(); }
+enum class ActionCategory {
+  Neutral, Primary, Confirmation, Information, DataTransfer, Caution, Destructive
+};
+
+struct ActionPaletteEntry {
+  Color normal;
+  Color hover;
+  Color pressed;
+  Color label;
+};
+
+inline ActionPaletteEntry actionPalette(ActionCategory category) {
+  switch (category) {
+  case ActionCategory::Primary:
+    return {action(), actionHover(), actionPressed(), onAction()};
+  case ActionCategory::Confirmation:
+    return {Color(24, 119, 83, 255), Color(18, 102, 70, 255),
+            Color(14, 84, 58, 255), onAction()};
+  case ActionCategory::Information:
+    return {Color(20, 113, 139, 255), Color(16, 96, 121, 255),
+            Color(13, 80, 102, 255), onAction()};
+  case ActionCategory::DataTransfer:
+    return {Color(113, 77, 190, 255), Color(96, 62, 167, 255),
+            Color(80, 50, 144, 255), onAction()};
+  case ActionCategory::Caution:
+    return {Color(153, 91, 18, 255), Color(131, 75, 13, 255),
+            Color(110, 61, 10, 255), onAction()};
+  case ActionCategory::Destructive:
+    return {Color(187, 57, 74, 255), Color(165, 43, 60, 255),
+            Color(140, 33, 48, 255), onAction()};
+  case ActionCategory::Neutral:
+    return {control(), controlHover(), controlPressed(), textPrimary()};
+  }
+  return {control(), controlHover(), controlPressed(), textPrimary()};
+}
+
+// Compatibility accessors keep existing semantic call sites on the same palette.
+inline Color primaryAction() { return actionPalette(ActionCategory::Primary).normal; }
+inline Color primaryActionHover() { return actionPalette(ActionCategory::Primary).hover; }
+inline Color primaryActionPressed() { return actionPalette(ActionCategory::Primary).pressed; }
+inline Color successAction() { return actionPalette(ActionCategory::Confirmation).normal; }
+inline Color successActionHover() { return actionPalette(ActionCategory::Confirmation).hover; }
+inline Color successActionPressed() { return actionPalette(ActionCategory::Confirmation).pressed; }
+inline Color infoAction() { return actionPalette(ActionCategory::Information).normal; }
+inline Color infoActionHover() { return actionPalette(ActionCategory::Information).hover; }
+inline Color infoActionPressed() { return actionPalette(ActionCategory::Information).pressed; }
+inline Color violetAction() { return actionPalette(ActionCategory::DataTransfer).normal; }
+inline Color violetActionHover() { return actionPalette(ActionCategory::DataTransfer).hover; }
+inline Color violetActionPressed() { return actionPalette(ActionCategory::DataTransfer).pressed; }
+inline Color warningAction() { return actionPalette(ActionCategory::Caution).normal; }
+inline Color warningActionHover() { return actionPalette(ActionCategory::Caution).hover; }
+inline Color warningActionPressed() { return actionPalette(ActionCategory::Caution).pressed; }
+inline Color dangerAction() { return actionPalette(ActionCategory::Destructive).normal; }
+inline Color dangerActionHover() { return actionPalette(ActionCategory::Destructive).hover; }
+inline Color dangerActionPressed() { return actionPalette(ActionCategory::Destructive).pressed; }
 inline Color progressTrack() { return control(); }
 inline Color progressFill() { return action(); }
 inline Color scrim() { return Color(0, 0, 0, 144); }

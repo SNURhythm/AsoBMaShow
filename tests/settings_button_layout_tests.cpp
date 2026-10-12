@@ -94,11 +94,36 @@ void testApplicationThemePreservesGameplayPalette() {
     ui_theme::setActiveMode(mode);
     const auto gameplayAccent = ui_theme::cyan();
     const auto gameplayRadius = ui_theme::controlRadius();
-    require(same(app_theme::primaryAction(), main_menu_theme::action()) &&
-                same(app_theme::infoAction(), main_menu_theme::action()) &&
-                same(app_theme::violetAction(), main_menu_theme::action()) &&
-                same(app_theme::successAction(), main_menu_theme::action()),
-            "normal application actions share the selector blue");
+    require(same(app_theme::primaryAction(), main_menu_theme::action()),
+            "primary actions retain the selector accent");
+    const auto luminance = [](Color color) {
+      const auto linear = [](double channel) {
+        channel /= 255.0;
+        return channel <= 0.04045 ? channel / 12.92
+                                 : std::pow((channel + 0.055) / 1.055, 2.4);
+      };
+      return 0.2126 * linear(color.r) + 0.7152 * linear(color.g) +
+             0.0722 * linear(color.b);
+    };
+    using Category = app_theme::ActionCategory;
+    const auto categories = {Category::Primary, Category::Confirmation,
+                             Category::Information, Category::DataTransfer,
+                             Category::Caution, Category::Destructive};
+    for (auto first = categories.begin(); first != categories.end(); ++first) {
+      const auto palette = app_theme::actionPalette(*first);
+      for (auto second = first + 1; second != categories.end(); ++second) {
+        require(!same(palette.normal, app_theme::actionPalette(*second).normal),
+                "grouped semantic actions remain visually distinct");
+      }
+      for (const auto fill : {palette.normal, palette.hover, palette.pressed}) {
+        require(fill.a == 255 && palette.label.a == 255,
+                "semantic action buttons and labels remain opaque");
+        require((luminance(palette.label) + 0.05) / (luminance(fill) + 0.05) >= 4.5,
+                "semantic action labels meet normal text contrast in every state");
+        require(same(app_theme::textOn(fill), palette.label),
+                "legacy action labels follow the category palette");
+      }
+    }
     require(same(app_theme::textOn(app_theme::primaryAction()), main_menu_theme::onAction()),
             "blue application actions retain white labels in both themes");
     require(app_theme::panelRadius() == 0 && app_theme::controlRadius() == 0 &&

@@ -127,3 +127,21 @@ BGA-facing selector/HUD surfaces separately in both modes.
 Opacity correction verification: desktop build and full parallel CTest passed
 (483/483), including the unchanged gameplay renderer golden. Fresh native visual
 inspection was unavailable because the Mac was locked. `git diff --check` passed.
+
+## Action categories
+
+Grouped actions use a shared semantic palette instead of sharing one accent.
+`ActionCategory` defines neutral, primary (indigo), confirmation (green),
+information (teal), data transfer (violet), caution (amber), and destructive
+(red). Each palette entry includes normal, hover, pressed, and label colors.
+Existing semantic accessors route through this palette. Profile action rows
+explicitly assign roles to activate, rename, copy/create/apply, import/export,
+overwrite, and delete; cancel and disabled actions retain neutral styling.
+Scene/modal opacity and BGA-facing surface tokens remain unchanged.
+
+Verification checks distinct categories, opaque colored buttons, and at least
+4.5:1 label contrast in every state in both color modes.
+
+Action-category verification: desktop build and both focused tests passed
+(settings layout/theme contracts and unchanged gameplay renderer golden).
+`git diff --check` passed. This pass did not include fresh native visual inspection.

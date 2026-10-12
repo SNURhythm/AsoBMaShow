@@ -48,7 +48,8 @@ SDL_Color statusColor(ProfileSettingsStatusKind kind) {
 
 Button *makeProfileActionButton(const LayoutMetrics &metrics,
                                 const i18n::Text &label, bool enabled,
-                                std::function<void()> action, int width = 0) {
+                                std::function<void()> action, int width = 0,
+                                app_theme::ActionCategory category = app_theme::ActionCategory::Neutral) {
   auto *text = makeText(label, metrics.bodyTextSize, app_theme::textPrimary(),
                         TextView::CENTER, TextView::MIDDLE);
   auto *button =
@@ -56,6 +57,14 @@ Button *makeProfileActionButton(const LayoutMetrics &metrics,
                         metrics.actionButtonHeight, text);
   button->setEnabled(enabled);
   if (enabled) {
+    if (category != app_theme::ActionCategory::Neutral) {
+      const auto normal = [category] { return app_theme::actionPalette(category).normal; };
+      const auto hover = [category] { return app_theme::actionPalette(category).hover; };
+      const auto pressed = [category] { return app_theme::actionPalette(category).pressed; };
+      button->setThemedBackgroundColors(normal, hover, pressed);
+      button->setThemedBorderColors(normal, hover, pressed);
+      text->setThemedColor([category] { return app_theme::actionPalette(category).label; });
+    }
     button->setOnClickListener(std::move(action));
   } else {
     text->setThemedColor(app_theme::textMuted);
@@ -655,19 +664,19 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
     actions->setGap(metrics.compact ? 8.0f : 10.0f);
     actions->addView(makeProfileActionButton(
         metrics, active ? i18n::message("settings.profiles.active.label") : i18n::message("settings.profiles.activate.label"), idle && !active,
-        [this, id = profile.id]() { activateProfile(id); }));
+        [this, id = profile.id]() { activateProfile(id); }, 0, app_theme::ActionCategory::Primary));
     actions->addView(makeProfileActionButton(
         metrics, i18n::message("settings.profiles.rename.label"), idle,
         [this, id = profile.id, name = profile.displayName]() {
           profileInlineEditor.beginRename(id, name);
           invalidateProfileLayout();
-        }));
+        }, 0, app_theme::ActionCategory::Information));
     actions->addView(makeProfileActionButton(
         metrics, i18n::message("settings.profiles.copy.label"), idle,
         [this, id = profile.id, name = profile.displayName]() {
           profileInlineEditor.beginDuplicate(id, name);
           invalidateProfileLayout();
-        }));
+        }, 0, app_theme::ActionCategory::Confirmation));
     actions->addView(makeProfileActionButton(
         metrics, confirmingDelete ? i18n::message("settings.profiles.confirm_delete.label") : i18n::message("settings.profiles.delete.label"),
         confirmingDelete || (idle && deleteEligibility.enabled),
@@ -678,10 +687,10 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
             profileController->requestDelete(id);
           }
           invalidateProfileLayout();
-        }));
+        }, 0, app_theme::ActionCategory::Destructive));
     actions->addView(makeProfileActionButton(
         metrics, i18n::message("settings.profiles.export.label"), idle,
-        [this, id = profile.id]() { startProfileExportPreparation(id); }));
+        [this, id = profile.id]() { startProfileExportPreparation(id); }, 0, app_theme::ActionCategory::DataTransfer));
     actions->addView(makeProfileActionButton(
         metrics,
         confirmingOverwrite ? i18n::message("settings.profiles.confirm_import.label") : i18n::message("settings.profiles.import_over.label"),
@@ -695,7 +704,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
           startProfileImportDocumentPicker(
               {.mode = ProfileImportMode::Overwrite, .overwriteProfileId = id},
               true);
-        }));
+        }, 0, app_theme::ActionCategory::Caution));
 
     if (confirmingDelete || confirmingOverwrite) {
       body->addView(makeWrappedText(
@@ -744,7 +753,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
               profileInlineEditor.clear();
             }
             invalidateProfileLayout();
-          }));
+          }, 0, app_theme::ActionCategory::Confirmation));
       editorActions->addView(makeProfileActionButton(
           metrics, i18n::message("settings.profiles.cancel.label"), true, [this]() {
             profileInlineEditor.clear();
@@ -788,7 +797,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
       makeProfileActionButton(metrics, i18n::message("settings.profiles.create.label"), idle, [this]() {
         profileController->create(profileCreateNameText);
         invalidateProfileLayout();
-      }));
+      }, 0, app_theme::ActionCategory::Confirmation));
   manageBody->addView(manageActions);
   cardsColumn->addView(makeCard(
       metrics, i18n::message("settings.profiles.player_profiles.label"), i18n::message("settings.profiles.keep_settings_records_separate.message"),
@@ -805,7 +814,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
       makeProfileActionButton(metrics, i18n::message("settings.profiles.import.label"), idle, [this]() {
         startProfileImportDocumentPicker(
             {.mode = ProfileImportMode::CreateWithNewId});
-      }));
+      }, 0, app_theme::ActionCategory::DataTransfer));
   archiveBody->addView(archiveActions);
 
   cardsColumn->addView(makeCard(
