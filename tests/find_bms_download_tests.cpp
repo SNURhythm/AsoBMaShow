@@ -186,6 +186,10 @@ void testPixelDrainPackageUsesDownloadApi() {
                 "https://pixeldrain.net/api/file/aB12Cd34?download"},
            Link{"https://pixeldrain.com/u/aB12Cd34?download#preview",
                 "https://pixeldrain.com/api/file/aB12Cd34?download"},
+           Link{"https://pixeldra.in/u/aB12Cd34",
+                "https://pixeldra.in/api/file/aB12Cd34?download"},
+           Link{"https://pixeldra.in/d/aB12Cd34/folder/song%23name.zip?download#preview",
+                "https://pixeldra.in/api/filesystem/aB12Cd34/folder/song%23name.zip?attach"},
            Link{"https://PIXELDRAIN.NET/u/aB12Cd34/",
                 "https://pixeldrain.net/api/file/aB12Cd34?download"},
            Link{"https://pixeldrain.net/d/h76bfTjz/-Never%20ending%20journey-.7z",
@@ -232,6 +236,8 @@ void testPixelDrainPackageLeavesOtherUrlsUnchanged() {
            "https://pixeldrain.net/u/a%2Fb",
            "https://pixeldrain.net.example/u/aB12Cd34",
            "https://notpixeldrain.net/u/aB12Cd34",
+           "https://pixeldra.in.example/u/aB12Cd34",
+           "https://notpixeldra.in/d/aB12Cd34/song.zip",
            "https://example.com/u/aB12Cd34",
            "ftp://pixeldrain.net/u/aB12Cd34"}) {
     const auto candidate = configurePackageDownloadCandidate(

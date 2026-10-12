@@ -158,6 +158,8 @@ void testPixelDrainApiErrorDownloadsFromNextProvider() {
   extractionDownloadFixture = fixture->archivePath;
   availableProvider = "Konmai";
   for (const std::string url : {
+           "https://pixeldra.in/api/file/abcd1234?download",
+           "https://pixeldra.in/api/filesystem/abcd1234/song.zip?attach",
            "https://pixeldrain.net/api/file/abcd1234?download",
            "https://pixeldrain.com/api/filesystem/abcd1234/song.zip?attach"}) {
     providerUrlOverrides = {{"Ginger", url}};
@@ -242,6 +244,8 @@ void testApiWaterfallDoesNotOverrideCancellationOrOtherFailures() {
   for (const auto failure : {
            Failure{"https://pixeldrain.net/api/file/abcd1234", 0, false},
            Failure{"https://example.com/song.zip", 403, false},
+           Failure{"https://pixeldra.in.example/api/file/abcd1234", 403, false},
+           Failure{"https://notpixeldra.in/api/filesystem/abcd1234/song.zip", 403, false},
            Failure{"https://pixeldrain.net.example/api/file/abcd1234", 403, false},
            Failure{"https://pixeldrain.net/api/file/abcd1234", 403, true}}) {
     availableProvider = "Konmai";

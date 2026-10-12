@@ -7,6 +7,12 @@
 namespace asobmshow::bms_search {
 namespace {
 
+bool isPixelDrainHost(const std::string &host) {
+  return hostMatches(host, "pixeldrain.net") ||
+         hostMatches(host, "pixeldrain.com") ||
+         hostMatches(host, "pixeldra.in");
+}
+
 std::string trimAsciiWhitespace(std::string value) {
   while (!value.empty() &&
          std::isspace(static_cast<unsigned char>(value.front()))) {
@@ -25,8 +31,7 @@ bool isPixelDrainApiError(const std::string &downloadUrl, long httpStatus) {
   if (httpStatus < 400 || httpStatus >= 600) return false;
   const auto parsed = parseUrl(downloadUrl);
   return parsed && (parsed->scheme == "http" || parsed->scheme == "https") &&
-         (hostMatches(parsed->host, "pixeldrain.net") ||
-          hostMatches(parsed->host, "pixeldrain.com")) &&
+         isPixelDrainHost(parsed->host) &&
          (parsed->path.starts_with("/api/file/") ||
           parsed->path.starts_with("/api/filesystem/"));
 }
@@ -41,8 +46,7 @@ DownloadCandidate configurePackageDownloadCandidate(
   }
   const auto parsed = parseUrl(candidate.downloadUrl);
   if (parsed && (parsed->scheme == "http" || parsed->scheme == "https") &&
-      (hostMatches(parsed->host, "pixeldrain.net") ||
-       hostMatches(parsed->host, "pixeldrain.com"))) {
+      isPixelDrainHost(parsed->host)) {
     // Package providers can return a file viewer URL rather than file data.
     // https://pixeldrain.com/api documents GET /file/{id}?download.
     static const std::regex filePath(R"(^/u/([A-Za-z0-9]+)/?$)");
