@@ -492,8 +492,11 @@ inline View *makeCard(const LayoutMetrics &metrics, const i18n::Text &title,
     card->setName("settingsSection");
     auto *rule = new View();
     rule->setPositionType(YGPositionTypeAbsolute);
-    rule->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
-    rule->setWidthPercent(100)->setHeight(1);
+    rule->setName("settingsSectionDivider");
+    rule->setPosition(Edge::Left, metrics.cardPadding)
+        ->setPosition(Edge::Right, metrics.cardPadding)
+        ->setPosition(Edge::Top, 0);
+    rule->setHeight(1);
     rule->setThemedBackgroundColor(app_theme::hairline);
     card->addView(rule);
   } else {
@@ -521,6 +524,22 @@ inline View *makeCard(const LayoutMetrics &metrics, const i18n::Text &title,
   card->addView(header);
   card->addView(body);
   return card;
+}
+
+inline void refineSettingsSectionSpacing(View *column,
+                                         const LayoutMetrics &metrics) {
+  if (!metrics.flatSections) return;
+  bool previousSection = false;
+  for (auto *child : column->getChildren()) {
+    const bool section = child->getName() == "settingsSection";
+    if (section) {
+      if (auto *divider = child->findViewByName("settingsSectionDivider")) {
+        divider->setVisible(previousSection);
+      }
+      if (previousSection) child->setMargin(Edge::Top, metrics.cardPadding);
+    }
+    previousSection = section;
+  }
 }
 
 inline View *makeSummaryRow(const LayoutMetrics &metrics,

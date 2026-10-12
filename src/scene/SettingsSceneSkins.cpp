@@ -1284,7 +1284,8 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
 
   auto *traitWorkspace = new View();
   traitWorkspace->setFlexDirection(FlexDirection::Row);
-  traitWorkspace->setGap(static_cast<float>(metrics.secondaryGap));
+  const int traitCatalogGap = metrics.compact ? 16 : 28;
+  traitWorkspace->setGap(static_cast<float>(traitCatalogGap));
   traitWorkspace->setAlignItems(YGAlignStretch);
   const int traitTabWidth = metrics.compact ? 96 : 124;
   auto *traitTabs = new View();
@@ -1343,7 +1344,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   auto *skinDropdown = buildGameplaySkinSelectionDropdown(
       metrics, activeTrait->skinType, selection, ordinaryActionsEnabled,
       static_cast<float>(std::max(220, metrics.cardsWidth - traitTabWidth -
-                                         metrics.secondaryGap - metrics.cardPadding * 2)));
+                                         traitCatalogGap - metrics.cardPadding * 2)));
   auto *skinDropdownRow = new View();
   skinDropdownRow->setFlexDirection(FlexDirection::Row);
   skinDropdownRow->setFlexWrap(YGWrapWrap);

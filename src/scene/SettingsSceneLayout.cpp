@@ -2566,12 +2566,6 @@ void SettingsScene::initView() {
   header->setPadding(Edge::Left, metrics.safe.left + metrics.horizontalPadding);
   header->setPadding(Edge::Right, metrics.safe.right + metrics.horizontalPadding);
   header->setFlexShrink(0);
-  auto *headerRule = new View();
-  headerRule->setPositionType(YGPositionTypeAbsolute);
-  headerRule->setPosition(Edge::Left, 0)->setPosition(Edge::Bottom, 0);
-  headerRule->setWidthPercent(100)->setHeight(1);
-  headerRule->setThemedBackgroundColor(app_theme::hairlineStrong);
-  header->addView(headerRule);
 
   auto *headerText = new View();
   headerText->setFlexDirection(FlexDirection::Column);
@@ -2673,6 +2667,7 @@ void SettingsScene::initView() {
     }
     lastLayoutWidth = -1;
   };
+  const int tabHeight = metrics.compact ? metrics.actionButtonHeight : 72;
   std::vector<DropdownView::Option> navigationOptions;
   auto makeTabButton = [&](SettingsTab tab, const i18n::Text &label,
                            TextView **labelOut) {
@@ -2684,7 +2679,7 @@ void SettingsScene::initView() {
       *labelOut = labelText;
     }
     auto *button =
-        makeButton(kFitContentWidth, metrics.actionButtonHeight, labelText,
+        makeButton(kFitContentWidth, tabHeight, labelText,
                    app_theme::control(), app_theme::controlHover(),
                    app_theme::controlPressed(), app_theme::hairline(),
                    app_theme::accentBorder(), app_theme::accentBorderStrong());
@@ -2814,6 +2809,7 @@ void SettingsScene::initView() {
     break;
   }
   if (cardsColumn != nullptr) {
+    refineSettingsSectionSpacing(cardsColumn, metrics);
     scrollContent->addView(cardsColumn);
   }
 
