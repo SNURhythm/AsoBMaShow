@@ -11,7 +11,8 @@ int horieLookups = 0;
 
 PackageSourceLookupResult providerLookup(const std::string &name) {
   providerLookups.push_back(name);
-  PackageSourceLookupResult result{.sourceName = name};
+  PackageSourceLookupResult result{
+      .sourceName = name, .sourceUrl = "https://fixture.invalid/api/" + name};
   if (availableProvider == name) {
     result.candidate = DownloadCandidate{
         .originalUrl = "https://fixture.invalid/" + name + ".zip",
@@ -91,6 +92,9 @@ void testProviderSelectionStopsAfterAFileIsFound() {
               ? "https://bms.wrigglebug.xyz/download/package/" + std::string(32, 'b')
               : "https://fixture.invalid/" + provider + ".zip"});
       assert(horieLookups == 0);
+      if (provider != "BMS") {
+        assert(result.fallbackUrl == providerDownloads.front());
+      }
       const size_t expectedLookups = provider == "Ginger" ? 1 :
                                      provider == "Konmai" ? 2 : 3;
       assert(providerLookups.size() == expectedLookups);

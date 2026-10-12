@@ -187,7 +187,11 @@ void testPixelDrainPackageUsesDownloadApi() {
            Link{"https://pixeldrain.com/u/aB12Cd34?download#preview",
                 "https://pixeldrain.com/api/file/aB12Cd34?download"},
            Link{"https://PIXELDRAIN.NET/u/aB12Cd34/",
-                "https://pixeldrain.net/api/file/aB12Cd34?download"}}) {
+                "https://pixeldrain.net/api/file/aB12Cd34?download"},
+           Link{"https://pixeldrain.net/d/h76bfTjz/-Never%20ending%20journey-.7z",
+                "https://pixeldrain.net/api/filesystem/h76bfTjz/-Never%20ending%20journey-.7z?attach"},
+           Link{"https://pixeldrain.com/d/aB12Cd34/folder/song%23name.zip?download#preview",
+                "https://pixeldrain.com/api/filesystem/aB12Cd34/folder/song%23name.zip?attach"}}) {
     DownloadCandidate classified;
     classified.downloadUrl = link.url;
     classified.reason = "This link is not a direct archive.";
@@ -216,6 +220,11 @@ void testPixelDrainPackageLeavesOtherUrlsUnchanged() {
   using namespace asobmshow::bms_search;
   for (const std::string url : {
            "https://pixeldrain.net/api/file/aB12Cd34?download&token=abc",
+           "https://pixeldrain.net/api/filesystem/h76bfTjz/song.7z?download",
+           "https://pixeldrain.net/d/",
+           "https://pixeldrain.net/d/h76bfTjz",
+           "https://pixeldrain.net/d/h76bfTjz/",
+           "https://pixeldrain.net.example/d/h76bfTjz/song.7z",
            "https://pixeldrain.net/l/aB12Cd34",
            "https://pixeldrain.net/u/",
            "https://pixeldrain.net/u/aB12Cd34/extra",

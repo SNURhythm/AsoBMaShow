@@ -36,10 +36,16 @@ DownloadCandidate configurePackageDownloadCandidate(
     // Package providers can return a file viewer URL rather than file data.
     // https://pixeldrain.com/api documents GET /file/{id}?download.
     static const std::regex filePath(R"(^/u/([A-Za-z0-9]+)/?$)");
+    static const std::regex filesystemPath(
+        R"(^/d/([A-Za-z0-9]+/(?:[^/]+/)*[^/]+)$)");
     std::smatch match;
     if (std::regex_match(parsed->path, match, filePath)) {
       candidate.downloadUrl = "https://" + parsed->host + "/api/file/" +
                               match[1].str() + "?download";
+    } else if (std::regex_match(parsed->path, match, filesystemPath)) {
+      // Filesystem shares use a separate API. Preserve the encoded path.
+      candidate.downloadUrl = "https://" + parsed->host + "/api/filesystem/" +
+                              match[1].str() + "?attach";
     }
   }
 

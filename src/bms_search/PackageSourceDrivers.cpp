@@ -181,7 +181,9 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
     }
 
     BmsSearchResult attempt = result;
-    if (!lookup.sourceUrl.empty()) {
+    if (!lookup.candidate->originalUrl.empty()) {
+      attempt.fallbackUrl = lookup.candidate->originalUrl;
+    } else if (!lookup.sourceUrl.empty()) {
       attempt.fallbackUrl = lookup.sourceUrl;
     }
     const std::string effectiveArchiveKey =
