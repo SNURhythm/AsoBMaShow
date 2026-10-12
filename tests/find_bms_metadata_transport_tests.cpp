@@ -1,7 +1,10 @@
 #include "CurlRAII.h"
+#include "BmsSearchService.h"
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -130,7 +133,9 @@ namespace asobmshow::bms_search {
 #undef CurlEasyHandle
 
 namespace actual_curl {
+#define FIND_BMS_TEST_CURL_FILE_TRANSPORT
 #include "transport_metadata_methods.inc"
+#undef FIND_BMS_TEST_CURL_FILE_TRANSPORT
 }
 
 size_t retainedBytes(void *context) {
@@ -296,6 +301,30 @@ void exerciseDownloadProbe(const std::string &origin) {
          "cancelled availability probe stops");
 }
 
+void exerciseFileDownloadStatus(const std::string &origin) {
+  const auto path = std::filesystem::temp_directory_path() /
+      ("asobmashow-download-status-" + std::to_string(
+          std::chrono::steady_clock::now().time_since_epoch().count()));
+  std::atomic_bool cancelled{false};
+  for (const long expected : {403L, 429L, 503L, 200L}) {
+    long status = 999;
+    std::string error;
+    const std::string route = expected == 200 ? "/normal"
+        : "/file-error/" + std::to_string(expected);
+    const bool success = actual_curl::downloadUrlToFile(
+        origin + route, path, cancelled, error, {}, {}, &status);
+    expect(success == (expected == 200), "file download HTTP outcome " + route);
+    expect(status == expected, "file download exposes HTTP status " + route);
+  }
+  long status = 403;
+  std::string error;
+  expect(!actual_curl::downloadUrlToFile(
+             "file:///unsupported", path, cancelled, error, {}, {}, &status),
+         "invalid protocol cannot download");
+  expect(status == 0, "transport failure clears stale HTTP status");
+  std::filesystem::remove(path);
+}
+
 int main(int argc, char **argv) {
   exercise(asobmshow::bms_search::fetchUrlText, "GET");
   exercise(asobmshow::bms_search::postUrlText, "POST");
@@ -303,6 +332,7 @@ int main(int argc, char **argv) {
     const std::string origin = argv[1];
     if (!origin.starts_with("http://127.0.0.1:")) return 2;
     exerciseDownloadProbe(origin);
+    exerciseFileDownloadStatus(origin);
     exerciseLoopback(actual_curl::fetchUrlText, "GET", origin);
     exerciseLoopback(actual_curl::postUrlText, "POST", origin);
   }

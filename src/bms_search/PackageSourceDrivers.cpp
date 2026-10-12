@@ -142,8 +142,8 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
                                            const std::atomic_bool &);
   };
   const std::array<PackageSource, 3> sources = {
-      PackageSource{"Ginger", GingerRushDriver::lookupByMd5},
       PackageSource{"Konmai", KonmaiDriver::lookupByMd5},
+      PackageSource{"Ginger", GingerRushDriver::lookupByMd5},
       PackageSource{"Wriggle", WriggleDriver::lookupByMd5},
   };
 
@@ -201,9 +201,16 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
             {{"source", lookup.sourceName}, {"detail", attempt.presentationMessage}});
       }
     }
-    // A downloadable file commits this operation to its provider. Failure or
-    // cancellation must not silently start another provider's archive.
+    const bool apiRejected = !cancelled.load() &&
+        attempt.status == BmsSearchResult::Status::DownloadFailed &&
+        isPixelDrainApiError(lookup.candidate->downloadUrl,
+                            attempt.downloadHttpStatus);
     result = std::move(attempt);
+    if (apiRejected) {
+      SDL_Log("BMS package source rejected download: %s", result.message.c_str());
+      continue;
+    }
+    // Other failures and cancellation stay with the chosen provider.
     return true;
   }
 

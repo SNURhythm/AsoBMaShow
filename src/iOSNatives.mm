@@ -2595,6 +2595,7 @@ static void CancelIOSDocumentIO(unsigned long long operationToken) {
     return NO;
   }
   NSHTTPURLResponse *httpResponse = (NSHTTPURLResponse *)response;
+  urlResponse = response;
   if (httpResponse.statusCode >= 400) {
     failureMessage = [NSString stringWithFormat:@"HTTP %ld while downloading archive.",
                                                (long)httpResponse.statusCode];
@@ -2773,7 +2774,9 @@ static void CancelIOSDocumentIO(unsigned long long operationToken) {
                     task:(NSURLSessionTask *)task
     didCompleteWithError:(NSError *)error {
   (void)session;
-  urlResponse = task.response;
+  if (task.response != nil) {
+    urlResponse = task.response;
+  }
   requestError = error;
   dispatch_semaphore_signal(semaphore);
 }
@@ -4763,8 +4766,10 @@ bool DownloadURLToFileIOS(const std::string &url,
                           std::string &errorMessage,
                           IOSDownloadProgressCallback progressCallback,
                           void *progressContext,
-                          std::function<bool(const std::string &, bool)> retryCallback) {
+                          std::function<bool(const std::string &, bool)> retryCallback,
+                          long *httpStatus) {
   @autoreleasepool {
+    if (httpStatus != nullptr) *httpStatus = 0;
     errorMessage.clear();
     if (cancelled.load()) {
       errorMessage = "Download cancelled.";
@@ -4892,6 +4897,10 @@ bool DownloadURLToFileIOS(const std::string &url,
     if (delegate->rejectedInvalidRedirect) {
       errorMessage = "Download redirected to a non-HTTP URL.";
       return false;
+    }
+    if (httpStatus != nullptr &&
+        [delegate->urlResponse isKindOfClass:[NSHTTPURLResponse class]]) {
+      *httpStatus = ((NSHTTPURLResponse *)delegate->urlResponse).statusCode;
     }
     if (delegate->failureMessage != nil) {
       errorMessage = std::string(delegate->failureMessage.UTF8String);

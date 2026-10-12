@@ -21,6 +21,16 @@ std::string trimAsciiWhitespace(std::string value) {
 
 } // namespace
 
+bool isPixelDrainApiError(const std::string &downloadUrl, long httpStatus) {
+  if (httpStatus < 400 || httpStatus >= 600) return false;
+  const auto parsed = parseUrl(downloadUrl);
+  return parsed && (parsed->scheme == "http" || parsed->scheme == "https") &&
+         (hostMatches(parsed->host, "pixeldrain.net") ||
+          hostMatches(parsed->host, "pixeldrain.com")) &&
+         (parsed->path.starts_with("/api/file/") ||
+          parsed->path.starts_with("/api/filesystem/"));
+}
+
 DownloadCandidate configurePackageDownloadCandidate(
     DownloadCandidate candidate, const std::string &downloadUrl,
     const std::string &archiveName, const std::string &md5,

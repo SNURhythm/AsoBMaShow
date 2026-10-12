@@ -215,7 +215,8 @@ std::optional<std::string> postUrlText(
 bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path,
                        std::atomic_bool &cancelled, std::string &errorMessage,
                        BmsSearchDownloadProgressCallback progressCallback,
-                       BmsSearchDownloadRetryCallback retryCallback = nullptr);
+                       BmsSearchDownloadRetryCallback retryCallback = nullptr,
+                       long *httpStatus = nullptr);
 std::filesystem::path makeDownloadDirectory(
     const std::filesystem::path &libraryRoot);
 bool downloadAndExtractArchive(
@@ -230,5 +231,6 @@ bool downloadAndExtractArchive(
 DownloadCandidate packageDownloadCandidate(const std::string &downloadUrl,
                                            const std::string &archiveName,
                                            const std::string &md5);
+bool isPixelDrainApiError(const std::string &downloadUrl, long httpStatus);
 
 } // namespace asobmshow::bms_search

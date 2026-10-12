@@ -81,6 +81,7 @@ struct BmsSearchResult {
   std::optional<BmsSearchPendingArtifact> pendingArtifact;
   // App-owned presentation retains its identity; transport diagnostics stay raw.
   i18n::Text presentationMessage;
+  long downloadHttpStatus = 0;
 };
 
 class BmsSearchService {

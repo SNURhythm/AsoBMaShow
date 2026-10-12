@@ -1352,6 +1352,9 @@ int main(int argc, char **argv) {
   testRunningDetailFollowsProgress();
   testProviderSelectionStopsAfterAFileIsFound();
   testChosenProviderRetriesOnlyOnUserDecision();
+  testPixelDrainApiErrorDownloadsFromNextProvider();
+  testPixelDrainApiErrorsContinueThroughRemainingSources();
+  testApiWaterfallDoesNotOverrideCancellationOrOtherFailures();
   testExtractionLimitsAndCancellation();
 #if ASOBMSHOW_HAS_LIBARCHIVE
   testUnknownSizeStreamIsBounded();

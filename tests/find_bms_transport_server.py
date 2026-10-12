@@ -26,6 +26,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         route = urlsplit(self.path).path
+        if route.startswith("/file-error/"):
+            code = int(route.rsplit("/", 1)[-1])
+            body = b'{"success":false,"value":"file_rate_limited_captcha_required","message":"Verification required"}'
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if route.startswith("/retry/"):
             self.retry_download(route.removeprefix("/retry/"))
             return

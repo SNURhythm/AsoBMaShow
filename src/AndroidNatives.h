@@ -138,7 +138,8 @@ bool DownloadURLToFileAndroid(const std::string &url,
                               const std::filesystem::path &path,
                               std::atomic_bool &cancelled,
                               AndroidDownloadProgressCallback progressCallback,
-                              std::string &errorMessage);
+                              std::string &errorMessage,
+                              long *httpStatus = nullptr);
 bool LoadAndroidNativeMusicFile(const std::string &filePath,
                                 const AndroidNativeMusicMetadata &metadata,
                                 std::string &errorMessage);

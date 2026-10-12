@@ -46,7 +46,8 @@ class AndroidMetadataPostCancellationTests(unittest.TestCase):
         cls.addClassCleanup(cls.output.cleanup)
         output = Path(cls.output.name)
         activity = (ROOT / "android/app/src/main/java/com/snurhythm/asobmashow/AsoBMaShowActivity.java").read_text()
-        signatures = ["public String postUrlText(",
+        signatures = ["public String postUrlText(", "public String downloadUrlToFile(",
+                      "private void copyBinaryResponse(",
                       "private HttpURLConnection openHttpConnection(String",
                       "private HttpURLConnection openHttpConnection(\n",
                       "private boolean isRedirectStatus(",
@@ -72,10 +73,17 @@ class AndroidMetadataPostCancellationTests(unittest.TestCase):
                           "AndroidDownloadProgressBridge *androidDownloadProgressBridge(",
                           "std::string callActivityStringMethod(",
                           "std::string callActivityStringMethodLong(",
-                          "bool parseBridgeResult(", "bool PostURLTextAndroid("):
+                          "std::string callActivityStringMethod2Long(",
+                          "std::string pathToUtf8(", "bool parseBridgeResult(",
+                          "bool DownloadURLToFileAndroid(", "bool PostURLTextAndroid("):
             pieces.append(function(native, signature))
         callback = "Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlTextCheckpoint("
         pieces.append('extern "C" JNIEXPORT jboolean JNICALL\n' + function(native, callback))
+        for name, result in (("Progress", "void"), ("Cancelled", "jboolean"),
+                             ("Response", "void")):
+            callback = "Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlToFile" + name + "("
+            if callback in native:
+                pieces.append('extern "C" JNIEXPORT ' + result + ' JNICALL\n' + function(native, callback))
         transport = (ROOT / "src/bms_search/DownloadSupport.cpp").read_text()
         signature = "std::optional<std::string> postUrlText("
         pieces.append(function(transport[transport.rindex(signature):], signature))
@@ -118,6 +126,11 @@ class AndroidMetadataPostCancellationTests(unittest.TestCase):
                          "uncancellable", "http-error", "io-error"):
             with self.subTest(scenario=scenario):
                 self.run_scenario("bridge-" + scenario)
+
+    def test_file_download_preserves_http_status(self):
+        for scenario in ("forbidden", "http-error", "success", "io-error", "no-status"):
+            with self.subTest(scenario=scenario):
+                self.run_scenario("file-" + scenario)
 
 
 @unittest.skipUnless(sys.platform in ("darwin", "linux"),

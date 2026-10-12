@@ -64,3 +64,31 @@ Java_com_snurhythm_asobmashow_AsoBMaShowActivity_requestBridge(
                                     body, error, std::move(checkpoint));
   return utf8ToJString(env, success ? body.c_str() : ("ERROR:" + error).c_str());
 }
+
+template <typename Request>
+bool downloadBridge(Request request, const std::string &url,
+                    const std::filesystem::path &path, std::string &error,
+                    long *status) {
+  if constexpr (std::is_invocable_v<Request, const std::string &,
+                                    const std::filesystem::path &, std::atomic_bool &,
+                                    AndroidDownloadProgressCallback, std::string &, long *>) {
+    return request(url, path, fixtureCancelled, {}, error, status);
+  } else {
+    return request(url, path, fixtureCancelled, {}, error);
+  }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_requestFile(
+    JNIEnv *env, jobject activity, jstring url, jstring path, jboolean wantStatus) {
+  fixtureEnv = env;
+  fixtureActivity = activity;
+  std::string error;
+  long status = 999;
+  const bool success = downloadBridge(&DownloadURLToFileAndroid,
+      jstringToUtf8(env, url), std::filesystem::path(jstringToUtf8(env, path)),
+      error, wantStatus ? &status : nullptr);
+  const std::string result = std::to_string(status) + ":" +
+      (success ? "OK" : "ERROR:" + error);
+  return utf8ToJString(env, result.c_str());
+}

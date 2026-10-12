@@ -2,10 +2,13 @@
 #include "bms_search/HorieYuukaDriver.h"
 #include "bms_search/PackageSourceDrivers.h"
 
+#include <map>
+
 namespace asobmshow::bms_search {
 std::vector<std::string> providerLookups;
 std::vector<std::string> providerDownloads;
 std::string availableProvider;
+std::map<std::string, std::string> providerUrlOverrides;
 bool bmsFileAvailable = false;
 int horieLookups = 0;
 
@@ -13,10 +16,14 @@ PackageSourceLookupResult providerLookup(const std::string &name) {
   providerLookups.push_back(name);
   PackageSourceLookupResult result{
       .sourceName = name, .sourceUrl = "https://fixture.invalid/api/" + name};
-  if (availableProvider == name) {
+  if (availableProvider == name || availableProvider == "all" ||
+      providerUrlOverrides.contains(name)) {
+    const auto override = providerUrlOverrides.find(name);
+    const std::string url = override != providerUrlOverrides.end()
+        ? override->second : "https://fixture.invalid/" + name + ".zip";
     result.candidate = DownloadCandidate{
-        .originalUrl = "https://fixture.invalid/" + name + ".zip",
-        .downloadUrl = "https://fixture.invalid/" + name + ".zip",
+        .originalUrl = url,
+        .downloadUrl = url,
         .archiveName = name + ".zip", .supported = true};
   }
   return result;
@@ -28,7 +35,7 @@ PackageSourceLookupResult KonmaiDriver::lookupByMd5(
 bool probeDownloadUrl(const std::string &, std::string &error,
                       const std::atomic_bool *) {
   providerLookups.push_back("Wriggle");
-  if (availableProvider == "Wriggle") return true;
+  if (availableProvider == "Wriggle" || availableProvider == "all") return true;
   error = "HTTP 404";
   return false;
 }
@@ -60,8 +67,11 @@ std::vector<std::string> BmsSearchDriver::bmsLinks(
 }
 std::vector<DownloadCandidate> BmsSearchDriver::downloadCandidates(
     const std::string &, const std::string &) {
-  return {{.originalUrl = "https://fixture.invalid/BMS.zip",
-           .downloadUrl = "https://fixture.invalid/BMS.zip", .supported = true}};
+  const auto override = providerUrlOverrides.find("BMS");
+  const std::string url = override != providerUrlOverrides.end()
+      ? override->second : "https://fixture.invalid/BMS.zip";
+  return {{.originalUrl = url, .downloadUrl = url,
+           .archiveName = "BMS.zip", .supported = true}};
 }
 } // namespace asobmshow::bms_search
 
@@ -95,8 +105,8 @@ void testProviderSelectionStopsAfterAFileIsFound() {
       if (provider != "BMS") {
         assert(result.fallbackUrl == providerDownloads.front());
       }
-      const size_t expectedLookups = provider == "Ginger" ? 1 :
-                                     provider == "Konmai" ? 2 : 3;
+      const size_t expectedLookups = provider == "Konmai" ? 1 :
+                                     provider == "Ginger" ? 2 : 3;
       assert(providerLookups.size() == expectedLookups);
     }
   }
@@ -127,9 +137,137 @@ void testChosenProviderRetriesOnlyOnUserDecision() {
       {}, {}, {}, options);
   assert(prompts == 2 && cancelled.load());
   assert(result.status == BmsSearchResult::Status::DownloadFailed);
-  assert(providerLookups == std::vector<std::string>{"Ginger"});
+  assert(providerLookups == std::vector<std::string>({"Konmai", "Ginger"}));
   assert(providerDownloads == std::vector<std::string>({
       "https://fixture.invalid/Ginger.zip", "https://fixture.invalid/Ginger.zip"}));
   assert(horieLookups == 0);
+  downloadFixtureFailure = {};
+}
+
+void testPixelDrainApiErrorDownloadsFromNextProvider() {
+  using namespace asobmshow::bms_search;
+  CleanupPaths cleanup;
+  std::string error;
+  const auto fixture = createFindBmsDownloadAttempt("fixture.zip", error);
+  assert(fixture);
+  cleanup.add(fixture->root);
+  const auto libraryRoot = testDownloadRoot(*fixture).parent_path();
+  cleanup.add(libraryRoot);
+  const std::string chart = "#TITLE Waterfall\n#00111:01\n";
+  writeExtractionZip(fixture->archivePath, {{"chart.bms", chart}});
+  extractionDownloadFixture = fixture->archivePath;
+  availableProvider = "Ginger";
+  for (const std::string url : {
+           "https://pixeldrain.net/api/file/abcd1234?download",
+           "https://pixeldrain.com/api/filesystem/abcd1234/song.zip?attach"}) {
+    providerUrlOverrides = {{"Konmai", url}};
+    for (const long status : {403L, 404L, 429L, 500L, 503L}) {
+      providerLookups.clear();
+      providerDownloads.clear();
+      horieLookups = 0;
+      int prompts = 0;
+      std::filesystem::path rejectedAttempt;
+      downloadFixtureFailure = [&](const std::string &target, std::string &message) {
+        providerDownloads.push_back(target);
+        downloadFixtureHttpStatus = target == url ? status : 200;
+        if (target != url) return false;
+        rejectedAttempt = observedDownloadAttempt;
+        message = "Provider rejected the request";
+        return true;
+      };
+      std::atomic_bool cancelled{false};
+      const auto library = libraryRoot / ("library-" + std::to_string(status));
+      const auto result = BmsSearchService().findAndDownload(
+          "", bms_parser::md5(chart), library, cancelled, {}, {}, {},
+          {.requestRetry = [&](const std::string &message, bool) {
+            std::cerr << "Unexpected retry during provider fallback: " << message << '\n';
+            ++prompts;
+            return false;
+          }});
+      assert(result.status == BmsSearchResult::Status::Downloaded);
+      assert(!cancelled && prompts == 0 && horieLookups == 0);
+      assert(providerLookups == std::vector<std::string>({"Konmai", "Ginger"}));
+      assert(providerDownloads == std::vector<std::string>(
+          {url, "https://fixture.invalid/Ginger.zip"}));
+      assert(!std::filesystem::exists(rejectedAttempt));
+      assert(result.fallbackUrl == "https://fixture.invalid/Ginger.zip");
+      assert(result.downloadHttpStatus == 200);
+    }
+  }
+  providerUrlOverrides.clear();
+  downloadFixtureHttpStatus = 0;
+  downloadFixtureFailure = {};
+}
+
+void testPixelDrainApiErrorsContinueThroughRemainingSources() {
+  using namespace asobmshow::bms_search;
+  availableProvider.clear();
+  for (const bool bmsAvailable : {false, true}) {
+    providerUrlOverrides = {
+        {"Konmai", "https://pixeldrain.net/api/file/konmai?download"},
+        {"Ginger", "https://pixeldrain.net/api/filesystem/ginger/song.zip?attach"},
+        {"BMS", "https://pixeldrain.net/api/filesystem/bms/song.zip?attach"}};
+    providerLookups.clear();
+    providerDownloads.clear();
+    bmsFileAvailable = bmsAvailable;
+    horieLookups = 0;
+    int prompts = 0;
+    downloadFixtureFailure = [&](const std::string &url, std::string &message) {
+      providerDownloads.push_back(url);
+      downloadFixtureHttpStatus = 403;
+      message = "CAPTCHA required";
+      return true;
+    };
+    std::atomic_bool cancelled{false};
+    const auto result = BmsSearchService().findAndDownload(
+        std::string(64, 'a'), std::string(32, 'b'), "fixture-library", cancelled,
+        {}, {}, {}, {.requestRetry = [&](const std::string &, bool) {
+          ++prompts;
+          return false;
+        }});
+    assert(!cancelled && prompts == 0);
+    assert(providerLookups == std::vector<std::string>({"Konmai", "Ginger", "Wriggle"}));
+    assert(providerDownloads.size() == (bmsAvailable ? 3 : 2) && horieLookups == 1);
+    assert(result.status != BmsSearchResult::Status::Downloaded);
+  }
+  bmsFileAvailable = false;
+  providerUrlOverrides.clear();
+  downloadFixtureHttpStatus = 0;
+  downloadFixtureFailure = {};
+}
+
+void testApiWaterfallDoesNotOverrideCancellationOrOtherFailures() {
+  using namespace asobmshow::bms_search;
+  struct Failure { const char *url; long status; bool cancel; };
+  for (const auto failure : {
+           Failure{"https://pixeldrain.net/api/file/abcd1234", 0, false},
+           Failure{"https://example.com/song.zip", 403, false},
+           Failure{"https://pixeldrain.net.example/api/file/abcd1234", 403, false},
+           Failure{"https://pixeldrain.net/api/file/abcd1234", 403, true}}) {
+    availableProvider = "Ginger";
+    providerUrlOverrides = {{"Konmai", failure.url}};
+    providerLookups.clear();
+    horieLookups = 0;
+    int prompts = 0;
+    std::atomic_bool cancelled{false};
+    downloadFixtureFailure = [&](const std::string &, std::string &message) {
+      downloadFixtureHttpStatus = failure.status;
+      cancelled.store(failure.cancel);
+      message = "Download failed";
+      return true;
+    };
+    const auto result = BmsSearchService().findAndDownload(
+        "", std::string(32, 'b'), "fixture-library", cancelled, {}, {}, {},
+        {.requestRetry = [&](const std::string &, bool) {
+          ++prompts;
+          return false;
+        }});
+    assert(result.status == BmsSearchResult::Status::DownloadFailed);
+    assert(cancelled && prompts == (failure.cancel ? 0 : 1));
+    assert(providerLookups == std::vector<std::string>{"Konmai"});
+    assert(horieLookups == 0);
+  }
+  providerUrlOverrides.clear();
+  downloadFixtureHttpStatus = 0;
   downloadFixtureFailure = {};
 }

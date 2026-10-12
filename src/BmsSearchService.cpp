@@ -237,6 +237,12 @@ BmsSearchResult BmsSearchService::findAndDownload(
                                  hash, libraryRoot, cancelled,
                                  progressCallback, options, result,
                                  supportedIt->archiveName)) {
+    if (!cancelled.load() &&
+        isPixelDrainApiError(effectiveDownloadUrl, result.downloadHttpStatus)) {
+      if (const auto fallbackResult = tryHorieAfterAutomaticFailure(result)) {
+        return *fallbackResult;
+      }
+    }
     if (result.fallbackUrl.empty()) {
       result.fallbackUrl = result.bmsUrl.empty() ? result.patternUrl
                                                  : result.bmsUrl;
