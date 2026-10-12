@@ -29,6 +29,19 @@ DownloadCandidate configurePackageDownloadCandidate(
   if (candidate.downloadUrl.empty()) {
     candidate.downloadUrl = downloadUrl;
   }
+  const auto parsed = parseUrl(candidate.downloadUrl);
+  if (parsed && (parsed->scheme == "http" || parsed->scheme == "https") &&
+      (hostMatches(parsed->host, "pixeldrain.net") ||
+       hostMatches(parsed->host, "pixeldrain.com"))) {
+    // Package providers can return a file viewer URL rather than file data.
+    // https://pixeldrain.com/api documents GET /file/{id}?download.
+    static const std::regex filePath(R"(^/u/([A-Za-z0-9]+)/?$)");
+    std::smatch match;
+    if (std::regex_match(parsed->path, match, filePath)) {
+      candidate.downloadUrl = "https://" + parsed->host + "/api/file/" +
+                              match[1].str() + "?download";
+    }
+  }
 
   const std::string suggestedArchiveName = trimAsciiWhitespace(archiveName);
   if (!suggestedArchiveName.empty() &&
