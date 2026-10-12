@@ -71,7 +71,10 @@ def function_body(source: str, signature: str) -> str:
     return ""
 
 
-main_menu_tabs = function_body(main_menu, "void MainMenuScene::selectTab(Tab tab)")
+main_menu_tabs = (
+    function_body(main_menu, "void MainMenuScene::selectTab(Tab tab)")
+    + function_body(main_menu, "void MainMenuScene::completeTabSwitch(Tab tab)")
+)
 require(
     "std::unique_ptr<IrUploadsScene> irTab_" in main_menu_header
     and "tab == Tab::Ir && !irTab_" in main_menu_tabs

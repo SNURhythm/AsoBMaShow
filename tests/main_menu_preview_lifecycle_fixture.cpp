@@ -41,6 +41,7 @@ struct Context {
 struct MainMenuScene {
   Context context;
   bool restoringTabSelection_ = false;
+  bool pendingTab_ = false;
   bool selectorActive = true;
   bool selectorTabActive() const { return selectorActive; }
   std::atomic_bool willStart = false;

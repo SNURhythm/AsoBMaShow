@@ -71,6 +71,7 @@ struct Lifecycle {
 struct MainMenuScene : Scene {
   enum class Tab { Play, Course, Music, Ir };
   Tab activeTab_ = Tab::Play;
+  bool pendingTab_ = false;
   struct Utility {
     int pauses = 0, resumes = 0, profileChanges = 0;
     void onPause() { ++pauses; }

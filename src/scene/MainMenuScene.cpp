@@ -685,6 +685,7 @@ const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
 }
 
 EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
+  if (pendingTab_) return {};
   if (tutorial_ != nullptr && tutorial_->getVisible()) {
     (void)tutorial_->handleEvents(event);
     return {};
@@ -763,7 +764,47 @@ bool MainMenuScene::renderViewBeforeScene(const View *) const {
 }
 
 void MainMenuScene::selectTab(Tab tab) {
-  if (tab == activeTab_ || willStart.load()) return;
+  if (tab == activeTab_ || willStart.load() || pendingTab_) return;
+  if (selectorTabActive()) {
+    if (tab == Tab::Music || tab == Tab::Ir) {
+      // Joining a preview and closing its audio device can take hundreds of
+      // milliseconds. Keep drawing while those resources are retired, then
+      // initialize the new tab on the UI thread with exclusive jukebox access.
+      if (previewWorker_) previewWorker_->cancel();
+      tabPreviewStop_ = std::async(std::launch::async, [this] {
+        if (previewWorker_) previewWorker_->stop();
+        stopAndClearSelectedChart();
+      });
+      pendingTab_ = tab;
+      for (auto *view : views) view->cancelPointerInput();
+      if (tabLoadingOverlay_) tabLoadingOverlay_->setVisible(true);
+      return;
+    }
+    if (previewWorker_) previewWorker_->stop();
+    stopAndClearSelectedChart();
+  }
+  completeTabSwitch(tab);
+}
+
+bool MainMenuScene::applyPendingTabSwitch() {
+  if (!pendingTab_) return true;
+  if (tabPreviewStop_.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+    return false;
+  tabPreviewStop_.get();
+  const Tab tab = *pendingTab_;
+  pendingTab_.reset();
+  if (tabLoadingOverlay_) tabLoadingOverlay_->setVisible(false);
+  completeTabSwitch(tab);
+  return true;
+}
+
+void MainMenuScene::cancelPendingTabSwitch() {
+  if (tabPreviewStop_.valid()) tabPreviewStop_.get();
+  pendingTab_.reset();
+  if (tabLoadingOverlay_) tabLoadingOverlay_->setVisible(false);
+}
+
+void MainMenuScene::completeTabSwitch(Tab tab) {
   if (selectorTabActive()) {
     const auto endEditing = [](View *root, const auto &self) -> void {
       if (auto *input = dynamic_cast<TextInputBox *>(root)) input->endEditing();
@@ -779,8 +820,6 @@ void MainMenuScene::selectTab(Tab tab) {
     state.search = searchText;
     state.songScroll = recyclerView->scrollOffset;
     state.folderScroll = folderRecyclerView->scrollOffset;
-    if (previewWorker_) previewWorker_->stop();
-    stopAndClearSelectedChart();
   } else if (auto *scene = activeUtilityTab()) {
     scene->onPause();
   }
@@ -891,6 +930,7 @@ MainMenuScene::~MainMenuScene() {
 }
 
 void MainMenuScene::stopReplayAndPreviewWork() {
+  cancelPendingTabSwitch();
   // Preparation workers can join the preview worker themselves. Join those
   // owners first, while all callbacks still have live scene dependencies.
   stopReplayLoadWorker();
@@ -903,6 +943,7 @@ void MainMenuScene::init() {
   chartSession =
       context.chartRepository.OpenSession(&context.scoreRepository);
   auto profileOperationBlocker = [this]() -> std::optional<std::string> {
+    if (pendingTab_) return i18n::tr("menu.loading.progress");
     if (replayExportJob_.inProgress()) {
       return i18n::tr("menu.replay_export_active.message");
     }
@@ -943,6 +984,7 @@ void MainMenuScene::onInputQueueOverflow() {
 }
 
 void MainMenuScene::onPause() {
+  cancelPendingTabSwitch();
   if (auto *scene = activeUtilityTab()) scene->onPause();
   // External settings may switch profile databases while the shell is retained.
   if (irTab_) irTab_->onProfileWillChange();
@@ -1000,11 +1042,11 @@ void MainMenuScene::onResume() {
 
 void MainMenuScene::queueSelectedSkinHandoff() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
-  if (activeTab_ != Tab::Play) return;
+  if (activeTab_ != Tab::Play || pendingTab_) return;
   // Settings retains the built-in selector. Re-evaluate type 5 after resume
   // unwinds, so changing the scene cannot clean up views inside onResume().
   defer([this]() {
-    if (activeTab_ != Tab::Play) return true;
+    if (activeTab_ != Tab::Play || pendingTab_) return true;
     if (context.gameplaySkinLifecycle &&
         !context.gameplaySkinLifecycle->presentationReady()) {
       presentationSkinRefreshPending = true;
@@ -1390,7 +1432,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   jacketView = new ImageView(0, 0, 0, 0);
   recyclerView->onSelected = [this, &context](const ChartMetaRecord &record,
                                               int idx) {
-    if (willStart.load())
+    if (willStart.load() || pendingTab_)
       return;
     const ChartMetaRecord item = record;
     chartSelectionGeneration =
@@ -1605,6 +1647,19 @@ void MainMenuScene::initView(ApplicationContext &context) {
       0, 0, rendering::window_width, rendering::window_height, {});
   decideOverlay_->setVisible(false);
   overlayPortal->present(decideOverlay_);
+  tabLoadingOverlay_ = new BlockingOverlayView(0, 0, rendering::window_width,
+                                               rendering::window_height);
+  tabLoadingOverlay_->setFlexDirection(FlexDirection::Column)
+      ->setAlignItems(YGAlignCenter)->setJustifyContent(YGJustifyCenter)
+      ->setThemedBackgroundColor(app_theme::scrim);
+  auto *tabLoadingText = new TextView(main_menu_theme::font, 28);
+  tabLoadingText->setLocalizedText(i18n::message("menu.loading.progress"));
+  tabLoadingText->setThemedColor(app_theme::textPrimary);
+  tabLoadingText->setWidth(300)->setHeight(64);
+  tabLoadingText->setAlign(TextView::CENTER);
+  tabLoadingOverlay_->addView(tabLoadingText);
+  tabLoadingOverlay_->setVisible(false);
+  overlayPortal->present(tabLoadingOverlay_);
   previewWorker_ = std::make_unique<MainMenuPreviewController>(
       [this](const ChartMetaRecord &request, std::atomic_bool &cancelled) {
         const auto &meta = request.meta;
@@ -7894,6 +7949,7 @@ void MainMenuScene::applyReplayExportResult() {
 }
 
 void MainMenuScene::update(float dt) {
+  if (!applyPendingTabSwitch()) return;
   if (irTab_) {
     irTab_->refreshLanguageIfNeeded();
     irTab_->update(dt);
@@ -7972,6 +8028,8 @@ void MainMenuScene::renderScene() {
     return;
   }
   const SafeAreaInsets safe = getSafeAreaInsetsUi();
+  if (tabLoadingOverlay_)
+    tabLoadingOverlay_->setSize(rendering::window_width, rendering::window_height);
   const bool layoutChanged =
       rendering::window_width != lastLayoutWidth ||
       rendering::window_height != lastLayoutHeight || safe.top != lastSafeTop ||
@@ -8044,6 +8102,7 @@ void MainMenuScene::renderScene() {
 }
 
 void MainMenuScene::cleanupScene() {
+  cancelPendingTabSwitch();
   if (musicTab_) musicTab_->cleanup();
   if (irTab_) irTab_->cleanup();
   musicTab_.reset();
@@ -8080,6 +8139,11 @@ void MainMenuScene::cleanupScene() {
   folderRecyclerView = nullptr;
   temporaryChartFolder.reset();
   rootLayout = nullptr;
+  if (tabLoadingOverlay_ != nullptr) {
+    overlayPortal->dismiss(tabLoadingOverlay_);
+    delete tabLoadingOverlay_;
+    tabLoadingOverlay_ = nullptr;
+  }
   if (decideOverlay_ != nullptr) {
     overlayPortal->dismiss(decideOverlay_);
     delete decideOverlay_;

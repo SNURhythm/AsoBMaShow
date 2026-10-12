@@ -28,6 +28,9 @@ class MainMenuTabsTests(unittest.TestCase):
             "bool MainMenuScene::selectorTabActive() const",
             "Scene *MainMenuScene::activeUtilityTab() const",
             "void MainMenuScene::selectTab(Tab tab)",
+            "void MainMenuScene::completeTabSwitch(Tab tab)",
+            "bool MainMenuScene::applyPendingTabSwitch()",
+            "void MainMenuScene::cancelPendingTabSwitch()",
             "EventHandleResult MainMenuScene::handleEvents(SDL_Event &event)",
             "void MainMenuScene::selectChartByPathAfterReload(",
             "ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const"))
@@ -39,6 +42,9 @@ class MainMenuTabsTests(unittest.TestCase):
 #include <cassert>
 #include <filesystem>
 #include <functional>
+#include <future>
+#include <chrono>
+#include <thread>
 #include <memory>
 #include <optional>
 #include <string>
@@ -107,7 +113,7 @@ struct Scene {
 };
 struct MusicPlayerScene: Scene { explicit MusicPlayerScene(int) {} };
 struct IrUploadsScene: Scene { explicit IrUploadsScene(int) {} };
-struct Preview { void stop() {} };
+struct Preview { std::function<void()> stopping; void cancel() {} void stop() { if(stopping) stopping(); } };
 template<class T> struct Recycler {
   std::vector<T> items;
   float scrollOffset=0;
@@ -167,7 +173,20 @@ struct MainMenuScene : Scene {
   EventHandleResult handleEvents(SDL_Event &);
   View *tutorial_=nullptr, *archiveUnzipModal_=nullptr, *findBmsModal_=nullptr, *decideOverlay_=nullptr, *recordsModal_=nullptr;
   View *playOptionsModalRoot=nullptr, *parseLogModalRoot=nullptr, *musicModalRoot=nullptr, *tasksModalRoot=nullptr, *rankingsModal=nullptr;
+  std::optional<Tab> pendingTab_;
+  std::future<void> tabPreviewStop_;
+  View *tabLoadingOverlay_=nullptr;
   void selectTab(Tab);
+  void completeTabSwitch(Tab);
+  bool applyPendingTabSwitch();
+  void cancelPendingTabSwitch();
+  void settleTab() {
+    const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(2);
+    while(!applyPendingTabSwitch() && std::chrono::steady_clock::now()<deadline)
+      std::this_thread::yield();
+    assert(!pendingTab_);
+  }
+  void switchTabAndWait(Tab tab) { selectTab(tab);settleTab(); }
   void selectChartByPathAfterReload(const std::filesystem::path&, AutoSelectionPreview);
   ChartMetaQuery chartQueryForActiveFolder() const;
   bool chartDifficultyRangeEnabled() const { return false; }
@@ -235,9 +254,49 @@ int main(int argc,char **argv) {
   MainMenuScene scene;
   auto folders=MainMenuScene::fixtureFolders();
   const std::string scenario=argv[1];
-  if(scenario=="shell-shortcuts") {
+  if(scenario=="slow-preview-switch" || scenario=="slow-preview-ir" || scenario=="cancel-preview-switch") {
+    const Tab destination=scenario=="slow-preview-ir" ? Tab::Ir : Tab::Music;
+    std::promise<void> entered,release;
+    auto releaseSignal=release.get_future().share();
+    Preview preview{[&] { entered.set_value();releaseSignal.wait(); }};
+    scene.previewWorker_=&preview;
+    View overlay;
+    scene.tabLoadingOverlay_=&overlay;
+    auto switching=std::async(std::launch::async,[&] { scene.selectTab(destination); });
+    entered.get_future().wait();
+    const auto result=switching.wait_for(std::chrono::milliseconds(50));
+    if(result!=std::future_status::ready) release.set_value();
+    switching.get();
+    assert(result==std::future_status::ready && "tab selection must not join slow preview/audio work on the UI thread");
+    assert(scene.pendingTab_ && scene.activeTab_==Tab::Play && !scene.musicTab_ && !scene.irTab_);
+    assert(overlay.visible && !scene.applyPendingTabSwitch());
+    SDL_Event event{.type=SDL_EVENT_KEY_DOWN,.key={.mod=SDL_KMOD_GUI,.key=SDLK_4}};
+    scene.handleEvents(event);
+    scene.selectTab(Tab::Course);
+    assert(*scene.pendingTab_==destination && scene.activeTab_==Tab::Play);
+    if(scenario=="cancel-preview-switch") {
+      std::promise<void> cancelEntered;
+      auto cancelling=std::async(std::launch::async,[&] {
+        cancelEntered.set_value();
+        scene.cancelPendingTabSwitch();
+      });
+      cancelEntered.get_future().wait();
+      const auto cancelResult=cancelling.wait_for(std::chrono::milliseconds(50));
+      release.set_value();
+      cancelling.get();
+      assert(cancelResult==std::future_status::timeout);
+      assert(!scene.pendingTab_ && !scene.tabPreviewStop_.valid());
+      assert(scene.activeTab_==Tab::Play && !scene.musicTab_);
+    } else {
+      release.set_value();
+      scene.settleTab();
+      assert(scene.activeTab_==destination && scene.activeUtilityTab()->initializations==1);
+    }
+    assert(!overlay.visible);
+    scene.previewWorker_=nullptr;
+  } else if(scenario=="shell-shortcuts") {
     for (int key=SDLK_1;key<=SDLK_4;++key) {
-      scene.selectTab(Tab::Music);
+      scene.switchTabAndWait(Tab::Music);
       const int before=scene.musicTab_->digitEvents;
       SDL_Event event{.type=SDL_EVENT_KEY_DOWN,.key={.mod=SDL_KMOD_GUI,.key=key}};
       scene.handleEvents(event);
@@ -250,11 +309,11 @@ int main(int argc,char **argv) {
     }
   } else if(scenario=="utility-lifecycle") {
     for (auto tab : {Tab::Music, Tab::Ir}) {
-      scene.selectTab(tab);
+      scene.switchTabAndWait(tab);
       auto *utility=scene.activeUtilityTab();
       assert(utility->initializations==1 && utility->resumes==0);
-      scene.selectTab(Tab::Play);
-      scene.selectTab(tab);
+      scene.switchTabAndWait(Tab::Play);
+      scene.switchTabAndWait(tab);
       assert(utility->initializations==1 && utility->resumes==1);
     }
   } else if(scenario=="play") {
@@ -304,7 +363,7 @@ int main(int argc,char **argv) {
     scene.selectedChartRecord=scene.songs.get(3);
     scene.songs.scrollOffset=175;
     scene.sidebar.scrollOffset=240;
-    scene.selectTab(Tab::Course);
+    scene.switchTabAndWait(Tab::Course);
     assert(scene.selectorTab_==Tab::Course && scene.searchText.empty());
     assert(!scene.selectedChartRecord && scene.songs.selectedIndex==-1);
     assert(!scene.temporaryChartFolder && scene.activeFolder.key=="course-table");
@@ -314,21 +373,21 @@ int main(int argc,char **argv) {
     scene.selectedChartRecord=scene.songs.get(2);
     scene.songs.scrollOffset=950; // Library resizing must clamp a retained offset.
     scene.sidebar.scrollOffset=800;
-    scene.selectTab(Tab::Play);
+    scene.switchTabAndWait(Tab::Play);
     assert(scene.activeFolder.key=="favorites" && scene.searchText=="play search");
     assert(scene.search.editing=="play search");
     assert(scene.temporaryChartFolder==std::filesystem::path("/charts/remember-me"));
     assert(scene.songs.selectedIndex==3 && scene.selectedChartRecord->meta.BmsPath=="song3.bms");
     assert(scene.songs.scrollOffset==175 && scene.sidebar.scrollOffset==240);
     // A leading synthetic record changes the visible index, not chart identity.
-    scene.selectTab(Tab::Course);
+    scene.switchTabAndWait(Tab::Course);
     assert(scene.activeFolder.key=="course" && scene.searchText=="course search");
     assert(!scene.temporaryChartFolder);
     assert(scene.songs.selectedIndex==3 && scene.selectedChartRecord->meta.BmsPath=="course2.bms");
     assert(scene.songs.scrollOffset==500 && scene.sidebar.scrollOffset==200);
     assert(!scene.restoringTabSelection_);
-    scene.selectTab(Tab::Music);
-    scene.selectTab(Tab::Course);
+    scene.switchTabAndWait(Tab::Music);
+    scene.switchTabAndWait(Tab::Course);
     assert(scene.selectedChartRecord->meta.BmsPath=="course2.bms");
     assert(scene.searchText=="course search" && scene.songs.scrollOffset==500);
   } else if(scenario=="first-course") {
@@ -336,31 +395,31 @@ int main(int argc,char **argv) {
     scene.songs.selectedIndex=2;
     scene.selectedChartRecord=scene.songs.get(2);
     scene.search.editingActive=true;
-    scene.selectTab(Tab::Course);
+    scene.switchTabAndWait(Tab::Course);
     assert(!scene.search.editingActive);
     assert(scene.activeFolder.type==T::CourseTable);
     assert(!scene.selectedChartRecord && "first COURSE entry must not retain PLAY chart details");
     assert(scene.songs.selectedIndex==-1);
   } else if(scenario=="special-rows") {
-    scene.selectTab(Tab::Course);
+    scene.switchTabAndWait(Tab::Course);
     scene.activeFolder={.key="course",.type=T::Course,.courseId=42};
     scene.reloadChartList();
     assert(scene.selectedChartRecord && scene.selectedChartRecord->courseStart);
     assert(scene.selectedChartRecord->meta.BmsPath.empty());
-    scene.selectTab(Tab::Play);
+    scene.switchTabAndWait(Tab::Play);
     scene.activeFolder={.key="archives",.type=T::SolidArchives};
     scene.reloadChartList();
     scene.songs.selectedIndex=0;
     scene.songs.onSelected(scene.songs.get(0),0);
     assert(scene.selectedChartRecord->unzipAll);
-    scene.selectTab(Tab::Course);
+    scene.switchTabAndWait(Tab::Course);
     assert(scene.songs.selectedIndex==0 && scene.selectedChartRecord->courseStart);
     assert(!scene.selectedChartRecord->unzipAll && scene.selectedChartRecord->meta.BmsPath.empty());
-    scene.selectTab(Tab::Play);
+    scene.switchTabAndWait(Tab::Play);
     assert(scene.songs.selectedIndex==0 && scene.selectedChartRecord && scene.selectedChartRecord->unzipAll);
     assert(!scene.selectedChartRecord->courseStart && scene.selectedChartRecord->meta.BmsPath.empty());
-    scene.selectTab(Tab::Music);
-    scene.selectTab(Tab::Play);
+    scene.switchTabAndWait(Tab::Music);
+    scene.switchTabAndWait(Tab::Play);
     assert(scene.songs.selectedIndex==0 && scene.selectedChartRecord->unzipAll);
   } else if(scenario=="failed-course-lookup") {
     for(auto preview : {MainMenuScene::AutoSelectionPreview::Suppress, MainMenuScene::AutoSelectionPreview::Load}) {
@@ -411,6 +470,14 @@ int main(int argc,char **argv) {
 
     def test_shell_shortcuts_precede_music_digit_handlers(self):
         subprocess.run([str(self.binary), "shell-shortcuts"], check=True)
+
+    def test_tab_selection_does_not_wait_for_preview_shutdown(self):
+        for scenario in ("slow-preview-switch", "slow-preview-ir"):
+            with self.subTest(scenario=scenario):
+                subprocess.run([str(self.binary), scenario], check=True, timeout=5)
+
+    def test_cancelling_switch_joins_shutdown_without_opening_destination(self):
+        subprocess.run([str(self.binary), "cancel-preview-switch"], check=True, timeout=5)
 
     def test_utility_tabs_load_once_on_creation_and_resume_when_retained(self):
         subprocess.run([str(self.binary), "utility-lifecycle"], check=True)

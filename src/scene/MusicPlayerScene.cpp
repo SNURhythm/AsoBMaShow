@@ -998,6 +998,7 @@ void MusicPlayerScene::cleanupScene() {
 }
 
 void MusicPlayerScene::buildView() {
+  View::LayoutBatchScope layoutBatch;
   auto safe = getSafeAreaInsetsUi();
   if (embeddedTab) safe.top = 0;
   rootLayout =
@@ -2341,6 +2342,7 @@ void MusicPlayerScene::styleButton(Button *button, TextView *text,
 }
 
 void MusicPlayerScene::reloadData(bool preserveSelection) {
+  View::LayoutBatchScope layoutBatch;
   const auto selectedLibrary = selectedLibraryTrack();
   const auto selectedFavorite =
       selectedTrackBrowserTrack(TrackBrowserKind::Favorites);

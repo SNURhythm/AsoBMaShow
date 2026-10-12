@@ -29,6 +29,7 @@
 #include <filesystem>
 #include <deque>
 #include <functional>
+#include <future>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -102,9 +103,15 @@ private:
   std::unique_ptr<MusicPlayerScene> musicTab_;
   std::unique_ptr<IrUploadsScene> irTab_;
   bool restoringTabSelection_ = false;
+  std::optional<Tab> pendingTab_;
+  std::future<void> tabPreviewStop_;
+  View *tabLoadingOverlay_ = nullptr;
   bool selectorTabActive() const;
   Scene *activeUtilityTab() const;
   void selectTab(Tab tab);
+  void completeTabSwitch(Tab tab);
+  bool applyPendingTabSwitch();
+  void cancelPendingTabSwitch();
   void refreshTabPresentation();
   bool renderViewBeforeScene(const View *view) const override;
   bool showTutorial_ = false;

@@ -317,6 +317,8 @@ struct MainMenuScene {
   void applyReplayLoadCompletion();
   void stopReplayLoadWorker();
   void stopReplayAndPreviewWork();
+  bool pendingTab_ = false;
+  void cancelPendingTabSwitch() { pendingTab_ = false; }
   bool beginReplayExport(const i18n::Text &, const i18n::Text &, const i18n::Text &);
   void applyReplayExportResult();
   void onPause();
