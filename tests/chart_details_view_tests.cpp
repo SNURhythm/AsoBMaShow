@@ -1,4 +1,5 @@
 #include "rendering/UniformCache.h"
+#include "rendering/ResponsiveUi.h"
 #include "view/ChartDetailsView.h"
 #include "view/ImageView.h"
 #include "view/ScrollView.h"
@@ -450,6 +451,22 @@ int main() {
                 "chart values remain within the details panel");
       }
     }
+  }
+  {
+    ChartDetailsView details(new ImageView(0, 0, 0, 0));
+    for (const bool compactSpace : {true, false, true}) {
+      rendering::compactMenuCanvasActive = compactSpace;
+      details.setWidth(compactSpace ? 260 : 472);
+      details.setCompact(false);
+      details.applyYogaLayout();
+      require(details.findViewByName("chartDetailsArtwork")->getVisible() == !compactSpace,
+              "secondary artwork follows available space and returns in a wider window");
+      require(details.findViewByName("chartDetailsSummary")->getVisible() == !compactSpace,
+              "secondary summary follows available space without adding navigation");
+      require(details.findViewByName("chartDetailsFacts")->getVisible(),
+              "chart facts remain available in the compact details panel");
+    }
+    rendering::compactMenuCanvasActive = false;
   }
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();

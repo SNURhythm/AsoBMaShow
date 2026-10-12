@@ -2547,7 +2547,7 @@ void SettingsScene::initView() {
   metrics.cardGap = metrics.compact ? 12 : 16;
   metrics.secondaryGap = 0;
   metrics.bodyGap = metrics.compact ? 18 : 28;
-  metrics.actionButtonHeight = rendering::phoneMenuCanvasActive ? rendering::phoneTouchTarget : (metrics.compact ? 48 : 54);
+  metrics.actionButtonHeight = rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : (metrics.compact ? 48 : 54);
   metrics.backButtonHeight = metrics.actionButtonHeight;
   metrics.backButtonWidth = metrics.compact ? 110 : 132;
   rootLayout->setPadding(Edge::All, 0);

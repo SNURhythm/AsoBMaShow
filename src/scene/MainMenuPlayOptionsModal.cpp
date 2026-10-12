@@ -22,7 +22,7 @@ Color modalPanelBorder() {
 }
 
 Button *makeCloseButton() {
-  auto *button = new Button(0, 0, 132, rendering::phoneMenuCanvasActive ? rendering::phoneTouchTarget : 48);
+  auto *button = new Button(0, 0, 132, rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 48);
   auto *text = new TextView(kFontPath, 20);
   text->setLocalizedText(i18n::message("menu.play_options.close.label"));
   text->setAlign(TextView::CENTER);
@@ -124,7 +124,7 @@ MainMenuPlayOptionsModal::Create(View *parent,
   optionsContent->setGap(12);
   optionsContent->setWidth(optionWidth);
 
-  const std::size_t columns = !rendering::phoneMenuCanvasActive && optionWidth >= 620.0f ? 4U : 2U;
+  const std::size_t columns = !rendering::compactMenuCanvasActive && optionWidth >= 620.0f ? 4U : 2U;
   auto *options = new PlayOptionsPanelView(
       std::move(callbacks),
       {.width = optionWidth,
@@ -141,7 +141,7 @@ MainMenuPlayOptionsModal::Create(View *parent,
   footer->setFlexDirection(FlexDirection::Row);
   footer->setJustifyContent(YGJustifyFlexEnd);
   footer->setAlignItems(YGAlignCenter);
-  footer->setHeight(rendering::phoneMenuCanvasActive ? 82 : 72)->setFlexShrink(0);
+  footer->setHeight(rendering::compactMenuCanvasActive ? 82 : 72)->setFlexShrink(0);
   footer->setPadding(Edge::Left, kPanelPadding);
   footer->setPadding(Edge::Right, kPanelPadding);
   addRule(footer, Edge::Top);
@@ -177,7 +177,7 @@ void MainMenuPlayOptionsModal::hide() {
 void MainMenuPlayOptionsModal::resize(int width, int height) {
   if (root_ == nullptr) return;
   root_->setSize(width, height);
-  if (!rendering::phoneMenuCanvasActive) return;
+  if (!rendering::compactMenuCanvasActive) return;
   const auto safe = rendering::uiSafeAreaInsets();
   root_->setPadding(Edge::Top, safe.top)->setPadding(Edge::Bottom, safe.bottom);
   root_->setPadding(Edge::Left, safe.left)->setPadding(Edge::Right, safe.right);

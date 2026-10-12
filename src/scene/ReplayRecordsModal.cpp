@@ -167,7 +167,7 @@ ReplayRecordsModal::Create(View *parent,
   modal->callbacks_ = std::move(callbacks);
 
   const auto safe = rendering::uiSafeAreaInsets();
-  const bool phone = rendering::phoneMenuCanvasActive;
+  const bool phone = rendering::compactMenuCanvasActive;
   const float kModalPanelWidth = phone ? std::min(760.0f,
       static_cast<float>(rendering::window_width - safe.left - safe.right - 24)) : 760.0f;
   const float kModalPanelHeight = phone ? std::min(660.0f,
@@ -504,9 +504,9 @@ ReplayRecordsModal::Create(View *parent,
     page->setVisible(true);
     for (auto *row : page->getChildren()) {
       if (row->getChildren().empty()) continue;
-      row->setMinHeight(rendering::phoneTouchTarget);
+      row->setMinHeight(rendering::compactTouchTarget);
       for (auto *child : row->getChildren()) {
-        if (dynamic_cast<Button *>(child)) child->setHeight(rendering::phoneTouchTarget);
+        if (dynamic_cast<Button *>(child)) child->setHeight(rendering::compactTouchTarget);
       }
     }
     auto *scroll = new ScrollView(0, 0, static_cast<int>(kModalContentWidth),
@@ -1170,7 +1170,7 @@ void ReplayRecordsModal::hide() {
 void ReplayRecordsModal::resize(int width, int height) {
   if (root_ == nullptr) return;
   root_->setSize(width, height);
-  if (!rendering::phoneMenuCanvasActive) return;
+  if (!rendering::compactMenuCanvasActive) return;
   const auto safe = rendering::uiSafeAreaInsets();
   root_->setPadding(Edge::Top, safe.top)->setPadding(Edge::Bottom, safe.bottom);
   root_->setPadding(Edge::Left, safe.left)->setPadding(Edge::Right, safe.right);
@@ -1627,7 +1627,7 @@ void ReplayRecordsModal::refreshActions() {
                           app_theme::violetActionPressed,
                           app_theme::violetActionHover);
 
-  if (rendering::phoneMenuCanvasActive) resize(rendering::window_width, rendering::window_height);
+  if (rendering::compactMenuCanvasActive) resize(rendering::window_width, rendering::window_height);
   if (root_ != nullptr) {
     root_->applyYogaLayoutFromRoot();
   }

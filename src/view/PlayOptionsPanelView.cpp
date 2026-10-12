@@ -49,17 +49,17 @@ View *makeRow(float height = 48.0f) {
   row->setFlexDirection(FlexDirection::Row);
   row->setAlignItems(YGAlignStretch);
   row->setGap(10);
-  row->setHeight(rendering::phoneMenuCanvasActive ? YGUndefined : height);
-  if (rendering::phoneMenuCanvasActive) {
-    row->setFlexWrap(YGWrapWrap)->setMinHeight(rendering::phoneTouchTarget);
+  row->setHeight(rendering::compactMenuCanvasActive ? YGUndefined : height);
+  if (rendering::compactMenuCanvasActive) {
+    row->setFlexWrap(YGWrapWrap)->setMinHeight(rendering::compactTouchTarget);
   }
   return row;
 }
 
 Button *makeButton(const i18n::Text &label, int fontSize, TextView **textOut) {
-  auto *button = new Button(0, 0, 0, rendering::phoneMenuCanvasActive ? rendering::phoneTouchTarget : 48);
+  auto *button = new Button(0, 0, 0, rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 48);
   button->setFlexGrow(1.0f);
-  button->setFlexBasis(rendering::phoneMenuCanvasActive ? 120.0f : 0.0f);
+  button->setFlexBasis(rendering::compactMenuCanvasActive ? 120.0f : 0.0f);
   button->setFlexShrink(1.0f);
   button->setCornerRadius(app_theme::controlRadius());
   button->setStyledBorderWidth(1);
@@ -279,7 +279,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
                     callbacks.isPlayOptionAllowed(option);
            }},
       {.columns = layout.playOptionColumns,
-       .rowHeight = rendering::phoneMenuCanvasActive ? rendering::phoneTouchTarget : 48.0f,
+       .rowHeight = rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 48.0f,
        .buttonFontSize = 15,
        .showLaneOrder = layout.showLaneOrder});
   playOptionSection->setWidthPercent(100);

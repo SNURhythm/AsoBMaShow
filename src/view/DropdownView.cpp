@@ -16,8 +16,8 @@ namespace {
 
 constexpr uint32_t kIconCaretUp = 0xf0d8;
 constexpr uint32_t kIconCaretDown = 0xf0d7;
-float triggerHeight() { return rendering::phoneMenuCanvasActive ? rendering::phoneTouchTarget : 42.0f; }
-float optionHeight() { return rendering::phoneMenuCanvasActive ? rendering::phoneTouchTarget : 38.0f; }
+float triggerHeight() { return rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 42.0f; }
+float optionHeight() { return rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 38.0f; }
 constexpr float kMenuPadding = 4.0f;
 constexpr float kMenuGap = 4.0f;
 constexpr float kWindowMargin = 10.0f;

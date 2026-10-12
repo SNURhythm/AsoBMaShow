@@ -156,9 +156,9 @@ inline LayoutMetrics resolveLayoutMetrics() {
     metrics.modeCardHeight = 156;
   }
 
-  if (rendering::phoneMenuCanvasActive) {
-    metrics.actionButtonHeight = rendering::phoneTouchTarget;
-    metrics.backButtonHeight = rendering::phoneTouchTarget;
+  if (rendering::compactMenuCanvasActive) {
+    metrics.actionButtonHeight = rendering::compactTouchTarget;
+    metrics.backButtonHeight = rendering::compactTouchTarget;
     metrics.bodyTextSize = 24;
     metrics.smallTextSize = 21;
   }

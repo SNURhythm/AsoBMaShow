@@ -107,7 +107,7 @@ void IntroScene::layoutView() {
   menu_->setWidthPercent(portrait ? 100 : 38);
   menu_->setFlexShrink(0);
   title_->setVAlign(portrait ? TextView::BOTTOM : TextView::MIDDLE);
-  title_->setAutoFitText(rendering::phoneMenuCanvasActive);
+  title_->setAutoFitText(rendering::compactMenuCanvasActive);
   rootLayout_->applyYogaLayout();
 }
 

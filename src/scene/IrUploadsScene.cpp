@@ -166,7 +166,7 @@ void IrUploadsScene::updateLayoutInsets() {
       ->setPadding(Edge::Left, safe.left)
       ->setPadding(Edge::Right, safe.right);
   const float width = rendering::window_width - safe.left - safe.right;
-  const bool phoneStack = rendering::phoneMenuCanvasActive && width < 900;
+  const bool phoneStack = rendering::compactMenuCanvasActive && width < 900;
   contentLayout->setFlexDirection(phoneStack ? FlexDirection::Column : FlexDirection::Row);
   if (auto *rail = rootLayout->findViewByName("irProviderRail")) {
     rail->setWidth(phoneStack ? width : (width < 1100 ? width * 0.28F : 350));
@@ -180,9 +180,9 @@ void IrUploadsScene::updateLayoutInsets() {
   providerStatusText->setMinHeight(phoneStack ? 36 : 100);
   openIrSettingsButton->setWidth(phoneStack ? 160 : YGUndefined);
   if (!phoneStack) openIrSettingsButton->setWidthPercent(100);
-  if (rendering::phoneMenuCanvasActive) {
+  if (rendering::compactMenuCanvasActive) {
     for (auto *button : {openIrSettingsButton, selectAllButton, clearButton, refreshButton})
-      button->setHeight(rendering::phoneTouchTarget);
+      button->setHeight(rendering::compactTouchTarget);
   }
 
   rootLayout->applyYogaLayout();

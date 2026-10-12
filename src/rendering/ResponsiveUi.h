@@ -4,10 +4,15 @@
 #include <cmath>
 
 namespace rendering {
-// Enabled only for opted-in built-in menus on an iPhone. Gameplay and skin
-// scenes keep their original design coordinates, including replay exports.
-inline bool phoneMenuCanvasActive = false;
-inline constexpr int phoneTouchTarget = 66; // 44 points at 1.5 UI units / point.
+// Built-in menus adapt to available density-independent space on every platform.
+// Gameplay and skin scenes retain their original design coordinates.
+inline bool responsiveMenuSceneActive = false;
+inline bool compactMenuCanvasActive = false;
+
+inline bool usesCompactMenuCanvas(int pixelWidth, int pixelHeight, float scale, bool menu) {
+  return menu && scale > 0 && std::min(pixelWidth, pixelHeight) / scale < 600.0f;
+}
+inline constexpr int compactTouchTarget = 66; // 44 points at 1.5 UI units / point.
 
 inline int responsiveMenuCanvasWidth(int drawableWidth, int drawableHeight,
                                      int logicalWidth, bool phoneMenu) {

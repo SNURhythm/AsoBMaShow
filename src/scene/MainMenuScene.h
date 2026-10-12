@@ -390,8 +390,6 @@ private:
   void initView(ApplicationContext &context);
   void updatePanelLayout();
   void updatePhonePanelLayout();
-  bool phoneLibraryOpen_ = false;
-  bool phoneDetailsOpen_ = false;
   float portraitDetailsHeight(float availableHeight) const;
   void updateMenuPresentation(bool portrait);
   void applyThemeChange();

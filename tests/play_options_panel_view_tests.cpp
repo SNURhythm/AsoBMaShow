@@ -327,7 +327,7 @@ void testLanguageRefreshPreservesPlayOptionsEditingAndScroll() {
 }
 
 void testPhoneOptionsReflowWithoutLosingSelection() {
-  rendering::phoneMenuCanvasActive = true;
+  rendering::compactMenuCanvasActive = true;
   {
     GameplayRuleset selected = GameplayRuleset::LR2;
     ScrollView scroll(0, 0, 420, 240);
@@ -343,7 +343,7 @@ void testPhoneOptionsReflowWithoutLosingSelection() {
       scroll.applyYogaLayout();
       for (const char *name : {"ruleset-lr2", "ruleset-beatoraja"}) {
         auto *button = dynamic_cast<Button *>(panel->findViewByName(name));
-        require(button && button->getHeight() >= rendering::phoneTouchTarget,
+        require(button && button->getHeight() >= rendering::compactTouchTarget,
                 "phone ruleset buttons retain 44-point touch height after rotation");
         require(button->getX() >= panel->getX() &&
                     button->getX() + button->getWidth() <= panel->getX() + width,
@@ -356,7 +356,7 @@ void testPhoneOptionsReflowWithoutLosingSelection() {
     scroll.scrollToBottom();
     require(scroll.getScrollOffset() > 0, "short phone option panes remain scrollable");
   }
-  rendering::phoneMenuCanvasActive = false;
+  rendering::compactMenuCanvasActive = false;
 }
 
 void testLaneCoverControlsAreAvailableInPlayOptions() {

@@ -1538,11 +1538,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
       selectedView->onSelected();
     }
     selectFolder(item);
-    if (rendering::phoneMenuCanvasActive) {
-      phoneLibraryOpen_ = false;
-      updatePanelLayout();
-      rootLayout->applyYogaLayout();
-    }
   };
   folderRecyclerView->onUnselected = [this](const LibraryFolderItem &item,
                                             int idx) {
@@ -2200,30 +2195,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
             SceneReturnTarget::Retained(this)),
         true);
   });
-  TextView *phoneLibraryText = nullptr;
-  auto *phoneLibraryButton = makeSelectorButton(
-      i18n::message("music_player.navigation.library.label"), 18, &phoneLibraryText, 0xf07c);
-  phoneLibraryButton->setName("mainMenuPhoneLibrary");
-  styleMenuButton(phoneLibraryButton, phoneLibraryText);
-  phoneLibraryButton->setOnClickListener([this] {
-    phoneLibraryOpen_ = !phoneLibraryOpen_;
-    phoneDetailsOpen_ = false;
-    updatePanelLayout();
-    rootLayout->applyYogaLayout();
-  });
-  libraryHeader->addView(phoneLibraryButton);
-  TextView *phoneDetailsText = nullptr;
-  auto *phoneDetailsButton = makeSelectorButton(
-      i18n::message("menu.selector.details.label"), 18, &phoneDetailsText, 0xf05a);
-  phoneDetailsButton->setName("mainMenuPhoneDetails");
-  styleMenuButton(phoneDetailsButton, phoneDetailsText);
-  phoneDetailsButton->setOnClickListener([this] {
-    phoneDetailsOpen_ = !phoneDetailsOpen_;
-    phoneLibraryOpen_ = false;
-    updatePanelLayout();
-    rootLayout->applyYogaLayout();
-  });
-  libraryHeader->addView(phoneDetailsButton);
   rightScroll->setContentView(rightContent);
   right->addView(rightScroll);
   // Primary actions stay reachable while chart details and tools scroll.
@@ -2295,20 +2266,11 @@ void MainMenuScene::updatePanelLayout() {
   View::LayoutBatchScope batch;
   const bool portrait = rendering::window_height > rendering::window_width;
   const auto safe = getSafeAreaInsetsUi();
-  if (rendering::phoneMenuCanvasActive) {
-    updateMenuPresentation(false);
-    updatePhonePanelLayout();
-    return;
-  }
   rootLayout->setPadding(Edge::Bottom, 0);
-  for (const auto *name : {"mainMenuPhoneLibrary", "mainMenuPhoneDetails"}) {
-    if (auto *button = rootLayout->findViewByName(name)) button->setDisplay(YGDisplayNone);
-  }
-  for (const auto *name : {"mainMenuBrowser", "mainMenuLibrary", "mainMenuSongs", "mainMenuDetails"}) {
-    auto *pane = rootLayout->findViewByName(name);
-    pane->setVisible(true);
-    pane->setDisplay(YGDisplayFlex);
-  }
+  rootLayout->findViewByName("mainMenuLibrary")->setPadding(Edge::Left, 14)->setPadding(Edge::Right, 14);
+  rootLayout->findViewByName("mainMenuSongs")->setPadding(Edge::Left, 16)->setPadding(Edge::Right, 16);
+  detailsContent_->setWidth(kDetailsContentWidth);
+  chartDetailsView_->setWidth(kDetailsContentWidth);
   const float contentWidth = std::max(0, rendering::window_width - safe.left - safe.right - 2 * kRootPadding);
   const float contentHeight = std::max(0, rendering::window_height - safe.top - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
   const float detailsHeight = portraitDetailsHeight(contentHeight);
@@ -2363,69 +2325,68 @@ void MainMenuScene::updatePanelLayout() {
   detailsContent_->setPadding(Edge::Top, 0);
   detailsContent_->setPadding(Edge::Bottom, 0);
   updateMenuPresentation(portrait);
+  if (rendering::compactMenuCanvasActive) updatePhonePanelLayout();
 }
 
 void MainMenuScene::updatePhonePanelLayout() {
+  const bool portrait = rendering::window_height > rendering::window_width;
   const auto safe = getSafeAreaInsetsUi();
+  const float width = rendering::window_width - safe.left - safe.right;
   rootLayout->setPadding(Edge::Bottom, safe.bottom);
-  auto *body = rootLayout->findViewByName("mainMenuBody");
   auto *browser = rootLayout->findViewByName("mainMenuBrowser");
   auto *library = rootLayout->findViewByName("mainMenuLibrary");
   auto *songs = rootLayout->findViewByName("mainMenuSongs");
   auto *details = rootLayout->findViewByName("mainMenuDetails");
   auto *primary = rootLayout->findViewByName("mainMenuPrimaryActions");
   auto *records = rootLayout->findViewByName("mainMenuRecordActions");
-  auto *scroll = static_cast<ScrollView *>(rootLayout->findViewByName("mainMenuDetailsScroll"));
-  const auto show = [](View *view, bool visible) {
-    view->setVisible(visible);
-    view->setDisplay(visible ? YGDisplayFlex : YGDisplayNone);
-  };
-  body->setFlexDirection(FlexDirection::Column);
-  show(browser, !phoneDetailsOpen_);
-  show(library, phoneLibraryOpen_);
-  show(songs, !phoneLibraryOpen_);
-  show(details, phoneDetailsOpen_);
-  browser->setWidthPercent(100)->setHeight(YGUndefined)->setFlex(1);
-  library->setWidthPercent(100)->setHeight(YGUndefined)->setFlex(1);
-  details->setWidthPercent(100)->setHeight(YGUndefined)->setFlex(1);
-  details->setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch);
-  details->setPadding(Edge::Left, 16)->setPadding(Edge::Right, 16);
-  scroll->setWidthPercent(100)->setHeight(YGUndefined)->setFlex(1);
+  auto *scroll = rootLayout->findViewByName("mainMenuDetailsScroll");
+  auto *controls = rootLayout->findViewByName("mainMenuControls");
+  const float detailsWidth = std::min(350.0f, width * 0.29f);
+  library->setWidth(portrait ? width * 0.25f : 180.0f);
+  library->setPadding(Edge::Left, 6)->setPadding(Edge::Right, 6);
+  songs->setPadding(Edge::Left, 8)->setPadding(Edge::Right, 8);
+  details->setPadding(Edge::All, 8);
+  details->setGap(8);
+  browser->setFlex(1)->setHeight(YGUndefined);
+  if (portrait) {
+    // Keep both existing detail columns, but reserve most of the screen for songs.
+    const float height = std::min(380.0f, rendering::window_height * 0.34f);
+    details->setHeight(height)->setFlexShrink(0);
+    scroll->setHeight(height - 18);
+    controls->setHeight(height - 18);
+  } else {
+    details->setWidth(detailsWidth);
+    scroll->setWidth(detailsWidth - 18);
+  }
   detailsContent_->setWidthPercent(100);
   chartDetailsView_->setWidthPercent(100)->setMinHeight(0);
-  chartDetailsView_->setCompact(false);
-  for (const auto *name : {"mainMenuPhoneLibrary", "mainMenuPhoneDetails"}) {
-    auto *button = rootLayout->findViewByName(name);
-    show(button, true);
-    button->setFlex(1)->setMinWidth(rendering::phoneTouchTarget);
-  }
-  const int height = rendering::phoneTouchTarget;
-  for (const auto *name : {"mainMenuToolbar", "mainMenuSearchRow"}) {
+  for (auto *view : {primary, records, chartActionsRow}) view->setWidthPercent(100);
+  const int height = rendering::compactTouchTarget;
+  for (const auto *name : {"mainMenuToolbar", "mainMenuSearchRow", "mainMenuLibraryActions"}) {
     auto *row = rootLayout->findViewByName(name);
-    row->setHeight(height);
+    if (std::string_view(name) != "mainMenuLibraryActions") row->setHeight(height);
     for (auto *child : row->getChildren()) child->setHeight(height);
   }
   searchBox->setHeight(height);
-  for (auto *button : {chartFilterButton, chartSortButton}) button->setWidth(92)->setHeight(height);
-  for (auto *view : {primary, records, chartActionsRow}) view->setWidthPercent(100);
+  for (auto *button : {chartFilterButton, chartSortButton}) button->setWidth(66)->setHeight(height);
   records->setHeight(height);
   chartActionsRow->setHeight(height);
   for (auto *view : std::array<View *, 3>{replayButtonSlot, replayButton, rankingsButton}) view->setHeight(height);
   for (auto *view : chartActionsRow->getChildren()) view->setHeight(height);
-  readyPlayOptionsButton->moveTo(*detailsContent_);
-  readyPlayOptionsButton->setWidthPercent(100)->setFlex(0)->setHeight(232);
-  auto *summary = readyPlayOptionsButton->getContentView();
-  summary->setFlexWrap(YGWrapWrap);
-  for (auto *cell : summary->getChildren()) {
-    cell->setFlex(0)->setWidthPercent(50)->setMinWidth(0);
-  }
   auto *dock = rootLayout->findViewByName("mainMenuPlayDock");
-  show(dock, true);
   dock->setHeight(80);
-  primaryActionSlot_->setWidthPercent(100)->setHeight(80);
-  for (auto *view : std::array<View *, 5>{startButton, findBmsButtonSlot,
-           findBmsButton, unzipButtonSlot, unzipButton}) view->setWidthPercent(100)->setHeight(80);
-  scroll->refreshContentLayout();
+  primaryActionSlot_->setWidth(portrait ? YGUndefined : detailsWidth)->setHeight(height);
+  if (portrait) primaryActionSlot_->setWidthPercent(100);
+  for (auto *view : std::array<View *, 3>{startButton, findBmsButton, unzipButton}) view->setWidthPercent(100)->setHeight(height);
+  findBmsButtonSlot->setHeight(findBmsButtonSlot->getVisible() ? height : 0);
+  unzipButtonSlot->setHeight(unzipButtonSlot->getVisible() ? height : 0);
+  if (!portrait) readyPlayOptionsButton->setHeight(80);
+  auto *summary = readyPlayOptionsButton->getContentView();
+  for (auto *cell : summary->getChildren()) {
+    cell->setPadding(Edge::Left, 6)->setPadding(Edge::Right, 6);
+  }
+  static_cast<ScrollView *>(scroll)->refreshContentLayout();
+  detailsControlsScroll_->refreshContentLayout();
 }
 
 void MainMenuScene::updateMenuPresentation(bool portrait) {
@@ -7951,7 +7912,7 @@ void MainMenuScene::update(float dt) {
   if (rankingsModal) {
     rankingsModal->update();
   }
-  if (selectorTabActive() && rootLayout && !rendering::phoneMenuCanvasActive && rendering::window_height > rendering::window_width) {
+  if (selectorTabActive() && rootLayout && !rendering::compactMenuCanvasActive && rendering::window_height > rendering::window_width) {
     const auto safe = getSafeAreaInsetsUi();
     const float availableHeight = std::max(0, rendering::window_height - safe.top - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
     const auto *details = rootLayout->findViewByName("mainMenuDetails");

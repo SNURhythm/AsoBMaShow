@@ -89,7 +89,6 @@ struct MainMenuScene {
   View *searchBox,*chartFilterButton,*chartSortButton,*replayButtonText,*rankingsButtonText;
   void updatePanelLayout(); void updateMenuPresentation(bool portrait);
   void updatePhonePanelLayout();
-  bool phoneLibraryOpen_=false,phoneDetailsOpen_=false;
   float portraitDetailsHeight(float) const;
   View *primaryActionSlot_=nullptr;
   bool unzipButtonAvailable_=false,findBmsAvailableWithoutTutorial_=false;
@@ -106,8 +105,6 @@ int main() {
   ScrollView scroll("mainMenuDetailsScroll"),controlsScroll("controlsScroll");
   ChartDetails chart;
   Button settings("mainMenuSettings"),options("options"),replay("replay"),ranking("ranking"),start("start"),unzip("unzip"),find("find");
-  View phoneLibrary("mainMenuPhoneLibrary"),phoneDetails("mainMenuPhoneDetails");
-  toolbar.add(phoneLibrary);toolbar.add(phoneDetails);
   root.setPadding(Edge::All,0)->setGap(0)->setAlignItems(YGAlignStretch);
   browser.setFlexDirection(FlexDirection::Row)->setGap(0)->setMinWidth(0)->setMinHeight(0);
   root.add(header);header.setHeight(80)->setFlexShrink(0)->setFlexDirection(FlexDirection::Row);header.add(wordmark);header.add(tabs);tabs.setWidth(320);header.add(toolbar);
@@ -234,27 +231,32 @@ int main() {
     assert(YGNodeLayoutGetTop(primary.node)+YGNodeLayoutGetHeight(primary.node)<=YGNodeLayoutGetHeight(controls.node)+1);
     assert(YGNodeLayoutGetLeft(controls.node)+YGNodeLayoutGetWidth(controls.node)<=YGNodeLayoutGetWidth(details.node)+1);
   }
-  rendering::phoneMenuCanvasActive=true;
+  rendering::compactMenuCanvasActive=true;
   for (const auto dimensions : {std::pair{585,1266},std::pair{1266,585}}) {
     rendering::window_width=dimensions.first;rendering::window_height=dimensions.second;
     root.setWidth(dimensions.first)->setHeight(dimensions.second);
-    scene.phoneLibraryOpen_=false;scene.phoneDetailsOpen_=false;
     scene.updatePanelLayout();root.applyYogaLayout();
-    assert(YGNodeStyleGetDisplay(library.node)==YGDisplayNone);
-    assert(YGNodeStyleGetDisplay(details.node)==YGDisplayNone);
-    assert(YGNodeLayoutGetWidth(songs.node)==YGNodeLayoutGetWidth(browser.node));
-    assert(YGNodeLayoutGetHeight(actionSlot.node)==80);
-    assert(YGNodeLayoutGetTop(dock.node)+YGNodeLayoutGetHeight(dock.node)<=dimensions.second-20);
-    scene.phoneLibraryOpen_=true;
-    scene.updatePanelLayout();root.applyYogaLayout();
-    assert(YGNodeStyleGetDisplay(songs.node)==YGDisplayNone);
-    assert(YGNodeLayoutGetWidth(library.node)==YGNodeLayoutGetWidth(browser.node));
-    scene.phoneLibraryOpen_=false;scene.phoneDetailsOpen_=true;
-    scene.updatePanelLayout();root.applyYogaLayout();
-    assert(YGNodeStyleGetDisplay(browser.node)==YGDisplayNone);
+    assert(YGNodeStyleGetDisplay(library.node)==YGDisplayFlex);
+    assert(YGNodeStyleGetDisplay(songs.node)==YGDisplayFlex);
     assert(YGNodeStyleGetDisplay(details.node)==YGDisplayFlex);
+    assert(YGNodeLayoutGetWidth(songs.node)>180);
+    assert(YGNodeLayoutGetHeight(browser.node)>200);
+    assert(YGNodeLayoutGetHeight(start.node)==66);
+    assert(YGNodeLayoutGetHeight(search.node)==66);
+    assert(YGNodeLayoutGetWidth(search.node)>100);
     assert(YGNodeLayoutGetHeight(scroll.node)>0);
-    assert(YGNodeLayoutGetWidth(actionSlot.node)==YGNodeLayoutGetWidth(dock.node));
+    assert(root.findViewByName("mainMenuPhoneLibrary")==nullptr);
+    assert(root.findViewByName("mainMenuPhoneDetails")==nullptr);
+    if (dimensions.second > dimensions.first) {
+      assert(YGNodeLayoutGetHeight(details.node)<=380);
+      assert(primary.parent==&controls && options.parent==&controlsContent);
+      assert(YGNodeStyleGetDisplay(dock.node)==YGDisplayNone);
+    } else {
+      assert(YGNodeLayoutGetWidth(library.node)==180);
+      assert(YGNodeLayoutGetWidth(details.node)<=350);
+      assert(primary.parent==&details && actionSlot.parent==&dock && options.parent==&dock);
+      assert(YGNodeLayoutGetTop(dock.node)+YGNodeLayoutGetHeight(dock.node)<=dimensions.second-20);
+    }
   }
 
 }
@@ -734,6 +736,14 @@ int main() {
 #include <cassert>
 int main() {
   using rendering::responsiveMenuCanvasWidth;
+  using rendering::usesCompactMenuCanvas;
+  assert(usesCompactMenuCanvas(1170, 2532, 3, true));
+  assert(usesCompactMenuCanvas(2532, 1170, 3, true));
+  assert(usesCompactMenuCanvas(1080, 2400, 3, true)); // Android density.
+  assert(!usesCompactMenuCanvas(1600, 2560, 2, true));
+  assert(!usesCompactMenuCanvas(1200, 1800, 2, true)); // 600-point breakpoint.
+  assert(usesCompactMenuCanvas(599, 900, 1, true));
+  assert(!usesCompactMenuCanvas(1170, 2532, 3, false));
   assert(responsiveMenuCanvasWidth(1170, 2532, 390, true) == 585);
   assert(responsiveMenuCanvasWidth(2532, 1170, 844, true) == 1266);
   assert(responsiveMenuCanvasWidth(2048, 2732, 1024, false) == 1080);
@@ -762,6 +772,10 @@ int main() {
         source = r'''
 #include <cassert>
 #include <cmath>
+#include "rendering/ResponsiveUi.h"
+void *s_window = nullptr;
+float SDL_GetWindowDisplayScale(void *) { return 1; }
+namespace platform { template<auto Function> float sdlMain(void *window) { return Function(window); } }
 namespace rendering {
 constexpr int design_width = 1920, design_height = 1080;
 int render_width = 1, render_height = 1;
@@ -796,7 +810,7 @@ int main() {
             source_path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             source_path.write_text(source)
-            subprocess.run(["c++", "-std=c++23", str(source_path), "-o", str(binary)], check=True)
+            subprocess.run(["c++", "-std=c++23", "-I", str(root / "src"), str(source_path), "-o", str(binary)], check=True)
             subprocess.run([str(binary)], check=True)
 
 

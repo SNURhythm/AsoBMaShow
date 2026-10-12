@@ -1,3 +1,4 @@
+#include "../rendering/ResponsiveUi.h"
 #include "../GameplayKeyMode.h"
 #include "ChartDetailsView.h"
 
@@ -326,7 +327,7 @@ void ChartDetailsView::renderImpl(RenderContext &) {
 
 void ChartDetailsView::refreshArtworkLayout() {
   if (!artworkFrame_ || !artworkPlaceholder_ || !identity_) return;
-  const int width = compact_ ? 112 : std::min(472, getWidth() > 0 ? getWidth() : 472);
+  const int width = rendering::compactMenuCanvasActive ? 0 : compact_ ? 112 : std::min(472, getWidth() > 0 ? getWidth() : 472);
   const int height = width;
   if (width == artworkLayoutWidth_ && height == artworkLayoutHeight_ &&
       compact_ == artworkLayoutCompact_) return;
@@ -348,6 +349,7 @@ void ChartDetailsView::setCompact(bool compact) {
   identity_->setGap(compact ? 14 : 8);
   artworkFrame_->setAlignSelf(YGAlignCenter);
   refreshArtworkLayout();
+  visible(artworkFrame_, !rendering::compactMenuCanvasActive);
   titleRow_->setHeight(compact ? 74 : 56);
   title_->setHeight(compact ? 74 : 56);
   title_->setWrap(false);
@@ -357,7 +359,7 @@ void ChartDetailsView::setCompact(bool compact) {
   artist_->setFlex(0)->setMinWidth(0)->setHeight(compact ? 28 : 30);
   genre_->setFlex(0)->setMinWidth(0);
   setGap(compact ? kSectionGap : 6);
-  visible(summary_, !compact);
+  visible(summary_, !compact && !rendering::compactMenuCanvasActive);
   visible(scoreSlot_, !compact);
   visible(rate_, compact);
   personalBest_->setPadding(Edge::All, compact ? 14 : 0);

@@ -335,7 +335,7 @@ void testCourseTargetsHaveIndependentIdentity() {
 } // namespace
 
 void testPhoneRecordDialogFitsAndRotates() {
-  rendering::phoneMenuCanvasActive = true;
+  rendering::compactMenuCanvasActive = true;
   const int oldWidth = rendering::window_width;
   const int oldHeight = rendering::window_height;
   rendering::window_width = 585;
@@ -363,7 +363,7 @@ void testPhoneRecordDialogFitsAndRotates() {
                exportVideo->getX() + exportVideo->getWidth() <= size.first,
            "phone replay actions remain reachable inside the panel");
   }
-  rendering::phoneMenuCanvasActive = false;
+  rendering::compactMenuCanvasActive = false;
   rendering::window_width = oldWidth;
   rendering::window_height = oldHeight;
 }

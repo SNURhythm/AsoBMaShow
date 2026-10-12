@@ -733,7 +733,7 @@ void MusicPlayerScene::updateLayoutInsets() {
   if (embeddedTab && statusText != nullptr) {
     statusText->setDisplay(compactNavigation ? YGDisplayNone : YGDisplayFlex);
   }
-  const bool phoneStack = rendering::phoneMenuCanvasActive && width < 900;
+  const bool phoneStack = rendering::compactMenuCanvasActive && width < 900;
   for (const auto *name : {"musicLibraryWorkspace", "musicFavoritesWorkspace"}) {
     if (auto *workspace = rootLayout->findViewByName(name)) {
       workspace->setFlexDirection(phoneStack ? FlexDirection::Column : FlexDirection::Row);
