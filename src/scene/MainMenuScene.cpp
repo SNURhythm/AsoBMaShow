@@ -1667,6 +1667,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   nav->setWidth(kLibraryPanelWidth);
   nav->setGap(8);
   nav->setPadding(Edge::All, kLibraryPanelPadding);
+  nav->setPadding(Edge::Top, 0)->setPadding(Edge::Bottom, 0);
   nav->clearBackgroundColor();
   nav->setCornerRadius(0);
 
