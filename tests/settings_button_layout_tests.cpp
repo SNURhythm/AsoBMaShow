@@ -1,5 +1,6 @@
 #include "scene/SettingsSceneShared.h"
 #include "rendering/UniformCache.h"
+#include "view/ActionButtonContent.h"
 
 #include <cassert>
 #include <cmath>
@@ -83,6 +84,37 @@ void testFlatSettingsSectionUsesContentHeight() {
             "section density preserves controls and localized heading space");
     require(section->getChildren().front()->getHeight() == 1,
             "flat settings groups use a single hairline divider");
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
+void testCompactActionCaptionsFitLocalizedControls() {
+  for (const auto language : {i18n::Language::English, i18n::Language::Japanese,
+                              i18n::Language::Korean}) {
+    i18n::setLanguage(language);
+    for (const int width : {128, 144, 160}) {
+      for (const auto key : {"settings.profiles.activate.label",
+                            "settings.profiles.rename.label", "settings.profiles.copy.label",
+                            "settings.profiles.delete.label", "settings.profiles.export.label",
+                            "settings.profiles.import_over.label", "records.export_video.label"}) {
+        View root(0, 0, width, 72);
+        auto *button = new Button(0, 0, width, 72);
+        auto *caption = settings_scene::makeText(i18n::message(key), 18,
+                                                app_theme::onAction());
+        button->setContentView(action_button::makeContent(caption, ui_icons::kDownload));
+        action_button::setIconColor(button, app_theme::onAction);
+        root.addView(button);
+        root.applyYogaLayout();
+        auto *icon = button->getContentView()->findViewByName("actionIcon");
+        require(icon && icon->getY() + icon->getHeight() <= caption->getY(),
+                "compact action glyph and caption never overlap");
+        requireFits(renderedTextBounds(*caption), button->getX() + 8,
+                    button->getY(), width - 16, 72);
+        requireFits(renderedTextBounds(*icon), button->getX(), button->getY(), width, 72);
+        require(caption->getText() == i18n::tr(key),
+                "compact actions retain their localized caption");
+      }
+    }
   }
   i18n::setLanguage(i18n::Language::English);
 }
@@ -239,6 +271,7 @@ int main() {
   init.resolution.width = 64;
   init.resolution.height = 64;
   assert(bgfx::init(init));
+  testCompactActionCaptionsFitLocalizedControls();
   testFlatSettingsSectionUsesContentHeight();
   testFixedJapaneseButtonsShrinkOnlyTheirRenderedText();
   testNestedButtonLabelsFitButOrdinaryTextKeepsItsOverflow();

@@ -145,3 +145,17 @@ Verification checks distinct categories, opaque colored buttons, and at least
 Action-category verification: desktop build and both focused tests passed
 (settings layout/theme contracts and unchanged gameplay renderer golden).
 `git diff --check` passed. This pass did not include fresh native visual inspection.
+
+## Icons for crowded actions
+
+Profile rows use compact 128/144-by-72 icon-and-caption buttons for activation,
+rename, copy, delete, export, and overwrite. Their existing semantic colors stay
+in place. Delete/overwrite confirmation states retain full-size explicit text.
+The replay footer uses the same icon-and-caption content for watch, ghost battle,
+results, and video export. Captions remain localized and visible for touch users;
+glyph and caption colors update together when actions become disabled.
+
+Verification: desktop build passed; both focused tests passed. Rendered caption
+and glyph bounds are checked at compact widths in English, Japanese, and Korean,
+and replay tests exercise the actual button clicks through the new content.
+`git diff --check` passed. Native preview was blocked by the locked Mac.

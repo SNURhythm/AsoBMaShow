@@ -1,3 +1,4 @@
+#include "../view/ActionButtonContent.h"
 #include "../i18n/Localization.h"
 #include "ReplayRecordsModal.h"
 
@@ -73,6 +74,7 @@ void styleThemedActionButton(Button *button, TextView *text, bool enabled,
         [border] { return app_theme::withAlpha(border(), 190); },
         [border] { return app_theme::withAlpha(border(), 220); });
     text->setThemedColor([normal] { return app_theme::textOn(normal()); });
+    action_button::setIconColor(button, [normal] { return app_theme::textOn(normal()); });
   } else {
     button->setThemedBackgroundColors(
         app_theme::panelSubtle, app_theme::panelSubtle, app_theme::panelSubtle);
@@ -80,6 +82,7 @@ void styleThemedActionButton(Button *button, TextView *text, bool enabled,
                                   app_theme::hairlineSubtle,
                                   app_theme::hairlineSubtle);
     text->setThemedColor(app_theme::textMuted);
+    action_button::setIconColor(button, app_theme::textMuted);
   }
 }
 
@@ -114,13 +117,13 @@ View *makeModalOptionRow(float height = 58.0f) {
 }
 
 Button *makeModalButton(const i18n::Text &label, int fontSize,
-                        TextView **textOut = nullptr) {
-  auto *button = new Button(0, 0, 160, 58);
+                        TextView **textOut = nullptr, uint32_t glyph = 0) {
+  auto *button = new Button(0, 0, 160, glyph ? 72 : 58);
   auto *text = new TextView(kFontPath, fontSize);
   text->setLocalizedText(label);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
-  button->setContentView(text);
+  button->setContentView(glyph ? action_button::makeContent(text, glyph) : text);
   button->setStyledBorderWidth(1);
   button->setCornerRadius(app_theme::controlRadius());
   if (textOut != nullptr) {
@@ -886,15 +889,15 @@ ReplayRecordsModal::Create(View *parent,
   footer->setJustifyContent(YGJustifyFlexEnd);
   footer->setAlignItems(YGAlignStretch);
   footer->setGap(8);
-  footer->setHeight(58);
+  footer->setHeight(72);
 
-  auto *watchButton = makeModalButton(i18n::message("records.watch.label"), 20, &modal->watchButtonText_);
+  auto *watchButton = makeModalButton(i18n::message("records.watch.label"), 20, &modal->watchButtonText_, 0xf04b);
   auto *gbattleButton =
-      makeModalButton("G-BATTLE", 18, &modal->gbattleButtonText_);
+      makeModalButton("G-BATTLE", 18, &modal->gbattleButtonText_, 0xf11b);
   auto *resultButton =
-      makeModalButton(i18n::message("records.view_result.label"), 18, &modal->resultButtonText_);
+      makeModalButton(i18n::message("records.view_result.label"), 18, &modal->resultButtonText_, 0xf201);
   auto *exportButton =
-      makeModalButton(i18n::message("records.export_video.label"), 18, &modal->exportButtonText_);
+      makeModalButton(i18n::message("records.export_video.label"), 18, &modal->exportButtonText_, 0xf03d);
 
   closeButton->setOnClickListener([raw = modal.get()]() {
     if (raw->operationInProgress()) {

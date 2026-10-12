@@ -9,6 +9,7 @@
 #include "../ProfileExportStaging.h"
 #include "../audio/NativeMusicPlayer.h"
 #include "../view/ScrollView.h"
+#include "../view/ActionButtonContent.h"
 
 #include <algorithm>
 #include <chrono>
@@ -49,12 +50,23 @@ SDL_Color statusColor(ProfileSettingsStatusKind kind) {
 Button *makeProfileActionButton(const LayoutMetrics &metrics,
                                 const i18n::Text &label, bool enabled,
                                 std::function<void()> action, int width = 0,
-                                app_theme::ActionCategory category = app_theme::ActionCategory::Neutral) {
-  auto *text = makeText(label, metrics.bodyTextSize, app_theme::textPrimary(),
+                                app_theme::ActionCategory category = app_theme::ActionCategory::Neutral,
+                                uint32_t glyph = 0) {
+  auto *text = makeText(label, glyph ? 18 : metrics.bodyTextSize, app_theme::textPrimary(),
                         TextView::CENTER, TextView::MIDDLE);
-  auto *button =
-      makeControlButton(width > 0 ? width : metrics.actionButtonWidth,
-                        metrics.actionButtonHeight, text);
+  Button *button = nullptr;
+  if (glyph) {
+    button = new Button(0, 0, width > 0 ? width : (metrics.compact ? 128 : 144), 72);
+    button->setContentView(action_button::makeContent(text, glyph));
+    button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                      app_theme::controlPressed);
+    button->setThemedBorderColors(app_theme::hairline, app_theme::accentBorder,
+                                  app_theme::accentBorderStrong);
+    button->setStyledBorderWidth(1);
+  } else {
+    button = makeControlButton(width > 0 ? width : metrics.actionButtonWidth,
+                               metrics.actionButtonHeight, text);
+  }
   button->setEnabled(enabled);
   if (enabled) {
     if (category != app_theme::ActionCategory::Neutral) {
@@ -69,6 +81,9 @@ Button *makeProfileActionButton(const LayoutMetrics &metrics,
   } else {
     text->setThemedColor(app_theme::textMuted);
   }
+  action_button::setIconColor(button, [category, enabled] {
+    return enabled ? app_theme::actionPalette(category).label : app_theme::textMuted();
+  });
   return button;
 }
 
@@ -664,19 +679,19 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
     actions->setGap(metrics.compact ? 8.0f : 10.0f);
     actions->addView(makeProfileActionButton(
         metrics, active ? i18n::message("settings.profiles.active.label") : i18n::message("settings.profiles.activate.label"), idle && !active,
-        [this, id = profile.id]() { activateProfile(id); }, 0, app_theme::ActionCategory::Primary));
+        [this, id = profile.id]() { activateProfile(id); }, 0, app_theme::ActionCategory::Primary, 0xf00c));
     actions->addView(makeProfileActionButton(
         metrics, i18n::message("settings.profiles.rename.label"), idle,
         [this, id = profile.id, name = profile.displayName]() {
           profileInlineEditor.beginRename(id, name);
           invalidateProfileLayout();
-        }, 0, app_theme::ActionCategory::Information));
+        }, 0, app_theme::ActionCategory::Information, 0xf303));
     actions->addView(makeProfileActionButton(
         metrics, i18n::message("settings.profiles.copy.label"), idle,
         [this, id = profile.id, name = profile.displayName]() {
           profileInlineEditor.beginDuplicate(id, name);
           invalidateProfileLayout();
-        }, 0, app_theme::ActionCategory::Confirmation));
+        }, 0, app_theme::ActionCategory::Confirmation, 0xf0c5));
     actions->addView(makeProfileActionButton(
         metrics, confirmingDelete ? i18n::message("settings.profiles.confirm_delete.label") : i18n::message("settings.profiles.delete.label"),
         confirmingDelete || (idle && deleteEligibility.enabled),
@@ -687,10 +702,10 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
             profileController->requestDelete(id);
           }
           invalidateProfileLayout();
-        }, 0, app_theme::ActionCategory::Destructive));
+        }, 0, app_theme::ActionCategory::Destructive, confirmingDelete ? 0 : 0xf1f8));
     actions->addView(makeProfileActionButton(
         metrics, i18n::message("settings.profiles.export.label"), idle,
-        [this, id = profile.id]() { startProfileExportPreparation(id); }, 0, app_theme::ActionCategory::DataTransfer));
+        [this, id = profile.id]() { startProfileExportPreparation(id); }, 0, app_theme::ActionCategory::DataTransfer, 0xf56e));
     actions->addView(makeProfileActionButton(
         metrics,
         confirmingOverwrite ? i18n::message("settings.profiles.confirm_import.label") : i18n::message("settings.profiles.import_over.label"),
@@ -704,7 +719,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
           startProfileImportDocumentPicker(
               {.mode = ProfileImportMode::Overwrite, .overwriteProfileId = id},
               true);
-        }, 0, app_theme::ActionCategory::Caution));
+        }, 0, app_theme::ActionCategory::Caution, confirmingOverwrite ? 0 : 0xf2f1));
 
     if (confirmingDelete || confirmingOverwrite) {
       body->addView(makeWrappedText(

@@ -141,7 +141,10 @@ void testRetainedModalActivatesSelectedRecordThroughOwner() {
 Button *findVisibleButton(View *view, const std::string &label) {
   if (!view->getVisible()) return nullptr;
   if (auto *button = dynamic_cast<Button *>(view)) {
-    auto *text = dynamic_cast<TextView *>(button->getContentView());
+    auto *content = button->getContentView();
+    auto *text = dynamic_cast<TextView *>(content);
+    if (!text && content)
+      text = dynamic_cast<TextView *>(content->findViewByName("actionCaption"));
     if (text && text->getText() == label) return button;
   }
   for (auto *child : view->getChildren()) {
