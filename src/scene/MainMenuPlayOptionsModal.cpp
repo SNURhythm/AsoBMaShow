@@ -86,14 +86,6 @@ MainMenuPlayOptionsModal::Create(View *parent,
       ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
-  const auto addRule = [](View *region, Edge edge) {
-    auto *rule = new View();
-    rule->setPositionType(YGPositionTypeAbsolute);
-    rule->setPosition(Edge::Left, 0)->setPosition(edge, 0);
-    rule->setWidthPercent(100)->setHeight(1);
-    rule->setThemedBackgroundColor(app_theme::hairline);
-    region->addView(rule);
-  };
   auto *header = new View();
   header->setHeight(64)->setFlexShrink(0);
   header->setPadding(Edge::Left, kPanelPadding);
@@ -104,7 +96,6 @@ MainMenuPlayOptionsModal::Create(View *parent,
   title->setThemedColor(app_theme::textPrimary);
   title->setHeight(36);
   header->addView(title);
-  addRule(header, Edge::Bottom);
   panel->addView(header);
 
   auto *scrollView = new ScrollView(0, 0, static_cast<int>(contentWidth), 1);
@@ -144,7 +135,6 @@ MainMenuPlayOptionsModal::Create(View *parent,
   footer->setHeight(rendering::compactMenuCanvasActive ? 82 : 72)->setFlexShrink(0);
   footer->setPadding(Edge::Left, kPanelPadding);
   footer->setPadding(Edge::Right, kPanelPadding);
-  addRule(footer, Edge::Top);
   auto *close = makeCloseButton();
   close->setOnClickListener([raw = modal.get()] { raw->hide(); });
   footer->addView(close);
