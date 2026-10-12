@@ -77,7 +77,7 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   contentCard->setPadding(Edge::Left, kRowPadding)->setPadding(Edge::Right, kRowPadding)->setGap(kColumnGap);
   addView(contentCard);
   auto *rule = new View();
-  rule->setHeight(1)->setFlexShrink(0)->setThemedBackgroundColor(main_menu_theme::rule);
+  rule->setHeight(1)->setFlexShrink(0)->setThemedBackgroundColor(main_menu_theme::ruleSubtle);
   addView(rule);
   clearLampHalo = new View();
   clearLampHalo->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 1);

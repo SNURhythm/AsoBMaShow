@@ -2570,7 +2570,7 @@ void SettingsScene::initView() {
   headerRule->setPositionType(YGPositionTypeAbsolute);
   headerRule->setPosition(Edge::Left, 0)->setPosition(Edge::Bottom, 0);
   headerRule->setWidthPercent(100)->setHeight(1);
-  headerRule->setThemedBackgroundColor(app_theme::hairline);
+  headerRule->setThemedBackgroundColor(app_theme::hairlineStrong);
   header->addView(headerRule);
 
   auto *headerText = new View();

@@ -324,7 +324,7 @@ void IrUploadsScene::buildView() {
   railRule->setPositionType(YGPositionTypeAbsolute)
       ->setPosition(Edge::Right, 0)->setPosition(Edge::Top, 0)
       ->setPosition(Edge::Bottom, 0)->setWidth(1)
-      ->setThemedBackgroundColor(main_menu_theme::rule);
+      ->setThemedBackgroundColor(main_menu_theme::ruleStrong);
   providerCard->addView(railRule);
   auto *providerColumn = new View();
   providerColumn->setMinWidth(0)

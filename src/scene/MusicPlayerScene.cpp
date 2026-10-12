@@ -404,7 +404,7 @@ public:
     rule->setPositionType(YGPositionTypeAbsolute)
         ->setPosition(Edge::Left, 0)->setPosition(Edge::Right, 0)
         ->setPosition(Edge::Bottom, 0)->setHeight(1)
-        ->setThemedBackgroundColor(main_menu_theme::rule);
+        ->setThemedBackgroundColor(main_menu_theme::ruleSubtle);
     addView(rule);
 
     auto *artworkFrame = new View();
@@ -1068,7 +1068,7 @@ void MusicPlayerScene::buildView() {
   railRule->setPositionType(YGPositionTypeAbsolute)
       ->setPosition(Edge::Right, 0)->setPosition(Edge::Top, 0)
       ->setPosition(Edge::Bottom, 0)->setWidth(1)
-      ->setThemedBackgroundColor(main_menu_theme::rule);
+      ->setThemedBackgroundColor(main_menu_theme::ruleStrong);
   rail->addView(railRule);
 
   libraryNavButton = makeNavButton(i18n::message("music_player.navigation.library.label"), &libraryNavText);
@@ -1423,7 +1423,7 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   detailRule->setPositionType(YGPositionTypeAbsolute)
       ->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0)
       ->setPosition(Edge::Bottom, 0)->setWidth(1)
-      ->setThemedBackgroundColor(main_menu_theme::rule);
+      ->setThemedBackgroundColor(main_menu_theme::ruleStrong);
   actions->addView(detailRule);
 
   auto *libraryArtFrame = new View();

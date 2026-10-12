@@ -1673,7 +1673,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   nav->setBorderWidth(0);
   auto *libraryRule = new View();
   libraryRule->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Right, 0)->setPosition(Edge::Top, 0);
-  libraryRule->setWidth(1)->setPosition(Edge::Bottom, 0)->setThemedBackgroundColor(main_menu_theme::rule);
+  libraryRule->setWidth(1)->setPosition(Edge::Bottom, 0)->setThemedBackgroundColor(main_menu_theme::ruleStrong);
   nav->addView(libraryRule);
 
   auto *wordmark = new TextView(main_menu_theme::font, 38,
@@ -1687,7 +1687,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   header->addView(wordmark);
   auto *headerRule = new View();
   headerRule->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 0)->setPosition(Edge::Bottom, 0);
-  headerRule->setWidth(kLibraryPanelWidth)->setHeight(1)->setThemedBackgroundColor(main_menu_theme::rule);
+  headerRule->setWidthPercent(100)->setHeight(1)->setThemedBackgroundColor(main_menu_theme::ruleStrong);
   header->addView(headerRule);
   auto *tabs = new View();
   tabs->setName("mainMenuTabs");
@@ -1923,7 +1923,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   right->setBorderWidth(0);
   auto *detailsRule = new View();
   detailsRule->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 16);
-  detailsRule->setWidth(1)->setPosition(Edge::Bottom, 0)->setThemedBackgroundColor(main_menu_theme::rule);
+  detailsRule->setWidth(1)->setPosition(Edge::Bottom, 0)->setThemedBackgroundColor(main_menu_theme::ruleStrong);
   right->addView(detailsRule);
   right->setGap(8);
   right->setPadding(Edge::Top, 16);

@@ -90,3 +90,23 @@ viewport is untouched by this structural pass.
 Structural-pass verification: desktop build passed; a fresh full parallel CTest
 run passed all 483 tests after the fixture/catalog fixes. `git diff --check`
 passed.
+
+## Palette and divider polish
+
+Moved application chrome to charcoal/slate and cool white with indigo-blue
+actions, coordinated hover/pressed states, and cool neutral text. Light-mode
+backdrop opacity is 232/255 to avoid a muddy gray canvas; controls and artwork
+placeholders remain translucent. Primary action white-label contrast is 5.76:1
+in light mode and 4.76:1 in dark mode; hover states retain at least that contrast.
+
+Dividers now distinguish subtle row separators, section rules and stronger
+workspace boundaries. The selector header rule spans the whole workspace, and
+Music, IR and Settings use the same boundary hierarchy. Native selector samples
+were inspected in both themes, and the original dark theme was restored.
+
+Reviewed the updated built-in renderer reference: 51,730 changed pixels are
+confined to title, score, autoplay and judgement-counter rectangles. Every pixel
+outside those HUD rectangles is unchanged, including the lane viewport.
+
+Palette verification: desktop build and fresh full parallel CTest passed
+(483/483); `git diff --check` passed.

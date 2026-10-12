@@ -39,7 +39,7 @@ using main_menu_theme::onAction;
 inline Color textPrimary() { return main_menu_theme::ink(); }
 inline Color textSecondary() { return main_menu_theme::secondary(); }
 inline Color textMuted() { return main_menu_theme::muted(); }
-inline Color darkText() { return Color(25, 27, 32, 255); }
+inline Color darkText() { return Color(27, 36, 54, 255); }
 inline Color textOn(const Color &background) {
   return perceivedBrightness(background) > 150 ? darkText() : onAction();
 }
@@ -51,8 +51,8 @@ inline Color lime() {
                                          : Color(123, 218, 146, 255);
 }
 inline Color hairline() { return main_menu_theme::rule(); }
-inline Color hairlineSubtle() { return withAlpha(hairline(), 128); }
-inline Color hairlineStrong() { return hairline(); }
+inline Color hairlineSubtle() { return main_menu_theme::ruleSubtle(); }
+inline Color hairlineStrong() { return main_menu_theme::ruleStrong(); }
 inline Color accentBorder() { return withAlpha(cyan(), 160); }
 inline Color accentBorderStrong() { return cyan(); }
 
