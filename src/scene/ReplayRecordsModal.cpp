@@ -1284,8 +1284,8 @@ void ReplayRecordsModal::showExportProgress(const i18n::Text &title,
   if (root_ == nullptr) {
     return;
   }
-  if (title_ != nullptr) title_->setLocalizedText(title);
   showListPage();
+  if (title_ != nullptr) title_->setLocalizedText(title);
   if (listContent_ != nullptr) listContent_->setVisible(false);
   if (filterSortContent_ != nullptr) filterSortContent_->setVisible(false);
   if (watchOptionsContent_ != nullptr) watchOptionsContent_->setVisible(false);
@@ -1890,6 +1890,7 @@ void ReplayRecordsModal::dispatchResult(const ResultRecordSummary &summary) {
 }
 
 void ReplayRecordsModal::showListPage() {
+  if (title_ != nullptr) title_->setLocalizedText(i18n::message("records.records.label"));
   if (listContent_ != nullptr) listContent_->setVisible(true);
   if (filterSortContent_ != nullptr) filterSortContent_->setVisible(false);
   if (watchOptionsContent_ != nullptr) watchOptionsContent_->setVisible(false);

@@ -457,12 +457,12 @@ void DefaultSkin::buildPresentationResultLayout(
     auto *current = makeComparisonColumn(
         card.current, semanticName + ":current", valueSize, lampStyle);
     current->setFlexGrow(1.5f);
-    comparisonRow->addView(current);
     if (card.target.has_value()) {
-      comparisonRow->addView(makeDivider());
       comparisonRow->addView(makeComparisonColumn(
           *card.target, semanticName + ":target", lampStyle ? 20 : 26, lampStyle));
+      comparisonRow->addView(makeDivider());
     }
+    comparisonRow->addView(current);
     panel->addView(comparisonRow);
 
     if (card.delta.has_value()) {

@@ -1842,7 +1842,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   filterRow->addView(searchField);
 
   chartFilterButton =
-      makeSelectorButton(i18n::message("menu.selector.filter.label"), 20, &chartFilterButtonText, 0xf0d7, true);
+      makeModalIconButton(kIconFilter, 20, &chartFilterButtonText);
   chartFilterButton->setWidth(kMenuActionHeight);
   chartFilterButton->setHeight(kMenuActionHeight);
   chartFilterButton->setFlexShrink(0.0f);
@@ -1852,7 +1852,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   filterRow->addView(chartFilterButton);
 
   chartSortButton =
-      makeSelectorButton(i18n::message("library.filter_sort.sort.label"), 20, &chartSortButtonText, 0xf0d7, true);
+      makeModalIconButton(kIconSort, 20, &chartSortButtonText);
   chartSortButton->setWidth(kMenuActionHeight);
   chartSortButton->setHeight(kMenuActionHeight);
   chartSortButton->setFlexShrink(0.0f);
