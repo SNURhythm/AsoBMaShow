@@ -142,8 +142,8 @@ bool EndlessDreamSourcesDriver::tryDownloadByMd5(
                                            const std::atomic_bool &);
   };
   const std::array<PackageSource, 3> sources = {
-      PackageSource{"Konmai", KonmaiDriver::lookupByMd5},
       PackageSource{"Ginger", GingerRushDriver::lookupByMd5},
+      PackageSource{"Konmai", KonmaiDriver::lookupByMd5},
       PackageSource{"Wriggle", WriggleDriver::lookupByMd5},
   };
 

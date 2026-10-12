@@ -105,8 +105,8 @@ void testProviderSelectionStopsAfterAFileIsFound() {
       if (provider != "BMS") {
         assert(result.fallbackUrl == providerDownloads.front());
       }
-      const size_t expectedLookups = provider == "Konmai" ? 1 :
-                                     provider == "Ginger" ? 2 : 3;
+      const size_t expectedLookups = provider == "Ginger" ? 1 :
+                                     provider == "Konmai" ? 2 : 3;
       assert(providerLookups.size() == expectedLookups);
     }
   }
@@ -137,7 +137,7 @@ void testChosenProviderRetriesOnlyOnUserDecision() {
       {}, {}, {}, options);
   assert(prompts == 2 && cancelled.load());
   assert(result.status == BmsSearchResult::Status::DownloadFailed);
-  assert(providerLookups == std::vector<std::string>({"Konmai", "Ginger"}));
+  assert(providerLookups == std::vector<std::string>({"Ginger"}));
   assert(providerDownloads == std::vector<std::string>({
       "https://fixture.invalid/Ginger.zip", "https://fixture.invalid/Ginger.zip"}));
   assert(horieLookups == 0);
@@ -156,11 +156,11 @@ void testPixelDrainApiErrorDownloadsFromNextProvider() {
   const std::string chart = "#TITLE Waterfall\n#00111:01\n";
   writeExtractionZip(fixture->archivePath, {{"chart.bms", chart}});
   extractionDownloadFixture = fixture->archivePath;
-  availableProvider = "Ginger";
+  availableProvider = "Konmai";
   for (const std::string url : {
            "https://pixeldrain.net/api/file/abcd1234?download",
            "https://pixeldrain.com/api/filesystem/abcd1234/song.zip?attach"}) {
-    providerUrlOverrides = {{"Konmai", url}};
+    providerUrlOverrides = {{"Ginger", url}};
     for (const long status : {403L, 404L, 429L, 500L, 503L}) {
       providerLookups.clear();
       providerDownloads.clear();
@@ -186,11 +186,11 @@ void testPixelDrainApiErrorDownloadsFromNextProvider() {
           }});
       assert(result.status == BmsSearchResult::Status::Downloaded);
       assert(!cancelled && prompts == 0 && horieLookups == 0);
-      assert(providerLookups == std::vector<std::string>({"Konmai", "Ginger"}));
+      assert(providerLookups == std::vector<std::string>({"Ginger", "Konmai"}));
       assert(providerDownloads == std::vector<std::string>(
-          {url, "https://fixture.invalid/Ginger.zip"}));
+          {url, "https://fixture.invalid/Konmai.zip"}));
       assert(!std::filesystem::exists(rejectedAttempt));
-      assert(result.fallbackUrl == "https://fixture.invalid/Ginger.zip");
+      assert(result.fallbackUrl == "https://fixture.invalid/Konmai.zip");
       assert(result.downloadHttpStatus == 200);
     }
   }
@@ -226,7 +226,7 @@ void testPixelDrainApiErrorsContinueThroughRemainingSources() {
           return false;
         }});
     assert(!cancelled && prompts == 0);
-    assert(providerLookups == std::vector<std::string>({"Konmai", "Ginger", "Wriggle"}));
+    assert(providerLookups == std::vector<std::string>({"Ginger", "Konmai", "Wriggle"}));
     assert(providerDownloads.size() == (bmsAvailable ? 3 : 2) && horieLookups == 1);
     assert(result.status != BmsSearchResult::Status::Downloaded);
   }
@@ -244,8 +244,8 @@ void testApiWaterfallDoesNotOverrideCancellationOrOtherFailures() {
            Failure{"https://example.com/song.zip", 403, false},
            Failure{"https://pixeldrain.net.example/api/file/abcd1234", 403, false},
            Failure{"https://pixeldrain.net/api/file/abcd1234", 403, true}}) {
-    availableProvider = "Ginger";
-    providerUrlOverrides = {{"Konmai", failure.url}};
+    availableProvider = "Konmai";
+    providerUrlOverrides = {{"Ginger", failure.url}};
     providerLookups.clear();
     horieLookups = 0;
     int prompts = 0;
@@ -264,7 +264,7 @@ void testApiWaterfallDoesNotOverrideCancellationOrOtherFailures() {
         }});
     assert(result.status == BmsSearchResult::Status::DownloadFailed);
     assert(cancelled && prompts == (failure.cancel ? 0 : 1));
-    assert(providerLookups == std::vector<std::string>{"Konmai"});
+    assert(providerLookups == std::vector<std::string>{"Ginger"});
     assert(horieLookups == 0);
   }
   providerUrlOverrides.clear();
