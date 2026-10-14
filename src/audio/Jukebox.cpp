@@ -2350,8 +2350,9 @@ bool Jukebox::loadArchivedSounds(bms_parser::Chart &chart,
 
     const std::filesystem::path resolvedAssetPath = *resolvedPath;
     const path_t soundPath = fspath_to_path_t(resolvedAssetPath);
-    if (!addArchiveAssetTarget(archiveBatches, archiveBatchOrder,
-                               resolvedAssetPath, wavId)) {
+    if (audio.hasCachedDecodedAsset(soundPath) ||
+        !addArchiveAssetTarget(archiveBatches, archiveBatchOrder,
+                                resolvedAssetPath, wavId)) {
       regularLoads.emplace_back(wavId, soundPath);
     }
   }
@@ -2891,11 +2892,21 @@ Jukebox::reconcileChartResources(
         reusable = reusable && !identity->second.empty() &&
                    previous != soundArchiveIdentities.end() &&
                    previous->second == identity->second;
+      } else {
+        auto [identity, inserted] = currentIdentities.try_emplace(asset.key);
+        if (inserted) {
+          identity->second = archive_source_identity::KeyForPath(asset.path);
+        }
+        const auto previous = soundArchiveIdentities.find(asset.key);
+        reusable = reusable && !identity->second.empty() &&
+                   previous != soundArchiveIdentities.end() &&
+                   previous->second == identity->second;
       }
       if (reusable) {
         retainedSounds[asset.id] = asset.key;
         retainedPaths.insert(asset.key);
-      } else if (!addArchiveChartAssetTarget(
+      } else if (audio.hasCachedDecodedAsset(asset.key) ||
+                 !addArchiveChartAssetTarget(
                      archiveBatches, archiveBatchOrder, asset.path, asset.id,
                      ArchiveChartAssetKind::Sound)) {
         auto [ids, inserted] = regularSoundIds.try_emplace(asset.key);

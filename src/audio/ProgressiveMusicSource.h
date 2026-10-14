@@ -1,0 +1,74 @@
+#pragma once
+
+#include "../bms_parser.hpp"
+
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <filesystem>
+#include <memory>
+#include <span>
+#include <string>
+
+namespace audio { class DecodedAssetCache; }
+
+namespace music_stream {
+
+inline constexpr int kSampleRate = 44100;
+inline constexpr int kChannels = 2;
+inline constexpr std::uint64_t kInitialBufferFrames = kSampleRate / 2;
+inline constexpr std::uint64_t kReadAheadFrames = kSampleRate * 10;
+
+enum class ReadStatus { Data, Pending, End, Cancelled, Error };
+struct ReadResult {
+  ReadStatus status = ReadStatus::Pending;
+  std::size_t frames = 0;
+  std::string error;
+};
+struct State {
+  std::uint64_t firstFrame = 0;
+  std::uint64_t availableFrames = 0;
+  // Starts at chart duration and expands as sound tails are discovered.
+  // Exact once complete. Never use this estimate to signal playback completion.
+  std::uint64_t durationFrames = 0;
+  bool complete = false;
+  bool cancelled = false;
+  std::string error;
+};
+struct PreviewGains {
+  float bgm = 1.0f;
+  float keysound = 1.0f;
+};
+
+// Listening-only source. Never decode, read files, or wait from an audio
+// callback. Native feeder workers may call ReadFrames with bounded waits.
+class Source {
+public:
+  static std::shared_ptr<Source> Create(std::unique_ptr<bms_parser::Chart> chart,
+                                        std::filesystem::path cachePath,
+                                        bool clubMode = false);
+  // Starts directly at an arbitrary chart frame, including overlapping tails.
+  // Snapshots chart data before returning; never publishes a partial-song cache.
+  static std::shared_ptr<Source> CreatePreview(
+      const bms_parser::Chart &chart, std::filesystem::path stagingParent,
+      std::shared_ptr<audio::DecodedAssetCache> decodedAssets,
+      std::uint64_t firstFrame, PreviewGains gains = {});
+  ~Source();
+  Source(const Source &) = delete;
+  Source &operator=(const Source &) = delete;
+
+  ReadResult ReadFrames(std::uint64_t firstFrame, std::span<short> interleaved,
+                        std::chrono::milliseconds wait = std::chrono::milliseconds(100));
+  [[nodiscard]] State GetState() const;
+  // Play/resume enables production; pause/stop disables further read-ahead.
+  void SetRenderingEnabled(bool enabled);
+  // Terminal cancellation. Bounded reads immediately wake; no partial cache is published.
+  void Cancel();
+
+private:
+  struct Impl;
+  explicit Source(std::unique_ptr<Impl> impl);
+  std::unique_ptr<Impl> impl;
+};
+
+} // namespace music_stream

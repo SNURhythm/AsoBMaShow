@@ -2,8 +2,9 @@
 
 MainMenuPreviewController::MainMenuPreviewController(
     ChartPreloadWorker::Processor processor, std::function<void()> release,
-    std::chrono::milliseconds debounceDelay)
-    : release_(std::move(release)), worker_(debounceDelay) {
+    std::chrono::milliseconds debounceDelay, std::function<void()> stopPlayback)
+    : release_(std::move(release)), stopPlayback_(std::move(stopPlayback)),
+      worker_(debounceDelay) {
   worker_.configure(std::move(processor));
   worker_.setOnIdle([this] { releaseWhenIdle(); });
 }
@@ -29,7 +30,9 @@ void MainMenuPreviewController::cancelAndReleaseWhenIdle() {
 }
 
 void MainMenuPreviewController::stop() {
+  std::lock_guard stopLock(stopMutex_);
   worker_.stop();
+  if (stopPlayback_) stopPlayback_();
   std::lock_guard lock(releaseMutex_);
   releasePending_ = false;
 }

@@ -3,6 +3,7 @@
 #include "audio/JukeboxLifecycle.h"
 #include "audio/JukeboxSoundResources.h"
 #include "audio/decoder.h"
+#include "audio/DecodedAssetCache.h"
 #include "skin/beatoraja/LuaSkinApplicationAudioBackend.h"
 
 #include <atomic>
@@ -75,6 +76,23 @@ void *operator new(std::size_t bytes) {
 
 void operator delete(void *memory) noexcept { std::free(memory); }
 void operator delete(void *memory, std::size_t) noexcept { std::free(memory); }
+
+// These lifecycle tests replace decoder I/O; cache decoding is exercised by
+// decoded_asset_cache_tests with real files and archive entries.
+bool audio::DecodedAssetCache::Contains(const std::filesystem::path &) const {
+  return false;
+}
+bool audio::DecodedAssetCache::Materialize(
+    const std::filesystem::path &, std::vector<short> &, SF_INFO &,
+    const std::atomic_bool &, std::stop_token, std::string *) {
+  return false;
+}
+bool audio::DecodedAssetCache::MaterializeBytes(
+    const std::filesystem::path &, const std::vector<unsigned char> &,
+    std::vector<short> &, SF_INFO &, const std::atomic_bool &,
+    std::stop_token, std::string *) {
+  return false;
+}
 
 bool decodeAudioToPCM(const path_t &, std::vector<short> &, SF_INFO &,
                       std::atomic<bool> &) {

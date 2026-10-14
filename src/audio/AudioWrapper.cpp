@@ -3,6 +3,7 @@
 #include <stdexcept>
 #include <SDL3/SDL.h>
 #include "decoder.h"
+#include "DecodedAssetCache.h"
 #include <sndfile.h>
 #include <stdio.h>
 #include <mutex>
@@ -920,10 +921,30 @@ audio::PlaybackRate AudioWrapper::playbackRate() const {
           .mode = audio::PlaybackMode::PitchShift};
 }
 
+void AudioWrapper::setDecodedAssetCache(
+    std::shared_ptr<audio::DecodedAssetCache> cache) {
+  std::shared_ptr<audio::DecodedAssetCache> previous;
+  {
+    std::lock_guard lock(soundDataListMutex);
+    previous = std::exchange(decodedAssetCache, std::move(cache));
+  }
+}
+
+bool AudioWrapper::hasCachedDecodedAsset(const path_t &path) const {
+  std::shared_ptr<audio::DecodedAssetCache> cache;
+  {
+    std::lock_guard lock(soundDataListMutex);
+    cache = decodedAssetCache;
+  }
+  return cache && cache->Contains(std::filesystem::path(path));
+}
+
 bool AudioWrapper::loadSound(const path_t &path,
                              std::atomic<bool> &isCancelled) {
+  std::shared_ptr<audio::DecodedAssetCache> cache;
   {
     std::lock_guard<std::mutex> lock(soundDataListMutex);
+    cache = decodedAssetCache;
     if (soundDataIndexMap.contains(path)) {
       return true;
     }
@@ -931,7 +952,10 @@ bool AudioWrapper::loadSound(const path_t &path,
 
   std::vector<short> pcmData;
   SF_INFO sfInfo;
-  bool result = decodeAudioToPCM(path, pcmData, sfInfo, isCancelled);
+  bool result = cache
+                    ? cache->Materialize(std::filesystem::path(path), pcmData,
+                                         sfInfo, isCancelled)
+                    : decodeAudioToPCM(path, pcmData, sfInfo, isCancelled);
   if (!result) {
     SDL_Log("Failed to decode audio file %s", path_t_to_utf8(path).c_str());
     return false;
@@ -943,8 +967,10 @@ bool AudioWrapper::loadSound(const path_t &path,
 bool AudioWrapper::loadSoundFromMemory(const path_t &path,
                                        const std::vector<unsigned char> &bytes,
                                        std::atomic<bool> &isCancelled) {
+  std::shared_ptr<audio::DecodedAssetCache> cache;
   {
     std::lock_guard<std::mutex> lock(soundDataListMutex);
+    cache = decodedAssetCache;
     if (soundDataIndexMap.contains(path)) {
       return true;
     }
@@ -952,8 +978,11 @@ bool AudioWrapper::loadSoundFromMemory(const path_t &path,
 
   std::vector<short> pcmData;
   SF_INFO sfInfo;
-  bool result =
-      decodeAudioBytesToPCM(path, bytes, pcmData, sfInfo, isCancelled);
+  bool result = cache
+                    ? cache->MaterializeBytes(std::filesystem::path(path), bytes,
+                                              pcmData, sfInfo, isCancelled)
+                    : decodeAudioBytesToPCM(path, bytes, pcmData, sfInfo,
+                                            isCancelled);
   if (!result) {
     SDL_Log("Failed to decode audio file %s", path_t_to_utf8(path).c_str());
     return false;

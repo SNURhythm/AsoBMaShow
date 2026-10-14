@@ -14,6 +14,8 @@ import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.media.AudioAttributes;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
 import android.media.MediaDescription;
 import android.media.MediaMetadata;
 import android.media.MediaPlayer;
@@ -202,6 +204,14 @@ public class AsoBMaShowActivity extends SDLActivity {
     private AsoBMaShowGyroscopeTurntableManager gyroscopeTurntableManager;
     private boolean gyroscopeActivityResumed;
     private MediaPlayer nativeMusicPlayer;
+    private NativePcmMusicPlayer nativeMusicStream;
+    private AudioFocusRequest nativeMusicFocusRequest;
+    private boolean nativeMusicResumeAfterFocus;
+    private boolean nativeMusicHasFocus;
+    // Keep the foreground/audio-focus lease while native queue logic prepares
+    // the next backend. Explicit pause/stop or a failed handoff releases it.
+    private boolean nativeMusicHandoff;
+    private long nativeMusicFocusGeneration;
     private MediaSession nativeMusicSession;
     private String nativeMusicTitle = "AsoBMaShow";
     private String nativeMusicArtist = "AsoBMaShow";
@@ -1539,9 +1549,121 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
     }
 
+    private boolean hasNativeMusicLocked() {
+        return nativeMusicStream != null || nativeMusicPlayer != null;
+    }
+
+    private boolean isNativeMusicPlayingLocked() {
+        return nativeMusicStream != null ? nativeMusicStream.isPlaying()
+                : nativeMusicPlayer != null && nativeMusicPlayer.isPlaying();
+    }
+
+    private boolean requestNativeMusicFocusLocked() {
+        if (nativeMusicHasFocus) return true;
+        AudioManager manager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        if (manager == null) return false;
+        if (nativeMusicFocusRequest == null) {
+            final long focusGeneration = nativeMusicFocusGeneration;
+            nativeMusicFocusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(new AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_MEDIA)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC).build())
+                    .setWillPauseWhenDucked(true)
+                    .setOnAudioFocusChangeListener(change -> {
+                        synchronized (nativeMusicLock) {
+                            if (focusGeneration != nativeMusicFocusGeneration) return;
+                            if (change == AudioManager.AUDIOFOCUS_GAIN) {
+                                nativeMusicHasFocus = true;
+                                if (nativeMusicResumeAfterFocus) {
+                                    nativeMusicResumeAfterFocus = false;
+                                    playNativeMusic();
+                                }
+                            } else {
+                                nativeMusicHasFocus = false;
+                                boolean resume = change != AudioManager.AUDIOFOCUS_LOSS
+                                        && (nativeMusicResumeAfterFocus || isNativeMusicPlayingLocked());
+                                if (hasNativeMusicLocked()) pauseNativeMusic();
+                                nativeMusicResumeAfterFocus = resume;
+                            }
+                        }
+                    }, new Handler(Looper.getMainLooper())).build();
+        }
+        nativeMusicHasFocus = manager.requestAudioFocus(nativeMusicFocusRequest)
+                == AudioManager.AUDIOFOCUS_REQUEST_GRANTED;
+        return nativeMusicHasFocus;
+    }
+
+    private void abandonNativeMusicFocusLocked() {
+        nativeMusicFocusGeneration++;
+        nativeMusicResumeAfterFocus = false;
+        nativeMusicHasFocus = false;
+        AudioManager manager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        if (manager != null && nativeMusicFocusRequest != null)
+            manager.abandonAudioFocusRequest(nativeMusicFocusRequest);
+        nativeMusicFocusRequest = null;
+    }
+
+    public String loadNativeMusicStream(String handleText, String metadataText, long durationMicros) {
+        synchronized (nativeMusicLock) {
+            nativeMusicHandoff |= isNativeMusicPlayingLocked();
+            releaseNativeMusicPlayerLocked(true);
+            try {
+                long handle = Long.parseLong(handleText);
+                if (handle <= 0) return ERROR_PREFIX + "Invalid music stream handle.";
+                final NativePcmMusicPlayer[] owner = new NativePcmMusicPlayer[1];
+                NativePcmMusicPlayer stream = AndroidMusicStream.create(handle, new NativePcmMusicPlayer.Listener() {
+                    private void publish(long generation, String error, boolean finished) {
+                        runOnUiThread(() -> {
+                            synchronized (nativeMusicLock) {
+                                if (nativeMusicStream != owner[0] || !owner[0].acceptsEvent(generation)) return;
+                                if (error == null && !finished) {
+                                    long durationMicros = owner[0].durationFrames() * 1000000L / AndroidMusicStream.SAMPLE_RATE;
+                                    if (durationMicros != nativeMusicDurationMicros) {
+                                        nativeMusicDurationMicros = durationMicros;
+                                        updateNativeMusicSessionLocked(isNativeMusicPlayingLocked(), false);
+                                    } else {
+                                        updateNativeMusicPlaybackStateLocked(isNativeMusicPlayingLocked(),
+                                                owner[0].positionFrames() * 1000L / AndroidMusicStream.SAMPLE_RATE);
+                                    }
+                                    return;
+                                }
+                                nativeMusicHandoff = finished;
+                                updateNativeMusicSessionLocked(isNativeMusicPlayingLocked());
+                                if (error != null) {
+                                    abandonNativeMusicFocusLocked();
+                                    AndroidMusicStream.reportError(error);
+                                } else if (finished) nativeMusicControlEvent("finished");
+                            }
+                        });
+                    }
+                    public void changed(long generation) { publish(generation, null, false); }
+                    public void finished(long generation) { publish(generation, null, true); }
+                    public void error(long generation, String message) { publish(generation, message, false); }
+                });
+                owner[0] = stream;
+                nativeMusicStream = stream;
+                stream.rate(nativeMusicPlaybackRate, nativeMusicTimeStretch);
+                String[] lines = metadataText == null ? new String[0] : metadataText.split("\\n", -1);
+                nativeMusicTitle = metadataLine(lines, 0, "AsoBMaShow");
+                nativeMusicArtist = metadataLine(lines, 1, "AsoBMaShow");
+                nativeMusicAlbum = metadataLine(lines, 2, "");
+                nativeMusicArtworkPath = metadataLine(lines, 3, "");
+                nativeMusicArtwork = decodeNativeMusicArtwork(nativeMusicArtworkPath);
+                nativeMusicDurationMicros = durationMicros;
+                ensureNativeMusicSessionLocked();
+                updateNativeMusicSessionLocked(false, false);
+                return "OK";
+            } catch (Exception e) {
+                releaseNativeMusicPlayerLocked();
+                return ERROR_PREFIX + messageForException(e, "Could not load music stream.");
+            }
+        }
+    }
+
     public String loadNativeMusic(String pathText, String metadataText, long durationMicros) {
         synchronized (nativeMusicLock) {
-            releaseNativeMusicPlayerLocked();
+            nativeMusicHandoff |= isNativeMusicPlayingLocked();
+            releaseNativeMusicPlayerLocked(true);
             try {
                 MediaPlayer player = new MediaPlayer();
                 player.setAudioAttributes(new AudioAttributes.Builder()
@@ -1559,8 +1681,14 @@ public class AsoBMaShowActivity extends SDLActivity {
                 nativeMusicAlbum = metadataLine(metadataLines, 2, "");
                 nativeMusicArtworkPath = metadataLine(metadataLines, 3, "");
                 nativeMusicArtwork = decodeNativeMusicArtwork(nativeMusicArtworkPath);
-                player.setOnCompletionListener(ignored ->
-                        nativeMusicControlEvent("finished"));
+                player.setOnCompletionListener(ignored -> {
+                    synchronized (nativeMusicLock) {
+                        if (nativeMusicPlayer != player) return;
+                        nativeMusicHandoff = true;
+                        updateNativeMusicSessionLocked(false);
+                        nativeMusicControlEvent("finished");
+                    }
+                });
                 nativeMusicPlayer = player;
                 nativeMusicDurationMicros = durationMicros > 0
                         ? durationMicros
@@ -1577,7 +1705,7 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     public String updateNativeMusicMetadata(String metadataText, long durationMicros) {
         synchronized (nativeMusicLock) {
-            if (nativeMusicPlayer == null) {
+            if (!hasNativeMusicLocked()) {
                 return "OK";
             }
             try {
@@ -1592,7 +1720,7 @@ public class AsoBMaShowActivity extends SDLActivity {
                 if (durationMicros > 0) {
                     nativeMusicDurationMicros = durationMicros;
                 }
-                updateNativeMusicSessionLocked(nativeMusicPlayer.isPlaying());
+                updateNativeMusicSessionLocked(isNativeMusicPlayingLocked());
                 return "OK";
             } catch (Exception e) {
                 return ERROR_PREFIX + messageForException(
@@ -1647,7 +1775,7 @@ public class AsoBMaShowActivity extends SDLActivity {
                             nativeMusicQueue.get((int) currentIndex).getQueueId();
                 }
                 if (nativeMusicSession != null) {
-                    boolean playing = nativeMusicPlayer != null && nativeMusicPlayer.isPlaying();
+                    boolean playing = isNativeMusicPlayingLocked();
                     updateNativeMusicSessionLocked(playing);
                 }
                 return "OK";
@@ -1660,14 +1788,24 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     public String playNativeMusic() {
         synchronized (nativeMusicLock) {
-            if (nativeMusicPlayer == null) {
+            if (!hasNativeMusicLocked()) {
                 return ERROR_PREFIX + "No music is loaded.";
             }
             try {
-                nativeMusicPlayer.start();
+                if (!requestNativeMusicFocusLocked()) {
+                    nativeMusicHandoff = false;
+                    updateNativeMusicSessionLocked(false);
+                    return ERROR_PREFIX + "Music audio focus was denied.";
+                }
+                nativeMusicResumeAfterFocus = false;
+                if (nativeMusicStream != null) nativeMusicStream.play();
+                else nativeMusicPlayer.start();
+                nativeMusicHandoff = false;
                 updateNativeMusicSessionLocked(true);
                 return "OK";
             } catch (Exception e) {
+                nativeMusicHandoff = false;
+                updateNativeMusicSessionLocked(false);
                 return ERROR_PREFIX + messageForException(e, "Could not play music.");
             }
         }
@@ -1675,13 +1813,14 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     public String pauseNativeMusic() {
         synchronized (nativeMusicLock) {
-            if (nativeMusicPlayer == null) {
+            if (!hasNativeMusicLocked()) {
                 return ERROR_PREFIX + "No music is loaded.";
             }
             try {
-                if (nativeMusicPlayer.isPlaying()) {
-                    nativeMusicPlayer.pause();
-                }
+                nativeMusicHandoff = false;
+                nativeMusicResumeAfterFocus = false;
+                if (nativeMusicStream != null) nativeMusicStream.pause();
+                else if (nativeMusicPlayer.isPlaying()) nativeMusicPlayer.pause();
                 updateNativeMusicSessionLocked(false);
                 return "OK";
             } catch (Exception e) {
@@ -1692,32 +1831,45 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     public String stopNativeMusic() {
         synchronized (nativeMusicLock) {
-            if (nativeMusicPlayer == null) {
-                return ERROR_PREFIX + "No music is loaded.";
-            }
+            nativeMusicHandoff = false;
+            nativeMusicResumeAfterFocus = false;
             try {
-                if (nativeMusicPlayer.isPlaying()) {
-                    nativeMusicPlayer.pause();
+                if (nativeMusicStream != null) {
+                    nativeMusicStream.pause();
+                    nativeMusicStream.stop();
+                } else if (nativeMusicPlayer != null) {
+                    if (nativeMusicPlayer.isPlaying()) nativeMusicPlayer.pause();
+                    nativeMusicPlayer.seekTo(0, MediaPlayer.SEEK_CLOSEST);
                 }
-                nativeMusicPlayer.seekTo(0, MediaPlayer.SEEK_CLOSEST);
-                updateNativeMusicSessionLocked(false, false);
-                stopNativeMusicForegroundServiceLocked();
                 return "OK";
             } catch (Exception e) {
                 return ERROR_PREFIX + messageForException(e, "Could not stop music.");
+            } finally {
+                try {
+                    abandonNativeMusicFocusLocked();
+                } catch (Exception ignored) {
+                }
+                try {
+                    updateNativeMusicSessionLocked(false, false);
+                } catch (Exception ignored) {
+                }
+                stopNativeMusicForegroundServiceLocked();
             }
         }
     }
 
     public String seekNativeMusic(String positionMicrosText) {
         synchronized (nativeMusicLock) {
-            if (nativeMusicPlayer == null) {
+            if (!hasNativeMusicLocked()) {
                 return ERROR_PREFIX + "No music is loaded.";
             }
             try {
                 long positionMicros = Math.max(0L, Long.parseLong(positionMicrosText));
-                nativeMusicPlayer.seekTo(positionMicros / 1000L, MediaPlayer.SEEK_CLOSEST);
-                updateNativeMusicSessionLocked(nativeMusicPlayer.isPlaying());
+                if (nativeMusicStream != null) nativeMusicStream.seek(
+                        (positionMicros / 1000000L) * AndroidMusicStream.SAMPLE_RATE
+                        + (positionMicros % 1000000L) * AndroidMusicStream.SAMPLE_RATE / 1000000L);
+                else nativeMusicPlayer.seekTo(positionMicros / 1000L, MediaPlayer.SEEK_CLOSEST);
+                updateNativeMusicSessionLocked(isNativeMusicPlayingLocked());
                 return "OK";
             } catch (Exception e) {
                 return ERROR_PREFIX + messageForException(e, "Could not seek music.");
@@ -1743,9 +1895,10 @@ public class AsoBMaShowActivity extends SDLActivity {
                 }
                 nativeMusicPlaybackRate = percent / 100.0f;
                 nativeMusicTimeStretch = fields[1].equals("time-stretch");
-                if (nativeMusicPlayer != null) {
-                    applyNativeMusicPlaybackRateLocked(nativeMusicPlayer);
-                    updateNativeMusicSessionLocked(nativeMusicPlayer.isPlaying());
+                if (hasNativeMusicLocked()) {
+                    if (nativeMusicStream != null) nativeMusicStream.rate(nativeMusicPlaybackRate, nativeMusicTimeStretch);
+                    else applyNativeMusicPlaybackRateLocked(nativeMusicPlayer);
+                    updateNativeMusicSessionLocked(isNativeMusicPlayingLocked());
                 }
                 return "OK";
             } catch (Exception e) {
@@ -1768,10 +1921,15 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     public String nativeMusicState() {
         synchronized (nativeMusicLock) {
-            if (nativeMusicPlayer == null) {
+            if (!hasNativeMusicLocked()) {
                 return "0\n0\n0\n0";
             }
             try {
+                if (nativeMusicStream != null) {
+                    return "1\n" + (nativeMusicStream.isPlaying() ? "1" : "0")
+                            + "\n" + nativeMusicStream.positionFrames() * 1000000L / AndroidMusicStream.SAMPLE_RATE
+                            + "\n" + nativeMusicStream.durationFrames() * 1000000L / AndroidMusicStream.SAMPLE_RATE;
+                }
                 long positionMicros = Math.max(0L, nativeMusicPlayer.getCurrentPosition()) * 1000L;
                 long durationMicros = nativeMusicDurationMicros > 0
                         ? nativeMusicDurationMicros
@@ -1968,7 +2126,7 @@ public class AsoBMaShowActivity extends SDLActivity {
             public void onSkipToNext() {
                 nativeMusicControlEvent("next");
             }
-        });
+        }, new Handler(Looper.getMainLooper()));
     }
 
     private void updateNativeMusicSessionLocked(boolean playing) {
@@ -1979,7 +2137,10 @@ public class AsoBMaShowActivity extends SDLActivity {
         ensureNativeMusicSessionLocked();
         long durationMs = Math.max(0L, nativeMusicDurationMicros / 1000L);
         long positionMs = 0L;
-        if (nativeMusicPlayer != null) {
+        if (nativeMusicStream != null) {
+            positionMs = nativeMusicStream.positionFrames() * 1000L / AndroidMusicStream.SAMPLE_RATE;
+            durationMs = nativeMusicStream.durationFrames() * 1000L / AndroidMusicStream.SAMPLE_RATE;
+        } else if (nativeMusicPlayer != null) {
             try {
                 positionMs = Math.max(0L, nativeMusicPlayer.getCurrentPosition());
             } catch (Exception ignored) {
@@ -2004,6 +2165,14 @@ public class AsoBMaShowActivity extends SDLActivity {
             nativeMusicSession.setQueueTitle(nativeMusicQueueTitle);
         }
 
+        updateNativeMusicPlaybackStateLocked(playing, positionMs);
+        nativeMusicSession.setActive(hasNativeMusicLocked());
+        if (updateService) {
+            updateNativeMusicForegroundServiceLocked(playing);
+        }
+    }
+
+    private void updateNativeMusicPlaybackStateLocked(boolean playing, long positionMs) {
         long actions = PlaybackState.ACTION_PLAY
                 | PlaybackState.ACTION_PAUSE
                 | PlaybackState.ACTION_PLAY_PAUSE
@@ -2011,24 +2180,24 @@ public class AsoBMaShowActivity extends SDLActivity {
                 | PlaybackState.ACTION_SEEK_TO
                 | PlaybackState.ACTION_SKIP_TO_PREVIOUS
                 | PlaybackState.ACTION_SKIP_TO_NEXT;
-        int state = nativeMusicPlayer == null
+        int state = !hasNativeMusicLocked()
                 ? PlaybackState.STATE_STOPPED
                 : (playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED);
+        // PCM position comes from consumed hardware frames. Disable framework
+        // extrapolation so a producer underrun never advances the lock-screen clock.
         PlaybackState.Builder playbackState = new PlaybackState.Builder()
                 .setActions(actions)
-                .setState(state, positionMs, playing ? nativeMusicPlaybackRate : 0.0f);
+                .setState(state, positionMs,
+                        playing && nativeMusicStream == null ? nativeMusicPlaybackRate : 0.0f);
         if (nativeMusicActiveQueueItemId != NATIVE_MUSIC_UNKNOWN_QUEUE_ID) {
             playbackState.setActiveQueueItemId(nativeMusicActiveQueueItemId);
         }
         nativeMusicSession.setPlaybackState(playbackState.build());
-        nativeMusicSession.setActive(nativeMusicPlayer != null);
-        if (updateService) {
-            updateNativeMusicForegroundServiceLocked(playing);
-        }
     }
 
     private void updateNativeMusicForegroundServiceLocked(boolean playing) {
-        if (nativeMusicPlayer == null || nativeMusicSession == null) {
+        if (nativeMusicHandoff && !playing) return;
+        if (!hasNativeMusicLocked() || nativeMusicSession == null) {
             stopNativeMusicForegroundServiceLocked();
             return;
         }
@@ -2083,6 +2252,18 @@ public class AsoBMaShowActivity extends SDLActivity {
     }
 
     private void releaseNativeMusicPlayerLocked() {
+        releaseNativeMusicPlayerLocked(false);
+    }
+
+    private void releaseNativeMusicPlayerLocked(boolean preserveSession) {
+        if (nativeMusicStream != null) {
+            nativeMusicStream.close();
+            nativeMusicStream = null;
+        }
+        if (!preserveSession) {
+            nativeMusicHandoff = false;
+            abandonNativeMusicFocusLocked();
+        }
         if (nativeMusicPlayer != null) {
             try {
                 nativeMusicPlayer.release();
@@ -2096,6 +2277,7 @@ public class AsoBMaShowActivity extends SDLActivity {
         nativeMusicAlbum = "";
         nativeMusicArtworkPath = "";
         nativeMusicArtwork = null;
+        if (preserveSession) return;
         nativeMusicQueueTitle = "";
         nativeMusicQueue.clear();
         nativeMusicActiveQueueItemId = NATIVE_MUSIC_UNKNOWN_QUEUE_ID;

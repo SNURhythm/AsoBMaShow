@@ -13,6 +13,7 @@
 #include "PlatformDocumentHandoff.h"
 #include "skin/package/SkinDirectoryRename.h"
 #include "audio/NativeMusicPlayer.h"
+#include "audio/ProgressiveMusicSource.h"
 #include "library/ChartLibraryTaskService.h"
 #include "library/DocumentsLibraryRefresh.h"
 #include "repositories/ChartRepository.h"
@@ -104,6 +105,33 @@ Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeAcquireRawTouchGesture(
 }
 
 namespace {
+
+std::mutex gMusicStreamMutex;
+struct MusicStreamHandle {
+  std::shared_ptr<music_stream::Source> source;
+  std::string readError;
+};
+std::unordered_map<jlong, MusicStreamHandle> gMusicStreams;
+jlong gNextMusicStreamHandle = 1;
+
+std::shared_ptr<music_stream::Source> musicStream(jlong handle) {
+  std::lock_guard lock(gMusicStreamMutex);
+  const auto found = gMusicStreams.find(handle);
+  return found == gMusicStreams.end() ? nullptr : found->second.source;
+}
+
+void releaseMusicStream(jlong handle) {
+  std::shared_ptr<music_stream::Source> source;
+  {
+    std::lock_guard lock(gMusicStreamMutex);
+    const auto found = gMusicStreams.find(handle);
+    if (found == gMusicStreams.end()) return;
+    source = std::move(found->second.source);
+    gMusicStreams.erase(found);
+  }
+  // Cancelling or destroying a source never holds the registry mutex.
+  source->Cancel();
+}
 
 constexpr const char *kAndroidTreeSentinel = "@androidtree@";
 constexpr const char *kErrorPrefix = "__ERROR__:";
@@ -1063,6 +1091,84 @@ Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlTextPauseReque
              : JNI_FALSE;
 }
 
+extern "C" JNIEXPORT jint JNICALL
+Java_com_snurhythm_asobmashow_AndroidMusicStream_read(
+    JNIEnv *env, jclass, jlong handle, jlong firstFrame, jshortArray samples) {
+  auto source = musicStream(handle);
+  if (!source) return -2;
+  if (firstFrame < 0 || samples == nullptr) return -3;
+  const jsize size = env->GetArrayLength(samples);
+  if (size < 2 || size > 8192 || size % music_stream::kChannels != 0) return -3;
+  try {
+    std::vector<short> buffer(static_cast<std::size_t>(size));
+    const auto result = source->ReadFrames(static_cast<std::uint64_t>(firstFrame), buffer);
+    switch (result.status) {
+    case music_stream::ReadStatus::Data:
+      if (result.frames > buffer.size() / music_stream::kChannels) return -3;
+      env->SetShortArrayRegion(samples, 0,
+          static_cast<jsize>(result.frames * music_stream::kChannels), buffer.data());
+      return env->ExceptionCheck() ? -3 : static_cast<jint>(result.frames);
+    case music_stream::ReadStatus::Pending: return 0;
+    case music_stream::ReadStatus::End: return -1;
+    case music_stream::ReadStatus::Cancelled: return -2;
+    case music_stream::ReadStatus::Error: {
+      std::lock_guard lock(gMusicStreamMutex);
+      if (const auto found = gMusicStreams.find(handle); found != gMusicStreams.end())
+        found->second.readError = result.error;
+      return -3;
+    }
+    }
+  } catch (...) { return -3; }
+  return -3;
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_snurhythm_asobmashow_AndroidMusicStream_duration(
+    JNIEnv *, jclass, jlong handle) {
+  auto source = musicStream(handle);
+  if (!source) return 0;
+  try { return static_cast<jlong>(std::min<std::uint64_t>(
+      source->GetState().durationFrames, std::numeric_limits<jlong>::max())); }
+  catch (...) { return 0; }
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_snurhythm_asobmashow_AndroidMusicStream_error(
+    JNIEnv *env, jclass, jlong handle) {
+  auto source = musicStream(handle);
+  std::string message = "Music preparation failed.";
+  {
+    std::lock_guard lock(gMusicStreamMutex);
+    if (const auto found = gMusicStreams.find(handle); found != gMusicStreams.end()
+        && !found->second.readError.empty()) message = found->second.readError;
+  }
+  try {
+    if (source) {
+      auto state = source->GetState();
+      if (!state.error.empty()) message = std::move(state.error);
+    }
+  } catch (...) { }
+  return utf8ToJString(env, message.c_str());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_snurhythm_asobmashow_AndroidMusicStream_enable(
+    JNIEnv *, jclass, jlong handle, jboolean enabled) {
+  if (auto source = musicStream(handle)) source->SetRenderingEnabled(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_snurhythm_asobmashow_AndroidMusicStream_release(
+    JNIEnv *, jclass, jlong handle) {
+  releaseMusicStream(handle);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_snurhythm_asobmashow_AndroidMusicStream_reportError(
+    JNIEnv *env, jclass, jstring message) {
+  native_music_player::NotifyPlaybackError(jstringToUtf8(env, message));
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeMusicControlEvent(
     JNIEnv *env, jclass, jstring eventName) {
@@ -1925,6 +2031,37 @@ bool DownloadURLToFileAndroid(const std::string &url,
   }
   std::string ignored;
   return parseBridgeResult(result, ignored, errorMessage);
+}
+
+bool LoadAndroidNativeMusicStream(std::shared_ptr<music_stream::Source> source,
+                                  const AndroidNativeMusicMetadata &metadata,
+                                  std::string &errorMessage) {
+  if (!source) {
+    errorMessage = "No music stream was supplied.";
+    return false;
+  }
+  jlong handle;
+  {
+    std::lock_guard lock(gMusicStreamMutex);
+    if (gNextMusicStreamHandle == std::numeric_limits<jlong>::max()) {
+      errorMessage = "Music stream handles exhausted.";
+      return false;
+    }
+    handle = gNextMusicStreamHandle++;
+    gMusicStreams.emplace(handle, MusicStreamHandle{std::move(source), {}});
+  }
+  const std::string payload = musicMetadataPayload(metadata);
+  const std::string handleText = std::to_string(handle);
+  std::string callError;
+  const auto result = callActivityStringMethod2Long(
+      "loadNativeMusicStream",
+      "(Ljava/lang/String;Ljava/lang/String;J)Ljava/lang/String;",
+      handleText.c_str(), payload.c_str(), metadata.durationMicros, callError);
+  std::string ignored;
+  if (callError.empty() && parseBridgeResult(result, ignored, errorMessage)) return true;
+  if (!callError.empty()) errorMessage = callError;
+  releaseMusicStream(handle);
+  return false;
 }
 
 bool LoadAndroidNativeMusicFile(const std::string &filePath,

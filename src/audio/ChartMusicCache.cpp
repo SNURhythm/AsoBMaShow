@@ -8,6 +8,7 @@
 #include "../path.h"
 #include "../targets.h"
 #include "SoundFileIO.h"
+#include "ProgressiveMusicSource.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../iOSNatives.hpp"
 #endif
@@ -15,6 +16,8 @@
 #include <SDL3/SDL.h>
 
 #include <cstdint>
+#include <array>
+#include <chrono>
 #include <string_view>
 #include <system_error>
 #include <unordered_set>
@@ -185,6 +188,47 @@ void PruneCacheExcept(const std::vector<std::filesystem::path> &keepPaths) {
     }
     std::filesystem::remove(path, error);
     error.clear();
+  }
+}
+
+PreparedMusic PrepareMusicForPlayback(const bms_parser::ChartMeta &meta,
+                                      std::atomic_bool &cancelled, bool clubMode,
+                                      chart_audio::LogCallback log) {
+  const auto output = CachedAudioPathForChart(meta, clubMode);
+  const auto failure = [&](std::string message) -> PreparedMusic {
+    return {.cache = {.audioPath = output, .message = std::move(message)}};
+  };
+  if (cancelled.load()) return failure("Music preparation cancelled");
+  if (CachedAudioExists(meta, clubMode)) return {.cache = resultForExistingFile(output)};
+  if (meta.BmsPath.empty()) return failure("Chart path is empty");
+  std::string error;
+  if (!ensureCacheDirectory(error)) return failure(std::move(error));
+  auto chart = play_options::parseChart(meta.BmsPath, cancelled, "music stream");
+  if (cancelled.load()) return failure("Music preparation cancelled");
+  if (!chart) return failure("Could not parse chart for music playback");
+  auto source = music_stream::Source::Create(std::move(chart), output, clubMode);
+  std::array<short, 2> probe{};
+  for (;;) {
+    if (cancelled.load()) {
+      source->Cancel();
+      return failure("Music preparation cancelled");
+    }
+    const auto state = source->GetState();
+    if (!state.error.empty()) return failure(state.error);
+    if (state.cancelled) return failure("Music preparation cancelled");
+    if (state.complete || state.availableFrames >= music_stream::kInitialBufferFrames) {
+      if (log) log("Music opening buffer ready: " + std::to_string(state.availableFrames) + " frames");
+      if (state.complete) return {.cache = resultForExistingFile(output)};
+      return {.cache = {.success = true,
+                         .audioPath = output,
+                         .message = "Music opening buffer ready",
+                         .durationMicros = static_cast<long long>(
+                             (state.durationFrames * 1000000 + music_stream::kSampleRate - 1) /
+                             music_stream::kSampleRate)},
+              .stream = std::move(source)};
+    }
+    // A bounded source wait also lets a superseding selection cancel preparation.
+    source->ReadFrames(state.availableFrames, probe, std::chrono::milliseconds(50));
   }
 }
 

@@ -188,6 +188,9 @@ public:
   Jukebox(Stopwatch *stopwatch,
           std::unique_ptr<audio::IBackendFactory> backendFactory);
   ~Jukebox();
+  void setDecodedAssetCache(std::shared_ptr<audio::DecodedAssetCache> cache) {
+    audio.setDecodedAssetCache(std::move(cache));
+  }
 
   // NOTE: Reading delta time is NOT THREAD SAFE, call this from render thread
   double getAvgDeltaTime();

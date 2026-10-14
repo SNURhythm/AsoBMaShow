@@ -35,6 +35,8 @@
 #include <vector>
 #include "../targets.h"
 #include "../audio/Jukebox.h"
+#include "../audio/PreviewStreamPlayer.h"
+#include "../audio/DecodedAssetCache.h"
 #include "../video/VideoPlayer.h"
 #include "MainMenuLibrary.h"
 #include "MainMenuPlayOptionsModal.h"
@@ -133,8 +135,12 @@ private:
   // Preview chart loading runs on the shared ChartPreloadWorker (single
   // scene-lifetime thread, debounced and latest-wins) so a selection change
   // never spawns or joins a per-selection thread on the UI thread.
-  std::unique_ptr<MainMenuPreviewController> previewWorker_;
+  audio::PreviewStreamPlayer previewPlayer_;
+  std::shared_ptr<audio::DecodedAssetCache> previewDecodedAssets_;
+  // Explicit chart position; future highlight selection supplies this value.
+  std::uint64_t previewStartFrame_ = 0;
   std::mutex previewJukeboxLoadMutex;
+  std::unique_ptr<MainMenuPreviewController> previewWorker_;
   ReplayRecordTask replayLoadTask_;
   bool prioritizeVisibleArtworkBindings = false;
   bool replayResultRecallInProgress = false;
@@ -491,6 +497,8 @@ private:
   selectedChartRandomInfoForPath(const std::filesystem::path &path) const;
   bms_parser::Chart *
   loadedSelectedChartForPath(const std::filesystem::path &path) const;
+  bms_parser::Chart *
+  parsedSelectedChartForPath(const std::filesystem::path &path) const;
   void resetStartLoadingUi();
   void resetReplayWatchLoadingUi();
   void publishReplayLoadDiagnostic(const char *action,

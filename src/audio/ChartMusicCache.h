@@ -6,8 +6,11 @@
 #include <atomic>
 #include <filesystem>
 #include <optional>
+#include <memory>
 #include <string>
 #include <vector>
+
+namespace music_stream { class Source; }
 
 namespace chart_music_cache {
 
@@ -23,6 +26,17 @@ struct CacheResult {
   std::string message;
   long long durationMicros = 0;
 };
+
+struct PreparedMusic {
+  CacheResult cache;
+  std::shared_ptr<music_stream::Source> stream;
+};
+
+// Music-player-only entry point. Cache misses return after opening PCM is ready;
+// gameplay and exports continue to use their existing full preparation paths.
+PreparedMusic PrepareMusicForPlayback(const bms_parser::ChartMeta &meta,
+                                      std::atomic_bool &cancelled, bool clubMode,
+                                      chart_audio::LogCallback log = {});
 
 std::filesystem::path CacheDirectory();
 std::filesystem::path CachedAudioPathForChart(

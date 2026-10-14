@@ -2,6 +2,7 @@
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "RAII.h"
 #include "audio/NativeMusicPlayer.h"
+#include "audio/IOSMusicStream.h"
 #include "ir/IrHttpClientIOS.h"
 #include "platform/PhotoAuthorizationPolicy.h"
 #include "platform/ScreenOrientation.h"
@@ -53,6 +54,8 @@ constexpr NSTimeInterval kIOSReplayFinishWaitTimeoutSeconds = 30.0;
 constexpr double kIOSReplayAudioLeadSeconds = 0.5;
 UIDocumentInteractionController *gIOSRevealFileController = nil;
 AVPlayer *gIOSNativeMusicPlayer = nil;
+std::shared_ptr<IOSMusicStream> gIOSNativeMusicStream;
+bool gIOSNativeMusicResumeAfterInterruption = false;
 id gIOSNativeMusicFinishedObserver = nil;
 IOSNativeMusicMetadata gIOSNativeMusicMetadata;
 IOSNativeMusicQueue gIOSNativeMusicQueue;
@@ -551,6 +554,7 @@ NSObject *IOSNativeMusicLock() {
 }
 
 long long IOSNativeMusicDurationMicrosLocked() {
+  if (gIOSNativeMusicStream) return gIOSNativeMusicStream->State().durationMicros;
   if (gIOSNativeMusicPlayer == nil) {
     return 0;
   }
@@ -566,10 +570,12 @@ long long IOSNativeMusicDurationMicrosLocked() {
 }
 
 bool IOSNativeMusicIsPlayingLocked() {
+  if (gIOSNativeMusicStream) return gIOSNativeMusicStream->State().playing;
   return gIOSNativeMusicPlayer != nil && gIOSNativeMusicPlayer.rate != 0.0f;
 }
 
 NSTimeInterval IOSNativeMusicCurrentTimeLocked() {
+  if (gIOSNativeMusicStream) return gIOSNativeMusicStream->State().positionMicros / 1000000.0;
   if (gIOSNativeMusicPlayer == nil) {
     return 0.0;
   }
@@ -592,7 +598,7 @@ void ApplyIOSNativeMusicPlaybackModeLocked() {
 void UpdateIOSNativeMusicNowPlayingInfoLocked() {
   @autoreleasepool {
     MPNowPlayingInfoCenter *center = [MPNowPlayingInfoCenter defaultCenter];
-    if (gIOSNativeMusicPlayer == nil) {
+    if (gIOSNativeMusicPlayer == nil && !gIOSNativeMusicStream) {
       center.nowPlayingInfo = nil;
       if (@available(iOS 13.0, *)) {
         center.playbackState = MPNowPlayingPlaybackStateStopped;
@@ -638,7 +644,9 @@ void UpdateIOSNativeMusicNowPlayingInfoLocked() {
     info[MPNowPlayingInfoPropertyElapsedPlaybackTime] =
         @(IOSNativeMusicCurrentTimeLocked());
     info[MPNowPlayingInfoPropertyPlaybackRate] =
-        @(IOSNativeMusicIsPlayingLocked() ? gIOSNativeMusicPlaybackRate
+        @(IOSNativeMusicIsPlayingLocked() &&
+          !(gIOSNativeMusicStream && gIOSNativeMusicStream->IsBuffering())
+              ? gIOSNativeMusicPlaybackRate
                                           : 0.0f);
     const NSUInteger queueCount =
         static_cast<NSUInteger>(gIOSNativeMusicQueue.items.size());
@@ -698,6 +706,53 @@ void ConfigureIOSNativeMusicRemoteCommands() {
     return;
   }
   gIOSNativeMusicRemoteCommandsConfigured = true;
+
+  // The stream engine requires explicit interruption and route handling.
+  [[NSNotificationCenter defaultCenter]
+      addObserverForName:AVAudioSessionInterruptionNotification
+                  object:[AVAudioSession sharedInstance]
+                   queue:[NSOperationQueue mainQueue]
+              usingBlock:^(NSNotification *notification) {
+    @synchronized(IOSNativeMusicLock()) {
+      if (!gIOSNativeMusicStream) return;
+      const auto type = [notification.userInfo[AVAudioSessionInterruptionTypeKey] unsignedIntegerValue];
+      std::string error;
+      if (type == AVAudioSessionInterruptionTypeBegan) {
+        gIOSNativeMusicResumeAfterInterruption = IOSNativeMusicIsPlayingLocked();
+        gIOSNativeMusicStream->Pause();
+        UpdateIOSNativeMusicNowPlayingInfoLocked();
+      } else {
+        const auto options = [notification.userInfo[AVAudioSessionInterruptionOptionKey] unsignedIntegerValue];
+        const bool resume = gIOSNativeMusicResumeAfterInterruption &&
+                            (options & AVAudioSessionInterruptionOptionShouldResume);
+        gIOSNativeMusicResumeAfterInterruption = false;
+        if (resume && !PlayIOSNativeMusic(error))
+          native_music_player::NotifyPlaybackError(error);
+      }
+    }
+  }];
+  [[NSNotificationCenter defaultCenter]
+      addObserverForName:AVAudioSessionRouteChangeNotification
+                  object:[AVAudioSession sharedInstance]
+                   queue:[NSOperationQueue mainQueue]
+              usingBlock:^(NSNotification *notification) {
+    if ([notification.userInfo[AVAudioSessionRouteChangeReasonKey] unsignedIntegerValue] !=
+        AVAudioSessionRouteChangeReasonOldDeviceUnavailable) return;
+    @synchronized(IOSNativeMusicLock()) {
+      if (!gIOSNativeMusicStream) return;
+      std::string error;
+      PauseIOSNativeMusic(error);
+    }
+  }];
+  [[NSNotificationCenter defaultCenter]
+      addObserverForName:AVAudioEngineConfigurationChangeNotification
+                  object:nil queue:[NSOperationQueue mainQueue]
+              usingBlock:^(NSNotification *notification) {
+    @synchronized(IOSNativeMusicLock()) {
+      if (gIOSNativeMusicStream)
+        gIOSNativeMusicStream->ConfigurationChanged((__bridge void *)notification.object);
+    }
+  }];
 
   MPRemoteCommandCenter *center = [MPRemoteCommandCenter sharedCommandCenter];
   center.playCommand.enabled = YES;
@@ -5265,6 +5320,48 @@ bool SetIOSFileExcludedFromBackup(const std::string &filePath, bool excluded,
   }
 }
 
+bool LoadIOSNativeMusicStream(std::shared_ptr<music_stream::Source> source,
+                              const IOSNativeMusicMetadata &metadata,
+                              std::string &errorMessage) {
+  errorMessage.clear();
+  @autoreleasepool {
+    @synchronized(IOSNativeMusicLock()) {
+      if (!ActivateIOSNativeMusicAudioSession(errorMessage)) return false;
+      auto identity = std::make_shared<std::weak_ptr<IOSMusicStream>>();
+      auto stream = IOSMusicStream::Create(std::move(source),
+          [identity](std::uint64_t epoch, IOSMusicStream::EventKind kind,
+                     const std::string &error) {
+            @synchronized(IOSNativeMusicLock()) {
+              auto current = identity->lock();
+              if (!current || current != gIOSNativeMusicStream ||
+                  !current->IsCurrentEvent(epoch)) return;
+              UpdateIOSNativeMusicNowPlayingInfoLocked();
+              if (kind == IOSMusicStream::EventKind::Finished)
+                native_music_player::NotifyControlEvent(native_music_player::ControlEvent::Finished);
+              else if (kind == IOSMusicStream::EventKind::Error)
+                native_music_player::NotifyPlaybackError(error);
+            }
+          }, errorMessage);
+      if (!stream) return false;
+      *identity = stream;
+      stream->SetRate(gIOSNativeMusicPlaybackRate, gIOSNativeMusicTimeStretch);
+      if (gIOSNativeMusicFinishedObserver != nil) {
+        [[NSNotificationCenter defaultCenter] removeObserver:gIOSNativeMusicFinishedObserver];
+        gIOSNativeMusicFinishedObserver = nil;
+      }
+      [gIOSNativeMusicPlayer pause];
+      gIOSNativeMusicPlayer = nil;
+      // The feeder never enters IOSNativeMusicLock; cancellation/join is safe here.
+      gIOSNativeMusicStream = std::move(stream);
+      gIOSNativeMusicResumeAfterInterruption = false;
+      gIOSNativeMusicMetadata = metadata;
+      ConfigureIOSNativeMusicRemoteCommands();
+      UpdateIOSNativeMusicNowPlayingInfoLocked();
+      return true;
+    }
+  }
+}
+
 bool LoadIOSNativeMusicFile(const std::string &filePath,
                             const IOSNativeMusicMetadata &metadata,
                             std::string &errorMessage) {
@@ -5301,6 +5398,8 @@ bool LoadIOSNativeMusicFile(const std::string &filePath,
       player.actionAtItemEnd = AVPlayerActionAtItemEndPause;
       player.automaticallyWaitsToMinimizeStalling = NO;
 
+      gIOSNativeMusicStream.reset();
+      gIOSNativeMusicResumeAfterInterruption = false;
       gIOSNativeMusicPlayer = player;
       ApplyIOSNativeMusicPlaybackModeLocked();
       gIOSNativeMusicFinishedObserver =
@@ -5339,7 +5438,7 @@ bool UpdateIOSNativeMusicMetadata(const IOSNativeMusicMetadata &metadata,
   errorMessage.clear();
   @autoreleasepool {
     @synchronized(IOSNativeMusicLock()) {
-      if (gIOSNativeMusicPlayer == nil) {
+      if (gIOSNativeMusicPlayer == nil && !gIOSNativeMusicStream) {
         return true;
       }
       const long long currentDurationMicros =
@@ -5370,14 +5469,18 @@ bool PlayIOSNativeMusic(std::string &errorMessage) {
   errorMessage.clear();
   @autoreleasepool {
     @synchronized(IOSNativeMusicLock()) {
-      if (gIOSNativeMusicPlayer == nil) {
+      if (gIOSNativeMusicPlayer == nil && !gIOSNativeMusicStream) {
         errorMessage = "No music is loaded";
         return false;
       }
       if (!ActivateIOSNativeMusicAudioSession(errorMessage)) {
         return false;
       }
-      [gIOSNativeMusicPlayer playImmediatelyAtRate:gIOSNativeMusicPlaybackRate];
+      if (gIOSNativeMusicStream) {
+        if (!gIOSNativeMusicStream->Play(errorMessage)) return false;
+      } else {
+        [gIOSNativeMusicPlayer playImmediatelyAtRate:gIOSNativeMusicPlaybackRate];
+      }
       UpdateIOSNativeMusicNowPlayingInfoLocked();
       return true;
     }
@@ -5388,10 +5491,12 @@ bool PauseIOSNativeMusic(std::string &errorMessage) {
   errorMessage.clear();
   @autoreleasepool {
     @synchronized(IOSNativeMusicLock()) {
-      if (gIOSNativeMusicPlayer == nil) {
+      if (gIOSNativeMusicPlayer == nil && !gIOSNativeMusicStream) {
         errorMessage = "No music is loaded";
         return false;
       }
+      gIOSNativeMusicResumeAfterInterruption = false;
+      if (gIOSNativeMusicStream) gIOSNativeMusicStream->Pause();
       [gIOSNativeMusicPlayer pause];
       UpdateIOSNativeMusicNowPlayingInfoLocked();
       return true;
@@ -5403,10 +5508,12 @@ bool StopIOSNativeMusic(std::string &errorMessage) {
   errorMessage.clear();
   @autoreleasepool {
     @synchronized(IOSNativeMusicLock()) {
-      if (gIOSNativeMusicPlayer == nil) {
+      if (gIOSNativeMusicPlayer == nil && !gIOSNativeMusicStream) {
         errorMessage = "No music is loaded";
         return false;
       }
+      gIOSNativeMusicResumeAfterInterruption = false;
+      if (gIOSNativeMusicStream) gIOSNativeMusicStream->Stop();
       [gIOSNativeMusicPlayer pause];
       [gIOSNativeMusicPlayer seekToTime:kCMTimeZero
                         toleranceBefore:kCMTimeZero
@@ -5427,9 +5534,14 @@ bool SeekIOSNativeMusic(long long positionMicros, std::string &errorMessage) {
   errorMessage.clear();
   @autoreleasepool {
     @synchronized(IOSNativeMusicLock()) {
-      if (gIOSNativeMusicPlayer == nil) {
+      if (gIOSNativeMusicPlayer == nil && !gIOSNativeMusicStream) {
         errorMessage = "No music is loaded";
         return false;
+      }
+      if (gIOSNativeMusicStream) {
+        gIOSNativeMusicStream->Seek(positionMicros);
+        UpdateIOSNativeMusicNowPlayingInfoLocked();
+        return true;
       }
       const NSTimeInterval duration = static_cast<NSTimeInterval>(
           IOSNativeMusicDurationMicrosLocked()) / 1000000.0;
@@ -5460,6 +5572,11 @@ bool SetIOSNativeMusicPlaybackRate(int percent, bool timeStretch,
       gIOSNativeMusicPlaybackRate =
           std::clamp(static_cast<float>(percent) / 100.0f, 0.5f, 2.0f);
       gIOSNativeMusicTimeStretch = timeStretch;
+      if (gIOSNativeMusicStream) {
+        gIOSNativeMusicStream->SetRate(gIOSNativeMusicPlaybackRate, timeStretch);
+        UpdateIOSNativeMusicNowPlayingInfoLocked();
+        return true;
+      }
       if (gIOSNativeMusicPlayer != nil) {
         const bool wasPlaying = IOSNativeMusicIsPlayingLocked();
         ApplyIOSNativeMusicPlaybackModeLocked();
@@ -5477,6 +5594,7 @@ bool SetIOSNativeMusicPlaybackRate(int percent, bool timeStretch,
 IOSNativeMusicState GetIOSNativeMusicState() {
   @autoreleasepool {
     @synchronized(IOSNativeMusicLock()) {
+      if (gIOSNativeMusicStream) return gIOSNativeMusicStream->State();
       IOSNativeMusicState state;
       state.loaded = gIOSNativeMusicPlayer != nil;
       if (!state.loaded) {

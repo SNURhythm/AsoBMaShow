@@ -69,8 +69,11 @@ public class AsoBMaShowMusicService extends Service {
         }
 
         if (ACTION_PLAY.equals(action)) {
-            sendTransportAction(intent, ACTION_PLAY);
             playing = sessionToken != null;
+            // Android 15+ permits background audio-focus requests only after
+            // this service has entered the foreground.
+            if (playing) updateNotification();
+            sendTransportAction(intent, ACTION_PLAY);
         } else if (ACTION_PAUSE.equals(action)) {
             sendTransportAction(intent, ACTION_PAUSE);
             playing = false;
@@ -80,8 +83,12 @@ public class AsoBMaShowMusicService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         } else if (ACTION_PREVIOUS.equals(action)) {
+            playing = sessionToken != null;
+            if (playing) updateNotification();
             AsoBMaShowActivity.nativeMusicControlEvent("previous");
         } else if (ACTION_NEXT.equals(action)) {
+            playing = sessionToken != null;
+            if (playing) updateNotification();
             AsoBMaShowActivity.nativeMusicControlEvent("next");
         }
 

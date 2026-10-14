@@ -2499,6 +2499,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
     )
+    add_test(NAME ios_audio_session_handoff_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ios_audio_session_handoff_tests.py)
+    set_tests_properties(ios_audio_session_handoff_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
+    )
     add_test(NAME main_menu_records_lifecycle
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/main_menu_records_lifecycle_tests.py -v)
@@ -4749,6 +4755,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/AtomicFile.cpp
         src/audio/ChartAudioRenderer.cpp
         src/audio/ChartMusicCache.cpp
+        src/audio/ProgressiveMusicSource.cpp
+        src/audio/DecodedAssetCache.cpp
         src/audio/ClubBeat.cpp
         src/audio/PrepMetronomeSound.cpp
         src/audio/decoder.cpp
@@ -4785,6 +4793,56 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             COMPILE_OPTIONS
             "$<$<AND:$<CONFIG:Debug>,$<STREQUAL:$<TARGET_PROPERTY:NAME>,chart_audio_renderer_tests>>:-O2>")
     endif()
+
+    get_target_property(PROGRESSIVE_MUSIC_TEST_SOURCES chart_audio_renderer_tests SOURCES)
+    list(REMOVE_ITEM PROGRESSIVE_MUSIC_TEST_SOURCES ${_chart_audio_fixture})
+    add_executable(progressive_music_source_tests
+        tests/progressive_music_source_tests.cpp ${PROGRESSIVE_MUSIC_TEST_SOURCES})
+    target_include_directories(progressive_music_source_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(progressive_music_source_tests PRIVATE cxx_std_23)
+    target_link_libraries(progressive_music_source_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(progressive_music_source_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(progressive_music_source_tests PRIVATE shell32 ole32)
+    endif()
+    add_test(NAME progressive_music_source_tests COMMAND progressive_music_source_tests)
+    set_tests_properties(progressive_music_source_tests PROPERTIES TIMEOUT 30)
+
+    add_executable(decoded_asset_cache_tests
+        tests/decoded_asset_cache_tests.cpp ${PROGRESSIVE_MUSIC_TEST_SOURCES})
+    target_include_directories(decoded_asset_cache_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(decoded_asset_cache_tests PRIVATE cxx_std_23)
+    target_link_libraries(decoded_asset_cache_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(decoded_asset_cache_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(decoded_asset_cache_tests PRIVATE shell32 ole32)
+    endif()
+    add_test(NAME decoded_asset_cache_tests COMMAND decoded_asset_cache_tests)
+    set_tests_properties(decoded_asset_cache_tests PROPERTIES TIMEOUT 30)
+
+    add_executable(preview_stream_player_tests
+        tests/preview_stream_player_tests.cpp src/audio/PreviewStreamPlayer.cpp
+        src/bms_parser.cpp src/path.cpp)
+    target_include_directories(preview_stream_player_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(preview_stream_player_tests PRIVATE cxx_std_23)
+    target_link_libraries(preview_stream_player_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(preview_stream_player_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(preview_stream_player_tests PRIVATE shell32 ole32)
+    endif()
+    add_test(NAME preview_stream_player_tests COMMAND preview_stream_player_tests)
+    set_tests_properties(preview_stream_player_tests PROPERTIES TIMEOUT 30)
+
+    add_executable(ios_music_stream_timeline_tests tests/ios_music_stream_timeline_tests.cpp)
+    target_include_directories(ios_music_stream_timeline_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(ios_music_stream_timeline_tests PRIVATE cxx_std_23)
+    add_test(NAME ios_music_stream_timeline_tests COMMAND ios_music_stream_timeline_tests)
 
     add_executable(audio_resampling_tests
         tests/audio_resampling_tests.cpp
@@ -4869,6 +4927,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/Jukebox.cpp
         src/audio/PrepMetronomeSound.cpp
         src/audio/decoder.cpp
+        src/audio/DecodedAssetCache.cpp
+        src/Uuid.cpp
         src/bms_parser.cpp
         src/path.cpp
         src/rendering/common.cpp
@@ -6346,6 +6406,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/Jukebox.cpp
         src/audio/PrepMetronomeSound.cpp
         src/audio/decoder.cpp
+        src/audio/DecodedAssetCache.cpp
+        src/Uuid.cpp
         src/bms_parser.cpp
         src/path.cpp
         src/rendering/common.cpp

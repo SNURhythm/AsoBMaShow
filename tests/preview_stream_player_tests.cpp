@@ -1,0 +1,259 @@
+#include "audio/PreviewStreamPlayer.h"
+#include "audio/AudioBackend.h"
+#include "audio/ProgressiveMusicSource.h"
+#include <algorithm>
+#include <atomic>
+#include <cassert>
+#include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+#include <vector>
+
+using namespace std::chrono_literals;
+namespace {
+// A source boundary double controls publication and bounded waits. The player,
+// its resampler, ring buffer, lifecycle, and callback all remain production code.
+struct SourceControl {
+  std::mutex mutex;
+  std::condition_variable changed;
+  std::vector<short> samples;
+  std::uint64_t first = 0;
+  std::size_t published = 0;
+  std::size_t maximumRead = 4096;
+  bool complete = false;
+  std::string error;
+  std::atomic_bool cancelled{false};
+  std::atomic_bool enabled{false};
+  std::atomic_bool readOnCallbackThread{false};
+  std::thread::id callbackThread = std::this_thread::get_id();
+  void publishAll() {
+    { std::lock_guard lock(mutex); published = samples.size() / 2; complete = true; }
+    changed.notify_all();
+  }
+};
+std::shared_ptr<SourceControl> nextSource;
+
+struct BackendControl {
+  audio::RenderCallback render = nullptr;
+  void *context = nullptr;
+  std::uint32_t rate = 44100;
+  bool failStart = false;
+  std::atomic_bool started{false};
+  std::atomic_int stops{0};
+  std::vector<short> pump(std::size_t frames) {
+    assert(render);
+    std::vector<short> output(frames * 2, 12345);
+    render(output.data(), static_cast<std::uint32_t>(frames), 2, context);
+    return output;
+  }
+};
+class FakeBackend final : public audio::IBackend {
+public:
+  explicit FakeBackend(std::shared_ptr<BackendControl> control) : control(std::move(control)) {}
+  ~FakeBackend() override { control->started = false; }
+  bool start(std::string &error) override {
+    if (control->failStart) { error = "injected device start failure"; return false; }
+    control->started = true;
+    return true;
+  }
+  bool stop(std::string &) override { control->started = false; ++control->stops; return true; }
+  bool isStarted() const override { return control->started; }
+  audio::RuntimeState runtimeState() const override {
+    return {.effectiveSampleRate = control->rate};
+  }
+private:
+  std::shared_ptr<BackendControl> control;
+};
+class FakeFactory final : public audio::IBackendFactory {
+public:
+  explicit FakeFactory(std::shared_ptr<BackendControl> control) : control(std::move(control)) {}
+  audio::Capabilities capabilities() const override { return {}; }
+  std::unique_ptr<audio::IBackend> open(const audio::StreamRequest &,
+      audio::RenderCallback callback, void *context, std::string &) override {
+    control->render = callback;
+    control->context = context;
+    return std::make_unique<FakeBackend>(control);
+  }
+private:
+  std::shared_ptr<BackendControl> control;
+};
+
+void waitFor(const auto &predicate) {
+  const auto limit = std::chrono::steady_clock::now() + 3s;
+  while (!predicate() && std::chrono::steady_clock::now() < limit)
+    std::this_thread::sleep_for(1ms);
+  assert(predicate());
+}
+std::shared_ptr<music_stream::Source> source(std::shared_ptr<SourceControl> control) {
+  nextSource = std::move(control);
+  return music_stream::Source::Create(nullptr, {});
+}
+std::vector<short> drain(audio::PreviewStreamPlayer &player,
+                         const std::shared_ptr<BackendControl> &backend,
+                         std::size_t frames) {
+  waitFor([&] { return backend->started.load(); });
+  std::vector<short> result;
+  for (std::size_t frame = 0; frame < frames; ++frame) {
+    waitFor([&] { return !player.GetState().buffering; });
+    const auto output = backend->pump(1);
+    result.insert(result.end(), output.begin(), output.end());
+  }
+  return result;
+}
+
+void testFutureOriginUnderrunAndStop() {
+  auto input = std::make_shared<SourceControl>();
+  input->first = 441000;
+  input->samples.assign(44100 * 2, 2345);
+  input->published = 22050;
+  auto backend = std::make_shared<BackendControl>();
+  audio::PreviewStreamPlayer player(std::make_unique<FakeFactory>(backend));
+  std::string error;
+  assert(player.Start(source(input), input->first, error));
+  const auto initial = drain(player, backend, 22050);
+  assert(std::all_of(initial.begin(), initial.end(), [](short value) { return value == 2345; }));
+  const auto silence = backend->pump(128);
+  assert(std::all_of(silence.begin(), silence.end(), [](short value) { return value == 0; }));
+  assert(player.GetState().positionFrames == 463050);
+  assert(player.GetState().buffering && !player.GetState().finished);
+  input->publishAll();
+  const auto rest = drain(player, backend, 22050);
+  assert(std::all_of(rest.begin(), rest.end(), [](short value) { return value == 2345; }));
+  waitFor([&] { return player.GetState().finished; });
+  assert(player.GetState().positionFrames == 485100);
+  assert(!input->readOnCallbackThread);
+  player.Stop();
+  assert(input->cancelled && !input->enabled && !backend->started);
+}
+
+void testRationalResamplingAndShortReads() {
+  for (const auto rate : {48000U, 88200U, 22050U}) {
+    auto input = std::make_shared<SourceControl>();
+    input->first = 100000;
+    input->samples = {0, 0, 1000, -1000, 2000, -2000, 3000, -3000};
+    input->maximumRead = 1;
+    input->publishAll();
+    auto backend = std::make_shared<BackendControl>();
+    backend->rate = rate;
+    audio::PreviewStreamPlayer player(std::make_unique<FakeFactory>(backend));
+    std::string error;
+    assert(player.Start(source(input), input->first, error));
+    const std::vector<short> expected = rate == 48000
+        ? std::vector<short>{0, 0, 919, -919, 1838, -1838, 2756, -2756, 3000, -3000}
+        : rate == 88200
+        ? std::vector<short>{0, 0, 500, -500, 1000, -1000, 1500, -1500,
+                             2000, -2000, 2500, -2500, 3000, -3000, 3000, -3000}
+        : std::vector<short>{0, 0, 2000, -2000};
+    assert(drain(player, backend, expected.size() / 2) == expected);
+    waitFor([&] { return player.GetState().finished; });
+    assert(player.GetState().positionFrames == 100004);
+    assert(!input->readOnCallbackThread);
+  }
+}
+
+void testDownsampledFinalPositionDoesNotPassEnd() {
+  auto input = std::make_shared<SourceControl>();
+  input->first = 12345;
+  input->samples = {0, 0, 1000, 1000, 2000, 2000, 3000, 3000, 4000, 4000};
+  input->publishAll();
+  auto backend = std::make_shared<BackendControl>();
+  backend->rate = 22050;
+  audio::PreviewStreamPlayer player(std::make_unique<FakeFactory>(backend));
+  std::string error;
+  assert(player.Start(source(input), input->first, error));
+  assert((drain(player, backend, 3) == std::vector<short>{0, 0, 2000, 2000, 4000, 4000}));
+  waitFor([&] { return player.GetState().finished; });
+  assert(player.GetState().positionFrames == 12350);
+}
+
+void testStopWakesPendingReadAndReplacement() {
+  auto stalled = std::make_shared<SourceControl>();
+  stalled->samples.assign(100, 77);
+  auto backend = std::make_shared<BackendControl>();
+  audio::PreviewStreamPlayer player(std::make_unique<FakeFactory>(backend));
+  std::string error;
+  assert(player.Start(source(stalled), 0, error));
+  waitFor([&] { return stalled->enabled.load(); });
+  const auto begin = std::chrono::steady_clock::now();
+  player.Stop();
+  assert(std::chrono::steady_clock::now() - begin < 500ms);
+  assert(stalled->cancelled && !backend->started);
+  auto replacement = std::make_shared<SourceControl>();
+  replacement->first = 900;
+  replacement->samples = {987, -987};
+  replacement->publishAll();
+  assert(player.Start(source(replacement), 900, error));
+  assert((drain(player, backend, 1) == std::vector<short>{987, -987}));
+  waitFor([&] { return player.GetState().finished; });
+  assert(player.GetState().positionFrames == 901);
+}
+
+void testDeviceAndSourceErrorsAreNotCompletion() {
+  for (const bool sourceError : {false, true}) {
+    auto input = std::make_shared<SourceControl>();
+    input->samples = {100, 100};
+    input->publishAll();
+    if (sourceError) input->error = "injected source failure";
+    auto backend = std::make_shared<BackendControl>();
+    backend->failStart = !sourceError;
+    audio::PreviewStreamPlayer player(std::make_unique<FakeFactory>(backend));
+    std::string error;
+    assert(player.Start(source(input), 0, error));
+    waitFor([&] { return !player.GetState().error.empty(); });
+    assert(!player.GetState().playing && !player.GetState().finished);
+    assert(!input->enabled);
+  }
+}
+} // namespace
+
+namespace music_stream {
+struct Source::Impl { std::shared_ptr<SourceControl> control; };
+Source::Source(std::unique_ptr<Impl> value) : impl(std::move(value)) {}
+Source::~Source() { Cancel(); }
+std::shared_ptr<Source> Source::Create(std::unique_ptr<bms_parser::Chart>, std::filesystem::path, bool) {
+  auto impl = std::make_unique<Impl>();
+  impl->control = nextSource;
+  return std::shared_ptr<Source>(new Source(std::move(impl)));
+}
+ReadResult Source::ReadFrames(std::uint64_t frame, std::span<short> output,
+                             std::chrono::milliseconds wait) {
+  auto &control = *impl->control;
+  if (std::this_thread::get_id() == control.callbackThread) control.readOnCallbackThread = true;
+  std::unique_lock lock(control.mutex);
+  assert(frame >= control.first);
+  const auto offset = frame - control.first;
+  control.changed.wait_for(lock, wait, [&] {
+    return control.cancelled || !control.error.empty() || control.complete || offset < control.published;
+  });
+  if (control.cancelled) return {.status = ReadStatus::Cancelled};
+  if (!control.error.empty()) return {.status = ReadStatus::Error, .error = control.error};
+  if (offset >= control.published)
+    return {.status = control.complete ? ReadStatus::End : ReadStatus::Pending};
+  const auto frames = std::min({output.size() / 2, control.published - static_cast<std::size_t>(offset), control.maximumRead});
+  std::copy_n(control.samples.begin() + offset * 2, frames * 2, output.begin());
+  return {.status = ReadStatus::Data, .frames = frames};
+}
+State Source::GetState() const {
+  auto &control = *impl->control;
+  std::lock_guard lock(control.mutex);
+  return {.firstFrame = control.first,
+          .availableFrames = control.first + control.published,
+          .durationFrames = control.first + control.samples.size() / 2,
+          .complete = control.complete, .cancelled = control.cancelled};
+}
+void Source::SetRenderingEnabled(bool enabled) { impl->control->enabled = enabled; }
+void Source::Cancel() { impl->control->cancelled = true; impl->control->changed.notify_all(); }
+}
+namespace audio {
+std::unique_ptr<IBackendFactory> CreatePlatformBackendFactory() {
+  return std::make_unique<FakeFactory>(std::make_shared<BackendControl>());
+}
+}
+int main() {
+  testFutureOriginUnderrunAndStop();
+  testRationalResamplingAndShortReads();
+  testDownsampledFinalPositionDoesNotPassEnd();
+  testStopWakesPendingReadAndReplacement();
+  testDeviceAndSourceErrorsAreNotCompletion();
+}

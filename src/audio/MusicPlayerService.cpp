@@ -1,5 +1,6 @@
 #include "MusicPlayerService.h"
 #include "../StableHash.h"
+#include "../RAII.h"
 
 #include <algorithm>
 #include <chrono>
@@ -1211,18 +1212,43 @@ bool MusicPlayerService::ProcessNativeControlEvents(
     i18n::Text &statusMessage) {
   statusMessage = {};
   bool handled = false;
+  const auto restoreIdleSession = [this] {
+    std::lock_guard lock(stateMutex);
+    const auto state = native_music_player::GetState();
+    if (!state.playing) {
+      std::string ignored;
+      if (state.loaded) {
+        native_music_player::Pause(ignored);
+      } else {
+        native_music_player::Stop(ignored);
+      }
+    }
+  };
+  for (auto &error : native_music_player::DrainPlaybackErrors()) {
+    handled = true;
+    statusMessage = std::move(error);
+  }
   for (const auto event : native_music_player::DrainControlEvents()) {
     handled = true;
     switch (event) {
     case native_music_player::ControlEvent::Previous:
-      PlayPreviousAsync(statusMessage);
+      if (!PlayPreviousAsync(statusMessage)) {
+        restoreIdleSession();
+      }
       break;
     case native_music_player::ControlEvent::Next:
-      PlayNextAsync(statusMessage);
+      if (!PlayNextAsync(statusMessage)) {
+        restoreIdleSession();
+      }
       break;
     case native_music_player::ControlEvent::Finished:
-      PlayNextAsync(statusMessage, i18n::message(
-          "music_player.service.finished_next.message"));
+      if (!PlayNextAsync(statusMessage, i18n::message(
+              "music_player.service.finished_next.message"))) {
+        std::lock_guard lock(stateMutex);
+        std::string ignored;
+        native_music_player::Stop(ignored);
+        loadedTrack.reset();
+      }
       break;
     }
   }
@@ -1360,10 +1386,19 @@ bool MusicPlayerService::PlayTrackLocked(
     return false;
   }
 
+  bool playing = false;
+  ScopeExit releaseFailedSession([this, &playing] {
+    if (!playing && !native_music_player::GetState().playing) {
+      std::string ignored;
+      native_music_player::Stop(ignored);
+      loadedTrack.reset();
+    }
+  });
   StopAdjacentPreloadWorker();
   renderCancelled.store(false, std::memory_order_release);
-  lastCacheResult = chart_music_cache::EnsureRenderedMusicFile(
+  auto prepared = chart_music_cache::PrepareMusicForPlayback(
       track.representativeChart, renderCancelled, clubMode);
+  lastCacheResult = prepared.cache;
   if (!lastCacheResult.success) {
     errorMessage = lastCacheResult.message.empty()
                        ? "Could not render music track."
@@ -1377,14 +1412,16 @@ bool MusicPlayerService::PlayTrackLocked(
     metadata.durationMicros = lastCacheResult.durationMicros;
   }
 
-  if (!native_music_player::Load(lastCacheResult.audioPath, metadata,
-                                 errorMessage)) {
+  const bool loaded = prepared.stream
+      ? native_music_player::LoadStream(prepared.stream, metadata, errorMessage)
+      : native_music_player::Load(lastCacheResult.audioPath, metadata, errorMessage);
+  if (!loaded) {
     return false;
   }
   if (!native_music_player::SetPlaybackRate(playbackRate, errorMessage)) {
     return false;
   }
-  const bool playing = native_music_player::Play(errorMessage);
+  playing = native_music_player::Play(errorMessage);
   if (playing) {
     loadedTrack = track;
     if (lastCacheResult.durationMicros > 0) {
@@ -1394,7 +1431,7 @@ bool MusicPlayerService::PlayTrackLocked(
     const auto keepPaths = PlaybackCacheKeepPathsLocked(lastCacheResult);
     auto adjacentTracks = AdjacentTracksLocked();
     chart_music_cache::PruneCacheExcept(keepPaths);
-    StartAdjacentPreloadWorker(std::move(adjacentTracks), clubMode);
+    if (!prepared.stream) StartAdjacentPreloadWorker(std::move(adjacentTracks), clubMode);
     EnsureNativeControlEventPump();
   }
   return playing;
@@ -1483,10 +1520,12 @@ void MusicPlayerService::PlaybackWorker(
     return;
   }
 
+  chart_music_cache::PreparedMusic prepared;
   chart_music_cache::CacheResult cacheResult;
   try {
-    cacheResult = chart_music_cache::EnsureRenderedMusicFile(
+    prepared = chart_music_cache::PrepareMusicForPlayback(
         track.representativeChart, renderCancelled, requestedClubMode);
+    cacheResult = prepared.cache;
   } catch (const std::exception &e) {
     cacheResult = {.success = false,
                    .message = std::string("Could not render music track: ") +
@@ -1521,8 +1560,10 @@ void MusicPlayerService::PlaybackWorker(
       }
 
       std::string errorMessage;
-      if (!native_music_player::Load(cacheResult.audioPath, metadata,
-                                     errorMessage)) {
+      const bool loaded = prepared.stream
+          ? native_music_player::LoadStream(prepared.stream, metadata, errorMessage)
+          : native_music_player::Load(cacheResult.audioPath, metadata, errorMessage);
+      if (!loaded) {
         statusMessage = errorMessage;
       } else if (!native_music_player::SetPlaybackRate(playbackRate,
                                                        errorMessage)) {
@@ -1542,11 +1583,20 @@ void MusicPlayerService::PlaybackWorker(
             successMessage.empty() ? i18n::message("music_player.service.playing.message") : successMessage;
       }
     }
+    // Android keeps focus/foreground eligibility during a queue handoff.
+    // Release it when preparation/loading fails with no prior track playing.
+    if (!playing && !native_music_player::GetState().playing) {
+      std::string ignored;
+      native_music_player::Stop(ignored);
+      loadedTrack.reset();
+    }
   }
 
   if (playing) {
     chart_music_cache::PruneCacheExcept(keepCachePaths);
-    StartAdjacentPreloadWorker(std::move(adjacentTracks), requestedClubMode);
+    // Give the active stream the preparation budget; full adjacent preload is
+    // retained for cache hits, where there is no competing producer.
+    if (!prepared.stream) StartAdjacentPreloadWorker(std::move(adjacentTracks), requestedClubMode);
     EnsureNativeControlEventPump();
   }
   if (isCurrentRequest() && !statusMessage.empty()) {
@@ -1563,10 +1613,12 @@ void MusicPlayerService::ClubModeSwitchWorker(
                requestRevision;
   };
 
+  chart_music_cache::PreparedMusic prepared;
   chart_music_cache::CacheResult cacheResult;
   try {
-    cacheResult = chart_music_cache::EnsureRenderedMusicFile(
+    prepared = chart_music_cache::PrepareMusicForPlayback(
         track.representativeChart, renderCancelled, requestedClubMode);
+    cacheResult = prepared.cache;
   } catch (const std::exception &e) {
     cacheResult = {.success = false,
                    .message = std::string("Could not switch Club Beat: ") +
@@ -1598,14 +1650,21 @@ void MusicPlayerService::ClubModeSwitchWorker(
       auto metadata = music_playlist::MakeNativeMetadata(track);
       metadata.durationMicros = cacheResult.durationMicros;
       std::string errorMessage;
-      if (!native_music_player::Load(cacheResult.audioPath, metadata,
-                                     errorMessage) ||
+      const bool loaded = prepared.stream
+          ? native_music_player::LoadStream(prepared.stream, metadata, errorMessage)
+          : native_music_player::Load(cacheResult.audioPath, metadata, errorMessage);
+      if (!loaded ||
           !native_music_player::SetPlaybackRate(playbackRate, errorMessage) ||
           (previousState.positionMicros > 0 &&
            !native_music_player::Seek(previousState.positionMicros,
                                       errorMessage)) ||
           (previousState.playing && !native_music_player::Play(errorMessage))) {
         statusMessage = errorMessage;
+        if (!native_music_player::GetState().playing) {
+          std::string ignored;
+          native_music_player::Stop(ignored);
+          loadedTrack.reset();
+        }
       } else {
         clubMode = requestedClubMode;
         lastCacheResult = cacheResult;
@@ -1624,7 +1683,9 @@ void MusicPlayerService::ClubModeSwitchWorker(
 
   if (switched) {
     chart_music_cache::PruneCacheExcept(keepCachePaths);
-    StartAdjacentPreloadWorker(std::move(adjacentTracks), requestedClubMode);
+    // Give the active stream the preparation budget; full adjacent preload is
+    // retained for cache hits, where there is no competing producer.
+    if (!prepared.stream) StartAdjacentPreloadWorker(std::move(adjacentTracks), requestedClubMode);
   }
   if (isCurrentRequest() && !statusMessage.empty()) {
     PublishNativeControlStatus(statusMessage);
@@ -1827,6 +1888,7 @@ void MusicPlayerService::StopNativeControlEventPump() {
     nativeControlEventThreadStopping = true;
     nativeControlEventThread.request_stop();
     native_music_player::DrainControlEvents();
+    native_music_player::DrainPlaybackErrors();
     threadToStop = std::move(nativeControlEventThread);
   }
 

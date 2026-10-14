@@ -14,6 +14,7 @@
 #include "../CourseConstraintUtils.h"
 #include "../LongNoteModeUtils.h"
 #include "../audio/MusicPlaylist.h"
+#include "../audio/ProgressiveMusicSource.h"
 #include "../tinyfiledialogs.h"
 #include <fstream>
 #include <algorithm>
@@ -1003,6 +1004,8 @@ void MainMenuScene::onPause() {
 }
 
 void MainMenuScene::onApplicationBackgroundChanged(bool background) {
+  if (background && previewWorker_) previewWorker_->stop();
+  if (!background && selectorTabActive() && !willStart.load()) reselectCurrentChart();
   if (background && archiveUnzipModal_ != nullptr) {
     archiveUnzipModal_->cancelAndWait();
   }
@@ -1675,6 +1678,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
             return;
           }
           this->context.jukebox.stop();
+          previewPlayer_.Stop();
+          previewDecodedAssets_.reset();
         }
         SDL_Log("Parsing %s", fspath_to_utf8(meta.BmsPath).c_str());
         std::unique_ptr<bms_parser::Chart> chart;
@@ -1703,24 +1708,39 @@ void MainMenuScene::initView(ApplicationContext &context) {
           if (isCancelled()) {
             return;
           }
-          if (this->context.jukebox.hasLoadedResources()) {
-            this->context.jukebox.reloadChartResources(*chart, true, cancelled);
-          } else {
-            this->context.jukebox.loadChart(*chart, true, cancelled);
-          }
+          const auto scratch = std::filesystem::temp_directory_path() / "chart-preview";
+          previewDecodedAssets_ = std::make_shared<audio::DecodedAssetCache>(scratch);
+          const auto &audioSettings = this->context.settings.audioVideo.audio;
+          auto source = music_stream::Source::CreatePreview(
+              *chart, scratch, previewDecodedAssets_, previewStartFrame_,
+              {.bgm = audioSettings.masterVolume * audioSettings.bgmVolume,
+               .keysound = audioSettings.masterVolume * audioSettings.keysoundVolume});
           if (isCancelled()) {
+            source->Cancel();
             return;
           }
-          setSelectedChart(std::move(chart), true);
+          setSelectedChart(std::move(chart), false);
           if (isCancelled()) {
             clearSelectedChart();
             return;
           }
           if (!willStart.load()) {
-            this->context.jukebox.play();
+            previewPlayer_.SetRequest({.deviceId = audioSettings.outputDeviceId,
+                .sampleRate = audioSettings.requestedSampleRate,
+                .bufferFrames = audioSettings.requestedBufferFrames});
+            // Apply master before the source's overlap clipping, matching the
+            // gameplay mixer's headroom when several loud keysounds overlap.
+            previewPlayer_.SetGain(1.0f);
+            std::string error;
+            if (!previewPlayer_.Start(std::move(source), previewStartFrame_, error))
+              SDL_Log("Preview playback failed: %s", error.c_str());
           }
         }
-      }, [this] { stopAndClearSelectedChart(); }, kPreviewDebounceDelay);
+      }, [this] { stopAndClearSelectedChart(); }, kPreviewDebounceDelay,
+      [this] {
+        std::lock_guard lock(previewJukeboxLoadMutex);
+        previewPlayer_.Stop();
+      });
 
   auto nav = new View();
   nav->setName("mainMenuLibrary");
@@ -4686,9 +4706,27 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           previewWorker_->stop();
         }
 
+        context.jukebox.setDecodedAssetCache(previewDecodedAssets_);
+        ScopeExit releasePreparationCache([this, jukebox = &context.jukebox] {
+          jukebox->setDecodedAssetCache(nullptr);
+          if (selectedChartMediaReady.load()) previewDecodedAssets_.reset();
+        });
         bms_parser::Chart *readyChart = nullptr;
         if (canReusePreviewForStart) {
           readyChart = loadedSelectedChartForPath(record.meta.BmsPath);
+          if (readyChart == nullptr) {
+            auto *parsedChart = parsedSelectedChartForPath(record.meta.BmsPath);
+            if (parsedChart != nullptr) {
+              std::atomic_bool prepareCancelled = false;
+              const auto loaded = context.jukebox.loadChart(*parsedChart, true, prepareCancelled);
+              if (!loaded.success || prepareCancelled) {
+                SDL_Log("Preview gameplay preparation failed: %s", loaded.diagnostic.c_str());
+                return finishStart();
+              }
+              selectedChartMediaReady.store(true);
+              readyChart = parsedChart;
+            }
+          }
         }
         if (readyChart != nullptr) {
           archive_file::appendDebugLogLine(
@@ -4742,7 +4780,11 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           applyEffectiveLongNoteModeToChart(*preparedChart,
                                             selectedLongNoteMode);
           context.jukebox.stop();
-          context.jukebox.loadChart(*preparedChart, true, parseCancelled);
+          const auto loaded = context.jukebox.loadChart(*preparedChart, true, parseCancelled);
+          if (!loaded.success || parseCancelled) {
+            SDL_Log("Gameplay preparation failed: %s", loaded.diagnostic.c_str());
+            return finishStart();
+          }
           bms_parser::Chart *loadedChart = nullptr;
           if (!parseCancelled) {
             loadedChart = setSelectedChart(
@@ -7275,6 +7317,9 @@ void MainMenuScene::clearSelectedChart() {
 }
 
 void MainMenuScene::stopAndClearSelectedChart() {
+  std::lock_guard lock(previewJukeboxLoadMutex);
+  previewPlayer_.Stop();
+  previewDecodedAssets_.reset();
   context.jukebox.stop();
   clearSelectedChart();
 }
@@ -7304,6 +7349,15 @@ bms_parser::Chart *MainMenuScene::loadedSelectedChartForPath(
       fspath_to_path_t(selectedChart->Meta.BmsPath) != fspath_to_path_t(path)) {
     return nullptr;
   }
+  return selectedChart.get();
+}
+
+bms_parser::Chart *MainMenuScene::parsedSelectedChartForPath(
+    const std::filesystem::path &path) const {
+  std::lock_guard lock(selectedChartMutex);
+  if (!selectedChartReusableForStart.load() || selectedChart == nullptr ||
+      fspath_to_path_t(selectedChart->Meta.BmsPath) != fspath_to_path_t(path))
+    return nullptr;
   return selectedChart.get();
 }
 

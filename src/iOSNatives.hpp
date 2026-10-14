@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <stop_token>
 #include <string>
 #include <vector>
@@ -63,6 +64,8 @@ struct IOSNativeTextEditorConfig {
   std::size_t selectionEnd = 0;
   int fontSize = 17;
 };
+
+namespace music_stream { class Source; }
 
 struct IOSNativeMusicMetadata {
   std::string title;
@@ -196,6 +199,9 @@ bool GetIOSFileExcludedFromBackup(const std::string &filePath, bool &excluded,
                                   std::string &errorMessage);
 bool SetIOSFileExcludedFromBackup(const std::string &filePath, bool excluded,
                                   std::string &errorMessage);
+bool LoadIOSNativeMusicStream(std::shared_ptr<music_stream::Source> source,
+                              const IOSNativeMusicMetadata &metadata,
+                              std::string &errorMessage);
 bool LoadIOSNativeMusicFile(const std::string &filePath,
                             const IOSNativeMusicMetadata &metadata,
                             std::string &errorMessage);

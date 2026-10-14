@@ -76,6 +76,17 @@ public:
     }
   }
 
+  // Position by output frame without decoding or advancing through the prefix.
+  void seek(std::uint64_t outputFrame) noexcept {
+    const auto whole = outputFrame / static_cast<std::uint64_t>(denominator);
+    const auto remainder = outputFrame % static_cast<std::uint64_t>(denominator);
+    const auto fractional = remainder * static_cast<std::uint64_t>(fractionalStep);
+    fraction = static_cast<std::int64_t>(fractional % denominator);
+    const auto integralFraction = whole * fractionalStep + fractional / denominator;
+    leftFrame = static_cast<std::size_t>(std::min<std::uint64_t>(
+        lastFrame, outputFrame * wholeStep + integralFraction));
+  }
+
 private:
   const std::size_t lastFrame;
   const std::int64_t denominator;

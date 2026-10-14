@@ -1,4 +1,5 @@
 #include "audio/AudioMix.h"
+#include "audio/PcmResampler.h"
 
 #include <chrono>
 #include <iostream>
@@ -12,6 +13,17 @@ void require(bool value, const char *message) {
   if (!value) throw std::runtime_error(message);
 }
 void checkSamples() {
+  for (const auto rates : {std::pair{48000, 44100}, std::pair{22050, 44100},
+                           std::pair{44100, 44100}}) {
+    const audio::pcm_resampling::Ratio ratio(rates.first, rates.second);
+    audio::pcm_resampling::Cursor advancing(ratio, 100000);
+    for (std::uint64_t output = 0; output < 60123; ++output) advancing.advance();
+    audio::pcm_resampling::Cursor seeking(ratio, 100000);
+    seeking.seek(60123);
+    require(seeking.left() == advancing.left() && seeking.right() == advancing.right() &&
+                seeking.interpolate(-12345, 30211) == advancing.interpolate(-12345, 30211),
+            "highlight seek must preserve exact resampler phase without prefix traversal");
+  }
   // At frame 1 the source position is 147/160: -73 + 80*147/160 = +0.5.
   // Opposite stereo channels must round both exact ties away from zero.
   const std::vector<short> ties{-73, 73, 7, -7};
