@@ -308,6 +308,23 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
     persistSettings();
   });
   keysoundControls->addView(prepMetronomeModeButton);
+  keysoundControls->addView(makeWrappedText(
+      i18n::message("settings.controls.prep_metronome.max_duration.label"),
+      metrics.bodyTextSize, app_theme::textSecondary()));
+  prepMetronomeMaxDurationInput = makeNumericInput(metrics);
+  prepMetronomeMaxDurationInput->setEditingText(std::to_string(
+      context.settings.prepMetronomeMaxDurationMilliseconds));
+  prepMetronomeMaxDurationInput->onEditingFinished([this](const std::string &text) {
+    context.settings.prepMetronomeMaxDurationMilliseconds = std::max(0,
+        parseInt(text, context.settings.prepMetronomeMaxDurationMilliseconds));
+    prepMetronomeMaxDurationInput->setEditingText(std::to_string(
+        context.settings.prepMetronomeMaxDurationMilliseconds));
+    persistSettings();
+  });
+  keysoundControls->addView(makeInputFrame(metrics, prepMetronomeMaxDurationInput));
+  keysoundControls->addView(makeWrappedText(
+      i18n::message("settings.controls.prep_metronome.max_duration.message"),
+      metrics.smallTextSize, app_theme::textSecondary()));
   cardsColumn->addView(makeCard(
       metrics, i18n::message("settings.timing.input_audio.label"), i18n::message("settings.timing.choose_hit_sounds_count_in.message"),
       keysoundControls, metrics.modeCardHeight, metrics.cardsWidth));

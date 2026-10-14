@@ -402,6 +402,7 @@ void SettingsScene::cleanupScene() {
   visibleTimeModeText = nullptr;
   keysoundModeText = nullptr;
   prepMetronomeModeText = nullptr;
+  prepMetronomeMaxDurationInput = nullptr;
   startLaneIndicatorsModeText = nullptr;
   showInvisibleNotesModeText = nullptr;
   touchVisualizationModeText = nullptr;

@@ -182,6 +182,7 @@ private:
   TextView *visibleTimeModeText = nullptr;
   TextView *keysoundModeText = nullptr;
   TextView *prepMetronomeModeText = nullptr;
+  TextInputBox *prepMetronomeMaxDurationInput = nullptr;
   TextView *ipadGestureReminderModeText = nullptr;
   TextView *startLaneIndicatorsModeText = nullptr;
   TextView *showInvisibleNotesModeText = nullptr;

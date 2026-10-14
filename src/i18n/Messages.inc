@@ -1237,6 +1237,8 @@
 {"settings.controls.mark_processed_notes.disabled.label", "Disabled", "사용 안 함", "無効", "已禁用", "已停用"},
 {"settings.controls.mark_processed_notes.enabled.label", "Enabled", "사용", "有効", "已启用", "已啟用"},
 {"settings.controls.milliseconds.label", "Milliseconds", "밀리초", "ミリ秒", "毫秒", "毫秒"},
+{"settings.controls.prep_metronome.max_duration.label", "Skip prep above (ms)", "시작 메트로놈 건너뛰기 기준 (ms)", "開始メトロノームを省略する上限 (ms)", "超过此时长跳过预备拍 (ms)", "超過此時長略過預備拍 (ms)"},
+{"settings.controls.prep_metronome.max_duration.message", "Skip the prep metronome if its duration exceeds this limit. 0 = no limit.", "시작 메트로놈 길이가 이 값을 넘으면 건너뜁니다. 0 = 제한 없음.", "開始メトロノームがこの長さを超える場合は省略します。0 = 制限なし。", "预备拍时长超过此值时跳过。0 = 不限制。", "預備拍時長超過此值時略過。0 = 不限制。"},
 {"settings.controls.prep_metronome.prep_off.label", "Prep Off", "시작 메트로놈 꺼짐", "開始メトロノーム: オフ", "预备拍关闭", "預備拍關閉"},
 {"settings.controls.prep_metronome.prep_on.label", "Prep On", "시작 메트로놈 켜짐", "開始メトロノーム: オン", "预备拍开启", "預備拍開啟"},
 {"settings.controls.start_lane_indicators.hidden.label", "Hidden", "숨김", "非表示", "隐藏", "隱藏"},

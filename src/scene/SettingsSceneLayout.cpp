@@ -102,6 +102,7 @@ void SettingsScene::resetViewState() {
   visibleTimeModeText = nullptr;
   keysoundModeText = nullptr;
   prepMetronomeModeText = nullptr;
+  prepMetronomeMaxDurationInput = nullptr;
   startLaneIndicatorsModeText = nullptr;
   ipadGestureReminderModeText = nullptr;
   showInvisibleNotesModeText = nullptr;

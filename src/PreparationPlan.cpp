@@ -67,11 +67,17 @@ Plan buildNormalPlan(const bms_parser::Chart &chart, bool indicatorEnabled,
                      bool metronomeEnabled, long long playbackAnchorMicros,
                      long long noteRangeStartMicros,
                      std::optional<long long> noteRangeEndMicros,
-                     audio::PlaybackRate playback) {
+                     audio::PlaybackRate playback,
+                     int metronomeMaxDurationMilliseconds) {
   Plan result;
   result.playback = playback;
   result.metronome = prep_metronome::buildPlan(
       chart, metronomeEnabled, false, playbackAnchorMicros);
+  if (result.metronome.enabled && metronomeMaxDurationMilliseconds > 0 &&
+      playback.realMicrosFromChart(result.metronome.leadInMicros) >
+          static_cast<long long>(metronomeMaxDurationMilliseconds) * 1000) {
+    result.metronome = {};
+  }
 
   const long long indicatorEnd = result.metronome.enabled
                                      ? result.metronome.startTimeMicros

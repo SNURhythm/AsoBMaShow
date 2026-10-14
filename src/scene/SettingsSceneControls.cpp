@@ -683,6 +683,11 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
   if (keysoundModeText != nullptr) {
     keysoundModeText->setLocalizedText(keysoundLabel);
   }
+  if (syncInputs && prepMetronomeMaxDurationInput != nullptr &&
+      !prepMetronomeMaxDurationInput->getSelected()) {
+    prepMetronomeMaxDurationInput->setEditingText(std::to_string(
+        context.settings.prepMetronomeMaxDurationMilliseconds));
+  }
   if (prepMetronomeModeText != nullptr) {
     prepMetronomeModeText->setLocalizedText(prepMetronomeLabel);
   }

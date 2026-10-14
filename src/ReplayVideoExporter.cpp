@@ -4816,7 +4816,8 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   const preparation::Plan preparationPlan = preparation::buildNormalPlan(
       *chart, context.settings.startLaneIndicatorsEnabled,
       context.settings.prepMetronomeEnabled, 0, 0, std::nullopt,
-      replay.provenance.playback);
+      replay.provenance.playback,
+      context.settings.prepMetronomeMaxDurationMilliseconds);
   PreparedReplayGameplayPresentation preparedGameplay;
   GameplaySkinSessionStopOwner skinSessionStopOwner(options.stop);
   auto skinSessionStop = makeScopeExit(
@@ -5056,7 +5057,8 @@ ReplayVideoExportResult exportCourseReplayImpl(
     preparation::Plan stagePreparationPlan = preparation::buildNormalPlan(
         *chart, context.settings.startLaneIndicatorsEnabled,
         context.settings.prepMetronomeEnabled, 0, 0, std::nullopt,
-        course_rules::kRequiredPlaybackRate);
+        course_rules::kRequiredPlaybackRate,
+        context.settings.prepMetronomeMaxDurationMilliseconds);
 
     const long long resultDurationMicros =
         resolvedOptions.includeResultScreen

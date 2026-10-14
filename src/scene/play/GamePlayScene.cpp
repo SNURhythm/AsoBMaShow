@@ -3993,7 +3993,8 @@ bool GamePlayScene::reset() {
     preparationPlan = preparation::buildNormalPlan(
         *chart, context.settings.startLaneIndicatorsEnabled,
         prepMetronomeEnabled, audioSeekPosition, startPositionMicros,
-        std::nullopt, options.playback);
+        std::nullopt, options.playback,
+        context.settings.prepMetronomeMaxDurationMilliseconds);
   }
   context.jukebox.schedule(
       *chart, options.autoKeySound, isCancelled, practiceKeySoundCutoff,

@@ -46,6 +46,46 @@ void setChartTempo(bms_parser::Chart &chart, double bpm = 120.0) {
 } // namespace
 
 int main() {
+  bms_parser::Chart slowChart;
+  setChartTempo(slowChart, 30.0);
+  addNote(addTimeline(slowChart, 0), 1);
+  const auto skipped = preparation::buildNormalPlan(
+      slowChart, true, true, 0, 0, std::nullopt, {});
+  ASSERT_TRUE(!skipped.metronome.enabled && skipped.metronome.clicks.empty(),
+              "default 5000 ms cutoff skips an eight-second prep metronome");
+  ASSERT_EQ(-2000000LL, skipped.playbackStartTimeMicros,
+            "skipping metronome keeps only the lane-indicator lead-in");
+  ASSERT_EQ(0LL, skipped.laneIndicator.endTimeMicros,
+            "lane indicator ends at chart start after metronome is skipped");
+
+  const auto noIndicator = preparation::buildNormalPlan(
+      slowChart, false, true, 3000000, 0, std::nullopt, {});
+  ASSERT_EQ(3000000LL, noIndicator.playbackStartTimeMicros,
+            "skipped prep adds no silent wait before the playback anchor");
+  for (const int maximum : {0, 8000}) {
+    const auto allowed = preparation::buildNormalPlan(
+        slowChart, false, true, 0, 0, std::nullopt, {}, maximum);
+    ASSERT_TRUE(allowed.metronome.enabled,
+                "zero disables the cutoff and an exact custom limit is allowed");
+    ASSERT_EQ(-8000000LL, allowed.playbackStartTimeMicros,
+              "allowed long prep retains its full duration");
+  }
+  ASSERT_TRUE(!preparation::buildNormalPlan(
+      slowChart, false, true, 0, 0, std::nullopt, {}, 7999).metronome.enabled,
+      "custom cutoff uses milliseconds rather than rounded seconds");
+  ASSERT_TRUE(preparation::buildNormalPlan(
+      slowChart, false, true, 0, 0, std::nullopt,
+      audio::PlaybackRate{.percent = 200}).metronome.enabled,
+      "cutoff compares real playback duration at accelerated playback");
+  setChartTempo(slowChart, 48.0);
+  ASSERT_TRUE(preparation::buildNormalPlan(
+      slowChart, false, true, 0, 0, std::nullopt, {}).metronome.enabled,
+      "exactly 5000 ms is not skipped");
+  ASSERT_TRUE(!preparation::buildNormalPlan(
+      slowChart, false, true, 0, 0, std::nullopt,
+      audio::PlaybackRate{.percent = 50}).metronome.enabled,
+      "slow playback exceeding the real-time cutoff is skipped");
+
   bms_parser::Chart chart;
   setChartTempo(chart);
   addTimeline(chart, 500000);
