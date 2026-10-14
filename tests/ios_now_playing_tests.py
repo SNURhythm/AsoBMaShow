@@ -23,6 +23,158 @@ def method(source, signature):
 
 @unittest.skipUnless(sys.platform == "darwin", "requires host Foundation")
 class IOSNowPlayingTests(unittest.TestCase):
+    def test_pause_releases_audio_session_and_resume_keeps_queue(self):
+        native = (ROOT / "src/iOSNatives.mm").read_text()
+        stream = (ROOT / "src/audio/IOSMusicStream.mm").read_text()
+        pause = method(stream, "void IOSMusicStream::Pause()")
+        play = method(stream, "bool IOSMusicStream::Play(std::string &error)")
+        native_pause = method(native, "bool PauseIOSNativeMusic(std::string &errorMessage)")
+        native_play = method(native, "bool PlayIOSNativeMusic(std::string &errorMessage)")
+        activate = method(native, "bool ActivateIOSNativeMusicAudioSession(std::string &errorMessage)")
+        fixture = r'''
+#import <Foundation/Foundation.h>
+#include <cassert>
+#include <condition_variable>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <vector>
+std::vector<std::string> calls;
+bool active = true, activationSucceeds = true, deactivationSucceeds = true;
+@interface FakeEngine : NSObject
+@property BOOL running;
+- (void)pause;
+@end
+@implementation FakeEngine
+- (void)pause { calls.push_back("engine pause"); self.running = NO; }
+@end
+@interface FakePlayer : NSObject
+@property BOOL playing;
+- (void)pause;
+- (void)play;
+- (void)playImmediatelyAtRate:(float)rate;
+@end
+@implementation FakePlayer
+- (void)pause { calls.push_back("player pause"); self.playing = NO; }
+- (void)play { assert(active); calls.push_back("player play"); self.playing = YES; }
+- (void)playImmediatelyAtRate:(float)rate { [self play]; }
+@end
+FakeEngine *engine;
+#define AVAudioSession FakeAudioSession
+using AVAudioSessionSetActiveOptions = NSUInteger;
+constexpr auto AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation = 1;
+NSString *const AVAudioSessionCategoryPlayback = @"playback";
+@interface AVAudioSession : NSObject
++ (instancetype)sharedInstance;
+- (BOOL)setCategory:(NSString *)category error:(NSError **)error;
+- (BOOL)setActive:(BOOL)value error:(NSError **)error;
+- (BOOL)setActive:(BOOL)value withOptions:(AVAudioSessionSetActiveOptions)options error:(NSError **)error;
+@end
+@implementation AVAudioSession
++ (instancetype)sharedInstance { static auto session = [AVAudioSession new]; return session; }
+- (BOOL)setCategory:(NSString *)category error:(NSError **)error { return YES; }
+- (BOOL)setActive:(BOOL)value error:(NSError **)error {
+  if (!activationSucceeds) return NO;
+  active = value; calls.push_back("activate"); return YES;
+}
+- (BOOL)setActive:(BOOL)value withOptions:(AVAudioSessionSetActiveOptions)options error:(NSError **)error {
+  assert(!engine.running && "pause hardware before deactivating the session");
+  assert(!value);
+  if (!deactivationSucceeds) return NO;
+  active = value;
+  calls.push_back("deactivate");
+  return YES;
+}
+@end
+std::string NSErrorMessage(NSError *, const char *fallback) { return fallback; }
+struct Source {
+  bool rendering = true;
+  void SetRenderingEnabled(bool enabled) { rendering = enabled; }
+  void RequestSeek(int) { assert(false && "resume must preserve queued PCM"); }
+};
+class IOSMusicStream {
+public:
+  struct Impl {
+    std::mutex mutex;
+    std::condition_variable wake;
+    bool playing = true, buffering = false, ended = false;
+    std::string failure;
+    FakeEngine *engine;
+    FakePlayer *player = [FakePlayer new];
+    std::shared_ptr<Source> source = std::make_shared<Source>();
+    struct { unsigned load() { return 100; } } played;
+    struct Completion { decltype(played) played; };
+    std::shared_ptr<Completion> completion = std::make_shared<Completion>();
+    struct Timeline {
+      unsigned Queued() { return 200; }
+      bool Drained(unsigned played) { return played >= Queued(); }
+    } timeline;
+    bool StartEngine(std::string &) {
+      assert(active);
+      calls.push_back("engine start");
+      engine.running = YES;
+      return true;
+    }
+    void Reset(int) { assert(false && "pause/resume must preserve timeline"); }
+  };
+  std::unique_ptr<Impl> impl = std::make_unique<Impl>();
+  void Pause();
+  bool Play(std::string &);
+};
+PAUSE
+PLAY
+std::shared_ptr<IOSMusicStream> gIOSNativeMusicStream;
+FakePlayer *gIOSNativeMusicPlayer = nil;
+bool gIOSNativeMusicResumeAfterInterruption = true;
+id IOSNativeMusicLock() { static auto lock = [NSObject new]; return lock; }
+void UpdateIOSNativeMusicNowPlayingInfoLocked() {
+  calls.push_back("metadata");
+}
+float gIOSNativeMusicPlaybackRate = 1.0f;
+ACTIVATE
+NATIVE_PAUSE
+NATIVE_PLAY
+int main() {
+  @autoreleasepool {
+    engine = [FakeEngine new]; engine.running = YES;
+    gIOSNativeMusicStream = std::make_shared<IOSMusicStream>();
+    auto &impl = *gIOSNativeMusicStream->impl;
+    impl.engine = engine;
+    impl.player.playing = YES;
+    std::string error;
+    assert(PauseIOSNativeMusic(error));
+    assert(!impl.playing && !impl.player.playing && !engine.running);
+    assert(!impl.source->rendering && !active);
+    assert(!gIOSNativeMusicResumeAfterInterruption);
+    assert((calls == std::vector<std::string>{"player pause", "engine pause", "metadata", "deactivate"}));
+    assert(PlayIOSNativeMusic(error));
+    assert(impl.playing && impl.player.playing && engine.running && impl.source->rendering);
+    assert(!impl.buffering && impl.timeline.Queued() == 200);
+    assert((calls == std::vector<std::string>{"player pause", "engine pause", "metadata", "deactivate",
+                                            "activate", "engine start", "player play", "metadata"}));
+    deactivationSucceeds = false;
+    assert(!PauseIOSNativeMusic(error) && !error.empty());
+    assert(!impl.playing && !engine.running && !impl.source->rendering);
+    deactivationSucceeds = true;
+    assert(PauseIOSNativeMusic(error) && error.empty());
+    activationSucceeds = false;
+    assert(!PlayIOSNativeMusic(error) && !error.empty());
+    assert(!impl.playing && !engine.running && !active);
+    activationSucceeds = true;
+    assert(PlayIOSNativeMusic(error) && error.empty());
+  }
+}
+'''.replace("NATIVE_PAUSE", native_pause).replace("NATIVE_PLAY", native_play).replace("ACTIVATE", activate).replace("PAUSE", pause).replace("PLAY", play)
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            mm, executable = folder / "pause.mm", folder / "pause"
+            mm.write_text(fixture)
+            subprocess.run(["xcrun", "--sdk", "macosx", "clang++", "-std=c++20",
+                            "-fobjc-arc", "-fblocks", "-framework", "Foundation",
+                            str(mm), "-o", str(executable)], check=True)
+            result = subprocess.run([str(executable)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_finite_stream_metadata_and_remote_seek_while_buffering(self):
         source = (ROOT / "src/iOSNatives.mm").read_text()
         duration = method(source, "long long IOSNativeMusicDurationMicrosLocked()")

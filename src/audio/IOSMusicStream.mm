@@ -235,6 +235,9 @@ void IOSMusicStream::Pause() {
   std::lock_guard lock(impl->mutex);
   impl->playing = false;
   [impl->player pause];
+  // iOS derives native play/pause state from the audio hardware/session.
+  // Pausing only the node leaves the system sending pause instead of play.
+  [impl->engine pause];
   impl->source->SetRenderingEnabled(false);
   impl->wake.notify_all();
 }

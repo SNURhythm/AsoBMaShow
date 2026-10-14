@@ -669,6 +669,13 @@ void UpdateIOSNativeMusicNowPlayingInfoLocked() {
       }
     }
     center.nowPlayingInfo = info;
+    NSLog(@"[NativeMusic] Now Playing stream=%d duration=%.3f elapsed=%.3f rate=%.2f seekEnabled=%d mainThread=%d",
+          gIOSNativeMusicStream != nullptr,
+          [info[MPMediaItemPropertyPlaybackDuration] doubleValue],
+          [info[MPNowPlayingInfoPropertyElapsedPlaybackTime] doubleValue],
+          [info[MPNowPlayingInfoPropertyPlaybackRate] doubleValue],
+          [MPRemoteCommandCenter sharedCommandCenter].changePlaybackPositionCommand.enabled,
+          [NSThread isMainThread]);
     if (@available(iOS 13.0, *)) {
       center.playbackState = IOSNativeMusicIsPlayingLocked()
                                  ? MPNowPlayingPlaybackStatePlaying
@@ -768,18 +775,20 @@ void ConfigureIOSNativeMusicRemoteCommands() {
   [center.playCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(
                               MPRemoteCommandEvent *) {
     std::string errorMessage;
-    return PlayIOSNativeMusic(errorMessage)
-               ? MPRemoteCommandHandlerStatusSuccess
-               : MPRemoteCommandHandlerStatusCommandFailed;
+    const bool success = PlayIOSNativeMusic(errorMessage);
+    NSLog(@"[NativeMusic] Remote play success=%d error=%s", success, errorMessage.c_str());
+    return success ? MPRemoteCommandHandlerStatusSuccess
+                   : MPRemoteCommandHandlerStatusCommandFailed;
   }];
 
   center.pauseCommand.enabled = YES;
   [center.pauseCommand addTargetWithHandler:^MPRemoteCommandHandlerStatus(
                                MPRemoteCommandEvent *) {
     std::string errorMessage;
-    return PauseIOSNativeMusic(errorMessage)
-               ? MPRemoteCommandHandlerStatusSuccess
-               : MPRemoteCommandHandlerStatusCommandFailed;
+    const bool success = PauseIOSNativeMusic(errorMessage);
+    NSLog(@"[NativeMusic] Remote pause success=%d error=%s", success, errorMessage.c_str());
+    return success ? MPRemoteCommandHandlerStatusSuccess
+                   : MPRemoteCommandHandlerStatusCommandFailed;
   }];
 
   center.togglePlayPauseCommand.enabled = YES;
@@ -827,7 +836,7 @@ void ConfigureIOSNativeMusicRemoteCommands() {
       }];
 
   center.changePlaybackPositionCommand.enabled = YES;
-  [center.changePlaybackPositionCommand
+  id seekTarget = [center.changePlaybackPositionCommand
       addTargetWithHandler:^MPRemoteCommandHandlerStatus(
           MPRemoteCommandEvent *event) {
         if (![event
@@ -840,10 +849,14 @@ void ConfigureIOSNativeMusicRemoteCommands() {
         const long long positionMicros = static_cast<long long>(
             std::max<NSTimeInterval>(0.0, positionEvent.positionTime) *
             1000000.0);
-        return SeekIOSNativeMusic(positionMicros, errorMessage)
-                   ? MPRemoteCommandHandlerStatusSuccess
-                   : MPRemoteCommandHandlerStatusCommandFailed;
+        const bool success = SeekIOSNativeMusic(positionMicros, errorMessage);
+        NSLog(@"[NativeMusic] Remote seek target=%lld success=%d error=%s",
+              positionMicros, success, errorMessage.c_str());
+        return success ? MPRemoteCommandHandlerStatusSuccess
+                       : MPRemoteCommandHandlerStatusCommandFailed;
       }];
+  NSLog(@"[NativeMusic] Remote commands registered seekTarget=%d seekEnabled=%d mainThread=%d",
+        seekTarget != nil, center.changePlaybackPositionCommand.enabled, [NSThread isMainThread]);
 }
 
 bool WaitForWriterInput(AVAssetWriter *writer, AVAssetWriterInput *input,
@@ -5508,6 +5521,18 @@ bool PauseIOSNativeMusic(std::string &errorMessage) {
       if (gIOSNativeMusicStream) gIOSNativeMusicStream->Pause();
       [gIOSNativeMusicPlayer pause];
       UpdateIOSNativeMusicNowPlayingInfoLocked();
+      if (gIOSNativeMusicStream) {
+        // AVPlayer manages this itself; our engine must release the session
+        // after pausing hardware so Control Center offers Play again.
+        NSError *error = nil;
+        if (![[AVAudioSession sharedInstance]
+                setActive:NO
+              withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
+                    error:&error]) {
+          errorMessage = NSErrorMessage(error, "Could not deactivate music audio session");
+          return false;
+        }
+      }
       return true;
     }
   }
