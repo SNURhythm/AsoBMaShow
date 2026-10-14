@@ -45,6 +45,7 @@ struct PreviewGains {
 };
 struct Statistics {
   std::uint64_t decoderOpens = 0;
+  std::uint64_t archiveReads = 0;
 };
 
 // Listening-only source. Never decode, read files, or wait from an audio

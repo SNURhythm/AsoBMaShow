@@ -1,3 +1,6 @@
+#include "ArchiveFile.h"
+#include "ArchiveRAII.h"
+#include <archive_entry.h>
 #include "PlayOptionUtils.h"
 #include "RAII.h"
 #include "Uuid.h"
@@ -48,13 +51,18 @@ void writeWav(const std::filesystem::path &path, int rate, int channels,
     require(sf_write_short(file.get(), samples.data(), samples.size()) ==
                 static_cast<sf_count_t>(samples.size()), "could not write WAV fixture");
 }
-void writeOgg(const std::filesystem::path &path, int frames) {
+void writeOgg(const std::filesystem::path &path, int frames, bool largeHeader = false) {
   SF_INFO info{};
   info.samplerate = 44100;
   info.channels = 1;
   info.format = SF_FORMAT_OGG | SF_FORMAT_VORBIS;
   auto file = asobmashow::audio::openSoundFileHandle(path, SFM_WRITE, info);
   require(bool(file), "could not create Ogg fixture");
+  if (largeHeader) {
+    const std::string comment(70000, 'x');
+    require(sf_set_string(file.get(), SF_STR_COMMENT, comment.c_str()) == 0,
+            "could not write large Ogg metadata fixture");
+  }
   const std::array<short, 4096> samples = [] {
     std::array<short, 4096> result{};
     result.fill(12000);
@@ -286,10 +294,16 @@ void testSeekPreparesOnlyRequestedRanges(const std::filesystem::path &root) {
           "stream completion must wait until all skipped ranges are prepared");
 }
 
-void testColdSeekSkipsExpiredVorbisDecoders(const std::filesystem::path &root) {
-  const auto dir = root / "cold-vorbis-seek";
+void testColdSeekSkipsExpiredVorbisDecoders(const std::filesystem::path &root,
+                                            std::string_view archiveExtension = {},
+                                            bool largeOgg = false) {
+  const bool archived = !archiveExtension.empty();
+  const auto dir = root / ((archived ? "cold-archive-seek" + std::string(archiveExtension)
+                                    : "cold-vorbis-seek") + (largeOgg ? "-large" : ""));
   std::filesystem::create_directories(dir);
-  writeOgg(dir / "tap.ogg", 8820);
+  writeOgg(dir / "tap.ogg", 8820, largeOgg);
+  if (largeOgg) require(std::filesystem::file_size(dir / "tap.ogg") > 64U * 1024U,
+                        "large Ogg fixture must exceed the single-file probe limit");
   writeWav(dir / "first.wav", 44100, 1, std::vector<short>(44100, 3000), 65);
   const std::string digits = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
   const auto code = [&](int value) {
@@ -307,15 +321,51 @@ void testColdSeekSkipsExpiredVorbisDecoders(const std::filesystem::path &root) {
     body += "#" + number + "11:" + code(measure * 2 + 10) +
             code(measure * 2 + 11) + "\n";
   }
+  // Repeated sounds and aliases must retain the occurrence overlapping the
+  // target, even when another occurrence/alias in the same batch has expired.
+  writeWav(dir / "second.wav", 44100, 1, std::vector<short>(4410, 1000));
+  body += "#01212:" + code(60) + "\n#WAV04 tap-50.ogg\n#02513:04\n"
+          "#02012:02\n#WAV03 second.wav\n#02512:03\n";
   auto chart = chartAt(dir, body);
   const auto referencePath = dir / "reference.wav";
   require(chart_audio::RenderChartAudioToWav(*chart, referencePath).success,
           "Vorbis seek reference failed");
   const auto reference = readWav(referencePath);
+  if (archived) {
+    const auto archivePath = root / ((largeOgg ? "cold-seek-large" : "cold-seek") +
+                                     std::string(archiveExtension));
+    auto writer = makeArchiveWriteHandle();
+    const auto format = archiveExtension == ".7z" ? archive_write_set_format_7zip(writer.get())
+                                                  : archive_write_set_format_zip(writer.get());
+    require(format == ARCHIVE_OK &&
+                archive_write_open_filename(writer.get(), archivePath.string().c_str()) == ARCHIVE_OK,
+            "could not create archive fixture");
+    for (const auto &file : std::filesystem::directory_iterator(dir)) {
+      if (file.path() == referencePath) continue;
+      std::ifstream input(file.path(), std::ios::binary);
+      const std::vector<char> bytes((std::istreambuf_iterator<char>(input)), {});
+      std::unique_ptr<archive_entry, decltype(&archive_entry_free)>
+          entry(archive_entry_new(), archive_entry_free);
+      archive_entry_set_pathname(entry.get(), file.path().filename().string().c_str());
+      archive_entry_set_filetype(entry.get(), AE_IFREG);
+      archive_entry_set_perm(entry.get(), 0644);
+      archive_entry_set_size(entry.get(), bytes.size());
+      require(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK &&
+                  archive_write_data(writer.get(), bytes.data(), bytes.size()) ==
+                      static_cast<la_ssize_t>(bytes.size()) &&
+                  archive_write_finish_entry(writer.get()) == ARCHIVE_OK,
+              "could not write archived keysound fixture");
+    }
+    require(archive_write_close(writer.get()) == ARCHIVE_OK, "could not finish archive fixture");
+    std::atomic_bool cancelled{false};
+    chart = play_options::parseChart(archivePath / "chart.bms", cancelled, "archive seek test");
+    require(bool(chart), "could not parse archived chart fixture");
+  }
   auto stream = music_stream::Source::Create(std::move(chart), dir / "streams");
   waitForOpening(stream);
   stream->SetRenderingEnabled(false);
   const auto before = stream->GetStatistics().decoderOpens;
+  const auto archiveReadsBefore = stream->GetStatistics().archiveReads;
   constexpr std::uint64_t target = 50 * 44100 + 123;
   std::array<short, 1994> samples{};
   stream->ReadFrames(target, samples, 0ms);
@@ -330,6 +380,11 @@ void testColdSeekSkipsExpiredVorbisDecoders(const std::filesystem::path &root) {
           "cold Vorbis seek must preserve overlapping tails and target PCM");
   require(stream->GetStatistics().decoderOpens - before < 8,
           "cold seek must not initialize every expired Vorbis decoder in the skipped prefix");
+  if (archived) {
+    const auto reads = stream->GetStatistics().archiveReads - archiveReadsBefore;
+    require(reads > 0 && reads <= 2,
+            "cold seek must batch archived keysounds instead of repeatedly extracting a solid prefix");
+  }
   stream->SetRenderingEnabled(true);
   require(readAll(stream) == reference,
           "skipped Vorbis assets must still play correctly when seeking backward");
@@ -481,6 +536,9 @@ int main() {
     testLazyLongSource(root);
     testSeekPreparesOnlyRequestedRanges(root);
     testColdSeekSkipsExpiredVorbisDecoders(root);
+    testColdSeekSkipsExpiredVorbisDecoders(root, ".7z");
+    testColdSeekSkipsExpiredVorbisDecoders(root, ".zip");
+    testColdSeekSkipsExpiredVorbisDecoders(root, ".zip", true);
     testSeekInterruptsObsoletePreparation(root);
     testSeekWakesWaitingRead(root);
     testCancelAndPause(root);

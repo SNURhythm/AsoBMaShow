@@ -25,6 +25,7 @@
 #include <atomic>
 #include <cmath>
 #include <condition_variable>
+#include <exception>
 #include <fstream>
 #include <limits>
 #include <map>
@@ -211,8 +212,10 @@ struct Source::Impl {
   std::uint64_t activeBlockFirst = 0, activeBlockEnd = 0;
   std::atomic_bool cancelled{false};
   std::atomic<std::uint64_t> decoderOpens{0};
+  std::atomic<std::uint64_t> archiveReads{0};
   std::unordered_map<int, std::shared_ptr<Asset>> assets;
   std::unordered_map<int, std::uint64_t> durationBounds;
+  std::unordered_map<int, std::filesystem::path> stagedAssets;
   std::uint64_t useCounter = 0;
   std::jthread worker;
 
@@ -266,6 +269,97 @@ struct Source::Impl {
     if (openCount >= kMaximumOpenAssets && oldest) oldest->closeDecoder();
   }
 
+  std::optional<std::filesystem::path> stageAsset(
+      int wav, std::span<const unsigned char> encoded) {
+    const auto path = stagingDirectory / ("asset-" + std::to_string(wav));
+    std::ofstream extracted(path, std::ios::binary);
+    for (std::size_t offset = 0; offset < encoded.size();) {
+      if (!checkpoint()) return {};
+      const auto count = std::min<std::size_t>(65536, encoded.size() - offset);
+      extracted.write(reinterpret_cast<const char *>(encoded.data() + offset), count);
+      if (!extracted) throw std::runtime_error("Could not stage archived music keysound");
+      offset += count;
+    }
+    extracted.close();
+    if (!extracted) throw std::runtime_error("Could not stage archived music keysound");
+    return path;
+  }
+
+  void prepareArchivedAssets(const std::vector<Event> &events, std::size_t first,
+                             std::uint64_t blockEnd, std::uint64_t skipEnd) {
+    // The shared preview cache owns its original virtual-path identity.
+    if (decodedAssets || first >= events.size() || events[first].frame >= blockEnd) return;
+    using Requests = std::map<std::filesystem::path, std::map<int, std::uint64_t>>;
+    std::map<std::filesystem::path, Requests> archives;
+    const std::vector<std::string_view> extensions(
+        asobmshow::chart_assets::kAudioExtensions.begin(),
+        asobmshow::chart_assets::kAudioExtensions.end());
+    for (auto index = first; index < events.size() && events[index].frame < blockEnd; ++index) {
+      if (!checkpoint()) return;
+      const auto &event = events[index];
+      if (assets.contains(event.wav) || stagedAssets.contains(event.wav)) continue;
+      const auto skipBefore = skipEnd > event.frame ? skipEnd - event.frame : 0;
+      if (const auto bound = durationBounds.find(event.wav);
+          bound != durationBounds.end() && bound->second < skipBefore) continue;
+      const auto sound = chart->WavTable.find(event.wav);
+      if (sound == chart->WavTable.end()) continue;
+      const auto path = chart->Meta.Folder / utf8_to_path_t(sound->second);
+      std::filesystem::path archive, inner;
+      if (!archive_file::splitVirtualPath(path, archive, inner)) continue;
+      const auto resolved = archive_file::findFileWithExtensions(path, extensions);
+      if (!resolved || !archive_file::splitVirtualPath(*resolved, archive, inner)) continue;
+      auto &requests = archives[archive][inner];
+      const auto [request, inserted] = requests.emplace(event.wav, skipBefore);
+      if (!inserted) request->second = std::min(request->second, skipBefore);
+    }
+    for (const auto &[archive, requests] : archives) {
+      if (!checkpoint()) return;
+      // When accessing multiple files in one archive, use the existing archive
+      // index and a batch reader. Repeated single-file reads reopen ZIP central
+      // directories or replay solid decompression for each file. A single asset
+      // can continue through the existing bounded reader.
+      if (requests.size() < 2) continue;
+      std::vector<std::filesystem::path> paths;
+      for (const auto &[path, sounds] : requests) paths.push_back(path);
+      std::string error;
+      std::exception_ptr failure;
+      ++archiveReads;
+      const bool read = archive_file::readArchiveEntriesStreamingBounded(
+          archive, paths, [&](archive_file::FileData &&file) {
+            // Do not propagate C++ exceptions through archive SDK callbacks.
+            try {
+              if (!checkpoint()) return false;
+              const auto found = requests.find(file.path);
+              if (found == requests.end()) return true;
+              std::optional<std::uint64_t> bound;
+              // This batch already extracted the bytes. Probe larger keysounds
+              // without another archive read or expensive Vorbis decoder setup.
+              if (file.bytes.size() <= 1024U * 1024U) {
+                if (const auto hint = audio::duration_bound::InspectVorbis(file.bytes))
+                  bound = audio::pcm_resampling::Ratio(hint->sampleRate, kSampleRate)
+                              .outputFrames(hint->frames, kMaximumFrames);
+              }
+              std::vector<int> needed;
+              for (const auto &[wav, skipBefore] : found->second) {
+                if (bound) durationBounds.emplace(wav, *bound);
+                if (!bound || *bound >= skipBefore) needed.push_back(wav);
+              }
+              if (needed.empty()) return true;
+              const auto staged = stageAsset(needed.front(), file.bytes);
+              if (!staged) return false;
+              for (const auto wav : needed) stagedAssets.emplace(wav, *staged);
+              return true;
+            } catch (...) {
+              failure = std::current_exception();
+              return false;
+            }
+          }, kMaximumEncodedAssetBytes, &error, [this] { return checkpoint(); });
+      if (failure) std::rethrow_exception(failure);
+      if (cancelled.load() || superseded()) return;
+      if (!read) throw std::runtime_error("Could not extract music keysounds: " + error);
+    }
+  }
+
   std::shared_ptr<Asset> loadAsset(int wav, std::stop_token stop,
                                   std::uint64_t skipBefore = 0) {
     if (const auto found = assets.find(wav); found != assets.end()) return found->second;
@@ -288,8 +382,11 @@ struct Source::Impl {
       const std::vector<std::string_view> extensions(
           asobmshow::chart_assets::kAudioExtensions.begin(),
           asobmshow::chart_assets::kAudioExtensions.end());
-      const auto resolved = archive_file::findFileWithExtensions(
-          chart->Meta.Folder / utf8_to_path_t(found->second), extensions);
+      const auto staged = stagedAssets.find(wav);
+      const auto resolved = staged != stagedAssets.end()
+          ? std::optional(staged->second)
+          : archive_file::findFileWithExtensions(
+                chart->Meta.Folder / utf8_to_path_t(found->second), extensions);
       if (!resolved) return assets.emplace(wav, nullptr).first->second;
       asset->path = *resolved;
       // A cold seek need not build Vorbis codebooks for every earlier tap.
@@ -301,6 +398,7 @@ struct Source::Impl {
             [](unsigned char c) { return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c; });
         if (extension == ".ogg") {
           std::vector<unsigned char> encoded;
+          if (archive_file::isVirtualPath(asset->path)) ++archiveReads;
           if (archive_file::readFileBoundedWithCheckpoint(
                   asset->path, encoded, 64U * 1024U, nullptr, stop,
                   [this] { return checkpoint(); })) {
@@ -333,6 +431,7 @@ struct Source::Impl {
       }
       std::filesystem::path archive, inner;
       if (archive_file::splitVirtualPath(asset->path, archive, inner)) {
+        ++archiveReads;
         std::vector<unsigned char> encoded;
         std::string error;
         if (!archive_file::readFileBoundedWithCheckpoint(
@@ -341,17 +440,10 @@ struct Source::Impl {
           if (cancelled.load() || superseded()) return {};
           throw std::runtime_error("Could not extract music keysound: " + error);
         }
-        asset->path = stagingDirectory / ("asset-" + std::to_string(wav));
-        std::ofstream extracted(asset->path, std::ios::binary);
-        for (std::size_t offset = 0; offset < encoded.size();) {
-          if (!checkpoint()) return {};
-          const auto count = std::min<std::size_t>(65536, encoded.size() - offset);
-          extracted.write(reinterpret_cast<const char *>(encoded.data() + offset), count);
-          if (!extracted) throw std::runtime_error("Could not stage archived music keysound");
-          offset += count;
-        }
-        extracted.close();
-        if (!extracted) throw std::runtime_error("Could not stage archived music keysound");
+        const auto path = stageAsset(wav, encoded);
+        if (!path) return {};
+        asset->path = *path;
+        stagedAssets.emplace(wav, *path);
       }
       makeRoom(asset);
       if (!asset->open()) {
@@ -460,6 +552,9 @@ struct Source::Impl {
         activeBlockFirst = position;
         activeBlockEnd = blockEnd;
       }
+      prepareArchivedAssets(events, eventIndex, blockEnd, std::min(position, totalFrames));
+      if (cancelled.load()) return;
+      if (discardObsoleteBlock()) continue;
       while (eventIndex < events.size() && events[eventIndex].frame < blockEnd) {
         if (!checkpoint()) break;
         const auto event = events[eventIndex++];
@@ -700,7 +795,8 @@ State Source::GetState() const {
   return impl->state;
 }
 Statistics Source::GetStatistics() const {
-  return {.decoderOpens = impl->decoderOpens.load()};
+  return {.decoderOpens = impl->decoderOpens.load(),
+          .archiveReads = impl->archiveReads.load()};
 }
 void Source::RequestSeek(std::uint64_t firstFrame) {
   {
