@@ -1486,9 +1486,17 @@ bms_parser::ChartMeta courseResultMetaForReplayVideo(
   const auto chartCount = replay.entryFacts.empty()
                               ? stages.size()
                               : replay.entryFacts.size();
+  std::vector<int> keyModes;
+  keyModes.reserve(stages.size());
+  for (const auto &stage : stages) {
+    keyModes.push_back(stage.chart != nullptr ? stage.chart->Meta.KeyMode : 0);
+  }
+  if (replay.totalCharts > static_cast<int>(keyModes.size())) {
+    keyModes.clear();
+  }
   auto meta = result_presentation::courseResultMeta(
       replay.courseName, replay.courseGroupName, chartCount, totalNotes,
-      playLength);
+      playLength, keyModes);
   if (!stages.empty() && stages.back().chart != nullptr) {
     const auto &lastMeta = stages.back().chart->Meta;
     meta.Bpm = lastMeta.Bpm;

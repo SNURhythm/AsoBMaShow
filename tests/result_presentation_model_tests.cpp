@@ -575,6 +575,16 @@ void testLocalFailedFullComboAndCourseOverrides() {
   expect(courseFinal.difficulty == "COURSE" && courseFinal.lampComparison &&
              courseFinal.lampComparison->current.value == "FULL COMBO",
          "saved course final keeps course header and final lamp");
+  const auto uniformRoot = buildPresentationLayout(courseFinal);
+  const auto *keyModeText = textView(uniformRoot.get(), "playtype");
+  expect(keyModeText && keyModeText->getText() == "7K1S",
+         "uniform course renders its keymode in the result header");
+  auto mixedMeta = meta;
+  mixedMeta.KeyMode = 0;
+  const auto mixed = makeLocalResultPresentation(mixedMeta, localState(), options);
+  const auto mixedRoot = buildPresentationLayout(mixed);
+  expect(!mixed.playtype && !mixedRoot->findViewByName("playtype"),
+         "mixed course omits the keymode header instead of showing a fallback");
 }
 
 void testFullyPopulatedRemotePresentation() {

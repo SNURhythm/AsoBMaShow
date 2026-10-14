@@ -247,8 +247,15 @@ inline std::string difficultyLabelForChart(
 
 inline bms_parser::ChartMeta courseResultMeta(
     const std::string &courseName, const std::string &courseGroupName,
-    std::size_t chartCount, int totalNotes, long long playLength) {
+    std::size_t chartCount, int totalNotes, long long playLength,
+    const std::vector<int> &keyModes) {
   bms_parser::ChartMeta meta;
+  // An aggregate has a keymode only when every course entry agrees.
+  meta.KeyMode = !keyModes.empty() && keyModes.size() == chartCount &&
+                         std::all_of(keyModes.begin(), keyModes.end(),
+                                     [&](int mode) { return mode == keyModes.front(); })
+                     ? keyModes.front() : 0;
+  meta.IsDP = meta.KeyMode == 10 || meta.KeyMode == 14;
   meta.Title = courseName.empty() ? i18n::tr("result.course.course_result.label") : courseName;
   meta.Artist = courseGroupName.empty() ? i18n::tr("result.course.course_mode.label") : courseGroupName;
   meta.TotalNotes = totalNotes;

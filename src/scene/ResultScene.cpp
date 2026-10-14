@@ -411,9 +411,12 @@ long long totalPlayLengthForCourse(const CoursePlaySession &session) {
 
 bms_parser::ChartMeta
 courseResultMetaForSession(const CoursePlaySession &session) {
+  std::vector<int> keyModes;
+  keyModes.reserve(session.entries.size());
+  for (const auto &entry : session.entries) keyModes.push_back(entry.meta.KeyMode);
   auto meta = result_presentation::courseResultMeta(
       session.courseName, session.courseGroupName, session.entries.size(),
-      totalNotesForCourse(session), totalPlayLengthForCourse(session));
+      totalNotesForCourse(session), totalPlayLengthForCourse(session), keyModes);
   meta.LnMode = normalizeChartLongNoteModeValue(session.longNoteMode);
   if (const auto *currentMeta = session.currentMeta(); currentMeta != nullptr) {
     // CourseResult keeps the current SongData for chart properties.
