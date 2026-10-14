@@ -4741,20 +4741,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(audio_video_settings_tests PRIVATE shell32 ole32)
     endif()
 
-    set(_chart_audio_fixture ${CMAKE_CURRENT_BINARY_DIR}/chart_audio_renderer_fixture.cpp)
-    add_custom_command(
-        OUTPUT ${_chart_audio_fixture}
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/chart_audio_renderer_extract.py
-                ${CMAKE_SOURCE_DIR} ${_chart_audio_fixture}
-        DEPENDS tests/chart_audio_renderer_extract.py tests/chart_audio_renderer_tests.cpp
-                src/audio/MusicPlayerService.cpp
-        VERBATIM
-    )
     add_executable(chart_audio_renderer_tests
-        ${_chart_audio_fixture}
+        tests/chart_audio_renderer_tests.cpp
         src/AtomicFile.cpp
         src/audio/ChartAudioRenderer.cpp
-        src/audio/ChartMusicCache.cpp
+        src/audio/MusicPreparation.cpp
         src/audio/ProgressiveMusicSource.cpp
         src/audio/DecodedAssetCache.cpp
         src/audio/ClubBeat.cpp
@@ -4795,7 +4786,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
 
     get_target_property(PROGRESSIVE_MUSIC_TEST_SOURCES chart_audio_renderer_tests SOURCES)
-    list(REMOVE_ITEM PROGRESSIVE_MUSIC_TEST_SOURCES ${_chart_audio_fixture})
+    list(REMOVE_ITEM PROGRESSIVE_MUSIC_TEST_SOURCES tests/chart_audio_renderer_tests.cpp)
     add_executable(progressive_music_source_tests
         tests/progressive_music_source_tests.cpp ${PROGRESSIVE_MUSIC_TEST_SOURCES})
     target_include_directories(progressive_music_source_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)

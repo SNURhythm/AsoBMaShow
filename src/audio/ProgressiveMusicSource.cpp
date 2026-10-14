@@ -1,7 +1,6 @@
 #include "ProgressiveMusicSource.h"
 
 #include "../ArchiveFile.h"
-#include "../AtomicFile.h"
 #include "../ChartPlaybackDuration.h"
 #include "../ThreadCompat.h"
 #include "../Uuid.h"
@@ -27,6 +26,7 @@
 #include <condition_variable>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <stdexcept>
 #include <unordered_map>
@@ -183,7 +183,7 @@ struct Voice {
 
 struct Source::Impl {
   std::unique_ptr<bms_parser::Chart> chart;
-  std::filesystem::path cachePath;
+  std::filesystem::path stagingParent;
   std::filesystem::path stagingDirectory;
   std::filesystem::path readPath;
   bool clubMode = false;
@@ -195,12 +195,44 @@ struct Source::Impl {
   mutable std::mutex mutex;
   std::condition_variable changed;
   State state;
+  // Only these intervals contain published PCM. The spool may be sparse after
+  // a seek; its holes must never be read or published as a complete song.
+  std::map<std::uint64_t, std::uint64_t> preparedRanges;
+  bool endKnown = false;
   bool enabled = true;
   std::uint64_t requestedFrame = 0;
   std::atomic_bool cancelled{false};
   std::unordered_map<int, std::shared_ptr<Asset>> assets;
   std::uint64_t useCounter = 0;
   std::jthread worker;
+
+  // Caller holds mutex. A missing frame has an empty prepared range.
+  std::uint64_t preparedEnd(std::uint64_t frame) const {
+    auto next = preparedRanges.upper_bound(frame);
+    if (next != preparedRanges.begin()) {
+      const auto previous = std::prev(next);
+      if (frame < previous->second) return previous->second;
+    }
+    return frame;
+  }
+
+  void publishRange(std::uint64_t first, std::uint64_t last) {
+    auto next = preparedRanges.lower_bound(first);
+    if (next != preparedRanges.begin()) {
+      auto previous = std::prev(next);
+      if (previous->second >= first) {
+        first = previous->first;
+        last = std::max(last, previous->second);
+        next = preparedRanges.erase(previous);
+      }
+    }
+    while (next != preparedRanges.end() && next->first <= last) {
+      last = std::max(last, next->second);
+      next = preparedRanges.erase(next);
+    }
+    preparedRanges.emplace(first, last);
+    state.availableFrames = preparedEnd(firstFrame);
+  }
 
   bool checkpoint() {
     std::unique_lock lock(mutex);
@@ -326,8 +358,8 @@ struct Source::Impl {
       return a.frame < b.frame;
     });
     if (!checkpoint()) return;
-    std::filesystem::create_directories(cachePath.parent_path());
-    stagingDirectory = cachePath.parent_path() / (".music-stream-" + uuid::generateV4());
+    std::filesystem::create_directories(stagingParent);
+    stagingDirectory = stagingParent / (".music-stream-" + uuid::generateV4());
     if (!std::filesystem::create_directory(stagingDirectory))
       throw std::runtime_error("Could not create music stream staging directory");
     const auto partialPath = stagingDirectory / "audio.wav";
@@ -346,20 +378,33 @@ struct Source::Impl {
     std::array<char, kBlockFrames * kChannels * sizeof(short)> pcm{};
     std::size_t eventIndex = 0;
     std::uint64_t position = firstFrame;
-    while (position < totalFrames || eventIndex < events.size()) {
+    if (!events.empty()) totalFrames = std::max(totalFrames, events.back().frame + 1);
+    for (;;) {
+      std::uint64_t blockEnd;
       {
         std::unique_lock lock(mutex);
         changed.wait(lock, [&] {
-          return cancelled.load() || (enabled &&
-              position < requestedFrame + kReadAheadFrames);
+          if (cancelled.load() || (endKnown && state.availableFrames >= totalFrames))
+            return true;
+          if (!enabled) return false;
+          const auto next = preparedEnd(requestedFrame);
+          return (!endKnown || next < totalFrames) &&
+                 next < requestedFrame + kReadAheadFrames;
         });
         if (cancelled.load()) return;
+        if (endKnown && state.availableFrames >= totalFrames) break;
+        const auto next = preparedEnd(requestedFrame);
+        if (position != next) {
+          position = next;
+          voices.clear();
+          eventIndex = 0;
+        }
+        blockEnd = std::min<std::uint64_t>(position + kBlockFrames, kMaximumFrames);
+        // Stop at the next prepared interval, avoiding writes over PCM that a
+        // reader may currently be consuming on another thread.
+        const auto following = preparedRanges.upper_bound(position);
+        if (following != preparedRanges.end()) blockEnd = std::min(blockEnd, following->first);
       }
-      // Include future event positions even if incomplete chart metadata ends earlier.
-      if (eventIndex < events.size())
-        totalFrames = std::max(totalFrames, events[eventIndex].frame + 1);
-      const auto blockEnd = std::min<std::uint64_t>(position + kBlockFrames, kMaximumFrames);
-      if (blockEnd <= position) throw std::runtime_error("Music stream exceeded WAV frame limit");
       while (eventIndex < events.size() && events[eventIndex].frame < blockEnd) {
         if (!checkpoint()) return;
         const auto event = events[eventIndex++];
@@ -377,6 +422,14 @@ struct Source::Impl {
         voice->cursor.seek(position > event.frame ? position - event.frame : 0);
         voices.push_back(std::move(voice));
       }
+      if (position >= totalFrames && eventIndex == events.size()) {
+        std::lock_guard lock(mutex);
+        endKnown = true;
+        state.durationFrames = totalFrames;
+        changed.notify_all();
+        continue;
+      }
+      if (blockEnd <= position) throw std::runtime_error("Music stream exceeded WAV frame limit");
       // Match the full renderer's accumulation order (all chart voices, then
       // Club Beat), independently of which block first activates each voice.
       std::sort(voices.begin(), voices.end(), [](const auto &a, const auto &b) {
@@ -423,40 +476,29 @@ struct Source::Impl {
         pcm[i * 2] = static_cast<char>(sample & 0xff);
         pcm[i * 2 + 1] = static_cast<char>(sample >> 8);
       }
+      output.seekp(static_cast<std::streamoff>(44 + (position - firstFrame) * 4));
       output.write(pcm.data(), samples * sizeof(short));
       output.flush();
       if (!output) throw std::runtime_error("Could not write music stream audio");
-      position = end;
       {
         std::lock_guard lock(mutex);
-        state.availableFrames = position;
+        publishRange(position, end);
         state.durationFrames = totalFrames;
+        endKnown = endKnown || eventIndex == events.size();
       }
+      position = end;
       changed.notify_all();
     }
-    const auto finalHeader = wavHeader(position - firstFrame);
+    const auto finalHeader = wavHeader(totalFrames - firstFrame);
     output.seekp(0);
     output.write(finalHeader.data(), finalHeader.size());
     output.close();
-    if (!output) throw std::runtime_error("Could not finalize music cache");
-    // Keep the spool path stable for readers. A hard link normally publishes
-    // without copying audio; filesystems without links use a completed copy.
-    // Bulk storage work holds no control mutex; only the final atomic rename
-    // is serialized with cancellation so a cancelled render cannot publish.
-    const auto publishPath = stagingDirectory / "complete.wav";
-    if (!preview) {
-      std::error_code linkError;
-      std::filesystem::create_hard_link(partialPath, publishPath, linkError);
-      if (linkError) std::filesystem::copy_file(partialPath, publishPath);
-    }
+    if (!output) throw std::runtime_error("Could not finalize music stream");
     {
       std::lock_guard lock(mutex);
       if (cancelled.load()) return;
-      std::string error;
-      if (!preview && !atomic_file::defaultOperations().replace(publishPath, cachePath, error))
-        throw std::runtime_error("Could not publish music cache: " + error);
       state.complete = true;
-      state.durationFrames = position;
+      state.durationFrames = totalFrames;
     }
     changed.notify_all();
     assets.clear();
@@ -480,14 +522,16 @@ Source::Source(std::unique_ptr<Impl> value) : impl(std::move(value)) {}
 Source::~Source() {
   Cancel();
   if (impl->worker.joinable()) impl->worker.join();
+  // Close extracted-asset decoders before removing their files (required on Windows).
+  impl->assets.clear();
   std::error_code ignored;
   if (!impl->stagingDirectory.empty()) std::filesystem::remove_all(impl->stagingDirectory, ignored);
 }
 std::shared_ptr<Source> Source::Create(std::unique_ptr<bms_parser::Chart> chart,
-                                     std::filesystem::path cachePath, bool clubMode) {
+                                     std::filesystem::path stagingParent, bool clubMode) {
   auto impl = std::make_unique<Impl>();
   impl->chart = std::move(chart);
-  impl->cachePath = std::move(cachePath);
+  impl->stagingParent = std::move(stagingParent);
   impl->clubMode = clubMode;
   auto source = std::shared_ptr<Source>(new Source(std::move(impl)));
   source->impl->worker = std::jthread([state = source->impl.get()](std::stop_token stop) {
@@ -521,7 +565,7 @@ std::shared_ptr<Source> Source::CreatePreview(
                                   event.wav, impl->previewEvents.size(),
                                   isBackground ? gains.bgm : gains.keysound});
   }
-  impl->cachePath = std::move(stagingParent) / "unused-preview.wav";
+  impl->stagingParent = std::move(stagingParent);
   impl->decodedAssets = std::move(decodedAssets);
   auto source = std::shared_ptr<Source>(new Source(std::move(impl)));
   source->impl->worker = std::jthread([state = source->impl.get()](std::stop_token stop) {
@@ -538,16 +582,24 @@ ReadResult Source::ReadFrames(std::uint64_t firstFrame, std::span<short> interle
     return {.status = ReadStatus::Error, .error = "Requested audio precedes preview range"};
   impl->requestedFrame = std::min(firstFrame, kMaximumFrames);
   impl->changed.notify_all();
+  const auto atEnd = [&] {
+    // A sought suffix can end while earlier ranges remain missing. When all
+    // ranges exist, wait for spool finalization before reporting EOF.
+    return impl->state.complete || (impl->endKnown &&
+        firstFrame >= impl->state.durationFrames &&
+        impl->state.availableFrames < impl->state.durationFrames);
+  };
   impl->changed.wait_for(lock, std::max(wait, std::chrono::milliseconds::zero()), [&] {
     return impl->state.cancelled || !impl->state.error.empty() ||
-           impl->state.complete || impl->state.availableFrames > firstFrame;
+           atEnd() || impl->preparedEnd(firstFrame) > firstFrame;
   });
   if (impl->state.cancelled) return {.status = ReadStatus::Cancelled};
   if (!impl->state.error.empty()) return {.status = ReadStatus::Error, .error = impl->state.error};
-  if (firstFrame >= impl->state.availableFrames)
-    return {.status = impl->state.complete ? ReadStatus::End : ReadStatus::Pending};
+  const auto availableEnd = impl->preparedEnd(firstFrame);
+  if (firstFrame >= availableEnd)
+    return {.status = atEnd() ? ReadStatus::End : ReadStatus::Pending};
   const auto frames = static_cast<std::size_t>(std::min<std::uint64_t>(
-      interleaved.size() / kChannels, impl->state.availableFrames - firstFrame));
+      interleaved.size() / kChannels, availableEnd - firstFrame));
   const auto path = impl->readPath;
   lock.unlock();
   std::ifstream input(path, std::ios::binary);

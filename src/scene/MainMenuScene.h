@@ -127,7 +127,7 @@ private:
   void buildTutorial();
   std::optional<ChartRepository::Session> chartSession;
   std::atomic_bool willStart = false;
-  std::unique_ptr<bms_parser::Chart> selectedChart;
+  std::shared_ptr<bms_parser::Chart> selectedChart;
   mutable std::mutex selectedChartMutex;
   std::atomic_bool selectedChartMediaReady = false;
   std::atomic_bool selectedChartReusableForStart = false;
@@ -139,6 +139,9 @@ private:
   std::shared_ptr<audio::DecodedAssetCache> previewDecodedAssets_;
   // Explicit chart position; future highlight selection supplies this value.
   std::uint64_t previewStartFrame_ = 0;
+  void updatePreviewVisuals();
+  // Guarded by previewJukeboxLoadMutex; full gameplay owns visuals after stop.
+  bool previewVisualsLoaded_ = false;
   std::mutex previewJukeboxLoadMutex;
   std::unique_ptr<MainMenuPreviewController> previewWorker_;
   ReplayRecordTask replayLoadTask_;
@@ -488,7 +491,7 @@ private:
   bool currentLongNoteModeSelectionAllowed(const std::string &mode) const;
   void refreshReadySettingsSummary();
   void refreshSelectedChartDetails();
-  bms_parser::Chart *setSelectedChart(std::unique_ptr<bms_parser::Chart> chart,
+  bms_parser::Chart *setSelectedChart(std::shared_ptr<bms_parser::Chart> chart,
                                       bool mediaReady,
                                       bool reusableForStart = true);
   void clearSelectedChart();

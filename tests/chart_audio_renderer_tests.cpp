@@ -3,11 +3,13 @@
 #include "Uuid.h"
 #include "targets.h"
 #include "audio/ChartAudioRenderer.h"
-#include "audio/ChartMusicCache.h"
+#include "audio/MusicPreparation.h"
+#include "audio/ProgressiveMusicSource.h"
+#include "Utils.h"
 #include "audio/ClubBeat.h"
-#include "audio/MusicPlaylist.h"
 #include "audio/SoundFileIO.h"
 
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <chrono>
@@ -46,18 +48,6 @@ void *operator new(std::size_t bytes) {
 
 void operator delete(void *memory) noexcept { std::free(memory); }
 void operator delete(void *memory, std::size_t) noexcept { std::free(memory); }
-
-class MusicPlayerService {
-public:
-  std::atomic<std::uint64_t> preloadRequestRevision{1};
-  std::atomic_bool preloadCancelled{false};
-  void AdjacentPreloadWorker(std::vector<music_playlist::MusicTrack> tracks,
-                             std::uint64_t preloadRevision,
-                             bool requestedClubMode,
-                             const std::stop_token &stopToken);
-};
-
-ASOBMS_ADJACENT_PRELOAD_METHOD
 
 namespace {
 int failures = 0;
@@ -369,19 +359,6 @@ void testSelectedLargeRender(const std::filesystem::path &root) {
              allocationFailure.message.find("memory") != std::string::npos &&
              readText(output) == "preserved output",
          "selected allocation failure is reported and preserves existing output");
-
-  cancelled.store(false);
-  reachedWriteBoundary = false;
-  const auto cache = chart_music_cache::EnsureRenderedMusicFile(
-      *chart, cancelled, [&](const std::string &message) {
-        if (message.starts_with("Chart audio duration:")) {
-          reachedWriteBoundary = true;
-          cancelled.store(true);
-        }
-      });
-  expect(reachedWriteBoundary && !cache.success &&
-             !std::filesystem::exists(cache.audioPath),
-         "foreground music cache admits the same large chart and cleans cancellation");
 }
 
 void testSelectedHighMixWork(const std::filesystem::path &root) {
@@ -401,12 +378,14 @@ void testSelectedHighMixWork(const std::filesystem::path &root) {
          "high cumulative work retains the full two-second decoded tail");
   std::atomic_bool cancelled{false};
   AllocationGuard guard;
-  const auto background = chart_music_cache::EnsureRenderedMusicFile(
-      *chart, cancelled, false, {}, chart_music_cache::RenderPolicy::AdjacentPreload);
-  expect(!background.success &&
-             background.message.find("work limit") != std::string::npos &&
-             !std::filesystem::exists(background.audioPath),
-         "background music cache retains its cumulative mixing work quota");
+  const auto limitedOutput = chart->Meta.Folder / "limited.wav";
+  const auto limited = chart_audio::RenderChartAudioToWav(
+      *chart, limitedOutput, {.isCancelled = &cancelled,
+                             .maxMixedFrames = 44100U * 60U * 60U});
+  expect(!limited.success &&
+             limited.message.find("work limit") != std::string::npos &&
+             !std::filesystem::exists(limitedOutput),
+         "explicit renderer work budgets reject excessive cumulative mixing");
 }
 
 void testSelectedLargeClubPlan(const std::filesystem::path &root) {
@@ -433,13 +412,15 @@ void testSelectedLargeClubPlan(const std::filesystem::path &root) {
          "cancelled club planning stops before producing events");
   cancelled.store(false);
   AllocationGuard guard;
-  const auto background = chart_music_cache::EnsureRenderedMusicFile(
-      *chart, cancelled, true, {}, chart_music_cache::RenderPolicy::AdjacentPreload);
-  expect(!background.success &&
-             background.message.find("plan limit") != std::string::npos &&
+  const auto limitedOutput = chart->Meta.Folder / "limited.wav";
+  const auto limited = chart_audio::RenderChartAudioToWav(
+      *chart, limitedOutput, {.clubMode = true, .isCancelled = &cancelled,
+                             .maxClubBeats = 100000});
+  expect(!limited.success &&
+             limited.message.find("plan limit") != std::string::npos &&
              audio_allocation_guard::rejected == 0 &&
-             !std::filesystem::exists(background.audioPath),
-         "background music cache retains its club-plan quota without allocation");
+             !std::filesystem::exists(limitedOutput),
+         "explicit renderer club-plan budgets reject excess beats before allocation");
 }
 
 void testOverflowScaleMetadata(const std::filesystem::path &root) {
@@ -695,8 +676,8 @@ void testGeneratedSoundBudget(const std::filesystem::path &root) {
   expect(!guardedRender(*chart, output, options).success,
          "generated sounds share the cumulative keysound work limit");
   chart->Measures.front()->Scale = 25001;
-  options.maxMixedFrames = chart_audio::kAdjacentPreloadMaxMixedFrames;
-  options.maxClubBeats = chart_audio::kAdjacentPreloadMaxClubBeats;
+  options.maxMixedFrames = 44100U * 60U * 60U;
+  options.maxClubBeats = 100000;
   const auto result = guardedRender(*chart, output, options);
   expect(!result.success && result.message.find("plan limit") != std::string::npos &&
              audio_allocation_guard::rejected == 0,
@@ -710,36 +691,63 @@ void testGeneratedSoundBudget(const std::filesystem::path &root) {
          "unrepresentable club beat numbers fail before allocation or integer overflow");
 }
 
-#if !TARGET_OS_WINDOWS
-void testAdjacentPreloadRejectsAndContinues(const std::filesystem::path &root) {
-  auto oversized = chartFixture(root, "preload-oversized", "0.5");
-  auto normal = chartFixture(root, "preload-normal");
-  const auto oversizedPath = chart_music_cache::CachedAudioPathForChart(oversized->Meta);
-  const auto normalPath = chart_music_cache::CachedAudioPathForChart(normal->Meta);
-  music_playlist::MusicTrack first;
-  first.representativeChart = oversized->Meta;
-  music_playlist::MusicTrack second;
-  second.representativeChart = normal->Meta;
-  MusicPlayerService service;
-  {
-    AllocationGuard guard;
-    service.AdjacentPreloadWorker({first, second}, 1, false, {});
+void testLegacyMusicCacheCleanup(const std::filesystem::path &root) {
+  const auto cache = root / "old-music-cache";
+  const auto exports = root / "exports";
+  std::filesystem::create_directories(cache / ".music-stream-old");
+  std::filesystem::create_directories(cache / "unrecognized-directory");
+  std::filesystem::create_directories(exports);
+  writeText(cache / "song.wav", "old full-song cache");
+  writeText(cache / "song.WAV", "old full-song cache");
+  writeText(cache / "song.wav.tmp", "old incomplete render");
+  writeText(cache / ".music-stream-old" / "audio.wav", "old stream spool");
+  writeText(cache / "notes.txt", "preserve unknown files");
+  writeText(cache / "unrecognized-directory" / "keep.wav", "preserve unknown subtree");
+  writeText(exports / "song.wav", "explicit export");
+  std::error_code error;
+  std::filesystem::create_directory_symlink(exports, cache / ".music-stream-link", error);
+  const bool linked = !error;
+  music_preparation::RemoveLegacyMusicCacheFiles(cache);
+  expect(!std::filesystem::exists(cache / "song.wav") &&
+             !std::filesystem::exists(cache / "song.WAV") &&
+             !std::filesystem::exists(cache / "song.wav.tmp") &&
+             !std::filesystem::exists(cache / ".music-stream-old"),
+         "legacy cleanup removes cached WAV, partial output, and old private stream directories");
+  expect(readText(exports / "song.wav") == "explicit export" &&
+             readText(cache / "notes.txt") == "preserve unknown files" &&
+             readText(cache / "unrecognized-directory" / "keep.wav") == "preserve unknown subtree",
+         "legacy cleanup preserves exports and unrecognized entries");
+  if (linked) {
+    expect(std::filesystem::is_symlink(cache / ".music-stream-link"),
+           "legacy cleanup does not follow or remove symbolic links");
+    music_preparation::RemoveLegacyMusicCacheFiles(cache / ".music-stream-link");
+    expect(readText(exports / "song.wav") == "explicit export",
+           "legacy cleanup refuses a symlink as its root");
   }
-  expect(audio_allocation_guard::rejected == 0,
-         "actual adjacent preload rejects before attempting huge allocations");
-  expect(!std::filesystem::exists(oversizedPath) &&
-             !std::filesystem::exists(oversizedPath.string() + ".tmp"),
-         "failed actual cache render leaves no output or owned partial file");
-  expect(std::filesystem::is_regular_file(normalPath),
-         "adjacent worker continues to the next valid real chart");
-  auto cancelled = chartFixture(root, "preload-cancelled", "0.001");
-  first.representativeChart = cancelled->Meta;
-  const auto cancelledPath = chart_music_cache::CachedAudioPathForChart(cancelled->Meta);
-  service.preloadCancelled.store(true);
-  service.AdjacentPreloadWorker({first}, 1, false, {});
-  expect(!std::filesystem::exists(cancelledPath) &&
-             !std::filesystem::exists(cancelledPath.string() + ".tmp"),
-         "cancelled adjacent parsing does not publish cache artifacts");
+  music_preparation::RemoveLegacyMusicCacheFiles(root / "missing-cache");
+}
+
+#if !TARGET_OS_WINDOWS
+void testShortMusicPreparationAlwaysStreams(const std::filesystem::path &root) {
+  // HOME is redirected by main, so migration cleanup cannot touch a real user cache.
+  const auto cache = Utils::GetDocumentsPath("music_cache");
+  std::filesystem::create_directories(cache);
+  writeText(cache / "old.wav", "retired cache");
+  auto chart = chartFixture(root, "short-stream", "1200");
+  std::atomic_bool cancelled{false};
+  auto prepared = music_preparation::PrepareMusicForPlayback(chart->Meta, cancelled, false);
+  expect(prepared.success && prepared.stream != nullptr,
+         "a fully prepared short song remains a stream instead of a persistent WAV");
+  expect(!std::filesystem::exists(cache),
+         "music preparation removes the old cache instead of recreating it");
+  if (prepared.stream) {
+    expect(prepared.stream->GetState().complete && prepared.durationMicros == 200000,
+           "short source completes before the half-second opening threshold");
+    std::array<short, 2> samples{};
+    const auto read = prepared.stream->ReadFrames(0, samples, std::chrono::milliseconds(100));
+    expect(read.frames == 1 && samples[0] > 11000 && samples[0] == samples[1],
+           "fully prepared short stream retains its playable PCM after preparation returns");
+  }
 }
 #endif
 }
@@ -786,8 +794,9 @@ int main(int argc, char **argv) {
     testPublicationFailureCleanup(root);
     testCancellationDuringMix(root);
     testGeneratedSoundBudget(root);
+    testLegacyMusicCacheCleanup(root);
 #if !TARGET_OS_WINDOWS
-    testAdjacentPreloadRejectsAndContinues(root);
+    testShortMusicPreparationAlwaysStreams(root);
 #endif
   } catch (const std::exception &error) {
     std::cerr << "Fixture failure: " << error.what() << '\n';

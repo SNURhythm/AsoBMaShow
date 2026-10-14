@@ -27,10 +27,14 @@ struct ReadResult {
 };
 struct State {
   std::uint64_t firstFrame = 0;
+  // End of the contiguous prepared prefix beginning at firstFrame. Later
+  // sought ranges may also be readable without preparing the intervening gap.
   std::uint64_t availableFrames = 0;
   // Starts at chart duration and expands as sound tails are discovered.
   // Exact once complete. Never use this estimate to signal playback completion.
   std::uint64_t durationFrames = 0;
+  // True only when every frame in the source range is prepared and finalized.
+  // ReadFrames may report End for a sought suffix before this becomes true.
   bool complete = false;
   bool cancelled = false;
   std::string error;
@@ -42,13 +46,14 @@ struct PreviewGains {
 
 // Listening-only source. Never decode, read files, or wait from an audio
 // callback. Native feeder workers may call ReadFrames with bounded waits.
+// Prepared audio is private temporary data, removed when the source is released.
 class Source {
 public:
   static std::shared_ptr<Source> Create(std::unique_ptr<bms_parser::Chart> chart,
-                                        std::filesystem::path cachePath,
+                                        std::filesystem::path stagingParent,
                                         bool clubMode = false);
   // Starts directly at an arbitrary chart frame, including overlapping tails.
-  // Snapshots chart data before returning; never publishes a partial-song cache.
+  // Snapshots chart data before returning.
   static std::shared_ptr<Source> CreatePreview(
       const bms_parser::Chart &chart, std::filesystem::path stagingParent,
       std::shared_ptr<audio::DecodedAssetCache> decodedAssets,
@@ -62,7 +67,7 @@ public:
   [[nodiscard]] State GetState() const;
   // Play/resume enables production; pause/stop disables further read-ahead.
   void SetRenderingEnabled(bool enabled);
-  // Terminal cancellation. Bounded reads immediately wake; no partial cache is published.
+  // Terminal cancellation. Bounded reads immediately wake.
   void Cancel();
 
 private:

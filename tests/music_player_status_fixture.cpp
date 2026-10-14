@@ -45,21 +45,18 @@ bool Load(const std::filesystem::path &, const music_playlist::Metadata &, std::
 bool SetPlaybackRate(int, std::string &) { return true; }
 bool Play(std::string &) { ++starts; state.playing = true; return true; }
 }
-namespace chart_music_cache {
-struct CacheResult {
-  bool success = true;
+namespace music_preparation {
+struct PreparedMusic {
+  bool success = false;
   std::string message;
-  std::filesystem::path audioPath = "controlled.wav";
-  long long durationMicros = 10000000;
+  long long durationMicros = 0;
+  std::shared_ptr<int> stream;
 };
-CacheResult nextResult;
-struct PreparedMusic { CacheResult cache; std::shared_ptr<int> stream; };
-bool useStream = false;
+PreparedMusic nextResult{.success = true, .durationMicros = 10000000,
+                         .stream = std::make_shared<int>(1)};
 PreparedMusic PrepareMusicForPlayback(int, std::atomic_bool &, bool) {
-  return {nextResult, useStream ? std::make_shared<int>(1) : nullptr};
+  return nextResult;
 }
-CacheResult EnsureRenderedMusicFile(int, std::atomic_bool &, bool) { return nextResult; }
-void PruneCacheExcept(const std::vector<std::filesystem::path> &) {}
 }
 
 class MusicPlayerService {
@@ -74,15 +71,10 @@ public:
   void PublishNativeControlStatus(const Status &);
   bool ConsumeNativeControlStatus(Status &);
   void SyncNativeQueueLocked() {}
-  std::vector<std::filesystem::path> PlaybackCacheKeepPathsLocked(
-      const chart_music_cache::CacheResult &) { return {}; }
-  std::vector<music_playlist::MusicTrack> AdjacentTracksLocked() { return {}; }
-  void StartAdjacentPreloadWorker(std::vector<music_playlist::MusicTrack>, bool) {}
   void EnsureNativeControlEventPump() {}
   std::atomic<std::uint64_t> playbackRequestRevision{1};
   std::atomic_bool renderCancelled{false};
   std::mutex stateMutex, nativeControlStatusMutex;
-  chart_music_cache::CacheResult lastCacheResult;
   int playbackRate = 100;
   std::optional<music_playlist::MusicTrack> loadedTrack;
   Status nativeControlStatusMessage;
@@ -203,10 +195,11 @@ int main() {
   expect(resolve(completion) == "選択した譜面を再生します。",
          "consumed completion remains localizable after another language change");
   expect(!service.ConsumeNativeControlStatus(completion), "refresh does not consume completion twice");
-  expect(native_music_player::loads == 1 && native_music_player::starts == 1,
+  expect(native_music_player::loads == 0 && native_music_player::streamLoads == 1 &&
+             native_music_player::starts == 1,
          "language changes do not restart native playback");
 
-  chart_music_cache::nextResult = {.success = false, .message = "Playing selected chart."};
+  music_preparation::nextResult = {.success = false, .message = "Playing selected chart."};
   native_music_player::state.playing = false;
   service.PlaybackWorker({}, 1, false, successMessage<MusicPlayerService::Status>(), {});
   expect(native_music_player::stops == 1 && !service.loadedTrack,
@@ -215,11 +208,11 @@ int main() {
   i18n::setLanguage(i18n::Language::Korean);
   expect(resolve(completion) == "Playing selected chart.",
          "async diagnostics matching catalog copy stay raw");
-  chart_music_cache::nextResult = {};
-  chart_music_cache::useStream = true;
+  music_preparation::nextResult = {.success = true, .durationMicros = 10000000,
+                                    .stream = std::make_shared<int>(2)};
   const int previousLoads = native_music_player::loads;
   service.PlaybackWorker({}, 1, false, successMessage<MusicPlayerService::Status>(), {});
-  expect(native_music_player::streamLoads == 1 && native_music_player::loads == previousLoads,
+  expect(native_music_player::streamLoads == 2 && native_music_player::loads == previousLoads,
          "cold music playback loads its prepared stream without waiting for a completed WAV");
   for (auto event : {native_music_player::ControlEvent::Previous,
                      native_music_player::ControlEvent::Next}) {

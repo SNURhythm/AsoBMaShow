@@ -86,3 +86,17 @@ Files: `NativeMusicPlayer.h/.cpp`, `ChartMusicCache.h/.cpp`, `MusicPlayerService
 - Emulator audio output was disabled; audible quality and physical-device timing
   were not assessed. Android 15 foreground eligibility is covered by review and
   contract checks, not by this Android 10 runtime smoke.
+
+
+## Follow-up: preview visuals, direct seeking, and temporary music data
+
+- Restore asynchronous preview BGA loading and drive it from consumed audio time;
+  preserve preview chart ownership and later gameplay visual resources.
+- Prepare seek ranges directly and preserve overlapping voices/resampler phase.
+  Never read sparse gaps as silence; only declare full preparation after coverage.
+- Replace ChartMusicCache with MusicPreparation, always returning an active stream.
+  Remove adjacent-track prerendering and persistent full-song cache publication;
+  retain private seek data only for the stream lifetime and clean legacy cache files.
+- Keep explicit exports on the existing complete renderer.
+- Verify focused PCM/lifecycle regressions, native builds, full CTest, and Android
+  preview BGA plus player transport behavior.

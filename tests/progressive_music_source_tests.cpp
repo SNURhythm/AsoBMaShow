@@ -79,11 +79,11 @@ std::vector<short> readAll(const std::shared_ptr<music_stream::Source> &source,
 std::vector<short> readWav(const std::filesystem::path &path) {
   SF_INFO info{};
   auto file = asobmashow::audio::openSoundFileHandle(path, SFM_READ, info);
-  require(bool(file), "completed cache must be a readable WAV");
-  require(info.channels == 2 && info.samplerate == 44100, "cache format changed");
+  require(bool(file), "reference must be a readable WAV");
+  require(info.channels == 2 && info.samplerate == 44100, "reference format changed");
   std::vector<short> result(static_cast<std::size_t>(info.frames) * 2);
   require(sf_readf_short(file.get(), result.data(), info.frames) == info.frames,
-          "cache must contain all rendered frames");
+          "reference must contain all rendered frames");
   return result;
 }
 void waitForOpening(const std::shared_ptr<music_stream::Source> &source) {
@@ -116,20 +116,18 @@ void testEquivalence(const std::filesystem::path &root) {
       const auto full = readWav(reference);
       require(suffix == std::vector<short>(full.begin() + origin * 2, full.end()),
               "nonzero preview must preserve earlier tails and exact resampler phase");
-      require(preview->GetState().firstFrame == origin &&
-                  !std::filesystem::exists(dir / "preview" / "unused-preview.wav"),
-              "preview suffix must not publish a full-song cache");
+      require(preview->GetState().firstFrame == origin,
+              "preview must retain its absolute origin");
       std::array<short, 2> before{};
       require(preview->ReadFrames(origin - 1, before).status == music_stream::ReadStatus::Error,
               "preview must reject reads outside its prepared range");
       const auto pastEnd = music_stream::Source::CreatePreview(*chart, dir / "end", {}, 44100 * 60);
       require(readAll(pastEnd, 44100 * 60).empty(), "preview beyond all tails must end without underflow");
     }
-    const auto cached = dir / "cache.wav";
-    const auto stream = music_stream::Source::Create(std::move(chart), cached, club);
+    const auto staging = dir / "streams";
+    const auto stream = music_stream::Source::Create(std::move(chart), staging, club);
     const auto actual = readAll(stream);
     require(actual == readWav(reference), "progressive PCM must match full rendering across boundaries/tails");
-    require(actual == readWav(cached), "completed cache must match streamed PCM");
     std::vector<short> backward(100 * 2);
     const auto seek = stream->ReadFrames(4090, backward);
     require(seek.status == music_stream::ReadStatus::Data && seek.frames == 100 &&
@@ -137,22 +135,36 @@ void testEquivalence(const std::filesystem::path &root) {
             "backward seek must preserve previously rendered audio");
   }
 }
+void testTemporaryLifetime(const std::filesystem::path &root) {
+  const auto dir = root / "temporary";
+  auto chart = chartAt(dir);
+  writeWav(dir / "first.wav", 44100, 1, std::vector<short>(4096, 12000));
+  const auto staging = dir / "streams";
+  auto stream = music_stream::Source::Create(std::move(chart), staging);
+  const auto pcm = readAll(stream);
+  require(!pcm.empty() && stream->GetState().complete, "short stream must complete");
+  require(std::filesystem::is_directory(staging),
+          "completed music must retain only private temporary stream data");
+  require(!std::filesystem::is_empty(staging), "active stream must own its seek data");
+  stream.reset();
+  require(std::filesystem::is_empty(staging),
+          "releasing a completed stream must remove all of its temporary data");
+}
 void testLazyLongSource(const std::filesystem::path &root) {
   const auto dir = root / "long";
   auto chart = chartAt(dir, "#00011:01\n#01011:02\n");
   // 80 s stereo exceeds the allocation guard if decoded as a complete PCM vector.
   writeWav(dir / "first.wav", 44100, 2, std::vector<short>(44100 * 2, 1000), 80);
-  const auto cached = dir / "cache.wav";
+  const auto staging = dir / "streams";
   std::shared_ptr<music_stream::Source> stream;
   {
     guardLargeAllocations.store(true);
     ScopeExit restore([] { guardLargeAllocations.store(false); });
-    stream = music_stream::Source::Create(std::move(chart), cached);
+    stream = music_stream::Source::Create(std::move(chart), staging);
     waitForOpening(stream);
     const auto state = stream->GetState();
     require(!state.complete && state.availableFrames < 44100 * 20,
             "long song must become ready before full preparation");
-    require(!std::filesystem::exists(cached), "partial stream must not publish cache");
     // This future asset did not exist during startup; eager all-asset loading
     // would permanently cache a miss and omit it from the sought block.
     writeWav(dir / "second.wav", 44100, 1, std::vector<short>(44100, 7000));
@@ -169,11 +181,69 @@ void testLazyLongSource(const std::filesystem::path &root) {
   }
   stream->Cancel();
 }
+void testSeekPreparesOnlyRequestedRanges(const std::filesystem::path &root) {
+  const auto dir = root / "seek-ranges";
+  auto chart = chartAt(dir, "#00001:01\n#02511:02\n");
+  std::vector<short> backing(48000 * 2);
+  for (std::size_t i = 0; i < backing.size(); ++i)
+    backing[i] = static_cast<short>(static_cast<int>((i * 17) % 16000) - 8000);
+  writeWav(dir / "first.wav", 48000, 2, backing, 80);
+  writeWav(dir / "second.wav", 22050, 1, std::vector<short>(22050, 7000));
+  const auto referencePath = dir / "reference.wav";
+  require(chart_audio::RenderChartAudioToWav(*chart, referencePath).success,
+          "seek reference render failed");
+  const auto reference = readWav(referencePath);
+  const auto staging = dir / "streams";
+  auto stream = music_stream::Source::Create(std::move(chart), staging);
+  waitForOpening(stream);
+  const auto readAt = [&](std::uint64_t frame) {
+    std::vector<short> samples(997 * 2);
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    for (;;) {
+      const auto result = stream->ReadFrames(frame, samples, 100ms);
+      require(std::chrono::steady_clock::now() < deadline, "range seek timed out");
+      if (result.status == music_stream::ReadStatus::Pending) continue;
+      require(result.status == music_stream::ReadStatus::Data && result.frames > 0,
+              "sought range must produce audio");
+      require(std::equal(samples.begin(), samples.begin() + result.frames * 2,
+                         reference.begin() + frame * 2),
+              "sought PCM must include earlier tails with exact resampler phase");
+      return;
+    }
+  };
+  readAt(44100 * 50 + 123);
+  require(stream->GetState().availableFrames < 44100 * 20,
+          "forward seek must not render the skipped prefix before target audio");
+  stream->SetRenderingEnabled(false);
+  std::array<short, 2> paused{};
+  require(stream->ReadFrames(44100 * 30 + 17, paused, 20ms).status ==
+              music_stream::ReadStatus::Pending,
+          "paused reads of skipped ranges must not expose sparse-file silence");
+  stream->SetRenderingEnabled(true);
+  readAt(44100 * 30 + 17); // Backward into a range skipped by the first seek.
+  require(stream->ReadFrames(44100 * 200, paused, 100ms).status ==
+              music_stream::ReadStatus::End,
+          "seeking past the known end must finish without filling earlier gaps");
+  readAt(41);             // Backward into the already prepared opening.
+  const auto tail = readAll(stream, 44100 * 75 + 19);
+  require(tail == std::vector<short>(reference.begin() + (44100 * 75 + 19) * 2,
+                                    reference.end()),
+          "seeking near the end must finish without filling earlier gaps");
+  require(!stream->GetState().complete,
+          "reaching EOF after a seek must not treat holes as prepared audio");
+  require(readAll(stream) == reference,
+          "reading skipped ranges later must recover the entire exact stream");
+  require(stream->GetState().complete,
+          "stream completion must wait until all skipped ranges are prepared");
+}
+
 void testCancelAndPause(const std::filesystem::path &root) {
   auto chart = chartAt(root / "cancel", "#10011:01\n");
-  const auto cached = chart->Meta.Folder / "cache.wav";
-  { std::ofstream old(cached); old << "old cache"; }
-  auto stream = music_stream::Source::Create(std::move(chart), cached);
+  const auto staging = chart->Meta.Folder / "streams";
+  std::filesystem::create_directories(staging);
+  const auto sentinel = staging / "unrelated.txt";
+  { std::ofstream old(sentinel); old << "unrelated file"; }
+  auto stream = music_stream::Source::Create(std::move(chart), staging);
   waitForOpening(stream);
   stream->SetRenderingEnabled(false);
   std::vector<short> samples(2);
@@ -187,11 +257,11 @@ void testCancelAndPause(const std::filesystem::path &root) {
               waiting.get().status == music_stream::ReadStatus::Cancelled,
           "cancellation must wake a blocked reader");
   stream.reset();
-  std::ifstream old(cached);
+  std::ifstream old(sentinel);
   std::string contents;
   std::getline(old, contents);
-  require(contents == "old cache", "cancelled stream must preserve previous cache");
-  for (const auto &entry : std::filesystem::directory_iterator(cached.parent_path()))
+  require(contents == "unrelated file", "cancelled stream must preserve unrelated files");
+  for (const auto &entry : std::filesystem::directory_iterator(staging))
     require(!entry.path().filename().string().starts_with(".music-stream-"),
             "cancelled source must clean its owned staging files");
 }
@@ -245,8 +315,10 @@ int main() {
   std::filesystem::create_directories(root);
   ScopeExit cleanup([&] { std::filesystem::remove_all(root); });
   try {
+    testTemporaryLifetime(root);
     testEquivalence(root);
     testLazyLongSource(root);
+    testSeekPreparesOnlyRequestedRanges(root);
     testCancelAndPause(root);
     testPreviewPagesSurviveHandoff(root);
     testPreviewGainHeadroom(root);

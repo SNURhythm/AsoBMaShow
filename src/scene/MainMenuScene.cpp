@@ -1679,10 +1679,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
           }
           this->context.jukebox.stop();
           previewPlayer_.Stop();
+          this->context.jukebox.unloadVisuals();
+          previewVisualsLoaded_ = false;
           previewDecodedAssets_.reset();
         }
         SDL_Log("Parsing %s", fspath_to_utf8(meta.BmsPath).c_str());
-        std::unique_ptr<bms_parser::Chart> chart;
+        std::shared_ptr<bms_parser::Chart> chart;
         try {
           chart = play_options::parseChart(meta.BmsPath, cancelled, "preview");
         } catch (const std::exception &e) {
@@ -1719,9 +1721,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
             source->Cancel();
             return;
           }
-          setSelectedChart(std::move(chart), false);
+          // Keep a worker-owned reference: selection may clear the published
+          // chart while the cancellable visual loader is still reading it.
+          setSelectedChart(chart, false);
           if (isCancelled()) {
-            clearSelectedChart();
+            source->Cancel();
+            if (!willStart.load()) clearSelectedChart();
             return;
           }
           if (!willStart.load()) {
@@ -1732,14 +1737,33 @@ void MainMenuScene::initView(ApplicationContext &context) {
             // gameplay mixer's headroom when several loud keysounds overlap.
             previewPlayer_.SetGain(1.0f);
             std::string error;
-            if (!previewPlayer_.Start(std::move(source), previewStartFrame_, error))
+            if (!previewPlayer_.Start(std::move(source), previewStartFrame_, error)) {
               SDL_Log("Preview playback failed: %s", error.c_str());
+            } else {
+              // Let progressive audio fill/start while visual assets load. No
+              // complete keysound decode or gameplay audio schedule is needed.
+              this->context.jukebox.loadVisuals(*chart, cancelled);
+              previewVisualsLoaded_ = true;
+            }
+          }
+          if (isCancelled()) {
+            previewPlayer_.Stop();
+            this->context.jukebox.unloadVisuals();
+            previewVisualsLoaded_ = false;
+            if (!willStart.load()) clearSelectedChart();
+            return;
           }
         }
       }, [this] { stopAndClearSelectedChart(); }, kPreviewDebounceDelay,
       [this] {
         std::lock_guard lock(previewJukeboxLoadMutex);
         previewPlayer_.Stop();
+        // stop() is also called onPause after gameplay has loaded its chart.
+        // Only retire resources still owned by this preview session.
+        if (previewVisualsLoaded_) {
+          this->context.jukebox.unloadVisuals();
+          previewVisualsLoaded_ = false;
+        }
       });
 
   auto nav = new View();
@@ -7292,10 +7316,10 @@ void MainMenuScene::startModernCourseReplayPlayback(
 }
 
 bms_parser::Chart *
-MainMenuScene::setSelectedChart(std::unique_ptr<bms_parser::Chart> chart,
+MainMenuScene::setSelectedChart(std::shared_ptr<bms_parser::Chart> chart,
                                 bool mediaReady, bool reusableForStart) {
   bms_parser::Chart *raw = chart.get();
-  std::unique_ptr<bms_parser::Chart> previous;
+  std::shared_ptr<bms_parser::Chart> previous;
   {
     std::lock_guard<std::mutex> lock(selectedChartMutex);
     previous = std::move(selectedChart);
@@ -7307,7 +7331,7 @@ MainMenuScene::setSelectedChart(std::unique_ptr<bms_parser::Chart> chart,
 }
 
 void MainMenuScene::clearSelectedChart() {
-  std::unique_ptr<bms_parser::Chart> previous;
+  std::shared_ptr<bms_parser::Chart> previous;
   {
     std::lock_guard<std::mutex> lock(selectedChartMutex);
     previous = std::move(selectedChart);
@@ -7319,6 +7343,10 @@ void MainMenuScene::clearSelectedChart() {
 void MainMenuScene::stopAndClearSelectedChart() {
   std::lock_guard lock(previewJukeboxLoadMutex);
   previewPlayer_.Stop();
+  if (previewVisualsLoaded_) {
+    context.jukebox.unloadVisuals();
+    previewVisualsLoaded_ = false;
+  }
   previewDecodedAssets_.reset();
   context.jukebox.stop();
   clearSelectedChart();
@@ -8002,8 +8030,24 @@ void MainMenuScene::applyReplayExportResult() {
   }
 }
 
+void MainMenuScene::updatePreviewVisuals() {
+  // The worker owns the visual schedule while loading. Never stall the UI on
+  // media preparation or retirement; the next frame catches up to the audio.
+  std::unique_lock lock(previewJukeboxLoadMutex, std::try_to_lock);
+  if (!lock.owns_lock() || !previewVisualsLoaded_) return;
+  const auto state = previewPlayer_.GetState();
+  if (!state.playing && !state.finished) return;
+  // positionFrames is absolute, including previewStartFrame_, and advances
+  // only when the audio callback consumes source frames (not during underruns).
+  const auto frames = state.positionFrames;
+  const auto micros = (frames / music_stream::kSampleRate) * 1'000'000 +
+      (frames % music_stream::kSampleRate) * 1'000'000 / music_stream::kSampleRate;
+  context.jukebox.seekVisualsToSongTime(static_cast<long long>(micros));
+}
+
 void MainMenuScene::update(float dt) {
   if (!applyPendingTabSwitch()) return;
+  updatePreviewVisuals();
   if (irTab_) {
     irTab_->refreshLanguageIfNeeded();
     irTab_->update(dt);

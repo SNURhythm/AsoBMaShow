@@ -17,12 +17,6 @@ namespace chart_audio {
 
 inline constexpr int kOutputSampleRate = 44100;
 inline constexpr int kOutputChannels = 2;
-inline constexpr std::size_t kAdjacentPreloadMaxOutputFrames =
-    128U * 1024U * 1024U / (sizeof(float) * kOutputChannels);
-inline constexpr std::size_t kAdjacentPreloadMaxMixedFrames =
-    static_cast<std::size_t>(kOutputSampleRate) * 60U * 60U;
-
-inline constexpr std::size_t kAdjacentPreloadMaxClubBeats = 100000;
 
 inline long long outputTimeMicros(long long chartTimeMicros,
                                   audio::PlaybackRate playback) {

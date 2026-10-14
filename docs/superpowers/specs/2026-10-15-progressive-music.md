@@ -10,15 +10,21 @@ tracks. Reuse the integer resampler, chart event collection, and Club Beat plan.
 Keep float overlap headroom and the existing PCM conversion semantics. Sparse
 notes retain silence and sounds retain tails across block boundaries.
 
-The source appends completed blocks to a private staging WAV and exposes only
-published frames to readers. Prepare 0.5 seconds before handing it to the native
-player; maintain up to ten seconds of read-ahead. Seeking into unpublished audio
-waits for production; seeking backward reads existing blocks without re-rendering.
-Only a fully completed render atomically replaces the persistent cache file.
-Cancellation and errors never publish a partial cache. Readers use bounded waits.
+The source writes completed blocks to a private staging WAV and exposes only
+published frame ranges to readers. Prepare 0.5 seconds before handing it to the
+native player; maintain up to ten seconds of read-ahead. Seeking into unpublished
+audio prepares that range directly, reconstructing overlapping voices at their
+exact resampler phase. Previously prepared ranges remain reusable, including
+when seeking backward. The staging file can contain gaps after a seek; reads never
+expose those gaps. Prepared audio belongs only to the active source and is removed
+when that source is released. There are no persistent full-song music caches or
+adjacent-track prerenders. Old app-owned music cache files are removed on the next
+playback preparation. Explicit audio exports still use the full renderer. Readers
+use bounded waits.
 
 Native PCM adapters use AVAudioEngine/AVAudioPlayerNode on iOS and AudioTrack on
-Android. Existing file playback remains for cache hits. Preserve pause, resume,
+Android. Playback preparation always returns a stream, including short songs.
+Preserve pause, resume,
 stop, seek, speed and pitch modes, duration, completion, queue/metadata controls,
 audio focus/interruption handling, and background services/audio sessions.
 Pause/stop disables speculative rendering; play enables it. Replacing a stream
@@ -33,16 +39,20 @@ failures stop the stream and expose an error instead of masquerading as completi
 
 Validate sample equivalence against the full renderer, initial readiness before
 later assets load, long-source bounded decoding, cross-block tails, seeks,
-cancellation, cache atomicity, and platform transport behavior. No deployment.
+cancellation, temporary-file ownership, and platform transport behavior. No deployment.
 
 
 Chart previews use the same block source through a separate portable audio
 backend. The preview request explicitly supplies an absolute start frame. Begin
 mixing at that frame, seek prior voices to their exact rational phase, and include
 all overlapping tails without rendering the skipped prefix. A suffix preview
-never publishes a complete-song music cache. The audio callback only consumes a
+uses the same temporary-file ownership. The audio callback only consumes a
 bounded ring; decoding, disk reads, waiting, and resampling stay on feeder workers.
 Respect output-device preferences and master/BGM/keysound volume settings.
+Load BGA resources after starting progressive audio, then drive the visual
+timeline from the preview's absolute consumed-frame position. Visual loading
+must not block UI updates; buffering freezes visual time with the audio. Retiring
+a preview releases only its own visual resources, preserving a later gameplay load.
 
 A preview-session DecodedAssetCache retains native-rate/channel PCM pages under a
 64 MiB LRU bound. Cache keys identify resolved source assets; changed sources
