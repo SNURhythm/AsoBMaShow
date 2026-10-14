@@ -17,6 +17,32 @@
 
 namespace skin {
 
+void GameplaySkinOperationModalState::action(const ControllerActionResult &result) {
+  actionError = result.accepted ? i18n::Text{} : result.message;
+  if (!result.accepted) dismissedError.clear();
+}
+
+void GameplaySkinOperationModalState::update(
+    const GameplaySkinSettingsSnapshot &snapshot) {
+  busy = snapshot.state == GameplaySkinSettingsState::Busy;
+  if (busy) {
+    actionError = {};
+    dismissedError.clear();
+  }
+  error = busy ? std::string{}
+              : (!actionError.empty() ? actionError.resolve()
+                 : snapshot.state == GameplaySkinSettingsState::Error
+                     ? snapshot.statusMessage : std::string{});
+  visible = busy || (!error.empty() && error != dismissedError);
+  if (error.empty()) dismissedError.clear();
+}
+
+void GameplaySkinOperationModalState::dismiss() {
+  if (busy) return;
+  dismissedError = error;
+  visible = false;
+}
+
 bool gameplaySkinPreviewCanReload(const GameplaySkinSettingsSnapshot &snapshot,
                                 bool presentationReady) noexcept {
   return snapshot.state != GameplaySkinSettingsState::Busy && presentationReady;

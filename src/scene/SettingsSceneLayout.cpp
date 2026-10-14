@@ -228,7 +228,10 @@ void SettingsScene::resetViewState() {
   gameplaySkinConfigurationDigestText = nullptr;
   gameplaySkinSafetyOverlayRoot = nullptr;
   gameplaySkinBusyOverlayRoot = nullptr;
+  gameplaySkinBusyOverlayTitleText = nullptr;
   gameplaySkinBusyOverlayStatusText = nullptr;
+  gameplaySkinBusyOverlayStatusScroll = nullptr;
+  gameplaySkinBusyOverlayActionText = nullptr;
   gameplaySkinBusyOverlayCancelButton = nullptr;
 #endif
 }

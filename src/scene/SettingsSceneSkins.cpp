@@ -11,6 +11,7 @@
 #include "../skin/beatoraja/BeatorajaSkinConfiguration.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/DropdownView.h"
+#include "../view/ScrollView.h"
 
 #include <algorithm>
 #include <charconv>
@@ -101,10 +102,11 @@ i18n::Text safetyLevelLabel(skin::SkinSafetyLevel level) {
 
 bool SettingsScene::handleGameplaySkinActionResult(
     skin::ControllerActionResult result) {
+  gameplaySkinOperationModal.action(result);
   if (!result.message.empty() &&
-      (!result.accepted || !result.asynchronous)) {
+      result.accepted && !result.asynchronous) {
     gameplaySkinUiMessage = result.message;
-  } else if (result.accepted && result.asynchronous) {
+  } else {
     gameplaySkinUiMessage = {};
   }
   if (result.accepted && !result.asynchronous) {
@@ -209,6 +211,7 @@ void SettingsScene::ensureGameplaySkinSettingsController() {
   gameplaySkinSettingsOrientation = context.settings.activePresentationOrientation();
   gameplaySkinSettingsLayoutKey.clear();
   gameplaySkinUiMessage = {};
+  gameplaySkinOperationModal = {};
   gameplaySkinSafetyDropdownOpen = false;
   gameplaySkinConfigurationDropdownOpenKey.clear();
   gameplaySkinReplaceConfirmationArmed = false;
@@ -322,8 +325,11 @@ void SettingsScene::updateGameplaySkinSettingsLiveUi(
     return;
   }
 
+  gameplaySkinOperationModal.update(snapshot);
   if (gameplaySkinStatusText != nullptr) {
-    gameplaySkinStatusText->setText(snapshot.statusMessage);
+    gameplaySkinStatusText->setText(
+        snapshot.state == skin::GameplaySkinSettingsState::Error
+            ? std::string{} : snapshot.statusMessage);
   }
   if (gameplaySkinUiMessageText != nullptr) {
     gameplaySkinUiMessageText->setLocalizedText(gameplaySkinUiMessage.resolve() ==
@@ -349,7 +355,7 @@ void SettingsScene::updateGameplaySkinSettingsLiveUi(
     }
   }
 
-  if (snapshot.state != skin::GameplaySkinSettingsState::Busy) {
+  if (!gameplaySkinOperationModal.visible) {
     if (gameplaySkinBusyOverlayRoot != nullptr) {
       gameplaySkinBusyOverlayRoot->setVisible(false);
     }
@@ -379,7 +385,7 @@ void SettingsScene::ensureGameplaySkinBusyOverlay(
     gameplaySkinBusyOverlayRoot->setThemedBackgroundColor(app_theme::scrim);
 
     auto *panel = new View();
-    panel->setWidth(520.0F);
+    panel->setWidth(std::min(520.0F, rendering::window_width * 0.92F));
     panel->setFlexDirection(FlexDirection::Column);
     panel->setAlignItems(YGAlignStretch);
     panel->setGap(14.0F);
@@ -388,16 +394,27 @@ void SettingsScene::ensureGameplaySkinBusyOverlay(
     panel->setCornerRadius(app_theme::panelRadius());
     panel->setThemedBorderColor(app_theme::hairline);
     panel->setBorderWidth(1);
-    panel->addView(makeWrappedText(i18n::message("settings.skins.updating_skins.label"), 26,
-                                   app_theme::textPrimary()));
+    gameplaySkinBusyOverlayTitleText = makeWrappedText({}, 26, app_theme::textPrimary());
+    panel->addView(gameplaySkinBusyOverlayTitleText);
     gameplaySkinBusyOverlayStatusText =
         makeWrappedText({}, 20, app_theme::textSecondary());
-    panel->addView(gameplaySkinBusyOverlayStatusText);
+    gameplaySkinBusyOverlayStatusScroll = new ScrollView();
+    gameplaySkinBusyOverlayStatusScroll->setWidthPercent(100.0F);
+    gameplaySkinBusyOverlayStatusScroll->setHeight(40.0F);
+    gameplaySkinBusyOverlayStatusScroll->setContentPadding(Edge::Right, 12.0F);
+    gameplaySkinBusyOverlayStatusScroll->setContentView(gameplaySkinBusyOverlayStatusText);
+    panel->addView(gameplaySkinBusyOverlayStatusScroll);
+    gameplaySkinBusyOverlayActionText = makeText({}, 20, app_theme::textPrimary(),
+                                                TextView::CENTER, TextView::MIDDLE);
     gameplaySkinBusyOverlayCancelButton = makeControlButton(
-        180, 60,
-        makeText(i18n::message("settings.skins.cancel.label"), 20, app_theme::textPrimary(), TextView::CENTER,
-                 TextView::MIDDLE));
+        180, 60, gameplaySkinBusyOverlayActionText);
     gameplaySkinBusyOverlayCancelButton->setOnClickListener([this]() {
+      if (!gameplaySkinOperationModal.busy) {
+        gameplaySkinOperationModal.dismiss();
+        if (gameplaySkinBusyOverlayRoot != nullptr)
+          gameplaySkinBusyOverlayRoot->setVisible(false);
+        return;
+      }
       if (gameplaySkinSettingsController != nullptr) {
         gameplaySkinSettingsController->cancelRescan();
         updateGameplaySkinSettingsLiveUi(
@@ -409,15 +426,16 @@ void SettingsScene::ensureGameplaySkinBusyOverlay(
     rootLayout->addView(gameplaySkinBusyOverlayRoot);
   }
 
-  std::string message = snapshot.statusMessage;
-  if (snapshot.hasPackageProgress) {
+  const bool busy = gameplaySkinOperationModal.busy;
+  std::string message = busy ? snapshot.statusMessage : gameplaySkinOperationModal.error;
+  if (busy && snapshot.hasPackageProgress) {
     const std::string progress =
         skin::gameplaySkinPackageProgressDisplayText(snapshot.progress);
     if (!progress.empty()) {
       message += message.empty() ? progress : "\n" + progress;
     }
   }
-  if (snapshot.rescanProgress.phase != skin::SkinRescanProgressPhase::Idle &&
+  if (busy && snapshot.rescanProgress.phase != skin::SkinRescanProgressPhase::Idle &&
       snapshot.rescanProgress.phase !=
           skin::SkinRescanProgressPhase::Succeeded &&
       snapshot.rescanProgress.phase !=
@@ -429,10 +447,24 @@ void SettingsScene::ensureGameplaySkinBusyOverlay(
     }
   }
   if (gameplaySkinBusyOverlayStatusText != nullptr) {
+    const bool messageChanged = gameplaySkinBusyOverlayStatusText->getText() != message;
     gameplaySkinBusyOverlayStatusText->setText(message);
+    if (messageChanged) {
+      gameplaySkinBusyOverlayStatusScroll->refreshContentLayout();
+      const float maximumHeight = std::clamp(
+          rendering::window_height * 0.85F - 220.0F, 40.0F, 240.0F);
+      gameplaySkinBusyOverlayStatusScroll->setHeight(std::min(
+          maximumHeight, static_cast<float>(gameplaySkinBusyOverlayStatusText->getHeight())));
+      gameplaySkinBusyOverlayStatusScroll->setScrollOffset(0);
+    }
+    gameplaySkinBusyOverlayStatusText->setThemedColor(busy ? app_theme::textSecondary : app_theme::coral);
   }
+  gameplaySkinBusyOverlayTitleText->setLocalizedText(i18n::message(
+      busy ? "settings.skins.updating_skins.label" : "settings.skins.operation_failed.label"));
+  gameplaySkinBusyOverlayActionText->setLocalizedText(i18n::message(
+      busy ? "settings.skins.cancel.label" : "settings.skins.close.label"));
   if (gameplaySkinBusyOverlayCancelButton != nullptr) {
-    gameplaySkinBusyOverlayCancelButton->setVisible(snapshot.canCancel);
+    gameplaySkinBusyOverlayCancelButton->setVisible(!busy || snapshot.canCancel);
   }
 }
 
@@ -1216,7 +1248,9 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   }
   imports->addView(importActions);
   gameplaySkinStatusText = makeWrappedText(
-      snapshot.statusMessage, metrics.smallTextSize, app_theme::textSecondary());
+      snapshot.state == skin::GameplaySkinSettingsState::Error
+          ? std::string{} : snapshot.statusMessage,
+      metrics.smallTextSize, app_theme::textSecondary());
   imports->addView(gameplaySkinStatusText);
   gameplaySkinUiMessageText = makeWrappedText(
       gameplaySkinUiMessage.resolve() != snapshot.statusMessage ? gameplaySkinUiMessage

@@ -345,6 +345,7 @@ void SettingsScene::cleanupScene() {
   gameplaySkinSettingsProfileId.clear();
   gameplaySkinSettingsLayoutKey.clear();
   gameplaySkinUiMessage = {};
+  gameplaySkinOperationModal = {};
   gameplaySkinReplaceConfirmationArmed = false;
   gameplaySkinRemovalConfirmationKey.clear();
 #endif
@@ -508,7 +509,10 @@ void SettingsScene::cleanupScene() {
   gameplaySkinUiMessageText = nullptr;
   gameplaySkinConfigurationDigestText = nullptr;
   gameplaySkinBusyOverlayRoot = nullptr;
+  gameplaySkinBusyOverlayTitleText = nullptr;
   gameplaySkinBusyOverlayStatusText = nullptr;
+  gameplaySkinBusyOverlayStatusScroll = nullptr;
+  gameplaySkinBusyOverlayActionText = nullptr;
   gameplaySkinBusyOverlayCancelButton = nullptr;
 #endif
   lastLayoutWidth = -1;

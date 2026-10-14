@@ -72,6 +72,7 @@ class SoundSetFolderPicker;
 #include "SettingsSceneInputRebuild.h"
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include "GameplaySkinSettingsController.h"
+#include "GameplaySkinSettingsPresentation.h"
 namespace skin { struct GameplaySkinSelection; }
 #endif
 
@@ -397,7 +398,11 @@ private:
   TextView *gameplaySkinConfigurationDigestText = nullptr;
   View *gameplaySkinSafetyOverlayRoot = nullptr;
   View *gameplaySkinBusyOverlayRoot = nullptr;
+  skin::GameplaySkinOperationModalState gameplaySkinOperationModal;
+  TextView *gameplaySkinBusyOverlayTitleText = nullptr;
   TextView *gameplaySkinBusyOverlayStatusText = nullptr;
+  ScrollView *gameplaySkinBusyOverlayStatusScroll = nullptr;
+  TextView *gameplaySkinBusyOverlayActionText = nullptr;
   Button *gameplaySkinBusyOverlayCancelButton = nullptr;
 #endif
   platform_document_handoff::PlatformDocumentHandoffOperation
