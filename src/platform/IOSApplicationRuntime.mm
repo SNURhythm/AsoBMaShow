@@ -92,6 +92,7 @@ void RunIOSMainThread(std::function<void()> operation) {
 
 int RunIOSApplication(SDL_Window *window, std::function<int()> application) {
   NSCAssert([NSThread isMainThread], @"Application bootstrap must own UIKit");
+  InitializeIOSNativeMusicControls();
   auto state = std::make_shared<Runtime>();
   updateViewport(*state, window);
   if (!SDL_AddEventWatch(lifecycleWatch, state.get())) return EXIT_FAILURE;

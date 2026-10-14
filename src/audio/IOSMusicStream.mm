@@ -207,7 +207,7 @@ std::shared_ptr<IOSMusicStream> IOSMusicStream::Create(
   [state->engine connect:state->varispeed to:state->timePitch format:state->format];
   [state->engine connect:state->timePitch to:state->engine.mainMixerNode format:state->format];
   [state->engine prepare];
-  if (!state->StartEngine(error)) return {};
+  // Loading prepares the graph; only Play may start hardware and claim playback.
   state->source->SetRenderingEnabled(false);
   auto stream = std::shared_ptr<IOSMusicStream>(new IOSMusicStream(std::move(state)));
   stream->impl->feeder = std::thread([ptr = stream->impl.get()] { ptr->Run(); });

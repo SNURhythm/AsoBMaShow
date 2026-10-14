@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise extracted iOS Now Playing metadata and remote seek registration."""
+"""Exercise iOS native transport lifecycle, metadata, and remote seek routing."""
 from pathlib import Path
 import subprocess
 import sys
@@ -41,6 +41,7 @@ class IOSNowPlayingTests(unittest.TestCase):
 #include <vector>
 std::vector<std::string> calls;
 bool active = true, activationSucceeds = true, deactivationSucceeds = true;
+unsigned gIOSNativeMusicTransportGeneration = 0;
 @interface FakeEngine : NSObject
 @property BOOL running;
 - (void)pause;
@@ -146,10 +147,12 @@ int main() {
     assert(!impl.playing && !impl.player.playing && !engine.running);
     assert(!impl.source->rendering && !active);
     assert(!gIOSNativeMusicResumeAfterInterruption);
+    assert(gIOSNativeMusicTransportGeneration == 1);
     assert((calls == std::vector<std::string>{"player pause", "engine pause", "metadata", "deactivate"}));
     assert(PlayIOSNativeMusic(error));
     assert(impl.playing && impl.player.playing && engine.running && impl.source->rendering);
     assert(!impl.buffering && impl.timeline.Queued() == 200);
+    assert(gIOSNativeMusicTransportGeneration == 2);
     assert((calls == std::vector<std::string>{"player pause", "engine pause", "metadata", "deactivate",
                                             "activate", "engine start", "player play", "metadata"}));
     deactivationSucceeds = false;
@@ -162,6 +165,7 @@ int main() {
     assert(!impl.playing && !engine.running && !active);
     activationSucceeds = true;
     assert(PlayIOSNativeMusic(error) && error.empty());
+    assert(gIOSNativeMusicTransportGeneration == 6);
   }
 }
 '''.replace("NATIVE_PAUSE", native_pause).replace("NATIVE_PLAY", native_play).replace("ACTIVATE", activate).replace("PAUSE", pause).replace("PLAY", play)
@@ -175,13 +179,245 @@ int main() {
             result = subprocess.run([str(executable)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_worker_publication_updates_controls_on_main_and_discards_stale_state(self):
+        source = (ROOT / "src/iOSNatives.mm").read_text()
+        publish = method(source, "void PublishIOSNativeMusicNowPlayingInfoLocked(")
+        fixture = r'''
+#import <Foundation/Foundation.h>
+#include <atomic>
+#include <cassert>
+#include <cstdint>
+#include <thread>
+#define MPRemoteCommandCenter FakeCommandCenter
+#define MPNowPlayingInfoCenter FakeInfoCenter
+NSString *const MPMediaItemPropertyPlaybackDuration = @"duration";
+NSString *const MPNowPlayingInfoPropertyElapsedPlaybackTime = @"elapsed";
+NSString *const MPNowPlayingInfoPropertyPlaybackRate = @"rate";
+constexpr int MPNowPlayingPlaybackStateStopped = 0;
+constexpr int MPNowPlayingPlaybackStatePlaying = 1;
+constexpr int MPNowPlayingPlaybackStatePaused = 2;
+@interface FakeCommand : NSObject
+@property BOOL enabled;
+@end
+@implementation FakeCommand
+@end
+@interface FakeCommandCenter : NSObject
+@property(strong) FakeCommand *playCommand;
+@property(strong) FakeCommand *pauseCommand;
+@property(strong) FakeCommand *togglePlayPauseCommand;
+@property(strong) FakeCommand *stopCommand;
+@property(strong) FakeCommand *nextTrackCommand;
+@property(strong) FakeCommand *previousTrackCommand;
+@property(strong) FakeCommand *changePlaybackPositionCommand;
++ (instancetype)sharedCommandCenter;
+@end
+@implementation FakeCommandCenter
++ (instancetype)sharedCommandCenter {
+  assert([NSThread isMainThread]);
+  static FakeCommandCenter *center;
+  if (!center) {
+    center = [FakeCommandCenter new];
+    center.playCommand = [FakeCommand new];
+    center.pauseCommand = [FakeCommand new];
+    center.togglePlayPauseCommand = [FakeCommand new];
+    center.stopCommand = [FakeCommand new];
+    center.nextTrackCommand = [FakeCommand new];
+    center.previousTrackCommand = [FakeCommand new];
+    center.changePlaybackPositionCommand = [FakeCommand new];
+  }
+  return center;
+}
+@end
+@interface FakeInfoCenter : NSObject
+@property(copy) NSDictionary *nowPlayingInfo;
+@property int playbackState;
++ (instancetype)defaultCenter;
+@end
+@implementation FakeInfoCenter
++ (instancetype)defaultCenter {
+  assert([NSThread isMainThread] && "MediaPlayer publication must run on main");
+  static FakeInfoCenter *center = [FakeInfoCenter new];
+  return center;
+}
+@end
+std::atomic<std::uint64_t> gIOSNativeMusicNowPlayingRevision{0};
+unsigned registrations = 0;
+void ConfigureIOSNativeMusicRemoteCommands() {
+  assert([NSThread isMainThread]);
+  if (!registrations) ++registrations;
+}
+NSMutableArray *pending;
+void QueueOnMain(int, dispatch_block_t block) { [pending addObject:[block copy]]; }
+#define dispatch_async QueueOnMain
+#define dispatch_get_main_queue() 0
+PUBLISH
+void drain() {
+  NSArray *blocks = [pending copy];
+  [pending removeAllObjects];
+  for (dispatch_block_t block in blocks) block();
+}
+void publishFromWorker(NSDictionary *info, bool playing) {
+  std::thread worker([info, playing] {
+    @autoreleasepool { PublishIOSNativeMusicNowPlayingInfoLocked(info, playing); }
+  });
+  worker.join();
+}
+int main() {
+  @autoreleasepool {
+    pending = [NSMutableArray new];
+    auto center = [MPNowPlayingInfoCenter defaultCenter];
+    auto commands = [MPRemoteCommandCenter sharedCommandCenter];
+    NSMutableDictionary *info = [@{@"duration": @180.0, @"elapsed": @10.0, @"rate": @1.25} mutableCopy];
+    publishFromWorker(info, true);
+    info[@"elapsed"] = @99.0;
+    assert(center.nowPlayingInfo == nil && "worker must enqueue, never publish synchronously");
+    drain();
+    assert(registrations == 1 && commands.changePlaybackPositionCommand.enabled);
+    assert([center.nowPlayingInfo[@"elapsed"] doubleValue] == 10.0 && "publish a value snapshot");
+    assert(commands.playCommand.enabled && commands.pauseCommand.enabled);
+
+    publishFromWorker(@{@"duration": @180.0, @"elapsed": @50.0, @"rate": @1.0}, true);
+    PublishIOSNativeMusicNowPlayingInfoLocked(nil, false);
+    // An already queued worker update must not republish a stopped track.
+    auto old = (dispatch_block_t)pending.firstObject;
+    old();
+    assert([center.nowPlayingInfo[@"elapsed"] doubleValue] == 10.0);
+    drain();
+    assert(center.nowPlayingInfo == nil && !commands.changePlaybackPositionCommand.enabled);
+    assert(!commands.playCommand.enabled && !commands.pauseCommand.enabled);
+
+    // A finite item stays seekable while paused or waiting for generated PCM.
+    for (bool playing : {false, true}) {
+      publishFromWorker(@{@"duration": @180.0, @"elapsed": @70.0, @"rate": @0.0}, playing);
+      drain();
+      assert(commands.changePlaybackPositionCommand.enabled);
+      assert([center.nowPlayingInfo[@"rate"] doubleValue] == 0.0);
+    }
+    publishFromWorker(@{@"duration": @0.0, @"elapsed": @0.0, @"rate": @0.0}, false);
+    drain();
+    assert(!commands.changePlaybackPositionCommand.enabled);
+    assert(registrations == 1);
+  }
+}
+'''.replace("PUBLISH", publish)
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            mm, executable = folder / "publication.mm", folder / "publication"
+            mm.write_text(fixture)
+            subprocess.run(["xcrun", "--sdk", "macosx", "clang++", "-std=c++20",
+                            "-fobjc-arc", "-fblocks", "-framework", "Foundation",
+                            str(mm), "-o", str(executable)], check=True)
+            result = subprocess.run([str(executable)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_engine_notification_never_waits_for_main_while_holding_native_lock(self):
+        source = (ROOT / "src/iOSNatives.mm").read_text()
+        configure = method(source, "void ConfigureIOSNativeMusicRemoteCommands() {")
+        start = configure.index("  [[NSNotificationCenter defaultCenter]\n      addObserverForName:AVAudioEngineConfigurationChangeNotification")
+        observer = configure[start:configure.index("\n\n  MPRemoteCommandCenter", start)]
+        route_start = configure.index("  [[NSNotificationCenter defaultCenter]\n      addObserverForName:AVAudioSessionRouteChangeNotification")
+        observer = configure[route_start:start] + observer
+        fixture = r'''
+#import <Foundation/Foundation.h>
+#include <cassert>
+#include <atomic>
+#include <cstdint>
+#include <string>
+#include <memory>
+#include <thread>
+NSString *const AVAudioEngineConfigurationChangeNotification = @"TestEngineChange";
+NSString *const AVAudioSessionRouteChangeNotification = @"TestRouteChange";
+NSString *const AVAudioSessionRouteChangeReasonKey = @"reason";
+constexpr NSUInteger AVAudioSessionRouteChangeReasonOldDeviceUnavailable = 1;
+#define AVAudioSession FakeAudioSession
+@interface FakeAudioSession : NSObject
++ (instancetype)sharedInstance;
+@end
+@implementation FakeAudioSession
++ (instancetype)sharedInstance { static auto session = [FakeAudioSession new]; return session; }
+@end
+std::atomic<std::uint64_t> gIOSNativeMusicTransportGeneration{0};
+unsigned pauses = 0;
+bool playing = true;
+bool IOSNativeMusicIsPlayingLocked() { return playing; }
+bool PauseIOSNativeMusic(std::string &) { ++pauses; playing = false; return true; }
+NSMutableArray *pending;
+void QueueOnMain(int, dispatch_block_t block) { [pending addObject:[block copy]]; }
+#define dispatch_async QueueOnMain
+#define dispatch_get_main_queue() 0
+id IOSNativeMusicLock() { static auto lock = [NSObject new]; return lock; }
+struct Stream {
+  void *changedEngine = nullptr;
+  void ConfigurationChanged(void *engine) {
+    assert([NSThread isMainThread]);
+    changedEngine = engine;
+  }
+};
+std::shared_ptr<Stream> gIOSNativeMusicStream = std::make_shared<Stream>();
+void configure() {
+OBSERVER
+}
+int main() {
+  @autoreleasepool {
+    pending = [NSMutableArray new];
+    configure();
+    id engine = [NSObject new];
+    auto posted = dispatch_semaphore_create(0);
+    std::thread worker([engine, posted] {
+      @autoreleasepool {
+        @synchronized(IOSNativeMusicLock()) {
+          [[NSNotificationCenter defaultCenter]
+              postNotificationName:AVAudioEngineConfigurationChangeNotification object:engine];
+        }
+        dispatch_semaphore_signal(posted);
+      }
+    });
+    // Main deliberately does not service notifications until the worker returns.
+    assert(dispatch_semaphore_wait(posted, dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC)) == 0 &&
+           "posting an engine notification under the native lock must not wait for main");
+    worker.join();
+    assert(gIOSNativeMusicStream->changedEngine == nullptr);
+    for (dispatch_block_t block in pending) block();
+    assert(gIOSNativeMusicStream->changedEngine == (__bridge void *)engine);
+    [pending removeAllObjects];
+    auto routeChange = [] {
+      [[NSNotificationCenter defaultCenter]
+          postNotificationName:AVAudioSessionRouteChangeNotification
+                        object:[AVAudioSession sharedInstance]
+                      userInfo:@{AVAudioSessionRouteChangeReasonKey: @1}];
+    };
+    routeChange();
+    ++gIOSNativeMusicTransportGeneration; // Explicitly start another track before delivery.
+    for (dispatch_block_t block in pending) block();
+    [pending removeAllObjects];
+    assert(pauses == 0 && "old route notification must not pause a new playback request");
+    routeChange();
+    for (dispatch_block_t block in pending) block();
+    [pending removeAllObjects];
+    assert(pauses == 1 && !playing);
+    routeChange();
+    for (dispatch_block_t block in pending) block();
+    assert(pauses == 1 && "a paused/stopped stream must not deactivate another audio session");
+  }
+}
+'''.replace("OBSERVER", observer)
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            mm, executable = folder / "notification.mm", folder / "notification"
+            mm.write_text(fixture)
+            subprocess.run(["xcrun", "--sdk", "macosx", "clang++", "-std=c++20",
+                            "-fobjc-arc", "-fblocks", "-framework", "Foundation",
+                            str(mm), "-o", str(executable)], check=True)
+            result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=5)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_finite_stream_metadata_and_remote_seek_while_buffering(self):
         source = (ROOT / "src/iOSNatives.mm").read_text()
         duration = method(source, "long long IOSNativeMusicDurationMicrosLocked()")
         update = method(source, "void UpdateIOSNativeMusicNowPlayingInfoLocked()")
         metadata = update[update.index("    const long long durationMicros ="):
                           update.index("    const NSUInteger queueCount =")]
-        configure = method(source, "void ConfigureIOSNativeMusicRemoteCommands()")
+        configure = method(source, "void ConfigureIOSNativeMusicRemoteCommands() {")
         seek = configure[configure.index("  center.changePlaybackPositionCommand.enabled"):-1]
         fixture = r'''
 #import <Foundation/Foundation.h>
@@ -292,7 +528,7 @@ int main() {
     FakeCenter *center = [FakeCenter new];
     center.changePlaybackPositionCommand = [FakeCommand new];
     configure(center);
-    assert(center.changePlaybackPositionCommand.enabled);
+    assert(!center.changePlaybackPositionCommand.enabled); // Enabled when an item is published.
     auto handler = center.changePlaybackPositionCommand.handler;
     MPChangePlaybackPositionCommandEvent *event = [MPChangePlaybackPositionCommandEvent new];
     event.positionTime = 42.5;

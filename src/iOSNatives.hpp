@@ -199,6 +199,8 @@ bool GetIOSFileExcludedFromBackup(const std::string &filePath, bool &excluded,
                                   std::string &errorMessage);
 bool SetIOSFileExcludedFromBackup(const std::string &filePath, bool excluded,
                                   std::string &errorMessage);
+// Register system transport controls on main before the playback worker starts.
+void InitializeIOSNativeMusicControls();
 bool LoadIOSNativeMusicStream(std::shared_ptr<music_stream::Source> source,
                               const IOSNativeMusicMetadata &metadata,
                               std::string &errorMessage);
