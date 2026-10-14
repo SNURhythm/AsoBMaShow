@@ -554,7 +554,10 @@ NSObject *IOSNativeMusicLock() {
 }
 
 long long IOSNativeMusicDurationMicrosLocked() {
-  if (gIOSNativeMusicStream) return gIOSNativeMusicStream->State().durationMicros;
+  if (gIOSNativeMusicStream) {
+    const auto duration = gIOSNativeMusicStream->State().durationMicros;
+    return duration > 0 ? duration : gIOSNativeMusicMetadata.durationMicros;
+  }
   if (gIOSNativeMusicPlayer == nil) {
     return 0;
   }
@@ -637,6 +640,12 @@ void UpdateIOSNativeMusicNowPlayingInfoLocked() {
     }
 
     const long long durationMicros = IOSNativeMusicDurationMicrosLocked();
+    // The engine has no AVPlayerItem from which the system can infer a finite
+    // audio item. Keep its seekable metadata explicit, including while buffering.
+    info[MPNowPlayingInfoPropertyMediaType] = @(MPNowPlayingInfoMediaTypeAudio);
+    info[MPNowPlayingInfoPropertyIsLiveStream] = @NO;
+    info[MPNowPlayingInfoPropertyDefaultPlaybackRate] =
+        @(gIOSNativeMusicPlaybackRate);
     if (durationMicros > 0) {
       info[MPMediaItemPropertyPlaybackDuration] =
           @(static_cast<double>(durationMicros) / 1000000.0);

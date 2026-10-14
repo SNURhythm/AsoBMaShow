@@ -12,6 +12,7 @@
 #include "DecodedAssetCache.h"
 #include "PcmResampler.h"
 #include "SoundFileIO.h"
+#include "VorbisDurationBound.h"
 #include "decoder.h"
 #if TARGET_OS_ANDROID
 #include "../AndroidNatives.h"
@@ -28,6 +29,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -90,6 +92,7 @@ struct Asset {
   std::shared_ptr<audio::DecodedAssetCache> decodedAssets;
   std::atomic_bool *cancelled = nullptr;
   std::stop_token stop;
+  std::atomic<std::uint64_t> *decoderOpens = nullptr;
 
   bool open() {
     if (file || !generated.empty() || (decodedAssets && info.frames > 0)) return true;
@@ -116,6 +119,7 @@ struct Asset {
                             info.samplerate != opened.samplerate))
       throw std::runtime_error("Music source changed during playback");
     info = opened;
+    if (decoderOpens) ++*decoderOpens;
     return true;
   }
 
@@ -201,8 +205,14 @@ struct Source::Impl {
   bool endKnown = false;
   bool enabled = true;
   std::uint64_t requestedFrame = 0;
+  std::optional<std::uint64_t> pendingSeek;
+  std::atomic<std::uint64_t> requestRevision{0};
+  std::uint64_t workRevision = 0;
+  std::uint64_t activeBlockFirst = 0, activeBlockEnd = 0;
   std::atomic_bool cancelled{false};
+  std::atomic<std::uint64_t> decoderOpens{0};
   std::unordered_map<int, std::shared_ptr<Asset>> assets;
+  std::unordered_map<int, std::uint64_t> durationBounds;
   std::uint64_t useCounter = 0;
   std::jthread worker;
 
@@ -234,10 +244,14 @@ struct Source::Impl {
     state.availableFrames = preparedEnd(firstFrame);
   }
 
+  bool superseded() const {
+    return requestRevision.load() != workRevision;
+  }
+
   bool checkpoint() {
     std::unique_lock lock(mutex);
-    changed.wait(lock, [&] { return enabled || cancelled.load(); });
-    return !cancelled.load();
+    changed.wait(lock, [&] { return enabled || cancelled.load() || superseded(); });
+    return !cancelled.load() && !superseded();
   }
 
   void makeRoom(const std::shared_ptr<Asset> &current) {
@@ -252,9 +266,13 @@ struct Source::Impl {
     if (openCount >= kMaximumOpenAssets && oldest) oldest->closeDecoder();
   }
 
-  std::shared_ptr<Asset> loadAsset(int wav, std::stop_token stop) {
+  std::shared_ptr<Asset> loadAsset(int wav, std::stop_token stop,
+                                  std::uint64_t skipBefore = 0) {
     if (const auto found = assets.find(wav); found != assets.end()) return found->second;
+    if (const auto found = durationBounds.find(wav);
+        found != durationBounds.end() && found->second < skipBefore) return {};
     auto asset = std::make_shared<Asset>();
+    asset->decoderOpens = &decoderOpens;
     if (wav == kKick || wav == kClap) {
       const auto sound = wav == kKick ? club_beat::synthesizeKick(kSampleRate)
                                      : club_beat::synthesizeClap(kSampleRate);
@@ -274,6 +292,29 @@ struct Source::Impl {
           chart->Meta.Folder / utf8_to_path_t(found->second), extensions);
       if (!resolved) return assets.emplace(wav, nullptr).first->second;
       asset->path = *resolved;
+      // A cold seek need not build Vorbis codebooks for every earlier tap.
+      // Only skip sounds proven to end before both the target and an already
+      // known timeline end, so conservative bounds never change exact duration.
+      if (skipBefore > 0 && !durationBounds.contains(wav)) {
+        auto extension = asset->path.extension().string();
+        std::transform(extension.begin(), extension.end(), extension.begin(),
+            [](unsigned char c) { return c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c; });
+        if (extension == ".ogg") {
+          std::vector<unsigned char> encoded;
+          if (archive_file::readFileBoundedWithCheckpoint(
+                  asset->path, encoded, 64U * 1024U, nullptr, stop,
+                  [this] { return checkpoint(); })) {
+            if (const auto hint = audio::duration_bound::InspectVorbis(encoded)) {
+              if (const auto frames = audio::pcm_resampling::Ratio(
+                      hint->sampleRate, kSampleRate).outputFrames(hint->frames, kMaximumFrames)) {
+                durationBounds.emplace(wav, *frames);
+                if (*frames < skipBefore) return {};
+              }
+            }
+          }
+          if (!checkpoint()) return {};
+        }
+      }
       if (decodedAssets) {
         asset->decodedAssets = decodedAssets;
         asset->cancelled = &cancelled;
@@ -297,7 +338,7 @@ struct Source::Impl {
         if (!archive_file::readFileBoundedWithCheckpoint(
                 asset->path, encoded, kMaximumEncodedAssetBytes, &error, stop,
                 [this] { return checkpoint(); })) {
-          if (cancelled.load()) return {};
+          if (cancelled.load() || superseded()) return {};
           throw std::runtime_error("Could not extract music keysound: " + error);
         }
         asset->path = stagingDirectory / ("asset-" + std::to_string(wav));
@@ -357,7 +398,11 @@ struct Source::Impl {
     std::stable_sort(events.begin(), events.end(), [](const Event &a, const Event &b) {
       return a.frame < b.frame;
     });
-    if (!checkpoint()) return;
+    {
+      std::unique_lock lock(mutex);
+      changed.wait(lock, [&] { return enabled || cancelled.load(); });
+      if (cancelled.load()) return;
+    }
     std::filesystem::create_directories(stagingParent);
     stagingDirectory = stagingParent / (".music-stream-" + uuid::generateV4());
     if (!std::filesystem::create_directory(stagingDirectory))
@@ -378,6 +423,13 @@ struct Source::Impl {
     std::array<char, kBlockFrames * kChannels * sizeof(short)> pcm{};
     std::size_t eventIndex = 0;
     std::uint64_t position = firstFrame;
+    const auto discardObsoleteBlock = [&] {
+      if (!superseded()) return false;
+      voices.clear();
+      eventIndex = 0;
+      position = std::numeric_limits<std::uint64_t>::max();
+      return true;
+    };
     if (!events.empty()) totalFrames = std::max(totalFrames, events.back().frame + 1);
     for (;;) {
       std::uint64_t blockEnd;
@@ -393,6 +445,7 @@ struct Source::Impl {
         });
         if (cancelled.load()) return;
         if (endKnown && state.availableFrames >= totalFrames) break;
+        workRevision = requestRevision.load();
         const auto next = preparedEnd(requestedFrame);
         if (position != next) {
           position = next;
@@ -404,11 +457,15 @@ struct Source::Impl {
         // reader may currently be consuming on another thread.
         const auto following = preparedRanges.upper_bound(position);
         if (following != preparedRanges.end()) blockEnd = std::min(blockEnd, following->first);
+        activeBlockFirst = position;
+        activeBlockEnd = blockEnd;
       }
       while (eventIndex < events.size() && events[eventIndex].frame < blockEnd) {
-        if (!checkpoint()) return;
+        if (!checkpoint()) break;
         const auto event = events[eventIndex++];
-        auto asset = loadAsset(event.wav, stop);
+        const auto skipEnd = std::min(position, totalFrames);
+        auto asset = loadAsset(event.wav, stop,
+            skipEnd > event.frame ? skipEnd - event.frame : 0);
         if (!asset) continue;
         const auto targetFrames = audio::pcm_resampling::Ratio(
             asset->info.samplerate, kSampleRate).outputFrames(asset->info.frames, kMaximumFrames);
@@ -422,6 +479,8 @@ struct Source::Impl {
         voice->cursor.seek(position > event.frame ? position - event.frame : 0);
         voices.push_back(std::move(voice));
       }
+      if (cancelled.load()) return;
+      if (discardObsoleteBlock()) continue;
       if (position >= totalFrames && eventIndex == events.size()) {
         std::lock_guard lock(mutex);
         endKnown = true;
@@ -438,7 +497,7 @@ struct Source::Impl {
       const auto end = std::min(blockEnd, totalFrames);
       std::fill(mix.begin(), mix.end(), 0.0f);
       for (auto &voice : voices) {
-        if (!checkpoint()) return;
+        if (!checkpoint()) break;
         auto &asset = *voice->asset;
         makeRoom(voice->asset);
         if (!asset.open()) throw std::runtime_error("Could not reopen music keysound");
@@ -468,6 +527,8 @@ struct Source::Impl {
           voice->cursor.advance();
         }
       }
+      if (cancelled.load()) return;
+      if (discardObsoleteBlock()) continue;
       std::erase_if(voices, [&](const auto &voice) { return voice->end <= end; });
       const auto samples = static_cast<std::size_t>(end - position) * kChannels;
       for (std::size_t i = 0; i < samples; ++i) {
@@ -580,7 +641,19 @@ ReadResult Source::ReadFrames(std::uint64_t firstFrame, std::span<short> interle
   std::unique_lock lock(impl->mutex);
   if (firstFrame < impl->firstFrame)
     return {.status = ReadStatus::Error, .error = "Requested audio precedes preview range"};
-  impl->requestedFrame = std::min(firstFrame, kMaximumFrames);
+  firstFrame = std::min(firstFrame, kMaximumFrames);
+  if (impl->state.cancelled) return {.status = ReadStatus::Cancelled};
+  if (!impl->state.error.empty()) return {.status = ReadStatus::Error, .error = impl->state.error};
+  // A feeder may enter its old read just after the transport has sought. Do
+  // not let that stale read replace the target before the new epoch reads it.
+  if (impl->pendingSeek && firstFrame != *impl->pendingSeek)
+    return {.status = ReadStatus::Pending};
+  impl->pendingSeek.reset();
+  if (firstFrame != impl->requestedFrame && impl->preparedEnd(firstFrame) == firstFrame &&
+      (firstFrame < impl->activeBlockFirst || firstFrame >= impl->activeBlockEnd))
+    ++impl->requestRevision;
+  impl->requestedFrame = firstFrame;
+  const auto revision = impl->requestRevision.load();
   impl->changed.notify_all();
   const auto atEnd = [&] {
     // A sought suffix can end while earlier ranges remain missing. When all
@@ -591,10 +664,12 @@ ReadResult Source::ReadFrames(std::uint64_t firstFrame, std::span<short> interle
   };
   impl->changed.wait_for(lock, std::max(wait, std::chrono::milliseconds::zero()), [&] {
     return impl->state.cancelled || !impl->state.error.empty() ||
+           impl->requestRevision.load() != revision ||
            atEnd() || impl->preparedEnd(firstFrame) > firstFrame;
   });
   if (impl->state.cancelled) return {.status = ReadStatus::Cancelled};
   if (!impl->state.error.empty()) return {.status = ReadStatus::Error, .error = impl->state.error};
+  if (impl->requestRevision.load() != revision) return {.status = ReadStatus::Pending};
   const auto availableEnd = impl->preparedEnd(firstFrame);
   if (firstFrame >= availableEnd)
     return {.status = atEnd() ? ReadStatus::End : ReadStatus::Pending};
@@ -623,6 +698,18 @@ ReadResult Source::ReadFrames(std::uint64_t firstFrame, std::span<short> interle
 State Source::GetState() const {
   std::lock_guard lock(impl->mutex);
   return impl->state;
+}
+Statistics Source::GetStatistics() const {
+  return {.decoderOpens = impl->decoderOpens.load()};
+}
+void Source::RequestSeek(std::uint64_t firstFrame) {
+  {
+    std::lock_guard lock(impl->mutex);
+    impl->requestedFrame = std::clamp(firstFrame, impl->firstFrame, kMaximumFrames);
+    impl->pendingSeek = impl->requestedFrame;
+    ++impl->requestRevision;
+  }
+  impl->changed.notify_all();
 }
 void Source::SetRenderingEnabled(bool enabled) {
   { std::lock_guard lock(impl->mutex); impl->enabled = enabled; }

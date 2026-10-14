@@ -1158,6 +1158,13 @@ Java_com_snurhythm_asobmashow_AndroidMusicStream_enable(
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_snurhythm_asobmashow_AndroidMusicStream_seek(
+    JNIEnv *, jclass, jlong handle, jlong firstFrame) {
+  if (auto source = musicStream(handle))
+    source->RequestSeek(static_cast<std::uint64_t>(std::max<jlong>(0, firstFrame)));
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_snurhythm_asobmashow_AndroidMusicStream_release(
     JNIEnv *, jclass, jlong handle) {
   releaseMusicStream(handle);

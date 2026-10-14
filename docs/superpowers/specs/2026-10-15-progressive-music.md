@@ -22,6 +22,13 @@ adjacent-track prerenders. Old app-owned music cache files are removed on the ne
 playback preparation. Explicit audio exports still use the full renderer. Readers
 use bounded waits.
 
+Native seeks immediately notify the producer and wake obsolete feeder reads.
+The producer abandons superseded blocks at asset and voice checkpoints, preserving
+already published PCM. Cold seeks inspect small complete Ogg/Vorbis containers
+for conservative duration bounds, avoiding expensive decoder initialization for
+expired keysounds. Unknown, large, or malformed assets use the normal decoder;
+overlapping tails and exact final duration still use decoded metadata.
+
 Native PCM adapters use AVAudioEngine/AVAudioPlayerNode on iOS and AudioTrack on
 Android. Playback preparation always returns a stream, including short songs.
 Preserve pause, resume,
@@ -30,6 +37,8 @@ audio focus/interruption handling, and background services/audio sessions.
 Pause/stop disables speculative rendering; play enables it. Replacing a stream
 cancels its producer. Read/underrun waiting must not block a UI or audio callback.
 The playback position follows consumed audio frames, not a wall-clock accumulator.
+iOS Now Playing explicitly identifies finite audio, retains its duration during
+initial buffering, and advertises the default playback rate and remote seek command.
 
 Opening assets from archives may still require extracting an individual encoded
 file. Keep extraction cancellable, retain extracted assets privately for reuse,

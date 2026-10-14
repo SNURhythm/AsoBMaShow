@@ -12,6 +12,7 @@ final class AndroidMusicStream {
     static native long duration(long handle);
     static native String error(long handle);
     static native void enable(long handle, boolean value);
+    static native void seek(long handle, long firstFrame);
     static native void release(long handle);
     static native void reportError(String message);
 
@@ -23,6 +24,7 @@ final class AndroidMusicStream {
                 public long durationFrames() { return duration(handle); }
                 public String error() { return AndroidMusicStream.error(handle); }
                 public void enable(boolean value) { AndroidMusicStream.enable(handle, value); }
+                public void seek(long frame) { AndroidMusicStream.seek(handle, frame); }
                 public void close() { release(handle); }
             }, output, listener);
         } catch (RuntimeException e) {

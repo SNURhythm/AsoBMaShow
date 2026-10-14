@@ -100,3 +100,23 @@ Files: `NativeMusicPlayer.h/.cpp`, `ChartMusicCache.h/.cpp`, `MusicPlayerService
 - Keep explicit exports on the existing complete renderer.
 - Verify focused PCM/lifecycle regressions, native builds, full CTest, and Android
   preview BGA plus player transport behavior.
+
+## Follow-up: cold-seek latency and iOS native scrubber
+
+- Skip decoder initialization for expired small Vorbis sounds using validated
+  container duration upper bounds; retain exact PCM and backward-seek behavior.
+- Route native seeks directly to the shared producer, interrupt obsolete blocks
+  cooperatively, and wake old feeder reads. Reset pending seeks on stop/restart
+  and iOS audio-engine configuration changes.
+- Publish explicit finite-audio metadata and duration fallback for iOS controls.
+- Cover decoder-open counts, exact output, obsolete-work interruption, stale reads,
+  oversized seeks, native forwarding, and iOS metadata/remote seek registration.
+- Run desktop, Android, and iOS build/static checks. The user will verify device
+  interaction manually; do not run an emulator or simulator for this follow-up.
+
+Verification: desktop `main` and affected native targets passed, with no compilation
+on a repeat `main` build. All 491 CTest checks passed; all eight Android PCM player
+JVM tests passed. Android release build-only and unsigned iOS build-only passed.
+The synthetic desktop fixture with 1,200 short Vorbis keysounds reduced its first
+100-second seek from about 3.45 seconds to 134 milliseconds; this is not an iPhone
+latency measurement. Physical-device scrubber behavior remains for manual testing.

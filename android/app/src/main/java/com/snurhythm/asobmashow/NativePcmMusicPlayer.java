@@ -7,6 +7,7 @@ final class NativePcmMusicPlayer {
         long durationFrames();
         String error();
         void enable(boolean value);
+        void seek(long frame);
         void close();
     }
     interface Output {
@@ -71,6 +72,7 @@ final class NativePcmMusicPlayer {
         completed = false;
         baseFrame = Math.max(0, frame);
         submitted = lastHead = headWrap = 0;
+        source.seek(baseFrame);
         if (playing) output.play();
         notifyAll();
     }

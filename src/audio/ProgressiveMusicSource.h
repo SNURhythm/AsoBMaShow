@@ -43,6 +43,9 @@ struct PreviewGains {
   float bgm = 1.0f;
   float keysound = 1.0f;
 };
+struct Statistics {
+  std::uint64_t decoderOpens = 0;
+};
 
 // Listening-only source. Never decode, read files, or wait from an audio
 // callback. Native feeder workers may call ReadFrames with bounded waits.
@@ -65,6 +68,10 @@ public:
   ReadResult ReadFrames(std::uint64_t firstFrame, std::span<short> interleaved,
                         std::chrono::milliseconds wait = std::chrono::milliseconds(100));
   [[nodiscard]] State GetState() const;
+  [[nodiscard]] Statistics GetStatistics() const;
+  // Prioritize a transport seek without waiting for an in-flight feeder read.
+  // The single feeder must next read this target; stale reads return Pending.
+  void RequestSeek(std::uint64_t firstFrame);
   // Play/resume enables production; pause/stop disables further read-ahead.
   void SetRenderingEnabled(bool enabled);
   // Terminal cancellation. Bounded reads immediately wake.

@@ -10,7 +10,7 @@ public final class NativePcmMusicPlayerTest {
     static final class Source implements NativePcmMusicPlayer.Source {
         volatile boolean enabled, closed, pending = true;
         volatile int failure;
-        volatile long lastRead = -1;
+        volatile long lastRead = -1, lastSeek = -1;
         CountDownLatch entered, unblock;
         public int read(long frame, short[] data) {
             lastRead = frame;
@@ -29,6 +29,7 @@ public final class NativePcmMusicPlayerTest {
         public long durationFrames() { return 100; }
         public String error() { return "render failed"; }
         public void enable(boolean value) { enabled = value; }
+        public void seek(long frame) { lastSeek = frame; }
         public void close() { closed = true; }
     }
     static final class Output implements NativePcmMusicPlayer.Output {
@@ -98,6 +99,7 @@ public final class NativePcmMusicPlayerTest {
         try {
             player.play(); assertTrue(entered.await(1, TimeUnit.SECONDS));
             player.seek(80); assertEquals(80, player.positionFrames());
+            assertEquals("seek must notify the source before the old read finishes", 80, source.lastSeek);
             source.unblock.countDown(); await(() -> output.written == 20);
             assertEquals(80, player.positionFrames());
             output.head = 20; await(() -> events.finished == 1);

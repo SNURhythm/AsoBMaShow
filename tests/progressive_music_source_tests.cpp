@@ -5,6 +5,7 @@
 #include "audio/DecodedAssetCache.h"
 #include "audio/ProgressiveMusicSource.h"
 #include "audio/SoundFileIO.h"
+#include "audio/VorbisDurationBound.h"
 
 #include <atomic>
 #include <chrono>
@@ -46,6 +47,49 @@ void writeWav(const std::filesystem::path &path, int rate, int channels,
   for (int repeat = 0; repeat < repeats; ++repeat)
     require(sf_write_short(file.get(), samples.data(), samples.size()) ==
                 static_cast<sf_count_t>(samples.size()), "could not write WAV fixture");
+}
+void writeOgg(const std::filesystem::path &path, int frames) {
+  SF_INFO info{};
+  info.samplerate = 44100;
+  info.channels = 1;
+  info.format = SF_FORMAT_OGG | SF_FORMAT_VORBIS;
+  auto file = asobmashow::audio::openSoundFileHandle(path, SFM_WRITE, info);
+  require(bool(file), "could not create Ogg fixture");
+  const std::array<short, 4096> samples = [] {
+    std::array<short, 4096> result{};
+    result.fill(12000);
+    return result;
+  }();
+  for (int offset = 0; offset < frames;) {
+    const auto count = std::min<int>(samples.size(), frames - offset);
+    require(sf_write_short(file.get(), samples.data(), count) == count,
+            "could not write Ogg fixture");
+    offset += count;
+  }
+}
+void testVorbisDurationBounds(const std::filesystem::path &root) {
+  const auto path = root / "duration.ogg";
+  writeOgg(path, 8820);
+  std::ifstream input(path, std::ios::binary);
+  const std::vector<unsigned char> encoded(
+      (std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+  const auto duration = audio::duration_bound::InspectVorbis(encoded);
+  require(duration && duration->sampleRate == 44100 && duration->frames >= 8820 &&
+              duration->frames < 10000,
+          "small Vorbis keysounds need a conservative duration without opening a decoder");
+  require(!audio::duration_bound::InspectVorbis(std::span(encoded).first(encoded.size() - 1)),
+          "truncated Vorbis must fall back to the decoder");
+  auto corrupt = encoded;
+  corrupt.back() ^= 1;
+  require(!audio::duration_bound::InspectVorbis(corrupt),
+          "corrupt Ogg pages must not supply duration bounds");
+  auto chained = encoded;
+  chained.insert(chained.end(), encoded.begin(), encoded.end());
+  require(!audio::duration_bound::InspectVorbis(chained),
+          "chained streams must fall back to the decoder");
+  const std::array<unsigned char, 4> other{'R', 'I', 'F', 'F'};
+  require(!audio::duration_bound::InspectVorbis(other),
+          "non-Vorbis assets must fall back to their normal decoder");
 }
 std::unique_ptr<bms_parser::Chart> chartAt(const std::filesystem::path &folder,
                                          const std::string &body = "#00011:01\n") {
@@ -224,6 +268,11 @@ void testSeekPreparesOnlyRequestedRanges(const std::filesystem::path &root) {
   require(stream->ReadFrames(44100 * 200, paused, 100ms).status ==
               music_stream::ReadStatus::End,
           "seeking past the known end must finish without filling earlier gaps");
+  const auto oversized = std::numeric_limits<std::uint64_t>::max();
+  stream->RequestSeek(oversized);
+  require(stream->ReadFrames(oversized, paused, 100ms).status ==
+              music_stream::ReadStatus::End,
+          "oversized seek must acknowledge its clamped target and report EOF");
   readAt(41);             // Backward into the already prepared opening.
   const auto tail = readAll(stream, 44100 * 75 + 19);
   require(tail == std::vector<short>(reference.begin() + (44100 * 75 + 19) * 2,
@@ -235,6 +284,117 @@ void testSeekPreparesOnlyRequestedRanges(const std::filesystem::path &root) {
           "reading skipped ranges later must recover the entire exact stream");
   require(stream->GetState().complete,
           "stream completion must wait until all skipped ranges are prepared");
+}
+
+void testColdSeekSkipsExpiredVorbisDecoders(const std::filesystem::path &root) {
+  const auto dir = root / "cold-vorbis-seek";
+  std::filesystem::create_directories(dir);
+  writeOgg(dir / "tap.ogg", 8820);
+  writeWav(dir / "first.wav", 44100, 1, std::vector<short>(44100, 3000), 65);
+  const std::string digits = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const auto code = [&](int value) {
+    return std::string{digits[value / 36], digits[value % 36]};
+  };
+  std::string body = "#00001:01\n";
+  for (int index = 0; index < 64; ++index) {
+    const auto filename = "tap-" + std::to_string(index) + ".ogg";
+    std::filesystem::copy_file(dir / "tap.ogg", dir / filename);
+    body += "#WAV" + code(index + 10) + " " + filename + "\n";
+  }
+  for (int measure = 0; measure < 32; ++measure) {
+    auto number = std::to_string(measure);
+    number.insert(0, 3 - number.size(), '0');
+    body += "#" + number + "11:" + code(measure * 2 + 10) +
+            code(measure * 2 + 11) + "\n";
+  }
+  auto chart = chartAt(dir, body);
+  const auto referencePath = dir / "reference.wav";
+  require(chart_audio::RenderChartAudioToWav(*chart, referencePath).success,
+          "Vorbis seek reference failed");
+  const auto reference = readWav(referencePath);
+  auto stream = music_stream::Source::Create(std::move(chart), dir / "streams");
+  waitForOpening(stream);
+  stream->SetRenderingEnabled(false);
+  const auto before = stream->GetStatistics().decoderOpens;
+  constexpr std::uint64_t target = 50 * 44100 + 123;
+  std::array<short, 1994> samples{};
+  stream->ReadFrames(target, samples, 0ms);
+  stream->SetRenderingEnabled(true);
+  music_stream::ReadResult result;
+  do { result = stream->ReadFrames(target, samples, 100ms); }
+  while (result.status == music_stream::ReadStatus::Pending);
+  stream->SetRenderingEnabled(false);
+  require(result.status == music_stream::ReadStatus::Data && result.frames > 0 &&
+              std::equal(samples.begin(), samples.begin() + result.frames * 2,
+                         reference.begin() + target * 2),
+          "cold Vorbis seek must preserve overlapping tails and target PCM");
+  require(stream->GetStatistics().decoderOpens - before < 8,
+          "cold seek must not initialize every expired Vorbis decoder in the skipped prefix");
+  stream->SetRenderingEnabled(true);
+  require(readAll(stream) == reference,
+          "skipped Vorbis assets must still play correctly when seeking backward");
+}
+
+void testSeekInterruptsObsoletePreparation(const std::filesystem::path &root) {
+  const auto dir = root / "seek-preemption";
+  std::filesystem::create_directories(dir);
+  writeOgg(dir / "long.ogg", 65 * 44100);
+  writeWav(dir / "first.wav", 44100, 1, std::vector<short>(44100, 3000), 65);
+  const std::string digits = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  std::string body = "#00001:01\n";
+  for (int index = 0; index < 64; ++index) {
+    const auto filename = "long-" + std::to_string(index) + ".ogg";
+    std::filesystem::copy_file(dir / "long.ogg", dir / filename);
+    const auto value = index + 10;
+    const std::string code{digits[value / 36], digits[value % 36]};
+    body += "#WAV" + code + " " + filename + "\n#02001:" + code + "\n";
+  }
+  auto stream = music_stream::Source::Create(chartAt(dir, body), dir / "streams");
+  waitForOpening(stream);
+  const auto before = stream->GetStatistics().decoderOpens;
+  std::array<short, 32> samples{};
+  stream->ReadFrames(50 * 44100, samples, 0ms);
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  while (stream->GetStatistics().decoderOpens < before + 3) {
+    require(std::chrono::steady_clock::now() < deadline, "obsolete work did not start");
+    std::this_thread::yield();
+  }
+  // Supersede a block while it is opening dozens of overlapping compressed
+  // sounds. The new target only needs the backing sound already opened at start.
+  constexpr std::uint64_t target = 20 * 44100 + 123;
+  stream->RequestSeek(target);
+  require(stream->ReadFrames(50 * 44100, samples, 0ms).status ==
+              music_stream::ReadStatus::Pending,
+          "a stale feeder read must not replace the newly requested seek");
+  music_stream::ReadResult result;
+  do { result = stream->ReadFrames(target, samples, 100ms); }
+  while (result.status == music_stream::ReadStatus::Pending &&
+         std::chrono::steady_clock::now() < deadline);
+  require(result.status == music_stream::ReadStatus::Data && samples[0] == 2999,
+          "superseding seek must render the new target");
+  stream->SetRenderingEnabled(false);
+  require(stream->GetStatistics().decoderOpens - before < 32,
+          "seek must abandon obsolete preparation before opening the entire old block");
+}
+
+void testSeekWakesWaitingRead(const std::filesystem::path &root) {
+  auto stream = music_stream::Source::Create(
+      chartAt(root / "waiting-seek", "#10011:01\n"), root / "waiting-streams");
+  waitForOpening(stream);
+  stream->SetRenderingEnabled(false);
+  std::array<short, 2> oldSamples{};
+  auto waiting = std::async(std::launch::async, [&] {
+    return stream->ReadFrames(100 * 44100, oldSamples, 5s);
+  });
+  require(waiting.wait_for(20ms) == std::future_status::timeout,
+          "old feeder read should wait for unavailable audio");
+  stream->RequestSeek(50 * 44100);
+  require(waiting.wait_for(500ms) == std::future_status::ready &&
+              waiting.get().status == music_stream::ReadStatus::Pending,
+          "seeking must wake an obsolete read instead of waiting for its timeout");
+  stream->Cancel();
+  require(stream->ReadFrames(100 * 44100, oldSamples).status == music_stream::ReadStatus::Cancelled,
+          "cancellation must take precedence over a pending seek");
 }
 
 void testCancelAndPause(const std::filesystem::path &root) {
@@ -315,10 +475,14 @@ int main() {
   std::filesystem::create_directories(root);
   ScopeExit cleanup([&] { std::filesystem::remove_all(root); });
   try {
+    testVorbisDurationBounds(root);
     testTemporaryLifetime(root);
     testEquivalence(root);
     testLazyLongSource(root);
     testSeekPreparesOnlyRequestedRanges(root);
+    testColdSeekSkipsExpiredVorbisDecoders(root);
+    testSeekInterruptsObsoletePreparation(root);
+    testSeekWakesWaitingRead(root);
     testCancelAndPause(root);
     testPreviewPagesSurviveHandoff(root);
     testPreviewGainHeadroom(root);

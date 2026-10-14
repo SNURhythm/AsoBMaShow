@@ -218,7 +218,10 @@ bool IOSMusicStream::Play(std::string &error) {
   std::lock_guard lock(impl->mutex);
   if (!impl->failure.empty()) { error = impl->failure; return false; }
   if (!impl->StartEngine(error)) return false;
-  if (impl->ended && impl->timeline.Drained(impl->completion->played.load())) impl->Reset(0);
+  if (impl->ended && impl->timeline.Drained(impl->completion->played.load())) {
+    impl->Reset(0);
+    impl->source->RequestSeek(0);
+  }
   impl->playing = true;
   impl->buffering = impl->timeline.Drained(impl->completion->played.load());
   impl->source->SetRenderingEnabled(true);
@@ -241,6 +244,7 @@ void IOSMusicStream::Stop() {
   impl->playing = false;
   impl->source->SetRenderingEnabled(false);
   impl->Reset(0);
+  impl->source->RequestSeek(0);
   [impl->engine pause];
   impl->wake.notify_all();
 }
@@ -251,7 +255,9 @@ void IOSMusicStream::Seek(long long positionMicros) {
   const auto micros = static_cast<std::uint64_t>(std::max(0LL, positionMicros));
   const auto frame = (micros / 1000000) * music_stream::kSampleRate +
                      (micros % 1000000) * music_stream::kSampleRate / 1000000;
-  impl->Reset(sourceState.complete ? std::min(frame, sourceState.durationFrames) : frame);
+  const auto target = sourceState.complete ? std::min(frame, sourceState.durationFrames) : frame;
+  impl->Reset(target);
+  impl->source->RequestSeek(target);
   impl->buffering = true;
   impl->wake.notify_all();
 }
@@ -279,6 +285,7 @@ void IOSMusicStream::ConfigurationChanged(void *changedEngine) {
   if ((__bridge void *)impl->engine != changedEngine) return;
   const auto position = impl->Position();
   impl->Reset(position);
+  impl->source->RequestSeek(position);
   if (impl->playing) {
     std::string error;
     if (!impl->StartEngine(error)) {
