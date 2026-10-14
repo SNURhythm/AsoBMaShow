@@ -1057,14 +1057,6 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   overview->addView(makeWrappedText(i18n::message("settings.skins.files_location", {{"path", visibleSkinFolder}}),
                                     metrics.smallTextSize,
                                     app_theme::textMuted()));
-  gameplaySkinStatusText = makeWrappedText(
-      snapshot.statusMessage, metrics.smallTextSize, app_theme::textSecondary());
-  overview->addView(gameplaySkinStatusText);
-  gameplaySkinUiMessageText = makeWrappedText(
-      gameplaySkinUiMessage.resolve() != snapshot.statusMessage ? gameplaySkinUiMessage
-                                                       : i18n::Text{},
-      metrics.smallTextSize, app_theme::textSecondary());
-  overview->addView(gameplaySkinUiMessageText);
   MusicSelectToolbarMode toolbarMode;
   {
     std::lock_guard lock(context.applicationUiStateMutex);
@@ -1223,6 +1215,14 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         app_theme::coral()));
   }
   imports->addView(importActions);
+  gameplaySkinStatusText = makeWrappedText(
+      snapshot.statusMessage, metrics.smallTextSize, app_theme::textSecondary());
+  imports->addView(gameplaySkinStatusText);
+  gameplaySkinUiMessageText = makeWrappedText(
+      gameplaySkinUiMessage.resolve() != snapshot.statusMessage ? gameplaySkinUiMessage
+                                                       : i18n::Text{},
+      metrics.smallTextSize, app_theme::textSecondary());
+  imports->addView(gameplaySkinUiMessageText);
   if (snapshot.hasPackageProgress) {
     imports->addView(makeWrappedText(
         skin::gameplaySkinPackageProgressDisplayText(snapshot.progress),
