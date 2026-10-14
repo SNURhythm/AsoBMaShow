@@ -9157,6 +9157,24 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             RESOURCE_LOCK metal_device
         )
+        add_executable(text_view_metal_tests
+            tests/text_view_metal_tests.cpp
+            src/rendering/Color.cpp
+            src/rendering/common.cpp
+            src/rendering/UiBatchRenderer.cpp
+            src/rendering/UniformCache.cpp
+            src/view/SdlTtfRuntime.cpp
+            src/view/TextView.cpp
+            src/view/View.cpp
+        )
+        target_include_directories(text_view_metal_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_compile_features(text_view_metal_tests PRIVATE cxx_std_23)
+        target_link_libraries(text_view_metal_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
+        asobmashow_register_test(text_view_metal_tests)
+        set_tests_properties(text_view_metal_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            RESOURCE_LOCK metal_device
+        )
         add_executable(ui_batch_metal_tests
             tests/ui_batch_metal_tests.cpp
             src/rendering/UiBatchRenderer.cpp

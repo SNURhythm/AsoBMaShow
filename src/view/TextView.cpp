@@ -524,6 +524,9 @@ void TextView::renderImpl(RenderContext &context) {
         kProgram, BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
     state.texture = texture;
     state.sampler = s_texColor;
+    // Tight icon rasters can touch an edge. Linear filtering must not wrap
+    // that ink onto the opposite side when UI scaling lands between pixels.
+    state.samplerFlags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
     context.appendUiTextured(vertices, indices, state);
   };
 
