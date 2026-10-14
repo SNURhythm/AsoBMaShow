@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -146,6 +147,122 @@ void testNormalDecodedRender(const std::filesystem::path &root) {
     expect(sf_readf_short(sound.get(), samples, 1) == 1 && samples[0] > 11000 &&
                samples[0] == samples[1],
            "actual decoded keysound reaches both output channels");
+  }
+}
+
+void replaceKeysound(const bms_parser::Chart &chart, int rate, int channels,
+                     const std::vector<short> &samples,
+                     const char *filename = "click.wav") {
+  SF_INFO info{};
+  info.samplerate = rate;
+  info.channels = channels;
+  info.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
+  auto sound = asobmashow::audio::openSoundFileHandle(
+      chart.Meta.Folder / filename, SFM_WRITE, info);
+  if (!sound || sf_write_short(sound.get(), samples.data(), samples.size()) !=
+                    static_cast<sf_count_t>(samples.size()))
+    throw std::runtime_error("Could not replace keysound fixture");
+}
+
+void testResampledWaveform(const std::filesystem::path &root) {
+  auto chart = chartFixture(root, "resampled-waveform");
+  const auto output = chart->Meta.Folder / "result.wav";
+  for (const int channels : {1, 2}) {
+    for (const int percent : {50, 100, 200}) {
+      // All three combinations have the same exact 1:2 source/output ratio.
+      // The decoder scales PCM16 by 32767/32768, so +/-2 decodes to +/-1.
+      replaceKeysound(*chart, 22050 * 100 / percent, channels,
+                      channels == 1 ? std::vector<short>{-2, 0}
+                                    : std::vector<short>{-2, 2, 0, 0});
+      chart_audio::RenderOptions options;
+      options.playback.percent = percent;
+      expect(guardedRender(*chart, output, options).success,
+             "fractional-rate waveform renders");
+      SF_INFO info{};
+      auto sound = asobmashow::audio::openSoundFileHandle(output, SFM_READ, info);
+      std::vector<short> samples(10);
+      expect(sound && sf_readf_short(sound.get(), samples.data(), 5) == 5,
+             "fractional-rate waveform can be read");
+      expect(samples == (channels == 1
+                             ? std::vector<short>{-1, -1, -1, -1, 0, 0, 0, 0, 0, 0}
+                             : std::vector<short>{-1, 1, -1, 1, 0, 0, 0, 0, 0, 0}),
+             "offline resampling rounds signed half samples away from zero");
+    }
+  }
+}
+
+void testFractionalPlaybackWaveform(const std::filesystem::path &root) {
+  auto chart = chartFixture(root, "fractional-playback-waveform");
+  replaceKeysound(*chart, 48000, 1, {-101, 201, -301, 401, -501});
+  const auto output = chart->Meta.Folder / "result.wav";
+  for (const int percent : {105, 195}) {
+    // Decoded PCM is {-100, 200, -300, 400, -500}. The exact source
+    // positions advance by 8/7 at 105%, or by 104/49 at 195%.
+    const std::vector<short> expected = percent == 105
+        ? std::vector<short>{-100, 129, -100, 14, -500}
+        : std::vector<short>{-100, -214, -500};
+    chart_audio::RenderOptions options;
+    options.playback.percent = percent;
+    options.maxMixedFrames = expected.size();
+    expect(guardedRender(*chart, output, options).success,
+           "fractional playback fits its exact mixed-frame budget");
+    SF_INFO info{};
+    auto sound = asobmashow::audio::openSoundFileHandle(output, SFM_READ, info);
+    std::vector<short> samples((expected.size() + 1) * 2);
+    expect(sound && sf_readf_short(sound.get(), samples.data(), expected.size() + 1) ==
+                        static_cast<sf_count_t>(expected.size() + 1),
+           "fractional playback waveform can be read");
+    for (std::size_t i = 0; i < expected.size(); ++i)
+      expect(samples[i * 2] == expected[i] && samples[i * 2 + 1] == expected[i],
+             "fractional playback preserves signed interpolation and the final frame");
+    expect(samples[expected.size() * 2] == 0 && samples.back() == 0,
+           "fractional playback stops at the exact projected frame count");
+    --options.maxMixedFrames;
+    expect(!guardedRender(*chart, output, options).success,
+           "fractional playback rejects a one-frame-short work budget");
+  }
+}
+
+void testDirectMixHeadroom(const std::filesystem::path &root) {
+  auto chart = chartFixture(root, "direct-mix-headroom");
+  replaceKeysound(*chart, 44100, 2, {20000, -20000});
+  replaceKeysound(*chart, 44100, 2, {-20000, 20000}, "negative.wav");
+  chart->WavTable[2] = "negative.wav";
+  chart->ReferencedWavTable[2] = "negative.wav";
+  auto *timeline = chart->Measures.front()->TimeLines.front();
+  timeline->BackgroundNotes.push_back(new bms_parser::Note(1));
+  timeline->BackgroundNotes.push_back(new bms_parser::Note(2));
+  const auto output = chart->Meta.Folder / "result.wav";
+  expect(guardedRender(*chart, output).success, "direct stereo overlap renders");
+  SF_INFO info{};
+  auto sound = asobmashow::audio::openSoundFileHandle(output, SFM_READ, info);
+  short samples[4]{};
+  expect(sound && sf_readf_short(sound.get(), samples, 2) == 2 &&
+             samples[0] == 19998 && samples[1] == -19998 &&
+             samples[2] == 0 && samples[3] == 0,
+         "direct mixing preserves stereo, float headroom, and the silent tail");
+}
+
+void benchmarkRendering(const std::filesystem::path &root) {
+  for (const int rate : {44100, 48000}) {
+    auto chart = chartFixture(root, "benchmark-" + std::to_string(rate));
+    std::vector<short> samples(rate * 2);
+    for (std::size_t i = 0; i < samples.size(); ++i)
+      samples[i] = static_cast<short>(static_cast<int>((i * 17) % 65536) - 32768);
+    replaceKeysound(*chart, rate, 2, samples);
+    auto *timeline = chart->Measures.front()->TimeLines.front();
+    for (int i = 1; i < 512; ++i)
+      timeline->BackgroundNotes.push_back(new bms_parser::Note(1));
+    for (int run = 0; run < 3; ++run) {
+      const auto start = std::chrono::steady_clock::now();
+      const auto result = chart_audio::RenderChartAudioToWav(
+          *chart, chart->Meta.Folder / "result.wav");
+      expect(result.success && result.eventCount == 512, "benchmark renders all voices");
+      std::cout << "Render 512 overlapping 1 s stereo sounds at " << rate << " Hz: "
+                << std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - start).count()
+                << " ms\n";
+    }
   }
 }
 
@@ -646,6 +763,13 @@ int main(int argc, char **argv) {
       testUnicodeKeysoundReference(root);
       return failures == 0 ? 0 : 1;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--benchmark") {
+      benchmarkRendering(root);
+      return failures == 0 ? 0 : 1;
+    }
+    testResampledWaveform(root);
+    testDirectMixHeadroom(root);
+    testFractionalPlaybackWaveform(root);
     testNormalDecodedRender(root);
     testUnicodeKeysoundReference(root);
     testRateAndTailSemantics(root);

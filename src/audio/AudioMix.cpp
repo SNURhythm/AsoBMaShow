@@ -1,4 +1,5 @@
 #include "AudioMix.h"
+#include "PcmResampler.h"
 #include "../perf/LatencyTelemetry.h"
 #include "../settings/AudioVideoSettings.h"
 
@@ -146,32 +147,11 @@ ProjectedResampledPcmSampleCount(std::size_t sourceSamples, int channels,
   if (channels <= 0 || sourceRate <= 0 || targetRate <= 0) return std::nullopt;
   const size_t channelCount = static_cast<size_t>(channels);
   if (sourceSamples % channelCount != 0) return std::nullopt;
-  if (sourceRate == targetRate) return sourceSamples;
-
-  const size_t sourceFrames = sourceSamples / channelCount;
-  if (sourceFrames == 0) return std::size_t{0};
-
-  const size_t sourceRateValue = static_cast<size_t>(sourceRate);
-  const size_t targetRateValue = static_cast<size_t>(targetRate);
-  const size_t maximumFrames =
-      std::numeric_limits<size_t>::max() / channelCount;
-  const size_t wholeSeconds = sourceFrames / sourceRateValue;
-  const size_t remainingFrames = sourceFrames % sourceRateValue;
-  if (wholeSeconds > maximumFrames / targetRateValue) {
-    return std::nullopt;
-  }
-  const size_t wholeTargetFrames = wholeSeconds * targetRateValue;
-  const std::uint64_t fractionalNumerator =
-      static_cast<std::uint64_t>(remainingFrames) *
-      static_cast<std::uint64_t>(targetRate);
-  const size_t fractionalTargetFrames = static_cast<size_t>(
-      fractionalNumerator / static_cast<std::uint64_t>(sourceRate) +
-      (fractionalNumerator % static_cast<std::uint64_t>(sourceRate) != 0));
-  if (fractionalTargetFrames > maximumFrames - wholeTargetFrames) {
-    return std::nullopt;
-  }
-  const size_t targetFrames = wholeTargetFrames + fractionalTargetFrames;
-  return targetFrames * channelCount;
+  const auto targetFrames = pcm_resampling::Ratio(sourceRate, targetRate).outputFrames(
+      sourceSamples / channelCount,
+      std::numeric_limits<size_t>::max() / channelCount);
+  if (!targetFrames) return std::nullopt;
+  return *targetFrames * channelCount;
 }
 
 bool ResampledPcmFitsSampleBudget(
@@ -195,39 +175,16 @@ std::vector<short> ResamplePcm(std::span<const short> source, int channels,
   const size_t targetFrames = *projectedSamples / channelCount;
   std::vector<short> output(*projectedSamples);
 
-  // Advance the exact source-rate / target-rate ratio without accumulating
-  // floating-point error. Android's 128-bit long double uses software math;
-  // integer interpolation also makes half-sample rounding platform-independent.
-  const auto denominator = static_cast<std::int64_t>(targetRate);
-  const size_t wholeStep = static_cast<size_t>(sourceRate / targetRate);
-  const auto fractionalStep = static_cast<std::int64_t>(sourceRate % targetRate);
-  size_t leftFrame = 0;
-  std::int64_t fraction = 0;
-
+  pcm_resampling::Cursor cursor(
+      pcm_resampling::Ratio(sourceRate, targetRate), sourceFrames);
   for (size_t targetFrame = 0; targetFrame < targetFrames; ++targetFrame) {
-    const size_t rightFrame = std::min(leftFrame + 1, sourceFrames - 1);
-
-    for (int channel = 0; channel < channels; ++channel) {
-      const size_t leftIndex = leftFrame * channelCount + channel;
-      const size_t rightIndex = rightFrame * channelCount + channel;
-      // A weighted int16 sample times a positive int rate fits in int64.
-      // Convex interpolation stays within int16 bounds, including after rounding.
-      const std::int64_t numerator =
-          source[leftIndex] * (denominator - fraction) +
-          source[rightIndex] * fraction;
-      const std::int64_t rounded =
-          (numerator + (numerator >= 0 ? denominator / 2 : -denominator / 2)) /
-          denominator;
-      output[targetFrame * channelCount + channel] = static_cast<short>(rounded);
+    const size_t leftIndex = cursor.left() * channelCount;
+    const size_t rightIndex = cursor.right() * channelCount;
+    for (size_t channel = 0; channel < channelCount; ++channel) {
+      output[targetFrame * channelCount + channel] = cursor.interpolate(
+          source[leftIndex + channel], source[rightIndex + channel]);
     }
-
-    // Saturate at the final source frame, including extreme rate ratios.
-    leftFrame += std::min(wholeStep, sourceFrames - 1 - leftFrame);
-    fraction += fractionalStep;
-    if (fraction >= denominator) {
-      fraction -= denominator;
-      if (leftFrame < sourceFrames - 1) ++leftFrame;
-    }
+    cursor.advance();
   }
 
   return output;

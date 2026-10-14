@@ -11,6 +11,7 @@
 #include "ChartAssetExtensions.h"
 #include "ClubBeat.h"
 #include "PrepMetronomeSound.h"
+#include "PcmResampler.h"
 #include "SoundFileIO.h"
 #include "decoder.h"
 
@@ -226,7 +227,9 @@ bool readArchiveAudioBatch(const ArchiveAudioBatch &batch,
 
 bool decodedSoundIsValid(const DecodedSound &decoded) {
   return decoded.info.frames > 0 && decoded.info.channels > 0 &&
-         decoded.info.samplerate > 0;
+         decoded.info.samplerate > 0 &&
+         static_cast<std::uint64_t>(decoded.info.frames) <=
+             decoded.pcm.size() / static_cast<std::size_t>(decoded.info.channels);
 }
 
 void preloadArchivedDecodedSounds(const bms_parser::Chart &chart,
@@ -439,20 +442,6 @@ long long audioMicrosForFrames(std::size_t frames) {
                 kOutputSampleRate));
 }
 
-float sampleDecodedChannel(const DecodedSound &sound, std::size_t frame,
-                           int channel) {
-  const int sourceChannels = sound.info.channels;
-  const int sourceChannel =
-      sourceChannels == 1 ? 0 : std::min(channel, sourceChannels - 1);
-  const std::size_t sampleIndex =
-      frame * static_cast<std::size_t>(sourceChannels) +
-      static_cast<std::size_t>(sourceChannel);
-  if (sampleIndex >= sound.pcm.size()) {
-    return 0.0f;
-  }
-  return static_cast<float>(sound.pcm[sampleIndex]) / 32768.0f;
-}
-
 bool mixSoundAt(std::vector<float> &mix, const DecodedSound &sound,
                 long long timeMicros, audio::PlaybackRate playback,
                 RenderBudget &budget) {
@@ -462,12 +451,15 @@ bool mixSoundAt(std::vector<float> &mix, const DecodedSound &sound,
   if (!budget.admitFrames(start)) return false;
   const std::size_t startFrame = static_cast<std::size_t>(start);
   const std::size_t sourceFrames = static_cast<std::size_t>(sound.info.frames);
-  const double sourceToTarget = static_cast<double>(
-      sourceFramesPerOutputFrame(sound.info.samplerate, playback));
-  const long double target = std::ceil(
-      static_cast<long double>(sourceFrames) / sourceToTarget);
-  if (!budget.admitFrames(target)) return false;
-  const std::size_t targetFrames = static_cast<std::size_t>(target);
+  const audio::pcm_resampling::Ratio ratio(
+      static_cast<std::int64_t>(sound.info.samplerate) * playback.percent,
+      static_cast<std::int64_t>(kOutputSampleRate) * 100);
+  const auto projectedFrames = ratio.outputFrames(sourceFrames, budget.maxFrames);
+  if (!projectedFrames) {
+    budget.error = "Chart audio sound-tail frame limit exceeded";
+    return false;
+  }
+  const std::size_t targetFrames = *projectedFrames;
   if (targetFrames >= budget.maxFrames - startFrame) {
     budget.error = "Chart audio sound-tail frame limit exceeded";
     return false;
@@ -478,26 +470,36 @@ bool mixSoundAt(std::vector<float> &mix, const DecodedSound &sound,
   }
   budget.remainingMixedFrames -= targetFrames;
   if (!ensureMixFrames(mix, startFrame + targetFrames + 1, budget)) return false;
-  for (std::size_t targetFrame = 0; targetFrame < targetFrames;
-       ++targetFrame) {
-    if (targetFrame % 4096 == 0 && !budget.checkpoint()) return false;
-    const double sourcePosition =
-        static_cast<double>(targetFrame) * sourceToTarget;
-    const std::size_t sourceFrame0 =
-        std::min(static_cast<std::size_t>(sourcePosition),
-                 sourceFrames > 0 ? sourceFrames - 1 : 0);
-    const std::size_t sourceFrame1 =
-        std::min(sourceFrame0 + 1, sourceFrames > 0 ? sourceFrames - 1 : 0);
-    const float fraction =
-        static_cast<float>(sourcePosition - static_cast<double>(sourceFrame0));
-
-    for (int channel = 0; channel < kOutputChannels; ++channel) {
-      const float s0 = sampleDecodedChannel(sound, sourceFrame0, channel);
-      const float s1 = sampleDecodedChannel(sound, sourceFrame1, channel);
-      const float sample = s0 + (s1 - s0) * fraction;
-      mix[(startFrame + targetFrame) * kOutputChannels + channel] += sample;
+  const auto channels = static_cast<std::size_t>(sound.info.channels);
+  const std::size_t rightChannel = channels == 1 ? 0 : 1;
+  audio::pcm_resampling::Cursor cursor(ratio, sourceFrames);
+  // Chunking retains cancellation latency while allowing the direct PCM loop
+  // to vectorize without a checkpoint or phase branch on every frame.
+  for (std::size_t begin = 0; begin < targetFrames; begin += 4096) {
+    if (!budget.checkpoint()) return false;
+    const auto end = std::min(begin + 4096, targetFrames);
+    if (ratio.direct()) {
+      for (auto frame = begin; frame < end; ++frame) {
+        const auto source = frame * channels;
+        const auto output = (startFrame + frame) * kOutputChannels;
+        mix[output] += sound.pcm[source] * (1.0f / 32768.0f);
+        mix[output + 1] += sound.pcm[source + rightChannel] * (1.0f / 32768.0f);
+      }
+    } else {
+      // Match AudioMix PCM16 rounding, then retain float overlap headroom.
+      for (auto frame = begin; frame < end; ++frame) {
+        const auto left = cursor.left() * channels;
+        const auto right = cursor.right() * channels;
+        const auto output = (startFrame + frame) * kOutputChannels;
+        const short leftSample = cursor.interpolate(sound.pcm[left], sound.pcm[right]);
+        const short rightSample = rightChannel == 0 ? leftSample : cursor.interpolate(
+            sound.pcm[left + rightChannel], sound.pcm[right + rightChannel]);
+        mix[output] += leftSample * (1.0f / 32768.0f);
+        mix[output + 1] += rightSample * (1.0f / 32768.0f);
+        cursor.advance();
+      }
     }
-    if (targetFrame == 4095 && !budget.reportedMixProgress) {
+    if (end >= 4096 && !budget.reportedMixProgress) {
       budget.reportedMixProgress = true;
       logMessage(budget.options, "Chart audio mix started: 4096 frames");
     }
