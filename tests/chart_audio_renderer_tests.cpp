@@ -742,7 +742,7 @@ void testShortMusicPreparationAlwaysStreams(const std::filesystem::path &root) {
          "music preparation removes the old cache instead of recreating it");
   if (prepared.stream) {
     expect(prepared.stream->GetState().complete && prepared.durationMicros == 200000,
-           "short source completes before the half-second opening threshold");
+           "short source completes before the startup buffer threshold");
     std::array<short, 2> samples{};
     const auto read = prepared.stream->ReadFrames(0, samples, std::chrono::milliseconds(100));
     expect(read.frames == 1 && samples[0] > 11000 && samples[0] == samples[1],

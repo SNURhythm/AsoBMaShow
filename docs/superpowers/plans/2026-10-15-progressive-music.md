@@ -120,3 +120,12 @@ JVM tests passed. Android release build-only and unsigned iOS build-only passed.
 The synthetic desktop fixture with 1,200 short Vorbis keysounds reduced its first
 100-second seek from about 3.45 seconds to 134 milliseconds; this is not an iPhone
 latency measurement. Physical-device scrubber behavior remains for manual testing.
+
+## Follow-up: startup stutter reserve
+
+- Increase the shared music startup reserve from half a second to two seconds.
+- Use the same reserve for preview, converted to its callback sample rate, with
+  another second of ring capacity for decoding and scheduling bursts.
+- Preserve immediate startup at EOF for shorter clips and cancellation while
+  buffering. Verify output through a simulated preparation stall, nonzero origins,
+  resampling, short streams, and existing native builds/tests without emulators.

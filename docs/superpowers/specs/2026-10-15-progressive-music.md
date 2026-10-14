@@ -1,6 +1,6 @@
 # Progressive music preparation
 
-The music player starts from an initial half-second of rendered PCM and prepares
+The music player starts from an initial two seconds of rendered PCM and prepares
 subsequent audio on a worker. Gameplay continues to prepare all of its audio;
 its scheduler, callback, and timing remain unchanged. Full loading can consume decoded preview pages before filling the remainder.
 
@@ -11,7 +11,7 @@ Keep float overlap headroom and the existing PCM conversion semantics. Sparse
 notes retain silence and sounds retain tails across block boundaries.
 
 The source writes completed blocks to a private staging WAV and exposes only
-published frame ranges to readers. Prepare 0.5 seconds before handing it to the
+published frame ranges to readers. Prepare two seconds before handing it to the
 native player; maintain up to ten seconds of read-ahead. Seeking into unpublished
 audio prepares that range directly, reconstructing overlapping voices at their
 exact resampler phase. Previously prepared ranges remain reusable, including
@@ -57,6 +57,8 @@ mixing at that frame, seek prior voices to their exact rational phase, and inclu
 all overlapping tails without rendering the skipped prefix. A suffix preview
 uses the same temporary-file ownership. The audio callback only consumes a
 bounded ring; decoding, disk reads, waiting, and resampling stay on feeder workers.
+Preview output also waits for two seconds of audio and keeps a three-second ring
+at the actual callback sample rate. Completed shorter clips start immediately.
 Respect output-device preferences and master/BGM/keysound volume settings.
 Load BGA resources after starting progressive audio, then drive the visual
 timeline from the preview's absolute consumed-frame position. Visual loading

@@ -16,7 +16,7 @@ namespace music_stream {
 
 inline constexpr int kSampleRate = 44100;
 inline constexpr int kChannels = 2;
-inline constexpr std::uint64_t kInitialBufferFrames = kSampleRate / 2;
+inline constexpr std::uint64_t kInitialBufferFrames = kSampleRate * 2;
 inline constexpr std::uint64_t kReadAheadFrames = kSampleRate * 10;
 
 enum class ReadStatus { Data, Pending, End, Cancelled, Error };

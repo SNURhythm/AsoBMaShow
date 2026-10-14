@@ -26,6 +26,7 @@ struct SourceControl {
   std::atomic_bool cancelled{false};
   std::atomic_bool enabled{false};
   std::atomic_bool readOnCallbackThread{false};
+  std::atomic<std::uint64_t> lastRead{0};
   std::thread::id callbackThread = std::this_thread::get_id();
   void publishAll() {
     { std::lock_guard lock(mutex); published = samples.size() / 2; complete = true; }
@@ -102,26 +103,63 @@ std::vector<short> drain(audio::PreviewStreamPlayer &player,
   return result;
 }
 
+void testStartupReserveBridgesPreparationStall() {
+  for (const auto rate : {44100U, 48000U, 88200U, 22050U}) {
+    auto input = std::make_shared<SourceControl>();
+    input->first = 441000;
+    input->samples.assign(44100 * 5 * 2, 2345);
+    input->published = 33075; // Three quarters of a second is not enough reserve.
+    auto backend = std::make_shared<BackendControl>();
+    backend->rate = rate;
+    audio::PreviewStreamPlayer player(std::make_unique<FakeFactory>(backend));
+    std::string error;
+    assert(player.Start(source(input), input->first, error));
+    waitFor([&] { return input->lastRead.load() >= input->first + 33075; });
+    assert(!backend->started && "preview must build a reserve before starting output");
+    assert(player.GetState().buffering && player.GetState().positionFrames == input->first);
+    {
+      std::lock_guard lock(input->mutex);
+      input->published = 44100 * 4 + 1;
+    }
+    input->changed.notify_all();
+    waitFor([&] { return backend->started.load(); });
+    // Even with no further producer progress, one second must already be queued.
+    const auto first = backend->pump(rate);
+    assert(std::all_of(first.begin(), first.end(), [](short value) { return value == 2345; }));
+    // Let the feeder fill its ring, then consume without allowing more decoding.
+    waitFor([&] { return input->lastRead.load() >= input->first + 44100 * 3; });
+    const auto next = backend->pump(rate);
+    assert(std::all_of(next.begin(), next.end(), [](short value) { return value == 2345; }));
+    assert(player.GetState().positionFrames == input->first + 88200);
+    waitFor([&] { return input->lastRead.load() >= input->first + 44100 * 4; });
+    const auto throughBurst = backend->pump(rate * 3 / 2);
+    assert(std::all_of(throughBurst.begin(), throughBurst.end(), [](short value) { return value == 2345; }));
+    assert(player.GetState().positionFrames == input->first + 154350);
+    assert(!input->readOnCallbackThread);
+    player.Stop();
+  }
+}
+
 void testFutureOriginUnderrunAndStop() {
   auto input = std::make_shared<SourceControl>();
   input->first = 441000;
-  input->samples.assign(44100 * 2, 2345);
-  input->published = 22050;
+  input->samples.assign(44100 * 3 * 2, 2345);
+  input->published = 88200;
   auto backend = std::make_shared<BackendControl>();
   audio::PreviewStreamPlayer player(std::make_unique<FakeFactory>(backend));
   std::string error;
   assert(player.Start(source(input), input->first, error));
-  const auto initial = drain(player, backend, 22050);
+  const auto initial = drain(player, backend, 88200);
   assert(std::all_of(initial.begin(), initial.end(), [](short value) { return value == 2345; }));
   const auto silence = backend->pump(128);
   assert(std::all_of(silence.begin(), silence.end(), [](short value) { return value == 0; }));
-  assert(player.GetState().positionFrames == 463050);
+  assert(player.GetState().positionFrames == 529200);
   assert(player.GetState().buffering && !player.GetState().finished);
   input->publishAll();
-  const auto rest = drain(player, backend, 22050);
+  const auto rest = drain(player, backend, 44100);
   assert(std::all_of(rest.begin(), rest.end(), [](short value) { return value == 2345; }));
   waitFor([&] { return player.GetState().finished; });
-  assert(player.GetState().positionFrames == 485100);
+  assert(player.GetState().positionFrames == 573300);
   assert(!input->readOnCallbackThread);
   player.Stop();
   assert(input->cancelled && !input->enabled && !backend->started);
@@ -223,6 +261,7 @@ ReadResult Source::ReadFrames(std::uint64_t frame, std::span<short> output,
   std::unique_lock lock(control.mutex);
   assert(frame >= control.first);
   const auto offset = frame - control.first;
+  control.lastRead.store(frame);
   control.changed.wait_for(lock, wait, [&] {
     return control.cancelled || !control.error.empty() || control.complete || offset < control.published;
   });
@@ -251,6 +290,7 @@ std::unique_ptr<IBackendFactory> CreatePlatformBackendFactory() {
 }
 }
 int main() {
+  testStartupReserveBridgesPreparationStall();
   testFutureOriginUnderrunAndStop();
   testRationalResamplingAndShortReads();
   testDownsampledFinalPositionDoesNotPassEnd();

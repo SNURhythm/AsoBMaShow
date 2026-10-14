@@ -26,7 +26,7 @@ public:
   PreviewStreamPlayer(const PreviewStreamPlayer &) = delete;
   PreviewStreamPlayer &operator=(const PreviewStreamPlayer &) = delete;
 
-  // Opens the device, then asynchronously fills half a second (or EOF) before
+  // Opens the device, then asynchronously fills the startup reserve (or EOF) before
   // starting output. Async failures are logged and exposed through GetState.
   bool Start(std::shared_ptr<music_stream::Source> source,
              std::uint64_t firstFrame, std::string &error);

@@ -25,6 +25,7 @@ struct PreviewSession {
   std::uint32_t outputRate = 0;
   std::vector<short> ring;
   std::size_t capacity = 0;
+  std::size_t startupFrames = 0;
   // Exactly one producer (feeder) and one consumer (backend callback).
   std::atomic<std::uint64_t> written{0};
   std::atomic<std::uint64_t> consumed{0};
@@ -190,7 +191,7 @@ struct PreviewSession {
   bool StartOutputIfReady(bool final) {
     if (deviceStarted.load(std::memory_order_relaxed)) return true;
     const auto queued = written.load(std::memory_order_relaxed);
-    if (!final && queued < (outputRate + 1) / 2) return true;
+    if (!final && queued < startupFrames) return true;
     if (!active.load(std::memory_order_acquire)) return false;
     if (!queued && final) return true;
     std::string diagnostic;
@@ -300,7 +301,13 @@ bool PreviewStreamPlayer::Start(std::shared_ptr<music_stream::Source> source,
     error = "Preview audio device returned an invalid sample rate";
     return false;
   }
-  session->capacity = std::max<std::size_t>(session->outputRate, kOutputBatchFrames);
+  session->startupFrames = (static_cast<std::uint64_t>(session->outputRate) *
+      music_stream::kInitialBufferFrames + music_stream::kSampleRate - 1) /
+      music_stream::kSampleRate;
+  // Retain another second beyond the startup reserve so the feeder can absorb
+  // decoder/scheduling bursts without immediately starving the callback.
+  session->capacity = std::max<std::size_t>(
+      session->startupFrames + session->outputRate, kOutputBatchFrames);
   session->ring.resize(session->capacity * music_stream::kChannels);
   session->source->SetRenderingEnabled(true);
   try {
