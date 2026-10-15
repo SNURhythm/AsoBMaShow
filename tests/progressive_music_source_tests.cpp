@@ -17,6 +17,7 @@
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <limits>
 #include <new>
 #include <stdexcept>
 #include <thread>
@@ -522,6 +523,37 @@ void testPreviewGainHeadroom(const std::filesystem::path &root) {
   require(!pcm.empty() && pcm[0] == 25998,
           "preview must apply master/bus gain before clipping overlapping voices");
 }
+
+void testPreviewCompletesWithoutPlaybackAndWarmsSkippedAssets(const std::filesystem::path &root) {
+  const auto dir = root / "preview-full-preparation";
+  auto chart = chartAt(dir, "#00011:01\n#01011:02\n");
+  writeWav(dir / "first.wav", 44100, 1, std::vector<short>(44100, 12000));
+  writeWav(dir / "second.wav", 44100, 1, std::vector<short>(44100, 6000), 20);
+  auto cache = std::make_shared<audio::DecodedAssetCache>(
+      dir, std::numeric_limits<std::size_t>::max());
+  // No ReadFrames calls: a full/stalled device queue must not stall preparation.
+  auto preview = music_stream::Source::CreatePreview(*chart, dir, cache, 44100 * 10);
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  while (!preview->GetState().complete && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(1ms);
+  require(preview->GetState().complete,
+          "preview must prepare its entire suffix without playback consuming audio");
+  while (cache->GetStatistics().retainedBytes < 44100U * 21 * sizeof(short) &&
+         std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(1ms);
+  require(cache->GetStatistics().retainedBytes == 44100U * 21 * sizeof(short),
+          "preview must also warm keysounds that ended before its highlight");
+  preview->Cancel();
+  preview.reset();
+  const auto prepared = cache->GetStatistics().decodedFrames;
+  std::atomic_bool cancelled{false}; SF_INFO info{}; std::vector<short> pcm;
+  require(cache->Materialize(dir / "first.wav", pcm, info, cancelled) && pcm.size() == 44100,
+          "gameplay must reuse the skipped keysound after preview stops");
+  require(cache->Materialize(dir / "second.wav", pcm, info, cancelled) && pcm.size() == 44100 * 20,
+          "gameplay must reuse the complete later asset after preview stops");
+  require(cache->GetStatistics().decodedFrames == prepared,
+          "fully prepared preview must leave no audio decoding for gameplay");
+}
 }
 
 int main() {
@@ -530,6 +562,7 @@ int main() {
   std::filesystem::create_directories(root);
   ScopeExit cleanup([&] { std::filesystem::remove_all(root); });
   try {
+    testPreviewCompletesWithoutPlaybackAndWarmsSkippedAssets(root);
     testVorbisDurationBounds(root);
     testTemporaryLifetime(root);
     testEquivalence(root);

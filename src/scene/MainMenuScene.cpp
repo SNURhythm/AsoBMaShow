@@ -1711,7 +1711,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
             return;
           }
           const auto scratch = std::filesystem::temp_directory_path() / "chart-preview";
-          previewDecodedAssets_ = std::make_shared<audio::DecodedAssetCache>(scratch);
+          previewDecodedAssets_ = std::make_shared<audio::DecodedAssetCache>(
+              scratch, audio::DecodedAssetCache::kUnlimitedRetainedBytes);
           const auto &audioSettings = this->context.settings.audioVideo.audio;
           auto source = music_stream::Source::CreatePreview(
               *chart, scratch, previewDecodedAssets_, previewStartFrame_,

@@ -308,7 +308,7 @@ struct DecodedAssetCache::Impl {
             std::size_t requestedFrames, bool full, std::vector<short> &pcm,
             SF_INFO &info, const std::atomic_bool &cancel, std::stop_token stop,
             std::string *error, const std::vector<unsigned char> *encoded = nullptr,
-            FailureKind *failure = nullptr) {
+            FailureKind *failure = nullptr, bool copyPcm = true) {
     if (failure) *failure = FailureKind::None;
     pcm.clear();
     info = {};
@@ -325,7 +325,7 @@ struct DecodedAssetCache::Impl {
               full ? available : requestedFrames);
       if (frames > std::numeric_limits<std::size_t>::max() / info.channels)
         throw std::runtime_error("Decoded audio is too large.");
-      pcm.resize(static_cast<std::size_t>(frames) * info.channels);
+      if (copyPcm) pcm.resize(static_cast<std::size_t>(frames) * info.channels);
       std::uint64_t copied = 0;
       while (copied < frames) {
         const auto frame = firstFrame + copied;
@@ -334,8 +334,9 @@ struct DecodedAssetCache::Impl {
         const auto page = readPage(*entry, decoder, pageIndex, cancel, stop, encoded, !full);
         const auto count = std::min<std::uint64_t>(frames - copied,
             page->size() / info.channels - offset);
-        std::copy_n(page->data() + offset * info.channels, count * info.channels,
-                     pcm.data() + copied * info.channels);
+        if (copyPcm)
+          std::copy_n(page->data() + offset * info.channels, count * info.channels,
+                       pcm.data() + copied * info.channels);
         copied += count;
       }
       checkpoint(cancel, stop);
@@ -373,6 +374,14 @@ bool DecodedAssetCache::Materialize(const std::filesystem::path &path,
     std::vector<short> &pcm, SF_INFO &info, const std::atomic_bool &cancel,
     std::stop_token stop, std::string *error) {
   return impl->read(path, 0, 0, true, pcm, info, cancel, stop, error);
+}
+bool DecodedAssetCache::Preload(const std::filesystem::path &path,
+    const std::atomic_bool &cancel, std::stop_token stop, std::string *error,
+    FailureKind *failure) {
+  std::vector<short> ignored;
+  SF_INFO info{};
+  return impl->read(path, 0, 0, true, ignored, info, cancel, stop, error,
+                    nullptr, failure, false);
 }
 bool DecodedAssetCache::MaterializeBytes(const std::filesystem::path &path,
     const std::vector<unsigned char> &encoded, std::vector<short> &pcm, SF_INFO &info,

@@ -91,6 +91,24 @@ void testCancellationRetainsReadyPages(const std::filesystem::path &root) {
   require(cache.Materialize(path, pcm, info, cancelled), "next session request can complete");
   require(cache.GetStatistics().decodedFrames == 12017, "cancelled preview's page must still be reused");
 }
+void testPreloadRetainsAllPagesForGameplay(const std::filesystem::path &root) {
+  const auto path = root / "preload.wav";
+  writeWav(path);
+  audio::DecodedAssetCache cache(root, audio::DecodedAssetCache::kUnlimitedRetainedBytes);
+  std::atomic_bool cancelled{false}; SF_INFO info{}; std::vector<short> pcm;
+  require(cache.ReadRange(path, 7001, 17, pcm, info, cancelled), "prepare highlight page");
+  require(cache.Preload(path, cancelled), "preload the remaining pages");
+  require(cache.GetStatistics().decodedFrames == 12017 &&
+              cache.GetStatistics().retainedBytes == 12017 * 2 * sizeof(short),
+          "preloading must retain the entire asset without decoding ready pages again");
+  cancelled = true;
+  require(!cache.Preload(path, cancelled), "preload must honor cancellation even for warm assets");
+  cancelled = false;
+  require(cache.Materialize(path, pcm, info, cancelled) && pcm.size() == 12017 * 2,
+          "gameplay must materialize all preloaded audio");
+  require(cache.GetStatistics().decodedFrames == 12017,
+          "materializing preloaded audio must not invoke the decoder again");
+}
 void testCancellationDuringFullDecode(const std::filesystem::path &root) {
   const auto path = root / "cancel-active.wav";
   writeWav(path, 2, 8 * 1024 * 1024);
@@ -191,6 +209,7 @@ int main() {
   try {
     std::filesystem::create_directories(root);
     testSparseReuse(root);
+    testPreloadRetainsAllPagesForGameplay(root);
     testCancellationRetainsReadyPages(root);
     testCancellationDuringFullDecode(root);
     testEvictionAndSourceChange(root);

@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
@@ -16,7 +17,11 @@
 struct ChartMetaRecord { struct { std::filesystem::path BmsPath; } meta; };
 namespace bms_parser { struct Chart {}; }
 namespace audio {
-struct DecodedAssetCache { explicit DecodedAssetCache(std::filesystem::path) {} };
+struct DecodedAssetCache {
+  static constexpr std::size_t kUnlimitedRetainedBytes = std::numeric_limits<std::size_t>::max();
+  explicit DecodedAssetCache(std::filesystem::path, std::size_t limit) : retainedLimit(limit) {}
+  std::size_t retainedLimit;
+};
 }
 namespace music_stream {
 inline constexpr std::uint64_t kSampleRate = 44100;
@@ -110,6 +115,9 @@ int main() {
     Scene scene;
     std::atomic_bool cancelled = false;
     scene.process({.meta = {.BmsPath = "chart.bms"}}, cancelled);
+    require(scene.previewDecodedAssets_ &&
+                scene.previewDecodedAssets_->retainedLimit == audio::DecodedAssetCache::kUnlimitedRetainedBytes,
+            "selected-chart preview must retain all prepared audio for gameplay");
     const auto &events = scene.context.jukebox.events;
     const auto audio = std::find(events.begin(), events.end(), "audio-start");
     const auto visual = std::find(events.begin(), events.end(), "visual-load");

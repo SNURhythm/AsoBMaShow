@@ -197,6 +197,7 @@ struct Source::Impl {
   std::uint64_t previewTimelineFrames = 0;
   std::vector<Event> previewEvents;
   std::shared_ptr<audio::DecodedAssetCache> decodedAssets;
+  std::vector<std::filesystem::path> previewAssetPaths;
   mutable std::mutex mutex;
   std::condition_variable changed;
   State state;
@@ -532,8 +533,10 @@ struct Source::Impl {
             return true;
           if (!enabled) return false;
           const auto next = preparedEnd(requestedFrame);
+          // A selected chart prepares gameplay audio even if the preview device
+          // stops consuming. Music-only streams retain their bounded read-ahead.
           return (!endKnown || next < totalFrames) &&
-                 next < requestedFrame + kReadAheadFrames;
+                 (preview || next < requestedFrame + kReadAheadFrames);
         });
         if (cancelled.load()) return;
         if (endKnown && state.availableFrames >= totalFrames) break;
@@ -662,7 +665,25 @@ struct Source::Impl {
   }
 
   void run(std::stop_token stop) noexcept {
-    try { render(stop); }
+    try {
+      render(stop);
+      // Playback can finish independently of gameplay preloading. In particular,
+      // EOF disables rendering, but only cancellation should stop cache warming.
+      if (preview && decodedAssets) {
+        for (const auto &path : previewAssetPaths) {
+          if (cancelled.load() || stop.stop_requested()) return;
+          std::string error;
+          audio::DecodedAssetCache::FailureKind failure;
+          if (!decodedAssets->Preload(path, cancelled, stop, &error, &failure)) {
+            if (failure == audio::DecodedAssetCache::FailureKind::Cancelled) return;
+            SDL_Log("Preview could not preload keysound: %s", error.c_str());
+            // Optional warming must not turn already prepared playback into an
+            // error. Stop on operational failures, skip missing/invalid assets.
+            if (failure == audio::DecodedAssetCache::FailureKind::Operation) return;
+          }
+        }
+      }
+    }
     catch (const std::exception &error) {
       std::lock_guard lock(mutex);
       if (!cancelled.load()) state.error = error.what();
@@ -723,6 +744,10 @@ std::shared_ptr<Source> Source::CreatePreview(
   }
   impl->stagingParent = std::move(stagingParent);
   impl->decodedAssets = std::move(decodedAssets);
+  if (impl->decodedAssets) {
+    for (const auto &[wav, name] : chart.ReferencedWavTable)
+      impl->previewAssetPaths.push_back(chart.Meta.Folder / utf8_to_path_t(name));
+  }
   auto source = std::shared_ptr<Source>(new Source(std::move(impl)));
   source->impl->worker = std::jthread([state = source->impl.get()](std::stop_token stop) {
     state->run(stop);

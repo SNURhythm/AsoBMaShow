@@ -57,7 +57,8 @@ public:
                                         std::filesystem::path stagingParent,
                                         bool clubMode = false);
   // Starts directly at an arbitrary chart frame, including overlapping tails.
-  // Snapshots chart data before returning.
+  // Prepares the entire remaining timeline independently of playback and warms
+  // earlier referenced assets for gameplay. Snapshots chart data before returning.
   static std::shared_ptr<Source> CreatePreview(
       const bms_parser::Chart &chart, std::filesystem::path stagingParent,
       std::shared_ptr<audio::DecodedAssetCache> decodedAssets,
