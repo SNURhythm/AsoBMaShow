@@ -53,14 +53,18 @@ public:
 };
 
 struct GlowCapture final : rendering::UiBatchBackend {
-  std::optional<rendering::UiBatchState> shadow;
+  std::optional<rendering::UiBatchState> glow;
   float top = 0;
+  std::vector<rendering::PosColorVertex> glowVertices;
+  std::vector<rendering::PosTexCoord0Vertex> imageVertices;
   bool submit(const rendering::UiBatchSubmission &submission) noexcept override {
-    const auto color = rendering::UniformCache::getInstance().getVec4("u_shadowColor");
-    if (submission.state.uniformCount == 2 &&
-        submission.state.uniforms[0].handle.idx == color.idx) {
-      shadow = submission.state;
-      top = submission.texturedVertices.front().y;
+    if (submission.colorVertices.size() > 32) {
+      glow = submission.state;
+      glowVertices.assign(submission.colorVertices.begin(), submission.colorVertices.end());
+      top = std::min_element(glowVertices.begin(), glowVertices.end(),
+                            [](const auto &a, const auto &b) { return a.y < b.y; })->y;
+    } else if (!submission.texturedVertices.empty() && submission.state.uniformCount == 0) {
+      imageVertices.assign(submission.texturedVertices.begin(), submission.texturedVertices.end());
     }
     return true;
   }
@@ -77,11 +81,13 @@ GlowCapture captureGlow(View &frame, View &details) {
   return capture;
 }
 
-void writePpm(const std::filesystem::path &path, int width, int height) {
+void writePpm(const std::filesystem::path &path, int width, int height, bool split = false) {
   std::ofstream output(path, std::ios::binary | std::ios::trunc);
   output << "P6\n" << width << ' ' << height << "\n255\n";
   const char pixel[] = {char(0x33), char(0x66), char(0x99)};
-  for (int index = 0; index < width * height; ++index) output.write(pixel, sizeof(pixel));
+  const char red[] = {char(0xdd), char(0x22), char(0x33)};
+  for (int index = 0; index < width * height; ++index)
+    output.write(split && index % width < width / 2 ? red : pixel, sizeof(pixel));
 }
 } // namespace
 
@@ -97,15 +103,37 @@ int main() {
     require(glow.update(0, 0) == 0, "stopped preview eventually clears the halo");
     glow.update(1, 0.1f);
     glow.reset();
+    require(std::all_of(glow.waveform().begin(), glow.waveform().end(), [](float value) { return value == 0; }),
+            "chart replacement clears waveform history");
     require(glow.update(0, 0) == 0, "chart replacement resets previous audio energy");
+    for (int i = 0; i < 32; ++i) glow.update(i % 8 == 0 ? 0.5f : 0.01f, 1.0f / 30);
+    const auto [quiet, loud] = std::minmax_element(glow.waveform().begin(), glow.waveform().end());
+    require(*loud - *quiet > 0.5f, "waveform retains distinct peaks and quiet passages");
+    ArtworkPalette solid;
+    solid.fill(Color(255, 0, 0));
+    ArtworkGlow shape{.intensity = 1, .spread = 44};
+    shape.waveform[0] = 1;
+    const auto mesh = makeArtworkGlowMesh(100, 100, 400, 300, solid, shape);
+    const auto outerRing = ArtworkGlowMesh::layers * ArtworkGlowMesh::segments;
+    const float topExtent = 100 - mesh.vertices[outerRing].y;
+    const float bottomExtent = mesh.vertices[outerRing + ArtworkGlowMesh::segments / 2].y - 400;
+    require(topExtent > bottomExtent + 20,
+            "a waveform peak extends its part of the contour independently of the quiet side");
+    require(std::abs(mesh.vertices[0].y - 101) < 0.001f &&
+                std::abs(mesh.vertices[ArtworkGlowMesh::segments / 2].y - 399) < 0.001f,
+            "the aura follows the actual rectangular image edges");
     const unsigned char pixels[] = {255, 0, 0, 0, 0, 80, 0, 255};
-    const auto green = artworkAmbientColor(pixels, 2, 1);
-    require(green && green->g >= 200 && green->r == 0 && green->b == 0,
+    const auto green = artworkAmbientPalette(pixels, 2, 1);
+    require(green && (*green)[7].g >= 200 && (*green)[7].r == 0 && (*green)[7].b == 0,
             "transparent pixels do not tint the halo and dark colors stay visible");
-    require(!artworkAmbientColor(std::span(pixels).first(4), 2, 1),
+    require(!artworkAmbientPalette(std::span(pixels).first(4), 2, 1),
             "incomplete image data has no palette");
+    const unsigned char dark[] = {6, 6, 6, 255};
+    const auto darkPalette = artworkAmbientPalette(dark, 1, 1);
+    require(darkPalette && (*darkPalette)[0].r <= 12 && (*darkPalette)[0].g <= 12,
+            "dark neutral borders do not turn into a bright gray aura");
     const unsigned char transparent[] = {255, 255, 255, 0};
-    require(!artworkAmbientColor(transparent, 1, 1), "transparent image has no halo");
+    require(!artworkAmbientPalette(transparent, 1, 1), "transparent image has no halo");
   }
 
   bgfx::Init init;
@@ -130,11 +158,11 @@ int main() {
     require(frame->getWidth() == 472 && frame->getHeight() == 472,
             "missing artwork uses a square placeholder");
     const int placeholderSummaryY = summary->getY();
-    writePpm(fixture, 32, 18);
+    writePpm(fixture, 32, 18, true);
     require(image->setImage(fspath_to_path_t(fixture)), "wide stagefile fixture decodes");
-    const auto palette = image->ambientColor();
-    require(palette && palette->b > palette->g && palette->g > palette->r,
-            "ambient color follows the decoded blue artwork");
+    const auto palette = image->ambientPalette();
+    require(palette && (*palette)[7].b > (*palette)[7].r && (*palette)[0].r > (*palette)[0].b,
+            "ambient palette preserves blue on the right and red on the left");
     RenderContext context;
     details.renderImpl(context);
     details.applyYogaLayout();
@@ -144,17 +172,33 @@ int main() {
             "decoded wide artwork retains the square frame and stable metadata position");
     details.updatePreviewGlow(0.5f, 0.1f);
     auto glow = captureGlow(*frame, details);
-    require(glow.shadow && glow.shadow->uniforms[0].value[3] > 0 &&
-                glow.shadow->uniforms[0].value[2] > glow.shadow->uniforms[0].value[0],
-            "audible preview submits a visible artwork-colored halo");
-    require(glow.shadow->scissor && glow.top >= glow.shadow->scissor->y,
+    require(!glow.glowVertices.empty(),
+            "ambient color bleed renders a feathered contour instead of a rectangular shadow");
+    const auto innerEnd = glow.glowVertices.begin() + ArtworkGlowMesh::segments;
+    const auto rightPixel = std::max_element(glow.glowVertices.begin(), innerEnd,
+        [](const auto &a, const auto &b) { return a.x < b.x; })->abgr;
+    const auto leftPixel = std::min_element(glow.glowVertices.begin(), innerEnd,
+        [](const auto &a, const auto &b) { return a.x < b.x; })->abgr;
+    require((rightPixel >> 24) > 0 && ((rightPixel >> 16) & 255) > (rightPixel & 255) &&
+                (leftPixel & 255) > ((leftPixel >> 16) & 255),
+            "the rendered halo bleeds different artwork colors from each side");
+    require(glow.glow && glow.glow->scissor && glow.top >= glow.glow->scissor->y,
             "the complete halo fits below the scroll viewport's top edge");
+    const auto rest = captureGlow(*image, details).imageVertices;
+    require(!rest.empty() && rest[1].x - rest[0].x > frame->getWidth(),
+            "the jacket gets a small centered scale pulse during audible preview");
+    const auto outer = ArtworkGlowMesh::layers * ArtworkGlowMesh::segments;
+    require((glow.glowVertices[outer].abgr >> 24) == 0,
+            "the outer contour feathers all the way to transparency");
     for (int i = 0; i < 180; ++i) details.updatePreviewGlow(0, 1.0f / 60);
-    require(!captureGlow(*frame, details).shadow, "stopped preview stops submitting a halo");
+    const auto stopped = captureGlow(*frame, details);
+    require(!stopped.glow, "stopped preview stops submitting a halo");
+    require(stopped.imageVertices[1].x - stopped.imageVertices[0].x == frame->getWidth(),
+            "silent preview restores the jacket's original size");
     details.updatePreviewGlow(0.5f, 0.1f);
     record.meta.BmsPath = "/charts/replacement.bms";
     details.setChart(&record, std::nullopt, kNoClearTypeRank, "");
-    require(!captureGlow(*frame, details).shadow, "chart change clears the previous halo");
+    require(!captureGlow(*frame, details).glow, "chart change clears the previous halo");
     const int wideHeight = details.getHeight();
     details.renderImpl(context);
     require(details.getHeight() == wideHeight && !YGNodeIsDirty(details.getNode()),
@@ -165,12 +209,12 @@ int main() {
             "portrait contains wide artwork in a square frame");
     details.updatePreviewGlow(0.5f, 0.1f);
     glow = captureGlow(*frame, details);
-    require(glow.shadow && glow.shadow->scissor && glow.top >= glow.shadow->scissor->y,
+    require(glow.glow && glow.glow->scissor && glow.top >= glow.glow->scissor->y,
             "compact artwork also leaves room above the halo");
     image->freeImage();
     details.updatePreviewGlow(0.5f, 0.1f);
-    require(!captureGlow(*frame, details).shadow, "unloaded artwork never glows");
-    require(!image->ambientColor(), "unloaded artwork clears its ambient color");
+    require(!captureGlow(*frame, details).glow, "unloaded artwork never glows");
+    require(!image->ambientPalette(), "unloaded artwork clears its ambient color");
     ImageView::dropCache(fspath_to_path_t(fixture));
     writePpm(fixture, 18, 32);
     require(image->setImage(fspath_to_path_t(fixture)), "tall stagefile fixture decodes");
@@ -178,6 +222,15 @@ int main() {
     details.applyYogaLayout();
     require(frame->getWidth() == 112 && frame->getHeight() == 112,
             "tall artwork retains the square compact frame");
+    for (const bool compact : {false, true}) {
+      details.setCompact(compact);
+      details.applyYogaLayout();
+      for (int i = 0; i < 40; ++i) details.updatePreviewGlow(0.5f, 1.0f / 30);
+      const auto maximum = captureGlow(*frame, details);
+      require(maximum.glow && maximum.glow->scissor &&
+                  maximum.top + 0.01f >= maximum.glow->scissor->y,
+              "full-height artwork at maximum glow and bounce stays below the scroll clip");
+    }
     record.meta.StageFile.clear();
     details.setChart(&record, std::nullopt, kNoClearTypeRank, "");
     details.applyYogaLayout();

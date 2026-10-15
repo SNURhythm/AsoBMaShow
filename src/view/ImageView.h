@@ -4,6 +4,7 @@
 
 #pragma once
 #include "DecodedImageCache.h"
+#include "ArtworkGlow.h"
 #include "ImageFade.h"
 #include "ImageDecodeCoordinator.h"
 #include "View.h"
@@ -42,7 +43,8 @@ private:
   static image_decode::DecodedImageCache imageCache;
   std::string currentImageKey;
   path_t currentImagePath;
-  std::optional<Color> ambientColor_;
+  std::optional<ArtworkPalette> ambientPalette_;
+  std::optional<ArtworkGlow> ambientGlow_;
   int currentImageWidth = 0;
   int currentImageHeight = 0;
   int asyncTargetWidth = 0;
@@ -89,7 +91,9 @@ public:
     return scrimColor_;
   }
   [[nodiscard]] const path_t &imagePath() const { return currentImagePath; }
-  [[nodiscard]] const std::optional<Color> &ambientColor() const { return ambientColor_; }
+  [[nodiscard]] const std::optional<ArtworkPalette> &ambientPalette() const { return ambientPalette_; }
+  void setAmbientGlow(const ArtworkGlow &glow) { ambientGlow_ = glow; }
+  void clearAmbientGlow() { ambientGlow_.reset(); }
   [[nodiscard]] int imageWidth() const { return currentImageWidth; }
   [[nodiscard]] int imageHeight() const { return currentImageHeight; }
 

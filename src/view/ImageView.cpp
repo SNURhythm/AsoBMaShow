@@ -1,4 +1,3 @@
-#include "ArtworkColor.h"
 //
 // Created by XF on 8/28/2024.
 //
@@ -605,7 +604,7 @@ bool ImageView::applyImage(const path_t &path, const std::string &key,
   currentImagePath = path;
   currentImageWidth = cache.width;
   currentImageHeight = cache.height;
-  ambientColor_ = artworkAmbientColor(*cache.rgba, cache.width, cache.height);
+  ambientPalette_ = artworkAmbientPalette(*cache.rgba, cache.width, cache.height);
   if (storeCache) {
     (void)imageCache.put(key, cache);
     if (sharedChartImagePath_ &&
@@ -705,7 +704,8 @@ void ImageView::freeTexture() {
     bgfx::destroy(texture);
   }
   texture = BGFX_INVALID_HANDLE;
-  ambientColor_.reset();
+  ambientPalette_.reset();
+  ambientGlow_.reset();
   currentImageWidth = 0;
   currentImageHeight = 0;
 }
@@ -968,8 +968,31 @@ void ImageView::renderImpl(RenderContext &context) {
     width = currentImageWidth * scale;
     height = currentImageHeight * scale;
   }
+  const float originalWidth = width, originalHeight = height;
+  if (ambientGlow_ && ambientPalette_) {
+    const float scale = 1 + 0.015f * ambientGlow_->intensity;
+    width *= scale;
+    height *= scale;
+  }
   const float x = getX() + (getWidth() - width) * 0.5F;
   const float y = getY() + (getHeight() - height) * 0.5F;
+  if (ambientGlow_ && ambientPalette_ && width > 0 && height > 0) {
+    auto glow = *ambientGlow_;
+    // Keep the bounce and glow inside the existing reserved vertical extent.
+    glow.spread = std::max(0.0f, glow.spread -
+        std::max(width - originalWidth, height - originalHeight) * 0.5f);
+    const auto mesh = makeArtworkGlowMesh(x, y, width, height, *ambientPalette_, glow);
+    RenderContext ambientContext = context;
+    if (ambientContext.scissor.width > 0) {
+      const int bleed = static_cast<int>(std::ceil(ambientGlow_->spread));
+      ambientContext.scissor.x -= bleed;
+      ambientContext.scissor.width += bleed * 2;
+    }
+    ambientContext.appendUiColor(mesh.vertices, mesh.indices,
+        ambientContext.makeUiBatchState(
+            rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE),
+            BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA));
+  }
   submitTexturedRoundedRect(context, texture, s_texColor, x, y,
                             width, height, getCornerRadius(), program,
                             std::span<const rendering::UiBatchUniform>(uniforms)

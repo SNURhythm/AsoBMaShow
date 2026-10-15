@@ -323,25 +323,28 @@ void ChartDetailsView::onLayout() {
 void ChartDetailsView::renderImpl(RenderContext &) {
   // Keep the square frame stable as image data arrives and panel size changes.
   refreshArtworkLayout();
+  const bool hasImage = artwork_->getVisible() && artwork_->imageWidth() > 0;
+  if (hasImage != artworkHasImage_) {
+    artworkHasImage_ = hasImage;
+    if (hasImage) artworkFrame_->clearBackgroundColor();
+    else artworkFrame_->setThemedBackgroundColor(main_menu_theme::surface);
+  }
 }
 
 void ChartDetailsView::updatePreviewGlow(float level, float dt) {
-  const auto &palette = artwork_->ambientColor();
+  const auto &palette = artwork_->ambientPalette();
   if (!artwork_->getVisible() || !palette || !artworkFrame_->getVisible()) {
     previewGlow_.reset();
-    artworkFrame_->clearShadow();
+    artwork_->clearAmbientGlow();
     return;
   }
   const float intensity = previewGlow_.update(level, dt);
   if (intensity == 0) {
-    artworkFrame_->clearShadow();
+    artwork_->clearAmbientGlow();
     return;
   }
-  auto color = *palette;
-  color.a = static_cast<uint8_t>(std::lround(150 * intensity));
-  const int spread = static_cast<int>(std::lround(
-      compact_ ? 8 + 16 * intensity : 14 + 30 * intensity));
-  artworkFrame_->setShadow(color, 0, 0, spread);
+  artwork_->setAmbientGlow({.intensity = intensity, .spread = compact_ ? 28.0f : 80.0f,
+                             .waveform = previewGlow_.waveform()});
 }
 
 void ChartDetailsView::refreshArtworkLayout() {
@@ -365,7 +368,7 @@ void ChartDetailsView::setCompact(bool compact) {
   compact_ = compact;
   // The scroll viewport clips vertically. Reserve the halo's maximum extent;
   // compact artwork already has ten units above it inside the identity row.
-  setPadding(Edge::Top, rendering::compactMenuCanvasActive ? 0 : compact ? 14 : 44);
+  setPadding(Edge::Top, rendering::compactMenuCanvasActive ? 0 : compact ? 18 : 80);
   identity_->setFlexDirection(compact ? FlexDirection::Row : FlexDirection::Column);
   identity_->setAlignItems(compact ? YGAlignCenter : YGAlignStretch);
   identity_->setGap(compact ? 14 : 8);
@@ -453,7 +456,7 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
   if (glowChartPath_ != chartPath) {
     glowChartPath_ = chartPath;
     previewGlow_.reset();
-    artworkFrame_->clearShadow();
+    artwork_->clearAmbientGlow();
   }
   artwork_->setVisible(chart && !record->meta.StageFile.empty());
   setCompact(compact_);

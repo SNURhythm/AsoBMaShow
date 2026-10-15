@@ -15,7 +15,7 @@ class ChartDetailsView : public View {
 public:
   explicit ChartDetailsView(ImageView *artwork);
   static constexpr float minimumChartHeight() {
-    return 14 + kIdentityHeight + kDifficultyHeight + 28 + 3 * kSectionGap +
+    return 18 + kIdentityHeight + kDifficultyHeight + 28 + 3 * kSectionGap +
            3 * kFactRowHeight + 2 * kFactGap + 2 * kFactPadding;
   }
   void setScoreContainer(View *container);
@@ -45,6 +45,7 @@ private:
   std::array<View *, 3> factRows_{};
   std::array<View *, 6> factCells_{};
   ImageView *artwork_ = nullptr;
+  bool artworkHasImage_ = false;
   PreviewGlow previewGlow_;
   std::string glowChartPath_;
   bool compact_ = true;
