@@ -19,6 +19,7 @@ public:
   void sensorAvailable();
   void stop(std::uint64_t nowMicros);
   void setForeground(bool foreground, std::uint64_t nowMicros);
+  void setEnabled(bool enabled, std::uint64_t nowMicros);
   void sensorStartSucceeded(std::uint64_t nowMicros);
   void sensorStartFailed(std::uint64_t nowMicros);
   void sensorRuntimeFailed(std::uint64_t nowMicros);
@@ -33,6 +34,7 @@ private:
   enum class SensorPhase { Stopped, StartPending, Running, Cooldown };
 
   void requestStart();
+  void suspend(std::uint64_t nowMicros);
   void requestStop();
   void enterCooldown(std::uint64_t nowMicros);
   void publishTransition(const std::optional<float> &transition,
@@ -52,6 +54,7 @@ private:
   bool backendStarted_ = false;
   bool supported_ = false;
   bool foreground_ = true;
+  bool enabled_ = false;
   bool nativeStartIssued_ = false;
   bool deviceEverPublished_ = false;
 };

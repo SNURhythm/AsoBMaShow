@@ -458,6 +458,24 @@ void InputDeviceRegistry::resetGyroscopeTurntableSession() {
   dispatchPending();
 }
 
+void InputDeviceRegistry::setGyroscopeBindingsPresent(bool present) {
+  gyroscopeBindingsPresent_ = present;
+  updateGyroscopeDemand();
+  dispatchPending();
+}
+
+void InputDeviceRegistry::updateGyroscopeDemand() {
+  const bool enabled = gyroscopeBindingsPresent_ ||
+      std::ranges::any_of(inputListeners_, [](const auto &entry) {
+        return entry.second.monitorGyroscope;
+      });
+  if (enabled == gyroscopeEnabled_) return;
+  gyroscopeEnabled_ = enabled;
+  for (const auto &backend : backends_) {
+    backend->setGyroscopeEnabled(enabled);
+  }
+}
+
 void InputDeviceRegistry::setRealtimeInputClaimed(
     input::DeviceClass deviceClass, bool claimed) {
   if (claimed && deviceClass == input::DeviceClass::Keyboard) {
@@ -569,13 +587,16 @@ void InputDeviceRegistry::pumpInternal(bool pumpBackends) {
   pumping_ = false;
 }
 
-std::uint64_t InputDeviceRegistry::subscribeInput(InputListener listener) {
+std::uint64_t InputDeviceRegistry::subscribeInput(InputListener listener,
+                                                  bool monitorGyroscope) {
   const std::uint64_t token = nextSubscriptionToken_++;
   queueState_->atSequenceBoundary([&](std::uint64_t firstEventSequence) {
     inputListeners_.emplace(
         token, InputSubscription{.firstEventSequence = firstEventSequence,
-                                 .listener = std::move(listener)});
+                                 .listener = std::move(listener),
+                                 .monitorGyroscope = monitorGyroscope});
   });
+  updateGyroscopeDemand();
   return token;
 }
 
@@ -610,6 +631,7 @@ void InputDeviceRegistry::unsubscribe(std::uint64_t token) {
   queueState_->unsubscribeRealtime(token);
   inputListeners_.erase(token);
   deviceListeners_.erase(token);
+  updateGyroscopeDemand();
 }
 
 std::vector<input::InputDeviceSnapshot> InputDeviceRegistry::snapshot() const {

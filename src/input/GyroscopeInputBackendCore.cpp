@@ -70,31 +70,45 @@ void GyroscopeInputBackendCore::setForeground(bool foreground,
   }
   foreground_ = foreground;
   if (!foreground_) {
-    const bool wasRunning = phase_ == SensorPhase::Running;
-    publishTransition(turntable_.reset(), nowMicros);
-    commands_.erase(std::remove(commands_.begin(), commands_.end(),
-                                GyroscopeSensorCommand::Start),
-                    commands_.end());
-    if (phase_ == SensorPhase::Running || nativeStartIssued_) {
-      requestStop();
-    }
-    phase_ = SensorPhase::Stopped;
-    retryAtMicros_.reset();
-    lastFreshAtMicros_.reset();
-    lastSensorTimestampSeconds_.reset();
-    if (wasRunning && deviceEverPublished_) {
-      publishSnapshot(true, InputDeviceStatus::Calibrating);
-    }
+    suspend(nowMicros);
     return;
   }
+  requestStart();
+}
 
-  if (backendStarted_ && supported_) {
-    requestStart();
+void GyroscopeInputBackendCore::setEnabled(bool enabled,
+                                           std::uint64_t nowMicros) {
+  if (enabled_ == enabled) {
+    return;
+  }
+  enabled_ = enabled;
+  if (!enabled_) {
+    suspend(nowMicros);
+    return;
+  }
+  requestStart();
+}
+
+void GyroscopeInputBackendCore::suspend(std::uint64_t nowMicros) {
+  const bool wasRunning = phase_ == SensorPhase::Running;
+  publishTransition(turntable_.reset(), nowMicros);
+  commands_.erase(std::remove(commands_.begin(), commands_.end(),
+                              GyroscopeSensorCommand::Start),
+                  commands_.end());
+  if (phase_ == SensorPhase::Running || nativeStartIssued_) {
+    requestStop();
+  }
+  phase_ = SensorPhase::Stopped;
+  retryAtMicros_.reset();
+  lastFreshAtMicros_.reset();
+  lastSensorTimestampSeconds_.reset();
+  if (wasRunning && deviceEverPublished_) {
+    publishSnapshot(true, InputDeviceStatus::Calibrating);
   }
 }
 
 void GyroscopeInputBackendCore::sensorStartSucceeded(std::uint64_t nowMicros) {
-  if (!backendStarted_ || !supported_ || !foreground_ ||
+  if (!backendStarted_ || !supported_ || !foreground_ || !enabled_ ||
       phase_ != SensorPhase::StartPending) {
     return;
   }
@@ -210,7 +224,7 @@ GyroscopeSensorCommand GyroscopeInputBackendCore::takeCommand() {
 }
 
 void GyroscopeInputBackendCore::requestStart() {
-  if (!backendStarted_ || !supported_ || !foreground_ ||
+  if (!backendStarted_ || !supported_ || !foreground_ || !enabled_ ||
       phase_ == SensorPhase::Running || phase_ == SensorPhase::StartPending) {
     return;
   }

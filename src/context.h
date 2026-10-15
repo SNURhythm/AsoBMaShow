@@ -629,6 +629,8 @@ public:
 
     inputDeviceRegistry.configureGyroscopeTurntable(
         inputProfile.gyroscopeTurntable);
+    inputDeviceRegistry.setGyroscopeBindingsPresent(
+        inputProfile.hasGyroscopeBindings());
 
     const PlayerProfilePaths activePaths = profileManager.activePaths();
     scoreRepository.SetDatabasePath(activePaths.scoresDb);
@@ -783,7 +785,7 @@ public:
                     : profileInitializationResult.message;
         return false;
       }
-      return input_profile_runtime::saveThenApplyGyroscopeConfig(
+      const bool saved = input_profile_runtime::saveThenApplyGyroscopeConfig(
           inputProfile, candidate,
           [this](const InputProfile &value, std::string &saveError) {
             return InputProfileStore::saveAtomic(
@@ -793,6 +795,11 @@ public:
             inputDeviceRegistry.configureGyroscopeTurntable(config);
           },
           error);
+      if (saved) {
+        inputDeviceRegistry.setGyroscopeBindingsPresent(
+            candidate.hasGyroscopeBindings());
+      }
+      return saved;
     };
     profileSessionCoordinator = std::make_unique<ProfileSessionCoordinator>(
         profileManager, scoreRepository, replayRepository,
@@ -825,6 +832,8 @@ public:
           inputProfile = loaded.profile;
           inputDeviceRegistry.configureGyroscopeTurntable(
               inputProfile.gyroscopeTurntable);
+          inputDeviceRegistry.setGyroscopeBindingsPresent(
+              inputProfile.hasGyroscopeBindings());
           return true;
         },
         [this](const std::filesystem::path &path) {
@@ -838,6 +847,8 @@ public:
           inputProfile = loaded.profile;
           inputDeviceRegistry.configureGyroscopeTurntable(
               inputProfile.gyroscopeTurntable);
+          inputDeviceRegistry.setGyroscopeBindingsPresent(
+              inputProfile.hasGyroscopeBindings());
         },
         [this]() {
           profileCacheRevision.fetch_add(1, std::memory_order_acq_rel);

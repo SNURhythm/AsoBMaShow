@@ -274,6 +274,15 @@ public:
     processCommands(nowMicros);
   }
 
+  void setGyroscopeEnabled(bool enabled) override {
+    const auto now = monotonicMicros();
+    {
+      const std::lock_guard lock(coreMutex_);
+      core_.setEnabled(enabled, now);
+    }
+    processCommands(now);
+  }
+
   void configureGyroscopeTurntable(
       input::GyroscopeTurntableConfig config) override {
     const std::lock_guard lock(coreMutex_);

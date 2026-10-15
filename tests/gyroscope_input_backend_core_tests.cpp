@@ -29,7 +29,7 @@ input::GyroscopeMotionSample motion(double heading, double rate,
 }
 
 struct Harness {
-  Harness()
+  explicit Harness(bool enabled = true)
       : core({.enqueueInput =
                   [this](input::PhysicalInputEvent event) {
                     order.push_back("input:" +
@@ -41,7 +41,7 @@ struct Harness {
                     order.push_back("device:" + std::to_string(static_cast<int>(
                                                     device.status)));
                     devices.push_back(std::move(device));
-                  }}) {}
+                  }}) { core.setEnabled(enabled, 0); }
 
   void clearEvents() {
     inputs.clear();
@@ -68,6 +68,57 @@ void activateClockwise(Harness &harness, std::uint64_t firstNowMicros = 1000) {
   require(!harness.inputs.empty() &&
               harness.inputs.back().normalizedValue == 1.0F,
           "fixture activates clockwise output");
+}
+
+void testUnusedSensorRemainsDormant() {
+  Harness harness(false);
+  harness.core.start(true, 0);
+  harness.core.sensorAvailable();
+  require(harness.core.takeCommand() == input::GyroscopeSensorCommand::None,
+          "unused supported hardware must not start the native sensor");
+  harness.core.setForeground(false, 1);
+  harness.core.setForeground(true, 2);
+  harness.core.pump(5000000);
+  require(harness.core.takeCommand() == input::GyroscopeSensorCommand::None,
+          "foregrounding and watchdog pumping must not activate unused hardware");
+}
+
+void testDemandReleaseCancelsSamplingAndRetries() {
+  Harness harness;
+  startRunning(harness);
+  activateClockwise(harness);
+  harness.clearEvents();
+  harness.core.setEnabled(false, 200000);
+  require(harness.inputs.size() == 1 &&
+              harness.inputs.front().normalizedValue == 0.0F &&
+              harness.core.takeCommand() == input::GyroscopeSensorCommand::Stop,
+          "removing demand releases held scratch and stops sampling");
+  harness.core.setForeground(false, 300000);
+  harness.core.setEnabled(true, 400000);
+  require(harness.core.takeCommand() == input::GyroscopeSensorCommand::None,
+          "new demand cannot start sampling in background");
+  harness.core.setForeground(true, 500000);
+  require(harness.core.takeCommand() == input::GyroscopeSensorCommand::Start,
+          "foreground resumes demanded sampling");
+  harness.core.setEnabled(false, 500001);
+  require(harness.core.takeCommand() == input::GyroscopeSensorCommand::Stop,
+          "removing demand cancels a native start awaiting its first sample");
+  harness.core.sensorStartSucceeded(500002);
+  harness.core.pump(5000000);
+  require(harness.core.takeCommand() == input::GyroscopeSensorCommand::None,
+          "late startup acknowledgement cannot revive unused sampling");
+  harness.core.setEnabled(true, 5000001);
+  require(harness.core.takeCommand() == input::GyroscopeSensorCommand::Start,
+          "renewed demand starts a fresh session");
+  harness.core.sensorStartFailed(5000002);
+  harness.core.setEnabled(false, 5000003);
+  harness.core.pump(10000000);
+  require(harness.core.takeCommand() == input::GyroscopeSensorCommand::None,
+          "removing demand cancels failure retries");
+  harness.core.setEnabled(true, 10000001);
+  harness.core.setEnabled(false, 10000002);
+  require(harness.core.takeCommand() == input::GyroscopeSensorCommand::None,
+          "removing demand cancels a start before native delivery");
 }
 
 void testUnsupportedAndConnectedBeforeInput() {
@@ -446,6 +497,8 @@ void testNativeRuntimeFailureReleasesWithoutWaitingForPump() {
 
 int main() {
   try {
+    testUnusedSensorRemainsDormant();
+    testDemandReleaseCancelsSamplingAndRetries();
     testUnsupportedAndConnectedBeforeInput();
     testCalibrationConfigAndSessionRelease();
     testWatchdogDisconnectRetryAndReconnect();

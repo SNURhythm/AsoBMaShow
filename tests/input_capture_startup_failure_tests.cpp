@@ -21,7 +21,7 @@ void require(bool value, const char *message) {
 
 InputDeviceRegistry::InputDeviceRegistry() = default;
 InputDeviceRegistry::~InputDeviceRegistry() = default;
-std::uint64_t InputDeviceRegistry::subscribeInput(InputListener listener) {
+std::uint64_t InputDeviceRegistry::subscribeInput(InputListener listener, bool) {
   if (failure == Failure::Input) throw std::runtime_error("injected registry failure");
   const auto token = nextToken++;
   inputs.emplace(token, std::move(listener));

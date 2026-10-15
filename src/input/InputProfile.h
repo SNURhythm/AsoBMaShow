@@ -42,6 +42,7 @@ struct InputProfile {
   std::vector<input::InputBinding> bindings;
 
   void sanitize(std::vector<std::string> &diagnostics);
+  [[nodiscard]] bool hasGyroscopeBindings() const;
 
   std::vector<std::reference_wrapper<const input::InputBinding>>
   bindingsFor(input::InputScope scope) const;

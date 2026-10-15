@@ -131,6 +131,8 @@ public:
   bool start(std::string &) override { return true; }
   void stop() override {}
   void pump() override {}
+  void setGyroscopeEnabled(bool enabled) override { gyroscopeEnabled = enabled; }
+  bool gyroscopeEnabled = false;
 
   void sendInput(input::PhysicalInputEvent value) {
     publishInput(std::move(value));
@@ -163,6 +165,44 @@ struct RegistryHarness {
     registry.pump();
   }
 };
+
+void testCaptureOwnsGyroscopeDemand() {
+  RegistryHarness harness;
+  InputProfile profile;
+  require(!harness.backend->gyroscopeEnabled,
+          "ordinary registry startup does not demand gyro sampling");
+  {
+    InputCaptureController controller(harness.registry, profile, {});
+    require(harness.backend->gyroscopeEnabled,
+            "opening input monitor enables gyro even before a binding exists");
+    {
+      InputCaptureController second(harness.registry, profile, {});
+    }
+    require(harness.backend->gyroscopeEnabled,
+            "closing one monitor preserves another monitor's demand");
+  }
+  require(!harness.backend->gyroscopeEnabled,
+          "closing the last monitor stops unused gyro sampling");
+  auto gyro = binding("gyro", {1, 7}, lane(0), axisControl("gyro", 0));
+  gyro.control.deviceClass = input::DeviceClass::Gyroscope;
+  profile.bindings.push_back(gyro);
+  harness.registry.setGyroscopeBindingsPresent(profile.hasGyroscopeBindings());
+  require(harness.backend->gyroscopeEnabled,
+          "a configured gyro binding keeps sampling active outside settings");
+  {
+    InputCaptureController controller(harness.registry, profile, {});
+    profile.bindings.clear();
+    harness.registry.setGyroscopeBindingsPresent(profile.hasGyroscopeBindings());
+    require(harness.backend->gyroscopeEnabled,
+            "removing the last binding preserves open monitor demand");
+  }
+  require(!harness.backend->gyroscopeEnabled,
+          "removing the last binding and monitor stops sampling");
+  profile.bindings.push_back(binding("key", {1, 7}, lane(0), keyControl(12)));
+  harness.registry.setGyroscopeBindingsPresent(profile.hasGyroscopeBindings());
+  require(!harness.backend->gyroscopeEnabled,
+          "non-gyro bindings do not activate sampling");
+}
 
 void testGyroscopeConfigUpdateIsSanitizedAndTransactional() {
   RegistryHarness harness;
@@ -1046,6 +1086,7 @@ void testReplacementNotifierIsReentrantAndResetIsALifetimeBarrier() {
 
 int main() {
   try {
+    testCaptureOwnsGyroscopeDemand();
     testMonitoringNoiseActivationRepeatsAndDuplicateIgnore();
     testGyroscopeConfigUpdateIsSanitizedAndTransactional();
     testVirtualControllerConfigUpdateIsSanitizedAndTransactional();
