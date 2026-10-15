@@ -264,6 +264,18 @@ struct PagedPreviewSource::Impl {
         const auto step = static_cast<std::uint64_t>(std::max(1, outputRate / 4));
         for (std::uint64_t first = 0; first < count; first += step)
           prepare(asset, first, std::min<std::uint64_t>(count, first + step));
+        // Downsampling can skip a final native page (or entire pages at very
+        // large ratios). Complete means gameplay can reuse every native frame,
+        // including samples no output interpolation endpoint ever requested.
+        if (count != 0) {
+          std::string error;
+          if (!cache->Preload(asset.path, cancelled, {}, &error)) {
+            checkpoint();
+            // This asset already published valid metadata; disappearance or a
+            // later decode failure cannot turn it retroactively into empty PCM.
+            throw std::runtime_error(error.empty() ? "Could not retain preview native audio." : error);
+          }
+        }
       }
       checkpoint();
       { std::lock_guard lock(mutex); state.preparationComplete = true; ++state.revision; }

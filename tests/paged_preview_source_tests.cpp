@@ -117,7 +117,13 @@ void testHighlightAndReuse(const std::filesystem::path &root) {
           "highlight tails and independent bus gains must reach the shared mixer");
   require(std::abs(samples[48000 * 2] - (8191.0f * 0.45f / 32768.0f)) < 0.00001f,
           "ended keysound must leave only the BGM tail");
-  require(cache->Contains(root / "referenced.wav"), "referenced WAVs must warm for gameplay");
+  const auto referencedBefore = cache->GetStatistics();
+  std::vector<short> referenced;
+  require(cache->Materialize(root / "referenced.wav", referenced, info, cancelled),
+          "cannot materialize referenced gameplay audio");
+  require(referenced.size() == 8193 &&
+              cache->GetStatistics().decodedFrames == referencedBefore.decodedFrames,
+          "referenced WAVs must have every native page retained for gameplay");
   const auto before = cache->GetStatistics();
   auto next = audio::PagedPreviewSource::Create(*chart(root, "#00001:01\n#00011:0002\n"), cache, 0);
   require(next->Begin(44100), "cannot begin reused preview");
@@ -147,6 +153,32 @@ void testResampling(const std::filesystem::path &root) {
     for (std::size_t i = 0; i < expected.size(); ++i)
       require(std::abs(actual[i] - expected[i] * (0.9f / 32768.0f)) < 0.000001f,
               "paged resampling differs at a seek/page/interpolation endpoint");
+  }
+}
+void testDownsamplingWarmsEveryNativePage(const std::filesystem::path &root) {
+  // 8193 native frames at 192 kHz produce 1882 output frames at 44.1 kHz.
+  // The last interpolation endpoint is native frame 8190, so output preparation
+  // alone never requests the final native page beginning at frame 8192.
+  writeWav(root / "first.wav", 192000, std::vector<short>(8193, 8192));
+  writeWav(root / "referenced.wav", 192000, std::vector<short>(8193, 4096));
+  auto parsed = chart(root, "#00011:01\n");
+  parsed->ReferencedWavTable.emplace(9, "referenced.wav");
+  auto cache = std::make_shared<audio::DecodedAssetCache>(root / "cache",
+      audio::DecodedAssetCache::kUnlimitedRetainedBytes);
+  auto source = audio::PagedPreviewSource::Create(*parsed, cache, 0);
+  require(source->Begin(44100), "cannot begin downsampling preview");
+  waitPrepared(source);
+  std::atomic_bool cancelled{false};
+  for (const auto *name : {"first.wav", "referenced.wav"}) {
+    const auto before = cache->GetStatistics();
+    std::vector<short> native;
+    SF_INFO info{};
+    require(cache->Materialize(root / name, native, info, cancelled),
+            "cannot materialize native gameplay PCM after downsampled preview");
+    require(native.size() == 8193 && info.samplerate == 192000,
+            "gameplay materialization must contain the complete native asset");
+    require(cache->GetStatistics().decodedFrames == before.decodedFrames,
+            "preparationComplete must retain native pages skipped by downsampling for selected and referenced WAVs");
   }
 }
 void testFractionalTiming(const std::filesystem::path &root) {
@@ -241,9 +273,10 @@ int main() {
   const auto root = std::filesystem::temp_directory_path() /
       ("asobmashow-paged-source-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
   try {
-    for (const char *name : {"highlight", "resampling", "missing", "progressive", "timing"}) std::filesystem::create_directories(root / name);
+    for (const char *name : {"highlight", "resampling", "missing", "progressive", "timing", "downsampling"}) std::filesystem::create_directories(root / name);
     testHighlightAndReuse(root / "highlight");
     testResampling(root / "resampling");
+    testDownsamplingWarmsEveryNativePage(root / "downsampling");
     testMissingAndExpired(root / "missing");
     testProgressiveStartup(root / "progressive");
     testFractionalTiming(root / "timing");
