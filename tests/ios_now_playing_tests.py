@@ -33,8 +33,8 @@ class IOSNowPlayingTests(unittest.TestCase):
         activate = method(native, "bool ActivateIOSNativeMusicAudioSession(std::string &errorMessage)")
         fixture = r'''
 #import <Foundation/Foundation.h>
+#include "audio/IOSMusicStreamWake.h"
 #include <cassert>
-#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -97,7 +97,8 @@ class IOSMusicStream {
 public:
   struct Impl {
     std::mutex mutex;
-    std::condition_variable wake;
+    std::shared_ptr<ios_music_stream::FeederWake> wake =
+        std::make_shared<ios_music_stream::FeederWake>();
     bool playing = true, buffering = false, ended = false;
     std::string failure;
     FakeEngine *engine;
@@ -175,6 +176,7 @@ int main() {
             mm.write_text(fixture)
             subprocess.run(["xcrun", "--sdk", "macosx", "clang++", "-std=c++20",
                             "-fobjc-arc", "-fblocks", "-framework", "Foundation",
+                            "-I", str(ROOT / "src"),
                             str(mm), "-o", str(executable)], check=True)
             result = subprocess.run([str(executable)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
@@ -560,9 +562,9 @@ class IOSStreamSeekTests(unittest.TestCase):
         stop = method(source, "void IOSMusicStream::Stop()")
         stop = stop.replace("[impl->engine pause];", "")
         fixture = r'''
+#include "audio/IOSMusicStreamWake.h"
 #include <algorithm>
 #include <cassert>
-#include <condition_variable>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -580,7 +582,8 @@ class IOSMusicStream {
 public:
   struct Impl {
     std::mutex mutex;
-    std::condition_variable wake;
+    std::shared_ptr<ios_music_stream::FeederWake> wake =
+        std::make_shared<ios_music_stream::FeederWake>();
     std::shared_ptr<FakeSource> source = std::make_shared<FakeSource>();
     bool playing = false, buffering = true;
     std::uint64_t resetFrame = 0;
@@ -631,7 +634,7 @@ int main() {
             cpp, obj = folder / "seek.cpp", folder / "seek.o"
             executable = folder / ("seek" + compiler.executable_suffix)
             cpp.write_text(fixture)
-            subprocess.run(compiler.compile_command(cpp, obj), check=True)
+            subprocess.run(compiler.compile_command(cpp, obj, includes=(ROOT / "src",)), check=True)
             subprocess.run(compiler.link_command([obj], executable), check=True)
             result = subprocess.run([str(executable)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)

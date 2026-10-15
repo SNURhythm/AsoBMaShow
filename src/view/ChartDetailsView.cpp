@@ -331,10 +331,20 @@ void ChartDetailsView::renderImpl(RenderContext &) {
   }
 }
 
+bool ChartDetailsView::canShowPreviewGlow() const {
+  if (!artwork_->ambientPalette()) return false;
+  for (auto node = artwork_->getNode(); node; node = YGNodeGetOwner(node)) {
+    const auto *view = static_cast<const View *>(YGNodeGetContext(node));
+    if (view && !view->getVisible()) return false;
+  }
+  return true;
+}
+
 void ChartDetailsView::updatePreviewGlow(float level, const audio::Spectrum &spectrum, float dt) {
-  const auto &palette = artwork_->ambientPalette();
-  if (!artwork_->getVisible() || !palette || !artworkFrame_->getVisible()) {
+  if (!canShowPreviewGlow()) {
     previewGlow_.reset();
+    sampledSpectrum_.fill(0);
+    spectrumCooldown_ = 0;
     artwork_->clearAmbientGlow();
     return;
   }
@@ -455,6 +465,8 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
   if (glowChartPath_ != chartPath) {
     glowChartPath_ = chartPath;
     previewGlow_.reset();
+    sampledSpectrum_.fill(0);
+    spectrumCooldown_ = 0;
     artwork_->clearAmbientGlow();
   }
   artwork_->setVisible(chart && !record->meta.StageFile.empty());

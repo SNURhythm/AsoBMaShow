@@ -1,6 +1,7 @@
 package com.snurhythm.asobmashow;
 
 final class NativePcmMusicPlayer {
+    static final int SAMPLE_RATE = 44100;
     static final int END = -1, CANCELLED = -2, ERROR = -3;
     interface Source {
         int read(long frame, short[] data);
@@ -28,6 +29,7 @@ final class NativePcmMusicPlayer {
     private volatile boolean closed;
     private long generation, baseFrame, submitted, duration;
     private long lastHead, headWrap;
+    private float playbackSpeed = 1.0f;
 
     NativePcmMusicPlayer(Source source, Output output, Listener listener) {
         this.source = source;
@@ -57,6 +59,7 @@ final class NativePcmMusicPlayer {
         output.pause();
         playing = false;
         source.enable(false);
+        notifyAll();
     }
 
     synchronized void stop() {
@@ -80,8 +83,10 @@ final class NativePcmMusicPlayer {
     synchronized void rate(float speed, boolean stretch) {
         if (closed) return;
         output.rate(speed, stretch);
+        playbackSpeed = speed;
         // Applying PlaybackParams can implicitly start a stopped AudioTrack.
         if (!playing) output.pause();
+        notifyAll();
     }
 
     synchronized void close() {
@@ -114,6 +119,7 @@ final class NativePcmMusicPlayer {
         try {
             while (true) {
                 long frame, currentGeneration;
+                long queuedFrames = -1;
                 boolean finished = false;
                 synchronized (this) {
                     while (!closed && !playing) wait();
@@ -132,7 +138,8 @@ final class NativePcmMusicPlayer {
                         count -= written;
                         submitted += written / 2;
                     }
-                    if (end && positionFrames() >= baseFrame + submitted) {
+                    if (end) queuedFrames = baseFrame + submitted - positionFrames();
+                    if (end && queuedFrames == 0) {
                         playing = false;
                         completed = true;
                         output.pause();
@@ -150,7 +157,15 @@ final class NativePcmMusicPlayer {
                     if (!closed) listener.changed(currentGeneration);
                 }
                 if (count != 0 || end) {
-                    synchronized (this) { if (!closed) wait(5); }
+                    synchronized (this) {
+                        if (!closed && playing && currentGeneration == generation) {
+                            if (queuedFrames < 0) queuedFrames = baseFrame + submitted - positionFrames();
+                            // Leave half the queued audio as a scheduling reserve. Rate changes
+                            // wake this wait; even a stalled device is retried within 50 ms.
+                            long delay = (long) (queuedFrames * 500.0 / (SAMPLE_RATE * playbackSpeed));
+                            wait(Math.max(5, Math.min(50, delay)));
+                        }
+                    }
                     continue;
                 }
                 // JNI may wait for up to 100 ms. No transport or Activity lock is held.
@@ -173,7 +188,9 @@ final class NativePcmMusicPlayer {
                     } else if (result == ERROR) {
                         throw new IllegalStateException(source.error());
                     } else {
-                        wait(5);
+                        // A pending native read already waits for production; avoid a hot
+                        // retry loop when it returns immediately without available frames.
+                        if (playing) wait(25);
                     }
                 }
             }

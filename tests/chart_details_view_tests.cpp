@@ -212,6 +212,10 @@ int main() {
             "missing artwork uses a square placeholder");
     require(frame->getY() == details.getY(),
             "visualizer adds no top padding or height to the desktop details");
+    int spectrumReads = 0;
+    const auto readSpectrum = [&] { ++spectrumReads; return fullSpectrum; };
+    details.updatePreviewGlow(0.5f, 1.0f / 120, readSpectrum);
+    require(spectrumReads == 0, "missing artwork does not request an FFT");
     const int placeholderSummaryY = summary->getY();
     writePpm(fixture, 32, 18, true);
     require(image->setImage(fspath_to_path_t(fixture)), "wide stagefile fixture decodes");
@@ -225,6 +229,20 @@ int main() {
                 image->getWidth() == frame->getWidth() && image->getHeight() == frame->getHeight() &&
                 summary->getY() == placeholderSummaryY,
             "decoded wide artwork retains the square frame and stable metadata position");
+    for (int i = 0; i < 120; ++i)
+      details.updatePreviewGlow(0.5f, 1.0f / 120, readSpectrum);
+    require(spectrumReads == 30, "120 Hz artwork animation requests only 30 FFTs per second");
+    details.updatePreviewGlow(0, 1.0f / 120, readSpectrum);
+    require(spectrumReads == 30, "silent output does not request an FFT");
+    details.setVisible(false);
+    details.updatePreviewGlow(0.5f, 1.0f / 120, readSpectrum);
+    require(spectrumReads == 30, "hidden artwork ancestors suppress FFT work");
+    details.setVisible(true);
+    details.updatePreviewGlow(0.5f, 1.0f / 120, readSpectrum);
+    require(spectrumReads == 31, "visible artwork immediately refreshes its spectrum");
+    for (int i = 0; i < 120; ++i)
+      details.updatePreviewGlow(i % 2 ? 0.5f : 0, 1.0f / 120, readSpectrum);
+    require(spectrumReads == 61, "alternating silence does not bypass the 30 Hz FFT limit");
     details.updatePreviewGlow(0.5f, fullSpectrum, 0.1f);
     auto glow = captureGlow(*frame, details);
     require(!glow.glowVertices.empty(),
@@ -254,6 +272,8 @@ int main() {
     record.meta.BmsPath = "/charts/replacement.bms";
     details.setChart(&record, std::nullopt, kNoClearTypeRank, "");
     require(!captureGlow(*frame, details).glow, "chart change clears the previous halo");
+    details.updatePreviewGlow(0.5f, 0, readSpectrum);
+    require(spectrumReads == 62, "a new chart immediately refreshes its spectrum");
     const int wideHeight = details.getHeight();
     details.renderImpl(context);
     require(details.getHeight() == wideHeight && !YGNodeIsDirty(details.getNode()),

@@ -239,8 +239,12 @@ struct PreviewSession {
         const auto read = consumed.load(std::memory_order_acquire);
         const auto free = capacity - static_cast<std::size_t>(write - read);
         if (!free) {
+          // Three seconds are already queued. Sleep until roughly one useful
+          // batch has drained instead of waking every 5 ms to top it up.
+          const auto refillWait = std::chrono::duration<double>(
+              std::min(0.1, static_cast<double>(kOutputBatchFrames) / outputRate));
           std::unique_lock lock(waitMutex);
-          wake.wait_for(lock, std::chrono::milliseconds(5), [&] {
+          wake.wait_for(lock, refillWait, [&] {
             return !active.load(std::memory_order_acquire);
           });
           continue;

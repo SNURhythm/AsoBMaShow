@@ -9,10 +9,12 @@ import org.junit.Test;
 public final class NativePcmMusicPlayerTest {
     static final class Source implements NativePcmMusicPlayer.Source {
         volatile boolean enabled, closed, pending = true;
-        volatile int failure;
+        volatile int failure, reads;
+        long frames = 100;
         volatile long lastRead = -1, lastSeek = -1;
         CountDownLatch entered, unblock;
         public int read(long frame, short[] data) {
+            reads++;
             lastRead = frame;
             if (entered != null) {
                 entered.countDown();
@@ -21,12 +23,12 @@ public final class NativePcmMusicPlayerTest {
             }
             if (failure != 0) return failure;
             if (pending) return 0;
-            if (frame >= 100) return NativePcmMusicPlayer.END;
-            int count = (int) Math.min(100 - frame, data.length / 2);
+            if (frame >= frames) return NativePcmMusicPlayer.END;
+            int count = (int) Math.min(frames - frame, data.length / 2);
             for (int i = 0; i < count; i++) data[i * 2] = data[i * 2 + 1] = (short) (frame + i);
             return count;
         }
-        public long durationFrames() { return 100; }
+        public long durationFrames() { return frames; }
         public String error() { return "render failed"; }
         public void enable(boolean value) { enabled = value; }
         public void seek(long frame) { lastSeek = frame; }
@@ -36,17 +38,21 @@ public final class NativePcmMusicPlayerTest {
         volatile long head, written;
         volatile boolean playing, closed;
         volatile int writeLimit = Integer.MAX_VALUE;
+        volatile int writeCalls, headCalls;
+        long capacity = Integer.MAX_VALUE;
         volatile float speed = 1;
         volatile boolean stretch;
         final java.util.List<Short> samples = new java.util.concurrent.CopyOnWriteArrayList<>();
         public int write(short[] data, int offset, int count) {
+            writeCalls++;
             count = Math.min(count, writeLimit);
+            if (count > 0) count = (int) Math.min(count, Math.max(0, capacity - written + head) * 2);
             if (count < 0) return count;
             for (int i = offset; i < offset + count; i += 2) samples.add(data[i]);
             written += count / 2;
             return count;
         }
-        public long headFrames() { return head; }
+        public long headFrames() { headCalls++; return head; }
         public void play() { playing = true; }
         public void pause() { playing = false; }
         public void flush() { head = written = 0; }
@@ -164,6 +170,75 @@ public final class NativePcmMusicPlayerTest {
         NativePcmMusicPlayer player = new NativePcmMusicPlayer(source, output, events);
         player.play(); await(() -> events.errors == 1 && source.closed);
         assertFalse(player.isPlaying()); assertEquals(0, events.finished); assertTrue(output.closed);
+    }
+
+    @Test public void fullOutputDoesNotRetryEveryFiveMilliseconds() throws Exception {
+        Source source = new Source(); Output output = new Output(); Events events = new Events();
+        source.pending = false; source.frames = 16384; output.capacity = 4096;
+        NativePcmMusicPlayer player = new NativePcmMusicPlayer(source, output, events);
+        try {
+            player.play(); await(() -> output.written == 4096 && output.writeCalls >= 2);
+            int calls = output.writeCalls;
+            Thread.sleep(250);
+            assertTrue("A full output should batch retries; calls=" + (output.writeCalls - calls),
+                    output.writeCalls - calls < 15);
+            assertEquals(4096, output.written);
+            player.seek(12000); await(() -> output.written == 4096);
+            assertEquals(12000, (short) output.samples.get(4096));
+        } finally { player.close(); }
+    }
+
+    @Test public void queuedEndDoesNotPollThePlaybackHeadEveryFiveMilliseconds() throws Exception {
+        Source source = new Source(); Output output = new Output(); Events events = new Events();
+        source.pending = false; source.frames = 4096;
+        NativePcmMusicPlayer player = new NativePcmMusicPlayer(source, output, events);
+        try {
+            player.play(); await(() -> output.headCalls > 0);
+            int calls = output.headCalls;
+            Thread.sleep(250);
+            assertTrue("Queued EOF should wait for buffered audio; calls=" + (output.headCalls - calls),
+                    output.headCalls - calls < 15);
+            assertEquals(0, events.finished);
+            output.head = 4096; await(() -> events.finished == 1);
+            assertEquals(4096, player.positionFrames());
+        } finally { player.close(); }
+    }
+
+    @Test public void pendingSourceRetriesAreBoundedAndRecover() throws Exception {
+        Source source = new Source(); Output output = new Output(); Events events = new Events();
+        NativePcmMusicPlayer player = new NativePcmMusicPlayer(source, output, events);
+        try {
+            player.play(); await(() -> source.reads > 0);
+            int reads = source.reads;
+            Thread.sleep(250);
+            assertTrue("An empty source should not be polled at 200 Hz; reads=" + (source.reads - reads),
+                    source.reads - reads < 15);
+            source.pending = false; await(() -> output.written == 100);
+            output.head = 100; await(() -> events.finished == 1);
+        } finally { player.close(); }
+    }
+
+    @Test public void refillCadenceFollowsPlaybackSpeedAndPauseStopsPolling() throws Exception {
+        Source source = new Source(); Output output = new Output(); Events events = new Events();
+        source.pending = false; source.frames = 16384; output.capacity = 1323;
+        NativePcmMusicPlayer player = new NativePcmMusicPlayer(source, output, events);
+        try {
+            player.rate(0.5f, true); player.play(); await(() -> output.written == 1323);
+            int calls = output.writeCalls;
+            Thread.sleep(300);
+            int slowCalls = output.writeCalls - calls;
+            player.rate(2.0f, false);
+            calls = output.writeCalls;
+            Thread.sleep(300);
+            int fastCalls = output.writeCalls - calls;
+            assertTrue("Refill cadence must follow playback speed: slow=" + slowCalls + ", fast=" + fastCalls,
+                    fastCalls > slowCalls * 2);
+            player.pause(); calls = output.writeCalls;
+            Thread.sleep(70);
+            assertEquals("Paused output must not be polled", calls, output.writeCalls);
+            player.close(); await(() -> output.closed && source.closed);
+            assertEquals(0, events.errors);
+        } finally { player.close(); }
     }
 
 }

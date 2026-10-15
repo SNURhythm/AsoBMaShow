@@ -21,6 +21,27 @@ public:
   void setScoreContainer(View *container);
   void setCompact(bool compact);
   void updatePreviewGlow(float level, const audio::Spectrum &spectrum, float dt);
+  template <typename ReadSpectrum>
+  void updatePreviewGlow(float level, float dt, ReadSpectrum readSpectrum) {
+    if (!canShowPreviewGlow()) {
+      sampledSpectrum_.fill(0);
+      spectrumCooldown_ = 0;
+      updatePreviewGlow(0, sampledSpectrum_, dt);
+      return;
+    }
+    // FFT work runs at most 30 Hz. Envelope interpolation still runs every UI
+    // frame, and hidden/missing artwork or silent output never requests an FFT.
+    if (std::isfinite(dt)) spectrumCooldown_ -= std::max(0.0f, dt);
+    if (!std::isfinite(level) || level <= 0) {
+      updatePreviewGlow(0, sampledSpectrum_, dt);
+      return;
+    }
+    if (spectrumCooldown_ <= 0.000001f) {
+      sampledSpectrum_ = readSpectrum();
+      spectrumCooldown_ = 1.0f / 30;
+    }
+    updatePreviewGlow(level, sampledSpectrum_, dt);
+  }
   void setChart(const ChartMetaRecord *record,
                 const std::optional<ScoreBestSnapshot> &best,
                 int clearRank, const std::string &total);
@@ -31,6 +52,7 @@ protected:
 
 private:
   void refreshArtworkLayout();
+  bool canShowPreviewGlow() const;
   static constexpr float kIdentityHeight = 132;
   static constexpr float kDifficultyHeight = 34;
   static constexpr float kSectionGap = 10;
@@ -47,6 +69,8 @@ private:
   ImageView *artwork_ = nullptr;
   bool artworkHasImage_ = false;
   PreviewGlow previewGlow_;
+  audio::Spectrum sampledSpectrum_{};
+  float spectrumCooldown_ = 0;
   std::string glowChartPath_;
   bool compact_ = true;
   int artworkLayoutWidth_ = -1;

@@ -44,6 +44,7 @@ struct BackendControl {
   bool failStart = false;
   std::atomic_bool started{false};
   std::atomic_int stops{0};
+  std::atomic_int runtimeQueries{0};
   std::vector<short> pump(std::size_t frames, int channels = 2) {
     assert(render);
     std::vector<short> output(frames * channels, 12345);
@@ -63,6 +64,7 @@ public:
   bool stop(std::string &) override { control->started = false; ++control->stops; return true; }
   bool isStarted() const override { return control->started; }
   audio::RuntimeState runtimeState() const override {
+    ++control->runtimeQueries;
     return {.effectiveSampleRate = control->rate};
   }
 private:
@@ -227,6 +229,27 @@ void testStartupReserveBridgesPreparationStall() {
   }
 }
 
+void testFullReserveDoesNotWakeEveryFiveMilliseconds() {
+  auto input = std::make_shared<SourceControl>();
+  input->samples.assign(44100 * 8 * 2, 2345);
+  input->publishAll();
+  auto backend = std::make_shared<BackendControl>();
+  audio::PreviewStreamPlayer player(std::make_unique<FakeFactory>(backend));
+  std::string error;
+  assert(player.Start(source(input), 0, error));
+  waitFor([&] { return input->lastRead.load() >= 44100 * 3 - 4096; });
+  const auto before = backend->runtimeQueries.load();
+  std::this_thread::sleep_for(200ms);
+  assert(backend->runtimeQueries.load() - before < 10 &&
+         "a full preview reserve must not poll the device 200 times per second");
+  const auto output = backend->pump(44100);
+  assert(std::all_of(output.begin(), output.end(), [](short sample) { return sample == 2345; }));
+  waitFor([&] { return input->lastRead.load() >= 44100 * 4 - 4096; });
+  const auto begin = std::chrono::steady_clock::now();
+  player.Stop();
+  assert(std::chrono::steady_clock::now() - begin < 500ms);
+}
+
 void testFutureOriginUnderrunAndStop() {
   auto input = std::make_shared<SourceControl>();
   input->first = 441000;
@@ -380,6 +403,7 @@ int main() {
   testSpectrumFollowsCurrentFrequencyNotRecentLevels();
   testOutputLevelTracksAudibleSamples();
   testStartupReserveBridgesPreparationStall();
+  testFullReserveDoesNotWakeEveryFiveMilliseconds();
   testFutureOriginUnderrunAndStop();
   testRationalResamplingAndShortReads();
   testDownsampledFinalPositionDoesNotPassEnd();

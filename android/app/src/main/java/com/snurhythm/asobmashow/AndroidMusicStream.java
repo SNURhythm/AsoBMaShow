@@ -7,7 +7,7 @@ import android.media.PlaybackParams;
 
 /** Android/JNI edges for the music-only PCM feeder. */
 final class AndroidMusicStream {
-    static final int SAMPLE_RATE = 44100;
+    static final int SAMPLE_RATE = NativePcmMusicPlayer.SAMPLE_RATE;
     static native int read(long handle, long firstFrame, short[] samples);
     static native long duration(long handle);
     static native String error(long handle);

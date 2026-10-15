@@ -2,11 +2,11 @@
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "IOSMusicStream.h"
 #include "IOSMusicStreamTimeline.h"
+#include "IOSMusicStreamWake.h"
 #include "ProgressiveMusicSource.h"
 #include "../iOSNatives.hpp"
 #import <AVFoundation/AVFoundation.h>
 #include <atomic>
-#include <condition_variable>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -21,7 +21,8 @@ struct IOSMusicStream::Impl {
   AVAudioUnitTimePitch *timePitch = nil;
   AVAudioFormat *format = nil;
   std::mutex mutex;
-  std::condition_variable wake;
+  std::shared_ptr<ios_music_stream::FeederWake> wake =
+      std::make_shared<ios_music_stream::FeederWake>();
   std::thread feeder;
   bool quitting = false;
   bool playing = false;
@@ -39,7 +40,7 @@ struct IOSMusicStream::Impl {
   ~Impl() {
     { std::lock_guard lock(mutex); quitting = true; playing = false; ++*notifications; }
     source->Cancel();
-    wake.notify_all();
+    wake->Notify();
     if (feeder.joinable()) feeder.join();
     [player stop];
     [engine stop];
@@ -92,7 +93,7 @@ struct IOSMusicStream::Impl {
     for (;;) {
       @autoreleasepool {
         std::unique_lock lock(mutex);
-        wake.wait(lock, [&] { return quitting || playing; });
+        while (!quitting && !playing) wake->Wait(lock);
         if (quitting) return;
         if (ended) {
           if (timeline.Drained(completion->played.load())) {
@@ -101,13 +102,13 @@ struct IOSMusicStream::Impl {
             [player pause];
             if (!notified) { notified = true; Notify(EventKind::Finished); }
           } else {
-            wake.wait_for(lock, std::chrono::milliseconds(5));
+            wake->Wait(lock);
           }
           continue;
         }
         // Keep roughly half a second in native buffers; source owns read-ahead.
         if (timeline.Queued() - completion->played.load() >= 22050) {
-          wake.wait_for(lock, std::chrono::milliseconds(5));
+          wake->Wait(lock);
           continue;
         }
         const auto first = timeline.End();
@@ -158,7 +159,7 @@ struct IOSMusicStream::Impl {
           // scheduling into a starved running timeline would count the silent gap.
           while (!timeline.Drained(completion->played.load()) &&
                  !quitting && playing && epoch == generation) {
-            wake.wait_for(lock, std::chrono::milliseconds(5));
+            wake->Wait(lock);
           }
           if (quitting) return;
           if (!playing || epoch != generation) continue;
@@ -167,11 +168,15 @@ struct IOSMusicStream::Impl {
         timeline.Queue(result.frames);
         const auto end = timeline.Queued();
         auto acknowledgement = completion;
+        auto signal = wake;
         [player scheduleBuffer:buffer completionCallbackType:AVAudioPlayerNodeCompletionDataPlayedBack
              completionHandler:^(AVAudioPlayerNodeCompletionCallbackType) {
                // Late callbacks from a flushed epoch cannot advance a new seek.
                auto previous = acknowledgement->played.load();
                while (previous < end && !acknowledgement->played.compare_exchange_weak(previous, end)) {}
+               // This retained signal also outlives the adapter. Never capture
+               // Impl or touch its mutex/source from a native completion.
+               signal->Notify();
              }];
         if (!player.playing) [player play];
         const auto duration = source->GetState().durationFrames;
@@ -227,7 +232,7 @@ bool IOSMusicStream::Play(std::string &error) {
   impl->source->SetRenderingEnabled(true);
   if (impl->timeline.Queued() && !impl->timeline.Drained(impl->completion->played.load()))
     [impl->player play];
-  impl->wake.notify_all();
+  impl->wake->Notify();
   return true;
 }
 
@@ -239,7 +244,7 @@ void IOSMusicStream::Pause() {
   // Pausing only the node leaves the system sending pause instead of play.
   [impl->engine pause];
   impl->source->SetRenderingEnabled(false);
-  impl->wake.notify_all();
+  impl->wake->Notify();
 }
 
 void IOSMusicStream::Stop() {
@@ -249,7 +254,7 @@ void IOSMusicStream::Stop() {
   impl->Reset(0);
   impl->source->RequestSeek(0);
   [impl->engine pause];
-  impl->wake.notify_all();
+  impl->wake->Notify();
 }
 
 void IOSMusicStream::Seek(long long positionMicros) {
@@ -262,7 +267,7 @@ void IOSMusicStream::Seek(long long positionMicros) {
   impl->Reset(target);
   impl->source->RequestSeek(target);
   impl->buffering = true;
-  impl->wake.notify_all();
+  impl->wake->Notify();
 }
 
 void IOSMusicStream::SetRate(float rate, bool timeStretch) {
@@ -272,6 +277,7 @@ void IOSMusicStream::SetRate(float rate, bool timeStretch) {
   impl->timePitch.rate = timeStretch ? rate : 1.0f;
   impl->timePitch.pitch = 0;
   impl->timePitch.bypass = !timeStretch;
+  impl->wake->Notify();
 }
 
 bool IOSMusicStream::IsBuffering() const {
@@ -298,7 +304,7 @@ void IOSMusicStream::ConfigurationChanged(void *changedEngine) {
       impl->Notify(EventKind::Error, error);
     }
   }
-  impl->wake.notify_all();
+  impl->wake->Notify();
 }
 
 IOSNativeMusicState IOSMusicStream::State() {

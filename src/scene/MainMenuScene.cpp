@@ -8060,8 +8060,9 @@ void MainMenuScene::update(float dt) {
     }
     // FFT analysis runs after releasing the selection lock, outside playback.
     const float level = currentPreview ? previewPlayer_.GetOutputLevel() : 0;
-    const auto spectrum = currentPreview ? previewPlayer_.GetOutputSpectrum() : audio::Spectrum{};
-    chartDetailsView_->updatePreviewGlow(level, spectrum, dt);
+    chartDetailsView_->updatePreviewGlow(level, dt, [this] {
+      return previewPlayer_.GetOutputSpectrum();
+    });
   }
   updatePreviewVisuals();
   if (irTab_) {
