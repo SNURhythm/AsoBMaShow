@@ -8047,6 +8047,19 @@ void MainMenuScene::updatePreviewVisuals() {
 
 void MainMenuScene::update(float dt) {
   if (!applyPendingTabSwitch()) return;
+  if (chartDetailsView_) {
+    float level = 0;
+    {
+      // Selection clears this chart before the preview debounce. Do not pulse
+      // newly cached artwork with audio from the previous selection.
+      std::unique_lock lock(selectedChartMutex, std::try_to_lock);
+      if (lock.owns_lock() && activeTab_ == Tab::Play && selectedChart &&
+          selectedChartRecord && selectedChart->Meta.BmsPath == selectedChartRecord->meta.BmsPath) {
+        level = previewPlayer_.GetOutputLevel();
+      }
+    }
+    chartDetailsView_->updatePreviewGlow(level, dt);
+  }
   updatePreviewVisuals();
   if (irTab_) {
     irTab_->refreshLanguageIfNeeded();

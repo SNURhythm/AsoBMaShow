@@ -6,6 +6,8 @@
 #include "view/TextView.h"
 #include "view/UiTheme.h"
 #include "view/MainMenuTheme.h"
+#include "view/ArtworkColor.h"
+#include "view/PreviewGlow.h"
 
 #include <bgfx/bgfx.h>
 #include <cstdlib>
@@ -50,6 +52,31 @@ public:
   using ChartDetailsView::renderImpl;
 };
 
+struct GlowCapture final : rendering::UiBatchBackend {
+  std::optional<rendering::UiBatchState> shadow;
+  float top = 0;
+  bool submit(const rendering::UiBatchSubmission &submission) noexcept override {
+    const auto color = rendering::UniformCache::getInstance().getVec4("u_shadowColor");
+    if (submission.state.uniformCount == 2 &&
+        submission.state.uniforms[0].handle.idx == color.idx) {
+      shadow = submission.state;
+      top = submission.texturedVertices.front().y;
+    }
+    return true;
+  }
+};
+
+GlowCapture captureGlow(View &frame, View &details) {
+  GlowCapture capture;
+  rendering::UiBatchRenderer batch(capture);
+  RenderContext context(batch);
+  context.scissor = {details.getX(), details.getY(), details.getWidth(), details.getHeight()};
+  batch.begin();
+  frame.render(context);
+  batch.end();
+  return capture;
+}
+
 void writePpm(const std::filesystem::path &path, int width, int height) {
   std::ofstream output(path, std::ios::binary | std::ios::trunc);
   output << "P6\n" << width << ' ' << height << "\n255\n";
@@ -59,6 +86,28 @@ void writePpm(const std::filesystem::path &path, int width, int height) {
 } // namespace
 
 int main() {
+  {
+    PreviewGlow glow;
+    require(glow.update(0, 1.0f / 60) == 0, "silent preview has no halo");
+    const float attack = glow.update(0.5f, 0.05f);
+    require(attack > 0.25f && attack < 1, "audible preview rises smoothly");
+    const float release = glow.update(0, 0.05f);
+    require(release > 0 && release < attack, "silence gently releases the halo");
+    for (int i = 0; i < 180; ++i) glow.update(0, 1.0f / 60);
+    require(glow.update(0, 0) == 0, "stopped preview eventually clears the halo");
+    glow.update(1, 0.1f);
+    glow.reset();
+    require(glow.update(0, 0) == 0, "chart replacement resets previous audio energy");
+    const unsigned char pixels[] = {255, 0, 0, 0, 0, 80, 0, 255};
+    const auto green = artworkAmbientColor(pixels, 2, 1);
+    require(green && green->g >= 200 && green->r == 0 && green->b == 0,
+            "transparent pixels do not tint the halo and dark colors stay visible");
+    require(!artworkAmbientColor(std::span(pixels).first(4), 2, 1),
+            "incomplete image data has no palette");
+    const unsigned char transparent[] = {255, 255, 255, 0};
+    require(!artworkAmbientColor(transparent, 1, 1), "transparent image has no halo");
+  }
+
   bgfx::Init init;
   init.type = bgfx::RendererType::Noop;
   init.resolution.width = 64;
@@ -83,6 +132,9 @@ int main() {
     const int placeholderSummaryY = summary->getY();
     writePpm(fixture, 32, 18);
     require(image->setImage(fspath_to_path_t(fixture)), "wide stagefile fixture decodes");
+    const auto palette = image->ambientColor();
+    require(palette && palette->b > palette->g && palette->g > palette->r,
+            "ambient color follows the decoded blue artwork");
     RenderContext context;
     details.renderImpl(context);
     details.applyYogaLayout();
@@ -90,6 +142,19 @@ int main() {
                 image->getWidth() == frame->getWidth() && image->getHeight() == frame->getHeight() &&
                 summary->getY() == placeholderSummaryY,
             "decoded wide artwork retains the square frame and stable metadata position");
+    details.updatePreviewGlow(0.5f, 0.1f);
+    auto glow = captureGlow(*frame, details);
+    require(glow.shadow && glow.shadow->uniforms[0].value[3] > 0 &&
+                glow.shadow->uniforms[0].value[2] > glow.shadow->uniforms[0].value[0],
+            "audible preview submits a visible artwork-colored halo");
+    require(glow.shadow->scissor && glow.top >= glow.shadow->scissor->y,
+            "the complete halo fits below the scroll viewport's top edge");
+    for (int i = 0; i < 180; ++i) details.updatePreviewGlow(0, 1.0f / 60);
+    require(!captureGlow(*frame, details).shadow, "stopped preview stops submitting a halo");
+    details.updatePreviewGlow(0.5f, 0.1f);
+    record.meta.BmsPath = "/charts/replacement.bms";
+    details.setChart(&record, std::nullopt, kNoClearTypeRank, "");
+    require(!captureGlow(*frame, details).shadow, "chart change clears the previous halo");
     const int wideHeight = details.getHeight();
     details.renderImpl(context);
     require(details.getHeight() == wideHeight && !YGNodeIsDirty(details.getNode()),
@@ -98,7 +163,14 @@ int main() {
     details.applyYogaLayout();
     require(frame->getWidth() == 112 && frame->getHeight() == 112,
             "portrait contains wide artwork in a square frame");
+    details.updatePreviewGlow(0.5f, 0.1f);
+    glow = captureGlow(*frame, details);
+    require(glow.shadow && glow.shadow->scissor && glow.top >= glow.shadow->scissor->y,
+            "compact artwork also leaves room above the halo");
     image->freeImage();
+    details.updatePreviewGlow(0.5f, 0.1f);
+    require(!captureGlow(*frame, details).shadow, "unloaded artwork never glows");
+    require(!image->ambientColor(), "unloaded artwork clears its ambient color");
     ImageView::dropCache(fspath_to_path_t(fixture));
     writePpm(fixture, 18, 32);
     require(image->setImage(fspath_to_path_t(fixture)), "tall stagefile fixture decodes");
@@ -468,6 +540,7 @@ int main() {
     }
     rendering::compactMenuCanvasActive = false;
   }
+  rendering::ShaderManager::getInstance().release();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
 }

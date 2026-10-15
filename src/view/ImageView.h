@@ -42,6 +42,7 @@ private:
   static image_decode::DecodedImageCache imageCache;
   std::string currentImageKey;
   path_t currentImagePath;
+  std::optional<Color> ambientColor_;
   int currentImageWidth = 0;
   int currentImageHeight = 0;
   int asyncTargetWidth = 0;
@@ -88,6 +89,7 @@ public:
     return scrimColor_;
   }
   [[nodiscard]] const path_t &imagePath() const { return currentImagePath; }
+  [[nodiscard]] const std::optional<Color> &ambientColor() const { return ambientColor_; }
   [[nodiscard]] int imageWidth() const { return currentImageWidth; }
   [[nodiscard]] int imageHeight() const { return currentImageHeight; }
 

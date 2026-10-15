@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <mutex>
 #include <thread>
@@ -42,10 +43,10 @@ struct BackendControl {
   bool failStart = false;
   std::atomic_bool started{false};
   std::atomic_int stops{0};
-  std::vector<short> pump(std::size_t frames) {
+  std::vector<short> pump(std::size_t frames, int channels = 2) {
     assert(render);
-    std::vector<short> output(frames * 2, 12345);
-    render(output.data(), static_cast<std::uint32_t>(frames), 2, context);
+    std::vector<short> output(frames * channels, 12345);
+    render(output.data(), static_cast<std::uint32_t>(frames), channels, context);
     return output;
   }
 };
@@ -101,6 +102,48 @@ std::vector<short> drain(audio::PreviewStreamPlayer &player,
     result.insert(result.end(), output.begin(), output.end());
   }
   return result;
+}
+
+void testOutputLevelTracksAudibleSamples() {
+  auto input = std::make_shared<SourceControl>();
+  input->samples.resize(1024 * 2);
+  for (std::size_t i = 0; i < input->samples.size(); i += 2) {
+    input->samples[i] = 16384;
+    input->samples[i + 1] = -16384; // Stereo energy must not cancel out.
+  }
+  input->publishAll();
+  auto backend = std::make_shared<BackendControl>();
+  audio::PreviewStreamPlayer player(std::make_unique<FakeFactory>(backend));
+  std::string error;
+  assert(player.GetOutputLevel() == 0);
+  assert(player.Start(source(input), 0, error));
+  waitFor([&] { return backend->started.load(); });
+  assert(player.GetOutputLevel() == 0);
+  backend->pump(128);
+  assert(std::abs(player.GetOutputLevel() - 0.5f) < 0.001f);
+  player.SetGain(0.5f);
+  backend->pump(128);
+  assert(std::abs(player.GetOutputLevel() - 0.25f) < 0.001f);
+  player.SetGain(0);
+  backend->pump(128);
+  assert(player.GetOutputLevel() == 0);
+  player.SetGain(1);
+  backend->pump(128, 1);
+  assert(player.GetOutputLevel() == 0); // Opposite-phase stereo is silent in mono.
+  backend->pump(512);
+  backend->pump(128);
+  assert(player.GetOutputLevel() == 0); // EOF callback emits silence.
+  player.Stop();
+  assert(player.GetOutputLevel() == 0);
+  auto replacement = std::make_shared<SourceControl>();
+  replacement->samples.assign(1024 * 2, 16384);
+  replacement->publishAll();
+  assert(player.Start(source(replacement), 0, error));
+  waitFor([&] { return backend->started.load(); });
+  backend->pump(128);
+  assert(player.GetOutputLevel() > 0);
+  player.Stop();
+  assert(player.GetOutputLevel() == 0); // Stop directly from a non-silent callback.
 }
 
 void testStartupReserveBridgesPreparationStall() {
@@ -290,6 +333,7 @@ std::unique_ptr<IBackendFactory> CreatePlatformBackendFactory() {
 }
 }
 int main() {
+  testOutputLevelTracksAudibleSamples();
   testStartupReserveBridgesPreparationStall();
   testFutureOriginUnderrunAndStop();
   testRationalResamplingAndShortReads();

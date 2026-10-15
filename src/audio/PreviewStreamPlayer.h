@@ -36,6 +36,8 @@ public:
   void SetRequest(StreamRequest request);
   void SetGain(float gain);
   [[nodiscard]] State GetState() const;
+  // Normalized RMS of the most recent output block. Lock-free for UI animation.
+  [[nodiscard]] float GetOutputLevel() const noexcept;
 private:
   struct Impl;
   std::unique_ptr<Impl> impl;

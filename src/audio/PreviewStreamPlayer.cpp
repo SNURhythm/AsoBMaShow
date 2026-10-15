@@ -18,7 +18,11 @@ namespace {
 constexpr std::size_t kSourceWindowFrames = 4096;
 constexpr std::size_t kOutputBatchFrames = 4096;
 
+static_assert(std::atomic<float>::is_always_lock_free);
+
 struct PreviewSession {
+  explicit PreviewSession(std::atomic<float> &level) : outputLevel(level) {}
+  std::atomic<float> &outputLevel;
   std::shared_ptr<music_stream::Source> source;
   std::unique_ptr<IBackend> backend;
   std::uint64_t firstFrame = 0;
@@ -65,6 +69,7 @@ struct PreviewSession {
       backend.reset();
     }
     deviceStarted.store(false, std::memory_order_release);
+    outputLevel.store(0.0f, std::memory_order_relaxed);
   }
 
   void Fail(std::string message) {
@@ -83,11 +88,15 @@ struct PreviewSession {
     if (!output || channels <= 0) return;
     auto *pcm = static_cast<short *>(output);
     std::fill_n(pcm, static_cast<std::size_t>(frameCount) * channels, short{0});
-    if (!session.active.load(std::memory_order_acquire)) return;
+    if (!session.active.load(std::memory_order_acquire)) {
+      session.outputLevel.store(0.0f, std::memory_order_relaxed);
+      return;
+    }
     const auto first = session.consumed.load(std::memory_order_relaxed);
     const auto end = session.written.load(std::memory_order_acquire);
     const auto frames = std::min<std::uint64_t>(frameCount, end - first);
     const auto gain = session.gain.load(std::memory_order_relaxed);
+    double energy = 0.0;
     for (std::uint64_t frame = 0; frame < frames; ++frame) {
       const auto offset = static_cast<std::size_t>((first + frame) % session.capacity) * 2;
       const auto left = session.ring[offset];
@@ -98,7 +107,12 @@ struct PreviewSession {
         pcm[frame * channels] = static_cast<short>(left * gain);
         pcm[frame * channels + 1] = static_cast<short>(right * gain);
       }
+      const double leftOutput = pcm[frame * channels] / 32768.0;
+      const double rightOutput = channels == 1 ? leftOutput : pcm[frame * channels + 1] / 32768.0;
+      energy += (leftOutput * leftOutput + rightOutput * rightOutput) * 0.5;
     }
+    session.outputLevel.store(frameCount ? static_cast<float>(std::sqrt(energy / frameCount)) : 0.0f,
+                              std::memory_order_relaxed);
     // Silence inserted during starvation never advances the music position.
     session.consumed.store(first + frames, std::memory_order_release);
   }
@@ -265,6 +279,7 @@ struct PreviewStreamPlayer::Impl {
   StreamRequest request;
   float gain = 1.0f;
   mutable std::mutex mutex;
+  std::atomic<float> outputLevel{0.0f};
   std::unique_ptr<PreviewSession> session;
 };
 
@@ -284,7 +299,7 @@ bool PreviewStreamPlayer::Start(std::shared_ptr<music_stream::Source> source,
     error = "Preview audio source or backend is unavailable";
     return false;
   }
-  auto session = std::make_unique<PreviewSession>();
+  auto session = std::make_unique<PreviewSession>(impl->outputLevel);
   session->source = std::move(source);
   session->firstFrame = firstFrame;
   session->gain.store(impl->gain, std::memory_order_relaxed);
@@ -335,6 +350,10 @@ void PreviewStreamPlayer::SetGain(float gain) {
   std::lock_guard lock(impl->mutex);
   impl->gain = std::isfinite(gain) ? std::clamp(gain, 0.0f, 1.0f) : 1.0f;
   if (impl->session) impl->session->gain.store(impl->gain, std::memory_order_relaxed);
+}
+
+float PreviewStreamPlayer::GetOutputLevel() const noexcept {
+  return impl->outputLevel.load(std::memory_order_relaxed);
 }
 
 PreviewStreamPlayer::State PreviewStreamPlayer::GetState() const {

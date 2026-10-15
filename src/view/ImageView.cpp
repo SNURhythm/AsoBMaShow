@@ -1,3 +1,4 @@
+#include "ArtworkColor.h"
 //
 // Created by XF on 8/28/2024.
 //
@@ -604,6 +605,7 @@ bool ImageView::applyImage(const path_t &path, const std::string &key,
   currentImagePath = path;
   currentImageWidth = cache.width;
   currentImageHeight = cache.height;
+  ambientColor_ = artworkAmbientColor(*cache.rgba, cache.width, cache.height);
   if (storeCache) {
     (void)imageCache.put(key, cache);
     if (sharedChartImagePath_ &&
@@ -703,6 +705,7 @@ void ImageView::freeTexture() {
     bgfx::destroy(texture);
   }
   texture = BGFX_INVALID_HANDLE;
+  ambientColor_.reset();
   currentImageWidth = 0;
   currentImageHeight = 0;
 }

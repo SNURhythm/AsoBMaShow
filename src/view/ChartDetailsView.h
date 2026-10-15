@@ -1,6 +1,7 @@
 #pragma once
 
 #include "View.h"
+#include "PreviewGlow.h"
 #include <array>
 #include "../repositories/ChartRepository.h"
 #include "../repositories/ScoreRepositoryModels.h"
@@ -14,11 +15,12 @@ class ChartDetailsView : public View {
 public:
   explicit ChartDetailsView(ImageView *artwork);
   static constexpr float minimumChartHeight() {
-    return kIdentityHeight + kDifficultyHeight + 28 + 3 * kSectionGap +
+    return 14 + kIdentityHeight + kDifficultyHeight + 28 + 3 * kSectionGap +
            3 * kFactRowHeight + 2 * kFactGap + 2 * kFactPadding;
   }
   void setScoreContainer(View *container);
   void setCompact(bool compact);
+  void updatePreviewGlow(float level, float dt);
   void setChart(const ChartMetaRecord *record,
                 const std::optional<ScoreBestSnapshot> &best,
                 int clearRank, const std::string &total);
@@ -43,6 +45,8 @@ private:
   std::array<View *, 3> factRows_{};
   std::array<View *, 6> factCells_{};
   ImageView *artwork_ = nullptr;
+  PreviewGlow previewGlow_;
+  std::string glowChartPath_;
   bool compact_ = true;
   int artworkLayoutWidth_ = -1;
   int artworkLayoutHeight_ = -1;
