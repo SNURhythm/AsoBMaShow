@@ -203,9 +203,10 @@ void changeWorkingDirectoryToExecutableDir(
 }
 
 uint32_t resolveResetFlags() {
-#if TARGET_OS_OSX || TARGET_OS_ANDROID
+#if TARGET_OS_OSX || TARGET_OS_ANDROID || TARGET_OS_IPHONE
   // Avoid a multisampled native-resolution backbuffer and its resolve on
-  // Android. Text and skin images retain their own texture filtering.
+  // Android and iOS menus. Text and skin images retain their own texture
+  // filtering; iOS gameplay restores its existing 2x MSAA below.
   constexpr int msaaSamples = 0;
 #else
   constexpr int msaaSamples = 2;
@@ -1697,6 +1698,22 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
                  !context.replayVideoExportActive.load(
                      std::memory_order_acquire) &&
                  !context.rendererAccess.exportRequested()) {
+#if TARGET_OS_IPHONE
+        const bool gameplayActive =
+            context.profileGameplayActive.load(std::memory_order_acquire);
+        const auto desiredResetFlags =
+            withoutMsaaResetFlags(activeBgfxResetFlags) |
+            (gameplayActive ? BGFX_RESET_MSAA_X2 : 0U);
+        if (desiredResetFlags != activeBgfxResetFlags) {
+          activeBgfxResetFlags = desiredResetFlags;
+          s_bgfxResetFlags = desiredResetFlags;
+          context.bgfxResetFlags.store(desiredResetFlags,
+                                       std::memory_order_relaxed);
+          bgfx::reset(rendering::render_width, rendering::render_height,
+                      desiredResetFlags);
+          context.restoreGameplayRenderViews();
+        }
+#endif
         const bool hasActiveVisuals = context.jukebox.hasActiveVisuals();
 
 #if TARGET_OS_IPHONE
@@ -1869,14 +1886,15 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       const auto presentedAt = std::chrono::steady_clock::now();
       context.framePacer.framePresented(presentedAt);
 #if TARGET_OS_IPHONE
-      // Preserve the automatic refresh target without blocking UIKit or
-      // reading SDL's mutable display objects from this worker.
+      // Menus use at most 60 FPS; gameplay retains its automatic refresh target.
+      // This worker wait does not block UIKit's event/input pump.
       const auto iosViewport = GetIOSWindowSnapshot(s_window);
       iosPresentationPacer.setCap(video::iosPresentationPacingCap(
           iosViewport ? iosViewport->refreshRate : 0.0F,
           context.framePacer.currentFrameCap(),
           context.replayVideoExportActive.load(std::memory_order_acquire) ||
-              context.rendererAccess.exportRequested()));
+              context.rendererAccess.exportRequested(),
+          context.profileGameplayActive.load(std::memory_order_acquire)));
       iosPresentationPacer.framePresented(presentedAt);
 #endif
       const auto waitStartedAt = std::chrono::steady_clock::now();
