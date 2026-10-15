@@ -4820,6 +4820,21 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_test(NAME decoded_asset_cache_tests COMMAND decoded_asset_cache_tests)
     set_tests_properties(decoded_asset_cache_tests PROPERTIES TIMEOUT 30)
 
+    add_executable(paged_preview_source_tests
+        tests/paged_preview_source_tests.cpp src/audio/PagedPreviewSource.cpp
+        src/audio/AudioMix.cpp ${PROGRESSIVE_MUSIC_TEST_SOURCES})
+    target_include_directories(paged_preview_source_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(paged_preview_source_tests PRIVATE cxx_std_23)
+    target_link_libraries(paged_preview_source_tests PRIVATE ${COMMON_LIBS} Threads::Threads)
+    if(APPLE)
+        target_link_libraries(paged_preview_source_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(paged_preview_source_tests PRIVATE shell32 ole32)
+    endif()
+    add_test(NAME paged_preview_source_tests COMMAND paged_preview_source_tests)
+    set_tests_properties(paged_preview_source_tests PROPERTIES TIMEOUT 30)
+
     add_executable(preview_stream_player_tests
         tests/preview_stream_player_tests.cpp src/audio/PreviewStreamPlayer.cpp
         src/bms_parser.cpp src/path.cpp)
