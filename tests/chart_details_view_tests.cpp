@@ -146,8 +146,9 @@ int main() {
     const auto alpha = [&](std::size_t ring, std::size_t segment = 0) {
       return mesh.vertices[ring * ArtworkGlowMesh::segments + segment].abgr >> 24;
     };
-    require(alpha(0) > 220 && alpha(6) > 25 && alpha(6) < 60 && alpha(10) < 2 && alpha(12) == 0,
-            "the saturated body fades faster by distance with only a short outer feather");
+    require(alpha(0) > 220 && alpha(3) > 185 && alpha(3) < 210 &&
+                alpha(6) > 105 && alpha(6) < 120 && alpha(9) > 18 && alpha(9) < 28 && alpha(12) == 0,
+            "smootherstep preserves the colored body and gently feathers it to transparent");
     for (std::size_t ring = 1; ring <= ArtworkGlowMesh::layers; ++ring)
       require(alpha(ring) <= alpha(ring - 1),
               "color fades continuously by distance without a bright bubble rim");

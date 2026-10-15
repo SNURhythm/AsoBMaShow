@@ -106,13 +106,14 @@ inline ArtworkGlowMesh makeArtworkGlowMesh(float x, float y, float width, float 
       // Fill each band's changing extent with a monotonic distance fade.
       // Its outer edge stays transparent even at the strongest peaks.
       const float radiusSquared = radius * radius;
-      // A faint contact glow supports a saturated body with a short outer
-      // feather. Both decay from the artwork, without a luminous outer rim.
+      // Reversed smootherstep preserves the body before gently reaching zero.
+      // Keep the close contact glow's exponential fade separate from it.
       const float taper = (1 - radiusSquared) * (1 - radiusSquared);
       const float contact = std::exp(-32 * radiusSquared);
-      const float body = std::exp(-5 * radiusSquared);
-      const float alpha = (0.87f * opacity * body +
-          (0.10f * opacity + 0.025f * bass) * contact) * taper;
+      const float body = std::clamp(1 - radiusSquared * radius *
+          (radius * (6 * radius - 15) + 10), 0.0f, 1.0f);
+      const float alpha = 0.87f * opacity * body +
+          (0.10f * opacity + 0.025f * bass) * contact * taper;
       auto feathered = color;
       const float diffusion = radius * radius * (3 - 2 * radius);
       feathered.r = static_cast<uint8_t>(std::lround(std::lerp(float(color.r), diffuseR, diffusion)));
