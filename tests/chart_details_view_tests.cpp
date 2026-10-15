@@ -122,9 +122,10 @@ int main() {
     require(glow.spectrum()[3] > 0.99f && glow.spectrum()[4] == 0 && glow.spectrum()[2] == 0,
             "a sustained tone never cycles into neighboring positions");
     audio::Spectrum treble{};
-    treble[25] = 1;
+    constexpr auto trebleBand = audio::kSpectrumBandCount - 4;
+    treble[trebleBand] = 1;
     for (int i = 0; i < 10; ++i) glow.update(0.5f, treble, 1.0f / 60);
-    require(glow.spectrum()[25] > 0.99f && glow.spectrum()[3] < 0.1f,
+    require(glow.spectrum()[trebleBand] > 0.99f && glow.spectrum()[3] < 0.1f,
             "changing frequency moves the peak to the new band while the old peak releases quickly");
     ArtworkPalette solid;
     solid.fill(Color(255, 0, 0));
@@ -142,7 +143,7 @@ int main() {
     const auto alpha = [&](std::size_t ring, std::size_t segment = 0) {
       return mesh.vertices[ring * ArtworkGlowMesh::segments + segment].abgr >> 24;
     };
-    require(alpha(0) > 220 && alpha(6) > 80 && alpha(12) == 0,
+    require(alpha(0) > 220 && alpha(6) > 160 && alpha(10) < 15 && alpha(12) == 0,
             "artwork color fills the aura from the jacket through the middle and fades to transparent");
     for (std::size_t ring = 1; ring <= ArtworkGlowMesh::layers; ++ring)
       require(alpha(ring) <= alpha(ring - 1),

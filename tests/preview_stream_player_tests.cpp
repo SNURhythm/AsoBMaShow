@@ -131,7 +131,7 @@ void testSpectrumFollowsCurrentFrequencyNotRecentLevels() {
     const auto treble = player.GetOutputSpectrum();
     const auto treblePeak = std::max_element(treble.begin(), treble.end());
     assert(*treblePeak > 0.7f);
-    assert(treblePeak - treble.begin() > bassPeak - bass.begin() + 10);
+    assert(treblePeak - treble.begin() > bassPeak - bass.begin() + audio::kSpectrumBandCount / 4);
     // Linear output resampling can leave quiet spectral images; the former
     // fundamental must fall below -45 dB instead of persisting as a peak.
     assert(treble[bassPeak - bass.begin()] < 0.35f);
