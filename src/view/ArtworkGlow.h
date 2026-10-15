@@ -72,36 +72,27 @@ inline ArtworkGlowMesh makeArtworkGlowMesh(float x, float y, float width, float 
     const auto edge = artworkGlowEdge(phase, width, height);
     const float edgeX = x + edge.x, edgeY = y + edge.y;
     const float nx = edge.nx, ny = edge.ny;
-    // Mirror fixed bass-to-treble bands across the two halves of the contour.
-    // Linear interpolation keeps narrow spectral peaks distinct and pointed.
+    // Mirror fixed bass-to-treble bands across the two halves of the aura.
+    // Each band controls how far its color diffuses from the artwork.
     const float frequencyPhase = phase < 0.5f ? phase * 2 : (1 - phase) * 2;
     const float bandPosition = frequencyPhase * (glow.spectrum.size() - 1);
     const auto bandIndex = static_cast<std::size_t>(bandPosition);
     const float wave = std::clamp(std::lerp(glow.spectrum[bandIndex],
         glow.spectrum[std::min(bandIndex + 1, glow.spectrum.size() - 1)],
         bandPosition - bandIndex), 0.0f, 1.0f);
-    const float extent = glow.spread * (0.08f + 0.92f * std::pow(wave, 1.25f));
+    const float reach = 0.28f + 0.72f * std::pow(wave, 0.75f);
     const Color color = artworkGlowColor(palette, edge.x / width, edge.y / height);
     for (std::size_t ring = 0; ring <= mesh.layers; ++ring) {
-      constexpr std::array<float, ArtworkGlowMesh::layers + 1> radii = {
-          0, 0.12f, 0.25f, 0.40f, 0.55f, 0.70f, 0.82f,
-          0.88f, 0.91f, 0.94f, 0.96f, 0.98f, 1.0f};
-      const float radius = radii[ring];
-      const float offset = std::lerp(-1.0f, extent, radius);
-      const float aura = 0.22f * std::exp(-2 * radius * radius) * (1 - radius);
-      const float edgeDistance = radius - 0.94f;
-      const float core = std::exp(-std::pow(edgeDistance / 0.016f, 2));
-      const float bloom = 0.28f * std::exp(-std::pow(edgeDistance / 0.065f, 2));
-      const float fade = ring == mesh.layers ? 0 : std::min(1.0f, aura + 0.9f * core + bloom);
+      const float radius = static_cast<float>(ring) / mesh.layers;
+      const float offset = std::lerp(-1.0f, glow.spread, radius);
+      // Fill the entire spread with color that decays with distance. The
+      // spectrum changes the falloff length, never draws a luminous rim.
+      const float distance = radius / reach;
+      const float taper = 1 - radius * radius;
+      const float fade = std::exp(-1.5f * distance * distance) * taper * taper;
       auto feathered = color;
-      const auto highlight = [core](uint8_t channel) {
-        return static_cast<uint8_t>(std::lround(std::lerp(float(channel), 255.0f, 0.35f * core)));
-      };
-      feathered.r = highlight(color.r);
-      feathered.g = highlight(color.g);
-      feathered.b = highlight(color.b);
       feathered.a = static_cast<uint8_t>(std::lround(color.a * glow.intensity *
-                                                   (0.40f + 0.60f * wave) * fade));
+                                                   (0.55f + 0.45f * wave) * fade));
       mesh.vertices[ring * mesh.segments + i] = {
           edgeX + nx * offset, edgeY + ny * offset, 0, feathered.toABGR()};
       if (ring == mesh.layers) continue;

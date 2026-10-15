@@ -134,14 +134,21 @@ int main() {
     const auto outerRing = ArtworkGlowMesh::layers * ArtworkGlowMesh::segments;
     const float topExtent = 100 - mesh.vertices[outerRing].y;
     const float bottomExtent = mesh.vertices[outerRing + ArtworkGlowMesh::segments / 2].y - 400;
-    require(topExtent > bottomExtent + 20,
-            "a spectral peak extends its contour independently of quiet frequency bands");
+    require(std::abs(topExtent - 44) < 0.001f && std::abs(bottomExtent - 44) < 0.001f,
+            "the aura has fixed overflow bounds while spectrum controls color diffusion");
     require(std::abs(mesh.vertices[0].y - 101) < 0.001f &&
                 std::abs(mesh.vertices[ArtworkGlowMesh::segments / 2].y - 399) < 0.001f,
             "the aura follows the actual rectangular image edges");
-    require((mesh.vertices[9 * ArtworkGlowMesh::segments].abgr >> 24) > 220 &&
-                (mesh.vertices[0].abgr >> 24) < 80,
-            "spectral peaks have a bright narrow outer edge rather than a diffuse soft contour");
+    const auto alpha = [&](std::size_t ring, std::size_t segment = 0) {
+      return mesh.vertices[ring * ArtworkGlowMesh::segments + segment].abgr >> 24;
+    };
+    require(alpha(0) > 220 && alpha(6) > 80 && alpha(12) == 0,
+            "artwork color fills the aura from the jacket through the middle and fades to transparent");
+    for (std::size_t ring = 1; ring <= ArtworkGlowMesh::layers; ++ring)
+      require(alpha(ring) <= alpha(ring - 1),
+              "color fades continuously by distance without a bright bubble rim");
+    require(alpha(6) > alpha(6, ArtworkGlowMesh::segments / 2) + 60,
+            "active frequency bands spread their color farther than quiet bands");
     const unsigned char pixels[] = {255, 0, 0, 0, 0, 80, 0, 255};
     const auto green = artworkAmbientPalette(pixels, 2, 1);
     require(green && (*green)[7].g >= 200 && (*green)[7].r == 0 && (*green)[7].b == 0,
