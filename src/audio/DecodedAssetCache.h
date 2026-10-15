@@ -54,7 +54,9 @@ public:
   DecodedAssetCache &operator=(const DecodedAssetCache &) = delete;
 
   // Unpinned active/idle decoders share a 16-descriptor bound. Explicit pins
-  // retain only sources currently being progressively warmed beyond that bound.
+  // preferentially retain progressively warmed sources, within a 64-decoder
+  // total bound. Excess idle pinned cursors can close and reopen as needed;
+  // descriptor eviction never removes retained PCM.
   DecoderPin PinDecoder(const std::filesystem::path &path,
                         const std::atomic_bool &cancelled, std::stop_token stop = {},
                         std::string *error = nullptr, FailureKind *failure = nullptr);

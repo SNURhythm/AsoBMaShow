@@ -106,5 +106,73 @@ class AndroidNativeMusicFocusTests(unittest.TestCase):
         self.run_case("stream-failure")
 
 
+class AndroidMusicStreamConstructionTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        java_home = os.environ.get("JAVA_HOME")
+        if not java_home and Path("/usr/libexec/java_home").is_file():
+            java_home = subprocess.check_output(
+                ["/usr/libexec/java_home", "-v", "17"], text=True).strip()
+        cls.java = str(Path(java_home) / "bin/java") if java_home else "java"
+        javac = str(Path(java_home) / "bin/javac") if java_home else "javac"
+        java_root = ROOT / "android/app/src/main/java/com/snurhythm/asobmashow"
+        stream = (java_root / "AndroidMusicStream.java").read_text()
+        player = (java_root / "NativePcmMusicPlayer.java").read_text()
+        stream = "\n".join(line for line in stream.splitlines()
+                           if not line.startswith(("package ", "import ")))
+        player = "\n".join(line for line in player.splitlines()
+                           if not line.startswith("package "))
+        # Substitute only JNI declarations; construction and cleanup run from source.
+        native_calls = {
+            "int read(long handle, long firstFrame, short[] samples)": "return NativeBoundary.read(handle, firstFrame, samples);",
+            "long duration(long handle)": "return NativeBoundary.duration(handle);",
+            "String error(long handle)": "return NativeBoundary.error(handle);",
+            "void enable(long handle, boolean value)": "NativeBoundary.enable(handle, value);",
+            "void seek(long handle, long firstFrame)": "NativeBoundary.seek(handle, firstFrame);",
+            "void release(long handle)": "NativeBoundary.release(handle);",
+            "void reportError(String message)": "NativeBoundary.reportError(message);",
+        }
+        for signature, body in native_calls.items():
+            stream = stream.replace("static native " + signature + ";",
+                                    "static " + signature + " { " + body + " }")
+        stream = stream.replace("final class AndroidMusicStream", "static final class AndroidMusicStream", 1)
+        player = player.replace("final class NativePcmMusicPlayer", "static final class NativePcmMusicPlayer", 1)
+        fixture = (ROOT / "tests/java/AndroidMusicStreamFixture.java").read_text()
+        fixture = fixture.replace("// STREAM_IMPLEMENTATION", stream).replace("// PLAYER_IMPLEMENTATION", player)
+        cls.output = tempfile.TemporaryDirectory()
+        generated = Path(cls.output.name) / "AndroidMusicStreamFixture.java"
+        generated.write_text(fixture)
+        subprocess.run([javac, "-d", cls.output.name, str(generated)], check=True)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.output.cleanup()
+
+    def run_case(self, *args):
+        result = subprocess.run([self.java, "-ea", "-cp", self.output.name,
+                                 "AndroidMusicStreamFixture", *args],
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_construction_failures_release_native_source_and_any_created_track(self):
+        for boundary in ("minimum", "unavailable", "build", "state", "uninitialized",
+                         "duration", "enable", "start"):
+            with self.subTest(boundary=boundary):
+                self.run_case(boundary)
+
+    def test_allocation_errors_also_release_both_resources(self):
+        for boundary in ("build", "state", "duration", "enable", "start"):
+            with self.subTest(boundary=boundary):
+                self.run_case(boundary, "normal", "error")
+
+    def test_cleanup_failures_preserve_original_and_do_not_skip_other_resource(self):
+        for boundary in ("minimum", "state", "uninitialized", "duration", "enable", "start"):
+            with self.subTest(boundary=boundary):
+                self.run_case(boundary, "cleanup")
+
+    def test_success_transfers_ownership_to_feeder_and_closes_exactly_once(self):
+        self.run_case("success")
+
+
 if __name__ == "__main__":
     unittest.main()

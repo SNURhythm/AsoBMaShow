@@ -444,6 +444,50 @@ void testOverlappingCompressedAssetsKeepProgressiveDecoders(const std::filesyste
   }
 }
 
+void testOverlappingWavAssetsRespectDescriptorCeiling(const std::filesystem::path &root) {
+  constexpr int count = 96;
+  constexpr int frames = 44100 * 4;
+  constexpr char digits[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  std::string body;
+  std::vector<std::filesystem::path> paths;
+  for (int index = 1; index <= count; ++index) {
+    const auto name = "sound-" + std::to_string(index) + ".wav";
+    paths.push_back(root / name);
+    writeWav(paths.back(), 44100, std::vector<short>(frames, 1024));
+    const std::string wav{digits[index / 36], digits[index % 36]};
+    body += "#WAV" + wav + " " + name + "\n#00001:" + wav + "\n";
+  }
+  auto cache = std::make_shared<audio::DecodedAssetCache>(root / "cache",
+      audio::DecodedAssetCache::kUnlimitedRetainedBytes);
+  auto source = audio::PagedPreviewSource::Create(*chart(root, body), cache, 0);
+  require(source->Begin(44100), "cannot start descriptor-pressure preview");
+  waitPrepared(source);
+  const auto prepared = cache->GetStatistics();
+  require(prepared.peakLiveDecoders <= 64,
+          "overlapping preview pins must not exceed the total descriptor ceiling");
+  require(prepared.liveDecoders <= 16 && prepared.pinnedEntries == 0,
+          "descriptor-pressure preview must release every preparation pin");
+  require(prepared.decodedFrames == std::uint64_t(frames) * count &&
+              prepared.retainedBytes == std::size_t(frames) * count * sizeof(short),
+          "descriptor-pressure preview must still preload and retain every native PCM frame");
+  std::atomic_bool cancelled{false}; SF_INFO info{};
+  const std::vector<short> expected(frames, 1023);
+  for (const auto &path : paths) {
+    std::vector<short> pcm;
+    require(cache->Materialize(path, pcm, info, cancelled) && pcm == expected,
+            "descriptor-pressure gameplay must retain exact PCM");
+  }
+  require(cache->GetStatistics().decoderOpens == prepared.decoderOpens,
+          "preloaded gameplay must not reopen pressure-evicted decoders");
+  const auto actual = renderAll(source);
+  float mixed = 0;
+  for (int voice = 0; voice < count; ++voice) mixed += 1023 * (0.9f / 32768.0f);
+  require(actual.size() == frames * 2, "descriptor-pressure preview must render every source frame");
+  for (const float sample : actual)
+    require(std::abs(sample - mixed) < 0.000001f,
+            "descriptor eviction must preserve the complete overlapping preview mix");
+}
+
 void testPreparationExitReleasesDecoderPins(const std::filesystem::path &root) {
   for (const bool fail : {false, true}) {
     writeWav(root / "first.wav", 44100, std::vector<short>(100, 16384));
@@ -522,7 +566,7 @@ int main() {
   const auto root = std::filesystem::temp_directory_path() /
       ("asobmashow-paged-source-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
   try {
-    for (const char *name : {"highlight", "resampling", "missing", "progressive", "timing", "downsampling", "preflight", "archive", "overlap", "pin-exit", "repeated-pin"}) std::filesystem::create_directories(root / name);
+    for (const char *name : {"highlight", "resampling", "missing", "progressive", "timing", "downsampling", "preflight", "archive", "overlap", "pressure", "pin-exit", "repeated-pin"}) std::filesystem::create_directories(root / name);
     testHighlightAndReuse(root / "highlight");
     testResampling(root / "resampling");
     testDownsamplingWarmsEveryNativePage(root / "downsampling");
@@ -532,6 +576,7 @@ int main() {
     testFractionalTiming(root / "timing");
     testArchivedPreviewBatchesOpeningFutureAndReferencedAssets(root / "archive");
     testOverlappingCompressedAssetsKeepProgressiveDecoders(root / "overlap");
+    testOverlappingWavAssetsRespectDescriptorCeiling(root / "pressure");
     testPreparationExitReleasesDecoderPins(root / "pin-exit");
     testPreparedRepeatedVoiceReleasesItsDecoderPin(root / "repeated-pin");
     std::filesystem::remove_all(root);

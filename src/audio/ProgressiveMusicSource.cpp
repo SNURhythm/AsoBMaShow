@@ -32,16 +32,146 @@
 #include <optional>
 #include <stdexcept>
 #include <unordered_map>
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#else
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 namespace music_stream {
 namespace {
 constexpr std::size_t kBlockFrames = 4096;
 constexpr std::size_t kTargetOpenAssets = 32;
+// Keep ordinary 64-layer arrangements warm, while leaving descriptors for the
+// spool, archives, and the rest of the app even with hundreds of active voices.
+constexpr std::size_t kMaximumOpenAssets = 128;
 constexpr std::size_t kMaximumEncodedAssetBytes = 256U * 1024U * 1024U;
 constexpr std::uint64_t kMaximumFrames =
     (std::numeric_limits<std::uint32_t>::max() - 36ULL) / (kChannels * sizeof(short));
 constexpr int kKick = -2;
 constexpr int kClap = -3;
+
+enum class LeaseResult { Acquired, Busy, Unsafe };
+
+// Kernel locks survive threads but are released by process death. Use the same
+// no-follow, single-link checks as the private export/replay staging leases.
+class StagingLease {
+public:
+  StagingLease() = default;
+  StagingLease(const StagingLease &) = delete;
+  StagingLease &operator=(const StagingLease &) = delete;
+  ~StagingLease() { reset(); }
+  void reset() {
+#if defined(_WIN32)
+    if (handle != INVALID_HANDLE_VALUE) CloseHandle(handle);
+    handle = INVALID_HANDLE_VALUE;
+#else
+    if (descriptor >= 0) ::close(descriptor);
+    descriptor = -1;
+#endif
+  }
+  LeaseResult acquire(const std::filesystem::path &path, bool create) {
+    reset();
+#if defined(_WIN32)
+    handle = CreateFileW(path.c_str(), GENERIC_READ | GENERIC_WRITE,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        nullptr, create ? OPEN_ALWAYS : OPEN_EXISTING,
+                        FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+    if (handle == INVALID_HANDLE_VALUE) return LeaseResult::Unsafe;
+    BY_HANDLE_FILE_INFORMATION info{};
+    if (!GetFileInformationByHandle(handle, &info) || info.nNumberOfLinks != 1 ||
+        (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))) {
+      reset();
+      return LeaseResult::Unsafe;
+    }
+    OVERLAPPED overlapped{};
+    if (LockFileEx(handle, LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY,
+                   0, 1, 0, &overlapped)) return LeaseResult::Acquired;
+    const auto busy = GetLastError() == ERROR_LOCK_VIOLATION;
+#else
+    descriptor = ::open(path.c_str(), O_RDWR | O_NOFOLLOW | O_NONBLOCK | O_CLOEXEC |
+                         (create ? O_CREAT : 0), 0600);
+    if (descriptor < 0) return LeaseResult::Unsafe;
+    struct stat info{};
+    if (::fstat(descriptor, &info) != 0 || !S_ISREG(info.st_mode) ||
+        info.st_uid != geteuid() || info.st_nlink != 1 || (info.st_mode & 0777) != 0600) {
+      reset();
+      return LeaseResult::Unsafe;
+    }
+    if (::flock(descriptor, LOCK_EX | LOCK_NB) == 0) return LeaseResult::Acquired;
+    const auto busy = errno == EWOULDBLOCK || errno == EAGAIN;
+#endif
+    reset();
+    return busy ? LeaseResult::Busy : LeaseResult::Unsafe;
+  }
+private:
+#if defined(_WIN32)
+  HANDLE handle = INVALID_HANDLE_VALUE;
+#else
+  int descriptor = -1;
+#endif
+};
+
+bool ownedStagingDirectory(const std::filesystem::path &path) {
+  std::error_code error;
+  if (std::filesystem::symlink_status(path, error).type() !=
+          std::filesystem::file_type::directory || error) return false;
+#if defined(_WIN32)
+  const auto attributes = GetFileAttributesW(path.c_str());
+  if (attributes == INVALID_FILE_ATTRIBUTES ||
+      (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) return false;
+#else
+  struct stat info{};
+  if (::lstat(path.c_str(), &info) != 0 || !S_ISDIR(info.st_mode) ||
+      info.st_uid != geteuid()) return false;
+#endif
+  return true;
+}
+
+// Caller holds the root lease across sweeping and creating a new source lease.
+// Old versions had no lease: retain those directories for seven days, whereas
+// a released modern lease positively identifies an abandoned source immediately.
+void sweepStaging(const std::filesystem::path &parent) {
+  std::error_code error;
+  std::filesystem::directory_iterator entries(parent, error), end;
+  while (!error && entries != end) {
+    const auto path = entries->path();
+    const auto name = path.filename().string();
+    if (name.starts_with(".music-stream-") &&
+        uuid::isCanonicalLowerV4(std::string_view(name).substr(14)) &&
+        ownedStagingDirectory(path)) {
+      StagingLease lease;
+      const auto leasePath = path / ".lease";
+      const auto type = std::filesystem::symlink_status(leasePath, error).type();
+      const auto missing = type == std::filesystem::file_type::not_found;
+      if (missing) error.clear();
+      bool abandoned = false;
+      if (!error && missing) {
+        const auto modified = std::filesystem::last_write_time(path, error);
+        abandoned = !error && std::filesystem::file_time_type::clock::now() - modified >
+                                 std::chrono::hours(24 * 7);
+      } else if (!error && type == std::filesystem::file_type::regular) {
+        abandoned = lease.acquire(leasePath, false) == LeaseResult::Acquired;
+      }
+      if (abandoned) {
+        // The root lease excludes another sweep/create. Windows cannot finish
+        // deleting the lease file (and its directory) until this handle closes.
+        lease.reset();
+        std::filesystem::remove_all(path, error);
+      }
+      // A damaged or inaccessible entry must not prevent independent cleanup.
+      error.clear();
+    }
+    entries.increment(error);
+  }
+}
 
 std::uint64_t framesForTime(long long micros, bool roundUp) {
   const auto time = static_cast<std::uint64_t>(std::max(0LL, micros));
@@ -77,9 +207,9 @@ std::array<char, 44> wavHeader(std::uint64_t frames) {
   return result;
 }
 
-// Active voices retain one decoder window per asset. The idle LRU is bounded,
-// so a song with thousands of keysounds does not retain thousands of FDs or
-// full decoded clips. Generated Club Beat sounds are small and resident.
+// Decoder windows have an idle target and a hard ceiling including active
+// voices. Eviction never discards a voice or its resampling cursor; its decoder
+// can reopen at the next needed frame. Generated Club Beat sounds stay resident.
 struct Asset {
   std::filesystem::path path;
   SF_INFO info{};
@@ -180,6 +310,7 @@ struct Source::Impl {
   std::filesystem::path stagingParent;
   std::filesystem::path stagingDirectory;
   std::filesystem::path readPath;
+  StagingLease stagingLease;
   bool clubMode = false;
   mutable std::mutex mutex;
   std::condition_variable changed;
@@ -271,9 +402,19 @@ struct Source::Impl {
 
   void makeRoom(const std::shared_ptr<Asset> &current) {
     if (current->file || !current->generated.empty() || !current->window.empty()) return;
-    // The target may be exceeded by active voices. Evicting one of those
-    // causes cyclic reopen/seek work on every block once polyphony exceeds it.
-    decoderTargetExceeded = trimIdleDecoders(kTargetOpenAssets - 1) >= kTargetOpenAssets;
+    // Prefer idle eviction so normal overlap does not reopen on every block.
+    const auto openCount = trimIdleDecoders(kTargetOpenAssets - 1);
+    decoderTargetExceeded = openCount >= kTargetOpenAssets;
+    if (openCount < kMaximumOpenAssets) return;
+    // Extreme polyphony still must fit the descriptor budget. The cursor is
+    // held by Voice, so closing the least recently needed active decoder does
+    // not change mixing order, sample position, or which voices are rendered.
+    std::shared_ptr<Asset> oldest;
+    for (const auto &[id, asset] : assets) {
+      if (asset && asset != current && asset->file &&
+          (!oldest || asset->lastUse < oldest->lastUse)) oldest = asset;
+    }
+    if (oldest) oldest->closeDecoder();
   }
 
   std::optional<std::filesystem::path> stageAsset(
@@ -481,9 +622,26 @@ struct Source::Impl {
       if (cancelled.load()) return;
     }
     std::filesystem::create_directories(stagingParent);
+    if (!ownedStagingDirectory(stagingParent))
+      throw std::runtime_error("Music stream staging root is unsafe");
+    StagingLease rootLease;
+    for (;;) {
+      const auto acquired = rootLease.acquire(stagingParent / ".music-stream.lock", true);
+      if (acquired == LeaseResult::Acquired) break;
+      if (acquired == LeaseResult::Unsafe)
+        throw std::runtime_error("Could not lock music stream staging root");
+      std::unique_lock lock(mutex);
+      if (changed.wait_for(lock, std::chrono::milliseconds(5), [&] { return cancelled.load(); }))
+        return;
+    }
+    sweepStaging(stagingParent);
+    if (cancelled.load()) return;
     stagingDirectory = stagingParent / (".music-stream-" + uuid::generateV4());
     if (!std::filesystem::create_directory(stagingDirectory))
       throw std::runtime_error("Could not create music stream staging directory");
+    if (stagingLease.acquire(stagingDirectory / ".lease", true) != LeaseResult::Acquired)
+      throw std::runtime_error("Could not lease music stream staging directory");
+    rootLease.reset();
     const auto partialPath = stagingDirectory / "audio.wav";
     std::ofstream output(partialPath, std::ios::binary);
     const auto header = wavHeader(0);
@@ -684,8 +842,23 @@ Source::~Source() {
   if (impl->worker.joinable()) impl->worker.join();
   // Close extracted-asset decoders before removing their files (required on Windows).
   impl->assets.clear();
-  std::error_code ignored;
-  if (!impl->stagingDirectory.empty()) std::filesystem::remove_all(impl->stagingDirectory, ignored);
+  if (!impl->stagingDirectory.empty()) {
+    StagingLease rootLease;
+    LeaseResult acquired;
+    do {
+      acquired = rootLease.acquire(impl->stagingParent / ".music-stream.lock", false);
+      if (acquired == LeaseResult::Busy)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    } while (acquired == LeaseResult::Busy);
+    if (acquired == LeaseResult::Acquired) {
+      // Keep cleanup serialized while releasing the source handle, including
+      // on Windows where an open lease would leave the directory delete-pending.
+      impl->stagingLease.reset();
+      std::error_code ignored;
+      std::filesystem::remove_all(impl->stagingDirectory, ignored);
+    }
+    // If the root became unsafe, leave the issued directory for a later sweep.
+  }
 }
 std::shared_ptr<Source> Source::Create(std::unique_ptr<bms_parser::Chart> chart,
                                      std::filesystem::path stagingParent, bool clubMode) {

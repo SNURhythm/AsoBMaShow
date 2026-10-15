@@ -950,6 +950,9 @@ void MainMenuScene::init() {
       context.chartRepository.OpenSession(&context.scoreRepository);
   auto profileOperationBlocker = [this]() -> std::optional<std::string> {
     if (pendingTab_) return i18n::tr("menu.loading.progress");
+    if (irTab_) {
+      if (auto reason = irTab_->profileSwitchBlocker()) return reason;
+    }
     if (replayExportJob_.inProgress()) {
       return i18n::tr("menu.replay_export_active.message");
     }
@@ -992,8 +995,6 @@ void MainMenuScene::onInputQueueOverflow() {
 void MainMenuScene::onPause() {
   cancelPendingTabSwitch();
   if (auto *scene = activeUtilityTab()) scene->onPause();
-  // External settings may switch profile databases while the shell is retained.
-  if (irTab_) irTab_->onProfileWillChange();
   if (replayLoadTask_.active()) {
     stopReplayLoadWorker();
     willStart.store(false);

@@ -29,6 +29,7 @@ namespace audio {
 namespace {
 constexpr std::size_t kMaximumEncodedBytes = 256U * 1024U * 1024U;
 constexpr std::size_t kMaximumUnpinnedDecoders = 16;
+constexpr std::size_t kMaximumDecoders = 64;
 
 struct CacheFailure : std::runtime_error {
   DecodedAssetCache::FailureKind kind;
@@ -140,9 +141,9 @@ struct DecodedAssetCache::Impl {
   std::list<PageKey> lru;
   std::uint64_t nextId = 0;
   Statistics statistics;
-  // Unpinned active leases and idle decoders share one descriptor bound. Explicit
-  // worker-scoped pins retain progressively warmed sources beyond that bound.
-  // Idle states
+  // All leases (including reservations still opening) and idle decoders share
+  // the hard descriptor bound. Pins have priority over the smaller unpinned
+  // budget, but idle pinned cursors can be evicted at the hard limit. Idle states
   // belong exclusively to this mutex, never an entry lock, so eviction cannot
   // invert the entry -> cache lock order used by readers.
   std::map<std::uint64_t, IdleDecoder> idleDecoders;
@@ -383,7 +384,6 @@ struct DecodedAssetCache::Impl {
       owner.decoderChanged.notify_all();
     }
     void borrow(Entry &value, const std::atomic_bool &cancel, std::stop_token stop) {
-      asobmashow::audio::SoundFileHandle evicted;
       {
         std::unique_lock lock(owner.mutex);
         for (;;) {
@@ -397,34 +397,29 @@ struct DecodedAssetCache::Impl {
             owner.idleDecoders.erase(cached);
             break;
           }
-          if (value.pins || owner.decoderSlots - owner.pinnedDecoderSlots < kMaximumUnpinnedDecoders) {
+          const bool unpinnedSlotAvailable = value.pins ||
+              owner.decoderSlots - owner.pinnedDecoderSlots < kMaximumUnpinnedDecoders;
+          if (owner.decoderSlots < kMaximumDecoders && unpinnedSlotAvailable) {
             ++owner.decoderSlots;
             if (value.pins) ++owner.pinnedDecoderSlots;
             break;
           }
           if (!owner.decoderLru.empty()) {
-            if (owner.decoderSlots - owner.pinnedDecoderSlots > kMaximumUnpinnedDecoders) {
-              owner.discardIdle(owner.idleDecoders.find(owner.decoderLru.front()));
-              continue;
-            }
-            const auto oldest = owner.idleDecoders.find(owner.decoderLru.front());
-            evicted = std::move(oldest->second.file);
-            oldest->second.entry->decoderReserved = false;
-            owner.idleDecoders.erase(oldest);
-            owner.decoderLru.pop_front();
-            // Reuse its reservation, closing the descriptor before opening ours.
-            break;
+            owner.discardIdle(owner.idleDecoders.find(owner.decoderLru.front()));
+            continue;
           }
+          if (owner.decoderSlots >= kMaximumDecoders && unpinnedSlotAvailable &&
+              !owner.pinnedDecoderLru.empty()) {
+            owner.discardIdle(owner.idleDecoders.find(owner.pinnedDecoderLru.front()));
+            continue;
+          }
+          // Only idle cursors may be closed. Borrowed readers release their
+          // reservation on return; poll cancellation while waiting for a slot.
           owner.decoderChanged.wait_for(lock, std::chrono::milliseconds(10));
         }
         entry = &value;
         value.decoderReserved = true;
         slot = true;
-      }
-      if (evicted) {
-        evicted.reset();
-        std::lock_guard lock(owner.mutex);
-        --owner.statistics.liveDecoders;
       }
     }
     void open(Entry &entry, const std::atomic_bool &cancel, std::stop_token stop,

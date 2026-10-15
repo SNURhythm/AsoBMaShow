@@ -17,8 +17,10 @@ final class AndroidMusicStream {
     static native void reportError(String message);
 
     static NativePcmMusicPlayer create(long handle, NativePcmMusicPlayer.Listener listener) {
-        TrackOutput output = new TrackOutput();
+        TrackOutput output = null;
         try {
+            output = new TrackOutput();
+            // Ownership transfers only when construction starts the feeder successfully.
             return new NativePcmMusicPlayer(new NativePcmMusicPlayer.Source() {
                 public int read(long frame, short[] samples) { return AndroidMusicStream.read(handle, frame, samples); }
                 public long durationFrames() { return duration(handle); }
@@ -27,8 +29,15 @@ final class AndroidMusicStream {
                 public void seek(long frame) { AndroidMusicStream.seek(handle, frame); }
                 public void close() { release(handle); }
             }, output, listener);
-        } catch (RuntimeException e) {
-            output.close();
+        } catch (RuntimeException | Error e) {
+            if (output != null) {
+                try { output.close(); } catch (RuntimeException | Error cleanup) {
+                    if (cleanup != e) e.addSuppressed(cleanup);
+                }
+            }
+            try { release(handle); } catch (RuntimeException | Error cleanup) {
+                if (cleanup != e) e.addSuppressed(cleanup);
+            }
             throw e;
         }
     }
@@ -44,6 +53,8 @@ final class AndroidMusicStream {
                     AudioFormat.CHANNEL_OUT_STEREO, AudioFormat.ENCODING_PCM_16BIT);
             if (minimum <= 0) throw new IllegalStateException("PCM output is unavailable.");
             int bytes = Math.max(minimum * 4, 16384);
+            // Allocate before acquiring the native AudioTrack resource.
+            drainPadding = new short[bytes / 2];
             track = new AudioTrack.Builder()
                     .setAudioAttributes(new AudioAttributes.Builder()
                             .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -53,11 +64,15 @@ final class AndroidMusicStream {
                             .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
                     .setTransferMode(AudioTrack.MODE_STREAM)
                     .setBufferSizeInBytes(bytes).build();
-            if (track.getState() != AudioTrack.STATE_INITIALIZED) {
-                track.release();
-                throw new IllegalStateException("Could not initialize PCM output.");
+            try {
+                if (track.getState() != AudioTrack.STATE_INITIALIZED)
+                    throw new IllegalStateException("Could not initialize PCM output.");
+            } catch (RuntimeException | Error e) {
+                try { track.release(); } catch (RuntimeException | Error cleanup) {
+                    if (cleanup != e) e.addSuppressed(cleanup);
+                }
+                throw e;
             }
-            drainPadding = new short[bytes / 2];
         }
         public int write(short[] samples, int offset, int count) {
             return track.write(samples, offset, count, AudioTrack.WRITE_NON_BLOCKING);

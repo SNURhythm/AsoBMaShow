@@ -82,6 +82,7 @@ public:
   void applyPreparationUpdates();
   void stopPreparation();
   void onPause();
+  std::optional<std::string> profileSwitchBlocker();
   void onProfileWillChange();
   void openIrSettings();
   void setTabTopInset(float topInset);
@@ -158,8 +159,14 @@ void testScenePreparationLaunchGatesAndApplicationThreadCompletion() {
   scene.applyPreparationUpdates();
   assert(scene.controller.statusText() == "Preparing 2 of 2...");
   assert(!scene.reloadRequested);
+  assert(scene.profileSwitchBlocker() == "Preparing 2 of 2...");
+  assert(scene.preparationTask.hasWorker() && scene.controller.selectedCount() == 2);
   gate.release.set_value();
-  applyPreparationUntilUnlocked(scene);
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  while (scene.profileSwitchBlocker() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::yield();
+  }
+  assert(!scene.profileSwitchBlocker() && !scene.controller.selectionLocked());
   assert(!scene.preparationTask.hasWorker() && scene.reloadRequested);
   assert(scene.controller.selectedCount() == 0);
   assert(scene.refreshes == hiddenRefreshes &&

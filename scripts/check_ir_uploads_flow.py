@@ -99,9 +99,14 @@ require(
     "the shell keeps IR preparation and deferred callbacks progressing while hidden",
 )
 main_menu_pause = function_body(main_menu, "void MainMenuScene::onPause()")
-require(
+reject(
     "irTab_->onProfileWillChange()" in main_menu_pause,
-    "external scene visits retire IR preparation before settings can replace profile repositories",
+    "ordinary scene pauses must not cancel retained IR preparation",
+)
+profile_blocker = function_body(main_menu, "auto profileOperationBlocker =")
+require(
+    "irTab_->profileSwitchBlocker()" in profile_blocker,
+    "profile replacement must consult retained IR preparation",
 )
 music_select_handler_start = music_select.find(
     "void MusicSelectScene::openIrUploads()"

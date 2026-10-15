@@ -115,6 +115,15 @@ void IrUploadsScene::onPause() {
   onInputQueueOverflow();
 }
 
+std::optional<std::string> IrUploadsScene::profileSwitchBlocker() {
+  // Settings can ask while the retained menu receives no updates. Consume a
+  // completed worker here so it cannot indefinitely block a profile switch.
+  applyPreparationUpdates();
+  if (!preparationTask.hasWorker()) return std::nullopt;
+  auto status = controller.statusMessage().resolve();
+  return status.empty() ? i18n::tr("menu.loading.progress") : status;
+}
+
 void IrUploadsScene::onResume() {
   presentationActive = true;
   refreshProfileIfNeeded();

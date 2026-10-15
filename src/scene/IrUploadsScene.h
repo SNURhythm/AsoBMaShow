@@ -33,7 +33,8 @@ public:
   void setTabTopInset(float topInset);
   void onPause() override;
   void onResume() override;
-  // Call before switching the active profile/repositories.
+  // Retained preparation must finish before its profile services are replaced.
+  [[nodiscard]] std::optional<std::string> profileSwitchBlocker();
   void onProfileWillChange();
 
   void init() override;

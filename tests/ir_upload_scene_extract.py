@@ -16,6 +16,7 @@ def main():
         "void IrUploadsScene::applyPreparationUpdates()",
         "void IrUploadsScene::stopPreparation()",
         "void IrUploadsScene::onPause()",
+        "std::optional<std::string> IrUploadsScene::profileSwitchBlocker()",
         "void IrUploadsScene::onProfileWillChange()",
         "void IrUploadsScene::openIrSettings()",
         "void IrUploadsScene::setTabTopInset(float topInset)",

@@ -998,7 +998,8 @@ void ImageView::renderImpl(RenderContext &context) {
     bool submitted = false;
     // These backends have checked-in shader binaries built by make.py. Keep
     // the existing CPU path on backends without the new vertex shader.
-    if (renderer == bgfx::RendererType::Metal || renderer == bgfx::RendererType::Vulkan ||
+    if (renderer == bgfx::RendererType::Direct3D11 || renderer == bgfx::RendererType::Direct3D12 ||
+        renderer == bgfx::RendererType::Metal || renderer == bgfx::RendererType::Vulkan ||
         renderer == bgfx::RendererType::OpenGLES) {
       if (!ambientGeometry_ || ambientGeometryWidth_ != originalWidth ||
           ambientGeometryHeight_ != originalHeight) {

@@ -525,7 +525,7 @@ int main() {
     menu.utility = menu.irTab_ = &utility;
     menu.onPause();
     menu.onResume();
-    assert(utility.pauses == 1 && utility.resumes == 1 && utility.profileChanges == 1);
+    assert(utility.pauses == 1 && utility.resumes == 1 && utility.profileChanges == 0);
     assert(menu.reselections == 0);
   }
 

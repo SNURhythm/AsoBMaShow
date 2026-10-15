@@ -221,6 +221,55 @@ void testDecoderPinIdentityAndOwnerLifetime(const std::filesystem::path &root) {
   require(std::filesystem::is_empty(scratch),
           "a pin outliving the cache must safely close descriptors and remove staging on release");
 }
+void testPinnedDecoderPressureRemainsBoundedAndRetainsPcm(const std::filesystem::path &root) {
+  audio::DecodedAssetCache cache(root, audio::DecodedAssetCache::kUnlimitedRetainedBytes);
+  std::atomic_bool cancelled{false}; SF_INFO info{};
+  std::vector<std::filesystem::path> paths;
+  std::vector<audio::DecodedAssetCache::DecoderPin> pins;
+  std::vector<short> expected;
+  for (int index = 0; index < 96; ++index) {
+    paths.push_back(root / ("pressure-" + std::to_string(index) + ".wav"));
+    writeWav(paths.back(), 1);
+    pins.push_back(cache.PinDecoder(paths.back(), cancelled));
+    require(bool(pins.back()), "pin decoder pressure fixture");
+    std::vector<short> pcm;
+    require(cache.ReadRange(paths.back(), 0, 17, pcm, info, cancelled), "read pinned pressure fixture");
+  }
+  require(cache.GetStatistics().peakLiveDecoders <= 64,
+          "pinned idle cursors must obey the total descriptor ceiling");
+  require(decodeAudioToPCM(fspath_to_path_t(paths.front()), expected, info, cancelled),
+          "decode pressure reference");
+  // Mix borrowed pinned readers with unpinned readers while all slots are occupied.
+  for (std::size_t index = 0; index < pins.size(); index += 3) pins[index] = {};
+  std::vector<std::future<bool>> reads;
+  for (const auto &path : paths) {
+    reads.push_back(std::async(std::launch::async, [&, path] {
+      SF_INFO metadata{}; std::vector<short> pcm;
+      return cache.ReadRange(path, 5000, 100, pcm, metadata, cancelled) &&
+             pcm == std::vector<short>(expected.begin() + 5000, expected.begin() + 5100);
+    }));
+  }
+  for (auto &read : reads) require(read.get(), "pressure reopen must preserve exact PCM");
+  require(cache.GetStatistics().peakLiveDecoders <= 64,
+          "borrowed and idle cursors must share the total descriptor ceiling");
+  for (const auto &path : paths)
+    require(cache.Preload(path, cancelled), "pressure must not prevent full preloading");
+  pins.clear();
+  const auto prepared = cache.GetStatistics();
+  require(prepared.pinnedEntries == 0 && prepared.liveDecoders <= 16,
+          "pressure pins must release and restore the idle descriptor budget");
+  require(prepared.decodedFrames == expected.size() * paths.size() &&
+              prepared.retainedBytes == expected.size() * paths.size() * sizeof(short),
+          "descriptor eviction must preserve all preloaded native PCM");
+  for (const auto &path : paths) {
+    std::vector<short> pcm;
+    require(cache.Materialize(path, pcm, info, cancelled) && pcm == expected,
+            "pressure-preloaded gameplay PCM must match the full decoder exactly");
+  }
+  require(cache.GetStatistics().decodedFrames == prepared.decodedFrames &&
+              cache.GetStatistics().decoderOpens == prepared.decoderOpens,
+          "gameplay must reuse retained PCM without reopening pressure-evicted decoders");
+}
 void testCancellationRetainsReadyPages(const std::filesystem::path &root) {
   const auto path = root / "cancel.wav";
   writeWav(path);
@@ -396,6 +445,7 @@ int main() {
     testDecoderRetentionRemainsBounded(root);
     testScopedDecoderPinsAndUnrelatedBorrowers(root);
     testDecoderPinIdentityAndOwnerLifetime(root);
+    testPinnedDecoderPressureRemainsBoundedAndRetainsPcm(root);
     testPreloadRetainsAllPagesForGameplay(root);
     testCancellationRetainsReadyPages(root);
     testCancellationDuringFullDecode(root);

@@ -21,6 +21,11 @@
 #include <stdexcept>
 #include <thread>
 #include <vector>
+#if !defined(_WIN32)
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 namespace {
 std::atomic_bool guardLargeAllocations{false};
@@ -174,20 +179,20 @@ void testEquivalence(const std::filesystem::path &root) {
 }
 void testCompressedSourceDecoderLifetime(const std::filesystem::path &root) {
   struct Case { int count; bool repeat; };
-  for (const auto [count, repeat] : {Case{32, false}, Case{33, false},
-                                    Case{64, false}, Case{64, true}}) {
+  for (const auto [count, repeat] : {Case{17, false}, Case{32, false}, Case{33, false},
+                                    Case{64, false}, Case{64, true}, Case{192, false}}) {
     const auto dir = root / ("overlapping-ogg-" + std::to_string(count) +
                              (repeat ? "-repeat" : ""));
     std::filesystem::create_directories(dir);
     const auto fixture = dir / "layer.ogg";
     {
       SF_INFO info{};
-      info.samplerate = 44100;
-      info.channels = 1;
+      info.samplerate = count > 128 ? 48000 : 44100;
+      info.channels = count > 128 ? 2 : 1;
       info.format = SF_FORMAT_OGG | SF_FORMAT_VORBIS;
       auto file = asobmashow::audio::openSoundFileHandle(fixture, SFM_WRITE, info);
       require(bool(file), "could not create overlapping Ogg fixture");
-      std::vector<short> samples(44100 * (repeat ? 1 : 3));
+      std::vector<short> samples(count > 128 ? 32000 : 44100 * (repeat ? 1 : 3));
       for (std::size_t i = 0; i < samples.size(); ++i)
         samples[i] = static_cast<short>(static_cast<int>((i * 17) % 801) - 400);
       require(sf_write_short(file.get(), samples.data(), samples.size()) ==
@@ -209,10 +214,18 @@ void testCompressedSourceDecoderLifetime(const std::filesystem::path &root) {
     const auto referencePath = dir / "reference.wav";
     require(chart_audio::RenderChartAudioToWav(*chart, referencePath).success,
             "overlapping Ogg reference render failed");
+#if !defined(_WIN32)
+    struct rlimit previous{};
+    require(getrlimit(RLIMIT_NOFILE, &previous) == 0, "could not query FD limit");
+    auto constrained = previous;
+    if (count > 128) constrained.rlim_cur = std::min<rlim_t>(160, previous.rlim_cur);
+    require(setrlimit(RLIMIT_NOFILE, &constrained) == 0, "could not constrain FD limit");
+    ScopeExit restoreLimit([&] { setrlimit(RLIMIT_NOFILE, &previous); });
+#endif
     const auto stream = music_stream::Source::Create(std::move(chart), dir / "streams");
     const auto actual = readAll(stream);
     const auto opens = stream->GetStatistics().decoderOpens;
-    if (opens > static_cast<std::uint64_t>(count) * 2)
+    if (count <= 128 && opens > static_cast<std::uint64_t>(count) * 2)
       throw std::runtime_error("active compressed sources must not reopen every block: " +
           std::to_string(count) + " sources opened " + std::to_string(opens) + " decoders");
     if (repeat)
@@ -232,6 +245,111 @@ void testCompressedSourceDecoderLifetime(const std::filesystem::path &root) {
     }
   }
 }
+void testAbandonedLeaseCleanup(const std::filesystem::path &root) {
+  const auto dir = root / "abandoned-lease";
+  auto chart = chartAt(dir);
+  const auto staging = dir / "music-streams";
+  const auto abandoned = staging / (".music-stream-" + uuid::generateV4());
+  std::filesystem::create_directories(abandoned);
+  { std::ofstream lease(abandoned / ".lease"); }
+  std::filesystem::permissions(abandoned / ".lease",
+      std::filesystem::perms::owner_read | std::filesystem::perms::owner_write);
+  { std::ofstream audio(abandoned / "audio.wav"); audio << "abandoned"; }
+  const auto stream = music_stream::Source::Create(std::move(chart), staging);
+  readAll(stream);
+  require(!std::filesystem::exists(abandoned),
+          "an unlocked abandoned lease and its directory must be fully removed");
+}
+void testAbandonedStagingCleanup(const std::filesystem::path &root, const char *executable) {
+#if !defined(_WIN32)
+  const auto dir = root / "abandoned";
+  const auto staging = dir / "music-streams";
+  const auto child = fork();
+  require(child >= 0, "could not fork crashed-source fixture");
+  if (child == 0) {
+    execl(executable, executable, "--abandon-staging", dir.c_str(), nullptr);
+    _exit(1);
+  }
+  int status = 0;
+  require(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+          "crashed-source fixture failed");
+  std::filesystem::path abandoned;
+  for (const auto &entry : std::filesystem::directory_iterator(staging))
+    if (entry.path().filename().string().starts_with(".music-stream-")) abandoned = entry.path();
+  require(!abandoned.empty(), "crash must leave an owned staging directory");
+  const auto unrelated = staging / ".music-stream-unrelated";
+  std::filesystem::create_directory(unrelated);
+  const auto outside = dir / "outside";
+  std::filesystem::create_directory(outside);
+  { std::ofstream sentinel(outside / "keep"); sentinel << "preserve"; }
+  const auto link = staging / (".music-stream-" + uuid::generateV4());
+  std::filesystem::create_directory_symlink(outside, link);
+  const auto oldLegacy = staging / (".music-stream-" + uuid::generateV4());
+  const auto freshLegacy = staging / (".music-stream-" + uuid::generateV4());
+  std::filesystem::create_directory(oldLegacy);
+  std::filesystem::create_directory(freshLegacy);
+  { std::ofstream stale(oldLegacy / "audio.wav"); stale << "abandoned old stream"; }
+  std::filesystem::last_write_time(oldLegacy,
+      std::filesystem::file_time_type::clock::now() - std::chrono::hours(24 * 8));
+  const auto unsafeLease = staging / (".music-stream-" + uuid::generateV4());
+  std::filesystem::create_directory(unsafeLease);
+  std::filesystem::create_symlink(outside / "keep", unsafeLease / ".lease");
+  auto live = music_stream::Source::Create(chartAt(dir), staging);
+  const auto expected = readAll(live);
+  require(!std::filesystem::exists(abandoned), "new source must sweep crashed staging at the actual stream root");
+  require(!std::filesystem::exists(oldLegacy) && std::filesystem::exists(freshLegacy),
+          "legacy staging cleanup must remove old orphans but preserve fresh unleased directories");
+  int ready[2], stop[2];
+  require(pipe(ready) == 0 && pipe(stop) == 0, "could not create child lifetime pipes");
+  const auto holding = fork();
+  require(holding >= 0, "could not fork active-source fixture");
+  if (holding == 0) {
+    close(ready[0]);
+    close(stop[1]);
+    const auto readyFd = std::to_string(ready[1]);
+    const auto stopFd = std::to_string(stop[0]);
+    execl(executable, executable, "--hold-staging", dir.c_str(),
+          readyFd.c_str(), stopFd.c_str(), nullptr);
+    _exit(1);
+  }
+  close(ready[1]);
+  close(stop[0]);
+  bool childReaped = false;
+  ScopeExit stopChild([&] {
+    close(ready[0]);
+    if (stop[1] >= 0) close(stop[1]);
+    if (!childReaped) waitpid(holding, &status, 0);
+  });
+  char signal = 0;
+  require(read(ready[0], &signal, 1) == 1, "active child source failed to start");
+  std::vector<std::filesystem::path> heldDirectories;
+  for (const auto &entry : std::filesystem::directory_iterator(staging)) {
+    if (std::filesystem::is_regular_file(entry.path() / "audio.wav")) {
+      heldDirectories.push_back(entry.path());
+      // Age alone must never override a live modern lease.
+      std::filesystem::last_write_time(entry.path(),
+          std::filesystem::file_time_type::clock::now() - std::chrono::hours(24 * 8));
+    }
+  }
+  require(heldDirectories.size() == 2, "expected parent and child source staging");
+  auto concurrent = music_stream::Source::Create(chartAt(dir), staging);
+  require(readAll(concurrent) == expected && readAll(live) == expected,
+          "sweeping must preserve another live source's seek data");
+  for (const auto &held : heldDirectories)
+    require(std::filesystem::exists(held / "audio.wav"),
+            "sweeping must preserve another process's active lease regardless of age");
+  require(std::filesystem::exists(unsafeLease) &&
+              std::filesystem::exists(unrelated) && std::filesystem::is_symlink(link) &&
+              std::filesystem::exists(outside / "keep"),
+          "staging sweep must preserve unrelated directories and symlink targets");
+  close(stop[1]);
+  stop[1] = -1;
+  const auto reaped = waitpid(holding, &status, 0);
+  childReaped = reaped == holding;
+  require(childReaped && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+          "another process must still read its source after cleanup");
+#endif
+}
 void testTemporaryLifetime(const std::filesystem::path &root) {
   const auto dir = root / "temporary";
   auto chart = chartAt(dir);
@@ -244,8 +362,9 @@ void testTemporaryLifetime(const std::filesystem::path &root) {
           "completed music must retain only private temporary stream data");
   require(!std::filesystem::is_empty(staging), "active stream must own its seek data");
   stream.reset();
-  require(std::filesystem::is_empty(staging),
-          "releasing a completed stream must remove all of its temporary data");
+  for (const auto &entry : std::filesystem::directory_iterator(staging))
+    require(entry.path().filename() == ".music-stream.lock",
+            "releasing a completed stream must remove all of its temporary data");
 }
 void testLazyLongSource(const std::filesystem::path &root) {
   const auto dir = root / "long";
@@ -591,12 +710,33 @@ void testCancelAndPause(const std::filesystem::path &root) {
 
 }
 
-int main() {
+int main(int argc, char **argv) {
+#if !defined(_WIN32)
+  if (argc > 2 && (std::string_view(argv[1]) == "--abandon-staging" ||
+                   std::string_view(argv[1]) == "--hold-staging")) {
+    try {
+      const std::filesystem::path dir = argv[2];
+      const auto stream = music_stream::Source::Create(chartAt(dir), dir / "music-streams");
+      const auto expected = readAll(stream);
+      if (std::string_view(argv[1]) == "--abandon-staging") _exit(0);
+      char signal = 1;
+      if (argc != 5 || write(std::stoi(argv[3]), &signal, 1) != 1) return 1;
+      read(std::stoi(argv[4]), &signal, 1);
+      return readAll(stream) == expected ? 0 : 1;
+    } catch (...) { return 1; }
+  }
+#endif
   const auto root = std::filesystem::temp_directory_path() /
                     ("music-stream-tests-" + uuid::generateV4());
   std::filesystem::create_directories(root);
   ScopeExit cleanup([&] { std::filesystem::remove_all(root); });
   try {
+    if (argc > 1 && std::string_view(argv[1]) == "--decoder-limit") {
+      testCompressedSourceDecoderLifetime(root);
+      return 0;
+    }
+    testAbandonedLeaseCleanup(root);
+    testAbandonedStagingCleanup(root, argv[0]);
     testVorbisDurationBounds(root);
     testTemporaryLifetime(root);
     testEquivalence(root);
