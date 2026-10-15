@@ -52,7 +52,7 @@ class AndroidNativeMusicFocusTests(unittest.TestCase):
         service = (ROOT / "android/app/src/main/java/com/snurhythm/asobmashow/AsoBMaShowMusicService.java").read_text()
         service_methods = ["public int onStartCommand(", "private void readUpdate(",
                            "private String nonEmpty(", "private void sendTransportAction(",
-                           "private void updateNotification()"]
+                           "private void updateNotification()", "private PendingIntent serviceIntent("]
         fixture = (ROOT / "tests/java/AndroidNativeMusicFocusFixture.java").read_text()
         fixture = fixture.replace("// ACTIVITY_METHODS", "\n".join(method(source, s) for s in signatures))
         constants = service[service.index("    public static final String ACTION_UPDATE"):service.index("    private static final String CHANNEL_ID")]
@@ -86,6 +86,9 @@ class AndroidNativeMusicFocusTests(unittest.TestCase):
 
     def test_remote_failures_release_bootstrap_foreground(self):
         self.run_case("remote-failure")
+
+    def test_notification_actions_cannot_override_later_transport_changes(self):
+        self.run_case("notification-cancel")
 
     def test_notification_play_does_not_recurse_through_session_play(self):
         self.run_case("notification-play")

@@ -42,6 +42,7 @@ public class AsoBMaShowMusicService extends Service {
     private String artworkPath = "";
     private boolean playing = false;
     private boolean foreground = false;
+    private long transportGeneration;
     private MediaSession.Token sessionToken;
 
     @Override
@@ -107,6 +108,9 @@ public class AsoBMaShowMusicService extends Service {
     }
 
     private void readUpdate(Intent intent) {
+        if (intent.hasExtra(EXTRA_TRANSPORT_GENERATION)) {
+            transportGeneration = intent.getLongExtra(EXTRA_TRANSPORT_GENERATION, 0);
+        }
         if (intent.hasExtra(EXTRA_TITLE)) {
             title = nonEmpty(intent.getStringExtra(EXTRA_TITLE), "AsoBMaShow");
         }
@@ -270,6 +274,8 @@ public class AsoBMaShowMusicService extends Service {
                 .putExtra(EXTRA_ARTIST, artist)
                 .putExtra(EXTRA_ALBUM, album)
                 .putExtra(EXTRA_ARTWORK_PATH, artworkPath)
+                // Capture the playback generation before asynchronous delivery.
+                .putExtra(EXTRA_TRANSPORT_GENERATION, transportGeneration)
                 .putExtra(EXTRA_PLAYING, playing);
         if (sessionToken != null) {
             intent.putExtra(EXTRA_SESSION_TOKEN, sessionToken);

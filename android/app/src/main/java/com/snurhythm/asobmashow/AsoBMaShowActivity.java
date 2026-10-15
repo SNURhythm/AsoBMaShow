@@ -2289,6 +2289,8 @@ public class AsoBMaShowActivity extends SDLActivity {
                 .putExtra(AsoBMaShowMusicService.EXTRA_ALBUM, nativeMusicAlbum)
                 .putExtra(AsoBMaShowMusicService.EXTRA_ARTWORK_PATH, nativeMusicArtworkPath)
                 .putExtra(AsoBMaShowMusicService.EXTRA_PLAYING, playing)
+                .putExtra(AsoBMaShowMusicService.EXTRA_TRANSPORT_GENERATION,
+                        nativeMusicTransportGeneration)
                 .putExtra(AsoBMaShowMusicService.EXTRA_SESSION_TOKEN,
                         nativeMusicSession.getSessionToken());
         if (playing) {

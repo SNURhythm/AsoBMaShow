@@ -96,10 +96,19 @@ public class AndroidNativeMusicFocusFixture {
         String getAction() { return action; }
         Intent putExtra(String key, Object value) { extras.put(key, value); return this; }
         boolean hasExtra(String key) { return extras.containsKey(key); }
+        long getLongExtra(String key, long fallback) { return ((Number) extras.getOrDefault(key, fallback)).longValue(); }
         String getStringExtra(String key) { return (String) extras.get(key); }
         boolean getBooleanExtra(String key, boolean fallback) { return (boolean) extras.getOrDefault(key, fallback); }
         <T> T getParcelableExtra(String key, Class<T> type) { return type.cast(extras.get(key)); }
         @SuppressWarnings("unchecked") <T> T getParcelableExtra(String key) { return (T) extras.get(key); }
+    }
+    static class PendingIntent {
+        static final int FLAG_UPDATE_CURRENT = 1, FLAG_IMMUTABLE = 2;
+        final Intent intent;
+        PendingIntent(Intent value) { intent = value; }
+        static PendingIntent getService(Object context, int code, Intent intent, int flags) {
+            return new PendingIntent(intent);
+        }
     }
     static class MediaSession {
         static final int FLAG_HANDLES_MEDIA_BUTTONS = 1, FLAG_HANDLES_TRANSPORT_CONTROLS = 2;
@@ -144,6 +153,7 @@ public class AndroidNativeMusicFocusFixture {
         static final int NOTIFICATION_ID = 1;
         String title = "", artist = "", album = "", artworkPath = "";
         boolean playing, foreground;
+        long transportGeneration;
         MediaSession.Token sessionToken;
         Notification buildNotification() { return new Notification(); }
         void removeNotification() { foreground = false; platformForeground = false; }
@@ -227,7 +237,34 @@ public class AndroidNativeMusicFocusFixture {
         else activity.nativeMusicPlayer = new NativePcmMusicPlayer();
         return activity;
     }
+    static void testNotificationCancellation() {
+        for (boolean stream : new boolean[]{true, false}) {
+            for (String action : new String[]{AsoBMaShowMusicService.ACTION_PLAY,
+                    AsoBMaShowMusicService.ACTION_PREVIOUS, AsoBMaShowMusicService.ACTION_NEXT}) {
+                for (String newer : new String[]{"pause", "stop", "load"}) {
+                    for (boolean serviceAlreadyDispatched : new boolean[]{true, false}) {
+                        AndroidNativeMusicFocusFixture a = loaded(stream);
+                        assert a.playNativeMusic().equals("OK"); drain();
+                        assert a.pauseNativeMusic().equals("OK"); drain();
+                        a.background = true;
+                        Intent notification = a.service.serviceIntent(action, 1).intent;
+                        if (serviceAlreadyDispatched) a.service.onStartCommand(notification, 0, 2);
+                        if (newer.equals("pause")) a.pauseNativeMusic();
+                        else if (newer.equals("stop")) a.stopNativeMusic();
+                        else assert a.loadNativeMusicStream("3", "replacement", 1000000).equals("OK");
+                        if (!serviceAlreadyDispatched) a.service.onStartCommand(notification, 0, 2);
+                        drain();
+                        assert !a.isNativeMusicPlayingLocked() && a.skips == 0
+                                : "stale notification " + action + " overrode " + newer;
+                        assert !a.nativeMusicHasFocus && !a.service.foreground
+                                : "stale notification retained foreground eligibility";
+                    }
+                }
+            }
+        }
+    }
     public static void main(String[] args) {
+        if (args[0].equals("notification-cancel")) { testNotificationCancellation(); return; }
         for (boolean stream : new boolean[]{true, false}) {
             AndroidNativeMusicFocusFixture a = loaded(stream);
             NativePcmMusicPlayer player = stream ? a.nativeMusicStream : a.nativeMusicPlayer;
@@ -269,8 +306,8 @@ public class AndroidNativeMusicFocusFixture {
                 assert a.service.title.equals(a.nativeMusicTitle);
                 break;
             case "notification-play":
-                a.service.onStartCommand(new Intent(a, AsoBMaShowMusicService.class)
-                        .setAction(AsoBMaShowMusicService.ACTION_PLAY), 0, 2);
+                a.service.onStartCommand(a.service.serviceIntent(
+                        AsoBMaShowMusicService.ACTION_PLAY, 2).intent, 0, 2);
                 drain();
                 assert player.playing && a.service.foreground && a.manager.requests == 2;
                 break;
