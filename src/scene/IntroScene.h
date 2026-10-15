@@ -52,5 +52,9 @@ private:
   std::uint64_t inputDeviceSubscription_ = 0;
   int layoutWidth_ = -1;
   int layoutHeight_ = -1;
+  int lastSafeTop = -1;
+  int lastSafeLeft = -1;
+  int lastSafeBottom = -1;
+  int lastSafeRight = -1;
   bool pendingStart_ = false;
 };

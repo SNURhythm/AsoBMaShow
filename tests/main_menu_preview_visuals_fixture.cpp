@@ -26,10 +26,14 @@ struct DecodedAssetCache {
 namespace music_stream {
 inline constexpr std::uint64_t kSampleRate = 44100;
 struct Source {
+  static inline bool failConstruction = false;
   struct Gains { float bgm, keysound; };
   static std::shared_ptr<Source> CreatePreview(bms_parser::Chart &,
       std::filesystem::path, std::shared_ptr<audio::DecodedAssetCache>,
-      std::uint64_t, Gains) { return std::make_shared<Source>(); }
+      std::uint64_t, Gains) {
+    if (failConstruction) throw std::runtime_error("duration exceeds frame limit");
+    return std::make_shared<Source>();
+  }
   void Cancel() {}
 };
 }
@@ -114,6 +118,12 @@ int main() {
   try {
     Scene scene;
     std::atomic_bool cancelled = false;
+    music_stream::Source::failConstruction = true;
+    scene.process({.meta = {.BmsPath = "malformed.bms"}}, cancelled);
+    require(!scene.selectedChart && !scene.previewDecodedAssets_ &&
+                !scene.context.jukebox.loaded && !scene.previewPlayer_.state.playing,
+            "preview construction failure must retire partial resources without escaping the worker");
+    music_stream::Source::failConstruction = false;
     scene.process({.meta = {.BmsPath = "chart.bms"}}, cancelled);
     require(scene.previewDecodedAssets_ &&
                 scene.previewDecodedAssets_->retainedLimit == audio::DecodedAssetCache::kUnlimitedRetainedBytes,

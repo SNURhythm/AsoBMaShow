@@ -767,22 +767,18 @@ bool MainMenuScene::renderViewBeforeScene(const View *) const {
 void MainMenuScene::selectTab(Tab tab) {
   if (tab == activeTab_ || willStart.load() || pendingTab_) return;
   if (selectorTabActive()) {
-    if (tab == Tab::Music || tab == Tab::Ir) {
-      // Joining a preview and closing its audio device can take hundreds of
-      // milliseconds. Keep drawing while those resources are retired, then
-      // initialize the new tab on the UI thread with exclusive jukebox access.
-      if (previewWorker_) previewWorker_->cancel();
-      tabPreviewStop_ = std::async(std::launch::async, [this] {
-        if (previewWorker_) previewWorker_->stop();
-        stopAndClearSelectedChart();
-      });
-      pendingTab_ = tab;
-      for (auto *view : views) view->cancelPointerInput();
-      if (tabLoadingOverlay_) tabLoadingOverlay_->setVisible(true);
-      return;
-    }
-    if (previewWorker_) previewWorker_->stop();
-    stopAndClearSelectedChart();
+    // Joining a preview and closing its audio device can take hundreds of
+    // milliseconds. Keep every selector-tab transition asynchronous, including
+    // PLAY <-> COURSE, before the destination takes ownership of the jukebox.
+    if (previewWorker_) previewWorker_->cancel();
+    tabPreviewStop_ = std::async(std::launch::async, [this] {
+      if (previewWorker_) previewWorker_->stop();
+      stopAndClearSelectedChart();
+    });
+    pendingTab_ = tab;
+    for (auto *view : views) view->cancelPointerInput();
+    if (tabLoadingOverlay_) tabLoadingOverlay_->setVisible(true);
+    return;
   }
   completeTabSwitch(tab);
 }
@@ -879,6 +875,7 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
     recyclerView->rebindVisibleItems();
     folderRecyclerView->rebindVisibleItems();
     restoringTabSelection_ = false;
+    reselectCurrentChart();
   } else if (auto *scene = activeUtilityTab()) {
     scene->refreshLanguageIfNeeded();
     if (!initializedUtilityTab) scene->onResume();
@@ -1705,7 +1702,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                                            fspath_to_utf8(meta.BmsPath));
           return;
         }
-        {
+        try {
           std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
           if (isCancelled()) {
             return;
@@ -1754,6 +1751,17 @@ void MainMenuScene::initView(ApplicationContext &context) {
             if (!willStart.load()) clearSelectedChart();
             return;
           }
+        } catch (const std::exception &error) {
+          // Source construction (including timeline validation) can fail before
+          // playback owns it. Keep the worker alive for the next selection.
+          SDL_Log("Preview preparation failed %s: %s",
+                  fspath_to_utf8(meta.BmsPath).c_str(), error.what());
+          std::lock_guard lock(previewJukeboxLoadMutex);
+          previewPlayer_.Stop();
+          this->context.jukebox.unloadVisuals();
+          previewVisualsLoaded_ = false;
+          previewDecodedAssets_.reset();
+          if (!willStart.load()) clearSelectedChart();
         }
       }, [this] { stopAndClearSelectedChart(); }, kPreviewDebounceDelay,
       [this] {

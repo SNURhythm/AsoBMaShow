@@ -117,7 +117,7 @@ int main() {
             result = subprocess.run([str(executable)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_pause_releases_audio_session_and_resume_keeps_queue(self):
+    def test_pause_restores_foreground_session_and_resume_keeps_queue(self):
         native = (ROOT / "src/iOSNatives.mm").read_text()
         stream = (ROOT / "src/audio/IOSMusicStream.mm").read_text()
         pause = method(stream, "void IOSMusicStream::Pause()")
@@ -125,6 +125,7 @@ int main() {
         native_pause = method(native, "bool PauseIOSNativeMusic(std::string &errorMessage)")
         native_play = method(native, "bool PlayIOSNativeMusic(std::string &errorMessage)")
         activate = method(native, "bool ActivateIOSNativeMusicAudioSession(std::string &errorMessage)")
+        restore = method(native, "bool RestoreIOSForegroundAudioSession(std::string &errorMessage)")
         fixture = r'''
 #import <Foundation/Foundation.h>
 #include "audio/IOSMusicStreamWake.h"
@@ -135,6 +136,8 @@ int main() {
 #include <vector>
 std::vector<std::string> calls;
 bool active = true, activationSucceeds = true, deactivationSucceeds = true;
+bool engineStartSucceeds = true, deactivationBusy = false;
+NSString *category;
 unsigned gIOSNativeMusicTransportGeneration = 0;
 @interface FakeEngine : NSObject
 @property BOOL running;
@@ -158,24 +161,41 @@ FakeEngine *engine;
 #define AVAudioSession FakeAudioSession
 using AVAudioSessionSetActiveOptions = NSUInteger;
 constexpr auto AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation = 1;
+constexpr auto AVAudioSessionErrorCodeIsBusy = 560030580;
 NSString *const AVAudioSessionCategoryPlayback = @"playback";
+NSString *const AVAudioSessionCategoryAmbient = @"ambient";
+constexpr auto AVAudioSessionCategoryOptionMixWithOthers = 1;
 @interface AVAudioSession : NSObject
 + (instancetype)sharedInstance;
-- (BOOL)setCategory:(NSString *)category error:(NSError **)error;
+- (BOOL)setCategory:(NSString *)value error:(NSError **)error;
+- (BOOL)setCategory:(NSString *)value withOptions:(NSUInteger)options error:(NSError **)error;
 - (BOOL)setActive:(BOOL)value error:(NSError **)error;
 - (BOOL)setActive:(BOOL)value withOptions:(AVAudioSessionSetActiveOptions)options error:(NSError **)error;
 @end
 @implementation AVAudioSession
 + (instancetype)sharedInstance { static auto session = [AVAudioSession new]; return session; }
-- (BOOL)setCategory:(NSString *)category error:(NSError **)error { return YES; }
+- (BOOL)setCategory:(NSString *)value error:(NSError **)error { category = value; return YES; }
+- (BOOL)setCategory:(NSString *)value withOptions:(NSUInteger)options error:(NSError **)error {
+  assert(options == AVAudioSessionCategoryOptionMixWithOthers);
+  category = value; return YES;
+}
 - (BOOL)setActive:(BOOL)value error:(NSError **)error {
   if (!activationSucceeds) return NO;
   active = value; calls.push_back("activate"); return YES;
 }
 - (BOOL)setActive:(BOOL)value withOptions:(AVAudioSessionSetActiveOptions)options error:(NSError **)error {
   assert(!engine.running && "pause hardware before deactivating the session");
+  assert(options == AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation);
   assert(!value);
   if (!deactivationSucceeds) return NO;
+  if (deactivationBusy) {
+    // iOS 8–25 may deactivate the session despite returning IsBusy when a
+    // retained foreground output is still running after the music pause.
+    active = false;
+    *error = [NSError errorWithDomain:NSOSStatusErrorDomain
+                                code:AVAudioSessionErrorCodeIsBusy userInfo:nil];
+    return NO;
+  }
   active = value;
   calls.push_back("deactivate");
   return YES;
@@ -205,8 +225,9 @@ public:
       unsigned Queued() { return 200; }
       bool Drained(unsigned played) { return played >= Queued(); }
     } timeline;
-    bool StartEngine(std::string &) {
+    bool StartEngine(std::string &error) {
       assert(active);
+      if (!engineStartSucceeds) { error = "engine startup failed"; return false; }
       calls.push_back("engine start");
       engine.running = YES;
       return true;
@@ -228,6 +249,7 @@ void UpdateIOSNativeMusicNowPlayingInfoLocked() {
 }
 float gIOSNativeMusicPlaybackRate = 1.0f;
 ACTIVATE
+RESTORE
 NATIVE_PAUSE
 NATIVE_PLAY
 int main() {
@@ -240,15 +262,16 @@ int main() {
     std::string error;
     assert(PauseIOSNativeMusic(error));
     assert(!impl.playing && !impl.player.playing && !engine.running);
-    assert(!impl.source->rendering && !active);
+    assert(!impl.source->rendering && active);
+    assert(category == AVAudioSessionCategoryAmbient);
     assert(!gIOSNativeMusicResumeAfterInterruption);
     assert(gIOSNativeMusicTransportGeneration == 1);
-    assert((calls == std::vector<std::string>{"player pause", "engine pause", "metadata", "deactivate"}));
+    assert((calls == std::vector<std::string>{"player pause", "engine pause", "metadata", "deactivate", "activate"}));
     assert(PlayIOSNativeMusic(error));
     assert(impl.playing && impl.player.playing && engine.running && impl.source->rendering);
     assert(!impl.buffering && impl.timeline.Queued() == 200);
     assert(gIOSNativeMusicTransportGeneration == 2);
-    assert((calls == std::vector<std::string>{"player pause", "engine pause", "metadata", "deactivate",
+    assert((calls == std::vector<std::string>{"player pause", "engine pause", "metadata", "deactivate", "activate",
                                             "activate", "engine start", "player play", "metadata"}));
     deactivationSucceeds = false;
     assert(!PauseIOSNativeMusic(error) && !error.empty());
@@ -257,13 +280,27 @@ int main() {
     assert(PauseIOSNativeMusic(error) && error.empty());
     activationSucceeds = false;
     assert(!PlayIOSNativeMusic(error) && !error.empty());
-    assert(!impl.playing && !engine.running && !active);
+    assert(!impl.playing && !engine.running);
     activationSucceeds = true;
     assert(PlayIOSNativeMusic(error) && error.empty());
     assert(gIOSNativeMusicTransportGeneration == 6);
+    assert(PauseIOSNativeMusic(error));
+    engineStartSucceeds = false;
+    assert(!PlayIOSNativeMusic(error) && error == "engine startup failed");
+    assert(!impl.playing && !engine.running && !impl.source->rendering);
+    assert(active && category == AVAudioSessionCategoryAmbient);
+    engineStartSucceeds = true;
+    assert(PlayIOSNativeMusic(error));
+    deactivationBusy = true;
+    assert(PauseIOSNativeMusic(error) && error.empty());
+    assert(active && category == AVAudioSessionCategoryAmbient);
+    assert(!impl.playing && !impl.player.playing && !engine.running && !impl.source->rendering);
+    activationSucceeds = false;
+    assert(!PauseIOSNativeMusic(error) && !error.empty());
+    assert(!active && category == AVAudioSessionCategoryAmbient);
   }
 }
-'''.replace("NATIVE_PAUSE", native_pause).replace("NATIVE_PLAY", native_play).replace("ACTIVATE", activate).replace("PAUSE", pause).replace("PLAY", play)
+'''.replace("NATIVE_PAUSE", native_pause).replace("NATIVE_PLAY", native_play).replace("ACTIVATE", activate).replace("RESTORE", restore).replace("PAUSE", pause).replace("PLAY", play)
         with tempfile.TemporaryDirectory() as folder:
             folder = Path(folder)
             mm, executable = folder / "pause.mm", folder / "pause"
@@ -271,6 +308,77 @@ int main() {
             subprocess.run(["xcrun", "--sdk", "macosx", "clang++", "-std=c++20",
                             "-fobjc-arc", "-fblocks", "-framework", "Foundation",
                             "-I", str(ROOT / "src"),
+                            str(mm), "-o", str(executable)], check=True)
+            result = subprocess.run([str(executable)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_failed_stream_is_unloaded_and_stale_callbacks_are_ignored(self):
+        native = (ROOT / "src/iOSNatives.mm").read_text()
+        load = method(native, "bool LoadIOSNativeMusicStream(")
+        callback = method(load, "[identity](std::uint64_t epoch,")
+        fixture = r'''
+#import <Foundation/Foundation.h>
+#include <cassert>
+#include <memory>
+#include <string>
+#include <cstdint>
+unsigned destroyed = 0, restored = 0, published = 0, errors = 0, finished = 0;
+struct IOSMusicStream {
+  enum class EventKind { Finished, Error, StateChanged };
+  ~IOSMusicStream() { ++destroyed; }
+  bool IsCurrentEvent(std::uint64_t epoch) { return epoch == 7; }
+};
+std::shared_ptr<IOSMusicStream> gIOSNativeMusicStream;
+unsigned gIOSNativeMusicTransportGeneration = 0;
+bool gIOSNativeMusicResumeAfterInterruption = true;
+struct Metadata { std::string title; } gIOSNativeMusicMetadata;
+struct Queue { int count; } gIOSNativeMusicQueue;
+id IOSNativeMusicLock() { static auto lock = [NSObject new]; return lock; }
+void UpdateIOSNativeMusicNowPlayingInfoLocked() { ++published; }
+void PublishIOSNativeMusicNowPlayingInfoLocked(id info, bool playing) {
+  assert(!info && !playing && !gIOSNativeMusicStream); ++published;
+}
+bool RestoreIOSForegroundAudioSession(std::string &) {
+  assert(!gIOSNativeMusicStream && destroyed == 1); ++restored; return true;
+}
+namespace native_music_player {
+enum class ControlEvent { Finished };
+void NotifyControlEvent(ControlEvent) { ++finished; }
+void NotifyPlaybackError(const std::string &error) {
+  assert(error == "output failed"); assert(!gIOSNativeMusicStream);
+  assert(restored == 1); ++errors;
+}
+}
+int main() {
+  @autoreleasepool {
+    auto identity = std::make_shared<std::weak_ptr<IOSMusicStream>>();
+    auto callback = CALLBACK;
+    gIOSNativeMusicStream = std::make_shared<IOSMusicStream>();
+    *identity = gIOSNativeMusicStream;
+    gIOSNativeMusicMetadata.title = "failed track";
+    gIOSNativeMusicQueue.count = 3;
+    callback(6, IOSMusicStream::EventKind::Error, "output failed");
+    assert(gIOSNativeMusicStream && errors == 0 && published == 0);
+    callback(7, IOSMusicStream::EventKind::Error, "output failed");
+    assert(!gIOSNativeMusicStream && destroyed == 1 && errors == 1);
+    assert(published == 1 && !gIOSNativeMusicResumeAfterInterruption);
+    assert(gIOSNativeMusicTransportGeneration == 1);
+    assert(gIOSNativeMusicMetadata.title.empty() && gIOSNativeMusicQueue.count == 0);
+    gIOSNativeMusicStream = std::make_shared<IOSMusicStream>();
+    callback(7, IOSMusicStream::EventKind::Error, "output failed");
+    assert(gIOSNativeMusicStream && errors == 1 && published == 1);
+    *identity = gIOSNativeMusicStream;
+    callback(7, IOSMusicStream::EventKind::Finished, "");
+    assert(gIOSNativeMusicStream && finished == 1 && restored == 1);
+  }
+}
+'''.replace("CALLBACK", callback)
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            mm, executable = folder / "error.mm", folder / "error"
+            mm.write_text(fixture)
+            subprocess.run(["xcrun", "--sdk", "macosx", "clang++", "-std=c++20",
+                            "-fobjc-arc", "-fblocks", "-framework", "Foundation",
                             str(mm), "-o", str(executable)], check=True)
             result = subprocess.run([str(executable)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)

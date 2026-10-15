@@ -721,6 +721,15 @@ bool ActivateIOSNativeMusicAudioSession(std::string &errorMessage) {
 bool RestoreIOSForegroundAudioSession(std::string &errorMessage) {
   AVAudioSession *session = [AVAudioSession sharedInstance];
   NSError *error = nil;
+  if (![session setActive:NO
+              withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
+                    error:&error] && error.code != AVAudioSessionErrorCodeIsBusy) {
+    errorMessage = NSErrorMessage(error, "Could not deactivate music audio session");
+    return false;
+  }
+  // Before iOS 26, retained foreground I/O can report IsBusy even though
+  // deactivation succeeded. Restore Ambient and reactivate in that case too.
+  error = nil;
   if (![session setCategory:AVAudioSessionCategoryAmbient
                 withOptions:AVAudioSessionCategoryOptionMixWithOthers
                       error:&error]) {
@@ -5395,11 +5404,24 @@ bool LoadIOSNativeMusicStream(std::shared_ptr<music_stream::Source> source,
               auto current = identity->lock();
               if (!current || current != gIOSNativeMusicStream ||
                   !current->IsCurrentEvent(epoch)) return;
+              if (kind == IOSMusicStream::EventKind::Error) {
+                ++gIOSNativeMusicTransportGeneration;
+                gIOSNativeMusicResumeAfterInterruption = false;
+                // Drop both owners before restoring the shared session so the
+                // failed engine is fully stopped and its feeder is joined.
+                current.reset();
+                gIOSNativeMusicStream.reset();
+                gIOSNativeMusicMetadata = {};
+                gIOSNativeMusicQueue = {};
+                PublishIOSNativeMusicNowPlayingInfoLocked(nil, false);
+                std::string ignored;
+                RestoreIOSForegroundAudioSession(ignored);
+                native_music_player::NotifyPlaybackError(error);
+                return;
+              }
               UpdateIOSNativeMusicNowPlayingInfoLocked();
               if (kind == IOSMusicStream::EventKind::Finished)
                 native_music_player::NotifyControlEvent(native_music_player::ControlEvent::Finished);
-              else if (kind == IOSMusicStream::EventKind::Error)
-                native_music_player::NotifyPlaybackError(error);
             }
           }, errorMessage);
       if (!stream) return false;
@@ -5537,7 +5559,11 @@ bool PlayIOSNativeMusic(std::string &errorMessage) {
         return false;
       }
       if (gIOSNativeMusicStream) {
-        if (!gIOSNativeMusicStream->Play(errorMessage)) return false;
+        if (!gIOSNativeMusicStream->Play(errorMessage)) {
+          std::string ignored;
+          RestoreIOSForegroundAudioSession(ignored);
+          return false;
+        }
       } else {
         [gIOSNativeMusicPlayer playImmediatelyAtRate:gIOSNativeMusicPlaybackRate];
       }
@@ -5560,18 +5586,10 @@ bool PauseIOSNativeMusic(std::string &errorMessage) {
       if (gIOSNativeMusicStream) gIOSNativeMusicStream->Pause();
       [gIOSNativeMusicPlayer pause];
       UpdateIOSNativeMusicNowPlayingInfoLocked();
-      if (gIOSNativeMusicStream) {
-        // AVPlayer manages this itself; our engine must release the session
-        // after pausing hardware so Control Center offers Play again.
-        NSError *error = nil;
-        if (![[AVAudioSession sharedInstance]
-                setActive:NO
-              withOptions:AVAudioSessionSetActiveOptionNotifyOthersOnDeactivation
-                    error:&error]) {
-          errorMessage = NSErrorMessage(error, "Could not deactivate music audio session");
-          return false;
-        }
-      }
+      // The engine stays paused; hand the process-wide session back to the
+      // retained foreground audio backend without restarting music hardware.
+      if (gIOSNativeMusicStream)
+        return RestoreIOSForegroundAudioSession(errorMessage);
       return true;
     }
   }

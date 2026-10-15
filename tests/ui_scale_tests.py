@@ -340,11 +340,13 @@ struct MusicPlayerScene {
   View *rootLayout,*contentLayout,*libraryNavButton,*favoritesNavButton,*playlistsNavButton,*playerNavButton,*statusText;
   View *libraryList=nullptr,*favoritesList=nullptr,*videoOverlayRoot=nullptr;
   bool embeddedTab=true; int tabTopInset=180;
+  int lastSafeTop=-1,lastSafeLeft=-1,lastSafeBottom=-1,lastSafeRight=-1;
   void updateLayoutInsets();
 };
 struct IrUploadsScene {
   View *rootLayout,*contentLayout,*headerLayout,*providerStatusText,*openIrSettingsButton,*candidateCountText,*refreshButton,*selectAllButton,*clearButton;
   bool embeddedTab=true; int tabTopInset=180;
+  int lastSafeTop=-1,lastSafeLeft=-1,lastSafeBottom=-1,lastSafeRight=-1;
   void updateLayoutInsets();
 };
 PRODUCTION_METHODS

@@ -155,6 +155,10 @@ void IrUploadsScene::updateLayoutInsets() {
     return;
   }
   auto safe = getSafeAreaInsetsUi();
+  lastSafeTop = safe.top;
+  lastSafeLeft = safe.left;
+  lastSafeBottom = safe.bottom;
+  lastSafeRight = safe.right;
   if (embeddedTab) safe.top = 0;
   rootLayout->setSize(rendering::window_width, rendering::window_height);
   rootLayout->setPadding(Edge::Top, embeddedTab ? tabTopInset : 0);
@@ -236,8 +240,13 @@ void IrUploadsScene::update(float) {
     reloadCandidates();
   }
 
+  const auto safe = getSafeAreaInsetsUi();
   if (rootLayout != nullptr && (lastLayoutWidth != rendering::window_width ||
-                                lastLayoutHeight != rendering::window_height)) {
+                                lastLayoutHeight != rendering::window_height ||
+                                lastSafeTop != safe.top ||
+                                lastSafeLeft != safe.left ||
+                                lastSafeBottom != safe.bottom ||
+                                lastSafeRight != safe.right)) {
     lastLayoutWidth = rendering::window_width;
     lastLayoutHeight = rendering::window_height;
     updateLayoutInsets();

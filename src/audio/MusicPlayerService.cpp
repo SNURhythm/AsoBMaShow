@@ -1215,6 +1215,11 @@ bool MusicPlayerService::ProcessNativeControlEvents(
   for (auto &error : native_music_player::DrainPlaybackErrors()) {
     handled = true;
     statusMessage = std::move(error);
+    std::lock_guard lock(stateMutex);
+    // A queued failure may belong to a track replaced before this drain.
+    if (!native_music_player::GetState().loaded) {
+      loadedTrack.reset();
+    }
   }
   for (const auto event : native_music_player::DrainControlEvents()) {
     handled = true;

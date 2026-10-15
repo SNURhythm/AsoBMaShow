@@ -120,7 +120,11 @@ struct MainMenuScene : Scene {
   void queueSelectedSkinHandoff() HANDOFF_BODY
 };
 
-namespace rendering { int window_width = 800, window_height = 600; }
+namespace rendering {
+int window_width = 800, window_height = 600;
+struct UiSafeAreaInsets { int top = 0, left = 0, bottom = 0, right = 0; };
+UiSafeAreaInsets uiSafeAreaInsets() { return {}; }
+}
 struct View { void setSize(int, int) {} void applyYogaLayout() {} };
 enum class SettingsDestination { Profile };
 struct SceneReturnTarget { static int Registered(const char *) { return 0; } };
@@ -133,6 +137,7 @@ struct IntroScene {
   View *content_ = nullptr, *menu_ = nullptr, *title_ = nullptr;
   View *settingsButton_ = nullptr, *tutorialButton_ = nullptr;
   int layoutWidth_ = -1, layoutHeight_ = -1;
+  int lastSafeTop = -1, lastSafeLeft = -1, lastSafeBottom = -1, lastSafeRight = -1;
   bool pendingStart_ = false;
   int navigations = 0;
   void processNavigationInput() { ++navigations; }
@@ -140,6 +145,11 @@ struct IntroScene {
   void layoutView() {
     layoutWidth_ = rendering::window_width;
     layoutHeight_ = rendering::window_height;
+    const auto safe = rendering::uiSafeAreaInsets();
+    lastSafeTop = safe.top;
+    lastSafeLeft = safe.left;
+    lastSafeBottom = safe.bottom;
+    lastSafeRight = safe.right;
     rootLayout_->setSize(layoutWidth_, layoutHeight_);
     rootLayout_->applyYogaLayout();
   }

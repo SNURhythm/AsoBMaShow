@@ -30,7 +30,8 @@ struct State { bool playing = false, loaded = false; } state;
 enum class ControlEvent { Previous, Next, Finished };
 std::vector<ControlEvent> events;
 std::vector<ControlEvent> DrainControlEvents() { return std::exchange(events, {}); }
-std::vector<std::string> DrainPlaybackErrors() { return {}; }
+std::vector<std::string> playbackErrors;
+std::vector<std::string> DrainPlaybackErrors() { return std::exchange(playbackErrors, {}); }
 bool Pause(std::string &) { ++pauses; state.playing = false; return true; }
 State GetState() { return state; }
 bool Stop(std::string &) { ++stops; state.playing = false; return true; }
@@ -234,6 +235,26 @@ int main() {
     expect(native_music_player::stops == stops + 1 &&
                native_music_player::pauses == pauses + 1,
            "queue boundary leaves active playback running");
+  }
+  service.loadedTrack = music_playlist::MusicTrack{.title = "Failed track"};
+  native_music_player::state = {};
+  native_music_player::playbackErrors = {"Native decoder failed."};
+  expect(service.ProcessNativeControlEvents(completion),
+         "native playback failures are handled even without control events");
+  expect(!service.loadedTrack,
+         "native backend failure clears stale loaded track metadata");
+  expect(resolve(completion) == "Native decoder failed.",
+         "clearing a failed backend preserves its diagnostic");
+  expect(!service.ProcessNativeControlEvents(completion),
+         "native failure is drained only once");
+
+  for (bool playing : {false, true}) {
+    service.loadedTrack = music_playlist::MusicTrack{.title = "Replacement track"};
+    native_music_player::state = {.playing = playing, .loaded = true};
+    native_music_player::playbackErrors = {"Previous backend failed."};
+    service.ProcessNativeControlEvents(completion);
+    expect(service.loadedTrack && service.loadedTrack->title == "Replacement track",
+           "queued old failure must not clear a newer loaded or paused track");
   }
   i18n::setLanguage(i18n::Language::English);
   return failures == 0 ? 0 : 1;

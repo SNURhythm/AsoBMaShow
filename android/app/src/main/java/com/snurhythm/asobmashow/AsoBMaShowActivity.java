@@ -1582,7 +1582,8 @@ public class AsoBMaShowActivity extends SDLActivity {
                                 nativeMusicHasFocus = false;
                                 boolean resume = change != AudioManager.AUDIOFOCUS_LOSS
                                         && (nativeMusicResumeAfterFocus || isNativeMusicPlayingLocked());
-                                if (hasNativeMusicLocked()) pauseNativeMusic();
+                                if (hasNativeMusicLocked())
+                                    pauseNativeMusicLocked(change != AudioManager.AUDIOFOCUS_LOSS);
                                 nativeMusicResumeAfterFocus = resume;
                             }
                         }
@@ -1627,12 +1628,14 @@ public class AsoBMaShowActivity extends SDLActivity {
                                     }
                                     return;
                                 }
+                                if (error != null) {
+                                    releaseNativeMusicPlayerLocked();
+                                    AndroidMusicStream.reportError(error);
+                                    return;
+                                }
                                 nativeMusicHandoff = finished;
                                 updateNativeMusicSessionLocked(isNativeMusicPlayingLocked());
-                                if (error != null) {
-                                    abandonNativeMusicFocusLocked();
-                                    AndroidMusicStream.reportError(error);
-                                } else if (finished) nativeMusicControlEvent("finished");
+                                if (finished) nativeMusicControlEvent("finished");
                             }
                         });
                     }
@@ -1791,6 +1794,7 @@ public class AsoBMaShowActivity extends SDLActivity {
             if (!hasNativeMusicLocked()) {
                 return ERROR_PREFIX + "No music is loaded.";
             }
+            boolean started = false;
             try {
                 if (!requestNativeMusicFocusLocked()) {
                     nativeMusicHandoff = false;
@@ -1800,12 +1804,19 @@ public class AsoBMaShowActivity extends SDLActivity {
                 nativeMusicResumeAfterFocus = false;
                 if (nativeMusicStream != null) nativeMusicStream.play();
                 else nativeMusicPlayer.start();
+                started = true;
                 nativeMusicHandoff = false;
                 updateNativeMusicSessionLocked(true);
                 return "OK";
             } catch (Exception e) {
                 nativeMusicHandoff = false;
-                updateNativeMusicSessionLocked(false);
+                // Metadata/service failures after start must not give away
+                // focus while the backend is still producing audio.
+                if (!started) abandonNativeMusicFocusLocked();
+                try {
+                    updateNativeMusicSessionLocked(started);
+                } catch (Exception ignored) {
+                }
                 return ERROR_PREFIX + messageForException(e, "Could not play music.");
             }
         }
@@ -1813,19 +1824,24 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     public String pauseNativeMusic() {
         synchronized (nativeMusicLock) {
-            if (!hasNativeMusicLocked()) {
-                return ERROR_PREFIX + "No music is loaded.";
-            }
-            try {
-                nativeMusicHandoff = false;
-                nativeMusicResumeAfterFocus = false;
-                if (nativeMusicStream != null) nativeMusicStream.pause();
-                else if (nativeMusicPlayer.isPlaying()) nativeMusicPlayer.pause();
-                updateNativeMusicSessionLocked(false);
-                return "OK";
-            } catch (Exception e) {
-                return ERROR_PREFIX + messageForException(e, "Could not pause music.");
-            }
+            return pauseNativeMusicLocked(false);
+        }
+    }
+
+    private String pauseNativeMusicLocked(boolean preserveFocus) {
+        if (!hasNativeMusicLocked()) {
+            return ERROR_PREFIX + "No music is loaded.";
+        }
+        try {
+            nativeMusicHandoff = false;
+            nativeMusicResumeAfterFocus = false;
+            if (nativeMusicStream != null) nativeMusicStream.pause();
+            else if (nativeMusicPlayer.isPlaying()) nativeMusicPlayer.pause();
+            if (!preserveFocus) abandonNativeMusicFocusLocked();
+            updateNativeMusicSessionLocked(false);
+            return "OK";
+        } catch (Exception e) {
+            return ERROR_PREFIX + messageForException(e, "Could not pause music.");
         }
     }
 

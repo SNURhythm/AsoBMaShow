@@ -93,4 +93,8 @@ private:
   std::uint64_t observedAttemptStatusRevision = 0;
   int lastLayoutWidth = -1;
   int lastLayoutHeight = -1;
+  int lastSafeTop = -1;
+  int lastSafeLeft = -1;
+  int lastSafeBottom = -1;
+  int lastSafeRight = -1;
 };

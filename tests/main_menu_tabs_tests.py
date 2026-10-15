@@ -31,6 +31,7 @@ class MainMenuTabsTests(unittest.TestCase):
             "void MainMenuScene::completeTabSwitch(Tab tab)",
             "bool MainMenuScene::applyPendingTabSwitch()",
             "void MainMenuScene::cancelPendingTabSwitch()",
+            "void MainMenuScene::reselectCurrentChart()",
             "EventHandleResult MainMenuScene::handleEvents(SDL_Event &event)",
             "void MainMenuScene::selectChartByPathAfterReload(",
             "ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const"))
@@ -150,7 +151,8 @@ struct MainMenuScene : Scene {
   bool restoringTabSelection_=false;
   std::optional<ChartMetaRecord> selectedChartRecord;
   std::optional<std::filesystem::path> suppressPreviewForChartPath;
-  int folderReloads=0, chartReloads=0;
+  int folderReloads=0, chartReloads=0, previewRequests=0;
+  bool musicPlaying=false;
   std::optional<std::filesystem::path> temporaryChartFolder;
   LibraryFolderItem activeFolder;
   std::string searchText;
@@ -178,6 +180,7 @@ struct MainMenuScene : Scene {
   View *tabLoadingOverlay_=nullptr;
   void selectTab(Tab);
   void completeTabSwitch(Tab);
+  void reselectCurrentChart();
   bool applyPendingTabSwitch();
   void cancelPendingTabSwitch();
   void settleTab() {
@@ -227,7 +230,12 @@ PROJECTION
   }
   MainMenuScene() {
     root.children.push_back(&search);
-    songs.onSelected=[this](const ChartMetaRecord &record,int) { selectedChartRecord=record; };
+    songs.onSelected=[this](const ChartMetaRecord &record,int) {
+      selectedChartRecord=record;
+      if(restoringTabSelection_ || !selectorTabActive() || record.meta.BmsPath.empty()) return;
+      ++previewRequests;
+      musicPlaying=false;
+    };
   }
   static std::vector<LibraryFolderItem> fixtureFolders() {
     using T=LibraryFolderItem::Type;
@@ -254,8 +262,12 @@ int main(int argc,char **argv) {
   MainMenuScene scene;
   auto folders=MainMenuScene::fixtureFolders();
   const std::string scenario=argv[1];
-  if(scenario=="slow-preview-switch" || scenario=="slow-preview-ir" || scenario=="cancel-preview-switch") {
-    const Tab destination=scenario=="slow-preview-ir" ? Tab::Ir : Tab::Music;
+  if(scenario=="slow-preview-switch" || scenario=="slow-preview-ir" || scenario=="slow-preview-course" || scenario=="slow-preview-play" || scenario=="cancel-preview-switch") {
+    const Tab destination=scenario=="slow-preview-ir" ? Tab::Ir :
+        scenario=="slow-preview-course" ? Tab::Course :
+        scenario=="slow-preview-play" ? Tab::Play : Tab::Music;
+    if(scenario=="slow-preview-play") scene.activeTab_=scene.selectorTab_=Tab::Course;
+    const Tab origin=scene.activeTab_;
     std::promise<void> entered,release;
     auto releaseSignal=release.get_future().share();
     Preview preview{[&] { entered.set_value();releaseSignal.wait(); }};
@@ -268,12 +280,12 @@ int main(int argc,char **argv) {
     if(result!=std::future_status::ready) release.set_value();
     switching.get();
     assert(result==std::future_status::ready && "tab selection must not join slow preview/audio work on the UI thread");
-    assert(scene.pendingTab_ && scene.activeTab_==Tab::Play && !scene.musicTab_ && !scene.irTab_);
+    assert(scene.pendingTab_ && scene.activeTab_==origin && !scene.musicTab_ && !scene.irTab_);
     assert(overlay.visible && !scene.applyPendingTabSwitch());
     SDL_Event event{.type=SDL_EVENT_KEY_DOWN,.key={.mod=SDL_KMOD_GUI,.key=SDLK_4}};
     scene.handleEvents(event);
     scene.selectTab(Tab::Course);
-    assert(*scene.pendingTab_==destination && scene.activeTab_==Tab::Play);
+    assert(*scene.pendingTab_==destination && scene.activeTab_==origin);
     if(scenario=="cancel-preview-switch") {
       std::promise<void> cancelEntered;
       auto cancelling=std::async(std::launch::async,[&] {
@@ -290,10 +302,23 @@ int main(int argc,char **argv) {
     } else {
       release.set_value();
       scene.settleTab();
-      assert(scene.activeTab_==destination && scene.activeUtilityTab()->initializations==1);
+      assert(scene.activeTab_==destination && (!scene.activeUtilityTab() || scene.activeUtilityTab()->initializations==1));
     }
     assert(!overlay.visible);
     scene.previewWorker_=nullptr;
+  } else if(scenario=="restored-preview") {
+    scene.reloadFolderItems();scene.reloadChartList();
+    scene.songs.selectedIndex=2;
+    scene.songs.onSelected(scene.songs.get(2),2);
+    for(auto destination : {Tab::Course,Tab::Music,Tab::Ir}) {
+      scene.switchTabAndWait(destination);
+      scene.musicPlaying=destination==Tab::Music;
+      const int requests=scene.previewRequests;
+      scene.switchTabAndWait(Tab::Play);
+      assert(scene.selectedChartRecord->meta.BmsPath=="song2.bms");
+      assert(scene.previewRequests==requests+1 && "restored selection must restart its preview exactly once");
+      assert(!scene.musicPlaying);
+    }
   } else if(scenario=="shell-shortcuts") {
     for (int key=SDLK_1;key<=SDLK_4;++key) {
       scene.switchTabAndWait(Tab::Music);
@@ -468,11 +493,14 @@ int main(int argc,char **argv) {
         path.write_text(source)
         subprocess.run(["c++", "-std=c++20", str(path), "-o", str(cls.binary)], check=True)
 
+    def test_restored_chart_restarts_preview_and_stops_music(self):
+        subprocess.run([str(self.binary), "restored-preview"], check=True)
+
     def test_shell_shortcuts_precede_music_digit_handlers(self):
         subprocess.run([str(self.binary), "shell-shortcuts"], check=True)
 
     def test_tab_selection_does_not_wait_for_preview_shutdown(self):
-        for scenario in ("slow-preview-switch", "slow-preview-ir"):
+        for scenario in ("slow-preview-switch", "slow-preview-ir", "slow-preview-course", "slow-preview-play"):
             with self.subTest(scenario=scenario):
                 subprocess.run([str(self.binary), scenario], check=True, timeout=5)
 

@@ -95,6 +95,10 @@ void IntroScene::layoutView() {
   layoutWidth_ = rendering::window_width;
   layoutHeight_ = rendering::window_height;
   const auto safe = rendering::uiSafeAreaInsets();
+  lastSafeTop = safe.top;
+  lastSafeLeft = safe.left;
+  lastSafeBottom = safe.bottom;
+  lastSafeRight = safe.right;
   const bool portrait = layoutWidth_ < layoutHeight_;
   const int inset = portrait ? 28 : 48;
   rootLayout_->setSize(layoutWidth_, layoutHeight_);
@@ -205,9 +209,12 @@ void IntroScene::update(float) {
   }
 #endif
   processNavigationInput();
+  const auto safe = rendering::uiSafeAreaInsets();
   if (rootLayout_ != nullptr &&
       (layoutWidth_ != rendering::window_width ||
-       layoutHeight_ != rendering::window_height)) {
+       layoutHeight_ != rendering::window_height ||
+       lastSafeTop != safe.top || lastSafeLeft != safe.left ||
+       lastSafeBottom != safe.bottom || lastSafeRight != safe.right)) {
     layoutView();
   }
 }
