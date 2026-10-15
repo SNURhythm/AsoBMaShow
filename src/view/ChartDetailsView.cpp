@@ -344,7 +344,7 @@ void ChartDetailsView::updatePreviewGlow(float level, const audio::Spectrum &spe
     return;
   }
   artwork_->setAmbientGlow({.intensity = intensity, .spread = compact_ ? 28.0f : 80.0f,
-                             .spectrum = previewGlow_.spectrum()});
+                             .spectrum = previewGlow_.spectrum(), .bass = previewGlow_.bass()});
 }
 
 void ChartDetailsView::refreshArtworkLayout() {

@@ -124,41 +124,56 @@ int main() {
     audio::Spectrum treble{};
     constexpr auto trebleBand = audio::kSpectrumBandCount - 4;
     treble[trebleBand] = 1;
-    for (int i = 0; i < 10; ++i) glow.update(0.5f, treble, 1.0f / 60);
+    glow.update(0.5f, treble, 0.035f);
+    require(glow.spectrum()[3] > 0.5f && glow.spectrum()[trebleBand] > 0.9f && glow.bass() > 0.5f,
+            "new peaks attack promptly while previous peaks settle with a smoother release");
+    for (int i = 0; i < 20; ++i) glow.update(0.5f, treble, 1.0f / 60);
     require(glow.spectrum()[trebleBand] > 0.99f && glow.spectrum()[3] < 0.1f,
             "changing frequency moves the peak to the new band while the old peak releases quickly");
     ArtworkPalette solid;
     solid.fill(Color(255, 0, 0));
-    ArtworkGlow shape{.intensity = 1, .spread = 44};
-    shape.spectrum[0] = 1;
+    ArtworkGlow shape{.intensity = 1, .spread = 44, .bass = 1};
+    shape.spectrum[4] = 1;
     const auto mesh = makeArtworkGlowMesh(100, 100, 400, 300, solid, shape);
     const auto outerRing = ArtworkGlowMesh::layers * ArtworkGlowMesh::segments;
     const float topExtent = 100 - mesh.vertices[outerRing].y;
     const float bottomExtent = mesh.vertices[outerRing + ArtworkGlowMesh::segments / 2].y - 400;
-    require(std::abs(topExtent - 44) < 0.001f && bottomExtent < 1,
-            "strong bands use the full spread while quiet bands collapse to the artwork");
+    require(std::abs(topExtent - 44) < 0.001f && bottomExtent < 5,
+            "strong bands use the full spread while quiet bands retain only a close bass glow");
     require(std::abs(mesh.vertices[0].y - 101) < 0.001f &&
                 std::abs(mesh.vertices[ArtworkGlowMesh::segments / 2].y - 399) < 0.001f,
             "the aura follows the actual rectangular image edges");
     const auto alpha = [&](std::size_t ring, std::size_t segment = 0) {
       return mesh.vertices[ring * ArtworkGlowMesh::segments + segment].abgr >> 24;
     };
-    require(alpha(0) > 220 && alpha(6) > 160 && alpha(10) < 15 && alpha(12) == 0,
-            "artwork color fills the aura from the jacket through the middle and fades to transparent");
+    require(alpha(0) > 220 && alpha(6) > 25 && alpha(6) < 60 && alpha(10) < 2 && alpha(12) == 0,
+            "the saturated body fades faster by distance with only a short outer feather");
     for (std::size_t ring = 1; ring <= ArtworkGlowMesh::layers; ++ring)
       require(alpha(ring) <= alpha(ring - 1),
               "color fades continuously by distance without a bright bubble rim");
-    require(alpha(6) > alpha(6, ArtworkGlowMesh::segments / 2) + 60,
+    require(alpha(6) > alpha(6, ArtworkGlowMesh::segments / 2) + 25,
             "active frequency bands spread their color farther than quiet bands");
-    require(alpha(0, ArtworkGlowMesh::segments / 2) == 0,
-            "quiet bands leave no opaque rectangular baseline around the artwork");
-    shape.spectrum[0] = 0.4f;
+    require(alpha(0, ArtworkGlowMesh::segments / 2) <= 8,
+            "the close bass glow stays faint instead of forming an opaque rectangle");
+    shape.bass = 0;
+    shape.spectrum[4] = 0.4f;
     const auto weak = makeArtworkGlowMesh(100, 100, 400, 300, solid, shape);
-    shape.spectrum[0] = 0.8f;
+    shape.spectrum[4] = 0.8f;
     const auto strong = makeArtworkGlowMesh(100, 100, 400, 300, solid, shape);
     require(100 - strong.vertices[outerRing].y > 6 * (100 - weak.vertices[outerRing].y) &&
                 (strong.vertices[0].abgr >> 24) > 3 * (weak.vertices[0].abgr >> 24),
             "moderate audio changes create a wide range of both distance and opacity");
+    shape.bass = 1;
+    const auto bassDriven = makeArtworkGlowMesh(100, 100, 400, 300, solid, shape);
+    require(100 - bassDriven.vertices[outerRing].y > 1.3f * (100 - strong.vertices[outerRing].y),
+            "bass expands the overall aura while mids and highs retain its local shape");
+    ArtworkPalette gradient;
+    gradient.fill(Color(0, 0, 255));
+    std::fill_n(gradient.begin(), kArtworkPaletteSide, Color(255, 0, 0));
+    const auto diffused = makeArtworkGlowMesh(100, 100, 400, 300, gradient, shape);
+    require((diffused.vertices[0].abgr & 0xffffff) == 255 &&
+                ((diffused.vertices[6 * ArtworkGlowMesh::segments].abgr >> 16) & 255) > 0,
+            "near colors stay saturated while neighboring artwork colors mix farther outward");
     const unsigned char pixels[] = {255, 0, 0, 0, 0, 80, 0, 255};
     const auto green = artworkAmbientPalette(pixels, 2, 1);
     require(green && (*green)[7].g >= 200 && (*green)[7].r == 0 && (*green)[7].b == 0,

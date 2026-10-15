@@ -970,7 +970,7 @@ void ImageView::renderImpl(RenderContext &context) {
   }
   const float originalWidth = width, originalHeight = height;
   if (ambientGlow_ && ambientPalette_) {
-    const float scale = 1 + 0.015f * ambientGlow_->intensity;
+    const float scale = 1 + 0.015f * ambientGlow_->intensity * (0.4f + 0.6f * ambientGlow_->bass);
     width *= scale;
     height *= scale;
   }

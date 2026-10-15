@@ -8,6 +8,7 @@ struct ArtworkGlow {
   float intensity = 0;
   float spread = 0;
   audio::Spectrum spectrum{};
+  float bass = 0;
 };
 
 struct ArtworkGlowMesh {
@@ -72,31 +73,53 @@ inline ArtworkGlowMesh makeArtworkGlowMesh(float x, float y, float width, float 
     const auto edge = artworkGlowEdge(phase, width, height);
     const float edgeX = x + edge.x, edgeY = y + edge.y;
     const float nx = edge.nx, ny = edge.ny;
-    // Mirror fixed bass-to-treble bands across the two halves of the aura.
-    // Each band controls how far its color diffuses from the artwork.
+    // Bass drives the overall breath; mids and highs shape mirrored plumes.
     const float frequencyPhase = phase < 0.5f ? phase * 2 : (1 - phase) * 2;
-    const float bandPosition = frequencyPhase * (glow.spectrum.size() - 1);
+    const float bandPosition = 4 + frequencyPhase * (glow.spectrum.size() - 5);
     const auto bandIndex = static_cast<std::size_t>(bandPosition);
+    const float fraction = bandPosition - bandIndex;
+    const float blend = fraction * fraction * (3 - 2 * fraction);
     const float wave = std::clamp(std::lerp(glow.spectrum[bandIndex],
         glow.spectrum[std::min(bandIndex + 1, glow.spectrum.size() - 1)],
-        bandPosition - bandIndex), 0.0f, 1.0f);
+        blend), 0.0f, 1.0f);
     // FFT magnitudes are logarithmic. Expand their visual contrast instead of
     // keeping quiet bands wide and opaque enough to form a rectangular slab.
     const float opacity = wave * wave;
-    const float extent = glow.spread * (0.02f + 0.98f * opacity * wave);
-    const Color color = artworkGlowColor(palette, edge.x / width, edge.y / height);
+    const float bass = std::clamp(glow.bass, 0.0f, 1.0f);
+    const float extent = glow.spread * (0.02f + 0.08f * bass + 0.90f * opacity * wave) *
+        (0.75f + 0.25f * bass);
+    const float u = edge.x / width, v = edge.y / height;
+    const Color color = artworkGlowColor(palette, u, v);
+    const std::array<Color, 4> neighbors = {
+        artworkGlowColor(palette, u - 0.18f, v), artworkGlowColor(palette, u + 0.18f, v),
+        artworkGlowColor(palette, u, v - 0.18f), artworkGlowColor(palette, u, v + 0.18f)};
+    const auto diffuse = [&](uint8_t Color::*channel) {
+      float sum = 2 * (color.*channel);
+      for (const auto &neighbor : neighbors) sum += neighbor.*channel;
+      return sum / 6;
+    };
+    const float diffuseR = diffuse(&Color::r), diffuseG = diffuse(&Color::g),
+                diffuseB = diffuse(&Color::b);
     for (std::size_t ring = 0; ring <= mesh.layers; ++ring) {
       const float radius = static_cast<float>(ring) / mesh.layers;
       const float offset = std::lerp(-1.0f, extent, radius);
       // Fill each band's changing extent with a monotonic distance fade.
       // Its outer edge stays transparent even at the strongest peaks.
       const float radiusSquared = radius * radius;
-      // A filled, stronger core drops away more sharply than a Gaussian.
-      const float taper = 1 - radiusSquared * radiusSquared;
-      const float fade = std::exp(-5 * radiusSquared * radiusSquared) * taper;
+      // A faint contact glow supports a saturated body with a short outer
+      // feather. Both decay from the artwork, without a luminous outer rim.
+      const float taper = (1 - radiusSquared) * (1 - radiusSquared);
+      const float contact = std::exp(-32 * radiusSquared);
+      const float body = std::exp(-5 * radiusSquared);
+      const float alpha = (0.87f * opacity * body +
+          (0.10f * opacity + 0.025f * bass) * contact) * taper;
       auto feathered = color;
+      const float diffusion = radius * radius * (3 - 2 * radius);
+      feathered.r = static_cast<uint8_t>(std::lround(std::lerp(float(color.r), diffuseR, diffusion)));
+      feathered.g = static_cast<uint8_t>(std::lround(std::lerp(float(color.g), diffuseG, diffusion)));
+      feathered.b = static_cast<uint8_t>(std::lround(std::lerp(float(color.b), diffuseB, diffusion)));
       feathered.a = static_cast<uint8_t>(std::lround(color.a * glow.intensity *
-                                                   opacity * fade));
+                                                   alpha));
       mesh.vertices[ring * mesh.segments + i] = {
           edgeX + nx * offset, edgeY + ny * offset, 0, feathered.toABGR()};
       if (ring == mesh.layers) continue;
