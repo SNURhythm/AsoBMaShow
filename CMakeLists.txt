@@ -4862,6 +4862,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(audio_mix_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(audio_mix_tests PRIVATE cxx_std_23)
 
+    add_executable(paged_pcm_mix_tests
+        tests/paged_pcm_mix_tests.cpp
+        src/audio/AudioMix.cpp)
+    target_include_directories(paged_pcm_mix_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(paged_pcm_mix_tests PRIVATE cxx_std_23)
+    target_link_libraries(paged_pcm_mix_tests PRIVATE Threads::Threads)
+    add_test(NAME paged_pcm_mix_tests COMMAND paged_pcm_mix_tests)
+
     add_executable(audio_wrapper_lifecycle_tests
         tests/audio_wrapper_lifecycle_tests.cpp
         src/audio/AudioBackend.cpp

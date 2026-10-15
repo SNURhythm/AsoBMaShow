@@ -1,5 +1,7 @@
 #pragma once
 
+#include "PagedPcmSound.h"
+
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -51,6 +53,9 @@ struct SoundData {
   bool hasBeenScheduled = false;
   std::vector<short> sourceData;
   std::vector<short> outputData;
+  // Install before callbacks start; producer publishes through this fixed owner.
+  // Paged metadata supplies channels/frame count instead of the fields below.
+  std::shared_ptr<audio::PagedPcmSound> pagedOutput;
   size_t sourceFrameCount = 0;
   size_t outputFrameCount = 0;
   std::atomic_bool retired{false};
@@ -271,6 +276,13 @@ using CommandDrainSnapshotHook = void (*)(void *context);
 void DrainCommands(AudioCallbackState &state,
                    CommandDrainSnapshotHook afterSnapshot = nullptr,
                    void *hookContext = nullptr);
+// Read-only preflight for activation followed by mixing AllBuses. A false result
+// requires the caller to leave schedule, voices and chart time unchanged. Uses
+// no ownership operations, allocations, locks, decoding or file access.
+bool ScheduledMixReady(const AudioCallbackState &state,
+                        long long bufferStartMicros, int sampleRate,
+                        std::uint32_t frameCount, int playbackRatePercent,
+                        std::uint32_t bufferOffsetFrames = 0) noexcept;
 void ActivateScheduledSounds(AudioCallbackState &state,
                              long long bufferStartMicros, int sampleRate,
                              std::uint32_t frameCount, int playbackRatePercent,
