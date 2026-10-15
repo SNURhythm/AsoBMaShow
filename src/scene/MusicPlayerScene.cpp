@@ -463,18 +463,24 @@ public:
         ->setHeight(48)
         ->setFlexShrink(0)
         ->setCornerRadius(app_theme::controlRadius());
-    favoriteButton
-        ->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
-                                    app_theme::controlPressed)
-        ->setThemedBorderColors(app_theme::hairlineSubtle,
-                                app_theme::hairlineStrong,
-                                app_theme::accentBorderStrong)
-        ->setStyledBorderWidth(1);
+    favoriteButton->setThemedBackgroundColors(
+        [] { return Color(0, 0, 0, 0); },
+        [this] {
+          auto color = isSelected_ ? main_menu_theme::onSelected() : main_menu_theme::ink();
+          color.a = 18;
+          return color;
+        },
+        [this] {
+          auto color = isSelected_ ? main_menu_theme::onSelected() : main_menu_theme::ink();
+          color.a = 34;
+          return color;
+        });
+    favoriteButton->setStyledBorderWidth(0);
     favoriteText = new TextView(kFontPath, 25);
     favoriteText->setText("☆");
     favoriteText->setAlign(TextView::CENTER);
     favoriteText->setVAlign(TextView::MIDDLE);
-    favoriteText->setThemedColor(app_theme::textSecondary);
+    favoriteText->setThemedColor(main_menu_theme::secondary);
     favoriteButton->setContentView(favoriteText);
     addView(favoriteButton);
   }
@@ -485,8 +491,8 @@ public:
     detail->setText(trackDetail(track));
     isFavorite_ = favorite;
     favoriteText->setText(favorite ? "★" : "☆");
-    favoriteText->setThemedColor(favorite ? app_theme::amber
-                                          : app_theme::textSecondary);
+    favoriteText->setThemedColor(favorite ? main_menu_theme::accent
+                                          : main_menu_theme::secondary);
     favoriteButton->setOnClickListener(std::move(onFavoriteToggle));
     if (artwork != nullptr) {
       const auto path = artworkPathForDisplay(track);
@@ -504,6 +510,8 @@ public:
   }
 
   void onSelected() override {
+    isSelected_ = true;
+    favoriteButton->propagateThemeChange();
     setThemedBackgroundColor(main_menu_theme::selected);
     title->setThemedColor(main_menu_theme::onSelected);
     detail->setThemedColor(main_menu_theme::selectedSecondary);
@@ -513,16 +521,19 @@ public:
   }
 
   void onUnselected() override {
+    isSelected_ = false;
+    favoriteButton->propagateThemeChange();
     setThemedBackgroundColor(main_menu_theme::control);
     title->setThemedColor(main_menu_theme::ink);
     detail->setThemedColor(main_menu_theme::secondary);
-    favoriteText->setThemedColor(isFavorite_ ? app_theme::amber
+    favoriteText->setThemedColor(isFavorite_ ? main_menu_theme::accent
                                            : main_menu_theme::secondary);
     artworkFallback->setThemedColor(main_menu_theme::muted);
   }
 
 private:
   bool isFavorite_ = false;
+  bool isSelected_ = false;
   ImageView *artwork = nullptr;
   TextView *artworkFallback = nullptr;
   TextView *title = nullptr;
