@@ -23,6 +23,100 @@ def method(source, signature):
 
 @unittest.skipUnless(sys.platform == "darwin", "requires host Foundation")
 class IOSNowPlayingTests(unittest.TestCase):
+    def test_stream_completion_and_failure_pause_the_audio_engine(self):
+        stream = (ROOT / "src/audio/IOSMusicStream.mm").read_text()
+        run = method(stream, "void Run()")
+        ended = method(run, "if (ended)")
+        terminal = method(run, "if (result.status == music_stream::ReadStatus::Cancelled ||")
+        fixture = r'''
+#import <Foundation/Foundation.h>
+#include "audio/IOSMusicStreamTimeline.h"
+#include <atomic>
+#include <cassert>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <vector>
+@interface FakeEngine : NSObject
+@property BOOL running;
+- (void)pause;
+@end
+@implementation FakeEngine
+- (void)pause { self.running = NO; }
+@end
+@interface FakePlayer : NSObject
+@property BOOL playing;
+- (void)pause;
+@end
+@implementation FakePlayer
+- (void)pause { self.playing = NO; }
+@end
+namespace music_stream {
+enum class ReadStatus { Cancelled, Error };
+struct ReadResult { ReadStatus status; std::string error; };
+}
+enum class EventKind { Finished, Error, StateChanged };
+struct Source {
+  bool rendering = true;
+  void SetRenderingEnabled(bool enabled) { rendering = enabled; }
+};
+struct Wake { void Wait(std::unique_lock<std::mutex> &) {} };
+struct Feeder {
+  FakeEngine *engine = [FakeEngine new];
+  FakePlayer *player = [FakePlayer new];
+  std::shared_ptr<Source> source = std::make_shared<Source>();
+  std::shared_ptr<Wake> wake = std::make_shared<Wake>();
+  struct Completion { std::atomic<std::uint64_t> played{0}; };
+  std::shared_ptr<Completion> completion = std::make_shared<Completion>();
+  ios_music_stream::Timeline timeline;
+  bool playing = true, ended = true, notified = false;
+  std::mutex mutex;
+  std::string failure;
+  std::vector<EventKind> events;
+  Feeder() { engine.running = YES; player.playing = YES; }
+  void Notify(EventKind kind, const std::string & = {}) { events.push_back(kind); }
+  void Finish() {
+    std::unique_lock lock(mutex);
+    for (int step = 0; step < 1; ++step) { ENDED }
+  }
+  void Accept(music_stream::ReadResult result) {
+    std::unique_lock lock(mutex);
+    for (int step = 0; step < 1; ++step) { TERMINAL }
+  }
+};
+int main() {
+  @autoreleasepool {
+    Feeder complete;
+    complete.timeline.Queue(4096);
+    complete.completion->played = 4095;
+    complete.Finish();
+    assert(complete.engine.running && complete.player.playing && complete.events.empty());
+    complete.completion->played = 4096;
+    complete.Finish();
+    assert(!complete.engine.running && "completed native music must stop engine rendering");
+    assert(!complete.player.playing && !complete.playing && !complete.source->rendering);
+    assert(complete.events == std::vector<EventKind>{EventKind::Finished});
+    for (const auto status : {music_stream::ReadStatus::Cancelled, music_stream::ReadStatus::Error}) {
+      Feeder failed;
+      failed.Accept({status, "fixture failure"});
+      assert(!failed.engine.running && "terminal source failure must stop engine rendering");
+      assert(!failed.player.playing && !failed.playing && !failed.source->rendering);
+      assert(failed.events == std::vector<EventKind>{status == music_stream::ReadStatus::Error
+          ? EventKind::Error : EventKind::StateChanged});
+    }
+  }
+}
+'''.replace("ENDED", ended).replace("TERMINAL", terminal)
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            mm, executable = folder / "terminal.mm", folder / "terminal"
+            mm.write_text(fixture)
+            subprocess.run(["xcrun", "--sdk", "macosx", "clang++", "-std=c++20",
+                            "-fobjc-arc", "-fblocks", "-framework", "Foundation",
+                            "-I", str(ROOT / "src"), str(mm), "-o", str(executable)], check=True)
+            result = subprocess.run([str(executable)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_pause_releases_audio_session_and_resume_keeps_queue(self):
         native = (ROOT / "src/iOSNatives.mm").read_text()
         stream = (ROOT / "src/audio/IOSMusicStream.mm").read_text()

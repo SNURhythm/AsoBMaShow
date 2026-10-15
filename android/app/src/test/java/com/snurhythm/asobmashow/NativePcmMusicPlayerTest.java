@@ -147,6 +147,34 @@ public final class NativePcmMusicPlayerTest {
         } finally { player.close(); }
     }
 
+    @Test public void completedTrackPausesOutputAndLeavesTheFeederAsleep() throws Exception {
+        Source source = new Source(); Output output = new Output(); Events events = new Events();
+        source.pending = false;
+        NativePcmMusicPlayer player = new NativePcmMusicPlayer(source, output, events);
+        try {
+            player.play(); await(() -> output.written == 100);
+            assertTrue(output.playing);
+            output.head = 100; await(() -> events.finished == 1);
+            assertFalse(output.playing); assertFalse(source.enabled);
+            int reads = source.reads, writes = output.writeCalls, heads = output.headCalls;
+            Thread.sleep(100);
+            assertEquals(reads, source.reads);
+            assertEquals(writes, output.writeCalls);
+            assertEquals(heads, output.headCalls);
+        } finally { player.close(); }
+    }
+
+    @Test public void terminalSourceStatesPauseAndReleaseOutput() throws Exception {
+        for (int status : new int[] {NativePcmMusicPlayer.ERROR, NativePcmMusicPlayer.CANCELLED}) {
+            Source source = new Source(); Output output = new Output(); Events events = new Events();
+            source.failure = status;
+            NativePcmMusicPlayer player = new NativePcmMusicPlayer(source, output, events);
+            player.play(); await(() -> source.closed && output.closed);
+            assertFalse(output.playing); assertFalse(source.enabled);
+            assertFalse(player.isPlaying()); assertEquals(0, events.finished);
+        }
+    }
+
     @Test public void partialWritesPreserveEveryFrameAndRateChangesKeepPause() throws Exception {
         Source source = new Source(); Output output = new Output(); Events events = new Events();
         source.pending = false; output.writeLimit = 14;

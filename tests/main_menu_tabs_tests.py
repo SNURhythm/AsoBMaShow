@@ -507,5 +507,88 @@ int main(int argc,char **argv) {
         subprocess.run([str(self.binary), "restore"], check=True)
 
 
+    def test_hidden_dialogs_do_not_relayout_the_idle_menu(self):
+        root = Path(__file__).resolve().parents[1]
+        render = extract((root / "src/scene/MainMenuScene.cpp").read_text(),
+                         "void MainMenuScene::renderScene()")
+        source = r'''
+#include <cassert>
+#include <cstdio>
+#define TARGET_OS_ANDROID 0
+namespace rendering { int window_width=1920, window_height=1080; }
+struct SafeAreaInsets { int top=0, left=0, bottom=0, right=0; };
+SafeAreaInsets safeArea;
+SafeAreaInsets getSafeAreaInsetsUi() { return safeArea; }
+enum class Edge { Top, Left, Right, Bottom };
+struct View {
+  bool visible=false;
+  int resizes=0, renders=0;
+  void setSize(int,int) {}
+  void setPadding(Edge,int) {}
+  void setViewportSize(int,int) {}
+  void updateLayout(int,int) {}
+  void applyYogaLayout() {}
+  void dismiss() {}
+  bool isOpen() { return false; }
+  bool isVisible() { return visible; }
+  bool getVisible() { return visible; }
+  void resize(int,int) { ++resizes; }
+  void render() { ++renders; }
+};
+constexpr int kRootPadding=8;
+struct MainMenuScene {
+  View root, records, finder, archive, utility;
+  View *rootLayout=&root, *recordsModal_=&records,
+       *findBmsModal_=&finder, *archiveUnzipModal_=&archive;
+  View *tabLoadingOverlay_=nullptr, *playOptionsModal=nullptr,
+       *overlayPortal=nullptr, *decideOverlay_=nullptr,
+       *revealContextMenu=nullptr, *parseLogModalRoot=nullptr,
+       *musicModalRoot=nullptr, *tasksModalRoot=nullptr, *tutorial_=nullptr;
+  int lastLayoutWidth=-1,lastLayoutHeight=-1,lastSafeTop=-1,lastSafeLeft=-1,
+      lastSafeBottom=-1,lastSafeRight=-1;
+  bool musicTab=false;
+  View *activeUtilityTab() { return musicTab ? &utility : nullptr; }
+  void resizeTasksModal() {} void resizeParseLogModal() {}
+  void updatePanelLayout() {} void refreshTabPresentation() {}
+  void renderScene();
+};
+RENDER
+int main() {
+  MainMenuScene menu;
+  menu.renderScene(); // Establish the viewport, including hidden dialogs.
+  for (auto *modal : {&menu.records, &menu.finder, &menu.archive}) {
+    assert(modal->resizes==1);
+    modal->resizes=0;
+  }
+  for (int i=0; i<120; ++i) menu.renderScene();
+  menu.musicTab=true;
+  for (int i=0; i<120; ++i) menu.renderScene();
+  assert(menu.utility.renders==120);
+  for (auto *modal : {&menu.records, &menu.finder, &menu.archive}) {
+    if (modal->resizes) std::fprintf(stderr,"hidden dialog resized %d times\n",modal->resizes);
+    assert(modal->resizes==0);
+  }
+  ++rendering::window_width;
+  menu.renderScene();
+  ++safeArea.top;
+  menu.renderScene();
+  for (auto *modal : {&menu.records, &menu.finder, &menu.archive}) {
+    assert(modal->resizes==2);
+    modal->visible=true;
+  }
+  menu.renderScene();
+  for (auto *modal : {&menu.records, &menu.finder, &menu.archive})
+    assert(modal->resizes==3);
+}
+'''
+        source = "#include <initializer_list>\n" + source.replace("RENDER", render)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-idle-menu-") as directory:
+            cpp = Path(directory) / "idle.cpp"
+            binary = Path(directory) / "idle"
+            cpp.write_text(source)
+            subprocess.run(["c++", "-std=c++20", str(cpp), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True, timeout=5)
+
+
 if __name__ == "__main__":
     unittest.main()

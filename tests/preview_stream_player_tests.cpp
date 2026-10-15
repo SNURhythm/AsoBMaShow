@@ -39,15 +39,31 @@ std::shared_ptr<SourceControl> nextSource;
 
 struct BackendControl {
   audio::RenderCallback render = nullptr;
+  audio::RenderTimingCallback timing = nullptr;
+  void *timingContext = nullptr;
   void *context = nullptr;
   std::uint32_t rate = 44100;
+  std::int64_t outputDelayMicros = 0;
+  bool timingKnown = false;
   bool failStart = false;
+  bool failStop = false;
   std::atomic_bool started{false};
+  std::atomic_bool stopOnCallbackThread{false};
+  std::atomic<std::int64_t> outputTimestampMicros{0};
+  std::atomic<std::int64_t> stoppedAtMicros{0};
+  std::thread::id callbackThread = std::this_thread::get_id();
   std::atomic_int stops{0};
   std::atomic_int runtimeQueries{0};
   std::vector<short> pump(std::size_t frames, int channels = 2) {
     assert(render);
     std::vector<short> output(frames * channels, 12345);
+    if (timing) {
+      const auto now = std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+      outputTimestampMicros = now + outputDelayMicros;
+      timing({.outputSteadyMicros = now + outputDelayMicros,
+              .outputTimestampKnown = timingKnown}, timingContext);
+    }
     render(output.data(), static_cast<std::uint32_t>(frames), channels, context);
     return output;
   }
@@ -56,12 +72,24 @@ class FakeBackend final : public audio::IBackend {
 public:
   explicit FakeBackend(std::shared_ptr<BackendControl> control) : control(std::move(control)) {}
   ~FakeBackend() override { control->started = false; }
+  void setRenderTimingCallback(audio::RenderTimingCallback callback, void *context) override {
+    control->timing = callback;
+    control->timingContext = context;
+  }
   bool start(std::string &error) override {
     if (control->failStart) { error = "injected device start failure"; return false; }
     control->started = true;
     return true;
   }
-  bool stop(std::string &) override { control->started = false; ++control->stops; return true; }
+  bool stop(std::string &error) override {
+    control->stoppedAtMicros = std::chrono::duration_cast<std::chrono::microseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    control->stopOnCallbackThread = std::this_thread::get_id() == control->callbackThread;
+    ++control->stops;
+    if (control->failStop) { error = "injected stop failure"; return false; }
+    control->started = false;
+    return true;
+  }
   bool isStarted() const override { return control->started; }
   audio::RuntimeState runtimeState() const override {
     ++control->runtimeQueries;
@@ -250,6 +278,77 @@ void testFullReserveDoesNotWakeEveryFiveMilliseconds() {
   assert(std::chrono::steady_clock::now() - begin < 500ms);
 }
 
+void testFinishedPreviewStopsItsDeviceWithoutCancellingPreparedAudio() {
+  for (const bool knownTiming : {false, true}) {
+    auto input = std::make_shared<SourceControl>();
+    input->samples.assign(1024 * 2, 2345);
+    input->publishAll();
+    auto backend = std::make_shared<BackendControl>();
+    backend->timingKnown = knownTiming;
+    backend->outputDelayMicros = 250000;
+    audio::PreviewStreamPlayer player(std::make_unique<FakeFactory>(backend));
+    std::string error;
+    assert(player.Start(source(input), 0, error));
+    assert(backend->timing && "preview must observe native presentation timing for tail drain");
+    waitFor([&] { return backend->started.load(); });
+    const auto output = backend->pump(1024);
+    assert(std::all_of(output.begin(), output.end(), [](short sample) { return sample == 2345; }));
+    waitFor([&] { return player.GetState().finished; });
+    std::this_thread::sleep_for(100ms);
+    assert(backend->started && "submitted final PCM must not stop before presentation");
+    waitFor([&] { return !backend->started.load(); });
+    if (knownTiming) {
+      const auto finalFrameMicros = (1024LL * 1000000 + backend->rate - 1) / backend->rate;
+      assert(backend->stoppedAtMicros >= backend->outputTimestampMicros + finalFrameMicros &&
+             "device stop must follow the final sample's native presentation time");
+    }
+    assert(!backend->stopOnCallbackThread && "native stop must run outside the render callback");
+    assert(!input->cancelled && "finishing device output must preserve gameplay cache warming");
+    assert(player.GetState().finished && player.GetState().positionFrames == 1024);
+  }
+}
+
+void testStopInterruptsFinalQueueAndPresentationWaits() {
+  for (const bool consume : {false, true}) {
+    auto input = std::make_shared<SourceControl>();
+    input->samples.assign(1024 * 2, 2345);
+    input->publishAll();
+    auto backend = std::make_shared<BackendControl>();
+    backend->timingKnown = true;
+    backend->outputDelayMicros = 5000000;
+    audio::PreviewStreamPlayer player(std::make_unique<FakeFactory>(backend));
+    std::string error;
+    assert(player.Start(source(input), 0, error));
+    waitFor([&] { return backend->started.load(); });
+    if (consume) {
+      backend->pump(1024);
+      waitFor([&] { return player.GetState().finished; });
+      std::this_thread::sleep_for(150ms); // Let the feeder enter the presentation wait.
+    }
+    const auto begin = std::chrono::steady_clock::now();
+    player.Stop();
+    assert(std::chrono::steady_clock::now() - begin < 500ms);
+    assert(input->cancelled && !backend->started);
+  }
+}
+
+void testFailedAutomaticStopQuiescesTheBackend() {
+  auto input = std::make_shared<SourceControl>();
+  input->samples.assign(1024 * 2, 2345);
+  input->publishAll();
+  auto backend = std::make_shared<BackendControl>();
+  backend->timingKnown = true;
+  backend->failStop = true;
+  audio::PreviewStreamPlayer player(std::make_unique<FakeFactory>(backend));
+  std::string error;
+  assert(player.Start(source(input), 0, error));
+  waitFor([&] { return backend->started.load(); });
+  backend->pump(1024);
+  waitFor([&] { return !backend->started.load(); });
+  assert(backend->stops == 1 && !backend->stopOnCallbackThread);
+  assert(player.GetState().finished && !input->cancelled);
+}
+
 void testFutureOriginUnderrunAndStop() {
   auto input = std::make_shared<SourceControl>();
   input->first = 441000;
@@ -353,6 +452,29 @@ void testDeviceAndSourceErrorsAreNotCompletion() {
     assert(!input->enabled);
   }
 }
+
+void testTerminalSourceStatesStopAnAlreadyPlayingDevice() {
+  for (const bool cancelled : {false, true}) {
+    auto input = std::make_shared<SourceControl>();
+    input->samples.assign(44100 * 4 * 2, 2345);
+    input->published = 88200;
+    auto backend = std::make_shared<BackendControl>();
+    audio::PreviewStreamPlayer player(std::make_unique<FakeFactory>(backend));
+    std::string error;
+    assert(player.Start(source(input), 0, error));
+    waitFor([&] { return backend->started.load(); });
+    {
+      std::lock_guard lock(input->mutex);
+      if (cancelled) input->cancelled = true;
+      else input->error = "injected failure during playback";
+    }
+    input->changed.notify_all();
+    waitFor([&] { return !player.GetState().playing; });
+    waitFor([&] { return !backend->started.load(); });
+    assert(!backend->stopOnCallbackThread && !player.GetState().finished);
+    assert(!input->enabled);
+  }
+}
 } // namespace
 
 namespace music_stream {
@@ -400,6 +522,10 @@ std::unique_ptr<IBackendFactory> CreatePlatformBackendFactory() {
 }
 }
 int main() {
+  testTerminalSourceStatesStopAnAlreadyPlayingDevice();
+  testFinishedPreviewStopsItsDeviceWithoutCancellingPreparedAudio();
+  testStopInterruptsFinalQueueAndPresentationWaits();
+  testFailedAutomaticStopQuiescesTheBackend();
   testSpectrumFollowsCurrentFrequencyNotRecentLevels();
   testOutputLevelTracksAudibleSamples();
   testStartupReserveBridgesPreparationStall();

@@ -100,6 +100,7 @@ struct IOSMusicStream::Impl {
             playing = false;
             source->SetRenderingEnabled(false);
             [player pause];
+            [engine pause];
             if (!notified) { notified = true; Notify(EventKind::Finished); }
           } else {
             wake->Wait(lock);
@@ -135,6 +136,7 @@ struct IOSMusicStream::Impl {
           playing = false;
           source->SetRenderingEnabled(false);
           [player pause];
+          [engine pause];
           if (result.status == music_stream::ReadStatus::Error) {
             failure = result.error.empty() ? "Could not prepare music audio" : result.error;
             if (!notified) { notified = true; Notify(EventKind::Error, failure); }

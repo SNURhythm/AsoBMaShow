@@ -39,6 +39,9 @@ struct PreviewSession {
   std::atomic_bool active{true};
   std::atomic_bool sourceEnded{false};
   std::atomic_bool deviceStarted{false};
+  RenderTiming pendingTiming; // Backend callback thread only.
+  std::atomic<std::int64_t> lastOutputEndMicros{0};
+  std::atomic<std::uint32_t> lastOutputBufferFrames{0};
   std::atomic<std::uint64_t> endFrame{std::numeric_limits<std::uint64_t>::max()};
   std::atomic<float> gain{1.0f};
   std::mutex waitMutex;
@@ -58,7 +61,10 @@ struct PreviewSession {
   ~PreviewSession() { Stop(); }
 
   void Stop() {
-    active.store(false, std::memory_order_release);
+    {
+      std::lock_guard lock(waitMutex);
+      active.store(false, std::memory_order_release);
+    }
     if (source) {
       source->SetRenderingEnabled(false);
       source->Cancel();
@@ -86,9 +92,15 @@ struct PreviewSession {
     source->SetRenderingEnabled(false);
   }
 
+  static void Timing(RenderTiming timing, void *context) {
+    static_cast<PreviewSession *>(context)->pendingTiming = timing;
+  }
+
   static void Render(void *output, std::uint32_t frameCount, int channels,
                      void *context) {
     auto &session = *static_cast<PreviewSession *>(context);
+    const auto timing = session.pendingTiming;
+    session.pendingTiming = {};
     if (!output || channels <= 0) return;
     auto *pcm = static_cast<short *>(output);
     std::fill_n(pcm, static_cast<std::size_t>(frameCount) * channels, short{0});
@@ -119,6 +131,15 @@ struct PreviewSession {
     session.outputLevel.store(frameCount ? static_cast<float>(std::sqrt(energy / frameCount)) : 0.0f,
                               std::memory_order_relaxed);
     session.spectrum.push(pcm, frameCount, channels, session.outputRate);
+    if (frames) {
+      const auto durationMicros = static_cast<std::int64_t>(
+          (frames * 1000000ULL + session.outputRate - 1) / session.outputRate);
+      session.lastOutputEndMicros.store(
+          timing.outputTimestampKnown && timing.outputSteadyMicros > 0
+              ? timing.outputSteadyMicros + durationMicros : 0,
+          std::memory_order_relaxed);
+      session.lastOutputBufferFrames.store(frameCount, std::memory_order_relaxed);
+    }
     // Silence inserted during starvation never advances the music position.
     session.consumed.store(first + frames, std::memory_order_release);
   }
@@ -223,7 +244,57 @@ struct PreviewSession {
     return true;
   }
 
-  void Run() noexcept {
+  void FinishOutput() {
+    if (!deviceStarted.load(std::memory_order_acquire)) return;
+    std::unique_lock lock(waitMutex);
+    while (active.load(std::memory_order_acquire) &&
+           consumed.load(std::memory_order_acquire) < written.load(std::memory_order_acquire)) {
+      wake.wait_for(lock, std::chrono::milliseconds(100), [&] {
+        return !active.load(std::memory_order_acquire);
+      });
+    }
+    if (!active.load(std::memory_order_acquire)) return;
+    lock.unlock();
+    // Consumed means copied into a native buffer, not yet heard. Preserve its
+    // presentation tail before stopping CoreAudio, whose stop need not drain.
+    const auto runtime = backend->runtimeState();
+    const double nativePeriod = runtime.effectiveSampleRate
+        ? static_cast<double>(runtime.effectiveBufferFrames) / runtime.effectiveSampleRate : 0;
+    const auto reserve = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+        std::chrono::duration<double>(2 * std::max(nativePeriod,
+            static_cast<double>(lastOutputBufferFrames.load(std::memory_order_relaxed)) / outputRate)));
+    const auto outputEnd = lastOutputEndMicros.load(std::memory_order_relaxed);
+    auto deadline = std::chrono::steady_clock::now();
+    if (outputEnd > 0) {
+      deadline = std::chrono::steady_clock::time_point(std::chrono::microseconds(outputEnd)) + reserve;
+    } else {
+      // No fabricated timestamp: an unknown route gets a conservative, bounded
+      // grace period plus any reported latency and native buffering reserve.
+      const double latency = std::isfinite(runtime.effectiveLatencyMs)
+          ? std::max(0.0, runtime.effectiveLatencyMs) / 1000.0 : 0;
+      deadline += std::chrono::seconds(1) + reserve +
+          std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+              std::chrono::duration<double>(latency));
+    }
+    lock.lock();
+    if (wake.wait_until(lock, deadline, [&] {
+          return !active.load(std::memory_order_acquire);
+        })) return;
+  }
+
+  void StopOutput() {
+    std::string error;
+    if (!backend->stop(error)) {
+      SDL_LogWarn(SDL_LOG_CATEGORY_AUDIO, "Preview output stop failed: %s", error.c_str());
+      // Destruction quiesces callbacks even if explicit stop could not confirm
+      // it. Stop() joins this worker before touching backend ownership.
+      backend.reset();
+    }
+    deviceStarted.store(false, std::memory_order_release);
+    outputLevel.store(0.0f, std::memory_order_relaxed);
+  }
+
+  void RunFeeder() noexcept {
     try {
       cursor = firstFrame;
       windowFirst = firstFrame;
@@ -270,6 +341,7 @@ struct PreviewSession {
         if (final) {
           source->SetRenderingEnabled(false);
           sourceEnded.store(true, std::memory_order_release);
+          FinishOutput();
           return;
         }
       }
@@ -278,6 +350,13 @@ struct PreviewSession {
     } catch (...) {
       Fail("Unexpected preview playback failure");
     }
+  }
+
+  void Run() noexcept {
+    RunFeeder();
+    // Includes source cancellation, device/rate errors and exceptions after
+    // startup. EOF first waits for presentation; explicit Stop interrupts it.
+    if (deviceStarted.load(std::memory_order_acquire)) StopOutput();
   }
 };
 } // namespace
@@ -320,6 +399,7 @@ bool PreviewStreamPlayer::Start(std::shared_ptr<music_stream::Source> source,
     if (error.empty()) error = "Could not open preview audio device";
     return false;
   }
+  session->backend->setRenderTimingCallback(PreviewSession::Timing, session.get());
   const auto runtime = session->backend->runtimeState();
   session->outputRate = runtime.effectiveCallbackSampleRate
       ? runtime.effectiveCallbackSampleRate : runtime.effectiveSampleRate;

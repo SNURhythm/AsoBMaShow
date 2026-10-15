@@ -8152,7 +8152,10 @@ void MainMenuScene::renderScene() {
       safe.left != lastSafeLeft || safe.bottom != lastSafeBottom ||
       safe.right != lastSafeRight;
   rootLayout->setSize(rendering::window_width, rendering::window_height);
-  if (recordsModal_ != nullptr) {
+  // Hidden dialog resizing can request layout for the entire menu tree.
+  // Keep idle preview/music frames free of that work; visible dialogs still
+  // refresh their dynamic controls, and viewport changes update every dialog.
+  if (recordsModal_ != nullptr && (layoutChanged || recordsModal_->isVisible())) {
     recordsModal_->resize(rendering::window_width, rendering::window_height);
   }
   if (playOptionsModal != nullptr && layoutChanged) {
@@ -8190,10 +8193,10 @@ void MainMenuScene::renderScene() {
     resizeTasksModal();
     resizeParseLogModal();
   }
-  if (findBmsModal_ != nullptr) {
+  if (findBmsModal_ != nullptr && (layoutChanged || findBmsModal_->isVisible())) {
     findBmsModal_->resize(rendering::window_width, rendering::window_height);
   }
-  if (archiveUnzipModal_ != nullptr) {
+  if (archiveUnzipModal_ != nullptr && (layoutChanged || archiveUnzipModal_->isVisible())) {
     archiveUnzipModal_->resize(rendering::window_width, rendering::window_height);
   }
   if (layoutChanged) {
