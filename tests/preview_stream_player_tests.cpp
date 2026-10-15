@@ -32,6 +32,7 @@ struct SourceControl {
   std::uint64_t first = 0;
   std::atomic<std::size_t> published{0};
   std::atomic_bool ready{false}, complete{false}, cancelled{false}, failed{false};
+  bool warming = false;
   std::atomic<std::uint64_t> revision{0}, rendered{0};
   std::atomic_int beginRate{0}, cancelCalls{0}, waits{0}, renderCalls{0};
   std::atomic<std::uint32_t> maximumRenderFrames{0};
@@ -298,6 +299,39 @@ void testNaturalEofPreservesPreparationAndPresentationTail() {
   }
 }
 
+void testTerminalPreparationDuringEofDrainStopsOutputWithoutCancellingSource() {
+  for (const bool cancelled : {false, true}) {
+    auto input = std::make_shared<SourceControl>();
+    input->samples.assign(1024 * 2, 0.25f);
+    input->warming = true; // Playback EOF precedes referenced-asset preparation.
+    input->publishAll();
+    auto backend = std::make_shared<BackendControl>();
+    backend->timingKnown = true;
+    backend->outputDelayMicros = 5000000;
+    audio::PreviewStreamPlayer player(std::make_unique<FakeFactory>(backend));
+    start(player, input, backend);
+    backend->pump(2048);
+    waitFor([&] { return player.GetState().finished; });
+    // Start queries once, control queries at startup and after EOF, then the
+    // drain queries presentation state. Inject after that final query so the
+    // failure occurs during FinishOutput rather than its preceding state check.
+    waitFor([&] { return backend->runtimeQueries.load() >= 4; });
+    assert(backend->started);
+    if (cancelled) { input->cancelled = true; input->changedState(); }
+    else input->fail("injected operation failure during EOF warming");
+    const auto limit = std::chrono::steady_clock::now() + 1500ms;
+    while (backend->started && std::chrono::steady_clock::now() < limit)
+      std::this_thread::sleep_for(1ms);
+    assert(!backend->started && "terminal preparation must interrupt the long presentation drain");
+    assert(!backend->stopOnCallbackThread && input->cancelCalls == 0);
+    const auto state = player.GetState();
+    assert(!state.playing && !state.finished);
+    if (!cancelled) assert(state.error == "injected operation failure during EOF warming");
+    player.Stop();
+    assert(input->cancelCalls == 1);
+  }
+}
+
 void testStopInterruptsStartupAndPresentationWaitsAndReplacement() {
   for (const int phase : {0, 1, 2}) {
     auto input = std::make_shared<SourceControl>(); input->samples.assign(1024 * 2, 0.25f);
@@ -422,7 +456,7 @@ PagedPreviewRenderResult PagedPreviewSource::Render(std::span<float> output,
 PagedPreviewState PagedPreviewSource::GetState() const {
   assert(!inCallback); auto &c = *impl->control; std::lock_guard lock(c.mutex);
   const auto elapsed = c.beginRate ? c.rendered * kPreviewSampleRate / c.beginRate : 0;
-  return {.startupReady = c.ready, .preparationComplete = c.complete, .durationKnown = c.complete,
+  return {.startupReady = c.ready, .preparationComplete = c.complete && !c.warming, .durationKnown = c.complete,
           .cancelled = c.cancelled, .firstFrame44100 = c.first,
           .durationFrames44100 = c.first + (c.beginRate ? c.samples.size() / 2 * kPreviewSampleRate / c.beginRate : 0),
           .positionFrames44100 = c.first + elapsed, .revision = c.revision, .error = c.error};
@@ -446,6 +480,7 @@ int main() {
   testSpectrumFollowsAudibleOutputAndResets();
   testPendingFreezesSourceClockAndResumesDirectly();
   testNaturalEofPreservesPreparationAndPresentationTail();
+  testTerminalPreparationDuringEofDrainStopsOutputWithoutCancellingSource();
   testStopInterruptsStartupAndPresentationWaitsAndReplacement();
   testFailuresAndCancellationStopOutputOffCallback();
   testStopRetainsSourceUntilInflightCallbackQuiesces();

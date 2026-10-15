@@ -168,10 +168,21 @@ struct PreviewSession {
           std::chrono::duration_cast<std::chrono::steady_clock::duration>(
               std::chrono::duration<double>(latency));
     }
-    std::unique_lock lock(waitMutex);
-    if (wake.wait_until(lock, deadline, [&] {
-          return !active.load(std::memory_order_acquire);
-        })) return;
+    while (active.load(std::memory_order_acquire)) {
+      // Playback can end while referenced assets are still warming. A later
+      // preparation failure must stop output even during a long native tail;
+      // retain warming ownership and leave Cancel to explicit Stop.
+      const auto state = source->GetState();
+      if (!state.error.empty()) { Fail(state.error); return; }
+      if (state.cancelled) { active.store(false, std::memory_order_release); return; }
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= deadline) return;
+      const auto nextCheck = std::min(deadline, now + std::chrono::seconds(1));
+      std::unique_lock lock(waitMutex);
+      if (wake.wait_until(lock, nextCheck, [&] {
+            return !active.load(std::memory_order_acquire);
+          })) return;
+    }
   }
 
   void StopOutput() {
