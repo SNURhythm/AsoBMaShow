@@ -1,44 +1,32 @@
 #pragma once
 
+#include "../audio/AudioSpectrum.h"
 #include <algorithm>
-#include <array>
 #include <cmath>
 
 class PreviewGlow {
 public:
-  static constexpr std::size_t kWaveformSize = 32;
-  float update(float level, float dt) {
+  float update(float level, const audio::Spectrum &spectrum, float dt) {
     const float target = std::isfinite(level) ? std::sqrt(std::clamp(level * 2, 0.0f, 1.0f)) : 0;
     const float elapsed = std::isfinite(dt) ? std::clamp(dt, 0.0f, 0.25f) : 0;
-    const float timeConstant = target > value_ ? 0.035f : 0.22f;
-    value_ += (target - value_) * (1 - std::exp(-elapsed / timeConstant));
-    // Retain about one second of the actual preview envelope. Different
-    // sections of the halo follow different points in this history.
-    historyTime_ += elapsed;
-    while (historyTime_ >= kHistoryStep) {
-      std::move(history_.begin() + 1, history_.end(), history_.begin());
-      history_.back() = target;
-      historyTime_ -= kHistoryStep;
-    }
-    const float phase = historyTime_ / kHistoryStep;
-    for (std::size_t i = 0; i < waveform_.size(); ++i) {
-      const float next = i + 1 < history_.size() ? history_[i + 1] : target;
-      waveform_[i] = history_[i] + (next - history_[i]) * phase;
+    value_ += (target - value_) * (1 - std::exp(-elapsed / (target > value_ ? 0.012f : 0.10f)));
+    for (std::size_t i = 0; i < bands_.size(); ++i) {
+      const float band = target > 0 && std::isfinite(spectrum[i]) ? std::clamp(spectrum[i], 0.0f, 1.0f) : 0;
+      // Frequency positions never move. Only a short attack/release filter
+      // suppresses block-boundary flicker in the current FFT magnitudes.
+      bands_[i] += (band - bands_[i]) *
+          (1 - std::exp(-elapsed / (band > bands_[i] ? 0.006f : 0.055f)));
+      if (bands_[i] < 0.001f) bands_[i] = 0;
     }
     if (value_ < 0.001f) value_ = 0;
     return value_;
   }
-  const std::array<float, kWaveformSize> &waveform() const { return waveform_; }
+  const audio::Spectrum &spectrum() const { return bands_; }
   void reset() {
     value_ = 0;
-    historyTime_ = 0;
-    history_.fill(0);
-    waveform_.fill(0);
+    bands_.fill(0);
   }
 private:
-  static constexpr float kHistoryStep = 1.0f / 30;
   float value_ = 0;
-  float historyTime_ = 0;
-  std::array<float, kWaveformSize> history_{};
-  std::array<float, kWaveformSize> waveform_{};
+  audio::Spectrum bands_{};
 };

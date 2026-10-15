@@ -1,5 +1,6 @@
 #pragma once
 #include "AudioBackend.h"
+#include "AudioSpectrum.h"
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -38,6 +39,8 @@ public:
   [[nodiscard]] State GetState() const;
   // Normalized RMS of the most recent output block. Lock-free for UI animation.
   [[nodiscard]] float GetOutputLevel() const noexcept;
+  // UI-thread consumer: FFT of the newest post-gain output, without player locks.
+  [[nodiscard]] Spectrum GetOutputSpectrum();
 private:
   struct Impl;
   std::unique_ptr<Impl> impl;

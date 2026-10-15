@@ -331,20 +331,20 @@ void ChartDetailsView::renderImpl(RenderContext &) {
   }
 }
 
-void ChartDetailsView::updatePreviewGlow(float level, float dt) {
+void ChartDetailsView::updatePreviewGlow(float level, const audio::Spectrum &spectrum, float dt) {
   const auto &palette = artwork_->ambientPalette();
   if (!artwork_->getVisible() || !palette || !artworkFrame_->getVisible()) {
     previewGlow_.reset();
     artwork_->clearAmbientGlow();
     return;
   }
-  const float intensity = previewGlow_.update(level, dt);
+  const float intensity = previewGlow_.update(level, spectrum, dt);
   if (intensity == 0) {
     artwork_->clearAmbientGlow();
     return;
   }
   artwork_->setAmbientGlow({.intensity = intensity, .spread = compact_ ? 28.0f : 80.0f,
-                             .waveform = previewGlow_.waveform()});
+                             .spectrum = previewGlow_.spectrum()});
 }
 
 void ChartDetailsView::refreshArtworkLayout() {
@@ -366,9 +366,8 @@ void ChartDetailsView::refreshArtworkLayout() {
 void ChartDetailsView::setCompact(bool compact) {
   View::LayoutBatchScope batch;
   compact_ = compact;
-  // The scroll viewport clips vertically. Reserve the halo's maximum extent;
-  // compact artwork already has ten units above it inside the identity row.
-  setPadding(Edge::Top, rendering::compactMenuCanvasActive ? 0 : compact ? 18 : 80);
+  // The visualizer overflows its image bounds without reserving layout space.
+  setPadding(Edge::Top, 0);
   identity_->setFlexDirection(compact ? FlexDirection::Row : FlexDirection::Column);
   identity_->setAlignItems(compact ? YGAlignCenter : YGAlignStretch);
   identity_->setGap(compact ? 14 : 8);

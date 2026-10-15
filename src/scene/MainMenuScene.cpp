@@ -8048,17 +8048,20 @@ void MainMenuScene::updatePreviewVisuals() {
 void MainMenuScene::update(float dt) {
   if (!applyPendingTabSwitch()) return;
   if (chartDetailsView_) {
-    float level = 0;
+    bool currentPreview = false;
     {
       // Selection clears this chart before the preview debounce. Do not pulse
       // newly cached artwork with audio from the previous selection.
       std::unique_lock lock(selectedChartMutex, std::try_to_lock);
       if (lock.owns_lock() && activeTab_ == Tab::Play && selectedChart &&
           selectedChartRecord && selectedChart->Meta.BmsPath == selectedChartRecord->meta.BmsPath) {
-        level = previewPlayer_.GetOutputLevel();
+        currentPreview = true;
       }
     }
-    chartDetailsView_->updatePreviewGlow(level, dt);
+    // FFT analysis runs after releasing the selection lock, outside playback.
+    const float level = currentPreview ? previewPlayer_.GetOutputLevel() : 0;
+    const auto spectrum = currentPreview ? previewPlayer_.GetOutputSpectrum() : audio::Spectrum{};
+    chartDetailsView_->updatePreviewGlow(level, spectrum, dt);
   }
   updatePreviewVisuals();
   if (irTab_) {

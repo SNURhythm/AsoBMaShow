@@ -978,7 +978,7 @@ void ImageView::renderImpl(RenderContext &context) {
   const float y = getY() + (getHeight() - height) * 0.5F;
   if (ambientGlow_ && ambientPalette_ && width > 0 && height > 0) {
     auto glow = *ambientGlow_;
-    // Keep the bounce and glow inside the existing reserved vertical extent.
+    // Keep the combined bounce and visualizer extent bounded.
     glow.spread = std::max(0.0f, glow.spread -
         std::max(width - originalWidth, height - originalHeight) * 0.5f);
     const auto mesh = makeArtworkGlowMesh(x, y, width, height, *ambientPalette_, glow);
@@ -987,13 +987,30 @@ void ImageView::renderImpl(RenderContext &context) {
       const int bleed = static_cast<int>(std::ceil(ambientGlow_->spread));
       ambientContext.scissor.x -= bleed;
       ambientContext.scissor.width += bleed * 2;
+      if (ambientContext.scissor.height > 0) {
+        ambientContext.scissor.y -= bleed;
+        ambientContext.scissor.height += bleed * 2;
+      }
     }
     ambientContext.appendUiColor(mesh.vertices, mesh.indices,
         ambientContext.makeUiBatchState(
             rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE),
             BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA));
   }
-  submitTexturedRoundedRect(context, texture, s_texColor, x, y,
+  RenderContext imageContext = context;
+  if (ambientGlow_ && ambientPalette_ && imageContext.scissor.width > 0) {
+    // Let the small centered pulse overflow by its own extent, independently
+    // of the much larger spectrum halo and without changing layout bounds.
+    const int bleedX = static_cast<int>(std::ceil((width - originalWidth) * 0.5f));
+    const int bleedY = static_cast<int>(std::ceil((height - originalHeight) * 0.5f));
+    imageContext.scissor.x -= bleedX;
+    imageContext.scissor.width += bleedX * 2;
+    if (imageContext.scissor.height > 0) {
+      imageContext.scissor.y -= bleedY;
+      imageContext.scissor.height += bleedY * 2;
+    }
+  }
+  submitTexturedRoundedRect(imageContext, texture, s_texColor, x, y,
                             width, height, getCornerRadius(), program,
                             std::span<const rendering::UiBatchUniform>(uniforms)
                                 .first(uniformCount));

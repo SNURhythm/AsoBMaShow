@@ -15,12 +15,12 @@ class ChartDetailsView : public View {
 public:
   explicit ChartDetailsView(ImageView *artwork);
   static constexpr float minimumChartHeight() {
-    return 18 + kIdentityHeight + kDifficultyHeight + 28 + 3 * kSectionGap +
+    return kIdentityHeight + kDifficultyHeight + 28 + 3 * kSectionGap +
            3 * kFactRowHeight + 2 * kFactGap + 2 * kFactPadding;
   }
   void setScoreContainer(View *container);
   void setCompact(bool compact);
-  void updatePreviewGlow(float level, float dt);
+  void updatePreviewGlow(float level, const audio::Spectrum &spectrum, float dt);
   void setChart(const ChartMetaRecord *record,
                 const std::optional<ScoreBestSnapshot> &best,
                 int clearRank, const std::string &total);

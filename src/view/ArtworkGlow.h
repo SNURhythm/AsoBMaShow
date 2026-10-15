@@ -1,13 +1,13 @@
 #pragma once
 
 #include "ArtworkColor.h"
-#include "PreviewGlow.h"
+#include "../audio/AudioSpectrum.h"
 #include "../rendering/common.h"
 
 struct ArtworkGlow {
   float intensity = 0;
   float spread = 0;
-  std::array<float, PreviewGlow::kWaveformSize> waveform{};
+  audio::Spectrum spectrum{};
 };
 
 struct ArtworkGlowMesh {
@@ -72,26 +72,36 @@ inline ArtworkGlowMesh makeArtworkGlowMesh(float x, float y, float width, float 
     const auto edge = artworkGlowEdge(phase, width, height);
     const float edgeX = x + edge.x, edgeY = y + edge.y;
     const float nx = edge.nx, ny = edge.ny;
-    const float wavePosition = phase * glow.waveform.size();
-    const auto waveIndex = static_cast<std::size_t>(wavePosition);
-    float blend = wavePosition - waveIndex;
-    blend = blend * blend * (3 - 2 * blend);
-    const float wave = std::clamp(std::lerp(glow.waveform[waveIndex],
-        glow.waveform[(waveIndex + 1) % glow.waveform.size()], blend), 0.0f, 1.0f);
-    const float extent = glow.spread * (0.45f + 0.55f * wave);
+    // Mirror fixed bass-to-treble bands across the two halves of the contour.
+    // Linear interpolation keeps narrow spectral peaks distinct and pointed.
+    const float frequencyPhase = phase < 0.5f ? phase * 2 : (1 - phase) * 2;
+    const float bandPosition = frequencyPhase * (glow.spectrum.size() - 1);
+    const auto bandIndex = static_cast<std::size_t>(bandPosition);
+    const float wave = std::clamp(std::lerp(glow.spectrum[bandIndex],
+        glow.spectrum[std::min(bandIndex + 1, glow.spectrum.size() - 1)],
+        bandPosition - bandIndex), 0.0f, 1.0f);
+    const float extent = glow.spread * (0.08f + 0.92f * std::pow(wave, 1.25f));
     const Color color = artworkGlowColor(palette, edge.x / width, edge.y / height);
     for (std::size_t ring = 0; ring <= mesh.layers; ++ring) {
-      const float radius = static_cast<float>(ring) / mesh.layers;
+      constexpr std::array<float, ArtworkGlowMesh::layers + 1> radii = {
+          0, 0.12f, 0.25f, 0.40f, 0.55f, 0.70f, 0.82f,
+          0.88f, 0.91f, 0.94f, 0.96f, 0.98f, 1.0f};
+      const float radius = radii[ring];
       const float offset = std::lerp(-1.0f, extent, radius);
-      const float aura = std::exp(-2.0f * radius * radius) * (1 - radius);
-      // A soft luminous ribbon follows the same audio-shaped boundary as the
-      // broader color bleed. Its feathered edges avoid a hard outline.
-      const float ribbonDistance = (radius - 0.58f) / 0.075f;
-      const float ribbon = 0.35f * std::exp(-ribbonDistance * ribbonDistance);
-      const float fade = ring == mesh.layers ? 0 : aura + ribbon;
+      const float aura = 0.22f * std::exp(-2 * radius * radius) * (1 - radius);
+      const float edgeDistance = radius - 0.94f;
+      const float core = std::exp(-std::pow(edgeDistance / 0.016f, 2));
+      const float bloom = 0.28f * std::exp(-std::pow(edgeDistance / 0.065f, 2));
+      const float fade = ring == mesh.layers ? 0 : std::min(1.0f, aura + 0.9f * core + bloom);
       auto feathered = color;
-      feathered.a = static_cast<uint8_t>(std::lround(color.a * 0.90f * glow.intensity *
-                                                   (0.65f + 0.35f * wave) * fade));
+      const auto highlight = [core](uint8_t channel) {
+        return static_cast<uint8_t>(std::lround(std::lerp(float(channel), 255.0f, 0.35f * core)));
+      };
+      feathered.r = highlight(color.r);
+      feathered.g = highlight(color.g);
+      feathered.b = highlight(color.b);
+      feathered.a = static_cast<uint8_t>(std::lround(color.a * glow.intensity *
+                                                   (0.40f + 0.60f * wave) * fade));
       mesh.vertices[ring * mesh.segments + i] = {
           edgeX + nx * offset, edgeY + ny * offset, 0, feathered.toABGR()};
       if (ring == mesh.layers) continue;

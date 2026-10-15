@@ -1,5 +1,6 @@
 #include "PreviewStreamPlayer.h"
 #include "ProgressiveMusicSource.h"
+#include "PreviewSpectrumAnalyzer.h"
 
 #include <SDL3/SDL.h>
 #include <algorithm>
@@ -21,8 +22,10 @@ constexpr std::size_t kOutputBatchFrames = 4096;
 static_assert(std::atomic<float>::is_always_lock_free);
 
 struct PreviewSession {
-  explicit PreviewSession(std::atomic<float> &level) : outputLevel(level) {}
+  explicit PreviewSession(std::atomic<float> &level, PreviewSpectrumAnalyzer &analyzer)
+      : outputLevel(level), spectrum(analyzer) {}
   std::atomic<float> &outputLevel;
+  PreviewSpectrumAnalyzer &spectrum;
   std::shared_ptr<music_stream::Source> source;
   std::unique_ptr<IBackend> backend;
   std::uint64_t firstFrame = 0;
@@ -70,6 +73,7 @@ struct PreviewSession {
     }
     deviceStarted.store(false, std::memory_order_release);
     outputLevel.store(0.0f, std::memory_order_relaxed);
+    spectrum.reset();
   }
 
   void Fail(std::string message) {
@@ -90,6 +94,7 @@ struct PreviewSession {
     std::fill_n(pcm, static_cast<std::size_t>(frameCount) * channels, short{0});
     if (!session.active.load(std::memory_order_acquire)) {
       session.outputLevel.store(0.0f, std::memory_order_relaxed);
+      session.spectrum.push(pcm, frameCount, channels, session.outputRate);
       return;
     }
     const auto first = session.consumed.load(std::memory_order_relaxed);
@@ -113,6 +118,7 @@ struct PreviewSession {
     }
     session.outputLevel.store(frameCount ? static_cast<float>(std::sqrt(energy / frameCount)) : 0.0f,
                               std::memory_order_relaxed);
+    session.spectrum.push(pcm, frameCount, channels, session.outputRate);
     // Silence inserted during starvation never advances the music position.
     session.consumed.store(first + frames, std::memory_order_release);
   }
@@ -280,6 +286,7 @@ struct PreviewStreamPlayer::Impl {
   float gain = 1.0f;
   mutable std::mutex mutex;
   std::atomic<float> outputLevel{0.0f};
+  PreviewSpectrumAnalyzer spectrum;
   std::unique_ptr<PreviewSession> session;
 };
 
@@ -299,7 +306,7 @@ bool PreviewStreamPlayer::Start(std::shared_ptr<music_stream::Source> source,
     error = "Preview audio source or backend is unavailable";
     return false;
   }
-  auto session = std::make_unique<PreviewSession>(impl->outputLevel);
+  auto session = std::make_unique<PreviewSession>(impl->outputLevel, impl->spectrum);
   session->source = std::move(source);
   session->firstFrame = firstFrame;
   session->gain.store(impl->gain, std::memory_order_relaxed);
@@ -354,6 +361,10 @@ void PreviewStreamPlayer::SetGain(float gain) {
 
 float PreviewStreamPlayer::GetOutputLevel() const noexcept {
   return impl->outputLevel.load(std::memory_order_relaxed);
+}
+
+Spectrum PreviewStreamPlayer::GetOutputSpectrum() {
+  return impl->spectrum.read();
 }
 
 PreviewStreamPlayer::State PreviewStreamPlayer::GetState() const {

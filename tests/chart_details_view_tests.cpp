@@ -54,6 +54,7 @@ public:
 
 struct GlowCapture final : rendering::UiBatchBackend {
   std::optional<rendering::UiBatchState> glow;
+  std::optional<rendering::UiBatchState> image;
   float top = 0;
   std::vector<rendering::PosColorVertex> glowVertices;
   std::vector<rendering::PosTexCoord0Vertex> imageVertices;
@@ -64,6 +65,7 @@ struct GlowCapture final : rendering::UiBatchBackend {
       top = std::min_element(glowVertices.begin(), glowVertices.end(),
                             [](const auto &a, const auto &b) { return a.y < b.y; })->y;
     } else if (!submission.texturedVertices.empty() && submission.state.uniformCount == 0) {
+      image = submission.state;
       imageVertices.assign(submission.texturedVertices.begin(), submission.texturedVertices.end());
     }
     return true;
@@ -92,36 +94,54 @@ void writePpm(const std::filesystem::path &path, int width, int height, bool spl
 } // namespace
 
 int main() {
+  const audio::Spectrum fullSpectrum = [] {
+    audio::Spectrum bands;
+    bands.fill(1);
+    return bands;
+  }();
   {
     PreviewGlow glow;
-    require(glow.update(0, 1.0f / 60) == 0, "silent preview has no halo");
-    const float attack = glow.update(0.5f, 0.05f);
+    require(glow.update(0, fullSpectrum, 1.0f / 60) == 0, "silent preview has no halo");
+    const float attack = glow.update(0.5f, fullSpectrum, 0.05f);
     require(attack > 0.25f && attack < 1, "audible preview rises smoothly");
-    const float release = glow.update(0, 0.05f);
+    const float release = glow.update(0, fullSpectrum, 0.05f);
     require(release > 0 && release < attack, "silence gently releases the halo");
-    for (int i = 0; i < 180; ++i) glow.update(0, 1.0f / 60);
-    require(glow.update(0, 0) == 0, "stopped preview eventually clears the halo");
-    glow.update(1, 0.1f);
+    for (int i = 0; i < 180; ++i) glow.update(0, fullSpectrum, 1.0f / 60);
+    require(glow.update(0, fullSpectrum, 0) == 0, "stopped preview eventually clears the halo");
+    glow.update(1, fullSpectrum, 0.1f);
     glow.reset();
-    require(std::all_of(glow.waveform().begin(), glow.waveform().end(), [](float value) { return value == 0; }),
-            "chart replacement clears waveform history");
-    require(glow.update(0, 0) == 0, "chart replacement resets previous audio energy");
-    for (int i = 0; i < 32; ++i) glow.update(i % 8 == 0 ? 0.5f : 0.01f, 1.0f / 30);
-    const auto [quiet, loud] = std::minmax_element(glow.waveform().begin(), glow.waveform().end());
-    require(*loud - *quiet > 0.5f, "waveform retains distinct peaks and quiet passages");
+    require(std::all_of(glow.spectrum().begin(), glow.spectrum().end(), [](float value) { return value == 0; }),
+            "chart replacement clears spectrum smoothing");
+    require(glow.update(0, fullSpectrum, 0) == 0, "chart replacement resets previous audio energy");
+    audio::Spectrum bass{};
+    bass[3] = 1;
+    glow.update(0.5f, bass, 0.02f);
+    require(glow.spectrum()[3] > 0.9f && glow.spectrum()[4] == 0,
+            "spectrum peaks attack immediately at their own frequency position");
+    for (int i = 0; i < 60; ++i) glow.update(0.5f, bass, 1.0f / 60);
+    require(glow.spectrum()[3] > 0.99f && glow.spectrum()[4] == 0 && glow.spectrum()[2] == 0,
+            "a sustained tone never cycles into neighboring positions");
+    audio::Spectrum treble{};
+    treble[25] = 1;
+    for (int i = 0; i < 10; ++i) glow.update(0.5f, treble, 1.0f / 60);
+    require(glow.spectrum()[25] > 0.99f && glow.spectrum()[3] < 0.1f,
+            "changing frequency moves the peak to the new band while the old peak releases quickly");
     ArtworkPalette solid;
     solid.fill(Color(255, 0, 0));
     ArtworkGlow shape{.intensity = 1, .spread = 44};
-    shape.waveform[0] = 1;
+    shape.spectrum[0] = 1;
     const auto mesh = makeArtworkGlowMesh(100, 100, 400, 300, solid, shape);
     const auto outerRing = ArtworkGlowMesh::layers * ArtworkGlowMesh::segments;
     const float topExtent = 100 - mesh.vertices[outerRing].y;
     const float bottomExtent = mesh.vertices[outerRing + ArtworkGlowMesh::segments / 2].y - 400;
     require(topExtent > bottomExtent + 20,
-            "a waveform peak extends its part of the contour independently of the quiet side");
+            "a spectral peak extends its contour independently of quiet frequency bands");
     require(std::abs(mesh.vertices[0].y - 101) < 0.001f &&
                 std::abs(mesh.vertices[ArtworkGlowMesh::segments / 2].y - 399) < 0.001f,
             "the aura follows the actual rectangular image edges");
+    require((mesh.vertices[9 * ArtworkGlowMesh::segments].abgr >> 24) > 220 &&
+                (mesh.vertices[0].abgr >> 24) < 80,
+            "spectral peaks have a bright narrow outer edge rather than a diffuse soft contour");
     const unsigned char pixels[] = {255, 0, 0, 0, 0, 80, 0, 255};
     const auto green = artworkAmbientPalette(pixels, 2, 1);
     require(green && (*green)[7].g >= 200 && (*green)[7].r == 0 && (*green)[7].b == 0,
@@ -157,6 +177,8 @@ int main() {
     details.applyYogaLayout();
     require(frame->getWidth() == 472 && frame->getHeight() == 472,
             "missing artwork uses a square placeholder");
+    require(frame->getY() == details.getY(),
+            "visualizer adds no top padding or height to the desktop details");
     const int placeholderSummaryY = summary->getY();
     writePpm(fixture, 32, 18, true);
     require(image->setImage(fspath_to_path_t(fixture)), "wide stagefile fixture decodes");
@@ -170,7 +192,7 @@ int main() {
                 image->getWidth() == frame->getWidth() && image->getHeight() == frame->getHeight() &&
                 summary->getY() == placeholderSummaryY,
             "decoded wide artwork retains the square frame and stable metadata position");
-    details.updatePreviewGlow(0.5f, 0.1f);
+    details.updatePreviewGlow(0.5f, fullSpectrum, 0.1f);
     auto glow = captureGlow(*frame, details);
     require(!glow.glowVertices.empty(),
             "ambient color bleed renders a feathered contour instead of a rectangular shadow");
@@ -183,19 +205,19 @@ int main() {
                 (leftPixel & 255) > ((leftPixel >> 16) & 255),
             "the rendered halo bleeds different artwork colors from each side");
     require(glow.glow && glow.glow->scissor && glow.top >= glow.glow->scissor->y,
-            "the complete halo fits below the scroll viewport's top edge");
+            "the visualizer uses an expanded clip without changing the image layout");
     const auto rest = captureGlow(*image, details).imageVertices;
     require(!rest.empty() && rest[1].x - rest[0].x > frame->getWidth(),
             "the jacket gets a small centered scale pulse during audible preview");
     const auto outer = ArtworkGlowMesh::layers * ArtworkGlowMesh::segments;
     require((glow.glowVertices[outer].abgr >> 24) == 0,
             "the outer contour feathers all the way to transparency");
-    for (int i = 0; i < 180; ++i) details.updatePreviewGlow(0, 1.0f / 60);
+    for (int i = 0; i < 180; ++i) details.updatePreviewGlow(0, fullSpectrum, 1.0f / 60);
     const auto stopped = captureGlow(*frame, details);
     require(!stopped.glow, "stopped preview stops submitting a halo");
     require(stopped.imageVertices[1].x - stopped.imageVertices[0].x == frame->getWidth(),
             "silent preview restores the jacket's original size");
-    details.updatePreviewGlow(0.5f, 0.1f);
+    details.updatePreviewGlow(0.5f, fullSpectrum, 0.1f);
     record.meta.BmsPath = "/charts/replacement.bms";
     details.setChart(&record, std::nullopt, kNoClearTypeRank, "");
     require(!captureGlow(*frame, details).glow, "chart change clears the previous halo");
@@ -207,12 +229,12 @@ int main() {
     details.applyYogaLayout();
     require(frame->getWidth() == 112 && frame->getHeight() == 112,
             "portrait contains wide artwork in a square frame");
-    details.updatePreviewGlow(0.5f, 0.1f);
+    details.updatePreviewGlow(0.5f, fullSpectrum, 0.1f);
     glow = captureGlow(*frame, details);
     require(glow.glow && glow.glow->scissor && glow.top >= glow.glow->scissor->y,
             "compact artwork also leaves room above the halo");
     image->freeImage();
-    details.updatePreviewGlow(0.5f, 0.1f);
+    details.updatePreviewGlow(0.5f, fullSpectrum, 0.1f);
     require(!captureGlow(*frame, details).glow, "unloaded artwork never glows");
     require(!image->ambientPalette(), "unloaded artwork clears its ambient color");
     ImageView::dropCache(fspath_to_path_t(fixture));
@@ -225,11 +247,21 @@ int main() {
     for (const bool compact : {false, true}) {
       details.setCompact(compact);
       details.applyYogaLayout();
-      for (int i = 0; i < 40; ++i) details.updatePreviewGlow(0.5f, 1.0f / 30);
+      const int contentHeight = details.getHeight();
+      const int imageY = frame->getY();
+      for (int i = 0; i < 40; ++i) details.updatePreviewGlow(0.5f, fullSpectrum, 1.0f / 30);
       const auto maximum = captureGlow(*frame, details);
       require(maximum.glow && maximum.glow->scissor &&
-                  maximum.top + 0.01f >= maximum.glow->scissor->y,
-              "full-height artwork at maximum glow and bounce stays below the scroll clip");
+                  maximum.top + 0.01f >= maximum.glow->scissor->y &&
+                  maximum.top < details.getY() && maximum.glow->scissor->y < details.getY(),
+              "full-height artwork visualizer bleeds above the layout through its own expanded clip");
+      require(details.getHeight() == contentHeight && frame->getY() == imageY &&
+                  !YGNodeIsDirty(details.getNode()),
+              "the visualizer never increases content height or shifts the jacket");
+      require(maximum.image && maximum.image->scissor && !maximum.imageVertices.empty() &&
+                  std::all_of(maximum.imageVertices.begin(), maximum.imageVertices.end(),
+                      [&](const auto &v) { return v.y >= maximum.image->scissor->y; }),
+              "the bounced jacket remains visible above the unchanged layout boundary");
     }
     record.meta.StageFile.clear();
     details.setChart(&record, std::nullopt, kNoClearTypeRank, "");

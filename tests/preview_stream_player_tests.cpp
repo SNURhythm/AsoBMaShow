@@ -3,6 +3,7 @@
 #include "audio/ProgressiveMusicSource.h"
 #include <algorithm>
 #include <atomic>
+#include <array>
 #include <cassert>
 #include <chrono>
 #include <cmath>
@@ -102,6 +103,49 @@ std::vector<short> drain(audio::PreviewStreamPlayer &player,
     result.insert(result.end(), output.begin(), output.end());
   }
   return result;
+}
+
+void testSpectrumFollowsCurrentFrequencyNotRecentLevels() {
+  constexpr std::size_t block = 4096;
+  for (const auto rate : {44100U, 48000U}) {
+    auto input = std::make_shared<SourceControl>();
+    input->samples.resize(block * 4 * 2);
+    for (std::size_t frame = 0; frame < block * 4; ++frame) {
+      const double frequency = frame < block ? 100.0 : 4000.0;
+      const short sample = static_cast<short>(14000 * std::sin(6.283185307179586 * frequency * frame / 44100));
+      input->samples[frame * 2] = sample;
+      input->samples[frame * 2 + 1] = -sample;
+    }
+    input->publishAll();
+    auto backend = std::make_shared<BackendControl>();
+    backend->rate = rate;
+    audio::PreviewStreamPlayer player(std::make_unique<FakeFactory>(backend));
+    std::string error;
+    assert(player.Start(source(input), 0, error));
+    waitFor([&] { return backend->started.load(); });
+    backend->pump(block * rate / 44100);
+    const auto bass = player.GetOutputSpectrum();
+    const auto bassPeak = std::max_element(bass.begin(), bass.end());
+    assert(*bassPeak > 0.7f && "actual output tone must produce a visible spectrum peak");
+    backend->pump(block * rate / 44100);
+    const auto treble = player.GetOutputSpectrum();
+    const auto treblePeak = std::max_element(treble.begin(), treble.end());
+    assert(*treblePeak > 0.7f);
+    assert(treblePeak - treble.begin() > bassPeak - bass.begin() + 10);
+    // Linear output resampling can leave quiet spectral images; the former
+    // fundamental must fall below -45 dB instead of persisting as a peak.
+    assert(treble[bassPeak - bass.begin()] < 0.35f);
+    assert(player.GetOutputSpectrum() == treble); // No new output: no cycling or drift.
+    player.SetGain(0);
+    backend->pump(block);
+    const auto muted = player.GetOutputSpectrum();
+    assert(*std::max_element(muted.begin(), muted.end()) == 0);
+    player.SetGain(1);
+    backend->pump(block / 2);
+    player.Stop();
+    const auto stopped = player.GetOutputSpectrum();
+    assert(*std::max_element(stopped.begin(), stopped.end()) == 0);
+  }
 }
 
 void testOutputLevelTracksAudibleSamples() {
@@ -333,6 +377,7 @@ std::unique_ptr<IBackendFactory> CreatePlatformBackendFactory() {
 }
 }
 int main() {
+  testSpectrumFollowsCurrentFrequencyNotRecentLevels();
   testOutputLevelTracksAudibleSamples();
   testStartupReserveBridgesPreparationStall();
   testFutureOriginUnderrunAndStop();
