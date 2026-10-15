@@ -1052,6 +1052,22 @@ void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
     // Select PCM storage once per voice; contiguous gameplay audio must not
     // pay page-publication branches for every interpolated sample.
     const auto mixFrames = [&]<bool Paged>() {
+      size_t cachedPage = std::numeric_limits<size_t>::max();
+      const short *cachedSamples = nullptr;
+      const auto frameSamples = [&](size_t frame) {
+        if constexpr (!Paged) return source.frameSamples<false>(frame);
+        else {
+          // Published pages are immutable and stay alive until callback
+          // quiescence. Acquire once per page transition, not twice per sample.
+          const size_t page = frame / PagedPcmSound::kPageFrames;
+          if (page != cachedPage) {
+            cachedSamples = source.paged->pageSamples(page);
+            cachedPage = page;
+          }
+          return cachedSamples == nullptr ? nullptr
+              : cachedSamples + (frame % PagedPcmSound::kPageFrames) * channels;
+        }
+      };
       for (size_t frame = 0; frame < frameCount - outputOffsetFrames; ++frame) {
         if (playingSound.loop && positionQ32 >= loopLengthQ32) {
           positionQ32 %= loopLengthQ32;
@@ -1067,8 +1083,8 @@ void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
         const float fraction =
             static_cast<float>(positionQ32 & kQ32FractionMask) /
             static_cast<float>(kQ32One);
-        const short *leftSamples = source.frameSamples<Paged>(leftFrame);
-        const short *rightSamples = source.frameSamples<Paged>(rightFrame);
+        const short *leftSamples = frameSamples(leftFrame);
+        const short *rightSamples = frameSamples(rightFrame);
         // Paged callers preflight the whole block before activation. Guard direct
         // misuse as well; never dereference unpublished PCM.
         if constexpr (Paged) {

@@ -173,6 +173,47 @@ void testFutureScheduleAndLoopReadiness() {
   require(state.scheduledSoundCount == 1 && !sound.playing,
           "successful readiness is read-only too");
 }
+
+void testDifferentPagedVoicesAndRepeatedLoopWraps() {
+  // Different owners use the same page indices. Short loops revisit earlier
+  // pages repeatedly within a callback; long voices cross a partial final page.
+  for (int rate : {50, 100, 137, 200}) {
+    std::array<SoundData, 3> contiguous, paged;
+    AudioCallbackState expected, actual;
+    const std::array<size_t, 3> lengths{7, 4099, 8201};
+    for (size_t index = 0; index < lengths.size(); ++index) {
+      const int channels = static_cast<int>(index) + 1;
+      fill(contiguous[index], channels, lengths[index], false);
+      fill(paged[index], channels, lengths[index], true);
+      for (auto pair : {std::pair{&expected, &contiguous[index]},
+                        std::pair{&actual, &paged[index]}}) {
+        require(audio::playback::AppendActiveSound(*pair.first, pair.second,
+            audio::Bus::Bgm, static_cast<std::uint32_t>(index), lengths[index] - 3,
+            0.25F, true), "append distinct paged loop owners");
+      }
+    }
+    for (int block = 0; block < 8; ++block) {
+      std::array<float, 1024> want{}, got{};
+      require(audio::playback::ScheduledMixReady(actual, 0, 48000, 512, rate),
+              "loop pages are ready");
+      allocationCount = 0;
+      countAllocations = true;
+      audio::playback::MixActiveSounds(actual, got, 512, 2, 1, 1, rate);
+      countAllocations = false;
+      audio::playback::MixActiveSounds(expected, want, 512, 2, 1, 1, rate);
+      require(got == want && allocationCount == 0,
+              "distinct page owners and repeated wraps preserve exact PCM without allocation");
+      require(actual.playingSoundCount == expected.playingSoundCount,
+              "loop voice counts match");
+      for (size_t index = 0; index < actual.playingSoundCount; ++index) {
+        require(actual.playingSounds[index].sourceFrameQ32 ==
+                    expected.playingSounds[index].sourceFrameQ32,
+                "page transitions preserve voice positions");
+      }
+    }
+  }
+}
+
 void testSparsePagesOnlyRequireActualInterpolationEndpoints() {
   SoundData sound;
   sound.pagedOutput = std::make_shared<audio::PagedPcmSound>();
@@ -310,6 +351,7 @@ int main() {
     testInterpolationEndpointAndResume();
     testScheduledOffsetsAndExactContiguousEquivalence();
     testFutureScheduleAndLoopReadiness();
+    testDifferentPagedVoicesAndRepeatedLoopWraps();
     testSparsePagesOnlyRequireActualInterpolationEndpoints();
     testCapacityDropsAndCallbackOffsetsMatchActivation();
     testChunkedPreflightChecksDueVoicesBeyondSingleMixCapacity();
