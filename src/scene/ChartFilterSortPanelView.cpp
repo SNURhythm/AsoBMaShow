@@ -9,6 +9,7 @@
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #include "../view/AppTheme.h"
+#include "../rendering/ResponsiveUi.h"
 
 #include <algorithm>
 #include <array>
@@ -21,6 +22,11 @@ constexpr uint32_t kIconCaretUp = 0xf0d8;
 constexpr uint32_t kIconCaretDown = 0xf0d7;
 constexpr uint32_t kIconSquare = 0xf0c8;
 constexpr uint32_t kIconSquareCheck = 0xf14a;
+
+float filterRowHeight() {
+  return rendering::compactMenuCanvasActive ? rendering::compactTouchTarget
+                                            : 42.0f;
+}
 
 struct ClearMarkFilterDefinition {
   const char *label;
@@ -244,7 +250,7 @@ void ChartFilterPanelView::buildStaticContent() {
     if (dropdown == nullptr) {
       return;
     }
-    dropdown->setHeight(42);
+    dropdown->setHeight(filterRowHeight());
   };
 
   clearMarkLabel = makePanelLabel(i18n::message("library.filter_sort.clear_mark.label"));
@@ -449,7 +455,36 @@ void ChartFilterPanelView::refresh(const State &state, bool open) {
   setVisible(open);
   setDisplay(open ? YGDisplayFlex : YGDisplayNone);
   setZIndex(open ? 100 : 0);
-  setHeight(open ? preferredHeight(state) : 0.0f);
+  refreshLayoutDensity();
+}
+
+void ChartFilterPanelView::onLayout() {
+  if (difficultyMaxDropdown != nullptr && lastRowHeight != filterRowHeight()) {
+    refreshLayoutDensity();
+  }
+}
+
+void ChartFilterPanelView::refreshLayoutDensity() {
+  View::LayoutBatchScope batch;
+  lastRowHeight = filterRowHeight();
+  for (auto *row : {clearMarkRow, scoreRankRow, difficultyRow}) {
+    row->setHeight(lastRowHeight);
+  }
+  for (auto *dropdown : {clearMarkDropdown, scoreRankDropdown,
+                         difficultyMinDropdown, difficultyMaxDropdown}) {
+    dropdown->setHeight(lastRowHeight);
+    // Keep compact triggers shrinkable; the popup retains its preferred width.
+    dropdown->setTriggerWidth(rendering::compactMenuCanvasActive
+                                  ? DropdownView::kDefaultWidth : 0.0f);
+  }
+  for (auto *button : {clearMarkOrAboveButton, clearMarkOrBelowButton,
+                       scoreRankOrAboveButton, scoreRankOrBelowButton}) {
+    button->setHeight(lastRowHeight);
+  }
+  const bool showDifficulty = currentState.difficultyRangeEnabled &&
+                              !currentState.difficultyLevels.empty();
+  difficultyContent->setHeight(showDifficulty ? 36.0f + lastRowHeight : 0.0f);
+  setHeight(getVisible() ? preferredHeight(currentState) : 0.0f);
 }
 
 void ChartFilterPanelView::refreshDropdowns(const State &state) {
@@ -493,7 +528,6 @@ void ChartFilterPanelView::refreshDropdowns(const State &state) {
       (state.difficultyMinDropdownOpen || state.difficultyMaxDropdownOpen);
   if (difficultyContent != nullptr) {
     difficultyContent->setVisible(showDifficulty);
-    difficultyContent->setHeight(showDifficulty ? 78.0f : 0.0f);
     difficultyContent->setZIndex(difficultyDropdownOpen ? 100 : 0);
   }
   if (difficultyRow != nullptr) {
@@ -566,12 +600,13 @@ void ChartFilterPanelView::refreshRangeButtons(const State &state) {
 float ChartFilterPanelView::preferredHeight(const State &state) const {
   constexpr float kBaseHeight = 276.0f;
   constexpr float kClearMarkGroupHeight = 90.0f;
-  float height = kBaseHeight;
+  const float rowGrowth = filterRowHeight() - 42.0f;
+  float height = kBaseHeight + 2.0f * rowGrowth;
   if (!state.clearMarkFilterVisible) {
-    height -= kClearMarkGroupHeight;
+    height -= kClearMarkGroupHeight + rowGrowth;
   }
   if (state.difficultyRangeEnabled && !state.difficultyLevels.empty()) {
-    height += 78.0f;
+    height += 78.0f + rowGrowth;
   }
   return std::max(0.0f, height);
 }

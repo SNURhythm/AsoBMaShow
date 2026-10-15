@@ -36,6 +36,9 @@ class AndroidNativeMusicFocusTests(unittest.TestCase):
             "public String loadNativeMusicStream(",
             "public String playNativeMusic()",
             "public String pauseNativeMusic()",
+            "public String stopNativeMusic()",
+            "private void ensureNativeMusicSessionLocked()",
+            "private void updateNativeMusicForegroundServiceLocked(boolean playing)",
             "private void releaseNativeMusicPlayerLocked()",
             "private void releaseNativeMusicPlayerLocked(boolean preserveSession)",
         ]
@@ -43,8 +46,17 @@ class AndroidNativeMusicFocusTests(unittest.TestCase):
         # remains the entrypoint in both the pre-fix and fixed code.
         if "private String pauseNativeMusicLocked(" in source:
             signatures.append("private String pauseNativeMusicLocked(")
+        for signature in ["private void startNativeMusicTransport("]:
+            if signature in source:
+                signatures.append(signature)
+        service = (ROOT / "android/app/src/main/java/com/snurhythm/asobmashow/AsoBMaShowMusicService.java").read_text()
+        service_methods = ["public int onStartCommand(", "private void readUpdate(",
+                           "private String nonEmpty(", "private void sendTransportAction(",
+                           "private void updateNotification()"]
         fixture = (ROOT / "tests/java/AndroidNativeMusicFocusFixture.java").read_text()
         fixture = fixture.replace("// ACTIVITY_METHODS", "\n".join(method(source, s) for s in signatures))
+        constants = service[service.index("    public static final String ACTION_UPDATE"):service.index("    private static final String CHANNEL_ID")]
+        fixture = fixture.replace("// SERVICE_METHODS", constants + "\n".join(method(service, s) for s in service_methods))
         cls.output = tempfile.TemporaryDirectory()
         generated = Path(cls.output.name) / "AndroidNativeMusicFocusFixture.java"
         generated.write_text(fixture)
@@ -59,6 +71,24 @@ class AndroidNativeMusicFocusTests(unittest.TestCase):
                                  "AndroidNativeMusicFocusFixture", name],
                                 capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_latest_queued_remote_request_keeps_foreground_eligibility(self):
+        self.run_case("remote-latest")
+
+    def test_deferred_remote_play_cannot_override_pause_stop_or_replacement(self):
+        self.run_case("remote-cancel")
+
+    def test_remote_play_restores_foreground_before_focus(self):
+        self.run_case("remote-play")
+
+    def test_remote_skips_restore_foreground_through_queue_preparation(self):
+        self.run_case("remote-skip")
+
+    def test_remote_failures_release_bootstrap_foreground(self):
+        self.run_case("remote-failure")
+
+    def test_notification_play_does_not_recurse_through_session_play(self):
+        self.run_case("notification-play")
 
     def test_start_failure_releases_focus(self):
         self.run_case("start-failure")

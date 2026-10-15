@@ -211,6 +211,8 @@ public class AsoBMaShowActivity extends SDLActivity {
     // Keep the foreground/audio-focus lease while native queue logic prepares
     // the next backend. Explicit pause/stop or a failed handoff releases it.
     private boolean nativeMusicHandoff;
+    private long nativeMusicTransportGeneration;
+    private boolean nativeMusicTransportPending;
     private long nativeMusicFocusGeneration;
     private MediaSession nativeMusicSession;
     private String nativeMusicTitle = "AsoBMaShow";
@@ -1829,6 +1831,8 @@ public class AsoBMaShowActivity extends SDLActivity {
     }
 
     private String pauseNativeMusicLocked(boolean preserveFocus) {
+        ++nativeMusicTransportGeneration;
+        nativeMusicTransportPending = false;
         if (!hasNativeMusicLocked()) {
             return ERROR_PREFIX + "No music is loaded.";
         }
@@ -1847,6 +1851,8 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     public String stopNativeMusic() {
         synchronized (nativeMusicLock) {
+            ++nativeMusicTransportGeneration;
+            nativeMusicTransportPending = false;
             nativeMusicHandoff = false;
             nativeMusicResumeAfterFocus = false;
             try {
@@ -2115,7 +2121,7 @@ public class AsoBMaShowActivity extends SDLActivity {
         nativeMusicSession.setCallback(new MediaSession.Callback() {
             @Override
             public void onPlay() {
-                playNativeMusic();
+                startNativeMusicTransport(AsoBMaShowMusicService.ACTION_PLAY);
             }
 
             @Override
@@ -2135,14 +2141,73 @@ public class AsoBMaShowActivity extends SDLActivity {
 
             @Override
             public void onSkipToPrevious() {
-                nativeMusicControlEvent("previous");
+                startNativeMusicTransport(AsoBMaShowMusicService.ACTION_PREVIOUS);
             }
 
             @Override
             public void onSkipToNext() {
-                nativeMusicControlEvent("next");
+                startNativeMusicTransport(AsoBMaShowMusicService.ACTION_NEXT);
+            }
+
+            @Override
+            public void onCustomAction(String action, Bundle extras) {
+                if (!AsoBMaShowMusicService.ACTION_PLAY.equals(action)
+                        && !AsoBMaShowMusicService.ACTION_PREVIOUS.equals(action)
+                        && !AsoBMaShowMusicService.ACTION_NEXT.equals(action)) return;
+                synchronized (nativeMusicLock) {
+                    // Service startup and session callbacks are asynchronous.
+                    // A newer pause/stop/load must cancel an older remote request.
+                    if (extras != null && extras.containsKey(
+                            AsoBMaShowMusicService.EXTRA_TRANSPORT_GENERATION)
+                            && extras.getLong(AsoBMaShowMusicService.EXTRA_TRANSPORT_GENERATION)
+                                    != nativeMusicTransportGeneration) {
+                        if (!nativeMusicTransportPending) {
+                            updateNativeMusicForegroundServiceLocked(isNativeMusicPlayingLocked());
+                        }
+                        return;
+                    }
+                    if (!hasNativeMusicLocked()) {
+                        stopNativeMusicForegroundServiceLocked();
+                        return;
+                    }
+                    nativeMusicTransportPending = false;
+                    // Only the service dispatches this after startForeground.
+                    if (AsoBMaShowMusicService.ACTION_PLAY.equals(action)) {
+                        playNativeMusic();
+                    } else {
+                        nativeMusicHandoff = true;
+                        nativeMusicControlEvent(AsoBMaShowMusicService.ACTION_PREVIOUS.equals(action)
+                                ? "previous" : "next");
+                    }
+                }
             }
         }, new Handler(Looper.getMainLooper()));
+    }
+
+    private void startNativeMusicTransport(String action) {
+        synchronized (nativeMusicLock) {
+            if (!hasNativeMusicLocked() || nativeMusicSession == null) return;
+            Intent intent = new Intent(this, AsoBMaShowMusicService.class)
+                    .setAction(action)
+                    .putExtra(AsoBMaShowMusicService.EXTRA_TITLE, nativeMusicTitle)
+                    .putExtra(AsoBMaShowMusicService.EXTRA_ARTIST, nativeMusicArtist)
+                    .putExtra(AsoBMaShowMusicService.EXTRA_ALBUM, nativeMusicAlbum)
+                    .putExtra(AsoBMaShowMusicService.EXTRA_ARTWORK_PATH, nativeMusicArtworkPath)
+                    .putExtra(AsoBMaShowMusicService.EXTRA_SESSION_TOKEN,
+                            nativeMusicSession.getSessionToken())
+                    .putExtra(AsoBMaShowMusicService.EXTRA_TRANSPORT_GENERATION,
+                            ++nativeMusicTransportGeneration);
+            nativeMusicTransportPending = true;
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(intent);
+                } else {
+                    startService(intent);
+                }
+            } catch (Exception ignored) {
+                nativeMusicTransportPending = false;
+            }
+        }
     }
 
     private void updateNativeMusicSessionLocked(boolean playing) {
@@ -2272,6 +2337,8 @@ public class AsoBMaShowActivity extends SDLActivity {
     }
 
     private void releaseNativeMusicPlayerLocked(boolean preserveSession) {
+        ++nativeMusicTransportGeneration;
+        nativeMusicTransportPending = false;
         if (nativeMusicStream != null) {
             nativeMusicStream.close();
             nativeMusicStream = null;

@@ -76,8 +76,11 @@ private:
   TextInputBox *bpmMaxBox = nullptr;
   View *difficultyContent = nullptr;
   View *difficultyRow = nullptr;
+  float lastRowHeight = -1.0f;
 
+  void onLayout() override;
   void buildStaticContent();
+  void refreshLayoutDensity();
   void refreshDropdowns(const State &state);
   void refreshRangeButtons(const State &state);
   [[nodiscard]] float preferredHeight(const State &state) const;

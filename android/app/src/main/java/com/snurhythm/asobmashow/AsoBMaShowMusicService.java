@@ -31,6 +31,7 @@ public class AsoBMaShowMusicService extends Service {
     public static final String EXTRA_ARTWORK_PATH = "artwork_path";
     public static final String EXTRA_PLAYING = "playing";
     public static final String EXTRA_SESSION_TOKEN = "session_token";
+    static final String EXTRA_TRANSPORT_GENERATION = "transport_generation";
 
     private static final String CHANNEL_ID = "asobmashow_music";
     static final int NOTIFICATION_ID = 0x41534d53;
@@ -85,11 +86,11 @@ public class AsoBMaShowMusicService extends Service {
         } else if (ACTION_PREVIOUS.equals(action)) {
             playing = sessionToken != null;
             if (playing) updateNotification();
-            AsoBMaShowActivity.nativeMusicControlEvent("previous");
+            sendTransportAction(intent, ACTION_PREVIOUS);
         } else if (ACTION_NEXT.equals(action)) {
             playing = sessionToken != null;
             if (playing) updateNotification();
-            AsoBMaShowActivity.nativeMusicControlEvent("next");
+            sendTransportAction(intent, ACTION_NEXT);
         }
 
         updateNotification();
@@ -158,8 +159,11 @@ public class AsoBMaShowMusicService extends Service {
         }
         MediaController.TransportControls controls =
                 new MediaController(this, token).getTransportControls();
-        if (ACTION_PLAY.equals(action)) {
-            controls.play();
+        if (ACTION_PLAY.equals(action) || ACTION_PREVIOUS.equals(action)
+                || ACTION_NEXT.equals(action)) {
+            // The ordinary callbacks bootstrap this service. A separate callback
+            // executes transport only after foreground promotion, without looping.
+            controls.sendCustomAction(action, intent.getExtras());
         } else if (ACTION_PAUSE.equals(action)) {
             controls.pause();
         } else if (ACTION_STOP.equals(action)) {
