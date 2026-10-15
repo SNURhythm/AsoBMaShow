@@ -254,6 +254,66 @@ void testProgressiveStartup(const std::filesystem::path &root) {
   source->Cancel();
   require(source->GetState().cancelled, "Cancel must join the producer");
 }
+void testFullCallbackPreflightPreservesScheduledAndActiveVoices(const std::filesystem::path &root) {
+  writeWav(root / "first.wav", 44100, std::vector<short>(100, 16384));
+  writeWav(root / "second.wav", 44100, std::vector<short>(44100 * 4, 8192));
+  auto source = audio::PagedPreviewSource::Create(*chart(root, "#00011:01\n#00111:02\n"), {}, 0);
+  constexpr std::uint32_t largeFrames = 44100 * 3;
+  std::vector<float> large(largeFrames * 2, 1.0f), small(64 * 2);
+  forbidAllocation = true;
+  const auto unstarted = source->CheckRender(largeFrames);
+  forbidAllocation = false;
+  preparationBlocked.store(false);
+  preparationGate.store(true);
+  require(source->Begin(44100), "cannot begin full-callback readiness preview");
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  while (!preparationBlocked.load() && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::yield();
+  const auto startup = source->GetState();
+  forbidAllocation = true;
+  const auto scheduledPending = source->CheckRender(largeFrames);
+  const auto initial = source->Render(small, 64);
+  const auto activePending = source->CheckRender(largeFrames);
+  const auto pendingRender = source->Render(large, largeFrames);
+  forbidAllocation = false;
+  const auto frozen = source->GetState();
+  preparationGate.store(false); // Release before any assertion can unwind.
+  require(unstarted.status == audio::PagedPreviewRenderStatus::Pending,
+          "unstarted preflight must be allocation-free and pending");
+  require(preparationBlocked.load() && startup.startupReady && !startup.preparationComplete,
+          "future scheduled asset must remain unpublished after startup");
+  require(scheduledPending.status == audio::PagedPreviewRenderStatus::Pending &&
+              activePending.status == audio::PagedPreviewRenderStatus::Pending,
+          "large preflight must include future scheduled sounds with active voices too");
+  require(initial.status == audio::PagedPreviewRenderStatus::Data && initial.frames == 64 &&
+              std::abs(small[0] - 16383.0f * (0.9f / 32768.0f)) < 0.000001f,
+          "pending preflight must preserve the first scheduled voice");
+  require(pendingRender.status == audio::PagedPreviewRenderStatus::Pending &&
+              frozen.positionFrames44100 == 64 &&
+              std::all_of(large.begin(), large.end(), [](float value) { return value == 0; }),
+          "pending full render must clear output without changing active voice or clock");
+  waitPrepared(source);
+  const auto prepared = source->GetState();
+  forbidAllocation = true;
+  const auto beyondEnd = source->CheckRender(UINT32_MAX);
+  const auto repeated = source->CheckRender(UINT32_MAX);
+  const auto resumed = source->Render(small, 64);
+  forbidAllocation = false;
+  require(beyondEnd.status == audio::PagedPreviewRenderStatus::Data &&
+              beyondEnd.frames == prepared.durationFrames44100 - 64 &&
+              repeated.frames == beyondEnd.frames,
+          "full-callback readiness must clamp to known EOF without advancing time");
+  require(resumed.status == audio::PagedPreviewRenderStatus::Data &&
+              std::abs(small[0] - 16383.0f * (0.9f / 32768.0f)) < 0.000001f,
+          "failed preflight must preserve active voice phase for exact resume");
+  (void)renderAll(source);
+  forbidAllocation = true;
+  const auto ended = source->CheckRender(UINT32_MAX);
+  forbidAllocation = false;
+  require(ended.status == audio::PagedPreviewRenderStatus::End && !ended.frames,
+          "preflight at known EOF must return End without allocation");
+}
+
 void testMissingAndExpired(const std::filesystem::path &root) {
   writeWav(root / "first.wav", 44100, std::vector<short>(100, 8192));
   { std::ofstream invalid(root / "second.wav"); invalid << "invalid audio"; }
@@ -273,12 +333,13 @@ int main() {
   const auto root = std::filesystem::temp_directory_path() /
       ("asobmashow-paged-source-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
   try {
-    for (const char *name : {"highlight", "resampling", "missing", "progressive", "timing", "downsampling"}) std::filesystem::create_directories(root / name);
+    for (const char *name : {"highlight", "resampling", "missing", "progressive", "timing", "downsampling", "preflight"}) std::filesystem::create_directories(root / name);
     testHighlightAndReuse(root / "highlight");
     testResampling(root / "resampling");
     testDownsamplingWarmsEveryNativePage(root / "downsampling");
     testMissingAndExpired(root / "missing");
     testProgressiveStartup(root / "progressive");
+    testFullCallbackPreflightPreservesScheduledAndActiveVoices(root / "preflight");
     testFractionalTiming(root / "timing");
     std::filesystem::remove_all(root);
     std::cout << "Paged preview source tests passed\n";

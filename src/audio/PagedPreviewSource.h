@@ -32,7 +32,7 @@ struct PagedPreviewState {
   std::string error;
 };
 
-// A single control thread owns Begin/Cancel. One backend callback owns Render.
+// A single control thread owns Begin/Cancel. One backend callback owns CheckRender/Render.
 // Cancel joins preparation, retaining every owner/page until destruction, which
 // must follow backend quiescence. State queries/waits are control-thread only.
 class PagedPreviewSource {
@@ -47,6 +47,11 @@ public:
 
   // Call once, after opening the backend, before allowing its callback to run.
   bool Begin(int actualOutputRate);
+  // Read-only full-callback preflight for output split across scratch chunks.
+  // Data reports the available request clamped to known EOF; Pending/End do not
+  // change mixer state or time. Callback-only, with the same realtime guarantees
+  // as Render. Published readiness persists until Cancel/failure.
+  [[nodiscard]] PagedPreviewRenderResult CheckRender(std::uint32_t frameCount) const noexcept;
   // Always clears the supplied stereo frames. Pending freezes all mixer state
   // and the frame clock. No allocation, locks, I/O, waits or notifications.
   PagedPreviewRenderResult Render(std::span<float> stereo,

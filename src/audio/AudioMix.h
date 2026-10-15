@@ -279,10 +279,13 @@ void DrainCommands(AudioCallbackState &state,
 // Read-only preflight for activation followed by mixing AllBuses. A false result
 // requires the caller to leave schedule, voices and chart time unchanged. Uses
 // no ownership operations, allocations, locks, decoding or file access.
+// Chunked callers can conservatively include every due sound, including voices
+// a single activation would drop but later chunks can admit after retirement.
 bool ScheduledMixReady(const AudioCallbackState &state,
                         long long bufferStartMicros, int sampleRate,
                         std::uint32_t frameCount, int playbackRatePercent,
-                        std::uint32_t bufferOffsetFrames = 0) noexcept;
+                        std::uint32_t bufferOffsetFrames = 0,
+                        bool includeAllDueSounds = false) noexcept;
 void ActivateScheduledSounds(AudioCallbackState &state,
                              long long bufferStartMicros, int sampleRate,
                              std::uint32_t frameCount, int playbackRatePercent,

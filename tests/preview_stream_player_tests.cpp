@@ -34,7 +34,7 @@ struct SourceControl {
   std::atomic_bool ready{false}, complete{false}, cancelled{false}, failed{false};
   bool warming = false;
   std::atomic<std::uint64_t> revision{0}, rendered{0};
-  std::atomic_int beginRate{0}, cancelCalls{0}, waits{0}, renderCalls{0};
+  std::atomic_int beginRate{0}, cancelCalls{0}, waits{0}, renderCalls{0}, preflightCalls{0};
   std::atomic<std::uint32_t> maximumRenderFrames{0};
   std::atomic_bool blockRender{false}, renderEntered{false}, sourceDestroyed{false};
   bool failBegin = false;
@@ -272,6 +272,25 @@ void testPendingFreezesSourceClockAndResumesDirectly() {
   assert(player.GetState().finished && player.GetState().positionFrames == input->first + 8192);
 }
 
+void testOversizedPendingCallbackIsEntirelySilentAndFreezesClock() {
+  auto input = std::make_shared<SourceControl>();
+  input->first = 441000;
+  input->samples.assign(8192 * 2, 0.25f);
+  input->publish(4096); // The second scratch chunk still needs preparation.
+  auto backend = std::make_shared<BackendControl>();
+  audio::PreviewStreamPlayer player(std::make_unique<FakeFactory>(backend));
+  start(player, input, backend);
+  assert(all(backend->pump(8192), 0) && "a later missing page must silence the entire native callback");
+  assert(player.GetState().buffering && player.GetState().positionFrames == input->first);
+  assert(input->renderCalls == 0 && "readiness must precede every committing scratch chunk");
+  input->publishAll();
+  assert(all(backend->pump(8192), 8191));
+  assert(!player.GetState().buffering && player.GetState().positionFrames == input->first + 8192);
+  assert(input->renderCalls == 2 && input->preflightCalls == 2);
+  backend->pump(1);
+  assert(player.GetState().finished);
+}
+
 void testNaturalEofPreservesPreparationAndPresentationTail() {
   for (const bool knownTiming : {false, true}) {
     auto input = std::make_shared<SourceControl>();
@@ -433,6 +452,16 @@ bool PagedPreviewSource::Begin(int rate) {
   if (impl->control->failBegin) { impl->control->fail("injected Begin failure"); return false; }
   return true;
 }
+PagedPreviewRenderResult PagedPreviewSource::CheckRender(std::uint32_t count) const noexcept {
+  assert(inCallback);
+  auto &c = *impl->control; ++c.preflightCalls;
+  if (c.cancelled || c.failed || !c.ready) return {};
+  const auto offset = c.rendered.load(); const auto available = c.published.load();
+  if (offset >= available) return {c.complete ? PagedPreviewRenderStatus::End : PagedPreviewRenderStatus::Pending, 0};
+  if (offset + count > available && !c.complete) return {};
+  return {PagedPreviewRenderStatus::Data,
+          static_cast<std::uint32_t>(std::min<std::size_t>(count, available - offset))};
+}
 PagedPreviewRenderResult PagedPreviewSource::Render(std::span<float> output,
                                                     std::uint32_t count) noexcept {
   assert(inCallback);
@@ -479,6 +508,7 @@ int main() {
   testFloatGainPrecedesClippingAndOutputEnergy();
   testSpectrumFollowsAudibleOutputAndResets();
   testPendingFreezesSourceClockAndResumesDirectly();
+  testOversizedPendingCallbackIsEntirelySilentAndFreezesClock();
   testNaturalEofPreservesPreparationAndPresentationTail();
   testTerminalPreparationDuringEofDrainStopsOutputWithoutCancellingSource();
   testStopInterruptsStartupAndPresentationWaitsAndReplacement();

@@ -84,6 +84,30 @@ struct PagedPreviewSource::Impl {
   std::uint64_t finalOutput = 0; // Worker-owned until durationKnown publication.
   bool begun = false;
 
+  struct RenderPosition { long long micros; std::uint32_t offset; };
+  RenderPosition renderPosition() const noexcept {
+    // Integer-second epochs preserve scheduler rounding across scratch chunks.
+    return {static_cast<long long>((renderedOutput / outputRate) * 1000000),
+            static_cast<std::uint32_t>(renderedOutput % outputRate)};
+  }
+  PagedPreviewRenderResult checkRender(std::uint32_t frameCount,
+                                       bool includeAllDueSounds) const noexcept {
+    if (cancelled.load(std::memory_order_relaxed) || failed.load(std::memory_order_acquire) ||
+        !startupReady.load(std::memory_order_acquire)) return {};
+    if (durationKnown.load(std::memory_order_acquire)) {
+      const auto end = durationOutput.load(std::memory_order_relaxed);
+      if (renderedOutput >= end) return {PagedPreviewRenderStatus::End, 0};
+      frameCount = static_cast<std::uint32_t>(std::min<std::uint64_t>(frameCount,
+                                                                  end - renderedOutput));
+    }
+    if (!frameCount) return {};
+    const auto position = renderPosition();
+    if (!playback::ScheduledMixReady(*callback, position.micros, outputRate,
+                                     frameCount, 100, position.offset,
+                                     includeAllDueSounds)) return {};
+    return {PagedPreviewRenderStatus::Data, frameCount};
+  }
+
   void checkpoint() const {
     if (cancelled.load(std::memory_order_relaxed))
       throw std::runtime_error("Preview preparation cancelled.");
@@ -359,31 +383,20 @@ bool PagedPreviewSource::Begin(int actualOutputRate) {
   }
   return false;
 }
+PagedPreviewRenderResult PagedPreviewSource::CheckRender(std::uint32_t frameCount) const noexcept {
+  return impl->checkRender(frameCount, true);
+}
 PagedPreviewRenderResult PagedPreviewSource::Render(std::span<float> stereo,
                                                    std::uint32_t frameCount) noexcept {
   if (stereo.size() / 2 < frameCount) return {};
   stereo = stereo.first(static_cast<std::size_t>(frameCount) * 2);
   std::fill(stereo.begin(), stereo.end(), 0.0f);
-  if (impl->cancelled.load(std::memory_order_relaxed) || impl->failed.load(std::memory_order_acquire) ||
-      !impl->startupReady.load(std::memory_order_acquire)) return {};
-  const bool known = impl->durationKnown.load(std::memory_order_acquire);
-  if (known) {
-    const auto end = impl->durationOutput.load(std::memory_order_relaxed);
-    if (impl->renderedOutput >= end) return {PagedPreviewRenderStatus::End, 0};
-    frameCount = static_cast<std::uint32_t>(std::min<std::uint64_t>(frameCount,
-                                                              end - impl->renderedOutput));
-  }
-  if (frameCount == 0) return {};
-  // Use an integer-second epoch and a small frame offset. Translating by
-  // whole seconds preserves the shared scheduler's nearest-frame mapping even
-  // at 768 kHz, without accumulating per-callback microsecond rounding drift.
-  const auto seconds = impl->renderedOutput / impl->outputRate;
-  const auto micros = static_cast<long long>(seconds * 1000000);
-  const auto offset = static_cast<std::uint32_t>(impl->renderedOutput % impl->outputRate);
-  if (!playback::ScheduledMixReady(*impl->callback, micros, impl->outputRate,
-                                   frameCount, 100, offset)) return {};
-  playback::ActivateScheduledSounds(*impl->callback, micros, impl->outputRate,
-                                    frameCount, 100, offset);
+  const auto ready = impl->checkRender(frameCount, false);
+  if (ready.status != PagedPreviewRenderStatus::Data) return ready;
+  frameCount = ready.frames;
+  const auto position = impl->renderPosition();
+  playback::ActivateScheduledSounds(*impl->callback, position.micros, impl->outputRate,
+                                    frameCount, 100, position.offset);
   playback::MixActiveSounds(*impl->callback, stereo, frameCount, 2,
                             impl->gains.bgm, impl->gains.keysound, 100);
   impl->renderedOutput += frameCount;

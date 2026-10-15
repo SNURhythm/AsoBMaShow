@@ -924,7 +924,7 @@ void DrainCommands(AudioCallbackState &state,
 bool ScheduledMixReady(const AudioCallbackState &state,
                         long long bufferStartMicros, int sampleRate,
                         std::uint32_t frameCount, int playbackRatePercent,
-                        std::uint32_t bufferOffsetFrames) noexcept {
+                        std::uint32_t bufferOffsetFrames, bool includeAllDueSounds) noexcept {
   if (frameCount > std::numeric_limits<std::uint32_t>::max() - bufferOffsetFrames) {
     return false;
   }
@@ -945,7 +945,7 @@ bool ScheduledMixReady(const AudioCallbackState &state,
         scheduled.startMicros, bufferStartMicros, sampleRate,
         frameCount + bufferOffsetFrames, playbackRatePercent, due);
     if (!due) break;
-    if (scheduled.soundData == nullptr || activeCount >= kMaxActiveSounds ||
+    if (scheduled.soundData == nullptr || (!includeAllDueSounds && activeCount >= kMaxActiveSounds) ||
         scheduled.startFrame > kQ32MaximumWholeFrame) continue;
     const auto source = outputPcmView(scheduled.soundData);
     if (source.pending) return false;

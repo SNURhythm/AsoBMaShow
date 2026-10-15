@@ -97,7 +97,15 @@ struct PreviewSession {
     double energy = 0.0;
     std::uint32_t offset = 0, lastDataEnd = 0;
     bool pending = false, ended = false;
-    while (offset < frameCount && session.active.load(std::memory_order_acquire) &&
+    if (frameCount > kOutputBatchFrames && session.active.load(std::memory_order_acquire) &&
+        !session.sourceEnded.load(std::memory_order_relaxed)) {
+      // Commit no scratch chunk until the entire native block is ready. Pages
+      // only publish once, so successful preflight covers all later chunks.
+      const auto ready = session.source->CheckRender(frameCount);
+      pending = ready.status == PagedPreviewRenderStatus::Pending;
+      ended = ready.status == PagedPreviewRenderStatus::End;
+    }
+    while (!pending && !ended && offset < frameCount && session.active.load(std::memory_order_acquire) &&
            !session.sourceEnded.load(std::memory_order_relaxed)) {
       const auto count = std::min<std::uint32_t>(frameCount - offset, kOutputBatchFrames);
       const auto rendered = session.source->Render(

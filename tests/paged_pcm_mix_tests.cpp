@@ -220,6 +220,48 @@ void testCapacityDropsAndCallbackOffsetsMatchActivation() {
           "overflowing chunk boundary rejected without mutation");
 }
 
+void testChunkedPreflightChecksDueVoicesBeyondSingleMixCapacity() {
+  SoundData shortSound, later;
+  fill(shortSound, 1, 4, false);
+  later.pagedOutput = std::make_shared<audio::PagedPcmSound>();
+  require(later.pagedOutput->publishMetadata(1, 4), "later voice metadata");
+  AudioCallbackState state;
+  require(audio::playback::PrepareScheduledSoundCapacity(state, kMaxActiveSounds + 1),
+          "reserve chunked schedule");
+  for (size_t index = 0; index < kMaxActiveSounds; ++index)
+    require(audio::playback::InsertScheduledSound(state,
+        {.soundData = &shortSound, .sequence = index}), "schedule early short voices");
+  require(audio::playback::InsertScheduledSound(state,
+      {.soundData = &later, .startMicros = 8000, .sequence = kMaxActiveSounds}),
+          "schedule later missing voice");
+  allocationCount = 0;
+  countAllocations = true;
+  const bool singleReady = audio::playback::ScheduledMixReady(state, 0, 1000, 16, 100);
+  const bool chunkedReady = audio::playback::ScheduledMixReady(state, 0, 1000, 16, 100, 0, true);
+  countAllocations = false;
+  require(singleReady && !chunkedReady && allocationCount == 0,
+          "chunked preflight must check later voices admitted after early voices retire");
+  require(state.scheduledSoundCount == kMaxActiveSounds + 1 && state.playingSoundCount == 0 &&
+              !shortSound.playing && !later.playing, "chunked readiness must leave state untouched");
+  const std::array<short, 4> samples{8192, 8192, 8192, 8192};
+  require(later.pagedOutput->publishPage(0, samples), "publish later due voice");
+  allocationCount = 0;
+  countAllocations = true;
+  const bool publishedReady = audio::playback::ScheduledMixReady(state, 0, 1000, 16, 100, 0, true);
+  countAllocations = false;
+  require(publishedReady && allocationCount == 0, "published later voice must unblock allocation-free preflight");
+  std::array<float, 16> block{};
+  audio::playback::ActivateScheduledSounds(state, 0, 1000, 8, 100);
+  audio::playback::MixActiveSounds(state, block, 8, 2, 1, 1, 100);
+  require(state.playingSoundCount == 0 && state.scheduledSoundCount == 1,
+          "earlier chunk must retire short voices before later admission");
+  audio::playback::ActivateScheduledSounds(state, 0, 1000, 8, 100, 8);
+  std::fill(block.begin(), block.end(), 0.0f);
+  audio::playback::MixActiveSounds(state, block, 8, 2, 1, 1, 100);
+  require(block[0] > 0 && state.scheduledSoundCount == 0,
+          "later chunk must actually admit the voice checked by full-span preflight");
+}
+
 void testProducerPublicationMakesImmutablePcmVisible() {
   audio::PagedPcmSound sound;
   std::atomic_bool producerSucceeded{true};
@@ -270,6 +312,7 @@ int main() {
     testFutureScheduleAndLoopReadiness();
     testSparsePagesOnlyRequireActualInterpolationEndpoints();
     testCapacityDropsAndCallbackOffsetsMatchActivation();
+    testChunkedPreflightChecksDueVoicesBeyondSingleMixCapacity();
     testProducerPublicationMakesImmutablePcmVisible();
     std::cout << "Paged PCM mixer tests passed\n";
     return 0;
