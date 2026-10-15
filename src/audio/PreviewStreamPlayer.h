@@ -5,12 +5,11 @@
 #include <memory>
 #include <string>
 
-namespace music_stream { class Source; }
-
 namespace audio {
+class PagedPreviewSource;
 // Foreground-only chart preview output. It owns a separate backend instance;
 // gameplay's mixer, callbacks, scheduling, and complete-sound ownership remain
-// unchanged. Source reads and resampling run on the feeder, never the callback.
+// unchanged. Preparation runs in the paged source; callbacks mix published PCM.
 class PreviewStreamPlayer {
 public:
   struct State {
@@ -27,11 +26,10 @@ public:
   PreviewStreamPlayer(const PreviewStreamPlayer &) = delete;
   PreviewStreamPlayer &operator=(const PreviewStreamPlayer &) = delete;
 
-  // Opens the device, then asynchronously fills the startup reserve (or EOF) before
+  // Opens the device, then waits for the source startup reserve before
   // starting output. Async failures are logged and exposed through GetState.
-  bool Start(std::shared_ptr<music_stream::Source> source,
-             std::uint64_t firstFrame, std::string &error);
-  // Cancels preparation, joins the feeder, and quiesces output before returning.
+  bool Start(std::shared_ptr<PagedPreviewSource> source, std::string &error);
+  // Cancels/joins preparation and control, then quiesces output before returning.
   void Stop();
   // Device settings take effect on the next Start. Gain applies immediately.
   void SetRequest(StreamRequest request);

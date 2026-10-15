@@ -10,8 +10,6 @@
 #include <span>
 #include <string>
 
-namespace audio { class DecodedAssetCache; }
-
 namespace music_stream {
 
 inline constexpr int kSampleRate = 44100;
@@ -39,10 +37,6 @@ struct State {
   bool cancelled = false;
   std::string error;
 };
-struct PreviewGains {
-  float bgm = 1.0f;
-  float keysound = 1.0f;
-};
 struct Statistics {
   std::uint64_t decoderOpens = 0;
   std::uint64_t archiveReads = 0;
@@ -56,13 +50,6 @@ public:
   static std::shared_ptr<Source> Create(std::unique_ptr<bms_parser::Chart> chart,
                                         std::filesystem::path stagingParent,
                                         bool clubMode = false);
-  // Starts directly at an arbitrary chart frame, including overlapping tails.
-  // Prepares the entire remaining timeline independently of playback and warms
-  // earlier referenced assets for gameplay. Snapshots chart data before returning.
-  static std::shared_ptr<Source> CreatePreview(
-      const bms_parser::Chart &chart, std::filesystem::path stagingParent,
-      std::shared_ptr<audio::DecodedAssetCache> decodedAssets,
-      std::uint64_t firstFrame, PreviewGains gains = {});
   ~Source();
   Source(const Source &) = delete;
   Source &operator=(const Source &) = delete;

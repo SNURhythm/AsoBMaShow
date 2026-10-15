@@ -14,7 +14,7 @@
 #include "../CourseConstraintUtils.h"
 #include "../LongNoteModeUtils.h"
 #include "../audio/MusicPlaylist.h"
-#include "../audio/ProgressiveMusicSource.h"
+#include "../audio/PagedPreviewSource.h"
 #include "../tinyfiledialogs.h"
 #include <fstream>
 #include <algorithm>
@@ -1711,8 +1711,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
           previewDecodedAssets_ = std::make_shared<audio::DecodedAssetCache>(
               scratch, audio::DecodedAssetCache::kUnlimitedRetainedBytes);
           const auto &audioSettings = this->context.settings.audioVideo.audio;
-          auto source = music_stream::Source::CreatePreview(
-              *chart, scratch, previewDecodedAssets_, previewStartFrame_,
+          auto source = audio::PagedPreviewSource::Create(
+              *chart, previewDecodedAssets_, previewStartFrame_,
               {.bgm = audioSettings.masterVolume * audioSettings.bgmVolume,
                .keysound = audioSettings.masterVolume * audioSettings.keysoundVolume});
           if (isCancelled()) {
@@ -1735,7 +1735,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
             // gameplay mixer's headroom when several loud keysounds overlap.
             previewPlayer_.SetGain(1.0f);
             std::string error;
-            if (!previewPlayer_.Start(std::move(source), previewStartFrame_, error)) {
+            if (!previewPlayer_.Start(std::move(source), error)) {
               SDL_Log("Preview playback failed: %s", error.c_str());
             } else {
               // Let progressive audio fill/start while visual assets load. No
@@ -8049,8 +8049,8 @@ void MainMenuScene::updatePreviewVisuals() {
   // positionFrames is absolute, including previewStartFrame_, and advances
   // only when the audio callback consumes source frames (not during underruns).
   const auto frames = state.positionFrames;
-  const auto micros = (frames / music_stream::kSampleRate) * 1'000'000 +
-      (frames % music_stream::kSampleRate) * 1'000'000 / music_stream::kSampleRate;
+  const auto micros = (frames / audio::kPreviewSampleRate) * 1'000'000 +
+      (frames % audio::kPreviewSampleRate) * 1'000'000 / audio::kPreviewSampleRate;
   context.jukebox.seekVisualsToSongTime(static_cast<long long>(micros));
 }
 

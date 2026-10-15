@@ -23,16 +23,22 @@ struct DecodedAssetCache {
   std::size_t retainedLimit;
 };
 }
-namespace music_stream {
-inline constexpr std::uint64_t kSampleRate = 44100;
-struct Source {
+namespace audio {
+inline constexpr std::uint64_t kPreviewSampleRate = 44100;
+struct PagedPreviewSource {
   static inline bool failConstruction = false;
   struct Gains { float bgm, keysound; };
-  static std::shared_ptr<Source> CreatePreview(bms_parser::Chart &,
-      std::filesystem::path, std::shared_ptr<audio::DecodedAssetCache>,
-      std::uint64_t, Gains) {
+  static inline Gains lastGains{};
+  static inline std::shared_ptr<DecodedAssetCache> lastCache;
+  std::uint64_t first = 0;
+  static std::shared_ptr<PagedPreviewSource> Create(const bms_parser::Chart &,
+      std::shared_ptr<DecodedAssetCache> cache, std::uint64_t first, Gains gains) {
     if (failConstruction) throw std::runtime_error("duration exceeds frame limit");
-    return std::make_shared<Source>();
+    lastGains = gains;
+    lastCache = std::move(cache);
+    auto result = std::make_shared<PagedPreviewSource>();
+    result->first = first;
+    return result;
   }
   void Cancel() {}
 };
@@ -53,10 +59,9 @@ struct Player {
   struct Request { std::string deviceId; unsigned sampleRate, bufferFrames; };
   std::vector<std::string> *events = nullptr;
   bool fail = false;
-  bool Start(std::shared_ptr<music_stream::Source>, std::uint64_t first,
-             std::string &) {
+  bool Start(std::shared_ptr<audio::PagedPreviewSource> source, std::string &) {
     events->push_back("audio-start");
-    state = {.playing = !fail, .positionFrames = first};
+    state = {.playing = !fail, .positionFrames = source->first};
     return !fail;
   }
   void Stop() { state = {}; events->push_back("audio-stop"); }
@@ -118,13 +123,19 @@ int main() {
   try {
     Scene scene;
     std::atomic_bool cancelled = false;
-    music_stream::Source::failConstruction = true;
+    audio::PagedPreviewSource::failConstruction = true;
     scene.process({.meta = {.BmsPath = "malformed.bms"}}, cancelled);
     require(!scene.selectedChart && !scene.previewDecodedAssets_ &&
                 !scene.context.jukebox.loaded && !scene.previewPlayer_.state.playing,
             "preview construction failure must retire partial resources without escaping the worker");
-    music_stream::Source::failConstruction = false;
+    audio::PagedPreviewSource::failConstruction = false;
+    scene.context.settings.audioVideo.audio.masterVolume = 0.5f;
+    scene.context.settings.audioVideo.audio.bgmVolume = 0.4f;
+    scene.context.settings.audioVideo.audio.keysoundVolume = 0.6f;
     scene.process({.meta = {.BmsPath = "chart.bms"}}, cancelled);
+    require(audio::PagedPreviewSource::lastGains.bgm == 0.2f &&
+                audio::PagedPreviewSource::lastGains.keysound == 0.3f,
+            "master and bus gains must reach the paged source before overlap clipping");
     require(scene.previewDecodedAssets_ &&
                 scene.previewDecodedAssets_->retainedLimit == audio::DecodedAssetCache::kUnlimitedRetainedBytes,
             "selected-chart preview must retain all prepared audio for gameplay");
@@ -135,7 +146,11 @@ int main() {
     require(audio < visual, "progressive audio must start before BGA loading");
     require(scene.selectedChart && !scene.mediaReady,
             "visual preparation must not mark gameplay audio resources ready");
+    const auto preparedCache = scene.previewDecodedAssets_;
     scene.stopPlayback();
+    require(scene.previewDecodedAssets_ == preparedCache &&
+                audio::PagedPreviewSource::lastCache == preparedCache,
+            "stopping preview must retain its decoded cache for gameplay handoff");
     require(!scene.context.jukebox.loaded, "retired preview must release BGA");
 
     scene.context.jukebox.loaded = true; // The subsequent full gameplay load.

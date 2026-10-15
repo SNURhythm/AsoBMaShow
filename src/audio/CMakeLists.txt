@@ -4,7 +4,7 @@ target_sources(main PRIVATE AudioBackend.cpp AudioDeviceManager.cpp AudioMix.cpp
                             GameplayBgaMissStateTracker.cpp Jukebox.cpp
                             MusicPlayerService.cpp MusicPlaylist.cpp
                             NativeMusicPlayer.cpp PrepMetronomeSound.cpp
-                            ProgressiveMusicSource.cpp PreviewStreamPlayer.cpp
+                            ProgressiveMusicSource.cpp PagedPreviewSource.cpp PreviewStreamPlayer.cpp
                             SkinSystemSoundService.cpp)
 
 if(IOS)

@@ -9,7 +9,6 @@
 #include "ChartAssetExtensions.h"
 #include "ChartAudioRenderer.h"
 #include "ClubBeat.h"
-#include "DecodedAssetCache.h"
 #include "PcmResampler.h"
 #include "SoundFileIO.h"
 #include "VorbisDurationBound.h"
@@ -90,13 +89,10 @@ struct Asset {
   std::vector<double> scratch;
   std::uint64_t windowStart = std::numeric_limits<std::uint64_t>::max();
   std::uint64_t lastUse = 0;
-  std::shared_ptr<audio::DecodedAssetCache> decodedAssets;
-  std::atomic_bool *cancelled = nullptr;
-  std::stop_token stop;
   std::atomic<std::uint64_t> *decoderOpens = nullptr;
 
   bool open() {
-    if (file || !generated.empty() || (decodedAssets && info.frames > 0)) return true;
+    if (file || !generated.empty()) return true;
     SF_INFO opened{};
 #if TARGET_OS_ANDROID
     if (IsAndroidTreePath(path)) {
@@ -138,17 +134,6 @@ struct Asset {
       windowStart = frame / kBlockFrames * kBlockFrames;
       const auto frames = std::min<std::uint64_t>(
           kBlockFrames, static_cast<std::uint64_t>(info.frames) - windowStart);
-      if (decodedAssets) {
-        SF_INFO currentInfo{};
-        std::string error;
-        if (!decodedAssets->ReadRange(path, windowStart, frames, window,
-                                      currentInfo, *cancelled, stop, &error))
-          throw std::runtime_error("Could not prepare preview keysound: " + error);
-        if (currentInfo.frames != info.frames || currentInfo.channels != info.channels ||
-            currentInfo.samplerate != info.samplerate || window.size() != frames * channels)
-          throw std::runtime_error("Preview source changed during playback");
-        return window[(frame - windowStart) * channels + channel];
-      }
       window.assign(static_cast<std::size_t>(frames) * channels, 0);
       scratch.resize(window.size());
       if (!file || sf_seek(file.get(), static_cast<sf_count_t>(windowStart), SEEK_SET) < 0)
@@ -192,12 +177,6 @@ struct Source::Impl {
   std::filesystem::path stagingDirectory;
   std::filesystem::path readPath;
   bool clubMode = false;
-  bool preview = false;
-  std::uint64_t firstFrame = 0;
-  std::uint64_t previewTimelineFrames = 0;
-  std::vector<Event> previewEvents;
-  std::shared_ptr<audio::DecodedAssetCache> decodedAssets;
-  std::vector<std::filesystem::path> previewAssetPaths;
   mutable std::mutex mutex;
   std::condition_variable changed;
   State state;
@@ -245,7 +224,7 @@ struct Source::Impl {
       next = preparedRanges.erase(next);
     }
     preparedRanges.emplace(first, last);
-    state.availableFrames = preparedEnd(firstFrame);
+    state.availableFrames = preparedEnd(0);
   }
 
   bool superseded() const {
@@ -288,8 +267,7 @@ struct Source::Impl {
 
   void prepareArchivedAssets(const std::vector<Event> &events, std::size_t first,
                              std::uint64_t blockEnd, std::uint64_t skipEnd) {
-    // The shared preview cache owns its original virtual-path identity.
-    if (decodedAssets || first >= events.size() || events[first].frame >= blockEnd) return;
+    if (first >= events.size() || events[first].frame >= blockEnd) return;
     using Requests = std::map<std::filesystem::path, std::map<int, std::uint64_t>>;
     std::map<std::filesystem::path, Requests> archives;
     const std::vector<std::string_view> extensions(
@@ -414,22 +392,6 @@ struct Source::Impl {
           if (!checkpoint()) return {};
         }
       }
-      if (decodedAssets) {
-        asset->decodedAssets = decodedAssets;
-        asset->cancelled = &cancelled;
-        asset->stop = stop;
-        std::string error;
-        audio::DecodedAssetCache::FailureKind failure;
-        if (!decodedAssets->Inspect(asset->path, asset->info, cancelled, stop, &error, &failure)) {
-          if (failure == audio::DecodedAssetCache::FailureKind::Operation)
-            throw std::runtime_error("Could not prepare preview asset: " + error);
-          if (!cancelled.load()) SDL_Log("Preview skipped invalid keysound: %s", error.c_str());
-          return assets.emplace(wav, nullptr).first->second;
-        }
-        asset->lastUse = ++useCounter;
-        assets.emplace(wav, asset);
-        return asset;
-      }
       std::filesystem::path archive, inner;
       if (archive_file::splitVirtualPath(asset->path, archive, inner)) {
         ++archiveReads;
@@ -459,14 +421,11 @@ struct Source::Impl {
 
   void render(std::stop_token stop) {
     if (!chart) throw std::runtime_error("Music stream chart is missing");
-    std::uint64_t totalFrames = std::max<std::uint64_t>(
-        std::max<std::uint64_t>(1, firstFrame), preview ? previewTimelineFrames :
+    std::uint64_t totalFrames = std::max<std::uint64_t>(1,
         framesForTime(chart_playback_duration::ChartTimelineEndMicros(*chart), true));
-    std::vector<Event> events = std::move(previewEvents);
-    if (!preview) {
-      for (const auto &event : chart_audio::CollectChartTimedAudioEvents(*chart)) {
-        events.push_back({framesForTime(event.timeMicros, false), event.wav, events.size()});
-      }
+    std::vector<Event> events;
+    for (const auto &event : chart_audio::CollectChartTimedAudioEvents(*chart)) {
+      events.push_back({framesForTime(event.timeMicros, false), event.wav, events.size()});
     }
     if (clubMode) {
       club_beat::PlanError error;
@@ -482,12 +441,10 @@ struct Source::Impl {
     // Playback needs only the event snapshot and asset names. Do not retain the
     // parser's entire note/timeline graph while a stopped music source is held
     // for resume, especially when gameplay is preparing another chart.
-    if (!preview) {
-      auto assetsOnly = std::make_unique<bms_parser::Chart>();
-      assetsOnly->Meta = std::move(chart->Meta);
-      assetsOnly->WavTable = std::move(chart->WavTable);
-      chart = std::move(assetsOnly);
-    }
+    auto assetsOnly = std::make_unique<bms_parser::Chart>();
+    assetsOnly->Meta = std::move(chart->Meta);
+    assetsOnly->WavTable = std::move(chart->WavTable);
+    chart = std::move(assetsOnly);
     std::stable_sort(events.begin(), events.end(), [](const Event &a, const Event &b) {
       return a.frame < b.frame;
     });
@@ -515,7 +472,7 @@ struct Source::Impl {
     std::array<float, kBlockFrames * kChannels> mix{};
     std::array<char, kBlockFrames * kChannels * sizeof(short)> pcm{};
     std::size_t eventIndex = 0;
-    std::uint64_t position = firstFrame;
+    std::uint64_t position = 0;
     const auto discardObsoleteBlock = [&] {
       if (!superseded()) return false;
       voices.clear();
@@ -533,10 +490,8 @@ struct Source::Impl {
             return true;
           if (!enabled) return false;
           const auto next = preparedEnd(requestedFrame);
-          // A selected chart prepares gameplay audio even if the preview device
-          // stops consuming. Music-only streams retain their bounded read-ahead.
           return (!endKnown || next < totalFrames) &&
-                 (preview || next < requestedFrame + kReadAheadFrames);
+                 next < requestedFrame + kReadAheadFrames;
         });
         if (cancelled.load()) return;
         if (endKnown && state.availableFrames >= totalFrames) break;
@@ -570,7 +525,7 @@ struct Source::Impl {
         if (!targetFrames || *targetFrames >= kMaximumFrames - event.frame)
           throw std::runtime_error("Music stream sound tail exceeds WAV frame limit");
         totalFrames = std::max(totalFrames, event.frame + *targetFrames + 1);
-        // Prior events may still be sounding at the selected highlight. Seek
+        // Prior events may still be sounding at the seek target. Seek
         // their exact resampler phase; do not render the skipped chart prefix.
         if (event.frame + *targetFrames <= position) continue;
         auto voice = std::make_unique<Voice>(std::move(asset), event, *targetFrames);
@@ -635,7 +590,7 @@ struct Source::Impl {
         pcm[i * 2] = static_cast<char>(sample & 0xff);
         pcm[i * 2 + 1] = static_cast<char>(sample >> 8);
       }
-      output.seekp(static_cast<std::streamoff>(44 + (position - firstFrame) * 4));
+      output.seekp(static_cast<std::streamoff>(44 + position * 4));
       output.write(pcm.data(), samples * sizeof(short));
       output.flush();
       if (!output) throw std::runtime_error("Could not write music stream audio");
@@ -648,7 +603,7 @@ struct Source::Impl {
       position = end;
       changed.notify_all();
     }
-    const auto finalHeader = wavHeader(totalFrames - firstFrame);
+    const auto finalHeader = wavHeader(totalFrames);
     output.seekp(0);
     output.write(finalHeader.data(), finalHeader.size());
     output.close();
@@ -667,22 +622,6 @@ struct Source::Impl {
   void run(std::stop_token stop) noexcept {
     try {
       render(stop);
-      // Playback can finish independently of gameplay preloading. In particular,
-      // EOF disables rendering, but only cancellation should stop cache warming.
-      if (preview && decodedAssets) {
-        for (const auto &path : previewAssetPaths) {
-          if (cancelled.load() || stop.stop_requested()) return;
-          std::string error;
-          audio::DecodedAssetCache::FailureKind failure;
-          if (!decodedAssets->Preload(path, cancelled, stop, &error, &failure)) {
-            if (failure == audio::DecodedAssetCache::FailureKind::Cancelled) return;
-            SDL_Log("Preview could not preload keysound: %s", error.c_str());
-            // Optional warming must not turn already prepared playback into an
-            // error. Stop on operational failures, skip missing/invalid assets.
-            if (failure == audio::DecodedAssetCache::FailureKind::Operation) return;
-          }
-        }
-      }
     }
     catch (const std::exception &error) {
       std::lock_guard lock(mutex);
@@ -716,51 +655,11 @@ std::shared_ptr<Source> Source::Create(std::unique_ptr<bms_parser::Chart> chart,
   });
   return source;
 }
-std::shared_ptr<Source> Source::CreatePreview(
-    const bms_parser::Chart &chart, std::filesystem::path stagingParent,
-    std::shared_ptr<audio::DecodedAssetCache> decodedAssets, std::uint64_t firstFrame,
-    PreviewGains gains) {
-  auto impl = std::make_unique<Impl>();
-  // Timeline objects stay owned by the menu for the eventual gameplay handoff.
-  impl->chart = std::make_unique<bms_parser::Chart>();
-  impl->chart->Meta = chart.Meta;
-  impl->chart->WavTable = chart.WavTable;
-  impl->preview = true;
-  impl->firstFrame = std::min(firstFrame, kMaximumFrames);
-  impl->state.firstFrame = impl->firstFrame;
-  impl->state.availableFrames = impl->firstFrame;
-  impl->requestedFrame = impl->firstFrame;
-  impl->previewTimelineFrames = framesForTime(
-      chart_playback_duration::ChartTimelineEndMicros(chart), true);
-  const auto background = chart_audio::CollectBackgroundAudioEvents(chart);
-  auto bgm = background.begin();
-  for (const auto &event : chart_audio::CollectChartTimedAudioEvents(chart)) {
-    const bool isBackground = bgm != background.end() &&
-        bgm->timeMicros == event.timeMicros && bgm->wav == event.wav;
-    if (isBackground) ++bgm;
-    impl->previewEvents.push_back({framesForTime(event.timeMicros, false),
-                                  event.wav, impl->previewEvents.size(),
-                                  isBackground ? gains.bgm : gains.keysound});
-  }
-  impl->stagingParent = std::move(stagingParent);
-  impl->decodedAssets = std::move(decodedAssets);
-  if (impl->decodedAssets) {
-    for (const auto &[wav, name] : chart.ReferencedWavTable)
-      impl->previewAssetPaths.push_back(chart.Meta.Folder / utf8_to_path_t(name));
-  }
-  auto source = std::shared_ptr<Source>(new Source(std::move(impl)));
-  source->impl->worker = std::jthread([state = source->impl.get()](std::stop_token stop) {
-    state->run(stop);
-  });
-  return source;
-}
 ReadResult Source::ReadFrames(std::uint64_t firstFrame, std::span<short> interleaved,
                               std::chrono::milliseconds wait) {
   if (interleaved.size() < kChannels || interleaved.size() % kChannels != 0)
     return {.status = ReadStatus::Error, .error = "Music read requires complete stereo frames"};
   std::unique_lock lock(impl->mutex);
-  if (firstFrame < impl->firstFrame)
-    return {.status = ReadStatus::Error, .error = "Requested audio precedes preview range"};
   firstFrame = std::min(firstFrame, kMaximumFrames);
   if (impl->state.cancelled) return {.status = ReadStatus::Cancelled};
   if (!impl->state.error.empty()) return {.status = ReadStatus::Error, .error = impl->state.error};
@@ -798,7 +697,7 @@ ReadResult Source::ReadFrames(std::uint64_t firstFrame, std::span<short> interle
   const auto path = impl->readPath;
   lock.unlock();
   std::ifstream input(path, std::ios::binary);
-  input.seekg(static_cast<std::streamoff>(44 + (firstFrame - impl->firstFrame) * 4));
+  input.seekg(static_cast<std::streamoff>(44 + firstFrame * 4));
   // Native targets are little-endian, but keep the spool's PCM portable.
   std::array<unsigned char, kBlockFrames * kChannels * sizeof(short)> bytes{};
   std::size_t offset = 0;
@@ -826,7 +725,7 @@ Statistics Source::GetStatistics() const {
 void Source::RequestSeek(std::uint64_t firstFrame) {
   {
     std::lock_guard lock(impl->mutex);
-    impl->requestedFrame = std::clamp(firstFrame, impl->firstFrame, kMaximumFrames);
+    impl->requestedFrame = std::min(firstFrame, kMaximumFrames);
     impl->pendingSeek = impl->requestedFrame;
     ++impl->requestRevision;
   }
