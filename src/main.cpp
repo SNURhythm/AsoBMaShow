@@ -844,7 +844,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     appliedOrientation = context.settings.screenOrientation;
     screen_orientation::apply(appliedOrientation, locked);
   };
-  context.setResponsiveMenuCanvas = [](bool menu) {
+  context.setResponsiveMenuCanvas = [&context](bool menu) {
+    context.uiBatchRenderer.invalidateFrame();
     if (rendering::responsiveMenuSceneActive != menu) {
       rendering::responsiveMenuSceneActive = menu;
       rendering::updateUIScale(rendering::render_width, rendering::render_height);
@@ -910,6 +911,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
                      1.0f, 0);
 
   context.restoreGameplayRenderViews = [&context]() {
+    context.uiBatchRenderer.invalidateFrame();
     if (s_blurPass == nullptr) {
       return;
     }
@@ -1023,6 +1025,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #if TARGET_OS_IPHONE
   FramePacer iosPresentationPacer;
   platform::IOSPreparedFrame iosPreparedFrame;
+  const Scene *lastDeferredUiScene = nullptr;
+  std::uint64_t lastUiPresentationGeneration = 0;
+  auto lastUiPresentedAt = std::chrono::steady_clock::now();
   bool iosViewportRestorePending = false;
   const auto submitIOSFrame = [](bool discard) {
     bgfx::frame(discard ? BGFX_FRAME_DISCARD : BGFX_FRAME_NONE);
@@ -1036,6 +1041,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     return input::isForegroundLifecycleEvent(event);
   };
   auto setAppBackground = [&](bool background) {
+    context.uiBatchRenderer.invalidateFrame();
     if (background && context.displaySettingsManager) {
       if (const auto rollbackResult =
               context.displaySettingsManager->onFocusLost();
@@ -1096,6 +1102,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     // Owner-bound export suppresses releases as well as presses. Retire any
     // pre-export capture before fresh input can reach the restored scene.
     if (ranApplicationWork) {
+      context.uiBatchRenderer.invalidateFrame();
       context.inputDeviceRegistry.clearSdlInputState();
       if (sceneManager.currentScene) sceneManager.currentScene->onInputQueueOverflow();
     }
@@ -1132,6 +1139,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         context.replayVideoExportActive.load(std::memory_order_acquire);
     if (exportActiveForPacing != pacingExportActive) {
       pacingExportActive = exportActiveForPacing;
+      context.uiBatchRenderer.invalidateFrame();
       context.framePacer.reset(currentFrameTime);
 #if TARGET_OS_IPHONE
       iosPresentationPacer.reset(currentFrameTime);
@@ -1381,6 +1389,10 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         restoreIOSViewportAfterKeyboardFocus();
       }
 #endif
+
+      if (event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) {
+        context.uiBatchRenderer.invalidateFrame();
+      }
 
       // on window resize
       if ((event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) &&
@@ -1655,6 +1667,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     // clear color
 
     bool renderedFrame = false;
+    bool skippedUnchangedFrame = false;
     const bool replayExportActive =
         context.replayVideoExportActive.load(std::memory_order_acquire);
     const bool replayExportRequested = context.rendererAccess.exportRequested();
@@ -1715,65 +1728,85 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         }
 #endif
         const bool hasActiveVisuals = context.jukebox.hasActiveVisuals();
-
+        bool deferUiSubmission = false;
+        bool forceUiPresentation = false;
 #if TARGET_OS_IPHONE
-        iosPreparedFrame.begin(GetIOSPresentationState());
+        deferUiSubmission = !hasActiveVisuals && sceneManager.currentScene &&
+            sceneManager.currentScene->canSkipUnchangedPresentation();
+        const auto uiPresentationState = GetIOSPresentationState();
+        if (lastDeferredUiScene != sceneManager.currentScene ||
+            lastUiPresentationGeneration != uiPresentationState.generation)
+          context.uiBatchRenderer.invalidateFrame();
+        lastDeferredUiScene = deferUiSubmission ? sceneManager.currentScene : nullptr;
+        // Occasionally drain unrelated bgfx resource commands even when the
+        // visible menu is unchanged. Animated menus still present at full rate.
+        forceUiPresentation = std::chrono::steady_clock::now() - lastUiPresentedAt >=
+            std::chrono::seconds(1);
+        iosPreparedFrame.begin(uiPresentationState);
 #endif
-        bgfx::touch(rendering::clear_view);
-        bgfx::touch(rendering::ui_view);
-        context.uiBatchRenderer.beginFrame();
+        context.uiBatchRenderer.beginFrame(deferUiSubmission);
         sceneManager.render();
+        const bool presentUi = context.uiBatchRenderer.finishFrame(forceUiPresentation);
+        skippedUnchangedFrame = !presentUi;
+        if (presentUi) {
+          bgfx::touch(rendering::clear_view);
+          bgfx::touch(rendering::ui_view);
 
-        const GameplayBgaCompositeState &bgaCompositeState =
-            context.gameplayBgaCompositeState;
-        const bool submitPreparedFullscreen =
-            bgaCompositeState.mode ==
-                GameplayBgaCompositeMode::FullscreenBuiltIn &&
-            bgaCompositeState.prepared.has_value();
-        const bool submitLegacyFullscreen =
-            bgaCompositeState.mode ==
-                GameplayBgaCompositeMode::FullscreenBuiltIn &&
-            bgaCompositeState.frameSerial == 0 &&
-            !bgaCompositeState.prepared.has_value() && hasActiveVisuals;
-        const bool compositeFullscreenBga =
-            submitPreparedFullscreen || submitLegacyFullscreen;
-        if (compositeFullscreenBga) {
-          bgfx::touch(rendering::bga_view);
-          bgfx::touch(rendering::bga_layer_view);
-          bgfx::touch(s_blurPass->finalView());
-          bgfx::touch(s_blurPass->blurViewH());
-          bgfx::touch(s_blurPass->blurViewV());
-          const bool ignoreBgaPostOptions =
-              context.ignoreBgaPostOptions.load(std::memory_order_acquire);
-          if (submitPreparedFullscreen) {
-            context.jukebox.submitFullscreen(*bgaCompositeState.prepared);
-          } else {
-            context.jukebox.render();
+          const GameplayBgaCompositeState &bgaCompositeState =
+              context.gameplayBgaCompositeState;
+          const bool submitPreparedFullscreen =
+              bgaCompositeState.mode ==
+                  GameplayBgaCompositeMode::FullscreenBuiltIn &&
+              bgaCompositeState.prepared.has_value();
+          const bool submitLegacyFullscreen =
+              bgaCompositeState.mode ==
+                  GameplayBgaCompositeMode::FullscreenBuiltIn &&
+              bgaCompositeState.frameSerial == 0 &&
+              !bgaCompositeState.prepared.has_value() && hasActiveVisuals;
+          const bool compositeFullscreenBga =
+              submitPreparedFullscreen || submitLegacyFullscreen;
+          if (compositeFullscreenBga) {
+            bgfx::touch(rendering::bga_view);
+            bgfx::touch(rendering::bga_layer_view);
+            bgfx::touch(s_blurPass->finalView());
+            bgfx::touch(s_blurPass->blurViewH());
+            bgfx::touch(s_blurPass->blurViewV());
+            const bool ignoreBgaPostOptions =
+                context.ignoreBgaPostOptions.load(std::memory_order_acquire);
+            if (submitPreparedFullscreen) {
+              context.jukebox.submitFullscreen(*bgaCompositeState.prepared);
+            } else {
+              context.jukebox.render();
+            }
+            s_blurPass->setBlurStrength(
+                ignoreBgaPostOptions ? 0.0f : context.settings.bgaBlurStrength);
+            s_postProcess.apply();
+            rendering::renderFullscreenTextureTint(
+                s_blurPass->outputTexture(), s_blurPass->finalView(),
+                ignoreBgaPostOptions
+                    ? 1.0f
+                    : static_cast<float>(context.settings.bgaBrightnessPercent) /
+                          100.0f);
           }
-          s_blurPass->setBlurStrength(
-              ignoreBgaPostOptions ? 0.0f : context.settings.bgaBlurStrength);
-          s_postProcess.apply();
-          rendering::renderFullscreenTextureTint(
-              s_blurPass->outputTexture(), s_blurPass->finalView(),
-              ignoreBgaPostOptions
-                  ? 1.0f
-                  : static_cast<float>(context.settings.bgaBrightnessPercent) /
-                        100.0f);
-        }
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-        const auto submitStarted = perf::latency::nowMicros();
+          const auto submitStarted = perf::latency::nowMicros();
 #endif
 #if TARGET_OS_IPHONE
-        if (!iosPreparedFrame.finish(GetIOSPresentationState(), submitIOSFrame))
-          continue;
+          if (!iosPreparedFrame.finish(GetIOSPresentationState(), submitIOSFrame)) {
+            context.uiBatchRenderer.invalidateFrame();
+            continue;
+          }
+          lastUiPresentationGeneration = uiPresentationState.generation;
+          lastUiPresentedAt = std::chrono::steady_clock::now();
 #else
-        bgfx::frame();
+          bgfx::frame();
 #endif
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-        perf::latency::record(perf::latency::Stage::FrameSubmit,
-                              perf::latency::nowMicros() - submitStarted);
+          perf::latency::record(perf::latency::Stage::FrameSubmit,
+                                perf::latency::nowMicros() - submitStarted);
 #endif
-        renderedFrame = true;
+          renderedFrame = true;
+        }
       }
     }
 
@@ -1882,7 +1915,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     //    bgfx::setState(BGFX_STATE_DEFAULT);
     //    bgfx::submit(rendering::main_view, program);
 
-    if (renderedFrame) {
+    if (renderedFrame || skippedUnchangedFrame) {
+      // Keep update/input cadence unchanged when an identical GPU frame is skipped.
       const auto presentedAt = std::chrono::steady_clock::now();
       context.framePacer.framePresented(presentedAt);
 #if TARGET_OS_IPHONE

@@ -47,6 +47,7 @@ void dispatchApplicationBackgroundChange(TestScene *scene, bool background) {
 }
 }
 struct Context {
+  struct UiBatchRenderer { void invalidateFrame() {} } uiBatchRenderer;
   struct Registry { void reconcileSdlDevices() {} void clearSdlInputState() {} } inputDeviceRegistry;
   struct Display {
     struct Message { bool empty() const { return true; } std::string resolve() const { return {}; } };

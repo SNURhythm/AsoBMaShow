@@ -601,6 +601,7 @@ bool ImageView::applyImage(const path_t &path, const std::string &key,
     return false;
   }
   texture = nextTexture;
+  rendering::UiBatchRenderer::notifyTextureChanged();
   currentImageKey = key;
   currentImagePath = path;
   currentImageWidth = cache.width;
@@ -703,6 +704,7 @@ bool ImageView::loadTexture(const path_t &path) {
 
 void ImageView::freeTexture() {
   if (bgfx::isValid(texture)) {
+    rendering::UiBatchRenderer::notifyTextureChanged();
     bgfx::destroy(texture);
   }
   texture = BGFX_INVALID_HANDLE;

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <limits>
 #include <ranges>
 #include <type_traits>
@@ -385,11 +386,118 @@ UiBatchRenderer::UiBatchRenderer(UiBatchBackend &backend) noexcept
 
 UiBatchRenderer::~UiBatchRenderer() { shutdown(); }
 
-void UiBatchRenderer::beginFrame() noexcept {
-  discard();
-  if (backend_ != nullptr) {
-    backend_->beginFrame();
+void UiBatchRenderer::RecordedFrame::clear() noexcept {
+  draws.clear();
+  colors.clear();
+  textures.clear();
+  indices.clear();
+}
+
+bool UiBatchRenderer::RecordedFrame::sameAs(const RecordedFrame &other) const noexcept {
+  if (draws.size() != other.draws.size() || colors.size() != other.colors.size() ||
+      textures.size() != other.textures.size() || indices != other.indices) return false;
+  if (!colors.empty() && std::memcmp(colors.data(), other.colors.data(),
+                                     colors.size() * sizeof(PosColorVertex)) != 0) return false;
+  if (!textures.empty() && std::memcmp(textures.data(), other.textures.data(),
+                                       textures.size() * sizeof(PosTexCoord0Vertex)) != 0) return false;
+  for (std::size_t i = 0; i < draws.size(); ++i) {
+    const auto &a = draws[i];
+    const auto &b = other.draws[i];
+    if (a.format != b.format || a.vertexOffset != b.vertexOffset ||
+        a.vertexCount != b.vertexCount || a.indexOffset != b.indexOffset ||
+        a.indexCount != b.indexCount ||
+        !sameState(a.state, b.state)) return false;
   }
+  return true;
+}
+
+void UiBatchRenderer::beginFrame(bool deferSubmission) noexcept {
+  discard();
+  recordedFrame_.clear();
+  recordedBytes_ = 0;
+  deferredSubmission_ = deferSubmission;
+  if (!deferredSubmission_) {
+    previousFrameValid_ = false;
+    previousFrame_.clear();
+    if (backend_) backend_->beginFrame();
+  }
+}
+
+bool UiBatchRenderer::recordSubmission(const UiBatchSubmission &submission) noexcept {
+  const auto bytes = sizeof(RecordedDraw) + submission.colorVertices.size_bytes() +
+      submission.texturedVertices.size_bytes() + submission.indices.size_bytes();
+  if (bytes > kMaximumDeferredBytes - recordedBytes_) return false;
+  try {
+    const bool color = submission.format == UiBatchVertexFormat::Color;
+    // A draw is committed only after all its data has been copied. On failure
+    // the previously recorded draws can still be submitted in their original order.
+    RecordedDraw draw{.format = submission.format,
+                      .vertexOffset = color ? recordedFrame_.colors.size() : recordedFrame_.textures.size(),
+                      .vertexCount = color ? submission.colorVertices.size() : submission.texturedVertices.size(),
+                      .indexOffset = recordedFrame_.indices.size(),
+                      .indexCount = submission.indices.size(),
+                      .state = submission.state};
+    recordedFrame_.colors.insert(recordedFrame_.colors.end(),
+        submission.colorVertices.begin(), submission.colorVertices.end());
+    recordedFrame_.textures.insert(recordedFrame_.textures.end(),
+        submission.texturedVertices.begin(), submission.texturedVertices.end());
+    recordedFrame_.indices.insert(recordedFrame_.indices.end(),
+        submission.indices.begin(), submission.indices.end());
+    recordedFrame_.draws.push_back(std::move(draw));
+    recordedBytes_ += bytes;
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+bool UiBatchRenderer::submitRecorded() noexcept {
+  if (!backend_) return false;
+  bool succeeded = true;
+  for (const auto &draw : recordedFrame_.draws) {
+    const bool color = draw.format == UiBatchVertexFormat::Color;
+    const UiBatchSubmission submission{
+        .format = draw.format,
+        .colorVertices = color ? std::span<const PosColorVertex>(recordedFrame_.colors)
+                                    .subspan(draw.vertexOffset, draw.vertexCount)
+                              : std::span<const PosColorVertex>{},
+        .texturedVertices = !color ? std::span<const PosTexCoord0Vertex>(recordedFrame_.textures)
+                                        .subspan(draw.vertexOffset, draw.vertexCount)
+                                  : std::span<const PosTexCoord0Vertex>{},
+        .indices = std::span<const std::uint16_t>(recordedFrame_.indices)
+                       .subspan(draw.indexOffset, draw.indexCount),
+        .state = draw.state};
+    succeeded = backend_->submit(submission) && succeeded;
+  }
+  return succeeded;
+}
+
+void UiBatchRenderer::useImmediateSubmission() noexcept {
+  if (!deferredSubmission_) return;
+  deferredSubmission_ = false;
+  previousFrameValid_ = false;
+  if (backend_) backend_->beginFrame();
+  (void)submitRecorded();
+  // Immediate frames fall back to the existing submission path without
+  // retaining their staging capacity or dropping any already recorded draws.
+  recordedFrame_ = {};
+  previousFrame_ = {};
+}
+
+bool UiBatchRenderer::finishFrame(bool forcePresentation) noexcept {
+  if (!deferredSubmission_) return true;
+  flushCurrent();
+  if (!deferredSubmission_) return true;
+  deferredSubmission_ = false;
+  const auto textureRevision = textureRevision_.load(std::memory_order_relaxed);
+  if (!forcePresentation && previousFrameValid_ &&
+      previousTextureRevision_ == textureRevision &&
+      recordedFrame_.sameAs(previousFrame_)) return false;
+  if (backend_) backend_->beginFrame();
+  previousFrameValid_ = submitRecorded();
+  previousTextureRevision_ = textureRevision;
+  std::swap(recordedFrame_, previousFrame_);
+  return true;
 }
 
 void UiBatchRenderer::begin() noexcept {
@@ -458,6 +566,9 @@ bool UiBatchRenderer::submitRetained(
   if (!active_ || !backend_ || !geometry) return false;
   // A retained draw is its own ordering boundary, between surrounding batches.
   flushCurrent();
+  // The caller needs the actual backend result to choose its CPU fallback.
+  // Retained effects therefore opt this whole frame out of deferred submission.
+  useImmediateSubmission();
   return backend_->submitRetained(geometry, state);
 }
 
@@ -478,6 +589,10 @@ void UiBatchRenderer::discard() noexcept { clearCurrent(); }
 
 void UiBatchRenderer::shutdown() noexcept {
   discard();
+  recordedFrame_ = {};
+  previousFrame_ = {};
+  previousFrameValid_ = false;
+  deferredSubmission_ = false;
   active_ = false;
   if (backend_ != nullptr) {
     backend_->shutdown();
@@ -499,6 +614,13 @@ bool UiBatchRenderer::flushCurrent() noexcept {
                               : std::span<const PosTexCoord0Vertex>{},
       .indices = indices_,
       .state = *state_};
+  if (deferredSubmission_) {
+    if (recordSubmission(submission)) {
+      clearCurrent();
+      return true;
+    }
+    useImmediateSubmission();
+  }
   const bool submitted = backend_->submit(submission);
   if (!submitted) {
     static std::uint32_t failures = 0;

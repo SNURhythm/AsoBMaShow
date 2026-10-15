@@ -414,6 +414,7 @@ TextView::TextView(const std::string &fontPath, int fontSize,
 
 TextView::~TextView() {
   if (bgfx::isValid(texture)) {
+    rendering::UiBatchRenderer::notifyTextureChanged();
     bgfx::destroy(texture);
   }
   releaseFontResources();
@@ -1113,6 +1114,7 @@ void TextView::onThemeChanged() {
 
 void TextView::invalidateTexture() {
   if (bgfx::isValid(texture)) {
+    rendering::UiBatchRenderer::notifyTextureChanged();
     bgfx::destroy(texture);
   }
   texture = BGFX_INVALID_HANDLE;
@@ -1227,6 +1229,7 @@ void TextView::createTexture() {
   (void)fallbackSurfaceWidth;
   (void)fallbackSurfaceHeight;
   texture = rendering::sdlSurfaceToBgfxTexture(surface.get());
+  if (bgfx::isValid(texture)) rendering::UiBatchRenderer::notifyTextureChanged();
 }
 
 YGSize TextView::measureFunc(YGNodeConstRef node, float width,

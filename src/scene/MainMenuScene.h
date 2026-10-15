@@ -81,6 +81,7 @@ struct MainMenuParseLogRow {
 class MainMenuScene : public Scene {
 public:
   bool usesResponsiveMenuCanvas() const override { return true; }
+  bool canSkipUnchangedPresentation() const override { return selectorTabActive(); }
   explicit MainMenuScene(ApplicationContext &context, bool showTutorial = false);
   ~MainMenuScene() override;
   void init() override;
