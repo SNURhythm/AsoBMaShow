@@ -1886,15 +1886,14 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       const auto presentedAt = std::chrono::steady_clock::now();
       context.framePacer.framePresented(presentedAt);
 #if TARGET_OS_IPHONE
-      // Menus use at most 60 FPS; gameplay retains its automatic refresh target.
+      // Menus and gameplay follow the display, including 120 Hz ProMotion.
       // This worker wait does not block UIKit's event/input pump.
       const auto iosViewport = GetIOSWindowSnapshot(s_window);
       iosPresentationPacer.setCap(video::iosPresentationPacingCap(
           iosViewport ? iosViewport->refreshRate : 0.0F,
           context.framePacer.currentFrameCap(),
           context.replayVideoExportActive.load(std::memory_order_acquire) ||
-              context.rendererAccess.exportRequested(),
-          context.profileGameplayActive.load(std::memory_order_acquire)));
+              context.rendererAccess.exportRequested()));
       iosPresentationPacer.framePresented(presentedAt);
 #endif
       const auto waitStartedAt = std::chrono::steady_clock::now();
