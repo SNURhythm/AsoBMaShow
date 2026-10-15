@@ -80,22 +80,23 @@ inline ArtworkGlowMesh makeArtworkGlowMesh(float x, float y, float width, float 
     const float wave = std::clamp(std::lerp(glow.spectrum[bandIndex],
         glow.spectrum[std::min(bandIndex + 1, glow.spectrum.size() - 1)],
         bandPosition - bandIndex), 0.0f, 1.0f);
-    const float reach = 0.28f + 0.72f * std::pow(wave, 0.75f);
+    // FFT magnitudes are logarithmic. Expand their visual contrast instead of
+    // keeping quiet bands wide and opaque enough to form a rectangular slab.
+    const float opacity = wave * wave;
+    const float extent = glow.spread * (0.02f + 0.98f * opacity * wave);
     const Color color = artworkGlowColor(palette, edge.x / width, edge.y / height);
     for (std::size_t ring = 0; ring <= mesh.layers; ++ring) {
       const float radius = static_cast<float>(ring) / mesh.layers;
-      const float offset = std::lerp(-1.0f, glow.spread, radius);
-      // Fill the entire spread with color that decays with distance. The
-      // spectrum changes the falloff length, never draws a luminous rim.
-      const float distance = radius / reach;
-      const float distanceSquared = distance * distance;
+      const float offset = std::lerp(-1.0f, extent, radius);
+      // Fill each band's changing extent with a monotonic distance fade.
+      // Its outer edge stays transparent even at the strongest peaks.
       const float radiusSquared = radius * radius;
       // A filled, stronger core drops away more sharply than a Gaussian.
       const float taper = 1 - radiusSquared * radiusSquared;
-      const float fade = std::exp(-5 * distanceSquared * distanceSquared) * taper;
+      const float fade = std::exp(-5 * radiusSquared * radiusSquared) * taper;
       auto feathered = color;
       feathered.a = static_cast<uint8_t>(std::lround(color.a * glow.intensity *
-                                                   (0.55f + 0.45f * wave) * fade));
+                                                   opacity * fade));
       mesh.vertices[ring * mesh.segments + i] = {
           edgeX + nx * offset, edgeY + ny * offset, 0, feathered.toABGR()};
       if (ring == mesh.layers) continue;

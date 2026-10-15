@@ -15,7 +15,7 @@ public:
       // Frequency positions never move. Only a short attack/release filter
       // suppresses block-boundary flicker in the current FFT magnitudes.
       bands_[i] += (band - bands_[i]) *
-          (1 - std::exp(-elapsed / (band > bands_[i] ? 0.006f : 0.055f)));
+          (1 - std::exp(-elapsed / (band > bands_[i] ? 0.006f : 0.035f)));
       if (bands_[i] < 0.001f) bands_[i] = 0;
     }
     if (value_ < 0.001f) value_ = 0;

@@ -135,8 +135,8 @@ int main() {
     const auto outerRing = ArtworkGlowMesh::layers * ArtworkGlowMesh::segments;
     const float topExtent = 100 - mesh.vertices[outerRing].y;
     const float bottomExtent = mesh.vertices[outerRing + ArtworkGlowMesh::segments / 2].y - 400;
-    require(std::abs(topExtent - 44) < 0.001f && std::abs(bottomExtent - 44) < 0.001f,
-            "the aura has fixed overflow bounds while spectrum controls color diffusion");
+    require(std::abs(topExtent - 44) < 0.001f && bottomExtent < 1,
+            "strong bands use the full spread while quiet bands collapse to the artwork");
     require(std::abs(mesh.vertices[0].y - 101) < 0.001f &&
                 std::abs(mesh.vertices[ArtworkGlowMesh::segments / 2].y - 399) < 0.001f,
             "the aura follows the actual rectangular image edges");
@@ -150,6 +150,15 @@ int main() {
               "color fades continuously by distance without a bright bubble rim");
     require(alpha(6) > alpha(6, ArtworkGlowMesh::segments / 2) + 60,
             "active frequency bands spread their color farther than quiet bands");
+    require(alpha(0, ArtworkGlowMesh::segments / 2) == 0,
+            "quiet bands leave no opaque rectangular baseline around the artwork");
+    shape.spectrum[0] = 0.4f;
+    const auto weak = makeArtworkGlowMesh(100, 100, 400, 300, solid, shape);
+    shape.spectrum[0] = 0.8f;
+    const auto strong = makeArtworkGlowMesh(100, 100, 400, 300, solid, shape);
+    require(100 - strong.vertices[outerRing].y > 6 * (100 - weak.vertices[outerRing].y) &&
+                (strong.vertices[0].abgr >> 24) > 3 * (weak.vertices[0].abgr >> 24),
+            "moderate audio changes create a wide range of both distance and opacity");
     const unsigned char pixels[] = {255, 0, 0, 0, 0, 80, 0, 255};
     const auto green = artworkAmbientPalette(pixels, 2, 1);
     require(green && (*green)[7].g >= 200 && (*green)[7].r == 0 && (*green)[7].b == 0,
