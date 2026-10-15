@@ -5300,6 +5300,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/DecodedImageCache.cpp
         src/view/ImageDecodeCoordinator.cpp
         src/view/ChartListItemView.cpp
+        src/view/LibraryFolderItemView.cpp
         src/view/ImageFade.cpp
         src/view/ImageFileDecoder.cpp
         src/view/ImageView.cpp
@@ -5330,7 +5331,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     get_target_property(CHART_DETAILS_TEST_SOURCES chart_list_item_view_tests SOURCES)
     list(REMOVE_ITEM CHART_DETAILS_TEST_SOURCES
-        tests/chart_list_item_view_tests.cpp src/view/ChartListItemView.cpp)
+        tests/chart_list_item_view_tests.cpp src/view/ChartListItemView.cpp
+        src/view/LibraryFolderItemView.cpp)
     add_executable(chart_details_view_tests
         tests/chart_details_view_tests.cpp
         src/view/ChartDetailsView.cpp

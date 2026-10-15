@@ -32,6 +32,8 @@ class MainMenuTabsTests(unittest.TestCase):
             "bool MainMenuScene::applyPendingTabSwitch()",
             "void MainMenuScene::cancelPendingTabSwitch()",
             "void MainMenuScene::reselectCurrentChart()",
+            "void MainMenuScene::applyPendingUiUpdates()",
+            "void MainMenuScene::requestLibraryReload(bool includeFolders)",
             "EventHandleResult MainMenuScene::handleEvents(SDL_Event &event)",
             "void MainMenuScene::selectChartByPathAfterReload(",
             "ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const"))
@@ -47,6 +49,7 @@ class MainMenuTabsTests(unittest.TestCase):
 #include <chrono>
 #include <thread>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <vector>
@@ -56,9 +59,13 @@ path_t fspath_to_path_t(const std::filesystem::path &path) { return path; }
 std::string fspath_to_utf8(const std::filesystem::path &path) { return path.string(); }
 namespace archive_file { void appendDebugLogLine(const std::string&) {} }
 QUERY_TYPES
+namespace bms_parser { struct ChartMeta {
+  std::filesystem::path BmsPath;
+  std::string Title, SubTitle, Artist, sha256, md5;
+}; }
 struct ChartMetaRecord {
-  struct { std::filesystem::path BmsPath; } meta;
-  bool courseStart=false, unzipAll=false;
+  bms_parser::ChartMeta meta;
+  bool courseStart=false, unzipAll=false, unavailable=false, solidArchive=false;
 };
 struct ChartRecordFilters {};
 namespace i18n { std::string tr(const char *key) { return key; } }
@@ -67,6 +74,13 @@ namespace chart_record_filters {
 void applyToQuery(ChartMetaQuery&, const ChartRecordFilters&, bool) {}
 }
 namespace main_menu_library {
+IDENTITY_TYPE;
+FindBmsChartIdentity findBmsChartIdentity(const bms_parser::ChartMeta &meta) {
+  return {meta.sha256, meta.md5}; // Fixture digests are already canonical.
+}
+IDENTITY_HELPER
+GENERATION_HELPERS
+HANDOFF_HELPER
 SELECTION_HELPER
 CENTERED_SCROLL_HELPER
 std::optional<ChartMetaRecord> findBmsUnfilteredHandoffRecord(
@@ -112,8 +126,25 @@ struct Scene {
   void prepareForUse() {} void init() { ++initializations; }
   template<class... Args> void configureTab(Args...) {}
 };
-struct MusicPlayerScene: Scene { explicit MusicPlayerScene(int) {} };
-struct IrUploadsScene: Scene { explicit IrUploadsScene(int) {} };
+struct Completion {
+  std::filesystem::path chartPath;
+  main_menu_library::FindBmsChartIdentity targetIdentity;
+  std::uint64_t selectionGeneration=0;
+};
+struct Tasks {
+  std::vector<Completion> completions;
+  std::vector<Completion> takeDownloadedIndexCompletions() {
+    auto result=std::move(completions); completions.clear(); return result;
+  }
+};
+struct Context {
+  std::atomic_bool chartLibraryFoldersReloadRequested=false, chartLibraryListReloadRequested=false;
+  Tasks *chartLibraryTasks=nullptr;
+  struct { std::uint64_t revision=1; std::uint64_t GetLibraryRevision() { return revision; } } chartRepository;
+};
+struct ImageView { static void dropAllCache() {} };
+struct MusicPlayerScene: Scene { explicit MusicPlayerScene(Context&) {} };
+struct IrUploadsScene: Scene { explicit IrUploadsScene(Context&) {} };
 struct Preview { std::function<void()> stopping; void cancel() {} void stop() { if(stopping) stopping(); } };
 template<class T> struct Recycler {
   std::vector<T> items;
@@ -159,7 +190,20 @@ struct MainMenuScene : Scene {
   struct { int longNoteMode=1; } profileSelections;
   ChartRecordFilters chartRecordFilters;
   struct { std::optional<ChartMetaRecord> leadingRecord; } chartListCache;
-  int context=0;
+  Context context;
+  std::mutex findBmsSelectionHandoffMutex;
+  using PendingFindBmsSelectionHandoff=Completion;
+  std::optional<PendingFindBmsSelectionHandoff> pendingFindBmsSelectionHandoff;
+  std::optional<std::filesystem::path> pendingSelectChartPath;
+  std::atomic_bool tasksModalOpenRequested=false;
+  std::uint64_t chartSelectionGeneration=0, libraryRevision=1;
+  int taskShows=0;
+  bool archiveUnzipInProgress() const { return false; }
+  void showTasksModal() { ++taskShows; }
+  void reloadScoreClearRanks() {}
+  std::optional<ChartMetaRecord> selectedRecordSnapshot() { return selectedChartRecord; }
+  void applyPendingUiUpdates();
+  void requestLibraryReload(bool includeFolders);
   View root;
   TextInputBox search;
   View *rootLayout=&root, *searchBox=&search, *revealContextMenu=nullptr;
@@ -200,12 +244,12 @@ struct MainMenuScene : Scene {
   void project(std::vector<LibraryFolderItem> &folders) {
 PROJECTION
   }
-  void reloadFolderItems() {
+  void reloadFolderItems(bool=false) {
     ++folderReloads;
     sidebar.items=fixtureFolders();
     project(sidebar.items);
   }
-  void reloadChartList() {
+  void reloadChartList(bool=false) {
     ++chartReloads;
     const std::string prefix=selectorTab_==Tab::Course ? "course" : "song";
     chartSession->rows.clear();
@@ -231,6 +275,8 @@ PROJECTION
   MainMenuScene() {
     root.children.push_back(&search);
     songs.onSelected=[this](const ChartMetaRecord &record,int) {
+      chartSelectionGeneration=main_menu_library::chartSelectionGenerationAfter(
+          chartSelectionGeneration, selectedChartRecord, record);
       selectedChartRecord=record;
       if(restoringTabSelection_ || !selectorTabActive() || record.meta.BmsPath.empty()) return;
       ++previewRequests;
@@ -262,7 +308,99 @@ int main(int argc,char **argv) {
   MainMenuScene scene;
   auto folders=MainMenuScene::fixtureFolders();
   const std::string scenario=argv[1];
-  if(scenario=="slow-preview-switch" || scenario=="slow-preview-ir" || scenario=="slow-preview-course" || scenario=="slow-preview-play" || scenario=="cancel-preview-switch") {
+  if(scenario=="hidden-library-revision") {
+    for(bool queuedHandoff : {false,true}) {
+      MainMenuScene resume; Tasks tasks; resume.context.chartLibraryTasks=&tasks;
+      resume.reloadFolderItems(); resume.reloadChartList();
+      auto target=resume.songs.get(2);
+      if(queuedHandoff) {
+        target.unavailable=true; target.meta.BmsPath.clear(); target.meta.sha256=std::string(64,'a');
+        resume.songs.items[2]=target;
+      }
+      resume.songs.selectedIndex=2; resume.songs.onSelected(target,2);
+      const auto generation=resume.chartSelectionGeneration;
+      resume.switchTabAndWait(Tab::Music);
+      const auto foldersBefore=resume.folderReloads, chartsBefore=resume.chartReloads;
+      // MUSIC favorite mutations increment the repository revision without setting reload flags.
+      ++resume.context.chartRepository.revision;
+      if(queuedHandoff) tasks.completions.push_back({"song3.bms", {std::string(64,'a'),{}}, generation});
+      resume.applyPendingUiUpdates();
+      assert(!resume.context.chartLibraryFoldersReloadRequested && !resume.context.chartLibraryListReloadRequested);
+      assert(resume.folderReloads==foldersBefore && resume.chartReloads==chartsBefore);
+      resume.switchTabAndWait(Tab::Play);
+      assert(resume.chartSelectionGeneration==generation);
+      resume.applyPendingUiUpdates();
+      assert(resume.folderReloads==foldersBefore+1 && resume.chartReloads==chartsBefore+1);
+      assert(resume.libraryRevision==resume.context.chartRepository.revision);
+      assert(resume.selectedChartRecord->meta.BmsPath==(queuedHandoff ? "song3.bms" : "song2.bms"));
+      assert(!resume.pendingFindBmsSelectionHandoff);
+      resume.applyPendingUiUpdates();
+      resume.switchTabAndWait(Tab::Music); resume.switchTabAndWait(Tab::Play);
+      resume.applyPendingUiUpdates();
+      assert(resume.folderReloads==foldersBefore+1 && resume.chartReloads==chartsBefore+1);
+    }
+  } else if(scenario=="hidden-completion-restore" || scenario=="hidden-completion-reject") {
+    for(auto utility : {Tab::Music, Tab::Ir}) {
+      for(bool pathless : {false,true}) {
+        MainMenuScene handoff;
+        Tasks tasks; handoff.context.chartLibraryTasks=&tasks;
+        handoff.reloadFolderItems(); handoff.reloadChartList();
+        auto target=handoff.songs.get(2);
+        target.unavailable=true;
+        target.meta.sha256=std::string(64, 'a');
+        if(pathless) target.meta.BmsPath.clear();
+        handoff.songs.items[2]=target;
+        handoff.songs.selectedIndex=2;
+        handoff.songs.onSelected(target,2);
+        const auto capturedGeneration=handoff.chartSelectionGeneration;
+        handoff.switchTabAndWait(utility);
+        tasks.completions.push_back({"song3.bms", {std::string(64, 'a'), {}}, capturedGeneration});
+        handoff.context.chartLibraryListReloadRequested=true;
+        handoff.tasksModalOpenRequested=true;
+        const auto reloads=handoff.chartReloads;
+        handoff.applyPendingUiUpdates();
+        assert(tasks.completions.empty() && handoff.taskShows==1);
+        assert(handoff.pendingFindBmsSelectionHandoff && handoff.context.chartLibraryListReloadRequested);
+        assert(handoff.chartReloads==reloads && handoff.selectedChartRecord->meta.BmsPath==target.meta.BmsPath);
+        if(scenario=="hidden-completion-reject") {
+          // Visiting another selector must invalidate the old selection generation.
+          handoff.switchTabAndWait(Tab::Course);
+          handoff.applyPendingUiUpdates();
+          assert(!handoff.pendingFindBmsSelectionHandoff);
+          assert(!handoff.selectedChartRecord || handoff.selectedChartRecord->meta.BmsPath!="song3.bms");
+          continue;
+        }
+        handoff.switchTabAndWait(Tab::Play);
+        assert(handoff.chartSelectionGeneration==capturedGeneration);
+        assert(handoff.chartReloads==reloads);
+        handoff.applyPendingUiUpdates();
+        assert(!handoff.pendingFindBmsSelectionHandoff && !handoff.context.chartLibraryListReloadRequested);
+        assert(handoff.selectedChartRecord && handoff.selectedChartRecord->meta.BmsPath=="song3.bms");
+        assert(handoff.chartReloads==reloads+1);
+        handoff.applyPendingUiUpdates();
+        assert(handoff.chartReloads==reloads+1);
+        handoff.switchTabAndWait(utility); handoff.switchTabAndWait(Tab::Play);
+        assert(handoff.selectedChartRecord->meta.BmsPath=="song3.bms");
+      }
+    }
+  } else if(scenario=="hidden-completion-stale") {
+    for(bool changeGeneration : {false,true}) {
+      MainMenuScene handoff; Tasks tasks; handoff.context.chartLibraryTasks=&tasks;
+      handoff.reloadFolderItems(); handoff.reloadChartList();
+      auto target=handoff.songs.get(2); target.unavailable=true; target.meta.sha256=std::string(64,'a');
+      handoff.songs.onSelected(target,2);
+      const auto generation=handoff.chartSelectionGeneration;
+      handoff.switchTabAndWait(Tab::Music);
+      tasks.completions.push_back({"song3.bms", {std::string(64,'a'),{}}, generation});
+      handoff.context.chartLibraryListReloadRequested=true;
+      handoff.applyPendingUiUpdates(); handoff.switchTabAndWait(Tab::Play);
+      if(changeGeneration) ++handoff.chartSelectionGeneration;
+      else handoff.selectedChartRecord->meta.sha256=std::string(64,'b');
+      handoff.applyPendingUiUpdates();
+      assert(!handoff.pendingFindBmsSelectionHandoff);
+      assert(handoff.selectedChartRecord->meta.BmsPath=="song2.bms");
+    }
+  } else if(scenario=="slow-preview-switch" || scenario=="slow-preview-ir" || scenario=="slow-preview-course" || scenario=="slow-preview-play" || scenario=="cancel-preview-switch") {
     const Tab destination=scenario=="slow-preview-ir" ? Tab::Ir :
         scenario=="slow-preview-course" ? Tab::Course :
         scenario=="slow-preview-play" ? Tab::Play : Tab::Music;
@@ -483,6 +621,10 @@ int main(int argc,char **argv) {
 '''
         source = (source.replace("QUERY_TYPES", types).replace("SELECTION_HELPER", selection_helper)
                   .replace("CENTERED_SCROLL_HELPER", extract(library, "float centeredScrollOffsetForItem("))
+                  .replace("IDENTITY_TYPE", extract((root / "src/scene/MainMenuLibrary.h").read_text(), "struct FindBmsChartIdentity"))
+                  .replace("IDENTITY_HELPER", extract(library, "bool identityMatches("))
+                  .replace("GENERATION_HELPERS", extract(library, "bool sameChartSelection(") + "\n" + extract(library, "std::uint64_t chartSelectionGenerationAfter("))
+                  .replace("HANDOFF_HELPER", extract(library, "bool findBmsSelectionHandoffAllowed("))
                   .replace("FOLDER_TYPE", extract(header, "struct LibraryFolderItem"))
                   .replace("TAB_STATE", extract(header, "struct SelectorTabState"))
                   .replace("PROJECTION", projection).replace("METHODS", methods))
@@ -492,6 +634,14 @@ int main(int argc,char **argv) {
         cls.binary = Path(cls.temp.name) / "test"
         path.write_text(source)
         subprocess.run(["c++", "-std=c++20", str(path), "-o", str(cls.binary)], check=True)
+
+    def test_hidden_revision_only_library_change_refreshes_once_on_return(self):
+        subprocess.run([str(self.binary), "hidden-library-revision"], check=True, timeout=5)
+
+    def test_hidden_completion_survives_return_and_rejects_stale_selection(self):
+        for scenario in ("hidden-completion-restore", "hidden-completion-reject", "hidden-completion-stale"):
+            with self.subTest(scenario=scenario):
+                subprocess.run([str(self.binary), scenario], check=True, timeout=5)
 
     def test_restored_chart_restarts_preview_and_stops_music(self):
         subprocess.run([str(self.binary), "restored-preview"], check=True)
@@ -614,6 +764,22 @@ int main() {
             cpp = Path(directory) / "idle.cpp"
             binary = Path(directory) / "idle"
             cpp.write_text(source)
+            subprocess.run(["c++", "-std=c++20", str(cpp), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True, timeout=5)
+
+
+    def test_hidden_selector_coalesces_refreshes_and_delivers_handoffs(self):
+        root = Path(__file__).resolve().parents[1]
+        production = (root / "src/scene/MainMenuScene.cpp").read_text()
+        fixture = (root / "tests/main_menu_hidden_selector_fixture.cpp").read_text()
+        methods = "\n".join(extract(production, signature) for signature in (
+            "void MainMenuScene::update(float dt)",
+            "void MainMenuScene::applyPendingUiUpdates()",
+            "void MainMenuScene::refreshScoreClearRanksIfNeeded()"))
+        with tempfile.TemporaryDirectory(prefix="asobmashow-hidden-selector-") as directory:
+            cpp = Path(directory) / "hidden.cpp"
+            binary = Path(directory) / "hidden"
+            cpp.write_text(fixture.replace("SCENE_METHODS", methods))
             subprocess.run(["c++", "-std=c++20", str(cpp), "-o", str(binary)], check=True)
             subprocess.run([str(binary)], check=True, timeout=5)
 

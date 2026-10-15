@@ -802,6 +802,7 @@ void MainMenuScene::cancelPendingTabSwitch() {
 }
 
 void MainMenuScene::completeTabSwitch(Tab tab) {
+  const bool resumeCurrentSelector = !selectorTabActive() && tab == selectorTab_;
   if (selectorTabActive()) {
     const auto endEditing = [](View *root, const auto &self) -> void {
       if (auto *input = dynamic_cast<TextInputBox *>(root)) input->endEditing();
@@ -840,7 +841,7 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
     irTab_->init();
     initializedUtilityTab = true;
   }
-  if (selectorTabActive()) {
+  if (selectorTabActive() && !resumeCurrentSelector) {
     selectorTab_ = tab;
     auto &state = selectorStates_[tab == Tab::Course ? 1 : 0];
     activeFolder = state.folder;
@@ -875,6 +876,13 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
     recyclerView->rebindVisibleItems();
     folderRecyclerView->rebindVisibleItems();
     restoringTabSelection_ = false;
+    reselectCurrentChart();
+  } else if (resumeCurrentSelector) {
+    // Hidden selector work is deferred, so its live state still owns any
+    // pending handoff generation, including unavailable pathless records.
+    if (context.chartRepository.GetLibraryRevision() != libraryRevision) {
+      requestLibraryReload(true);
+    }
     reselectCurrentChart();
   } else if (auto *scene = activeUtilityTab()) {
     scene->refreshLanguageIfNeeded();
@@ -3715,6 +3723,12 @@ void MainMenuScene::applyPendingUiUpdates() {
     }
   }
   const bool shouldOpenTasksModal = tasksModalOpenRequested.exchange(false);
+  if (shouldOpenTasksModal) {
+    showTasksModal();
+  }
+  // Keep invalidations and selection handoffs together until the selector
+  // returns. Applying a hidden handoff would lose it on tab restoration.
+  if (!selectorTabActive()) return;
   const bool shouldReloadFolders =
       context.chartLibraryFoldersReloadRequested.exchange(false);
   const bool shouldReloadCharts =
@@ -3728,9 +3742,6 @@ void MainMenuScene::applyPendingUiUpdates() {
   std::optional<ChartMetaRecord> findBmsSelectionBeforeReload;
   if (findBmsHandoff.has_value()) {
     findBmsSelectionBeforeReload = selectedRecordSnapshot();
-  }
-  if (shouldOpenTasksModal) {
-    showTasksModal();
   }
   if (shouldReloadFolders) {
     reloadScoreClearRanks();
@@ -8095,7 +8106,7 @@ void MainMenuScene::update(float dt) {
 #endif
   // Update the scene logic
   // std::cout << "Updating Main Menu Scene, dt: " << dt << std::endl;
-  refreshScoreClearRanksIfNeeded();
+  if (selectorTabActive()) refreshScoreClearRanksIfNeeded();
   refreshIrRecordListIfNeeded();
   refreshTasksButton();
   applyPendingUiUpdates();

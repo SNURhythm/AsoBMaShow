@@ -73,6 +73,7 @@ public:
   ir_uploads::PreparationTask preparationTask;
   bool providerCanSubmit = true, reloadRequested = false;
   bool candidatesLoaded = false;
+  bool presentationActive = true;
   std::thread::id applicationThread = std::this_thread::get_id();
   int refreshes = 0, providerRefreshes = 0;
   void refreshProviderState() { ++providerRefreshes; }
@@ -148,6 +149,7 @@ void testScenePreparationLaunchGatesAndApplicationThreadCompletion() {
   scene.startUpload();
   gate.wait();
   scene.onPause();
+  const auto hiddenRefreshes = scene.refreshes;
   assert(scene.pointerCancellations == 1 && scene.preparationTask.hasWorker());
   assert(scene.controller.selectionLocked() && scene.controller.selectedCount() == 2);
   assert(application.irDrivers.drafts == 2 && application.irSubmissionService->batches == 1);
@@ -160,6 +162,8 @@ void testScenePreparationLaunchGatesAndApplicationThreadCompletion() {
   applyPreparationUntilUnlocked(scene);
   assert(!scene.preparationTask.hasWorker() && scene.reloadRequested);
   assert(scene.controller.selectedCount() == 0);
+  assert(scene.refreshes == hiddenRefreshes &&
+         "background preparation must complete without refreshing hidden UI");
   const auto refreshes = scene.refreshes;
   scene.applyPreparationUpdates();
   scene.stopPreparation();

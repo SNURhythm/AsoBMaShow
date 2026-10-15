@@ -52,6 +52,80 @@ public:
   using ChartDetailsView::renderImpl;
 };
 
+void testUnchangedChartDetailsPreserveTexturesAndLayout() {
+  ChartDetailsView details(new ImageView(0, 0, 0, 0));
+  details.setWidth(460);
+  ChartMetaRecord record;
+  record.meta.BmsPath = "/charts/retained.bms";
+  record.meta.Title = "Retained details";
+  record.meta.Bpm = 150;
+  record.meta.TotalNotes = 1350;
+  ScoreBestSnapshot best;
+  best.score = 2451;
+  best.maxScore = 2700;
+  for (const bool compact : {false, true}) {
+    details.setCompact(compact);
+    details.setChart(&record, best, kClearTypeHardClearRank, "320");
+    std::array<TextView *, 3> labels{};
+    std::array<bgfx::TextureHandle, 3> textures{};
+    constexpr std::array names = {"chartDetailsGrade", "chartDetailsBestRate", "chartDetailsTempo"};
+    for (std::size_t i = 0; i < names.size(); ++i) {
+      labels[i] = dynamic_cast<TextView *>(details.findViewByName(names[i]));
+      require(labels[i] != nullptr, "summary labels exist in both layouts");
+      textures[i] = labels[i]->textureHandle();
+      require(bgfx::isValid(textures[i]), "populated summary labels have rasters");
+    }
+    require(!YGNodeIsDirty(details.getNode()), "initial details layout is settled");
+    {
+      View::LayoutBatchScope batch;
+      for (int repeat = 0; repeat < 3; ++repeat) {
+        details.setChart(&record, best, kClearTypeHardClearRank, "320");
+        for (std::size_t i = 0; i < labels.size(); ++i) {
+          require(labels[i]->textureHandle().idx == textures[i].idx,
+                  "unchanged details binding must retain summary textures");
+        }
+        require(!YGNodeIsDirty(details.getNode()),
+                "unchanged details binding must not reparent or dirty the layout");
+      }
+    }
+    details.setChart(&record, std::nullopt, kNoClearTypeRank, "320");
+    require(labels[0]->getText() == "—" && labels[1]->getText() == "—" &&
+                labels[2]->getText().starts_with("BPM 150"),
+            "an unplayed chart clears the previous best and retains its tempo");
+    details.setChart(&record, best, kClearTypeHardClearRank, "320");
+    record.meta.TotalNotes = 0;
+    auto invalidBest = best;
+    invalidBest.maxScore = 0;
+    details.setChart(&record, invalidBest, kClearTypeHardClearRank, "320");
+    require(labels[0]->getText() == "—" && labels[1]->getText() == "—",
+            "a score without a valid maximum clears the previous grade and percentage");
+    record.meta.TotalNotes = 1350;
+    details.setChart(&record, best, kClearTypeHardClearRank, "320");
+    details.setChart(nullptr, std::nullopt, kNoClearTypeRank, "");
+    require(labels[0]->getText() == "—" && labels[1]->getText() == "—" &&
+                labels[2]->getText() == "BPM —   |   —",
+            "clearing the chart clears all summary values");
+  }
+  details.setCompact(false);
+  details.setWidth(420);
+  require(details.findViewByName("chartDetailsArtwork")->getWidth() == 420,
+          "width-only layout changes still resize the desktop artwork");
+  {
+    View scoreColumn;
+    scoreColumn.setWidth(420);
+    auto *score = details.findViewByName("chartDetailsPersonalBest");
+    details.setScoreContainer(&scoreColumn);
+    details.setChart(&record, best, kClearTypeHardClearRank, "320");
+    require(scoreColumn.findViewByName("chartDetailsPersonalBest") == score,
+            "unchanged layout binding retains an external score container");
+    details.setScoreContainer(nullptr);
+    details.setChart(&record, best, kClearTypeHardClearRank, "320");
+    require(scoreColumn.getChildren().empty() &&
+                details.findViewByName("chartDetailsPersonalBest") == score,
+            "the score reattaches without forcing a structural layout refresh");
+  }
+}
+
 struct GlowCapture final : rendering::UiBatchBackend {
   std::optional<rendering::UiBatchState> glow;
   std::optional<rendering::UiBatchState> image;
@@ -194,6 +268,8 @@ int main() {
   init.resolution.width = 64;
   init.resolution.height = 64;
   require(bgfx::init(init), "headless bgfx initializes for chart details");
+
+  testUnchangedChartDetailsPreserveTexturesAndLayout();
   {
     const auto fixture = std::filesystem::temp_directory_path() /
         ("asobmashow-details-" + std::to_string(SDL_GetTicksNS()) + ".ppm");

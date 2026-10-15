@@ -110,16 +110,20 @@ void IrUploadsScene::setTabTopInset(float topInset) {
 }
 
 void IrUploadsScene::onPause() {
-  // Tab switches keep preparation running; only input ownership changes.
+  // Keep preparation running while deferring hidden list and layout work.
+  presentationActive = false;
   onInputQueueOverflow();
 }
 
 void IrUploadsScene::onResume() {
+  presentationActive = true;
   refreshProfileIfNeeded();
   refreshLanguageIfNeeded();
   observeRemoteRevisions();
   if ((!candidatesLoaded || reloadRequested) && !controller.selectionLocked()) {
     reloadCandidates();
+  } else {
+    refreshUi();
   }
   updateLayoutInsets();
 }
@@ -206,6 +210,7 @@ void IrUploadsScene::updateLayoutInsets() {
 }
 
 void IrUploadsScene::init() {
+  presentationActive = true;
   displayedProfileId = context.profileManager.activeProfile().id;
   context.jukebox.stop();
   preparationTask.reset();
@@ -234,6 +239,11 @@ EventHandleResult IrUploadsScene::handleEvents(SDL_Event &event) {
 void IrUploadsScene::update(float) {
   refreshProfileIfNeeded();
   applyPreparationUpdates();
+  // Completion still reaches the controller in the background. Resume observes
+  // the latest revisions once, avoiding a history scan for each upload status.
+  if (!presentationActive) {
+    return;
+  }
   observeRemoteRevisions();
   if (reloadRequested && !controller.selectionLocked()) {
     reloadRequested = false;
@@ -686,7 +696,7 @@ void IrUploadsScene::applyPreparationUpdates() {
     controller.completePreparation(*updates.completion);
     reloadRequested = true;
   }
-  if (updates.progress || updates.completion) {
+  if (presentationActive && (updates.progress || updates.completion)) {
     refreshUi();
   }
 }

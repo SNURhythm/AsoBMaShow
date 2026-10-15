@@ -36,7 +36,7 @@
 namespace music_stream {
 namespace {
 constexpr std::size_t kBlockFrames = 4096;
-constexpr std::size_t kMaximumOpenAssets = 32;
+constexpr std::size_t kTargetOpenAssets = 32;
 constexpr std::size_t kMaximumEncodedAssetBytes = 256U * 1024U * 1024U;
 constexpr std::uint64_t kMaximumFrames =
     (std::numeric_limits<std::uint32_t>::max() - 36ULL) / (kChannels * sizeof(short));
@@ -77,9 +77,9 @@ std::array<char, 44> wavHeader(std::uint64_t frames) {
   return result;
 }
 
-// One decoder window per hot asset. Inactive assets retain only metadata and a
-// path, so a song with thousands of keysounds does not retain thousands of FDs
-// or full decoded clips. Generated Club Beat sounds are small and resident.
+// Active voices retain one decoder window per asset. The idle LRU is bounded,
+// so a song with thousands of keysounds does not retain thousands of FDs or
+// full decoded clips. Generated Club Beat sounds are small and resident.
 struct Asset {
   std::filesystem::path path;
   SF_INFO info{};
@@ -89,6 +89,7 @@ struct Asset {
   std::vector<double> scratch;
   std::uint64_t windowStart = std::numeric_limits<std::uint64_t>::max();
   std::uint64_t lastUse = 0;
+  std::size_t activeVoices = 0;
   std::atomic<std::uint64_t> *decoderOpens = nullptr;
 
   bool open() {
@@ -167,7 +168,10 @@ struct Voice {
       : asset(std::move(value)), start(event.frame), end(start + frames), order(event.order),
         gain(event.gain),
         ratio(asset->info.samplerate, kSampleRate),
-        cursor(ratio, static_cast<std::size_t>(asset->info.frames)) {}
+        cursor(ratio, static_cast<std::size_t>(asset->info.frames)) {
+    ++asset->activeVoices;
+  }
+  ~Voice() { --asset->activeVoices; }
 };
 } // namespace
 
@@ -197,6 +201,7 @@ struct Source::Impl {
   std::unordered_map<int, std::uint64_t> durationBounds;
   std::unordered_map<int, std::filesystem::path> stagedAssets;
   std::uint64_t useCounter = 0;
+  bool decoderTargetExceeded = false;
   std::jthread worker;
 
   // Caller holds mutex. A missing frame has an empty prepared range.
@@ -237,16 +242,38 @@ struct Source::Impl {
     return !cancelled.load() && !superseded();
   }
 
+  std::size_t trimIdleDecoders(std::size_t target) {
+    std::size_t openCount = 0;
+    for (const auto &[id, asset] : assets) {
+      if (asset && (asset->file || !asset->window.empty())) ++openCount;
+    }
+    if (openCount <= target) return openCount;
+    std::vector<std::shared_ptr<Asset>> idle;
+    for (const auto &[id, asset] : assets) {
+      if (asset && asset->activeVoices == 0 && (asset->file || !asset->window.empty()))
+        idle.push_back(asset);
+    }
+    std::sort(idle.begin(), idle.end(), [](const auto &a, const auto &b) {
+      return a->lastUse < b->lastUse;
+    });
+    for (const auto &asset : idle) {
+      if (openCount <= target) break;
+      asset->closeDecoder();
+      --openCount;
+    }
+    return openCount;
+  }
+
+  void trimExcessIdleDecoders() {
+    if (decoderTargetExceeded)
+      decoderTargetExceeded = trimIdleDecoders(kTargetOpenAssets) > kTargetOpenAssets;
+  }
+
   void makeRoom(const std::shared_ptr<Asset> &current) {
     if (current->file || !current->generated.empty() || !current->window.empty()) return;
-    std::size_t openCount = 0;
-    std::shared_ptr<Asset> oldest;
-    for (const auto &[id, asset] : assets) {
-      if (!asset || (!asset->file && asset->window.empty())) continue;
-      ++openCount;
-      if (asset != current && (!oldest || asset->lastUse < oldest->lastUse)) oldest = asset;
-    }
-    if (openCount >= kMaximumOpenAssets && oldest) oldest->closeDecoder();
+    // The target may be exceeded by active voices. Evicting one of those
+    // causes cyclic reopen/seek work on every block once polyphony exceeds it.
+    decoderTargetExceeded = trimIdleDecoders(kTargetOpenAssets - 1) >= kTargetOpenAssets;
   }
 
   std::optional<std::filesystem::path> stageAsset(
@@ -266,14 +293,14 @@ struct Source::Impl {
   }
 
   void prepareArchivedAssets(const std::vector<Event> &events, std::size_t first,
-                             std::uint64_t blockEnd, std::uint64_t skipEnd) {
-    if (first >= events.size() || events[first].frame >= blockEnd) return;
+                             std::uint64_t stagingEnd, std::uint64_t skipEnd) {
+    if (first >= events.size() || events[first].frame >= stagingEnd) return;
     using Requests = std::map<std::filesystem::path, std::map<int, std::uint64_t>>;
     std::map<std::filesystem::path, Requests> archives;
     const std::vector<std::string_view> extensions(
         asobmshow::chart_assets::kAudioExtensions.begin(),
         asobmshow::chart_assets::kAudioExtensions.end());
-    for (auto index = first; index < events.size() && events[index].frame < blockEnd; ++index) {
+    for (auto index = first; index < events.size() && events[index].frame < stagingEnd; ++index) {
       if (!checkpoint()) return;
       const auto &event = events[index];
       if (assets.contains(event.wav) || stagedAssets.contains(event.wav)) continue;
@@ -473,16 +500,20 @@ struct Source::Impl {
     std::array<char, kBlockFrames * kChannels * sizeof(short)> pcm{};
     std::size_t eventIndex = 0;
     std::uint64_t position = 0;
+    std::uint64_t archiveStagingEnd = 0;
     const auto discardObsoleteBlock = [&] {
       if (!superseded()) return false;
       voices.clear();
+      trimExcessIdleDecoders();
       eventIndex = 0;
+      archiveStagingEnd = 0;
       position = std::numeric_limits<std::uint64_t>::max();
       return true;
     };
     if (!events.empty()) totalFrames = std::max(totalFrames, events.back().frame + 1);
     for (;;) {
       std::uint64_t blockEnd;
+      bool resetVoices = false;
       {
         std::unique_lock lock(mutex);
         changed.wait(lock, [&] {
@@ -500,7 +531,9 @@ struct Source::Impl {
         if (position != next) {
           position = next;
           voices.clear();
+          resetVoices = true;
           eventIndex = 0;
+          archiveStagingEnd = 0;
         }
         blockEnd = std::min<std::uint64_t>(position + kBlockFrames, kMaximumFrames);
         // Stop at the next prepared interval, avoiding writes over PCM that a
@@ -510,7 +543,15 @@ struct Source::Impl {
         activeBlockFirst = position;
         activeBlockEnd = blockEnd;
       }
-      prepareArchivedAssets(events, eventIndex, blockEnd, std::min(position, totalFrames));
+      if (resetVoices) trimExcessIdleDecoders();
+      if (blockEnd > archiveStagingEnd) {
+        // Stage encoded assets in opening-sized groups, independently of PCM
+        // blocks. Sliding this horizon every block would again extract only
+        // one newly reached entry at a time from a solid archive.
+        const auto stagingEnd = std::min(position + kInitialBufferFrames, kMaximumFrames);
+        prepareArchivedAssets(events, eventIndex, stagingEnd, std::min(position, totalFrames));
+        archiveStagingEnd = stagingEnd;
+      }
       if (cancelled.load()) return;
       if (discardObsoleteBlock()) continue;
       while (eventIndex < events.size() && events[eventIndex].frame < blockEnd) {
@@ -582,7 +623,8 @@ struct Source::Impl {
       }
       if (cancelled.load()) return;
       if (discardObsoleteBlock()) continue;
-      std::erase_if(voices, [&](const auto &voice) { return voice->end <= end; });
+      if (std::erase_if(voices, [&](const auto &voice) { return voice->end <= end; }) > 0)
+        trimExcessIdleDecoders();
       const auto samples = static_cast<std::size_t>(end - position) * kChannels;
       for (std::size_t i = 0; i < samples; ++i) {
         const auto sample = static_cast<std::uint16_t>(static_cast<short>(
@@ -630,6 +672,8 @@ struct Source::Impl {
       std::lock_guard lock(mutex);
       if (!cancelled.load()) state.error = "Music stream preparation failed";
     }
+    // Voice destruction has released every pin, including on cancel/error.
+    assets.clear();
     changed.notify_all();
   }
 };

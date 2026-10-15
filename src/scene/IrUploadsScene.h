@@ -46,6 +46,7 @@ private:
   SceneReturnTarget returnTarget_;
   Scene *tabSettingsReturnOwner = nullptr;
   bool embeddedTab = false;
+  bool presentationActive = true;
   float tabTopInset = 0;
   std::function<void()> tabClose;
   std::string displayedProfileId;

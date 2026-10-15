@@ -101,14 +101,14 @@ void LibraryFolderItemView::setItem(const std::string &label, int depth,
   labelView->setDisplay(rootItem || section ? YGDisplayNone : YGDisplayFlex);
   sectionLabelView->setVisible(section);
   sectionLabelView->setDisplay(section ? YGDisplayFlex : YGDisplayNone);
-  sectionLabelView->setText(label);
   groupLabelView->setVisible(rootItem);
   groupLabelView->setDisplay(rootItem ? YGDisplayFlex : YGDisplayNone);
-  groupLabelView->setText(label);
   sectionRule->setVisible(section);
   clearLamp->setVisible(hasClearLampColor(clearRank));
   clearLamp->setDisplay(hasClearLampColor(clearRank) ? YGDisplayFlex : YGDisplayNone);
-  labelView->setText(label);
+  auto *activeLabel = section ? sectionLabelView : rootItem ? groupLabelView : labelView;
+  activeLabel->setDeferredTextureMaterialization(true);
+  activeLabel->setText(label);
   const bool showCount = count >= 0;
   countView->setWidth(showCount ? kCountWidth : 0);
   countView->setText(showCount ? std::to_string(count) : "");
@@ -132,6 +132,7 @@ void LibraryFolderItemView::setItem(const std::string &label, int depth,
   } else {
     onUnselected();
   }
+  activeLabel->setDeferredTextureMaterialization(false);
 }
 
 void LibraryFolderItemView::onSelected() {
@@ -141,8 +142,7 @@ void LibraryFolderItemView::onSelected() {
   contentCard->setCornerRadius(0);
   contentCard->setBorderWidth(0);
   disclosureView->setThemedColor(main_menu_theme::onAction);
-  labelView->setThemedColor(main_menu_theme::onAction);
-  groupLabelView->setThemedColor(main_menu_theme::onAction);
+  (rootItem ? groupLabelView : labelView)->setThemedColor(main_menu_theme::onAction);
   countView->setThemedColor(main_menu_theme::onAction);
 }
 
@@ -152,7 +152,8 @@ void LibraryFolderItemView::onUnselected() {
   contentCard->setCornerRadius(0);
   contentCard->setBorderWidth(0);
   disclosureView->setThemedColor(main_menu_theme::muted);
-  labelView->setThemedColor(sectionHeader ? main_menu_theme::muted : main_menu_theme::ink);
-  groupLabelView->setThemedColor(main_menu_theme::ink);
+  if (!sectionHeader) {
+    (rootItem ? groupLabelView : labelView)->setThemedColor(main_menu_theme::ink);
+  }
   countView->setThemedColor(main_menu_theme::muted);
 }

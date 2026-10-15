@@ -89,6 +89,7 @@ struct IrUploadsScene: LayoutFixture {
        *candidateCountText=&control, *refreshButton=&control,
        *selectAllButton=&control, *clearButton=&control;
   bool reloadRequested=false;
+  bool presentationActive=true;
   struct { bool selectionLocked() { return false; } } controller;
   void update(float); void updateLayoutInsets();
   void refreshProfileIfNeeded() {} void applyPreparationUpdates() {}

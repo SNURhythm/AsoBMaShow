@@ -55,6 +55,8 @@ struct PagedPreviewSource::Impl {
     std::filesystem::path path;
     SF_INFO info{};
     std::unique_ptr<SoundData> sound;
+    bool staged = false;
+    std::size_t preparedPages = 0;
   };
   struct Event {
     long long timeMicros;
@@ -123,6 +125,21 @@ struct PagedPreviewSource::Impl {
       ++state.revision; }
     changed.notify_all();
   }
+  void stageAssets(std::vector<std::size_t> indices) {
+    std::erase_if(indices, [&](std::size_t index) { return assets[index].staged; });
+    std::sort(indices.begin(), indices.end());
+    indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+    if (indices.empty()) return;
+    std::vector<std::filesystem::path> paths;
+    paths.reserve(indices.size());
+    for (const auto index : indices) paths.push_back(assets[index].path);
+    std::string error;
+    if (!cache->StageArchiveAssets(paths, cancelled, {}, &error)) {
+      checkpoint();
+      throw std::runtime_error(error.empty() ? "Could not stage preview audio." : error);
+    }
+    for (const auto index : indices) assets[index].staged = true;
+  }
   void inspect(Asset &asset) {
     checkpoint();
     if (asset.sound->pagedOutput->metadata()) return;
@@ -146,6 +163,18 @@ struct PagedPreviewSource::Impl {
                                           UINT32_MAX);
     if (!count || !asset.sound->pagedOutput->publishMetadata(asset.info.channels, *count))
       throw std::runtime_error("Preview audio length is not representable.");
+  }
+
+  DecodedAssetCache::DecoderPin pinDecoder(Asset &asset) {
+    checkpoint();
+    DecodedAssetCache::FailureKind failure{};
+    std::string error;
+    auto pin = cache->PinDecoder(asset.path, cancelled, {}, &error, &failure);
+    if (!pin && failure != DecodedAssetCache::FailureKind::InvalidAsset) {
+      checkpoint();
+      throw std::runtime_error(error.empty() ? "Could not retain preview decoder." : error);
+    }
+    return pin;
   }
 
   // Each contiguous missing output-page run leases one decoder/cache ReadRange,
@@ -202,12 +231,24 @@ struct PagedPreviewSource::Impl {
         if (!asset.sound->pagedOutput->publishPage(publish,
                 std::span<const short>(output.data(), frames * channels)))
           throw std::runtime_error("Could not publish preview PCM page.");
+        ++asset.preparedPages;
       }
     }
   }
 
   void run() noexcept {
     try {
+      struct ActiveAsset {
+        DecodedAssetCache::DecoderPin pin;
+        std::size_t voices = 0;
+      };
+      // These pins follow preparation windows, never playback/session lifetime.
+      // Stack ownership releases every pin on completion, cancellation or error.
+      std::vector<ActiveAsset> activeAssets(assets.size());
+      const auto outputComplete = [](const Asset &asset) {
+        const auto *metadata = asset.sound->pagedOutput->metadata();
+        return metadata && asset.preparedPages == metadata->pageCount;
+      };
       finalOutput = scaleFrames(timelineFrames44100, outputRate, kPreviewSampleRate, true);
       // Before callbacks start, classify all earlier events so expired voices
       // are omitted and every overlapping tail is scheduled at its offset.
@@ -217,30 +258,60 @@ struct PagedPreviewSource::Impl {
       auto reach = [&](std::size_t index) {
         auto &event = events[index];
         auto &asset = assets[event.asset];
+        auto &retained = activeAssets[event.asset];
+        if (!retained.pin && !outputComplete(asset)) retained.pin = pinDecoder(asset);
         inspect(asset);
         const auto length = asset.sound->pagedOutput->metadata()->frameCount;
         const auto tail = event.outputStart + length;
         finalOutput = std::max(finalOutput, tail);
-        if (tail > originOutput && length != 0) active.push_back(index);
+        if (tail > originOutput && length != 0) {
+          active.push_back(index);
+          ++retained.voices;
+        } else if (!retained.voices) {
+          retained.pin = {};
+        }
       };
-      while (nextEvent < events.size() && events[nextEvent].outputStart <= originOutput)
-        reach(nextEvent++);
       // Prepare two seconds at arbitrary origin, then short forward windows.
       std::uint64_t windowStart = originOutput;
       auto windowEnd = originOutput + static_cast<std::uint64_t>(outputRate) * 2;
+      auto stagedThrough = windowEnd;
+      std::size_t nextStagedEvent = 0;
+      auto stageThrough = [&](std::uint64_t end) {
+        std::vector<std::size_t> indices;
+        while (nextStagedEvent < events.size() && events[nextStagedEvent].outputStart < end)
+          indices.push_back(events[nextStagedEvent++].asset);
+        stageAssets(std::move(indices));
+      };
+      // Keep archive extraction bounded by the next two seconds of event
+      // requests. Stage opening/highlight tails first; later windows never wait
+      // for the chart's unused or distant assets to be extracted in archive order.
+      stageThrough(stagedThrough);
+      while (nextEvent < events.size() && events[nextEvent].outputStart <= originOutput)
+        reach(nextEvent++);
       bool initial = true;
       for (;;) {
         checkpoint();
+        if (windowEnd > stagedThrough) {
+          stagedThrough = windowStart + static_cast<std::uint64_t>(outputRate) * 2;
+          stageThrough(stagedThrough);
+        }
         while (nextEvent < events.size() && events[nextEvent].outputStart < windowEnd)
           reach(nextEvent++);
         for (const auto index : active) {
           const auto &event = events[index];
           const auto first = windowStart > event.outputStart ? windowStart - event.outputStart : 0;
           prepare(assets[event.asset], first, windowEnd - event.outputStart + 1);
+          // Repeated voices can remain scheduled after this asset is fully
+          // prepared. They consume immutable output pages and need no cursor.
+          if (outputComplete(assets[event.asset])) activeAssets[event.asset].pin = {};
         }
         std::erase_if(active, [&](std::size_t index) {
           const auto &event = events[index];
-          return event.outputStart + assets[event.asset].sound->pagedOutput->metadata()->frameCount <= windowEnd;
+          if (event.outputStart + assets[event.asset].sound->pagedOutput->metadata()->frameCount > windowEnd)
+            return false;
+          auto &retained = activeAssets[event.asset];
+          if (--retained.voices == 0) retained.pin = {};
+          return true;
         });
         if (nextEvent == events.size() && !durationKnown.load(std::memory_order_relaxed)) {
           durationOutput.store(finalOutput > originOutput ? finalOutput - originOutput : 0,
@@ -282,7 +353,12 @@ struct PagedPreviewSource::Impl {
       }
       // Playback consumption has no effect on warming: prepare the prefixes,
       // unused selected WAVs and referenced WAV variants as well.
+      std::vector<std::size_t> remaining;
+      for (std::size_t index = 0; index < assets.size(); ++index)
+        if (!assets[index].staged) remaining.push_back(index);
+      stageAssets(std::move(remaining));
       for (auto &asset : assets) {
+        auto pin = pinDecoder(asset);
         inspect(asset);
         const auto count = asset.sound->pagedOutput->metadata()->frameCount;
         const auto step = static_cast<std::uint64_t>(std::max(1, outputRate / 4));

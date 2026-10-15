@@ -2,8 +2,12 @@
 #include "audio/AudioMix.h"
 #include "audio/DecodedAssetCache.h"
 #include "audio/SoundFileIO.h"
+#include "audio/decoder.h"
+#include "ArchiveFile.h"
+#include "ArchiveRAII.h"
 #include "bms_parser.hpp"
 
+#include <archive_entry.h>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -317,7 +321,9 @@ void testFullCallbackPreflightPreservesScheduledAndActiveVoices(const std::files
 void testMissingAndExpired(const std::filesystem::path &root) {
   writeWav(root / "first.wav", 44100, std::vector<short>(100, 8192));
   { std::ofstream invalid(root / "second.wav"); invalid << "invalid audio"; }
-  auto source = audio::PagedPreviewSource::Create(*chart(root, "#00001:01\n#00111:02\n#00211:03\n"), {}, 44100);
+  auto parsed = chart(root, "#00001:01\n#00111:02\n#00211:03\n");
+  parsed->ReferencedWavTable.emplace(20, "missing.zip/tone.wav");
+  auto source = audio::PagedPreviewSource::Create(*parsed, {}, 44100);
   require(source->Begin(44100), "cannot start invalid asset preview");
   waitPrepared(source);
   require(source->GetState().error.empty(), "invalid/missing assets must be known empty");
@@ -327,13 +333,196 @@ void testMissingAndExpired(const std::filesystem::path &root) {
   require(!badRate->Begin(0) && !badRate->GetState().error.empty(),
           "invalid backend rate must report a control-thread error");
 }
+
+void testArchivedPreviewBatchesOpeningFutureAndReferencedAssets(const std::filesystem::path &root) {
+  writeWav(root / "tone.wav", 44100, std::vector<short>(22050, 8192));
+  std::ifstream input(root / "tone.wav", std::ios::binary);
+  const std::vector<char> bytes((std::istreambuf_iterator<char>(input)), {});
+  const auto archivePath = root / "sounds.7z";
+  auto writer = makeArchiveWriteHandle();
+  require(archive_write_set_format_7zip(writer.get()) == ARCHIVE_OK &&
+              archive_write_open_filename(writer.get(), archivePath.string().c_str()) == ARCHIVE_OK,
+          "cannot create archived preview fixture");
+  std::string body;
+  constexpr char digits[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  for (int index = 1; index <= 16; ++index) {
+    const std::string name = "sound-" + std::to_string(index) + ".wav";
+    UniqueResource<archive_entry, archive_entry_free> entry(archive_entry_new());
+    archive_entry_set_pathname(entry.get(), name.c_str());
+    archive_entry_set_filetype(entry.get(), AE_IFREG);
+    archive_entry_set_perm(entry.get(), 0644);
+    archive_entry_set_size(entry.get(), bytes.size());
+    require(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK &&
+                archive_write_data(writer.get(), bytes.data(), bytes.size()) ==
+                    static_cast<la_ssize_t>(bytes.size()), "cannot write archived preview asset");
+    const std::string wav{'0', digits[index]};
+    if (index <= 14) {
+      body += "#WAV" + wav + " " + name + "\n";
+      body += std::string(index <= 12 ? "#00001:" : "#00201:") + wav + "\n";
+    }
+  }
+  require(archive_write_close(writer.get()) == ARCHIVE_OK, "cannot finish archived preview fixture");
+  auto parsed = chart(root, body);
+  parsed->Meta.Folder = archivePath;
+  parsed->ReferencedWavTable.emplace(15, "sound-15.wav");
+  parsed->ReferencedWavTable.emplace(16, "sound-16.wav");
+  auto cache = std::make_shared<audio::DecodedAssetCache>(root / "cache",
+      audio::DecodedAssetCache::kUnlimitedRetainedBytes);
+  auto source = audio::PagedPreviewSource::Create(*parsed, cache, 0);
+  require(source->Begin(44100), "cannot start archived preview");
+  waitPrepared(source);
+  require(cache->GetStatistics().decodedFrames == 16 * 22050,
+          "archive batching must warm opening, future and referenced native PCM");
+  require(cache->GetStatistics().archiveReads <= 4,
+          "preview preparation must batch archive entries instead of replaying one extraction per asset");
+  const auto samples = renderAll(source);
+  require(!samples.empty() && std::abs(samples.front() - 12 * 8191.0f * 0.9f / 32768) < 0.00001f,
+          "archive staging must preserve overlapping preview PCM");
+}
+
+void testOverlappingCompressedAssetsKeepProgressiveDecoders(const std::filesystem::path &root) {
+  const auto encoded = root / "tone.ogg";
+  SF_INFO written{};
+  written.samplerate = 44100;
+  written.channels = 1;
+  written.format = SF_FORMAT_OGG | SF_FORMAT_VORBIS;
+  {
+    auto file = asobmashow::audio::openSoundFileHandle(encoded, SFM_WRITE, written);
+    require(bool(file), "cannot create overlapping compressed fixture");
+    std::vector<short> samples(44100 * 4);
+    for (std::size_t index = 0; index < samples.size(); ++index)
+      samples[index] = static_cast<short>(int(index % 200) * 10 - 1000);
+    require(sf_writef_short(file.get(), samples.data(), samples.size()) ==
+                static_cast<sf_count_t>(samples.size()), "cannot write overlapping compressed fixture");
+  }
+  std::atomic_bool cancelled{false};
+  SF_INFO info{};
+  std::vector<short> expected;
+  require(decodeAudioToPCM(fspath_to_path_t(encoded), expected, info, cancelled),
+          "cannot decode overlapping compressed reference");
+  constexpr char digits[] = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  for (const int count : {16, 17, 32}) {
+    const auto directory = root / std::to_string(count);
+    std::filesystem::create_directories(directory);
+    std::string body;
+    std::vector<std::filesystem::path> paths;
+    for (int index = 1; index <= count; ++index) {
+      const auto name = "sound-" + std::to_string(index) + ".ogg";
+      paths.push_back(directory / name);
+      std::filesystem::copy_file(encoded, paths.back());
+      const std::string wav{'0', digits[index]};
+      body += "#WAV" + wav + " " + name + "\n#00001:" + wav + "\n";
+    }
+    auto cache = std::make_shared<audio::DecodedAssetCache>(directory / "cache",
+        audio::DecodedAssetCache::kUnlimitedRetainedBytes);
+    auto source = audio::PagedPreviewSource::Create(*chart(directory, body), cache, 0);
+    require(source->Begin(44100), "cannot start overlapping compressed preview");
+    waitPrepared(source);
+    const auto state = cache->GetStatistics();
+    require(state.decoderOpens == static_cast<std::uint64_t>(count),
+            "each actively warmed compressed asset must open once across every preview window");
+    require(state.decodedFrames == expected.size() * count,
+            "overlapping preview must retain every native frame exactly once");
+    require(state.liveDecoders <= 16,
+            "completed preview preparation must release decoder pins and trim idle retention");
+    require(state.pinnedEntries == 0,
+            "completed preview preparation must retain no worker-scoped pins");
+    for (const auto &path : paths) {
+      std::vector<short> actual;
+      require(cache->Materialize(path, actual, info, cancelled) && actual == expected,
+              "retained compressed PCM must match the contiguous decoder exactly");
+    }
+    const auto actual = renderAll(source);
+    require(actual.size() >= expected.size() * 2, "overlap render must contain every source frame");
+    for (std::size_t frame = 0; frame < expected.size(); ++frame) {
+      float mixed = 0;
+      for (int voice = 0; voice < count; ++voice) mixed += expected[frame] * (0.9f / 32768.0f);
+      require(std::abs(actual[frame * 2] - mixed) < 0.000001f &&
+                  actual[frame * 2] == actual[frame * 2 + 1],
+              "decoder retention must preserve overlapping preview PCM");
+    }
+  }
+}
+
+void testPreparationExitReleasesDecoderPins(const std::filesystem::path &root) {
+  for (const bool fail : {false, true}) {
+    writeWav(root / "first.wav", 44100, std::vector<short>(100, 16384));
+    writeWav(root / "second.wav", 44100, std::vector<short>(44100 * 4, 8192));
+    auto cache = std::make_shared<audio::DecodedAssetCache>(root / "cache",
+        audio::DecodedAssetCache::kUnlimitedRetainedBytes);
+    auto source = audio::PagedPreviewSource::Create(*chart(root, "#00011:01\n"), cache, 0);
+    preparationBlocked.store(false);
+    preparationGate.store(true);
+    require(source->Begin(44100), "cannot begin pin cleanup preview");
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while (!preparationBlocked.load() && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::yield();
+    if (!preparationBlocked.load()) {
+      preparationGate.store(false);
+      require(false, "pin cleanup preview did not reach preparation gate");
+    }
+    const auto pinned = cache->GetStatistics().pinnedEntries;
+    if (fail) {
+      std::filesystem::remove(root / "second.wav");
+      preparationGate.store(false);
+      while (source->GetState().error.empty() && std::chrono::steady_clock::now() < deadline)
+        source->WaitForChange(source->GetState().revision, 20ms);
+      require(!source->GetState().error.empty(), "source removal during preparation must report failure");
+      source->Cancel();
+    } else {
+      // Keep the producer gated until Cancel has requested termination, then
+      // allow its normal checkpoint to unwind and release worker-owned pins.
+      std::jthread release([&] {
+        while (!source->GetState().cancelled) std::this_thread::yield();
+        preparationGate.store(false);
+      });
+      source->Cancel();
+    }
+    require(pinned != 0 && cache->GetStatistics().pinnedEntries == 0,
+            "cancellation and operational failure must release all preparation pins");
+    require(cache->Contains(root / "first.wav"),
+            "preparation exit must retain already prepared native PCM");
+  }
+}
+
+void testPreparedRepeatedVoiceReleasesItsDecoderPin(const std::filesystem::path &root) {
+  writeWav(root / "first.wav", 44100, std::vector<short>(100, 16384));
+  writeWav(root / "second.wav", 44100, std::vector<short>(44100 * 4, 8192));
+  auto parsed = chart(root, "#00011:0101\n#00111:02\n");
+  for (auto *measure : parsed->Measures)
+    for (auto *timeline : measure->TimeLines)
+      for (const auto *note : timeline->Notes)
+        if (note && note->Wav == 1 && timeline->Timing > 0)
+          timeline->Timing = 1999000;
+  auto cache = std::make_shared<audio::DecodedAssetCache>(root / "cache",
+      audio::DecodedAssetCache::kUnlimitedRetainedBytes);
+  auto source = audio::PagedPreviewSource::Create(*parsed, cache, 0);
+  preparationBlocked.store(false);
+  preparationGate.store(true);
+  require(source->Begin(44100), "cannot begin repeated voice pin preview");
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  while (!preparationBlocked.load() && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::yield();
+  const auto startup = source->GetState();
+  const auto retained = cache->GetStatistics();
+  preparationGate.store(false);
+  require(preparationBlocked.load() && startup.startupReady && !startup.preparationComplete,
+          "later large source must remain gated after startup");
+  // The second first.wav voice extends past the two-second startup window,
+  // but all of that source's output is already ready. Only second.wav is warming.
+  require(retained.pinnedEntries == 1 && retained.decodedFrames == 100,
+          "fully prepared repeated voices must release their cursor while later audio is warming");
+  waitPrepared(source);
+  require(cache->GetStatistics().pinnedEntries == 0,
+          "repeated voice preparation must finish with no retained pins");
+}
 }
 int main() {
   bypassPreparationGate = true;
   const auto root = std::filesystem::temp_directory_path() /
       ("asobmashow-paged-source-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
   try {
-    for (const char *name : {"highlight", "resampling", "missing", "progressive", "timing", "downsampling", "preflight"}) std::filesystem::create_directories(root / name);
+    for (const char *name : {"highlight", "resampling", "missing", "progressive", "timing", "downsampling", "preflight", "archive", "overlap", "pin-exit", "repeated-pin"}) std::filesystem::create_directories(root / name);
     testHighlightAndReuse(root / "highlight");
     testResampling(root / "resampling");
     testDownsamplingWarmsEveryNativePage(root / "downsampling");
@@ -341,6 +530,10 @@ int main() {
     testProgressiveStartup(root / "progressive");
     testFullCallbackPreflightPreservesScheduledAndActiveVoices(root / "preflight");
     testFractionalTiming(root / "timing");
+    testArchivedPreviewBatchesOpeningFutureAndReferencedAssets(root / "archive");
+    testOverlappingCompressedAssetsKeepProgressiveDecoders(root / "overlap");
+    testPreparationExitReleasesDecoderPins(root / "pin-exit");
+    testPreparedRepeatedVoiceReleasesItsDecoderPin(root / "repeated-pin");
     std::filesystem::remove_all(root);
     std::cout << "Paged preview source tests passed\n";
     return 0;

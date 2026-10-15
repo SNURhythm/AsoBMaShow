@@ -172,6 +172,66 @@ void testEquivalence(const std::filesystem::path &root) {
             "backward seek must preserve previously rendered audio");
   }
 }
+void testCompressedSourceDecoderLifetime(const std::filesystem::path &root) {
+  struct Case { int count; bool repeat; };
+  for (const auto [count, repeat] : {Case{32, false}, Case{33, false},
+                                    Case{64, false}, Case{64, true}}) {
+    const auto dir = root / ("overlapping-ogg-" + std::to_string(count) +
+                             (repeat ? "-repeat" : ""));
+    std::filesystem::create_directories(dir);
+    const auto fixture = dir / "layer.ogg";
+    {
+      SF_INFO info{};
+      info.samplerate = 44100;
+      info.channels = 1;
+      info.format = SF_FORMAT_OGG | SF_FORMAT_VORBIS;
+      auto file = asobmashow::audio::openSoundFileHandle(fixture, SFM_WRITE, info);
+      require(bool(file), "could not create overlapping Ogg fixture");
+      std::vector<short> samples(44100 * (repeat ? 1 : 3));
+      for (std::size_t i = 0; i < samples.size(); ++i)
+        samples[i] = static_cast<short>(static_cast<int>((i * 17) % 801) - 400);
+      require(sf_write_short(file.get(), samples.data(), samples.size()) ==
+                  static_cast<sf_count_t>(samples.size()),
+              "could not write overlapping Ogg fixture");
+    }
+    const std::string digits = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    std::string body;
+    for (int index = 0; index < count; ++index) {
+      const int wav = index + 10;
+      const std::string code{digits[wav / 36], digits[wav % 36]};
+      const auto name = "layer-" + std::to_string(index) + ".ogg";
+      std::filesystem::copy_file(fixture, dir / name);
+      body += "#WAV" + code + " " + name + "\n#00001:" + code + "\n";
+      // All first-burst voices expire before the second burst at 4s.
+      if (repeat) body += "#00201:" + code + "\n";
+    }
+    auto chart = chartAt(dir, body);
+    const auto referencePath = dir / "reference.wav";
+    require(chart_audio::RenderChartAudioToWav(*chart, referencePath).success,
+            "overlapping Ogg reference render failed");
+    const auto stream = music_stream::Source::Create(std::move(chart), dir / "streams");
+    const auto actual = readAll(stream);
+    const auto opens = stream->GetStatistics().decoderOpens;
+    if (opens > static_cast<std::uint64_t>(count) * 2)
+      throw std::runtime_error("active compressed sources must not reopen every block: " +
+          std::to_string(count) + " sources opened " + std::to_string(opens) + " decoders");
+    if (repeat)
+      require(opens > static_cast<std::uint64_t>(count),
+              "completed voices must release excess idle decoders before the next burst");
+    const auto reference = readWav(referencePath);
+    if (actual != reference) {
+      const auto mismatch = std::mismatch(actual.begin(), actual.end(),
+                                          reference.begin(), reference.end());
+      throw std::runtime_error("overlapping compressed voices differ: " +
+          std::to_string(count) + " sources, actual samples " + std::to_string(actual.size()) +
+          ", reference samples " + std::to_string(reference.size()) + ", mismatch " +
+          std::to_string(mismatch.first - actual.begin()) + ", actual " +
+          (mismatch.first == actual.end() ? "end" : std::to_string(*mismatch.first)) +
+          ", reference " +
+          (mismatch.second == reference.end() ? "end" : std::to_string(*mismatch.second)));
+    }
+  }
+}
 void testTemporaryLifetime(const std::filesystem::path &root) {
   const auto dir = root / "temporary";
   auto chart = chartAt(dir);
@@ -375,6 +435,68 @@ void testColdSeekSkipsExpiredVorbisDecoders(const std::filesystem::path &root,
           "skipped Vorbis assets must still play correctly when seeking backward");
 }
 
+void testSpacedArchivedSoundsUseStagingWindows(const std::filesystem::path &root) {
+  const auto dir = root / "spaced-archive";
+  std::filesystem::create_directories(dir);
+  const std::string digits = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  std::string body;
+  std::vector<std::filesystem::path> paths;
+  for (int measure = 0; measure < 2; ++measure) {
+    std::string notes;
+    for (int note = 0; note < 16; ++note) {
+      const int index = measure * 16 + note;
+      const int wav = index + 10;
+      const std::string code{digits[wav / 36], digits[wav % 36]};
+      const auto name = "tap-" + std::to_string(index) + ".wav";
+      paths.push_back(dir / name);
+      std::vector<short> samples(8820);
+      for (std::size_t frame = 0; frame < samples.size(); ++frame)
+        samples[frame] = static_cast<short>(index * 100 + static_cast<int>(frame % 301) - 1500);
+      writeWav(paths.back(), 44100, 1, samples);
+      body += "#WAV" + code + " " + name + "\n";
+      notes += code;
+    }
+    body += "#00" + std::to_string(measure) + "11:" + notes + "\n";
+  }
+  auto chart = chartAt(dir, body);
+  const auto referencePath = dir / "reference.wav";
+  require(chart_audio::RenderChartAudioToWav(*chart, referencePath).success,
+          "spaced archive reference render failed");
+  const auto reference = readWav(referencePath);
+  paths.push_back(dir / "chart.bms");
+  const auto archivePath = root / "spaced-sounds.7z";
+  auto writer = makeArchiveWriteHandle();
+  require(archive_write_set_format_7zip(writer.get()) == ARCHIVE_OK &&
+              archive_write_open_filename(writer.get(), archivePath.string().c_str()) == ARCHIVE_OK,
+          "could not create spaced archive fixture");
+  for (const auto &path : paths) {
+    std::ifstream input(path, std::ios::binary);
+    const std::vector<char> bytes((std::istreambuf_iterator<char>(input)), {});
+    std::unique_ptr<archive_entry, decltype(&archive_entry_free)>
+        entry(archive_entry_new(), archive_entry_free);
+    archive_entry_set_pathname(entry.get(), path.filename().string().c_str());
+    archive_entry_set_filetype(entry.get(), AE_IFREG);
+    archive_entry_set_perm(entry.get(), 0644);
+    archive_entry_set_size(entry.get(), bytes.size());
+    require(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK &&
+                archive_write_data(writer.get(), bytes.data(), bytes.size()) ==
+                    static_cast<la_ssize_t>(bytes.size()) &&
+                archive_write_finish_entry(writer.get()) == ARCHIVE_OK,
+            "could not write spaced archive fixture");
+  }
+  require(archive_write_close(writer.get()) == ARCHIVE_OK,
+          "could not finish spaced archive fixture");
+  std::atomic_bool cancelled{false};
+  chart = play_options::parseChart(archivePath / "chart.bms", cancelled, "spaced archive test");
+  require(bool(chart), "could not parse spaced archive fixture");
+  const auto stream = music_stream::Source::Create(std::move(chart), dir / "streams");
+  require(readAll(stream) == reference, "spaced archived keysounds must preserve exact mixed PCM");
+  const auto reads = stream->GetStatistics().archiveReads;
+  if (reads > 3)
+    throw std::runtime_error("32 spaced archived keysounds must use staging windows, read " +
+                            std::to_string(reads) + " archive sessions");
+}
+
 void testSeekInterruptsObsoletePreparation(const std::filesystem::path &root) {
   const auto dir = root / "seek-preemption";
   std::filesystem::create_directories(dir);
@@ -478,12 +600,14 @@ int main() {
     testVorbisDurationBounds(root);
     testTemporaryLifetime(root);
     testEquivalence(root);
+    testCompressedSourceDecoderLifetime(root);
     testLazyLongSource(root);
     testSeekPreparesOnlyRequestedRanges(root);
     testColdSeekSkipsExpiredVorbisDecoders(root);
     testColdSeekSkipsExpiredVorbisDecoders(root, ".7z");
     testColdSeekSkipsExpiredVorbisDecoders(root, ".zip");
     testColdSeekSkipsExpiredVorbisDecoders(root, ".zip", true);
+    testSpacedArchivedSoundsUseStagingWindows(root);
     testSeekInterruptsObsoletePreparation(root);
     testSeekWakesWaitingRead(root);
     testCancelAndPause(root);

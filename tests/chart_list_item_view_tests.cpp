@@ -1,5 +1,6 @@
 #include "rendering/UniformCache.h"
 #include "view/ChartListItemView.h"
+#include "view/LibraryFolderItemView.h"
 #include "view/ImageView.h"
 #include "view/UiTheme.h"
 #include "view/MainMenuTheme.h"
@@ -39,6 +40,46 @@ bool sameColor(const Color &actual, const Color &expected) {
   return actual.r == expected.r && actual.g == expected.g &&
          actual.b == expected.b && actual.a == expected.a;
 }
+
+void testFolderBindingOnlyMaterializesVisibleLabel() {
+  LibraryFolderItemView row(0, 0, 350, 50);
+  std::vector<TextView *> labels;
+  for (auto *child : row.getChildren().front()->getChildren()) {
+    if (auto *text = dynamic_cast<TextView *>(child)) labels.push_back(text);
+  }
+  for (int index = 0; index < 9; ++index) {
+    const bool section = index % 3 == 2;
+    const int depth = index % 3 == 1 ? 1 : 0;
+    const bool selected = index % 2 != 0;
+    std::vector<bgfx::TextureHandle> previous;
+    for (auto *label : labels) previous.push_back(label->textureHandle());
+    const std::string value = "Recycled folder " + std::to_string(index);
+    {
+      View::LayoutBatchScope batch;
+      row.setItem(value, depth, -1, selected, kNoClearTypeRank,
+                  false, false, false, 0, section);
+    }
+    int displayedLabels = 0;
+    for (std::size_t i = 0; i < labels.size(); ++i) {
+      auto *label = labels[i];
+      const auto texture = label->textureHandle();
+      if (!label->getVisible() || YGNodeStyleGetDisplay(label->getNode()) == YGDisplayNone) {
+        require(!bgfx::isValid(texture) || texture.idx == previous[i].idx,
+                "recycled folder binding must not upload a hidden label variant");
+      } else if (label->getText() == value) {
+        ++displayedLabels;
+        require(bgfx::isValid(texture), "the active folder label has a raster");
+        const auto expected = section ? main_menu_theme::muted()
+            : selected ? main_menu_theme::onAction() : main_menu_theme::ink();
+        const auto actual = label->currentColor();
+        require(actual.r == expected.r && actual.g == expected.g &&
+                    actual.b == expected.b && actual.a == expected.a,
+                "recycling folder variants preserves selected and section colors");
+      }
+    }
+    require(displayedLabels == 1, "recycling root, leaf and section rows binds exactly one current label");
+  }
+}
 } // namespace
 
 int main() {
@@ -47,6 +88,8 @@ int main() {
   init.resolution.width = 64;
   init.resolution.height = 64;
   require(bgfx::init(init), "headless bgfx initializes for chart list row");
+
+  testFolderBindingOnlyMaterializesVisibleLabel();
 
   {
     ui_theme::setActiveMode(ui_theme::ThemeMode::Dark);

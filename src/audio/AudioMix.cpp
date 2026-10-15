@@ -128,8 +128,9 @@ struct OutputPcmView {
   int channels = 0;
   bool pending = false;
 
+  template<bool Paged>
   const short *frameSamples(size_t frame) const noexcept {
-    if (paged == nullptr) return contiguous + frame * static_cast<size_t>(channels);
+    if constexpr (!Paged) return contiguous + frame * static_cast<size_t>(channels);
     const short *page = paged->pageSamples(frame / PagedPcmSound::kPageFrames);
     return page == nullptr ? nullptr
                            : page + (frame % PagedPcmSound::kPageFrames) *
@@ -1048,66 +1049,77 @@ void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
 
     std::uint64_t positionQ32 = playingSound.sourceFrameQ32;
     bool finished = false;
-    for (size_t frame = 0; frame < frameCount - outputOffsetFrames; ++frame) {
-      if (playingSound.loop && positionQ32 >= loopLengthQ32) {
-        positionQ32 %= loopLengthQ32;
-      }
-      const size_t leftFrame = static_cast<size_t>(positionQ32 >> 32);
-      if (leftFrame >= source.frameCount) {
-        finished = true;
-        break;
-      }
-      const size_t rightFrame = leftFrame + 1 < source.frameCount
-                                    ? leftFrame + 1
-                                    : leftFrame;
-      const float fraction =
-          static_cast<float>(positionQ32 & kQ32FractionMask) /
-          static_cast<float>(kQ32One);
-      const short *leftSamples = source.frameSamples(leftFrame);
-      const short *rightSamples = source.frameSamples(rightFrame);
-      // Paged callers preflight the whole block before activation. Guard direct
-      // misuse as well; never dereference unpublished PCM.
-      if (leftSamples == nullptr || rightSamples == nullptr) return;
-      const size_t outputFrameOffset =
-          (outputOffsetFrames + frame) * static_cast<size_t>(outputChannels);
-
-      if (channels == 1) {
-        const float left = static_cast<float>(leftSamples[0]);
-        const float right = static_cast<float>(rightSamples[0]);
-        const float sample = (left + (right - left) * fraction) / 32768.0f;
-        for (int outputChannel = 0; outputChannel < outputChannels;
-             ++outputChannel) {
-          mixBuffer[outputFrameOffset + outputChannel] += sample * gain;
-        }
-      } else {
-        for (int channel = 0; channel < channels; ++channel) {
-          const int outputChannel = channel % outputChannels;
-          const float left =
-              static_cast<float>(leftSamples[channel]);
-          const float right =
-              static_cast<float>(rightSamples[channel]);
-          const float sample = (left + (right - left) * fraction) / 32768.0f;
-          mixBuffer[outputFrameOffset + outputChannel] += sample * gain;
-        }
-      }
-
-      if (positionQ32 >
-          std::numeric_limits<std::uint64_t>::max() - rateIncrement) {
-        positionQ32 = std::numeric_limits<std::uint64_t>::max();
-        finished = true;
-        break;
-      }
-      positionQ32 += rateIncrement;
-      if (static_cast<size_t>(positionQ32 >> 32) >=
-          source.frameCount) {
-        if (playingSound.loop) {
+    // Select PCM storage once per voice; contiguous gameplay audio must not
+    // pay page-publication branches for every interpolated sample.
+    const auto mixFrames = [&]<bool Paged>() {
+      for (size_t frame = 0; frame < frameCount - outputOffsetFrames; ++frame) {
+        if (playingSound.loop && positionQ32 >= loopLengthQ32) {
           positionQ32 %= loopLengthQ32;
-        } else {
+        }
+        const size_t leftFrame = static_cast<size_t>(positionQ32 >> 32);
+        if (leftFrame >= source.frameCount) {
           finished = true;
           break;
         }
+        const size_t rightFrame = leftFrame + 1 < source.frameCount
+                                      ? leftFrame + 1
+                                      : leftFrame;
+        const float fraction =
+            static_cast<float>(positionQ32 & kQ32FractionMask) /
+            static_cast<float>(kQ32One);
+        const short *leftSamples = source.frameSamples<Paged>(leftFrame);
+        const short *rightSamples = source.frameSamples<Paged>(rightFrame);
+        // Paged callers preflight the whole block before activation. Guard direct
+        // misuse as well; never dereference unpublished PCM.
+        if constexpr (Paged) {
+          if (leftSamples == nullptr || rightSamples == nullptr) return false;
+        }
+        const size_t outputFrameOffset =
+            (outputOffsetFrames + frame) * static_cast<size_t>(outputChannels);
+
+        if (channels == 1) {
+          const float left = static_cast<float>(leftSamples[0]);
+          const float right = static_cast<float>(rightSamples[0]);
+          const float sample = (left + (right - left) * fraction) / 32768.0f;
+          for (int outputChannel = 0; outputChannel < outputChannels;
+               ++outputChannel) {
+            mixBuffer[outputFrameOffset + outputChannel] += sample * gain;
+          }
+        } else {
+          for (int channel = 0; channel < channels; ++channel) {
+            const int outputChannel = channel % outputChannels;
+            const float left =
+                static_cast<float>(leftSamples[channel]);
+            const float right =
+                static_cast<float>(rightSamples[channel]);
+            const float sample = (left + (right - left) * fraction) / 32768.0f;
+            mixBuffer[outputFrameOffset + outputChannel] += sample * gain;
+          }
+        }
+
+        if (positionQ32 >
+            std::numeric_limits<std::uint64_t>::max() - rateIncrement) {
+          positionQ32 = std::numeric_limits<std::uint64_t>::max();
+          finished = true;
+          break;
+        }
+        positionQ32 += rateIncrement;
+        if (static_cast<size_t>(positionQ32 >> 32) >=
+            source.frameCount) {
+          if (playingSound.loop) {
+            positionQ32 %= loopLengthQ32;
+          } else {
+            finished = true;
+            break;
+          }
+        }
       }
-    }
+      return true;
+    };
+    const bool mixed = source.paged != nullptr
+                           ? mixFrames.template operator()<true>()
+                           : mixFrames.template operator()<false>();
+    if (!mixed) return;
 
     playingSound.sourceFrameQ32 = positionQ32;
     playingSound.outputOffsetFrames = 0;

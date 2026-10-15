@@ -374,8 +374,15 @@ void ChartDetailsView::refreshArtworkLayout() {
 }
 
 void ChartDetailsView::setCompact(bool compact) {
+  if (compactLayoutApplied_ && compact_ == compact &&
+      compactLayoutCanvas_ == rendering::compactMenuCanvasActive) {
+    refreshArtworkLayout();
+    return;
+  }
   View::LayoutBatchScope batch;
   compact_ = compact;
+  compactLayoutApplied_ = true;
+  compactLayoutCanvas_ = rendering::compactMenuCanvasActive;
   // The visualizer overflows its image bounds without reserving layout space.
   setPadding(Edge::Top, 0);
   identity_->setFlexDirection(compact ? FlexDirection::Row : FlexDirection::Column);
@@ -477,10 +484,10 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
   artist_->setText(record ? record->meta.Artist +
       (record->meta.SubArtist.empty() ? "" : " / " + record->meta.SubArtist) : "");
   genre_->setText(record ? record->meta.Genre : "");
-  grade_->setText("—");
-  desktopRate_->setText("—");
-  tempo_->setText("BPM —   |   —");
   if (!chart) {
+    grade_->setText("—");
+    desktopRate_->setText("—");
+    tempo_->setText("BPM —   |   —");
     for (auto *value : {difficulty_, chartLevel_, bpm_, judge_, length_, notes_, total_,
                        noteTypes_, score_, rate_, next_, clear_}) {
       value->setText("—");
@@ -523,6 +530,8 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
   clear_->setText(clearRank == kNoClearTypeRank ? "—" : clearTypeRankToLabel(clearRank));
   updateClearLamp(*clear_, clearRank);
   if (!best) {
+    grade_->setText("—");
+    desktopRate_->setText("—");
     score_->setText("");
     rate_->setText("");
     next_->setText("");
@@ -534,6 +543,8 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
   score_->setText(std::to_string(best->score) + " / " +
                   (maxScore > 0 ? std::to_string(maxScore) : "—"));
   if (maxScore <= 0) {
+    grade_->setText("—");
+    desktopRate_->setText("—");
     rate_->setText("");
     next_->setText("");
     return;

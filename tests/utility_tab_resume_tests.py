@@ -98,8 +98,13 @@ int main() {
 #include <atomic>
 #include <cassert>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
+namespace rendering { int window_width=1920,window_height=1080; }
+struct Insets { int top=0,left=0,bottom=0,right=0; };
+Insets getSafeAreaInsetsUi() { return {}; }
 namespace ir { constexpr auto kTachiProviderId="tachi"; }
 struct Context {
   struct ProfileManager {
@@ -148,25 +153,51 @@ struct IrUploadsScene {
   std::uint64_t observedScoreRevision=1,observedProfileCacheRevision=1;
   std::uint64_t observedAccountEvidenceRevision=1,observedAttemptStatusRevision=1;
   bool candidatesLoaded=true,reloadRequested=false;
-  struct Controller { bool locked=false; bool selectionLocked() const { return locked; } } controller;
-  int reads=0,credentials=0;
+  bool presentationActive=true;
+  struct Controller {
+    bool locked=false;
+    int prepared=0;
+    bool selectionLocked() const { return locked; }
+    void setPreparationProgress(int completed,int) { prepared=completed; }
+    void completePreparation(int) { locked=false; }
+  } controller;
+  struct PreparationTask {
+    struct Updates {
+      std::optional<std::pair<int,int>> progress;
+      std::optional<int> completion;
+    } pending;
+    Updates takeUpdates() { return std::exchange(pending,{}); }
+  } preparationTask;
+  int reads=0,credentials=0,uiRefreshes=0,pointerCancellations=0,layoutUpdates=0;
+  int *rootLayout=nullptr;
+  int lastLayoutWidth=1920,lastLayoutHeight=1080;
+  int lastSafeTop=0,lastSafeLeft=0,lastSafeBottom=0,lastSafeRight=0;
+  void onPause();
   void onResume();
+  void update(float);
+  void applyPreparationUpdates();
   void observeRemoteRevisions();
   void refreshProfileIfNeeded();
   void onProfileWillChange() { candidatesLoaded=false;reloadRequested=false;displayedProfileId.clear(); }
   void reloadCandidates() {
     ++reads;refreshProviderState();reloadRequested=false;candidatesLoaded=true;
     observeRemoteRevisions();reloadRequested=false;
+    refreshUi();
   }
   void refreshProviderState() { ++credentials; }
+  void refreshUi() { ++uiRefreshes; }
+  void onInputQueueOverflow() { ++pointerCancellations; }
   void refreshLanguageIfNeeded() {}
-  void updateLayoutInsets() {}
+  void updateLayoutInsets() { ++layoutUpdates; }
   std::string serverOrigin() const { return origin; }
 };
 MUSIC_RESUME
 IR_RESUME
 IR_PROFILE
 IR_OBSERVE
+IR_PAUSE
+IR_UPDATE
+IR_PREPARATION
 int main() {
   MusicPlayerScene music;
   for(int i=0;i<20;++i) music.onResume();
@@ -203,6 +234,57 @@ int main() {
   ir.controller.locked=false;ir.onResume();assert(ir.reads==7);
   ir.candidatesLoaded=false;ir.onResume();assert(ir.reads==8);
   assert(ir.credentials==ir.reads);
+
+  IrUploadsScene hidden;
+  ++hidden.context.submission.value.revision;
+  hidden.update(0);
+  assert(hidden.reads==1 && "a standalone foreground scene must refresh normally");
+  hidden.onPause();
+  assert(hidden.pointerCancellations==1);
+  const int visibleRefreshes=hidden.uiRefreshes;
+  for(int frame=0;frame<600;++frame) {
+    if(frame%60==0) ++hidden.context.submission.value.revision;
+    hidden.update(0);
+  }
+  assert(hidden.reads==1 && hidden.credentials==1 &&
+         "hidden IR delivery revisions must not rescan candidate history");
+  hidden.controller.locked=true;
+  hidden.preparationTask.pending.progress=std::pair{1,2};
+  hidden.update(0);
+  assert(hidden.controller.prepared==1 && hidden.controller.locked);
+  hidden.preparationTask.pending.completion=1;
+  hidden.update(0);
+  assert(!hidden.controller.locked && hidden.reloadRequested &&
+         "hidden preparation completion must still reach the controller");
+  assert(hidden.reads==1 && hidden.uiRefreshes==visibleRefreshes &&
+         hidden.layoutUpdates==0 && "hidden completion must defer presentation work");
+  hidden.onResume();
+  assert(hidden.reads==2 && hidden.credentials==2 && !hidden.reloadRequested &&
+         "resume must coalesce hidden revisions and completion into one refresh");
+  hidden.update(0);hidden.onResume();
+  assert(hidden.reads==2);
+
+  hidden.onPause();
+  hidden.controller.locked=true;
+  hidden.preparationTask.pending.progress=std::pair{2,3};
+  ++hidden.context.scoreRepository.revision;
+  hidden.update(0);
+  const int beforeResume=hidden.uiRefreshes;
+  hidden.onResume();
+  assert(hidden.reads==2 && hidden.reloadRequested &&
+         hidden.uiRefreshes==beforeResume+1 &&
+         "resuming during preparation must show its latest progress without a reload");
+  hidden.preparationTask.pending.completion=1;
+  hidden.update(0);
+  assert(hidden.reads==3 && !hidden.reloadRequested);
+
+  hidden.onPause();
+  hidden.context.profileManager.profile.id="next";
+  hidden.update(0);
+  assert(hidden.displayedProfileId=="next" && !hidden.candidatesLoaded &&
+         hidden.reads==3 && "hidden profile changes must invalidate stale candidates");
+  hidden.onResume();
+  assert(hidden.reads==4 && hidden.candidatesLoaded);
 }
 '''
         for key, code in (
@@ -210,6 +292,9 @@ int main() {
             ("IR_RESUME", extract(ir, "void IrUploadsScene::onResume()")),
             ("IR_PROFILE", extract(ir, "void IrUploadsScene::refreshProfileIfNeeded()")),
             ("IR_OBSERVE", extract(ir, "void IrUploadsScene::observeRemoteRevisions()")),
+            ("IR_PAUSE", extract(ir, "void IrUploadsScene::onPause()")),
+            ("IR_UPDATE", extract(ir, "void IrUploadsScene::update(float)")),
+            ("IR_PREPARATION", extract(ir, "void IrUploadsScene::applyPreparationUpdates()")),
         ):
             source = source.replace(key, code)
         self.compile_and_run(source)

@@ -73,6 +73,8 @@ private:
   float spectrumCooldown_ = 0;
   std::string glowChartPath_;
   bool compact_ = true;
+  bool compactLayoutApplied_ = false;
+  bool compactLayoutCanvas_ = false;
   int artworkLayoutWidth_ = -1;
   int artworkLayoutHeight_ = -1;
   bool artworkLayoutCompact_ = true;

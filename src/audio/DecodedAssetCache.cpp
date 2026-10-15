@@ -15,18 +15,20 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
+#include <exception>
 #include <fstream>
 #include <limits>
 #include <list>
 #include <map>
 #include <mutex>
-#include <semaphore>
 #include <stdexcept>
 #include <utility>
 
 namespace audio {
 namespace {
 constexpr std::size_t kMaximumEncodedBytes = 256U * 1024U * 1024U;
+constexpr std::size_t kMaximumUnpinnedDecoders = 16;
 
 struct CacheFailure : std::runtime_error {
   DecodedAssetCache::FailureKind kind;
@@ -114,11 +116,20 @@ struct DecodedAssetCache::Impl {
     std::filesystem::path decodedPath;
     SF_INFO info{};
     bool inspected = false;
+    // Guarded by the cache mutex, not the per-entry decode mutex.
+    std::size_t pins = 0;
+    bool decoderReserved = false;
   };
   using PageKey = std::pair<std::uint64_t, std::uint64_t>;
   struct Page {
     std::shared_ptr<const std::vector<short>> samples;
     std::list<PageKey>::iterator lru;
+  };
+  struct IdleDecoder {
+    Entry *entry = nullptr;
+    asobmashow::audio::SoundFileHandle file;
+    sf_count_t position = 0;
+    std::list<std::uint64_t>::iterator lru;
   };
 
   std::filesystem::path scratchDirectory;
@@ -129,9 +140,17 @@ struct DecodedAssetCache::Impl {
   std::list<PageKey> lru;
   std::uint64_t nextId = 0;
   Statistics statistics;
-  // Concurrent gameplay workers may decode different assets; bound descriptors
-  // and scratch buffers without serializing all assets behind the page-map lock.
-  std::counting_semaphore<16> decoderSlots{16};
+  // Unpinned active leases and idle decoders share one descriptor bound. Explicit
+  // worker-scoped pins retain progressively warmed sources beyond that bound.
+  // Idle states
+  // belong exclusively to this mutex, never an entry lock, so eviction cannot
+  // invert the entry -> cache lock order used by readers.
+  std::map<std::uint64_t, IdleDecoder> idleDecoders;
+  std::list<std::uint64_t> decoderLru;
+  std::list<std::uint64_t> pinnedDecoderLru;
+  std::size_t decoderSlots = 0;
+  std::size_t pinnedDecoderSlots = 0;
+  std::condition_variable decoderChanged;
 
   Impl(std::filesystem::path root, std::size_t maximum)
       : maximumRetainedBytes(maximum) {
@@ -146,8 +165,47 @@ struct DecodedAssetCache::Impl {
     scratchDirectory = root / ("decoded-assets-" + uuid::generateV4());
   }
   ~Impl() {
+    idleDecoders.clear();
     std::error_code ignored;
     std::filesystem::remove_all(scratchDirectory, ignored);
+  }
+
+  // Caller owns the cache mutex. Close before releasing the reservation.
+  void discardIdle(std::map<std::uint64_t, IdleDecoder>::iterator decoder) {
+    auto &entry = *decoder->second.entry;
+    if (entry.pins) {
+      pinnedDecoderLru.erase(decoder->second.lru);
+      --pinnedDecoderSlots;
+    } else {
+      decoderLru.erase(decoder->second.lru);
+    }
+    entry.decoderReserved = false;
+    idleDecoders.erase(decoder);
+    --decoderSlots;
+    --statistics.liveDecoders;
+  }
+
+  void pin(Entry &entry) {
+    std::lock_guard lock(mutex);
+    if (entry.pins++ != 0) return;
+    ++statistics.pinnedEntries;
+    if (entry.decoderReserved) ++pinnedDecoderSlots;
+    if (const auto idle = idleDecoders.find(entry.id); idle != idleDecoders.end())
+      pinnedDecoderLru.splice(pinnedDecoderLru.end(), decoderLru, idle->second.lru);
+    decoderChanged.notify_all();
+  }
+
+  void unpin(Entry &entry) noexcept {
+    std::lock_guard lock(mutex);
+    if (--entry.pins != 0) return;
+    --statistics.pinnedEntries;
+    if (entry.decoderReserved) --pinnedDecoderSlots;
+    if (const auto idle = idleDecoders.find(entry.id); idle != idleDecoders.end())
+      decoderLru.splice(decoderLru.end(), pinnedDecoderLru, idle->second.lru);
+    while (decoderSlots - pinnedDecoderSlots > kMaximumUnpinnedDecoders && !decoderLru.empty())
+      discardIdle(idleDecoders.find(decoderLru.front()));
+    // A concurrently borrowed lease can finish; its return also trims excess.
+    decoderChanged.notify_all();
   }
 
   std::shared_ptr<Entry> entryFor(const std::filesystem::path &path,
@@ -162,6 +220,10 @@ struct DecodedAssetCache::Impl {
     auto &entry = entries[resolved];
     if (entry && entry->identity == identity) return entry;
     if (entry) {
+      if (const auto decoder = idleDecoders.find(entry->id); decoder != idleDecoders.end()) {
+        discardIdle(decoder);
+        decoderChanged.notify_all();
+      }
       for (auto it = pages.begin(); it != pages.end();) {
         if (it->first.first != entry->id) { ++it; continue; }
         statistics.retainedBytes -= it->second.samples->size() * sizeof(short);
@@ -184,31 +246,200 @@ struct DecodedAssetCache::Impl {
     return lock;
   }
 
-  // A request owns its decoder lease. No decoder or file cursor is retained in
-  // the cache, and cancellation of one request never invalidates ready pages.
+  // Caller owns the entry lock. Commit the path only after all encoded bytes
+  // are staged and their source identity is still current.
+  void stageEncoded(Entry &entry, const std::vector<unsigned char> &encoded,
+                    const std::atomic_bool &cancel, std::stop_token stop) {
+    checkpoint(cancel, stop);
+    std::filesystem::create_directories(scratchDirectory);
+    const auto staged = scratchDirectory / std::to_string(entry.id);
+    ScopeExit cleanup([&] {
+      std::error_code ignored;
+      std::filesystem::remove(staged, ignored);
+    });
+    std::ofstream output(staged, std::ios::binary | std::ios::trunc);
+    std::size_t offset = 0;
+    while (offset < encoded.size()) {
+      checkpoint(cancel, stop);
+      const auto count = std::min<std::size_t>(65536, encoded.size() - offset);
+      output.write(reinterpret_cast<const char *>(encoded.data() + offset), count);
+      if (!output) throw std::runtime_error("Could not stage archived audio.");
+      offset += count;
+    }
+    output.close();
+    if (!output) throw std::runtime_error("Could not stage archived audio.");
+    checkpoint(cancel, stop);
+    if (sourceIdentity(entry.logicalPath) != entry.identity)
+      throw std::runtime_error("Audio source changed during preparation.");
+    entry.decodedPath = staged;
+    cleanup.dismiss();
+  }
+
+  void stageArchives(const std::vector<std::filesystem::path> &paths,
+                     const std::atomic_bool &cancel, std::stop_token stop) {
+    using Requests = std::map<std::filesystem::path, std::shared_ptr<Entry>>;
+    std::map<std::filesystem::path, Requests> archives;
+    for (const auto &path : paths) {
+      checkpoint(cancel, stop);
+      std::filesystem::path archive, inner;
+      if (!archive_file::splitVirtualPath(path, archive, inner)) continue;
+      auto entry = entryFor(path, cancel, stop);
+      if (archive_file::splitVirtualPath(entry->logicalPath, archive, inner))
+        archives[archive].emplace(inner, std::move(entry));
+    }
+    for (auto &[archive, requests] : archives) {
+      // The extraction backend can hold its own archive mutex in callbacks.
+      // Acquire entries first, in one stable order, so a concurrent per-entry
+      // reader cannot hold an entry while waiting on this batch's archive lock.
+      std::vector<std::shared_ptr<Entry>> ordered;
+      for (const auto &[path, entry] : requests) ordered.push_back(entry);
+      std::sort(ordered.begin(), ordered.end(), [](const auto &a, const auto &b) {
+        return a->id < b->id;
+      });
+      std::vector<std::unique_lock<std::timed_mutex>> locks;
+      locks.reserve(ordered.size());
+      for (const auto &entry : ordered) locks.push_back(lockEntry(*entry, cancel, stop));
+      std::erase_if(requests, [](const auto &request) {
+        return !request.second->decodedPath.empty();
+      });
+      if (requests.empty()) continue;
+      std::vector<std::filesystem::path> innerPaths;
+      for (const auto &[path, entry] : requests) innerPaths.push_back(path);
+      std::string error;
+      std::exception_ptr failure;
+      { std::lock_guard lock(mutex); ++statistics.archiveReads; }
+      const bool read = archive_file::readArchiveEntriesStreamingBounded(
+          archive, innerPaths, [&](archive_file::FileData &&file) {
+            // Exceptions must not cross an archive SDK callback boundary.
+            try {
+              checkpoint(cancel, stop);
+              const auto found = requests.find(file.path);
+              if (found != requests.end()) stageEncoded(*found->second, file.bytes, cancel, stop);
+              return true;
+            } catch (...) {
+              failure = std::current_exception();
+              return false;
+            }
+          }, kMaximumEncodedBytes, &error, [&] { return !cancelled(cancel, stop); });
+      if (failure) std::rethrow_exception(failure);
+      checkpoint(cancel, stop);
+      if (!read) throw std::runtime_error("Could not extract preview audio: " + error);
+      for (const auto &[path, entry] : requests) {
+        if (entry->decodedPath.empty())
+          throw std::runtime_error("Could not stage requested preview audio.");
+      }
+    }
+  }
+
+  // A request exclusively borrows its decoder/cursor while holding the entry
+  // lock. Successful leases return to their pinned/unpinned idle LRU; failed/cancelled
+  // reads discard their cursor without invalidating immutable ready PCM pages.
   struct Decoder {
     Impl &owner;
+    Entry *entry = nullptr;
     asobmashow::audio::SoundFileHandle file;
     sf_count_t position = 0;
     bool slot = false;
+    bool reusable = false;
     explicit Decoder(Impl &value) : owner(value) {}
     ~Decoder() {
+      if (!slot) return;
+      const bool opened = bool(file);
+      if (reusable && opened) {
+        try {
+          std::lock_guard lock(owner.mutex);
+          const auto current = owner.entries.find(entry->logicalPath);
+          if (current != owner.entries.end() && current->second.get() == entry &&
+              (entry->pins || owner.decoderSlots - owner.pinnedDecoderSlots <= kMaximumUnpinnedDecoders)) {
+            const auto [cached, inserted] = owner.idleDecoders.try_emplace(entry->id);
+            if (inserted) {
+              auto &list = entry->pins ? owner.pinnedDecoderLru : owner.decoderLru;
+              try {
+                list.push_back(entry->id);
+              } catch (...) {
+                owner.idleDecoders.erase(cached);
+                throw;
+              }
+              cached->second.entry = entry;
+              cached->second.lru = std::prev(list.end());
+              cached->second.position = position;
+              cached->second.file = std::move(file);
+              owner.decoderChanged.notify_one();
+              return;
+            }
+          }
+        } catch (...) {
+          // Returning a lease must remain noexcept, including allocation failure.
+        }
+      }
       file.reset();
-      if (slot) owner.decoderSlots.release();
+      {
+        std::lock_guard lock(owner.mutex);
+        if (opened) --owner.statistics.liveDecoders;
+        if (entry->pins) --owner.pinnedDecoderSlots;
+        entry->decoderReserved = false;
+        --owner.decoderSlots;
+      }
+      owner.decoderChanged.notify_all();
+    }
+    void borrow(Entry &value, const std::atomic_bool &cancel, std::stop_token stop) {
+      asobmashow::audio::SoundFileHandle evicted;
+      {
+        std::unique_lock lock(owner.mutex);
+        for (;;) {
+          checkpoint(cancel, stop);
+          if (const auto cached = owner.idleDecoders.find(value.id);
+              cached != owner.idleDecoders.end()) {
+            file = std::move(cached->second.file);
+            position = cached->second.position;
+            auto &list = value.pins ? owner.pinnedDecoderLru : owner.decoderLru;
+            list.erase(cached->second.lru);
+            owner.idleDecoders.erase(cached);
+            break;
+          }
+          if (value.pins || owner.decoderSlots - owner.pinnedDecoderSlots < kMaximumUnpinnedDecoders) {
+            ++owner.decoderSlots;
+            if (value.pins) ++owner.pinnedDecoderSlots;
+            break;
+          }
+          if (!owner.decoderLru.empty()) {
+            if (owner.decoderSlots - owner.pinnedDecoderSlots > kMaximumUnpinnedDecoders) {
+              owner.discardIdle(owner.idleDecoders.find(owner.decoderLru.front()));
+              continue;
+            }
+            const auto oldest = owner.idleDecoders.find(owner.decoderLru.front());
+            evicted = std::move(oldest->second.file);
+            oldest->second.entry->decoderReserved = false;
+            owner.idleDecoders.erase(oldest);
+            owner.decoderLru.pop_front();
+            // Reuse its reservation, closing the descriptor before opening ours.
+            break;
+          }
+          owner.decoderChanged.wait_for(lock, std::chrono::milliseconds(10));
+        }
+        entry = &value;
+        value.decoderReserved = true;
+        slot = true;
+      }
+      if (evicted) {
+        evicted.reset();
+        std::lock_guard lock(owner.mutex);
+        --owner.statistics.liveDecoders;
+      }
     }
     void open(Entry &entry, const std::atomic_bool &cancel, std::stop_token stop,
               const std::vector<unsigned char> *encoded) {
       if (file) return;
-      while (!owner.decoderSlots.try_acquire_for(std::chrono::milliseconds(10)))
-        checkpoint(cancel, stop);
-      slot = true;
+      borrow(entry, cancel, stop);
       checkpoint(cancel, stop);
+      if (file) return;
       if (entry.decodedPath.empty()) {
         std::filesystem::path archive, inner;
         if (archive_file::splitVirtualPath(entry.logicalPath, archive, inner)) {
           std::vector<unsigned char> extracted;
           if (encoded == nullptr) {
             std::string error;
+            { std::lock_guard lock(owner.mutex); ++owner.statistics.archiveReads; }
             if (!archive_file::readFileBoundedWithCheckpoint(entry.logicalPath,
                     extracted, kMaximumEncodedBytes, &error, stop,
                     [&] { return !cancelled(cancel, stop); })) {
@@ -217,28 +448,20 @@ struct DecodedAssetCache::Impl {
             }
             encoded = &extracted;
           }
-          checkpoint(cancel, stop);
-          std::filesystem::create_directories(owner.scratchDirectory);
-          const auto staged = owner.scratchDirectory / std::to_string(entry.id);
-          std::ofstream output(staged, std::ios::binary | std::ios::trunc);
-          std::size_t offset = 0;
-          while (offset < encoded->size()) {
-            checkpoint(cancel, stop);
-            const auto count = std::min<std::size_t>(65536, encoded->size() - offset);
-            output.write(reinterpret_cast<const char *>(encoded->data() + offset), count);
-            if (!output) throw std::runtime_error("Could not stage archived audio.");
-            offset += count;
-          }
-          output.close();
-          if (!output) throw std::runtime_error("Could not stage archived audio.");
-          checkpoint(cancel, stop);
-          entry.decodedPath = staged;
+          owner.stageEncoded(entry, *encoded, cancel, stop);
         } else {
           entry.decodedPath = entry.logicalPath;
         }
       }
       SF_INFO opened{};
       file = openFile(entry.decodedPath, opened);
+      if (file) {
+        std::lock_guard lock(owner.mutex);
+        ++owner.statistics.decoderOpens;
+        ++owner.statistics.liveDecoders;
+        owner.statistics.peakLiveDecoders = std::max(owner.statistics.peakLiveDecoders,
+                                                    owner.statistics.liveDecoders);
+      }
       checkpoint(cancel, stop);
       if (!file && sf_error(nullptr) == SF_ERR_SYSTEM)
         throw std::runtime_error("Could not read audio source.");
@@ -342,6 +565,7 @@ struct DecodedAssetCache::Impl {
       checkpoint(cancel, stop);
       if (sourceIdentity(entry->logicalPath) != entry->identity)
         throw std::runtime_error("Audio source changed during preparation.");
+      decoder.reusable = true;
       return true;
     } catch (const std::exception &exception) {
       pcm.clear();
@@ -355,9 +579,45 @@ struct DecodedAssetCache::Impl {
   }
 };
 
+struct DecodedAssetCache::DecoderPin::State {
+  std::shared_ptr<Impl> owner;
+  std::shared_ptr<Impl::Entry> entry;
+  bool active = false;
+  ~State() { if (active) owner->unpin(*entry); }
+};
+DecodedAssetCache::DecoderPin::DecoderPin() = default;
+DecodedAssetCache::DecoderPin::~DecoderPin() = default;
+DecodedAssetCache::DecoderPin::DecoderPin(DecoderPin &&) noexcept = default;
+DecodedAssetCache::DecoderPin &DecodedAssetCache::DecoderPin::operator=(DecoderPin &&) noexcept = default;
+DecodedAssetCache::DecoderPin::operator bool() const noexcept { return bool(state); }
+
 DecodedAssetCache::DecodedAssetCache(std::filesystem::path root, std::size_t maximum)
-    : impl(std::make_unique<Impl>(std::move(root), maximum)) {}
+    : impl(std::make_shared<Impl>(std::move(root), maximum)) {}
 DecodedAssetCache::~DecodedAssetCache() = default;
+
+DecodedAssetCache::DecoderPin DecodedAssetCache::PinDecoder(
+    const std::filesystem::path &path, const std::atomic_bool &cancel,
+    std::stop_token stop, std::string *error, FailureKind *failure) {
+  if (error) error->clear();
+  if (failure) *failure = FailureKind::None;
+  DecoderPin pin;
+  try {
+    auto entry = impl->entryFor(path, cancel, stop);
+    auto state = std::make_unique<DecoderPin::State>();
+    state->owner = impl;
+    state->entry = std::move(entry);
+    impl->pin(*state->entry);
+    state->active = true;
+    pin.state = std::move(state);
+  } catch (const std::exception &exception) {
+    if (error) *error = exception.what();
+    if (failure) {
+      const auto *classified = dynamic_cast<const CacheFailure *>(&exception);
+      *failure = classified ? classified->kind : FailureKind::Operation;
+    }
+  }
+  return pin;
+}
 
 bool DecodedAssetCache::Inspect(const std::filesystem::path &path, SF_INFO &info,
     const std::atomic_bool &cancel, std::stop_token stop, std::string *error,
@@ -382,6 +642,17 @@ bool DecodedAssetCache::Preload(const std::filesystem::path &path,
   SF_INFO info{};
   return impl->read(path, 0, 0, true, ignored, info, cancel, stop, error,
                     nullptr, failure, false);
+}
+bool DecodedAssetCache::StageArchiveAssets(const std::vector<std::filesystem::path> &paths,
+    const std::atomic_bool &cancel, std::stop_token stop, std::string *error) {
+  if (error) error->clear();
+  try {
+    impl->stageArchives(paths, cancel, stop);
+    return true;
+  } catch (const std::exception &exception) {
+    if (error) *error = exception.what();
+    return false;
+  }
 }
 bool DecodedAssetCache::MaterializeBytes(const std::filesystem::path &path,
     const std::vector<unsigned char> &encoded, std::vector<short> &pcm, SF_INFO &info,
