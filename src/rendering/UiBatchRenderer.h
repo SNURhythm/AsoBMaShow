@@ -35,7 +35,7 @@ struct UiBatchState {
   std::uint64_t state = 0;
   std::optional<UiBatchScissor> scissor;
   std::optional<std::array<float, 16>> transform;
-  std::array<UiBatchUniform, 2> uniforms{};
+  std::array<UiBatchUniform, 6> uniforms{};
   std::size_t uniformCount = 0;
   float textureOpacity = 1.0f;
 };
@@ -48,11 +48,22 @@ struct UiBatchSubmission {
   UiBatchState state;
 };
 
+// Immutable geometry can stay in GPU buffers while only draw uniforms change.
+// Owners replace this object when the image/layout changes; the backend holds
+// a weak reference so it can retire the associated buffers after replacement.
+struct UiRetainedGeometry {
+  bgfx::VertexLayout layout;
+  std::vector<std::byte> vertices;
+  std::vector<std::uint16_t> indices;
+};
+
 class UiBatchBackend {
 public:
   virtual ~UiBatchBackend() = default;
   virtual void beginFrame() noexcept {}
   virtual bool submit(const UiBatchSubmission &) noexcept = 0;
+  virtual bool submitRetained(const std::shared_ptr<const UiRetainedGeometry> &,
+                              const UiBatchState &) noexcept { return false; }
   virtual void shutdown() noexcept {}
 };
 
@@ -76,6 +87,8 @@ public:
   bool appendTextured(std::span<const PosTexCoord0Vertex> vertices,
                       std::span<const std::uint16_t> indices,
                       const UiBatchState &state);
+  bool submitRetained(const std::shared_ptr<const UiRetainedGeometry> &geometry,
+                      const UiBatchState &state) noexcept;
   bool flush() noexcept;
   void end() noexcept;
   void discard() noexcept;

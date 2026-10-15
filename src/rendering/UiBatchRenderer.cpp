@@ -1,4 +1,5 @@
 #include "UiBatchRenderer.h"
+#include "BgfxRAII.h"
 #include "../targets.h"
 
 #if TARGET_OS_ANDROID
@@ -63,7 +64,55 @@ public:
 
   ~BgfxUiBatchBackend() override { shutdown(); }
 
-  void beginFrame() noexcept override { nextBufferSlot_ = 0; }
+  void beginFrame() noexcept override {
+    nextBufferSlot_ = 0;
+    std::erase_if(retainedSlots_, [](const auto &slot) { return slot->geometry.expired(); });
+  }
+
+  bool submitRetained(const std::shared_ptr<const UiRetainedGeometry> &geometry,
+                      const UiBatchState &state) noexcept override {
+    try {
+      if (!geometry || !bgfx::isValid(state.program) || geometry->indices.empty() ||
+          geometry->vertices.empty() || !geometry->layout.getStride() ||
+          state.uniformCount > state.uniforms.size()) return false;
+      for (std::size_t i = 0; i < state.uniformCount; ++i)
+        if (!bgfx::isValid(state.uniforms[i].handle)) return false;
+      RetainedSlot *slot = nullptr;
+      for (const auto &candidate : retainedSlots_) {
+        if (candidate->geometry.lock() == geometry) { slot = candidate.get(); break; }
+      }
+      if (!slot) {
+        auto created = std::make_unique<RetainedSlot>();
+        created->geometry = geometry;
+        const auto *vertices = bgfx::copy(geometry->vertices.data(),
+            static_cast<std::uint32_t>(geometry->vertices.size()));
+        if (!vertices) return false;
+        created->vertices.reset(bgfx::createVertexBuffer(vertices, geometry->layout));
+        if (!bgfx::isValid(created->vertices.get())) return false;
+        const auto *indices = bgfx::copy(geometry->indices.data(),
+            static_cast<std::uint32_t>(geometry->indices.size() * sizeof(std::uint16_t)));
+        if (!indices) return false;
+        created->indices.reset(bgfx::createIndexBuffer(indices));
+        if (!bgfx::isValid(created->indices.get())) return false;
+        slot = created.get();
+        retainedSlots_.push_back(std::move(created));
+      }
+      bgfx::setVertexBuffer(0, slot->vertices.get());
+      bgfx::setIndexBuffer(slot->indices.get());
+      for (std::size_t i = 0; i < state.uniformCount; ++i)
+        bgfx::setUniform(state.uniforms[i].handle, state.uniforms[i].value.data());
+      if (state.transform) bgfx::setTransform(state.transform->data());
+      if (state.scissor) {
+        const auto &clip = *state.scissor;
+        setScissorUI(clip.x, clip.y, clip.width, clip.height);
+      } else bgfx::setScissor();
+      bgfx::setState(state.state);
+      bgfx::submit(ui_view, state.program);
+      return true;
+    } catch (...) {
+      return false;
+    }
+  }
 
   bool submit(const UiBatchSubmission &submission) noexcept override {
     try {
@@ -203,6 +252,7 @@ public:
   }
 
   void shutdown() noexcept override {
+    retainedSlots_.clear();
     for (auto &slot : bufferSlots_) {
       if (bgfx::isValid(slot.colorVertexBuffer)) {
         bgfx::destroy(slot.colorVertexBuffer);
@@ -222,6 +272,11 @@ public:
   }
 
 private:
+  struct RetainedSlot {
+    std::weak_ptr<const UiRetainedGeometry> geometry;
+    BgfxHandleGuard<bgfx::VertexBufferHandle> vertices;
+    BgfxHandleGuard<bgfx::IndexBufferHandle> indices;
+  };
   struct BufferSlot {
     bgfx::DynamicVertexBufferHandle colorVertexBuffer = BGFX_INVALID_HANDLE;
     bgfx::DynamicVertexBufferHandle texturedVertexBuffer = BGFX_INVALID_HANDLE;
@@ -305,6 +360,7 @@ private:
   }
 
   std::vector<BufferSlot> bufferSlots_;
+  std::vector<std::unique_ptr<RetainedSlot>> retainedSlots_;
   bgfx::VertexLayout opacityLayout_;
   std::vector<std::array<float, 4>> opacityVertices_;
   std::size_t nextBufferSlot_ = 0;
@@ -394,6 +450,15 @@ bool UiBatchRenderer::append(UiBatchVertexFormat format,
     indices_.push_back(static_cast<std::uint16_t>(base + index));
   }
   return true;
+}
+
+bool UiBatchRenderer::submitRetained(
+    const std::shared_ptr<const UiRetainedGeometry> &geometry,
+    const UiBatchState &state) noexcept {
+  if (!active_ || !backend_ || !geometry) return false;
+  // A retained draw is its own ordering boundary, between surrounding batches.
+  flushCurrent();
+  return backend_->submitRetained(geometry, state);
 }
 
 bool UiBatchRenderer::flush() noexcept {

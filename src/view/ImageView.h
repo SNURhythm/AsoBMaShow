@@ -45,6 +45,9 @@ private:
   path_t currentImagePath;
   std::optional<ArtworkPalette> ambientPalette_;
   std::optional<ArtworkGlow> ambientGlow_;
+  std::shared_ptr<const rendering::UiRetainedGeometry> ambientGeometry_;
+  float ambientGeometryWidth_ = 0;
+  float ambientGeometryHeight_ = 0;
   int currentImageWidth = 0;
   int currentImageHeight = 0;
   int asyncTargetWidth = 0;

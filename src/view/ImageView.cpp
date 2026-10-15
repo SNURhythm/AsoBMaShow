@@ -3,6 +3,7 @@
 //
 
 #include "ImageView.h"
+#include "ArtworkGlowProfile.h"
 #include "../ArchiveFile.h"
 #include "ImageFileDecoder.h"
 #include "../path.h"
@@ -605,6 +606,7 @@ bool ImageView::applyImage(const path_t &path, const std::string &key,
   currentImageWidth = cache.width;
   currentImageHeight = cache.height;
   ambientPalette_ = artworkAmbientPalette(*cache.rgba, cache.width, cache.height);
+  ambientGeometry_.reset();
   if (storeCache) {
     (void)imageCache.put(key, cache);
     if (sharedChartImagePath_ &&
@@ -706,6 +708,7 @@ void ImageView::freeTexture() {
   texture = BGFX_INVALID_HANDLE;
   ambientPalette_.reset();
   ambientGlow_.reset();
+  ambientGeometry_.reset();
   currentImageWidth = 0;
   currentImageHeight = 0;
 }
@@ -981,7 +984,6 @@ void ImageView::renderImpl(RenderContext &context) {
     // Keep the combined bounce and visualizer extent bounded.
     glow.spread = std::max(0.0f, glow.spread -
         std::max(width - originalWidth, height - originalHeight) * 0.5f);
-    const auto mesh = makeArtworkGlowMesh(x, y, width, height, *ambientPalette_, glow);
     RenderContext ambientContext = context;
     if (ambientContext.scissor.width > 0) {
       const int bleed = static_cast<int>(std::ceil(ambientGlow_->spread));
@@ -992,10 +994,51 @@ void ImageView::renderImpl(RenderContext &context) {
         ambientContext.scissor.height += bleed * 2;
       }
     }
-    ambientContext.appendUiColor(mesh.vertices, mesh.indices,
-        ambientContext.makeUiBatchState(
-            rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE),
-            BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA));
+    const auto renderer = bgfx::getRendererType();
+    bool submitted = false;
+    // These backends have checked-in shader binaries built by make.py. Keep
+    // the existing CPU path on backends without the new vertex shader.
+    if (renderer == bgfx::RendererType::Metal || renderer == bgfx::RendererType::Vulkan ||
+        renderer == bgfx::RendererType::OpenGLES) {
+      if (!ambientGeometry_ || ambientGeometryWidth_ != originalWidth ||
+          ambientGeometryHeight_ != originalHeight) {
+        const auto profile = makeArtworkGlowProfile(originalWidth, originalHeight, *ambientPalette_);
+        auto geometry = std::make_shared<rendering::UiRetainedGeometry>();
+        geometry->layout.begin()
+            .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::TexCoord0, 4, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::TexCoord1, 2, bgfx::AttribType::Float)
+            .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true).end();
+        const auto bytes = std::as_bytes(std::span{profile.vertices});
+        geometry->vertices.assign(bytes.begin(), bytes.end());
+        geometry->indices.assign(profile.indices.begin(), profile.indices.end());
+        ambientGeometry_ = std::move(geometry);
+        ambientGeometryWidth_ = originalWidth;
+        ambientGeometryHeight_ = originalHeight;
+      }
+      auto state = ambientContext.makeUiBatchState(
+          rendering::ShaderManager::getInstance().getProgram("vs_artwork_glow.bin", "fs_simple.bin"),
+          BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);
+      auto &uniforms = rendering::UniformCache::getInstance();
+      state.uniforms[0] = {uniforms.getVec4("u_artworkGlowRect"), {x, y, width, height}};
+      state.uniforms[1] = {uniforms.getVec4("u_artworkGlowParams"),
+                           {glow.intensity, glow.spread, glow.bass, ambientContext.getOpacity()}};
+      constexpr std::array spectrumNames = {"u_artworkGlowSpectrum0", "u_artworkGlowSpectrum1",
+                                            "u_artworkGlowSpectrum2", "u_artworkGlowSpectrum3"};
+      for (std::size_t i = 0; i < spectrumNames.size(); ++i) {
+        state.uniforms[i + 2].handle = uniforms.getVec4(spectrumNames[i]);
+        std::copy_n(glow.spectrum.begin() + i * 4, 4, state.uniforms[i + 2].value.begin());
+      }
+      state.uniformCount = 6;
+      submitted = ambientContext.submitUiRetained(ambientGeometry_, state);
+    }
+    if (!submitted) {
+      const auto mesh = makeArtworkGlowMesh(x, y, width, height, *ambientPalette_, glow);
+      ambientContext.appendUiColor(mesh.vertices, mesh.indices,
+          ambientContext.makeUiBatchState(
+              rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE),
+              BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA));
+    }
   }
   RenderContext imageContext = context;
   if (ambientGlow_ && ambientPalette_ && imageContext.scissor.width > 0) {

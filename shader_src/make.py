@@ -57,8 +57,10 @@ def patch_essl_shader(dst):
 
 def compile_shader(src, dst, type, platform, profile):
     os.makedirs(os.path.dirname(dst), exist_ok=True)
+    varying = (["--varyingdef", "artwork_glow_varying.def.sc"]
+               if src == "vs_artwork_glow.sc" else [])
     result = subprocess.run(
-        [shaderc, "-f", src, "-o", dst, "--platform", platform, "--type", type, "--profile", profile, "-O 3", "-i", "."]
+        [shaderc, "-f", src, "-o", dst, "--platform", platform, "--type", type, "--profile", profile, "-O 3", "-i", "."] + varying
     )
     if result.returncode != 0:
         print(f"Failed to compile shader {src} to {dst}")

@@ -56,10 +56,22 @@ struct RecordingBackend final : rendering::UiBatchBackend {
     captured.indices.assign(submission.indices.begin(), submission.indices.end());
     captured.state = submission.state;
     submissions.push_back(std::move(captured));
+    order.push_back('D');
+    return true;
+  }
+
+  bool submitRetained(const std::shared_ptr<const rendering::UiRetainedGeometry> &geometry,
+                      const rendering::UiBatchState &state) noexcept override {
+    retained.push_back(geometry);
+    retainedStates.push_back(state);
+    order.push_back('R');
     return true;
   }
 
   std::vector<CapturedSubmission> submissions;
+  std::vector<std::shared_ptr<const rendering::UiRetainedGeometry>> retained;
+  std::vector<rendering::UiBatchState> retainedStates;
+  std::vector<char> order;
   std::size_t rejectedSubmissions = 0;
 };
 
@@ -301,6 +313,44 @@ void testFailedBatchDoesNotBlockLaterSubmission() {
          "a failed UI batch does not corrupt later painter-order geometry");
 }
 
+void testRetainedGeometryPreservesOrderAndIdentity() {
+  RecordingBackend backend;
+  rendering::UiBatchRenderer renderer(backend);
+  auto geometry = std::make_shared<rendering::UiRetainedGeometry>();
+  geometry->layout.begin(bgfx::RendererType::Noop)
+      .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+      .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true).end();
+  const auto bytes = std::as_bytes(std::span{kFirstQuad});
+  geometry->vertices.assign(bytes.begin(), bytes.end());
+  geometry->indices.assign(kQuadIndices.begin(), kQuadIndices.end());
+  auto state = colorState();
+  state.scissor = {2, 3, 100, 200};
+  state.uniformCount = 6;
+  for (std::size_t i = 0; i < state.uniformCount; ++i)
+    state.uniforms[i] = {bgfx::UniformHandle{static_cast<std::uint16_t>(i)}, {float(i), 0, 0, 0}};
+
+  renderer.begin();
+  renderer.appendColor(kFirstQuad, kQuadIndices, colorState());
+  expect(renderer.submitRetained(geometry, state), "retained geometry submits inside a UI batch");
+  renderer.appendColor(kSecondQuad, kQuadIndices, colorState());
+  renderer.end();
+  expect(backend.order == std::vector<char>({'D', 'R', 'D'}),
+         "retained geometry draws between earlier and later UI content");
+  renderer.begin();
+  state.uniforms[5].value[0] = 99;
+  renderer.submitRetained(geometry, state);
+  renderer.end();
+  expect(backend.retained.size() == 2 && backend.retained[0] == backend.retained[1] &&
+             backend.retained[1].get() == geometry.get(),
+         "animation reuses the same immutable geometry without staging a new mesh");
+  expect(backend.retainedStates[0].scissor->x == 2 &&
+             backend.retainedStates[0].uniforms[5].value[0] == 5 &&
+             backend.retainedStates[1].uniforms[5].value[0] == 99,
+         "retained draws preserve clipping and refresh all shader parameters");
+  expect(!renderer.submitRetained(geometry, state),
+         "retained geometry cannot draw outside an active UI batch");
+}
+
 } // namespace
 
 int main() {
@@ -311,6 +361,7 @@ int main() {
   testStateBoundariesPreserveSubmissionOrder();
   testBatchSplitsBeforeUint16IndexLimit();
   testFailedBatchDoesNotBlockLaterSubmission();
+  testRetainedGeometryPreservesOrderAndIdentity();
   if (failures != 0) {
     return 1;
   }

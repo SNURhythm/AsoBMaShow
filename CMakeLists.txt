@@ -5314,6 +5314,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/ScrollView.cpp
         ${CHART_DETAILS_TEST_SOURCES}
     )
+    add_executable(artwork_glow_tests tests/artwork_glow_tests.cpp src/rendering/Color.cpp)
+    target_include_directories(artwork_glow_tests PRIVATE src SDL/include bgfx/bgfx/include)
+    target_compile_features(artwork_glow_tests PRIVATE cxx_std_20)
+    add_test(NAME artwork_glow_tests COMMAND artwork_glow_tests)
     target_include_directories(chart_details_view_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(chart_details_view_tests PRIVATE cxx_std_23)
     target_link_libraries(chart_details_view_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
@@ -9235,6 +9239,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
         add_executable(ui_batch_metal_tests
             tests/ui_batch_metal_tests.cpp
+            src/rendering/Color.cpp
             src/rendering/UiBatchRenderer.cpp
             src/rendering/UniformCache.cpp
         )
@@ -9250,6 +9255,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         # emulator or Android build; keep the host's Metal backend and SDK.
         add_executable(ui_batch_android_upload_metal_tests
             tests/ui_batch_metal_tests.cpp
+            src/rendering/Color.cpp
             src/rendering/UiBatchRenderer.cpp
             src/rendering/UniformCache.cpp
         )
