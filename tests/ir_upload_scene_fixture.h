@@ -72,6 +72,7 @@ public:
   ir_uploads::Controller controller;
   ir_uploads::PreparationTask preparationTask;
   bool providerCanSubmit = true, reloadRequested = false;
+  bool candidatesLoaded = false;
   std::thread::id applicationThread = std::this_thread::get_id();
   int refreshes = 0, providerRefreshes = 0;
   void refreshProviderState() { ++providerRefreshes; }
@@ -208,10 +209,12 @@ void testSceneStopRetainsCancelledSelectionUntilCompletion() {
         return ir_uploads::VerificationOutcome{};
       }}));
   assert(profileWorkEntered.get_future().wait_for(5s) == std::future_status::ready);
+  scene.candidatesLoaded = true;
   scene.onProfileWillChange();
   assert(!scene.preparationTask.hasWorker() && !scene.controller.selectionLocked());
   assert(scene.controller.candidates().empty() && scene.controller.selectedCount() == 0);
   assert(scene.displayedProfileId.empty() && list.candidates.empty() && list.scrollOffset == 0);
+  assert(!scene.candidatesLoaded && "profile handoff must invalidate the loaded candidate snapshot");
   const auto refreshes = scene.refreshes;
   scene.applyPreparationUpdates();
   assert(!scene.reloadRequested && scene.refreshes == refreshes);

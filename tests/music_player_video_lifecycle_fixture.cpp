@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <memory>
@@ -31,6 +32,8 @@ struct Jukebox {
 struct NativeMusic {
   struct Playback { bool loaded = true; };
   Playback playback;
+  std::uint64_t contentRevision = 0;
+  std::uint64_t ContentRevision() const { return contentRevision; }
   std::optional<MusicTrack> current = MusicTrack{};
   Playback PlaybackState() const { return playback; }
   std::optional<MusicTrack> CurrentTrackSnapshot() const { return current; }
@@ -45,7 +48,11 @@ struct ApplicationContext {
   Jukebox jukebox{e};
   NativeMusic musicPlayer;
   ProfileManager profileManager;
-  int libraryRevision = 0;
+  struct ChartRepository {
+    std::uint64_t libraryRevision = 0;
+    std::uint64_t GetLibraryRevision() const { return libraryRevision; }
+  } chartRepository;
+  std::atomic<std::uint64_t> profileCacheRevision{0};
   std::atomic_bool ignoreBgaPostOptions{false};
 };
 struct View {
@@ -90,11 +97,20 @@ public:
       selectedLibraryPlaylistId = 0;
   int reloads = 0, observedLibraryRevision = -1;
   bool selectionPreserved = false;
+  bool dataLoaded = false;
+  std::uint64_t loadedLibraryRevision = 0;
+  std::uint64_t loadedProfileCacheRevision = 0;
+  std::uint64_t loadedContentRevision = 0;
   void reloadData(bool preserveSelection) {
     ++reloads;
-    observedLibraryRevision = context.libraryRevision;
+    loadedLibraryRevision = context.chartRepository.GetLibraryRevision();
+    loadedProfileCacheRevision = context.profileCacheRevision.load();
+    loadedContentRevision = context.musicPlayer.ContentRevision();
+    dataLoaded = true;
+    observedLibraryRevision = loadedLibraryRevision;
     selectionPreserved = preserveSelection;
   }
+  void refreshSystemPlaybackPrivacyButtons() {}
   void applySystemPlaybackPrivacy(bool) {}
   void refreshLanguageIfNeeded() {}
   void setTabTopInset(float topInset);
@@ -254,14 +270,22 @@ void testResumeRefreshesSameProfileLibraryAndClearsChangedProfileSelection() {
   scene.pendingDeletePlaylistId = 7;
   scene.onResume();
   assert(scene.reloads == 1 && scene.selectionPreserved);
-  context.libraryRevision = 1; // PLAY changed chart/favorite data only.
+  scene.onResume();
+  assert(scene.reloads == 1 && "unchanged retained tab must reuse its loaded lists");
+  context.chartRepository.libraryRevision = 1; // PLAY changed chart/favorite data only.
   scene.onResume();
   assert(scene.reloads == 2 && scene.observedLibraryRevision == 1);
   assert(scene.selectionPreserved && scene.pendingDeletePlaylistId == 7);
+  ++context.profileCacheRevision;
+  scene.onResume();
+  assert(scene.reloads == 3 && scene.selectionPreserved);
+  ++context.musicPlayer.contentRevision;
+  scene.onResume();
+  assert(scene.reloads == 4 && scene.selectionPreserved);
   context.profileManager.profile.id = "next-profile";
   scene.pendingClearPlaylistId = scene.selectedLibraryPlaylistId = 7;
   scene.onResume();
-  assert(scene.reloads == 3 && !scene.selectionPreserved);
+  assert(scene.reloads == 5 && !scene.selectionPreserved);
   assert(scene.pendingDeletePlaylistId == 0 && scene.pendingClearPlaylistId == 0);
   assert(scene.selectedLibraryPlaylistId == 0 && scene.displayedProfileId == "next-profile");
 }
