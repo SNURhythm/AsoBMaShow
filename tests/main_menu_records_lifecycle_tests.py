@@ -81,6 +81,43 @@ def records_fixture():
 
 
 class MainMenuRecordsLifecycleTests(unittest.TestCase):
+    def test_profile_switch_consults_retained_ir_preparation(self):
+        source = (ROOT / "src/scene/MainMenuScene.cpp").read_text()
+        blocker = fixture_tools.function_body(source, "auto profileOperationBlocker =")
+        fixture = r'''
+#include <atomic>
+#include <cassert>
+#include <optional>
+#include <string>
+struct IrTab {
+  bool preparing = true;
+  int queries = 0;
+  std::optional<std::string> profileSwitchBlocker() {
+    ++queries;
+    return preparing ? std::optional<std::string>("IR preparation") : std::nullopt;
+  }
+};
+struct Menu {
+  bool pendingTab_ = false;
+  IrTab *irTab_ = nullptr;
+  struct Job { bool inProgress() { return false; } } replayExportJob_;
+  Job *findBmsModal_ = nullptr;
+  std::atomic_bool willStart{false};
+  bool archiveUnzipInProgress() { return false; }
+  std::optional<std::string> blocked() BLOCKER
+};
+int main() {
+  Menu menu;
+  assert(!menu.blocked());
+  IrTab ir;
+  menu.irTab_ = &ir;
+  assert(menu.blocked() == "IR preparation" && ir.preparing);
+  ir.preparing = false;
+  assert(!menu.blocked() && ir.queries == 2);
+}
+'''.replace("BLOCKER", blocker)
+        fixture_tools.MusicSelectSceneBehaviorTests().compile_and_run(fixture)
+
     def test_resume_activates_selected_music_select_skin_after_callback_returns(self):
         source = (ROOT / "src/scene/MainMenuScene.cpp").read_text()
         fixture = (ROOT / "tests/main_menu_skin_resume_fixture.cpp").read_text()

@@ -12,6 +12,7 @@ class View;
 
 class ChartRecordsScene final : public Scene {
 public:
+  bool usesResponsiveMenuCanvas() const override { return true; }
   ChartRecordsScene(ApplicationContext &context, ChartMetaRecord record,
                     SceneReturnTarget returnTarget)
       : Scene(context), record_(std::move(record)),

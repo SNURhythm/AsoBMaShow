@@ -18,11 +18,18 @@ class UiScaleTests(unittest.TestCase):
                              "void MainMenuScene::updateMenuPresentation(bool portrait)") + "\n" + extract(
                                  (root / "src/scene/MainMenuScene.cpp").read_text(),
                                  "float MainMenuScene::portraitDetailsHeight(float availableHeight) const")
+        method += "\n" + extract((root / "src/scene/MainMenuScene.cpp").read_text(), "void MainMenuScene::updatePhonePanelLayout()")
+        for signature in ("void MainMenuScene::refreshPrimaryActionVisibility()",
+                          "void MainMenuScene::setFindBmsButtonVisible(bool visible)",
+                          "void MainMenuScene::setUnzipButtonVisible(bool visible)"):
+            method += "\n" + extract((root / "src/scene/MainMenuScene.cpp").read_text(), signature)
         source = r'''
 #include <yoga/Yoga.h>
+#include "rendering/ResponsiveUi.h"
 #include <array>
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -43,10 +50,13 @@ struct View {
   View* setMinHeight(float v) { YGNodeStyleSetMinHeight(node,v);return this; }
   View* setFlex(float v) { YGNodeStyleSetFlex(node,v);return this; }
   View* setFlexShrink(float v) { YGNodeStyleSetFlexShrink(node,v);return this; }
+  View* setFlexWrap(YGWrap v) { YGNodeStyleSetFlexWrap(node,v);return this; }
   View* setFlexDirection(FlexDirection v) { YGNodeStyleSetFlexDirection(node,YGFlexDirection(v));return this; }
   View* setGap(float v) { YGNodeStyleSetGap(node,YGGutterAll,v);return this; }
   View* setPadding(Edge e,float v) { YGNodeStyleSetPadding(node,YGEdge(e),v);return this; }
+  View* setPosition(Edge e,float v) { YGNodeStyleSetPosition(node,YGEdge(e),v);return this; }
   View* setAlignItems(YGAlign v) { YGNodeStyleSetAlignItems(node,v);return this; }
+  void applyYogaLayout() { YGNodeCalculateLayout(node,YGUndefined,YGUndefined,YGDirectionLTR); }
   void setAutoFitText(bool) {}
   void setVisible(bool v) { visible=v; }
   bool getVisible() { return visible; }
@@ -59,13 +69,16 @@ struct View {
 };
 struct Button:View { View content{"content"}; using View::View; View* getContentView() { return &content; } };
 struct ScrollView:View { using View::View; void refreshContentLayout() {} };
-struct ChartDetails:View { static constexpr float minimumChartHeight() { return 410; } View best{"best"}; ChartDetails():View("chart") { add(best); } void setScoreContainer(View* v) { best.moveTo(v?*v:*this); } };
+struct ChartDetails:View { static constexpr float minimumChartHeight() { return 448; } View best{"best"}; ChartDetails():View("chart") { add(best); } void setCompact(bool) {} void setScoreContainer(View* v) { best.moveTo(v?*v:*this); } };
 using ChartDetailsView = ChartDetails;
 namespace rendering { int window_width=1080,window_height=1920; }
 struct SafeAreaInsets { int top=30,right=0,bottom=20,left=0; };
 SafeAreaInsets getSafeAreaInsetsUi() { return {}; }
-constexpr int kRootPadding=28,kLibraryPanelWidth=320,kDetailsPanelWidth=500,kDetailsContentWidth=460;
-constexpr int kPortraitMenuActionHeight=64,kMenuActionHeight=84;
+constexpr int kRootPadding=0,kLibraryPanelWidth=350,kDetailsPanelWidth=540,kDetailsContentWidth=472;
+constexpr int kMenuHeaderHeight=80,kPlayDockHeight=120;
+constexpr int kPortraitMenuActionHeight=64,kMenuActionHeight=56;
+enum class NewcomerTutorialStep { Download };
+struct Tutorial { bool getVisible() { return false; } NewcomerTutorialStep step() { return NewcomerTutorialStep::Download; } };
 struct MainMenuScene {
   View* rootLayout;
   View *detailsContent_, *detailsControlsContent_;
@@ -76,80 +89,152 @@ struct MainMenuScene {
   Button *replayButton,*rankingsButton,*startButton,*unzipButton,*findBmsButton;
   View *searchBox,*chartFilterButton,*chartSortButton,*replayButtonText,*rankingsButtonText;
   void updatePanelLayout(); void updateMenuPresentation(bool portrait);
+  void updatePhonePanelLayout();
   float portraitDetailsHeight(float) const;
+  View *primaryActionSlot_=nullptr;
+  bool unzipButtonAvailable_=false,findBmsAvailableWithoutTutorial_=false;
+  Tutorial *tutorial_=nullptr;
+  void refreshPrimaryActionVisibility();
+  void setFindBmsButtonVisible(bool visible);
+  void setUnzipButtonVisible(bool visible);
 };
 PRODUCTION_METHOD
 int main() {
+  View body("mainMenuBody"),dock("mainMenuPlayDock"),header("mainMenuHeader"),tabs("mainMenuTabs"),wordmark("mainMenuWordmark"),searchRow("mainMenuSearchRow");
   View root("root"),browser("mainMenuBrowser"),library("mainMenuLibrary"),songs("mainMenuSongs"),details("mainMenuDetails"),actions("mainMenuLibraryActions"),button("button"),primary("mainMenuPrimaryActions"),controls("mainMenuControls"),list("list"),records("mainMenuRecordActions"),toolbar("mainMenuToolbar"),content("content"),controlsContent("controlsContent"),tools("tools"),unzipSlot("unzip"),findSlot("find"),replaySlot("replay"),search("search"),filter("filter"),sort("sort"),replayText("replayText"),rankingText("rankingText");
+  View actionSlot("mainMenuPrimaryActionSlot"),viewer("viewer"),reveal("reveal"),divider("mainMenuDetailsDivider");
   ScrollView scroll("mainMenuDetailsScroll"),controlsScroll("controlsScroll");
   ChartDetails chart;
   Button settings("mainMenuSettings"),options("options"),replay("replay"),ranking("ranking"),start("start"),unzip("unzip"),find("find");
-  root.setPadding(Edge::All,28)->setGap(24)->setAlignItems(YGAlignStretch);
-  browser.setFlexDirection(FlexDirection::Row)->setGap(24)->setMinWidth(0)->setMinHeight(0);
-  root.add(browser);root.add(details);browser.add(library);browser.add(songs);
+  std::array<View,6> summaryCells={View("heading"),View("assist"),View("gauge"),View("random"),View("speed"),View("target")};
+  for(auto &cell:summaryCells) options.content.add(cell);
+  root.setPadding(Edge::All,0)->setGap(0)->setAlignItems(YGAlignStretch);
+  browser.setFlexDirection(FlexDirection::Row)->setGap(0)->setMinWidth(0)->setMinHeight(0);
+  root.add(header);header.setHeight(80)->setFlexShrink(0)->setFlexDirection(FlexDirection::Row);header.add(wordmark);header.add(tabs);tabs.setWidth(320);header.add(toolbar);
+  std::array<View,4> tabButtons={View("PLAY"),View("COURSE"),View("MUSIC"),View("IR")};
+  for(auto &tab:tabButtons){tabs.add(tab);tab.setHeight(66);}
+  tabs.setFlexDirection(FlexDirection::Row)->setHeight(80);
+  root.add(body);root.add(dock);body.setFlex(1)->setMinHeight(0)->setGap(0);
+  dock.setHeight(120)->setFlexShrink(0)->setFlexDirection(FlexDirection::Row);
+  body.add(browser);body.add(details);browser.add(library);browser.add(songs);
   library.add(actions);actions.add(button);library.add(list);list.setFlex(1);
   library.setPadding(Edge::All,14);button.setWidth(292)->setHeight(84);
   songs.setFlex(1)->setMinWidth(0)->setMinHeight(0)->setPadding(Edge::All,16);
-  songs.add(toolbar);toolbar.setFlexDirection(FlexDirection::Row)->setGap(12);
+  songs.add(searchRow);searchRow.setFlexDirection(FlexDirection::Row)->setGap(10);
+  searchRow.add(search);search.setFlex(1)->setMinWidth(0);searchRow.add(filter);searchRow.add(sort);
+  toolbar.setFlexDirection(FlexDirection::Row)->setGap(12);
   std::array<View,4> headerButtons={View("add"),View("refresh"),View("search"),View("tasks")};
   int widths[]={112,122,154,142};
   for(int i=0;i<4;++i){toolbar.add(headerButtons[i]);headerButtons[i].setWidth(widths[i]);}
   details.setGap(12)->setPadding(Edge::Bottom,16);details.add(scroll);details.add(primary);details.add(controls);
+  details.add(divider);YGNodeStyleSetPositionType(divider.node,YGPositionTypeAbsolute);
   controls.setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch)->setGap(8);
   controls.setFlex(1)->setMinWidth(0)->setMinHeight(0);controls.add(controlsScroll);
   controlsScroll.setWidthPercent(100)->setFlex(1)->setMinHeight(0);
   primary.setFlexShrink(0);scroll.setFlex(1)->setMinWidth(0)->setMinHeight(0);
-  primary.add(start);primary.add(findSlot);primary.add(records);primary.add(settings);
+  primary.add(actionSlot);actionSlot.setFlexShrink(0);actionSlot.add(start);actionSlot.add(findSlot);actionSlot.add(unzipSlot);
+  primary.add(records);primary.add(tools);primary.add(settings);
+  tools.setFlexDirection(FlexDirection::Row);tools.add(viewer);tools.add(reveal);viewer.setFlex(1);reveal.setFlex(1);
   records.setFlexDirection(FlexDirection::Row);records.add(replaySlot);records.add(ranking);
   replaySlot.setFlex(1)->setMinWidth(0);ranking.setFlex(1)->setMinWidth(0);
   replaySlot.add(replay);replay.setWidthPercent(100);
-  content.add(chart);content.add(options);content.add(tools);content.add(unzipSlot);
-  unzipSlot.add(unzip);findSlot.add(find);unzipSlot.setVisible(false);findSlot.setVisible(false);findSlot.setDisplay(YGDisplayNone);
+  content.add(chart);content.add(options);
+  unzipSlot.add(unzip);findSlot.add(find);unzipSlot.setVisible(false);unzipSlot.setDisplay(YGDisplayNone);findSlot.setVisible(false);findSlot.setDisplay(YGDisplayNone);
   MainMenuScene scene{&root,&content,&controlsContent,&controlsScroll,nullptr,&chart,&options,&tools,&unzipSlot,&findSlot,&replaySlot,&replay,&ranking,&start,&unzip,&find,&search,&filter,&sort,&replayText,&rankingText};
-  for (auto dimensions : {std::pair{1080,1920},std::pair{1080,1440},std::pair{1080,1100},std::pair{1920,1080},std::pair{1080,1920}}) {
+  scene.primaryActionSlot_=&actionSlot;
+  for (auto dimensions : {std::pair{800,1200},std::pair{1600,2200},std::pair{1080,1920},std::pair{1080,1440},std::pair{1080,1100},std::pair{1920,1080},std::pair{1440,1080},std::pair{1280,1080},std::pair{1080,1920}}) {
     rendering::window_width=dimensions.first;rendering::window_height=dimensions.second;
     root.setWidth(dimensions.first)->setHeight(dimensions.second);
-    root.setPadding(Edge::Top,58)->setPadding(Edge::Bottom,48);
+    root.setPadding(Edge::Top,30)->setPadding(Edge::Bottom,0);
     content.setHeight(340);controlsContent.setHeight(260);
     YGNodeCalculateLayout(content.node,YGUndefined,YGUndefined,YGDirectionLTR);
     YGNodeCalculateLayout(controlsContent.node,YGUndefined,YGUndefined,YGDirectionLTR);
     scene.updatePanelLayout();YGNodeCalculateLayout(root.node,dimensions.first,dimensions.second,YGDirectionLTR);
     scene.updatePanelLayout();YGNodeCalculateLayout(root.node,dimensions.first,dimensions.second,YGDirectionLTR);
-    assert(findSlot.parent==&primary && "download must remain with the primary action when rotating");
+    if (dimensions.second>dimensions.first) {
+      assert(YGNodeLayoutGetTop(divider.node)==0 && YGNodeLayoutGetHeight(divider.node)==1);
+      assert(YGNodeLayoutGetWidth(divider.node)==YGNodeLayoutGetWidth(details.node));
+    } else {
+      assert(YGNodeLayoutGetLeft(divider.node)==0 && YGNodeLayoutGetWidth(divider.node)==1);
+      assert(YGNodeLayoutGetTop(divider.node)==16);
+    }
+    const bool showWordmark=dimensions.second<=dimensions.first && dimensions.first>=1500;
+    assert(wordmark.visible==showWordmark);
+    assert(YGNodeStyleGetDisplay(wordmark.node)==(showWordmark?YGDisplayFlex:YGDisplayNone));
+    assert(YGNodeStyleGetDisplay(tabs.node)==YGDisplayFlex);
+    assert(YGNodeLayoutGetHeight(header.node)==(dimensions.first<1000?160:80));
+    for(const auto &tab:tabButtons) {
+      assert(YGNodeLayoutGetWidth(tab.node)>=100);
+      assert(YGNodeLayoutGetLeft(tab.node)+YGNodeLayoutGetWidth(tab.node)<=YGNodeLayoutGetWidth(tabs.node)+1);
+    }
+    if(dimensions.first<1000)
+      assert(YGNodeLayoutGetTop(toolbar.node)>=YGNodeLayoutGetHeight(tabs.node));
+    assert(findSlot.parent==&actionSlot && unzipSlot.parent==&actionSlot && start.parent==&actionSlot);
+    // Every replacement occupies the same slot, including across rotation.
+    for (int action : {0,1,2,1,0}) {
+      scene.setFindBmsButtonVisible(action==1);
+      scene.setUnzipButtonVisible(action==2);
+      root.applyYogaLayout();
+      assert(start.visible==(action==0) && findSlot.visible==(action==1) && unzipSlot.visible==(action==2));
+      auto *active=action==0?static_cast<View*>(&start):action==1?&findSlot:&unzipSlot;
+      assert(YGNodeLayoutGetTop(active->node)==0);
+      assert(YGNodeLayoutGetWidth(active->node)==YGNodeLayoutGetWidth(actionSlot.node));
+      assert(YGNodeLayoutGetHeight(active->node)==YGNodeLayoutGetHeight(actionSlot.node));
+    }
+    scene.setUnzipButtonVisible(true);
+    scene.setFindBmsButtonVisible(true);
+    assert(findSlot.visible && !unzipSlot.visible && !start.visible);
+    scene.setFindBmsButtonVisible(false);
+    assert(unzipSlot.visible && !start.visible);
+    scene.setUnzipButtonVisible(false);
+    assert(YGNodeLayoutGetLeft(reveal.node)==YGNodeLayoutGetLeft(ranking.node));
+    assert(YGNodeLayoutGetWidth(viewer.node)==YGNodeLayoutGetWidth(replaySlot.node));
     float bh=YGNodeLayoutGetHeight(browser.node),dh=YGNodeLayoutGetHeight(details.node);
+    assert(YGNodeLayoutGetWidth(search.node)>=100 && "search remains usable on 4:3 and narrow landscape screens");
+    assert(YGNodeLayoutGetLeft(toolbar.node)+YGNodeLayoutGetWidth(toolbar.node)<=dimensions.first+1);
     if(dimensions.second>dimensions.first) {
-      const float usable=dimensions.second-106-24;
-      assert(std::abs(dh-(410+34))<1 && std::abs(bh+dh-usable)<1);
+      const float usable=dimensions.second-30-20-(dimensions.first<1000?160:80);
+      assert(std::abs(dh-(476+34))<1 && std::abs(bh+dh-usable)<1);
       controlsContent.setHeight(400);
       YGNodeCalculateLayout(controlsContent.node,YGUndefined,YGUndefined,YGDirectionLTR);
-      assert(scene.portraitDetailsHeight(usable)==std::min(578.0F,usable-320));
+      assert(scene.portraitDetailsHeight(usable)==std::min(650.0F,usable-320));
       assert(scene.portraitDetailsHeight(600)==280);
       controlsContent.setHeight(260);
       YGNodeCalculateLayout(controlsContent.node,YGUndefined,YGUndefined,YGDirectionLTR);
-      assert(scene.portraitDetailsHeight(usable)==444);
+      assert(scene.portraitDetailsHeight(usable)==510);
       assert(YGNodeStyleGetMinHeight(chart.node).value == dh-34);
       assert(YGNodeStyleGetPadding(content.node,YGEdgeTop).value == 0 &&
              YGNodeStyleGetPadding(content.node,YGEdgeBottom).value == 0);
       assert(YGNodeLayoutGetLeft(songs.node)>YGNodeLayoutGetLeft(library.node));
       assert(std::abs(YGNodeLayoutGetHeight(library.node)-bh)<1);
-      assert(std::abs(YGNodeLayoutGetWidth(library.node)/(YGNodeLayoutGetWidth(browser.node)-24)-.3)<.02);
+      assert(std::abs(YGNodeLayoutGetWidth(library.node)/YGNodeLayoutGetWidth(browser.node)-.3)<.02);
       assert(YGNodeLayoutGetTop(details.node)>=YGNodeLayoutGetTop(browser.node)+bh);
-      assert(chart.best.parent==&controlsContent && options.parent==&controlsContent && tools.parent==&controlsContent);
-      assert(primary.parent==&controls && settings.parent==&records);
+      assert(chart.best.parent==&controlsContent && options.parent==&controlsContent && tools.parent==&primary);
+      assert(primary.parent==&controls && settings.parent==&toolbar);
+      assert(YGNodeLayoutGetHeight(records.node)==64 &&
+             YGNodeLayoutGetHeight(ranking.node)<=YGNodeLayoutGetHeight(records.node));
       assert(YGNodeLayoutGetLeft(headerButtons.back().node)+YGNodeLayoutGetWidth(headerButtons.back().node)<=YGNodeLayoutGetWidth(toolbar.node)+1);
-      assert(YGNodeLayoutGetHeight(scroll.node)>0 && YGNodeLayoutGetHeight(primary.node)==136);
+      assert(YGNodeLayoutGetHeight(scroll.node)>0 && YGNodeLayoutGetHeight(primary.node)==208);
       assert(YGNodeLayoutGetLeft(controls.node)>YGNodeLayoutGetLeft(scroll.node));
       assert(std::abs(YGNodeLayoutGetWidth(controls.node)-YGNodeLayoutGetWidth(scroll.node))<1);
       assert(YGNodeLayoutGetWidth(button.node)<=YGNodeLayoutGetWidth(library.node)-28+1);
     } else {
+      assert(YGNodeLayoutGetHeight(dock.node)==120);
+      assert(YGNodeStyleGetPadding(dock.node,YGEdgeBottom).value==0);
       assert(YGNodeStyleGetMinHeight(chart.node).value == 0);
-      assert(YGNodeStyleGetPadding(content.node,YGEdgeTop).value == 16 &&
-             YGNodeStyleGetPadding(content.node,YGEdgeBottom).value == 16);
-      assert(YGNodeLayoutGetWidth(library.node)==320 && YGNodeLayoutGetWidth(details.node)==500);
+      assert(YGNodeStyleGetPadding(content.node,YGEdgeTop).value == 0 &&
+             YGNodeStyleGetPadding(content.node,YGEdgeBottom).value == 0);
+      assert(YGNodeLayoutGetWidth(library.node)==350 && YGNodeLayoutGetWidth(details.node)==540);
       assert(std::abs(bh-dh)<1);
-      assert(!controls.visible && chart.best.parent==&chart && options.parent==&content && tools.parent==&content);
-      assert(primary.parent==&details && settings.parent==&primary);
-      assert(YGNodeLayoutGetHeight(primary.node)==280 && YGNodeLayoutGetHeight(button.node)==84);
+      assert(dock.children.size()==2 && dock.children[0]==&options && dock.children[1]==&actionSlot);
+      assert(YGNodeLayoutGetTop(dock.node)+YGNodeLayoutGetHeight(dock.node)==dimensions.second-20);
+      assert(YGNodeLayoutGetTop(actionSlot.node)+YGNodeLayoutGetHeight(actionSlot.node)==YGNodeLayoutGetHeight(dock.node));
+      assert(!controls.visible && chart.best.parent==&chart && options.parent==&dock && actionSlot.parent==&dock && tools.parent==&primary);
+      assert(primary.parent==&details && settings.parent==&toolbar);
+      assert(YGNodeLayoutGetWidth(actionSlot.node)==YGNodeLayoutGetWidth(details.node));
+      assert(YGNodeLayoutGetTop(tools.node)>=YGNodeLayoutGetTop(records.node)+YGNodeLayoutGetHeight(records.node));
+      assert(YGNodeLayoutGetHeight(viewer.node)==76 && YGNodeLayoutGetHeight(ranking.node)==76);
+      assert(YGNodeLayoutGetHeight(primary.node)==164 && YGNodeLayoutGetHeight(button.node)==56);
     }
     if(dimensions.second<=dimensions.first)continue;
     assert(YGNodeLayoutGetHeight(controlsScroll.node)>0);
@@ -157,14 +242,212 @@ int main() {
     assert(YGNodeLayoutGetTop(primary.node)+YGNodeLayoutGetHeight(primary.node)<=YGNodeLayoutGetHeight(controls.node)+1);
     assert(YGNodeLayoutGetLeft(controls.node)+YGNodeLayoutGetWidth(controls.node)<=YGNodeLayoutGetWidth(details.node)+1);
   }
+  rendering::compactMenuCanvasActive=true;
+  for (const auto dimensions : {std::pair{585,1266},std::pair{1266,585},std::pair{1470,750},std::pair{1020,600},std::pair{585,1266}}) {
+    rendering::window_width=dimensions.first;rendering::window_height=dimensions.second;
+    root.setWidth(dimensions.first)->setHeight(dimensions.second);
+    scene.updatePanelLayout();root.applyYogaLayout();
+    options.content.setWidth(YGNodeLayoutGetWidth(options.node))->setHeight(YGNodeLayoutGetHeight(options.node));
+    options.content.applyYogaLayout();
+    assert(YGNodeStyleGetDisplay(library.node)==YGDisplayFlex);
+    assert(YGNodeStyleGetDisplay(songs.node)==YGDisplayFlex);
+    assert(YGNodeStyleGetDisplay(details.node)==YGDisplayFlex);
+    assert(YGNodeLayoutGetWidth(songs.node)>180);
+    assert(YGNodeLayoutGetHeight(browser.node)>200);
+    assert(YGNodeLayoutGetHeight(start.node)==(dimensions.second>dimensions.first ? 66 : YGNodeLayoutGetHeight(dock.node)));
+    assert(YGNodeLayoutGetHeight(search.node)==66);
+    assert(YGNodeLayoutGetWidth(search.node)>100);
+    assert(YGNodeLayoutGetHeight(scroll.node)>0);
+    assert(root.findViewByName("mainMenuPhoneLibrary")==nullptr);
+    assert(root.findViewByName("mainMenuPhoneDetails")==nullptr);
+    if (dimensions.second > dimensions.first) {
+      assert(YGNodeStyleGetDisplay(summaryCells[0].node)==YGDisplayFlex);
+      assert(YGNodeLayoutGetHeight(details.node)<=380);
+      assert(primary.parent==&controls && options.parent==&controlsContent);
+      assert(YGNodeStyleGetDisplay(dock.node)==YGDisplayNone);
+    } else {
+      assert(YGNodeLayoutGetWidth(library.node)>=250);
+      assert(YGNodeStyleGetDisplay(summaryCells[0].node)==YGDisplayNone);
+      for (size_t i=1;i<summaryCells.size();++i) {
+        const auto cell=summaryCells[i].node;
+        assert(YGNodeLayoutGetWidth(cell)>=120);
+        assert(YGNodeLayoutGetTop(cell)+YGNodeLayoutGetHeight(cell)<=YGNodeLayoutGetHeight(options.node)-8);
+        assert(YGNodeLayoutGetLeft(cell)+YGNodeLayoutGetWidth(cell)<=YGNodeLayoutGetWidth(options.node)+1);
+      }
+      assert(YGNodeLayoutGetHeight(options.node)==YGNodeLayoutGetHeight(dock.node));
+      assert(YGNodeLayoutGetHeight(actionSlot.node)==YGNodeLayoutGetHeight(dock.node));
+      assert(YGNodeLayoutGetWidth(options.node)+YGNodeLayoutGetWidth(actionSlot.node)==dimensions.first);
+      assert(YGNodeLayoutGetWidth(details.node)<=350);
+      assert(primary.parent==&details && actionSlot.parent==&dock && options.parent==&dock);
+      assert(YGNodeLayoutGetTop(dock.node)+YGNodeLayoutGetHeight(dock.node)==dimensions.second-20);
+    }
+  }
+
 }
 '''.replace("PRODUCTION_METHOD", method)
         with tempfile.TemporaryDirectory(prefix="asobmashow-menu-yoga-") as temp:
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             path.write_text(source)
-            subprocess.run(["c++", "-std=c++20", "-I", str(root / "yoga"), str(path),
+            subprocess.run(["c++", "-std=c++20", "-I", str(root / "yoga"), "-I", str(root / "src"), str(path),
                             os.environ.get("ASOBMASHOW_TEST_YOGA_LIBRARY", str(root / "cmake-build-debug/yoga/yoga/libyogacore.a")), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
+    def test_utility_rails_keep_compact_controls_and_feedback_in_bounds(self):
+        root = Path(__file__).resolve().parents[1]
+        methods = "\n".join(extract((root / f"src/scene/{name}.cpp").read_text(),
+                                    f"void {name}::updateLayoutInsets()")
+                            for name in ("MusicPlayerScene", "IrUploadsScene"))
+        source = r'''
+#include <yoga/Yoga.h>
+#include "rendering/ResponsiveUi.h"
+#include <algorithm>
+#include <cassert>
+#include <string>
+#include <string_view>
+#include <vector>
+enum class FlexDirection { Column=YGFlexDirectionColumn, Row=YGFlexDirectionRow };
+enum class Edge { Left=YGEdgeLeft, Right=YGEdgeRight, Top=YGEdgeTop, Bottom=YGEdgeBottom, All=YGEdgeAll };
+struct View {
+  YGNodeRef node=YGNodeNew();
+  std::string name;
+  std::vector<View*> children;
+  explicit View(std::string n=""):name(n) {}
+  virtual ~View() { YGNodeFree(node); }
+  View* setWidth(float v) { YGNodeStyleSetWidth(node,v);return this; }
+  View* setHeight(float v) { YGNodeStyleSetHeight(node,v);return this; }
+  View* setSize(float w,float h) { return setWidth(w)->setHeight(h); }
+  View* setWidthPercent(float v) { YGNodeStyleSetWidthPercent(node,v);return this; }
+  View* setMinWidth(float v) { YGNodeStyleSetMinWidth(node,v);return this; }
+  View* setMinHeight(float v) { YGNodeStyleSetMinHeight(node,v);return this; }
+  View* setFlex(float v) { YGNodeStyleSetFlex(node,v);return this; }
+  View* setFlexShrink(float v) { YGNodeStyleSetFlexShrink(node,v);return this; }
+  View* setFlexWrap(YGWrap v) { YGNodeStyleSetFlexWrap(node,v);return this; }
+  View* setFlexDirection(FlexDirection v) { YGNodeStyleSetFlexDirection(node,YGFlexDirection(v));return this; }
+  View* setGap(float v) { YGNodeStyleSetGap(node,YGGutterAll,v);return this; }
+  View* setPadding(Edge e,float v) { YGNodeStyleSetPadding(node,YGEdge(e),v);return this; }
+  View* setDisplay(YGDisplay v) { YGNodeStyleSetDisplay(node,v);return this; }
+  void applyYogaLayout() { YGNodeCalculateLayout(node,YGUndefined,YGUndefined,YGDirectionLTR); }
+  void add(View& v) { children.push_back(&v);YGNodeInsertChild(node,v.node,children.size()-1); }
+  View* findViewByName(const std::string &n) { if(name==n)return this; for(auto* c:children)if(auto* found=c->findViewByName(n))return found;return nullptr; }
+};
+struct ScrollView:View { View* getContentView() {return this;} void refreshContentLayout() {} };
+namespace rendering { int window_width=1920,window_height=1080; }
+struct Insets { int top=20,right=12,bottom=24,left=12; };
+Insets getSafeAreaInsetsUi() { return {}; }
+constexpr int kRailWidth=300,kHeaderHeight=80,kScreenPadding=24;
+struct MusicPlayerScene {
+  View *rootLayout,*contentLayout,*libraryNavButton,*favoritesNavButton,*playlistsNavButton,*playerNavButton,*statusText;
+  View *libraryList=nullptr,*favoritesList=nullptr,*videoOverlayRoot=nullptr;
+  bool embeddedTab=true; int tabTopInset=180;
+  int lastSafeTop=-1,lastSafeLeft=-1,lastSafeBottom=-1,lastSafeRight=-1;
+  void updateLayoutInsets();
+};
+struct IrUploadsScene {
+  View *rootLayout,*contentLayout,*headerLayout,*providerStatusText,*openIrSettingsButton,*candidateCountText,*refreshButton,*selectAllButton,*clearButton;
+  bool embeddedTab=true; int tabTopInset=180;
+  int lastSafeTop=-1,lastSafeLeft=-1,lastSafeBottom=-1,lastSafeRight=-1;
+  void updateLayoutInsets();
+};
+PRODUCTION_METHODS
+void within(const View &child,const View &parent) {
+  assert(YGNodeStyleGetDisplay(child.node)==YGDisplayFlex);
+  assert(YGNodeLayoutGetWidth(child.node)>0 && YGNodeLayoutGetHeight(child.node)>0);
+  assert(YGNodeLayoutGetLeft(child.node)>=0 && YGNodeLayoutGetTop(child.node)>=0);
+  assert(YGNodeLayoutGetLeft(child.node)+YGNodeLayoutGetWidth(child.node)<=YGNodeLayoutGetWidth(parent.node)+1);
+  assert(YGNodeLayoutGetTop(child.node)+YGNodeLayoutGetHeight(child.node)<=YGNodeLayoutGetHeight(parent.node)+1);
+}
+int main() {
+  View musicRoot,musicContent,musicRail("musicNavigationRail"),musicWorkspace;
+  View library,favorites,playlists,player,spacer("musicNavigationSpacer"),status;
+  musicRoot.add(musicContent);musicContent.setFlex(1)->setMinHeight(0);musicContent.add(musicRail);musicContent.add(musicWorkspace);
+  musicRail.setFlexShrink(0);musicWorkspace.setFlex(1)->setMinWidth(0)->setMinHeight(0);
+  for(auto *button:{&library,&favorites,&playlists,&player}) musicRail.add(*button);
+  musicRail.add(spacer);spacer.setFlex(1);musicRail.add(status);status.setHeight(72);
+  MusicPlayerScene music{&musicRoot,&musicContent,&library,&favorites,&playlists,&player,&status};
+  View irRoot,irHeader,irContent,irRail("irProviderRail"),identity("irProviderIdentity"),title,providerStatus,settings,count,refresh,irWorkspace;
+  View toolbar("irSelectionToolbar"),selectAll,clear,selection;
+  irRoot.add(irHeader);irRoot.add(irContent);irContent.setFlex(1)->setMinHeight(0);
+  irContent.add(irRail);irContent.add(irWorkspace);irRail.setFlexShrink(0);
+  irRail.add(identity);identity.setMinWidth(0)->setGap(4);identity.add(title);title.setHeight(46);identity.add(providerStatus);
+  irRail.add(settings);irRail.add(count);count.setHeight(32)->setWidthPercent(100);irRail.add(refresh);refresh.setWidthPercent(100);
+  irWorkspace.setFlex(1)->setMinWidth(0)->setMinHeight(0)->setPadding(Edge::All,24);irWorkspace.add(toolbar);
+  toolbar.setFlexDirection(FlexDirection::Row)->setGap(10)->setFlexShrink(0);
+  toolbar.add(selectAll);selectAll.setWidth(146);toolbar.add(clear);clear.setWidth(112);toolbar.add(selection);selection.setFlex(1)->setHeight(32);
+  IrUploadsScene ir{&irRoot,&irContent,&irHeader,&providerStatus,&settings,&count,&refresh,&selectAll,&clear};
+  for (bool compact:{false,true,false}) {
+    rendering::compactMenuCanvasActive=compact;
+    for (int width:{1920,1000,585,390,800,1920}) {
+      rendering::window_width=width;rendering::window_height=1266;
+      music.updateLayoutInsets();ir.updateLayoutInsets();
+      for(auto *button:{&library,&favorites,&playlists,&player,&status}) within(*button,musicRail);
+      for(auto *child:{&identity,&settings,&count,&refresh}) within(*child,irRail);
+      within(selectAll,toolbar);within(clear,toolbar);
+      within(musicRail,musicContent);within(irRail,irContent);
+      if(width<900) {
+        assert(YGNodeLayoutGetTop(status.node)>=YGNodeLayoutGetTop(library.node)+YGNodeLayoutGetHeight(library.node));
+        assert(YGNodeLayoutGetTop(refresh.node)>=YGNodeLayoutGetTop(settings.node)+YGNodeLayoutGetHeight(settings.node));
+        assert(YGNodeLayoutGetTop(irWorkspace.node)>=YGNodeLayoutGetTop(irRail.node)+YGNodeLayoutGetHeight(irRail.node));
+      }
+    }
+  }
+}
+'''.replace("PRODUCTION_METHODS", methods)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-utility-yoga-") as temp:
+            path, binary = Path(temp) / "test.cpp", Path(temp) / "test"
+            path.write_text(source)
+            subprocess.run(["c++", "-std=c++20", "-I", str(root / "yoga"), "-I", str(root / "src"), str(path),
+                            os.environ.get("ASOBMASHOW_TEST_YOGA_LIBRARY", str(root / "cmake-build-debug/yoga/yoga/libyogacore.a")), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
+    def test_empty_marquee_viewport_does_not_draw_unclipped_text(self):
+        root = Path(__file__).resolve().parents[1]
+        method = extract((root / "src/view/TextView.cpp").read_text(),
+                         "void TextView::renderImpl(RenderContext &context)")
+        # Exercise production geometry/overflow decisions before GPU submission.
+        method = method[:method.index("  const auto submitText")] + "  ++draws; if (!clip) ++unclippedDraws; }"
+        source = r"""
+#include <cmath>
+#include <optional>
+struct SDL_Rect { int x,y,w,h; };
+struct RenderContext {};
+namespace bgfx { bool isValid(int value) { return value != 0; } }
+struct TextView {
+  enum class TextOverflow { Visible, Hidden, Marquee };
+  TextOverflow overflow = TextOverflow::Marquee;
+  int texture=1, width=0, height=30, draws=0, unclippedDraws=0;
+  bool wrapEnabled=false;
+  SDL_Rect rect{0,0,200,30};
+  SDL_Rect resolvedTextRect() { return rect; }
+  void createTexture() { texture=1; }
+  int getContentWidth() { return width; }
+  int getContentHeight() { return height; }
+  int getContentX() { return 0; }
+  float getRotationDegrees() { return 0; }
+  std::optional<int> textFitBounds() { return std::nullopt; }
+  float marqueeOffset(int) { return 40; }
+  void renderImpl(RenderContext &);
+};
+PRODUCTION_METHOD
+#include <cassert>
+int main() {
+  RenderContext context;
+  for(auto overflow : {TextView::TextOverflow::Marquee, TextView::TextOverflow::Hidden}) {
+    TextView text; text.overflow=overflow;
+    text.renderImpl(context);
+    assert(text.draws==0 && "zero-width clipped labels must not draw across neighbouring columns");
+    text.width=2; text.renderImpl(context);
+    assert(text.draws==1 && text.unclippedDraws==0);
+    text.height=0; text.renderImpl(context);
+    assert(text.draws==1 && "zero-height clipped labels must not draw across neighbouring rows");
+  }
+}
+""".replace("PRODUCTION_METHOD", method)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-marquee-") as temp:
+            path = Path(temp) / "test.cpp"
+            binary = Path(temp) / "test"
+            path.write_text(source)
+            subprocess.run(["c++", "-std=c++23", str(path), "-o", str(binary)], check=True)
             subprocess.run([str(binary)], check=True)
 
     def test_preview_actions_share_a_row_in_both_orientations(self):
@@ -447,9 +730,11 @@ int main() {
 #include <initializer_list>
 constexpr int YGUndefined = -1;
 enum class Edge { Top, Right, Bottom, Left };
+namespace app_theme { constexpr int resultBackdrop() { return 42; } }
 struct View {
   struct LayoutBatchScope {};
-  int width = 0, height = 0, minimum = 0;
+  int width = 0, height = 0, minimum = 0, background = 0;
+  void setBackgroundColor(int color) { background=color; }
   std::array<int, 4> margins{};
   void setSize(int w, int h) { width=w; height=h; }
   void setWidth(int w) { width=w; }
@@ -488,10 +773,13 @@ int main() {
                      &scene.restore, &scene.confirmation}) {
     assert(view->width==1080 && view->height==2340);
   }
+  assert(scene.viewport.background==0); // Custom skins own their background.
   ScrollView scroll;
   scene.resultScroll=&scroll;
   scene.resultLayoutSignature={};
   scene.resizeResultLayout();
+  assert(scene.viewport.background==app_theme::resultBackdrop());
+  assert(scene.viewport.width==1080 && scene.viewport.height==2340);
   assert(scene.root.width==1080 && scene.root.minimum==2110);
   assert(scroll.margins[0]==140 && scroll.margins[2]==90);
   rendering::safe={160, 0, 100, 0};
@@ -501,6 +789,8 @@ int main() {
   rendering::window_height=1080;
   rendering::safe={0, 140, 60, 140};
   scene.resizeResultLayout();
+  assert(scene.viewport.background==app_theme::resultBackdrop());
+  assert(scene.viewport.width==2340 && scene.viewport.height==1080);
   assert(scene.root.width==2060 && scene.root.minimum==1020);
   assert(scene.controls.width==2340 && scene.controls.height==1080);
 }
@@ -627,6 +917,90 @@ int main() {
             subprocess.run(["c++", "-std=c++23", "-I", str(root / "src"), str(path), "-o", str(binary)], check=True)
             subprocess.run([str(binary)], check=True)
 
+    def test_replay_export_restores_menu_geometry_and_density(self):
+        root = Path(__file__).resolve().parents[1]
+        exporter = (root / "src/ReplayVideoExporter.cpp").read_text()
+        methods = "\n".join(extract(exporter, signature) + ";" for signature in (
+            "struct ReplayVideoRenderGeometryState",
+            "void restoreReplayVideoRenderGeometry(",
+            "class ScopedReplayVideoRenderGeometry"))
+        methods += "\n" + extract((root / "src/main.cpp").read_text(),
+                                     "void rendering::updateUIScale(int renderW, int renderH)")
+        source = r'''
+#include "rendering/ResponsiveUi.h"
+#include <cassert>
+int s_window=1;
+float SDL_GetWindowDisplayScale(int) { return 3.0f; }
+namespace platform { template<auto F> auto sdlMain(int w) { return F(w); } }
+namespace rendering {
+constexpr int design_width=1920, design_height=1080;
+int window_width=585, window_height=1266, render_width=1170, render_height=2532;
+float widthScale=3, heightScale=3, ui_scale_x=2, ui_scale_y=2;
+int ui_offset_x=0,ui_offset_y=0,ui_view_width=1170,ui_view_height=2532;
+void updateUIScale(int,int);
+}
+METHODS
+int main() {
+  using namespace rendering;
+  responsiveMenuSceneActive=true;
+  compactMenuCanvasActive=true;
+  {
+    ScopedReplayVideoRenderGeometry geometry(1170,2532);
+    for (int frame=0;frame<2;++frame) {
+      geometry.applyExport();
+      assert(window_width==1080 && !compactMenuCanvasActive);
+      geometry.restorePrimary();
+      assert(window_width==585 && window_height==1266);
+      assert(responsiveMenuSceneActive && compactMenuCanvasActive);
+    }
+    geometry.applyExport();
+  }
+  assert(window_width==585 && responsiveMenuSceneActive && compactMenuCanvasActive);
+}
+'''.replace("METHODS", methods)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-export-geometry-") as temp:
+            path = Path(temp) / "test.cpp"
+            binary = Path(temp) / "test"
+            path.write_text(source)
+            subprocess.run(["c++", "-std=c++23", "-I", str(root / "src"), str(path), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
+    def test_phone_menu_canvas_preserves_tablet_and_gameplay_coordinates(self):
+        root = Path(__file__).resolve().parents[1]
+        source = r"""
+#include "rendering/ResponsiveUi.h"
+#include <cassert>
+int main() {
+  using rendering::responsiveMenuCanvasWidth;
+  using rendering::usesCompactMenuCanvas;
+  assert(usesCompactMenuCanvas(1170, 2532, 3, true));
+  assert(usesCompactMenuCanvas(2532, 1170, 3, true));
+  assert(usesCompactMenuCanvas(1080, 2400, 3, true)); // Android density.
+  assert(!usesCompactMenuCanvas(1600, 2560, 2, true));
+  assert(!usesCompactMenuCanvas(1200, 1800, 2, true)); // 600-point breakpoint.
+  assert(usesCompactMenuCanvas(599, 900, 1, true));
+  assert(!usesCompactMenuCanvas(1170, 2532, 3, false));
+  assert(responsiveMenuCanvasWidth(1170, 2532, 390, true) == 585);
+  assert(responsiveMenuCanvasWidth(2532, 1170, 844, true) == 1266);
+  assert(responsiveMenuCanvasWidth(2048, 2732, 1024, false) == 1080);
+  assert(responsiveMenuCanvasWidth(2732, 2048, 1366, false) == 1920);
+  assert(responsiveMenuCanvasWidth(1170, 2532, 390, false) == 1080);
+  assert(responsiveMenuCanvasWidth(2532, 1170, 844, false) == 1920);
+  // A 66-unit phone control occupies 44 logical points at either pixel density.
+  for (const int density : {2, 3}) {
+    const int drawable = 390 * density;
+    const auto canvas = responsiveMenuCanvasWidth(drawable, 844 * density, 390, true);
+    assert(66.0 * drawable / canvas / density == 44.0);
+  }
+}
+"""
+        with tempfile.TemporaryDirectory(prefix="asobmashow-phone-canvas-") as temp:
+            path = Path(temp) / "test.cpp"
+            binary = Path(temp) / "test"
+            path.write_text(source)
+            subprocess.run(["c++", "-std=c++23", "-I", str(root / "src"), str(path), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
     def test_portrait_and_landscape_keep_readable_units_and_valid_coordinates(self):
         root = Path(__file__).resolve().parents[1]
         method = extract((root / "src/main.cpp").read_text(),
@@ -634,6 +1008,10 @@ int main() {
         source = r'''
 #include <cassert>
 #include <cmath>
+#include "rendering/ResponsiveUi.h"
+void *s_window = nullptr;
+float SDL_GetWindowDisplayScale(void *) { return 1; }
+namespace platform { template<auto Function> float sdlMain(void *window) { return Function(window); } }
 namespace rendering {
 constexpr int design_width = 1920, design_height = 1080;
 int render_width = 1, render_height = 1;
@@ -668,7 +1046,7 @@ int main() {
             source_path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             source_path.write_text(source)
-            subprocess.run(["c++", "-std=c++23", str(source_path), "-o", str(binary)], check=True)
+            subprocess.run(["c++", "-std=c++23", "-I", str(root / "src"), str(source_path), "-o", str(binary)], check=True)
             subprocess.run([str(binary)], check=True)
 
 

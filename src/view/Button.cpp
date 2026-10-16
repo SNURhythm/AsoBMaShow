@@ -123,8 +123,21 @@ void Button::renderImpl(RenderContext &context) {
   }
   const float radius = getCornerRadius();
   if (hasStyledBorder && styleBorderWidth > 0) {
-    drawButtonRect(context, getX(), getY(), getWidth(), getHeight(), radius,
-                   border);
+    if (radius <= 0.5f) {
+      // Square application controls must not put an opaque border under their
+      // translucent fill. Keep the rounded gameplay path unchanged.
+      const int inset = std::min({styleBorderWidth, getWidth() / 2, getHeight() / 2});
+      drawButtonRect(context, getX(), getY(), getWidth(), inset, 0, border);
+      drawButtonRect(context, getX(), getY() + getHeight() - inset,
+                     getWidth(), inset, 0, border);
+      drawButtonRect(context, getX(), getY() + inset, inset,
+                     getHeight() - 2 * inset, 0, border);
+      drawButtonRect(context, getX() + getWidth() - inset, getY() + inset, inset,
+                     getHeight() - 2 * inset, 0, border);
+    } else {
+      drawButtonRect(context, getX(), getY(), getWidth(), getHeight(), radius,
+                     border);
+    }
   }
   if (hasStyledBackground) {
     const int inset = hasStyledBorder ? styleBorderWidth : 0;

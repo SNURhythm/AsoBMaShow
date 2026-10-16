@@ -11,7 +11,7 @@
 #include "../view/OverlayPortal.h"
 #include "../view/RecyclerView.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../iOSNatives.hpp"
@@ -29,7 +29,7 @@
 namespace ir {
 namespace {
 
-constexpr const char *kFont = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kFont = app_theme::font;
 constexpr uint32_t kIconXmark = 0xf00d;
 constexpr int kPanelMaximumWidth = 1180;
 constexpr int kPanelMaximumHeight = 840;
@@ -73,14 +73,23 @@ TextView *makeText(int size, TextView::TextAlign align = TextView::LEFT) {
   text->setAlign(align);
   text->setVAlign(TextView::MIDDLE);
   text->setOverflow(TextView::TextOverflow::Hidden);
-  text->setThemedColor(ui_theme::textPrimary);
+  text->setThemedColor(app_theme::textPrimary);
   return text;
+}
+
+void addRegionRule(View *region, Edge edge = Edge::Bottom) {
+  auto *rule = new View();
+  rule->setPositionType(YGPositionTypeAbsolute);
+  rule->setPosition(Edge::Left, 0)->setPosition(edge, 0);
+  rule->setWidthPercent(100)->setHeight(1);
+  rule->setThemedBackgroundColor(app_theme::hairline);
+  region->addView(rule);
 }
 
 TextView *makeRankingLampBadge() {
   auto *lamp = makeText(15, TextView::CENTER);
   lamp->setWidth(kLampColumnWidth)->setHeight(32);
-  lamp->setCornerRadius(6);
+  lamp->setCornerRadius(0);
   return lamp;
 }
 
@@ -97,12 +106,12 @@ Button *makeActionButton(const i18n::Text &label, int width,
   text->setLocalizedText(label);
   button->setContentView(text);
   button->setWidth(width)->setHeight(48)->setFlexShrink(0);
-  button->setCornerRadius(ui_theme::controlRadius());
-  button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                    ui_theme::controlPressed);
-  button->setThemedBorderColors(ui_theme::hairlineStrong,
-                                ui_theme::accentBorderStrong,
-                                ui_theme::accentBorderStrong);
+  button->setCornerRadius(app_theme::controlRadius());
+  button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                    app_theme::controlPressed);
+  button->setThemedBorderColors(app_theme::hairlineStrong,
+                                app_theme::accentBorderStrong,
+                                app_theme::accentBorderStrong);
   button->setStyledBorderWidth(1);
   button->setOnClickListener(std::move(action));
   return button;
@@ -115,15 +124,15 @@ Button *makeIconActionButton(uint32_t codepoint,
   icon->setText(ui_icons::textForCodepoint(codepoint));
   icon->setAlign(TextView::CENTER);
   icon->setVAlign(TextView::MIDDLE);
-  icon->setThemedColor(ui_theme::textPrimary);
+  icon->setThemedColor(app_theme::textPrimary);
   button->setContentView(icon);
   button->setWidth(48)->setHeight(48)->setFlexShrink(0);
-  button->setCornerRadius(ui_theme::controlRadius());
-  button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                    ui_theme::controlPressed);
-  button->setThemedBorderColors(ui_theme::hairlineStrong,
-                                ui_theme::accentBorderStrong,
-                                ui_theme::accentBorderStrong);
+  button->setCornerRadius(app_theme::controlRadius());
+  button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                    app_theme::controlPressed);
+  button->setThemedBorderColors(app_theme::hairlineStrong,
+                                app_theme::accentBorderStrong,
+                                app_theme::accentBorderStrong);
   button->setStyledBorderWidth(1);
   button->setOnClickListener(std::move(action));
   return button;
@@ -136,11 +145,10 @@ View *makeMetricCardWithValue(i18n::Text label, TextView *&value,
   card->setFlexDirection(FlexDirection::Column);
   card->setPadding(Edge::All, 10);
   card->setGap(4);
-  card->setThemedBackgroundColor(ui_theme::panelSubtle);
-  card->setCornerRadius(ui_theme::controlRadius());
+  addRegionRule(card, Edge::Top);
   auto *caption = makeText(14);
   caption->setLocalizedText(label);
-  caption->setThemedColor(ui_theme::textMuted);
+  caption->setThemedColor(app_theme::textMuted);
   value = valueView;
   card->addView(caption);
   card->addView(value);
@@ -179,8 +187,6 @@ public:
     setPadding(Edge::Top, 5);
     setPadding(Edge::Bottom, 5);
     setGap(2);
-    setCornerRadius(ui_theme::controlRadius());
-    setBorderWidth(1);
 
     primary_ = new View();
     primary_->setFlexDirection(FlexDirection::Row);
@@ -212,6 +218,7 @@ public:
     primary_->addView(combo_);
     primary_->addView(time_);
     addView(primary_);
+    addRegionRule(this);
   }
 
   void bind(const IrRankingRowPresentation &row) {
@@ -228,14 +235,12 @@ public:
     time_->setText(row.achievementTimeText);
     const Color lampColor = clearLampColorForRank(row.clearType);
     lamp_->setBackgroundColor(lampColor);
-    lamp_->setColor(ui_theme::sdl(ui_theme::textOn(lampColor)));
+    lamp_->setColor(app_theme::sdl(app_theme::textOn(lampColor)));
     setBackgroundColor(row.highlighted
-                           ? ui_theme::withAlpha(ui_theme::cyan(), 42)
-                           : ui_theme::panelSubtle());
-    setBorderColor(row.highlighted ? ui_theme::accentBorderStrong()
-                                   : ui_theme::hairlineSubtle());
-    player_->setThemedColor(row.highlighted ? ui_theme::cyan
-                                            : ui_theme::textPrimary);
+                           ? app_theme::withAlpha(app_theme::cyan(), 42)
+                           : app_theme::panelSubtle());
+    player_->setThemedColor(row.highlighted ? app_theme::cyan
+                                            : app_theme::textPrimary);
 
     primary_->setGap(row.compact ? 8 : kRankingColumnGap);
     score_->setWidth(row.compact ? 120 : kScoreColumnWidth);
@@ -262,7 +267,7 @@ private:
 TextView *makeHeaderLabel(i18n::Text label, TextView::TextAlign align) {
   auto *text = makeText(14, align);
   text->setLocalizedText(label);
-  text->setThemedColor(ui_theme::textMuted);
+  text->setThemedColor(app_theme::textMuted);
   return text;
 }
 
@@ -276,8 +281,8 @@ public:
     setGap(kRankingColumnGap);
     setHeight(34);
     setFlexShrink(0);
-    setThemedBackgroundColor(ui_theme::fieldInk);
-    setCornerRadius(ui_theme::controlRadius());
+    setThemedBackgroundColor(app_theme::fieldInk);
+    setCornerRadius(app_theme::controlRadius());
 
     rank_ = makeHeaderLabel(i18n::message("ir.ranking.table.rank.label"), TextView::CENTER);
     rank_->setWidth(kRankColumnWidth);
@@ -409,17 +414,17 @@ struct IrRankingModal::Impl {
     root->setFlexDirection(FlexDirection::Column);
     root->setAlignItems(YGAlignCenter);
     root->setJustifyContent(YGJustifyCenter);
-    root->setBackgroundColor(Color(2, 5, 9, 190));
+    root->setThemedBackgroundColor(app_theme::scrim);
 
     panel->setFlexDirection(FlexDirection::Column);
     panel->setAlignItems(YGAlignStretch);
-    panel->setPadding(Edge::All, 22);
-    panel->setGap(12);
-    panel->setThemedBackgroundColor(ui_theme::panelStrong);
-    panel->setCornerRadius(ui_theme::panelRadius());
-    panel->setThemedBorderColor(ui_theme::hairlineStrong);
+    panel->setPadding(Edge::All, 18);
+    panel->setGap(8);
+    panel->setThemedBackgroundColor(app_theme::panelStrong);
+    panel->setCornerRadius(app_theme::panelRadius());
+    panel->setThemedBorderColor(app_theme::hairlineStrong);
     panel->setBorderWidth(1);
-    panel->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow);
+    panel->setThemedShadow(app_theme::shadow, app_theme::kModalShadow);
 
     auto *header = new View();
     header->setFlexDirection(FlexDirection::Row);
@@ -427,36 +432,36 @@ struct IrRankingModal::Impl {
     header->setGap(10);
     header->setHeight(52);
     header->setFlexShrink(0);
-    headerTitle = makeText(28);
+    headerTitle = new TextView(app_theme::boldFont, 26, TextView::FontWeight::Bold);
+    headerTitle->setVAlign(TextView::MIDDLE);
+    headerTitle->setOverflow(TextView::TextOverflow::Hidden);
+    headerTitle->setMinWidth(0);
+    headerTitle->setThemedColor(app_theme::textPrimary);
     headerTitle->setLocalizedText(i18n::message("ir.ranking.bokutachi_ranking.label"));
     headerTitle->setFlex(1);
     fetchedAt = makeText(15, TextView::RIGHT);
-    fetchedAt->setThemedColor(ui_theme::textMuted);
+    fetchedAt->setThemedColor(app_theme::textMuted);
     fetchedAt->setWidth(220);
     refreshButton = makeActionButton(i18n::message("ir.ranking.refresh.label"), 112, [this]() { refresh(); });
     closeButton =
         makeIconActionButton(kIconXmark, [this]() { requestClose(); });
     header->addView(headerTitle);
-    header->addView(fetchedAt);
-    header->addView(refreshButton);
     header->addView(closeButton);
+    addRegionRule(header);
     panel->addView(header);
 
     chartTitle = makeText(21);
-    chartTitle->setThemedColor(ui_theme::textSecondary);
+    chartTitle->setThemedColor(app_theme::textSecondary);
     chartTitle->setHeight(32);
     chartTitle->setFlexShrink(0);
     panel->addView(chartTitle);
 
     comparisonCard = new View();
-    comparisonCard->setHeight(54);
+    comparisonCard->setHeight(42);
     comparisonCard->setFlexShrink(0);
     comparisonCard->setPadding(Edge::Left, 14);
     comparisonCard->setPadding(Edge::Right, 14);
-    comparisonCard->setThemedBackgroundColor(ui_theme::panelSubtle);
-    comparisonCard->setCornerRadius(ui_theme::controlRadius());
-    comparisonCard->setThemedBorderColor(ui_theme::accentBorder);
-    comparisonCard->setBorderWidth(1);
+    addRegionRule(comparisonCard);
     comparison = makeText(17);
     comparisonCard->addView(comparison);
     panel->addView(comparisonCard);
@@ -468,7 +473,7 @@ struct IrRankingModal::Impl {
     panel->addView(status);
     detail = makeText(16, TextView::CENTER);
     detail->setWrap(true);
-    detail->setThemedColor(ui_theme::textSecondary);
+    detail->setThemedColor(app_theme::textSecondary);
     detail->setHeight(54);
     detail->setFlexShrink(0);
     panel->addView(detail);
@@ -500,7 +505,7 @@ struct IrRankingModal::Impl {
     auto *tableContent = new View();
     tableContent->setFlexDirection(FlexDirection::Column);
     tableContent->setAlignItems(YGAlignStretch);
-    tableContent->setGap(4);
+    tableContent->setGap(0);
     rankingTable->setContentView(tableContent);
     tableHeader = new RankingTableHeaderView();
     tableContent->addView(tableHeader);
@@ -513,12 +518,10 @@ struct IrRankingModal::Impl {
     list->setFlexShrink(1);
     list->setFlexBasis(0);
     list->setMinHeight(0);
-    list->itemHeight = 74;
+    list->itemHeight = 60;
     list->reserveScrollbarGutter = true;
     list->clearBackgroundColor();
-    list->setCornerRadius(ui_theme::controlRadius());
-    list->setThemedBorderColor(ui_theme::hairlineSubtle);
-    list->setBorderWidth(1);
+    list->setBorderWidth(0);
     list->onCreateView = [](const auto &) { return new RankingRowView(); };
     list->onBind = [this](View *view, const auto &, int index, bool) {
       auto *row = dynamic_cast<RankingRowView *>(view);
@@ -532,12 +535,22 @@ struct IrRankingModal::Impl {
     tableContent->addView(list);
     panel->addView(rankingTable);
     paginationStatus = makeText(15, TextView::CENTER);
-    paginationStatus->setThemedColor(ui_theme::textMuted);
+    paginationStatus->setThemedColor(app_theme::textMuted);
     paginationStatus->setWrap(true);
     paginationStatus->setHeight(44);
     paginationStatus->setFlexShrink(0);
     paginationStatus->setDisplay(YGDisplayNone);
     panel->addView(paginationStatus);
+    auto *actionFooter = new View();
+    actionFooter->setFlexDirection(FlexDirection::Row);
+    actionFooter->setAlignItems(YGAlignCenter);
+    actionFooter->setGap(12)->setHeight(60)->setFlexShrink(0);
+    fetchedAt->setFlex(1)->setMinWidth(0);
+    fetchedAt->setAlign(TextView::LEFT);
+    actionFooter->addView(fetchedAt);
+    actionFooter->addView(refreshButton);
+    addRegionRule(actionFooter, Edge::Top);
+    panel->addView(actionFooter);
     root->addView(panel);
     root->setVisible(false);
     buildScoreDetail();
@@ -553,23 +566,27 @@ struct IrRankingModal::Impl {
     scoreDetailRoot->setFlexDirection(FlexDirection::Column);
     scoreDetailRoot->setAlignItems(YGAlignCenter);
     scoreDetailRoot->setJustifyContent(YGJustifyCenter);
-    scoreDetailRoot->setBackgroundColor(Color(2, 5, 9, 214));
+    scoreDetailRoot->setThemedBackgroundColor(app_theme::scrim);
 
     scoreDetailPanel->setFlexDirection(FlexDirection::Column);
     scoreDetailPanel->setAlignItems(YGAlignStretch);
     scoreDetailPanel->setPadding(Edge::All, 18);
     scoreDetailPanel->setGap(12);
-    scoreDetailPanel->setThemedBackgroundColor(ui_theme::panelStrong);
-    scoreDetailPanel->setCornerRadius(ui_theme::panelRadius());
-    scoreDetailPanel->setThemedBorderColor(ui_theme::hairlineStrong);
+    scoreDetailPanel->setThemedBackgroundColor(app_theme::panelStrong);
+    scoreDetailPanel->setCornerRadius(app_theme::panelRadius());
+    scoreDetailPanel->setThemedBorderColor(app_theme::hairlineStrong);
     scoreDetailPanel->setBorderWidth(1);
-    scoreDetailPanel->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow);
+    scoreDetailPanel->setThemedShadow(app_theme::shadow, app_theme::kModalShadow);
 
     auto *detailHeader = new View();
     detailHeader->setFlexDirection(FlexDirection::Row);
     detailHeader->setAlignItems(YGAlignCenter);
     detailHeader->setGap(10)->setHeight(52)->setFlexShrink(0);
-    scoreDetailTitle = makeText(25);
+    scoreDetailTitle = new TextView(app_theme::boldFont, 25, TextView::FontWeight::Bold);
+    scoreDetailTitle->setVAlign(TextView::MIDDLE);
+    scoreDetailTitle->setOverflow(TextView::TextOverflow::Hidden);
+    scoreDetailTitle->setMinWidth(0);
+    scoreDetailTitle->setThemedColor(app_theme::textPrimary);
     scoreDetailTitle->setFlex(1);
     detailHeader->addView(scoreDetailTitle);
     detailHeader->addView(
@@ -596,12 +613,12 @@ struct IrRankingModal::Impl {
     scoreDetailJudgements->setFlexShrink(0);
     scoreDetailJudgements->setGap(2);
     scoreDetailJudgements->setPadding(Edge::All, 4);
-    scoreDetailJudgements->setThemedBackgroundColor(ui_theme::fieldInk);
-    scoreDetailJudgements->setCornerRadius(ui_theme::controlRadius());
+    scoreDetailJudgements->setThemedBackgroundColor(app_theme::fieldInk);
+    scoreDetailJudgements->setCornerRadius(app_theme::controlRadius());
 
     const auto makeJudgementHeaderCell = [] {
       auto *cell = makeText(14, TextView::RIGHT);
-      cell->setThemedColor(ui_theme::textMuted);
+      cell->setThemedColor(app_theme::textMuted);
       return cell;
     };
     auto *judgementHeader = new View();
@@ -612,7 +629,7 @@ struct IrRankingModal::Impl {
     judgementHeader->setPadding(Edge::Right, 10);
     auto *judgementHeading = makeText(14);
     judgementHeading->setLocalizedText(i18n::message("ir.ranking.score_detail.judgment.label"));
-    judgementHeading->setThemedColor(ui_theme::textMuted);
+    judgementHeading->setThemedColor(app_theme::textMuted);
     judgementHeading->setWidth(152);
     scoreDetailJudgementLabels[0] = judgementHeading;
     auto *totalHeading = makeJudgementHeaderCell();
@@ -620,11 +637,11 @@ struct IrRankingModal::Impl {
     scoreDetailJudgementHeadings[0] = totalHeading;
     auto *earlyHeading = makeJudgementHeaderCell();
     earlyHeading->setLocalizedText(i18n::message("ir.ranking.score_detail.early.label"));
-    earlyHeading->setThemedColor(ui_theme::fastFeedback);
+    earlyHeading->setThemedColor(app_theme::fastFeedback);
     scoreDetailJudgementHeadings[1] = earlyHeading;
     auto *lateHeading = makeJudgementHeaderCell();
     lateHeading->setLocalizedText(i18n::message("ir.ranking.score_detail.late.label"));
-    lateHeading->setThemedColor(ui_theme::slowFeedback);
+    lateHeading->setThemedColor(app_theme::slowFeedback);
     scoreDetailJudgementHeadings[2] = lateHeading;
     judgementHeader->addView(judgementHeading);
     judgementHeader->addView(totalHeading);
@@ -641,7 +658,7 @@ struct IrRankingModal::Impl {
           row->setHeight(36)->setFlexShrink(0);
           row->setPadding(Edge::Left, 10);
           row->setPadding(Edge::Right, 10);
-          row->setThemedBackgroundColor(ui_theme::panelSubtle);
+          row->setThemedBackgroundColor(app_theme::panelSubtle);
 
           auto *name = makeText(16);
           name->setLocalizedText(label);
@@ -650,20 +667,20 @@ struct IrRankingModal::Impl {
           scoreDetailJudgementLabels[index + 1] = name;
           scoreDetailTotals[index] = makeText(17, TextView::RIGHT);
           scoreDetailEarly[index] = makeText(17, TextView::RIGHT);
-          scoreDetailEarly[index]->setThemedColor(ui_theme::fastFeedback);
+          scoreDetailEarly[index]->setThemedColor(app_theme::fastFeedback);
           scoreDetailLate[index] = makeText(17, TextView::RIGHT);
-          scoreDetailLate[index]->setThemedColor(ui_theme::slowFeedback);
+          scoreDetailLate[index]->setThemedColor(app_theme::slowFeedback);
           row->addView(name);
           row->addView(scoreDetailTotals[index]);
           row->addView(scoreDetailEarly[index]);
           row->addView(scoreDetailLate[index]);
           scoreDetailJudgements->addView(row);
         };
-    makeJudgementRow("PGREAT", 0, ui_theme::cyan);
-    makeJudgementRow("GREAT", 1, ui_theme::lime);
-    makeJudgementRow("GOOD", 2, ui_theme::amber);
+    makeJudgementRow("PGREAT", 0, app_theme::cyan);
+    makeJudgementRow("GREAT", 1, app_theme::lime);
+    makeJudgementRow("GOOD", 2, app_theme::amber);
     makeJudgementRow("BAD", 3, [] { return Color(255, 132, 96, 255); });
-    makeJudgementRow("POOR", 4, ui_theme::coral);
+    makeJudgementRow("POOR", 4, app_theme::coral);
 
     scoreDetailJudgementUnavailable = makeText(17, TextView::CENTER);
     scoreDetailJudgementUnavailable->setLocalizedText(
@@ -672,10 +689,10 @@ struct IrRankingModal::Impl {
     scoreDetailJudgementUnavailable->setHeight(88);
     scoreDetailJudgementUnavailable->setFlexShrink(0);
     scoreDetailJudgementUnavailable->setPadding(Edge::All, 12);
-    scoreDetailJudgementUnavailable->setThemedColor(ui_theme::textSecondary);
+    scoreDetailJudgementUnavailable->setThemedColor(app_theme::textSecondary);
     scoreDetailJudgementUnavailable->setThemedBackgroundColor(
-        ui_theme::panelSubtle);
-    scoreDetailJudgementUnavailable->setCornerRadius(ui_theme::controlRadius());
+        app_theme::panelSubtle);
+    scoreDetailJudgementUnavailable->setCornerRadius(app_theme::controlRadius());
 
     scoreDetailKpoorNote = makeText(14, TextView::CENTER);
     scoreDetailKpoorNote->setLocalizedText(
@@ -683,7 +700,7 @@ struct IrRankingModal::Impl {
     scoreDetailKpoorNote->setWrap(true);
     scoreDetailKpoorNote->setHeight(32);
     scoreDetailKpoorNote->setFlexShrink(0);
-    scoreDetailKpoorNote->setThemedColor(ui_theme::textMuted);
+    scoreDetailKpoorNote->setThemedColor(app_theme::textMuted);
 
     auto *metadata = makeMetricRow();
     metadata->setHeight(82);
@@ -692,6 +709,7 @@ struct IrRankingModal::Impl {
     metadata->addView(
         makeMetricCard(i18n::message("ir.ranking.score_detail.achieved.label"), scoreDetailAchievementTime, 16));
 
+    addRegionRule(detailHeader);
     scoreDetailPanel->addView(detailHeader);
     scoreDetailPanel->addView(summary);
     scoreDetailPanel->addView(scoreDetailJudgements);
@@ -793,9 +811,9 @@ struct IrRankingModal::Impl {
     scoreDetailAchievementTime->setText(detail.achievementTimeText);
     const Color lampColor = clearLampColorForRank(detail.clearType);
     scoreDetailLamp->setBackgroundColor(lampColor);
-    scoreDetailLamp->setColor(ui_theme::sdl(ui_theme::textOn(lampColor)));
+    scoreDetailLamp->setColor(app_theme::sdl(app_theme::textOn(lampColor)));
     scoreDetailTitle->setThemedColor(
-        detail.highlighted ? ui_theme::cyan : ui_theme::textPrimary);
+        detail.highlighted ? app_theme::cyan : app_theme::textPrimary);
     scoreDetailOpen = true;
     scoreDetailRoot->setVisible(true);
     updateScoreDetailLayout(safeInsets());
@@ -839,7 +857,7 @@ struct IrRankingModal::Impl {
     root->setPadding(Edge::Right, safe.right + kPanelMargin);
     panel->setWidth(static_cast<float>(geometry.width));
     panel->setHeight(static_cast<float>(geometry.height));
-    list->itemHeight = 74;
+    list->itemHeight = 60;
     fetchedAt->setVisible(!geometry.compact);
     fetchedAt->setDisplay(geometry.compact ? YGDisplayNone : YGDisplayFlex);
     root->applyYogaLayout();
@@ -875,11 +893,11 @@ struct IrRankingModal::Impl {
     nearbyTab->setEnabled(presentation.hasNearbyRanking);
     for (auto *tab : {topTab, nearbyTab}) {
       tab->setThemedBackgroundColors(
-          tab->isSelected() ? ui_theme::controlPressed : ui_theme::control,
-          ui_theme::controlHover, ui_theme::controlPressed);
+          tab->isSelected() ? app_theme::controlPressed : app_theme::control,
+          app_theme::controlHover, app_theme::controlPressed);
       tab->setThemedBorderColors(
-          tab->isSelected() ? ui_theme::accentBorderStrong : ui_theme::hairlineStrong,
-          ui_theme::accentBorderStrong, ui_theme::accentBorderStrong);
+          tab->isSelected() ? app_theme::accentBorderStrong : app_theme::hairlineStrong,
+          app_theme::accentBorderStrong, app_theme::accentBorderStrong);
       tab->setStyledBorderWidth(tab->isSelected() ? 2 : 1);
     }
     status->setVisible(!showList);

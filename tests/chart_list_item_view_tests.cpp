@@ -1,7 +1,9 @@
 #include "rendering/UniformCache.h"
 #include "view/ChartListItemView.h"
+#include "view/LibraryFolderItemView.h"
 #include "view/ImageView.h"
 #include "view/UiTheme.h"
+#include "view/MainMenuTheme.h"
 
 #include <bgfx/bgfx.h>
 
@@ -38,6 +40,46 @@ bool sameColor(const Color &actual, const Color &expected) {
   return actual.r == expected.r && actual.g == expected.g &&
          actual.b == expected.b && actual.a == expected.a;
 }
+
+void testFolderBindingOnlyMaterializesVisibleLabel() {
+  LibraryFolderItemView row(0, 0, 350, 50);
+  std::vector<TextView *> labels;
+  for (auto *child : row.getChildren().front()->getChildren()) {
+    if (auto *text = dynamic_cast<TextView *>(child)) labels.push_back(text);
+  }
+  for (int index = 0; index < 9; ++index) {
+    const bool section = index % 3 == 2;
+    const int depth = index % 3 == 1 ? 1 : 0;
+    const bool selected = index % 2 != 0;
+    std::vector<bgfx::TextureHandle> previous;
+    for (auto *label : labels) previous.push_back(label->textureHandle());
+    const std::string value = "Recycled folder " + std::to_string(index);
+    {
+      View::LayoutBatchScope batch;
+      row.setItem(value, depth, -1, selected, kNoClearTypeRank,
+                  false, false, false, 0, section);
+    }
+    int displayedLabels = 0;
+    for (std::size_t i = 0; i < labels.size(); ++i) {
+      auto *label = labels[i];
+      const auto texture = label->textureHandle();
+      if (!label->getVisible() || YGNodeStyleGetDisplay(label->getNode()) == YGDisplayNone) {
+        require(!bgfx::isValid(texture) || texture.idx == previous[i].idx,
+                "recycled folder binding must not upload a hidden label variant");
+      } else if (label->getText() == value) {
+        ++displayedLabels;
+        require(bgfx::isValid(texture), "the active folder label has a raster");
+        const auto expected = section ? main_menu_theme::muted()
+            : selected ? main_menu_theme::onAction() : main_menu_theme::ink();
+        const auto actual = label->currentColor();
+        require(actual.r == expected.r && actual.g == expected.g &&
+                    actual.b == expected.b && actual.a == expected.a,
+                "recycling folder variants preserves selected and section colors");
+      }
+    }
+    require(displayedLabels == 1, "recycling root, leaf and section rows binds exactly one current label");
+  }
+}
 } // namespace
 
 int main() {
@@ -47,10 +89,13 @@ int main() {
   init.resolution.height = 64;
   require(bgfx::init(init), "headless bgfx initializes for chart list row");
 
+  testFolderBindingOnlyMaterializesVisibleLabel();
+
   {
     ui_theme::setActiveMode(ui_theme::ThemeMode::Dark);
     ChartMetaRecord record;
     record.meta.Folder = "/charts/first";
+    record.meta.BmsPath = "/charts/first/song.bms";
     record.meta.Banner = "banner.png";
     record.meta.Title = "Banner Song";
     record.meta.Artist = "Banner Artist";
@@ -60,45 +105,71 @@ int main() {
     row.applyYogaLayout();
 
     auto *card = row.findViewByName("chartListContentCard");
-    auto *banner = dynamic_cast<ImageView *>(
-        row.findViewByName("chartListBanner"));
-    auto *difficulty = dynamic_cast<TextView *>(
-        row.findViewByName("chartListDifficulty"));
-    auto *keyMode = dynamic_cast<TextView *>(
-        row.findViewByName("chartListKeyMode"));
-    require(card != nullptr && banner != nullptr,
-            "chart row exposes its card and banner background");
-    require(difficulty != nullptr && keyMode != nullptr,
-            "chart row exposes difficulty and key-mode labels");
+    auto *jacket = dynamic_cast<ImageView *>(row.findViewByName("chartListJacket"));
+    auto *difficulty = dynamic_cast<TextView *>(row.findViewByName("chartListDifficulty"));
+    auto *keyMode = dynamic_cast<TextView *>(row.findViewByName("chartListKeyMode"));
+    auto *title = row.findViewByName("chartListTitle");
+    auto *artist = row.findViewByName("chartListArtist");
+    auto *artwork = row.findViewByName("chartListArtwork");
+    require(card && jacket && difficulty && keyMode && title && artist && artwork,
+            "the row exposes its aligned data columns and artwork");
     require(difficulty->fontWeight() == TextView::FontWeight::Bold &&
                 keyMode->fontWeight() == TextView::FontWeight::Bold,
-            "difficulty and key-mode labels use bold text");
-    require(banner->imagePath() == path_t("/charts/first/banner.png"),
-            "chart row binds Folder/Banner through ImageView");
-    require(banner->fade().has_value() &&
-                banner->fade()->direction ==
-                    ImageFadeDirection::LeftToRight &&
-                banner->fade()->strength == 1.0F,
-            "chart banner fades in from left to right at full strength");
-    require(banner->scrimColor().has_value() &&
-                sameColor(*banner->scrimColor(), Color(5, 10, 18, 144)),
-            "dark chart banner uses the readability scrim");
-    ui_theme::setActiveMode(ui_theme::ThemeMode::Light);
-    row.propagateThemeChange();
-    require(banner->scrimColor().has_value() &&
-                sameColor(*banner->scrimColor(),
-                          Color(255, 255, 255, 168)),
-            "chart banner scrim follows the active light theme");
-    ui_theme::setActiveMode(ui_theme::ThemeMode::Dark);
-    row.propagateThemeChange();
-    require(banner->getWidth() == 368 &&
-                banner->getX() + banner->getWidth() ==
-                    card->getX() + card->getWidth() - 1 &&
-                banner->getY() == card->getY() + 1,
-            "chart banner is inset and anchored to the card right edge");
-    require(!card->getChildren().empty() &&
-                card->getChildren().front() == banner,
-            "chart banner renders behind row content");
+            "table difficulty and key mode retain clear typographic hierarchy");
+    require(jacket->imagePath() == path_t("/charts/first/banner.png"),
+            "banner artwork is a thumbnail fallback when a stage image is absent");
+    require(artwork->getWidth() == 72 && artwork->getHeight() == 72 &&
+                artist->getX() == title->getX() &&
+                artist->getY() >= title->getY() + title->getHeight() &&
+                difficulty->getX() >= title->getX() + title->getWidth(),
+            "desktop rows stack title and artist beside the thumbnail without overlapping difficulty");
+    auto *leftLamp = row.findViewByName("chartListClearLamp");
+    require(leftLamp && leftLamp->getX() < artwork->getX() &&
+                leftLamp->getHeight() > leftLamp->getWidth(),
+            "the clear lamp is a compact vertical bar before the artwork");
+    record.meta.StageFile = "stage.png";
+    row.setMeta(record);
+    require(jacket->imagePath() == path_t("/charts/first/stage.png"),
+            "stage artwork takes priority over a banner");
+    record.meta.StageFile.clear();
+    for (const auto mode : {ui_theme::ThemeMode::Light, ui_theme::ThemeMode::Dark}) {
+      ui_theme::setActiveMode(mode);
+      row.propagateThemeChange();
+      record.difficultyTableLabels = "sl3 / ★11";
+      row.setMeta(record);
+      row.setClearRank(kClearTypeHardClearRank);
+      row.onSelected();
+      auto *lamp = row.findViewByName("chartListClearLamp");
+      require(lamp && YGNodeStyleGetBorder(lamp->getNode(), YGEdgeAll) == 0,
+              "clear lamps have no hard border on the selected surface");
+      const auto color = difficulty->currentColor();
+      const auto expected = main_menu_theme::onAction();
+      require(difficulty->getText() == record.difficultyTableLabels &&
+                  color.r == expected.r && color.g == expected.g && color.b == expected.b,
+              "selected table units stay verbatim and readable in both themes");
+      row.onUnselected();
+      require(jacket->getVisible(), "selection retains the dedicated thumbnail");
+    }
+    record.difficultyTableLabels.clear();
+    row.setMeta(record);
+    row.applyYogaLayout();
+    const int shortLevelWidth = difficulty->getWidth();
+    const int difficultyRight = difficulty->getX() + difficulty->getWidth();
+    const int shortTitleWidth = title->getWidth();
+    record.difficultyTableLabels = "sl12 / ★25 / st10";
+    row.setMeta(record);
+    row.applyYogaLayout();
+    require(difficulty->getWidth() >= difficulty->measureTextWidth(difficulty->getText()) &&
+                difficulty->getWidth() > shortLevelWidth &&
+                difficulty->getX() + difficulty->getWidth() == difficultyRight &&
+                keyMode->getX() + keyMode->getWidth() == difficultyRight &&
+                title->getWidth() < shortTitleWidth,
+            "long difficulty units expand left without clipping or moving the right-aligned key mode");
+    record.difficultyTableLabels.clear();
+    row.setMeta(record);
+    row.applyYogaLayout();
+    require(difficulty->getWidth() == shortLevelWidth && title->getWidth() == shortTitleWidth,
+            "recycled short levels return space to the title column");
 
     for (const int keys : {5, 7}) {
       record.meta.KeyMode = keys;
@@ -156,33 +227,75 @@ int main() {
     }
     require(hasFailingGrade, "a recorded zero EX score displays grade F");
     row.setBestScoreRank(0, 0);
-    require(!rankBadge->getVisible() && bestScore->getText().empty(),
-            "unplayed rows hide the badge and clear the previous score");
+    require(rankBadge->getVisible() && bestScore->getText().empty(),
+            "unplayed rows keep column alignment and clear the previous score");
     row.setBestScoreRank(2451, 2700);
 
+    ChartListItemView initiallyNarrow(0, 0, 620, 100, record);
+    initiallyNarrow.setMeta(record);
+    initiallyNarrow.applyYogaLayout();
+    row.setWidth(620);
+    row.applyYogaLayout();
+    require(artist->getY() >= title->getY() + title->getHeight() &&
+                difficulty->getX() >= title->getX() + title->getWidth(),
+            "narrow rows put the artist under the title without obscuring difficulty");
+    require(row.findViewByName("chartListClearLamp")->getWidth() == 6,
+            "compact rows preserve a visible clear lamp");
+    row.setWidth(964);
+    row.applyYogaLayout();
+    require(artist->getX() == title->getX() &&
+                artist->getY() >= title->getY() + title->getHeight(),
+            "widening preserves the stacked title and artist layout");
+    require(leftLamp->getX() < artwork->getX() &&
+                leftLamp->getHeight() > leftLamp->getWidth(),
+            "rotation keeps the clear lamp at the leading edge");
+    record.difficultyTableLabels = "sl12 / ★25 / st10 / ◆12 / sl15 / ★24 / st11 / sl13 / ★22 / st9 / ◆15";
+    row.setMeta(record);
+    row.applyYogaLayout();
+    const int wideDifficultyWidth = difficulty->getWidth();
+    auto *favorite = row.findViewByName("chartListFavorite");
+    require(favorite && favorite->getVisible(), "playable rows retain their favorite action");
+    for (const int width : {620, 420, 780, 620}) {
+      row.setWidth(width);
+      row.applyYogaLayout();
+      require(difficulty->getX() >= title->getX() + title->getWidth() && title->getWidth() >= 80 &&
+                  rankBadge->getX() >= difficulty->getX() + difficulty->getWidth() &&
+                  favorite->getX() >= rankBadge->getX() + rankBadge->getWidth() &&
+                  favorite->getX() + favorite->getWidth() <= row.getX() + row.getWidth(),
+              "long multi-table labels preserve title space and keep score and favorite inside narrow rows");
+      require(difficulty->getWidth() < wideDifficultyWidth,
+              "difficulty width adapts to resizing within the compact breakpoint");
+      require(difficulty->getText() == record.difficultyTableLabels,
+              "width caps retain the full difficulty label for marquee scrolling");
+    }
+    row.setWidth(964);
+    row.applyYogaLayout();
+    require(difficulty->getWidth() == wideDifficultyWidth,
+            "widening restores the desired difficulty width without rebinding metadata");
+    record.difficultyTableLabels.clear();
     record.meta.Banner.clear();
     row.setMeta(record);
-    require(banner->imagePath().empty(),
+    require(jacket->imagePath().empty(),
             "rebind without a banner clears recycled image identity");
-    require(!rankBadge->getVisible() && bestScore->getText().empty(),
+    require(rankBadge->getVisible() && bestScore->getText().empty(),
             "recycling a row clears the score before a new best is bound");
 
     record.meta.Banner = "banner.png";
     record.unavailable = true;
     row.setMeta(record);
-    require(banner->imagePath().empty(),
+    require(jacket->imagePath().empty(),
             "unavailable rows do not request banner files");
 
     record.unavailable = false;
     record.solidArchive = true;
     row.setMeta(record);
-    require(banner->imagePath().empty(),
+    require(jacket->imagePath().empty(),
             "solid archive rows do not request banner files");
 
     record.solidArchive = false;
     record.courseStart = true;
     row.setMeta(record);
-    require(banner->imagePath().empty(),
+    require(jacket->imagePath().empty(),
             "course rows do not borrow a chart banner");
   }
 

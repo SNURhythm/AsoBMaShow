@@ -132,6 +132,13 @@ std::vector<std::string> systemFontFallbackPaths() {
 }
 
 std::string fontPathForWeight(const std::string &path, TextView::FontWeight weight) {
+  constexpr std::string_view selectorFont = "assets/fonts/roboto-condensed-regular.ttf";
+  if (std::string_view(path).ends_with(selectorFont)) {
+    return path.substr(0, path.size() - selectorFont.size()) +
+        (weight == TextView::FontWeight::Bold
+            ? "assets/fonts/roboto-condensed-bold.ttf"
+            : "assets/fonts/roboto-condensed-regular.ttf");
+  }
   static constexpr std::string_view notoPaths[] = {
       "assets/fonts/notosanscjkjp.ttf", "assets/fonts/notosansjp.ttf",
       "assets/fonts/notosanskr.otf"};
@@ -407,6 +414,7 @@ TextView::TextView(const std::string &fontPath, int fontSize,
 
 TextView::~TextView() {
   if (bgfx::isValid(texture)) {
+    rendering::UiBatchRenderer::notifyTextureChanged();
     bgfx::destroy(texture);
   }
   releaseFontResources();
@@ -470,6 +478,12 @@ void TextView::setDeferredTextureMaterialization(bool deferred) {
 }
 
 void TextView::renderImpl(RenderContext &context) {
+  // A flex row can give a label no space. Empty clip bounds must suppress
+  // drawing, not turn a hidden/marquee label into unbounded visible text.
+  if (overflow != TextOverflow::Visible &&
+      (getContentWidth() <= 0 || getContentHeight() <= 0)) {
+    return;
+  }
   if (!bgfx::isValid(texture)) {
     createTexture();
   }
@@ -511,6 +525,9 @@ void TextView::renderImpl(RenderContext &context) {
         kProgram, BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA);
     state.texture = texture;
     state.sampler = s_texColor;
+    // Tight icon rasters can touch an edge. Linear filtering must not wrap
+    // that ink onto the opposite side when UI scaling lands between pixels.
+    state.samplerFlags = BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP;
     context.appendUiTextured(vertices, indices, state);
   };
 
@@ -1097,6 +1114,7 @@ void TextView::onThemeChanged() {
 
 void TextView::invalidateTexture() {
   if (bgfx::isValid(texture)) {
+    rendering::UiBatchRenderer::notifyTextureChanged();
     bgfx::destroy(texture);
   }
   texture = BGFX_INVALID_HANDLE;
@@ -1211,6 +1229,7 @@ void TextView::createTexture() {
   (void)fallbackSurfaceWidth;
   (void)fallbackSurfaceHeight;
   texture = rendering::sdlSurfaceToBgfxTexture(surface.get());
+  if (bgfx::isValid(texture)) rendering::UiBatchRenderer::notifyTextureChanged();
 }
 
 YGSize TextView::measureFunc(YGNodeConstRef node, float width,

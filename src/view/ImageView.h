@@ -4,6 +4,7 @@
 
 #pragma once
 #include "DecodedImageCache.h"
+#include "ArtworkGlow.h"
 #include "ImageFade.h"
 #include "ImageDecodeCoordinator.h"
 #include "View.h"
@@ -21,6 +22,9 @@ imageResourceAvailable(const std::filesystem::path &path);
                                           std::stop_token stop);
 
 class ImageView : public View {
+public:
+  enum class ContentMode { Stretch, Contain };
+
 private:
   void renderImpl(RenderContext &context) override;
   using ImageCache = image_decode::DecodedImageData;
@@ -39,6 +43,11 @@ private:
   static image_decode::DecodedImageCache imageCache;
   std::string currentImageKey;
   path_t currentImagePath;
+  std::optional<ArtworkPalette> ambientPalette_;
+  std::optional<ArtworkGlow> ambientGlow_;
+  std::shared_ptr<const rendering::UiRetainedGeometry> ambientGeometry_;
+  float ambientGeometryWidth_ = 0;
+  float ambientGeometryHeight_ = 0;
   int currentImageWidth = 0;
   int currentImageHeight = 0;
   int asyncTargetWidth = 0;
@@ -50,12 +59,17 @@ private:
   std::optional<ImageFade> fade_;
   std::optional<Color> scrimColor_;
   ThemeColorProvider themedScrimColorProvider_;
+  ContentMode contentMode_ = ContentMode::Stretch;
 
 protected:
   void onLayout() override;
   void onThemeChanged() override;
 
 public:
+  ImageView *setContentMode(ContentMode mode) {
+    contentMode_ = mode;
+    return this;
+  }
   ImageView() = delete;
   ImageView(int x, int y, int width, int height);
   ImageView(int x, int y, int width, int height, const path_t &path);
@@ -80,6 +94,9 @@ public:
     return scrimColor_;
   }
   [[nodiscard]] const path_t &imagePath() const { return currentImagePath; }
+  [[nodiscard]] const std::optional<ArtworkPalette> &ambientPalette() const { return ambientPalette_; }
+  void setAmbientGlow(const ArtworkGlow &glow) { ambientGlow_ = glow; }
+  void clearAmbientGlow() { ambientGlow_.reset(); }
   [[nodiscard]] int imageWidth() const { return currentImageWidth; }
   [[nodiscard]] int imageHeight() const { return currentImageHeight; }
 

@@ -1,5 +1,6 @@
 #include "scene/SettingsSceneShared.h"
 #include "rendering/UniformCache.h"
+#include "view/ActionButtonContent.h"
 
 #include <cassert>
 #include <cmath>
@@ -59,6 +60,124 @@ void requireFits(const SDL_FRect &text, int x, int y, int width, int height) {
   require(text.x >= x && text.y >= y && text.x + text.w <= x + width &&
               text.y + text.h <= y + height && text.w > 0 && text.h > 0,
           "Japanese button text fits its allocated content without clipping");
+}
+
+void testFlatSettingsSectionUsesContentHeight() {
+  settings_scene::LayoutMetrics metrics;
+  metrics.flatSections = true;
+  metrics.cardPadding = 14;
+  metrics.cardGap = 12;
+  for (const auto language : {i18n::Language::English, i18n::Language::Japanese,
+                              i18n::Language::Korean}) {
+    i18n::setLanguage(language);
+    View root(0, 0, 600, 900);
+    root.setFlexDirection(FlexDirection::Column);
+    auto *body = new View();
+    body->setHeight(48);
+    auto *section = settings_scene::makeCard(
+        metrics, i18n::message("settings.navigation.audio.label"), "", body, 500, 600);
+    root.addView(section);
+    root.applyYogaLayout();
+    require(section->getHeight() < 200,
+            "flat settings sections discard legacy oversized card minimums");
+    require(body->getHeight() == 48 && body->getY() >= section->getY() + 14,
+            "section density preserves controls and localized heading space");
+    require(section->getChildren().front()->getHeight() == 1,
+            "flat settings groups use a single hairline divider");
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
+void testCompactActionCaptionsFitLocalizedControls() {
+  for (const auto language : {i18n::Language::English, i18n::Language::Japanese,
+                              i18n::Language::Korean}) {
+    i18n::setLanguage(language);
+    for (const int width : {128, 144, 160}) {
+      for (const auto key : {"settings.profiles.activate.label",
+                            "settings.profiles.rename.label", "settings.profiles.copy.label",
+                            "settings.profiles.delete.label", "settings.profiles.export.label",
+                            "settings.profiles.import_over.label", "records.export_video.label"}) {
+        View root(0, 0, width, 72);
+        auto *button = new Button(0, 0, width, 72);
+        auto *caption = settings_scene::makeText(i18n::message(key), 18,
+                                                app_theme::onAction());
+        button->setContentView(action_button::makeContent(caption, ui_icons::kDownload));
+        action_button::setIconColor(button, app_theme::onAction);
+        root.addView(button);
+        root.applyYogaLayout();
+        auto *icon = button->getContentView()->findViewByName("actionIcon");
+        require(icon && icon->getY() + icon->getHeight() <= caption->getY(),
+                "compact action glyph and caption never overlap");
+        requireFits(renderedTextBounds(*caption), button->getX() + 8,
+                    button->getY(), width - 16, 72);
+        requireFits(renderedTextBounds(*icon), button->getX(), button->getY(), width, 72);
+        require(caption->getText() == i18n::tr(key),
+                "compact actions retain their localized caption");
+      }
+    }
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
+void testApplicationThemePreservesGameplayPalette() {
+  const auto originalMode = ui_theme::activeMode();
+  const auto same = [](Color a, Color b) { return a.toABGR() == b.toABGR(); };
+  for (const auto mode : {ui_theme::ThemeMode::Dark, ui_theme::ThemeMode::Light}) {
+    ui_theme::setActiveMode(mode);
+    const auto gameplayAccent = ui_theme::cyan();
+    const auto gameplayRadius = ui_theme::controlRadius();
+    require(same(app_theme::primaryAction(), main_menu_theme::action()),
+            "primary actions retain the selector accent");
+    const auto luminance = [](Color color) {
+      const auto linear = [](double channel) {
+        channel /= 255.0;
+        return channel <= 0.04045 ? channel / 12.92
+                                 : std::pow((channel + 0.055) / 1.055, 2.4);
+      };
+      return 0.2126 * linear(color.r) + 0.7152 * linear(color.g) +
+             0.0722 * linear(color.b);
+    };
+    using Category = app_theme::ActionCategory;
+    const auto categories = {Category::Primary, Category::Confirmation,
+                             Category::Information, Category::DataTransfer,
+                             Category::Caution, Category::Destructive};
+    for (auto first = categories.begin(); first != categories.end(); ++first) {
+      const auto palette = app_theme::actionPalette(*first);
+      for (auto second = first + 1; second != categories.end(); ++second) {
+        require(!same(palette.normal, app_theme::actionPalette(*second).normal),
+                "grouped semantic actions remain visually distinct");
+      }
+      for (const auto fill : {palette.normal, palette.hover, palette.pressed}) {
+        require(fill.a == 255 && palette.label.a == 255,
+                "semantic action buttons and labels remain opaque");
+        require((luminance(palette.label) + 0.05) / (luminance(fill) + 0.05) >= 4.5,
+                "semantic action labels meet normal text contrast in every state");
+        require(same(app_theme::textOn(fill), palette.label),
+                "legacy action labels follow the category palette");
+      }
+    }
+    require(same(app_theme::textOn(app_theme::primaryAction()), main_menu_theme::onAction()),
+            "blue application actions retain white labels in both themes");
+    require(app_theme::panelRadius() == 0 && app_theme::controlRadius() == 0 &&
+                app_theme::shadow().a == 0 && app_theme::cardShadow().a == 0,
+            "application chrome uses square surfaces without decorative shadows");
+    for (const auto surface : {app_theme::backdrop(), app_theme::panel(),
+                               app_theme::panelStrong(), app_theme::panelSubtle(),
+                               app_theme::resultBackdrop(), app_theme::resultPanelStrong(),
+                               app_theme::mainMenuBackdrop()}) {
+      require(surface.a == 255, "scene and modal backgrounds block content behind them");
+    }
+    require(main_menu_theme::backdrop().a < 255 && main_menu_theme::surface().a < 255 &&
+                main_menu_theme::control().a < 255 && app_theme::hudPanel().a < 255 &&
+                app_theme::hudPanelStrong().a < 255 && app_theme::hudPanelSubtle().a < 255 &&
+                app_theme::textPrimary().a == 255,
+            "only BGA-facing selector and HUD surfaces retain translucent backgrounds");
+    require(same(ui_theme::cyan(), gameplayAccent) && gameplayRadius == 8 &&
+                ui_theme::controlRadius() == gameplayRadius &&
+                !same(app_theme::primaryAction(), ui_theme::primaryAction()),
+            "application styling does not mutate the gameplay palette or geometry");
+  }
+  ui_theme::setActiveMode(originalMode);
 }
 
 void testFixedJapaneseButtonsShrinkOnlyTheirRenderedText() {
@@ -146,11 +265,14 @@ void testButtonFittingRespondsToLanguageAndAvailableHeight() {
 } // namespace
 
 int main() {
+  testApplicationThemePreservesGameplayPalette();
   bgfx::Init init;
   init.type = bgfx::RendererType::Noop;
   init.resolution.width = 64;
   init.resolution.height = 64;
   assert(bgfx::init(init));
+  testCompactActionCaptionsFitLocalizedControls();
+  testFlatSettingsSectionUsesContentHeight();
   testFixedJapaneseButtonsShrinkOnlyTheirRenderedText();
   testNestedButtonLabelsFitButOrdinaryTextKeepsItsOverflow();
   testButtonFittingRespondsToLanguageAndAvailableHeight();

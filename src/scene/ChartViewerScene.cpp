@@ -32,7 +32,7 @@
 #include "../view/ResultRecordListView.h"
 #include "../view/ScrollView.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 #include "../view/View.h"
 #include "PracticePanelView.h"
 #include "play/GamePlayScene.h"
@@ -331,19 +331,19 @@ bool matchHeader(std::string_view line, std::string_view headerUpper) {
 Button *makeButton(const std::string &label, int width, int fontSize,
                    TextView **textOut = nullptr) {
   auto *button = new Button(0, 0, width, kHeaderButtonHeight);
-  auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", fontSize);
+  auto *text = new TextView(app_theme::font, fontSize);
   text->setText(label);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   text->setOverflow(TextView::TextOverflow::Hidden);
-  text->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  text->setColor(app_theme::sdl(app_theme::textPrimary()));
   button->setContentView(text);
-  button->setCornerRadius(ui_theme::controlRadius());
+  button->setCornerRadius(app_theme::controlRadius());
   button->setStyledBorderWidth(1);
-  button->setBackgroundColors(ui_theme::control(), ui_theme::controlHover(),
-                              ui_theme::controlPressed());
-  button->setBorderColors(ui_theme::hairline(), ui_theme::cyan(),
-                          ui_theme::cyan());
+  button->setBackgroundColors(app_theme::control(), app_theme::controlHover(),
+                              app_theme::controlPressed());
+  button->setBorderColors(app_theme::hairline(), app_theme::cyan(),
+                          app_theme::cyan());
   if (textOut != nullptr) {
     *textOut = text;
   }
@@ -957,7 +957,7 @@ private:
          ++layoutIndex) {
       auto &layout = measureLayouts[layoutIndex];
       const auto *measure = chart->Measures[layout.measureIndex];
-      auto label = std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf",
+      auto label = std::make_unique<TextView>(app_theme::font,
                                               16);
       label->setText(std::to_string(layout.measureIndex));
       label->setColor({245, 247, 250, 255});
@@ -1731,7 +1731,7 @@ private:
 
     CachedMarkerGlyph label;
     label.text =
-        std::make_unique<TextView>("assets/fonts/notosanscjkjp.ttf", fontSize);
+        std::make_unique<TextView>(app_theme::font, fontSize);
     label.text->setColor(color);
     label.text->setText(std::string(1, glyph));
     label.texture = label.text->textureHandle();
@@ -2556,7 +2556,7 @@ void ChartViewerScene::initView() {
   addView(rootLayout);
   rootLayout->setFlexDirection(FlexDirection::Column);
   rootLayout->setAlignItems(YGAlignStretch);
-  rootLayout->setBackgroundColor(ui_theme::backdrop());
+  rootLayout->setBackgroundColor(app_theme::backdrop());
 
   auto *header = new View();
   header->setHeight(safe.top + 98);
@@ -2567,9 +2567,9 @@ void ChartViewerScene::initView() {
   header->setPadding(Edge::Right, safe.right + kHeaderPadding);
   header->setPadding(Edge::Bottom, 10);
   header->setGap(12);
-  header->setBackgroundColor(ui_theme::panelStrong());
-  header->setShadow(ui_theme::shadow(), ui_theme::kHeaderShadow);
-  header->setBorderColor(ui_theme::hairline());
+  header->setThemedBackgroundColor(app_theme::panel);
+  header->setShadow(app_theme::shadow(), app_theme::kHeaderShadow);
+  header->setBorderColor(app_theme::hairline());
   header->setBorderWidth(1);
 
   auto *titleColumn = new View();
@@ -2579,16 +2579,16 @@ void ChartViewerScene::initView() {
   titleColumn->setMinWidth(0);
   titleColumn->setGap(2);
 
-  titleText = new TextView("assets/fonts/notosanscjkjp.ttf", 29);
-  titleText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  titleText = new TextView(app_theme::boldFont, 29);
+  titleText->setColor(app_theme::sdl(app_theme::textPrimary()));
   titleText->setHeight(36);
   titleText->setOverflow(TextView::TextOverflow::Marquee);
-  subtitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-  subtitleText->setColor(ui_theme::sdl(ui_theme::textMuted()));
+  subtitleText = new TextView(app_theme::font, 18);
+  subtitleText->setColor(app_theme::sdl(app_theme::textMuted()));
   subtitleText->setHeight(23);
   subtitleText->setOverflow(TextView::TextOverflow::Hidden);
-  randomSummaryText = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
-  randomSummaryText->setColor(ui_theme::sdl(ui_theme::amber()));
+  randomSummaryText = new TextView(app_theme::font, 16);
+  randomSummaryText->setColor(app_theme::sdl(app_theme::amber()));
   randomSummaryText->setHeight(21);
   randomSummaryText->setOverflow(TextView::TextOverflow::Hidden);
   titleColumn->addView(titleText);
@@ -2596,8 +2596,8 @@ void ChartViewerScene::initView() {
   titleColumn->addView(randomSummaryText);
   header->addView(titleColumn);
 
-  statusText = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
-  statusText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  statusText = new TextView(app_theme::font, 17);
+  statusText->setColor(app_theme::sdl(app_theme::textSecondary()));
   statusText->setAlign(TextView::RIGHT);
   statusText->setVAlign(TextView::MIDDLE);
   statusText->setWidth(250);
@@ -2607,10 +2607,10 @@ void ChartViewerScene::initView() {
 
   TextView *zoomButtonText = nullptr;
   auto *zoomOutButton = makeButton("-", 52, 26);
-  zoomText = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
+  zoomText = new TextView(app_theme::font, 17);
   zoomText->setAlign(TextView::CENTER);
   zoomText->setVAlign(TextView::MIDDLE);
-  zoomText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  zoomText->setColor(app_theme::sdl(app_theme::textPrimary()));
   zoomText->setWidth(70);
   zoomText->setHeight(kHeaderButtonHeight);
   auto *zoomInButton = makeButton("+", 52, 26, &zoomButtonText);
@@ -2650,12 +2650,12 @@ void ChartViewerScene::initView() {
   toolbar->setPadding(Edge::Left, safe.left + kHeaderPadding);
   toolbar->setPadding(Edge::Right, safe.right + kHeaderPadding);
   toolbar->setGap(12);
-  toolbar->setBackgroundColor(ui_theme::panel());
-  toolbar->setBorderColor(ui_theme::hairline());
+  toolbar->setBackgroundColor(app_theme::panel());
+  toolbar->setBorderColor(app_theme::hairline());
   toolbar->setBorderWidth(1);
 
-  selectionText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-  selectionText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  selectionText = new TextView(app_theme::font, 18);
+  selectionText->setColor(app_theme::sdl(app_theme::textSecondary()));
   selectionText->setVAlign(TextView::MIDDLE);
   selectionText->setOverflow(TextView::TextOverflow::Hidden);
   selectionText->setFlex(1);
@@ -2776,7 +2776,7 @@ void ChartViewerScene::rebuildRandomDrawer() {
     randomDrawerRoot->setVisible(false);
     randomDrawerRoot->setFlexDirection(FlexDirection::Row);
     randomDrawerRoot->setAlignItems(YGAlignStretch);
-    randomDrawerRoot->setBackgroundColor(Color(2, 5, 9, 170));
+    randomDrawerRoot->setThemedBackgroundColor(app_theme::scrim);
 
     auto *spacer = new View();
     spacer->setFlex(1);
@@ -2788,10 +2788,10 @@ void ChartViewerScene::rebuildRandomDrawer() {
     panel->setAlignItems(YGAlignStretch);
     panel->setPadding(Edge::All, 20);
     panel->setGap(14);
-    panel->setBackgroundColor(ui_theme::panelStrong());
-    panel->setCornerRadius(ui_theme::panelRadius());
-    panel->setShadow(ui_theme::shadow(), ui_theme::kSidePanelShadow);
-    panel->setBorderColor(ui_theme::hairline());
+    panel->setBackgroundColor(app_theme::panelStrong());
+    panel->setCornerRadius(app_theme::panelRadius());
+    panel->setShadow(app_theme::shadow(), app_theme::kSidePanelShadow);
+    panel->setBorderColor(app_theme::hairline());
     panel->setBorderWidth(1);
 
     auto *drawerHeader = new View();
@@ -2800,9 +2800,9 @@ void ChartViewerScene::rebuildRandomDrawer() {
     drawerHeader->setGap(12);
     drawerHeader->setHeight(58);
 
-    auto *drawerTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+    auto *drawerTitle = new TextView(app_theme::boldFont, 28);
     drawerTitle->setText("#RANDOM");
-    drawerTitle->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+    drawerTitle->setColor(app_theme::sdl(app_theme::textPrimary()));
     drawerTitle->setVAlign(TextView::MIDDLE);
     drawerTitle->setFlex(1);
     drawerHeader->addView(drawerTitle);
@@ -2815,8 +2815,8 @@ void ChartViewerScene::rebuildRandomDrawer() {
     randomDrawerScroll = new ScrollView();
     randomDrawerScroll->setFlex(1);
     randomDrawerScroll->clearBackgroundColor();
-    randomDrawerScroll->setCornerRadius(ui_theme::controlRadius());
-    randomDrawerScroll->setBorderColor(ui_theme::hairline());
+    randomDrawerScroll->setCornerRadius(app_theme::controlRadius());
+    randomDrawerScroll->setBorderColor(app_theme::hairline());
     randomDrawerScroll->setBorderWidth(1);
     randomDrawerScroll->setContentPadding(Edge::All, 12);
     panel->addView(randomDrawerScroll);
@@ -2832,9 +2832,9 @@ void ChartViewerScene::rebuildRandomDrawer() {
 
   if (randomOptions.empty()) {
     randomDrawerPage = 0;
-    auto *empty = new TextView("assets/fonts/notosanscjkjp.ttf", 19);
+    auto *empty = new TextView(app_theme::font, 19);
     empty->setText(i18n::tr("chart_viewer.no_active_random.message"));
-    empty->setColor(ui_theme::sdl(ui_theme::textMuted()));
+    empty->setColor(app_theme::sdl(app_theme::textMuted()));
     empty->setWrap(true);
     empty->setHeight(84);
     content->addView(empty);
@@ -2854,16 +2854,16 @@ void ChartViewerScene::rebuildRandomDrawer() {
       pager->setHeight(58);
       pager->setPadding(Edge::Left, 10);
       pager->setPadding(Edge::Right, 10);
-      pager->setBackgroundColor(ui_theme::panelSubtle());
-      pager->setCornerRadius(ui_theme::controlRadius());
-      pager->setBorderColor(ui_theme::hairline());
+      pager->setBackgroundColor(app_theme::panelSubtle());
+      pager->setCornerRadius(app_theme::controlRadius());
+      pager->setBorderColor(app_theme::hairline());
       pager->setBorderWidth(1);
 
-      auto *pageLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
+      auto *pageLabel = new TextView(app_theme::font, 17);
       pageLabel->setText(i18n::tr("chart_viewer.showing.prefix") + std::to_string(pageStart + 1) + "-" +
                          std::to_string(pageEnd) + " / " +
                          std::to_string(totalOptions));
-      pageLabel->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+      pageLabel->setColor(app_theme::sdl(app_theme::textSecondary()));
       pageLabel->setVAlign(TextView::MIDDLE);
       pageLabel->setOverflow(TextView::TextOverflow::Hidden);
       pageLabel->setFlex(1);
@@ -2900,22 +2900,22 @@ void ChartViewerScene::rebuildRandomDrawer() {
       row->setHeight(62);
       row->setPadding(Edge::Left, 10 + option.depth * 18);
       row->setPadding(Edge::Right, 10);
-      row->setBackgroundColor(ui_theme::panelSubtle());
-      row->setCornerRadius(ui_theme::controlRadius());
-      row->setBorderColor(ui_theme::hairline());
+      row->setBackgroundColor(app_theme::panelSubtle());
+      row->setCornerRadius(app_theme::controlRadius());
+      row->setBorderColor(app_theme::hairline());
       row->setBorderWidth(1);
 
-      auto *label = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+      auto *label = new TextView(app_theme::font, 18);
       label->setText("#" + std::to_string(option.index + 1));
-      label->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+      label->setColor(app_theme::sdl(app_theme::textPrimary()));
       label->setVAlign(TextView::MIDDLE);
       label->setWidth(72);
       label->setHeight(42);
       row->addView(label);
 
-      auto *range = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+      auto *range = new TextView(app_theme::font, 16);
       range->setText("1-" + std::to_string(option.maxValue));
-      range->setColor(ui_theme::sdl(ui_theme::textMuted()));
+      range->setColor(app_theme::sdl(app_theme::textMuted()));
       range->setVAlign(TextView::MIDDLE);
       range->setFlex(1);
       range->setHeight(42);
@@ -2931,9 +2931,9 @@ void ChartViewerScene::rebuildRandomDrawer() {
       });
       row->addView(prev);
 
-      auto *value = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+      auto *value = new TextView(app_theme::font, 24);
       value->setText(std::to_string(option.selectedValue));
-      value->setColor(ui_theme::sdl(ui_theme::amber()));
+      value->setColor(app_theme::sdl(app_theme::amber()));
       value->setAlign(TextView::CENTER);
       value->setVAlign(TextView::MIDDLE);
       value->setWidth(64);
@@ -3253,7 +3253,7 @@ void ChartViewerScene::rebuildGhostModal() {
   ghostModalRoot->setFlexDirection(FlexDirection::Column);
   ghostModalRoot->setAlignItems(YGAlignCenter);
   ghostModalRoot->setJustifyContent(YGJustifyCenter);
-  ghostModalRoot->setBackgroundColor(Color(2, 5, 9, 174));
+  ghostModalRoot->setThemedBackgroundColor(app_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(std::min<float>(kPanelWidth,
@@ -3264,21 +3264,21 @@ void ChartViewerScene::rebuildGhostModal() {
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
       ->setPadding(Edge::All, kPanelPadding)
-      ->setBackgroundColor(ui_theme::panelStrong())
-      ->setCornerRadius(ui_theme::panelRadius())
-      ->setShadow(ui_theme::shadow(), ui_theme::kModalShadow)
-      ->setBorderColor(ui_theme::hairline())
+      ->setBackgroundColor(app_theme::panelStrong())
+      ->setCornerRadius(app_theme::panelRadius())
+      ->setShadow(app_theme::shadow(), app_theme::kModalShadow)
+      ->setBorderColor(app_theme::hairline())
       ->setBorderWidth(1);
 
-  auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
+  auto *title = new TextView(app_theme::boldFont, 30);
   title->setText(i18n::tr("chart_viewer.load_ghost.label"));
-  title->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  title->setColor(app_theme::sdl(app_theme::textPrimary()));
   title->setHeight(42);
   panel->addView(title);
 
-  ghostModalEmptyText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  ghostModalEmptyText = new TextView(app_theme::font, 18);
   ghostModalEmptyText->setText("");
-  ghostModalEmptyText->setColor(ui_theme::sdl(ui_theme::textMuted()));
+  ghostModalEmptyText->setColor(app_theme::sdl(app_theme::textMuted()));
   ghostModalEmptyText->setHeight(28);
   ghostModalEmptyText->setOverflow(TextView::TextOverflow::Hidden);
   panel->addView(ghostModalEmptyText);
@@ -3300,8 +3300,8 @@ void ChartViewerScene::rebuildGhostModal() {
       ->setFlexBasis(0)
       ->setMinHeight(0);
   ghostReplayListView->clearBackgroundColor();
-  ghostReplayListView->setCornerRadius(ui_theme::controlRadius());
-  ghostReplayListView->setBorderColor(ui_theme::hairline());
+  ghostReplayListView->setCornerRadius(app_theme::controlRadius());
+  ghostReplayListView->setBorderColor(app_theme::hairline());
   ghostReplayListView->setBorderWidth(1);
   ghostReplayListView->onSelectionChanged = [this](int idx) {
     selectedGhostReplayIndex = idx;
@@ -3632,7 +3632,7 @@ void ChartViewerScene::rebuildOptionsDrawer() {
   optionsDrawerRoot->setFlexDirection(FlexDirection::Column);
   optionsDrawerRoot->setAlignItems(YGAlignCenter);
   optionsDrawerRoot->setJustifyContent(YGJustifyCenter);
-  optionsDrawerRoot->setBackgroundColor(Color(2, 5, 9, 174));
+  optionsDrawerRoot->setThemedBackgroundColor(app_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(std::min<float>(kPanelWidth, rendering::window_width - 36))
@@ -3641,10 +3641,10 @@ void ChartViewerScene::rebuildOptionsDrawer() {
       ->setAlignItems(YGAlignStretch)
       ->setGap(12)
       ->setPadding(Edge::All, kPanelPadding)
-      ->setBackgroundColor(ui_theme::panelStrong())
-      ->setCornerRadius(ui_theme::panelRadius())
-      ->setShadow(ui_theme::shadow(), ui_theme::kModalShadow)
-      ->setBorderColor(ui_theme::hairline())
+      ->setBackgroundColor(app_theme::panelStrong())
+      ->setCornerRadius(app_theme::panelRadius())
+      ->setShadow(app_theme::shadow(), app_theme::kModalShadow)
+      ->setBorderColor(app_theme::hairline())
       ->setBorderWidth(1);
 
   auto *header = new View();
@@ -3653,9 +3653,9 @@ void ChartViewerScene::rebuildOptionsDrawer() {
   header->setGap(12);
   header->setHeight(52);
 
-  auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 28);
+  auto *title = new TextView(app_theme::boldFont, 28);
   title->setText(i18n::tr("chart_viewer.chart_option.label"));
-  title->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  title->setColor(app_theme::sdl(app_theme::textPrimary()));
   title->setVAlign(TextView::MIDDLE);
   title->setFlex(1);
   header->addView(title);
@@ -3682,16 +3682,16 @@ void ChartViewerScene::rebuildOptionsDrawer() {
   currentRow->setGap(12);
   currentRow->setHeight(52);
 
-  auto *currentLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 19);
+  auto *currentLabel = new TextView(app_theme::font, 19);
   currentLabel->setText(i18n::tr("chart_viewer.current.label"));
-  currentLabel->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  currentLabel->setColor(app_theme::sdl(app_theme::textSecondary()));
   currentLabel->setVAlign(TextView::MIDDLE);
   currentLabel->setWidth(86);
   currentLabel->setHeight(44);
   currentRow->addView(currentLabel);
 
-  viewerOptionText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  viewerOptionText->setColor(ui_theme::sdl(ui_theme::amber()));
+  viewerOptionText = new TextView(app_theme::font, 22);
+  viewerOptionText->setColor(app_theme::sdl(app_theme::amber()));
   viewerOptionText->setVAlign(TextView::MIDDLE);
   viewerOptionText->setOverflow(TextView::TextOverflow::Hidden);
   viewerOptionText->setFlex(1);

@@ -6,11 +6,13 @@
 #include <iomanip>
 #include <iostream>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <type_traits>
 #include <vector>
+#include <utility>
 
 namespace music_playlist {
 struct MusicTrack {
@@ -22,24 +24,40 @@ struct Metadata { long long durationMicros = 0; };
 Metadata MakeNativeMetadata(const MusicTrack &) { return {}; }
 }
 namespace native_music_player {
-int loads = 0, starts = 0;
+int loads = 0, starts = 0, streamLoads = 0;
+int stops = 0, pauses = 0;
+struct State { bool playing = false, loaded = false; } state;
+enum class ControlEvent { Previous, Next, Finished };
+std::vector<ControlEvent> events;
+std::vector<ControlEvent> DrainControlEvents() { return std::exchange(events, {}); }
+std::vector<std::string> playbackErrors;
+std::vector<std::string> DrainPlaybackErrors() { return std::exchange(playbackErrors, {}); }
+bool Pause(std::string &) { ++pauses; state.playing = false; return true; }
+State GetState() { return state; }
+bool Stop(std::string &) { ++stops; state.playing = false; return true; }
+bool LoadStream(std::shared_ptr<int>, const music_playlist::Metadata &, std::string &) {
+  ++streamLoads;
+  return true;
+}
 bool Load(const std::filesystem::path &, const music_playlist::Metadata &, std::string &) {
   ++loads;
   return true;
 }
 bool SetPlaybackRate(int, std::string &) { return true; }
-bool Play(std::string &) { ++starts; return true; }
+bool Play(std::string &) { ++starts; state.playing = true; return true; }
 }
-namespace chart_music_cache {
-struct CacheResult {
-  bool success = true;
+namespace music_preparation {
+struct PreparedMusic {
+  bool success = false;
   std::string message;
-  std::filesystem::path audioPath = "controlled.wav";
-  long long durationMicros = 10000000;
+  long long durationMicros = 0;
+  std::shared_ptr<int> stream;
 };
-CacheResult nextResult;
-CacheResult EnsureRenderedMusicFile(int, std::atomic_bool &, bool) { return nextResult; }
-void PruneCacheExcept(const std::vector<std::filesystem::path> &) {}
+PreparedMusic nextResult{.success = true, .durationMicros = 10000000,
+                         .stream = std::make_shared<int>(1)};
+PreparedMusic PrepareMusicForPlayback(int, std::atomic_bool &, bool) {
+  return nextResult;
+}
 }
 
 class MusicPlayerService {
@@ -47,18 +65,17 @@ public:
   using Status = STATUS_TYPE;
   void PlaybackWorker(music_playlist::MusicTrack, std::uint64_t, bool,
                       Status, const std::stop_token &);
+  bool ProcessNativeControlEvents(Status &);
+  bool queueCanAdvance = false;
+  bool PlayPreviousAsync(Status &) { return queueCanAdvance; }
+  bool PlayNextAsync(Status &, Status = {}) { return queueCanAdvance; }
   void PublishNativeControlStatus(const Status &);
   bool ConsumeNativeControlStatus(Status &);
   void SyncNativeQueueLocked() {}
-  std::vector<std::filesystem::path> PlaybackCacheKeepPathsLocked(
-      const chart_music_cache::CacheResult &) { return {}; }
-  std::vector<music_playlist::MusicTrack> AdjacentTracksLocked() { return {}; }
-  void StartAdjacentPreloadWorker(std::vector<music_playlist::MusicTrack>, bool) {}
   void EnsureNativeControlEventPump() {}
   std::atomic<std::uint64_t> playbackRequestRevision{1};
   std::atomic_bool renderCancelled{false};
   std::mutex stateMutex, nativeControlStatusMutex;
-  chart_music_cache::CacheResult lastCacheResult;
   int playbackRate = 100;
   std::optional<music_playlist::MusicTrack> loadedTrack;
   Status nativeControlStatusMessage;
@@ -89,7 +106,7 @@ struct Player {
     return !failClear;
   }
 };
-namespace ui_theme {
+namespace app_theme {
 int primaryAction, primaryActionHover, primaryActionPressed, accentBorderStrong,
     control, controlHover, controlPressed, hairlineStrong, warningAction,
     warningActionHover, warningActionPressed, accentBorder, successAction,
@@ -179,15 +196,66 @@ int main() {
   expect(resolve(completion) == "選択した譜面を再生します。",
          "consumed completion remains localizable after another language change");
   expect(!service.ConsumeNativeControlStatus(completion), "refresh does not consume completion twice");
-  expect(native_music_player::loads == 1 && native_music_player::starts == 1,
+  expect(native_music_player::loads == 0 && native_music_player::streamLoads == 1 &&
+             native_music_player::starts == 1,
          "language changes do not restart native playback");
 
-  chart_music_cache::nextResult = {.success = false, .message = "Playing selected chart."};
+  music_preparation::nextResult = {.success = false, .message = "Playing selected chart."};
+  native_music_player::state.playing = false;
   service.PlaybackWorker({}, 1, false, successMessage<MusicPlayerService::Status>(), {});
+  expect(native_music_player::stops == 1 && !service.loadedTrack,
+         "failed queue preparation releases the idle foreground playback session");
   expect(service.ConsumeNativeControlStatus(completion), "failed rendering publishes its diagnostic");
   i18n::setLanguage(i18n::Language::Korean);
   expect(resolve(completion) == "Playing selected chart.",
          "async diagnostics matching catalog copy stay raw");
+  music_preparation::nextResult = {.success = true, .durationMicros = 10000000,
+                                    .stream = std::make_shared<int>(2)};
+  const int previousLoads = native_music_player::loads;
+  service.PlaybackWorker({}, 1, false, successMessage<MusicPlayerService::Status>(), {});
+  expect(native_music_player::streamLoads == 2 && native_music_player::loads == previousLoads,
+         "cold music playback loads its prepared stream without waiting for a completed WAV");
+  for (auto event : {native_music_player::ControlEvent::Previous,
+                     native_music_player::ControlEvent::Next}) {
+    native_music_player::state = {.playing = false, .loaded = true};
+    const int pauses = native_music_player::pauses;
+    native_music_player::events = {event};
+    service.ProcessNativeControlEvents(completion);
+    expect(native_music_player::pauses == pauses + 1,
+           "queue boundary restores paused session after notification promotion");
+    native_music_player::state = {};
+    const int stops = native_music_player::stops;
+    native_music_player::events = {event};
+    service.ProcessNativeControlEvents(completion);
+    expect(native_music_player::stops == stops + 1,
+           "queue boundary releases notification foreground service without a backend");
+    native_music_player::state = {.playing = true, .loaded = true};
+    native_music_player::events = {event};
+    service.ProcessNativeControlEvents(completion);
+    expect(native_music_player::stops == stops + 1 &&
+               native_music_player::pauses == pauses + 1,
+           "queue boundary leaves active playback running");
+  }
+  service.loadedTrack = music_playlist::MusicTrack{.title = "Failed track"};
+  native_music_player::state = {};
+  native_music_player::playbackErrors = {"Native decoder failed."};
+  expect(service.ProcessNativeControlEvents(completion),
+         "native playback failures are handled even without control events");
+  expect(!service.loadedTrack,
+         "native backend failure clears stale loaded track metadata");
+  expect(resolve(completion) == "Native decoder failed.",
+         "clearing a failed backend preserves its diagnostic");
+  expect(!service.ProcessNativeControlEvents(completion),
+         "native failure is drained only once");
+
+  for (bool playing : {false, true}) {
+    service.loadedTrack = music_playlist::MusicTrack{.title = "Replacement track"};
+    native_music_player::state = {.playing = playing, .loaded = true};
+    native_music_player::playbackErrors = {"Previous backend failed."};
+    service.ProcessNativeControlEvents(completion);
+    expect(service.loadedTrack && service.loadedTrack->title == "Replacement track",
+           "queued old failure must not clear a newer loaded or paused track");
+  }
   i18n::setLanguage(i18n::Language::English);
   return failures == 0 ? 0 : 1;
 }

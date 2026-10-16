@@ -5,18 +5,18 @@
 #include "Button.h"
 #include "TextInputBox.h"
 #include "TextView.h"
-#include "UiTheme.h"
+#include "AppTheme.h"
 
 #include <algorithm>
 #include <utility>
 
 namespace {
-constexpr const char *kFont = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kFont = app_theme::font;
 
 TextView *makeText(i18n::Text text, int size) {
   auto *view = new TextView(kFont, size);
   view->setLocalizedText(std::move(text));
-  view->setThemedColor(ui_theme::textPrimary);
+  view->setThemedColor(app_theme::textPrimary);
   view->setAlign(TextView::CENTER);
   view->setVAlign(TextView::MIDDLE);
   view->setOverflow(TextView::TextOverflow::Hidden);
@@ -28,13 +28,13 @@ Button *makeButton(const i18n::Text &label, int fontSize, TextView **textOut) {
   button->setFlexGrow(1.0f);
   button->setFlexBasis(0.0f);
   button->setFlexShrink(1.0f);
-  button->setCornerRadius(ui_theme::controlRadius());
+  button->setCornerRadius(app_theme::controlRadius());
   button->setStyledBorderWidth(1);
-  button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                    ui_theme::controlPressed);
-  button->setThemedBorderColors(ui_theme::hairlineSubtle,
-                                ui_theme::hairlineStrong,
-                                ui_theme::accentBorder);
+  button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                    app_theme::controlPressed);
+  button->setThemedBorderColors(app_theme::hairlineSubtle,
+                                app_theme::hairlineStrong,
+                                app_theme::accentBorder);
   auto *text = makeText(label, fontSize);
   button->setContentView(text);
   if (textOut != nullptr) {
@@ -50,30 +50,30 @@ void styleButton(Button *button, TextView *text, bool selected, bool enabled) {
   button->setEnabled(enabled);
   if (!enabled) {
     button->setThemedBackgroundColors(
-        ui_theme::panelSubtle, ui_theme::panelSubtle, ui_theme::panelSubtle);
-    button->setThemedBorderColors(ui_theme::hairlineSubtle,
-                                  ui_theme::hairlineSubtle,
-                                  ui_theme::hairlineSubtle);
-    text->setThemedColor(ui_theme::textMuted);
+        app_theme::panelSubtle, app_theme::panelSubtle, app_theme::panelSubtle);
+    button->setThemedBorderColors(app_theme::hairlineSubtle,
+                                  app_theme::hairlineSubtle,
+                                  app_theme::hairlineSubtle);
+    text->setThemedColor(app_theme::textMuted);
     return;
   }
   if (selected) {
-    button->setThemedBackgroundColors(ui_theme::primaryAction,
-                                      ui_theme::primaryActionHover,
-                                      ui_theme::primaryActionPressed);
-    button->setThemedBorderColors(ui_theme::accentBorderStrong,
-                                  ui_theme::accentBorderStrong,
-                                  ui_theme::accentBorderStrong);
+    button->setThemedBackgroundColors(app_theme::primaryAction,
+                                      app_theme::primaryActionHover,
+                                      app_theme::primaryActionPressed);
+    button->setThemedBorderColors(app_theme::accentBorderStrong,
+                                  app_theme::accentBorderStrong,
+                                  app_theme::accentBorderStrong);
     text->setThemedColor(
-        [] { return ui_theme::textOn(ui_theme::primaryAction()); });
+        [] { return app_theme::textOn(app_theme::primaryAction()); });
     return;
   }
-  button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                    ui_theme::controlPressed);
-  button->setThemedBorderColors(ui_theme::hairlineSubtle,
-                                ui_theme::hairlineStrong,
-                                ui_theme::accentBorder);
-  text->setThemedColor(ui_theme::textPrimary);
+  button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                    app_theme::controlPressed);
+  button->setThemedBorderColors(app_theme::hairlineSubtle,
+                                app_theme::hairlineStrong,
+                                app_theme::accentBorder);
+  text->setThemedColor(app_theme::textPrimary);
 }
 } // namespace
 
@@ -85,7 +85,7 @@ PlayOptionSectionView::PlayOptionSectionView(
   setGap(10);
 
   auto *heading = makeText(i18n::message("play_options.section.play_option.label"), 20);
-  heading->setThemedColor(ui_theme::textSecondary);
+  heading->setThemedColor(app_theme::textSecondary);
   heading->setAlign(TextView::LEFT);
   heading->setHeight(28);
   addView(heading);
@@ -124,7 +124,7 @@ PlayOptionSectionView::PlayOptionSectionView(
   laneRow->setHeight(52);
 
   auto *laneLabel = makeText(i18n::message("play_options.section.lane_order.label"), 17);
-  laneLabel->setThemedColor(ui_theme::textSecondary);
+  laneLabel->setThemedColor(app_theme::textSecondary);
   laneLabel->setAlign(TextView::LEFT);
   laneLabel->setWidth(90);
   laneLabel->setFlexShrink(0.0f);
@@ -132,10 +132,10 @@ PlayOptionSectionView::PlayOptionSectionView(
   laneRow->addView(laneLabel);
 
   laneOrderInput = new TextInputBox(kFont, 18);
-  laneOrderInput->setColor(ui_theme::sdl(ui_theme::textPrimary()));
-  laneOrderInput->setBackgroundColor(ui_theme::control());
-  laneOrderInput->setCornerRadius(ui_theme::controlRadius());
-  laneOrderInput->setBorderColor(ui_theme::hairline());
+  laneOrderInput->setColor(app_theme::sdl(app_theme::textPrimary()));
+  laneOrderInput->setBackgroundColor(app_theme::control());
+  laneOrderInput->setCornerRadius(app_theme::controlRadius());
+  laneOrderInput->setBorderColor(app_theme::hairline());
   laneOrderInput->setBorderWidth(1);
   laneOrderInput->setPadding(Edge::Left, 12);
   laneOrderInput->setPadding(Edge::Right, 12);
@@ -187,7 +187,7 @@ PlayOptionSectionView::PlayOptionSectionView(
   addView(laneActionRow);
 
   laneOrderMessage = makeText("", 15);
-  laneOrderMessage->setThemedColor(ui_theme::textMuted);
+  laneOrderMessage->setThemedColor(app_theme::textMuted);
   laneOrderMessage->setAlign(TextView::LEFT);
   laneOrderMessage->setHeight(24);
   addView(laneOrderMessage);
@@ -236,5 +236,5 @@ void PlayOptionSectionView::setLaneOrderMessage(i18n::Text message,
   }
   laneOrderMessage->setLocalizedText(std::move(message));
   laneOrderMessage->setColor(
-      ui_theme::sdl(error ? ui_theme::coral() : ui_theme::textMuted()));
+      app_theme::sdl(error ? app_theme::coral() : app_theme::textMuted()));
 }

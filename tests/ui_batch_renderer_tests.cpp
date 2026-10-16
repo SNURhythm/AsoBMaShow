@@ -45,6 +45,8 @@ struct CapturedSubmission {
 };
 
 struct RecordingBackend final : rendering::UiBatchBackend {
+  void beginFrame() noexcept override { ++begunFrames; }
+  std::size_t begunFrames = 0;
   bool submit(const rendering::UiBatchSubmission &submission) noexcept override {
     if (rejectedSubmissions != 0) {
       --rejectedSubmissions;
@@ -56,11 +58,25 @@ struct RecordingBackend final : rendering::UiBatchBackend {
     captured.indices.assign(submission.indices.begin(), submission.indices.end());
     captured.state = submission.state;
     submissions.push_back(std::move(captured));
+    order.push_back('D');
+    return true;
+  }
+
+  bool submitRetained(const std::shared_ptr<const rendering::UiRetainedGeometry> &geometry,
+                      const rendering::UiBatchState &state) noexcept override {
+    if (rejectRetained) return false;
+    retained.push_back(geometry);
+    retainedStates.push_back(state);
+    order.push_back('R');
     return true;
   }
 
   std::vector<CapturedSubmission> submissions;
+  std::vector<std::shared_ptr<const rendering::UiRetainedGeometry>> retained;
+  std::vector<rendering::UiBatchState> retainedStates;
+  std::vector<char> order;
   std::size_t rejectedSubmissions = 0;
+  bool rejectRetained = false;
 };
 
 rendering::UiBatchState colorState() {
@@ -301,9 +317,181 @@ void testFailedBatchDoesNotBlockLaterSubmission() {
          "a failed UI batch does not corrupt later painter-order geometry");
 }
 
+void testRetainedGeometryPreservesOrderAndIdentity() {
+  RecordingBackend backend;
+  rendering::UiBatchRenderer renderer(backend);
+  auto geometry = std::make_shared<rendering::UiRetainedGeometry>();
+  geometry->layout.begin(bgfx::RendererType::Noop)
+      .add(bgfx::Attrib::Position, 3, bgfx::AttribType::Float)
+      .add(bgfx::Attrib::Color0, 4, bgfx::AttribType::Uint8, true).end();
+  const auto bytes = std::as_bytes(std::span{kFirstQuad});
+  geometry->vertices.assign(bytes.begin(), bytes.end());
+  geometry->indices.assign(kQuadIndices.begin(), kQuadIndices.end());
+  auto state = colorState();
+  state.scissor = {2, 3, 100, 200};
+  state.uniformCount = 6;
+  for (std::size_t i = 0; i < state.uniformCount; ++i)
+    state.uniforms[i] = {bgfx::UniformHandle{static_cast<std::uint16_t>(i)}, {float(i), 0, 0, 0}};
+
+  renderer.begin();
+  renderer.appendColor(kFirstQuad, kQuadIndices, colorState());
+  expect(renderer.submitRetained(geometry, state), "retained geometry submits inside a UI batch");
+  renderer.appendColor(kSecondQuad, kQuadIndices, colorState());
+  renderer.end();
+  expect(backend.order == std::vector<char>({'D', 'R', 'D'}),
+         "retained geometry draws between earlier and later UI content");
+  renderer.begin();
+  state.uniforms[5].value[0] = 99;
+  renderer.submitRetained(geometry, state);
+  renderer.end();
+  expect(backend.retained.size() == 2 && backend.retained[0] == backend.retained[1] &&
+             backend.retained[1].get() == geometry.get(),
+         "animation reuses the same immutable geometry without staging a new mesh");
+  expect(backend.retainedStates[0].scissor->x == 2 &&
+             backend.retainedStates[0].uniforms[5].value[0] == 5 &&
+             backend.retainedStates[1].uniforms[5].value[0] == 99,
+         "retained draws preserve clipping and refresh all shader parameters");
+  expect(!renderer.submitRetained(geometry, state),
+         "retained geometry cannot draw outside an active UI batch");
+}
+
+void testUnchangedFramesDoNotReachTheGpu() {
+  RecordingBackend backend;
+  rendering::UiBatchRenderer renderer(backend);
+  const auto draw = [&] {
+    renderer.beginFrame(true);
+    renderer.begin();
+    renderer.appendColor(kFirstQuad, kQuadIndices, colorState());
+    renderer.end();
+  };
+  draw();
+  expect(backend.submissions.empty(), "recording must defer GPU submission");
+  expect(renderer.finishFrame(), "first frame must be presented");
+  expect(backend.submissions.size() == 1, "first frame submits its geometry");
+  for (int i = 0; i < 120; ++i) {
+    draw();
+    expect(!renderer.finishFrame(), "identical menu frame must not redraw");
+  }
+  expect(backend.submissions.size() == 1, "unchanged frames perform no GPU draws");
+  draw();
+  expect(renderer.finishFrame(true), "surface restoration can force an identical frame");
+  expect(backend.submissions.size() == 2, "forced restoration replays the complete frame");
+}
+
+void testDeferredFramesObserveVisualAndTextureChanges() {
+  RecordingBackend backend;
+  rendering::UiBatchRenderer renderer(backend);
+  auto vertices = kFirstQuad;
+  auto state = colorState();
+  const auto draw = [&] {
+    renderer.beginFrame(true);
+    renderer.begin();
+    renderer.appendColor(vertices, kQuadIndices, state);
+    renderer.end();
+    return renderer.finishFrame();
+  };
+  expect(draw() && !draw(), "stable frame is submitted only once");
+  expect(backend.begunFrames == 1, "unchanged frame skips backend resource work too");
+  vertices[0].x = 1;
+  expect(draw() && !draw(), "scroll or animation geometry changes redraw immediately");
+  state.scissor = rendering::UiBatchScissor{1, 2, 30, 40};
+  expect(draw(), "changed clipping invalidates presentation");
+  state.texture = bgfx::TextureHandle{12};
+  expect(draw(), "changed image invalidates presentation");
+  state.uniformCount = 1;
+  state.uniforms[0] = {.handle = bgfx::UniformHandle{3}, .value = {1, 2, 3, 4}};
+  expect(draw(), "changed shader parameters invalidate presentation");
+  state.uniforms[0].value[3] = 0.5f;
+  expect(draw(), "animated opacity invalidates presentation");
+  rendering::UiBatchRenderer::notifyTextureChanged();
+  expect(draw() && !draw(), "reused texture handles cannot hide changed image pixels");
+  renderer.invalidateFrame();
+  expect(draw(), "a discarded native presentation is retried");
+  renderer.beginFrame(true);
+  expect(renderer.finishFrame(), "removing the final draw still presents a cleared frame");
+  renderer.beginFrame(true);
+  expect(!renderer.finishFrame(), "an unchanged empty frame can idle");
+}
+
+void testDeferredFailuresAndImmediateFramesCannotPoisonTheCache() {
+  RecordingBackend backend;
+  rendering::UiBatchRenderer renderer(backend);
+  const auto draw = [&](bool deferred) {
+    renderer.beginFrame(deferred);
+    renderer.begin();
+    renderer.appendColor(kFirstQuad, kQuadIndices, colorState());
+    renderer.end();
+    return renderer.finishFrame();
+  };
+  backend.rejectedSubmissions = 1;
+  expect(draw(true) && backend.submissions.empty(), "fixture rejects first GPU submission");
+  expect(draw(true) && backend.submissions.size() == 1,
+         "failed submission never caches an invisible frame as complete");
+  expect(!draw(true), "successful retry can idle");
+  expect(draw(false) && backend.submissions.size() == 2,
+         "non-menu rendering retains immediate submission");
+  expect(draw(true) && backend.submissions.size() == 3,
+         "returning from gameplay or export forces the first menu presentation");
+}
+
+void testDeferredRetainedDrawsPreserveFallbackAndOrder() {
+  RecordingBackend backend;
+  rendering::UiBatchRenderer renderer(backend);
+  auto geometry = std::make_shared<rendering::UiRetainedGeometry>();
+  const auto draw = [&] {
+    renderer.beginFrame(true);
+    renderer.begin();
+    renderer.appendColor(kFirstQuad, kQuadIndices, colorState());
+    const bool retainedSubmitted = renderer.submitRetained(geometry, colorState());
+    expect(retainedSubmitted != backend.rejectRetained,
+           "retained submission returns the actual backend result immediately");
+    if (!retainedSubmitted)
+      renderer.appendColor(kFirstQuad, kQuadIndices, colorState());
+    renderer.appendColor(kSecondQuad, kQuadIndices, colorState());
+    renderer.end();
+    return renderer.finishFrame();
+  };
+  expect(draw() && backend.order == std::vector<char>({'D', 'R', 'D'}),
+         "retained submission flushes the recorded prefix in painter order");
+  expect(draw() && backend.order.size() == 6,
+         "retained effects opt out of unchanged-frame suppression");
+  backend.rejectRetained = true;
+  backend.order.clear();
+  expect(draw() && backend.order == std::vector<char>({'D', 'D'}),
+         "failed retained effects submit their CPU fallback after the prefix");
+  expect(backend.submissions.back().vertices.size() == 8,
+         "fallback geometry and following content both reach the backend");
+}
+
+void testOversizedFramesFallBackWithoutDroppingDraws() {
+  RecordingBackend backend;
+  rendering::UiBatchRenderer renderer(backend);
+  std::vector<rendering::PosColorVertex> vertices(60'000, kFirstQuad[0]);
+  std::vector<std::uint16_t> indices(60'000, 0);
+  renderer.beginFrame(true);
+  renderer.begin();
+  for (int i = 0; i < 12; ++i) {
+    auto state = colorState();
+    state.texture = bgfx::TextureHandle{static_cast<std::uint16_t>(i)};
+    renderer.appendColor(vertices, indices, state);
+    renderer.flush();
+  }
+  renderer.end();
+  expect(renderer.finishFrame() && backend.submissions.size() == 12,
+         "oversized recording falls back without losing prior or later draws");
+  for (std::size_t i = 0; i < backend.submissions.size(); ++i)
+    expect(backend.submissions[i].state.texture.idx == i,
+           "fallback preserves complete painter order");
+}
+
 } // namespace
 
 int main() {
+  testUnchangedFramesDoNotReachTheGpu();
+  testDeferredFramesObserveVisualAndTextureChanges();
+  testDeferredFailuresAndImmediateFramesCannotPoisonTheCache();
+  testDeferredRetainedDrawsPreserveFallbackAndOrder();
+  testOversizedFramesFallBackWithoutDroppingDraws();
   testCompatibleColoredGeometryCoalesces();
   testRenderContextScopeFlushesOnlyAtExplicitBoundary();
   testDirectViewFlushesDecorationsBeforeAndUiAfterCustomDraw();
@@ -311,6 +499,7 @@ int main() {
   testStateBoundariesPreserveSubmissionOrder();
   testBatchSplitsBeforeUint16IndexLimit();
   testFailedBatchDoesNotBlockLaterSubmission();
+  testRetainedGeometryPreservesOrderAndIdentity();
   if (failures != 0) {
     return 1;
   }

@@ -68,7 +68,8 @@ Plan buildNormalPlan(const bms_parser::Chart &chart, bool indicatorEnabled,
                      bool metronomeEnabled, long long playbackAnchorMicros,
                      long long noteRangeStartMicros,
                      std::optional<long long> noteRangeEndMicros,
-                     audio::PlaybackRate playback);
+                     audio::PlaybackRate playback,
+                     int metronomeMaxDurationMilliseconds = 5000);
 
 Plan buildPracticePlan(const bms_parser::Chart &chart, bool indicatorEnabled,
                        long long practiceStartMicros,

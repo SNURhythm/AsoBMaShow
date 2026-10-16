@@ -35,11 +35,15 @@ struct RecyclerView {
 
 struct Context {
   struct Settings { bool archiveChartPreviewEnabled = false; } settings;
-  struct MusicPlayer { void Stop(std::string &) {} } musicPlayer;
+  struct MusicPlayer { int stops = 0; void Stop(std::string &) { ++stops; } } musicPlayer;
 };
 
 struct MainMenuScene {
   Context context;
+  bool restoringTabSelection_ = false;
+  bool pendingTab_ = false;
+  bool selectorActive = true;
+  bool selectorTabActive() const { return selectorActive; }
   std::atomic_bool willStart = false;
   int chartSelectionGeneration = 0;
   std::optional<ChartMetaRecord> selectedChartRecord;
@@ -136,6 +140,8 @@ void exerciseSelection(int kind, bool blocked) {
   if (kind == 3) selected.meta.BmsPath.clear();
   if (kind == 4) selected.meta.BmsPath = "archive:/pack.zip/chart.bms";
   if (kind == 5) scene.suppressPreviewForChartPath = selected.meta.BmsPath;
+  scene.restoringTabSelection_ = kind == 7;
+  scene.selectorActive = kind != 8;
   auto selection = std::async(std::launch::async, [&] {
     scene.selectionThread = std::this_thread::get_id();
     scene.recycler.onSelected(selected, 0);
@@ -159,11 +165,13 @@ void exerciseSelection(int kind, bool blocked) {
   expect(!scene.concurrentCleanup, "cleanup must not overlap a jukebox load");
   expect(!scene.cleanupOnSelectionThread, "cleanup stays off the selection thread");
   if (kind != 6) expect(!scene.selected, "skipped selections discard the old chart");
+  if (kind == 7 || kind == 8)
+    expect(scene.context.musicPlayer.stops == 0, "restoring or hidden selections preserve music playback");
   worker.stop();
 }
 
 int main() {
-  for (int kind = 0; kind <= 6; ++kind) {
+  for (int kind = 0; kind <= 8; ++kind) {
     exerciseSelection(kind, false);
     exerciseSelection(kind, true);
   }

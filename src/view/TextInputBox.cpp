@@ -5,7 +5,7 @@
 #include "../rendering/ShaderManager.h"
 #include "Button.h"
 #include "IconText.h"
-#include "UiTheme.h"
+#include "AppTheme.h"
 #include <SDL3/SDL_events.h>
 #include <algorithm>
 #include <array>
@@ -165,7 +165,7 @@ void TextInputBox::setClearable(bool value) {
     icon->setAlign(TextView::CENTER);
     icon->setVAlign(TextView::MIDDLE);
     icon->setOverflow(TextView::TextOverflow::Hidden);
-    icon->setThemedColor(ui_theme::textMuted);
+    icon->setThemedColor(app_theme::textMuted);
     clearButton->setContentView(icon);
     clearButton->setOnClickListener([this]() { clearFromButton(); });
   }

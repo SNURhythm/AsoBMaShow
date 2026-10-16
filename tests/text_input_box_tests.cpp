@@ -9,6 +9,7 @@
 #include "i18n/Localization.h"
 #include "view/IconText.h"
 #include "view/UiTheme.h"
+#include "view/AppTheme.h"
 #include "scene/play/GuidedAccessReminder.h"
 #include "scene/play/GuidedAccessButtonCue.h"
 
@@ -706,7 +707,7 @@ std::string instructionText(GuidedAccessInstructionView &view) {
              "styled instructions fit their paragraph without clipping");
       const auto color = run->currentColor();
       const auto expected = run->fontWeight() == TextView::FontWeight::Bold
-          ? ui_theme::cyan() : ui_theme::textSecondary();
+          ? app_theme::cyan() : app_theme::textSecondary();
       expect(color.r == expected.r && color.g == expected.g && color.b == expected.b,
              "setting targets use accent color and surrounding text stays secondary");
     }
@@ -755,9 +756,9 @@ void checkReminderDescriptionAtCurrentSize() {
            "explanation has a clear paragraph gap before the setup steps");
     expect(disableHelp->getY() - (help->getY() + help->getHeight()) >= 24,
            "disable reminder note is spaced separately from setup steps");
-    expect(why->currentColor().r == ui_theme::cyan().r &&
-           why->currentColor().g == ui_theme::cyan().g &&
-           why->currentColor().b == ui_theme::cyan().b,
+    expect(why->currentColor().r == app_theme::cyan().r &&
+           why->currentColor().g == app_theme::cyan().g &&
+           why->currentColor().b == app_theme::cyan().b,
            "explanation uses the theme accent color");
     expect(help->getChildren().size() == 2, "setup keeps its two instruction lines");
     expect(instructionText(*disableHelp) == withoutEmphasis(

@@ -46,6 +46,7 @@ int main() {
   Scene scene;
   struct { Scene *currentScene; } sceneManager{&scene};
   struct {
+    struct UiBatchRenderer { void invalidateFrame() {} } uiBatchRenderer;
     struct Registry {
       int events = 0, pumps = 0, clears = 0;
       void clearSdlInputState() { ++clears; }

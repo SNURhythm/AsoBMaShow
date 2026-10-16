@@ -1,4 +1,5 @@
 #include "InputProfile.h"
+
 #include "ChartLaneBinding.h"
 
 #include <algorithm>
@@ -34,6 +35,13 @@ bool hasValidThresholdOrder(const input::InputBinding &binding) {
 }
 
 } // namespace
+
+bool InputProfile::hasGyroscopeBindings() const {
+  for (const auto &binding : bindings) {
+    if (binding.control.deviceClass == input::DeviceClass::Gyroscope) return true;
+  }
+  return false;
+}
 
 void InputProfile::sanitize(std::vector<std::string> &diagnostics) {
   if (schemaVersion != kSchemaVersion) {

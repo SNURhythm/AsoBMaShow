@@ -1,3 +1,4 @@
+#include "../rendering/ResponsiveUi.h"
 #pragma once
 #include "../i18n/Localization.h"
 
@@ -9,7 +10,7 @@
 #include "../view/Button.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 #include "../view/View.h"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../iOSNatives.hpp"
@@ -28,7 +29,7 @@
 namespace settings_scene {
 // Let Yoga size the button from its content and horizontal padding.
 inline constexpr int kFitContentWidth = -1;
-inline constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
+inline constexpr const char *kFontPath = app_theme::font;
 
 struct SafeAreaInsets {
   int top = 0;
@@ -40,6 +41,7 @@ struct SafeAreaInsets {
 struct LayoutMetrics {
   SafeAreaInsets safe;
   bool compact = false;
+  bool flatSections = false;
   bool ultraCompact = false;
   bool stackBody = false;
   bool useDualCardRow = true;
@@ -154,6 +156,12 @@ inline LayoutMetrics resolveLayoutMetrics() {
     metrics.modeCardHeight = 156;
   }
 
+  if (rendering::compactMenuCanvasActive) {
+    metrics.actionButtonHeight = rendering::compactTouchTarget;
+    metrics.backButtonHeight = rendering::compactTouchTarget;
+    metrics.bodyTextSize = 24;
+    metrics.smallTextSize = 21;
+  }
   const int availableWidth =
       std::max(0, rendering::window_width - metrics.safe.left -
                       metrics.safe.right - metrics.horizontalPadding * 2);
@@ -181,83 +189,85 @@ inline bool sameColor(const Color &lhs, const Color &rhs) {
 }
 
 inline View::ThemeColorProvider themeTextColorProvider(const Color &color) {
-  if (sameColor(color, ui_theme::textPrimary())) {
-    return ui_theme::textPrimary;
+  if (sameColor(color, app_theme::textPrimary())) {
+    return app_theme::textPrimary;
   }
-  if (sameColor(color, ui_theme::textSecondary())) {
-    return ui_theme::textSecondary;
+  if (sameColor(color, app_theme::textSecondary())) {
+    return app_theme::textSecondary;
   }
-  if (sameColor(color, ui_theme::textMuted())) {
-    return ui_theme::textMuted;
+  if (sameColor(color, app_theme::textMuted())) {
+    return app_theme::textMuted;
   }
-  if (sameColor(color, ui_theme::cyan())) {
-    return ui_theme::cyan;
+  if (sameColor(color, app_theme::cyan())) {
+    return app_theme::cyan;
   }
-  if (sameColor(color, ui_theme::lime())) {
-    return ui_theme::lime;
+  if (sameColor(color, app_theme::lime())) {
+    return app_theme::lime;
   }
-  if (sameColor(color, ui_theme::amber())) {
-    return ui_theme::amber;
+  if (sameColor(color, app_theme::amber())) {
+    return app_theme::amber;
   }
-  if (sameColor(color, ui_theme::coral())) {
-    return ui_theme::coral;
+  if (sameColor(color, app_theme::coral())) {
+    return app_theme::coral;
   }
   return {};
 }
 
 inline View::ThemeColorProvider themeSurfaceColorProvider(const Color &color) {
-  if (sameColor(color, ui_theme::control())) {
-    return ui_theme::control;
+  if (sameColor(color, app_theme::control())) {
+    return app_theme::control;
   }
-  if (sameColor(color, ui_theme::controlHover())) {
-    return ui_theme::controlHover;
+  if (sameColor(color, app_theme::controlHover())) {
+    return app_theme::controlHover;
   }
-  if (sameColor(color, ui_theme::controlPressed())) {
-    return ui_theme::controlPressed;
+  if (sameColor(color, app_theme::controlPressed())) {
+    return app_theme::controlPressed;
   }
-  if (sameColor(color, ui_theme::panel())) {
-    return ui_theme::panel;
+  if (sameColor(color, app_theme::panel())) {
+    return app_theme::panel;
   }
-  if (sameColor(color, ui_theme::panelStrong())) {
-    return ui_theme::panelStrong;
+  if (sameColor(color, app_theme::panelStrong())) {
+    return app_theme::panelStrong;
   }
-  if (sameColor(color, ui_theme::panelSubtle())) {
-    return ui_theme::panelSubtle;
+  if (sameColor(color, app_theme::panelSubtle())) {
+    return app_theme::panelSubtle;
   }
-  if (sameColor(color, ui_theme::hairline())) {
-    return ui_theme::hairline;
+  if (sameColor(color, app_theme::hairline())) {
+    return app_theme::hairline;
   }
-  if (sameColor(color, ui_theme::hairlineSubtle())) {
-    return ui_theme::hairlineSubtle;
+  if (sameColor(color, app_theme::hairlineSubtle())) {
+    return app_theme::hairlineSubtle;
   }
-  if (sameColor(color, ui_theme::hairlineStrong())) {
-    return ui_theme::hairlineStrong;
+  if (sameColor(color, app_theme::hairlineStrong())) {
+    return app_theme::hairlineStrong;
   }
-  if (sameColor(color, ui_theme::accentBorder())) {
-    return ui_theme::accentBorder;
+  if (sameColor(color, app_theme::accentBorder())) {
+    return app_theme::accentBorder;
   }
-  if (sameColor(color, ui_theme::accentBorderStrong())) {
-    return ui_theme::accentBorderStrong;
+  if (sameColor(color, app_theme::accentBorderStrong())) {
+    return app_theme::accentBorderStrong;
   }
-  if (sameColor(color, ui_theme::cyan())) {
-    return ui_theme::cyan;
+  if (sameColor(color, app_theme::cyan())) {
+    return app_theme::cyan;
   }
-  if (sameColor(color, ui_theme::coral())) {
-    return ui_theme::coral;
+  if (sameColor(color, app_theme::coral())) {
+    return app_theme::coral;
   }
-  if (sameColor(color, ui_theme::lime())) {
-    return ui_theme::lime;
+  if (sameColor(color, app_theme::lime())) {
+    return app_theme::lime;
   }
-  if (sameColor(color, ui_theme::amber())) {
-    return ui_theme::amber;
+  if (sameColor(color, app_theme::amber())) {
+    return app_theme::amber;
   }
   return {};
 }
 
 inline TextView *makeText(const i18n::Text &text, int size, const Color &color,
                           TextView::TextAlign align = TextView::LEFT,
-                          TextView::TextVAlign valign = TextView::TOP) {
-  auto *view = new TextView(kFontPath, size);
+                          TextView::TextVAlign valign = TextView::TOP,
+                          TextView::FontWeight weight = TextView::FontWeight::Regular) {
+  auto *view = new TextView(weight == TextView::FontWeight::Bold
+                                ? app_theme::boldFont : kFontPath, size, weight);
   view->setDeferredTextureMaterialization(true);
   view->setLocalizedText(text);
   const auto themedProvider = themeTextColorProvider(color);
@@ -268,6 +278,13 @@ inline TextView *makeText(const i18n::Text &text, int size, const Color &color,
   }
   view->setAlign(align);
   view->setVAlign(valign);
+  return view;
+}
+
+inline TextView *makeHeading(const i18n::Text &text, int size) {
+  auto *view = makeText(text, size, app_theme::textPrimary(), TextView::LEFT,
+                        TextView::TOP, TextView::FontWeight::Bold);
+  view->setWrap(true);
   return view;
 }
 
@@ -302,7 +319,7 @@ inline Button *makeButton(int width, int height, TextView *label,
   } else {
     button->setContentView(label);
   }
-  button->setCornerRadius(ui_theme::controlRadius());
+  button->setCornerRadius(app_theme::controlRadius());
   button->setBackgroundColors(normalBackground, hoverBackground,
                               pressedBackground);
   button->setBorderColors(normalBorder, hoverBorder, pressedBorder);
@@ -331,20 +348,30 @@ inline Button *makeButton(int width, int height, TextView *label,
 
 inline Button *makeControlButton(int width, int height, TextView *label) {
   auto *button = makeButton(
-      width, height, label, ui_theme::control(), ui_theme::controlHover(),
-      ui_theme::controlPressed(), ui_theme::hairline(),
-      ui_theme::accentBorder(), ui_theme::accentBorderStrong());
-  button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                    ui_theme::controlPressed);
-  button->setThemedBorderColors(ui_theme::hairline, ui_theme::accentBorder,
-                                ui_theme::accentBorderStrong);
+      width, height, label, app_theme::control(), app_theme::controlHover(),
+      app_theme::controlPressed(), app_theme::hairline(),
+      app_theme::accentBorder(), app_theme::accentBorderStrong());
+  button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                    app_theme::controlPressed);
+  button->setThemedBorderColors(app_theme::hairline, app_theme::accentBorder,
+                                app_theme::accentBorderStrong);
   return button;
 }
 
 inline Button *makeAccentButton(int width, int height, TextView *label,
                                 const Color &accent) {
+  if (sameColor(accent, app_theme::cyan()) ||
+      sameColor(accent, app_theme::lime())) {
+    auto *button = makeControlButton(width, height, label);
+    button->setThemedBackgroundColors(app_theme::action, app_theme::actionHover,
+                                      app_theme::actionPressed);
+    button->setThemedBorderColors(app_theme::action, app_theme::actionHover,
+                                  app_theme::actionPressed);
+    label->setThemedColor(app_theme::onAction);
+    return button;
+  }
   const auto accentProvider = themeSurfaceColorProvider(accent);
-  const bool light = ui_theme::activeMode() == ui_theme::ThemeMode::Light;
+  const bool light = app_theme::activeMode() == app_theme::ThemeMode::Light;
   const uint8_t normalAlpha = light ? 54 : 82;
   const uint8_t hoverAlpha = light ? 74 : 108;
   const uint8_t pressedAlpha = light ? 100 : 136;
@@ -359,7 +386,7 @@ inline Button *makeAccentButton(int width, int height, TextView *label,
                                           uint8_t darkAlpha) {
       return [accentProvider, lightAlpha, darkAlpha]() {
         Color color = accentProvider();
-        color.a = ui_theme::activeMode() == ui_theme::ThemeMode::Light
+        color.a = app_theme::activeMode() == app_theme::ThemeMode::Light
                       ? lightAlpha
                       : darkAlpha;
         return color;
@@ -369,10 +396,10 @@ inline Button *makeAccentButton(int width, int height, TextView *label,
         withModeAlpha(54, 82), withModeAlpha(74, 108), withModeAlpha(100, 136));
     button->setThemedBorderColors(
         [accentProvider]() {
-          return ui_theme::withAlpha(accentProvider(), 178);
+          return app_theme::withAlpha(accentProvider(), 178);
         },
         [accentProvider]() {
-          return ui_theme::withAlpha(accentProvider(), 216);
+          return app_theme::withAlpha(accentProvider(), 216);
         },
         accentProvider);
   }
@@ -383,16 +410,16 @@ inline Button *makeStepButton(const LayoutMetrics &metrics, int width,
                               const i18n::Text &label) {
   return makeControlButton(width, metrics.actionButtonHeight,
                            makeText(label, metrics.bodyTextSize + 4,
-                                    ui_theme::textPrimary(), TextView::CENTER,
+                                    app_theme::textPrimary(), TextView::CENTER,
                                     TextView::MIDDLE));
 }
 
 inline Button *makeResetButton(const LayoutMetrics &metrics) {
   return makeAccentButton(metrics.resetButtonWidth, metrics.actionButtonHeight,
                           makeText(i18n::message("settings.options.reset.label"), metrics.bodyTextSize + 4,
-                                   ui_theme::textPrimary(), TextView::CENTER,
+                                   app_theme::textPrimary(), TextView::CENTER,
                                    TextView::MIDDLE),
-                          ui_theme::coral());
+                          app_theme::coral());
 }
 
 inline TextInputBox *makeNumericInput(const LayoutMetrics &metrics) {
@@ -403,7 +430,7 @@ inline TextInputBox *makeNumericInput(const LayoutMetrics &metrics) {
   input->setBorderWidth(0);
   input->setAlign(TextView::CENTER);
   input->setVAlign(TextView::MIDDLE);
-  input->setThemedColor(ui_theme::textPrimary);
+  input->setThemedColor(app_theme::textPrimary);
   return input;
 }
 
@@ -411,12 +438,12 @@ inline TextInputBox *makeTextInput(const LayoutMetrics &metrics, int minWidth) {
   auto *input = new TextInputBox(kFontPath, metrics.bodyTextSize);
   input->setText("");
   input->setSize(minWidth, metrics.actionButtonHeight);
-  input->setThemedBackgroundColor(ui_theme::control);
-  input->setCornerRadius(ui_theme::controlRadius());
-  input->setThemedBorderColor(ui_theme::hairline);
+  input->setThemedBackgroundColor(app_theme::control);
+  input->setCornerRadius(app_theme::controlRadius());
+  input->setThemedBorderColor(app_theme::hairline);
   input->setBorderWidth(1);
   input->setVAlign(TextView::MIDDLE);
-  input->setThemedColor(ui_theme::textPrimary);
+  input->setThemedColor(app_theme::textPrimary);
   return input;
 }
 
@@ -446,9 +473,9 @@ inline View *makeInputFrame(const LayoutMetrics &metrics, TextInputBox *input) {
   auto *value = new View();
   value->setWidth(static_cast<float>(metrics.offsetValueWidth));
   value->setHeight(static_cast<float>(metrics.actionButtonHeight));
-  value->setThemedBackgroundColor(ui_theme::control);
-  value->setCornerRadius(ui_theme::controlRadius());
-  value->setThemedBorderColor(ui_theme::hairline);
+  value->setThemedBackgroundColor(app_theme::control);
+  value->setCornerRadius(app_theme::controlRadius());
+  value->setThemedBorderColor(app_theme::hairline);
   value->setBorderWidth(1);
   value->addView(input);
   return value;
@@ -461,12 +488,24 @@ inline View *makeCard(const LayoutMetrics &metrics, const i18n::Text &title,
   card->setFlexDirection(FlexDirection::Column);
   card->setGap(metrics.cardGap);
   card->setPadding(Edge::All, static_cast<float>(metrics.cardPadding));
-  card->setThemedBackgroundColor(ui_theme::panel);
-  card->setCornerRadius(ui_theme::panelRadius());
-  card->setThemedShadow(ui_theme::cardShadow, ui_theme::kCardShadow);
-  card->setThemedBorderColor(ui_theme::hairline);
-  card->setBorderWidth(1);
-  card->setMinHeight(static_cast<float>(minHeight));
+  if (metrics.flatSections) {
+    card->setName("settingsSection");
+    auto *rule = new View();
+    rule->setPositionType(YGPositionTypeAbsolute);
+    rule->setName("settingsSectionDivider");
+    rule->setPosition(Edge::Left, metrics.cardPadding)
+        ->setPosition(Edge::Right, metrics.cardPadding)
+        ->setPosition(Edge::Top, 0);
+    rule->setHeight(1);
+    rule->setThemedBackgroundColor(app_theme::hairline);
+    card->addView(rule);
+  } else {
+    card->setThemedBackgroundColor(app_theme::panel);
+    card->setCornerRadius(app_theme::panelRadius());
+    card->setThemedBorderColor(app_theme::hairline);
+    card->setBorderWidth(1);
+    card->setMinHeight(static_cast<float>(minHeight));
+  }
   if (width > 0) {
     card->setWidth(static_cast<float>(width));
   }
@@ -475,16 +514,32 @@ inline View *makeCard(const LayoutMetrics &metrics, const i18n::Text &title,
   header->setFlexDirection(FlexDirection::Column);
   header->setGap(metrics.compact ? 6.0f : 8.0f);
   auto *titleText =
-      makeWrappedText(title, metrics.sectionTitleSize, ui_theme::textPrimary());
+      makeHeading(title, metrics.sectionTitleSize);
   header->addView(titleText);
   if (!description.empty()) {
     auto *descriptionText = makeWrappedText(description, metrics.bodyTextSize,
-                                            ui_theme::textSecondary());
+                                            app_theme::textSecondary());
     header->addView(descriptionText);
   }
   card->addView(header);
   card->addView(body);
   return card;
+}
+
+inline void refineSettingsSectionSpacing(View *column,
+                                         const LayoutMetrics &metrics) {
+  if (!metrics.flatSections) return;
+  bool previousSection = false;
+  for (auto *child : column->getChildren()) {
+    const bool section = child->getName() == "settingsSection";
+    if (section) {
+      if (auto *divider = child->findViewByName("settingsSectionDivider")) {
+        divider->setVisible(previousSection);
+      }
+      if (previousSection) child->setMargin(Edge::Top, metrics.cardPadding);
+    }
+    previousSection = section;
+  }
 }
 
 inline View *makeSummaryRow(const LayoutMetrics &metrics,
@@ -495,9 +550,9 @@ inline View *makeSummaryRow(const LayoutMetrics &metrics,
   row->setAlignItems(YGAlignCenter);
 
   row->addView(
-      makeText(label, metrics.summaryValueSize, ui_theme::textSecondary()));
+      makeText(label, metrics.summaryValueSize, app_theme::textSecondary()));
   auto *valueText = makeText("", metrics.summaryValueSize,
-                             ui_theme::textPrimary(), TextView::RIGHT);
+                             app_theme::textPrimary(), TextView::RIGHT);
   row->addView(valueText);
   if (valueOut != nullptr) {
     *valueOut = valueText;

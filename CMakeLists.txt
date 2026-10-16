@@ -2499,6 +2499,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
     )
+    add_test(NAME ios_audio_session_handoff_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ios_audio_session_handoff_tests.py)
+    set_tests_properties(ios_audio_session_handoff_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
+    )
     add_test(NAME main_menu_records_lifecycle
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest tests/main_menu_records_lifecycle_tests.py -v)
@@ -2715,6 +2721,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 ${CMAKE_SOURCE_DIR}/scripts/check_ios_native_text_editor_sync.py
                 ${CMAKE_SOURCE_DIR})
     set_tests_properties(ios_native_text_editor_sync_audit PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+    add_test(NAME ios_now_playing_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ios_now_playing_tests.py)
+    set_tests_properties(ios_now_playing_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
     add_test(NAME image_fade_shader_audit
@@ -4735,20 +4746,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(audio_video_settings_tests PRIVATE shell32 ole32)
     endif()
 
-    set(_chart_audio_fixture ${CMAKE_CURRENT_BINARY_DIR}/chart_audio_renderer_fixture.cpp)
-    add_custom_command(
-        OUTPUT ${_chart_audio_fixture}
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/chart_audio_renderer_extract.py
-                ${CMAKE_SOURCE_DIR} ${_chart_audio_fixture}
-        DEPENDS tests/chart_audio_renderer_extract.py tests/chart_audio_renderer_tests.cpp
-                src/audio/MusicPlayerService.cpp
-        VERBATIM
-    )
     add_executable(chart_audio_renderer_tests
-        ${_chart_audio_fixture}
+        tests/chart_audio_renderer_tests.cpp
         src/AtomicFile.cpp
         src/audio/ChartAudioRenderer.cpp
-        src/audio/ChartMusicCache.cpp
+        src/audio/MusicPreparation.cpp
+        src/audio/ProgressiveMusicSource.cpp
+        src/audio/DecodedAssetCache.cpp
         src/audio/ClubBeat.cpp
         src/audio/PrepMetronomeSound.cpp
         src/audio/decoder.cpp
@@ -4786,6 +4790,71 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             "$<$<AND:$<CONFIG:Debug>,$<STREQUAL:$<TARGET_PROPERTY:NAME>,chart_audio_renderer_tests>>:-O2>")
     endif()
 
+    get_target_property(PROGRESSIVE_MUSIC_TEST_SOURCES chart_audio_renderer_tests SOURCES)
+    list(REMOVE_ITEM PROGRESSIVE_MUSIC_TEST_SOURCES tests/chart_audio_renderer_tests.cpp)
+    add_executable(progressive_music_source_tests
+        tests/progressive_music_source_tests.cpp ${PROGRESSIVE_MUSIC_TEST_SOURCES})
+    target_include_directories(progressive_music_source_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(progressive_music_source_tests PRIVATE cxx_std_23)
+    target_link_libraries(progressive_music_source_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(progressive_music_source_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(progressive_music_source_tests PRIVATE shell32 ole32)
+    endif()
+    add_test(NAME progressive_music_source_tests COMMAND progressive_music_source_tests)
+    set_tests_properties(progressive_music_source_tests PROPERTIES TIMEOUT 30)
+
+    add_executable(decoded_asset_cache_tests
+        tests/decoded_asset_cache_tests.cpp ${PROGRESSIVE_MUSIC_TEST_SOURCES})
+    target_include_directories(decoded_asset_cache_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(decoded_asset_cache_tests PRIVATE cxx_std_23)
+    target_link_libraries(decoded_asset_cache_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(decoded_asset_cache_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(decoded_asset_cache_tests PRIVATE shell32 ole32)
+    endif()
+    add_test(NAME decoded_asset_cache_tests COMMAND decoded_asset_cache_tests)
+    set_tests_properties(decoded_asset_cache_tests PROPERTIES TIMEOUT 30)
+
+    add_executable(paged_preview_source_tests
+        tests/paged_preview_source_tests.cpp src/audio/PagedPreviewSource.cpp
+        src/audio/AudioMix.cpp ${PROGRESSIVE_MUSIC_TEST_SOURCES})
+    target_include_directories(paged_preview_source_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(paged_preview_source_tests PRIVATE cxx_std_23)
+    target_link_libraries(paged_preview_source_tests PRIVATE ${COMMON_LIBS} Threads::Threads)
+    if(APPLE)
+        target_link_libraries(paged_preview_source_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(paged_preview_source_tests PRIVATE shell32 ole32)
+    endif()
+    add_test(NAME paged_preview_source_tests COMMAND paged_preview_source_tests)
+    set_tests_properties(paged_preview_source_tests PROPERTIES TIMEOUT 30)
+
+    add_executable(preview_stream_player_tests
+        tests/preview_stream_player_tests.cpp src/audio/PreviewStreamPlayer.cpp
+        src/bms_parser.cpp src/path.cpp)
+    target_include_directories(preview_stream_player_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(preview_stream_player_tests PRIVATE cxx_std_23)
+    target_link_libraries(preview_stream_player_tests PRIVATE ${COMMON_LIBS})
+    if(APPLE)
+        target_link_libraries(preview_stream_player_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(preview_stream_player_tests PRIVATE shell32 ole32)
+    endif()
+    add_test(NAME preview_stream_player_tests COMMAND preview_stream_player_tests)
+    set_tests_properties(preview_stream_player_tests PROPERTIES TIMEOUT 30)
+
+    add_executable(ios_music_stream_timeline_tests tests/ios_music_stream_timeline_tests.cpp)
+    target_include_directories(ios_music_stream_timeline_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(ios_music_stream_timeline_tests PRIVATE cxx_std_23)
+    add_test(NAME ios_music_stream_timeline_tests COMMAND ios_music_stream_timeline_tests)
+
     add_executable(audio_resampling_tests
         tests/audio_resampling_tests.cpp
         src/audio/AudioMix.cpp
@@ -4807,6 +4876,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_include_directories(audio_mix_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(audio_mix_tests PRIVATE cxx_std_23)
+
+    add_executable(paged_pcm_mix_tests
+        tests/paged_pcm_mix_tests.cpp
+        src/audio/AudioMix.cpp)
+    target_include_directories(paged_pcm_mix_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(paged_pcm_mix_tests PRIVATE cxx_std_23)
+    target_link_libraries(paged_pcm_mix_tests PRIVATE Threads::Threads)
+    add_test(NAME paged_pcm_mix_tests COMMAND paged_pcm_mix_tests)
 
     add_executable(audio_wrapper_lifecycle_tests
         tests/audio_wrapper_lifecycle_tests.cpp
@@ -4869,6 +4946,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/Jukebox.cpp
         src/audio/PrepMetronomeSound.cpp
         src/audio/decoder.cpp
+        src/audio/DecodedAssetCache.cpp
+        src/Uuid.cpp
         src/bms_parser.cpp
         src/path.cpp
         src/rendering/common.cpp
@@ -5221,6 +5300,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/DecodedImageCache.cpp
         src/view/ImageDecodeCoordinator.cpp
         src/view/ChartListItemView.cpp
+        src/view/LibraryFolderItemView.cpp
         src/view/ImageFade.cpp
         src/view/ImageFileDecoder.cpp
         src/view/ImageView.cpp
@@ -5251,13 +5331,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     get_target_property(CHART_DETAILS_TEST_SOURCES chart_list_item_view_tests SOURCES)
     list(REMOVE_ITEM CHART_DETAILS_TEST_SOURCES
-        tests/chart_list_item_view_tests.cpp src/view/ChartListItemView.cpp)
+        tests/chart_list_item_view_tests.cpp src/view/ChartListItemView.cpp
+        src/view/LibraryFolderItemView.cpp)
     add_executable(chart_details_view_tests
         tests/chart_details_view_tests.cpp
         src/view/ChartDetailsView.cpp
         src/view/ScrollView.cpp
         ${CHART_DETAILS_TEST_SOURCES}
     )
+    add_executable(artwork_glow_tests tests/artwork_glow_tests.cpp src/rendering/Color.cpp)
+    target_include_directories(artwork_glow_tests PRIVATE src SDL/include bgfx/bgfx/include)
+    target_compile_features(artwork_glow_tests PRIVATE cxx_std_20)
+    add_test(NAME artwork_glow_tests COMMAND artwork_glow_tests)
     target_include_directories(chart_details_view_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(chart_details_view_tests PRIVATE cxx_std_23)
     target_link_libraries(chart_details_view_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
@@ -5508,6 +5593,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(play_options_panel_view_tests
         tests/play_options_panel_view_tests.cpp
+        src/scene/ChartFilterSortPanelView.cpp
         src/rendering/Color.cpp
         src/rendering/common.cpp
         src/rendering/SimpleBatchRenderer.cpp
@@ -6346,6 +6432,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/audio/Jukebox.cpp
         src/audio/PrepMetronomeSound.cpp
         src/audio/decoder.cpp
+        src/audio/DecodedAssetCache.cpp
+        src/Uuid.cpp
         src/bms_parser.cpp
         src/path.cpp
         src/rendering/common.cpp
@@ -8931,7 +9019,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
         asobmashow_register_test(${test_target})
     endforeach()
-    set_tests_properties(text_input_box_tests difficulty_table_importer_tests button_enabled_tests PROPERTIES
+    set_tests_properties(text_input_box_tests difficulty_table_importer_tests button_enabled_tests chart_details_view_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     if (TARGET skin_resource_catalog_tests)
         asobmashow_register_test(skin_resource_catalog_tests)
@@ -9157,8 +9245,27 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             RESOURCE_LOCK metal_device
         )
+        add_executable(text_view_metal_tests
+            tests/text_view_metal_tests.cpp
+            src/rendering/Color.cpp
+            src/rendering/common.cpp
+            src/rendering/UiBatchRenderer.cpp
+            src/rendering/UniformCache.cpp
+            src/view/SdlTtfRuntime.cpp
+            src/view/TextView.cpp
+            src/view/View.cpp
+        )
+        target_include_directories(text_view_metal_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_compile_features(text_view_metal_tests PRIVATE cxx_std_23)
+        target_link_libraries(text_view_metal_tests PRIVATE ${COMMON_LIBS} bgfx yogacore)
+        asobmashow_register_test(text_view_metal_tests)
+        set_tests_properties(text_view_metal_tests PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            RESOURCE_LOCK metal_device
+        )
         add_executable(ui_batch_metal_tests
             tests/ui_batch_metal_tests.cpp
+            src/rendering/Color.cpp
             src/rendering/UiBatchRenderer.cpp
             src/rendering/UniformCache.cpp
         )
@@ -9174,6 +9281,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         # emulator or Android build; keep the host's Metal backend and SDK.
         add_executable(ui_batch_android_upload_metal_tests
             tests/ui_batch_metal_tests.cpp
+            src/rendering/Color.cpp
             src/rendering/UiBatchRenderer.cpp
             src/rendering/UniformCache.cpp
         )
@@ -9341,6 +9449,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             --output ${CMAKE_CURRENT_BINARY_DIR}/replay_result_skin_fixture.cpp
         DEPENDS tests/replay_result_skin_extract.py tests/replay_result_skin_fixture.cpp
                 src/ReplayVideoExporter.cpp src/ResultImageExporter.cpp
+                src/ResultPresentationUtils.h
         VERBATIM
     )
     add_executable(replay_result_skin_tests ${CMAKE_CURRENT_BINARY_DIR}/replay_result_skin_fixture.cpp)
@@ -9478,6 +9587,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/settings_note_editing_tests.py)
     add_test(NAME lane_cover_scene_input_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/lane_cover_scene_input_tests.py)
+    add_test(NAME main_menu_tabs_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/main_menu_tabs_tests.py)
+    add_test(NAME responsive_scene_layout_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/responsive_scene_layout_tests.py)
+    add_test(NAME android_native_music_focus_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/android_native_music_focus_tests.py)
+    add_test(NAME utility_tab_resume_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/utility_tab_resume_tests.py)
+    set_tests_properties(utility_tab_resume_tests PROPERTIES
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}")
     add_test(NAME ui_scale_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ui_scale_tests.py)
     set_tests_properties(ui_scale_tests PROPERTIES

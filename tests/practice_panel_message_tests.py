@@ -21,7 +21,7 @@ class PresetMessageTests(unittest.TestCase):
 #include <utility>
 using SDL_Color = int;
 constexpr int YGDisplayNone = 0, YGDisplayFlex = 1;
-namespace ui_theme { int coral() { return 1; } int cyan() { return 2; } int sdl(int c) { return c; } }
+namespace app_theme { int coral() { return 1; } int cyan() { return 2; } int sdl(int c) { return c; } }
 struct TextView {
   std::string text;
   int height = 0, display = 0;

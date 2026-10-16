@@ -20,6 +20,7 @@ namespace {
 
 std::mutex gControlEventsMutex;
 std::vector<ControlEvent> gControlEvents;
+std::vector<std::string> gPlaybackErrors;
 std::mutex gMetadataMutex;
 MetadataVisibility gMetadataVisibility;
 std::optional<TrackMetadata> gLastRawMetadata;
@@ -266,6 +267,42 @@ bool Load(const std::filesystem::path &audioPath,
   return loaded;
 }
 
+bool LoadStream(std::shared_ptr<music_stream::Source> source,
+                const TrackMetadata &metadata, std::string &errorMessage) {
+  errorMessage.clear();
+  if (!source) {
+    errorMessage = "Music stream is missing.";
+    return false;
+  }
+  const auto normalized = normalizedMetadata(metadata, {});
+  TrackMetadata visible;
+  {
+    std::lock_guard lock(gMetadataMutex);
+    visible = applyMetadataVisibility(normalized, gMetadataVisibility);
+  }
+  bool loaded = false;
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  IOSNativeMusicMetadata platformMetadata{.title = visible.title,
+      .artist = visible.artist, .album = visible.album,
+      .artworkPath = fspath_to_utf8(visible.artworkPath),
+      .durationMicros = visible.durationMicros};
+  loaded = LoadIOSNativeMusicStream(std::move(source), platformMetadata, errorMessage);
+#elif TARGET_OS_ANDROID
+  AndroidNativeMusicMetadata platformMetadata{.title = visible.title,
+      .artist = visible.artist, .album = visible.album,
+      .artworkPath = fspath_to_utf8(visible.artworkPath),
+      .durationMicros = visible.durationMicros};
+  loaded = LoadAndroidNativeMusicStream(std::move(source), platformMetadata, errorMessage);
+#else
+  errorMessage = "Native music playback is not supported on this platform.";
+#endif
+  if (loaded) {
+    std::lock_guard lock(gMetadataMutex);
+    gLastRawMetadata = normalized;
+  }
+  return loaded;
+}
+
 bool Play(std::string &errorMessage) {
   errorMessage.clear();
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
@@ -367,6 +404,18 @@ std::vector<ControlEvent> DrainControlEvents() {
   std::lock_guard<std::mutex> lock(gControlEventsMutex);
   events.swap(gControlEvents);
   return events;
+}
+
+void NotifyPlaybackError(std::string message) {
+  std::lock_guard lock(gControlEventsMutex);
+  if (gPlaybackErrors.size() < 32) gPlaybackErrors.push_back(std::move(message));
+}
+
+std::vector<std::string> DrainPlaybackErrors() {
+  std::vector<std::string> errors;
+  std::lock_guard lock(gControlEventsMutex);
+  errors.swap(gPlaybackErrors);
+  return errors;
 }
 
 } // namespace native_music_player

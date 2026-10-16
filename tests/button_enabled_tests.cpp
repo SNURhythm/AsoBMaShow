@@ -191,9 +191,16 @@ void testDisabledButtonDimsWholeContentAndRestoresFollowingViews() {
 
   REQUIRE(backend.submissions.size() == 5);
   const auto &decoration = backend.submissions[0].colors;
-  REQUIRE(decoration.size() == 8);
+  REQUIRE(decoration.size() == 20);
+  // Each border quad stays outside the interior so translucent fills reveal
+  // the scene instead of compositing over an opaque border underlay.
+  for (size_t index = 0; index < 16; index += 4) {
+    const auto &first = decoration[index];
+    const auto &last = decoration[index + 2];
+    REQUIRE(last.x <= 2 || first.x >= 98 || last.y <= 2 || first.y >= 48);
+  }
   REQUIRE(decoration[0].abgr == 0x725a5046U);
-  REQUIRE(decoration[4].abgr == 0x5a3c3228U);
+  REQUIRE(decoration[16].abgr == 0x5a3c3228U);
   REQUIRE(backend.submissions[1].colors[0].abgr == 0x561e140aU);
   const auto &disabledTexture = backend.submissions[2];
   REQUIRE(disabledTexture.textured);
@@ -214,9 +221,21 @@ void testDisabledButtonDimsWholeContentAndRestoresFollowingViews() {
   }
   REQUIRE(backend.submissions.size() == 3);
   REQUIRE(backend.submissions[0].colors[0].abgr == 0xff5a5046U);
-  REQUIRE(backend.submissions[0].colors[4].abgr == 0xc83c3228U);
+  REQUIRE(backend.submissions[0].colors[16].abgr == 0xc83c3228U);
   REQUIRE(backend.submissions[1].colors[0].abgr == 0xc01e140aU);
   REQUIRE(backend.submissions[2].state.uniformCount == 0);
+
+  backend.submissions.clear();
+  button.setCornerRadius(8);
+  {
+    RenderContext::UiBatchScope batch(context);
+    button.render(context);
+  }
+  const auto &rounded = backend.submissions[0].colors;
+  REQUIRE(rounded.size() == 42);
+  REQUIRE(rounded[0].x == 50 && rounded[0].y == 25);
+  REQUIRE(rounded[0].abgr == 0xff5a5046U);
+  REQUIRE(rounded[21].abgr == 0xc83c3228U);
 }
 
 void testDisabledButtonContentPixels() {
@@ -662,6 +681,37 @@ void testCancelledTouchDoesNotClick() {
   REQUIRE(clicks == 1);
 }
 
+void testRecyclerSkipsSectionHeadings() {
+  RecyclerView<int> list([](int a, int b) { return a == b; });
+  list.setSize(200, 200);
+  list.itemHeight = 40;
+  list.onCreateView = [](const int &) { return new View(); };
+  list.onBind = [](View *, const int &, int, bool) {};
+  list.setItems(std::vector<int>{1, 0, 2});
+  list.isSelectable = [](const int &item, int) { return item != 0; };
+  int selected = -1;
+  list.onSelected = [&](const int &, int index) { selected = index; };
+  list.selectedIndex = 0;
+  SDL_Event key{};
+  key.type = SDL_EVENT_KEY_DOWN;
+  key.key.key = SDLK_DOWN;
+  list.handleEvents(key);
+  REQUIRE(selected == 2 && list.selectedIndex == 2);
+  key.key.key = SDLK_UP;
+  list.handleEvents(key);
+  REQUIRE(selected == 0 && list.selectedIndex == 0);
+  list.handleEvents(key);
+  REQUIRE(selected == 2 && list.selectedIndex == 2);
+  auto down = mouseEvent(SDL_EVENT_MOUSE_BUTTON_DOWN, 30, 60);
+  auto up = mouseEvent(SDL_EVENT_MOUSE_BUTTON_UP, 30, 60);
+  list.handleEvents(down);
+  list.handleEvents(up);
+  REQUIRE(list.selectedIndex == 2);
+  list.isSelectable = [](const int &, int) { return false; };
+  list.handleEvents(key);
+  REQUIRE(list.selectedIndex == -1);
+}
+
 int main(int argc, char **argv) {
   if (argc == 2 && std::string(argv[1]) == "--navigation-only") {
     testNavigationMayDestroyDispatchingViews();
@@ -671,6 +721,7 @@ int main(int argc, char **argv) {
   const bool metalOnly = argc == 2 && std::string(argv[1]) == "--metal-only";
   if (!renderOnly && !metalOnly) {
     testNavigationMayDestroyDispatchingViews();
+    testRecyclerSkipsSectionHeadings();
     testCancelledTouchDoesNotClick();
     testDisabledSiblingDoesNotLeaveCoveredButtonGesturesStuck();
     testDisabledSiblingEndsCoveredScrollGestures();

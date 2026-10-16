@@ -11,7 +11,7 @@ public:
   KeybombPreviewView(Judgement judgement, std::function<keybomb::Style()> style)
       : judgement(judgement), style(std::move(style)) {
     setBackgroundColor(Color(18, 22, 30));
-    setCornerRadius(8);
+    setCornerRadius(0);
   }
 
   void renderAt(RenderContext &context, long long now) {

@@ -213,6 +213,19 @@ struct FindBmsDependencies {
   }
 };
 struct MainMenuScene {
+  enum class Tab { Play, Course, Music, Ir };
+  Tab activeTab_ = Tab::Play;
+  struct Utility {
+    int pauses = 0, resumes = 0, profileChanges = 0;
+    void onPause() { ++pauses; }
+    void onResume() { ++resumes; }
+    void onProfileWillChange() { ++profileChanges; }
+  };
+  Utility *utility = nullptr, *irTab_ = nullptr;
+  Utility *activeUtilityTab() { return utility; }
+  bool selectorTabActive() const { return activeTab_ == Tab::Play || activeTab_ == Tab::Course; }
+  int reselections = 0;
+
   void onApplicationBackgroundChanged(bool) {}
   SceneManager manager;
   struct {
@@ -284,7 +297,7 @@ struct MainMenuScene {
   auto refreshScoreClearRankViews() { return std::optional<int>{}; }
   void refreshLongNoteModeClearRankViews() {}
   void refreshLibraryIfNeeded() {}
-  void reselectCurrentChart() {}
+  void reselectCurrentChart() { ++reselections; }
   Callbacks callbacks() { Callbacks callbacks; OWNER_CALLBACKS return callbacks; }
   int selectedChartRandomInfoForPath(const std::filesystem::path &) const { return 0; }
   bool finishReplayLoadFailure(const char *, std::string message, const char *fallback) {
@@ -304,6 +317,8 @@ struct MainMenuScene {
   void applyReplayLoadCompletion();
   void stopReplayLoadWorker();
   void stopReplayAndPreviewWork();
+  bool pendingTab_ = false;
+  void cancelPendingTabSwitch() { pendingTab_ = false; }
   bool beginReplayExport(const i18n::Text &, const i18n::Text &, const i18n::Text &);
   void applyReplayExportResult();
   void onPause();
@@ -503,6 +518,17 @@ void testDestructionStopsFindBmsBeforeStatusDependencies() {
   assert(lifetime.workerFinished && !lifetime.dependenciesAlive);
 }
 int main() {
+  {
+    MainMenuScene menu;
+    MainMenuScene::Utility utility;
+    menu.activeTab_ = MainMenuScene::Tab::Music;
+    menu.utility = menu.irTab_ = &utility;
+    menu.onPause();
+    menu.onResume();
+    assert(utility.pauses == 1 && utility.resumes == 1 && utility.profileChanges == 0);
+    assert(menu.reselections == 0);
+  }
+
   testExportStartupFailureRestoresRecordsAndPreview();
   testAutoPlay();
   testRecall();

@@ -19,7 +19,7 @@
 #include "skin/ResultSkinConfiguration.h"
 #include "targets.h"
 #include "view/TextView.h"
-#include "view/UiTheme.h"
+#include "view/AppTheme.h"
 #include "view/View.h"
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
 #include "iOSNatives.hpp"
@@ -321,7 +321,7 @@ void drawResultGaugeGraphPrimitive(
     rendering::SimpleBatchRenderer &batch,
     const result_gauge_history::ResultGaugeGraph &graph, float x, float y,
     float w, float h) {
-  batch.addRect(x, y, w, h, ui_theme::resultPanelSubtle().toABGR());
+  batch.addRect(x, y, w, h, app_theme::resultPanelSubtle().toABGR());
 
   const float padding = 8.0f;
   const float graphX = x + padding;
@@ -335,7 +335,7 @@ void drawResultGaugeGraphPrimitive(
     return graphY + point.normalizedY * graphH;
   };
 
-  const uint32_t guideColor = ui_theme::hairlineSubtle().toABGR();
+  const uint32_t guideColor = app_theme::hairlineSubtle().toABGR();
   const float guide80Y = graphY + graph.geometry.guide80Y * graphH;
   const float guide30Y = graphY + graph.geometry.guide30Y * graphH;
   batch.addLine(graphX, guide80Y, graphX + graphW, guide80Y, 1.0F,
@@ -401,7 +401,7 @@ void attachPresentationGaugeGraph(
   if (!graph.label.has_value()) {
     return;
   }
-  auto *gaugeLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
+  auto *gaugeLabel = new TextView(app_theme::font, 15);
   gaugeLabel->setText(graph.label->text);
   gaugeLabel->setAlign(TextView::CENTER);
   gaugeLabel->setVAlign(TextView::MIDDLE);
@@ -410,11 +410,11 @@ void attachPresentationGaugeGraph(
   gaugeLabel->setPosition(Edge::Top, 12);
   gaugeLabel->setWidth(142);
   gaugeLabel->setHeight(30);
-  gaugeLabel->setCornerRadius(6);
+  gaugeLabel->setCornerRadius(0);
   gaugeLabel->setZIndex(2);
   gaugeLabel->setName("resultGaugeLabel");
   gaugeLabel->setBackgroundColor(graph.label->background);
-  gaugeLabel->setColor(ui_theme::sdl(ui_theme::textOn(graph.label->background)));
+  gaugeLabel->setColor(app_theme::sdl(app_theme::textOn(graph.label->background)));
   graphPlaceHolder->addView(gaugeLabel);
 }
 
@@ -468,9 +468,17 @@ bms_parser::ChartMeta courseResultMetaForReplay(
   const auto chartCount = replay.entryFacts.empty()
                               ? replay.stages.size()
                               : replay.entryFacts.size();
+  std::vector<int> keyModes;
+  keyModes.reserve(charts.size());
+  for (const auto &chart : charts) {
+    keyModes.push_back(chart != nullptr ? chart->Meta.KeyMode : 0);
+  }
+  if (replay.totalCharts > static_cast<int>(keyModes.size())) {
+    keyModes.clear();
+  }
   auto meta = result_presentation::courseResultMeta(
       replay.courseName, replay.courseGroupName, chartCount,
-      totalNotes, playLength);
+      totalNotes, playLength, keyModes);
   if (!charts.empty() && charts.back() != nullptr) {
     meta.Bpm = charts.back()->Meta.Bpm;
     meta.MinBpm = charts.back()->Meta.MinBpm;
@@ -656,10 +664,10 @@ ResultImageExportResult renderResultImageWithSkinData(
     const auto makeGraphCell = [&]() {
       auto *graph = new View();
       graph->setName("graph");
-      graph->setBackgroundColor(ui_theme::resultPanelSubtle());
-      graph->setCornerRadius(ui_theme::panelRadius());
-      graph->setShadow(ui_theme::cardShadow(), ui_theme::kCardShadow);
-      graph->setBorderColor(ui_theme::hairlineSubtle());
+      graph->setBackgroundColor(app_theme::resultPanelSubtle());
+      graph->setCornerRadius(app_theme::panelRadius());
+      graph->setShadow(app_theme::cardShadow(), app_theme::kCardShadow);
+      graph->setBorderColor(app_theme::hairlineSubtle());
       graph->setBorderWidth(1);
       return prepareCell(graph);
     };
@@ -713,7 +721,7 @@ ResultImageExportResult renderResultImageWithSkinData(
   backdropBatch.begin();
   backdropBatch.addRect(0.0f, 0.0f, static_cast<float>(rendering::window_width),
                         static_cast<float>(rendering::window_height),
-                        ui_theme::backdrop().toABGR());
+                        app_theme::withAlpha(app_theme::backdrop(), 255).toABGR());
   backdropBatch.end();
   bool rendered = true;
   {

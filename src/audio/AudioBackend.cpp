@@ -211,6 +211,10 @@ public:
     contextConfig.coreaudio.sessionCategory = ma_ios_session_category_ambient;
     contextConfig.coreaudio.sessionCategoryOptions =
         ma_ios_session_category_option_mix_with_others;
+    // Preview and gameplay retain independent devices but share the app's
+    // AVAudioSession. Retiring either device must not deactivate the session
+    // beneath the other; app/native playback transitions own session policy.
+    contextConfig.coreaudio.noAudioSessionDeactivate = MA_TRUE;
     const ma_result result =
         ma_device_init_ex(nullptr, 0, &contextConfig, &config, &device_);
 #elif TARGET_OS_ANDROID

@@ -1,3 +1,6 @@
+#include "../rendering/ResponsiveUi.h"
+#include "../rendering/UiSafeArea.h"
+#include "../view/ActionButtonContent.h"
 #include "../i18n/Localization.h"
 #include "ReplayRecordsModal.h"
 
@@ -9,7 +12,7 @@
 #include "../view/ResultRecordListView.h"
 #include "../view/ScrollView.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 #include "../view/View.h"
 #include "RemoteResultRecallController.h"
 #include "../ReplayVideoExporter.h"
@@ -23,7 +26,7 @@
 
 namespace {
 
-constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kFontPath = app_theme::font;
 constexpr uint32_t kIconXmark = 0xf00d;
 constexpr uint32_t kIconFilter = 0xf0b0;
 constexpr uint32_t kIconShare = 0xf1e0;
@@ -48,7 +51,7 @@ constexpr ClearMarkFilterDefinition kDifficultyClearMarkFilters[] = {
 
 TextView *makeText(i18n::Text text, int size,
                    View::ThemeColorProvider color) {
-  auto *view = new TextView(kFontPath, size);
+  auto *view = new TextView(size >= 26 ? app_theme::boldFont : kFontPath, size);
   view->setLocalizedText(text);
   view->setThemedColor(std::move(color));
   view->setVAlign(TextView::MIDDLE);
@@ -65,41 +68,43 @@ void styleThemedActionButton(Button *button, TextView *text, bool enabled,
     return;
   }
   button->setEnabled(enabled);
-  button->setCornerRadius(ui_theme::controlRadius());
+  button->setCornerRadius(app_theme::controlRadius());
   if (enabled) {
     button->setThemedBackgroundColors(normal, hover, pressed);
     button->setThemedBorderColors(
-        [border] { return ui_theme::withAlpha(border(), 150); },
-        [border] { return ui_theme::withAlpha(border(), 190); },
-        [border] { return ui_theme::withAlpha(border(), 220); });
-    text->setThemedColor([normal] { return ui_theme::textOn(normal()); });
+        [border] { return app_theme::withAlpha(border(), 150); },
+        [border] { return app_theme::withAlpha(border(), 190); },
+        [border] { return app_theme::withAlpha(border(), 220); });
+    text->setThemedColor([normal] { return app_theme::textOn(normal()); });
+    action_button::setIconColor(button, [normal] { return app_theme::textOn(normal()); });
   } else {
     button->setThemedBackgroundColors(
-        ui_theme::panelSubtle, ui_theme::panelSubtle, ui_theme::panelSubtle);
-    button->setThemedBorderColors(ui_theme::hairlineSubtle,
-                                  ui_theme::hairlineSubtle,
-                                  ui_theme::hairlineSubtle);
-    text->setThemedColor(ui_theme::textMuted);
+        app_theme::panelSubtle, app_theme::panelSubtle, app_theme::panelSubtle);
+    button->setThemedBorderColors(app_theme::hairlineSubtle,
+                                  app_theme::hairlineSubtle,
+                                  app_theme::hairlineSubtle);
+    text->setThemedColor(app_theme::textMuted);
+    action_button::setIconColor(button, app_theme::textMuted);
   }
 }
 
 void styleOptionButton(Button *button, TextView *text, bool selected) {
   if (selected) {
-    styleThemedActionButton(button, text, true, ui_theme::primaryAction,
-                            ui_theme::primaryActionHover,
-                            ui_theme::primaryActionPressed,
-                            ui_theme::accentBorderStrong);
+    styleThemedActionButton(button, text, true, app_theme::primaryAction,
+                            app_theme::primaryActionHover,
+                            app_theme::primaryActionPressed,
+                            app_theme::accentBorderStrong);
   } else {
-    styleThemedActionButton(button, text, true, ui_theme::control,
-                            ui_theme::controlHover, ui_theme::controlPressed,
-                            ui_theme::hairlineStrong);
+    styleThemedActionButton(button, text, true, app_theme::control,
+                            app_theme::controlHover, app_theme::controlPressed,
+                            app_theme::hairlineStrong);
   }
 }
 
 TextView *makeModalLabel(const i18n::Text &text) {
   auto *label = new TextView(kFontPath, 20);
   label->setLocalizedText(text);
-  label->setThemedColor(ui_theme::textSecondary);
+  label->setThemedColor(app_theme::textSecondary);
   label->setHeight(28);
   return label;
 }
@@ -114,15 +119,15 @@ View *makeModalOptionRow(float height = 58.0f) {
 }
 
 Button *makeModalButton(const i18n::Text &label, int fontSize,
-                        TextView **textOut = nullptr) {
-  auto *button = new Button(0, 0, 160, 58);
+                        TextView **textOut = nullptr, uint32_t glyph = 0) {
+  auto *button = new Button(0, 0, 160, glyph ? 72 : 58);
   auto *text = new TextView(kFontPath, fontSize);
   text->setLocalizedText(label);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
-  button->setContentView(text);
+  button->setContentView(glyph ? action_button::makeContent(text, glyph) : text);
   button->setStyledBorderWidth(1);
-  button->setCornerRadius(ui_theme::controlRadius());
+  button->setCornerRadius(app_theme::controlRadius());
   if (textOut != nullptr) {
     *textOut = text;
   }
@@ -139,7 +144,7 @@ Button *makeModalIconButton(uint32_t iconCodepoint, int fontSize,
   text->setOverflow(TextView::TextOverflow::Hidden);
   button->setContentView(text);
   button->setStyledBorderWidth(1);
-  button->setCornerRadius(ui_theme::controlRadius());
+  button->setCornerRadius(app_theme::controlRadius());
   if (textOut != nullptr) {
     *textOut = text;
   }
@@ -147,9 +152,7 @@ Button *makeModalIconButton(uint32_t iconCodepoint, int fontSize,
 }
 
 Color modalPanelBorder() {
-  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
-             ? ui_theme::hairlineStrong()
-             : Color(86, 118, 153, 210);
+  return app_theme::hairlineStrong();
 }
 
 } // namespace
@@ -163,12 +166,16 @@ ReplayRecordsModal::Create(View *parent,
   auto modal = std::unique_ptr<ReplayRecordsModal>(new ReplayRecordsModal());
   modal->callbacks_ = std::move(callbacks);
 
-  constexpr float kModalPanelWidth = 760.0f;
-  constexpr float kModalPanelHeight = 660.0f;
+  const auto safe = rendering::uiSafeAreaInsets();
+  const bool phone = rendering::compactMenuCanvasActive;
+  const float kModalPanelWidth = phone ? std::min(760.0f,
+      static_cast<float>(rendering::window_width - safe.left - safe.right - 24)) : 760.0f;
+  const float kModalPanelHeight = phone ? std::min(660.0f,
+      static_cast<float>(rendering::window_height - safe.top - safe.bottom - 24)) : 660.0f;
   constexpr float kModalPanelPadding = 22.0f;
-  constexpr float kModalContentWidth =
+  const float kModalContentWidth =
       kModalPanelWidth - kModalPanelPadding * 2.0f;
-  constexpr float kModalContentHeight = 418.0f;
+  const float kModalContentHeight = phone ? std::max(80.0f, kModalPanelHeight - 330) : 418.0f;
 
   auto *root = new BlockingOverlayView(0, 0, rendering::window_width,
                                        rendering::window_height);
@@ -180,18 +187,19 @@ ReplayRecordsModal::Create(View *parent,
   root->setFlexDirection(FlexDirection::Column);
   root->setAlignItems(YGAlignCenter);
   root->setJustifyContent(YGJustifyCenter);
-  root->setThemedBackgroundColor(ui_theme::scrim);
+  root->setThemedBackgroundColor(app_theme::scrim);
 
   auto *panel = new View();
+  panel->setName("recordsPanel");
   panel->setWidth(kModalPanelWidth)
       ->setHeight(kModalPanelHeight)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
       ->setPadding(Edge::All, kModalPanelPadding)
-      ->setThemedBackgroundColor(ui_theme::panelStrong)
-      ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+      ->setThemedBackgroundColor(app_theme::panelStrong)
+      ->setCornerRadius(app_theme::panelRadius())
+      ->setThemedShadow(app_theme::shadow, app_theme::kModalShadow)
       ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
@@ -200,9 +208,9 @@ ReplayRecordsModal::Create(View *parent,
       ->setAlignItems(YGAlignCenter)
       ->setGap(10)
       ->setHeight(54);
-  auto *title = new TextView(kFontPath, 30);
+  auto *title = new TextView(app_theme::boldFont, 42);
   title->setLocalizedText(i18n::message("records.records.label"));
-  title->setThemedColor(ui_theme::textPrimary);
+  title->setThemedColor(app_theme::textPrimary);
   title->setHeight(54);
   title->setFlexGrow(1.0f);
   title->setFlexBasis(0.0f);
@@ -228,13 +236,19 @@ ReplayRecordsModal::Create(View *parent,
   closeButton->setWidth(54);
   closeButton->setHeight(54);
   closeButton->setFlexShrink(0.0f);
-  header->addView(shareButton);
-  header->addView(deleteButton);
+
   header->addView(filterButton);
   header->addView(closeButton);
   panel->addView(header);
+  auto *headerRule = new View();
+  headerRule->setPositionType(YGPositionTypeAbsolute);
+  headerRule->setPosition(Edge::Top, 86);
+  headerRule->setPosition(Edge::Left, kModalPanelPadding);
+  headerRule->setPosition(Edge::Right, kModalPanelPadding);
+  headerRule->setHeight(1)->setThemedBackgroundColor(app_theme::hairlineStrong);
+  panel->addView(headerRule);
 
-  auto *status = makeText({}, 18, ui_theme::textSecondary);
+  auto *status = makeText({}, 18, app_theme::textSecondary);
   status->setHeight(30);
   status->setOverflow(TextView::TextOverflow::Hidden);
   status->setVisible(false);
@@ -255,6 +269,15 @@ ReplayRecordsModal::Create(View *parent,
       ->setWidth(kModalContentWidth)
       ->setHeight(kModalContentHeight)
       ->setGap(10);
+  auto *recordTools = new View();
+  recordTools->setFlexDirection(FlexDirection::Row);
+  recordTools->setHeight(54)->setFlexShrink(0)->setGap(8);
+  auto *toolsSpace = new View();
+  toolsSpace->setFlex(1);
+  recordTools->addView(toolsSpace);
+  recordTools->addView(shareButton);
+  recordTools->addView(deleteButton);
+  listContent->addView(recordTools);
   auto *list = new ResultRecordListView();
   list->setIrUploadAvailable(static_cast<bool>(modal->callbacks_.irUpload));
   list->onSelectionChanged = [raw = modal.get()](int idx) {
@@ -278,8 +301,8 @@ ReplayRecordsModal::Create(View *parent,
       };
   list->setFlex(1);
   list->clearBackgroundColor();
-  list->setThemedBorderColor(ui_theme::hairline);
-  list->setBorderWidth(1);
+  list->setThemedBorderColor(app_theme::hairline);
+  list->setBorderWidth(0);
   listContent->addView(list);
   contentFrame->addView(listContent);
 
@@ -294,7 +317,7 @@ ReplayRecordsModal::Create(View *parent,
   filterSortContent->setVisible(false);
 
   constexpr float kFilterScrollRightPadding = 12.0f;
-  constexpr float kFilterContentWidth =
+  const float kFilterContentWidth =
       kModalContentWidth - kFilterScrollRightPadding;
   auto *filterScroll = new ScrollView(0, 0,
                                       static_cast<int>(kModalContentWidth),
@@ -473,6 +496,19 @@ ReplayRecordsModal::Create(View *parent,
   filterSortContent->addView(filterScroll);
   contentFrame->addView(filterSortContent);
 
+  const auto makeOptionsScrollable = [kModalContentWidth, kModalContentHeight](View *page) -> View * {
+    page->setPositionType(YGPositionTypeRelative);
+    page->setHeight(YGUndefined)->setWidth(kModalContentWidth);
+    page->setJustifyContent(YGJustifyFlexStart);
+    page->setVisible(true);
+    auto *scroll = new ScrollView(0, 0, static_cast<int>(kModalContentWidth),
+                                  static_cast<int>(kModalContentHeight));
+    scroll->setPositionType(YGPositionTypeAbsolute);
+    scroll->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
+    scroll->setContentView(page);
+    scroll->setVisible(false);
+    return scroll;
+  };
   auto *watchOptionsContent = new View();
   watchOptionsContent->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
@@ -583,6 +619,7 @@ ReplayRecordsModal::Create(View *parent,
   addKeysoundRow(watchOptionsContent, &modal->keysoundAutoButton_,
                 &modal->keysoundAutoButtonText_, &modal->keysoundInputButton_,
                 &modal->keysoundInputButtonText_);
+  watchOptionsContent = makeOptionsScrollable(watchOptionsContent);
   contentFrame->addView(watchOptionsContent);
 
   auto *exportOptionsContent = new View();
@@ -757,6 +794,7 @@ ReplayRecordsModal::Create(View *parent,
                 &modal->exportKeysoundAutoButtonText_,
                 &modal->exportKeysoundInputButton_,
                 &modal->exportKeysoundInputButtonText_);
+  exportOptionsContent = makeOptionsScrollable(exportOptionsContent);
   contentFrame->addView(exportOptionsContent);
 
   auto *exportProgressContent = new View();
@@ -774,27 +812,27 @@ ReplayRecordsModal::Create(View *parent,
   auto *exportProgressMessageText = new TextView(kFontPath, 24);
   exportProgressMessageText->setLocalizedText(i18n::message("records.preparing_export.label"));
   exportProgressMessageText->setColor(
-      ui_theme::sdl(ui_theme::textPrimary()));
+      app_theme::sdl(app_theme::textPrimary()));
   exportProgressMessageText->setHeight(38);
   exportProgressContent->addView(exportProgressMessageText);
 
   auto *exportProgressTrack = new View();
   exportProgressTrack->setWidth(kModalContentWidth)
       ->setHeight(24)
-      ->setThemedBackgroundColor(ui_theme::progressTrack)
-      ->setCornerRadius(ui_theme::controlRadius())
-      ->setThemedBorderColor(ui_theme::hairline)
+      ->setThemedBackgroundColor(app_theme::progressTrack)
+      ->setCornerRadius(app_theme::controlRadius())
+      ->setThemedBorderColor(app_theme::hairline)
       ->setBorderWidth(1);
   auto *exportProgressFill = new View();
   exportProgressFill->setWidth(0)->setHeight(20)->setBackgroundColor(
-      ui_theme::progressFill());
+      app_theme::progressFill());
   exportProgressTrack->addView(exportProgressFill);
   exportProgressContent->addView(exportProgressTrack);
 
   auto *exportProgressPercentText = new TextView(kFontPath, 22);
   exportProgressPercentText->setText("0%");
   exportProgressPercentText->setColor(
-      ui_theme::sdl(ui_theme::textSecondary()));
+      app_theme::sdl(app_theme::textSecondary()));
   exportProgressPercentText->setHeight(34);
   exportProgressPercentText->setAlign(TextView::RIGHT);
   exportProgressContent->addView(exportProgressPercentText);
@@ -814,7 +852,7 @@ ReplayRecordsModal::Create(View *parent,
 
   auto *deleteQuestion = new TextView(kFontPath, 28);
   deleteQuestion->setLocalizedText(i18n::message("records.delete_brd_replay_file.label"));
-  deleteQuestion->setThemedColor(ui_theme::textPrimary);
+  deleteQuestion->setThemedColor(app_theme::textPrimary);
   deleteQuestion->setAlign(TextView::CENTER);
   deleteQuestion->setHeight(44);
   deleteConfirmationContent->addView(deleteQuestion);
@@ -822,7 +860,7 @@ ReplayRecordsModal::Create(View *parent,
   auto *deleteDetail = new TextView(kFontPath, 20);
   deleteDetail->setLocalizedText(
       i18n::message("records.replay.delete_warning"));
-  deleteDetail->setThemedColor(ui_theme::textSecondary);
+  deleteDetail->setThemedColor(app_theme::textSecondary);
   deleteDetail->setAlign(TextView::CENTER);
   deleteDetail->setWrap(true);
   deleteDetail->setHeight(72);
@@ -857,15 +895,16 @@ ReplayRecordsModal::Create(View *parent,
   });
   styleThemedActionButton(
       deleteCancelButton, modal->deleteCancelButtonText_, true,
-      ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed,
-      ui_theme::hairlineStrong);
+      app_theme::control, app_theme::controlHover, app_theme::controlPressed,
+      app_theme::hairlineStrong);
   styleThemedActionButton(
       deleteConfirmButton, modal->deleteConfirmButtonText_, true,
-      ui_theme::warningAction, ui_theme::warningActionHover,
-      ui_theme::warningActionPressed, ui_theme::amber);
+      app_theme::warningAction, app_theme::warningActionHover,
+      app_theme::warningActionPressed, app_theme::amber);
   deleteConfirmationActions->addView(deleteCancelButton);
   deleteConfirmationActions->addView(deleteConfirmButton);
   deleteConfirmationContent->addView(deleteConfirmationActions);
+  deleteConfirmationContent = makeOptionsScrollable(deleteConfirmationContent);
   contentFrame->addView(deleteConfirmationContent);
 
   auto *footer = new View();
@@ -873,15 +912,18 @@ ReplayRecordsModal::Create(View *parent,
   footer->setJustifyContent(YGJustifyFlexEnd);
   footer->setAlignItems(YGAlignStretch);
   footer->setGap(8);
-  footer->setHeight(58);
+  footer->setName("recordsFooter");
+  footer->setHeight(phone ? 152 : 72);
+  footer->setFlexWrap(phone ? YGWrapWrap : YGWrapNoWrap);
+  footer->setFlexShrink(0);
 
-  auto *watchButton = makeModalButton(i18n::message("records.watch.label"), 20, &modal->watchButtonText_);
+  auto *watchButton = makeModalButton(i18n::message("records.watch.label"), 20, &modal->watchButtonText_, 0xf04b);
   auto *gbattleButton =
-      makeModalButton("G-BATTLE", 18, &modal->gbattleButtonText_);
+      makeModalButton("G-BATTLE", 18, &modal->gbattleButtonText_, 0xf11b);
   auto *resultButton =
-      makeModalButton(i18n::message("records.view_result.label"), 18, &modal->resultButtonText_);
+      makeModalButton(i18n::message("records.view_result.label"), 18, &modal->resultButtonText_, 0xf201);
   auto *exportButton =
-      makeModalButton(i18n::message("records.export_video.label"), 18, &modal->exportButtonText_);
+      makeModalButton(i18n::message("records.export_video.label"), 18, &modal->exportButtonText_, 0xf03d);
 
   closeButton->setOnClickListener([raw = modal.get()]() {
     if (raw->operationInProgress()) {
@@ -1118,7 +1160,61 @@ void ReplayRecordsModal::hide() {
 }
 
 void ReplayRecordsModal::resize(int width, int height) {
-  if (root_ != nullptr) root_->setSize(width, height);
+  if (root_ == nullptr) return;
+  root_->setSize(width, height);
+  const bool compact = rendering::compactMenuCanvasActive;
+  View::LayoutBatchScope layoutBatch;
+  const auto safe = rendering::uiSafeAreaInsets();
+  root_->setPadding(Edge::Top, safe.top)->setPadding(Edge::Bottom, safe.bottom);
+  root_->setPadding(Edge::Left, safe.left)->setPadding(Edge::Right, safe.right);
+  auto *panel = root_->findViewByName("recordsPanel");
+  const float panelWidth = std::max(200.0f, std::min(760.0f, float(width - safe.left - safe.right - 24)));
+  const float panelHeight = std::max(200.0f, std::min(660.0f, float(height - safe.top - safe.bottom - 24)));
+  const float contentWidth = panelWidth - 44;
+  const float contentHeight = std::max(80.0f, panelHeight - (compact ? 330 : 242));
+  auto *footer = root_->findViewByName("recordsFooter");
+  footer->setHeight(compact ? 152 : 72);
+  footer->setFlexWrap(compact ? YGWrapWrap : YGWrapNoWrap);
+  panel->setWidth(panelWidth)->setHeight(panelHeight);
+  contentFrame_->setWidth(contentWidth)->setHeight(contentHeight);
+  for (auto *page : {listContent_, filterSortContent_, watchOptionsContent_,
+                     exportOptionsContent_, exportProgressContent_, deleteConfirmationContent_}) {
+    if (!page) continue;
+    page->setWidth(contentWidth)->setHeight(contentHeight);
+    if (auto *scroll = dynamic_cast<ScrollView *>(page)) {
+      auto *options = scroll->getContentView();
+      options->setWidth(contentWidth)->setMinHeight(compact ? 0 : contentHeight);
+      options->setJustifyContent(compact ? YGJustifyFlexStart : YGJustifyCenter);
+      const int optionHeight = compact ? rendering::compactTouchTarget : 58;
+      for (auto *row : options->getChildren()) {
+        if (row->getChildren().empty()) continue;
+        row->setMinHeight(optionHeight);
+        for (auto *child : row->getChildren())
+          if (dynamic_cast<Button *>(child)) child->setHeight(optionHeight);
+      }
+      scroll->refreshContentLayout();
+    }
+    for (auto *child : page->getChildren()) {
+      if (auto *scroll = dynamic_cast<ScrollView *>(child)) {
+        scroll->setWidth(contentWidth)->setHeight(contentHeight);
+        scroll->getContentView()->setWidth(contentWidth - 12);
+        scroll->refreshContentLayout();
+      }
+    }
+  }
+  const bool watchOptions = watchOptionsContent_ && watchOptionsContent_->getVisible();
+  const bool exportOptions = exportOptionsContent_ && exportOptionsContent_->getVisible();
+  const std::array<float, 4> widths{watchOptions ? 160.0f : 124.0f, 144.0f,
+                                  142.0f, exportOptions ? 160.0f : 142.0f};
+  size_t index = 0;
+  for (auto *button : {watchButton_, gbattleButton_, resultButton_, exportButton_}) {
+    if (button) {
+      button->setWidth(button->getVisible() ? (compact ? (contentWidth - 8) / 2 : widths[index]) : 0);
+      button->setDisplay(button->getVisible() ? YGDisplayFlex : YGDisplayNone);
+    }
+    ++index;
+  }
+  if (exportProgressTrack_) exportProgressTrack_->setWidth(contentWidth);
 }
 
 bool ReplayRecordsModal::handleEvents(SDL_Event &event) {
@@ -1203,8 +1299,8 @@ void ReplayRecordsModal::showExportProgress(const i18n::Text &title,
   if (root_ == nullptr) {
     return;
   }
-  if (title_ != nullptr) title_->setLocalizedText(title);
   showListPage();
+  if (title_ != nullptr) title_->setLocalizedText(title);
   if (listContent_ != nullptr) listContent_->setVisible(false);
   if (filterSortContent_ != nullptr) filterSortContent_->setVisible(false);
   if (watchOptionsContent_ != nullptr) watchOptionsContent_->setVisible(false);
@@ -1500,52 +1596,53 @@ void ReplayRecordsModal::refreshActions() {
   }
 
   styleThemedActionButton(closeButton_, closeButtonText_,
-                          !modalOperationInProgress, ui_theme::control,
-                          ui_theme::controlHover, ui_theme::controlPressed,
-                          ui_theme::hairlineStrong);
+                          !modalOperationInProgress, app_theme::control,
+                          app_theme::controlHover, app_theme::controlPressed,
+                          app_theme::hairlineStrong);
   styleThemedActionButton(shareButton_, shareButtonText_,
                           shareAvailable && fileActions.shareVisible &&
                               fileActions.enabled && !deleteConfirmationMode,
-                          ui_theme::infoAction, ui_theme::infoActionHover,
-                          ui_theme::infoActionPressed, ui_theme::accentBorder);
+                          app_theme::infoAction, app_theme::infoActionHover,
+                          app_theme::infoActionPressed, app_theme::accentBorder);
   styleThemedActionButton(deleteButton_, deleteButtonText_,
                           removeAvailable && fileActions.deleteVisible &&
                               fileActions.enabled && !deleteConfirmationMode,
-                          ui_theme::warningAction, ui_theme::warningActionHover,
-                          ui_theme::warningActionPressed, ui_theme::amber);
+                          app_theme::warningAction, app_theme::warningActionHover,
+                          app_theme::warningActionPressed, app_theme::amber);
   if (replay_record_filters::hasActiveCriteria(filters_) || filterSortMode) {
     styleThemedActionButton(
         filterButton_, filterButtonText_,
         !watchOptionsMode && !optionsMode && !progressMode &&
             !modalOperationInProgress,
-        ui_theme::primaryAction, ui_theme::primaryActionHover,
-        ui_theme::primaryActionPressed, ui_theme::accentBorderStrong);
+        app_theme::primaryAction, app_theme::primaryActionHover,
+        app_theme::primaryActionPressed, app_theme::accentBorderStrong);
   } else {
     styleThemedActionButton(
         filterButton_, filterButtonText_,
         !watchOptionsMode && !optionsMode && !progressMode &&
             !modalOperationInProgress,
-        ui_theme::control, ui_theme::controlHover, ui_theme::controlPressed,
-        ui_theme::hairlineStrong);
+        app_theme::control, app_theme::controlHover, app_theme::controlPressed,
+        app_theme::hairlineStrong);
   }
   styleThemedActionButton(watchButton_, watchButtonText_,
                           watchVisible && !modalOperationInProgress,
-                          ui_theme::infoAction, ui_theme::infoActionHover,
-                          ui_theme::infoActionPressed, ui_theme::accentBorder);
+                          app_theme::infoAction, app_theme::infoActionHover,
+                          app_theme::infoActionPressed, app_theme::accentBorder);
   styleThemedActionButton(gbattleButton_, gbattleButtonText_,
                           gbattleVisible && !modalOperationInProgress,
-                          ui_theme::warningAction, ui_theme::warningActionHover,
-                          ui_theme::warningActionPressed, ui_theme::amber);
+                          app_theme::warningAction, app_theme::warningActionHover,
+                          app_theme::warningActionPressed, app_theme::amber);
   styleThemedActionButton(resultButton_, resultButtonText_,
-                          resultAction.enabled, ui_theme::successAction,
-                          ui_theme::successActionHover,
-                          ui_theme::successActionPressed, ui_theme::lime);
+                          resultAction.enabled, app_theme::successAction,
+                          app_theme::successActionHover,
+                          app_theme::successActionPressed, app_theme::lime);
   styleThemedActionButton(exportButton_, exportButtonText_,
                           exportVisible && !modalOperationInProgress,
-                          ui_theme::violetAction, ui_theme::violetActionHover,
-                          ui_theme::violetActionPressed,
-                          ui_theme::violetActionHover);
+                          app_theme::violetAction, app_theme::violetActionHover,
+                          app_theme::violetActionPressed,
+                          app_theme::violetActionHover);
 
+  if (rendering::compactMenuCanvasActive) resize(rendering::window_width, rendering::window_height);
   if (root_ != nullptr) {
     root_->applyYogaLayoutFromRoot();
   }
@@ -1567,9 +1664,9 @@ void ReplayRecordsModal::refreshFilterSortButtons() {
   }
   for (const replay_records_modal::ScoreRankFilterButton &item : scoreRankFilterButtons_) {
     if (item.rank.has_value() && !scoreRankFilterAvailable()) {
-      styleThemedActionButton(item.button, item.text, false, ui_theme::control,
-                              ui_theme::controlHover, ui_theme::controlPressed,
-                              ui_theme::hairlineStrong);
+      styleThemedActionButton(item.button, item.text, false, app_theme::control,
+                              app_theme::controlHover, app_theme::controlPressed,
+                              app_theme::hairlineStrong);
     } else {
       styleOptionButton(item.button, item.text,
                         item.rank == filters_.scoreRank);
@@ -1602,20 +1699,20 @@ void ReplayRecordsModal::refreshExportOptionButtons() {
                     !selectedExportIncludeResultScreen_);
   if (autoPlaySelection) {
     styleThemedActionButton(touchShowButton_, touchShowButtonText_, false,
-                            ui_theme::control, ui_theme::controlHover,
-                            ui_theme::controlPressed, ui_theme::hairlineStrong);
+                            app_theme::control, app_theme::controlHover,
+                            app_theme::controlPressed, app_theme::hairlineStrong);
     styleOptionButton(touchHideButton_, touchHideButtonText_, true);
     styleThemedActionButton(exportTouchShowButton_, exportTouchShowButtonText_,
-                            false, ui_theme::control, ui_theme::controlHover,
-                            ui_theme::controlPressed, ui_theme::hairlineStrong);
+                            false, app_theme::control, app_theme::controlHover,
+                            app_theme::controlPressed, app_theme::hairlineStrong);
     styleOptionButton(exportTouchHideButton_, exportTouchHideButtonText_, true);
     styleThemedActionButton(ghostShowButton_, ghostShowButtonText_, false,
-                            ui_theme::control, ui_theme::controlHover,
-                            ui_theme::controlPressed, ui_theme::hairlineStrong);
+                            app_theme::control, app_theme::controlHover,
+                            app_theme::controlPressed, app_theme::hairlineStrong);
     styleOptionButton(ghostHideButton_, ghostHideButtonText_, true);
     styleThemedActionButton(exportGhostShowButton_, exportGhostShowButtonText_,
-                            false, ui_theme::control, ui_theme::controlHover,
-                            ui_theme::controlPressed, ui_theme::hairlineStrong);
+                            false, app_theme::control, app_theme::controlHover,
+                            app_theme::controlPressed, app_theme::hairlineStrong);
     styleOptionButton(exportGhostHideButton_, exportGhostHideButtonText_, true);
     return;
   }
@@ -1808,6 +1905,7 @@ void ReplayRecordsModal::dispatchResult(const ResultRecordSummary &summary) {
 }
 
 void ReplayRecordsModal::showListPage() {
+  if (title_ != nullptr) title_->setLocalizedText(i18n::message("records.records.label"));
   if (listContent_ != nullptr) listContent_->setVisible(true);
   if (filterSortContent_ != nullptr) filterSortContent_->setVisible(false);
   if (watchOptionsContent_ != nullptr) watchOptionsContent_->setVisible(false);

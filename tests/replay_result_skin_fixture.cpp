@@ -133,6 +133,10 @@ struct ChartMeta {
   double PlayLevel = 0;
   double Bpm = 0, MinBpm = 0, MaxBpm = 0;
   int Difficulty = 0;
+  int KeyMode = 5;
+  bool IsDP = false;
+  long long TotalLength = 0;
+  std::string Title, Artist;
   std::string BmsPath, Folder, StageFile, BackBmp, Banner;
 };
 struct Chart { ChartMeta Meta; };
@@ -148,11 +152,11 @@ struct CourseReplayData {
   std::vector<CourseReplayEntryFacts> entryFacts;
 };
 struct CourseReplayVideoStage { std::shared_ptr<bms_parser::Chart> chart; };
-namespace result_presentation {
-bms_parser::ChartMeta courseResultMeta(const std::string &, const std::string &,
-                                       std::size_t count, int notes, long long length) {
-  return {.TotalNotes = notes, .PlayLength = length, .PlayLevel = static_cast<double>(count)};
+namespace i18n {
+std::string tr(const char *key) { return key; }
 }
+namespace result_presentation {
+ASOBMS_COURSE_META_HELPER
 }
 ASOBMS_COURSE_META
 ASOBMS_COURSE_IMAGE_META
@@ -174,6 +178,7 @@ int main() {
   chart->Meta.MinBpm = 150;
   chart->Meta.MaxBpm = 210;
   chart->Meta.Difficulty = 4;
+  chart->Meta.KeyMode = 7;
   const auto courseMeta = courseResultMetaForReplayVideo({}, {{chart}, {chart}});
   check(courseMeta.TotalNotes == 200 && courseMeta.PlayLength == 246 &&
             courseMeta.StageFile == "stage.png" && courseMeta.BackBmp == "back.png" &&
@@ -184,12 +189,27 @@ int main() {
   std::vector<std::unique_ptr<bms_parser::Chart>> imageCharts;
   imageCharts.push_back(std::make_unique<bms_parser::Chart>(*chart));
   imageCharts.push_back(std::make_unique<bms_parser::Chart>(*chart));
+  CourseReplayData complete;
+  complete.stages.resize(2);
+  complete.entryFacts = {{100, 123}, {100, 123}};
+  check(courseMeta.KeyMode == 7 &&
+            courseResultMetaForReplay(complete, imageCharts).KeyMode == 7,
+        "uniform course image and video exports retain 7-key mode");
+  auto otherMode = std::make_shared<bms_parser::Chart>(*chart);
+  otherMode->Meta.KeyMode = 14;
+  imageCharts.back()->Meta.KeyMode = 14;
+  check(courseResultMetaForReplayVideo(complete, {{chart}, {otherMode}}).KeyMode == 0 &&
+            courseResultMetaForReplay(complete, imageCharts).KeyMode == 0,
+        "mixed course exports omit keymode");
+  imageCharts.back()->Meta.KeyMode = 7;
   CourseReplayData partial;
   partial.totalCharts = 3;
   partial.stages.resize(2);
   partial.entryFacts = {{110, 124}, {120, 125}, {300, 456}};
   const auto partialVideo = courseResultMetaForReplayVideo(partial, {{chart}, {chart}});
   const auto partialImage = courseResultMetaForReplay(partial, imageCharts);
+  check(partialVideo.KeyMode == 0 && partialImage.KeyMode == 0,
+        "partial exports omit keymode when unplayed chart modes are unknown");
   for (const auto &meta : {partialVideo, partialImage}) {
     check(meta.Bpm == 180 && meta.MinBpm == 150 && meta.MaxBpm == 210 &&
               meta.Difficulty == 4,

@@ -5,7 +5,8 @@
 #include "OverlayPortal.h"
 #include "ScrollView.h"
 #include "TextView.h"
-#include "UiTheme.h"
+#include "AppTheme.h"
+#include "../rendering/ResponsiveUi.h"
 
 #include <algorithm>
 #include <cmath>
@@ -15,8 +16,8 @@ namespace {
 
 constexpr uint32_t kIconCaretUp = 0xf0d8;
 constexpr uint32_t kIconCaretDown = 0xf0d7;
-constexpr float kTriggerHeight = 42.0f;
-constexpr float kOptionHeight = 38.0f;
+float triggerHeight() { return rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 42.0f; }
+float optionHeight() { return rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 38.0f; }
 constexpr float kMenuPadding = 4.0f;
 constexpr float kMenuGap = 4.0f;
 constexpr float kWindowMargin = 10.0f;
@@ -51,38 +52,38 @@ void styleButton(Button *button, TextView *text, bool selected, bool enabled) {
   if (button == nullptr || text == nullptr) {
     return;
   }
-  button->setCornerRadius(ui_theme::controlRadius());
+  button->setCornerRadius(app_theme::controlRadius());
   button->setStyledBorderWidth(1);
   if (!enabled) {
     button->setThemedBackgroundColors(
-        ui_theme::panelSubtle, ui_theme::panelSubtle, ui_theme::panelSubtle);
-    button->setThemedBorderColors(ui_theme::hairlineSubtle,
-                                  ui_theme::hairlineSubtle,
-                                  ui_theme::hairlineSubtle);
-    text->setThemedColor(ui_theme::textMuted);
+        app_theme::panelSubtle, app_theme::panelSubtle, app_theme::panelSubtle);
+    button->setThemedBorderColors(app_theme::hairlineSubtle,
+                                  app_theme::hairlineSubtle,
+                                  app_theme::hairlineSubtle);
+    text->setThemedColor(app_theme::textMuted);
     return;
   }
   if (selected) {
-    button->setThemedBackgroundColors(ui_theme::primaryAction,
-                                      ui_theme::primaryActionHover,
-                                      ui_theme::primaryActionPressed);
+    button->setThemedBackgroundColors(app_theme::primaryAction,
+                                      app_theme::primaryActionHover,
+                                      app_theme::primaryActionPressed);
     button->setThemedBorderColors(
-        [] { return ui_theme::withAlpha(ui_theme::accentBorderStrong(), 150); },
-        [] { return ui_theme::withAlpha(ui_theme::accentBorderStrong(), 190); },
+        [] { return app_theme::withAlpha(app_theme::accentBorderStrong(), 150); },
+        [] { return app_theme::withAlpha(app_theme::accentBorderStrong(), 190); },
         [] {
-          return ui_theme::withAlpha(ui_theme::accentBorderStrong(), 220);
+          return app_theme::withAlpha(app_theme::accentBorderStrong(), 220);
         });
     text->setThemedColor(
-        [] { return ui_theme::textOn(ui_theme::primaryAction()); });
+        [] { return app_theme::textOn(app_theme::primaryAction()); });
     return;
   }
 
-  button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                    ui_theme::controlPressed);
-  button->setThemedBorderColors(ui_theme::hairlineSubtle,
-                                ui_theme::hairlineStrong,
-                                ui_theme::hairlineStrong);
-  text->setThemedColor(ui_theme::textPrimary);
+  button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                    app_theme::controlPressed);
+  button->setThemedBorderColors(app_theme::hairlineSubtle,
+                                app_theme::hairlineStrong,
+                                app_theme::hairlineStrong);
+  text->setThemedColor(app_theme::textPrimary);
 }
 
 bool mouseEventToUi(const SDL_MouseButtonEvent &event, float &uiX, float &uiY) {
@@ -107,8 +108,9 @@ DropdownView::DropdownView(Callbacks callbacks, OverlayPortal *portal)
   setFlexDirection(FlexDirection::Column);
   setAlignItems(YGAlignStretch);
   setWidth(kDefaultWidth);
-  setHeight(kTriggerHeight);
-  setMinHeight(kTriggerHeight);
+  lastTriggerHeight = triggerHeight();
+  setHeight(lastTriggerHeight);
+  setMinHeight(triggerHeight());
   setFlexShrink(1.0f);
   setZIndex(0);
   buildView();
@@ -128,8 +130,8 @@ DropdownView::~DropdownView() {
 }
 
 void DropdownView::buildView() {
-  triggerButton = new Button(0, 0, 160, static_cast<int>(kTriggerHeight));
-  triggerButton->setHeight(kTriggerHeight);
+  triggerButton = new Button(0, 0, 160, static_cast<int>(triggerHeight()));
+  triggerButton->setHeight(triggerHeight());
   triggerButton->setWidthPercent(100.0f);
   triggerButton->setFlexGrow(1.0f);
   triggerButton->setFlexBasis(0.0f);
@@ -157,7 +159,7 @@ void DropdownView::buildView() {
   triggerIndicator->setFlexShrink(0.0f);
   triggerIndicator->setCornerRadius(2.5f);
   content->addView(triggerIndicator);
-  triggerText = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+  triggerText = new TextView(app_theme::font, 16);
   triggerText->setVAlign(TextView::MIDDLE);
   triggerText->setOverflow(TextView::TextOverflow::Hidden);
   triggerText->setMinWidth(0);
@@ -176,15 +178,15 @@ void DropdownView::buildView() {
   menuContent->setAlignItems(YGAlignStretch);
   menuContent->setGap(4);
 
-  menuScroll = new ScrollView(0, static_cast<int>(kTriggerHeight + kMenuGap),
-                              160, static_cast<int>(kOptionHeight));
+  menuScroll = new ScrollView(0, static_cast<int>(triggerHeight() + kMenuGap),
+                              160, static_cast<int>(optionHeight()));
   menuScroll->setPositionType(YGPositionTypeAbsolute);
   menuScroll->setContentPadding(Edge::All, kMenuPadding);
-  menuScroll->setThemedBackgroundColor(ui_theme::panelStrong);
-  menuScroll->setThemedBorderColor(ui_theme::hairlineStrong);
+  menuScroll->setThemedBackgroundColor(app_theme::panelStrong);
+  menuScroll->setThemedBorderColor(app_theme::hairlineStrong);
   menuScroll->setBorderWidth(1);
-  menuScroll->setCornerRadius(ui_theme::controlRadius());
-  menuScroll->setThemedShadow(ui_theme::backdrop, ui_theme::kPanelShadow);
+  menuScroll->setCornerRadius(app_theme::controlRadius());
+  menuScroll->setThemedShadow(app_theme::shadow, app_theme::kPanelShadow);
   menuScroll->setZIndex(100);
   menuScroll->setVisible(false);
   menuScroll->setContentView(menuContent);
@@ -211,6 +213,7 @@ void DropdownView::refresh(const State &state) {
 }
 
 void DropdownView::applyRefresh(State state) {
+  refreshDensity();
   const bool rebuild = !optionsMatch(state.options);
   const bool wasOpen = current.open;
   if (rebuild || current.label != state.label) cachedPreferredWidth.reset();
@@ -244,8 +247,8 @@ void DropdownView::rebuildOptions() {
   }
 
   for (const auto &option : current.options) {
-    auto *button = new Button(0, 0, 160, static_cast<int>(kOptionHeight));
-    button->setHeight(kOptionHeight);
+    auto *button = new Button(0, 0, 160, static_cast<int>(optionHeight()));
+    button->setHeight(optionHeight());
     button->setWidthPercent(100.0f);
     button->setMinWidth(0);
     button->setFlexGrow(0.0f);
@@ -264,7 +267,7 @@ void DropdownView::rebuildOptions() {
     indicator->setCornerRadius(2.5f);
     content->addView(indicator);
 
-    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
+    auto *text = new TextView(app_theme::font, 15);
     text->setLocalizedText(option.label);
     text->setAlign(TextView::LEFT);
     text->setVAlign(TextView::MIDDLE);
@@ -354,8 +357,8 @@ void DropdownView::refreshVisualState() {
         menuVisible ? kIconCaretUp : kIconCaretDown));
     triggerIcon->setThemedColor(
         !current.enabled
-            ? ui_theme::textMuted
-            : (menuVisible ? ui_theme::textPrimary : ui_theme::textSecondary));
+            ? app_theme::textMuted
+            : (menuVisible ? app_theme::onAction : app_theme::textSecondary));
   }
 
   styleButton(triggerButton, triggerText, menuVisible, current.enabled);
@@ -392,10 +395,10 @@ void DropdownView::updateMenuPlacement() {
   const int visibleOptions =
       std::clamp(optionCount, 1, std::max(1, current.maxVisibleItems));
   const int desiredHeight = static_cast<int>(
-      std::round(static_cast<float>(visibleOptions) * kOptionHeight +
+      std::round(static_cast<float>(visibleOptions) * optionHeight() +
                  kMenuPadding * 2.0f));
   const int minimumHeight =
-      static_cast<int>(std::round(kOptionHeight + kMenuPadding * 2.0f));
+      static_cast<int>(std::round(optionHeight() + kMenuPadding * 2.0f));
 
   const int menuWidth =
       static_cast<int>(std::round(std::max(1.0f, resolvedWidth)));
@@ -592,7 +595,21 @@ bool DropdownView::handleEventsImpl(SDL_Event &event) {
   return true;
 }
 
-void DropdownView::onLayout() { updateMenuPlacement(); }
+void DropdownView::refreshDensity() {
+  if (triggerButton == nullptr) return;
+  const float height = triggerHeight();
+  if (height == lastTriggerHeight) return;
+  lastTriggerHeight = height;
+  View::LayoutBatchScope batch;
+  setHeight(height)->setMinHeight(height);
+  triggerButton->setHeight(height);
+  for (auto &option : optionButtons) option.button->setHeight(optionHeight());
+}
+
+void DropdownView::onLayout() {
+  refreshDensity();
+  updateMenuPlacement();
+}
 
 void DropdownView::onMove(int, int) { updateMenuPlacement(); }
 

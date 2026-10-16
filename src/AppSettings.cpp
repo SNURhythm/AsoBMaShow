@@ -508,6 +508,8 @@ void AppSettings::PresentationSettings::sanitize(PresentationOrientation orienta
 }
 
 void AppSettings::sanitize() {
+  prepMetronomeMaxDurationMilliseconds =
+      std::max(0, prepMetronomeMaxDurationMilliseconds);
   for (auto *policy : {&scratchless5K, &scratchless7K}) {
     if (policy->mode < ScratchlessMode::Disabled ||
         policy->mode > ScratchlessMode::SelectedTables) {

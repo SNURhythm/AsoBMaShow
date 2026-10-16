@@ -2,7 +2,7 @@
 
 #include "../input/SDLPointerEvent.h"
 #include "../platform/SDLMainThread.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 #include "../view/View.h"
 
 #include <algorithm>
@@ -46,7 +46,7 @@ protected:
     content_->render(context);
     if (content_->getWidth() > getWidth() && getWidth() > 0) {
       const float ratio = float(getWidth()) / content_->getWidth();
-      scrollbar_.setBackgroundColor(ui_theme::textMuted());
+      scrollbar_.setBackgroundColor(app_theme::textMuted());
       scrollbar_.setCornerRadius(2);
       scrollbar_.setSize(getWidth() * ratio, 4);
       scrollbar_.setPositionNoLayout(getX() + offset_ * ratio,

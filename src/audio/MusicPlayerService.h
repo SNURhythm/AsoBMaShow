@@ -2,7 +2,7 @@
 
 #include "../ThreadCompat.h"
 #include "../i18n/Localization.h"
-#include "ChartMusicCache.h"
+#include "MusicPreparation.h"
 #include "../repositories/ChartRepository.h"
 #include "../repositories/MusicPlaylistRepository.h"
 #include "MusicPlaylist.h"
@@ -13,7 +13,6 @@
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
-#include <filesystem>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -32,6 +31,9 @@ public:
   bool ReloadLibrary(std::string &errorMessage);
   bool ReloadLibraryAndPlaylists(std::string &errorMessage,
                                  int preferredSelectedPlaylistId = 0);
+  [[nodiscard]] std::uint64_t ContentRevision() const {
+    return contentRevision.load(std::memory_order_acquire);
+  }
   [[nodiscard]] std::size_t LibraryTrackCount() const;
   [[nodiscard]] std::vector<music_playlist::MusicTrack>
   LibraryTracksSnapshot() const;
@@ -166,16 +168,6 @@ private:
                             std::uint64_t requestRevision,
                             bool requestedClubMode,
                             const std::stop_token &stopToken);
-  std::vector<music_playlist::MusicTrack> AdjacentTracksLocked() const;
-  std::vector<std::filesystem::path> PlaybackCacheKeepPathsLocked(
-      const chart_music_cache::CacheResult &currentResult) const;
-  void StartAdjacentPreloadWorker(
-      std::vector<music_playlist::MusicTrack> tracks, bool requestedClubMode);
-  void StopAdjacentPreloadWorker();
-  void AdjacentPreloadWorker(std::vector<music_playlist::MusicTrack> tracks,
-                             std::uint64_t preloadRevision,
-                             bool requestedClubMode,
-                             const std::stop_token &stopToken);
   void RefreshPlaylistCachesLocked(int preferredSelectedPlaylistId);
   void RestoreQueueFromPersistedStateLocked();
   void PersistPlayerStateLocked();
@@ -197,10 +189,10 @@ private:
   MusicPlaylistRepository &repository;
   ChartRepository &charts;
   mutable std::mutex stateMutex;
+  std::atomic<std::uint64_t> contentRevision{0};
   mutable std::mutex nativeControlStatusMutex;
   std::mutex nativeControlThreadMutex;
   std::mutex playbackThreadMutex;
-  std::mutex preloadThreadMutex;
   mutable std::mutex sleepTimerMutex;
   std::condition_variable sleepTimerCv;
   std::mutex sleepTimerThreadMutex;
@@ -219,7 +211,6 @@ private:
   bool sessionOnlyQueueOrder = false;
   std::vector<music_playlist::MusicTrack> sessionPersistentQueueTracks;
   std::jthread playbackThread;
-  std::jthread preloadThread;
   std::jthread sleepTimerThread;
   std::jthread nativeControlEventThread;
   std::optional<std::chrono::steady_clock::time_point> sleepTimerDeadline;
@@ -228,10 +219,7 @@ private:
   std::uint64_t nativeControlStatusRevision = 0;
   std::uint64_t consumedNativeControlStatusRevision = 0;
   std::atomic_bool renderCancelled{false};
-  std::atomic_bool preloadCancelled{false};
   std::atomic<std::uint64_t> playbackRequestRevision{0};
-  std::atomic<std::uint64_t> preloadRequestRevision{0};
-  chart_music_cache::CacheResult lastCacheResult;
 };
 
 } // namespace music_player

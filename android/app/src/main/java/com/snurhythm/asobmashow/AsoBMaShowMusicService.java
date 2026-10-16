@@ -31,6 +31,7 @@ public class AsoBMaShowMusicService extends Service {
     public static final String EXTRA_ARTWORK_PATH = "artwork_path";
     public static final String EXTRA_PLAYING = "playing";
     public static final String EXTRA_SESSION_TOKEN = "session_token";
+    static final String EXTRA_TRANSPORT_GENERATION = "transport_generation";
 
     private static final String CHANNEL_ID = "asobmashow_music";
     static final int NOTIFICATION_ID = 0x41534d53;
@@ -41,6 +42,7 @@ public class AsoBMaShowMusicService extends Service {
     private String artworkPath = "";
     private boolean playing = false;
     private boolean foreground = false;
+    private long transportGeneration;
     private MediaSession.Token sessionToken;
 
     @Override
@@ -69,8 +71,11 @@ public class AsoBMaShowMusicService extends Service {
         }
 
         if (ACTION_PLAY.equals(action)) {
-            sendTransportAction(intent, ACTION_PLAY);
             playing = sessionToken != null;
+            // Android 15+ permits background audio-focus requests only after
+            // this service has entered the foreground.
+            if (playing) updateNotification();
+            sendTransportAction(intent, ACTION_PLAY);
         } else if (ACTION_PAUSE.equals(action)) {
             sendTransportAction(intent, ACTION_PAUSE);
             playing = false;
@@ -80,9 +85,13 @@ public class AsoBMaShowMusicService extends Service {
             stopSelf();
             return START_NOT_STICKY;
         } else if (ACTION_PREVIOUS.equals(action)) {
-            AsoBMaShowActivity.nativeMusicControlEvent("previous");
+            playing = sessionToken != null;
+            if (playing) updateNotification();
+            sendTransportAction(intent, ACTION_PREVIOUS);
         } else if (ACTION_NEXT.equals(action)) {
-            AsoBMaShowActivity.nativeMusicControlEvent("next");
+            playing = sessionToken != null;
+            if (playing) updateNotification();
+            sendTransportAction(intent, ACTION_NEXT);
         }
 
         updateNotification();
@@ -99,6 +108,9 @@ public class AsoBMaShowMusicService extends Service {
     }
 
     private void readUpdate(Intent intent) {
+        if (intent.hasExtra(EXTRA_TRANSPORT_GENERATION)) {
+            transportGeneration = intent.getLongExtra(EXTRA_TRANSPORT_GENERATION, 0);
+        }
         if (intent.hasExtra(EXTRA_TITLE)) {
             title = nonEmpty(intent.getStringExtra(EXTRA_TITLE), "AsoBMaShow");
         }
@@ -151,8 +163,11 @@ public class AsoBMaShowMusicService extends Service {
         }
         MediaController.TransportControls controls =
                 new MediaController(this, token).getTransportControls();
-        if (ACTION_PLAY.equals(action)) {
-            controls.play();
+        if (ACTION_PLAY.equals(action) || ACTION_PREVIOUS.equals(action)
+                || ACTION_NEXT.equals(action)) {
+            // The ordinary callbacks bootstrap this service. A separate callback
+            // executes transport only after foreground promotion, without looping.
+            controls.sendCustomAction(action, intent.getExtras());
         } else if (ACTION_PAUSE.equals(action)) {
             controls.pause();
         } else if (ACTION_STOP.equals(action)) {
@@ -259,6 +274,8 @@ public class AsoBMaShowMusicService extends Service {
                 .putExtra(EXTRA_ARTIST, artist)
                 .putExtra(EXTRA_ALBUM, album)
                 .putExtra(EXTRA_ARTWORK_PATH, artworkPath)
+                // Capture the playback generation before asynchronous delivery.
+                .putExtra(EXTRA_TRANSPORT_GENERATION, transportGeneration)
                 .putExtra(EXTRA_PLAYING, playing);
         if (sessionToken != null) {
             intent.putExtra(EXTRA_SESSION_TOKEN, sessionToken);

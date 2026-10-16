@@ -12,50 +12,68 @@
 #include "PlayOptionSectionView.h"
 #include "SnappedSlider.h"
 #include "TextView.h"
-#include "UiTheme.h"
+#include "AppTheme.h"
+#include "../rendering/ResponsiveUi.h"
 
 #include <algorithm>
 #include <utility>
 
 namespace {
-constexpr const char *kFont = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kFont = app_theme::font;
 
 TextView *makeLabel(const i18n::Text &label) {
-  auto *text = new TextView(kFont, 20);
+  auto *text = new TextView(app_theme::boldFont, 20, TextView::FontWeight::Bold);
   text->setLocalizedText(label);
-  text->setThemedColor(ui_theme::textSecondary);
+  text->setThemedColor(app_theme::textPrimary);
   text->setVAlign(TextView::MIDDLE);
   text->setHeight(28);
   return text;
 }
 
-View *makeRow(float height = 58.0f) {
+View *makeSectionHeader(TextView *label) {
+  auto *header = new View();
+  header->setFlexDirection(FlexDirection::Column);
+  header->setPadding(Edge::Top, 10);
+  auto *rule = new View();
+  rule->setPositionType(YGPositionTypeAbsolute);
+  rule->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
+  rule->setWidthPercent(100)->setHeight(1);
+  rule->setThemedBackgroundColor(app_theme::hairline);
+  header->addView(rule);
+  header->addView(label);
+  return header;
+}
+
+View *makeRow(float height = 48.0f) {
   auto *row = new View();
   row->setFlexDirection(FlexDirection::Row);
   row->setAlignItems(YGAlignStretch);
   row->setGap(10);
-  row->setHeight(height);
+  row->setHeight(rendering::compactMenuCanvasActive ? YGUndefined : height);
+  if (rendering::compactMenuCanvasActive) {
+    row->setFlexWrap(YGWrapWrap)->setMinHeight(rendering::compactTouchTarget);
+  }
   return row;
 }
 
 Button *makeButton(const i18n::Text &label, int fontSize, TextView **textOut) {
-  auto *button = new Button(0, 0, 0, 54);
+  auto *button = new Button(0, 0, 0, rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 48);
   button->setFlexGrow(1.0f);
-  button->setFlexBasis(0.0f);
+  button->setFlexBasis(rendering::compactMenuCanvasActive ? 120.0f : 0.0f);
   button->setFlexShrink(1.0f);
-  button->setCornerRadius(ui_theme::controlRadius());
+  button->setCornerRadius(app_theme::controlRadius());
   button->setStyledBorderWidth(1);
-  button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                    ui_theme::controlPressed);
-  button->setThemedBorderColors(ui_theme::hairlineSubtle,
-                                ui_theme::hairlineStrong,
-                                ui_theme::accentBorder);
+  button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                    app_theme::controlPressed);
+  button->setThemedBorderColors(app_theme::hairlineSubtle,
+                                app_theme::hairlineStrong,
+                                app_theme::accentBorder);
   auto *text = new TextView(kFont, fontSize);
   text->setLocalizedText(label);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   text->setOverflow(TextView::TextOverflow::Hidden);
-  text->setThemedColor(ui_theme::textPrimary);
+  text->setThemedColor(app_theme::textPrimary);
   button->setContentView(text);
   if (textOut != nullptr) {
     *textOut = text;
@@ -70,28 +88,28 @@ void styleButton(Button *button, TextView *text, bool selected, bool enabled) {
   button->setEnabled(enabled);
   button->setSelected(selected);
   if (selected) {
-    button->setThemedBackgroundColors(ui_theme::primaryAction,
-                                      ui_theme::primaryActionHover,
-                                      ui_theme::primaryActionPressed);
-    button->setThemedBorderColors(ui_theme::accentBorderStrong,
-                                  ui_theme::accentBorderStrong,
-                                  ui_theme::accentBorderStrong);
+    button->setThemedBackgroundColors(app_theme::primaryAction,
+                                      app_theme::primaryActionHover,
+                                      app_theme::primaryActionPressed);
+    button->setThemedBorderColors(app_theme::accentBorderStrong,
+                                  app_theme::accentBorderStrong,
+                                  app_theme::accentBorderStrong);
     text->setThemedColor(
-        [] { return ui_theme::textOn(ui_theme::primaryAction()); });
+        [] { return app_theme::textOn(app_theme::primaryAction()); });
   } else if (!enabled) {
     button->setThemedBackgroundColors(
-        ui_theme::panelSubtle, ui_theme::panelSubtle, ui_theme::panelSubtle);
-    button->setThemedBorderColors(ui_theme::hairlineSubtle,
-                                  ui_theme::hairlineSubtle,
-                                  ui_theme::hairlineSubtle);
-    text->setThemedColor(ui_theme::textMuted);
+        app_theme::panelSubtle, app_theme::panelSubtle, app_theme::panelSubtle);
+    button->setThemedBorderColors(app_theme::hairlineSubtle,
+                                  app_theme::hairlineSubtle,
+                                  app_theme::hairlineSubtle);
+    text->setThemedColor(app_theme::textMuted);
   } else {
-    button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                      ui_theme::controlPressed);
-    button->setThemedBorderColors(ui_theme::hairlineSubtle,
-                                  ui_theme::hairlineStrong,
-                                  ui_theme::accentBorder);
-    text->setThemedColor(ui_theme::textPrimary);
+    button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                      app_theme::controlPressed);
+    button->setThemedBorderColors(app_theme::hairlineSubtle,
+                                  app_theme::hairlineStrong,
+                                  app_theme::accentBorder);
+    text->setThemedColor(app_theme::textPrimary);
   }
 }
 
@@ -124,11 +142,11 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   setWidth(layout.width);
   setFlexDirection(FlexDirection::Column);
   setAlignItems(YGAlignStretch);
-  setGap(12);
+  setGap(8);
 
   auto *rulesetSectionLabel = makeLabel(i18n::message("play_options.ruleset.label"));
   rulesetSectionLabel->setName("ruleset-section-label");
-  addView(rulesetSectionLabel);
+  addView(makeSectionHeader(rulesetSectionLabel));
   auto *rulesetRow = makeRow();
   for (const GameplayRuleset ruleset : {GameplayRuleset::LR2,
                                         GameplayRuleset::Beatoraja}) {
@@ -152,7 +170,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   if (layout.showGauge) {
     gaugeSectionLabel = makeLabel(i18n::message("play_options.gauge.label"));
     gaugeSectionLabel->setName("gauge-section-label");
-    addView(gaugeSectionLabel);
+    addView(makeSectionHeader(gaugeSectionLabel));
     auto addGaugeButton = [this](View *row, GaugeType type) {
       TextView *text = nullptr;
       const std::string label = gaugeLabel(type, GaugeAutoShiftMode::None);
@@ -180,7 +198,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
     addGaugeButton(gaugeRowB, GaugeType::Hazard);
     addView(gaugeRowB);
 
-    addView(makeLabel(i18n::message("play_options.auto_shift.label")));
+    addView(makeSectionHeader(makeLabel(i18n::message("play_options.auto_shift.label"))));
     auto addAutoShiftButton = [this](View *row, GaugeAutoShiftMode mode) {
       TextView *text = nullptr;
       const std::string label = gaugeAutoShiftMenuLabel(mode);
@@ -212,10 +230,10 @@ PlayOptionsPanelView::PlayOptionsPanelView(
     gaugeAutoShiftBoundsSection = new View();
     gaugeAutoShiftBoundsSection->setFlexDirection(FlexDirection::Column);
     gaugeAutoShiftBoundsSection->setAlignItems(YGAlignStretch);
-    gaugeAutoShiftBoundsSection->setGap(12);
+    gaugeAutoShiftBoundsSection->setGap(8);
     gaugeAutoShiftBoundsSection->setDisplay(YGDisplayNone);
     gaugeAutoShiftBoundsSection->setVisible(false);
-    gaugeAutoShiftBoundsSection->addView(makeLabel(i18n::message("play_options.auto_shift_lower_bound.label")));
+    gaugeAutoShiftBoundsSection->addView(makeSectionHeader(makeLabel(i18n::message("play_options.auto_shift_lower_bound.label"))));
     auto addLowerBoundButton = [this](View *row, GaugeType type) {
       TextView *text = nullptr;
       const std::string label = gaugeLabel(type, GaugeAutoShiftMode::None);
@@ -261,13 +279,13 @@ PlayOptionsPanelView::PlayOptionsPanelView(
                     callbacks.isPlayOptionAllowed(option);
            }},
       {.columns = layout.playOptionColumns,
-       .rowHeight = 58,
+       .rowHeight = rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 48.0f,
        .buttonFontSize = 15,
        .showLaneOrder = layout.showLaneOrder});
-  playOptionSection->setWidth(layout.width);
+  playOptionSection->setWidthPercent(100);
   addView(playOptionSection);
 
-  addView(makeLabel(i18n::message("play_options.long_note_mode.label")));
+  addView(makeSectionHeader(makeLabel(i18n::message("play_options.long_note_mode.label"))));
   auto *longNoteModeRow = makeRow();
   for (const char *mode : long_note_mode::kPlayableIds) {
     TextView *text = nullptr;
@@ -283,7 +301,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   addView(longNoteModeRow);
 
   assistOptionLabel = makeLabel(i18n::message("play_options.assist_option.label"));
-  addView(assistOptionLabel);
+  addView(makeSectionHeader(assistOptionLabel));
   auto *assistRow = makeRow();
   for (const char *option : {assist_options::kOff, assist_options::kDrag,
                              assist_options::kBpmGuide}) {
@@ -300,7 +318,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   }
   addView(assistRow);
 
-  addView(makeLabel(i18n::message("settings.lane.covers.title")));
+  addView(makeSectionHeader(makeLabel(i18n::message("settings.lane.covers.title"))));
   laneCoverControls = new LaneCoverControlsView([this](const lane_cover::State &covers) {
     state.laneCovers = covers;
     if (callbacks.onLaneCoversChanged) callbacks.onLaneCoversChanged(covers);
@@ -310,14 +328,8 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   auto *playbackGroup = new View();
   playbackGroup->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
-      ->setGap(10)
-      ->setMargin(Edge::Left, 20)
-      ->setPadding(Edge::All, 12)
-      ->setThemedBackgroundColor(ui_theme::panelSubtle)
-      ->setThemedBorderColor(ui_theme::hairlineSubtle)
-      ->setBorderWidth(1)
-      ->setCornerRadius(ui_theme::controlRadius());
-  playbackGroup->addView(makeLabel(i18n::message("play_options.playback_rate.label")));
+      ->setGap(8);
+  playbackGroup->addView(makeSectionHeader(makeLabel(i18n::message("play_options.playback_rate.label"))));
   auto *playbackRateRow = makeRow();
   playbackRateSlider = new SnappedSlider([this](int percent) {
     if (callbacks.onPlaybackRateSelected) {
@@ -329,7 +341,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   playbackRateText = new TextView(kFont, 22);
   playbackRateText->setAlign(TextView::RIGHT);
   playbackRateText->setVAlign(TextView::MIDDLE);
-  playbackRateText->setThemedColor(ui_theme::textPrimary);
+  playbackRateText->setThemedColor(app_theme::textPrimary);
   playbackRateText->setWidth(72);
   playbackRateRow->addView(playbackRateText);
   playbackGroup->addView(playbackRateRow);
@@ -351,7 +363,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   playbackGroup->addView(playbackModeDropdown);
   addView(playbackGroup);
 
-  addView(makeLabel(i18n::message("play_options.club_mode.label")));
+  addView(makeSectionHeader(makeLabel(i18n::message("play_options.club_mode.label"))));
   clubModeButton = makeButton("", 18, nullptr);
   clubModeButton->setName("club-mode");
   clubModeButtonContent = new CheckboxButtonContent("", 18, 17);
@@ -366,7 +378,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   addView(clubModeButton);
 
   if (layout.showPacemaker) {
-    addView(makeLabel(i18n::message("play_options.pacemaker.label")));
+    addView(makeSectionHeader(makeLabel(i18n::message("play_options.pacemaker.label"))));
     View *row = nullptr;
     for (size_t i = 0; i < pacemaker::kSelectableTargets.size(); ++i) {
       if (i % 3 == 0) {
@@ -477,9 +489,9 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
     clubModeButtonContent->setThemedColor(
         state.clubMode
             ? View::ThemeColorProvider{[] {
-                return ui_theme::textOn(ui_theme::primaryAction());
+                return app_theme::textOn(app_theme::primaryAction());
               }}
-            : View::ThemeColorProvider{ui_theme::textPrimary});
+            : View::ThemeColorProvider{app_theme::textPrimary});
   }
   for (const auto &item : pacemakerButtons) {
     styleButton(item.button, item.text,

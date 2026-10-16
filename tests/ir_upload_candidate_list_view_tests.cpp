@@ -1,3 +1,4 @@
+#include "../src/view/AppTheme.h"
 #include "../src/rendering/UniformCache.h"
 #include "../src/view/Button.h"
 #include "../src/view/CheckboxButtonContent.h"
@@ -183,8 +184,8 @@ int main() {
     expect(!selection->hasStyledBackgroundStyle(),
            "IR upload checkbox has no outer selection box");
     expect(sameColor(selectionContent->iconView()->currentColor(),
-                     ui_theme::sdl(ui_theme::cyan())),
-           "selected IR upload checkbox tints the glyph cyan");
+                     app_theme::sdl(app_theme::cyan())),
+           "selected IR upload checkbox uses the application accent");
     click(list, *selection);
     expect(toggles == 1 && toggledAttemptId == first.result.attemptId &&
                rowSelections == 0,
@@ -201,7 +202,7 @@ int main() {
     expect(!selection->hasStyledBackgroundStyle(),
            "unchecked IR upload checkbox remains unboxed");
     expect(sameColor(selectionContent->iconView()->currentColor(),
-                     ui_theme::sdl(ui_theme::textMuted())),
+                     app_theme::sdl(app_theme::textMuted())),
            "unchecked IR upload checkbox uses the muted tint");
     expect(text(row, "irUploadStatus")->getText() == "Retry",
            "rebind replaces status");

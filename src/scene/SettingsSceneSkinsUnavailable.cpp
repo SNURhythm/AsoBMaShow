@@ -18,10 +18,10 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   body->addView(makeWrappedText(
       available ? i18n::message("settings.skins.gameplay_skin_support_starting.message") :
                   i18n::message("settings.skins.gameplay_skins_unavailable_in_build.message"),
-      metrics.bodyTextSize, ui_theme::textSecondary()));
+      metrics.bodyTextSize, app_theme::textSecondary()));
   body->addView(makeWrappedText(
       i18n::message("settings.skins.built_in_gameplay_presentation_remains_active.message"),
-      metrics.smallTextSize, ui_theme::textMuted()));
+      metrics.smallTextSize, app_theme::textMuted()));
   column->addView(makeCard(metrics, i18n::message("settings.skins.skins.label"), i18n::message("settings.skins.availability.label"), body,
                            metrics.modeCardHeight, metrics.cardsWidth));
   appendBuiltInSkinFallbackSettings(column, metrics);

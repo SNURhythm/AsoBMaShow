@@ -1,11 +1,18 @@
 #pragma once
 #include <sndfile.h> // Include the sndfile library for handling audio files
 #include <vector>
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <limits>
 #include <stop_token>
 #include "../path.h"
+
+// Preserve the historical floating-point decode conversion for both full
+// gameplay buffers and the preview's native-rate cached PCM pages.
+inline short audioSampleToPcm16(double sample) {
+  return static_cast<short>(std::clamp(sample, -1.0, 1.0) * 32767);
+}
 
 struct AudioDecodeLimits {
   std::size_t maximumEncodedBytes = std::numeric_limits<std::size_t>::max();

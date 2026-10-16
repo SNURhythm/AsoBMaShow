@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -19,11 +20,22 @@ class View;
 
 class IrUploadsScene final : public Scene {
 public:
+  bool usesResponsiveMenuCanvas() const override { return true; }
   explicit IrUploadsScene(
       ApplicationContext &context,
       SceneReturnTarget returnTarget =
           SceneReturnTarget::Registered("MainMenu"))
       : Scene(context), returnTarget_(std::move(returnTarget)) {}
+
+  // Configure before init; the shell owns the header and scene lifetime.
+  void configureTab(float topInset, std::function<void()> onClose,
+                    Scene *settingsReturnOwner);
+  void setTabTopInset(float topInset);
+  void onPause() override;
+  void onResume() override;
+  // Retained preparation must finish before its profile services are replaced.
+  [[nodiscard]] std::optional<std::string> profileSwitchBlocker();
+  void onProfileWillChange();
 
   void init() override;
   void update(float dt) override;
@@ -33,6 +45,14 @@ public:
 
 private:
   SceneReturnTarget returnTarget_;
+  Scene *tabSettingsReturnOwner = nullptr;
+  bool embeddedTab = false;
+  bool presentationActive = true;
+  float tabTopInset = 0;
+  std::function<void()> tabClose;
+  std::string displayedProfileId;
+  void updateLayoutInsets();
+  void refreshProfileIfNeeded();
   void buildView();
   void reloadCandidates();
   void refreshUi();
@@ -46,6 +66,8 @@ private:
   [[nodiscard]] std::string serverOrigin() const;
 
   View *rootLayout = nullptr;
+  View *headerLayout = nullptr;
+  View *contentLayout = nullptr;
   TextView *candidateCountText = nullptr;
   TextView *providerStatusText = nullptr;
   TextView *selectionCountText = nullptr;
@@ -65,8 +87,16 @@ private:
   i18n::Text loadDiagnostic;
   bool providerCanSubmit = false;
   bool reloadRequested = false;
+  bool candidatesLoaded = false;
+  std::uint64_t observedScoreRevision = 0;
+  std::uint64_t observedProfileCacheRevision = 0;
+  std::string observedServerOrigin;
   std::uint64_t observedAccountEvidenceRevision = 0;
   std::uint64_t observedAttemptStatusRevision = 0;
   int lastLayoutWidth = -1;
   int lastLayoutHeight = -1;
+  int lastSafeTop = -1;
+  int lastSafeLeft = -1;
+  int lastSafeBottom = -1;
+  int lastSafeRight = -1;
 };

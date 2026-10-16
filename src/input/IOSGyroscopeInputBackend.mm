@@ -202,6 +202,15 @@ public:
     drainCommands(now);
   }
 
+  void setGyroscopeEnabled(bool enabled) override {
+    const auto now = nowMicros();
+    {
+      const std::lock_guard lock(coreMutex_);
+      core_.setEnabled(enabled, now);
+    }
+    drainCommands(now);
+  }
+
   void configureGyroscopeTurntable(
       input::GyroscopeTurntableConfig config) override {
     const std::lock_guard lock(coreMutex_);

@@ -10,7 +10,8 @@ class MainMenuPreviewController final {
 public:
   MainMenuPreviewController(
       ChartPreloadWorker::Processor processor, std::function<void()> release,
-      std::chrono::milliseconds debounceDelay = std::chrono::milliseconds(100));
+      std::chrono::milliseconds debounceDelay = std::chrono::milliseconds(100),
+      std::function<void()> stopPlayback = {});
   ~MainMenuPreviewController();
   MainMenuPreviewController(const MainMenuPreviewController &) = delete;
   MainMenuPreviewController &operator=(const MainMenuPreviewController &) = delete;
@@ -32,6 +33,8 @@ private:
   void releaseWhenIdle();
 
   std::function<void()> release_;
+  std::function<void()> stopPlayback_;
+  std::mutex stopMutex_;
   std::mutex releaseMutex_;
   bool releasePending_ = false;
   // Joined before the callback and its synchronization state are destroyed.

@@ -2,6 +2,7 @@
 #include "scene/ArchiveUnzipPresentation.h"
 #include "ArchiveRAII.h"
 #include "rendering/common.h"
+#include "rendering/ResponsiveUi.h"
 #include "rendering/UniformCache.h"
 #include "view/Button.h"
 #include "view/TextView.h"
@@ -135,6 +136,29 @@ void preflightRequiresExplicitChoiceAndDispatchesCallbacksOnlyOnUpdate(bool dele
     assert(modal->startAll());
     assert(modal->isVisible());
     assertDescriptionsFit(*modal);
+    for (const auto size : {std::pair{585, 1266}, std::pair{1266, 585}, std::pair{480, 900}}) {
+      rendering::compactMenuCanvasActive = true;
+      rendering::window_width = size.first;
+      rendering::window_height = size.second;
+      parent.setSize(size.first, size.second);
+      modal->resize(size.first, size.second);
+      parent.applyYogaLayout();
+      auto *panel = modal->root()->getChildren().front();
+      assert(panel->getX() >= 0 && panel->getY() >= 0);
+      assert(panel->getX() + panel->getWidth() <= size.first);
+      assert(panel->getY() + panel->getHeight() <= size.second);
+      for (const auto *label : {"Keep Archives", "Delete After Unzip", "Cancel"}) {
+        auto *button = findButton(modal->root(), label);
+        assert(button && button->getX() >= panel->getX() && button->getY() >= panel->getY());
+        assert(button->getX() + button->getWidth() <= panel->getX() + panel->getWidth());
+        assert(button->getY() + button->getHeight() <= panel->getY() + panel->getHeight());
+      }
+    }
+    rendering::compactMenuCanvasActive = false;
+    rendering::window_width = rendering::design_width;
+    rendering::window_height = rendering::design_height;
+    parent.setSize(rendering::window_width, rendering::window_height);
+    modal->resize(rendering::window_width, rendering::window_height);
     assert(!modal->startAll());
     assert(findButton(modal->root(), "Keep Archives"));
     assert(findButton(modal->root(), "Delete After Unzip"));

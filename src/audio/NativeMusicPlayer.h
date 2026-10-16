@@ -3,8 +3,11 @@
 #include "PlaybackRate.h"
 
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <vector>
+
+namespace music_stream { class Source; }
 
 namespace native_music_player {
 
@@ -53,6 +56,8 @@ bool SetMetadataVisibility(MetadataVisibility visibility,
 bool SetQueueMetadata(const QueueMetadata &queue, std::string &errorMessage);
 bool Load(const std::filesystem::path &audioPath,
           const TrackMetadata &metadata, std::string &errorMessage);
+bool LoadStream(std::shared_ptr<music_stream::Source> source,
+                const TrackMetadata &metadata, std::string &errorMessage);
 bool Play(std::string &errorMessage);
 bool Pause(std::string &errorMessage);
 bool Stop(std::string &errorMessage);
@@ -61,5 +66,7 @@ bool SetPlaybackRate(audio::PlaybackRate rate, std::string &errorMessage);
 PlaybackState GetState();
 void NotifyControlEvent(ControlEvent event);
 std::vector<ControlEvent> DrainControlEvents();
+void NotifyPlaybackError(std::string message);
+std::vector<std::string> DrainPlaybackErrors();
 
 } // namespace native_music_player

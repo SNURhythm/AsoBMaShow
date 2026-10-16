@@ -69,6 +69,20 @@ struct Lifecycle {
   }
 };
 struct MainMenuScene : Scene {
+  enum class Tab { Play, Course, Music, Ir };
+  Tab activeTab_ = Tab::Play;
+  bool pendingTab_ = false;
+  struct Utility {
+    int pauses = 0, resumes = 0, profileChanges = 0;
+    void onPause() { ++pauses; }
+    void onResume() { ++resumes; }
+    void onProfileWillChange() { ++profileChanges; }
+  };
+  Utility *utility = nullptr, *irTab_ = nullptr;
+  Utility *activeUtilityTab() { return utility; }
+  bool selectorTabActive() const { return activeTab_ == Tab::Play || activeTab_ == Tab::Course; }
+  int reselections = 0;
+
   MainMenuScene() = default;
   template <class Context> MainMenuScene(Context &, bool) {}
   struct Context {
@@ -101,12 +115,16 @@ struct MainMenuScene : Scene {
   std::optional<int> refreshScoreClearRankViews() { return {}; }
   void refreshLongNoteModeClearRankViews() {}
   void refreshLibraryIfNeeded() { ++refreshed; }
-  void reselectCurrentChart() {}
+  void reselectCurrentChart() { ++reselections; }
   void onResume() RESUME_BODY
   void queueSelectedSkinHandoff() HANDOFF_BODY
 };
 
-namespace rendering { int window_width = 800, window_height = 600; }
+namespace rendering {
+int window_width = 800, window_height = 600;
+struct UiSafeAreaInsets { int top = 0, left = 0, bottom = 0, right = 0; };
+UiSafeAreaInsets uiSafeAreaInsets() { return {}; }
+}
 struct View { void setSize(int, int) {} void applyYogaLayout() {} };
 enum class SettingsDestination { Profile };
 struct SceneReturnTarget { static int Registered(const char *) { return 0; } };
@@ -116,12 +134,25 @@ struct SettingsScene : Scene {
 struct IntroScene {
   MainMenuScene::Context &context;
   View *rootLayout_ = nullptr, *startButton_ = nullptr;
+  View *content_ = nullptr, *menu_ = nullptr, *title_ = nullptr;
   View *settingsButton_ = nullptr, *tutorialButton_ = nullptr;
   int layoutWidth_ = -1, layoutHeight_ = -1;
+  int lastSafeTop = -1, lastSafeLeft = -1, lastSafeBottom = -1, lastSafeRight = -1;
   bool pendingStart_ = false;
   int navigations = 0;
   void processNavigationInput() { ++navigations; }
   void stopInputListening() {}
+  void layoutView() {
+    layoutWidth_ = rendering::window_width;
+    layoutHeight_ = rendering::window_height;
+    const auto safe = rendering::uiSafeAreaInsets();
+    lastSafeTop = safe.top;
+    lastSafeLeft = safe.left;
+    lastSafeBottom = safe.bottom;
+    lastSafeRight = safe.right;
+    rootLayout_->setSize(layoutWidth_, layoutHeight_);
+    rootLayout_->applyYogaLayout();
+  }
   void start() INTRO_START_BODY
   void update(float) INTRO_UPDATE_BODY
   void openSettings() INTRO_SETTINGS_BODY
@@ -208,6 +239,23 @@ int main() {
     menu.queueSelectedSkinHandoff();
     menu.deferred.back()();
     assert(lifecycle.calls == 1 && manager.current && !menu.presentationSkinRefreshPending);
+  }
+#endif
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  for (const auto tab : {MainMenuScene::Tab::Course, MainMenuScene::Tab::Music,
+                         MainMenuScene::Tab::Ir}) {
+    MainMenuScene menu;
+    SceneManager manager;
+    Lifecycle lifecycle;
+    menu.context.sceneManager = &manager;
+    menu.context.gameplaySkinLifecycle = &lifecycle;
+    menu.queueSelectedSkinHandoff();
+    menu.activeTab_ = tab;
+    menu.deferred.back()();
+    assert(lifecycle.calls == 0 && !manager.current);
+    const auto count = menu.deferred.size();
+    menu.queueSelectedSkinHandoff();
+    assert(menu.deferred.size() == count);
   }
 #endif
   for (int scenario = 0; scenario < 5; ++scenario) {

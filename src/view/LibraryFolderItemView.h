@@ -10,7 +10,7 @@ public:
 
   void setItem(const std::string &label, int depth, int count, bool selected,
                int clearRank, bool clearMarkFolder, bool expandable,
-               bool expanded);
+               bool expanded, uint32_t icon = 0, bool section = false);
   void onSelected() override;
   void onUnselected() override;
 
@@ -19,6 +19,11 @@ private:
   TextView *disclosureView;
   View *clearLamp;
   TextView *labelView;
+  TextView *groupLabelView;
+  TextView *sectionLabelView;
+  View *sectionRule;
+  bool sectionHeader = false;
+  bool rootItem = false;
   TextView *countView;
   int itemDepth = 0;
   int itemClearRank = -1;

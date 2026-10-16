@@ -5,7 +5,7 @@
 #include "../view/Button.h"
 #include "../view/IconText.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 
 #include <algorithm>
 #include <utility>
@@ -35,7 +35,7 @@ TextView *makeIcon(std::uint32_t codepoint) {
   icon->setText(ui_icons::textForCodepoint(codepoint));
   icon->setAlign(TextView::CENTER);
   icon->setVAlign(TextView::MIDDLE);
-  icon->setThemedColor(ui_theme::textPrimary);
+  icon->setThemedColor(app_theme::textPrimary);
   icon->setWidth(kControlSize);
   icon->setHeight(kControlSize);
   return icon;
@@ -117,11 +117,11 @@ void MusicSelectToolbarView::rebuild() {
   setFlexDirection(FlexDirection::Row);
   setFlexWrap(YGWrapWrap);
   setAlignItems(YGAlignCenter);
-  setThemedBackgroundColor(ui_theme::panelStrong);
-  setThemedBorderColor(ui_theme::hairlineStrong);
+  setThemedBackgroundColor(app_theme::panelStrong);
+  setThemedBorderColor(app_theme::hairlineStrong);
   setBorderWidth(kBorderWidth);
-  setCornerRadius(ui_theme::controlRadius());
-  setThemedShadow(ui_theme::shadow, ui_theme::kPanelShadow);
+  setCornerRadius(app_theme::controlRadius());
+  setThemedShadow(app_theme::shadow, app_theme::kPanelShadow);
 
   std::vector<float> widths;
   for (const auto control : layout) {
@@ -132,7 +132,7 @@ void MusicSelectToolbarView::rebuild() {
     if (codepoint != 0) {
       content = makeIcon(codepoint);
     } else {
-      label = new TextView("assets/fonts/notosanscjkjp.ttf", 17);
+      label = new TextView(app_theme::font, 17);
       std::string text;
       switch (control) {
       case MusicSelectToolbarControl::ChartMenu:
@@ -154,7 +154,7 @@ void MusicSelectToolbarView::rebuild() {
       label->setAlign(TextView::CENTER);
       label->setVAlign(TextView::MIDDLE);
       label->setOverflow(TextView::TextOverflow::Hidden);
-      label->setThemedColor(ui_theme::textPrimary);
+      label->setThemedColor(app_theme::textPrimary);
       width = std::min(availableWidth,
                        std::max(kControlSize,
                                 static_cast<float>(label->measureTextWidth(text)) +
@@ -176,13 +176,13 @@ void MusicSelectToolbarView::rebuild() {
     button->setWidth(width);
     button->setFlexShrink(0.0F);
     button->setHeight(kControlSize);
-    button->setCornerRadius(ui_theme::controlRadius());
-    button->setThemedBackgroundColors(ui_theme::control,
-                                      ui_theme::controlHover,
-                                      ui_theme::controlPressed);
-    button->setThemedBorderColors(ui_theme::hairlineStrong,
-                                  ui_theme::accentBorder,
-                                  ui_theme::accentBorderStrong);
+    button->setCornerRadius(app_theme::controlRadius());
+    button->setThemedBackgroundColors(app_theme::control,
+                                      app_theme::controlHover,
+                                      app_theme::controlPressed);
+    button->setThemedBorderColors(app_theme::hairlineStrong,
+                                  app_theme::accentBorder,
+                                  app_theme::accentBorderStrong);
     button->setStyledBorderWidth(1);
     button->setContentView(content);
     button->setOnClickListener([this, control] { activateControl(control); });

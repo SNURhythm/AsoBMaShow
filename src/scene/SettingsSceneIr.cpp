@@ -33,10 +33,10 @@ View *makeActionRow(const LayoutMetrics &metrics) {
 }
 
 Button *makeIrButton(const LayoutMetrics &metrics, i18n::Text label,
-                     const Color &accent = ui_theme::cyan()) {
+                     const Color &accent = app_theme::cyan()) {
   return makeAccentButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
                           makeText(label, metrics.bodyTextSize + 2,
-                                   ui_theme::textPrimary(), TextView::CENTER,
+                                   app_theme::textPrimary(), TextView::CENTER,
                                    TextView::MIDDLE),
                           accent);
 }
@@ -75,7 +75,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
   if (!driver) {
     auto *body =
         makeWrappedText(i18n::message("settings.ir.bokutachi_driver_unavailable_in_build.message"),
-                        metrics.bodyTextSize, ui_theme::textSecondary());
+                        metrics.bodyTextSize, app_theme::textSecondary());
     column->addView(makeCard(metrics, i18n::message("settings.ir.internet_ranking.label"), "", body, 180,
                              metrics.cardsWidth));
     return column;
@@ -287,10 +287,10 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
 
   auto *enableRow = makeActionRow(metrics);
   enableRow->addView(makeWrappedText(i18n::message("settings.ir.provider.label"), metrics.bodyTextSize,
-                                     ui_theme::textSecondary()));
+                                     app_theme::textSecondary()));
   auto *enabledButton =
       makeIrButton(metrics, presentation.enabled ? i18n::message("settings.ir.enabled.label") : i18n::message("settings.ir.disabled.label"),
-                   presentation.enabled ? ui_theme::lime() : ui_theme::coral());
+                   presentation.enabled ? app_theme::lime() : app_theme::coral());
   enabledButton->setOnClickListener([this, publishResult]() {
     if (!irSettingsModel) {
       return;
@@ -306,10 +306,10 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     auto *autoRow = makeActionRow(metrics);
     autoRow->addView(makeWrappedText(i18n::message("settings.ir.automatic_score_submission.label"),
                                      metrics.bodyTextSize,
-                                     ui_theme::textSecondary()));
+                                     app_theme::textSecondary()));
     auto *autoButton = makeIrButton(
         metrics, presentation.autoSubmit ? i18n::message("settings.ir.auto_submit_on.label") : i18n::message("settings.ir.auto_submit_off.label"),
-        presentation.autoSubmit ? ui_theme::lime() : ui_theme::amber());
+        presentation.autoSubmit ? app_theme::lime() : app_theme::amber());
     autoButton->setEnabled(presentation.authenticatedActionsAvailable);
     autoButton->setOnClickListener([this, publishResult]() {
       if (!irSettingsModel) {
@@ -324,7 +324,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
   }
 
   settingsBody->addView(makeWrappedText(i18n::message("settings.ir.server_origin.label"), metrics.bodyTextSize,
-                                        ui_theme::textSecondary()));
+                                        app_theme::textSecondary()));
   auto *originRow = makeActionRow(metrics);
   irServerOriginInput = makeTextInput(
       metrics, std::max(280, metrics.cardsWidth - metrics.actionButtonWidth -
@@ -345,13 +345,13 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
   if (presentation.insecureServerOrigin) {
     settingsBody->addView(makeWrappedText(
         i18n::message("settings.ir.server_origin.http_restrictions_notice"),
-        metrics.smallTextSize, ui_theme::coral()));
+        metrics.smallTextSize, app_theme::coral()));
   }
 
   settingsBody->addView(
       makeWrappedText(presentation.credentialLabel, metrics.bodyTextSize,
-                      presentation.hasCredential ? ui_theme::lime()
-                                                 : ui_theme::textSecondary()));
+                      presentation.hasCredential ? app_theme::lime()
+                                                 : app_theme::textSecondary()));
   if (irKeyEditorActive) {
     auto *keyRow = makeActionRow(metrics);
     irApiKeyInput =
@@ -360,7 +360,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
                                                  metrics.cardPadding * 2 - 36));
     irApiKeyInput->setEditingText("");
     keyRow->addView(irApiKeyInput);
-    auto *saveKey = makeIrButton(metrics, i18n::message("settings.ir.save_key.label"), ui_theme::lime());
+    auto *saveKey = makeIrButton(metrics, i18n::message("settings.ir.save_key.label"), app_theme::lime());
     saveKey->setEnabled(presentation.authenticatedActionsAvailable);
     saveKey->setOnClickListener([this, publishResult]() {
       if (!irSettingsModel || !irApiKeyInput) {
@@ -375,7 +375,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
       publishResult(result, i18n::message("settings.ir.api_key_saved_device.message"));
     });
     keyRow->addView(saveKey);
-    auto *cancelKey = makeIrButton(metrics, i18n::message("settings.ir.cancel.label"), ui_theme::amber());
+    auto *cancelKey = makeIrButton(metrics, i18n::message("settings.ir.cancel.label"), app_theme::amber());
     cancelKey->setOnClickListener([this]() {
       if (irApiKeyInput) {
         std::string apiKey = irApiKeyInput->getText();
@@ -401,7 +401,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     });
     keyActions->addView(replaceKey);
     if (presentation.hasCredential) {
-      auto *removeKey = makeIrButton(metrics, i18n::message("settings.ir.remove_key.label"), ui_theme::coral());
+      auto *removeKey = makeIrButton(metrics, i18n::message("settings.ir.remove_key.label"), app_theme::coral());
       removeKey->setOnClickListener([this, publishResult]() {
         if (!irSettingsModel) {
           return;
@@ -416,7 +416,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
 
   settingsBody->addView(makeWrappedText(
       i18n::message("settings.ir.credentials.device_storage_notice"),
-      metrics.smallTextSize, ui_theme::textMuted()));
+      metrics.smallTextSize, app_theme::textMuted()));
   column->addView(makeCard(
       metrics, "Bokutachi",
       presentation.readOnly
@@ -429,19 +429,19 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     queueBody->setFlexDirection(FlexDirection::Column);
     queueBody->setGap(metrics.compact ? 10.0F : 14.0F);
     irPendingCountText =
-        makeWrappedText("", metrics.bodyTextSize, ui_theme::textPrimary());
+        makeWrappedText("", metrics.bodyTextSize, app_theme::textPrimary());
     irAwaitingCountText =
-        makeWrappedText("", metrics.bodyTextSize, ui_theme::textPrimary());
+        makeWrappedText("", metrics.bodyTextSize, app_theme::textPrimary());
     irBlockedCountText =
-        makeWrappedText("", metrics.bodyTextSize, ui_theme::textPrimary());
+        makeWrappedText("", metrics.bodyTextSize, app_theme::textPrimary());
     irFailedCountText =
-        makeWrappedText("", metrics.bodyTextSize, ui_theme::textPrimary());
+        makeWrappedText("", metrics.bodyTextSize, app_theme::textPrimary());
     queueBody->addView(irPendingCountText);
     queueBody->addView(irAwaitingCountText);
     queueBody->addView(irBlockedCountText);
     queueBody->addView(irFailedCountText);
 
-    auto *retryAll = makeIrButton(metrics, i18n::message("settings.ir.retry_all_now.label"), ui_theme::lime());
+    auto *retryAll = makeIrButton(metrics, i18n::message("settings.ir.retry_all_now.label"), app_theme::lime());
     retryAll->setEnabled(presentation.canRetryAll);
     retryAll->setOnClickListener([this, publishResult]() {
       if (!irSettingsModel) {
@@ -470,10 +470,10 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
            {"diagnostic", snapshot.diagnostic.empty()
                               ? std::string{} : " · " + snapshot.diagnostic}});
       row->addView(makeWrappedText(label, metrics.smallTextSize,
-                                   ui_theme::textSecondary()));
+                                   app_theme::textSecondary()));
       if (irPendingDiscardRowId == snapshot.rowId) {
         auto *confirm =
-            makeIrButton(metrics, i18n::message("settings.ir.confirm_discard.label"), ui_theme::coral());
+            makeIrButton(metrics, i18n::message("settings.ir.confirm_discard.label"), app_theme::coral());
         confirm->setOnClickListener(
             [this, publishResult, rowId = snapshot.rowId]() {
               if (!irSettingsModel) {
@@ -486,14 +486,14 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
               publishResult(result, i18n::message("settings.ir.queued_submission_discarded.message"));
             });
         row->addView(confirm);
-        auto *cancel = makeIrButton(metrics, i18n::message("settings.ir.cancel.label"), ui_theme::amber());
+        auto *cancel = makeIrButton(metrics, i18n::message("settings.ir.cancel.label"), app_theme::amber());
         cancel->setOnClickListener([this]() {
           irPendingDiscardRowId.reset();
           lastLayoutWidth = -1;
         });
         row->addView(cancel);
       } else {
-        auto *discard = makeIrButton(metrics, i18n::message("settings.ir.discard.label"), ui_theme::coral());
+        auto *discard = makeIrButton(metrics, i18n::message("settings.ir.discard.label"), app_theme::coral());
         discard->setOnClickListener([this, rowId = snapshot.rowId]() {
           irPendingDiscardRowId = rowId;
           irStatusMessage = i18n::message("settings.ir.confirm_permanent_removal_queued_score.message");
@@ -507,7 +507,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     if (shown == 0) {
       queueBody->addView(
           makeWrappedText(i18n::message("settings.ir.no_discardable_submissions_currently_queued.message"),
-                          metrics.smallTextSize, ui_theme::textMuted()));
+                          metrics.smallTextSize, app_theme::textMuted()));
     }
     column->addView(makeCard(
         metrics, i18n::message("settings.ir.submission_queue.label"),
@@ -521,18 +521,18 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
     syncBody->setGap(metrics.compact ? 10.0F : 14.0F);
     syncBody->addView(makeWrappedText(presentation.recordSyncHelperText,
                                       metrics.smallTextSize,
-                                      ui_theme::textSecondary()));
+                                      app_theme::textSecondary()));
     syncBody->addView(makeWrappedText(
         presentation.recordSyncStatusText, metrics.bodyTextSize,
-        presentation.recordSyncStatusIsError ? ui_theme::coral()
-                                             : ui_theme::textPrimary()));
+        presentation.recordSyncStatusIsError ? app_theme::coral()
+                                             : app_theme::textPrimary()));
     if (!presentation.recordSyncCooldownText.empty()) {
       syncBody->addView(makeWrappedText(presentation.recordSyncCooldownText,
                                         metrics.smallTextSize,
-                                        ui_theme::amber()));
+                                        app_theme::amber()));
     }
     auto *syncRecords = makeIrButton(
-        metrics, presentation.recordSyncButtonLabel, ui_theme::lime());
+        metrics, presentation.recordSyncButtonLabel, app_theme::lime());
     syncRecords->setEnabled(presentation.canSyncRecords);
     syncRecords->setOnClickListener([this]() {
       if (!context.irSubmissionService) {
@@ -552,7 +552,7 @@ View *SettingsScene::buildIrTab(const LayoutMetrics &metrics) {
   if (!irStatusMessage.empty()) {
     irStatusText =
         makeWrappedText(irStatusMessage, metrics.bodyTextSize,
-                        irStatusIsError ? ui_theme::coral() : ui_theme::lime());
+                        irStatusIsError ? app_theme::coral() : app_theme::lime());
     auto *statusBody = new View();
     statusBody->addView(irStatusText);
     column->addView(makeCard(metrics, i18n::message("settings.ir.ir_status.label"), "", statusBody, 120,

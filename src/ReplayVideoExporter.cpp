@@ -1,6 +1,8 @@
+#include "view/AppTheme.h"
 #include "ScratchlessGameplayPolicy.h"
 #include "GameplayKeyMode.h"
 #include "ReplayVideoExporter.h"
+#include "rendering/ResponsiveUi.h"
 #include "ExportFileName.h"
 #include "replay/CourseReplayConsumer.h"
 #include "replay/ReplayOption.h"
@@ -741,6 +743,8 @@ void reportReplayExportProgress(const ReplayVideoExportOptions &options,
 }
 
 struct ReplayVideoRenderGeometryState {
+  bool responsiveMenuSceneActive = rendering::responsiveMenuSceneActive;
+  bool compactMenuCanvasActive = rendering::compactMenuCanvasActive;
   int windowWidth = rendering::window_width;
   int windowHeight = rendering::window_height;
   int renderWidth = rendering::render_width;
@@ -757,6 +761,8 @@ struct ReplayVideoRenderGeometryState {
 
 void restoreReplayVideoRenderGeometry(
     const ReplayVideoRenderGeometryState &state) {
+  rendering::responsiveMenuSceneActive = state.responsiveMenuSceneActive;
+  rendering::compactMenuCanvasActive = state.compactMenuCanvasActive;
   rendering::window_width = state.windowWidth;
   rendering::window_height = state.windowHeight;
   rendering::render_width = state.renderWidth;
@@ -778,7 +784,10 @@ public:
 
   ~ScopedReplayVideoRenderGeometry() { restorePrimary(); }
 
-  void applyExport() { rendering::updateUIScale(exportWidth, exportHeight); }
+  void applyExport() {
+    rendering::responsiveMenuSceneActive = false;
+    rendering::updateUIScale(exportWidth, exportHeight);
+  }
 
   void restorePrimary() {
     restoreReplayVideoRenderGeometry(primary);
@@ -1232,7 +1241,7 @@ Color resultGaugeLineColor(float value) {
 void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
                               const RhythmState &resultState, float x, float y,
                               float w, float h) {
-  batch.addRect(x, y, w, h, ui_theme::resultPanelSubtle().toABGR());
+  batch.addRect(x, y, w, h, app_theme::resultPanelSubtle().toABGR());
 
   const float padding = 8.0f;
   const float graphX = x + padding;
@@ -1248,7 +1257,7 @@ void drawResultGaugeLineGraph(rendering::SimpleBatchRenderer &batch,
     return graphY + graphH - (clampedValue(value) / gaugeMaximum) * graphH;
   };
 
-  const uint32_t guideColor = ui_theme::hairlineSubtle().toABGR();
+  const uint32_t guideColor = app_theme::hairlineSubtle().toABGR();
   batch.addLine(graphX, valueY(80.0f), graphX + graphW, valueY(80.0f), 1.0f,
                 guideColor);
   batch.addLine(graphX, valueY(30.0f), graphX + graphW, valueY(30.0f), 1.0f,
@@ -1477,9 +1486,17 @@ bms_parser::ChartMeta courseResultMetaForReplayVideo(
   const auto chartCount = replay.entryFacts.empty()
                               ? stages.size()
                               : replay.entryFacts.size();
+  std::vector<int> keyModes;
+  keyModes.reserve(stages.size());
+  for (const auto &stage : stages) {
+    keyModes.push_back(stage.chart != nullptr ? stage.chart->Meta.KeyMode : 0);
+  }
+  if (replay.totalCharts > static_cast<int>(keyModes.size())) {
+    keyModes.clear();
+  }
   auto meta = result_presentation::courseResultMeta(
       replay.courseName, replay.courseGroupName, chartCount, totalNotes,
-      playLength);
+      playLength, keyModes);
   if (!stages.empty() && stages.back().chart != nullptr) {
     const auto &lastMeta = stages.back().chart->Meta;
     meta.Bpm = lastMeta.Bpm;
@@ -4799,7 +4816,8 @@ ReplayVideoExporter::Export(ApplicationContext &context,
   const preparation::Plan preparationPlan = preparation::buildNormalPlan(
       *chart, context.settings.startLaneIndicatorsEnabled,
       context.settings.prepMetronomeEnabled, 0, 0, std::nullopt,
-      replay.provenance.playback);
+      replay.provenance.playback,
+      context.settings.prepMetronomeMaxDurationMilliseconds);
   PreparedReplayGameplayPresentation preparedGameplay;
   GameplaySkinSessionStopOwner skinSessionStopOwner(options.stop);
   auto skinSessionStop = makeScopeExit(
@@ -5039,7 +5057,8 @@ ReplayVideoExportResult exportCourseReplayImpl(
     preparation::Plan stagePreparationPlan = preparation::buildNormalPlan(
         *chart, context.settings.startLaneIndicatorsEnabled,
         context.settings.prepMetronomeEnabled, 0, 0, std::nullopt,
-        course_rules::kRequiredPlaybackRate);
+        course_rules::kRequiredPlaybackRate,
+        context.settings.prepMetronomeMaxDurationMilliseconds);
 
     const long long resultDurationMicros =
         resolvedOptions.includeResultScreen

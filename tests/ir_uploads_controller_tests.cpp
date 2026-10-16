@@ -549,6 +549,7 @@ void testProviderAvailabilityRejectsAuthenticatedHttpUploads() {
 
 int main() {
   testPreparationStatusFollowsLanguageChanges();
+  testSceneSettingsRouteRetainsEmbeddedShell();
   testScenePreparationLaunchGatesAndApplicationThreadCompletion();
   testSceneStopRetainsCancelledSelectionUntilCompletion();
   testPreparationTaskProgressPartialFailureAndCompletionJoining();

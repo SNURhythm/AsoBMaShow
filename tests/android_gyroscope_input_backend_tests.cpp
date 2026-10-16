@@ -50,7 +50,7 @@ struct Harness {
        },
        .enqueueDevice = [this](auto device) { devices.push_back(std::move(device)); }}};
 
-  explicit Harness(bool successfulRegistration = true)
+  explicit Harness(bool successfulRegistration = true, bool enabled = true)
       : registrationSucceeds(successfulRegistration) {
     androidGyroscopeJavaCall = [this](std::string_view method) {
       if (method == "startGyroscopeTurntableSensors") {
@@ -66,6 +66,7 @@ struct Harness {
     };
     std::string error;
     require(backend.start(error), "backend starts against a supported sensor");
+    backend.setGyroscopeEnabled(enabled);
   }
 
   ~Harness() { backend.stop(); androidGyroscopeJavaCall = {}; }
@@ -84,6 +85,33 @@ struct Harness {
     sample(3, 30, time + 0.1);
   }
 };
+
+void testSamplingFollowsDemandAcrossLifecycle() {
+  Harness h(true, false);
+  require(h.generation == 0, "unused Android gyro never registers a sensor");
+  h.backend.activityPaused();
+  h.backend.activityResumed();
+  h.backend.pump();
+  require(h.generation == 0, "foreground alone does not register an unused gyro");
+  h.backend.setGyroscopeEnabled(true);
+  require(h.generation == 1, "demand registers the Android sensor");
+  h.clockwise();
+  require(h.inputs.size() == 1 && h.inputs.back().normalizedValue == 1.0F,
+          "demanded sensor preserves immediate scratch delivery");
+  h.sampleDuringStop = true;
+  h.backend.setGyroscopeEnabled(false);
+  require(h.inputs.size() == 2 && h.inputs.back().normalizedValue == 0.0F,
+          "demand removal releases held scratch without deadlocking callbacks");
+  h.sample(100, 30, 2.0, 1);
+  h.backend.pump();
+  require(h.inputs.size() == 2 && h.generation == 1,
+          "late samples cannot revive disabled sampling");
+  h.backend.activityPaused();
+  h.backend.setGyroscopeEnabled(true);
+  require(h.generation == 1, "demand waits until foreground before registering");
+  h.backend.activityResumed();
+  require(h.generation == 2, "foreground starts a fresh demanded session");
+}
 
 void testEveryDirectionReachesTheSinkBeforePump() {
   Harness h;
@@ -202,6 +230,7 @@ void testStopWaitsForAcquiredLifecycleCallbackWithoutHoldingCommandLock() {
 
 int main() {
   try {
+    testSamplingFollowsDemandAcrossLifecycle();
     testEveryDirectionReachesTheSinkBeforePump();
     testPauseInvalidatesGenerationAndDoesNotJoinUnderCoreLock();
     testSensorDeliveryAgeSurvivesDifferentBootAndSteadyEpochs();

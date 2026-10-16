@@ -29,11 +29,14 @@
 #include <filesystem>
 #include <deque>
 #include <functional>
+#include <future>
 #include <thread>
 #include <unordered_set>
 #include <vector>
 #include "../targets.h"
 #include "../audio/Jukebox.h"
+#include "../audio/PreviewStreamPlayer.h"
+#include "../audio/DecodedAssetCache.h"
 #include "../video/VideoPlayer.h"
 #include "MainMenuLibrary.h"
 #include "MainMenuPlayOptionsModal.h"
@@ -61,6 +64,8 @@ class OverlayPortal;
 class BlockingOverlayView;
 class DecideLoadingOverlay;
 class MainMenuPreviewController;
+class MusicPlayerScene;
+class IrUploadsScene;
 class PlayOptionsPanelView;
 class NewcomerTutorialView;
 class ScrollView;
@@ -75,10 +80,13 @@ struct MainMenuParseLogRow {
 
 class MainMenuScene : public Scene {
 public:
+  bool usesResponsiveMenuCanvas() const override { return true; }
+  bool canSkipUnchangedPresentation() const override { return selectorTabActive(); }
   explicit MainMenuScene(ApplicationContext &context, bool showTutorial = false);
   ~MainMenuScene() override;
   void init() override;
   void onPause() override;
+  void onInputQueueOverflow() override;
   void onResume() override;
   void onLanguageChanged() override;
   void onPresentationOrientationChanged() override;
@@ -92,6 +100,23 @@ public:
   void cleanupScene() override;
 
 private:
+  enum class Tab { Play, Course, Music, Ir };
+  Tab activeTab_ = Tab::Play;
+  Tab selectorTab_ = Tab::Play;
+  std::unique_ptr<MusicPlayerScene> musicTab_;
+  std::unique_ptr<IrUploadsScene> irTab_;
+  bool restoringTabSelection_ = false;
+  std::optional<Tab> pendingTab_;
+  std::future<void> tabPreviewStop_;
+  View *tabLoadingOverlay_ = nullptr;
+  bool selectorTabActive() const;
+  Scene *activeUtilityTab() const;
+  void selectTab(Tab tab);
+  void completeTabSwitch(Tab tab);
+  bool applyPendingTabSwitch();
+  void cancelPendingTabSwitch();
+  void refreshTabPresentation();
+  bool renderViewBeforeScene(const View *view) const override;
   bool showTutorial_ = false;
   bool findBmsAvailableWithoutTutorial_ = false;
   NewcomerTutorialView *tutorial_ = nullptr;
@@ -103,7 +128,7 @@ private:
   void buildTutorial();
   std::optional<ChartRepository::Session> chartSession;
   std::atomic_bool willStart = false;
-  std::unique_ptr<bms_parser::Chart> selectedChart;
+  std::shared_ptr<bms_parser::Chart> selectedChart;
   mutable std::mutex selectedChartMutex;
   std::atomic_bool selectedChartMediaReady = false;
   std::atomic_bool selectedChartReusableForStart = false;
@@ -111,8 +136,15 @@ private:
   // Preview chart loading runs on the shared ChartPreloadWorker (single
   // scene-lifetime thread, debounced and latest-wins) so a selection change
   // never spawns or joins a per-selection thread on the UI thread.
-  std::unique_ptr<MainMenuPreviewController> previewWorker_;
+  audio::PreviewStreamPlayer previewPlayer_;
+  std::shared_ptr<audio::DecodedAssetCache> previewDecodedAssets_;
+  // Explicit chart position; future highlight selection supplies this value.
+  std::uint64_t previewStartFrame_ = 0;
+  void updatePreviewVisuals();
+  // Guarded by previewJukeboxLoadMutex; full gameplay owns visuals after stop.
+  bool previewVisualsLoaded_ = false;
   std::mutex previewJukeboxLoadMutex;
+  std::unique_ptr<MainMenuPreviewController> previewWorker_;
   ReplayRecordTask replayLoadTask_;
   bool prioritizeVisibleArtworkBindings = false;
   bool replayResultRecallInProgress = false;
@@ -161,7 +193,18 @@ private:
     bool clearMarkFolder = false;
     bool expandable = false;
     bool expanded = false;
+    bool sectionHeader = false;
   };
+
+  struct SelectorTabState {
+    LibraryFolderItem folder;
+    std::optional<ChartMetaRecord> selected;
+    std::optional<std::filesystem::path> temporaryFolder;
+    std::string search;
+    float songScroll = 0;
+    float folderScroll = 0;
+  };
+  std::array<SelectorTabState, 2> selectorStates_;
 
   RecyclerView<ChartMetaRecord> *recyclerView = nullptr;
   RecyclerView<LibraryFolderItem> *folderRecyclerView = nullptr;
@@ -206,6 +249,8 @@ private:
   Button *chartSortButton = nullptr;
   TextView *chartSortButtonText = nullptr;
   Button *startButton = nullptr;
+  View *primaryActionSlot_ = nullptr;
+  bool unzipButtonAvailable_ = false;
   Button *rankingsButton = nullptr;
   TextView *rankingsButtonText = nullptr;
   std::unique_ptr<ir::IrRankingModal> rankingsModal;
@@ -221,10 +266,6 @@ private:
   TextView *unzipButtonText = nullptr;
   Button *parseLogButton = nullptr;
   TextView *parseLogButtonText = nullptr;
-  Button *musicButton = nullptr;
-  TextView *musicButtonText = nullptr;
-  Button *irUploadsButton = nullptr;
-  TextView *irUploadsButtonText = nullptr;
   Button *tasksButton = nullptr;
   TextView *tasksButtonText = nullptr;
   TextView *replayButtonText = nullptr;
@@ -286,6 +327,7 @@ private:
   TextView *tasksCloseButtonText = nullptr;
   std::unique_ptr<FindBmsModal> findBmsModal_;
   TextView *readyGaugeText = nullptr;
+  TextView *readySpeedText = nullptr;
   TextView *readyPlayOptionText = nullptr;
   TextView *readyAssistOptionText = nullptr;
   TextView *readyPacemakerText = nullptr;
@@ -364,6 +406,7 @@ private:
 
   void initView(ApplicationContext &context);
   void updatePanelLayout();
+  void updatePhonePanelLayout();
   float portraitDetailsHeight(float availableHeight) const;
   void updateMenuPresentation(bool portrait);
   void applyThemeChange();
@@ -449,7 +492,7 @@ private:
   bool currentLongNoteModeSelectionAllowed(const std::string &mode) const;
   void refreshReadySettingsSummary();
   void refreshSelectedChartDetails();
-  bms_parser::Chart *setSelectedChart(std::unique_ptr<bms_parser::Chart> chart,
+  bms_parser::Chart *setSelectedChart(std::shared_ptr<bms_parser::Chart> chart,
                                       bool mediaReady,
                                       bool reusableForStart = true);
   void clearSelectedChart();
@@ -458,6 +501,8 @@ private:
   selectedChartRandomInfoForPath(const std::filesystem::path &path) const;
   bms_parser::Chart *
   loadedSelectedChartForPath(const std::filesystem::path &path) const;
+  bms_parser::Chart *
+  parsedSelectedChartForPath(const std::filesystem::path &path) const;
   void resetStartLoadingUi();
   void resetReplayWatchLoadingUi();
   void publishReplayLoadDiagnostic(const char *action,
@@ -476,7 +521,7 @@ private:
   void startCourseDirect(std::shared_ptr<CoursePlaySession> session);
   void openChartViewerForSelection();
   void openChartViewerDirect(const ChartMetaRecord &record);
-  void toggleRevealContextMenu();
+  void toggleRevealContextMenu(View *anchor = nullptr);
   void showSelectedChartFolder();
   bool clearSameFolderScope();
   void revealSelectedChartInFileManager();
@@ -485,6 +530,7 @@ private:
   void setPlayableChartActionsVisible(bool visible);
   void setPlayableChartActionsVisible(bool visible, bool chartActionsVisible);
   void setUnzipButtonVisible(bool visible);
+  void refreshPrimaryActionVisibility();
   void refreshUnzipButtonForSelection(const ChartMetaRecord *record);
   void buildUnzipProgressModal();
   bool archiveUnzipInProgress() const;
@@ -520,9 +566,10 @@ private:
 #if TARGET_OS_ANDROID
   void buildFileActionsModal();
   void resizeFileActionsModal();
-  void resizeTasksModal();
   void showFileActionsModal();
 #endif
+  void resizeTasksModal();
+  void resizeParseLogModal();
   void buildTasksModal();
   void showTasksModal();
   void hideTasksModal();

@@ -79,6 +79,33 @@ private:
   std::filesystem::path path_;
 };
 
+void testPrepMetronomeDurationPersistence() {
+  TempDirectory temp;
+  const auto path = temp.path() / "prep-duration.json";
+  expect(AppSettings{}.prepMetronomeMaxDurationMilliseconds == 5000,
+         "new profiles default to a 5000 ms prep cutoff");
+  writeFile(path, R"({"schemaVersion":8})");
+  expect(AppSettingsStore::Load(path).settings.prepMetronomeMaxDurationMilliseconds == 5000,
+         "existing profiles receive the 5000 ms default");
+  writeFile(path, R"({"schemaVersion":8,"prepMetronomeMaxDurationMilliseconds":7000})");
+  const auto loaded = AppSettingsStore::Load(path);
+  std::string error;
+  expect(AppSettingsStore::Save(path, loaded.settings, error),
+         "prep duration settings save");
+  const auto saved = nlohmann::json::parse(readFile(path));
+  expect(saved.value("prepMetronomeMaxDurationMilliseconds", -1) == 7000,
+         "prep metronome cutoff persists in milliseconds");
+  auto unlimited = loaded.settings;
+  unlimited.prepMetronomeMaxDurationMilliseconds = 0;
+  expect(AppSettingsStore::Save(path, unlimited, error) &&
+             AppSettingsStore::Load(path).settings.prepMetronomeMaxDurationMilliseconds == 0,
+         "no-limit preference survives restart");
+  unlimited.prepMetronomeMaxDurationMilliseconds = -1;
+  unlimited.sanitize();
+  expect(unlimited.prepMetronomeMaxDurationMilliseconds == 0,
+         "negative durations are normalized to the minimum");
+}
+
 AppSettings makeDistinctSettings() {
   AppSettings value;
   value.audioVideo.audio.outputDeviceId = "device:studio";
@@ -2808,6 +2835,7 @@ int main() {
   testHostileSkinJsonIsBoundedDuringDecode();
   testSkinEntryCollisionKeysDeduplicateDeterministically();
   testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues();
+  testPrepMetronomeDurationPersistence();
   testIpadGestureReminderRoundTrip();
   testScreenOrientationRoundTripAndDefaults();
   testReplayPreferencesSurviveSettingsRoundTrip();

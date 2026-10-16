@@ -1219,6 +1219,27 @@ void testAuthoredCourseStageLiveCarry() {
   }
 }
 
+void testCourseResultKeyMode() {
+  CoursePlaySession session;
+  session.entries.resize(3);
+  for (const int mode : {5, 7, 9, 10, 14}) {
+    for (auto &entry : session.entries) entry.meta.KeyMode = mode;
+    for (const std::size_t index : {0U, 2U, 3U}) {
+      session.currentIndex = index;
+      const auto meta = courseResultMetaForSession(session);
+      require(meta.KeyMode == mode, "course result retains the common chart keymode");
+      require(meta.IsDP == (mode == 10 || mode == 14),
+              "course result retains common double-play mode");
+    }
+  }
+  session.entries.front().meta.KeyMode = 7;
+  require(gameplay::keyModeLabel(courseResultMetaForSession(session).KeyMode).empty(),
+          "mixed course omits keymode, including unplayed entries");
+  session.entries.clear();
+  require(gameplay::keyModeLabel(courseResultMetaForSession(session).KeyMode).empty(),
+          "empty course does not invent a keymode");
+}
+
 void testCourseResultKeepsLastChartMetadata() {
   CoursePlaySession session;
   session.courseName = "Metadata course";
@@ -2650,6 +2671,7 @@ int main(int argc, char **argv) {
     testActualDoublePlayFlipPreparation(path);
   }
   testCourseResultKeepsLastChartMetadata();
+  testCourseResultKeyMode();
   testCourseAbort();
   testPracticeTerminalExceptions();
   testLongNoteAbortAccounting();

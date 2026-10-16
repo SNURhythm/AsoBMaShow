@@ -537,6 +537,57 @@ void testArchivedChartLoadsAudioAboveSchedulingBudget(bool sevenZip,
   }
 }
 
+void testRegularChartReusesSoundsAndInvalidatesReplacement() {
+  TemporaryArchivedVisualFixture fixture;
+  const auto soundPath = fixture.directory / "shared.wav";
+  auto writeSound = [&](std::int16_t sample) {
+    std::ofstream stream(soundPath, std::ios::binary | std::ios::trunc);
+    stream << shortWave(64, sample);
+    require(stream.good(), "regular sound fixture writes PCM");
+  };
+  writeSound(1000);
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+  bms_parser::Chart chart;
+  chart.Meta.Folder = fixture.directory;
+  chart.Meta.BmsPath = fixture.directory / "chart.bms";
+  chart.ReferencedWavTable = {{1, "shared.wav"}};
+  std::atomic_bool cancelled = false;
+  require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success,
+          "regular sound loads");
+  const auto original = jukebox.resolveRealtimeKeySound(1);
+  require(original && original->valid(), "regular sound has a live handle");
+  require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success &&
+              original->valid(),
+          "unchanged regular sound retains decoded PCM");
+  const auto size = std::filesystem::file_size(soundPath);
+  const auto modified = std::filesystem::last_write_time(soundPath);
+  writeSound(-1000);
+  std::filesystem::last_write_time(soundPath, modified);
+  require(std::filesystem::file_size(soundPath) == size &&
+              std::filesystem::last_write_time(soundPath) == modified,
+          "regular sound replacement preserves size and modification time");
+  require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success,
+          "regular sound replacement reloads");
+  require(!original->valid(), "regular sound replacement retires stale PCM");
+  const auto replacement = jukebox.resolveRealtimeKeySound(1);
+  require(replacement && replacement->valid(), "replacement has a live handle");
+  require(jukebox.play(0).success, "replacement starts playback");
+  jukebox.playKeySound(1);
+  std::vector<std::int16_t> output(128);
+  control->renderCallback(output.data(), 64, 2, control->renderUserData);
+  require(jukebox.stopKeepDevice().success, "replacement stops playback");
+  require(std::any_of(output.begin(), output.end(),
+                      [](auto sample) { return sample < 0; }) &&
+              std::none_of(output.begin(), output.end(),
+                           [](auto sample) { return sample > 0; }),
+          "regular sound replacement renders refreshed negative PCM");
+  require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success &&
+              replacement->valid(),
+          "unchanged regular replacement retains decoded PCM");
+}
+
 void testArchivedChartReusesSharedSoundsAndInvalidatesReplacement(bool sevenZip) {
   TemporaryArchivedVisualFixture fixture;
   if (sevenZip) {
@@ -1098,6 +1149,7 @@ int main(int argc, char **argv) {
     testManagerRestartAndRollbackRestoreProductionJukeboxVisuals();
     testVideoMaterializationCompletesBeforePlayback();
     testArchivedVisualsPreloadInOneArchiveBatch();
+    testRegularChartReusesSoundsAndInvalidatesReplacement();
     for (const bool sevenZip : {false, true}) {
       testArchivedChartCombinesSoundAndVisualExtraction(sevenZip);
       testArchivedChartReusesSharedSoundsAndInvalidatesReplacement(sevenZip);

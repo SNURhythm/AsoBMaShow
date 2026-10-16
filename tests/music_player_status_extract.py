@@ -20,6 +20,7 @@ def main():
     menu_status_type = re.search(r"^\s*([\w:]+) musicStatusMessage;", scene_header, re.M).group(1)
     service_methods = "\n\n".join(extract(service, signature) for signature in (
         "void MusicPlayerService::PlaybackWorker(",
+        "bool MusicPlayerService::ProcessNativeControlEvents(\n    " + status_type + " &",
         "void MusicPlayerService::PublishNativeControlStatus(",
         "bool MusicPlayerService::ConsumeNativeControlStatus(\n    " + status_type + " &",
     ))

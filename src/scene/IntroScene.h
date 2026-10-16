@@ -10,9 +10,11 @@
 
 class Button;
 class View;
+class TextView;
 
 class IntroScene final : public Scene {
 public:
+  bool usesResponsiveMenuCanvas() const override { return true; }
   explicit IntroScene(ApplicationContext &context)
       : Scene(context),
         navigation_(musicSelectKeyLayoutForConfig(
@@ -31,12 +33,16 @@ private:
   void startTutorial();
   void openSettings();
   void buildView();
+  void layoutView();
   void startInputListening();
   void stopInputListening();
   void syncNavigationSelection();
   void processNavigationInput();
 
   View *rootLayout_ = nullptr;
+  View *content_ = nullptr;
+  View *menu_ = nullptr;
+  TextView *title_ = nullptr;
   Button *startButton_ = nullptr;
   Button *settingsButton_ = nullptr;
   Button *tutorialButton_ = nullptr;
@@ -46,5 +52,9 @@ private:
   std::uint64_t inputDeviceSubscription_ = 0;
   int layoutWidth_ = -1;
   int layoutHeight_ = -1;
+  int lastSafeTop = -1;
+  int lastSafeLeft = -1;
+  int lastSafeBottom = -1;
+  int lastSafeRight = -1;
   bool pendingStart_ = false;
 };

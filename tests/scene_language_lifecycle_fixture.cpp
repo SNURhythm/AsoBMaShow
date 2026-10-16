@@ -40,6 +40,7 @@ public:
   BackgroundTasks *chartLibraryTasks = nullptr;
   std::function<void()> notifyBackgroundTaskPauseStateChanged;
   std::function<void(bool)> setGameplayOrientationLocked;
+  std::function<void(bool)> setResponsiveMenuCanvas;
   int gameplayBgaCompositeState = 0;
 };
 struct RenderContext {
@@ -208,7 +209,33 @@ void testGameplayOrientationFollowsSceneLifetime() {
   assert(!locked && "shutdown must release the lock");
 }
 
+void testMenuCanvasIsSelectedBeforeSceneInitializationAndResume() {
+  ApplicationContext context;
+  bool menuCanvas = false;
+  context.setResponsiveMenuCanvas = [&](bool menu) { menuCanvas = menu; };
+  SceneManager manager(context);
+  struct Menu final : Scene {
+    bool &menuCanvas;
+    Menu(ApplicationContext &context, bool &value) : Scene(context), menuCanvas(value) {}
+    bool usesResponsiveMenuCanvas() const override { return true; }
+    void init() override { assert(menuCanvas); }
+    void onResume() override { assert(menuCanvas); }
+    void update(float) override {}
+    void renderScene() override {}
+    void cleanupScene() override {}
+  };
+  auto menu = std::make_unique<Menu>(context, menuCanvas);
+  auto *retained = menu.get();
+  manager.changeScene(std::move(menu));
+  assert(menuCanvas);
+  manager.changeScene(std::make_unique<ObservedScene>(context), true);
+  assert(!menuCanvas && "gameplay and skin scenes retain their design canvas");
+  manager.changeScene(retained);
+  assert(menuCanvas);
+}
+
 int main() {
+  testMenuCanvasIsSelectedBeforeSceneInitializationAndResume();
   testGameplayOrientationFollowsSceneLifetime();
   testTutorialMenuReturnsWithState();
   i18n::setLanguage(i18n::Language::English);

@@ -5,14 +5,17 @@
 #include "../Utils.h"
 #include "../library/ChartLibraryPlatform.h"
 #include "../rendering/common.h"
+#include "../rendering/ResponsiveUi.h"
+#include "../rendering/UiSafeArea.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/Button.h"
 #include "../view/ModalViewHelpers.h"
 #include "../view/RecyclerView.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 
 #include <algorithm>
+#include <array>
 #include <utility>
 
 namespace {
@@ -82,10 +85,10 @@ public:
     setJustifyContent(YGJustifyCenter);
     setPadding(Edge::Left, 14);
     setPadding(Edge::Right, 14);
-    setCornerRadius(ui_theme::controlRadius());
+    setCornerRadius(app_theme::controlRadius());
     setBorderWidth(1);
 
-    label = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+    label = new TextView(app_theme::font, 16);
     label->setWrap(true);
     label->setOverflow(TextView::TextOverflow::Hidden);
     label->setVAlign(TextView::MIDDLE);
@@ -107,20 +110,20 @@ public:
   }
 
   void onSelected() override {
-    setThemedBackgroundColor(ui_theme::infoActionHover);
+    setThemedBackgroundColor(app_theme::infoActionHover);
     setThemedBorderColor(
-        [] { return ui_theme::withAlpha(ui_theme::infoActionPressed(), 210); });
+        [] { return app_theme::withAlpha(app_theme::infoActionPressed(), 210); });
     if (label != nullptr) {
       label->setThemedColor(
-          [] { return ui_theme::textOn(ui_theme::infoActionHover()); });
+          [] { return app_theme::textOn(app_theme::infoActionHover()); });
     }
   }
 
   void onUnselected() override {
-    setThemedBackgroundColor(ui_theme::control);
-    setThemedBorderColor(ui_theme::hairlineStrong);
+    setThemedBackgroundColor(app_theme::control);
+    setThemedBorderColor(app_theme::hairlineStrong);
     if (label != nullptr) {
-      label->setThemedColor(ui_theme::textPrimary);
+      label->setThemedColor(app_theme::textPrimary);
     }
   }
 
@@ -266,7 +269,31 @@ bool FindBmsModal::isVisible() const {
 View *FindBmsModal::root() const { return findBmsModalRoot; }
 
 void FindBmsModal::resize(int width, int height) {
-  if (findBmsModalRoot != nullptr) findBmsModalRoot->setSize(width, height);
+  if (findBmsModalRoot == nullptr) return;
+  View::LayoutBatchScope layoutBatch;
+  const auto safe = rendering::uiSafeAreaInsets();
+  findBmsModalRoot->setSize(width, height);
+  findBmsModalRoot->setPadding(Edge::Top, safe.top)->setPadding(Edge::Bottom, safe.bottom);
+  findBmsModalRoot->setPadding(Edge::Left, safe.left)->setPadding(Edge::Right, safe.right);
+  const float panelWidth = std::max(0.0f, std::min(760.0f, float(width - safe.left - safe.right - 24)));
+  const float panelHeight = std::max(0.0f, std::min(560.0f, float(height - safe.top - safe.bottom - 24)));
+  const float contentWidth = std::max(0.0f, panelWidth - 46);
+  findBmsModalRoot->findViewByName("findBmsPanel")->setWidth(panelWidth)->setHeight(panelHeight);
+  findBmsCandidateRecyclerView->setWidth(contentWidth)->setMinHeight(0);
+  findBmsDetailText->setMinHeight(0);
+  findBmsProgressTrack->setWidth(contentWidth);
+  auto *footer = findBmsModalRoot->findViewByName("findBmsFooter");
+  footer->setFlexWrap(YGWrapWrap)->setHeight(YGUndefined)->setFlexShrink(0);
+  const float actionHeight = rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 58;
+  const std::array<float, 8> widths{130, 240, 150, 150, 150, 180, 150, 150};
+  size_t index = 0;
+  for (auto *button : {findBmsCloseButton, findBmsConfirmButton, findBmsRetryButton,
+                       findBmsKeepFilesButton, findBmsDeleteFilesButton,
+                       findBmsOpenButton, findBmsGoogleButton, findBmsRefreshButton}) {
+    button->setWidth(std::min(widths[index++], contentWidth));
+    button->setHeight(actionHeight)->setFlexShrink(0);
+    button->setDisplay(button->getVisible() ? YGDisplayFlex : YGDisplayNone);
+  }
 }
 
 void FindBmsModal::cancelAndWait() {
@@ -320,38 +347,39 @@ void FindBmsModal::build(View *parent) {
   findBmsModalRoot->setFlexDirection(FlexDirection::Column);
   findBmsModalRoot->setAlignItems(YGAlignCenter);
   findBmsModalRoot->setJustifyContent(YGJustifyCenter);
-  findBmsModalRoot->setThemedBackgroundColor(ui_theme::scrim);
+  findBmsModalRoot->setThemedBackgroundColor(app_theme::scrim);
 
   auto *panel = new View();
+  panel->setName("findBmsPanel");
   panel->setWidth(kModalPanelWidth)
       ->setHeight(560)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
       ->setPadding(Edge::All, kModalPanelPadding)
-      ->setThemedBackgroundColor(ui_theme::panelStrong)
-      ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+      ->setThemedBackgroundColor(app_theme::panelStrong)
+      ->setCornerRadius(app_theme::panelRadius())
+      ->setThemedShadow(app_theme::shadow, app_theme::kModalShadow)
       ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
-  findBmsModalTitleText = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
+  findBmsModalTitleText = new TextView(app_theme::boldFont, 30);
   findBmsModalTitleText->setLocalizedText(i18n::message("library.find_bms.find_bms.label"));
-  findBmsModalTitleText->setThemedColor(ui_theme::textPrimary);
+  findBmsModalTitleText->setThemedColor(app_theme::textPrimary);
   findBmsModalTitleText->setHeight(42);
   panel->addView(findBmsModalTitleText);
 
-  findBmsStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+  findBmsStatusText = new TextView(app_theme::font, 22);
   findBmsStatusText->setLocalizedText(i18n::message("library.find_bms.preparing_lookup.label"));
-  findBmsStatusText->setThemedColor(ui_theme::textPrimary);
+  findBmsStatusText->setThemedColor(app_theme::textPrimary);
   findBmsStatusText->setWrap(true);
   findBmsStatusText->setOverflow(TextView::TextOverflow::Hidden);
   findBmsStatusText->setHeight(58);
   panel->addView(findBmsStatusText);
 
-  findBmsDetailText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  findBmsDetailText = new TextView(app_theme::font, 18);
   findBmsDetailText->setText("");
-  findBmsDetailText->setThemedColor(ui_theme::textSecondary);
+  findBmsDetailText->setThemedColor(app_theme::textSecondary);
   findBmsDetailText->setWrap(true);
   findBmsDetailText->setOverflow(TextView::TextOverflow::Hidden);
   findBmsDetailText->setFlex(1);
@@ -366,9 +394,9 @@ void FindBmsModal::build(View *parent) {
   findBmsCandidateRecyclerView->setWidth(kModalContentWidth);
   findBmsCandidateRecyclerView->setHeight(0);
   findBmsCandidateRecyclerView->setThemedBackgroundColor(
-      ui_theme::insetSurface);
-  findBmsCandidateRecyclerView->setCornerRadius(ui_theme::controlRadius());
-  findBmsCandidateRecyclerView->setThemedBorderColor(ui_theme::hairline);
+      app_theme::insetSurface);
+  findBmsCandidateRecyclerView->setCornerRadius(app_theme::controlRadius());
+  findBmsCandidateRecyclerView->setThemedBorderColor(app_theme::hairline);
   findBmsCandidateRecyclerView->setBorderWidth(1);
   findBmsCandidateRecyclerView->setVisible(false);
   findBmsCandidateRecyclerView->onCreateView = [](const BmsSearchCandidate &) {
@@ -391,17 +419,18 @@ void FindBmsModal::build(View *parent) {
   findBmsProgressTrack = new View();
   findBmsProgressTrack->setWidth(kModalContentWidth)
       ->setHeight(24)
-      ->setThemedBackgroundColor(ui_theme::progressTrack)
-      ->setCornerRadius(ui_theme::controlRadius())
-      ->setThemedBorderColor(ui_theme::hairline)
+      ->setThemedBackgroundColor(app_theme::progressTrack)
+      ->setCornerRadius(app_theme::controlRadius())
+      ->setThemedBorderColor(app_theme::hairline)
       ->setBorderWidth(1);
   findBmsProgressFill = new View();
   findBmsProgressFill->setWidth(0)->setHeight(20)->setBackgroundColor(
-      ui_theme::progressFill());
+      app_theme::progressFill());
   findBmsProgressTrack->addView(findBmsProgressFill);
   panel->addView(findBmsProgressTrack);
 
   auto *footer = new View();
+  footer->setName("findBmsFooter");
   footer->setFlexDirection(FlexDirection::Row);
   footer->setJustifyContent(YGJustifyFlexEnd);
   footer->setAlignItems(YGAlignStretch);
@@ -671,7 +700,7 @@ void FindBmsModal::refresh(bool refreshCandidates) {
           findBmsResult.status == BmsSearchResult::Status::HashMismatch ||
           findBmsResult.status == BmsSearchResult::Status::NotFound));
     findBmsStatusText->setColor(
-        ui_theme::sdl(failed ? ui_theme::coral() : ui_theme::textPrimary()));
+        app_theme::sdl(failed ? app_theme::coral() : app_theme::textPrimary()));
   }
 
   const bool showCandidateList =
@@ -842,38 +871,39 @@ void FindBmsModal::refresh(bool refreshCandidates) {
   }
 
   styleThemedActionButton(findBmsCloseButton, findBmsCloseButtonText, true,
-                          ui_theme::control, ui_theme::controlHover,
-                          ui_theme::controlPressed, ui_theme::hairlineStrong);
+                          app_theme::control, app_theme::controlHover,
+                          app_theme::controlPressed, app_theme::hairlineStrong);
   styleThemedActionButton(findBmsConfirmButton, findBmsConfirmButtonText,
-                          findBmsAwaitingConfirmation, ui_theme::successAction,
-                          ui_theme::successActionHover,
-                          ui_theme::successActionPressed, ui_theme::accentBorder);
+                          findBmsAwaitingConfirmation, app_theme::successAction,
+                          app_theme::successActionHover,
+                          app_theme::successActionPressed, app_theme::accentBorder);
   styleThemedActionButton(findBmsRetryButton, findBmsRetryButtonText,
-                          retryRequest.has_value(), ui_theme::successAction,
-                          ui_theme::successActionHover,
-                          ui_theme::successActionPressed, ui_theme::accentBorder);
+                          retryRequest.has_value(), app_theme::successAction,
+                          app_theme::successActionHover,
+                          app_theme::successActionPressed, app_theme::accentBorder);
   styleThemedActionButton(
       findBmsKeepFilesButton, findBmsKeepFilesButtonText,
-      policy.showPendingActions, ui_theme::successAction,
-      ui_theme::successActionHover, ui_theme::successActionPressed,
-      ui_theme::accentBorder);
+      policy.showPendingActions, app_theme::successAction,
+      app_theme::successActionHover, app_theme::successActionPressed,
+      app_theme::accentBorder);
   styleThemedActionButton(
       findBmsDeleteFilesButton, findBmsDeleteFilesButtonText,
-      policy.showPendingActions, ui_theme::dangerAction,
-      ui_theme::dangerActionHover, ui_theme::dangerActionPressed,
-      ui_theme::accentBorder);
+      policy.showPendingActions, app_theme::dangerAction,
+      app_theme::dangerActionHover, app_theme::dangerActionPressed,
+      app_theme::accentBorder);
   styleThemedActionButton(findBmsOpenButton, findBmsOpenButtonText,
-                          !running && hasSource, ui_theme::infoAction,
-                          ui_theme::infoActionHover,
-                          ui_theme::infoActionPressed, ui_theme::accentBorder);
+                          !running && hasSource, app_theme::infoAction,
+                          app_theme::infoActionHover,
+                          app_theme::infoActionPressed, app_theme::accentBorder);
   styleThemedActionButton(
       findBmsGoogleButton, findBmsGoogleButtonText, !running && hasSearchAction,
-      ui_theme::violetAction, ui_theme::violetActionHover,
-      ui_theme::violetActionPressed, ui_theme::violetActionHover);
+      app_theme::violetAction, app_theme::violetActionHover,
+      app_theme::violetActionPressed, app_theme::violetActionHover);
   styleThemedActionButton(
       findBmsRefreshButton, findBmsRefreshButtonText, hasRefreshAction,
-      ui_theme::successAction, ui_theme::successActionHover,
-      ui_theme::successActionPressed, ui_theme::accentBorder);
+      app_theme::successAction, app_theme::successActionHover,
+      app_theme::successActionPressed, app_theme::accentBorder);
+  resize(rendering::window_width, rendering::window_height);
   findBmsModalRoot->applyYogaLayout();
 }
 

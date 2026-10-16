@@ -11,6 +11,8 @@
 #include <optional>
 #include <memory>
 
+namespace music_stream { class Source; }
+
 struct PlatformDirectoryImportProgress;
 #include <string>
 #include <string_view>
@@ -140,6 +142,9 @@ bool DownloadURLToFileAndroid(const std::string &url,
                               AndroidDownloadProgressCallback progressCallback,
                               std::string &errorMessage,
                               long *httpStatus = nullptr);
+bool LoadAndroidNativeMusicStream(std::shared_ptr<music_stream::Source> source,
+                                  const AndroidNativeMusicMetadata &metadata,
+                                  std::string &errorMessage);
 bool LoadAndroidNativeMusicFile(const std::string &filePath,
                                 const AndroidNativeMusicMetadata &metadata,
                                 std::string &errorMessage);

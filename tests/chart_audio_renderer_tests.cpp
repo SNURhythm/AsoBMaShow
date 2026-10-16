@@ -3,13 +3,16 @@
 #include "Uuid.h"
 #include "targets.h"
 #include "audio/ChartAudioRenderer.h"
-#include "audio/ChartMusicCache.h"
+#include "audio/MusicPreparation.h"
+#include "audio/ProgressiveMusicSource.h"
+#include "Utils.h"
 #include "audio/ClubBeat.h"
-#include "audio/MusicPlaylist.h"
 #include "audio/SoundFileIO.h"
 
+#include <array>
 #include <atomic>
 #include <cmath>
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -45,18 +48,6 @@ void *operator new(std::size_t bytes) {
 
 void operator delete(void *memory) noexcept { std::free(memory); }
 void operator delete(void *memory, std::size_t) noexcept { std::free(memory); }
-
-class MusicPlayerService {
-public:
-  std::atomic<std::uint64_t> preloadRequestRevision{1};
-  std::atomic_bool preloadCancelled{false};
-  void AdjacentPreloadWorker(std::vector<music_playlist::MusicTrack> tracks,
-                             std::uint64_t preloadRevision,
-                             bool requestedClubMode,
-                             const std::stop_token &stopToken);
-};
-
-ASOBMS_ADJACENT_PRELOAD_METHOD
 
 namespace {
 int failures = 0;
@@ -146,6 +137,122 @@ void testNormalDecodedRender(const std::filesystem::path &root) {
     expect(sf_readf_short(sound.get(), samples, 1) == 1 && samples[0] > 11000 &&
                samples[0] == samples[1],
            "actual decoded keysound reaches both output channels");
+  }
+}
+
+void replaceKeysound(const bms_parser::Chart &chart, int rate, int channels,
+                     const std::vector<short> &samples,
+                     const char *filename = "click.wav") {
+  SF_INFO info{};
+  info.samplerate = rate;
+  info.channels = channels;
+  info.format = SF_FORMAT_WAV | SF_FORMAT_PCM_16;
+  auto sound = asobmashow::audio::openSoundFileHandle(
+      chart.Meta.Folder / filename, SFM_WRITE, info);
+  if (!sound || sf_write_short(sound.get(), samples.data(), samples.size()) !=
+                    static_cast<sf_count_t>(samples.size()))
+    throw std::runtime_error("Could not replace keysound fixture");
+}
+
+void testResampledWaveform(const std::filesystem::path &root) {
+  auto chart = chartFixture(root, "resampled-waveform");
+  const auto output = chart->Meta.Folder / "result.wav";
+  for (const int channels : {1, 2}) {
+    for (const int percent : {50, 100, 200}) {
+      // All three combinations have the same exact 1:2 source/output ratio.
+      // The decoder scales PCM16 by 32767/32768, so +/-2 decodes to +/-1.
+      replaceKeysound(*chart, 22050 * 100 / percent, channels,
+                      channels == 1 ? std::vector<short>{-2, 0}
+                                    : std::vector<short>{-2, 2, 0, 0});
+      chart_audio::RenderOptions options;
+      options.playback.percent = percent;
+      expect(guardedRender(*chart, output, options).success,
+             "fractional-rate waveform renders");
+      SF_INFO info{};
+      auto sound = asobmashow::audio::openSoundFileHandle(output, SFM_READ, info);
+      std::vector<short> samples(10);
+      expect(sound && sf_readf_short(sound.get(), samples.data(), 5) == 5,
+             "fractional-rate waveform can be read");
+      expect(samples == (channels == 1
+                             ? std::vector<short>{-1, -1, -1, -1, 0, 0, 0, 0, 0, 0}
+                             : std::vector<short>{-1, 1, -1, 1, 0, 0, 0, 0, 0, 0}),
+             "offline resampling rounds signed half samples away from zero");
+    }
+  }
+}
+
+void testFractionalPlaybackWaveform(const std::filesystem::path &root) {
+  auto chart = chartFixture(root, "fractional-playback-waveform");
+  replaceKeysound(*chart, 48000, 1, {-101, 201, -301, 401, -501});
+  const auto output = chart->Meta.Folder / "result.wav";
+  for (const int percent : {105, 195}) {
+    // Decoded PCM is {-100, 200, -300, 400, -500}. The exact source
+    // positions advance by 8/7 at 105%, or by 104/49 at 195%.
+    const std::vector<short> expected = percent == 105
+        ? std::vector<short>{-100, 129, -100, 14, -500}
+        : std::vector<short>{-100, -214, -500};
+    chart_audio::RenderOptions options;
+    options.playback.percent = percent;
+    options.maxMixedFrames = expected.size();
+    expect(guardedRender(*chart, output, options).success,
+           "fractional playback fits its exact mixed-frame budget");
+    SF_INFO info{};
+    auto sound = asobmashow::audio::openSoundFileHandle(output, SFM_READ, info);
+    std::vector<short> samples((expected.size() + 1) * 2);
+    expect(sound && sf_readf_short(sound.get(), samples.data(), expected.size() + 1) ==
+                        static_cast<sf_count_t>(expected.size() + 1),
+           "fractional playback waveform can be read");
+    for (std::size_t i = 0; i < expected.size(); ++i)
+      expect(samples[i * 2] == expected[i] && samples[i * 2 + 1] == expected[i],
+             "fractional playback preserves signed interpolation and the final frame");
+    expect(samples[expected.size() * 2] == 0 && samples.back() == 0,
+           "fractional playback stops at the exact projected frame count");
+    --options.maxMixedFrames;
+    expect(!guardedRender(*chart, output, options).success,
+           "fractional playback rejects a one-frame-short work budget");
+  }
+}
+
+void testDirectMixHeadroom(const std::filesystem::path &root) {
+  auto chart = chartFixture(root, "direct-mix-headroom");
+  replaceKeysound(*chart, 44100, 2, {20000, -20000});
+  replaceKeysound(*chart, 44100, 2, {-20000, 20000}, "negative.wav");
+  chart->WavTable[2] = "negative.wav";
+  chart->ReferencedWavTable[2] = "negative.wav";
+  auto *timeline = chart->Measures.front()->TimeLines.front();
+  timeline->BackgroundNotes.push_back(new bms_parser::Note(1));
+  timeline->BackgroundNotes.push_back(new bms_parser::Note(2));
+  const auto output = chart->Meta.Folder / "result.wav";
+  expect(guardedRender(*chart, output).success, "direct stereo overlap renders");
+  SF_INFO info{};
+  auto sound = asobmashow::audio::openSoundFileHandle(output, SFM_READ, info);
+  short samples[4]{};
+  expect(sound && sf_readf_short(sound.get(), samples, 2) == 2 &&
+             samples[0] == 19998 && samples[1] == -19998 &&
+             samples[2] == 0 && samples[3] == 0,
+         "direct mixing preserves stereo, float headroom, and the silent tail");
+}
+
+void benchmarkRendering(const std::filesystem::path &root) {
+  for (const int rate : {44100, 48000}) {
+    auto chart = chartFixture(root, "benchmark-" + std::to_string(rate));
+    std::vector<short> samples(rate * 2);
+    for (std::size_t i = 0; i < samples.size(); ++i)
+      samples[i] = static_cast<short>(static_cast<int>((i * 17) % 65536) - 32768);
+    replaceKeysound(*chart, rate, 2, samples);
+    auto *timeline = chart->Measures.front()->TimeLines.front();
+    for (int i = 1; i < 512; ++i)
+      timeline->BackgroundNotes.push_back(new bms_parser::Note(1));
+    for (int run = 0; run < 3; ++run) {
+      const auto start = std::chrono::steady_clock::now();
+      const auto result = chart_audio::RenderChartAudioToWav(
+          *chart, chart->Meta.Folder / "result.wav");
+      expect(result.success && result.eventCount == 512, "benchmark renders all voices");
+      std::cout << "Render 512 overlapping 1 s stereo sounds at " << rate << " Hz: "
+                << std::chrono::duration<double, std::milli>(
+                       std::chrono::steady_clock::now() - start).count()
+                << " ms\n";
+    }
   }
 }
 
@@ -252,19 +359,6 @@ void testSelectedLargeRender(const std::filesystem::path &root) {
              allocationFailure.message.find("memory") != std::string::npos &&
              readText(output) == "preserved output",
          "selected allocation failure is reported and preserves existing output");
-
-  cancelled.store(false);
-  reachedWriteBoundary = false;
-  const auto cache = chart_music_cache::EnsureRenderedMusicFile(
-      *chart, cancelled, [&](const std::string &message) {
-        if (message.starts_with("Chart audio duration:")) {
-          reachedWriteBoundary = true;
-          cancelled.store(true);
-        }
-      });
-  expect(reachedWriteBoundary && !cache.success &&
-             !std::filesystem::exists(cache.audioPath),
-         "foreground music cache admits the same large chart and cleans cancellation");
 }
 
 void testSelectedHighMixWork(const std::filesystem::path &root) {
@@ -284,12 +378,14 @@ void testSelectedHighMixWork(const std::filesystem::path &root) {
          "high cumulative work retains the full two-second decoded tail");
   std::atomic_bool cancelled{false};
   AllocationGuard guard;
-  const auto background = chart_music_cache::EnsureRenderedMusicFile(
-      *chart, cancelled, false, {}, chart_music_cache::RenderPolicy::AdjacentPreload);
-  expect(!background.success &&
-             background.message.find("work limit") != std::string::npos &&
-             !std::filesystem::exists(background.audioPath),
-         "background music cache retains its cumulative mixing work quota");
+  const auto limitedOutput = chart->Meta.Folder / "limited.wav";
+  const auto limited = chart_audio::RenderChartAudioToWav(
+      *chart, limitedOutput, {.isCancelled = &cancelled,
+                             .maxMixedFrames = 44100U * 60U * 60U});
+  expect(!limited.success &&
+             limited.message.find("work limit") != std::string::npos &&
+             !std::filesystem::exists(limitedOutput),
+         "explicit renderer work budgets reject excessive cumulative mixing");
 }
 
 void testSelectedLargeClubPlan(const std::filesystem::path &root) {
@@ -316,13 +412,15 @@ void testSelectedLargeClubPlan(const std::filesystem::path &root) {
          "cancelled club planning stops before producing events");
   cancelled.store(false);
   AllocationGuard guard;
-  const auto background = chart_music_cache::EnsureRenderedMusicFile(
-      *chart, cancelled, true, {}, chart_music_cache::RenderPolicy::AdjacentPreload);
-  expect(!background.success &&
-             background.message.find("plan limit") != std::string::npos &&
+  const auto limitedOutput = chart->Meta.Folder / "limited.wav";
+  const auto limited = chart_audio::RenderChartAudioToWav(
+      *chart, limitedOutput, {.clubMode = true, .isCancelled = &cancelled,
+                             .maxClubBeats = 100000});
+  expect(!limited.success &&
+             limited.message.find("plan limit") != std::string::npos &&
              audio_allocation_guard::rejected == 0 &&
-             !std::filesystem::exists(background.audioPath),
-         "background music cache retains its club-plan quota without allocation");
+             !std::filesystem::exists(limitedOutput),
+         "explicit renderer club-plan budgets reject excess beats before allocation");
 }
 
 void testOverflowScaleMetadata(const std::filesystem::path &root) {
@@ -578,8 +676,8 @@ void testGeneratedSoundBudget(const std::filesystem::path &root) {
   expect(!guardedRender(*chart, output, options).success,
          "generated sounds share the cumulative keysound work limit");
   chart->Measures.front()->Scale = 25001;
-  options.maxMixedFrames = chart_audio::kAdjacentPreloadMaxMixedFrames;
-  options.maxClubBeats = chart_audio::kAdjacentPreloadMaxClubBeats;
+  options.maxMixedFrames = 44100U * 60U * 60U;
+  options.maxClubBeats = 100000;
   const auto result = guardedRender(*chart, output, options);
   expect(!result.success && result.message.find("plan limit") != std::string::npos &&
              audio_allocation_guard::rejected == 0,
@@ -593,36 +691,63 @@ void testGeneratedSoundBudget(const std::filesystem::path &root) {
          "unrepresentable club beat numbers fail before allocation or integer overflow");
 }
 
-#if !TARGET_OS_WINDOWS
-void testAdjacentPreloadRejectsAndContinues(const std::filesystem::path &root) {
-  auto oversized = chartFixture(root, "preload-oversized", "0.5");
-  auto normal = chartFixture(root, "preload-normal");
-  const auto oversizedPath = chart_music_cache::CachedAudioPathForChart(oversized->Meta);
-  const auto normalPath = chart_music_cache::CachedAudioPathForChart(normal->Meta);
-  music_playlist::MusicTrack first;
-  first.representativeChart = oversized->Meta;
-  music_playlist::MusicTrack second;
-  second.representativeChart = normal->Meta;
-  MusicPlayerService service;
-  {
-    AllocationGuard guard;
-    service.AdjacentPreloadWorker({first, second}, 1, false, {});
+void testLegacyMusicCacheCleanup(const std::filesystem::path &root) {
+  const auto cache = root / "old-music-cache";
+  const auto exports = root / "exports";
+  std::filesystem::create_directories(cache / ".music-stream-old");
+  std::filesystem::create_directories(cache / "unrecognized-directory");
+  std::filesystem::create_directories(exports);
+  writeText(cache / "song.wav", "old full-song cache");
+  writeText(cache / "song.WAV", "old full-song cache");
+  writeText(cache / "song.wav.tmp", "old incomplete render");
+  writeText(cache / ".music-stream-old" / "audio.wav", "old stream spool");
+  writeText(cache / "notes.txt", "preserve unknown files");
+  writeText(cache / "unrecognized-directory" / "keep.wav", "preserve unknown subtree");
+  writeText(exports / "song.wav", "explicit export");
+  std::error_code error;
+  std::filesystem::create_directory_symlink(exports, cache / ".music-stream-link", error);
+  const bool linked = !error;
+  music_preparation::RemoveLegacyMusicCacheFiles(cache);
+  expect(!std::filesystem::exists(cache / "song.wav") &&
+             !std::filesystem::exists(cache / "song.WAV") &&
+             !std::filesystem::exists(cache / "song.wav.tmp") &&
+             !std::filesystem::exists(cache / ".music-stream-old"),
+         "legacy cleanup removes cached WAV, partial output, and old private stream directories");
+  expect(readText(exports / "song.wav") == "explicit export" &&
+             readText(cache / "notes.txt") == "preserve unknown files" &&
+             readText(cache / "unrecognized-directory" / "keep.wav") == "preserve unknown subtree",
+         "legacy cleanup preserves exports and unrecognized entries");
+  if (linked) {
+    expect(std::filesystem::is_symlink(cache / ".music-stream-link"),
+           "legacy cleanup does not follow or remove symbolic links");
+    music_preparation::RemoveLegacyMusicCacheFiles(cache / ".music-stream-link");
+    expect(readText(exports / "song.wav") == "explicit export",
+           "legacy cleanup refuses a symlink as its root");
   }
-  expect(audio_allocation_guard::rejected == 0,
-         "actual adjacent preload rejects before attempting huge allocations");
-  expect(!std::filesystem::exists(oversizedPath) &&
-             !std::filesystem::exists(oversizedPath.string() + ".tmp"),
-         "failed actual cache render leaves no output or owned partial file");
-  expect(std::filesystem::is_regular_file(normalPath),
-         "adjacent worker continues to the next valid real chart");
-  auto cancelled = chartFixture(root, "preload-cancelled", "0.001");
-  first.representativeChart = cancelled->Meta;
-  const auto cancelledPath = chart_music_cache::CachedAudioPathForChart(cancelled->Meta);
-  service.preloadCancelled.store(true);
-  service.AdjacentPreloadWorker({first}, 1, false, {});
-  expect(!std::filesystem::exists(cancelledPath) &&
-             !std::filesystem::exists(cancelledPath.string() + ".tmp"),
-         "cancelled adjacent parsing does not publish cache artifacts");
+  music_preparation::RemoveLegacyMusicCacheFiles(root / "missing-cache");
+}
+
+#if !TARGET_OS_WINDOWS
+void testShortMusicPreparationAlwaysStreams(const std::filesystem::path &root) {
+  // HOME is redirected by main, so migration cleanup cannot touch a real user cache.
+  const auto cache = Utils::GetDocumentsPath("music_cache");
+  std::filesystem::create_directories(cache);
+  writeText(cache / "old.wav", "retired cache");
+  auto chart = chartFixture(root, "short-stream", "1200");
+  std::atomic_bool cancelled{false};
+  auto prepared = music_preparation::PrepareMusicForPlayback(chart->Meta, cancelled, false);
+  expect(prepared.success && prepared.stream != nullptr,
+         "a fully prepared short song remains a stream instead of a persistent WAV");
+  expect(!std::filesystem::exists(cache),
+         "music preparation removes the old cache instead of recreating it");
+  if (prepared.stream) {
+    expect(prepared.stream->GetState().complete && prepared.durationMicros == 200000,
+           "short source completes before the startup buffer threshold");
+    std::array<short, 2> samples{};
+    const auto read = prepared.stream->ReadFrames(0, samples, std::chrono::milliseconds(100));
+    expect(read.frames == 1 && samples[0] > 11000 && samples[0] == samples[1],
+           "fully prepared short stream retains its playable PCM after preparation returns");
+  }
 }
 #endif
 }
@@ -646,6 +771,13 @@ int main(int argc, char **argv) {
       testUnicodeKeysoundReference(root);
       return failures == 0 ? 0 : 1;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--benchmark") {
+      benchmarkRendering(root);
+      return failures == 0 ? 0 : 1;
+    }
+    testResampledWaveform(root);
+    testDirectMixHeadroom(root);
+    testFractionalPlaybackWaveform(root);
     testNormalDecodedRender(root);
     testUnicodeKeysoundReference(root);
     testRateAndTailSemantics(root);
@@ -662,8 +794,9 @@ int main(int argc, char **argv) {
     testPublicationFailureCleanup(root);
     testCancellationDuringMix(root);
     testGeneratedSoundBudget(root);
+    testLegacyMusicCacheCleanup(root);
 #if !TARGET_OS_WINDOWS
-    testAdjacentPreloadRejectsAndContinues(root);
+    testShortMusicPreparationAlwaysStreams(root);
 #endif
   } catch (const std::exception &error) {
     std::cerr << "Fixture failure: " << error.what() << '\n';

@@ -1,3 +1,5 @@
+#include "../rendering/ResponsiveUi.h"
+#include "../rendering/UiSafeArea.h"
 #include "../i18n/Localization.h"
 #include "MainMenuPlayOptionsModal.h"
 
@@ -7,37 +9,35 @@
 #include "../view/OverlayPortal.h"
 #include "../view/ScrollView.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 
 #include <algorithm>
 #include <utility>
 
 namespace {
-constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kFontPath = app_theme::font;
 
 Color modalPanelBorder() {
-  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
-             ? ui_theme::hairlineStrong()
-             : Color(86, 118, 153, 210);
+  return app_theme::hairlineStrong();
 }
 
 Button *makeCloseButton() {
-  auto *button = new Button(0, 0, 160, 58);
+  auto *button = new Button(0, 0, 132, rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 48);
   auto *text = new TextView(kFontPath, 20);
   text->setLocalizedText(i18n::message("menu.play_options.close.label"));
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   text->setThemedColor(
-      [] { return ui_theme::textOn(ui_theme::control()); });
+      [] { return app_theme::textOn(app_theme::control()); });
   button->setContentView(text);
   button->setStyledBorderWidth(1);
-  button->setCornerRadius(ui_theme::controlRadius());
-  button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                    ui_theme::controlPressed);
+  button->setCornerRadius(app_theme::controlRadius());
+  button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                    app_theme::controlPressed);
   button->setThemedBorderColors(
-      [] { return ui_theme::withAlpha(ui_theme::hairlineStrong(), 150); },
-      [] { return ui_theme::withAlpha(ui_theme::hairlineStrong(), 190); },
-      [] { return ui_theme::withAlpha(ui_theme::hairlineStrong(), 220); });
+      [] { return app_theme::withAlpha(app_theme::hairlineStrong(), 150); },
+      [] { return app_theme::withAlpha(app_theme::hairlineStrong(), 190); },
+      [] { return app_theme::withAlpha(app_theme::hairlineStrong(), 220); });
   return button;
 }
 } // namespace
@@ -51,7 +51,7 @@ MainMenuPlayOptionsModal::Create(View *parent,
   const float availablePanelWidth =
       std::max(300.0f, static_cast<float>(rendering::window_width) - 48.0f);
   const float panelWidth = std::min(760.0f, availablePanelWidth);
-  constexpr float kPanelPadding = 22.0f;
+  constexpr float kPanelPadding = 18.0f;
   constexpr float kScrollRightPadding = 18.0f;
   const float contentWidth = panelWidth - kPanelPadding * 2.0f;
   const float optionWidth = std::max(0.0f, contentWidth - kScrollRightPadding);
@@ -71,30 +71,51 @@ MainMenuPlayOptionsModal::Create(View *parent,
   root->setFlexDirection(FlexDirection::Column);
   root->setAlignItems(YGAlignCenter);
   root->setJustifyContent(YGJustifyCenter);
-  root->setThemedBackgroundColor(ui_theme::scrim);
+  root->setThemedBackgroundColor(app_theme::scrim);
 
   auto *panel = new View();
+  panel->setName("playOptionsModalPanel");
   panel->setWidth(panelWidth)
       ->setHeight(panelHeight)
       ->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
-      ->setGap(12)
-      ->setPadding(Edge::All, kPanelPadding)
-      ->setThemedBackgroundColor(ui_theme::panelStrong)
-      ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+      ->setGap(0)
+      ->setPadding(Edge::All, 0)
+      ->setThemedBackgroundColor(app_theme::panelStrong)
+      ->setCornerRadius(app_theme::panelRadius())
       ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
 
-  auto *title = new TextView(kFontPath, 30);
+  const auto addRule = [](View *region, Edge edge) {
+    auto *rule = new View();
+    rule->setPositionType(YGPositionTypeAbsolute);
+    rule->setPosition(Edge::Left, 0)->setPosition(edge, 0);
+    rule->setWidthPercent(100)->setHeight(1);
+    rule->setThemedBackgroundColor(app_theme::hairline);
+    region->addView(rule);
+  };
+  auto *header = new View();
+  header->setHeight(64)->setFlexShrink(0);
+  header->setPadding(Edge::Left, kPanelPadding);
+  header->setPadding(Edge::Right, kPanelPadding);
+  header->setJustifyContent(YGJustifyCenter);
+  auto *title = new TextView(app_theme::boldFont, 26, TextView::FontWeight::Bold);
   title->setLocalizedText(i18n::message("menu.play_options.play_options.label"));
-  title->setThemedColor(ui_theme::textPrimary);
-  title->setHeight(42);
-  panel->addView(title);
+  title->setThemedColor(app_theme::textPrimary);
+  title->setHeight(36);
+  header->addView(title);
+  addRule(header, Edge::Bottom);
+  panel->addView(header);
 
   auto *scrollView = new ScrollView(0, 0, static_cast<int>(contentWidth), 1);
+  scrollView->setName("playOptionsModalScroll");
   scrollView->setWidth(contentWidth);
   scrollView->setFlex(1.0f);
+  scrollView->setMinHeight(0);
+  scrollView->setMargin(Edge::Left, kPanelPadding);
+  scrollView->setMargin(Edge::Right, kPanelPadding);
+  scrollView->setContentPadding(Edge::Top, 12);
+  scrollView->setContentPadding(Edge::Bottom, 12);
   scrollView->setContentPadding(Edge::Right, kScrollRightPadding);
 
   auto *optionsContent = new View();
@@ -103,7 +124,7 @@ MainMenuPlayOptionsModal::Create(View *parent,
   optionsContent->setGap(12);
   optionsContent->setWidth(optionWidth);
 
-  const std::size_t columns = optionWidth >= 620.0f ? 4U : 2U;
+  const std::size_t columns = !rendering::compactMenuCanvasActive && optionWidth >= 620.0f ? 4U : 2U;
   auto *options = new PlayOptionsPanelView(
       std::move(callbacks),
       {.width = optionWidth,
@@ -117,11 +138,16 @@ MainMenuPlayOptionsModal::Create(View *parent,
   panel->addView(scrollView);
 
   auto *footer = new View();
+  footer->setName("playOptionsModalFooter");
   footer->setFlexDirection(FlexDirection::Row);
   footer->setJustifyContent(YGJustifyFlexEnd);
-  footer->setAlignItems(YGAlignStretch);
-  footer->setHeight(58);
+  footer->setAlignItems(YGAlignCenter);
+  footer->setHeight(rendering::compactMenuCanvasActive ? 82 : 72)->setFlexShrink(0);
+  footer->setPadding(Edge::Left, kPanelPadding);
+  footer->setPadding(Edge::Right, kPanelPadding);
+  addRule(footer, Edge::Top);
   auto *close = makeCloseButton();
+  close->setName("playOptionsModalClose");
   close->setOnClickListener([raw = modal.get()] { raw->hide(); });
   footer->addView(close);
   panel->addView(footer);
@@ -151,5 +177,21 @@ void MainMenuPlayOptionsModal::hide() {
 }
 
 void MainMenuPlayOptionsModal::resize(int width, int height) {
-  if (root_ != nullptr) root_->setSize(width, height);
+  if (root_ == nullptr) return;
+  root_->setSize(width, height);
+  View::LayoutBatchScope layoutBatch;
+  const auto safe = rendering::uiSafeAreaInsets();
+  root_->setPadding(Edge::Top, safe.top)->setPadding(Edge::Bottom, safe.bottom);
+  root_->setPadding(Edge::Left, safe.left)->setPadding(Edge::Right, safe.right);
+  const float panelWidth = std::max(240.0f, std::min(760.0f, float(width - safe.left - safe.right - 24)));
+  const float panelHeight = std::max(200.0f, std::min(820.0f, float(height - safe.top - safe.bottom - 24)));
+  root_->findViewByName("playOptionsModalPanel")->setWidth(panelWidth)->setHeight(panelHeight);
+  auto *scroll = static_cast<ScrollView *>(root_->findViewByName("playOptionsModalScroll"));
+  scroll->setWidth(panelWidth - 36);
+  scroll->getContentView()->setWidth(panelWidth - 54);
+  panel_->setWidth(panelWidth - 54);
+  const bool compact = rendering::compactMenuCanvasActive;
+  root_->findViewByName("playOptionsModalFooter")->setHeight(compact ? 82 : 72);
+  root_->findViewByName("playOptionsModalClose")->setHeight(compact ? rendering::compactTouchTarget : 48);
+  scroll->refreshContentLayout();
 }

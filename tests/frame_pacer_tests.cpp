@@ -134,6 +134,32 @@ void testIOSDefaultPresentationPacingFollowsDisplay() {
   require(video::iosPresentationPacingCap(120.0F, 0, true) == 0,
           "replay export does not wait for display presentation");
 }
+
+void testIOSProMotionPresentationPreservesExplicitCapsAndExport() {
+  require(video::iosPresentationPacingCap(120.0F, 0, false) == 120,
+          "uncapped menus preserve 120 Hz ProMotion presentation");
+  require(video::iosPresentationPacingCap(30.0F, 0, false) == 30,
+          "menus never exceed the display refresh rate");
+  require(video::iosPresentationPacingCap(120.0F, 144, false) == 0,
+          "explicit menu frame settings retain their existing pacer behavior");
+  FramePacer explicitPacer;
+  FramePacer menuPacer;
+  const auto now = Clock::time_point{};
+  explicitPacer.setCap(30);
+  menuPacer.setCap(video::iosPresentationPacingCap(120.0F, 30, false));
+  explicitPacer.framePresented(now);
+  menuPacer.framePresented(now);
+  require(explicitPacer.remaining(now) > menuPacer.remaining(now),
+          "the main loop's longer wait preserves a lower explicit menu cap");
+  menuPacer.setCap(video::iosPresentationPacingCap(120.0F, 0, false));
+  menuPacer.framePresented(now);
+  require(menuPacer.remaining(now) > 8ms && menuPacer.remaining(now) < 9ms,
+          "uncapped menu presentation uses a 120 Hz frame deadline");
+  menuPacer.setCap(video::iosPresentationPacingCap(120.0F, 0, true));
+  menuPacer.framePresented(now);
+  require(menuPacer.remaining(now) == Clock::duration::zero(),
+          "menu export never inherits the interactive presentation wait");
+}
 } // namespace
 
 int main() {
@@ -144,5 +170,6 @@ int main() {
   testDeadlinesSaturateAtClockMaximum();
   testMultiDayCatchUpKeepsTheOriginalPhase();
   testIOSDefaultPresentationPacingFollowsDisplay();
+  testIOSProMotionPresentationPreservesExplicitCapsAndExport();
   return 0;
 }

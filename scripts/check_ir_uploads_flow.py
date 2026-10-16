@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pathlib
+import re
 import sys
 
 
@@ -11,12 +12,18 @@ root = (
     else pathlib.Path(__file__).parent.parent
 ).resolve()
 main_menu_path = root / "src/scene/MainMenuScene.cpp"
+main_menu_header_path = root / "src/scene/MainMenuScene.h"
 uploads_scene_path = root / "src/scene/IrUploadsScene.cpp"
 preparation_task_path = root / "src/scene/IrUploadPreparationTask.cpp"
 music_select_path = root / "src/scene/MusicSelectScene.cpp"
 
 main_menu = (
     main_menu_path.read_text(encoding="utf-8") if main_menu_path.is_file() else ""
+)
+main_menu_header = (
+    main_menu_header_path.read_text(encoding="utf-8")
+    if main_menu_header_path.is_file()
+    else ""
 )
 uploads_scene = (
     uploads_scene_path.read_text(encoding="utf-8")
@@ -46,17 +53,60 @@ def reject(condition: bool, message: str) -> None:
         failures.append(message)
 
 
-main_menu_handler_start = main_menu.find(
-    "irUploadsButton->setOnClickListener"
+def function_body(source: str, signature: str) -> str:
+    start = source.find(signature)
+    if start < 0:
+        return ""
+    opening = source.find("{", start)
+    if opening < 0:
+        return ""
+    depth = 1
+    for position in range(opening + 1, len(source)):
+        if source[position] == "{":
+            depth += 1
+        elif source[position] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[opening + 1:position]
+    return ""
+
+
+main_menu_tabs = (
+    function_body(main_menu, "void MainMenuScene::selectTab(Tab tab)")
+    + function_body(main_menu, "void MainMenuScene::completeTabSwitch(Tab tab)")
 )
-main_menu_handler_end = main_menu.find(
-    "styleThemedActionButton(irUploadsButton", main_menu_handler_start
-)
-main_menu_handler = main_menu[main_menu_handler_start:main_menu_handler_end]
 require(
-    "std::make_unique<IrUploadsScene>" in main_menu_handler
-    and "SceneReturnTarget::Retained(this)" in main_menu_handler,
-    "built-in Song Select opens the dedicated scene with retained return",
+    "std::unique_ptr<IrUploadsScene> irTab_" in main_menu_header
+    and "tab == Tab::Ir && !irTab_" in main_menu_tabs
+    and "irTab_ = std::make_unique<IrUploadsScene>(context)" in main_menu_tabs,
+    "the built-in menu owns one lazy IR tab instance",
+)
+configure_position = main_menu_tabs.find("irTab_->configureTab(inset, returnToPlay, this)")
+init_position = main_menu_tabs.find("irTab_->init()")
+require(
+    0 <= configure_position < init_position
+    and "selectTab(Tab::Play)" in main_menu_tabs,
+    "the IR tab reserves the shell header and closes to PLAY before initialization",
+)
+reject(
+    "changeScene(" in main_menu_tabs,
+    "selecting a built-in tab must not transition SceneManager scenes",
+)
+main_menu_update = function_body(main_menu, "void MainMenuScene::update(float dt)")
+require(
+    re.search(r"if\s*\(irTab_\)\s*\{[^}]*irTab_->update\(dt\);"
+              r"[^}]*irTab_->handleDeferred\(\);", main_menu_update) is not None,
+    "the shell keeps IR preparation and deferred callbacks progressing while hidden",
+)
+main_menu_pause = function_body(main_menu, "void MainMenuScene::onPause()")
+reject(
+    "irTab_->onProfileWillChange()" in main_menu_pause,
+    "ordinary scene pauses must not cancel retained IR preparation",
+)
+profile_blocker = function_body(main_menu, "auto profileOperationBlocker =")
+require(
+    "irTab_->profileSwitchBlocker()" in profile_blocker,
+    "profile replacement must consult retained IR preparation",
 )
 music_select_handler_start = music_select.find(
     "void MusicSelectScene::openIrUploads()"
@@ -124,16 +174,36 @@ reject(
     or "result_recall::BuildChartResult" in uploads_scene,
     "manual IR upload must not reconstruct a replay",
 )
+settings_action = function_body(uploads_scene, "void IrUploadsScene::openIrSettings()")
 require(
     "openIrSettingsButton->setOnClickListener" in uploads_scene
-    and "std::make_unique<SettingsScene>(context," in uploads_scene
-    and "SettingsDestination::Ir" in uploads_scene,
+    and re.search(r"std::make_unique<SettingsScene>\(\s*context,\s*"
+                  r"SettingsDestination::Ir,", settings_action) is not None,
     "Open IR Settings must be a clickable direct navigation action",
 )
 require(
+    re.search(r"embeddedTab\s*\?\s*SceneReturnTarget::Retained\(tabSettingsReturnOwner\)"
+              r"\s*:\s*returnTarget_\),\s*embeddedTab\);", settings_action) is not None,
+    "embedded IR Settings must retain the shell and return to it, while standalone uses its return target",
+)
+back_action = function_body(uploads_scene, "void IrUploadsScene::goBack()")
+require(
+    re.search(r"if\s*\(embeddedTab\)\s*\{\s*if\s*\(tabClose\)\s*tabClose\(\);"
+              r"\s*return;\s*\}\s*stopPreparation\(\);", back_action) is not None
+    and "returnToScene(*context.sceneManager, returnTarget_)" in back_action,
+    "embedded Back closes the tab without cancelling preparation; standalone Back stops work and returns",
+)
+tab_pause = function_body(uploads_scene, "void IrUploadsScene::onPause()")
+require(
+    "onInputQueueOverflow()" in tab_pause
+    and "stopPreparation()" not in tab_pause,
+    "normal tab pauses retire pointer input while preserving preparation",
+)
+require(
     "preparationTask.stopAndWait()" in uploads_scene
-    and uploads_scene.count("stopPreparation();") >= 3,
-    "Back and cleanup must stop and join local preparation",
+    and "stopPreparation()" in function_body(uploads_scene, "void IrUploadsScene::cleanupScene()")
+    and "stopPreparation()" in function_body(uploads_scene, "void IrUploadsScene::onProfileWillChange()"),
+    "cleanup and profile changes must stop and join local preparation",
 )
 shutdown = preparation_task[preparation_task.find("void PreparationTask::stopAndWait()") :]
 gate_cancel = shutdown.find("enqueueGate_->requestCancellation()")

@@ -63,7 +63,7 @@ InputCaptureController::InputCaptureController(InputDeviceRegistry &registry,
     inputSubscription_ =
         registry_.subscribeInput([this](const input::PhysicalInputEvent &event) {
           resolver_.consume(event);
-        });
+        }, true);
     deviceSubscription_ = registry_.subscribeDevices(
         [this](const input::InputDeviceSnapshot &device) {
           observeDevice(device);

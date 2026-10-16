@@ -9,7 +9,7 @@
 #include "../view/Button.h"
 #include "../view/ResultRecordListView.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 
 #include <span>
 #include <string>
@@ -18,11 +18,11 @@
 #include <vector>
 
 namespace {
-constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kFontPath = app_theme::font;
 
 TextView *makeText(std::string value, int size,
                    View::ThemeColorProvider color) {
-  auto *result = new TextView(kFontPath, size);
+  auto *result = new TextView(size >= 26 ? app_theme::boldFont : kFontPath, size);
   result->setText(std::move(value));
   result->setThemedColor(std::move(color));
   result->setVAlign(TextView::MIDDLE);
@@ -33,14 +33,14 @@ TextView *makeText(std::string value, int size,
 Button *makeButton(std::string label) {
   auto *button = new Button();
   button->setWidth(116)->setHeight(52)->setCornerRadius(
-      ui_theme::controlRadius());
-  button->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                    ui_theme::controlPressed);
-  button->setThemedBorderColors(ui_theme::hairlineStrong,
-                                ui_theme::accentBorder,
-                                ui_theme::accentBorderStrong);
+      app_theme::controlRadius());
+  button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                    app_theme::controlPressed);
+  button->setThemedBorderColors(app_theme::hairlineStrong,
+                                app_theme::accentBorder,
+                                app_theme::accentBorderStrong);
   button->setStyledBorderWidth(1);
-  auto *text = makeText(std::move(label), 20, ui_theme::textPrimary);
+  auto *text = makeText(std::move(label), 20, app_theme::textPrimary);
   text->setAlign(TextView::CENTER);
   button->setContentView(text);
   return button;
@@ -56,7 +56,7 @@ void ChartRecordsScene::buildView() {
       ->setAlignItems(YGAlignStretch)
       ->setGap(12)
       ->setPadding(Edge::All, 24)
-      ->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
+      ->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
   addView(rootLayout_);
 
   auto *header = new View();
@@ -66,23 +66,31 @@ void ChartRecordsScene::buildView() {
       ->setGap(14);
   auto *back = makeButton(i18n::tr("records.back.label"));
   back->setOnClickListener([this] { goBack(); });
-  header->addView(back);
-  auto *title = makeText(i18n::tr("records.records.label"), 34, ui_theme::textPrimary);
+
+  auto *title = makeText(i18n::tr("records.records.label"), 34, app_theme::textPrimary);
   title->setWidth(160)->setHeight(52)->setFlexShrink(0);
   header->addView(title);
-  auto *chartTitle = makeText(record_.meta.Title, 20, ui_theme::textSecondary);
-  chartTitle->setFlex(1)->setHeight(52)->setMinWidth(0);
-  header->addView(chartTitle);
+  auto *headerSpace = new View();
+  headerSpace->setFlex(1);
+  header->addView(headerSpace);
+  header->addView(back);
   rootLayout_->addView(header);
+  auto *chartTitle = makeText(record_.meta.Title, 48, app_theme::textPrimary);
+  chartTitle->setHeight(64)->setMinWidth(0);
+  chartTitle->setOverflow(TextView::TextOverflow::Marquee);
+  rootLayout_->addView(chartTitle);
+  auto *rule = new View();
+  rule->setHeight(1)->setThemedBackgroundColor(app_theme::hairlineStrong);
+  rootLayout_->addView(rule);
 
   recordsView_ = new ResultRecordListView();
   recordsView_->setFlex(1)->setMinHeight(0);
   recordsView_->clearBackgroundColor();
-  recordsView_->setThemedBorderColor(ui_theme::hairline);
-  recordsView_->setBorderWidth(1);
+  recordsView_->setThemedBorderColor(app_theme::hairline);
+  recordsView_->setBorderWidth(0);
   rootLayout_->addView(recordsView_);
 
-  emptyText_ = makeText(i18n::tr("records.no_records.message"), 20, ui_theme::textSecondary);
+  emptyText_ = makeText(i18n::tr("records.no_records.message"), 20, app_theme::textSecondary);
   emptyText_->setHeight(48);
   emptyText_->setAlign(TextView::CENTER);
   emptyText_->setVisible(false);

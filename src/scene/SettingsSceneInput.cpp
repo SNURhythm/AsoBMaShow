@@ -491,16 +491,15 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   const InputSettingsLayout layout =
       resolveInputSettingsLayout(bodyWidth, metrics.compact);
 
-  cards->addView(makeWrappedText(i18n::message("settings.input.general.label"),
-      metrics.sectionTitleSize, ui_theme::textPrimary()));
+  cards->addView(makeHeading(i18n::message("settings.input.general.label"), metrics.sectionTitleSize));
   cards->addView(makeWrappedText(i18n::message("settings.input.general.help"),
-      metrics.smallTextSize, ui_theme::textSecondary()));
+      metrics.smallTextSize, app_theme::textSecondary()));
   auto *notePriorityControls = new View();
   notePriorityControls->setFlexDirection(FlexDirection::Column);
   notePriorityControls->setGap(metrics.compact ? 12.0f : 16.0f);
   notePriorityControls->setAlignItems(YGAlignFlexStart);
   notePriorityModeText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   notePriorityModeButton =
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
@@ -521,7 +520,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   touchVisualizationControls->setGap(metrics.compact ? 12.0f : 16.0f);
   touchVisualizationControls->setAlignItems(YGAlignFlexStart);
   touchVisualizationModeText =
-      makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   touchVisualizationModeButton =
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
@@ -540,7 +539,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   if (IsIOSPad()) {
     auto *controls = new View();
     ipadGestureReminderModeText =
-        makeText("", metrics.bodyTextSize + 6, ui_theme::textPrimary(),
+        makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE);
     ipadGestureReminderModeButton = makeControlButton(metrics.actionButtonWidth,
                                                      metrics.actionButtonHeight,
@@ -558,8 +557,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   }
 #endif
 
-  cards->addView(makeWrappedText(i18n::message("settings.input.scoped.label"),
-      metrics.sectionTitleSize, ui_theme::textPrimary()));
+  cards->addView(makeHeading(i18n::message("settings.input.scoped.label"), metrics.sectionTitleSize));
   auto *selectorBody = new View();
   selectorBody->setFlexDirection(FlexDirection::Column);
   selectorBody->setGap(static_cast<float>(layout.selectorGap));
@@ -651,8 +649,8 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   auto *resetButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
       makeText(i18n::message("settings.input.reset_scope.label"), metrics.bodyTextSize + 2,
-               ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
-      ui_theme::coral());
+               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE),
+      app_theme::coral());
   resetButton->setOnClickListener([this]() {
     inputCaptureController->cancel();
     inputCaptureAction.reset();
@@ -684,7 +682,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       row->setAlignItems(YGAlignCenter);
       row->setGap(static_cast<float>(layout.selectorGap));
       auto *text = makeText(i18n::message(label), metrics.bodyTextSize,
-                            ui_theme::textPrimary(), TextView::LEFT, TextView::MIDDLE);
+                            app_theme::textPrimary(), TextView::LEFT, TextView::MIDDLE);
       text->setWidth(static_cast<float>(labelWidth));
       text->setHeight(static_cast<float>(metrics.actionButtonHeight));
       text->setFlexShrink(0.0F);
@@ -701,10 +699,10 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
     };
     auto makeModeButton = [&](const char *label, bool selected, bool available = true) {
       auto *text = makeText(i18n::message(label), metrics.bodyTextSize + 1,
-                            available ? ui_theme::textPrimary() : ui_theme::textSecondary(),
+                            available ? app_theme::textPrimary() : app_theme::textSecondary(),
                             TextView::CENTER, TextView::MIDDLE);
       auto *button = selected
-          ? makeAccentButton(kFitContentWidth, metrics.actionButtonHeight, text, ui_theme::cyan())
+          ? makeAccentButton(kFitContentWidth, metrics.actionButtonHeight, text, app_theme::cyan())
           : makeControlButton(kFitContentWidth, metrics.actionButtonHeight, text);
       button->setFlexShrink(0.0F);
       button->setEnabled(available);
@@ -744,7 +742,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
             : i18n::message("settings.input.setting.error",
                             {{"prefix", i18n::message("settings.input.not_saved.prefix")},
                              {"error", inputPlayfieldTouchSettingsError}}),
-        metrics.smallTextSize, ui_theme::coral()));
+        metrics.smallTextSize, app_theme::coral()));
     cards->addView(makeCard(
         metrics, i18n::message("settings.input.playfield_touch.label"),
         gameplay::keyModeLabel(touchKeyMode), touchBody,
@@ -763,9 +761,9 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
         metrics.actionButtonHeight,
         makeText(virtualControllerConfig.enabled ? i18n::message("settings.input.virtual_controller_on.label")
                                                  : i18n::message("settings.input.virtual_controller_off.label"),
-                 metrics.bodyTextSize + 1, ui_theme::textPrimary(),
+                 metrics.bodyTextSize + 1, app_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE),
-        virtualControllerConfig.enabled ? ui_theme::cyan() : ui_theme::coral());
+        virtualControllerConfig.enabled ? app_theme::cyan() : app_theme::coral());
     virtualControllerToggle->setOnClickListener(
         [this, controllerKeyMode, virtualControllerConfig]() {
           auto next = virtualControllerConfig;
@@ -780,7 +778,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
             makeText(virtualControllerConfig.scratchEnabled
                          ? i18n::message("settings.input.virtual_scratch_on.label")
                          : i18n::message("settings.input.virtual_scratch_off.label"),
-                     metrics.bodyTextSize + 1, ui_theme::textPrimary(),
+                     metrics.bodyTextSize + 1, app_theme::textPrimary(),
                      TextView::CENTER, TextView::MIDDLE));
         scratchToggle->setOnClickListener([this, controllerKeyMode, virtualControllerConfig]() {
           auto next = virtualControllerConfig;
@@ -796,7 +794,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
             std::min(bodyWidth, metrics.actionButtonWidth),
             metrics.actionButtonHeight,
             makeText(spinScratch ? i18n::message("settings.input.scratch_spin_mode.label") : i18n::message("settings.input.scratch_flick_mode.label"),
-                     metrics.bodyTextSize + 1, ui_theme::textPrimary(),
+                     metrics.bodyTextSize + 1, app_theme::textPrimary(),
                      TextView::CENTER, TextView::MIDDLE));
         scratchModeButton->setOnClickListener(
             [this, controllerKeyMode, virtualControllerConfig, spinScratch]() {
@@ -814,7 +812,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
           std::min(bodyWidth, metrics.actionButtonWidth),
           metrics.actionButtonHeight,
           makeText(playerTwo ? i18n::message("settings.input.player_2_p.label") : i18n::message("settings.input.player_1_p.label"),
-                   metrics.bodyTextSize + 1, ui_theme::textPrimary(),
+                   metrics.bodyTextSize + 1, app_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE));
       playerButton->setOnClickListener(
           [this, controllerKeyMode, virtualControllerConfig, playerTwo]() {
@@ -828,7 +826,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
           makeControlButton(std::min(bodyWidth, metrics.actionButtonWidth),
                             metrics.actionButtonHeight,
                             makeText(i18n::message("settings.input.edit_layout.label"), metrics.bodyTextSize + 1,
-                                     ui_theme::textPrimary(), TextView::CENTER,
+                                     app_theme::textPrimary(), TextView::CENTER,
                                      TextView::MIDDLE));
       editButton->setOnClickListener([this]() {
         inputVirtualControllerEditorVisible = true;
@@ -842,7 +840,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
             : i18n::message("settings.input.setting.error",
                             {{"prefix", i18n::message("settings.input.not_saved.prefix")},
                              {"error", inputVirtualControllerSettingsError}}),
-        metrics.smallTextSize, ui_theme::coral()));
+        metrics.smallTextSize, app_theme::coral()));
     cards->addView(makeCard(
         metrics, i18n::message("settings.input.virtual_controller.label"),
         gameplay::keyModeLabel(controllerKeyMode), virtualControllerBody,
@@ -873,9 +871,9 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
         i18n::message("settings.input.gyroscope.status",
                       {{"prefix", i18n::message("settings.input.status.prefix")},
                        {"status", inputDeviceStatusLabel(status)}}),
-        metrics.bodyTextSize, ui_theme::textPrimary()));
+        metrics.bodyTextSize, app_theme::textPrimary()));
     inputMonitorText = makeWrappedText(
-        i18n::message("settings.input.turntable_0_000.label"), metrics.bodyTextSize, ui_theme::textSecondary());
+        i18n::message("settings.input.turntable_0_000.label"), metrics.bodyTextSize, app_theme::textSecondary());
     gyroscopeBody->addView(inputMonitorText);
 
     const GyroscopeSettingsLayout gyroscopeLayout =
@@ -895,17 +893,17 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       field->setWidth(static_cast<float>(gyroscopeLayout.editorWidth));
       field->setFlexGrow(gyroscopeLayout.stackEditors ? 0.0F : 1.0F);
       field->addView(makeText(i18n::message(std::string(labelKey).c_str()), metrics.smallTextSize,
-                              ui_theme::textMuted()));
+                              app_theme::textMuted()));
       auto *input = new TextInputBox(kFontPath, metrics.bodyTextSize);
       input->setEditingText(std::to_string(value));
       input->setSize(gyroscopeLayout.editorWidth, metrics.actionButtonHeight);
-      input->setThemedBackgroundColor(ui_theme::control);
-      input->setThemedBorderColor(ui_theme::hairline);
+      input->setThemedBackgroundColor(app_theme::control);
+      input->setThemedBorderColor(app_theme::hairline);
       input->setBorderWidth(1);
-      input->setCornerRadius(ui_theme::controlRadius());
+      input->setCornerRadius(app_theme::controlRadius());
       input->setAlign(TextView::CENTER);
       input->setVAlign(TextView::MIDDLE);
-      input->setThemedColor(ui_theme::textPrimary);
+      input->setThemedColor(app_theme::textPrimary);
       input->onEditingFinished([this, stepAngle](const std::string &text) {
         commitGyroscopeTurntableSetting(stepAngle, text);
       });
@@ -921,7 +919,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
     gyroscopeBody->addView(editors);
     gyroscopeBody->addView(makeWrappedText(
         gyroscopeSettingsErrorLabel(inputGyroscopeSettingsError),
-        metrics.smallTextSize, ui_theme::coral()));
+        metrics.smallTextSize, app_theme::coral()));
     cards->addView(makeCard(
         metrics, i18n::message("settings.input.gyroscope_turntable.label"), i18n::message("settings.input.use_device_rotation_as_turntable.message"),
         gyroscopeBody, metrics.compact ? 300 : 240, metrics.cardsWidth));
@@ -946,10 +944,10 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
     actionGroup->setGap(metrics.compact ? 8.0F : 10.0F);
     actionGroup->setPadding(Edge::All,
                             static_cast<float>(layout.actionGroupPadding));
-    actionGroup->setThemedBackgroundColor(ui_theme::panelSubtle);
-    actionGroup->setThemedBorderColor(ui_theme::hairlineSubtle);
+    actionGroup->setThemedBackgroundColor(app_theme::panelSubtle);
+    actionGroup->setThemedBorderColor(app_theme::hairlineSubtle);
     actionGroup->setBorderWidth(kInputSettingsActionGroupBorderWidth);
-    actionGroup->setCornerRadius(ui_theme::controlRadius());
+    actionGroup->setCornerRadius(app_theme::controlRadius());
 
     auto *actionHeader = new View();
     actionHeader->setFlexDirection(FlexDirection::Row);
@@ -958,7 +956,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
     actionHeader->setJustifyContent(YGJustifySpaceBetween);
     actionHeader->setGap(static_cast<float>(layout.selectorGap));
     actionHeader->addView(makeWrappedText(
-        definition.label, metrics.bodyTextSize + 2, ui_theme::textPrimary()));
+        definition.label, metrics.bodyTextSize + 2, app_theme::textPrimary()));
     if (definition.bindable) {
       const bool listeningForAction =
           inputCaptureController->state() ==
@@ -968,9 +966,9 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       auto *bindButton = makeAccentButton(
           metrics.compact ? 150 : 190, metrics.actionButtonHeight,
           makeText(listeningForAction ? i18n::message("settings.input.listening.progress") : i18n::message("settings.input.bind.label"),
-                   metrics.bodyTextSize + 1, ui_theme::textPrimary(),
+                   metrics.bodyTextSize + 1, app_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE),
-          listeningForAction ? ui_theme::amber() : ui_theme::cyan());
+          listeningForAction ? app_theme::amber() : app_theme::cyan());
       bindButton->setOnClickListener([this, action = definition.action]() {
         inputCaptureAction = action;
         inputCaptureController->begin(
@@ -992,7 +990,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       actionGroup->addView(makeWrappedText(
           inputSelectedDeviceId.empty() ? i18n::message("settings.input.unbound.label")
                                         : i18n::message("settings.input.no_binding_device_filter.message"),
-          metrics.smallTextSize, ui_theme::textMuted()));
+          metrics.smallTextSize, app_theme::textMuted()));
     }
 
     for (const auto &binding : visibleBindings) {
@@ -1000,7 +998,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       bindingRow->setFlexDirection(FlexDirection::Column);
       bindingRow->setGap(metrics.compact ? 8.0F : 10.0F);
       bindingRow->setPadding(Edge::Top, 8.0F);
-      bindingRow->setThemedBorderColor(ui_theme::hairlineSubtle);
+      bindingRow->setThemedBorderColor(app_theme::hairlineSubtle);
       bindingRow->setBorderWidth(kInputSettingsBindingRowBorderWidth);
 
       const auto device = devices.find(binding.control.deviceId);
@@ -1026,7 +1024,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
                          {"control", controlLabel(binding.control)},
                          {"device", deviceLabel}}),
           metrics.smallTextSize,
-          missing ? ui_theme::amber() : ui_theme::textSecondary()));
+          missing ? app_theme::amber() : app_theme::textSecondary()));
 
       auto *editor = new View();
       editor->setFlexDirection(layout.stackBindingEditor ? FlexDirection::Column
@@ -1047,17 +1045,17 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
         field->setGap(4.0F);
         field->setWidth(static_cast<float>(editorControlWidth));
         field->addView(
-            makeText(label, metrics.smallTextSize, ui_theme::textMuted()));
+            makeText(label, metrics.smallTextSize, app_theme::textMuted()));
         auto *input = new TextInputBox(kFontPath, metrics.bodyTextSize);
         input->setEditingText(formatThreshold(value));
         input->setSize(editorControlWidth, metrics.actionButtonHeight);
-        input->setThemedBackgroundColor(ui_theme::control);
-        input->setThemedBorderColor(ui_theme::hairline);
+        input->setThemedBackgroundColor(app_theme::control);
+        input->setThemedBorderColor(app_theme::hairline);
         input->setBorderWidth(1);
-        input->setCornerRadius(ui_theme::controlRadius());
+        input->setCornerRadius(app_theme::controlRadius());
         input->setAlign(TextView::CENTER);
         input->setVAlign(TextView::MIDDLE);
-        input->setThemedColor(ui_theme::textPrimary);
+        input->setThemedColor(app_theme::textPrimary);
         input->onEditingFinished(
             [onCommit = std::move(onCommit)](const std::string &text) {
               onCommit(parseThreshold(text));
@@ -1097,7 +1095,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
         auto *invertButton = makeControlButton(
             editorControlWidth, metrics.actionButtonHeight,
             makeText(binding.inverted ? i18n::message("settings.input.inverted_on.label") : i18n::message("settings.input.inverted_off.label"),
-                     metrics.smallTextSize, ui_theme::textPrimary(),
+                     metrics.smallTextSize, app_theme::textPrimary(),
                      TextView::CENTER, TextView::MIDDLE));
         invertButton->setOnClickListener([this, bindingId = binding.id]() {
           inputCaptureController->toggleBindingInversion(bindingId);
@@ -1107,9 +1105,9 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
       }
       auto *unbindButton = makeAccentButton(
           editorControlWidth, metrics.actionButtonHeight,
-          makeText(i18n::message("settings.input.unbind.label"), metrics.smallTextSize, ui_theme::textPrimary(),
+          makeText(i18n::message("settings.input.unbind.label"), metrics.smallTextSize, app_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE),
-          ui_theme::coral());
+          app_theme::coral());
       unbindButton->setOnClickListener([this, bindingId = binding.id]() {
         inputCaptureController->cancel();
         inputCaptureAction.reset();
@@ -1134,14 +1132,14 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
     monitorBody->setFlexDirection(FlexDirection::Column);
     monitorBody->setGap(metrics.compact ? 8.0F : 12.0F);
     inputCaptureStateText =
-        makeWrappedText("", metrics.bodyTextSize, ui_theme::textPrimary());
+        makeWrappedText("", metrics.bodyTextSize, app_theme::textPrimary());
     if (!showGyroscopeSettings) {
       inputMonitorText =
           makeWrappedText(i18n::message("settings.input.waiting_input.progress"), metrics.smallTextSize,
-                          ui_theme::textSecondary());
+                          app_theme::textSecondary());
     }
     inputErrorText =
-        makeWrappedText("", metrics.smallTextSize, ui_theme::coral());
+        makeWrappedText("", metrics.smallTextSize, app_theme::coral());
     monitorBody->addView(inputCaptureStateText);
     if (!showGyroscopeSettings) {
       monitorBody->addView(inputMonitorText);
@@ -1151,7 +1149,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
         InputCaptureController::State::Idle) {
       auto *cancelButton = makeControlButton(
           metrics.actionButtonWidth, metrics.actionButtonHeight,
-          makeText(i18n::message("settings.input.cancel.label"), metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+          makeText(i18n::message("settings.input.cancel.label"), metrics.bodyTextSize + 2, app_theme::textPrimary(),
                    TextView::CENTER, TextView::MIDDLE));
       cancelButton->setOnClickListener([this]() {
         inputCaptureController->cancel();
@@ -1185,7 +1183,7 @@ void SettingsScene::buildInputConflictOverlay(const LayoutMetrics &metrics) {
   inputConflictOverlayRoot->setFlexDirection(FlexDirection::Column);
   inputConflictOverlayRoot->setAlignItems(YGAlignCenter);
   inputConflictOverlayRoot->setJustifyContent(YGJustifyCenter);
-  inputConflictOverlayRoot->setThemedBackgroundColor(ui_theme::scrim);
+  inputConflictOverlayRoot->setThemedBackgroundColor(app_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(static_cast<float>(std::min(
@@ -1196,20 +1194,18 @@ void SettingsScene::buildInputConflictOverlay(const LayoutMetrics &metrics) {
   panel->setAlignItems(YGAlignStretch);
   panel->setGap(metrics.compact ? 14.0F : 18.0F);
   panel->setPadding(Edge::All, static_cast<float>(metrics.cardPadding));
-  panel->setThemedBackgroundColor(ui_theme::panelStrong);
-  panel->setCornerRadius(ui_theme::panelRadius());
-  panel->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow);
-  panel->setThemedBorderColor(ui_theme::hairline);
+  panel->setThemedBackgroundColor(app_theme::panelStrong);
+  panel->setCornerRadius(app_theme::panelRadius());
+  panel->setThemedBorderColor(app_theme::hairline);
   panel->setBorderWidth(1);
-  panel->addView(makeWrappedText(i18n::message("settings.input.binding_conflict.label"), metrics.sectionTitleSize,
-                                 ui_theme::textPrimary()));
+  panel->addView(makeHeading(i18n::message("settings.input.binding_conflict.label"), metrics.sectionTitleSize));
 
   for (const auto &conflict : inputCaptureController->pendingConflicts()) {
     panel->addView(makeWrappedText(
         i18n::message("settings.input.binding_conflict.description",
                      {{"control", controlLabel(conflict.control)},
                       {"action", actionLabel(conflict.action)}}),
-        metrics.bodyTextSize, ui_theme::amber()));
+        metrics.bodyTextSize, app_theme::amber()));
   }
 
   auto *actions = new View();
@@ -1219,9 +1215,9 @@ void SettingsScene::buildInputConflictOverlay(const LayoutMetrics &metrics) {
   actions->setJustifyContent(YGJustifyCenter);
   auto *replaceButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText(i18n::message("settings.input.replace.label"), metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+      makeText(i18n::message("settings.input.replace.label"), metrics.bodyTextSize + 2, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
-      ui_theme::amber());
+      app_theme::amber());
   replaceButton->setOnClickListener([this]() {
     inputCaptureController->confirmReplace();
     if (inputCaptureController->state() ==
@@ -1235,7 +1231,7 @@ void SettingsScene::buildInputConflictOverlay(const LayoutMetrics &metrics) {
   auto *keepButton = makeControlButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
       makeText(i18n::message("settings.input.keep.label"), metrics.bodyTextSize + 2,
-               ui_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
   keepButton->setOnClickListener([this]() {
     inputCaptureController->rejectReplace();
     inputCaptureAction.reset();
@@ -1277,7 +1273,7 @@ void SettingsScene::buildInputVirtualControllerEditorOverlay(
   inputVirtualControllerEditorOverlayRoot->setPadding(
       Edge::Bottom, static_cast<float>(metrics.safe.bottom + 18));
   inputVirtualControllerEditorOverlayRoot->setThemedBackgroundColor(
-      ui_theme::backdrop);
+      app_theme::backdrop);
 
   auto *header = new View();
   header->setFlexDirection(FlexDirection::Row);
@@ -1287,18 +1283,17 @@ void SettingsScene::buildInputVirtualControllerEditorOverlay(
   title->setFlexDirection(FlexDirection::Column);
   title->setFlex(1.0F);
   title->setGap(4.0F);
-  title->addView(makeText(i18n::message("settings.input.virtual_controller_layout.label"), metrics.sectionTitleSize,
-                           ui_theme::textPrimary()));
+  title->addView(makeHeading(i18n::message("settings.input.virtual_controller_layout.label"), metrics.sectionTitleSize));
   title->addView(makeWrappedText(
       i18n::message("settings.input.virtual_controller.layout_help"),
-      metrics.smallTextSize, ui_theme::textSecondary()));
+      metrics.smallTextSize, app_theme::textSecondary()));
   header->addView(title);
 
   auto *doneButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
-      makeText(i18n::message("settings.input.done.label"), metrics.bodyTextSize + 2, ui_theme::textPrimary(),
+      makeText(i18n::message("settings.input.done.label"), metrics.bodyTextSize + 2, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE),
-      ui_theme::cyan());
+      app_theme::cyan());
   doneButton->setFlexShrink(0.0F);
   doneButton->setOnClickListener([this]() {
     inputVirtualControllerEditorVisible = false;
@@ -1309,7 +1304,7 @@ void SettingsScene::buildInputVirtualControllerEditorOverlay(
 
   inputVirtualControllerEditorOverlayRoot->addView(makeWrappedText(
       i18n::message("settings.input.virtual_controller.handle_legend"),
-      metrics.smallTextSize, ui_theme::textSecondary()));
+      metrics.smallTextSize, app_theme::textSecondary()));
 
   auto *editor = new VirtualControllerEditorView(
       context.inputProfile.virtualControllerForKeyMode(inputSelectedKeyMode), inputSelectedKeyMode,

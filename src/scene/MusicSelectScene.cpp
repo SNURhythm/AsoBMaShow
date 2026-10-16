@@ -53,7 +53,7 @@
 #include "../view/ScrollView.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 #include "play/GamePlayScene.h"
 #include "MainMenuProfileSelections.h"
 
@@ -82,7 +82,7 @@
 #include <utility>
 
 namespace {
-constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kFontPath = app_theme::font;
 constexpr const char *kSkinSoundAssetRoot = "assets";
 // Coalesce quick wheel movement without adding seconds to every uncached song.
 constexpr std::int64_t kRankingDurationMillis = 250;
@@ -293,14 +293,14 @@ TextView *makeText(i18n::Text value, int size,
 Button *makeButton(i18n::Text label) {
   auto *result = new Button();
   result->setWidth(180)->setHeight(56)->setCornerRadius(
-      ui_theme::controlRadius());
-  result->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                    ui_theme::controlPressed);
-  result->setThemedBorderColors(ui_theme::hairlineStrong,
-                                ui_theme::accentBorder,
-                                ui_theme::accentBorderStrong);
+      app_theme::controlRadius());
+  result->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                    app_theme::controlPressed);
+  result->setThemedBorderColors(app_theme::hairlineStrong,
+                                app_theme::accentBorder,
+                                app_theme::accentBorderStrong);
   result->setStyledBorderWidth(1);
-  auto *labelView = makeText(std::move(label), 21, ui_theme::textPrimary);
+  auto *labelView = makeText(std::move(label), 21, app_theme::textPrimary);
   labelView->setAlign(TextView::CENTER);
   result->setContentView(labelView);
   return result;
@@ -1611,7 +1611,7 @@ void MusicSelectScene::showDirectoryStatus(std::string message) {
   if (directoryStatusMessage_ == message) return;
   directoryStatusMessage_ = std::move(message);
   if (!directoryStatus_ && !directoryStatusMessage_.empty()) {
-    directoryStatus_ = makeText({}, 20, ui_theme::textPrimary);
+    directoryStatus_ = makeText({}, 20, app_theme::textPrimary);
     directoryStatus_->setPositionType(YGPositionTypeAbsolute);
     directoryStatus_->setPosition(Edge::Left, 20);
     directoryStatus_->setPosition(Edge::Top, 20);
@@ -2028,7 +2028,7 @@ void MusicSelectScene::buildSearchPrompt() {
   searchOverlay_->setFlexDirection(FlexDirection::Column);
   searchOverlay_->setAlignItems(YGAlignCenter);
   searchOverlay_->setJustifyContent(YGJustifyCenter);
-  searchOverlay_->setThemedBackgroundColor(ui_theme::scrim);
+  searchOverlay_->setThemedBackgroundColor(app_theme::scrim);
 
   auto *panel = new View();
   panel->setWidth(600)
@@ -2037,24 +2037,24 @@ void MusicSelectScene::buildSearchPrompt() {
       ->setAlignItems(YGAlignStretch)
       ->setGap(16)
       ->setPadding(Edge::All, 24)
-      ->setThemedBackgroundColor(ui_theme::panelStrong)
-      ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
-      ->setThemedBorderColor(ui_theme::hairlineStrong)
+      ->setThemedBackgroundColor(app_theme::panelStrong)
+      ->setCornerRadius(app_theme::panelRadius())
+      ->setThemedShadow(app_theme::shadow, app_theme::kModalShadow)
+      ->setThemedBorderColor(app_theme::hairlineStrong)
       ->setBorderWidth(1);
 
-  auto *title = makeText(i18n::message("music_select.search.label"), 28, ui_theme::textPrimary);
+  auto *title = makeText(i18n::message("music_select.search.label"), 28, app_theme::textPrimary);
   title->setHeight(40);
   panel->addView(title);
 
   searchInput_ = new TextInputBox(kFontPath, 22);
   searchInput_->setHeight(58);
   searchInput_->setClearable(true);
-  searchInput_->setThemedBackgroundColor(ui_theme::insetSurface);
-  searchInput_->setThemedBorderColor(ui_theme::hairlineStrong);
+  searchInput_->setThemedBackgroundColor(app_theme::insetSurface);
+  searchInput_->setThemedBorderColor(app_theme::hairlineStrong);
   searchInput_->setBorderWidth(1);
-  searchInput_->setCornerRadius(ui_theme::controlRadius());
-  searchInput_->setThemedColor(ui_theme::textPrimary);
+  searchInput_->setCornerRadius(app_theme::controlRadius());
+  searchInput_->setThemedColor(app_theme::textPrimary);
   searchInput_->setVAlign(TextView::MIDDLE);
   searchInput_->onSubmit([this](const std::string &text) {
     hideSearchPrompt();
@@ -3556,20 +3556,20 @@ void MusicSelectScene::buildErrorView() {
       ->setJustifyContent(YGJustifyCenter)
       ->setGap(12)
       ->setPadding(Edge::All, 32)
-      ->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
-  auto *title = makeText(i18n::message("music_select.music_select_skin_failed.label"), 38, ui_theme::coral);
+      ->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
+  auto *title = makeText(i18n::message("music_select.music_select_skin_failed.label"), 38, app_theme::coral);
   title->setHeight(58);
   root->addView(title);
   if (!selectedSkinPath_.empty()) {
     auto *path = makeText(i18n::message("music_select.selected_skin.message",
                                         {{"path", selectedSkinPath_}}), 20,
-                          ui_theme::textSecondary);
+                          app_theme::textSecondary);
     path->setHeight(44);
     root->addView(path);
   }
   if (diagnostics_.empty()) {
     auto *reason = makeText(i18n::message("music_select.no_diagnostic_reported.message"), 20,
-                            ui_theme::textSecondary);
+                            app_theme::textSecondary);
     reason->setHeight(44);
     root->addView(reason);
   } else {
@@ -3577,7 +3577,7 @@ void MusicSelectScene::buildErrorView() {
       const auto &diagnostic = diagnostics_[index];
       auto *reasonView = makeText(
           musicSelectSkinFailureReason(index, diagnostic), 19,
-                                  ui_theme::textPrimary);
+                                  app_theme::textPrimary);
       reasonView->setMinHeight(42);
       root->addView(reasonView);
     }
@@ -4011,7 +4011,7 @@ void MusicSelectScene::showTasksModal() {
     tasksModal_->setFlexDirection(FlexDirection::Column);
     tasksModal_->setAlignItems(YGAlignCenter);
     tasksModal_->setJustifyContent(YGJustifyCenter);
-    tasksModal_->setThemedBackgroundColor(ui_theme::scrim);
+    tasksModal_->setThemedBackgroundColor(app_theme::scrim);
 
     auto *panel = new View();
     panel->setWidth(760)
@@ -4020,27 +4020,27 @@ void MusicSelectScene::showTasksModal() {
         ->setAlignItems(YGAlignStretch)
         ->setGap(14)
         ->setPadding(Edge::All, 22)
-        ->setThemedBackgroundColor(ui_theme::panelStrong)
-        ->setCornerRadius(ui_theme::panelRadius())
-        ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
-        ->setThemedBorderColor(ui_theme::hairlineStrong)
+        ->setThemedBackgroundColor(app_theme::panelStrong)
+        ->setCornerRadius(app_theme::panelRadius())
+        ->setThemedShadow(app_theme::shadow, app_theme::kModalShadow)
+        ->setThemedBorderColor(app_theme::hairlineStrong)
         ->setBorderWidth(1);
-    auto *title = makeText(i18n::message("music_select.tasks.label"), 30, ui_theme::textPrimary);
+    auto *title = makeText(i18n::message("music_select.tasks.label"), 30, app_theme::textPrimary);
     title->setHeight(42);
     panel->addView(title);
 
     auto *scroll = new ScrollView(0, 0, 716, 400);
     scroll->setWidth(716)
         ->setFlex(1)
-        ->setThemedBackgroundColor(ui_theme::insetSurface)
-        ->setCornerRadius(ui_theme::controlRadius())
-        ->setThemedBorderColor(ui_theme::hairline)
+        ->setThemedBackgroundColor(app_theme::insetSurface)
+        ->setCornerRadius(app_theme::controlRadius())
+        ->setThemedBorderColor(app_theme::hairline)
         ->setBorderWidth(1);
     scroll->setContentPadding(Edge::All, 12);
     auto *content = new View();
     content->setFlexDirection(FlexDirection::Column)
         ->setAlignItems(YGAlignStretch);
-    tasksModalText_ = makeText({}, 18, ui_theme::textSecondary);
+    tasksModalText_ = makeText({}, 18, app_theme::textSecondary);
     tasksModalText_->setWrap(true);
     tasksModalText_->setOverflow(TextView::TextOverflow::Visible);
     content->addView(tasksModalText_);
@@ -4312,9 +4312,9 @@ void MusicSelectScene::buildSkinLoadingView() {
       ->setAlignItems(YGAlignCenter)
       ->setJustifyContent(YGJustifyCenter)
       ->setPadding(Edge::All, 32)
-      ->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
+      ->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
   auto *label = makeText(i18n::message("music_select.loading_music_select_skin.progress"), 28,
-                         ui_theme::textPrimary);
+                         app_theme::textPrimary);
   label->setHeight(56);
   label->setAlign(TextView::CENTER);
   root->addView(label);

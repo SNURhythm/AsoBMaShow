@@ -676,6 +676,45 @@ void testPreviewSkinChoicesRespectModeAndFollowSelection() {
 } // namespace
 
 int main() {
+  {
+    skin::GameplaySkinOperationModalState modal;
+    skin::GameplaySkinSettingsSnapshot snapshot;
+    snapshot.state = skin::GameplaySkinSettingsState::Busy;
+    modal.update(snapshot);
+    require(modal.visible && modal.busy, "installation shows the progress modal");
+    modal.dismiss();
+    require(modal.visible, "Close cannot dismiss active installation work");
+    snapshot.state = skin::GameplaySkinSettingsState::Error;
+    snapshot.statusMessage = "Invalid skin archive";
+    modal.update(snapshot);
+    require(modal.visible && !modal.busy && modal.error == snapshot.statusMessage,
+            "installation failure stays in the same modal with its diagnostic");
+    modal.dismiss();
+    modal.update(snapshot);
+    require(!modal.visible, "polling and view rebuilds do not reopen dismissed errors");
+    modal.action({.accepted = true});
+    modal.update(snapshot);
+    require(!modal.visible, "accepted revalidation does not reopen a previous failure");
+    snapshot.state = skin::GameplaySkinSettingsState::Busy;
+    modal.update(snapshot);
+    snapshot.state = skin::GameplaySkinSettingsState::Error;
+    modal.update(snapshot);
+    require(modal.visible, "a retry can show the same error again");
+    snapshot.state = skin::GameplaySkinSettingsState::Ready;
+    snapshot.statusMessage = "Installed";
+    modal.update(snapshot);
+    require(!modal.visible && modal.error.empty(), "success closes the progress modal");
+    modal.action({.accepted = false, .message = "Picker unavailable"});
+    modal.update(snapshot);
+    require(modal.visible && modal.error == "Picker unavailable",
+            "immediate action failures also appear in the modal");
+    modal.dismiss();
+    modal.update(snapshot);
+    require(!modal.visible, "immediate failures stay dismissed");
+    modal.action({.accepted = false, .message = "Picker unavailable"});
+    modal.update(snapshot);
+    require(modal.visible, "repeated immediate failures can reopen the modal");
+  }
   testPreviewSkinChoicesRespectModeAndFollowSelection();
   testPreparedImportAvailabilityIsExact();
   testMetadataChangesInvalidateAnUnchangedDigest();

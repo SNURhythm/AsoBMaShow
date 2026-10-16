@@ -132,6 +132,13 @@ struct RenderContext {
     }
   }
 
+  // Retained shaders receive inherited opacity explicitly in their uniforms.
+  [[nodiscard]] float getOpacity() const noexcept { return opacity; }
+  bool submitUiRetained(const std::shared_ptr<const rendering::UiRetainedGeometry> &geometry,
+                        const rendering::UiBatchState &state) const noexcept {
+    return uiBatch && uiBatch->submitRetained(geometry, state);
+  }
+
   [[nodiscard]] rendering::UiBatchState
   makeUiBatchState(bgfx::ProgramHandle program, std::uint64_t state) const {
     rendering::UiBatchState result{.program = program, .state = state};

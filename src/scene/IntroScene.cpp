@@ -8,37 +8,43 @@
 #include "SettingsScene.h"
 #include "../music_select/MusicSelectLaunchPolicy.h"
 #include "../rendering/common.h"
+#include "../rendering/UiSafeArea.h"
+#include "../rendering/ResponsiveUi.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 
 #include <memory>
 #include <utility>
 
 namespace {
-constexpr const char *kFontPath = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kFontPath = app_theme::font;
 
 TextView *text(std::string value, int size, View::ThemeColorProvider color) {
-  auto *view = new TextView(kFontPath, size);
+  auto *view = new TextView(size >= 26 ? app_theme::boldFont : kFontPath, size);
   view->setText(std::move(value));
   view->setThemedColor(std::move(color));
-  view->setAlign(TextView::CENTER);
+  view->setAlign(TextView::LEFT);
   view->setVAlign(TextView::MIDDLE);
   return view;
 }
 
 Button *button(std::string label) {
   auto *result = new Button();
-  result->setWidth(300)
-      ->setHeight(64)
-      ->setCornerRadius(ui_theme::controlRadius());
-  result->setThemedBackgroundColors(ui_theme::control, ui_theme::controlHover,
-                                    ui_theme::controlPressed);
-  result->setThemedBorderColors(ui_theme::hairlineStrong,
-                                ui_theme::accentBorder,
-                                ui_theme::accentBorderStrong);
-  result->setStyledBorderWidth(1);
-  result->setContentView(text(std::move(label), 24, ui_theme::textPrimary));
+  result->setWidthPercent(100)
+      ->setHeight(80)
+      ->setPadding(Edge::Left, 24)
+      ->setPadding(Edge::Right, 24)
+      ->setCornerRadius(app_theme::controlRadius());
+  result->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                    app_theme::controlPressed);
+  result->setThemedBorderColors(app_theme::hairlineStrong,
+                                app_theme::accentBorder,
+                                app_theme::accentBorderStrong);
+  result->setStyledBorderWidth(0);
+  auto *labelView = text(std::move(label), 34, app_theme::textPrimary);
+  labelView->setPadding(Edge::Left, 24)->setPadding(Edge::Right, 24);
+  result->setContentView(labelView);
   return result;
 }
 } // namespace
@@ -57,29 +63,56 @@ void IntroScene::buildView() {
   rootLayout_ =
       new View(0, 0, rendering::window_width, rendering::window_height);
   rootLayout_->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignCenter)
-      ->setJustifyContent(YGJustifyCenter)
-      ->setGap(18)
-      ->setThemedBackgroundColor(ui_theme::mainMenuBackdrop);
+      ->setAlignItems(YGAlignStretch)
+      ->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
   addView(rootLayout_);
 
-  auto *title = text("AsoBMaShow", 58, ui_theme::textPrimary);
-  title->setWidth(720)->setHeight(92);
-  rootLayout_->addView(title);
+  content_ = new View();
+  content_->setFlex(1)->setMinHeight(0)->setGap(48);
+  rootLayout_->addView(content_);
+  title_ = text("AsoBMaShow", 88, app_theme::textPrimary);
+  title_->setMinWidth(0)->setFlex(1);
+  title_->setWrap(true);
+  content_->addView(title_);
 
+  menu_ = new View();
+  menu_->setFlexDirection(FlexDirection::Column)->setGap(1)
+      ->setJustifyContent(YGJustifyCenter);
+  content_->addView(menu_);
   startButton_ = button(i18n::tr("intro.start.label"));
   startButton_->setOnClickListener([this] { start(); });
-  rootLayout_->addView(startButton_);
-
+  menu_->addView(startButton_);
   settingsButton_ = button(i18n::tr("intro.settings.label"));
   settingsButton_->setOnClickListener([this] { openSettings(); });
-  rootLayout_->addView(settingsButton_);
+  menu_->addView(settingsButton_);
   tutorialButton_ = button(i18n::tr("tutorial.replay.label"));
   tutorialButton_->setOnClickListener([this] { startTutorial(); });
-  rootLayout_->addView(tutorialButton_);
-  rootLayout_->applyYogaLayout();
+  menu_->addView(tutorialButton_);
+  layoutView();
+}
+
+void IntroScene::layoutView() {
   layoutWidth_ = rendering::window_width;
   layoutHeight_ = rendering::window_height;
+  const auto safe = rendering::uiSafeAreaInsets();
+  lastSafeTop = safe.top;
+  lastSafeLeft = safe.left;
+  lastSafeBottom = safe.bottom;
+  lastSafeRight = safe.right;
+  const bool portrait = layoutWidth_ < layoutHeight_;
+  const int inset = portrait ? 28 : 48;
+  rootLayout_->setSize(layoutWidth_, layoutHeight_);
+  rootLayout_->setPadding(Edge::Left, safe.left + inset)
+      ->setPadding(Edge::Right, safe.right + inset)
+      ->setPadding(Edge::Top, safe.top + inset)
+      ->setPadding(Edge::Bottom, safe.bottom + inset);
+  content_->setFlexDirection(portrait ? FlexDirection::Column : FlexDirection::Row)
+      ->setAlignItems(YGAlignStretch)->setGap(portrait ? 24 : 48);
+  menu_->setWidthPercent(portrait ? 100 : 38);
+  menu_->setFlexShrink(0);
+  title_->setVAlign(portrait ? TextView::BOTTOM : TextView::MIDDLE);
+  title_->setAutoFitText(rendering::compactMenuCanvasActive);
+  rootLayout_->applyYogaLayout();
 }
 
 void IntroScene::start() {
@@ -176,13 +209,13 @@ void IntroScene::update(float) {
   }
 #endif
   processNavigationInput();
+  const auto safe = rendering::uiSafeAreaInsets();
   if (rootLayout_ != nullptr &&
       (layoutWidth_ != rendering::window_width ||
-       layoutHeight_ != rendering::window_height)) {
-    layoutWidth_ = rendering::window_width;
-    layoutHeight_ = rendering::window_height;
-    rootLayout_->setSize(layoutWidth_, layoutHeight_);
-    rootLayout_->applyYogaLayout();
+       layoutHeight_ != rendering::window_height ||
+       lastSafeTop != safe.top || lastSafeLeft != safe.left ||
+       lastSafeBottom != safe.bottom || lastSafeRight != safe.right)) {
+    layoutView();
   }
 }
 
@@ -192,6 +225,9 @@ void IntroScene::cleanupScene() {
   pendingStart_ = false;
   stopInputListening();
   rootLayout_ = nullptr;
+  content_ = nullptr;
+  menu_ = nullptr;
+  title_ = nullptr;
   startButton_ = nullptr;
   settingsButton_ = nullptr;
   tutorialButton_ = nullptr;
@@ -236,9 +272,15 @@ void IntroScene::syncNavigationSelection() {
     if (buttons[i] == nullptr) continue;
     const bool selected = static_cast<std::size_t>(navigation_.choice()) == i;
     buttons[i]->setSelected(selected);
+    buttons[i]->setThemedBackgroundColors(
+        selected ? app_theme::primaryAction : app_theme::control,
+        selected ? app_theme::primaryActionHover : app_theme::controlHover,
+        selected ? app_theme::primaryActionPressed : app_theme::controlPressed);
+    if (auto *label = dynamic_cast<TextView *>(buttons[i]->getContentView()))
+      label->setThemedColor(selected ? app_theme::onAction : app_theme::textPrimary);
     buttons[i]->setThemedBorderColors(
-        selected ? ui_theme::accentBorderStrong : ui_theme::hairlineStrong,
-        ui_theme::accentBorder, ui_theme::accentBorderStrong);
+        selected ? app_theme::accentBorderStrong : app_theme::hairlineStrong,
+        app_theme::accentBorder, app_theme::accentBorderStrong);
   }
 }
 

@@ -11,6 +11,7 @@
 #include "SettingsLibraryTask.h"
 #include "SettingsPreviewPlayback.h"
 #include "../view/ColorPickerPopup.h"
+#include "../view/AppTheme.h"
 #include "SettingsPreviewAutoPlay.h"
 #include "SettingsSceneProfileEditorState.h"
 #include "Scene.h"
@@ -71,6 +72,7 @@ class SoundSetFolderPicker;
 #include "SettingsSceneInputRebuild.h"
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include "GameplaySkinSettingsController.h"
+#include "GameplaySkinSettingsPresentation.h"
 namespace skin { struct GameplaySkinSelection; }
 #endif
 
@@ -78,6 +80,7 @@ enum class SettingsDestination { Profile, Ir };
 
 class SettingsScene : public Scene, public IRhythmControl {
 public:
+  bool usesResponsiveMenuCanvas() const override { return true; }
   explicit SettingsScene(
       ApplicationContext &context,
       SettingsDestination destination = SettingsDestination::Profile,
@@ -179,6 +182,7 @@ private:
   TextView *visibleTimeModeText = nullptr;
   TextView *keysoundModeText = nullptr;
   TextView *prepMetronomeModeText = nullptr;
+  TextInputBox *prepMetronomeMaxDurationInput = nullptr;
   TextView *ipadGestureReminderModeText = nullptr;
   TextView *startLaneIndicatorsModeText = nullptr;
   TextView *showInvisibleNotesModeText = nullptr;
@@ -395,7 +399,11 @@ private:
   TextView *gameplaySkinConfigurationDigestText = nullptr;
   View *gameplaySkinSafetyOverlayRoot = nullptr;
   View *gameplaySkinBusyOverlayRoot = nullptr;
+  skin::GameplaySkinOperationModalState gameplaySkinOperationModal;
+  TextView *gameplaySkinBusyOverlayTitleText = nullptr;
   TextView *gameplaySkinBusyOverlayStatusText = nullptr;
+  ScrollView *gameplaySkinBusyOverlayStatusScroll = nullptr;
+  TextView *gameplaySkinBusyOverlayActionText = nullptr;
   Button *gameplaySkinBusyOverlayCancelButton = nullptr;
 #endif
   platform_document_handoff::PlatformDocumentHandoffOperation
@@ -411,12 +419,12 @@ private:
   std::string profileCreateNameText;
   settings_scene::ProfileInlineEditorState profileInlineEditor;
   i18n::Text difficultyTableStatusMessage;
-  SDL_Color difficultyTableStatusColor{157, 177, 200, 255};
+  SDL_Color difficultyTableStatusColor = app_theme::sdl(app_theme::textSecondary());
   i18n::Text chartFolderStatusMessage;
-  SDL_Color chartFolderStatusColor{157, 177, 200, 255};
+  SDL_Color chartFolderStatusColor = app_theme::sdl(app_theme::textSecondary());
   i18n::Text archiveCacheCleanupStatusMessage =
       i18n::message("settings.temporary_archive_cache_has_not_cleaned_yet.message");
-  SDL_Color archiveCacheCleanupStatusColor{157, 177, 200, 255};
+  SDL_Color archiveCacheCleanupStatusColor = app_theme::sdl(app_theme::textSecondary());
   bool difficultyTableImportModalVisible = false;
   bool difficultyTableImportFinished = false;
   bool difficultyTableImportSucceeded = false;
@@ -441,8 +449,8 @@ private:
   player_settings::VideoSettings displayDraft;
   i18n::Text audioStatusMessage;
   i18n::Text displayStatusMessage;
-  SDL_Color audioStatusColor{157, 177, 200, 255};
-  SDL_Color displayStatusColor{157, 177, 200, 255};
+  SDL_Color audioStatusColor = app_theme::sdl(app_theme::textSecondary());
+  SDL_Color displayStatusColor = app_theme::sdl(app_theme::textSecondary());
   bool audioDeviceDropdownOpen = false;
   bool audioSampleRateDropdownOpen = false;
   bool audioBufferDropdownOpen = false;

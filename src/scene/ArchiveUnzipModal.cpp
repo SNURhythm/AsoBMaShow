@@ -4,10 +4,12 @@
 
 #include "FindBmsProgressPresentation.h"
 #include "../rendering/common.h"
+#include "../rendering/ResponsiveUi.h"
+#include "../rendering/UiSafeArea.h"
 #include "../view/BlockingOverlayView.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 
 #include <algorithm>
 #include <iomanip>
@@ -19,13 +21,13 @@ namespace {
 Button *makeModalButton(const i18n::Text &label, int fontSize,
                         TextView **textOut = nullptr) {
   auto *button = new Button(0, 0, 160, 58);
-  auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", fontSize);
+  auto *text = new TextView(app_theme::font, fontSize);
   text->setLocalizedText(label);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   button->setContentView(text);
   button->setStyledBorderWidth(1);
-  button->setCornerRadius(ui_theme::controlRadius());
+  button->setCornerRadius(app_theme::controlRadius());
   if (textOut != nullptr) {
     *textOut = text;
   }
@@ -33,9 +35,7 @@ Button *makeModalButton(const i18n::Text &label, int fontSize,
 }
 
 Color modalPanelBorder() {
-  return ui_theme::activeMode() == ui_theme::ThemeMode::Light
-             ? ui_theme::hairlineStrong()
-             : Color(86, 118, 153, 210);
+  return app_theme::hairlineStrong();
 }
 
 }
@@ -85,29 +85,30 @@ void ArchiveUnzipModal::build(View *parent) {
   root_->setFlexDirection(FlexDirection::Column);
   root_->setAlignItems(YGAlignCenter);
   root_->setJustifyContent(YGJustifyCenter);
-  root_->setThemedBackgroundColor(ui_theme::scrim);
+  root_->setThemedBackgroundColor(app_theme::scrim);
   parent->addView(root_);
 
   auto *panel = new View();
+  panel->setName("archiveUnzipPanel");
   panel->setWidth(kModalPanelWidth)
       ->setFlexDirection(FlexDirection::Column)
       ->setGap(14)
       ->setPadding(Edge::All, kModalPanelPadding)
-      ->setThemedBackgroundColor(ui_theme::panelStrong)
-      ->setCornerRadius(ui_theme::panelRadius())
-      ->setThemedShadow(ui_theme::shadow, ui_theme::kModalShadow)
+      ->setThemedBackgroundColor(app_theme::panelStrong)
+      ->setCornerRadius(app_theme::panelRadius())
+      ->setThemedShadow(app_theme::shadow, app_theme::kModalShadow)
       ->setThemedBorderColor(modalPanelBorder)
       ->setBorderWidth(1);
   root_->addView(panel);
 
-  title_ = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
+  title_ = new TextView(app_theme::boldFont, 30);
   title_->setLocalizedText(i18n::message("library.archive.unzip.label"));
-  title_->setThemedColor(ui_theme::textPrimary);
+  title_->setThemedColor(app_theme::textPrimary);
   title_->setHeight(42);
   panel->addView(title_);
 
-  message_ = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
-  message_->setThemedColor(ui_theme::textSecondary);
+  message_ = new TextView(app_theme::font, 22);
+  message_->setThemedColor(app_theme::textSecondary);
   message_->setMinHeight(32);
   message_->setWidthPercent(100);
   message_->setWrap(true);
@@ -116,28 +117,29 @@ void ArchiveUnzipModal::build(View *parent) {
   track_ = new View();
   track_->setWidth(kModalContentWidth)
       ->setHeight(24)
-      ->setThemedBackgroundColor(ui_theme::progressTrack)
-      ->setCornerRadius(ui_theme::controlRadius())
-      ->setThemedBorderColor(ui_theme::hairline)
+      ->setThemedBackgroundColor(app_theme::progressTrack)
+      ->setCornerRadius(app_theme::controlRadius())
+      ->setThemedBorderColor(app_theme::hairline)
       ->setBorderWidth(1);
   fill_ = new View();
-  fill_->setWidth(0)->setHeight(20)->setBackgroundColor(ui_theme::progressFill());
+  fill_->setWidth(0)->setHeight(20)->setBackgroundColor(app_theme::progressFill());
   track_->addView(fill_);
   panel->addView(track_);
 
-  percent_ = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  percent_->setThemedColor(ui_theme::textSecondary);
+  percent_ = new TextView(app_theme::font, 20);
+  percent_->setThemedColor(app_theme::textSecondary);
   percent_->setHeight(28);
   panel->addView(percent_);
 
-  detail_ = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
-  detail_->setThemedColor(ui_theme::textMuted);
+  detail_ = new TextView(app_theme::font, 18);
+  detail_->setThemedColor(app_theme::textMuted);
   detail_->setMinHeight(54);
   detail_->setWidthPercent(100);
   detail_->setWrap(true);
   panel->addView(detail_);
 
   auto *footer = new View();
+  footer->setName("archiveUnzipFooter");
   footer->setFlexDirection(FlexDirection::Row);
   footer->setJustifyContent(YGJustifyFlexEnd);
   footer->setAlignItems(YGAlignStretch);
@@ -296,8 +298,28 @@ void ArchiveUnzipModal::update() {
 }
 
 void ArchiveUnzipModal::resize(int width, int height) {
-  if (root_ != nullptr) {
-    root_->setSize(width, height);
+  if (root_ == nullptr) return;
+  View::LayoutBatchScope layoutBatch;
+  const auto safe = rendering::uiSafeAreaInsets();
+  root_->setSize(width, height);
+  root_->setPadding(Edge::Top, safe.top)->setPadding(Edge::Bottom, safe.bottom);
+  root_->setPadding(Edge::Left, safe.left)->setPadding(Edge::Right, safe.right);
+  const float panelWidth = std::max(0.0f, std::min(700.0f, float(width - safe.left - safe.right - 24)));
+  const float contentWidth = std::max(0.0f, panelWidth - 46);
+  auto *panel = root_->findViewByName("archiveUnzipPanel");
+  panel->setWidth(panelWidth);
+  YGNodeStyleSetMaxHeight(panel->getNode(), std::max(0, height - safe.top - safe.bottom - 24));
+  panel->applyYogaLayout();
+  track_->setWidth(contentWidth);
+  auto *footer = root_->findViewByName("archiveUnzipFooter");
+  footer->setFlexWrap(YGWrapWrap)->setHeight(YGUndefined)->setFlexShrink(0);
+  const float actionHeight = rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 58;
+  keepButton_->setWidth(std::min(180.0f, contentWidth));
+  deleteButton_->setWidth(std::min(210.0f, contentWidth));
+  cancelButton_->setWidth(std::min(130.0f, contentWidth));
+  for (auto *button : {keepButton_, deleteButton_, cancelButton_}) {
+    button->setHeight(actionHeight)->setFlexShrink(0);
+    button->setDisplay(button->getVisible() ? YGDisplayFlex : YGDisplayNone);
   }
 }
 
@@ -368,6 +390,7 @@ void ArchiveUnzipModal::setDeleteVisible(bool visible) {
   deleteButton_->setVisible(visible);
   deleteButton_->setWidth(visible ? 210.0f : 0.0f);
   deleteButton_->setHeight(visible ? 58.0f : 0.0f);
+  resize(rendering::window_width, rendering::window_height);
 }
 
 void ArchiveUnzipModal::setAllChoiceVisible(bool visible) {
@@ -381,6 +404,7 @@ void ArchiveUnzipModal::setAllChoiceVisible(bool visible) {
   track_->setHeight(visible ? 0.0f : 24.0f);
   percent_->setVisible(!visible);
   percent_->setHeight(visible ? 0.0f : 28.0f);
+  resize(rendering::window_width, rendering::window_height);
 }
 
 void ArchiveUnzipModal::updateProgress(double fraction,
@@ -389,6 +413,7 @@ void ArchiveUnzipModal::updateProgress(double fraction,
                                       std::uint64_t total) {
   fraction = std::clamp(fraction, 0.0, 1.0);
   message_->setLocalizedText(message);
+  resize(rendering::window_width, rendering::window_height);
   fill_->setWidth(std::max(0.0f, (track_->getWidth() - 4.0f) *
                                    static_cast<float>(fraction)));
   std::ostringstream text;

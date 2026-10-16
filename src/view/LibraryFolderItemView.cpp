@@ -2,11 +2,12 @@
 #include "ClearLampColors.h"
 #include "IconText.h"
 #include "UiTheme.h"
+#include "MainMenuTheme.h"
 #include <algorithm>
 
 namespace {
 constexpr int kBottomGap = 6;
-constexpr int kDepthIndent = 18;
+constexpr int kDepthIndent = 28;
 constexpr int kCardLeftPadding = 8;
 constexpr int kLeafCardLeftPadding = 2;
 constexpr int kItemGap = 8;
@@ -14,8 +15,8 @@ constexpr int kExpandableItemGap = 0;
 constexpr int kDisclosureWidth = 14;
 constexpr int kLeafDisclosureWidth = 4;
 constexpr int kCountWidth = 48;
-constexpr int kChevronRightIcon = 0xf054;
-constexpr int kChevronDownIcon = 0xf078;
+constexpr int kChevronRightIcon = 0xf0da;
+constexpr int kChevronDownIcon = 0xf0d7;
 } // namespace
 
 LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
@@ -49,15 +50,30 @@ LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
   clearLamp->setCornerRadius(3.0f);
   contentCard->addView(clearLamp);
 
-  labelView = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  labelView = new TextView(main_menu_theme::font, 24);
   labelView->setVAlign(TextView::MIDDLE);
   labelView->setOverflow(TextView::TextOverflow::Marquee);
   labelView->setFlex(1);
   labelView->setFlexShrink(1);
   labelView->setMinWidth(0);
   contentCard->addView(labelView);
+  groupLabelView = new TextView(main_menu_theme::font, 24, TextView::FontWeight::Bold);
+  groupLabelView->setVAlign(TextView::MIDDLE);
+  groupLabelView->setOverflow(TextView::TextOverflow::Hidden);
+  groupLabelView->setFlex(1)->setMinWidth(0);
+  contentCard->addView(groupLabelView);
+  sectionLabelView = new TextView(main_menu_theme::font, 18);
+  sectionLabelView->setVAlign(TextView::MIDDLE);
+  sectionLabelView->setFlex(1)->setMinWidth(0);
+  sectionLabelView->setThemedColor(main_menu_theme::muted);
+  contentCard->addView(sectionLabelView);
+  sectionRule = new View();
+  sectionRule->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Top, 0);
+  sectionRule->setPosition(Edge::Left, 8)->setPosition(Edge::Right, 24)->setHeight(1);
+  sectionRule->setThemedBackgroundColor(main_menu_theme::rule);
+  contentCard->addView(sectionRule);
 
-  countView = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+  countView = new TextView(main_menu_theme::font, 20);
   countView->setAlign(TextView::RIGHT);
   countView->setVAlign(TextView::MIDDLE);
   countView->setOverflow(TextView::TextOverflow::Hidden);
@@ -68,87 +84,76 @@ LibraryFolderItemView::LibraryFolderItemView(int x, int y, int width,
 void LibraryFolderItemView::setItem(const std::string &label, int depth,
                                     int count, bool selected, int clearRank,
                                     bool clearMarkFolder, bool expandable,
-                                    bool expanded) {
+                                    bool expanded, uint32_t icon, bool section) {
+  sectionHeader = section;
+  rootItem = depth == 0 && !section;
   itemDepth = depth;
   itemClearRank = clearRank;
   itemClearMarkFolder = clearMarkFolder;
   const bool leaf = !expandable;
-  contentCard->setMargin(Edge::Left,
-                         static_cast<float>(std::max(0, itemDepth) *
-                                            kDepthIndent));
-  contentCard->setPadding(Edge::Left,
-                          leaf ? kLeafCardLeftPadding : kCardLeftPadding);
-  contentCard->setGap(expandable ? kExpandableItemGap : kItemGap);
-  disclosureView->setWidth(expandable ? kDisclosureWidth
-                                      : kLeafDisclosureWidth);
-  disclosureView->setText(
-      expandable ? ui_icons::textForCodepoint(expanded ? kChevronDownIcon
-                                                       : kChevronRightIcon)
-                 : "");
-  labelView->setText(label);
+  contentCard->setMargin(Edge::Left, 0);
+  contentCard->setPadding(Edge::Left, std::max(0, itemDepth) * kDepthIndent + kCardLeftPadding);
+  contentCard->setGap(icon ? 14 : 8);
+  disclosureView->setWidth(section ? 0 : icon ? 28 : expandable ? kDisclosureWidth : kLeafDisclosureWidth);
+  disclosureView->setText(icon ? ui_icons::textForCodepoint(icon) :
+      expandable ? ui_icons::textForCodepoint(expanded ? kChevronDownIcon : kChevronRightIcon) : "");
+  labelView->setVisible(!rootItem && !section);
+  labelView->setDisplay(rootItem || section ? YGDisplayNone : YGDisplayFlex);
+  sectionLabelView->setVisible(section);
+  sectionLabelView->setDisplay(section ? YGDisplayFlex : YGDisplayNone);
+  groupLabelView->setVisible(rootItem);
+  groupLabelView->setDisplay(rootItem ? YGDisplayFlex : YGDisplayNone);
+  sectionRule->setVisible(section);
+  clearLamp->setVisible(hasClearLampColor(clearRank));
+  clearLamp->setDisplay(hasClearLampColor(clearRank) ? YGDisplayFlex : YGDisplayNone);
+  auto *activeLabel = section ? sectionLabelView : rootItem ? groupLabelView : labelView;
+  activeLabel->setDeferredTextureMaterialization(true);
+  activeLabel->setText(label);
   const bool showCount = count >= 0;
   countView->setWidth(showCount ? kCountWidth : 0);
   countView->setText(showCount ? std::to_string(count) : "");
   if (hasClearLampColor(clearRank)) {
-    const Color clearColor = clearLampColorForRank(clearRank);
-    clearLamp->setBackgroundColor(
-        itemClearMarkFolder ? ui_theme::withAlpha(ui_theme::textOn(clearColor),
-                                                  176)
-                            : clearColor);
+    auto glow = clearLampColorForRank(clearRank);
+    auto core = glow;
+    core.r = static_cast<uint8_t>((3 * core.r + 255) / 4);
+    core.g = static_cast<uint8_t>((3 * core.g + 255) / 4);
+    core.b = static_cast<uint8_t>((3 * core.b + 255) / 4);
+    core.a = 255;
+    clearLamp->setBackgroundColor(core);
+    if (clearRank == kClearTypeHardClearRank) glow = Color(140, 185, 255, 255);
+    glow.a = 160;
+    clearLamp->setShadow(glow, 0, 0, 10);
   } else {
     clearLamp->clearBackgroundColor();
+    clearLamp->clearShadow();
   }
-  if (selected) {
+  if (selected && !section) {
     onSelected();
   } else {
     onUnselected();
   }
+  activeLabel->setDeferredTextureMaterialization(false);
 }
 
 void LibraryFolderItemView::onSelected() {
-  if (itemClearMarkFolder && hasClearLampColor(itemClearRank)) {
-    const Color accent = clearLampColorForRank(itemClearRank);
-    contentCard->setBackgroundColor(Color(accent.r, accent.g, accent.b, 255));
-    contentCard->setCornerRadius(ui_theme::controlRadius());
-    contentCard->setBorderColor(
-        ui_theme::withAlpha(ui_theme::textOn(accent), 230));
-    contentCard->setBorderWidth(1);
-    const SDL_Color text = ui_theme::sdl(ui_theme::textOn(accent));
-    disclosureView->setColor(text);
-    labelView->setColor(text);
-    countView->setColor(text);
-    return;
-  }
-
-  contentCard->setThemedBackgroundColor(ui_theme::mainMenuItemSelected);
-  contentCard->setCornerRadius(ui_theme::controlRadius());
-  contentCard->setThemedBorderColor(ui_theme::accentBorderStrong);
-  contentCard->setBorderWidth(1);
-  disclosureView->setThemedColor(ui_theme::textSecondary);
-  labelView->setThemedColor(ui_theme::textPrimary);
-  countView->setThemedColor(ui_theme::lime);
+  if (sectionHeader) return;
+  groupLabelView->setOverflow(TextView::TextOverflow::Marquee);
+  contentCard->setThemedBackgroundColor(main_menu_theme::action);
+  contentCard->setCornerRadius(0);
+  contentCard->setBorderWidth(0);
+  disclosureView->setThemedColor(main_menu_theme::onAction);
+  (rootItem ? groupLabelView : labelView)->setThemedColor(main_menu_theme::onAction);
+  countView->setThemedColor(main_menu_theme::onAction);
 }
 
 void LibraryFolderItemView::onUnselected() {
-  if (itemClearMarkFolder && hasClearLampColor(itemClearRank)) {
-    const Color accent = clearLampColorForRank(itemClearRank);
-    contentCard->setBackgroundColor(accent);
-    contentCard->setCornerRadius(ui_theme::controlRadius());
-    contentCard->setBorderColor(
-        ui_theme::withAlpha(ui_theme::textOn(accent), 112));
-    contentCard->setBorderWidth(1);
-    const SDL_Color text = ui_theme::sdl(ui_theme::textOn(accent));
-    disclosureView->setColor(text);
-    labelView->setColor(text);
-    countView->setColor(text);
-    return;
+  groupLabelView->setOverflow(TextView::TextOverflow::Hidden);
+  contentCard->clearBackgroundColor();
+  contentCard->setCornerRadius(0);
+  contentCard->setBorderWidth(0);
+  disclosureView->setThemedColor(main_menu_theme::muted);
+  if (!sectionHeader) {
+    (rootItem ? groupLabelView : labelView)->setThemedColor(main_menu_theme::ink);
   }
-
-  contentCard->setThemedBackgroundColor(ui_theme::mainMenuItem);
-  contentCard->setCornerRadius(ui_theme::controlRadius());
-  contentCard->setThemedBorderColor(ui_theme::hairlineSubtle);
-  contentCard->setBorderWidth(1);
-  disclosureView->setThemedColor(ui_theme::textMuted);
-  labelView->setThemedColor(ui_theme::textPrimary);
-  countView->setThemedColor(ui_theme::textMuted);
+  countView->setThemedColor(main_menu_theme::muted);
 }

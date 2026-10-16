@@ -575,6 +575,16 @@ void testLocalFailedFullComboAndCourseOverrides() {
   expect(courseFinal.difficulty == "COURSE" && courseFinal.lampComparison &&
              courseFinal.lampComparison->current.value == "FULL COMBO",
          "saved course final keeps course header and final lamp");
+  const auto uniformRoot = buildPresentationLayout(courseFinal);
+  const auto *keyModeText = textView(uniformRoot.get(), "playtype");
+  expect(keyModeText && keyModeText->getText() == "7K1S",
+         "uniform course renders its keymode in the result header");
+  auto mixedMeta = meta;
+  mixedMeta.KeyMode = 0;
+  const auto mixed = makeLocalResultPresentation(mixedMeta, localState(), options);
+  const auto mixedRoot = buildPresentationLayout(mixed);
+  expect(!mixed.playtype && !mixedRoot->findViewByName("playtype"),
+         "mixed course omits the keymode header instead of showing a fallback");
 }
 
 void testFullyPopulatedRemotePresentation() {
@@ -921,11 +931,10 @@ void testDefaultSkinLocalPresentationContract() {
   auto *comboCardView = root->findViewByName("resultSummaryCard:combo");
   expect(
       gradeCardView && scoreCardView && lampCardView && comboCardView &&
-          std::abs(gradeCardView->getWidth() - scoreCardView->getWidth()) <=
-              1 &&
-          std::abs(scoreCardView->getWidth() - lampCardView->getWidth()) <= 1 &&
+          scoreCardView->getWidth() > gradeCardView->getWidth() &&
+          scoreCardView->getWidth() > lampCardView->getWidth() &&
           std::abs(lampCardView->getWidth() - comboCardView->getWidth()) <= 1,
-      "complete authoritative local summary cards share width evenly");
+      "authoritative summary gives the current score a wider hero region");
   expect(root->findViewByName("resultInfoGrid") &&
              root->findViewByName("resultInfoTile:total-notes") &&
              textView(root.get(), "resultInfoLabel:total-notes") &&
@@ -1120,6 +1129,11 @@ void testLegacyPortraitResultMetricsFitWithoutDividers() {
     if (!grid) continue;
     const bool portrait = dimensions.second > dimensions.first;
     for (auto *child : grid->getChildren()) {
+      if (child->getName() == "resultSectionRule") {
+        expect(child->getHeight() == 1 && child->getWidth() <= grid->getWidth(),
+               "result section uses a contained horizontal rule");
+        continue;
+      }
       const bool metric = child->getName().starts_with("resultMetricTile:") ||
                           child->getName().starts_with("resultJudgementTile:");
       if (!metric) {
@@ -1212,10 +1226,10 @@ void testDefaultSkinSummaryCardsFlexWithoutAbsentSpace() {
   auto *combo = threeRoot->findViewByName("resultSummaryCard:combo");
   expect(threeRow && score && lamp && combo &&
              threeRow->getChildren().size() == 3 &&
-             std::abs(score->getWidth() - lamp->getWidth()) <= 1 &&
+             score->getWidth() > lamp->getWidth() &&
              std::abs(lamp->getWidth() - combo->getWidth()) <= 1 &&
              score->getWidth() < oneCard->getWidth(),
-         "multiple present summary cards divide available width evenly");
+         "multiple present summary regions prioritize the score within available width");
 }
 
 void testDefaultSkinExplicitZerosAndMobileMetadataWrap() {

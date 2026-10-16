@@ -23,11 +23,15 @@ public:
   void onSelected() override;
   void onUnselected() override;
 
+protected:
+  void onLayout() override;
+
 private:
   void applyTextColors(bool selected);
   void setFavoriteState(bool favorite);
   void refreshFavoriteButton();
   void refreshScoreRankColor();
+  void refreshColumnWidths();
 
   ChartMetaRecord currentRecord;
   bool unavailable = false;
@@ -36,8 +40,15 @@ private:
   bool selected = false;
   std::function<bool(const ChartMetaRecord &, bool)> favoriteToggleHandler;
   View *contentCard;
-  ImageView *bannerImage;
+  bool compact_ = false;
+  int desiredDifficultyWidth_ = 86;
+  int desiredLevelWidth_ = 24;
+  int appliedLevelWidth_ = -1;
+  int appliedDifficultyWidth_ = -1;
+  int appliedTitleMinimumWidth_ = -1;
+  TextView *artworkPlaceholder;
   View *clearLamp;
+  View *clearLampHalo;
   View *artworkFrame;
   ImageView *jacketImage;
   View *textLayout;
@@ -47,11 +58,10 @@ private:
   TextView *artistView;
   TextView *levelView;
   TextView *keyModeView;
-  TextView *scoreRankShadowView;
-  TextView *scoreRankWeightView;
   TextView *scoreRankView;
   TextView *bestScoreView;
   std::string scoreRank;
   Button *favoriteButton;
   TextView *favoriteIconView;
+  TextView *favoriteOutlineView;
 };

@@ -19,7 +19,9 @@
 #include "view/TextInputBox.h"
 #include "i18n/Localization.h"
 #include "rendering/UniformCache.h"
+#include "rendering/ResponsiveUi.h"
 #include "scene/SettingsSceneInputLayout.h"
+#include "scene/ChartFilterSortPanelView.h"
 
 #include <SDL3/SDL.h>
 
@@ -325,6 +327,39 @@ void testLanguageRefreshPreservesPlayOptionsEditingAndScroll() {
   i18n::setLanguage(i18n::Language::English);
 }
 
+void testPhoneOptionsReflowWithoutLosingSelection() {
+  rendering::compactMenuCanvasActive = true;
+  {
+    GameplayRuleset selected = GameplayRuleset::LR2;
+    ScrollView scroll(0, 0, 420, 240);
+    auto *panel = new PlayOptionsPanelView(
+        {.onRulesetSelected = [&](GameplayRuleset value) { selected = value; }},
+        {.width = 420, .playOptionColumns = 2}, nullptr);
+    scroll.setContentView(panel);
+    panel->refresh({.ruleset = selected});
+    for (const int width : {420, 700, 420}) {
+      scroll.setWidth(width);
+      panel->setWidth(width);
+      scroll.refreshContentLayout();
+      scroll.applyYogaLayout();
+      for (const char *name : {"ruleset-lr2", "ruleset-beatoraja"}) {
+        auto *button = dynamic_cast<Button *>(panel->findViewByName(name));
+        require(button && button->getHeight() >= rendering::compactTouchTarget,
+                "phone ruleset buttons retain 44-point touch height after rotation");
+        require(button->getX() >= panel->getX() &&
+                    button->getX() + button->getWidth() <= panel->getX() + width,
+                "phone option buttons stay inside the resized panel");
+      }
+    }
+    click(*static_cast<Button *>(panel->findViewByName("ruleset-beatoraja")));
+    require(selected == GameplayRuleset::Beatoraja,
+            "phone options remain interactive after rotating twice");
+    scroll.scrollToBottom();
+    require(scroll.getScrollOffset() > 0, "short phone option panes remain scrollable");
+  }
+  rendering::compactMenuCanvasActive = false;
+}
+
 void testLaneCoverControlsAreAvailableInPlayOptions() {
   lane_cover::State selected;
   int changes = 0;
@@ -544,6 +579,90 @@ void testDropdownSelectionDefersTeardownUntilItsCallbackReturns() {
 }
 } // namespace
 
+void testRetainedDropdownChangesDensity() {
+  rendering::compactMenuCanvasActive = false;
+  View root(0, 0, 600, 900);
+  auto *dropdown = new DropdownView({});
+  root.addView(dropdown);
+  for (const bool compact : {false, true, false, true}) {
+    rendering::compactMenuCanvasActive = compact;
+    root.setWidth(compact ? 585 : 600);
+    root.applyYogaLayout();
+    const int expected = compact ? rendering::compactTouchTarget : 42;
+    require(dropdown->getHeight() == expected &&
+                dropdown->triggerButton->getHeight() == expected,
+            "retained dropdown updates its trigger height across density changes");
+  }
+  rendering::compactMenuCanvasActive = false;
+}
+
+void testChartFilterRowsContainCompactDropdowns() {
+  for (const bool initiallyCompact : {true, false}) {
+    rendering::compactMenuCanvasActive = initiallyCompact;
+    View root(0, 0, 472, 900);
+    auto *panel = new ChartFilterPanelView({});
+    root.addView(panel);
+    ChartFilterPanelView::State state;
+    for (const bool clearMarkVisible : {true, false}) {
+      state.clearMarkFilterVisible = clearMarkVisible;
+      for (const bool difficultyEnabled : {false, true}) {
+        state.difficultyRangeEnabled = difficultyEnabled;
+        for (const bool hasLevels : {false, true}) {
+          state.difficultyLevels = hasLevels
+              ? std::vector<DifficultyLevelInfo>{{.level = "1"}, {.level = "2"}}
+              : std::vector<DifficultyLevelInfo>{};
+          panel->refresh(state, true);
+          for (const bool compact : {initiallyCompact, !initiallyCompact, initiallyCompact}) {
+            // Retained panels must reflow on layout without a state refresh.
+            rendering::compactMenuCanvasActive = compact;
+            root.setWidth(compact ? 320 : 472);
+            root.applyYogaLayout();
+            const int rowHeight = compact ? 66 : 42;
+            const auto &groups = panel->getChildren();
+            const bool showDifficulty = difficultyEnabled && hasLevels;
+            for (const auto index : {1U, 3U, 6U}) {
+              if ((index == 1 && !clearMarkVisible) || (index == 6 && !showDifficulty)) continue;
+              View *row = index == 6 ? groups[index]->getChildren()[1] : groups[index];
+              for (View *control : row->getChildren()) {
+                require(control->getY() >= row->getY() &&
+                            control->getY() + control->getHeight() <= row->getY() + row->getHeight(),
+                        "chart filter dropdown and range buttons must fit inside their Yoga row");
+                require(control->getHeight() == rowHeight,
+                        "chart filter dropdown and range buttons follow the active density");
+                require(control->getWidth() > 0 && control->getX() >= row->getX() &&
+                            control->getX() + control->getWidth() <= row->getX() + row->getWidth(),
+                        "narrow chart filter rows retain controls within the available width");
+              }
+            }
+            int bottom = panel->getY();
+            for (View *group : groups) {
+              if (!group->getVisible()) continue;
+              require(group->getY() >= bottom, "chart filter sibling groups must not overlap");
+              bottom = group->getY() + group->getHeight();
+              for (View *child : group->getChildren()) {
+                require(child->getY() + child->getHeight() <= bottom,
+                        "chart filter difficulty section must contain its dropdown row");
+              }
+            }
+            require(bottom <= panel->getY() + panel->getHeight(),
+                    "chart filter preferred height must contain all visible groups");
+            const int expectedHeight = (clearMarkVisible ? 276 : 186) +
+                (showDifficulty ? 78 : 0) +
+                (compact ? (clearMarkVisible ? 48 : 24) + (showDifficulty ? 24 : 0) : 0);
+            require(panel->getHeight() == expectedHeight,
+                    "chart filter preferred height preserves desktop geometry and grows for compact rows");
+          }
+          panel->refresh(state, false);
+          root.applyYogaLayout();
+          require(!panel->getVisible() && panel->getHeight() == 0,
+                  "closed chart filter panels remain collapsed");
+        }
+      }
+    }
+  }
+  rendering::compactMenuCanvasActive = false;
+}
+
 int main() {
   bgfx::Init init;
   init.type = bgfx::RendererType::Noop;
@@ -556,12 +675,15 @@ int main() {
   testColorPickerDragAndRelease();
   testSliderReleaseConsumedByDisabledSiblingEndsOnlyItsGesture();
   testLanguageRefreshPreservesPlayOptionsEditingAndScroll();
+  testPhoneOptionsReflowWithoutLosingSelection();
   testLaneCoverControlsAreAvailableInPlayOptions();
   testLaneOrderDraftTracksAuthoritativeSelectionAndProfile();
   testScrollViewUsesPreciseWheelDeltaAndNaturalDirection();
   testScrollViewTargetsWheelEventPosition();
   testDropdownDefersOptionViewsUntilOpen();
   testInputSelectorWidthsStayStableAcrossRefreshes();
+  testRetainedDropdownChangesDensity();
+  testChartFilterRowsContainCompactDropdowns();
   testDropdownSelectionDefersTeardownUntilItsCallbackReturns();
 
   {

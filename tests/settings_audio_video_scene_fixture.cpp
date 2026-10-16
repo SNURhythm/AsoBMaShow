@@ -1,5 +1,6 @@
 // Compiled through settings_audio_video_scene_extract.py. Only rendering and
 // the Test Sound backend are replaced; callback, status fields and methods are real.
+#include "view/AppTheme.h"
 #include "audio/AudioDeviceManager.h"
 #include "video/DisplaySettingsManager.h"
 #include "i18n/Localization.h"
@@ -8,7 +9,6 @@
 #include <string>
 
 namespace {
-struct SDL_Color { unsigned char r, g, b, a; };
 struct StatusView {
   i18n::Text text;
   void setText(const std::string &value) { text = value; }

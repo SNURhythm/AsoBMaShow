@@ -186,6 +186,25 @@ void testFullStaticFonts() {
   assert(std::string(TTF_GetFontStyleName(regular.primaryFont())) == "Regular");
   assert(std::string(TTF_GetFontStyleName(bold.primaryFont())) == "Bold");
 
+  {
+    FontProbeView selector(root + "roboto-condensed-regular.ttf", 22);
+    FontProbeView selectorBold(root + "roboto-condensed-regular.ttf", 22, TextView::FontWeight::Bold);
+    assert(selectorBold.primaryFontPath() == root + "roboto-condensed-bold.ttf");
+    for (auto *view : {&selector, &selectorBold}) {
+      assert(view->fontForGlyph(U'A') == view->primaryFont());
+      assert(view->fontForGlyph(U'힣') != view->primaryFont());
+      assert(TTF_FontHasGlyph(view->fontForGlyph(U'힣'), U'힣'));
+      TTF_Font *reference = TTF_OpenFont(view->primaryFontPath().c_str(), 44);
+      assert(reference);
+      SDL_Surface *actual = TTF_RenderText_Blended(view->primaryFont(), "Satellite", 0, {255, 255, 255, 255});
+      SDL_Surface *expected = TTF_RenderText_Blended(reference, "Satellite", 0, {255, 255, 255, 255});
+      assert(actual && expected && actual->w == expected->w && actual->h == expected->h);
+      SDL_DestroySurface(actual);
+      SDL_DestroySurface(expected);
+      TTF_CloseFont(reference);
+    }
+  }
+
   // Preserve the complete legacy coverage, including dynamic chart text.
   std::ifstream coverage(ASOBMASHOW_SOURCE_DIR "/tests/fixtures/ui_font_legacy_coverage.txt");
   assert(coverage.is_open());

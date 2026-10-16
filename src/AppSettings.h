@@ -170,6 +170,7 @@ public:
   HiSpeedFixMode hispeedFixMode = HiSpeedFixMode::Main;
   bool inputKeysoundEnabled = true;
   bool prepMetronomeEnabled = false;
+  int prepMetronomeMaxDurationMilliseconds = 5000; // 0 disables the limit.
   bool ipadGestureReminderEnabled = true;
   bool startLaneIndicatorsEnabled = true;
   const built_in_notes::ModeStyles &builtInNotesForKeyMode(int mode) const {

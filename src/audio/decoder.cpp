@@ -135,9 +135,7 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
     std::transform(
         tempBuffer.begin(), tempBuffer.begin() + readSamples,
         buffer.begin() + static_cast<std::size_t>(numFrames) * channels,
-        [](double val) {
-          return static_cast<short>(std::clamp(val, -1.0, 1.0) * 32767);
-        });
+        audioSampleToPcm16);
     numFrames += read;
     if (read < requested) {
       break;

@@ -165,6 +165,8 @@ private:
 
 } // namespace audio
 
+namespace audio { class DecodedAssetCache; }
+
 class AudioWrapper : public audio::IAudioRuntime {
 public:
   AudioWrapper(Stopwatch *stopwatch);
@@ -174,6 +176,9 @@ public:
       Stopwatch *stopwatch,
       std::unique_ptr<audio::playback::IBackendLifecycle> injectedBackend);
   ~AudioWrapper();
+  // Loader-only reuse of the active preview session's native-rate PCM pages.
+  void setDecodedAssetCache(std::shared_ptr<audio::DecodedAssetCache> cache);
+  [[nodiscard]] bool hasCachedDecodedAsset(const path_t &path) const;
   bool loadSound(const path_t &path, std::atomic<bool> &isCancelled);
   bool loadSoundFromMemory(const path_t &path,
                            const std::vector<unsigned char> &bytes,
@@ -257,6 +262,7 @@ private:
   std::unique_ptr<audio::IBackendFactory> backendFactory;
   std::unique_ptr<audio::playback::IBackendLifecycle> backend;
 
+  std::shared_ptr<audio::DecodedAssetCache> decodedAssetCache;
   std::vector<std::shared_ptr<SoundData>> soundDataList;
   AudioCallbackState callbackState;
   std::atomic<uint64_t> scheduledSoundSequence{0};

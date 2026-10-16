@@ -57,6 +57,7 @@ public:
   // Main thread only, after a ready interruption has gated gameplay input.
   void completeRealtimeInputFallback();
   void configureGyroscopeTurntable(input::GyroscopeTurntableConfig config);
+  void setGyroscopeBindingsPresent(bool present);
   void resetGyroscopeTurntableSession();
   // Claimed classes are delivered to realtime listeners but omitted from the
   // ordinary frame queue, preventing delayed duplicate gameplay edges.
@@ -73,7 +74,8 @@ public:
 
   // Input subscriptions never inherit events queued before their sequence
   // boundary.
-  std::uint64_t subscribeInput(InputListener listener);
+  // Monitoring keeps the sensor active before the first binding is captured.
+  std::uint64_t subscribeInput(InputListener listener, bool monitorGyroscope = false);
   // Runs on the producing native callback thread before that input is queued
   // for ordinary frame dispatch. Unsubscribe waits for an active callback.
   std::uint64_t subscribeRealtimeInput(InputListener listener);
@@ -101,6 +103,7 @@ private:
   struct InputSubscription {
     std::uint64_t firstEventSequence = 0;
     InputListener listener;
+    bool monitorGyroscope = false;
   };
   struct QueueState;
   struct BackendSinkGate;
@@ -109,6 +112,7 @@ private:
   void enqueueDevice(input::InputDeviceSnapshot device);
   void dispatchPending();
   void pumpInternal(bool pumpBackends);
+  void updateGyroscopeDemand();
 
   std::shared_ptr<QueueState> queueState_;
   std::vector<std::unique_ptr<IInputBackend>> backends_;
@@ -129,4 +133,6 @@ private:
   bool pumping_ = false;
   bool repumpRequested_ = false;
   bool repumpBackendsRequested_ = false;
+  bool gyroscopeBindingsPresent_ = false;
+  bool gyroscopeEnabled_ = false;
 };

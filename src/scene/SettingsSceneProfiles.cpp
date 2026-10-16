@@ -9,6 +9,7 @@
 #include "../ProfileExportStaging.h"
 #include "../audio/NativeMusicPlayer.h"
 #include "../view/ScrollView.h"
+#include "../view/ActionButtonContent.h"
 
 #include <algorithm>
 #include <chrono>
@@ -33,33 +34,56 @@ View *makeProfileCardsColumn(const LayoutMetrics &metrics) {
 SDL_Color statusColor(ProfileSettingsStatusKind kind) {
   switch (kind) {
   case ProfileSettingsStatusKind::Success:
-    return {157, 220, 176, 255};
+    return app_theme::sdl(app_theme::lime());
   case ProfileSettingsStatusKind::Warning:
-    return {255, 209, 128, 255};
+    return app_theme::sdl(app_theme::amber());
   case ProfileSettingsStatusKind::Error:
-    return {255, 177, 170, 255};
+    return app_theme::sdl(app_theme::coral());
   case ProfileSettingsStatusKind::Info:
-    return {185, 214, 255, 255};
+    return app_theme::sdl(app_theme::cyan());
   case ProfileSettingsStatusKind::None:
-    return {157, 177, 200, 255};
+    return app_theme::sdl(app_theme::textSecondary());
   }
-  return {157, 177, 200, 255};
+  return app_theme::sdl(app_theme::textSecondary());
 }
 
 Button *makeProfileActionButton(const LayoutMetrics &metrics,
                                 const i18n::Text &label, bool enabled,
-                                std::function<void()> action, int width = 0) {
-  auto *text = makeText(label, metrics.bodyTextSize, ui_theme::textPrimary(),
+                                std::function<void()> action, int width = 0,
+                                app_theme::ActionCategory category = app_theme::ActionCategory::Neutral,
+                                uint32_t glyph = 0) {
+  auto *text = makeText(label, glyph ? 18 : metrics.bodyTextSize, app_theme::textPrimary(),
                         TextView::CENTER, TextView::MIDDLE);
-  auto *button =
-      makeControlButton(width > 0 ? width : metrics.actionButtonWidth,
-                        metrics.actionButtonHeight, text);
+  Button *button = nullptr;
+  if (glyph) {
+    button = new Button(0, 0, width > 0 ? width : (metrics.compact ? 128 : 144), 72);
+    button->setContentView(action_button::makeContent(text, glyph));
+    button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
+                                      app_theme::controlPressed);
+    button->setThemedBorderColors(app_theme::hairline, app_theme::accentBorder,
+                                  app_theme::accentBorderStrong);
+    button->setStyledBorderWidth(1);
+  } else {
+    button = makeControlButton(width > 0 ? width : metrics.actionButtonWidth,
+                               metrics.actionButtonHeight, text);
+  }
   button->setEnabled(enabled);
   if (enabled) {
+    if (category != app_theme::ActionCategory::Neutral) {
+      const auto normal = [category] { return app_theme::actionPalette(category).normal; };
+      const auto hover = [category] { return app_theme::actionPalette(category).hover; };
+      const auto pressed = [category] { return app_theme::actionPalette(category).pressed; };
+      button->setThemedBackgroundColors(normal, hover, pressed);
+      button->setThemedBorderColors(normal, hover, pressed);
+      text->setThemedColor([category] { return app_theme::actionPalette(category).label; });
+    }
     button->setOnClickListener(std::move(action));
   } else {
-    text->setThemedColor(ui_theme::textMuted);
+    text->setThemedColor(app_theme::textMuted);
   }
+  action_button::setIconColor(button, [category, enabled] {
+    return enabled ? app_theme::actionPalette(category).label : app_theme::textMuted();
+  });
   return button;
 }
 
@@ -487,10 +511,10 @@ void SettingsScene::activateProfile(std::string_view profileId) {
       {.sanitize = [this]() { context.settings.sanitize(); },
        .applyTheme =
            [this]() {
-             ui_theme::setActiveMode(context.settings.uiThemeMode ==
+             app_theme::setActiveMode(context.settings.uiThemeMode ==
                                              AppSettings::UiThemeMode::Light
-                                         ? ui_theme::ThemeMode::Light
-                                         : ui_theme::ThemeMode::Dark);
+                                         ? app_theme::ThemeMode::Light
+                                         : app_theme::ThemeMode::Dark);
            },
        .applyJukebox =
            [this]() {
@@ -525,8 +549,8 @@ void SettingsScene::activateProfile(std::string_view profileId) {
                             : i18n::message("settings.profiles.profile_audio_settings_need_attention.message"))
                      : result.message,
                  result.status == audio::ApplyStatus::Applied
-                     ? SDL_Color{157, 220, 176, 255}
-                     : SDL_Color{255, 177, 170, 255});
+                     ? app_theme::sdl(app_theme::lime())
+                     : app_theme::sdl(app_theme::coral()));
              if (result.status == audio::ApplyStatus::Applied) {
                return std::string{};
              }
@@ -559,8 +583,8 @@ void SettingsScene::activateProfile(std::string_view profileId) {
                                          ? i18n::message("settings.profiles.profile_display_settings_applied.message")
                                          : i18n::message("settings.profiles.profile_display_settings_need_attention.message"))
                                   : result.message,
-                              accepted ? SDL_Color{157, 220, 176, 255}
-                                       : SDL_Color{255, 177, 170, 255});
+                              accepted ? app_theme::sdl(app_theme::lime())
+                                       : app_theme::sdl(app_theme::coral()));
              updateDisplayPreviewUi();
              if (result.status == display::ApplyStatus::PreviewPending) {
                return ProfileDisplayRuntimeResult{
@@ -594,7 +618,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
     cardsColumn->addView(makeCard(
         metrics, i18n::message("settings.profiles.player_profiles.label"), i18n::message("settings.profiles.profile_services_unavailable.message"),
         makeWrappedText(i18n::message("settings.profiles.restart_app_try_again.message"),
-                        metrics.bodyTextSize, ui_theme::textSecondary()),
+                        metrics.bodyTextSize, app_theme::textSecondary()),
         metrics.modeCardHeight, metrics.cardsWidth));
     return cardsColumn;
   }
@@ -612,7 +636,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
   const auto &status = profileController->status();
   if (!status.message.empty()) {
     profileStatusText = makeWrappedText(
-        status.text, metrics.bodyTextSize, ui_theme::textSecondary());
+        status.text, metrics.bodyTextSize, app_theme::textSecondary());
     profileStatusText->setColor(statusColor(status.kind));
     cardsColumn->addView(profileStatusText);
   }
@@ -647,7 +671,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
                        {"lastUsed", i18n::message("settings.profiles.last_used.prefix")},
                        {"timestamp", display_time::formatStoredTimestamp(profile.lastUsedAt)}}),
         metrics.smallTextSize,
-        active ? ui_theme::lime() : ui_theme::textSecondary()));
+        active ? app_theme::lime() : app_theme::textSecondary()));
 
     auto *actions = new View();
     actions->setFlexDirection(FlexDirection::Row);
@@ -655,19 +679,19 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
     actions->setGap(metrics.compact ? 8.0f : 10.0f);
     actions->addView(makeProfileActionButton(
         metrics, active ? i18n::message("settings.profiles.active.label") : i18n::message("settings.profiles.activate.label"), idle && !active,
-        [this, id = profile.id]() { activateProfile(id); }));
+        [this, id = profile.id]() { activateProfile(id); }, 0, app_theme::ActionCategory::Primary, 0xf00c));
     actions->addView(makeProfileActionButton(
         metrics, i18n::message("settings.profiles.rename.label"), idle,
         [this, id = profile.id, name = profile.displayName]() {
           profileInlineEditor.beginRename(id, name);
           invalidateProfileLayout();
-        }));
+        }, 0, app_theme::ActionCategory::Information, 0xf303));
     actions->addView(makeProfileActionButton(
         metrics, i18n::message("settings.profiles.copy.label"), idle,
         [this, id = profile.id, name = profile.displayName]() {
           profileInlineEditor.beginDuplicate(id, name);
           invalidateProfileLayout();
-        }));
+        }, 0, app_theme::ActionCategory::Confirmation, 0xf0c5));
     actions->addView(makeProfileActionButton(
         metrics, confirmingDelete ? i18n::message("settings.profiles.confirm_delete.label") : i18n::message("settings.profiles.delete.label"),
         confirmingDelete || (idle && deleteEligibility.enabled),
@@ -678,10 +702,10 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
             profileController->requestDelete(id);
           }
           invalidateProfileLayout();
-        }));
+        }, 0, app_theme::ActionCategory::Destructive, confirmingDelete ? 0 : 0xf1f8));
     actions->addView(makeProfileActionButton(
         metrics, i18n::message("settings.profiles.export.label"), idle,
-        [this, id = profile.id]() { startProfileExportPreparation(id); }));
+        [this, id = profile.id]() { startProfileExportPreparation(id); }, 0, app_theme::ActionCategory::DataTransfer, 0xf56e));
     actions->addView(makeProfileActionButton(
         metrics,
         confirmingOverwrite ? i18n::message("settings.profiles.confirm_import.label") : i18n::message("settings.profiles.import_over.label"),
@@ -695,14 +719,14 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
           startProfileImportDocumentPicker(
               {.mode = ProfileImportMode::Overwrite, .overwriteProfileId = id},
               true);
-        }));
+        }, 0, app_theme::ActionCategory::Caution, confirmingOverwrite ? 0 : 0xf2f1));
 
     if (confirmingDelete || confirmingOverwrite) {
       body->addView(makeWrappedText(
           confirmingDelete
               ? i18n::message("settings.profiles.delete_profile.label")
               : i18n::message("settings.profiles.replace_profile.label"),
-          metrics.bodyTextSize, ui_theme::amber()));
+          metrics.bodyTextSize, app_theme::amber()));
       actions->addView(makeProfileActionButton(
           metrics, i18n::message("settings.profiles.cancel.label"), true, [this]() {
             profileController->cancelConfirmation();
@@ -744,7 +768,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
               profileInlineEditor.clear();
             }
             invalidateProfileLayout();
-          }));
+          }, 0, app_theme::ActionCategory::Confirmation));
       editorActions->addView(makeProfileActionButton(
           metrics, i18n::message("settings.profiles.cancel.label"), true, [this]() {
             profileInlineEditor.clear();
@@ -761,7 +785,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
     }
     if (!disabledReason.empty()) {
       auto *reason = makeWrappedText(disabledReason, metrics.smallTextSize,
-                                     ui_theme::textMuted());
+                                     app_theme::textMuted());
       body->addView(reason);
     }
 
@@ -788,7 +812,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
       makeProfileActionButton(metrics, i18n::message("settings.profiles.create.label"), idle, [this]() {
         profileController->create(profileCreateNameText);
         invalidateProfileLayout();
-      }));
+      }, 0, app_theme::ActionCategory::Confirmation));
   manageBody->addView(manageActions);
   cardsColumn->addView(makeCard(
       metrics, i18n::message("settings.profiles.player_profiles.label"), i18n::message("settings.profiles.keep_settings_records_separate.message"),
@@ -805,7 +829,7 @@ View *SettingsScene::buildProfileTab(const LayoutMetrics &metrics) {
       makeProfileActionButton(metrics, i18n::message("settings.profiles.import.label"), idle, [this]() {
         startProfileImportDocumentPicker(
             {.mode = ProfileImportMode::CreateWithNewId});
-      }));
+      }, 0, app_theme::ActionCategory::DataTransfer));
   archiveBody->addView(archiveActions);
 
   cardsColumn->addView(makeCard(

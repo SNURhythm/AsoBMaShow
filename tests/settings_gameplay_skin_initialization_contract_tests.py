@@ -246,7 +246,10 @@ int main() {
             "gameplaySkinConfigurationDigestText",
             "gameplaySkinSafetyOverlayRoot",
             "gameplaySkinBusyOverlayRoot",
+            "gameplaySkinBusyOverlayTitleText",
             "gameplaySkinBusyOverlayStatusText",
+            "gameplaySkinBusyOverlayStatusScroll",
+            "gameplaySkinBusyOverlayActionText",
             "gameplaySkinBusyOverlayCancelButton",
         ):
             self.assertIn(

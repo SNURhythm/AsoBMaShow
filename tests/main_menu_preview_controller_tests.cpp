@@ -203,6 +203,42 @@ void testUnstartedWorkerDoesNotReleaseOnCallingThread() {
   preview.stop();
   assert(releases == 0);
 }
+
+void testStopQuiescesPlaybackAfterLoaderAndRetainsPreparation() {
+  Gate load;
+  std::atomic_bool loading = true;
+  std::atomic_bool stoppedPlayback = false;
+  std::atomic_int releases = 0;
+  MainMenuPreviewController preview(
+      [&](const auto &, auto &) { load.block(); loading = false; },
+      [&] { ++releases; }, 0ms,
+      [&] { assert(!loading); stoppedPlayback = true; });
+  preview.request(chart("preview.bms"));
+  load.waitUntilEntered();
+  auto stop = std::async(std::launch::async, [&] { preview.stop(); });
+  assert(stop.wait_for(20ms) == std::future_status::timeout);
+  assert(!stoppedPlayback);
+  load.release();
+  stop.get();
+  assert(stoppedPlayback && releases == 0);
+}
+
+void testConcurrentStopsSerializeLoaderJoinAndPlaybackTeardown() {
+  Gate load;
+  std::atomic_int stops = 0;
+  MainMenuPreviewController preview(
+      [&](const auto &, auto &) { load.block(); }, [] {}, 0ms, [&] { ++stops; });
+  preview.request(chart("preview.bms"));
+  load.waitUntilEntered();
+  auto tabStop = std::async(std::launch::async, [&] { preview.stop(); });
+  auto backgroundStop = std::async(std::launch::async, [&] { preview.stop(); });
+  assert(tabStop.wait_for(20ms) == std::future_status::timeout);
+  assert(backgroundStop.wait_for(20ms) == std::future_status::timeout);
+  load.release();
+  tabStop.get();
+  backgroundStop.get();
+  assert(stops == 2);
+}
 } // namespace
 
 int main() {
@@ -213,4 +249,6 @@ int main() {
   testStopRetainsPublishedChartAndAllowsRestart();
   testDestructionJoinsBeforeCallbackStateDies();
   testUnstartedWorkerDoesNotReleaseOnCallingThread();
+  testStopQuiescesPlaybackAfterLoaderAndRetainsPreparation();
+  testConcurrentStopsSerializeLoaderJoinAndPlaybackTeardown();
 }

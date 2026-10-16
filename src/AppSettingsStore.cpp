@@ -742,6 +742,8 @@ json settingsToJson(const AppSettings &settings) {
       {"hispeedFixMode", static_cast<int>(settings.hispeedFixMode)},
       {"inputKeysoundEnabled", settings.inputKeysoundEnabled},
       {"prepMetronomeEnabled", settings.prepMetronomeEnabled},
+      {"prepMetronomeMaxDurationMilliseconds",
+       settings.prepMetronomeMaxDurationMilliseconds},
       {"ipadGestureReminderEnabled", settings.ipadGestureReminderEnabled},
       {"startLaneIndicatorsEnabled", settings.startLaneIndicatorsEnabled},
       {"showInvisibleNotes", settings.showInvisibleNotes},
@@ -1016,6 +1018,8 @@ AppSettings settingsFromJson(const json &document,
             diagnostics);
   readValue(document, "prepMetronomeEnabled", settings.prepMetronomeEnabled,
             diagnostics);
+  readValue(document, "prepMetronomeMaxDurationMilliseconds",
+            settings.prepMetronomeMaxDurationMilliseconds, diagnostics);
   // Existing profiles predate the reminder; enable it by default only for newcomers.
   settings.ipadGestureReminderEnabled = false;
   readValue(document, "ipadGestureReminderEnabled",

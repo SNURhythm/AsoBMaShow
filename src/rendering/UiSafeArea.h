@@ -16,6 +16,8 @@ struct UiSafeAreaInsets {
   int left = 0;
 };
 
+// Apply these insets to content and controls, never to a scene's background fill.
+// Background containers must cover the complete window, including safe areas.
 inline UiSafeAreaInsets uiSafeAreaInsets() {
   UiSafeAreaInsets result;
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR

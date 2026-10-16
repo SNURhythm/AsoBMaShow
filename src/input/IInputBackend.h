@@ -35,6 +35,7 @@ public:
   // and activate only while gameplay owns a device class.
   virtual void setRealtimeInputClaimed(input::DeviceClass, bool) {}
   virtual void configureGyroscopeTurntable(input::GyroscopeTurntableConfig) {}
+  virtual void setGyroscopeEnabled(bool) {}
   virtual void resetGyroscopeTurntableSession() {}
 
 protected:

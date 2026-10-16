@@ -4,6 +4,7 @@
 #include "ClearLampColors.h"
 #include "IconText.h"
 #include "UiTheme.h"
+#include "MainMenuTheme.h"
 #include "../ScoreRankUtils.h"
 
 #include <cmath>
@@ -13,13 +14,43 @@
 #include <sstream>
 
 namespace {
-constexpr int kBottomGap = 8;
-constexpr int kArtworkFramePadding = 3;
-constexpr int kArtworkFrameBorderWidth = 1;
-constexpr int kBannerWidth = 368;
-constexpr int kDifficultyColumnWidth = 72;
-constexpr uint32_t kIconStar = 0xf005;
-constexpr const char *kUiFont = "assets/fonts/notosanscjkjp.ttf";
+constexpr int kArtworkWidth = 72;
+constexpr int kRowPadding = 12;
+constexpr int kColumnGap = 12;
+constexpr int kTitleMinimumWidth = 120;
+constexpr int kDifficultyColumnWidth = 86;
+constexpr int kLevelPadding = 12;
+constexpr int kBestWidth = 86;
+constexpr int kCompactBestWidth = 76;
+constexpr int kFavoriteWidth = 40;
+constexpr const char *kUiFont = main_menu_theme::font;
+
+class ArtworkPlaceholder final : public TextView {
+public:
+  explicit ArtworkPlaceholder(ImageView &artwork)
+      : TextView(ui_icons::kFontAwesomeSolidPath, 24), artwork_(artwork) {}
+
+protected:
+  void renderImpl(RenderContext &context) override {
+    if (artwork_.imageWidth() <= 0 || artwork_.imageHeight() <= 0) {
+      TextView::renderImpl(context);
+    }
+  }
+
+private:
+  ImageView &artwork_;
+};
+
+TextView *rowText(const char *name, int size, int height,
+                  TextView::FontWeight weight = TextView::FontWeight::Regular) {
+  auto *view = new TextView(kUiFont, size, weight);
+  view->setName(name);
+  view->setHeight(height)->setMinWidth(0)->setFlexShrink(0);
+  view->setVAlign(TextView::MIDDLE);
+  view->setOverflow(TextView::TextOverflow::Marquee);
+  view->setThemedColor(main_menu_theme::ink);
+  return view;
+}
 
 std::string formatPlayLevel(double level) {
   const double rounded = std::round(level);
@@ -52,212 +83,155 @@ std::string keyModeDescription(const bms_parser::ChartMeta &meta) {
 ChartListItemView::ChartListItemView(int x, int y, int width, int height,
                                      const ChartMetaRecord &record)
     : View(x, y, width, height) {
+  View::LayoutBatchScope layoutBatch;
   (void)record;
+  setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch);
   contentCard = new View();
-  bannerImage = new ImageView(0, 0, 0, 0);
-  clearLamp = new View();
-  artworkFrame = new View();
-  jacketImage = new ImageView(0, 0, 0, 0);
-  textLayout = new View();
-  detailsLayout = new View();
-  scoreRankColumn = new View();
-  titleView = new TextView(kUiFont, 26);
-  artistView = new TextView(kUiFont, 17);
-  levelView = new TextView(kUiFont, 18, TextView::FontWeight::Bold);
-  keyModeView = new TextView(kUiFont, 14, TextView::FontWeight::Bold);
-  scoreRankShadowView = new TextView(kUiFont, 34);
-  scoreRankWeightView = new TextView(kUiFont, 34);
-  scoreRankView = new TextView(kUiFont, 34);
-  bestScoreView = new TextView(kUiFont, 18, TextView::FontWeight::Bold);
-  favoriteButton = new Button();
-  favoriteIconView = new TextView(ui_icons::kFontAwesomeSolidPath, 20);
-
-  this->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignStretch)
-      ->setPadding(Edge::Bottom, kBottomGap);
-
-  const int contentCardHeight = height > kBottomGap ? height - kBottomGap
-                                                     : height;
   contentCard->setName("chartListContentCard");
-  contentCard->setFlexDirection(FlexDirection::Row)
-      ->setAlignItems(YGAlignCenter)
-      ->setHeight(contentCardHeight)
-      ->setFlexShrink(0)
-      ->setPadding(Edge::All, 8)
-      ->setPadding(Edge::End, 24)
-      ->setGap(12);
-  this->addView(contentCard);
-
-  bannerImage->setName("chartListBanner");
-  bannerImage->setPositionType(YGPositionTypeAbsolute)
-      ->setPosition(Edge::Left, YGUndefined)
-      ->setPosition(Edge::Top, 0)
-      ->setPosition(Edge::Right, 0)
-      ->setWidth(kBannerWidth)
-      ->setHeight(std::max(0, contentCardHeight - 2))
-      ->setCornerRadius(ui_theme::childRadiusForInset(
-          ui_theme::controlRadius(), 1.0F, 0.0F));
-  bannerImage->setFade(ImageFadeDirection::LeftToRight, 1.0F);
-  bannerImage->setThemedScrimColor([] {
-    return ui_theme::activeMode() == ui_theme::ThemeMode::Light
-               ? Color(255, 255, 255, 168)
-               : Color(5, 10, 18, 144);
-  });
-  contentCard->addView(bannerImage);
-
-  clearLamp->setWidth(6)->setHeight(78)->setFlexShrink(0);
-  clearLamp->setCornerRadius(3.0f);
+  contentCard->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter);
+  contentCard->setHeight(height - 1)->setFlexShrink(0);
+  contentCard->setPadding(Edge::Left, kRowPadding)->setPadding(Edge::Right, kRowPadding)->setGap(kColumnGap);
+  addView(contentCard);
+  auto *rule = new View();
+  rule->setHeight(1)->setFlexShrink(0)->setThemedBackgroundColor(main_menu_theme::ruleSubtle);
+  addView(rule);
+  clearLampHalo = new View();
+  clearLampHalo->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 1);
+  clearLampHalo->setPosition(Edge::Top, 10)->setWidth(6)->setHeight(height - 21);
+  clearLampHalo->setCornerRadius(3);
+  contentCard->addView(clearLampHalo);
+  clearLamp = new View();
+  clearLamp->setName("chartListClearLamp");
+  clearLamp->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 1);
+  clearLamp->setPosition(Edge::Top, 10)->setWidth(6)->setHeight(height - 21);
+  clearLamp->setCornerRadius(3);
+  clearLamp->setBorderWidth(0);
   contentCard->addView(clearLamp);
 
-  // Stage file jacket
-  artworkFrame->setWidth(84)
-      ->setHeight(84)
-      ->setFlexShrink(0)
-      ->setPadding(Edge::All, kArtworkFramePadding)
-      ->setAlignItems(YGAlignCenter)
-      ->setJustifyContent(YGJustifyCenter)
-      ->setThemedBackgroundColor(ui_theme::panelSubtle)
-      ->setCornerRadius(ui_theme::controlRadius())
-      ->setThemedBorderColor(ui_theme::hairlineSubtle)
-      ->setBorderWidth(kArtworkFrameBorderWidth);
-  jacketImage->setWidth(78)->setHeight(78);
-  jacketImage->setCornerRadius(ui_theme::childRadiusForInset(
-      ui_theme::controlRadius(), static_cast<float>(kArtworkFrameBorderWidth),
-      static_cast<float>(kArtworkFramePadding)));
+  artworkFrame = new View();
+  artworkFrame->setName("chartListArtwork");
+  artworkFrame->setWidth(kArtworkWidth)->setHeight(kArtworkWidth)->setFlexShrink(0);
+  artworkFrame->setThemedBackgroundColor(main_menu_theme::surface);
+  jacketImage = new ImageView(0, 0, kArtworkWidth, kArtworkWidth);
+  jacketImage->setName("chartListJacket");
+  jacketImage->setPositionType(YGPositionTypeAbsolute);
+  jacketImage->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
+  jacketImage->setContentMode(ImageView::ContentMode::Contain);
   artworkFrame->addView(jacketImage);
+  artworkPlaceholder = new ArtworkPlaceholder(*jacketImage);
+  artworkPlaceholder->setName("chartListArtworkPlaceholder");
+  artworkPlaceholder->setText(ui_icons::textForCodepoint(ui_icons::kMusic));
+  artworkPlaceholder->setAlign(TextView::CENTER);
+  artworkPlaceholder->setVAlign(TextView::MIDDLE);
+  artworkPlaceholder->setWidth(kArtworkWidth)->setHeight(kArtworkWidth);
+  artworkPlaceholder->setThemedColor(main_menu_theme::muted);
+  artworkFrame->addView(artworkPlaceholder);
   contentCard->addView(artworkFrame);
 
-  // Main text
-  textLayout->setFlexDirection(FlexDirection::Column)
-      ->setJustifyContent(YGJustifyCenter)
-      ->setFlexGrow(1)
-      ->setFlexBasis(0)
-      ->setFlexShrink(1)
-      ->setMinWidth(0)
-      ->setGap(4);
-  contentCard->addView(textLayout);
-
-  titleView->setHeight(36);
-  titleView->setVAlign(TextView::TextVAlign::BOTTOM);
-  titleView->setOverflow(TextView::TextOverflow::Marquee);
-  titleView->setAlignSelf(YGAlignStretch);
-  titleView->setFlexShrink(1);
-  titleView->setMinWidth(0);
+  textLayout = new View();
+  textLayout->setFlex(1)->setMinWidth(0)->setJustifyContent(YGJustifyCenter)->setGap(4);
+  titleView = rowText("chartListTitle", 28, 40, TextView::FontWeight::Bold);
   textLayout->addView(titleView);
-
-  artistView->setHeight(24);
-  artistView->setVAlign(TextView::TextVAlign::TOP);
-  artistView->setOverflow(TextView::TextOverflow::Marquee);
-  artistView->setAlignSelf(YGAlignStretch);
-  artistView->setFlexShrink(1);
-  artistView->setMinWidth(0);
+  contentCard->addView(textLayout);
+  artistView = rowText("chartListArtist", 21, 32);
   textLayout->addView(artistView);
 
-  // Difficulty and key mode
-  detailsLayout->setFlexDirection(FlexDirection::Column)
-      ->setAlignItems(YGAlignFlexEnd)
-      ->setJustifyContent(YGJustifyCenter)
-      ->setWidth(kDifficultyColumnWidth)
-      ->setHeight(84)
-      ->setFlexShrink(0)
-      ->setGap(6);
-
-  levelView->setAlign(TextView::TextAlign::RIGHT);
-  levelView->setName("chartListDifficulty");
-  levelView->setVAlign(TextView::TextVAlign::MIDDLE);
-  levelView->setOverflow(TextView::TextOverflow::Marquee);
-  levelView->setWidth(kDifficultyColumnWidth)->setHeight(32);
+  detailsLayout = new View();
+  detailsLayout->setWidth(kDifficultyColumnWidth)->setFlexShrink(0);
+  detailsLayout->setAlignItems(YGAlignStretch)->setGap(3);
+  levelView = rowText("chartListDifficulty", 27, 44, TextView::FontWeight::Bold);
+  levelView->setAlign(TextView::RIGHT);
+  levelView->setAlignSelf(YGAlignFlexEnd)->setPadding(Edge::Left, kLevelPadding)->setPadding(Edge::Right, kLevelPadding);
+  levelView->setThemedBackgroundColor(main_menu_theme::action);
+  levelView->setThemedColor(main_menu_theme::onAction);
   detailsLayout->addView(levelView);
-
-  keyModeView->setAlign(TextView::TextAlign::RIGHT);
-  keyModeView->setName("chartListKeyMode");
-  keyModeView->setVAlign(TextView::TextVAlign::MIDDLE);
-  keyModeView->setOverflow(TextView::TextOverflow::Hidden);
-  keyModeView->setWidth(kDifficultyColumnWidth)->setHeight(24);
+  keyModeView = rowText("chartListKeyMode", 17, 24, TextView::FontWeight::Bold);
+  keyModeView->setAlign(TextView::RIGHT);
   detailsLayout->addView(keyModeView);
+  contentCard->addView(detailsLayout);
 
+  scoreRankColumn = new View();
   scoreRankColumn->setName("chartListScoreRank");
-  scoreRankColumn->setWidth(96)
-      ->setHeight(72)
-      ->setFlexShrink(0)
-      ->setAlignItems(YGAlignStretch)
-      ->setJustifyContent(YGJustifyCenter)
-      ->setCornerRadius(12.0f)
-      ->setBorderWidth(1);
-  scoreRankColumn->setDisplay(YGDisplayNone);
-  scoreRankColumn->setVisible(false);
-  scoreRankShadowView->setPositionType(YGPositionTypeAbsolute);
-  scoreRankShadowView->setPosition(Edge::Left, 1);
-  scoreRankShadowView->setPosition(Edge::Top, 2);
-  scoreRankShadowView->setAlign(TextView::TextAlign::CENTER);
-  scoreRankShadowView->setVAlign(TextView::TextVAlign::MIDDLE);
-  scoreRankShadowView->setOverflow(TextView::TextOverflow::Hidden);
-  scoreRankShadowView->setWidth(96)->setHeight(44);
-  scoreRankWeightView->setPositionType(YGPositionTypeAbsolute);
-  scoreRankWeightView->setPosition(Edge::Left, 1);
-  scoreRankWeightView->setPosition(Edge::Top, 0);
-  scoreRankWeightView->setAlign(TextView::TextAlign::CENTER);
-  scoreRankWeightView->setVAlign(TextView::TextVAlign::MIDDLE);
-  scoreRankWeightView->setOverflow(TextView::TextOverflow::Hidden);
-  scoreRankWeightView->setWidth(96)->setHeight(44);
-  scoreRankView->setAlign(TextView::TextAlign::CENTER);
-  scoreRankView->setVAlign(TextView::TextVAlign::MIDDLE);
-  scoreRankView->setOverflow(TextView::TextOverflow::Hidden);
-  scoreRankView->setWidth(96)->setHeight(44);
-  bestScoreView->setName("chartListBestScore");
-  bestScoreView->setHeight(24)->setFlexShrink(0);
-  bestScoreView->setAlign(TextView::CENTER);
-  bestScoreView->setVAlign(TextView::MIDDLE);
-  bestScoreView->setOverflow(TextView::TextOverflow::Hidden);
-  bestScoreView->setThemedColor(ui_theme::textPrimary);
-  scoreRankColumn->addView(scoreRankShadowView);
-  scoreRankColumn->addView(scoreRankWeightView);
+  scoreRankColumn->setWidth(kBestWidth)->setHeight(76)->setFlexShrink(0);
+  scoreRankColumn->setJustifyContent(YGJustifyCenter);
+  scoreRankView = rowText("chartListGrade", 34, 44, TextView::FontWeight::Bold);
+  bestScoreView = rowText("chartListBestScore", 18, 25);
   scoreRankColumn->addView(scoreRankView);
   scoreRankColumn->addView(bestScoreView);
-  auto *scoreDetails = new View();
-  scoreDetails->setFlexDirection(FlexDirection::Row)
-      ->setAlignItems(YGAlignCenter)
-      ->setFlexShrink(0)
-      ->setGap(6);
-  scoreDetails->addView(scoreRankColumn);
-  scoreDetails->addView(detailsLayout);
-  contentCard->addView(scoreDetails);
+  contentCard->addView(scoreRankColumn);
 
-  favoriteButton->setWidth(56)
-      ->setHeight(56)
-      ->setFlexShrink(0)
-      ->setCornerRadius(ui_theme::controlRadius());
-  favoriteButton
-      ->setThemedBackgroundColors(
-          [] { return Color(0, 0, 0, 0); }, ui_theme::controlHover,
-          ui_theme::controlPressed)
-      ->setThemedBorderColors(
-          [] { return Color(0, 0, 0, 0); }, ui_theme::hairlineStrong,
-          ui_theme::accentBorder)
-      ->setStyledBorderWidth(1);
-  favoriteIconView->setText(ui_icons::textForCodepoint(kIconStar));
+  favoriteButton = new Button();
+  favoriteButton->setName("chartListFavorite");
+  favoriteButton->setWidth(kFavoriteWidth)->setHeight(56)->setFlexShrink(0);
+  favoriteButton->setThemedBackgroundColors(
+      [] { return Color(0, 0, 0, 0); },
+      [this] {
+        auto color = selected ? main_menu_theme::onSelected() : main_menu_theme::ink();
+        color.a = 18;
+        return color;
+      },
+      [this] {
+        auto color = selected ? main_menu_theme::onSelected() : main_menu_theme::ink();
+        color.a = 34;
+        return color;
+      });
+  favoriteButton->setStyledBorderWidth(0);
+  favoriteIconView = new TextView(ui_icons::kFontAwesomeSolidPath, 25);
+  favoriteIconView->setText(ui_icons::textForCodepoint(0xf005));
   favoriteIconView->setAlign(TextView::CENTER);
   favoriteIconView->setVAlign(TextView::MIDDLE);
-  favoriteIconView->setOverflow(TextView::TextOverflow::Hidden);
-  favoriteButton->setContentView(favoriteIconView);
+  auto *favoriteContent = new View();
+  favoriteContent->setAlignItems(YGAlignCenter)->setJustifyContent(YGJustifyCenter);
+  favoriteIconView->setWidth(36)->setHeight(40);
+  favoriteOutlineView = new TextView("assets/fonts/fa-regular-400.ttf", 25);
+  favoriteOutlineView->setText(ui_icons::textForCodepoint(0xf005));
+  favoriteOutlineView->setWidth(36)->setHeight(40);
+  favoriteOutlineView->setAlign(TextView::CENTER);
+  favoriteOutlineView->setVAlign(TextView::MIDDLE);
+  favoriteContent->addView(favoriteIconView);
+  favoriteContent->addView(favoriteOutlineView);
+  favoriteButton->setContentView(favoriteContent);
   favoriteButton->setOnClickListener([this]() {
     if (currentRecord.courseStart || solidArchive || unavailable ||
-        currentRecord.meta.BmsPath.empty()) {
-      return;
-    }
+        currentRecord.meta.BmsPath.empty()) return;
     const bool nextFavorite = !favorite;
     const auto toggledPath = currentRecord.meta.BmsPath;
-    if (!favoriteToggleHandler || favoriteToggleHandler(currentRecord,
-                                                        nextFavorite)) {
-      if (currentRecord.meta.BmsPath == toggledPath) {
-        setFavoriteState(nextFavorite);
-      }
+    if (!favoriteToggleHandler || favoriteToggleHandler(currentRecord, nextFavorite)) {
+      if (currentRecord.meta.BmsPath == toggledPath) setFavoriteState(nextFavorite);
     }
   });
   contentCard->addView(favoriteButton);
-
   onUnselected();
-  this->applyYogaLayout();
+  applyYogaLayout();
+}
+
+void ChartListItemView::onLayout() {
+  View::onLayout();
+  const bool compact = getWidth() < 840;
+  View::LayoutBatchScope batch;
+  if (compact != compact_) {
+    compact_ = compact;
+    scoreRankColumn->setWidth(compact ? kCompactBestWidth : kBestWidth);
+  }
+  refreshColumnWidths();
+}
+
+void ChartListItemView::refreshColumnWidths() {
+  const int availableWidth = std::max(0, getWidth() - 2 * kRowPadding -
+      4 * kColumnGap - kArtworkWidth - kFavoriteWidth -
+      (compact_ ? kCompactBestWidth : kBestWidth));
+  const int titleMinimum = std::min(kTitleMinimumWidth, availableWidth / 2);
+  const int difficultyWidth = std::min(desiredDifficultyWidth_, availableWidth - titleMinimum);
+  const int levelWidth = std::min(desiredLevelWidth_, difficultyWidth);
+  if (difficultyWidth == appliedDifficultyWidth_ && titleMinimum == appliedTitleMinimumWidth_ &&
+      levelWidth == appliedLevelWidth_) return;
+  appliedDifficultyWidth_ = difficultyWidth;
+  appliedLevelWidth_ = levelWidth;
+  appliedTitleMinimumWidth_ = titleMinimum;
+  View::LayoutBatchScope batch;
+  detailsLayout->setWidth(difficultyWidth);
+  levelView->setWidth(levelWidth);
+  textLayout->setMinWidth(titleMinimum);
 }
 
 void ChartListItemView::setMeta(const ChartMetaRecord &record,
@@ -274,12 +248,9 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
   titleView->setText(title);
   artistView->setText(meta.Artist);
   scoreRank.clear();
-  scoreRankShadowView->setText("");
-  scoreRankWeightView->setText("");
   scoreRankView->setText("");
   bestScoreView->setText("");
-  scoreRankColumn->setDisplay(YGDisplayNone);
-  scoreRankColumn->setVisible(false);
+  scoreRankView->setText("—");
   if (record.courseStart) {
     levelView->setLocalizedText(record.difficultyTableLabels.empty()
                            ? i18n::message("library.chart.course.label")
@@ -297,19 +268,14 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
     keyModeView->setLocalizedText(unavailable ? i18n::message("library.chart.missing.badge")
                                      : keyModeDescription(meta));
   }
-  if (!unavailable && !solidArchive && !meta.StageFile.empty()) {
-    jacketImage->setImageAsync(meta.Folder / meta.StageFile,
-                               prioritizeArtwork);
-  } else {
-    jacketImage->freeImage();
-  }
-  if (!record.courseStart && !unavailable && !solidArchive &&
-      !meta.Banner.empty()) {
-    bannerImage->setImageAsync(meta.Folder / meta.Banner,
-                               prioritizeArtwork);
-  } else {
-    bannerImage->freeImage();
-  }
+  desiredLevelWidth_ = levelView->measureTextWidth(levelView->getText()) + 2 * kLevelPadding;
+  desiredDifficultyWidth_ = std::max({kDifficultyColumnWidth, desiredLevelWidth_,
+      keyModeView->measureTextWidth(keyModeView->getText())});
+  refreshColumnWidths();
+  const auto artwork = !meta.StageFile.empty() ? meta.StageFile : meta.Banner;
+  const bool hasArtwork = !record.courseStart && !unavailable && !solidArchive && !artwork.empty();
+  if (hasArtwork) jacketImage->setImageAsync(meta.Folder / artwork, prioritizeArtwork);
+  else jacketImage->freeImage();
   favoriteButton->setVisible(!record.courseStart && !unavailable &&
                              !solidArchive &&
                              !meta.BmsPath.empty());
@@ -318,38 +284,38 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
 
 void ChartListItemView::setClearRank(int clearRank) {
   if (!solidArchive && hasClearLampColor(clearRank)) {
-    clearLamp->setBackgroundColor(clearLampColorForRank(clearRank));
+    auto glow = clearLampColorForRank(clearRank);
+    auto core = glow;
+    core.r = static_cast<uint8_t>((3 * core.r + 255) / 4);
+    core.g = static_cast<uint8_t>((3 * core.g + 255) / 4);
+    core.b = static_cast<uint8_t>((3 * core.b + 255) / 4);
+    core.a = 255;
+    clearLamp->setBackgroundColor(core);
+    if (clearRank == kClearTypeHardClearRank) glow = Color(140, 185, 255, 255);
+    glow.a = 175;
+    clearLamp->setShadow(glow, 0, 0, 5);
+    glow.a = 85;
+    clearLampHalo->setShadow(glow, 0, 0, 15);
   } else {
+    clearLamp->clearShadow();
+    clearLampHalo->clearShadow();
     clearLamp->clearBackgroundColor();
   }
 }
 
 void ChartListItemView::setBestScoreRank(int score, int maxScore) {
-  if (currentRecord.courseStart || solidArchive || unavailable ||
-      maxScore <= 0 || score < 0) {
-    scoreRankShadowView->setText("");
-    scoreRankWeightView->setText("");
-    scoreRankView->setText("");
+  if (currentRecord.courseStart || solidArchive || unavailable || maxScore <= 0 || score < 0) {
+    scoreRankView->setText("—");
     bestScoreView->setText("");
     scoreRank.clear();
-    scoreRankColumn->setDisplay(YGDisplayNone);
-    scoreRankColumn->setVisible(false);
     return;
   }
-
   scoreRank = score_rank::labelForScore(score, maxScore);
-  const std::string displayRank = score_rank::displayLabel(scoreRank);
-  scoreRankShadowView->setText(displayRank);
-  scoreRankWeightView->setText(displayRank);
-  scoreRankView->setText(displayRank);
+  scoreRankView->setText(score_rank::displayLabel(scoreRank));
   std::ostringstream rate;
   rate.imbue(std::locale::classic());
-  rate << std::fixed << std::setprecision(2)
-       << 100.0 * static_cast<double>(score) / maxScore << '%';
+  rate << std::fixed << std::setprecision(2) << 100.0 * score / maxScore << '%';
   bestScoreView->setText(rate.str());
-  const bool visible = !scoreRank.empty();
-  scoreRankColumn->setDisplay(visible ? YGDisplayFlex : YGDisplayNone);
-  scoreRankColumn->setVisible(visible);
   refreshScoreRankColor();
 }
 
@@ -365,120 +331,50 @@ void ChartListItemView::setFavoriteState(bool nextFavorite) {
 }
 
 void ChartListItemView::refreshFavoriteButton() {
-  if (favoriteIconView == nullptr) {
-    return;
-  }
-  if (favorite) {
-    favoriteIconView->setThemedColor(ui_theme::amber);
-  } else {
-    favoriteIconView->setThemedColor(selected ? ui_theme::textSecondary
-                                              : ui_theme::textMuted);
-  }
+  if (!favoriteIconView) return;
+  favoriteButton->propagateThemeChange();
+  favoriteIconView->setVisible(favorite);
+  favoriteIconView->setDisplay(favorite ? YGDisplayFlex : YGDisplayNone);
+  favoriteOutlineView->setVisible(!favorite);
+  favoriteOutlineView->setDisplay(favorite ? YGDisplayNone : YGDisplayFlex);
+  favoriteOutlineView->setThemedColor(selected ? main_menu_theme::onSelected : main_menu_theme::secondary);
+  favoriteIconView->setThemedColor(favorite
+      ? (selected ? main_menu_theme::selectedAccent : main_menu_theme::accent)
+      : (selected ? main_menu_theme::selectedSecondary : main_menu_theme::muted));
 }
 
 void ChartListItemView::refreshScoreRankColor() {
-  if (scoreRankView == nullptr) {
-    return;
-  }
-  const std::string rank = score_rank::displayLabel(scoreRank);
-  scoreRankView->setThemedColor(
-      [rank] { return ui_theme::scoreRankColor(rank); });
-  scoreRankWeightView->setThemedColor(
-      [rank] { return ui_theme::scoreRankColor(rank); });
-  scoreRankShadowView->setThemedColor([] {
-    return ui_theme::activeMode() == ui_theme::ThemeMode::Light
-               ? Color(0, 0, 0, 92)
-               : Color(0, 0, 0, 184);
-  });
-  scoreRankColumn->setThemedBackgroundColor([rank] {
-    return ui_theme::withAlpha(
-        ui_theme::scoreRankColor(rank),
-        ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 22 : 30);
-  });
-  scoreRankColumn->setThemedBorderColor([rank] {
-    return ui_theme::withAlpha(
-        ui_theme::scoreRankColor(rank),
-        ui_theme::activeMode() == ui_theme::ThemeMode::Light ? 92 : 112);
-  });
+  if (!scoreRankView) return;
+  scoreRankView->setThemedColor(selected ? main_menu_theme::onSelected
+                                        : main_menu_theme::ink);
+  bestScoreView->setThemedColor(selected ? main_menu_theme::selectedSecondary
+                                        : main_menu_theme::secondary);
+  scoreRankColumn->clearBackgroundColor();
+  scoreRankColumn->setBorderWidth(0);
 }
 
 void ChartListItemView::onSelected() {
   selected = true;
-  contentCard->setThemedBackgroundColor(ui_theme::mainMenuItemSelected);
-  contentCard->setCornerRadius(ui_theme::controlRadius());
-  contentCard->setThemedBorderColor(ui_theme::accentBorderStrong);
-  contentCard->setBorderWidth(1);
-  artworkFrame->setThemedBackgroundColor(ui_theme::controlHover);
-  artworkFrame->setThemedBorderColor(ui_theme::accentBorder);
+  contentCard->setThemedBackgroundColor(main_menu_theme::selected);
   applyTextColors(true);
   refreshFavoriteButton();
 }
 
 void ChartListItemView::onUnselected() {
   selected = false;
-  contentCard->setThemedBackgroundColor(ui_theme::mainMenuItem);
-  contentCard->setCornerRadius(ui_theme::controlRadius());
-  contentCard->setThemedBorderColor(ui_theme::hairlineSubtle);
-  contentCard->setBorderWidth(1);
-  artworkFrame->setThemedBackgroundColor(ui_theme::control);
-  artworkFrame->setThemedBorderColor(ui_theme::hairlineStrong);
+  contentCard->clearBackgroundColor();
   applyTextColors(false);
   refreshFavoriteButton();
 }
 
 void ChartListItemView::applyTextColors(bool selected) {
-  if (currentRecord.courseStart) {
-    titleView->setThemedColor(selected ? ui_theme::lime
-                                       : ui_theme::textPrimary);
-    artistView->setThemedColor(selected ? ui_theme::textSecondary
-                                        : ui_theme::textMuted);
-    levelView->setThemedColor(ui_theme::lime);
-    keyModeView->setThemedColor(selected ? ui_theme::textSecondary
-                                         : ui_theme::textMuted);
-    scoreRankView->setThemedColor(selected ? ui_theme::textSecondary
-                                           : ui_theme::textMuted);
-    return;
-  }
-
-  if (solidArchive) {
-    if (selected) {
-      titleView->setThemedColor(ui_theme::amber);
-    } else {
-      titleView->setColor(ui_theme::sdl(Color(226, 181, 82, 255)));
-    }
-    artistView->setThemedColor(selected ? ui_theme::textSecondary
-                                        : ui_theme::textMuted);
-    levelView->setThemedColor(ui_theme::amber);
-    keyModeView->setThemedColor(selected ? ui_theme::textSecondary
-                                         : ui_theme::textMuted);
-    scoreRankView->setThemedColor(selected ? ui_theme::textSecondary
-                                           : ui_theme::textMuted);
-    return;
-  }
-
-  if (unavailable) {
-    titleView->setThemedColor(ui_theme::coral);
-    artistView->setColor(ui_theme::sdl(selected ? Color(255, 171, 158, 255)
-                                                : Color(219, 101, 94, 255)));
-    levelView->setColor(ui_theme::sdl(selected ? Color(255, 218, 208, 255)
-                                               : Color(240, 132, 116, 255)));
-    keyModeView->setColor(ui_theme::sdl(selected ? Color(255, 171, 158, 255)
-                                                 : Color(211, 91, 84, 255)));
-    scoreRankView->setColor(ui_theme::sdl(
-        selected ? Color(255, 171, 158, 255) : Color(211, 91, 84, 255)));
-    return;
-  }
-
-  titleView->setThemedColor(ui_theme::textPrimary);
-  artistView->setThemedColor(selected ? ui_theme::textSecondary
-                                      : ui_theme::textMuted);
-  if (selected) {
-    levelView->setThemedColor(ui_theme::lime);
-  } else {
-    levelView->setThemedColor(
-        [] { return ui_theme::withAlpha(ui_theme::cyan(), 218); });
-  }
-  keyModeView->setThemedColor(selected ? ui_theme::textSecondary
-                                       : ui_theme::textMuted);
+  levelView->setThemedColor(main_menu_theme::onAction);
+  titleView->setOverflow(selected ? TextView::TextOverflow::Marquee : TextView::TextOverflow::Hidden);
+  artistView->setOverflow(selected ? TextView::TextOverflow::Marquee : TextView::TextOverflow::Hidden);
+  titleView->setThemedColor(selected ? main_menu_theme::onSelected : main_menu_theme::ink);
+  artistView->setThemedColor(selected ? main_menu_theme::selectedSecondary : main_menu_theme::secondary);
+  keyModeView->setThemedColor(selected ? main_menu_theme::selectedSecondary : main_menu_theme::muted);
+  if (!selected && unavailable) titleView->setThemedColor(main_menu_theme::error);
+  else if (!selected && solidArchive) titleView->setThemedColor(main_menu_theme::warning);
   refreshScoreRankColor();
 }

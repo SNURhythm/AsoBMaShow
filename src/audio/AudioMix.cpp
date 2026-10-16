@@ -1,4 +1,5 @@
 #include "AudioMix.h"
+#include "PcmResampler.h"
 #include "../perf/LatencyTelemetry.h"
 #include "../settings/AudioVideoSettings.h"
 
@@ -118,6 +119,82 @@ void removeActiveSoundAt(AudioCallbackState &state, size_t index) {
   }
 }
 
+// Read stable metadata once per voice/block. A paged owner with no metadata
+// is pending, whereas an absent owner keeps the contiguous gameplay path.
+struct OutputPcmView {
+  const PagedPcmSound::Metadata *paged = nullptr;
+  const short *contiguous = nullptr;
+  size_t frameCount = 0;
+  int channels = 0;
+  bool pending = false;
+
+  template<bool Paged>
+  const short *frameSamples(size_t frame) const noexcept {
+    if constexpr (!Paged) return contiguous + frame * static_cast<size_t>(channels);
+    const short *page = paged->pageSamples(frame / PagedPcmSound::kPageFrames);
+    return page == nullptr ? nullptr
+                           : page + (frame % PagedPcmSound::kPageFrames) *
+                                        static_cast<size_t>(channels);
+  }
+};
+
+OutputPcmView outputPcmView(const SoundData *sound) noexcept {
+  if (sound == nullptr) return {};
+  if (sound->pagedOutput) {
+    const auto *metadata = sound->pagedOutput->metadata();
+    if (metadata == nullptr) return {.pending = true};
+    return {.paged = metadata, .frameCount = metadata->frameCount,
+            .channels = metadata->channels};
+  }
+  return {.contiguous = sound->outputData.data(),
+          .frameCount = sound->outputFrameCount, .channels = sound->channels};
+}
+
+bool voiceMixReady(const OutputPcmView &source, std::uint64_t positionQ32,
+                   std::uint32_t outputOffsetFrames, bool loop,
+                   std::uint32_t frameCount, std::uint64_t increment) noexcept {
+  if (source.pending) return false;
+  if (source.paged == nullptr || source.channels <= 0 ||
+      static_cast<size_t>(positionQ32 >> 32) >= source.frameCount) return true;
+  const auto loopLengthQ32 = frameToQ32(source.frameCount);
+  std::uint64_t remaining = frameCount - std::min(outputOffsetFrames, frameCount);
+  while (remaining != 0) {
+    if (loop && positionQ32 >= loopLengthQ32) positionQ32 %= loopLengthQ32;
+    const size_t left = static_cast<size_t>(positionQ32 >> 32);
+    if (left >= source.frameCount) break;
+
+    // Usual playback rates cannot skip a complete PCM page. Check the page
+    // interval for a monotonic run rather than revisiting two atomics for each
+    // output frame. Split at sound ends/loop wraps and Q32 overflow exactly as
+    // the mixer does. Huge rates use single samples to avoid requiring pages
+    // skipped by playback.
+    std::uint64_t run = 1;
+    if (increment <= PagedPcmSound::kPageFrames * kQ32One) {
+      run = std::min(remaining, (loopLengthQ32 - 1 - positionQ32) / increment + 1);
+      run = std::min(run,
+          (std::numeric_limits<std::uint64_t>::max() - positionQ32) / increment + 1);
+    }
+    const auto lastPosition = positionQ32 + (run - 1) * increment;
+    const size_t lastLeft = static_cast<size_t>(lastPosition >> 32);
+    const size_t lastRight = std::min(lastLeft + 1, source.frameCount - 1);
+    const size_t firstPage = left / PagedPcmSound::kPageFrames;
+    const size_t lastPage = lastRight / PagedPcmSound::kPageFrames;
+    for (size_t page = firstPage; page <= lastPage; ++page) {
+      if (source.paged->pageSamples(page) == nullptr) return false;
+    }
+    // Every frame of this sound uses this one immutable page, including loops.
+    if (source.paged->pageCount == 1) return true;
+    remaining -= run;
+    if (lastPosition > std::numeric_limits<std::uint64_t>::max() - increment) break;
+    positionQ32 = lastPosition + increment;
+    if (positionQ32 >= loopLengthQ32) {
+      if (!loop) break;
+      positionQ32 %= loopLengthQ32;
+    }
+  }
+  return true;
+}
+
 size_t clampFrameToSound(size_t frame, const SoundData *soundData) {
   return soundData == nullptr ? frame
                               : std::min(frame, soundData->outputFrameCount);
@@ -146,32 +223,11 @@ ProjectedResampledPcmSampleCount(std::size_t sourceSamples, int channels,
   if (channels <= 0 || sourceRate <= 0 || targetRate <= 0) return std::nullopt;
   const size_t channelCount = static_cast<size_t>(channels);
   if (sourceSamples % channelCount != 0) return std::nullopt;
-  if (sourceRate == targetRate) return sourceSamples;
-
-  const size_t sourceFrames = sourceSamples / channelCount;
-  if (sourceFrames == 0) return std::size_t{0};
-
-  const size_t sourceRateValue = static_cast<size_t>(sourceRate);
-  const size_t targetRateValue = static_cast<size_t>(targetRate);
-  const size_t maximumFrames =
-      std::numeric_limits<size_t>::max() / channelCount;
-  const size_t wholeSeconds = sourceFrames / sourceRateValue;
-  const size_t remainingFrames = sourceFrames % sourceRateValue;
-  if (wholeSeconds > maximumFrames / targetRateValue) {
-    return std::nullopt;
-  }
-  const size_t wholeTargetFrames = wholeSeconds * targetRateValue;
-  const std::uint64_t fractionalNumerator =
-      static_cast<std::uint64_t>(remainingFrames) *
-      static_cast<std::uint64_t>(targetRate);
-  const size_t fractionalTargetFrames = static_cast<size_t>(
-      fractionalNumerator / static_cast<std::uint64_t>(sourceRate) +
-      (fractionalNumerator % static_cast<std::uint64_t>(sourceRate) != 0));
-  if (fractionalTargetFrames > maximumFrames - wholeTargetFrames) {
-    return std::nullopt;
-  }
-  const size_t targetFrames = wholeTargetFrames + fractionalTargetFrames;
-  return targetFrames * channelCount;
+  const auto targetFrames = pcm_resampling::Ratio(sourceRate, targetRate).outputFrames(
+      sourceSamples / channelCount,
+      std::numeric_limits<size_t>::max() / channelCount);
+  if (!targetFrames) return std::nullopt;
+  return *targetFrames * channelCount;
 }
 
 bool ResampledPcmFitsSampleBudget(
@@ -195,39 +251,16 @@ std::vector<short> ResamplePcm(std::span<const short> source, int channels,
   const size_t targetFrames = *projectedSamples / channelCount;
   std::vector<short> output(*projectedSamples);
 
-  // Advance the exact source-rate / target-rate ratio without accumulating
-  // floating-point error. Android's 128-bit long double uses software math;
-  // integer interpolation also makes half-sample rounding platform-independent.
-  const auto denominator = static_cast<std::int64_t>(targetRate);
-  const size_t wholeStep = static_cast<size_t>(sourceRate / targetRate);
-  const auto fractionalStep = static_cast<std::int64_t>(sourceRate % targetRate);
-  size_t leftFrame = 0;
-  std::int64_t fraction = 0;
-
+  pcm_resampling::Cursor cursor(
+      pcm_resampling::Ratio(sourceRate, targetRate), sourceFrames);
   for (size_t targetFrame = 0; targetFrame < targetFrames; ++targetFrame) {
-    const size_t rightFrame = std::min(leftFrame + 1, sourceFrames - 1);
-
-    for (int channel = 0; channel < channels; ++channel) {
-      const size_t leftIndex = leftFrame * channelCount + channel;
-      const size_t rightIndex = rightFrame * channelCount + channel;
-      // A weighted int16 sample times a positive int rate fits in int64.
-      // Convex interpolation stays within int16 bounds, including after rounding.
-      const std::int64_t numerator =
-          source[leftIndex] * (denominator - fraction) +
-          source[rightIndex] * fraction;
-      const std::int64_t rounded =
-          (numerator + (numerator >= 0 ? denominator / 2 : -denominator / 2)) /
-          denominator;
-      output[targetFrame * channelCount + channel] = static_cast<short>(rounded);
+    const size_t leftIndex = cursor.left() * channelCount;
+    const size_t rightIndex = cursor.right() * channelCount;
+    for (size_t channel = 0; channel < channelCount; ++channel) {
+      output[targetFrame * channelCount + channel] = cursor.interpolate(
+          source[leftIndex + channel], source[rightIndex + channel]);
     }
-
-    // Saturate at the final source frame, including extreme rate ratios.
-    leftFrame += std::min(wholeStep, sourceFrames - 1 - leftFrame);
-    fraction += fractionalStep;
-    if (fraction >= denominator) {
-      fraction -= denominator;
-      if (leftFrame < sourceFrames - 1) ++leftFrame;
-    }
+    cursor.advance();
   }
 
   return output;
@@ -509,7 +542,7 @@ void CommitOutputRateTransition(OutputRateTransition transition,
 bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
                        std::uint32_t outputOffsetFrames, size_t startFrame,
                        float gain, bool loop) {
-  if (soundData == nullptr || startFrame >= soundData->outputFrameCount ||
+  if (soundData == nullptr || startFrame >= outputPcmView(soundData).frameCount ||
       startFrame > kQ32MaximumWholeFrame ||
       state.playingSoundCount >= kMaxActiveSounds) {
     return false;
@@ -532,7 +565,7 @@ bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
 static bool AppendRealtimeActiveSound(AudioCallbackState &state,
                                       SoundData *soundData, Bus bus,
                                       size_t startFrame) {
-  if (soundData == nullptr || startFrame >= soundData->outputFrameCount ||
+  if (soundData == nullptr || startFrame >= outputPcmView(soundData).frameCount ||
       startFrame > kQ32MaximumWholeFrame) {
     return false;
   }
@@ -889,6 +922,44 @@ void DrainCommands(AudioCallbackState &state,
   state.commandReadCursor.store(readCursor, std::memory_order_release);
 }
 
+bool ScheduledMixReady(const AudioCallbackState &state,
+                        long long bufferStartMicros, int sampleRate,
+                        std::uint32_t frameCount, int playbackRatePercent,
+                        std::uint32_t bufferOffsetFrames, bool includeAllDueSounds) noexcept {
+  if (frameCount > std::numeric_limits<std::uint32_t>::max() - bufferOffsetFrames) {
+    return false;
+  }
+  const auto increment = rateIncrementQ32(playbackRatePercent);
+  for (size_t index = 0; index < state.playingSoundCount; ++index) {
+    const auto &voice = state.playingSounds[index];
+    if (!voiceMixReady(outputPcmView(voice.soundData), voice.sourceFrameQ32,
+                       voice.outputOffsetFrames, voice.loop, frameCount,
+                       increment)) return false;
+  }
+  // Activation appends before mixing retires finished active voices. Match that
+  // capacity/drop behavior without mutating callback state or sound owners.
+  size_t activeCount = state.playingSoundCount;
+  for (size_t index = 0; index < state.scheduledSoundCount; ++index) {
+    const auto &scheduled = state.scheduledSounds[index];
+    bool due = false;
+    const auto absoluteOffset = outputOffsetForStartMicros(
+        scheduled.startMicros, bufferStartMicros, sampleRate,
+        frameCount + bufferOffsetFrames, playbackRatePercent, due);
+    if (!due) break;
+    if (scheduled.soundData == nullptr || (!includeAllDueSounds && activeCount >= kMaxActiveSounds) ||
+        scheduled.startFrame > kQ32MaximumWholeFrame) continue;
+    const auto source = outputPcmView(scheduled.soundData);
+    if (source.pending) return false;
+    if (scheduled.startFrame >= source.frameCount) continue;
+    ++activeCount;
+    const auto offset = absoluteOffset > bufferOffsetFrames
+                            ? absoluteOffset - bufferOffsetFrames : 0;
+    if (!voiceMixReady(source, frameToQ32(scheduled.startFrame), offset,
+                       scheduled.loop, frameCount, increment)) return false;
+  }
+  return true;
+}
+
 void ActivateScheduledSounds(AudioCallbackState &state,
                              long long bufferStartMicros, int sampleRate,
                              std::uint32_t frameCount,
@@ -946,10 +1017,12 @@ void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
   while (soundIndex < state.playingSoundCount) {
     PlayingSound &playingSound = state.playingSounds[soundIndex];
     SoundData *soundData = playingSound.soundData;
+    const auto source = outputPcmView(soundData);
     const size_t sourceFrame =
         static_cast<size_t>(playingSound.sourceFrameQ32 >> 32);
-    if (soundData == nullptr || soundData->channels <= 0 ||
-        sourceFrame >= soundData->outputFrameCount) {
+    if (source.pending) return;
+    if (soundData == nullptr || source.channels <= 0 ||
+        sourceFrame >= source.frameCount) {
       removeActiveSoundAt(state, soundIndex);
       continue;
     }
@@ -964,8 +1037,7 @@ void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
 
     const std::uint32_t outputOffsetFrames =
         std::min(playingSound.outputOffsetFrames, frameCount);
-    const short *source = soundData->outputData.data();
-    const int channels = soundData->channels;
+    const int channels = source.channels;
     const float busGain = playingSound.bus == Bus::Bgm
                               ? bgmGain
                               : playingSound.bus == Bus::Keysound
@@ -973,68 +1045,97 @@ void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
                                     : 1.0F;
     const float gain = kMixHeadroom * busGain * playingSound.gain;
     const std::uint64_t loopLengthQ32 =
-        frameToQ32(soundData->outputFrameCount);
+        frameToQ32(source.frameCount);
 
     std::uint64_t positionQ32 = playingSound.sourceFrameQ32;
     bool finished = false;
-    for (size_t frame = 0; frame < frameCount - outputOffsetFrames; ++frame) {
-      if (playingSound.loop && positionQ32 >= loopLengthQ32) {
-        positionQ32 %= loopLengthQ32;
-      }
-      const size_t leftFrame = static_cast<size_t>(positionQ32 >> 32);
-      if (leftFrame >= soundData->outputFrameCount) {
-        finished = true;
-        break;
-      }
-      const size_t rightFrame = leftFrame + 1 < soundData->outputFrameCount
-                                    ? leftFrame + 1
-                                    : leftFrame;
-      const float fraction =
-          static_cast<float>(positionQ32 & kQ32FractionMask) /
-          static_cast<float>(kQ32One);
-      const size_t leftFrameOffset = leftFrame * static_cast<size_t>(channels);
-      const size_t rightFrameOffset =
-          rightFrame * static_cast<size_t>(channels);
-      const size_t outputFrameOffset =
-          (outputOffsetFrames + frame) * static_cast<size_t>(outputChannels);
-
-      if (channels == 1) {
-        const float left = static_cast<float>(source[leftFrameOffset]);
-        const float right = static_cast<float>(source[rightFrameOffset]);
-        const float sample = (left + (right - left) * fraction) / 32768.0f;
-        for (int outputChannel = 0; outputChannel < outputChannels;
-             ++outputChannel) {
-          mixBuffer[outputFrameOffset + outputChannel] += sample * gain;
+    // Select PCM storage once per voice; contiguous gameplay audio must not
+    // pay page-publication branches for every interpolated sample.
+    const auto mixFrames = [&]<bool Paged>() {
+      size_t cachedPage = std::numeric_limits<size_t>::max();
+      const short *cachedSamples = nullptr;
+      const auto frameSamples = [&](size_t frame) {
+        if constexpr (!Paged) return source.frameSamples<false>(frame);
+        else {
+          // Published pages are immutable and stay alive until callback
+          // quiescence. Acquire once per page transition, not twice per sample.
+          const size_t page = frame / PagedPcmSound::kPageFrames;
+          if (page != cachedPage) {
+            cachedSamples = source.paged->pageSamples(page);
+            cachedPage = page;
+          }
+          return cachedSamples == nullptr ? nullptr
+              : cachedSamples + (frame % PagedPcmSound::kPageFrames) * channels;
         }
-      } else {
-        for (int channel = 0; channel < channels; ++channel) {
-          const int outputChannel = channel % outputChannels;
-          const float left =
-              static_cast<float>(source[leftFrameOffset + channel]);
-          const float right =
-              static_cast<float>(source[rightFrameOffset + channel]);
-          const float sample = (left + (right - left) * fraction) / 32768.0f;
-          mixBuffer[outputFrameOffset + outputChannel] += sample * gain;
-        }
-      }
-
-      if (positionQ32 >
-          std::numeric_limits<std::uint64_t>::max() - rateIncrement) {
-        positionQ32 = std::numeric_limits<std::uint64_t>::max();
-        finished = true;
-        break;
-      }
-      positionQ32 += rateIncrement;
-      if (static_cast<size_t>(positionQ32 >> 32) >=
-          soundData->outputFrameCount) {
-        if (playingSound.loop) {
+      };
+      for (size_t frame = 0; frame < frameCount - outputOffsetFrames; ++frame) {
+        if (playingSound.loop && positionQ32 >= loopLengthQ32) {
           positionQ32 %= loopLengthQ32;
-        } else {
+        }
+        const size_t leftFrame = static_cast<size_t>(positionQ32 >> 32);
+        if (leftFrame >= source.frameCount) {
           finished = true;
           break;
         }
+        const size_t rightFrame = leftFrame + 1 < source.frameCount
+                                      ? leftFrame + 1
+                                      : leftFrame;
+        const float fraction =
+            static_cast<float>(positionQ32 & kQ32FractionMask) /
+            static_cast<float>(kQ32One);
+        const short *leftSamples = frameSamples(leftFrame);
+        const short *rightSamples = frameSamples(rightFrame);
+        // Paged callers preflight the whole block before activation. Guard direct
+        // misuse as well; never dereference unpublished PCM.
+        if constexpr (Paged) {
+          if (leftSamples == nullptr || rightSamples == nullptr) return false;
+        }
+        const size_t outputFrameOffset =
+            (outputOffsetFrames + frame) * static_cast<size_t>(outputChannels);
+
+        if (channels == 1) {
+          const float left = static_cast<float>(leftSamples[0]);
+          const float right = static_cast<float>(rightSamples[0]);
+          const float sample = (left + (right - left) * fraction) / 32768.0f;
+          for (int outputChannel = 0; outputChannel < outputChannels;
+               ++outputChannel) {
+            mixBuffer[outputFrameOffset + outputChannel] += sample * gain;
+          }
+        } else {
+          for (int channel = 0; channel < channels; ++channel) {
+            const int outputChannel = channel % outputChannels;
+            const float left =
+                static_cast<float>(leftSamples[channel]);
+            const float right =
+                static_cast<float>(rightSamples[channel]);
+            const float sample = (left + (right - left) * fraction) / 32768.0f;
+            mixBuffer[outputFrameOffset + outputChannel] += sample * gain;
+          }
+        }
+
+        if (positionQ32 >
+            std::numeric_limits<std::uint64_t>::max() - rateIncrement) {
+          positionQ32 = std::numeric_limits<std::uint64_t>::max();
+          finished = true;
+          break;
+        }
+        positionQ32 += rateIncrement;
+        if (static_cast<size_t>(positionQ32 >> 32) >=
+            source.frameCount) {
+          if (playingSound.loop) {
+            positionQ32 %= loopLengthQ32;
+          } else {
+            finished = true;
+            break;
+          }
+        }
       }
-    }
+      return true;
+    };
+    const bool mixed = source.paged != nullptr
+                           ? mixFrames.template operator()<true>()
+                           : mixFrames.template operator()<false>();
+    if (!mixed) return;
 
     playingSound.sourceFrameQ32 = positionQ32;
     playingSound.outputOffsetFrames = 0;

@@ -54,6 +54,28 @@ class MainMenuPreviewLifecycleTests(unittest.TestCase):
                         self.assertTrue(any(flag.startswith("/Fe") and flag.endswith(".exe")
                                             for flag in link))
 
+    def test_progressive_preview_prepares_and_retires_visuals(self):
+        source = (ROOT / "src/scene/MainMenuScene.cpp").read_text()
+        fixture = (ROOT / "tests/main_menu_preview_visuals_fixture.cpp").read_text()
+        fixture = fixture.replace("PREVIEW_PROCESS", callback_body(
+            source, "[this](const ChartMetaRecord &request, std::atomic_bool &cancelled)"))
+        stop = source.index("}, [this] { stopAndClearSelectedChart(); }, kPreviewDebounceDelay,")
+        fixture = fixture.replace("PREVIEW_STOP", callback_body(source[stop:], "[this] {\n"))
+        signature = "void MainMenuScene::updatePreviewVisuals()"
+        self.assertTrue(signature in source, "preview must drive BGA from consumed audio frames")
+        fixture = fixture.replace("SYNC_METHOD", "void updatePreviewVisuals() " +
+                                  callback_body(source, signature))
+
+        compiler = FixtureCompiler.from_environment()
+        with tempfile.TemporaryDirectory() as directory:
+            program = Path(directory) / "visuals.cpp"
+            executable = Path(directory) / ("visuals" + compiler.executable_suffix)
+            program.write_text(fixture)
+            compiler.build([str(program)], executable, directory, standard=23)
+            result = subprocess.run([str(executable)], cwd=directory, capture_output=True,
+                                    text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_selection_is_nonblocking_and_cleanup_respects_worker_ownership(self):
         source = (ROOT / "src/scene/MainMenuScene.cpp").read_text()
         header = (ROOT / "src/scene/MainMenuScene.h").read_text()

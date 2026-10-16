@@ -75,7 +75,7 @@ struct View {
   void setVisible(bool value) { visible = value; }
 };
 struct ScissorScope { ScissorScope(RenderContext &, int, int, int, int) {} };
-namespace ui_theme { int textMuted() { return 0; } }
+namespace app_theme { int textMuted() { return 0; } }
 bool pointInside(const View &view, float x, float y) {
   return x >= view.x && y >= view.y && x <= view.x + view.width && y <= view.y + view.height;
 }

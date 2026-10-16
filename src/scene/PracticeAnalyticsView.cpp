@@ -6,7 +6,7 @@
 #include "../rendering/common.h"
 #include "../view/Button.h"
 #include "../view/TextView.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 
 #include <algorithm>
 #include <cmath>
@@ -17,12 +17,12 @@
 #include <utility>
 
 namespace {
-constexpr const char *kFont = "assets/fonts/notosanscjkjp.ttf";
+constexpr const char *kFont = app_theme::font;
 
 TextView *makeText(std::string text, int size, Color color) {
   auto *view = new TextView(kFont, size);
   view->setText(text);
-  view->setColor(ui_theme::sdl(color));
+  view->setColor(app_theme::sdl(color));
   view->setVAlign(TextView::MIDDLE);
   view->setOverflow(TextView::TextOverflow::Hidden);
   return view;
@@ -32,13 +32,13 @@ Button *makeButton(std::string label, int width = 120) {
   auto *button = new Button(0, 0, width, 44);
   button->setWidth(width);
   button->setHeight(44);
-  button->setCornerRadius(ui_theme::controlRadius());
+  button->setCornerRadius(app_theme::controlRadius());
   button->setStyledBorderWidth(1);
-  button->setBackgroundColors(ui_theme::control(), ui_theme::controlHover(),
-                              ui_theme::controlPressed());
-  button->setBorderColors(ui_theme::hairline(), ui_theme::cyan(),
-                          ui_theme::cyan());
-  auto *text = makeText(std::move(label), 15, ui_theme::textPrimary());
+  button->setBackgroundColors(app_theme::control(), app_theme::controlHover(),
+                              app_theme::controlPressed());
+  button->setBorderColors(app_theme::hairline(), app_theme::cyan(),
+                          app_theme::cyan());
+  auto *text = makeText(std::move(label), 15, app_theme::textPrimary());
   text->setAlign(TextView::CENTER);
   button->setContentView(text);
   return button;
@@ -105,7 +105,7 @@ protected:
     batch.begin(context.getTransformMatrix());
     batch.addRect(static_cast<float>(getX()), static_cast<float>(getY()),
                   static_cast<float>(width), static_cast<float>(height),
-                  ui_theme::resultPanelSubtle().toABGR());
+                  app_theme::resultPanelSubtle().toABGR());
     switch (mode) {
     case PracticeAnalyticsMode::Histogram:
       renderHistogram();
@@ -257,7 +257,7 @@ private:
     }
     const float center = x + width * 0.5f;
     batch.addLine(center, y + 4.0f, center, y + height - 4.0f, 2.0f,
-                  ui_theme::textSecondary().toABGR());
+                  app_theme::textSecondary().toABGR());
     for (const auto &bin : analysis.histogram) {
       const float x0 =
           center + static_cast<float>(bin.lowerMillis) / extent * width * 0.5f;
@@ -289,7 +289,7 @@ private:
     const float height = static_cast<float>(getHeight());
     const float center = x + width * 0.5f;
     batch.addLine(center, y + 2.0f, center, y + height - 2.0f, 2.0f,
-                  ui_theme::textSecondary().toABGR());
+                  app_theme::textSecondary().toABGR());
     if (lanes.empty()) {
       return;
     }
@@ -303,7 +303,7 @@ private:
     for (std::size_t index = 0; index < lanes.size(); ++index) {
       const float rowY = y + rowHeight * index;
       batch.addLine(x, rowY + rowHeight, x + width, rowY + rowHeight, 1.0f,
-                    ui_theme::hairlineSubtle().toABGR());
+                    app_theme::hairlineSubtle().toABGR());
       if (!lanes[index].timing.meanMillis.has_value()) {
         continue;
       }
@@ -320,7 +320,7 @@ private:
 
   static Color sectionColor(const std::optional<double> &accuracy) {
     if (!accuracy.has_value()) {
-      return ui_theme::control();
+      return app_theme::control();
     }
     const double amount = std::clamp(*accuracy, 0.0, 1.0);
     const Color low = ui_theme::coral();
@@ -408,10 +408,8 @@ void PracticeAnalyticsView::build() {
   setAlignItems(YGAlignStretch);
   setGap(6);
   setPadding(Edge::All, 10);
-  setBackgroundColor(ui_theme::resultPanel());
-  setCornerRadius(ui_theme::panelRadius());
-  setBorderColor(ui_theme::hairlineSubtle());
-  setBorderWidth(1);
+  clearBackgroundColor();
+  setBorderWidth(0);
 
   modeControlsRow = new View();
   modeControlsRow->setHeight(44);
@@ -432,8 +430,8 @@ void PracticeAnalyticsView::build() {
   modeControlsRow->addView(spacer);
   auto *abandoned =
       makeText(i18n::tr("practice.analytics.abandoned.prefix") + std::to_string(model.abandonedAttempts()), 14,
-               model.abandonedAttempts() == 0 ? ui_theme::textMuted()
-                                              : ui_theme::amber());
+               model.abandonedAttempts() == 0 ? app_theme::textMuted()
+                                              : app_theme::amber());
   abandoned->setWidth(140);
   abandoned->setHeight(28);
   abandoned->setAlign(TextView::RIGHT);
@@ -448,7 +446,7 @@ void PracticeAnalyticsView::build() {
   previousChoiceButton = makeButton("<", 48);
   previousChoiceButton->setOnClickListener([this]() { moveSelection(-1); });
   choiceRow->addView(previousChoiceButton);
-  selectionText = makeText("", 15, ui_theme::textPrimary());
+  selectionText = makeText("", 15, app_theme::textPrimary());
   selectionText->setFlexGrow(1.0f);
   selectionText->setMinWidth(0);
   selectionText->setHeight(36);
@@ -457,11 +455,10 @@ void PracticeAnalyticsView::build() {
   nextChoiceButton = makeButton(">", 48);
   nextChoiceButton->setOnClickListener([this]() { moveSelection(1); });
   choiceRow->addView(nextChoiceButton);
-  addView(choiceRow);
 
-  summaryText = makeText("", 15, ui_theme::textPrimary());
+  summaryText = makeText("", 15, app_theme::textPrimary());
   summaryText->setHeight(26);
-  summaryText->setAlign(TextView::CENTER);
+  summaryText->setAlign(TextView::LEFT);
   addView(summaryText);
 
   chartView = new AnalyticsChartView(
@@ -473,15 +470,16 @@ void PracticeAnalyticsView::build() {
   chartView->setFlexGrow(1.0f);
   chartView->setFlexShrink(1.0f);
   chartView->setWidthPercent(100.0f);
-  chartView->setCornerRadius(ui_theme::controlRadius());
-  chartView->setBorderColor(ui_theme::hairlineSubtle());
-  chartView->setBorderWidth(1);
+  chartView->setCornerRadius(app_theme::controlRadius());
+  chartView->setBorderColor(app_theme::hairlineSubtle());
+  chartView->setBorderWidth(0);
   addView(chartView);
 
-  detailText = makeText("", 13, ui_theme::textSecondary());
+  detailText = makeText("", 13, app_theme::textSecondary());
   detailText->setHeight(24);
-  detailText->setAlign(TextView::CENTER);
+  detailText->setAlign(TextView::LEFT);
   addView(detailText);
+  addView(choiceRow);
 }
 
 void PracticeAnalyticsView::setAttemptSelection(

@@ -1,7 +1,7 @@
 #pragma once
 
 #include "../../view/TextView.h"
-#include "../../view/UiTheme.h"
+#include "../../view/AppTheme.h"
 
 // The reminder's localized instructions use **...** for setting targets.
 // Separate TextViews keep font weight and theme color scoped to those targets.
@@ -47,14 +47,14 @@ private:
         const auto marker = line.find("**", start);
         const auto text = line.substr(start, marker - start);
         if (!text.empty()) {
-          auto *run = new TextView("assets/fonts/notosanscjkjp.ttf", 22,
+          auto *run = new TextView(emphasized ? app_theme::boldFont : app_theme::font, 22,
               emphasized ? TextView::FontWeight::Bold : TextView::FontWeight::Regular);
           run->setText(text);
           run->setWrap(true);
           run->setAlign(TextView::CENTER);
           YGNodeStyleSetMaxWidthPercent(run->getNode(), 100);
           run->setVAlign(TextView::MIDDLE);
-          run->setThemedColor(emphasized ? ui_theme::cyan : ui_theme::textSecondary);
+          run->setThemedColor(emphasized ? app_theme::cyan : app_theme::textSecondary);
           row->addView(run);
         }
         if (marker == std::string::npos) break;

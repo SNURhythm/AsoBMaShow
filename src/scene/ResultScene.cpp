@@ -29,7 +29,7 @@
 #include "../view/TextView.h"
 #include "../view/ScrollView.h"
 #include "../rendering/UiSafeArea.h"
-#include "../view/UiTheme.h"
+#include "../view/AppTheme.h"
 #include "play/GamePlayScene.h"
 #include "play/Pacemaker.h"
 #include "ChartViewerScene.h"
@@ -138,7 +138,7 @@ void drawResultGaugeGraphPrimitive(
     rendering::SimpleBatchRenderer &batch,
     const result_gauge_history::ResultGaugeGraph &graph, float x, float y,
     float w, float h) {
-  batch.addRect(x, y, w, h, ui_theme::resultPanelSubtle().toABGR());
+  batch.addRect(x, y, w, h, app_theme::resultPanelSubtle().toABGR());
 
   const float padding = 8.0f;
   const float graphX = x + padding;
@@ -152,7 +152,7 @@ void drawResultGaugeGraphPrimitive(
     return graphY + point.normalizedY * graphH;
   };
 
-  const uint32_t guideColor = ui_theme::hairlineSubtle().toABGR();
+  const uint32_t guideColor = app_theme::hairlineSubtle().toABGR();
   const float guide80Y = graphY + graph.geometry.guide80Y * graphH;
   const float guide30Y = graphY + graph.geometry.guide30Y * graphH;
   batch.addLine(graphX, guide80Y, graphX + graphW, guide80Y, 1.0F, guideColor);
@@ -411,9 +411,12 @@ long long totalPlayLengthForCourse(const CoursePlaySession &session) {
 
 bms_parser::ChartMeta
 courseResultMetaForSession(const CoursePlaySession &session) {
+  std::vector<int> keyModes;
+  keyModes.reserve(session.entries.size());
+  for (const auto &entry : session.entries) keyModes.push_back(entry.meta.KeyMode);
   auto meta = result_presentation::courseResultMeta(
       session.courseName, session.courseGroupName, session.entries.size(),
-      totalNotesForCourse(session), totalPlayLengthForCourse(session));
+      totalNotesForCourse(session), totalPlayLengthForCourse(session), keyModes);
   meta.LnMode = normalizeChartLongNoteModeValue(session.longNoteMode);
   if (const auto *currentMeta = session.currentMeta(); currentMeta != nullptr) {
     // CourseResult keeps the current SongData for chart properties.
@@ -1395,15 +1398,15 @@ void ResultScene::addResultPersistenceStatus() {
   status->setFlexDirection(FlexDirection::Column);
   status->setAlignItems(YGAlignCenter);
   status->setGap(14);
-  status->setBackgroundColor(ui_theme::resultPanelStrong());
-  status->setCornerRadius(ui_theme::panelRadius());
-  status->setBorderColor(ui_theme::withAlpha(ui_theme::coral(), 180));
+  status->setBackgroundColor(app_theme::resultPanelStrong());
+  status->setCornerRadius(app_theme::panelRadius());
+  status->setBorderColor(app_theme::withAlpha(app_theme::coral(), 180));
   status->setBorderWidth(1);
-  status->setShadow(ui_theme::cardShadow(), ui_theme::kCardShadow);
+  status->setShadow(app_theme::cardShadow(), app_theme::kCardShadow);
 
-  persistenceStatusMessage = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  persistenceStatusMessage = new TextView(app_theme::font, 20);
   persistenceStatusMessage->setText(persistenceOptions.outcome.userMessage);
-  persistenceStatusMessage->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  persistenceStatusMessage->setColor(app_theme::sdl(app_theme::textPrimary()));
   persistenceStatusMessage->setAlign(TextView::CENTER);
   persistenceStatusMessage->setWrap(true);
   persistenceStatusMessage->setWidthPercent(100.0f);
@@ -1421,26 +1424,26 @@ void ResultScene::addResultPersistenceStatus() {
                              Color hover, Color pressed, Color border,
                              std::function<void()> onClick) {
     auto *button = new Button();
-    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+    auto *text = new TextView(app_theme::font, 22);
     text->setText(label);
     text->setAlign(TextView::CENTER);
     text->setVAlign(TextView::MIDDLE);
-    text->setColor(ui_theme::sdl(ui_theme::textOn(normal)));
+    text->setColor(app_theme::sdl(app_theme::textOn(normal)));
     button->setContentView(text);
     button->setOnClickListener(std::move(onClick));
     button->setSize(292, 60);
-    button->setCornerRadius(ui_theme::controlRadius());
+    button->setCornerRadius(app_theme::controlRadius());
     button->setBackgroundColors(normal, hover, pressed);
-    button->setBorderColors(ui_theme::withAlpha(border, 150),
-                            ui_theme::withAlpha(border, 190),
-                            ui_theme::withAlpha(border, 220));
+    button->setBorderColors(app_theme::withAlpha(border, 150),
+                            app_theme::withAlpha(border, 190),
+                            app_theme::withAlpha(border, 220));
     button->setStyledBorderWidth(1);
     return button;
   };
 
   persistenceRetryButton = makeButton(
-      i18n::tr("result.retry_save.label"), ui_theme::primaryAction(), ui_theme::primaryActionHover(),
-      ui_theme::primaryActionPressed(), ui_theme::cyan(),
+      i18n::tr("result.retry_save.label"), app_theme::primaryAction(), app_theme::primaryActionHover(),
+      app_theme::primaryActionPressed(), app_theme::cyan(),
       [this]() { retryResultPersistence(); });
   const bool courseRetryable =
       isCourseFinalResult() && local->courseOptions.session != nullptr &&
@@ -1453,8 +1456,8 @@ void ResultScene::addResultPersistenceStatus() {
                                       persistenceOptions.outcome.retryable()));
   actions->addView(persistenceRetryButton);
   persistenceDetailsButton = makeButton(
-      i18n::tr("result.show_details.label"), ui_theme::infoAction(), ui_theme::infoActionHover(),
-      ui_theme::infoActionPressed(), ui_theme::accentBorder(), [this]() {
+      i18n::tr("result.show_details.label"), app_theme::infoAction(), app_theme::infoActionHover(),
+      app_theme::infoActionPressed(), app_theme::accentBorder(), [this]() {
         const auto *current = localSource();
         if (current == nullptr || persistenceDetailsModalRoot == nullptr) {
           return;
@@ -1503,9 +1506,9 @@ void ResultScene::addResultPersistenceStatus() {
                                                            : YGDisplayNone);
   actions->addView(persistenceDetailsButton);
   actions->addView(makeButton(
-      i18n::tr("result.continue_without_saving.label"), ui_theme::warningAction(),
-      ui_theme::warningActionHover(), ui_theme::warningActionPressed(),
-      ui_theme::coral(), [this]() { continueWithoutSaving(); }));
+      i18n::tr("result.continue_without_saving.label"), app_theme::warningAction(),
+      app_theme::warningActionHover(), app_theme::warningActionPressed(),
+      app_theme::coral(), [this]() { continueWithoutSaving(); }));
   status->addView(actions);
 
   if (normalResultActions != nullptr) {
@@ -1525,7 +1528,7 @@ void ResultScene::addResultPersistenceStatus() {
   persistenceDetailsModalRoot->setFlexDirection(FlexDirection::Column);
   persistenceDetailsModalRoot->setAlignItems(YGAlignCenter);
   persistenceDetailsModalRoot->setJustifyContent(YGJustifyCenter);
-  persistenceDetailsModalRoot->setBackgroundColor(ui_theme::scrim());
+  persistenceDetailsModalRoot->setBackgroundColor(app_theme::scrim());
 
   auto *modalPanel = new View();
   const float modalWidth = std::max(
@@ -1540,37 +1543,37 @@ void ResultScene::addResultPersistenceStatus() {
       ->setAlignItems(YGAlignStretch)
       ->setGap(14)
       ->setPadding(Edge::All, 24)
-      ->setBackgroundColor(ui_theme::panelStrong())
-      ->setCornerRadius(ui_theme::panelRadius())
-      ->setShadow(ui_theme::shadow(), ui_theme::kModalShadow)
-      ->setBorderColor(ui_theme::hairline())
+      ->setBackgroundColor(app_theme::panelStrong())
+      ->setCornerRadius(app_theme::panelRadius())
+      ->setShadow(app_theme::shadow(), app_theme::kModalShadow)
+      ->setBorderColor(app_theme::hairline())
       ->setBorderWidth(1);
 
-  auto *modalTitle = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
+  auto *modalTitle = new TextView(app_theme::boldFont, 30);
   modalTitle->setText(i18n::tr("result.save_conflict_details.label"));
-  modalTitle->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  modalTitle->setColor(app_theme::sdl(app_theme::textPrimary()));
   modalTitle->setHeight(42);
   modalPanel->addView(modalTitle);
 
-  auto *modalIntroduction = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  auto *modalIntroduction = new TextView(app_theme::font, 18);
   modalIntroduction->setLocalizedText(
       i18n::message("result.save_conflict.explanation"));
-  modalIntroduction->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  modalIntroduction->setColor(app_theme::sdl(app_theme::textSecondary()));
   modalIntroduction->setWrap(true);
   modalIntroduction->setHeight(50);
   modalPanel->addView(modalIntroduction);
 
   persistenceDetailsStateText =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  persistenceDetailsStateText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+      new TextView(app_theme::font, 20);
+  persistenceDetailsStateText->setColor(app_theme::sdl(app_theme::textPrimary()));
   persistenceDetailsStateText->setWrap(true);
   persistenceDetailsStateText->setHeight(34);
   modalPanel->addView(persistenceDetailsStateText);
 
   persistenceDetailsReasonText =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+      new TextView(app_theme::font, 18);
   persistenceDetailsReasonText->setColor(
-      ui_theme::sdl(ui_theme::textPrimary()));
+      app_theme::sdl(app_theme::textPrimary()));
   persistenceDetailsReasonText->setWrap(true);
   persistenceDetailsReasonText->setMinHeight(130);
   persistenceDetailsReasonText->setFlexGrow(1);
@@ -1578,9 +1581,9 @@ void ResultScene::addResultPersistenceStatus() {
   modalPanel->addView(persistenceDetailsReasonText);
 
   persistenceDetailsReferenceText =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 17);
+      new TextView(app_theme::font, 17);
   persistenceDetailsReferenceText->setColor(
-      ui_theme::sdl(ui_theme::textMuted()));
+      app_theme::sdl(app_theme::textMuted()));
   persistenceDetailsReferenceText->setWrap(true);
   persistenceDetailsReferenceText->setHeight(66);
   modalPanel->addView(persistenceDetailsReferenceText);
@@ -1591,8 +1594,8 @@ void ResultScene::addResultPersistenceStatus() {
   modalFooter->setHeight(60);
   modalFooter->setFlexShrink(0);
   auto *closeButton = makeButton(
-      i18n::tr("result.close.label"), ui_theme::infoAction(), ui_theme::infoActionHover(),
-      ui_theme::infoActionPressed(), ui_theme::accentBorder(), [this]() {
+      i18n::tr("result.close.label"), app_theme::infoAction(), app_theme::infoActionHover(),
+      app_theme::infoActionPressed(), app_theme::accentBorder(), [this]() {
         if (persistenceDetailsModalRoot != nullptr) {
           persistenceDetailsModalRoot->setVisible(false);
         }
@@ -1662,9 +1665,9 @@ void ResultScene::addIrResultStatus() {
   status->setFlexDirection(FlexDirection::Row);
   status->setAlignItems(YGAlignCenter);
   status->setGap(16.0F);
-  status->setBackgroundColor(ui_theme::resultPanelStrong());
-  status->setCornerRadius(ui_theme::panelRadius());
-  status->setBorderColor(ui_theme::hairlineStrong());
+  status->setBackgroundColor(app_theme::resultPanelStrong());
+  status->setCornerRadius(app_theme::panelRadius());
+  status->setBorderColor(app_theme::hairlineStrong());
   status->setBorderWidth(1);
 
   auto *copy = new View();
@@ -1672,13 +1675,13 @@ void ResultScene::addIrResultStatus() {
   copy->setFlex(1.0F);
   copy->setMinWidth(0.0F);
   copy->setGap(2.0F);
-  irResultStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
-  irResultStatusText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  irResultStatusText = new TextView(app_theme::font, 20);
+  irResultStatusText->setColor(app_theme::sdl(app_theme::textPrimary()));
   irResultStatusText->setWrap(true);
   irResultStatusText->setWidthPercent(100.0F);
   copy->addView(irResultStatusText);
-  irResultDetailText = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
-  irResultDetailText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  irResultDetailText = new TextView(app_theme::font, 16);
+  irResultDetailText->setColor(app_theme::sdl(app_theme::textSecondary()));
   irResultDetailText->setWrap(true);
   irResultDetailText->setWidthPercent(100.0F);
   copy->addView(irResultDetailText);
@@ -1687,28 +1690,28 @@ void ResultScene::addIrResultStatus() {
   const auto makeAction = [](const std::string &label, const Color &accent,
                              std::function<void()> action) {
     auto *button = new Button(0, 0, 196, 52);
-    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 19);
+    auto *text = new TextView(app_theme::font, 19);
     text->setText(label);
     text->setAlign(TextView::CENTER);
     text->setVAlign(TextView::MIDDLE);
-    text->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+    text->setColor(app_theme::sdl(app_theme::textPrimary()));
     button->setContentView(text);
     button->setSize(196, 52);
-    button->setCornerRadius(ui_theme::controlRadius());
-    button->setBackgroundColors(ui_theme::withAlpha(accent, 72),
-                                ui_theme::withAlpha(accent, 104),
-        ui_theme::withAlpha(accent, 136));
-    button->setBorderColors(ui_theme::withAlpha(accent, 170),
-                            ui_theme::withAlpha(accent, 210), accent);
+    button->setCornerRadius(app_theme::controlRadius());
+    button->setBackgroundColors(app_theme::withAlpha(accent, 72),
+                                app_theme::withAlpha(accent, 104),
+        app_theme::withAlpha(accent, 136));
+    button->setBorderColors(app_theme::withAlpha(accent, 170),
+                            app_theme::withAlpha(accent, 210), accent);
     button->setStyledBorderWidth(1);
     button->setOnClickListener(std::move(action));
     return button;
   };
   irResultSubmitButton =
-      makeAction(i18n::tr("result.submit.label"), ui_theme::cyan(), [this]() { submitIrResult(); });
+      makeAction(i18n::tr("result.submit.label"), app_theme::cyan(), [this]() { submitIrResult(); });
   status->addView(irResultSubmitButton);
   irResultRetryButton =
-      makeAction(i18n::tr("result.ir.retry.label"), ui_theme::lime(), [this]() { retryIrResult(); });
+      makeAction(i18n::tr("result.ir.retry.label"), app_theme::lime(), [this]() { retryIrResult(); });
   status->addView(irResultRetryButton);
 
   status->setDisplay(YGDisplayNone);
@@ -2018,11 +2021,11 @@ void ResultScene::addRetryButtons() {
                            bool replay, Color normal, Color hover,
                            Color pressed, Color border) {
     auto button = new Button();
-    auto text = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+    auto text = new TextView(app_theme::boldFont, 24);
     text->setText(label);
     text->setAlign(TextView::CENTER);
     text->setVAlign(TextView::MIDDLE);
-    text->setColor(ui_theme::sdl(ui_theme::textOn(normal)));
+    text->setColor(app_theme::sdl(app_theme::textOn(normal)));
     button->setContentView(text);
     button->setOnClickListener([this, samePattern, replay]() {
       if (replay) {
@@ -2032,25 +2035,25 @@ void ResultScene::addRetryButtons() {
       }
     });
     button->setSize(232, 64);
-    button->setCornerRadius(ui_theme::controlRadius());
+    button->setCornerRadius(app_theme::controlRadius());
     button->setBackgroundColors(normal, hover, pressed);
-    button->setBorderColors(ui_theme::withAlpha(border, 150),
-                            ui_theme::withAlpha(border, 190),
-                            ui_theme::withAlpha(border, 220));
+    button->setBorderColors(app_theme::withAlpha(border, 150),
+                            app_theme::withAlpha(border, 190),
+                            app_theme::withAlpha(border, 220));
     button->setStyledBorderWidth(1);
     return button;
   };
 
   if (local->replayResult) {
-    retryRow->addView(makeButton(i18n::tr("result.replay.label"), true, true, ui_theme::infoAction(),
-                                 ui_theme::infoActionHover(),
-                                 ui_theme::infoActionPressed(),
-                                 ui_theme::cyan()));
+    retryRow->addView(makeButton(i18n::tr("result.replay.label"), true, true, app_theme::infoAction(),
+                                 app_theme::infoActionHover(),
+                                 app_theme::infoActionPressed(),
+                                 app_theme::cyan()));
   } else if (local->practiceOptions.enabled) {
     retryRow->addView(
-        makeButton(i18n::tr("result.gameplay.retry.label"), true, false, ui_theme::primaryAction(),
-                                 ui_theme::primaryActionHover(),
-                   ui_theme::primaryActionPressed(), ui_theme::cyan()));
+        makeButton(i18n::tr("result.gameplay.retry.label"), true, false, app_theme::primaryAction(),
+                                 app_theme::primaryActionHover(),
+                   app_theme::primaryActionPressed(), app_theme::cyan()));
   } else {
     const bool canRetrySame =
         local->retrySameAllowed && local->retryData.has_value()
@@ -2058,89 +2061,89 @@ void ResultScene::addRetryButtons() {
             : (local->retrySameAllowed &&
                play_options::hasSamePatternRandomization(local->meta));
     retryRow->addView(
-        makeButton(i18n::tr("result.gameplay.retry.label"), !canRetrySame, false, ui_theme::primaryAction(),
-                                 ui_theme::primaryActionHover(),
-                   ui_theme::primaryActionPressed(), ui_theme::cyan()));
+        makeButton(i18n::tr("result.gameplay.retry.label"), !canRetrySame, false, app_theme::primaryAction(),
+                                 app_theme::primaryActionHover(),
+                   app_theme::primaryActionPressed(), app_theme::cyan()));
     if (canRetrySame) {
       retryRow->addView(
-          makeButton(i18n::tr("result.retry_same.label"), true, false, ui_theme::successAction(),
-                                   ui_theme::successActionHover(),
-                     ui_theme::successActionPressed(), ui_theme::lime()));
+          makeButton(i18n::tr("result.retry_same.label"), true, false, app_theme::successAction(),
+                                   app_theme::successActionHover(),
+                     app_theme::successActionPressed(), app_theme::lime()));
     }
   }
 
   rankingsButton = new Button();
-  auto *rankingsText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+  auto *rankingsText = new TextView(app_theme::font, 24);
   rankingsText->setText(i18n::tr("result.rankings.label"));
   rankingsText->setAlign(TextView::CENTER);
   rankingsText->setVAlign(TextView::MIDDLE);
   rankingsText->setColor(
-      ui_theme::sdl(ui_theme::textOn(ui_theme::infoAction())));
+      app_theme::sdl(app_theme::textOn(app_theme::infoAction())));
   rankingsButton->setContentView(rankingsText);
   rankingsButton->setOnClickListener([this]() { openRankings(); });
   rankingsButton->setSize(232, 64);
-  rankingsButton->setCornerRadius(ui_theme::controlRadius());
-  rankingsButton->setBackgroundColors(ui_theme::infoAction(),
-                                       ui_theme::infoActionHover(),
-                                       ui_theme::infoActionPressed());
-  rankingsButton->setBorderColors(ui_theme::withAlpha(ui_theme::cyan(), 150),
-      ui_theme::withAlpha(ui_theme::cyan(), 190),
-      ui_theme::withAlpha(ui_theme::cyan(), 220));
+  rankingsButton->setCornerRadius(app_theme::controlRadius());
+  rankingsButton->setBackgroundColors(app_theme::infoAction(),
+                                       app_theme::infoActionHover(),
+                                       app_theme::infoActionPressed());
+  rankingsButton->setBorderColors(app_theme::withAlpha(app_theme::cyan(), 150),
+      app_theme::withAlpha(app_theme::cyan(), 190),
+      app_theme::withAlpha(app_theme::cyan(), 220));
   rankingsButton->setStyledBorderWidth(1);
   retryRow->addView(rankingsButton);
   refreshRankingsButton();
 
   exportPhotoButton = new Button();
-  exportPhotoButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+  exportPhotoButtonText = new TextView(app_theme::font, 24);
   exportPhotoButtonText->setText(i18n::tr("result.export_photo.label"));
   exportPhotoButtonText->setAlign(TextView::CENTER);
   exportPhotoButtonText->setVAlign(TextView::MIDDLE);
   exportPhotoButtonText->setColor(
-      ui_theme::sdl(ui_theme::textOn(ui_theme::violetAction())));
+      app_theme::sdl(app_theme::textOn(app_theme::violetAction())));
   exportPhotoButton->setContentView(exportPhotoButtonText);
   exportPhotoButton->setOnClickListener([this]() { exportPhoto(); });
   exportPhotoButton->setSize(232, 64);
-  exportPhotoButton->setCornerRadius(ui_theme::controlRadius());
-  exportPhotoButton->setBackgroundColors(ui_theme::violetAction(),
-                                         ui_theme::violetActionHover(),
-                                         ui_theme::violetActionPressed());
+  exportPhotoButton->setCornerRadius(app_theme::controlRadius());
+  exportPhotoButton->setBackgroundColors(app_theme::violetAction(),
+                                         app_theme::violetActionHover(),
+                                         app_theme::violetActionPressed());
   exportPhotoButton->setBorderColors(
-      ui_theme::withAlpha(ui_theme::violetActionHover(), 150),
-      ui_theme::withAlpha(ui_theme::violetActionHover(), 190),
-      ui_theme::withAlpha(ui_theme::violetActionHover(), 220));
+      app_theme::withAlpha(app_theme::violetActionHover(), 150),
+      app_theme::withAlpha(app_theme::violetActionHover(), 190),
+      app_theme::withAlpha(app_theme::violetActionHover(), 220));
   exportPhotoButton->setStyledBorderWidth(1);
   if (local->autoPlayResult) {
     exportPhotoButtonText->setLocalizedText(i18n::message("records.auto_play.label"));
     exportPhotoButton->setOnClickListener([]() {});
     exportPhotoButton->setBackgroundColors(
-        ui_theme::control(), ui_theme::control(), ui_theme::control());
-    exportPhotoButton->setBorderColors(ui_theme::hairlineSubtle(),
-                                       ui_theme::hairlineSubtle(),
-                                       ui_theme::hairlineSubtle());
+        app_theme::control(), app_theme::control(), app_theme::control());
+    exportPhotoButton->setBorderColors(app_theme::hairlineSubtle(),
+                                       app_theme::hairlineSubtle(),
+                                       app_theme::hairlineSubtle());
   }
   retryRow->addView(exportPhotoButton);
 
   practiceSectionButton = new Button();
   practiceSectionButton->setName("resultPracticeSectionButton");
   practiceSectionButtonText =
-      new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+      new TextView(app_theme::font, 22);
   practiceSectionButtonText->setText(i18n::tr("result.select_section.label"));
   practiceSectionButtonText->setAlign(TextView::CENTER);
   practiceSectionButtonText->setVAlign(TextView::MIDDLE);
   practiceSectionButtonText->setColor(
-      ui_theme::sdl(ui_theme::textOn(ui_theme::successAction())));
+      app_theme::sdl(app_theme::textOn(app_theme::successAction())));
   practiceSectionButton->setContentView(practiceSectionButtonText);
   practiceSectionButton->setOnClickListener(
       [this]() { practiceThisSection(); });
   practiceSectionButton->setSize(280, 64);
-  practiceSectionButton->setCornerRadius(ui_theme::controlRadius());
-  practiceSectionButton->setBackgroundColors(ui_theme::successAction(),
-                                             ui_theme::successActionHover(),
-      ui_theme::successActionPressed());
+  practiceSectionButton->setCornerRadius(app_theme::controlRadius());
+  practiceSectionButton->setBackgroundColors(app_theme::successAction(),
+                                             app_theme::successActionHover(),
+      app_theme::successActionPressed());
   practiceSectionButton->setBorderColors(
-      ui_theme::withAlpha(ui_theme::lime(), 150),
-      ui_theme::withAlpha(ui_theme::lime(), 190),
-      ui_theme::withAlpha(ui_theme::lime(), 220));
+      app_theme::withAlpha(app_theme::lime(), 150),
+      app_theme::withAlpha(app_theme::lime(), 190),
+      app_theme::withAlpha(app_theme::lime(), 220));
   practiceSectionButton->setStyledBorderWidth(1);
   retryRow->addView(practiceSectionButton);
   updatePracticeSectionAction();
@@ -2225,13 +2228,13 @@ void ResultScene::buildResultTouchControls() {
   panel->setFlexWrap(YGWrapWrap);
   panel->setGap(8.0F);
   panel->setPadding(Edge::All, 8.0F);
-  panel->setCornerRadius(ui_theme::controlRadius());
-  panel->setBackgroundColor(Color(8, 16, 24, 96));
+  panel->setCornerRadius(app_theme::controlRadius());
+  panel->setBackgroundColor(app_theme::panelSubtle());
 
   const auto addAction = [this, panel, local](
                              ResultTouchControlAction action) {
     std::string label;
-    Color accent = ui_theme::cyan();
+    Color accent = app_theme::cyan();
     std::function<void()> callback;
     bool enabled = true;
     switch (action) {
@@ -2249,7 +2252,7 @@ void ResultScene::buildResultTouchControls() {
       break;
     case ResultTouchControlAction::Retry:
       label = i18n::tr("result.gameplay.retry.label");
-      accent = ui_theme::primaryAction();
+      accent = app_theme::primaryAction();
       callback = [this, local]() {
         if (local == nullptr) return;
         const bool canRetrySame = local->retrySameAllowed &&
@@ -2263,7 +2266,7 @@ void ResultScene::buildResultTouchControls() {
       break;
     case ResultTouchControlAction::RetrySame:
       label = i18n::tr("result.retry_same.label");
-      accent = ui_theme::successAction();
+      accent = app_theme::successAction();
       callback = [this]() {
         if (isCourseFinalResult()) {
           startModernCourseRetrySame();
@@ -2274,7 +2277,7 @@ void ResultScene::buildResultTouchControls() {
       break;
     case ResultTouchControlAction::Replay:
       label = i18n::tr("result.replay.label");
-      accent = ui_theme::infoAction();
+      accent = app_theme::infoAction();
       callback = [this]() {
         if (isCourseFinalResult()) {
           startCourseReplay();
@@ -2285,23 +2288,23 @@ void ResultScene::buildResultTouchControls() {
       break;
     case ResultTouchControlAction::Rankings:
       label = i18n::tr("result.rankings.label");
-      accent = ui_theme::infoAction();
+      accent = app_theme::infoAction();
       callback = [this]() { openRankings(); };
       enabled = rankingsAvailable();
       break;
     case ResultTouchControlAction::ExportPhoto:
       label = i18n::tr("result.export.label");
-      accent = ui_theme::violetAction();
+      accent = app_theme::violetAction();
       callback = [this]() { exportPhoto(); };
       break;
     case ResultTouchControlAction::SelectSection:
       label = i18n::tr("result.section.label");
-      accent = ui_theme::successAction();
+      accent = app_theme::successAction();
       callback = [this]() { practiceThisSection(); };
       break;
     case ResultTouchControlAction::Next:
       label = i18n::tr("result.next.label");
-      accent = ui_theme::successAction();
+      accent = app_theme::successAction();
       callback = [this]() { continueCourse(); };
       break;
     case ResultTouchControlAction::CourseDetails:
@@ -2310,27 +2313,27 @@ void ResultScene::buildResultTouchControls() {
       break;
     case ResultTouchControlAction::Hide:
       label = i18n::tr("result.hide.label");
-      accent = ui_theme::textSecondary();
+      accent = app_theme::textSecondary();
       callback = [this]() { setResultTouchControlsHidden(true); };
       break;
     }
     auto *button = new Button();
-    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+    auto *text = new TextView(app_theme::font, 18);
     text->setText(label);
     text->setAlign(TextView::CENTER);
     text->setVAlign(TextView::MIDDLE);
-    text->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+    text->setColor(app_theme::sdl(app_theme::textPrimary()));
     if (action == ResultTouchControlAction::ExportPhoto) {
       resultTouchExportPhotoText = text;
     }
     button->setContentView(text);
     button->setSize(142, 48);
-    button->setCornerRadius(ui_theme::controlRadius());
-    button->setBackgroundColors(ui_theme::withAlpha(accent, 76),
-                                ui_theme::withAlpha(accent, 112),
-                                ui_theme::withAlpha(accent, 152));
-    button->setBorderColors(ui_theme::withAlpha(accent, 140),
-                            ui_theme::withAlpha(accent, 190), accent);
+    button->setCornerRadius(app_theme::controlRadius());
+    button->setBackgroundColors(app_theme::control(),
+                                app_theme::controlHover(),
+                                app_theme::controlPressed());
+    button->setBorderColors(app_theme::withAlpha(accent, 140),
+                            app_theme::withAlpha(accent, 190), accent);
     button->setStyledBorderWidth(1);
     button->setEnabled(enabled);
     button->setOnClickListener(std::move(callback));
@@ -2411,33 +2414,33 @@ void ResultScene::handleResultSkinRenderFailure() {
   notice->setJustifyContent(YGJustifySpaceBetween);
   notice->setPadding(Edge::All, 16.0F);
   notice->setGap(16.0F);
-  notice->setCornerRadius(ui_theme::panelRadius());
-  notice->setBackgroundColor(ui_theme::resultPanelStrong());
-  notice->setBorderColor(ui_theme::withAlpha(ui_theme::coral(), 210));
+  notice->setCornerRadius(app_theme::panelRadius());
+  notice->setBackgroundColor(app_theme::resultPanelStrong());
+  notice->setBorderColor(app_theme::withAlpha(app_theme::coral(), 210));
   notice->setBorderWidth(1);
   notice->setZIndex(2300);
 
-  auto *message = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  auto *message = new TextView(app_theme::font, 18);
   message->setText(renderFailed
                        ? i18n::tr("result.result_skin_stopped_rendering_application_controls_restored.message")
                        : i18n::tr("result.result_skin_failed_start_application_controls_available.message"));
-  message->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  message->setColor(app_theme::sdl(app_theme::textPrimary()));
   message->setWrap(true);
   message->setFlexGrow(1.0F);
   notice->addView(message);
 
   auto *back = new Button();
-  auto *backText = new TextView("assets/fonts/notosanscjkjp.ttf", 18);
+  auto *backText = new TextView(app_theme::font, 18);
   backText->setText(i18n::tr("result.back.label"));
   backText->setAlign(TextView::CENTER);
   backText->setVAlign(TextView::MIDDLE);
-  backText->setColor(ui_theme::sdl(ui_theme::textOn(ui_theme::primaryAction())));
+  backText->setColor(app_theme::sdl(app_theme::textOn(app_theme::primaryAction())));
   back->setContentView(backText);
   back->setSize(128, 48);
-  back->setCornerRadius(ui_theme::controlRadius());
-  back->setBackgroundColors(ui_theme::primaryAction(),
-                            ui_theme::primaryActionHover(),
-                            ui_theme::primaryActionPressed());
+  back->setCornerRadius(app_theme::controlRadius());
+  back->setBackgroundColors(app_theme::primaryAction(),
+                            app_theme::primaryActionHover(),
+                            app_theme::primaryActionPressed());
   back->setOnClickListener([this]() {
     const auto *current = localSource();
     if (current != nullptr && isCourseStageResult() &&
@@ -2499,42 +2502,42 @@ void ResultScene::addRemoteButtons() {
                              const Color &border,
                              std::function<void()> action) {
     auto *button = new Button();
-    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+    auto *text = new TextView(app_theme::font, 24);
     text->setText(label);
     text->setAlign(TextView::CENTER);
     text->setVAlign(TextView::MIDDLE);
-    text->setColor(ui_theme::sdl(ui_theme::textOn(normal)));
+    text->setColor(app_theme::sdl(app_theme::textOn(normal)));
     button->setContentView(text);
     button->setOnClickListener(std::move(action));
     button->setSize(232, 64);
-    button->setCornerRadius(ui_theme::controlRadius());
+    button->setCornerRadius(app_theme::controlRadius());
     button->setBackgroundColors(normal, hover, pressed);
-    button->setBorderColors(ui_theme::withAlpha(border, 150),
-                            ui_theme::withAlpha(border, 190),
-                            ui_theme::withAlpha(border, 220));
+    button->setBorderColors(app_theme::withAlpha(border, 150),
+                            app_theme::withAlpha(border, 190),
+                            app_theme::withAlpha(border, 220));
     button->setStyledBorderWidth(1);
     return button;
   };
 
   if (actions.rankings) {
     rankingsButton =
-        makeButton(i18n::tr("result.rankings.label"), ui_theme::infoAction(),
-                   ui_theme::infoActionHover(), ui_theme::infoActionPressed(),
-                   ui_theme::cyan(), [this]() { openRankings(); });
+        makeButton(i18n::tr("result.rankings.label"), app_theme::infoAction(),
+                   app_theme::infoActionHover(), app_theme::infoActionPressed(),
+                   app_theme::cyan(), [this]() { openRankings(); });
     rankingsButton->setEnabled(rankingsAvailable());
     row->addView(rankingsButton);
   }
 
   if (actions.exportPhoto) {
-    exportPhotoButtonText = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+    exportPhotoButtonText = new TextView(app_theme::font, 24);
     exportPhotoButtonText->setText(i18n::tr("result.export_photo.label"));
     exportPhotoButtonText->setAlign(TextView::CENTER);
     exportPhotoButtonText->setVAlign(TextView::MIDDLE);
     exportPhotoButtonText->setColor(
-        ui_theme::sdl(ui_theme::textOn(ui_theme::violetAction())));
+        app_theme::sdl(app_theme::textOn(app_theme::violetAction())));
     exportPhotoButton = makeButton(
-        i18n::tr("result.export_photo.label"), ui_theme::violetAction(), ui_theme::violetActionHover(),
-        ui_theme::violetActionPressed(), ui_theme::violetActionHover(),
+        i18n::tr("result.export_photo.label"), app_theme::violetAction(), app_theme::violetActionHover(),
+        app_theme::violetActionPressed(), app_theme::violetActionHover(),
         [this]() { exportPhoto(); });
     exportPhotoButton->setContentView(exportPhotoButtonText);
     row->addView(exportPhotoButton);
@@ -2563,15 +2566,15 @@ void ResultScene::addRemoteIrStatus() {
   status->setFlexDirection(FlexDirection::Row);
   status->setAlignItems(YGAlignCenter);
   status->setGap(12.0F);
-  status->setBackgroundColor(ui_theme::resultPanelStrong());
-  status->setCornerRadius(ui_theme::panelRadius());
-  status->setBorderColor(ui_theme::withAlpha(ui_theme::lime(), 170));
+  status->setBackgroundColor(app_theme::resultPanelStrong());
+  status->setCornerRadius(app_theme::panelRadius());
+  status->setBorderColor(app_theme::withAlpha(app_theme::lime(), 170));
   status->setBorderWidth(1);
 
-  auto *irLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  auto *irLabel = new TextView(app_theme::font, 20);
   irLabel->setName("remoteIrLabel");
   irLabel->setText("IR");
-  irLabel->setColor(ui_theme::sdl(ui_theme::lime()));
+  irLabel->setColor(app_theme::sdl(app_theme::lime()));
   irLabel->setWidth(28.0F);
   irLabel->setHeight(32.0F);
   status->addView(irLabel);
@@ -2579,22 +2582,22 @@ void ResultScene::addRemoteIrStatus() {
   auto *check = new TextView(ui_icons::kFontAwesomeSolidPath, 18);
   check->setName("remoteIrUploadedCheck");
   check->setText(ui_icons::textForCodepoint(0xf00c));
-  check->setColor(ui_theme::sdl(ui_theme::lime()));
+  check->setColor(app_theme::sdl(app_theme::lime()));
   check->setWidth(24.0F);
   check->setHeight(32.0F);
   status->addView(check);
 
-  irResultStatusText = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  irResultStatusText = new TextView(app_theme::font, 20);
   irResultStatusText->setText(i18n::tr("result.bokutachi_uploaded.label"));
-  irResultStatusText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  irResultStatusText->setColor(app_theme::sdl(app_theme::textPrimary()));
   irResultStatusText->setFlex(1.0F);
   irResultStatusText->setHeight(32.0F);
   status->addView(irResultStatusText);
 
-  irResultDetailText = new TextView("assets/fonts/notosanscjkjp.ttf", 16);
+  irResultDetailText = new TextView(app_theme::font, 16);
   irResultDetailText->setName("remoteIrReadOnlyStatus");
   irResultDetailText->setText(i18n::tr("result.read_only_synchronized_result.label"));
-  irResultDetailText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  irResultDetailText->setColor(app_theme::sdl(app_theme::textSecondary()));
   irResultDetailText->setWidth(240.0F);
   irResultDetailText->setHeight(28.0F);
   status->addView(irResultDetailText);
@@ -2826,7 +2829,7 @@ void ResultScene::showCourseDetails() {
   courseDetailsModalRoot->setFlexDirection(FlexDirection::Column);
   courseDetailsModalRoot->setAlignItems(YGAlignCenter);
   courseDetailsModalRoot->setJustifyContent(YGJustifyCenter);
-  courseDetailsModalRoot->setBackgroundColor(ui_theme::scrim());
+  courseDetailsModalRoot->setBackgroundColor(app_theme::scrim());
 
   auto *panel = new View();
   panel->setName("courseDetailsPanel");
@@ -2836,23 +2839,23 @@ void ResultScene::showCourseDetails() {
   panel->setAlignItems(YGAlignStretch);
   panel->setPadding(Edge::All, 20);
   panel->setGap(12);
-  panel->setCornerRadius(ui_theme::panelRadius());
-  panel->setBackgroundColor(ui_theme::panelStrong());
+  panel->setCornerRadius(app_theme::panelRadius());
+  panel->setBackgroundColor(app_theme::panelStrong());
   const auto label = [](const std::string &text, int size, Color color) {
-    auto *view = new TextView("assets/fonts/notosanscjkjp.ttf", size);
+    auto *view = new TextView(app_theme::font, size);
     view->setText(text);
-    view->setColor(ui_theme::sdl(color));
+    view->setColor(app_theme::sdl(color));
     view->setHeight(size + 12);
     view->setFlexShrink(0);
     view->setOverflow(TextView::TextOverflow::Marquee);
     return view;
   };
   panel->addView(label(i18n::tr("result.course.details.label"), 28,
-                       ui_theme::textPrimary()));
+                       app_theme::textPrimary()));
   if (const auto grade = gradeCard(local->presentation)) {
     panel->addView(label(std::string(i18n::tr("result.course.achievement.label")) + ": " +
                             grade->rate + "  ·  " + grade->grade,
-                        22, ui_theme::cyan()));
+                        22, app_theme::cyan()));
   }
   auto *scroll = new ScrollView();
   scroll->setFlex(1);
@@ -2870,10 +2873,10 @@ void ResultScene::showCourseDetails() {
     row->setFlexShrink(0);
     row->setPadding(Edge::All, 12);
     row->setGap(6);
-    row->setBackgroundColor(ui_theme::resultBackdrop());
-    row->setCornerRadius(ui_theme::controlRadius());
+    row->setBackgroundColor(app_theme::resultBackdrop());
+    row->setCornerRadius(app_theme::controlRadius());
     row->addView(label(std::to_string(index + 1) + ". " + stage.title, 22,
-                       ui_theme::textPrimary()));
+                       app_theme::textPrimary()));
     if (stage.result) {
       const auto &result = *stage.result;
       const auto grade = gradeCard(result);
@@ -2882,14 +2885,14 @@ void ResultScene::showCourseDetails() {
               (grade ? grade->rate : "—") + "  ·  EX " +
               std::to_string(result.score.value_or(0)) + " / " +
               std::to_string(result.maxScore.value_or(0)),
-          20, ui_theme::cyan()));
+          20, app_theme::cyan()));
       std::ostringstream gauge;
       gauge << std::fixed << std::setprecision(1)
             << result.finalGauge.value_or(0.0F);
       row->addView(label(
           "BP " + std::to_string(result.badPoints.value_or(0)) +
               "  ·  " + result.gaugeType.value_or("GAUGE") + " " + gauge.str() + "%",
-          18, ui_theme::textSecondary()));
+          18, app_theme::textSecondary()));
       if (!result.gaugeSeries.empty()) {
         auto *graph = new ResultGaugeGraphView(std::move(stage.result->gaugeSeries));
         graph->setHeight(100);
@@ -2898,7 +2901,7 @@ void ResultScene::showCourseDetails() {
       }
     } else {
       row->addView(label(i18n::tr("result.course.not_played.label"), 20,
-                         ui_theme::textMuted()));
+                         app_theme::textMuted()));
     }
     content->addView(row);
   }
@@ -2906,15 +2909,15 @@ void ResultScene::showCourseDetails() {
   panel->addView(scroll);
   auto *close = new Button();
   auto *closeText = label(i18n::tr("result.close.label"), 22,
-                           ui_theme::textPrimary());
+                           app_theme::textPrimary());
   closeText->setAlign(TextView::CENTER);
   closeText->setVAlign(TextView::MIDDLE);
   close->setContentView(closeText);
   close->setHeight(52);
   close->setFlexShrink(0);
-  close->setBackgroundColors(ui_theme::infoAction(), ui_theme::infoActionHover(),
-                              ui_theme::infoActionPressed());
-  close->setCornerRadius(ui_theme::controlRadius());
+  close->setBackgroundColors(app_theme::infoAction(), app_theme::infoActionHover(),
+                              app_theme::infoActionPressed());
+  close->setCornerRadius(app_theme::controlRadius());
   close->setOnClickListener([this]() { courseDetailsModalRoot->setVisible(false); });
   panel->addView(close);
   courseDetailsModalRoot->addView(panel);
@@ -2938,36 +2941,36 @@ void ResultScene::addCourseButtons() {
                        Color pressed, Color border,
                        std::function<void()> onClick) {
     auto *button = new Button();
-    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 24);
+    auto *text = new TextView(app_theme::font, 24);
     text->setText(label);
     text->setAlign(TextView::CENTER);
     text->setVAlign(TextView::MIDDLE);
-    text->setColor(ui_theme::sdl(ui_theme::textOn(normal)));
+    text->setColor(app_theme::sdl(app_theme::textOn(normal)));
     button->setContentView(text);
     button->setOnClickListener(std::move(onClick));
     button->setSize(232, 64);
-    button->setCornerRadius(ui_theme::controlRadius());
+    button->setCornerRadius(app_theme::controlRadius());
     button->setBackgroundColors(normal, hover, pressed);
-    button->setBorderColors(ui_theme::withAlpha(border, 150),
-                            ui_theme::withAlpha(border, 190),
-                            ui_theme::withAlpha(border, 220));
+    button->setBorderColors(app_theme::withAlpha(border, 150),
+                            app_theme::withAlpha(border, 190),
+                            app_theme::withAlpha(border, 220));
     button->setStyledBorderWidth(1);
     return std::pair<Button *, TextView *>(button, text);
   };
 
   if (isCourseFinalResult() && courseOptions.session != nullptr) {
     auto [detailsButton, ignoredText] = makeButton(
-        i18n::tr("result.course.details.label"), ui_theme::infoAction(),
-        ui_theme::infoActionHover(), ui_theme::infoActionPressed(),
-        ui_theme::cyan(), [this]() { showCourseDetails(); });
+        i18n::tr("result.course.details.label"), app_theme::infoAction(),
+        app_theme::infoActionHover(), app_theme::infoActionPressed(),
+        app_theme::cyan(), [this]() { showCourseDetails(); });
     (void)ignoredText;
     actionHost->addView(detailsButton);
   }
 
   if (isCourseStageResult()) {
     auto [nextButton, ignoredText] = makeButton(
-        i18n::tr("result.next.label"), ui_theme::successAction(), ui_theme::successActionHover(),
-        ui_theme::successActionPressed(), ui_theme::lime(),
+        i18n::tr("result.next.label"), app_theme::successAction(), app_theme::successActionHover(),
+        app_theme::successActionPressed(), app_theme::lime(),
         [this]() { continueCourse(); });
     (void)ignoredText;
     actionHost->addView(nextButton);
@@ -2977,9 +2980,9 @@ void ResultScene::addCourseButtons() {
       courseOptions.session->courseReplayData != nullptr &&
       !courseOptions.session->courseReplayData->stages.empty()) {
     auto [replayButton, ignoredText] =
-        makeButton(i18n::tr("result.replay.label"), ui_theme::infoAction(),
-                   ui_theme::infoActionHover(), ui_theme::infoActionPressed(),
-                   ui_theme::cyan(), [this]() { startCourseReplay(); });
+        makeButton(i18n::tr("result.replay.label"), app_theme::infoAction(),
+                   app_theme::infoActionHover(), app_theme::infoActionPressed(),
+                   app_theme::cyan(), [this]() { startCourseReplay(); });
     (void)ignoredText;
     actionHost->addView(replayButton);
   }
@@ -2988,18 +2991,18 @@ void ResultScene::addCourseButtons() {
       courseOptions.session->modernCourseResultBrowsing &&
       courseOptions.session->modernCourseRetrySameAllowed) {
     auto [retrySameButton, ignoredText] =
-        makeButton(i18n::tr("result.retry_same.label"), ui_theme::successAction(),
-                   ui_theme::successActionHover(),
-                   ui_theme::successActionPressed(), ui_theme::lime(),
+        makeButton(i18n::tr("result.retry_same.label"), app_theme::successAction(),
+                   app_theme::successActionHover(),
+                   app_theme::successActionPressed(), app_theme::lime(),
                    [this]() { startModernCourseRetrySame(); });
     (void)ignoredText;
     actionHost->addView(retrySameButton);
   }
 
   auto [photoButton, photoText] =
-      makeButton(i18n::tr("result.export_photo.label"), ui_theme::violetAction(),
-      ui_theme::violetActionHover(), ui_theme::violetActionPressed(),
-      ui_theme::violetActionHover(), [this]() { exportPhoto(); });
+      makeButton(i18n::tr("result.export_photo.label"), app_theme::violetAction(),
+      app_theme::violetActionHover(), app_theme::violetActionPressed(),
+      app_theme::violetActionHover(), [this]() { exportPhoto(); });
   exportPhotoButton = photoButton;
   exportPhotoButtonText = photoText;
   actionHost->addView(exportPhotoButton);
@@ -3046,8 +3049,8 @@ void ResultScene::buildCourseExitConfirmation() {
   overlay->setFlexDirection(FlexDirection::Column);
   overlay->setAlignItems(YGAlignCenter);
   overlay->setJustifyContent(YGJustifyCenter);
-  overlay->setBackgroundColors(Color(0, 0, 0, 174), Color(0, 0, 0, 174),
-                               Color(0, 0, 0, 174));
+  overlay->setBackgroundColors(app_theme::scrim(), app_theme::scrim(),
+                               app_theme::scrim());
   overlay->setOnClickListener([]() {});
   overlay->setZIndex(100);
 
@@ -3057,22 +3060,22 @@ void ResultScene::buildCourseExitConfirmation() {
   panel->setFlexDirection(FlexDirection::Column);
   panel->setAlignItems(YGAlignStretch);
   panel->setGap(18);
-  panel->setBackgroundColor(ui_theme::resultPanelStrong());
-  panel->setCornerRadius(ui_theme::panelRadius());
-  panel->setBorderColor(ui_theme::withAlpha(ui_theme::coral(), 180));
+  panel->setBackgroundColor(app_theme::resultPanelStrong());
+  panel->setCornerRadius(app_theme::panelRadius());
+  panel->setBorderColor(app_theme::withAlpha(app_theme::coral(), 180));
   panel->setBorderWidth(1);
-  panel->setShadow(ui_theme::cardShadow(), ui_theme::kCardShadow);
+  panel->setShadow(app_theme::cardShadow(), app_theme::kCardShadow);
 
-  auto *title = new TextView("assets/fonts/notosanscjkjp.ttf", 30);
+  auto *title = new TextView(app_theme::boldFont, 30);
   title->setText(i18n::tr("result.leave_course.label"));
-  title->setColor(ui_theme::sdl(ui_theme::textPrimary()));
+  title->setColor(app_theme::sdl(app_theme::textPrimary()));
   title->setAlign(TextView::CENTER);
   title->setHeight(42);
   panel->addView(title);
 
-  auto *message = new TextView("assets/fonts/notosanscjkjp.ttf", 20);
+  auto *message = new TextView(app_theme::font, 20);
   message->setText(i18n::tr("result.course_progress_will_lost.message"));
-  message->setColor(ui_theme::sdl(ui_theme::textSecondary()));
+  message->setColor(app_theme::sdl(app_theme::textSecondary()));
   message->setAlign(TextView::CENTER);
   message->setHeight(32);
   panel->addView(message);
@@ -3087,31 +3090,31 @@ void ResultScene::buildCourseExitConfirmation() {
                             Color pressed, Color border,
                             std::function<void()> onClick) {
     auto *button = new Button();
-    auto *text = new TextView("assets/fonts/notosanscjkjp.ttf", 22);
+    auto *text = new TextView(app_theme::font, 22);
     text->setText(label);
     text->setAlign(TextView::CENTER);
     text->setVAlign(TextView::MIDDLE);
-    text->setColor(ui_theme::sdl(ui_theme::textOn(normal)));
+    text->setColor(app_theme::sdl(app_theme::textOn(normal)));
     button->setContentView(text);
     button->setOnClickListener(std::move(onClick));
     button->setSize(208, 58);
-    button->setCornerRadius(ui_theme::controlRadius());
+    button->setCornerRadius(app_theme::controlRadius());
     button->setBackgroundColors(normal, hover, pressed);
-    button->setBorderColors(ui_theme::withAlpha(border, 150),
-                            ui_theme::withAlpha(border, 190),
-                            ui_theme::withAlpha(border, 220));
+    button->setBorderColors(app_theme::withAlpha(border, 150),
+                            app_theme::withAlpha(border, 190),
+                            app_theme::withAlpha(border, 220));
     button->setStyledBorderWidth(1);
     return button;
   };
 
   row->addView(
-      makeModalButton(i18n::tr("result.cancel.label"), ui_theme::control(), ui_theme::controlHover(),
-      ui_theme::controlPressed(), ui_theme::hairlineSubtle(),
+      makeModalButton(i18n::tr("result.cancel.label"), app_theme::control(), app_theme::controlHover(),
+      app_theme::controlPressed(), app_theme::hairlineSubtle(),
       [this]() { hideCourseExitConfirmation(); }));
-  row->addView(makeModalButton(i18n::tr("result.back_menu.label"), ui_theme::warningAction(),
-                               ui_theme::warningActionHover(),
-                               ui_theme::warningActionPressed(),
-      ui_theme::coral(), [this]() { exitResult(); }));
+  row->addView(makeModalButton(i18n::tr("result.back_menu.label"), app_theme::warningAction(),
+                               app_theme::warningActionHover(),
+                               app_theme::warningActionPressed(),
+      app_theme::coral(), [this]() { exitResult(); }));
   panel->addView(row);
   overlay->addView(panel);
   overlay->setVisible(false);
@@ -4239,17 +4242,16 @@ void ResultScene::buildResultView() {
     graphView->setWidthPercent(100.0F)->setFlex(1.0F);
     graphPlaceHolder->addView(graphView);
 
-    auto *gaugeLabel = new TextView("assets/fonts/notosanscjkjp.ttf", 15);
+    auto *gaugeLabel = new TextView(app_theme::font, 15);
     gaugeLabel->setAlign(TextView::CENTER);
     gaugeLabel->setVAlign(TextView::MIDDLE);
-    gaugeLabel->setPositionType(YGPositionTypeAbsolute);
-    gaugeLabel->setPosition(Edge::Left, 12);
-    gaugeLabel->setPosition(Edge::Top, 12);
+    gaugeLabel->setAlignSelf(YGAlignFlexStart);
+    gaugeLabel->setFlexShrink(0);
     gaugeLabel->setWidth(142);
     gaugeLabel->setHeight(30);
-    gaugeLabel->setCornerRadius(6);
+    gaugeLabel->setCornerRadius(app_theme::controlRadius());
     gaugeLabel->setZIndex(2);
-    graphPlaceHolder->addView(gaugeLabel);
+    graphPlaceHolder->insertViewBefore(gaugeLabel, graphView);
 
     const auto updateGaugeLabel = [graphView, gaugeLabel]() {
       const auto &graph = graphView->graph();
@@ -4261,7 +4263,7 @@ void ResultScene::buildResultView() {
       gaugeLabel->setText(graph->label->text);
       gaugeLabel->setBackgroundColor(graph->label->background);
       gaugeLabel->setColor(
-          ui_theme::sdl(ui_theme::textOn(graph->label->background)));
+          app_theme::sdl(app_theme::textOn(graph->label->background)));
     };
     updateGaugeLabel();
 
@@ -4611,6 +4613,8 @@ void ResultScene::resizeResultLayout() {
     rootLayout->setMinHeight(rendering::window_height);
     return;
   }
+  // Paint through every safe-area edge; only the scrollable content is inset.
+  viewportLayout->setBackgroundColor(app_theme::resultBackdrop());
   resultScroll->setMargin(Edge::Top, safe.top)->setMargin(Edge::Right, safe.right);
   resultScroll->setMargin(Edge::Bottom, safe.bottom)->setMargin(Edge::Left, safe.left);
   const int width = rendering::window_width - safe.left - safe.right;

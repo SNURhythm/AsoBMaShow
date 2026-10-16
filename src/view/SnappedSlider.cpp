@@ -1,7 +1,7 @@
 #include "SnappedSlider.h"
 
 #include "../input/SDLPointerEvent.h"
-#include "UiTheme.h"
+#include "AppTheme.h"
 
 #include <algorithm>
 #include <array>
@@ -118,15 +118,15 @@ void SnappedSlider::renderImpl(RenderContext &context) {
   const float thumbX = trackX + trackWidth * fraction;
   const float thumbY = static_cast<float>(getY()) + height * 0.5F;
 
-  Color trackColor = ui_theme::control();
-  Color fillColor = ui_theme::cyan();
+  Color trackColor = app_theme::control();
+  Color fillColor = app_theme::cyan();
   Color thumbColor = hovered || mouseDragging || activeTouchId != -1
-                         ? ui_theme::textPrimary()
-                         : ui_theme::cyan();
+                         ? app_theme::textPrimary()
+                         : app_theme::cyan();
   if (!current.enabled) {
-    trackColor = ui_theme::withAlpha(trackColor, 110);
-    fillColor = ui_theme::withAlpha(fillColor, 90);
-    thumbColor = ui_theme::withAlpha(thumbColor, 110);
+    trackColor = app_theme::withAlpha(trackColor, 110);
+    fillColor = app_theme::withAlpha(fillColor, 90);
+    thumbColor = app_theme::withAlpha(thumbColor, 110);
   }
 
   appendRoundedRect(context, trackX, trackY, trackWidth, kTrackHeight,

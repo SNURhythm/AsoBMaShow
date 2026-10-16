@@ -10,6 +10,22 @@
 
 namespace skin {
 
+// Retained separately from the view tree so rotation/rebuilds do not reopen a
+// dismissed failure. Busy operations keep using the same progress dialog.
+struct GameplaySkinOperationModalState {
+  bool visible = false;
+  bool busy = false;
+  std::string error;
+
+  void action(const ControllerActionResult &result);
+  void update(const GameplaySkinSettingsSnapshot &snapshot);
+  void dismiss();
+
+private:
+  i18n::Text actionError;
+  std::string dismissedError;
+};
+
 // Negative skin types identify additional mode tabs, never catalog types.
 [[nodiscard]] std::vector<SkinTargetTrait> gameplaySkinSettingsTargets();
 
