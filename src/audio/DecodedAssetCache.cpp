@@ -138,6 +138,7 @@ struct DecodedAssetCache::Impl {
   mutable std::mutex mutex;
   std::map<std::filesystem::path, std::shared_ptr<Entry>> entries;
   std::map<PageKey, Page> pages;
+  std::map<std::filesystem::path, std::shared_ptr<archive_file::BoundedArchiveReader>> archiveReaders;
   std::list<PageKey> lru;
   std::uint64_t nextId = 0;
   Statistics statistics;
@@ -308,9 +309,16 @@ struct DecodedAssetCache::Impl {
       for (const auto &[path, entry] : requests) innerPaths.push_back(path);
       std::string error;
       std::exception_ptr failure;
-      { std::lock_guard lock(mutex); ++statistics.archiveReads; }
-      const bool read = archive_file::readArchiveEntriesStreamingBounded(
-          archive, innerPaths, [&](archive_file::FileData &&file) {
+      std::shared_ptr<archive_file::BoundedArchiveReader> reader;
+      {
+        std::lock_guard lock(mutex);
+        ++statistics.archiveReads;
+        auto &cached = archiveReaders[archive];
+        if (!cached) cached = std::make_shared<archive_file::BoundedArchiveReader>(archive);
+        reader = cached;
+      }
+      const bool read = reader->read(
+          innerPaths, [&](archive_file::FileData &&file) {
             // Exceptions must not cross an archive SDK callback boundary.
             try {
               checkpoint(cancel, stop);

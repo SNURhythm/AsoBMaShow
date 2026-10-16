@@ -539,6 +539,7 @@ std::deque<std::string> gDebugLogLines;
 std::uint64_t gDebugLogRevision = 0;
 
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
+std::atomic_uint64_t gZipStreamingOpenCount{0};
 std::mutex gStreamingEntryObserverMutex;
 StreamingEntryObserverForTesting gStreamingEntryObserver;
 
@@ -5676,12 +5677,24 @@ bool readZipEntriesByIndex(
   return true;
 }
 
+struct ZipStreamingReader {
+  archive_source::Access source;
+  mz_zip_archive archive{};
+  void reset() {
+    if (archive.m_pState) mz_zip_reader_end(&archive);
+    mz_zip_zero_struct(&archive);
+    source = {};
+  }
+  ~ZipStreamingReader() { reset(); }
+};
+
 bool readZipEntriesByIndexStreaming(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,
     const std::optional<EntryRange> &range, const FileDataCallback &onFile,
     std::string *errorMessage, const PauseCallback &pauseCallback,
-    std::size_t maximumBytes = std::numeric_limits<std::size_t>::max()) {
+    std::size_t maximumBytes = std::numeric_limits<std::size_t>::max(),
+    ZipStreamingReader *retainedReader = nullptr) {
   if (innerPaths.empty()) {
     return true;
   }
@@ -5731,24 +5744,26 @@ bool readZipEntriesByIndexStreaming(
               return a.order < b.order;
             });
 
-  mz_zip_archive archive{};
-  mz_zip_zero_struct(&archive);
-  const auto sourceAccess = archive_source::resolve(archivePath);
-  const std::string archiveText = fspath_to_utf8(sourceAccess.path);
-  if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
-                                  MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0,
-                                  0)) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Could not open ZIP central directory.";
+  ZipStreamingReader localReader;
+  auto &reader = retainedReader ? *retainedReader : localReader;
+  auto &archive = reader.archive;
+  if (!archive.m_pState) {
+    reader.source = archive_source::resolve(archivePath);
+    const std::string archiveText = fspath_to_utf8(reader.source.path);
+    if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
+                                    MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0, 0)) {
+      if (errorMessage != nullptr) *errorMessage = "Could not open ZIP central directory.";
+      return false;
     }
-    return false;
+#if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
+    ++gZipStreamingOpenCount;
+#endif
   }
 
   auto fail = [&](const std::string &message) {
     if (errorMessage != nullptr) {
       *errorMessage = message;
     }
-    mz_zip_reader_end(&archive);
     return false;
   };
 
@@ -5800,19 +5815,16 @@ bool readZipEntriesByIndexStreaming(
     FileData file;
     if (!readZipEntryByFileIndex(&archive, fileIndex, target.entryPath, file,
                                   errorMessage, pauseCallback, nullptr, maximumBytes)) {
-      mz_zip_reader_end(&archive);
       return false;
     }
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
     notifyStreamingEntryObserverForTesting(archivePath, target.entryPath);
 #endif
     if (!emitFileData(std::move(file), onFile, errorMessage)) {
-      mz_zip_reader_end(&archive);
       return false;
     }
   }
 
-  mz_zip_reader_end(&archive);
   return true;
 }
 
@@ -8701,6 +8713,10 @@ void setStreamingEntryObserverForTesting(
   gStreamingEntryObserver = std::move(observer);
 }
 
+std::uint64_t zipStreamingOpenCountForTesting() {
+  return gZipStreamingOpenCount.load();
+}
+
 void setZipMappingEnabledForTesting(bool enabled) {
   gZipMappingEnabledForTesting.store(enabled, std::memory_order_relaxed);
 }
@@ -9131,11 +9147,15 @@ bool readArchiveEntriesStreaming(
 #endif
 }
 
-bool readArchiveEntriesStreamingBounded(
+static bool readArchiveEntriesStreamingBoundedImpl(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,
     FileDataCallback onFile, std::uint64_t maximumBytes,
-    std::string *errorMessage, PauseCallback pauseCallback) {
+    std::string *errorMessage, PauseCallback pauseCallback
+#if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
+    , ZipStreamingReader *retainedReader = nullptr
+#endif
+    ) {
   if (!onFile) {
     if (errorMessage) *errorMessage = "Archive file consumer is unavailable.";
     return false;
@@ -9168,7 +9188,7 @@ bool readArchiveEntriesStreamingBounded(
   if (index->backend == ArchiveIndexBackend::MinizZip) {
     std::string zipError;
     if (readZipEntriesByIndexStreaming(archivePath, resolved, std::nullopt,
-                                       onFile, &zipError, pauseCallback, limit))
+                                       onFile, &zipError, pauseCallback, limit, retainedReader))
       return reportRead(true, "bounded miniz ZIP");
     if (errorMessage) *errorMessage = zipError;
     if (zipError != "ZIP entry is not supported by direct reader.")
@@ -9199,6 +9219,57 @@ bool readArchiveEntriesStreamingBounded(
 #else
   if (errorMessage) *errorMessage = "Archive format has no bounded streaming reader.";
   return false;
+#endif
+}
+
+bool readArchiveEntriesStreamingBounded(
+    const std::filesystem::path &archivePath,
+    const std::vector<std::filesystem::path> &innerPaths,
+    FileDataCallback onFile, std::uint64_t maximumBytes,
+    std::string *errorMessage, PauseCallback pauseCallback) {
+  return readArchiveEntriesStreamingBoundedImpl(archivePath, innerPaths,
+      std::move(onFile), maximumBytes, errorMessage, std::move(pauseCallback));
+}
+
+struct BoundedArchiveReader::Impl {
+  explicit Impl(std::filesystem::path value) : path(std::move(value)) {}
+  std::filesystem::path path;
+  std::timed_mutex mutex;
+#if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
+  std::shared_ptr<const CachedIndex> index;
+  ZipStreamingReader reader;
+  void reset() {
+    reader.reset();
+    index.reset();
+  }
+#endif
+};
+BoundedArchiveReader::BoundedArchiveReader(std::filesystem::path archivePath)
+    : impl(std::make_unique<Impl>(std::move(archivePath))) {}
+BoundedArchiveReader::~BoundedArchiveReader() = default;
+bool BoundedArchiveReader::read(
+    const std::vector<std::filesystem::path> &innerPaths, FileDataCallback onFile,
+    std::uint64_t maximumBytes, std::string *errorMessage, PauseCallback pauseCallback) {
+  std::unique_lock lock(impl->mutex, std::defer_lock);
+  while (!lock.try_lock_for(std::chrono::milliseconds(10))) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) return false;
+  }
+  if (!pauseIfNeeded(pauseCallback, errorMessage)) return false;
+#if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
+  const auto index = cachedIndexForArchive(impl->path, errorMessage, pauseCallback);
+  if (index != impl->index) {
+    impl->reset();
+    impl->index = index;
+  }
+  if (!index) return false;
+  bool succeeded = false;
+  ScopeExit discardFailedReader([&] { if (!succeeded) impl->reset(); });
+  succeeded = readArchiveEntriesStreamingBoundedImpl(impl->path, innerPaths,
+      std::move(onFile), maximumBytes, errorMessage, std::move(pauseCallback), &impl->reader);
+  return succeeded;
+#else
+  return readArchiveEntriesStreamingBoundedImpl(impl->path, innerPaths, std::move(onFile),
+      maximumBytes, errorMessage, std::move(pauseCallback));
 #endif
 }
 

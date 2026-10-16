@@ -4243,6 +4243,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS=1
     )
     target_link_libraries(archive_file_concurrency_tests PRIVATE ${COMMON_LIBS})
+    add_test(NAME archive_bounded_reader_tests COMMAND archive_file_concurrency_tests --bounded-reader)
     add_test(NAME archive_reference_reader_tests COMMAND archive_file_concurrency_tests --source-reference)
     add_test(NAME archive_unicode_artwork_read_tests COMMAND archive_file_concurrency_tests --unicode-entry read)
     add_test(NAME archive_unicode_artwork_missing_tests COMMAND archive_file_concurrency_tests --unicode-entry missing)

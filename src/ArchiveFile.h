@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <functional>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -156,6 +157,7 @@ void appendDebugLogLine(const std::string &message);
 void setStreamingEntryObserverForTesting(
     StreamingEntryObserverForTesting observer);
 void setZipMappingEnabledForTesting(bool enabled);
+std::uint64_t zipStreamingOpenCountForTesting();
 void resetSingleFlightWaiterCountForTesting();
 std::uint32_t singleFlightWaiterCountForTesting();
 #endif
@@ -194,6 +196,24 @@ bool readArchiveEntriesStreamingBounded(
     FileDataCallback onFile, std::uint64_t maximumBytes,
     std::string *errorMessage = nullptr,
     PauseCallback pauseCallback = nullptr);
+// Worker-owned reader for successive bounded batches from one archive. Keeps
+// ZIP directory state until destruction; source changes invalidate that state.
+// Calls are serialized. Callbacks must not re-enter the same reader.
+class BoundedArchiveReader {
+public:
+  explicit BoundedArchiveReader(std::filesystem::path archivePath);
+  ~BoundedArchiveReader();
+  BoundedArchiveReader(const BoundedArchiveReader &) = delete;
+  BoundedArchiveReader &operator=(const BoundedArchiveReader &) = delete;
+  bool read(const std::vector<std::filesystem::path> &innerPaths,
+            FileDataCallback onFile, std::uint64_t maximumBytes,
+            std::string *errorMessage = nullptr,
+            PauseCallback pauseCallback = nullptr);
+private:
+  struct Impl;
+  std::unique_ptr<Impl> impl;
+};
+
 enum class ConcurrentReadMemoryPolicy {
   Strict,
   AllowSingleOversizedEntry,
