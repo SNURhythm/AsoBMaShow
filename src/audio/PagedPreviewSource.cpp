@@ -9,11 +9,14 @@
 #include "PcmResampler.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <condition_variable>
+#include <cmath>
 #include <limits>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -86,12 +89,13 @@ struct PagedPreviewSource::Impl {
   std::uint64_t timelineFrames44100 = 0;
   std::uint64_t finalOutput = 0; // Worker-owned until durationKnown publication.
   bool begun = false;
+  bool skipLeadingSilence = false;
 
   struct RenderPosition { long long micros; std::uint32_t offset; };
-  RenderPosition renderPosition() const noexcept {
+  RenderPosition renderPosition(std::uint64_t frame) const noexcept {
     // Integer-second epochs preserve scheduler rounding across scratch chunks.
-    return {static_cast<long long>((renderedOutput / outputRate) * 1000000),
-            static_cast<std::uint32_t>(renderedOutput % outputRate)};
+    return {static_cast<long long>((frame / outputRate) * 1000000),
+            static_cast<std::uint32_t>(frame % outputRate)};
   }
   PagedPreviewRenderResult checkRender(std::uint32_t frameCount,
                                        bool includeAllDueSounds) const noexcept {
@@ -104,7 +108,7 @@ struct PagedPreviewSource::Impl {
                                                                   end - renderedOutput));
     }
     if (!frameCount) return {};
-    const auto position = renderPosition();
+    const auto position = renderPosition(renderedOutput);
     if (!playback::ScheduledMixReady(*callback, position.micros, outputRate,
                                      frameCount, 100, position.offset,
                                      includeAllDueSounds)) return {};
@@ -237,6 +241,65 @@ struct PagedPreviewSource::Impl {
     }
   }
 
+  // Worker-only, before startupReady. Rebuilding after the scan retains each
+  // overlapping voice's exact offset and leaves later pauses in the schedule.
+  void prepareSchedule() {
+    playback::ClearCallbackSounds(*callback);
+    for (std::size_t index = 0; index < events.size(); ++index) {
+      const auto &event = events[index];
+      const auto *meta = assets[event.asset].sound->pagedOutput->metadata();
+      const auto skipped = event.outputStart < originOutput ? originOutput - event.outputStart : 0;
+      if (meta && skipped >= meta->frameCount) continue;
+      const auto relative = event.outputStart > originOutput ? event.outputStart - originOutput : 0;
+      const auto micros = nearestFrames(relative, 1000000, outputRate);
+      if (micros > static_cast<std::uint64_t>(std::numeric_limits<long long>::max()))
+        throw std::runtime_error("Preview schedule time is not representable.");
+      auto &scheduled = callback->scheduledSounds[callback->scheduledSoundCount++];
+      scheduled = {.soundData = assets[event.asset].sound.get(), .bus = event.bus,
+                   .startMicros = static_cast<long long>(micros), .sequence = index,
+                   .startFrame = static_cast<std::size_t>(skipped)};
+    }
+    callback->scheduledNonSystemSounds.store(callback->scheduledSoundCount,
+                                             std::memory_order_relaxed);
+  }
+
+  std::optional<std::uint64_t> firstAudibleFrame(std::uint64_t first,
+                                               std::uint64_t end) {
+    std::array<float, 1024 * 2> mixed{};
+    for (auto frame = first; frame < end;) {
+      checkpoint();
+      const auto count = static_cast<std::uint32_t>(std::min<std::uint64_t>(1024, end - frame));
+      const auto position = renderPosition(frame - originOutput);
+      // The mixer admits due voices before retiring finished ones. A scan block
+      // may be larger than a device callback; never let that difference drop a
+      // sound and mistake the whole preview for silence.
+      auto voices = callback->playingSoundCount;
+      for (std::size_t i = 0; i < callback->scheduledSoundCount; ++i) {
+        const auto start = nearestFrames(
+            static_cast<std::uint64_t>(callback->scheduledSounds[i].startMicros),
+            outputRate, 1000000);
+        if (start >= frame - originOutput + count) break;
+        if (++voices > kMaxActiveSounds) return originOutput;
+      }
+      if (!playback::ScheduledMixReady(*callback, position.micros, outputRate,
+                                       count, 100, position.offset, true))
+        throw std::runtime_error("Preview silence scan reached unprepared audio.");
+      auto samples = std::span<float>(mixed).first(count * 2);
+      std::fill(samples.begin(), samples.end(), 0.0f);
+      playback::ActivateScheduledSounds(*callback, position.micros, outputRate,
+                                         count, 100, position.offset);
+      playback::MixActiveSounds(*callback, samples, count, 2,
+                                gains.bgm, gains.keysound, 100);
+      const auto audible = std::find_if(samples.begin(), samples.end(),
+          // Match the player's int16 conversion; cancellation between voices
+          // can leave floating-point residue that produces a zero PCM sample.
+          [](float sample) { return std::abs(sample * 32767.0f) >= 1.0f; });
+      if (audible != samples.end()) return frame + (audible - samples.begin()) / 2;
+      frame += count;
+    }
+    return std::nullopt;
+  }
+
   void run() noexcept {
     try {
       struct ActiveAsset {
@@ -294,6 +357,10 @@ struct PagedPreviewSource::Impl {
       std::vector<std::vector<Range>> ranges(assets.size());
       std::vector<std::size_t> work;
       work.reserve(assets.size());
+      // Until startup publication the worker can borrow the actual mixer to
+      // detect silence, then rebuild it at the first audible frame. No second
+      // mixed-audio cache or audio-callback scanning is needed.
+      if (skipLeadingSilence) prepareSchedule();
       bool initial = true;
       for (;;) {
         checkpoint();
@@ -343,28 +410,29 @@ struct PagedPreviewSource::Impl {
           publishState();
         }
         if (initial) {
-          // Schedule writes end before startupReady's release publication. Later
-          // preparation only touches immutable owners' atomic page slots.
-          for (std::size_t index = 0; index < events.size(); ++index) {
-            const auto &event = events[index];
-            const auto *meta = assets[event.asset].sound->pagedOutput->metadata();
-            const auto skipped = event.outputStart < originOutput ? originOutput - event.outputStart : 0;
-            if (meta && skipped >= meta->frameCount) continue;
-            const auto relative = event.outputStart > originOutput ? event.outputStart - originOutput : 0;
-            const auto micros = nearestFrames(relative, 1000000, outputRate);
-            if (micros > static_cast<std::uint64_t>(std::numeric_limits<long long>::max()))
-              throw std::runtime_error("Preview schedule time is not representable.");
-            auto &scheduled = callback->scheduledSounds[callback->scheduledSoundCount++];
-            scheduled = {.soundData = assets[event.asset].sound.get(), .bus = event.bus,
-                         .startMicros = static_cast<long long>(micros), .sequence = index,
-                         .startFrame = static_cast<std::size_t>(skipped)};
+          const auto audible = skipLeadingSilence
+              ? firstAudibleFrame(windowStart, std::min(windowEnd, finalOutput))
+              : std::optional<std::uint64_t>{originOutput};
+          const bool ended = nextEvent == events.size() && active.empty() &&
+                             windowEnd >= finalOutput;
+          if (audible || ended) {
+            const auto newOrigin = audible.value_or(std::max(originOutput, finalOutput));
+            const auto skipped = newOrigin - originOutput;
+            originOutput = newOrigin;
+            durationOutput.store(finalOutput > originOutput ? finalOutput - originOutput : 0,
+                                  std::memory_order_relaxed);
+            prepareSchedule();
+            {
+              std::lock_guard lock(mutex);
+              state.firstFrame44100 += scaleFrames(skipped, kPreviewSampleRate, outputRate);
+              position44100.store(state.firstFrame44100, std::memory_order_relaxed);
+              state.startupReady = true;
+              ++state.revision;
+            }
+            startupReady.store(true, std::memory_order_release);
+            changed.notify_all();
+            initial = false;
           }
-          callback->scheduledNonSystemSounds.store(callback->scheduledSoundCount,
-                                                    std::memory_order_relaxed);
-          { std::lock_guard lock(mutex); state.startupReady = true; ++state.revision; }
-          startupReady.store(true, std::memory_order_release);
-          changed.notify_all();
-          initial = false;
         }
         if (nextEvent == events.size() && active.empty() && windowEnd >= finalOutput) break;
         windowStart = windowEnd;
@@ -448,13 +516,14 @@ std::shared_ptr<PagedPreviewSource> PagedPreviewSource::Create(
   }
   return std::shared_ptr<PagedPreviewSource>(new PagedPreviewSource(std::move(value)));
 }
-bool PagedPreviewSource::Begin(int actualOutputRate) {
+bool PagedPreviewSource::Begin(int actualOutputRate, bool skipLeadingSilence) {
   if (impl->begun || impl->cancelled.load(std::memory_order_relaxed)) return false;
   impl->begun = true;
   try {
     if (actualOutputRate <= 0 || actualOutputRate > 768000)
       throw std::runtime_error("Preview backend sample rate is invalid.");
     impl->outputRate = actualOutputRate;
+    impl->skipLeadingSilence = skipLeadingSilence;
     impl->originOutput = nearestFrames(impl->state.firstFrame44100,
                                        actualOutputRate, kPreviewSampleRate);
     if (impl->originOutput > std::numeric_limits<std::uint64_t>::max() -
@@ -490,7 +559,7 @@ PagedPreviewRenderResult PagedPreviewSource::Render(std::span<float> stereo,
   const auto ready = impl->checkRender(frameCount, false);
   if (ready.status != PagedPreviewRenderStatus::Data) return ready;
   frameCount = ready.frames;
-  const auto position = impl->renderPosition();
+  const auto position = impl->renderPosition(impl->renderedOutput);
   playback::ActivateScheduledSounds(*impl->callback, position.micros, impl->outputRate,
                                     frameCount, 100, position.offset);
   playback::MixActiveSounds(*impl->callback, stereo, frameCount, 2,

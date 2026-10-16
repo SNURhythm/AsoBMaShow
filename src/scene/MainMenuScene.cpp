@@ -8064,8 +8064,8 @@ void MainMenuScene::updatePreviewVisuals() {
   if (!lock.owns_lock() || !previewVisualsLoaded_) return;
   const auto state = previewPlayer_.GetState();
   if (!state.playing && !state.finished) return;
-  // positionFrames is absolute, including previewStartFrame_, and advances
-  // only when the audio callback consumes source frames (not during underruns).
+  // positionFrames is absolute, including the requested start and skipped
+  // leading silence. After startup it advances only with consumed audio frames.
   const auto frames = state.positionFrames;
   if (previewVisualPositionFrames_ != frames) {
     previewVisualPositionFrames_ = frames;

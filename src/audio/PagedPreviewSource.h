@@ -46,7 +46,9 @@ public:
   PagedPreviewSource &operator=(const PagedPreviewSource &) = delete;
 
   // Call once, after opening the backend, before allowing its callback to run.
-  bool Begin(int actualOutputRate);
+  // Optional leading-silence removal prepares a new absolute starting position
+  // before startupReady; later silence and the complete native cache are kept.
+  bool Begin(int actualOutputRate, bool skipLeadingSilence = false);
   // Read-only full-callback preflight for output split across scratch chunks.
   // Data reports the available request clamped to known EOF; Pending/End do not
   // change mixer state or time. Callback-only, with the same realtime guarantees

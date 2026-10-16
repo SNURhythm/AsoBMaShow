@@ -241,7 +241,7 @@ void testProgressiveStartup(const std::filesystem::path &root) {
   auto source = audio::PagedPreviewSource::Create(*chart(root, "#00011:01\n"), {}, 0);
   preparationBlocked.store(false);
   preparationGate.store(true);
-  require(source->Begin(44100), "cannot begin progressive preview");
+  require(source->Begin(44100, true), "cannot begin progressive preview");
   const auto deadline = std::chrono::steady_clock::now() + 5s;
   while (!preparationBlocked.load() && std::chrono::steady_clock::now() < deadline)
     std::this_thread::yield();
@@ -342,6 +342,103 @@ void testFullCallbackPreflightPreservesScheduledAndActiveVoices(const std::files
   forbidAllocation = false;
   require(ended.status == audio::PagedPreviewRenderStatus::End && !ended.frames,
           "preflight at known EOF must return End without allocation");
+}
+
+void testLeadingSilenceIsSkippedWithoutChangingLaterAudio(const std::filesystem::path &root) {
+  std::vector<short> samples(44100 * 3 * 2, 0);
+  // Only the right channel sounds; keep a deliberate pause after the opening.
+  for (std::size_t frame = 7000; frame < 17000; ++frame) samples[frame * 2 + 1] = 8192;
+  for (std::size_t frame = 27000; frame < 44100 * 3; ++frame) samples[frame * 2 + 1] = 4096;
+  writeWav(root / "first.wav", 44100, samples, 2);
+  writeWav(root / "second.wav", 44100, std::vector<short>(44100, 0));
+  auto parsed = chart(root, "#00001:02\n#00201:01\n");
+  for (const int rate : {44100, 48000}) {
+    for (const std::uint64_t start : {0ULL, 44100ULL * 4 + 3000}) {
+      auto reference = audio::PagedPreviewSource::Create(*parsed, {}, start);
+      require(reference->Begin(rate), "cannot start untrimmed reference");
+      waitPrepared(reference);
+      const auto original = renderAll(reference);
+      const auto first = std::find_if(original.begin(), original.end(),
+                                      [](float sample) { return sample != 0.0f; });
+      require(first != original.end(), "silence fixture must contain audible audio");
+      const auto skipped = static_cast<std::uint64_t>((first - original.begin()) / 2);
+      auto cache = std::make_shared<audio::DecodedAssetCache>(root / "cache",
+          audio::DecodedAssetCache::kUnlimitedRetainedBytes);
+      auto trimmed = audio::PagedPreviewSource::Create(*parsed, cache, start);
+      require(trimmed->Begin(rate, true), "cannot start silence-skipping preview");
+      waitPrepared(trimmed);
+      const auto ready = trimmed->GetState();
+      const auto expectedStart = start + skipped * 44100 / rate;
+      require(ready.firstFrame44100 == expectedStart &&
+                  ready.positionFrames44100 == expectedStart,
+              "preview clock must jump over timeline gaps and silent PCM at startup");
+      const auto audible = renderAll(trimmed);
+      require(audible.size() == original.size() - skipped * 2,
+              "skip only the leading frames, keeping later pauses and the ending");
+      require(std::equal(audible.begin(), audible.end(), original.begin() + skipped * 2),
+              "trimmed preview must preserve every sample from its first audible frame");
+      const auto before = cache->GetStatistics();
+      std::atomic_bool cancelled{false};
+      std::vector<short> native;
+      SF_INFO info{};
+      require(cache->Materialize(root / "first.wav", native, info, cancelled) &&
+                  native.size() == samples.size() &&
+                  cache->GetStatistics().decodedFrames == before.decodedFrames,
+              "skipping preview silence must retain the full native audio for gameplay");
+    }
+  }
+}
+
+void testSilenceDetectionUsesTheMixedAudio(const std::filesystem::path &root) {
+  writeWav(root / "first.wav", 44100, std::vector<short>(44100 * 2, 8192));
+  writeWav(root / "second.wav", 44100, std::vector<short>(44100, -8192));
+  auto source = audio::PagedPreviewSource::Create(
+      *chart(root, "#00001:01\n#00011:02\n"), {}, 0);
+  require(source->Begin(44100, true), "cannot start cancelling-voices preview");
+  waitPrepared(source);
+  require(source->GetState().firstFrame44100 == 44100,
+          "overlapping voices that cancel to silence must not end the leading scan");
+  const auto audible = renderAll(source);
+  require(audible.size() == 44100 * 2 && audible.front() != 0.0f,
+          "skip the cancelled mix and retain the earlier sound's audible tail");
+  auto muted = audio::PagedPreviewSource::Create(
+      *chart(root, "#00001:01\n#00111:02\n"), {}, 0, {0.0f, 1.0f});
+  require(muted->Begin(44100, true), "cannot start muted-opening preview");
+  waitPrepared(muted);
+  require(muted->GetState().firstFrame44100 == 44100 * 2,
+          "a muted BGM must not delay the first audible keysound");
+}
+
+void testSilenceScanNeverDropsAnAudibleVoice(const std::filesystem::path &root) {
+  writeWav(root / "first.wav", 44100, std::vector<short>(256, 0));
+  writeWav(root / "second.wav", 44100, std::vector<short>(44100, 8192));
+  std::string body;
+  for (std::size_t i = 0; i < kMaxActiveSounds; ++i) body += "#00001:01\n";
+  body += "#00111:02\n";
+  auto parsed = chart(root, body);
+  for (auto *measure : parsed->Measures)
+    for (auto *timeline : measure->TimeLines)
+      for (const auto *note : timeline->Notes)
+        if (note && note->Wav == 2) timeline->Timing = 11610; // output frame 512
+  auto source = audio::PagedPreviewSource::Create(*parsed, {}, 0);
+  require(source->Begin(44100, true), "cannot begin dense silence scan");
+  waitPrepared(source);
+  require(source->GetState().firstFrame44100 == 0,
+          "a potentially saturated scan must preserve the original origin");
+  std::vector<float> block(512 * 2);
+  require(source->Render(block, 512).frames == 512,
+          "dense preview must preserve its opening instead of incorrectly ending");
+  require(source->Render(block, 512).frames == 512 && block.front() != 0.0f,
+          "audible voice after short silent voices must survive preview preparation");
+}
+
+void testEntirelySilentPreviewReachesEnd(const std::filesystem::path &root) {
+  writeWav(root / "first.wav", 44100, std::vector<short>(44100, 0));
+  auto source = audio::PagedPreviewSource::Create(*chart(root, "#00101:01\n"), {}, 0);
+  require(source->Begin(44100, true), "cannot start silent preview");
+  waitPrepared(source);
+  require(source->GetState().startupReady, "silent preview must finish startup");
+  require(renderAll(source).empty(), "an entirely silent preview must reach EOF without playing silence");
 }
 
 void testMissingAndExpired(const std::filesystem::path &root) {
@@ -523,7 +620,7 @@ void testPreparationExitReleasesDecoderPins(const std::filesystem::path &root) {
     auto source = audio::PagedPreviewSource::Create(*chart(root, "#00011:01\n"), cache, 0);
     preparationBlocked.store(false);
     preparationGate.store(true);
-    require(source->Begin(44100), "cannot begin pin cleanup preview");
+    require(source->Begin(44100, true), "cannot begin pin cleanup preview");
     const auto deadline = std::chrono::steady_clock::now() + 5s;
     while (!preparationBlocked.load() && std::chrono::steady_clock::now() < deadline)
       std::this_thread::yield();
@@ -592,7 +689,11 @@ int main() {
   const auto root = std::filesystem::temp_directory_path() /
       ("asobmashow-paged-source-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
   try {
-    for (const char *name : {"highlight", "resampling", "missing", "progressive", "timing", "downsampling", "preflight", "archive", "overlap", "pressure", "pin-exit", "repeated-pin", "parallel"}) std::filesystem::create_directories(root / name);
+    for (const char *name : {"highlight", "resampling", "missing", "progressive", "timing", "downsampling", "preflight", "archive", "overlap", "pressure", "pin-exit", "repeated-pin", "parallel", "trim", "silent", "mixed-trim", "dense-trim"}) std::filesystem::create_directories(root / name);
+    testLeadingSilenceIsSkippedWithoutChangingLaterAudio(root / "trim");
+    testEntirelySilentPreviewReachesEnd(root / "silent");
+    testSilenceScanNeverDropsAnAudibleVoice(root / "dense-trim");
+    testSilenceDetectionUsesTheMixedAudio(root / "mixed-trim");
     testIndependentAssetsPrepareConcurrently(root / "parallel");
     testHighlightAndReuse(root / "highlight");
     testResampling(root / "resampling");

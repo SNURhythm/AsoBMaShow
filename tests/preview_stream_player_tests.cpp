@@ -38,6 +38,7 @@ struct SourceControl {
   std::atomic<std::uint32_t> maximumRenderFrames{0};
   std::atomic_bool blockRender{false}, renderEntered{false}, sourceDestroyed{false};
   bool failBegin = false;
+  bool skippingLeadingSilence = false;
   std::string error;
   void changedState() { ++revision; changed.notify_all(); }
   void publish(std::size_t frames, bool final = false) {
@@ -169,6 +170,7 @@ void testStartupUsesActualBackendRateAndDoesNotMixBeforeCallback() {
     assert(player.Start(source(input), error));
     waitFor([&] { return input->beginRate.load() != 0 && input->waits.load() != 0; });
     assert(input->beginRate == rate && backend->request.deviceId == "selected-device");
+    assert(input->skippingLeadingSilence);
     assert(backend->request.sampleRate == 96000 && backend->request.bufferFrames == 512);
     assert(!backend->started && input->renderCalls == 0);
     assert(player.GetState().buffering && player.GetState().positionFrames == input->first);
@@ -447,8 +449,9 @@ std::shared_ptr<PagedPreviewSource> PagedPreviewSource::Create(const bms_parser:
   auto value = std::make_unique<Impl>(); value->control = nextSource;
   return std::shared_ptr<PagedPreviewSource>(new PagedPreviewSource(std::move(value)));
 }
-bool PagedPreviewSource::Begin(int rate) {
+bool PagedPreviewSource::Begin(int rate, bool skipLeadingSilence) {
   assert(!inCallback); impl->control->beginRate = rate;
+  impl->control->skippingLeadingSilence = skipLeadingSilence;
   if (impl->control->failBegin) { impl->control->fail("injected Begin failure"); return false; }
   return true;
 }
