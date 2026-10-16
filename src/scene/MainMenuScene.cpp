@@ -4742,10 +4742,6 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
       .percent = context.settings.selectedPlaybackRatePercent,
       .mode = context.settings.selectedPlaybackMode,
   };
-  const std::string normalizedPlayOption =
-      play_options::normalizePlayOption(playOption);
-  const bool canReusePreviewForStart =
-      normalizedPlayOption.empty() || normalizedPlayOption == "NORMAL";
   const SelectedChartRandomInfo chartRandomInfo =
       selectedChartRandomInfoForPath(record.meta.BmsPath);
   std::string tableName;
@@ -4771,7 +4767,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
       [this, record, gaugeType, gaugeAutoShift, gaugeAutoShiftLowerBound,
        ruleset, autoKeySound, playOption, selectedLongNoteMode, assistOption,
        pacemakerTarget, playback,
-       canReusePreviewForStart, chartRandomInfo, tableName = std::move(tableName),
+       chartRandomInfo, tableName = std::move(tableName),
        tableLevel = std::move(tableLevel)]() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
         if (context.gameplaySkinLifecycle &&
@@ -4783,11 +4779,6 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           resetStartLoadingUi();
           return true;
         };
-        if (!canReusePreviewForStart) {
-          if (previewWorker_ != nullptr) {
-            previewWorker_->cancel();
-          }
-        }
         if (previewWorker_ != nullptr) {
           previewWorker_->stop();
         }
@@ -4797,27 +4788,30 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           jukebox->setDecodedAssetCache(nullptr);
           if (selectedChartMediaReady.load()) previewDecodedAssets_.reset();
         });
-        bms_parser::Chart *readyChart = nullptr;
-        if (canReusePreviewForStart) {
-          readyChart = loadedSelectedChartForPath(record.meta.BmsPath);
-          if (readyChart == nullptr) {
-            auto *parsedChart = parsedSelectedChartForPath(record.meta.BmsPath);
-            if (parsedChart != nullptr) {
-              std::atomic_bool prepareCancelled = false;
-              const auto loaded = context.jukebox.loadChart(*parsedChart, true, prepareCancelled);
-              if (!loaded.success || prepareCancelled) {
-                SDL_Log("Preview gameplay preparation failed: %s", loaded.diagnostic.c_str());
-                return finishStart();
-              }
-              selectedChartMediaReady.store(true);
-              readyChart = parsedChart;
+        auto *readyChart = loadedSelectedChartForPath(record.meta.BmsPath);
+        if (readyChart == nullptr) {
+          auto *parsedChart = parsedSelectedChartForPath(record.meta.BmsPath);
+          if (parsedChart != nullptr) {
+            std::atomic_bool prepareCancelled = false;
+            const auto loaded = context.jukebox.loadChart(*parsedChart, true, prepareCancelled);
+            if (!loaded.success || prepareCancelled) {
+              SDL_Log("Preview gameplay preparation failed: %s", loaded.diagnostic.c_str());
+              return finishStart();
             }
+            selectedChartMediaReady.store(true);
+            readyChart = parsedChart;
           }
         }
         if (readyChart != nullptr) {
           archive_file::appendDebugLogLine(
               "Start reusing loaded preview chart: " +
               fspath_to_utf8(record.meta.BmsPath));
+          // Preview already chose BMS #RANDOM branches and loaded their assets.
+          // Lane modifiers reuse those resources, but still roll at Play time.
+          // Consume the pristine chart before any modifier can mutate it.
+          selectedChartReusableForStart.store(false);
+          const auto playInfo =
+              play_options::applySelectedPlayOptions(*readyChart, playOption);
           applyEffectiveLongNoteModeToChart(*readyChart,
                                             selectedLongNoteMode);
           context.jukebox.stop();
@@ -4830,6 +4824,10 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                     .gaugeAutoShift = gaugeAutoShift,
                                     .gaugeAutoShiftLowerBound =
                                         gaugeAutoShiftLowerBound,
+                                    .playOption = playInfo.option,
+                                    .playOptionSeed = playInfo.seed,
+                                    .playOption2 = playInfo.option2,
+                                    .playOption2Seed = playInfo.seed2,
                                     .longNoteMode = selectedLongNoteMode,
                                     .assistOption = assistOption,
                                     .pacemakerTarget = pacemakerTarget,

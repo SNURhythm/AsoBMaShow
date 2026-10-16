@@ -54,6 +54,22 @@ class MainMenuPreviewLifecycleTests(unittest.TestCase):
                         self.assertTrue(any(flag.startswith("/Fe") and flag.endswith(".exe")
                                             for flag in link))
 
+    def test_play_reuses_preview_resources_for_lane_modifiers(self):
+        source = (ROOT / "src/scene/MainMenuScene.cpp").read_text()
+        fixture = (ROOT / "tests/main_menu_preview_start_fixture.cpp").read_text()
+        fixture = fixture.replace("START_METHOD", callback_body(
+            source, "void MainMenuScene::startChartDirect(const ChartMetaRecord &record)"))
+        compiler = FixtureCompiler.from_environment()
+        with tempfile.TemporaryDirectory() as directory:
+            program = Path(directory) / "start.cpp"
+            executable = Path(directory) / ("start" + compiler.executable_suffix)
+            program.write_text(fixture)
+            compiler.build([str(program)], executable, directory, standard=23,
+                           includes=[ROOT / "src"])
+            result = subprocess.run([str(executable)], cwd=directory, capture_output=True,
+                                    text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_progressive_preview_prepares_and_retires_visuals(self):
         source = (ROOT / "src/scene/MainMenuScene.cpp").read_text()
         fixture = (ROOT / "tests/main_menu_preview_visuals_fixture.cpp").read_text()

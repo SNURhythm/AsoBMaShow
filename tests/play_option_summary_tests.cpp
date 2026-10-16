@@ -6,6 +6,7 @@
 #include <iostream>
 #include <atomic>
 #include <memory>
+#include <tuple>
 
 void testLaneOrders() {
   bms_parser::ChartMeta single;
@@ -78,7 +79,56 @@ void testDemotedNotesFollowModifiedActiveLane() {
   }
 }
 
+void testPreviewBranchesAndResourcesSurviveLaneModifiers() {
+  const std::string input =
+      "#BPM 120\n#RANDOM 2\n"
+      "#IF 1\n#WAV01 first.wav\n#BMP01 first.bmp\n#00011:01\n#00004:01\n#ENDIF\n"
+      "#IF 2\n#WAV02 second.wav\n#BMP02 second.bmp\n#00011:02\n#00019:0002\n#00004:02\n#ENDIF\n"
+      "#ENDRANDOM\n";
+  const std::vector<unsigned char> bytes(input.begin(), input.end());
+  auto parsePreview = [&] {
+    bms_parser::Parser parser;
+    parser.SetRandomValues({2});
+    bms_parser::Chart *raw = nullptr;
+    std::atomic_bool cancelled = false;
+    parser.Parse(bytes, &raw, false, false, cancelled);
+    return std::unique_ptr<bms_parser::Chart>(raw);
+  };
+  auto pattern = [](const bms_parser::Chart &chart) {
+    std::vector<std::tuple<long long, int, int>> notes;
+    for (const auto *measure : chart.Measures)
+      for (const auto *timeline : measure->TimeLines)
+        for (const auto *note : timeline->Notes)
+          if (note) notes.emplace_back(timeline->Timing, note->Lane, note->Wav);
+    return notes;
+  };
+  for (const std::string option : {"MIRROR", "RANDOM", "R-RANDOM", "S-RANDOM"}) {
+    auto preview = parsePreview();
+    assert(preview && preview->Meta.RandomValues == std::vector<int>{2});
+    assert(preview->ReferencedWavTable.size() == 1 && preview->ReferencedWavTable.at(2) == "second.wav");
+    assert(preview->ReferencedBmpTable.size() == 1 && preview->ReferencedBmpTable.at(2) == "second.bmp");
+    const auto sounds = preview->ReferencedWavTable;
+    const auto visuals = preview->ReferencedBmpTable;
+    const auto info = play_options::applySelectedPlayOptions(*preview, option);
+    assert(info.option == option);
+    assert(info.seed.has_value() == (option != "MIRROR"));
+    assert(preview->Meta.RandomValues == std::vector<int>{2});
+    assert(preview->ReferencedWavTable == sounds && preview->ReferencedBmpTable == visuals);
+    assert(pattern(*preview).size() == 2);
+    if (option == "MIRROR") assert(std::get<1>(pattern(*preview).front()) == 6);
+
+    // Replay must reproduce the same lanes from the captured Play-time seed.
+    auto replay = parsePreview();
+    std::optional<std::string> replayOption;
+    std::optional<long long> replaySeed;
+    assert(play_options::applyPlayOptionModifier(*replay, option, info.seed, 0,
+                                                replayOption, replaySeed));
+    assert(pattern(*replay) == pattern(*preview));
+  }
+}
+
 int main() {
+  testPreviewBranchesAndResourcesSurviveLaneModifiers();
   testDemotedNotesFollowModifiedActiveLane();
   for (int keyMode : {7, 14}) {
     bms_parser::ChartMeta meta;
