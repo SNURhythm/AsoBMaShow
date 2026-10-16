@@ -34,8 +34,10 @@ ProjectedResampledPcmSampleCount(std::size_t sourceSamples, int channels,
 bool ResampledPcmFitsSampleBudget(std::size_t sourceSamples, int channels,
                                   int sourceRate, int targetRate,
                                   std::size_t maximumCombinedSamples) noexcept;
+// Cancellation discards the output; no partial PCM is returned.
 std::vector<short> ResamplePcm(std::span<const short> source, int channels,
-                               int sourceRate, int targetRate);
+                               int sourceRate, int targetRate,
+                               const std::atomic_bool *cancelled = nullptr);
 
 } // namespace audio
 

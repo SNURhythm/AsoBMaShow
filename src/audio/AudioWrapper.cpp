@@ -1046,7 +1046,7 @@ bool AudioWrapper::loadDecodedSound(const path_t &path,
                    targetSampleRate, sampleRate);
 
     soundData->outputData = audio::ResamplePcm(soundData->sourceData, channels,
-                                               sampleRate, targetSampleRate);
+                                               sampleRate, targetSampleRate, &isCancelled);
     if ((!soundData->sourceData.empty() && soundData->outputData.empty()) ||
         isCancelled) {
       return false;

@@ -160,7 +160,7 @@ struct PagedPreviewSource::Impl {
           *outputSamples > DecodedAssetCache::kMaximumPcmAssetBytes / sizeof(short))
         throw std::runtime_error("Preview resampled audio exceeds the per-asset byte limit.");
       auto output = ResamplePcm(native->pcm, native->info.channels,
-                                native->info.samplerate, outputRate);
+                                native->info.samplerate, outputRate, &cancelled);
       checkpoint();
       if ((!native->pcm.empty() && output.empty()) ||
           !outputSound.publishFull(native->info.channels, std::move(output)))

@@ -240,11 +240,13 @@ bool ResampledPcmFitsSampleBudget(
 }
 
 std::vector<short> ResamplePcm(std::span<const short> source, int channels,
-                               int sourceRate, int targetRate) {
+                               int sourceRate, int targetRate,
+                               const std::atomic_bool *cancelled) {
   const auto projectedSamples = ProjectedResampledPcmSampleCount(
       source.size(), channels, sourceRate, targetRate);
   if (!projectedSamples || source.empty()) return {};
-  if (sourceRate == targetRate) return {source.begin(), source.end()};
+  if (cancelled && cancelled->load(std::memory_order_relaxed)) return {};
+  if (sourceRate == targetRate && !cancelled) return {source.begin(), source.end()};
 
   const size_t channelCount = static_cast<size_t>(channels);
   const size_t sourceFrames = source.size() / channelCount;
@@ -253,14 +255,27 @@ std::vector<short> ResamplePcm(std::span<const short> source, int channels,
 
   pcm_resampling::Cursor cursor(
       pcm_resampling::Ratio(sourceRate, targetRate), sourceFrames);
-  for (size_t targetFrame = 0; targetFrame < targetFrames; ++targetFrame) {
-    const size_t leftIndex = cursor.left() * channelCount;
-    const size_t rightIndex = cursor.right() * channelCount;
-    for (size_t channel = 0; channel < channelCount; ++channel) {
-      output[targetFrame * channelCount + channel] = cursor.interpolate(
-          source[leftIndex + channel], source[rightIndex + channel]);
+  for (size_t targetFrame = 0; targetFrame < targetFrames;) {
+    // Whole-asset preview preparation must remain interruptible, including
+    // cancellation while allocating its output and same-rate PCM copies.
+    if (cancelled && cancelled->load(std::memory_order_relaxed)) return {};
+    const size_t chunkFrames = std::min<size_t>(4096, targetFrames - targetFrame);
+    const size_t chunkEnd = targetFrame + chunkFrames;
+    if (sourceRate == targetRate) {
+      const size_t offset = targetFrame * channelCount;
+      std::copy_n(source.data() + offset, chunkFrames * channelCount, output.data() + offset);
+      targetFrame = chunkEnd;
+      continue;
     }
-    cursor.advance();
+    for (; targetFrame < chunkEnd; ++targetFrame) {
+      const size_t leftIndex = cursor.left() * channelCount;
+      const size_t rightIndex = cursor.right() * channelCount;
+      for (size_t channel = 0; channel < channelCount; ++channel) {
+        output[targetFrame * channelCount + channel] = cursor.interpolate(
+            source[leftIndex + channel], source[rightIndex + channel]);
+      }
+      cursor.advance();
+    }
   }
 
   return output;

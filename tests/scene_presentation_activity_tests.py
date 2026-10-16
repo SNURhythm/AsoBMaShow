@@ -122,6 +122,191 @@ int main() {
 }
 '''.replace("FILL_METHOD", method))
 
+    def test_paused_gameplay_native_configuration_changes_wake_drawing(self):
+        source = (ROOT / "src/scene/play/GamePlayScene.cpp").read_text()
+        methods = extract(source,
+                          "bool GamePlayScene::needsContinuousPresentation() const")
+        methods += "\n" + extract(source,
+                                  "void GamePlayScene::refreshRuntimePresentationConfiguration()")
+        self.compile_and_run('''
+#include "ui/PresentationSchedule.h"
+#include <cassert>
+enum class PresentationMode { BuiltIn, Skin };
+struct Configuration {
+  int visibleTimeDurationMilliseconds = 1000, notesDisplayTimingMilliseconds = 0;
+  float configuredHispeed = 1, hispeedMultiplier = 1, laneCoverHispeedFactor = 1;
+  bool laneCoverEnabled = true, liftEnabled = false, hiddenEnabled = false;
+  float noteStartPositionPercent = 0, liftRatio = 0, hiddenRatio = 0;
+};
+struct Store {
+  Configuration applied;
+  int calls = 0;
+  void setConfiguration(const Configuration &value) { applied = value; ++calls; }
+};
+struct Presentation {
+  Configuration applied;
+  int calls = 0;
+  PresentationMode activeMode() const { return PresentationMode::BuiltIn; }
+  void configure(const Configuration &value) { applied = value; ++calls; }
+};
+struct Hispeed {
+  float value = 4;
+  float hispeed() const { return value; }
+};
+struct GamePlayScene {
+  bool playbackInitializationFailed = false, guidedAccessReminderPending = false;
+  bool practiceMenuActive = false, coursePauseHoldActive = false, coursePauseHoldRewinding = false;
+  long long practiceMenuStartPressedMicros = 0;
+  struct State {} ownedState;
+  State *state = &ownedState;
+  struct {
+    struct {
+      bool isPaused() const { return true; }
+      bool hasActiveVideoVisuals() const { return false; }
+    } jukebox;
+    struct { int notesDisplayTimingMilliseconds = 0; } settings;
+  } context;
+  Store store;
+  Store *playfieldVisualStateStore = &store;
+  Presentation builtIn;
+  Presentation *presentation = &builtIn;
+  Hispeed speed;
+  Hispeed *playfieldHispeedState = &speed;
+  Configuration playfieldPresentationConfiguration;
+  bool playfieldLaneCoverEnabled = true, playfieldLiftEnabled = false, playfieldHiddenEnabled = false;
+  float playfieldLaneCoverPercent = 0, playfieldLiftRatio = 0, playfieldHiddenRatio = 0;
+  int duration = 1000;
+  int effectiveVisibleTimeDurationMilliseconds() const { return duration; }
+  bool needsContinuousPresentation() const;
+  void refreshRuntimePresentationConfiguration();
+};
+GAMEPLAY_METHODS
+int main() {
+  GamePlayScene scene;
+  ui::PresentationSchedule schedule;
+  auto settle = [&] { schedule.didPresent(ui::revisions(), {}, 0); };
+  settle();
+  assert(!scene.needsContinuousPresentation());
+  scene.playfieldVisualStateStore = nullptr;
+  scene.refreshRuntimePresentationConfiguration();
+  assert(!schedule.shouldRender(1, scene.needsContinuousPresentation()));
+  scene.playfieldVisualStateStore = &scene.store;
+
+  // Native lane-cover commands remain delivered during pause, without an SDL
+  // event. The real refresh publishes the cover to both playfield consumers.
+  scene.playfieldLaneCoverPercent = 40;
+  scene.refreshRuntimePresentationConfiguration();
+  assert(scene.store.calls == 1 && scene.builtIn.calls == 1);
+  assert(scene.store.applied.noteStartPositionPercent == 40);
+  assert(scene.builtIn.applied.noteStartPositionPercent == 40);
+  assert(schedule.shouldRender(1, scene.needsContinuousPresentation()) &&
+         "native lane-cover changes must wake a paused built-in playfield");
+
+  settle();
+  scene.speed.value = 6;
+  scene.duration = 800;
+  scene.refreshRuntimePresentationConfiguration();
+  assert(scene.store.applied.configuredHispeed == 6);
+  assert(scene.builtIn.applied.visibleTimeDurationMilliseconds == 800);
+  assert(schedule.shouldRender(1, scene.needsContinuousPresentation()) &&
+         "native speed changes must wake a paused built-in playfield");
+}
+'''.replace("GAMEPLAY_METHODS", methods))
+
+    def test_paused_preview_native_lane_events_wake_drawing(self):
+        scene_source = (ROOT / "src/scene/SettingsScene.cpp").read_text()
+        preview_source = (ROOT / "src/scene/SettingsScenePreview.cpp").read_text()
+        methods = extract(scene_source,
+                          "bool SettingsScene::needsContinuousPresentation() const")
+        methods += "\n" + extract(preview_source,
+                                  "void SettingsScene::consumePreviewTransactions(")
+        # MIDI/gyroscope events reach this owner-thread consumer through the
+        # input registry, without main.cpp's SDL event invalidation. Empty lane
+        # hits update only playfield state, with no judgement TextView mutation.
+        self.compile_and_run('''
+#include "ui/PresentationSchedule.h"
+#include <array>
+#include <cassert>
+#include <cstddef>
+#include <span>
+enum class PresentationMode { BuiltIn, Skin };
+struct Presentation {
+  PresentationMode activeMode() const { return PresentationMode::BuiltIn; }
+};
+namespace gameplay {
+enum class LaneVisualAction { Press, Release };
+enum class NoteKind { LongTail };
+enum class LongNoteRule { Classic };
+struct GameplayInputResult {
+  std::size_t noteId = 0;
+  bool hasJudge = false, hasReplayEvent = false, hasLaneVisual = false;
+  int judge = 0;
+  struct { int action = 0, lane = 0; long long songTimeMicros = 0; } replayEvent;
+  struct {
+    LaneVisualAction action = LaneVisualAction::Press;
+    int lane = 0, judge = 0;
+    long long visualTimeMicros = 0;
+  } laneVisual;
+};
+}
+namespace judgement_indicator {
+bool recordsInputTiming(int, bool) { return false; }
+}
+int makePlayfieldJudgeEventClock(long long, int, int) { return 0; }
+struct Definition {
+  struct Note {
+    gameplay::NoteKind kind = gameplay::NoteKind::LongTail;
+    gameplay::LongNoteRule longNoteRule = gameplay::LongNoteRule::Classic;
+  } value;
+  std::size_t noteCount() const { return 0; }
+  const Note &note(std::size_t) const { return value; }
+};
+struct Events {
+  bool pressed = false;
+  void onLanePressed(int, int, long long) { pressed = true; }
+  void onLaneReleased(int, long long) { pressed = false; }
+  void onTimingSample(int, int) {}
+};
+struct SettingsScene {
+  bool previewActive = true, previewPaused = true, previewRendererDirty = false;
+  Presentation presentation;
+  Presentation *previewPresentation = &presentation;
+  Definition *previewDefinition = nullptr;
+  Events events;
+  Events *previewPresentationEvents = &events;
+  long long previewElapsedMicros = 0;
+  void publishPreviewJudgement(int, long long, int) {
+    assert(false && "empty lane input must not rely on judgement label updates");
+  }
+  bool needsContinuousPresentation() const;
+  void consumePreviewTransactions(std::span<const gameplay::GameplayInputResult>);
+};
+PREVIEW_METHODS
+int main() {
+  SettingsScene scene;
+  ui::PresentationSchedule schedule;
+  auto settle = [&] { schedule.didPresent(ui::revisions(), {}, 0); };
+  settle();
+  assert(!scene.needsContinuousPresentation());
+  scene.consumePreviewTransactions({});
+  assert(!schedule.shouldRender(1, scene.needsContinuousPresentation()));
+
+  std::array<gameplay::GameplayInputResult, 1> transactions{};
+  transactions[0].hasLaneVisual = true;
+  scene.consumePreviewTransactions(transactions);
+  assert(scene.events.pressed);
+  assert(schedule.shouldRender(1, scene.needsContinuousPresentation()) &&
+         "native lane press must wake a paused preview before maintenance");
+
+  settle();
+  transactions[0].laneVisual.action = gameplay::LaneVisualAction::Release;
+  scene.consumePreviewTransactions(transactions);
+  assert(!scene.events.pressed);
+  assert(schedule.shouldRender(1, scene.needsContinuousPresentation()) &&
+         "native lane release must clear a paused preview promptly");
+}
+'''.replace("PREVIEW_METHODS", methods))
+
 
 if __name__ == "__main__":
     unittest.main()

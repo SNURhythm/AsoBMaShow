@@ -4925,6 +4925,8 @@ void GamePlayScene::refreshRuntimePresentationConfiguration() {
   if (playfieldVisualStateStore == nullptr || presentation == nullptr) {
     return;
   }
+  // Native controls can change the custom playfield while ordinary pause idles.
+  ui::invalidate();
   playfieldPresentationConfiguration.visibleTimeDurationMilliseconds =
       effectiveVisibleTimeDurationMilliseconds();
   playfieldPresentationConfiguration.configuredHispeed =
@@ -5447,6 +5449,7 @@ void GamePlayScene::applyLoadedBestReplay(const ReplayData &loaded) {
     // ghost BMSPlayer supplies to ScoreDataProperty during gameplay.
     activeBestScoreTarget =
         pacemaker::targetFromBestSnapshot(*chart, *activePacemakerBest, &loaded);
+    ui::invalidate();
   }
 }
 

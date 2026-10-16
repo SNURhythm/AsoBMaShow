@@ -713,6 +713,8 @@ void SettingsScene::consumePreviewTransactions(
     std::span<const gameplay::GameplayInputResult> transactions) {
   for (const auto &transaction : transactions) {
     if (transaction.hasLaneVisual && previewPresentationEvents) {
+      // Native MIDI/gyroscope input does not pass through SDL event invalidation.
+      ui::invalidate();
       const auto &event = transaction.laneVisual;
       if (event.action == gameplay::LaneVisualAction::Press)
         previewPresentationEvents->onLanePressed(event.lane, event.judge, event.visualTimeMicros);

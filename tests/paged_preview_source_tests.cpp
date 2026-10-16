@@ -25,6 +25,7 @@
 namespace {
 thread_local bool forbidAllocation = false;
 thread_local bool bypassPreparationGate = false;
+thread_local std::atomic_bool *cancelResamplingOnAllocation = nullptr;
 std::atomic_bool preparationGate{false};
 std::atomic_bool preparationBlocked{false};
 std::atomic_uint blockedPreparations{0};
@@ -33,6 +34,10 @@ std::atomic_uint largeAllocationAttempts{0};
 }
 void *operator new(std::size_t bytes) {
   if (forbidAllocation) throw std::bad_alloc();
+  if (cancelResamplingOnAllocation) {
+    cancelResamplingOnAllocation->store(true);
+    cancelResamplingOnAllocation = nullptr;
+  }
   if (bytes > 256U * 1024U * 1024U && rejectLargeAllocations.load()) {
     ++largeAllocationAttempts;
     throw std::bad_alloc();
@@ -201,6 +206,28 @@ void testResamplingRejectsOversizedOutputBeforeAllocation(const std::filesystem:
             "oversized resampled PCM must be rejected before requesting its allocation");
     require(!state.error.empty() && !state.preparationComplete,
             "oversized resampling must report a preparation error");
+  }
+}
+void testCancellationInterruptsResampling() {
+  std::vector<short> native(16384 * 2);
+  for (std::size_t i = 0; i < native.size(); ++i) native[i] = static_cast<short>(int(i) - 16384);
+  for (const int rate : {32000, 48000, 16000}) {
+    std::atomic_bool cancelled{false};
+    require(audio::ResamplePcm(native, 2, 32000, rate, &cancelled) ==
+                audio::ResamplePcm(native, 2, 32000, rate),
+            "cancellable resampling must preserve uncancelled PCM exactly");
+    // Cancel during the output allocation, after the entry checkpoint. This
+    // deterministically exercises cancellation during conversion without a
+    // large fixture or a CPU-speed-dependent deadline.
+    cancelResamplingOnAllocation = &cancelled;
+    const auto clearHook = makeScopeExit([&] { cancelResamplingOnAllocation = nullptr; });
+    const auto output = audio::ResamplePcm(native, 2, 32000, rate, &cancelled);
+    require(cancelled && output.empty(),
+            "resampling must discard work cancelled during its output allocation");
+    forbidAllocation = true;
+    const auto alreadyCancelled = audio::ResamplePcm(native, 2, 32000, rate, &cancelled);
+    forbidAllocation = false;
+    require(alreadyCancelled.empty(), "pre-cancelled resampling must not allocate output");
   }
 }
 void testDownsamplingWarmsEveryNativePage(const std::filesystem::path &root) {
@@ -914,6 +941,7 @@ int main() {
     testIndependentAssetsPrepareConcurrently(root / "parallel");
     testHighlightAndReuse(root / "highlight");
     testResamplingRejectsOversizedOutputBeforeAllocation(root / "resampling");
+    testCancellationInterruptsResampling();
     testResampling(root / "resampling");
     testDownsamplingWarmsEveryNativePage(root / "downsampling");
     testMissingAndExpired(root / "missing");
