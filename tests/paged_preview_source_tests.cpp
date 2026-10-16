@@ -534,6 +534,40 @@ void testSilenceScanNeverDropsAnAudibleVoice(const std::filesystem::path &root) 
           "audible voice after short silent voices must survive preview preparation");
 }
 
+void testSparseLeadingSilenceSkipsEmptyTime(const std::filesystem::path &root) {
+  constexpr long long distantMicros = 10LL * 365 * 24 * 60 * 60 * 1'000'000;
+  constexpr std::uint64_t distantFrames = 10ULL * 365 * 24 * 60 * 60 * 44100;
+  writeWav(root / "first.wav", 44100, std::vector<short>(64, 0));
+  writeWav(root / "second.wav", 44100, std::vector<short>(64, 8192));
+  for (int scenario = 0; scenario < 3; ++scenario) {
+    auto parsed = chart(root, scenario == 0 ? "#00011:02\n" :
+                              scenario == 1 ? "#00011:01\n#00111:02\n" : "");
+    parsed->Meta.TotalLength = distantMicros;
+    for (auto *measure : parsed->Measures)
+      for (auto *timeline : measure->TimeLines)
+        for (const auto *note : timeline->Notes)
+          if (note && note->Wav == 2) timeline->Timing = distantMicros;
+    auto source = audio::PagedPreviewSource::Create(*parsed, {}, 0);
+    require(source->Begin(44100, true), "cannot begin sparse preview");
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    auto state = source->GetState();
+    while (!state.preparationComplete && state.error.empty() &&
+           std::chrono::steady_clock::now() < deadline) {
+      source->WaitForChange(state.revision, 20ms);
+      state = source->GetState();
+    }
+    if (!state.preparationComplete) source->Cancel();
+    require(state.preparationComplete && state.error.empty(),
+            "leading-silence preparation must skip event-free years promptly");
+    require(state.firstFrame44100 == distantFrames,
+            "sparse preview must seek exactly to the first audible event or silent EOF");
+    const auto samples = renderAll(source);
+    require(scenario == 2 ? samples.empty() :
+                samples.size() == 128 && samples.front() != 0.0f,
+            "skipping empty time must preserve the complete distant sound");
+  }
+}
+
 void testEntirelySilentPreviewReachesEnd(const std::filesystem::path &root) {
   writeWav(root / "first.wav", 44100, std::vector<short>(44100, 0));
   auto source = audio::PagedPreviewSource::Create(*chart(root, "#00101:01\n"), {}, 0);
@@ -871,6 +905,7 @@ int main() {
   try {
     for (const char *name : {"highlight", "resampling", "missing", "progressive", "timing", "downsampling", "preflight", "archive", "overlap", "pressure", "pin-exit", "repeated-pin", "parallel", "trim", "silent", "mixed-trim", "dense-trim"}) std::filesystem::create_directories(root / name);
     testLeadingSilenceIsSkippedWithoutChangingLaterAudio(root / "trim");
+    testSparseLeadingSilenceSkipsEmptyTime(root / "silent");
     testEntirelySilentPreviewReachesEnd(root / "silent");
     testSilenceScanNeverDropsAnAudibleVoice(root / "dense-trim");
     testSilenceDetectionUsesTheMixedAudio(root / "mixed-trim");

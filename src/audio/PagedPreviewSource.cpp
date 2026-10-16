@@ -395,6 +395,10 @@ struct PagedPreviewSource::Impl {
       std::size_t reached = 0;
       auto windowStart = originOutput;
       for (;;) {
+        // With no active voice, only the next event can end leading silence.
+        if (skipLeadingSilence && callback->playingSoundCount == 0)
+          windowStart = std::max(windowStart, reached < events.size()
+              ? events[reached].outputStart : finalOutput);
         const auto windowEnd = windowStart + static_cast<std::uint64_t>(outputRate) * 2;
         auto due = reached;
         while (due < events.size() && events[due].outputStart < windowEnd) ++due;
