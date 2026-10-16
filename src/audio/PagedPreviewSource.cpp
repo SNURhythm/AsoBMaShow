@@ -2,6 +2,7 @@
 
 #include "../ChartPlaybackDuration.h"
 #include "../path.h"
+#include "../utils/ParallelWorkBatch.h"
 #include "AudioMix.h"
 #include "ChartAudioRenderer.h"
 #include "DecodedAssetCache.h"
@@ -245,6 +246,7 @@ struct PagedPreviewSource::Impl {
       // These pins follow preparation windows, never playback/session lifetime.
       // Stack ownership releases every pin on completion, cancellation or error.
       std::vector<ActiveAsset> activeAssets(assets.size());
+      ParallelWorkBatch preparation(assets.size());
       const auto outputComplete = [](const Asset &asset) {
         const auto *metadata = asset.sound->pagedOutput->metadata();
         return metadata && asset.preparedPages == metadata->pageCount;
@@ -288,6 +290,10 @@ struct PagedPreviewSource::Impl {
       stageThrough(stagedThrough);
       while (nextEvent < events.size() && events[nextEvent].outputStart <= originOutput)
         reach(nextEvent++);
+      struct Range { std::uint64_t first, end; };
+      std::vector<std::vector<Range>> ranges(assets.size());
+      std::vector<std::size_t> work;
+      work.reserve(assets.size());
       bool initial = true;
       for (;;) {
         checkpoint();
@@ -297,13 +303,26 @@ struct PagedPreviewSource::Impl {
         }
         while (nextEvent < events.size() && events[nextEvent].outputStart < windowEnd)
           reach(nextEvent++);
+        // Voices can share an asset. Give each asset one task so page writes
+        // and decoder cursors stay exclusive while independent sounds overlap.
+        work.clear();
         for (const auto index : active) {
           const auto &event = events[index];
+          if (outputComplete(assets[event.asset])) continue;
+          if (ranges[event.asset].empty()) work.push_back(event.asset);
           const auto first = windowStart > event.outputStart ? windowStart - event.outputStart : 0;
-          prepare(assets[event.asset], first, windowEnd - event.outputStart + 1);
-          // Repeated voices can remain scheduled after this asset is fully
-          // prepared. They consume immutable output pages and need no cursor.
-          if (outputComplete(assets[event.asset])) activeAssets[event.asset].pin = {};
+          const auto end = windowEnd - event.outputStart + 1;
+          ranges[event.asset].push_back({first, end});
+        }
+        preparation.run(work.size(), [&](std::size_t index) {
+          const auto asset = work[index];
+          for (const auto &range : ranges[asset])
+            prepare(assets[asset], range.first, range.end);
+        });
+        for (const auto asset : work) {
+          ranges[asset].clear();
+          // Repeated voices consume immutable output pages after preparation.
+          if (outputComplete(assets[asset])) activeAssets[asset].pin = {};
         }
         std::erase_if(active, [&](std::size_t index) {
           const auto &event = events[index];
@@ -357,7 +376,8 @@ struct PagedPreviewSource::Impl {
       for (std::size_t index = 0; index < assets.size(); ++index)
         if (!assets[index].staged) remaining.push_back(index);
       stageAssets(std::move(remaining));
-      for (auto &asset : assets) {
+      preparation.run(assets.size(), [&](std::size_t index) {
+        auto &asset = assets[index];
         auto pin = pinDecoder(asset);
         inspect(asset);
         const auto count = asset.sound->pagedOutput->metadata()->frameCount;
@@ -376,7 +396,7 @@ struct PagedPreviewSource::Impl {
             throw std::runtime_error(error.empty() ? "Could not retain preview native audio." : error);
           }
         }
-      }
+      });
       checkpoint();
       { std::lock_guard lock(mutex); state.preparationComplete = true; ++state.revision; }
       changed.notify_all();

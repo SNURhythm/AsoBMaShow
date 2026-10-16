@@ -6,6 +6,7 @@
 #include "ArchiveFile.h"
 #include "ArchiveRAII.h"
 #include "bms_parser.hpp"
+#include "utils/ParallelWork.h"
 
 #include <archive_entry.h>
 #include <atomic>
@@ -25,6 +26,7 @@ thread_local bool forbidAllocation = false;
 thread_local bool bypassPreparationGate = false;
 std::atomic_bool preparationGate{false};
 std::atomic_bool preparationBlocked{false};
+std::atomic_uint blockedPreparations{0};
 }
 void *operator new(std::size_t bytes) {
   if (forbidAllocation) throw std::bad_alloc();
@@ -32,7 +34,9 @@ void *operator new(std::size_t bytes) {
   // sound fits below this threshold, so startup must publish before this gate.
   if (!bypassPreparationGate && bytes >= 16384 && preparationGate.load()) {
     preparationBlocked.store(true);
+    ++blockedPreparations;
     while (preparationGate.load()) std::this_thread::yield();
+    --blockedPreparations;
   }
   if (auto *memory = std::malloc(bytes ? bytes : 1)) return memory;
   throw std::bad_alloc();
@@ -258,6 +262,28 @@ void testProgressiveStartup(const std::filesystem::path &root) {
   source->Cancel();
   require(source->GetState().cancelled, "Cancel must join the producer");
 }
+void testIndependentAssetsPrepareConcurrently(const std::filesystem::path &root) {
+  if (parallel_worker_count(2) < 2) return;
+  writeWav(root / "first.wav", 44100, std::vector<short>(44100, 1200));
+  writeWav(root / "second.wav", 44100, std::vector<short>(44100, 2400));
+  for (const auto &body : {"#00101:01\n#00101:02\n", "#00101:00\n"}) {
+    auto parsed = chart(root, body);
+    auto source = audio::PagedPreviewSource::Create(*parsed, {}, 0);
+    preparationGate = true;
+    const bool begun = source->Begin(44100);
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    while (blockedPreparations.load() < 2 && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::yield();
+    const bool concurrent = blockedPreparations.load() >= 2;
+    preparationGate = false;
+    require(begun, "cannot begin concurrent preparation fixture");
+    waitPrepared(source);
+    source->Cancel();
+    require(concurrent,
+            "scheduled and unused assets must decode concurrently, even when one decode stalls");
+  }
+}
+
 void testFullCallbackPreflightPreservesScheduledAndActiveVoices(const std::filesystem::path &root) {
   writeWav(root / "first.wav", 44100, std::vector<short>(100, 16384));
   writeWav(root / "second.wav", 44100, std::vector<short>(44100 * 4, 8192));
@@ -566,7 +592,8 @@ int main() {
   const auto root = std::filesystem::temp_directory_path() /
       ("asobmashow-paged-source-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
   try {
-    for (const char *name : {"highlight", "resampling", "missing", "progressive", "timing", "downsampling", "preflight", "archive", "overlap", "pressure", "pin-exit", "repeated-pin"}) std::filesystem::create_directories(root / name);
+    for (const char *name : {"highlight", "resampling", "missing", "progressive", "timing", "downsampling", "preflight", "archive", "overlap", "pressure", "pin-exit", "repeated-pin", "parallel"}) std::filesystem::create_directories(root / name);
+    testIndependentAssetsPrepareConcurrently(root / "parallel");
     testHighlightAndReuse(root / "highlight");
     testResampling(root / "resampling");
     testDownsamplingWarmsEveryNativePage(root / "downsampling");

@@ -1,4 +1,5 @@
 #include "utils/ParallelWork.h"
+#include "utils/ParallelWorkBatch.h"
 
 #include <array>
 #include <cassert>
@@ -82,7 +83,37 @@ void testCompletionWaitsForBorrowedWork() {
   completed.get();
 }
 
+void testPersistentBatchesJoinAndRecoverFromFailure() {
+  ParallelWorkBatch batch(4);
+  std::array<std::atomic_int, 19> visits{};
+  for (int pass = 0; pass < 3; ++pass) {
+    batch.run(visits.size(), [&](std::size_t index) { ++visits[index]; });
+    for (const auto &visit : visits) assert(visit == pass + 1);
+  }
+  std::atomic_int active = 0;
+  bool caught = false;
+  try {
+    batch.run(visits.size(), [&](std::size_t index) {
+      if (index == 0) throw std::runtime_error("injected work failure");
+      ++active;
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      --active;
+    });
+  } catch (const std::runtime_error &) {
+    caught = true;
+  }
+  assert(caught && active == 0);
+  batch.run(visits.size(), [&](std::size_t index) { ++visits[index]; });
+  for (const auto &visit : visits) assert(visit == 4);
+  batch.run(0, [](std::size_t) { assert(false); });
+  const auto caller = std::this_thread::get_id();
+  batch.run(1, [&](std::size_t index) {
+    assert(index == 0 && std::this_thread::get_id() == caller);
+  });
+}
+
 int main() {
+  testPersistentBatchesJoinAndRecoverFromFailure();
   testWorkerCountHeadroomAndWidth();
   testEmptyAndSequentialWork();
   testExactlyOnceAndBorrowedMoveOnlyWork();
