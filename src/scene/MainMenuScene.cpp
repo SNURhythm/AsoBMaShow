@@ -29,6 +29,7 @@
 #include "../PlatformDocumentHandoff.h"
 #include "../PlatformOpen.h"
 #include "../RAII.h"
+#include "../perf/StartupTrace.h"
 #include "../platform/SDLApplicationRuntime.h"
 #include "../repositories/ScoreCacheQueries.h"
 #include "../repositories/SqliteRAII.h"
@@ -4714,6 +4715,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
     return;
   }
 
+  auto startupTrace = std::make_shared<perf::StartupTrace>("menu");
   if (startButtonText != nullptr) {
     startButtonText->setLocalizedText(i18n::message("menu.loading.progress"));
   }
@@ -4722,6 +4724,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
     decideOverlay_->setVisible(true);
   }
   ImageView::dropAllCache();
+  startupTrace->mark("loading-overlay-and-image-cache");
 
   const GaugeType gaugeType = profileSelections.gaugeType;
   const GaugeAutoShiftMode gaugeAutoShift = profileSelections.gaugeAutoShift;
@@ -4764,7 +4767,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
   }
 
   defer(
-      [this, record, gaugeType, gaugeAutoShift, gaugeAutoShiftLowerBound,
+      [this, startupTrace, record, gaugeType, gaugeAutoShift, gaugeAutoShiftLowerBound,
        ruleset, autoKeySound, playOption, selectedLongNoteMode, assistOption,
        pacemakerTarget, playback,
        chartRandomInfo, tableName = std::move(tableName),
@@ -4775,20 +4778,25 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           return false;
         }
 #endif
-        auto finishStart = [this]() {
+        startupTrace->mark("deferred-and-skin-ready");
+        auto finishStart = [this, startupTrace]() {
           resetStartLoadingUi();
+          startupTrace->mark("loading-ui-reset");
           return true;
         };
         if (previewWorker_ != nullptr) {
           previewWorker_->stop();
         }
 
+        startupTrace->mark("preview-stop");
         context.jukebox.setDecodedAssetCache(previewDecodedAssets_);
-        ScopeExit releasePreparationCache([this, jukebox = &context.jukebox] {
+        ScopeExit releasePreparationCache([this, startupTrace, jukebox = &context.jukebox] {
           jukebox->setDecodedAssetCache(nullptr);
           if (selectedChartMediaReady.load()) previewDecodedAssets_.reset();
+          startupTrace->mark("preparation-cache-release");
         });
         auto *readyChart = loadedSelectedChartForPath(record.meta.BmsPath);
+        startupTrace->mark(readyChart ? "media-already-ready" : "media-needs-preparation");
         if (readyChart == nullptr) {
           auto *parsedChart = parsedSelectedChartForPath(record.meta.BmsPath);
           if (parsedChart != nullptr) {
@@ -4803,6 +4811,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           }
         }
         if (readyChart != nullptr) {
+          startupTrace->mark("media-ready");
           archive_file::appendDebugLogLine(
               "Start reusing loaded preview chart: " +
               fspath_to_utf8(record.meta.BmsPath));
@@ -4814,7 +4823,9 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
               play_options::applySelectedPlayOptions(*readyChart, playOption);
           applyEffectiveLongNoteModeToChart(*readyChart,
                                             selectedLongNoteMode);
+          startupTrace->mark("lane-and-long-note-options");
           context.jukebox.stop();
+          startupTrace->mark("jukebox-stop");
           changeToGameplayScene(readyChart,
                                 {
                                     .startPosition = 0,
@@ -4857,6 +4868,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
               "Start parse exception: " +
               fspath_to_utf8(record.meta.BmsPath) + ": " + e.what());
         }
+        startupTrace->mark("fallback-chart-parse");
         if (preparedChart != nullptr && !parseCancelled) {
           play_options::PlayOptionReplayInfo playInfo =
               play_options::applySelectedPlayOptions(*preparedChart,
@@ -4864,7 +4876,9 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           applyEffectiveLongNoteModeToChart(*preparedChart,
                                             selectedLongNoteMode);
           context.jukebox.stop();
+          startupTrace->mark("fallback-options-and-stop");
           const auto loaded = context.jukebox.loadChart(*preparedChart, true, parseCancelled);
+          startupTrace->mark("fallback-resource-load");
           if (!loaded.success || parseCancelled) {
             SDL_Log("Gameplay preparation failed: %s", loaded.diagnostic.c_str());
             return finishStart();
@@ -7542,9 +7556,11 @@ void MainMenuScene::changeToGameplayScene(bms_parser::Chart *chart,
   if (options.replayData == nullptr) {
     options.clubMode = context.settings.gameplayClubModeEnabled;
   }
-  context.sceneManager->changeScene(
-      std::make_unique<GamePlayScene>(context, chart, std::move(options)),
-      true);
+  perf::StartupTrace startupTrace("transition");
+  auto gameplay = std::make_unique<GamePlayScene>(context, chart, std::move(options));
+  startupTrace.mark("scene-constructor");
+  context.sceneManager->changeScene(std::move(gameplay), true);
+  startupTrace.mark("menu-pause-and-gameplay-init");
 }
 
 bool MainMenuScene::beginReplayExport(const i18n::Text &progressTitle,

@@ -20,6 +20,7 @@
 #include "PracticeNoteFinalizer.h"
 #include "../../ChartPlaybackDuration.h"
 #include "../../ArchiveFile.h"
+#include "../../perf/StartupTrace.h"
 #include "../../ReplayGhostUtils.h"
 #include "../../ReplayResultStateBuilder.h"
 #include "../../GBattleMode.h"
@@ -3318,6 +3319,8 @@ void GamePlayScene::cancelGameplaySkinPreparation() noexcept {
 }
 
 void GamePlayScene::init() {
+  startupPresentationTrace = std::make_unique<perf::StartupTrace>("first-gameplay-render");
+  perf::StartupTrace startupTrace("gameplay-init");
   context.profileGameplayActive.store(true, std::memory_order_release);
   profileGameplayBlockerActive = true;
   context.jukebox.setEmbeddedBgaBrightnessPercent(
@@ -3400,6 +3403,7 @@ void GamePlayScene::init() {
       playfieldChartHasDocument = records.records.front().hasDocument;
     }
   }
+  startupTrace.mark("chart-model-and-score-queries");
   initializePlayfieldVisualNoteSources();
   ownedPlayfieldVisualStateStore =
       std::make_unique<PlayfieldVisualStateStore>(playfieldChartVisualModel);
@@ -3561,8 +3565,10 @@ void GamePlayScene::init() {
       std::make_unique<PlayfieldPresentationEventFanout>(
           *playfieldVisualStateStore, *presentation);
   presentationEventFanout = ownedPresentationEventFanout.get();
+  startupTrace.mark("presentation-construction");
   std::string musicStopError;
   context.musicPlayer.Stop(musicStopError);
+  startupTrace.mark("music-stop");
   // The chart's audio was already loaded and scheduled (preload worker or
   // launch thread); keep the audio device open so play() short-circuits the
   // multi-hundred-ms device start instead of stopping and re-opening it.
@@ -3575,6 +3581,7 @@ void GamePlayScene::init() {
   if (!practiceMenuActive && !reset()) {
     return;
   }
+  startupTrace.mark("attempt-reset");
   if (!isReplayPlayback() && !options.autoPlay) {
     const auto activeInputScopes =
         makeGameplayInputScopes(presentationKeyMode());
@@ -3882,6 +3889,7 @@ void GamePlayScene::init() {
 }
 
 bool GamePlayScene::reset() {
+  perf::StartupTrace startupTrace("attempt-reset");
   stopGuidedAccessChime(true);
   guidedAccessReminderExiting = false;
   guidedAccessReminder.reset();
@@ -3960,7 +3968,9 @@ bool GamePlayScene::reset() {
   for (auto *note : chart_playability::noteIdentities(*chart).notes) {
     note->Reset();
   }
+  startupTrace.mark("notes-and-presentation-reset");
   context.jukebox.stop();
+  startupTrace.mark("jukebox-stop");
   std::string playbackRateError;
   const bool playbackRateApplied =
       context.jukebox.setPlaybackRate(options.playback, playbackRateError);
@@ -3974,6 +3984,7 @@ bool GamePlayScene::reset() {
     showPlaybackInitializationFailure(playbackInitialization.visibleStatus);
     return false;
   }
+  startupTrace.mark("playback-rate");
   const long long startPositionMicros = getStartPositionMicros();
   const std::optional<long long> practiceKeySoundCutoff =
       options.practiceSession != nullptr || options.practiceLeadInMicros > 0
@@ -4021,6 +4032,7 @@ bool GamePlayScene::reset() {
                                     preparationRange);
     context.jukebox.appendScheduledAudioEvents(replayKeysounds);
   }
+  startupTrace.mark("audio-schedule");
   playfieldFrameSerial = 0;
   playfieldLaneCoverResetPending = false;
   if (startSelectControl.has_value()) {
@@ -4106,6 +4118,7 @@ bool GamePlayScene::reset() {
   }
   updateSkinResetLayoutVisibility();
 #endif
+  startupTrace.mark("state-targets-and-skin");
   if (guidedAccessReminderPending) {
     prepareGuidedAccessChime();
     showGuidedAccessReminder();
@@ -4496,6 +4509,7 @@ void GamePlayScene::showGuidedAccessReminder() {
 }
 
 bool GamePlayScene::startPreparedAttempt() {
+  perf::StartupTrace startupTrace("attempt-start");
   stopGuidedAccessChime(true);
   state->isPlaying = true;
   if (pauseButton != nullptr) pauseButton->setVisible(true);
@@ -4508,6 +4522,7 @@ bool GamePlayScene::startPreparedAttempt() {
     inputHandler->startListenTouch();
 #endif
   }
+  startupTrace.mark("input-start");
   const auto playbackStarted =
       context.jukebox.play(preparationPlan.playbackStartTimeMicros);
   if (!playbackStarted.success) {
@@ -4516,6 +4531,7 @@ bool GamePlayScene::startPreparedAttempt() {
             false, playbackStarted.diagnostic).visibleStatus);
     return false;
   }
+  startupTrace.mark("audio-device-start");
   replayEventCursor = 0;
   replayLaneCoverCursor = 0;
   floatingLaneCoverDragActive = false;
@@ -4534,6 +4550,7 @@ bool GamePlayScene::startPreparedAttempt() {
   }
   updatePracticeHud(context.jukebox.getTimeMicros());
   updateGaugeStatusText();
+  startupTrace.mark("replay-recording-setup");
   if (gameplay::shouldAttemptRealtimeGameplayReset(
           laneInputController != nullptr, inputHandler != nullptr,
           options.autoPlay)) {
@@ -7123,6 +7140,10 @@ void GamePlayScene::update(float dt) {
 }
 
 void GamePlayScene::renderScene() {
+  // One-shot trace through initial update/draw, not just scene construction.
+  // This measures CPU rendering; the native display presentation follows later.
+  auto firstFrameTrace = std::move(startupPresentationTrace);
+  if (firstFrameTrace) firstFrameTrace->mark("render-begin");
   if (playbackInitializationFailed || guidedAccessReminderPending) {
     return;
   }

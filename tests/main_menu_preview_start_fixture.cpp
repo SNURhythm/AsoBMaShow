@@ -9,6 +9,9 @@
 #include <vector>
 #include <iostream>
 
+namespace perf {
+struct StartupTrace { explicit StartupTrace(const char *) {} void mark(const char *) {} };
+}
 // Execute the real menu start method; replace UI, parsing, and device boundaries.
 namespace bms_parser {
 struct Chart {
