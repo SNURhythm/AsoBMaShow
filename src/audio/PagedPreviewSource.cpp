@@ -261,8 +261,23 @@ struct PagedPreviewSource::Impl {
             [&](archive_file::FileData &&file) {
               for (const auto index : indices.at(file.path)) publishAsset(index, &file.bytes, &*batch);
               return !cancelled.load(std::memory_order_relaxed);
-            }, &error, cancelled, archive_file::readArchiveEntriesConcurrently,
-            archive_file::readArchiveEntriesStreaming,
+            }, &error, cancelled,
+            [](const auto &archivePath, const auto &entries, auto onFile,
+               auto workers, auto budget, auto *readError, auto keepGoing, auto) {
+              // Keep concurrent extraction within its scheduling reservation.
+              // Larger valid entries use the separately bounded fallback below.
+              return archive_file::readArchiveEntriesConcurrently(
+                  archivePath, entries, std::move(onFile), workers, budget,
+                  readError, std::move(keepGoing),
+                  archive_file::ConcurrentReadMemoryPolicy::Strict);
+            },
+            [](const auto &archivePath, const auto &entries, auto onFile,
+               auto *readError, auto keepGoing) {
+              return archive_file::readArchiveEntriesStreamingBounded(
+                  archivePath, entries, std::move(onFile),
+                  DecodedAssetCache::kMaximumEncodedAssetBytes, readError,
+                  std::move(keepGoing));
+            },
             [&](const std::filesystem::path &path) { return priorities.at(path); });
         if (!loaded) {
           checkpoint();

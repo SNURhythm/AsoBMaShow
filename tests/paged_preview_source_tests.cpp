@@ -9,6 +9,7 @@
 #include "utils/ParallelWork.h"
 
 #include <archive_entry.h>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -558,6 +559,75 @@ void testMissingAndExpired(const std::filesystem::path &root) {
           "invalid backend rate must report a control-thread error");
 }
 
+void testArchiveEntryLimitsBeforeExtraction(const std::filesystem::path &root) {
+  writeWav(root / "tone.wav", 44100, std::vector<short>(64, 8192));
+  std::ifstream input(root / "tone.wav", std::ios::binary);
+  const std::vector<char> tone((std::istreambuf_iterator<char>(input)), {});
+  // Stream zero padding into a compressed ZIP without retaining the expanded
+  // payload. One entry exercises streaming; four enable concurrent extraction.
+  // A valid 33 MiB entry must still load through the bounded fallback when it
+  // exceeds the concurrent stage's 32 MiB scheduling reservation.
+  for (const auto [count, megabytes] : {std::pair{1, 257}, std::pair{4, 257},
+                                       std::pair{4, 33}}) {
+    const auto archivePath = root / (std::to_string(count) + "-" +
+        std::to_string(megabytes) + ".zip");
+    auto writer = makeArchiveWriteHandle();
+    require(archive_write_set_format_zip(writer.get()) == ARCHIVE_OK &&
+                archive_write_set_options(writer.get(), "zip:compression=deflate") == ARCHIVE_OK &&
+                archive_write_open_filename(writer.get(), archivePath.string().c_str()) == ARCHIVE_OK,
+            "cannot create bounded archive fixture");
+    auto parsed = chart(root, "#00011:01\n");
+    parsed->Meta.Folder = archivePath;
+    parsed->WavTable.clear();
+    parsed->ReferencedWavTable.clear();
+    const std::array<char, 64 * 1024> zeros{};
+    for (int index = 1; index <= count; ++index) {
+      const auto name = "sound-" + std::to_string(index) + ".wav";
+      parsed->WavTable.emplace(index, name);
+      const auto bytes = index == 1 ? std::size_t(megabytes) * 1024 * 1024 : tone.size();
+      UniqueResource<archive_entry, archive_entry_free> entry(archive_entry_new());
+      archive_entry_set_pathname(entry.get(), name.c_str());
+      archive_entry_set_filetype(entry.get(), AE_IFREG);
+      archive_entry_set_perm(entry.get(), 0644);
+      archive_entry_set_size(entry.get(), bytes);
+      require(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK &&
+                  archive_write_data(writer.get(), tone.data(), tone.size()) ==
+                      static_cast<la_ssize_t>(tone.size()), "cannot write bounded archive entry");
+      for (auto remaining = bytes - tone.size(); remaining > 0;) {
+        const auto chunk = std::min(remaining, zeros.size());
+        require(archive_write_data(writer.get(), zeros.data(), chunk) ==
+                    static_cast<la_ssize_t>(chunk), "cannot pad archive entry");
+        remaining -= chunk;
+      }
+    }
+    require(archive_write_close(writer.get()) == ARCHIVE_OK, "cannot finish bounded archive fixture");
+    auto cache = std::make_shared<audio::DecodedAssetCache>();
+    auto source = audio::PagedPreviewSource::Create(*parsed, cache, 0);
+    largeAllocationAttempts = 0;
+    rejectLargeAllocations = true;
+    require(source->Begin(44100), "cannot begin bounded archive preview");
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    auto state = source->GetState();
+    while (state.error.empty() && !state.preparationComplete &&
+           std::chrono::steady_clock::now() < deadline) {
+      source->WaitForChange(state.revision, 20ms);
+      state = source->GetState();
+    }
+    source->Cancel();
+    rejectLargeAllocations = false;
+    require(largeAllocationAttempts == 0,
+            "preview archive entries must be bounded before extraction allocates their payload");
+    if (megabytes > 256) {
+      require(!state.error.empty() && !state.preparationComplete,
+              "oversized encoded archive entries must fail preparation");
+    } else {
+      require(state.error.empty() && state.preparationComplete &&
+                  cache->GetStatistics().decodedFrames == 64U * count,
+              "valid entries above the scheduling budget must still decode through bounded streaming");
+    }
+  }
+}
+
 void testArchivedPreviewBatchesOpeningFutureAndReferencedAssets(const std::filesystem::path &root) {
   writeWav(root / "tone.wav", 44100, std::vector<short>(22050, 8192));
   std::ifstream input(root / "tone.wav", std::ios::binary);
@@ -815,6 +885,7 @@ int main() {
     testProgressiveStartup(root / "progressive");
     testFullCallbackPreflightPreservesScheduledAndActiveVoices(root / "preflight");
     testFractionalTiming(root / "timing");
+    testArchiveEntryLimitsBeforeExtraction(root / "archive");
     testArchivedPreviewBatchesOpeningFutureAndReferencedAssets(root / "archive");
     testOverlappingCompressedAssetsDecodeOnce(root / "overlap");
     testOverlappingWavAssetsRespectDescriptorCeiling(root / "pressure");
