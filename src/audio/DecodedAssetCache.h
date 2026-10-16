@@ -25,6 +25,10 @@ public:
   };
   static constexpr std::size_t kDefaultRetainedBytes = 64U * 1024U * 1024U;
   static constexpr std::size_t kUnlimitedRetainedBytes = std::numeric_limits<std::size_t>::max();
+  // Per-asset decode bounds are independent of cache retention, including an
+  // unlimited preview cache. Validate these before allocating whole buffers.
+  static constexpr std::size_t kMaximumEncodedAssetBytes = 256U * 1024U * 1024U;
+  static constexpr std::size_t kMaximumPcmAssetBytes = 256U * 1024U * 1024U;
   enum class FailureKind { None, Cancelled, InvalidAsset, Operation };
   struct Statistics {
     std::uint64_t decodedFrames = 0;

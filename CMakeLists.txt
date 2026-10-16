@@ -4808,7 +4808,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(progressive_music_source_tests PROPERTIES TIMEOUT 30)
 
     add_executable(decoded_asset_cache_tests
-        tests/decoded_asset_cache_tests.cpp ${PROGRESSIVE_MUSIC_TEST_SOURCES})
+        tests/decoded_asset_cache_tests.cpp tests/support/AllocationFailure.cpp
+        ${PROGRESSIVE_MUSIC_TEST_SOURCES})
     target_include_directories(decoded_asset_cache_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(decoded_asset_cache_tests PRIVATE cxx_std_23)
     target_link_libraries(decoded_asset_cache_tests PRIVATE ${COMMON_LIBS})

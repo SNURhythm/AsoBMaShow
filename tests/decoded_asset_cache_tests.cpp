@@ -4,6 +4,7 @@
 #include "audio/DecodedAssetCache.h"
 #include "audio/SoundFileIO.h"
 #include "audio/decoder.h"
+#include "support/AllocationFailure.h"
 
 #include <archive.h>
 #include <archive_entry.h>
@@ -202,11 +203,76 @@ void testArchiveBatchIdentityAndGameplayReuse(const std::filesystem::path &root)
           "removed archives fail batch validation");
 }
 
+void testRejectsExcessiveDecodeBeforeAllocation(const std::filesystem::path &root) {
+  const auto flac = root / "oversized-header.flac";
+  {
+    SF_INFO info{}; info.samplerate = 48000; info.channels = 2;
+    info.format = SF_FORMAT_FLAC | SF_FORMAT_PCM_16;
+    auto file = asobmashow::audio::openSoundFileHandle(flac, SFM_WRITE, info);
+    require(bool(file), "create FLAC fixture");
+    const short samples[32]{};
+    require(sf_writef_short(file.get(), samples, 16) == 16, "write FLAC fixture");
+  }
+  auto bytes = bytesAt(flac);
+  require(bytes.size() > 26 && bytes[4] % 128 == 0, "FLAC starts with STREAMINFO");
+  // STREAMINFO's low 36 bits advertise enough stereo frames for 512 MiB PCM,
+  // despite the tiny encoded file. libsndfile trusts this count on open.
+  std::uint64_t packed = 0;
+  for (int i = 18; i < 26; ++i) packed = (packed << 8) | bytes[i];
+  packed = (packed & ~((std::uint64_t{1} << 36) - 1)) | (128U * 1024U * 1024U);
+  for (int i = 25; i >= 18; --i) { bytes[i] = packed & 255; packed >>= 8; }
+  { std::ofstream output(flac, std::ios::binary); output.write(
+        reinterpret_cast<const char *>(bytes.data()), bytes.size()); }
+  SF_INFO advertised{};
+  auto header = asobmashow::audio::openSoundFileHandle(flac, SFM_READ, advertised);
+  require(header && advertised.frames == 128U * 1024U * 1024U,
+          "fixture must advertise the excessive PCM allocation");
+  header.reset();
+  const auto zip = root / "oversized-header.zip";
+  zipWav(zip, bytes);
+  const auto logical = archive_file::makeVirtualPath(zip, "sounds/tone.wav");
+  std::atomic_bool cancelled{false};
+  for (const auto retention : {audio::DecodedAssetCache::kDefaultRetainedBytes,
+                               audio::DecodedAssetCache::kUnlimitedRetainedBytes}) {
+    audio::DecodedAssetCache cache({}, retention);
+    const auto batch = cache.BeginArchiveBatch(zip);
+    require(bool(batch), "begin oversized fixture archive batch");
+    for (int mode = 0; mode < 4; ++mode) {
+      audio::DecodedAssetCache::FailureKind failure{};
+      std::shared_ptr<const audio::DecodedAssetCache::DecodedSound> sound;
+      std::size_t largest;
+      {
+        test_support::AllocationSizeObserver observer;
+        test_support::AllocationSizeLimit limit(1024U * 1024U);
+        if (mode == 0) sound = cache.Load(flac, cancelled, {}, nullptr, &failure);
+        if (mode == 1) sound = cache.LoadBytes(logical, bytes, cancelled, {}, nullptr, &failure);
+        if (mode == 2) sound = cache.LoadArchiveBytes(*batch, logical, bytes, cancelled, {}, nullptr, &failure);
+        if (mode == 3) sound = cache.Load(logical, cancelled, {}, nullptr, &failure);
+        largest = observer.largest();
+      }
+      require(!sound && failure == audio::DecodedAssetCache::FailureKind::InvalidAsset,
+              "all cache decode paths must reject excessive PCM as an invalid asset");
+      require(largest <= 1024U * 1024U, "reject excessive PCM before attempting its allocation");
+      require(cache.GetStatistics().retainedBytes == 0 && cache.GetStatistics().liveDecoders == 0,
+              "rejected assets retain no PCM or decoder");
+    }
+  }
+  const auto oversizedFile = root / "oversized-encoded.wav";
+  writeWav(oversizedFile, 1, 16);
+  std::filesystem::resize_file(oversizedFile, 257U * 1024U * 1024U);
+  audio::DecodedAssetCache cache;
+  audio::DecodedAssetCache::FailureKind failure{};
+  require(!cache.Load(oversizedFile, cancelled, {}, nullptr, &failure) &&
+              failure == audio::DecodedAssetCache::FailureKind::InvalidAsset,
+          "encoded file size is bounded even when its PCM payload is tiny");
+}
+
 }
 int main() {
   const auto root = std::filesystem::temp_directory_path() / ("decoded-asset-tests-" + uuid::generateV4());
   try {
     std::filesystem::create_directories(root);
+    testRejectsExcessiveDecodeBeforeAllocation(root);
     testWholeLoadAndConcurrentReuse(root);
     testCancellationAndInvalidAssets(root);
     testEvictionAndIdentity(root);

@@ -17,6 +17,17 @@ public:
 
 using FailNextAllocation = FailAllocationAfter;
 
+// Reject oversized ordinary allocations without putting the test process at risk.
+class AllocationSizeLimit final {
+public:
+  explicit AllocationSizeLimit(std::size_t maximumBytes) noexcept;
+  ~AllocationSizeLimit();
+  AllocationSizeLimit(const AllocationSizeLimit &) = delete;
+  AllocationSizeLimit &operator=(const AllocationSizeLimit &) = delete;
+private:
+  std::size_t previousLimit;
+};
+
 // Observe ordinary C++ allocations on this thread without changing admission.
 class AllocationSizeObserver final {
 public:

@@ -149,6 +149,8 @@ struct DecodedAssetCache::Impl {
     if (failure) *failure = FailureKind::None;
     try {
       checkpoint(cancel, stop);
+      if (encoded && encoded->size() > kMaximumEncodedAssetBytes)
+        throw CacheFailure(FailureKind::InvalidAsset, "Encoded audio exceeds the byte limit.");
       const auto resolved = batch ? path.lexically_normal() : resolvedPath(path);
       const auto identity = batch ? batchAssetIdentity(*batch, resolved) : sourceIdentity(resolved);
       if (identity.empty()) throw CacheFailure(FailureKind::InvalidAsset,
@@ -184,11 +186,14 @@ struct DecodedAssetCache::Impl {
       });
       // The legacy full decoder only reads this flag; its older API is non-const.
       auto &decodeCancelled = const_cast<std::atomic_bool &>(cancel);
+      constexpr AudioDecodeLimits limits{
+          .maximumEncodedBytes = kMaximumEncodedAssetBytes,
+          .maximumPcmSamples = kMaximumPcmAssetBytes / sizeof(short)};
       const bool decoded = encoded
-          ? decodeAudioBytesToPCM(fspath_to_path_t(resolved), *encoded,
-                                  sound->pcm, sound->info, decodeCancelled)
+          ? decodeAudioBytesToPCMBounded(fspath_to_path_t(resolved), *encoded,
+                sound->pcm, sound->info, decodeCancelled, limits.maximumPcmSamples)
           : decodeAudioToPCMBounded(fspath_to_path_t(resolved), sound->pcm,
-                                    sound->info, decodeCancelled, {}, stop);
+                                    sound->info, decodeCancelled, limits, stop);
       checkpoint(cancel, stop);
       if (!batch && sourceIdentity(resolved) != identity)
         throw std::runtime_error("Audio source changed during preparation.");
