@@ -8,6 +8,7 @@
 #include "DecodedAssetCache.h"
 #include "PcmResampler.h"
 
+#include <SDL3/SDL_log.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -90,6 +91,7 @@ struct PagedPreviewSource::Impl {
   std::uint64_t finalOutput = 0; // Worker-owned until durationKnown publication.
   bool begun = false;
   bool skipLeadingSilence = false;
+  std::chrono::steady_clock::duration stagingTime{}; // Preparation worker only.
 
   struct RenderPosition { long long micros; std::uint32_t offset; };
   RenderPosition renderPosition(std::uint64_t frame) const noexcept {
@@ -139,7 +141,10 @@ struct PagedPreviewSource::Impl {
     paths.reserve(indices.size());
     for (const auto index : indices) paths.push_back(assets[index].path);
     std::string error;
-    if (!cache->StageArchiveAssets(paths, cancelled, {}, &error)) {
+    const auto started = std::chrono::steady_clock::now();
+    const bool staged = cache->StageArchiveAssets(paths, cancelled, {}, &error);
+    stagingTime += std::chrono::steady_clock::now() - started;
+    if (!staged) {
       checkpoint();
       throw std::runtime_error(error.empty() ? "Could not stage preview audio." : error);
     }
@@ -301,6 +306,12 @@ struct PagedPreviewSource::Impl {
   }
 
   void run() noexcept {
+    const auto started = std::chrono::steady_clock::now();
+    const auto milliseconds = [](auto duration) {
+      return std::chrono::duration<double, std::milli>(duration).count();
+    };
+    double startupMs = -1.0;
+    bool complete = false;
     try {
       struct ActiveAsset {
         DecodedAssetCache::DecoderPin pin;
@@ -431,6 +442,9 @@ struct PagedPreviewSource::Impl {
             }
             startupReady.store(true, std::memory_order_release);
             changed.notify_all();
+            startupMs = milliseconds(std::chrono::steady_clock::now() - started);
+            SDL_Log("[preview-prepare] startup: %.2f ms assets=%zu events=%zu",
+                    startupMs, assets.size(), events.size());
             initial = false;
           }
         }
@@ -467,12 +481,25 @@ struct PagedPreviewSource::Impl {
       });
       checkpoint();
       { std::lock_guard lock(mutex); state.preparationComplete = true; ++state.revision; }
+      complete = true;
       changed.notify_all();
     } catch (const std::exception &error) {
       if (!cancelled.load(std::memory_order_relaxed)) fail(error.what());
     } catch (...) {
       if (!cancelled.load(std::memory_order_relaxed)) fail("Unknown preview preparation error.");
     }
+    const auto elapsed = std::chrono::steady_clock::now() - started;
+    const auto statistics = cache->GetStatistics();
+    SDL_Log("[preview-prepare] %s: totalMs=%.2f startupMs=%.2f stagingMs=%.2f "
+            "processingMs=%.2f assets=%zu decoderOpens=%llu archiveBatches=%llu "
+            "decodedFrames=%llu cacheHitFrames=%llu",
+            complete ? "complete" : cancelled.load(std::memory_order_relaxed) ? "cancelled" : "failed",
+            milliseconds(elapsed), startupMs, milliseconds(stagingTime),
+            milliseconds(elapsed - stagingTime), assets.size(),
+            static_cast<unsigned long long>(statistics.decoderOpens),
+            static_cast<unsigned long long>(statistics.archiveReads),
+            static_cast<unsigned long long>(statistics.decodedFrames),
+            static_cast<unsigned long long>(statistics.cacheHitFrames));
   }
 };
 

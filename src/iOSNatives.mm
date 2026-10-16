@@ -4480,6 +4480,14 @@ void StopIOSSecurityScopedResource(void *resource) {
 }
 
 std::string GetIOSDocumentsPath() {
+  // The sandbox root is stable for this process. Progressive audio checks it
+  // thousands of times; resolve/create it only once, retrying an initial failure.
+  static std::mutex pathMutex;
+  static std::string cachedPath;
+  std::lock_guard lock(pathMutex);
+  if (!cachedPath.empty()) {
+    return cachedPath;
+  }
   @autoreleasepool {
     NSFileManager *manager = NSFileManager.defaultManager;
     NSArray<NSString *> *paths = NSSearchPathForDirectoriesInDomains(
@@ -4500,7 +4508,8 @@ std::string GetIOSDocumentsPath() {
                                   error:&error]) {
       return {};
     }
-    return std::string(resolvedDirectory.fileSystemRepresentation);
+    cachedPath = resolvedDirectory.fileSystemRepresentation;
+    return cachedPath;
   }
 }
 
