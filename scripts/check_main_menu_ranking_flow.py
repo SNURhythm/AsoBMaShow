@@ -35,18 +35,28 @@ if "LoadBestScoreForRuleset(" not in ranking_open or (
     )
     raise SystemExit(1)
 
-selection_start = source.find("recyclerView->onSelected =")
+callback_start = source.find("const auto selectChart =")
+selection_start = source.find("recyclerView->onSelected =", callback_start)
 selection_end = source.find("recyclerView->onUnselected =", selection_start)
-if selection_start < 0 or selection_end < 0:
+if callback_start < 0 or selection_start < 0 or selection_end < 0:
     print("FAIL: unable to locate the main-menu chart selection handler", file=sys.stderr)
     raise SystemExit(1)
 
 selection_handler = source[selection_start:selection_end]
-assignment = selection_handler.find("selectedChartRecord = item;")
-ranking_refresh = selection_handler.find("refreshRankingsButton();")
+selection_callback = source[callback_start:selection_start]
+assignment = selection_callback.find("selectedChartRecord = item;")
+ranking_refresh = selection_callback.find("refreshRankingsButton();")
 if assignment < 0 or ranking_refresh < assignment:
     print(
         "FAIL: selecting a chart must refresh Rankings after storing the selection",
+        file=sys.stderr,
+    )
+    raise SystemExit(1)
+
+if ("selectChart(record, idx, false);" not in selection_handler or
+        "selectChart(record, idx, true);" not in selection_handler):
+    print(
+        "FAIL: normal and pointer selections must use the shared selection callback",
         file=sys.stderr,
     )
     raise SystemExit(1)
