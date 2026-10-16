@@ -209,6 +209,11 @@ public:
   audio::playback::BackendOperationResult
   reloadChartResources(bms_parser::Chart &chart, bool scheduleNotes,
                        std::atomic_bool &isCancelled);
+  // Finish audio preparation for the same chart already passed to loadVisuals.
+  // Keeps its decoded images/videos; callers serialize preview visual updates.
+  audio::playback::BackendOperationResult
+  prepareGameplayAudioFromPreview(bms_parser::Chart &chart,
+                                  std::atomic_bool &isCancelled);
   bool hasLoadedResources() const;
   void loadVisuals(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
   void unloadVisuals();
@@ -368,19 +373,20 @@ private:
   audio::playback::BackendOperationResult loadResolvedChartResources(
       bms_parser::Chart &chart, const ChartResourceTable &wavTable,
       const ChartResourceTable &bmpTable, bool loadVisualAssets,
-      std::atomic_bool &isCancelled);
+      std::atomic_bool &isCancelled, bool preserveVisuals = false);
   audio::playback::BackendOperationResult
   reconcileChartResources(bms_parser::Chart &chart,
                           const std::vector<ResolvedSoundAsset> *sounds,
                           const std::vector<ResolvedVisualAsset> &visuals,
-                          std::atomic_bool &isCancelled);
+                          std::atomic_bool &isCancelled, bool preserveVisuals = false);
   void reconcileVisualResources(
       bms_parser::Chart &chart, const std::vector<ResolvedVisualAsset> &assets,
       std::atomic_bool &isCancelled);
   bool preloadVisual(int visualId, std::atomic_bool &isCancelled);
   audio::playback::BackendOperationResult
   loadChartImpl(bms_parser::Chart &chart, bool scheduleNotes,
-                std::atomic_bool &isCancelled, bool preserveDevice);
+                std::atomic_bool &isCancelled, bool preserveDevice,
+                bool preserveVisuals = false);
   bool scheduleAudioFromCursor(size_t cursor);
   void playOverlappingAudioAt(long long micro);
   audio::playback::BackendOperationResult

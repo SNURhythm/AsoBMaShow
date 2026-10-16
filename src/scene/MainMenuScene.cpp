@@ -1718,7 +1718,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
           return;
         }
         try {
-          std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+          std::unique_lock<std::mutex> lock(previewJukeboxLoadMutex);
           if (isCancelled()) {
             return;
           }
@@ -1750,19 +1750,50 @@ void MainMenuScene::initView(ApplicationContext &context) {
             // gameplay mixer's headroom when several loud keysounds overlap.
             previewPlayer_.SetGain(1.0f);
             std::string error;
-            if (!previewPlayer_.Start(std::move(source), error)) {
+            if (!previewPlayer_.Start(source, error)) {
               SDL_Log("Preview playback failed: %s", error.c_str());
             } else {
-              // Let progressive audio fill/start while visual assets load. No
-              // complete keysound decode or gameplay audio schedule is needed.
+              // Start progressively, then finish gameplay preparation while
+              // listening. Let the source finish its prioritized decoding first.
               this->context.jukebox.loadVisuals(*chart, cancelled);
               previewVisualsLoaded_ = true;
+              lock.unlock();
+              bool audioPrepared = false;
+              while (!isCancelled()) {
+                const auto state = source->GetState();
+                if (state.cancelled || !state.error.empty()) break;
+                if (state.preparationComplete) {
+                  audioPrepared = true;
+                  break;
+                }
+                // Preparation notifications wake promptly; the bounded wait
+                // also observes selection/Play cancellation from the controller.
+                source->WaitForChange(state.revision, std::chrono::milliseconds(25));
+              }
+              lock.lock();
+              if (audioPrepared && !isCancelled()) {
+                this->context.jukebox.setDecodedAssetCache(previewDecodedAssets_);
+                ScopeExit releaseCache([this] {
+                  this->context.jukebox.setDecodedAssetCache(nullptr);
+                });
+                const auto loaded = this->context.jukebox.prepareGameplayAudioFromPreview(
+                    *chart, cancelled);
+                if (!loaded.success) {
+                  SDL_Log("Preview gameplay preparation failed: %s", loaded.diagnostic.c_str());
+                } else {
+                  std::lock_guard selectedLock(selectedChartMutex);
+                  if (!isCancelled() && selectedChart == chart) {
+                    selectedChartMediaReady.store(true);
+                  }
+                }
+              }
             }
           }
           if (isCancelled()) {
             previewPlayer_.Stop();
             this->context.jukebox.unloadVisuals();
             previewVisualsLoaded_ = false;
+            selectedChartMediaReady.store(false);
             if (!willStart.load()) clearSelectedChart();
             return;
           }
@@ -1783,9 +1814,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
         std::lock_guard lock(previewJukeboxLoadMutex);
         previewPlayer_.Stop();
         // stop() is also called onPause after gameplay has loaded its chart.
-        // Only retire resources still owned by this preview session.
+        // Play takes ownership of a completed preparation. Other stops retire
+        // preview visuals and invalidate readiness for a later full load.
         if (previewVisualsLoaded_) {
-          this->context.jukebox.unloadVisuals();
+          if (!willStart.load() || !selectedChartMediaReady.load()) {
+            this->context.jukebox.unloadVisuals();
+            selectedChartMediaReady.store(false);
+          }
           previewVisualsLoaded_ = false;
         }
       });

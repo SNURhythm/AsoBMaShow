@@ -537,6 +537,31 @@ void testArchivedChartLoadsAudioAboveSchedulingBudget(bool sevenZip,
   }
 }
 
+void testPreviewGameplayPreparationRetainsVisuals() {
+  TemporaryArchivedVisualFixture fixture;
+  const auto imagePath = fixture.directory / "preview.bmp";
+  { std::ofstream image(imagePath, std::ios::binary); image << singlePixelPpm(255, 0, 0); }
+  { std::ofstream sound(fixture.directory / "key.wav", std::ios::binary); sound << shortWave(); }
+  Stopwatch stopwatch;
+  Jukebox jukebox(&stopwatch,
+                  std::make_unique<TestFactory>(std::make_shared<BackendControl>()));
+  bms_parser::Chart chart;
+  populateVisualChart(chart, false, fixture.directory, "preview.bmp");
+  chart.ReferencedWavTable = {{1, "key.wav"}};
+  std::atomic_bool cancelled = false;
+  jukebox.loadVisuals(chart, cancelled);
+  jukebox.seekVisualsToSongTime(0);
+  require(jukebox.hasActiveVisuals(), "preview fixture has a loaded image");
+  // Already decoded visuals must survive without opening the asset again.
+  std::filesystem::remove(imagePath);
+  require(jukebox.prepareGameplayAudioFromPreview(chart, cancelled).success,
+          "preview finishes gameplay preparation");
+  const auto sound = jukebox.resolveRealtimeKeySound(1);
+  require(sound && sound->valid(), "preparation publishes playable gameplay audio");
+  jukebox.seekVisualsToSongTime(0);
+  require(jukebox.hasActiveVisuals(), "gameplay preparation retains the decoded preview image");
+}
+
 void testRegularChartReusesSoundsAndInvalidatesReplacement() {
   TemporaryArchivedVisualFixture fixture;
   const auto soundPath = fixture.directory / "shared.wav";
@@ -1132,6 +1157,7 @@ int main(int argc, char **argv) {
   require(bgfx::init(init), "headless bgfx initializes for image resources");
 
   try {
+    testPreviewGameplayPreparationRetainsVisuals();
     testUnicodeChartAssetReferences();
     if (argc == 2 && std::string_view(argv[1]) == "--unicode-assets") {
       rendering::UniformCache::getInstance().destroyAll();

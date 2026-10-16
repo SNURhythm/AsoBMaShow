@@ -34,7 +34,7 @@ struct PagedPreviewState {
 
 // A single control thread owns Begin/Cancel. One backend callback owns CheckRender/Render.
 // Cancel joins preparation, retaining every owner/page until destruction, which
-// must follow backend quiescence. State queries/waits are control-thread only.
+// must follow backend quiescence. State queries/waits are safe on non-callback threads.
 class PagedPreviewSource {
 public:
   static std::shared_ptr<PagedPreviewSource>
