@@ -95,6 +95,20 @@ void testBatchedEventsAndClockWrap() {
           "SDL tick wraparound does not change fling velocity or distance");
 }
 
+void testActivitySurvivesSameTickAndEndsWithMotion() {
+  auto momentum = fling();
+  float delta = 0.0F;
+  require(momentum.isActive(), "a released fling needs subsequent frames");
+  require(!momentum.step(1100, delta) && momentum.isActive(),
+          "same-tick release drawing must preserve the next-frame demand");
+  for (std::uint32_t now = 1116; momentum.isActive() && now < 10000; now += 16)
+    momentum.step(now, delta);
+  require(!momentum.isActive(), "settled momentum must stop requesting frames");
+  momentum = fling();
+  momentum.stop();
+  require(!momentum.isActive(), "hitting a scroll boundary stops frame demand");
+}
+
 void testStoppingAndNewGestures() {
   auto momentum = fling();
   momentum.release(1201);
@@ -122,6 +136,7 @@ int main() {
     testFrameAndTouchRateIndependence();
     testBatchedEventsAndClockWrap();
     testStoppingAndNewGestures();
+    testActivitySurvivesSameTickAndEndsWithMotion();
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';
     return 1;

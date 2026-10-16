@@ -85,6 +85,7 @@ public:
   }
 
   void setMode(PracticeAnalyticsMode value) {
+    if (mode != value) ui::invalidate();
     mode = value;
     pointerCapture.cancelAll();
   }
@@ -484,7 +485,11 @@ void PracticeAnalyticsView::build() {
 
 void PracticeAnalyticsView::setAttemptSelection(
     std::optional<std::size_t> attemptIndex) {
+  const auto previousAttempt = model.selectedAttempt();
+  const auto previousGroup = model.selectedAggregateGroup();
   model.selectAttempt(attemptIndex);
+  if (previousAttempt != model.selectedAttempt() ||
+      previousGroup != model.selectedAggregateGroup()) ui::invalidate();
   if (attemptIndex.has_value()) {
     const std::size_t aggregateCount = model.compatibilityGroups().size();
     if (*attemptIndex < model.completedAttempts()) {
@@ -497,7 +502,11 @@ void PracticeAnalyticsView::setAttemptSelection(
 }
 
 void PracticeAnalyticsView::setAggregateSelection(std::size_t groupIndex) {
+  const auto previousAttempt = model.selectedAttempt();
+  const auto previousGroup = model.selectedAggregateGroup();
   model.selectAggregateGroup(groupIndex);
+  if (previousAttempt != model.selectedAttempt() ||
+      previousGroup != model.selectedAggregateGroup()) ui::invalidate();
   if (groupIndex < model.compatibilityGroups().size()) {
     choiceIndex = groupIndex;
   }
@@ -567,11 +576,15 @@ void PracticeAnalyticsView::applyChoice() {
     return;
   }
   const auto &choice = choices[choiceIndex];
+  const auto previousAttempt = model.selectedAttempt();
+  const auto previousGroup = model.selectedAggregateGroup();
   if (choice.attemptIndex.has_value()) {
     model.selectAttempt(choice.attemptIndex);
   } else {
     model.selectAggregateGroup(choice.groupIndex);
   }
+  if (previousAttempt != model.selectedAttempt() ||
+      previousGroup != model.selectedAggregateGroup()) ui::invalidate();
   refreshText();
 }
 
@@ -629,7 +642,9 @@ void PracticeAnalyticsView::refreshText() {
 
 void PracticeAnalyticsView::selectSections(std::size_t firstSection,
                                            std::size_t lastSection) {
+  const auto previous = model.selectedRange();
   model.selectSection(firstSection, lastSection);
+  if (previous != model.selectedRange()) ui::invalidate();
   refreshText();
   if (const auto selected = model.selectedRange();
       selected.has_value() && sectionSelectionListener) {

@@ -81,7 +81,7 @@ struct MainMenuParseLogRow {
 class MainMenuScene : public Scene {
 public:
   bool usesResponsiveMenuCanvas() const override { return true; }
-  bool canSkipUnchangedPresentation() const override { return selectorTabActive(); }
+  bool needsContinuousPresentation() const override;
   explicit MainMenuScene(ApplicationContext &context, bool showTutorial = false);
   ~MainMenuScene() override;
   void init() override;
@@ -143,6 +143,7 @@ private:
   void updatePreviewVisuals();
   // Guarded by previewJukeboxLoadMutex; full gameplay owns visuals after stop.
   bool previewVisualsLoaded_ = false;
+  std::optional<std::uint64_t> previewVisualPositionFrames_;
   std::mutex previewJukeboxLoadMutex;
   std::unique_ptr<MainMenuPreviewController> previewWorker_;
   ReplayRecordTask replayLoadTask_;

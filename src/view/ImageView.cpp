@@ -473,7 +473,7 @@ image_decode::ImageDecodeCoordinator &imageDecodeCoordinator() {
           archive_file::appendDebugLogLine(diagnostic);
         }
         return decoded;
-      });
+      }, 2, [] { ui::notifyCompletion(); });
   return coordinator;
 }
 
@@ -601,6 +601,7 @@ bool ImageView::applyImage(const path_t &path, const std::string &key,
     return false;
   }
   texture = nextTexture;
+  texturePixels = cache.rgba;
   rendering::UiBatchRenderer::notifyTextureChanged();
   currentImageKey = key;
   currentImagePath = path;
@@ -623,6 +624,9 @@ bool ImageView::applyCachedTexture(const path_t &path,
                                    const std::string &key) {
   if (const auto cached = imageCache.get(key)) {
     cancelAsyncRequest();
+    if (texturePixels.lock() == cached->rgba && bgfx::isValid(texture)) {
+      return true;
+    }
     return applyImage(path, key, *cached, false);
   }
   if (asyncTicket != 0) {
@@ -708,6 +712,7 @@ void ImageView::freeTexture() {
     bgfx::destroy(texture);
   }
   texture = BGFX_INVALID_HANDLE;
+  texturePixels.reset();
   ambientPalette_.reset();
   ambientGlow_.reset();
   ambientGeometry_.reset();
@@ -780,6 +785,7 @@ bool ImageView::setImageAsync(const path_t &path, bool prioritize) {
   }
   currentImageKey = key;
   currentImagePath = path;
+  ui::invalidate();
   if (applyCachedTexture(path, key)) {
     asyncImagePending = false;
     return true;
@@ -856,6 +862,7 @@ bool ImageView::setImageAsyncShared(const path_t &path, bool prioritize) {
   }
   currentImageKey = key;
   currentImagePath = path;
+  ui::invalidate();
   if (applyCachedTexture(path, key)) {
     asyncImagePending = false;
     return true;
@@ -887,36 +894,52 @@ void ImageView::freeImage() {
   freeTexture();
 }
 ImageView *ImageView::setFade(ImageFadeDirection direction, float strength) {
-  fade_ = makeImageFade(direction, strength);
+  const auto fade = makeImageFade(direction, strength);
+  if (fade_ == fade) return this;
+  fade_ = fade;
+  ui::invalidate();
   return this;
 }
 ImageView *ImageView::clearFade() {
+  if (!fade_) return this;
   fade_.reset();
+  ui::invalidate();
   return this;
 }
 ImageView *ImageView::setScrimColor(const Color &color) {
   themedScrimColorProvider_ = {};
+  if (scrimColor_ && scrimColor_->toABGR() == color.toABGR()) return this;
   scrimColor_ = color;
+  ui::invalidate();
   return this;
 }
 ImageView *ImageView::setThemedScrimColor(ThemeColorProvider provider) {
   themedScrimColorProvider_ = std::move(provider);
+  const auto previous = scrimColor_;
   if (themedScrimColorProvider_) {
     scrimColor_ = themedScrimColorProvider_();
   } else {
     scrimColor_.reset();
   }
+  if (previous.has_value() != scrimColor_.has_value() ||
+      (previous && previous->toABGR() != scrimColor_->toABGR())) ui::invalidate();
   return this;
 }
 ImageView *ImageView::clearScrimColor() {
   themedScrimColorProvider_ = {};
+  if (!scrimColor_) return this;
   scrimColor_.reset();
+  ui::invalidate();
   return this;
 }
 void ImageView::onThemeChanged() {
   View::onThemeChanged();
   if (themedScrimColorProvider_) {
-    scrimColor_ = themedScrimColorProvider_();
+    const auto color = themedScrimColorProvider_();
+    if (!scrimColor_ || scrimColor_->toABGR() != color.toABGR()) {
+      scrimColor_ = color;
+      ui::invalidate();
+    }
   }
 }
 void ImageView::onLayout() {

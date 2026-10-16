@@ -549,7 +549,12 @@ public:
     setCornerRadius(std::max(0.0f, app_theme::controlRadius() - 1.0f));
   }
 
-  void setFraction(float value) { fraction = std::clamp(value, 0.0f, 1.0f); }
+  void setFraction(float value) {
+    const float next = std::clamp(value, 0.0f, 1.0f);
+    if (fraction == next) return;
+    fraction = next;
+    ui::invalidate();
+  }
 
 protected:
   [[nodiscard]] bool requiresUiBatchBoundary() const noexcept override {
@@ -862,6 +867,10 @@ EventHandleResult MusicPlayerScene::handleEvents(SDL_Event &event) {
     }
   }
   return Scene::handleEvents(event);
+}
+
+bool MusicPlayerScene::needsContinuousPresentation() const {
+  return context.musicPlayer.PlaybackState().playing;
 }
 
 void MusicPlayerScene::update(float) {

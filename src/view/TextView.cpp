@@ -1,4 +1,5 @@
 #include "TextView.h"
+#include "TextAnimationTiming.h"
 #include "SdlTtfRuntime.h"
 #include "FontCacheSession.h"
 #include "../RAII.h"
@@ -26,9 +27,6 @@
 
 namespace {
 std::mutex g_fontCacheMutex;
-constexpr float kMarqueePixelsPerSecond = 48.0f;
-constexpr Uint64 kMarqueeStartDelayMs = 700;
-constexpr Uint64 kMarqueeEdgeDelayMs = 850;
 constexpr int kTextRasterScale = 2;
 constexpr std::string_view kReplacementUtf8 = "\xEF\xBF\xBD";
 
@@ -456,6 +454,7 @@ void TextView::setResolvedText(const std::string &newText) {
     return;
   }
   this->text = newText;
+  ui::invalidate();
   cachedLineWrapWidth = -1;
   cachedWrappedLines.clear();
   marqueeStartedAt = SDL_GetTicks();
@@ -1029,36 +1028,14 @@ float TextView::marqueeOffset(int viewportWidth) {
     marqueeStartedAt = SDL_GetTicks();
   }
 
-  const float scrollDurationMs =
-      static_cast<float>(overflowWidth) / kMarqueePixelsPerSecond * 1000.0f;
-  const Uint64 scrollMs =
-      std::max<Uint64>(1, static_cast<Uint64>(std::round(scrollDurationMs)));
-  const Uint64 cycleMs = kMarqueeStartDelayMs + scrollMs + kMarqueeEdgeDelayMs +
-                         scrollMs + kMarqueeEdgeDelayMs;
-  Uint64 phase = (SDL_GetTicks() - marqueeStartedAt) % cycleMs;
-
-  if (phase < kMarqueeStartDelayMs) {
-    return 0.0f;
+  const auto frame = text_animation::marquee(
+      overflowWidth, marqueeStartedAt, SDL_GetTicks());
+  if (frame.moving) {
+    ui::requestAnimationFrame();
+  } else if (frame.redrawAt != 0) {
+    ui::requestRedrawAt(frame.redrawAt);
   }
-  phase -= kMarqueeStartDelayMs;
-
-  if (phase < scrollMs) {
-    return static_cast<float>(overflowWidth) * static_cast<float>(phase) /
-           static_cast<float>(scrollMs);
-  }
-  phase -= scrollMs;
-
-  if (phase < kMarqueeEdgeDelayMs) {
-    return static_cast<float>(overflowWidth);
-  }
-  phase -= kMarqueeEdgeDelayMs;
-
-  if (phase < scrollMs) {
-    return static_cast<float>(overflowWidth) *
-           (1.0f - static_cast<float>(phase) / static_cast<float>(scrollMs));
-  }
-
-  return 0.0f;
+  return frame.offset;
 }
 
 void TextView::setColor(SDL_Color newColor) {
@@ -1068,6 +1045,7 @@ void TextView::setColor(SDL_Color newColor) {
     return;
   }
   this->color = newColor;
+  ui::invalidate();
   invalidateTexture();
   if (!deferTextureMaterialization) {
     createTexture();
@@ -1087,6 +1065,7 @@ void TextView::setThemedColor(ThemeColorProvider provider) {
     return;
   }
   color = newColor;
+  ui::invalidate();
   invalidateTexture();
   if (!deferTextureMaterialization) {
     createTexture();
@@ -1106,6 +1085,7 @@ void TextView::onThemeChanged() {
     return;
   }
   color = newColor;
+  ui::invalidate();
   invalidateTexture();
   if (!deferTextureMaterialization) {
     createTexture();
@@ -1256,6 +1236,7 @@ YGSize TextView::measureFunc(YGNodeConstRef node, float width,
 void TextView::setAlign(TextAlign newAlign) {
   if (align == newAlign) return;
   align = newAlign;
+  ui::invalidate();
   if (!wrapEnabled && text.find_first_of("\r\n") == std::string::npos) return;
   metricsDirty = true;
   invalidateTexture();
@@ -1263,13 +1244,18 @@ void TextView::setAlign(TextAlign newAlign) {
   if (!deferTextureMaterialization) createTexture();
 }
 
-void TextView::setVAlign(TextVAlign newVAlign) { this->valign = newVAlign; }
+void TextView::setVAlign(TextVAlign newVAlign) {
+  if (valign == newVAlign) return;
+  valign = newVAlign;
+  ui::invalidate();
+}
 
 void TextView::setOverflow(TextOverflow newOverflow) {
   if (overflow == newOverflow) {
     return;
   }
   overflow = newOverflow;
+  ui::invalidate();
   marqueeStartedAt = SDL_GetTicks();
   YGNodeMarkDirty(getNode());
   applyYogaLayoutFromRoot();
@@ -1280,6 +1266,7 @@ void TextView::setWrap(bool enabled) {
     return;
   }
   wrapEnabled = enabled;
+  ui::invalidate();
   if (!wrapEnabled) {
     currentWrapWidth = 0;
   }

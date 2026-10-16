@@ -8061,9 +8061,20 @@ void MainMenuScene::updatePreviewVisuals() {
   // positionFrames is absolute, including previewStartFrame_, and advances
   // only when the audio callback consumes source frames (not during underruns).
   const auto frames = state.positionFrames;
+  if (previewVisualPositionFrames_ != frames) {
+    previewVisualPositionFrames_ = frames;
+    ui::invalidate();
+  }
   const auto micros = (frames / audio::kPreviewSampleRate) * 1'000'000 +
       (frames % audio::kPreviewSampleRate) * 1'000'000 / audio::kPreviewSampleRate;
   context.jukebox.seekVisualsToSongTime(static_cast<long long>(micros));
+}
+
+bool MainMenuScene::needsContinuousPresentation() const {
+  if (const auto *scene = activeUtilityTab()) {
+    return scene->needsContinuousPresentation();
+  }
+  return context.jukebox.hasActiveVisuals() && previewPlayer_.GetState().playing;
 }
 
 void MainMenuScene::update(float dt) {

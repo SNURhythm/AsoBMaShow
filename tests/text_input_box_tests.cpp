@@ -12,6 +12,7 @@
 #include "view/AppTheme.h"
 #include "scene/play/GuidedAccessReminder.h"
 #include "scene/play/GuidedAccessButtonCue.h"
+#include "ui/PresentationSchedule.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
@@ -90,6 +91,71 @@ public:
 
   [[nodiscard]] SDL_Rect textRect() const { return resolvedTextRect(); }
 };
+
+void testTextPresentationInvalidationAndDeadlines() {
+  TextView text(app_theme::font, 20);
+  text.setDeferredTextureMaterialization(true);
+  text.setSize(100, 40);
+  text.setText("A long text label that needs to scroll across its narrow frame");
+  auto revision = ui::revisions();
+  text.setAlign(TextView::RIGHT);
+  expect(ui::revisions() != revision, "single-line alignment wakes presentation");
+  revision = ui::revisions();
+  text.setAlign(TextView::RIGHT);
+  expect(ui::revisions() == revision, "equal alignment keeps presentation idle");
+  text.setVAlign(TextView::BOTTOM);
+  expect(ui::revisions() != revision, "vertical alignment wakes presentation");
+  revision = ui::revisions();
+  text.setVAlign(TextView::BOTTOM);
+  text.setText(text.getText());
+  text.setColor(text.currentColor());
+  expect(ui::revisions() == revision, "equal text appearance stays idle");
+
+  text.setAlign(TextView::LEFT);
+  text.setOverflow(TextView::TextOverflow::Marquee);
+  RenderContext context;
+  ui::FrameDemand demand;
+  {
+    ui::FrameDemandScope scope(demand);
+    text.render(context);
+  }
+  expect(!demand.animation && demand.redrawAt.has_value(),
+         "visible marquee hold declares a timed redraw");
+  demand = {};
+  context.pushScissor(2000, 2000, 10, 10);
+  {
+    ui::FrameDemandScope scope(demand);
+    text.render(context);
+  }
+  context.popScissor();
+  expect(!demand.animation && !demand.redrawAt,
+         "clipped marquee requests no redraw");
+
+  TextInputBox input(app_theme::font, 20);
+  input.setSize(200, 40);
+  input.setEditingText("hello");
+  revision = ui::revisions();
+  input.setEditingText("hello");
+  expect(ui::revisions() == revision, "equal editing text leaves caret timing alone");
+  input.onSelected();
+  expect(ui::revisions() != revision, "programmatic focus wakes the caret");
+  demand = {};
+  const auto before = SDL_GetTicks();
+  {
+    ui::FrameDemandScope scope(demand);
+    input.render(context);
+  }
+  expect(!demand.animation && demand.redrawAt &&
+             *demand.redrawAt >= before + 500 && *demand.redrawAt <= SDL_GetTicks() + 500,
+         "focused caret declares its next blink instead of continuous frames");
+  input.onUnselected();
+  demand = {};
+  {
+    ui::FrameDemandScope scope(demand);
+    input.render(context);
+  }
+  expect(!demand.animation && !demand.redrawAt, "unfocused input settles");
+}
 
 void click(TextInputBox &input, int x, int y) {
   SDL_Event down{};
@@ -1006,6 +1072,8 @@ int main() {
   init.resolution.width = 64;
   init.resolution.height = 64;
   expect(bgfx::init(init), "headless bgfx initializes for text input tests");
+
+  testTextPresentationInvalidationAndDeadlines();
 
   testConsumedReleaseEndsTextSelectionWithoutEndingEditing();
   testConsumedReleaseCancelsPendingTextFocus();

@@ -77,6 +77,7 @@ public:
                          StartOptions options);
   ~GamePlayScene() override;
   bool pausesBackgroundTasksForPerformance() const override { return true; }
+  bool needsContinuousPresentation() const override;
   void init() override;
   void update(float dt) override;
   void onApplicationBackgroundChanged(bool background) override;

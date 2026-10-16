@@ -6900,6 +6900,18 @@ bool GamePlayScene::finishIfGaugeFailed() {
   return true;
 }
 
+bool GamePlayScene::needsContinuousPresentation() const {
+  if (playbackInitializationFailed) return false;
+  if (guidedAccessReminderPending) return true;
+  if (presentation && presentation->activeMode() == PresentationMode::Skin)
+    return true;
+  if (practiceMenuActive) return practiceMenuStartPressedMicros != 0;
+  if (coursePauseHoldActive || coursePauseHoldRewinding) return true;
+  // Course menus do not pause playback. Built-in ordinary pauses use the
+  // frozen song clock for notes, lane effects and BGA, so their UI can settle.
+  return state == nullptr || !context.jukebox.isPaused();
+}
+
 void GamePlayScene::update(float dt) {
   updateSkinIrTarget();
   if (guidedAccessReminderPending) {

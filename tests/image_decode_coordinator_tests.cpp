@@ -290,6 +290,65 @@ void testLegacyCancellationDoesNotAccumulateTerminalTickets() {
          "fire-and-forget cancellation leaves no terminal ticket records behind");
 }
 
+void testCompletionNotifierPublishesReadyFailureAndDrops() {
+  std::atomic<int> notifications = 0;
+  image_decode::ImageDecodeCoordinator coordinator(
+      [](const auto &item) -> std::optional<image_decode::DecodedImageData> {
+        if (item.key == "failed") return std::nullopt;
+        return image_decode::DecodedImageData{.width=1, .height=1,
+          .rgba=std::make_shared<std::vector<unsigned char>>(4, 0)};
+      }, 1, [&] {
+        // Notification must run outside the coordinator lock: a consumer may
+        // query ready data immediately when signalled.
+        (void)coordinator.readyBytes();
+        ++notifications;
+      });
+  const auto ready = coordinator.request(request("ready"));
+  expect(waitUntil([&] { return notifications == 1; }),
+         "ready decode signals a sleeping presentation owner");
+  expect(coordinator.takeReady(ready).has_value(),
+         "ready result is published before the notification");
+  const auto failed = coordinator.request(request("failed"));
+  expect(waitUntil([&] { return notifications == 2; }) && coordinator.hasFailed(failed),
+         "failed decode also wakes its consumer");
+  coordinator.drop("failed");
+  expect(notifications == 3 && !coordinator.isTracked(failed),
+         "dropping a tracked request signals retry work");
+  coordinator.drop("missing");
+  coordinator.dropPrefix("missing");
+  coordinator.dropAll();
+  expect(notifications == 3, "empty cache drops do not keep presentation awake");
+
+  const auto prefix = coordinator.request(request("prefix:item"));
+  expect(waitUntil([&] { return notifications == 4; }), "prefix decode finishes");
+  coordinator.dropPrefix("prefix:");
+  expect(notifications == 5 && !coordinator.isTracked(prefix),
+         "prefix drop publishes invalidated tickets");
+  const auto all = coordinator.request(request("all"));
+  expect(waitUntil([&] { return notifications == 6; }), "final decode finishes");
+  coordinator.dropAll();
+  expect(notifications == 7 && !coordinator.isTracked(all),
+         "dropAll publishes invalidated tickets");
+}
+
+void testDiscardedDecodeDoesNotPublishStaleCompletion() {
+  ControlledLoader loader;
+  std::atomic<int> notifications = 0;
+  image_decode::ImageDecodeCoordinator coordinator(
+      [&](const auto &item) { return loader.load(item); }, 1,
+      [&] { ++notifications; });
+  const auto ticket = coordinator.request(request("dropped"));
+  expect(waitUntil([&] { return loader.hasStarted("dropped"); }),
+         "controlled decode starts before drop");
+  coordinator.dropAll();
+  expect(notifications == 1 && !coordinator.isTracked(ticket),
+         "dropping in-flight work signals its cancellation");
+  loader.release("dropped");
+  coordinator.shutdown();
+  expect(notifications == 1,
+         "discarded worker result cannot publish a stale completion");
+}
+
 } // namespace
 
 int main() {
@@ -300,6 +359,8 @@ int main() {
   testTerminalWaitIsNotifiedAndTakesReadyImage();
   testTerminalWaitCancellationDoesNotCancelAnotherConsumer();
   testLegacyCancellationDoesNotAccumulateTerminalTickets();
+  testCompletionNotifierPublishesReadyFailureAndDrops();
+  testDiscardedDecodeDoesNotPublishStaleCompletion();
   if (failures != 0) {
     std::cerr << failures << " image decode coordinator test(s) failed\n";
     return 1;

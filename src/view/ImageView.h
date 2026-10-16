@@ -39,6 +39,9 @@ private:
   void applyAsyncImageIfReady();
   bool loadTexture(const path_t &path);
   bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+  // Reuse equal cache bindings without retaining decoded CPU pixels. Cache
+  // replacement under the same key must still replace the uploaded texture.
+  std::weak_ptr<std::vector<unsigned char>> texturePixels;
   bgfx::UniformHandle s_texColor = BGFX_INVALID_HANDLE;
   static image_decode::DecodedImageCache imageCache;
   std::string currentImageKey;
@@ -67,7 +70,9 @@ protected:
 
 public:
   ImageView *setContentMode(ContentMode mode) {
+    if (contentMode_ == mode) return this;
     contentMode_ = mode;
+    ui::invalidate();
     return this;
   }
   ImageView() = delete;
@@ -95,8 +100,18 @@ public:
   }
   [[nodiscard]] const path_t &imagePath() const { return currentImagePath; }
   [[nodiscard]] const std::optional<ArtworkPalette> &ambientPalette() const { return ambientPalette_; }
-  void setAmbientGlow(const ArtworkGlow &glow) { ambientGlow_ = glow; }
-  void clearAmbientGlow() { ambientGlow_.reset(); }
+  void setAmbientGlow(const ArtworkGlow &glow) {
+    if (ambientGlow_ && ambientGlow_->intensity == glow.intensity &&
+        ambientGlow_->spread == glow.spread && ambientGlow_->bass == glow.bass &&
+        ambientGlow_->spectrum == glow.spectrum) return;
+    ambientGlow_ = glow;
+    ui::invalidate();
+  }
+  void clearAmbientGlow() {
+    if (!ambientGlow_) return;
+    ambientGlow_.reset();
+    ui::invalidate();
+  }
   [[nodiscard]] int imageWidth() const { return currentImageWidth; }
   [[nodiscard]] int imageHeight() const { return currentImageHeight; }
 

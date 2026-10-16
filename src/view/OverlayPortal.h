@@ -109,9 +109,12 @@ public:
       return;
     }
     presented.push_back(overlay);
+    ui::invalidate();
   }
 
-  void dismiss(View *overlay) { std::erase(presented, overlay); }
+  void dismiss(View *overlay) {
+    if (std::erase(presented, overlay) != 0) ui::invalidate();
+  }
 
   [[nodiscard]] bool isPresented(const View *overlay) const {
     return std::ranges::find(presented, overlay) != presented.end();

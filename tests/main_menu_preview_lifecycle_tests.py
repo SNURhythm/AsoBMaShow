@@ -71,7 +71,8 @@ class MainMenuPreviewLifecycleTests(unittest.TestCase):
             program = Path(directory) / "visuals.cpp"
             executable = Path(directory) / ("visuals" + compiler.executable_suffix)
             program.write_text(fixture)
-            compiler.build([str(program)], executable, directory, standard=23)
+            compiler.build([str(program)], executable, directory, standard=23,
+                           includes=[ROOT / "src"])
             result = subprocess.run([str(executable)], cwd=directory, capture_output=True,
                                     text=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

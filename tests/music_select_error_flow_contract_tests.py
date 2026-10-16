@@ -954,7 +954,8 @@ int main() {
             directory = Path(tempfile.mkdtemp(dir=fixture_directory))
             program = directory / "scene.cpp"
             executable = directory / ("scene" + compiler.executable_suffix)
-            program.write_text('#include "' + (ROOT / "src/i18n/Localization.h").as_posix() + '"\n' + source)
+            program.write_text('#include "' + (ROOT / "src/i18n/Localization.h").as_posix() + '"\n' +
+                               '#include "' + (ROOT / "src/ui/PresentationSchedule.h").as_posix() + '"\n' + source)
             objects = []
             if fixture_objects is not None:
                 localization_object = fixture_objects.get(compiler)

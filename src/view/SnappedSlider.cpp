@@ -80,6 +80,7 @@ SnappedSlider::SnappedSlider(std::function<void(int)> onValueChanged)
 }
 
 void SnappedSlider::refresh(const State &state) {
+  const State previous = current;
   current.minimum = std::min(state.minimum, state.maximum);
   current.maximum = std::max(state.minimum, state.maximum);
   current.step = std::max(1, state.step);
@@ -96,6 +97,7 @@ void SnappedSlider::refresh(const State &state) {
   if (!current.enabled) {
     cancelInteraction();
   }
+  if (current != previous) ui::invalidate();
 }
 
 void SnappedSlider::renderImpl(RenderContext &context) {
@@ -262,12 +264,14 @@ void SnappedSlider::updateFromX(float x) {
     return;
   }
   current.value = next;
+  ui::invalidate();
   if (onValueChanged) {
     onValueChanged(next);
   }
 }
 
 void SnappedSlider::cancelInteraction() {
+  if (mouseDragging || hovered || activeTouchId != -1) ui::invalidate();
   mouseDragging = false;
   hovered = false;
   activeTouchId = -1;

@@ -180,9 +180,11 @@ public:
   }
 
   void selectNext() {
-    selectedIndex =
-        result_gauge_history::nextSeriesIndex(series, selectedIndex);
+    const auto next = result_gauge_history::nextSeriesIndex(series, selectedIndex);
+    if (selectedIndex == next) return;
+    selectedIndex = next;
     updateGraph();
+    ui::invalidate();
   }
 
   [[nodiscard]] std::size_t seriesCount() const { return series.size(); }
@@ -4280,6 +4282,14 @@ void ResultScene::buildResultView() {
   rootLayout->applyYogaLayout();
 
 
+}
+
+bool ResultScene::needsContinuousPresentation() const {
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  return resultSkinSession != nullptr;
+#else
+  return false;
+#endif
 }
 
 void ResultScene::update(float dt) {

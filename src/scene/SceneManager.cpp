@@ -28,6 +28,7 @@ void SceneManager::cleanupSceneInstance(Scene *scene) {
 }
 
 void SceneManager::updateForegroundSceneState() {
+  ui::invalidate();
   if (context.setResponsiveMenuCanvas) {
     context.setResponsiveMenuCanvas(currentScene && currentScene->usesResponsiveMenuCanvas());
   }
@@ -54,6 +55,7 @@ void SceneManager::updateForegroundSceneState() {
 
 void SceneManager::setPresentationOrientation(player_settings::PresentationOrientation orientation) {
   if (context.settings.activePresentationOrientation() == orientation) return;
+  ui::invalidate();
   // Finish edits while their original owner is still selected. Retained scenes
   // keep their lists/selection; only presentation controls are refreshed.
   auto retained = backgroundScenes;

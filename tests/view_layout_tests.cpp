@@ -1,6 +1,7 @@
 #include "../src/view/BlockingOverlayView.h"
 #include "../src/view/OverlayPortal.h"
 #include "../src/view/View.h"
+#include "../src/view/UiTheme.h"
 #include "scene/ResultLayoutGeometry.h"
 #include "ir/IrRankingModal.h"
 #include "scene/SettingsSceneInputActions.h"
@@ -39,6 +40,146 @@ int ui_view_height = design_height;
 } // namespace rendering
 
 namespace {
+
+void testVisualMutationsWakeIdlePresentation() {
+  View root(0, 0, 300, 200);
+  const auto changes = [](auto mutate) {
+    const auto before = ui::revisions();
+    mutate();
+    assert(ui::revisions() != before);
+  };
+  const auto unchanged = [](auto mutate) {
+    const auto before = ui::revisions();
+    mutate();
+    assert(ui::revisions() == before);
+  };
+  changes([&] { root.setBackgroundColor(Color(20, 30, 40)); });
+  unchanged([&] { root.setBackgroundColor(Color(20, 30, 40)); });
+  changes([&] { root.setBackgroundGradient(Color(1, 2, 3), Color(4, 5, 6)); });
+  unchanged([&] { root.setBackgroundGradient(Color(1, 2, 3), Color(4, 5, 6)); });
+  changes([&] { root.clearBackgroundColor(); });
+  unchanged([&] { root.clearBackgroundColor(); });
+  changes([&] { root.setVisible(false); });
+  unchanged([&] { root.setVisible(false); });
+  changes([&] { root.setVisible(true); });
+  changes([&] { root.setRotationDegrees(15); });
+  unchanged([&] { root.setRotationDegrees(15); });
+  changes([&] { root.setAutoFitText(true); });
+  unchanged([&] { root.setAutoFitText(true); });
+  changes([&] { root.setCornerRadius(8); });
+  unchanged([&] { root.setCornerRadius(8); });
+  changes([&] { root.setBorderColor(Color(90, 80, 70)); });
+  unchanged([&] { root.setBorderColor(Color(90, 80, 70)); });
+  changes([&] { root.setBorderWidth(2); });
+  unchanged([&] { root.setBorderWidth(2); });
+  changes([&] { root.clearBorderColor(); });
+  unchanged([&] { root.clearBorderColor(); });
+  changes([&] { root.setShadow(Color(0, 0, 0, 80), 0, 2, 8); });
+  unchanged([&] { root.setShadow(Color(0, 0, 0, 80), 0, 2, 8); });
+  changes([&] { root.clearShadow(); });
+  unchanged([&] { root.clearShadow(); });
+  changes([&] { root.setSize(350, 250); });
+  unchanged([&] { root.setSize(350, 250); });
+  changes([&] { root.setPadding(Edge::All, 12); });
+  unchanged([&] { root.setPadding(Edge::All, 12); });
+  changes([&] { root.setPositionNoLayout(5, 10); });
+  unchanged([&] { root.setPositionNoLayout(5, 10); });
+  auto *child = new View(0, 0, 20, 20);
+  changes([&] { root.addView(child); });
+  changes([&] { child->setZIndex(2); });
+  unchanged([&] { child->setZIndex(2); });
+  changes([&] { root.clearChildren(); });
+  unchanged([&] { root.clearChildren(); });
+}
+
+void testThemedStyleAndLayoutReapplicationSettle() {
+  View root(0, 0, 300, 200);
+  auto revision = ui::revisions();
+  root.setThemedShadow({}, 0, 2, 8);
+  assert(ui::revisions() == revision);
+
+  Color theme(20, 30, 40, 80);
+  const auto applyTheme = [&] {
+    root.setThemedBackgroundColor([&] { return theme; });
+    root.setThemedBorderColor([&] { return theme; });
+    root.setThemedShadow([&] { return theme; }, ui_theme::kCardShadow);
+  };
+  applyTheme();
+  root.setBorderWidth(2);
+  root.applyYogaLayout();
+  revision = ui::revisions();
+  applyTheme();
+  root.propagateThemeChange();
+  root.applyYogaLayout();
+  assert(ui::revisions() == revision);
+  theme = Color(40, 50, 60, 100);
+  root.propagateThemeChange();
+  assert(ui::revisions() != revision);
+  revision = ui::revisions();
+  root.propagateThemeChange();
+  root.applyYogaLayout();
+  assert(ui::revisions() == revision);
+}
+
+void testPublishedGeometryWakesAfterExternalYogaCalculation() {
+  View root(0, 0, 300, 200);
+  auto *child = new View(0, 0, 20, 20);
+  root.addView(child);
+  root.applyYogaLayout();
+  const auto revision = ui::revisions();
+  YGNodeStyleSetWidth(child->getNode(), 70);
+  YGNodeCalculateLayout(root.getNode(), YGUndefined, YGUndefined, YGDirectionLTR);
+  assert(!YGNodeIsDirty(root.getNode()));
+  root.applyYogaLayout();
+  assert(child->getWidth() == 70);
+  assert(ui::revisions() != revision);
+  const auto settled = ui::revisions();
+  root.applyYogaLayout();
+  assert(ui::revisions() == settled);
+}
+
+class ScheduledRenderProbe final : public View {
+public:
+  using View::View;
+  int paints = 0;
+private:
+  void renderImpl(RenderContext &) override {
+    ++paints;
+    // Real widgets may reapply layout while painting. Once geometry settles,
+    // that must not force another presentation by itself.
+    applyYogaLayout();
+    if (paints == 1) ui::requestRedrawAt(500);
+  }
+};
+
+void testIdleDrawingLeavesServiceTicksAndDeadlinesAlive() {
+  ScheduledRenderProbe view(0, 0, 100, 100);
+  RenderContext context;
+  ui::PresentationSchedule schedule;
+  const auto present = [&](std::uint64_t now) {
+    if (!schedule.shouldRender(now)) return;
+    const auto before = ui::revisions();
+    ui::FrameDemand demand;
+    {
+      ui::FrameDemandScope frame(demand);
+      view.render(context);
+    }
+    schedule.didPresent(before, demand, now);
+  };
+  present(0);
+  int serviceTicks = 0;
+  for (int tick = 1; tick <= 120; ++tick) {
+    ++serviceTicks;
+    present(tick * 8);
+  }
+  assert(serviceTicks == 120);
+  assert(view.paints == 2); // Initial frame and the due 500 ms deadline.
+  view.setWidth(120);
+  present(968);
+  assert(view.paints == 3);
+  present(976);
+  assert(view.paints == 3);
+}
 
 void testBatchedConstructorOwnership() {
   for (const bool explicitFrame : {false, true}) {
@@ -1160,6 +1301,10 @@ void testProfileInlineEditorClearsWhenUnavailable() {
 } // namespace
 
 int main() {
+  testVisualMutationsWakeIdlePresentation();
+  testThemedStyleAndLayoutReapplicationSettle();
+  testPublishedGeometryWakesAfterExternalYogaCalculation();
+  testIdleDrawingLeavesServiceTicksAndDeadlinesAlive();
   testBatchedConstructorOwnership();
   testLayoutRecoversAfterCallbackFailure();
   testViewSkipsOffscreenPaintingButStillVisitsVisibleChildren();

@@ -89,11 +89,17 @@ void ScrollView::setContentView(View *view) {
     return;
   }
   contentView.reset(view);
+  ui::invalidate();
   refreshContentLayout();
 }
 
 ScrollView *ScrollView::setContentPadding(Edge edge, float padding) {
+  const std::array previous{contentPaddingLeft, contentPaddingTop,
+                            contentPaddingRight, contentPaddingBottom};
   updateStoredContentPadding(edge, padding);
+  if (previous == std::array{contentPaddingLeft, contentPaddingTop,
+                             contentPaddingRight, contentPaddingBottom}) return this;
+  ui::invalidate();
   refreshContentLayout();
   return this;
 }
@@ -128,16 +134,20 @@ void ScrollView::scrollToBottom() {
     return;
   }
   refreshContentLayout();
+  const double previousOffset = scrollOffset;
   scrollOffset = std::max(0.0f,
                           static_cast<float>(contentView->getHeight() -
                                              getScrollContentHeight()));
   updateContentPosition();
+  if (scrollOffset != previousOffset) ui::invalidate();
 }
 
 void ScrollView::setScrollOffset(float offset) {
+  const double previousOffset = scrollOffset;
   scrollOffset = std::max(0.0f, offset);
   clampScrollOffset();
   updateContentPosition();
+  if (scrollOffset != previousOffset) ui::invalidate();
 }
 
 void ScrollView::renderImpl(RenderContext &context) {
@@ -154,6 +164,10 @@ void ScrollView::renderImpl(RenderContext &context) {
     ScissorScope scissor(context, getScrollContentX(), getScrollContentY(),
                          getScrollContentWidth(), getScrollContentHeight());
     contentView->render(context);
+  }
+  if (touchMomentum.isActive() && context.boundsIntersectScissor(
+          getViewportX(), getViewportY(), getViewportWidth(), getViewportHeight())) {
+    ui::requestAnimationFrame();
   }
   renderPersistentScrollbar(context);
 }

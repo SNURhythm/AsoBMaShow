@@ -448,6 +448,8 @@ View *View::setDisplay(YGDisplay display) {
 
 View *View::setBackgroundColor(const Color &color) {
   themedBackgroundColorProvider = nullptr;
+  if (!hasBackground || hasGradientBackground ||
+      backgroundColor.toABGR() != color.toABGR()) ui::invalidate();
   backgroundColor = color;
   hasBackground = true;
   hasGradientBackground = false;
@@ -457,7 +459,10 @@ View *View::setBackgroundColor(const Color &color) {
 View *View::setThemedBackgroundColor(ThemeColorProvider provider) {
   themedBackgroundColorProvider = std::move(provider);
   if (themedBackgroundColorProvider) {
-    backgroundColor = themedBackgroundColorProvider();
+    const Color color = themedBackgroundColorProvider();
+    if (!hasBackground || hasGradientBackground ||
+        backgroundColor.toABGR() != color.toABGR()) ui::invalidate();
+    backgroundColor = color;
     hasBackground = true;
     hasGradientBackground = false;
   }
@@ -467,6 +472,10 @@ View *View::setThemedBackgroundColor(ThemeColorProvider provider) {
 View *View::setBackgroundGradient(const Color &topColor,
                                   const Color &bottomColor) {
   themedBackgroundColorProvider = nullptr;
+  if (!hasBackground || !hasGradientBackground ||
+      backgroundGradientTopColor.toABGR() != topColor.toABGR() ||
+      backgroundGradientBottomColor.toABGR() != bottomColor.toABGR())
+    ui::invalidate();
   backgroundGradientTopColor = topColor;
   backgroundGradientBottomColor = bottomColor;
   hasBackground = true;
@@ -476,58 +485,69 @@ View *View::setBackgroundGradient(const Color &topColor,
 
 View *View::clearBackgroundColor() {
   themedBackgroundColorProvider = nullptr;
+  if (hasBackground) ui::invalidate();
   hasBackground = false;
   hasGradientBackground = false;
   return this;
 }
 
 View *View::setCornerRadius(float radius) {
-  cornerRadius = std::max(0.0f, radius);
+  const float normalized = std::max(0.0f, radius);
+  if (cornerRadius != normalized) ui::invalidate();
+  cornerRadius = normalized;
   return this;
 }
 
 View *View::setShadow(const Color &color, int offsetX, int offsetY,
                       int spread) {
-  themedShadowColorProvider = nullptr;
-  shadowColor = color;
-  shadowOffsetX = offsetX;
-  shadowOffsetY = offsetY;
-  shadowSpread = std::max(0, spread);
-  shadowRadiusInset = 0.0f;
-  hasShadow = color.a > 0 && shadowSpread > 0;
-  return this;
+  return setShadow(color, ui_theme::ShadowSpec{offsetX, offsetY, spread, 0.0f});
 }
 
 View *View::setShadow(const Color &color, const ui_theme::ShadowSpec &shadow) {
-  setShadow(color, shadow.offsetX, shadow.offsetY, shadow.spread);
-  shadowRadiusInset = std::max(0.0f, shadow.radiusInset);
+  themedShadowColorProvider = nullptr;
+  const int spread = std::max(0, shadow.spread);
+  const float inset = std::max(0.0f, shadow.radiusInset);
+  const bool visible = color.a > 0 && spread > 0;
+  if (hasShadow != visible || shadowColor.toABGR() != color.toABGR() ||
+      shadowOffsetX != shadow.offsetX || shadowOffsetY != shadow.offsetY ||
+      shadowSpread != spread || shadowRadiusInset != inset) ui::invalidate();
+  shadowColor = color;
+  shadowOffsetX = shadow.offsetX;
+  shadowOffsetY = shadow.offsetY;
+  shadowSpread = spread;
+  shadowRadiusInset = inset;
+  hasShadow = visible;
   return this;
 }
 
 View *View::setThemedShadow(ThemeColorProvider provider, int offsetX,
                             int offsetY, int spread) {
-  themedShadowColorProvider = std::move(provider);
-  shadowOffsetX = offsetX;
-  shadowOffsetY = offsetY;
-  shadowSpread = std::max(0, spread);
-  shadowRadiusInset = 0.0f;
-  if (themedShadowColorProvider) {
-    shadowColor = themedShadowColorProvider();
-    hasShadow = shadowColor.a > 0 && shadowSpread > 0;
-  }
-  return this;
+  return setThemedShadow(std::move(provider),
+                        ui_theme::ShadowSpec{offsetX, offsetY, spread, 0.0f});
 }
 
 View *View::setThemedShadow(ThemeColorProvider provider,
                             const ui_theme::ShadowSpec &shadow) {
-  setThemedShadow(std::move(provider), shadow.offsetX, shadow.offsetY,
-                  shadow.spread);
-  shadowRadiusInset = std::max(0.0f, shadow.radiusInset);
+  if (provider) {
+    setShadow(provider(), shadow);
+  } else {
+    const int spread = std::max(0, shadow.spread);
+    const float inset = std::max(0.0f, shadow.radiusInset);
+    if (hasShadow && (shadowOffsetX != shadow.offsetX ||
+                     shadowOffsetY != shadow.offsetY || shadowSpread != spread ||
+                     shadowRadiusInset != inset)) ui::invalidate();
+    shadowOffsetX = shadow.offsetX;
+    shadowOffsetY = shadow.offsetY;
+    shadowSpread = spread;
+    shadowRadiusInset = inset;
+  }
+  themedShadowColorProvider = std::move(provider);
   return this;
 }
 
 View *View::clearShadow() {
   themedShadowColorProvider = nullptr;
+  if (hasShadow) ui::invalidate();
   hasShadow = false;
   shadowSpread = 0;
   shadowRadiusInset = 0.0f;
@@ -536,6 +556,7 @@ View *View::clearShadow() {
 
 View *View::setBorderColor(const Color &color) {
   themedBorderColorProvider = nullptr;
+  if (!hasBorder || borderColor.toABGR() != color.toABGR()) ui::invalidate();
   borderColor = color;
   hasBorder = true;
   syncYogaBorderWidth();
@@ -545,7 +566,9 @@ View *View::setBorderColor(const Color &color) {
 View *View::setThemedBorderColor(ThemeColorProvider provider) {
   themedBorderColorProvider = std::move(provider);
   if (themedBorderColorProvider) {
-    borderColor = themedBorderColorProvider();
+    const Color color = themedBorderColorProvider();
+    if (!hasBorder || borderColor.toABGR() != color.toABGR()) ui::invalidate();
+    borderColor = color;
     hasBorder = true;
   }
   syncYogaBorderWidth();
@@ -554,13 +577,16 @@ View *View::setThemedBorderColor(ThemeColorProvider provider) {
 
 View *View::clearBorderColor() {
   themedBorderColorProvider = nullptr;
+  if (hasBorder) ui::invalidate();
   hasBorder = false;
   syncYogaBorderWidth();
   return this;
 }
 
 View *View::setBorderWidth(int width) {
-  borderWidth = std::max(0, width);
+  const int normalized = std::max(0, width);
+  if (borderWidth != normalized) ui::invalidate();
+  borderWidth = normalized;
   syncYogaBorderWidth();
   return this;
 }
@@ -605,6 +631,7 @@ View *View::insertViewAtLayoutIndex(View *view, std::size_t layoutIndex) {
   if (view == nullptr || view->parent != nullptr) {
     return this;
   }
+  ui::invalidate();
   std::unique_ptr<View> pending(view);
   layoutIndex = std::min(layoutIndex,
                          static_cast<std::size_t>(YGNodeGetChildCount(node)));
@@ -631,6 +658,8 @@ void View::refreshInsertionOrderFromLayout() {
 }
 
 View *View::clearChildren() {
+  if (children.empty()) return this;
+  ui::invalidate();
   for (auto *view : children) {
     dirtyRoots.erase(view);
     if (node != nullptr && view != nullptr && view->node != nullptr) {
@@ -653,16 +682,23 @@ void View::applyYogaLayoutFromRoot() { requestLayout(); }
 
 void View::onThemeChanged() {
   if (themedBackgroundColorProvider) {
-    backgroundColor = themedBackgroundColorProvider();
+    const Color color = themedBackgroundColorProvider();
+    if (!hasBackground || hasGradientBackground ||
+        backgroundColor.toABGR() != color.toABGR()) ui::invalidate();
+    backgroundColor = color;
     hasBackground = true;
     hasGradientBackground = false;
   }
   if (themedBorderColorProvider) {
-    borderColor = themedBorderColorProvider();
+    const Color color = themedBorderColorProvider();
+    if (!hasBorder || borderColor.toABGR() != color.toABGR()) ui::invalidate();
+    borderColor = color;
     hasBorder = true;
   }
   if (themedShadowColorProvider) {
-    shadowColor = themedShadowColorProvider();
+    const Color color = themedShadowColorProvider();
+    if (shadowColor.toABGR() != color.toABGR()) ui::invalidate();
+    shadowColor = color;
     hasShadow = shadowColor.a > 0 && shadowSpread > 0;
   }
 }
@@ -850,6 +886,15 @@ void View::applyYogaLayoutImmediate() {
   }
   auto newWidth = YGNodeLayoutGetWidth(node);
   auto newHeight = YGNodeLayoutGetHeight(node);
+  // Yoga may already have recalculated descendants before we visit them, or
+  // callers may have explicitly calculated the exposed node. Compare against
+  // the geometry last published by View as well as the current dirty flag.
+  if (prevX != absoluteX || prevY != absoluteY ||
+      publishedLayoutWidth != newWidth || publishedLayoutHeight != newHeight) {
+    ui::invalidate();
+  }
+  publishedLayoutWidth = newWidth;
+  publishedLayoutHeight = newHeight;
   if (prevWidth != newWidth || prevHeight != newHeight) {
     onResize(newWidth, newHeight);
   }

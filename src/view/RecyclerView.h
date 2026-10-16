@@ -3,6 +3,7 @@
 #include <SDL3/SDL_events.h>
 #include "../input/SDLPointerEvent.h"
 #include "ScrollMomentum.h"
+#include "ScrollbarFade.h"
 #include "View.h"
 #include <bgfx/bgfx.h>
 #include <SDL3/SDL.h>
@@ -52,6 +53,10 @@ private:
       ScissorScope scissor(context, this->getContentX(), this->getContentY(),
                            this->getContentWidth(),
                            this->getContentHeight());
+      if (touchMomentum.isActive() && context.boundsIntersectScissor(
+              getContentX(), getContentY(), getContentWidth(), getContentHeight())) {
+        ui::requestAnimationFrame();
+      }
       for (const auto &entry : viewEntries) {
         entry.first->render(context);
       }
@@ -323,6 +328,7 @@ public:
   }
 
   inline void setItems(std::vector<T> &&items) {
+    ui::invalidate();
     itemProvider = nullptr;
     externalItemCount = 0;
     this->items = std::move(items);
@@ -335,6 +341,7 @@ public:
   }
 
   inline void setItems(const std::vector<T> &items) {
+    ui::invalidate();
     itemProvider = nullptr;
     externalItemCount = 0;
     this->items = items;
@@ -348,6 +355,7 @@ public:
 
   inline void setItemProvider(int count,
                               std::function<const T &(int)> provider) {
+    ui::invalidate();
     items.clear();
     externalItemCount = std::max(0, count);
     itemProvider = std::move(provider);
@@ -361,6 +369,7 @@ public:
   // viewport back to the first row.
   inline void updateItemProvider(int count,
                                  std::function<const T &(int)> provider) {
+    ui::invalidate();
     items.clear();
     externalItemCount = std::max(0, count);
     itemProvider = std::move(provider);
@@ -373,6 +382,7 @@ public:
   }
 
   inline void push(T item) {
+    ui::invalidate();
     itemProvider = nullptr;
     externalItemCount = 0;
     items.push_back(item);
@@ -380,6 +390,7 @@ public:
   }
 
   inline void pop() {
+    ui::invalidate();
     itemProvider = nullptr;
     externalItemCount = 0;
     items.pop_back();
@@ -387,6 +398,7 @@ public:
   }
 
   inline void remove(int index) {
+    ui::invalidate();
     itemProvider = nullptr;
     externalItemCount = 0;
     items.erase(items.begin() + index);
@@ -394,6 +406,7 @@ public:
   }
 
   inline void clear() {
+    if (!items.empty() || externalItemCount != 0 || !viewEntries.empty()) ui::invalidate();
     items.clear();
     itemProvider = nullptr;
     externalItemCount = 0;
@@ -429,6 +442,7 @@ public:
   }
 
   inline void rebindVisibleItems() {
+    ui::invalidate();
     visibleItemsNeedRebind = true;
     updateVisibleItems();
   }
@@ -497,9 +511,6 @@ private:
   static constexpr int kScrollbarRightInset = 5;
   static constexpr int kScrollbarVerticalInset = 6;
   static constexpr int kScrollbarMinThumbHeight = 28;
-  static constexpr Uint64 kScrollbarFadeInMs = 120;
-  static constexpr Uint64 kScrollbarHoldMs = 650;
-  static constexpr Uint64 kScrollbarFadeOutMs = 480;
 
   inline bool canScroll() const {
     return itemCount() * itemHeight > this->getContentHeight();
@@ -577,46 +588,23 @@ private:
     }
   }
 
-  inline static float smoothStep(float value) {
-    value = std::clamp(value, 0.0f, 1.0f);
-    return value * value * (3.0f - 2.0f * value);
-  }
-
   inline float currentScrollbarAlpha(Uint64 now) const {
-    if (!canScroll() || scrollbarLastActivityAt == 0) {
-      return 0.0f;
-    }
-    if (touchDragging) {
-      return 1.0f;
-    }
-
-    const float fadeIn =
-        scrollbarFadeInStartedAt == 0
-            ? 1.0f
-            : std::min(1.0f,
-                       static_cast<float>(now - scrollbarFadeInStartedAt) /
-                           static_cast<float>(kScrollbarFadeInMs));
-    const Uint64 inactiveFor =
-        now > scrollbarLastActivityAt ? now - scrollbarLastActivityAt : 0;
-    float fadeOut = 1.0f;
-    if (inactiveFor > kScrollbarHoldMs) {
-      fadeOut =
-          1.0f -
-          std::min(1.0f, static_cast<float>(inactiveFor - kScrollbarHoldMs) /
-                             static_cast<float>(kScrollbarFadeOutMs));
-    }
-    return smoothStep(std::min(fadeIn, fadeOut));
+    if (!canScroll()) return 0.0f;
+    return scrollbarPresentation(now, scrollbarFadeInStartedAt,
+                                 scrollbarLastActivityAt, touchDragging).alpha;
   }
 
   inline void revealScrollbar() {
     if (!canScroll()) {
       return;
     }
-    const Uint64 now = SDL_GetTicks();
+    // Zero denotes an unrevealed scrollbar, including SDL's first tick.
+    const Uint64 now = std::max<Uint64>(1, SDL_GetTicks());
     if (currentScrollbarAlpha(now) <= 0.01f) {
       scrollbarFadeInStartedAt = now;
     }
     scrollbarLastActivityAt = now;
+    ui::invalidate();
   }
 
   inline static uint32_t scrollbarColor(uint8_t r, uint8_t g, uint8_t b,
@@ -650,10 +638,10 @@ private:
   }
 
   inline void renderScrollbar(RenderContext &context) const {
-    const float alpha = currentScrollbarAlpha(SDL_GetTicks());
-    if (alpha <= 0.0f) {
-      return;
-    }
+    if (!canScroll()) return;
+    const auto presentation = scrollbarPresentation(SDL_GetTicks(),
+        scrollbarFadeInStartedAt, scrollbarLastActivityAt, touchDragging);
+    const float alpha = presentation.alpha;
 
     const int itemsSize = std::max(1, itemCount()) * itemHeight;
     const int trackHeight =
@@ -665,12 +653,16 @@ private:
     const int maxOffset = std::max(1, itemsSize - this->getContentHeight());
     const int thumbHeight =
         std::clamp(this->getContentHeight() * trackHeight / itemsSize,
-                   kScrollbarMinThumbHeight, trackHeight);
+                   std::min(kScrollbarMinThumbHeight, trackHeight), trackHeight);
     const float progress =
         std::clamp(scrollOffset / maxOffset, 0.0, 1.0);
     const int trackX = this->getContentX() + this->getContentWidth() -
                        kScrollbarRightInset - kScrollbarWidth;
     const int trackY = this->getContentY() + kScrollbarVerticalInset;
+    if (!context.boundsIntersectScissor(trackX, trackY, kScrollbarWidth, trackHeight)) return;
+    if (presentation.animate) ui::requestAnimationFrame();
+    if (presentation.redrawAt) ui::requestRedrawAt(*presentation.redrawAt);
+    if (alpha <= 0.0f) return;
     const int thumbY =
         trackY +
         static_cast<int>(std::round((trackHeight - thumbHeight) * progress));

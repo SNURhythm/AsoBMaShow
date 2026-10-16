@@ -277,6 +277,7 @@ namespace skin { class ResultSkinSession; }
 
 class ResultScene : public Scene {
 public:
+  bool needsContinuousPresentation() const override;
   ResultScene(
       ApplicationContext &context, const bms_parser::ChartMeta &meta,
       const RhythmState &state, const ScoreProvenance &attemptProvenance,

@@ -20,6 +20,7 @@
 #include "../rendering/UniformCache.h"
 #include "../rendering/Color.h"
 #include "../RAII.h"
+#include "../ui/PresentationSchedule.h"
 #include "bgfx/bgfx.h"
 #include "bgfx/defines.h"
 
@@ -613,10 +614,16 @@ public:
     }
   }
 
-  inline void setVisible(bool visible) { isVisible = visible; }
+  inline void setVisible(bool visible) {
+    if (isVisible == visible) return;
+    isVisible = visible;
+    ui::invalidate();
+  }
   [[nodiscard]] inline bool getVisible() const { return isVisible; }
   inline void setZIndex(int zIndex) {
+    if (this->zIndex == zIndex) return;
     this->zIndex = zIndex;
+    ui::invalidate();
     if (parent != nullptr) {
       parent->markChildrenOrderDirty();
     }
@@ -649,6 +656,7 @@ public:
     }
     const int dx = absoluteX - oldAbsX;
     const int dy = absoluteY - oldAbsY;
+    if (dx != 0 || dy != 0) ui::invalidate();
     updateChildrenAbsolute(dx, dy);
     onMove(newX, newY);
   }
@@ -708,14 +716,17 @@ public:
   View *setCornerRadius(float radius);
   [[nodiscard]] float getCornerRadius() const { return cornerRadius; }
   View *setRotationDegrees(float degrees) {
-    rotationDegrees = std::isfinite(degrees) ? std::fmod(degrees, 360.0f)
-                                              : 0.0f;
+    const float normalized = std::isfinite(degrees) ? std::fmod(degrees, 360.0f)
+                                                   : 0.0f;
+    if (rotationDegrees != normalized) ui::invalidate();
+    rotationDegrees = normalized;
     return this;
   }
   [[nodiscard]] float getRotationDegrees() const { return rotationDegrees; }
   // Descendant text keeps its intrinsic size for layout, then fits its drawing
   // into the allocated content frames. Manually owned roots can opt in too.
   View *setAutoFitText(bool enabled) {
+    if (autoFitText != enabled) ui::invalidate();
     autoFitText = enabled;
     return this;
   }
@@ -862,6 +873,9 @@ private:
     }
   }
   void requestLayout() {
+    View *layoutRoot = this;
+    while (layoutRoot->parent != nullptr) layoutRoot = layoutRoot->parent;
+    if (YGNodeIsDirty(layoutRoot->node)) ui::invalidate();
     if (layoutBatchDepth > 0 || layoutApplyDepth > 0) {
       markLayoutDirty();
       return;
@@ -923,6 +937,8 @@ private:
   ThemeColorProvider themedShadowColorProvider;
   int absoluteX = 0;
   int absoluteY = 0;
+  float publishedLayoutWidth = 0;
+  float publishedLayoutHeight = 0;
   bool isVisible; // Visibility of the view
   bool hasBackground = false;
   bool hasGradientBackground = false;

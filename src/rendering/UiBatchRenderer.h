@@ -1,9 +1,9 @@
 #pragma once
 
 #include "common.h"
+#include "../ui/PresentationSchedule.h"
 
 #include <array>
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -72,7 +72,6 @@ class UiBatchRenderer final {
 public:
   static constexpr std::size_t kMaximumVertices = 65'532;
   static constexpr std::size_t kMaximumIndices = 65'532;
-  static constexpr std::size_t kMaximumDeferredBytes = 8 * 1024 * 1024;
 
   UiBatchRenderer();
   explicit UiBatchRenderer(UiBatchBackend &backend) noexcept;
@@ -81,14 +80,9 @@ public:
   UiBatchRenderer(const UiBatchRenderer &) = delete;
   UiBatchRenderer &operator=(const UiBatchRenderer &) = delete;
 
-  void beginFrame(bool deferSubmission = false) noexcept;
-  // Returns false only when a deferred frame exactly matches the last one.
-  // Callers must invalidate it if presentation is interrupted or discarded.
-  bool finishFrame(bool forcePresentation = false) noexcept;
-  void invalidateFrame() noexcept { previousFrameValid_ = false; }
-  static void notifyTextureChanged() noexcept {
-    textureRevision_.fetch_add(1, std::memory_order_relaxed);
-  }
+  void beginFrame() noexcept;
+  void invalidateFrame() noexcept { ui::invalidate(); }
+  static void notifyTextureChanged() noexcept { ui::invalidate(); }
   void begin() noexcept;
   bool appendColor(std::span<const PosColorVertex> vertices,
                    std::span<const std::uint16_t> indices,
@@ -104,23 +98,6 @@ public:
   void shutdown() noexcept;
 
 private:
-  struct RecordedDraw {
-    UiBatchVertexFormat format = UiBatchVertexFormat::Color;
-    std::size_t vertexOffset = 0, vertexCount = 0;
-    std::size_t indexOffset = 0, indexCount = 0;
-    UiBatchState state;
-  };
-  struct RecordedFrame {
-    std::vector<RecordedDraw> draws;
-    std::vector<PosColorVertex> colors;
-    std::vector<PosTexCoord0Vertex> textures;
-    std::vector<std::uint16_t> indices;
-    void clear() noexcept;
-    bool sameAs(const RecordedFrame &) const noexcept;
-  };
-  bool recordSubmission(const UiBatchSubmission &) noexcept;
-  bool submitRecorded() noexcept;
-  void useImmediateSubmission() noexcept;
   template <typename Vertex>
   bool append(UiBatchVertexFormat format, std::span<const Vertex> vertices,
               std::span<const std::uint16_t> indices,
@@ -136,12 +113,6 @@ private:
   std::vector<PosTexCoord0Vertex> texturedVertices_;
   std::vector<std::uint16_t> indices_;
   bool active_ = false;
-  RecordedFrame recordedFrame_, previousFrame_;
-  std::size_t recordedBytes_ = 0;
-  bool deferredSubmission_ = false;
-  bool previousFrameValid_ = false;
-  std::uint64_t previousTextureRevision_ = 0;
-  static inline std::atomic<std::uint64_t> textureRevision_{0};
 };
 
 } // namespace rendering

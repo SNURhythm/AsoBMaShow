@@ -61,7 +61,11 @@ public:
   void setOnClickListener(std::function<void()> listener);
   void setEnabled(bool enabled);
   [[nodiscard]] bool isEnabled() const { return enabled; }
-  void setSelected(bool selected) { this->selected = selected; }
+  void setSelected(bool selected) {
+    if (this->selected == selected) return;
+    this->selected = selected;
+    ui::invalidate();
+  }
   [[nodiscard]] bool isSelected() const { return selected; }
   [[nodiscard]] bool hasStyledBackgroundStyle() const noexcept {
     return hasStyledBackground;

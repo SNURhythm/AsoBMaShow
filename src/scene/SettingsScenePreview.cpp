@@ -182,6 +182,7 @@ void SettingsScene::ensurePreviewRenderer() {
   // Keep the current session until the matching activation can be acquired.
   if (!previewSkinReloadReady()) return;
   if (previewRendererDirty) {
+    ui::invalidate();
     destroyPreviewRenderer();
     previewRendererDirty = false;
   }
@@ -189,6 +190,7 @@ void SettingsScene::ensurePreviewRenderer() {
     previewChart = makePreviewChart(previewKeyMode);
   }
   if (previewRenderer == nullptr && previewChart != nullptr) {
+    ui::invalidate();
     previewChartVisualModel = std::make_unique<PlayfieldChartVisualModel>(
         buildPlayfieldChartVisualModel(*previewChart, 0));
     previewVisualStateStore = std::make_unique<PlayfieldVisualStateStore>(

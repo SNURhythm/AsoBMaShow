@@ -25,6 +25,7 @@ class ColorPickerPopup::SampleView final : public View {
 public:
   explicit SampleView(Sample sample) : sample(std::move(sample)) {}
   void setColor(std::uint32_t value) {
+    if (color != value) ui::invalidate();
     color = value;
     setBackgroundColor(sample.style == SampleStyle::Outline ? Color(0, 0, 0, 0)
         : Color((std::uint32_t(sample.alpha) << 24U) | color));

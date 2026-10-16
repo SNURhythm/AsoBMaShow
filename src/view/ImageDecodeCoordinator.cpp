@@ -6,8 +6,9 @@
 namespace image_decode {
 
 ImageDecodeCoordinator::ImageDecodeCoordinator(Loader loader,
-                                               std::size_t workerCount)
-    : loader_(std::move(loader)) {
+                                               std::size_t workerCount,
+                                               CompletionNotifier notifier)
+    : loader_(std::move(loader)), notifier_(std::move(notifier)) {
   workerCount = std::max<std::size_t>(1, workerCount);
   configuredWorkerCount_ = workerCount;
   try {
@@ -23,13 +24,14 @@ ImageDecodeCoordinator::ImageDecodeCoordinator(Loader loader,
 }
 
 ImageDecodeCoordinator::ImageDecodeCoordinator(LegacyLoader loader,
-                                               std::size_t workerCount)
+                                               std::size_t workerCount,
+                                               CompletionNotifier notifier)
     : ImageDecodeCoordinator(
           [loader = std::move(loader)](const ImageDecodeRequest &request,
                                        std::stop_token) {
             return loader ? loader(request) : std::nullopt;
           },
-          workerCount) {}
+          workerCount, std::move(notifier)) {}
 
 ImageDecodeCoordinator::~ImageDecodeCoordinator() { shutdown(); }
 
@@ -177,18 +179,21 @@ bool ImageDecodeCoordinator::isTracked(Ticket ticket) const {
 }
 
 void ImageDecodeCoordinator::drop(std::string_view key) {
+  bool changed = false;
   {
     std::lock_guard lock(mutex_);
     const auto work = work_.find(key);
     if (work != work_.end()) {
       eraseWorkLocked(work);
+      changed = true;
     }
   }
   cv_.notify_all();
+  if (changed && notifier_) notifier_();
 }
 
 void ImageDecodeCoordinator::dropPrefix(std::string_view prefix) {
-  std::lock_guard lock(mutex_);
+  std::unique_lock lock(mutex_);
   std::vector<std::string> keys;
   for (const auto &[key, item] : work_) {
     (void)item;
@@ -202,18 +207,23 @@ void ImageDecodeCoordinator::dropPrefix(std::string_view prefix) {
       eraseWorkLocked(work);
     }
   }
+  lock.unlock();
   cv_.notify_all();
+  if (!keys.empty() && notifier_) notifier_();
 }
 
 void ImageDecodeCoordinator::dropAll() {
-  std::lock_guard lock(mutex_);
+  std::unique_lock lock(mutex_);
+  const bool changed = !work_.empty();
   while (!work_.empty()) {
     eraseWorkLocked(work_.begin());
   }
   priorityQueue_.clear();
   queue_.clear();
   readyBytes_ = 0;
+  lock.unlock();
   cv_.notify_all();
+  if (changed && notifier_) notifier_();
 }
 
 void ImageDecodeCoordinator::shutdown() {
@@ -327,7 +337,7 @@ void ImageDecodeCoordinator::run() {
       decoded.reset();
     }
 
-    std::lock_guard lock(mutex_);
+    std::unique_lock lock(mutex_);
     const auto work = work_.find(request.key);
     if (work == work_.end() || work->second.id != workId ||
         work->second.state != WorkState::InFlight) {
@@ -348,7 +358,9 @@ void ImageDecodeCoordinator::run() {
       work->second.request.encoded.reset();
       work->second.state = WorkState::Failed;
     }
+    lock.unlock();
     cv_.notify_all();
+    if (notifier_) notifier_();
   }
 }
 

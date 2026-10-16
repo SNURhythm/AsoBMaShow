@@ -5,6 +5,8 @@
 
 class ScrollMomentum {
 public:
+  [[nodiscard]] bool isActive() const noexcept { return active; }
+
   void stop() {
     velocity = 0.0f;
     pendingDragDelta = 0.0f;

@@ -26,6 +26,7 @@ class SettingsRotationEditTests(unittest.TestCase):
             (root / "src/platform/SDLMainThread.h").read_text(),
             "inline void stopFocusedTextInput()") + "\n}\n" + methods)
         fixture = r'''
+#include "ui/PresentationSchedule.h"
 #include <array>
 #include <utility>
 namespace platform {

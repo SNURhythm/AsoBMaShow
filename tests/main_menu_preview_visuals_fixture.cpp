@@ -7,10 +7,12 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
+#include "ui/PresentationSchedule.h"
 
 // Run the production worker and clock adapter with device/parser boundaries
 // replaced, so no native audio device or renderer is needed for this wiring test.
@@ -101,6 +103,7 @@ struct Scene {
   std::shared_ptr<audio::DecodedAssetCache> previewDecodedAssets_;
   std::uint64_t previewStartFrame_ = 0;
   bool previewVisualsLoaded_ = false;
+  std::optional<std::uint64_t> previewVisualPositionFrames_;
   std::mutex previewJukeboxLoadMutex;
   std::unique_ptr<Worker> previewWorker_ = std::make_unique<Worker>();
   std::atomic_bool willStart = false;
@@ -204,11 +207,15 @@ int main() {
     clockScene.updatePreviewVisuals();
     require(clockScene.context.jukebox.positions.back() == 50'500'000,
             "preview position is absolute: do not add previewStartFrame twice");
+    ui::PresentationSchedule schedule;
+    schedule.didPresent(ui::revisions(), {}, 0);
     clockScene.updatePreviewVisuals();
     require(clockScene.context.jukebox.positions.back() == 50'500'000,
             "buffering must freeze visuals at the last consumed frame");
+    require(!schedule.shouldRender(1), "unchanged preview position must settle");
     clockScene.previewPlayer_.state = {.finished = true, .positionFrames = 2'249'100};
     clockScene.updatePreviewVisuals();
+    require(schedule.shouldRender(1), "preview EOF must wake drawing for its final BGA position");
     require(clockScene.context.jukebox.positions.back() == 51'000'000,
             "EOF must display the final consumed position");
     std::atomic_bool locked = false, release = false;

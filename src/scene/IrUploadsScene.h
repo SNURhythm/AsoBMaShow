@@ -20,6 +20,7 @@ class View;
 
 class IrUploadsScene final : public Scene {
 public:
+  bool needsContinuousPresentation() const override { return false; }
   bool usesResponsiveMenuCanvas() const override { return true; }
   explicit IrUploadsScene(
       ApplicationContext &context,

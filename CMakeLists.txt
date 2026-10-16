@@ -5475,6 +5475,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/Button.cpp
         src/view/ScrollView.cpp
         src/view/View.cpp
+        src/view/SnappedSlider.cpp
     )
     target_include_directories(button_enabled_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(button_enabled_tests PRIVATE cxx_std_23)
@@ -9219,6 +9220,27 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(ui_batch_upload_cache_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(ui_batch_upload_cache_tests PRIVATE cxx_std_20)
     asobmashow_register_test(ui_batch_upload_cache_tests)
+
+    add_test(NAME scene_presentation_activity_tests
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.scene_presentation_activity_tests)
+    set_tests_properties(scene_presentation_activity_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}")
+
+    add_executable(ui_presentation_schedule_tests tests/ui_presentation_schedule_tests.cpp)
+    target_include_directories(ui_presentation_schedule_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(ui_presentation_schedule_tests PRIVATE cxx_std_23)
+    asobmashow_register_test(ui_presentation_schedule_tests)
+
+    add_executable(text_animation_timing_tests tests/text_animation_timing_tests.cpp)
+    target_include_directories(text_animation_timing_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(text_animation_timing_tests PRIVATE cxx_std_23)
+    asobmashow_register_test(text_animation_timing_tests)
+
+    add_executable(scrollbar_fade_tests tests/scrollbar_fade_tests.cpp)
+    target_include_directories(scrollbar_fade_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(scrollbar_fade_tests PRIVATE cxx_std_23)
+    asobmashow_register_test(scrollbar_fade_tests)
 
     add_executable(ui_batch_renderer_tests
         tests/ui_batch_renderer_tests.cpp

@@ -74,7 +74,7 @@ private:
   uint64_t pointerDownListenerId = 0;
   size_t selectionAnchor = 0;
   size_t lastRenderedCaretCursor = static_cast<size_t>(-1);
-  Uint32 lastBlink = 0;
+  Uint64 lastBlink = 0;
   SDL_Rect viewRect;
   size_t cursorPos = 0;
   std::vector<std::function<void(const std::string &)>> onTextChangedCallbacks;

@@ -3,6 +3,7 @@
 #include <archive_entry.h>
 #include "rendering/UniformCache.h"
 #include "view/ImageView.h"
+#include "ui/PresentationSchedule.h"
 #include "support/AllocationFailure.h"
 
 #define MINIZ_NO_ZLIB_COMPATIBLE_NAMES
@@ -157,6 +158,39 @@ int main() {
   require(bgfx::init(init), "headless bgfx initializes for image fade state");
 
   {
+    ImageView image(0, 0, 64, 64);
+    auto revision = ui::revisions();
+    image.clearAmbientGlow();
+    image.clearFade();
+    image.clearScrimColor();
+    image.setContentMode(ImageView::ContentMode::Stretch);
+    require(ui::revisions() == revision, "empty image appearance setters remain idle");
+    image.setContentMode(ImageView::ContentMode::Contain);
+    require(ui::revisions() != revision, "content mode changes wake presentation");
+    image.setFade(ImageFadeDirection::LeftToRight, 0.5f);
+    revision = ui::revisions();
+    image.setFade(ImageFadeDirection::LeftToRight, 0.5f);
+    require(ui::revisions() == revision, "equal image fade remains idle");
+    image.setScrimColor(Color(20, 30, 40, 50));
+    revision = ui::revisions();
+    image.setThemedScrimColor([] { return Color(20, 30, 40, 50); });
+    require(ui::revisions() == revision, "equal themed image color remains idle");
+    ArtworkGlow glow{.intensity = 0.5f, .spread = 20};
+    image.setAmbientGlow(glow);
+    require(ui::revisions() != revision, "new glow wakes presentation");
+    revision = ui::revisions();
+    image.setAmbientGlow(glow);
+    require(ui::revisions() == revision, "equal audio glow remains idle");
+    glow.spectrum[2] = 0.5f;
+    image.setAmbientGlow(glow);
+    require(ui::revisions() != revision, "changed glow spectrum wakes presentation");
+    image.clearAmbientGlow();
+    revision = ui::revisions();
+    image.clearAmbientGlow();
+    require(ui::revisions() == revision, "settled glow does not perpetually invalidate");
+  }
+
+  {
     const auto root = std::filesystem::temp_directory_path() /
         ("asobms-archived-artwork-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -236,6 +270,10 @@ int main() {
     require(ready, "one-pixel thumbnail finishes loading within the test deadline");
     require(thumbnail.imageWidth() == 1 && thumbnail.imageHeight() == 1,
             "shared artwork does not collide with a one-pixel thumbnail cache key");
+    const auto thumbnailRevision = ui::revisions().visual;
+    require(thumbnail.setImageAsync(imagePath, true) &&
+                ui::revisions().visual == thumbnailRevision,
+            "rebinding ready thumbnail does not recreate its texture");
     artwork.onLayout();
     require(artwork.imageWidth() == 2048 && artwork.imageHeight() == 8,
             "layout does not replace shared artwork with a display-sized thumbnail");
@@ -243,6 +281,16 @@ int main() {
     require(reused.setImageAsyncShared(imagePath, true) &&
                 reused.imageWidth() == 2048 && reused.imageHeight() == 8,
             "shared artwork reuses its bounded cache entry");
+    const auto artworkRevision = ui::revisions().visual;
+    require(reused.setImageAsyncShared(imagePath, true) &&
+                ui::revisions().visual == artworkRevision,
+            "rebinding ready shared artwork does not recreate its texture");
+    ImageView rebound(0, 0, 1, 1);
+    require(rebound.setImageAsync(imagePath, true) && rebound.imageWidth() == 1,
+            "rebind fixture begins with a different decoded cache key");
+    require(rebound.setImageAsyncShared(imagePath, true) &&
+                rebound.imageWidth() == 2048 && rebound.imageHeight() == 8,
+            "changing to an already cached key replaces the previous texture");
     ImageView::dropAllCache();
     std::filesystem::remove_all(fixtureRoot);
   }
@@ -418,6 +466,20 @@ int main() {
     }
     require(image.imageWidth() == 1 && image.imageHeight() == 1,
             "a failed async decode can retry when its source becomes ready");
+    writePpm(artworkPath, 2, 1);
+    ImageView::dropCache(imagePath);
+    ImageView replacement(0, 0, 8, 8);
+    bool replacementReady = false;
+    const auto replacementDeadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    while (!replacementReady && std::chrono::steady_clock::now() < replacementDeadline) {
+      replacementReady = replacement.setImageAsync(imagePath, true);
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    require(replacementReady && replacement.imageWidth() == 2,
+            "another consumer repopulates the dropped key with changed image data");
+    require(image.setImageAsync(imagePath, true) && image.imageWidth() == 2,
+            "rebinding a replaced cache entry uploads its new pixels");
     ImageView::dropAllCache();
     std::filesystem::remove_all(fixtureRoot);
   }

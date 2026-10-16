@@ -1,4 +1,6 @@
 #include "video/FramePacer.h"
+#include "video/IdlePresentationPacing.h"
+#include "ui/PresentationSchedule.h"
 #include "video/IOSPresentationPacing.h"
 
 #include <chrono>
@@ -160,9 +162,39 @@ void testIOSProMotionPresentationPreservesExplicitCapsAndExport() {
   require(menuPacer.remaining(now) == Clock::duration::zero(),
           "menu export never inherits the interactive presentation wait");
 }
+void testIdleGateRetainsWaitWithoutGpuVsync() {
+  const auto now = Clock::time_point{};
+  ui::PresentationSchedule schedule;
+  schedule.didPresent(ui::revisions(), {}, 0);
+  FramePacer explicitPacer, idlePacer;
+  explicitPacer.framePresented(now);
+  idlePacer.setCap(video::idlePresentationPacingCap(120.0F, 0,
+                                                   !schedule.shouldRender(8)));
+  idlePacer.framePresented(now);
+  auto wait = std::max(explicitPacer.remaining(now), idlePacer.remaining(now));
+  require(wait > 8ms && wait < 9ms,
+          "idle uncapped frames must wait even without a GPU vsync submission");
+  ui::invalidate();
+  idlePacer.setCap(video::idlePresentationPacingCap(120.0F, 0,
+                                                   !schedule.shouldRender(16)));
+  idlePacer.framePresented(now);
+  require(idlePacer.remaining(now) == Clock::duration::zero(),
+          "active uncapped frames retain their existing presentation pacing");
+  explicitPacer.setCap(30);
+  explicitPacer.framePresented(now);
+  idlePacer.setCap(video::idlePresentationPacingCap(120.0F, 30, true));
+  idlePacer.framePresented(now);
+  wait = std::max(explicitPacer.remaining(now), idlePacer.remaining(now));
+  require(wait > 33ms && wait < 34ms, "idle preserves an explicit frame cap");
+  idlePacer.setCap(video::idlePresentationPacingCap(0.0F, 0, true));
+  idlePacer.framePresented(now);
+  require(idlePacer.remaining(now) > 8ms,
+          "a missing display snapshot must not restore the idle hot loop");
+}
 } // namespace
 
 int main() {
+  testIdleGateRetainsWaitWithoutGpuVsync();
   testUncappedPacingNeverWaits();
   testExactDeadlineAndOverrun();
   testCapChangesAndBackgroundReset();

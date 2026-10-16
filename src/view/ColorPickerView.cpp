@@ -89,6 +89,7 @@ ColorPickerView::Area ColorPickerView::areaAt(float x, float y) const {
 }
 
 void ColorPickerView::updatePointer(float x, float y) {
+  const auto previous = current;
   const auto g = geometry(*this);
   if (dragging == Area::Hue) {
     current.hue = std::clamp((x - g.x) / std::max(1.0F, g.width), 0.0F, 1.0F);
@@ -96,6 +97,8 @@ void ColorPickerView::updatePointer(float x, float y) {
     current.saturation = std::clamp((x - g.x) / std::max(1.0F, g.width), 0.0F, 1.0F);
     current.value = 1 - std::clamp((y - g.y) / std::max(1.0F, g.squareHeight), 0.0F, 1.0F);
   }
+  if (current.hue != previous.hue || current.saturation != previous.saturation ||
+      current.value != previous.value) ui::invalidate();
 }
 
 void ColorPickerView::finish() {

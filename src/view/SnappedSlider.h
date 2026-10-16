@@ -12,6 +12,7 @@ public:
     int step = 1;
     int value = 0;
     bool enabled = true;
+    bool operator==(const State &) const = default;
   };
 
   explicit SnappedSlider(std::function<void(int)> onValueChanged = {});
