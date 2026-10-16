@@ -1,4 +1,5 @@
 #include <cassert>
+#include "ui/PresentationSchedule.h"
 
 enum class PresentationMode { BuiltIn, Skin };
 struct Presentation {
@@ -45,6 +46,7 @@ struct GamePlayScene : Scene {
 };
 struct MusicPlayerScene : Scene {
   Context context;
+  bool videoFullscreenActive = false, videoVisualsLoaded = false;
   bool needsContinuousPresentation() const override;
 };
 struct MainMenuScene : Scene {
@@ -119,6 +121,24 @@ int main() {
   music.context.musicPlayer.state.playing = true;
   assert(menu.needsContinuousPresentation());
   music.context.musicPlayer.state.playing = false;
+  assert(!menu.needsContinuousPresentation());
+  music.videoFullscreenActive = true;
+  assert(!menu.needsContinuousPresentation()); // Artwork-only fallback can idle.
+  music.videoVisualsLoaded = true;
+
+  // Opening or seeking can render before the asynchronous decoder supplies its
+  // frame. No View mutation or completion signal wakes this later upload.
+  ui::PresentationSchedule schedule;
+  for (const auto eventTime : {0U, 100U}) {
+    ui::invalidate();
+    assert(schedule.shouldRender(eventTime, menu.needsContinuousPresentation()));
+    schedule.didPresent(ui::revisions(), {}, eventTime); // Decoder not ready yet.
+    assert(schedule.shouldRender(eventTime + 8, menu.needsContinuousPresentation()));
+    schedule.didPresent(ui::revisions(), {}, eventTime + 8); // Promote decoded frame.
+  }
+  music.videoFullscreenActive = false;
+  assert(!menu.needsContinuousPresentation());
+  music.videoVisualsLoaded = false;
   assert(!menu.needsContinuousPresentation());
   menu.utility = nullptr;
   menu.context.jukebox.visuals = true;

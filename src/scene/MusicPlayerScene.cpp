@@ -870,7 +870,10 @@ EventHandleResult MusicPlayerScene::handleEvents(SDL_Event &event) {
 }
 
 bool MusicPlayerScene::needsContinuousPresentation() const {
-  return context.musicPlayer.PlaybackState().playing;
+  // Paused opens/seeks can finish decoding after the input-triggered frame.
+  // Jukebox promotes those frames during rendering, without a completion wake.
+  return context.musicPlayer.PlaybackState().playing ||
+         (videoFullscreenActive && videoVisualsLoaded);
 }
 
 void MusicPlayerScene::update(float) {
