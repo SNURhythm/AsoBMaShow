@@ -43,9 +43,10 @@ public:
 
   void configure(Processor processor);
 
-  // Requests a load of the given chart (latest-wins, debounced, non-blocking).
-  // A request for a path already queued or in flight is a no-op.
-  void request(const ChartMetaRecord &record);
+  // Requests a load of the given chart (latest-wins, non-blocking). Direct
+  // selection bypasses the debounce, including a previously queued request.
+  // An identical in-flight request is always a no-op.
+  void request(const ChartMetaRecord &record, bool bypassDebounce = false);
 
   // Cancels any debounced pending request and cooperatively stops the worker
   // without joining. The worker abandons the current request at its next
@@ -87,5 +88,5 @@ private:
   std::optional<ChartMetaRecord> pending_;
   bool idleNotificationPending_ = false;
   std::optional<path_t> inFlightPath_;
-  std::chrono::steady_clock::time_point pendingSince_{};
+  std::chrono::steady_clock::time_point pendingReadyAt_{};
 };

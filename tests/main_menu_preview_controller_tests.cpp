@@ -223,6 +223,17 @@ void testStopQuiescesPlaybackAfterLoaderAndRetainsPreparation() {
   assert(stoppedPlayback && releases == 0);
 }
 
+void testDirectSelectionForwardsImmediateTiming() {
+  std::promise<void> started;
+  auto ready = started.get_future();
+  MainMenuPreviewController preview(
+      [&](const auto &, auto &) { started.set_value(); }, [] {}, 2s);
+  preview.request(chart("direct.bms"), true);
+  const auto result = ready.wait_for(500ms);
+  preview.stop();
+  assert(result == std::future_status::ready);
+}
+
 void testConcurrentStopsSerializeLoaderJoinAndPlaybackTeardown() {
   Gate load;
   std::atomic_int stops = 0;
@@ -242,6 +253,7 @@ void testConcurrentStopsSerializeLoaderJoinAndPlaybackTeardown() {
 } // namespace
 
 int main() {
+  testDirectSelectionForwardsImmediateTiming();
   testDeferredReleaseWaitsForLoadWithoutBlockingSelection();
   testReplacementWithdrawsReleaseAndReloadsCancelledSamePath();
   testStopWaitsForDeferredReleaseExactlyOnce();

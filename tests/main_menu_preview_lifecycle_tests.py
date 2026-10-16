@@ -86,8 +86,11 @@ class MainMenuPreviewLifecycleTests(unittest.TestCase):
             if "std::mutex preview" in line
         ))
         fixture = fixture.replace("SELECTION_CALLBACK", callback_body(
-            source, "recyclerView->onSelected = [this, &context]"
+            source, "const auto selectChart = [this, &context]"
         ))
+        wiring_start = source.index("  recyclerView->onSelected = [selectChart]")
+        wiring_end = source.index("  recyclerView->onUnselected", wiring_start)
+        fixture = fixture.replace("SELECTION_WIRING", source[wiring_start:wiring_end])
         compiler = FixtureCompiler.from_environment()
         with tempfile.TemporaryDirectory() as directory:
             program = Path(directory) / "preview.cpp"

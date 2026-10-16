@@ -431,6 +431,8 @@ public:
   // on click
   std::function<bool(const T &, int)> isSelectable;
   std::function<void(const T &, int)> onSelected;
+  // Optional replacement for onSelected on a row click or completed tap.
+  std::function<void(const T &, int)> onSelectedByPointer;
   std::function<void(const T &, int)> onUnselected;
   int selectedIndex = -1;
 
@@ -554,7 +556,9 @@ private:
       onUnselected(itemAt(selectedIndex), selectedIndex);
     }
     selectedIndex = index;
-    if (onSelected) {
+    if (onSelectedByPointer) {
+      onSelectedByPointer(itemAt(selectedIndex), selectedIndex);
+    } else if (onSelected) {
       onSelected(itemAt(selectedIndex), selectedIndex);
     }
   }

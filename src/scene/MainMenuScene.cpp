@@ -1439,8 +1439,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   };
 
   jacketView = new ImageView(0, 0, 0, 0);
-  recyclerView->onSelected = [this, &context](const ChartMetaRecord &record,
-                                              int idx) {
+  const auto selectChart = [this, &context](const ChartMetaRecord &record,
+                                          int idx, bool bypassDebounce) {
     if (willStart.load() || pendingTab_)
       return;
     const ChartMetaRecord item = record;
@@ -1533,8 +1533,14 @@ void MainMenuScene::initView(ApplicationContext &context) {
     if (previewWorker_ != nullptr) {
       ChartMetaRecord previewRecord;
       previewRecord.meta = std::move(meta);
-      previewWorker_->request(std::move(previewRecord));
+      previewWorker_->request(std::move(previewRecord), bypassDebounce);
     }
+  };
+  recyclerView->onSelected = [selectChart](const ChartMetaRecord &record, int idx) {
+    selectChart(record, idx, false);
+  };
+  recyclerView->onSelectedByPointer = [selectChart](const ChartMetaRecord &record, int idx) {
+    selectChart(record, idx, true);
   };
   recyclerView->onUnselected = [this](const ChartMetaRecord &item, int idx) {
     auto unselectedView = recyclerView->getViewByIndex(idx);

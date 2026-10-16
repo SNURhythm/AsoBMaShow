@@ -621,6 +621,44 @@ static void testRecyclerAllowsTapJitterAtDifferentScreenSizes() {
   rendering::ui_scale_y = originalScaleY;
 }
 
+static void testRecyclerDistinguishesDirectSelectionFromBrowsing() {
+  RecyclerView<int> list([](int a, int b) { return a == b; });
+  list.setSize(200, 200);
+  list.itemHeight = 60;
+  list.onCreateView = [](const int &) { return new View(); };
+  list.onBind = [](View *, const int &, int, bool) {};
+  list.setItems(std::vector<int>{1, 2, 3, 4, 5, 6});
+  int direct = 0;
+  int browsed = 0;
+  list.onSelected = [&](const int &, int) { ++browsed; };
+  list.onSelectedByPointer = [&](const int &, int) { ++direct; };
+  auto click = mouseEvent(SDL_EVENT_MOUSE_BUTTON_DOWN, 80, 90);
+  list.handleEvents(click);
+  REQUIRE(direct == 1 && browsed == 0);
+  auto down = fingerEvent(SDL_EVENT_FINGER_DOWN, 80, 90);
+  auto up = fingerEvent(SDL_EVENT_FINGER_UP, 80, 90);
+  list.handleEvents(down);
+  list.handleEvents(up);
+  REQUIRE(direct == 2 && browsed == 0);
+  SDL_Event key{};
+  key.type = SDL_EVENT_KEY_DOWN;
+  key.key.key = SDLK_DOWN;
+  list.handleEvents(key);
+  REQUIRE(direct == 2 && browsed == 1);
+  SDL_Event wheel{};
+  wheel.type = SDL_EVENT_MOUSE_WHEEL;
+  wheel.wheel.mouse_x = 80;
+  wheel.wheel.mouse_y = 90;
+  wheel.wheel.y = -1;
+  list.handleEvents(wheel);
+  list.handleEvents(down);
+  auto drag = fingerEvent(SDL_EVENT_FINGER_MOTION, 80, 50);
+  list.handleEvents(drag);
+  auto dragEnd = fingerEvent(SDL_EVENT_FINGER_UP, 80, 50);
+  list.handleEvents(dragEnd);
+  REQUIRE(direct == 2 && browsed == 1);
+}
+
 static void testNavigationMayDestroyDispatchingViews() {
   for (const bool touch : {false, true}) {
     for (const bool throughButtonContent : {false, true}) {
@@ -835,6 +873,7 @@ int main(int argc, char **argv) {
     testProgrammaticWidgetChangesWakePresentationOnce();
     testThemedButtonChangesWakePresentationAndThenSettle();
     testNavigationMayDestroyDispatchingViews();
+    testRecyclerDistinguishesDirectSelectionFromBrowsing();
     testRecyclerSkipsSectionHeadings();
     testCancelledTouchDoesNotClick();
     testDisabledSiblingDoesNotLeaveCoveredButtonGesturesStuck();
