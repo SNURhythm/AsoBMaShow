@@ -175,6 +175,14 @@ bool listEntries(const std::filesystem::path &archivePath,
                  std::vector<Entry> &entries,
                  std::string *errorMessage = nullptr,
                  PauseCallback pauseCallback = nullptr);
+// Resolve one batch against a single validated index. Results are aligned with
+// innerPaths; missing entries are null. Returned paths are archive-relative.
+bool resolveArchiveEntriesWithExtensions(
+    const std::filesystem::path &archivePath,
+    const std::vector<std::filesystem::path> &innerPaths,
+    const std::vector<std::string_view> &extensions,
+    std::vector<std::optional<std::filesystem::path>> &resolved,
+    std::string *errorMessage = nullptr, PauseCallback pauseCallback = nullptr);
 bool listEntriesBounded(const std::filesystem::path &archivePath,
                         std::vector<Entry> &entries, std::uint64_t maximumEntries,
                         std::string *errorMessage = nullptr,

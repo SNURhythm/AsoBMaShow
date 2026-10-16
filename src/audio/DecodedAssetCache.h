@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <sndfile.h>
 #include <stop_token>
 #include <string>
@@ -47,6 +48,21 @@ public:
   std::shared_ptr<const DecodedSound> LoadBytes(const std::filesystem::path &path,
       const std::vector<unsigned char> &bytes, const std::atomic_bool &cancelled,
       std::stop_token stop = {}, std::string *error = nullptr, FailureKind *failure = nullptr);
+  // A batch validates its source once before resolution/extraction and again
+  // before completion. Only pass fully resolved paths from that same archive.
+  // This avoids filesystem/extension checks inside every decode callback.
+  struct ArchiveBatch {
+    std::filesystem::path path;
+    std::string identity;
+  };
+  std::optional<ArchiveBatch> BeginArchiveBatch(const std::filesystem::path &path) const;
+  bool ArchiveBatchUnchanged(const ArchiveBatch &batch) const;
+  std::shared_ptr<const DecodedSound> FindArchiveAsset(const ArchiveBatch &batch,
+      const std::filesystem::path &resolvedPath);
+  std::shared_ptr<const DecodedSound> LoadArchiveBytes(const ArchiveBatch &batch,
+      const std::filesystem::path &resolvedPath, const std::vector<unsigned char> &bytes,
+      const std::atomic_bool &cancelled, std::stop_token stop = {},
+      std::string *error = nullptr, FailureKind *failure = nullptr);
   bool Materialize(const std::filesystem::path &path, std::vector<short> &pcm,
       SF_INFO &info, const std::atomic_bool &cancelled,
       std::stop_token stop = {}, std::string *error = nullptr);

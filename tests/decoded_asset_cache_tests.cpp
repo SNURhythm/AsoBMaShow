@@ -162,6 +162,46 @@ void testArchiveBytesAndOwnerLifetime(const std::filesystem::path &root) {
   require(survivor->pcm == expected && !std::filesystem::exists(root / "unused-scratch"),
           "immutable PCM outlives cache without scratch storage");
 }
+void testArchiveBatchIdentityAndGameplayReuse(const std::filesystem::path &root) {
+  const auto wav = root / "batch-tone.wav", zip = root / "batch.zip";
+  writeWav(wav);
+  const auto bytes = bytesAt(wav);
+  zipWav(zip, bytes);
+  const auto logical = archive_file::makeVirtualPath(zip, "sounds/tone.wav");
+  std::atomic_bool cancelled{false};
+  audio::DecodedAssetCache cache;
+  const auto batch = cache.BeginArchiveBatch(zip);
+  require(bool(batch), "begin validated archive batch");
+  const auto sound = cache.LoadArchiveBytes(*batch, logical, bytes, cancelled);
+  require(sound && cache.FindArchiveAsset(*batch, logical) == sound &&
+              cache.ArchiveBatchUnchanged(*batch), "batch buffers share one source generation");
+  SF_INFO info{}; std::vector<short> gameplay;
+  require(cache.Materialize(logical, gameplay, info, cancelled) && gameplay == sound->pcm &&
+              cache.GetStatistics().decoderOpens == 1,
+          "batch identity must match normal gameplay cache lookup");
+  const auto foreign = archive_file::makeVirtualPath(root / "different.zip", "sounds/tone.wav");
+  require(!cache.LoadArchiveBytes(*batch, foreign, bytes, cancelled) &&
+              !cache.FindArchiveAsset(*batch, zip / "../outside.wav"),
+          "batch identity must not apply to files outside its archive");
+  cancelled = true;
+  require(!cache.LoadArchiveBytes(*batch, logical, bytes, cancelled), "batch cache hits observe cancellation");
+  cancelled = false;
+  const auto stamp = std::filesystem::last_write_time(zip);
+  const auto replacement = root / "batch-replacement.zip";
+  zipWav(replacement, bytes);
+  std::filesystem::last_write_time(replacement, stamp);
+  std::filesystem::rename(replacement, zip);
+  require(!cache.ArchiveBatchUnchanged(*batch) && !cache.Contains(logical),
+          "batch completion detects source replacement with unchanged size and mtime");
+  const auto changed = cache.BeginArchiveBatch(zip);
+  require(changed && !cache.FindArchiveAsset(*changed, logical), "next batch must reject stale native PCM");
+  require(bool(cache.LoadArchiveBytes(*changed, logical, bytes, cancelled)) &&
+              cache.GetStatistics().decoderOpens == 2, "new generation decodes instead of reusing stale PCM");
+  std::filesystem::remove(zip);
+  require(!cache.ArchiveBatchUnchanged(*changed) && !cache.BeginArchiveBatch(zip),
+          "removed archives fail batch validation");
+}
+
 }
 int main() {
   const auto root = std::filesystem::temp_directory_path() / ("decoded-asset-tests-" + uuid::generateV4());
@@ -171,6 +211,7 @@ int main() {
     testCancellationAndInvalidAssets(root);
     testEvictionAndIdentity(root);
     testArchiveBytesAndOwnerLifetime(root);
+    testArchiveBatchIdentityAndGameplayReuse(root);
     std::filesystem::remove_all(root);
     std::cout << "decoded asset cache tests passed\n";
     return 0;

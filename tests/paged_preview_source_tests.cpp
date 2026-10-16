@@ -557,6 +557,12 @@ void testArchivedPreviewBatchesOpeningFutureAndReferencedAssets(const std::files
   parsed->ReferencedWavTable.emplace(16, "sound-16.wav");
   auto cache = std::make_shared<audio::DecodedAssetCache>(root / "cache",
       audio::DecodedAssetCache::kUnlimitedRetainedBytes);
+  std::atomic_uint archiveChecks{0};
+  archive_file::setCachePathNormalizer([&](const std::filesystem::path &path) {
+    ++archiveChecks;
+    return fspath_to_utf8(path);
+  });
+  const auto resetNormalizer = makeScopeExit([] { archive_file::setCachePathNormalizer({}); });
   auto source = audio::PagedPreviewSource::Create(*parsed, cache, 0);
   require(source->Begin(44100), "cannot start archived preview");
   waitPrepared(source);
@@ -564,6 +570,9 @@ void testArchivedPreviewBatchesOpeningFutureAndReferencedAssets(const std::files
           "archive batching must warm opening, future and referenced native PCM");
   require(cache->GetStatistics().archiveReads == 0,
           "preview preparation must batch archive entries instead of replaying one extraction per asset");
+  std::cerr << "Archive preview metadata checks: " << archiveChecks.load() << '\n';
+  require(archiveChecks.load() <= 64,
+          "preview must validate archive metadata per batch, not repeatedly per keysound");
   const auto samples = renderAll(source);
   require(!samples.empty() && std::abs(samples.front() - 12 * 8191.0f * 0.9f / 32768) < 0.00001f,
           "archive loading must preserve overlapping preview PCM");

@@ -145,18 +145,12 @@ struct PagedPreviewSource::Impl {
       ++state.revision; }
     changed.notify_all();
   }
-  void publishAsset(std::size_t index, const std::vector<unsigned char> *bytes = nullptr) {
+  void publishDecoded(std::size_t index,
+      const std::shared_ptr<const DecodedAssetCache::DecodedSound> &native) {
     checkpoint();
-    auto &asset = assets[index];
-    DecodedAssetCache::FailureKind failure{};
-    std::string error;
-    const auto native = bytes ? cache->LoadBytes(asset.path, *bytes, cancelled, {}, &error, &failure)
-                              : cache->Load(asset.path, cancelled, {}, &error, &failure);
+    auto &outputSound = *assets[index].sound->pagedOutput;
     if (!native) {
-      checkpoint();
-      if (failure != DecodedAssetCache::FailureKind::InvalidAsset)
-        throw std::runtime_error(error.empty() ? "Could not load preview audio." : error);
-      asset.sound->pagedOutput->publishMetadata(0, 0);
+      outputSound.publishMetadata(0, 0);
     } else {
       const pcm_resampling::Ratio ratio(native->info.samplerate, outputRate);
       if (!ratio.outputFrames(static_cast<std::size_t>(native->info.frames), UINT32_MAX))
@@ -165,10 +159,24 @@ struct PagedPreviewSource::Impl {
                                 native->info.samplerate, outputRate);
       checkpoint();
       if ((!native->pcm.empty() && output.empty()) ||
-          !asset.sound->pagedOutput->publishFull(native->info.channels, std::move(output)))
+          !outputSound.publishFull(native->info.channels, std::move(output)))
         throw std::runtime_error("Could not publish preview audio.");
     }
     publishState();
+  }
+  void publishAsset(std::size_t index, const std::vector<unsigned char> *bytes = nullptr,
+                     const DecodedAssetCache::ArchiveBatch *batch = nullptr) {
+    checkpoint();
+    DecodedAssetCache::FailureKind failure{};
+    std::string error;
+    const auto native = bytes
+        ? cache->LoadArchiveBytes(*batch, assets[index].path, *bytes, cancelled, {}, &error, &failure)
+        : cache->Load(assets[index].path, cancelled, {}, &error, &failure);
+    if (!native && failure != DecodedAssetCache::FailureKind::InvalidAsset) {
+      checkpoint();
+      throw std::runtime_error(error.empty() ? "Could not load preview audio." : error);
+    }
+    publishDecoded(index, native);
   }
 
   void loadAll() {
@@ -182,11 +190,6 @@ struct PagedPreviewSource::Impl {
     static const std::vector<std::string_view> extensions(
         asobmshow::chart_assets::kAudioExtensions.begin(),
         asobmshow::chart_assets::kAudioExtensions.end());
-    for (const auto index : ordered) {
-      checkpoint();
-      if (auto resolved = archive_file::findFileWithExtensions(assets[index].path, extensions))
-        assets[index].path = std::move(*resolved);
-    }
     // A chart normally has one source. Contiguous source groups also support
     // mixed loose/archive assets without creating nested worker pools.
     for (std::size_t first = 0; first < ordered.size();) {
@@ -195,6 +198,15 @@ struct PagedPreviewSource::Impl {
       const bool archived = archive_file::splitVirtualPath(assets[ordered[first]].path, archive, inner);
       auto end = first + 1;
       while (end < ordered.size()) {
+        // The first path has established this archive. Containment is purely
+        // lexical; splitVirtualPath would stat that same file for every sound.
+        if (archived) {
+          const auto relative = assets[ordered[end]].path.lexically_relative(archive);
+          if (relative.empty() || relative == "." || relative.is_absolute() ||
+              *relative.begin() == "..") break;
+          ++end;
+          continue;
+        }
         std::filesystem::path nextArchive, nextInner;
         const bool nextArchived = archive_file::splitVirtualPath(assets[ordered[end]].path,
                                                                 nextArchive, nextInner);
@@ -205,24 +217,45 @@ struct PagedPreviewSource::Impl {
         ParallelWorkBatch workers(end - first);
         workers.run(end - first, [&](std::size_t item) { publishAsset(ordered[first + item]); });
       } else {
+        const auto batchStarted = std::chrono::steady_clock::now();
+        const auto batch = cache->BeginArchiveBatch(archive);
+        if (!batch) throw std::runtime_error("Preview audio archive is unavailable.");
+        std::vector<std::filesystem::path> requested;
+        for (auto item = first; item < end; ++item) {
+          requested.push_back(assets[ordered[item]].path.lexically_relative(archive));
+        }
+        std::vector<std::optional<std::filesystem::path>> resolved;
+        std::string error;
+        if (!archive_file::resolveArchiveEntriesWithExtensions(archive, requested, extensions,
+                resolved, &error, [&] { return !cancelled.load(std::memory_order_relaxed); })) {
+          checkpoint();
+          throw std::runtime_error(error.empty() ? "Could not resolve preview archive audio." : error);
+        }
         std::vector<std::filesystem::path> paths;
         std::map<std::filesystem::path, std::vector<std::size_t>> indices;
         std::map<std::filesystem::path, std::size_t> priorities;
+        std::size_t cached = 0, missing = 0;
         for (auto item = first; item < end; ++item) {
+          checkpoint();
           const auto index = ordered[item];
-          if (cache->Contains(assets[index].path) || !archive_file::exists(assets[index].path)) {
-            publishAsset(index);
+          if (!resolved[item - first]) { ++missing; publishDecoded(index, {}); continue; }
+          inner = *resolved[item - first];
+          assets[index].path = archive_file::makeVirtualPath(archive, inner);
+          if (const auto ready = cache->FindArchiveAsset(*batch, assets[index].path)) {
+            ++cached;
+            publishDecoded(index, ready);
             continue;
           }
-          archive_file::splitVirtualPath(assets[index].path, archive, inner);
           if (!indices.contains(inner)) { paths.push_back(inner); priorities.emplace(inner, item); }
           indices[inner].push_back(index);
         }
-        std::string error;
+        logPreparation("[preview-prepare] archive-ready: setupMs=%.2f assets=%zu cached=%zu missing=%zu read=%zu",
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - batchStarted).count(),
+            end - first, cached, missing, paths.size());
         const bool loaded = ConsumeArchiveAssetBatch(archive, paths,
             parallel_worker_count(paths.size()), 64U * 1024U * 1024U,
             [&](archive_file::FileData &&file) {
-              for (const auto index : indices.at(file.path)) publishAsset(index, &file.bytes);
+              for (const auto index : indices.at(file.path)) publishAsset(index, &file.bytes, &*batch);
               return !cancelled.load(std::memory_order_relaxed);
             }, &error, cancelled, archive_file::readArchiveEntriesConcurrently,
             archive_file::readArchiveEntriesStreaming,
@@ -231,6 +264,8 @@ struct PagedPreviewSource::Impl {
           checkpoint();
           throw std::runtime_error(error.empty() ? "Could not read preview audio archive." : error);
         }
+        if (!cache->ArchiveBatchUnchanged(*batch))
+          throw std::runtime_error("Preview audio archive changed during preparation.");
       }
       first = end;
     }
@@ -300,7 +335,7 @@ struct PagedPreviewSource::Impl {
     const auto milliseconds = [](auto duration) {
       return std::chrono::duration<double, std::milli>(duration).count();
     };
-    double startupMs = -1.0;
+    double startupMs = -1.0, scanMs = 0.0;
     bool complete = false;
     try {
       finalOutput = scaleFrames(timelineFrames44100, outputRate, kPreviewSampleRate, true);
@@ -354,9 +389,11 @@ struct PagedPreviewSource::Impl {
           finalOutput = std::max(finalOutput, event.outputStart +
               assets[event.asset].sound->pagedOutput->metadata()->frameCount);
         }
+        const auto scanStarted = std::chrono::steady_clock::now();
         const auto audible = skipLeadingSilence
             ? firstAudibleFrame(windowStart, std::min(windowEnd, finalOutput))
             : std::optional<std::uint64_t>{originOutput};
+        scanMs += milliseconds(std::chrono::steady_clock::now() - scanStarted);
         const bool ended = reached == events.size() && windowEnd >= finalOutput;
         if (audible || ended) {
           const auto newOrigin = audible.value_or(std::max(originOutput, finalOutput));
@@ -374,8 +411,9 @@ struct PagedPreviewSource::Impl {
           startupReady.store(true, std::memory_order_release);
           changed.notify_all();
           startupMs = milliseconds(std::chrono::steady_clock::now() - started);
-          logPreparation("[preview-prepare] startup: %.2f ms assets=%zu events=%zu",
-                          startupMs, assets.size(), events.size());
+          logPreparation("[preview-prepare] startup: %.2f ms assets=%zu events=%zu scanMs=%.2f firstFrame=%llu",
+                          startupMs, assets.size(), events.size(), scanMs,
+                          static_cast<unsigned long long>(state.firstFrame44100));
           break;
         }
         windowStart = windowEnd;

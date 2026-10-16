@@ -11042,6 +11042,27 @@ findFileWithExtensions(const std::filesystem::path &basePath,
       });
 }
 
+bool resolveArchiveEntriesWithExtensions(
+    const std::filesystem::path &archivePath,
+    const std::vector<std::filesystem::path> &innerPaths,
+    const std::vector<std::string_view> &extensions,
+    std::vector<std::optional<std::filesystem::path>> &resolved,
+    std::string *errorMessage, PauseCallback pauseCallback) {
+  resolved.clear();
+  const auto index = cachedIndexForArchive(archivePath, errorMessage, pauseCallback);
+  if (!index) return false;
+  resolved.reserve(innerPaths.size());
+  for (const auto &path : innerPaths) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) { resolved.clear(); return false; }
+    resolved.push_back(file_extension_resolver::find(path, extensions,
+        [&](const std::filesystem::path &candidate) -> std::optional<std::filesystem::path> {
+          const auto *entry = findIndexedEntry(*index, candidate);
+          return entry && !entry->directory ? std::optional{entry->path} : std::nullopt;
+        }));
+  }
+  return true;
+}
+
 std::optional<std::filesystem::path>
 materializeFile(const std::filesystem::path &path, std::string *errorMessage,
                 const std::atomic_bool *cancelled) {

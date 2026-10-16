@@ -51,9 +51,7 @@ std::filesystem::path resolvedPath(const std::filesystem::path &path) {
   return resolved.lexically_normal();
 }
 
-std::string sourceIdentity(const std::filesystem::path &path) {
-  std::filesystem::path source, inner;
-  if (!archive_file::splitVirtualPath(path, source, inner)) source = path;
+std::string fileIdentity(std::filesystem::path source) {
 #if TARGET_OS_ANDROID
   if (IsAndroidTreePath(source)) {
     std::string error;
@@ -63,7 +61,7 @@ std::string sourceIdentity(const std::filesystem::path &path) {
     const bool valid = fstat(*fd, &status) == 0 && S_ISREG(status.st_mode);
     close(*fd);
     if (!valid) return {};
-    return fspath_to_utf8(path) + ':' + std::to_string(status.st_dev) + ':' +
+    return std::to_string(status.st_dev) + ':' +
            std::to_string(status.st_ino) + ':' + std::to_string(status.st_size) + ':' +
            std::to_string(status.st_mtim.tv_sec) + ':' + std::to_string(status.st_mtim.tv_nsec) + ':' +
            std::to_string(status.st_ctim.tv_sec) + ':' + std::to_string(status.st_ctim.tv_nsec);
@@ -74,8 +72,22 @@ std::string sourceIdentity(const std::filesystem::path &path) {
     auto canonical = std::filesystem::weakly_canonical(source, error);
     if (!error) source = std::move(canonical);
   }
-  const auto identity = archive_source_identity::KeyForPath(source);
+  return archive_source_identity::KeyForPath(source);
+}
+
+std::string sourceIdentity(const std::filesystem::path &path) {
+  std::filesystem::path source, inner;
+  if (!archive_file::splitVirtualPath(path, source, inner)) source = path;
+  const auto identity = fileIdentity(source);
   return identity.empty() ? std::string{} : fspath_to_utf8(path) + '|' + identity;
+}
+
+std::string batchAssetIdentity(const DecodedAssetCache::ArchiveBatch &batch,
+                               const std::filesystem::path &path) {
+  const auto inner = path.lexically_relative(batch.path);
+  if (batch.identity.empty() || inner.empty() || inner == "." || inner.is_absolute() ||
+      *inner.begin() == "..") return {};
+  return fspath_to_utf8(path) + '|' + batch.identity;
 }
 
 bool copyDecoded(const std::shared_ptr<const DecodedAssetCache::DecodedSound> &sound,
@@ -131,13 +143,14 @@ struct DecodedAssetCache::Impl {
 
   std::shared_ptr<const DecodedSound> load(const std::filesystem::path &path,
       const std::vector<unsigned char> *encoded, const std::atomic_bool &cancel,
-      std::stop_token stop, std::string *error, FailureKind *failure) {
+      std::stop_token stop, std::string *error, FailureKind *failure,
+      const ArchiveBatch *batch = nullptr) {
     if (error) error->clear();
     if (failure) *failure = FailureKind::None;
     try {
       checkpoint(cancel, stop);
-      const auto resolved = resolvedPath(path);
-      const auto identity = sourceIdentity(resolved);
+      const auto resolved = batch ? path.lexically_normal() : resolvedPath(path);
+      const auto identity = batch ? batchAssetIdentity(*batch, resolved) : sourceIdentity(resolved);
       if (identity.empty()) throw CacheFailure(FailureKind::InvalidAsset,
                                                "Audio source is unavailable.");
       std::shared_ptr<Entry> entry;
@@ -177,7 +190,7 @@ struct DecodedAssetCache::Impl {
           : decodeAudioToPCMBounded(fspath_to_path_t(resolved), sound->pcm,
                                     sound->info, decodeCancelled, {}, stop);
       checkpoint(cancel, stop);
-      if (sourceIdentity(resolved) != identity)
+      if (!batch && sourceIdentity(resolved) != identity)
         throw std::runtime_error("Audio source changed during preparation.");
       if (!decoded || sound->info.samplerate <= 0) throw CacheFailure(FailureKind::InvalidAsset, "Could not decode audio source.");
       const auto bytes = sound->pcm.size() * sizeof(short);
@@ -219,6 +232,35 @@ std::shared_ptr<const DecodedAssetCache::DecodedSound> DecodedAssetCache::LoadBy
     const std::atomic_bool &cancel, std::stop_token stop, std::string *error,
     FailureKind *failure) {
   return impl->load(path, &bytes, cancel, stop, error, failure);
+}
+std::optional<DecodedAssetCache::ArchiveBatch> DecodedAssetCache::BeginArchiveBatch(
+    const std::filesystem::path &path) const {
+  auto normalized = path.lexically_normal();
+  auto identity = fileIdentity(normalized);
+  if (identity.empty()) return std::nullopt;
+  return ArchiveBatch{std::move(normalized), std::move(identity)};
+}
+bool DecodedAssetCache::ArchiveBatchUnchanged(const ArchiveBatch &batch) const {
+  return !batch.identity.empty() && fileIdentity(batch.path) == batch.identity;
+}
+std::shared_ptr<const DecodedAssetCache::DecodedSound> DecodedAssetCache::FindArchiveAsset(
+    const ArchiveBatch &batch, const std::filesystem::path &path) {
+  const auto resolved = path.lexically_normal();
+  const auto identity = batchAssetIdentity(batch, resolved);
+  std::lock_guard lock(impl->mutex);
+  const auto found = impl->entries.find(resolved);
+  if (identity.empty() || found == impl->entries.end() || found->second->identity != identity ||
+      !found->second->sound) return {};
+  auto &entry = *found->second;
+  impl->lru.splice(impl->lru.end(), impl->lru, entry.lru);
+  impl->statistics.cacheHitFrames += entry.sound->info.frames;
+  return entry.sound;
+}
+std::shared_ptr<const DecodedAssetCache::DecodedSound> DecodedAssetCache::LoadArchiveBytes(
+    const ArchiveBatch &batch, const std::filesystem::path &path,
+    const std::vector<unsigned char> &bytes, const std::atomic_bool &cancel,
+    std::stop_token stop, std::string *error, FailureKind *failure) {
+  return impl->load(path, &bytes, cancel, stop, error, failure, &batch);
 }
 bool DecodedAssetCache::Materialize(const std::filesystem::path &path,
     std::vector<short> &pcm, SF_INFO &info, const std::atomic_bool &cancel,

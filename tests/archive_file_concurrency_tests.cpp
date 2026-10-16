@@ -1283,6 +1283,19 @@ void testFileExtensionResolutionSharesPriorityAcrossStorage(bool archived) {
   assert(!archive_file::findFileWithExtensions(storagePath("compressed.wav"), {}));
   assert(archive_file::findFileWithExtensions(storagePath("image.bmp"), {"png"}) ==
          storagePath("image.png"));
+  if (archived) {
+    std::vector<std::optional<std::filesystem::path>> resolved;
+    std::string error;
+    assert(archive_file::resolveArchiveEntriesWithExtensions(archivePath,
+        {"exact.wav", "PREFERRED.AIF", "folder/deep.song.wav", "missing.wav", "folder"},
+        extensions, resolved, &error));
+    assert((resolved == std::vector<std::optional<std::filesystem::path>>{
+        "exact.wav", "preferred.flac", "folder/deep.song.ogg", std::nullopt, std::nullopt}));
+    assert(!archive_file::resolveArchiveEntriesWithExtensions(archivePath,
+        {"exact.wav"}, extensions, resolved, &error, [] { return false; }));
+    assert(resolved.empty());
+  }
+
 }
 
 void testZipBoundedReadRejectsCentralDirectoryUnderstatedSize() {
