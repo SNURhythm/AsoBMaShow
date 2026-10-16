@@ -186,6 +186,19 @@ void testIdleGateRetainsWaitWithoutGpuVsync() {
   idlePacer.framePresented(now);
   wait = std::max(explicitPacer.remaining(now), idlePacer.remaining(now));
   require(wait > 33ms && wait < 34ms, "idle preserves an explicit frame cap");
+  explicitPacer.setCap(240);
+  explicitPacer.framePresented(now);
+  idlePacer.setCap(video::idlePresentationPacingCap(120.0F, 240, true));
+  idlePacer.reset(now);
+  idlePacer.framePresented(now);
+  wait = std::max(explicitPacer.remaining(now), idlePacer.remaining(now));
+  require(wait > 8ms && wait < 9ms,
+          "skipped VSync frames preserve display cadence with a higher explicit cap");
+  idlePacer.setCap(video::idlePresentationPacingCap(120.0F, 240, true, false));
+  idlePacer.framePresented(now);
+  wait = std::max(explicitPacer.remaining(now), idlePacer.remaining(now));
+  require(wait > 4ms && wait < 5ms,
+          "VSync disabled preserves a higher explicit cap on skipped frames");
   idlePacer.setCap(video::idlePresentationPacingCap(0.0F, 0, true));
   idlePacer.framePresented(now);
   require(idlePacer.remaining(now) > 8ms,

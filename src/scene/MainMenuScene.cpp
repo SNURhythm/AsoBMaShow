@@ -8129,7 +8129,10 @@ bool MainMenuScene::needsContinuousPresentation() const {
   if (const auto *scene = activeUtilityTab()) {
     return scene->needsContinuousPresentation();
   }
-  return context.jukebox.hasActiveVisuals() && previewPlayer_.GetState().playing;
+  // EOF can seek the video after audio stops. Decoded frames are promoted by
+  // rendering, so keep the selected video active even after that final seek.
+  return (context.jukebox.hasActiveVisuals() && previewPlayer_.GetState().playing) ||
+         context.jukebox.hasActiveVideoVisuals();
 }
 
 void MainMenuScene::update(float dt) {

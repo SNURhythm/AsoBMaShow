@@ -238,6 +238,7 @@ public:
   audio::playback::BackendOperationResult stopKeepDevice();
   void render();
   bool hasActiveVisuals() const;
+  bool hasActiveVideoVisuals() const;
   long long getScheduledAudioEndMicros();
   long long getScheduledVisualEndMicros();
   std::vector<std::filesystem::path> activeMaterializedVideoPaths() const;

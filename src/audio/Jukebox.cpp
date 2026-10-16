@@ -1739,6 +1739,20 @@ bool Jukebox::hasActiveVisuals() const {
           currentBmpLayer.load(std::memory_order_relaxed) != -1);
 }
 
+bool Jukebox::hasActiveVideoVisuals() const {
+  if (!hasActiveVisuals()) return false;
+  // Do not stall presentation while the media worker owns the table. Keep
+  // rendering until we can determine whether the selected visuals are videos.
+  std::unique_lock lock(videoPlayerTableMutex, std::try_to_lock);
+  if (!lock.owns_lock()) return true;
+  for (const int id : {currentBga.load(std::memory_order_relaxed),
+                       currentBmpLayer.load(std::memory_order_relaxed)}) {
+    const auto video = videoPlayerTable.find(id);
+    if (video != videoPlayerTable.end() && video->second) return true;
+  }
+  return false;
+}
+
 long long Jukebox::getScheduledAudioEndMicros() {
   long long endMicros = 0;
   for (const auto &event : audioList) {

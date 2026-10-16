@@ -446,6 +446,22 @@ void testArchivedVisualsPreloadInOneArchiveBatch() {
   jukebox.seekVisualsToSongTime(1'000);
   require(jukebox.hasActiveVisuals(),
           "second archive visual is ready without event-time extraction");
+  require(jukebox.stop().success, "drain scheduler before querying selected media types");
+  jukebox.seekVisualsToSongTime(0);
+  require(!jukebox.hasActiveVideoVisuals(),
+          "an image does not require video presentation even with a preloaded video");
+  jukebox.seekVisualsToSongTime(1'000);
+  require(jukebox.hasActiveVideoVisuals(),
+          "a selected video with a stopped clock still requires decoded frame presentation");
+  jukebox.setVisualsSuspended(true);
+  require(!jukebox.hasActiveVideoVisuals(), "suspended video visuals can idle");
+  jukebox.setVisualsSuspended(false);
+  jukebox.setVisualsEnabled(false);
+  require(!jukebox.hasActiveVideoVisuals(), "disabled video visuals can idle");
+  jukebox.setVisualsEnabled(true);
+  jukebox.seekVisualsToSongTime(0);
+  jukebox.seekVisualsToSongTime(1'000);
+  require(jukebox.hasActiveVideoVisuals(), "reenabled selected video resumes presentation");
   require(jukebox.activeMaterializedVideoPaths().size() == 1,
           "timed activation reuses the preloaded archived video");
 }

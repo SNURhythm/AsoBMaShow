@@ -6925,8 +6925,9 @@ bool GamePlayScene::needsContinuousPresentation() const {
   if (practiceMenuActive) return practiceMenuStartPressedMicros != 0;
   if (coursePauseHoldActive || coursePauseHoldRewinding) return true;
   // Course menus do not pause playback. Built-in ordinary pauses use the
-  // frozen song clock for notes, lane effects and BGA, so their UI can settle.
-  return state == nullptr || !context.jukebox.isPaused();
+  // frozen song clock, but a video may still need to promote a decoded frame.
+  return state == nullptr || !context.jukebox.isPaused() ||
+         context.jukebox.hasActiveVideoVisuals();
 }
 
 void GamePlayScene::update(float dt) {

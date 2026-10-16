@@ -7,9 +7,10 @@ struct Presentation {
   PresentationMode activeMode() const { return mode; }
 };
 struct Jukebox {
-  bool paused = true, visuals = false;
+  bool paused = true, visuals = false, video = false;
   bool isPaused() const { return paused; }
   bool hasActiveVisuals() const { return visuals; }
+  bool hasActiveVideoVisuals() const { return visuals && video; }
 };
 struct Playback { bool playing = false; };
 struct Player {
@@ -95,6 +96,12 @@ int main() {
   assert(!game.needsContinuousPresentation());
   game.context.jukebox.visuals = true;
   assert(!game.needsContinuousPresentation());
+  game.context.jukebox.video = true;
+  ui::PresentationSchedule pausedSchedule;
+  pausedSchedule.didPresent(ui::revisions(), {}, 0); // Pause rendered before decode completed.
+  assert(pausedSchedule.shouldRender(8, game.needsContinuousPresentation()));
+  game.context.jukebox.video = false;
+  assert(!pausedSchedule.shouldRender(8, game.needsContinuousPresentation()));
   game.coursePauseHoldActive = true;
   assert(game.needsContinuousPresentation());
   game.coursePauseHoldActive = false;
@@ -146,6 +153,13 @@ int main() {
   assert(menu.needsContinuousPresentation());
   menu.previewPlayer_.state.playing = false;
   assert(!menu.needsContinuousPresentation());
+
+  menu.context.jukebox.video = true;
+  ui::PresentationSchedule eofSchedule;
+  eofSchedule.didPresent(ui::revisions(), {}, 0); // EOF seek rendered before decode completed.
+  assert(eofSchedule.shouldRender(8, menu.needsContinuousPresentation()));
+  menu.context.jukebox.visuals = false;
+  assert(!eofSchedule.shouldRender(8, menu.needsContinuousPresentation()));
 
   ResultScene result;
   assert(!result.needsContinuousPresentation());

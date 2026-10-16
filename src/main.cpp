@@ -1961,7 +1961,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           ? platform::getWindowSnapshot(s_window) : std::nullopt;
       idlePresentationPacer.setCap(video::idlePresentationPacingCap(
           idleViewport ? idleViewport->refreshRate : 0.0F,
-          context.framePacer.currentFrameCap(), skippedIdleFrame));
+          context.framePacer.currentFrameCap(), skippedIdleFrame,
+          (context.bgfxResetFlags.load(std::memory_order_acquire) & BGFX_RESET_VSYNC) != 0));
       idlePresentationPacer.framePresented(presentedAt);
 #endif
       const auto waitStartedAt = std::chrono::steady_clock::now();
