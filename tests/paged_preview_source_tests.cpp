@@ -27,9 +27,15 @@ thread_local bool bypassPreparationGate = false;
 std::atomic_bool preparationGate{false};
 std::atomic_bool preparationBlocked{false};
 std::atomic_uint blockedPreparations{0};
+std::atomic_bool rejectLargeAllocations{false};
+std::atomic_uint largeAllocationAttempts{0};
 }
 void *operator new(std::size_t bytes) {
   if (forbidAllocation) throw std::bad_alloc();
+  if (bytes > 256U * 1024U * 1024U && rejectLargeAllocations.load()) {
+    ++largeAllocationAttempts;
+    throw std::bad_alloc();
+  }
   // Pause the real worker's first large unused-asset read. The short scheduled
   // sound fits below this threshold, so startup must publish before this gate.
   if (!bypassPreparationGate && bytes >= 16384 && preparationGate.load()) {
@@ -165,6 +171,35 @@ void testResampling(const std::filesystem::path &root) {
     for (std::size_t i = 0; i < expected.size(); ++i)
       require(std::abs(actual[i] - expected[i] * (0.9f / 32768.0f)) < 0.000001f,
               "paged resampling differs at a seek/page/interpolation endpoint");
+  }
+}
+void testResamplingRejectsOversizedOutputBeforeAllocation(const std::filesystem::path &root) {
+  // Small, valid native files can expand far beyond the per-asset PCM budget.
+  // The stereo case fits if channels are accidentally omitted from the check.
+  for (const auto [frames, channels] : {std::pair{60000, 1}, std::pair{1500, 2}}) {
+    writeWav(root / "first.wav", 1, std::vector<short>(frames * channels, 8192), channels);
+    auto parsed = chart(root, "#00011:01\n");
+    auto cache = std::make_shared<audio::DecodedAssetCache>(root / "cache",
+        audio::DecodedAssetCache::kUnlimitedRetainedBytes);
+    auto source = audio::PagedPreviewSource::Create(*parsed, cache, 0);
+    largeAllocationAttempts.store(0);
+    rejectLargeAllocations.store(true);
+    require(source->Begin(48000), "cannot begin oversized resampling preview");
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    auto state = source->GetState();
+    while (state.error.empty() && !state.preparationComplete &&
+           std::chrono::steady_clock::now() < deadline) {
+      source->WaitForChange(state.revision, 20ms);
+      state = source->GetState();
+    }
+    source->Cancel();
+    rejectLargeAllocations.store(false);
+    require(cache->GetStatistics().decodedFrames == static_cast<std::uint64_t>(frames),
+            "low-rate fixture must decode successfully at its native rate");
+    require(largeAllocationAttempts.load() == 0,
+            "oversized resampled PCM must be rejected before requesting its allocation");
+    require(!state.error.empty() && !state.preparationComplete,
+            "oversized resampling must report a preparation error");
   }
 }
 void testDownsamplingWarmsEveryNativePage(const std::filesystem::path &root) {
@@ -773,6 +808,7 @@ int main() {
     testContinuousQueueAndEarlyEnd(root / "parallel");
     testIndependentAssetsPrepareConcurrently(root / "parallel");
     testHighlightAndReuse(root / "highlight");
+    testResamplingRejectsOversizedOutputBeforeAllocation(root / "resampling");
     testResampling(root / "resampling");
     testDownsamplingWarmsEveryNativePage(root / "downsampling");
     testMissingAndExpired(root / "missing");
@@ -789,6 +825,7 @@ int main() {
     return 0;
   } catch (const std::exception &error) {
     forbidAllocation = false;
+    rejectLargeAllocations.store(false);
     preparationGate.store(false);
     std::filesystem::remove_all(root);
     std::cerr << error.what() << '\n';

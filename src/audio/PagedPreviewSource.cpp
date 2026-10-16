@@ -9,7 +9,6 @@
 #include "ChartAssetExtensions.h"
 #include "ChartAudioRenderer.h"
 #include "DecodedAssetCache.h"
-#include "PcmResampler.h"
 
 #include <SDL3/SDL_log.h>
 #include <algorithm>
@@ -152,9 +151,14 @@ struct PagedPreviewSource::Impl {
     if (!native) {
       outputSound.publishMetadata(0, 0);
     } else {
-      const pcm_resampling::Ratio ratio(native->info.samplerate, outputRate);
-      if (!ratio.outputFrames(static_cast<std::size_t>(native->info.frames), UINT32_MAX))
-        throw std::runtime_error("Preview audio length is not representable.");
+      // Resampling can expand a small native asset into gigabytes. Bound the
+      // actual output samples (including channels and rounded-up frames) before
+      // allocating, independently of the cache's unlimited retention setting.
+      const auto outputSamples = ProjectedResampledPcmSampleCount(
+          native->pcm.size(), native->info.channels, native->info.samplerate, outputRate);
+      if (!outputSamples ||
+          *outputSamples > DecodedAssetCache::kMaximumPcmAssetBytes / sizeof(short))
+        throw std::runtime_error("Preview resampled audio exceeds the per-asset byte limit.");
       auto output = ResamplePcm(native->pcm, native->info.channels,
                                 native->info.samplerate, outputRate);
       checkpoint();
