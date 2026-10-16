@@ -223,7 +223,7 @@ public:
                     std::nullopt,
                 const prep_metronome::PrepMetronomePlan *prepMetronomePlan =
                     nullptr,
-                bool clubMode = false);
+                bool clubMode = false, bool preserveVisuals = false);
   void appendScheduledAudioEvents(
       std::span<const ScheduledAudioEvent> events);
   void seekVisualsToSongTime(long long rawSongMicros);

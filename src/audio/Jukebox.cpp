@@ -3302,9 +3302,9 @@ Jukebox::loadChartImpl(bms_parser::Chart &chart, bool scheduleNotes,
     playThread.join();
   }
 
-  currentBga.store(-1, std::memory_order_relaxed);
-  currentBmpLayer.store(-1, std::memory_order_relaxed);
-  {
+  if (!preserveVisuals) {
+    currentBga.store(-1, std::memory_order_relaxed);
+    currentBmpLayer.store(-1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
     for (auto &videoPlayer : videoPlayerTable) {
       if (videoPlayer.second != nullptr) {
@@ -3332,7 +3332,8 @@ Jukebox::loadChartImpl(bms_parser::Chart &chart, bool scheduleNotes,
   }
   if (isCancelled)
     return {.success = true};
-  schedule(chart, scheduleNotes, isCancelled);
+  schedule(chart, scheduleNotes, isCancelled, std::nullopt, nullptr, false,
+           preserveVisuals);
   SDL_Log("Chart loaded");
   return {.success = true};
 }
@@ -3430,10 +3431,12 @@ void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
                        std::optional<long long> noteScheduleCutoffMicros,
                        const prep_metronome::PrepMetronomePlan
                            *prepMetronomePlan,
-                       bool clubMode) {
+                       bool clubMode, bool preserveVisuals) {
   audioCursor = 0;
   audioList.clear();
-  scheduleVisuals(chart, isCancelled);
+  // Preview already owns this schedule and its current decoder positions.
+  // Preparing gameplay audio must not restart or blank those visuals.
+  if (!preserveVisuals) scheduleVisuals(chart, isCancelled);
   for (auto &measure : chart.Measures) {
     if (isCancelled)
       return;

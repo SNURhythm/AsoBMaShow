@@ -1687,6 +1687,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
         SDL_Log("Previewing %s", fspath_to_utf8(meta.BmsPath).c_str());
         {
           std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+          std::lock_guard visualLock(previewVisualsMutex);
           if (isCancelled()) {
             return;
           }
@@ -1720,6 +1721,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
         }
         try {
           std::unique_lock<std::mutex> lock(previewJukeboxLoadMutex);
+          std::unique_lock visualLock(previewVisualsMutex);
           if (isCancelled()) {
             return;
           }
@@ -1758,6 +1760,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
               // listening. Let the source finish its prioritized decoding first.
               this->context.jukebox.loadVisuals(*chart, cancelled);
               previewVisualsLoaded_ = true;
+              visualLock.unlock();
               lock.unlock();
               bool audioPrepared = false;
               while (!isCancelled()) {
@@ -1790,6 +1793,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
               }
             }
           }
+          if (!visualLock.owns_lock()) visualLock.lock();
           if (isCancelled()) {
             previewPlayer_.Stop();
             this->context.jukebox.unloadVisuals();
@@ -1804,6 +1808,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
           SDL_Log("Preview preparation failed %s: %s",
                   fspath_to_utf8(meta.BmsPath).c_str(), error.what());
           std::lock_guard lock(previewJukeboxLoadMutex);
+          std::lock_guard visualLock(previewVisualsMutex);
           previewPlayer_.Stop();
           this->context.jukebox.unloadVisuals();
           previewVisualsLoaded_ = false;
@@ -1813,6 +1818,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       }, [this] { stopAndClearSelectedChart(); }, kPreviewDebounceDelay,
       [this] {
         std::lock_guard lock(previewJukeboxLoadMutex);
+        std::lock_guard visualLock(previewVisualsMutex);
         previewPlayer_.Stop();
         // stop() is also called onPause after gameplay has loaded its chart.
         // Play takes ownership of a completed preparation. Other stops retire
@@ -7118,6 +7124,7 @@ void MainMenuScene::startModernReplayPlayback(
           }
           {
             std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+            std::lock_guard visualLock(previewVisualsMutex);
             context.jukebox.stop();
             context.jukebox.loadChart(*loaded.chart, true, *cancelled);
           }
@@ -7223,6 +7230,7 @@ void MainMenuScene::startModernGBattlePlayback(
           }
           {
             std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+            std::lock_guard visualLock(previewVisualsMutex);
             context.jukebox.stop();
             context.jukebox.loadChart(*loaded.chart, true, *cancelled);
           }
@@ -7416,6 +7424,7 @@ void MainMenuScene::clearSelectedChart() {
 
 void MainMenuScene::stopAndClearSelectedChart() {
   std::lock_guard lock(previewJukeboxLoadMutex);
+  std::lock_guard visualLock(previewVisualsMutex);
   previewPlayer_.Stop();
   if (previewVisualsLoaded_) {
     context.jukebox.unloadVisuals();
@@ -8107,9 +8116,9 @@ void MainMenuScene::applyReplayExportResult() {
 }
 
 void MainMenuScene::updatePreviewVisuals() {
-  // The worker owns the visual schedule while loading. Never stall the UI on
-  // media preparation or retirement; the next frame catches up to the audio.
-  std::unique_lock lock(previewJukeboxLoadMutex, std::try_to_lock);
+  // Visual loading/retirement owns this lock; gameplay audio preparation uses
+  // a separate lock so it cannot delay the first image or freeze its clock.
+  std::unique_lock lock(previewVisualsMutex, std::try_to_lock);
   if (!lock.owns_lock() || !previewVisualsLoaded_) return;
   const auto state = previewPlayer_.GetState();
   if (!state.playing && !state.finished) return;

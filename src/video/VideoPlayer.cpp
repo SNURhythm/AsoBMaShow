@@ -379,48 +379,29 @@ void VideoPlayer::update() {
     return;
   }
 
-  AVFrame *currentFrame;
-  double elapsedTime;
-  double frameTime;
-  // Determine the next frame to display
-  // ... (existing buffering logic remains, but we get the frame from
-  // frameBuffer) ...
-
-  // Note: We need to handle frame skipping logic properly with the new pool
-  // The existing loop:
-  while (true) {
-    {
-      std::unique_lock<std::mutex> lock(bufferMutex);
-      if (bufferSize == 0) {
-        return;
-      }
-      currentFrame = frameBuffer[bufferHead];
-      long long now = stopwatch->elapsedMicros();
-      elapsedTime = (now - startTime) / 1000000.0;
-      frameTime = (currentFrame->pts - startPTS) *
-                  av_q2d(formatContext->streams[videoStreamIndex]->time_base);
-
-      if (elapsedTime < frameTime) {
-        // Not time yet
-        return;
-      }
-
-      frameBuffer[bufferHead] = nullptr; // Clear buffer slot
+  AVFrame *currentFrame = nullptr;
+  double frameTime = 0.0;
+  {
+    std::lock_guard<std::mutex> lock(bufferMutex);
+    const double elapsedTime = (stopwatch->elapsedMicros() - startTime) / 1000000.0;
+    // Select the newest due frame from this bounded queue snapshot. Even when
+    // decoding is late, keep one image to present instead of dropping every
+    // frame and waiting for the decoder to catch the advancing audio clock.
+    while (bufferSize > 0) {
+      AVFrame *nextFrame = frameBuffer[bufferHead];
+      const double nextTime = (nextFrame->pts - startPTS) *
+          av_q2d(formatContext->streams[videoStreamIndex]->time_base);
+      if (elapsedTime < nextTime) break;
+      if (currentFrame != nullptr) recycleFrame(currentFrame);
+      currentFrame = nextFrame;
+      frameTime = nextTime;
+      frameBuffer[bufferHead] = nullptr;
       bufferHead = (bufferHead + 1) % maxBufferSize;
       --bufferSize;
     }
-
-    // We consumed a frame from the buffer
-    freeSpace.notify_one();
-
-    if (elapsedTime > frameTime + 0.1) {
-      lastFramePTS = frameTime;
-      // Recycle the skipped frame
-      recycleFrame(currentFrame);
-      continue;
-    }
-    break;
   }
+  if (currentFrame == nullptr) return;
+  freeSpace.notify_one();
 
   // Upload to BGFX textures.
   // Use bgfx::copy + explicit pitch because decoder output can be padded
@@ -777,7 +758,8 @@ void VideoPlayer::seek(int64_t micro) {
   // Reinitialize timing
   lastFramePTS = 0;
   startTime = stopwatch->elapsedMicros();
-  hasVideoFrame = false;
+  // Keep the uploaded image visible while decoding the replacement. stop()
+  // and unloadVideo() still retire it when playback or the clip changes.
 
   // Notify predecoding thread to continue from the new position
   SDL_Log("Seeked to %" PRId64 " microseconds", micro);
@@ -804,7 +786,7 @@ void VideoPlayer::predecodeFrames() {
     if (timestamp != AV_NOPTS_VALUE) {
       const double frameTime = (timestamp - startPTS) *
           av_q2d(formatContext->streams[videoStreamIndex]->time_base);
-      // Match update()'s late-frame tolerance, but discard seek preroll before
+      // Discard seek preroll older than the target tolerance before
       // conversion or queueing. Otherwise three obsolete frames stall decoding
       // until the presentation thread drains them.
       if (seekPositionSeconds > frameTime + 0.1) return;

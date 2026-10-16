@@ -134,6 +134,7 @@ struct Scene {
   bool previewVisualsLoaded_ = false;
   std::optional<std::uint64_t> previewVisualPositionFrames_;
   std::mutex previewJukeboxLoadMutex;
+  std::mutex previewVisualsMutex;
   std::unique_ptr<Worker> previewWorker_ = std::make_unique<Worker>();
   std::atomic_bool willStart = false;
   std::mutex selectedChartMutex;
@@ -192,6 +193,22 @@ int main() {
     scene.stopPlayback(); // onPause/cleanup can retire the worker again.
     require(scene.context.jukebox.loaded,
             "repeated preview stop must preserve the gameplay visual handoff");
+
+    Scene preparingScene;
+    preparingScene.context.jukebox.duringPreparation = [&](std::atomic_bool &) {
+      // Audio decoding already finished before visual loading. Gameplay staging
+      // is still blocked here while the UI activates and advances the preview.
+      std::thread uiThread([&] {
+        preparingScene.previewPlayer_.state.positionFrames = 4410;
+        preparingScene.updatePreviewVisuals();
+        preparingScene.previewPlayer_.state.positionFrames = 8820;
+        preparingScene.updatePreviewVisuals();
+      });
+      uiThread.join();
+    };
+    preparingScene.process({.meta = {.BmsPath = "chart.bms"}}, cancelled);
+    require(preparingScene.context.jukebox.positions == std::vector<long long>{100'000, 200'000},
+            "preview must activate and advance while gameplay audio preparation is blocked");
 
     Scene progressiveScene;
     audio::PagedPreviewSource::preparationComplete = false;
@@ -314,7 +331,7 @@ int main() {
             "EOF must display the final consumed position");
     std::atomic_bool locked = false, release = false;
     std::thread loader([&] {
-      std::lock_guard lock(clockScene.previewJukeboxLoadMutex);
+      std::lock_guard lock(clockScene.previewVisualsMutex);
       locked = true;
       while (!release) std::this_thread::yield();
     });

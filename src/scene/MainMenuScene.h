@@ -141,10 +141,13 @@ private:
   // Explicit chart position; future highlight selection supplies this value.
   std::uint64_t previewStartFrame_ = 0;
   void updatePreviewVisuals();
-  // Guarded by previewJukeboxLoadMutex; full gameplay owns visuals after stop.
+  // Guarded by previewVisualsMutex; full gameplay owns visuals after stop.
   bool previewVisualsLoaded_ = false;
   std::optional<std::uint64_t> previewVisualPositionFrames_;
+  // Mutations take the load lock before the visual lock. UI clock updates
+  // take only the visual lock, including during background audio preparation.
   std::mutex previewJukeboxLoadMutex;
+  std::mutex previewVisualsMutex;
   std::unique_ptr<MainMenuPreviewController> previewWorker_;
   ReplayRecordTask replayLoadTask_;
   bool prioritizeVisibleArtworkBindings = false;

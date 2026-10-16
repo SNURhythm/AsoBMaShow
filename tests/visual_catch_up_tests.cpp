@@ -405,6 +405,83 @@ void testTimelineEdges(const std::filesystem::path &clip) {
   std::cout << "timeline edges: zero/single, missing/image, shared ID, backward/rapid, eager readiness\n";
 }
 
+void testGameplayPreparationPreservesPreview(const std::filesystem::path &clip) {
+  Stopwatch stopwatch;
+  Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>());
+  fixture::Session session;
+  bms_parser::Chart chart;
+  chart.Meta.Folder = clip.parent_path();
+  chart.ReferencedBmpTable.emplace(1, clip.filename().string());
+  appendEvent(chart, 0, 1, -1);
+  appendEvent(chart, 500'000, 1, -1);
+  std::atomic_bool cancelled = false;
+  jukebox.loadVisuals(chart, cancelled);
+  jukebox.seekVisualsToSongTime(250'000);
+  const auto *player = seekEvents().front().player;
+  fixture::releaseWorkers();
+  expectUpload(player, 250'000, 0, [&] { jukebox.render(); });
+  require(player->prepareEmbeddedSubmission({}, 0).has_value(), "preview image is visible");
+  const auto prepared = jukebox.prepareGameplayAudioFromPreview(chart, cancelled);
+  require(prepared.success, "background gameplay audio preparation succeeds");
+  require(jukebox.hasActiveVideoVisuals() && player->prepareEmbeddedSubmission({}, 0).has_value(),
+          "gameplay audio preparation must keep the preview video visible");
+  jukebox.seekVisualsToSongTime(300'000);
+  expectSeeks({250'000});
+  jukebox.seekVisualsToSongTime(550'000);
+  expectSeeks({250'000, 50'000});
+}
+
+void testLateFirstFrameIsPresented(const std::filesystem::path &clip) {
+  Stopwatch stopwatch;
+  VideoPlayer player(&stopwatch);
+  fixture::Session session;
+  std::atomic_bool cancelled = false;
+  require(player.loadVideo(clip.string(), cancelled), "late-frame fixture loads");
+  player.playFrom(0);
+  fixture::releaseWorkers();
+  fixture::awaitBoundary(&player, fixture::Boundary::Rejected);
+  VideoPlayer::DecodeBatch batch(player);
+  // Three decoded frames (0, 50, 100 ms) are ready, but the audio clock has
+  // advanced during startup. Display the newest available image immediately.
+  stopwatch.seek(250'000);
+  const auto after = fixture::events().size();
+  player.update();
+  const auto observed = fixture::events();
+  std::vector<std::int64_t> uploads;
+  for (auto it = observed.begin() + after; it != observed.end(); ++it) {
+    if (it->boundary == fixture::Boundary::Upload) uploads.push_back(it->micros);
+  }
+  require(uploads == std::vector<std::int64_t>{100'000},
+          "late startup must upload the newest due frame instead of discarding every image");
+}
+
+void testSeekKeepsDisplayedFrame(const std::filesystem::path &clip) {
+  Stopwatch stopwatch;
+  VideoPlayer player(&stopwatch);
+  fixture::Session session;
+  std::atomic_bool cancelled = false;
+  require(player.loadVideo(clip.string(), cancelled), "seek-display fixture loads");
+  player.playFrom(0);
+  fixture::releaseWorkers();
+  expectUpload(&player, 0, 0, [&] { player.update(); });
+  const auto displayed = player.prepareEmbeddedSubmission({}, 0);
+  require(displayed.has_value(), "uploaded frame can be presented");
+  {
+    VideoPlayer::DecodeBatch batch(player);
+    player.playFrom(750'000);
+    player.update();
+    const auto seeking = player.prepareEmbeddedSubmission({}, 0);
+    require(seeking.has_value() && seeking->textures[0].idx == displayed->textures[0].idx,
+            "seeking must keep the displayed frame until its replacement is ready");
+  }
+  expectUpload(&player, 750'000, 0, [&] { player.update(); });
+  player.stop();
+  require(!player.prepareEmbeddedSubmission({}, 0), "stopping clears the displayed frame");
+  require(player.loadVideo(clip.string(), cancelled), "replacement clip loads");
+  player.playFrom(0);
+  require(!player.prepareEmbeddedSubmission({}, 0), "reloading cannot expose the previous clip's frame");
+}
+
 void testSeekPrerollDoesNotWaitForPresentation(const std::filesystem::path &clip) {
   Stopwatch stopwatch;
   VideoPlayer player(&stopwatch);
@@ -500,8 +577,12 @@ int main(int argc, char **argv) {
   if (!bgfx::init(init)) {
     return 2;
   }
+  rendering::PosTexCoord0Vertex::init();
   int result = 0;
   try {
+    testSeekKeepsDisplayedFrame(argv[1]);
+    testLateFirstFrameIsPresented(argv[1]);
+    testGameplayPreparationPreservesPreview(argv[1]);
     testSeekPrerollDoesNotWaitForPresentation(argv[1]);
     testDecodedFrameStorage(argv[2], true);
     testDecodedFrameStorage(argv[3], false);
