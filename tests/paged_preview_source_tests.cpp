@@ -107,8 +107,8 @@ void testHighlightAndReuse(const std::filesystem::path &root) {
   std::atomic_bool cancelled{false};
   std::vector<short> prefix;
   SF_INFO info{};
-  require(cache->ReadRange(root / "first.wav", 0, 4096, prefix, info, cancelled),
-          "cannot seed partial gameplay cache");
+  require(cache->Materialize(root / "first.wav", prefix, info, cancelled),
+          "cannot seed whole gameplay cache");
   auto source = audio::PagedPreviewSource::Create(*parsed, cache, 44100, {0.5f, 0.25f});
   parsed.reset(); // The source must own a synchronous snapshot.
   std::vector<float> pending(16, 1.0f);
@@ -143,6 +143,10 @@ void testHighlightAndReuse(const std::filesystem::path &root) {
   require(!std::filesystem::exists(root / "cache") ||
           std::filesystem::is_empty(root / "cache"), "preview must not spool mixed PCM");
   next->Cancel();
+  const auto log = archive_file::debugLogText();
+  require(log.find("[preview-prepare] startup:") != std::string::npos &&
+              log.find("[preview-prepare] complete:") != std::string::npos,
+          "preview timings must appear in the in-app performance log");
   require(next->GetState().cancelled, "Cancel must be terminal");
 }
 void testResampling(const std::filesystem::path &root) {
@@ -243,7 +247,8 @@ void testProgressiveStartup(const std::filesystem::path &root) {
   preparationGate.store(true);
   require(source->Begin(44100, true), "cannot begin progressive preview");
   const auto deadline = std::chrono::steady_clock::now() + 5s;
-  while (!preparationBlocked.load() && std::chrono::steady_clock::now() < deadline)
+  while ((!preparationBlocked.load() || !source->GetState().startupReady) &&
+         std::chrono::steady_clock::now() < deadline)
     std::this_thread::yield();
   const auto state = source->GetState();
   preparationGate.store(false); // Always release before an assertion can unwind.
@@ -262,6 +267,66 @@ void testProgressiveStartup(const std::filesystem::path &root) {
   source->Cancel();
   require(source->GetState().cancelled, "Cancel must join the producer");
 }
+void testContinuousQueueAndEarlyEnd(const std::filesystem::path &root) {
+  if (parallel_worker_count(2) < 2) return;
+  for (const bool blockOpening : {true, false}) {
+    writeWav(root / "first.wav", 44100,
+             std::vector<short>(blockOpening ? 44100 * 4 : 100, 16384));
+    writeWav(root / "second.wav", 44100,
+             std::vector<short>(blockOpening ? 100 : 44100 * 4, 8192));
+    auto parsed = chart(root, "#00011:01\n");
+    parsed->Meta.TotalLength = 0;
+    parsed->Meta.PlayLength = 0;
+    auto cache = std::make_shared<audio::DecodedAssetCache>();
+    auto source = audio::PagedPreviewSource::Create(*parsed, cache, 0);
+    preparationBlocked = false;
+    preparationGate = true;
+    const auto releaseGate = makeScopeExit([&] { preparationGate = false; });
+    require(source->Begin(44100), "begin continuous queue test");
+    const auto deadline = std::chrono::steady_clock::now() + 5s;
+    while ((!preparationBlocked || (blockOpening ? !cache->Contains(root / "second.wav") :
+           !source->GetState().startupReady)) && std::chrono::steady_clock::now() < deadline)
+      std::this_thread::yield();
+    const auto state = source->GetState();
+    bool correct = false;
+    if (blockOpening) {
+      correct = preparationBlocked && cache->Contains(root / "second.wav") && !state.startupReady;
+    } else if (state.startupReady && state.durationKnown) {
+      const auto samples = renderAll(source);
+      correct = samples.size() == 200 && source->GetState().positionFrames44100 == 100 &&
+                !source->GetState().preparationComplete;
+    }
+    preparationGate = false;
+    waitPrepared(source);
+    require(correct, blockOpening ? "unused keysounds keep loading while opening sound is blocked" :
+                                  "preview ends at true duration while unused loading remains blocked");
+  }
+}
+
+void testAppearanceOrderPrecedesWavTableOrder(const std::filesystem::path &root) {
+  writeWav(root / "opening.wav", 44100, std::vector<short>(100, 16384));
+  writeWav(root / "large.wav", 44100, std::vector<short>(44100, 8192));
+  auto parsed = chart(root, "#WAVZZ opening.wav\n#00011:ZZ\n");
+  const auto count = parallel_worker_count(1024) + 2;
+  for (unsigned int index = 1; index <= count; ++index) {
+    const auto name = "unused-" + std::to_string(index) + ".wav";
+    std::filesystem::copy_file(root / "large.wav", root / name);
+    parsed->WavTable[index] = name;
+  }
+  auto source = audio::PagedPreviewSource::Create(*parsed, {}, 0);
+  preparationBlocked = false;
+  preparationGate = true;
+  require(source->Begin(44100), "begin appearance-order test");
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  while ((!preparationBlocked || !source->GetState().startupReady) &&
+         std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+  const auto state = source->GetState();
+  preparationGate = false;
+  waitPrepared(source);
+  require(state.startupReady && !state.preparationComplete,
+          "first event must load before earlier WAV IDs can occupy every worker");
+}
+
 void testIndependentAssetsPrepareConcurrently(const std::filesystem::path &root) {
   if (parallel_worker_count(2) < 2) return;
   writeWav(root / "first.wav", 44100, std::vector<short>(44100, 1200));
@@ -297,7 +362,8 @@ void testFullCallbackPreflightPreservesScheduledAndActiveVoices(const std::files
   preparationGate.store(true);
   require(source->Begin(44100), "cannot begin full-callback readiness preview");
   const auto deadline = std::chrono::steady_clock::now() + 5s;
-  while (!preparationBlocked.load() && std::chrono::steady_clock::now() < deadline)
+  while ((!preparationBlocked.load() || !source->GetState().startupReady) &&
+         std::chrono::steady_clock::now() < deadline)
     std::this_thread::yield();
   const auto startup = source->GetState();
   forbidAllocation = true;
@@ -496,14 +562,14 @@ void testArchivedPreviewBatchesOpeningFutureAndReferencedAssets(const std::files
   waitPrepared(source);
   require(cache->GetStatistics().decodedFrames == 16 * 22050,
           "archive batching must warm opening, future and referenced native PCM");
-  require(cache->GetStatistics().archiveReads <= 4,
+  require(cache->GetStatistics().archiveReads == 0,
           "preview preparation must batch archive entries instead of replaying one extraction per asset");
   const auto samples = renderAll(source);
   require(!samples.empty() && std::abs(samples.front() - 12 * 8191.0f * 0.9f / 32768) < 0.00001f,
-          "archive staging must preserve overlapping preview PCM");
+          "archive loading must preserve overlapping preview PCM");
 }
 
-void testOverlappingCompressedAssetsKeepProgressiveDecoders(const std::filesystem::path &root) {
+void testOverlappingCompressedAssetsDecodeOnce(const std::filesystem::path &root) {
   const auto encoded = root / "tone.ogg";
   SF_INFO written{};
   written.samplerate = 44100;
@@ -546,10 +612,8 @@ void testOverlappingCompressedAssetsKeepProgressiveDecoders(const std::filesyste
             "each actively warmed compressed asset must open once across every preview window");
     require(state.decodedFrames == expected.size() * count,
             "overlapping preview must retain every native frame exactly once");
-    require(state.liveDecoders <= 16,
-            "completed preview preparation must release decoder pins and trim idle retention");
-    require(state.pinnedEntries == 0,
-            "completed preview preparation must retain no worker-scoped pins");
+    require(state.liveDecoders == 0,
+            "completed preview preparation must retain no live decoders");
     for (const auto &path : paths) {
       std::vector<short> actual;
       require(cache->Materialize(path, actual, info, cancelled) && actual == expected,
@@ -586,10 +650,10 @@ void testOverlappingWavAssetsRespectDescriptorCeiling(const std::filesystem::pat
   require(source->Begin(44100), "cannot start descriptor-pressure preview");
   waitPrepared(source);
   const auto prepared = cache->GetStatistics();
-  require(prepared.peakLiveDecoders <= 64,
-          "overlapping preview pins must not exceed the total descriptor ceiling");
-  require(prepared.liveDecoders <= 16 && prepared.pinnedEntries == 0,
-          "descriptor-pressure preview must release every preparation pin");
+  require(prepared.peakLiveDecoders <= parallel_worker_count(count),
+          "full decoding must remain bounded by worker count");
+  require(prepared.liveDecoders == 0,
+          "descriptor-pressure preview must release every decoder");
   require(prepared.decodedFrames == std::uint64_t(frames) * count &&
               prepared.retainedBytes == std::size_t(frames) * count * sizeof(short),
           "descriptor-pressure preview must still preload and retain every native PCM frame");
@@ -611,7 +675,7 @@ void testOverlappingWavAssetsRespectDescriptorCeiling(const std::filesystem::pat
             "descriptor eviction must preserve the complete overlapping preview mix");
 }
 
-void testPreparationExitReleasesDecoderPins(const std::filesystem::path &root) {
+void testPreparationExitClosesDecoders(const std::filesystem::path &root) {
   for (const bool fail : {false, true}) {
     writeWav(root / "first.wav", 44100, std::vector<short>(100, 16384));
     writeWav(root / "second.wav", 44100, std::vector<short>(44100 * 4, 8192));
@@ -620,15 +684,16 @@ void testPreparationExitReleasesDecoderPins(const std::filesystem::path &root) {
     auto source = audio::PagedPreviewSource::Create(*chart(root, "#00011:01\n"), cache, 0);
     preparationBlocked.store(false);
     preparationGate.store(true);
-    require(source->Begin(44100, true), "cannot begin pin cleanup preview");
+    require(source->Begin(44100, true), "cannot begin decoder cleanup preview");
     const auto deadline = std::chrono::steady_clock::now() + 5s;
-    while (!preparationBlocked.load() && std::chrono::steady_clock::now() < deadline)
+    while ((!preparationBlocked.load() || !source->GetState().startupReady) &&
+         std::chrono::steady_clock::now() < deadline)
       std::this_thread::yield();
     if (!preparationBlocked.load()) {
       preparationGate.store(false);
-      require(false, "pin cleanup preview did not reach preparation gate");
+      require(false, "decoder cleanup preview did not reach preparation gate");
     }
-    const auto pinned = cache->GetStatistics().pinnedEntries;
+    const auto active = cache->GetStatistics().liveDecoders;
     if (fail) {
       std::filesystem::remove(root / "second.wav");
       preparationGate.store(false);
@@ -638,21 +703,21 @@ void testPreparationExitReleasesDecoderPins(const std::filesystem::path &root) {
       source->Cancel();
     } else {
       // Keep the producer gated until Cancel has requested termination, then
-      // allow its normal checkpoint to unwind and release worker-owned pins.
+      // allow its normal checkpoint to unwind and release worker-owned decoders.
       std::jthread release([&] {
         while (!source->GetState().cancelled) std::this_thread::yield();
         preparationGate.store(false);
       });
       source->Cancel();
     }
-    require(pinned != 0 && cache->GetStatistics().pinnedEntries == 0,
-            "cancellation and operational failure must release all preparation pins");
+    require(active != 0 && cache->GetStatistics().liveDecoders == 0,
+            "cancellation and operational failure must release all active decoders");
     require(cache->Contains(root / "first.wav"),
             "preparation exit must retain already prepared native PCM");
   }
 }
 
-void testPreparedRepeatedVoiceReleasesItsDecoderPin(const std::filesystem::path &root) {
+void testPreparedRepeatedVoiceDoesNotRetainDecoder(const std::filesystem::path &root) {
   writeWav(root / "first.wav", 44100, std::vector<short>(100, 16384));
   writeWav(root / "second.wav", 44100, std::vector<short>(44100 * 4, 8192));
   auto parsed = chart(root, "#00011:0101\n#00111:02\n");
@@ -666,9 +731,10 @@ void testPreparedRepeatedVoiceReleasesItsDecoderPin(const std::filesystem::path 
   auto source = audio::PagedPreviewSource::Create(*parsed, cache, 0);
   preparationBlocked.store(false);
   preparationGate.store(true);
-  require(source->Begin(44100), "cannot begin repeated voice pin preview");
+  require(source->Begin(44100), "cannot begin repeated voice decoder preview");
   const auto deadline = std::chrono::steady_clock::now() + 5s;
-  while (!preparationBlocked.load() && std::chrono::steady_clock::now() < deadline)
+  while ((!preparationBlocked.load() || !source->GetState().startupReady) &&
+         std::chrono::steady_clock::now() < deadline)
     std::this_thread::yield();
   const auto startup = source->GetState();
   const auto retained = cache->GetStatistics();
@@ -677,11 +743,11 @@ void testPreparedRepeatedVoiceReleasesItsDecoderPin(const std::filesystem::path 
           "later large source must remain gated after startup");
   // The second first.wav voice extends past the two-second startup window,
   // but all of that source's output is already ready. Only second.wav is warming.
-  require(retained.pinnedEntries == 1 && retained.decodedFrames == 100,
-          "fully prepared repeated voices must release their cursor while later audio is warming");
+  require(retained.liveDecoders == 1 && retained.decodedFrames == 100,
+          "fully prepared repeated voices must close their decoder while later audio is warming");
   waitPrepared(source);
-  require(cache->GetStatistics().pinnedEntries == 0,
-          "repeated voice preparation must finish with no retained pins");
+  require(cache->GetStatistics().liveDecoders == 0,
+          "repeated voice preparation must finish with no live decoders");
 }
 }
 int main() {
@@ -694,6 +760,8 @@ int main() {
     testEntirelySilentPreviewReachesEnd(root / "silent");
     testSilenceScanNeverDropsAnAudibleVoice(root / "dense-trim");
     testSilenceDetectionUsesTheMixedAudio(root / "mixed-trim");
+    testAppearanceOrderPrecedesWavTableOrder(root / "parallel");
+    testContinuousQueueAndEarlyEnd(root / "parallel");
     testIndependentAssetsPrepareConcurrently(root / "parallel");
     testHighlightAndReuse(root / "highlight");
     testResampling(root / "resampling");
@@ -703,10 +771,10 @@ int main() {
     testFullCallbackPreflightPreservesScheduledAndActiveVoices(root / "preflight");
     testFractionalTiming(root / "timing");
     testArchivedPreviewBatchesOpeningFutureAndReferencedAssets(root / "archive");
-    testOverlappingCompressedAssetsKeepProgressiveDecoders(root / "overlap");
+    testOverlappingCompressedAssetsDecodeOnce(root / "overlap");
     testOverlappingWavAssetsRespectDescriptorCeiling(root / "pressure");
-    testPreparationExitReleasesDecoderPins(root / "pin-exit");
-    testPreparedRepeatedVoiceReleasesItsDecoderPin(root / "repeated-pin");
+    testPreparationExitClosesDecoders(root / "pin-exit");
+    testPreparedRepeatedVoiceDoesNotRetainDecoder(root / "repeated-pin");
     std::filesystem::remove_all(root);
     std::cout << "Paged preview source tests passed\n";
     return 0;

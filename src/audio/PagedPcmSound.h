@@ -44,6 +44,7 @@ public:
 
     std::unique_ptr<std::atomic<const short *>[]> pages_;
     std::vector<std::unique_ptr<short[]>> owners_;
+    std::vector<short> completeBuffer_;
   };
 
   PagedPcmSound() = default;
@@ -69,10 +70,24 @@ public:
     return true;
   }
 
+  // Publish a whole keysound with one allocation owner and no per-page copies.
+  bool publishFull(int channels, std::vector<short> samples) {
+    if (owner_ || channels <= 0 || samples.size() % channels != 0 ||
+        samples.size() / channels > UINT32_MAX) return false;
+    auto ready = std::unique_ptr<Metadata>(new Metadata(channels, samples.size() / channels));
+    ready->completeBuffer_ = std::move(samples);
+    for (std::size_t page = 0; page < ready->pageCount; ++page)
+      ready->pages_[page].store(ready->completeBuffer_.data() + page * kPageFrames * channels,
+                                std::memory_order_relaxed);
+    owner_ = std::move(ready);
+    published_.store(owner_.get(), std::memory_order_release);
+    return true;
+  }
+
   // Copy exactly one complete (possibly final partial) interleaved output-rate
   // PCM page. Published samples are immutable and cannot be replaced.
   bool publishPage(std::size_t pageIndex, std::span<const short> samples) {
-    if (!owner_ || pageIndex >= owner_->pageCount || owner_->owners_[pageIndex]) {
+    if (!owner_ || pageIndex >= owner_->pageCount || !owner_->completeBuffer_.empty() || owner_->owners_[pageIndex]) {
       return false;
     }
     const std::size_t frames = std::min(kPageFrames,

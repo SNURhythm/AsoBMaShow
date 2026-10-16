@@ -4,6 +4,12 @@
 #include "../RAII.h"
 #include "ChartAssetExtensions.h"
 #include "SoundFileIO.h"
+#include "../targets.h"
+#if TARGET_OS_ANDROID
+#include "../AndroidNatives.h"
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <array>
@@ -327,6 +333,23 @@ bool decodeAudioToPCMBounded(const path_t &filePath,
   }
 
   const auto resolvedPath = resolveAudioFilePath(fsPath);
+#if TARGET_OS_ANDROID
+  if (IsAndroidTreePath(resolvedPath)) {
+    std::string error;
+    const auto descriptor = OpenAndroidTreeFileDescriptor(resolvedPath, error);
+    if (!descriptor) return false;
+    struct stat status{};
+    if (fstat(*descriptor, &status) != 0 || status.st_size < 0 ||
+        static_cast<std::uintmax_t>(status.st_size) > limits.maximumEncodedBytes) {
+      close(*descriptor);
+      return false;
+    }
+    SNDFILE *file = sf_open_fd(*descriptor, SFM_READ, &fileInfo, SF_TRUE);
+    if (!file) close(*descriptor);
+    return decodeAudioFile(file, filePath, buffer, fileInfo, isCancelled,
+                           limits.maximumPcmSamples);
+  }
+#endif
   std::error_code sizeError;
   const std::uintmax_t encodedBytes = std::filesystem::file_size(resolvedPath,
                                                                  sizeError);

@@ -1,9 +1,12 @@
 #include "PagedPreviewSource.h"
 
+#include "../ArchiveFile.h"
 #include "../ChartPlaybackDuration.h"
 #include "../path.h"
 #include "../utils/ParallelWorkBatch.h"
 #include "AudioMix.h"
+#include "ArchiveAssetBatchLoader.h"
+#include "ChartAssetExtensions.h"
 #include "ChartAudioRenderer.h"
 #include "DecodedAssetCache.h"
 #include "PcmResampler.h"
@@ -14,6 +17,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <cmath>
+#include <cstdio>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -24,6 +28,18 @@
 
 namespace audio {
 namespace {
+template <typename... Args>
+void logPreparation(const char *format, Args... args) noexcept {
+  try {
+    char message[512];
+    std::snprintf(message, sizeof(message), format, args...);
+    SDL_Log("%s", message);
+    archive_file::appendDebugLogLine(message);
+  } catch (...) {
+    // Diagnostics must not turn a successful preparation into a failure.
+  }
+}
+
 // All ratios here use positive rates <= 1,000,000. Splitting the quotient
 // keeps the fractional multiplication bounded on platforms without int128.
 std::uint64_t scaleFramesBounded(std::uint64_t frames, std::uint64_t numerator,
@@ -58,10 +74,7 @@ std::uint64_t framesForMicros(long long micros, int rate, bool roundUp) {
 struct PagedPreviewSource::Impl {
   struct Asset {
     std::filesystem::path path;
-    SF_INFO info{};
     std::unique_ptr<SoundData> sound;
-    bool staged = false;
-    std::size_t preparedPages = 0;
   };
   struct Event {
     long long timeMicros;
@@ -91,7 +104,7 @@ struct PagedPreviewSource::Impl {
   std::uint64_t finalOutput = 0; // Worker-owned until durationKnown publication.
   bool begun = false;
   bool skipLeadingSilence = false;
-  std::chrono::steady_clock::duration stagingTime{}; // Preparation worker only.
+  std::atomic_bool loadingDone{false};
 
   struct RenderPosition { long long micros; std::uint32_t offset; };
   RenderPosition renderPosition(std::uint64_t frame) const noexcept {
@@ -132,117 +145,94 @@ struct PagedPreviewSource::Impl {
       ++state.revision; }
     changed.notify_all();
   }
-  void stageAssets(std::vector<std::size_t> indices) {
-    std::erase_if(indices, [&](std::size_t index) { return assets[index].staged; });
-    std::sort(indices.begin(), indices.end());
-    indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
-    if (indices.empty()) return;
-    std::vector<std::filesystem::path> paths;
-    paths.reserve(indices.size());
-    for (const auto index : indices) paths.push_back(assets[index].path);
-    std::string error;
-    const auto started = std::chrono::steady_clock::now();
-    const bool staged = cache->StageArchiveAssets(paths, cancelled, {}, &error);
-    stagingTime += std::chrono::steady_clock::now() - started;
-    if (!staged) {
-      checkpoint();
-      throw std::runtime_error(error.empty() ? "Could not stage preview audio." : error);
-    }
-    for (const auto index : indices) assets[index].staged = true;
-  }
-  void inspect(Asset &asset) {
+  void publishAsset(std::size_t index, const std::vector<unsigned char> *bytes = nullptr) {
     checkpoint();
-    if (asset.sound->pagedOutput->metadata()) return;
+    auto &asset = assets[index];
     DecodedAssetCache::FailureKind failure{};
     std::string error;
-    if (!cache->Inspect(asset.path, asset.info, cancelled, {}, &error, &failure)) {
+    const auto native = bytes ? cache->LoadBytes(asset.path, *bytes, cancelled, {}, &error, &failure)
+                              : cache->Load(asset.path, cancelled, {}, &error, &failure);
+    if (!native) {
       checkpoint();
       if (failure != DecodedAssetCache::FailureKind::InvalidAsset)
-        throw std::runtime_error(error.empty() ? "Could not inspect preview audio." : error);
-      if (!asset.sound->pagedOutput->publishMetadata(0, 0))
-        throw std::runtime_error("Could not publish empty preview audio.");
-      return;
+        throw std::runtime_error(error.empty() ? "Could not load preview audio." : error);
+      asset.sound->pagedOutput->publishMetadata(0, 0);
+    } else {
+      const pcm_resampling::Ratio ratio(native->info.samplerate, outputRate);
+      if (!ratio.outputFrames(static_cast<std::size_t>(native->info.frames), UINT32_MAX))
+        throw std::runtime_error("Preview audio length is not representable.");
+      auto output = ResamplePcm(native->pcm, native->info.channels,
+                                native->info.samplerate, outputRate);
+      checkpoint();
+      if ((!native->pcm.empty() && output.empty()) ||
+          !asset.sound->pagedOutput->publishFull(native->info.channels, std::move(output)))
+        throw std::runtime_error("Could not publish preview audio.");
     }
-    if (asset.info.frames <= 0 || asset.info.channels <= 0 || asset.info.samplerate <= 0) {
-      if (!asset.sound->pagedOutput->publishMetadata(0, 0))
-        throw std::runtime_error("Could not publish empty preview audio.");
-      return;
-    }
-    const pcm_resampling::Ratio ratio(asset.info.samplerate, outputRate);
-    const auto count = ratio.outputFrames(static_cast<std::size_t>(asset.info.frames),
-                                          UINT32_MAX);
-    if (!count || !asset.sound->pagedOutput->publishMetadata(asset.info.channels, *count))
-      throw std::runtime_error("Preview audio length is not representable.");
+    publishState();
   }
 
-  DecodedAssetCache::DecoderPin pinDecoder(Asset &asset) {
-    checkpoint();
-    DecodedAssetCache::FailureKind failure{};
-    std::string error;
-    auto pin = cache->PinDecoder(asset.path, cancelled, {}, &error, &failure);
-    if (!pin && failure != DecodedAssetCache::FailureKind::InvalidAsset) {
+  void loadAll() {
+    // One continuous whole-asset queue: event order first, unused variants last.
+    std::vector<std::size_t> ordered;
+    std::vector<bool> seen(assets.size());
+    for (const auto &event : events)
+      if (!seen[event.asset]) { seen[event.asset] = true; ordered.push_back(event.asset); }
+    for (std::size_t index = 0; index < assets.size(); ++index)
+      if (!seen[index]) ordered.push_back(index);
+    static const std::vector<std::string_view> extensions(
+        asobmshow::chart_assets::kAudioExtensions.begin(),
+        asobmshow::chart_assets::kAudioExtensions.end());
+    for (const auto index : ordered) {
       checkpoint();
-      throw std::runtime_error(error.empty() ? "Could not retain preview decoder." : error);
+      if (auto resolved = archive_file::findFileWithExtensions(assets[index].path, extensions))
+        assets[index].path = std::move(*resolved);
     }
-    return pin;
-  }
-
-  // Each contiguous missing output-page run leases one decoder/cache ReadRange,
-  // including the native page holding the right interpolation endpoint.
-  void prepare(Asset &asset, std::uint64_t first, std::uint64_t end) {
-    inspect(asset);
-    const auto *meta = asset.sound->pagedOutput->metadata();
-    end = std::min<std::uint64_t>(end, meta->frameCount);
-    if (first >= end) return;
-    constexpr auto pageFrames = PagedPcmSound::kPageFrames;
-    auto page = static_cast<std::size_t>(first / pageFrames);
-    const auto endPage = static_cast<std::size_t>((end - 1) / pageFrames + 1);
-    const pcm_resampling::Ratio ratio(asset.info.samplerate, outputRate);
-    while (page < endPage) {
+    // A chart normally has one source. Contiguous source groups also support
+    // mixed loose/archive assets without creating nested worker pools.
+    for (std::size_t first = 0; first < ordered.size();) {
       checkpoint();
-      if (meta->pageSamples(page)) { ++page; continue; }
-      const auto firstPage = page++;
-      while (page < endPage && !meta->pageSamples(page)) ++page;
-      const auto firstOutput = firstPage * pageFrames;
-      const auto endOutput = std::min(page * pageFrames, meta->frameCount);
-      pcm_resampling::Cursor cursor(ratio, static_cast<std::size_t>(asset.info.frames));
-      cursor.seek(firstOutput);
-      const auto firstNative = cursor.left();
-      cursor.seek(endOutput - 1);
-      const auto endNative = cursor.right() + 1;
-      std::vector<short> native;
-      SF_INFO info{};
-      std::string error;
-      if (!cache->ReadRange(asset.path, firstNative, endNative - firstNative,
-                            native, info, cancelled, {}, &error)) {
-        checkpoint();
-        // Metadata already succeeded: a later read failure is operational,
-        // never retroactively replace published sound metadata with empty PCM.
-        throw std::runtime_error(error.empty() ? "Could not prepare preview audio." : error);
+      std::filesystem::path archive, inner;
+      const bool archived = archive_file::splitVirtualPath(assets[ordered[first]].path, archive, inner);
+      auto end = first + 1;
+      while (end < ordered.size()) {
+        std::filesystem::path nextArchive, nextInner;
+        const bool nextArchived = archive_file::splitVirtualPath(assets[ordered[end]].path,
+                                                                nextArchive, nextInner);
+        if (nextArchived != archived || (archived && nextArchive != archive)) break;
+        ++end;
       }
-      if (info.channels != asset.info.channels || info.frames != asset.info.frames ||
-          info.samplerate != asset.info.samplerate ||
-          native.size() != (endNative - firstNative) * static_cast<std::size_t>(info.channels))
-        throw std::runtime_error("Preview audio changed during preparation.");
-      const auto channels = static_cast<std::size_t>(info.channels);
-      std::vector<short> output(pageFrames * channels);
-      cursor.seek(firstOutput);
-      for (auto publish = firstPage; publish < page; ++publish) {
-        checkpoint();
-        const auto frames = std::min(pageFrames, meta->frameCount - publish * pageFrames);
-        for (std::size_t frame = 0; frame < frames; ++frame) {
-          const auto left = (cursor.left() - firstNative) * channels;
-          const auto right = (cursor.right() - firstNative) * channels;
-          for (std::size_t channel = 0; channel < channels; ++channel)
-            output[frame * channels + channel] = ratio.direct() ? native[left + channel] :
-                cursor.interpolate(native[left + channel], native[right + channel]);
-          cursor.advance();
+      if (!archived) {
+        ParallelWorkBatch workers(end - first);
+        workers.run(end - first, [&](std::size_t item) { publishAsset(ordered[first + item]); });
+      } else {
+        std::vector<std::filesystem::path> paths;
+        std::map<std::filesystem::path, std::vector<std::size_t>> indices;
+        std::map<std::filesystem::path, std::size_t> priorities;
+        for (auto item = first; item < end; ++item) {
+          const auto index = ordered[item];
+          if (cache->Contains(assets[index].path) || !archive_file::exists(assets[index].path)) {
+            publishAsset(index);
+            continue;
+          }
+          archive_file::splitVirtualPath(assets[index].path, archive, inner);
+          if (!indices.contains(inner)) { paths.push_back(inner); priorities.emplace(inner, item); }
+          indices[inner].push_back(index);
         }
-        if (!asset.sound->pagedOutput->publishPage(publish,
-                std::span<const short>(output.data(), frames * channels)))
-          throw std::runtime_error("Could not publish preview PCM page.");
-        ++asset.preparedPages;
+        std::string error;
+        const bool loaded = ConsumeArchiveAssetBatch(archive, paths,
+            parallel_worker_count(paths.size()), 64U * 1024U * 1024U,
+            [&](archive_file::FileData &&file) {
+              for (const auto index : indices.at(file.path)) publishAsset(index, &file.bytes);
+              return !cancelled.load(std::memory_order_relaxed);
+            }, &error, cancelled, archive_file::readArchiveEntriesConcurrently,
+            archive_file::readArchiveEntriesStreaming,
+            [&](const std::filesystem::path &path) { return priorities.at(path); });
+        if (!loaded) {
+          checkpoint();
+          throw std::runtime_error(error.empty() ? "Could not read preview audio archive." : error);
+        }
       }
+      first = end;
     }
   }
 
@@ -313,172 +303,93 @@ struct PagedPreviewSource::Impl {
     double startupMs = -1.0;
     bool complete = false;
     try {
-      struct ActiveAsset {
-        DecodedAssetCache::DecoderPin pin;
-        std::size_t voices = 0;
-      };
-      // These pins follow preparation windows, never playback/session lifetime.
-      // Stack ownership releases every pin on completion, cancellation or error.
-      std::vector<ActiveAsset> activeAssets(assets.size());
-      ParallelWorkBatch preparation(assets.size());
-      const auto outputComplete = [](const Asset &asset) {
-        const auto *metadata = asset.sound->pagedOutput->metadata();
-        return metadata && asset.preparedPages == metadata->pageCount;
-      };
       finalOutput = scaleFrames(timelineFrames44100, outputRate, kPreviewSampleRate, true);
-      // Before callbacks start, classify all earlier events so expired voices
-      // are omitted and every overlapping tail is scheduled at its offset.
-      std::size_t nextEvent = 0;
-      std::vector<std::size_t> active;
-      active.reserve(events.size());
-      auto reach = [&](std::size_t index) {
-        auto &event = events[index];
-        auto &asset = assets[event.asset];
-        auto &retained = activeAssets[event.asset];
-        if (!retained.pin && !outputComplete(asset)) retained.pin = pinDecoder(asset);
-        inspect(asset);
-        const auto length = asset.sound->pagedOutput->metadata()->frameCount;
-        const auto tail = event.outputStart + length;
-        finalOutput = std::max(finalOutput, tail);
-        if (tail > originOutput && length != 0) {
-          active.push_back(index);
-          ++retained.voices;
-        } else if (!retained.voices) {
-          retained.pin = {};
+      prepareSchedule();
+      std::jthread loader([&] {
+        try { loadAll(); }
+        catch (const std::exception &error) {
+          if (!cancelled.load(std::memory_order_relaxed)) fail(error.what());
+        } catch (...) {
+          if (!cancelled.load(std::memory_order_relaxed)) fail("Unknown preview loading error.");
         }
-      };
-      // Prepare two seconds at arbitrary origin, then short forward windows.
-      std::uint64_t windowStart = originOutput;
-      auto windowEnd = originOutput + static_cast<std::uint64_t>(outputRate) * 2;
-      auto stagedThrough = windowEnd;
-      std::size_t nextStagedEvent = 0;
-      auto stageThrough = [&](std::uint64_t end) {
-        std::vector<std::size_t> indices;
-        while (nextStagedEvent < events.size() && events[nextStagedEvent].outputStart < end)
-          indices.push_back(events[nextStagedEvent++].asset);
-        stageAssets(std::move(indices));
-      };
-      // Keep archive extraction bounded by the next two seconds of event
-      // requests. Stage opening/highlight tails first; later windows never wait
-      // for the chart's unused or distant assets to be extracted in archive order.
-      stageThrough(stagedThrough);
-      while (nextEvent < events.size() && events[nextEvent].outputStart <= originOutput)
-        reach(nextEvent++);
-      struct Range { std::uint64_t first, end; };
-      std::vector<std::vector<Range>> ranges(assets.size());
-      std::vector<std::size_t> work;
-      work.reserve(assets.size());
-      // Until startup publication the worker can borrow the actual mixer to
-      // detect silence, then rebuild it at the first audible frame. No second
-      // mixed-audio cache or audio-callback scanning is needed.
-      if (skipLeadingSilence) prepareSchedule();
-      bool initial = true;
-      for (;;) {
-        checkpoint();
-        if (windowEnd > stagedThrough) {
-          stagedThrough = windowStart + static_cast<std::uint64_t>(outputRate) * 2;
-          stageThrough(stagedThrough);
-        }
-        while (nextEvent < events.size() && events[nextEvent].outputStart < windowEnd)
-          reach(nextEvent++);
-        // Voices can share an asset. Give each asset one task so page writes
-        // and decoder cursors stay exclusive while independent sounds overlap.
-        work.clear();
-        for (const auto index : active) {
-          const auto &event = events[index];
-          if (outputComplete(assets[event.asset])) continue;
-          if (ranges[event.asset].empty()) work.push_back(event.asset);
-          const auto first = windowStart > event.outputStart ? windowStart - event.outputStart : 0;
-          const auto end = windowEnd - event.outputStart + 1;
-          ranges[event.asset].push_back({first, end});
-        }
-        preparation.run(work.size(), [&](std::size_t index) {
-          const auto asset = work[index];
-          for (const auto &range : ranges[asset])
-            prepare(assets[asset], range.first, range.end);
+        loadingDone.store(true, std::memory_order_release);
+        publishState();
+      });
+      auto waitUntil = [&](auto ready) {
+        std::unique_lock lock(mutex);
+        changed.wait(lock, [&] {
+          return cancelled.load(std::memory_order_relaxed) || failed.load(std::memory_order_acquire) || ready();
         });
-        for (const auto asset : work) {
-          ranges[asset].clear();
-          // Repeated voices consume immutable output pages after preparation.
-          if (outputComplete(assets[asset])) activeAssets[asset].pin = {};
+        checkpoint();
+        if (failed.load(std::memory_order_acquire)) throw std::runtime_error(state.error);
+      };
+      auto publishDuration = [&] {
+        for (const auto &event : events)
+          finalOutput = std::max(finalOutput, event.outputStart +
+              assets[event.asset].sound->pagedOutput->metadata()->frameCount);
+        durationOutput.store(finalOutput > originOutput ? finalOutput - originOutput : 0,
+                              std::memory_order_relaxed);
+        {
+          std::lock_guard lock(mutex);
+          state.durationKnown = true;
+          state.durationFrames44100 = std::max(timelineFrames44100,
+              scaleFrames(finalOutput, kPreviewSampleRate, outputRate, true));
         }
-        std::erase_if(active, [&](std::size_t index) {
-          const auto &event = events[index];
-          if (event.outputStart + assets[event.asset].sound->pagedOutput->metadata()->frameCount > windowEnd)
-            return false;
-          auto &retained = activeAssets[event.asset];
-          if (--retained.voices == 0) retained.pin = {};
+        durationKnown.store(true, std::memory_order_release);
+        publishState();
+      };
+      std::size_t reached = 0;
+      auto windowStart = originOutput;
+      for (;;) {
+        const auto windowEnd = windowStart + static_cast<std::uint64_t>(outputRate) * 2;
+        auto due = reached;
+        while (due < events.size() && events[due].outputStart < windowEnd) ++due;
+        waitUntil([&] {
+          for (auto index = reached; index < due; ++index)
+            if (!assets[events[index].asset].sound->pagedOutput->metadata()) return false;
           return true;
         });
-        if (nextEvent == events.size() && !durationKnown.load(std::memory_order_relaxed)) {
-          durationOutput.store(finalOutput > originOutput ? finalOutput - originOutput : 0,
-                                std::memory_order_relaxed);
-          { std::lock_guard lock(mutex);
-            state.durationKnown = true;
-            state.durationFrames44100 = std::max(timelineFrames44100,
-                scaleFrames(finalOutput, kPreviewSampleRate, outputRate, true)); }
-          durationKnown.store(true, std::memory_order_release);
-          publishState();
+        while (reached < due) {
+          const auto &event = events[reached++];
+          finalOutput = std::max(finalOutput, event.outputStart +
+              assets[event.asset].sound->pagedOutput->metadata()->frameCount);
         }
-        if (initial) {
-          const auto audible = skipLeadingSilence
-              ? firstAudibleFrame(windowStart, std::min(windowEnd, finalOutput))
-              : std::optional<std::uint64_t>{originOutput};
-          const bool ended = nextEvent == events.size() && active.empty() &&
-                             windowEnd >= finalOutput;
-          if (audible || ended) {
-            const auto newOrigin = audible.value_or(std::max(originOutput, finalOutput));
-            const auto skipped = newOrigin - originOutput;
-            originOutput = newOrigin;
-            durationOutput.store(finalOutput > originOutput ? finalOutput - originOutput : 0,
-                                  std::memory_order_relaxed);
-            prepareSchedule();
-            {
-              std::lock_guard lock(mutex);
-              state.firstFrame44100 += scaleFrames(skipped, kPreviewSampleRate, outputRate);
-              position44100.store(state.firstFrame44100, std::memory_order_relaxed);
-              state.startupReady = true;
-              ++state.revision;
-            }
-            startupReady.store(true, std::memory_order_release);
-            changed.notify_all();
-            startupMs = milliseconds(std::chrono::steady_clock::now() - started);
-            SDL_Log("[preview-prepare] startup: %.2f ms assets=%zu events=%zu",
-                    startupMs, assets.size(), events.size());
-            initial = false;
+        const auto audible = skipLeadingSilence
+            ? firstAudibleFrame(windowStart, std::min(windowEnd, finalOutput))
+            : std::optional<std::uint64_t>{originOutput};
+        const bool ended = reached == events.size() && windowEnd >= finalOutput;
+        if (audible || ended) {
+          const auto newOrigin = audible.value_or(std::max(originOutput, finalOutput));
+          const auto skipped = newOrigin - originOutput;
+          originOutput = newOrigin;
+          prepareSchedule();
+          if (reached == events.size()) publishDuration();
+          {
+            std::lock_guard lock(mutex);
+            state.firstFrame44100 += scaleFrames(skipped, kPreviewSampleRate, outputRate);
+            position44100.store(state.firstFrame44100, std::memory_order_relaxed);
+            state.startupReady = true;
+            ++state.revision;
           }
+          startupReady.store(true, std::memory_order_release);
+          changed.notify_all();
+          startupMs = milliseconds(std::chrono::steady_clock::now() - started);
+          logPreparation("[preview-prepare] startup: %.2f ms assets=%zu events=%zu",
+                          startupMs, assets.size(), events.size());
+          break;
         }
-        if (nextEvent == events.size() && active.empty() && windowEnd >= finalOutput) break;
         windowStart = windowEnd;
-        windowEnd += std::max(1, outputRate / 4);
       }
-      // Playback consumption has no effect on warming: prepare the prefixes,
-      // unused selected WAVs and referenced WAV variants as well.
-      std::vector<std::size_t> remaining;
-      for (std::size_t index = 0; index < assets.size(); ++index)
-        if (!assets[index].staged) remaining.push_back(index);
-      stageAssets(std::move(remaining));
-      preparation.run(assets.size(), [&](std::size_t index) {
-        auto &asset = assets[index];
-        auto pin = pinDecoder(asset);
-        inspect(asset);
-        const auto count = asset.sound->pagedOutput->metadata()->frameCount;
-        const auto step = static_cast<std::uint64_t>(std::max(1, outputRate / 4));
-        for (std::uint64_t first = 0; first < count; first += step)
-          prepare(asset, first, std::min<std::uint64_t>(count, first + step));
-        // Downsampling can skip a final native page (or entire pages at very
-        // large ratios). Complete means gameplay can reuse every native frame,
-        // including samples no output interpolation endpoint ever requested.
-        if (count != 0) {
-          std::string error;
-          if (!cache->Preload(asset.path, cancelled, {}, &error)) {
-            checkpoint();
-            // This asset already published valid metadata; disappearance or a
-            // later decode failure cannot turn it retroactively into empty PCM.
-            throw std::runtime_error(error.empty() ? "Could not retain preview native audio." : error);
-          }
-        }
-      });
+      if (!durationKnown.load(std::memory_order_relaxed)) {
+        waitUntil([&] {
+          for (const auto &event : events)
+            if (!assets[event.asset].sound->pagedOutput->metadata()) return false;
+          return true;
+        });
+        publishDuration();
+      }
+      waitUntil([&] { return loadingDone.load(std::memory_order_acquire); });
+      loader.join();
       checkpoint();
       { std::lock_guard lock(mutex); state.preparationComplete = true; ++state.revision; }
       complete = true;
@@ -490,12 +401,10 @@ struct PagedPreviewSource::Impl {
     }
     const auto elapsed = std::chrono::steady_clock::now() - started;
     const auto statistics = cache->GetStatistics();
-    SDL_Log("[preview-prepare] %s: totalMs=%.2f startupMs=%.2f stagingMs=%.2f "
-            "processingMs=%.2f assets=%zu decoderOpens=%llu archiveBatches=%llu "
+    logPreparation("[preview-prepare] %s: totalMs=%.2f startupMs=%.2f assets=%zu decoderOpens=%llu individualArchiveReads=%llu "
             "decodedFrames=%llu cacheHitFrames=%llu",
             complete ? "complete" : cancelled.load(std::memory_order_relaxed) ? "cancelled" : "failed",
-            milliseconds(elapsed), startupMs, milliseconds(stagingTime),
-            milliseconds(elapsed - stagingTime), assets.size(),
+            milliseconds(elapsed), startupMs, assets.size(),
             static_cast<unsigned long long>(statistics.decoderOpens),
             static_cast<unsigned long long>(statistics.archiveReads),
             static_cast<unsigned long long>(statistics.decodedFrames),
@@ -523,7 +432,7 @@ std::shared_ptr<PagedPreviewSource> PagedPreviewSource::Create(
   auto snapshotAsset = [&](const std::string &name) {
     auto path = (chart.Meta.Folder / utf8_to_path_t(name)).lexically_normal();
     auto [it, added] = assetsByPath.emplace(path, value->assets.size());
-    if (added) value->assets.push_back({.path = std::move(path), .info = {}, .sound = {}});
+    if (added) value->assets.push_back({.path = std::move(path), .sound = {}});
     return it->second;
   };
   for (const auto &[wav, name] : chart.WavTable) assetsByWav.emplace(wav, snapshotAsset(name));

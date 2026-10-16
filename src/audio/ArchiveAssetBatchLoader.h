@@ -16,7 +16,8 @@ bool ConsumeArchiveAssetBatch(
     archive_file::FileDataCallback consume, std::string *errorMessage,
     std::atomic_bool &isCancelled,
     ConcurrentReader readConcurrently = archive_file::readArchiveEntriesConcurrently,
-    StreamingReader readStreaming = archive_file::readArchiveEntriesStreaming) {
+    StreamingReader readStreaming = archive_file::readArchiveEntriesStreaming,
+    std::function<std::size_t(const std::filesystem::path &)> decodePriority = {}) {
   auto checkpoint = [&] { return !isCancelled.load(std::memory_order_relaxed); };
   if (!checkpoint()) {
     return false;
@@ -57,7 +58,7 @@ bool ConsumeArchiveAssetBatch(
   const auto pipelineBytes = maximumBytes - extractionBytes;
   ArchiveAssetPipeline pipeline(
       workerCount - std::max<std::size_t>(1, extractWorkers),
-      pipelineBytes, isCancelled, std::move(consume));
+      pipelineBytes, isCancelled, std::move(consume), std::move(decodePriority));
   std::unordered_set<path_t> acceptedPaths;
   std::mutex acceptedMutex;
   std::atomic_bool rejected = false;
