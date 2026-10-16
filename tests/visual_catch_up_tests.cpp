@@ -405,6 +405,52 @@ void testTimelineEdges(const std::filesystem::path &clip) {
   std::cout << "timeline edges: zero/single, missing/image, shared ID, backward/rapid, eager readiness\n";
 }
 
+void testSeekPrerollDoesNotWaitForPresentation(const std::filesystem::path &clip) {
+  Stopwatch stopwatch;
+  VideoPlayer player(&stopwatch);
+  fixture::Session session;
+  std::atomic_bool cancelled = false;
+  require(player.loadVideo(clip.string(), cancelled), "preroll fixture loads");
+  fixture::useEarlierSeekKeyframe(true);
+  player.playFrom(750'000);
+  fixture::releaseWorkers();
+  // Simulate a demuxer landing on an earlier keyframe. No render/update drains
+  // the queue: obsolete frames must not fill it before the useful seek output.
+  fixture::awaitFrame(&player, 750'000);
+  expectUpload(&player, 750'000, 0, [&] { player.update(); });
+  const auto observed = fixture::events();
+  const auto conversions = std::count_if(observed.begin(), observed.end(), [](const auto &event) {
+    return event.boundary == fixture::Boundary::Convert;
+  });
+  require(conversions <= 7, "preroll must be discarded before pixel conversion");
+}
+
+void testDecodedFrameStorage(const std::filesystem::path &clip, bool nativeYuv,
+                             bool oversizedBuffer = false) {
+  Stopwatch stopwatch;
+  VideoPlayer player(&stopwatch);
+  fixture::Session session;
+  std::atomic_bool cancelled = false;
+  require(player.loadVideo(clip.string(), cancelled), "frame-storage fixture loads");
+  if (oversizedBuffer) fixture::attachOversizedDecodedBuffer();
+  const auto loaded = fixture::events();
+  require(std::none_of(loaded.begin(), loaded.end(), [](const auto &event) {
+    return event.boundary == fixture::Boundary::ConversionContext;
+  }), "loading must defer unused conversion context allocation");
+  player.playFrom(0);
+  fixture::releaseWorkers();
+  fixture::awaitBoundary(&player, nativeYuv ? fixture::Boundary::Reference
+                                          : fixture::Boundary::Convert);
+  expectUpload(&player, 0, 0, [&] { player.update(); });
+  const auto decoded = fixture::events();
+  require(std::none_of(decoded.begin(), decoded.end(), [nativeYuv](const auto &event) {
+    if (!nativeYuv) return event.boundary == fixture::Boundary::Reference;
+    return event.boundary == fixture::Boundary::Convert ||
+           event.boundary == fixture::Boundary::ConversionContext ||
+           (event.boundary == fixture::Boundary::Reference && event.result != 0);
+  }), "native YUV reuses storage while RGB keeps the conversion fallback");
+}
+
 void testEofAndShutdown(const std::filesystem::path &clip) {
   Stopwatch stopwatch;
   VideoPlayer player(&stopwatch);
@@ -443,8 +489,8 @@ void testEofAndShutdown(const std::filesystem::path &clip) {
 }
 
 int main(int argc, char **argv) {
-  if (argc != 2) {
-    std::cerr << "usage: visual_catch_up_tests <marker-clip>\n";
+  if (argc != 4) {
+    std::cerr << "usage: visual_catch_up_tests <marker-clip> <yuv-clip> <rgb-clip>\n";
     return 2;
   }
   bgfx::Init init;
@@ -456,6 +502,10 @@ int main(int argc, char **argv) {
   }
   int result = 0;
   try {
+    testSeekPrerollDoesNotWaitForPresentation(argv[1]);
+    testDecodedFrameStorage(argv[2], true);
+    testDecodedFrameStorage(argv[3], false);
+    testDecodedFrameStorage(argv[2], false, true);
     testOrderedCatchUp(argv[1], false, false);
     testOrderedCatchUp(argv[1], true, false);
     testOrderedCatchUp(argv[1], false, true);

@@ -18,7 +18,18 @@ def main():
         playable = clip.with_suffix(".mp4")
         shutil.copyfile(clip, playable)
         (Path(root) / "image.bmp").write_bytes(b"P6\n1 1\n255\n\x22\x44\x66")
-        subprocess.run([str(args.binary.resolve()), str(playable.resolve())],
+        yuv = Path(root) / "native-yuv.mkv"
+        subprocess.run([shutil.which("ffmpeg"), "-v", "error", "-y", "-f", "lavfi",
+                        "-i", "color=black:size=512x256:rate=20", "-t", "1",
+                        "-c:v", "ffv1", "-pix_fmt", "yuv420p", str(yuv)],
+                       check=True, timeout=10)
+        rgb = Path(root) / "converted-rgb.mkv"
+        subprocess.run([shutil.which("ffmpeg"), "-v", "error", "-y", "-f", "lavfi",
+                        "-i", "color=black:size=512x256:rate=20", "-t", "1",
+                        "-c:v", "ffv1", "-pix_fmt", "bgr0", str(rgb)],
+                       check=True, timeout=10)
+        subprocess.run([str(args.binary.resolve()), str(playable.resolve()),
+                        str(yuv.resolve()), str(rgb.resolve())],
                        check=True, timeout=40)
 
 

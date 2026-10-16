@@ -10,7 +10,7 @@ namespace visual_catch_up_fixture {
 
 enum class Boundary {
   Seek, Flush, Receive, Read, Send, Drain, Frame, Upload, Rejected, EofWait,
-  WorkerStopped
+  WorkerStopped, Convert, Reference, ConversionContext
 };
 
 struct Event {
@@ -30,6 +30,8 @@ public:
 
 void awaitWorkers(std::size_t count);
 void releaseWorkers();
+void useEarlierSeekKeyframe(bool enabled);
+void attachOversizedDecodedBuffer();
 void armCatchUpProbe(std::size_t failedSeekOrdinal = 0);
 void finishCatchUpProbe();
 std::vector<Event> events();
