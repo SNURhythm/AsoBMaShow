@@ -31,7 +31,7 @@ add_executable(storage_optimizer_tests tests/storage_optimizer_tests.cpp
     src/archive/UnzipOutput.cpp src/archive/IndexBuildCoordinator.cpp
     src/MinizBridge.c src/Utils.cpp src/bms_parser.cpp src/path.cpp
     src/bms_search/DownloadStorageOptimization.cpp
-    src/storage/StorageOptimizer.cpp src/storage/StorageDirectoryEvidence.cpp src/storage/StoragePreflight.cpp src/storage/StorageDirectoryWorkingSet.cpp
+    src/storage/StorageOptimizer.cpp src/storage/StorageDirectoryEvidence.cpp src/storage/StorageWorkScheduler.cpp src/storage/StoragePreflight.cpp src/storage/StorageDirectoryWorkingSet.cpp
     src/storage/StorageDirectoryInventory.cpp src/storage/StoragePathIndex.cpp src/storage/StorageScanScheduler.cpp
     src/ChartScanWorkScheduler.cpp src/storage/AudioTranscoder.cpp src/storage/BgaTranscoder.cpp
     src/storage/VideoCompressionGeometry.cpp src/storage/StoragePolicy.cpp
@@ -106,3 +106,9 @@ add_executable(storage_measurement_state_tests tests/storage_measurement_state_t
     src/storage/StorageMeasurementState.cpp src/storage/StoragePathIndex.cpp)
 target_compile_features(storage_measurement_state_tests PRIVATE cxx_std_23)
 asobmashow_register_test(storage_measurement_state_tests)
+
+add_executable(storage_work_scheduler_tests tests/storage_work_scheduler_tests.cpp src/storage/StorageWorkScheduler.cpp)
+target_compile_features(storage_work_scheduler_tests PRIVATE cxx_std_23)
+target_link_libraries(storage_work_scheduler_tests PRIVATE Threads::Threads)
+asobmashow_register_test(storage_work_scheduler_tests)
+set_tests_properties(storage_work_scheduler_tests PROPERTIES TIMEOUT 30)

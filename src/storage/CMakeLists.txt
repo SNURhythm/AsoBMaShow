@@ -3,7 +3,7 @@ target_sources(main PRIVATE StoragePlatform.cpp StorageFileTransaction.cpp)
 target_sources(main PRIVATE AudioTranscoder.cpp)
 target_sources(main PRIVATE VideoCompressionGeometry.cpp)
 target_sources(main PRIVATE BgaTranscoder.cpp)
-target_sources(main PRIVATE StorageOptimizer.cpp StorageDirectoryEvidence.cpp)
+target_sources(main PRIVATE StorageOptimizer.cpp StorageDirectoryEvidence.cpp StorageWorkScheduler.cpp)
 target_sources(main PRIVATE StorageTask.cpp StorageMaintenanceGuard.cpp)
 target_sources(main PRIVATE StorageApplicationIntegration.cpp)
 

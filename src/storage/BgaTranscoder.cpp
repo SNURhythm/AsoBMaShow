@@ -89,7 +89,7 @@ struct Input {
         decoders.push_back(context);
         checked(avcodec_parameters_to_context(context, stream->codecpar), "Read decoder parameters");
         context->pkt_timebase = stream->time_base;
-        context->thread_count = 2;
+        context->thread_count = StorageExecutionLimits::videoThreads;
         context->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT;
         context->err_recognition = AV_EF_CRCCHECK | AV_EF_BITSTREAM | AV_EF_BUFFER | AV_EF_EXPLODE;
         checked(avcodec_open2(context, decoder, nullptr), "Open source decoder");
@@ -352,7 +352,7 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
   video.sample_aspect_ratio = plan.sampleAspectRatio;
   video.color_range = sourceScan.colorRange; video.colorspace = sourceScan.colorSpace;
   video.color_primaries = sourceScan.colorPrimaries; video.color_trc = sourceScan.colorTransfer;
-  video.thread_count = 2; video.max_b_frames = 0;
+  video.thread_count = StorageExecutionLimits::videoThreads; video.max_b_frames = 0;
   video.gop_size = std::max(1, static_cast<int>(std::ceil(av_q2d(plan.frameRate))) * 2);
   if (output.format->oformat->flags & AVFMT_GLOBALHEADER) video.flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
   checked(av_opt_set(video.priv_data, "preset", "medium", 0), "Set x264 preset");

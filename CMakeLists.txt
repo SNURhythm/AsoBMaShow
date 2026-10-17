@@ -6259,7 +6259,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_search/DownloadedArchiveWorkflow.cpp
         src/storage/StoragePolicy.cpp
         src/bms_search/DownloadStorageOptimization.cpp
-        src/storage/StorageOptimizer.cpp src/storage/StorageDirectoryEvidence.cpp
+        src/storage/StorageOptimizer.cpp src/storage/StorageDirectoryEvidence.cpp src/storage/StorageWorkScheduler.cpp
         src/storage/StoragePreflight.cpp src/storage/StorageDirectoryWorkingSet.cpp
         src/storage/StorageDirectoryInventory.cpp src/storage/StoragePathIndex.cpp src/storage/StorageScanScheduler.cpp
         src/ChartScanWorkScheduler.cpp src/storage/AudioTranscoder.cpp src/storage/BgaTranscoder.cpp

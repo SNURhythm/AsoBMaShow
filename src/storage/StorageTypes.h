@@ -3,6 +3,7 @@
 #include "StoragePolicy.h"
 
 #include <cstdint>
+#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <optional>
@@ -10,6 +11,14 @@
 #include <vector>
 
 namespace storage_management {
+
+struct StorageExecutionLimits {
+  std::size_t audioWorkers = 1;
+  // Video remains one codec job with the existing fixed FFmpeg thread count.
+  static constexpr std::size_t videoWorkers = 1;
+  static constexpr int videoThreads = 2;
+};
+StorageExecutionLimits DefaultStorageExecutionLimits();
 
 // May wait on the worker for foreground admission; false requests cancellation.
 using Checkpoint = std::function<bool()>;

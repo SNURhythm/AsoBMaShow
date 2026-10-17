@@ -117,6 +117,36 @@ void testOverlappingRegisteredRootDoesNotBlockRecovery() {
               read(f.candidate.source) == std::string(1024, 's'),
           "overlapping registrations do not prevent owned cleanup or affect unrelated files");
 }
+void testTwoWorkerJournalsAfterRestart() {
+  Fixture f;
+  const auto job = f.paths.temporaryRoot / "12345678-1234-4234-8234-123456789abc";
+  const auto unknown = f.paths.temporaryRoot / "12345678-1234-4234-8234-123456789abd";
+  f.temp.write(fs::relative(unknown / "candidate-not-a-uuid.mp4", f.temp.root), "foreign");
+  std::string error;
+  for (const auto id : {"12345678-1234-4234-8234-123456789abe", "12345678-1234-4234-8234-123456789abf"}) {
+    auto candidate = f.candidate;
+    candidate.source = f.temp.root / "library" / id / "source.mpg";
+    candidate.destination = candidate.source.parent_path() / "source.mp4";
+    f.temp.write(fs::relative(candidate.source, f.temp.root), std::string(1024, 's'));
+    candidate.identity = *ReadFileIdentity(candidate.source, error);
+    auto encoded = f.encoded; encoded.outputPath = job / (std::string("candidate-") + id + ".mp4");
+    f.temp.write(fs::relative(encoded.outputPath, f.temp.root), std::string(128, 'v'));
+    FileTransactionDependencies dependencies;
+    dependencies.faultPoint = [](std::string_view point) { if (point == "published") throw Crash{}; };
+    try { StorageFileTransaction(f.paths, dependencies).Replace(candidate, encoded); }
+    catch (const Crash &) {}
+  }
+  require(std::distance(fs::directory_iterator(f.paths.journalRoot), fs::directory_iterator{}) == 2,
+      "two independent durable worker journals survive simulated termination");
+  f.temp.write(fs::relative(f.paths.journalRoot / "corrupt.json", f.temp.root), "invalid");
+  require(StorageFileTransaction(f.paths).Recover().recoveryRequired && fs::exists(job), "unresolved recovery preserves worker outputs");
+  fs::remove(f.paths.journalRoot / "corrupt.json");
+  auto report = StorageFileTransaction(f.paths).Recover();
+  require(!report.recoveryRequired && !fs::exists(job) && fs::exists(unknown), "restart clears recognized worker outputs and preserves unknown names");
+  for (const auto id : {"12345678-1234-4234-8234-123456789abe", "12345678-1234-4234-8234-123456789abf"})
+    require(read(f.temp.root / "library" / id / "source.mpg") == std::string(1024, 's') &&
+        !fs::exists(f.temp.root / "library" / id / "source.mp4"), "both original media restored");
+}
 void testAbandonedCandidatesAfterRestart() {
   constexpr auto job = "12345678-1234-4234-8234-123456789abc";
   for (const bool journal : {false, true}) {
@@ -456,6 +486,7 @@ int main(int argc, char **argv) {
     }
     testSandboxedRecovery(argv[0]);
 #endif
+    testTwoWorkerJournalsAfterRestart();
     testReplacementPermissions();
     testOverlappingRegisteredRootDoesNotBlockRecovery();
     testAbandonedCandidatesAfterRestart();

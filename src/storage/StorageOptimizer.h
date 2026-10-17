@@ -2,6 +2,7 @@
 
 #include "StorageFileTransaction.h"
 #include "StorageDirectoryEvidence.h"
+#include "StorageWorkScheduler.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -46,6 +47,7 @@ struct OptimizerDependencies {
   std::function<std::optional<std::uint64_t>(const std::filesystem::path &)> availableSpace;
   std::function<std::chrono::steady_clock::time_point()> now;
   StorageEvidenceMetrics *evidenceMetrics = nullptr;
+  StorageExecutionLimits executionLimits = DefaultStorageExecutionLimits();
 };
 OptimizerDependencies DefaultOptimizerDependencies(StoragePlatformPaths);
 

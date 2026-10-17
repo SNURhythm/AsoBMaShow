@@ -357,22 +357,22 @@ Checkpoint, ProgressCallback) -> StorageReport` coordinates the pool. Workers
 reserve estimated temporary bytes (source size plus existing 1 MiB reserve)
 through the shared budget before encoder admission.
 
-- [ ] Add failing `independentDirectoriesOverlapWithinBudget`,
+- [x] Add failing `independentDirectoriesOverlapWithinBudget`,
   `sameDirectoryAndVideoNeverOverlap`, `cancelStopsAdmissionAndDrainsTransactions`
   and `recoveryFailureStopsOtherAdmissions`. Use barriers and explicit fault points.
-- [ ] Run scheduler tests to record failure.
-- [ ] Keep the global storage-job lease outside the pool. Recover journals once
+- [x] Run scheduler tests to record failure.
+- [x] Keep the global storage-job lease outside the pool. Recover journals once
   before workers start; create a separate transaction/validator per active
   directory and unique job-owned output paths per worker. Serialize overlapping
   root/directory mutations and enforce one video slot without nested thread pools.
-- [ ] Aggregate progress/counters and at most 100 details through one synchronized
+- [x] Aggregate progress/counters and at most 100 details through one synchronized
   coordinator. Use monotonic atomic cancellation/failure state. Reserve scratch
   capacity across workers, recheck real free space, and release reservations on
   every outcome. Never release maintenance until active workers settle safely.
-- [ ] Extend crash/restart tests to two independent journals and abandoned worker
+- [x] Extend crash/restart tests to two independent journals and abandoned worker
   output paths. Keep unknown files and unresolved recovery state untouched.
   Run scheduler, optimizer, transaction and task tests together.
-- [ ] Commit and push `perf: schedule bounded parallel audio storage work`.
+- [x] Commit and push `perf: schedule bounded parallel audio storage work`.
 
 ### Task 8: Measure scale, choose defaults and complete platform verification
 

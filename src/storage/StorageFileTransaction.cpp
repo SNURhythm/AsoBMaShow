@@ -65,7 +65,11 @@ void cleanupAbandonedCandidates(const StoragePlatformPaths &paths,
     for (; !ec && files != end; files.increment(ec)) {
       const auto path = files->path();
       const auto name = path.filename();
-      if (name != "candidate.flac" && name != "candidate.ogg" && name != "candidate.mp4") {
+      const auto stem = path.stem().string();
+      const auto extension = path.extension();
+      const bool workerCandidate = stem.starts_with("candidate-") && uuid::isCanonicalLowerV4(stem.substr(10)) &&
+          (extension == ".flac" || extension == ".ogg" || extension == ".mp4");
+      if (!workerCandidate && name != "candidate.flac" && name != "candidate.ogg" && name != "candidate.mp4") {
         recognized = false; break;
       }
       const auto identity = ReadFileIdentity(path, error, paths.pathAccessRoots);

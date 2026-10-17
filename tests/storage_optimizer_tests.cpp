@@ -25,6 +25,7 @@ OptimizationRequest request(const fs::path &root) {
 }
 OptimizerDependencies dependencies(TempDirectory &temp, std::vector<std::string> &events) {
   auto result = DefaultOptimizerDependencies(MakeStoragePlatformPaths(temp.root / "private", {temp.root / "charts"}));
+  result.executionLimits.audioWorkers = 1;
   result.probeCodecs = [] {
     StorageCodecCapabilities caps;
     caps.flac.available = caps.vorbis.available = caps.x264.available = caps.aac.available = caps.mp4.available = true;
@@ -52,6 +53,27 @@ OptimizerDependencies dependencies(TempDirectory &temp, std::vector<std::string>
     return transactions;
   };
   return result;
+}
+void independentDirectoriesUseDistinctOutputs() {
+  TempDirectory temp;
+  temp.write("charts/a/one.wav", std::string(100, 'a'));
+  temp.write("charts/b/two.wav", std::string(100, 'b'));
+  std::vector<std::string> events;
+  auto deps = dependencies(temp, events); deps.executionLimits.audioWorkers = 2;
+  deps.transactions = DefaultOptimizerDependencies(deps.paths).transactions;
+  std::mutex mutex; std::condition_variable changed; int entered = 0;
+  std::set<fs::path> outputs;
+  deps.encodeAudio = [&](const auto &, const auto &, const fs::path &output, auto, auto) {
+    { std::unique_lock lock(mutex); outputs.insert(output); ++entered; changed.notify_all();
+      require(changed.wait_for(lock, std::chrono::seconds(2), [&] { return entered == 2; }), "independent encoders overlap"); }
+    std::ofstream(output) << "tiny";
+    return EncodeResult{FileOutcome::Converted, output, {}};
+  };
+  auto report = StorageOptimizer(deps).Run(request(temp.root / "charts"));
+  require(report.converted == 2 && !report.recoveryRequired && outputs.size() == 2,
+      "parallel directories commit distinct temporary outputs");
+  require(report.groupDeltas.size() == 1 && report.groupDeltas[0].bytesBefore == 200 && report.groupDeltas[0].bytesAfter == 8,
+      "parallel directory deltas aggregate once into their parent");
 }
 void extractedDownloadUsesWholePackage() {
   TempDirectory temp;
@@ -409,6 +431,8 @@ void cancellableSingleConversionPermit() {
 int main(int argc, char **argv) {
   try {
     if (argc > 1 && std::string_view(argv[1]) == "--commit-cost") { unrelatedFoldersDoNotMultiplyCommitChecks(); return 0; }
+    if (argc > 1 && std::string_view(argv[1]) == "--parallel") { independentDirectoriesUseDistinctOutputs(); return 0; }
+    independentDirectoriesUseDistinctOutputs();
     storageLibraryIntegration();
     extractedDownloadUsesWholePackage(); wholeFolderOrchestration(); deletionAndUnavailableGroups(); staleEvidenceNeverBecomesFreshByRescanning();
     changedDirectoryIsSkippedWithoutAcceptingNewAssets(); unrelatedFoldersDoNotMultiplyCommitChecks();
