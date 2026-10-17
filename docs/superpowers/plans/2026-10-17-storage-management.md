@@ -503,7 +503,7 @@ without repurposing downloaded byte counters as encoding percentages.
 `docs/storage-management.md`; update `docs/testing/README.md` only if necessary
 to explain group membership. Update this plan's checkboxes/evidence as executed.
 
-- [ ] Use a disposable library with two chart difficulties, disjoint sabun audio
+- [x] Use a disposable library with two chart difficulties, disjoint sabun audio
   and video, nested and unreferenced media, a shared keysound,
   a protected stage image also used as BGA, a small MPEG-1 video, and an archive
   group. Record chart hashes, scores/playlists identities, and initial file bytes.
@@ -512,30 +512,42 @@ to explain group membership. Update this plan's checkboxes/evidence as executed.
   test fixture directory afterward. Verify compression covers the whole folder
   independently of the displayed representative and that deletion remains limited
   to supported video files, including unreferenced ones, while preserving images.
-- [ ] Exercise the download workflow with a local fake archive/transport fixture,
+- [x] Exercise the download workflow with a local fake archive/transport fixture,
   including effective skip-extraction override, warnings, cancel, and unchanged
   mismatches. Verify registration occurs only after optimization finishes. Do not
   download a real package just to test the feature.
-- [ ] Build the affected groups together:
+- [x] Build the affected groups together:
   `cmake --build cmake-build-debug --target main tests_library tests_audio
   tests_video tests_downloads tests_settings tests_ui -j 6`.
   Run `ctest --test-dir cmake-build-debug -L
   '^area_(library|audio|video|downloads|settings|ui)$' --output-on-failure
   --no-tests=error -j 6`. These commands are each one shell command despite line
   wrapping. Broaden only for unresolved cross-subsystem risk or a new failure.
-- [ ] Verify iOS and Android linked encoders and native local-folder operation
+- [x] Verify iOS and Android linked encoders and native local-folder operation
   through the established build-only paths (`scripts/ios_firebase_deploy.sh
   --build-only`, `scripts/android_firebase_deploy.sh --build-only`, with required
   private signing setup). Compile on the established Windows runner and check
   no-clobber/rename behavior there. Report unavailable platform validation rather
   than claiming cross-platform completion. Never run distribution/upload commands.
-- [ ] Document caps, quality, lossless limitations, deletion/artwork scope,
+- [x] Document caps, quality, lossless limitations, deletion/artwork scope,
   supported backends, partial cancellation, recovery, warning meanings, and
   automatic extraction precedence. Include that cap requests can be skipped
   when the candidate is not smaller, and that existing under-cap H.264 is skipped.
-- [ ] Review spec coverage and the full task diff, record focused test evidence,
+- [x] Review spec coverage and the full task diff, record focused test evidence,
   commit `docs: explain chart storage management`, and push the current feature
   branch. Do not merge or deploy as part of this plan.
+
+Task 10 evidence: the combined desktop build passed and all 117 affected CTests
+passed. Real-codec integration covers whole-folder conversion, caps, deletion,
+resource resolution/decoding and unchanged chart/reference identities. Download
+fixtures cover staging, verification, warnings, cancellation and registration.
+Disposable-library UI checks covered selection, confirmation, results, narrow
+portrait layout and return navigation; a Back re-entry regression was reproduced
+and fixed. Desktop native music playback is unavailable, so audible playback was
+not verified. iOS and Android build-only commands passed, and real codec and file
+transaction tests passed on iOS 27.1 Simulator and Android 10 emulator. Windows
+build/filesystem validation was unavailable. Only disposable test data was removed;
+no build was distributed.
 
 ## Planning review
 

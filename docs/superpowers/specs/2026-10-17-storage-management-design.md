@@ -1,6 +1,7 @@
 # Storage management and download storage saving
 
-Status: implementation in progress. The companion plan tracks completed tasks.
+Status: implemented. The companion plan records verification evidence and the
+remaining Windows and end-to-end mobile playback validation limits.
 Latest agreed scope: recursive folder-wide operations without chart-reference
 scanning; BGA deletion removes videos and preserves all images.
 

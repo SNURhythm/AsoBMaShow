@@ -12,6 +12,7 @@
 using namespace storage_management;
 using storage_test::require;
 using storage_test::TempDirectory;
+void storageLibraryIntegration();
 namespace fs = std::filesystem;
 namespace {
 OptimizationRequest request(const fs::path &root) {
@@ -315,6 +316,7 @@ void cancellableSingleConversionPermit() {
 }
 int main() {
   try {
+    storageLibraryIntegration();
     extractedDownloadUsesWholePackage(); wholeFolderOrchestration(); deletionAndUnavailableGroups(); staleEvidenceNeverBecomesFreshByRescanning();
     partialFailureAndAccounting(); revalidateAtTheActualCommitBoundary(); cleanupFailureAndFatalRecovery(); cancellationCapabilitiesAndNoOp();
     boundedReportsAndProgress(); cancellableSingleConversionPermit();
