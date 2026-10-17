@@ -941,12 +941,19 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   // counting the current frame in the next window.
   std::optional<std::chrono::steady_clock::time_point> fpsWindowStart;
   int renderedFramesInWindow = 0;
+  int appliedUiCanvasWidth = rendering::window_width;
+  int appliedUiCanvasHeight = rendering::window_height;
   float appliedLaneAngleDegrees = context.settings.presentation().laneAngleDegrees;
   float appliedLaneLength = context.settings.presentation().laneLength;
   bool hasDeferredRenderResize = false;
   int deferredRenderResizeW = 0;
   int deferredRenderResizeH = 0;
   uint32_t activeBgfxResetFlags = s_bgfxResetFlags;
+#if TARGET_OS_ANDROID
+  const bool allowAntiAliasing = !isAndroidEmulator();
+#else
+  constexpr bool allowAntiAliasing = true;
+#endif
   context.displayBackend = std::make_unique<display::SDLDisplayBackend>(
       s_window, TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android,
       [&activeBgfxResetFlags]() { return activeBgfxResetFlags; },
@@ -1000,17 +1007,19 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
               context.framePacer.reset(std::chrono::steady_clock::now());
               return true;
             });
-      }, TARGET_PLATFORM == Android);
-#if TARGET_OS_ANDROID
-  // Android owns native geometry; only apply the persisted renderer preference.
+      }, TARGET_PLATFORM == Android, allowAntiAliasing);
+  // Apply renderer preferences without changing native geometry at startup.
   auto startupVideo = context.displayBackend->capture().settings;
+#if TARGET_OS_ANDROID
   startupVideo.vsync = context.settings.audioVideo.video.vsync;
-  std::string startupVsyncError;
-  if (!context.displayBackend->apply(startupVideo, startupVsyncError)) {
-    SDL_Log("Could not apply Android VSync preference: %s",
-            startupVsyncError.c_str());
-  }
 #endif
+  if (allowAntiAliasing)
+    startupVideo.msaaSamples = context.settings.audioVideo.video.msaaSamples;
+  std::string startupRendererError;
+  if (!context.displayBackend->apply(startupVideo, startupRendererError)) {
+    SDL_Log("Could not apply renderer preferences: %s",
+            startupRendererError.c_str());
+  }
   context.displaySettingsManager =
       std::make_unique<display::DisplaySettingsManager>(
           *context.displayBackend, context.framePacer,
@@ -1658,22 +1667,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #endif
     s_blurPass->setBlurStrength(context.settings.bgaBlurStrength);
     context.jukebox.setBgaDisplayMode(context.settings.bgaDisplayMode);
-    const bool laneTransformChanged =
-        std::abs(appliedLaneAngleDegrees - context.settings.presentation().laneAngleDegrees) >
-            0.001f ||
-        std::abs(appliedLaneLength - context.settings.presentation().laneLength) > 0.001f;
-    if (laneTransformChanged &&
-        !context.replayVideoExportActive.load(std::memory_order_acquire) &&
-        !context.rendererAccess.exportRequested()) {
-      std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex,
-                                            std::try_to_lock);
-      if (bgfxLock.owns_lock()) {
-        appliedLaneAngleDegrees = context.settings.presentation().laneAngleDegrees;
-        appliedLaneLength = context.settings.presentation().laneLength;
-        context.restoreGameplayRenderViews();
-      }
-    }
-
     //    bgfx::reset(rendering::window_width, rendering::window_height);
     // SDL_Log("Window size: %d x %d", rendering::window_width,
     //         rendering::window_height);
@@ -1725,13 +1718,33 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
                  !context.replayVideoExportActive.load(
                      std::memory_order_acquire) &&
                  !context.rendererAccess.exportRequested()) {
+        // Menu and gameplay can use different logical canvases without resizing
+        // the drawable. Keep the cached projection matched to the current canvas.
+        // Export also changes these dimensions, so inspect them only while owning
+        // the renderer and after ruling out an export frame.
+        const bool viewTransformChanged =
+            appliedUiCanvasWidth != rendering::window_width ||
+            appliedUiCanvasHeight != rendering::window_height ||
+            std::abs(appliedLaneAngleDegrees - context.settings.presentation().laneAngleDegrees) >
+                0.001f ||
+            std::abs(appliedLaneLength - context.settings.presentation().laneLength) > 0.001f;
+        if (viewTransformChanged) {
+          appliedUiCanvasWidth = rendering::window_width;
+          appliedUiCanvasHeight = rendering::window_height;
+          appliedLaneAngleDegrees = context.settings.presentation().laneAngleDegrees;
+          appliedLaneLength = context.settings.presentation().laneLength;
+          context.restoreGameplayRenderViews();
+        }
 #if TARGET_OS_IPHONE
         const bool gameplayActive =
             context.profileGameplayActive.load(std::memory_order_acquire);
         const auto desiredResetFlags =
             withoutMsaaResetFlags(activeBgfxResetFlags) |
-            (gameplayActive ? BGFX_RESET_MSAA_X2 : 0U);
-        if (desiredResetFlags != activeBgfxResetFlags) {
+            parseMsaaFlag(context.settings.audioVideo.video.msaaSamples < 0
+                              ? (gameplayActive ? 2 : 0)
+                              : context.settings.audioVideo.video.msaaSamples);
+        if (!context.displaySettingsManager->hasPendingPreview() &&
+            desiredResetFlags != activeBgfxResetFlags) {
           activeBgfxResetFlags = desiredResetFlags;
           s_bgfxResetFlags = desiredResetFlags;
           context.bgfxResetFlags.store(desiredResetFlags,

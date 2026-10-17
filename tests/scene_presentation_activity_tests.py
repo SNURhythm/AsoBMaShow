@@ -50,6 +50,128 @@ class ScenePresentationActivityTests(unittest.TestCase):
             self.compile_and_run(f"#define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS {skins}\n" +
                                  fixture.replace("SCENE_ACTIVITY_METHODS", "\n".join(methods)))
 
+    def test_ios_msaa_choice_and_preview_survive_scene_changes(self):
+        source = (ROOT / "src/main.cpp").read_text()
+        start = source.index("        const bool gameplayActive =", source.index("const bool viewTransformChanged"))
+        end = source.index("#endif", start)
+        self.compile_and_run(r'''
+#include <atomic>
+#include <cassert>
+#include <cstdint>
+constexpr uint32_t BGFX_RESET_NONE=0, BGFX_RESET_MSAA_X2=0x10,
+  BGFX_RESET_MSAA_X4=0x20, BGFX_RESET_MSAA_X8=0x30, BGFX_RESET_MSAA_X16=0x40;
+namespace rendering { int render_width=2400, render_height=1080; }
+namespace bgfx { uint32_t lastFlags=0x80; void reset(int,int,uint32_t flags) { lastFlags=flags; } }
+struct Context {
+  struct { struct { struct { int msaaSamples=-1; } video; } audioVideo; } settings;
+  std::atomic<bool> profileGameplayActive=false;
+  std::atomic<uint32_t> bgfxResetFlags=0x80;
+  struct Manager { bool preview=false; bool hasPendingPreview() const { return preview; } } manager;
+  Manager *displaySettingsManager=&manager;
+  void restoreGameplayRenderViews() {}
+};
+uint32_t s_bgfxResetFlags=0x80;
+PARSER
+MASK
+int main() {
+  Context context;
+  uint32_t activeBgfxResetFlags=0x80;
+  auto update = [&] { POLICY };
+  update(); assert(activeBgfxResetFlags==0x80);
+  context.profileGameplayActive=true;
+  update(); assert(activeBgfxResetFlags==0x90);
+  context.settings.audioVideo.video.msaaSamples=4;
+  update(); assert(activeBgfxResetFlags==0xa0);
+  context.profileGameplayActive=false;
+  update(); assert(activeBgfxResetFlags==0xa0);
+  context.settings.audioVideo.video.msaaSamples=0;
+  context.profileGameplayActive=true;
+  update(); assert(activeBgfxResetFlags==0x80);
+  context.settings.audioVideo.video.msaaSamples=-1;
+  context.manager.preview=true;
+  activeBgfxResetFlags=0xb0; // An unconfirmed 8x preview owns reset flags.
+  update(); assert(activeBgfxResetFlags==0xb0);
+  context.profileGameplayActive=false;
+  update(); assert(activeBgfxResetFlags==0xb0);
+  context.manager.preview=false;
+  update(); assert(activeBgfxResetFlags==0x80);
+}
+'''.replace("POLICY", source[start:end])
+            .replace("PARSER", extract(source, "uint32_t parseMsaaFlag("))
+            .replace("MASK", extract(source, "static uint32_t withoutMsaaResetFlags(")))
+
+    def test_scene_canvas_transition_refreshes_projection_before_drawing(self):
+        source = (ROOT / "src/main.cpp").read_text()
+        start = source.index("      } else if (bgfxLock.owns_lock() &&")
+        end = source.index("#if TARGET_OS_IPHONE", start)
+        refresh = source[start:end].replace("} else if", "if", 1) + "}"
+        self.compile_and_run('''
+#include <atomic>
+#include <cassert>
+#include <cmath>
+#include <mutex>
+namespace rendering { int window_width = 1371, window_height = 617; }
+struct Context {
+  struct Presentation { float laneAngleDegrees = 20, laneLength = 4; };
+  struct Settings {
+    Presentation value;
+    const Presentation &presentation() const { return value; }
+  } settings;
+  std::atomic<bool> replayVideoExportActive{false};
+  struct Access {
+    bool requested = false;
+    bool exportRequested() const { return requested; }
+  } rendererAccess;
+  std::mutex bgfxRenderMutex;
+  int projectionWidth = 1371, projectionHeight = 617, restores = 0;
+  void restoreGameplayRenderViews() {
+    projectionWidth = rendering::window_width;
+    projectionHeight = rendering::window_height;
+    ++restores;
+  }
+};
+int main() {
+  Context context;
+  float appliedLaneAngleDegrees = 20, appliedLaneLength = 4;
+  int appliedUiCanvasWidth = 1371, appliedUiCanvasHeight = 617;
+  std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex);
+  auto refresh = [&] { REFRESH_TRANSFORMS };
+  refresh();
+  assert(context.restores == 0);
+  // Android phone menu -> gameplay at unchanged 2400 x 1080 drawable size.
+  rendering::window_width = 1920;
+  rendering::window_height = 864;
+  refresh();
+  assert(context.projectionWidth == 1920 && context.projectionHeight == 864 &&
+         "gameplay must draw with its own canvas projection on the first frame");
+  refresh();
+  assert(context.restores == 1 && "unchanged frames must not rebuild transforms");
+  // Home/resume may already restore gameplay; exiting still needs menu projection.
+  context.restoreGameplayRenderViews();
+  rendering::window_width = 1371;
+  rendering::window_height = 617;
+  context.rendererAccess.requested = true;
+  refresh();
+  assert(context.projectionWidth == 1920 && "export retains renderer ownership");
+  context.rendererAccess.requested = false;
+  context.replayVideoExportActive = true;
+  refresh();
+  assert(context.projectionWidth == 1920);
+  context.replayVideoExportActive = false;
+  refresh();
+  assert(context.projectionWidth == 1371 && context.projectionHeight == 617 &&
+         "returning from gameplay must restore the menu projection");
+  assert(context.restores == 3);
+  rendering::window_height = 620;
+  bgfxLock.unlock();
+  refresh();
+  assert(context.projectionHeight == 617 && "a frame without renderer ownership must defer");
+  bgfxLock.lock();
+  refresh();
+  assert(context.projectionHeight == 620 && "height-only changes also refresh");
+}
+'''.replace("REFRESH_TRANSFORMS", refresh))
+
     def test_programmatic_canvas_changes_wake_idle_drawing(self):
         source = (ROOT / "src/scene/ChartViewerScene.cpp").read_text()
         methods = "\n".join(extract(source, signature) for signature in (

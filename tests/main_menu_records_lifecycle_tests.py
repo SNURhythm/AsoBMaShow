@@ -27,6 +27,7 @@ def records_fixture():
         "MainMenuScene::~MainMenuScene()",
         "bool MainMenuScene::beginReplayExport(",
         "void MainMenuScene::applyReplayExportResult()",
+        "std::optional<ChartMetaRecord> MainMenuScene::selectedRecordSnapshot() const",
         "void MainMenuScene::finishReplayResultRecallFailure(",
         "void MainMenuScene::finishRemoteResultRecallFailure(",
         "void MainMenuScene::startRemoteResultRecall(",

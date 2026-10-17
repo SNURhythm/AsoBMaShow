@@ -32,6 +32,7 @@ struct Capabilities {
   bool canSelectResolution = false;
   bool canChangeVsync = false;
   bool canSetFrameCap = true;
+  bool canChangeAntiAliasing = false;
   std::vector<DisplayInfo> displays;
   bool operator==(const Capabilities &) const = default;
 };

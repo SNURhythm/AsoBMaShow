@@ -55,6 +55,7 @@ void AudioVideoSettings::sanitize() {
   if (video.height <= 0) {
     video.height = 720;
   }
+  if (!isValidMsaaSamples(video.msaaSamples)) video.msaaSamples = -1;
   video.frameCap =
       sanitizeOptionalRange(video.frameCap, kMinFrameCap, kMaxFrameCap);
 }

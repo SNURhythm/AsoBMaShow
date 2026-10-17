@@ -453,10 +453,14 @@ int main() {
             main_menu_library::chartSelectionPathForReload(
                 {}, retainedSelection),
             "reload falls back to retained chart after list selection reset");
-  ASSERT_EQ(std::filesystem::path("/library/B/visible.bms"),
+  ASSERT_EQ(std::filesystem::path("/library/A/selected.bms"),
             main_menu_library::chartSelectionPathForReload(
                 "/library/B/visible.bms", retainedSelection),
-            "visible list selection takes priority during reload");
+            "retained identity survives reordered rows at the old index");
+  ASSERT_EQ(std::filesystem::path("/library/B/visible.bms"),
+            main_menu_library::chartSelectionPathForReload(
+                "/library/B/visible.bms", std::nullopt),
+            "visible row is a fallback when no chart identity was retained");
 
   ASSERT_EQ(70.0f,
             main_menu_library::centeredScrollOffsetForItem(2, 100, 108, 400),

@@ -886,8 +886,7 @@ void DefaultSkin::buildPresentationResultLayout(
   const bool showTimingAnalytics =
       authoritativePresentation ? presentation.timingAnalytics.has_value()
                                 : data->showTimingAnalytics;
-  if (graphPlaceHolder != nullptr && data->showControls &&
-      showTimingAnalytics) {
+  if (graphPlaceHolder != nullptr && showTimingAnalytics) {
     auto *visualsRow = new View();
     visualsRow->setName("resultVisuals");
     visualsRow->setWidthPercent(100.0f);

@@ -841,6 +841,7 @@ json settingsToJson(const AppSettings &settings) {
         {"width", settings.audioVideo.video.width},
         {"height", settings.audioVideo.video.height},
         {"vsync", settings.audioVideo.video.vsync},
+        {"msaaSamples", settings.audioVideo.video.msaaSamples},
         {"frameCap", settings.audioVideo.video.frameCap}}},
   };
   json providers = json::object();
@@ -1279,6 +1280,7 @@ AppSettings settingsFromJson(const json &document,
       readValue(*video, "height", settings.audioVideo.video.height,
                 diagnostics);
       readValue(*video, "vsync", settings.audioVideo.video.vsync, diagnostics);
+      readValue(*video, "msaaSamples", settings.audioVideo.video.msaaSamples, diagnostics);
       readValue(*video, "frameCap", settings.audioVideo.video.frameCap,
                 diagnostics);
     }

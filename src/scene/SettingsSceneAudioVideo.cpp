@@ -212,6 +212,7 @@ void SettingsScene::ensureAudioVideoSession() {
   displayResolutionDropdownOpen = false;
   displayVsyncDropdownOpen = false;
   displayFrameCapDropdownOpen = false;
+  displayAntiAliasingDropdownOpen = false;
   audioStatusMessage = {};
   displayStatusMessage = {};
   audioVideoSession = std::make_unique<SettingsAudioVideoSession>(
@@ -505,6 +506,7 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
     displayResolutionDropdownOpen = open && openIndex == 2;
     displayVsyncDropdownOpen = open && openIndex == 3;
     displayFrameCapDropdownOpen = open && openIndex == 4;
+    displayAntiAliasingDropdownOpen = open && openIndex == 5;
     refreshAudioVideoControls();
   };
 
@@ -594,6 +596,17 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
                        },
                        overlayPortal);
 
+  displayAntiAliasingDropdown = new DropdownView(
+      {.onOpenChanged = [closeOtherDisplayDropdowns](bool open) {
+         closeOtherDisplayDropdowns(5, open);
+       },
+       .onOptionSelected = [this](const std::string &id) {
+         displayDraft.msaaSamples = parseInt(id, -1);
+         displayAntiAliasingDropdownOpen = false;
+         refreshAudioVideoControls();
+       }},
+      overlayPortal);
+
   const float dropdownWidth = static_cast<float>(
       std::max(260, metrics.cardsWidth - metrics.cardPadding * 2));
   refreshDropdown(displayModeDropdown, model.modes, displayModeDropdownOpen,
@@ -607,6 +620,10 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
   refreshDropdown(displayFrameCapDropdown, model.frameCaps,
                   displayFrameCapDropdownOpen, i18n::message("settings.display.frame_cap.label"), dropdownWidth);
 
+  refreshDropdown(displayAntiAliasingDropdown, model.antiAliasing,
+                  displayAntiAliasingDropdownOpen,
+                  i18n::message("settings.display.anti_aliasing.label"), dropdownWidth);
+
   controls->addView(makeChoiceField(metrics, i18n::message("settings.display.window_mode.label"), displayModeDropdown,
                                     model.modes.explanation));
   controls->addView(makeChoiceField(metrics, i18n::message("settings.display.display.label"), displayIndexDropdown,
@@ -619,6 +636,10 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
   controls->addView(makeChoiceField(metrics, i18n::message("settings.display.frame_cap.label"),
                                     displayFrameCapDropdown,
                                     model.frameCaps.explanation));
+
+  controls->addView(makeChoiceField(
+      metrics, i18n::message("settings.display.anti_aliasing.label"),
+      displayAntiAliasingDropdown, model.antiAliasing.explanation));
 
   auto *applyButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
@@ -787,6 +808,9 @@ void SettingsScene::refreshAudioVideoControls(bool syncInputs) {
                     displayResolutionDropdownOpen, i18n::message("settings.audio.resolution.label"), dropdownWidth);
     refreshDropdown(displayVsyncDropdown, displayModel.vsync,
                     displayVsyncDropdownOpen, "VSync", dropdownWidth);
+    refreshDropdown(displayAntiAliasingDropdown, displayModel.antiAliasing,
+                    displayAntiAliasingDropdownOpen,
+                    i18n::message("settings.display.anti_aliasing.label"), dropdownWidth);
     refreshDropdown(displayFrameCapDropdown, displayModel.frameCaps,
                     displayFrameCapDropdownOpen, i18n::message("settings.audio.frame_cap.label"), dropdownWidth);
   }

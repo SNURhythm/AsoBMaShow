@@ -284,6 +284,7 @@ private:
   DropdownView *displayResolutionDropdown = nullptr;
   DropdownView *displayVsyncDropdown = nullptr;
   DropdownView *displayFrameCapDropdown = nullptr;
+  DropdownView *displayAntiAliasingDropdown = nullptr;
   TextInputBox *masterVolumeInput = nullptr;
   TextInputBox *bgmVolumeInput = nullptr;
   TextInputBox *keysoundVolumeInput = nullptr;
@@ -460,6 +461,7 @@ private:
   bool displayResolutionDropdownOpen = false;
   bool displayVsyncDropdownOpen = false;
   bool displayFrameCapDropdownOpen = false;
+  bool displayAntiAliasingDropdownOpen = false;
   std::unique_ptr<ir::IrSettingsActionModel> irSettingsModel;
   std::optional<std::int64_t> irPendingDiscardRowId;
   bool irKeyEditorActive = false;

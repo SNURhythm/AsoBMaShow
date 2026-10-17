@@ -867,6 +867,12 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
       if (index >= 0 && index < recyclerView->size()) {
         recyclerView->selectedIndex = index;
         recyclerView->onSelected(recyclerView->get(index), index);
+      } else if (!state.selected->courseStart && !state.selected->unzipAll) {
+        // A score filter may exclude the retained chart; details and actions
+        // still belong to it until the user chooses another chart.
+        selectedChartRecord = state.selected;
+        recyclerView->selectedIndex = -1;
+        recyclerView->onSelected(*state.selected, -1);
       }
     }
     recyclerView->scrollOffset = std::clamp(state.songScroll, 0.0F,
@@ -3457,8 +3463,17 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
       preserveViewState ? recyclerView->scrollOffset : 0.0f;
   const int previousSelectedIndex =
       preserveViewState ? recyclerView->selectedIndex : -1;
+  const bool selectionWasVisible =
+      preserveViewState && previousSelectedIndex >= 0 &&
+      previousSelectedIndex < recyclerView->size() &&
+      recyclerView->itemHeight > 0 &&
+      previousSelectedIndex * recyclerView->itemHeight <
+          previousScrollOffset + recyclerView->getHeight() &&
+      (previousSelectedIndex + 1) * recyclerView->itemHeight > previousScrollOffset;
   std::filesystem::path visibleSelectedPath;
-  if (preserveViewState && previousSelectedIndex >= 0 &&
+  if (preserveViewState &&
+      (!selectedChartRecord || selectedChartRecord->meta.BmsPath.empty()) &&
+      previousSelectedIndex >= 0 &&
       previousSelectedIndex < recyclerView->size()) {
     visibleSelectedPath =
         recyclerView->get(previousSelectedIndex).meta.BmsPath;
@@ -3573,6 +3588,15 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
       selectedChartRecord && (selectedChartRecord->unzipAll || selectedChartRecord->courseStart) && leadingOffset > 0
           ? 0 : findPathNear(previousSelectedPath, previousSelectedIndex);
 
+  if (selectionWasVisible && restoredSelectedIndex >= 0 &&
+      restoredSelectedIndex != previousSelectedIndex) {
+    // Keep the selected row at its previous screen position when a new score
+    // moves it in the sorted list. Do not jump to an offscreen selection.
+    recyclerView->scrollOffset = std::clamp(
+        previousScrollOffset + static_cast<float>(
+            (restoredSelectedIndex - previousSelectedIndex) * recyclerView->itemHeight),
+        0.0f, maxOffset);
+  }
   recyclerView->selectedIndex = restoredSelectedIndex;
   refreshPlayOptionButtons();
   refreshLongNoteModeButtons();
@@ -5123,13 +5147,20 @@ void MainMenuScene::reselectCurrentChart() {
   if (recyclerView == nullptr || !recyclerView->onSelected) {
     return;
   }
-  const int selected = recyclerView->selectedIndex;
-  if (selected < 0 || selected >= recyclerView->size()) {
+  auto record = selectedRecordSnapshot();
+  const int index = recyclerView->selectedIndex;
+  if (record && !record->meta.BmsPath.empty() &&
+      index >= 0 && index < recyclerView->size()) {
+    const auto &visibleRecord = recyclerView->get(index);
+    if (visibleRecord.meta.BmsPath == record->meta.BmsPath) {
+      record = visibleRecord;
+    }
+  }
+  if (!record) {
     return;
   }
 
-  const ChartMetaRecord record = recyclerView->get(selected);
-  recyclerView->onSelected(record, selected);
+  recyclerView->onSelected(*record, recyclerView->selectedIndex);
 }
 
 void MainMenuScene::refreshReplayAvailability(const ChartMetaRecord *record) {
@@ -5239,12 +5270,12 @@ void MainMenuScene::startUnzipSelectedArchiveFolder() {
     return;
   }
 
-  const int selected = recyclerView->selectedIndex;
-  if (selected < 0 || selected >= recyclerView->size()) {
+  const auto selection = selectedRecordSnapshot();
+  if (!selection) {
     return;
   }
 
-  const ChartMetaRecord record = recyclerView->get(selected);
+  const ChartMetaRecord record = *selection;
   startUnzipArchiveFolder(record);
 }
 
@@ -5324,12 +5355,12 @@ void MainMenuScene::openFindBmsForSelection() {
     return;
   }
 
-  const int selected = recyclerView->selectedIndex;
-  if (selected < 0 || selected >= recyclerView->size()) {
+  const auto selection = selectedRecordSnapshot();
+  if (!selection) {
     return;
   }
 
-  const ChartMetaRecord record = recyclerView->get(selected);
+  const ChartMetaRecord record = *selection;
   if (record.solidArchive || !record.unavailable ||
       (record.meta.SHA256.empty() && record.meta.MD5.empty() &&
        record.meta.Title.empty())) {
@@ -6201,14 +6232,14 @@ void MainMenuScene::playSelectedChartAsMusic() {
     return;
   }
 
-  const int selected = recyclerView->selectedIndex;
-  if (selected < 0 || selected >= recyclerView->size()) {
+  const auto selection = selectedRecordSnapshot();
+  if (!selection) {
     musicStatusMessage = i18n::message("menu.select_chart_first.message");
     refreshMusicModal();
     return;
   }
 
-  const ChartMetaRecord record = recyclerView->get(selected);
+  const ChartMetaRecord record = *selection;
   if (record.solidArchive || record.unavailable ||
       record.meta.BmsPath.empty()) {
     musicStatusMessage = i18n::message("menu.selected_chart_unable_played_as_music.message");
@@ -6236,14 +6267,14 @@ void MainMenuScene::addSelectedChartToMusicPlaylist() {
     return;
   }
 
-  const int selected = recyclerView->selectedIndex;
-  if (selected < 0 || selected >= recyclerView->size()) {
+  const auto selection = selectedRecordSnapshot();
+  if (!selection) {
     musicStatusMessage = i18n::message("menu.music_player.select_chart_first.message");
     refreshMusicModal();
     return;
   }
 
-  const ChartMetaRecord record = recyclerView->get(selected);
+  const ChartMetaRecord record = *selection;
   if (record.solidArchive || record.unavailable ||
       record.meta.BmsPath.empty()) {
     musicStatusMessage = i18n::message("menu.music_player.selected_chart_unable_added_playlist.message");
@@ -6267,14 +6298,14 @@ void MainMenuScene::removeSelectedChartFromMusicPlaylist() {
     return;
   }
 
-  const int selected = recyclerView->selectedIndex;
-  if (selected < 0 || selected >= recyclerView->size()) {
+  const auto selection = selectedRecordSnapshot();
+  if (!selection) {
     musicStatusMessage = i18n::message("menu.music_player.select_chart_first.message");
     refreshMusicModal();
     return;
   }
 
-  const ChartMetaRecord record = recyclerView->get(selected);
+  const ChartMetaRecord record = *selection;
   if (record.solidArchive || record.unavailable ||
       record.meta.BmsPath.empty()) {
     musicStatusMessage = i18n::message("menu.music_player.selected_chart_unable_removed_from_playlist.message");
@@ -6770,11 +6801,10 @@ void MainMenuScene::openReplayRecordsForSelection() {
   if (recordsModal_ == nullptr || recyclerView == nullptr) {
     return;
   }
-  const int selected = recyclerView->selectedIndex;
-  if (selected < 0 || selected >= recyclerView->size()) {
+  const auto selectedMeta = selectedRecordSnapshot();
+  if (!selectedMeta) {
     return;
   }
-  const auto *selectedMeta = &recyclerView->get(selected);
   const bool courseStartReplay =
       selectedMeta->courseStart &&
       activeFolder.type == LibraryFolderItem::Type::Course &&
@@ -8070,13 +8100,10 @@ void MainMenuScene::applyReplayExportResult() {
   (void)replayExportJob_.takeProgress();
 
   if (recyclerView != nullptr) {
-    const int selected = recyclerView->selectedIndex;
-    if (selected >= 0 && selected < recyclerView->size()) {
-      const auto &selectedMeta = recyclerView->get(selected);
-      if (!selectedMeta.unavailable && !selectedMeta.meta.BmsPath.empty() &&
-          recyclerView->onSelected) {
-        recyclerView->onSelected(selectedMeta, selected);
-      }
+    const auto selectedMeta = selectedRecordSnapshot();
+    if (selectedMeta && !selectedMeta->unavailable &&
+        !selectedMeta->meta.BmsPath.empty() && recyclerView->onSelected) {
+      recyclerView->onSelected(*selectedMeta, recyclerView->selectedIndex);
     }
   }
 

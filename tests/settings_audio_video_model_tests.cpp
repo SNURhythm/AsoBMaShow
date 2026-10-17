@@ -72,6 +72,7 @@ display::Capabilities desktopDisplayCapabilities() {
       .canSelectResolution = true,
       .canChangeVsync = true,
       .canSetFrameCap = true,
+      .canChangeAntiAliasing = true,
       .displays = {{.index = 0,
                     .name = "Laptop Display",
                     .resolutions = {{1280, 720, 60},
@@ -402,6 +403,7 @@ void testDisplayModelUsesFriendlyLabelsAndShowsFixedFields() {
   intent.width = 1600;
   intent.height = 900;
   intent.frameCap = 75;
+  intent.msaaSamples = 4;
 
   const auto desktop =
       BuildDisplayControlModel(intent, desktopDisplayCapabilities());
@@ -415,6 +417,11 @@ void testDisplayModelUsesFriendlyLabelsAndShowsFixedFields() {
   require(findOption(desktop.frameCaps, "75") != nullptr,
           "valid custom frame caps remain selectable");
 
+  require(desktop.antiAliasing.enabled && desktop.antiAliasing.selectedValue == "4" &&
+              findOption(desktop.antiAliasing, "-1") && findOption(desktop.antiAliasing, "0") &&
+              findOption(desktop.antiAliasing, "2") && findOption(desktop.antiAliasing, "4") &&
+              findOption(desktop.antiAliasing, "8") && findOption(desktop.antiAliasing, "16"),
+          "MSAA control exposes default, off, and sample counts with the current selection");
   const auto fixed =
       BuildDisplayControlModel(intent, fixedDisplayCapabilities());
   require(!fixed.modes.enabled && !fixed.displays.enabled &&
@@ -425,6 +432,8 @@ void testDisplayModelUsesFriendlyLabelsAndShowsFixedFields() {
               !fixed.resolutions.explanation.empty() &&
               !fixed.vsync.explanation.empty(),
           "fixed display controls explain why they cannot be changed");
+  require(!fixed.antiAliasing.enabled && !fixed.antiAliasing.explanation.empty(),
+          "unsupported renderer explains why MSAA cannot be changed");
   require(fixed.frameCaps.enabled,
           "app-owned frame limiting remains available on fixed displays");
 }
@@ -564,6 +573,47 @@ void testDisplayPreviewPersistsOnlyWhenKept() {
               fixture.settings.audioVideo.video == candidate &&
               fixture.saves == 1,
           "Keep persists exactly the confirmed candidate");
+}
+
+void testAntiAliasingPreviewConfirmationAndTimeout() {
+  SessionFixture fixture;
+  auto candidate = fixture.settings.audioVideo.video;
+  candidate.msaaSamples = 4;
+  const auto now = Clock::time_point{};
+  require(fixture.session.beginDisplayPreview(candidate, now).status ==
+              display::ApplyStatus::PreviewPending && fixture.saves == 0,
+          "anti-aliasing changes preview before saving");
+  fixture.session.tick(now + std::chrono::seconds(16));
+  require(fixture.displayBackend.state.settings.msaaSamples == -1 &&
+              fixture.settings.audioVideo.video.msaaSamples == -1 && fixture.saves == 0,
+          "timed out anti-aliasing restores the renderer without saving");
+  fixture.session.beginDisplayPreview(candidate, now);
+  require(fixture.session.keepDisplayPreview().status == display::ApplyStatus::Applied &&
+              fixture.settings.audioVideo.video.msaaSamples == 4 && fixture.saves == 1,
+          "confirmed anti-aliasing persists the chosen sample count");
+}
+
+void testUnavailableAntiAliasingPreservesImportedIntent() {
+  AppSettings settings;
+  settings.audioVideo.video.msaaSamples = 8;
+  FakeAudioRuntime runtime;
+  FakePlayback playback;
+  audio::AudioDeviceManager audioManager(runtime, playback, settings.audioVideo.audio);
+  FakeDisplayBackend backend;
+  backend.exposedCapabilities.canChangeAntiAliasing = false;
+  FakeFrameCapRuntime cap;
+  display::DisplaySettingsManager manager(backend, cap, settings.audioVideo.video);
+  int saves = 0;
+  SettingsAudioVideoSession session(settings, audioManager, manager,
+                                    {.persist = [&] { ++saves; }});
+  auto candidate = settings.audioVideo.video;
+  candidate.msaaSamples = 4;
+  candidate.frameCap = 120;
+  require(session.beginDisplayPreview(candidate, Clock::time_point{}).status ==
+              display::ApplyStatus::Applied && saves == 1 &&
+              settings.audioVideo.video.msaaSamples == 8 &&
+              backend.capture().settings.msaaSamples == -1,
+          "unavailable MSAA keeps imported intent while unrelated settings apply");
 }
 
 void testSafeFrameCapOnlyChangePersistsWithoutOverlay() {
@@ -859,6 +909,8 @@ int main() {
   testSettingsTestSoundUsesInjectedKeysoundPath();
   testSettingsTestSoundSynthesizesCMajorNotes();
   testDisplayPreviewPersistsOnlyWhenKept();
+  testAntiAliasingPreviewConfirmationAndTimeout();
+  testUnavailableAntiAliasingPreservesImportedIntent();
   testSafeFrameCapOnlyChangePersistsWithoutOverlay();
   testFixedDisplayFrameCapPreservesImportedDisabledIntent();
   testMobileVsyncUsesCurrentNativeGeometryAfterRotation();

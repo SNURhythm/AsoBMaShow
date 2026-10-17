@@ -46,6 +46,8 @@ struct MainMenuScene {
     std::atomic_bool chartLibraryListReloadRequested = false;
     std::atomic_bool chartLibraryFoldersReloadRequested = false;
   } context;
+  std::optional<ChartMetaRecord> selectedChartRecord;
+  std::optional<ChartMetaRecord> selectedRecordSnapshot() const;
   Rows rows;
   Rows *recyclerView = &rows;
   Modal modal;

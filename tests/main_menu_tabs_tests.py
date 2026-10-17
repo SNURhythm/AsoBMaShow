@@ -308,6 +308,25 @@ int main(int argc,char **argv) {
   MainMenuScene scene;
   auto folders=MainMenuScene::fixtureFolders();
   const std::string scenario=argv[1];
+  if(scenario=="filtered-tab-selection") {
+    for (auto tab : {Tab::Play, Tab::Course}) {
+      MainMenuScene restored;
+      restored.selectorTab_=restored.activeTab_=tab;
+      if (tab==Tab::Course)
+        restored.activeFolder={.key="course",.type=T::Course,.courseId=42};
+      restored.reloadFolderItems(); restored.reloadChartList();
+      ChartMetaRecord retained;
+      retained.meta.BmsPath="filtered-out.bms";
+      restored.songs.selectedIndex=-1;
+      restored.songs.onSelected(retained,-1);
+      restored.switchTabAndWait(tab==Tab::Play ? Tab::Course : Tab::Play);
+      restored.switchTabAndWait(tab);
+      assert(restored.songs.selectedIndex==-1 && "a retained chart must not highlight the course-start row");
+      assert(restored.selectedChartRecord && restored.selectedChartRecord->meta.BmsPath=="filtered-out.bms" &&
+             "tab restoration retains a chart even when the current query no longer includes it");
+    }
+    return 0;
+  }
   if(scenario=="hidden-library-revision") {
     for(bool queuedHandoff : {false,true}) {
       MainMenuScene resume; Tasks tasks; resume.context.chartLibraryTasks=&tasks;
@@ -634,6 +653,39 @@ int main(int argc,char **argv) {
         cls.binary = Path(cls.temp.name) / "test"
         path.write_text(source)
         subprocess.run(["c++", "-std=c++20", str(path), "-o", str(cls.binary)], check=True)
+
+    def test_score_reorder_preserves_chart_after_page_release(self):
+        root = Path(__file__).resolve().parents[1]
+        production = (root / "src/scene/MainMenuScene.cpp").read_text()
+        header = (root / "src/scene/MainMenuScene.h").read_text()
+        library = (root / "src/scene/MainMenuLibrary.cpp").read_text()
+        helpers = "\n".join(extract(library, signature) for signature in (
+            "std::optional<ChartMetaRecord> chartSelectionRecordForReload(",
+            "std::filesystem::path chartSelectionPathForReload("))
+        methods = "\n".join(extract(production, signature) for signature in (
+            "void MainMenuScene::ChartListPageCache::reset(",
+            "void MainMenuScene::ChartListPageCache::releasePages()",
+            "void MainMenuScene::ChartListPageCache::clear()",
+            "const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(",
+            "void MainMenuScene::reloadChartList(",
+            "std::optional<ChartMetaRecord> MainMenuScene::selectedRecordSnapshot() const",
+            "void MainMenuScene::reselectCurrentChart()",
+            "void MainMenuScene::openReplayRecordsForSelection()",
+            "void MainMenuScene::startSelectedChart()",
+            "void MainMenuScene::refreshSelectedChartDetails()"))
+        fixture = (root / "tests/main_menu_chart_reload_fixture.cpp").read_text()
+        fixture = fixture.replace("// SELECTION_HELPERS", helpers).replace(
+            "// CACHE_TYPE", extract(header, "struct ChartListPageCache {") + ";").replace(
+            "// PRODUCTION_METHODS", methods)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-menu-reorder-") as temp:
+            source, binary = Path(temp) / "test.cpp", Path(temp) / "test"
+            source.write_text(fixture)
+            subprocess.run(["c++", "-std=c++20", "-I", str(root / "src"),
+                            str(source), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
+    def test_filtered_out_selection_survives_tab_restoration(self):
+        subprocess.run([str(self.binary), "filtered-tab-selection"], check=True)
 
     def test_hidden_revision_only_library_change_refreshes_once_on_return(self):
         subprocess.run([str(self.binary), "hidden-library-revision"], check=True, timeout=5)
