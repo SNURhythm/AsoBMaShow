@@ -532,7 +532,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
       resolvePreviewPanelWidth(metrics, foldButtonSize, previewPanelFolded);
   const int panelHeight = std::max(
       foldButtonSize, rendering::window_height - metrics.safe.top -
-                          metrics.safe.bottom - metrics.verticalPadding * 2);
+                          metrics.verticalPadding * 2);
   auto *previewPanel = new View();
   previewPanel->setWidth(static_cast<float>(panelWidth));
   previewPanel->setPadding(
@@ -2523,9 +2523,9 @@ void SettingsScene::initView() {
   rootLayout->setPadding(
       Edge::Right,
       static_cast<float>(metrics.safe.right + metrics.horizontalPadding));
-  rootLayout->setPadding(
-      Edge::Bottom,
-      static_cast<float>(metrics.safe.bottom + metrics.verticalPadding));
+  // Extend the settings screen through the bottom safe area. Dialogs and
+  // custom-skin previews still use the full native insets.
+  rootLayout->setPadding(Edge::Bottom, static_cast<float>(metrics.verticalPadding));
   rootLayout->setGap(static_cast<float>(metrics.rootGap));
 
   if (previewActive) {
@@ -2631,7 +2631,7 @@ void SettingsScene::initView() {
   content->setPadding(Edge::Top, 16);
   content->setPadding(Edge::Left, metrics.safe.left + metrics.horizontalPadding);
   content->setPadding(Edge::Right, metrics.safe.right + metrics.horizontalPadding);
-  content->setPadding(Edge::Bottom, metrics.safe.bottom);
+  content->setPadding(Edge::Bottom, 0);
   content->setAlignItems(YGAlignStretch);
 
   auto *tabControls = new View();
