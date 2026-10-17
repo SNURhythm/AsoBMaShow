@@ -1074,6 +1074,41 @@ void testPortraitResultTimingAndActionsFit() {
   i18n::setLanguage(i18n::Language::English);
 }
 
+void testReplayResultFitsWideCanvasWithoutControls() {
+  const auto meta = localMeta();
+  const auto state = localState();
+  for (const auto dimensions : {std::pair{1920, 864}, std::pair{1080, 1920}}) {
+    rendering::window_width = dimensions.first;
+    rendering::window_height = dimensions.second;
+    auto root = std::make_unique<View>(0, 0, dimensions.first, dimensions.second);
+    ResultSkinData data{&state, &meta, nullptr};
+    data.showControls = false;
+    data.showTimingAnalytics = true;
+    DefaultSkin skin;
+    skin.buildLayout("Result", root.get(), &data);
+    root->applyYogaLayout();
+    auto *analytics = root->findViewByName("timingAnalytics");
+    auto *gauge = root->findViewByName("graph");
+    auto *title = root->findViewByName("title");
+    expect(analytics && gauge,
+           "video results reserve both gauge and timing analytics without action controls");
+    expect(!root->findViewByName("resultActions"),
+           "video result layout does not add interactive scene actions");
+    expect(title && title->getY() >= 0,
+           "exported result title stays inside the viewport");
+    if (analytics && gauge) {
+      expect(analytics->getY() >= 0 && analytics->getHeight() >= 236 &&
+                 analytics->getY() + analytics->getHeight() <= dimensions.second,
+             "exported timing analytics fits below the result header");
+      if (dimensions.first > dimensions.second) {
+        expect(analytics->getY() == gauge->getY() &&
+                   analytics->getX() >= gauge->getX() + gauge->getWidth(),
+               "wide video results share a row instead of overflowing vertically");
+      }
+    }
+  }
+}
+
 void testDefaultSkinLegacyNullPresentationParity() {
   const auto meta = localMeta();
   const auto state = localState();
@@ -1415,6 +1450,7 @@ int main() {
   testDefaultSkinLocalPresentationContract();
   testPortraitResultKeepsComparisonCardsReadable();
   testPortraitResultTimingAndActionsFit();
+  testReplayResultFitsWideCanvasWithoutControls();
   testDefaultSkinLegacyNullPresentationParity();
   testLegacyPortraitResultMetricsFitWithoutDividers();
   testDefaultSkinSparseRemoteOmitsUnsupportedViews();

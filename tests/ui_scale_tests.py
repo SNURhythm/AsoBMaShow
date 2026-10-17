@@ -941,6 +941,12 @@ int ui_offset_x=0,ui_offset_y=0,ui_view_width=1170,ui_view_height=2532;
 void updateUIScale(int,int);
 }
 METHODS
+template<class Geometry> void finishGeometry(Geometry &geometry) {
+  if constexpr (requires { geometry.restorePrimaryAndFinish(); })
+    geometry.restorePrimaryAndFinish();
+  else
+    geometry.restorePrimary();
+}
 int main() {
   using namespace rendering;
   responsiveMenuSceneActive=true;
@@ -957,6 +963,20 @@ int main() {
     geometry.applyExport();
   }
   assert(window_width==585 && responsiveMenuSceneActive && compactMenuCanvasActive);
+  {
+    ScopedReplayVideoRenderGeometry geometry(1920,1080);
+    geometry.applyExport();
+    assert(window_width==1920 && !responsiveMenuSceneActive);
+    // Final render cleanup restores the menu before releasing renderer ownership.
+    finishGeometry(geometry);
+    assert(window_width==585 && window_height==1266 && compactMenuCanvasActive);
+    // The owner can resize while the export worker finishes encoding the MP4.
+    updateUIScale(2532,1170);
+    assert(window_width==1266 && window_height==585 && compactMenuCanvasActive);
+  }
+  assert(window_width==1266 && window_height==585 &&
+         render_width==2532 && render_height==1170 &&
+         "finished export destruction must not overwrite a newer viewport");
 }
 '''.replace("METHODS", methods)
         with tempfile.TemporaryDirectory(prefix="asobmashow-export-geometry-") as temp:

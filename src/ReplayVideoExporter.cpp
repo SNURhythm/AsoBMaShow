@@ -122,20 +122,23 @@ PracticeAnalyticsView *addReplayResultAnalytics(
     View &resultRoot, const bms_parser::Chart &chart,
     const ReplayData &replay) {
   const std::span<const ReplayData> attempts(&replay, 1);
-  auto *host = new View();
-  host->setName("timingAnalytics");
-  host->setWidthPercent(100.0f);
-  host->setHeight(
-      practice_analytics_presentation::kPreferredAnalyticsHeight);
-  host->setMinHeight(
-      practice_analytics_presentation::kMinimumAnalyticsHeight);
-  host->setFlexShrink(1.0f);
-  host->setFlexDirection(FlexDirection::Column);
-  host->setAlignItems(YGAlignStretch);
+  auto *host = resultRoot.findViewByName("timingAnalytics");
+  if (host == nullptr) {
+    host = new View();
+    host->setName("timingAnalytics");
+    host->setWidthPercent(100.0f);
+    host->setHeight(
+        practice_analytics_presentation::kPreferredAnalyticsHeight);
+    host->setMinHeight(
+        practice_analytics_presentation::kMinimumAnalyticsHeight);
+    host->setFlexShrink(1.0f);
+    host->setFlexDirection(FlexDirection::Column);
+    host->setAlignItems(YGAlignStretch);
+    resultRoot.addView(host);
+  }
   auto *analytics = new PracticeAnalyticsView(
       practice::ResultModel(chart, attempts, 0));
   host->addView(analytics);
-  resultRoot.addView(host);
   return analytics;
 }
 
@@ -782,7 +785,7 @@ public:
   ScopedReplayVideoRenderGeometry(int exportWidth, int exportHeight)
       : exportWidth(exportWidth), exportHeight(exportHeight) {}
 
-  ~ScopedReplayVideoRenderGeometry() { restorePrimary(); }
+  ~ScopedReplayVideoRenderGeometry() { restorePrimaryAndFinish(); }
 
   void applyExport() {
     rendering::responsiveMenuSceneActive = false;
@@ -793,7 +796,16 @@ public:
     restoreReplayVideoRenderGeometry(primary);
   }
 
+  void restorePrimaryAndFinish() {
+    if (finished) return;
+    restorePrimary();
+    // Encoding can outlive renderer ownership. Destruction must not overwrite
+    // a viewport that the application has resized since render cleanup.
+    finished = true;
+  }
+
 private:
+  bool finished = false;
   ReplayVideoRenderGeometryState primary;
   int exportWidth = 0;
   int exportHeight = 0;
@@ -3074,7 +3086,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     resultRoot.reset();
     context.jukebox.stop();
     context.jukebox.unloadVisuals();
-    exportGeometry.restorePrimary();
+    exportGeometry.restorePrimaryAndFinish();
     restorePrimaryRenderViews(&context);
     if (bgaBlurPass != nullptr) {
       bgaBlurPass->shutdown();
@@ -3232,6 +3244,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         chart, resultReplay, replayResultState);
     resultSkinData.outGraphPlaceholder = &resultGraphPlaceholder;
     resultSkinData.showControls = false;
+    resultSkinData.showTimingAnalytics = true;
     const play_options::PlayModeDisplayLabel playModeDisplay =
         play_options::formatPlayModeDisplayLabel(replay);
     resultSkinData.playModeLabel = playModeDisplay.mode;
@@ -3882,7 +3895,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     courseResultRoot.reset();
     context.jukebox.stop();
     context.jukebox.unloadVisuals();
-    exportGeometry.restorePrimary();
+    exportGeometry.restorePrimaryAndFinish();
     restorePrimaryRenderViews(&context);
     if (bgaBlurPass != nullptr) {
       bgaBlurPass->shutdown();
@@ -4344,6 +4357,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
       data.gameplayGraph = stage.gameplayGraph;
       data.outGraphPlaceholder = &stageResultGraphPlaceholder;
       data.showControls = false;
+      data.showTimingAnalytics = true;
       const play_options::PlayModeDisplayLabel display =
           play_options::formatPlayModeDisplayLabel(stageReplay);
       data.playModeLabel = display.mode;

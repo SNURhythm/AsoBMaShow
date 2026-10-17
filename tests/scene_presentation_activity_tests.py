@@ -50,6 +50,78 @@ class ScenePresentationActivityTests(unittest.TestCase):
             self.compile_and_run(f"#define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS {skins}\n" +
                                  fixture.replace("SCENE_ACTIVITY_METHODS", "\n".join(methods)))
 
+    def test_scene_canvas_transition_refreshes_projection_before_drawing(self):
+        source = (ROOT / "src/main.cpp").read_text()
+        start = source.index("      } else if (bgfxLock.owns_lock() &&")
+        end = source.index("#if TARGET_OS_IPHONE", start)
+        refresh = source[start:end].replace("} else if", "if", 1) + "}"
+        self.compile_and_run('''
+#include <atomic>
+#include <cassert>
+#include <cmath>
+#include <mutex>
+namespace rendering { int window_width = 1371, window_height = 617; }
+struct Context {
+  struct Presentation { float laneAngleDegrees = 20, laneLength = 4; };
+  struct Settings {
+    Presentation value;
+    const Presentation &presentation() const { return value; }
+  } settings;
+  std::atomic<bool> replayVideoExportActive{false};
+  struct Access {
+    bool requested = false;
+    bool exportRequested() const { return requested; }
+  } rendererAccess;
+  std::mutex bgfxRenderMutex;
+  int projectionWidth = 1371, projectionHeight = 617, restores = 0;
+  void restoreGameplayRenderViews() {
+    projectionWidth = rendering::window_width;
+    projectionHeight = rendering::window_height;
+    ++restores;
+  }
+};
+int main() {
+  Context context;
+  float appliedLaneAngleDegrees = 20, appliedLaneLength = 4;
+  int appliedUiCanvasWidth = 1371, appliedUiCanvasHeight = 617;
+  std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex);
+  auto refresh = [&] { REFRESH_TRANSFORMS };
+  refresh();
+  assert(context.restores == 0);
+  // Android phone menu -> gameplay at unchanged 2400 x 1080 drawable size.
+  rendering::window_width = 1920;
+  rendering::window_height = 864;
+  refresh();
+  assert(context.projectionWidth == 1920 && context.projectionHeight == 864 &&
+         "gameplay must draw with its own canvas projection on the first frame");
+  refresh();
+  assert(context.restores == 1 && "unchanged frames must not rebuild transforms");
+  // Home/resume may already restore gameplay; exiting still needs menu projection.
+  context.restoreGameplayRenderViews();
+  rendering::window_width = 1371;
+  rendering::window_height = 617;
+  context.rendererAccess.requested = true;
+  refresh();
+  assert(context.projectionWidth == 1920 && "export retains renderer ownership");
+  context.rendererAccess.requested = false;
+  context.replayVideoExportActive = true;
+  refresh();
+  assert(context.projectionWidth == 1920);
+  context.replayVideoExportActive = false;
+  refresh();
+  assert(context.projectionWidth == 1371 && context.projectionHeight == 617 &&
+         "returning from gameplay must restore the menu projection");
+  assert(context.restores == 3);
+  rendering::window_height = 620;
+  bgfxLock.unlock();
+  refresh();
+  assert(context.projectionHeight == 617 && "a frame without renderer ownership must defer");
+  bgfxLock.lock();
+  refresh();
+  assert(context.projectionHeight == 620 && "height-only changes also refresh");
+}
+'''.replace("REFRESH_TRANSFORMS", refresh))
+
     def test_programmatic_canvas_changes_wake_idle_drawing(self):
         source = (ROOT / "src/scene/ChartViewerScene.cpp").read_text()
         methods = "\n".join(extract(source, signature) for signature in (
