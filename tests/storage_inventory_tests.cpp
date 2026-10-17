@@ -1,5 +1,7 @@
 #include "../src/storage/ChartResourceInventory.h"
 #include "StorageTestSupport.h"
+#include "../src/storage/StoragePathIndex.h"
+#include "../src/storage/StorageDirectoryInventory.h"
 
 #include <iostream>
 #include <set>
@@ -21,6 +23,56 @@ std::set<fs::path> candidateNames(const StorageInventory &inventory) {
   std::set<fs::path> result;
   for (const auto &candidate : inventory.candidates) result.insert(candidate.source.filename());
   return result;
+}
+void rootIndexUsesComponentsAndUnions() {
+  StoragePathIndex index({"/pack", "/pack/sub", "/pack/", "/package", "/outside"});
+  require(index.Ancestors("/pack/sub/asset.wav") == std::vector<std::size_t>{0, 2, 1},
+          "root index preserves nested and duplicate memberships");
+  require(index.Ancestors("/package/file.wav") == std::vector<std::size_t>{3},
+          "component lookup never confuses prefix siblings");
+  require(index.MinimalRoots() == std::vector<fs::path>{"/outside", "/pack", "/package"},
+          "minimal physical roots remove duplicate and nested traversal");
+  require(index.Ancestors("/pack/../outside/file").empty(), "traversal components rejected");
+}
+void metadataVisitIsIndependentOfUnrelatedRoots() {
+  TempDirectory temp;
+  temp.write("group/a.wav", "12345");
+  temp.write("group/sub/inside.wav");
+  fs::create_hard_link(temp.root / "group/a.wav", temp.root / "group/hard.wav");
+  fs::create_symlink(temp.root / "group/sub", temp.root / "group/link");
+  std::vector<fs::path> roots{temp.root / "group"};
+  for (int i = 0; i < 10000; ++i) roots.push_back(temp.root / ("unrelated" + std::to_string(i)));
+  StoragePathIndex index(std::move(roots));
+  std::uint64_t steps = 0;
+  require(index.Ancestors(temp.root / "group/a.wav", &steps) == std::vector<std::size_t>{0},
+          "large index finds the matching root");
+  require(steps < 20, "lookup cost depends on path depth, not unrelated roots");
+  StorageScanMetrics metrics;
+  StorageDirectoryStamp stamp;
+  std::string error;
+  std::map<fs::path, StorageDirectoryEntry> entries;
+  require(VisitStorageDirectory(temp.root / "group", temp.root, StorageVisitMode::SizeOnly, {},
+      [&](const auto &entry) { entries.emplace(entry.name, entry); return true; }, stamp, &metrics, error),
+      "size-only visitor enumerates one authorized directory");
+  require(entries.size() == 4 && metrics.entries == 4 && metrics.metadataReads == 4,
+          "one metadata read per entry, without recursing or looking up each group");
+  require(entries.at("a.wav").bytes == 5 && entries.at("hard.wav").bytes == 5 &&
+              !entries.at("a.wav").identity && entries.at("link").kind == StorageEntryKind::Symlink,
+          "measurement includes logical hard-link bytes and never follows links or builds identities");
+  temp.write("group/unique.wav", "abc");
+  entries.clear();
+  require(VisitStorageDirectory(temp.root / "group", temp.root / "group", StorageVisitMode::Preflight, {},
+      [&](const auto &entry) { entries.emplace(entry.name, entry); return true; }, stamp, nullptr, error),
+      "preflight visitor supports a sandbox boundary");
+  require(entries.at("unique.wav").identity == ReadFileIdentity(temp.root / "group/unique.wav", error),
+          "batched metadata preserves exact existing identity timestamps");
+  require(!entries.at("hard.wav").identity, "hard links cannot gain mutation identities");
+  require(!VisitStorageDirectory(temp.root / "group/link", temp.root, StorageVisitMode::SizeOnly,
+      {}, [](const auto &) { return true; }, stamp, nullptr, error), "symlink directory rejected");
+  require(!VisitStorageDirectory(temp.root / "group", temp.root / "unrelated", StorageVisitMode::SizeOnly,
+      {}, [](const auto &) { return true; }, stamp, nullptr, error), "outside trusted boundary rejected");
+  require(!VisitStorageDirectory(temp.root / "group", temp.root, StorageVisitMode::SizeOnly,
+      [] { return false; }, [](const auto &) { return true; }, stamp, nullptr, error), "cancel before traversal");
 }
 void testWholeFolderIncludesSabunsAndUnreferencedMedia() {
   TempDirectory temp;
@@ -128,6 +180,8 @@ void testUnsafeAndUnsupportedFiles() {
 
 int main() {
   try {
+    rootIndexUsesComponentsAndUnions();
+    metadataVisitIsIndependentOfUnrelatedRoots();
     testWholeFolderIncludesSabunsAndUnreferencedMedia();
     testAmbiguousStemsAndFreshness();
     testUnsafeAndUnsupportedFiles();

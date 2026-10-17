@@ -165,6 +165,17 @@ updates added/removed/changed groups; a user's explicit Refresh can still reques
 a complete new size walk. Cache provenance includes source/root identity and
 scan generation; stale measurements stay visibly stale until refreshed.
 
+### Database access
+
+Keep database work out of per-file scan/encode loops. Reuse bound prepared
+statements within a repository session, batch related reads and writes, and
+inspect query plans/index coverage for group selection and affected-root refresh.
+Avoid per-group query loops when refreshing many expanded rows and avoid loading
+all chart metadata for a subset operation. Retain transaction boundaries and
+repository thread ownership; do not share a mutable SQLite statement across
+worker threads. Use query/VM-step counts with representative group fixtures to
+verify improvements, rather than adding caches without invalidation rules.
+
 ### Compact preflight and execution
 
 Preflight stores selected policy/root identity, per-directory membership and

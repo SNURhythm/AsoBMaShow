@@ -101,19 +101,19 @@ callable with the visitor function's signature, defaulting to that production
 function. Root/directory metadata validation belongs to this seam so synthetic
 tests can feed metadata into the real reducer without creating filesystem nodes.
 
-- [ ] Add failing cases `rootIndexUsesComponentsAndUnions` and
+- [x] Add failing cases `rootIndexUsesComponentsAndUnions` and
   `metadataVisitIsIndependentOfUnrelatedRoots`. Assert exact memberships for
   duplicates, nested roots and `pack`/`package`, one logical metadata visit per
   regular entry, and no per-entry loop over 10,000 unrelated roots.
-- [ ] Build/run `storage_inventory_tests` and record the failing assertions.
-- [ ] Implement the prefix index and directory visitor. Authorize/open each
+- [x] Build/run `storage_inventory_tests` and record the failing assertions.
+- [x] Implement the prefix index and directory visitor. Authorize/open each
   directory boundary once, inspect children without following links, and obtain
   identity/size from the same metadata result where the platform supports it.
   Preserve the existing `FileIdentity` timestamp representation. Expose the
   visitor seam for synthetic benchmark entries without a fake aggregation path.
-- [ ] Run inventory and file-transaction tests, including sandbox-root and link
+- [x] Run inventory and file-transaction tests, including sandbox-root and link
   cases. Confirm group lookup work depends on path depth, not library group count.
-- [ ] Commit and push `perf: index storage roots and reuse directory metadata`.
+- [x] Commit and push `perf: index storage roots and reuse directory metadata`.
 
 ### Task 2: Schedule parallel directory discovery with bounded backpressure
 
@@ -252,7 +252,9 @@ an iterable working set only when its fingerprint matches.
 **Files:** Modify `src/storage/StorageInventoryTask.{h,cpp}`,
 `src/scene/StorageManagementScene.{h,cpp}` and relevant localization only if new
 user-visible wording is needed; extend `tests/storage_inventory_task_tests.cpp`
-and the existing scene extraction tests.
+and the existing scene extraction tests. Inspect/update
+`src/repositories/MusicPlaylistRepository.{h,cpp}`, `ChartRepository.{h,cpp}` and
+`tests/music_playlist_repository_tests.cpp` for requested DB efficiency.
 
 **Interfaces:** Replace `Start` with `StartMeasurements(InventoryRequest)` and
 `StartPreflight(InventoryRequest)`. `TakeMeasurements() ->
@@ -287,6 +289,13 @@ so this intermediate task still builds.
   Reconcile external library revisions by changed group/source identities.
   Apply arithmetic deltas only to measurements whose source/generation baseline
   remains valid; otherwise refresh the affected scope and mark its total pending.
+- [ ] Inspect SQL query plans and existing statement reuse. Add a batched group
+  lookup for expanded/affected rows where current code performs N+1 queries; use
+  bound reusable statements and indexed group keys. Keep SQLite use on repository
+  owners, with no per-file scan SQL and no shared mutable statement across workers.
+  Extend repository tests with query/VM-step counts and group identity fixtures;
+  batch affected-root invalidation writes within existing transaction boundaries
+  in Task 6. Record measured query plans and timings in Task 8.
 - [ ] Verify progressive browsing, selected preflight and cancellation with the
   focused task/scene tests, then compile `main`.
 - [ ] Commit and push `perf: show storage measurements incrementally`.

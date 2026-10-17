@@ -5,6 +5,7 @@ target_link_libraries(storage_policy_tests PRIVATE ${FFMPEG_LIBRARIES})
 asobmashow_register_test(storage_policy_tests)
 
 add_executable(storage_inventory_tests tests/storage_inventory_tests.cpp
+    src/storage/StoragePathIndex.cpp src/storage/StorageDirectoryInventory.cpp
     src/storage/ChartResourceInventory.cpp src/storage/StoragePolicy.cpp
     src/audio/ChartVisualAssetResolver.cpp)
 target_compile_features(storage_inventory_tests PRIVATE cxx_std_23)
