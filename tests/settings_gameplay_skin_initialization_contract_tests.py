@@ -72,7 +72,7 @@ int main() {
 '''
         fixture = fixture.replace("// RELATIVE_METHODS", relative + "\n" + utf8)
         fixture = fixture.replace("// SETTINGS_STORAGE", storage)
-        compiler = FixtureCompiler.from_environment()
+        compiler = FixtureCompiler.from_environment(shared_headers=True)
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             source = directory / "skin_storage.cpp"
@@ -145,7 +145,7 @@ int main() {
 }
 '''
         fixture = fixture.replace("MODE_CALLBACK", mode_callback).replace("TABLE_CALLBACK", table_callback)
-        compiler = FixtureCompiler.from_environment()
+        compiler = FixtureCompiler.from_environment(shared_headers=True)
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             source_path = directory / "scratchless_skin_callbacks.cpp"
@@ -198,7 +198,7 @@ int main() {
   assert(scene.difficultyTables.empty() && scene.lastLayoutWidth == -1);
 }
 '''
-        compiler = FixtureCompiler.from_environment()
+        compiler = FixtureCompiler.from_environment(shared_headers=True)
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             source_path = directory / "scratchless_table_refresh.cpp"

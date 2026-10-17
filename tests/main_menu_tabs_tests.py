@@ -653,7 +653,7 @@ int main(int argc,char **argv) {
         path = Path(cls.temp.name) / "test.cpp"
         cls.binary = Path(cls.temp.name) / "test"
         path.write_text(source)
-        FixtureCompiler.from_environment().build([path], cls.binary, path.parent)
+        FixtureCompiler.from_environment(shared_headers=True).build([path], cls.binary, path.parent)
 
     def test_score_reorder_preserves_chart_after_page_release(self):
         root = Path(__file__).resolve().parents[1]
@@ -681,7 +681,7 @@ int main(int argc,char **argv) {
         with tempfile.TemporaryDirectory(prefix="asobmashow-menu-reorder-") as temp:
             source, binary = Path(temp) / "test.cpp", Path(temp) / "test"
             source.write_text(fixture)
-            FixtureCompiler.from_environment().build(
+            FixtureCompiler.from_environment(shared_headers=True).build(
                 [source], binary, source.parent, includes=[root / "src"])
             subprocess.run([str(binary)], check=True)
 
@@ -817,7 +817,7 @@ int main() {
             cpp = Path(directory) / "idle.cpp"
             binary = Path(directory) / "idle"
             cpp.write_text(source)
-            FixtureCompiler.from_environment().build([cpp], binary, cpp.parent)
+            FixtureCompiler.from_environment(shared_headers=True).build([cpp], binary, cpp.parent)
             subprocess.run([str(binary)], check=True, timeout=5)
 
 
@@ -833,7 +833,7 @@ int main() {
             cpp = Path(directory) / "hidden.cpp"
             binary = Path(directory) / "hidden"
             cpp.write_text(fixture.replace("SCENE_METHODS", methods))
-            FixtureCompiler.from_environment().build([cpp], binary, cpp.parent)
+            FixtureCompiler.from_environment(shared_headers=True).build([cpp], binary, cpp.parent)
             subprocess.run([str(binary)], check=True, timeout=5)
 
 

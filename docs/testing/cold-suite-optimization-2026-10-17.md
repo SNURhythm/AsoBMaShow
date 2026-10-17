@@ -86,3 +86,22 @@ To repeat the compiler-cache-independent check after building all native targets
 cmake --build cmake-build-debug -j 6
 CCACHE_DISABLE=1 ctest --test-dir cmake-build-debug --output-on-failure -j 6
 ```
+
+## Follow-up toward 30 seconds
+
+Enabled the existing per-invocation header sharing in preview lifecycle, menu
+tabs, replay export cancellation and settings initialization fixtures. This
+changes 11 call sites without new infrastructure, persistent fixture artifacts,
+or reduced assertions. The isolated preview suite improved from 6.18 to 3.74
+seconds with compiler caching disabled. The other three affected suites passed
+together in 2.82 seconds after the change.
+
+The full cache-disabled `-j 6` run passed 498/498 tests in **54.92 seconds**.
+That is effectively unchanged from the earlier 55.13-second measurement;
+focused savings do not establish a significant whole-suite improvement.
+Profiling the music-selection fixture suite found roughly 15 seconds spent on
+compilation/linking and 10 seconds on subprocess execution. The four real
+feature-disabled translation-unit checks and real-time audio checks also remain
+substantial costs. Stopped this pass at the small, verified improvements:
+30 seconds was not reached, and further large gains appear to need broader
+fixture consolidation or scheduling work.

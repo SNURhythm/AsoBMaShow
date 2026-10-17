@@ -28,7 +28,7 @@ class MainMenuPreviewLifecycleTests(unittest.TestCase):
         fixture = (ROOT / "tests/main_menu_preview_start_fixture.cpp").read_text()
         fixture = fixture.replace("START_METHOD", callback_body(
             source, "void MainMenuScene::startChartDirect(const ChartMetaRecord &record)"))
-        compiler = FixtureCompiler.from_environment()
+        compiler = FixtureCompiler.from_environment(shared_headers=True)
         with tempfile.TemporaryDirectory() as directory:
             program = Path(directory) / "start.cpp"
             executable = Path(directory) / ("start" + compiler.executable_suffix)
@@ -51,7 +51,7 @@ class MainMenuPreviewLifecycleTests(unittest.TestCase):
         fixture = fixture.replace("SYNC_METHOD", "void updatePreviewVisuals() " +
                                   callback_body(source, signature))
 
-        compiler = FixtureCompiler.from_environment()
+        compiler = FixtureCompiler.from_environment(shared_headers=True)
         with tempfile.TemporaryDirectory() as directory:
             program = Path(directory) / "visuals.cpp"
             executable = Path(directory) / ("visuals" + compiler.executable_suffix)
@@ -76,7 +76,7 @@ class MainMenuPreviewLifecycleTests(unittest.TestCase):
         wiring_start = source.index("  recyclerView->onSelected = [selectChart]")
         wiring_end = source.index("  recyclerView->onUnselected", wiring_start)
         fixture = fixture.replace("SELECTION_WIRING", source[wiring_start:wiring_end])
-        compiler = FixtureCompiler.from_environment()
+        compiler = FixtureCompiler.from_environment(shared_headers=True)
         with tempfile.TemporaryDirectory() as directory:
             program = Path(directory) / "preview.cpp"
             executable = Path(directory) / ("preview" + compiler.executable_suffix)
