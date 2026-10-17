@@ -414,7 +414,7 @@ float gameplayHudMetricsHeight(bool showPacemaker) {
 }
 
 float gameplayHudMetricsY(bool showPacemaker) {
-  return static_cast<float>(rendering::window_height) - rendering::uiSafeAreaInsets().bottom - kHudMargin -
+  return static_cast<float>(rendering::window_height) - kHudMargin -
          gameplayHudMetricsHeight(showPacemaker);
 }
 
@@ -1520,7 +1520,7 @@ std::array<float, 4> BMSRenderer::gameplayHudTitleRect() const {
   const float width = gameplayHudTitleWidth();
   if (presentationOrientation == player_settings::PresentationOrientation::Portrait) {
     return {rendering::window_width - safe.right - kHudMargin - width,
-            rendering::window_height - safe.bottom - kHudMargin - 82.0F, width, 82.0F};
+            rendering::window_height - kHudMargin - 82.0F, width, 82.0F};
   }
   return {safe.left + kHudMargin, safe.top + kHudMargin, width, 82.0F};
 }
@@ -4190,7 +4190,7 @@ void BMSRenderer::configure(
         configuredLaneLength, playAreaWidth, angle, aspect,
         {.top = float(safe.top) / std::max(1, rendering::window_height),
          .right = float(safe.right) / std::max(1, rendering::window_width),
-         .bottom = float(safe.bottom) / std::max(1, rendering::window_height),
+         .bottom = 0.0F,
          .left = float(safe.left) / std::max(1, rendering::window_width)});
     const bx::Vec3 eye{gameplay_geometry::kPlayAreaCenterX,
                       frame.lookAtY - std::tan(bx::toRad(angle)) * frame.cameraDepth,

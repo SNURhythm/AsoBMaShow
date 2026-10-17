@@ -2140,7 +2140,7 @@ void resetViewTransform(uint16_t bgaWidth, uint16_t bgaHeight,
         settings.presentation().laneAngleDegrees, aspect,
         {.top = float(safe.top) / rendering::window_height,
          .right = float(safe.right) / rendering::window_width,
-         .bottom = float(safe.bottom) / rendering::window_height,
+         .bottom = 0.0F,
          .left = float(safe.left) / rendering::window_width});
     kCameraDepth = frame.cameraDepth;
     laneLookAtY = frame.lookAtY;

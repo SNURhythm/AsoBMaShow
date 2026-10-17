@@ -10,6 +10,193 @@ from gameplay_terminal_scene_extract import extract
 
 
 class UiScaleTests(unittest.TestCase):
+    def test_scene_helpers_preserve_modal_and_custom_skin_safe_bounds(self):
+        root = Path(__file__).resolve().parents[1]
+        methods = []
+        for name in ("MainMenuScene.cpp", "SettingsSceneShared.h"):
+            production = (root / "src/scene" / name).read_text()
+            namespace = Path(name).stem
+            methods.append("namespace " + namespace + " {\n" +
+                           extract(production, "struct SafeAreaInsets") + ";\n" +
+                           extract(production, "SafeAreaInsets getSafeAreaInsetsUi()") + "\n}")
+        preview = (root / "src/scene/SettingsScenePreview.cpp").read_text()
+        creation = extract(preview, "void SettingsScene::ensurePreviewRenderer()")
+        creation = creation[creation.index("const auto safe ="):creation.index("    previewSkinBounds =")]
+        resize = extract(preview, "void SettingsScene::renderPreview()")
+        resize = resize[resize.index("const auto safe ="):resize.index("  if (previewSkinBounds != bounds)")]
+        gameplay = extract((root / "src/scene/play/GamePlayScene.cpp").read_text(),
+                           "skin::UiLogicalRect gameplaySkinSafeUiBounds()")
+        menu = (root / "src/scene/MainMenuScene.cpp").read_text()
+        modals = "\n".join(extract(menu, "void MainMenuScene::" + name + "()")
+                           for name in ("resizeTasksModal", "resizeParseLogModal"))
+        source = r'''
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <cmath>
+#include <initializer_list>
+#include <string>
+struct IOSNormalizedSafeAreaInsets { float top=0, left=0, bottom=0, right=0; } native;
+auto GetIOSSafeAreaInsetsNormalized() { return native; }
+namespace rendering { int window_width=800, window_height=1600; }
+namespace skin { struct UiLogicalRect { double x,y,width,height; }; }
+METHODS
+GAMEPLAY
+namespace SettingsSceneShared {
+skin::UiLogicalRect createPreviewBounds() { CREATION return bounds; }
+std::array<double,4> resizePreviewBounds() { RESIZE return bounds; }
+}
+enum class Edge { Top, Right, Bottom, Left };
+struct View {
+  struct LayoutBatchScope {};
+  std::array<float,4> padding{};
+  float width=0,height=0;
+  View *panel=nullptr;
+  View* setPadding(Edge edge,float value) { padding[int(edge)]=value; return this; }
+  View* setWidth(float value) { width=value; return this; }
+  View* setHeight(float value) { height=value; return this; }
+  View* findViewByName(const std::string &) { return panel; }
+  void refreshContentLayout() {}
+};
+auto getSafeAreaInsetsUi() { return MainMenuScene::getSafeAreaInsetsUi(); }
+struct ModalScene {
+  View tasks,parse,tasksPanel,parsePanel,tasksScroll,parseList;
+  View *tasksModalRoot=&tasks,*parseLogModalRoot=&parse;
+  View *tasksScrollView=&tasksScroll,*parseLogRecyclerView=&parseList;
+  ModalScene() { tasks.panel=&tasksPanel;parse.panel=&parsePanel; }
+  void resizeTasksModal();
+  void resizeParseLogModal();
+};
+MODALS
+int main(int argc,char **argv) {
+  assert(argc==2);
+  const bool preview=std::string(argv[1])=="preview";
+  for (bool portrait : {true, false, true}) {
+    rendering::window_width=portrait ? 800 : 1600;
+    rendering::window_height=portrait ? 1600 : 320;
+    for (float bottom : {0.0f, .125f, .25f}) {
+      native={.125f, .125f, bottom, .25f};
+      const auto check=[bottom](auto insets) {
+        assert(insets.bottom==bottom*rendering::window_height);
+        assert(insets.top==rendering::window_height/8);
+        assert(insets.left==rendering::window_width/8);
+        assert(insets.right==rendering::window_width/4);
+      };
+      if (preview) {
+      check(SettingsSceneShared::getSafeAreaInsetsUi());
+      const auto actual=gameplaySkinSafeUiBounds();
+      const auto created=SettingsSceneShared::createPreviewBounds();
+      const auto resized=SettingsSceneShared::resizePreviewBounds();
+      assert(created.x==actual.x && created.y==actual.y &&
+             created.width==actual.width && created.height==actual.height);
+      assert((resized==std::array<double,4>{actual.x,actual.y,actual.width,actual.height}));
+      } else {
+      check(MainMenuScene::getSafeAreaInsetsUi());
+      ModalScene scene;
+      scene.resizeTasksModal();scene.resizeParseLogModal();
+      for (const auto *modal : {&scene.tasks,&scene.parse}) {
+        assert(modal->padding[2]==bottom*rendering::window_height);
+        const float panelBottom=modal->padding[0]+
+            (rendering::window_height-modal->padding[0]-modal->padding[2]+modal->panel->height)/2;
+        assert(panelBottom<=rendering::window_height-bottom*rendering::window_height-16);
+      }
+      }
+    }
+  }
+}
+'''.replace("METHODS", "\n".join(methods)).replace("GAMEPLAY", gameplay)
+        source = source.replace("CREATION", creation).replace("RESIZE", resize)
+        source = source.replace("MODALS", modals.replace("MainMenuScene::", "ModalScene::"))
+        with tempfile.TemporaryDirectory(prefix="asobmashow-safe-bounds-") as temp:
+            path = Path(temp) / "test.cpp"
+            binary = Path(temp) / "test"
+            path.write_text(source)
+            subprocess.run(["c++", "-std=c++20", "-UTARGET_OS_IOS", "-DTARGET_OS_IOS=1",
+                            "-DTARGET_OS_SIMULATOR=0", str(path), "-o", str(binary)], check=True)
+            for scenario in ("preview", "modals"):
+                with self.subTest(scenario=scenario):
+                    subprocess.run([str(binary), scenario], check=True)
+
+    def test_settings_screen_layout_ignores_only_the_bottom_inset(self):
+        root = Path(__file__).resolve().parents[1]
+        shared = (root / "src/scene/SettingsSceneShared.h").read_text()
+        helpers = "\n".join(extract(shared, name) + (";" if name.startswith("struct") else "")
+                            for name in ("struct SafeAreaInsets", "struct LayoutMetrics",
+                                         "inline SafeAreaInsets getSafeAreaInsetsUi()",
+                                         "inline LayoutMetrics resolveLayoutMetrics()"))
+        layout = (root / "src/scene/SettingsSceneLayout.cpp").read_text()
+        init = extract(layout, "void SettingsScene::initView()")
+        root_layout = init[:init.index("  if (previewActive)")] + "}"
+        content_start = init.index("  auto *content = new View();")
+        content_end = init.index("  content->setAlignItems(YGAlignStretch);", content_start)
+        content_layout = init[content_start:content_end]
+        preview = extract(layout, "void SettingsScene::buildPreviewLayout(")
+        height_start = preview.index("  const int panelHeight =")
+        panel_height = preview[height_start:preview.index(";", height_start) + 1]
+        source = r'''
+#include <algorithm>
+#include <array>
+#include <cassert>
+#include <cmath>
+#include <initializer_list>
+#include "rendering/ResponsiveUi.h"
+struct IOSNormalizedSafeAreaInsets { float top=0,left=0,bottom=0,right=0; } native;
+auto GetIOSSafeAreaInsetsNormalized() { return native; }
+namespace rendering { int window_width=800,window_height=1600; }
+HELPERS
+enum class Edge { Top,Right,Bottom,Left };
+enum class FlexDirection { Row,Column };
+struct View {
+  struct LayoutBatchScope {};
+  std::array<float,4> padding{};
+  View()=default;
+  View(int,int,int,int) {}
+  View* setPadding(Edge edge,float value) { padding[int(edge)]=value;return this; }
+  void setFlexDirection(FlexDirection) {}
+  void setGap(float) {}
+  void setFlex(float) {}
+  void setMinHeight(float) {}
+};
+struct SettingsScene { View *rootLayout=nullptr;void addView(View*) {} void initView(); };
+ROOT_LAYOUT
+View* contentLayout(const LayoutMetrics &metrics,bool portrait) {
+  CONTENT_LAYOUT
+  return content;
+}
+int previewPanelHeight(const LayoutMetrics &metrics) {
+  const int foldButtonSize=metrics.compact ? 54 : 58;
+  PANEL_HEIGHT
+  return panelHeight;
+}
+int main() {
+  for (int height : {1600,400,1600}) {
+    rendering::window_height=height;
+    for (float bottom : {0.0f,.125f,.25f}) {
+      native={.125f,.125f,bottom,.25f};
+      const auto metrics=resolveLayoutMetrics();
+      SettingsScene scene;scene.initView();
+      assert(scene.rootLayout->padding[0]==height/8+metrics.verticalPadding);
+      assert(scene.rootLayout->padding[1]==200+metrics.horizontalPadding);
+      assert(scene.rootLayout->padding[3]==100+metrics.horizontalPadding);
+      assert(scene.rootLayout->padding[2]==metrics.verticalPadding);
+      auto *content=contentLayout(metrics,height>rendering::window_width);
+      assert(content->padding[2]==0);
+      assert(previewPanelHeight(metrics)==height-height/8-2*metrics.verticalPadding);
+      delete content;delete scene.rootLayout;
+    }
+  }
+}
+'''.replace("HELPERS", helpers).replace("ROOT_LAYOUT", root_layout)
+        source = source.replace("CONTENT_LAYOUT", content_layout).replace("PANEL_HEIGHT", panel_height)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-settings-insets-") as temp:
+            path = Path(temp) / "test.cpp"
+            binary = Path(temp) / "test"
+            path.write_text(source)
+            subprocess.run(["c++", "-std=c++20", "-UTARGET_OS_IOS", "-DTARGET_OS_IOS=1",
+                            "-DTARGET_OS_SIMULATOR=0", "-I", str(root / "src"),
+                            str(path), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
     def test_main_menu_layout_uses_real_yoga_for_rotation(self):
         root = Path(__file__).resolve().parents[1]
         method = extract((root / "src/scene/MainMenuScene.cpp").read_text(),
@@ -547,6 +734,8 @@ int main() {
         renderer = (root / "src/scene/play/BMSRenderer.cpp").read_text()
         methods = extract(renderer, "float BMSRenderer::gameplayHudTitleWidth() const") + "\n" + extract(
             renderer, "std::array<float, 4> BMSRenderer::gameplayHudTitleRect() const")
+        methods += "\n" + extract(renderer, "float gameplayHudMetricsHeight(bool showPacemaker)")
+        methods += "\n" + extract(renderer, "float gameplayHudMetricsY(bool showPacemaker)")
         source = r'''
 #include <algorithm>
 #include <array>
@@ -574,7 +763,9 @@ int main() {
     rendering::window_height=height;
     const auto rect=renderer.gameplayHudTitleRect();
     assert(rect[0]+rect[2]==1080-10-28);
-    assert(rect[1]+rect[3]==height-40-28);
+    assert(rect[1]+rect[3]==height-28);
+    for (bool pacemaker : {false, true})
+      assert(gameplayHudMetricsY(pacemaker)+gameplayHudMetricsHeight(pacemaker)==height-28);
     assert(rect[0]>=20+28+430+28 && rect[2]>=430);
   }
   renderer.presentationOrientation=player_settings::PresentationOrientation::Landscape;
@@ -781,18 +972,18 @@ int main() {
   scene.resizeResultLayout();
   assert(scene.viewport.background==app_theme::resultBackdrop());
   assert(scene.viewport.width==1080 && scene.viewport.height==2340);
-  assert(scene.root.width==1080 && scene.root.minimum==2110);
-  assert(scroll.margins[0]==140 && scroll.margins[2]==90);
+  assert(scene.root.width==1080 && scene.root.minimum==2200);
+  assert(scroll.margins[0]==140 && scroll.margins[2]==0);
   rendering::safe={160, 0, 100, 0};
   scene.resizeResultLayout();
-  assert(scene.root.minimum==2080 && scroll.margins[0]==160);
+  assert(scene.root.minimum==2180 && scroll.margins[0]==160 && scroll.margins[2]==0);
   rendering::window_width=2340;
   rendering::window_height=1080;
   rendering::safe={0, 140, 60, 140};
   scene.resizeResultLayout();
   assert(scene.viewport.background==app_theme::resultBackdrop());
   assert(scene.viewport.width==2340 && scene.viewport.height==1080);
-  assert(scene.root.width==2060 && scene.root.minimum==1020);
+  assert(scene.root.width==2060 && scene.root.minimum==1080 && scroll.margins[2]==0);
   assert(scene.controls.width==2340 && scene.controls.height==1080);
 }
 '''.replace("PRODUCTION_METHOD", method)
@@ -842,6 +1033,10 @@ int main() {
         root = Path(__file__).resolve().parents[1]
         method = extract((root / "src/main.cpp").read_text(),
                          "void resetViewTransform(uint16_t bgaWidth, uint16_t bgaHeight,")
+        renderer = (root / "src/scene/play/BMSRenderer.cpp").read_text()
+        configure = extract(renderer, "void BMSRenderer::configure(")
+        frame_start = configure.index("const auto frame = rendering::framePortraitPlayfield(")
+        frame_call = configure[frame_start:configure.index(";", frame_start) + 1]
         source = r'''
 #include <algorithm>
 #include "rendering/PortraitPlayfieldFraming.h"
@@ -876,8 +1071,8 @@ namespace rendering {
 int window_width = 1920, window_height = 1080, render_width = 1920, render_height = 1080;
 int ui_offset_x = 0, ui_offset_y = 0, ui_view_width = 1920, ui_view_height = 1080;
 constexpr int ui_view = 0, bga_view = 1, bga_layer_view = 2, clear_view = 3;
-struct Insets { int top=0, right=0, bottom=0, left=0; };
-Insets uiSafeAreaInsets() { return {}; }
+struct Insets { int top=0, right=0, bottom=0, left=0; } safe;
+Insets uiSafeAreaInsets() { return safe; }
 Camera game_camera;
 Camera* main_camera = &game_camera;
 }
@@ -890,6 +1085,12 @@ struct AppSettings {
   float playAreaWidthForKeyMode(int) const { return 8; }
 };
 PRODUCTION_METHOD
+auto configuredRendererFrame(float configuredLaneLength, float playAreaWidth,
+                             float angle, float aspect) {
+  const auto safe=rendering::uiSafeAreaInsets();
+  RENDERER_FRAME_CALL
+  return frame;
+}
 int main() {
   using namespace rendering;
   AppSettings settings;
@@ -908,9 +1109,21 @@ int main() {
     const float visibleWidth = 2 * depthAtJudge * std::tan(bx::toRad(60))
                                * game_camera.aspect;
     assert(visibleWidth >= 8 && "portrait camera must show scratch and all seven keys");
+    safe={120,20,0,30};
+    resetViewTransform(1080,height,4,5,6,settings);
+    const auto eye=game_camera.eye, target=game_camera.at;
+    safe.bottom=120;
+    const auto frame=configuredRendererFrame(settings.laneLength, 8,
+        settings.laneAngleDegrees, float(window_width)/window_height);
+    assert(-frame.cameraDepth==eye.z && frame.lookAtY==target.y &&
+           "renderer reconfiguration must keep the same edge-to-edge framing");
+    resetViewTransform(1080,height,4,5,6,settings);
+    assert(game_camera.eye.z==eye.z && game_camera.at.y==target.y &&
+           "bottom safe area must not shift or shrink the built-in playfield");
+    safe={};
   }
 }
-'''.replace("PRODUCTION_METHOD", method)
+'''.replace("PRODUCTION_METHOD", method).replace("RENDERER_FRAME_CALL", frame_call)
         with tempfile.TemporaryDirectory(prefix="asobmashow-portrait-camera-") as temp:
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
