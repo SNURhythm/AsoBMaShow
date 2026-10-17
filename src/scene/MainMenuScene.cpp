@@ -466,8 +466,7 @@ SafeAreaInsets getSafeAreaInsetsUi() {
       normalized.left * static_cast<float>(rendering::window_width)));
   insets.right = static_cast<int>(std::lround(
       normalized.right * static_cast<float>(rendering::window_width)));
-  insets.bottom = static_cast<int>(std::lround(
-      normalized.bottom * static_cast<float>(rendering::window_height)));
+  // Preserve the original edge-to-edge bottom layout for this scene.
 #endif
   return insets;
 }

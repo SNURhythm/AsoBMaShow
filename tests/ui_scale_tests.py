@@ -10,6 +10,49 @@ from gameplay_terminal_scene_extract import extract
 
 
 class UiScaleTests(unittest.TestCase):
+    def test_main_menu_and_settings_keep_original_bottom_inset_policy(self):
+        root = Path(__file__).resolve().parents[1]
+        methods = []
+        for name in ("MainMenuScene.cpp", "SettingsSceneShared.h"):
+            production = (root / "src/scene" / name).read_text()
+            namespace = Path(name).stem
+            methods.append("namespace " + namespace + " {\n" +
+                           extract(production, "struct SafeAreaInsets") + ";\n" +
+                           extract(production, "SafeAreaInsets getSafeAreaInsetsUi()") + "\n}")
+        source = r'''
+#include <cassert>
+#include <cmath>
+#include <initializer_list>
+struct IOSNormalizedSafeAreaInsets { float top=0, left=0, bottom=0, right=0; } native;
+auto GetIOSSafeAreaInsetsNormalized() { return native; }
+namespace rendering { int window_width=800, window_height=1600; }
+METHODS
+int main() {
+  for (bool portrait : {true, false, true}) {
+    rendering::window_width=portrait ? 800 : 1600;
+    rendering::window_height=portrait ? 1600 : 800;
+    for (float bottom : {0.0f, .125f, .25f}) {
+      native={.125f, .125f, bottom, .25f};
+      const auto check=[](auto insets) {
+        assert(insets.bottom==0 && "Main Menu and Settings retain their original edge-to-edge bottom layout");
+        assert(insets.top==rendering::window_height/8);
+        assert(insets.left==rendering::window_width/8);
+        assert(insets.right==rendering::window_width/4);
+      };
+      check(MainMenuScene::getSafeAreaInsetsUi());
+      check(SettingsSceneShared::getSafeAreaInsetsUi());
+    }
+  }
+}
+'''.replace("METHODS", "\n".join(methods))
+        with tempfile.TemporaryDirectory(prefix="asobmashow-bottom-insets-") as temp:
+            path = Path(temp) / "test.cpp"
+            binary = Path(temp) / "test"
+            path.write_text(source)
+            subprocess.run(["c++", "-std=c++20", "-DTARGET_OS_IOS=1",
+                            "-DTARGET_OS_SIMULATOR=0", str(path), "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
     def test_main_menu_layout_uses_real_yoga_for_rotation(self):
         root = Path(__file__).resolve().parents[1]
         method = extract((root / "src/scene/MainMenuScene.cpp").read_text(),
@@ -547,6 +590,8 @@ int main() {
         renderer = (root / "src/scene/play/BMSRenderer.cpp").read_text()
         methods = extract(renderer, "float BMSRenderer::gameplayHudTitleWidth() const") + "\n" + extract(
             renderer, "std::array<float, 4> BMSRenderer::gameplayHudTitleRect() const")
+        methods += "\n" + extract(renderer, "float gameplayHudMetricsHeight(bool showPacemaker)")
+        methods += "\n" + extract(renderer, "float gameplayHudMetricsY(bool showPacemaker)")
         source = r'''
 #include <algorithm>
 #include <array>
@@ -574,7 +619,9 @@ int main() {
     rendering::window_height=height;
     const auto rect=renderer.gameplayHudTitleRect();
     assert(rect[0]+rect[2]==1080-10-28);
-    assert(rect[1]+rect[3]==height-40-28);
+    assert(rect[1]+rect[3]==height-28);
+    for (bool pacemaker : {false, true})
+      assert(gameplayHudMetricsY(pacemaker)+gameplayHudMetricsHeight(pacemaker)==height-28);
     assert(rect[0]>=20+28+430+28 && rect[2]>=430);
   }
   renderer.presentationOrientation=player_settings::PresentationOrientation::Landscape;
@@ -781,18 +828,18 @@ int main() {
   scene.resizeResultLayout();
   assert(scene.viewport.background==app_theme::resultBackdrop());
   assert(scene.viewport.width==1080 && scene.viewport.height==2340);
-  assert(scene.root.width==1080 && scene.root.minimum==2110);
-  assert(scroll.margins[0]==140 && scroll.margins[2]==90);
+  assert(scene.root.width==1080 && scene.root.minimum==2200);
+  assert(scroll.margins[0]==140 && scroll.margins[2]==0);
   rendering::safe={160, 0, 100, 0};
   scene.resizeResultLayout();
-  assert(scene.root.minimum==2080 && scroll.margins[0]==160);
+  assert(scene.root.minimum==2180 && scroll.margins[0]==160 && scroll.margins[2]==0);
   rendering::window_width=2340;
   rendering::window_height=1080;
   rendering::safe={0, 140, 60, 140};
   scene.resizeResultLayout();
   assert(scene.viewport.background==app_theme::resultBackdrop());
   assert(scene.viewport.width==2340 && scene.viewport.height==1080);
-  assert(scene.root.width==2060 && scene.root.minimum==1020);
+  assert(scene.root.width==2060 && scene.root.minimum==1080 && scroll.margins[2]==0);
   assert(scene.controls.width==2340 && scene.controls.height==1080);
 }
 '''.replace("PRODUCTION_METHOD", method)
@@ -842,6 +889,10 @@ int main() {
         root = Path(__file__).resolve().parents[1]
         method = extract((root / "src/main.cpp").read_text(),
                          "void resetViewTransform(uint16_t bgaWidth, uint16_t bgaHeight,")
+        renderer = (root / "src/scene/play/BMSRenderer.cpp").read_text()
+        configure = extract(renderer, "void BMSRenderer::configure(")
+        frame_start = configure.index("const auto frame = rendering::framePortraitPlayfield(")
+        frame_call = configure[frame_start:configure.index(";", frame_start) + 1]
         source = r'''
 #include <algorithm>
 #include "rendering/PortraitPlayfieldFraming.h"
@@ -876,8 +927,8 @@ namespace rendering {
 int window_width = 1920, window_height = 1080, render_width = 1920, render_height = 1080;
 int ui_offset_x = 0, ui_offset_y = 0, ui_view_width = 1920, ui_view_height = 1080;
 constexpr int ui_view = 0, bga_view = 1, bga_layer_view = 2, clear_view = 3;
-struct Insets { int top=0, right=0, bottom=0, left=0; };
-Insets uiSafeAreaInsets() { return {}; }
+struct Insets { int top=0, right=0, bottom=0, left=0; } safe;
+Insets uiSafeAreaInsets() { return safe; }
 Camera game_camera;
 Camera* main_camera = &game_camera;
 }
@@ -890,6 +941,12 @@ struct AppSettings {
   float playAreaWidthForKeyMode(int) const { return 8; }
 };
 PRODUCTION_METHOD
+auto configuredRendererFrame(float configuredLaneLength, float playAreaWidth,
+                             float angle, float aspect) {
+  const auto safe=rendering::uiSafeAreaInsets();
+  RENDERER_FRAME_CALL
+  return frame;
+}
 int main() {
   using namespace rendering;
   AppSettings settings;
@@ -908,9 +965,21 @@ int main() {
     const float visibleWidth = 2 * depthAtJudge * std::tan(bx::toRad(60))
                                * game_camera.aspect;
     assert(visibleWidth >= 8 && "portrait camera must show scratch and all seven keys");
+    safe={120,20,0,30};
+    resetViewTransform(1080,height,4,5,6,settings);
+    const auto eye=game_camera.eye, target=game_camera.at;
+    safe.bottom=120;
+    const auto frame=configuredRendererFrame(settings.laneLength, 8,
+        settings.laneAngleDegrees, float(window_width)/window_height);
+    assert(-frame.cameraDepth==eye.z && frame.lookAtY==target.y &&
+           "renderer reconfiguration must keep the same edge-to-edge framing");
+    resetViewTransform(1080,height,4,5,6,settings);
+    assert(game_camera.eye.z==eye.z && game_camera.at.y==target.y &&
+           "bottom safe area must not shift or shrink the built-in playfield");
+    safe={};
   }
 }
-'''.replace("PRODUCTION_METHOD", method)
+'''.replace("PRODUCTION_METHOD", method).replace("RENDERER_FRAME_CALL", frame_call)
         with tempfile.TemporaryDirectory(prefix="asobmashow-portrait-camera-") as temp:
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
