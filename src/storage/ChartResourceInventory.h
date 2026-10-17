@@ -1,0 +1,66 @@
+#pragma once
+
+#include "StorageTypes.h"
+#include "../audio/ChartVisualAssetResolver.h"
+
+#include <map>
+
+namespace storage_management {
+
+struct FolderSelection {
+  std::string groupId;
+  std::filesystem::path path;
+  bool writableLocal = true;
+  bool chartPathFallback = false;
+};
+struct InventoryRequest {
+  std::vector<FolderSelection> groups;
+  StoragePolicy policy;
+  bool isolatedStaging = false;
+};
+struct FileIdentity {
+  std::uint64_t bytes = 0;
+  std::filesystem::file_time_type modified;
+  std::uint64_t device = 0;
+  std::uint64_t fileId = 0;
+  bool operator==(const FileIdentity &) const = default;
+};
+enum class AssetOperation { LosslessFlac, LossyVorbis, CompressH264, Delete };
+struct AssetCandidate {
+  std::filesystem::path source;
+  std::filesystem::path destination;
+  asobmshow::chart_assets::MediaKind kind = asobmshow::chart_assets::MediaKind::Other;
+  AssetOperation operation = AssetOperation::LosslessFlac;
+  std::vector<std::string> groups;
+  FileIdentity identity;
+};
+struct GroupStorageMeasurement {
+  std::string groupId;
+  std::filesystem::path root;
+  std::optional<std::uint64_t> totalBytes;
+  std::uint64_t audioBytes = 0;
+  std::uint64_t videoBytes = 0;
+  std::uint64_t imageBytes = 0;
+  StorageDiagnostic reason;
+};
+struct StorageInventory {
+  InventoryRequest request;
+  std::vector<AssetCandidate> candidates;
+  std::vector<GroupStorageMeasurement> groups;
+  std::vector<FileResult> skips;
+  std::map<std::filesystem::path, FileIdentity> files;
+  std::map<std::filesystem::path, std::filesystem::file_time_type> directories;
+  std::optional<std::uint64_t> totalBytes;
+  bool complete = true;
+  bool cancelled = false;
+};
+
+// Rejects symlink components rather than canonicalizing through them.
+bool IsSafeLocalPath(const std::filesystem::path &path, std::string &error);
+std::optional<FileIdentity> ReadFileIdentity(const std::filesystem::path &path,
+                                           std::string &error);
+bool IsWithinFolder(const std::filesystem::path &path, const std::filesystem::path &folder);
+StorageInventory BuildInventory(const InventoryRequest &, Checkpoint = {}, ProgressCallback = {});
+bool RevalidateInventory(const StorageInventory &, Checkpoint, std::string &error);
+
+} // namespace storage_management

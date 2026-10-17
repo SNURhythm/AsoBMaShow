@@ -1,4 +1,5 @@
 #include "Jukebox.h"
+#include "ChartVisualAssetResolver.h"
 #include "../ArchiveSourceIdentity.h"
 #include "../targets.h"
 #if TARGET_OS_ANDROID
@@ -566,16 +567,6 @@ void prepareAndroidChartAssetDirectoryCache(bms_parser::Chart &chart,
 }
 #endif
 
-std::vector<std::string_view> toExtensionViews(const std::string *extensions,
-                                               size_t count) {
-  std::vector<std::string_view> views;
-  views.reserve(count);
-  for (size_t i = 0; i < count; ++i) {
-    views.emplace_back(extensions[i]);
-  }
-  return views;
-}
-
 std::vector<std::string_view> makeAudioExtensionViews() {
   return std::vector<std::string_view>(
       asobmshow::chart_assets::kAudioExtensions.begin(),
@@ -584,15 +575,11 @@ std::vector<std::string_view> makeAudioExtensionViews() {
 
 std::optional<std::filesystem::path>
 findWithReplacedExtensions(const std::filesystem::path &basePath,
-                           const std::string *extensions, size_t count) {
-  for (size_t i = 0; i < count; ++i) {
-    std::filesystem::path path = basePath;
-    path.replace_extension(extensions[i]);
-    if (auto resolved = archive_file::findFileWithExtensions(path, {})) {
-      return resolved;
-    }
-  }
-  return std::nullopt;
+                           std::span<const std::string_view> extensions) {
+  return asobmshow::chart_assets::FindWithReplacedExtensions(basePath, extensions,
+      [](const std::filesystem::path &path) {
+        return archive_file::findFileWithExtensions(path, {});
+      });
 }
 
 unsigned char *decodeImageBytes(const std::vector<unsigned char> &bytes,
@@ -819,15 +806,9 @@ public:
 
   std::optional<std::filesystem::path>
   findReplacedExtensions(const std::filesystem::path &innerPath,
-                         const std::string *extensions, size_t count) const {
-    for (size_t i = 0; i < count; ++i) {
-      std::filesystem::path candidate = innerPath;
-      candidate.replace_extension(extensions[i]);
-      if (const auto resolved = findExactOrLower(candidate)) {
-        return resolved;
-      }
-    }
-    return std::nullopt;
+                         std::span<const std::string_view> extensions) const {
+    return asobmshow::chart_assets::FindWithReplacedExtensions(innerPath, extensions,
+        [this](const std::filesystem::path &path) { return findExactOrLower(path); });
   }
 
 private:
@@ -2457,8 +2438,7 @@ void Jukebox::loadBMPs(bms_parser::Chart &chart,
     return;
   }
 
-  const auto imageExtensionViews =
-      toExtensionViews(imageExtensions, std::size(imageExtensions));
+  const auto &imageExtensionViews = asobmshow::chart_assets::kImageExtensions;
   std::vector<int> bmpIds;
   bmpIds.reserve(bmpTable.size());
   for (const auto &[bmpId, bmpPath] : bmpTable) {
@@ -2479,7 +2459,7 @@ void Jukebox::loadBMPs(bms_parser::Chart &chart,
     std::filesystem::path path;
 
     if (auto resolvedVideoPath = findWithReplacedExtensions(
-            basePath, videoExtensions, std::size(videoExtensions))) {
+            basePath, asobmshow::chart_assets::kVideoExtensions)) {
       if (isCancelled)
         return;
       path = *resolvedVideoPath;
@@ -2526,8 +2506,7 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
   }
 
   const std::vector<std::string_view> noExtensions;
-  const auto imageExtensionViews =
-      toExtensionViews(imageExtensions, std::size(imageExtensions));
+  const auto &imageExtensionViews = asobmshow::chart_assets::kImageExtensions;
   std::unordered_map<path_t, ArchiveAssetBatch> imageBatches;
   std::unordered_map<path_t, ArchiveAssetBatch> videoBatches;
   std::vector<path_t> imageBatchOrder;
@@ -2551,14 +2530,14 @@ bool Jukebox::loadArchivedBMPs(bms_parser::Chart &chart,
     if (baseIsVirtual) {
       if (ArchiveEntryLookup *lookup = getArchiveLookup(archivePath, lookups)) {
         if (const auto resolvedInner = lookup->findReplacedExtensions(
-                innerPath, videoExtensions, std::size(videoExtensions))) {
+                innerPath, asobmshow::chart_assets::kVideoExtensions)) {
           resolvedVideoPath =
               archive_file::makeVirtualPath(archivePath, *resolvedInner);
         }
       }
     } else {
       resolvedVideoPath = findWithReplacedExtensions(
-          basePath, videoExtensions, std::size(videoExtensions));
+          basePath, asobmshow::chart_assets::kVideoExtensions);
     }
     if (resolvedVideoPath.has_value()) {
       if (!addArchiveAssetTarget(videoBatches, videoBatchOrder,
@@ -2772,8 +2751,7 @@ std::vector<Jukebox::ResolvedVisualAsset>
 Jukebox::resolveVisualAssets(bms_parser::Chart &chart,
                              const ChartResourceTable &bmpTable,
                              std::atomic_bool &isCancelled) {
-  const auto imageExtensionViews =
-      toExtensionViews(imageExtensions, std::size(imageExtensions));
+  const auto &imageExtensionViews = asobmshow::chart_assets::kImageExtensions;
   const std::vector<std::string_view> noExtensions;
   std::unordered_map<path_t, ArchiveEntryLookup> lookups;
   std::vector<ResolvedVisualAsset> assets;
@@ -2795,14 +2773,14 @@ Jukebox::resolveVisualAssets(bms_parser::Chart &chart,
     if (baseIsVirtual) {
       if (ArchiveEntryLookup *lookup = getArchiveLookup(archivePath, lookups)) {
         if (const auto resolvedInner = lookup->findReplacedExtensions(
-                innerPath, videoExtensions, std::size(videoExtensions))) {
+                innerPath, asobmshow::chart_assets::kVideoExtensions)) {
           resolvedVideoPath =
               archive_file::makeVirtualPath(archivePath, *resolvedInner);
         }
       }
     } else {
       resolvedVideoPath = findWithReplacedExtensions(
-          basePath, videoExtensions, std::size(videoExtensions));
+          basePath, asobmshow::chart_assets::kVideoExtensions);
     }
 
     if (resolvedVideoPath.has_value()) {

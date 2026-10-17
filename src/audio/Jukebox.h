@@ -465,10 +465,6 @@ private:
   std::atomic<int> bgaDisplayMode{
       static_cast<int>(AppSettings::BgaDisplayMode::Fit)};
   std::atomic<float> embeddedBgaBrightness{1.0F};
-  const std::string videoExtensions[9] = {"mp4",  "wmv", "m4v", "webm", "mpg",
-                                          "mpeg", "m1v", "m2v", "avi"};
-  const std::string imageExtensions[6] = {"jpg", "jpeg", "gif",
-                                          "bmp", "png",  "tga"};
   struct PreparedBgaFrameKey {
     std::uint64_t frameSerial = 0;
     std::int64_t bgaTimeMicros = 0;

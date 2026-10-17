@@ -1,4 +1,6 @@
 #include "audio/ArchiveAssetPipeline.h"
+#include "audio/ChartVisualAssetResolver.h"
+#include "FileExtensionResolver.h"
 #include "RAII.h"
 
 #include <atomic>
@@ -7,6 +9,7 @@
 #include <future>
 #include <iostream>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 
 namespace {
@@ -303,6 +306,24 @@ void testBufferedDecodePriorityPreservesContinuousProduction() {
 
 int main() {
   try {
+    for (const auto &root : {std::filesystem::path("local"), std::filesystem::path("archive/inner")}) {
+      std::set<std::filesystem::path> files{root / "movie.mpg", root / "movie.mp4",
+                                           root / "movie.png", root / "sound.wav", root / "sound.flac"};
+      const auto lookup = [&](const std::filesystem::path &path) -> std::optional<std::filesystem::path> {
+        return files.contains(path) ? std::optional(path) : std::nullopt;
+      };
+      using namespace asobmshow::chart_assets;
+      auto video = ResolveVisualAsset(root / "movie.png", lookup);
+      require(video && video->path == root / "movie.mp4" && video->video,
+              "visual resolution preserves video-before-image and MP4-first priority");
+      files.erase(root / "movie.mp4");
+      files.erase(root / "movie.mpg");
+      auto image = ResolveVisualAsset(root / "movie.mpg", lookup);
+      require(image && image->path == root / "movie.png" && !image->video,
+              "visual resolution falls back to supported images for local/archive lookups");
+      require(file_extension_resolver::find(root / "sound.wav", kAudioExtensions, lookup) == root / "sound.wav",
+              "audio resolution remains authored-path-first");
+    }
     testBufferedDecodePriorityPreservesContinuousProduction();
     testConsumptionOverlapsProductionAndRetainsBudget(9, 1);
     testConsumptionOverlapsProductionAndRetainsBudget(1, 9);

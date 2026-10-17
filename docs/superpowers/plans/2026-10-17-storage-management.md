@@ -175,29 +175,29 @@ returning an optional resolved path; return path plus video/image kind. The help
 must work with existing local and archive lookups. Share the ordered extension
 lists with inventory classification and filesystem collision checks.
 
-- [ ] Add failing fixtures for Unicode/mixed-case paths, subfolders, overlapping
+- [x] Add failing fixtures for Unicode/mixed-case paths, subfolders, overlapping
   roots, preserved images, preview audio, unreadable folders, links, virtual
   sources, and cancellation. Use tiny text/assets, no media decoding.
-- [ ] Add a folder fixture with a representative chart and a sabun using disjoint
+- [x] Add a folder fixture with a representative chart and a sabun using disjoint
   audio/video, nested media, and unreferenced media. Assert each eligible file
   enters compression once. Changing representative/index/UI expansion must not
   change inventory. Malformed chart text must not prevent enumeration. Delete BGA
   must include all supported videos and preserve all audio/images.
-- [ ] Test same-stem audio/video alternatives: skip ambiguous conversions without
+- [x] Test same-stem audio/video alternatives: skip ambiguous conversions without
   scanning chart references. Test visual extension priority and ensure deletion
   enumerates every video alternative while preserving same-stem images.
-- [ ] Run the target to confirm failures, then extract visual resolution from
+- [x] Run the target to confirm failures, then extract visual resolution from
   all three Jukebox paths (ordinary loading, archive loading, reconciled assets).
   Preserve its current priority and audio's exact-path-first behavior.
-- [ ] Implement bounded recursive filesystem enumeration, selected-folder unions,
+- [x] Implement bounded recursive filesystem enumeration, selected-folder unions,
   classification, byte totals, and conservative collision checks. Resolve
   chart-path fallback groups to their containing folder. Reject unsupported
   paths/links/backends and report unreadable scopes. No chart declaration scan,
   parser, or ownership graph is part of this feature.
-- [ ] Verify `storage_inventory_tests` and `archive_asset_pipeline_tests`; label
+- [x] Verify `storage_inventory_tests` and `archive_asset_pipeline_tests`; label
   inventory tests `area_library`, `area_audio`, and `area_video`. Run `tests_audio`
   and the archive target because shared runtime resolution changed.
-- [ ] Commit `feat: inventory chart storage with shared asset resolution`.
+- [x] Commit `feat: inventory chart storage with shared asset resolution`.
 
 ## Task 3: Recoverable file changes and private staging
 

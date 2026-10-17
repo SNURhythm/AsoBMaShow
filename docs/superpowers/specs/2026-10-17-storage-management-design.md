@@ -1,8 +1,8 @@
 # Storage management and download storage saving
 
-Status: proposed for review. This document and its companion implementation plan
-are the deliverables of the current planning task; product implementation has
-not started.
+Status: implementation in progress. The companion plan tracks completed tasks.
+Latest agreed scope: recursive folder-wide operations without chart-reference
+scanning; BGA deletion removes videos and preserves all images.
 
 ## Intent and agreed requirements
 
