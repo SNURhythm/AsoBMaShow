@@ -451,8 +451,8 @@ Replay investigation so far (source tracing only):
   Original persisted evidence has not been changed. Findings 2, 3 and 6 remain
   pending final upstream coordination and follow-up implementation.
 
-The implementation plan and verification record are in
-[`../superpowers/plans/2026-10-04-parser-consumer-fixes.md`](../superpowers/plans/2026-10-04-parser-consumer-fixes.md).
+The implementation revisions, verification record, and final continuation are
+recorded below.
 
 Local implementation commit: `b64bf3d4` (`fix: harden parser timing, mine recount
 and metadata rebuild`). Per the user's latest instruction, it has **not been

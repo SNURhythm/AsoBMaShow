@@ -1,8 +1,8 @@
 # Refactoring follow-up proportionality review
 
 Reviewed 2026-09-13 at source commit 383ec028, covering all 66 entries in
-[the follow-up record](../refactoring-next-targets.md). The user requested that
-the broad sweep end, then asked whether these changes cover real cases and
+[the historical follow-up record](https://github.com/SNURhythm/AsoBMaShow/blob/383ec028/docs/refactoring-next-targets.md).
+The user requested that the broad sweep end, then asked whether these changes cover real cases and
 whether protections for rare cases impose disproportionate cost.
 
 ## Decision

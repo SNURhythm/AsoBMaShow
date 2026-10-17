@@ -48,8 +48,8 @@ LEDGER_PATH = (
 )
 SKIN_ROOT = Path("src/bms/player/beatoraja/skin")
 SELECT_ROOT = Path("src/bms/player/beatoraja/select")
-CORE_PLAN = "docs/superpowers/plans/2026-09-01-beatoraja-type5-compatibility-core.md"
-RUNTIME_PLAN = "docs/superpowers/plans/2026-09-01-beatoraja-music-select-runtime.md"
+# The v1 ledger keeps its "plan" key, but cites the durable design specification.
+MUSIC_SELECT_SPEC = "docs/superpowers/specs/2026-09-01-beatoraja-lua-music-select-design.md"
 
 SELECT_SOURCES = (
     "MusicSelector.java",
@@ -392,21 +392,21 @@ def _extract(root: Path) -> dict:
 def _owning_task(identifier: str) -> tuple[str, str]:
     if identifier.startswith(("json.field.", "lua.object-field.", "select.loader.",
                               "select.lua-loader.")):
-        return CORE_PLAN, "Task 3: Exact type-5 Lua table decoder"
+        return MUSIC_SELECT_SPEC, "Exact type-5 Lua table decoder"
     if identifier.startswith(("select.skin-bar.", "select.behavior.skin-bar.",
                               "select.behavior.skin-distribution-graph.",
                               "select.loader.json-select.")):
-        return CORE_PLAN, "Task 4: SkinBar canonical expansion"
+        return MUSIC_SELECT_SPEC, "SkinBar canonical expansion"
     if identifier.startswith(("select.property.",)):
-        return RUNTIME_PLAN, "Task 4: Complete property, timer, and writer projection"
+        return MUSIC_SELECT_SPEC, "Complete property, timer, and writer projection"
     if identifier.startswith(("select.input.",)):
-        return RUNTIME_PLAN, "Task 3: Music-select input processor"
+        return MUSIC_SELECT_SPEC, "Music-select input processor"
     if identifier.startswith(("select.bar-class.", "select.bar-behavior.",
                               "select.behavior.bar-renderer.")):
-        return RUNTIME_PLAN, "Task 2: Bar manager and renderer model"
+        return MUSIC_SELECT_SPEC, "Bar manager and renderer model"
     if identifier.startswith("select.behavior.music-selector."):
-        return RUNTIME_PLAN, "Task 5: Complete source event and command controller"
-    return CORE_PLAN, "Task 5: Music-select state bridge and session"
+        return MUSIC_SELECT_SPEC, "Complete source event and command controller"
+    return MUSIC_SELECT_SPEC, "Music-select state bridge and session"
 
 
 def make_ledger(surface: dict) -> dict:

@@ -28,6 +28,18 @@ is represented through a platform document contract. iOS source membership is
 filesystem-synchronized; follow the repository instructions instead of adding
 ordinary sources manually to Xcode project metadata.
 
+Android's DocumentsProvider exposes the whole user-visible Documents subtree,
+including BMS, databases, profiles, skins, and exports. It shares the native
+path: external-files/Documents, with internal-files/Documents as fallback.
+Caches, import staging, credentials, and private skin state stay outside it.
+Provider mutations validate containment, names, root protection, and symlinks.
+BMS edits coalesce until writers close and the app resumes, then request a
+normal library refresh; pending changes survive process restarts. Other edits
+do not trigger scanning. This testing layout has no migration from the earlier
+flat files root. Restricted-file access is the default flavor; all-files access
+is explicit. Current archive import choices are described in the retained
+[SAF archive specification](../superpowers/specs/2026-10-08-android-archive-reference-import-design.md).
+
 ## Verification
 
 Use Android Java unit tests, `platform_document_handoff_tests`, Android/iOS
