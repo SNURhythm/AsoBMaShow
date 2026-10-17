@@ -3919,7 +3919,9 @@ void testConcurrentZipMappingFallback() {
 } // namespace
 
 int RunStorageMeasurementTests();
+int RunStorageInventoryTaskTests();
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string(argv[1]) == "--storage-inventory-task") return RunStorageInventoryTaskTests();
   if (argc == 2 && std::string(argv[1]) == "--storage-measurement") return RunStorageMeasurementTests();
   if (argc == 2 && std::string(argv[1]) == "--index-visitor") {
     testIndexVisitorStreamsAndReleasesStorageOnlyIndexes();

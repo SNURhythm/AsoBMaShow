@@ -1,27 +1,48 @@
 #pragma once
-#include "ChartResourceInventory.h"
+#include "StorageMeasurement.h"
+#include "StoragePreflight.h"
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <thread>
 
 namespace storage_management {
-// Read-only work owned by the browser. No view, scene or application pointers
-// cross into the worker; cancelling joins before retiring its immutable result.
+enum class StorageInventoryMode { Measurements, Preflight };
+struct StorageInventoryTaskResult {
+  StorageInventoryMode mode = StorageInventoryMode::Measurements;
+  bool complete = false, cancelled = false;
+  std::optional<StoragePreflight> preflight;
+};
+struct StorageInventoryTaskBuilders {
+  std::function<StorageMeasurements(const InventoryRequest &, Checkpoint, MeasurementCallback, std::stop_token)> measurements;
+  std::function<StoragePreflight(const InventoryRequest &, Checkpoint, std::stop_token)> preflight;
+  std::function<std::chrono::steady_clock::time_point()> now;
+  std::function<void()> wake;
+};
+// The browser owns a single generation. Replacing it cancels and joins before
+// retiring its queues; workers never capture view or application pointers.
 class StorageInventoryTask {
 public:
-  using Builder = std::function<StorageInventory(const InventoryRequest &, Checkpoint)>;
-  explicit StorageInventoryTask(Builder builder = {});
+  explicit StorageInventoryTask(StorageInventoryTaskBuilders = {});
   ~StorageInventoryTask();
-  void Start(InventoryRequest);
+  void StartMeasurements(InventoryRequest);
+  void StartPreflight(InventoryRequest);
   void Cancel();
-  std::optional<StorageInventory> TakeResult();
+  std::vector<GroupStorageMeasurement> TakeMeasurements();
+  std::optional<StorageInventoryTaskResult> TakeResult();
 private:
+  void Start(InventoryRequest, StorageInventoryMode);
   struct State {
     std::mutex mutex;
-    std::optional<StorageInventory> result;
+    std::map<std::string, GroupStorageMeasurement> measurements;
+    std::optional<StorageInventoryTaskResult> result;
+    std::optional<std::chrono::steady_clock::time_point> published, notified;
+    bool finished = false;
+    std::uint64_t generation = 0;
   };
-  Builder builder_;
+  StorageInventoryTaskBuilders builders_;
   std::shared_ptr<State> state_;
   std::jthread worker_;
+  std::uint64_t generation_ = 0;
 };
 }

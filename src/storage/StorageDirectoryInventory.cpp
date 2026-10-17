@@ -161,3 +161,12 @@ bool VisitStorageDirectory(const fs::path &path, const fs::path &accessRoot,
   return keepGoing(check, error);
 }
 }
+
+namespace storage_management {
+std::string StorageDirectorySourceIdentity(const StorageDirectoryStamp &stamp) {
+  const auto seconds = std::chrono::floor<std::chrono::seconds>(stamp.modified.time_since_epoch());
+  const auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(stamp.modified.time_since_epoch() - seconds);
+  return std::to_string(stamp.device) + ':' + std::to_string(stamp.fileId) + ':' +
+      std::to_string(seconds.count()) + ':' + std::to_string(nanos.count());
+}
+}

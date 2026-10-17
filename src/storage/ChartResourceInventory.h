@@ -22,6 +22,7 @@ struct InventoryRequest {
   bool isolatedStaging = false;
   // Trusted sandbox/bookmark boundaries; empty retains the full filesystem walk.
   std::vector<std::filesystem::path> pathAccessRoots;
+  std::filesystem::path scanScratchRoot;
 };
 enum class AssetOperation { LosslessFlac, LossyVorbis, CompressH264, Delete };
 struct AssetCandidate {
@@ -43,6 +44,7 @@ struct GroupStorageMeasurement {
   StorageDiagnostic reason;
   StorageSourceKind sourceKind = StorageSourceKind::Local;
   std::string sourceIdentity;
+  std::uint64_t generation = 0;
 };
 struct StorageInventory {
   InventoryRequest request;

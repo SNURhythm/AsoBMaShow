@@ -35,5 +35,5 @@ public:
   std::vector<Track> SelectedGroups() const;
 private:
   std::vector<Track> groups_;
-  std::set<std::string> selected_;
+  std::set<std::string> selected_, available_;
 };

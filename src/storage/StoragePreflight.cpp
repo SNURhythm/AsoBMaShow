@@ -153,6 +153,7 @@ StoragePreflight BuildStoragePreflight(const InventoryRequest &request, Checkpoi
       if (const auto found = positions.find(batch.job.path); found != positions.end()) for (const auto position : found->second) {
         auto &measured = result.groups[position]; measured.reason = batch.reason;
         if (batch.reason.code == StorageReason::None) {
+          measured.sourceIdentity = StorageDirectorySourceIdentity(batch.stamp);
           measured.totalBytes = batch.totals.bytes; measured.audioBytes = batch.totals.audio;
           measured.videoBytes = batch.totals.video; measured.imageBytes = batch.totals.image;
         }

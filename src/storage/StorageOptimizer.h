@@ -1,6 +1,7 @@
 #pragma once
 
 #include "StorageFileTransaction.h"
+#include "StoragePreflight.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -51,6 +52,7 @@ struct OptimizationRequest {
   InventoryRequest inventory;
   StoragePolicy policy;
   std::optional<StorageInventory> preflight;
+  std::optional<StoragePreflight> compactPreflight;
 };
 class StorageOptimizer {
 public:

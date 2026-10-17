@@ -26,12 +26,6 @@ fs::path normalizedRoot(const FolderSelection &group) {
   while (path != path.root_path() && path.filename().empty()) path = path.parent_path();
   return path;
 }
-std::string sourceIdentity(const StorageDirectoryStamp &stamp) {
-  const auto seconds = std::chrono::floor<std::chrono::seconds>(stamp.modified.time_since_epoch());
-  const auto nanos = std::chrono::duration_cast<std::chrono::nanoseconds>(stamp.modified.time_since_epoch() - seconds);
-  return std::to_string(stamp.device) + ':' + std::to_string(stamp.fileId) + ':' +
-      std::to_string(seconds.count()) + ':' + std::to_string(nanos.count());
-}
 struct ArchiveWork {
   fs::path path;
   std::vector<FolderSelection> groups;
@@ -152,7 +146,7 @@ StorageMeasurements MeasureStorageGroups(const InventoryRequest &request, Checkp
         if (batch.reason.code == StorageReason::None) {
           measurement.totalBytes = batch.totals.bytes;
           measurement.audioBytes = batch.totals.audio; measurement.videoBytes = batch.totals.video;
-          measurement.imageBytes = batch.totals.image; measurement.sourceIdentity = sourceIdentity(batch.stamp);
+          measurement.imageBytes = batch.totals.image; measurement.sourceIdentity = StorageDirectorySourceIdentity(batch.stamp);
         }
         completed.push_back(measurement);
       }

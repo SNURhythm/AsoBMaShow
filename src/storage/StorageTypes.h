@@ -57,6 +57,16 @@ struct FileResult {
   // Exact committed changes, including a known retained recovery backup.
   std::vector<StorageFileChange> filesystemChanges;
 };
+struct GroupStorageDelta {
+  std::string groupId;
+  std::uint64_t bytesBefore = 0, bytesAfter = 0;
+  bool needsRefresh = false;
+  std::uint64_t audioBefore = 0, audioAfter = 0, videoBefore = 0, videoAfter = 0;
+  std::uint64_t imageBefore = 0, imageAfter = 0;
+  std::optional<std::uint64_t> baselineBytes;
+  std::string sourceIdentity, nextSourceIdentity;
+  std::uint64_t baselineGeneration = 0;
+};
 struct StorageReport {
   // A bounded detail list; counters include files omitted from this list.
   std::vector<FileResult> files;
@@ -69,6 +79,7 @@ struct StorageReport {
   bool recoveryRequired = false;
   bool cleanupPending = false;
   std::vector<std::filesystem::path> changedRoots;
+  std::vector<GroupStorageDelta> groupDeltas;
 };
 struct EncodeResult {
   FileOutcome outcome = FileOutcome::Skipped;

@@ -9,6 +9,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -171,10 +172,12 @@ createChartDatabase(const std::filesystem::path &databasePath) {
 }
 
 std::atomic<int> *connectionOpenCount = nullptr;
+sqlite3 *lastOpenedConnection = nullptr;
 
-int countConnectionOpen(sqlite3 *, char **, const sqlite3_api_routines *) {
+int countConnectionOpen(sqlite3 *database, char **, const sqlite3_api_routines *) {
   assert(connectionOpenCount != nullptr);
   connectionOpenCount->fetch_add(1, std::memory_order_relaxed);
+  lastOpenedConnection = database;
   return SQLITE_OK;
 }
 
@@ -446,9 +449,61 @@ void testInvalidInputsDoNotMutatePlaylistFamily() {
   }
 }
 
+void testBatchedGroupsUseIndexedReusableStatements() {
+  TempDirectory temporary;
+  const auto chartPath = temporary.path() / "chart.db";
+  const auto original = createChartDatabase(chartPath);
+  auto chartDb = openDatabase(chartPath);
+  execOrAbort(chartDb.get(), "CREATE INDEX idx_chart_meta_folder ON chart_meta(folder);"
+      "CREATE INDEX idx_chart_meta_sha256 ON chart_meta(sha256);"
+      "CREATE INDEX idx_chart_meta_md5 ON chart_meta(md5);");
+  execOrAbort(chartDb.get(), "WITH RECURSIVE seq(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM seq WHERE n<3000) "
+      "INSERT INTO chart_meta(path,folder,md5,sha256,title,source_priority,source_archive_size) "
+      "SELECT '/library/'||n||'/chart.bms','/library/'||n,'','hash-'||n,'Song '||n,0,0 FROM seq");
+  std::vector<bms_parser::ChartMeta> groups;
+  for (int i = 1; i <= 80; ++i) {
+    bms_parser::ChartMeta group; group.Folder = "/library/" + std::to_string(i); groups.push_back(group);
+  }
+  auto fallback = original; fallback.Folder.clear(); groups.push_back(fallback);
+  groups.push_back(groups.front()); // Repeated input identities preserve input positions.
+  std::atomic<int> connections{0}; ScopedConnectionOpenCounter connectionCapture(connections);
+  MusicPlaylistRepository repository(temporary.path() / "music.db", chartPath);
+  assert(repository.EnsureReady());
+  auto *owner = lastOpenedConnection;
+  assert(std::filesystem::equivalent(std::filesystem::path(sqlite3_db_filename(owner, "main")), temporary.path() / "music.db"));
+  repository_test::StatementTrace trace;
+  auto traceStatements = std::make_unique<repository_test::ScopedStatementTrace>(owner, trace);
+  MusicLibraryQueryMetrics first;
+  const auto rows = repository.SelectLibraryGroups(groups, &first);
+  assert(rows.size() == groups.size());
+  for (const auto &row : rows) assert(row.size() == 1 && row.front().useChartPathIdentity);
+  assert(rows.front().front().representativeChart.Folder == groups.front().Folder);
+  assert(rows[80].front().representativeChart.BmsPath == original.BmsPath);
+  assert(first.prepared == 3 && first.selects == 1); // One indexed selection, regardless of expanded group count.
+  assert(first.vmSteps < 50000 && first.fullScanSteps < 500);
+  const auto select = std::ranges::find_if(trace.sql, [](const auto &sql) { return sql.starts_with("WITH requested AS"); });
+  assert(select != trace.sql.end());
+  const auto plan = repository_test::explainPlan(owner, *select);
+  assert(repository_test::planContains(plan, "idx_chart_meta_folder"));
+  assert(repository_test::planContains(plan, "sqlite_autoindex_chart_meta_1"));
+  assert(repository_test::planContains(plan, "idx_chart_meta_sha256"));
+  std::cout << "Batched group query: " << first.prepared << " preparations, " << first.selects
+            << " select, " << first.vmSteps << " VM steps, " << first.fullScanSteps << " full-scan steps\n";
+  for (const auto &line : plan) std::cout << "  " << line << '\n';
+  MusicLibraryQueryMetrics next;
+  assert(repository.SelectLibraryGroups({groups.front()}, &next).front().size() == 1);
+  assert(next.prepared == 0 && next.selects == 1 && next.vmSteps < 1000 && next.fullScanSteps < 10);
+  execOrAbort(chartDb.get(), "DELETE FROM chart_meta WHERE folder='/library/1'");
+  assert(repository.SelectLibraryGroups({groups.front()}).front().empty()); // No stale result cache.
+  traceStatements.reset();
+  repository.Shutdown();
+  assert(repository.SelectLibraryGroups({groups[1]}).front().size() == 1); // Statements follow connection lifetime.
+}
+
 } // namespace
 
 int main() {
+  testBatchedGroupsUseIndexedReusableStatements();
   testRoundTripAndConnectionReuse();
   testVersionZeroMigration();
   testPlaylistNamesAreBoundAsData();

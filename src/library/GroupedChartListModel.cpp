@@ -54,14 +54,12 @@ void GroupedChartListModel::Rebuild() const {
 }
 void StorageGroupSelection::SetGroups(std::vector<Track> groups) {
   groups_ = std::move(groups);
-  std::erase_if(selected_, [this](const auto &id) {
-    return std::none_of(groups_.begin(), groups_.end(),
-        [&](const auto &group) { return group.groupId == id; });
-  });
+  available_.clear();
+  for (const auto &group : groups_) available_.insert(group.groupId);
+  std::erase_if(selected_, [this](const auto &id) { return !available_.contains(id); });
 }
 void StorageGroupSelection::Toggle(const Track &row) {
-  if (row.groupId.empty() || std::none_of(groups_.begin(), groups_.end(),
-      [&](const auto &group) { return group.groupId == row.groupId; })) return;
+  if (row.groupId.empty() || !available_.contains(row.groupId)) return;
   if (!selected_.erase(row.groupId)) selected_.insert(row.groupId);
 }
 std::size_t StorageGroupSelection::HiddenCount(const std::vector<Track> &rows) const {

@@ -1,6 +1,7 @@
 #include "StorageManagementScene.h"
 #include "SceneManager.h"
 #include "../ArchiveFile.h"
+#include "../storage/StorageApplicationIntegration.h"
 #include "../path.h"
 #include "../rendering/common.h"
 #include "../view/AppTheme.h"
@@ -90,6 +91,7 @@ void StorageManagementScene::init() {
   profileId_ = context.profileManager.activeProfile().id;
   policy_ = context.settings.storagePreferences.manual;
   BuildView();
+  if (context.storageTask) appliedReport_ = context.storageTask->Snapshot().lastReport;
   ReloadGroups();
 }
 void StorageManagementScene::BuildView() {
@@ -138,7 +140,7 @@ void StorageManagementScene::BuildView() {
     sortBySize_ = !sortBySize_; RefreshRows();
   }, &sortText_));
   actions->addView(button("storage.ui.refresh", [this] {
-    if (!shownTask_.running) ReloadGroups();
+    if (!shownTask_.running) ReloadGroups(true);
   }));
   browser_->addView(actions);
   selectionText_ = text("");
@@ -183,7 +185,7 @@ void StorageManagementScene::BuildView() {
   controls->addView(apply_);
   cancel_ = button("storage.ui.cancel", [this] {
     if (context.storageTask && shownTask_.running) context.storageTask->RequestCancel();
-    else { inventoryTask_.Cancel(); measuring_ = false; InvalidatePreflight(); RefreshState(); }
+    else { inventoryTask_.Cancel(); measuring_ = false; pendingMeasurements_.clear(); InvalidatePreflight(); RefreshState(); }
   });
   controls->addView(cancel_);
   reportText_ = text("", 20);
@@ -215,14 +217,8 @@ void StorageManagementScene::Layout() {
 InventoryRequest StorageManagementScene::RequestFor(const std::vector<Track> &tracks) const {
   InventoryRequest request;
   request.policy = policy_;
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  if (auto session = context.chartRepository.OpenSession()) {
-    for (const auto &entry : session->SelectAllEntries()) {
-      const auto root = chart_library_platform::resolveFolderEntryPath(entry);
-      if (root.is_absolute()) request.pathAccessRoots.push_back(root.lexically_normal());
-    }
-  }
-#endif
+  request.pathAccessRoots = pathAccessRoots_;
+  request.scanScratchRoot = StoragePrivateRoot(context) / "storage-management/scan";
   for (const auto &track : tracks) {
     const auto &meta = track.representativeChart;
     const bool fallback = meta.Folder.empty();
@@ -230,35 +226,78 @@ InventoryRequest StorageManagementScene::RequestFor(const std::vector<Track> &tr
     const auto name = fspath_to_utf8(path);
     const bool local = path.is_absolute() && !archive_file::isVirtualPath(path) &&
         !name.starts_with("@androidtree@") && !name.starts_with("content:");
-    request.groups.push_back({track.groupId, path, local, fallback});
+    request.groups.push_back({track.groupId, path, local, fallback, local ? StorageSourceKind::Local :
+        archive_file::isVirtualPath(path) ? StorageSourceKind::Archive : StorageSourceKind::Unsupported});
   }
   return request;
 }
-void StorageManagementScene::ReloadGroups() {
+void StorageManagementScene::ReloadGroups(bool invalidateAll) {
   inventoryTask_.Cancel();
-  preflight_.reset();
+  preflight_.reset(); measuring_ = false;
   libraryRevision_ = context.chartRepository.GetLibraryRevision();
   measurementRevision_ = context.storageMeasurementRevision;
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  pathAccessRoots_.clear();
+  if (auto session = context.chartRepository.OpenSession()) {
+    for (const auto &entry : session->SelectAllEntries()) {
+      const auto root = chart_library_platform::resolveFolderEntryPath(entry);
+      if (root.is_absolute()) pathAccessRoots_.push_back(root.lexically_normal());
+    }
+  }
+#endif
   groups_ = music_playlist::MakeTracks(context.musicPlaylistRepository.SelectLibraryTracks());
+  const auto request = RequestFor(groups_);
+  std::vector<StorageGroupSource> sources;
+  for (std::size_t i = 0; i < groups_.size(); ++i) {
+    const auto &group = groups_[i]; const auto &meta = group.representativeChart;
+    sources.push_back({request.groups[i], std::to_string(group.chartCount) + ':' + meta.MD5 + ':' + meta.SHA256 + ':' +
+        fspath_to_utf8(meta.BmsPath)});
+  }
+  const auto changed = ReconcileStorageMeasurements(measurements_, measurementSources_, sources, invalidateAll);
+  pendingMeasurements_.insert(changed.begin(), changed.end());
+  std::erase_if(pendingMeasurements_, [&](const auto &id) { return !measurementSources_.contains(id); });
   selection_.SetGroups(groups_);
   model_ = GroupedChartListModel{};
   model_.SetGroups(groups_);
   model_.SetQuery(search_->getText());
-  for (const auto &group : groups_) {
-    if (!expanded_.contains(group.groupId)) continue;
-    model_.SetChildren(group.groupId, music_playlist::MakeTracks(
-        context.musicPlaylistRepository.SelectLibraryGroupTracks(group.representativeChart)));
-    model_.SetExpanded(group.groupId, true);
+  std::vector<bms_parser::ChartMeta> expandedGroups;
+  std::vector<std::string> expandedIds;
+  for (const auto &group : groups_) if (expanded_.contains(group.groupId)) {
+    expandedGroups.push_back(group.representativeChart); expandedIds.push_back(group.groupId);
   }
-  measurements_.clear();
+  const auto expandedTracks = context.musicPlaylistRepository.SelectLibraryGroups(expandedGroups);
+  for (std::size_t i = 0; i < expandedIds.size(); ++i) {
+    auto children = music_playlist::MakeTracks(expandedTracks[i]);
+    for (auto &child : children) { child.groupId = expandedIds[i]; child.expandedChart = true; child.groupRepresentative = false; }
+    model_.SetChildren(expandedIds[i], std::move(children)); model_.SetExpanded(expandedIds[i], true);
+  }
   RefreshRows();
-  Measure(false);
+  MeasureGroups(pendingMeasurements_);
+}
+void StorageManagementScene::MeasureGroups(const std::set<std::string> &ids) {
+  std::vector<Track> groups;
+  for (const auto &group : groups_) if (ids.contains(group.groupId)) groups.push_back(group);
+  if (groups.empty()) return;
+  measuring_ = true; measuringSelection_ = false;
+  inventoryTask_.StartMeasurements(RequestFor(groups));
+  RefreshState();
 }
 void StorageManagementScene::Measure(bool selectedOnly) {
-  measuring_ = true;
-  measuringSelection_ = selectedOnly;
-  inventoryTask_.Start(RequestFor(selectedOnly ? selection_.SelectedGroups() : groups_));
+  measuring_ = true; measuringSelection_ = selectedOnly;
+  pendingMeasurements_.clear();
+  if (selectedOnly) inventoryTask_.StartPreflight(RequestFor(selection_.SelectedGroups()));
+  else {
+    for (const auto &group : groups_) pendingMeasurements_.insert(group.groupId);
+    inventoryTask_.StartMeasurements(RequestFor(groups_));
+  }
   RefreshState();
+}
+void StorageManagementScene::ApplyReport(const StorageReport &report) {
+  preflight_.reset();
+  inventoryTask_.Cancel(); measuring_ = false;
+  const auto changed = ApplyStorageReportMeasurements(measurements_, RequestFor(groups_).groups, report);
+  pendingMeasurements_.insert(changed.begin(), changed.end());
+  RefreshRows(); MeasureGroups(pendingMeasurements_);
 }
 void StorageManagementScene::InvalidatePreflight() {
   preflight_.reset();
@@ -314,10 +353,10 @@ void StorageManagementScene::RefreshRows() {
   RefreshState();
 }
 void StorageManagementScene::ReviewOrApply() {
-  if (shownTask_.running || measuring_ || selection_.Count() == 0 || IsNoOp(policy_)) return;
+  if (shownTask_.running || (measuring_ && measuringSelection_) || selection_.Count() == 0 || IsNoOp(policy_)) return;
   if (!preflight_) { Measure(true); return; }
-  if (!preflight_->complete || preflight_->candidates.empty() || !context.storageTask) return;
-  auto request = OptimizationRequest{preflight_->request, policy_, std::move(preflight_)};
+  if (!preflight_->complete || preflight_->eligibleCount == 0 || !context.storageTask) return;
+  auto request = OptimizationRequest{.inventory = preflight_->request, .policy = policy_, .compactPreflight = std::move(preflight_)};
   preflight_.reset();
   inventoryTask_.Cancel();
   (void)context.storageTask->Start(std::move(request));
@@ -333,16 +372,14 @@ void StorageManagementScene::RefreshState() {
   sortText_->setText(i18n::tr(sortBySize_ ? "storage.ui.sort_size" : "storage.ui.sort_title"));
   backText_->setText(i18n::tr(shownTask_.running ? "storage.ui.cancel_back" : "library.tasks.back.label"));
   policyView_->SetEnabled(!shownTask_.running && !returnWhenFinished_);
-  apply_->setEnabled(context.storageTask && !shownTask_.running && !measuring_ &&
+  apply_->setEnabled(context.storageTask && !shownTask_.running && !(measuring_ && measuringSelection_) &&
       !shownTask_.recoveryRequired && !IsNoOp(policy_) && selection_.Count() > 0 &&
-      (!preflight_ || (preflight_->complete && !preflight_->candidates.empty())));
+      (!preflight_ || (preflight_->complete && preflight_->eligibleCount != 0)));
   applyText_->setText(i18n::tr(preflight_ ? "storage.ui.confirm_apply" : "storage.ui.review"));
   cancel_->setEnabled(shownTask_.running || measuring_);
   if (preflight_) {
-    std::uint64_t eligibleBytes = 0;
-    for (const auto &candidate : preflight_->candidates) eligibleBytes += candidate.identity.bytes;
-    auto summary = i18n::format("storage.ui.preflight", {{"count", std::to_string(preflight_->candidates.size())},
-        {"bytes", bytes(eligibleBytes)}, {"skipped", std::to_string(preflight_->skips.size())}});
+    auto summary = i18n::format("storage.ui.preflight", {{"count", std::to_string(preflight_->eligibleCount)},
+        {"bytes", bytes(preflight_->eligibleBytes)}, {"skipped", std::to_string(preflight_->skippedCount)}});
     for (const auto &group : preflight_->groups)
       if (!group.totalBytes) summary += "\n" + fspath_to_utf8(group.root) + ": " + reason(group.reason.code);
     summary += std::string("\n\n") + i18n::tr("storage.ui.confirm_warning");
@@ -392,14 +429,28 @@ void StorageManagementScene::update(float) {
     policyView_->SetPolicy(policy_);
     selection_.Clear(); expanded_.clear(); ReloadGroups();
   }
-  if (!task.running && (libraryRevision_ != context.chartRepository.GetLibraryRevision() ||
-      measurementRevision_ != context.storageMeasurementRevision)) ReloadGroups();
-  if (auto result = inventoryTask_.TakeResult()) {
-    measuring_ = false;
-    for (const auto &group : result->groups) measurements_[group.groupId] = group;
-    if (measuringSelection_) preflight_ = std::move(*result);
-    RefreshRows();
+  if (!task.running && task.lastReport != appliedReport_) {
+    appliedReport_ = task.lastReport;
+    measurementRevision_ = context.storageMeasurementRevision;
+    if (appliedReport_) ApplyReport(*appliedReport_);
   }
+  if (!task.running && libraryRevision_ != context.chartRepository.GetLibraryRevision()) ReloadGroups();
+  measurementRevision_ = context.storageMeasurementRevision;
+  bool rowsChanged = false;
+  const auto publish = [&](std::vector<GroupStorageMeasurement> rows) {
+    for (auto &group : rows) {
+      pendingMeasurements_.erase(group.groupId);
+      measurements_[group.groupId] = std::move(group); rowsChanged = true;
+    }
+  };
+  publish(inventoryTask_.TakeMeasurements());
+  if (auto result = inventoryTask_.TakeResult()) {
+    publish(inventoryTask_.TakeMeasurements()); // Completion flushes the last throttled batch.
+    measuring_ = false; pendingMeasurements_.clear();
+    if (result->mode == StorageInventoryMode::Preflight) preflight_ = std::move(result->preflight);
+    rowsChanged = true;
+  }
+  if (rowsChanged) RefreshRows();
   if (task.running != shownTask_.running || task.cancelling != shownTask_.cancelling ||
       task.lastReport != shownTask_.lastReport || task.progress.phase != shownTask_.progress.phase ||
       task.progress.filesDone != shownTask_.progress.filesDone || task.progress.filesTotal != shownTask_.progress.filesTotal ||
@@ -411,7 +462,10 @@ void StorageManagementScene::update(float) {
 void StorageManagementScene::onLanguageChanged() { Scene::onLanguageChanged(); RefreshRows(); }
 void StorageManagementScene::onApplicationBackgroundChanged(bool background) {
   if (background) { inventoryTask_.Cancel(); measuring_ = false; InvalidatePreflight(); }
-  else if (!shownTask_.running) Measure(false);
+  else if (!shownTask_.running) {
+    for (const auto &group : groups_) if (!measurements_.contains(group.groupId)) pendingMeasurements_.insert(group.groupId);
+    MeasureGroups(pendingMeasurements_);
+  }
 }
 bool StorageManagementScene::prepareForStorageMaintenance(std::string &) {
   inventoryTask_.Cancel(); measuring_ = false;

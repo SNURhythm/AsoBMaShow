@@ -19,6 +19,7 @@ struct StorageDirectoryStamp {
   std::filesystem::perms permissions = std::filesystem::perms::unknown;
   bool operator==(const StorageDirectoryStamp &) const = default;
 };
+std::string StorageDirectorySourceIdentity(const StorageDirectoryStamp &);
 // Each worker owns its metrics, then the coordinator sums completed batches.
 struct StorageScanMetrics {
   std::uint64_t entries = 0, metadataReads = 0, rootIndexSteps = 0;

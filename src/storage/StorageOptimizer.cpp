@@ -242,13 +242,29 @@ StorageReport StorageOptimizer::Run(const OptimizationRequest &request, Checkpoi
     InventoryRequest inventoryRequest = request.inventory; inventoryRequest.policy = request.policy;
     inventoryRequest.pathAccessRoots = dependencies_.paths.pathAccessRoots;
     emit();
-    if (request.preflight && !sameRequest(request.preflight->request, inventoryRequest)) {
+    if ((request.preflight && !sameRequest(request.preflight->request, inventoryRequest)) ||
+        (request.compactPreflight && !sameRequest(request.compactPreflight->request, inventoryRequest))) {
       append(report, {.reason = {StorageReason::StaleInput, "Selected folders or policy changed after preflight"}}); return complete();
     }
     auto inventory = request.preflight ? *request.preflight : BuildInventory(inventoryRequest, checkpoint);
     inventory.request.pathAccessRoots = inventoryRequest.pathAccessRoots;
     if (inventory.cancelled || !checkpoint()) return complete();
     std::string error;
+    // Transitional adapter until directory-at-a-time execution replaces Evidence.
+    // The compact confirmation remains authoritative over the freshly loaded
+    // legacy inventory; a new directory or changed entry cannot become eligible.
+    if (request.compactPreflight) {
+      const auto &confirmed = *request.compactPreflight;
+      if (!confirmed.complete || confirmed.cancelled || confirmed.directories.size() != inventory.directories.size()) {
+        append(report, {.reason = {StorageReason::StaleInput, "Confirmed directory scope changed"}}); return complete();
+      }
+      for (const auto &[path, summary] : confirmed.directories) {
+        if (!inventory.directories.contains(path) ||
+            !LoadStorageDirectory(summary, inventoryRequest, checkpoint, error, {.scratchRoot = dependencies_.paths.scanRoot})) {
+          append(report, {.source = path, .reason = {StorageReason::StaleInput, error}}); return complete();
+        }
+      }
+    }
     if (!RevalidateInventory(inventory, checkpoint, error)) {
       if (!cancelled) append(report, {.reason = {StorageReason::StaleInput, error}});
       return complete();

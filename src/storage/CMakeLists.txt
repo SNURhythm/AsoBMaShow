@@ -13,3 +13,5 @@ target_sources(main PRIVATE StoragePathIndex.cpp StorageDirectoryInventory.cpp S
 target_sources(main PRIVATE StorageMeasurement.cpp StorageArchiveMeasurement.cpp)
 
 target_sources(main PRIVATE StoragePreflight.cpp StorageDirectoryWorkingSet.cpp)
+
+target_sources(main PRIVATE StorageMeasurementState.cpp)

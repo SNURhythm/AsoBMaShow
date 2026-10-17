@@ -4,6 +4,7 @@
 #include "../library/GroupedChartListModel.h"
 #include "../storage/StorageInventoryTask.h"
 #include "../storage/StorageTask.h"
+#include "../storage/StorageMeasurementState.h"
 
 class Button;
 class TextView;
@@ -31,7 +32,9 @@ private:
   void cleanupScene() override;
   void BuildView();
   void Layout();
-  void ReloadGroups();
+  void ReloadGroups(bool invalidateAll = false);
+  void MeasureGroups(const std::set<std::string> &);
+  void ApplyReport(const storage_management::StorageReport &);
   void RefreshRows();
   void RefreshState();
   void InvalidatePreflight();
@@ -51,7 +54,11 @@ private:
   std::set<std::string> expanded_;
   std::map<std::string, storage_management::GroupStorageMeasurement> measurements_;
   storage_management::StorageInventoryTask inventoryTask_;
-  std::optional<storage_management::StorageInventory> preflight_;
+  std::optional<storage_management::StoragePreflight> preflight_;
+  std::map<std::string, storage_management::StorageGroupSource> measurementSources_;
+  std::set<std::string> pendingMeasurements_;
+  std::vector<std::filesystem::path> pathAccessRoots_;
+  std::shared_ptr<const storage_management::StorageReport> appliedReport_;
   storage_management::StoragePolicy policy_;
   storage_management::StorageTaskSnapshot shownTask_;
   bool measuring_ = false, measuringSelection_ = false;

@@ -227,25 +227,25 @@ result so Task-2 coordination also delivers completed preflight directories.
 Checkpoint, std::string&) -> std::unique_ptr<StorageDirectoryInventory>` returns
 an iterable working set only when its fingerprint matches.
 
-- [ ] Add failing `summariesDoNotRetainAllAssets`, `fingerprintsRejectChangedEntries`
+- [x] Add failing `summariesDoNotRetainAllAssets`, `fingerprintsRejectChangedEntries`
   and `largeDirectorySpillRetainsCollisionRules`. Assert precise hard-link totals,
   bounded skip samples, deterministic fingerprints independent of enumeration
   order, case-varied collisions, and rejection of replaced directory identities.
-- [ ] Run the new focused tests to establish failure before implementation.
-- [ ] Use Task 2 to scan only selected local roots in `Preflight` mode; aggregate
+- [x] Run the new focused tests to establish failure before implementation.
+- [x] Use Task 2 to scan only selected local roots in `Preflight` mode; aggregate
   per directory and roll up indexed ancestors at directory/group boundaries.
   Do not build all-file maps or global candidate vectors. Fingerprint ordered
   relative names, entry kinds and identity metadata
   using the existing SHA-256 implementation. Do not hash media contents here.
-- [ ] Keep at most 4,096 entry records or 8 MiB of name/record payload in a
+- [x] Keep at most 4,096 entry records or 8 MiB of name/record payload in a
   working set; cross either threshold by spilling that directory into a private
   temporary SQLite index, with an 8 MiB page-cache budget and ordered iteration.
   The spill is expendable and never a source of recovery authorization. Check
   cancellation between entries; retain unavailable totals on traversal failure.
-- [ ] Test cancellation, disk-full injection, unknown private files, overlapping
+- [x] Test cancellation, disk-full injection, unknown private files, overlapping
   groups, and spill cleanup/restart. Keep the whole-library retained state to
   groups/directories/summaries, without candidate vectors.
-- [ ] Commit and push `perf: stream compact storage preflight summaries`.
+- [x] Commit and push `perf: stream compact storage preflight summaries`.
 
 ### Task 5: Publish folder sizes progressively and review selected work promptly
 
@@ -269,18 +269,18 @@ diagnostics; byte fields are `std::uint64_t`, the ID is `std::string`, and
 Keep the existing inventory adapter for Apply until Task 6 migrates the optimizer,
 so this intermediate task still builds.
 
-- [ ] Add failing `measurementsArriveBeforeScanCompletion`,
+- [x] Add failing `measurementsArriveBeforeScanCompletion`,
   `selectedReviewCancelsUnrelatedScan`, `replacedScanCannotPublishOldRows`,
   `subsetApplyNeverStartsFullMeasurement` and `jobRefreshPreservesUnrelatedSizes`.
   Use latches/controlled clocks, not fixed sleeps, to assert early visible totals,
   cancellation and no stale generation delivery.
-- [ ] Run `storage_inventory_task_tests` and the scene fixture to confirm failure.
-- [ ] Publish coalesced per-group updates at most every 100 ms, plus completion.
+- [x] Run `storage_inventory_task_tests` and the scene fixture to confirm failure.
+- [x] Publish coalesced per-group updates at most every 100 ms, plus completion.
   Bound the queue by group count by replacing older updates for the same group.
   Enable selected Review during browsing; replace/reprioritize that scan rather
   than waiting for every unrelated folder. Preserve unavailable/pending wording,
   selected groups, expanded rows and scroll position while batches arrive.
-- [ ] Separate group-list reload, measurement invalidation and explicit full
+- [x] Separate group-list reload, measurement invalidation and explicit full
   Refresh. Keep completed sizes on Review; policy/selection changes invalidate
   only selected preflight. Move preflight into Apply. Update sizes using all
   committed group deltas and remeasure only changed/uncertain roots, including
@@ -289,16 +289,16 @@ so this intermediate task still builds.
   Reconcile external library revisions by changed group/source identities.
   Apply arithmetic deltas only to measurements whose source/generation baseline
   remains valid; otherwise refresh the affected scope and mark its total pending.
-- [ ] Inspect SQL query plans and existing statement reuse. Add a batched group
+- [x] Inspect SQL query plans and existing statement reuse. Add a batched group
   lookup for expanded/affected rows where current code performs N+1 queries; use
   bound reusable statements and indexed group keys. Keep SQLite use on repository
   owners, with no per-file scan SQL and no shared mutable statement across workers.
   Extend repository tests with query/VM-step counts and group identity fixtures;
   batch affected-root invalidation writes within existing transaction boundaries
   in Task 6. Record measured query plans and timings in Task 8.
-- [ ] Verify progressive browsing, selected preflight and cancellation with the
+- [x] Verify progressive browsing, selected preflight and cancellation with the
   focused task/scene tests, then compile `main`.
-- [ ] Commit and push `perf: show storage measurements incrementally`.
+- [x] Commit and push `perf: show storage measurements incrementally`.
 
 ### Task 6: Convert with active-directory evidence and no whole-library copies
 

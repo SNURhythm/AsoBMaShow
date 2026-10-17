@@ -31,12 +31,14 @@ add_executable(storage_optimizer_tests tests/storage_optimizer_tests.cpp
     src/archive/UnzipOutput.cpp src/archive/IndexBuildCoordinator.cpp
     src/MinizBridge.c src/Utils.cpp src/bms_parser.cpp src/path.cpp
     src/bms_search/DownloadStorageOptimization.cpp
-    src/storage/StorageOptimizer.cpp src/storage/AudioTranscoder.cpp src/storage/BgaTranscoder.cpp
+    src/storage/StorageOptimizer.cpp src/storage/StoragePreflight.cpp src/storage/StorageDirectoryWorkingSet.cpp
+    src/storage/StorageDirectoryInventory.cpp src/storage/StoragePathIndex.cpp src/storage/StorageScanScheduler.cpp
+    src/ChartScanWorkScheduler.cpp src/storage/AudioTranscoder.cpp src/storage/BgaTranscoder.cpp
     src/storage/VideoCompressionGeometry.cpp src/storage/StoragePolicy.cpp
     src/storage/ChartResourceInventory.cpp src/storage/StorageFileTransaction.cpp src/storage/StoragePlatform.cpp
     src/audio/ChartVisualAssetResolver.cpp src/AtomicFile.cpp src/FileChecksum.cpp src/Uuid.cpp)
 target_compile_features(storage_optimizer_tests PRIVATE cxx_std_23)
-target_link_libraries(storage_optimizer_tests PRIVATE ${COMMON_LIBS})
+target_link_libraries(storage_optimizer_tests PRIVATE ${COMMON_LIBS} SQLite3)
 if(APPLE)
     target_link_libraries(storage_optimizer_tests PRIVATE iconv)
 endif()
@@ -68,11 +70,11 @@ target_compile_features(storage_music_admission_tests PRIVATE cxx_std_23)
 target_link_libraries(storage_music_admission_tests PRIVATE Threads::Threads)
 asobmashow_register_test(storage_music_admission_tests)
 
-add_executable(storage_inventory_task_tests tests/storage_inventory_task_tests.cpp
-    src/storage/StorageInventoryTask.cpp src/storage/ChartResourceInventory.cpp
-    src/storage/StoragePolicy.cpp src/audio/ChartVisualAssetResolver.cpp)
-target_compile_features(storage_inventory_task_tests PRIVATE cxx_std_23)
-asobmashow_register_test(storage_inventory_task_tests)
+target_sources(archive_file_concurrency_tests PRIVATE tests/storage_inventory_task_tests.cpp
+    src/storage/StorageInventoryTask.cpp src/storage/StoragePreflight.cpp
+    src/storage/StorageDirectoryWorkingSet.cpp src/FileChecksum.cpp)
+add_test(NAME storage_inventory_task_tests COMMAND archive_file_concurrency_tests --storage-inventory-task)
+set_tests_properties(storage_inventory_task_tests PROPERTIES TIMEOUT 20)
 
 add_executable(storage_scan_scheduler_tests tests/storage_scan_scheduler_tests.cpp
     src/storage/StorageScanScheduler.cpp src/ChartScanWorkScheduler.cpp src/Uuid.cpp)
@@ -99,3 +101,8 @@ add_executable(storage_directory_inventory_tests tests/storage_directory_invento
 target_compile_features(storage_directory_inventory_tests PRIVATE cxx_std_23)
 target_link_libraries(storage_directory_inventory_tests PRIVATE SQLite3 Threads::Threads)
 asobmashow_register_test(storage_directory_inventory_tests)
+
+add_executable(storage_measurement_state_tests tests/storage_measurement_state_tests.cpp
+    src/storage/StorageMeasurementState.cpp src/storage/StoragePathIndex.cpp)
+target_compile_features(storage_measurement_state_tests PRIVATE cxx_std_23)
+asobmashow_register_test(storage_measurement_state_tests)
