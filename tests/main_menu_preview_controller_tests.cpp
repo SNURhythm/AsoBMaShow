@@ -250,9 +250,28 @@ void testConcurrentStopsSerializeLoaderJoinAndPlaybackTeardown() {
   backgroundStop.get();
   assert(stops == 2);
 }
+void testMaintenanceAdmissionDoesNotRestartStoppedProducer() {
+  std::atomic_bool admit = true;
+  std::atomic_int loads = 0;
+  MainMenuPreviewController preview([&](const auto &, auto &) { ++loads; }, [] {}, 0ms,
+      [] {}, [&] { return admit.load(); });
+  preview.request(chart("old.bms"));
+  waitUntil([&] { return loads == 1; });
+  admit = false;
+  preview.stop();
+  preview.request(chart("new.bms"));
+  preview.stop();
+  assert(loads == 1);
+  admit = true;
+  preview.request(chart("new.bms"));
+  waitUntil([&] { return loads == 2; });
+  preview.stop();
+}
+
 } // namespace
 
 int main() {
+  testMaintenanceAdmissionDoesNotRestartStoppedProducer();
   testDirectSelectionForwardsImmediateTiming();
   testDeferredReleaseWaitsForLoadWithoutBlockingSelection();
   testReplacementWithdrawsReleaseAndReloadsCancelledSamePath();

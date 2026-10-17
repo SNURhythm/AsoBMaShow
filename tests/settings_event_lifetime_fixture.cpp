@@ -38,6 +38,7 @@ struct ApplicationContext {
   int uiBatchRenderer = 0;
   SceneManager *sceneManager = nullptr;
   std::atomic_bool backgroundTasksPausedForForegroundScene = false;
+  std::atomic_bool storageMaintenanceActive = false;
   BackgroundTasks *chartLibraryTasks = nullptr;
   std::function<void()> notifyBackgroundTaskPauseStateChanged;
   std::function<void(bool)> setGameplayOrientationLocked;

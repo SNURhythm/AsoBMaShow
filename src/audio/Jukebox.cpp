@@ -3209,6 +3209,19 @@ void Jukebox::loadVisuals(bms_parser::Chart &chart,
   }
 }
 
+audio::playback::BackendOperationResult Jukebox::discardLoadedMedia() {
+  auto result = stop();
+  if (!result.success) return result;
+  result = audio.unloadSounds();
+  if (!result.success) return result;
+  wavTableAbs.clear();
+  audioList.clear();
+  bmpList.clear();
+  bmpLayerList.clear();
+  unloadVisuals();
+  return {.success = true};
+}
+
 void Jukebox::unloadVisuals() {
   clearVisualResources();
   poorBgaSequences.clear();

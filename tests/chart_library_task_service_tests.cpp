@@ -920,7 +920,36 @@ void testDocumentsRefreshUsesIdleWorkerAndRestoresRemovedRoot() {
 
 } // namespace
 
+void testStorageMaintenanceAdmission() {
+  using namespace chart_library_tasks;
+  ChartLibraryTaskService service([](const auto &, const auto &, auto, auto) {
+    return TaskRunResult{};
+  });
+  auto pending = service.reserve("pending", "picker");
+  expect(!service.tryReserveMaintenance(), "pending producer refuses maintenance");
+  service.failReserved(pending, "cancelled");
+  auto lease = service.tryReserveMaintenance();
+  expect(lease.has_value(), "idle library grants maintenance");
+  if (!lease) return;
+  expect(!service.tryReserveMaintenance(), "second maintenance refused");
+  expect(service.enqueue({}) == 0, "new scan blocked during maintenance");
+  expect(service.reserve("import", "copy") == 0, "new producer blocked during maintenance");
+  expect(!service.beginAndroidImport("late", true), "new Android import blocked");
+  expect(!service.enqueueMaintenanceRefresh(*lease + 1, {.kind = TaskKind::RefreshPath}),
+         "refresh requires owning token");
+  expect(!service.enqueueMaintenanceRefresh(*lease, {.kind = TaskKind::AndroidImport}),
+         "maintenance token cannot authorize imports");
+  expect(service.enqueueMaintenanceRefresh(*lease, {.kind = TaskKind::RefreshPath}) != 0,
+         "owner can hand off refresh before release");
+  service.releaseMaintenance(*lease + 1);
+  expect(service.maintenanceReserved(), "foreign token cannot release reservation");
+  service.releaseMaintenance(*lease);
+  expect(!service.maintenanceReserved(), "owner releases reservation");
+  expect(service.beginAndroidImport("fresh", true), "fresh import admitted after release");
+}
+
 int main() {
+  testStorageMaintenanceAdmission();
   testDocumentsRefreshUsesIdleWorkerAndRestoresRemovedRoot();
   testTaskTitlesRetainMessagesAcrossLanguageChanges();
   testTaskDetailsRetainProducerMessages();

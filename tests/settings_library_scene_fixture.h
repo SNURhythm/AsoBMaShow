@@ -66,7 +66,7 @@ class SettingsScene {
 public:
   explicit SettingsScene(LibraryOperations &operations) : context{{operations}} {}
   ~SettingsScene() { libraryTask.stopAndWait(); }
-  struct { LibraryRepository chartRepository; } context;
+  struct { LibraryRepository chartRepository; bool storageMaintenanceActive = false; } context;
   SettingsLibraryTask libraryTask;
   LibraryText tableStatus, folderStatus, input;
   LibraryText *difficultyTableStatusText = &tableStatus;

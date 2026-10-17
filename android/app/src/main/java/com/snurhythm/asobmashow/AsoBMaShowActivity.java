@@ -920,6 +920,10 @@ public class AsoBMaShowActivity extends SDLActivity {
         return startPendingImportCopy(uri, archivePickerName.get(), true, "", "move".equals(operation));
     }
 
+    public AutoCloseable reserveStorageSubtrees(String[] paths) throws IOException {
+        return DocumentsMutationGuard.reserveExistingSubtrees(paths);
+    }
+
     public Object getDocumentsMutationLock() {
         return AsoBMaShowDocumentsProvider.DOCUMENT_MUTATION_LOCK;
     }
@@ -1846,6 +1850,13 @@ public class AsoBMaShowActivity extends SDLActivity {
             return "OK";
         } catch (Exception e) {
             return ERROR_PREFIX + messageForException(e, "Could not pause music.");
+        }
+    }
+
+    public String unloadNativeMusic() {
+        synchronized (nativeMusicLock) {
+            releaseNativeMusicPlayerLocked();
+            return "OK";
         }
     }
 

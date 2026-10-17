@@ -32,3 +32,20 @@ add_executable(storage_optimizer_tests tests/storage_optimizer_tests.cpp
 target_compile_features(storage_optimizer_tests PRIVATE cxx_std_23)
 target_link_libraries(storage_optimizer_tests PRIVATE SndFile::sndfile ${FFMPEG_LIBRARIES})
 asobmashow_register_test(storage_optimizer_tests)
+
+add_executable(storage_task_tests tests/storage_task_tests.cpp
+    src/storage/StorageTask.cpp src/storage/StorageMaintenanceGuard.cpp)
+target_compile_features(storage_task_tests PRIVATE cxx_std_23)
+asobmashow_register_test(storage_task_tests)
+
+set(storage_music_admission_source ${CMAKE_CURRENT_BINARY_DIR}/generated/storage_music_admission_tests.cpp)
+add_custom_command(OUTPUT ${storage_music_admission_source}
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/storage_music_admission_extract.py
+            --root ${CMAKE_SOURCE_DIR} --output ${storage_music_admission_source}
+    DEPENDS tests/storage_music_admission_extract.py tests/storage_music_admission_fixture.cpp
+            tests/gameplay_terminal_scene_extract.py src/audio/MusicPlayerService.cpp)
+add_executable(storage_music_admission_tests ${storage_music_admission_source})
+target_include_directories(storage_music_admission_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(storage_music_admission_tests PRIVATE cxx_std_23)
+target_link_libraries(storage_music_admission_tests PRIVATE Threads::Threads)
+asobmashow_register_test(storage_music_admission_tests)

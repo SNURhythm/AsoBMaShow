@@ -12,6 +12,7 @@ enum class Failure {
   None,
   ProfileInitialization,
   DatabaseInitialization,
+  StorageRecovery,
 };
 
 struct Result {
@@ -29,6 +30,7 @@ struct Dependencies {
   std::function<app_database_initializer::DatabaseInitializationStatus()>
       initializeDatabases;
   std::function<void(const Result &)> reportFatal;
+  std::function<bool()> recoverStorage;
   std::function<void()> reconcileReplayFiles;
   std::function<void()> runReadyApplication;
 };

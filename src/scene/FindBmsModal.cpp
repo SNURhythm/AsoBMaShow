@@ -530,6 +530,7 @@ void FindBmsModal::show(const ChartMetaRecord &record, bool requireConfirmation)
 }
 
 void FindBmsModal::startLookup() {
+  if (callbacks_.admit && !callbacks_.admit()) return;
   if (!findBmsAwaitingConfirmation || findBmsTask.running() ||
       findBmsResult.pendingArtifact) {
     return;
@@ -571,6 +572,7 @@ void FindBmsModal::startLookup() {
 }
 
 void FindBmsModal::startCandidateDownload(size_t candidateIndex) {
+  if (callbacks_.admit && !callbacks_.admit()) return;
   if (findBmsTask.running() ||
       candidateIndex >= findBmsResult.candidates.size()) {
     return;
@@ -606,6 +608,7 @@ void FindBmsModal::startCandidateDownload(size_t candidateIndex) {
 
 void FindBmsModal::startPendingArtifactResolution(
     BmsSearchPendingArtifactDecision decision) {
+  if (callbacks_.admit && !callbacks_.admit()) return;
   if (findBmsTask.running() || !findBmsResult.pendingArtifact) {
     return;
   }

@@ -19,6 +19,7 @@ namespace native_music_player {
 namespace {
 
 std::mutex gControlEventsMutex;
+bool gControlEventsEnabled = true;
 std::vector<ControlEvent> gControlEvents;
 std::vector<std::string> gPlaybackErrors;
 std::mutex gMetadataMutex;
@@ -339,6 +340,17 @@ bool Stop(std::string &errorMessage) {
 #endif
 }
 
+bool Unload(std::string &errorMessage) {
+  errorMessage.clear();
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  return UnloadIOSNativeMusic(errorMessage);
+#elif TARGET_OS_ANDROID
+  return UnloadAndroidNativeMusic(errorMessage);
+#else
+  return true;
+#endif
+}
+
 bool Seek(long long positionMicros, std::string &errorMessage) {
   errorMessage.clear();
   positionMicros = std::max(0LL, positionMicros);
@@ -392,9 +404,16 @@ PlaybackState GetState() {
 #endif
 }
 
+void SetControlEventsEnabled(bool enabled) {
+  std::lock_guard lock(gControlEventsMutex);
+  gControlEventsEnabled = enabled;
+  gControlEvents.clear();
+  gPlaybackErrors.clear();
+}
+
 void NotifyControlEvent(ControlEvent event) {
   std::lock_guard<std::mutex> lock(gControlEventsMutex);
-  if (gControlEvents.size() < 32) {
+  if (gControlEventsEnabled && gControlEvents.size() < 32) {
     gControlEvents.push_back(event);
   }
 }
@@ -408,7 +427,7 @@ std::vector<ControlEvent> DrainControlEvents() {
 
 void NotifyPlaybackError(std::string message) {
   std::lock_guard lock(gControlEventsMutex);
-  if (gPlaybackErrors.size() < 32) gPlaybackErrors.push_back(std::move(message));
+  if (gControlEventsEnabled && gPlaybackErrors.size() < 32) gPlaybackErrors.push_back(std::move(message));
 }
 
 std::vector<std::string> DrainPlaybackErrors() {

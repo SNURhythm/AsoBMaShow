@@ -15,6 +15,7 @@ template <typename T> class RecyclerView;
 std::filesystem::path findBmsDownloadRoot(ChartRepository::Session *session);
 
 struct FindBmsModalCallbacks {
+  std::function<bool()> admit;
   std::function<std::filesystem::path()> downloadRoot;
   std::function<BmsSearchDownloadOptions()> downloadOptions;
   std::function<void()> downloadStarted;

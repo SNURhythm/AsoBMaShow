@@ -670,6 +670,11 @@ void MusicPlayerScene::setTabTopInset(float topInset) {
   updateLayoutInsets();
 }
 
+bool MusicPlayerScene::prepareForStorageMaintenance(std::string &) {
+  exitVideoFullscreen();
+  return true;
+}
+
 void MusicPlayerScene::onPause() {
   exitVideoFullscreen();
   onInputQueueOverflow();
@@ -4561,6 +4566,7 @@ bool MusicPlayerScene::handleProgressSeekEvents(SDL_Event &event,
 }
 
 void MusicPlayerScene::watchVideo() {
+  if (context.storageMaintenanceActive) return;
   if (videoFullscreenActive) {
     showVideoControls();
     return;
@@ -4619,6 +4625,7 @@ void MusicPlayerScene::watchVideo() {
 
 bool MusicPlayerScene::loadVideoVisualsForTrack(const MusicTrack &track,
                                                 bool showStatusMessage) {
+  if (context.storageMaintenanceActive) return false;
   videoTrackId = favoriteKeyForTrack(track);
   std::atomic_bool cancelled{false};
   auto chart = play_options::parseChart(track.representativeChart, cancelled,

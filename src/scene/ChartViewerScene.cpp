@@ -2386,6 +2386,14 @@ ChartViewerScene::~ChartViewerScene() {
   cleanup();
 }
 
+bool ChartViewerScene::prepareForStorageMaintenance(std::string &error) {
+  if (!deferred.empty()) { error = "Chart viewer preparation is active."; return false; }
+  stopListening();
+  listenAudioLoaded = false;
+  retainedListenResourcesForReload = false;
+  return true;
+}
+
 void ChartViewerScene::init() {
   initView();
   parseAndRefresh(selectedRandomValues.empty()
@@ -4449,6 +4457,7 @@ void ChartViewerScene::retainLoadedListenResourcesForChartChange() {
 }
 
 void ChartViewerScene::startListeningFromSelection() {
+  if (context.storageMaintenanceActive) return;
   if (chart == nullptr || canvasView == nullptr ||
       !canvasView->hasSelectedTime()) {
     if (statusText != nullptr) {
@@ -4474,6 +4483,7 @@ void ChartViewerScene::startListeningFromSelection() {
 
   defer(
       [this, selectedTime]() {
+        if (context.storageMaintenanceActive) return true;
         if (chart == nullptr || canvasView == nullptr) {
           return true;
         }
@@ -4527,6 +4537,7 @@ void ChartViewerScene::startListeningFromSelection() {
 }
 
 void ChartViewerScene::toggleListenPause() {
+  if (context.storageMaintenanceActive) return;
   if (!listenActive) {
     return;
   }
@@ -4552,6 +4563,7 @@ void ChartViewerScene::stopListening() {
 }
 
 void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
+  if (context.storageMaintenanceActive) return;
   if (chart == nullptr || canvasView == nullptr) {
     return;
   }
@@ -4599,6 +4611,7 @@ void ChartViewerScene::startPracticeFromSelection(bool autoPlay) {
       [this, selectedTime, chartRandomSeed, chartRandomPrng, chartRandomValues,
        gaugeSelection, autoKeySound, assistOption, selectedLongNoteMode,
        autoPlay, canReuseJukeboxResources, launchConfiguration]() {
+        if (context.storageMaintenanceActive) return true;
         std::atomic_bool parseCancelled = false;
         std::unique_ptr<bms_parser::Chart> practiceChart;
         try {

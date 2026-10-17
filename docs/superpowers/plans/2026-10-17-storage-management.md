@@ -385,26 +385,26 @@ public:
 thread admission and media/preparation shutdown acknowledgments. Its dependencies
 are callbacks so lifecycle tests do not need the renderer/audio device.
 
-- [ ] Add failing tests for simultaneous Start, cancel before/after commit,
+- [x] Add failing tests for simultaneous Start, cancel before/after commit,
   bounded progress handoff, scene destruction, app shutdown, profile change, and
   startup recovery before any library reads. Assert no callback can outlive its
   owner and no worker holds UI references.
-- [ ] Add admission tests for pending library tasks, a preview producer, music
+- [x] Add admission tests for pending library tasks, a preview producer, music
   playback/preparation, native next/play events, gameplay, export, and new imports.
   Existing owners must quiesce or refuse maintenance; newly arriving owners cannot
   enter until release. Use explicit barriers and fake callbacks.
-- [ ] Implement application-thread admission before spawning the job. Stop/join
+- [x] Implement application-thread admission before spawning the job. Stop/join
   preview and music sources; retain the reservation through refresh handoff.
   Wire mobile backgrounding to cancellation and profile-switch/shutdown sequencing
   to worker completion. Integrate recovery before normal startup library access.
-- [ ] Extend existing library-task admission with a maintenance reservation rather
+- [x] Extend existing library-task admission with a maintenance reservation rather
   than relying on a racy active-count check. Reserve Android Documents subtrees
   through the shared Java mutation monitor; test writes/renames/deletes reject
   reserved files and release correctly after cancellation.
-- [ ] On completion, invalidate affected resolution/media state and storage
+- [x] On completion, invalidate affected resolution/media state and storage
   measurements, then enqueue existing affected-path refresh. Resume playback only
   on a new user/native play request; never reuse a stale progressive source.
-- [ ] Run `storage_task_tests`, the affected `area_library` lifecycle tests,
+- [x] Run `storage_task_tests`, the affected `area_library` lifecycle tests,
   `area_audio` tests, and `python3 tests/android_documents_mutation_guard_tests.py`.
   Commit `feat: coordinate storage maintenance with media and library tasks`.
 

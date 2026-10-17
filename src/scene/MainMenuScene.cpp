@@ -998,6 +998,18 @@ void MainMenuScene::onInputQueueOverflow() {
   if (auto *scene = activeUtilityTab()) scene->onInputQueueOverflow();
 }
 
+bool MainMenuScene::prepareForStorageMaintenance(std::string &error) {
+  if (willStart || replayLoadTask_.active() || replayExportJob_.inProgress() || archiveUnzipInProgress() ||
+      (findBmsModal_ && findBmsModal_->inProgress())) {
+    error = "A chart download, preparation, or export is active.";
+    return false;
+  }
+  if (previewWorker_) previewWorker_->stop();
+  stopAndClearSelectedChart();
+  if (musicTab_ && !musicTab_->prepareForStorageMaintenance(error)) return false;
+  return true;
+}
+
 void MainMenuScene::onPause() {
   cancelPendingTabSwitch();
   if (auto *scene = activeUtilityTab()) scene->onPause();
@@ -1839,7 +1851,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
           }
           previewVisualsLoaded_ = false;
         }
-      });
+      }, [this] { return !this->context.storageMaintenanceActive.load(); });
 
   auto nav = new View();
   nav->setName("mainMenuLibrary");
@@ -4601,6 +4613,7 @@ void MainMenuScene::startSelectedCourse() {
 
 void MainMenuScene::startCourseDirect(
     std::shared_ptr<CoursePlaySession> session) {
+  if (context.storageMaintenanceActive) return;
   if (session == nullptr || session->entries.empty() ||
       willStart.exchange(true)) {
     return;
@@ -4738,6 +4751,7 @@ void MainMenuScene::startSelectedChart() {
 }
 
 void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
+  if (context.storageMaintenanceActive) return;
   if (willStart.exchange(true)) {
     return;
   }
@@ -4987,6 +5001,7 @@ void MainMenuScene::openChartViewerForSelection() {
 }
 
 void MainMenuScene::openChartViewerDirect(const ChartMetaRecord &record) {
+  if (context.storageMaintenanceActive) return;
   if (willStart.load() || replayExportJob_.inProgress() ||
       record.solidArchive || record.unavailable ||
       record.meta.BmsPath.empty()) {
@@ -5280,6 +5295,7 @@ void MainMenuScene::startUnzipSelectedArchiveFolder() {
 }
 
 void MainMenuScene::startUnzipArchiveFolder(const ChartMetaRecord &record) {
+  if (context.storageMaintenanceActive) return;
   if (willStart.load() || replayExportJob_.inProgress() ||
       archiveUnzipInProgress() || pendingSelectChartPath.has_value() ||
       context.chartLibraryListReloadRequested.load() ||
@@ -6690,6 +6706,7 @@ std::string MainMenuScene::tasksModalTextSnapshot() {
 void MainMenuScene::buildFindBmsModal() {
   findBmsModal_ = FindBmsModal::Create(
       rootLayout, {
+      .admit = [this] { return !context.storageMaintenanceActive.load(); },
       .downloadRoot = [this]() { return preferredBmsDownloadRoot(); },
       .downloadOptions = [this]() {
         return BmsSearchDownloadOptions{
@@ -7032,6 +7049,7 @@ bool MainMenuScene::prepareAutoPlayChartForRecord(
 }
 
 void MainMenuScene::startAutoPlayPlayback(const ChartMetaRecord &record) {
+  if (context.storageMaintenanceActive) return;
   if (record.courseStart || willStart.load()) return;
   willStart.store(true);
   if (previewWorker_) previewWorker_->cancel();
@@ -7100,6 +7118,7 @@ void MainMenuScene::startAutoPlayPlayback(const ChartMetaRecord &record) {
 
 void MainMenuScene::startModernReplayPlayback(
     const ChartMetaRecord &record, ModernChartResultRecord modern) {
+  if (context.storageMaintenanceActive) return;
   if (record.courseStart || willStart.load()) {
     return;
   }
@@ -7202,6 +7221,7 @@ void MainMenuScene::startModernReplayPlayback(
 
 void MainMenuScene::startModernGBattlePlayback(
     const ChartMetaRecord &record, ModernChartResultRecord modern) {
+  if (context.storageMaintenanceActive) return;
   if (record.courseStart || willStart.load()) {
     return;
   }
@@ -7322,6 +7342,7 @@ void MainMenuScene::startModernGBattlePlayback(
 
 void MainMenuScene::startModernCourseReplayPlayback(
     const ChartMetaRecord &record, ModernCourseResultRecord modern) {
+  if (context.storageMaintenanceActive) return;
   if (!record.courseStart || willStart.load()) {
     return;
   }
@@ -7531,6 +7552,7 @@ bool MainMenuScene::finishReplayLoadFailure(const char *action,
 
 void MainMenuScene::startReplayLoadWorker(
     std::function<void(std::shared_ptr<std::atomic_bool>)> work) {
+  if (context.storageMaintenanceActive) return;
   replayLoadTask_.start([this, work = std::move(work)](std::shared_ptr<std::atomic_bool> cancelled) {
     try {
       work(cancelled);
@@ -7592,6 +7614,7 @@ void MainMenuScene::changeToGameplayScene(bms_parser::Chart *chart,
 bool MainMenuScene::beginReplayExport(const i18n::Text &progressTitle,
                                       const i18n::Text &progressMessage,
                                       const i18n::Text &statusMessage) {
+  if (context.storageMaintenanceActive) return false;
   if (!replayExportJob_.tryBegin()) {
     return false;
   }

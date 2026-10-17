@@ -107,31 +107,55 @@ void ChartLibraryTaskService::setGameplayPaused(bool paused) {
   workAvailable_.notify_all();
 }
 
+std::optional<std::uint64_t> ChartLibraryTaskService::tryReserveMaintenance() {
+  std::lock_guard lifecycle(lifecycleMutex_);
+  std::lock_guard state(stateMutex_);
+  if (maintenanceToken_ || !queue_.empty() || activeTaskId_ ||
+      std::any_of(tasks_.begin(), tasks_.end(), [](const auto &task) { return isActive(task.status); }))
+    return {};
+  maintenanceToken_ = nextTaskId_++;
+  return maintenanceToken_;
+}
+void ChartLibraryTaskService::releaseMaintenance(std::uint64_t token) {
+  std::lock_guard state(stateMutex_);
+  if (maintenanceToken_ == token) maintenanceToken_.reset();
+}
+bool ChartLibraryTaskService::maintenanceReserved() const {
+  std::lock_guard state(stateMutex_);
+  return maintenanceToken_.has_value();
+}
+std::uint64_t ChartLibraryTaskService::enqueueMaintenanceRefresh(std::uint64_t token, TaskRequest request) {
+  std::lock_guard lifecycle(lifecycleMutex_);
+  std::lock_guard state(stateMutex_);
+  if (maintenanceToken_ != token || request.kind != TaskKind::RefreshPath) return 0;
+  return enqueueLocked(std::move(request));
+}
 std::uint64_t ChartLibraryTaskService::enqueue(TaskRequest request) {
-  std::lock_guard lifecycleLock(lifecycleMutex_);
-  std::uint64_t id = 0;
-  {
-    std::lock_guard lock(stateMutex_);
-    request.id = nextTaskId_;
-    id = request.id;
-    TaskInfo task{
-        .id = id,
-        .title = request.title,
-        .status = gameplayPaused_ ? TaskStatus::Paused : TaskStatus::Queued,
-        .detail = gameplayPaused_ ? i18n::message("library.tasks.paused.label") : i18n::message("library.tasks.waiting"),
-    };
-    startWorkerLocked();
-    tasks_.push_back(std::move(task));
-    try {
-      queue_.push_back(std::move(request));
-    } catch (...) {
-      tasks_.pop_back();
-      throw;
-    }
-    ++nextTaskId_;
-    trimHistoryLocked();
-    bumpRevisionLocked();
+  std::lock_guard lifecycle(lifecycleMutex_);
+  std::lock_guard state(stateMutex_);
+  if (maintenanceToken_) return 0;
+  return enqueueLocked(std::move(request));
+}
+std::uint64_t ChartLibraryTaskService::enqueueLocked(TaskRequest request) {
+  request.id = nextTaskId_;
+  const auto id = request.id;
+  TaskInfo task{
+      .id = id,
+      .title = request.title,
+      .status = gameplayPaused_ ? TaskStatus::Paused : TaskStatus::Queued,
+      .detail = gameplayPaused_ ? i18n::message("library.tasks.paused.label") : i18n::message("library.tasks.waiting"),
+  };
+  startWorkerLocked();
+  tasks_.push_back(std::move(task));
+  try {
+    queue_.push_back(std::move(request));
+  } catch (...) {
+    tasks_.pop_back();
+    throw;
   }
+  ++nextTaskId_;
+  trimHistoryLocked();
+  bumpRevisionLocked();
   workAvailable_.notify_one();
   return id;
 }
@@ -139,6 +163,7 @@ std::uint64_t ChartLibraryTaskService::enqueue(TaskRequest request) {
 std::uint64_t ChartLibraryTaskService::reserve(i18n::Text title,
                                                i18n::Text detail) {
   std::lock_guard lock(stateMutex_);
+  if (maintenanceToken_) return 0;
   const std::uint64_t id = nextTaskId_++;
   tasks_.push_back(TaskInfo{
       .id = id,
@@ -171,7 +196,7 @@ bool ChartLibraryTaskService::enqueueReserved(std::uint64_t id,
 bool ChartLibraryTaskService::enqueueReservedLocked(std::uint64_t id,
                                                     TaskRequest request) {
   TaskInfo *task = findTaskLocked(id);
-  if (task == nullptr) {
+  if (maintenanceToken_ || task == nullptr) {
     return false;
   }
   request.id = id;
@@ -191,7 +216,7 @@ bool ChartLibraryTaskService::enqueueReservedLocked(std::uint64_t id,
 bool ChartLibraryTaskService::beginAndroidImport(const std::string &token,
                                                 bool folder, bool moveSource) {
   std::lock_guard lock(stateMutex_);
-  if (!acceptingAndroidImports_ || token.empty() || androidImports_.contains(token)) {
+  if (maintenanceToken_ || !acceptingAndroidImports_ || token.empty() || androidImports_.contains(token)) {
     return false;
   }
   const std::uint64_t id = nextTaskId_;

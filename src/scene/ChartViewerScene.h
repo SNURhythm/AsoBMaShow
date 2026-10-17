@@ -72,6 +72,7 @@ public:
           SceneReturnTarget::Registered("MainMenu"));
   ~ChartViewerScene() override;
 
+  bool prepareForStorageMaintenance(std::string &error) override;
   void init() override;
   void onResume() override;
   EventHandleResult handleEvents(SDL_Event &event) override;

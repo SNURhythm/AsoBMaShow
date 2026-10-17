@@ -208,10 +208,43 @@ public final class DocumentsMutationGuardTests {
         reserveAndClose(root.resolve("chart").toFile());
     }
 
+    private static void maintenance(Path root) throws Exception {
+        Path chart = Files.createDirectory(root.resolve("chart"));
+        File media = Files.write(chart.resolve("sound.wav"), new byte[]{1}).toFile();
+        try (DocumentsMutationGuard.Reservation writer = DocumentsMutationGuard.reserveWriter(media)) {
+            rejected(() -> DocumentsMutationGuard.reserveExistingSubtrees(new String[]{chart.toString()}), true);
+            DocumentsMutationGuard.requireUnreserved(chart.toFile(), true);
+        }
+        try (AutoCloseable lease = DocumentsMutationGuard.reserveExistingSubtrees(new String[]{chart.toString()})) {
+            rejected(() -> DocumentsMutationGuard.reserveWriter(media), true);
+            rejected(() -> DocumentsMutationGuard.requireUnreserved(media, false), true);
+            rejected(() -> DocumentsMutationGuard.requireUnreserved(chart.toFile(), true), true);
+            reserveAndClose(root.resolve("unrelated").toFile());
+        }
+        try (DocumentsMutationGuard.Reservation writer = DocumentsMutationGuard.reserveWriter(media)) {}
+        rejected(() -> DocumentsMutationGuard.reserveExistingSubtrees(new String[]{chart.toString(), root.resolve("absent").toString()}), false);
+        // Partial admission must release the first subtree on failure.
+        try (AutoCloseable lease = DocumentsMutationGuard.reserveExistingSubtrees(new String[]{chart.toString()})) {}
+        Path renamed = root.resolve("renamed");
+        try (DocumentsMutationGuard.Reservation writer = DocumentsMutationGuard.reserveWriter(media)) {
+            Files.move(chart, renamed);
+            DocumentsMutationGuard.pathRenamed(chart.toFile(), renamed.toFile());
+            rejected(() -> DocumentsMutationGuard.reserveExistingSubtrees(new String[]{renamed.toString()}), true);
+            Files.move(renamed, chart);
+            DocumentsMutationGuard.pathRenamed(renamed.toFile(), chart.toFile());
+        }
+        Path alias = Files.createSymbolicLink(root.resolve("alias"), chart);
+        rejected(() -> DocumentsMutationGuard.reserveExistingSubtrees(new String[]{alias.toString()}), false);
+        blockedBySharedMonitor(() -> {
+            try (AutoCloseable lease = DocumentsMutationGuard.reserveExistingSubtrees(new String[]{chart.toString()})) {}
+        });
+    }
+
     public static void main(String[] args) throws Exception {
-        Path root = Files.createTempDirectory("documents-mutation-guard-");
+        Path root = Files.createTempDirectory("documents-mutation-guard-").toRealPath();
         try {
             switch (args[0]) {
+                case "maintenance": maintenance(root); break;
                 case "existing": existing(root); break;
                 case "descendants": descendants(root); break;
                 case "ancestors": ancestors(root); break;

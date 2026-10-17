@@ -60,6 +60,7 @@ void testSuccessRunsBodyExactlyOnce() {
                           .music = true};
           },
           .reportFatal = [&](const Result &) { ++reportCalls; },
+          .recoverStorage = [&] { events.push_back("storage"); return true; },
           .reconcileReplayFiles = [&] {
             ++reconciliationCalls;
             events.push_back("reconcile");
@@ -74,7 +75,7 @@ void testSuccessRunsBodyExactlyOnce() {
   expect(reportCalls == 0, "success does not report fatal");
   expect(runtimeCalls == 1, "success runs application once");
   expect(reconciliationCalls == 1, "success reconciles replay files once");
-  expect(events == std::vector<std::string_view>{"databases", "reconcile",
+  expect(events == std::vector<std::string_view>{"databases", "storage", "reconcile",
                                                  "runtime"},
          "database readiness and reconciliation precede runtime");
 }
@@ -192,6 +193,17 @@ void testDatabaseFailuresFailClosed() {
   }
 }
 
+void testStorageRecoveryFailureBlocksRuntime() {
+  bool fatal = false, runtime = false;
+  auto exitCode = application_startup::execute(true, Dependencies{
+    .initializeDatabases = [] { return Status{true, true, true, true}; },
+    .reportFatal = [&](const Result &result) { fatal = result.failure == Failure::StorageRecovery; },
+    .recoverStorage = [] { return false; },
+    .runReadyApplication = [&] { runtime = true; },
+  });
+  expect(exitCode == EXIT_FAILURE && fatal && !runtime, "uncertain storage blocks runtime");
+}
+
 void testBgfxTransientBuffersAreExpanded() {
   struct Limits {
     uint32_t maxTransientVbSize = 0;
@@ -209,6 +221,7 @@ void testBgfxTransientBuffersAreExpanded() {
 
 int main() {
   testSuccessRunsBodyExactlyOnce();
+  testStorageRecoveryFailureBlocksRuntime();
   testReplayReconciliationFailureDoesNotBlockResultsOrRuntime();
   testProfileFailureShortCircuitsEverything();
   testDatabaseFailuresFailClosed();

@@ -304,10 +304,11 @@ corrupt records preserve files and surface recovery-required status. Recovery
 does not resume unfinished encoding jobs or provide a user-facing recycle bin.
 
 Manual execution first obtains an application-thread maintenance reservation:
-wait for existing library mutations to finish, stop and join preview/music
+refuse admission until existing library mutations finish, stop and join preview/music
 preparation, release loaded media, and refuse admission while gameplay/export is
 active. The reservation prevents new in-app playback/import/scan/export mutations
-until the worker and completion refresh finish. Android app-owned Documents also
+until the worker finishes and affected-path refresh is handed to the serialized
+library task service. Playback starts only from fresh preparation afterward. Android app-owned Documents also
 uses the existing `DocumentsMutationGuard` reservation through a narrow JNI
 bridge. External filesystem editors cannot be globally locked; detect changes
 before commit and skip stale inputs rather than promising cross-process isolation.

@@ -28,6 +28,11 @@ public:
   virtual void onPresentationOrientationChanged() {}
   virtual void onPause() {}
   virtual void onResume() {}
+  virtual bool prepareForStorageMaintenance(std::string &error) {
+    if (!pausesBackgroundTasksForPerformance()) return true;
+    error = "Finish the active gameplay or export first.";
+    return false;
+  }
   virtual void onLanguageChanged() {
     for (auto *view : views) {
       view->propagateLanguageChange();

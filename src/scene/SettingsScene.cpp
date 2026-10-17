@@ -150,6 +150,12 @@ void SettingsScene::measureTemporaryArchiveCache() {
   }
 }
 
+bool SettingsScene::prepareForStorageMaintenance(std::string &error) {
+  if (!libraryTask.running() && !archiveCacheMaintenance.running()) return true;
+  error = "A library update or cache operation is active.";
+  return false;
+}
+
 void SettingsScene::init() {
   lastLayoutWidth = -1;
   ensureProfileController();

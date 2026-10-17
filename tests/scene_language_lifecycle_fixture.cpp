@@ -37,6 +37,7 @@ public:
   int uiBatchRenderer = 0;
   SceneManager *sceneManager = nullptr;
   std::atomic_bool backgroundTasksPausedForForegroundScene = false;
+  std::atomic_bool storageMaintenanceActive = false;
   BackgroundTasks *chartLibraryTasks = nullptr;
   std::function<void()> notifyBackgroundTaskPauseStateChanged;
   std::function<void(bool)> setGameplayOrientationLocked;
@@ -234,7 +235,30 @@ void testMenuCanvasIsSelectedBeforeSceneInitializationAndResume() {
   assert(menuCanvas);
 }
 
+void testMaintenanceKeepsCurrentSceneWhenGameplayIsRejected() {
+  ApplicationContext context;
+  SceneManager manager(context);
+  manager.changeScene(std::make_unique<ObservedScene>(context));
+  auto *retained = manager.currentScene;
+  context.storageMaintenanceActive = true;
+  struct Gameplay : Scene {
+    using Scene::Scene;
+    bool pausesBackgroundTasksForPerformance() const override { return true; }
+    void init() override { assert(false); }
+    void update(float) override {}
+    void renderScene() override {}
+    void cleanupScene() override {}
+  };
+  manager.changeScene(std::make_unique<Gameplay>(context));
+  assert(manager.currentScene == retained);
+  auto gameplay = std::make_unique<Gameplay>(context);
+  manager.registerScene("game", std::move(gameplay));
+  manager.changeScene("game");
+  assert(manager.currentScene == retained);
+}
+
 int main() {
+  testMaintenanceKeepsCurrentSceneWhenGameplayIsRejected();
   testMenuCanvasIsSelectedBeforeSceneInitializationAndResume();
   testGameplayOrientationFollowsSceneLifetime();
   testTutorialMenuReturnsWithState();

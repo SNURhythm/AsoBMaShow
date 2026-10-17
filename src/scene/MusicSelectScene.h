@@ -69,6 +69,7 @@ public:
 
   void onInputQueueOverflow() override;
   void init() override;
+  bool prepareForStorageMaintenance(std::string &error) override;
   void onPause() override;
   void onResume() override;
   void onLanguageChanged() override;

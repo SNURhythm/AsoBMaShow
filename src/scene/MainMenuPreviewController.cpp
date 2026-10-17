@@ -2,8 +2,9 @@
 
 MainMenuPreviewController::MainMenuPreviewController(
     ChartPreloadWorker::Processor processor, std::function<void()> release,
-    std::chrono::milliseconds debounceDelay, std::function<void()> stopPlayback)
-    : release_(std::move(release)), stopPlayback_(std::move(stopPlayback)),
+    std::chrono::milliseconds debounceDelay, std::function<void()> stopPlayback,
+    std::function<bool()> admit)
+    : release_(std::move(release)), stopPlayback_(std::move(stopPlayback)), admit_(std::move(admit)),
       worker_(debounceDelay) {
   worker_.configure(std::move(processor));
   worker_.setOnIdle([this] { releaseWhenIdle(); });
@@ -13,6 +14,8 @@ MainMenuPreviewController::~MainMenuPreviewController() { stop(); }
 
 void MainMenuPreviewController::request(const ChartMetaRecord &record,
                                         bool bypassDebounce) {
+  std::lock_guard stopLock(stopMutex_);
+  if (admit_ && !admit_()) return;
   {
     std::lock_guard lock(releaseMutex_);
     releasePending_ = false;

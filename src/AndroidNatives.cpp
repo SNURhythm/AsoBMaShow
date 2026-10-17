@@ -1504,6 +1504,52 @@ std::string ImportAndroidDocument(std::uint64_t operationToken,
                         : result;
 }
 
+std::shared_ptr<void> ReserveAndroidStorageSubtrees(
+    const std::vector<std::filesystem::path> &paths, std::string &error) {
+  auto *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+  auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
+  if (!env || !activity) { error = "Android storage service is unavailable."; return {}; }
+  jclass activityClass = env->GetObjectClass(activity);
+  jclass stringClass = env->FindClass("java/lang/String");
+  jmethodID method = activityClass ? env->GetMethodID(activityClass,
+      "reserveStorageSubtrees", "([Ljava/lang/String;)Ljava/lang/AutoCloseable;") : nullptr;
+  jobjectArray array = stringClass ? env->NewObjectArray(static_cast<jsize>(paths.size()), stringClass, nullptr) : nullptr;
+  if (array && method) {
+    for (std::size_t i = 0; i < paths.size() && !env->ExceptionCheck(); ++i) {
+      auto value = env->NewStringUTF(paths[i].string().c_str());
+      env->SetObjectArrayElement(array, static_cast<jsize>(i), value);
+      env->DeleteLocalRef(value);
+    }
+  }
+  jobject lease = array && method && !env->ExceptionCheck() ? env->CallObjectMethod(activity, method, array) : nullptr;
+  jobject retained = lease && !env->ExceptionCheck() ? env->NewGlobalRef(lease) : nullptr;
+  if (env->ExceptionCheck()) env->ExceptionClear();
+  if (lease && !retained) {
+    jclass type = env->GetObjectClass(lease);
+    jmethodID close = type ? env->GetMethodID(type, "close", "()V") : nullptr;
+    if (close) env->CallVoidMethod(lease, close);
+    if (env->ExceptionCheck()) env->ExceptionClear();
+    if (type) env->DeleteLocalRef(type);
+  }
+  if (lease) env->DeleteLocalRef(lease);
+  if (array) env->DeleteLocalRef(array);
+  if (stringClass) env->DeleteLocalRef(stringClass);
+  if (activityClass) env->DeleteLocalRef(activityClass);
+  env->DeleteLocalRef(activity);
+  if (!retained) { error = "A document writer or import is using this folder, or folder access is unavailable."; return {}; }
+  return std::shared_ptr<void>(retained, [](void *value) {
+    auto *jni = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
+    if (!jni) return;
+    auto object = static_cast<jobject>(value);
+    jclass type = jni->GetObjectClass(object);
+    jmethodID close = type ? jni->GetMethodID(type, "close", "()V") : nullptr;
+    if (close) jni->CallVoidMethod(object, close);
+    if (jni->ExceptionCheck()) jni->ExceptionClear();
+    if (type) jni->DeleteLocalRef(type);
+    jni->DeleteGlobalRef(object);
+  });
+}
+
 namespace skin {
 int renameAndroidSkinDirectoryWithMutationLock(int sourceParent,
                                                const char *sourceName,
@@ -2155,6 +2201,14 @@ bool StopAndroidNativeMusic(std::string &errorMessage) {
     errorMessage = callError;
     return false;
   }
+  std::string ignored;
+  return parseBridgeResult(result, ignored, errorMessage);
+}
+
+bool UnloadAndroidNativeMusic(std::string &errorMessage) {
+  std::string callError;
+  const auto result = callActivityStringMethod("unloadNativeMusic", "()Ljava/lang/String;", nullptr, callError);
+  if (!callError.empty()) { errorMessage = callError; return false; }
   std::string ignored;
   return parseBridgeResult(result, ignored, errorMessage);
 }

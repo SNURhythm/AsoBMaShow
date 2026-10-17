@@ -214,6 +214,7 @@ bool UpdateIOSNativeMusicQueue(const IOSNativeMusicQueue &queue,
 bool PlayIOSNativeMusic(std::string &errorMessage);
 bool PauseIOSNativeMusic(std::string &errorMessage);
 bool StopIOSNativeMusic(std::string &errorMessage);
+bool UnloadIOSNativeMusic(std::string &errorMessage);
 bool SeekIOSNativeMusic(long long positionMicros, std::string &errorMessage);
 bool SetIOSNativeMusicPlaybackRate(int percent, bool timeStretch,
                                    std::string &errorMessage);
