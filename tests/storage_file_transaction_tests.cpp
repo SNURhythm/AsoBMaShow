@@ -1,0 +1,283 @@
+#include "../src/storage/StorageFileTransaction.h"
+#include "StorageTestSupport.h"
+#include <nlohmann/json.hpp>
+
+#include <iostream>
+#include <iterator>
+
+using namespace storage_management;
+using storage_test::require;
+namespace fs = std::filesystem;
+namespace {
+struct Crash {};
+struct Fixture {
+  storage_test::TempDirectory temp;
+  StoragePlatformPaths paths;
+  AssetCandidate candidate;
+  EncodeResult encoded;
+  Fixture(bool samePath = false, bool deletion = false) {
+    temp.write("library/asset.mpg", std::string(1024, 's'));
+    temp.write("private/encoded.mp4", std::string(128, 'v'));
+    paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root / "library"});
+    candidate.source = temp.root / "library/asset.mpg";
+    candidate.destination = samePath ? candidate.source : temp.root / "library/asset.mp4";
+    if (samePath) {
+      fs::rename(candidate.source, temp.root / "library/asset.mp4");
+      candidate.source = candidate.destination = temp.root / "library/asset.mp4";
+    }
+    candidate.kind = asobmshow::chart_assets::MediaKind::Video;
+    candidate.operation = deletion ? AssetOperation::Delete : AssetOperation::CompressH264;
+    std::string error;
+    candidate.identity = *ReadFileIdentity(candidate.source, error);
+    encoded.outcome = FileOutcome::Converted;
+    encoded.outputPath = temp.root / "private/encoded.mp4";
+  }
+};
+std::string read(const fs::path &path) {
+  std::ifstream stream(path, std::ios::binary);
+  return {std::istreambuf_iterator<char>(stream), {}};
+}
+void requireNoRecoveryFiles(const Fixture &f) {
+  for (const auto &entry : fs::directory_iterator(f.paths.journalRoot))
+    require(!entry.is_regular_file(), "completed transactions remove their journal");
+  for (const auto &entry : fs::directory_iterator(f.candidate.source.parent_path()))
+    require(!entry.path().filename().string().starts_with(".asobmashow-storage-"),
+            "completed transactions remove sibling installation files and backups");
+}
+void testSuccessAndCancellation() {
+  for (const bool samePath : {false, true}) {
+    Fixture f(samePath);
+    StorageFileTransaction transaction(f.paths, {});
+    const auto result = transaction.Replace(f.candidate, f.encoded, {});
+    require(result.outcome == FileOutcome::Converted && result.reclaimedBytes == 896,
+            "successful replacement accounts for actual removed source bytes");
+    require(read(f.candidate.destination) == std::string(128, 'v'), "validated output installed");
+    if (!samePath) require(!fs::exists(f.candidate.source), "old extension retired");
+    requireNoRecoveryFiles(f);
+  }
+  Fixture f(false, true);
+  StorageFileTransaction transaction(f.paths, {});
+  const auto cancelled = transaction.Delete(f.candidate, [] { return false; });
+  require(cancelled.outcome == FileOutcome::Cancelled && fs::exists(f.candidate.source),
+          "cancellation before commit retains source");
+  int checkpoints = 0;
+  const auto hashingCancelled = transaction.Delete(f.candidate, [&] { return ++checkpoints == 1; });
+  require(hashingCancelled.outcome == FileOutcome::Cancelled && fs::exists(f.candidate.source),
+          "cancellation during source verification is reported as cancellation");
+  const auto deleted = transaction.Delete(f.candidate, {});
+  require(deleted.outcome == FileOutcome::Deleted && deleted.reclaimedBytes == 1024 &&
+              !fs::exists(f.candidate.source), "deletion reclaims bytes after unlink");
+  requireNoRecoveryFiles(f);
+}
+void testRestartAtEveryBoundary() {
+  for (const bool samePath : {false, true}) {
+    for (const auto point : {"copying", "copied", "prepared", "published-before-journal",
+                             "published", "retired-before-journal", "retired", "committed"}) {
+      Fixture f(samePath);
+      FileTransactionDependencies dependencies;
+      dependencies.faultPoint = [point](std::string_view reached) { if (reached == point) throw Crash{}; };
+      try {
+        StorageFileTransaction(f.paths, dependencies).Replace(f.candidate, f.encoded, {});
+        require(false, "injected crash point reached");
+      } catch (const Crash &) {}
+      const auto recovered = StorageFileTransaction(f.paths, {}).Recover({});
+      require(!recovered.recoveryRequired, "restart resolves valid journal");
+      if (std::string_view(point) == "committed") {
+        require(read(f.candidate.destination) == std::string(128, 'v'), "committed replacement survives restart");
+        require(recovered.reclaimedBytes == 896, "recovery counts bytes only after backup cleanup");
+      } else {
+        require(read(f.candidate.source) == std::string(1024, 's'), "uncommitted replacement rolls back");
+        if (!samePath) require(!fs::exists(f.candidate.destination), "uncommitted destination removed");
+      }
+      requireNoRecoveryFiles(f);
+    }
+  }
+  for (const auto point : {"prepared", "retired", "committed"}) {
+    Fixture f(false, true);
+    FileTransactionDependencies dependencies;
+    dependencies.faultPoint = [point](std::string_view reached) { if (reached == point) throw Crash{}; };
+    try { StorageFileTransaction(f.paths, dependencies).Delete(f.candidate, {}); }
+    catch (const Crash &) {}
+    const auto recovered = StorageFileTransaction(f.paths, {}).Recover({});
+    require(!recovered.recoveryRequired, "deletion journal recovers");
+    require(fs::exists(f.candidate.source) != (std::string_view(point) == "committed"),
+            "only committed deletions survive restart");
+    requireNoRecoveryFiles(f);
+  }
+}
+void testFailuresNeverClobberAndCleanupAccounting() {
+  {
+    Fixture f;
+    FileTransactionDependencies dependencies;
+    dependencies.faultPoint = [&](std::string_view point) {
+      if (point == "committed") f.temp.write("library/asset.mp4", "unexpected output edit");
+    };
+    const auto result = StorageFileTransaction(f.paths, dependencies).Replace(f.candidate, f.encoded, {});
+    require(result.reason.code == StorageReason::RecoveryRequired && result.reclaimedBytes == 0,
+            "changed output before backup cleanup requires recovery, not an ordinary warning");
+  }
+  for (const bool samePath : {false, true}) {
+    Fixture f(samePath);
+    auto dependencies = DefaultFileTransactionDependencies();
+    const auto rename = dependencies.renameNoReplace;
+    dependencies.renameNoReplace = [rename, &f](const fs::path &from, const fs::path &to, std::string &error) {
+      if (from.extension() == ".install") { error = "injected rename failure"; return false; }
+      return rename(from, to, error);
+    };
+    const auto result = StorageFileTransaction(f.paths, dependencies).Replace(f.candidate, f.encoded, {});
+    require(result.outcome == FileOutcome::Failed && read(f.candidate.source) == std::string(1024, 's'),
+            "failed installation rename restores the original for either path strategy");
+  }
+  {
+    Fixture f;
+    f.temp.write("private/foreign", "unrelated file must remain intact");
+    FileTransactionDependencies dependencies;
+    dependencies.faultPoint = [&](std::string_view point) {
+      if (point != "copying") return;
+      for (const auto &entry : fs::directory_iterator(f.candidate.source.parent_path())) {
+        if (entry.path().extension() != ".install") continue;
+        fs::remove(entry.path());
+        fs::create_symlink(f.temp.root / "private/foreign", entry.path());
+      }
+    };
+    const auto result = StorageFileTransaction(f.paths, dependencies).Replace(f.candidate, f.encoded, {});
+    require(result.outcome == FileOutcome::Failed &&
+                read(f.temp.root / "private/foreign") == "unrelated file must remain intact",
+            "installation copy never follows a replaced staging symlink");
+  }
+  {
+    Fixture f;
+    FileTransactionDependencies dependencies;
+    dependencies.faultPoint = [&](std::string_view point) {
+      if (point == "published") f.temp.write("library/asset.mpg", "edit after publication");
+    };
+    const auto result = StorageFileTransaction(f.paths, dependencies).Replace(f.candidate, f.encoded, {});
+    require(result.outcome == FileOutcome::Failed &&
+                read(f.candidate.source) == "edit after publication",
+            "source is rechecked immediately before retirement");
+  }
+  for (const bool deletion : {false, true}) {
+    Fixture f(false, deletion);
+    bool cancel = false;
+    FileTransactionDependencies dependencies;
+    dependencies.faultPoint = [&](std::string_view point) { if (point == "retired") cancel = true; };
+    StorageFileTransaction transaction(f.paths, dependencies);
+    const auto result = deletion ? transaction.Delete(f.candidate, [&] { return !cancel; }) :
+        transaction.Replace(f.candidate, f.encoded, [&] { return !cancel; });
+    require(result.outcome == FileOutcome::Cancelled && read(f.candidate.source) == std::string(1024, 's'),
+            "cancellation after retirement but before commitment restores source");
+    requireNoRecoveryFiles(f);
+  }
+  {
+    Fixture f;
+    FileTransactionDependencies dependencies;
+    dependencies.faultPoint = [&](std::string_view point) {
+      if (point == "prepared") f.temp.write("library/asset.mp4", "external destination");
+    };
+    const auto result = StorageFileTransaction(f.paths, dependencies).Replace(f.candidate, f.encoded, {});
+    require(result.outcome == FileOutcome::Failed && result.reclaimedBytes == 0 &&
+                read(f.candidate.source) == std::string(1024, 's') &&
+                read(f.candidate.destination) == "external destination",
+            "a destination appearing at commit is never overwritten or removed");
+  }
+  {
+    Fixture f;
+    FileTransactionDependencies dependencies;
+    dependencies.faultPoint = [&](std::string_view point) {
+      if (point == "prepared") f.temp.write("library/asset.mpg", "external edit");
+    };
+    const auto result = StorageFileTransaction(f.paths, dependencies).Replace(f.candidate, f.encoded, {});
+    require(result.outcome == FileOutcome::Failed && read(f.candidate.source) == "external edit",
+            "source changed before commit is preserved");
+  }
+  {
+    Fixture f;
+    FileTransactionDependencies dependencies;
+    dependencies.copyAndSync = [](const fs::path &, const fs::path &, const FileIdentity &, Checkpoint, std::string &error) {
+      error = "disk full"; return false;
+    };
+    const auto result = StorageFileTransaction(f.paths, dependencies).Replace(f.candidate, f.encoded, {});
+    require(result.outcome == FileOutcome::Failed && fs::exists(f.candidate.source),
+            "copy/disk-full failure leaves original intact");
+  }
+  {
+    Fixture f(true);
+    auto dependencies = DefaultFileTransactionDependencies();
+    const auto remove = dependencies.remove;
+    dependencies.remove = [remove](const fs::path &path, std::string &error) {
+      if (path.extension() == ".backup") { error = "busy backup"; return false; }
+      return remove(path, error);
+    };
+    const auto result = StorageFileTransaction(f.paths, dependencies).Replace(f.candidate, f.encoded, {});
+    require(result.outcome == FileOutcome::Converted && result.reclaimedBytes == 0 &&
+                result.reason.code == StorageReason::CleanupFailed,
+            "retained original backup is not reported as reclaimed space");
+    const auto recovered = StorageFileTransaction(f.paths, {}).Recover({});
+    require(!recovered.recoveryRequired && recovered.reclaimedBytes == 896,
+            "later recovery accounts for successful cleanup");
+    requireNoRecoveryFiles(f);
+  }
+}
+void testForeignIdentityAndCorruptJournalArePreserved() {
+  Fixture f(true);
+  FileTransactionDependencies dependencies;
+  dependencies.faultPoint = [](std::string_view point) { if (point == "committed") throw Crash{}; };
+  try { StorageFileTransaction(f.paths, dependencies).Replace(f.candidate, f.encoded, {}); }
+  catch (const Crash &) {}
+  for (const auto &entry : fs::directory_iterator(f.candidate.source.parent_path())) {
+    if (entry.path().extension() == ".backup") {
+      fs::remove(entry.path());
+      std::ofstream(entry.path()) << "unrelated replacement file";
+    }
+  }
+  const auto recovered = StorageFileTransaction(f.paths, {}).Recover({});
+  require(recovered.recoveryRequired, "foreign backup identity blocks cleanup");
+  bool foundForeign = false;
+  for (const auto &entry : fs::directory_iterator(f.candidate.source.parent_path()))
+    if (entry.path().extension() == ".backup") foundForeign = read(entry.path()) == "unrelated replacement file";
+  require(foundForeign, "recovery never deletes an unrelated file at a recorded path");
+  std::ofstream(f.paths.journalRoot / "corrupt.json") << "not JSON";
+  require(StorageFileTransaction(f.paths, {}).Recover({}).recoveryRequired,
+          "corrupt records remain visible as recovery-required");
+  require(fs::exists(f.paths.journalRoot / "corrupt.json"), "corrupt record preserved");
+
+  Fixture outside;
+  dependencies.faultPoint = [](std::string_view point) { if (point == "prepared") throw Crash{}; };
+  try { StorageFileTransaction(outside.paths, dependencies).Replace(outside.candidate, outside.encoded, {}); }
+  catch (const Crash &) {}
+  for (const auto &entry : fs::directory_iterator(outside.paths.journalRoot)) {
+    if (entry.path().extension() != ".json") continue;
+    nlohmann::json record;
+    { std::ifstream input(entry.path()); input >> record; }
+    record["source"] = (outside.temp.root / "private/encoded.mp4").string();
+    std::ofstream(entry.path()) << record;
+  }
+  require(StorageFileTransaction(outside.paths, {}).Recover({}).recoveryRequired &&
+              read(outside.encoded.outputPath) == std::string(128, 'v'),
+          "out-of-authorized-root journal cannot mutate its target");
+
+  Fixture malformed;
+  dependencies.faultPoint = [](std::string_view point) { if (point == "committed") throw Crash{}; };
+  try { StorageFileTransaction(malformed.paths, dependencies).Replace(malformed.candidate, malformed.encoded, {}); }
+  catch (const Crash &) {}
+  for (const auto &entry : fs::directory_iterator(malformed.paths.journalRoot)) {
+    if (entry.path().extension() != ".json") continue;
+    nlohmann::json record;
+    { std::ifstream input(entry.path()); input >> record; }
+    record["phase"] = 4.5;
+    std::ofstream(entry.path()) << record;
+  }
+  require(StorageFileTransaction(malformed.paths, {}).Recover({}).recoveryRequired,
+          "malformed journal state must not be coerced into a committed decision");
+}
+}
+int main() {
+  try {
+    testSuccessAndCancellation();
+    testRestartAtEveryBoundary();
+    testFailuresNeverClobberAndCleanupAccounting();
+    testForeignIdentityAndCorruptJournalArePreserved();
+  } catch (const std::exception &error) {
+    std::cerr << "FAIL: " << error.what() << '\n'; return 1;
+  }
+}

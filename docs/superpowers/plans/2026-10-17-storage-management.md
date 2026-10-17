@@ -222,26 +222,26 @@ public:
 };
 ```
 
-- [ ] Write fault-driven tests for extension-changing and same-path replacements,
+- [x] Write fault-driven tests for extension-changing and same-path replacements,
   deletion, destination appearance, source changes, disk full, and cleanup errors.
   Restart from every durable journal state. Assertions: original or validated
   output remains playable; uncommitted deletion is restored; committed cleanup
   only touches matching identities; retained backups contribute zero reclaimed
   bytes until actually removed. No fixed sleeps.
-- [ ] Run `storage_file_transaction_tests` and confirm failure before writing
+- [x] Run `storage_file_transaction_tests` and confirm failure before writing
   transaction bodies. Register it in `area_library`.
-- [ ] Implement the spec's journal state transitions and exclusive same-volume
+- [x] Implement the spec's journal state transitions and exclusive same-volume
   installation files. Hash/check source and output at commit, flush journals and
   directories, and keep recoverable backups for same-path replacement. Reject
   corrupt/out-of-root journal targets. Treat inconsistent recovery as blocking
   library access to the affected scope, not permission to remove files.
-- [ ] Implement deletion as journaled rename → committed decision → unlink.
+- [x] Implement deletion as journaled rename → committed decision → unlink.
   Recheck cancellation before commit; after commitment finish consistent cleanup
   or leave an explicit recovery record. Keep temporary/journal roots outside
   Android's user-visible Documents and preserve iOS scope lifetime through commit.
-- [ ] Run the transaction target once all fault scenarios are implemented and
+- [x] Run the transaction target once all fault scenarios are implemented and
   require every injected boundary/restart case to pass.
-- [ ] Commit `feat: make chart media changes recoverable`.
+- [x] Commit `feat: make chart media changes recoverable`.
 
 ## Task 4: Lossless and lossy audio conversion
 

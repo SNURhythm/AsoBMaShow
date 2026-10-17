@@ -569,6 +569,7 @@ asobmashow_label_tests(area_build
 asobmashow_label_tests(area_settings storage_policy_tests)
 asobmashow_label_tests(area_library storage_policy_tests)
 asobmashow_label_tests(area_library storage_inventory_tests)
+asobmashow_label_tests(area_library storage_file_transaction_tests)
 asobmashow_label_tests(area_audio storage_inventory_tests)
 asobmashow_label_tests(area_video storage_inventory_tests)
 asobmashow_label_tests(area_ir

@@ -33,6 +33,7 @@ struct AssetCandidate {
   AssetOperation operation = AssetOperation::LosslessFlac;
   std::vector<std::string> groups;
   FileIdentity identity;
+  std::string sourceHash; // Filled immediately before encoding, not during browsing.
 };
 struct GroupStorageMeasurement {
   std::string groupId;
