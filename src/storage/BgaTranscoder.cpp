@@ -162,6 +162,23 @@ struct Timeline {
     last = pts; end = nextEnd; maximumDuration = std::max(maximumDuration, duration); ++frames;
   }
 };
+std::uint64_t timestampDistance(std::int64_t left, std::int64_t right) {
+  // Unsigned subtraction represents the full signed timestamp span exactly,
+  // including distances greater than INT64_MAX, without overflowing abs().
+  return left >= right ? static_cast<std::uint64_t>(left) - static_cast<std::uint64_t>(right) :
+                         static_cast<std::uint64_t>(right) - static_cast<std::uint64_t>(left);
+}
+void validateDeclaredVideoTimeline(const AVStream &video, const Timeline &decoded) {
+  if (video.start_time == AV_NOPTS_VALUE) return;
+  if (timestampDistance(decoded.first, video.start_time) > 1)
+    throw Failure{StorageReason::ValidationFailed, "Decoder lost the opening presentation interval"};
+  if (video.duration <= 0) return;
+  if (video.start_time > std::numeric_limits<std::int64_t>::max() - video.duration)
+    throw Failure{StorageReason::ValidationFailed, "Declared video end is out of range"};
+  const auto declaredEnd = video.start_time + video.duration;
+  if (timestampDistance(declaredEnd, decoded.end) > static_cast<std::uint64_t>(decoded.maximumDuration))
+    throw Failure{StorageReason::ValidationFailed, "Decoded video does not match its declared duration"};
+}
 struct Scan {
   VideoDescription description;
   Timeline video, audio;
@@ -256,16 +273,12 @@ Scan scan(const fs::path &path, const Checkpoint &check) {
   }, [](int, const AVPacket &) {});
   if (!result.video.frames || (description.hasAudio && !result.audio.frames))
     throw Failure{StorageReason::ValidationFailed, "Empty media stream"};
-  if (video->start_time != AV_NOPTS_VALUE && std::abs(result.video.first - video->start_time) > 1)
-    throw Failure{StorageReason::ValidationFailed, "Decoder lost the opening presentation interval"};
+  validateDeclaredVideoTimeline(*video, result.video);
   description.duration = result.video.end - result.video.first;
   description.minimumFrameInterval = result.video.minimumInterval;
   description.audioDiscontinuous = result.audio.discontinuous;
   result.originMicros = av_rescale_q(result.video.first, result.video.timeBase, AV_TIME_BASE_Q);
   if (description.hasAudio) result.originMicros = std::min(result.originMicros, av_rescale_q(result.audio.first, result.audio.timeBase, AV_TIME_BASE_Q));
-  if (video->duration > 0 && video->start_time != AV_NOPTS_VALUE &&
-      std::abs((video->start_time + video->duration) - result.video.end) > result.video.maximumDuration)
-    throw Failure{StorageReason::ValidationFailed, "Decoded video does not match its declared duration"};
   return result;
 }
 

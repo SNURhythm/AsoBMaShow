@@ -91,6 +91,36 @@ void timelineTests() {
   overlapping.add(1, 1);
   require(!overlapping.discontinuous, "adjacent intervals remain continuous");
 }
+void declaredVideoTimelineTests() {
+  const auto maximum = std::numeric_limits<std::int64_t>::max();
+  const auto minimum = std::numeric_limits<std::int64_t>::min();
+  const auto accepts = [](std::int64_t start, std::int64_t duration,
+                          std::int64_t first, std::int64_t frameDuration) {
+    AVStream stream{};
+    stream.start_time = start; stream.duration = duration;
+    Timeline decoded;
+    decoded.add(first, frameDuration);
+    try { validateDeclaredVideoTimeline(stream, decoded); }
+    catch (const Failure &failure) {
+      require(failure.reason == StorageReason::ValidationFailed, "malformed container timing fails validation");
+      return false;
+    }
+    return true;
+  };
+  require(!accepts(maximum - 1, 2, maximum - 1, 1),
+          "declared end overflow cannot wrap into an accepted duration tolerance");
+  require(!accepts(maximum, 0, -1, 1),
+          "opening timestamp difference cannot overflow abs at INT64_MIN");
+  require(!accepts(minimum + 1, 0, maximum - 1, 1),
+          "opening timestamps at opposite extremes are rejected");
+  require(accepts(maximum - 1, 1, maximum - 1, 1) &&
+              accepts(minimum + 1, 1, minimum + 1, 1),
+          "representable declared timing remains valid at both limits");
+  require(accepts(0, 2, 0, 1) && !accepts(0, 3, 0, 1),
+          "declared end keeps the one-frame tolerance boundary");
+  require(accepts(AV_NOPTS_VALUE, maximum, 0, 1),
+          "unknown container start does not invent a declared end");
+}
 void audioTests() {
   storage_test::TempDirectory temp;
   StoragePolicy policy;
@@ -355,7 +385,7 @@ void videoTests() {
 }
 int main() {
   av_log_set_level(AV_LOG_ERROR);
-  try { timelineTests(); audioTests(); videoTests(); }
+  try { timelineTests(); declaredVideoTimelineTests(); audioTests(); videoTests(); }
   catch (const std::exception &error) { std::cerr << error.what() << '\n'; return 1; }
   return 0;
 }
