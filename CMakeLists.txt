@@ -14,7 +14,9 @@ set(ASOBMASHOW_APPLICATION_VERSION "${PROJECT_VERSION}" CACHE STRING
 add_compile_definitions(
     ASOBMASHOW_APPLICATION_VERSION="${ASOBMASHOW_APPLICATION_VERSION}")
 include(CTest)
-option(ASOBMASHOW_BUILD_TESTS "Build lightweight unit tests" ON)
+option(ASOBMASHOW_BUILD_TESTS "Build unit and integration tests" ON)
+option(ASOBMASHOW_TEST_FULL_DEBUG_INFO
+       "Keep full variable/type debug information in Clang/GCC test objects" OFF)
 option(ASOBMASHOW_ENABLE_PERF_TELEMETRY
        "Log periodic frame, audio, and input performance telemetry" OFF)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
@@ -8744,6 +8746,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 )
             else()
                 target_compile_options(${target_name} PRIVATE -UNDEBUG)
+                # Line tables retain source breakpoints and symbolized stacks
+                # without repeating full STL/JSON type information per fixture.
+                # Opt back into full debug info for local-variable inspection.
+                if(NOT ASOBMASHOW_TEST_FULL_DEBUG_INFO)
+                    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+                        target_compile_options(${target_name} PRIVATE
+                            $<$<CONFIG:Debug,RelWithDebInfo>:-gline-tables-only>)
+                    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+                        target_compile_options(${target_name} PRIVATE
+                            $<$<CONFIG:Debug,RelWithDebInfo>:-g1>)
+                    endif()
+                endif()
                 # Use the same optimized-Debug policy as main, including in
                 # fixture translation units that instantiate STL/JSON helpers.
                 # Assertions remain enabled in every configuration.
@@ -8751,6 +8765,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                     target_compile_options(${target_name} PRIVATE
                         $<$<CONFIG:Debug>:-O1 -fno-omit-frame-pointer>)
                 endif()
+            endif()
+            if(APPLE AND NOT IOS)
+                target_link_options(${target_name} PRIVATE "LINKER:-dead_strip")
             endif()
             set_property(TARGET ${target_name}
                 PROPERTY ASOBMASHOW_TEST_TARGET_PREPARED TRUE)

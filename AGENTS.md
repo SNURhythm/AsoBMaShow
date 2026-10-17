@@ -139,6 +139,12 @@ contains examples and timing context if needed.
   `cmake --build cmake-build-debug --target main -j 6`
 - For full CTest runs, execute tests in parallel:
   `ctest --test-dir cmake-build-debug --output-on-failure -j 6`
+- Clang/GCC test targets use compact debug information by default, retaining
+  source breakpoints and stack traces but omitting full local-variable/type
+  inspection. For a debugging session that needs it, configure with
+  `cmake -S . -B cmake-build-debug -DASOBMASHOW_TEST_FULL_DEBUG_INFO=ON`
+  and rebuild the desired test target. Set the option back to `OFF` to restore
+  compact test objects. Application debug information is unaffected.
 - Run only one Ninja/CMake build at a time per build directory. Combine targets
   in one invocation; concurrent builds can corrupt `.ninja_deps` and cause
   repeated recompilation of unchanged files.
