@@ -113,7 +113,8 @@ void archiveUpdatesBatchWithoutFullCopy() {
 }
 void interruptedArchiveWritesRecover() {
   const std::vector<std::pair<std::string, unsigned>> faults = {{"archive-entry-ready", 1}, {"archive-redo", 3},
-      {"archive-write", 3}, {"archive-cursor", 3}, {"archive-before-truncate", 1}, {"archive-truncate", 1}};
+      {"archive-write", 3}, {"archive-cursor", 3}, {"archive-before-truncate", 1}, {"archive-truncate", 1},
+      {"archive-cleanup-ready", 1}, {"archive-manifest-unlinked", 1}, {"archive-cleanup-remove", 1}};
   for (const auto &[point, occurrence] : faults) {
     storage_test::TempDirectory temp;
     const auto archive = temp.root / "library.zip";
@@ -141,12 +142,13 @@ void interruptedArchiveWritesRecover() {
     require(RecoverStorageArchives(paths).changedRoots.empty(), "archive recovery is idempotent");
   }
 }
-void writeSparseZip64(const fs::path &path) {
+void writeSparseZip64(const fs::path &path, std::uint64_t offset = 0x100000000ULL + 4096,
+    const std::string &audioName = "\x93\xfa\x96\x7b\x8c\xea.wav") {
   using storage_management::archive_detail::put;
-  std::ofstream file(path, std::ios::binary); std::uint64_t offset = 0x100000000ULL + 4096;
+  std::ofstream file(path, std::ios::binary);
   file.seekp(offset); std::string central;
   for (const auto &[name, payload] : std::vector<std::pair<std::string, std::string>>{
-      {"movie.avi", std::string(1000, 'v')}, {"\x93\xfa\x96\x7b\x8c\xea.wav", std::string(10000, 'a')}, {"chart.bms", "fixture"}}) {
+      {"movie.avi", std::string(1000, 'v')}, {audioName, std::string(10000, 'a')}, {"chart.bms", "fixture"}}) {
     const auto crc = crc32(0, reinterpret_cast<const Bytef *>(payload.data()), payload.size());
     std::string local(30, '\0'); put(local, 0, 0x04034b50, 4); put(local, 4, 20, 2); put(local, 14, crc, 4);
     put(local, 18, payload.size(), 4); put(local, 22, payload.size(), 4); put(local, 26, name.size(), 2);
@@ -164,6 +166,17 @@ void writeSparseZip64(const fs::path &path) {
   std::string end(22, '\0'); put(end, 0, 0x06054b50, 4); put(end, 8, 3, 2); put(end, 10, 3, 2);
   put(end, 12, central.size(), 4); put(end, 16, 0xffffffff, 4); put(end, 20, 12, 2);
   const auto tail = end64 + locator + end + "archive-note"; file.write(tail.data(), tail.size()); require(file.good(), "write sparse ZIP64 fixture");
+}
+void malformedLegacyNamesAreRejected() {
+  storage_test::TempDirectory temp;
+  const auto path = temp.root / "invalid.zip";
+  // A CP932 lead byte followed by ASCII '.' must not become a replacement
+  // character and silently name a different asset on Android or Windows.
+  writeSparseZip64(path, 0, "\x81.wav");
+  bool rejected = false;
+  try { StorageArchive archive(path, temp.root / "invalid.sqlite", {}); }
+  catch (const StorageArchiveError &) { rejected = true; }
+  require(rejected, "malformed CP932 names are rejected instead of substituted");
 }
 void sparseZip64AndLegacyNames() {
   storage_test::TempDirectory temp; const auto path = temp.root / "large.zip"; writeSparseZip64(path);
@@ -303,7 +316,8 @@ void storageArchiveTests() {
   for (const auto &[name, run] : std::vector<std::pair<const char *, void(*)()>>{
       {"manifest", manifestsExtractEntries}, {"preflight", selectedArchiveFoldersAreEligible},
       {"update", archiveUpdatesBatchWithoutFullCopy}, {"recovery", interruptedArchiveWritesRecover},
-      {"zip64", sparseZip64AndLegacyNames}, {"playback", realArchiveOptimizerPreservesPlayback},
+      {"zip64", sparseZip64AndLegacyNames}, {"invalid-encoding", malformedLegacyNamesAreRejected},
+      {"playback", realArchiveOptimizerPreservesPlayback},
       {"boundaries", archivePolicyBoundaries}, {"rejections", unsafeAndStaleArchivesAreRejected},
       {"partial", partialWritesAndForeignChanges}}) {
     try { run(); } catch (const std::exception &error) { throw std::runtime_error(std::string(name) + ": " + error.what()); }

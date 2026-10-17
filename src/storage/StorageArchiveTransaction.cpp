@@ -46,11 +46,24 @@ bool ownedFile(const std::string &name) {
   if (path.stem() == "input") return asobmshow::chart_assets::ClassifyMediaPath(path) != asobmshow::chart_assets::MediaKind::Other;
   return path.stem() == "output" && (path.extension() == ".flac" || path.extension() == ".ogg" || path.extension() == ".mp4");
 }
-void cleanup(const fs::path &journal) {
+void cleanup(fs::path journal, const StorageArchiveDependencies &deps = {}) {
   for (const auto &entry : fs::directory_iterator(journal))
     require(entry.is_regular_file() && !entry.is_symlink() && ownedFile(entry.path().filename().string()),
         "Unexpected file in archive recovery directory", StorageReason::RecoveryRequired);
-  for (const auto &entry : fs::directory_iterator(journal)) fs::remove(entry.path());
+  const auto name = journal.filename().string();
+  if (!name.starts_with("archive-preparing-") && !name.starts_with("archive-cleanup-")) {
+    const auto retired = journal.parent_path() / ("archive-cleanup-" + name.substr(8));
+    fs::rename(journal, retired); journal = retired;
+  }
+  // Persist the cleanup-only namespace before unlinking the manifest. A crash
+  // during deletion must never leave a ready journal without recovery evidence.
+  syncDirectory(journal.parent_path());
+  if (deps.faultPoint) deps.faultPoint("archive-cleanup-ready");
+  for (const auto &entry : fs::directory_iterator(journal)) {
+    fs::remove(entry.path());
+    if (entry.path().filename() == "manifest.sqlite" && deps.faultPoint) deps.faultPoint("archive-manifest-unlinked");
+  }
+  if (deps.faultPoint) deps.faultPoint("archive-cleanup-remove");
   fs::remove(journal); syncDirectory(journal.parent_path());
 }
 void authority(const fs::path &path, const StoragePlatformPaths &paths) {
@@ -398,7 +411,7 @@ StorageReport UpdateStorageArchive(const StorageArchiveSummary &summary, const S
       Update update(archive, journal, deps, started); update.progress.filesTotal = summary.eligibleCount;
       update.Entries(&summary, policy, check, progress); update.Finish(); report = update.Result();
     }
-    cleanup(journal); journal.clear();
+    cleanup(journal, deps); journal.clear();
   } catch (const std::exception &error) {
     failure(report, summary.path, error, started);
     if (!started && !journal.empty()) { try { cleanup(journal); } catch (...) { report.cleanupPending = true; } }
@@ -411,9 +424,10 @@ StorageReport RecoverStorageArchives(const StoragePlatformPaths &paths, Checkpoi
     std::string pathError; require(IsSafeLocalPath(paths.journalRoot, pathError, paths.pathAccessRoots), "Unsafe archive recovery root", StorageReason::RecoveryRequired);
     for (const auto &entry : fs::directory_iterator(paths.journalRoot)) {
       active(check); const auto name = entry.path().filename().string(); if (!name.starts_with("archive-")) continue;
-      if (name.starts_with("archive-preparing-")) {
-        require(uuid::isCanonicalLowerV4(name.substr(18)) && !entry.is_symlink() && entry.is_directory(), "Invalid archive preparation directory", StorageReason::RecoveryRequired);
-        cleanup(entry.path()); continue;
+      if (name.starts_with("archive-preparing-") || name.starts_with("archive-cleanup-")) {
+        const auto prefix = name.starts_with("archive-preparing-") ? 18 : 16;
+        require(uuid::isCanonicalLowerV4(name.substr(prefix)) && !entry.is_symlink() && entry.is_directory(), "Invalid archive cleanup directory", StorageReason::RecoveryRequired);
+        cleanup(entry.path(), deps); continue;
       }
       require(uuid::isCanonicalLowerV4(name.substr(8)) && !entry.is_symlink() && entry.is_directory(), "Invalid archive recovery directory", StorageReason::RecoveryRequired);
       const auto journal = entry.path(); fs::path source; bool started = true;
@@ -429,7 +443,7 @@ StorageReport RecoverStorageArchives(const StoragePlatformPaths &paths, Checkpoi
           auto report = update.Result(); result.converted += report.converted; result.deleted += report.deleted; result.reclaimedBytes += report.reclaimedBytes;
           for (auto &file : report.files) if (result.files.size() < 100) result.files.push_back(std::move(file)); result.changedRoots.push_back(source);
         }
-        cleanup(journal);
+        cleanup(journal, deps);
       } catch (const std::exception &error) { failure(result, source.empty() ? journal : source, error, true); }
     }
   } catch (const std::exception &error) {

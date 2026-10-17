@@ -1,6 +1,6 @@
 #pragma once
 #include "StorageArchiveIO.h"
-#include <sqlite3.h>
+#include "../sqlite3.h"
 #include <limits>
 
 namespace storage_management::archive_detail {

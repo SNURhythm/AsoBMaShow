@@ -65,4 +65,4 @@
 - [x] Update supported-format, extra-space, recovery and cancellation behavior without promising whole-archive rollback.
 - [x] Run `cmake --build cmake-build-debug --target main -j 6` and focused CTest groups.
 - [x] Run `scripts/ios_firebase_deploy.sh --build-only` (no upload); fix platform findings.
-- [ ] Review the completed diff, commit task-related changes and push the current upstream.
+- [x] Review the completed diff, commit task-related changes and push the current upstream.

@@ -3,9 +3,15 @@
 #include "../text/Utf8.h"
 #include <algorithm>
 #include <array>
+#include <climits>
 #include <cstdio>
 #include <cstring>
-#if __has_include(<iconv.h>)
+#if defined(__ANDROID__)
+#include "../targets.h"
+#include "../AndroidNatives.h"
+#elif defined(_WIN32)
+#include <windows.h>
+#elif __has_include(<iconv.h>)
 #include <iconv.h>
 #define STORAGE_ARCHIVE_ICONV 1
 #endif
@@ -27,7 +33,27 @@ std::string lower(std::string text) {
 std::string decoded(std::string raw, bool utf8) {
   if (asobmashow::text::validUtf8(raw)) return raw;
   require(!utf8, "Invalid UTF-8 archive name");
-#ifdef STORAGE_ARCHIVE_ICONV
+#if defined(__ANDROID__)
+  auto result = ConvertAndroidMs932ToUtf8(raw);
+  // Java's String decoder substitutes U+FFFD for malformed input. CP932
+  // cannot encode that scalar, so reject substitution before accepting a name.
+  require(result && result->find("\xef\xbf\xbd") == std::string::npos, "Invalid CP932 archive name");
+  return *result;
+#elif defined(_WIN32)
+  require(raw.size() <= INT_MAX, "Archive filename is too long");
+  const auto length = static_cast<int>(raw.size());
+  const auto wideLength = MultiByteToWideChar(932, MB_ERR_INVALID_CHARS, raw.data(), length, nullptr, 0);
+  require(wideLength > 0, "Invalid CP932 archive name");
+  std::wstring wide(wideLength, L'\0');
+  require(MultiByteToWideChar(932, MB_ERR_INVALID_CHARS, raw.data(), length, wide.data(), wideLength) == wideLength,
+      "Cannot decode CP932 archive name");
+  const auto utf8Length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(), wideLength, nullptr, 0, nullptr, nullptr);
+  require(utf8Length > 0, "Cannot encode archive filename");
+  std::string result(utf8Length, '\0');
+  require(WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide.data(), wideLength, result.data(), utf8Length, nullptr, nullptr) == utf8Length,
+      "Cannot encode archive filename");
+  return result;
+#elif defined(STORAGE_ARCHIVE_ICONV)
   auto converter = iconv_open("UTF-8", "CP932");
   require(converter != reinterpret_cast<iconv_t>(-1), "Cannot decode archive filename");
   std::string result(raw.size() * 4, '\0');

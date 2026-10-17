@@ -153,6 +153,8 @@ conversions and finishes the archive with the changes already accepted; this
 finalization can take time for a large archive. Archive recovery runs before
 playback and library readers are admitted. Keep both the archive and its private
 recovery directory intact if recovery is required.
+Completed archive journals enter a durable cleanup-only state before their
+metadata is removed, so interrupted cleanup can finish on the next startup.
 
 Independent folders can convert audio concurrently: up to four workers on
 desktop. Mobile scanning and audio conversion use the same worker policy as chart
@@ -217,3 +219,8 @@ codec/file transaction tests on iOS 27.1 Simulator and the Android 10 emulator.
 The desktop music UI was inspected, but
 that build reports native music playback unavailable. Windows build and filesystem
 execution were not available in this session; they remain release validation work.
+
+Archive update coverage includes desktop ZIP/TAR batching, sparse ZIP64 offsets,
+legacy filenames, real FLAC playback resolution, overlapping-write recovery and
+interrupted journal cleanup. The archive additions also pass iOS and Android
+build-only checks; giant-library device performance has not been measured.
