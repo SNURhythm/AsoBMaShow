@@ -16,7 +16,7 @@ View *SettingsScene::buildStorageControls(const LayoutMetrics &metrics) {
     defer([this] {
       context.sceneManager->changeScene(
           new StorageManagementScene(context, SceneReturnTarget::Retained(this)), true);
-      return false;
+      return true; // Settings remains alive; retire this callback before it resumes.
     }, 0, true);
   });
   controls->addView(open);

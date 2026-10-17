@@ -566,7 +566,7 @@ asobmashow_label_tests(area_build
 )
 
 # A few boundary tests are useful from either owning subsystem.
-asobmashow_label_tests(area_settings storage_policy_tests)
+asobmashow_label_tests(area_settings storage_policy_tests settings_event_lifetime_tests)
 asobmashow_label_tests(area_library storage_policy_tests)
 asobmashow_label_tests(area_library storage_inventory_tests)
 asobmashow_label_tests(area_library storage_file_transaction_tests)

@@ -72,6 +72,8 @@ struct View {
 PRODUCTION_SCENE_HEADER
 PRODUCTION_MANAGER_HEADER
 PRODUCTION_MANAGER_METHODS
+PRODUCTION_RETURN_TARGET
+PRODUCTION_RETURN_METHOD
 
 struct DisplaySession {
   struct Result { std::string message; };
@@ -104,9 +106,19 @@ struct SettingsScene : Scene {
   void renderScene() override {}
   void cleanupScene() override {}
   EventHandleResult handleEvents(SDL_Event &event) override;
+  void openStorage();
 };
 
 PRODUCTION_SETTINGS_EVENTS
+
+struct StorageManagementScene : SettingsScene {
+  SceneReturnTarget target;
+  StorageManagementScene(ApplicationContext &context, SceneReturnTarget value)
+      : SettingsScene(context), target(std::move(value)) {}
+};
+void SettingsScene::openStorage() {
+  defer(PRODUCTION_STORAGE_OPEN, 0, true);
+}
 
 int main() {
   ApplicationContext context;
@@ -145,4 +157,15 @@ int main() {
     assert(manager.currentScene == manager.registeredScenes.at("Intro").get());
   }
   assert(destructions == 2 && "Back deletes each dynamic Settings scene");
+  auto settings = std::make_unique<SettingsScene>(context);
+  auto *retained = settings.get();
+  manager.changeScene(std::move(settings));
+  retained->openStorage();
+  ++context.currentFrame;
+  manager.handleDeferred();
+  assert(dynamic_cast<StorageManagementScene *>(manager.currentScene));
+  assert(manager.hasBackgroundScene(retained));
+  assert(returnToScene(manager, SceneReturnTarget::Retained(retained)));
+  manager.handleDeferred();
+  assert(manager.currentScene == retained && "Back must not replay the storage-opening callback");
 }
