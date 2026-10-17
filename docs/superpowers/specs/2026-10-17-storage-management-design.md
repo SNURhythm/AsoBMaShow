@@ -10,6 +10,10 @@ Reduce the disk space used by installed BMS packages and newly downloaded BMS
 packages while preserving chart identity and playability. The manual browser
 must reuse the grouped chart representation in the music player.
 
+Compression covers the entire selected folder subtree, including nested media
+and resources used only by other sabuns. The group's representative chart is
+for presentation only; its references never define the compression file set.
+
 The requested operations are:
 
 - Lossless WAV to FLAC conversion.
@@ -61,6 +65,11 @@ responsive scene with the same representative artwork, title, artist, chart
 count, search matching, and expandable chart presentation as the music player.
 Selection is at the **group** level: expanded charts explain what is affected;
 they do not imply that a shared keysound can be changed for only one difficulty.
+Selecting a folder group selects its entire recursive folder contents for media
+inventory, regardless of which chart represents the group or is expanded. Apply
+the chosen compression policy to every eligible media file in that subtree,
+including files absent from every chart's declarations. Ownership and format
+safety checks still apply. BGA deletion retains its declaration-based scope.
 
 Provide group checkboxes, Select filtered, Clear selection, and sorting by title
 or measured size. Search does not silently discard existing selections. Show the
@@ -126,9 +135,11 @@ action beside an invalid cap or quality value.
 Use libsndfile directly; no dependency on an installed command-line executable.
 Only `.wav` inputs are eligible for lossless FLAC; `.wav` and `.flac` are eligible
 for Ogg Vorbis. Verify the decoded format rather than trusting extensions.
-Existing Ogg/MP3 files are left alone. Process only inventoried chart resources,
-including protected preview audio when it is actually referenced; this is not an
-unused-file cleanup feature.
+Existing Ogg/MP3 files are left alone. Enumerate eligible audio files recursively
+throughout the selected folder subtree, including preview audio, sabun-specific
+resources, and files with no discovered chart references. Chart declarations
+establish ownership and replacement safety, not the compression candidate set.
+Unreferenced media can be compressed but is never deleted as unused-file cleanup.
 
 Lossless FLAC preserves the native sample rate, channel count, frame count, and
 integer PCM samples exactly. Support 8/16/24-bit integer PCM that the linked
@@ -152,6 +163,11 @@ the intended replacement after source removal. Otherwise skip the collision.
 Keep an output only when it is strictly smaller than the source.
 
 ### BGA video
+
+Enumerate supported video files recursively throughout the selected folder
+subtree, including videos used only by another sabun or absent from all chart
+declarations. Validate their actual media type before conversion; images and
+non-media files are not compression candidates.
 
 Use FFmpeg libraries with software `libx264` and an MP4 container. Use preset
 `medium`, with CRF 18 / 23 / 28 for High / Balanced / Smaller respectively.
@@ -218,8 +234,15 @@ An ambiguous stem/role relationship is skipped as a unit.
 
 ## Inventory, ownership, and storage support
 
-Use repository groups for UI identity, but build ownership from real files. The
-repository may suppress duplicate charts; it is not a complete deletion manifest.
+Use repository groups for UI identity, but build inventory from real files.
+Maintain two distinct inputs: recursive enumeration of all files under selected
+folder roots determines compression candidates and byte totals; chart declaration
+scanning determines ownership, protected roles, replacement safety, and deletion
+eligibility. Never seed or restrict compression to the representative chart's
+references, the union of known chart references, or expanded UI rows. A chart-path
+fallback group uses its containing folder as the physical selection scope, with
+overlapping scopes deduplicated. The repository may suppress duplicate charts;
+it is not a complete media inventory or deletion manifest.
 A source-only resource inventory reads all supported `.bms/.bme/.bml/.pms` files
 under registered local roots, including unindexed charts, without changing their
 bytes. Recognize resource/artwork declarations across all branches, UTF-8 and
@@ -236,8 +259,14 @@ Deduplicate nested roots and physical files; aggregate selected totals as a unio
 not the sum of overlapping rows. Resolve candidates using the same audio/visual
 rules as playback and record every fallback/protected role. Record reverse owners
 for shared resources. A resource is eligible only if all its owning groups are
-selected; report other owners so the user can select them. An unindexed owner
-inside a selected chart folder belongs to that folder group. An unindexed owner
+covered by the selected folder union; this includes charts in nested folders even
+when their rows were not separately selected. Report owners outside that union
+so the user can select them. An eligible media file
+with no discovered owners is still a compression candidate when contained in a
+selected folder and the ownership scan is complete. Compression never follows a
+chart reference outside the selected folder union to expand the mutation scope.
+An unindexed owner inside a selected chart folder belongs to that folder group.
+An unindexed owner
 outside selected folders remains protected. Files referenced outside registered
 roots remain untouched. Do not claim to protect unknown charts outside the
 inventoried roots.
@@ -335,7 +364,8 @@ For an effective non-no-op policy:
    preference. Do not transform the compressed archive in place.
 3. Verify the original extracted chart hash through `decideExtractedArchive`.
 4. Inventory and optimize the private extracted staging tree with the captured
-   policy, then verify chart-file identities are unchanged.
+   policy, including all nested eligible media rather than only resources of the
+   chart used for hash verification, then verify chart-file identities are unchanged.
 5. Commit through `commitArtifact`, then use the existing `filesReady` and
    downloaded-index path. No library registration occurs before optimization
    completes or is explicitly skipped because of per-file failures.
@@ -383,6 +413,10 @@ favorites, queue controls, scroll behavior, and asynchronous artwork lifetime.
 - Inventory tests cover conditional declarations, CP932 and mixed case, shared
   folders, unindexed charts, protected artwork, alternate-extension collisions,
   nested roots, path escape, unreadable roots, and virtual sources.
+- Folder-scope tests use a representative chart and a sabun with disjoint audio
+  and video references, plus nested and unreferenced media. All eligible files
+  must enter compression once, independent of representative choice, indexing,
+  or UI expansion. Unreferenced files must remain ineligible for BGA deletion.
 - Fault injection covers encode failure, disk full, rename/unlink failure,
   source mutation, cancellation at each commit boundary, and startup recovery.
   No failure may leave a previously playable chart without its original or a
