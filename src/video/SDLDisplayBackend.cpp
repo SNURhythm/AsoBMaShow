@@ -252,22 +252,25 @@ SDLDisplayBackend::SDLDisplayBackend(
     SDL_Window *window, bool fixedMobileDisplayValue,
     ResetFlagsReader readResetFlagsValue,
     RendererTransactionFactory beginRendererTransactionValue,
-    bool allowMobileVsyncValue)
+    bool allowMobileVsyncValue, bool allowAntiAliasingValue)
     : SDLDisplayBackend(std::make_shared<RealSDLDisplayAdapter>(window),
                         fixedMobileDisplayValue, std::move(readResetFlagsValue),
                         std::move(beginRendererTransactionValue),
-                        allowMobileVsyncValue) {}
+                        allowMobileVsyncValue, allowAntiAliasingValue) {}
 
 SDLDisplayBackend::SDLDisplayBackend(
     std::shared_ptr<ISDLDisplayAdapter> adapterValue,
     bool fixedMobileDisplayValue, ResetFlagsReader readResetFlagsValue,
     RendererTransactionFactory beginRendererTransactionValue,
-    bool allowMobileVsyncValue)
+    bool allowMobileVsyncValue, bool allowAntiAliasingValue)
     : adapter(std::move(adapterValue)),
       fixedMobileDisplay(fixedMobileDisplayValue),
       allowMobileVsync(allowMobileVsyncValue),
+      allowAntiAliasing(allowAntiAliasingValue),
       readResetFlags(std::move(readResetFlagsValue)),
-      beginRendererTransaction(std::move(beginRendererTransactionValue)) {}
+      beginRendererTransaction(std::move(beginRendererTransactionValue)) {
+  defaultMsaaFlags = currentResetFlags() & BGFX_RESET_MSAA_MASK;
+}
 
 std::uint32_t SDLDisplayBackend::currentResetFlags() const {
   return readResetFlags ? readResetFlags() : 0;
@@ -315,6 +318,7 @@ Capabilities SDLDisplayBackend::capabilities() const {
       .canChangeVsync =
           (!fixedMobileDisplay || allowMobileVsync) && rendererTransactionsAvailable,
       .canSetFrameCap = true,
+      .canChangeAntiAliasing = allowAntiAliasing && rendererTransactionsAvailable,
   };
   if (!adapter) {
     return result;
@@ -367,6 +371,7 @@ Capabilities SDLDisplayBackend::capabilities() const {
 RuntimeState SDLDisplayBackend::capture() const {
   RuntimeState result;
   result.bgfxResetFlags = currentResetFlags();
+  result.settings.msaaSamples = appliedMsaaSamples;
   result.settings.vsync = (result.bgfxResetFlags & BGFX_RESET_VSYNC) != 0;
   if (!adapter) {
     return result;
@@ -590,6 +595,11 @@ bool SDLDisplayBackend::apply(const player_settings::VideoSettings &settings,
     return false;
   }
   const RuntimeState previous = capture();
+  if (!player_settings::isValidMsaaSamples(settings.msaaSamples) ||
+      (!allowAntiAliasing && settings.msaaSamples != appliedMsaaSamples)) {
+    errorMessage = "Anti-aliasing setting is unavailable.";
+    return false;
+  }
   const SDLWindowState current = adapter->windowState();
   if (fixedMobileDisplay &&
       (settings.mode != previous.settings.mode || settings.displayIndex != 0 ||
@@ -600,8 +610,20 @@ bool SDLDisplayBackend::apply(const player_settings::VideoSettings &settings,
   }
   const bool mutateWindow =
       !fixedMobileDisplay && !sameDisplayFields(settings, current);
-  const std::uint32_t resetFlags =
+  std::uint32_t resetFlags =
       resetFlagsForVsync(previous.bgfxResetFlags, settings.vsync);
+  if (settings.msaaSamples != appliedMsaaSamples) {
+    std::uint32_t msaaFlags = defaultMsaaFlags;
+    switch (settings.msaaSamples) {
+    case 0: msaaFlags = 0; break;
+    case 2: msaaFlags = BGFX_RESET_MSAA_X2; break;
+    case 4: msaaFlags = BGFX_RESET_MSAA_X4; break;
+    case 8: msaaFlags = BGFX_RESET_MSAA_X8; break;
+    case 16: msaaFlags = BGFX_RESET_MSAA_X16; break;
+    default: break;
+    }
+    resetFlags = (resetFlags & ~BGFX_RESET_MSAA_MASK) | msaaFlags;
+  }
   const bool synchronize =
       mutateWindow || resetFlags != previous.bgfxResetFlags;
 
@@ -654,6 +676,7 @@ bool SDLDisplayBackend::apply(const player_settings::VideoSettings &settings,
     restoreAfterFailure();
     return false;
   }
+  appliedMsaaSamples = settings.msaaSamples;
   return true;
 }
 
@@ -749,6 +772,8 @@ RestoreStatus SDLDisplayBackend::restore(const RuntimeState &snapshot,
   }
 
   rememberRestoredWindowedGeometry(snapshot);
+
+  appliedMsaaSamples = snapshot.settings.msaaSamples;
 
   // sdlWindowFlags remains diagnostic for focus/minimize/visibility and other
   // window-manager-owned bits. Maximized state is captured explicitly above.

@@ -542,6 +542,43 @@ void testFixedMobileDisplayOnlyAdvertisesFrameCap() {
           "mobile exposes only its current physical display as logical zero");
 }
 
+void testAntiAliasingApplyAndRollback() {
+  auto adapter = std::make_shared<FakeSDLAdapter>();
+  adapter->state.mode = DisplayMode::ExclusiveFullscreen;
+  adapter->state.width = 2400;
+  adapter->state.height = 1080;
+  RendererSpy renderer;
+  std::uint32_t activeFlags = 0x80; // VSync, no MSAA.
+  auto backend = makeBackend(adapter, renderer, activeFlags, true, true);
+  const auto original = backend.capture();
+  auto candidate = original.settings;
+  candidate.msaaSamples = 4;
+  std::string error;
+  require(backend.apply(candidate, error) && activeFlags == 0xa0 &&
+              backend.capture().settings.msaaSamples == 4,
+          "4x MSAA applies while preserving VSync and the requested setting");
+  candidate.msaaSamples = 8;
+  renderer.failNextSynchronize = true;
+  require(!backend.apply(candidate, error) && activeFlags == 0xa0 &&
+              backend.capture().settings.msaaSamples == 4,
+          "failed MSAA transaction preserves the previous renderer and setting");
+  require(backend.restore(original, error) == display::RestoreStatus::Restored &&
+              activeFlags == 0x80 && backend.capture().settings.msaaSamples == -1,
+          "rollback restores default MSAA intent and reset flags");
+  candidate.msaaSamples = 2;
+  require(backend.apply(candidate, error) && activeFlags == 0x90,
+          "2x MSAA can be enabled after rollback");
+  candidate.msaaSamples = -1;
+  require(backend.apply(candidate, error) && activeFlags == 0x80,
+          "Default returns to the original platform MSAA policy");
+  candidate.msaaSamples = 3;
+  require(!backend.apply(candidate, error) && activeFlags == 0x80,
+          "unsupported sample counts do not mutate the renderer");
+  require(adapter->fullscreenCalls == 0 && adapter->sizeCalls == 0 &&
+              adapter->positionCalls == 0 && adapter->displayModeCalls == 0,
+          "MSAA does not mutate native mobile geometry");
+}
+
 void testAndroidVsyncWithoutWindowMutation() {
   auto adapter = std::make_shared<FakeSDLAdapter>();
   adapter->state.mode = DisplayMode::ExclusiveFullscreen;
@@ -1016,6 +1053,7 @@ int main() {
   testWindowedRestoreRejectsIgnoredPosition();
   testCapabilitiesUseTheSDLAdapterAndDeduplicateModes();
   testFixedMobileDisplayOnlyAdvertisesFrameCap();
+  testAntiAliasingApplyAndRollback();
   testAndroidVsyncWithoutWindowMutation();
   testRendererReservationExcludesExportBeforeFirstSDLMutation();
   testExportUiFrameUnlockStillExcludesDisplayTransactions();

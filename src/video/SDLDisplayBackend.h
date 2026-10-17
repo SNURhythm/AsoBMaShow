@@ -87,11 +87,13 @@ public:
   SDLDisplayBackend(SDL_Window *window, bool fixedMobileDisplay,
                     ResetFlagsReader readResetFlags,
                     RendererTransactionFactory beginRendererTransaction,
-                    bool allowMobileVsync = false);
+                    bool allowMobileVsync = false,
+                    bool allowAntiAliasing = true);
   SDLDisplayBackend(std::shared_ptr<ISDLDisplayAdapter>,
                     bool fixedMobileDisplay, ResetFlagsReader readResetFlags,
                     RendererTransactionFactory beginRendererTransaction,
-                    bool allowMobileVsync = false);
+                    bool allowMobileVsync = false,
+                    bool allowAntiAliasing = true);
 
   Capabilities capabilities() const override;
   void observeRuntimeState() const override;
@@ -126,6 +128,9 @@ private:
   std::shared_ptr<ISDLDisplayAdapter> adapter;
   bool fixedMobileDisplay = false;
   bool allowMobileVsync = false;
+  bool allowAntiAliasing = true;
+  int appliedMsaaSamples = -1;
+  std::uint32_t defaultMsaaFlags = 0;
   ResetFlagsReader readResetFlags;
   RendererTransactionFactory beginRendererTransaction;
   mutable std::optional<WindowedGeometry> lastWindowedGeometry;

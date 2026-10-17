@@ -50,6 +50,56 @@ class ScenePresentationActivityTests(unittest.TestCase):
             self.compile_and_run(f"#define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS {skins}\n" +
                                  fixture.replace("SCENE_ACTIVITY_METHODS", "\n".join(methods)))
 
+    def test_ios_msaa_choice_and_preview_survive_scene_changes(self):
+        source = (ROOT / "src/main.cpp").read_text()
+        start = source.index("        const bool gameplayActive =", source.index("const bool viewTransformChanged"))
+        end = source.index("#endif", start)
+        self.compile_and_run(r'''
+#include <atomic>
+#include <cassert>
+#include <cstdint>
+constexpr uint32_t BGFX_RESET_NONE=0, BGFX_RESET_MSAA_X2=0x10,
+  BGFX_RESET_MSAA_X4=0x20, BGFX_RESET_MSAA_X8=0x30, BGFX_RESET_MSAA_X16=0x40;
+namespace rendering { int render_width=2400, render_height=1080; }
+namespace bgfx { uint32_t lastFlags=0x80; void reset(int,int,uint32_t flags) { lastFlags=flags; } }
+struct Context {
+  struct { struct { struct { int msaaSamples=-1; } video; } audioVideo; } settings;
+  std::atomic<bool> profileGameplayActive=false;
+  std::atomic<uint32_t> bgfxResetFlags=0x80;
+  struct Manager { bool preview=false; bool hasPendingPreview() const { return preview; } } manager;
+  Manager *displaySettingsManager=&manager;
+  void restoreGameplayRenderViews() {}
+};
+uint32_t s_bgfxResetFlags=0x80;
+PARSER
+MASK
+int main() {
+  Context context;
+  uint32_t activeBgfxResetFlags=0x80;
+  auto update = [&] { POLICY };
+  update(); assert(activeBgfxResetFlags==0x80);
+  context.profileGameplayActive=true;
+  update(); assert(activeBgfxResetFlags==0x90);
+  context.settings.audioVideo.video.msaaSamples=4;
+  update(); assert(activeBgfxResetFlags==0xa0);
+  context.profileGameplayActive=false;
+  update(); assert(activeBgfxResetFlags==0xa0);
+  context.settings.audioVideo.video.msaaSamples=0;
+  context.profileGameplayActive=true;
+  update(); assert(activeBgfxResetFlags==0x80);
+  context.settings.audioVideo.video.msaaSamples=-1;
+  context.manager.preview=true;
+  activeBgfxResetFlags=0xb0; // An unconfirmed 8x preview owns reset flags.
+  update(); assert(activeBgfxResetFlags==0xb0);
+  context.profileGameplayActive=false;
+  update(); assert(activeBgfxResetFlags==0xb0);
+  context.manager.preview=false;
+  update(); assert(activeBgfxResetFlags==0x80);
+}
+'''.replace("POLICY", source[start:end])
+            .replace("PARSER", extract(source, "uint32_t parseMsaaFlag("))
+            .replace("MASK", extract(source, "static uint32_t withoutMsaaResetFlags(")))
+
     def test_scene_canvas_transition_refreshes_projection_before_drawing(self):
         source = (ROOT / "src/main.cpp").read_text()
         start = source.index("      } else if (bgfxLock.owns_lock() &&")

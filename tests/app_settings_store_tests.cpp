@@ -79,6 +79,29 @@ private:
   std::filesystem::path path_;
 };
 
+void testAntiAliasingPersistenceAndMigration() {
+  TempDirectory temp;
+  const auto path = temp.path() / "anti-aliasing.json";
+  for (const int samples : {-1, 0, 2, 4, 8, 16, 3, -2, 32}) {
+    writeFile(path, "{\"schemaVersion\":8,\"video\":{\"msaaSamples\":" +
+                        std::to_string(samples) + "}}");
+    const auto loaded = AppSettingsStore::Load(path);
+    std::string error;
+    expect(AppSettingsStore::Save(path, loaded.settings, error),
+           "anti-aliasing settings save");
+    const auto json = nlohmann::json::parse(readFile(path));
+    const int expected = samples == 3 || samples == -2 || samples == 32 ? -1 : samples;
+    expect(json["video"].value("msaaSamples", -99) == expected,
+           "anti-aliasing survives restart and invalid samples use platform default");
+  }
+  writeFile(path, R"({"schemaVersion":8,"video":{}})");
+  const auto loaded = AppSettingsStore::Load(path);
+  std::string error;
+  expect(AppSettingsStore::Save(path, loaded.settings, error), "legacy video saves");
+  expect(nlohmann::json::parse(readFile(path))["video"].value("msaaSamples", -99) == -1,
+         "existing settings preserve platform anti-aliasing defaults");
+}
+
 void testPrepMetronomeDurationPersistence() {
   TempDirectory temp;
   const auto path = temp.path() / "prep-duration.json";
@@ -2835,6 +2858,7 @@ int main() {
   testHostileSkinJsonIsBoundedDuringDecode();
   testSkinEntryCollisionKeysDeduplicateDeterministically();
   testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues();
+  testAntiAliasingPersistenceAndMigration();
   testPrepMetronomeDurationPersistence();
   testIpadGestureReminderRoundTrip();
   testScreenOrientationRoundTripAndDefaults();

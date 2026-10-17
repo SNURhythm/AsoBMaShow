@@ -114,7 +114,7 @@ bool DisplaySettingsManager::displayFieldsEqual(
     const player_settings::VideoSettings &left,
     const player_settings::VideoSettings &right) {
   if (left.mode != right.mode || left.displayIndex != right.displayIndex ||
-      left.vsync != right.vsync) {
+      left.vsync != right.vsync || left.msaaSamples != right.msaaSamples) {
     return false;
   }
   if (left.mode == player_settings::DisplayMode::BorderlessFullscreen) {
@@ -143,6 +143,12 @@ std::optional<i18n::Text> DisplaySettingsManager::unsupportedReason(
   if (candidate.frameCap != 0 &&
       (candidate.frameCap < 1 || candidate.frameCap > 1000)) {
     return i18n::message("settings.audio_video.display.cap_invalid");
+  }
+
+  if (!player_settings::isValidMsaaSamples(candidate.msaaSamples) ||
+      (candidate.msaaSamples != effective.msaaSamples &&
+       !backendCapabilities.canChangeAntiAliasing)) {
+    return i18n::message("settings.audio_video.unavailable_on_platform.message");
   }
 
   const bool modeChanged = candidate.mode != effective.mode;

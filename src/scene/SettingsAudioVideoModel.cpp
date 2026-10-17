@@ -300,6 +300,20 @@ BuildDisplayControlModel(const player_settings::VideoSettings &intent,
     model.vsync.explanation = i18n::message("settings.audio_video.managed_by_system.message");
   }
 
+  model.antiAliasing.selectedValue = std::to_string(intent.msaaSamples);
+  model.antiAliasing.options = {
+      {.persistedValue = "-1", .label = i18n::message("settings.display.anti_aliasing_default.label")},
+      {.persistedValue = "0", .label = i18n::message("settings.audio_video.off.label")}};
+  for (const int samples : {2, 4, 8, 16}) {
+    model.antiAliasing.options.push_back(
+        {.persistedValue = std::to_string(samples),
+         .label = std::to_string(samples) + "× MSAA"});
+  }
+  model.antiAliasing.enabled = capabilities.canChangeAntiAliasing;
+  model.antiAliasing.explanation = i18n::message(
+      model.antiAliasing.enabled ? "settings.display.anti_aliasing.description"
+                                : "settings.audio_video.unavailable_on_platform.message");
+
   model.frameCaps.selectedValue = std::to_string(intent.frameCap);
   constexpr std::array<std::uint32_t, 12> kCommonFrameCaps = {
       0, 1, 5, 15, 30, 60, 75, 90, 120, 144, 165, 240};
@@ -431,6 +445,11 @@ display::ApplyResult SettingsAudioVideoSession::beginDisplayPreview(
     persistedCandidate.vsync = candidate.vsync;
   } else {
     runtimeCandidate.vsync = working.vsync;
+  }
+  if (capabilities.canChangeAntiAliasing) {
+    persistedCandidate.msaaSamples = candidate.msaaSamples;
+  } else {
+    runtimeCandidate.msaaSamples = working.msaaSamples;
   }
   if (capabilities.canSetFrameCap) {
     persistedCandidate.frameCap = candidate.frameCap;

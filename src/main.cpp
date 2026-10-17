@@ -949,6 +949,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   int deferredRenderResizeW = 0;
   int deferredRenderResizeH = 0;
   uint32_t activeBgfxResetFlags = s_bgfxResetFlags;
+#if TARGET_OS_ANDROID
+  const bool allowAntiAliasing = !isAndroidEmulator();
+#else
+  constexpr bool allowAntiAliasing = true;
+#endif
   context.displayBackend = std::make_unique<display::SDLDisplayBackend>(
       s_window, TARGET_PLATFORM == iOS || TARGET_PLATFORM == Android,
       [&activeBgfxResetFlags]() { return activeBgfxResetFlags; },
@@ -1002,17 +1007,19 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
               context.framePacer.reset(std::chrono::steady_clock::now());
               return true;
             });
-      }, TARGET_PLATFORM == Android);
-#if TARGET_OS_ANDROID
-  // Android owns native geometry; only apply the persisted renderer preference.
+      }, TARGET_PLATFORM == Android, allowAntiAliasing);
+  // Apply renderer preferences without changing native geometry at startup.
   auto startupVideo = context.displayBackend->capture().settings;
+#if TARGET_OS_ANDROID
   startupVideo.vsync = context.settings.audioVideo.video.vsync;
-  std::string startupVsyncError;
-  if (!context.displayBackend->apply(startupVideo, startupVsyncError)) {
-    SDL_Log("Could not apply Android VSync preference: %s",
-            startupVsyncError.c_str());
-  }
 #endif
+  if (allowAntiAliasing)
+    startupVideo.msaaSamples = context.settings.audioVideo.video.msaaSamples;
+  std::string startupRendererError;
+  if (!context.displayBackend->apply(startupVideo, startupRendererError)) {
+    SDL_Log("Could not apply renderer preferences: %s",
+            startupRendererError.c_str());
+  }
   context.displaySettingsManager =
       std::make_unique<display::DisplaySettingsManager>(
           *context.displayBackend, context.framePacer,
@@ -1733,8 +1740,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
             context.profileGameplayActive.load(std::memory_order_acquire);
         const auto desiredResetFlags =
             withoutMsaaResetFlags(activeBgfxResetFlags) |
-            (gameplayActive ? BGFX_RESET_MSAA_X2 : 0U);
-        if (desiredResetFlags != activeBgfxResetFlags) {
+            parseMsaaFlag(context.settings.audioVideo.video.msaaSamples < 0
+                              ? (gameplayActive ? 2 : 0)
+                              : context.settings.audioVideo.video.msaaSamples);
+        if (!context.displaySettingsManager->hasPendingPreview() &&
+            desiredResetFlags != activeBgfxResetFlags) {
           activeBgfxResetFlags = desiredResetFlags;
           s_bgfxResetFlags = desiredResetFlags;
           context.bgfxResetFlags.store(desiredResetFlags,

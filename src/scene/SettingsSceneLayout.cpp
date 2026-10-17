@@ -203,6 +203,7 @@ void SettingsScene::resetViewState() {
   displayResolutionDropdown = nullptr;
   displayVsyncDropdown = nullptr;
   displayFrameCapDropdown = nullptr;
+  displayAntiAliasingDropdown = nullptr;
   masterVolumeInput = nullptr;
   bgmVolumeInput = nullptr;
   keysoundVolumeInput = nullptr;
