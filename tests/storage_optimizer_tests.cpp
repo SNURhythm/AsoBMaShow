@@ -1,4 +1,6 @@
 #include "../src/storage/StorageOptimizer.h"
+#include "../src/storage/StorageMeasurement.h"
+#include "../src/storage/StorageMeasurementState.h"
 #include "StorageTestSupport.h"
 #include "../src/bms_search/DownloadStorageOptimization.h"
 
@@ -74,6 +76,49 @@ void independentDirectoriesUseDistinctOutputs() {
       "parallel directories commit distinct temporary outputs");
   require(report.groupDeltas.size() == 1 && report.groupDeltas[0].bytesBefore == 200 && report.groupDeltas[0].bytesAfter == 8,
       "parallel directory deltas aggregate once into their parent");
+}
+void subsetRefreshNeverEnumeratesAncestorSiblings() {
+  for (bool externalEdit : {false, true}) {
+    TempDirectory temp;
+    temp.write("charts/selected/a.wav", std::string(100, 'a'));
+    temp.write("charts/other/b.wav", std::string(100, 'b'));
+    InventoryRequest browser;
+    browser.groups = {{"parent", temp.root / "charts"}, {"selected", temp.root / "charts/selected"},
+                      {"other", temp.root / "charts/other"}};
+    auto measured = MeasureStorageGroups(browser);
+    require(measured.complete, "browser measurements cover nested groups");
+    StorageMeasurementRows rows;
+    for (auto &row : measured.groups) { row.generation = 7; rows[row.groupId] = row; }
+    auto selected = request(temp.root / "charts/selected");
+    selected.inventory.groups[0].groupId = "selected";
+    selected.measurementBaselines = measured.groups;
+    selected.preflight = BuildStoragePreflight(selected.inventory);
+    std::vector<std::string> events;
+    auto deps = dependencies(temp, events);
+    if (externalEdit) {
+      const auto encode = deps.encodeAudio;
+      deps.encodeAudio = [&, encode](const auto &asset, const auto &policy, const auto &output, auto check, auto progress) {
+        auto result = encode(asset, policy, output, check, progress);
+        temp.write("charts/selected/new.wav", "external");
+        return result;
+      };
+    }
+    const auto report = StorageOptimizer(deps).Run(std::move(selected));
+    const auto refresh = ApplyStorageReportMeasurements(rows, browser.groups, report);
+    if (!externalEdit) require(rows.at("parent").totalBytes == 104 && rows.at("selected").totalBytes == 4 && refresh.empty(),
+        "exact committed deltas update cached ancestor estimates without a new walk");
+    else require(refresh == std::set<std::string>{"selected"} && !rows.at("parent").totalBytes,
+        "uncertain ancestor stays unavailable instead of recursively scanning siblings");
+    InventoryRequest followup;
+    for (const auto &group : browser.groups) if (refresh.contains(group.groupId)) followup.groups.push_back(group);
+    StorageScanDependencies scan;
+    scan.enumerate = [&](const auto &path, const auto &root, auto mode, auto check, auto visit, auto &stamp, auto *metrics, auto &error) {
+      require(IsWithinFolder(path, temp.root / "charts/selected"), "subset followup never enumerates ancestor or sibling directories");
+      return VisitStorageDirectory(path, root, mode, check, visit, stamp, metrics, error);
+    };
+    require(MeasureStorageGroups(followup, {}, {}, nullptr, scan).complete, "scoped uncertain rows can be remeasured");
+    require(rows.at("other").totalBytes == 100, "unrelated completed row remains cached");
+  }
 }
 void extractedDownloadUsesWholePackage() {
   TempDirectory temp;
@@ -431,11 +476,13 @@ void cancellableSingleConversionPermit() {
 int main(int argc, char **argv) {
   try {
     if (argc > 1 && std::string_view(argv[1]) == "--commit-cost") { unrelatedFoldersDoNotMultiplyCommitChecks(); return 0; }
+    if (argc > 1 && std::string_view(argv[1]) == "--subset-refresh") { subsetRefreshNeverEnumeratesAncestorSiblings(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--parallel") { independentDirectoriesUseDistinctOutputs(); return 0; }
     independentDirectoriesUseDistinctOutputs();
     storageLibraryIntegration();
     extractedDownloadUsesWholePackage(); wholeFolderOrchestration(); deletionAndUnavailableGroups(); staleEvidenceNeverBecomesFreshByRescanning();
     changedDirectoryIsSkippedWithoutAcceptingNewAssets(); unrelatedFoldersDoNotMultiplyCommitChecks();
+    subsetRefreshNeverEnumeratesAncestorSiblings();
     ancestorChartsStayProtectedWithoutBlockingIndependentRoots(); committedDeltasSurviveDetailLimitAndRetainedBackups();
     partialFailureAndAccounting(); revalidateAtTheActualCommitBoundary(); cleanupFailureAndFatalRecovery(); cancellationCapabilitiesAndNoOp();
     boundedReportsAndProgress(); cancellableSingleConversionPermit();

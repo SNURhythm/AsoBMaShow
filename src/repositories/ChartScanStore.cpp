@@ -596,7 +596,7 @@ bool ChartRepository::Session::InsertChartMeta(
                                   .count())) {
     return false;
   }
-  chart_repository_detail::BumpLibraryRevision();
+  chart_repository_detail::BumpLibraryRevision({chartMeta.Folder.empty() ? chartMeta.BmsPath.parent_path() : chartMeta.Folder});
   return true;
 }
 
@@ -637,17 +637,29 @@ struct ChartRepository::Session::ScanBatch::Impl {
       return false;
     }
     transaction.reset();
+    if (unknownRoots || !changedRoots.empty()) {
+      chart_repository_detail::BumpLibraryRevision(unknownRoots ? std::vector<std::filesystem::path>{} :
+          std::vector<std::filesystem::path>(changedRoots.begin(), changedRoots.end()));
+      changedRoots.clear(); unknownRoots = false;
+    }
     return true;
   }
 
-  void noteChanged() {
+  void noteRoot(const std::filesystem::path &root) {
+    if (unknownRoots) return;
+    changedRoots.insert(root.lexically_normal());
+    if (root.empty() || changedRoots.size() > 4096) { changedRoots.clear(); unknownRoots = true; }
+  }
+
+  void noteChanged(const std::filesystem::path &root) {
     if (sqlite3_changes(database()) > 0) {
       ++changedCount;
+      noteRoot(root);
     }
   }
 
-  void noteFolderChanged(bool changed = true) {
-    folderChanged = folderChanged || changed;
+  void noteFolderChanged(const std::filesystem::path &root, bool changed = true) {
+    if (changed) noteRoot(root);
   }
 
   bool ensureChartInsertStatement() {
@@ -706,7 +718,8 @@ struct ChartRepository::Session::ScanBatch::Impl {
   SqliteStatementHandle sourcePreferenceUpdateStatement;
   const std::int64_t addDateSeconds;
   int changedCount = 0;
-  bool folderChanged = false;
+  std::set<std::filesystem::path> changedRoots;
+  bool unknownRoots = false;
   bool ready = false;
   bool committed = false;
   bool chartInsertStatementAttempted = false;
@@ -743,7 +756,7 @@ bool ChartRepository::Session::ScanBatch::UpsertChart(
                               sequenceFeatures, impl_->addDateSeconds)) {
     return false;
   }
-  impl_->noteChanged();
+  impl_->noteChanged(meta.Folder.empty() ? meta.BmsPath.parent_path() : meta.Folder);
   return true;
 }
 
@@ -767,7 +780,7 @@ bool ChartRepository::Session::ScanBatch::UpdateChartHasDocument(
     return false;
   }
   if (sqlite3_changes(impl_->database()) > 0) {
-    impl_->noteChanged();
+    impl_->noteChanged(path.parent_path());
   }
   return true;
 }
@@ -791,7 +804,7 @@ bool ChartRepository::Session::ScanBatch::DeleteChart(
     logSqlError("deleting a chart", impl_->database());
     return false;
   }
-  impl_->noteChanged();
+  impl_->noteChanged(path.parent_path());
   return true;
 }
 
@@ -810,7 +823,6 @@ bool ChartRepository::Session::ScanBatch::DeleteCharts(
           logSqlErrorText)) {
     return false;
   }
-  bool changed = false;
   for (const auto &path : paths) {
     std::filesystem::path relative = path;
     chart_storage_identity::ToRelativePath(relative);
@@ -821,10 +833,7 @@ bool ChartRepository::Session::ScanBatch::DeleteCharts(
       logSqlError("deleting chart paths", impl_->database());
       return false;
     }
-    changed = changed || sqlite3_changes(impl_->database()) > 0;
-  }
-  if (changed) {
-    impl_->noteChanged();
+    impl_->noteChanged(path.parent_path());
   }
   return true;
 }
@@ -864,7 +873,7 @@ bool ChartRepository::Session::ScanBatch::DeleteChartsInArchive(
     return false;
   }
   if (sqlite3_changes(impl_->database()) > 0) {
-    impl_->noteChanged();
+    impl_->noteChanged(archivePath);
   }
   return true;
 }
@@ -886,7 +895,7 @@ bool ChartRepository::Session::ScanBatch::DeleteSolidArchive(
     logSqlError("deleting solid archive", impl_->database());
     return false;
   }
-  impl_->noteChanged();
+  impl_->noteChanged(path);
   return true;
 }
 
@@ -907,7 +916,7 @@ bool ChartRepository::Session::ScanBatch::DeleteArchiveCache(
     logSqlError("deleting archive scan cache", impl_->database());
     return false;
   }
-  impl_->noteChanged();
+  impl_->noteChanged(path);
   return true;
 }
 
@@ -958,7 +967,7 @@ bool ChartRepository::Session::ScanBatch::UpsertSolidArchive(
     logSqlError("inserting solid archive", impl_->database());
     return false;
   }
-  impl_->noteChanged();
+  impl_->noteChanged(update.path);
   return true;
 }
 
@@ -1010,7 +1019,7 @@ bool ChartRepository::Session::ScanBatch::UpsertArchiveCache(
     logSqlError("upserting archive scan cache", impl_->database());
     return false;
   }
-  impl_->noteChanged();
+  impl_->noteChanged(update.path);
   return true;
 }
 
@@ -1040,7 +1049,7 @@ bool ChartRepository::Session::ScanBatch::UpdateSourcePreference(
     logSqlError("updating chart source preference", impl_->database());
     return false;
   }
-  impl_->noteChanged();
+  impl_->noteChanged(update.path.parent_path());
   return true;
 }
 
@@ -1088,7 +1097,7 @@ bool ChartRepository::Session::ScanBatch::UpdateSourcePreferenceInArchive(
     return false;
   }
   if (sqlite3_changes(impl_->database()) > 0) {
-    impl_->noteChanged();
+    impl_->noteChanged(archivePath);
   }
   return true;
 }
@@ -1207,7 +1216,7 @@ bool ChartRepository::Session::ScanBatch::SynchronizeFolders(
         logSqlError("deleting missing folder scan record", impl_->database());
         return false;
       }
-      impl_->noteFolderChanged();
+      impl_->noteFolderChanged(path);
       deleted.insert(path);
     }
     return true;
@@ -1265,7 +1274,7 @@ bool ChartRepository::Session::ScanBatch::SynchronizeFolders(
         logSqlError("upserting folder scan record", impl_->database());
         return false;
       }
-      impl_->noteFolderChanged(valuesChanged);
+      impl_->noteFolderChanged(path, valuesChanged);
     }
 
     if (const auto existingChildren = storedChildren.find(path);
@@ -1392,9 +1401,6 @@ bool ChartRepository::Session::ScanBatch::Commit() {
   }
   impl_->committed = true;
   impl_->ready = false;
-  if (impl_->changedCount > 0 || impl_->folderChanged) {
-    chart_repository_detail::BumpLibraryRevision();
-  }
   return true;
 }
 

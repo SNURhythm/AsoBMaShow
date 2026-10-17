@@ -131,6 +131,7 @@ bool InitializeStorageServices(ApplicationContext &context) {
               refresh.kind = chart_library_tasks::TaskKind::RefreshPath;
               refresh.title = "Refresh optimized chart folders";
               refresh.refreshPaths = StoragePathIndex(std::move(refreshRoots)).MinimalRoots();
+              refresh.storageMeasurementsCurrent = true;
               if (!context.chartLibraryTasks->enqueueMaintenanceRefresh(*token, std::move(refresh)))
                 throw std::runtime_error("Could not refresh optimized folders");
             }

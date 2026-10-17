@@ -345,6 +345,35 @@ bms_parser::ChartMeta chartMeta(const std::filesystem::path &root) {
   return meta;
 }
 
+void testStorageSourceRevisionIncludesSecondaryCharts() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  auto first = chartMeta(temporary.path() / "song");
+  auto secondary = first; secondary.BmsPath = first.Folder / "secondary.bms";
+  auto unrelated = chartMeta(temporary.path() / "other");
+  assert(session->InsertChartMeta(first) && session->InsertChartMeta(secondary) && session->InsertChartMeta(unrelated));
+  const auto before = repository.GetLibraryRevision();
+  secondary.MD5 = "22222222222222222222222222222222";
+  auto batch = session->BeginScanBatch();
+  assert(batch && batch->UpsertChart(secondary, std::nullopt, false));
+  assert(repository.GetLibraryRevision() == before);
+  assert(batch->Commit());
+  const auto changes = repository.GetLibraryChangesSince(before);
+  assert(changes.revision > before && !changes.unknown);
+  assert(changes.roots == std::vector<std::filesystem::path>{first.Folder});
+  assert(session->CountAllChartMeta() == 3);
+  repository.NotifyStorageSourceRefresh({unrelated.Folder});
+  assert(repository.GetLibraryChangesSince(changes.revision).roots ==
+      std::vector<std::filesystem::path>{unrelated.Folder});
+  assert(repository.GetLibraryChangesSince(before).roots.size() == 2);
+  std::vector<std::filesystem::path> overflow;
+  for (int i = 0; i < 4097; ++i) overflow.push_back(temporary.path() / std::to_string(i));
+  repository.NotifyStorageSourceRefresh(overflow);
+  assert(repository.GetLibraryChangesSince(changes.revision).unknown);
+}
+
 void testScanBatchCommitAndRollback() {
   TempDirectory temporary;
   ChartRepository repository(temporary.path() / "chart.db");
@@ -4474,6 +4503,7 @@ int main(int argc, char **argv) {
   testDirectoryRecordsIncludeDirectChartsAndRawDescendants();
   testMetadataFolderMergePreservesNormalizedDuplicatesAndScales();
   testRawExactFolderKeepsNonpreferredDuplicate();
+  testStorageSourceRevisionIncludesSecondaryCharts();
   testScanBatchCommitAndRollback();
   testScanBatchRetainsSessionStorage();
   testScanBatchUpsertPreservesExistingAddDate();

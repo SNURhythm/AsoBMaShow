@@ -161,8 +161,15 @@ StoragePlatformPaths MakeStoragePlatformPaths(const fs::path &privateRoot,
     accessRoots = allowedRoots;
     accessRoots.push_back(privateRoot);
   }
+  auto syncRoot = privateRoot.lexically_normal();
+  std::error_code error;
+  while (!syncRoot.empty() && !fs::exists(syncRoot, error) && !error) {
+    const auto parent = syncRoot.parent_path();
+    if (parent == syncRoot) break;
+    syncRoot = parent;
+  }
   return {privateRoot / "storage-management/journal", privateRoot / "storage-management/temporary",
-          std::move(allowedRoots), std::move(accessRoots), privateRoot / "storage-management/scan"};
+          std::move(allowedRoots), std::move(accessRoots), privateRoot / "storage-management/scan", syncRoot};
 }
 
 FileTransactionDependencies DefaultFileTransactionDependencies() {

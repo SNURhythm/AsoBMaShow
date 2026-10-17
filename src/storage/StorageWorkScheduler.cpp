@@ -11,7 +11,8 @@
 namespace storage_management {
 StorageExecutionLimits DefaultStorageExecutionLimits() {
 #if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
-  constexpr std::size_t cap = 2;
+  // Native correctness is covered; mobile throughput/memory still needs device measurements.
+  constexpr std::size_t cap = 1;
 #else
   constexpr std::size_t cap = 4;
 #endif

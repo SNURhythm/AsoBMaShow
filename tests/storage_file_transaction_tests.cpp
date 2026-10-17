@@ -4,6 +4,9 @@
 
 #include <iostream>
 #include <iterator>
+#include <array>
+#include <condition_variable>
+#include <thread>
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
 #if TARGET_OS_OSX
@@ -43,6 +46,100 @@ struct Fixture {
 std::string read(const fs::path &path) {
   std::ifstream stream(path, std::ios::binary);
   return {std::istreambuf_iterator<char>(stream), {}};
+}
+void testConcurrentCommitAndCancellation() {
+  storage_test::TempDirectory temp;
+  const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root / "library"});
+  std::array<AssetCandidate, 2> candidates;
+  std::array<EncodeResult, 2> encoded;
+  for (std::size_t i = 0; i < 2; ++i) {
+    const auto folder = "library/" + std::to_string(i);
+    temp.write(folder + "/asset.mpg", std::string(1024, 's'));
+    temp.write("private/output" + std::to_string(i) + ".mp4", std::string(128, 'v'));
+    auto &candidate = candidates[i];
+    candidate.source = temp.root / folder / "asset.mpg";
+    candidate.destination = temp.root / folder / "asset.mp4";
+    candidate.kind = asobmshow::chart_assets::MediaKind::Video;
+    candidate.operation = AssetOperation::CompressH264;
+    std::string error;
+    candidate.identity = *ReadFileIdentity(candidate.source, error);
+    encoded[i] = {FileOutcome::Converted, temp.root / "private" / ("output" + std::to_string(i) + ".mp4")};
+  }
+  std::mutex mutex; std::condition_variable ready; int prepared = 0;
+  std::array<FileResult, 2> results;
+  std::array<std::exception_ptr, 2> failures;
+  std::vector<std::jthread> threads;
+  for (std::size_t i = 0; i < 2; ++i) threads.emplace_back([&, i] {
+    try {
+      bool cancelled = false;
+      FileTransactionDependencies dependencies;
+      dependencies.faultPoint = [&](std::string_view point) {
+        if (point == "prepared") {
+          std::unique_lock lock(mutex); ++prepared; ready.notify_all();
+          require(ready.wait_for(lock, std::chrono::seconds(2), [&] { return prepared == 2; }),
+                  "independent durable transactions overlap before commit");
+        }
+        if (i == 0 && point == "retired") cancelled = true;
+      };
+      results[i] = StorageFileTransaction(paths, dependencies).Replace(candidates[i], encoded[i], [&] { return !cancelled; });
+    } catch (...) { failures[i] = std::current_exception(); }
+  });
+  threads.clear();
+  for (auto failure : failures) if (failure) std::rethrow_exception(failure);
+  require(results[0].outcome == FileOutcome::Cancelled && read(candidates[0].source) == std::string(1024, 's') &&
+              !fs::exists(candidates[0].destination), "cancelled transaction restores only its original");
+  require(results[1].outcome == FileOutcome::Converted && !fs::exists(candidates[1].source) &&
+              read(candidates[1].destination) == std::string(128, 'v'), "other concurrent transaction remains committed");
+  const auto recovered = StorageFileTransaction(paths).Recover();
+  require(!recovered.recoveryRequired && !recovered.failed && fs::is_empty(paths.journalRoot),
+          "both workers settle shared journal storage before recovery");
+}
+void testJournalHierarchyIsDurableBeforeMutation() {
+  for (bool recoverFirst : {false, true}) {
+    Fixture fixture;
+    const auto privateRoot = fixture.temp.root / "new/private";
+    auto paths = MakeStoragePlatformPaths(privateRoot, {fixture.temp.root / "library"});
+    std::vector<fs::path> synced;
+    auto dependencies = DefaultFileTransactionDependencies();
+    const auto sync = dependencies.syncDirectory;
+    dependencies.syncDirectory = [&](const fs::path &path, std::string &error) {
+      synced.push_back(path); return sync(path, error);
+    };
+    auto assertBarrier = [&] {
+      auto expected = paths.journalRoot;
+      std::size_t position = 0;
+      for (;;) {
+        require(position < synced.size() && synced[position++] == expected,
+                "journal hierarchy is synced through its previously existing ancestor before mutation");
+        if (expected == fixture.temp.root) break;
+        expected = expected.parent_path();
+      }
+    };
+    dependencies.faultPoint = [&](std::string_view point) { if (point == "copying") assertBarrier(); };
+    StorageFileTransaction transaction(paths, dependencies);
+    if (recoverFirst) {
+      require(!transaction.Recover().recoveryRequired, "fresh startup initializes durable journal hierarchy");
+      assertBarrier();
+    }
+    require(transaction.Replace(fixture.candidate, fixture.encoded).outcome == FileOutcome::Converted,
+            "first transaction succeeds after directory durability barrier");
+  }
+  Fixture fixture;
+  auto paths = MakeStoragePlatformPaths(fixture.temp.root / "new/private", {fixture.temp.root / "library"});
+  auto dependencies = DefaultFileTransactionDependencies();
+  const auto sync = dependencies.syncDirectory;
+  dependencies.syncDirectory = [&](const fs::path &path, std::string &error) {
+    if (path == fixture.temp.root) { error = "injected hierarchy flush failure"; return false; }
+    return sync(path, error);
+  };
+  const auto failed = StorageFileTransaction(paths, dependencies).Replace(fixture.candidate, fixture.encoded);
+  require(failed.outcome == FileOutcome::Failed && fs::exists(fixture.candidate.source) &&
+              !fs::exists(fixture.candidate.destination) && fs::is_empty(paths.journalRoot),
+          "failed ancestor flush prevents journal decisions and source mutation");
+  const auto recovery = StorageFileTransaction(paths, dependencies).Recover();
+  require(recovery.recoveryRequired, "startup cannot admit work after a hierarchy flush failure");
+  require(StorageFileTransaction(paths).Replace(fixture.candidate, fixture.encoded).outcome == FileOutcome::Converted,
+          "retry flushes the originally captured ancestor even when failed creation left directories behind");
 }
 void requireNoRecoveryFiles(const Fixture &f) {
   for (const auto &entry : fs::directory_iterator(f.paths.journalRoot))
@@ -486,6 +583,8 @@ int main(int argc, char **argv) {
     }
     testSandboxedRecovery(argv[0]);
 #endif
+    testConcurrentCommitAndCancellation();
+    testJournalHierarchyIsDurableBeforeMutation();
     testTwoWorkerJournalsAfterRestart();
     testReplacementPermissions();
     testOverlappingRegisteredRootDoesNotBlockRecovery();

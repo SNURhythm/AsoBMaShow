@@ -121,7 +121,8 @@ private:
   }
   void spill() {
     const auto root = limits_.scratchRoot.empty() ? fs::temp_directory_path() : limits_.scratchRoot;
-    if (!fs::is_directory(root)) throw std::runtime_error("Scan scratch directory is unavailable");
+    fs::create_directories(root);
+    if (!fs::is_directory(fs::symlink_status(root))) throw std::runtime_error("Scan scratch directory is unavailable");
     const auto owned = root / ("storage-scan-" + uuid::generateV4());
     if (!fs::create_directory(owned)) throw std::runtime_error("Cannot create private scan directory");
     directory_ = owned;
@@ -172,7 +173,7 @@ struct DirectoryState {
 
 StorageScanLimits DefaultStorageScanLimits() {
 #if defined(__ANDROID__) || TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  constexpr std::size_t cap = 4;
+  constexpr std::size_t cap = 1; // Increase only after native device throughput/memory measurements.
 #else
   constexpr std::size_t cap = 8;
 #endif

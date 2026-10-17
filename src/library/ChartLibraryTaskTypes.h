@@ -57,6 +57,8 @@ struct TaskRequest {
   bool rebuildLibraryMetadata = false;
   bool folderRegistrationCompleted = false;
   std::vector<std::filesystem::path> refreshPaths;
+  // The storage job already applied these resource deltas to its displayed sizes.
+  bool storageMeasurementsCurrent = false;
 };
 
 struct TaskInfo {

@@ -7,6 +7,9 @@
 #include <mutex>
 #include <set>
 #include <thread>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 
 using namespace storage_management;
 using storage_test::require;
@@ -166,9 +169,25 @@ void spillFailureStopsAndCleansUp() {
         sink({.children = {{.path = "/a"}, {.path = "/b"}, {.path = "/c"}}});
       }, [](auto) { return true; }), "spill I/O failure cancels pending work");
 }
+void firstScanCreatesItsPrivateSpillRoot() {
+  storage_test::TempDirectory temp;
+  temp.write("private/keep", "unrelated");
+  const auto scratch = temp.root / "private/storage-management/scan";
+  std::vector<StorageScanJob> roots{{.path = "/one"}, {.path = "/two"}, {.path = "/three"}};
+  StorageScanScheduleMetrics metrics;
+  require(RunStorageScan(roots, {.workers = 1, .frontierRecords = 1, .scratchRoot = scratch, .metrics = &metrics},
+      [](const auto &, auto, auto sink) { sink({.totals = {.bytes = 1, .files = 1}}); },
+      [](auto) { return true; }), "first large scan creates its missing private scratch hierarchy");
+  require(metrics.jobsFinished == 3 && metrics.spilledJobs == 3 && std::filesystem::is_empty(scratch) &&
+              std::filesystem::is_regular_file(temp.root / "private/keep"),
+          "fresh-root spill completes all jobs and removes only its owned database directory");
+}
 }
 int main() {
   try {
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
+    require(DefaultStorageScanLimits().workers == 1, "unmeasured mobile defaults to one scan worker");
+#endif
     independentDirectoriesOverlap();
     skewedRootsShareWorkers();
     localResultsExcludeDescendants();
@@ -176,5 +195,6 @@ int main() {
     saturatedCancellationWakesAllWaiters();
     archiveJobsShareOnePool();
     spillFailureStopsAndCleansUp();
+    firstScanCreatesItsPrivateSpillRoot();
   } catch (const std::exception &error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }
 }

@@ -27,6 +27,7 @@ asobmashow_register_test(storage_media_tests)
 
 add_executable(storage_optimizer_tests tests/storage_optimizer_tests.cpp
     tests/storage_library_integration.cpp
+    src/storage/StorageMeasurement.cpp src/storage/StorageArchiveMeasurement.cpp src/storage/StorageMeasurementState.cpp
     src/audio/decoder.cpp src/ArchiveFile.cpp src/archive/TemporaryCache.cpp
     src/archive/UnzipOutput.cpp src/archive/IndexBuildCoordinator.cpp
     src/MinizBridge.c src/Utils.cpp src/bms_parser.cpp src/path.cpp
@@ -112,3 +113,18 @@ target_compile_features(storage_work_scheduler_tests PRIVATE cxx_std_23)
 target_link_libraries(storage_work_scheduler_tests PRIVATE Threads::Threads)
 asobmashow_register_test(storage_work_scheduler_tests)
 set_tests_properties(storage_work_scheduler_tests PROPERTIES TIMEOUT 30)
+
+# Deliberately excluded from the default build/CTest. Compile production code
+# separately with optimization even in the developer's Debug build directory.
+if(UNIX)
+get_target_property(storage_benchmark_sources storage_optimizer_tests SOURCES)
+list(FILTER storage_benchmark_sources EXCLUDE REGEX "^tests/|src/audio/decoder.cpp|src/bms_search/DownloadStorageOptimization.cpp")
+add_executable(storage_scale_benchmark EXCLUDE_FROM_ALL tests/storage_scale_benchmark.cpp
+    ${storage_benchmark_sources} src/storage/StorageMeasurement.cpp src/storage/StorageArchiveMeasurement.cpp)
+target_compile_features(storage_scale_benchmark PRIVATE cxx_std_23)
+target_compile_options(storage_scale_benchmark PRIVATE $<$<CXX_COMPILER_ID:Clang,AppleClang,GNU>:-O2;-g0>)
+target_link_libraries(storage_scale_benchmark PRIVATE ${COMMON_LIBS} SQLite3)
+if(APPLE)
+    target_link_libraries(storage_scale_benchmark PRIVATE iconv)
+endif()
+endif()

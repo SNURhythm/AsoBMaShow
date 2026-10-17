@@ -14,6 +14,7 @@ public:
   StorageReport Recover(Checkpoint = {});
 
 private:
+  bool PrepareJournalDirectory(std::string &);
   FileResult Run(const AssetCandidate &, const EncodeResult *, Checkpoint);
   StoragePlatformPaths paths_;
   FileTransactionDependencies dependencies_;

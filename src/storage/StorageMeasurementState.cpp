@@ -12,10 +12,11 @@ bool adjust(std::uint64_t &value, std::uint64_t before, std::uint64_t after) {
 }
 }
 std::set<std::string> ReconcileStorageMeasurements(StorageMeasurementRows &rows,
-    std::map<std::string, StorageGroupSource> &previous, const std::vector<StorageGroupSource> &current, bool invalidateAll) {
+    std::map<std::string, StorageGroupSource> &previous, const std::vector<StorageGroupSource> &current, bool invalidateAll,
+    const std::vector<std::filesystem::path> &changedRoots) {
   std::set<std::string> refresh;
   std::map<std::string, StorageGroupSource> next;
-  std::vector<std::filesystem::path> changedPaths, paths;
+  std::vector<std::filesystem::path> changedPaths = changedRoots, paths;
   for (const auto &source : current) {
     const auto &group = source.selection;
     const auto old = previous.find(group.groupId);
@@ -30,7 +31,11 @@ std::set<std::string> ReconcileStorageMeasurements(StorageMeasurementRows &rows,
   for (const auto &[id, source] : previous) if (!next.contains(id)) changedPaths.push_back(root(source.selection));
   const StoragePathIndex groupIndex(paths), changedIndex(changedPaths);
   for (const auto &path : changedPaths)
-    for (const auto index : groupIndex.Ancestors(path)) refresh.insert(current[index].selection.groupId);
+    for (const auto index : groupIndex.Ancestors(path)) {
+      const auto &group = current[index].selection;
+      rows[group.groupId] = {.groupId = group.groupId, .root = paths[index],
+          .reason = {StorageReason::StaleInput, "Cached total needs refresh"}, .sourceKind = group.sourceKind};
+    }
   for (std::size_t i = 0; i < current.size(); ++i)
     if (!changedIndex.Ancestors(paths[i]).empty()) refresh.insert(current[i].selection.groupId);
   for (const auto &id : refresh) rows.erase(id);
@@ -65,7 +70,16 @@ std::set<std::string> ApplyStorageReportMeasurements(StorageMeasurementRows &row
     if (applied) affected.erase(delta.groupId);
     else affected.insert(delta.groupId);
   }
-  for (const auto &id : affected) rows.erase(id);
-  return affected;
+  std::set<std::string> refresh;
+  for (std::size_t i = 0; i < groups.size(); ++i) if (affected.contains(groups[i].groupId)) {
+    const auto &group = groups[i];
+    rows[group.groupId] = {.groupId = group.groupId, .root = paths[i],
+        .reason = {StorageReason::StaleInput, "Cached total needs refresh"}, .sourceKind = group.sourceKind};
+    // A strict ancestor would recursively re-enumerate unrelated siblings.
+    // Keep its estimate unavailable until explicit Refresh; auto-refresh only
+    // rows contained in the physical changed subtree union.
+    if (!changedIndex.Ancestors(paths[i]).empty()) refresh.insert(group.groupId);
+  }
+  return refresh;
 }
 }

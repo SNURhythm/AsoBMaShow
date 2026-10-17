@@ -264,10 +264,35 @@ void fillDefaults(FileTransactionDependencies &ops) {
 
 StorageFileTransaction::StorageFileTransaction(StoragePlatformPaths paths, FileTransactionDependencies dependencies)
     : paths_(std::move(paths)), dependencies_(std::move(dependencies)) {
+  if (paths_.journalSyncRoot.empty()) {
+    paths_.journalSyncRoot = paths_.journalRoot.parent_path();
+    std::error_code error;
+    while (!paths_.journalSyncRoot.empty() && !fs::exists(paths_.journalSyncRoot, error) && !error) {
+      const auto parent = paths_.journalSyncRoot.parent_path();
+      if (parent == paths_.journalSyncRoot) break;
+      paths_.journalSyncRoot = parent;
+    }
+  }
   if (!dependencies_.identity) dependencies_.identity = [roots = paths_.pathAccessRoots](const fs::path &path, std::string &error) {
     return ReadFileIdentity(path, error, roots);
   };
   fillDefaults(dependencies_);
+}
+bool StorageFileTransaction::PrepareJournalDirectory(std::string &error) {
+  std::error_code ec;
+  fs::create_directories(paths_.journalRoot, ec);
+  if (ec) { error = ec.message(); return false; }
+  if (!IsSafeLocalPath(paths_.journalRoot, error, paths_.pathAccessRoots)) return false;
+  if (paths_.journalSyncRoot.empty() || !IsWithinFolder(paths_.journalRoot, paths_.journalSyncRoot)) {
+    error = "Journal durability root is not an ancestor"; return false;
+  }
+  // Repeat the complete captured barrier even after a failed attempt created
+  // these directories, and before any worker can retire a source. Syncing only
+  // journalRoot does not persist its own link in the newly created parent.
+  for (auto directory = paths_.journalRoot;; directory = directory.parent_path()) {
+    if (!dependencies_.syncDirectory(directory, error)) return false;
+    if (directory == paths_.journalSyncRoot) return true;
+  }
 }
 
 FileResult StorageFileTransaction::Replace(const AssetCandidate &candidate, const EncodeResult &encoded, Checkpoint check) {
@@ -303,8 +328,7 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
   record.backup = record.source.parent_path() / (".asobmashow-storage-" + record.id + ".backup");
   record.journal = paths_.journalRoot / (record.id + ".json");
   std::error_code ec;
-  fs::create_directories(paths_.journalRoot, ec);
-  if (ec || !IsSafeLocalPath(paths_.journalRoot, error, paths_.pathAccessRoots)) return fail(StorageReason::IoError, ec ? ec.message() : error);
+  if (!PrepareJournalDirectory(error)) return fail(StorageReason::IoError, error);
   if (!deletion) {
     if (encoded->outcome != FileOutcome::Converted) return fail(StorageReason::ValidationFailed, "No validated encoded output");
     const auto outputIdentity = dependencies_.identity(encoded->outputPath, error);
@@ -418,13 +442,12 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
 StorageReport StorageFileTransaction::Recover(Checkpoint check) {
   StorageReport report;
   std::error_code ec;
-  fs::create_directories(paths_.journalRoot, ec);
   std::string error;
-  if (ec || !IsSafeLocalPath(paths_.journalRoot, error, paths_.pathAccessRoots)) {
+  if (!PrepareJournalDirectory(error)) {
     report.recoveryRequired = true;
     report.failed = 1;
     report.files.push_back({.source = paths_.journalRoot, .outcome = FileOutcome::Failed,
-        .reason = {StorageReason::RecoveryRequired, ec ? ec.message() : error}});
+        .reason = {StorageReason::RecoveryRequired, error}});
     return report;
   }
   fs::directory_iterator it(paths_.journalRoot, ec), end;

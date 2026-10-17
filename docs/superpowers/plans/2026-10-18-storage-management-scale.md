@@ -381,12 +381,12 @@ through the shared budget before encoder admission.
 `docs/testing/storage-scale-2026-10-18.md`; update `docs/storage-management.md` and
 this plan with results. Do not add the large benchmark to default CTest.
 
-- [ ] Add small operation-count regressions to the owning tests for prefix lookup,
+- [x] Add small operation-count regressions to the owning tests for prefix lookup,
   bounded summary/result queues and unrelated-folder independence. Add an opt-in
   ten-million-entry synthetic mode through the real Task-1 visitor/Task-3 reducer
   and Task-2 scan scheduler; generate entries lazily rather than allocating ten
   million records. Assert queue/working-set bounds and report peak RSS.
-- [ ] Build the benchmark's production sources with optimization and compare the
+- [x] Build the benchmark's production sources with optimization and compare the
   baseline's fixed-file-count layouts plus real 1,000-/10,000-entry directories.
   Report enumeration/bookkeeping time, metadata/check counts and peak RSS.
   Compare one/two/four/eight scan workers, warm resident/persisted archive indexes
@@ -394,27 +394,38 @@ this plan with results. Do not add the large benchmark to default CTest.
   archives and one archive with thousands of groups. Measure shared-dispatch
   overhead before considering a more complex scheduler; choose actual defaults
   from throughput and cancellation latency, recording platform gaps.
-- [ ] Benchmark actual short WAV/FLAC media with one/two/four audio workers and
+- [x] Benchmark actual short WAV/FLAC media with one/two/four audio workers and
   record separate encode, verification and durable commit timings. Reduce default
   concurrency when contention erases the benefit. Keep mobile at one if no native
   mobile measurement supports increasing it; document that limit explicitly.
-- [ ] Investigate repeated local-directory enumeration if it dominates short
+- [x] Investigate repeated local-directory enumeration if it dominates short
   audio; consolidate only checks whose removal preserves the same collision/edit
   regression assertions. Record residual costs rather than bypassing them.
-- [ ] Build `main tests_app tests_library tests_archives tests_audio tests_video tests_settings
+- [x] Build `main tests_app tests_library tests_archives tests_audio tests_video tests_settings
   tests_music_select` at `-j 6`; run CTest with
   `-L '^area_(app|library|archives|audio|video|settings|music_select)$' --output-on-failure
   --no-tests=error -j 6`. Run the iOS build-only helper with `--skip-init` and
   Android `--build-only`; verify native concurrent transaction/cancellation tests
   on disposable simulator/emulator storage where available.
-- [ ] Update docs with measured results, platform limits and safe cancellation;
+- [x] Update docs with measured results, platform limits and safe cancellation;
   do not extrapolate a small scan into an asserted ten-million-file elapsed time.
   Commit and push `test: verify storage scaling and conversion budgets`.
 
-## Handoff
+## Execution outcome
 
-The written design is approved. This plan awaits user review and execution-method
-selection. Native execution in this session is recommended because the inventory,
-evidence and scheduler interfaces are tightly coupled. The native workflow ends
-with one independent whole-branch review, followed by fixes and appropriate
-verification. No additional worktree is needed or authorized.
+All eight tasks completed in the current checkout using the approved native
+execution workflow. One independent whole-branch review found one critical and
+three important issues; the single fix pass addressed all four with regression
+coverage. There are no deferred minor findings.
+
+Final verification: desktop application and all requested test targets built;
+166/166 affected tests passed. iOS and Android build-only checks passed after the
+fixes, and native scan/work-scheduler/transaction suites passed on both the iOS
+Simulator and Android emulator. No distribution action was performed.
+
+The [measurement report](../../testing/storage-scale-2026-10-18.md) and its raw
+75-run CSV document real directory/archive scans, ten-million-entry synthetic
+bounds, actual codec/commit timings and platform gaps. Desktop scan/audio caps
+remain 8/4; mobile defaults are 1/1. Four audio workers improved throughput by
+3.6–3.8× on the measured fixtures. Dense-directory safety checks retain their
+local quadratic cost; uncertain strict ancestor totals require explicit Refresh.

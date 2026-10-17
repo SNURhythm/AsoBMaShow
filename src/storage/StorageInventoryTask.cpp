@@ -51,7 +51,8 @@ void StorageInventoryTask::Start(InventoryRequest request, StorageInventoryMode 
       } else {
         auto preflight = builders.preflight(request, check, stop);
         for (auto &group : preflight.groups) group.generation = state->generation;
-        queue(preflight.groups, false); result.complete = preflight.complete; result.cancelled = preflight.cancelled;
+        // Review evidence must not replace the browser's cached size provenance.
+        result.complete = preflight.complete; result.cancelled = preflight.cancelled;
         result.preflight = std::move(preflight);
       }
     } catch (...) {

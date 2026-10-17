@@ -22,6 +22,12 @@
 
 class ScoreRepository;
 
+struct ChartLibraryChanges {
+  std::uint64_t revision = 0;
+  bool unknown = false;
+  std::vector<std::filesystem::path> roots;
+};
+
 struct ArchiveUnzipRecoveryRecord {
   std::filesystem::path archivePath, outputFolder;
   std::string archiveKey;
@@ -431,6 +437,8 @@ public:
   std::optional<Session> OpenSession(ScoreRepository *scores = nullptr);
   [[nodiscard]] const std::filesystem::path &DatabasePath() const;
   [[nodiscard]] std::uint64_t GetLibraryRevision() const;
+  [[nodiscard]] ChartLibraryChanges GetLibraryChangesSince(std::uint64_t revision) const;
+  void NotifyStorageSourceRefresh(const std::vector<std::filesystem::path> &roots);
   static std::filesystem::path DefaultBmsFolderPath();
   static bool IsDefaultBmsFolderPath(const std::filesystem::path &path);
 

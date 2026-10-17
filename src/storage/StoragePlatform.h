@@ -12,6 +12,9 @@ struct StoragePlatformPaths {
   std::vector<std::filesystem::path> pathAccessRoots;
   // Expendable scan indexes; never read as transaction recovery authority.
   std::filesystem::path scanRoot;
+  // Existing ancestor captured before journal creation; copied to every worker
+  // so retries/concurrent first use cannot mistake an unsynced new directory for it.
+  std::filesystem::path journalSyncRoot;
 };
 // On sandboxed platforms, roots must come from the OS private directory and
 // authorized library/bookmark registrations, never from recovery records.

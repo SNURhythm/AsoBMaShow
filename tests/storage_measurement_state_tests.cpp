@@ -17,10 +17,10 @@ void subsetApplyNeverStartsFullMeasurement() {
   const auto refresh = ApplyStorageReportMeasurements(rows, groups, report);
   require(rows.at("selected").totalBytes == 60 && rows.at("selected").audioBytes == 60,
       "subset conversion applies known committed deltas without a new size walk");
-  require(refresh == std::set<std::string>{"parent"} && !rows.contains("parent") && rows.at("other").totalBytes == 20,
-      "only uncertain ancestors refresh; unrelated sizes survive");
+  require(refresh.empty() && !rows.at("parent").totalBytes && rows.at("other").totalBytes == 20,
+      "uncertain ancestors remain unavailable without recursively refreshing unrelated siblings");
   rows.at("selected").generation = 8;
-  require(ApplyStorageReportMeasurements(rows, groups, report).contains("selected") && !rows.contains("selected"),
+  require(ApplyStorageReportMeasurements(rows, groups, report).contains("selected") && !rows.at("selected").totalBytes,
       "stale report generation cannot change a newer measurement");
 }
 void jobRefreshPreservesUnrelatedSizes() {
@@ -44,12 +44,27 @@ void sourceChangesInvalidateContainingRollups() {
   const std::vector<StorageGroupSource> current{{{"parent", "/parent"}, "same"},
       {{"sibling", "/sibling"}, "same"}, {{"child", "/parent/child"}, "new"}};
   const auto refresh = ReconcileStorageMeasurements(rows, previous, current, false);
-  require(refresh == std::set<std::string>{"parent", "child"} && rows.size() == 1 && rows.contains("sibling"),
+  require(refresh == std::set<std::string>{"child"} && !rows.at("parent").totalBytes && rows.at("sibling").totalBytes == 50,
       "new nested source invalidates its containing totals only");
+}
+
+void dirtyScopesInvalidateStableRepresentative() {
+  StorageMeasurementRows rows{{"parent", {.groupId = "parent", .totalBytes = 100}},
+      {"song", {.groupId = "song", .totalBytes = 60}}, {"other", {.groupId = "other", .totalBytes = 40}}};
+  const std::vector<StorageGroupSource> current{{{"parent", "/library"}, "same"},
+      {{"song", "/library/song"}, "same"}, {{"other", "/library/other"}, "same"}};
+  std::map<std::string, StorageGroupSource> previous;
+  for (const auto &source : current) previous[source.selection.groupId] = source;
+  const auto refresh = ReconcileStorageMeasurements(rows, previous, current, false, {"/library/song"});
+  require(refresh == std::set<std::string>{"song"} && !rows.contains("song") &&
+      !rows.at("parent").totalBytes && rows.at("other").totalBytes == 40,
+      "secondary chart/resource-only revision invalidates its scope with stable representative and count");
+  require(ReconcileStorageMeasurements(rows, previous, current, true).size() == 3 && rows.empty(),
+      "unknown revision conservatively invalidates every source");
 }
 
 }
 int main() {
-  try { subsetApplyNeverStartsFullMeasurement(); jobRefreshPreservesUnrelatedSizes(); sourceChangesInvalidateContainingRollups(); }
+  try { subsetApplyNeverStartsFullMeasurement(); jobRefreshPreservesUnrelatedSizes(); sourceChangesInvalidateContainingRollups(); dirtyScopesInvalidateStableRepresentative(); }
   catch (const std::exception &error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }
 }

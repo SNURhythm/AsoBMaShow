@@ -234,7 +234,8 @@ InventoryRequest StorageManagementScene::RequestFor(const std::vector<Track> &tr
 void StorageManagementScene::ReloadGroups(bool invalidateAll) {
   inventoryTask_.Cancel();
   preflight_.reset(); measuring_ = false;
-  libraryRevision_ = context.chartRepository.GetLibraryRevision();
+  const auto changes = context.chartRepository.GetLibraryChangesSince(libraryRevision_);
+  libraryRevision_ = changes.revision;
   measurementRevision_ = context.storageMeasurementRevision;
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   pathAccessRoots_.clear();
@@ -253,9 +254,9 @@ void StorageManagementScene::ReloadGroups(bool invalidateAll) {
     sources.push_back({request.groups[i], std::to_string(group.chartCount) + ':' + meta.MD5 + ':' + meta.SHA256 + ':' +
         fspath_to_utf8(meta.BmsPath)});
   }
-  const auto changed = ReconcileStorageMeasurements(measurements_, measurementSources_, sources, invalidateAll);
+  const auto changed = ReconcileStorageMeasurements(measurements_, measurementSources_, sources, invalidateAll || changes.unknown, changes.roots);
+  std::erase_if(pendingMeasurements_, [&](const auto &id) { return measurements_.contains(id) || !measurementSources_.contains(id); });
   pendingMeasurements_.insert(changed.begin(), changed.end());
-  std::erase_if(pendingMeasurements_, [&](const auto &id) { return !measurementSources_.contains(id); });
   selection_.SetGroups(groups_);
   model_ = GroupedChartListModel{};
   model_.SetGroups(groups_);
@@ -295,6 +296,7 @@ void StorageManagementScene::Measure(bool selectedOnly) {
 void StorageManagementScene::ApplyReport(const StorageReport &report) {
   preflight_.reset();
   inventoryTask_.Cancel(); measuring_ = false;
+  pendingMeasurements_.clear();
   const auto changed = ApplyStorageReportMeasurements(measurements_, RequestFor(groups_).groups, report);
   pendingMeasurements_.insert(changed.begin(), changed.end());
   RefreshRows(); MeasureGroups(pendingMeasurements_);

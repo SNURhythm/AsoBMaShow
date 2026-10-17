@@ -27,6 +27,21 @@ Hard-linked regular files contribute their logical bytes at each selected path,
 but are excluded from modification. Overlapping selected folders count each path
 only once in the combined total.
 
+Browsing measures sizes in the background and publishes completed folder totals
+as they become available. It keeps folder summaries rather than every asset in
+memory. Review scans only the selected folder union for conversion eligibility;
+successful changes update known row totals directly. Uncertain results refresh
+only rows inside the changed subtrees. A strict ancestor whose total cannot be
+updated safely stays unavailable until **Refresh**, so a subset operation does
+not recursively scan unrelated sibling folders. Opening confirmation does not
+scan the entire library again.
+
+Library refreshes invalidate sizes for their changed source paths, including
+nonrepresentative charts and resource-only changes. Unrelated completed rows stay
+cached. The bounded change history conservatively invalidates all sizes if it
+cannot identify the changed scopes. Cached sizes are estimates: external edits
+become visible after a library refresh or an explicit storage **Refresh**.
+
 ## Audio choices
 
 | Choice | Behavior |
@@ -108,6 +123,13 @@ new work. After successful recovery, abandoned private encoding candidates are
 removed; unrecognized files and unresolved recovery state are retained. Do not
 manually remove recovery files while an operation is pending.
 
+Independent folders can convert audio concurrently: up to four workers on
+desktop, one on mobile. A folder and its selected ancestors finish in order;
+video remains one job at a time. Cancellation waits for active transactions to
+settle before releasing library maintenance. A recovery failure stops new work
+across all workers. Temporary-space budgets cover concurrent outputs and are
+checked against available disk space before each file starts.
+
 The result includes converted, deleted, skipped and failed counts. Reclaimed
 bytes are counted only when obsolete originals/backups have actually been removed.
 Common outcomes:
@@ -141,6 +163,10 @@ unoptimized. Automatic work pauses during foreground gameplay or mobile
 backgrounding and remains cancellable.
 
 ## Developer verification
+
+See [scale measurements and platform limits](testing/storage-scale-2026-10-18.md)
+for the opt-in benchmark, selected worker defaults and remaining dense-directory
+validation cost.
 
 Storage tests belong to the library, audio, video, settings and UI groups listed
 in [the testing guide](testing/README.md). `storage_optimizer_tests` includes a

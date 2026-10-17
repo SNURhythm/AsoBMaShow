@@ -30,6 +30,7 @@
 #include <future>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -214,12 +215,29 @@ struct DifficultyLabelCache {
 std::mutex gDifficultyLabelCacheMutex;
 DifficultyLabelCache gDifficultyLabelCache;
 std::atomic<std::uint64_t> gLibraryRevision{1};
+std::mutex gLibraryChangesMutex;
+std::map<std::filesystem::path, std::uint64_t> gLibraryChangedRoots;
+std::uint64_t gLibraryUnknownRevision = 1;
+constexpr std::size_t kLibraryChangeRootLimit = 4096;
 
 std::string columnString(sqlite3_stmt *stmt, int idx);
 void invalidateDifficultyLabelCache();
 
-void bumpLibraryRevision() {
-  gLibraryRevision.fetch_add(1, std::memory_order_relaxed);
+void bumpLibraryRevision(const std::vector<std::filesystem::path> &roots = {}) {
+  std::lock_guard lock(gLibraryChangesMutex);
+  const auto revision = gLibraryRevision.load(std::memory_order_relaxed) + 1;
+  bool unknown = roots.empty();
+  for (auto root : roots) {
+    if (root.empty()) { unknown = true; break; }
+    chart_storage_identity::ToAbsolutePath(root);
+    gLibraryChangedRoots[root.lexically_normal()] = revision;
+    if (gLibraryChangedRoots.size() > kLibraryChangeRootLimit) { unknown = true; break; }
+  }
+  if (unknown) {
+    gLibraryChangedRoots.clear();
+    gLibraryUnknownRevision = revision;
+  }
+  gLibraryRevision.store(revision, std::memory_order_release);
 }
 
 using asobmshow::bms_metadata::lowerCopy;
@@ -1400,8 +1418,8 @@ void chart_repository_detail::InvalidateDifficultyLabelCache() {
   invalidateDifficultyLabelCache();
 }
 
-void chart_repository_detail::BumpLibraryRevision() {
-  bumpLibraryRevision();
+void chart_repository_detail::BumpLibraryRevision(const std::vector<std::filesystem::path> &roots) {
+  bumpLibraryRevision(roots);
 }
 
 int ChartRepository::Session::CountAllChartMeta() {
@@ -3264,7 +3282,21 @@ void chart_repository_detail::SelectAllChartMeta(
 }
 
 std::uint64_t ChartRepository::GetLibraryRevision() const {
-  return gLibraryRevision.load(std::memory_order_relaxed);
+  return gLibraryRevision.load(std::memory_order_acquire);
+}
+
+ChartLibraryChanges ChartRepository::GetLibraryChangesSince(std::uint64_t revision) const {
+  std::lock_guard lock(gLibraryChangesMutex);
+  ChartLibraryChanges changes{.revision = gLibraryRevision.load(std::memory_order_relaxed),
+      .unknown = revision < gLibraryUnknownRevision};
+  if (!changes.unknown)
+    for (const auto &[root, changed] : gLibraryChangedRoots)
+      if (changed > revision) changes.roots.push_back(root);
+  return changes;
+}
+
+void ChartRepository::NotifyStorageSourceRefresh(const std::vector<std::filesystem::path> &roots) {
+  bumpLibraryRevision(roots);
 }
 
 #endif

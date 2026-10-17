@@ -174,6 +174,10 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
     std::vector<fs::path> groupRoots;
     for (const auto &row : baselines) groupRoots.push_back(row.root);
     const StoragePathIndex groups(groupRoots);
+    std::set<std::size_t> selectedAncestors;
+    for (const auto &row : inventory.groups)
+      for (const auto position : groups.Ancestors(row.root)) selectedAncestors.insert(position);
+    std::map<std::size_t, StorageDirectoryStamp> cachedAncestorStamps;
     std::map<fs::path, StorageScanTotals> totals;
     for (auto it = inventory.directories.rbegin(); it != inventory.directories.rend(); ++it) {
       auto &sum = totals[it->first];
@@ -192,7 +196,26 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
           found->second.reason.code == StorageReason::None && row.totalBytes == measured->second.bytes &&
           row.audioBytes == measured->second.audio && row.videoBytes == measured->second.video &&
           row.imageBytes == measured->second.image && row.sourceIdentity == StorageDirectorySourceIdentity(found->second.stamp));
+      const auto position = baselineValid.size() - 1;
+      if (found == inventory.directories.end() && selectedAncestors.contains(position) &&
+          row.sourceKind == StorageSourceKind::Local && row.totalBytes && !row.sourceIdentity.empty()) {
+        const auto matches = access.Ancestors(row.root);
+        const auto boundary = matches.empty() ? fs::path{} : inventoryRequest.pathAccessRoots[matches.back()];
+        StorageDirectoryStamp stamp;
+        std::string stampError;
+        // This preserves a cached display estimate, not recursive filesystem
+        // freshness or mutation authority. Only exact committed deltas change it.
+        if (ReadStorageDirectoryStamp(row.root, boundary, stamp, stampError) &&
+            row.sourceIdentity == StorageDirectorySourceIdentity(stamp)) {
+          baselineValid.back() = true;
+          cachedAncestorStamps.emplace(position, stamp);
+        }
+      }
     }
+    // A selected baseline known to be stale also invalidates its cached rollups.
+    for (std::size_t i = 0; i < baselines.size(); ++i) if (!baselineValid[i] && inventory.directories.contains(baselines[i].root))
+      for (const auto ancestor : groups.Ancestors(baselines[i].root))
+        if (cachedAncestorStamps.contains(ancestor)) baselineValid[ancestor] = false;
     totals.clear();
     std::map<std::size_t, GroupStorageDelta> deltas;
     std::vector<fs::path> changedDirectories;
@@ -237,7 +260,8 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
         if (selectedAuthority.empty()) { error = "Directory is outside authorized roots"; skipDirectory(); return finishDirectory(); }
         StoragePlatformPaths localPaths{.journalRoot = dependencies_.paths.journalRoot,
             .temporaryRoot = dependencies_.paths.temporaryRoot,
-            .allowedRoots = {allowedRoots[selectedAuthority.back()]}, .scanRoot = dependencies_.paths.scanRoot};
+            .allowedRoots = {allowedRoots[selectedAuthority.back()]}, .scanRoot = dependencies_.paths.scanRoot,
+            .journalSyncRoot = dependencies_.paths.journalSyncRoot};
         // Transaction private paths and source have separate sandbox boundaries.
         for (const auto &path : {directoryPath, localPaths.temporaryRoot, localPaths.journalRoot}) {
           const auto matches = access.Ancestors(path);
@@ -396,7 +420,16 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
     for (auto &[position, delta] : deltas) {
       delta.needsRefresh |= uncertainGroups.contains(position);
       const auto found = inventory.directories.find(baselines[position].root);
-      if (found == inventory.directories.end() || found->second.reason.code != StorageReason::None) delta.needsRefresh = true;
+      if (found == inventory.directories.end() && cachedAncestorStamps.contains(position)) {
+        const auto &row = baselines[position];
+        const auto matches = access.Ancestors(row.root);
+        const auto boundary = matches.empty() ? fs::path{} : inventoryRequest.pathAccessRoots[matches.back()];
+        StorageDirectoryStamp stamp;
+        std::string stampError;
+        if (!ReadStorageDirectoryStamp(row.root, boundary, stamp, stampError) || stamp != cachedAncestorStamps.at(position))
+          delta.needsRefresh = true;
+        else delta.nextSourceIdentity = row.sourceIdentity;
+      } else if (found == inventory.directories.end() || found->second.reason.code != StorageReason::None) delta.needsRefresh = true;
       else delta.nextSourceIdentity = StorageDirectorySourceIdentity(found->second.stamp);
       report.groupDeltas.push_back(std::move(delta));
     }

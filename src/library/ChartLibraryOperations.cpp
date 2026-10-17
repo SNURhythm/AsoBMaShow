@@ -177,6 +177,9 @@ TaskRunResult ChartLibraryOperations::runPathRefresh(
   if (!result.completed) {
     throw TaskError(i18n::message("library.tasks.folder_refresh_failed"));
   }
+  if (!request.storageMeasurementsCurrent)
+    dependencies_.repository.NotifyStorageSourceRefresh(request.refreshPaths.empty() ?
+        std::vector<std::filesystem::path>{request.refreshPath} : request.refreshPaths);
   if (dependencies_.requestReload) {
     dependencies_.requestReload(true);
   }
@@ -371,6 +374,7 @@ TaskRunResult ChartLibraryOperations::runRefresh(
         std::to_string(scanPaused));
     throw TaskError(i18n::message("library.tasks.refresh_failed"));
   }
+  dependencies_.repository.NotifyStorageSourceRefresh(roots);
   if (dependencies_.requestReload) {
     dependencies_.requestReload(true);
   }

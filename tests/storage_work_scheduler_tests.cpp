@@ -5,11 +5,22 @@
 #include <iostream>
 #include <thread>
 #include <set>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 using namespace storage_management;
 using storage_test::require;
 using namespace std::chrono_literals;
 using MediaKind = asobmshow::chart_assets::MediaKind;
 namespace {
+void conservativePlatformDefaults() {
+#if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
+  require(DefaultStorageExecutionLimits().audioWorkers == 1, "unmeasured mobile defaults to one audio worker");
+#else
+  require(DefaultStorageExecutionLimits().audioWorkers >= 1 && DefaultStorageExecutionLimits().audioWorkers <= 4,
+          "desktop audio workers remain within measured cap");
+#endif
+}
 StoragePreflight input(std::initializer_list<const char *> paths) {
   StoragePreflight result;
   for (const auto path : paths) result.directories[path] = {.directory = path, .eligibleCount = 1};
@@ -150,6 +161,7 @@ void recoveryFailureStopsOtherAdmissions() {
 int main(int argc, char **argv) {
   try {
     const std::string filter = argc > 1 ? argv[1] : "";
+    if (filter.empty() || filter == "defaults") conservativePlatformDefaults();
     if (filter.empty() || filter == "exception") workerExceptionsBecomeRecoveryReports();
     if (filter.empty() || filter == "overlap") independentDirectoriesOverlapWithinBudget();
     if (filter.empty() || filter == "serialize") sameDirectoryAndVideoNeverOverlap();
