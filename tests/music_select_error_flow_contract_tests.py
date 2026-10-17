@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import unittest
+import atexit
 import os
 import subprocess
 import tempfile
 from pathlib import Path
+from functools import lru_cache
 from unittest.mock import patch
 
 if __package__:
@@ -13,6 +15,15 @@ else:
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@lru_cache(maxsize=1)
+def shared_fixture_workspace():
+    # Imported callers share compilation within this process, just like the
+    # unittest class. Each execution still gets a fresh working directory.
+    directory = tempfile.TemporaryDirectory()
+    atexit.register(directory.cleanup)
+    return directory.name, {}, {}
 
 
 def read_music_select_scene():
@@ -940,13 +951,14 @@ int main() {
                                   self.fixture_directory.name, self.fixture_executables,
                                   self.fixture_objects)
         else:
-            # Other suites also invoke this helper without unittest class setup.
-            with tempfile.TemporaryDirectory() as directory:
-                self._compile_and_run(source, extra_sources, arguments, directory, {})
+            # Other suites invoke this helper without unittest class setup.
+            directory, executables, objects = shared_fixture_workspace()
+            self._compile_and_run(source, extra_sources, arguments,
+                                  directory, executables, objects)
 
     def _compile_and_run(self, source, extra_sources, arguments,
                          fixture_directory, fixture_executables, fixture_objects=None):
-        compiler = FixtureCompiler.from_environment()
+        compiler = FixtureCompiler.from_environment(shared_headers=True)
         extra_sources = (*extra_sources, ROOT / "src/i18n/Localization.cpp")
         key = (source, extra_sources, compiler)
         executable = fixture_executables.get(key)
@@ -959,17 +971,18 @@ int main() {
                                '#include "' + (ROOT / "src/ui/PresentationSchedule.h").as_posix() + '"\n' + source)
             objects = []
             if fixture_objects is not None:
-                localization_object = fixture_objects.get(compiler)
-                if localization_object is None:
-                    localization_object = directory / "Localization.obj"
-                    subprocess.run(
-                        compiler.compile_command(ROOT / "src/i18n/Localization.cpp",
-                                                 localization_object.name),
-                        cwd=directory, check=True, capture_output=True, text=True,
-                    )
-                    fixture_objects[compiler] = localization_object
-                extra_sources = extra_sources[:-1]
-                objects.append(localization_object)
+                for extra_source in extra_sources:
+                    object_key = (compiler, extra_source)
+                    extra_object = fixture_objects.get(object_key)
+                    if extra_object is None:
+                        extra_object = directory / f"shared-{len(fixture_objects)}.obj"
+                        subprocess.run(
+                            compiler.compile_command(extra_source, extra_object.name),
+                            cwd=directory, check=True, capture_output=True, text=True,
+                        )
+                        fixture_objects[object_key] = extra_object
+                    objects.append(extra_object)
+                extra_sources = ()
             compiler.build([program, *extra_sources], executable, directory, objects=objects)
             fixture_executables[key] = executable
         # Fixture-created files (e.g. replay slots) remain isolated per case too.

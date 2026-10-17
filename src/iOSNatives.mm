@@ -1,6 +1,7 @@
 #include "iOSNatives.hpp"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "RAII.h"
+#include "bms_search/DownloadRetryWait.h"
 #include "audio/NativeMusicPlayer.h"
 #include "audio/IOSMusicStream.h"
 #include "ir/IrHttpClientIOS.h"
@@ -5002,14 +5003,9 @@ bool DownloadURLToFileIOS(const std::string &url,
       delegate->requestError = nil;
       delegate->urlResponse = nil;
       if (needsDecision) continue;
-      const auto retryAt = std::chrono::steady_clock::now() +
-                           std::chrono::seconds(1 << attempt);
-      while (std::chrono::steady_clock::now() < retryAt) {
-        if (cancelled.load()) {
-          errorMessage = "Download cancelled.";
-          return false;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      if (!waitForDownloadRetry(attempt, cancelled)) {
+        errorMessage = "Download cancelled.";
+        return false;
       }
     }
     [delegate detachProgress];

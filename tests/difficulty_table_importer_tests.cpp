@@ -1,4 +1,5 @@
 #include "../src/DifficultyTableImporter.h"
+#include "../src/DifficultyTableDefaults.h"
 #include "../src/DifficultyTableModel.h"
 #include "../src/repositories/ChartRepository.h"
 #include "../src/sqlite3.h"
@@ -683,8 +684,24 @@ void testPackagedDefaultsImportWithoutNetwork() {
   assert(session->SelectDifficultyTables().size() == 2);
 }
 
+// Revision transitions need all source identities, not the full packaged catalog.
+// testPackagedDefaultsImportWithoutNetwork covers the real snapshot separately.
+std::string writeSmallBundledSnapshot(const std::filesystem::path &directory) {
+  Fixture fixture;
+  nlohmann::json tables = nlohmann::json::array();
+  for (const auto &source : difficulty_table::kDefaultSources) {
+    tables.push_back({{"source_url", source.url},
+                      {"header", nlohmann::json::parse(fixture.headerJson)},
+                      {"data", nlohmann::json::parse(fixture.dataJson)}});
+  }
+  const auto path = directory / "defaults.json";
+  std::ofstream(path) << nlohmann::json{{"tables", tables}}.dump();
+  return path.string();
+}
+
 void testSharedSeedStatePreservesDeletedTables() {
   TempDirectory temporary;
+  const auto snapshot = writeSmallBundledSnapshot(temporary.path());
   ChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   ApplicationUiState applicationState;
@@ -694,7 +711,7 @@ void testSharedSeedStatePreservesDeletedTables() {
   {
     auto session = repository.OpenSession();
     assert(session);
-    assert(importer.SeedBundledDefaultsForApplication(*session, applicationState));
+    assert(importer.SeedBundledDefaultsForApplication(*session, applicationState, snapshot));
     assert(applicationState.bundledDifficultyTablesRevision == 2);
     const auto tables = session->SelectDifficultyTables();
     assert(tables.size() == 2);
@@ -703,12 +720,13 @@ void testSharedSeedStatePreservesDeletedTables() {
   // Reopening the shared database under another profile uses the same state.
   auto session = repository.OpenSession();
   assert(session);
-  assert(!importer.SeedBundledDefaultsForApplication(*session, applicationState));
+  assert(!importer.SeedBundledDefaultsForApplication(*session, applicationState, snapshot));
   assert(session->SelectDifficultyTables().empty());
 }
 
 void testBundledSeedRevisionsAdvanceOnlyAfterSuccessfulImport() {
   TempDirectory temporary;
+  const auto snapshot = writeSmallBundledSnapshot(temporary.path());
   ChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
   auto session = repository.OpenSession();
@@ -717,17 +735,17 @@ void testBundledSeedRevisionsAdvanceOnlyAfterSuccessfulImport() {
   DifficultyTableImporter importer;
   assert(!importer.SeedBundledDefaultsForApplication(*session, state, "missing.json"));
   assert(state.bundledDifficultyTablesRevision == 0);
-  assert(importer.SeedBundledDefaultsForApplication(*session, state));
+  assert(importer.SeedBundledDefaultsForApplication(*session, state, snapshot));
   assert(state.bundledDifficultyTablesRevision == 2);
   const auto tables = session->SelectDifficultyTables();
   assert(tables.size() == 8);
   for (const auto &table : tables) assert(session->DeleteDifficultyTable(table.id));
   // Offline snapshot completion is independent of the pending online refresh.
   assert(state.onlineDifficultyTablesRevision == 0);
-  assert(!importer.SeedBundledDefaultsForApplication(*session, state));
+  assert(!importer.SeedBundledDefaultsForApplication(*session, state, snapshot));
   assert(session->SelectDifficultyTables().empty());
   state.bundledDifficultyTablesRevision = 7;
-  assert(!importer.SeedBundledDefaultsForApplication(*session, state));
+  assert(!importer.SeedBundledDefaultsForApplication(*session, state, snapshot));
   assert(state.bundledDifficultyTablesRevision == 7);
   assert(session->SelectDifficultyTables().empty());
 }

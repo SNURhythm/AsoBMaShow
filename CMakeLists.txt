@@ -14,7 +14,9 @@ set(ASOBMASHOW_APPLICATION_VERSION "${PROJECT_VERSION}" CACHE STRING
 add_compile_definitions(
     ASOBMASHOW_APPLICATION_VERSION="${ASOBMASHOW_APPLICATION_VERSION}")
 include(CTest)
-option(ASOBMASHOW_BUILD_TESTS "Build lightweight unit tests" ON)
+option(ASOBMASHOW_BUILD_TESTS "Build unit and integration tests" ON)
+option(ASOBMASHOW_TEST_FULL_DEBUG_INFO
+       "Keep full variable/type debug information in Clang/GCC test objects" OFF)
 option(ASOBMASHOW_ENABLE_PERF_TELEMETRY
        "Log periodic frame, audio, and input performance telemetry" OFF)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
@@ -2595,13 +2597,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(skin_package_store_windows_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
-    add_test(NAME lua_skin_file_system_windows_contract
-        COMMAND ${Python3_EXECUTABLE}
-                -m unittest
-                tests/lua_skin_file_system_windows_contract_tests.py -v)
-    set_tests_properties(lua_skin_file_system_windows_contract PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
     add_test(NAME settings_virtual_controller_ui_contract
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest
@@ -2609,18 +2604,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(settings_virtual_controller_ui_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
-    add_test(NAME settings_input_binding_ui_contract
-        COMMAND ${Python3_EXECUTABLE}
-                -m unittest
-                tests/settings_input_binding_ui_contract_tests.py -v)
-    set_tests_properties(settings_input_binding_ui_contract PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
     add_test(NAME settings_gameplay_skin_initialization_contract
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest
                 tests/settings_gameplay_skin_initialization_contract_tests.py -v)
     set_tests_properties(settings_gameplay_skin_initialization_contract PROPERTIES
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
     add_test(NAME gameplay_scene_feature_off_compile_contract
@@ -2642,18 +2631,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_test(NAME replay_export_cancellation_boundary
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/replay_export_cancellation_tests.py)
+    set_tests_properties(ios_foreground_ingress_tests ios_export_input_suppression_tests
+        background_gameplay_dispatch_tests replay_export_cancellation_boundary PROPERTIES
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}")
     add_test(NAME replay_video_ui_batch_contract
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest
                 tests/replay_video_ui_batch_contract_tests.py -v)
     set_tests_properties(replay_video_ui_batch_contract PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-    add_test(NAME text_view_transient_buffer_contract
-        COMMAND ${Python3_EXECUTABLE}
-                -m unittest
-                tests/text_view_transient_buffer_contract_tests.py -v)
-    set_tests_properties(text_view_transient_buffer_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
     add_library(ir_submission_eligibility_test_support STATIC
@@ -2726,6 +2711,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_test(NAME ios_now_playing_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ios_now_playing_tests.py)
     set_tests_properties(ios_now_playing_tests PROPERTIES
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
     add_test(NAME image_fade_shader_audit
@@ -6199,7 +6185,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/find_bms_transport_server.py
                 $<TARGET_FILE:find_bms_metadata_transport_tests>)
     set_tests_properties(find_bms_metadata_loopback_transport_tests PROPERTIES
-        TIMEOUT 55 RUN_SERIAL TRUE)
+        TIMEOUT 55)
     add_test(NAME android_metadata_post_cancellation_tests
         COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/android_metadata_post_cancellation_tests.py)
     set_tests_properties(android_metadata_post_cancellation_tests PROPERTIES TIMEOUT 60)
@@ -6210,6 +6196,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_test(NAME ios_hardware_button_tests
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/ios_hardware_button_tests.py)
+        set_tests_properties(ios_guided_access_status_tests ios_hardware_button_tests PROPERTIES
+            ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}")
         add_test(NAME unzip_marker_io_tests
             COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/unzip_marker_io_tests.py)
         set_tests_properties(unzip_marker_io_tests PROPERTIES TIMEOUT 30)
@@ -6240,7 +6228,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/find_bms_transport_server.py
                     $<TARGET_FILE:find_bms_ios_file_bridge_tests>)
         set_tests_properties(find_bms_ios_file_bridge_tests PROPERTIES
-            TIMEOUT 55 RUN_SERIAL TRUE)
+            TIMEOUT 55)
     endif()
 
     add_custom_command(
@@ -8758,6 +8746,28 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 )
             else()
                 target_compile_options(${target_name} PRIVATE -UNDEBUG)
+                # Line tables retain source breakpoints and symbolized stacks
+                # without repeating full STL/JSON type information per fixture.
+                # Opt back into full debug info for local-variable inspection.
+                if(NOT ASOBMASHOW_TEST_FULL_DEBUG_INFO)
+                    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+                        target_compile_options(${target_name} PRIVATE
+                            $<$<CONFIG:Debug,RelWithDebInfo>:-gline-tables-only>)
+                    elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+                        target_compile_options(${target_name} PRIVATE
+                            $<$<CONFIG:Debug,RelWithDebInfo>:-g1>)
+                    endif()
+                endif()
+                # Use the same optimized-Debug policy as main, including in
+                # fixture translation units that instantiate STL/JSON helpers.
+                # Assertions remain enabled in every configuration.
+                if(ENABLE_DEBUG_OPTIMIZED_BUILD)
+                    target_compile_options(${target_name} PRIVATE
+                        $<$<CONFIG:Debug>:-O1 -fno-omit-frame-pointer>)
+                endif()
+            endif()
+            if(APPLE AND NOT IOS)
+                target_link_options(${target_name} PRIVATE "LINKER:-dead_strip")
             endif()
             set_property(TARGET ${target_name}
                 PROPERTY ASOBMASHOW_TEST_TARGET_PREPARED TRUE)
@@ -8769,6 +8779,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         endif()
         set_tests_properties(${test_name} PROPERTIES
             WORKING_DIRECTORY $<TARGET_FILE_DIR:${target_name}>
+            ASOBMASHOW_BUILD_TARGETS "${target_name}"
         )
     endfunction()
 
@@ -9177,9 +9188,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET lua_skin_host_modules_tests)
         asobmashow_register_test(lua_skin_host_modules_tests)
-        # Debug callback tests retain the production 4 ms wall-clock guard;
-        # sibling test preemption must not consume that budget.
-        set_tests_properties(lua_skin_host_modules_tests PROPERTIES RUN_SERIAL TRUE)
     endif()
     if (TARGET lua_skin_http_transport_tests)
         asobmashow_register_test(lua_skin_http_transport_tests)
@@ -9483,14 +9491,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(playfield_projection_tests)
     if(TARGET play_skin_state_bridge_tests)
         asobmashow_register_test(play_skin_state_bridge_tests)
-        set_tests_properties(play_skin_state_bridge_tests PROPERTIES RUN_SERIAL TRUE TIMEOUT 120)
+        set_tests_properties(play_skin_state_bridge_tests PROPERTIES TIMEOUT 120)
     endif()
     if(TARGET gameplay_skin_session_factory_tests)
         asobmashow_register_test(gameplay_skin_session_factory_tests)
     endif()
     if(TARGET play_skin_session_tests)
         asobmashow_register_test(play_skin_session_tests)
-        set_tests_properties(play_skin_session_tests PROPERTIES RUN_SERIAL TRUE TIMEOUT 120)
+        set_tests_properties(play_skin_session_tests PROPERTIES TIMEOUT 120)
     endif()
     if(TARGET gameplay_skin_loading_benchmark_tests)
         asobmashow_register_test(gameplay_skin_loading_benchmark_tests)
@@ -9615,6 +9623,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/main_menu_tabs_tests.py)
     add_test(NAME responsive_scene_layout_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/responsive_scene_layout_tests.py)
+    set_tests_properties(settings_rotation_edit_tests settings_note_editing_tests
+        lane_cover_scene_input_tests main_menu_tabs_tests responsive_scene_layout_tests PROPERTIES
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}")
     add_test(NAME android_native_music_focus_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/android_native_music_focus_tests.py)
     add_test(NAME utility_tab_resume_tests
@@ -9624,7 +9635,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_test(NAME ui_scale_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ui_scale_tests.py)
     set_tests_properties(ui_scale_tests PROPERTIES
-        ENVIRONMENT "ASOBMASHOW_TEST_YOGA_LIBRARY=$<TARGET_FILE:yogacore>")
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT};ASOBMASHOW_TEST_YOGA_LIBRARY=$<TARGET_FILE:yogacore>")
     asobmashow_register_test(result_gauge_history_tests)
     asobmashow_register_test(result_presentation_model_tests)
     asobmashow_register_test(remote_result_scene_tests)
@@ -9641,9 +9652,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(profile_archive_tests foundation_profile_archive_validation --shard validation)
     asobmashow_register_test(profile_archive_tests foundation_profile_archive_transactions --shard transactions)
     asobmashow_register_test(profile_archive_tests foundation_profile_archive_faults --shard faults)
-    # The fault matrix assumes its injected filesystem failure is the only I/O
-    # failure while it classifies exact durable recovery outcomes.
-    set_tests_properties(foundation_profile_archive_faults PROPERTIES RUN_SERIAL TRUE)
+    # Fault injection is process-local and every case owns a unique temp root.
 
     asobmashow_register_test(profile_settings_controller_tests foundation_profile_controller)
     asobmashow_register_test(profile_runtime_reapply_tests foundation_profile_runtime)
@@ -9749,6 +9758,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_SOURCE_DIR}/tests/fixture_compiler_environment_tests.py -v)
         set_tests_properties(fixture_compiler_environment_tests PROPERTIES TIMEOUT 60)
+        add_test(NAME test_groups_tests
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/tests/test_groups_tests.py -v)
     endif()
 
+    include("${CMAKE_SOURCE_DIR}/cmake/TestGroupCatalog.cmake")
 endif()

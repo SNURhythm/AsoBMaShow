@@ -39,6 +39,7 @@
 #include <set>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -696,10 +697,13 @@ Json chartJson(const PlayfieldChartVisualModel &model) {
 std::vector<std::uint8_t> readPixels(const RenderTarget &target) {
   bgfx::blit(rendering::readback_view, target.readback, 0, 0, target.output);
   std::uint32_t currentFrame = bgfx::frame();
-  std::vector<std::uint8_t> bgra(
-      static_cast<std::size_t>(kDrawableWidth) * kDrawableHeight * 4U);
+  const auto byteCount = static_cast<std::size_t>(kDrawableWidth) * kDrawableHeight * 4U;
+  // Debug libc++ constructs vector(size) one byte at a time. The readback
+  // buffer needs bulk initialization, not millions of allocator callbacks.
+  auto bgra = std::make_unique_for_overwrite<std::uint8_t[]>(byteCount);
+  std::memset(bgra.get(), 0, byteCount);
   const std::uint32_t expectedFrame =
-      bgfx::readTexture(target.readback, bgra.data());
+      bgfx::readTexture(target.readback, bgra.get());
   expect(expectedFrame != std::numeric_limits<std::uint32_t>::max(),
          "headless Metal pixel readback is scheduled");
   for (unsigned guard = 0; currentFrame < expectedFrame && guard < 16;
@@ -708,10 +712,13 @@ std::vector<std::uint8_t> readPixels(const RenderTarget &target) {
   }
   expect(currentFrame >= expectedFrame,
          "headless Metal pixel readback completes");
-  for (std::size_t offset = 0; offset < bgra.size(); offset += 4U) {
-    std::swap(bgra[offset], bgra[offset + 2U]);
+  auto *pixels = bgra.get();
+  for (std::size_t offset = 0; offset < byteCount; offset += 4U) {
+    const auto blue = pixels[offset];
+    pixels[offset] = pixels[offset + 2U];
+    pixels[offset + 2U] = blue;
   }
-  return bgra;
+  return {pixels, pixels + byteCount};
 }
 
 ScenarioResult renderScenario(

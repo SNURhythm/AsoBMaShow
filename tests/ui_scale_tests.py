@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 from gameplay_terminal_scene_extract import extract
+from support.fixture_compiler import FixtureCompiler
 
 
 class UiScaleTests(unittest.TestCase):
@@ -110,9 +111,9 @@ int main(int argc,char **argv) {
         with tempfile.TemporaryDirectory(prefix="asobmashow-safe-bounds-") as temp:
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
-            path.write_text(source)
-            subprocess.run(["c++", "-std=c++20", "-UTARGET_OS_IOS", "-DTARGET_OS_IOS=1",
-                            "-DTARGET_OS_SIMULATOR=0", str(path), "-o", str(binary)], check=True)
+            path.write_text("#undef TARGET_OS_IOS\n#define TARGET_OS_IOS 1\n"
+                            "#define TARGET_OS_SIMULATOR 0\n" + source)
+            FixtureCompiler.from_environment(shared_headers=True).build([path], binary, Path(temp))
             for scenario in ("preview", "modals"):
                 with self.subTest(scenario=scenario):
                     subprocess.run([str(binary), scenario], check=True)
@@ -191,10 +192,11 @@ int main() {
         with tempfile.TemporaryDirectory(prefix="asobmashow-settings-insets-") as temp:
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
-            path.write_text(source)
-            subprocess.run(["c++", "-std=c++20", "-UTARGET_OS_IOS", "-DTARGET_OS_IOS=1",
-                            "-DTARGET_OS_SIMULATOR=0", "-I", str(root / "src"),
-                            str(path), "-o", str(binary)], check=True)
+            path.write_text("#undef TARGET_OS_IOS\n#define TARGET_OS_IOS 1\n"
+                            "#define TARGET_OS_SIMULATOR 0\n" + source)
+            FixtureCompiler.from_environment(shared_headers=True).build(
+                [path], binary, Path(temp),
+                includes=[root / "src"])
             subprocess.run([str(binary)], check=True)
 
     def test_main_menu_layout_uses_real_yoga_for_rotation(self):
@@ -477,8 +479,11 @@ int main() {
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             path.write_text(source)
-            subprocess.run(["c++", "-std=c++20", "-I", str(root / "yoga"), "-I", str(root / "src"), str(path),
-                            os.environ.get("ASOBMASHOW_TEST_YOGA_LIBRARY", str(root / "cmake-build-debug/yoga/yoga/libyogacore.a")), "-o", str(binary)], check=True)
+            FixtureCompiler.from_environment(shared_headers=True).build(
+                [path], binary, Path(temp),
+                includes=[root / "yoga", root / "src"],
+                objects=[os.environ.get("ASOBMASHOW_TEST_YOGA_LIBRARY",
+                                       str(root / "cmake-build-debug/yoga/yoga/libyogacore.a"))])
             subprocess.run([str(binary)], check=True)
 
     def test_utility_rails_keep_compact_controls_and_feedback_in_bounds(self):
@@ -584,8 +589,11 @@ int main() {
         with tempfile.TemporaryDirectory(prefix="asobmashow-utility-yoga-") as temp:
             path, binary = Path(temp) / "test.cpp", Path(temp) / "test"
             path.write_text(source)
-            subprocess.run(["c++", "-std=c++20", "-I", str(root / "yoga"), "-I", str(root / "src"), str(path),
-                            os.environ.get("ASOBMASHOW_TEST_YOGA_LIBRARY", str(root / "cmake-build-debug/yoga/yoga/libyogacore.a")), "-o", str(binary)], check=True)
+            FixtureCompiler.from_environment(shared_headers=True).build(
+                [path], binary, Path(temp),
+                includes=[root / "yoga", root / "src"],
+                objects=[os.environ.get("ASOBMASHOW_TEST_YOGA_LIBRARY",
+                                       str(root / "cmake-build-debug/yoga/yoga/libyogacore.a"))])
             subprocess.run([str(binary)], check=True)
 
     def test_empty_marquee_viewport_does_not_draw_unclipped_text(self):
@@ -635,7 +643,7 @@ int main() {
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             path.write_text(source)
-            subprocess.run(["c++", "-std=c++23", str(path), "-o", str(binary)], check=True)
+            FixtureCompiler.from_environment(shared_headers=True).build([path], binary, Path(temp), standard=23)
             subprocess.run([str(binary)], check=True)
 
     def test_preview_actions_share_a_row_in_both_orientations(self):
@@ -683,8 +691,11 @@ int main() {
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             path.write_text(source)
-            subprocess.run(["c++", "-std=c++20", "-I", str(root / "yoga"), str(path),
-                            os.environ.get("ASOBMASHOW_TEST_YOGA_LIBRARY", str(root / "cmake-build-debug/yoga/yoga/libyogacore.a")), "-o", str(binary)], check=True)
+            FixtureCompiler.from_environment(shared_headers=True).build(
+                [path], binary, Path(temp),
+                includes=[root / "yoga"],
+                objects=[os.environ.get("ASOBMASHOW_TEST_YOGA_LIBRARY",
+                                       str(root / "cmake-build-debug/yoga/yoga/libyogacore.a"))])
             subprocess.run([str(binary)], check=True)
 
     def test_preview_controls_render_after_hud(self):
@@ -726,7 +737,7 @@ int main() {
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             path.write_text(source)
-            subprocess.run(["c++", "-std=c++20", str(path), "-o", str(binary)], check=True)
+            FixtureCompiler.from_environment(shared_headers=True).build([path], binary, Path(temp))
             subprocess.run([str(binary)], check=True)
 
     def test_gameplay_title_uses_bottom_right_only_in_portrait(self):
@@ -777,7 +788,9 @@ int main() {
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             path.write_text(source)
-            subprocess.run(["c++", "-std=c++20", "-I", str(root / "src"), str(path), "-o", str(binary)], check=True)
+            FixtureCompiler.from_environment(shared_headers=True).build(
+                [path], binary, Path(temp),
+                includes=[root / "src"])
             subprocess.run([str(binary)], check=True)
 
     def test_queued_rotation_precedes_start_input(self):
@@ -846,7 +859,9 @@ LOOP
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             path.write_text(source)
-            subprocess.run(["c++", "-std=c++20", "-I", str(root / "src"), str(path), "-o", str(binary)], check=True)
+            FixtureCompiler.from_environment(shared_headers=True).build(
+                [path], binary, Path(temp),
+                includes=[root / "src"])
             subprocess.run([str(binary)], check=True)
 
     def test_result_rotation_discards_old_photo_status_labels(self):
@@ -909,7 +924,7 @@ int main() {
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             path.write_text(source)
-            subprocess.run(["c++", "-std=c++20", str(path), "-o", str(binary)], check=True)
+            FixtureCompiler.from_environment(shared_headers=True).build([path], binary, Path(temp))
             subprocess.run([str(binary)], check=True)
 
     def test_result_rotation_resizes_custom_controls_and_safe_area(self):
@@ -991,7 +1006,7 @@ int main() {
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             path.write_text(source)
-            subprocess.run(["c++", "-std=c++20", str(path), "-o", str(binary)], check=True)
+            FixtureCompiler.from_environment(shared_headers=True).build([path], binary, Path(temp))
             subprocess.run([str(binary)], check=True)
 
     def test_orientation_numeric_controls_accept_their_own_ranges(self):
@@ -1026,7 +1041,9 @@ int main() {
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             path.write_text(source)
-            subprocess.run(["c++", "-std=c++20", "-I", str(root / "src"), str(path), "-o", str(binary)], check=True)
+            FixtureCompiler.from_environment(shared_headers=True).build(
+                [path], binary, Path(temp),
+                includes=[root / "src"])
             subprocess.run([str(binary)], check=True)
 
     def test_portrait_camera_keeps_all_eight_lanes_in_view(self):
@@ -1128,7 +1145,9 @@ int main() {
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             path.write_text(source)
-            subprocess.run(["c++", "-std=c++23", "-I", str(root / "src"), str(path), "-o", str(binary)], check=True)
+            FixtureCompiler.from_environment(shared_headers=True).build(
+                [path], binary, Path(temp), standard=23,
+                includes=[root / "src"])
             subprocess.run([str(binary)], check=True)
 
     def test_replay_export_restores_menu_geometry_and_density(self):
@@ -1196,7 +1215,9 @@ int main() {
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             path.write_text(source)
-            subprocess.run(["c++", "-std=c++23", "-I", str(root / "src"), str(path), "-o", str(binary)], check=True)
+            FixtureCompiler.from_environment(shared_headers=True).build(
+                [path], binary, Path(temp), standard=23,
+                includes=[root / "src"])
             subprocess.run([str(binary)], check=True)
 
     def test_phone_menu_canvas_preserves_tablet_and_gameplay_coordinates(self):
@@ -1232,7 +1253,9 @@ int main() {
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             path.write_text(source)
-            subprocess.run(["c++", "-std=c++23", "-I", str(root / "src"), str(path), "-o", str(binary)], check=True)
+            FixtureCompiler.from_environment(shared_headers=True).build(
+                [path], binary, Path(temp), standard=23,
+                includes=[root / "src"])
             subprocess.run([str(binary)], check=True)
 
     def test_portrait_and_landscape_keep_readable_units_and_valid_coordinates(self):
@@ -1280,7 +1303,9 @@ int main() {
             source_path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             source_path.write_text(source)
-            subprocess.run(["c++", "-std=c++23", "-I", str(root / "src"), str(source_path), "-o", str(binary)], check=True)
+            FixtureCompiler.from_environment(shared_headers=True).build(
+                [source_path], binary, Path(temp), standard=23,
+                includes=[root / "src"])
             subprocess.run([str(binary)], check=True)
 
 

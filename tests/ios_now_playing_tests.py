@@ -6,7 +6,7 @@ import sys
 import tempfile
 import unittest
 
-from support.fixture_compiler import FixtureCompiler
+from support.fixture_compiler import FixtureCompiler, build_foundation_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -111,9 +111,7 @@ int main() {
             folder = Path(folder)
             mm, executable = folder / "terminal.mm", folder / "terminal"
             mm.write_text(fixture)
-            subprocess.run(["xcrun", "--sdk", "macosx", "clang++", "-std=c++20",
-                            "-fobjc-arc", "-fblocks", "-framework", "Foundation",
-                            "-I", str(ROOT / "src"), str(mm), "-o", str(executable)], check=True)
+            build_foundation_fixture(mm, executable, includes=[ROOT / "src"])
             result = subprocess.run([str(executable)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -305,10 +303,7 @@ int main() {
             folder = Path(folder)
             mm, executable = folder / "pause.mm", folder / "pause"
             mm.write_text(fixture)
-            subprocess.run(["xcrun", "--sdk", "macosx", "clang++", "-std=c++20",
-                            "-fobjc-arc", "-fblocks", "-framework", "Foundation",
-                            "-I", str(ROOT / "src"),
-                            str(mm), "-o", str(executable)], check=True)
+            build_foundation_fixture(mm, executable, includes=[ROOT / "src"])
             result = subprocess.run([str(executable)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -377,9 +372,7 @@ int main() {
             folder = Path(folder)
             mm, executable = folder / "error.mm", folder / "error"
             mm.write_text(fixture)
-            subprocess.run(["xcrun", "--sdk", "macosx", "clang++", "-std=c++20",
-                            "-fobjc-arc", "-fblocks", "-framework", "Foundation",
-                            str(mm), "-o", str(executable)], check=True)
+            build_foundation_fixture(mm, executable)
             result = subprocess.run([str(executable)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -508,9 +501,7 @@ int main() {
             folder = Path(folder)
             mm, executable = folder / "publication.mm", folder / "publication"
             mm.write_text(fixture)
-            subprocess.run(["xcrun", "--sdk", "macosx", "clang++", "-std=c++20",
-                            "-fobjc-arc", "-fblocks", "-framework", "Foundation",
-                            str(mm), "-o", str(executable)], check=True)
+            build_foundation_fixture(mm, executable)
             result = subprocess.run([str(executable)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -609,9 +600,7 @@ int main() {
             folder = Path(folder)
             mm, executable = folder / "notification.mm", folder / "notification"
             mm.write_text(fixture)
-            subprocess.run(["xcrun", "--sdk", "macosx", "clang++", "-std=c++20",
-                            "-fobjc-arc", "-fblocks", "-framework", "Foundation",
-                            str(mm), "-o", str(executable)], check=True)
+            build_foundation_fixture(mm, executable)
             result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=5)
             self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -750,9 +739,7 @@ int main() {
             folder = Path(folder)
             mm, executable = folder / "now_playing.mm", folder / "now_playing"
             mm.write_text(fixture)
-            subprocess.run(["xcrun", "--sdk", "macosx", "clang++", "-std=c++20",
-                            "-fobjc-arc", "-fblocks", "-framework", "Foundation",
-                            str(mm), "-o", str(executable)], check=True)
+            build_foundation_fixture(mm, executable)
             result = subprocess.run([str(executable)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -833,11 +820,10 @@ int main() {
         compiler = FixtureCompiler.from_environment()
         with tempfile.TemporaryDirectory() as folder:
             folder = Path(folder)
-            cpp, obj = folder / "seek.cpp", folder / "seek.o"
+            cpp = folder / "seek.cpp"
             executable = folder / ("seek" + compiler.executable_suffix)
             cpp.write_text(fixture)
-            subprocess.run(compiler.compile_command(cpp, obj, includes=(ROOT / "src",)), check=True)
-            subprocess.run(compiler.link_command([obj], executable), check=True)
+            compiler.build([cpp], executable, folder, includes=[ROOT / "src"])
             result = subprocess.run([str(executable)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 

@@ -197,7 +197,8 @@ std::vector<std::byte> makeLargePng(int width, int height) {
 
 void testLargePngDownsamplesWithoutSourceAllocation() {
   const bool stress = std::getenv("ASOBMS_IMAGE_STRESS") != nullptr;
-  const int sourceSize = stress ? 16384 : 4096;
+  // A 4 MiB source still exceeds the 1 MiB allocation ceiling by fourfold.
+  const int sourceSize = stress ? 16384 : 1024;
   const int targetSize = stress ? 2048 : 128;
   const auto png = makeLargePng(sourceSize, sourceSize);
   test_support::AllocationSizeObserver allocations;
@@ -206,7 +207,7 @@ void testLargePngDownsamplesWithoutSourceAllocation() {
   expect(decoded && decoded->width == targetSize && decoded->height == targetSize,
          "large PNG remains accepted and fits the requested dimensions");
   expect(allocations.largest() <= std::max<std::size_t>(1024U * 1024U, targetSize * targetSize * 4),
-         "PNG reduction never materializes the 64 MiB source pixel buffer");
+         "PNG reduction never materializes the full source pixel buffer");
   if (decoded) {
     for (int y : {0, targetSize - 1}) for (int x : {0, targetSize - 1}) {
       const auto offset = (y * targetSize + x) * 4;

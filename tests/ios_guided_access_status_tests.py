@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 
 from gameplay_terminal_scene_extract import extract
+from support.fixture_compiler import build_foundation_fixture
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -64,9 +65,7 @@ def main():
         source = Path(temporary) / "test.mm"
         binary = Path(temporary) / "test"
         source.write_text(PREAMBLE + method + TEST)
-        subprocess.run(["xcrun", "--sdk", "macosx", "clang++", "-std=c++20",
-                        "-fobjc-arc", "-fblocks", "-framework", "Foundation", "-I", str(ROOT / "src"),
-                        str(source), "-o", str(binary)], check=True)
+        build_foundation_fixture(source, binary, includes=[ROOT / "src"])
         subprocess.run([str(binary)], check=True)
         subprocess.run([str(binary), "initially-enabled"], check=True)
     print("Guided Access initial, polled, and notified status tests passed")

@@ -8,6 +8,38 @@ for input, audio/video, Internet Ranking, gameplay options, tables, and skins.
 Views are reusable layout/rendering components, not owners of application
 transactions.
 
+## Application appearance and responsive layout
+
+`src/view/AppTheme.h` shares the selector's typography and palette across
+built-in screens: Roboto Condensed with CJK fallback, square controls and
+artwork, and flat sections divided by rules. Application scene and modal
+backgrounds are opaque in both themes. BGA-facing selector and gameplay HUD
+surfaces retain explicit translucency; modal scrims dim surrounding content.
+Background fills cover the full window, with safe-area insets applied to content
+and controls. Gameplay lanes, user-authored skins, and semantic judgement,
+gauge, rank, and graph colors retain their own presentation contracts.
+
+Actions use semantic categories: neutral, primary, confirmation, information,
+data transfer, caution, and destructive. Normal, hover, pressed, and disabled
+states retain readable labels. Compact profile and replay actions keep localized
+captions alongside icons; destructive confirmation keeps explicit text.
+
+`src/rendering/ResponsiveUi.h` chooses compact built-in menus when the shorter
+available dimension is below 600 density-independent points, using display
+scale rather than device identity. Gameplay and custom skins keep their design
+coordinates. Compact layout preserves simultaneous library, songs, and details
+views, narrows panels, and hides secondary artwork/summary content. Essential
+actions retain 44-point touch heights. Wider windows restore ordinary panels;
+dialogs fit safe areas and scroll. Empty or hidden text viewports must not paint
+outside their clip.
+
+The compact landscape dock gives options and primary actions one shared height.
+Its backgrounds extend through the bottom safe area while content stays padded
+above it. Rotation restores the ordinary layout. Settings uses a navigation
+rail on wide screens and a section dropdown in portrait; Music and IR share the
+selector's workspace boundaries without redundant page headers. Results lead
+with the current score; practice keeps Start outside scrolling content.
+
 ## Settings organization
 
 Navigation follows this order: Profiles, Input, Timing, Lane, HUD, Background,

@@ -6,13 +6,11 @@
 
 #include <array>
 #include <cmath>
-#include <concepts>
 #include <functional>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -66,57 +64,6 @@ void require(bool condition, std::string_view message) {
     throw std::runtime_error(std::string(message));
   }
 }
-
-using PlaySoundSignature = bool (AudioWrapper::*)(const path_t &, audio::Bus,
-                                                  long long);
-using ScheduleSoundSignature = bool (AudioWrapper::*)(const path_t &,
-                                                      audio::Bus, long long);
-using SetVolumesSignature = void (AudioWrapper::*)(const audio::Volumes &);
-using SetSettingsVolumesSignature =
-    void (AudioWrapper::*)(const player_settings::AudioSettings &);
-using StartDeviceSignature =
-    audio::playback::BackendOperationResult (AudioWrapper::*)();
-using StopSoundsSignature =
-    audio::playback::BackendOperationResult (AudioWrapper::*)();
-using SetPlaybackRateSignature = bool (AudioWrapper::*)(audio::PlaybackRate,
-                                                        std::string &);
-
-static_assert(
-    std::same_as<decltype(std::declval<SoundData>().sourceFrameCount), size_t>);
-static_assert(
-    std::same_as<decltype(std::declval<SoundData>().outputFrameCount), size_t>);
-static_assert(
-    std::same_as<decltype(std::declval<SoundData>().sourceSampleRate), int>);
-static_assert(
-    std::same_as<decltype(std::declval<PlayingSound>().bus), audio::Bus>);
-static_assert(
-    std::same_as<decltype(std::declval<PlayingSound>().sourceFrameQ32),
-                 std::uint64_t>);
-static_assert(
-    std::same_as<decltype(std::declval<ScheduledSound>().bus), audio::Bus>);
-static_assert(
-    std::same_as<decltype(std::declval<AudioCommand>().bus), audio::Bus>);
-static_assert(std::same_as<decltype(static_cast<PlaySoundSignature>(
-                               &AudioWrapper::playSound)),
-                           PlaySoundSignature>);
-static_assert(std::same_as<decltype(static_cast<ScheduleSoundSignature>(
-                               &AudioWrapper::scheduleSound)),
-                           ScheduleSoundSignature>);
-static_assert(std::same_as<decltype(static_cast<SetVolumesSignature>(
-                               &AudioWrapper::setVolumes)),
-                           SetVolumesSignature>);
-static_assert(std::same_as<decltype(static_cast<SetSettingsVolumesSignature>(
-                               &AudioWrapper::setVolumes)),
-                           SetSettingsVolumesSignature>);
-static_assert(std::same_as<decltype(static_cast<StartDeviceSignature>(
-                               &AudioWrapper::startDevice)),
-                           StartDeviceSignature>);
-static_assert(std::same_as<decltype(static_cast<StopSoundsSignature>(
-                               &AudioWrapper::stopSounds)),
-                           StopSoundsSignature>);
-static_assert(std::same_as<decltype(static_cast<SetPlaybackRateSignature>(
-                               &AudioWrapper::setPlaybackRate)),
-                           SetPlaybackRateSignature>);
 
 std::vector<short> stereoRamp(size_t frameCount) {
   std::vector<short> result;

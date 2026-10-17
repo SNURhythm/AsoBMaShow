@@ -3,6 +3,7 @@
 
 #include "RAII.h"
 #include "BmsSearchService.h"
+#include "bms_search/DownloadRetryWait.h"
 
 #include <algorithm>
 #include <array>
@@ -54,6 +55,19 @@ struct NativeFileIoFixture {
 };
 
 NativeFileIoFixture nativeIo;
+
+std::chrono::milliseconds retryElapsed{0};
+std::atomic_bool *cancelDuringRetry = nullptr;
+
+auto retryNow() {
+  return std::chrono::steady_clock::time_point{} + retryElapsed;
+}
+
+void retrySleep(std::chrono::milliseconds duration) {
+  retryElapsed += duration;
+  if (cancelDuringRetry && retryElapsed >= std::chrono::milliseconds(250))
+    cancelDuringRetry->store(true);
+}
 
 int fixtureRename(const char *source, const char *destination) {
   const bool staging = std::filesystem::path(destination).filename() == "archive";
@@ -136,7 +150,10 @@ int fixtureLstat(const char *path, struct stat *status) {
 #define write fixtureWrite
 #define close fixtureClose
 #define lstat fixtureLstat
+#define waitForDownloadRetry(attempt, cancelled) \
+  waitForDownloadRetry(attempt, cancelled, retryNow, retrySleep)
 #include "transport_native_methods.inc"
+#undef waitForDownloadRetry
 #undef rename
 #undef read
 #undef write
@@ -234,6 +251,9 @@ bool expectedFile(const std::filesystem::path &path, char value, size_t size) {
 #if TRANSPORT_HAS_FILE_BRIDGE
 void exerciseDownloadRecovery(const std::string &origin,
                                const std::filesystem::path &root) {
+  const std::atomic_bool alreadyCancelled{true};
+  expect(!waitForDownloadRetry(0, alreadyCancelled),
+         "real-clock wait honors cancellation before sleeping");
   const auto destination = root / "archive.zip";
   const std::string expected = std::string(16384, 'a') +
                                std::string(16384, 'b') +
@@ -242,32 +262,22 @@ void exerciseDownloadRecovery(const std::string &origin,
                                      "permanent", "exhausted", "cancel"}) {
     std::ofstream(destination, std::ios::trunc) << "zzz";
     std::atomic_bool cancelled{false};
-    std::atomic_bool finished{false};
-    std::thread canceller;
-    if (scenario == "cancel") {
-      canceller = std::thread([&] {
-        while (!finished.load()) {
-          std::string history;
-          std::string historyError;
-          if (DownloadURLTextIOS(origin + "/retry-stats?scenario=cancel",
-                                  history, historyError) && !history.empty())
-            break;
-          std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(250));
-        cancelled.store(true);
-      });
-    }
+    retryElapsed = std::chrono::milliseconds(0);
+    cancelDuringRetry = scenario == "cancel" ? &cancelled : nullptr;
     std::string error;
     const auto start = std::chrono::steady_clock::now();
     const bool success = downloadUrlToFile(origin + "/retry/" + scenario,
         destination, cancelled, error, {});
     const auto elapsed = std::chrono::steady_clock::now() - start;
-    finished.store(true);
-    if (canceller.joinable()) canceller.join();
+    cancelDuringRetry = nullptr;
     const bool recoverable = scenario == "resume" || scenario == "restart" ||
                              scenario == "ignore-range";
     expect(success == recoverable, scenario + " retries the current archive URL");
+    const int expectedDelayMs = scenario == "resume" ? 3000 :
+        scenario == "restart" || scenario == "ignore-range" ? 1000 :
+        scenario == "exhausted" ? 7000 : scenario == "cancel" ? 300 : 0;
+    expect(retryElapsed == std::chrono::milliseconds(expectedDelayMs),
+           scenario + " honors exponential backoff and cancellation polling");
     if (recoverable) {
       std::ifstream input(destination, std::ios::binary);
       const std::string actual{std::istreambuf_iterator<char>(input),
@@ -329,10 +339,13 @@ void exerciseDownloadRecoveryDecision(const std::string &origin,
     std::ofstream(destination, std::ios::trunc) << "zzz";
     std::atomic_bool cancelled{false};
     int prompts = 0;
+    retryElapsed = std::chrono::milliseconds(0);
     std::string error;
     const bool success = downloadUrlToFile(origin + "/retry/" + scenario,
         destination, cancelled, error, {}, [&](const std::string &message, bool canResume) {
           ++prompts;
+          expect(retryElapsed == std::chrono::seconds(7),
+                 "recovery prompt follows the complete automatic backoff");
           expect(!message.empty() && canResume, "interrupted download offers native resume");
           std::string history;
           std::string historyError;

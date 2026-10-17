@@ -8,6 +8,24 @@ main menu, browse/filter/sort discovered charts, and can request a rescan. A
 scan must remain responsive: discovery and parsing run in workers while the
 application thread owns visible progress and database updates.
 
+## Built-in selector navigation
+
+PLAY, COURSE, MUSIC, and IR remain reachable in narrow and portrait layouts.
+PLAY omits courses; COURSE presents them directly. The two selector tabs retain
+their own folder, selection, and scroll state. Music and IR are lazily created,
+shell-owned scenes that retain their state and receive lifecycle, language,
+input, and deferred work without becoming separate SceneManager destinations.
+IR Settings returns to the shell. Profile changes retire preparation before
+replacing profile data.
+
+Chart rows stack title and artist, show a slim clear lamp and square letterboxed
+jacket or placeholder, and omit redundant column headings and numeric indices.
+Details stay expanded; stagefile artwork uses its decoded aspect ratio, and
+Viewer/Reveal actions remain in the title overflow. Long level/key labels grow
+left while staying right-aligned. Portrait hides the wordmark in both layout
+and rendering. The play-options dock includes assist options without duplicate
+favorite or records controls in the details overflow.
+
 ## Code map
 
 - `src/repositories/ChartRepository*` owns chart metadata queries and schema.

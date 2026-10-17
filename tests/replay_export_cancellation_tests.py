@@ -6,7 +6,7 @@ import tempfile
 
 from support.fixture_compiler import FixtureCompiler
 
-compiler = FixtureCompiler.from_environment()
+compiler = FixtureCompiler.from_environment(shared_headers=True)
 root = Path(__file__).resolve().parents[1]
 source = (root / 'src/ReplayVideoExporter.cpp').read_text()
 start = source.index('ReplayAudioTrackResult\nwriteReplayAudioTrack(')

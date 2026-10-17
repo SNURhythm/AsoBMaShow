@@ -105,11 +105,10 @@ int main() {
         compiler = FixtureCompiler.from_environment()
         with tempfile.TemporaryDirectory() as folder:
             folder = Path(folder)
-            cpp, obj = folder / "handoff.cpp", folder / "handoff.o"
+            cpp = folder / "handoff.cpp"
             executable = folder / ("handoff" + compiler.executable_suffix)
             cpp.write_text(fixture)
-            subprocess.run(compiler.compile_command(cpp, obj, includes=[ROOT / "src"]), check=True)
-            subprocess.run(compiler.link_command([obj], executable), check=True)
+            compiler.build([cpp], executable, folder, includes=[ROOT / "src"])
             result = subprocess.run([str(executable)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 

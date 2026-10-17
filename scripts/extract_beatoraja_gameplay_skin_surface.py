@@ -279,9 +279,8 @@ def extract(root: Path) -> dict:
     }
 
 
-PLAN_FORMATS = "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-contract-and-formats.md"
-PLAN_VISUALIZERS = "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-visualizers.md"
-PLAN_ASSETS = "docs/superpowers/plans/2026-08-21-beatoraja-gameplay-skin-assets-and-host.md"
+# The v1 ledger keeps its "plan" key, but cites the durable design specification.
+GAMEPLAY_SPEC = "docs/superpowers/specs/2026-08-21-beatoraja-gameplay-skin-parity-design.md"
 
 TIMING_DISTRIBUTION_NOOP_SOURCE = {
     "path": "src/bms/player/beatoraja/skin/SkinTimingDistributionGraph.java",
@@ -395,35 +394,35 @@ def legacy_export(identifier: str) -> dict:
 def ledger_feature(feature: dict) -> dict:
     identifier = feature["id"]
     if identifier.startswith("json.field."):
-        return missing(identifier, PLAN_FORMATS, "Task 4: JSON gameplay document decoder")
+        return missing(identifier, GAMEPLAY_SPEC, "JSON gameplay document decoder")
     if identifier.startswith("lr2.csv-command.") or identifier.startswith("lr2.header-command."):
-        return missing(identifier, PLAN_FORMATS, "Task 5: LR2 syntax, encoding, header, and include engine")
+        return missing(identifier, GAMEPLAY_SPEC, "LR2 syntax, encoding, header, and include engine")
     if identifier.startswith("lr2.play-command."):
-        return missing(identifier, PLAN_FORMATS, "Task 6: LR2 gameplay commands to canonical model")
+        return missing(identifier, GAMEPLAY_SPEC, "LR2 gameplay commands to canonical model")
     if identifier in IMPLEMENTED_LUA_IDS:
         return implemented(identifier)
     if identifier.startswith("lua.export."):
         return legacy_export(identifier)
     if "font" in identifier:
-        return missing(identifier, PLAN_ASSETS, "Task 1: Bitmap .fnt and LR2FONT resources")
+        return missing(identifier, GAMEPLAY_SPEC, "Bitmap .fnt and LR2FONT resources")
     if "pmchara" in identifier:
-        return missing(identifier, PLAN_ASSETS, "Task 3: Complete Pomyu/PM-character rendering")
+        return missing(identifier, GAMEPLAY_SPEC, "Complete Pomyu/PM-character rendering")
     if "practice" in identifier:
-        return missing(identifier, PLAN_ASSETS, "Task 4: SkinPractice object")
+        return missing(identifier, GAMEPLAY_SPEC, "SkinPractice object")
     if identifier == "lua.object-field.skin-source":
-        return missing(identifier, PLAN_ASSETS, "Task 2: Skin source movies")
+        return missing(identifier, GAMEPLAY_SPEC, "Skin source movies")
     if identifier == "lua.object-field.text-event":
-        return missing(identifier, PLAN_ASSETS, "Task 5: Editable skin text")
+        return missing(identifier, GAMEPLAY_SPEC, "Editable skin text")
     if "timing-visualizer" in identifier or "timingvisualizer" in identifier:
-        return missing(identifier, PLAN_VISUALIZERS, "Task 3: Timing visualizer")
+        return missing(identifier, GAMEPLAY_SPEC, "Timing visualizer")
     if "hit-error" in identifier or "hiterrorvisualizer" in identifier:
-        return missing(identifier, PLAN_VISUALIZERS, "Task 4: Hit-error visualizer")
+        return missing(identifier, GAMEPLAY_SPEC, "Hit-error visualizer")
     if "judge-graph" in identifier or "judgegraph" in identifier or "note-distribution" in identifier:
-        return missing(identifier, PLAN_VISUALIZERS, "Task 2: Judgement and note-distribution graph")
+        return missing(identifier, GAMEPLAY_SPEC, "Judgement and note-distribution graph")
     if "bpm-graph" in identifier or "bpmgraph" in identifier:
-        return missing(identifier, PLAN_VISUALIZERS, "Task 6: BPM/scroll/stop graph")
+        return missing(identifier, GAMEPLAY_SPEC, "BPM/scroll/stop graph")
     if "gauge-graph" in identifier or "gaugegraph" in identifier:
-        return missing(identifier, PLAN_VISUALIZERS, "Task 7: Gauge-history graph")
+        return missing(identifier, GAMEPLAY_SPEC, "Gauge-history graph")
     if "timing-distribution" in identifier or "timingdistributiongraph" in identifier:
         return source_defined_noop(identifier, TIMING_DISTRIBUTION_NOOP_SOURCE)
     if identifier in {

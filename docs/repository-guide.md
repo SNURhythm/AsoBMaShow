@@ -12,6 +12,10 @@ current system rather than the sequence of changes that produced it.
 - [Replay contract matrix](replay/file-replay-contract-matrix.md) and the
   [skin compatibility references](skin-compat/) remain detailed external-format
   and acceptance sources.
+- [Design specifications](superpowers/specs/) retain feature requirements,
+  contracts, and architectural decisions. Their dated status and validation
+  notes are historical; use feature pages and code for the current implementation.
+- [Focused testing](testing/README.md) maps source areas to test groups.
 
 ## Repository map
 
@@ -79,3 +83,8 @@ user-visible feature, an ownership boundary, a persistent format, or an
 operational workflow changes. Do not add chronological implementation plans,
 temporary audit reports, or source-shape assertions as permanent architecture
 records.
+
+Keep useful specifications even after implementation. Remove completed task
+plans and execution checklists once their lasting requirements are covered by
+feature pages or specs; Git history retains the implementation record. Update
+references when pruning documents so tools and guides point to retained sources.

@@ -108,12 +108,52 @@
 - To compile shaders from this machine, run:
   `cd shader_src && SHADERC=../bgfx/bgfx/.build/osx-arm64/bin/shadercRelease python3 make.py`
 
+## Efficient Tests
+
+Keep test costs in mind: compilation, execution, disk use, and maintenance all
+add up. Use judgment proportional to the change; this guidance is not a checklist
+or a reason to spend extra time or tokens proving compliance.
+
+- Prefer extending useful behavioral coverage over adding redundant tests.
+  Small, low-risk edits do not automatically need new tests.
+- Prefer small fixtures that still exercise the relevant boundary. Be mindful
+  of large data sets, repeated scenarios, runtime compilation, fixed sleeps,
+  and tests that serialize the suite.
+- Reuse setup or compilation when straightforward, while keeping test state
+  isolated. Controlled clocks and explicit synchronization can help avoid slow
+  or flaky waits. Preserve meaningful assertions and real integration coverage.
+- Consider cold-run cost too; warm caches can hide expensive work. Around
+  **60 seconds at `-j 6`** is a useful local full-suite reference, not a hard
+  limit or a requirement to benchmark every change. Investigate noticeable
+  regressions when worthwhile, without chasing small timing differences.
+- Use focused checks during iteration and broader checks when the change calls
+  for them. Avoid repeating expensive runs without a useful reason; documentation
+  edits generally only need a diff review.
+
+The [optimization report](docs/testing/cold-suite-optimization-2026-10-17.md)
+contains examples and timing context if needed.
+
 ## Local Build Verification
 
+- Start with the relevant subsystem group in [docs/testing/README.md](docs/testing/README.md).
+  For example, build audio tests with
+  `cmake --build cmake-build-debug --target tests_audio -j 6`, then run
+  `ctest --test-dir cmake-build-debug -L '^area_audio$' --output-on-failure --no-tests=error -j 6`.
+  Preview membership with `ctest --test-dir cmake-build-debug -N -L '^area_audio$'`.
+- Combine affected groups for changes across boundaries; a focused passing run
+  is normally sufficient for a localized change. Use the full suite when impact
+  is broad or uncertain, not automatically after every edit or before every commit.
+  New tests belong in an `area_*` block in `cmake/TestGroupCatalog.cmake`.
 - For desktop local compile checks, use the existing `cmake-build-debug` folder:
   `cmake --build cmake-build-debug --target main -j 6`
 - For full CTest runs, execute tests in parallel:
   `ctest --test-dir cmake-build-debug --output-on-failure -j 6`
+- Clang/GCC test targets use compact debug information by default, retaining
+  source breakpoints and stack traces but omitting full local-variable/type
+  inspection. For a debugging session that needs it, configure with
+  `cmake -S . -B cmake-build-debug -DASOBMASHOW_TEST_FULL_DEBUG_INFO=ON`
+  and rebuild the desired test target. Set the option back to `OFF` to restore
+  compact test objects. Application debug information is unaffected.
 - Run only one Ninja/CMake build at a time per build directory. Combine targets
   in one invocation; concurrent builds can corrupt `.ninja_deps` and cause
   repeated recompilation of unchanged files.
