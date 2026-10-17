@@ -113,3 +113,47 @@ i18n::Text findBmsRunningDetailMessage(const std::string &message) {
   }
   return i18n::message("library.find_bms.searching_available_sources.progress");
 }
+
+i18n::Text findBmsStorageProgressMessage(const storage_management::StorageProgress &progress) {
+  using storage_management::StoragePhase;
+  const char *key = "storage.ui.verifying";
+  switch (progress.phase) {
+  case StoragePhase::Inventory: key = "storage.ui.scanning"; break;
+  case StoragePhase::Encode: key = "storage.ui.encoding"; break;
+  case StoragePhase::Verify: break;
+  case StoragePhase::Commit: key = "storage.ui.committing"; break;
+  case StoragePhase::Complete: break; // package still awaits chart verification and promotion
+  }
+  return i18n::message("library.find_bms.storage.progress", {{"phase", i18n::message(key)},
+      {"done", std::to_string(progress.filesDone)}, {"total", std::to_string(progress.filesTotal)}});
+}
+
+i18n::Text findBmsStoragePolicyMessage(const BmsSearchDownloadOptions &options) {
+  using namespace storage_management;
+  const auto &policy = options.storagePolicy;
+  const char *audio = policy.audio == AudioAction::LosslessFlac ? "storage.ui.flac" :
+      policy.audio == AudioAction::LossyVorbis ? "storage.ui.ogg" : "storage.ui.keep";
+  const char *bga = policy.bga == BgaAction::CompressH264 ? "storage.ui.h264" :
+      policy.bga == BgaAction::Delete ? "storage.ui.delete_video" : "storage.ui.keep";
+  auto text = i18n::message("library.find_bms.storage.strategy", {{"audio", i18n::message(audio)},
+      {"bga", i18n::message(bga)}});
+  if (policy.bga == BgaAction::CompressH264) {
+    const char *qualities[] = {"storage.ui.high", "storage.ui.balanced", "storage.ui.smaller"};
+    const char *caps[] = {"", "1920 × 1080", "1280 × 720", "854 × 480", "640 × 360"};
+    text = i18n::message("library.find_bms.storage.detail", {{"detail", text},
+        {"storage", i18n::message("library.find_bms.storage.video_limits", {
+            {"quality", i18n::message(qualities[static_cast<int>(policy.videoQuality)])},
+            {"resolution", policy.resolution == ResolutionCap::Original ? i18n::Text(i18n::message("storage.ui.original")) : i18n::Text(caps[static_cast<int>(policy.resolution)])},
+            {"fps", policy.maxFps == 0 ? i18n::Text(i18n::message("storage.ui.original")) : i18n::Text(std::to_string(policy.maxFps))}})}});
+  }
+  if (options.skipUnarchivingForNonSolidArchives && !IsNoOp(policy))
+    text = i18n::message("library.find_bms.storage.detail", {{"detail", text},
+        {"storage", i18n::message("library.find_bms.storage.extraction_override")}});
+  return text;
+}
+
+i18n::Text findBmsStorageReportMessage(const storage_management::StorageReport &report) {
+  return i18n::message("library.find_bms.storage.report", {{"converted", std::to_string(report.converted)},
+      {"deleted", std::to_string(report.deleted)}, {"skipped", std::to_string(report.skipped)},
+      {"failed", std::to_string(report.failed)}, {"bytes", formatFindBmsBytes(report.reclaimedBytes)}});
+}

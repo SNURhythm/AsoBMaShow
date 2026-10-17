@@ -6711,7 +6711,11 @@ void MainMenuScene::buildFindBmsModal() {
       .downloadOptions = [this]() {
         return BmsSearchDownloadOptions{
             .skipUnarchivingForNonSolidArchives =
-                context.settings.findBmsSkipUnarchivingForNonSolidArchives};
+                context.settings.findBmsSkipUnarchivingForNonSolidArchives,
+            .storagePolicy = storage_management::EffectiveDownloadPolicy(context.settings.storagePreferences),
+            .storagePauseRequested = [app = &context] {
+              return app->backgroundTasksPausedForForegroundScene.load() || app->appInBackground.load();
+            }};
       },
       .downloadStarted = [this]() {
         findBmsSelectionGenerationAtDownloadStart = chartSelectionGeneration;

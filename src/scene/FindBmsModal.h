@@ -81,6 +81,8 @@ private:
   bool findBmsAwaitingConfirmation = false;
   ChartMetaRecord findBmsModalChart;
   BmsSearchResult findBmsResult;
+  BmsSearchDownloadOptions findBmsCapturedOptions;
+  std::optional<storage_management::StorageProgress> findBmsStorageProgress;
   std::optional<BmsSearchPendingArtifactDecision> findBmsPendingDecision;
   std::string findBmsProgressMessage;
   std::uint64_t findBmsProgressCurrent = 0;

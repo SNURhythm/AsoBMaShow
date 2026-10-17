@@ -49,6 +49,10 @@ struct DownloadedArchiveWorkflowDependencies {
                                          archive_file::PauseCallback,
                                          ArchiveVerificationLimits)>
       decideExtracted;
+  std::function<storage_management::StorageReport(
+      const std::filesystem::path &, const storage_management::StoragePolicy &,
+      storage_management::Checkpoint, storage_management::ProgressCallback)>
+      optimizeExtracted;
   std::function<bool(const BmsSearchPendingArtifact &, std::string &,
                      std::vector<std::filesystem::path> &)>
       commitArtifact;

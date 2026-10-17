@@ -64,7 +64,8 @@ require(
     "Settings must toggle the persisted Find BMS option",
 )
 require(
-    modal_source.count("callbacks_.downloadOptions()") == 2
+    all("callbacks_.downloadOptions()" in modal_source.split(signature, 1)[1].split("\nvoid FindBmsModal::", 1)[0]
+        for signature in ("void FindBmsModal::startLookup()", "void FindBmsModal::startCandidateDownload("))
     and "findBmsSkipUnarchivingForNonSolidArchives" in main_menu_source
     and "findBmsSkipUnarchivingForNonSolidArchives" in music_select_source,
     "automatic and candidate downloads must capture the option",

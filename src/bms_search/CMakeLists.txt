@@ -7,6 +7,7 @@ target_sources(main PRIVATE
     DownloadedArchiveWorkflow.cpp
     DownloadStaging.cpp
     DownloadStorageIdentity.cpp
+    DownloadStorageOptimization.cpp
     DownloadSupport.cpp
     DropboxDriver.cpp
     GoogleDriveDriver.cpp

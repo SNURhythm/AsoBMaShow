@@ -25,6 +25,7 @@ target_link_libraries(storage_media_tests PRIVATE SndFile::sndfile ${FFMPEG_LIBR
 asobmashow_register_test(storage_media_tests)
 
 add_executable(storage_optimizer_tests tests/storage_optimizer_tests.cpp
+    src/bms_search/DownloadStorageOptimization.cpp
     src/storage/StorageOptimizer.cpp src/storage/AudioTranscoder.cpp src/storage/BgaTranscoder.cpp
     src/storage/VideoCompressionGeometry.cpp src/storage/StoragePolicy.cpp
     src/storage/ChartResourceInventory.cpp src/storage/StorageFileTransaction.cpp src/storage/StoragePlatform.cpp

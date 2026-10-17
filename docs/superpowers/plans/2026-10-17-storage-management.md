@@ -467,35 +467,35 @@ to `DownloadedArchiveWorkflowDependencies`. Carry an optional structured
 recoverable optimization warnings. Progress gains an optional typed storage phase
 without repurposing downloaded byte counters as encoding percentages.
 
-- [ ] Add workflow fake assertions in order: extract → verify chart hash →
+- [x] Add workflow fake assertions in order: extract → verify chart hash →
   optimize → verify unchanged chart identities → commit → filesReady/index.
   Off and Keep/Keep must not call the optimizer or override skip-unarchiving.
   Enabled effective policy must force extraction while preserving the setting.
-- [ ] Verify optimization receives the entire extracted package subtree, including
+- [x] Verify optimization receives the entire extracted package subtree, including
   nested media and resources absent from the hash-matched chart but used by a
   different sabun. Reuse the folder-scope inventory/optimizer fixture for coverage.
-- [ ] Add cases for archive and extracted mismatch, inconclusive verification,
+- [x] Add cases for archive and extracted mismatch, inconclusive verification,
   explicit mismatch Keep, unsupported codecs, per-file errors, failed rollback,
   cancellation during encoding and immediately before commit. Assert mismatches
   are kept unchanged, warnings reach successful results, and cancellation/fatal
   recovery prevents commit/index.
-- [ ] Test both lookup/candidate entry paths in both selector scenes, retry
+- [x] Test both lookup/candidate entry paths in both selector scenes, retry
   policy stability, profile/policy changes during an attempt, and a retained
   dialog returning after completion. Test optimization progress does not display
   as downloaded bytes or prematurely reach the final completion state.
-- [ ] Run failing download tests, then insert the hook after successful extracted
+- [x] Run failing download tests, then insert the hook after successful extracted
   verification and before `commitArtifact`. Use the same optimizer/codec permit,
   isolated-staging inventory, and captured settings; honor cancellation and the
   existing foreground-performance pause signal. Leave mismatch resolution on
   the existing path and explain that kept mismatches were not optimized.
-- [ ] Surface the saved strategy and effective extraction override in the dialog;
+- [x] Surface the saved strategy and effective extraction override in the dialog;
   expose completion warnings/counts and reclaimed media bytes without conflating
   them with downloaded archive size. Reuse existing artifact cleanup and index
   callbacks. No extra network request is needed for optimization.
-- [ ] Run `cmake --build cmake-build-debug --target tests_downloads -j 6`, then
+- [x] Run `cmake --build cmake-build-debug --target tests_downloads -j 6`, then
   `ctest --test-dir cmake-build-debug -L '^area_downloads$' --output-on-failure
   --no-tests=error -j 6`. All existing verification/mismatch tests must still pass.
-- [ ] Commit `feat: apply storage saving policies after BMS downloads`.
+- [x] Commit `feat: apply storage saving policies after BMS downloads`.
 
 ## Task 10: Integration verification and documentation
 

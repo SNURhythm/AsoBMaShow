@@ -2,8 +2,13 @@
 
 #include "../BmsChartFile.h"
 #include "../CanonicalDigest.h"
+#include "../bms_parser.hpp"
 
 #include <algorithm>
+#include <array>
+#include <fstream>
+#include <map>
+#include <thread>
 #include <cctype>
 #include <limits>
 #include <new>
@@ -80,6 +85,38 @@ BmsSearchPendingArtifact extractedArtifact(
           .storageKey = request.storageKey,
           .alternateDestinationPath =
               request.downloadRoot / "_archives" / request.archiveName};
+}
+
+// Verify every chart's path and content, including sabuns unrelated to the
+// selected hash. Stream hashes so package size does not bound working memory.
+using ChartIdentities = std::map<std::filesystem::path, std::array<unsigned char, 32>>;
+std::optional<ChartIdentities> chartIdentities(const std::filesystem::path &root,
+                                              const storage_management::Checkpoint &checkpoint) {
+  ChartIdentities result;
+  std::error_code error;
+  if (!std::filesystem::is_directory(std::filesystem::symlink_status(root, error)) || error) return {};
+  std::filesystem::recursive_directory_iterator it(root, error), end;
+  for (; !error && it != end; it.increment(error)) {
+    if (!checkpoint()) return {};
+    const auto status = it->symlink_status(error);
+    if (error || std::filesystem::is_symlink(status)) return {};
+    if (!asobmshow::bms_chart_file::isBmsChartPath(it->path())) continue;
+    if (!std::filesystem::is_regular_file(status) || std::filesystem::hard_link_count(it->path(), error) != 1 || error) return {};
+    std::ifstream input(it->path(), std::ios::binary);
+    if (!input) return {};
+    bms_parser::SHA256 hash; hash.init();
+    std::array<unsigned char, archiveVerificationChunkBytes> buffer;
+    while (input) {
+      if (!checkpoint()) return {};
+      input.read(reinterpret_cast<char *>(buffer.data()), buffer.size());
+      if (input.gcount() > 0) hash.update(buffer.data(), static_cast<unsigned int>(input.gcount()));
+    }
+    if (!input.eof()) return {};
+    std::array<unsigned char, 32> digest{}; hash.final(digest.data());
+    result.emplace(it->path().lexically_relative(root), digest);
+  }
+  if (error || !checkpoint()) return {};
+  return result;
 }
 
 } // namespace
@@ -189,6 +226,7 @@ bool processDownloadedArchive(
   result.removedPaths.clear();
   result.pendingArtifact.reset();
   result.presentationMessage = {};
+  result.storageReport.reset();
   if (!dependencies.decideArchive || !dependencies.commitArtifact) {
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message = "Find BMS archive processing is unavailable.";
@@ -199,13 +237,15 @@ bool processDownloadedArchive(
     return false;
   }
 
-  if (request.options.skipUnarchivingForNonSolidArchives) {
+  const bool optimize = !storage_management::IsNoOp(request.options.storagePolicy);
+  const bool keepArchive = request.options.skipUnarchivingForNonSolidArchives && !optimize;
+  if (keepArchive) {
     reportProgress(progressCallback, "Inspecting downloaded archive");
     reportProgress(progressCallback, "Validating archive contents");
   }
   const auto directDecision = dependencies.decideArchive(
       request.attempt.archivePath, request.archiveKey,
-      request.options.skipUnarchivingForNonSolidArchives,
+      keepArchive,
       [&cancelled] { return !cancelled.load(); });
   if (reportCancelled(cancelled, result)) {
     return false;
@@ -315,6 +355,50 @@ bool processDownloadedArchive(
     return true;
   }
 
+  if (optimize) {
+    const auto checkpoint = [&] {
+      while (!cancelled.load() && request.options.storagePauseRequested &&
+             request.options.storagePauseRequested()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+      }
+      return !cancelled.load();
+    };
+    auto failOptimization = [&](const char *key, const std::string &message) {
+      if (!reportCancelled(cancelled, result)) {
+        result.status = BmsSearchResult::Status::DownloadFailed;
+        result.message = message;
+        result.presentationMessage = i18n::message(key);
+      }
+      return false;
+    };
+    auto storageProgress = [&](const storage_management::StorageProgress &progress) {
+      if (progressCallback) progressCallback({.message = "Optimizing downloaded media", .storageProgress = progress});
+    };
+    try {
+      if (!dependencies.optimizeExtracted)
+        return failOptimization("library.find_bms.storage.unavailable", "Storage optimization is unavailable.");
+      const auto before = chartIdentities(request.attempt.extractedPath, checkpoint);
+      if (!before) return failOptimization("library.find_bms.storage.identity_failed", "Could not verify downloaded chart identities.");
+      result.storageReport = dependencies.optimizeExtracted(request.attempt.extractedPath,
+          request.options.storagePolicy, checkpoint, storageProgress);
+      const auto &report = *result.storageReport;
+      if (report.cancelled) cancelled.store(true);
+      if (reportCancelled(cancelled, result)) return false;
+      if (report.recoveryRequired || report.cleanupPending)
+        return failOptimization("library.find_bms.storage.recovery_failed", "Storage cleanup did not finish; downloaded files were not installed.");
+      storageProgress({.phase = storage_management::StoragePhase::Verify});
+      const auto after = chartIdentities(request.attempt.extractedPath, checkpoint);
+      if (!after || *before != *after)
+        return failOptimization("library.find_bms.storage.identity_failed", "Downloaded chart identities changed; files were not installed.");
+      storageProgress({.phase = storage_management::StoragePhase::Commit});
+      if (!checkpoint() || reportCancelled(cancelled, result)) {
+        reportCancelled(cancelled, result); return false;
+      }
+    } catch (const std::exception &) {
+      return failOptimization("library.find_bms.storage.failed", "Could not safely optimize downloaded media; files were not installed.");
+    }
+  }
+  if (reportCancelled(cancelled, result)) return false;
   const auto artifact = extractedArtifact(request);
   std::string commitError;
   std::vector<std::filesystem::path> removedPaths;
