@@ -25,7 +25,8 @@ Read the spec before executing; the details below implement its proposed design.
 - Chart bytes and paths never change.
 - Compression enumerates all eligible media recursively under selected folders,
   including sabun-only and unreferenced files. Representative charts are display
-  data, never the compression manifest. BGA deletion remains declaration-based.
+  data, never the operation manifest. BGA deletion removes all supported videos
+  recursively and preserves all images. No chart-reference or ownership scan.
 - Defaults: audio Keep, BGA Keep, video quality Balanced, resolution Original,
   FPS Original, and automatic download processing Off.
 - Ogg Vorbis quality is `0.5`; no resampling, gain normalization, or channel remix.
@@ -36,7 +37,7 @@ Read the spec before executing; the details below implement its proposed design.
 - Only validated, strictly smaller conversions replace originals. Reclamation
   excludes any original/backup still present after cleanup failure.
 - Mutate supported writable local folders only; preserve source assets on
-  per-file failure and reject incomplete ownership scopes.
+  per-file failure and report unreadable folder scopes.
 - No CLI encoder dependency, generated-parser edits, whole-file formatting,
   deployment, worktree creation, or mutations of the developer's real library.
 - Work in the current checkout. Commit and push verified task-related work to
@@ -47,10 +48,10 @@ Read the spec before executing; the details below implement its proposed design.
 
 These less obvious inputs need explicit coverage, assigned below:
 
-1. A resource declaration in an unchosen RANDOM branch or an unindexed chart
-   protects shared artwork/media: Task 2.
-2. Installing `sample.ogg` changes the fallback for another missing same-stem
-   reference, even if no destination exists: Tasks 2 and 6.
+1. Malformed/unindexed charts must not prevent recursive media discovery, and
+   all images must survive Delete BGA videos: Task 2.
+2. Installing `sample.ogg` beside a same-stem alternative changes playback
+   fallback: conservatively skip ambiguous conversions in Tasks 2 and 6.
 3. Cancellation or a crash between publishing output and retiring input must
    retain a playable asset and recover accurate reclaimed bytes: Task 3.
 4. 29.97 FPS, VFR gaps, rotated/anamorphic video, or embedded audio must not become
@@ -66,7 +67,7 @@ These less obvious inputs need explicit coverage, assigned below:
 | Files | Responsibility |
 | --- | --- |
 | `src/storage/StoragePolicy.{h,cpp}`, `StorageTypes.h` | Options, common results/checkpoints, capability/default policy |
-| `src/storage/ChartResourceInventory.{h,cpp}` | Declaration scan, reverse ownership, eligibility and byte union |
+| `src/storage/ChartResourceInventory.{h,cpp}` | Recursive media enumeration, collision checks, eligibility and byte union |
 | `src/audio/ChartAssetExtensions.h`, new `ChartVisualAssetResolver.{h,cpp}` | Shared existing audio/visual resolution semantics |
 | `src/storage/StorageFileTransaction.{h,cpp}`, `StoragePlatform.{h,cpp}` | Recoverable filesystem operations and platform paths/access |
 | `src/storage/AudioTranscoder.{h,cpp}`, `BgaTranscoder.{h,cpp}` | Streaming codecs and output validation |
@@ -127,24 +128,24 @@ aggregate counts/bytes, cancelled, recoveryRequired), and `EncodeResult`
 (outcome, output path, reason). Reasons are typed codes plus diagnostic detail;
 localization happens at presentation boundaries.
 
-- [ ] Add failing assertions for exact defaults, Keep/Keep no-op, disabled
+- [x] Add failing assertions for exact defaults, Keep/Keep no-op, disabled
   automation, CRF mapping, and invalid enums/FPS reverting safely. Add settings
   round-trip tests proving manual/download independence and that a malformed
   destructive policy disables automation rather than choosing Delete.
-- [ ] Register `storage_policy_tests` in `area_settings` and `area_library`.
+- [x] Register `storage_policy_tests` in `area_settings` and `area_library`.
   Build/run it and the existing settings persistence test; record the expected
   missing-policy or failed-assertion result before implementation.
-- [ ] Implement the types and persist an optional `storagePreferences` JSON
+- [x] Implement the types and persist an optional `storagePreferences` JSON
   object. Missing fields use defaults; a malformed supplied policy fails closed.
   Add `AppSettings::storagePreferences` and sanitation without changing unrelated
   settings. An additive optional object does not require a schema migration.
-- [ ] Run `cmake --build cmake-build-debug --target storage_policy_tests -j 6`
+- [x] Run `cmake --build cmake-build-debug --target storage_policy_tests -j 6`
   and `ctest --test-dir cmake-build-debug -R '^storage_policy_tests$'
   --output-on-failure --no-tests=error`. Build the existing
   `profile_settings_persistence_tests` target and run CTest with
   `-R '^foundation_profile_settings_persistence$'`; require round-trip/default
   tests to pass.
-- [ ] Review the focused diff and commit `feat: define storage saving policies`.
+- [x] Review the focused diff and commit `feat: define storage saving policies`.
 
 ## Task 2: Resource inventory and playback resolution parity
 
@@ -154,18 +155,13 @@ localization happens at presentation boundaries.
 `src/audio/CMakeLists.txt`; create `tests/storage_inventory_tests.cpp` and extend
 `tests/archive_asset_pipeline_tests.cpp`. Wire sources/tests in Task 1's CMake.
 
-**Interfaces:** `InventoryRequest` contains registered roots, selected group
-IDs/paths, resolved folder selection scopes, policy, and an isolated-staging flag.
-`AssetCandidate` contains source, destination, role (Audio/BgaVideo/BgaImage),
-effective operation, owner group IDs,
-containing selected scopes, source identity/hash, bytes, and affected authored
-references. Containment and reference ownership are separate: an unreferenced
-file can be eligible for compression, but never for declaration-based deletion.
-`StorageInventory` contains candidates, per-group totals, skips, ownership-completeness status, and
-fingerprints of the chart/directory evidence needed for freshness checks.
+**Interfaces:** `InventoryRequest` contains selected group IDs/folder paths,
+policy, and an isolated-staging flag. `AssetCandidate` contains source,
+destination, media kind, effective operation, containing selected groups,
+source identity, and bytes. `StorageInventory` contains candidates, per-group
+totals, skips, completeness status, and filesystem evidence for freshness checks.
 Hash large media only when preparing that candidate for conversion/commit;
-ordinary browser measurement needs file identities and byte counts, not a full
-read of every video.
+ordinary browser measurement uses file identities and byte counts.
 
 ```cpp
 StorageInventory BuildInventory(const InventoryRequest &, Checkpoint,
@@ -176,41 +172,31 @@ bool RevalidateInventory(const StorageInventory &, Checkpoint,
 
 Expose `chart_assets::ResolveVisualAsset(path, lookup)` with an injected lookup
 returning an optional resolved path; return path plus video/image kind. The helper
-must work with existing local and archive lookups. Expose candidate enumeration
-using the same ordered extension lists for inventory collision/role analysis.
+must work with existing local and archive lookups. Share the ordered extension
+lists with inventory classification and filesystem collision checks.
 
-- [ ] Add failing inventory fixtures for all conditional declarations, unused
-  `#BMP00`, CP932 paths, mixed-case names, subfolders, duplicate/nested roots,
-  unindexed neighboring charts, artwork sharing, preview audio, unselected owners,
-  and a malformed/unreadable ownership scope. Use tiny text/assets, no decoding.
-- [ ] Add a folder fixture with a representative chart and another sabun using
-  disjoint WAV/FLAC and video files, nested media, and unreferenced audio/video.
-  Assert every eligible file enters compression exactly once. Changing the
-  representative, omitting the sabun from repository results, or keeping the UI
-  collapsed must not change inventory. Nested chart owners are covered by a
-  selected ancestor folder without selecting their rows separately; owners
-  outside the selected union remain protected. Unreferenced media is not a BGA-deletion
-  candidate; references outside selected folders do not expand compression scope.
-- [ ] Add tests where `sample.wav`, `sample.flac`, and a missing `sample.mp3`
-  reference share a stem. Assert proposed replacement cannot change another
-  reference's selected content. Test BGA video-over-image priority and that
-  deleting one fallback cannot reveal an unplanned alternate BGA.
-- [ ] Run the new target to confirm failures, then extract visual resolution
-  from all three Jukebox paths (ordinary loading, archive loading, reconciled
-  visual assets). Preserve current priority exactly. Keep audio exact-path-first.
-- [ ] Implement source-only declaration scanning with existing UTF-8/CP932/path
-  helpers, including protected roles across every branch. Enumerate real chart
-  files rather than only preferred repository records. Independently enumerate
-  all files recursively under selected folders to form compression candidates;
-  use declarations for ownership/safety and BGA deletion, not as a compression
-  whitelist. Resolve chart-path fallback groups to their containing folder.
-  Build canonical ownership and candidate unions, reject unsupported paths,
-  links, and backends, and fail closed per affected scope. Do not introduce a
-  second gameplay parser.
-- [ ] Verify `storage_inventory_tests` and `archive_asset_pipeline_tests`; add
-  `storage_inventory_tests` to `area_library`, `area_audio`, and `area_video`.
-  Run `tests_audio` plus the targeted archive test because shared runtime
-  resolution changed. All existing lookup-order assertions must remain unchanged.
+- [ ] Add failing fixtures for Unicode/mixed-case paths, subfolders, overlapping
+  roots, preserved images, preview audio, unreadable folders, links, virtual
+  sources, and cancellation. Use tiny text/assets, no media decoding.
+- [ ] Add a folder fixture with a representative chart and a sabun using disjoint
+  audio/video, nested media, and unreferenced media. Assert each eligible file
+  enters compression once. Changing representative/index/UI expansion must not
+  change inventory. Malformed chart text must not prevent enumeration. Delete BGA
+  must include all supported videos and preserve all audio/images.
+- [ ] Test same-stem audio/video alternatives: skip ambiguous conversions without
+  scanning chart references. Test visual extension priority and ensure deletion
+  enumerates every video alternative while preserving same-stem images.
+- [ ] Run the target to confirm failures, then extract visual resolution from
+  all three Jukebox paths (ordinary loading, archive loading, reconciled assets).
+  Preserve its current priority and audio's exact-path-first behavior.
+- [ ] Implement bounded recursive filesystem enumeration, selected-folder unions,
+  classification, byte totals, and conservative collision checks. Resolve
+  chart-path fallback groups to their containing folder. Reject unsupported
+  paths/links/backends and report unreadable scopes. No chart declaration scan,
+  parser, or ownership graph is part of this feature.
+- [ ] Verify `storage_inventory_tests` and `archive_asset_pipeline_tests`; label
+  inventory tests `area_library`, `area_audio`, and `area_video`. Run `tests_audio`
+  and the archive target because shared runtime resolution changed.
 - [ ] Commit `feat: inventory chart storage with shared asset resolution`.
 
 ## Task 3: Recoverable file changes and private staging
@@ -354,16 +340,16 @@ public:
 ```
 
 - [ ] Add dependency-fake tests that assert inventory/revalidation → encode →
-  verify → transaction order, distinct-source deduplication, protected/shared
-  asset exclusions, complete BGA fallback deletion, stale preflight rejection,
+  verify → transaction order, distinct-source deduplication, preserved images,
+  complete BGA video deletion, stale preflight rejection,
   and unchanged chart hashes. Revalidate resolver results after each installation
   so a prior replacement cannot invalidate a later candidate's assumptions.
   Refresh evidence for exactly the job's committed changes; an external edit
   between two commits must still invalidate the affected candidate.
 - [ ] Verify full-folder orchestration converts representative-only, sabun-only,
   nested, and unreferenced eligible media once each, while retaining non-media
-  files and excluding unreferenced files from BGA deletion. Ownership exclusions
-  and resolver collision checks must still apply to the enumerated file union.
+  files and preserving every image/audio file during BGA deletion. Filesystem
+  collision checks must still apply to compression of the enumerated file union.
 - [ ] Test partial successes, no-op, codec unavailable, skipped caps, cancellation,
   cleanup failure, and fatal recovery. Reports must distinguish attempted from
   installed bytes and avoid double-counting shared files. Unknown sizes stay
@@ -525,7 +511,7 @@ to explain group membership. Update this plan's checkboxes/evidence as executed.
   gameplay, preview, and music player load the resulting assets. Delete only the
   test fixture directory afterward. Verify compression covers the whole folder
   independently of the displayed representative and that deletion remains limited
-  to declared BGA-only resources.
+  to supported video files, including unreferenced ones, while preserving images.
 - [ ] Exercise the download workflow with a local fake archive/transport fixture,
   including effective skip-extraction override, warnings, cancel, and unchanged
   mismatches. Verify registration occurs only after optimization finishes. Do not
@@ -555,7 +541,7 @@ to explain group membership. Update this plan's checkboxes/evidence as executed.
 
 The plan covers the requested manual operations, grouped-list reuse, automatic
 downloads, and resolution/FPS upper bounds. The primary review choices are the
-proposed quality defaults, BGA deletion including BGA-only images, and local-file
+proposed quality defaults, folder-wide BGA video deletion preserving images, and local-file
 mutation scope. Archived/SAF libraries remain visible but require the existing
 extraction/import route before manual optimization.
 

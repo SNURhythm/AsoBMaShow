@@ -728,9 +728,65 @@ json presentationToJson(const AppSettings::PresentationSettings &settings) {
   };
 }
 
+json storagePolicyToJson(const storage_management::StoragePolicy &policy) {
+  return {{"audio", static_cast<int>(policy.audio)},
+          {"bga", static_cast<int>(policy.bga)},
+          {"videoQuality", static_cast<int>(policy.videoQuality)},
+          {"resolution", static_cast<int>(policy.resolution)},
+          {"maxFps", policy.maxFps}};
+}
+
+bool readStoragePolicy(const json &document, std::string_view key,
+                       storage_management::StoragePolicy &policy,
+                       std::vector<std::string> &diagnostics) {
+  const auto found = document.find(std::string(key));
+  if (found == document.end()) return true;
+  bool valid = found->is_object();
+  if (valid) {
+    auto read = [&](std::string_view field, auto &value) {
+      if (!found->contains(std::string(field))) return;
+      int encoded = static_cast<int>(value);
+      if (!readValue(*found, field, encoded, diagnostics)) valid = false;
+      else value = static_cast<std::remove_reference_t<decltype(value)>>(encoded);
+    };
+    read("audio", policy.audio);
+    read("bga", policy.bga);
+    read("videoQuality", policy.videoQuality);
+    read("resolution", policy.resolution);
+    read("maxFps", policy.maxFps);
+    valid = storage_management::IsValid(policy) && valid;
+  }
+  if (!valid) {
+    policy = {};
+    invalidValue("storagePreferences." + std::string(key),
+                 "invalid policy; reset to Keep and disable automation", diagnostics);
+  }
+  return valid;
+}
+
+void readStoragePreferences(const json &document,
+                            storage_management::StoragePreferences &preferences,
+                            std::vector<std::string> &diagnostics) {
+  const auto found = document.find("storagePreferences");
+  if (found == document.end()) return;
+  if (!found->is_object()) {
+    preferences = {};
+    invalidValue("storagePreferences", "expected object", diagnostics);
+    return;
+  }
+  readValue(*found, "afterDownload", preferences.afterDownload, diagnostics);
+  const bool manualValid = readStoragePolicy(*found, "manual", preferences.manual, diagnostics);
+  const bool downloadValid = readStoragePolicy(*found, "download", preferences.download, diagnostics);
+  if (!manualValid || !downloadValid) preferences.afterDownload = false;
+}
+
 json settingsToJson(const AppSettings &settings) {
   json document = {
       {"schemaVersion", AppSettingsStore::kCurrentSchemaVersion},
+      {"storagePreferences", {
+          {"manual", storagePolicyToJson(settings.storagePreferences.manual)},
+          {"download", storagePolicyToJson(settings.storagePreferences.download)},
+          {"afterDownload", settings.storagePreferences.afterDownload}}},
       {"notePriorityMode", static_cast<int>(settings.notePriorityMode)},
       {"audioOffsetMs", settings.audioOffsetMs},
       {"visualOffsetMs", settings.visualOffsetMs},
@@ -992,6 +1048,7 @@ void readPresentation(const json &document, AppSettings::PresentationSettings &s
 AppSettings settingsFromJson(const json &document,
                              std::vector<std::string> &diagnostics) {
   AppSettings settings;
+  readStoragePreferences(document, settings.storagePreferences, diagnostics);
   if (!document.contains("selectedGaugeAutoShiftMode") &&
       document.contains("selectedGaugeType")) {
     settings.selectedGaugeAutoShiftMode = "none";

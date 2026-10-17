@@ -14,6 +14,7 @@
 #include "settings/PresentationGeometryPolicy.h"
 #include "platform/ScreenOrientation.h"
 #include "skin/SkinProfileSettings.h"
+#include "storage/StoragePolicy.h"
 
 #include <algorithm>
 #include <array>
@@ -235,6 +236,7 @@ public:
   bool touchVisualizationEnabled = true;
   bool archiveChartPreviewEnabled = true;
   bool findBmsSkipUnarchivingForNonSolidArchives = false;
+  storage_management::StoragePreferences storagePreferences;
   bool bgaEnabled = true;
   int bgaBrightnessPercent = kDefaultBgaBrightnessPercent;
   float bgaBlurStrength = kDefaultBgaBlurStrength;

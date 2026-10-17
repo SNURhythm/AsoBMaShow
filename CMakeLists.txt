@@ -9701,12 +9701,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(ledger_test_evidence_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
+    include(cmake/StorageManagementTests.cmake)
+
     get_property(asobmashow_directory_targets DIRECTORY
         PROPERTY BUILDSYSTEM_TARGETS)
     foreach(asobmashow_target IN LISTS asobmashow_directory_targets)
         get_target_property(asobmashow_target_sources
             ${asobmashow_target} SOURCES)
         if(asobmashow_target_sources)
+            if("src/AppSettings.cpp" IN_LIST asobmashow_target_sources)
+                target_sources(${asobmashow_target} PRIVATE src/storage/StoragePolicy.cpp)
+            endif()
             # PracticeConfiguration owns chart mutations and therefore needs
             # the parser implementation, including in standalone test targets.
             list(FIND asobmashow_target_sources
