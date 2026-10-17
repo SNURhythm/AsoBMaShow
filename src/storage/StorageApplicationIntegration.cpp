@@ -42,7 +42,7 @@ std::optional<Access> accessFolders(ApplicationContext &context, std::string &er
   }
   auto root = StoragePrivateRoot(context);
   if (root.empty()) { error = "Private storage is unavailable."; return {}; }
-  access.paths = MakeStoragePlatformPaths(root, std::move(roots));
+  access.paths = MakeStoragePlatformPaths(root, std::move(roots), TARGET_OS_IOS || TARGET_OS_SIMULATOR);
   return access;
 }
 std::vector<std::filesystem::path> selectedRoots(const OptimizationRequest &request) {
@@ -94,7 +94,11 @@ bool InitializeStorageServices(ApplicationContext &context) {
   if (journalError) return false;
 #endif
   auto recovery = StorageFileTransaction(startup->paths).Recover();
-  if (recovery.recoveryRequired) return false;
+  if (recovery.recoveryRequired) {
+    for (const auto &file : recovery.files)
+      SDL_Log("Storage recovery: %s: %s", file.source.string().c_str(), file.reason.detail.c_str());
+    return false;
+  }
   context.chartLibraryFolderActions = std::make_unique<chart_library_platform::FolderActionService>(
       context.chartRepository, *context.chartLibraryTasks);
   auto environment = std::make_shared<Access>();
@@ -137,7 +141,7 @@ bool InitializeStorageServices(ApplicationContext &context) {
       const auto roots = selectedRoots(request);
       if (roots.empty()) { error = "Select a local chart folder."; return {}; }
       for (const auto &root : roots) {
-        if (!IsSafeLocalPath(root, error) ||
+        if (!IsSafeLocalPath(root, error, access->paths.pathAccessRoots) ||
             std::any_of(access->unavailableRoots.begin(), access->unavailableRoots.end(),
                 [&](const auto &unavailable) { return IsWithinFolder(root, unavailable); }) ||
             std::none_of(access->paths.allowedRoots.begin(), access->paths.allowedRoots.end(),

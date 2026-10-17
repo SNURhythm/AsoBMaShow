@@ -114,7 +114,7 @@ struct Evidence {
   bool checkCharts(Checkpoint check, std::string &error) const {
     for (const auto &[path, identity] : charts) {
       if (check && !check()) { error = "Cancelled"; return false; }
-      auto current = ReadFileIdentity(path, error);
+      auto current = ReadFileIdentity(path, error, inventory.request.pathAccessRoots);
       if (!current || *current != identity) { error = "Chart changed since inventory"; return false; }
     }
     return true;
@@ -123,7 +123,7 @@ struct Evidence {
     for (const auto &[path, modified] : inventory.directories) {
       if (path == except) continue;
       if (check && !check()) { error = "Cancelled"; return false; }
-      if (!IsSafeLocalPath(path, error)) return false;
+      if (!IsSafeLocalPath(path, error, inventory.request.pathAccessRoots)) return false;
       std::error_code ec;
       if (fs::last_write_time(path, ec) != modified || ec) { error = "Directory changed since inventory"; return false; }
     }
@@ -131,7 +131,7 @@ struct Evidence {
   }
   bool candidate(const AssetCandidate &asset, Checkpoint check, std::string &error) const {
     if (!checkCharts(check, error) || !checkDirectories(check, error)) return false;
-    const auto identity = ReadFileIdentity(asset.source, error);
+    const auto identity = ReadFileIdentity(asset.source, error, inventory.request.pathAccessRoots);
     if (!identity || *identity != asset.identity) { error = "Source changed since inventory"; return false; }
     return true;
   }
@@ -154,7 +154,7 @@ struct Evidence {
   bool beforeCommit(const AssetCandidate &asset, const std::vector<StorageFileChange> &owned,
                      Checkpoint check, std::string &error) const {
     const auto parent = asset.source.parent_path();
-    if (!IsSafeLocalPath(parent, error) || !checkCharts(check, error) || !checkDirectories(check, error, parent)) return false;
+    if (!IsSafeLocalPath(parent, error, inventory.request.pathAccessRoots) || !checkCharts(check, error) || !checkDirectories(check, error, parent)) return false;
     const auto found = children.find(parent);
     auto expected = found == children.end() ? std::set<fs::path>{} : found->second;
     bool sourceChangedByTransaction = false;
@@ -162,7 +162,7 @@ struct Evidence {
       if (change.path.parent_path() != parent) { error = "Unexpected transaction path"; return false; }
       sourceChangedByTransaction |= change.path == asset.source;
       if (change.after) {
-        const auto identity = ReadFileIdentity(change.path, error);
+        const auto identity = ReadFileIdentity(change.path, error, inventory.request.pathAccessRoots);
         if (!identity || *identity != *change.after) { error = "Transaction file identity changed before commit"; return false; }
         expected.insert(change.path);
       } else {
@@ -174,7 +174,7 @@ struct Evidence {
       }
     }
     if (!sourceChangedByTransaction) {
-      const auto identity = ReadFileIdentity(asset.source, error);
+      const auto identity = ReadFileIdentity(asset.source, error, inventory.request.pathAccessRoots);
       if (!identity || *identity != asset.identity) { error = "Source changed before commit"; return false; }
     }
     fs::file_time_type ignored;
@@ -182,11 +182,11 @@ struct Evidence {
   }
   bool advance(const AssetCandidate &asset, const FileResult &result, Checkpoint check, std::string &error) {
     const auto parent = asset.source.parent_path();
-    if (!IsSafeLocalPath(parent, error)) return false;
+    if (!IsSafeLocalPath(parent, error, inventory.request.pathAccessRoots)) return false;
     for (const auto &change : result.filesystemChanges) {
       if (change.path.parent_path() != parent) { error = "Transaction reported an unrelated path"; return false; }
       if (change.after) {
-        const auto identity = ReadFileIdentity(change.path, error);
+        const auto identity = ReadFileIdentity(change.path, error, inventory.request.pathAccessRoots);
         if (!identity || *identity != *change.after) { error = "Installed file or recovery backup changed"; return false; }
         inventory.files[change.path] = *change.after;
         inventory.entries.insert(change.path); children[parent].insert(change.path);
@@ -240,11 +240,13 @@ StorageReport StorageOptimizer::Run(const OptimizationRequest &request, Checkpoi
     if (report.files.size() > 100) report.files.resize(100);
     if (report.recoveryRequired || report.cancelled) return complete();
     InventoryRequest inventoryRequest = request.inventory; inventoryRequest.policy = request.policy;
+    inventoryRequest.pathAccessRoots = dependencies_.paths.pathAccessRoots;
     emit();
     if (request.preflight && !sameRequest(request.preflight->request, inventoryRequest)) {
       append(report, {.reason = {StorageReason::StaleInput, "Selected folders or policy changed after preflight"}}); return complete();
     }
     auto inventory = request.preflight ? *request.preflight : BuildInventory(inventoryRequest, checkpoint);
+    inventory.request.pathAccessRoots = inventoryRequest.pathAccessRoots;
     if (inventory.cancelled || !checkpoint()) return complete();
     std::string error;
     if (!RevalidateInventory(inventory, checkpoint, error)) {
@@ -268,7 +270,7 @@ StorageReport StorageOptimizer::Run(const OptimizationRequest &request, Checkpoi
     if (inventory.candidates.empty()) return complete();
     std::error_code ec;
     fs::create_directories(dependencies_.paths.temporaryRoot, ec);
-    if (ec || !IsSafeLocalPath(dependencies_.paths.temporaryRoot, error)) {
+    if (ec || !IsSafeLocalPath(dependencies_.paths.temporaryRoot, error, dependencies_.paths.pathAccessRoots)) {
       append(report, {.outcome = FileOutcome::Failed, .reason = {StorageReason::IoError, ec ? ec.message() : error}}); return complete();
     }
     TemporaryDirectory temporary;

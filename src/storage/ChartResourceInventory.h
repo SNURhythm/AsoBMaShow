@@ -18,6 +18,8 @@ struct InventoryRequest {
   std::vector<FolderSelection> groups;
   StoragePolicy policy;
   bool isolatedStaging = false;
+  // Trusted sandbox/bookmark boundaries; empty retains the full filesystem walk.
+  std::vector<std::filesystem::path> pathAccessRoots;
 };
 enum class AssetOperation { LosslessFlac, LossyVorbis, CompressH264, Delete };
 struct AssetCandidate {
@@ -53,9 +55,11 @@ struct StorageInventory {
 };
 
 // Rejects symlink components rather than canonicalizing through them.
-bool IsSafeLocalPath(const std::filesystem::path &path, std::string &error);
+bool IsSafeLocalPath(const std::filesystem::path &path, std::string &error,
+                     const std::vector<std::filesystem::path> &accessRoots = {});
 std::optional<FileIdentity> ReadFileIdentity(const std::filesystem::path &path,
-                                           std::string &error);
+                                           std::string &error,
+                                           const std::vector<std::filesystem::path> &accessRoots = {});
 bool IsWithinFolder(const std::filesystem::path &path, const std::filesystem::path &folder);
 StorageInventory BuildInventory(const InventoryRequest &, Checkpoint = {}, ProgressCallback = {});
 bool RevalidateInventory(const StorageInventory &, Checkpoint, std::string &error);

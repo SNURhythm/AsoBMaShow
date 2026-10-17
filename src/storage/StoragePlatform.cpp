@@ -122,13 +122,18 @@ bool renameNoReplace(const fs::path &from, const fs::path &to, std::string &erro
 } // namespace
 
 StoragePlatformPaths MakeStoragePlatformPaths(const fs::path &privateRoot,
-                                             std::vector<fs::path> allowedRoots) {
+                                             std::vector<fs::path> allowedRoots, bool sandboxedAncestors) {
+  std::vector<fs::path> accessRoots;
+  if (sandboxedAncestors) {
+    accessRoots = allowedRoots;
+    accessRoots.push_back(privateRoot);
+  }
   return {privateRoot / "storage-management/journal", privateRoot / "storage-management/temporary",
-          std::move(allowedRoots)};
+          std::move(allowedRoots), std::move(accessRoots)};
 }
 
 FileTransactionDependencies DefaultFileTransactionDependencies() {
-  return {.identity = ReadFileIdentity,
+  return {.identity = [](const fs::path &path, std::string &error) { return ReadFileIdentity(path, error); },
           .createExclusive = createExclusive,
           .copyAndSync = copyAndSync,
           .renameNoReplace = renameNoReplace,

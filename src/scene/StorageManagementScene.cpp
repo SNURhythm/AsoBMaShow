@@ -215,6 +215,14 @@ void StorageManagementScene::Layout() {
 InventoryRequest StorageManagementScene::RequestFor(const std::vector<Track> &tracks) const {
   InventoryRequest request;
   request.policy = policy_;
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  if (auto session = context.chartRepository.OpenSession()) {
+    for (const auto &entry : session->SelectAllEntries()) {
+      const auto root = chart_library_platform::resolveFolderEntryPath(entry);
+      if (root.is_absolute()) request.pathAccessRoots.push_back(root.lexically_normal());
+    }
+  }
+#endif
   for (const auto &track : tracks) {
     const auto &meta = track.representativeChart;
     const bool fallback = meta.Folder.empty();

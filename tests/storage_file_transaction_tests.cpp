@@ -4,6 +4,13 @@
 
 #include <iostream>
 #include <iterator>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_OSX
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+#endif
 
 using namespace storage_management;
 using storage_test::require;
@@ -44,6 +51,25 @@ void requireNoRecoveryFiles(const Fixture &f) {
     require(!entry.path().filename().string().starts_with(".asobmashow-storage-"),
             "completed transactions remove sibling installation files and backups");
 }
+#if defined(__APPLE__) && TARGET_OS_OSX
+void testSandboxedRecovery(const char *executable) {
+  storage_test::TempDirectory temp;
+  fs::create_directories(temp.root / "system/app/private");
+  fs::create_directories(temp.root / "system/app/library");
+  const auto profile = "(version 1) (allow default) (deny file-read-metadata (literal \"" +
+      (temp.root / "system").string() + "\"))";
+  const auto child = fork();
+  require(child >= 0, "start sandbox recovery subprocess");
+  if (!child) {
+    execl("/usr/bin/sandbox-exec", "sandbox-exec", "-p", profile.c_str(), executable,
+          "--sandbox-recovery", (temp.root / "system/app").c_str(), nullptr);
+    _exit(127);
+  }
+  int status = 0;
+  require(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+          "startup recovery works when system ancestors deny metadata access");
+}
+#endif
 void testAbandonedCandidatesAfterRestart() {
   constexpr auto job = "12345678-1234-4234-8234-123456789abc";
   for (const bool journal : {false, true}) {
@@ -336,8 +362,53 @@ void testForeignIdentityAndCorruptJournalArePreserved() {
           "malformed journal state must not be coerced into a committed decision");
 }
 }
-int main() {
+int main(int argc, char **argv) {
   try {
+#if defined(__APPLE__) && TARGET_OS_OSX
+    if (argc == 3 && std::string_view(argv[1]) == "--sandbox-recovery") {
+      const fs::path root = argv[2];
+      std::error_code ec;
+      fs::symlink_status(root.parent_path(), ec);
+      require(ec == std::errc::operation_not_permitted || ec == std::errc::permission_denied,
+              "fixture denies inspection of the system ancestor");
+      const auto paths = MakeStoragePlatformPaths(root / "private", {root / "library"}, true);
+      const auto recovered = StorageFileTransaction(paths).Recover();
+      require(!recovered.recoveryRequired, "fresh writable app storage is not an interrupted operation");
+      std::ofstream(root / "library/asset.mpg") << std::string(128, 'v');
+      InventoryRequest request;
+      request.groups = {{"sandbox", root / "library"}};
+      request.policy.bga = BgaAction::Delete;
+      request.pathAccessRoots = paths.pathAccessRoots;
+      const auto inventory = BuildInventory(request);
+      std::string error;
+      require(inventory.complete && inventory.candidates.size() == 1 && RevalidateInventory(inventory, {}, error),
+              "inventory and revalidation stay within the granted subtree");
+      FileTransactionDependencies dependencies;
+      dependencies.faultPoint = [](std::string_view point) { if (point == "retired") throw Crash{}; };
+      try { StorageFileTransaction(paths, dependencies).Delete(inventory.candidates.front()); }
+      catch (const Crash &) {}
+      require(!StorageFileTransaction(paths).Recover().recoveryRequired &&
+                  read(root / "library/asset.mpg") == std::string(128, 'v'),
+              "interrupted mutation recovers beneath inaccessible system parents");
+      fs::create_directories(root / "outside");
+      std::ofstream(root / "outside/keep.mpg") << "outside";
+      fs::create_directory_symlink(root / "outside", root / "library/linked");
+      require(!IsSafeLocalPath(root / "library/linked/keep.mpg", error, paths.pathAccessRoots),
+              "anchoring never permits symlinks beneath authorized folders");
+      require(!IsSafeLocalPath(root / "outside/keep.mpg", error, paths.pathAccessRoots),
+              "anchoring does not authorize unrelated subtrees");
+      fs::remove(paths.journalRoot);
+      fs::create_directory_symlink(root / "outside", paths.journalRoot);
+      const auto unsafe = StorageFileTransaction(paths).Recover();
+      require(unsafe.recoveryRequired && !unsafe.files.empty() &&
+                  unsafe.files.front().source == paths.journalRoot &&
+                  unsafe.files.front().reason.detail.find("Symlink") != std::string::npos &&
+                  read(root / "outside/keep.mpg") == "outside",
+              "unsafe private journal retains files and reports the failing path");
+      return 0;
+    }
+    testSandboxedRecovery(argv[0]);
+#endif
     testAbandonedCandidatesAfterRestart();
     testSuccessAndCancellation();
     testRestartAtEveryBoundary();

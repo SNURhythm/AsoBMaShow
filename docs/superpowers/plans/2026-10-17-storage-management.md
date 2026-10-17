@@ -559,6 +559,16 @@ cancellation, cleanup retry, unknown files and symlinks. No critical or deferred
 minor findings remained. The 117 affected desktop tests, both mobile build-only
 paths, and both native mobile codec/transaction suites passed after the fixes.
 
+iOS startup follow-up: a sandbox regression reproduced fresh recovery failing
+when a system ancestor denies metadata access despite the app directory being
+writable. iOS validation now starts at OS-private or authorized library roots and
+checks the boundary and all descendants, retaining symlink/hard-link rejection.
+Desktop and Android retain their existing full path checks. The regression covers
+inventory, interrupted deletion recovery, forbidden subtrees and a symlinked
+journal directory; recovery errors retain the specific path and diagnostic.
+The 117 affected tests, application startup test and iOS build-only check passed.
+The reported physical iOS device was unavailable for a direct retest.
+
 ## Planning review
 
 The plan covers the requested manual operations, grouped-list reuse, automatic

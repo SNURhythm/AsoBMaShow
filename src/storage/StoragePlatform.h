@@ -9,10 +9,13 @@ struct StoragePlatformPaths {
   std::filesystem::path temporaryRoot;
   // Recovery authority comes from the application, never from a journal file.
   std::vector<std::filesystem::path> allowedRoots;
+  std::vector<std::filesystem::path> pathAccessRoots;
 };
+// On sandboxed platforms, roots must come from the OS private directory and
+// authorized library/bookmark registrations, never from recovery records.
 StoragePlatformPaths MakeStoragePlatformPaths(
     const std::filesystem::path &privateApplicationRoot,
-    std::vector<std::filesystem::path> allowedRoots);
+    std::vector<std::filesystem::path> allowedRoots, bool sandboxedAncestors = false);
 
 using StorageCommitPrecondition = std::function<bool(const AssetCandidate &,
     const std::vector<StorageFileChange> &, Checkpoint, std::string &)>;

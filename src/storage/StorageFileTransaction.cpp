@@ -47,7 +47,7 @@ void cleanupAbandonedCandidates(const StoragePlatformPaths &paths,
     if (report.files.size() < 100) report.files.push_back({.source = path, .outcome = FileOutcome::Failed,
         .reason = {StorageReason::CleanupFailed, error}});
   };
-  if (!IsSafeLocalPath(paths.temporaryRoot, error) ||
+  if (!IsSafeLocalPath(paths.temporaryRoot, error, paths.pathAccessRoots) ||
       std::ranges::any_of(paths.allowedRoots, [&](const auto &root) {
         return IsWithinFolder(paths.temporaryRoot, root);
       })) {
@@ -58,7 +58,7 @@ void cleanupAbandonedCandidates(const StoragePlatformPaths &paths,
   for (; !ec && jobs != end; jobs.increment(ec)) {
     if (!checkpoint(check)) { report.cancelled = true; return; }
     const auto job = jobs->path();
-    if (!uuid::isCanonicalLowerV4(job.filename().string()) || !IsSafeLocalPath(job, error) ||
+    if (!uuid::isCanonicalLowerV4(job.filename().string()) || !IsSafeLocalPath(job, error, paths.pathAccessRoots) ||
         !fs::is_directory(jobs->symlink_status(ec))) continue;
     // Only the optimizer's flat, known candidate files establish ownership.
     // Preserve foreign entries, links and future job formats without following them.
@@ -71,7 +71,7 @@ void cleanupAbandonedCandidates(const StoragePlatformPaths &paths,
       if (name != "candidate.flac" && name != "candidate.ogg" && name != "candidate.mp4") {
         recognized = false; break;
       }
-      const auto identity = ReadFileIdentity(path, error);
+      const auto identity = ReadFileIdentity(path, error, paths.pathAccessRoots);
       if (!identity) { recognized = false; break; }
       candidates.emplace_back(path, *identity);
     }
@@ -80,7 +80,7 @@ void cleanupAbandonedCandidates(const StoragePlatformPaths &paths,
     bool removed = true;
     for (const auto &[path, identity] : candidates) {
       if (!checkpoint(check)) { report.cancelled = true; return; }
-      if (ReadFileIdentity(path, error) != identity || !dependencies.remove(path, error)) {
+      if (ReadFileIdentity(path, error, paths.pathAccessRoots) != identity || !dependencies.remove(path, error)) {
         if (error.empty()) error = "Abandoned candidate changed during cleanup";
         failed(path); removed = false; break;
       }
@@ -126,7 +126,7 @@ bool authorized(const fs::path &source, const StoragePlatformPaths &paths, std::
   if (!source.is_absolute() || source != source.lexically_normal() ||
       !std::ranges::any_of(paths.allowedRoots, [&](const auto &root) {
         return root.is_absolute() && IsWithinFolder(source, root.lexically_normal());
-      }) || !IsSafeLocalPath(source.parent_path(), error)) {
+      }) || !IsSafeLocalPath(source.parent_path(), error, paths.pathAccessRoots)) {
     error = "Transaction is outside an authorized local folder"; return false;
   }
   return true;
@@ -163,7 +163,7 @@ bool validTargets(const Record &record, const StoragePlatformPaths &paths, std::
 }
 std::optional<Record> loadRecord(const fs::path &path, const StoragePlatformPaths &paths, std::string &error) {
   std::error_code ec;
-  if (!IsSafeLocalPath(path, error) || fs::file_size(path, ec) > 65536 || ec) return {};
+  if (!IsSafeLocalPath(path, error, paths.pathAccessRoots) || fs::file_size(path, ec) > 65536 || ec) return {};
   try {
     std::ifstream stream(path, std::ios::binary);
     json value;
@@ -262,6 +262,9 @@ void fillDefaults(FileTransactionDependencies &ops) {
 
 StorageFileTransaction::StorageFileTransaction(StoragePlatformPaths paths, FileTransactionDependencies dependencies)
     : paths_(std::move(paths)), dependencies_(std::move(dependencies)) {
+  if (!dependencies_.identity) dependencies_.identity = [roots = paths_.pathAccessRoots](const fs::path &path, std::string &error) {
+    return ReadFileIdentity(path, error, roots);
+  };
   fillDefaults(dependencies_);
 }
 
@@ -299,7 +302,7 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
   record.journal = paths_.journalRoot / (record.id + ".json");
   std::error_code ec;
   fs::create_directories(paths_.journalRoot, ec);
-  if (ec || !IsSafeLocalPath(paths_.journalRoot, error)) return fail(StorageReason::IoError, ec ? ec.message() : error);
+  if (ec || !IsSafeLocalPath(paths_.journalRoot, error, paths_.pathAccessRoots)) return fail(StorageReason::IoError, ec ? ec.message() : error);
   if (!deletion) {
     if (encoded->outcome != FileOutcome::Converted) return fail(StorageReason::ValidationFailed, "No validated encoded output");
     const auto outputIdentity = dependencies_.identity(encoded->outputPath, error);
@@ -412,7 +415,13 @@ StorageReport StorageFileTransaction::Recover(Checkpoint check) {
   std::error_code ec;
   fs::create_directories(paths_.journalRoot, ec);
   std::string error;
-  if (ec || !IsSafeLocalPath(paths_.journalRoot, error)) { report.recoveryRequired = true; return report; }
+  if (ec || !IsSafeLocalPath(paths_.journalRoot, error, paths_.pathAccessRoots)) {
+    report.recoveryRequired = true;
+    report.failed = 1;
+    report.files.push_back({.source = paths_.journalRoot, .outcome = FileOutcome::Failed,
+        .reason = {StorageReason::RecoveryRequired, ec ? ec.message() : error}});
+    return report;
+  }
   fs::directory_iterator it(paths_.journalRoot, ec), end;
   for (; !ec && it != end; it.increment(ec)) {
     if (!checkpoint(check)) { report.cancelled = true; break; }

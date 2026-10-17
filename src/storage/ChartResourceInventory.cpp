@@ -46,31 +46,49 @@ bool IsWithinFolder(const fs::path &path, const fs::path &folder) {
   return true;
 }
 
-bool IsSafeLocalPath(const fs::path &path, std::string &error) {
+bool IsSafeLocalPath(const fs::path &path, std::string &error, const std::vector<fs::path> &accessRoots) {
   if (!path.is_absolute()) { error = "Expected an absolute local path"; return false; }
-  auto current = path.root_path();
-  for (const auto &part : path.relative_path()) {
+  for (const auto &part : path) {
     if (part == "..") { error = "Parent traversal is unsupported"; return false; }
-    current /= part;
+  }
+  auto current = path.root_path();
+  bool anchored = accessRoots.empty();
+  for (auto root : accessRoots) {
+    if (!root.is_absolute() || root != root.lexically_normal()) continue;
+    while (root != root.root_path() && root.filename().empty()) root = root.parent_path();
+    if (IsWithinFolder(path, root) && (!anchored || IsWithinFolder(current, root))) {
+      current = std::move(root); anchored = true;
+    }
+  }
+  if (!anchored) { error = "Path is outside accessible storage roots: " + path.string(); return false; }
+  const auto inspect = [&](const fs::path &component) {
     std::error_code ec;
-    const auto status = fs::symlink_status(current, ec);
+    const auto status = fs::symlink_status(component, ec);
     if (ec || !fs::exists(status) || fs::is_symlink(status)) {
-      error = ec ? ec.message() : "Symlink or missing path component";
+      error = component.string() + ": " + (ec ? ec.message() : "Symlink or missing path component");
       return false;
     }
 #ifdef _WIN32
-    const auto attributes = GetFileAttributesW(current.c_str());
+    const auto attributes = GetFileAttributesW(component.c_str());
     if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
-      error = "Reparse points are unsupported";
+      error = "Reparse points are unsupported: " + component.string();
       return false;
     }
 #endif
+    return true;
+  };
+  // iOS grants an app/bookmark subtree without granting metadata access to its
+  // system parents. Validate the trusted boundary itself and every child below it.
+  if (!accessRoots.empty() && !inspect(current)) return false;
+  for (const auto &part : path.lexically_relative(current)) {
+    current /= part;
+    if (!inspect(current)) return false;
   }
   return true;
 }
 
-std::optional<FileIdentity> ReadFileIdentity(const fs::path &path, std::string &error) {
-  if (!IsSafeLocalPath(path, error)) return {};
+std::optional<FileIdentity> ReadFileIdentity(const fs::path &path, std::string &error, const std::vector<fs::path> &accessRoots) {
+  if (!IsSafeLocalPath(path, error, accessRoots)) return {};
   FileIdentity result;
 #ifdef _WIN32
   const auto handle = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
@@ -117,7 +135,7 @@ StorageInventory BuildInventory(const InventoryRequest &request, Checkpoint chec
     std::string error;
     if (!group.writableLocal) {
       measurement.reason = {StorageReason::UnsupportedSource, "Extract/import to a writable local folder first"};
-    } else if (ec || !IsSafeLocalPath(root, error)) {
+    } else if (ec || !IsSafeLocalPath(root, error, request.pathAccessRoots)) {
       measurement.reason = {StorageReason::UnsafePath, ec ? ec.message() : error};
     } else {
       root = root.lexically_normal();
@@ -163,11 +181,11 @@ StorageInventory BuildInventory(const InventoryRequest &request, Checkpoint chec
         const auto status = it->symlink_status(ec);
         if (ec) break;
         std::string error;
-        if (fs::is_symlink(status) || !IsSafeLocalPath(path, error)) {
+        if (fs::is_symlink(status) || !IsSafeLocalPath(path, error, request.pathAccessRoots)) {
           skip(inventory, path, StorageReason::UnsafePath, "Symlink or unsafe path");
         } else if (fs::is_directory(status)) {
           pending.push_back(path);
-        } else if (auto identity = ReadFileIdentity(path, error)) {
+        } else if (auto identity = ReadFileIdentity(path, error, request.pathAccessRoots)) {
           inventory.files.emplace(path, *identity);
         } else {
           skip(inventory, path, StorageReason::UnsafePath, std::move(error));
@@ -254,12 +272,12 @@ bool RevalidateInventory(const StorageInventory &inventory, Checkpoint check, st
   if (inventory.cancelled) { error = "Inventory cancelled"; return false; }
   for (const auto &[path, expected] : inventory.files) {
     if (!checkpoint(check)) { error = "Cancelled"; return false; }
-    const auto current = ReadFileIdentity(path, error);
+    const auto current = ReadFileIdentity(path, error, inventory.request.pathAccessRoots);
     if (!current || *current != expected) { error = "File changed since inventory"; return false; }
   }
   for (const auto &[path, expected] : inventory.directories) {
     if (!checkpoint(check)) { error = "Cancelled"; return false; }
-    if (!IsSafeLocalPath(path, error)) return false;
+    if (!IsSafeLocalPath(path, error, inventory.request.pathAccessRoots)) return false;
     std::error_code ec;
     if (fs::last_write_time(path, ec) != expected || ec) {
       error = "Directory changed since inventory"; return false;
