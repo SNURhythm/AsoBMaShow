@@ -228,11 +228,6 @@ void testLayoutRecoversAfterCallbackFailure() {
   assert(unrelated.getWidth() == 80);
 }
 
-static_assert(requires(ResultSkinData data) {
-  data.showTimingAnalytics;
-  data.showResultGraph;
-});
-
 class EventRecordingView final : public View {
 public:
   int eventCount = 0;

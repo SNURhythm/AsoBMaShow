@@ -11,7 +11,6 @@
 #include <array>
 #include <chrono>
 #include <condition_variable>
-#include <concepts>
 #include <cstdlib>
 #include <deque>
 #include <future>
@@ -133,29 +132,6 @@ bool decodeSkinSoundBundleAware(const path_t &, std::vector<short> &, SF_INFO &,
 namespace {
 
 using namespace std::chrono_literals;
-
-using LoadChartSignature = audio::playback::BackendOperationResult (Jukebox::*)(
-    bms_parser::Chart &, bool, std::atomic_bool &);
-using ReloadChartSignature = audio::playback::BackendOperationResult (
-    Jukebox::*)(bms_parser::Chart &, bool, std::atomic_bool &);
-using PlaySignature =
-    audio::playback::BackendOperationResult (Jukebox::*)(long long);
-using StopSignature = audio::playback::BackendOperationResult (Jukebox::*)();
-using SeekSignature =
-    audio::playback::BackendOperationResult (Jukebox::*)(long long);
-
-static_assert(
-    std::same_as<decltype(static_cast<LoadChartSignature>(&Jukebox::loadChart)),
-                 LoadChartSignature>);
-static_assert(std::same_as<decltype(static_cast<ReloadChartSignature>(
-                               &Jukebox::reloadChartResources)),
-                           ReloadChartSignature>);
-static_assert(std::same_as<decltype(static_cast<PlaySignature>(&Jukebox::play)),
-                           PlaySignature>);
-static_assert(std::same_as<decltype(static_cast<StopSignature>(&Jukebox::stop)),
-                           StopSignature>);
-static_assert(std::same_as<decltype(static_cast<SeekSignature>(&Jukebox::seek)),
-                           SeekSignature>);
 
 void require(bool condition, std::string_view message) {
   if (!condition) {

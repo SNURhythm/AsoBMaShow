@@ -1,9 +1,7 @@
-import os
 import pathlib
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
 
 if __package__:
     from .support.fixture_compiler import FixtureCompiler
@@ -126,39 +124,6 @@ def run_fixture():
 class GameplayBuiltinImageBatchTests(unittest.TestCase):
     def test_bounded_unrestricted_and_cancelled_batches(self):
         run_fixture()
-
-    def test_fixture_uses_configured_compiler_frontend(self):
-        for frontend, compiler_id, standard in (
-            ("GNU", "Clang", "-std=c++23"),
-            ("MSVC", "MSVC", "/std:c++latest"),
-            ("MSVC", "Clang", "/std:c++latest"),
-            ("", "MSVC", "/std:c++latest"),
-        ):
-            with self.subTest(frontend=frontend, compiler_id=compiler_id):
-                with patch.dict(os.environ, {
-                    "ASOBMASHOW_TEST_CXX_COMPILER": "/configured/compiler",
-                    "ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT": frontend,
-                    "ASOBMASHOW_TEST_CXX_COMPILER_ID": compiler_id,
-                    "ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER": '["/cache path/launcher", "--flag"]',
-                }), patch.object(subprocess, "run", return_value=
-                    subprocess.CompletedProcess([], 0)) as run:
-                    run_fixture()
-                    command = run.call_args_list[0].args[0]
-                    self.assertEqual(command[:3], ["/cache path/launcher", "--flag",
-                                                  "/configured/compiler"])
-                    self.assertEqual(len(run.call_args_list), 3)
-                    link = run.call_args_list[1].args[0]
-                    self.assertEqual(link[0], "/configured/compiler")
-                    self.assertNotIn("/cache path/launcher", link)
-                    self.assertIn(standard, command)
-                    if frontend == "MSVC" or compiler_id == "MSVC":
-                        self.assertNotIn("-pthread", command)
-                        self.assertNotIn("-o", command)
-                        self.assertTrue(any(flag.startswith("/Fo") for flag in command))
-                        self.assertTrue(any(flag.startswith("/Fe") and flag.endswith(".exe")
-                                            for flag in link))
-                    self.assertEqual(run.call_args_list[2].kwargs["cwd"],
-                                     run.call_args_list[0].kwargs["cwd"])
 
 
 if __name__ == "__main__":

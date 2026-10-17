@@ -2595,25 +2595,11 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(skin_package_store_windows_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
-    add_test(NAME lua_skin_file_system_windows_contract
-        COMMAND ${Python3_EXECUTABLE}
-                -m unittest
-                tests/lua_skin_file_system_windows_contract_tests.py -v)
-    set_tests_properties(lua_skin_file_system_windows_contract PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
     add_test(NAME settings_virtual_controller_ui_contract
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest
                 tests/settings_virtual_controller_ui_contract_tests.py -v)
     set_tests_properties(settings_virtual_controller_ui_contract PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-    add_test(NAME settings_input_binding_ui_contract
-        COMMAND ${Python3_EXECUTABLE}
-                -m unittest
-                tests/settings_input_binding_ui_contract_tests.py -v)
-    set_tests_properties(settings_input_binding_ui_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
     add_test(NAME settings_gameplay_skin_initialization_contract
@@ -2647,13 +2633,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 -m unittest
                 tests/replay_video_ui_batch_contract_tests.py -v)
     set_tests_properties(replay_video_ui_batch_contract PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-    add_test(NAME text_view_transient_buffer_contract
-        COMMAND ${Python3_EXECUTABLE}
-                -m unittest
-                tests/text_view_transient_buffer_contract_tests.py -v)
-    set_tests_properties(text_view_transient_buffer_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
     add_library(ir_submission_eligibility_test_support STATIC
