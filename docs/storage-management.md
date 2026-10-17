@@ -98,11 +98,33 @@ charts and other files are also kept. Deletion has no undo after completion.
 ## Supported locations
 
 Writable ordinary local folders are supported, including app-owned mobile
-downloads/imports and accessible writable iOS folders. Archives and Android
-SAF/content-provider sources must first use the existing extraction/import flow
-to become local folders. Storage management does not rewrite archive containers
-or copy a library automatically. Modification of symlinks, hard links, special
-files and unsafe paths, and unsupported filesystem operations, are rejected.
+downloads/imports and accessible writable iOS folders. Writable local archives
+can also be updated in place:
+
+| Container | In-place support |
+| --- | --- |
+| ZIP / ZIP64 | Single-volume archives with stored or deflated regular files and directories. |
+| TAR | Uncompressed USTAR regular files and directories. |
+| Other formats or layouts | Excluded with a format/layout explanation. No full-copy fallback. |
+
+Encrypted/split ZIPs, links, overlapping or ambiguous entries, compressed TARs,
+GNU/PAX/sparse TAR records, RAR and 7z are not supported by the in-place updater.
+Reading these formats elsewhere in the app remains separate from update support.
+Android SAF/content-provider references require the existing local import flow.
+Symlinks, hard links, special files and unsafe filesystem paths are rejected.
+
+Selecting several folders inside one archive creates one batch. Only the selected
+media changes; charts, images and unselected entry contents stay intact. Review
+shows uncompressed eligible input bytes. Reported savings are the reduction in
+the archive's file length, which can differ from filesystem allocation.
+
+There is no second complete archive or extracted tree. A disk-backed index and
+bounded redo buffers accompany one extracted input, encoded output and prepared
+replacement at a time. The media staging budget is 1 GiB, additionally limited by
+free space; an entry must fit a conservative three-times-input estimate plus
+8 MiB. Oversized entries are skipped. A conversion must reduce the stored archive
+record too: a smaller FLAC can still be skipped when the original ZIP compression
+was more compact. Each batch compacts the archive once and rebuilds its metadata.
 
 ## Progress, cancellation and recovery
 
@@ -114,7 +136,7 @@ manual work at a safe checkpoint.
 All scene admission checks run before media is stopped, so a rejected request
 leaves existing playback alone.
 
-Each file commits separately. Cancel keeps already completed changes and retains
+Ordinary local files commit separately. Cancel keeps already completed changes and retains
 uncommitted originals; it does not roll back the entire batch. Output is staged
 privately, validated, then installed using a journal and same-volume temporary
 files/backups. On POSIX systems, replacements preserve the source's access
@@ -122,6 +144,15 @@ permission bits. Startup recovery checks interrupted transactions before admitti
 new work. After successful recovery, abandoned private encoding candidates are
 removed; unrecognized files and unresolved recovery state are retained. Do not
 manually remove recovery files while an operation is pending.
+
+Archives use durable forward recovery instead of a full backup. Before overwriting
+a bounded chunk, the updater saves its redo bytes and progress, then syncs the
+archive before advancing. Interruption recovery validates the file identity,
+completed output and remaining input before resuming. Cancellation stops new
+conversions and finishes the archive with the changes already accepted; this
+finalization can take time for a large archive. Archive recovery runs before
+playback and library readers are admitted. Keep both the archive and its private
+recovery directory intact if recovery is required.
 
 Independent folders can convert audio concurrently: up to four workers on
 desktop. Mobile scanning and audio conversion use the same worker policy as chart

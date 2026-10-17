@@ -2,6 +2,7 @@
 #include "AudioTranscoder.h"
 #include "BgaTranscoder.h"
 #include "StoragePathIndex.h"
+#include "StorageArchiveTransaction.h"
 #include "../Uuid.h"
 
 #include <algorithm>
@@ -79,6 +80,13 @@ void append(StorageReport &report, FileResult result) {
   report.cleanupPending |= result.reason.code == StorageReason::CleanupFailed;
   if (report.files.size() < 100) report.files.push_back(std::move(result));
 }
+void mergeReport(StorageReport &report, StorageReport other) {
+  report.converted += other.converted; report.deleted += other.deleted;
+  report.skipped += other.skipped; report.failed += other.failed; report.reclaimedBytes += other.reclaimedBytes;
+  report.cancelled |= other.cancelled; report.recoveryRequired |= other.recoveryRequired; report.cleanupPending |= other.cleanupPending;
+  for (auto &file : other.files) if (report.files.size() < 100) report.files.push_back(std::move(file));
+  report.changedRoots.insert(report.changedRoots.end(), other.changedRoots.begin(), other.changedRoots.end());
+}
 StorageDiagnostic missingCodec(AssetOperation operation, const StorageCodecCapabilities &caps) {
   const StorageCodecSupport *required = nullptr;
   switch (operation) {
@@ -121,9 +129,11 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
   try {
     auto lease = dependencies_.permit->Acquire(checkpoint);
     if (!lease) { report.cancelled = true; return complete(); }
+    report = RecoverStorageArchives(dependencies_.paths, checkpoint);
+    if (report.recoveryRequired || report.cancelled) return complete();
     auto transactions = dependencies_.transactions(dependencies_.paths, {});
     const auto recovery = transactions.recover(checkpoint);
-    report = recovery;
+    mergeReport(report, recovery);
     if (report.files.size() > 100) report.files.resize(100);
     if (report.recoveryRequired || report.cancelled) return complete();
     InventoryRequest inventoryRequest = request.inventory; inventoryRequest.policy = request.policy;
@@ -412,6 +422,22 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
     report.cancelled |= worked.cancelled; report.recoveryRequired |= worked.recoveryRequired;
     report.cleanupPending |= worked.cleanupPending;
     for (auto &file : worked.files) if (report.files.size() < 100) report.files.push_back(std::move(file));
+    for (const auto &archive : inventory.archives) {
+      if (!archive.eligibleCount || report.recoveryRequired || !checkpoint()) continue;
+      const auto beforeFiles = state.filesDone, beforeBytes = report.reclaimedBytes;
+      StorageArchiveDependencies archiveDependencies{
+        .encode = [&](const AssetCandidate &asset, const StoragePolicy &policy, const fs::path &output, Checkpoint check, ProgressCallback progress) {
+          const auto missing = missingCodec(asset.operation, caps);
+          if (missing.code != StorageReason::None) return EncodeResult{.reason = missing};
+          const auto &encoder = asset.operation == AssetOperation::CompressH264 ? dependencies_.encodeVideo : dependencies_.encodeAudio;
+          return encoder(asset, policy, output, std::move(check), std::move(progress));
+        }, .availableSpace = dependencies_.availableSpace};
+      mergeReport(report, UpdateStorageArchive(archive, request.policy, dependencies_.paths, archiveDependencies, checkpoint,
+          [&](const StorageProgress &value) {
+            state = value; state.filesDone += beforeFiles; state.filesTotal = inventory.eligibleCount;
+            state.reclaimedBytes += beforeBytes; emit();
+          }));
+    }
     // The changed subtree union is computed once, not once per asset/group pair.
     report.changedRoots.insert(report.changedRoots.end(), changedDirectories.begin(), changedDirectories.end());
     report.changedRoots = StoragePathIndex(std::move(report.changedRoots)).MinimalRoots();

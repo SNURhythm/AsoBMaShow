@@ -222,6 +222,16 @@ public final class DocumentsMutationGuardTests {
             reserveAndClose(root.resolve("unrelated").toFile());
         }
         try (DocumentsMutationGuard.Reservation writer = DocumentsMutationGuard.reserveWriter(media)) {}
+        File archive = Files.write(root.resolve("charts.zip"), new byte[]{1}).toFile();
+        try (DocumentsMutationGuard.Reservation writer = DocumentsMutationGuard.reserveWriter(archive)) {
+            rejected(() -> DocumentsMutationGuard.reserveExistingSubtrees(new String[]{archive.toString()}), true);
+        }
+        try (AutoCloseable lease = DocumentsMutationGuard.reserveExistingSubtrees(new String[]{archive.toString()})) {
+            rejected(() -> DocumentsMutationGuard.reserveWriter(archive), true);
+            rejected(() -> DocumentsMutationGuard.requireUnreserved(root.toFile(), true), true);
+            DocumentsMutationGuard.requireUnreserved(media, false);
+        }
+        try (DocumentsMutationGuard.Reservation writer = DocumentsMutationGuard.reserveWriter(archive)) {}
         rejected(() -> DocumentsMutationGuard.reserveExistingSubtrees(new String[]{chart.toString(), root.resolve("absent").toString()}), false);
         // Partial admission must release the first subtree on failure.
         try (AutoCloseable lease = DocumentsMutationGuard.reserveExistingSubtrees(new String[]{chart.toString()})) {}

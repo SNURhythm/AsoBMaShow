@@ -91,8 +91,9 @@ final class DocumentsMutationGuard {
                     for (Path part = path; part != null; part = part.getParent()) {
                         if (Files.isSymbolicLink(part)) throw new IOException("Storage folder is a symbolic link");
                     }
-                    if (!Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS))
-                        throw new IOException("Storage folder is unavailable");
+                    if (!Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)
+                            && !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
+                        throw new IOException("Storage folder or archive is unavailable");
                     File canonical = path.toFile().getCanonicalFile();
                     requireUnreservedLocked(canonical.toPath(), true);
                     for (Reservation writer : writers) {

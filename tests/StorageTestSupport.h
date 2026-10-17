@@ -13,10 +13,15 @@ inline void require(bool condition, const char *message) {
 class TempDirectory {
 public:
   TempDirectory() {
-    root = std::filesystem::canonical(std::filesystem::temp_directory_path()) /
+    const auto base = std::filesystem::canonical(std::filesystem::temp_directory_path()) /
            ("asobmashow-storage-" + std::to_string(
                std::chrono::steady_clock::now().time_since_epoch().count()));
-    std::filesystem::create_directory(root);
+    // Different test processes can observe the same clock tick. Only adopt a
+    // directory this instance created, so their destructors cannot cross-delete.
+    for (std::size_t attempt = 0;; ++attempt) {
+      root = base; root += "-" + std::to_string(attempt);
+      if (std::filesystem::create_directory(root)) break;
+    }
   }
   ~TempDirectory() {
     std::error_code ignored;

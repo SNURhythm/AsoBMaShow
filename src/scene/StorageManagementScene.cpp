@@ -386,8 +386,8 @@ void StorageManagementScene::RefreshState() {
     std::map<std::string, std::size_t> excluded;
     for (const auto &group : preflight_->groups) {
       if (group.reason.code == StorageReason::None) continue;
-      const auto why = group.sourceKind == StorageSourceKind::Archive
-          ? i18n::tr("storage.ui.archive_extract_required") : reason(group.reason.code);
+      const auto why = group.sourceKind == StorageSourceKind::Archive && group.reason.code == StorageReason::UnsupportedFormat
+          ? i18n::tr("storage.ui.archive_update_unsupported") : reason(group.reason.code);
       ++excluded[why];
     }
     for (const auto &[why, count] : excluded)

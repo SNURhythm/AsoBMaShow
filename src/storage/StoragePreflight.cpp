@@ -60,6 +60,11 @@ StoragePreflight BuildStoragePreflight(const InventoryRequest &request, Checkpoi
   for (const auto &group : request.groups) {
     GroupStorageMeasurement measured{.groupId = group.groupId, .root = group.path, .sourceKind = group.sourceKind};
     auto root = group.chartPathFallback ? group.path.parent_path() : group.path;
+    if (group.sourceKind == StorageSourceKind::Archive) {
+      measured.root = root;
+      result.groups.push_back(std::move(measured));
+      continue;
+    }
     if (group.sourceKind != StorageSourceKind::Local || !group.writableLocal)
       measured.reason = {StorageReason::UnsupportedSource, "Compression requires a writable local folder"};
     else if (!root.is_absolute() || std::ranges::any_of(root, [](const auto &part) { return part == ".."; }))
@@ -162,6 +167,7 @@ StoragePreflight BuildStoragePreflight(const InventoryRequest &request, Checkpoi
     return true;
   }, checkpoint);
   result.cancelled = !checkpoint(); result.complete = complete && !result.cancelled;
+  AppendStorageArchivePreflight(result, checkpoint);
   for (auto &group : result.groups) if (!group.totalBytes) {
     result.totalBytes.reset();
     if (group.reason.code == StorageReason::None) {
@@ -188,6 +194,7 @@ std::vector<fs::path> StoragePreflight::EligibleRoots() const {
   }
   const StoragePathIndex selected(roots);
   std::vector<fs::path> eligible;
+  for (const auto &archive : archives) if (archive.eligibleCount) eligible.push_back(archive.path);
   for (const auto &[path, summary] : directories) if (summary.eligibleCount && summary.reason.code == StorageReason::None) {
     const auto ancestors = selected.Ancestors(path);
     if (!ancestors.empty()) eligible.push_back(roots[ancestors.front()]);

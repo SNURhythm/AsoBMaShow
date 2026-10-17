@@ -26,6 +26,8 @@ target_link_libraries(storage_media_tests PRIVATE SndFile::sndfile ${FFMPEG_LIBR
 asobmashow_register_test(storage_media_tests)
 
 add_executable(storage_optimizer_tests tests/storage_optimizer_tests.cpp
+    tests/storage_archive_tests.cpp
+    src/storage/StorageArchiveTransaction.cpp
     tests/storage_library_integration.cpp
     src/storage/StorageMeasurement.cpp src/storage/StorageArchiveMeasurement.cpp src/storage/StorageMeasurementState.cpp
     src/audio/decoder.cpp src/ArchiveFile.cpp src/archive/TemporaryCache.cpp
@@ -47,6 +49,8 @@ if(WIN32)
     target_link_libraries(storage_optimizer_tests PRIVATE shell32 ole32)
 endif()
 asobmashow_register_test(storage_optimizer_tests)
+add_test(NAME storage_archive_tests COMMAND storage_optimizer_tests --archive)
+set_tests_properties(storage_archive_tests PROPERTIES TIMEOUT 60)
 
 add_executable(storage_task_tests tests/storage_task_tests.cpp
     src/storage/StorageTask.cpp src/storage/StorageMaintenanceGuard.cpp)

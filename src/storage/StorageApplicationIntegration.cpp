@@ -1,6 +1,7 @@
 #include "StorageApplicationIntegration.h"
 #include "StorageTask.h"
 #include "StoragePathIndex.h"
+#include "StorageArchiveTransaction.h"
 #include "../context.h"
 #include "../scene/SceneManager.h"
 #include "../scene/Scene.h"
@@ -36,8 +37,8 @@ std::optional<Access> accessFolders(ApplicationContext &context, std::string &er
       if (!resolved.empty()) path = std::filesystem::path(resolved);
     }
 #endif
-    // Archives and SAF entries remain visible in the browser, but do not grant
-    // local transaction authority. Missing roots may contain recovery records;
+    // Local archive files inherit their registered folder's authority; SAF
+    // references do not grant local filesystem authority. Missing roots may contain recovery records;
     // retain their absolute names so recovery can fail closed on actual access.
     if (path.is_absolute()) roots.push_back(path.lexically_normal());
   }
@@ -76,7 +77,7 @@ bool InitializeStorageServices(ApplicationContext &context) {
   std::vector<std::filesystem::path> existing;
   for (const auto &root : startup->paths.allowedRoots) {
     std::error_code ec;
-    if (std::filesystem::is_directory(root, ec)) existing.push_back(root);
+    if (std::filesystem::is_directory(root, ec) || std::filesystem::is_regular_file(root, ec)) existing.push_back(root);
   }
   // Registered roots can overlap; reserve their union once.
   OptimizationRequest scopeRequest;
@@ -90,7 +91,8 @@ bool InitializeStorageServices(ApplicationContext &context) {
   }
   if (journalError) return false;
 #endif
-  auto recovery = StorageFileTransaction(startup->paths).Recover();
+  auto recovery = RecoverStorageArchives(startup->paths);
+  if (!recovery.recoveryRequired) recovery = StorageFileTransaction(startup->paths).Recover();
   if (recovery.recoveryRequired) {
     for (const auto &file : recovery.files)
       SDL_Log("Storage recovery: %s: %s", file.source.string().c_str(), file.reason.detail.c_str());

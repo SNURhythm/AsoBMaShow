@@ -9750,6 +9750,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 target_link_libraries(${asobmashow_target} PRIVATE asobmashow_utf8)
             endif()
 
+            if("src/storage/StoragePreflight.cpp" IN_LIST asobmashow_target_sources)
+                target_sources(${asobmashow_target} PRIVATE
+                    src/storage/StorageArchive.cpp src/storage/StorageArchiveIO.cpp src/storage/StorageArchivePreflight.cpp)
+                target_link_libraries(${asobmashow_target} PRIVATE asobmashow_utf8 ZLIB::ZLIB)
+                if(APPLE)
+                    target_link_libraries(${asobmashow_target} PRIVATE iconv)
+                endif()
+            endif()
+            if("src/storage/StorageOptimizer.cpp" IN_LIST asobmashow_target_sources AND
+               NOT "src/storage/StorageArchiveTransaction.cpp" IN_LIST asobmashow_target_sources)
+                target_sources(${asobmashow_target} PRIVATE src/storage/StorageArchiveTransaction.cpp)
+            endif()
+
             # Utils.cpp uses CoreFoundation for exact MS932 decoding on Apple.
             # Keep standalone consumers on the application/iOS link contract.
             if(APPLE)

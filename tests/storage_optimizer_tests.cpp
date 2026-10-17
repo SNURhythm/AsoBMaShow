@@ -15,6 +15,7 @@ using namespace storage_management;
 using storage_test::require;
 using storage_test::TempDirectory;
 void storageLibraryIntegration();
+void storageArchiveTests();
 namespace fs = std::filesystem;
 namespace {
 OptimizationRequest request(const fs::path &root) {
@@ -487,6 +488,7 @@ void cancellableSingleConversionPermit() {
 }
 int main(int argc, char **argv) {
   try {
+    if (argc > 1 && std::string_view(argv[1]) == "--archive") { storageArchiveTests(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--commit-cost") { unrelatedFoldersDoNotMultiplyCommitChecks(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--subset-refresh") { subsetRefreshNeverEnumeratesAncestorSiblings(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--parallel") { independentDirectoriesUseDistinctOutputs(); return 0; }

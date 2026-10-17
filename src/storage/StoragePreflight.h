@@ -1,6 +1,7 @@
 #pragma once
 #include "ChartResourceInventory.h"
 #include "StorageScanScheduler.h"
+#include "StorageArchive.h"
 
 namespace storage_management {
 struct StorageDirectorySummary {
@@ -18,6 +19,7 @@ struct StoragePreflight {
   InventoryRequest request;
   std::vector<GroupStorageMeasurement> groups;
   std::map<std::filesystem::path, StorageDirectorySummary> directories;
+  std::vector<StorageArchiveSummary> archives;
   std::vector<FileResult> skips;
   std::optional<std::uint64_t> totalBytes;
   std::uint64_t eligibleCount = 0, eligibleBytes = 0, skippedCount = 0;
@@ -28,6 +30,7 @@ struct StoragePreflight {
 };
 StoragePreflight BuildStoragePreflight(const InventoryRequest &, Checkpoint = {},
     StorageScanMetrics * = nullptr, StorageScanDependencies = {});
+void AppendStorageArchivePreflight(StoragePreflight &, Checkpoint);
 std::unique_ptr<StorageDirectoryInventory> LoadStorageDirectory(const StorageDirectorySummary &,
     const InventoryRequest &, Checkpoint, std::string &, StorageDirectoryLimits = {});
 std::optional<AssetCandidate> StorageCandidateForEntry(const StorageDirectoryEntry &,
