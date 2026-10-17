@@ -193,7 +193,8 @@ int main() {
     assert(YGNodeLayoutGetWidth(search.node)>=100 && "search remains usable on 4:3 and narrow landscape screens");
     assert(YGNodeLayoutGetLeft(toolbar.node)+YGNodeLayoutGetWidth(toolbar.node)<=dimensions.first+1);
     if(dimensions.second>dimensions.first) {
-      const float usable=dimensions.second-30-20-(dimensions.first<1000?160:80);
+      // The menu extends through the bottom safe area, including after rotation.
+      const float usable=dimensions.second-30-(dimensions.first<1000?160:80);
       assert(std::abs(dh-(476+34))<1 && std::abs(bh+dh-usable)<1);
       controlsContent.setHeight(400);
       YGNodeCalculateLayout(controlsContent.node,YGUndefined,YGUndefined,YGDirectionLTR);
@@ -227,7 +228,7 @@ int main() {
       assert(YGNodeLayoutGetWidth(library.node)==350 && YGNodeLayoutGetWidth(details.node)==540);
       assert(std::abs(bh-dh)<1);
       assert(dock.children.size()==2 && dock.children[0]==&options && dock.children[1]==&actionSlot);
-      assert(YGNodeLayoutGetTop(dock.node)+YGNodeLayoutGetHeight(dock.node)==dimensions.second-20);
+      assert(YGNodeLayoutGetTop(dock.node)+YGNodeLayoutGetHeight(dock.node)==dimensions.second);
       assert(YGNodeLayoutGetTop(actionSlot.node)+YGNodeLayoutGetHeight(actionSlot.node)==YGNodeLayoutGetHeight(dock.node));
       assert(!controls.visible && chart.best.parent==&chart && options.parent==&dock && actionSlot.parent==&dock && tools.parent==&primary);
       assert(primary.parent==&details && settings.parent==&toolbar);
@@ -279,7 +280,7 @@ int main() {
       assert(YGNodeLayoutGetWidth(options.node)+YGNodeLayoutGetWidth(actionSlot.node)==dimensions.first);
       assert(YGNodeLayoutGetWidth(details.node)<=350);
       assert(primary.parent==&details && actionSlot.parent==&dock && options.parent==&dock);
-      assert(YGNodeLayoutGetTop(dock.node)+YGNodeLayoutGetHeight(dock.node)==dimensions.second-20);
+      assert(YGNodeLayoutGetTop(dock.node)+YGNodeLayoutGetHeight(dock.node)==dimensions.second);
     }
   }
 

@@ -124,9 +124,7 @@ def main():
     methods += "\n" + ingress
     interruption = extract(source, "  void interruptInput(const input::InputInterruption &interruption)")
     methods += "\n" + interruption.replace("  void interruptInput(", "void FixtureRealtimeSession::interruptInput(", 1)
-    # These lifecycle fragments omit control-thread diagnostic logging.
-    reset_boundary = "\n".join(line for line in extract(source, "bool GamePlayScene::reset()").splitlines()
-                               if "startupTrace" not in line)
+    reset_boundary = extract(source, "bool GamePlayScene::reset()")
     reset_boundary = reset_boundary[reset_boundary.index("{") + 1:
                                     reset_boundary.index("  ownedState.reset();")]
     reset_boundary = reset_boundary.replace("#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR", "#if 1", 1)
@@ -173,8 +171,7 @@ def main():
     state_end = fallback_source.index('  capturePlayfieldVisualState(')
     preparation_methods += '\nbool PreparedGamePlayScene::prepareBuiltInFallback() {\n'
     preparation_methods += fallback_source[state_start:state_end] + fallback_body + '\n}\n'
-    reset_source = "\n".join(line for line in extract(source, 'bool GamePlayScene::reset()').splitlines()
-                             if "startupTrace" not in line)
+    reset_source = extract(source, "bool GamePlayScene::reset()")
     reset_start = reset_source.index('  for (const auto &measure : chart->Measures)')
     reset_end = reset_source.index('  context.jukebox.stop();', reset_start)
     preparation_methods += '\nvoid PreparedGamePlayScene::resetNotesForSameAttempt() {\n'

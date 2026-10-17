@@ -51,13 +51,11 @@ class RhythmLaneInputController;
 class RhythmInputHandler;
 class BuiltInPlayfieldPresentation;
 class PlayfieldPresentation;
-namespace perf { class StartupTrace; }
 class GamePlayScene : public Scene, public IRhythmControl {
 public:
   bool locksOrientation() const override { return true; }
 
 private:
-  std::unique_ptr<perf::StartupTrace> startupPresentationTrace;
   std::unique_ptr<bms_parser::Chart> ownedChart;
   bms_parser::Chart *chart = nullptr;
   bool scratchlessAllowed = false;

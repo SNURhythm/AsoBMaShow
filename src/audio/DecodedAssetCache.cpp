@@ -90,28 +90,10 @@ std::string batchAssetIdentity(const DecodedAssetCache::ArchiveBatch &batch,
   return fspath_to_utf8(path) + '|' + batch.identity;
 }
 
-bool copyDecoded(const std::shared_ptr<const DecodedAssetCache::DecodedSound> &sound,
-    std::vector<short> &pcm, SF_INFO &info, const std::atomic_bool &cancel,
-    std::stop_token stop, std::string *error) {
-  if (!sound) return false;
-  try {
-    checkpoint(cancel, stop);
-    if (!sound->pcm.empty()) pcm.assign(sound->pcm.begin(), sound->pcm.end());
-    checkpoint(cancel, stop);
-    info = sound->info;
-    return true;
-  } catch (const std::exception &exception) {
-    pcm.clear(); info = {};
-    if (error) *error = exception.what();
-    return false;
-  }
-}
-
 } // namespace
 
 struct DecodedAssetCache::Impl {
   struct Entry {
-    std::filesystem::path path;
     std::string identity;
     std::timed_mutex decodeMutex;
     std::shared_ptr<const DecodedSound> sound; // Protected by the cache mutex.
@@ -135,6 +117,10 @@ struct DecodedAssetCache::Impl {
 
   std::shared_ptr<const DecodedSound> cached(const std::shared_ptr<Entry> &entry) {
     std::lock_guard lock(mutex);
+    return cachedLocked(entry);
+  }
+
+  std::shared_ptr<const DecodedSound> cachedLocked(const std::shared_ptr<Entry> &entry) {
     if (!entry->sound) return {};
     lru.splice(lru.end(), lru, entry->lru);
     statistics.cacheHitFrames += entry->sound->info.frames;
@@ -162,7 +148,6 @@ struct DecodedAssetCache::Impl {
         if (!current || current->identity != identity) {
           if (current) forget(*current);
           current = std::make_shared<Entry>();
-          current->path = resolved;
           current->identity = identity;
         }
         entry = current;
@@ -227,7 +212,7 @@ struct DecodedAssetCache::Impl {
   }
 };
 
-DecodedAssetCache::DecodedAssetCache(std::filesystem::path, std::size_t maximum)
+DecodedAssetCache::DecodedAssetCache(std::size_t maximum)
     : impl(std::make_shared<Impl>(maximum)) {}
 DecodedAssetCache::~DecodedAssetCache() = default;
 std::shared_ptr<const DecodedAssetCache::DecodedSound> DecodedAssetCache::Load(
@@ -257,32 +242,15 @@ std::shared_ptr<const DecodedAssetCache::DecodedSound> DecodedAssetCache::FindAr
   const auto identity = batchAssetIdentity(batch, resolved);
   std::lock_guard lock(impl->mutex);
   const auto found = impl->entries.find(resolved);
-  if (identity.empty() || found == impl->entries.end() || found->second->identity != identity ||
-      !found->second->sound) return {};
-  auto &entry = *found->second;
-  impl->lru.splice(impl->lru.end(), impl->lru, entry.lru);
-  impl->statistics.cacheHitFrames += entry.sound->info.frames;
-  return entry.sound;
+  if (identity.empty() || found == impl->entries.end() || found->second->identity != identity)
+    return {};
+  return impl->cachedLocked(found->second);
 }
 std::shared_ptr<const DecodedAssetCache::DecodedSound> DecodedAssetCache::LoadArchiveBytes(
     const ArchiveBatch &batch, const std::filesystem::path &path,
     const std::vector<unsigned char> &bytes, const std::atomic_bool &cancel,
     std::stop_token stop, std::string *error, FailureKind *failure) {
   return impl->load(path, &bytes, cancel, stop, error, failure, &batch);
-}
-bool DecodedAssetCache::Materialize(const std::filesystem::path &path,
-    std::vector<short> &pcm, SF_INFO &info, const std::atomic_bool &cancel,
-    std::stop_token stop, std::string *error) {
-  pcm.clear(); info = {};
-  const auto sound = Load(path, cancel, stop, error);
-  return copyDecoded(sound, pcm, info, cancel, stop, error);
-}
-bool DecodedAssetCache::MaterializeBytes(const std::filesystem::path &path,
-    const std::vector<unsigned char> &bytes, std::vector<short> &pcm, SF_INFO &info,
-    const std::atomic_bool &cancel, std::stop_token stop, std::string *error) {
-  pcm.clear(); info = {};
-  const auto sound = LoadBytes(path, bytes, cancel, stop, error);
-  return copyDecoded(sound, pcm, info, cancel, stop, error);
 }
 bool DecodedAssetCache::Contains(const std::filesystem::path &path) const {
   const auto resolved = resolvedPath(path);

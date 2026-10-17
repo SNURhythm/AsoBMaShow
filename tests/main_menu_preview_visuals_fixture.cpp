@@ -22,7 +22,7 @@ namespace bms_parser { struct Chart {}; }
 namespace audio {
 struct DecodedAssetCache {
   static constexpr std::size_t kUnlimitedRetainedBytes = std::numeric_limits<std::size_t>::max();
-  explicit DecodedAssetCache(std::filesystem::path, std::size_t limit) : retainedLimit(limit) {}
+  explicit DecodedAssetCache(std::size_t limit) : retainedLimit(limit) {}
   std::size_t retainedLimit;
   bool cleared = false;
   void Clear() { cleared = true; }

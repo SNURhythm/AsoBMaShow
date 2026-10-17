@@ -59,7 +59,7 @@ void testWholeLoadAndConcurrentReuse(const std::filesystem::path &root) {
   SF_INFO info{};
   std::vector<short> expected;
   require(decodeAudioToPCM(fspath_to_path_t(path), expected, info, cancelled), "legacy decode");
-  audio::DecodedAssetCache cache(root / "no-scratch");
+  audio::DecodedAssetCache cache;
   std::vector<std::future<std::shared_ptr<const audio::DecodedAssetCache::DecodedSound>>> pending;
   for (int i = 0; i < 12; ++i)
     pending.push_back(std::async(std::launch::async, [&] { return cache.Load(path, cancelled); }));
@@ -69,11 +69,10 @@ void testWholeLoadAndConcurrentReuse(const std::filesystem::path &root) {
     require(pending[i].get() == first, "concurrent requests share one immutable buffer");
   require(cache.GetStatistics().decoderOpens == 1 && cache.GetStatistics().liveDecoders == 0,
           "one full decode closes its decoder immediately");
-  std::vector<short> gameplay;
-  require(cache.Materialize(path, gameplay, info, cancelled) && gameplay == expected,
+  const auto gameplay = cache.Load(path, cancelled);
+  require(gameplay == first && gameplay->pcm == expected,
           "gameplay reuses exact native PCM");
   require(cache.GetStatistics().decodedFrames == 12017, "gameplay must not decode again");
-  require(!std::filesystem::exists(root / "no-scratch"), "whole loading creates no scratch files");
 }
 void testCancellationAndInvalidAssets(const std::filesystem::path &root) {
   const auto path = root / "cancel.wav";
@@ -114,7 +113,7 @@ void testEvictionAndIdentity(const std::filesystem::path &root) {
   const auto first = root / "bounded1.wav", second = root / "bounded2.wav";
   writeWav(first, 1, 100); writeWav(second, 1, 100);
   std::atomic_bool cancelled{false};
-  audio::DecodedAssetCache cache({}, 200);
+  audio::DecodedAssetCache cache(200);
   const auto owned = cache.Load(first, cancelled);
   require(bool(owned) && bool(cache.Load(second, cancelled)), "load bounded sounds");
   require(!cache.Contains(first) && cache.Contains(second) && cache.GetStatistics().retainedBytes == 200,
@@ -124,7 +123,7 @@ void testEvictionAndIdentity(const std::filesystem::path &root) {
   require(!cache.Contains(second), "source changes invalidate cache");
   require(cache.Load(second, cancelled)->pcm.size() == 1000 && !cache.Contains(second) &&
               cache.GetStatistics().retainedBytes == 0, "oversized sound loads without retention");
-  audio::DecodedAssetCache unlimited({}, audio::DecodedAssetCache::kUnlimitedRetainedBytes);
+  audio::DecodedAssetCache unlimited(audio::DecodedAssetCache::kUnlimitedRetainedBytes);
   auto old = unlimited.Load(first, cancelled);
   const auto timestamp = std::filesystem::last_write_time(first);
   const auto replacement = root / "replacement.wav";
@@ -151,17 +150,16 @@ void testArchiveBytesAndOwnerLifetime(const std::filesystem::path &root) {
   require(decodeAudioBytesToPCM(fspath_to_path_t(logical), bytes, expected, info, cancelled), "legacy archive decode");
   std::shared_ptr<const audio::DecodedAssetCache::DecodedSound> survivor;
   {
-    audio::DecodedAssetCache cache(root / "unused-scratch");
+    audio::DecodedAssetCache cache;
     survivor = cache.LoadBytes(logical, bytes, cancelled);
     require(survivor && survivor->pcm == expected, "batch bytes decode whole PCM directly");
-    std::vector<short> gameplay;
-    require(cache.Materialize(logical, gameplay, info, cancelled) && gameplay == expected,
+    const auto gameplay = cache.Load(logical, cancelled);
+    require(gameplay == survivor && gameplay->pcm == expected,
             "gameplay reuses batch-seeded native PCM");
     require(cache.GetStatistics().archiveReads == 0 && cache.GetStatistics().decoderOpens == 1,
             "batch reuse neither extracts nor decodes twice");
   }
-  require(survivor->pcm == expected && !std::filesystem::exists(root / "unused-scratch"),
-          "immutable PCM outlives cache without scratch storage");
+  require(survivor->pcm == expected, "immutable PCM outlives cache");
 }
 void testArchiveBatchIdentityAndGameplayReuse(const std::filesystem::path &root) {
   const auto wav = root / "batch-tone.wav", zip = root / "batch.zip";
@@ -176,8 +174,8 @@ void testArchiveBatchIdentityAndGameplayReuse(const std::filesystem::path &root)
   const auto sound = cache.LoadArchiveBytes(*batch, logical, bytes, cancelled);
   require(sound && cache.FindArchiveAsset(*batch, logical) == sound &&
               cache.ArchiveBatchUnchanged(*batch), "batch buffers share one source generation");
-  SF_INFO info{}; std::vector<short> gameplay;
-  require(cache.Materialize(logical, gameplay, info, cancelled) && gameplay == sound->pcm &&
+  const auto gameplay = cache.Load(logical, cancelled);
+  require(gameplay == sound &&
               cache.GetStatistics().decoderOpens == 1,
           "batch identity must match normal gameplay cache lookup");
   const auto foreign = archive_file::makeVirtualPath(root / "different.zip", "sounds/tone.wav");
@@ -234,7 +232,7 @@ void testRejectsExcessiveDecodeBeforeAllocation(const std::filesystem::path &roo
   std::atomic_bool cancelled{false};
   for (const auto retention : {audio::DecodedAssetCache::kDefaultRetainedBytes,
                                audio::DecodedAssetCache::kUnlimitedRetainedBytes}) {
-    audio::DecodedAssetCache cache({}, retention);
+    audio::DecodedAssetCache cache(retention);
     const auto batch = cache.BeginArchiveBatch(zip);
     require(bool(batch), "begin oversized fixture archive batch");
     for (int mode = 0; mode < 4; ++mode) {

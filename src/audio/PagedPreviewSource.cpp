@@ -10,13 +10,11 @@
 #include "ChartAudioRenderer.h"
 #include "DecodedAssetCache.h"
 
-#include <SDL3/SDL_log.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <condition_variable>
 #include <cmath>
-#include <cstdio>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -27,18 +25,6 @@
 
 namespace audio {
 namespace {
-template <typename... Args>
-void logPreparation(const char *format, Args... args) noexcept {
-  try {
-    char message[512];
-    std::snprintf(message, sizeof(message), format, args...);
-    SDL_Log("%s", message);
-    archive_file::appendDebugLogLine(message);
-  } catch (...) {
-    // Diagnostics must not turn a successful preparation into a failure.
-  }
-}
-
 // All ratios here use positive rates <= 1,000,000. Splitting the quotient
 // keeps the fractional multiplication bounded on platforms without int128.
 std::uint64_t scaleFramesBounded(std::uint64_t frames, std::uint64_t numerator,
@@ -218,14 +204,13 @@ struct PagedPreviewSource::Impl {
         std::filesystem::path nextArchive, nextInner;
         const bool nextArchived = archive_file::splitVirtualPath(assets[ordered[end]].path,
                                                                 nextArchive, nextInner);
-        if (nextArchived != archived || (archived && nextArchive != archive)) break;
+        if (nextArchived) break;
         ++end;
       }
       if (!archived) {
         ParallelWorkBatch workers(end - first);
         workers.run(end - first, [&](std::size_t item) { publishAsset(ordered[first + item]); });
       } else {
-        const auto batchStarted = std::chrono::steady_clock::now();
         const auto batch = cache->BeginArchiveBatch(archive);
         if (!batch) throw std::runtime_error("Preview audio archive is unavailable.");
         std::vector<std::filesystem::path> requested;
@@ -242,24 +227,19 @@ struct PagedPreviewSource::Impl {
         std::vector<std::filesystem::path> paths;
         std::map<std::filesystem::path, std::vector<std::size_t>> indices;
         std::map<std::filesystem::path, std::size_t> priorities;
-        std::size_t cached = 0, missing = 0;
         for (auto item = first; item < end; ++item) {
           checkpoint();
           const auto index = ordered[item];
-          if (!resolved[item - first]) { ++missing; publishDecoded(index, {}); continue; }
+          if (!resolved[item - first]) { publishDecoded(index, {}); continue; }
           inner = *resolved[item - first];
           assets[index].path = archive_file::makeVirtualPath(archive, inner);
           if (const auto ready = cache->FindArchiveAsset(*batch, assets[index].path)) {
-            ++cached;
             publishDecoded(index, ready);
             continue;
           }
           if (!indices.contains(inner)) { paths.push_back(inner); priorities.emplace(inner, item); }
           indices[inner].push_back(index);
         }
-        logPreparation("[preview-prepare] archive-ready: setupMs=%.2f assets=%zu cached=%zu missing=%zu read=%zu",
-            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - batchStarted).count(),
-            end - first, cached, missing, paths.size());
         const bool loaded = ConsumeArchiveAssetBatch(archive, paths,
             parallel_worker_count(paths.size()), 64U * 1024U * 1024U,
             [&](archive_file::FileData &&file) {
@@ -354,12 +334,6 @@ struct PagedPreviewSource::Impl {
   }
 
   void run() noexcept {
-    const auto started = std::chrono::steady_clock::now();
-    const auto milliseconds = [](auto duration) {
-      return std::chrono::duration<double, std::milli>(duration).count();
-    };
-    double startupMs = -1.0, scanMs = 0.0;
-    bool complete = false;
     try {
       finalOutput = scaleFrames(timelineFrames44100, outputRate, kPreviewSampleRate, true);
       prepareSchedule();
@@ -416,11 +390,9 @@ struct PagedPreviewSource::Impl {
           finalOutput = std::max(finalOutput, event.outputStart +
               assets[event.asset].sound->pagedOutput->metadata()->frameCount);
         }
-        const auto scanStarted = std::chrono::steady_clock::now();
         const auto audible = skipLeadingSilence
             ? firstAudibleFrame(windowStart, std::min(windowEnd, finalOutput))
             : std::optional<std::uint64_t>{originOutput};
-        scanMs += milliseconds(std::chrono::steady_clock::now() - scanStarted);
         const bool ended = reached == events.size() && windowEnd >= finalOutput;
         if (audible || ended) {
           const auto newOrigin = audible.value_or(std::max(originOutput, finalOutput));
@@ -437,10 +409,6 @@ struct PagedPreviewSource::Impl {
           }
           startupReady.store(true, std::memory_order_release);
           changed.notify_all();
-          startupMs = milliseconds(std::chrono::steady_clock::now() - started);
-          logPreparation("[preview-prepare] startup: %.2f ms assets=%zu events=%zu scanMs=%.2f firstFrame=%llu",
-                          startupMs, assets.size(), events.size(), scanMs,
-                          static_cast<unsigned long long>(state.firstFrame44100));
           break;
         }
         windowStart = windowEnd;
@@ -457,23 +425,12 @@ struct PagedPreviewSource::Impl {
       loader.join();
       checkpoint();
       { std::lock_guard lock(mutex); state.preparationComplete = true; ++state.revision; }
-      complete = true;
       changed.notify_all();
     } catch (const std::exception &error) {
       if (!cancelled.load(std::memory_order_relaxed)) fail(error.what());
     } catch (...) {
       if (!cancelled.load(std::memory_order_relaxed)) fail("Unknown preview preparation error.");
     }
-    const auto elapsed = std::chrono::steady_clock::now() - started;
-    const auto statistics = cache->GetStatistics();
-    logPreparation("[preview-prepare] %s: totalMs=%.2f startupMs=%.2f assets=%zu decoderOpens=%llu individualArchiveReads=%llu "
-            "decodedFrames=%llu cacheHitFrames=%llu",
-            complete ? "complete" : cancelled.load(std::memory_order_relaxed) ? "cancelled" : "failed",
-            milliseconds(elapsed), startupMs, assets.size(),
-            static_cast<unsigned long long>(statistics.decoderOpens),
-            static_cast<unsigned long long>(statistics.archiveReads),
-            static_cast<unsigned long long>(statistics.decodedFrames),
-            static_cast<unsigned long long>(statistics.cacheHitFrames));
   }
 };
 
@@ -484,7 +441,7 @@ std::shared_ptr<PagedPreviewSource> PagedPreviewSource::Create(
     std::uint64_t firstFrame44100, PagedPreviewGains gains) {
   auto value = std::make_unique<Impl>();
   value->cache = decodedAssets ? std::move(decodedAssets) :
-      std::make_shared<DecodedAssetCache>(std::filesystem::path{}, DecodedAssetCache::kUnlimitedRetainedBytes);
+      std::make_shared<DecodedAssetCache>(DecodedAssetCache::kUnlimitedRetainedBytes);
   value->gains = gains;
   value->state.firstFrame44100 = firstFrame44100;
   value->state.positionFrames44100 = firstFrame44100;

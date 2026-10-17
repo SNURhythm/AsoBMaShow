@@ -156,12 +156,10 @@ void testHighlightAndReuse(const std::filesystem::path &root) {
   auto parsed = chart(root, "#00001:01\n#00011:0002\n");
   parsed->ReferencedWavTable.emplace(9, "referenced.wav");
   writeWav(root / "referenced.wav", 44100, std::vector<short>(8193, 1200));
-  auto cache = std::make_shared<audio::DecodedAssetCache>(root / "cache",
+  auto cache = std::make_shared<audio::DecodedAssetCache>(
       audio::DecodedAssetCache::kUnlimitedRetainedBytes);
   std::atomic_bool cancelled{false};
-  std::vector<short> prefix;
-  SF_INFO info{};
-  require(cache->Materialize(root / "first.wav", prefix, info, cancelled),
+  require(bool(cache->Load(root / "first.wav", cancelled)),
           "cannot seed whole gameplay cache");
   auto source = audio::PagedPreviewSource::Create(*parsed, cache, 44100, {0.5f, 0.25f});
   parsed.reset(); // The source must own a synchronous snapshot.
@@ -180,10 +178,8 @@ void testHighlightAndReuse(const std::filesystem::path &root) {
   require(std::abs(samples[48000 * 2] - (8191.0f * 0.45f / 32768.0f)) < 0.00001f,
           "ended keysound must leave only the BGM tail");
   const auto referencedBefore = cache->GetStatistics();
-  std::vector<short> referenced;
-  require(cache->Materialize(root / "referenced.wav", referenced, info, cancelled),
-          "cannot materialize referenced gameplay audio");
-  require(referenced.size() == 8193 &&
+  const auto referenced = cache->Load(root / "referenced.wav", cancelled);
+  require(referenced && referenced->pcm.size() == 8193 &&
               cache->GetStatistics().decodedFrames == referencedBefore.decodedFrames,
           "referenced WAVs must have every native page retained for gameplay");
   const auto before = cache->GetStatistics();
@@ -194,13 +190,7 @@ void testHighlightAndReuse(const std::filesystem::path &root) {
           "fully warmed native PCM must survive preview EOF and reuse");
   require(cache->GetStatistics().cacheHitFrames > before.cacheHitFrames,
           "second preview must consume the native cache");
-  require(!std::filesystem::exists(root / "cache") ||
-          std::filesystem::is_empty(root / "cache"), "preview must not spool mixed PCM");
   next->Cancel();
-  const auto log = archive_file::debugLogText();
-  require(log.find("[preview-prepare] startup:") != std::string::npos &&
-              log.find("[preview-prepare] complete:") != std::string::npos,
-          "preview timings must appear in the in-app performance log");
   require(next->GetState().cancelled, "Cancel must be terminal");
 }
 void testResampling(const std::filesystem::path &root) {
@@ -239,7 +229,7 @@ void testResamplingRejectsOversizedOutputBeforeAllocation(const std::filesystem:
   for (const auto [frames, channels] : {std::pair{60000, 1}, std::pair{1500, 2}}) {
     writeWav(root / "first.wav", 1, std::vector<short>(frames * channels, 8192), channels);
     auto parsed = chart(root, "#00011:01\n");
-    auto cache = std::make_shared<audio::DecodedAssetCache>(root / "cache",
+    auto cache = std::make_shared<audio::DecodedAssetCache>(
         audio::DecodedAssetCache::kUnlimitedRetainedBytes);
     auto source = audio::PagedPreviewSource::Create(*parsed, cache, 0);
     largeAllocationAttempts.store(0);
@@ -292,7 +282,7 @@ void testDownsamplingWarmsEveryNativePage(const std::filesystem::path &root) {
   writeWav(root / "referenced.wav", 192000, std::vector<short>(8193, 4096));
   auto parsed = chart(root, "#00011:01\n");
   parsed->ReferencedWavTable.emplace(9, "referenced.wav");
-  auto cache = std::make_shared<audio::DecodedAssetCache>(root / "cache",
+  auto cache = std::make_shared<audio::DecodedAssetCache>(
       audio::DecodedAssetCache::kUnlimitedRetainedBytes);
   auto source = audio::PagedPreviewSource::Create(*parsed, cache, 0);
   require(source->Begin(44100), "cannot begin downsampling preview");
@@ -300,12 +290,9 @@ void testDownsamplingWarmsEveryNativePage(const std::filesystem::path &root) {
   std::atomic_bool cancelled{false};
   for (const auto *name : {"first.wav", "referenced.wav"}) {
     const auto before = cache->GetStatistics();
-    std::vector<short> native;
-    SF_INFO info{};
-    require(cache->Materialize(root / name, native, info, cancelled),
-            "cannot materialize native gameplay PCM after downsampled preview");
-    require(native.size() == 8193 && info.samplerate == 192000,
-            "gameplay materialization must contain the complete native asset");
+    const auto native = cache->Load(root / name, cancelled);
+    require(native && native->pcm.size() == 8193 && native->info.samplerate == 192000,
+            "gameplay cache lookup must contain the complete native asset");
     require(cache->GetStatistics().decodedFrames == before.decodedFrames,
             "preparationComplete must retain native pages skipped by downsampling for selected and referenced WAVs");
   }
@@ -546,7 +533,7 @@ void testLeadingSilenceIsSkippedWithoutChangingLaterAudio(const std::filesystem:
                                       [](float sample) { return sample != 0.0f; });
       require(first != original.end(), "silence fixture must contain audible audio");
       const auto skipped = static_cast<std::uint64_t>((first - original.begin()) / 2);
-      auto cache = std::make_shared<audio::DecodedAssetCache>(root / "cache",
+      auto cache = std::make_shared<audio::DecodedAssetCache>(
           audio::DecodedAssetCache::kUnlimitedRetainedBytes);
       auto trimmed = audio::PagedPreviewSource::Create(*parsed, cache, start);
       require(trimmed->Begin(rate, true), "cannot start silence-skipping preview");
@@ -563,10 +550,8 @@ void testLeadingSilenceIsSkippedWithoutChangingLaterAudio(const std::filesystem:
               "trimmed preview must preserve every sample from its first audible frame");
       const auto before = cache->GetStatistics();
       std::atomic_bool cancelled{false};
-      std::vector<short> native;
-      SF_INFO info{};
-      require(cache->Materialize(root / "first.wav", native, info, cancelled) &&
-                  native.size() == samples.size() &&
+      const auto native = cache->Load(root / "first.wav", cancelled);
+      require(native && native->pcm.size() == samples.size() &&
                   cache->GetStatistics().decodedFrames == before.decodedFrames,
               "skipping preview silence must retain the full native audio for gameplay");
     }
@@ -777,7 +762,7 @@ void testArchivedPreviewBatchesOpeningFutureAndReferencedAssets(const std::files
   parsed->Meta.Folder = archivePath;
   parsed->ReferencedWavTable.emplace(15, "sound-15.wav");
   parsed->ReferencedWavTable.emplace(16, "sound-16.wav");
-  auto cache = std::make_shared<audio::DecodedAssetCache>(root / "cache",
+  auto cache = std::make_shared<audio::DecodedAssetCache>(
       audio::DecodedAssetCache::kUnlimitedRetainedBytes);
   std::atomic_uint archiveChecks{0};
   archive_file::setCachePathNormalizer([&](const std::filesystem::path &path) {
@@ -833,7 +818,7 @@ void testOverlappingCompressedAssetsDecodeOnce(const std::filesystem::path &root
       const std::string wav{'0', digits[index]};
       body += "#WAV" + wav + " " + name + "\n#00001:" + wav + "\n";
     }
-    auto cache = std::make_shared<audio::DecodedAssetCache>(directory / "cache",
+    auto cache = std::make_shared<audio::DecodedAssetCache>(
         audio::DecodedAssetCache::kUnlimitedRetainedBytes);
     auto source = audio::PagedPreviewSource::Create(*chart(directory, body), cache, 0);
     require(source->Begin(44100), "cannot start overlapping compressed preview");
@@ -846,8 +831,8 @@ void testOverlappingCompressedAssetsDecodeOnce(const std::filesystem::path &root
     require(state.liveDecoders == 0,
             "completed preview preparation must retain no live decoders");
     for (const auto &path : paths) {
-      std::vector<short> actual;
-      require(cache->Materialize(path, actual, info, cancelled) && actual == expected,
+      const auto actual = cache->Load(path, cancelled);
+      require(actual && actual->pcm == expected,
               "retained compressed PCM must match the contiguous decoder exactly");
     }
     const auto actual = renderAll(source);
@@ -875,7 +860,7 @@ void testOverlappingWavAssetsRespectDescriptorCeiling(const std::filesystem::pat
     const std::string wav{digits[index / 36], digits[index % 36]};
     body += "#WAV" + wav + " " + name + "\n#00001:" + wav + "\n";
   }
-  auto cache = std::make_shared<audio::DecodedAssetCache>(root / "cache",
+  auto cache = std::make_shared<audio::DecodedAssetCache>(
       audio::DecodedAssetCache::kUnlimitedRetainedBytes);
   auto source = audio::PagedPreviewSource::Create(*chart(root, body), cache, 0);
   require(source->Begin(44100), "cannot start descriptor-pressure preview");
@@ -888,11 +873,11 @@ void testOverlappingWavAssetsRespectDescriptorCeiling(const std::filesystem::pat
   require(prepared.decodedFrames == std::uint64_t(frames) * count &&
               prepared.retainedBytes == std::size_t(frames) * count * sizeof(short),
           "descriptor-pressure preview must still preload and retain every native PCM frame");
-  std::atomic_bool cancelled{false}; SF_INFO info{};
+  std::atomic_bool cancelled{false};
   const std::vector<short> expected(frames, 1023);
   for (const auto &path : paths) {
-    std::vector<short> pcm;
-    require(cache->Materialize(path, pcm, info, cancelled) && pcm == expected,
+    const auto sound = cache->Load(path, cancelled);
+    require(sound && sound->pcm == expected,
             "descriptor-pressure gameplay must retain exact PCM");
   }
   require(cache->GetStatistics().decoderOpens == prepared.decoderOpens,
@@ -910,7 +895,7 @@ void testPreparationExitClosesDecoders(const std::filesystem::path &root) {
   for (const bool fail : {false, true}) {
     writeWav(root / "first.wav", 44100, std::vector<short>(100, 16384));
     writeWav(root / "second.wav", 44100, std::vector<short>(44100 * 4, 8192));
-    auto cache = std::make_shared<audio::DecodedAssetCache>(root / "cache",
+    auto cache = std::make_shared<audio::DecodedAssetCache>(
         audio::DecodedAssetCache::kUnlimitedRetainedBytes);
     auto source = audio::PagedPreviewSource::Create(*chart(root, "#00011:01\n#00031:02\n"), cache, 0);
     preparationBlocked.store(false);
@@ -957,7 +942,7 @@ void testPreparedRepeatedVoiceDoesNotRetainDecoder(const std::filesystem::path &
       for (const auto *note : timeline->Notes)
         if (note && note->Wav == 1 && timeline->Timing > 0)
           timeline->Timing = 1999000;
-  auto cache = std::make_shared<audio::DecodedAssetCache>(root / "cache",
+  auto cache = std::make_shared<audio::DecodedAssetCache>(
       audio::DecodedAssetCache::kUnlimitedRetainedBytes);
   auto source = audio::PagedPreviewSource::Create(*parsed, cache, 0);
   preparationBlocked.store(false);

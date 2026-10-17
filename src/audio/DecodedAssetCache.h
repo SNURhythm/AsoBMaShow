@@ -60,10 +60,7 @@ public:
     std::size_t liveDecoders = 0;
     std::size_t peakLiveDecoders = 0;
   };
-  // scratchRoot is retained for caller compatibility; whole-buffer loading
-  // creates no scratch directory or extracted-audio files.
-  explicit DecodedAssetCache(std::filesystem::path scratchRoot = {},
-                            std::size_t maximumRetainedBytes = kDefaultRetainedBytes);
+  explicit DecodedAssetCache(std::size_t maximumRetainedBytes = kDefaultRetainedBytes);
   ~DecodedAssetCache();
   DecodedAssetCache(const DecodedAssetCache &) = delete;
   DecodedAssetCache &operator=(const DecodedAssetCache &) = delete;
@@ -88,12 +85,6 @@ public:
       const std::filesystem::path &resolvedPath, const std::vector<unsigned char> &bytes,
       const std::atomic_bool &cancelled, std::stop_token stop = {},
       std::string *error = nullptr, FailureKind *failure = nullptr);
-  bool Materialize(const std::filesystem::path &path, std::vector<short> &pcm,
-      SF_INFO &info, const std::atomic_bool &cancelled,
-      std::stop_token stop = {}, std::string *error = nullptr);
-  bool MaterializeBytes(const std::filesystem::path &path,
-      const std::vector<unsigned char> &bytes, std::vector<short> &pcm, SF_INFO &info,
-      const std::atomic_bool &cancelled, std::stop_token stop = {}, std::string *error = nullptr);
   [[nodiscard]] bool Contains(const std::filesystem::path &path) const;
   // Release cache ownership after handoff; active playback keeps shared PCM.
   void Clear();
