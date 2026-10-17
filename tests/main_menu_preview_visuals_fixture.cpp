@@ -24,6 +24,8 @@ struct DecodedAssetCache {
   static constexpr std::size_t kUnlimitedRetainedBytes = std::numeric_limits<std::size_t>::max();
   explicit DecodedAssetCache(std::filesystem::path, std::size_t limit) : retainedLimit(limit) {}
   std::size_t retainedLimit;
+  bool cleared = false;
+  void Clear() { cleared = true; }
 };
 }
 namespace audio {
@@ -170,9 +172,10 @@ int main() {
     require(audio::PagedPreviewSource::lastGains.bgm == 0.2f &&
                 audio::PagedPreviewSource::lastGains.keysound == 0.3f,
             "master and bus gains must reach the paged source before overlap clipping");
-    require(scene.previewDecodedAssets_ &&
-                scene.previewDecodedAssets_->retainedLimit == audio::DecodedAssetCache::kUnlimitedRetainedBytes,
-            "selected-chart preview must retain all prepared audio for gameplay");
+    require(audio::PagedPreviewSource::lastCache->retainedLimit ==
+                audio::DecodedAssetCache::kUnlimitedRetainedBytes &&
+                audio::PagedPreviewSource::lastCache->cleared && !scene.previewDecodedAssets_,
+            "completed gameplay handoff releases preparation cache ownership");
     const auto &events = scene.context.jukebox.events;
     const auto audio = std::find(events.begin(), events.end(), "audio-start");
     const auto visual = std::find(events.begin(), events.end(), "visual-load");
@@ -182,11 +185,9 @@ int main() {
             "completed preview must prepare gameplay resources before Play");
     scene.willStart = true;
     require(!scene.context.jukebox.cache, "preparation must release its cache attachment");
-    const auto preparedCache = scene.previewDecodedAssets_;
     scene.stopPlayback();
-    require(scene.previewDecodedAssets_ == preparedCache &&
-                audio::PagedPreviewSource::lastCache == preparedCache,
-            "stopping preview must retain its decoded cache for gameplay handoff");
+    require(!scene.previewDecodedAssets_ && audio::PagedPreviewSource::lastCache->cleared,
+            "stopping a fully prepared preview does not retain a redundant decode cache");
     require(scene.context.jukebox.loaded, "Play must retain prepared preview BGA");
 
     scene.context.jukebox.loaded = true; // The subsequent full gameplay load.
@@ -259,6 +260,9 @@ int main() {
     require(cancelledPreparation.selectedChart && !cancelledPreparation.selectedChartMediaReady &&
                 !cancelledPreparation.context.jukebox.loaded && !cancelledPreparation.context.jukebox.cache,
             "Play during audio preparation keeps the chart but never publishes partial media as ready");
+    require(cancelledPreparation.previewDecodedAssets_ &&
+                !cancelledPreparation.previewDecodedAssets_->cleared,
+            "Play cancelling gameplay preparation must retain decoded PCM for foreground completion");
     cancelled = false;
 
     Scene publicationRace;

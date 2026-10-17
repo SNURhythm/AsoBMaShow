@@ -26,6 +26,8 @@ namespace {
 thread_local bool forbidAllocation = false;
 thread_local bool bypassPreparationGate = false;
 thread_local std::atomic_bool *cancelResamplingOnAllocation = nullptr;
+thread_local audio::DecodedAssetCache *clearCacheOnPcmAllocation = nullptr;
+thread_local std::size_t clearCacheAllocationBytes = 0;
 std::atomic_bool preparationGate{false};
 std::atomic_bool preparationBlocked{false};
 std::atomic_uint blockedPreparations{0};
@@ -34,6 +36,11 @@ std::atomic_uint largeAllocationAttempts{0};
 }
 void *operator new(std::size_t bytes) {
   if (forbidAllocation) throw std::bad_alloc();
+  if (clearCacheOnPcmAllocation && bytes == clearCacheAllocationBytes) {
+    auto *cache = clearCacheOnPcmAllocation;
+    clearCacheOnPcmAllocation = nullptr;
+    cache->Clear();
+  }
   if (cancelResamplingOnAllocation) {
     cancelResamplingOnAllocation->store(true);
     cancelResamplingOnAllocation = nullptr;
@@ -42,7 +49,7 @@ void *operator new(std::size_t bytes) {
     ++largeAllocationAttempts;
     throw std::bad_alloc();
   }
-  // Pause the real worker's first large unused-asset read. The short scheduled
+  // Pause the real worker's first large hidden-keysound read. The short scheduled
   // sound fits below this threshold, so startup must publish before this gate.
   if (!bypassPreparationGate && bytes >= 16384 && preparationGate.load()) {
     preparationBlocked.store(true);
@@ -107,6 +114,41 @@ std::vector<float> renderAll(const std::shared_ptr<audio::PagedPreviewSource> &s
     samples.insert(samples.end(), block.begin(), block.begin() + rendered.frames * 2);
   }
 }
+void testCacheClearDuringDecode(const std::filesystem::path &root) {
+  constexpr std::size_t frames = 10000;
+  const auto path = root / "cleared.wav";
+  writeWav(path, 44100, std::vector<short>(frames, 1000));
+  audio::DecodedAssetCache cache;
+  std::atomic_bool cancelled{false};
+  // Clear after admission, when the real decoder allocates its PCM. Completion
+  // must return valid audio without republishing an entry from before Clear.
+  clearCacheAllocationBytes = frames * sizeof(short);
+  clearCacheOnPcmAllocation = &cache;
+  const auto sound = cache.Load(path, cancelled);
+  const bool cleared = clearCacheOnPcmAllocation == nullptr;
+  clearCacheOnPcmAllocation = nullptr;
+  require(cleared && sound && sound->pcm.size() == frames, "clear during real PCM decoding");
+  require(!cache.Contains(path) && cache.GetStatistics().retainedBytes == 0,
+          "completion after Clear must not publish a stale or null cache entry");
+  require(bool(cache.Load(path, cancelled)) && cache.Contains(path),
+          "a fresh load after Clear may populate the cache normally");
+}
+
+void testUnusedDefinitionsAreNotPrepared(const std::filesystem::path &root) {
+  writeWav(root / "first.wav", 44100, std::vector<short>(100, 1000));
+  writeWav(root / "second.wav", 44100, std::vector<short>(44100, 2000));
+  writeWav(root / "hidden.wav", 44100, std::vector<short>(200, 3000));
+  auto parsed = chart(root, "#WAV03 hidden.wav\n#00011:01\n#00031:03\n");
+  auto cache = std::make_shared<audio::DecodedAssetCache>();
+  auto source = audio::PagedPreviewSource::Create(*parsed, cache, 0);
+  require(source->Begin(44100), "begin required-assets preview");
+  waitPrepared(source);
+  require(cache->Contains(root / "first.wav") && cache->Contains(root / "hidden.wav"),
+          "scheduled and hidden gameplay keysounds must be prepared");
+  require(!cache->Contains(root / "second.wav") && cache->GetStatistics().decoderOpens == 2,
+          "unused WAV definitions must not be decoded or retained");
+}
+
 void testHighlightAndReuse(const std::filesystem::path &root) {
   // At one second, the BGM tail (8192) overlaps a key sound (4096).
   writeWav(root / "first.wav", 22050, std::vector<short>(22050 * 3, 8192));
@@ -166,17 +208,29 @@ void testResampling(const std::filesystem::path &root) {
   for (std::size_t i = 0; i < native.size(); ++i) native[i] = short(int((i * 137) % 30000) - 15000);
   writeWav(root / "first.wav", 32000, native, 2);
   for (int outputRate : {44100, 48000}) {
-    auto source = audio::PagedPreviewSource::Create(*chart(root, "#00011:01\n"), {}, 0);
+    auto cache = std::make_shared<audio::DecodedAssetCache>();
+    auto source = audio::PagedPreviewSource::Create(*chart(root, "#00011:01\n"), cache, 0);
     require(source->Begin(outputRate), "cannot start resampling preview");
     waitPrepared(source);
     const auto actual = renderAll(source);
     auto decoded = native;
     for (auto &value : decoded) value = static_cast<short>(int(value) * 32767 / 32768);
     const auto expected = audio::ResamplePcm(decoded, 2, 32000, outputRate);
+    std::atomic_bool cancelled{false};
+    const auto cached = cache->Load(root / "first.wav", cancelled);
+    auto prepared = cached->FindPreparedOutput(outputRate);
+    require(prepared == expected,
+            "preview must expose its exact output buffer for gameplay reuse");
+    std::weak_ptr<const std::vector<short>> outputOwner = prepared.storage();
+    prepared = {};
     require(actual.size() >= expected.size(), "duration must contain all resampled PCM");
     for (std::size_t i = 0; i < expected.size(); ++i)
       require(std::abs(actual[i] - expected[i] * (0.9f / 32768.0f)) < 0.000001f,
               "paged resampling differs at a seek/page/interpolation endpoint");
+    require(!outputOwner.expired(), "preview retains the published output buffer");
+    source.reset();
+    require(outputOwner.expired() && cached->FindPreparedOutput(outputRate).empty(),
+            "the native cache must not retain abandoned converted buffers");
   }
 }
 void testResamplingRejectsOversizedOutputBeforeAllocation(const std::filesystem::path &root) {
@@ -305,7 +359,7 @@ void testFractionalTiming(const std::filesystem::path &root) {
 void testProgressiveStartup(const std::filesystem::path &root) {
   writeWav(root / "first.wav", 44100, std::vector<short>(100, 16384));
   writeWav(root / "second.wav", 44100, std::vector<short>(44100 * 4, 8192));
-  auto source = audio::PagedPreviewSource::Create(*chart(root, "#00011:01\n"), {}, 0);
+  auto source = audio::PagedPreviewSource::Create(*chart(root, "#00011:01\n#00031:02\n"), {}, 0);
   preparationBlocked.store(false);
   preparationGate.store(true);
   require(source->Begin(44100, true), "cannot begin progressive preview");
@@ -315,9 +369,9 @@ void testProgressiveStartup(const std::filesystem::path &root) {
     std::this_thread::yield();
   const auto state = source->GetState();
   preparationGate.store(false); // Always release before an assertion can unwind.
-  require(preparationBlocked.load(), "unused asset warming did not reach the allocation gate");
+  require(preparationBlocked.load(), "hidden keysound warming did not reach the allocation gate");
   require(state.startupReady && !state.preparationComplete,
-          "startup must precede full preparation of unused assets");
+          "startup must precede full preparation of hidden keysounds");
   std::vector<float> block(64 * 2);
   require(source->Render(block, 64).status == audio::PagedPreviewRenderStatus::Data,
           "startup PCM must be playable before full preparation");
@@ -337,7 +391,7 @@ void testContinuousQueueAndEarlyEnd(const std::filesystem::path &root) {
              std::vector<short>(blockOpening ? 44100 * 4 : 100, 16384));
     writeWav(root / "second.wav", 44100,
              std::vector<short>(blockOpening ? 100 : 44100 * 4, 8192));
-    auto parsed = chart(root, "#00011:01\n");
+    auto parsed = chart(root, "#00011:01\n#00031:02\n");
     parsed->Meta.TotalLength = 0;
     parsed->Meta.PlayLength = 0;
     auto cache = std::make_shared<audio::DecodedAssetCache>();
@@ -361,8 +415,8 @@ void testContinuousQueueAndEarlyEnd(const std::filesystem::path &root) {
     }
     preparationGate = false;
     waitPrepared(source);
-    require(correct, blockOpening ? "unused keysounds keep loading while opening sound is blocked" :
-                                  "preview ends at true duration while unused loading remains blocked");
+    require(correct, blockOpening ? "hidden keysounds keep loading while opening sound is blocked" :
+                                  "preview ends at true duration while hidden keysound loading remains blocked");
   }
 }
 
@@ -375,6 +429,7 @@ void testAppearanceOrderPrecedesWavTableOrder(const std::filesystem::path &root)
     const auto name = "unused-" + std::to_string(index) + ".wav";
     std::filesystem::copy_file(root / "large.wav", root / name);
     parsed->WavTable[index] = name;
+    parsed->ReferencedWavTable[index] = name;
   }
   auto source = audio::PagedPreviewSource::Create(*parsed, {}, 0);
   preparationBlocked = false;
@@ -394,7 +449,7 @@ void testIndependentAssetsPrepareConcurrently(const std::filesystem::path &root)
   if (parallel_worker_count(2) < 2) return;
   writeWav(root / "first.wav", 44100, std::vector<short>(44100, 1200));
   writeWav(root / "second.wav", 44100, std::vector<short>(44100, 2400));
-  for (const auto &body : {"#00101:01\n#00101:02\n", "#00101:00\n"}) {
+  for (const auto &body : {"#00101:01\n#00101:02\n", "#00031:0102\n"}) {
     auto parsed = chart(root, body);
     auto source = audio::PagedPreviewSource::Create(*parsed, {}, 0);
     preparationGate = true;
@@ -408,7 +463,7 @@ void testIndependentAssetsPrepareConcurrently(const std::filesystem::path &root)
     waitPrepared(source);
     source->Cancel();
     require(concurrent,
-            "scheduled and unused assets must decode concurrently, even when one decode stalls");
+            "scheduled and hidden keysounds must decode concurrently, even when one decode stalls");
   }
 }
 
@@ -645,6 +700,7 @@ void testArchiveEntryLimitsBeforeExtraction(const std::filesystem::path &root) {
     for (int index = 1; index <= count; ++index) {
       const auto name = "sound-" + std::to_string(index) + ".wav";
       parsed->WavTable.emplace(index, name);
+      parsed->ReferencedWavTable.emplace(index, name);
       const auto bytes = index == 1 ? std::size_t(megabytes) * 1024 * 1024 : tone.size();
       UniqueResource<archive_entry, archive_entry_free> entry(archive_entry_new());
       archive_entry_set_pathname(entry.get(), name.c_str());
@@ -856,7 +912,7 @@ void testPreparationExitClosesDecoders(const std::filesystem::path &root) {
     writeWav(root / "second.wav", 44100, std::vector<short>(44100 * 4, 8192));
     auto cache = std::make_shared<audio::DecodedAssetCache>(root / "cache",
         audio::DecodedAssetCache::kUnlimitedRetainedBytes);
-    auto source = audio::PagedPreviewSource::Create(*chart(root, "#00011:01\n"), cache, 0);
+    auto source = audio::PagedPreviewSource::Create(*chart(root, "#00011:01\n#00031:02\n"), cache, 0);
     preparationBlocked.store(false);
     preparationGate.store(true);
     require(source->Begin(44100, true), "cannot begin decoder cleanup preview");
@@ -931,6 +987,8 @@ int main() {
       ("asobmashow-paged-source-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
   try {
     for (const char *name : {"highlight", "resampling", "missing", "progressive", "timing", "downsampling", "preflight", "archive", "overlap", "pressure", "pin-exit", "repeated-pin", "parallel", "trim", "silent", "mixed-trim", "dense-trim"}) std::filesystem::create_directories(root / name);
+    testCacheClearDuringDecode(root / "highlight");
+    testUnusedDefinitionsAreNotPrepared(root / "highlight");
     testLeadingSilenceIsSkippedWithoutChangingLaterAudio(root / "trim");
     testSparseLeadingSilenceSkipsEmptyTime(root / "silent");
     testEntirelySilentPreviewReachesEnd(root / "silent");

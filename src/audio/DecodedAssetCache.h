@@ -1,11 +1,14 @@
 #pragma once
 
+#include "SharedPcmBuffer.h"
+
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <sndfile.h>
 #include <stop_token>
@@ -21,7 +24,25 @@ class DecodedAssetCache {
 public:
   struct DecodedSound {
     SF_INFO info{};
-    std::vector<short> pcm;
+    SharedPcmBuffer pcm;
+
+    // Reuse the preview's conversion while its playback owner is alive. The
+    // cache itself retains only native PCM, not additional output-rate buffers.
+    [[nodiscard]] SharedPcmBuffer FindPreparedOutput(int sampleRate) const {
+      if (sampleRate == info.samplerate) return pcm;
+      std::lock_guard lock(outputMutex_);
+      return sampleRate == outputRate_ ? SharedPcmBuffer(output_.lock()) : SharedPcmBuffer{};
+    }
+    void RememberPreparedOutput(int sampleRate, const SharedPcmBuffer &output) const {
+      std::lock_guard lock(outputMutex_);
+      outputRate_ = sampleRate;
+      output_ = output.storage();
+    }
+
+  private:
+    mutable std::mutex outputMutex_;
+    mutable int outputRate_ = 0;
+    mutable std::weak_ptr<const std::vector<short>> output_;
   };
   static constexpr std::size_t kDefaultRetainedBytes = 64U * 1024U * 1024U;
   static constexpr std::size_t kUnlimitedRetainedBytes = std::numeric_limits<std::size_t>::max();
@@ -74,6 +95,8 @@ public:
       const std::vector<unsigned char> &bytes, std::vector<short> &pcm, SF_INFO &info,
       const std::atomic_bool &cancelled, std::stop_token stop = {}, std::string *error = nullptr);
   [[nodiscard]] bool Contains(const std::filesystem::path &path) const;
+  // Release cache ownership after handoff; active playback keeps shared PCM.
+  void Clear();
   [[nodiscard]] Statistics GetStatistics() const;
 private:
   std::shared_ptr<Impl> impl;

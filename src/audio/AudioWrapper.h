@@ -1,6 +1,7 @@
 #pragma once
 
 #include "AudioMix.h"
+#include "DecodedAssetCache.h"
 #include "AudioDeviceManager.h"
 #include "../settings/AudioVideoSettings.h"
 
@@ -165,8 +166,6 @@ private:
 
 } // namespace audio
 
-namespace audio { class DecodedAssetCache; }
-
 class AudioWrapper : public audio::IAudioRuntime {
 public:
   AudioWrapper(Stopwatch *stopwatch);
@@ -176,7 +175,7 @@ public:
       Stopwatch *stopwatch,
       std::unique_ptr<audio::playback::IBackendLifecycle> injectedBackend);
   ~AudioWrapper();
-  // Loader-only reuse of the active preview session's native-rate PCM pages.
+  // Loader-only reuse of the active preview session's immutable PCM buffers.
   void setDecodedAssetCache(std::shared_ptr<audio::DecodedAssetCache> cache);
   [[nodiscard]] bool hasCachedDecodedAsset(const path_t &path) const;
   bool loadSound(const path_t &path, std::atomic<bool> &isCancelled);
@@ -312,9 +311,10 @@ private:
   UserData userData;
   Stopwatch *stopwatch;
 
-  bool loadDecodedSound(const path_t &path, std::vector<short> pcmData,
+  bool loadDecodedSound(const path_t &path, audio::SharedPcmBuffer pcmData,
                         int channels, int sampleRate,
-                        std::atomic<bool> &isCancelled);
+                        std::atomic<bool> &isCancelled,
+                        const audio::DecodedAssetCache::DecodedSound *prepared = nullptr);
   void cleanupRetiredSkinSoundsLocked() noexcept;
   bool retireSkinSound(audio::SkinSoundHandle handle) noexcept;
   void initializeUserData();

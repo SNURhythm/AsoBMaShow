@@ -159,9 +159,13 @@ struct PagedPreviewSource::Impl {
       if (!outputSamples ||
           *outputSamples > DecodedAssetCache::kMaximumPcmAssetBytes / sizeof(short))
         throw std::runtime_error("Preview resampled audio exceeds the per-asset byte limit.");
-      auto output = ResamplePcm(native->pcm, native->info.channels,
-                                native->info.samplerate, outputRate, &cancelled);
+      auto output = native->FindPreparedOutput(outputRate);
+      if (output.empty() && !native->pcm.empty()) {
+        output = ResamplePcm(native->pcm, native->info.channels,
+                             native->info.samplerate, outputRate, &cancelled);
+      }
       checkpoint();
+      native->RememberPreparedOutput(outputRate, output);
       if ((!native->pcm.empty() && output.empty()) ||
           !outputSound.publishFull(native->info.channels, std::move(output)))
         throw std::runtime_error("Could not publish preview audio.");
@@ -184,7 +188,7 @@ struct PagedPreviewSource::Impl {
   }
 
   void loadAll() {
-    // One continuous whole-asset queue: event order first, unused variants last.
+    // One whole-asset queue: audible events first, other gameplay references last.
     std::vector<std::size_t> ordered;
     std::vector<bool> seen(assets.size());
     for (const auto &event : events)
@@ -496,7 +500,8 @@ std::shared_ptr<PagedPreviewSource> PagedPreviewSource::Create(
     if (added) value->assets.push_back({.path = std::move(path), .sound = {}});
     return it->second;
   };
-  for (const auto &[wav, name] : chart.WavTable) assetsByWav.emplace(wav, snapshotAsset(name));
+  // Definitions alone do not require decoding. Preserve non-audible gameplay
+  // references (including hidden notes), as well as every scheduled event.
   for (const auto &[wav, name] : chart.ReferencedWavTable) {
     (void)wav;
     snapshotAsset(name);
@@ -508,7 +513,11 @@ std::shared_ptr<PagedPreviewSource> PagedPreviewSource::Create(
         bgm->timeMicros == event.timeMicros && bgm->wav == event.wav;
     if (isBackground) ++bgm;
     auto asset = assetsByWav.find(event.wav);
-    if (asset == assetsByWav.end()) continue;
+    if (asset == assetsByWav.end()) {
+      const auto defined = chart.WavTable.find(event.wav);
+      if (defined == chart.WavTable.end()) continue;
+      asset = assetsByWav.emplace(event.wav, snapshotAsset(defined->second)).first;
+    }
     value->events.push_back({event.timeMicros, asset->second, isBackground ? Bus::Bgm : Bus::Keysound});
   }
   return std::shared_ptr<PagedPreviewSource>(new PagedPreviewSource(std::move(value)));

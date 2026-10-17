@@ -950,12 +950,14 @@ bool AudioWrapper::loadSound(const path_t &path,
     }
   }
 
+  if (cache) {
+    const auto sound = cache->Load(std::filesystem::path(path), isCancelled);
+    return sound && loadDecodedSound(path, sound->pcm, sound->info.channels,
+                                     sound->info.samplerate, isCancelled, sound.get());
+  }
   std::vector<short> pcmData;
   SF_INFO sfInfo;
-  bool result = cache
-                    ? cache->Materialize(std::filesystem::path(path), pcmData,
-                                         sfInfo, isCancelled)
-                    : decodeAudioToPCM(path, pcmData, sfInfo, isCancelled);
+  const bool result = decodeAudioToPCM(path, pcmData, sfInfo, isCancelled);
   if (!result) {
     SDL_Log("Failed to decode audio file %s", path_t_to_utf8(path).c_str());
     return false;
@@ -976,13 +978,14 @@ bool AudioWrapper::loadSoundFromMemory(const path_t &path,
     }
   }
 
+  if (cache) {
+    const auto sound = cache->LoadBytes(std::filesystem::path(path), bytes, isCancelled);
+    return sound && loadDecodedSound(path, sound->pcm, sound->info.channels,
+                                     sound->info.samplerate, isCancelled, sound.get());
+  }
   std::vector<short> pcmData;
   SF_INFO sfInfo;
-  bool result = cache
-                    ? cache->MaterializeBytes(std::filesystem::path(path), bytes,
-                                              pcmData, sfInfo, isCancelled)
-                    : decodeAudioBytesToPCM(path, bytes, pcmData, sfInfo,
-                                            isCancelled);
+  const bool result = decodeAudioBytesToPCM(path, bytes, pcmData, sfInfo, isCancelled);
   if (!result) {
     SDL_Log("Failed to decode audio file %s", path_t_to_utf8(path).c_str());
     return false;
@@ -1007,9 +1010,10 @@ bool AudioWrapper::loadGeneratedSound(const path_t &path,
 }
 
 bool AudioWrapper::loadDecodedSound(const path_t &path,
-                                    std::vector<short> pcmData, int channels,
+                                    audio::SharedPcmBuffer pcmData, int channels,
                                     int sampleRate,
-                                    std::atomic<bool> &isCancelled) {
+                                    std::atomic<bool> &isCancelled,
+                                    const audio::DecodedAssetCache::DecodedSound *prepared) {
   if (isCancelled) {
     return false;
   }
@@ -1045,12 +1049,17 @@ bool AudioWrapper::loadDecodedSound(const path_t &path,
                    "Target sample rate: %d, File sample rate: %d",
                    targetSampleRate, sampleRate);
 
-    soundData->outputData = audio::ResamplePcm(soundData->sourceData, channels,
-                                               sampleRate, targetSampleRate, &isCancelled);
+    soundData->outputData = sampleRate == targetSampleRate ? soundData->sourceData :
+        prepared ? prepared->FindPreparedOutput(targetSampleRate) : audio::SharedPcmBuffer{};
+    if (soundData->outputData.empty() && !soundData->sourceData.empty()) {
+      soundData->outputData = audio::ResamplePcm(soundData->sourceData, channels,
+                                                 sampleRate, targetSampleRate, &isCancelled);
+    }
     if ((!soundData->sourceData.empty() && soundData->outputData.empty()) ||
         isCancelled) {
       return false;
     }
+    if (prepared) prepared->RememberPreparedOutput(targetSampleRate, soundData->outputData);
     soundData->outputFrameCount =
         soundData->outputData.size() / static_cast<size_t>(channels);
 

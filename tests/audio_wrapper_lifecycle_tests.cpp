@@ -82,16 +82,15 @@ void operator delete(void *memory, std::size_t) noexcept { std::free(memory); }
 bool audio::DecodedAssetCache::Contains(const std::filesystem::path &) const {
   return false;
 }
-bool audio::DecodedAssetCache::Materialize(
-    const std::filesystem::path &, std::vector<short> &, SF_INFO &,
-    const std::atomic_bool &, std::stop_token, std::string *) {
-  return false;
+std::shared_ptr<const audio::DecodedAssetCache::DecodedSound> audio::DecodedAssetCache::Load(
+    const std::filesystem::path &, const std::atomic_bool &, std::stop_token,
+    std::string *, FailureKind *) {
+  return {};
 }
-bool audio::DecodedAssetCache::MaterializeBytes(
+std::shared_ptr<const audio::DecodedAssetCache::DecodedSound> audio::DecodedAssetCache::LoadBytes(
     const std::filesystem::path &, const std::vector<unsigned char> &,
-    std::vector<short> &, SF_INFO &, const std::atomic_bool &,
-    std::stop_token, std::string *) {
-  return false;
+    const std::atomic_bool &, std::stop_token, std::string *, FailureKind *) {
+  return {};
 }
 
 bool decodeAudioToPCM(const path_t &, std::vector<short> &, SF_INFO &,

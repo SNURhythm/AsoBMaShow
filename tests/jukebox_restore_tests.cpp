@@ -1,6 +1,7 @@
 #include "ArchiveFile.h"
 #include "audio/AudioDeviceManager.h"
 #include "audio/Jukebox.h"
+#include "audio/DecodedAssetCache.h"
 #include "rendering/UniformCache.h"
 #include "support/AllocationFailure.h"
 
@@ -550,6 +551,70 @@ void testArchivedChartLoadsAudioAboveSchedulingBudget(bool sevenZip,
     const auto sound = jukebox.resolveRealtimeKeySound(id);
     require(sound && sound->valid(),
             "audio above the scheduling budget decodes to a playable sound");
+  }
+}
+
+void testGameplaySharesPreparedPcm() {
+  for (const bool archived : {false, true}) {
+    for (const std::uint32_t rate : {44100U, 48000U}) {
+      TemporaryArchivedVisualFixture fixture;
+      const auto bytes = shortWave(44100, 1000);
+      const auto path = archived ? fixture.archivePath / "song/shared.wav" :
+                                   fixture.directory / "shared.wav";
+      if (archived) writeChartArchive(fixture.archivePath, {{"song/shared.wav", bytes}});
+      else { std::ofstream file(path, std::ios::binary); file << bytes; }
+      auto cache = std::make_shared<audio::DecodedAssetCache>();
+      std::atomic_bool cancelled{false};
+      auto native = cache->Load(path, cancelled);
+      require(bool(native), "preview prepared native PCM");
+      audio::SharedPcmBuffer prepared = rate == native->info.samplerate ? native->pcm :
+          audio::SharedPcmBuffer(audio::ResamplePcm(native->pcm, native->info.channels,
+                                                   native->info.samplerate, rate));
+      native->RememberPreparedOutput(rate, prepared);
+      std::weak_ptr<const std::vector<short>> nativeStorage = native->pcm.storage();
+      std::weak_ptr<const std::vector<short>> outputStorage = prepared.storage();
+      Stopwatch stopwatch;
+      auto control = std::make_shared<BackendControl>();
+      AudioWrapper wrapper(&stopwatch, std::make_unique<TestFactory>(control));
+      std::string error;
+      require(wrapper.stopSounds().success, "suspend playback before selecting its output rate");
+      require(wrapper.restart({.deviceId = rate == 44100 ? "default" : "usb",
+                               .sampleRate = rate, .bufferFrames = rate == 44100 ? 128U : 64U}, error),
+              "select gameplay output rate");
+      wrapper.setDecodedAssetCache(cache);
+      const auto opens = cache->GetStatistics().decoderOpens;
+      const bool loaded = archived
+          ? wrapper.loadSoundFromMemory(fspath_to_path_t(path),
+                                         {bytes.begin(), bytes.end()}, cancelled)
+          : wrapper.loadSound(fspath_to_path_t(path), cancelled);
+      require(loaded && cache->GetStatistics().decoderOpens == opens,
+              "gameplay reuses prepared loose and archive decodes");
+      require(wrapper.playSound(fspath_to_path_t(path), audio::Bus::System), "play shared sound");
+      std::array<std::int16_t, 128> output{};
+      control->renderCallback(output.data(), 64, 2, control->renderUserData);
+      const auto &state = *static_cast<UserData *>(control->renderUserData)->callbackState;
+      require(state.playingSoundCount == 1, "shared sound reaches the callback");
+      const auto *sound = state.playingSounds[0].soundData;
+      require(sound->sourceData.data() == native->pcm.data(),
+              "gameplay must share preview native PCM without materializing a copy");
+      require(sound->outputData.data() == prepared.data(),
+              "gameplay must share the prepared output at both native and converted rates");
+      wrapper.setDecodedAssetCache(nullptr);
+      cache->Clear();
+      require(cache->GetStatistics().retainedBytes == 0 && !cache->Contains(path),
+              "handoff releases cache ownership");
+      cache.reset();
+      native.reset();
+      prepared = {};
+      require(!nativeStorage.expired() && !outputStorage.expired(),
+              "gameplay retains PCM after all preparation owners are released");
+      control->renderCallback(output.data(), 64, 2, control->renderUserData);
+      require(std::any_of(output.begin(), output.end(), [](auto sample) { return sample > 0; }),
+              "gameplay PCM stays playable after preparation cache release");
+      require(wrapper.unloadSounds().success, "drain and release shared gameplay audio");
+      require(nativeStorage.expired() && outputStorage.expired(),
+              "retiring the last playback owner frees shared PCM");
+    }
   }
 }
 
@@ -1173,6 +1238,7 @@ int main(int argc, char **argv) {
   require(bgfx::init(init), "headless bgfx initializes for image resources");
 
   try {
+    testGameplaySharesPreparedPcm();
     testPreviewGameplayPreparationRetainsVisuals();
     testUnicodeChartAssetReferences();
     if (argc == 2 && std::string_view(argv[1]) == "--unicode-assets") {

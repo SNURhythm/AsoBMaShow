@@ -478,9 +478,10 @@ PrepareOutputRateTransition(std::span<SoundData *const> sounds,
       return std::nullopt;
     }
 
-    auto outputData =
-        ResamplePcm(soundData->sourceData, soundData->channels,
-                    soundData->sourceSampleRate, targetSampleRate);
+    SharedPcmBuffer outputData = targetSampleRate == soundData->sourceSampleRate
+        ? soundData->sourceData
+        : SharedPcmBuffer(ResamplePcm(soundData->sourceData, soundData->channels,
+                                      soundData->sourceSampleRate, targetSampleRate));
     if (!soundData->sourceData.empty() && outputData.empty()) {
       return std::nullopt;
     }

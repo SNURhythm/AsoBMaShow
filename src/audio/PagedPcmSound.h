@@ -1,5 +1,7 @@
 #pragma once
 
+#include "SharedPcmBuffer.h"
+
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
@@ -44,7 +46,7 @@ public:
 
     std::unique_ptr<std::atomic<const short *>[]> pages_;
     std::vector<std::unique_ptr<short[]>> owners_;
-    std::vector<short> completeBuffer_;
+    SharedPcmBuffer completeBuffer_;
   };
 
   PagedPcmSound() = default;
@@ -71,7 +73,7 @@ public:
   }
 
   // Publish a whole keysound with one allocation owner and no per-page copies.
-  bool publishFull(int channels, std::vector<short> samples) {
+  bool publishFull(int channels, SharedPcmBuffer samples) {
     if (owner_ || channels <= 0 || samples.size() % channels != 0 ||
         samples.size() / channels > UINT32_MAX) return false;
     auto ready = std::unique_ptr<Metadata>(new Metadata(channels, samples.size() / channels));

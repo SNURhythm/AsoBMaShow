@@ -1787,6 +1787,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
                 } else {
                   std::lock_guard selectedLock(selectedChartMutex);
                   if (!isCancelled() && selectedChart == chart) {
+                    // Playback owns the shared samples; release the preparation
+                    // index only after a complete, uncancelled handoff.
+                    previewDecodedAssets_->Clear();
+                    previewDecodedAssets_.reset();
                     selectedChartMediaReady.store(true);
                   }
                 }

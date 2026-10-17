@@ -96,7 +96,7 @@ bool copyDecoded(const std::shared_ptr<const DecodedAssetCache::DecodedSound> &s
   if (!sound) return false;
   try {
     checkpoint(cancel, stop);
-    pcm = sound->pcm;
+    if (!sound->pcm.empty()) pcm.assign(sound->pcm.begin(), sound->pcm.end());
     checkpoint(cancel, stop);
     info = sound->info;
     return true;
@@ -189,20 +189,23 @@ struct DecodedAssetCache::Impl {
       constexpr AudioDecodeLimits limits{
           .maximumEncodedBytes = kMaximumEncodedAssetBytes,
           .maximumPcmSamples = kMaximumPcmAssetBytes / sizeof(short)};
+      std::vector<short> pcm;
       const bool decoded = encoded
           ? decodeAudioBytesToPCMBounded(fspath_to_path_t(resolved), *encoded,
-                sound->pcm, sound->info, decodeCancelled, limits.maximumPcmSamples)
-          : decodeAudioToPCMBounded(fspath_to_path_t(resolved), sound->pcm,
+                pcm, sound->info, decodeCancelled, limits.maximumPcmSamples)
+          : decodeAudioToPCMBounded(fspath_to_path_t(resolved), pcm,
                                     sound->info, decodeCancelled, limits, stop);
       checkpoint(cancel, stop);
       if (!batch && sourceIdentity(resolved) != identity)
         throw std::runtime_error("Audio source changed during preparation.");
       if (!decoded || sound->info.samplerate <= 0) throw CacheFailure(FailureKind::InvalidAsset, "Could not decode audio source.");
+      sound->pcm = std::move(pcm);
       const auto bytes = sound->pcm.size() * sizeof(short);
       {
         std::lock_guard lock(mutex);
         statistics.decodedFrames += sound->info.frames;
-        if (entries[resolved] == entry && bytes <= maximumBytes) {
+        const auto current = entries.find(resolved);
+        if (current != entries.end() && current->second == entry && bytes <= maximumBytes) {
           while (statistics.retainedBytes > maximumBytes - bytes && !lru.empty())
             forget(*lru.front());
           lru.push_back(entry);
@@ -288,6 +291,11 @@ bool DecodedAssetCache::Contains(const std::filesystem::path &path) const {
   const auto found = impl->entries.find(resolved);
   return !identity.empty() && found != impl->entries.end() &&
       found->second->identity == identity && bool(found->second->sound);
+}
+void DecodedAssetCache::Clear() {
+  std::lock_guard lock(impl->mutex);
+  while (!impl->lru.empty()) impl->forget(*impl->lru.front());
+  impl->entries.clear();
 }
 DecodedAssetCache::Statistics DecodedAssetCache::GetStatistics() const {
   std::lock_guard lock(impl->mutex);

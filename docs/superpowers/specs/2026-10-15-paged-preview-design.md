@@ -56,3 +56,22 @@ partial-cache handoff, complete warming, cancellation and no mixed output files.
 Player fake-backend tests cover startup, underflow clock, gains/clipping, EOF tail,
 errors, stop and rate changes. Run the desktop build and parallel CTest suite.
 No app, emulator, simulator, deployment or persistent service launch is authorized.
+
+## Memory retention follow-up (2026-10-17)
+
+Whole-asset preparation now shares immutable PCM storage between the decode
+cache, preview output and gameplay. Matching native/output rates use the same
+buffer; converted preview output is reused by gameplay at the same rate. The
+cache keeps only a weak reference to converted output. Playback cursors and
+controls remain independent for each sound owner, and device-rate changes replace
+output storage without changing native samples or another owner's output.
+
+The required asset set is the union of timed audio events and
+`ReferencedWavTable`, including hidden gameplay notes. Unused `WavTable`
+definitions are no longer warmed. After an uncancelled gameplay handoff becomes
+ready, the menu releases preparation cache ownership. Cancellation before that
+point preserves the cache for foreground completion when Play is pressed.
+
+This removes redundant retention; it does not impose an aggregate chart budget.
+Required whole keysounds remain resident, and the existing per-asset decode and
+resampling bounds still apply to preview preparation.
