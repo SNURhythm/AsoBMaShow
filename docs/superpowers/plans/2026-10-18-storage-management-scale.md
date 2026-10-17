@@ -137,13 +137,13 @@ StorageScanLimits, ScanJobWork, ScanBatchSink, Checkpoint) -> bool` owns the
 coordinator and existing shared worker pool. The returned bool means completed;
 individual unavailable-source diagnostics travel in batches.
 
-- [ ] Add failing `independentDirectoriesOverlap`, `skewedRootsShareWorkers`,
+- [x] Add failing `independentDirectoriesOverlap`, `skewedRootsShareWorkers`,
   `wideTreeBoundsFrontier`, `saturatedCancellationWakesAllWaiters` and
   `archiveJobsShareOnePool`. Use barriers and counters, asserting one iterator
   owner per directory, at most `2*workers` submitted jobs, no per-file tasks,
   eventual progress for both local/archive jobs and bounded frontier memory.
-- [ ] Build/run `storage_scan_scheduler_tests` to record the expected failure.
-- [ ] Implement a single coordinator with rolling admission into
+- [x] Build/run `storage_scan_scheduler_tests` to record the expected failure.
+- [x] Implement a single coordinator with rolling admission into
   `chart_scan::WorkScheduler`. Workers send batches of at most 128 child jobs or
   256 KiB, allowing one oversized path record only when the batch is empty;
   retain at most two batches per worker. The coordinator continuously drains
@@ -151,14 +151,14 @@ individual unavailable-source diagnostics travel in batches.
   Spill excess pending paths into private SQLite with an 8 MiB page cache.
   Reuse archive lane admission; feed local/archive pending jobs fairly. Do not
   change normal chart-scan scheduling defaults or add a nested worker pool.
-- [ ] Roll up parent completion only after discovery and all children finish;
+- [x] Roll up parent completion only after discovery and all children finish;
   use directory-local counters and batched coordinator reduction. Wake blocked
   sinks on cancellation/failure, settle active jobs before cleanup, and reject
   retired-generation batches. Preserve unknown private files on cleanup.
-- [ ] Run scheduler tests plus `chart_scan_work_scheduler_tests` and
+- [x] Run scheduler tests plus `chart_scan_work_scheduler_tests` and
   `chart_scan_startup_failure_tests`; include spill failure and cancellation with
   one worker to catch producer/consumer deadlocks without timing assertions.
-- [ ] Commit and push `perf: schedule bounded parallel storage scans`.
+- [x] Commit and push `perf: schedule bounded parallel storage scans`.
 
 ### Task 3: Measure local folders and archive groups without mutation inventories
 

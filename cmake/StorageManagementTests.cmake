@@ -73,3 +73,10 @@ add_executable(storage_inventory_task_tests tests/storage_inventory_task_tests.c
     src/storage/StoragePolicy.cpp src/audio/ChartVisualAssetResolver.cpp)
 target_compile_features(storage_inventory_task_tests PRIVATE cxx_std_23)
 asobmashow_register_test(storage_inventory_task_tests)
+
+add_executable(storage_scan_scheduler_tests tests/storage_scan_scheduler_tests.cpp
+    src/storage/StorageScanScheduler.cpp src/ChartScanWorkScheduler.cpp src/Uuid.cpp)
+target_compile_features(storage_scan_scheduler_tests PRIVATE cxx_std_23)
+target_link_libraries(storage_scan_scheduler_tests PRIVATE SQLite3 Threads::Threads)
+asobmashow_register_test(storage_scan_scheduler_tests)
+set_tests_properties(storage_scan_scheduler_tests PROPERTIES TIMEOUT 30)
