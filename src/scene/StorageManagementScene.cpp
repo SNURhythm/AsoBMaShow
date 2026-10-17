@@ -383,8 +383,6 @@ void StorageManagementScene::RefreshState() {
   if (preflight_) {
     auto summary = i18n::format("storage.ui.preflight", {{"count", std::to_string(preflight_->eligibleCount)},
         {"bytes", bytes(preflight_->eligibleBytes)}, {"skipped", std::to_string(preflight_->skippedCount)}});
-    for (const auto &group : preflight_->groups)
-      if (!group.totalBytes) summary += "\n" + fspath_to_utf8(group.root) + ": " + reason(group.reason.code);
     summary += std::string("\n\n") + i18n::tr("storage.ui.confirm_warning");
     preflightText_->setText(summary);
   } else preflightText_->setText(i18n::tr("storage.ui.folder_scope"));
