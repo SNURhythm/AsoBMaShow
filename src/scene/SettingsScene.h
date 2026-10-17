@@ -497,6 +497,7 @@ private:
   View *buildAudioTab(const settings_scene::LayoutMetrics &metrics);
   View *buildDisplayTab(const settings_scene::LayoutMetrics &metrics);
   View *buildDifficultyTablesTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildStorageControls(const settings_scene::LayoutMetrics &metrics);
   View *buildBmsLibraryTab(const settings_scene::LayoutMetrics &metrics);
   View *buildGameplaySkinsTab(const settings_scene::LayoutMetrics &metrics);
   View *buildIrTab(const settings_scene::LayoutMetrics &metrics);

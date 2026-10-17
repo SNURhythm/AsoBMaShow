@@ -9,6 +9,8 @@
 #include "../rendering/common.h"
 #include "../targets.h"
 #include "../view/Button.h"
+#include "../view/MusicTrackRowView.h"
+#include "../library/GroupedChartListModel.h"
 #include "../view/CheckboxButtonContent.h"
 #include "../view/DropdownView.h"
 #include "../view/IconText.h"
@@ -81,41 +83,6 @@ SafeAreaInsets getSafeAreaInsetsUi() {
   insets.right = static_cast<int>(normalized.right * rendering::window_width);
 #endif
   return insets;
-}
-
-std::string trackTitle(const music_playlist::MusicTrack &track) {
-  std::string title = track.title.empty() ? i18n::tr("music_player.untitled.label") : track.title;
-  if (!track.subtitle.empty()) {
-    title += " " + track.subtitle;
-  }
-  return title;
-}
-
-std::string trackArtist(const music_playlist::MusicTrack &track) {
-  if (!track.artist.empty() && !track.subArtist.empty() &&
-      track.artist != track.subArtist) {
-    return track.artist + " / " + track.subArtist;
-  }
-  if (!track.artist.empty()) {
-    return track.artist;
-  }
-  if (!track.subArtist.empty()) {
-    return track.subArtist;
-  }
-  return i18n::tr("music_player.unknown_artist.label");
-}
-
-std::string trackDetail(const music_playlist::MusicTrack &track) {
-  std::string detail = trackArtist(track);
-  if (!track.genre.empty()) {
-    detail += "  " + track.genre;
-  }
-  if (track.groupRepresentative && track.chartCount > 1) {
-    detail += "  " + std::to_string(track.chartCount) + " charts";
-  } else if (track.expandedChart) {
-    detail += "  chart";
-  }
-  return detail;
 }
 
 std::string formatMusicTime(long long micros) {
@@ -265,26 +232,6 @@ parseSleepTimerDurationMicros(const std::string &rawValue,
   return static_cast<long long>(std::llround(totalSeconds * 1000000.0));
 }
 
-bool containsText(const std::string &haystack, const std::string &needle) {
-  return lowercaseText(haystack).find(needle) != std::string::npos;
-}
-
-bool trackMatchesSearch(const music_playlist::MusicTrack &track,
-                        const std::string &query) {
-  if (query.empty()) {
-    return true;
-  }
-  const auto &meta = track.representativeChart;
-  const std::string searchable =
-      track.title + " " + track.subtitle + " " + track.artist + " " +
-      track.subArtist + " " + track.genre + " " + track.trackId + " " +
-      track.chartId + " " + meta.Title + " " + meta.SubTitle + " " +
-      meta.Artist + " " + meta.SubArtist + " " + meta.Genre + " " + meta.MD5 +
-      " " + meta.SHA256 + " " + fspath_to_utf8(meta.BmsPath) + " " +
-      fspath_to_utf8(meta.Folder);
-  return containsText(searchable, query);
-}
-
 bool sameTrackList(const std::vector<music_playlist::MusicTrack> &a,
                    const std::vector<music_playlist::MusicTrack> &b) {
   if (a.size() != b.size()) {
@@ -356,18 +303,6 @@ int adjustedDetachedNextIndex(std::optional<std::size_t> previousNextIndex,
   return std::clamp(index, 0, static_cast<int>(nextSize));
 }
 
-std::filesystem::path
-artworkPathForDisplay(const music_playlist::MusicTrack &track) {
-  const auto &meta = track.representativeChart;
-  if (!meta.StageFile.empty()) {
-    return meta.Folder / meta.StageFile;
-  }
-  if (!meta.Banner.empty()) {
-    return meta.Folder / meta.Banner;
-  }
-  return track.artworkPath;
-}
-
 void mouseButtonEventToUi(const SDL_MouseButtonEvent &event, int &uiX,
                           int &uiY) {
   const int screenX = static_cast<int>(event.x * rendering::widthScale);
@@ -387,160 +322,6 @@ bool isInsideView(const View *view, float uiX, float uiY) {
          uiX <= view->getX() + view->getWidth() && uiY >= view->getY() &&
          uiY <= view->getY() + view->getHeight();
 }
-
-class MusicTrackRowView : public View {
-public:
-  MusicTrackRowView() {
-    setHeight(kTrackRowHeight)
-        ->setPadding(Edge::All, 8)
-        ->setFlexDirection(FlexDirection::Row)
-        ->setAlignItems(YGAlignCenter)
-        ->setJustifyContent(YGJustifyCenter)
-        ->setGap(12)
-        ->setCornerRadius(app_theme::controlRadius())
-        ->setBorderWidth(0);
-
-    auto *rule = new View();
-    rule->setPositionType(YGPositionTypeAbsolute)
-        ->setPosition(Edge::Left, 0)->setPosition(Edge::Right, 0)
-        ->setPosition(Edge::Bottom, 0)->setHeight(1)
-        ->setThemedBackgroundColor(main_menu_theme::ruleSubtle);
-    addView(rule);
-
-    auto *artworkFrame = new View();
-    artworkFrame->setWidth(48)
-        ->setHeight(48)
-        ->setFlexShrink(0)
-        ->setFlexDirection(FlexDirection::Column)
-        ->setAlignItems(YGAlignStretch)
-        ->setJustifyContent(YGJustifyCenter)
-        ->setThemedBackgroundColor(app_theme::insetSurface)
-        ->setThemedBorderColor(app_theme::hairlineSubtle)
-        ->setBorderWidth(1)
-        ->setCornerRadius(app_theme::controlRadius());
-
-    artworkFallback = new TextView(kFontPath, 13);
-    artworkFallback->setText("ART");
-    artworkFallback->setHeight(22);
-    artworkFallback->setAlign(TextView::CENTER);
-    artworkFallback->setVAlign(TextView::MIDDLE);
-    artworkFallback->setThemedColor(app_theme::textMuted);
-    artworkFrame->addView(artworkFallback);
-
-    artwork = new ImageView(0, 0, 0, 0);
-    artwork->setWidth(48)
-        ->setHeight(48)
-        ->setPositionType(YGPositionTypeAbsolute)
-        ->setPosition(Edge::Left, 0)
-        ->setPosition(Edge::Top, 0)
-        ->setCornerRadius(app_theme::controlRadius());
-    artworkFrame->addView(artwork);
-    addView(artworkFrame);
-
-    auto *textColumn = new View();
-    textColumn->setFlex(1)
-        ->setMinWidth(0)
-        ->setFlexDirection(FlexDirection::Column)
-        ->setAlignItems(YGAlignStretch)
-        ->setJustifyContent(YGJustifyCenter)
-        ->setGap(4);
-
-    title = new TextView(app_theme::boldFont, 19);
-    title->setHeight(26);
-    title->setThemedColor(app_theme::textPrimary);
-    title->setOverflow(TextView::TextOverflow::Hidden);
-    textColumn->addView(title);
-
-    detail = new TextView(kFontPath, 15);
-    detail->setHeight(22);
-    detail->setThemedColor(app_theme::textSecondary);
-    detail->setOverflow(TextView::TextOverflow::Marquee);
-    textColumn->addView(detail);
-    addView(textColumn);
-
-    favoriteButton = new Button();
-    favoriteButton->setWidth(48)
-        ->setHeight(48)
-        ->setFlexShrink(0)
-        ->setCornerRadius(app_theme::controlRadius());
-    favoriteButton->setThemedBackgroundColors(
-        [] { return Color(0, 0, 0, 0); },
-        [this] {
-          auto color = isSelected_ ? main_menu_theme::onSelected() : main_menu_theme::ink();
-          color.a = 18;
-          return color;
-        },
-        [this] {
-          auto color = isSelected_ ? main_menu_theme::onSelected() : main_menu_theme::ink();
-          color.a = 34;
-          return color;
-        });
-    favoriteButton->setStyledBorderWidth(0);
-    favoriteText = new TextView(kFontPath, 25);
-    favoriteText->setText("☆");
-    favoriteText->setAlign(TextView::CENTER);
-    favoriteText->setVAlign(TextView::MIDDLE);
-    favoriteText->setThemedColor(main_menu_theme::secondary);
-    favoriteButton->setContentView(favoriteText);
-    addView(favoriteButton);
-  }
-
-  void setTrack(const music_playlist::MusicTrack &track, bool selected,
-                bool favorite, std::function<void()> onFavoriteToggle) {
-    title->setText(trackTitle(track));
-    detail->setText(trackDetail(track));
-    isFavorite_ = favorite;
-    favoriteText->setText(favorite ? "★" : "☆");
-    favoriteText->setThemedColor(favorite ? main_menu_theme::accent
-                                          : main_menu_theme::secondary);
-    favoriteButton->setOnClickListener(std::move(onFavoriteToggle));
-    if (artwork != nullptr) {
-      const auto path = artworkPathForDisplay(track);
-      if (path.empty()) {
-        artwork->freeImage();
-      } else {
-        artwork->setImageAsync(fspath_to_path_t(path), true);
-      }
-    }
-    if (selected) {
-      onSelected();
-    } else {
-      onUnselected();
-    }
-  }
-
-  void onSelected() override {
-    isSelected_ = true;
-    favoriteButton->propagateThemeChange();
-    setThemedBackgroundColor(main_menu_theme::selected);
-    title->setThemedColor(main_menu_theme::onSelected);
-    detail->setThemedColor(main_menu_theme::selectedSecondary);
-    favoriteText->setThemedColor(isFavorite_ ? main_menu_theme::selectedAccent
-                                           : main_menu_theme::onSelected);
-    artworkFallback->setThemedColor(main_menu_theme::selectedSecondary);
-  }
-
-  void onUnselected() override {
-    isSelected_ = false;
-    favoriteButton->propagateThemeChange();
-    setThemedBackgroundColor(main_menu_theme::control);
-    title->setThemedColor(main_menu_theme::ink);
-    detail->setThemedColor(main_menu_theme::secondary);
-    favoriteText->setThemedColor(isFavorite_ ? main_menu_theme::accent
-                                           : main_menu_theme::secondary);
-    artworkFallback->setThemedColor(main_menu_theme::muted);
-  }
-
-private:
-  bool isFavorite_ = false;
-  bool isSelected_ = false;
-  ImageView *artwork = nullptr;
-  TextView *artworkFallback = nullptr;
-  TextView *title = nullptr;
-  TextView *detail = nullptr;
-  Button *favoriteButton = nullptr;
-  TextView *favoriteText = nullptr;
-};
 
 class MusicSeekProgressFillView : public View {
 public:
@@ -1428,8 +1209,9 @@ void MusicPlayerScene::buildTrackBrowserPage(View *page,
   trackList->onBind = [this](View *view, const MusicTrack &track, int,
                              bool selected) {
     if (auto *row = dynamic_cast<MusicTrackRowView *>(view)) {
-      row->setTrack(track, selected, isFavoriteTrack(track),
-                    [this, track]() { toggleFavorite(track); });
+      row->setTrack(track, selected,
+                    {isFavoriteTrack(track) ? "★" : "☆", isFavoriteTrack(track),
+                     [this, track]() { toggleFavorite(track); }});
     }
   };
   trackList->onSelected = [this, kind](const MusicTrack &, int index) {
@@ -1788,8 +1570,9 @@ void MusicPlayerScene::buildPlaylistsPage(View *page) {
   playlistList->onBind = [this](View *view, const MusicTrack &track, int,
                                 bool selected) {
     if (auto *row = dynamic_cast<MusicTrackRowView *>(view)) {
-      row->setTrack(track, selected, isFavoriteTrack(track),
-                    [this, track]() { toggleFavorite(track); });
+      row->setTrack(track, selected,
+                    {isFavoriteTrack(track) ? "★" : "☆", isFavoriteTrack(track),
+                     [this, track]() { toggleFavorite(track); }});
     }
   };
   playlistList->onSelected = [this](const MusicTrack &, int index) {
@@ -2123,8 +1906,9 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   playerQueueList->onBind = [this](View *view, const MusicTrack &track, int,
                                    bool selected) {
     if (auto *row = dynamic_cast<MusicTrackRowView *>(view)) {
-      row->setTrack(track, selected, isFavoriteTrack(track),
-                    [this, track]() { toggleFavorite(track); });
+      row->setTrack(track, selected,
+                    {isFavoriteTrack(track) ? "★" : "☆", isFavoriteTrack(track),
+                     [this, track]() { toggleFavorite(track); }});
     }
   };
   playerQueueList->onSelected = [this](const MusicTrack &, int index) {
@@ -2521,28 +2305,18 @@ void MusicPlayerScene::applyTrackBrowserFilterForTrackId(
 
   auto &filtered = trackBrowserFilteredTracks(kind);
   const auto &source = trackBrowserSourceTracks(kind);
-  filtered.clear();
-  const std::string query =
-      lowercaseText(trimPlaylistName(trackBrowserSearchText(kind)));
-  for (const auto &track : source) {
-    if (kind == TrackBrowserKind::Library) {
-      const bool expanded = !track.groupId.empty() &&
-                            expandedLibraryGroupIds.contains(track.groupId);
-      const auto childrenIt = expanded ? libraryGroupTracks.find(track.groupId)
-                                       : libraryGroupTracks.end();
-      if (expanded && childrenIt != libraryGroupTracks.end()) {
-        std::copy_if(childrenIt->second.begin(), childrenIt->second.end(),
-                     std::back_inserter(filtered),
-                     [&query](const MusicTrack &childTrack) {
-                       return trackMatchesSearch(childTrack, query);
-                     });
-        continue;
-      }
-    }
-    if (trackMatchesSearch(track, query)) {
-      filtered.push_back(track);
+  GroupedChartListModel model;
+  model.SetGroups(source);
+  if (kind == TrackBrowserKind::Library) {
+    for (const auto &groupId : expandedLibraryGroupIds) {
+      if (const auto children = libraryGroupTracks.find(groupId);
+          children != libraryGroupTracks.end())
+        model.SetChildren(groupId, children->second);
+      model.SetExpanded(groupId, true);
     }
   }
+  model.SetQuery(trackBrowserSearchText(kind));
+  filtered = model.Rows();
 
   int &selectedIndex = trackBrowserSelectedIndex(kind);
   selectedIndex = -1;

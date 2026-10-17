@@ -427,27 +427,27 @@ semantics. Keep multi-selection in a storage-specific model keyed by groupId.
 `StoragePolicyView` edits a value `StoragePolicy` via a change callback; it does
 not access workers or global settings directly.
 
-- [ ] Characterize existing group identity/search/expansion behavior in tests
+- [x] Characterize existing group identity/search/expansion behavior in tests
   before extraction. Assert group selection survives search, expansion, sorting,
   and revision refresh; hidden selections remain counted; child rows cannot
   silently request an isolated shared-media mutation.
-- [ ] Extract row formatting, artwork lifetime, and grouped filtering into shared
+- [x] Extract row formatting, artwork lifetime, and grouped filtering into shared
   units. Update every music-player row consumer (library, favorites, playlists,
   and queue) without changing favorites/playback/scroll behavior. Keep grouping
   SQL in `MusicPlaylistRepository`; do not route storage through the playback queue.
-- [ ] Build the storage scene using asynchronous inventory, typed per-group
+- [x] Build the storage scene using asynchronous inventory, typed per-group
   measurements, multi-select/preflight, policy controls, confirmation, progress,
   cancellation, and reports. Unsupported sources display the actionable reason
   from the spec. Clear all views' stale callbacks on teardown.
-- [ ] Add Settings navigation and both policy editors; display download policy
+- [x] Add Settings navigation and both policy editors; display download policy
   independently from manual policy. Save through the existing profile persistence
   coordinator. Localize all new UI text in the existing message catalog. Confirm
   automatic Delete BGA when enabled, without prompting on subsequent downloads.
-- [ ] Run `grouped_chart_list_tests` (label `area_library` and `area_ui`), music
+- [x] Run `grouped_chart_list_tests` (label `area_library` and `area_ui`), music
   player repository/UI lifecycle tests, and `localization_catalog_tests`. Build
   `main`; inspect responsive desktop/portrait layouts and music controls using
-  a disposable test library. Verify idle UI redraw follows existing scheduling.
-- [ ] Commit `feat: add grouped chart storage management UI`.
+  a disposable test library in Task 10 (desktop automation input blocked). Verify idle UI redraw follows existing scheduling.
+- [x] Commit `feat: add grouped chart storage management UI`.
 
 ## Task 9: Automatic storage saving in Find BMS
 

@@ -74,3 +74,5 @@ target_sources(main PRIVATE
 if (NOT IOS)
     target_sources(main PRIVATE platform/SDLApplicationRuntime.cpp platform/ApplicationEventQueue.cpp)
 endif ()
+
+target_sources(main PRIVATE library/GroupedChartListModel.cpp)

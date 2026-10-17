@@ -6,3 +6,5 @@ target_sources(main PRIVATE BgaTranscoder.cpp)
 target_sources(main PRIVATE StorageOptimizer.cpp)
 target_sources(main PRIVATE StorageTask.cpp StorageMaintenanceGuard.cpp)
 target_sources(main PRIVATE StorageApplicationIntegration.cpp)
+
+target_sources(main PRIVATE StorageInventoryTask.cpp)
