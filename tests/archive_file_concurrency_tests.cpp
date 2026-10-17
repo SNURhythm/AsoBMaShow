@@ -3165,6 +3165,40 @@ void testArchiveIndexRejectsPreservedMetadataReplacement(bool coldCache,
   archive_file::clearArchiveIndexCacheForTesting();
 }
 
+void testIndexVisitorStreamsAndReleasesStorageOnlyIndexes() {
+  TempDirectory temporary;
+  const auto archive = temporary.path() / "visit.zip";
+  const auto cache = temporary.path() / "index";
+  std::vector<std::string> paths;
+  for (int i = 0; i < 1000; ++i) paths.push_back("folder/entry-" + std::to_string(i) + ".wav");
+  writeStoredZip(archive, paths);
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cache);
+  std::string error;
+  std::size_t entries = 0;
+  assert(archive_file::visitIndexEntries(archive, [&](const auto &) { ++entries; return true; }, &error));
+  assert(entries == 1000);
+  assert(archive_file::residentArchiveIndexCountForTesting() == 0);
+  bounded_allocation_probe::largest = 0;
+  bounded_allocation_probe::enabled = true;
+  entries = 0;
+  const bool streamed = archive_file::visitIndexEntries(archive, [&](const auto &) { ++entries; return true; }, &error);
+  bounded_allocation_probe::enabled = false;
+  assert(streamed && entries == 1000);
+  assert(bounded_allocation_probe::largest < 64 * 1024);
+  assert(archive_file::residentArchiveIndexCountForTesting() == 0);
+  std::vector<archive_file::Entry> resident;
+  assert(archive_file::listEntries(archive, resident, &error));
+  assert(archive_file::residentArchiveIndexCountForTesting() == 1);
+  assert(archive_file::visitIndexEntries(archive, [](const auto &) { return true; }, &error));
+  assert(archive_file::residentArchiveIndexCountForTesting() == 1);
+  archive_file::clearArchiveIndexCacheForTesting();
+  entries = 0;
+  assert(!archive_file::visitIndexEntries(archive, [&](const auto &) { ++entries; return false; }, &error));
+  assert(entries == 1 && archive_file::residentArchiveIndexCountForTesting() == 0);
+  archive_file::setArchiveIndexCacheDirectory({});
+}
+
 void testArchiveIndexPersistsAcrossColdCacheRestart() {
   constexpr int kEntryCount = 20;
   TempDirectory temporary;
@@ -3884,7 +3918,13 @@ void testConcurrentZipMappingFallback() {
 
 } // namespace
 
+int RunStorageMeasurementTests();
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string(argv[1]) == "--storage-measurement") return RunStorageMeasurementTests();
+  if (argc == 2 && std::string(argv[1]) == "--index-visitor") {
+    testIndexVisitorStreamsAndReleasesStorageOnlyIndexes();
+    return 0;
+  }
   if (argc == 2 && std::string(argv[1]) == "--bounded-reader") {
     testBoundedZipReaderReusesDirectory();
     return 0;
@@ -4068,6 +4108,7 @@ int main(int argc, char **argv) {
     testFullUnzipRuntimeByteLimitCannotRestartFallback(extension);
     testFullUnzipExactBudgetAndReuseDoNotChargeEstimatedBytes(extension);
   }
+  testIndexVisitorStreamsAndReleasesStorageOnlyIndexes();
   testArchiveIndexPersistsAcrossColdCacheRestart();
   for (const bool coldCache : {true, false}) {
     for (const bool replaceFile : {false, true}) {

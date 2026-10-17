@@ -35,6 +35,7 @@ void add(StorageScanTotals &to, const StorageScanTotals &value) {
 }
 void add(StorageScanMetrics &to, const StorageScanMetrics &value) {
   add(to.entries, value.entries); add(to.metadataReads, value.metadataReads); add(to.rootIndexSteps, value.rootIndexSteps);
+  add(to.archiveIndexVisits, value.archiveIndexVisits); add(to.archiveEntries, value.archiveEntries);
 }
 // The coordinator exclusively owns this expendable queue and its statements.
 class PendingJobs {
@@ -283,15 +284,16 @@ bool RunStorageScan(std::span<const StorageScanJob> roots, StorageScanLimits lim
       if (limits.metrics) ++limits.metrics->jobsFinished;
       auto own = state.own;
       own.directoryComplete = true;
-      // Leaves publish just once; non-leaves publish their local result, then the subtree rollup.
-      if (state.pending && !deliver(std::move(own))) break;
+      // Local metadata and recursive totals are separate events, regardless of
+      // whether descendants happen to finish before their parent iterator.
+      if (!deliver(std::move(own))) break;
       auto completed = event.batch.job.id;
       while (completed && checkpoint()) {
         auto found = directories.find(completed);
         if (found == directories.end() || !found->second.ended || found->second.pending) break;
         auto &done = found->second;
         auto result = done.own;
-        result.directoryComplete = completed == event.batch.job.id;
+        result.directoryComplete = false;
         result.subtreeComplete = true;
         add(result.totals, done.descendants); add(result.metrics, done.descendantMetrics);
         if (result.reason.code == StorageReason::None) result.reason = done.descendantReason;

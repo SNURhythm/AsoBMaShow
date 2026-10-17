@@ -21,11 +21,9 @@ struct StorageDirectoryStamp {
 // Each worker owns its metrics, then the coordinator sums completed batches.
 struct StorageScanMetrics {
   std::uint64_t entries = 0, metadataReads = 0, rootIndexSteps = 0;
+  std::uint64_t archiveIndexVisits = 0, archiveEntries = 0;
 };
 using EntryVisitor = std::function<bool(const StorageDirectoryEntry &)>;
 bool VisitStorageDirectory(const std::filesystem::path &, const std::filesystem::path &accessRoot,
     StorageVisitMode, Checkpoint, EntryVisitor, StorageDirectoryStamp &, StorageScanMetrics *, std::string &);
-struct StorageScanDependencies {
-  std::function<decltype(VisitStorageDirectory)> enumerate = VisitStorageDirectory;
-};
 }

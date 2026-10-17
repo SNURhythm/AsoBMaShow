@@ -183,18 +183,18 @@ during that call. It returns success only after full cache/source validation.
 Checkpoint, StorageScanMetrics*) -> std::vector<GroupStorageMeasurement>` privately
 reduces entries and publishes totals only on successful complete validation.
 
-- [ ] Add failing `sizeOnlyDoesNotBuildPreflight`, `hardLinksCountLogicalBytes`,
+- [x] Add failing `sizeOnlyDoesNotBuildPreflight`, `hardLinksCountLogicalBytes`,
   `thousandArchiveGroupsVisitIndexOnce`, `archiveRootsAreSourceScoped`,
   `solidArchivesStayExcluded`, `invalidCachePublishesNoTotals` and
   `scanDoesNotAccumulateResidentArchiveIndexes`. Include implicit directories,
   duplicate/nested/prefix-sibling roots, truncated footers, source changes,
   encrypted entries, overflow and cancellation. Assert zero media reads/extracts
   for a valid cached index and no asset candidate/identity maps in browsing.
-- [ ] Run measurement and archive tests to establish failure before changes.
-- [ ] Implement local size aggregation using worker-local directory totals and
+- [x] Run measurement and archive tests to establish failure before changes.
+- [x] Implement local size aggregation using worker-local directory totals and
   parent rollups. Keep no file-level scan state and mark inaccessible scopes
   unavailable. Respect existing no-follow boundaries and logical hard-link rules.
-- [ ] Refactor the existing persisted index record parser for callback streaming;
+- [x] Refactor the existing persisted index record parser for callback streaming;
   retain current format validation and source identity checks, including footer.
   Borrow a fresh resident immutable index without vector copies. Reuse existing
   single-flight building once for a stale/missing index; release storage-created
@@ -202,10 +202,10 @@ reduces entries and publishes totals only on successful complete validation.
   Stream each archive once into an inner-root prefix reducer, with no
   `listEntries`/`entryRangeForFolder` call per virtual folder. Preserve current
   non-solid discovery semantics and propagate unsupported-source diagnostics.
-- [ ] Run measurement, archive concurrency/source-access/index-coordinator and
+- [x] Run measurement, archive concurrency/source-access/index-coordinator and
   chart-library scanner tests. Verify no archive writer or new solid support was
   introduced. Make archived rows explicitly describe uncompressed logical bytes.
-- [ ] Commit and push `perf: measure storage with size walks and archive indexes`.
+- [x] Commit and push `perf: measure storage with size walks and archive indexes`.
 
 ### Task 4: Stream summaries and create compact, bounded preflight evidence
 

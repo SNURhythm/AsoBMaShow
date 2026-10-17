@@ -2153,6 +2153,7 @@
 {"storage.ui.io_error", "File access failed", "파일 접근 실패", "ファイルアクセス失敗", "文件访问失败", "檔案存取失敗"},
 {"storage.ui.keep", "Keep", "유지", "保持", "保留", "保留"},
 {"storage.ui.local_required", "Extract/import to a writable local folder first", "먼저 쓰기 가능한 로컬 폴더로 압축 해제/가져오기를 하세요", "先に書き込み可能なローカルフォルダーへ展開/インポートしてください", "请先解压或导入到可写的本地文件夹", "請先解壓縮或匯入至可寫入的本機資料夾"},
+{"storage.ui.archive_uncompressed", "Archive (uncompressed)", "압축 파일 (해제 후 크기)", "アーカイブ（展開後の容量）", "压缩包（解压后大小）", "壓縮檔（解壓後大小）"},
 {"storage.ui.logical_bytes", "Sizes are logical file bytes. Actual disk savings may differ. Compression savings are known only after conversion.", "표시 크기는 파일의 논리적 바이트입니다. 실제 디스크 절약량은 다를 수 있으며 압축 절약량은 변환 후 확인됩니다.", "サイズは論理ファイル容量です。実際のディスク節約量は異なる場合があります。圧縮の効果は変換後に分かります。", "大小为文件逻辑字节数，实际磁盘节省量可能不同。压缩节省量仅在转换后可知。", "大小為檔案邏輯位元組數，實際磁碟節省量可能不同。壓縮節省量僅在轉換後可知。"},
 {"storage.ui.not_smaller", "Output was not smaller; original kept", "용량이 줄지 않아 원본을 유지했습니다", "容量が減らなかったため元ファイルを保持しました", "输出未变小；已保留原文件", "輸出未變小；已保留原檔"},
 {"storage.ui.ogg", "Lossy Ogg Vorbis", "손실 Ogg Vorbis", "非可逆Ogg Vorbis", "有损 Ogg Vorbis", "有損 Ogg Vorbis"},

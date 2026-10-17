@@ -58,6 +58,31 @@ void skewedRootsShareWorkers() {
       }), "skewed tree completes");
   require(rootBytes == 10, "parent completes after summing both children exactly once");
 }
+void localResultsExcludeDescendants() {
+  std::vector<StorageScanJob> roots{{.path = "/root"}};
+  std::mutex mutex;
+  std::condition_variable changed;
+  bool childDone = false;
+  std::uint64_t local = 0, recursive = 0;
+  require(RunStorageScan(roots, {.workers = 2, .maxSubmitted = 4},
+      [&](const auto &job, auto, auto sink) {
+        if (job.parentId) { sink({.totals = {.bytes = 1}}); return; }
+        sink({.children = {{.path = "/root/child"}}});
+        std::unique_lock lock(mutex);
+        require(changed.wait_for(lock, 2s, [&] { return childDone; }), "child completes before root enumeration ends");
+        lock.unlock();
+        sink({.totals = {.bytes = 10}});
+      }, [&](auto batch) {
+        if (batch.job.parentId && batch.subtreeComplete) {
+          { std::lock_guard lock(mutex); childDone = true; }
+          changed.notify_all();
+        }
+        if (!batch.job.parentId && batch.directoryComplete) local = batch.totals.bytes;
+        if (!batch.job.parentId && batch.subtreeComplete) recursive = batch.totals.bytes;
+        return true;
+      }), "local/subtree completion scan succeeds");
+  require(local == 10 && recursive == 11, "directory metadata never double-counts descendants that finished earlier");
+}
 void wideTreeBoundsFrontier() {
   storage_test::TempDirectory temp;
   temp.write("unrelated", "keep");
@@ -146,6 +171,7 @@ int main() {
   try {
     independentDirectoriesOverlap();
     skewedRootsShareWorkers();
+    localResultsExcludeDescendants();
     wideTreeBoundsFrontier();
     saturatedCancellationWakesAllWaiters();
     archiveJobsShareOnePool();

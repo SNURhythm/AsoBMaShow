@@ -8,11 +8,13 @@
 
 namespace storage_management {
 
+enum class StorageSourceKind { Local, Archive, Unsupported };
 struct FolderSelection {
   std::string groupId;
   std::filesystem::path path;
   bool writableLocal = true;
   bool chartPathFallback = false;
+  StorageSourceKind sourceKind = StorageSourceKind::Local;
 };
 struct InventoryRequest {
   std::vector<FolderSelection> groups;
@@ -39,6 +41,8 @@ struct GroupStorageMeasurement {
   std::uint64_t videoBytes = 0;
   std::uint64_t imageBytes = 0;
   StorageDiagnostic reason;
+  StorageSourceKind sourceKind = StorageSourceKind::Local;
+  std::string sourceIdentity;
 };
 struct StorageInventory {
   InventoryRequest request;

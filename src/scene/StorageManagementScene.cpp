@@ -289,7 +289,9 @@ std::string StorageManagementScene::MeasurementText(const Track &track) const {
     return i18n::tr(measuring_ ? "storage.ui.pending" : "storage.ui.unavailable");
   const auto &value = found->second;
   if (!value.totalBytes) return reason(value.reason.code).empty() ? i18n::tr("storage.ui.unavailable") : reason(value.reason.code);
-  return bytes(*value.totalBytes) + " · " + i18n::tr("storage.ui.audio") + " " + bytes(value.audioBytes) +
+  const auto prefix = value.sourceKind == StorageSourceKind::Archive
+      ? std::string(i18n::tr("storage.ui.archive_uncompressed")) + " · " : std::string{};
+  return prefix + bytes(*value.totalBytes) + " · " + i18n::tr("storage.ui.audio") + " " + bytes(value.audioBytes) +
       " · " + i18n::tr("storage.ui.video") + " " + bytes(value.videoBytes) +
       " · " + i18n::tr("storage.ui.images") + " " + bytes(value.imageBytes);
 }

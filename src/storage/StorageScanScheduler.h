@@ -35,6 +35,10 @@ struct StorageScanLimits {
   StorageScanScheduleMetrics *metrics = nullptr;
 };
 StorageScanLimits DefaultStorageScanLimits();
+struct StorageScanDependencies {
+  std::function<decltype(VisitStorageDirectory)> enumerate = VisitStorageDirectory;
+  StorageScanLimits limits = DefaultStorageScanLimits();
+};
 using ScanBatchSink = std::function<bool(StorageScanBatch)>;
 using ScanJobWork = std::function<void(const StorageScanJob &, Checkpoint, ScanBatchSink)>;
 // Work/checkpoint run concurrently; result delivery runs only on the coordinator.

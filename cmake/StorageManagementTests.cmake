@@ -80,3 +80,12 @@ target_compile_features(storage_scan_scheduler_tests PRIVATE cxx_std_23)
 target_link_libraries(storage_scan_scheduler_tests PRIVATE SQLite3 Threads::Threads)
 asobmashow_register_test(storage_scan_scheduler_tests)
 set_tests_properties(storage_scan_scheduler_tests PROPERTIES TIMEOUT 30)
+
+# Reuse the existing archive test binary/backend objects for measurement integration.
+target_sources(archive_file_concurrency_tests PRIVATE tests/storage_measurement_tests.cpp
+    src/storage/StorageMeasurement.cpp src/storage/StorageArchiveMeasurement.cpp
+    src/storage/StoragePathIndex.cpp src/storage/StorageDirectoryInventory.cpp
+    src/storage/StorageScanScheduler.cpp src/ChartScanWorkScheduler.cpp src/Uuid.cpp
+    src/storage/ChartResourceInventory.cpp src/storage/StoragePolicy.cpp src/audio/ChartVisualAssetResolver.cpp)
+target_link_libraries(archive_file_concurrency_tests PRIVATE SQLite3)
+add_test(NAME storage_measurement_tests COMMAND archive_file_concurrency_tests --storage-measurement)
