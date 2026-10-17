@@ -225,6 +225,8 @@ struct MainMenuScene {
   Utility *activeUtilityTab() { return utility; }
   bool selectorTabActive() const { return activeTab_ == Tab::Play || activeTab_ == Tab::Course; }
   int reselections = 0;
+  std::optional<ChartMetaRecord> selectedChartRecord;
+  std::optional<ChartMetaRecord> selectedRecordSnapshot() const;
 
   void onApplicationBackgroundChanged(bool) {}
   SceneManager manager;

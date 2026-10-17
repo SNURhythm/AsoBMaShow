@@ -301,6 +301,7 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
         source = (ROOT / "src/scene/MainMenuScene.cpp").read_text()
         methods = []
         for signature in (
+            "std::optional<ChartMetaRecord> MainMenuScene::selectedRecordSnapshot() const",
             "void MainMenuScene::refreshUnzipButtonForSelection(",
             "void MainMenuScene::startUnzipSelectedArchiveFolder()",
             "void MainMenuScene::startUnzipArchiveFolder(",

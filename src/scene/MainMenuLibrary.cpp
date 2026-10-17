@@ -254,13 +254,12 @@ ChartMetaQuery chartQueryForSameFolder(
 std::filesystem::path chartSelectionPathForReload(
     const std::filesystem::path &visibleSelectionPath,
     const std::optional<ChartMetaRecord> &retainedSelection) {
-  if (!visibleSelectionPath.empty()) {
-    return visibleSelectionPath;
-  }
-  if (retainedSelection.has_value()) {
+  // The page cache may have been released during gameplay. Reading the old
+  // index can now return a different chart after score-based sorting changes.
+  if (retainedSelection && !retainedSelection->meta.BmsPath.empty()) {
     return retainedSelection->meta.BmsPath;
   }
-  return {};
+  return visibleSelectionPath;
 }
 
 float centeredScrollOffsetForItem(int selectedIndex, int itemCount,
