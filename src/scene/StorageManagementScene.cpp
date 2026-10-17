@@ -397,6 +397,8 @@ void StorageManagementScene::RefreshState() {
     for (const auto &[why, count] : excluded)
       summary += "\n" + i18n::format("storage.ui.excluded_folders", {
           {"count", std::to_string(count)}, {"reason", why}});
+    if (!preflight_->archives.empty())
+      summary += std::string("\n") + i18n::tr("storage.ui.archive_review_hint");
     if (policy_.audio == AudioAction::LosslessFlac)
       summary += std::string("\n") + i18n::tr("storage.ui.flac_scope");
     summary += std::string("\n\n") + i18n::tr("storage.ui.confirm_warning");

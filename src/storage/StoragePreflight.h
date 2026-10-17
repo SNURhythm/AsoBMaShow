@@ -30,7 +30,7 @@ struct StoragePreflight {
 };
 StoragePreflight BuildStoragePreflight(const InventoryRequest &, Checkpoint = {},
     StorageScanMetrics * = nullptr, StorageScanDependencies = {});
-void AppendStorageArchivePreflight(StoragePreflight &, Checkpoint);
+void AppendStorageArchivePreflight(StoragePreflight &, Checkpoint, StorageScanMetrics * = nullptr);
 std::unique_ptr<StorageDirectoryInventory> LoadStorageDirectory(const StorageDirectorySummary &,
     const InventoryRequest &, Checkpoint, std::string &, StorageDirectoryLimits = {});
 std::optional<AssetCandidate> StorageCandidateForEntry(const StorageDirectoryEntry &,

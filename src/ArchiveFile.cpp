@@ -1,4 +1,5 @@
 #include "ArchiveFile.h"
+#include "archive/ArchiveEntryFilter.h"
 #include "StableHash.h"
 #include "archive/TemporaryCache.h"
 #include "archive/UnzipOutput.h"
@@ -8816,6 +8817,10 @@ std::filesystem::path makeVirtualPath(const std::filesystem::path &archivePath,
     return archivePath;
   }
   return archivePath / innerPath;
+}
+
+bool isSystemEntry(const std::filesystem::path &path) {
+  return isSystemEntryPath(path);
 }
 
 bool visitIndexEntries(const std::filesystem::path &archivePath,

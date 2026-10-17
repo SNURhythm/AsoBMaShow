@@ -168,7 +168,7 @@ void failedSpillAndRestartNeverAuthorizeStaleMetadata() {
   require(cancelled.cancelled && !cancelled.complete && cancelled.eligibleCount == 0, "cancelled preflight authorizes no candidates");
 }
 }
-int main() {
+int storageDirectoryInventoryTests() {
   try {
     summariesDoNotRetainAllAssets();
     independentSelectedFoldersComplete();
@@ -177,4 +177,5 @@ int main() {
     failedSpillAndRestartNeverAuthorizeStaleMetadata();
     skipDetailsAndSpillErrorsStayBounded();
   } catch (const std::exception &error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }
+  return 0;
 }

@@ -17,7 +17,7 @@ struct VideoFixture {
   std::vector<std::int64_t> timestamps;
   bool h264 = false, audio = false;
   bool alpha = false, hdr = false, interlaced = false;
-  AVRational sampleAspectRatio{1, 1};
+  AVRational sampleAspectRatio{1, 1}, laterSampleAspectRatio{0, 1};
   int rotation = 0;
   bool scaledDisplayMatrix = false;
   bool millisecondContainer = false, lossless = false;
@@ -113,6 +113,10 @@ inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
           frame.data[plane][y * frame.linesize[plane] + x] = 90 + ((x + y + plane * 19) % 60);
     }
     if (fixture.interlaced) frame.flags |= AV_FRAME_FLAG_INTERLACED | AV_FRAME_FLAG_TOP_FIELD_FIRST;
+    if (fixture.laterSampleAspectRatio.num > 0 && i == fixture.timestamps.size() / 2) {
+      encoder.sample_aspect_ratio = fixture.laterSampleAspectRatio;
+      frame.pict_type = AV_PICTURE_TYPE_I;
+    } else frame.pict_type = AV_PICTURE_TYPE_NONE;
     frame.pts = fixture.timestamps[i]; frame.duration = 1;
     require(avcodec_send_frame(&encoder, &frame) >= 0, "fixture encode frame"); drain();
   }
@@ -144,6 +148,7 @@ struct VideoObservation {
   int rotation = 0;
   AVRational sampleAspectRatio{1, 1};
   std::vector<double> timestamps;
+  std::vector<AVRational> frameSampleAspectRatios;
   double videoEnd = 0, audioEnd = 0;
 };
 inline VideoObservation inspectVideo(const std::filesystem::path &path) {
@@ -185,6 +190,7 @@ inline VideoObservation inspectVideo(const std::filesystem::path &path) {
       const double time = r.frame->best_effort_timestamp * av_q2d(stream->time_base);
       if (decoder->codec_type == AVMEDIA_TYPE_VIDEO) {
         result.timestamps.push_back(time);
+        result.frameSampleAspectRatios.push_back(r.frame->sample_aspect_ratio);
         result.videoEnd = time + r.frame->duration * av_q2d(stream->time_base);
       } else result.audioEnd = time + double(r.frame->nb_samples) / r.frame->sample_rate;
       av_frame_unref(r.frame);

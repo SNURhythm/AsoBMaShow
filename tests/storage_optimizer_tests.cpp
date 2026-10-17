@@ -16,6 +16,7 @@ using storage_test::require;
 using storage_test::TempDirectory;
 void storageLibraryIntegration();
 void storageArchiveTests();
+int storageDirectoryInventoryTests();
 namespace fs = std::filesystem;
 namespace {
 OptimizationRequest request(const fs::path &root) {
@@ -56,6 +57,47 @@ OptimizerDependencies dependencies(TempDirectory &temp, std::vector<std::string>
     return transactions;
   };
   return result;
+}
+void reviewedSelectionRetainsPrivateSandboxBoundary() {
+  TempDirectory temp;
+  temp.write("charts/song/sound.wav", std::string(100, 'a'));
+  temp.write("charts/song/movie.mpg", std::string(100, 'v'));
+  const auto libraryRoot = temp.root / "charts";
+  const auto privateRoot = temp.root / "private";
+  fs::create_directory(privateRoot);
+  auto input = request(libraryRoot / "song");
+  input.policy.bga = BgaAction::Delete; input.inventory.policy = input.policy;
+  // Manual review knows the registered library, while platform dependencies
+  // additionally supply the application's private sandbox boundary.
+  input.inventory.pathAccessRoots = {libraryRoot};
+  input.preflight = BuildStoragePreflight(input.inventory);
+  require(input.preflight->complete && input.preflight->eligibleCount == 2,
+          "manual review admits replacement and deletion within the registered library");
+  std::vector<std::string> events;
+  auto deps = dependencies(temp, events);
+  deps.paths = MakeStoragePlatformPaths(privateRoot, {libraryRoot}, true);
+  const auto factory = DefaultOptimizerDependencies(deps.paths).transactions;
+  bool checkedLocalPaths = false;
+  deps.transactions = [&](const StoragePlatformPaths &paths, StorageCommitPrecondition beforeCommit) {
+    if (beforeCommit) {
+      require(std::find(paths.pathAccessRoots.begin(), paths.pathAccessRoots.end(), libraryRoot) != paths.pathAccessRoots.end() &&
+                  std::find(paths.pathAccessRoots.begin(), paths.pathAccessRoots.end(), privateRoot) != paths.pathAccessRoots.end(),
+              "local transactions retain both source and private sandbox access boundaries");
+      require(paths.allowedRoots == std::vector<fs::path>{libraryRoot},
+              "private sandbox access does not grant source mutation authority");
+      checkedLocalPaths = true;
+    }
+    return factory(paths, std::move(beforeCommit));
+  };
+  const auto report = StorageOptimizer(deps).Run(std::move(input));
+  require(checkedLocalPaths && report.converted == 1 && report.deleted == 1 && report.reclaimedBytes == 196 &&
+              !report.failed && !report.skipped && !report.recoveryRequired && !report.cleanupPending && !report.cancelled,
+          "reviewed sandboxed selection completes real replacement and deletion transactions");
+  require(!fs::exists(libraryRoot / "song/sound.wav") && !fs::exists(libraryRoot / "song/movie.mpg") &&
+              fs::file_size(libraryRoot / "song/sound.ogg") == 4,
+          "sandboxed transactions install encoded audio and remove the selected video");
+  require(fs::is_empty(deps.paths.temporaryRoot) && fs::is_empty(deps.paths.journalRoot),
+          "sandboxed transactions settle private temporary files and journals");
 }
 void independentDirectoriesUseDistinctOutputs() {
   TempDirectory temp;
@@ -488,10 +530,13 @@ void cancellableSingleConversionPermit() {
 }
 int main(int argc, char **argv) {
   try {
+    if (argc > 1 && std::string_view(argv[1]) == "--directory-inventory") return storageDirectoryInventoryTests();
     if (argc > 1 && std::string_view(argv[1]) == "--archive") { storageArchiveTests(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--commit-cost") { unrelatedFoldersDoNotMultiplyCommitChecks(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--subset-refresh") { subsetRefreshNeverEnumeratesAncestorSiblings(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--parallel") { independentDirectoriesUseDistinctOutputs(); return 0; }
+    if (argc > 1 && std::string_view(argv[1]) == "--sandbox-boundaries") { reviewedSelectionRetainsPrivateSandboxBoundary(); return 0; }
+    reviewedSelectionRetainsPrivateSandboxBoundary();
     independentDirectoriesUseDistinctOutputs();
     storageLibraryIntegration();
     extractedDownloadUsesWholePackage(); wholeFolderOrchestration(); deletionAndUnavailableGroups(); staleEvidenceNeverBecomesFreshByRescanning();

@@ -18,6 +18,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <stop_token>
 #include <unordered_map>
@@ -251,7 +252,10 @@ public:
   void setVolumes(const audio::Volumes &volumes) override;
   void setVolumes(const player_settings::AudioSettings &settings);
 
-  audio::playback::BackendOperationResult unloadSounds();
+  // Called after confirmed stop, before owner release, under the lifecycle lock.
+  // The callback must not reenter this wrapper or restart the shared backend.
+  audio::playback::BackendOperationResult unloadSounds(
+      const std::function<audio::playback::BackendOperationResult()> &beforeDiscard = {});
 
 private:
   void openRealtimeSoundGate() noexcept;

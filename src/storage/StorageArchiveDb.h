@@ -1,5 +1,5 @@
 #pragma once
-#include "StorageArchiveIO.h"
+#include "StorageArchive.h"
 #include "../sqlite3.h"
 #include <limits>
 
@@ -31,6 +31,10 @@ struct Statement {
   }
   ~Statement() { sqlite3_finalize(value); }
   Statement(const Statement &) = delete;
+  void reset() {
+    require(sqlite3_reset(value) == SQLITE_OK && sqlite3_clear_bindings(value) == SQLITE_OK,
+        "Cannot reset archive metadata query", StorageReason::IoError);
+  }
   void bind(int slot, std::string_view text) {
     require(text.size() <= INT_MAX && sqlite3_bind_blob(value, slot, text.data(), static_cast<int>(text.size()), SQLITE_TRANSIENT) == SQLITE_OK,
         "Cannot store archive metadata", StorageReason::IoError);
@@ -59,6 +63,11 @@ struct Statement {
     return size ? std::string(data, size) : std::string{};
   }
 };
+// Both the lightweight review index and the physical update manifest use these
+// columns. Stop after two matches: only ambiguity, not the full count, matters.
+inline constexpr auto candidateCollisionSql = "SELECT count(*) FROM (SELECT 1 FROM entries WHERE (stem=? AND media=?) OR (name=? AND id!=?) LIMIT 2)";
+std::optional<AssetCandidate> archiveCandidate(const StorageArchiveEntry &, const StoragePolicy &,
+    StorageDiagnostic &, Statement &collisions);
 struct Database {
   sqlite3 *value = nullptr;
   explicit Database(const std::filesystem::path &path, bool create = true) {

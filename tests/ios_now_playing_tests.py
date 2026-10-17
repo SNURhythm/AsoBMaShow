@@ -307,6 +307,172 @@ int main() {
             result = subprocess.run([str(executable)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_failed_unload_retains_transport_until_session_handoff_succeeds(self):
+        native = (ROOT / "src/iOSNatives.mm").read_text()
+        unload = method(native, "bool UnloadIOSNativeMusic(std::string &errorMessage)")
+        fixture = r'''
+#import <Foundation/Foundation.h>
+#include <cassert>
+#include <memory>
+#include <string>
+unsigned destroyedStreams = 0, destroyedPlayers = 0, published = 0;
+bool active = true, rollbackSucceeds = true;
+int failureStage = 0;
+using AVAudioSessionCategoryOptions = NSUInteger;
+#define AVAudioSession FakeAudioSession
+@interface AVAudioSession : NSObject
+@property(copy) NSString *category;
+@property(copy) NSString *mode;
+@property AVAudioSessionCategoryOptions categoryOptions;
++ (instancetype)sharedInstance;
+- (BOOL)setCategory:(NSString *)category mode:(NSString *)mode
+            options:(AVAudioSessionCategoryOptions)options error:(NSError **)error;
+- (BOOL)setActive:(BOOL)value error:(NSError **)error;
+@end
+@implementation AVAudioSession
++ (instancetype)sharedInstance { static auto session = [AVAudioSession new]; return session; }
+- (BOOL)setCategory:(NSString *)category mode:(NSString *)mode
+            options:(AVAudioSessionCategoryOptions)options error:(NSError **)error {
+  if (!rollbackSucceeds) {
+    *error = [NSError errorWithDomain:@"rollback" code:1 userInfo:nil];
+    return NO;
+  }
+  self.category = category; self.mode = mode; self.categoryOptions = options;
+  return YES;
+}
+- (BOOL)setActive:(BOOL)value error:(NSError **)error {
+  if (!rollbackSucceeds) {
+    *error = [NSError errorWithDomain:@"rollback" code:2 userInfo:nil];
+    return NO;
+  }
+  active = value; return YES;
+}
+@end
+@interface FakePlayer : NSObject
+@property float rate;
+@property long long position;
+- (void)pause;
+@end
+@implementation FakePlayer
+- (void)pause { self.rate = 0; }
+- (void)dealloc { ++destroyedPlayers; }
+@end
+struct IOSMusicStream {
+  bool playing = false;
+  long long position = 1234567;
+  ~IOSMusicStream() { ++destroyedStreams; }
+};
+std::shared_ptr<IOSMusicStream> gIOSNativeMusicStream;
+FakePlayer *gIOSNativeMusicPlayer = nil;
+id gIOSNativeMusicFinishedObserver = nil;
+unsigned gIOSNativeMusicTransportGeneration = 7;
+bool gIOSNativeMusicResumeAfterInterruption = true;
+struct Metadata { std::string title; } gIOSNativeMusicMetadata;
+struct Queue { int count; int currentIndex; } gIOSNativeMusicQueue;
+id IOSNativeMusicLock() { static auto lock = [NSObject new]; return lock; }
+void PublishIOSNativeMusicNowPlayingInfoLocked(id info, bool playing) {
+  assert(!info && !playing); ++published;
+}
+bool RestoreIOSForegroundAudioSession(std::string &error) {
+  auto session = [AVAudioSession sharedInstance];
+  if (failureStage != 1) active = false;
+  if (failureStage >= 3 || failureStage == 0) {
+    session.category = @"ambient";
+    session.mode = @"default";
+    session.categoryOptions = 1;
+  }
+  if (failureStage) { error = "original handoff error"; return false; }
+  active = true; return true;
+}
+UNLOAD
+int main() {
+  @autoreleasepool {
+    for (bool stream : {true, false}) {
+      for (bool playing : {true, false}) {
+        for (int stage : {1, 2, 3}) {
+          for (bool recover : {true, false}) {
+            @autoreleasepool {
+              destroyedStreams = destroyedPlayers = published = 0;
+              auto session = [AVAudioSession sharedInstance];
+              NSString *originalCategory = stream && !playing ? @"ambient" : @"playback";
+              session.category = originalCategory;
+              session.mode = @"music mode";
+              session.categoryOptions = stream && !playing ? 1 : 0;
+              const auto originalOptions = session.categoryOptions;
+              active = true;
+              if (stream) {
+                gIOSNativeMusicStream = std::make_shared<IOSMusicStream>();
+                gIOSNativeMusicStream->playing = playing;
+              } else {
+                gIOSNativeMusicPlayer = [FakePlayer new];
+                gIOSNativeMusicPlayer.rate = playing ? 1.25f : 0.0f;
+                gIOSNativeMusicPlayer.position = 1234567;
+              }
+              const auto *originalStream = gIOSNativeMusicStream.get();
+              __weak FakePlayer *originalPlayer = gIOSNativeMusicPlayer;
+              __block unsigned finished = 0;
+              gIOSNativeMusicFinishedObserver = [[NSNotificationCenter defaultCenter]
+                  addObserverForName:@"finished" object:nil queue:nil
+                  usingBlock:^(NSNotification *) { ++finished; }];
+              gIOSNativeMusicMetadata.title = "retained track";
+              gIOSNativeMusicQueue = {3, 1};
+              gIOSNativeMusicTransportGeneration = 7;
+              gIOSNativeMusicResumeAfterInterruption = true;
+              failureStage = stage;
+              rollbackSucceeds = recover;
+              std::string error;
+              assert(!UnloadIOSNativeMusic(error));
+              assert(error == "original handoff error");
+              assert(gIOSNativeMusicStream.get() == originalStream);
+              assert(gIOSNativeMusicPlayer == originalPlayer);
+              assert(destroyedStreams == 0 && destroyedPlayers == 0 && published == 0);
+              assert(gIOSNativeMusicTransportGeneration == 7);
+              assert(gIOSNativeMusicResumeAfterInterruption);
+              assert(gIOSNativeMusicMetadata.title == "retained track");
+              assert(gIOSNativeMusicQueue.count == 3 && gIOSNativeMusicQueue.currentIndex == 1);
+              if (stream) {
+                assert(gIOSNativeMusicStream->playing == playing);
+                assert(gIOSNativeMusicStream->position == 1234567);
+              } else {
+                assert(gIOSNativeMusicPlayer.rate == (playing ? 1.25f : 0.0f));
+                assert(gIOSNativeMusicPlayer.position == 1234567);
+              }
+              [[NSNotificationCenter defaultCenter] postNotificationName:@"finished" object:nil];
+              assert(finished == 1 && gIOSNativeMusicFinishedObserver != nil);
+              if (recover) {
+                assert(active && [session.category isEqualToString:originalCategory]);
+                assert([session.mode isEqualToString:@"music mode"]);
+                assert(session.categoryOptions == originalOptions);
+              }
+              failureStage = 0;
+              rollbackSucceeds = true;
+              assert(UnloadIOSNativeMusic(error) && error.empty());
+              assert(!gIOSNativeMusicStream && gIOSNativeMusicPlayer == nil);
+              assert(destroyedStreams == (stream ? 1 : 0));
+              assert(destroyedPlayers == (stream ? 0 : 1));
+              assert(gIOSNativeMusicTransportGeneration == 8 && published == 1);
+              assert(!gIOSNativeMusicResumeAfterInterruption);
+              assert(gIOSNativeMusicMetadata.title.empty() && gIOSNativeMusicQueue.count == 0);
+              assert(gIOSNativeMusicFinishedObserver == nil);
+              [[NSNotificationCenter defaultCenter] postNotificationName:@"finished" object:nil];
+              assert(finished == 1);
+              assert(active && [session.category isEqualToString:@"ambient"]);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+'''.replace("UNLOAD", unload)
+        with tempfile.TemporaryDirectory() as folder:
+            folder = Path(folder)
+            mm, executable = folder / "unload.mm", folder / "unload"
+            mm.write_text(fixture)
+            build_foundation_fixture(mm, executable)
+            result = subprocess.run([str(executable)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_failed_stream_is_unloaded_and_stale_callbacks_are_ignored(self):
         native = (ROOT / "src/iOSNatives.mm").read_text()
         load = method(native, "bool LoadIOSNativeMusicStream(")

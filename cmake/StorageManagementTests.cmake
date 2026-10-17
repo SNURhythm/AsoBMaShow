@@ -27,6 +27,7 @@ asobmashow_register_test(storage_media_tests)
 
 add_executable(storage_optimizer_tests tests/storage_optimizer_tests.cpp
     tests/storage_archive_tests.cpp
+    tests/storage_directory_inventory_tests.cpp
     src/storage/StorageArchiveTransaction.cpp
     tests/storage_library_integration.cpp
     src/storage/StorageMeasurement.cpp src/storage/StorageArchiveMeasurement.cpp src/storage/StorageMeasurementState.cpp
@@ -97,15 +98,10 @@ target_sources(archive_file_concurrency_tests PRIVATE tests/storage_measurement_
 target_link_libraries(archive_file_concurrency_tests PRIVATE SQLite3)
 add_test(NAME storage_measurement_tests COMMAND archive_file_concurrency_tests --storage-measurement)
 
-add_executable(storage_directory_inventory_tests tests/storage_directory_inventory_tests.cpp
-    src/storage/StoragePreflight.cpp src/storage/StorageDirectoryWorkingSet.cpp
-    src/storage/ChartResourceInventory.cpp src/storage/StoragePolicy.cpp
-    src/storage/StorageDirectoryInventory.cpp src/storage/StoragePathIndex.cpp
-    src/storage/StorageScanScheduler.cpp src/ChartScanWorkScheduler.cpp
-    src/audio/ChartVisualAssetResolver.cpp src/FileChecksum.cpp src/Uuid.cpp)
-target_compile_features(storage_directory_inventory_tests PRIVATE cxx_std_23)
-target_link_libraries(storage_directory_inventory_tests PRIVATE SQLite3 Threads::Threads)
-asobmashow_register_test(storage_directory_inventory_tests)
+# Preflight now uses the real archive index. Reuse its existing integration
+# binary instead of adding another full archive backend to a standalone test.
+add_custom_target(storage_directory_inventory_tests DEPENDS storage_optimizer_tests)
+add_test(NAME storage_directory_inventory_tests COMMAND storage_optimizer_tests --directory-inventory)
 
 add_executable(storage_measurement_state_tests tests/storage_measurement_state_tests.cpp
     src/storage/StorageMeasurementState.cpp src/storage/StoragePathIndex.cpp)

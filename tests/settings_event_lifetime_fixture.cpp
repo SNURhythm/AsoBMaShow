@@ -31,6 +31,7 @@ constexpr int SDL_EVENT_WINDOW_FIRST = SDL_EVENT_WINDOW_FOCUS_LOST;
 constexpr int SDL_EVENT_WINDOW_LAST = SDL_EVENT_WINDOW_HIDDEN;
 struct SDL_Event { int type = SDL_EVENT_MOUSE_BUTTON_UP; struct { int event = 0; } window; };
 class SceneManager;
+namespace audio::playback { struct BackendOperationResult { bool success = true; std::string diagnostic; }; }
 namespace player_settings { enum class PresentationOrientation { Landscape, Portrait }; }
 struct BackgroundTasks { void setGameplayPaused(bool) {} };
 struct ApplicationContext {
@@ -46,13 +47,21 @@ struct ApplicationContext {
   int gameplayBgaCompositeState = 0;
   struct {
     int stops = 0;
-    bool SetStorageMaintenance(bool active, std::string &) { if (active) ++stops; return true; }
+    bool fail = false;
+    bool SetStorageMaintenance(bool active, std::string &error) {
+      if (active) { if (fail) { error = "native unload failed"; return false; } ++stops; } return true;
+    }
   } musicPlayer;
   struct {
     int stops = 0;
-    struct Result { bool success = true; std::string diagnostic; };
+    using Result = audio::playback::BackendOperationResult;
     bool fail = false;
-    Result discardLoadedMedia() { ++stops; return {!fail, fail ? "backend busy" : ""}; }
+    Result discardLoadedMedia(const std::function<Result()> &beforeDiscard) {
+      if (fail) return {false, "backend busy"};
+      auto result = beforeDiscard();
+      if (result.success) ++stops;
+      return result;
+    }
   } jukebox;
   struct {
     struct { int video = 0; } audioVideo;
@@ -177,6 +186,11 @@ void testMaintenanceAdmission() {
   assert(a->releases == 0 && b->releases == 0);
   context.jukebox.fail = false;
   context.jukebox.stops = 0;
+  context.musicPlayer.fail = true;
+  assert(!admitMedia(context));
+  assert(context.jukebox.stops == 0 && context.musicPlayer.stops == 0);
+  assert(a->releases == 0 && b->releases == 0);
+  context.musicPlayer.fail = false;
   assert(admitMedia(context));
   assert(context.musicPlayer.stops == 1 && context.jukebox.stops == 1);
   assert(a->releases == 1 && b->releases == 1);

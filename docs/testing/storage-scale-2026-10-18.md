@@ -223,3 +223,25 @@ one-worker defaults first), five focused desktop scheduler/measurement/optimizer
 and shared-worker tests, and renewed desktop/iOS/Android application builds.
 Desktop benchmark settings and measurements are unchanged by this mobile-only
 policy update; physical-device speedup is still unmeasured.
+
+## Archive review follow-up
+
+Review previously rebuilt the physical update manifest even when browsing had
+already indexed the archive. It now visits that cached index once per container,
+uses reusable SQLite statements for candidate/collision checks, and leaves full
+physical-layout validation to Apply before encoding or writing. System entries
+excluded from browsing remain excluded from mutation and are preserved verbatim.
+
+The opt-in command below creates one ZIP with 20 folders and 1,000 WAV entries
+per folder, primes the persisted browsing index, then times review separately:
+
+```sh
+cmake-build-debug/storage_scale_benchmark archive-review 20 1000 6 persisted
+```
+
+On this Mac, review fell from **4.408 s to 0.163 s** (about **27×**). The final run
+reported one archive-index visit, 20,000 entries and 18.8 MiB peak RSS. Fixture
+creation/index priming are outside that timing; the payloads are intentionally
+small. This measures metadata review, not device throughput or Apply time on an
+80 GiB archive. The archive regressions verify cached review, physical validation
+before encoding/writes, system-entry preservation and supported ZIP64/TAR layouts.

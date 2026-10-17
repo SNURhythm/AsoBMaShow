@@ -78,11 +78,12 @@ int main(int argc, char **argv) {
     std::uint64_t converted = 0;
     StorageEvidenceMetrics evidence;
     const bool synthetic = mode == "synthetic" || mode == "cancel" || mode == "dispatch";
-    const bool archive = mode == "archive" || mode == "archives";
+    const bool archiveReview = mode == "archive-review";
+    const bool archive = mode == "archive" || mode == "archives" || archiveReview;
     if (archive) {
       archive_file::setArchiveIndexCacheDirectory(temp.root / "indexes");
-      const auto count = mode == "archive" ? 1 : dirs;
-      const auto groups = mode == "archive" ? dirs : 1;
+      const auto count = mode == "archives" ? dirs : 1;
+      const auto groups = mode == "archives" ? 1 : dirs;
       for (std::size_t a = 0; a < count; ++a) {
         const auto path = root / ("p" + std::to_string(a) + ".zip");
         writeArchive(path, groups, files);
@@ -142,7 +143,13 @@ int main(int argc, char **argv) {
     }
     const auto start = Clock::now();
     double preflightSeconds = 0;
-    if (mode == "evidence") {
+    if (archiveReview) {
+      request.policy.audio = AudioAction::LosslessFlac;
+      request.scanScratchRoot = deps.limits.scratchRoot;
+      const auto review = BuildStoragePreflight(request, {}, &metrics, deps);
+      require(review.complete && review.eligibleCount == dirs * files, "archive review candidates");
+      preflightSeconds = seconds(start);
+    } else if (mode == "evidence") {
       require(dirs == workers, "evidence benchmark holds one directory per worker");
       request.policy.audio = AudioAction::LosslessFlac;
       auto preflight = BuildStoragePreflight(request, {}, &metrics, deps);

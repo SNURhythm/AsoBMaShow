@@ -168,6 +168,44 @@ std::uint64_t timestampDistance(std::int64_t left, std::int64_t right) {
   return left >= right ? static_cast<std::uint64_t>(left) - static_cast<std::uint64_t>(right) :
                          static_cast<std::uint64_t>(right) - static_cast<std::uint64_t>(left);
 }
+std::int64_t timestampAdd(std::int64_t left, std::int64_t right) {
+  if ((right > 0 && left > std::numeric_limits<std::int64_t>::max() - right) ||
+      (right < 0 && left < std::numeric_limits<std::int64_t>::min() - right))
+    unsupported("Timestamp addition is out of range");
+  const auto result = left + right;
+  if (result == AV_NOPTS_VALUE) unsupported("Timestamp is out of range");
+  return result;
+}
+std::int64_t timestampSubtract(std::int64_t left, std::int64_t right) {
+  if ((right < 0 && left > std::numeric_limits<std::int64_t>::max() + right) ||
+      (right > 0 && left < std::numeric_limits<std::int64_t>::min() + right))
+    unsupported("Timestamp difference is out of range");
+  const auto result = left - right;
+  if (result == AV_NOPTS_VALUE) unsupported("Timestamp is out of range");
+  return result;
+}
+std::int64_t rescaleTimestamp(std::int64_t value, AVRational source, AVRational destination) {
+  if (value == AV_NOPTS_VALUE || source.num <= 0 || source.den <= 0 || destination.num <= 0 || destination.den <= 0)
+    unsupported("Unknown timestamp or time base");
+  const auto result = av_rescale_q(value, source, destination);
+  // FFmpeg returns INT64_MIN when the rescaled value is unrepresentable.
+  if (result == AV_NOPTS_VALUE) unsupported("Rescaled timestamp is out of range");
+  return result;
+}
+std::int64_t normalizedTimestamp(std::int64_t value, AVRational source, std::int64_t originMicros,
+                                 AVRational destination) {
+  return timestampSubtract(rescaleTimestamp(value, source, destination),
+                           rescaleTimestamp(originMicros, AV_TIME_BASE_Q, destination));
+}
+void validateTimelineOrigin(const Timeline &timeline, std::int64_t originMicros, AVRational destination) {
+  normalizedTimestamp(timeline.first, timeline.timeBase, originMicros, destination);
+  normalizedTimestamp(timeline.end, timeline.timeBase, originMicros, destination);
+}
+void rescalePacketTimestamps(AVPacket &packet, AVRational source, AVRational destination) {
+  if (packet.pts != AV_NOPTS_VALUE) packet.pts = rescaleTimestamp(packet.pts, source, destination);
+  if (packet.dts != AV_NOPTS_VALUE) packet.dts = rescaleTimestamp(packet.dts, source, destination);
+  if (packet.duration > 0) packet.duration = rescaleTimestamp(packet.duration, source, destination);
+}
 void validateDeclaredVideoTimeline(const AVStream &video, const Timeline &decoded) {
   if (video.start_time == AV_NOPTS_VALUE) return;
   if (timestampDistance(decoded.first, video.start_time) > 1)
@@ -239,12 +277,26 @@ Scan scan(const fs::path &path, const Checkpoint &check) {
     description.audioLayoutSupported = layout.order == AV_CHANNEL_ORDER_UNSPEC ||
         (layout.order == AV_CHANNEL_ORDER_NATIVE && (layout.u.mask == AV_CH_LAYOUT_MONO || layout.u.mask == AV_CH_LAYOUT_STEREO));
   }
+  AVRational decodedAspectRatio{0, 1};
   decode(input, check, [&](int index, const AVFrame &decoded) {
     const auto pts = decoded.best_effort_timestamp;
     if (index == input.video) {
       if (!result.video.frames && !(decoded.flags & AV_FRAME_FLAG_KEY))
         throw Failure{StorageReason::ValidationFailed, "Video does not start with an independently decodable frame"};
       if (decoded.width != description.width || decoded.height != description.height) unsupported("Video changes resolution midstream");
+      // Container SAR takes precedence in FFmpeg's display guess. Also track
+      // coded frame SAR so that a fixed container value cannot hide changes.
+      const auto codedAspectRatio = decoded.sample_aspect_ratio;
+      if (codedAspectRatio.num > 0 && codedAspectRatio.den > 0) {
+        if (decodedAspectRatio.num > 0 && av_cmp_q(decodedAspectRatio, codedAspectRatio))
+          unsupported("Video changes sample aspect ratio midstream");
+        decodedAspectRatio = codedAspectRatio;
+      }
+      auto aspectRatio = av_guess_sample_aspect_ratio(input.format, video, const_cast<AVFrame *>(&decoded));
+      if (aspectRatio.num <= 0 || aspectRatio.den <= 0) aspectRatio = {1, 1};
+      if (!result.video.frames) description.sampleAspectRatio = aspectRatio;
+      else if (av_cmp_q(description.sampleAspectRatio, aspectRatio))
+        unsupported("Video changes display aspect ratio midstream");
       const auto pixel = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(decoded.format));
       if (!pixel) unsupported("Unknown pixel format");
       description.alpha |= (pixel->flags & AV_PIX_FMT_FLAG_ALPHA) != 0;
@@ -254,21 +306,21 @@ Scan scan(const fs::path &path, const Checkpoint &check) {
       if (av_frame_get_side_data(&decoded, AV_FRAME_DATA_STEREO3D)) description.unsupportedContent = true;
       auto duration = decoded.duration;
       if (duration <= 0 && description.frameRate.num > 0 && description.frameRate.den > 0)
-        duration = av_rescale_q(1, av_inv_q(description.frameRate), video->time_base);
+        duration = rescaleTimestamp(1, av_inv_q(description.frameRate), video->time_base);
       result.video.add(pts, duration);
       // Container clocks (notably Matroska milliseconds) round rational CFR
       // timestamps. Check the entire cadence within one input tick, rather
       // than treating alternating rounded intervals as genuine VFR bursts.
       if (description.frameRate.num > 0 && description.frameRate.den > 0) {
-        const auto expected = av_rescale_q(result.video.frames - 1,
+        const auto expected = rescaleTimestamp(result.video.frames - 1,
             av_inv_q(description.frameRate), video->time_base);
-        if (std::abs((pts - result.video.first) - expected) > 1) description.variableFrameRate = true;
+        if (timestampDistance(pts - result.video.first, expected) > 1) description.variableFrameRate = true;
       } else description.variableFrameRate = true;
     } else {
       if (decoded.sample_rate != description.audioSampleRate || decoded.ch_layout.nb_channels != description.audioChannels)
         unsupported("Embedded audio changes format midstream");
-      const auto duration = av_rescale_q(decoded.nb_samples, {1, decoded.sample_rate}, result.audio.timeBase);
-      result.audio.add(pts, duration, std::max<std::int64_t>(1, av_rescale_q(1, {1, decoded.sample_rate}, result.audio.timeBase)));
+      const auto duration = rescaleTimestamp(decoded.nb_samples, {1, decoded.sample_rate}, result.audio.timeBase);
+      result.audio.add(pts, duration, std::max<std::int64_t>(1, rescaleTimestamp(1, {1, decoded.sample_rate}, result.audio.timeBase)));
     }
   }, [](int, const AVPacket &) {});
   if (!result.video.frames || (description.hasAudio && !result.audio.frames))
@@ -277,8 +329,10 @@ Scan scan(const fs::path &path, const Checkpoint &check) {
   description.duration = result.video.end - result.video.first;
   description.minimumFrameInterval = result.video.minimumInterval;
   description.audioDiscontinuous = result.audio.discontinuous;
-  result.originMicros = av_rescale_q(result.video.first, result.video.timeBase, AV_TIME_BASE_Q);
-  if (description.hasAudio) result.originMicros = std::min(result.originMicros, av_rescale_q(result.audio.first, result.audio.timeBase, AV_TIME_BASE_Q));
+  result.originMicros = rescaleTimestamp(result.video.first, result.video.timeBase, AV_TIME_BASE_Q);
+  if (description.hasAudio) result.originMicros = std::min(result.originMicros, rescaleTimestamp(result.audio.first, result.audio.timeBase, AV_TIME_BASE_Q));
+  validateTimelineOrigin(result.video, result.originMicros, AV_TIME_BASE_Q);
+  if (description.hasAudio) validateTimelineOrigin(result.audio, result.originMicros, AV_TIME_BASE_Q);
   return result;
 }
 
@@ -357,6 +411,10 @@ struct ScaleBuffer {
 struct EncodedSummary { std::uint64_t frames = 0; };
 EncodedSummary encode(const fs::path &source, const fs::path &destination, const Scan &sourceScan,
                        const VideoCompressionPlan &plan, const Checkpoint &check, bool &created) {
+  validateTimelineOrigin(sourceScan.video, sourceScan.originMicros, plan.timeBase);
+  if (sourceScan.description.hasAudio)
+    validateTimelineOrigin(sourceScan.audio, sourceScan.originMicros,
+        plan.audio == VideoAudioTreatment::Remux ? sourceScan.audio.timeBase : AVRational{1, sourceScan.description.audioSampleRate});
   Input input(source); Output output; output.open(destination, created);
   Codec videoEncoder, audioEncoder;
   ScaleBuffer scale; AudioBuffers audioBuffers;
@@ -440,12 +498,12 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
           throw Failure{StorageReason::ValidationFailed, "Encoder changed video presentation timestamps"};
         compressed->duration = durations.front().second; durations.pop_front();
       } else {
-        const auto end = av_rescale_q(sourceScan.audio.end, sourceScan.audio.timeBase, encoder.time_base) -
-                         av_rescale_q(sourceScan.originMicros, AV_TIME_BASE_Q, encoder.time_base);
-        if (compressed->pts != AV_NOPTS_VALUE && compressed->duration > 0 && compressed->pts + compressed->duration > end)
-          compressed->duration = std::max<std::int64_t>(0, end - compressed->pts);
+        const auto end = normalizedTimestamp(sourceScan.audio.end, sourceScan.audio.timeBase, sourceScan.originMicros, encoder.time_base);
+        if (compressed->pts != AV_NOPTS_VALUE && compressed->duration > 0)
+          compressed->duration = compressed->pts >= end ? 0 :
+              std::min(compressed->duration, timestampSubtract(end, compressed->pts));
       }
-      av_packet_rescale_ts(compressed.get(), encoder.time_base, stream->time_base);
+      rescalePacketTimestamps(*compressed, encoder.time_base, stream->time_base);
       compressed->stream_index = stream->index;
       checked(av_interleaved_write_frame(output.format, compressed.get()), "Write MP4 packet", StorageReason::IoError);
       av_packet_unref(compressed.get());
@@ -454,8 +512,7 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
   };
   auto pending = frame(); bool hasPending = false;
   VideoTimestampSelector selector(plan);
-  const auto videoOffset = av_rescale_q(sourceScan.video.first, sourceScan.video.timeBase, video.time_base) -
-                           av_rescale_q(sourceScan.originMicros, AV_TIME_BASE_Q, video.time_base);
+  const auto videoOffset = normalizedTimestamp(sourceScan.video.first, sourceScan.video.timeBase, sourceScan.originMicros, video.time_base);
   EncodedSummary summary;
   std::int64_t audioPosition = AV_NOPTS_VALUE, audioNextInput = AV_NOPTS_VALUE;
   auto flushAudio = [&](bool final) {
@@ -470,7 +527,7 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
       checked(av_frame_get_buffer(samples.get(), 0), "Allocate bounded AAC frame");
       if (av_audio_fifo_read(audioBuffers.fifo, reinterpret_cast<void **>(samples->extended_data), samples->nb_samples) != samples->nb_samples)
         throw Failure{StorageReason::ValidationFailed, "Read native audio samples failed"};
-      audioPosition += samples->nb_samples; send(audio, audioStream, samples.get());
+      audioPosition = timestampAdd(audioPosition, samples->nb_samples); send(audio, audioStream, samples.get());
     }
   };
   decode(input, check, [&](int index, const AVFrame &decoded) {
@@ -478,9 +535,10 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
       auto selected = selector.Select(decoded.best_effort_timestamp);
       if (!selected.valid) unsupported("Invalid video presentation timestamps");
       if (!selected.keep) return;
-      selected.timestamp += videoOffset;
+      if (selected.timestamp == AV_NOPTS_VALUE) unsupported("Selected video timestamp is out of range");
+      selected.timestamp = timestampAdd(selected.timestamp, videoOffset);
       if (hasPending) {
-        pending->duration = selected.timestamp - pending->pts;
+        pending->duration = timestampSubtract(selected.timestamp, pending->pts);
         send(video, videoStream, pending.get()); ++summary.frames;
         av_frame_unref(pending.get());
       }
@@ -501,12 +559,11 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
       hasPending = true;
     } else if (audioEncoder.value) {
       auto &audio = *audioEncoder.value;
-      const auto pts = av_rescale_q(decoded.best_effort_timestamp, sourceAudio->time_base, audio.time_base) -
-                       av_rescale_q(sourceScan.originMicros, AV_TIME_BASE_Q, audio.time_base);
+      const auto pts = normalizedTimestamp(decoded.best_effort_timestamp, sourceAudio->time_base, sourceScan.originMicros, audio.time_base);
       if (audioPosition == AV_NOPTS_VALUE) audioPosition = pts;
-      if (audioNextInput != AV_NOPTS_VALUE && std::abs(pts - audioNextInput) > 1)
+      if (audioNextInput != AV_NOPTS_VALUE && timestampDistance(pts, audioNextInput) > 1)
         unsupported("Discontinuous audio cannot be transcoded faithfully");
-      audioNextInput = pts + decoded.nb_samples;
+      audioNextInput = timestampAdd(pts, decoded.nb_samples);
       if (decoded.nb_samples <= 0 || decoded.nb_samples > 1048576) unsupported("Unsupported audio frame size");
       auto converted = frame();
       converted->format = audio.sample_fmt; converted->sample_rate = audio.sample_rate; converted->nb_samples = decoded.nb_samples;
@@ -525,14 +582,14 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
     if (index != input.audio || plan.audio != VideoAudioTreatment::Remux) return;
     if (sourcePacket.pts == AV_NOPTS_VALUE || sourcePacket.dts == AV_NOPTS_VALUE) unsupported("Embedded audio packet has no timestamp");
     auto copy = packet(); checked(av_packet_ref(copy.get(), &sourcePacket), "Retain embedded audio packet");
-    const auto origin = av_rescale_q(sourceScan.originMicros, AV_TIME_BASE_Q, sourceAudio->time_base);
-    copy->pts -= origin; copy->dts -= origin;
-    av_packet_rescale_ts(copy.get(), sourceAudio->time_base, audioStream->time_base); copy->stream_index = audioStream->index;
+    const auto origin = rescaleTimestamp(sourceScan.originMicros, AV_TIME_BASE_Q, sourceAudio->time_base);
+    copy->pts = timestampSubtract(copy->pts, origin); copy->dts = timestampSubtract(copy->dts, origin);
+    rescalePacketTimestamps(*copy, sourceAudio->time_base, audioStream->time_base); copy->stream_index = audioStream->index;
     checked(av_interleaved_write_frame(output.format, copy.get()), "Remux embedded audio", StorageReason::IoError);
   });
   if (!hasPending) throw Failure{StorageReason::ValidationFailed, "No selected video frames"};
-  pending->duration = av_rescale_q(sourceScan.video.end, sourceScan.video.timeBase, video.time_base) -
-                       av_rescale_q(sourceScan.originMicros, AV_TIME_BASE_Q, video.time_base) - pending->pts;
+  pending->duration = timestampSubtract(normalizedTimestamp(sourceScan.video.end, sourceScan.video.timeBase,
+                                                           sourceScan.originMicros, video.time_base), pending->pts);
   if (pending->duration <= 0) unsupported("Invalid final video duration");
   send(video, videoStream, pending.get()); ++summary.frames;
   send(video, videoStream, nullptr);
@@ -550,24 +607,24 @@ void verify(const Scan &source, const Scan &output, const VideoCompressionPlan &
       av_cmp_q(description.sampleAspectRatio, plan.sampleAspectRatio) || description.rotation != plan.rotation ||
       description.alpha || description.hdr || description.interlaced || description.unsupportedContent ||
       description.hasAudio != source.description.hasAudio || output.video.frames != summary.frames) invalid();
-  const auto videoTolerance = std::max(av_rescale_q(source.video.maximumDuration, source.video.timeBase, AV_TIME_BASE_Q),
-                                       av_rescale_q(1, av_inv_q(plan.frameRate), AV_TIME_BASE_Q)) + 1;
-  const auto expectedStart = av_rescale_q(source.video.first, source.video.timeBase, AV_TIME_BASE_Q) - source.originMicros;
-  const auto expectedEnd = av_rescale_q(source.video.end, source.video.timeBase, AV_TIME_BASE_Q) - source.originMicros;
-  if (std::abs(av_rescale_q(output.video.first, output.video.timeBase, AV_TIME_BASE_Q) - expectedStart) > 2 ||
-      std::abs(av_rescale_q(output.video.end, output.video.timeBase, AV_TIME_BASE_Q) - expectedEnd) > videoTolerance) invalid();
+  const auto videoTolerance = timestampAdd(std::max(rescaleTimestamp(source.video.maximumDuration, source.video.timeBase, AV_TIME_BASE_Q),
+                                       rescaleTimestamp(1, av_inv_q(plan.frameRate), AV_TIME_BASE_Q)), 1);
+  const auto expectedStart = normalizedTimestamp(source.video.first, source.video.timeBase, source.originMicros, AV_TIME_BASE_Q);
+  const auto expectedEnd = normalizedTimestamp(source.video.end, source.video.timeBase, source.originMicros, AV_TIME_BASE_Q);
+  if (timestampDistance(rescaleTimestamp(output.video.first, output.video.timeBase, AV_TIME_BASE_Q), expectedStart) > 2 ||
+      timestampDistance(rescaleTimestamp(output.video.end, output.video.timeBase, AV_TIME_BASE_Q), expectedEnd) > videoTolerance) invalid();
   // Unreduced CFR retains its source-clock rounding; the encoder has already
   // verified every presentation timestamp. Enforce the exact grid on reductions.
   if (plan.reduceFps && output.video.minimumInterval > 0 &&
       av_compare_ts(output.video.minimumInterval, output.video.timeBase, 1, {1, plan.maxFps}) < 0) invalid();
   if (description.hasAudio) {
     if (description.audioChannels != source.description.audioChannels || description.audioSampleRate != source.description.audioSampleRate) invalid();
-    const auto audioTolerance = std::max(av_rescale_q(source.audio.maximumDuration, source.audio.timeBase, AV_TIME_BASE_Q),
-                                         av_rescale_q(output.audio.maximumDuration, output.audio.timeBase, AV_TIME_BASE_Q)) + 2;
-    const auto start = av_rescale_q(source.audio.first, source.audio.timeBase, AV_TIME_BASE_Q) - source.originMicros;
-    const auto end = av_rescale_q(source.audio.end, source.audio.timeBase, AV_TIME_BASE_Q) - source.originMicros;
-    if (std::abs(av_rescale_q(output.audio.first, output.audio.timeBase, AV_TIME_BASE_Q) - start) > audioTolerance ||
-        std::abs(av_rescale_q(output.audio.end, output.audio.timeBase, AV_TIME_BASE_Q) - end) > audioTolerance) invalid();
+    const auto audioTolerance = timestampAdd(std::max(rescaleTimestamp(source.audio.maximumDuration, source.audio.timeBase, AV_TIME_BASE_Q),
+                                         rescaleTimestamp(output.audio.maximumDuration, output.audio.timeBase, AV_TIME_BASE_Q)), 2);
+    const auto start = normalizedTimestamp(source.audio.first, source.audio.timeBase, source.originMicros, AV_TIME_BASE_Q);
+    const auto end = normalizedTimestamp(source.audio.end, source.audio.timeBase, source.originMicros, AV_TIME_BASE_Q);
+    if (timestampDistance(rescaleTimestamp(output.audio.first, output.audio.timeBase, AV_TIME_BASE_Q), start) > audioTolerance ||
+        timestampDistance(rescaleTimestamp(output.audio.end, output.audio.timeBase, AV_TIME_BASE_Q), end) > audioTolerance) invalid();
   }
 }
 }

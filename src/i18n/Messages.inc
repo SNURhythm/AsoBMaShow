@@ -2119,6 +2119,7 @@
 {"settings.visual.start_lane_indicators.label", "Start Lane Indicators", "시작 레인 표시", "開始レーン表示", "起始轨道指示", "起始軌道指示"},
 {"settings.visual.touch_points.label", "Touch Points", "터치 위치", "タッチ位置", "触控点", "觸控點"},
 {"storage.ui.already_optimized", "Already within the selected video limits", "이미 선택한 영상 제한 이내입니다", "選択した動画上限を満たしています", "已符合所选视频限制", "已符合所選影片限制"},
+{"storage.ui.archive_review_hint", "Archive candidates are checked for safe in-place updates when you apply.", "적용 시 압축 파일을 원본 내에서 안전하게 변경할 수 있는지 확인합니다.", "適用時に、アーカイブを安全に直接更新できるか確認します。", "应用时会检查压缩包中的候选文件能否安全地原位更新。", "套用時會檢查壓縮檔中的候選檔案能否安全地原位更新。"},
 {"storage.ui.archive_uncompressed", "Archive (uncompressed)", "압축 파일 (해제 후 크기)", "アーカイブ（展開後の容量）", "压缩包（解压后大小）", "壓縮檔（解壓後大小）"},
 {"storage.ui.archive_update_unsupported", "Archive format or layout does not support in-place updates", "이 압축 형식이나 구조는 원본 내 변경을 지원하지 않습니다", "このアーカイブ形式または構造は直接更新に対応していません", "此压缩格式或结构不支持原位更新", "此壓縮格式或結構不支援原位更新"},
 {"storage.ui.audio", "Audio", "오디오", "音声", "音频", "音訊"},

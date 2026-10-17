@@ -973,6 +973,7 @@ bool MusicPlayerService::ShuffleQueue(std::string &errorMessage) {
 }
 
 bool MusicPlayerService::SetStorageMaintenance(bool active, std::string &errorMessage) {
+  errorMessage.clear();
   {
     std::lock_guard admission(playbackAdmissionMutex);
     storageMaintenance = active;
@@ -981,9 +982,22 @@ bool MusicPlayerService::SetStorageMaintenance(bool active, std::string &errorMe
   if (!active) return true;
   // Do not hold admission while joining the native event pump: it may be
   // finishing a Next/Previous request which must now observe the closed gate.
-  Stop(errorMessage);
-  errorMessage.clear();
-  return !native_music_player::IsSupported() || native_music_player::Unload(errorMessage);
+  StopPlaybackWorker();
+  StopNativeControlEventPump();
+  bool unloaded = false;
+  {
+    std::lock_guard lock(stateMutex);
+    // A failed unload retains the native media. Keep the matching track,
+    // timer and control pump available on failure; Stop would erase them.
+    unloaded = !native_music_player::IsSupported() || native_music_player::Unload(errorMessage);
+    if (unloaded) loadedTrack.reset();
+  }
+  if (!unloaded) {
+    EnsureNativeControlEventPump();
+    return false;
+  }
+  ClearSleepTimer();
+  return true;
 }
 
 bool MusicPlayerService::PlayCurrent(std::string &errorMessage) {
@@ -1225,6 +1239,10 @@ bool MusicPlayerService::ProcessNativeControlEvents(
   statusMessage = {};
   bool handled = false;
   const auto restoreIdleSession = [this] {
+    // The pump may already have drained this event when maintenance closes
+    // admission. Its rejected request must not mutate the retained transport.
+    std::lock_guard admission(playbackAdmissionMutex);
+    if (storageMaintenance) return;
     std::lock_guard lock(stateMutex);
     const auto state = native_music_player::GetState();
     if (!state.playing) {
@@ -1261,6 +1279,8 @@ bool MusicPlayerService::ProcessNativeControlEvents(
     case native_music_player::ControlEvent::Finished:
       if (!PlayNextAsync(statusMessage, i18n::message(
               "music_player.service.finished_next.message"))) {
+        std::lock_guard admission(playbackAdmissionMutex);
+        if (storageMaintenance) break;
         std::lock_guard lock(stateMutex);
         std::string ignored;
         native_music_player::Stop(ignored);

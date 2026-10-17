@@ -167,7 +167,7 @@ StoragePreflight BuildStoragePreflight(const InventoryRequest &request, Checkpoi
     return true;
   }, checkpoint);
   result.cancelled = !checkpoint(); result.complete = complete && !result.cancelled;
-  AppendStorageArchivePreflight(result, checkpoint);
+  AppendStorageArchivePreflight(result, checkpoint, metrics);
   for (auto &group : result.groups) if (!group.totalBytes) {
     result.totalBytes.reset();
     if (group.reason.code == StorageReason::None) {

@@ -3209,10 +3209,11 @@ void Jukebox::loadVisuals(bms_parser::Chart &chart,
   }
 }
 
-audio::playback::BackendOperationResult Jukebox::discardLoadedMedia() {
+audio::playback::BackendOperationResult Jukebox::discardLoadedMedia(
+    const std::function<audio::playback::BackendOperationResult()> &beforeDiscard) {
   auto result = stop();
   if (!result.success) return result;
-  result = audio.unloadSounds();
+  result = audio.unloadSounds(beforeDiscard);
   if (!result.success) return result;
   wavTableAbs.clear();
   audioList.clear();

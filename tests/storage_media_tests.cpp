@@ -121,6 +121,64 @@ void declaredVideoTimelineTests() {
   require(accepts(AV_NOPTS_VALUE, maximum, 0, 1),
           "unknown container start does not invent a declared end");
 }
+void crossStreamTimelineTests() {
+  const auto maximum = std::numeric_limits<std::int64_t>::max();
+  const auto minimum = std::numeric_limits<std::int64_t>::min();
+  const auto rejectsRange = [](auto operation) {
+    try { operation(); }
+    catch (const Failure &failure) { return failure.reason == StorageReason::UnsupportedFormat; }
+    return false;
+  };
+  require(rejectsRange([&] { normalizedTimestamp(maximum - 2, AV_TIME_BASE_Q, -10, AV_TIME_BASE_Q); }) &&
+              rejectsRange([&] { normalizedTimestamp(minimum + 1, AV_TIME_BASE_Q, 10, AV_TIME_BASE_Q); }),
+          "origin subtraction rejects overflow at either signed boundary");
+  require(rejectsRange([&] { normalizedTimestamp(maximum / 2, {1, 1}, 0, AV_TIME_BASE_Q); }) &&
+              rejectsRange([&] { normalizedTimestamp(0, AV_TIME_BASE_Q, maximum / 2, {1, 1000000000}); }),
+          "timestamp and origin rescaling reject FFmpeg's overflow sentinel");
+  require(rejectsRange([&] { timestampAdd(maximum, 1); }) &&
+              rejectsRange([&] { timestampAdd(minimum + 1, -2); }) &&
+              rejectsRange([&] { timestampSubtract(minimum + 1, 1); }),
+          "frame offsets and durations cannot overflow or become unknown timestamps");
+  require(normalizedTimestamp(maximum - 1, AV_TIME_BASE_Q, maximum - 2, AV_TIME_BASE_Q) == 1 &&
+              normalizedTimestamp(minimum + 2, AV_TIME_BASE_Q, minimum + 1, AV_TIME_BASE_Q) == 1 &&
+              normalizedTimestamp(-48000, {1, 48000}, -2000000, {1, 48000}) == 48000,
+          "near-limit and negative origins preserve representable relative timing");
+  AVPacket remux{};
+  remux.pts = maximum / 2; remux.dts = remux.pts; remux.duration = 1;
+  require(rejectsRange([&] { rescalePacketTimestamps(remux, {1, 1}, AV_TIME_BASE_Q); }),
+          "remux rescaling rejects timestamps that cannot fit the muxer clock");
+  Scan source, output;
+  source.video.timeBase = output.video.timeBase = AV_TIME_BASE_Q;
+  source.audio.timeBase = AV_TIME_BASE_Q;
+  source.video.add(maximum - 2, 1);
+  source.audio.add(-10, 1);
+  source.originMicros = -10;
+  output.video.add(0, 1);
+  output.description.h264 = true;
+  output.description.width = output.description.height = 16;
+  output.description.sampleAspectRatio = {1, 1};
+  VideoCompressionPlan plan;
+  plan.width = plan.height = 16; plan.frameRate = {25, 1}; plan.sampleAspectRatio = {1, 1};
+  bool rejected = false;
+  try { verify(source, output, plan, {1}); }
+  catch (const Failure &failure) { rejected = failure.reason == StorageReason::UnsupportedFormat; }
+  require(rejected, "cross-stream origin rejects an unrepresentable normalized video timestamp");
+  plan.timeBase = AV_TIME_BASE_Q;
+  bool created = false;
+  require(rejectsRange([&] { encode({}, {}, source, plan, {}, created); }) && !created,
+          "encoder rejects cross-stream overflow before opening an output");
+  source.video = {}; source.video.timeBase = AV_TIME_BASE_Q; source.video.add(0, 1);
+  source.audio = {}; source.audio.timeBase = AV_TIME_BASE_Q; source.audio.add(maximum - 2, 1);
+  source.description.hasAudio = true;
+  source.description.audioSampleRate = 48000;
+  plan.audio = VideoAudioTreatment::Remux;
+  require(rejectsRange([&] { encode({}, {}, source, plan, {}, created); }) && !created,
+          "encoder also validates a distant remuxed audio endpoint");
+  plan.audio = VideoAudioTreatment::Aac;
+  source.originMicros = minimum + 1;
+  require(rejectsRange([&] { encode({}, {}, source, plan, {}, created); }) && !created,
+          "encoder rejects a shared origin outside the destination timestamp range");
+}
 void audioTests() {
   storage_test::TempDirectory temp;
   StoragePolicy policy;
@@ -235,6 +293,23 @@ void audioTests() {
           "existing MP3 is never recompressed");
 }
 
+void changingAspectRatioTests() {
+  storage_test::TempDirectory temp;
+  storage_test::VideoFixture fixture;
+  fixture.laterSampleAspectRatio = {4, 3};
+  const auto input = temp.root / "changing-sar.mpg";
+  const auto output = temp.root / "changing-sar.mp4";
+  storage_test::makeVideo(input, fixture);
+  const auto original = storage_test::inspectVideo(input);
+  require(original.frameSampleAspectRatios.size() == 30 &&
+              av_cmp_q(original.frameSampleAspectRatios.front(), original.frameSampleAspectRatios.back()) != 0,
+          "fixture decodes constant pixel dimensions with changing frame aspect ratio");
+  StoragePolicy policy; policy.bga = BgaAction::CompressH264;
+  const auto result = EncodeBga(candidate(input), policy, output, {}, {});
+  require(result.outcome == FileOutcome::Skipped && result.reason.code == StorageReason::UnsupportedFormat &&
+              !std::filesystem::exists(output) && std::filesystem::exists(input),
+          "changing decoded aspect ratio keeps original without creating an output");
+}
 void videoTests() {
   storage_test::TempDirectory temp;
   StoragePolicy policy; policy.bga = BgaAction::CompressH264;
@@ -385,7 +460,7 @@ void videoTests() {
 }
 int main() {
   av_log_set_level(AV_LOG_ERROR);
-  try { timelineTests(); declaredVideoTimelineTests(); audioTests(); videoTests(); }
+  try { timelineTests(); declaredVideoTimelineTests(); crossStreamTimelineTests(); changingAspectRatioTests(); audioTests(); videoTests(); }
   catch (const std::exception &error) { std::cerr << error.what() << '\n'; return 1; }
   return 0;
 }

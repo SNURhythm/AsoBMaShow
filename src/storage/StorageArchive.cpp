@@ -1,6 +1,7 @@
 #include "StorageArchive.h"
 #include "StorageArchiveDb.h"
 #include "../text/Utf8.h"
+#include "../archive/ArchiveEntryFilter.h"
 #include <algorithm>
 #include <array>
 #include <climits>
@@ -294,8 +295,14 @@ std::optional<StorageArchiveEntry> StorageArchive::Next(std::optional<std::uint6
   if (!q.step()) return {}; return row(q);
 }
 std::optional<AssetCandidate> StorageArchive::Candidate(const StorageArchiveEntry &entry, const StoragePolicy &policy, StorageDiagnostic &reason) const {
+  Statement collisions(db->value, candidateCollisionSql);
+  return archiveCandidate(entry, policy, reason, collisions);
+}
+std::optional<AssetCandidate> archive_detail::archiveCandidate(const StorageArchiveEntry &entry,
+    const StoragePolicy &policy, StorageDiagnostic &reason, Statement &q) {
   reason = {}; if (entry.directory || !IsValid(policy)) return {};
   const auto path = fs::u8path(entry.name), extension = path.extension();
+  if (archive_file::isSystemEntry(path)) return {};
   const auto kind = asobmshow::chart_assets::ClassifyMediaPath(path);
   const auto ext = asobmshow::chart_assets::LowerMediaExtension(path);
   AssetCandidate candidate{.source = path, .destination = path, .kind = kind, .identity = {.bytes = entry.bytes}};
@@ -307,7 +314,7 @@ std::optional<AssetCandidate> StorageArchive::Candidate(const StorageArchiveEntr
   } else return {};
   if (candidate.operation != AssetOperation::Delete) {
     auto stem = path; stem.replace_extension();
-    Statement q(db->value, "SELECT count(*) FROM entries WHERE (stem=? AND media=?) OR (name=? AND id!=?)");
+    q.reset();
     q.text(1, lower(pathText(stem))); q.bind(2, static_cast<unsigned>(kind)); q.text(3, pathText(candidate.destination)); q.bind(4, entry.id); q.step();
     if (q.integer(0) > 1) { reason = {StorageReason::Collision, "Same-stem archive media alternatives are ambiguous"}; return {}; }
   }

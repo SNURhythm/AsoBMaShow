@@ -168,12 +168,14 @@ bool InitializeStorageServices(ApplicationContext &context) {
       *environment = std::move(*access);
       if (context.sceneManager && !context.sceneManager->canPrepareForStorageMaintenance(error)) return {};
       // Entering Storage pauses the retained scenes and joins their preload
-      // workers. The maintenance gate prevents new loads. Confirm backend
-      // teardown before clearing scene owners or stopping native music so a
-      // backend rejection leaves those owners available when returning.
-      auto stopped = context.jukebox.discardLoadedMedia();
+      // workers. The maintenance gate prevents new loads. After confirming the
+      // shared backend is stopped, unload native music before releasing shared
+      // PCM or scene owners. Either rejection retains the loaded media.
+      auto stopped = context.jukebox.discardLoadedMedia([&] {
+        const bool unloaded = context.musicPlayer.SetStorageMaintenance(true, error);
+        return audio::playback::BackendOperationResult{.success = unloaded, .diagnostic = error};
+      });
       if (!stopped.success) { error = stopped.diagnostic; return {}; }
-      if (!context.musicPlayer.SetStorageMaintenance(true, error)) return {};
       if (context.sceneManager && !context.sceneManager->prepareForStorageMaintenance(error)) return {};
       return guard;
     },

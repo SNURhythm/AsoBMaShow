@@ -8,6 +8,7 @@ a = p.parse_args()
 source = (a.root / 'src/audio/MusicPlayerService.cpp').read_text()
 methods = '\n'.join(extract(source, signature) for signature in (
     'bool MusicPlayerService::SetStorageMaintenance(',
+    'bool MusicPlayerService::ProcessNativeControlEvents(\n    i18n::Text &',
     'bool MusicPlayerService::PlayCurrent(',
     'bool MusicPlayerService::PlayNext(',
     'bool MusicPlayerService::PlayPrevious(',

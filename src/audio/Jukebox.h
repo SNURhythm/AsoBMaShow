@@ -218,7 +218,8 @@ public:
   void loadVisuals(bms_parser::Chart &chart, std::atomic_bool &isCancelled);
   void unloadVisuals();
   // Requires all scene preparation workers to have stopped.
-  audio::playback::BackendOperationResult discardLoadedMedia();
+  audio::playback::BackendOperationResult discardLoadedMedia(
+      const std::function<audio::playback::BackendOperationResult()> &beforeDiscard = {});
   void schedule(bms_parser::Chart &chart, bool scheduleNotes,
                 std::atomic_bool &isCancelled,
                 std::optional<long long> noteScheduleCutoffMicros =

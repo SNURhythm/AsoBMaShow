@@ -4,6 +4,7 @@
 #include "../src/storage/StorageArchiveDb.h"
 #include "../src/audio/decoder.h"
 #include "../src/ArchiveRAII.h"
+#include "../src/ArchiveFile.h"
 #include "StorageTestSupport.h"
 #include <archive_entry.h>
 #include <zlib.h>
@@ -12,6 +13,7 @@ using namespace storage_management;
 using storage_test::require;
 namespace fs = std::filesystem;
 namespace {
+std::map<std::string, std::string> readArchive(const fs::path &path);
 void writeArchive(const fs::path &path, const std::vector<std::pair<std::string, std::string>> &files,
     bool deflated = false, bool tar = false) {
   auto writer = makeArchiveWriteHandle();
@@ -98,6 +100,53 @@ void archiveReviewSeparatesPrivateAndLibraryAccess() {
   const auto linked = BuildStoragePreflight(request);
   require(linked.eligibleCount == 0 && linked.groups.front().reason.code == StorageReason::UnsafePath,
       "symlink beneath the private boundary still rejects scratch storage");
+}
+void reviewUsesCachedIndexAndApplyValidatesLayout() {
+  storage_test::TempDirectory temp;
+  archive_file::setArchiveIndexCacheDirectory(temp.root / "indexes");
+  const auto path = temp.root / "songs.zip";
+  writeArchive(path, {{"a.wav", std::string(1000, 'a')}, {"b.wav", std::string(1000, 'b')}});
+  // Browsing reads ZIP's central directory. Review can reuse that index even
+  // though a local header is invalid; Apply must validate physical records.
+  {
+    std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out);
+    const std::string bytes((std::istreambuf_iterator<char>(file)), {});
+    const auto second = bytes.find("PK\003\004", 4);
+    require(second != std::string::npos, "find second local header");
+    file.clear(); file.seekp(second); file.write("BAD!", 4);
+  }
+  require(archive_file::visitIndexEntries(path, [](const auto &) { return true; }), "prime browsing index after the edit");
+  InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+      .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = temp.root / "scan"};
+  StorageScanMetrics metrics;
+  const auto review = BuildStoragePreflight(request, {}, &metrics);
+  require(review.complete && review.eligibleCount == 2 && metrics.archiveIndexVisits == 1 && metrics.archiveEntries == 2,
+      "review consumes one cached index without rebuilding physical layout metadata");
+  std::string error; const auto before = HashStorageFile(path, {}, error);
+  unsigned encodes = 0;
+  StorageArchiveDependencies deps{.encode = [&](const auto &, const auto &, const auto &, auto, auto) {
+    ++encodes; return EncodeResult{};
+  }};
+  const auto result = UpdateStorageArchive(review.archives.front(), request.policy,
+      MakeStoragePlatformPaths(temp.root / "private", {temp.root}), deps);
+  require(result.failed == 1 && !result.recoveryRequired && encodes == 0 && HashStorageFile(path, {}, error) == before,
+      "Apply validates physical layout before encoding or writing despite a cached review");
+}
+void reviewAndApplyPreserveSystemEntries() {
+  storage_test::TempDirectory temp;
+  const auto path = temp.root / "songs.zip";
+  writeArchive(path, {{"movie.avi", "video"}, {"._movie.avi", "sidecar"},
+      {"__MACOSX/other.avi", "system"}, {"song/chart.bms", "chart"}});
+  InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+      .policy = {.bga = BgaAction::Delete}, .scanScratchRoot = temp.root / "scan"};
+  const auto review = BuildStoragePreflight(request);
+  require(review.eligibleCount == 1, "review excludes the browsing index's system entries");
+  const auto report = UpdateStorageArchive(review.archives.front(), request.policy,
+      MakeStoragePlatformPaths(temp.root / "private", {temp.root}), {});
+  const auto files = readArchive(path);
+  require(report.deleted == 1 && !report.failed && files.size() == 3 &&
+      files.at("._movie.avi") == "sidecar" && files.at("__MACOSX/other.avi") == "system" &&
+      files.at("song/chart.bms") == "chart", "Apply changes exactly the reviewed media, preserving excluded system entries");
 }
 std::map<std::string, std::string> readArchive(const fs::path &path) {
   auto reader = makeArchiveReadHandle(); archive_read_support_filter_all(reader.get()); archive_read_support_format_all(reader.get());
@@ -294,7 +343,17 @@ void unsafeAndStaleArchivesAreRejected() {
     InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
         .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = temp.root / "scan"};
     const auto review = BuildStoragePreflight(request);
-    if (mode != "stale") {
+    if ((mode == "encrypted" || mode == "traversal") && review.eligibleCount) {
+      std::string error; const auto before = HashStorageFile(path, {}, error);
+      unsigned encodes = 0;
+      StorageArchiveDependencies deps{.encode = [&](const auto &, const auto &, const auto &, auto, auto) {
+        ++encodes; return EncodeResult{};
+      }};
+      const auto result = UpdateStorageArchive(review.archives.front(), request.policy,
+          MakeStoragePlatformPaths(temp.root / "private", {temp.root}), deps);
+      require(result.failed == 1 && !result.recoveryRequired && encodes == 0 && HashStorageFile(path, {}, error) == before,
+          "indexed candidates with unsafe layouts are rejected before encoding or mutation");
+    } else if (mode != "stale") {
       require(review.eligibleCount == 0 && review.EligibleRoots().empty(), "unsupported, ambiguous or unsafe archives have no mutation admission");
     } else {
       std::ofstream(path, std::ios::binary | std::ios::app) << 'x';
@@ -346,6 +405,8 @@ void storageArchiveTests() {
   for (const auto &[name, run] : std::vector<std::pair<const char *, void(*)()>>{
       {"manifest", manifestsExtractEntries}, {"preflight", selectedArchiveFoldersAreEligible},
       {"sandbox", archiveReviewSeparatesPrivateAndLibraryAccess},
+      {"cached-review", reviewUsesCachedIndexAndApplyValidatesLayout},
+      {"system-entries", reviewAndApplyPreserveSystemEntries},
       {"update", archiveUpdatesBatchWithoutFullCopy}, {"recovery", interruptedArchiveWritesRecover},
       {"zip64", sparseZip64AndLegacyNames}, {"invalid-encoding", malformedLegacyNamesAreRejected},
       {"playback", realArchiveOptimizerPreservesPlayback},

@@ -5626,6 +5626,22 @@ bool UnloadIOSNativeMusic(std::string &errorMessage) {
   errorMessage.clear();
   @autoreleasepool {
     @synchronized(IOSNativeMusicLock()) {
+      AVAudioSession *session = [AVAudioSession sharedInstance];
+      NSString *category = session.category;
+      NSString *mode = session.mode;
+      const auto options = session.categoryOptions;
+      // Admission may reject this unload. Keep the transport and its owners
+      // intact until the fallible session handoff has completed.
+      if (!RestoreIOSForegroundAudioSession(errorMessage)) {
+        // A failed handoff may already have deactivated or recategorized the
+        // session. Restore its actual configuration (paused streams can use
+        // Ambient) without replacing the original handoff diagnostic.
+        NSError *ignored = nil;
+        [session setCategory:category mode:mode options:options error:&ignored];
+        ignored = nil;
+        [session setActive:YES error:&ignored];
+        return false;
+      }
       ++gIOSNativeMusicTransportGeneration;
       gIOSNativeMusicResumeAfterInterruption = false;
       if (gIOSNativeMusicFinishedObserver != nil) {
@@ -5639,7 +5655,7 @@ bool UnloadIOSNativeMusic(std::string &errorMessage) {
       gIOSNativeMusicMetadata = {};
       gIOSNativeMusicQueue = {};
       PublishIOSNativeMusicNowPlayingInfoLocked(nil, false);
-      return RestoreIOSForegroundAudioSession(errorMessage);
+      return true;
     }
   }
 }

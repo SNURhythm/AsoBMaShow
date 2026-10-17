@@ -115,7 +115,13 @@ Symlinks, hard links, special files and unsafe filesystem paths are rejected.
 
 Selecting several folders inside one archive creates one batch. Only the selected
 media changes; charts, images and unselected entry contents stay intact. Review
-shows uncompressed eligible input bytes. Reported savings are the reduction in
+uses the existing browsing index for uncompressed candidate input bytes and
+collision checks, once per physical archive. It does not rebuild the physical
+update manifest or seek through every local entry header. Archive layout safety
+is validated when Apply starts, before encoding or any archive write; candidates
+in encrypted, unsafe or otherwise unsupported layouts can therefore be rejected
+at that point. Source identity is checked during both review and Apply.
+Reported savings are the reduction in
 the archive's file length, which can differ from filesystem allocation.
 
 There is no second complete archive or extracted tree. A disk-backed index and

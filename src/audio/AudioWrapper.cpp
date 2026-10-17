@@ -1909,13 +1909,18 @@ AudioWrapper::pruneSounds(const std::vector<path_t> &paths) {
   return {.success = true};
 }
 
-audio::playback::BackendOperationResult AudioWrapper::unloadSounds() {
+audio::playback::BackendOperationResult AudioWrapper::unloadSounds(
+    const std::function<audio::playback::BackendOperationResult()> &beforeDiscard) {
   std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
   std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
   std::lock_guard<std::mutex> commandLock(audioCommandMutex);
   const auto stopped = stopSoundsWithLifecycleAndCommandLocked();
   if (!stopped.success) {
     return stopped;
+  }
+  if (beforeDiscard) {
+    const auto admitted = beforeDiscard();
+    if (!admitted.success) return admitted;
   }
   ++soundLoadGeneration;
   soundDataList.clear();
