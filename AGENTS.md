@@ -135,6 +135,15 @@ contains examples and timing context if needed.
 
 ## Local Build Verification
 
+- Start with the relevant subsystem group in [docs/testing/README.md](docs/testing/README.md).
+  For example, build audio tests with
+  `cmake --build cmake-build-debug --target tests_audio -j 6`, then run
+  `ctest --test-dir cmake-build-debug -L '^area_audio$' --output-on-failure --no-tests=error -j 6`.
+  Preview membership with `ctest --test-dir cmake-build-debug -N -L '^area_audio$'`.
+- Combine affected groups for changes across boundaries; a focused passing run
+  is normally sufficient for a localized change. Use the full suite when impact
+  is broad or uncertain, not automatically after every edit or before every commit.
+  New tests belong in an `area_*` block in `cmake/TestGroupCatalog.cmake`.
 - For desktop local compile checks, use the existing `cmake-build-debug` folder:
   `cmake --build cmake-build-debug --target main -j 6`
 - For full CTest runs, execute tests in parallel:

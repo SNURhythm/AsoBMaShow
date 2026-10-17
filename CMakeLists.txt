@@ -8779,6 +8779,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         endif()
         set_tests_properties(${test_name} PROPERTIES
             WORKING_DIRECTORY $<TARGET_FILE_DIR:${target_name}>
+            ASOBMASHOW_BUILD_TARGETS "${target_name}"
         )
     endfunction()
 
@@ -9757,6 +9758,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                     ${CMAKE_SOURCE_DIR}/tests/fixture_compiler_environment_tests.py -v)
         set_tests_properties(fixture_compiler_environment_tests PROPERTIES TIMEOUT 60)
+        add_test(NAME test_groups_tests
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/tests/test_groups_tests.py -v)
     endif()
 
+    include("${CMAKE_SOURCE_DIR}/cmake/TestGroupCatalog.cmake")
 endif()
