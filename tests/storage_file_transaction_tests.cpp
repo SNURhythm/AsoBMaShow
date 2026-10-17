@@ -44,6 +44,71 @@ void requireNoRecoveryFiles(const Fixture &f) {
     require(!entry.path().filename().string().starts_with(".asobmashow-storage-"),
             "completed transactions remove sibling installation files and backups");
 }
+void testAbandonedCandidatesAfterRestart() {
+  constexpr auto job = "12345678-1234-4234-8234-123456789abc";
+  for (const bool journal : {false, true}) {
+    Fixture f;
+    const auto candidate = f.paths.temporaryRoot / job / "candidate.mp4";
+    f.temp.write(fs::relative(candidate, f.temp.root), "abandoned encoded data");
+    f.temp.write(fs::relative(f.paths.temporaryRoot / "unknown/data", f.temp.root), "foreign data");
+    if (journal) {
+      FileTransactionDependencies dependencies;
+      dependencies.faultPoint = [](std::string_view point) { if (point == "published") throw Crash{}; };
+      try { StorageFileTransaction(f.paths, dependencies).Replace(f.candidate, f.encoded); }
+      catch (const Crash &) {}
+    }
+    const auto report = StorageFileTransaction(f.paths).Recover();
+    require(!report.recoveryRequired && !report.cleanupPending && report.reclaimedBytes == 0,
+            "abandoned scratch cleanup is not counted as reclaimed library media");
+    require(!fs::exists(candidate.parent_path()), "restart removes abandoned private candidate jobs");
+    require(read(f.candidate.source) == std::string(1024, 's') &&
+                read(f.paths.temporaryRoot / "unknown/data") == "foreign data",
+            "restart preserves original media and unrecognized private entries");
+  }
+  Fixture failed;
+  const auto candidate = failed.paths.temporaryRoot / job / "candidate.flac";
+  failed.temp.write(fs::relative(candidate, failed.temp.root), "unfinished encode");
+  FileTransactionDependencies dependencies;
+  dependencies.remove = [](const fs::path &, std::string &error) { error = "injected cleanup failure"; return false; };
+  const auto report = StorageFileTransaction(failed.paths, dependencies).Recover();
+  require(report.recoveryRequired && report.cleanupPending && fs::exists(candidate),
+          "failed candidate cleanup is retained and reported for retry");
+  require(!StorageFileTransaction(failed.paths).Recover().recoveryRequired && !fs::exists(candidate),
+          "next recovery retries abandoned candidate cleanup");
+
+  Fixture unsettled;
+  unsettled.temp.write(fs::relative(unsettled.paths.temporaryRoot / job / "candidate.mp4", unsettled.temp.root), "retained");
+  unsettled.temp.write(fs::relative(unsettled.paths.journalRoot / "invalid.json", unsettled.temp.root), "invalid");
+  require(StorageFileTransaction(unsettled.paths).Recover().recoveryRequired &&
+              fs::exists(unsettled.paths.temporaryRoot / job / "candidate.mp4"),
+          "unresolved journals retain candidate state");
+
+  Fixture cancelled;
+  cancelled.temp.write(fs::relative(cancelled.paths.temporaryRoot / job / "candidate.ogg", cancelled.temp.root), "retained");
+  require(StorageFileTransaction(cancelled.paths).Recover([] { return false; }).cancelled &&
+              fs::exists(cancelled.paths.temporaryRoot / job / "candidate.ogg"),
+          "cancellation leaves abandoned candidate available for later cleanup");
+
+  Fixture unknown;
+  unknown.temp.write(fs::relative(unknown.paths.temporaryRoot / job / "candidate.mp4", unknown.temp.root), "candidate");
+  unknown.temp.write(fs::relative(unknown.paths.temporaryRoot / job / "unknown", unknown.temp.root), "foreign");
+  StorageFileTransaction(unknown.paths).Recover();
+  require(fs::exists(unknown.paths.temporaryRoot / job / "candidate.mp4") &&
+              read(unknown.paths.temporaryRoot / job / "unknown") == "foreign",
+          "unrecognized job contents prevent partial cleanup");
+
+  Fixture linked;
+  linked.temp.write("foreign/candidate.mp4", "never follow links");
+  fs::create_directories(linked.paths.temporaryRoot);
+  std::error_code ec;
+  fs::create_directory_symlink(linked.temp.root / "foreign", linked.paths.temporaryRoot / job, ec);
+  if (!ec) {
+    StorageFileTransaction(linked.paths).Recover();
+    require(read(linked.temp.root / "foreign/candidate.mp4") == "never follow links" &&
+                fs::is_symlink(fs::symlink_status(linked.paths.temporaryRoot / job)),
+            "abandoned cleanup never follows or removes unrecognized symlinks");
+  }
+}
 void testSuccessAndCancellation() {
   for (const bool samePath : {false, true}) {
     Fixture f(samePath);
@@ -273,6 +338,7 @@ void testForeignIdentityAndCorruptJournalArePreserved() {
 }
 int main() {
   try {
+    testAbandonedCandidatesAfterRestart();
     testSuccessAndCancellation();
     testRestartAtEveryBoundary();
     testFailuresNeverClobberAndCleanupAccounting();

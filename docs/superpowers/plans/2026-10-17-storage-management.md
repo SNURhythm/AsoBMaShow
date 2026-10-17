@@ -549,6 +549,16 @@ transaction tests passed on iOS 27.1 Simulator and Android 10 emulator. Windows
 build/filesystem validation was unavailable. Only disposable test data was removed;
 no build was distributed.
 
+Final independent review found two important issues: millisecond-rounded CFR
+inputs could lose frames despite already satisfying the FPS cap, and interrupted
+encoding could leave private candidates behind. Both were reproduced by failing
+regressions and fixed. Real Matroska fixtures now retain all 29.97/30 FPS frames
+and timestamps; existing VFR-burst coverage still passes. Recovery removes only
+recognized abandoned private jobs after journals settle, with coverage for
+cancellation, cleanup retry, unknown files and symlinks. No critical or deferred
+minor findings remained. The 117 affected desktop tests, both mobile build-only
+paths, and both native mobile codec/transaction suites passed after the fixes.
+
 ## Planning review
 
 The plan covers the requested manual operations, grouped-list reuse, automatic

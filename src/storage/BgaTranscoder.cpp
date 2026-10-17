@@ -234,6 +234,14 @@ Scan scan(const fs::path &path, const Checkpoint &check) {
       if (duration <= 0 && description.frameRate.num > 0 && description.frameRate.den > 0)
         duration = av_rescale_q(1, av_inv_q(description.frameRate), video->time_base);
       result.video.add(pts, duration);
+      // Container clocks (notably Matroska milliseconds) round rational CFR
+      // timestamps. Check the entire cadence within one input tick, rather
+      // than treating alternating rounded intervals as genuine VFR bursts.
+      if (description.frameRate.num > 0 && description.frameRate.den > 0) {
+        const auto expected = av_rescale_q(result.video.frames - 1,
+            av_inv_q(description.frameRate), video->time_base);
+        if (std::abs((pts - result.video.first) - expected) > 1) description.variableFrameRate = true;
+      } else description.variableFrameRate = true;
     } else {
       if (decoded.sample_rate != description.audioSampleRate || decoded.ch_layout.nb_channels != description.audioChannels)
         unsupported("Embedded audio changes format midstream");
@@ -247,7 +255,6 @@ Scan scan(const fs::path &path, const Checkpoint &check) {
     throw Failure{StorageReason::ValidationFailed, "Decoder lost the opening presentation interval"};
   description.duration = result.video.end - result.video.first;
   description.minimumFrameInterval = result.video.minimumInterval;
-  description.variableFrameRate = result.video.minimumInterval != result.video.maximumInterval;
   description.audioDiscontinuous = result.audio.discontinuous;
   result.originMicros = av_rescale_q(result.video.first, result.video.timeBase, AV_TIME_BASE_Q);
   if (description.hasAudio) result.originMicros = std::min(result.originMicros, av_rescale_q(result.audio.first, result.audio.timeBase, AV_TIME_BASE_Q));
@@ -531,7 +538,9 @@ void verify(const Scan &source, const Scan &output, const VideoCompressionPlan &
   const auto expectedEnd = av_rescale_q(source.video.end, source.video.timeBase, AV_TIME_BASE_Q) - source.originMicros;
   if (std::abs(av_rescale_q(output.video.first, output.video.timeBase, AV_TIME_BASE_Q) - expectedStart) > 2 ||
       std::abs(av_rescale_q(output.video.end, output.video.timeBase, AV_TIME_BASE_Q) - expectedEnd) > videoTolerance) invalid();
-  if (plan.maxFps && output.video.minimumInterval > 0 &&
+  // Unreduced CFR retains its source-clock rounding; the encoder has already
+  // verified every presentation timestamp. Enforce the exact grid on reductions.
+  if (plan.reduceFps && output.video.minimumInterval > 0 &&
       av_compare_ts(output.video.minimumInterval, output.video.timeBase, 1, {1, plan.maxFps}) < 0) invalid();
   if (description.hasAudio) {
     if (description.audioChannels != source.description.audioChannels || description.audioSampleRate != source.description.audioSampleRate) invalid();

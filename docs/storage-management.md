@@ -98,7 +98,9 @@ Each file commits separately. Cancel keeps already completed changes and retains
 uncommitted originals; it does not roll back the entire batch. Output is staged
 privately, validated, then installed using a journal and same-volume temporary
 files/backups. Startup recovery checks interrupted transactions before admitting
-new work. Do not manually remove recovery files while an operation is pending.
+new work. After successful recovery, abandoned private encoding candidates are
+removed; unrecognized files and unresolved recovery state are retained. Do not
+manually remove recovery files while an operation is pending.
 
 The result includes converted, deleted, skipped and failed counts. Reclaimed
 bytes are counted only when obsolete originals/backups have actually been removed.

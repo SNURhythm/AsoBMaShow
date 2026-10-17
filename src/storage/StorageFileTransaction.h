@@ -9,6 +9,8 @@ public:
   StorageFileTransaction(StoragePlatformPaths, FileTransactionDependencies = {});
   FileResult Replace(const AssetCandidate &, const EncodeResult &, Checkpoint = {});
   FileResult Delete(const AssetCandidate &, Checkpoint = {});
+  // Call at startup before workers, or while holding the shared conversion permit.
+  // After journal recovery, removes recognized private jobs abandoned by a crash.
   StorageReport Recover(Checkpoint = {});
 
 private:

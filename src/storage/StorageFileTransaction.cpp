@@ -36,6 +36,60 @@ bool entryExists(const fs::path &path) {
   const auto status = fs::symlink_status(path, ec);
   return fs::exists(status) || (ec && ec != std::errc::no_such_file_or_directory);
 }
+void cleanupAbandonedCandidates(const StoragePlatformPaths &paths,
+                                const FileTransactionDependencies &dependencies,
+                                const Checkpoint &check, StorageReport &report) {
+  if (!entryExists(paths.temporaryRoot)) return;
+  std::string error;
+  auto failed = [&](const fs::path &path) {
+    report.recoveryRequired = report.cleanupPending = true;
+    ++report.failed;
+    if (report.files.size() < 100) report.files.push_back({.source = path, .outcome = FileOutcome::Failed,
+        .reason = {StorageReason::CleanupFailed, error}});
+  };
+  if (!IsSafeLocalPath(paths.temporaryRoot, error) ||
+      std::ranges::any_of(paths.allowedRoots, [&](const auto &root) {
+        return IsWithinFolder(paths.temporaryRoot, root);
+      })) {
+    error = "Private candidate cleanup path is unsafe"; failed(paths.temporaryRoot); return;
+  }
+  std::error_code ec;
+  fs::directory_iterator jobs(paths.temporaryRoot, ec), end;
+  for (; !ec && jobs != end; jobs.increment(ec)) {
+    if (!checkpoint(check)) { report.cancelled = true; return; }
+    const auto job = jobs->path();
+    if (!uuid::isCanonicalLowerV4(job.filename().string()) || !IsSafeLocalPath(job, error) ||
+        !fs::is_directory(jobs->symlink_status(ec))) continue;
+    // Only the optimizer's flat, known candidate files establish ownership.
+    // Preserve foreign entries, links and future job formats without following them.
+    bool recognized = true;
+    std::vector<std::pair<fs::path, FileIdentity>> candidates;
+    fs::directory_iterator files(job, ec);
+    for (; !ec && files != end; files.increment(ec)) {
+      const auto path = files->path();
+      const auto name = path.filename();
+      if (name != "candidate.flac" && name != "candidate.ogg" && name != "candidate.mp4") {
+        recognized = false; break;
+      }
+      const auto identity = ReadFileIdentity(path, error);
+      if (!identity) { recognized = false; break; }
+      candidates.emplace_back(path, *identity);
+    }
+    if (ec) break;
+    if (!recognized) continue;
+    bool removed = true;
+    for (const auto &[path, identity] : candidates) {
+      if (!checkpoint(check)) { report.cancelled = true; return; }
+      if (ReadFileIdentity(path, error) != identity || !dependencies.remove(path, error)) {
+        if (error.empty()) error = "Abandoned candidate changed during cleanup";
+        failed(path); removed = false; break;
+      }
+    }
+    if (removed && (!dependencies.remove(job, error) || !dependencies.syncDirectory(paths.temporaryRoot, error)))
+      failed(job);
+  }
+  if (ec) { error = ec.message(); failed(paths.temporaryRoot); }
+}
 bool sameObject(const FileIdentity &a, const FileIdentity &b) {
   return a.device == b.device && a.fileId == b.fileId;
 }
@@ -375,6 +429,7 @@ StorageReport StorageFileTransaction::Recover(Checkpoint check) {
     } else report.reclaimedBytes += reclaimed;
   }
   if (ec) report.recoveryRequired = true;
+  if (!report.recoveryRequired && !report.cancelled) cleanupAbandonedCandidates(paths_, dependencies_, check, report);
   return report;
 }
 

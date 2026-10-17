@@ -20,6 +20,7 @@ struct VideoFixture {
   AVRational sampleAspectRatio{1, 1};
   int rotation = 0;
   bool scaledDisplayMatrix = false;
+  bool millisecondContainer = false, lossless = false;
 };
 inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
   struct Resources {
@@ -35,10 +36,11 @@ inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
   if (fixture.timestamps.empty()) for (int i = 0; i < 30; ++i) fixture.timestamps.push_back(i);
   // NUT preserves the codec's exact rational timestamps, including deliberate
   // VFR gaps, without a millisecond container clock rounding the fixture.
-  const char *container = fixture.rotation || fixture.scaledDisplayMatrix ? "mp4" : "nut";
+  const char *container = fixture.millisecondContainer ? "matroska" :
+                          fixture.rotation || fixture.scaledDisplayMatrix ? "mp4" : "nut";
   require(avformat_alloc_output_context2(&resources.mux, nullptr, container, path.string().c_str()) >= 0,
           "create fixture container");
-  const auto codec = fixture.alpha ? avcodec_find_encoder(AV_CODEC_ID_FFV1) :
+  const auto codec = fixture.alpha || fixture.lossless ? avcodec_find_encoder(AV_CODEC_ID_FFV1) :
                      fixture.h264 ? avcodec_find_encoder_by_name("libx264") : avcodec_find_encoder(AV_CODEC_ID_MPEG1VIDEO);
   require(codec, "fixture encoder present");
   auto stream = avformat_new_stream(resources.mux, nullptr);

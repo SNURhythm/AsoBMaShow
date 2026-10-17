@@ -34,9 +34,10 @@ VideoCompressionPlan PlanVideoCompression(const VideoDescription &source, const 
   const double displayHeight = source.height;
   const double scale = longCap ? std::min({1.0, longCap / std::max(displayWidth, displayHeight),
                                           shortCap / std::min(displayWidth, displayHeight)}) : 1.0;
-  result.reduceFps = policy.maxFps > 0 && (source.minimumFrameInterval > 0 ?
-      av_compare_ts(source.minimumFrameInterval, source.timeBase, 1, {1, policy.maxFps}) < 0 :
-      (source.variableFrameRate || av_cmp_q(source.frameRate, {policy.maxFps, 1}) > 0));
+  result.reduceFps = policy.maxFps > 0 && (!source.variableFrameRate ?
+      av_cmp_q(source.frameRate, {policy.maxFps, 1}) > 0 :
+      (source.minimumFrameInterval <= 0 ||
+       av_compare_ts(source.minimumFrameInterval, source.timeBase, 1, {1, policy.maxFps}) < 0));
   if (source.h264 && scale >= 1.0 && !result.reduceFps)
     return skip(StorageReason::AlreadyOptimized, "H.264 already satisfies the requested caps");
   if (!source.codecs.x264.available || !source.codecs.mp4.available)

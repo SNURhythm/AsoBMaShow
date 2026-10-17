@@ -211,6 +211,35 @@ void videoTests() {
       require(std::abs(decoded.timestamps[i] - i * (highRate ? 1.0 / 30 : 1001.0 / 30000)) < .00001,
               "retained frames follow the intended rational timeline");
   }
+  // Matroska's millisecond clock rounds 29.97/30 FPS to 33/34 ms intervals.
+  // A cap must preserve an already compliant cadence, including every frame.
+  for (const auto rate : {AVRational{30000, 1001}, AVRational{30, 1}}) {
+    storage_test::VideoFixture fixture; fixture.rate = rate; fixture.millisecondContainer = fixture.lossless = true;
+    for (int i = 0; i < 60; ++i) fixture.timestamps.push_back(i);
+    const auto input = temp.root / (rate.den == 1 ? "rounded-30.webm" : "rounded-2997.webm");
+    const auto output = temp.root / (rate.den == 1 ? "rounded-30.mp4" : "rounded-2997.mp4");
+    storage_test::makeVideo(input, fixture);
+    const auto original = storage_test::inspectVideo(input);
+    require(original.timestamps.size() == 60 && std::abs(original.timestamps[1] - .033) < .00001 &&
+                std::abs(original.timestamps[2] - .067) < .00001,
+            "fixture exercises millisecond-quantized frame timing");
+    result = EncodeBga(candidate(input), policy, output, {}, {});
+    if (result.outcome != FileOutcome::Converted) std::cerr << "Quantized CFR: " << result.reason.detail << '\n';
+    require(result.outcome == FileOutcome::Converted, "quantized CFR conversion succeeds below FPS cap");
+    const auto decoded = storage_test::inspectVideo(output);
+    require(decoded.timestamps.size() == 60, "under-cap quantized CFR never drops frames");
+    for (std::size_t i = 0; i < decoded.timestamps.size(); ++i)
+      require(std::abs(decoded.timestamps[i] - original.timestamps[i]) < .00001,
+              "under-cap quantized CFR preserves each presentation timestamp");
+    require(std::abs(decoded.videoEnd - original.videoEnd) < .001,
+            "under-cap quantized CFR retains final duration");
+  }
+  storage_test::VideoFixture roundedH264; roundedH264.rate = {30000, 1001};
+  roundedH264.h264 = roundedH264.millisecondContainer = true;
+  storage_test::makeVideo(temp.root / "rounded-h264.webm", roundedH264);
+  require(EncodeBga(candidate(temp.root / "rounded-h264.webm"), policy,
+                    temp.root / "rounded-h264.mp4", {}, {}).reason.code == StorageReason::AlreadyOptimized,
+          "quantized H264 below the cap is not repeatedly reencoded");
   storage_test::VideoFixture gapFixture; gapFixture.timestamps = {0, 1, 2, 8, 9, 10, 20, 21, 22, 23, 24};
   storage_test::makeVideo(temp.root / "gaps.mpg", gapFixture);
   result = EncodeBga(candidate(temp.root / "gaps.mpg"), policy, temp.root / "gaps.mp4", {}, {});
