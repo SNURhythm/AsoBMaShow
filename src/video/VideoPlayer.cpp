@@ -47,6 +47,47 @@ std::uint32_t packAbgr(const video::EmbeddedYuvQuadVertex &vertex) {
   return (alpha << 24U) | (blue << 16U) | (green << 8U) | red;
 }
 
+bool canReferenceYuvFrame(const AVFrame &frame, int width, int height) {
+  if (frame.format != AV_PIX_FMT_YUV420P || frame.width != width ||
+      frame.height != height || frame.nb_extended_buf != 0 ||
+      frame.opaque_ref != nullptr) return false;
+  const auto layout = video::makeYuv420FrameLayout(
+      width, height, frame.linesize[0], frame.linesize[1], frame.linesize[2]);
+  const auto budget = video::videoDecodedMemoryLayout(width, height);
+  if (!layout || !budget) return false;
+  // Recycled references retain no pixel buffers. At most three queued frames,
+  // one being uploaded and one being prepared share the existing six-frame
+  // allowance, including any decoder padding retained by av_frame_ref.
+  const auto maximumBytes = budget->alignedYuvFrameBytes *
+      video::maximumResidentCpuYuvFrames / 5;
+  std::size_t retainedBytes = 0;
+  for (const auto *buffer : frame.buf) {
+    if (!buffer) continue;
+    if (buffer->size > maximumBytes - retainedBytes) return false;
+    retainedBytes += buffer->size;
+  }
+  for (int i = 0; i < frame.nb_side_data; ++i) {
+    const auto *side = frame.side_data[i];
+    const auto bytes = side->buf ? std::max(side->size, side->buf->size) : side->size;
+    if (bytes > maximumBytes - retainedBytes) return false;
+    retainedBytes += bytes;
+  }
+  const std::uint32_t bytes[] = {layout->yBytes, layout->uBytes, layout->vBytes};
+  for (int plane = 0; plane < 3; ++plane) {
+    if (frame.linesize[plane] <= 0 || !frame.data[plane]) return false;
+    bool contained = false;
+    for (const auto *buffer : frame.buf) {
+      if (!buffer) continue;
+      const auto base = reinterpret_cast<std::uintptr_t>(buffer->data);
+      const auto data = reinterpret_cast<std::uintptr_t>(frame.data[plane]);
+      if (data >= base && data - base <= buffer->size &&
+          bytes[plane] <= buffer->size - (data - base)) contained = true;
+    }
+    if (!contained) return false;
+  }
+  return true;
+}
+
 } // namespace
 
 const bgfx::VertexLayout &VideoPlayer::embeddedVertexLayout() noexcept {
@@ -139,6 +180,7 @@ void VideoPlayer::unloadVideo() {
       codecContext = nullptr;
     }
     videoStreamIndex = -1;
+    seekPositionSeconds = 0.0;
   }
   destroyVideoTextures();
   reservedDecodedBytes = 0;
@@ -148,6 +190,7 @@ void VideoPlayer::unloadVideo() {
       av_frame_free(&f);
     }
     recyclePool.clear();
+    retainRecycledBuffers = true;
   }
 }
 
@@ -269,13 +312,6 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
     if (startPTS == AV_NOPTS_VALUE) {
       startPTS = 0; // Default to 0 if start_time is not available
     }
-    swsContext = sws_getContext(codecContext->width, codecContext->height,
-                                codecContext->pix_fmt, codecContext->width,
-                                codecContext->height, AV_PIX_FMT_YUV420P,
-                                SWS_BILINEAR, nullptr, nullptr, nullptr);
-    if (swsContext == nullptr) {
-      return fail();
-    }
     // auto num = videoStream->avg_frame_rate.num;
     // auto den = videoStream->avg_frame_rate.den;
     // if (den == 0) {
@@ -343,48 +379,29 @@ void VideoPlayer::update() {
     return;
   }
 
-  AVFrame *currentFrame;
-  double elapsedTime;
-  double frameTime;
-  // Determine the next frame to display
-  // ... (existing buffering logic remains, but we get the frame from
-  // frameBuffer) ...
-
-  // Note: We need to handle frame skipping logic properly with the new pool
-  // The existing loop:
-  while (true) {
-    {
-      std::unique_lock<std::mutex> lock(bufferMutex);
-      if (bufferSize == 0) {
-        return;
-      }
-      currentFrame = frameBuffer[bufferHead];
-      long long now = stopwatch->elapsedMicros();
-      elapsedTime = (now - startTime) / 1000000.0;
-      frameTime = (currentFrame->pts - startPTS) *
-                  av_q2d(formatContext->streams[videoStreamIndex]->time_base);
-
-      if (elapsedTime < frameTime) {
-        // Not time yet
-        return;
-      }
-
-      frameBuffer[bufferHead] = nullptr; // Clear buffer slot
+  AVFrame *currentFrame = nullptr;
+  double frameTime = 0.0;
+  {
+    std::lock_guard<std::mutex> lock(bufferMutex);
+    const double elapsedTime = (stopwatch->elapsedMicros() - startTime) / 1000000.0;
+    // Select the newest due frame from this bounded queue snapshot. Even when
+    // decoding is late, keep one image to present instead of dropping every
+    // frame and waiting for the decoder to catch the advancing audio clock.
+    while (bufferSize > 0) {
+      AVFrame *nextFrame = frameBuffer[bufferHead];
+      const double nextTime = (nextFrame->pts - startPTS) *
+          av_q2d(formatContext->streams[videoStreamIndex]->time_base);
+      if (elapsedTime < nextTime) break;
+      if (currentFrame != nullptr) recycleFrame(currentFrame);
+      currentFrame = nextFrame;
+      frameTime = nextTime;
+      frameBuffer[bufferHead] = nullptr;
       bufferHead = (bufferHead + 1) % maxBufferSize;
       --bufferSize;
     }
-
-    // We consumed a frame from the buffer
-    freeSpace.notify_one();
-
-    if (elapsedTime > frameTime + 0.1) {
-      lastFramePTS = frameTime;
-      // Recycle the skipped frame
-      recycleFrame(currentFrame);
-      continue;
-    }
-    break;
   }
+  if (currentFrame == nullptr) return;
+  freeSpace.notify_one();
 
   // Upload to BGFX textures.
   // Use bgfx::copy + explicit pitch because decoder output can be padded
@@ -722,6 +739,7 @@ void VideoPlayer::seek(int64_t micro) {
     return;
   }
   avcodec_flush_buffers(codecContext);
+  seekPositionSeconds = static_cast<double>(micro) / 1000000.0;
 
   {
     std::lock_guard<std::mutex> lock(bufferMutex);
@@ -740,7 +758,8 @@ void VideoPlayer::seek(int64_t micro) {
   // Reinitialize timing
   lastFramePTS = 0;
   startTime = stopwatch->elapsedMicros();
-  hasVideoFrame = false;
+  // Keep the uploaded image visible while decoding the replacement. stop()
+  // and unloadVideo() still retire it when playback or the clip changes.
 
   // Notify predecoding thread to continue from the new position
   SDL_Log("Seeked to %" PRId64 " microseconds", micro);
@@ -762,6 +781,16 @@ void VideoPlayer::predecodeFrames() {
       decodeGeneration.load(std::memory_order_acquire);
 
   auto queueDecodedFrame = [&]() {
+    const auto timestamp = decodedFrame->best_effort_timestamp != AV_NOPTS_VALUE
+        ? decodedFrame->best_effort_timestamp : decodedFrame->pts;
+    if (timestamp != AV_NOPTS_VALUE) {
+      const double frameTime = (timestamp - startPTS) *
+          av_q2d(formatContext->streams[videoStreamIndex]->time_base);
+      // Discard seek preroll older than the target tolerance before
+      // conversion or queueing. Otherwise three obsolete frames stall decoding
+      // until the presentation thread drains them.
+      if (seekPositionSeconds > frameTime + 0.1) return;
+    }
     AVFrame *targetFrame = getRecycledFrame();
     if (targetFrame == nullptr) {
       SDL_Log("Failed to allocate a decoded video frame");
@@ -772,38 +801,55 @@ void VideoPlayer::predecodeFrames() {
       return;
     }
 
-    const bool canReuseExistingBuffer =
-        targetFrame->buf[0] != nullptr &&
-        targetFrame->format == AV_PIX_FMT_YUV420P &&
-        targetFrame->width == videoFrameWidth &&
-        targetFrame->height == videoFrameHeight;
-    if (!canReuseExistingBuffer) {
+    if (canReferenceYuvFrame(*decodedFrame, videoFrameWidth, videoFrameHeight)) {
+      {
+        std::lock_guard<std::mutex> lock(recycleMutex);
+        retainRecycledBuffers = false;
+        for (auto *frame : recyclePool) av_frame_unref(frame);
+      }
       av_frame_unref(targetFrame);
-      targetFrame->format = AV_PIX_FMT_YUV420P;
-      targetFrame->width = videoFrameWidth;
-      targetFrame->height = videoFrameHeight;
-      if (av_frame_get_buffer(targetFrame, 32) < 0) {
+      if (av_frame_ref(targetFrame, decodedFrame) < 0) {
+        recycleFrame(targetFrame);
+        return;
+      }
+    } else {
+      swsContext = sws_getCachedContext(swsContext, decodedFrame->width,
+          decodedFrame->height, static_cast<AVPixelFormat>(decodedFrame->format),
+          videoFrameWidth, videoFrameHeight, AV_PIX_FMT_YUV420P,
+          SWS_BILINEAR, nullptr, nullptr, nullptr);
+      if (!swsContext) {
+        recycleFrame(targetFrame);
+        return;
+      }
+      const bool canReuseExistingBuffer =
+          targetFrame->buf[0] != nullptr &&
+          targetFrame->format == AV_PIX_FMT_YUV420P &&
+          targetFrame->width == videoFrameWidth &&
+          targetFrame->height == videoFrameHeight;
+      if (!canReuseExistingBuffer) {
+        av_frame_unref(targetFrame);
+        targetFrame->format = AV_PIX_FMT_YUV420P;
+        targetFrame->width = videoFrameWidth;
+        targetFrame->height = videoFrameHeight;
+        if (av_frame_get_buffer(targetFrame, 32) < 0) {
+          recycleFrame(targetFrame);
+          return;
+        }
+      }
+      if (av_frame_make_writable(targetFrame) < 0) {
+        SDL_Log("Failed to make target frame writable");
+        recycleFrame(targetFrame);
+        return;
+      }
+      if (sws_scale(swsContext, decodedFrame->data, decodedFrame->linesize, 0,
+                    decodedFrame->height, targetFrame->data,
+                    targetFrame->linesize) <= 0) {
+        SDL_Log("Failed to convert a decoded video frame");
         recycleFrame(targetFrame);
         return;
       }
     }
-    if (av_frame_make_writable(targetFrame) < 0) {
-      SDL_Log("Failed to make target frame writable");
-      recycleFrame(targetFrame);
-      return;
-    }
-    if (sws_scale(swsContext, decodedFrame->data, decodedFrame->linesize, 0,
-                  codecContext->height, targetFrame->data,
-                  targetFrame->linesize) <= 0) {
-      SDL_Log("Failed to convert a decoded video frame");
-      recycleFrame(targetFrame);
-      return;
-    }
-
-    targetFrame->pts =
-        decodedFrame->best_effort_timestamp != AV_NOPTS_VALUE
-            ? decodedFrame->best_effort_timestamp
-            : decodedFrame->pts;
+    targetFrame->pts = timestamp;
     std::lock_guard<std::mutex> lock(bufferMutex);
     if (predecodingActive && bufferSize < maxBufferSize) {
       frameBuffer[bufferTail] = targetFrame;
@@ -983,6 +1029,7 @@ void VideoPlayer::recycleFrame(AVFrame *frame) {
   if (!frame)
     return;
   std::lock_guard<std::mutex> lock(recycleMutex);
+  if (!retainRecycledBuffers) av_frame_unref(frame);
   if (recyclePool.size() >= maxRecyclePoolSize) {
     av_frame_free(&frame);
     return;

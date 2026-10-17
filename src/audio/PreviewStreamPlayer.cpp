@@ -297,7 +297,7 @@ bool PreviewStreamPlayer::Start(std::shared_ptr<PagedPreviewSource> source,
     error = "Preview audio device returned an invalid sample rate";
     return false;
   }
-  if (!session->source->Begin(static_cast<int>(session->outputRate))) {
+  if (!session->source->Begin(static_cast<int>(session->outputRate), true)) {
     error = session->source->GetState().error;
     if (error.empty()) error = "Could not prepare preview audio";
     return false;

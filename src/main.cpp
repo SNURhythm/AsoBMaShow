@@ -52,6 +52,7 @@
 #include "context.h"
 #include "audio/AudioWrapper.h"
 #include "video/SDLDisplayBackend.h"
+#include "video/IdlePresentationPacing.h"
 #ifdef _WIN32
 #include <windows.h>
 
@@ -1025,14 +1026,17 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #if TARGET_OS_IPHONE
   FramePacer iosPresentationPacer;
   platform::IOSPreparedFrame iosPreparedFrame;
-  const Scene *lastDeferredUiScene = nullptr;
   std::uint64_t lastUiPresentationGeneration = 0;
-  auto lastUiPresentedAt = std::chrono::steady_clock::now();
   bool iosViewportRestorePending = false;
   const auto submitIOSFrame = [](bool discard) {
     bgfx::frame(discard ? BGFX_FRAME_DISCARD : BGFX_FRAME_NONE);
   };
 #endif
+#if !TARGET_OS_IPHONE
+  FramePacer idlePresentationPacer;
+#endif
+  ui::PresentationSchedule uiPresentationSchedule;
+  const Scene *lastUiScene = nullptr;
   constexpr int kBackgroundEventWaitTimeoutMs = 1000;
   auto isAppBackgroundEvent = [](const SDL_Event &event) {
     return input::isBackgroundLifecycleEvent(event);
@@ -1412,6 +1416,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           !(TARGET_OS_ANDROID &&
             context.appInBackground.load(std::memory_order_acquire) &&
             (event.type < SDL_EVENT_WINDOW_FIRST || event.type > SDL_EVENT_WINDOW_LAST))) {
+        // Custom scene controls can mutate drawing state outside View setters.
+        ui::invalidate();
         auto result = sceneManager.handleEvents(event);
         if (result.quit) {
           context.quitFlag = true;
@@ -1642,7 +1648,14 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       continue;
     }
     context.inputDeviceRegistry.pump();
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+    const auto sceneUpdateStarted = perf::latency::nowMicros();
+#endif
     sceneManager.update(deltaTime);
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+    perf::latency::record(perf::latency::Stage::SceneUpdate,
+                          perf::latency::nowMicros() - sceneUpdateStarted);
+#endif
     s_blurPass->setBlurStrength(context.settings.bgaBlurStrength);
     context.jukebox.setBgaDisplayMode(context.settings.bgaDisplayMode);
     const bool laneTransformChanged =
@@ -1667,7 +1680,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     // clear color
 
     bool renderedFrame = false;
-    bool skippedUnchangedFrame = false;
+    bool skippedIdleFrame = false;
     const bool replayExportActive =
         context.replayVideoExportActive.load(std::memory_order_acquire);
     const bool replayExportRequested = context.rendererAccess.exportRequested();
@@ -1702,6 +1715,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         perf::latency::record(perf::latency::Stage::FrameSubmit,
                               perf::latency::nowMicros() - submitStarted);
 #endif
+        uiPresentationSchedule.invalidate();
         context.replayVideoExportUiFrameSerial.fetch_add(
             1, std::memory_order_release);
         context.replayVideoExportUiFrameRequested.store(
@@ -1728,27 +1742,40 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         }
 #endif
         const bool hasActiveVisuals = context.jukebox.hasActiveVisuals();
-        bool deferUiSubmission = false;
-        bool forceUiPresentation = false;
+        if (lastUiScene != sceneManager.currentScene) {
+          uiPresentationSchedule.invalidate();
+          lastUiScene = sceneManager.currentScene;
+        }
 #if TARGET_OS_IPHONE
-        deferUiSubmission = !hasActiveVisuals && sceneManager.currentScene &&
-            sceneManager.currentScene->canSkipUnchangedPresentation();
         const auto uiPresentationState = GetIOSPresentationState();
-        if (lastDeferredUiScene != sceneManager.currentScene ||
-            lastUiPresentationGeneration != uiPresentationState.generation)
-          context.uiBatchRenderer.invalidateFrame();
-        lastDeferredUiScene = deferUiSubmission ? sceneManager.currentScene : nullptr;
-        // Occasionally drain unrelated bgfx resource commands even when the
-        // visible menu is unchanged. Animated menus still present at full rate.
-        forceUiPresentation = std::chrono::steady_clock::now() - lastUiPresentedAt >=
-            std::chrono::seconds(1);
-        iosPreparedFrame.begin(uiPresentationState);
+        if (lastUiPresentationGeneration != uiPresentationState.generation)
+          uiPresentationSchedule.invalidate();
 #endif
-        context.uiBatchRenderer.beginFrame(deferUiSubmission);
-        sceneManager.render();
-        const bool presentUi = context.uiBatchRenderer.finishFrame(forceUiPresentation);
-        skippedUnchangedFrame = !presentUi;
-        if (presentUi) {
+        const auto uiNow = SDL_GetTicks();
+        const bool continuousPresentation = sceneManager.currentScene &&
+            sceneManager.currentScene->needsContinuousPresentation();
+        if (!uiPresentationSchedule.shouldRender(uiNow, continuousPresentation)) {
+          skippedIdleFrame = true;
+        } else {
+          // Capture before drawing: render-time mutations and worker completions
+          // must survive this acknowledgment and get their own settling frame.
+          const auto beforeDrawing = ui::revisions();
+          ui::FrameDemand frameDemand;
+#if TARGET_OS_IPHONE
+          iosPreparedFrame.begin(uiPresentationState);
+#endif
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+          const auto uiRenderStarted = perf::latency::nowMicros();
+#endif
+          {
+            ui::FrameDemandScope demandScope(frameDemand);
+            context.uiBatchRenderer.beginFrame();
+            sceneManager.render();
+          }
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+          perf::latency::record(perf::latency::Stage::UiRender,
+                                perf::latency::nowMicros() - uiRenderStarted);
+#endif
           bgfx::touch(rendering::clear_view);
           bgfx::touch(rendering::ui_view);
 
@@ -1797,7 +1824,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
             continue;
           }
           lastUiPresentationGeneration = uiPresentationState.generation;
-          lastUiPresentedAt = std::chrono::steady_clock::now();
 #else
           bgfx::frame();
 #endif
@@ -1805,6 +1831,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           perf::latency::record(perf::latency::Stage::FrameSubmit,
                                 perf::latency::nowMicros() - submitStarted);
 #endif
+          uiPresentationSchedule.didPresent(beforeDrawing, frameDemand, uiNow);
           renderedFrame = true;
         }
       }
@@ -1915,8 +1942,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     //    bgfx::setState(BGFX_STATE_DEFAULT);
     //    bgfx::submit(rendering::main_view, program);
 
-    if (renderedFrame || skippedUnchangedFrame) {
-      // Keep update/input cadence unchanged when an identical GPU frame is skipped.
+    if (renderedFrame || skippedIdleFrame) {
+      // Keep update/input cadence unchanged when idle UI drawing is skipped.
       const auto presentedAt = std::chrono::steady_clock::now();
       context.framePacer.framePresented(presentedAt);
 #if TARGET_OS_IPHONE
@@ -1929,12 +1956,23 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           context.replayVideoExportActive.load(std::memory_order_acquire) ||
               context.rendererAccess.exportRequested()));
       iosPresentationPacer.framePresented(presentedAt);
+#else
+      const auto idleViewport = skippedIdleFrame
+          ? platform::getWindowSnapshot(s_window) : std::nullopt;
+      idlePresentationPacer.setCap(video::idlePresentationPacingCap(
+          idleViewport ? idleViewport->refreshRate : 0.0F,
+          context.framePacer.currentFrameCap(), skippedIdleFrame,
+          (context.bgfxResetFlags.load(std::memory_order_acquire) & BGFX_RESET_VSYNC) != 0));
+      idlePresentationPacer.framePresented(presentedAt);
 #endif
       const auto waitStartedAt = std::chrono::steady_clock::now();
       auto waitDuration = context.framePacer.remaining(waitStartedAt);
 #if TARGET_OS_IPHONE
       waitDuration = std::max(
           waitDuration, iosPresentationPacer.remaining(waitStartedAt));
+#else
+      waitDuration = std::max(
+          waitDuration, idlePresentationPacer.remaining(waitStartedAt));
 #endif
       if (waitDuration > std::chrono::steady_clock::duration::zero()) {
 #if TARGET_OS_IPHONE

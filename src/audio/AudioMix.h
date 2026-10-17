@@ -34,8 +34,10 @@ ProjectedResampledPcmSampleCount(std::size_t sourceSamples, int channels,
 bool ResampledPcmFitsSampleBudget(std::size_t sourceSamples, int channels,
                                   int sourceRate, int targetRate,
                                   std::size_t maximumCombinedSamples) noexcept;
+// Cancellation discards the output; no partial PCM is returned.
 std::vector<short> ResamplePcm(std::span<const short> source, int channels,
-                               int sourceRate, int targetRate);
+                               int sourceRate, int targetRate,
+                               const std::atomic_bool *cancelled = nullptr);
 
 } // namespace audio
 
@@ -51,8 +53,8 @@ struct SoundData {
   // Callback-owned (or accessed with the backend stopped). Monotonic for this
   // owner's lifetime: false proves no scheduled entry can refer to this owner.
   bool hasBeenScheduled = false;
-  std::vector<short> sourceData;
-  std::vector<short> outputData;
+  audio::SharedPcmBuffer sourceData;
+  audio::SharedPcmBuffer outputData;
   // Install before callbacks start; producer publishes through this fixed owner.
   // Paged metadata supplies channels/frame count instead of the fields below.
   std::shared_ptr<audio::PagedPcmSound> pagedOutput;
@@ -189,7 +191,7 @@ enum class MixScope : std::uint8_t {
 
 struct OutputRateCandidate {
   SoundData *soundData = nullptr;
-  std::vector<short> outputData;
+  SharedPcmBuffer outputData;
   size_t outputFrameCount = 0;
 };
 

@@ -34,7 +34,7 @@ struct PagedPreviewState {
 
 // A single control thread owns Begin/Cancel. One backend callback owns CheckRender/Render.
 // Cancel joins preparation, retaining every owner/page until destruction, which
-// must follow backend quiescence. State queries/waits are control-thread only.
+// must follow backend quiescence. State queries/waits are safe on non-callback threads.
 class PagedPreviewSource {
 public:
   static std::shared_ptr<PagedPreviewSource>
@@ -46,7 +46,9 @@ public:
   PagedPreviewSource &operator=(const PagedPreviewSource &) = delete;
 
   // Call once, after opening the backend, before allowing its callback to run.
-  bool Begin(int actualOutputRate);
+  // Optional leading-silence removal prepares a new absolute starting position
+  // before startupReady; later silence and the complete native cache are kept.
+  bool Begin(int actualOutputRate, bool skipLeadingSilence = false);
   // Read-only full-callback preflight for output split across scratch chunks.
   // Data reports the available request clamped to known EOF; Pending/End do not
   // change mixer state or time. Callback-only, with the same realtime guarantees

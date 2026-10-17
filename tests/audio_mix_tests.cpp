@@ -81,10 +81,6 @@ using StopSoundsSignature =
 using SetPlaybackRateSignature = bool (AudioWrapper::*)(audio::PlaybackRate,
                                                         std::string &);
 
-static_assert(std::same_as<decltype(std::declval<SoundData>().sourceData),
-                           std::vector<short>>);
-static_assert(std::same_as<decltype(std::declval<SoundData>().outputData),
-                           std::vector<short>>);
 static_assert(
     std::same_as<decltype(std::declval<SoundData>().sourceFrameCount), size_t>);
 static_assert(
@@ -283,10 +279,11 @@ void testConfirmedDrainPublishesThenRestartsAtNewRate() {
   SoundData sound;
   sound.channels = 1;
   sound.sourceSampleRate = 44100;
-  sound.sourceData.resize(441);
-  for (size_t frame = 0; frame < sound.sourceData.size(); ++frame) {
-    sound.sourceData[frame] = static_cast<short>(frame);
+  std::vector<short> samples(441);
+  for (size_t frame = 0; frame < samples.size(); ++frame) {
+    samples[frame] = static_cast<short>(frame);
   }
+  sound.sourceData = std::move(samples);
   sound.sourceFrameCount = sound.sourceData.size();
   sound.outputData = sound.sourceData;
   sound.outputFrameCount = sound.outputData.size();
@@ -534,10 +531,11 @@ void testRateTransitionRegeneratesAndRemapsEveryFrameDomain() {
   sound.channels = 1;
   sound.sourceSampleRate = 44100;
   sound.sourceFrameCount = 88200;
-  sound.sourceData.resize(sound.sourceFrameCount);
-  for (size_t frame = 0; frame < sound.sourceFrameCount; ++frame) {
-    sound.sourceData[frame] = static_cast<short>(frame % 30000);
+  std::vector<short> samples(sound.sourceFrameCount);
+  for (size_t frame = 0; frame < samples.size(); ++frame) {
+    samples[frame] = static_cast<short>(frame % 30000);
   }
+  sound.sourceData = std::move(samples);
   sound.outputData = sound.sourceData;
   sound.outputFrameCount = sound.sourceFrameCount;
   sound.currentFrame = 4410;
@@ -611,7 +609,7 @@ void testRateTransitionRemapsCommandsPastFormerQueueBoundary() {
   sound.channels = 1;
   sound.sourceSampleRate = 44100;
   sound.sourceFrameCount = 44100;
-  sound.sourceData.resize(sound.sourceFrameCount, 1000);
+  sound.sourceData = std::vector<short>(sound.sourceFrameCount, 1000);
   sound.outputData = sound.sourceData;
   sound.outputFrameCount = sound.sourceFrameCount;
 
@@ -1150,15 +1148,15 @@ void testSystemOnlyMixPlaysSystemWhileSkippingBgmKeysoundAndScheduled() {
   // active-but-frozen so pause/resume resumes them exactly where they paused.
   SoundData systemSound;
   systemSound.channels = 1;
-  systemSound.outputData.assign(64, 16384);
+  systemSound.outputData = std::vector<short>(64, 16384);
   systemSound.outputFrameCount = 64;
   SoundData bgm;
   bgm.channels = 1;
-  bgm.outputData.assign(64, 16384);
+  bgm.outputData = std::vector<short>(64, 16384);
   bgm.outputFrameCount = 64;
   SoundData keysound;
   keysound.channels = 1;
-  keysound.outputData.assign(64, 16384);
+  keysound.outputData = std::vector<short>(64, 16384);
   keysound.outputFrameCount = 64;
 
   AudioCallbackState state;
@@ -1419,6 +1417,32 @@ void testPartialScheduleClearRetirementAndRestart() {
 
 } // namespace
 
+void testPcmBuffersShareOwnershipAcrossRateTransitions() {
+  SoundData sound;
+  sound.channels = 1;
+  sound.sourceSampleRate = 44100;
+  sound.sourceData = {100, 200, 300, 400};
+  sound.sourceFrameCount = 4;
+  sound.outputData = sound.sourceData;
+  sound.outputFrameCount = 4;
+  const auto retained = sound.sourceData;
+  require(sound.outputData.data() == retained.data(),
+          "native and matching output PCM must share immutable storage");
+  AudioCallbackState state;
+  const std::array<SoundData *, 1> sounds{&sound};
+  auto changed = audio::playback::PrepareOutputRateTransition(sounds, 44100, 48000);
+  require(changed.has_value(), "prepare a different output rate");
+  audio::playback::CommitOutputRateTransition(std::move(*changed), state);
+  require(sound.sourceData.data() == retained.data() &&
+              sound.outputData.data() != retained.data() && retained[1] == 200,
+          "rate changes must preserve shared native PCM");
+  auto restored = audio::playback::PrepareOutputRateTransition(sounds, 48000, 44100);
+  require(restored.has_value(), "restore native output rate");
+  audio::playback::CommitOutputRateTransition(std::move(*restored), state);
+  require(sound.outputData.data() == retained.data(),
+          "returning to native rate must reuse native PCM without a copy");
+}
+
 int main() {
   try {
     testChunkedScheduleRoundsAgainstTheOriginalCallbackOrigin();
@@ -1572,6 +1596,7 @@ int main() {
                 keysoundEvent.bus == audio::Bus::Keysound,
             "scheduled audio retains explicit keysound classification");
 
+    testPcmBuffersShareOwnershipAcrossRateTransitions();
     testRateTransitionRegeneratesAndRemapsEveryFrameDomain();
     testRateTransitionRemapsCommandsPastFormerQueueBoundary();
     testStoppedQueryInterpretationPreservesErrors();

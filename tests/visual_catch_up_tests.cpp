@@ -405,6 +405,129 @@ void testTimelineEdges(const std::filesystem::path &clip) {
   std::cout << "timeline edges: zero/single, missing/image, shared ID, backward/rapid, eager readiness\n";
 }
 
+void testGameplayPreparationPreservesPreview(const std::filesystem::path &clip) {
+  Stopwatch stopwatch;
+  Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>());
+  fixture::Session session;
+  bms_parser::Chart chart;
+  chart.Meta.Folder = clip.parent_path();
+  chart.ReferencedBmpTable.emplace(1, clip.filename().string());
+  appendEvent(chart, 0, 1, -1);
+  appendEvent(chart, 500'000, 1, -1);
+  std::atomic_bool cancelled = false;
+  jukebox.loadVisuals(chart, cancelled);
+  jukebox.seekVisualsToSongTime(250'000);
+  const auto *player = seekEvents().front().player;
+  fixture::releaseWorkers();
+  expectUpload(player, 250'000, 0, [&] { jukebox.render(); });
+  require(player->prepareEmbeddedSubmission({}, 0).has_value(), "preview image is visible");
+  const auto prepared = jukebox.prepareGameplayAudioFromPreview(chart, cancelled);
+  require(prepared.success, "background gameplay audio preparation succeeds");
+  require(jukebox.hasActiveVideoVisuals() && player->prepareEmbeddedSubmission({}, 0).has_value(),
+          "gameplay audio preparation must keep the preview video visible");
+  jukebox.seekVisualsToSongTime(300'000);
+  expectSeeks({250'000});
+  jukebox.seekVisualsToSongTime(550'000);
+  expectSeeks({250'000, 50'000});
+}
+
+void testLateFirstFrameIsPresented(const std::filesystem::path &clip) {
+  Stopwatch stopwatch;
+  VideoPlayer player(&stopwatch);
+  fixture::Session session;
+  std::atomic_bool cancelled = false;
+  require(player.loadVideo(clip.string(), cancelled), "late-frame fixture loads");
+  player.playFrom(0);
+  fixture::releaseWorkers();
+  fixture::awaitBoundary(&player, fixture::Boundary::Rejected);
+  VideoPlayer::DecodeBatch batch(player);
+  // Three decoded frames (0, 50, 100 ms) are ready, but the audio clock has
+  // advanced during startup. Display the newest available image immediately.
+  stopwatch.seek(250'000);
+  const auto after = fixture::events().size();
+  player.update();
+  const auto observed = fixture::events();
+  std::vector<std::int64_t> uploads;
+  for (auto it = observed.begin() + after; it != observed.end(); ++it) {
+    if (it->boundary == fixture::Boundary::Upload) uploads.push_back(it->micros);
+  }
+  require(uploads == std::vector<std::int64_t>{100'000},
+          "late startup must upload the newest due frame instead of discarding every image");
+}
+
+void testSeekKeepsDisplayedFrame(const std::filesystem::path &clip) {
+  Stopwatch stopwatch;
+  VideoPlayer player(&stopwatch);
+  fixture::Session session;
+  std::atomic_bool cancelled = false;
+  require(player.loadVideo(clip.string(), cancelled), "seek-display fixture loads");
+  player.playFrom(0);
+  fixture::releaseWorkers();
+  expectUpload(&player, 0, 0, [&] { player.update(); });
+  const auto displayed = player.prepareEmbeddedSubmission({}, 0);
+  require(displayed.has_value(), "uploaded frame can be presented");
+  {
+    VideoPlayer::DecodeBatch batch(player);
+    player.playFrom(750'000);
+    player.update();
+    const auto seeking = player.prepareEmbeddedSubmission({}, 0);
+    require(seeking.has_value() && seeking->textures[0].idx == displayed->textures[0].idx,
+            "seeking must keep the displayed frame until its replacement is ready");
+  }
+  expectUpload(&player, 750'000, 0, [&] { player.update(); });
+  player.stop();
+  require(!player.prepareEmbeddedSubmission({}, 0), "stopping clears the displayed frame");
+  require(player.loadVideo(clip.string(), cancelled), "replacement clip loads");
+  player.playFrom(0);
+  require(!player.prepareEmbeddedSubmission({}, 0), "reloading cannot expose the previous clip's frame");
+}
+
+void testSeekPrerollDoesNotWaitForPresentation(const std::filesystem::path &clip) {
+  Stopwatch stopwatch;
+  VideoPlayer player(&stopwatch);
+  fixture::Session session;
+  std::atomic_bool cancelled = false;
+  require(player.loadVideo(clip.string(), cancelled), "preroll fixture loads");
+  fixture::useEarlierSeekKeyframe(true);
+  player.playFrom(750'000);
+  fixture::releaseWorkers();
+  // Simulate a demuxer landing on an earlier keyframe. No render/update drains
+  // the queue: obsolete frames must not fill it before the useful seek output.
+  fixture::awaitFrame(&player, 750'000);
+  expectUpload(&player, 750'000, 0, [&] { player.update(); });
+  const auto observed = fixture::events();
+  const auto conversions = std::count_if(observed.begin(), observed.end(), [](const auto &event) {
+    return event.boundary == fixture::Boundary::Convert;
+  });
+  require(conversions <= 7, "preroll must be discarded before pixel conversion");
+}
+
+void testDecodedFrameStorage(const std::filesystem::path &clip, bool nativeYuv,
+                             bool oversizedBuffer = false) {
+  Stopwatch stopwatch;
+  VideoPlayer player(&stopwatch);
+  fixture::Session session;
+  std::atomic_bool cancelled = false;
+  require(player.loadVideo(clip.string(), cancelled), "frame-storage fixture loads");
+  if (oversizedBuffer) fixture::attachOversizedDecodedBuffer();
+  const auto loaded = fixture::events();
+  require(std::none_of(loaded.begin(), loaded.end(), [](const auto &event) {
+    return event.boundary == fixture::Boundary::ConversionContext;
+  }), "loading must defer unused conversion context allocation");
+  player.playFrom(0);
+  fixture::releaseWorkers();
+  fixture::awaitBoundary(&player, nativeYuv ? fixture::Boundary::Reference
+                                          : fixture::Boundary::Convert);
+  expectUpload(&player, 0, 0, [&] { player.update(); });
+  const auto decoded = fixture::events();
+  require(std::none_of(decoded.begin(), decoded.end(), [nativeYuv](const auto &event) {
+    if (!nativeYuv) return event.boundary == fixture::Boundary::Reference;
+    return event.boundary == fixture::Boundary::Convert ||
+           event.boundary == fixture::Boundary::ConversionContext ||
+           (event.boundary == fixture::Boundary::Reference && event.result != 0);
+  }), "native YUV reuses storage while RGB keeps the conversion fallback");
+}
+
 void testEofAndShutdown(const std::filesystem::path &clip) {
   Stopwatch stopwatch;
   VideoPlayer player(&stopwatch);
@@ -443,8 +566,8 @@ void testEofAndShutdown(const std::filesystem::path &clip) {
 }
 
 int main(int argc, char **argv) {
-  if (argc != 2) {
-    std::cerr << "usage: visual_catch_up_tests <marker-clip>\n";
+  if (argc != 4) {
+    std::cerr << "usage: visual_catch_up_tests <marker-clip> <yuv-clip> <rgb-clip>\n";
     return 2;
   }
   bgfx::Init init;
@@ -454,8 +577,16 @@ int main(int argc, char **argv) {
   if (!bgfx::init(init)) {
     return 2;
   }
+  rendering::PosTexCoord0Vertex::init();
   int result = 0;
   try {
+    testSeekKeepsDisplayedFrame(argv[1]);
+    testLateFirstFrameIsPresented(argv[1]);
+    testGameplayPreparationPreservesPreview(argv[1]);
+    testSeekPrerollDoesNotWaitForPresentation(argv[1]);
+    testDecodedFrameStorage(argv[2], true);
+    testDecodedFrameStorage(argv[3], false);
+    testDecodedFrameStorage(argv[2], false, true);
     testOrderedCatchUp(argv[1], false, false);
     testOrderedCatchUp(argv[1], true, false);
     testOrderedCatchUp(argv[1], false, true);

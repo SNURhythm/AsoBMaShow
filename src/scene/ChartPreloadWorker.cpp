@@ -6,12 +6,17 @@ void ChartPreloadWorker::configure(Processor processor) {
   processor_ = std::move(processor);
 }
 
-void ChartPreloadWorker::request(const ChartMetaRecord &record) {
+void ChartPreloadWorker::request(const ChartMetaRecord &record,
+                                 bool bypassDebounce) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (pending_ &&
         fspath_to_path_t(pending_->meta.BmsPath) ==
             fspath_to_path_t(record.meta.BmsPath)) {
+      if (bypassDebounce) {
+        pendingReadyAt_ = std::chrono::steady_clock::now();
+        cv_.notify_one();
+      }
       return;  // this exact chart is already queued
     }
     if (inFlightPath_ && inFlightCancellation_ &&
@@ -30,7 +35,8 @@ void ChartPreloadWorker::request(const ChartMetaRecord &record) {
     // on the idle worker; ensureWorker() starts a thread after stop() joined it.
     stop_.store(false, std::memory_order_release);
     pending_ = record;
-    pendingSince_ = std::chrono::steady_clock::now();
+    pendingReadyAt_ = std::chrono::steady_clock::now() +
+                      (bypassDebounce ? std::chrono::milliseconds(0) : debounceDelay_);
   }
   try {
     ensureWorker();
@@ -122,15 +128,13 @@ void ChartPreloadWorker::workerLoop(std::stop_token stop) {
           });
           continue;
         }
-        const auto elapsed = std::chrono::steady_clock::now() - pendingSince_;
-        if (elapsed >= debounceDelay_) {
+        if (std::chrono::steady_clock::now() >= pendingReadyAt_) {
           break;
         }
-        cv_.wait_for(lock, debounceDelay_ - elapsed, [&] {
-          return stop.stop_requested() ||
-                 idleNotificationPending_ ||
-                 stop_.load(std::memory_order_acquire);
-        });
+        // A direct selection can promote this queued chart while we wait.
+        // Recheck its deadline after every notification, including replacements.
+        const auto deadline = pendingReadyAt_;
+        cv_.wait_until(lock, deadline);
       }
       request = std::move(*pending_);
       pending_.reset();

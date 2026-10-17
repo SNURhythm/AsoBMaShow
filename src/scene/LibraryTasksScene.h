@@ -10,6 +10,7 @@ class ScrollView;
 
 class LibraryTasksScene final : public Scene {
 public:
+  bool needsContinuousPresentation() const override { return false; }
   bool usesResponsiveMenuCanvas() const override { return true; }
   LibraryTasksScene(ApplicationContext &context, SceneReturnTarget returnTarget)
       : Scene(context), returnTarget_(std::move(returnTarget)) {}

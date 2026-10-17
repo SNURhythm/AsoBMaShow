@@ -30,6 +30,7 @@ struct View {
 
 struct RecyclerView {
   std::function<void(const ChartMetaRecord &, int)> onSelected;
+  std::function<void(const ChartMetaRecord &, int)> onSelectedByPointer;
   View *getViewByIndex(int) { return nullptr; }
 };
 
@@ -81,8 +82,10 @@ struct MainMenuScene {
 
   MainMenuScene() {
     auto &context = this->context;
-    recyclerView->onSelected = [this, &context](const ChartMetaRecord &record, int idx)
+    const auto selectChart = [this, &context](const ChartMetaRecord &record, int idx,
+                                            bool bypassDebounce)
         SELECTION_CALLBACK;
+    SELECTION_WIRING
   }
 };
 
@@ -170,7 +173,26 @@ void exerciseSelection(int kind, bool blocked) {
   worker.stop();
 }
 
+void exerciseDirectSelectionTiming() {
+  MainMenuScene scene;
+  std::promise<void> loaded;
+  auto ready = loaded.get_future();
+  MainMenuPreviewController worker(
+      [&](const auto &, auto &) { loaded.set_value(); }, [] {}, std::chrono::seconds(2));
+  scene.previewWorker_ = &worker;
+  ChartMetaRecord record;
+  record.meta.BmsPath = "/songs/direct.bms";
+  scene.recycler.onSelected(record, 0);
+  expect(ready.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout,
+         "ordinary selection keeps the preview debounce");
+  scene.recycler.onSelectedByPointer(record, 0);
+  expect(ready.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready,
+         "the actual pointer selection callback bypasses the preview debounce");
+  worker.stop();
+}
+
 int main() {
+  exerciseDirectSelectionTiming();
   for (int kind = 0; kind <= 8; ++kind) {
     exerciseSelection(kind, false);
     exerciseSelection(kind, true);

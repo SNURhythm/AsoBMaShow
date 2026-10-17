@@ -11,12 +11,13 @@ MainMenuPreviewController::MainMenuPreviewController(
 
 MainMenuPreviewController::~MainMenuPreviewController() { stop(); }
 
-void MainMenuPreviewController::request(const ChartMetaRecord &record) {
+void MainMenuPreviewController::request(const ChartMetaRecord &record,
+                                        bool bypassDebounce) {
   {
     std::lock_guard lock(releaseMutex_);
     releasePending_ = false;
   }
-  worker_.request(record);
+  worker_.request(record, bypassDebounce);
 }
 
 void MainMenuPreviewController::cancel() { worker_.cancel(); }

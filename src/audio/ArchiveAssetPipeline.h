@@ -7,6 +7,7 @@
 #include <condition_variable>
 #include <deque>
 #include <exception>
+#include <functional>
 #include <mutex>
 #include <thread>
 
@@ -16,10 +17,11 @@ class ArchiveAssetPipeline {
 public:
   ArchiveAssetPipeline(std::size_t workerCount, std::uint64_t maximumBytes,
                        std::atomic_bool &cancelled,
-                       archive_file::FileDataCallback consumer)
+                       archive_file::FileDataCallback consumer,
+                       std::function<std::size_t(const std::filesystem::path &)> priority = {})
       : maximumBytes_(maximumBytes),
         maximumFiles_(std::max<std::size_t>(1, workerCount) * 2),
-        cancelled_(cancelled), consumer_(std::move(consumer)) {
+        cancelled_(cancelled), consumer_(std::move(consumer)), priority_(std::move(priority)) {
     try {
       for (std::size_t worker = 0; worker < std::max<std::size_t>(1, workerCount);
            ++worker) {
@@ -48,7 +50,16 @@ public:
     if (stopped() || closed_) {
       return false;
     }
-    files_.push_back(std::move(file));
+    // Extraction retains archive locality; decode the earliest chart sound
+    // currently buffered. The bounded queue never waits for an unextracted key.
+    if (priority_) {
+      const auto rank = priority_(file.path);
+      const auto position = std::upper_bound(files_.begin(), files_.end(), rank,
+          [&](std::size_t value, const auto &pending) { return value < priority_(pending.path); });
+      files_.insert(position, std::move(file));
+    } else {
+      files_.push_back(std::move(file));
+    }
     residentBytes_ += bytes;
     ++residentFiles_;
     changed_.notify_all();
@@ -148,6 +159,7 @@ private:
   const std::size_t maximumFiles_;
   std::atomic_bool &cancelled_;
   archive_file::FileDataCallback consumer_;
+  std::function<std::size_t(const std::filesystem::path &)> priority_;
   mutable std::mutex mutex_;
   std::condition_variable changed_;
   std::deque<archive_file::FileData> files_;

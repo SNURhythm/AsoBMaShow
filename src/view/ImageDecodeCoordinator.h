@@ -53,10 +53,15 @@ public:
                                                     std::stop_token)>;
   using LegacyLoader =
       std::function<std::optional<DecodedImageData>(const ImageDecodeRequest &)>;
+  // Called outside the coordinator lock after publishing ready/failed work
+  // or dropping tracked work. May run on any worker/caller thread; must not throw.
+  using CompletionNotifier = std::function<void()>;
 
-  explicit ImageDecodeCoordinator(Loader loader, std::size_t workerCount = 2);
+  explicit ImageDecodeCoordinator(Loader loader, std::size_t workerCount = 2,
+                                  CompletionNotifier notifier = {});
   explicit ImageDecodeCoordinator(LegacyLoader loader,
-                                  std::size_t workerCount = 2);
+                                  std::size_t workerCount = 2,
+                                  CompletionNotifier notifier = {});
   ~ImageDecodeCoordinator();
   ImageDecodeCoordinator(const ImageDecodeCoordinator &) = delete;
   ImageDecodeCoordinator &operator=(const ImageDecodeCoordinator &) = delete;
@@ -95,6 +100,7 @@ private:
   void eraseWorkLocked(std::map<std::string, Work, std::less<>>::iterator work);
 
   Loader loader_;
+  CompletionNotifier notifier_;
   mutable std::mutex mutex_;
   std::condition_variable cv_;
   std::mutex shutdownMutex_;

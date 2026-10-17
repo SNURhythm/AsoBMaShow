@@ -213,7 +213,7 @@ require(
 require(
     "findBmsSelectionHandoffAllowed(" in main_menu_source
     and "AutoSelectionPreview::Load" in main_menu_source
-    and "previewWorker_->request(std::move(previewRecord))" in main_menu_source,
+    and "previewWorker_->request(std::move(previewRecord), bypassDebounce)" in main_menu_source,
     "unchanged Find BMS selection must re-enter normal preview loading",
 )
 apply_updates_start = main_menu_source.find(

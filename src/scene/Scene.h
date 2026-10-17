@@ -2,6 +2,7 @@
 #include "../view/View.h"
 #include "../i18n/Localization.h"
 #include "../context.h"
+#include "../ui/PresentationSchedule.h"
 #include <SDL3/SDL.h>
 #include <vector>
 #include <set>
@@ -36,6 +37,7 @@ public:
     const auto currentRevision = i18n::revision();
     if (languageRevision_ != currentRevision) {
       languageRevision_ = currentRevision;
+      ui::invalidate();
       onLanguageChanged();
     }
   }
@@ -52,8 +54,9 @@ public:
   virtual bool pausesBackgroundTasksForPerformance() const { return false; }
   virtual bool locksOrientation() const { return false; }
   virtual bool usesResponsiveMenuCanvas() const { return false; }
-  // Opt in only for scenes whose complete drawing goes through UiBatchRenderer.
-  virtual bool canSkipUnchangedPresentation() const { return false; }
+  // Custom drawing is conservative until its clocks and mutations are audited.
+  // Service updates and deferred callbacks continue while presentation is idle.
+  virtual bool needsContinuousPresentation() const { return true; }
   virtual EventHandleResult handleEvents(SDL_Event &event) {
     for (auto view : views) {
       if (!view->handleEvents(event)) {
@@ -76,6 +79,7 @@ public:
   void postDeferred(std::function<bool()> func) {
     std::lock_guard lock(postedDeferredMutex_);
     postedDeferred_.push_back(std::move(func));
+    ui::notifyCompletion();
   }
   void handleDeferred() {
     std::vector<std::function<bool()>> posted;
@@ -94,6 +98,7 @@ public:
       if (it->first <= time) {
         if (it->second.first <= context.currentFrame) {
           for (const auto &func : it->second.second) {
+            ui::invalidate();
             if (!func())
               return;
             if (isDead) {
@@ -157,6 +162,7 @@ public:
     std::unique_ptr<View> pending(view);
     views.push_back(view);
     pending.release();
+    ui::invalidate();
   }
 
   virtual ~Scene() { destroyOwnedViews(); }

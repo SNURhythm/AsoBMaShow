@@ -4243,6 +4243,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS=1
     )
     target_link_libraries(archive_file_concurrency_tests PRIVATE ${COMMON_LIBS})
+    add_test(NAME archive_bounded_reader_tests COMMAND archive_file_concurrency_tests --bounded-reader)
     add_test(NAME archive_reference_reader_tests COMMAND archive_file_concurrency_tests --source-reference)
     add_test(NAME archive_unicode_artwork_read_tests COMMAND archive_file_concurrency_tests --unicode-entry read)
     add_test(NAME archive_unicode_artwork_missing_tests COMMAND archive_file_concurrency_tests --unicode-entry missing)
@@ -4807,7 +4808,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(progressive_music_source_tests PROPERTIES TIMEOUT 30)
 
     add_executable(decoded_asset_cache_tests
-        tests/decoded_asset_cache_tests.cpp ${PROGRESSIVE_MUSIC_TEST_SOURCES})
+        tests/decoded_asset_cache_tests.cpp tests/support/AllocationFailure.cpp
+        ${PROGRESSIVE_MUSIC_TEST_SOURCES})
     target_include_directories(decoded_asset_cache_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(decoded_asset_cache_tests PRIVATE cxx_std_23)
     target_link_libraries(decoded_asset_cache_tests PRIVATE ${COMMON_LIBS})
@@ -5475,6 +5477,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/Button.cpp
         src/view/ScrollView.cpp
         src/view/View.cpp
+        src/view/SnappedSlider.cpp
     )
     target_include_directories(button_enabled_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(button_enabled_tests PRIVATE cxx_std_23)
@@ -9219,6 +9222,27 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_include_directories(ui_batch_upload_cache_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(ui_batch_upload_cache_tests PRIVATE cxx_std_20)
     asobmashow_register_test(ui_batch_upload_cache_tests)
+
+    add_test(NAME scene_presentation_activity_tests
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.scene_presentation_activity_tests)
+    set_tests_properties(scene_presentation_activity_tests PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}")
+
+    add_executable(ui_presentation_schedule_tests tests/ui_presentation_schedule_tests.cpp)
+    target_include_directories(ui_presentation_schedule_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(ui_presentation_schedule_tests PRIVATE cxx_std_23)
+    asobmashow_register_test(ui_presentation_schedule_tests)
+
+    add_executable(text_animation_timing_tests tests/text_animation_timing_tests.cpp)
+    target_include_directories(text_animation_timing_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(text_animation_timing_tests PRIVATE cxx_std_23)
+    asobmashow_register_test(text_animation_timing_tests)
+
+    add_executable(scrollbar_fade_tests tests/scrollbar_fade_tests.cpp)
+    target_include_directories(scrollbar_fade_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(scrollbar_fade_tests PRIVATE cxx_std_23)
+    asobmashow_register_test(scrollbar_fade_tests)
 
     add_executable(ui_batch_renderer_tests
         tests/ui_batch_renderer_tests.cpp

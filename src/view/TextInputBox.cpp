@@ -1,5 +1,6 @@
 #include "../platform/SDLMainThread.h"
 #include "TextInputBox.h"
+#include "TextAnimationTiming.h"
 #include "../input/SDLPointerEvent.h"
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
@@ -156,6 +157,7 @@ void TextInputBox::beginEditing() {
 void TextInputBox::endEditing() { finishEditing(); }
 
 void TextInputBox::setClearable(bool value) {
+  if (clearable == value) return;
   clearable = value;
   if (clearable && clearButton == nullptr) {
     clearButton = std::make_unique<Button>();
@@ -189,6 +191,12 @@ void TextInputBox::syncTextInputRect(int cursorX, int cursorY) {
 }
 
 void TextInputBox::setEditingText(const std::string &newText) {
+  if (editingText == newText && composition.empty() &&
+      cursorPos == newText.size() && selectionAnchor == cursorPos &&
+      !isDraggingSelection && activeTouchId == -1 && pendingFocusTouchId == -1) {
+    return;
+  }
+  ui::invalidate();
   editingText = newText;
   clearComposition();
   cursorPos = editingText.size();
@@ -617,17 +625,16 @@ void TextInputBox::renderImpl(RenderContext &context) {
 
     const size_t caretDisplayCursor =
         composition.empty() ? cursorPos : compositionCursorDisplayPos();
-    const Uint32 blinkInterval = 500;
-    const Uint32 currentTime = SDL_GetTicks();
+    const Uint64 currentTime = SDL_GetTicks();
     if (lastRenderedCaretCursor != caretDisplayCursor) {
       lastBlink = currentTime;
       lastRenderedCaretCursor = caretDisplayCursor;
     }
 
-    const bool showCaret =
-        (currentTime - lastBlink) % (2 * blinkInterval) < blinkInterval;
+    const auto caret = text_animation::caret(lastBlink, currentTime);
+    ui::requestRedrawAt(caret.redrawAt);
 
-    if (showCaret) {
+    if (caret.visible) {
       int caretX = 0;
       int caretY = 0;
       cursorToPos(caretDisplayCursor, text, caretX, caretY);
@@ -1037,6 +1044,7 @@ bool TextInputBox::syncNativeTextEditorState(
     selectionAnchor = newSelectionStart;
     cursorPos = newSelectionEnd;
     lastRenderedCaretCursor = static_cast<size_t>(-1);
+    ui::invalidate();
   }
 
   return textChanged;
@@ -1060,6 +1068,7 @@ void TextInputBox::handleNativeTextEditorEvent(
     IOSNativeTextEditorEvent event, const IOSNativeTextEditorState &state) {
   if (!isSelected) {
     isSelected = true;
+    ui::invalidate();
     registerPointerDownListener();
   }
   bool selectionChanged = false;
@@ -1108,11 +1117,15 @@ void TextInputBox::handleNativeTextEditorEvent(
 #endif
 
 void TextInputBox::onSelected() {
+  if (isSelected) return;
   isSelected = true;
+  lastRenderedCaretCursor = static_cast<size_t>(-1);
+  ui::invalidate();
   registerPointerDownListener();
 }
 
 void TextInputBox::onUnselected() {
+  if (isSelected) ui::invalidate();
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   hideNativeTextEditor(false);
 #endif

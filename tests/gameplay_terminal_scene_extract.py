@@ -171,7 +171,7 @@ def main():
     state_end = fallback_source.index('  capturePlayfieldVisualState(')
     preparation_methods += '\nbool PreparedGamePlayScene::prepareBuiltInFallback() {\n'
     preparation_methods += fallback_source[state_start:state_end] + fallback_body + '\n}\n'
-    reset_source = extract(source, 'bool GamePlayScene::reset()')
+    reset_source = extract(source, "bool GamePlayScene::reset()")
     reset_start = reset_source.index('  for (const auto &measure : chart->Measures)')
     reset_end = reset_source.index('  context.jukebox.stop();', reset_start)
     preparation_methods += '\nvoid PreparedGamePlayScene::resetNotesForSameAttempt() {\n'

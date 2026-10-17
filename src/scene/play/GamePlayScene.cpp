@@ -4908,6 +4908,8 @@ void GamePlayScene::refreshRuntimePresentationConfiguration() {
   if (playfieldVisualStateStore == nullptr || presentation == nullptr) {
     return;
   }
+  // Native controls can change the custom playfield while ordinary pause idles.
+  ui::invalidate();
   playfieldPresentationConfiguration.visibleTimeDurationMilliseconds =
       effectiveVisibleTimeDurationMilliseconds();
   playfieldPresentationConfiguration.configuredHispeed =
@@ -5430,6 +5432,7 @@ void GamePlayScene::applyLoadedBestReplay(const ReplayData &loaded) {
     // ghost BMSPlayer supplies to ScoreDataProperty during gameplay.
     activeBestScoreTarget =
         pacemaker::targetFromBestSnapshot(*chart, *activePacemakerBest, &loaded);
+    ui::invalidate();
   }
 }
 
@@ -6898,6 +6901,19 @@ bool GamePlayScene::finishIfGaugeFailed() {
   }
   scheduleResultTransition(0);
   return true;
+}
+
+bool GamePlayScene::needsContinuousPresentation() const {
+  if (playbackInitializationFailed) return false;
+  if (guidedAccessReminderPending) return true;
+  if (presentation && presentation->activeMode() == PresentationMode::Skin)
+    return true;
+  if (practiceMenuActive) return practiceMenuStartPressedMicros != 0;
+  if (coursePauseHoldActive || coursePauseHoldRewinding) return true;
+  // Course menus do not pause playback. Built-in ordinary pauses use the
+  // frozen song clock, but a video may still need to promote a decoded frame.
+  return state == nullptr || !context.jukebox.isPaused() ||
+         context.jukebox.hasActiveVideoVisuals();
 }
 
 void GamePlayScene::update(float dt) {

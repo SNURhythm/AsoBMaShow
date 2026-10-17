@@ -261,10 +261,49 @@ void testConsumerFailureJoinsWorkersAndPropagates() {
           "finished pipeline rejects further buffers");
 }
 
+void testBufferedDecodePriorityPreservesContinuousProduction() {
+  std::atomic_bool cancelled = false;
+  TestGate firstGate, secondGate;
+  std::promise<void> firstStarted, secondStarted, drained;
+  std::vector<std::filesystem::path> order;
+  audio::ArchiveAssetPipeline pipeline(2, 16, cancelled,
+      [&](archive_file::FileData &&file) {
+        if (file.path == "active-first") {
+          firstStarted.set_value();
+          require(firstGate.wait(), "release first worker");
+        } else if (file.path == "active-second") {
+          secondStarted.set_value();
+          require(secondGate.wait(), "release second worker");
+        } else {
+          // The second worker stays gated while the first drains both entries.
+          order.push_back(file.path);
+          if (order.size() == 2) drained.set_value();
+        }
+        return true;
+      }, [](const std::filesystem::path &path) { return path == "opening" ? 0 : 10; });
+  const auto cleanup = makeScopeExit([&] { firstGate.release(); secondGate.release(); });
+  require(pipeline.push({.path = "active-first", .bytes = {1}}), "first accepted");
+  require(firstStarted.get_future().wait_for(std::chrono::seconds(2)) == std::future_status::ready,
+          "first active");
+  require(pipeline.push({.path = "active-second", .bytes = {1}}), "second accepted");
+  require(secondStarted.get_future().wait_for(std::chrono::seconds(2)) == std::future_status::ready,
+          "second active");
+  require(pipeline.push({.path = "later", .bytes = {1}}) &&
+              pipeline.push({.path = "opening", .bytes = {1}}),
+          "physical extraction order can differ from chart order");
+  firstGate.release();
+  require(drained.get_future().wait_for(std::chrono::seconds(2)) == std::future_status::ready,
+          "free worker keeps draining without a phase barrier");
+  secondGate.release();
+  require(pipeline.finish() && order == std::vector<std::filesystem::path>{"opening", "later"},
+          "decode selects earliest appearance among available encoded entries");
+}
+
 }
 
 int main() {
   try {
+    testBufferedDecodePriorityPreservesContinuousProduction();
     testConsumptionOverlapsProductionAndRetainsBudget(9, 1);
     testConsumptionOverlapsProductionAndRetainsBudget(1, 9);
     testConsumptionOverlapsProductionAndRetainsBudget(9, 9);

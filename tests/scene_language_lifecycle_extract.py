@@ -18,6 +18,7 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     fixture = (args.root / "tests/scene_language_lifecycle_fixture.cpp").read_text()
+    fixture = f'#include "{(args.root / "src/ui/PresentationSchedule.h").as_posix()}"\n' + fixture
     for marker, filename in (
         ("PRODUCTION_SCENE_HEADER", "src/scene/Scene.h"),
         ("PRODUCTION_MANAGER_HEADER", "src/scene/SceneManager.h"),

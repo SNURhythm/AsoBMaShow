@@ -17,7 +17,7 @@ public:
   MainMenuPreviewController &operator=(const MainMenuPreviewController &) = delete;
 
   // A new preview withdraws any deferred release of the previous selection.
-  void request(const ChartMetaRecord &record);
+  void request(const ChartMetaRecord &record, bool bypassDebounce = false);
   void cancel();
 
   // Nonblocking. Release runs on the worker after any load finishes. As with

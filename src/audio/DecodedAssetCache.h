@@ -1,40 +1,55 @@
 #pragma once
 
+#include "SharedPcmBuffer.h"
+
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <memory>
 #include <limits>
+#include <memory>
+#include <mutex>
+#include <optional>
 #include <sndfile.h>
 #include <stop_token>
 #include <string>
 #include <vector>
 
 namespace audio {
-
-// Session-owned, native-rate PCM shared by preview preparation and the later
-// gameplay load. All methods are loader/worker operations, never audio callbacks.
+// Whole native-rate keysounds shared by preview and gameplay. Decode once using
+// the full loader; readers retain immutable PCM independently of cache eviction.
+// All operations are loader/worker operations, never audio callbacks.
 class DecodedAssetCache {
   struct Impl;
 public:
-  // Worker-scoped retention of a decoder cursor, independent of PCM retention.
-  // Pinning performs no decoding. The token may safely outlive the cache owner.
-  class DecoderPin {
-  public:
-    DecoderPin();
-    ~DecoderPin();
-    DecoderPin(DecoderPin &&) noexcept;
-    DecoderPin &operator=(DecoderPin &&) noexcept;
-    explicit operator bool() const noexcept;
+  struct DecodedSound {
+    SF_INFO info{};
+    SharedPcmBuffer pcm;
+
+    // Reuse the preview's conversion while its playback owner is alive. The
+    // cache itself retains only native PCM, not additional output-rate buffers.
+    [[nodiscard]] SharedPcmBuffer FindPreparedOutput(int sampleRate) const {
+      if (sampleRate == info.samplerate) return pcm;
+      std::lock_guard lock(outputMutex_);
+      return sampleRate == outputRate_ ? SharedPcmBuffer(output_.lock()) : SharedPcmBuffer{};
+    }
+    void RememberPreparedOutput(int sampleRate, const SharedPcmBuffer &output) const {
+      std::lock_guard lock(outputMutex_);
+      outputRate_ = sampleRate;
+      output_ = output.storage();
+    }
+
   private:
-    friend class DecodedAssetCache;
-    struct State;
-    std::unique_ptr<State> state;
+    mutable std::mutex outputMutex_;
+    mutable int outputRate_ = 0;
+    mutable std::weak_ptr<const std::vector<short>> output_;
   };
-  static constexpr std::size_t kPageFrames = 4096;
   static constexpr std::size_t kDefaultRetainedBytes = 64U * 1024U * 1024U;
   static constexpr std::size_t kUnlimitedRetainedBytes = std::numeric_limits<std::size_t>::max();
+  // Per-asset decode bounds are independent of cache retention, including an
+  // unlimited preview cache. Validate these before allocating whole buffers.
+  static constexpr std::size_t kMaximumEncodedAssetBytes = 256U * 1024U * 1024U;
+  static constexpr std::size_t kMaximumPcmAssetBytes = 256U * 1024U * 1024U;
   enum class FailureKind { None, Cancelled, InvalidAsset, Operation };
   struct Statistics {
     std::uint64_t decodedFrames = 0;
@@ -44,57 +59,37 @@ public:
     std::uint64_t archiveReads = 0;
     std::size_t liveDecoders = 0;
     std::size_t peakLiveDecoders = 0;
-    std::size_t pinnedEntries = 0;
   };
-
-  explicit DecodedAssetCache(std::filesystem::path scratchRoot = {},
-                            std::size_t maximumRetainedBytes = kDefaultRetainedBytes);
+  explicit DecodedAssetCache(std::size_t maximumRetainedBytes = kDefaultRetainedBytes);
   ~DecodedAssetCache();
   DecodedAssetCache(const DecodedAssetCache &) = delete;
   DecodedAssetCache &operator=(const DecodedAssetCache &) = delete;
-
-  // Unpinned active/idle decoders share a 16-descriptor bound. Explicit pins
-  // preferentially retain progressively warmed sources, within a 64-decoder
-  // total bound. Excess idle pinned cursors can close and reopen as needed;
-  // descriptor eviction never removes retained PCM.
-  DecoderPin PinDecoder(const std::filesystem::path &path,
-                        const std::atomic_bool &cancelled, std::stop_token stop = {},
-                        std::string *error = nullptr, FailureKind *failure = nullptr);
-
-  bool Inspect(const std::filesystem::path &path, SF_INFO &info,
-               const std::atomic_bool &cancelled, std::stop_token stop = {},
-               std::string *error = nullptr, FailureKind *failure = nullptr);
-  // firstFrame need not be page-aligned. Returns only frames before EOF, in
-  // native channel order, with the same double-to-int16 conversion as decoder.cpp.
-  bool ReadRange(const std::filesystem::path &path, std::uint64_t firstFrame,
-                 std::size_t frameCount, std::vector<short> &pcm, SF_INFO &info,
-                 const std::atomic_bool &cancelled, std::stop_token stop = {},
-                 std::string *error = nullptr);
-  bool Materialize(const std::filesystem::path &path, std::vector<short> &pcm,
-                   SF_INFO &info, const std::atomic_bool &cancelled,
-                   std::stop_token stop = {}, std::string *error = nullptr);
-  // Warm missing native-rate pages without allocating another full PCM copy.
-  bool Preload(const std::filesystem::path &path, const std::atomic_bool &cancelled,
-               std::stop_token stop = {}, std::string *error = nullptr,
-               FailureKind *failure = nullptr);
-  // Stage encoded entries in one streaming extraction per archive, without
-  // decoding PCM. Callers choose a near-future window before warming the rest.
-  // Regular paths and already staged entries need no archive work.
-  bool StageArchiveAssets(const std::vector<std::filesystem::path> &paths,
-                          const std::atomic_bool &cancelled,
-                          std::stop_token stop = {}, std::string *error = nullptr);
-  // Existing batch archive extraction can seed an uncached asset without
-  // extracting that same entry again. The logical original path remains its key.
-  bool MaterializeBytes(const std::filesystem::path &path,
-                        const std::vector<unsigned char> &encoded,
-                        std::vector<short> &pcm, SF_INFO &info,
-                        const std::atomic_bool &cancelled,
-                        std::stop_token stop = {}, std::string *error = nullptr);
+  std::shared_ptr<const DecodedSound> Load(const std::filesystem::path &path,
+      const std::atomic_bool &cancelled, std::stop_token stop = {},
+      std::string *error = nullptr, FailureKind *failure = nullptr);
+  std::shared_ptr<const DecodedSound> LoadBytes(const std::filesystem::path &path,
+      const std::vector<unsigned char> &bytes, const std::atomic_bool &cancelled,
+      std::stop_token stop = {}, std::string *error = nullptr, FailureKind *failure = nullptr);
+  // A batch validates its source once before resolution/extraction and again
+  // before completion. Only pass fully resolved paths from that same archive.
+  // This avoids filesystem/extension checks inside every decode callback.
+  struct ArchiveBatch {
+    std::filesystem::path path;
+    std::string identity;
+  };
+  std::optional<ArchiveBatch> BeginArchiveBatch(const std::filesystem::path &path) const;
+  bool ArchiveBatchUnchanged(const ArchiveBatch &batch) const;
+  std::shared_ptr<const DecodedSound> FindArchiveAsset(const ArchiveBatch &batch,
+      const std::filesystem::path &resolvedPath);
+  std::shared_ptr<const DecodedSound> LoadArchiveBytes(const ArchiveBatch &batch,
+      const std::filesystem::path &resolvedPath, const std::vector<unsigned char> &bytes,
+      const std::atomic_bool &cancelled, std::stop_token stop = {},
+      std::string *error = nullptr, FailureKind *failure = nullptr);
   [[nodiscard]] bool Contains(const std::filesystem::path &path) const;
+  // Release cache ownership after handoff; active playback keeps shared PCM.
+  void Clear();
   [[nodiscard]] Statistics GetStatistics() const;
-
 private:
   std::shared_ptr<Impl> impl;
 };
-
 } // namespace audio

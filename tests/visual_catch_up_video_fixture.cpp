@@ -24,6 +24,8 @@ struct State {
   std::unordered_set<const VideoPlayer *> releasedWorkers;
   std::unordered_map<const VideoPlayer *, const std::mutex *> outputMutexes;
   bool holdWorkers = false;
+  bool earlierSeekKeyframe = false;
+  bool oversizedDecodedBuffer = false;
   bool catchUpProbe = false;
   bool probing = false;
   bool witnessed = false;
@@ -75,6 +77,8 @@ Session::Session(bool holdWorkers) {
   state.releasedWorkers.clear();
   state.outputMutexes.clear();
   state.holdWorkers = holdWorkers;
+  state.earlierSeekKeyframe = false;
+  state.oversizedDecodedBuffer = false;
   state.catchUpProbe = false;
   state.probing = false;
   state.witnessed = false;
@@ -101,6 +105,16 @@ void releaseWorkers() {
   std::lock_guard lock(state.mutex);
   state.holdWorkers = false;
   state.changed.notify_all();
+}
+
+void useEarlierSeekKeyframe(bool enabled) {
+  std::lock_guard lock(state.mutex);
+  state.earlierSeekKeyframe = enabled;
+}
+
+void attachOversizedDecodedBuffer() {
+  std::lock_guard lock(state.mutex);
+  state.oversizedDecodedBuffer = true;
 }
 
 void armCatchUpProbe(std::size_t failedSeekOrdinal) {
@@ -180,9 +194,10 @@ AVPacket *allocatePacket(const VideoPlayer *player) {
 
 int seek(const VideoPlayer *player, AVFormatContext *context, int streamIndex,
          std::int64_t timestamp, int flags) {
-  bool fail = false;
+  bool fail = false, earlier = false;
   {
     std::unique_lock lock(state.mutex);
+    earlier = state.earlierSeekKeyframe;
     ++state.seekOrdinal;
     fail = state.seekOrdinal == state.failedSeekOrdinal;
     if (state.catchUpProbe && state.seekOrdinal == 1) {
@@ -199,7 +214,7 @@ int seek(const VideoPlayer *player, AVFormatContext *context, int streamIndex,
     }
   }
   const int result = fail ? AVERROR(EIO)
-                          : av_seek_frame(context, streamIndex, timestamp, flags);
+                          : av_seek_frame(context, streamIndex, earlier ? 0 : timestamp, flags);
   const auto micros = av_rescale_q(timestamp,
       context->streams[streamIndex]->time_base, AVRational{1, AV_TIME_BASE});
   record({Boundary::Seek, player, micros, result});
@@ -214,6 +229,14 @@ void flush(const VideoPlayer *player, AVCodecContext *context) {
 int receive(const VideoPlayer *player, AVCodecContext *context, AVFrame *frame) {
   record({Boundary::Receive, player});
   const int result = avcodec_receive_frame(context, frame);
+  if (result == 0) {
+    std::lock_guard lock(state.mutex);
+    if (state.oversizedDecodedBuffer) {
+      if (frame->buf[7]) throw std::runtime_error("fixture needs an unused buffer slot");
+      frame->buf[7] = av_buffer_alloc(2 * 1024 * 1024);
+      if (!frame->buf[7]) throw std::runtime_error("fixture buffer allocation failed");
+    }
+  }
   if (result == 0 && frame->width == 16 && frame->height == 16 &&
       frame->format == AV_PIX_FMT_YUV420P) {
     record({Boundary::Frame, player, markerMicros(frame->data[0], frame->linesize[0])});
@@ -230,6 +253,27 @@ int send(const VideoPlayer *player, AVCodecContext *context,
          const AVPacket *packet) {
   record({packet ? Boundary::Send : Boundary::Drain, player});
   return avcodec_send_packet(context, packet);
+}
+
+template <typename... Args>
+auto convert(const VideoPlayer *player, Args... args) {
+  record({Boundary::Convert, player});
+  return sws_scale(args...);
+}
+template <typename... Args>
+auto conversionContext(const VideoPlayer *player, Args... args) {
+  record({Boundary::ConversionContext, player});
+  return sws_getContext(args...);
+}
+template <typename... Args>
+auto cachedConversionContext(const VideoPlayer *player, Args... args) {
+  record({Boundary::ConversionContext, player});
+  return sws_getCachedContext(args...);
+}
+int reference(const VideoPlayer *player, AVFrame *target, const AVFrame *source) {
+  const int result = av_frame_ref(target, source);
+  record({Boundary::Reference, player, -1, result});
+  return result;
 }
 
 void freePacket(const VideoPlayer *player, AVPacket **packet) {
@@ -279,13 +323,17 @@ void observeCatchUpTextureUpload(
     const VideoPlayer *player, TextureHandle handle, std::uint16_t layer,
     std::uint8_t mip, std::uint16_t x, std::uint16_t y, std::uint16_t width,
     std::uint16_t height, const Memory *memory, std::uint16_t pitch) {
-  if (width == 16 && height == 16) {
+  if (width == player->getFrameWidth() && height == player->getFrameHeight()) {
     visual_catch_up_fixture::upload(player, memory->data, pitch);
   }
   updateTexture2D(handle, layer, mip, x, y, width, height, memory, pitch);
 }
 }
 
+#define sws_scale(...) visual_catch_up_fixture::convert(this, __VA_ARGS__)
+#define sws_getContext(...) visual_catch_up_fixture::conversionContext(this, __VA_ARGS__)
+#define sws_getCachedContext(...) visual_catch_up_fixture::cachedConversionContext(this, __VA_ARGS__)
+#define av_frame_ref(...) visual_catch_up_fixture::reference(this, __VA_ARGS__)
 #define av_packet_alloc() visual_catch_up_fixture::allocatePacket(this)
 #define av_packet_free(...) visual_catch_up_fixture::freePacket(this, __VA_ARGS__)
 #define av_seek_frame(...) visual_catch_up_fixture::seek(this, __VA_ARGS__)
@@ -305,3 +353,9 @@ void observeCatchUpTextureUpload(
 #undef av_seek_frame
 #undef av_packet_alloc
 #undef av_packet_free
+
+#undef av_frame_ref
+#undef sws_getCachedContext
+#undef sws_scale
+
+#undef sws_getContext

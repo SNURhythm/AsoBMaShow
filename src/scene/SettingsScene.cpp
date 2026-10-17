@@ -226,6 +226,12 @@ void SettingsScene::onLanguageChanged() {
   updateDisplayPreviewUi();
 }
 
+bool SettingsScene::needsContinuousPresentation() const {
+  return previewActive &&
+         (!previewPaused || previewRendererDirty || !previewPresentation ||
+          previewPresentation->activeMode() == PresentationMode::Skin);
+}
+
 void SettingsScene::update(float dt) {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   updateGameplaySkinSettingsController();

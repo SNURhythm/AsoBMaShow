@@ -1739,6 +1739,20 @@ bool Jukebox::hasActiveVisuals() const {
           currentBmpLayer.load(std::memory_order_relaxed) != -1);
 }
 
+bool Jukebox::hasActiveVideoVisuals() const {
+  if (!hasActiveVisuals()) return false;
+  // Do not stall presentation while the media worker owns the table. Keep
+  // rendering until we can determine whether the selected visuals are videos.
+  std::unique_lock lock(videoPlayerTableMutex, std::try_to_lock);
+  if (!lock.owns_lock()) return true;
+  for (const int id : {currentBga.load(std::memory_order_relaxed),
+                       currentBmpLayer.load(std::memory_order_relaxed)}) {
+    const auto video = videoPlayerTable.find(id);
+    if (video != videoPlayerTable.end() && video->second) return true;
+  }
+  return false;
+}
+
 long long Jukebox::getScheduledAudioEndMicros() {
   long long endMicros = 0;
   for (const auto &event : audioList) {
@@ -2845,22 +2859,22 @@ Jukebox::resolveVisualAssets(bms_parser::Chart &chart,
 audio::playback::BackendOperationResult Jukebox::loadResolvedChartResources(
     bms_parser::Chart &chart, const ChartResourceTable &wavTable,
     const ChartResourceTable &bmpTable, bool loadVisualAssets,
-    std::atomic_bool &isCancelled) {
+    std::atomic_bool &isCancelled, bool preserveVisuals) {
   const auto sounds = resolveSoundAssets(chart, wavTable, isCancelled);
-  const auto visuals = loadVisualAssets && !isCancelled
+  const auto visuals = loadVisualAssets && !preserveVisuals && !isCancelled
                            ? resolveVisualAssets(chart, bmpTable, isCancelled)
                            : std::vector<ResolvedVisualAsset>{};
   if (isCancelled) {
     return {.success = true};
   }
-  return reconcileChartResources(chart, &sounds, visuals, isCancelled);
+  return reconcileChartResources(chart, &sounds, visuals, isCancelled, preserveVisuals);
 }
 
 audio::playback::BackendOperationResult
 Jukebox::reconcileChartResources(
     bms_parser::Chart &chart, const std::vector<ResolvedSoundAsset> *sounds,
     const std::vector<ResolvedVisualAsset> &visuals,
-    std::atomic_bool &isCancelled) {
+    std::atomic_bool &isCancelled, bool preserveVisuals) {
   std::unordered_map<path_t, ArchiveChartAssetBatch> archiveBatches;
   std::vector<path_t> archiveBatchOrder;
   std::unordered_map<path_t, std::vector<int>> regularSoundIds;
@@ -2931,9 +2945,9 @@ Jukebox::reconcileChartResources(
     soundArchiveIdentities = std::move(currentIdentities);
   }
 
-  clearVisualResources();
+  if (!preserveVisuals) clearVisualResources();
   if (isCancelled ||
-      !prepareGameplayBgaLayerImageIds(chart, visuals, isCancelled)) {
+      (!preserveVisuals && !prepareGameplayBgaLayerImageIds(chart, visuals, isCancelled))) {
     return {.success = true};
   }
   {
@@ -3262,7 +3276,8 @@ jukebox_lifecycle::SessionState Jukebox::makeLifecycleState() noexcept {
 
 audio::playback::BackendOperationResult
 Jukebox::loadChartImpl(bms_parser::Chart &chart, bool scheduleNotes,
-                       std::atomic_bool &isCancelled, bool preserveDevice) {
+                       std::atomic_bool &isCancelled, bool preserveDevice,
+                       bool preserveVisuals) {
   auto lifecycleState = makeLifecycleState();
   const auto stopped = preserveDevice
                            ? jukebox_lifecycle::StopSessionForTransitionKeepDevice(
@@ -3287,9 +3302,9 @@ Jukebox::loadChartImpl(bms_parser::Chart &chart, bool scheduleNotes,
     playThread.join();
   }
 
-  currentBga.store(-1, std::memory_order_relaxed);
-  currentBmpLayer.store(-1, std::memory_order_relaxed);
-  {
+  if (!preserveVisuals) {
+    currentBga.store(-1, std::memory_order_relaxed);
+    currentBmpLayer.store(-1, std::memory_order_relaxed);
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
     for (auto &videoPlayer : videoPlayerTable) {
       if (videoPlayer.second != nullptr) {
@@ -3304,22 +3319,30 @@ Jukebox::loadChartImpl(bms_parser::Chart &chart, bool scheduleNotes,
 #if TARGET_OS_ANDROID
   prepareAndroidChartAssetDirectoryCache(chart, chart.ReferencedWavTable,
                                          chart.ReferencedBmpTable,
-                                         loadVisualAssets, isCancelled);
+                                         loadVisualAssets && !preserveVisuals, isCancelled);
   if (isCancelled)
     return {.success = true};
 #endif
   auto loaded = loadResolvedChartResources(chart, chart.ReferencedWavTable,
                                            chart.ReferencedBmpTable,
-                                           loadVisualAssets, isCancelled);
+                                           loadVisualAssets, isCancelled, preserveVisuals);
   if (!loaded.success) {
     SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "%s", loaded.diagnostic.c_str());
     return loaded;
   }
   if (isCancelled)
     return {.success = true};
-  schedule(chart, scheduleNotes, isCancelled);
+  schedule(chart, scheduleNotes, isCancelled, std::nullopt, nullptr, false,
+           preserveVisuals);
   SDL_Log("Chart loaded");
   return {.success = true};
+}
+
+audio::playback::BackendOperationResult
+Jukebox::prepareGameplayAudioFromPreview(bms_parser::Chart &chart,
+                                        std::atomic_bool &isCancelled) {
+  return loadChartImpl(chart, true, isCancelled,
+                       /*preserveDevice=*/false, /*preserveVisuals=*/true);
 }
 
 bool Jukebox::hasLoadedResources() const {
@@ -3408,10 +3431,12 @@ void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
                        std::optional<long long> noteScheduleCutoffMicros,
                        const prep_metronome::PrepMetronomePlan
                            *prepMetronomePlan,
-                       bool clubMode) {
+                       bool clubMode, bool preserveVisuals) {
   audioCursor = 0;
   audioList.clear();
-  scheduleVisuals(chart, isCancelled);
+  // Preview already owns this schedule and its current decoder positions.
+  // Preparing gameplay audio must not restart or blank those visuals.
+  if (!preserveVisuals) scheduleVisuals(chart, isCancelled);
   for (auto &measure : chart.Measures) {
     if (isCancelled)
       return;

@@ -61,6 +61,8 @@ class TextView;
 struct SkinGameplayChartGraphState;
 class MusicSelectScene final : public Scene {
 public:
+  // Authored skins may animate independently of playback or input.
+  bool needsContinuousPresentation() const override { return true; }
   MusicSelectScene(ApplicationContext &,
                    skin::GameplaySkinActivationRequest);
   ~MusicSelectScene() override;

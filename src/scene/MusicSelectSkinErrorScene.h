@@ -10,6 +10,7 @@ class View;
 
 class MusicSelectSkinErrorScene final : public Scene {
 public:
+  bool needsContinuousPresentation() const override { return false; }
   MusicSelectSkinErrorScene(ApplicationContext &, std::string selectedSkinPath,
                             std::vector<skin::SkinDiagnostic>);
 

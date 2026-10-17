@@ -1,4 +1,5 @@
 #include "scene/play/Pacemaker.h"
+#include "ui/PresentationSchedule.h"
 
 // Substitute the repository factory boundary only. The unchanged scene methods
 // below run with the production task, resolver, and pacemaker policy.
@@ -74,12 +75,17 @@ void testSceneUpdatesPersonalBestGhostWithoutChangingSelectedTarget() {
   scene.startBestReplayLoad("best", "song.bms");
   // The worker cannot update scene state before the application consumes it.
   assert(!scene.activeBestScoreTarget.usesReplayProgression);
+  ui::PresentationSchedule schedule;
+  schedule.didPresent(ui::revisions(), {}, 0);
   finishScene(scene);
+  assert(schedule.shouldRender(1) && "loaded BEST target must redraw even while gameplay is paused");
   assert(scene.activeBestScoreTarget.usesReplayProgression);
   assert(pacemaker::targetScoreAtPlayedNotes(scene.activeBestScoreTarget, 1) == 2);
   assert(!scene.activePacemakerTarget.usesReplayProgression);
   assert(pacemaker::targetScoreAtPlayedNotes(scene.activePacemakerTarget, 1) == 1);
+  schedule.didPresent(ui::revisions(), {}, 0);
   scene.applyPendingBestReplay();
+  assert(!schedule.shouldRender(1) && "completion polling must let the playfield settle");
   assert(scene.activeBestScoreTarget.scoreAfterNotes == std::vector<int>({0, 2, 3, 3}));
 }
 

@@ -385,6 +385,7 @@ public:
   }
 
   void setChart(bms_parser::Chart *newChart) {
+    ui::invalidate();
     const practice::RangeSelection previousRange = practiceRange;
     const bool hadPracticeRange = practiceRangeSet;
     chart = newChart;
@@ -399,7 +400,11 @@ public:
     setPracticeRange(previousRange);
   }
 
-  void setShowInvisibleNotes(bool enabled) { showInvisibleNotes = enabled; }
+  void setShowInvisibleNotes(bool enabled) {
+    if (showInvisibleNotes == enabled) return;
+    showInvisibleNotes = enabled;
+    ui::invalidate();
+  }
 
   void setZoom(float newZoom) {
     const std::optional<ZoomFocusAnchor> focusAnchor =
@@ -409,6 +414,7 @@ public:
     if (std::abs(zoom - previousZoom) <= 0.001f) {
       return;
     }
+    ui::invalidate();
     rebuildLayout();
     if (focusAnchor.has_value()) {
       focusZoomAnchor(*focusAnchor);
@@ -422,6 +428,8 @@ public:
   }
 
   void setPracticeRange(const practice::RangeSelection &range) {
+    const auto previous = practiceRange;
+    const bool previouslySet = practiceRangeSet;
     practiceRange = range;
     const long long chartEnd =
         chart == nullptr
@@ -438,6 +446,7 @@ public:
                                  : practice::Marker::Start;
     }
     practiceRangeSet = true;
+    if (!previouslySet || previous != practiceRange) ui::invalidate();
   }
 
   [[nodiscard]] practice::RangeSelection getPracticeRange() const {
@@ -445,7 +454,9 @@ public:
   }
 
   void setActivePracticeMarker(practice::Marker marker) {
+    if (practiceRange.active == marker) return;
     practiceRange.active = marker;
+    ui::invalidate();
   }
 
   bool moveActivePracticeMarker(practice::TimelineDirection direction) {
@@ -468,6 +479,7 @@ public:
     practiceRange.placeActiveMarker(
         *adjacent, chart_playback_duration::ChartTimelineEndMicros(*chart));
     playbackActive = false;
+    ui::invalidate();
     if (selectionListener != nullptr) {
       selectionListener(getSelectedTimeMicros());
     }
@@ -493,27 +505,51 @@ public:
   }
 
   void setPlaybackTime(long long timeMicros, bool active) {
-    playbackTimeMicros = std::max(0LL, timeMicros);
+    const auto nextTime = std::max(0LL, timeMicros);
+    if (playbackTimeMicros != nextTime || playbackActive != active)
+      ui::invalidate();
+    playbackTimeMicros = nextTime;
     playbackActive = active;
     if (playbackActive) {
       autofocusPlaybackCursor();
     }
   }
 
-  void clearPlaybackTime() { playbackActive = false; }
+  void clearPlaybackTime() {
+    if (!playbackActive) return;
+    playbackActive = false;
+    ui::invalidate();
+  }
 
   void setGhostReplay(const ReplayData &replayData) {
-    replayGhostEvents = replay_ghost::buildReplayGhostEvents(
+    auto events = replay_ghost::buildReplayGhostEvents(
         replayData, orderedTimelines, laneToOrderIndex,
         [this](long long timeMicros) { return timeToBeatPosition(timeMicros); });
-    replayMissMarkers = replay_ghost::buildReplayMissMarkers(
+    auto markers = replay_ghost::buildReplayMissMarkers(
         replayData, orderedTimelines, laneToOrderIndex,
         [this](long long timeMicros) { return timeToBeatPosition(timeMicros); });
+    const bool sameEvents = std::ranges::equal(events, replayGhostEvents,
+        [](const auto &a, const auto &b) {
+          return a.lane == b.lane && a.noteTimeMicros == b.noteTimeMicros &&
+                 a.judgeTimeMicros == b.judgeTimeMicros &&
+                 a.judgeScrollPosition == b.judgeScrollPosition && a.judgement == b.judgement;
+        });
+    const bool sameMarkers = std::ranges::equal(markers, replayMissMarkers,
+        [](const auto &a, const auto &b) {
+          return a.lane == b.lane && a.noteTimeMicros == b.noteTimeMicros &&
+                 a.noteScrollPosition == b.noteScrollPosition;
+        });
+    if (sameEvents && sameMarkers) return;
+    replayGhostEvents = std::move(events);
+    replayMissMarkers = std::move(markers);
+    ui::invalidate();
   }
 
   void clearGhostReplay() {
+    if (replayGhostEvents.empty() && replayMissMarkers.empty()) return;
     replayGhostEvents.clear();
     replayMissMarkers.clear();
+    ui::invalidate();
   }
 
 protected:
@@ -2410,6 +2446,10 @@ EventHandleResult ChartViewerScene::handleEvents(SDL_Event &event) {
     }
   }
   return Scene::handleEvents(event);
+}
+
+bool ChartViewerScene::needsContinuousPresentation() const {
+  return listenActive;
 }
 
 void ChartViewerScene::update(float dt) {

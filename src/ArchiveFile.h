@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <functional>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <stop_token>
 #include <string>
@@ -156,6 +157,7 @@ void appendDebugLogLine(const std::string &message);
 void setStreamingEntryObserverForTesting(
     StreamingEntryObserverForTesting observer);
 void setZipMappingEnabledForTesting(bool enabled);
+std::uint64_t zipStreamingOpenCountForTesting();
 void resetSingleFlightWaiterCountForTesting();
 std::uint32_t singleFlightWaiterCountForTesting();
 #endif
@@ -173,6 +175,14 @@ bool listEntries(const std::filesystem::path &archivePath,
                  std::vector<Entry> &entries,
                  std::string *errorMessage = nullptr,
                  PauseCallback pauseCallback = nullptr);
+// Resolve one batch against a single validated index. Results are aligned with
+// innerPaths; missing entries are null. Returned paths are archive-relative.
+bool resolveArchiveEntriesWithExtensions(
+    const std::filesystem::path &archivePath,
+    const std::vector<std::filesystem::path> &innerPaths,
+    const std::vector<std::string_view> &extensions,
+    std::vector<std::optional<std::filesystem::path>> &resolved,
+    std::string *errorMessage = nullptr, PauseCallback pauseCallback = nullptr);
 bool listEntriesBounded(const std::filesystem::path &archivePath,
                         std::vector<Entry> &entries, std::uint64_t maximumEntries,
                         std::string *errorMessage = nullptr,
@@ -194,6 +204,24 @@ bool readArchiveEntriesStreamingBounded(
     FileDataCallback onFile, std::uint64_t maximumBytes,
     std::string *errorMessage = nullptr,
     PauseCallback pauseCallback = nullptr);
+// Worker-owned reader for successive bounded batches from one archive. Keeps
+// ZIP directory state until destruction; source changes invalidate that state.
+// Calls are serialized. Callbacks must not re-enter the same reader.
+class BoundedArchiveReader {
+public:
+  explicit BoundedArchiveReader(std::filesystem::path archivePath);
+  ~BoundedArchiveReader();
+  BoundedArchiveReader(const BoundedArchiveReader &) = delete;
+  BoundedArchiveReader &operator=(const BoundedArchiveReader &) = delete;
+  bool read(const std::vector<std::filesystem::path> &innerPaths,
+            FileDataCallback onFile, std::uint64_t maximumBytes,
+            std::string *errorMessage = nullptr,
+            PauseCallback pauseCallback = nullptr);
+private:
+  struct Impl;
+  std::unique_ptr<Impl> impl;
+};
+
 enum class ConcurrentReadMemoryPolicy {
   Strict,
   AllowSingleOversizedEntry,

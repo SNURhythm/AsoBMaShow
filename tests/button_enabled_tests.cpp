@@ -1,6 +1,10 @@
 #include "../src/view/View.h"
 #include "../src/view/ScrollView.h"
 #include "../src/view/RecyclerView.h"
+#include "../src/view/OverlayPortal.h"
+#include "../src/view/KeybombPreviewView.h"
+#include "../src/view/SnappedSlider.h"
+#include "../src/ui/PresentationSchedule.h"
 #include <functional>
 #include <memory>
 #include <string>
@@ -617,6 +621,44 @@ static void testRecyclerAllowsTapJitterAtDifferentScreenSizes() {
   rendering::ui_scale_y = originalScaleY;
 }
 
+static void testRecyclerDistinguishesDirectSelectionFromBrowsing() {
+  RecyclerView<int> list([](int a, int b) { return a == b; });
+  list.setSize(200, 200);
+  list.itemHeight = 60;
+  list.onCreateView = [](const int &) { return new View(); };
+  list.onBind = [](View *, const int &, int, bool) {};
+  list.setItems(std::vector<int>{1, 2, 3, 4, 5, 6});
+  int direct = 0;
+  int browsed = 0;
+  list.onSelected = [&](const int &, int) { ++browsed; };
+  list.onSelectedByPointer = [&](const int &, int) { ++direct; };
+  auto click = mouseEvent(SDL_EVENT_MOUSE_BUTTON_DOWN, 80, 90);
+  list.handleEvents(click);
+  REQUIRE(direct == 1 && browsed == 0);
+  auto down = fingerEvent(SDL_EVENT_FINGER_DOWN, 80, 90);
+  auto up = fingerEvent(SDL_EVENT_FINGER_UP, 80, 90);
+  list.handleEvents(down);
+  list.handleEvents(up);
+  REQUIRE(direct == 2 && browsed == 0);
+  SDL_Event key{};
+  key.type = SDL_EVENT_KEY_DOWN;
+  key.key.key = SDLK_DOWN;
+  list.handleEvents(key);
+  REQUIRE(direct == 2 && browsed == 1);
+  SDL_Event wheel{};
+  wheel.type = SDL_EVENT_MOUSE_WHEEL;
+  wheel.wheel.mouse_x = 80;
+  wheel.wheel.mouse_y = 90;
+  wheel.wheel.y = -1;
+  list.handleEvents(wheel);
+  list.handleEvents(down);
+  auto drag = fingerEvent(SDL_EVENT_FINGER_MOTION, 80, 50);
+  list.handleEvents(drag);
+  auto dragEnd = fingerEvent(SDL_EVENT_FINGER_UP, 80, 50);
+  list.handleEvents(dragEnd);
+  REQUIRE(direct == 2 && browsed == 1);
+}
+
 static void testNavigationMayDestroyDispatchingViews() {
   for (const bool touch : {false, true}) {
     for (const bool throughButtonContent : {false, true}) {
@@ -712,6 +754,114 @@ void testRecyclerSkipsSectionHeadings() {
   REQUIRE(list.selectedIndex == -1);
 }
 
+void testProgrammaticWidgetChangesWakePresentationOnce() {
+  Button button(0, 0, 100, 50);
+  auto before = ui::revisions();
+  button.setEnabled(false);
+  REQUIRE(ui::revisions() != before);
+  before = ui::revisions();
+  button.setEnabled(false);
+  REQUIRE(ui::revisions() == before);
+  button.setBackgroundColors(Color(10, 20, 30), Color(20, 30, 40), Color(30, 40, 50));
+  REQUIRE(ui::revisions() != before);
+  before = ui::revisions();
+  button.setBackgroundColors(Color(10, 20, 30), Color(20, 30, 40), Color(30, 40, 50));
+  REQUIRE(ui::revisions() == before);
+  button.setBorderColors(Color(11, 22, 33), Color(22, 33, 44), Color(33, 44, 55));
+  REQUIRE(ui::revisions() != before);
+  before = ui::revisions();
+  button.setBorderColors(Color(11, 22, 33), Color(22, 33, 44), Color(33, 44, 55));
+  REQUIRE(ui::revisions() == before);
+  button.setStyledBorderWidth(2);
+  REQUIRE(ui::revisions() != before);
+  before = ui::revisions();
+  button.setStyledBorderWidth(2);
+  REQUIRE(ui::revisions() == before);
+
+  SnappedSlider slider;
+  before = ui::revisions();
+  slider.refresh({.minimum = 0, .maximum = 100, .step = 10, .value = 23});
+  REQUIRE(slider.value() == 20 && ui::revisions() != before);
+  before = ui::revisions();
+  slider.refresh({.minimum = 100, .maximum = 0, .step = 10, .value = 22});
+  REQUIRE(slider.value() == 20 && ui::revisions() == before);
+  slider.refresh({.minimum = 0, .maximum = 100, .step = 10, .value = 22, .enabled = false});
+  REQUIRE(ui::revisions() != before);
+  before = ui::revisions();
+  slider.refresh({.minimum = 0, .maximum = 100, .step = 10, .value = 20, .enabled = false});
+  REQUIRE(ui::revisions() == before);
+
+  ScrollView scroll(0, 0, 100, 50);
+  scroll.setContentView(new View(0, 0, 100, 500));
+  before = ui::revisions();
+  scroll.setContentView(nullptr);
+  REQUIRE(ui::revisions() != before);
+  before = ui::revisions();
+  scroll.setContentView(nullptr);
+  REQUIRE(ui::revisions() == before);
+
+  OverlayPortal portal;
+  View overlay;
+  before = ui::revisions();
+  portal.present(&overlay);
+  REQUIRE(ui::revisions() != before);
+  before = ui::revisions();
+  portal.present(&overlay);
+  REQUIRE(ui::revisions() == before);
+  portal.dismiss(&overlay);
+  REQUIRE(ui::revisions() != before);
+  before = ui::revisions();
+  portal.dismiss(&overlay);
+  REQUIRE(ui::revisions() == before);
+}
+
+void testThemedButtonChangesWakePresentationAndThenSettle() {
+  Button button(0, 0, 100, 50);
+  std::array<Color, 6> colors{Color(10, 20, 30), Color(20, 30, 40),
+      Color(30, 40, 50), Color(40, 50, 60), Color(50, 60, 70), Color(60, 70, 80)};
+  button.setThemedBackgroundColors([&] { return colors[0]; },
+      [&] { return colors[1]; }, [&] { return colors[2]; });
+  button.setThemedBorderColors([&] { return colors[3]; },
+      [&] { return colors[4]; }, [&] { return colors[5]; });
+  button.setStyledBorderWidth(2);
+  REQUIRE(button.getContentView() == nullptr);
+  ui::PresentationSchedule schedule;
+  schedule.didPresent(ui::revisions(), {}, 100);
+  REQUIRE(!schedule.shouldRender(101));
+  for (auto &color : colors) {
+    ++color.r;
+    button.propagateThemeChange();
+    REQUIRE(schedule.shouldRender(101));
+    schedule.didPresent(ui::revisions(), {}, 101);
+    button.propagateThemeChange();
+    REQUIRE(!schedule.shouldRender(102));
+  }
+}
+
+void testHiddenAndClippedPreviewsDoNotKeepDrawing() {
+  KeybombPreviewView preview(Judgement::PGreat, [] { return keybomb::Style{}; });
+  preview.setSize(200, 100);
+  RecordingBackend backend;
+  rendering::UiBatchRenderer renderer(backend);
+  RenderContext context(renderer);
+  const auto demandFor = [&](bool visible, bool clipped) {
+    preview.setVisible(visible);
+    ui::FrameDemand demand;
+    ui::FrameDemandScope demandScope(demand);
+    RenderContext::UiBatchScope batch(context);
+    if (clipped) {
+      ScissorScope clip(context, 300, 300, 10, 10);
+      preview.render(context);
+    } else {
+      preview.render(context);
+    }
+    return demand;
+  };
+  REQUIRE(demandFor(true, false).animation);
+  REQUIRE(!demandFor(false, false).animation);
+  REQUIRE(!demandFor(true, true).animation);
+}
+
 int main(int argc, char **argv) {
   if (argc == 2 && std::string(argv[1]) == "--navigation-only") {
     testNavigationMayDestroyDispatchingViews();
@@ -720,7 +870,10 @@ int main(int argc, char **argv) {
   const bool renderOnly = argc == 2 && std::string(argv[1]) == "--render-only";
   const bool metalOnly = argc == 2 && std::string(argv[1]) == "--metal-only";
   if (!renderOnly && !metalOnly) {
+    testProgrammaticWidgetChangesWakePresentationOnce();
+    testThemedButtonChangesWakePresentationAndThenSettle();
     testNavigationMayDestroyDispatchingViews();
+    testRecyclerDistinguishesDirectSelectionFromBrowsing();
     testRecyclerSkipsSectionHeadings();
     testCancelledTouchDoesNotClick();
     testDisabledSiblingDoesNotLeaveCoveredButtonGesturesStuck();
@@ -739,6 +892,7 @@ int main(int argc, char **argv) {
   if (metalOnly) {
     testDisabledButtonContentPixels();
   } else {
+    testHiddenAndClippedPreviewsDoNotKeepDrawing();
     testDisabledButtonDimsWholeContentAndRestoresFollowingViews();
   }
   rendering::ShaderManager::getInstance().release();

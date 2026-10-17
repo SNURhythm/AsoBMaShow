@@ -15,6 +15,8 @@ public:
   }
 
   void renderAt(RenderContext &context, long long now) {
+    if (!getVisible() || !context.boundsIntersectScissor(
+            getX(), getY(), getWidth(), getHeight())) return;
     ScissorScope clip(context, getX(), getY(), getWidth(), getHeight());
     auto appearance = keybomb::sanitize(style());
     appearance.color = keybomb::resolvedColor(judgement, appearance,
@@ -25,6 +27,7 @@ public:
     const float laneWidth = std::min({64.0F, getWidth() * 0.22F / (1.5F * size),
                                      getHeight() * 0.44F / (1.5F * size)});
     if (laneWidth <= 0) return;
+    ui::requestAnimationFrame();
     const auto program = rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
     const auto state = context.makeUiBatchState(program,
         BGFX_STATE_WRITE_RGB | BGFX_STATE_BLEND_ALPHA | BGFX_STATE_MSAA);

@@ -938,6 +938,69 @@ int main() {
         self.assertIn("URLByResolvingSymlinksInPath", implementation)
         self.assertIn("resolvedDirectory.fileSystemRepresentation", implementation)
 
+    def test_ios_documents_path_retries_failure_then_reuses_success_across_threads(self):
+        source = IOS_NATIVES_SOURCE.read_text(encoding="utf-8")
+        start = source.index("std::string GetIOSDocumentsPath()")
+        end = source.index("std::string GetIOSApplicationSupportPath()", start)
+        harness = r'''
+#include <Foundation/Foundation.h>
+#include <atomic>
+#include <cassert>
+#include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
+std::atomic<int> searches{0}, creates{0};
+NSArray<NSString *> *TestSearch(NSSearchPathDirectory, NSSearchPathDomainMask, BOOL) {
+  return ++searches == 1 ? @[] : @[@"/tmp"];
+}
+@interface TestFileManager : NSObject
++ (instancetype)defaultManager;
+- (BOOL)createDirectoryAtURL:(NSURL *)url
+    withIntermediateDirectories:(BOOL)intermediate
+    attributes:(NSDictionary *)attributes error:(NSError **)error;
+@end
+@implementation TestFileManager
++ (instancetype)defaultManager { return [[self alloc] init]; }
+- (BOOL)createDirectoryAtURL:(NSURL *)url
+    withIntermediateDirectories:(BOOL)intermediate
+    attributes:(NSDictionary *)attributes error:(NSError **)error {
+  return ++creates != 1;
+}
+@end
+#define NSSearchPathForDirectoriesInDomains TestSearch
+#define NSFileManager TestFileManager
+IMPLEMENTATION
+int main() {
+  // Neither an unavailable sandbox nor failed creation may poison the cache.
+  assert(GetIOSDocumentsPath().empty());
+  assert(GetIOSDocumentsPath().empty());
+  std::string expected;
+  @autoreleasepool {
+    expected = [NSURL fileURLWithPath:@"/tmp" isDirectory:YES]
+        .URLByResolvingSymlinksInPath.fileSystemRepresentation;
+  }
+  std::vector<std::thread> workers;
+  for (int i = 0; i < 12; ++i) workers.emplace_back([&] {
+    for (int j = 0; j < 100; ++j) assert(GetIOSDocumentsPath() == expected);
+  });
+  for (auto &worker : workers) worker.join();
+  assert(searches == 3);
+  assert(creates == 2);
+}
+'''.replace("IMPLEMENTATION", source[start:end])
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory) / "documents.mm"
+            fixture.write_text(harness)
+            binary = Path(directory) / "documents"
+            result = subprocess.run(
+                ["clang++", "-std=c++20", "-fobjc-arc", "-framework", "Foundation",
+                 str(fixture), "-o", str(binary)], capture_output=True, text=True
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            result = subprocess.run([str(binary)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_ios_skin_storage_keeps_payloads_live_in_files_documents(self):
         source = SKIN_STORAGE_PATHS_SOURCE.read_text(encoding="utf-8")
         start = source.index("SkinStorageRoots defaultSkinStorageRoots()")

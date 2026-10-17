@@ -216,6 +216,46 @@ void testLatestWinsSupersedesQueued() {
   worker.stop();
 }
 
+void testImmediateRequestsAndPendingPromotion() {
+  using namespace std::chrono_literals;
+  for (const bool promotePending : {false, true}) {
+    ChartPreloadWorker worker(2s);
+    std::binary_semaphore started{0};
+    std::atomic_int calls = 0;
+    worker.configure([&](const auto &, auto &) { ++calls; started.release(); });
+    const auto record = makeRecord("direct");
+    if (promotePending) {
+      worker.request(record);
+      expect(!started.try_acquire_for(50ms), "browsing retains its debounce");
+    }
+    worker.request(record, true);
+    expect(started.try_acquire_for(500ms),
+           "a direct request wakes immediately, including an already queued chart");
+    worker.stop();
+    expect(calls == 1, "direct selection loads exactly once");
+  }
+}
+
+void testImmediateSelectionDoesNotBypassLaterBrowsing() {
+  using namespace std::chrono_literals;
+  ChartPreloadWorker worker(2s);
+  std::binary_semaphore started{0};
+  std::vector<std::string> loaded;
+  worker.configure([&](const auto &record, auto &) {
+    loaded.push_back(record.meta.Title);
+    started.release();
+  });
+  worker.request(makeRecord("direct"), true);
+  expect(started.try_acquire_for(500ms), "first direct selection starts immediately");
+  worker.request(makeRecord("browse"));
+  expect(!started.try_acquire_for(100ms), "later browsing gets a fresh debounce");
+  worker.request(makeRecord("latest"), true);
+  expect(started.try_acquire_for(500ms), "a direct replacement wakes a delayed worker");
+  worker.stop();
+  expect(loaded == std::vector<std::string>({"direct", "latest"}),
+         "the superseded browsing selection never starts");
+}
+
 void testDedupSamePath() {
   ChartPreloadWorker worker(std::chrono::milliseconds(20));
   RecordingProcessor recorder;
@@ -479,6 +519,8 @@ void testActiveCancelDefersCleanupUntilProcessorReturns() {
 }  // namespace
 
 int main() {
+  testImmediateRequestsAndPendingPromotion();
+  testImmediateSelectionDoesNotBypassLaterBrowsing();
   testUnicodeSelectionQueriesDuringSupersession();
   testThreadStartupFailureAllowsRetryOfTheSameChart();
   testLatestWinsSupersedesQueued();

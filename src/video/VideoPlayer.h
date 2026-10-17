@@ -135,6 +135,7 @@ private:
 
   long long startTime;       // Start time for playback
   double lastFramePTS = 0.0; // Last decoded frame's PTS for synchronization
+  double seekPositionSeconds = 0.0; // Protected by videoMutex.
 
   std::mutex eofMutex;
   std::condition_variable eofCV; // Condition variable for eof signaling
@@ -166,6 +167,7 @@ private:
 
   std::vector<AVFrame *> recyclePool;
   std::mutex recycleMutex;
+  bool retainRecycledBuffers = true; // Protected by recycleMutex.
   AVFrame *getRecycledFrame();
   void recycleFrame(AVFrame *frame);
 };

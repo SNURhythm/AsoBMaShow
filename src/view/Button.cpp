@@ -157,7 +157,9 @@ void Button::setOnClickListener(std::function<void()> listener) {
 }
 
 void Button::setEnabled(bool value) {
+  if (enabled == value) return;
   enabled = value;
+  ui::invalidate();
   if (!enabled) {
     mousePressedInside = false;
     isHovered = false;
@@ -170,6 +172,7 @@ void Button::setContentView(View *view) {
     return;
   }
   contentView.reset(view);
+  ui::invalidate();
   if (contentView) {
     contentView->setAutoFitText(true);
   }
@@ -181,6 +184,10 @@ Button *Button::setBackgroundColors(const Color &normal, const Color &hover,
   normalBackgroundColorProvider = nullptr;
   hoverBackgroundColorProvider = nullptr;
   pressedBackgroundColorProvider = nullptr;
+  if (hasStyledBackground && normalBackgroundColor.toABGR() == normal.toABGR() &&
+      hoverBackgroundColor.toABGR() == hover.toABGR() &&
+      pressedBackgroundColor.toABGR() == pressed.toABGR()) return this;
+  ui::invalidate();
   normalBackgroundColor = normal;
   hoverBackgroundColor = hover;
   pressedBackgroundColor = pressed;
@@ -191,6 +198,9 @@ Button *Button::setBackgroundColors(const Color &normal, const Color &hover,
 Button *Button::setThemedBackgroundColors(ThemeColorProvider normal,
                                           ThemeColorProvider hover,
                                           ThemeColorProvider pressed) {
+  const bool wasStyled = hasStyledBackground;
+  const std::array previous{normalBackgroundColor.toABGR(),
+                            hoverBackgroundColor.toABGR(), pressedBackgroundColor.toABGR()};
   normalBackgroundColorProvider = std::move(normal);
   hoverBackgroundColorProvider = std::move(hover);
   pressedBackgroundColorProvider = std::move(pressed);
@@ -204,6 +214,8 @@ Button *Button::setThemedBackgroundColors(ThemeColorProvider normal,
     pressedBackgroundColor = pressedBackgroundColorProvider();
   }
   hasStyledBackground = true;
+  if (!wasStyled || previous != std::array{normalBackgroundColor.toABGR(),
+      hoverBackgroundColor.toABGR(), pressedBackgroundColor.toABGR()}) ui::invalidate();
   return this;
 }
 
@@ -212,6 +224,10 @@ Button *Button::setBorderColors(const Color &normal, const Color &hover,
   normalBorderColorProvider = nullptr;
   hoverBorderColorProvider = nullptr;
   pressedBorderColorProvider = nullptr;
+  if (hasStyledBorder && normalBorderColor.toABGR() == normal.toABGR() &&
+      hoverBorderColor.toABGR() == hover.toABGR() &&
+      pressedBorderColor.toABGR() == pressed.toABGR()) return this;
+  ui::invalidate();
   normalBorderColor = normal;
   hoverBorderColor = hover;
   pressedBorderColor = pressed;
@@ -222,6 +238,9 @@ Button *Button::setBorderColors(const Color &normal, const Color &hover,
 Button *Button::setThemedBorderColors(ThemeColorProvider normal,
                                       ThemeColorProvider hover,
                                       ThemeColorProvider pressed) {
+  const bool wasStyled = hasStyledBorder;
+  const std::array previous{normalBorderColor.toABGR(),
+                            hoverBorderColor.toABGR(), pressedBorderColor.toABGR()};
   normalBorderColorProvider = std::move(normal);
   hoverBorderColorProvider = std::move(hover);
   pressedBorderColorProvider = std::move(pressed);
@@ -235,16 +254,25 @@ Button *Button::setThemedBorderColors(ThemeColorProvider normal,
     pressedBorderColor = pressedBorderColorProvider();
   }
   hasStyledBorder = true;
+  if (!wasStyled || previous != std::array{normalBorderColor.toABGR(),
+      hoverBorderColor.toABGR(), pressedBorderColor.toABGR()}) ui::invalidate();
   return this;
 }
 
 Button *Button::setStyledBorderWidth(int width) {
-  styleBorderWidth = std::max(0, width);
+  width = std::max(0, width);
+  if (styleBorderWidth == width) return this;
+  styleBorderWidth = width;
+  ui::invalidate();
   return this;
 }
 
 void Button::onThemeChanged() {
   View::onThemeChanged();
+  const std::array previous{normalBackgroundColor.toABGR(),
+      hoverBackgroundColor.toABGR(), pressedBackgroundColor.toABGR(),
+      normalBorderColor.toABGR(), hoverBorderColor.toABGR(),
+      pressedBorderColor.toABGR()};
   if (normalBackgroundColorProvider) {
     normalBackgroundColor = normalBackgroundColorProvider();
   }
@@ -263,6 +291,10 @@ void Button::onThemeChanged() {
   if (pressedBorderColorProvider) {
     pressedBorderColor = pressedBorderColorProvider();
   }
+  if (previous != std::array{normalBackgroundColor.toABGR(),
+          hoverBackgroundColor.toABGR(), pressedBackgroundColor.toABGR(),
+          normalBorderColor.toABGR(), hoverBorderColor.toABGR(),
+          pressedBorderColor.toABGR()}) ui::invalidate();
 }
 
 void Button::propagateThemeChange() {
@@ -295,6 +327,7 @@ void Button::onResize(int newWidth, int newHeight) {
 }
 
 void Button::onPointerInputCancelled() {
+  if (mousePressedInside || isHovered || activeTouchId != -1) ui::invalidate();
   mousePressedInside = false;
   isHovered = false;
   activeTouchId = -1;

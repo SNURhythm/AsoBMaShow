@@ -1283,6 +1283,19 @@ void testFileExtensionResolutionSharesPriorityAcrossStorage(bool archived) {
   assert(!archive_file::findFileWithExtensions(storagePath("compressed.wav"), {}));
   assert(archive_file::findFileWithExtensions(storagePath("image.bmp"), {"png"}) ==
          storagePath("image.png"));
+  if (archived) {
+    std::vector<std::optional<std::filesystem::path>> resolved;
+    std::string error;
+    assert(archive_file::resolveArchiveEntriesWithExtensions(archivePath,
+        {"exact.wav", "PREFERRED.AIF", "folder/deep.song.wav", "missing.wav", "folder"},
+        extensions, resolved, &error));
+    assert((resolved == std::vector<std::optional<std::filesystem::path>>{
+        "exact.wav", "preferred.flac", "folder/deep.song.ogg", std::nullopt, std::nullopt}));
+    assert(!archive_file::resolveArchiveEntriesWithExtensions(archivePath,
+        {"exact.wav"}, extensions, resolved, &error, [] { return false; }));
+    assert(resolved.empty());
+  }
+
 }
 
 void testZipBoundedReadRejectsCentralDirectoryUnderstatedSize() {
@@ -3807,6 +3820,51 @@ void testTemporaryCacheFacadeUsesPrivateRootAndLiveProtectionIdentity() {
   assert(error == "Materialize cancelled." && !std::filesystem::exists(root));
 }
 
+void testBoundedZipReaderReusesDirectory() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "preview.zip";
+  writeStoredZipContents(path, "sound.wav", "first", true);
+  archive_file::BoundedArchiveReader reader(path);
+  auto read = [&](const std::string &expected) {
+    std::string result;
+    assert(reader.read({"sound.wav"}, [&](archive_file::FileData &&file) {
+      result.assign(file.bytes.begin(), file.bytes.end());
+      return true;
+    }, 1024));
+    assert(result == expected);
+  };
+  const auto opens = archive_file::zipStreamingOpenCountForTesting();
+  for (int batch = 0; batch < 20; ++batch) read("first");
+  assert(archive_file::zipStreamingOpenCountForTesting() - opens == 1 &&
+         "progressive batches must not reopen the ZIP directory");
+  // A replaced source must never read bytes using the retained old directory.
+  writeStoredZipContents(path, "sound.wav", "replacement-longer", true);
+  read("replacement-longer");
+  assert(archive_file::zipStreamingOpenCountForTesting() - opens == 2);
+  bool emitted = false;
+  auto consume = [&](archive_file::FileData &&) { emitted = true; return true; };
+  assert(!reader.read({"sound.wav"}, consume, 2));
+  assert(!emitted);
+  assert(!reader.read({"sound.wav"}, consume, 1024, nullptr, [] { return false; }));
+  assert(!emitted);
+  read("replacement-longer");
+  assert(!reader.read({"sound.wav"}, [](archive_file::FileData &&) { return false; }, 1024));
+  read("replacement-longer");
+  bool threw = false;
+  try {
+    reader.read({"sound.wav"}, [](archive_file::FileData &&) -> bool {
+      throw std::runtime_error("consumer failed");
+    }, 1024);
+  } catch (const std::runtime_error &) { threw = true; }
+  assert(threw);
+  read("replacement-longer");
+  // Simultaneous callers share directory state but never its seek cursor.
+  auto first = std::async(std::launch::async, [&] { read("replacement-longer"); });
+  auto second = std::async(std::launch::async, [&] { read("replacement-longer"); });
+  first.get();
+  second.get();
+}
+
 void testConcurrentZipMappingFallback() {
   archive_file::setZipMappingEnabledForTesting(false);
   testConcurrentDeflatedZipBoundedScratch();
@@ -3822,6 +3880,10 @@ void testConcurrentZipMappingFallback() {
 } // namespace
 
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string(argv[1]) == "--bounded-reader") {
+    testBoundedZipReaderReusesDirectory();
+    return 0;
+  }
   if (argc == 2 && std::string(argv[1]) == "--mapped-zip") {
     testConcurrentMappedZipNeedsNoCompressedAllocation();
     testConcurrentZipMappingFallback();
@@ -3973,6 +4035,7 @@ int main(int argc, char **argv) {
   for (const auto *mode : {"disk", "memory", "reuse"}) testForgedEncryptionFlagCannotCertifyFullUnzip(mode);
   for (const auto *mode : {"omission", "rename", "limit"}) testForgedManifestCannotCertifyFullUnzip(mode);
   testLiveManifestPromotionCoalescesAndCancelsWaiters();
+  testBoundedZipReaderReusesDirectory();
   testBoundedStreamingRejectsOversizedPayload();
   testConcurrentReaderRejectsOversizedPayload();
   testConcurrentStoredZipFitsExactBudget();

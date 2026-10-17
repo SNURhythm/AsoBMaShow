@@ -61,6 +61,7 @@ template <typename Commit>
 
 class ChartViewerScene : public Scene {
 public:
+  bool needsContinuousPresentation() const override;
   ChartViewerScene(
       ApplicationContext &context, ChartMetaRecord record,
       std::optional<unsigned int> randomSeed = std::nullopt,

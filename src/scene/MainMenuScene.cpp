@@ -1439,8 +1439,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   };
 
   jacketView = new ImageView(0, 0, 0, 0);
-  recyclerView->onSelected = [this, &context](const ChartMetaRecord &record,
-                                              int idx) {
+  const auto selectChart = [this, &context](const ChartMetaRecord &record,
+                                          int idx, bool bypassDebounce) {
     if (willStart.load() || pendingTab_)
       return;
     const ChartMetaRecord item = record;
@@ -1533,8 +1533,14 @@ void MainMenuScene::initView(ApplicationContext &context) {
     if (previewWorker_ != nullptr) {
       ChartMetaRecord previewRecord;
       previewRecord.meta = std::move(meta);
-      previewWorker_->request(std::move(previewRecord));
+      previewWorker_->request(std::move(previewRecord), bypassDebounce);
     }
+  };
+  recyclerView->onSelected = [selectChart](const ChartMetaRecord &record, int idx) {
+    selectChart(record, idx, false);
+  };
+  recyclerView->onSelectedByPointer = [selectChart](const ChartMetaRecord &record, int idx) {
+    selectChart(record, idx, true);
   };
   recyclerView->onUnselected = [this](const ChartMetaRecord &item, int idx) {
     auto unselectedView = recyclerView->getViewByIndex(idx);
@@ -1621,7 +1627,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rootLayout->setPadding(Edge::Top, safe.top + kRootPadding);
   rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
   rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
-  rootLayout->setPadding(Edge::Bottom, safe.bottom);
+  // The menu dock intentionally reaches the screen edge, including the bottom safe area.
+  rootLayout->setPadding(Edge::Bottom, 0);
   rootLayout->setThemedBackgroundColor(main_menu_theme::backdrop);
   auto *header = new View();
   header->setName("mainMenuHeader");
@@ -1680,6 +1687,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
         SDL_Log("Previewing %s", fspath_to_utf8(meta.BmsPath).c_str());
         {
           std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+          std::lock_guard visualLock(previewVisualsMutex);
           if (isCancelled()) {
             return;
           }
@@ -1712,13 +1720,13 @@ void MainMenuScene::initView(ApplicationContext &context) {
           return;
         }
         try {
-          std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+          std::unique_lock<std::mutex> lock(previewJukeboxLoadMutex);
+          std::unique_lock visualLock(previewVisualsMutex);
           if (isCancelled()) {
             return;
           }
-          const auto scratch = std::filesystem::temp_directory_path() / "chart-preview";
           previewDecodedAssets_ = std::make_shared<audio::DecodedAssetCache>(
-              scratch, audio::DecodedAssetCache::kUnlimitedRetainedBytes);
+              audio::DecodedAssetCache::kUnlimitedRetainedBytes);
           const auto &audioSettings = this->context.settings.audioVideo.audio;
           auto source = audio::PagedPreviewSource::Create(
               *chart, previewDecodedAssets_, previewStartFrame_,
@@ -1744,19 +1752,56 @@ void MainMenuScene::initView(ApplicationContext &context) {
             // gameplay mixer's headroom when several loud keysounds overlap.
             previewPlayer_.SetGain(1.0f);
             std::string error;
-            if (!previewPlayer_.Start(std::move(source), error)) {
+            if (!previewPlayer_.Start(source, error)) {
               SDL_Log("Preview playback failed: %s", error.c_str());
             } else {
-              // Let progressive audio fill/start while visual assets load. No
-              // complete keysound decode or gameplay audio schedule is needed.
+              // Start progressively, then finish gameplay preparation while
+              // listening. Let the source finish its prioritized decoding first.
               this->context.jukebox.loadVisuals(*chart, cancelled);
               previewVisualsLoaded_ = true;
+              visualLock.unlock();
+              lock.unlock();
+              bool audioPrepared = false;
+              while (!isCancelled()) {
+                const auto state = source->GetState();
+                if (state.cancelled || !state.error.empty()) break;
+                if (state.preparationComplete) {
+                  audioPrepared = true;
+                  break;
+                }
+                // Preparation notifications wake promptly; the bounded wait
+                // also observes selection/Play cancellation from the controller.
+                source->WaitForChange(state.revision, std::chrono::milliseconds(25));
+              }
+              lock.lock();
+              if (audioPrepared && !isCancelled()) {
+                this->context.jukebox.setDecodedAssetCache(previewDecodedAssets_);
+                ScopeExit releaseCache([this] {
+                  this->context.jukebox.setDecodedAssetCache(nullptr);
+                });
+                const auto loaded = this->context.jukebox.prepareGameplayAudioFromPreview(
+                    *chart, cancelled);
+                if (!loaded.success) {
+                  SDL_Log("Preview gameplay preparation failed: %s", loaded.diagnostic.c_str());
+                } else {
+                  std::lock_guard selectedLock(selectedChartMutex);
+                  if (!isCancelled() && selectedChart == chart) {
+                    // Playback owns the shared samples; release the preparation
+                    // index only after a complete, uncancelled handoff.
+                    previewDecodedAssets_->Clear();
+                    previewDecodedAssets_.reset();
+                    selectedChartMediaReady.store(true);
+                  }
+                }
+              }
             }
           }
+          if (!visualLock.owns_lock()) visualLock.lock();
           if (isCancelled()) {
             previewPlayer_.Stop();
             this->context.jukebox.unloadVisuals();
             previewVisualsLoaded_ = false;
+            selectedChartMediaReady.store(false);
             if (!willStart.load()) clearSelectedChart();
             return;
           }
@@ -1766,6 +1811,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
           SDL_Log("Preview preparation failed %s: %s",
                   fspath_to_utf8(meta.BmsPath).c_str(), error.what());
           std::lock_guard lock(previewJukeboxLoadMutex);
+          std::lock_guard visualLock(previewVisualsMutex);
           previewPlayer_.Stop();
           this->context.jukebox.unloadVisuals();
           previewVisualsLoaded_ = false;
@@ -1775,11 +1821,16 @@ void MainMenuScene::initView(ApplicationContext &context) {
       }, [this] { stopAndClearSelectedChart(); }, kPreviewDebounceDelay,
       [this] {
         std::lock_guard lock(previewJukeboxLoadMutex);
+        std::lock_guard visualLock(previewVisualsMutex);
         previewPlayer_.Stop();
         // stop() is also called onPause after gameplay has loaded its chart.
-        // Only retire resources still owned by this preview session.
+        // Play takes ownership of a completed preparation. Other stops retire
+        // preview visuals and invalidate readiness for a later full load.
         if (previewVisualsLoaded_) {
-          this->context.jukebox.unloadVisuals();
+          if (!willStart.load() || !selectedChartMediaReady.load()) {
+            this->context.jukebox.unloadVisuals();
+            selectedChartMediaReady.store(false);
+          }
           previewVisualsLoaded_ = false;
         }
       });
@@ -2389,13 +2440,13 @@ void MainMenuScene::updatePanelLayout() {
   View::LayoutBatchScope batch;
   const bool portrait = rendering::window_height > rendering::window_width;
   const auto safe = getSafeAreaInsetsUi();
-  rootLayout->setPadding(Edge::Bottom, safe.bottom);
+  rootLayout->setPadding(Edge::Bottom, 0);
   rootLayout->findViewByName("mainMenuLibrary")->setPadding(Edge::Left, 14)->setPadding(Edge::Right, 14);
   rootLayout->findViewByName("mainMenuSongs")->setPadding(Edge::Left, 16)->setPadding(Edge::Right, 16);
   detailsContent_->setWidth(kDetailsContentWidth);
   chartDetailsView_->setWidth(kDetailsContentWidth);
   const float contentWidth = std::max(0, rendering::window_width - safe.left - safe.right - 2 * kRootPadding);
-  const float contentHeight = std::max(0, rendering::window_height - safe.top - safe.bottom - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
+  const float contentHeight = std::max(0, rendering::window_height - safe.top - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
   const float detailsHeight = portraitDetailsHeight(contentHeight);
   auto *browser = rootLayout->findViewByName("mainMenuBrowser");
   auto *library = rootLayout->findViewByName("mainMenuLibrary");
@@ -2461,7 +2512,7 @@ void MainMenuScene::updatePhonePanelLayout() {
   const bool portrait = rendering::window_height > rendering::window_width;
   const auto safe = getSafeAreaInsetsUi();
   const float width = rendering::window_width - safe.left - safe.right;
-  rootLayout->setPadding(Edge::Bottom, safe.bottom);
+  rootLayout->setPadding(Edge::Bottom, 0);
   auto *browser = rootLayout->findViewByName("mainMenuBrowser");
   auto *library = rootLayout->findViewByName("mainMenuLibrary");
   auto *songs = rootLayout->findViewByName("mainMenuSongs");
@@ -4701,10 +4752,6 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
       .percent = context.settings.selectedPlaybackRatePercent,
       .mode = context.settings.selectedPlaybackMode,
   };
-  const std::string normalizedPlayOption =
-      play_options::normalizePlayOption(playOption);
-  const bool canReusePreviewForStart =
-      normalizedPlayOption.empty() || normalizedPlayOption == "NORMAL";
   const SelectedChartRandomInfo chartRandomInfo =
       selectedChartRandomInfoForPath(record.meta.BmsPath);
   std::string tableName;
@@ -4730,7 +4777,7 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
       [this, record, gaugeType, gaugeAutoShift, gaugeAutoShiftLowerBound,
        ruleset, autoKeySound, playOption, selectedLongNoteMode, assistOption,
        pacemakerTarget, playback,
-       canReusePreviewForStart, chartRandomInfo, tableName = std::move(tableName),
+       chartRandomInfo, tableName = std::move(tableName),
        tableLevel = std::move(tableLevel)]() {
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
         if (context.gameplaySkinLifecycle &&
@@ -4742,11 +4789,6 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           resetStartLoadingUi();
           return true;
         };
-        if (!canReusePreviewForStart) {
-          if (previewWorker_ != nullptr) {
-            previewWorker_->cancel();
-          }
-        }
         if (previewWorker_ != nullptr) {
           previewWorker_->stop();
         }
@@ -4756,27 +4798,30 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
           jukebox->setDecodedAssetCache(nullptr);
           if (selectedChartMediaReady.load()) previewDecodedAssets_.reset();
         });
-        bms_parser::Chart *readyChart = nullptr;
-        if (canReusePreviewForStart) {
-          readyChart = loadedSelectedChartForPath(record.meta.BmsPath);
-          if (readyChart == nullptr) {
-            auto *parsedChart = parsedSelectedChartForPath(record.meta.BmsPath);
-            if (parsedChart != nullptr) {
-              std::atomic_bool prepareCancelled = false;
-              const auto loaded = context.jukebox.loadChart(*parsedChart, true, prepareCancelled);
-              if (!loaded.success || prepareCancelled) {
-                SDL_Log("Preview gameplay preparation failed: %s", loaded.diagnostic.c_str());
-                return finishStart();
-              }
-              selectedChartMediaReady.store(true);
-              readyChart = parsedChart;
+        auto *readyChart = loadedSelectedChartForPath(record.meta.BmsPath);
+        if (readyChart == nullptr) {
+          auto *parsedChart = parsedSelectedChartForPath(record.meta.BmsPath);
+          if (parsedChart != nullptr) {
+            std::atomic_bool prepareCancelled = false;
+            const auto loaded = context.jukebox.loadChart(*parsedChart, true, prepareCancelled);
+            if (!loaded.success || prepareCancelled) {
+              SDL_Log("Preview gameplay preparation failed: %s", loaded.diagnostic.c_str());
+              return finishStart();
             }
+            selectedChartMediaReady.store(true);
+            readyChart = parsedChart;
           }
         }
         if (readyChart != nullptr) {
           archive_file::appendDebugLogLine(
               "Start reusing loaded preview chart: " +
               fspath_to_utf8(record.meta.BmsPath));
+          // Preview already chose BMS #RANDOM branches and loaded their assets.
+          // Lane modifiers reuse those resources, but still roll at Play time.
+          // Consume the pristine chart before any modifier can mutate it.
+          selectedChartReusableForStart.store(false);
+          const auto playInfo =
+              play_options::applySelectedPlayOptions(*readyChart, playOption);
           applyEffectiveLongNoteModeToChart(*readyChart,
                                             selectedLongNoteMode);
           context.jukebox.stop();
@@ -4789,6 +4834,10 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
                                     .gaugeAutoShift = gaugeAutoShift,
                                     .gaugeAutoShiftLowerBound =
                                         gaugeAutoShiftLowerBound,
+                                    .playOption = playInfo.option,
+                                    .playOptionSeed = playInfo.seed,
+                                    .playOption2 = playInfo.option2,
+                                    .playOption2Seed = playInfo.seed2,
                                     .longNoteMode = selectedLongNoteMode,
                                     .assistOption = assistOption,
                                     .pacemakerTarget = pacemakerTarget,
@@ -7065,6 +7114,7 @@ void MainMenuScene::startModernReplayPlayback(
           }
           {
             std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+            std::lock_guard visualLock(previewVisualsMutex);
             context.jukebox.stop();
             context.jukebox.loadChart(*loaded.chart, true, *cancelled);
           }
@@ -7170,6 +7220,7 @@ void MainMenuScene::startModernGBattlePlayback(
           }
           {
             std::lock_guard<std::mutex> lock(previewJukeboxLoadMutex);
+            std::lock_guard visualLock(previewVisualsMutex);
             context.jukebox.stop();
             context.jukebox.loadChart(*loaded.chart, true, *cancelled);
           }
@@ -7363,6 +7414,7 @@ void MainMenuScene::clearSelectedChart() {
 
 void MainMenuScene::stopAndClearSelectedChart() {
   std::lock_guard lock(previewJukeboxLoadMutex);
+  std::lock_guard visualLock(previewVisualsMutex);
   previewPlayer_.Stop();
   if (previewVisualsLoaded_) {
     context.jukebox.unloadVisuals();
@@ -7503,9 +7555,8 @@ void MainMenuScene::changeToGameplayScene(bms_parser::Chart *chart,
   if (options.replayData == nullptr) {
     options.clubMode = context.settings.gameplayClubModeEnabled;
   }
-  context.sceneManager->changeScene(
-      std::make_unique<GamePlayScene>(context, chart, std::move(options)),
-      true);
+  auto gameplay = std::make_unique<GamePlayScene>(context, chart, std::move(options));
+  context.sceneManager->changeScene(std::move(gameplay), true);
 }
 
 bool MainMenuScene::beginReplayExport(const i18n::Text &progressTitle,
@@ -8052,18 +8103,32 @@ void MainMenuScene::applyReplayExportResult() {
 }
 
 void MainMenuScene::updatePreviewVisuals() {
-  // The worker owns the visual schedule while loading. Never stall the UI on
-  // media preparation or retirement; the next frame catches up to the audio.
-  std::unique_lock lock(previewJukeboxLoadMutex, std::try_to_lock);
+  // Visual loading/retirement owns this lock; gameplay audio preparation uses
+  // a separate lock so it cannot delay the first image or freeze its clock.
+  std::unique_lock lock(previewVisualsMutex, std::try_to_lock);
   if (!lock.owns_lock() || !previewVisualsLoaded_) return;
   const auto state = previewPlayer_.GetState();
   if (!state.playing && !state.finished) return;
-  // positionFrames is absolute, including previewStartFrame_, and advances
-  // only when the audio callback consumes source frames (not during underruns).
+  // positionFrames is absolute, including the requested start and skipped
+  // leading silence. After startup it advances only with consumed audio frames.
   const auto frames = state.positionFrames;
+  if (previewVisualPositionFrames_ != frames) {
+    previewVisualPositionFrames_ = frames;
+    ui::invalidate();
+  }
   const auto micros = (frames / audio::kPreviewSampleRate) * 1'000'000 +
       (frames % audio::kPreviewSampleRate) * 1'000'000 / audio::kPreviewSampleRate;
   context.jukebox.seekVisualsToSongTime(static_cast<long long>(micros));
+}
+
+bool MainMenuScene::needsContinuousPresentation() const {
+  if (const auto *scene = activeUtilityTab()) {
+    return scene->needsContinuousPresentation();
+  }
+  // EOF can seek the video after audio stops. Decoded frames are promoted by
+  // rendering, so keep the selected video active even after that final seek.
+  return (context.jukebox.hasActiveVisuals() && previewPlayer_.GetState().playing) ||
+         context.jukebox.hasActiveVideoVisuals();
 }
 
 void MainMenuScene::update(float dt) {
@@ -8106,7 +8171,6 @@ void MainMenuScene::update(float dt) {
   }
 #endif
   // Update the scene logic
-  // std::cout << "Updating Main Menu Scene, dt: " << dt << std::endl;
   if (selectorTabActive()) refreshScoreClearRanksIfNeeded();
   refreshIrRecordListIfNeeded();
   refreshTasksButton();
@@ -8149,7 +8213,7 @@ void MainMenuScene::update(float dt) {
   }
   if (selectorTabActive() && rootLayout && !rendering::compactMenuCanvasActive && rendering::window_height > rendering::window_width) {
     const auto safe = getSafeAreaInsetsUi();
-    const float availableHeight = std::max(0, rendering::window_height - safe.top - safe.bottom - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
+    const float availableHeight = std::max(0, rendering::window_height - safe.top - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
     const auto *details = rootLayout->findViewByName("mainMenuDetails");
     if (details && std::abs(details->getHeight() - portraitDetailsHeight(availableHeight)) > 1) {
       updatePanelLayout();
@@ -8159,7 +8223,6 @@ void MainMenuScene::update(float dt) {
 
 void MainMenuScene::renderScene() {
   // Render the scene
-  // SDL_Log("Rendering Main Menu Scene");
   if (rootLayout == nullptr) {
     return;
   }
@@ -8229,7 +8292,7 @@ void MainMenuScene::renderScene() {
     rootLayout->setPadding(Edge::Top, safe.top + kRootPadding);
     rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
     rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
-    rootLayout->setPadding(Edge::Bottom, safe.bottom);
+    rootLayout->setPadding(Edge::Bottom, 0);
     updatePanelLayout();
     refreshTabPresentation();
     rootLayout->applyYogaLayout();
