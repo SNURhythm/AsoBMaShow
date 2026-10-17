@@ -178,6 +178,16 @@ EncodeResult EncodeAudio(const AssetCandidate &candidate, const StoragePolicy &p
   if (!input) return finish(FileOutcome::Failed, StorageReason::ValidationFailed, "Cannot decode source audio");
   auto decision = ChooseAudioEncoding(info.format, info.samplerate, info.channels, policy.audio, ProbeStorageCodecs());
   if (!decision.format) return finish(FileOutcome::Skipped, decision.reason.code, decision.reason.detail);
+  int channelMap[2]{};
+  if (sf_command(input.get(), SFC_GET_CHANNEL_MAP_INFO, channelMap, info.channels * sizeof(int))) {
+    const bool mono = info.channels == 1 && (channelMap[0] == SF_CHANNEL_MAP_MONO ||
+        channelMap[0] == SF_CHANNEL_MAP_CENTER || channelMap[0] == SF_CHANNEL_MAP_FRONT_CENTER);
+    const bool stereo = info.channels == 2 &&
+        (channelMap[0] == SF_CHANNEL_MAP_LEFT || channelMap[0] == SF_CHANNEL_MAP_FRONT_LEFT) &&
+        (channelMap[1] == SF_CHANNEL_MAP_RIGHT || channelMap[1] == SF_CHANNEL_MAP_FRONT_RIGHT);
+    if (!mono && !stereo)
+      return finish(FileOutcome::Skipped, StorageReason::UnsupportedFormat, "Native channel assignments cannot be preserved");
+  }
   const auto container = inspectContainer(candidate.source, info.format, check);
   if (container.code == StorageReason::Cancelled) return cancelled();
   if (container.code != StorageReason::None)

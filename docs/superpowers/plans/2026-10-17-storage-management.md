@@ -298,26 +298,26 @@ EncodeResult EncodeBga(const AssetCandidate &, const StoragePolicy &,
                       Checkpoint, ProgressCallback);
 ```
 
-- [ ] Add pure assertions: 1920×1080 capped to HD → 1280×720; 1024-square →
+- [x] Add pure assertions: 1920×1080 capped to HD → 1280×720; 1024-square →
   720-square; portrait 1080×1920 → 720×1280; 320×240 under HD stays 320×240;
   odd/SAR/rotated inputs preserve display aspect ratio within the alignment rule.
   Check every cap enum and CRF. Preserve rational rates below the cap.
-- [ ] Add real, tiny MPEG-1 fixtures that produce smaller H.264 at original
+- [x] Add real, tiny MPEG-1 fixtures that produce smaller H.264 at original
   dimensions/frame timing. Include existing H.264 under caps (skip), H.264 over
   caps (convert), VFR gaps, 30000/1001 under 30, 60000/1001 capped to 30, and
   embedded audio. Assert final timeline duration and that frame dropping does
   not speed up playback; validate no duplicate/fill frames are introduced.
-- [ ] Add malformed timestamp, unavailable x264/AAC, alpha/HDR/interlaced input,
+- [x] Add malformed timestamp, unavailable x264/AAC, alpha/HDR/interlaced input,
   corrupt packet, truncated output, cancellation, and larger-output assertions.
   Generate fixtures once within the target; do not invoke a host FFmpeg CLI.
-- [ ] Run failing tests, then implement the rational geometry/timeline policy
+- [x] Run failing tests, then implement the rational geometry/timeline policy
   and streaming FFmpeg pipeline. Use `libx264`, `medium`, CRF 18/23/28,
   two threads maximum, compatible 4:2:0 output, and preserved metadata. Remux
   supported audio or encode AAC at 128 kbit/s without timeline/layout changes.
-- [ ] Decode the complete temporary output for validation in bounded buffers;
+- [x] Decode the complete temporary output for validation in bounded buffers;
   compare duration with the spec's frame/packet tolerance and reject non-smaller
   output. Report that a requested cap was not applied when retaining the source.
-- [ ] Run `storage_policy_tests` and `storage_media_tests`, then commit
+- [x] Run `storage_policy_tests` and `storage_media_tests`, then commit
   `feat: compress BGA video with resolution and FPS caps`.
 
 ## Task 6: Shared optimizer and accurate operation reports
