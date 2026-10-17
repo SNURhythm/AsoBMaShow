@@ -146,7 +146,7 @@ bool InitializeStorageServices(ApplicationContext &context) {
           });
       auto access = accessFolders(context, error);
       if (!access) return {};
-      const auto roots = selectedRoots(request);
+      const auto roots = request.preflight ? request.preflight->EligibleRoots() : selectedRoots(request);
       if (roots.empty()) { error = "Select a local chart folder."; return {}; }
       const StoragePathIndex allowed(access->paths.allowedRoots), unavailable(access->unavailableRoots),
           boundaries(access->paths.pathAccessRoots);

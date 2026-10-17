@@ -163,9 +163,11 @@ StoragePreflight BuildStoragePreflight(const InventoryRequest &request, Checkpoi
   }, checkpoint);
   result.cancelled = !checkpoint(); result.complete = complete && !result.cancelled;
   for (auto &group : result.groups) if (!group.totalBytes) {
-    result.complete = false;
-    if (group.reason.code == StorageReason::None)
+    result.totalBytes.reset();
+    if (group.reason.code == StorageReason::None) {
+      result.complete = false;
       group.reason = {result.cancelled ? StorageReason::Cancelled : StorageReason::IncompleteInventory, "Preflight did not complete"};
+    }
   }
   if (!result.complete) result.totalBytes.reset();
   if (result.cancelled) {
@@ -173,6 +175,24 @@ StoragePreflight BuildStoragePreflight(const InventoryRequest &request, Checkpoi
     for (auto &group : result.groups) group.totalBytes.reset();
   }
   return result;
+}
+std::vector<fs::path> StoragePreflight::EligibleRoots() const {
+  if (!complete || cancelled) return {};
+  std::vector<fs::path> roots;
+  // Keep the whole selected folder reserved, including parent chart files that
+  // may reference eligible media in a descendant. Omit rejected selections.
+  for (const auto &group : groups) {
+    const auto found = directories.find(group.root);
+    if (found != directories.end() && found->second.reason.code == StorageReason::None)
+      roots.push_back(group.root);
+  }
+  const StoragePathIndex selected(roots);
+  std::vector<fs::path> eligible;
+  for (const auto &[path, summary] : directories) if (summary.eligibleCount && summary.reason.code == StorageReason::None) {
+    const auto ancestors = selected.Ancestors(path);
+    if (!ancestors.empty()) eligible.push_back(roots[ancestors.front()]);
+  }
+  return StoragePathIndex(std::move(eligible)).MinimalRoots();
 }
 std::unique_ptr<StorageDirectoryInventory> LoadStorageDirectory(const StorageDirectorySummary &summary,
     const InventoryRequest &, Checkpoint check, std::string &error, StorageDirectoryLimits limits) {

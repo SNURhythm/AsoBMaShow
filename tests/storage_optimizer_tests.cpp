@@ -180,6 +180,18 @@ void deletionAndUnavailableGroups() {
   input.policy.audio = AudioAction::Keep; input.policy.bga = BgaAction::Delete;
   input.inventory.policy = input.policy;
   input.inventory.groups.push_back({"archive", temp.root / "archive.zip", false});
+  input.inventory.groups.push_back({"missing", temp.root / "missing"});
+  input.preflight = BuildStoragePreflight(input.inventory);
+  require(input.preflight->complete && input.preflight->eligibleCount == 3,
+          "mixed selection review enables confirmation for eligible videos");
+  require(input.preflight->EligibleRoots() == std::vector<fs::path>{temp.root / "charts"},
+          "review admission excludes unavailable roots while retaining nested media");
+  input.preflight->complete = false;
+  const auto interrupted = StorageOptimizer(dependencies(temp, events)).Run(input);
+  require(interrupted.failed == 1 && events.empty() && fs::exists(temp.root / "charts/movie.mpg") &&
+              fs::exists(temp.root / "charts/nested/unused.avi"),
+          "interrupted preflight cannot apply its partial eligible count");
+  input.preflight->complete = true;
   const auto report = StorageOptimizer(dependencies(temp, events)).Run(input, {}, {});
   require(report.deleted == 3 && report.reclaimedBytes == 150 && events.empty(),
           "delete policy removes every video alternative without using encoders");

@@ -33,6 +33,39 @@ void summariesDoNotRetainAllAssets() {
   for (const auto &[path, summary] : preflight.directories)
     require(summary.samples.empty() && summary.fingerprint.size() == 64, "directory summaries contain hashes, not asset samples");
 }
+void independentSelectedFoldersComplete() {
+  TempDirectory temp;
+  temp.write("one/nested/a.wav", "12345");
+  temp.write("two/b.wav", "1234567");
+  auto input = request(temp.root / "one");
+  input.groups.push_back({"other", temp.root / "two"});
+  input.groups.push_back({"missing", temp.root / "missing"});
+  input.groups.push_back({"archive", temp.root / "archive.zip", false, false, StorageSourceKind::Archive});
+  temp.write("unchanged/readme.txt", "kept");
+  input.groups.push_back({"unchanged", temp.root / "unchanged"});
+  const auto preflight = BuildStoragePreflight(input);
+  require(preflight.complete && preflight.eligibleCount == 2 && preflight.eligibleBytes == 12,
+          "completed review permits eligible folders alongside unavailable selections");
+  require(!preflight.totalBytes && !preflight.groups.at(2).totalBytes && !preflight.groups.at(3).totalBytes,
+          "skipped selections retain unknown sizes and their diagnostics");
+  require(preflight.groups.at(2).reason.code == StorageReason::IncompleteInventory &&
+              preflight.groups.at(3).reason.code == StorageReason::UnsupportedSource,
+          "unavailable groups explain their exclusion");
+  require(preflight.EligibleRoots() == std::vector<fs::path>{temp.root / "one", temp.root / "two"},
+          "admission reserves whole eligible folders without unavailable or unchanged selections");
+  StorageScanDependencies failed;
+  failed.limits.workers = failed.limits.maxSubmitted = 1;
+  failed.enumerate = [](const auto &path, const auto &root, auto mode, auto check, auto visit,
+      auto &stamp, auto *metrics, auto &error) {
+    if (path.filename() == "two") throw std::runtime_error("injected worker failure");
+    return VisitStorageDirectory(path, root, mode, check, visit, stamp, metrics, error);
+  };
+  auto interruptedInput = input;
+  interruptedInput.groups.front().path /= "nested"; // Finish one candidate before the second worker fails.
+  const auto interrupted = BuildStoragePreflight(interruptedInput, {}, nullptr, failed);
+  require(!interrupted.complete && interrupted.eligibleCount == 1 && interrupted.EligibleRoots().empty(),
+          "interrupted scan cannot authorize even previously counted eligible files");
+}
 void fingerprintsRejectChangedEntries() {
   TempDirectory temp;
   temp.write("charts/a.wav", "12345");
@@ -138,6 +171,7 @@ void failedSpillAndRestartNeverAuthorizeStaleMetadata() {
 int main() {
   try {
     summariesDoNotRetainAllAssets();
+    independentSelectedFoldersComplete();
     fingerprintsRejectChangedEntries();
     largeDirectorySpillRetainsCollisionRules();
     failedSpillAndRestartNeverAuthorizeStaleMetadata();

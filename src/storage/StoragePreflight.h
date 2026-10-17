@@ -21,7 +21,10 @@ struct StoragePreflight {
   std::vector<FileResult> skips;
   std::optional<std::uint64_t> totalBytes;
   std::uint64_t eligibleCount = 0, eligibleBytes = 0, skippedCount = 0;
+  // A completed review may contain unavailable groups; those remain skipped.
+  // False means traversal was interrupted, not that every folder must be usable.
   bool complete = true, cancelled = false;
+  std::vector<std::filesystem::path> EligibleRoots() const;
 };
 StoragePreflight BuildStoragePreflight(const InventoryRequest &, Checkpoint = {},
     StorageScanMetrics * = nullptr, StorageScanDependencies = {});

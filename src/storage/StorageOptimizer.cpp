@@ -137,6 +137,11 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
     auto inventory = request.preflight ? std::move(*request.preflight) : BuildStoragePreflight(inventoryRequest, checkpoint, nullptr, scan);
     inventory.request.pathAccessRoots = inventoryRequest.pathAccessRoots;
     if (inventory.cancelled || !checkpoint()) return complete();
+    if (!inventory.complete) {
+      append(report, {.outcome = FileOutcome::Failed,
+                      .reason = {StorageReason::IncompleteInventory, "Preflight was interrupted; review the selected folders again"}});
+      return complete();
+    }
     std::string error;
     for (const auto &group : inventory.groups) {
       if (!group.totalBytes) append(report, {.source = group.root, .reason = group.reason});
