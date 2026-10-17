@@ -659,12 +659,17 @@ void MusicSelectScene::init() {
   startInputListening();
 }
 
-bool MusicSelectScene::prepareForStorageMaintenance(std::string &error) {
+bool MusicSelectScene::canPrepareForStorageMaintenance(std::string &error) {
   if (launching_ || (findBmsModal_ && findBmsModal_->inProgress()) ||
       (archiveUnzipModal_ && archiveUnzipModal_->inProgress())) {
     error = "A chart download, preparation, or extraction is active.";
     return false;
   }
+  return true;
+}
+
+bool MusicSelectScene::prepareForStorageMaintenance(std::string &error) {
+  if (!canPrepareForStorageMaintenance(error)) return false;
   stopPreloadWorker();
   previewController_.reset();
   // Destruction cancels and joins loading before it releases the audio port.

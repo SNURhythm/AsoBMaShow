@@ -101,6 +101,39 @@ bool copyAndSync(const fs::path &from, const fs::path &to, const FileIdentity &e
   return synced;
 }
 
+bool preservePermissions(const fs::path &source, const FileIdentity &sourceIdentity,
+                         const fs::path &installed, const FileIdentity &installedIdentity,
+                         std::string &error) {
+#ifdef _WIN32
+  (void)source; (void)sourceIdentity; (void)installed; (void)installedIdentity; (void)error;
+  return true;
+#else
+  struct Descriptor {
+    int value;
+    ~Descriptor() { if (value >= 0) close(value); }
+  } input{open(source.c_str(), O_RDONLY | O_CLOEXEC | O_NOFOLLOW)},
+    output{open(installed.c_str(), O_WRONLY | O_CLOEXEC | O_NOFOLLOW)};
+  const auto matches = [](int fd, const FileIdentity &identity, struct stat &info) {
+    return fd >= 0 && fstat(fd, &info) == 0 && S_ISREG(info.st_mode) && info.st_nlink == 1 &&
+           static_cast<std::uint64_t>(info.st_dev) == identity.device &&
+           static_cast<std::uint64_t>(info.st_ino) == identity.fileId &&
+           static_cast<std::uint64_t>(info.st_size) == identity.bytes;
+  };
+  struct stat sourceInfo{}, installedInfo{};
+  if (!matches(input.value, sourceIdentity, sourceInfo) ||
+      !matches(output.value, installedIdentity, installedInfo)) {
+    error = "File identity changed before preserving permissions"; return false;
+  }
+  // Carry access permissions, never set-user/group-ID bits, onto the new
+  // inode. Keep the installation private until the full copy is verified.
+  if (fchmod(output.value, sourceInfo.st_mode & 0777) != 0 || fsync(output.value) != 0) {
+    error = "Cannot preserve source permissions: " + std::string(std::strerror(errno));
+    return false;
+  }
+  return true;
+#endif
+}
+
 bool renameNoReplace(const fs::path &from, const fs::path &to, std::string &error) {
 #ifdef _WIN32
   if (MoveFileExW(from.c_str(), to.c_str(), MOVEFILE_WRITE_THROUGH)) return true;
@@ -136,6 +169,7 @@ FileTransactionDependencies DefaultFileTransactionDependencies() {
   return {.identity = [](const fs::path &path, std::string &error) { return ReadFileIdentity(path, error); },
           .createExclusive = createExclusive,
           .copyAndSync = copyAndSync,
+          .preservePermissions = preservePermissions,
           .renameNoReplace = renameNoReplace,
           .remove = [](const fs::path &path, std::string &error) {
             std::error_code ec;

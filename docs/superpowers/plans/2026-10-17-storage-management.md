@@ -569,6 +569,22 @@ journal directory; recovery errors retain the specific path and diagnostic.
 The 117 affected tests, application startup test and iOS build-only check passed.
 The reported physical iOS device was unavailable for a direct retest.
 
+PR #146 follow-up: reproduced all four review findings with failing regressions.
+Private candidate recovery now tolerates unrelated ancestor registrations;
+scene admission checks every retained owner before stopping any media; installed
+POSIX replacements preserve source access permissions, with rollback on failure;
+and hard-linked regular files contribute logical size without becoming mutation
+candidates. Regression coverage includes empty and abandoned private jobs,
+rejected/accepted scene admission, 0600/0640/0644 same-path and extension-changing
+replacements, injected permission failure, and overlapping size measurements.
+Desktop main, iOS build-only and Android build-only passed. Across the 144 tests
+in app/library/audio/video/settings/music_select, 141 passed initially; three
+runtime fixture suites exposed missing storage-maintenance context fields from
+the feature and passed after their fixtures were updated. The admission test
+also passed after the final fixture cleanup. No distribution helper was run in
+upload mode. Large-library performance is a separate proposed follow-up in the
+2026-10-18 scaling design; these fixes do not establish ten-million-file support.
+
 ## Planning review
 
 The plan covers the requested manual operations, grouped-list reuse, automatic

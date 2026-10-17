@@ -998,12 +998,17 @@ void MainMenuScene::onInputQueueOverflow() {
   if (auto *scene = activeUtilityTab()) scene->onInputQueueOverflow();
 }
 
-bool MainMenuScene::prepareForStorageMaintenance(std::string &error) {
+bool MainMenuScene::canPrepareForStorageMaintenance(std::string &error) {
   if (willStart || replayLoadTask_.active() || replayExportJob_.inProgress() || archiveUnzipInProgress() ||
       (findBmsModal_ && findBmsModal_->inProgress())) {
     error = "A chart download, preparation, or export is active.";
     return false;
   }
+  return !musicTab_ || musicTab_->canPrepareForStorageMaintenance(error);
+}
+
+bool MainMenuScene::prepareForStorageMaintenance(std::string &error) {
+  if (!canPrepareForStorageMaintenance(error)) return false;
   if (previewWorker_) previewWorker_->stop();
   stopAndClearSelectedChart();
   if (musicTab_ && !musicTab_->prepareForStorageMaintenance(error)) return false;

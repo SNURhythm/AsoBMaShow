@@ -9476,6 +9476,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 src/scene/SettingsScene.cpp src/scene/Scene.h
                 src/scene/SettingsSceneStorage.cpp src/scene/SceneReturnTarget.h src/scene/SceneReturnTarget.cpp
                 src/scene/SceneManager.h src/scene/SceneManager.cpp
+                src/storage/StorageApplicationIntegration.cpp
         VERBATIM
     )
     add_executable(settings_event_lifetime_tests ${settings_event_lifetime_source})

@@ -25,6 +25,8 @@ struct FileTransactionDependencies {
   std::function<bool(const std::filesystem::path &, std::string &)> createExclusive;
   std::function<bool(const std::filesystem::path &, const std::filesystem::path &,
                      const FileIdentity &, Checkpoint, std::string &)> copyAndSync;
+  std::function<bool(const std::filesystem::path &, const FileIdentity &,
+                     const std::filesystem::path &, const FileIdentity &, std::string &)> preservePermissions;
   std::function<bool(const std::filesystem::path &, const std::filesystem::path &, std::string &)> renameNoReplace;
   std::function<bool(const std::filesystem::path &, std::string &)> remove;
   std::function<bool(const std::filesystem::path &, std::string &)> syncDirectory;

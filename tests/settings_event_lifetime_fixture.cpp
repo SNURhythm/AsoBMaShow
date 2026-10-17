@@ -45,6 +45,15 @@ struct ApplicationContext {
   std::function<void(bool)> setResponsiveMenuCanvas;
   int gameplayBgaCompositeState = 0;
   struct {
+    int stops = 0;
+    bool SetStorageMaintenance(bool active, std::string &) { if (active) ++stops; return true; }
+  } musicPlayer;
+  struct {
+    int stops = 0;
+    struct Result { bool success = true; std::string diagnostic; };
+    Result discardLoadedMedia() { ++stops; return {}; }
+  } jukebox;
+  struct {
     struct { int video = 0; } audioVideo;
     player_settings::PresentationOrientation orientation = player_settings::PresentationOrientation::Landscape;
     auto activePresentationOrientation() const { return orientation; }
@@ -120,7 +129,53 @@ void SettingsScene::openStorage() {
   defer(PRODUCTION_STORAGE_OPEN, 0, true);
 }
 
+bool admitMedia(ApplicationContext &context) {
+  std::string error;
+  bool guard = true;
+  PRODUCTION_MEDIA_ADMISSION
+}
+struct MaintenanceScene : SettingsScene {
+  using SettingsScene::SettingsScene;
+  bool busy = false;
+  int releases = 0;
+  bool canPrepareForStorageMaintenance(std::string &error) override {
+    if (busy) error = "busy";
+    return !busy;
+  }
+  bool prepareForStorageMaintenance(std::string &error) override {
+    if (!canPrepareForStorageMaintenance(error)) return false;
+    ++releases;
+    return true;
+  }
+};
+void testMaintenanceAdmission() {
+  ApplicationContext context;
+  SceneManager manager(context);
+  auto first = std::make_unique<MaintenanceScene>(context);
+  auto second = std::make_unique<MaintenanceScene>(context);
+  auto *a = first.get();
+  auto *b = second.get();
+  manager.changeScene(std::move(first));
+  manager.changeScene(std::move(second), true);
+  a->busy = true; // retained Settings/library work rejects before any media is stopped
+  assert(!admitMedia(context));
+  assert(context.musicPlayer.stops == 0 && context.jukebox.stops == 0);
+  assert(a->releases == 0 && b->releases == 0);
+  // Exercise both traversal orders and direct SceneManager callers too.
+  std::string error;
+  for (auto *busy : {a, b}) {
+    a->busy = busy == a;
+    b->busy = busy == b;
+    assert(!manager.prepareForStorageMaintenance(error));
+    assert(a->releases == 0 && b->releases == 0);
+  }
+  a->busy = b->busy = false;
+  assert(admitMedia(context));
+  assert(context.musicPlayer.stops == 1 && context.jukebox.stops == 1);
+  assert(a->releases == 1 && b->releases == 1);
+}
 int main() {
+  testMaintenanceAdmission();
   ApplicationContext context;
   int destructions = 0;
   SceneManager manager(context);

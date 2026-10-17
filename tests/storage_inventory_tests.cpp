@@ -89,6 +89,16 @@ void testUnsafeAndUnsupportedFiles() {
   const auto inventory = BuildInventory(input, {}, {});
   require(candidateNames(inventory) == std::set<fs::path>{"safe.wav"},
           "symlinks and hard links cannot escape or mutate other selections");
+  require(inventory.complete && inventory.totalBytes ==
+              fs::file_size(temp.root / "selected/safe.wav") + fs::file_size(temp.root / "selected/hard.wav") &&
+              inventory.groups.front().audioBytes == inventory.totalBytes,
+          "hard-linked media contributes logical bytes while remaining ineligible for mutation");
+  auto overlapping = input;
+  overlapping.groups.push_back({"duplicate", temp.root / "selected"});
+  const auto unionInventory = BuildInventory(overlapping);
+  require(unionInventory.totalBytes == inventory.totalBytes &&
+              unionInventory.groups.back().totalBytes == inventory.totalBytes,
+          "overlapping measurements count hard-linked paths once in the union");
   fs::create_symlink(temp.root / "absent", temp.root / "selected/safe.ogg");
   require(BuildInventory(input, {}, {}).candidates.empty(),
           "dangling destination symlink is still a collision");

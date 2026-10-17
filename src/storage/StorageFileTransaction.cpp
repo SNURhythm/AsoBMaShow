@@ -47,10 +47,7 @@ void cleanupAbandonedCandidates(const StoragePlatformPaths &paths,
     if (report.files.size() < 100) report.files.push_back({.source = path, .outcome = FileOutcome::Failed,
         .reason = {StorageReason::CleanupFailed, error}});
   };
-  if (!IsSafeLocalPath(paths.temporaryRoot, error, paths.pathAccessRoots) ||
-      std::ranges::any_of(paths.allowedRoots, [&](const auto &root) {
-        return IsWithinFolder(paths.temporaryRoot, root);
-      })) {
+  if (!IsSafeLocalPath(paths.temporaryRoot, error, paths.pathAccessRoots)) {
     error = "Private candidate cleanup path is unsafe"; failed(paths.temporaryRoot); return;
   }
   std::error_code ec;
@@ -254,6 +251,7 @@ void fillDefaults(FileTransactionDependencies &ops) {
   if (!ops.identity) ops.identity = defaults.identity;
   if (!ops.createExclusive) ops.createExclusive = defaults.createExclusive;
   if (!ops.copyAndSync) ops.copyAndSync = defaults.copyAndSync;
+  if (!ops.preservePermissions) ops.preservePermissions = defaults.preservePermissions;
   if (!ops.renameNoReplace) ops.renameNoReplace = defaults.renameNoReplace;
   if (!ops.remove) ops.remove = defaults.remove;
   if (!ops.syncDirectory) ops.syncDirectory = defaults.syncDirectory;
@@ -347,6 +345,9 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
       return rollback(checkpoint(check) ? StorageReason::ValidationFailed : StorageReason::Cancelled,
                       "Installation copy changed or verification cancelled");
     record.outputIdentity = *installedIdentity;
+    if (!dependencies_.preservePermissions(record.source, record.sourceIdentity,
+                                          record.temporary, record.outputIdentity, error))
+      return rollback(StorageReason::IoError, error);
   }
   record.phase = Phase::Prepared;
   if (!writeRecord(record, error)) return rollback(StorageReason::IoError, error);

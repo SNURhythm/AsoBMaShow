@@ -155,6 +155,7 @@ bool InitializeStorageServices(ApplicationContext &context) {
       access->scopes.push_back(std::move(reservation));
 #endif
       *environment = std::move(*access);
+      if (context.sceneManager && !context.sceneManager->canPrepareForStorageMaintenance(error)) return {};
       if (!context.musicPlayer.SetStorageMaintenance(true, error)) return {};
       if (context.sceneManager && !context.sceneManager->prepareForStorageMaintenance(error)) return {};
       auto stopped = context.jukebox.discardLoadedMedia();

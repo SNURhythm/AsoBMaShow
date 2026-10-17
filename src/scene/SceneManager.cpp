@@ -217,7 +217,16 @@ void SceneManager::render() {
   }
 }
 
+bool SceneManager::canPrepareForStorageMaintenance(std::string &error) {
+  auto scenes = backgroundScenes;
+  if (currentScene) scenes.insert(currentScene);
+  for (auto &[name, scene] : registeredScenes) if (scene) scenes.insert(scene.get());
+  for (auto *scene : scenes) if (!scene->canPrepareForStorageMaintenance(error)) return false;
+  return true;
+}
+
 bool SceneManager::prepareForStorageMaintenance(std::string &error) {
+  if (!canPrepareForStorageMaintenance(error)) return false;
   auto scenes = backgroundScenes;
   if (currentScene) scenes.insert(currentScene);
   for (auto &[name, scene] : registeredScenes) if (scene) scenes.insert(scene.get());

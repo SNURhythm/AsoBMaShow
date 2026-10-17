@@ -2386,8 +2386,13 @@ ChartViewerScene::~ChartViewerScene() {
   cleanup();
 }
 
-bool ChartViewerScene::prepareForStorageMaintenance(std::string &error) {
+bool ChartViewerScene::canPrepareForStorageMaintenance(std::string &error) {
   if (!deferred.empty()) { error = "Chart viewer preparation is active."; return false; }
+  return true;
+}
+
+bool ChartViewerScene::prepareForStorageMaintenance(std::string &error) {
+  if (!canPrepareForStorageMaintenance(error)) return false;
   stopListening();
   listenAudioLoaded = false;
   retainedListenResourcesForReload = false;

@@ -90,7 +90,7 @@ public:
   ~SettingsScene() override;
 
   void onInputQueueOverflow() override;
-  bool prepareForStorageMaintenance(std::string &error) override;
+  bool canPrepareForStorageMaintenance(std::string &error) override;
   void init() override;
   void update(float dt) override;
   void onLanguageChanged() override;

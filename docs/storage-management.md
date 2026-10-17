@@ -23,6 +23,9 @@ Rows show logical file bytes, including separate audio, video and preserved-imag
 totals. These are not physical disk-allocation measurements. Unknown or unreadable
 sizes remain unavailable. The review reports eligible input bytes; compression
 savings are only known after encoding and validation.
+Hard-linked regular files contribute their logical bytes at each selected path,
+but are excluded from modification. Overlapping selected folders count each path
+only once in the combined total.
 
 ## Audio choices
 
@@ -83,8 +86,8 @@ Writable ordinary local folders are supported, including app-owned mobile
 downloads/imports and accessible writable iOS folders. Archives and Android
 SAF/content-provider sources must first use the existing extraction/import flow
 to become local folders. Storage management does not rewrite archive containers
-or copy a library automatically. Symlinks, hard links, special files, unsafe paths
-and unsupported filesystem operations are rejected.
+or copy a library automatically. Modification of symlinks, hard links, special
+files and unsafe paths, and unsupported filesystem operations, are rejected.
 
 ## Progress, cancellation and recovery
 
@@ -93,11 +96,14 @@ music/preview readers and reserves library maintenance; competing playback or
 library operations cannot start during the mutation. Back requests cancellation
 and returns after the worker releases maintenance. Mobile backgrounding cancels
 manual work at a safe checkpoint.
+All scene admission checks run before media is stopped, so a rejected request
+leaves existing playback alone.
 
 Each file commits separately. Cancel keeps already completed changes and retains
 uncommitted originals; it does not roll back the entire batch. Output is staged
 privately, validated, then installed using a journal and same-volume temporary
-files/backups. Startup recovery checks interrupted transactions before admitting
+files/backups. On POSIX systems, replacements preserve the source's access
+permission bits. Startup recovery checks interrupted transactions before admitting
 new work. After successful recovery, abandoned private encoding candidates are
 removed; unrecognized files and unresolved recovery state are retained. Do not
 manually remove recovery files while an operation is pending.

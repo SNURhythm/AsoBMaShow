@@ -70,6 +70,53 @@ void testSandboxedRecovery(const char *executable) {
           "startup recovery works when system ancestors deny metadata access");
 }
 #endif
+void testReplacementPermissions() {
+#ifndef _WIN32
+  for (bool samePath : {false, true}) {
+    for (auto mode : {fs::perms::owner_read | fs::perms::owner_write,
+                      fs::perms::owner_read | fs::perms::owner_write | fs::perms::group_read,
+                      fs::perms::owner_read | fs::perms::owner_write | fs::perms::group_read | fs::perms::others_read}) {
+      Fixture f(samePath);
+      fs::permissions(f.candidate.source, mode);
+      require(StorageFileTransaction(f.paths).Replace(f.candidate, f.encoded).outcome == FileOutcome::Converted,
+              "replacement succeeds for private and shared source permissions");
+      require((fs::status(f.candidate.destination).permissions() & fs::perms::all) == mode,
+              "replacement preserves source access permissions");
+      requireNoRecoveryFiles(f);
+    }
+  }
+  Fixture failed;
+  const auto sharedMode = fs::perms::owner_read | fs::perms::owner_write | fs::perms::group_read;
+  fs::permissions(failed.candidate.source, sharedMode);
+  FileTransactionDependencies dependencies;
+  dependencies.preservePermissions = [](const fs::path &, const FileIdentity &, const fs::path &,
+                                        const FileIdentity &, std::string &error) {
+    error = "injected permission failure"; return false;
+  };
+  const auto result = StorageFileTransaction(failed.paths, dependencies).Replace(failed.candidate, failed.encoded);
+  require(result.outcome == FileOutcome::Failed && !fs::exists(failed.candidate.destination) &&
+              read(failed.candidate.source) == std::string(1024, 's') &&
+              (fs::status(failed.candidate.source).permissions() & fs::perms::all) == sharedMode,
+          "permission preservation failure leaves the original media and mode intact");
+  requireNoRecoveryFiles(failed);
+#endif
+}
+void testOverlappingRegisteredRootDoesNotBlockRecovery() {
+  Fixture f;
+  // A broad registration is unrelated to the selected library and can contain
+  // the app-private directory without authorizing optimization of that directory.
+  f.paths.allowedRoots.push_back(f.temp.root);
+  fs::create_directories(f.paths.temporaryRoot);
+  require(!StorageFileTransaction(f.paths).Recover().recoveryRequired,
+          "empty private temporary directory beneath a registration does not block startup");
+  const auto job = f.paths.temporaryRoot / "12345678-1234-4234-8234-123456789abc";
+  f.temp.write(fs::relative(job / "candidate.mp4", f.temp.root), "abandoned candidate");
+  f.temp.write(fs::relative(f.paths.temporaryRoot / "unknown", f.temp.root), "retained");
+  require(!StorageFileTransaction(f.paths).Recover().recoveryRequired && !fs::exists(job) &&
+              read(f.paths.temporaryRoot / "unknown") == "retained" &&
+              read(f.candidate.source) == std::string(1024, 's'),
+          "overlapping registrations do not prevent owned cleanup or affect unrelated files");
+}
 void testAbandonedCandidatesAfterRestart() {
   constexpr auto job = "12345678-1234-4234-8234-123456789abc";
   for (const bool journal : {false, true}) {
@@ -409,6 +456,8 @@ int main(int argc, char **argv) {
     }
     testSandboxedRecovery(argv[0]);
 #endif
+    testReplacementPermissions();
+    testOverlappingRegisteredRootDoesNotBlockRecovery();
     testAbandonedCandidatesAfterRestart();
     testSuccessAndCancellation();
     testRestartAtEveryBoundary();

@@ -128,6 +128,7 @@ struct ApplicationContext {
   struct { int legacyInputGeneration(int, int) { return 0; } } inputDeviceRegistry;
   struct { int audioRuntime() { return 0; } } jukebox;
   std::atomic_bool appInBackground = false;
+  std::atomic_bool storageMaintenanceActive = false;
   Lifecycle *gameplaySkinLifecycle = nullptr;
   SceneManager *sceneManager = nullptr;
 };

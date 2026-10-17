@@ -127,6 +127,7 @@ StorageInventory BuildInventory(const InventoryRequest &request, Checkpoint chec
   inventory.totalBytes = 0;
   std::vector<fs::path> roots;
   std::set<fs::path> unavailable;
+  std::map<fs::path, std::uint64_t> measuredBytes;
   for (const auto &group : request.groups) {
     GroupStorageMeasurement measurement;
     measurement.groupId = group.groupId;
@@ -187,8 +188,16 @@ StorageInventory BuildInventory(const InventoryRequest &request, Checkpoint chec
           pending.push_back(path);
         } else if (auto identity = ReadFileIdentity(path, error, request.pathAccessRoots)) {
           inventory.files.emplace(path, *identity);
+          measuredBytes.emplace(path, identity->bytes);
         } else {
           skip(inventory, path, StorageReason::UnsafePath, std::move(error));
+          // Logical size includes regular entries such as hard links even when
+          // their identity makes them ineligible for modification.
+          if (fs::is_regular_file(status)) {
+            const auto bytes = it->file_size(ec);
+            if (ec) break;
+            measuredBytes.emplace(path, bytes);
+          }
         }
       }
       if (ec) { unavailable.insert(root); break; }
@@ -214,20 +223,23 @@ StorageInventory BuildInventory(const InventoryRequest &request, Checkpoint chec
     if (kind != MediaKind::Other)
       ++stems[{path.parent_path(), stemKey(path), kind == MediaKind::Audio}];
   }
-  for (const auto &[path, identity] : inventory.files) {
+  for (const auto &[path, bytes] : measuredBytes) {
     if (!checkpoint(check)) { inventory.cancelled = true; inventory.complete = false; break; }
     const auto kind = asobmshow::chart_assets::ClassifyMediaPath(path);
     std::vector<std::string> groups;
     for (auto &group : inventory.groups) {
       if (!group.totalBytes || !IsWithinFolder(path, group.root)) continue;
       groups.push_back(group.groupId);
-      *group.totalBytes += identity.bytes;
-      if (kind == MediaKind::Audio) group.audioBytes += identity.bytes;
-      if (kind == MediaKind::Video) group.videoBytes += identity.bytes;
-      if (kind == MediaKind::Image) group.imageBytes += identity.bytes;
+      *group.totalBytes += bytes;
+      if (kind == MediaKind::Audio) group.audioBytes += bytes;
+      if (kind == MediaKind::Video) group.videoBytes += bytes;
+      if (kind == MediaKind::Image) group.imageBytes += bytes;
     }
     if (groups.empty()) continue;
-    *inventory.totalBytes += identity.bytes;
+    *inventory.totalBytes += bytes;
+    const auto file = inventory.files.find(path);
+    if (file == inventory.files.end()) continue;
+    const auto &identity = file->second;
     AssetCandidate candidate{.source = path, .destination = path, .kind = kind,
                              .groups = std::move(groups), .identity = identity};
     const auto extension = asobmshow::chart_assets::LowerMediaExtension(path);

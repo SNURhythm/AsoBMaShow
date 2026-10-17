@@ -47,6 +47,7 @@ public:
   
   void setPresentationOrientation(player_settings::PresentationOrientation);
   EventHandleResult handleEvents(SDL_Event &event);
+  bool canPrepareForStorageMaintenance(std::string &error);
   bool prepareForStorageMaintenance(std::string &error);
   void cleanup();
   void update(float dt);

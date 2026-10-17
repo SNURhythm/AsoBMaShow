@@ -186,6 +186,7 @@ struct MusicSelectScene {
   struct { bool active() const { return false; } } recordsTask_;
   struct Context {
     std::atomic_bool appInBackground = false;
+    std::atomic_bool storageMaintenanceActive = false;
     FixtureRepository chartRepository;
     struct Replay {
       std::filesystem::path GetResolvedProfileRoot() const { return "/profile"; }

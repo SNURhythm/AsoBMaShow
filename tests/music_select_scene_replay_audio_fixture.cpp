@@ -243,6 +243,7 @@ struct MusicSelectScene {
     Jukebox jukebox;
     SceneManager *sceneManager;
     std::atomic_bool appInBackground = false;
+    std::atomic_bool storageMaintenanceActive = false;
   } context;
   bool launching_ = false;
   bool sceneActive_ = true, failed_ = false;

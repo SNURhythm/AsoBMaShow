@@ -28,10 +28,14 @@ public:
   virtual void onPresentationOrientationChanged() {}
   virtual void onPause() {}
   virtual void onResume() {}
-  virtual bool prepareForStorageMaintenance(std::string &error) {
+  // Admission must inspect every retained scene before any owner releases media.
+  virtual bool canPrepareForStorageMaintenance(std::string &error) {
     if (!pausesBackgroundTasksForPerformance()) return true;
     error = "Finish the active gameplay or export first.";
     return false;
+  }
+  virtual bool prepareForStorageMaintenance(std::string &error) {
+    return canPrepareForStorageMaintenance(error);
   }
   virtual void onLanguageChanged() {
     for (auto *view : views) {
