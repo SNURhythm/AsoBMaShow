@@ -804,6 +804,9 @@ static void reportStartupFailure(const ApplicationContext &context,
               status.music ? 1 : 0);
     }
     break;
+  case application_startup::Failure::StorageRecovery:
+    SDL_Log("Application storage recovery failed");
+    break;
   case application_startup::Failure::None:
     SDL_Log("Application startup reported an unspecified fatal failure");
     break;
@@ -1064,6 +1067,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     }
     const bool previous =
         context.appInBackground.exchange(background, std::memory_order_acq_rel);
+    if (background) storage_management::RequestCancelStorageTask(context);
     if (previous == background) {
       return;
     }
@@ -1093,6 +1097,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   bool androidResumeResizePending = false;
 #endif
   while (!context.quitFlag) {
+    storage_management::PollStorageTask(context);
     bool ranApplicationWork = false;
 #if TARGET_OS_IPHONE
     // Only acknowledge lifecycle events already forwarded before this owner's
@@ -2091,6 +2096,7 @@ int run() {
               [&context](const application_startup::Result &result) {
                 reportStartupFailure(context, result);
               },
+          .recoverStorage = [&context] { return storage_management::InitializeStorageServices(context); },
           .reconcileReplayFiles =
               [&context] {
                 const auto report = replay::reconcileProfileReplayFiles(

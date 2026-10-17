@@ -2,6 +2,7 @@
 #include "bms_search/DownloadedArchiveWorkflow.h"
 #include "bms_search/DownloadStaging.h"
 #include "bms_search/DownloadStorageIdentity.h"
+#include "bms_search/DownloadStorageOptimization.h"
 #include "bms_search/PackageDownloadCandidate.h"
 #include "scene/FindBmsDialogPolicy.h"
 #include "scene/FindBmsProgressPresentation.h"
@@ -850,6 +851,107 @@ asobmshow::bms_search::DownloadedArchiveWorkflowRequest workflowRequest(
           .options = {.skipUnarchivingForNonSolidArchives = true}};
 }
 
+void testWorkflowStoragePolicyAndCommitBoundaries() {
+  using namespace asobmshow::bms_search;
+  using namespace storage_management;
+  enum class Case { NoOp, Success, Warning, ArchiveMismatch, ExtractedMismatch,
+                    Inconclusive, ChangedChart, AddedChart, RemovedChart,
+                    CancelEncoding, CancelBeforeCommit, PauseCancel, Recovery, Cleanup };
+  for (auto scenario : {Case::NoOp, Case::Success, Case::Warning, Case::ArchiveMismatch,
+      Case::ExtractedMismatch, Case::Inconclusive, Case::ChangedChart, Case::AddedChart,
+      Case::RemovedChart, Case::CancelEncoding, Case::CancelBeforeCommit, Case::PauseCancel, Case::Recovery, Case::Cleanup}) {
+    CleanupPaths cleanup;
+    std::string error;
+    auto attempt = createFindBmsDownloadAttempt("package.zip", error);
+    assert(attempt); cleanup.add(attempt->root);
+    auto downloadRoot = testDownloadRoot(*attempt); cleanup.add(downloadRoot.parent_path());
+    writeText(attempt->archivePath, "archive");
+    auto request = workflowRequest(*attempt, downloadRoot);
+    if (scenario != Case::NoOp) request.options.storagePolicy.audio = AudioAction::LosslessFlac;
+    std::atomic_bool cancelled = false;
+    if (scenario == Case::PauseCancel) request.options.storagePauseRequested = [&] { cancelled = true; return true; };
+    std::vector<std::string> steps;
+    bool committed = false, optimized = false, sawStorageProgress = false;
+    DownloadedArchiveWorkflowDependencies dependencies{
+      .decideArchive = [&](const auto &, const auto &, bool skip, auto) {
+        assert(skip == (scenario == Case::NoOp));
+        return DirectArchiveDecision{.disposition = scenario == Case::NoOp
+            ? DirectArchiveDisposition::KeepArchive : scenario == Case::ArchiveMismatch
+            ? DirectArchiveDisposition::HashMismatch : DirectArchiveDisposition::Unarchive};
+      },
+      .extractArchive = [&](const auto &, const auto &root, auto &, auto, auto) {
+        steps.push_back("extract");
+        std::filesystem::create_directories(root / "nested");
+        writeText(root / "chart.bms", "#TITLE Original\n");
+        writeText(root / "nested/sabun.bme", "#TITLE Sabun\n");
+        writeText(root / "nested/unreferenced.wav", "media");
+        return true;
+      },
+      .decideExtracted = [&](const auto &, const auto &, auto, auto) {
+        steps.push_back("verify");
+        return ExtractedArchiveDecision{.disposition = scenario == Case::ExtractedMismatch
+            ? ExtractedArchiveDisposition::HashMismatch : scenario == Case::Inconclusive
+            ? ExtractedArchiveDisposition::Inconclusive : ExtractedArchiveDisposition::Match,
+            .foundBmsFile = true};
+      },
+      .optimizeExtracted = [&](const auto &root, const auto &policy, auto checkpoint, auto progress) {
+        assert((steps == std::vector<std::string>{"extract", "verify"}));
+        steps.push_back("optimize"); optimized = true;
+        assert(root == attempt->extractedPath && policy == request.options.storagePolicy);
+        assert(std::filesystem::exists(root / "nested/unreferenced.wav"));
+        assert(checkpoint());
+        progress(StorageProgress{.phase = StoragePhase::Encode, .filesTotal = 2});
+        StorageReport report;
+        report.converted = 1; report.reclaimedBytes = 123;
+        if (scenario == Case::Warning) { report.failed = 1; report.skipped = 1; }
+        if (scenario == Case::ChangedChart) writeText(root / "nested/sabun.bme", "#TITLE Modified\n");
+        if (scenario == Case::AddedChart) writeText(root / "new.bms", "new chart");
+        if (scenario == Case::RemovedChart) std::filesystem::remove(root / "chart.bms");
+        if (scenario == Case::CancelEncoding) { cancelled = true; assert(!checkpoint()); report.cancelled = true; }
+        if (scenario == Case::Recovery) report.recoveryRequired = true;
+        if (scenario == Case::Cleanup) report.cleanupPending = true;
+        return report;
+      },
+      .commitArtifact = [&](const auto &artifact, auto &, auto &) {
+        steps.push_back("commit"); committed = true;
+        assert(!cancelled);
+        assert(artifact.kind == (scenario == Case::NoOp ? BmsSearchPendingArtifactKind::Archive
+                                                       : BmsSearchPendingArtifactKind::ExtractedDirectory));
+        return true;
+      }};
+    BmsSearchResult result;
+    bool processed = processDownloadedArchive(request, cancelled,
+        [&](const BmsSearchDownloadProgress &progress) {
+          if (!progress.storageProgress) return;
+          sawStorageProgress = true;
+          assert(progress.downloadedBytes == 0 && progress.totalBytes == 0);
+          if (scenario == Case::CancelBeforeCommit && progress.storageProgress->phase == StoragePhase::Commit)
+            cancelled = true;
+        }, result, dependencies);
+    assert(request.options.skipUnarchivingForNonSolidArchives); // effective override never persists
+    const bool mismatch = scenario == Case::ArchiveMismatch || scenario == Case::ExtractedMismatch;
+    const bool success = scenario == Case::NoOp || scenario == Case::Success || scenario == Case::Warning;
+    assert(processed == (success || mismatch));
+    assert(committed == success);
+    assert(optimized == !(scenario == Case::NoOp || mismatch || scenario == Case::Inconclusive || scenario == Case::PauseCancel));
+    assert(sawStorageProgress == optimized);
+    if (success) {
+      assert(result.status == BmsSearchResult::Status::Downloaded);
+      if (optimized) {
+        assert(result.storageReport && result.storageReport->reclaimedBytes == 123);
+        assert(steps.back() == "commit");
+        if (scenario == Case::Warning) assert(result.storageReport->failed == 1 && result.storageReport->skipped == 1);
+      } else assert(!result.storageReport);
+    } else if (mismatch) {
+      assert(result.status == BmsSearchResult::Status::HashMismatch && result.pendingArtifact);
+      assert(!result.storageReport);
+    } else {
+      assert(result.status == BmsSearchResult::Status::DownloadFailed);
+      assert(result.outputPath.empty() && !result.pendingArtifact);
+    }
+  }
+}
+
 void testWorkflowKeepsDirectArchiveWithoutExtraction() {
   CleanupPaths cleanup;
   std::string error;
@@ -1395,6 +1497,7 @@ int main(int argc, char **argv) {
   testSolidEmptyAndFailedListingsFallBack();
   testDirectArchiveMd5AndNoHashBehavior();
   testDirectArchiveNoHashUnreadableBmsFallsBack();
+  testWorkflowStoragePolicyAndCommitBoundaries();
   testWorkflowKeepsDirectArchiveWithoutExtraction();
   testWorkflowStagesDirectArchiveMismatch();
   testWorkflowCommitsFallbackExtractionMatch();

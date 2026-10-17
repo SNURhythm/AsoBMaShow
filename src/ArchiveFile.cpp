@@ -503,6 +503,7 @@ struct CachedIndex {
   unsigned char sevenZipFormat = 0;
   bool hasEncryptedEntries = false;
   bool liveSourceManifest = false;
+  mutable std::atomic_bool retainForBrowsing{false};
   std::vector<Entry> entries;
   std::unordered_map<std::string, std::size_t> exact;
   std::unordered_map<std::string, std::size_t> lower;
@@ -510,7 +511,8 @@ struct CachedIndex {
 
 std::mutex gIndexMutex;
 // NOTE: gIndexCache is intentionally unbounded (one full entry list per
-// archive indexed this process, bounded by library size). An LRU eviction of
+// archive retained for browsing, bounded by library size). Storage measurement
+// uses transient leases and does not retain newly built indexes. An LRU eviction of
 // least-recently-used archive indexes is a possible follow-up if memory
 // becomes a concern on very large libraries.
 std::unordered_map<std::string, std::shared_ptr<const CachedIndex>> gIndexCache;
@@ -3886,103 +3888,102 @@ bool writeCachedIndexToDisk(const std::string &key,
   return directOk;
 }
 
-std::shared_ptr<CachedIndex> readCachedIndexFromDisk(
+bool readCachedIndexRecords(
     const std::string &key, std::uintmax_t size,
-    std::filesystem::file_time_type mtime,
-    const std::string &sourceIdentity,
-    std::uint64_t maximumEntries) {
-  const std::filesystem::path directory = archiveIndexCacheDirectory();
-  if (directory.empty() || sourceIdentity.empty()) {
-    return nullptr;
-  }
-  const std::filesystem::path filePath = archiveIndexCacheFilePath(key);
-  std::error_code sizeError;
-  const std::uintmax_t fileBytes =
-      std::filesystem::file_size(filePath, sizeError);
-  if (sizeError || fileBytes == 0) {
-    return nullptr;
-  }
+    std::filesystem::file_time_type mtime, const std::string &sourceIdentity,
+    std::uint64_t maximumEntries, CachedIndex &index,
+    const std::function<bool(const Entry &)> &visitor = {},
+    const PauseCallback &pauseCallback = {}) {
+  if (archiveIndexCacheDirectory().empty() || sourceIdentity.empty()) return false;
+  const auto filePath = archiveIndexCacheFilePath(key);
+  std::error_code error;
+  const auto fileBytes = std::filesystem::file_size(filePath, error);
+  if (error || fileBytes == 0) return false;
+  const auto cacheModified = std::filesystem::last_write_time(filePath, error);
+  if (error) return false;
   archive_source::InputFile file(filePath, std::ios::binary);
-  if (!file) {
-    return nullptr;
-  }
-  auto readU64 = [&]() -> std::uint64_t {
+  if (!file) return false;
+  const auto readU64 = [&]() {
     std::uint64_t value = 0;
     file.read(reinterpret_cast<char *>(&value), sizeof(value));
     return value;
   };
-  auto readU8 = [&]() -> std::uint8_t {
+  const auto readU8 = [&]() {
     std::uint8_t value = 0;
     file.read(reinterpret_cast<char *>(&value), sizeof(value));
     return value;
   };
-  auto index = std::make_shared<CachedIndex>();
-  const std::uint8_t version = readU8();
-  const std::uint64_t storedKeyLen = readU64();
-  if (!file.good() || version != kArchiveIndexCacheVersion ||
-      storedKeyLen > fileBytes ||
-      storedKeyLen > (1024ull * 1024ull * 1024ull)) {
-    return nullptr;
-  }
-  std::string storedKey(static_cast<std::size_t>(storedKeyLen), '\0');
-  file.read(storedKey.data(), static_cast<std::streamsize>(storedKeyLen));
-  if (!file.good() || storedKey != key) {
-    return nullptr;
-  }
-  const std::uint64_t storedSize = readU64();
-  const std::uint64_t storedMtime = readU64();
-  if (!file.good() ||
-      storedSize != static_cast<std::uint64_t>(size) ||
-      storedMtime != static_cast<std::uint64_t>(mtime.time_since_epoch().count())) {
-    return nullptr;
-  }
-  index->size = size;
-  index->mtime = mtime;
-  index->backend = static_cast<ArchiveIndexBackend>(readU8());
-  index->sevenZipFormat = readU8();
-  const std::uint64_t entryCount = readU64();
-  // Each serialized entry needs at least 34 bytes beyond the variable-length
-  // path, so a count much larger than the file can hold is malformed and
-  // would otherwise allow an unbounded allocation from a corrupt file.
-  if (!file.good() || entryCount > (fileBytes / 34ull) || entryCount > maximumEntries) {
-    return nullptr;
-  }
-  index->entries.reserve(static_cast<std::size_t>(entryCount));
+  const auto version = readU8();
+  const auto keyLength = readU64();
+  if (!file.good() || version != kArchiveIndexCacheVersion || keyLength != key.size()) return false;
+  std::string storedKey(key.size(), '\0');
+  file.read(storedKey.data(), static_cast<std::streamsize>(storedKey.size()));
+  const auto storedSize = readU64(), storedMtime = readU64();
+  if (!file.good() || storedKey != key || storedSize != size ||
+      storedMtime != static_cast<std::uint64_t>(mtime.time_since_epoch().count())) return false;
+  index.size = size;
+  index.mtime = mtime;
+  index.backend = static_cast<ArchiveIndexBackend>(readU8());
+  index.sevenZipFormat = readU8();
+  const auto entryCount = readU64();
+  if (!file.good() || entryCount > fileBytes / 34 || entryCount > maximumEntries) return false;
+  const auto entriesStart = file.tellg();
+  const auto footerBytes = 8 + sourceIdentity.size() + 1;
+  if (entriesStart < 0 || fileBytes < static_cast<std::uintmax_t>(entriesStart) + footerBytes) return false;
+  const auto footerOffset = fileBytes - footerBytes;
+  // The identity footer is fixed-size for this source. Validate it before any
+  // consumer sees entries, then stream the records without a second entry pass.
+  file.seekg(static_cast<std::streamoff>(footerOffset));
+  if (readU64() != sourceIdentity.size()) return false;
+  index.sourceIdentity.resize(sourceIdentity.size());
+  file.read(index.sourceIdentity.data(), static_cast<std::streamsize>(sourceIdentity.size()));
+  const auto encrypted = readU8();
+  if (!file.good() || index.sourceIdentity != sourceIdentity || encrypted > 1) return false;
+  index.hasEncryptedEntries = encrypted != 0;
+  file.seekg(entriesStart);
+  if (!visitor) index.entries.reserve(static_cast<std::size_t>(entryCount));
   for (std::uint64_t i = 0; i < entryCount; ++i) {
-    const std::uint64_t pathLen = readU64();
-    if (!file.good() || pathLen > fileBytes ||
-        pathLen > (1024ull * 1024ull * 1024ull)) {
-      return nullptr;
-    }
-    std::string pathText(static_cast<std::size_t>(pathLen), '\0');
-    file.read(pathText.data(), static_cast<std::streamsize>(pathLen));
+    if ((i % 256) == 0 && !pauseIfNeeded(pauseCallback)) return false;
+    const auto pathLength = readU64();
+    const auto position = file.tellg();
+    if (!file.good() || position < 0 || pathLength > 1024 * 1024 ||
+        static_cast<std::uintmax_t>(position) > footerOffset ||
+        footerOffset - static_cast<std::uintmax_t>(position) < 26 ||
+        pathLength > footerOffset - static_cast<std::uintmax_t>(position) - 26) return false;
+    std::string pathText(static_cast<std::size_t>(pathLength), '\0');
+    file.read(pathText.data(), static_cast<std::streamsize>(pathLength));
     Entry entry;
     entry.path = utf8_to_path_t(pathText);
-    if (!isCanonicalEntryPath(entry.path) || genericPathUtf8(entry.path) != pathText) {
-      return nullptr;
-    }
-    entry.directory = readU8() != 0;
+    if (!isCanonicalEntryPath(entry.path) || genericPathUtf8(entry.path) != pathText) return false;
+    const auto directory = readU8();
+    entry.directory = directory != 0;
     entry.size = readU64();
     entry.order = static_cast<std::size_t>(readU64());
     entry.offset = static_cast<std::int64_t>(readU64());
-    entry.solid = readU8() != 0;
-    if (!file.good()) {
-      return nullptr;
-    }
-    index->entries.push_back(std::move(entry));
+    const auto solid = readU8();
+    entry.solid = solid != 0;
+    if (!file.good() || directory > 1 || solid > 1) return false;
+    if (visitor) { if (!visitor(entry)) return false; }
+    else index.entries.push_back(std::move(entry));
   }
-  const auto identityLength = readU64();
-  if (!file.good() || identityLength != sourceIdentity.size()) return nullptr;
-  index->sourceIdentity.resize(sourceIdentity.size());
-  file.read(index->sourceIdentity.data(),
-            static_cast<std::streamsize>(index->sourceIdentity.size()));
-  index->hasEncryptedEntries = readU8() != 0;
-  if (!file.good() || index->sourceIdentity != sourceIdentity) return nullptr;
+  if (file.tellg() != static_cast<std::streamoff>(footerOffset) || !pauseIfNeeded(pauseCallback)) return false;
+  const auto currentSize = std::filesystem::file_size(filePath, error);
+  if (error || currentSize != fileBytes) return false;
+  const auto currentModified = std::filesystem::last_write_time(filePath, error);
+  return !error && currentModified == cacheModified;
+}
+
+std::shared_ptr<CachedIndex> readCachedIndexFromDisk(
+    const std::string &key, std::uintmax_t size,
+    std::filesystem::file_time_type mtime, const std::string &sourceIdentity,
+    std::uint64_t maximumEntries) {
+  auto index = std::make_shared<CachedIndex>();
+  if (!readCachedIndexRecords(key, size, mtime, sourceIdentity, maximumEntries, *index)) return nullptr;
   return index;
 }
 
 std::shared_ptr<const CachedIndex>
-cachedIndexForArchiveIfFresh(const std::filesystem::path &archivePath) {
+cachedIndexForArchiveIfFresh(const std::filesystem::path &archivePath, bool retainInMemory = true) {
   std::uintmax_t size = 0;
   std::filesystem::file_time_type mtime{};
   if (!fileState(archivePath, size, mtime)) {
@@ -3997,6 +3998,7 @@ cachedIndexForArchiveIfFresh(const std::filesystem::path &archivePath) {
   if (it != gIndexCache.end() && it->second != nullptr &&
       it->second->size == size && it->second->mtime == mtime &&
       it->second->sourceIdentity == sourceIdentity) {
+    if (retainInMemory) it->second->retainForBrowsing.store(true);
     return it->second;
   }
   return nullptr;
@@ -4007,8 +4009,9 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
                       std::string *errorMessage,
                       const PauseCallback &pauseCallback = nullptr,
                       std::uint64_t maximumEntries = std::numeric_limits<std::uint64_t>::max(),
-                      bool requireLiveSource = false) {
+                      bool requireLiveSource = false, bool retainInMemory = true) {
   const auto boundedIndex = [&](std::shared_ptr<const CachedIndex> index) {
+    if (index && retainInMemory) index->retainForBrowsing.store(true);
     if (index && index->entries.size() > maximumEntries) {
       if (errorMessage) *errorMessage = "Archive exceeds the verification entry-count limit.";
       return std::shared_ptr<const CachedIndex>{};
@@ -4056,7 +4059,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
         return boundedIndex(current->second);
       }
       gIndexCache[key] = diskIndex;
-      return diskIndex;
+      return boundedIndex(diskIndex);
     }
   }
 
@@ -4252,7 +4255,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
     gIndexCache[key] = loaded;
   }
   buildScope.complete(true);
-  return loaded;
+  return boundedIndex(loaded);
 #else
   if (errorMessage != nullptr) {
     *errorMessage = "Archive support is not compiled in.";
@@ -8689,6 +8692,11 @@ std::size_t pruneArchiveIndexCache(
 }
 
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
+std::size_t residentArchiveIndexCountForTesting() {
+  std::lock_guard lock(gIndexMutex);
+  return gIndexCache.size();
+}
+
 void clearArchiveIndexCacheForTesting() {
   {
     std::lock_guard<std::mutex> lock(gIndexMutex);
@@ -8808,6 +8816,74 @@ std::filesystem::path makeVirtualPath(const std::filesystem::path &archivePath,
     return archivePath;
   }
   return archivePath / innerPath;
+}
+
+bool visitIndexEntries(const std::filesystem::path &archivePath,
+    const std::function<bool(const Entry &)> &visitor, std::string *errorMessage,
+    PauseCallback pauseCallback) {
+  if (!visitor || !isArchiveSupportAvailable() || !hasSupportedArchiveExtension(archivePath) ||
+      !pauseIfNeeded(pauseCallback, errorMessage)) return false;
+  const auto identity = archive_source_identity::KeyForPath(archivePath);
+  if (identity.empty()) { if (errorMessage) *errorMessage = "Archive source is unavailable."; return false; }
+  const auto key = archiveKey(archivePath);
+  struct Lease {
+    std::string key;
+    std::shared_ptr<const CachedIndex> index;
+    ~Lease() {
+      if (!index || index->retainForBrowsing.load()) return;
+      std::lock_guard lock(gIndexMutex);
+      const auto found = gIndexCache.find(key);
+      if (found != gIndexCache.end() && found->second == index &&
+          !index->retainForBrowsing.load() && index.use_count() == 2) gIndexCache.erase(found);
+    }
+  } lease{key, cachedIndexForArchiveIfFresh(archivePath, false)};
+  bool delivered = false, stopped = false;
+  const auto keepGoing = [&] {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) stopped = true;
+    return !stopped;
+  };
+  const auto emit = [&](const Entry &entry) {
+    delivered = true;
+    if (!visitor(entry)) { stopped = true; return false; }
+    return true;
+  };
+  if (!lease.index) {
+    std::uintmax_t size = 0;
+    std::filesystem::file_time_type mtime{};
+    if (!fileState(archivePath, size, mtime)) return false;
+    CachedIndex header;
+    if (readCachedIndexRecords(key, size, mtime, identity,
+        std::numeric_limits<std::uint64_t>::max(), header, emit, keepGoing)) {
+      if (archive_source_identity::KeyForPath(archivePath) != identity) {
+        if (errorMessage) *errorMessage = "Archive changed during index measurement.";
+        return false;
+      }
+      return true;
+    }
+    // A callback may have accumulated partial records. Never replay a rebuilt
+    // index into that same consumer; callers discard unsuccessful measurements.
+    if (delivered || stopped) {
+      // Repair malformed persisted state for the next scan, without replaying
+      // entries into a consumer that has already seen an incomplete stream.
+      if (delivered && !stopped) lease.index = cachedIndexForArchive(archivePath, nullptr, keepGoing,
+          std::numeric_limits<std::uint64_t>::max(), true, false);
+      if (errorMessage && errorMessage->empty()) *errorMessage = "Archive index measurement did not complete.";
+      return false;
+    }
+    lease.index = cachedIndexForArchive(archivePath, errorMessage, keepGoing,
+        std::numeric_limits<std::uint64_t>::max(), false, false);
+    if (!lease.index) return false;
+  }
+  std::size_t count = 0;
+  for (const auto &entry : lease.index->entries) {
+    if ((count++ % 256) == 0 && !keepGoing()) return false;
+    if (!emit(entry)) return false;
+  }
+  if (!keepGoing() || archive_source_identity::KeyForPath(archivePath) != identity) {
+    if (errorMessage && errorMessage->empty()) *errorMessage = "Archive changed during index measurement.";
+    return false;
+  }
+  return true;
 }
 
 bool listEntries(const std::filesystem::path &archivePath,

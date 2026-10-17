@@ -38,11 +38,22 @@ struct ApplicationContext {
   int uiBatchRenderer = 0;
   SceneManager *sceneManager = nullptr;
   std::atomic_bool backgroundTasksPausedForForegroundScene = false;
+  std::atomic_bool storageMaintenanceActive = false;
   BackgroundTasks *chartLibraryTasks = nullptr;
   std::function<void()> notifyBackgroundTaskPauseStateChanged;
   std::function<void(bool)> setGameplayOrientationLocked;
   std::function<void(bool)> setResponsiveMenuCanvas;
   int gameplayBgaCompositeState = 0;
+  struct {
+    int stops = 0;
+    bool SetStorageMaintenance(bool active, std::string &) { if (active) ++stops; return true; }
+  } musicPlayer;
+  struct {
+    int stops = 0;
+    struct Result { bool success = true; std::string diagnostic; };
+    bool fail = false;
+    Result discardLoadedMedia() { ++stops; return {!fail, fail ? "backend busy" : ""}; }
+  } jukebox;
   struct {
     struct { int video = 0; } audioVideo;
     player_settings::PresentationOrientation orientation = player_settings::PresentationOrientation::Landscape;
@@ -71,6 +82,8 @@ struct View {
 PRODUCTION_SCENE_HEADER
 PRODUCTION_MANAGER_HEADER
 PRODUCTION_MANAGER_METHODS
+PRODUCTION_RETURN_TARGET
+PRODUCTION_RETURN_METHOD
 
 struct DisplaySession {
   struct Result { std::string message; };
@@ -103,11 +116,73 @@ struct SettingsScene : Scene {
   void renderScene() override {}
   void cleanupScene() override {}
   EventHandleResult handleEvents(SDL_Event &event) override;
+  void openStorage();
 };
 
 PRODUCTION_SETTINGS_EVENTS
 
+struct StorageManagementScene : SettingsScene {
+  SceneReturnTarget target;
+  StorageManagementScene(ApplicationContext &context, SceneReturnTarget value)
+      : SettingsScene(context), target(std::move(value)) {}
+};
+void SettingsScene::openStorage() {
+  defer(PRODUCTION_STORAGE_OPEN, 0, true);
+}
+
+bool admitMedia(ApplicationContext &context) {
+  std::string error;
+  bool guard = true;
+  PRODUCTION_MEDIA_ADMISSION
+}
+struct MaintenanceScene : SettingsScene {
+  using SettingsScene::SettingsScene;
+  bool busy = false;
+  int releases = 0;
+  bool canPrepareForStorageMaintenance(std::string &error) override {
+    if (busy) error = "busy";
+    return !busy;
+  }
+  bool prepareForStorageMaintenance(std::string &error) override {
+    if (!canPrepareForStorageMaintenance(error)) return false;
+    ++releases;
+    return true;
+  }
+};
+void testMaintenanceAdmission() {
+  ApplicationContext context;
+  SceneManager manager(context);
+  auto first = std::make_unique<MaintenanceScene>(context);
+  auto second = std::make_unique<MaintenanceScene>(context);
+  auto *a = first.get();
+  auto *b = second.get();
+  manager.changeScene(std::move(first));
+  manager.changeScene(std::move(second), true);
+  a->busy = true; // retained Settings/library work rejects before any media is stopped
+  assert(!admitMedia(context));
+  assert(context.musicPlayer.stops == 0 && context.jukebox.stops == 0);
+  assert(a->releases == 0 && b->releases == 0);
+  // Exercise both traversal orders and direct SceneManager callers too.
+  std::string error;
+  for (auto *busy : {a, b}) {
+    a->busy = busy == a;
+    b->busy = busy == b;
+    assert(!manager.prepareForStorageMaintenance(error));
+    assert(a->releases == 0 && b->releases == 0);
+  }
+  a->busy = b->busy = false;
+  context.jukebox.fail = true;
+  assert(!admitMedia(context));
+  assert(context.musicPlayer.stops == 0);
+  assert(a->releases == 0 && b->releases == 0);
+  context.jukebox.fail = false;
+  context.jukebox.stops = 0;
+  assert(admitMedia(context));
+  assert(context.musicPlayer.stops == 1 && context.jukebox.stops == 1);
+  assert(a->releases == 1 && b->releases == 1);
+}
 int main() {
+  testMaintenanceAdmission();
   ApplicationContext context;
   int destructions = 0;
   SceneManager manager(context);
@@ -144,4 +219,15 @@ int main() {
     assert(manager.currentScene == manager.registeredScenes.at("Intro").get());
   }
   assert(destructions == 2 && "Back deletes each dynamic Settings scene");
+  auto settings = std::make_unique<SettingsScene>(context);
+  auto *retained = settings.get();
+  manager.changeScene(std::move(settings));
+  retained->openStorage();
+  ++context.currentFrame;
+  manager.handleDeferred();
+  assert(dynamic_cast<StorageManagementScene *>(manager.currentScene));
+  assert(manager.hasBackgroundScene(retained));
+  assert(returnToScene(manager, SceneReturnTarget::Retained(retained)));
+  manager.handleDeferred();
+  assert(manager.currentScene == retained && "Back must not replay the storage-opening callback");
 }

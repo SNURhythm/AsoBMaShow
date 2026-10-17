@@ -475,6 +475,7 @@ MusicSelectScene::~MusicSelectScene() {
 }
 
 void MusicSelectScene::configureSoundServices() {
+  if (context.storageMaintenanceActive) return;
   if (previewAudio_ && systemSound_ &&
       soundSetPath_ == context.settings.skinSelectSoundSetPath &&
       soundSetBookmark_ == context.settings.skinSelectSoundSetBookmark) {
@@ -658,6 +659,28 @@ void MusicSelectScene::init() {
   startInputListening();
 }
 
+bool MusicSelectScene::canPrepareForStorageMaintenance(std::string &error) {
+  if (launching_ || (findBmsModal_ && findBmsModal_->inProgress()) ||
+      (archiveUnzipModal_ && archiveUnzipModal_->inProgress())) {
+    error = "A chart download, preparation, or extraction is active.";
+    return false;
+  }
+  return true;
+}
+
+bool MusicSelectScene::prepareForStorageMaintenance(std::string &error) {
+  if (!canPrepareForStorageMaintenance(error)) return false;
+  stopPreloadWorker();
+  previewController_.reset();
+  // Destruction cancels and joins loading before it releases the audio port.
+  previewAudio_.reset();
+  systemSound_.reset();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  if (skinSession_) skinSession_->suspendAudio();
+#endif
+  return true;
+}
+
 void MusicSelectScene::onPause() {
   closeRankings();
   if (revealContextMenu_) revealContextMenu_->dismiss();
@@ -713,7 +736,7 @@ void MusicSelectScene::onResume() {
     presentationSkinRefreshPending = false;
     if (!reactivateSkinAfterSettings()) return;
   }
-  if (!background && !failed_ && skinSession_) skinSession_->resumeAudio();
+  if (!background && !failed_ && !context.storageMaintenanceActive && skinSession_) skinSession_->resumeAudio();
 #endif
   syncToolbar();
   reloadLibrary();
@@ -763,7 +786,7 @@ void MusicSelectScene::onApplicationBackgroundChanged(bool background) {
   }
   configureSoundServices();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
-  if (skinSession_) skinSession_->resumeAudio();
+  if (skinSession_ && !context.storageMaintenanceActive) skinSession_->resumeAudio();
 #endif
   if (previewAudio_) previewAudio_->resumeDefaultBgm();
   continueDirectoryRestore();
@@ -2144,6 +2167,7 @@ void MusicSelectScene::closeDirectory() {
 }
 
 void MusicSelectScene::startPreloadForSelection() {
+  if (context.storageMaintenanceActive) return;
   if (!sceneActive_ || context.appInBackground.load(std::memory_order_acquire) ||
       launching_ || recordsExportJob_.inProgress()) {
     return;
@@ -2315,6 +2339,7 @@ std::unique_ptr<bms_parser::Chart> MusicSelectScene::takePreloadedChart(
 }
 
 void MusicSelectScene::startArchiveUnzip(const ChartMetaRecord &record) {
+  if (context.storageMaintenanceActive) return;
   if (modalLayer_ == nullptr || selectorInputBlocked()) return;
   if (!archiveUnzipModal_) {
     archiveUnzipModal_ = ArchiveUnzipModal::Create(
@@ -2349,6 +2374,7 @@ void MusicSelectScene::resetFailedLaunch(std::uint64_t generation) {
 }
 
 void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
+  if (context.storageMaintenanceActive) return;
   if (!sceneActive_ || failed_ || selectorInputBlocked() ||
       context.appInBackground.load(std::memory_order_acquire)) return;
   const auto snapshot = bars_.readView();
@@ -2566,6 +2592,7 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
 
 void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
                                     bool autoplay) {
+  if (context.storageMaintenanceActive) return;
   if (!sceneActive_ || failed_ ||
       context.appInBackground.load(std::memory_order_acquire)) return;
   if (launching_ || bar.courseCharts.empty() || !bar.presentation.exists) {
@@ -2688,6 +2715,7 @@ void MusicSelectScene::launchCourse(const MusicSelectBar &bar,
 }
 
 void MusicSelectScene::launchSelectedDirectoryAutoplay() {
+  if (context.storageMaintenanceActive) return;
   if (!sceneActive_ || failed_ || launching_ ||
       context.appInBackground.load(std::memory_order_acquire)) return;
   auto snapshot = bars_.readView();
@@ -2705,6 +2733,7 @@ void MusicSelectScene::launchSelectedDirectoryAutoplay() {
 }
 
 void MusicSelectScene::launchDirectoryAutoplay(const MusicSelectBar &directory) {
+  if (context.storageMaintenanceActive) return;
   MusicSelectBar playlist;
   playlist.title = directory.title;
   for (const auto &child : bars_.childrenOf(directory.id)) {
@@ -2720,6 +2749,7 @@ void MusicSelectScene::launchDirectoryAutoplay(const MusicSelectBar &directory) 
 void MusicSelectScene::launchCourseReplay(
     const MusicSelectBar &course, int slot,
     const MusicSelectBarManagerReadView &snapshot) {
+  if (context.storageMaintenanceActive) return;
   if (!sceneActive_ || failed_ || launching_ ||
       context.appInBackground.load(std::memory_order_acquire)) return;
   const int lnMode =
@@ -2760,6 +2790,7 @@ void MusicSelectScene::launchCourseReplay(
 }
 
 void MusicSelectScene::launchSelectedReplay(int slot) {
+  if (context.storageMaintenanceActive) return;
   if (!sceneActive_ || failed_ || launching_ ||
       context.appInBackground.load(std::memory_order_acquire)) return;
   if (launching_ || slot < 0 || slot >= 4) return;
@@ -3597,6 +3628,7 @@ void MusicSelectScene::openMusicPlayer() {
 }
 
 void MusicSelectScene::openChartViewer() {
+  if (context.storageMaintenanceActive) return;
   const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rowCount()) return;
   const auto &selected = snapshot.rowAt(snapshot.selectedIndex);
@@ -3888,12 +3920,17 @@ void MusicSelectScene::openDownload() {
   const auto record = *snapshot.rowAt(snapshot.selectedIndex).chart;
   if (!findBmsModal_) {
     findBmsModal_ = FindBmsModal::Create(modalLayer_, {
-        .downloadRoot = [this] {
+        .admit = [this] { return !context.storageMaintenanceActive.load(); },
+      .downloadRoot = [this] {
           return findBmsDownloadRoot(chartSession_ ? &*chartSession_ : nullptr);
         },
         .downloadOptions = [this] {
           return BmsSearchDownloadOptions{.skipUnarchivingForNonSolidArchives =
-              context.settings.findBmsSkipUnarchivingForNonSolidArchives};
+              context.settings.findBmsSkipUnarchivingForNonSolidArchives,
+            .storagePolicy = storage_management::EffectiveDownloadPolicy(context.settings.storagePreferences),
+            .storagePauseRequested = [app = &context] {
+              return app->backgroundTasksPausedForForegroundScene.load() || app->appInBackground.load();
+            }};
         },
         .filesReady = [this](const ChartMetaRecord &record, const BmsSearchResult &result,
                              bool matched) {

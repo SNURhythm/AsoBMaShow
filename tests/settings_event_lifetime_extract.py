@@ -23,6 +23,16 @@ def main():
     fixture = fixture.replace("PRODUCTION_SETTINGS_EVENTS", extract(
         (args.root / "src/scene/SettingsScene.cpp").read_text(),
         "EventHandleResult SettingsScene::handleEvents(SDL_Event &event)"))
+    fixture = fixture.replace("PRODUCTION_RETURN_TARGET", without_includes(
+        (args.root / "src/scene/SceneReturnTarget.h").read_text()))
+    fixture = fixture.replace("PRODUCTION_RETURN_METHOD", without_includes(
+        (args.root / "src/scene/SceneReturnTarget.cpp").read_text()))
+    storage = (args.root / "src/scene/SettingsSceneStorage.cpp").read_text()
+    fixture = fixture.replace("PRODUCTION_STORAGE_OPEN", extract(
+        storage[storage.index("defer("):], "[this]"))
+    integration = (args.root / "src/storage/StorageApplicationIntegration.cpp").read_text()
+    admission = integration.split("*environment = std::move(*access);", 1)[1].split("    },", 1)[0]
+    fixture = fixture.replace("PRODUCTION_MEDIA_ADMISSION", admission)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(fixture)
 

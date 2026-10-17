@@ -44,6 +44,7 @@ struct ProfileManager {
   const Profile &activeProfile() const { return profile; }
 };
 struct ApplicationContext {
+  std::atomic_bool storageMaintenanceActive = false;
   Evidence e;
   Jukebox jukebox{e};
   NativeMusic musicPlayer;
@@ -290,6 +291,14 @@ void testResumeRefreshesSameProfileLibraryAndClearsChangedProfileSelection() {
   assert(scene.selectedLibraryPlaylistId == 0 && scene.displayedProfileId == "next-profile");
 }
 int main() {
+  {
+    ApplicationContext context;
+    context.storageMaintenanceActive = true;
+    MusicPlayerScene scene(context);
+    scene.buildControlledViews();
+    scene.watchVideo();
+    assert(!scene.videoFullscreenActive && context.e.events.empty());
+  }
   testResumeRefreshesSameProfileLibraryAndClearsChangedProfileSelection();
   testTabPauseReleasesVideoButKeepsPlaybackAndViews();
   for (const bool previous : {false, true}) {

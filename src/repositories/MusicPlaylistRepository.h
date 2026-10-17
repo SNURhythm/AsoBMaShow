@@ -21,6 +21,10 @@ struct MusicPlayerStateRecord {
   std::string queueDisplayName;
 };
 
+struct MusicLibraryQueryMetrics {
+  std::uint64_t prepared = 0, selects = 0, vmSteps = 0, fullScanSteps = 0;
+};
+
 class MusicPlaylistRepository {
 public:
   MusicPlaylistRepository();
@@ -60,6 +64,8 @@ public:
   std::vector<MusicTrackRecord> SelectLibraryTracks();
   std::vector<MusicTrackRecord> SelectLibraryGroupTracks(
       const bms_parser::ChartMeta &chartMeta);
+  std::vector<std::vector<MusicTrackRecord>> SelectLibraryGroups(
+      const std::vector<bms_parser::ChartMeta> &, MusicLibraryQueryMetrics * = nullptr);
   std::vector<MusicTrackRecord> SelectNowPlayingTracks();
   std::vector<MusicTrackRecord> SelectTracks(int playlistId);
 

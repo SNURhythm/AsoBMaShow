@@ -45,6 +45,7 @@ public:
   void configureTab(float topInset, std::function<void()> onClose,
                     Scene *settingsReturnOwner);
   void setTabTopInset(float topInset);
+  bool prepareForStorageMaintenance(std::string &error) override;
   void onPause() override;
   void onResume() override;
   void onLanguageChanged() override;

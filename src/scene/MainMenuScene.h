@@ -85,6 +85,8 @@ public:
   explicit MainMenuScene(ApplicationContext &context, bool showTutorial = false);
   ~MainMenuScene() override;
   void init() override;
+  bool canPrepareForStorageMaintenance(std::string &error) override;
+  bool prepareForStorageMaintenance(std::string &error) override;
   void onPause() override;
   void onInputQueueOverflow() override;
   void onResume() override;

@@ -641,6 +641,44 @@ void testConcurrentScannerCheckpointsReturnPausedForEveryScanOperation() {
   }
 }
 
+void testBatchRefreshIndexesEveryRequestedRoot() {
+  using namespace chart_library_tasks;
+  TempDirectory temporary;
+  const auto first = temporary.path() / "first";
+  const auto second = temporary.path() / "second";
+  writeChart(first); writeChart(second);
+  std::ofstream(first / "sample.wav") << "initial resource";
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "batch refresh repository is ready");
+  bool reloadRequested = false;
+  ChartLibraryOperations operations(dependencies(repository, temporary.path(), reloadRequested));
+  TaskRequest request;
+  request.kind = TaskKind::RefreshPath;
+  request.refreshPaths = {first, second};
+  const auto result = operations.run(request, {}, [](const auto &, const auto &) {}, [] { return true; });
+  auto session = repository.OpenSession();
+  expect(result.disposition == TaskRunDisposition::Complete && session->CountAllChartMeta() == 2 && reloadRequested,
+      "one batch refresh indexes both disjoint roots and publishes completion");
+  // No charts means the scanner has no row mutation to publish. Editing an
+  // existing resource also preserves directory membership and its timestamp.
+  const auto resources = temporary.path() / "resources";
+  std::filesystem::create_directories(resources);
+  std::ofstream(resources / "sample.wav") << "initial";
+  request.refreshPaths = {resources};
+  operations.run(request, {}, [](const auto &, const auto &) {}, [] { return true; });
+  const auto before = repository.GetLibraryRevision();
+  std::ofstream(resources / "sample.wav") << "resource-only change";
+  operations.run(request, {}, [](const auto &, const auto &) {}, [] { return true; });
+  const auto changes = repository.GetLibraryChangesSince(before);
+  expect(changes.revision > before && !changes.unknown &&
+      changes.roots == std::vector<std::filesystem::path>{resources},
+      "resource-only refresh publishes only its storage scope without changing chart rows");
+  request.storageMeasurementsCurrent = true;
+  operations.run(request, {}, [](const auto &, const auto &) {}, [] { return true; });
+  expect(repository.GetLibraryRevision() == changes.revision,
+      "maintenance refresh does not invalidate resource deltas already applied by the storage job");
+}
+
 void testAddingFolderRefreshesAccessForEveryEffectiveEntry() {
   TempDirectory temporary;
   const auto existingRoot = temporary.path() / "existing";
@@ -1310,6 +1348,7 @@ int main() {
   testRebuildTaskRetriesPreserveInitializationAndArchiveProgress(true, true, true);
   testFailedFolderRegistrationCanBeRetriedThroughTheService();
   testConcurrentScannerCheckpointsReturnPausedForEveryScanOperation();
+  testBatchRefreshIndexesEveryRequestedRoot();
   testAddingFolderRefreshesAccessForEveryEffectiveEntry();
   testPathRefreshReconcilesOnlyTheRequestedSubtree();
   testPathRefreshReparsesSamePathAndFolderPreview();

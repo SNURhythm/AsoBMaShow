@@ -43,6 +43,7 @@ struct MainMenuScene {
   struct { bool inProgress() const { return false; } } replayExportJob_;
   std::optional<std::filesystem::path> pendingSelectChartPath;
   struct {
+    std::atomic_bool storageMaintenanceActive = false;
     std::atomic_bool chartLibraryListReloadRequested = false;
     std::atomic_bool chartLibraryFoldersReloadRequested = false;
   } context;

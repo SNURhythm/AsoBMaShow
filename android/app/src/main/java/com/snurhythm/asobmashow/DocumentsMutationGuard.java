@@ -7,16 +7,17 @@ import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.ArrayList;
 
-/** Coordinates document mutations with imports that own a new destination. */
+/** Coordinates document writers, imports, and native storage maintenance. */
 final class DocumentsMutationGuard {
     // Callers hold this monitor across the guard check and actual filesystem
     // mutation. A reservation stays active while a long-running import releases
     // the monitor, allowing mutations in unrelated document subtrees.
     static final Object LOCK = new Object();
     private static final ArrayList<Reservation> reservations = new ArrayList<>();
+    private static final ArrayList<Reservation> writers = new ArrayList<>();
 
     static final class Reservation implements AutoCloseable {
-        final File canonicalOutput;
+        File canonicalOutput;
 
         private Reservation(File output) { canonicalOutput = output; }
 
@@ -25,6 +26,7 @@ final class DocumentsMutationGuard {
                 // Remove by lease identity: closing an old lease twice must not
                 // release a later reservation for the same destination.
                 reservations.remove(this);
+                writers.remove(this);
             }
         }
     }
@@ -43,6 +45,70 @@ final class DocumentsMutationGuard {
             Reservation reservation = new Reservation(canonicalOutput);
             reservations.add(reservation);
             return reservation;
+        }
+    }
+
+    static Reservation reserveWriter(File file) throws IOException {
+        synchronized (LOCK) {
+            File canonical = file.getCanonicalFile();
+            requireUnreservedLocked(canonical.toPath(), false);
+            Reservation lease = new Reservation(canonical);
+            writers.add(lease);
+            return lease;
+        }
+    }
+
+    // Ordinary provider renames remain supported while a writer is open.
+    // Move its lease with the subtree so maintenance cannot miss the open FD.
+    static void pathRenamed(File source, File destination) {
+        synchronized (LOCK) {
+            Path from = source.toPath();
+            Path to = destination.toPath();
+            for (Reservation writer : writers) {
+                Path path = writer.canonicalOutput.toPath();
+                if (isSameOrDescendant(path, from))
+                    writer.canonicalOutput = to.resolve(from.relativize(path)).toFile();
+            }
+        }
+    }
+
+    static final class ReservationGroup implements AutoCloseable {
+        private final ArrayList<Reservation> leases = new ArrayList<>();
+        @Override public void close() {
+            synchronized (LOCK) {
+                for (Reservation lease : leases) lease.close();
+                leases.clear();
+            }
+        }
+    }
+
+    static ReservationGroup reserveExistingSubtrees(String[] paths) throws IOException {
+        synchronized (LOCK) {
+            ReservationGroup group = new ReservationGroup();
+            try {
+                for (String value : paths) {
+                    Path path = new File(value).toPath().toAbsolutePath().normalize();
+                    for (Path part = path; part != null; part = part.getParent()) {
+                        if (Files.isSymbolicLink(part)) throw new IOException("Storage folder is a symbolic link");
+                    }
+                    if (!Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)
+                            && !Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS))
+                        throw new IOException("Storage folder or archive is unavailable");
+                    File canonical = path.toFile().getCanonicalFile();
+                    requireUnreservedLocked(canonical.toPath(), true);
+                    for (Reservation writer : writers) {
+                        if (isSameOrDescendant(writer.canonicalOutput.toPath(), canonical.toPath()))
+                            throw new IOException("Cannot modify documents: import in progress or document writer open");
+                    }
+                    Reservation lease = new Reservation(canonical);
+                    reservations.add(lease);
+                    group.leases.add(lease);
+                }
+                return group;
+            } catch (IOException | RuntimeException error) {
+                group.close();
+                throw error;
+            }
         }
     }
 

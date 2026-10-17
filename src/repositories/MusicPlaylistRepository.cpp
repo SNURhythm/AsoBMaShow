@@ -919,6 +919,8 @@ struct MusicPlaylistRepository::Impl {
   std::mutex mutex;
   sqlite3 *database = nullptr;
   sqlite3 *schemaDatabase = nullptr;
+  SqliteStatementHandle libraryTracks, folderTracks, pathTracks;
+  SqliteStatementHandle requestedGroupInsert, requestedGroupClear, requestedGroupSelect;
 };
 
 MusicPlaylistRepository::Impl::~Impl() { Shutdown(); }
@@ -945,6 +947,8 @@ bool MusicPlaylistRepository::Impl::EnsureDatabase() {
 }
 
 void MusicPlaylistRepository::Impl::Shutdown() {
+  libraryTracks.reset(); folderTracks.reset(); pathTracks.reset();
+  requestedGroupInsert.reset(); requestedGroupClear.reset(); requestedGroupSelect.reset();
   sqlite3 *connection = database;
   database = nullptr;
   Close(connection);
@@ -1705,13 +1709,14 @@ void MusicPlaylistRepository::Impl::SelectLibraryTracks(
       " cm ON cm.path = mg.representative_path "
       "ORDER BY cm.title COLLATE NOCASE, cm.path";
 
-  SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, query, stmt,
+  auto &stmt = libraryTracks;
+  if (!stmt && !prepareSqliteStatementLogged(db, query, stmt,
                                     "selecting music library tracks",
                                     logSqlErrorText)) {
     return;
   }
 
+  sqlite3_reset(stmt);
   while (sqlite3_step(stmt) == SQLITE_ROW) {
     MusicTrackRecord record;
     record.representativeChart = readChartMeta(stmt);
@@ -1720,6 +1725,7 @@ void MusicPlaylistRepository::Impl::SelectLibraryTracks(
     record.useChartPathIdentity = false;
     tracks.push_back(std::move(record));
   }
+  sqlite3_reset(stmt);
 }
 
 void MusicPlaylistRepository::Impl::SelectLibraryGroupTracks(
@@ -1754,12 +1760,14 @@ void MusicPlaylistRepository::Impl::SelectLibraryGroupTracks(
            "cm.difficulty, cm.level, cm.total_notes DESC, cm.length DESC, ";
   query += chartSourceOrderBy("cm");
 
-  SqliteStatementHandle stmt;
-  if (!prepareSqliteStatementLogged(db, query, stmt,
+  auto &stmt = useFolder ? folderTracks : pathTracks;
+  if (!stmt && !prepareSqliteStatementLogged(db, query, stmt,
                                     "selecting music library group tracks",
                                     logSqlErrorText)) {
     return;
   }
+  sqlite3_reset(stmt);
+  sqlite3_clear_bindings(stmt);
   bindSqliteText(stmt, 1, groupKey);
 
   while (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -1769,6 +1777,8 @@ void MusicPlaylistRepository::Impl::SelectLibraryGroupTracks(
     record.useChartPathIdentity = true;
     tracks.push_back(std::move(record));
   }
+  sqlite3_reset(stmt);
+  sqlite3_clear_bindings(stmt);
 }
 
 void MusicPlaylistRepository::Impl::SelectNowPlayingTracks(
@@ -1975,6 +1985,84 @@ MusicPlaylistRepository::SelectLibraryGroupTracks(
     impl_->SelectLibraryGroupTracks(impl_->database, chartMeta, tracks);
   }
   return tracks;
+}
+
+std::vector<std::vector<MusicTrackRecord>> MusicPlaylistRepository::SelectLibraryGroups(
+    const std::vector<bms_parser::ChartMeta> &groups, MusicLibraryQueryMetrics *metrics) {
+  std::lock_guard lock(impl_->mutex);
+  std::vector<std::vector<MusicTrackRecord>> result(groups.size());
+  if (groups.empty() || !impl_->EnsureDatabase()) return result;
+  auto *db = impl_->database;
+  const auto prepare = [&](SqliteStatementHandle &statement, const std::string &query) {
+    if (statement) return true;
+    if (!prepareSqliteStatementLogged(db, query, statement, "preparing batched music groups", logSqlErrorText)) return false;
+    if (metrics) ++metrics->prepared;
+    return true;
+  };
+  if (!impl_->requestedGroupSelect) {
+    if (!execSql(db, "CREATE TEMP TABLE IF NOT EXISTS storage_requested_music_groups("
+        "position INTEGER PRIMARY KEY, key TEXT NOT NULL, folder INTEGER NOT NULL)", "creating requested music groups")) return result;
+    // Explicit joins keep selection proportional to requested groups. Both arms
+    // use existing chart_meta folder/path indexes; preferred-source hashes have
+    // their own indexes. No result cache survives a library update.
+    std::string query = "WITH requested AS (SELECT cm.*, sg.position AS group_position FROM "
+        "temp.storage_requested_music_groups sg CROSS JOIN ";
+    query += kChartMetaTable;
+    query += " cm ON cm.folder=sg.key WHERE sg.folder=1 UNION ALL SELECT cm.*, sg.position AS group_position FROM "
+        "temp.storage_requested_music_groups sg CROSS JOIN ";
+    query += kChartMetaTable;
+    query += " cm ON cm.path=sg.key WHERE sg.folder=0) SELECT ";
+    query += kChartMetaSelectColumns;
+    query += ", cm.group_position FROM requested cm WHERE ";
+    query += asobmshow::chart_sql::preferredChartPredicate("cm", kChartMetaTable);
+    query += " ORDER BY cm.group_position, ";
+    query += musicRepresentativeOrderBy("cm");
+    query += ", cm.title COLLATE NOCASE, cm.subtitle COLLATE NOCASE, cm.difficulty, cm.level, cm.total_notes DESC, cm.length DESC, ";
+    query += chartSourceOrderBy("cm");
+    if (!prepare(impl_->requestedGroupSelect, query)) return result;
+  }
+  if (!prepare(impl_->requestedGroupClear, "DELETE FROM temp.storage_requested_music_groups") ||
+      !prepare(impl_->requestedGroupInsert, "INSERT INTO temp.storage_requested_music_groups VALUES(?1,?2,?3)")) return result;
+  const auto finish = [&](sqlite3_stmt *statement) {
+    if (metrics) {
+      metrics->vmSteps += sqlite3_stmt_status(statement, SQLITE_STMTSTATUS_VM_STEP, 1);
+      metrics->fullScanSteps += sqlite3_stmt_status(statement, SQLITE_STMTSTATUS_FULLSCAN_STEP, 1);
+    } else {
+      sqlite3_stmt_status(statement, SQLITE_STMTSTATUS_VM_STEP, 1);
+      sqlite3_stmt_status(statement, SQLITE_STMTSTATUS_FULLSCAN_STEP, 1);
+    }
+    sqlite3_reset(statement); sqlite3_clear_bindings(statement);
+  };
+  std::string error;
+  SqliteTransactionHandle transaction(db, "SAVEPOINT requested_music_groups", error,
+      "RELEASE requested_music_groups", "ROLLBACK TO requested_music_groups; RELEASE requested_music_groups");
+  if (!transaction.active()) return result;
+  int status = sqlite3_step(impl_->requestedGroupClear); finish(impl_->requestedGroupClear);
+  if (status != SQLITE_DONE) return result;
+  for (std::size_t i = 0; i < groups.size(); ++i) {
+    auto *statement = impl_->requestedGroupInsert.get();
+    const auto &group = groups[i];
+    sqlite3_bind_int64(statement, 1, i);
+    bindSqliteText(statement, 2, chart_storage_identity::StoredPathText(group.Folder.empty() ? group.BmsPath : group.Folder));
+    sqlite3_bind_int(statement, 3, !group.Folder.empty());
+    status = sqlite3_step(statement); finish(statement);
+    if (status != SQLITE_DONE) return result;
+  }
+  if (metrics) ++metrics->selects;
+  auto *statement = impl_->requestedGroupSelect.get();
+  while ((status = sqlite3_step(statement)) == SQLITE_ROW) {
+    const auto position = sqlite3_column_int64(statement, kChartMetaColumnCount);
+    if (position < 0 || static_cast<std::size_t>(position) >= result.size()) { status = SQLITE_CORRUPT; break; }
+    MusicTrackRecord record; record.representativeChart = readChartMeta(statement);
+    record.chartCount = 1; record.useChartPathIdentity = true;
+    result[position].push_back(std::move(record));
+  }
+  finish(statement);
+  if (status != SQLITE_DONE || !transaction.commit(error)) {
+    logSqlError("selecting batched music library groups", db);
+    for (auto &group : result) group.clear();
+  }
+  return result;
 }
 
 std::vector<MusicTrackRecord>

@@ -92,3 +92,13 @@ Java_com_snurhythm_asobmashow_AsoBMaShowActivity_requestFile(
       (success ? "OK" : "ERROR:" + error);
   return utf8ToJString(env, result.c_str());
 }
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_reservePath(
+    JNIEnv *env, jobject activity, jstring path) {
+  fixtureEnv = env;
+  fixtureActivity = activity;
+  std::string error;
+  auto lease = ReserveAndroidStorageSubtrees({std::filesystem::path(jstringToUtf8(env, path))}, error);
+  return lease != nullptr;
+}

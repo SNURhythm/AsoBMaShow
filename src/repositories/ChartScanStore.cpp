@@ -501,8 +501,51 @@ bool clearMetadataRebuildRequired(sqlite3 *database) {
   return true;
 }
 
+// A scoped refresh binds one indexed range per disjoint requested root. The
+// prepared statement is reused across roots, with no whole-library result set.
+template<class Row>
+void visitScopedRows(sqlite3 *database, const char *selectSql,
+    const std::vector<std::filesystem::path> &roots, Row row) {
+  std::vector<std::string> keys;
+  for (const auto &root : roots) {
+    auto key = chart_storage_identity::StoredFolderPathText(root);
+    if (!key.empty()) keys.push_back(std::move(key));
+  }
+  std::ranges::sort(keys);
+  std::vector<std::string> minimal;
+  std::string previousPrefix;
+  for (const auto &key : keys) {
+    if (!minimal.empty() && (key == minimal.back() || key.starts_with(previousPrefix))) continue;
+    minimal.push_back(key); previousPrefix = key;
+    if (previousPrefix.back() != std::filesystem::path::preferred_separator)
+      previousPrefix += std::filesystem::path::preferred_separator;
+  }
+  const bool scoped = !roots.empty();
+  std::string query = selectSql;
+  if (scoped) query += " WHERE path = ?1 OR (path >= ?2 AND path < ?3)";
+  SqliteStatementHandle statement;
+  if (!prepareSqliteStatementLogged(database, query, statement,
+      "selecting scoped scan rows", logSqlErrorText)) throw std::runtime_error("Cannot prepare scan scope query");
+  auto read = [&] {
+    int status;
+    while ((status = sqlite3_step(statement.get())) == SQLITE_ROW) row(statement.get());
+    if (status != SQLITE_DONE) throw std::runtime_error("Cannot read scan scope query");
+  };
+  if (!scoped) { read(); return; }
+  for (const auto &key : minimal) {
+    std::string prefix = key;
+    if (prefix.back() != std::filesystem::path::preferred_separator)
+      prefix += std::filesystem::path::preferred_separator;
+    sqlite3_reset(statement.get()); sqlite3_clear_bindings(statement.get());
+    bindSqliteText(statement.get(), 1, key);
+    bindSqliteText(statement.get(), 2, prefix);
+    bindSqliteText(statement.get(), 3, sqliteLexicographicSuccessor(prefix));
+    read();
+  }
+}
+
 ChartScanSnapshot loadScanSnapshot(sqlite3 *database,
-                                   ChartScanSnapshotLoad load) {
+                                   ChartScanSnapshotLoad load, const std::vector<std::filesystem::path> &roots) {
   ChartScanSnapshot snapshot;
   if (load == ChartScanSnapshotLoad::Full) {
     chart_repository_detail::SelectAllChartMeta(database, snapshot.charts);
@@ -510,41 +553,22 @@ ChartScanSnapshot loadScanSnapshot(sqlite3 *database,
 
   if (load == ChartScanSnapshotLoad::Full ||
       load == ChartScanSnapshotLoad::Reconcile) {
-    SqliteStatementHandle solidStatement;
-    if (prepareSqliteStatementLogged(
-            database, "SELECT path FROM solid_archives", solidStatement,
-            "selecting solid archive paths", logSqlErrorText)) {
-      while (sqlite3_step(solidStatement.get()) == SQLITE_ROW) {
-        snapshot.solidArchives.push_back(
-            {.path = storedPathFromDatabase(
-                 sqliteColumnString(solidStatement.get(), 0))});
-      }
-    }
-
-    const char *cacheQuery =
-        "SELECT path, archive_size, mtime_ns, solid, uncompressed_size, "
-        "file_count, chart_count FROM archive_scan_cache";
-    SqliteStatementHandle cacheStatement;
-    if (prepareSqliteStatementLogged(database, cacheQuery, cacheStatement,
-                                     "selecting archive scan cache",
-                                     logSqlErrorText)) {
-      while (sqlite3_step(cacheStatement.get()) == SQLITE_ROW) {
-        snapshot.archiveCache.push_back({
-            .path = storedPathFromDatabase(
-                sqliteColumnString(cacheStatement.get(), 0)),
-            .archiveSize = sqlite3_column_int64(cacheStatement.get(), 1),
-            .mtimeNs = sqlite3_column_int64(cacheStatement.get(), 2),
-            .solid = sqlite3_column_int(cacheStatement.get(), 3) != 0,
-            .uncompressedSize =
-                static_cast<std::uint64_t>(std::max<sqlite3_int64>(
-                    0, sqlite3_column_int64(cacheStatement.get(), 4))),
-            .fileCount =
-                std::max(0, sqlite3_column_int(cacheStatement.get(), 5)),
-            .chartCount = sqlite3_column_int(cacheStatement.get(), 6),
-        });
-      }
-    }
+    visitScopedRows(database, "SELECT path FROM solid_archives", roots, [&](sqlite3_stmt *row) {
+      snapshot.solidArchives.push_back({.path = storedPathFromDatabase(sqliteColumnString(row, 0))});
+    });
+    visitScopedRows(database,
+        "SELECT path, archive_size, mtime_ns, solid, uncompressed_size, file_count, chart_count FROM archive_scan_cache",
+        roots, [&](sqlite3_stmt *row) {
+      snapshot.archiveCache.push_back({
+          .path = storedPathFromDatabase(sqliteColumnString(row, 0)),
+          .archiveSize = sqlite3_column_int64(row, 1), .mtimeNs = sqlite3_column_int64(row, 2),
+          .solid = sqlite3_column_int(row, 3) != 0,
+          .uncompressedSize = static_cast<std::uint64_t>(std::max<sqlite3_int64>(0, sqlite3_column_int64(row, 4))),
+          .fileCount = std::max(0, sqlite3_column_int(row, 5)), .chartCount = sqlite3_column_int(row, 6)});
+    });
   }
+  // Completion markers and checkpoint belong to the shared resumable scan;
+  // scoped refreshes must preserve markers for the rest of that scan.
 
   selectCompletedArchives(database, snapshot.completedArchives);
   ChartScanCheckpoint checkpoint;
@@ -572,7 +596,7 @@ bool ChartRepository::Session::InsertChartMeta(
                                   .count())) {
     return false;
   }
-  chart_repository_detail::BumpLibraryRevision();
+  chart_repository_detail::BumpLibraryRevision({chartMeta.Folder.empty() ? chartMeta.BmsPath.parent_path() : chartMeta.Folder});
   return true;
 }
 
@@ -613,17 +637,29 @@ struct ChartRepository::Session::ScanBatch::Impl {
       return false;
     }
     transaction.reset();
+    if (unknownRoots || !changedRoots.empty()) {
+      chart_repository_detail::BumpLibraryRevision(unknownRoots ? std::vector<std::filesystem::path>{} :
+          std::vector<std::filesystem::path>(changedRoots.begin(), changedRoots.end()));
+      changedRoots.clear(); unknownRoots = false;
+    }
     return true;
   }
 
-  void noteChanged() {
+  void noteRoot(const std::filesystem::path &root) {
+    if (unknownRoots) return;
+    changedRoots.insert(root.lexically_normal());
+    if (root.empty() || changedRoots.size() > 4096) { changedRoots.clear(); unknownRoots = true; }
+  }
+
+  void noteChanged(const std::filesystem::path &root) {
     if (sqlite3_changes(database()) > 0) {
       ++changedCount;
+      noteRoot(root);
     }
   }
 
-  void noteFolderChanged(bool changed = true) {
-    folderChanged = folderChanged || changed;
+  void noteFolderChanged(const std::filesystem::path &root, bool changed = true) {
+    if (changed) noteRoot(root);
   }
 
   bool ensureChartInsertStatement() {
@@ -682,7 +718,8 @@ struct ChartRepository::Session::ScanBatch::Impl {
   SqliteStatementHandle sourcePreferenceUpdateStatement;
   const std::int64_t addDateSeconds;
   int changedCount = 0;
-  bool folderChanged = false;
+  std::set<std::filesystem::path> changedRoots;
+  bool unknownRoots = false;
   bool ready = false;
   bool committed = false;
   bool chartInsertStatementAttempted = false;
@@ -719,7 +756,7 @@ bool ChartRepository::Session::ScanBatch::UpsertChart(
                               sequenceFeatures, impl_->addDateSeconds)) {
     return false;
   }
-  impl_->noteChanged();
+  impl_->noteChanged(meta.Folder.empty() ? meta.BmsPath.parent_path() : meta.Folder);
   return true;
 }
 
@@ -743,7 +780,7 @@ bool ChartRepository::Session::ScanBatch::UpdateChartHasDocument(
     return false;
   }
   if (sqlite3_changes(impl_->database()) > 0) {
-    impl_->noteChanged();
+    impl_->noteChanged(path.parent_path());
   }
   return true;
 }
@@ -767,7 +804,7 @@ bool ChartRepository::Session::ScanBatch::DeleteChart(
     logSqlError("deleting a chart", impl_->database());
     return false;
   }
-  impl_->noteChanged();
+  impl_->noteChanged(path.parent_path());
   return true;
 }
 
@@ -786,7 +823,6 @@ bool ChartRepository::Session::ScanBatch::DeleteCharts(
           logSqlErrorText)) {
     return false;
   }
-  bool changed = false;
   for (const auto &path : paths) {
     std::filesystem::path relative = path;
     chart_storage_identity::ToRelativePath(relative);
@@ -797,10 +833,7 @@ bool ChartRepository::Session::ScanBatch::DeleteCharts(
       logSqlError("deleting chart paths", impl_->database());
       return false;
     }
-    changed = changed || sqlite3_changes(impl_->database()) > 0;
-  }
-  if (changed) {
-    impl_->noteChanged();
+    impl_->noteChanged(path.parent_path());
   }
   return true;
 }
@@ -840,7 +873,7 @@ bool ChartRepository::Session::ScanBatch::DeleteChartsInArchive(
     return false;
   }
   if (sqlite3_changes(impl_->database()) > 0) {
-    impl_->noteChanged();
+    impl_->noteChanged(archivePath);
   }
   return true;
 }
@@ -862,7 +895,7 @@ bool ChartRepository::Session::ScanBatch::DeleteSolidArchive(
     logSqlError("deleting solid archive", impl_->database());
     return false;
   }
-  impl_->noteChanged();
+  impl_->noteChanged(path);
   return true;
 }
 
@@ -883,7 +916,7 @@ bool ChartRepository::Session::ScanBatch::DeleteArchiveCache(
     logSqlError("deleting archive scan cache", impl_->database());
     return false;
   }
-  impl_->noteChanged();
+  impl_->noteChanged(path);
   return true;
 }
 
@@ -934,7 +967,7 @@ bool ChartRepository::Session::ScanBatch::UpsertSolidArchive(
     logSqlError("inserting solid archive", impl_->database());
     return false;
   }
-  impl_->noteChanged();
+  impl_->noteChanged(update.path);
   return true;
 }
 
@@ -986,7 +1019,7 @@ bool ChartRepository::Session::ScanBatch::UpsertArchiveCache(
     logSqlError("upserting archive scan cache", impl_->database());
     return false;
   }
-  impl_->noteChanged();
+  impl_->noteChanged(update.path);
   return true;
 }
 
@@ -1016,7 +1049,7 @@ bool ChartRepository::Session::ScanBatch::UpdateSourcePreference(
     logSqlError("updating chart source preference", impl_->database());
     return false;
   }
-  impl_->noteChanged();
+  impl_->noteChanged(update.path.parent_path());
   return true;
 }
 
@@ -1064,7 +1097,7 @@ bool ChartRepository::Session::ScanBatch::UpdateSourcePreferenceInArchive(
     return false;
   }
   if (sqlite3_changes(impl_->database()) > 0) {
-    impl_->noteChanged();
+    impl_->noteChanged(archivePath);
   }
   return true;
 }
@@ -1183,7 +1216,7 @@ bool ChartRepository::Session::ScanBatch::SynchronizeFolders(
         logSqlError("deleting missing folder scan record", impl_->database());
         return false;
       }
-      impl_->noteFolderChanged();
+      impl_->noteFolderChanged(path);
       deleted.insert(path);
     }
     return true;
@@ -1241,7 +1274,7 @@ bool ChartRepository::Session::ScanBatch::SynchronizeFolders(
         logSqlError("upserting folder scan record", impl_->database());
         return false;
       }
-      impl_->noteFolderChanged(valuesChanged);
+      impl_->noteFolderChanged(path, valuesChanged);
     }
 
     if (const auto existingChildren = storedChildren.find(path);
@@ -1368,9 +1401,6 @@ bool ChartRepository::Session::ScanBatch::Commit() {
   }
   impl_->committed = true;
   impl_->ready = false;
-  if (impl_->changedCount > 0 || impl_->folderChanged) {
-    chart_repository_detail::BumpLibraryRevision();
-  }
   return true;
 }
 
@@ -1379,28 +1409,17 @@ int ChartRepository::Session::ScanBatch::ChangedCount() const {
 }
 
 ChartScanSnapshot ChartRepository::Session::LoadScanSnapshot(
-    ChartScanSnapshotLoad load) {
-  return loadScanSnapshot(impl_->database(), load);
+    ChartScanSnapshotLoad load, const std::vector<std::filesystem::path> &roots) {
+  return loadScanSnapshot(impl_->database(), load, roots);
 }
 
 std::vector<ChartScanReconcileIdentity>
-ChartRepository::Session::LoadScanReconcileIdentities() {
+ChartRepository::Session::LoadScanReconcileIdentities(const std::vector<std::filesystem::path> &roots) {
   std::vector<ChartScanReconcileIdentity> identities;
-  sqlite3 *database = impl_->database();
-  SqliteStatementHandle statement;
-  if (!prepareSqliteStatementLogged(
-          database, "SELECT path, md5, sha256 FROM chart_meta", statement,
-          "selecting chart scan reconcile identities", logSqlErrorText)) {
-    return identities;
-  }
-  while (sqlite3_step(statement.get()) == SQLITE_ROW) {
-    identities.push_back({
-        .path = storedPathFromDatabase(
-            sqliteColumnString(statement.get(), 0)),
-        .md5 = normalizedHash(sqliteColumnString(statement.get(), 1)),
-        .sha256 = normalizedHash(sqliteColumnString(statement.get(), 2)),
-    });
-  }
+  visitScopedRows(impl_->database(), "SELECT path, md5, sha256 FROM chart_meta", roots, [&](sqlite3_stmt *row) {
+    identities.push_back({.path = storedPathFromDatabase(sqliteColumnString(row, 0)),
+        .md5 = normalizedHash(sqliteColumnString(row, 1)), .sha256 = normalizedHash(sqliteColumnString(row, 2))});
+  });
   return identities;
 }
 

@@ -972,7 +972,23 @@ bool MusicPlayerService::ShuffleQueue(std::string &errorMessage) {
   return true;
 }
 
+bool MusicPlayerService::SetStorageMaintenance(bool active, std::string &errorMessage) {
+  {
+    std::lock_guard admission(playbackAdmissionMutex);
+    storageMaintenance = active;
+    native_music_player::SetControlEventsEnabled(!active);
+  }
+  if (!active) return true;
+  // Do not hold admission while joining the native event pump: it may be
+  // finishing a Next/Previous request which must now observe the closed gate.
+  Stop(errorMessage);
+  errorMessage.clear();
+  return !native_music_player::IsSupported() || native_music_player::Unload(errorMessage);
+}
+
 bool MusicPlayerService::PlayCurrent(std::string &errorMessage) {
+  std::lock_guard admission(playbackAdmissionMutex);
+  if (storageMaintenance) { errorMessage = "Storage maintenance is active."; return false; }
   std::lock_guard<std::mutex> lock(stateMutex);
   return PlayCurrentLocked(errorMessage);
 }
@@ -988,6 +1004,8 @@ bool MusicPlayerService::PlayCurrentLocked(std::string &errorMessage) {
 }
 
 bool MusicPlayerService::PlayNext(std::string &errorMessage) {
+  std::lock_guard admission(playbackAdmissionMutex);
+  if (storageMaintenance) { errorMessage = "Storage maintenance is active."; return false; }
   std::lock_guard<std::mutex> lock(stateMutex);
   return PlayNextLocked(errorMessage);
 }
@@ -1004,6 +1022,8 @@ bool MusicPlayerService::PlayNextLocked(std::string &errorMessage) {
 }
 
 bool MusicPlayerService::PlayPrevious(std::string &errorMessage) {
+  std::lock_guard admission(playbackAdmissionMutex);
+  if (storageMaintenance) { errorMessage = "Storage maintenance is active."; return false; }
   std::lock_guard<std::mutex> lock(stateMutex);
   return PlayPreviousLocked(errorMessage);
 }
@@ -1062,6 +1082,8 @@ bool MusicPlayerService::PlayPreviousAsync(std::string &statusMessage,
 }
 
 bool MusicPlayerService::Resume(std::string &errorMessage) {
+  std::lock_guard admission(playbackAdmissionMutex);
+  if (storageMaintenance) { errorMessage = "Storage maintenance is active."; return false; }
   std::lock_guard<std::mutex> lock(stateMutex);
   return native_music_player::Play(errorMessage);
 }
@@ -1111,6 +1133,8 @@ audio::PlaybackRate MusicPlayerService::PlaybackRate() const {
 
 bool MusicPlayerService::SetClubMode(bool enabled,
                                      std::string &statusMessage) {
+  std::lock_guard admission(playbackAdmissionMutex);
+  if (storageMaintenance) { statusMessage = "Storage maintenance is active."; return false; }
   std::optional<music_playlist::MusicTrack> track;
   bool appliedImmediately = false;
   {
@@ -1366,6 +1390,8 @@ bool MusicPlayerService::PlayTrackLocked(
 bool MusicPlayerService::StartPlaybackAsync(PlaybackRequest request,
                                             i18n::Text &statusMessage,
                                             i18n::Text successMessage) {
+  std::lock_guard admission(playbackAdmissionMutex);
+  if (storageMaintenance) { statusMessage = "Storage maintenance is active."; return false; }
   statusMessage = {};
   if (!native_music_player::IsSupported()) {
     statusMessage = i18n::message("music_player.service.native_unavailable.message");

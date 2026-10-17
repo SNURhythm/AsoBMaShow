@@ -5622,6 +5622,28 @@ bool StopIOSNativeMusic(std::string &errorMessage) {
   }
 }
 
+bool UnloadIOSNativeMusic(std::string &errorMessage) {
+  errorMessage.clear();
+  @autoreleasepool {
+    @synchronized(IOSNativeMusicLock()) {
+      ++gIOSNativeMusicTransportGeneration;
+      gIOSNativeMusicResumeAfterInterruption = false;
+      if (gIOSNativeMusicFinishedObserver != nil) {
+        [[NSNotificationCenter defaultCenter] removeObserver:gIOSNativeMusicFinishedObserver];
+        gIOSNativeMusicFinishedObserver = nil;
+      }
+      [gIOSNativeMusicPlayer pause];
+      gIOSNativeMusicPlayer = nil;
+      // The feeder never takes this monitor; its destruction joins safely.
+      gIOSNativeMusicStream.reset();
+      gIOSNativeMusicMetadata = {};
+      gIOSNativeMusicQueue = {};
+      PublishIOSNativeMusicNowPlayingInfoLocked(nil, false);
+      return RestoreIOSForegroundAudioSession(errorMessage);
+    }
+  }
+}
+
 bool SeekIOSNativeMusic(long long positionMicros, std::string &errorMessage) {
   errorMessage.clear();
   @autoreleasepool {

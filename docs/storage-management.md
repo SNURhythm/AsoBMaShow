@@ -1,0 +1,226 @@
+# Chart storage management
+
+Open **Settings → BMS Library → Storage Management** to reduce installed package
+sizes. Select folders, choose independent audio and BGA actions, then use
+**Review changes → Confirm & apply**. Defaults keep all media unchanged.
+
+## What a selection includes
+
+Each checkbox selects the entire folder and its subfolders: every difficulty's
+resources, preview audio, and unreferenced media. Expanding a row shows its charts;
+it does not narrow the operation to that chart. Nested selections are processed
+as a union, so a file is changed only once. Search keeps hidden selections; the
+selected count tells you how many are hidden.
+
+The tool does not scan chart references or discover owners outside the selected
+folders. Selecting a folder therefore also affects any other chart that uses its
+media. Chart files and paths remain unchanged, preserving their hashes and the
+identities used by scores, replays, favorites and playlists. The app resolves
+converted resources through its existing extension fallback. Other BMS players
+may have different fallback behavior.
+
+Rows show logical file bytes, including separate audio, video and preserved-image
+totals. These are not physical disk-allocation measurements. Unknown or unreadable
+sizes remain unavailable. The review reports eligible input bytes; compression
+savings are only known after encoding and validation.
+Hard-linked regular files contribute their logical bytes at each selected path,
+but are excluded from modification. Overlapping selected folders count each path
+only once in the combined total.
+
+Browsing measures sizes in the background and publishes completed folder totals
+as they become available. It keeps folder summaries rather than every asset in
+memory. Review scans only the selected folder union for conversion eligibility;
+successful changes update known row totals directly. Uncertain results refresh
+only rows inside the changed subtrees. A strict ancestor whose total cannot be
+updated safely stays unavailable until **Refresh**, so a subset operation does
+not recursively scan unrelated sibling folders. Opening confirmation does not
+scan the entire library again.
+
+Library refreshes invalidate sizes for their changed source paths, including
+nonrepresentative charts and resource-only changes. Unrelated completed rows stay
+cached. The bounded change history conservatively invalidates all sizes if it
+cannot identify the changed scopes. Cached sizes are estimates: external edits
+become visible after a library refresh or an explicit storage **Refresh**.
+
+## Audio choices
+
+| Choice | Behavior |
+| --- | --- |
+| Keep | Leave audio unchanged. |
+| Lossless FLAC | Convert supported integer PCM WAV to FLAC, verifying identical decoded samples, rate, channels and length. |
+| Lossy Ogg Vorbis | Convert supported WAV/FLAC to Vorbis at quality 0.5, preserving rate, channels and length. |
+
+Lossless conversion supports 8-, 16- and 24-bit integer PCM. Float and 32-bit PCM
+WAV are skipped rather than silently quantized. Existing Ogg and MP3 are never
+recompressed. Unsupported channel layouts and playback-critical metadata that
+cannot be preserved are skipped. Vorbis changes sample values; keep a separate
+backup if you may want the originals later.
+
+The output keeps the filename stem with `.flac` or `.ogg`. It replaces the source
+only after full decode validation and only if strictly smaller. Ambiguous
+same-stem alternatives or existing destinations are skipped, never overwritten.
+
+## BGA video choices
+
+**Compress to H.264** uses software x264, an MP4 container and the `medium` preset.
+High, Balanced and Smaller quality correspond to CRF 18, 23 and 28; Balanced is
+the default. One conversion runs at a time, with at most two encoder threads.
+The main saving is replacing inefficient video such as MPEG-1; resizing is optional.
+
+Resolution choices are Original, 1920 × 1080, 1280 × 720, 854 × 480 and 640 × 360.
+They bound the displayed long and short edges, preserving aspect ratio and
+orientation without upscaling. For example, a square 1024 × 1024 source capped at
+1280 × 720 becomes 720 × 720. Original preserves geometry, except odd coded
+dimensions may shrink by one pixel per axis for 4:2:0 encoder alignment, with
+sample aspect ratio adjusted to preserve display shape.
+
+FPS choices are Original, 60, 30, 24 and 15. Original retains presentation timing,
+including variable-rate gaps. A cap drops frames when needed without duplicating
+frames or slowing playback. Retained frames use a rational time grid when frame
+reduction is necessary; timing adjustment is bounded by one cap interval. A
+30000/1001 source remains unchanged under a 30 FPS cap.
+
+Embedded audio is retained: compatible streams are remuxed; supported other audio
+is converted to AAC at 128 kbit/s. Unsupported HDR, alpha, interlacing, stream
+layouts or essential metadata produce a skip rather than a destructive conversion.
+
+Existing H.264 already within the caps is skipped, even if a different quality
+preset is selected. Every candidate is decoded and validated. **An output must
+be smaller to be installed, even when caps were requested.** A “not smaller” result
+means the original remains and its requested caps were not applied.
+
+**Delete BGA videos** permanently removes supported video files throughout the
+selected folders, including nested, unreferenced and alternate versions. Supported
+extensions are MP4, WMV, M4V, WebM, MPG, MPEG, M1V, M2V and AVI. All images are kept,
+including static/layer/miss BGAs, stage artwork, banners and backgrounds. Audio,
+charts and other files are also kept. Deletion has no undo after completion.
+
+## Supported locations
+
+Writable ordinary local folders are supported, including app-owned mobile
+downloads/imports and accessible writable iOS folders. Writable local archives
+can also be updated in place:
+
+| Container | In-place support |
+| --- | --- |
+| ZIP / ZIP64 | Single-volume archives with stored or deflated regular files and directories. |
+| TAR | Uncompressed USTAR regular files and directories. |
+| Other formats or layouts | Excluded with a format/layout explanation. No full-copy fallback. |
+
+Encrypted/split ZIPs, links, overlapping or ambiguous entries, compressed TARs,
+GNU/PAX/sparse TAR records, RAR and 7z are not supported by the in-place updater.
+Reading these formats elsewhere in the app remains separate from update support.
+Android SAF/content-provider references require the existing local import flow.
+Symlinks, hard links, special files and unsafe filesystem paths are rejected.
+
+Selecting several folders inside one archive creates one batch. Only the selected
+media changes; charts, images and unselected entry contents stay intact. Review
+shows uncompressed eligible input bytes. Reported savings are the reduction in
+the archive's file length, which can differ from filesystem allocation.
+
+There is no second complete archive or extracted tree. A disk-backed index and
+bounded redo buffers accompany one extracted input, encoded output and prepared
+replacement at a time. The media staging budget is 1 GiB, additionally limited by
+free space; an entry must fit a conservative three-times-input estimate plus
+8 MiB. Oversized entries are skipped. A conversion must reduce the stored archive
+record too: a smaller FLAC can still be skipped when the original ZIP compression
+was more compact. Each batch compacts the archive once and rebuilds its metadata.
+
+## Progress, cancellation and recovery
+
+Progress separates scanning, encoding, verification and commit. Manual work stops
+music/preview readers and reserves library maintenance; competing playback or
+library operations cannot start during the mutation. Back requests cancellation
+and returns after the worker releases maintenance. Mobile backgrounding cancels
+manual work at a safe checkpoint.
+All scene admission checks run before media is stopped, so a rejected request
+leaves existing playback alone.
+
+Ordinary local files commit separately. Cancel keeps already completed changes and retains
+uncommitted originals; it does not roll back the entire batch. Output is staged
+privately, validated, then installed using a journal and same-volume temporary
+files/backups. On POSIX systems, replacements preserve the source's access
+permission bits. Startup recovery checks interrupted transactions before admitting
+new work. After successful recovery, abandoned private encoding candidates are
+removed; unrecognized files and unresolved recovery state are retained. Do not
+manually remove recovery files while an operation is pending.
+
+Archives use durable forward recovery instead of a full backup. Before overwriting
+a bounded chunk, the updater saves its redo bytes and progress, then syncs the
+archive before advancing. Interruption recovery validates the file identity,
+completed output and remaining input before resuming. Cancellation stops new
+conversions and finishes the archive with the changes already accepted; this
+finalization can take time for a large archive. Archive recovery runs before
+playback and library readers are admitted. Keep both the archive and its private
+recovery directory intact if recovery is required.
+Completed archive journals enter a durable cleanup-only state before their
+metadata is removed, so interrupted cleanup can finish on the next startup.
+
+Independent folders can convert audio concurrently: up to four workers on
+desktop. Mobile scanning and audio conversion use the same worker policy as chart
+audio loading, reserving
+processor capacity for foreground threads (for example, four workers on six
+logical processors and six on eight). Actual concurrency is also limited by
+available independent folders and temporary space. A folder and its selected
+ancestors finish in order; video remains one job at a time. Cancellation waits for active transactions to
+settle before releasing library maintenance. A recovery failure stops new work
+across all workers. Temporary-space budgets cover concurrent outputs and are
+checked against available disk space before each file starts.
+
+The result includes converted, deleted, skipped and failed counts. Reclaimed
+bytes are counted only when obsolete originals/backups have actually been removed.
+Common outcomes:
+
+| Outcome | Meaning |
+| --- | --- |
+| Already optimized / not smaller | Original retained; no savings claimed for that file. |
+| Unsupported format / codec unavailable | This build cannot safely perform the requested operation. |
+| Collision / unsafe path / stale input | Filesystem evidence is ambiguous or changed; original retained. Refresh and review again. |
+| Unavailable / insufficient space / I/O or validation failure | The affected scope/file could not be processed safely; inspect the reason before retrying. |
+| Cleanup pending | A known obsolete backup remains. Its bytes are not counted as reclaimed; recovery can retry cleanup. |
+| Recovery required | Retained state needs recovery before further mutation. Keep the affected files and private recovery records intact. |
+
+## Automatic Find BMS downloads
+
+Settings offers a separate download policy and **Save storage after download**
+toggle, initially Off. It is profile-specific and independent of the manual policy.
+Enabling video deletion requires an explicit acknowledgment. Find BMS previews
+the captured policy; changing profiles/settings does not alter an active attempt.
+
+A non-no-op enabled policy forces extraction for that attempt, even when
+**Skip unarchive** is saved. The saved extraction preference is not changed.
+Keep/Keep does not force extraction. Processing happens after chart verification,
+inside private extracted staging, before package promotion and library registration.
+All chart paths and content are verified unchanged again before commit.
+
+Ordinary per-file skips/failures keep originals and allow a verified download to
+finish with a warning summary. Cancellation, unsettled recovery or cleanup state
+prevents promotion. A hash-mismatch package explicitly kept by the user remains
+unoptimized. Automatic work pauses during foreground gameplay or mobile
+backgrounding and remains cancellable.
+
+## Developer verification
+
+See [scale measurements and platform limits](testing/storage-scale-2026-10-18.md)
+for the opt-in benchmark, selected worker defaults and remaining dense-directory
+validation cost.
+
+Storage tests belong to the library, audio, video, settings and UI groups listed
+in [the testing guide](testing/README.md). `storage_optimizer_tests` includes a
+disposable library with real FLAC, Vorbis and H.264 encoders, caps, deletion,
+overlapping selections, archive eligibility, unchanged chart/profile identities,
+and resource resolution/decoding after replacement. Download workflow fixtures
+cover extraction precedence, cancellation, warnings, mismatch handling and commit
+ordering without fetching a real package.
+
+Verification for this implementation used the desktop grouped suites and a real
+disposable-library conversion, plus the iOS and Android build-only paths and native
+codec/file transaction tests on iOS 27.1 Simulator and the Android 10 emulator.
+The desktop music UI was inspected, but
+that build reports native music playback unavailable. Windows build and filesystem
+execution were not available in this session; they remain release validation work.
+
+Archive update coverage includes desktop ZIP/TAR batching, sparse ZIP64 offsets,
+legacy filenames, real FLAC playback resolution, overlapping-write recovery and
+interrupted journal cleanup. The archive additions also pass iOS and Android
+build-only checks; giant-library device performance has not been measured.

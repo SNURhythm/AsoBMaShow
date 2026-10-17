@@ -191,17 +191,19 @@ public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
                 return ParcelFileDescriptor.open(file, access);
             }
             policy.requireWritable(file);
-            DocumentsMutationGuard.requireUnreserved(file, false);
+            DocumentsMutationGuard.Reservation writer = DocumentsMutationGuard.reserveWriter(file);
             boolean bms = DocumentsPathPolicy.affectsBms(documentId);
             DocumentsLibraryChanges changes = changes(getContext());
             // A folder can be renamed into BMS while its writer is still open.
             changes.writerOpened(SystemClock.elapsedRealtime(), bms);
             try {
                 return ParcelFileDescriptor.open(file, access, closeHandler, error -> {
+                    writer.close();
                     changes.writerClosed(SystemClock.elapsedRealtime());
                     notifyDocument(documentId);
                 });
             } catch (IOException | RuntimeException error) {
+                writer.close();
                 changes.writerClosed(SystemClock.elapsedRealtime());
                 throw error;
             }
@@ -261,6 +263,7 @@ public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
             if (source.equals(destination)) return documentId;
             if (destination.exists()) throw new IOException("A document with that name already exists");
             Files.move(source.toPath(), destination.toPath());
+            DocumentsMutationGuard.pathRenamed(source, destination);
             String renamed = policy.documentId(destination);
             changed(documentId);
             changed(renamed);

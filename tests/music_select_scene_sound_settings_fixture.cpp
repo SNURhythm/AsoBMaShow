@@ -50,6 +50,7 @@ struct MusicSelectScene {
     struct Settings { std::string skinSelectSoundSetPath, skinSelectSoundSetBookmark; } settings;
     struct Jukebox { int audioRuntime() { return 0; } } jukebox;
     std::atomic_bool appInBackground = false;
+    std::atomic_bool storageMaintenanceActive = false;
   } context;
   struct Controller { void reset() {} } previewController_;
   std::unique_ptr<MusicSelectPreviewAudioService> previewAudio_;

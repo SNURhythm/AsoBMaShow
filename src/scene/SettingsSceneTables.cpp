@@ -328,6 +328,7 @@ void SettingsScene::hideDifficultyTableImportModal() {
 }
 
 void SettingsScene::addDifficultyTableFromUrl() {
+  if (context.storageMaintenanceActive) return;
   if (libraryTask.running()) {
     return;
   }
@@ -405,6 +406,7 @@ void SettingsScene::addDifficultyTableFromUrl() {
 }
 
 void SettingsScene::updateDifficultyTableFromSource(int tableId) {
+  if (context.storageMaintenanceActive) return;
   if (libraryTask.running() || tableId <= 0) {
     return;
   }
@@ -446,6 +448,7 @@ void SettingsScene::updateDifficultyTableFromSource(int tableId) {
 }
 
 void SettingsScene::deleteDifficultyTable(int tableId) {
+  if (context.storageMaintenanceActive) return;
   if (libraryTask.running() || tableId <= 0) {
     return;
   }
@@ -490,6 +493,7 @@ void SettingsScene::deleteDifficultyTable(int tableId) {
 }
 
 void SettingsScene::refreshChartLibrary() {
+  if (context.storageMaintenanceActive) return;
   if (libraryTask.running()) {
     return;
   }
@@ -597,6 +601,7 @@ void SettingsScene::refreshChartLibrary() {
 
 void SettingsScene::setFindBmsDownloadEntry(
     const std::string &entryPathText) {
+  if (context.storageMaintenanceActive) return;
   auto session = context.chartRepository.OpenSession();
   if (!session.has_value()) {
     chartFolderStatusMessage = i18n::message("settings.difficulty_tables.could_not_open_chart_database.message");
@@ -621,6 +626,7 @@ void SettingsScene::setFindBmsDownloadEntry(
 }
 
 void SettingsScene::deleteChartEntry(const std::string &entryPathText) {
+  if (context.storageMaintenanceActive) return;
   if (libraryTask.running() || entryPathText.empty()) {
     return;
   }

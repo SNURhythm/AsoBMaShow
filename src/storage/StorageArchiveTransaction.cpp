@@ -1,0 +1,455 @@
+#include "StorageArchiveTransaction.h"
+#include "StorageArchiveDb.h"
+#include "StoragePathIndex.h"
+#include "../AtomicFile.h"
+#include "../FileChecksum.h"
+#include "../Uuid.h"
+#include <algorithm>
+#include <cstdio>
+#include <zlib.h>
+
+namespace storage_management {
+namespace fs = std::filesystem;
+using namespace archive_detail;
+namespace {
+constexpr std::uint64_t chunkSize = 512 * 1024, stagingReserve = 8 * 1024 * 1024;
+std::string pathText(const fs::path &path) { const auto text = path.generic_u8string(); return {text.begin(), text.end()}; }
+void syncDirectory(const fs::path &path) {
+  std::string error; if (!atomic_file::syncDirectory(path, error)) throw StorageArchiveError(StorageReason::IoError, error);
+}
+void syncFile(const fs::path &path) {
+  std::string error; if (!atomic_file::syncFile(path, error)) throw StorageArchiveError(StorageReason::IoError, error);
+}
+struct SqlTransaction {
+  Database &db; bool committed = false;
+  explicit SqlTransaction(Database &db) : db(db) { db.exec("BEGIN IMMEDIATE"); }
+  ~SqlTransaction() { if (!committed) sqlite3_exec(db.value, "ROLLBACK", nullptr, nullptr, nullptr); }
+  void Commit() { db.exec("COMMIT"); committed = true; }
+};
+struct Output {
+  FILE *file = nullptr;
+  explicit Output(const fs::path &path) {
+#ifdef _WIN32
+    file = _wfopen(path.c_str(), L"wbx");
+#else
+    file = std::fopen(path.c_str(), "wbx");
+#endif
+    require(file, "Cannot create archive staging file", StorageReason::IoError);
+  }
+  ~Output() { if (file) std::fclose(file); }
+  void Write(std::string_view bytes) { require(std::fwrite(bytes.data(), 1, bytes.size(), file) == bytes.size(), "Cannot write archive staging file", StorageReason::IoError); }
+  void Close() { auto *value = file; file = nullptr; require(std::fclose(value) == 0, "Cannot flush archive staging file", StorageReason::IoError); }
+};
+bool ownedFile(const std::string &name) {
+  if (name == "manifest.sqlite" || name == "manifest.sqlite-journal" || name == "replacement.bin") return true;
+  const auto path = fs::path(name);
+  if (path.stem() == "input") return asobmshow::chart_assets::ClassifyMediaPath(path) != asobmshow::chart_assets::MediaKind::Other;
+  return path.stem() == "output" && (path.extension() == ".flac" || path.extension() == ".ogg" || path.extension() == ".mp4");
+}
+void cleanup(fs::path journal, const StorageArchiveDependencies &deps = {}) {
+  for (const auto &entry : fs::directory_iterator(journal))
+    require(entry.is_regular_file() && !entry.is_symlink() && ownedFile(entry.path().filename().string()),
+        "Unexpected file in archive recovery directory", StorageReason::RecoveryRequired);
+  const auto name = journal.filename().string();
+  if (!name.starts_with("archive-preparing-") && !name.starts_with("archive-cleanup-")) {
+    const auto retired = journal.parent_path() / ("archive-cleanup-" + name.substr(8));
+    fs::rename(journal, retired); journal = retired;
+  }
+  // Persist the cleanup-only namespace before unlinking the manifest. A crash
+  // during deletion must never leave a ready journal without recovery evidence.
+  syncDirectory(journal.parent_path());
+  if (deps.faultPoint) deps.faultPoint("archive-cleanup-ready");
+  for (const auto &entry : fs::directory_iterator(journal)) {
+    fs::remove(entry.path());
+    if (entry.path().filename() == "manifest.sqlite" && deps.faultPoint) deps.faultPoint("archive-manifest-unlinked");
+  }
+  if (deps.faultPoint) deps.faultPoint("archive-cleanup-remove");
+  fs::remove(journal); syncDirectory(journal.parent_path());
+}
+void authority(const fs::path &path, const StoragePlatformPaths &paths) {
+  require(path.is_absolute() && !StoragePathIndex(paths.allowedRoots).Ancestors(path).empty(), "Archive is outside authorized library roots", StorageReason::UnsafePath);
+  require(!IsWithinFolder(path, paths.journalRoot) && !IsWithinFolder(path, paths.temporaryRoot), "Private recovery files cannot be optimized", StorageReason::UnsafePath);
+  std::string error; require(IsSafeLocalPath(path, error, paths.pathAccessRoots), "Unsafe archive path", StorageReason::UnsafePath);
+}
+void append(StorageReport &report, FileResult result) {
+  if (result.outcome == FileOutcome::Failed) ++report.failed;
+  else if (result.outcome == FileOutcome::Skipped) ++report.skipped;
+  else if (result.outcome == FileOutcome::Cancelled) report.cancelled = true;
+  if (report.files.size() < 100) report.files.push_back(std::move(result));
+}
+struct Chunk {
+  std::uint64_t id = 0, source = 0, length = 0, kind = 0, destination = 0;
+  std::string hash, data;
+};
+class Update {
+public:
+  StorageArchive &archive;
+  Database &db;
+  fs::path journal;
+  const StorageArchiveDependencies &deps;
+  StorageReport report;
+  StorageProgress progress;
+  bool &started;
+  Update(StorageArchive &archive, fs::path journal, const StorageArchiveDependencies &deps, bool &started)
+      : archive(archive), db(*archive.db), journal(std::move(journal)), deps(deps), started(started) {}
+  std::uint64_t Value(const char *column) const {
+    const auto sql = std::string("SELECT ") + column + " FROM control WHERE id=1";
+    Statement q(db.value, sql.c_str()); require(q.step(), "Missing archive recovery state"); return q.integer(0);
+  }
+  void Set(const char *column, std::uint64_t value) {
+    const auto sql = std::string("UPDATE control SET ") + column + "=? WHERE id=1";
+    Statement q(db.value, sql.c_str()); q.bind(1, value); q.step();
+  }
+  void Fault(std::string_view name) { if (deps.faultPoint) deps.faultPoint(name); }
+  void InsertChunk(std::uint64_t entry, std::uint64_t part, std::uint64_t source, std::string_view bytes, std::uint64_t kind, std::uint64_t destination = 0) {
+    Statement q(db.value, "INSERT INTO chunks(entry_id,part,source,length,hash,kind,destination,done,data) VALUES(?,?,?,?,?,?,?,0,?)");
+    q.bind(1, entry); q.bind(2, part); q.bind(3, source); q.bind(4, bytes.size()); q.text(5, file_checksum::sha256(bytes));
+    q.bind(6, kind); q.bind(7, destination); q.bind(8, kind == 2 ? bytes : std::string_view{}); q.step();
+  }
+  void Initialize(Checkpoint check) {
+    db.exec("CREATE TABLE control(id INTEGER PRIMARY KEY CHECK(id=1),version INTEGER,path TEXT,device INTEGER,file_id INTEGER,"
+        "original_size INTEGER,format INTEGER,comment BLOB,ready INTEGER DEFAULT 0,started INTEGER DEFAULT 0,"
+        "phase INTEGER DEFAULT 0,cursor INTEGER DEFAULT 0,stage_entry INTEGER DEFAULT 0,final_size INTEGER DEFAULT 0);"
+        "CREATE TABLE chunks(id INTEGER PRIMARY KEY,entry_id INTEGER,part INTEGER,source INTEGER,length INTEGER,hash TEXT,"
+        "kind INTEGER,destination INTEGER,done INTEGER,data BLOB,UNIQUE(entry_id,part));"
+        "CREATE INDEX chunks_pending ON chunks(entry_id,done,part);"
+        "CREATE TABLE redo(id INTEGER PRIMARY KEY CHECK(id=1),chunk INTEGER,target INTEGER,before BLOB,after BLOB);"
+        "ALTER TABLE entries ADD COLUMN action INTEGER DEFAULT 0;"
+        "ALTER TABLE entries ADD COLUMN complete INTEGER DEFAULT 0;"
+        "ALTER TABLE entries ADD COLUMN output_offset INTEGER DEFAULT 0;"
+        "ALTER TABLE entries ADD COLUMN original_bytes INTEGER;"
+        "ALTER TABLE entries ADD COLUMN original_span INTEGER;"
+        "ALTER TABLE entries ADD COLUMN original_name TEXT;"
+        "UPDATE entries SET original_bytes=bytes,original_span=span,original_name=name;");
+    SqlTransaction transaction(db);
+    Statement state(db.value, "INSERT INTO control(id,version,path,device,file_id,original_size,format,comment) VALUES(1,1,?,?,?,?,?,?)");
+    state.text(1, pathText(archive.io.path)); state.bind(2, archive.identity.device); state.bind(3, archive.identity.fileId);
+    state.bind(4, archive.identity.bytes); state.bind(5, static_cast<unsigned>(archive.Format())); state.bind(6, archive.comment); state.step();
+    std::optional<std::uint64_t> cursor;
+    while (auto entry = archive.Next(cursor)) {
+      cursor = entry->offset;
+      for (std::uint64_t part = 0, position = 0; position < entry->span; ++part) {
+        active(check); const auto amount = std::min(chunkSize, entry->span - position), source = plus(entry->offset, position);
+        InsertChunk(entry->id, part, source, archive.io.Read(source, amount), 0); position += amount;
+      }
+    }
+    Set("ready", 1); transaction.Commit(); syncFile(journal / "manifest.sqlite"); syncDirectory(journal); syncDirectory(journal.parent_path()); Fault("archive-ready");
+  }
+  std::optional<Chunk> NextChunk(std::uint64_t entry) {
+    Statement q(db.value, "SELECT id,source,length,kind,destination,hash,data FROM chunks WHERE entry_id=? AND done=0 ORDER BY part LIMIT 1");
+    q.bind(1, entry); if (!q.step()) return {};
+    Chunk chunk{q.integer(0), q.integer(1), q.integer(2), q.integer(3), q.integer(4), q.bytes(5), q.bytes(6)};
+    require(chunk.length && chunk.length <= chunkSize && chunk.kind <= 2 && chunk.hash.size() == 64, "Invalid archive recovery chunk"); return chunk;
+  }
+  std::string ReadChunk(const Chunk &chunk) {
+    std::string bytes;
+    if (chunk.kind == 0) {
+      require(plus(chunk.source, chunk.length) <= Value("original_size"), "Invalid original archive extent"); bytes = archive.io.Read(chunk.source, chunk.length);
+    } else if (chunk.kind == 1) {
+      StorageArchiveIO stage(journal / "replacement.bin", {}, false);
+      require(plus(chunk.source, chunk.length) <= stage.Identity().bytes, "Truncated archive replacement"); bytes = stage.Read(chunk.source, chunk.length);
+    } else bytes = chunk.data;
+    require(bytes.size() == chunk.length && file_checksum::sha256(bytes) == chunk.hash, "Archive or prepared media changed", StorageReason::StaleInput); return bytes;
+  }
+  void Done(std::uint64_t id) {
+    SqlTransaction transaction(db); Statement q(db.value, "UPDATE chunks SET done=1 WHERE id=?"); q.bind(1, id); q.step();
+    db.exec("DELETE FROM redo"); transaction.Commit(); Fault("archive-cursor");
+  }
+  void WriteChunk(const Chunk &chunk) {
+    const auto bytes = ReadChunk(chunk);
+    require(plus(chunk.destination, chunk.length) <= Value("original_size") && (chunk.kind != 0 || chunk.destination <= chunk.source), "Archive compaction would overwrite unread data");
+    if (chunk.kind == 0 && chunk.destination == chunk.source) { Done(chunk.id); return; }
+    require(started, "Archive write was not authorized by durable state");
+    const auto old = archive.io.Read(chunk.destination, chunk.length);
+    {
+      SqlTransaction transaction(db); Statement q(db.value, "INSERT INTO redo VALUES(1,?,?,?,?)");
+      q.bind(1, chunk.id); q.bind(2, chunk.destination); q.bind(3, old); q.bind(4, bytes); q.step(); transaction.Commit();
+    }
+    Fault("archive-redo"); archive.io.Write(chunk.destination, bytes); archive.io.Sync(); Fault("archive-write");
+    if (deps.metrics) deps.metrics->bytesWritten += bytes.size(); Done(chunk.id);
+  }
+  void ValidateRecovery() {
+    const auto identity = archive.io.Identity();
+    require(identity.device == Value("device") && identity.fileId == Value("file_id") &&
+        (identity.bytes == Value("original_size") || (Value("phase") >= 2 && identity.bytes == Value("final_size"))),
+        "Archive identity or size changed since the interrupted update", StorageReason::StaleInput);
+    Statement redo(db.value, "SELECT chunk,target,before,after FROM redo WHERE id=1");
+    std::uint64_t pending = 0, target = 0; std::string before, after;
+    if (redo.step()) {
+      pending = redo.integer(0); target = redo.integer(1); before = redo.bytes(2); after = redo.bytes(3);
+      require(started && !after.empty() && after.size() <= chunkSize && before.size() == after.size() && plus(target, after.size()) <= identity.bytes, "Invalid archive redo record");
+      Statement q(db.value, "SELECT destination,length,hash,done FROM chunks WHERE id=?"); q.bind(1, pending);
+      require(q.step() && q.integer(0) == target && q.integer(1) == after.size() && !q.integer(3) && q.bytes(2) == file_checksum::sha256(after), "Archive redo evidence is inconsistent");
+      const auto current = archive.io.Read(target, after.size());
+      for (std::size_t i = 0; i < current.size(); ++i) require(current[i] == before[i] || current[i] == after[i], "Archive changed outside the interrupted write", StorageReason::StaleInput);
+    }
+    // An overlapping write owns its saved source chunk; all other source and
+    // output ranges must still match before any recovery mutation is allowed.
+    Statement chunks(db.value, "SELECT id,source,length,kind,destination,hash,data,done FROM chunks ORDER BY id");
+    while (chunks.step()) {
+      Chunk chunk{chunks.integer(0), chunks.integer(1), chunks.integer(2), chunks.integer(3), chunks.integer(4), chunks.bytes(5), chunks.bytes(6)};
+      require(chunk.length && chunk.length <= chunkSize && chunk.kind <= 2, "Invalid archive recovery chunk");
+      if (chunk.id == pending) continue;
+      if (chunks.integer(7)) require(plus(chunk.destination, chunk.length) <= identity.bytes &&
+          file_checksum::sha256(archive.io.Read(chunk.destination, chunk.length)) == chunk.hash, "Previously written archive data changed", StorageReason::StaleInput);
+      else ReadChunk(chunk);
+    }
+    if (pending) { archive.io.Write(target, after); archive.io.Sync(); Done(pending); }
+  }
+  void Start() { Set("started", 1); started = true; }
+  void ValidateEntry(std::uint64_t entry) {
+    archive.io.CheckPath();
+    Statement q(db.value, "SELECT id,source,length,kind,destination,hash,data FROM chunks WHERE entry_id=? ORDER BY part");
+    q.bind(1, entry);
+    while (q.step()) ReadChunk({q.integer(0), q.integer(1), q.integer(2), q.integer(3), q.integer(4), q.bytes(5), q.bytes(6)});
+  }
+  void RemoveStaging() {
+    for (const auto &entry : fs::directory_iterator(journal)) {
+      const auto name = entry.path().filename().string();
+      if (name != "manifest.sqlite" && name != "manifest.sqlite-journal" && ownedFile(name)) {
+        require(!entry.is_symlink() && entry.is_regular_file(), "Unsafe archive staging file"); fs::remove(entry.path());
+      }
+    }
+  }
+  void RecordSkip(const StorageArchiveEntry &entry, FileOutcome outcome, StorageDiagnostic reason) {
+    append(report, {.source = archive.io.path / fs::u8path(entry.name), .outcome = outcome, .reason = std::move(reason), .bytesBefore = entry.bytes});
+  }
+  void Prepare(StorageArchiveEntry &, const AssetCandidate &, const StoragePolicy &, Checkpoint, ProgressCallback);
+  void CopyRecord(const StorageArchiveEntry &entry) {
+    Statement state(db.value, "SELECT action FROM entries WHERE id=?"); state.bind(1, entry.id); require(state.step(), "Missing archive entry state");
+    const auto action = state.integer(0), destination = started ? Value("cursor") : entry.offset;
+    require(destination <= entry.offset, "Archive destination is beyond unread source");
+    {
+      SqlTransaction transaction(db);
+      Statement q(db.value, "UPDATE chunks SET destination=? + source - ? WHERE entry_id=?");
+      q.bind(1, destination); q.bind(2, action == 1 ? 0 : entry.offset); q.bind(3, entry.id); q.step();
+      Statement row(db.value, "UPDATE entries SET output_offset=? WHERE id=?"); row.bind(1, destination); row.bind(2, entry.id); row.step(); transaction.Commit();
+    }
+    while (auto chunk = NextChunk(entry.id)) WriteChunk(*chunk);
+    {
+      SqlTransaction transaction(db); Statement q(db.value, "UPDATE entries SET complete=1 WHERE id=?"); q.bind(1, entry.id); q.step();
+      Set("cursor", action == 2 ? destination : plus(destination, entry.span)); Set("stage_entry", 0); transaction.Commit();
+    }
+    RemoveStaging();
+  }
+  void Entries(const StorageArchiveSummary *summary, const StoragePolicy &policy, Checkpoint check, ProgressCallback notify) {
+    const StoragePathIndex selected(summary ? summary->innerRoots : std::vector<fs::path>{});
+    std::optional<std::uint64_t> cursor;
+    while (auto entry = archive.Next(cursor)) {
+      cursor = entry->offset;
+      Statement state(db.value, "SELECT complete,action FROM entries WHERE id=?"); state.bind(1, entry->id); require(state.step(), "Missing archive entry");
+      if (state.integer(0)) continue;
+      const bool cancelled = check && !check(); report.cancelled |= cancelled;
+      if (cancelled && !started) return;
+      if (summary && !report.cancelled && !state.integer(1) && !selected.Ancestors(fs::u8path(entry->name)).empty()) {
+        StorageDiagnostic reason; const auto candidate = archive.Candidate(*entry, policy, reason);
+        if (candidate) {
+          progress.currentPath = archive.io.path / candidate->source; progress.phase = StoragePhase::Encode; if (notify) notify(progress);
+          try { Prepare(*entry, *candidate, policy, check, [&](const StorageProgress &value) { progress.phase = value.phase; if (notify) notify(progress); }); }
+          catch (const StorageArchiveError &error) {
+            if (error.code == StorageReason::Cancelled) { report.cancelled = true; if (!started) return; }
+            else throw;
+          }
+          ++progress.filesDone;
+        }
+      }
+      progress.phase = StoragePhase::Commit; if (notify) notify(progress); CopyRecord(*entry);
+    }
+  }
+  void Trailer() {
+    SqlTransaction transaction(db);
+    const auto start = Value("cursor"); std::uint64_t destination = start, part = 0, count = 0; std::string buffer;
+    auto flush = [&] { if (!buffer.empty()) { InsertChunk(0, part++, 0, buffer, 2, destination); destination = plus(destination, buffer.size()); buffer.clear(); } };
+    auto append = [&](std::string_view bytes) {
+      while (!bytes.empty()) {
+        const auto amount = std::min<std::size_t>(chunkSize - buffer.size(), bytes.size()); buffer.append(bytes.substr(0, amount)); bytes.remove_prefix(amount);
+        if (buffer.size() == chunkSize) flush();
+      }
+    };
+    if (archive.Format() == StorageArchiveFormat::Tar) append(std::string(1024, '\0'));
+    else {
+      std::optional<std::uint64_t> cursor;
+      while (auto entry = archive.Next(cursor)) {
+        cursor = entry->offset; Statement q(db.value, "SELECT action,output_offset FROM entries WHERE id=?"); q.bind(1, entry->id); q.step();
+        if (q.integer(0) == 2) continue; append(archive.Central(*entry, q.integer(1))); ++count;
+      }
+      const auto centralSize = plus(destination, buffer.size()) - start;
+      if (count >= 0xffff || centralSize >= 0xffffffff || start >= 0xffffffff) {
+        std::string record(56, '\0'); put(record, 0, 0x06064b50, 4); put(record, 4, 44, 8); put(record, 12, 45, 2); put(record, 14, 45, 2);
+        put(record, 24, count, 8); put(record, 32, count, 8); put(record, 40, centralSize, 8); put(record, 48, start, 8); append(record);
+        std::string locator(20, '\0'); put(locator, 0, 0x07064b50, 4); put(locator, 8, start + centralSize, 8); put(locator, 16, 1, 4); append(locator);
+      }
+      std::string end(22, '\0'); put(end, 0, 0x06054b50, 4); put(end, 8, std::min<std::uint64_t>(count, 0xffff), 2); put(end, 10, std::min<std::uint64_t>(count, 0xffff), 2);
+      put(end, 12, std::min<std::uint64_t>(centralSize, 0xffffffff), 4); put(end, 16, std::min<std::uint64_t>(start, 0xffffffff), 4); put(end, 20, archive.comment.size(), 2);
+      append(end); append(archive.comment);
+    }
+    flush(); require(destination < Value("original_size"), "Archive rewrite does not reclaim physical space"); Set("final_size", destination); Set("phase", 1); transaction.Commit();
+  }
+  void Finish() {
+    if (!started) return;
+    if (Value("phase") == 0) Trailer();
+    if (Value("phase") == 1) { while (auto chunk = NextChunk(0)) WriteChunk(*chunk); Set("phase", 2); }
+    if (Value("phase") == 2) {
+      ValidateRecovery(); Fault("archive-before-truncate"); archive.io.Truncate(Value("final_size")); archive.io.Sync(); Fault("archive-truncate"); Set("phase", 3);
+    }
+    if (deps.metrics) ++deps.metrics->archivesCompacted;
+  }
+  StorageReport Result() {
+    if (!started) return report;
+    require(Value("phase") == 3, "Archive update still requires recovery", StorageReason::RecoveryRequired);
+    Statement q(db.value, "SELECT original_name,name,original_bytes,bytes,action FROM entries WHERE action!=0 ORDER BY offset");
+    while (q.step()) {
+      const bool deleted = q.integer(4) == 2; if (deleted) ++report.deleted; else ++report.converted;
+      if (report.files.size() < 100) report.files.push_back({.source = archive.io.path / fs::u8path(q.bytes(0)),
+          .destination = deleted ? fs::path{} : archive.io.path / fs::u8path(q.bytes(1)), .outcome = deleted ? FileOutcome::Deleted : FileOutcome::Converted,
+          .bytesBefore = q.integer(2), .bytesAfter = deleted ? 0 : q.integer(3)});
+    }
+    report.reclaimedBytes = Value("original_size") - Value("final_size"); report.changedRoots.push_back(archive.io.path); return report;
+  }
+};
+void Update::Prepare(StorageArchiveEntry &entry, const AssetCandidate &candidate, const StoragePolicy &policy, Checkpoint check, ProgressCallback notify) {
+  if (candidate.operation == AssetOperation::Delete) {
+    ValidateEntry(entry.id);
+    SqlTransaction transaction(db); Statement q(db.value, "UPDATE entries SET action=2 WHERE id=?"); q.bind(1, entry.id); q.step();
+    Statement chunks(db.value, "DELETE FROM chunks WHERE entry_id=?"); chunks.bind(1, entry.id); chunks.step(); Start(); transaction.Commit(); Fault("archive-entry-ready"); return;
+  }
+  const auto required = plus(plus(entry.bytes, entry.bytes), plus(entry.bytes, stagingReserve));
+  const auto available = deps.availableSpace ? deps.availableSpace(journal) : std::optional<std::uint64_t>(fs::space(journal).available);
+  if (required > deps.scratchLimit || !available || required > *available) {
+    RecordSkip(entry, FileOutcome::Skipped, {StorageReason::InsufficientSpace, "Archive entry exceeds the bounded media staging budget"}); return;
+  }
+  RemoveStaging();
+  const auto input = journal / ("input." + asobmshow::chart_assets::LowerMediaExtension(candidate.source));
+  const auto output = journal / ("output" + candidate.destination.extension().string()); archive.Extract(entry, input, check);
+  auto staged = candidate; staged.source = input; staged.destination = output;
+  std::string error; const auto identity = ReadFileIdentity(input, error);
+  require(identity.has_value(), "Cannot identify staged archive media", StorageReason::IoError); staged.identity = *identity;
+  bool tooLarge = false;
+  auto checkpoint = [&] {
+    if (check && !check()) return false;
+    std::error_code ec; const auto size = fs::file_size(output, ec); if (!ec && size > entry.bytes + 1024 * 1024) tooLarge = true; return !tooLarge;
+  };
+  require(static_cast<bool>(deps.encode), "Archive media encoder is unavailable", StorageReason::CodecUnavailable);
+  EncodeResult encoded;
+  try { encoded = deps.encode(staged, policy, output, checkpoint, notify); }
+  catch (const std::exception &error) {
+    RecordSkip(entry, FileOutcome::Failed, {StorageReason::IoError, error.what()}); RemoveStaging(); return;
+  }
+  if (tooLarge) { RecordSkip(entry, FileOutcome::Skipped, {StorageReason::NotSmaller, "Encoded archive media exceeds the staging limit"}); RemoveStaging(); return; }
+  if (encoded.outcome != FileOutcome::Converted) { RecordSkip(entry, encoded.outcome, encoded.reason); RemoveStaging(); return; }
+  require(encoded.outputPath == output, "Archive encoder returned an unowned output", StorageReason::ValidationFailed);
+  const auto encodedIdentity = ReadFileIdentity(output, error); require(encodedIdentity.has_value(), "Unsafe archive encoder output", StorageReason::ValidationFailed);
+  if (encodedIdentity->bytes >= entry.bytes) { RecordSkip(entry, FileOutcome::Skipped, {StorageReason::NotSmaller, "Encoded archive media is not smaller"}); RemoveStaging(); return; }
+  active(check); StorageArchiveIO encodedFile(output, {}, false); auto crc = crc32(0, nullptr, 0);
+  for (std::uint64_t position = 0; position < encodedIdentity->bytes;) {
+    active(check); auto bytes = encodedFile.Read(position, std::min(chunkSize, encodedIdentity->bytes - position));
+    crc = crc32(crc, reinterpret_cast<const Bytef *>(bytes.data()), bytes.size()); position += bytes.size();
+  }
+  auto replacement = entry; const auto header = archive.Replacement(replacement, candidate.destination.extension().string(), encodedIdentity->bytes, crc);
+  std::uint64_t extra = 0;
+  if (archive.Format() == StorageArchiveFormat::Zip) { const auto central = archive.Central(replacement, entry.offset); if (central.size() > entry.metadata.size()) extra = central.size() - entry.metadata.size(); }
+  if (plus(replacement.span, extra) >= entry.span) {
+    // CopyRecord removes staging after encodedFile has closed on every platform.
+    RecordSkip(entry, FileOutcome::Skipped, {StorageReason::NotSmaller, "Encoded media does not reduce its compressed archive record"}); return;
+  }
+  const auto prepared = journal / "replacement.bin"; Output file(prepared); file.Write(header);
+  for (std::uint64_t position = 0; position < encodedIdentity->bytes;) {
+    active(check); const auto bytes = encodedFile.Read(position, std::min(chunkSize, encodedIdentity->bytes - position)); file.Write(bytes); position += bytes.size();
+  }
+  const auto padding = replacement.span - header.size() - encodedIdentity->bytes; require(padding < 512, "Invalid archive replacement padding");
+  file.Write(std::string(padding, '\0')); file.Close(); syncFile(prepared); syncDirectory(journal);
+  require(ReadFileIdentity(output, error) == encodedIdentity, "Encoded archive media changed before installation", StorageReason::StaleInput);
+  ValidateEntry(entry.id);
+  if (deps.metrics) deps.metrics->peakScratchBytes = std::max(deps.metrics->peakScratchBytes, plus(entry.bytes, plus(encodedIdentity->bytes, replacement.span)));
+  {
+    StorageArchiveIO stage(prepared, {}, false); SqlTransaction transaction(db);
+    Statement remove(db.value, "DELETE FROM chunks WHERE entry_id=?"); remove.bind(1, entry.id); remove.step();
+    for (std::uint64_t part = 0, position = 0; position < replacement.span; ++part) {
+      const auto bytes = stage.Read(position, std::min(chunkSize, replacement.span - position)); InsertChunk(entry.id, part, position, bytes, 1); position += bytes.size();
+    }
+    Statement q(db.value, "UPDATE entries SET span=?,packed=?,bytes=?,crc=?,method=?,flags=?,name=?,raw_name=?,metadata=?,action=1 WHERE id=?");
+    q.bind(1, replacement.span); q.bind(2, replacement.packed); q.bind(3, replacement.bytes); q.bind(4, replacement.crc);
+    q.bind(5, replacement.method); q.bind(6, replacement.flags); q.text(7, replacement.name); q.bind(8, replacement.rawName); q.bind(9, replacement.metadata); q.bind(10, entry.id); q.step();
+    Set("stage_entry", entry.id); Start(); transaction.Commit();
+  }
+  entry = std::move(replacement); Fault("archive-entry-ready");
+}
+fs::path createJournal(const StoragePlatformPaths &paths) {
+  fs::create_directories(paths.journalRoot); std::string error;
+  require(IsSafeLocalPath(paths.journalRoot, error, paths.pathAccessRoots), "Unsafe archive journal root", StorageReason::UnsafePath);
+  const auto journal = paths.journalRoot / ("archive-preparing-" + uuid::generateV4());
+  require(fs::create_directory(journal), "Cannot create archive recovery directory", StorageReason::IoError); fs::permissions(journal, fs::perms::owner_all, fs::perm_options::replace);
+  auto path = paths.journalRoot;
+  while (!path.empty()) { syncDirectory(path); if (path == paths.journalSyncRoot || path == path.root_path()) break; path = path.parent_path(); }
+  return journal;
+}
+void failure(StorageReport &report, const fs::path &path, const std::exception &error, bool started) {
+  const auto *archiveError = dynamic_cast<const StorageArchiveError *>(&error);
+  const auto reason = started ? StorageReason::RecoveryRequired : archiveError ? archiveError->code : StorageReason::IoError;
+  append(report, {.source = path, .outcome = reason == StorageReason::Cancelled ? FileOutcome::Cancelled : FileOutcome::Failed, .reason = {reason, error.what()}});
+  report.recoveryRequired |= started; if (started) report.changedRoots.push_back(path);
+}
+}
+StorageReport UpdateStorageArchive(const StorageArchiveSummary &summary, const StoragePolicy &policy,
+    const StoragePlatformPaths &paths, const StorageArchiveDependencies &deps, Checkpoint check, ProgressCallback progress) {
+  StorageReport report; fs::path journal; bool started = false;
+  try {
+    authority(summary.path, paths); active(check); std::string error; const auto current = ReadFileIdentity(summary.path, error, paths.pathAccessRoots);
+    require(current && *current == summary.identity, "Archive changed since review", StorageReason::StaleInput); journal = createJournal(paths);
+    {
+      StorageArchive archive(summary.path, journal / "manifest.sqlite", paths.pathAccessRoots, check);
+      require(archive.identity == summary.identity, "Archive changed while starting update", StorageReason::StaleInput);
+      {
+        Update preparing(archive, journal, deps, started); preparing.Initialize(check);
+      }
+      // A preparation crash cannot have modified the source. Publish the ready
+      // journal only after its database is closed, while retaining the file lock.
+      archive.db.reset();
+      const auto ready = journal.parent_path() / ("archive-" + journal.filename().string().substr(18));
+      fs::rename(journal, ready); journal = ready; syncDirectory(journal.parent_path());
+      archive.db = std::make_unique<Database>(journal / "manifest.sqlite", false);
+      Update update(archive, journal, deps, started); update.progress.filesTotal = summary.eligibleCount;
+      update.Entries(&summary, policy, check, progress); update.Finish(); report = update.Result();
+    }
+    cleanup(journal, deps); journal.clear();
+  } catch (const std::exception &error) {
+    failure(report, summary.path, error, started);
+    if (!started && !journal.empty()) { try { cleanup(journal); } catch (...) { report.cleanupPending = true; } }
+  }
+  return report;
+}
+StorageReport RecoverStorageArchives(const StoragePlatformPaths &paths, Checkpoint check, const StorageArchiveDependencies &deps) {
+  StorageReport result; std::error_code error; if (!fs::exists(paths.journalRoot, error) && !error) return result;
+  try {
+    std::string pathError; require(IsSafeLocalPath(paths.journalRoot, pathError, paths.pathAccessRoots), "Unsafe archive recovery root", StorageReason::RecoveryRequired);
+    for (const auto &entry : fs::directory_iterator(paths.journalRoot)) {
+      active(check); const auto name = entry.path().filename().string(); if (!name.starts_with("archive-")) continue;
+      if (name.starts_with("archive-preparing-") || name.starts_with("archive-cleanup-")) {
+        const auto prefix = name.starts_with("archive-preparing-") ? 18 : 16;
+        require(uuid::isCanonicalLowerV4(name.substr(prefix)) && !entry.is_symlink() && entry.is_directory(), "Invalid archive cleanup directory", StorageReason::RecoveryRequired);
+        cleanup(entry.path(), deps); continue;
+      }
+      require(uuid::isCanonicalLowerV4(name.substr(8)) && !entry.is_symlink() && entry.is_directory(), "Invalid archive recovery directory", StorageReason::RecoveryRequired);
+      const auto journal = entry.path(); fs::path source; bool started = true;
+      try {
+        require(ReadFileIdentity(journal / "manifest.sqlite", pathError, paths.pathAccessRoots).has_value(), "Unsafe archive manifest", StorageReason::RecoveryRequired); bool ready = false;
+        {
+          Database db(journal / "manifest.sqlite", false); Statement q(db.value, "SELECT version,path,ready,started FROM control WHERE id=1");
+          require(q.step() && q.integer(0) == 1, "Unknown archive recovery version"); source = fs::u8path(q.bytes(1)); ready = q.integer(2); started = q.integer(3);
+        }
+        if (ready && started) {
+          authority(source, paths); StorageArchive archive(source, journal / "manifest.sqlite", paths.pathAccessRoots, {}, true);
+          Update update(archive, journal, deps, started); update.ValidateRecovery(); update.Entries(nullptr, {}, {}, {}); update.Finish();
+          auto report = update.Result(); result.converted += report.converted; result.deleted += report.deleted; result.reclaimedBytes += report.reclaimedBytes;
+          for (auto &file : report.files) if (result.files.size() < 100) result.files.push_back(std::move(file)); result.changedRoots.push_back(source);
+        }
+        cleanup(journal, deps);
+      } catch (const std::exception &error) { failure(result, source.empty() ? journal : source, error, true); }
+    }
+  } catch (const std::exception &error) {
+    const auto *cancelled = dynamic_cast<const StorageArchiveError *>(&error);
+    if (cancelled && cancelled->code == StorageReason::Cancelled) result.cancelled = true; else failure(result, paths.journalRoot, error, true);
+  }
+  return result;
+}
+}

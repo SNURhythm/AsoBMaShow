@@ -6257,6 +6257,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_search/Common.cpp
         src/bms_search/ArchiveDecision.cpp
         src/bms_search/DownloadedArchiveWorkflow.cpp
+        src/storage/StoragePolicy.cpp
+        src/bms_search/DownloadStorageOptimization.cpp
+        src/storage/StorageOptimizer.cpp src/storage/StorageDirectoryEvidence.cpp src/storage/StorageWorkScheduler.cpp
+        src/storage/StoragePreflight.cpp src/storage/StorageDirectoryWorkingSet.cpp
+        src/storage/StorageDirectoryInventory.cpp src/storage/StoragePathIndex.cpp src/storage/StorageScanScheduler.cpp
+        src/ChartScanWorkScheduler.cpp src/storage/AudioTranscoder.cpp src/storage/BgaTranscoder.cpp
+        src/storage/VideoCompressionGeometry.cpp src/storage/ChartResourceInventory.cpp
+        src/storage/StorageFileTransaction.cpp src/storage/StoragePlatform.cpp
+        src/audio/ChartVisualAssetResolver.cpp src/AtomicFile.cpp src/FileChecksum.cpp
         src/bms_search/DownloadStaging.cpp
         src/bms_search/DownloadStorageIdentity.cpp
         src/bms_search/PackageDownloadCandidate.cpp
@@ -6291,7 +6300,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     elseif(TARGET SDL3)
         target_link_libraries(find_bms_download_tests PRIVATE SDL3)
     endif()
-    target_link_libraries(find_bms_download_tests PRIVATE ${COMMON_LIBS})
+    target_link_libraries(find_bms_download_tests PRIVATE ${COMMON_LIBS} SQLite3 SndFile::sndfile ${FFMPEG_LIBRARIES})
     if(APPLE)
         target_link_libraries(find_bms_download_tests PRIVATE iconv)
     endif()
@@ -9468,7 +9477,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         DEPENDS tests/settings_event_lifetime_extract.py tests/settings_event_lifetime_fixture.cpp
                 tests/gameplay_terminal_scene_extract.py tests/result_skin_timeout_extract.py
                 src/scene/SettingsScene.cpp src/scene/Scene.h
+                src/scene/SettingsSceneStorage.cpp src/scene/SceneReturnTarget.h src/scene/SceneReturnTarget.cpp
                 src/scene/SceneManager.h src/scene/SceneManager.cpp
+                src/storage/StorageApplicationIntegration.cpp
         VERBATIM
     )
     add_executable(settings_event_lifetime_tests ${settings_event_lifetime_source})
@@ -9701,12 +9712,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(ledger_test_evidence_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
+    include(cmake/StorageManagementTests.cmake)
+
     get_property(asobmashow_directory_targets DIRECTORY
         PROPERTY BUILDSYSTEM_TARGETS)
     foreach(asobmashow_target IN LISTS asobmashow_directory_targets)
         get_target_property(asobmashow_target_sources
             ${asobmashow_target} SOURCES)
         if(asobmashow_target_sources)
+            if("src/AppSettings.cpp" IN_LIST asobmashow_target_sources)
+                target_sources(${asobmashow_target} PRIVATE src/storage/StoragePolicy.cpp)
+            endif()
             # PracticeConfiguration owns chart mutations and therefore needs
             # the parser implementation, including in standalone test targets.
             list(FIND asobmashow_target_sources
@@ -9732,6 +9748,19 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             if(asobmashow_target_sources MATCHES
                "(LuaSkinHostModules|SkinTextGraphNormalization|Skin2DRenderer)\\.cpp")
                 target_link_libraries(${asobmashow_target} PRIVATE asobmashow_utf8)
+            endif()
+
+            if("src/storage/StoragePreflight.cpp" IN_LIST asobmashow_target_sources)
+                target_sources(${asobmashow_target} PRIVATE
+                    src/storage/StorageArchive.cpp src/storage/StorageArchiveIO.cpp src/storage/StorageArchivePreflight.cpp)
+                target_link_libraries(${asobmashow_target} PRIVATE asobmashow_utf8 ZLIB::ZLIB)
+                if(APPLE)
+                    target_link_libraries(${asobmashow_target} PRIVATE iconv)
+                endif()
+            endif()
+            if("src/storage/StorageOptimizer.cpp" IN_LIST asobmashow_target_sources AND
+               NOT "src/storage/StorageArchiveTransaction.cpp" IN_LIST asobmashow_target_sources)
+                target_sources(${asobmashow_target} PRIVATE src/storage/StorageArchiveTransaction.cpp)
             endif()
 
             # Utils.cpp uses CoreFoundation for exact MS932 decoding on Apple.

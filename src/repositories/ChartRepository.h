@@ -22,6 +22,12 @@
 
 class ScoreRepository;
 
+struct ChartLibraryChanges {
+  std::uint64_t revision = 0;
+  bool unknown = false;
+  std::vector<std::filesystem::path> roots;
+};
+
 struct ArchiveUnzipRecoveryRecord {
   std::filesystem::path archivePath, outputFolder;
   std::string archiveKey;
@@ -385,11 +391,11 @@ public:
         const std::filesystem::path &path, int &removedChartCount);
     bool ClearEntries();
     ChartScanSnapshot LoadScanSnapshot(
-        ChartScanSnapshotLoad load = ChartScanSnapshotLoad::Full);
-    // Loads only the identity columns (path + md5 + sha256) for every stored
-    // chart, for the scanner's reconcile pass. Cheaper than LoadScanSnapshot
-    // on a large library because the full metadata row is not materialized.
-    std::vector<ChartScanReconcileIdentity> LoadScanReconcileIdentities();
+        ChartScanSnapshotLoad load = ChartScanSnapshotLoad::Full,
+        const std::vector<std::filesystem::path> &roots = {});
+    // Empty roots select the whole library; scoped roots use indexed path ranges.
+    // Only identity columns are loaded, never full chart metadata.
+    std::vector<ChartScanReconcileIdentity> LoadScanReconcileIdentities(const std::vector<std::filesystem::path> &roots = {});
     std::optional<ScanBatch> BeginScanBatch();
     bool ClearScanCheckpoint();
     bool ClearChartMetadataRebuildRequired();
@@ -431,6 +437,8 @@ public:
   std::optional<Session> OpenSession(ScoreRepository *scores = nullptr);
   [[nodiscard]] const std::filesystem::path &DatabasePath() const;
   [[nodiscard]] std::uint64_t GetLibraryRevision() const;
+  [[nodiscard]] ChartLibraryChanges GetLibraryChangesSince(std::uint64_t revision) const;
+  void NotifyStorageSourceRefresh(const std::vector<std::filesystem::path> &roots);
   static std::filesystem::path DefaultBmsFolderPath();
   static bool IsDefaultBmsFolderPath(const std::filesystem::path &path);
 

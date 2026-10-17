@@ -31,6 +31,14 @@ class AsoBMaShowActivity {
     private native String request(String url, boolean cancellable);
     private native String requestBridge(String url, boolean cancellable);
     private native String requestFile(String url, String path, boolean wantStatus);
+    private native boolean reservePath(String path);
+    private String reservedPath;
+    private boolean reservationClosed;
+    public AutoCloseable reserveStorageSubtrees(String[] paths) {
+        require(paths.length == 1, "one selected subtree");
+        reservedPath = paths[0];
+        return () -> reservationClosed = true;
+    }
     private static final List<Connection> connections = new ArrayList<>();
     private static final CountDownLatch blocked = new CountDownLatch(1);
     private static String scenario;
@@ -143,6 +151,15 @@ class AsoBMaShowActivity {
     public static void main(String[] args) throws Exception {
         System.load(args[0]);
         scenario = args[1];
+        if (scenario.equals("storage-unicode")) {
+            AsoBMaShowActivity activity = new AsoBMaShowActivity();
+            String path = "/Documents/BMS/音楽-리듬-🎵";
+            require(activity.reservePath(path), "reservation succeeds");
+            require(path.equals(activity.reservedPath), "JNI preserves the exact Unicode subtree");
+            require(activity.reservationClosed, "reservation lease closes");
+            System.out.println("PASS " + scenario);
+            return;
+        }
         boolean directBridge = scenario.startsWith("bridge-");
         if (directBridge) scenario = scenario.substring("bridge-".length());
         boolean fileDownload = scenario.startsWith("file-");

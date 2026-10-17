@@ -525,6 +525,7 @@ void AppSettings::sanitize() {
     policy->tableUrls = std::move(tableUrls);
   }
   replayPreferences.sanitize();
+  storagePreferences = storage_management::Sanitize(storagePreferences);
   switch (notePriorityMode) {
   case NotePriorityMode::Lowest:
   case NotePriorityMode::Combo:

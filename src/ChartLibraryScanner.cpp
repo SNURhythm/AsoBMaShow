@@ -581,32 +581,17 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   }
 
   const auto scanSnapshotLoadStart = scanPhaseStart();
+  const auto scopedRoots = reconcileMode == ReconcileMode::Scoped ? roots : std::vector<std::filesystem::path>{};
   ChartScanSnapshot scanSnapshot = session.LoadScanSnapshot(
       reconcileExisting ? ChartScanSnapshotLoad::Reconcile
-                        : ChartScanSnapshotLoad::CheckpointOnly);
+                        : ChartScanSnapshotLoad::CheckpointOnly, scopedRoots);
   // The reconcile pass only needs each stored chart's identity (path + md5 +
   // sha256), so load those lightweight records instead of full metadata rows.
   std::vector<ChartScanReconcileIdentity> storedChartIdentities;
   if (reconcileExisting) {
-    storedChartIdentities = session.LoadScanReconcileIdentities();
+    storedChartIdentities = session.LoadScanReconcileIdentities(scopedRoots);
   }
   scanPhaseEnd("load-scan-snapshot", scanSnapshotLoadStart);
-  if (reconcileMode == ReconcileMode::Scoped) {
-    const auto pathOutsideScope = [&](const std::filesystem::path &path) {
-      return std::ranges::none_of(roots, [&](const auto &root) {
-        return pathAtOrInsideRoot(path, root);
-      });
-    };
-    std::erase_if(storedChartIdentities, [&](const auto &identity) {
-      return pathOutsideScope(identity.path);
-    });
-    std::erase_if(scanSnapshot.solidArchives, [&](const auto &archive) {
-      return pathOutsideScope(archive.path);
-    });
-    std::erase_if(scanSnapshot.archiveCache, [&](const auto &archive) {
-      return pathOutsideScope(archive.path);
-    });
-  }
   const ChartScanCheckpoint checkpoint =
       scanSnapshot.checkpoint.value_or(ChartScanCheckpoint{});
 

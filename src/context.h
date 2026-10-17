@@ -38,6 +38,7 @@
 #include "library/ChartLibraryOperations.h"
 #include "library/ChartLibraryPlatform.h"
 #include "library/ChartLibraryTaskService.h"
+#include "storage/StorageApplicationIntegration.h"
 #include "path.h"
 #include "targets.h"
 #include "tinyfiledialogs.h"
@@ -210,6 +211,9 @@ public:
       chartLibraryTasks;
   std::unique_ptr<chart_library_platform::FolderActionService>
       chartLibraryFolderActions;
+  std::shared_ptr<storage_management::StorageTask> storageTask;
+  std::atomic_bool storageMaintenanceActive{false};
+  std::atomic<std::uint64_t> storageMeasurementRevision{0};
   std::atomic_bool chartLibraryFoldersReloadRequested = false;
   std::atomic_bool chartLibraryListReloadRequested = false;
   std::atomic<std::uint64_t> chartLibraryScanFlushRequested{0};
@@ -766,9 +770,7 @@ public:
              .rebuildLibraryMetadata = true});
       }
     };
-    chartLibraryFolderActions =
-        std::make_unique<chart_library_platform::FolderActionService>(
-            chartRepository, *chartLibraryTasks);
+    // Folder/import admission is installed after startup storage recovery.
     requestAddChartFolderFromFiles = [this] {
       if (chartLibraryFolderActions) {
         chartLibraryFolderActions->requestAddFolder();
@@ -1556,6 +1558,9 @@ public:
   }
 
   ProfileSwitchResult switchProfile(std::string_view profileId) {
+    storage_management::CancelAndWaitStorageTask(*this);
+    if (storageMaintenanceActive) return {.error = ProfileError::SwitchBlocked,
+        .message = "Storage recovery is required before switching profiles."};
     if (!profileSessionCoordinator) {
       return {.error = ProfileError::SwitchBlocked,
               .message = profileInitializationResult.message.empty()
@@ -1567,6 +1572,7 @@ public:
 
   ~ApplicationContext() {
     quitFlag = true;
+    storage_management::ShutdownStorageServices(*this);
     requestRebuildChartLibrary = nullptr;
     requestAddChartFolderFromFiles = nullptr;
     chartLibraryFolderActions.reset();

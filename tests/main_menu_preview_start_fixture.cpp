@@ -89,6 +89,7 @@ struct Scene {
     std::string assistOption, pacemakerTarget;
   } profileSelections;
   struct {
+    std::atomic_bool storageMaintenanceActive = false;
     struct { bool inputKeysoundEnabled = true; int selectedPlaybackRatePercent = 100, selectedPlaybackMode = 0; } settings;
     struct {
       int loads = 0;

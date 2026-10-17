@@ -28,6 +28,9 @@ namespace chart_library_tasks {
 class ChartLibraryTaskService;
 }
 
+std::shared_ptr<void> ReserveAndroidStorageSubtrees(
+    const std::vector<std::filesystem::path> &paths, std::string &error);
+
 void RegisterAndroidImportTasks(chart_library_tasks::ChartLibraryTaskService &tasks);
 void UnregisterAndroidImportTasks(chart_library_tasks::ChartLibraryTaskService &tasks);
 
@@ -155,6 +158,7 @@ bool UpdateAndroidNativeMusicQueue(const AndroidNativeMusicQueue &queue,
 bool PlayAndroidNativeMusic(std::string &errorMessage);
 bool PauseAndroidNativeMusic(std::string &errorMessage);
 bool StopAndroidNativeMusic(std::string &errorMessage);
+bool UnloadAndroidNativeMusic(std::string &errorMessage);
 bool SeekAndroidNativeMusic(long long positionMicros,
                             std::string &errorMessage);
 bool SetAndroidNativeMusicPlaybackRate(int percent, bool timeStretch,

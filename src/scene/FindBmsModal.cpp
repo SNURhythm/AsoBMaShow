@@ -148,6 +148,7 @@ double progressRatio(const BmsSearchDownloadProgress &progress) {
 std::string
 findBmsProgressEventDisplayText(const BmsSearchDownloadProgress &progress,
                                 bool includeBytes) {
+  if (progress.storageProgress) return findBmsStorageProgressMessage(*progress.storageProgress).resolve();
   return findBmsProgressDisplayText(progress.message, progress.downloadedBytes,
                                     progress.totalBytes, includeBytes);
 }
@@ -165,6 +166,7 @@ bool shouldReplaceFindBmsLogLine(const std::string &previous,
 
 double findBmsProgressFractionFor(const BmsSearchDownloadProgress &progress,
                                   double previous) {
+  if (progress.storageProgress) return std::min(0.995, std::max(previous, 0.98));
   const std::string &message = progress.message;
   if (message == "Preparing lookup") {
     return std::max(previous, 0.02);
@@ -530,6 +532,7 @@ void FindBmsModal::show(const ChartMetaRecord &record, bool requireConfirmation)
 }
 
 void FindBmsModal::startLookup() {
+  if (callbacks_.admit && !callbacks_.admit()) return;
   if (!findBmsAwaitingConfirmation || findBmsTask.running() ||
       findBmsResult.pendingArtifact) {
     return;
@@ -556,6 +559,8 @@ void FindBmsModal::startLookup() {
   BmsSearchDownloadOptions downloadOptions =
       callbacks_.downloadOptions ? callbacks_.downloadOptions()
                                  : BmsSearchDownloadOptions{};
+  findBmsCapturedOptions = downloadOptions;
+  findBmsStorageProgress.reset();
   downloadOptions.requestRetry = findBmsTask.retryCallback();
   if (callbacks_.downloadStarted) callbacks_.downloadStarted();
   findBmsTask.start([record, downloadRoot, downloadOptions](
@@ -571,6 +576,7 @@ void FindBmsModal::startLookup() {
 }
 
 void FindBmsModal::startCandidateDownload(size_t candidateIndex) {
+  if (callbacks_.admit && !callbacks_.admit()) return;
   if (findBmsTask.running() ||
       candidateIndex >= findBmsResult.candidates.size()) {
     return;
@@ -582,6 +588,8 @@ void FindBmsModal::startCandidateDownload(size_t candidateIndex) {
   BmsSearchDownloadOptions downloadOptions =
       callbacks_.downloadOptions ? callbacks_.downloadOptions()
                                  : BmsSearchDownloadOptions{};
+  findBmsCapturedOptions = downloadOptions;
+  findBmsStorageProgress.reset();
   downloadOptions.requestRetry = findBmsTask.retryCallback();
   findBmsResult = {};
   findBmsResult.candidates = {candidate};
@@ -606,6 +614,7 @@ void FindBmsModal::startCandidateDownload(size_t candidateIndex) {
 
 void FindBmsModal::startPendingArtifactResolution(
     BmsSearchPendingArtifactDecision decision) {
+  if (callbacks_.admit && !callbacks_.admit()) return;
   if (findBmsTask.running() || !findBmsResult.pendingArtifact) {
     return;
   }
@@ -663,7 +672,8 @@ void FindBmsModal::refresh(bool refreshCandidates) {
                        ? i18n::message("library.find_bms.keeping_files.label")
                        : i18n::message("library.find_bms.deleting_files.label");
     } else {
-      statusText = findBmsProgressDisplayMessage(findBmsProgressMessage,
+      statusText = findBmsStorageProgress ? findBmsStorageProgressMessage(*findBmsStorageProgress) :
+          findBmsProgressDisplayMessage(findBmsProgressMessage,
                                               findBmsProgressCurrent,
                                               findBmsProgressTotal, true);
     }
@@ -749,6 +759,19 @@ void FindBmsModal::refresh(bool refreshCandidates) {
   } else {
     detail = findBmsRunningDetailMessage(findBmsProgressMessage);
   }
+  const auto displayedOptions = findBmsAwaitingConfirmation && callbacks_.downloadOptions
+      ? callbacks_.downloadOptions() : findBmsCapturedOptions;
+  if (findBmsAwaitingConfirmation || running || findBmsResult.status == BmsSearchResult::Status::Downloaded ||
+      !storage_management::IsNoOp(displayedOptions.storagePolicy)) {
+    detail = i18n::message("library.find_bms.storage.detail", {{"detail", detail},
+        {"storage", findBmsStoragePolicyMessage(displayedOptions)}});
+    if (findBmsResult.status == BmsSearchResult::Status::HashMismatch)
+      detail = i18n::message("library.find_bms.storage.detail", {{"detail", detail},
+          {"storage", i18n::message("library.find_bms.storage.mismatch_unchanged")}});
+  }
+  if (!running && findBmsResult.status == BmsSearchResult::Status::Downloaded && findBmsResult.storageReport)
+    detail = i18n::message("library.find_bms.storage.detail", {{"detail", detail},
+        {"storage", findBmsStorageReportMessage(*findBmsResult.storageReport)}});
   if (!findBmsModalChart.meta.Title.empty()) {
     detail = i18n::message("library.find_bms.chart_detail",
         {{"title", findBmsModalChart.meta.Title}, {"detail", detail}});
@@ -931,6 +954,7 @@ void FindBmsModal::update() {
   for (const auto &progress : progressEvents) {
     const bool replace =
         shouldReplaceFindBmsLogLine(findBmsProgressMessage, progress.message);
+    findBmsStorageProgress = progress.storageProgress;
     findBmsProgressMessage = progress.message;
     findBmsProgressCurrent = progress.downloadedBytes;
     findBmsProgressTotal = progress.totalBytes;
