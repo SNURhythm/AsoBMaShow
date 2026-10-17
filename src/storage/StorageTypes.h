@@ -60,4 +60,13 @@ struct EncodeResult {
   StorageDiagnostic reason;
 };
 
+struct StorageCodecSupport {
+  bool available = false;
+  std::string reason;
+};
+struct StorageCodecCapabilities {
+  StorageCodecSupport flac, vorbis, x264, aac, mp4;
+};
+StorageCodecCapabilities ProbeStorageCodecs();
+
 } // namespace storage_management

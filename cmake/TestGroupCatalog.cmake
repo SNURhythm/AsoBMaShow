@@ -572,6 +572,9 @@ asobmashow_label_tests(area_library storage_inventory_tests)
 asobmashow_label_tests(area_library storage_file_transaction_tests)
 asobmashow_label_tests(area_audio storage_inventory_tests)
 asobmashow_label_tests(area_video storage_inventory_tests)
+asobmashow_label_tests(area_audio storage_media_tests)
+asobmashow_label_tests(area_video storage_media_tests)
+asobmashow_label_tests(area_library storage_media_tests)
 asobmashow_label_tests(area_ir
     ir_credential_store_tests ir_credential_migration_tests pending_ir_credential_cleanup_tests
     result_skin_ir_tests result_skin_ir_scene_tests gameplay_skin_ir_scene_tests)

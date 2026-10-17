@@ -257,23 +257,23 @@ probe in `AudioTranscoder.cpp` using the already linked libraries.
 const StoragePolicy &, const std::filesystem::path &temporaryOutput,
 Checkpoint, ProgressCallback) -> EncodeResult` creates only temporary output.
 
-- [ ] Add small generated PCM fixtures covering 8/16/24-bit mono/stereo WAV.
+- [x] Add small generated PCM fixtures covering 8/16/24-bit mono/stereo WAV.
   Assert FLAC fully decodes with bit-exact samples/rate/channels/frame count.
   Assert float/32-bit WAV is skipped in lossless mode. Include an impulse at the
   start and a nonzero final sample in Vorbis fixtures to catch delay/truncation;
   verify exact decoded length, rate/channels, and playable nonempty output.
-- [ ] Add unavailable-codec, unsupported layout, playback-critical metadata,
+- [x] Add unavailable-codec, unsupported layout, playback-critical metadata,
   corrupt/truncated input, cancellation, and equal/larger-output tests. Test
   WAV→Vorbis and FLAC→Vorbis; Ogg/MP3 inputs must be skipped. Put policy decisions
   in pure tests and use only a few tiny real codec fixtures.
-- [ ] Confirm tests fail, then implement bounded libsndfile read/write loops,
+- [x] Confirm tests fail, then implement bounded libsndfile read/write loops,
   format validation and decode-back verification. FLAC comparison uses native
   integer PCM, avoiding the app playback decoder's 16-bit conversion. Apply
   Vorbis quality `0.5`. The transcoder never installs output or deletes input.
-- [ ] Probe linked capabilities instead of falling back to a different codec.
+- [x] Probe linked capabilities instead of falling back to a different codec.
   Verify iOS packaged libsndfile support via `scripts/get_ios_libs.py` and the
   linked library/header configuration before changing dependency declarations.
-- [ ] Run `storage_media_tests`; label it `area_audio`, `area_video`, and
+- [x] Run `storage_media_tests`; label it `area_audio`, `area_video`, and
   `area_library`. Require exact FLAC and timing assertions to pass, then commit
   `feat: encode storage optimized FLAC and Vorbis audio`.
 
