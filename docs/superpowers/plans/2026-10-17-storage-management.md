@@ -339,32 +339,32 @@ public:
 };
 ```
 
-- [ ] Add dependency-fake tests that assert inventory/revalidation → encode →
+- [x] Add dependency-fake tests that assert inventory/revalidation → encode →
   verify → transaction order, distinct-source deduplication, preserved images,
   complete BGA video deletion, stale preflight rejection,
   and unchanged chart hashes. Revalidate resolver results after each installation
   so a prior replacement cannot invalidate a later candidate's assumptions.
   Refresh evidence for exactly the job's committed changes; an external edit
   between two commits must still invalidate the affected candidate.
-- [ ] Verify full-folder orchestration converts representative-only, sabun-only,
+- [x] Verify full-folder orchestration converts representative-only, sabun-only,
   nested, and unreferenced eligible media once each, while retaining non-media
   files and preserving every image/audio file during BGA deletion. Filesystem
   collision checks must still apply to compression of the enumerated file union.
-- [ ] Test partial successes, no-op, codec unavailable, skipped caps, cancellation,
+- [x] Test partial successes, no-op, codec unavailable, skipped caps, cancellation,
   cleanup failure, and fatal recovery. Reports must distinguish attempted from
   installed bytes and avoid double-counting shared files. Unknown sizes stay
   unknown. A normal failure continues to the next asset; recoveryRequired stops
   the affected scope. Verify the single-conversion permit with deterministic
   synchronization rather than sleeps.
-- [ ] Run failing tests, then implement sequential orchestration with one private
+- [x] Run failing tests, then implement sequential orchestration with one private
   candidate at a time. Honor checkpoints between chunks/frames and before each
   commit. Cap progress notifications and keep diagnostics bounded (counts plus
   a bounded detail list, with a private full report if needed).
-- [ ] Run `storage_optimizer_tests` and all new storage targets in one build,
+- [x] Run `storage_optimizer_tests` and all new storage targets in one build,
   followed by `ctest --test-dir cmake-build-debug -R '^storage_.*_tests$'
   --output-on-failure --no-tests=error -j 6`. Register optimizer tests in
   `area_library`; require all new tests to pass.
-- [ ] Commit `feat: orchestrate cancellable chart storage optimization`.
+- [x] Commit `feat: orchestrate cancellable chart storage optimization`.
 
 ## Task 7: Manual job lifecycle and mutation admission
 

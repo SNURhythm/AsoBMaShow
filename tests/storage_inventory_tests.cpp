@@ -93,6 +93,10 @@ void testUnsafeAndUnsupportedFiles() {
   require(BuildInventory(input, {}, {}).candidates.empty(),
           "dangling destination symlink is still a collision");
   fs::remove(temp.root / "selected/safe.ogg");
+  fs::create_symlink(temp.root / "outside.wav", temp.root / "selected/safe.mp3");
+  require(BuildInventory(input, {}, {}).candidates.empty(),
+          "unsafe same-stem alternatives still block ambiguous audio conversion");
+  fs::remove(temp.root / "selected/safe.mp3");
   input.groups.front().path = temp.root / "selected/escape";
   require(BuildInventory(input, {}, {}).candidates.empty(), "symlink root is rejected");
   input.groups.front().path = temp.root / "missing";

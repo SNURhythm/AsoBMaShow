@@ -159,6 +159,7 @@ StorageInventory BuildInventory(const InventoryRequest &request, Checkpoint chec
         if (ec) break;
         if (!checkpoint(check)) { inventory.cancelled = true; break; }
         const auto path = it->path();
+        inventory.entries.insert(path);
         const auto status = it->symlink_status(ec);
         if (ec) break;
         std::string error;
@@ -189,7 +190,8 @@ StorageInventory BuildInventory(const InventoryRequest &request, Checkpoint chec
   }
 
   std::map<std::tuple<fs::path, std::u8string, bool>, std::size_t> stems;
-  for (const auto &[path, identity] : inventory.files) {
+  for (const auto &path : inventory.entries) {
+    if (inventory.directories.contains(path)) continue;
     const auto kind = asobmshow::chart_assets::ClassifyMediaPath(path);
     if (kind != MediaKind::Other)
       ++stems[{path.parent_path(), stemKey(path), kind == MediaKind::Audio}];

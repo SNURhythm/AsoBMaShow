@@ -34,6 +34,18 @@ struct StorageDiagnostic {
   StorageReason code = StorageReason::None;
   std::string detail;
 };
+struct FileIdentity {
+  std::uint64_t bytes = 0;
+  std::filesystem::file_time_type modified;
+  std::uint64_t device = 0;
+  std::uint64_t fileId = 0;
+  bool operator==(const FileIdentity &) const = default;
+};
+struct StorageFileChange {
+  std::filesystem::path path;
+  // Absent means the transaction removed this directory entry.
+  std::optional<FileIdentity> after;
+};
 struct FileResult {
   std::filesystem::path source;
   std::filesystem::path destination;
@@ -42,6 +54,8 @@ struct FileResult {
   std::optional<std::uint64_t> bytesBefore;
   std::optional<std::uint64_t> bytesAfter;
   std::uint64_t reclaimedBytes = 0;
+  // Exact committed changes, including a known retained recovery backup.
+  std::vector<StorageFileChange> filesystemChanges;
 };
 struct StorageReport {
   // A bounded detail list; counters include files omitted from this list.
@@ -53,6 +67,8 @@ struct StorageReport {
   std::uint64_t reclaimedBytes = 0;
   bool cancelled = false;
   bool recoveryRequired = false;
+  bool cleanupPending = false;
+  std::vector<std::filesystem::path> changedRoots;
 };
 struct EncodeResult {
   FileOutcome outcome = FileOutcome::Skipped;

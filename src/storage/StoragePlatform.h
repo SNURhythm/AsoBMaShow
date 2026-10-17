@@ -14,6 +14,9 @@ StoragePlatformPaths MakeStoragePlatformPaths(
     const std::filesystem::path &privateApplicationRoot,
     std::vector<std::filesystem::path> allowedRoots);
 
+using StorageCommitPrecondition = std::function<bool(const AssetCandidate &,
+    const std::vector<StorageFileChange> &, Checkpoint, std::string &)>;
+
 struct FileTransactionDependencies {
   std::function<std::optional<FileIdentity>(const std::filesystem::path &, std::string &)> identity;
   std::function<bool(const std::filesystem::path &, std::string &)> createExclusive;
@@ -23,6 +26,7 @@ struct FileTransactionDependencies {
   std::function<bool(const std::filesystem::path &, std::string &)> remove;
   std::function<bool(const std::filesystem::path &, std::string &)> syncDirectory;
   std::function<void(std::string_view)> faultPoint;
+  StorageCommitPrecondition beforeCommit;
 };
 FileTransactionDependencies DefaultFileTransactionDependencies();
 std::optional<std::string> HashStorageFile(const std::filesystem::path &, Checkpoint, std::string &);

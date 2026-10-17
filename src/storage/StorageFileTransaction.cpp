@@ -294,6 +294,18 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
   record.phase = Phase::Prepared;
   if (!writeRecord(record, error)) return rollback(StorageReason::IoError, error);
   if (dependencies_.faultPoint) dependencies_.faultPoint("prepared");
+  const auto validateScope = [&](bool retired, bool published) {
+    if (!dependencies_.beforeCommit) return true;
+    std::vector<StorageFileChange> changes;
+    if (!record.temporary.empty()) changes.push_back({record.temporary,
+        published ? std::nullopt : std::optional<FileIdentity>(record.outputIdentity)});
+    changes.push_back({record.backup, retired ? std::optional<FileIdentity>(record.sourceIdentity) : std::nullopt});
+    if (retired && (deletion || record.source != record.destination)) changes.push_back({record.source, std::nullopt});
+    if (published) changes.push_back({record.destination, record.outputIdentity});
+    return dependencies_.beforeCommit(candidate, changes, check, error);
+  };
+  if (!validateScope(false, false))
+    return rollback(checkpoint(check) ? StorageReason::StaleInput : StorageReason::Cancelled, error);
   if (!checkpoint(check)) return rollback(StorageReason::Cancelled, "Cancelled before commit");
   if (!matches(record.source, record.sourceIdentity, record.sourceHash, dependencies_, true, error, check))
     return rollback(checkpoint(check) ? StorageReason::StaleInput : StorageReason::Cancelled, "Source verification interrupted before commit");
@@ -315,6 +327,8 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
     if (!rename(record.temporary, record.destination, Phase::Published, "published")) return rollback(StorageReason::IoError, error);
   }
   if (!checkpoint(check)) return rollback(StorageReason::Cancelled, "Cancelled before durable commit");
+  if (!validateScope(true, !deletion))
+    return rollback(checkpoint(check) ? StorageReason::StaleInput : StorageReason::Cancelled, error);
   record.phase = Phase::Committed;
   // A failed durability flush may have already published the committed record.
   // Leave both playable output and backup for restart instead of guessing.
@@ -322,6 +336,9 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
   if (dependencies_.faultPoint) dependencies_.faultPoint("committed");
   result.outcome = deletion ? FileOutcome::Deleted : FileOutcome::Converted;
   result.bytesAfter = deletion ? 0 : record.outputIdentity.bytes;
+  if (deletion || record.source != record.destination)
+    result.filesystemChanges.push_back({record.source, std::nullopt});
+  if (!deletion) result.filesystemChanges.push_back({record.destination, record.outputIdentity});
   if (!finishRecord(record, dependencies_, result.reclaimedBytes, error)) {
     const auto cleanupError = error;
     const bool outputIntact = deletion || matches(record.destination, record.outputIdentity,
@@ -330,6 +347,8 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
                                                                     record.sourceHash, dependencies_, true, error);
     result.reason = {outputIntact && backupIntact ? StorageReason::CleanupFailed : StorageReason::RecoveryRequired,
                      cleanupError};
+    if (outputIntact && backupIntact && entryExists(record.backup))
+      result.filesystemChanges.push_back({record.backup, record.sourceIdentity});
   }
   return result;
 }

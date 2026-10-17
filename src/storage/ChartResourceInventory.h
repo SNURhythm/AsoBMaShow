@@ -4,6 +4,7 @@
 #include "../audio/ChartVisualAssetResolver.h"
 
 #include <map>
+#include <set>
 
 namespace storage_management {
 
@@ -17,13 +18,6 @@ struct InventoryRequest {
   std::vector<FolderSelection> groups;
   StoragePolicy policy;
   bool isolatedStaging = false;
-};
-struct FileIdentity {
-  std::uint64_t bytes = 0;
-  std::filesystem::file_time_type modified;
-  std::uint64_t device = 0;
-  std::uint64_t fileId = 0;
-  bool operator==(const FileIdentity &) const = default;
 };
 enum class AssetOperation { LosslessFlac, LossyVorbis, CompressH264, Delete };
 struct AssetCandidate {
@@ -50,6 +44,8 @@ struct StorageInventory {
   std::vector<GroupStorageMeasurement> groups;
   std::vector<FileResult> skips;
   std::map<std::filesystem::path, FileIdentity> files;
+  // Includes unsafe entries without following or reading their targets.
+  std::set<std::filesystem::path> entries;
   std::map<std::filesystem::path, std::filesystem::file_time_type> directories;
   std::optional<std::uint64_t> totalBytes;
   bool complete = true;
