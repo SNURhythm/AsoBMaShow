@@ -1628,7 +1628,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rootLayout->setPadding(Edge::Top, safe.top + kRootPadding);
   rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
   rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
-  rootLayout->setPadding(Edge::Bottom, safe.bottom);
+  // The menu dock intentionally reaches the screen edge, including the bottom safe area.
+  rootLayout->setPadding(Edge::Bottom, 0);
   rootLayout->setThemedBackgroundColor(main_menu_theme::backdrop);
   auto *header = new View();
   header->setName("mainMenuHeader");
@@ -2441,13 +2442,13 @@ void MainMenuScene::updatePanelLayout() {
   View::LayoutBatchScope batch;
   const bool portrait = rendering::window_height > rendering::window_width;
   const auto safe = getSafeAreaInsetsUi();
-  rootLayout->setPadding(Edge::Bottom, safe.bottom);
+  rootLayout->setPadding(Edge::Bottom, 0);
   rootLayout->findViewByName("mainMenuLibrary")->setPadding(Edge::Left, 14)->setPadding(Edge::Right, 14);
   rootLayout->findViewByName("mainMenuSongs")->setPadding(Edge::Left, 16)->setPadding(Edge::Right, 16);
   detailsContent_->setWidth(kDetailsContentWidth);
   chartDetailsView_->setWidth(kDetailsContentWidth);
   const float contentWidth = std::max(0, rendering::window_width - safe.left - safe.right - 2 * kRootPadding);
-  const float contentHeight = std::max(0, rendering::window_height - safe.top - safe.bottom - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
+  const float contentHeight = std::max(0, rendering::window_height - safe.top - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
   const float detailsHeight = portraitDetailsHeight(contentHeight);
   auto *browser = rootLayout->findViewByName("mainMenuBrowser");
   auto *library = rootLayout->findViewByName("mainMenuLibrary");
@@ -2513,7 +2514,7 @@ void MainMenuScene::updatePhonePanelLayout() {
   const bool portrait = rendering::window_height > rendering::window_width;
   const auto safe = getSafeAreaInsetsUi();
   const float width = rendering::window_width - safe.left - safe.right;
-  rootLayout->setPadding(Edge::Bottom, safe.bottom);
+  rootLayout->setPadding(Edge::Bottom, 0);
   auto *browser = rootLayout->findViewByName("mainMenuBrowser");
   auto *library = rootLayout->findViewByName("mainMenuLibrary");
   auto *songs = rootLayout->findViewByName("mainMenuSongs");
@@ -8231,7 +8232,7 @@ void MainMenuScene::update(float dt) {
   }
   if (selectorTabActive() && rootLayout && !rendering::compactMenuCanvasActive && rendering::window_height > rendering::window_width) {
     const auto safe = getSafeAreaInsetsUi();
-    const float availableHeight = std::max(0, rendering::window_height - safe.top - safe.bottom - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
+    const float availableHeight = std::max(0, rendering::window_height - safe.top - 2 * kRootPadding - (rendering::window_width < 1000 ? 2 : 1) * kMenuHeaderHeight);
     const auto *details = rootLayout->findViewByName("mainMenuDetails");
     if (details && std::abs(details->getHeight() - portraitDetailsHeight(availableHeight)) > 1) {
       updatePanelLayout();
@@ -8311,7 +8312,7 @@ void MainMenuScene::renderScene() {
     rootLayout->setPadding(Edge::Top, safe.top + kRootPadding);
     rootLayout->setPadding(Edge::Left, safe.left + kRootPadding);
     rootLayout->setPadding(Edge::Right, safe.right + kRootPadding);
-    rootLayout->setPadding(Edge::Bottom, safe.bottom);
+    rootLayout->setPadding(Edge::Bottom, 0);
     updatePanelLayout();
     refreshTabPresentation();
     rootLayout->applyYogaLayout();
