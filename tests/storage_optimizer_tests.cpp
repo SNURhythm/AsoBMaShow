@@ -85,7 +85,7 @@ void wholeFolderOrchestration() {
   auto input = request(temp.root / "charts");
   input.inventory.groups.push_back({"nested", temp.root / "charts/nested"});
   input.inventory.groups.push_back({"duplicate", temp.root / "charts"});
-  input.preflight = BuildInventory(input.inventory);
+  input.preflight = BuildStoragePreflight(input.inventory);
   auto deps = dependencies(temp, events);
   const auto report = StorageOptimizer(deps).Run(input, {}, {});
   require(report.converted == 6 && report.reclaimedBytes == 576 && !report.failed && !report.cancelled,
@@ -132,7 +132,7 @@ void staleEvidenceNeverBecomesFreshByRescanning() {
     temp.write("charts/chart.bms", "original chart");
     std::vector<std::string> events;
     auto input = request(temp.root / "charts");
-    input.preflight = BuildInventory(input.inventory);
+    input.preflight = BuildStoragePreflight(input.inventory);
     auto deps = dependencies(temp, events);
     if (change == 0) temp.write("charts/b.wav", "external edit before run");
     else {
@@ -158,6 +158,95 @@ void staleEvidenceNeverBecomesFreshByRescanning() {
     require(std::find(events.begin(), events.end(), "encode:b.wav") == events.end(), "stale next input never reaches encoder");
     require(report.skipped || report.failed, "stale evidence is reported explicitly");
   }
+}
+void changedDirectoryIsSkippedWithoutAcceptingNewAssets() {
+  TempDirectory temp;
+  temp.write("charts/root.wav", std::string(100, 'r'));
+  temp.write("charts/a/a.wav", std::string(100, 'a'));
+  temp.write("charts/b/b.wav", std::string(100, 'b'));
+  auto input = request(temp.root / "charts");
+  input.preflight = BuildStoragePreflight(input.inventory);
+  temp.write("charts/a/new.wav", std::string(100, 'n'));
+  std::vector<std::string> events;
+  const auto report = StorageOptimizer(dependencies(temp, events)).Run(std::move(input));
+  require(report.converted == 2 && report.skipped && fs::exists(temp.root / "charts/a/a.wav") &&
+      fs::exists(temp.root / "charts/a/new.wav") && !fs::exists(temp.root / "charts/b/b.wav"),
+      "a stale directory stays skipped while an unchanged sibling can finish");
+  require(report.groupDeltas.size() == 1 && report.groupDeltas.front().needsRefresh,
+      "uncertain child changes invalidate the ancestor delta even after a committed parent change");
+}
+void unrelatedFoldersDoNotMultiplyCommitChecks() {
+  TempDirectory temp;
+  auto input = request(temp.root / "charts/active");
+  temp.write("charts/active/a.wav", std::string(100, 'a'));
+  for (int i = 0; i < 80; ++i) {
+    const auto path = fs::path("charts") / ("other" + std::to_string(i));
+    temp.write(path / "chart.bms", "chart");
+    input.inventory.groups.push_back({std::to_string(i), temp.root / path});
+  }
+  input.preflight = BuildStoragePreflight(input.inventory);
+  std::vector<std::string> events;
+  auto deps = dependencies(temp, events);
+  int checkpoints = 0, commitChecks = 0;
+  const auto encoder = deps.encodeAudio;
+  deps.encodeAudio = [&](const auto &asset, const auto &policy, const auto &output, auto check, auto progress) {
+    auto encoded = encoder(asset, policy, output, check, progress);
+    checkpoints = 0;
+    return encoded;
+  };
+  const auto factory = deps.transactions;
+  deps.transactions = [&, factory](const auto &paths, auto beforeCommit) {
+    auto transaction = factory(paths, std::move(beforeCommit));
+    auto replace = transaction.replace;
+    transaction.replace = [&, replace](const auto &asset, const auto &encoded, auto check) {
+      commitChecks = checkpoints;
+      return replace(asset, encoded, check);
+    };
+    return transaction;
+  };
+  const auto report = StorageOptimizer(deps).Run(std::move(input), [&] { ++checkpoints; return true; });
+  require(report.converted == 1 && commitChecks < 40,
+      "unrelated selected chart folders do not add per-file commit checks");
+}
+void committedDeltasSurviveDetailLimitAndRetainedBackups() {
+  TempDirectory temp;
+  for (int i = 0; i < 105; ++i) temp.write(fs::path("charts") / (std::to_string(i) + ".wav"), std::string(100, 'a'));
+  temp.write("charts/nested/other.wav", std::string(100, 'b'));
+  auto input = request(temp.root / "charts");
+  input.preflight = BuildStoragePreflight(input.inventory);
+  input.measurementBaselines = input.preflight->groups;
+  input.measurementBaselines.front().generation = 7;
+  std::vector<std::string> events;
+  StorageEvidenceMetrics metrics;
+  auto deps = dependencies(temp, events); deps.evidenceMetrics = &metrics;
+  const auto report = StorageOptimizer(deps).Run(std::move(input));
+  require(report.converted == 106 && report.files.size() == 100 && report.groupDeltas.size() == 1,
+      "every committed file contributes a delta beyond capped details");
+  const auto &delta = report.groupDeltas.front();
+  require(delta.bytesBefore == 10600 && delta.bytesAfter == 424 && delta.audioBefore == 10600 &&
+      delta.audioAfter == 424 && delta.baselineBytes == 10600 && delta.baselineGeneration == 7 &&
+      !delta.needsRefresh && !delta.nextSourceIdentity.empty(), "nested physical changes roll up exactly once");
+  require(metrics.membershipEnumerations >= 106 && metrics.membershipEntries >= 105 * 105,
+      "local membership checks remain instrumented rather than silently removed");
+}
+void ancestorChartsStayProtectedWithoutBlockingIndependentRoots() {
+  TempDirectory temp;
+  temp.write("charts/a/chart.bms", "original chart");
+  temp.write("charts/a/nested/a.wav", std::string(100, 'a'));
+  temp.write("charts/b/b.wav", std::string(100, 'b'));
+  auto input = request(temp.root / "charts/a");
+  input.inventory.groups.push_back({"independent", temp.root / "charts/b"});
+  input.preflight = BuildStoragePreflight(input.inventory);
+  std::vector<std::string> events;
+  auto deps = dependencies(temp, events); const auto encode = deps.encodeAudio;
+  deps.encodeAudio = [&, encode](const auto &asset, const auto &policy, const auto &output, auto check, auto progress) {
+    auto result = encode(asset, policy, output, check, progress);
+    if (asset.source.filename() == "a.wav") temp.write("charts/a/chart.bms", "external chart edit");
+    return result;
+  };
+  const auto report = StorageOptimizer(deps).Run(std::move(input));
+  require(report.converted == 1 && report.skipped == 1 && fs::exists(temp.root / "charts/a/nested/a.wav") &&
+      !fs::exists(temp.root / "charts/b/b.wav"), "ancestor chart edits protect nested assets while unrelated roots proceed");
 }
 void partialFailureAndAccounting() {
   TempDirectory temp;
@@ -230,6 +319,9 @@ void cleanupFailureAndFatalRecovery() {
     else {
       require(report.converted == 2 && !report.reclaimedBytes && !report.recoveryRequired && report.cleanupPending,
               "known retained backups are tracked while cleanup warnings claim no reclaimed bytes");
+      require(report.groupDeltas.size() == 1 && report.groupDeltas[0].bytesBefore == 200 &&
+          report.groupDeltas[0].bytesAfter == 208 && report.groupDeltas[0].audioAfter == 8,
+          "retained recovery backups count as physical bytes rather than reclaimed media");
       const auto recovered = StorageFileTransaction(deps.paths).Recover();
       require(!recovered.recoveryRequired && recovered.reclaimedBytes == 192 &&
                   StorageFileTransaction(deps.paths).Recover().reclaimedBytes == 0,
@@ -314,10 +406,13 @@ void cancellableSingleConversionPermit() {
   held.reset(); require(permit.Acquire({}).has_value(), "released permit can be acquired again");
 }
 }
-int main() {
+int main(int argc, char **argv) {
   try {
+    if (argc > 1 && std::string_view(argv[1]) == "--commit-cost") { unrelatedFoldersDoNotMultiplyCommitChecks(); return 0; }
     storageLibraryIntegration();
     extractedDownloadUsesWholePackage(); wholeFolderOrchestration(); deletionAndUnavailableGroups(); staleEvidenceNeverBecomesFreshByRescanning();
+    changedDirectoryIsSkippedWithoutAcceptingNewAssets(); unrelatedFoldersDoNotMultiplyCommitChecks();
+    ancestorChartsStayProtectedWithoutBlockingIndependentRoots(); committedDeltasSurviveDetailLimitAndRetainedBackups();
     partialFailureAndAccounting(); revalidateAtTheActualCommitBoundary(); cleanupFailureAndFatalRecovery(); cancellationCapabilitiesAndNoOp();
     boundedReportsAndProgress(); cancellableSingleConversionPermit();
   } catch (const std::exception &error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }

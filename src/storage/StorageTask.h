@@ -15,7 +15,7 @@ struct StorageTaskSnapshot {
 };
 struct StorageTaskDependencies {
   std::function<std::optional<StorageMaintenanceGuard>(const OptimizationRequest &, std::string &)> admit;
-  std::function<StorageReport(const OptimizationRequest &, Checkpoint, ProgressCallback)> run;
+  std::function<StorageReport(OptimizationRequest, Checkpoint, ProgressCallback)> run;
   std::function<void()> wake;
 };
 class StorageTask {

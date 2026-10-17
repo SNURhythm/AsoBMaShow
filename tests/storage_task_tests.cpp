@@ -10,6 +10,24 @@ using storage_test::require;
 
 int main() {
   try {
+    // The handoff must preserve owned storage, not duplicate the confirmed tree.
+    OptimizationRequest transfer;
+    transfer.preflight.emplace();
+    transfer.preflight->groups.resize(1);
+    const auto *ownedGroups = transfer.preflight->groups.data();
+    bool ownershipMoved = false;
+    StorageTask moveTask({
+      .admit = [](const OptimizationRequest &, std::string &) -> std::optional<StorageMaintenanceGuard> {
+        return StorageMaintenanceGuard({}, {});
+      },
+      .run = [&](OptimizationRequest received, Checkpoint, ProgressCallback) {
+        ownershipMoved = received.preflight && received.preflight->groups.data() == ownedGroups;
+        return StorageReport{};
+      },
+    });
+    require(moveTask.Start(std::move(transfer)), "owned preflight starts");
+    moveTask.CancelAndWait();
+    require(ownershipMoved, "preflightOwnershipMovesWithoutAssetCopies");
     std::atomic<int> admitted{0}, released{0}, refreshed{0};
     std::binary_semaphore entered{0};
     std::counting_semaphore<16> finish{0};

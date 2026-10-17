@@ -1,7 +1,7 @@
 #pragma once
 
 #include "StorageFileTransaction.h"
-#include "StoragePreflight.h"
+#include "StorageDirectoryEvidence.h"
 
 #include <chrono>
 #include <condition_variable>
@@ -45,19 +45,20 @@ struct OptimizerDependencies {
   std::function<OptimizerTransactions(const StoragePlatformPaths &, StorageCommitPrecondition)> transactions;
   std::function<std::optional<std::uint64_t>(const std::filesystem::path &)> availableSpace;
   std::function<std::chrono::steady_clock::time_point()> now;
+  StorageEvidenceMetrics *evidenceMetrics = nullptr;
 };
 OptimizerDependencies DefaultOptimizerDependencies(StoragePlatformPaths);
 
 struct OptimizationRequest {
   InventoryRequest inventory;
   StoragePolicy policy;
-  std::optional<StorageInventory> preflight;
-  std::optional<StoragePreflight> compactPreflight;
+  std::optional<StoragePreflight> preflight;
+  std::vector<GroupStorageMeasurement> measurementBaselines;
 };
 class StorageOptimizer {
 public:
   explicit StorageOptimizer(OptimizerDependencies dependencies) : dependencies_(std::move(dependencies)) {}
-  StorageReport Run(const OptimizationRequest &, Checkpoint = {}, ProgressCallback = {});
+  StorageReport Run(OptimizationRequest, Checkpoint = {}, ProgressCallback = {});
 private:
   OptimizerDependencies dependencies_;
 };

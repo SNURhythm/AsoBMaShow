@@ -356,7 +356,8 @@ void StorageManagementScene::ReviewOrApply() {
   if (shownTask_.running || (measuring_ && measuringSelection_) || selection_.Count() == 0 || IsNoOp(policy_)) return;
   if (!preflight_) { Measure(true); return; }
   if (!preflight_->complete || preflight_->eligibleCount == 0 || !context.storageTask) return;
-  auto request = OptimizationRequest{.inventory = preflight_->request, .policy = policy_, .compactPreflight = std::move(preflight_)};
+  auto request = OptimizationRequest{.inventory = preflight_->request, .policy = policy_, .preflight = std::move(preflight_)};
+  for (const auto &[id, row] : measurements_) request.measurementBaselines.push_back(row);
   preflight_.reset();
   inventoryTask_.Cancel();
   (void)context.storageTask->Start(std::move(request));

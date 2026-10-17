@@ -6259,7 +6259,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/bms_search/DownloadedArchiveWorkflow.cpp
         src/storage/StoragePolicy.cpp
         src/bms_search/DownloadStorageOptimization.cpp
-        src/storage/StorageOptimizer.cpp src/storage/AudioTranscoder.cpp src/storage/BgaTranscoder.cpp
+        src/storage/StorageOptimizer.cpp src/storage/StorageDirectoryEvidence.cpp
+        src/storage/StoragePreflight.cpp src/storage/StorageDirectoryWorkingSet.cpp
+        src/storage/StorageDirectoryInventory.cpp src/storage/StoragePathIndex.cpp src/storage/StorageScanScheduler.cpp
+        src/ChartScanWorkScheduler.cpp src/storage/AudioTranscoder.cpp src/storage/BgaTranscoder.cpp
         src/storage/VideoCompressionGeometry.cpp src/storage/ChartResourceInventory.cpp
         src/storage/StorageFileTransaction.cpp src/storage/StoragePlatform.cpp
         src/audio/ChartVisualAssetResolver.cpp src/AtomicFile.cpp src/FileChecksum.cpp
@@ -6297,7 +6300,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     elseif(TARGET SDL3)
         target_link_libraries(find_bms_download_tests PRIVATE SDL3)
     endif()
-    target_link_libraries(find_bms_download_tests PRIVATE ${COMMON_LIBS} SndFile::sndfile ${FFMPEG_LIBRARIES})
+    target_link_libraries(find_bms_download_tests PRIVATE ${COMMON_LIBS} SQLite3 SndFile::sndfile ${FFMPEG_LIBRARIES})
     if(APPLE)
         target_link_libraries(find_bms_download_tests PRIVATE iconv)
     endif()

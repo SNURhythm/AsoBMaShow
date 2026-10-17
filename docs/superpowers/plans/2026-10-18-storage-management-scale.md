@@ -315,12 +315,12 @@ the task's run callback consumes it by value and the worker moves it.
 `Candidate`, `BeforeCommit`, and `Advance` with the existing evidence arguments.
 Transactions still receive `StorageCommitPrecondition` unchanged.
 
-- [ ] Add failing `unrelatedFoldersDoNotMultiplyCommitChecks`,
+- [x] Add failing `unrelatedFoldersDoNotMultiplyCommitChecks`,
   `changedDirectoryIsSkippedWithoutAcceptingNewAssets` and
   `preflightOwnershipMovesWithoutAssetCopies`. Retain tests for edits during
   encoding, case-varied alternatives, symlinked ancestors and chart changes.
-- [ ] Run optimizer/task tests to establish the regressions.
-- [ ] Scan compact preflight when absent; verify directory membership/fingerprints
+- [x] Run optimizer/task tests to establish the regressions.
+- [x] Scan compact preflight when absent; verify directory membership/fingerprints
   when loading each working set. Process one directory at a time initially.
   Select relevant authorized/access boundaries through Task 1 so transaction
   checks also avoid repeatedly searching all registrations. Preserve source hash,
@@ -329,12 +329,12 @@ Transactions still receive `StorageCommitPrecondition` unchanged.
   Populate Task-5 group deltas for every committed change; apply each physical
   change once per affected group, with no dependence on capped detail reports.
   Existing selected preflight must bypass any new global preflight build.
-- [ ] Extract local evidence and remove loops over every selected chart/directory
+- [x] Extract local evidence and remove loops over every selected chart/directory
   from per-file paths. Keep local same-stem and external-change checks intact;
   instrument their enumeration costs before consolidating redundant work.
   Remove the full-inventory migration adapter once production callers are moved.
-- [ ] Run inventory/optimizer/task/file-transaction tests and compile `main`.
-- [ ] Commit and push `perf: bound storage conversion evidence by directory`.
+- [x] Run inventory/optimizer/task/file-transaction tests and compile `main`.
+- [x] Commit and push `perf: bound storage conversion evidence by directory`.
 
 ### Task 7: Bound audio concurrency, scratch reservations and failure propagation
 

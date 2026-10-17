@@ -56,6 +56,7 @@ struct TaskRequest {
   std::shared_ptr<AndroidArchiveImportOwner> androidArchiveOwner;
   bool rebuildLibraryMetadata = false;
   bool folderRegistrationCompleted = false;
+  std::vector<std::filesystem::path> refreshPaths;
 };
 
 struct TaskInfo {

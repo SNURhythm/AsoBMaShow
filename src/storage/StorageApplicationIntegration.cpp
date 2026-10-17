@@ -1,5 +1,6 @@
 #include "StorageApplicationIntegration.h"
 #include "StorageTask.h"
+#include "StoragePathIndex.h"
 #include "../context.h"
 #include "../scene/SceneManager.h"
 #include "../scene/Scene.h"
@@ -47,13 +48,9 @@ std::optional<Access> accessFolders(ApplicationContext &context, std::string &er
 }
 std::vector<std::filesystem::path> selectedRoots(const OptimizationRequest &request) {
   std::vector<std::filesystem::path> roots;
-  for (const auto &group : request.inventory.groups) {
-    auto path = (group.chartPathFallback ? group.path.parent_path() : group.path).lexically_normal();
-    if (std::any_of(roots.begin(), roots.end(), [&](const auto &root) { return IsWithinFolder(path, root); })) continue;
-    std::erase_if(roots, [&](const auto &root) { return IsWithinFolder(root, path); });
-    roots.push_back(std::move(path));
-  }
-  return roots;
+  for (const auto &group : request.inventory.groups)
+    roots.push_back((group.chartPathFallback ? group.path.parent_path() : group.path).lexically_normal());
+  return StoragePathIndex(std::move(roots)).MinimalRoots();
 }
 }
 
@@ -118,14 +115,24 @@ bool InitializeStorageServices(ApplicationContext &context) {
       if (!token) { error = "A chart library scan or import is active."; return {}; }
       context.storageMaintenanceActive = true;
       StorageMaintenanceGuard guard(
-          [&context, token](const StorageReport &report) {
+          [&context, token, roots = selectedRoots(request)](const StorageReport &report) {
             ++context.storageMeasurementRevision;
             if (report.recoveryRequired) return;
-            for (const auto &root : report.changedRoots) {
-              if (!context.chartLibraryTasks->enqueueMaintenanceRefresh(*token, {
-                  .kind = chart_library_tasks::TaskKind::RefreshPath,
-                  .title = "Refresh optimized chart folder",
-                  .refreshPath = root})) throw std::runtime_error("Could not refresh optimized folder");
+            if (!report.changedRoots.empty()) {
+              // Include selected ancestors whose charts may reference a changed
+              // nested media folder, and perform one scoped scanner operation.
+              const StoragePathIndex selected(roots);
+              std::vector<std::filesystem::path> refreshRoots;
+              for (const auto &changed : report.changedRoots) {
+                const auto ancestors = selected.Ancestors(changed);
+                refreshRoots.push_back(ancestors.empty() ? changed : roots[ancestors.front()]);
+              }
+              chart_library_tasks::TaskRequest refresh;
+              refresh.kind = chart_library_tasks::TaskKind::RefreshPath;
+              refresh.title = "Refresh optimized chart folders";
+              refresh.refreshPaths = StoragePathIndex(std::move(refreshRoots)).MinimalRoots();
+              if (!context.chartLibraryTasks->enqueueMaintenanceRefresh(*token, std::move(refresh)))
+                throw std::runtime_error("Could not refresh optimized folders");
             }
             context.chartLibraryListReloadRequested = true;
           },
@@ -140,12 +147,13 @@ bool InitializeStorageServices(ApplicationContext &context) {
       if (!access) return {};
       const auto roots = selectedRoots(request);
       if (roots.empty()) { error = "Select a local chart folder."; return {}; }
+      const StoragePathIndex allowed(access->paths.allowedRoots), unavailable(access->unavailableRoots),
+          boundaries(access->paths.pathAccessRoots);
       for (const auto &root : roots) {
-        if (!IsSafeLocalPath(root, error, access->paths.pathAccessRoots) ||
-            std::any_of(access->unavailableRoots.begin(), access->unavailableRoots.end(),
-                [&](const auto &unavailable) { return IsWithinFolder(root, unavailable); }) ||
-            std::none_of(access->paths.allowedRoots.begin(), access->paths.allowedRoots.end(),
-                [&](const auto &allowed) { return IsWithinFolder(root, allowed); })) {
+        const auto matches = boundaries.Ancestors(root);
+        const auto localBoundaries = matches.empty() ? std::vector<std::filesystem::path>{} :
+            std::vector<std::filesystem::path>{access->paths.pathAccessRoots[matches.back()]};
+        if (!IsSafeLocalPath(root, error, localBoundaries) || !unavailable.Ancestors(root).empty() || allowed.Ancestors(root).empty()) {
           error = "The selected folder is not a registered local chart folder."; return {};
         }
       }
@@ -162,8 +170,8 @@ bool InitializeStorageServices(ApplicationContext &context) {
       if (!stopped.success) { error = stopped.diagnostic; return {}; }
       return guard;
     },
-    .run = [environment](const OptimizationRequest &request, Checkpoint check, ProgressCallback progress) {
-      return StorageOptimizer(DefaultOptimizerDependencies(environment->paths)).Run(request, std::move(check), std::move(progress));
+    .run = [environment](OptimizationRequest request, Checkpoint check, ProgressCallback progress) {
+      return StorageOptimizer(DefaultOptimizerDependencies(environment->paths)).Run(std::move(request), std::move(check), std::move(progress));
     },
     .wake = [] { SharedStorageConversionPermit()->Notify(); },
   });

@@ -164,7 +164,8 @@ TaskRunResult ChartLibraryOperations::runPathRefresh(
   };
   ChartLibraryScanner scanner;
   const auto result = scanner.ScanScopedWithResult(
-      *session, {request.refreshPath}, &stopToken, publishScanProgress,
+      *session, request.refreshPaths.empty() ? std::vector<std::filesystem::path>{request.refreshPath} : request.refreshPaths,
+      &stopToken, publishScanProgress,
       checkpoint, dependencies_.pendingScanFlushRequest,
       dependencies_.completeScanFlush);
   SDL_Log("Chart folder refresh changed %d entries", result.changedCount);

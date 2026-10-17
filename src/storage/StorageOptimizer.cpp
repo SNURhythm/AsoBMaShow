@@ -1,10 +1,11 @@
 #include "StorageOptimizer.h"
 #include "AudioTranscoder.h"
 #include "BgaTranscoder.h"
-#include "../BmsChartFile.h"
+#include "StoragePathIndex.h"
 #include "../Uuid.h"
 
 #include <algorithm>
+#include <atomic>
 #include <limits>
 #include <utility>
 
@@ -58,14 +59,9 @@ bool sameRequest(const InventoryRequest &left, const InventoryRequest &right) {
   if (left.policy != right.policy || left.isolatedStaging != right.isolatedStaging || left.groups.size() != right.groups.size()) return false;
   for (std::size_t i = 0; i < left.groups.size(); ++i) {
     const auto &a = left.groups[i]; const auto &b = right.groups[i];
-    if (a.groupId != b.groupId || a.path != b.path || a.writableLocal != b.writableLocal || a.chartPathFallback != b.chartPathFallback) return false;
+    if (a.groupId != b.groupId || a.path != b.path || a.writableLocal != b.writableLocal || a.chartPathFallback != b.chartPathFallback || a.sourceKind != b.sourceKind) return false;
   }
   return true;
-}
-void addRoot(std::vector<fs::path> &roots, const fs::path &root) {
-  if (std::ranges::any_of(roots, [&](const auto &old) { return IsWithinFolder(root, old); })) return;
-  std::erase_if(roots, [&](const auto &old) { return IsWithinFolder(old, root); });
-  roots.push_back(root); std::ranges::sort(roots);
 }
 void append(StorageReport &report, FileResult result) {
   switch (result.outcome) {
@@ -99,122 +95,17 @@ struct TemporaryDirectory {
   ~TemporaryDirectory() { if (!path.empty()) { std::error_code ignored; fs::remove_all(path, ignored); } }
 };
 
-// All files are checked once at admission. Between files, retain that evidence:
-// inspect the next source, charts and directory timestamps, not a refreshed copy
-// of every asset. Only a transaction's explicit path/identity changes advance it.
-struct Evidence {
-  StorageInventory inventory;
-  std::map<fs::path, FileIdentity> charts;
-  std::map<fs::path, std::set<fs::path>> children;
-  explicit Evidence(StorageInventory value) : inventory(std::move(value)) {
-    for (const auto &[path, identity] : inventory.files)
-      if (asobmshow::bms_chart_file::isBmsChartPath(path)) charts.emplace(path, identity);
-    for (const auto &path : inventory.entries) children[path.parent_path()].insert(path);
-  }
-  bool checkCharts(Checkpoint check, std::string &error) const {
-    for (const auto &[path, identity] : charts) {
-      if (check && !check()) { error = "Cancelled"; return false; }
-      auto current = ReadFileIdentity(path, error, inventory.request.pathAccessRoots);
-      if (!current || *current != identity) { error = "Chart changed since inventory"; return false; }
-    }
-    return true;
-  }
-  bool checkDirectories(Checkpoint check, std::string &error, const fs::path &except = {}) const {
-    for (const auto &[path, modified] : inventory.directories) {
-      if (path == except) continue;
-      if (check && !check()) { error = "Cancelled"; return false; }
-      if (!IsSafeLocalPath(path, error, inventory.request.pathAccessRoots)) return false;
-      std::error_code ec;
-      if (fs::last_write_time(path, ec) != modified || ec) { error = "Directory changed since inventory"; return false; }
-    }
-    return true;
-  }
-  bool candidate(const AssetCandidate &asset, Checkpoint check, std::string &error) const {
-    if (!checkCharts(check, error) || !checkDirectories(check, error)) return false;
-    const auto identity = ReadFileIdentity(asset.source, error, inventory.request.pathAccessRoots);
-    if (!identity || *identity != asset.identity) { error = "Source changed since inventory"; return false; }
-    return true;
-  }
-  bool checkEntries(const fs::path &parent, const std::set<fs::path> &expected, Checkpoint check,
-                    std::string &error, fs::file_time_type &modified) const {
-    std::error_code ec;
-    modified = fs::last_write_time(parent, ec);
-    if (ec) { error = ec.message(); return false; }
-    std::set<fs::path> actual;
-    fs::directory_iterator it(parent, ec), end;
-    for (; !ec && it != end; it.increment(ec)) {
-      if (check && !check()) { error = "Cancelled"; return false; }
-      actual.insert(it->path());
-    }
-    if (ec || actual != expected || fs::last_write_time(parent, ec) != modified || ec) {
-      error = "Unexpected directory entry changed during transaction"; return false;
-    }
-    return true;
-  }
-  bool beforeCommit(const AssetCandidate &asset, const std::vector<StorageFileChange> &owned,
-                     Checkpoint check, std::string &error) const {
-    const auto parent = asset.source.parent_path();
-    if (!IsSafeLocalPath(parent, error, inventory.request.pathAccessRoots) || !checkCharts(check, error) || !checkDirectories(check, error, parent)) return false;
-    const auto found = children.find(parent);
-    auto expected = found == children.end() ? std::set<fs::path>{} : found->second;
-    bool sourceChangedByTransaction = false;
-    for (const auto &change : owned) {
-      if (change.path.parent_path() != parent) { error = "Unexpected transaction path"; return false; }
-      sourceChangedByTransaction |= change.path == asset.source;
-      if (change.after) {
-        const auto identity = ReadFileIdentity(change.path, error, inventory.request.pathAccessRoots);
-        if (!identity || *identity != *change.after) { error = "Transaction file identity changed before commit"; return false; }
-        expected.insert(change.path);
-      } else {
-        std::error_code ec; const auto status = fs::symlink_status(change.path, ec);
-        if (fs::exists(status) || (ec && ec != std::errc::no_such_file_or_directory)) {
-          error = "Foreign file appeared at a transaction path"; return false;
-        }
-        expected.erase(change.path);
-      }
-    }
-    if (!sourceChangedByTransaction) {
-      const auto identity = ReadFileIdentity(asset.source, error, inventory.request.pathAccessRoots);
-      if (!identity || *identity != asset.identity) { error = "Source changed before commit"; return false; }
-    }
-    fs::file_time_type ignored;
-    return checkEntries(parent, expected, check, error, ignored);
-  }
-  bool advance(const AssetCandidate &asset, const FileResult &result, Checkpoint check, std::string &error) {
-    const auto parent = asset.source.parent_path();
-    if (!IsSafeLocalPath(parent, error, inventory.request.pathAccessRoots)) return false;
-    for (const auto &change : result.filesystemChanges) {
-      if (change.path.parent_path() != parent) { error = "Transaction reported an unrelated path"; return false; }
-      if (change.after) {
-        const auto identity = ReadFileIdentity(change.path, error, inventory.request.pathAccessRoots);
-        if (!identity || *identity != *change.after) { error = "Installed file or recovery backup changed"; return false; }
-        inventory.files[change.path] = *change.after;
-        inventory.entries.insert(change.path); children[parent].insert(change.path);
-      } else {
-        std::error_code ec; const auto status = fs::symlink_status(change.path, ec);
-        if (fs::exists(status) || (ec && ec != std::errc::no_such_file_or_directory)) {
-          error = "A file appeared at a retired source path"; return false;
-        }
-        inventory.files.erase(change.path); inventory.entries.erase(change.path); children[parent].erase(change.path);
-      }
-    }
-    if (!checkCharts(check, error) || !checkDirectories(check, error, parent)) return false;
-    fs::file_time_type modified;
-    if (!checkEntries(parent, children[parent], check, error, modified)) return false;
-    inventory.directories[parent] = modified;
-    return true;
-  }
-};
+
 }
 
-StorageReport StorageOptimizer::Run(const OptimizationRequest &request, Checkpoint check, ProgressCallback progress) {
+StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint check, ProgressCallback progress) {
   StorageReport report;
   if (!IsValid(request.policy)) {
     append(report, {.outcome = FileOutcome::Skipped, .reason = {StorageReason::UnsupportedFormat, "Invalid storage policy"}});
     return report;
   }
   if (IsNoOp(request.policy)) return report;
-  bool cancelled = false;
+  std::atomic<bool> cancelled{false};
   Checkpoint checkpoint = [&] { if (!cancelled && check && !check()) cancelled = true; return !cancelled; };
   StorageProgress state;
   bool notified = false;
@@ -230,11 +121,7 @@ StorageReport StorageOptimizer::Run(const OptimizationRequest &request, Checkpoi
   try {
     auto lease = dependencies_.permit->Acquire(checkpoint);
     if (!lease) { report.cancelled = true; return complete(); }
-    StorageCommitPrecondition validateBeforeCommit;
-    auto transactions = dependencies_.transactions(dependencies_.paths,
-        [&](const AssetCandidate &asset, const std::vector<StorageFileChange> &owned, Checkpoint check, std::string &error) {
-          return validateBeforeCommit && validateBeforeCommit(asset, owned, std::move(check), error);
-        });
+    auto transactions = dependencies_.transactions(dependencies_.paths, {});
     const auto recovery = transactions.recover(checkpoint);
     report = recovery;
     if (report.files.size() > 100) report.files.resize(100);
@@ -242,33 +129,15 @@ StorageReport StorageOptimizer::Run(const OptimizationRequest &request, Checkpoi
     InventoryRequest inventoryRequest = request.inventory; inventoryRequest.policy = request.policy;
     inventoryRequest.pathAccessRoots = dependencies_.paths.pathAccessRoots;
     emit();
-    if ((request.preflight && !sameRequest(request.preflight->request, inventoryRequest)) ||
-        (request.compactPreflight && !sameRequest(request.compactPreflight->request, inventoryRequest))) {
+    if (request.preflight && !sameRequest(request.preflight->request, inventoryRequest)) {
       append(report, {.reason = {StorageReason::StaleInput, "Selected folders or policy changed after preflight"}}); return complete();
     }
-    auto inventory = request.preflight ? *request.preflight : BuildInventory(inventoryRequest, checkpoint);
+    StorageScanDependencies scan;
+    scan.limits.scratchRoot = dependencies_.paths.scanRoot;
+    auto inventory = request.preflight ? std::move(*request.preflight) : BuildStoragePreflight(inventoryRequest, checkpoint, nullptr, scan);
     inventory.request.pathAccessRoots = inventoryRequest.pathAccessRoots;
     if (inventory.cancelled || !checkpoint()) return complete();
     std::string error;
-    // Transitional adapter until directory-at-a-time execution replaces Evidence.
-    // The compact confirmation remains authoritative over the freshly loaded
-    // legacy inventory; a new directory or changed entry cannot become eligible.
-    if (request.compactPreflight) {
-      const auto &confirmed = *request.compactPreflight;
-      if (!confirmed.complete || confirmed.cancelled || confirmed.directories.size() != inventory.directories.size()) {
-        append(report, {.reason = {StorageReason::StaleInput, "Confirmed directory scope changed"}}); return complete();
-      }
-      for (const auto &[path, summary] : confirmed.directories) {
-        if (!inventory.directories.contains(path) ||
-            !LoadStorageDirectory(summary, inventoryRequest, checkpoint, error, {.scratchRoot = dependencies_.paths.scanRoot})) {
-          append(report, {.source = path, .reason = {StorageReason::StaleInput, error}}); return complete();
-        }
-      }
-    }
-    if (!RevalidateInventory(inventory, checkpoint, error)) {
-      if (!cancelled) append(report, {.reason = {StorageReason::StaleInput, error}});
-      return complete();
-    }
     for (const auto &group : inventory.groups) {
       if (!group.totalBytes) append(report, {.source = group.root, .reason = group.reason});
       if (group.totalBytes && (IsWithinFolder(dependencies_.paths.temporaryRoot, group.root) ||
@@ -278,12 +147,10 @@ StorageReport StorageOptimizer::Run(const OptimizationRequest &request, Checkpoi
         return complete();
       }
     }
-    for (auto skipped : inventory.skips) {
-      if (auto found = inventory.files.find(skipped.source); found != inventory.files.end()) skipped.bytesBefore = found->second.bytes;
-      append(report, std::move(skipped));
-    }
-    state.filesTotal = inventory.candidates.size();
-    if (inventory.candidates.empty()) return complete();
+    report.skipped += inventory.skippedCount;
+    for (auto &skipped : inventory.skips) if (report.files.size() < 100) report.files.push_back(std::move(skipped));
+    state.filesTotal = inventory.eligibleCount;
+    if (!inventory.eligibleCount) return complete();
     std::error_code ec;
     fs::create_directories(dependencies_.paths.temporaryRoot, ec);
     if (ec || !IsSafeLocalPath(dependencies_.paths.temporaryRoot, error, dependencies_.paths.pathAccessRoots)) {
@@ -298,76 +165,193 @@ StorageReport StorageOptimizer::Run(const OptimizationRequest &request, Checkpoi
     fs::permissions(jobPath, fs::perms::owner_all, fs::perm_options::replace, ec);
     if (ec) { append(report, {.outcome = FileOutcome::Failed, .reason = {StorageReason::IoError, ec.message()}}); return complete(); }
     const auto caps = dependencies_.probeCodecs();
-    Evidence evidence(std::move(inventory));
-    validateBeforeCommit = [&](const AssetCandidate &asset, const std::vector<StorageFileChange> &owned, Checkpoint check, std::string &error) {
-      return evidence.beforeCommit(asset, owned, std::move(check), error);
-    };
-    bool staleScope = false;
-    for (auto asset : evidence.inventory.candidates) {
+    std::vector<fs::path> allowedRoots = dependencies_.paths.allowedRoots;
+    const StoragePathIndex authority(allowedRoots), access(inventoryRequest.pathAccessRoots);
+    std::vector<GroupStorageMeasurement> baselines = std::move(request.measurementBaselines);
+    std::set<std::string> baselineIds;
+    for (const auto &row : baselines) baselineIds.insert(row.groupId);
+    for (const auto &row : inventory.groups) if (!baselineIds.contains(row.groupId)) baselines.push_back(row);
+    std::vector<fs::path> groupRoots;
+    for (const auto &row : baselines) groupRoots.push_back(row.root);
+    const StoragePathIndex groups(groupRoots);
+    std::map<fs::path, StorageScanTotals> totals;
+    for (auto it = inventory.directories.rbegin(); it != inventory.directories.rend(); ++it) {
+      auto &sum = totals[it->first];
+      const auto &own = it->second.totals;
+      sum.bytes += own.bytes; sum.audio += own.audio; sum.video += own.video; sum.image += own.image;
+      if (inventory.directories.contains(it->first.parent_path())) {
+        auto &parent = totals[it->first.parent_path()];
+        parent.bytes += sum.bytes; parent.audio += sum.audio; parent.video += sum.video; parent.image += sum.image;
+      }
+    }
+    std::vector<bool> baselineValid;
+    for (const auto &row : baselines) {
+      const auto found = inventory.directories.find(row.root);
+      const auto measured = totals.find(row.root);
+      baselineValid.push_back(found != inventory.directories.end() && measured != totals.end() &&
+          found->second.reason.code == StorageReason::None && row.totalBytes == measured->second.bytes &&
+          row.audioBytes == measured->second.audio && row.videoBytes == measured->second.video &&
+          row.imageBytes == measured->second.image && row.sourceIdentity == StorageDirectorySourceIdentity(found->second.stamp));
+    }
+    totals.clear();
+    std::map<std::size_t, GroupStorageDelta> deltas;
+    std::vector<fs::path> changedDirectories;
+    std::set<std::size_t> uncertainGroups;
+    for (auto &[directoryPath, summary] : inventory.directories) {
       if (!checkpoint() || report.recoveryRequired) break;
-      state.currentPath = asset.source;
-      FileResult result{.source = asset.source, .destination = asset.destination, .bytesBefore = asset.identity.bytes};
-      bool transactionStarted = false;
-      bool transactionFinished = false;
-      const auto output = jobPath / ("candidate" + asset.destination.extension().string());
-      try {
-        if (staleScope || !evidence.candidate(asset, checkpoint, error)) {
-          result.reason = {StorageReason::StaleInput, error};
-        } else if (const auto missing = missingCodec(asset.operation, caps); missing.code != StorageReason::None) {
-          result.reason = missing;
-        } else {
-          bool canEncode = true;
-          if (asset.operation != AssetOperation::Delete) {
-            const auto available = dependencies_.availableSpace(jobPath);
-            constexpr std::uint64_t reserve = 1024 * 1024;
-            if (!available || asset.identity.bytes > std::numeric_limits<std::uint64_t>::max() - reserve || *available < asset.identity.bytes + reserve) {
-              canEncode = false; result.reason = {StorageReason::InsufficientSpace, "Insufficient private space before encoding"};
+      if (!summary.eligibleCount) continue;
+      error.clear();
+      StorageDirectoryEvidence evidence(summary, inventory, {.scratchRoot = dependencies_.paths.scanRoot}, dependencies_.evidenceMetrics);
+      auto skipDirectory = [&] {
+        report.skipped += summary.eligibleCount;
+        if (report.files.size() < 100) report.files.push_back({.source = directoryPath,
+            .reason = {StorageReason::StaleInput, error}});
+        state.filesDone += summary.eligibleCount;
+        // A failed baseline cannot authorize descendants later in the job.
+        summary.reason = {StorageReason::StaleInput, error};
+        changedDirectories.push_back(directoryPath);
+        for (const auto position : groups.Ancestors(directoryPath)) uncertainGroups.insert(position);
+      };
+      if (!evidence.Load(checkpoint, error)) { if (!cancelled) skipDirectory(); continue; }
+      const auto selectedAuthority = authority.Ancestors(directoryPath);
+      if (selectedAuthority.empty()) { error = "Directory is outside authorized roots"; skipDirectory(); continue; }
+      StoragePlatformPaths localPaths{.journalRoot = dependencies_.paths.journalRoot,
+          .temporaryRoot = dependencies_.paths.temporaryRoot,
+          .allowedRoots = {allowedRoots[selectedAuthority.back()]}, .scanRoot = dependencies_.paths.scanRoot};
+      // Transaction private paths and source have separate sandbox boundaries.
+      for (const auto &path : {directoryPath, localPaths.temporaryRoot, localPaths.journalRoot}) {
+        const auto matches = access.Ancestors(path);
+        if (!matches.empty()) localPaths.pathAccessRoots.push_back(inventoryRequest.pathAccessRoots[matches.back()]);
+      }
+      auto localTransactions = dependencies_.transactions(localPaths,
+          [&](const AssetCandidate &asset, const std::vector<StorageFileChange> &owned, Checkpoint check, std::string &error) {
+            return evidence.BeforeCommit(asset, owned, std::move(check), error);
+          });
+      const auto affectedGroups = groups.Ancestors(directoryPath);
+      GroupStorageDelta directoryDelta;
+      bool changedDirectory = false, staleScope = false;
+      fs::path cursor;
+      while (auto entry = evidence.Candidates().Next(cursor, error)) {
+        cursor = entry->name;
+        StorageDiagnostic candidateReason;
+        auto next = StorageCandidateForEntry(*entry, evidence.Directory(), request.policy, {}, candidateReason);
+        if (!next) { ++report.skipped; ++state.filesDone; continue; }
+        auto asset = std::move(*next);
+        if (!checkpoint() || report.recoveryRequired) break;
+        state.currentPath = asset.source;
+        FileResult result{.source = asset.source, .destination = asset.destination, .bytesBefore = asset.identity.bytes};
+        bool transactionStarted = false;
+        bool transactionFinished = false;
+        const auto output = jobPath / ("candidate" + asset.destination.extension().string());
+        try {
+          if (staleScope || !evidence.Candidate(asset, checkpoint, error)) {
+            result.reason = {StorageReason::StaleInput, error};
+          } else if (const auto missing = missingCodec(asset.operation, caps); missing.code != StorageReason::None) {
+            result.reason = missing;
+          } else {
+            bool canEncode = true;
+            if (asset.operation != AssetOperation::Delete) {
+              const auto available = dependencies_.availableSpace(jobPath);
+              constexpr std::uint64_t reserve = 1024 * 1024;
+              if (!available || asset.identity.bytes > std::numeric_limits<std::uint64_t>::max() - reserve || *available < asset.identity.bytes + reserve) {
+                canEncode = false; result.reason = {StorageReason::InsufficientSpace, "Insufficient private space before encoding"};
+              }
+            }
+            if (canEncode) {
+              const auto hash = HashStorageFile(asset.source, checkpoint, error);
+              if (!hash) { result.outcome = cancelled ? FileOutcome::Cancelled : FileOutcome::Failed; result.reason = {cancelled ? StorageReason::Cancelled : StorageReason::IoError, error}; }
+              else {
+                asset.sourceHash = *hash;
+                EncodeResult encoded;
+                if (asset.operation != AssetOperation::Delete) {
+                  state.phase = StoragePhase::Encode; emit();
+                  auto encoderProgress = [&](const StorageProgress &value) { state.phase = value.phase; emit(); };
+                  const auto &encoder = asset.operation == AssetOperation::CompressH264 ? dependencies_.encodeVideo : dependencies_.encodeAudio;
+                  encoded = encoder(asset, request.policy, output, checkpoint, encoderProgress);
+                  result.outcome = encoded.outcome; result.reason = encoded.reason;
+                  if (encoded.outcome == FileOutcome::Converted && encoded.outputPath != output) {
+                    encoded.outcome = result.outcome = FileOutcome::Failed;
+                    result.reason = {StorageReason::ValidationFailed, "Encoder returned an output outside this job"};
+                  }
+                }
+                if (checkpoint() && (asset.operation == AssetOperation::Delete || encoded.outcome == FileOutcome::Converted)) {
+                  if (!evidence.Candidate(asset, checkpoint, error)) {
+                    result.outcome = FileOutcome::Skipped; result.reason = {StorageReason::StaleInput, error};
+                  } else {
+                    state.phase = StoragePhase::Commit; emit(); transactionStarted = true;
+                    result = asset.operation == AssetOperation::Delete ? localTransactions.erase(asset, checkpoint) : localTransactions.replace(asset, encoded, checkpoint);
+                    transactionFinished = true;
+                  }
+                }
+              }
             }
           }
-          if (canEncode) {
-            const auto hash = HashStorageFile(asset.source, checkpoint, error);
-            if (!hash) { result.outcome = cancelled ? FileOutcome::Cancelled : FileOutcome::Failed; result.reason = {cancelled ? StorageReason::Cancelled : StorageReason::IoError, error}; }
-            else {
-              asset.sourceHash = *hash;
-              EncodeResult encoded;
-              if (asset.operation != AssetOperation::Delete) {
-                state.phase = StoragePhase::Encode; emit();
-                auto encoderProgress = [&](const StorageProgress &value) { state.phase = value.phase; emit(); };
-                const auto &encoder = asset.operation == AssetOperation::CompressH264 ? dependencies_.encodeVideo : dependencies_.encodeAudio;
-                encoded = encoder(asset, request.policy, output, checkpoint, encoderProgress);
-                result.outcome = encoded.outcome; result.reason = encoded.reason;
-                if (encoded.outcome == FileOutcome::Converted && encoded.outputPath != output) {
-                  encoded.outcome = result.outcome = FileOutcome::Failed;
-                  result.reason = {StorageReason::ValidationFailed, "Encoder returned an output outside this job"};
-                }
-              }
-              if (checkpoint() && (asset.operation == AssetOperation::Delete || encoded.outcome == FileOutcome::Converted)) {
-                if (!evidence.candidate(asset, checkpoint, error)) {
-                  result.outcome = FileOutcome::Skipped; result.reason = {StorageReason::StaleInput, error};
-                } else {
-                  state.phase = StoragePhase::Commit; emit(); transactionStarted = true;
-                  result = asset.operation == AssetOperation::Delete ? transactions.erase(asset, checkpoint) : transactions.replace(asset, encoded, checkpoint);
-                  transactionFinished = true;
-                }
-              }
-            }
+        } catch (const std::exception &exception) {
+          result.outcome = FileOutcome::Failed;
+          result.reason = {transactionStarted && !transactionFinished ? StorageReason::RecoveryRequired : StorageReason::IoError, exception.what()};
+        }
+        if (cancelled && !transactionFinished) { result.outcome = FileOutcome::Cancelled; result.reason = {StorageReason::Cancelled, "Cancelled before commit"}; }
+        if (result.outcome == FileOutcome::Converted || result.outcome == FileOutcome::Deleted) {
+          changedDirectory = true;
+          // Exact physical changes include retained backups, independently of the detail cap.
+          for (const auto &change : result.filesystemChanges) {
+            auto before = evidence.Directory().Find(change.path.filename(), error);
+            const auto oldBytes = before ? before->bytes : 0;
+            const auto newBytes = change.after ? change.after->bytes : 0;
+            directoryDelta.bytesBefore += oldBytes; directoryDelta.bytesAfter += newBytes;
+            const auto kind = asobmshow::chart_assets::ClassifyMediaPath(change.path);
+            using asobmshow::chart_assets::MediaKind;
+            if (kind == MediaKind::Audio) { directoryDelta.audioBefore += oldBytes; directoryDelta.audioAfter += newBytes; }
+            if (kind == MediaKind::Video) { directoryDelta.videoBefore += oldBytes; directoryDelta.videoAfter += newBytes; }
+            if (kind == MediaKind::Image) { directoryDelta.imageBefore += oldBytes; directoryDelta.imageAfter += newBytes; }
           }
         }
-      } catch (const std::exception &exception) {
-        result.outcome = FileOutcome::Failed;
-        result.reason = {transactionStarted && !transactionFinished ? StorageReason::RecoveryRequired : StorageReason::IoError, exception.what()};
+        if (result.reason.code == StorageReason::StaleInput) staleScope = true;
+        const bool recover = result.reason.code == StorageReason::RecoveryRequired;
+        if (transactionFinished && !recover && !cancelled && !evidence.Advance(asset, result, checkpoint, error)) staleScope = true;
+        append(report, std::move(result));
+        fs::remove(output, ec); ec.clear();
+        ++state.filesDone; emit();
+        if (report.cancelled || recover) break;
       }
-      if (cancelled && !transactionFinished) { result.outcome = FileOutcome::Cancelled; result.reason = {StorageReason::Cancelled, "Cancelled before commit"}; }
-      if (result.outcome == FileOutcome::Converted || result.outcome == FileOutcome::Deleted)
-        for (const auto &group : evidence.inventory.groups)
-          if (group.totalBytes && IsWithinFolder(asset.source, group.root)) addRoot(report.changedRoots, group.root);
-      const bool recover = result.reason.code == StorageReason::RecoveryRequired;
-      if (transactionFinished && !recover && !cancelled && !evidence.advance(asset, result, checkpoint, error)) staleScope = true;
-      append(report, std::move(result));
-      fs::remove(output, ec); ec.clear();
-      ++state.filesDone; emit();
-      if (report.cancelled || recover) break;
+      if (!error.empty() || staleScope || cancelled || report.recoveryRequired || !evidence.Finish(checkpoint, error)) {
+        summary.reason = {StorageReason::StaleInput, error}; directoryDelta.needsRefresh = true;
+        changedDirectories.push_back(directoryPath);
+        for (const auto position : affectedGroups) uncertainGroups.insert(position);
+      }
+      if (changedDirectory) {
+        changedDirectories.push_back(directoryPath);
+        for (const auto position : affectedGroups) {
+          auto &delta = deltas[position];
+          const auto &baseline = baselines[position];
+          delta.groupId = baseline.groupId; delta.baselineBytes = baseline.totalBytes;
+          delta.sourceIdentity = baseline.sourceIdentity; delta.baselineGeneration = baseline.generation;
+          delta.bytesBefore += directoryDelta.bytesBefore; delta.bytesAfter += directoryDelta.bytesAfter;
+          delta.audioBefore += directoryDelta.audioBefore; delta.audioAfter += directoryDelta.audioAfter;
+          delta.videoBefore += directoryDelta.videoBefore; delta.videoAfter += directoryDelta.videoAfter;
+          delta.imageBefore += directoryDelta.imageBefore; delta.imageAfter += directoryDelta.imageAfter;
+          delta.needsRefresh |= directoryDelta.needsRefresh || !baselineValid[position];
+        }
+      }
     }
+    // The changed subtree union is computed once, not once per asset/group pair.
+    report.changedRoots.insert(report.changedRoots.end(), changedDirectories.begin(), changedDirectories.end());
+    report.changedRoots = StoragePathIndex(std::move(report.changedRoots)).MinimalRoots();
+    const StoragePathIndex changedIndex(report.changedRoots);
+    for (std::size_t position = 0; position < baselines.size(); ++position) {
+      if (deltas.contains(position) || !baselineValid[position] || changedIndex.Ancestors(baselines[position].root).empty()) continue;
+      const auto &row = baselines[position];
+      deltas[position] = {.groupId = row.groupId, .baselineBytes = row.totalBytes,
+          .sourceIdentity = row.sourceIdentity, .baselineGeneration = row.generation};
+    }
+    for (auto &[position, delta] : deltas) {
+      delta.needsRefresh |= uncertainGroups.contains(position);
+      const auto found = inventory.directories.find(baselines[position].root);
+      if (found == inventory.directories.end() || found->second.reason.code != StorageReason::None) delta.needsRefresh = true;
+      else delta.nextSourceIdentity = StorageDirectorySourceIdentity(found->second.stamp);
+      report.groupDeltas.push_back(std::move(delta));
+    }
+
   } catch (const std::exception &exception) {
     append(report, {.outcome = FileOutcome::Failed, .reason = {StorageReason::IoError, exception.what()}});
   }

@@ -641,6 +641,25 @@ void testConcurrentScannerCheckpointsReturnPausedForEveryScanOperation() {
   }
 }
 
+void testBatchRefreshIndexesEveryRequestedRoot() {
+  using namespace chart_library_tasks;
+  TempDirectory temporary;
+  const auto first = temporary.path() / "first";
+  const auto second = temporary.path() / "second";
+  writeChart(first); writeChart(second);
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "batch refresh repository is ready");
+  bool reloadRequested = false;
+  ChartLibraryOperations operations(dependencies(repository, temporary.path(), reloadRequested));
+  TaskRequest request;
+  request.kind = TaskKind::RefreshPath;
+  request.refreshPaths = {first, second};
+  const auto result = operations.run(request, {}, [](const auto &, const auto &) {}, [] { return true; });
+  auto session = repository.OpenSession();
+  expect(result.disposition == TaskRunDisposition::Complete && session->CountAllChartMeta() == 2 && reloadRequested,
+      "one batch refresh indexes both disjoint roots and publishes completion");
+}
+
 void testAddingFolderRefreshesAccessForEveryEffectiveEntry() {
   TempDirectory temporary;
   const auto existingRoot = temporary.path() / "existing";
@@ -1310,6 +1329,7 @@ int main() {
   testRebuildTaskRetriesPreserveInitializationAndArchiveProgress(true, true, true);
   testFailedFolderRegistrationCanBeRetriedThroughTheService();
   testConcurrentScannerCheckpointsReturnPausedForEveryScanOperation();
+  testBatchRefreshIndexesEveryRequestedRoot();
   testAddingFolderRefreshesAccessForEveryEffectiveEntry();
   testPathRefreshReconcilesOnlyTheRequestedSubtree();
   testPathRefreshReparsesSamePathAndFolderPreview();

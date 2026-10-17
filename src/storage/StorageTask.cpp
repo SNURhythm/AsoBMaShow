@@ -21,10 +21,10 @@ bool StorageTask::Start(OptimizationRequest request) {
     finished_ = false;
   }
   try {
-    worker_ = std::thread([this, request = std::move(request)] {
+    worker_ = std::thread([this, request = std::move(request)]() mutable {
       StorageReport report;
       try {
-        report = dependencies_.run(request, [this] { return !cancelled_.load(); },
+        report = dependencies_.run(std::move(request), [this] { return !cancelled_.load(); },
             [this](const StorageProgress &progress) {
               std::lock_guard state(stateMutex_);
               snapshot_.progress = progress;

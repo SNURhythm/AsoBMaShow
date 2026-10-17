@@ -73,6 +73,25 @@ struct DirectoryCloser { void operator()(DIR *directory) const { closedir(direct
 #endif
 }
 
+bool ReadStorageDirectoryStamp(const fs::path &path, const fs::path &accessRoot,
+    StorageDirectoryStamp &stamp, std::string &error) {
+  const std::vector<fs::path> boundaries = accessRoot.empty() ? std::vector<fs::path>{} : std::vector<fs::path>{accessRoot};
+  if (!IsSafeLocalPath(path, error, boundaries)) return false;
+#ifdef _WIN32
+  BY_HANDLE_FILE_INFORMATION info{};
+  if (!inspect(path, info, error) || !(info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+      (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+    error = "Unsafe directory"; return false;
+  }
+#else
+  struct stat info{};
+  if (lstat(path.c_str(), &info) != 0 || !S_ISDIR(info.st_mode)) {
+    error = "Unsafe directory"; return false;
+  }
+#endif
+  stamp = directoryStamp(info); return true;
+}
+
 bool VisitStorageDirectory(const fs::path &path, const fs::path &accessRoot,
     StorageVisitMode mode, Checkpoint check, EntryVisitor visit, StorageDirectoryStamp &stamp,
     StorageScanMetrics *metrics, std::string &error) {

@@ -149,12 +149,20 @@ struct FolderStatisticsSqlObservation {
 };
 FolderStatisticsSqlObservation *folderStatisticsSqlObservation = nullptr;
 
+int scopedScanFullSteps = 0, scopedScanVmSteps = 0;
+bool observingScopedScan = false;
+
 int traceStatement(unsigned mask, void *, void *statement, void *) {
   if (statement == nullptr) {
     return 0;
   }
   const char *sql = sqlite3_sql(static_cast<sqlite3_stmt *>(statement));
   const std::string_view sqlText = sql != nullptr ? sql : "";
+  if (observingScopedScan && mask == SQLITE_TRACE_PROFILE &&
+      sqlText.starts_with("SELECT path, md5, sha256 FROM chart_meta")) {
+    scopedScanFullSteps += sqlite3_stmt_status(static_cast<sqlite3_stmt *>(statement), SQLITE_STMTSTATUS_FULLSCAN_STEP, 1);
+    scopedScanVmSteps += sqlite3_stmt_status(static_cast<sqlite3_stmt *>(statement), SQLITE_STMTSTATUS_VM_STEP, 1);
+  }
   if (folderStatisticsSqlObservation != nullptr &&
       sqlText.find("FROM chart_meta cm") != std::string_view::npos) {
     auto &observation = *folderStatisticsSqlObservation;
@@ -4209,6 +4217,36 @@ void testSearchStatisticsAvoidRichRowsAndAutoplayKeepsRawMatches() {
   }
 }
 
+void testScopedScanReadsOnlyRequestedPaths() {
+  TempDirectory temporary;
+  std::atomic<int> connections{0};
+  ScopedConnectionObserver observer(connections);
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  const auto root = temporary.path() / "songs";
+  seedPhysicalDirectoryPages(repository, root, 3000);
+  auto database = openDatabase(repository.DatabasePath());
+  const auto scope = root / "small_%";
+  const auto key = scope.generic_string();
+  assert(execute(database.get(), "UPDATE chart_meta SET path='" + key + "/a.bms' WHERE rowid=1;"
+      "UPDATE chart_meta SET path='" + key + "/nested/b.bms' WHERE rowid=2;"
+      "UPDATE chart_meta SET path='" + key + "neighbor/c.bms' WHERE rowid=3;"
+      "INSERT INTO solid_archives(path) VALUES('" + key + "/pack.zip'),('" + key + "neighbor/pack.zip')"));
+  auto session = repository.OpenSession();
+  const std::vector<std::filesystem::path> roots{scope, scope / "nested", scope};
+  scopedScanFullSteps = scopedScanVmSteps = 0; observingScopedScan = true;
+  const auto rows = session->LoadScanReconcileIdentities(roots);
+  observingScopedScan = false;
+  assert(scopedScanFullSteps == 0 && scopedScanVmSteps < 200);
+  assert(rows.size() == 2 && rows[0].path != rows[1].path);
+  const auto snapshot = session->LoadScanSnapshot(ChartScanSnapshotLoad::Reconcile, roots);
+  assert(snapshot.charts.empty() && snapshot.solidArchives.size() == 1);
+  const auto exact = session->LoadScanReconcileIdentities({scope / "a.bms"});
+  assert(exact.size() == 1 && exact.front().path == scope / "a.bms");
+  assert(session->LoadScanReconcileIdentities({root / "missing"}).empty());
+  assert(session->LoadScanReconcileIdentities().size() == 3000);
+}
+
 void testScratchlessTableMembership() {
   TempDirectory temp;
   ChartRepository repository(temp.path() / "chart.db");
@@ -4339,6 +4377,10 @@ void testScratchlessMembershipWhileAnotherConnectionWrites() {
 }
 
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "--scoped-scan-test") {
+    testScopedScanReadsOnlyRequestedPaths(); return 0;
+  }
+
   if (argc == 2 && std::string_view(argv[1]) == "--unicode-archive-test") {
     try {
       testUnicodeSolidArchiveNameSurvivesScanAndBrowsing();
@@ -4354,6 +4396,7 @@ int main(int argc, char **argv) {
     testDifficultyEntryDownloadUrlsFollowTheirSourceRows();
     return 0;
   }
+  testScopedScanReadsOnlyRequestedPaths();
   testScratchlessCourseOnlyMembership();
   testScratchlessMembershipWhileAnotherConnectionWrites();
   testScratchlessTableMembership();
