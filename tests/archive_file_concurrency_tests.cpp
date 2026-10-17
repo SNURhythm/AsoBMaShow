@@ -155,6 +155,7 @@ void writeSevenZip(const std::filesystem::path &path,
   auto writer = makeArchiveWriteHandle();
   assert(writer);
   assert(archive_write_set_format_7zip(writer.get()) == ARCHIVE_OK);
+  assert(archive_write_set_options(writer.get(), "7zip:compression-level=1") == ARCHIVE_OK);
   assert(archive_write_open_filename(writer.get(), path.string().c_str()) ==
          ARCHIVE_OK);
 
@@ -2381,6 +2382,8 @@ void writeFullUnzipBudgetFixture(const std::filesystem::path &path, std::size_t 
       extension == ".zip" ? archive_write_set_format_zip(writer.get()) :
                             archive_write_set_format_pax_restricted(writer.get());
   assert(format == ARCHIVE_OK);
+  if (extension == ".7z")
+    assert(archive_write_set_options(writer.get(), "7zip:compression-level=1") == ARCHIVE_OK);
   assert(archive_write_open_filename(writer.get(), path.string().c_str()) == ARCHIVE_OK);
   const std::string payload(bytes, 'x');
   for (const auto *name : {"first.bin", "second.bin"}) {
@@ -2780,6 +2783,8 @@ void writeFullUnzipOutputCollisionFixture(const std::filesystem::path &path,
   assert((extension == ".7z" ? archive_write_set_format_7zip(writer.get()) :
           extension == ".tar" ? archive_write_set_format_pax_restricted(writer.get()) :
                                 archive_write_set_format_zip(writer.get())) == ARCHIVE_OK);
+  if (extension == ".7z")
+    assert(archive_write_set_options(writer.get(), "7zip:compression-level=1") == ARCHIVE_OK);
   assert(archive_write_open_filename(writer.get(), path.string().c_str()) == ARCHIVE_OK);
   char value = 'a';
   for (const auto &name : names) {

@@ -105,11 +105,12 @@ void testVorbisDurationBounds(const std::filesystem::path &root) {
           "non-Vorbis assets must fall back to their normal decoder");
 }
 std::unique_ptr<bms_parser::Chart> chartAt(const std::filesystem::path &folder,
-                                         const std::string &body = "#00011:01\n") {
+                                         const std::string &body = "#00011:01\n",
+                                         int bpm = 120) {
   std::filesystem::create_directories(folder);
   const auto path = folder / "chart.bms";
   { std::ofstream file(path);
-    file << "#PLAYER 1\n#TITLE Stream fixture\n#BPM 120\n"
+    file << "#PLAYER 1\n#TITLE Stream fixture\n#BPM " << bpm << "\n"
             "#WAV01 first.wav\n#WAV02 second.wav\n" << body; }
   std::atomic_bool cancelled{false};
   auto chart = play_options::parseChart(path, cancelled, "progressive music test");
@@ -193,8 +194,9 @@ void testCompressedSourceDecoderLifetime(const std::filesystem::path &root) {
       info.format = SF_FORMAT_OGG | SF_FORMAT_VORBIS;
       auto file = asobmashow::audio::openSoundFileHandle(fixture, SFM_WRITE, info);
       require(bool(file), "could not create overlapping Ogg fixture");
-      // Half a second still crosses five 4096-frame decode blocks.
-      std::vector<short> samples(count > 128 ? 32000 : 22050);
+      // Three decode blocks still exceed the two-opens-per-source guard if
+      // active decoders are incorrectly reopened on every block.
+      std::vector<short> samples(count > 128 ? 32000 : 8193);
       for (std::size_t i = 0; i < samples.size(); ++i)
         samples[i] = static_cast<short>(static_cast<int>((i * 17) % 801) - 400);
       require(sf_write_short(file.get(), samples.data(), samples.size()) ==
@@ -209,10 +211,10 @@ void testCompressedSourceDecoderLifetime(const std::filesystem::path &root) {
       const auto name = "layer-" + std::to_string(index) + ".ogg";
       std::filesystem::copy_file(fixture, dir / name);
       body += "#WAV" + code + " " + name + "\n#00001:" + code + "\n";
-      // All first-burst voices expire before the second burst at 4s.
+      // All first-burst voices expire before the second burst at 0.8s.
       if (repeat) body += "#00201:" + code + "\n";
     }
-    auto chart = chartAt(dir, body);
+    auto chart = chartAt(dir, body, 600);
     const auto referencePath = dir / "reference.wav";
     require(chart_audio::RenderChartAudioToWav(*chart, referencePath).success,
             "overlapping Ogg reference render failed");
@@ -401,11 +403,12 @@ void testLazyLongSource(const std::filesystem::path &root) {
 }
 void testSeekPreparesOnlyRequestedRanges(const std::filesystem::path &root) {
   const auto dir = root / "seek-ranges";
-  auto chart = chartAt(dir, "#00001:01\n#02511:02\n");
+  auto chart = chartAt(dir, "#00001:01\n#01211:02\n");
   std::vector<short> backing(48000 * 2);
   for (std::size_t i = 0; i < backing.size(); ++i)
     backing[i] = static_cast<short>(static_cast<int>((i * 17) % 16000) - 8000);
-  writeWav(dir / "first.wav", 48000, 2, backing, 80);
+  // Retain seeks beyond the 10 s read-ahead and 20 s eager-work guard.
+  writeWav(dir / "first.wav", 48000, 2, backing, 32);
   writeWav(dir / "second.wav", 22050, 1, std::vector<short>(22050, 7000));
   const auto referencePath = dir / "reference.wav";
   require(chart_audio::RenderChartAudioToWav(*chart, referencePath).success,
@@ -429,16 +432,16 @@ void testSeekPreparesOnlyRequestedRanges(const std::filesystem::path &root) {
       return;
     }
   };
-  readAt(44100 * 50 + 123);
+  readAt(44100 * 24 + 123);
   require(stream->GetState().availableFrames < 44100 * 20,
           "forward seek must not render the skipped prefix before target audio");
   stream->SetRenderingEnabled(false);
   std::array<short, 2> paused{};
-  require(stream->ReadFrames(44100 * 30 + 17, paused, 20ms).status ==
+  require(stream->ReadFrames(44100 * 16 + 17, paused, 20ms).status ==
               music_stream::ReadStatus::Pending,
           "paused reads of skipped ranges must not expose sparse-file silence");
   stream->SetRenderingEnabled(true);
-  readAt(44100 * 30 + 17); // Backward into a range skipped by the first seek.
+  readAt(44100 * 16 + 17); // Backward into a range skipped by the first seek.
   require(stream->ReadFrames(44100 * 200, paused, 100ms).status ==
               music_stream::ReadStatus::End,
           "seeking past the known end must finish without filling earlier gaps");
@@ -448,8 +451,8 @@ void testSeekPreparesOnlyRequestedRanges(const std::filesystem::path &root) {
               music_stream::ReadStatus::End,
           "oversized seek must acknowledge its clamped target and report EOF");
   readAt(41);             // Backward into the already prepared opening.
-  const auto tail = readAll(stream, 44100 * 75 + 19);
-  require(tail == std::vector<short>(reference.begin() + (44100 * 75 + 19) * 2,
+  const auto tail = readAll(stream, 44100 * 28 + 19);
+  require(tail == std::vector<short>(reference.begin() + (44100 * 28 + 19) * 2,
                                     reference.end()),
           "seeking near the end must finish without filling earlier gaps");
   require(!stream->GetState().complete,

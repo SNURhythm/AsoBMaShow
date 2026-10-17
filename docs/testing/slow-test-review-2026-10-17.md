@@ -1,5 +1,9 @@
 # Slow test review — 2026-10-17
 
+The subsequent [full-suite optimization pass](cold-suite-optimization-2026-10-17.md)
+addresses cold compiler-cache performance and revisits the retry waits and
+serialization retained in this earlier pass.
+
 The preceding full `ctest -j 6` run passed 498 tests in 129.54 seconds. Its slowest entries guided this review; parallel-run durations include contention and are not directly comparable with isolated measurements. Temporary per-case timing was used to identify costs in the importer and progressive-audio suites, then removed.
 
 ## Reduced work

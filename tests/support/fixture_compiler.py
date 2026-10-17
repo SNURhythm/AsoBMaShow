@@ -1,9 +1,11 @@
 """Compile temporary behavioral fixtures with the configured CMake toolchain."""
 
+import atexit
 import json
 import os
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
@@ -26,9 +28,10 @@ class FixtureCompiler:
     frontend: str = ""
     compiler_id: str = ""
     launcher: tuple = ()
+    shared_headers: bool = False
 
     @classmethod
-    def from_environment(cls):
+    def from_environment(cls, shared_headers=False):
         encoded = os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER")
         launcher_file = os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER_LAUNCHER_FILE")
         if not encoded and launcher_file:
@@ -43,7 +46,8 @@ class FixtureCompiler:
             launcher = []
         return cls(os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER", "c++"),
                    os.environ.get("ASOBMASHOW_TEST_CXX_FRONTEND_VARIANT", ""),
-                   os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER_ID", ""), tuple(launcher))
+                   os.environ.get("ASOBMASHOW_TEST_CXX_COMPILER_ID", ""), tuple(launcher),
+                   shared_headers)
 
     @property
     def msvc(self):
@@ -71,6 +75,10 @@ class FixtureCompiler:
 
     def build(self, sources, executable, directory, standard=20, includes=(), objects=(),
               compile_options=(), link_options=()):
+        if (self.shared_headers and not compile_options and not self.msvc and
+                self.compiler_id in {"Clang", "AppleClang"}):
+            header = _standard_header(self, standard)
+            compile_options = ("-include-pch", str(header) + ".pch")
         objects = list(objects)
         directory = Path(directory)
         for index, source in enumerate(sources):
@@ -86,6 +94,24 @@ class FixtureCompiler:
             objects.append(output)
         subprocess.run([*self.link_command(objects, Path(executable).name), *link_options],
                        cwd=directory, check=True, capture_output=True, text=True)
+
+
+@lru_cache(maxsize=None)
+def _standard_header(compiler, standard):
+    # Kept only for this Python invocation; cold suites share parsing work too.
+    directory = tempfile.TemporaryDirectory(prefix="asobmashow-fixture-headers-")
+    atexit.register(directory.cleanup)
+    header = Path(directory.name) / "standard.hpp"
+    header.write_text("\n".join(f"#include <{name}>" for name in (
+        "algorithm", "array", "atomic", "cassert", "chrono", "condition_variable",
+        "cstdint", "deque", "filesystem", "fstream", "functional", "iostream",
+        "map", "memory", "mutex", "optional", "set", "sstream", "stdexcept",
+        "string", "string_view", "thread", "unordered_map", "utility", "vector")))
+    subprocess.run(
+        [*compiler.launcher, compiler.compiler, f"-std=c++{standard}", "-pthread",
+         "-x", "c++-header", "-c", str(header), "-o", str(header) + ".pch"],
+        check=True, capture_output=True, text=True)
+    return header
 
 
 @lru_cache(maxsize=1)

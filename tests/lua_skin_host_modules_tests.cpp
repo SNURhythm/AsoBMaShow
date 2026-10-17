@@ -2349,6 +2349,9 @@ int main(int argc, char **argv) {
     benchmarkFileHelpers();
     return failures == 0 ? 0 : 1;
   }
+  // Host semantics are independent of scheduler time; deadline enforcement
+  // is covered by lua_skin_runtime_tests with controlled and real clocks.
+  LuaRuntimeTestHooks::setWallTime(std::chrono::steady_clock::time_point{});
   testIndexedNumericCatalogMatchesExactAdmission();
   testAudioAndHttpArgumentsUsePinnedLuaJConversions();
   testMainStateArgumentsUsePinnedLuaJConversions();

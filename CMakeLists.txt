@@ -6183,7 +6183,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/find_bms_transport_server.py
                 $<TARGET_FILE:find_bms_metadata_transport_tests>)
     set_tests_properties(find_bms_metadata_loopback_transport_tests PROPERTIES
-        TIMEOUT 55 RUN_SERIAL TRUE)
+        TIMEOUT 55)
     add_test(NAME android_metadata_post_cancellation_tests
         COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/android_metadata_post_cancellation_tests.py)
     set_tests_properties(android_metadata_post_cancellation_tests PROPERTIES TIMEOUT 60)
@@ -6226,7 +6226,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/find_bms_transport_server.py
                     $<TARGET_FILE:find_bms_ios_file_bridge_tests>)
         set_tests_properties(find_bms_ios_file_bridge_tests PROPERTIES
-            TIMEOUT 55 RUN_SERIAL TRUE)
+            TIMEOUT 55)
     endif()
 
     add_custom_command(
@@ -8744,6 +8744,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 )
             else()
                 target_compile_options(${target_name} PRIVATE -UNDEBUG)
+                # Use the same optimized-Debug policy as main, including in
+                # fixture translation units that instantiate STL/JSON helpers.
+                # Assertions remain enabled in every configuration.
+                if(ENABLE_DEBUG_OPTIMIZED_BUILD)
+                    target_compile_options(${target_name} PRIVATE
+                        $<$<CONFIG:Debug>:-O1 -fno-omit-frame-pointer>)
+                endif()
             endif()
             set_property(TARGET ${target_name}
                 PROPERTY ASOBMASHOW_TEST_TARGET_PREPARED TRUE)
@@ -9163,9 +9170,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
     if (TARGET lua_skin_host_modules_tests)
         asobmashow_register_test(lua_skin_host_modules_tests)
-        # Debug callback tests retain the production 4 ms wall-clock guard;
-        # sibling test preemption must not consume that budget.
-        set_tests_properties(lua_skin_host_modules_tests PROPERTIES RUN_SERIAL TRUE)
     endif()
     if (TARGET lua_skin_http_transport_tests)
         asobmashow_register_test(lua_skin_http_transport_tests)
@@ -9469,14 +9473,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(playfield_projection_tests)
     if(TARGET play_skin_state_bridge_tests)
         asobmashow_register_test(play_skin_state_bridge_tests)
-        set_tests_properties(play_skin_state_bridge_tests PROPERTIES RUN_SERIAL TRUE TIMEOUT 120)
+        set_tests_properties(play_skin_state_bridge_tests PROPERTIES TIMEOUT 120)
     endif()
     if(TARGET gameplay_skin_session_factory_tests)
         asobmashow_register_test(gameplay_skin_session_factory_tests)
     endif()
     if(TARGET play_skin_session_tests)
         asobmashow_register_test(play_skin_session_tests)
-        set_tests_properties(play_skin_session_tests PROPERTIES RUN_SERIAL TRUE TIMEOUT 120)
+        set_tests_properties(play_skin_session_tests PROPERTIES TIMEOUT 120)
     endif()
     if(TARGET gameplay_skin_loading_benchmark_tests)
         asobmashow_register_test(gameplay_skin_loading_benchmark_tests)
@@ -9630,9 +9634,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(profile_archive_tests foundation_profile_archive_validation --shard validation)
     asobmashow_register_test(profile_archive_tests foundation_profile_archive_transactions --shard transactions)
     asobmashow_register_test(profile_archive_tests foundation_profile_archive_faults --shard faults)
-    # The fault matrix assumes its injected filesystem failure is the only I/O
-    # failure while it classifies exact durable recovery outcomes.
-    set_tests_properties(foundation_profile_archive_faults PROPERTIES RUN_SERIAL TRUE)
+    # Fault injection is process-local and every case owns a unique temp root.
 
     asobmashow_register_test(profile_settings_controller_tests foundation_profile_controller)
     asobmashow_register_test(profile_runtime_reapply_tests foundation_profile_runtime)

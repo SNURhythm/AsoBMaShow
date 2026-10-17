@@ -1859,15 +1859,17 @@ void testFolderProbeAndCancelledReadsDoNotPoisonSession() {
   ScopedConnectionObserver observer(connections);
   ChartRepository charts(temporary.path() / "chart.db");
   assert(charts.EnsureReady());
+  // More rows than the 1,000-step probe budget still expose a full scan;
+  // cancellation only needs rows beyond the three-row interruption point.
   {
     auto database = openDatabase(charts.DatabasePath());
     assert(execute(database.get(),
         "WITH RECURSIVE rows(value) AS (SELECT 1 UNION ALL "
-        "SELECT value + 1 FROM rows WHERE value < 50000) "
+        "SELECT value + 1 FROM rows WHERE value < 2048) "
         "INSERT INTO chart_meta(path,folder,md5,sha256,title) "
         "SELECT 'library/song/' || value || '.bms', 'library/song', "
         "printf('%032d', 0), printf('%064d', 0), "
-        "printf('%06d', 50000-value) FROM rows"));
+        "printf('%06d', 2048-value) FROM rows"));
   }
   auto session = charts.OpenSession();
   assert(session);
@@ -1941,7 +1943,7 @@ void testFolderProbeAndCancelledReadsDoNotPoisonSession() {
   assert(threw && visited == 0);
   session->VisitChartMetaSelection("library",
       [&](const ChartMetaRecord &) { ++visited; });
-  assert(visited == 50000);
+  assert(visited == 2048);
   readCancellation = &cancelled;
 
   ChartMetaQuery query;
@@ -2002,7 +2004,7 @@ void testFolderProbeAndCancelledReadsDoNotPoisonSession() {
   cancelReadSql.clear();
   assert(session->SelectChartMetaByPaths(paths).records.size() == 2);
   assert(session->HasChartMetaForParentFolder("library"));
-  assert(session->CountAllChartMeta() == 50000);
+  assert(session->CountAllChartMeta() == 2048);
 }
 
 void testChartMigrationCompatibilityMatrix() {
