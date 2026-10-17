@@ -14,6 +14,7 @@ struct StorageScanJob {
 struct StorageScanTotals {
   std::uint64_t bytes = 0, audio = 0, video = 0, image = 0, files = 0;
 };
+struct StorageDirectorySummary;
 struct StorageScanBatch {
   StorageScanJob job;
   std::vector<StorageScanJob> children;
@@ -21,6 +22,7 @@ struct StorageScanBatch {
   StorageDirectoryStamp stamp;
   StorageScanMetrics metrics;
   StorageDiagnostic reason;
+  std::shared_ptr<StorageDirectorySummary> summary;
   bool directoryComplete = false, subtreeComplete = false;
 };
 struct StorageScanScheduleMetrics {

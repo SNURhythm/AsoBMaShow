@@ -1,0 +1,33 @@
+#pragma once
+#include "ChartResourceInventory.h"
+#include "StorageScanScheduler.h"
+
+namespace storage_management {
+struct StorageDirectorySummary {
+  std::filesystem::path directory, accessRoot;
+  StorageDirectoryStamp stamp;
+  std::string fingerprint;
+  std::vector<std::filesystem::path> childDirectories;
+  StorageScanTotals totals;
+  std::uint64_t eligibleCount = 0, eligibleBytes = 0, skippedCount = 0;
+  std::map<StorageReason, std::uint64_t> reasons;
+  std::vector<FileResult> samples; // Drained into the preflight's global bounded sample list.
+  StorageDiagnostic reason;
+};
+struct StoragePreflight {
+  InventoryRequest request;
+  std::vector<GroupStorageMeasurement> groups;
+  std::map<std::filesystem::path, StorageDirectorySummary> directories;
+  std::vector<FileResult> skips;
+  std::optional<std::uint64_t> totalBytes;
+  std::uint64_t eligibleCount = 0, eligibleBytes = 0, skippedCount = 0;
+  bool complete = true, cancelled = false;
+};
+StoragePreflight BuildStoragePreflight(const InventoryRequest &, Checkpoint = {},
+    StorageScanMetrics * = nullptr, StorageScanDependencies = {});
+std::unique_ptr<StorageDirectoryInventory> LoadStorageDirectory(const StorageDirectorySummary &,
+    const InventoryRequest &, Checkpoint, std::string &, StorageDirectoryLimits = {});
+std::optional<AssetCandidate> StorageCandidateForEntry(const StorageDirectoryEntry &,
+    const StorageDirectoryInventory &, const StoragePolicy &, const std::vector<std::string> &groups,
+    StorageDiagnostic &);
+}

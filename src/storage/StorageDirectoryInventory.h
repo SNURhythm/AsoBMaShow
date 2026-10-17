@@ -1,6 +1,7 @@
 #pragma once
 
 #include "StorageTypes.h"
+#include <memory>
 
 namespace storage_management {
 enum class StorageVisitMode { SizeOnly, Preflight };
@@ -26,4 +27,33 @@ struct StorageScanMetrics {
 using EntryVisitor = std::function<bool(const StorageDirectoryEntry &)>;
 bool VisitStorageDirectory(const std::filesystem::path &, const std::filesystem::path &accessRoot,
     StorageVisitMode, Checkpoint, EntryVisitor, StorageDirectoryStamp &, StorageScanMetrics *, std::string &);
+}
+
+namespace storage_management {
+struct StorageDirectoryLimits {
+  std::size_t records = 4096, bytes = 8 * 1024 * 1024;
+  std::filesystem::path scratchRoot;
+};
+// One directory's bounded, ordered metadata store. No media contents are read.
+class StorageDirectoryInventory {
+public:
+  explicit StorageDirectoryInventory(std::filesystem::path, StorageDirectoryLimits = {});
+  ~StorageDirectoryInventory();
+  StorageDirectoryInventory(const StorageDirectoryInventory &) = delete;
+  StorageDirectoryInventory &operator=(const StorageDirectoryInventory &) = delete;
+  bool Add(const StorageDirectoryEntry &, std::string &);
+  bool Set(const StorageDirectoryEntry &, std::string &);
+  bool Remove(const std::filesystem::path &name, std::string &);
+  std::optional<StorageDirectoryEntry> Find(const std::filesystem::path &name, std::string &) const;
+  std::optional<StorageDirectoryEntry> Next(const std::filesystem::path &after, std::string &) const;
+  bool Visit(Checkpoint, EntryVisitor, std::string &) const;
+  std::uint64_t StemCount(const std::filesystem::path &, bool audio, std::string &) const;
+  std::string Fingerprint(Checkpoint, std::string &) const;
+  std::size_t Size() const;
+  bool Spilled() const;
+  const std::filesystem::path &Directory() const;
+private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+};
 }

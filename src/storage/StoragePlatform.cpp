@@ -162,7 +162,7 @@ StoragePlatformPaths MakeStoragePlatformPaths(const fs::path &privateRoot,
     accessRoots.push_back(privateRoot);
   }
   return {privateRoot / "storage-management/journal", privateRoot / "storage-management/temporary",
-          std::move(allowedRoots), std::move(accessRoots)};
+          std::move(allowedRoots), std::move(accessRoots), privateRoot / "storage-management/scan"};
 }
 
 FileTransactionDependencies DefaultFileTransactionDependencies() {

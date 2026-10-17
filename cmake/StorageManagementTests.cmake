@@ -89,3 +89,13 @@ target_sources(archive_file_concurrency_tests PRIVATE tests/storage_measurement_
     src/storage/ChartResourceInventory.cpp src/storage/StoragePolicy.cpp src/audio/ChartVisualAssetResolver.cpp)
 target_link_libraries(archive_file_concurrency_tests PRIVATE SQLite3)
 add_test(NAME storage_measurement_tests COMMAND archive_file_concurrency_tests --storage-measurement)
+
+add_executable(storage_directory_inventory_tests tests/storage_directory_inventory_tests.cpp
+    src/storage/StoragePreflight.cpp src/storage/StorageDirectoryWorkingSet.cpp
+    src/storage/ChartResourceInventory.cpp src/storage/StoragePolicy.cpp
+    src/storage/StorageDirectoryInventory.cpp src/storage/StoragePathIndex.cpp
+    src/storage/StorageScanScheduler.cpp src/ChartScanWorkScheduler.cpp
+    src/audio/ChartVisualAssetResolver.cpp src/FileChecksum.cpp src/Uuid.cpp)
+target_compile_features(storage_directory_inventory_tests PRIVATE cxx_std_23)
+target_link_libraries(storage_directory_inventory_tests PRIVATE SQLite3 Threads::Threads)
+asobmashow_register_test(storage_directory_inventory_tests)

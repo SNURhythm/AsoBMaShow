@@ -10,6 +10,8 @@ struct StoragePlatformPaths {
   // Recovery authority comes from the application, never from a journal file.
   std::vector<std::filesystem::path> allowedRoots;
   std::vector<std::filesystem::path> pathAccessRoots;
+  // Expendable scan indexes; never read as transaction recovery authority.
+  std::filesystem::path scanRoot;
 };
 // On sandboxed platforms, roots must come from the OS private directory and
 // authorized library/bookmark registrations, never from recovery records.

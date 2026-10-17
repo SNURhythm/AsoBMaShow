@@ -274,6 +274,7 @@ bool RunStorageScan(std::span<const StorageScanJob> roots, StorageScanLimits lim
       add(state.own.totals, event.batch.totals);
       add(state.own.metrics, event.batch.metrics);
       if (event.batch.stamp.fileId) state.own.stamp = event.batch.stamp;
+      if (event.batch.summary) state.own.summary = std::move(event.batch.summary);
       if (event.batch.reason.code != StorageReason::None) state.own.reason = std::move(event.batch.reason);
       if (!event.terminal) {
         if (!deliver(std::move(event.batch))) break;
