@@ -110,54 +110,28 @@
 
 ## Efficient Tests
 
-- Tests have real build, runtime, disk, and maintenance costs. Treat those costs
-  as part of the change, and inspect existing coverage before adding tests.
-  Extend an existing behavioral fixture when possible. Add a test for a distinct
-  failure mode or contract; avoid duplicate coverage, assertions that merely
-  mirror the implementation, and source-text checks where behavior can be tested.
-  Reversible, low-impact edits do not automatically need new tests.
-- The full desktop CTest runtime budget is **60 seconds at `-j 6`** on this
-  machine, after native targets are built, with a cold or disabled compiler
-  cache. Runtime-generated fixture compilation counts toward that budget.
-  Also consider clean/incremental build cost; moving compilation outside CTest
-  is not itself a reduction in total verification cost.
-- Use the smallest fixture that still crosses the regression boundary, and
-  explain that boundary in the test. Preserve meaningful format, cancellation,
-  concurrency, and limit cases. Avoid oversized catalogs, images, audio,
-  archives, and Cartesian-product matrices without a coverage reason. Keep
-  endurance/stress repetition opt-in when ordinary boundary coverage suffices.
-- Use controlled clocks, explicit events, and bounded condition waits for
-  scheduling and retry tests. Avoid fixed sleeps used to guess when work has
-  finished. Exercise the real timing policy through an injectable boundary;
-  retain focused real-time checks where actual deadlines are the contract.
-  Do not change production timing or relax assertions/timeouts just to pass faster.
-- Share immutable fixture setup, header parsing, and dependency compilation
-  within a run where useful. Keep runtime state and mutable files isolated.
-  Reuse compiled objects only under a matching compiler/flags/ABI contract.
-  Warm persistent caches are a bonus, not the basis for acceptable performance.
-- Design tests to run concurrently using unique temporary directories and
-  ephemeral ports. `RUN_SERIAL` needs a documented shared-resource or real-time
-  constraint: it blocks every other test slot. Use a scoped resource lock when
-  only particular tests conflict. Never run concurrent builds in one build tree.
-- Preserve assertions and regression-sensitive observations when optimizing.
-  Follow the existing `ENABLE_DEBUG_OPTIMIZED_BUILD` policy for native tests;
-  do not disable checks or remove meaningful cases to meet the runtime budget.
-- When adding or materially changing tests, measure affected suites before and
-  after. New compiler invocations, large fixtures, repeated scenarios, sleeps,
-  and serialization need a concrete coverage reason and measured cost. For
-  changes that can affect the suite budget, verify the full run with:
-  `CCACHE_DISABLE=1 ctest --test-dir cmake-build-debug --output-on-failure -j 6`
-  Ensure every executed native binary is current. Report cache mode,
-  parallelism, elapsed time, and retained coverage. Separate the first run after rebuilding from repeats;
-  do not present compiler-cache-cold results as cold operating-system-cache results.
-- During iteration, run focused checks that resolve the current uncertainty.
-  Run the required broader checks before completion, then stop once they pass
-  unless a new change, failure, or specific stability question justifies a repeat.
-  Documentation-only edits need documentation/diff checks, not a native rebuild
-  or full CTest run. Investigate expensive work before accepting repeated rebuilds.
+Keep test costs in mind: compilation, execution, disk use, and maintenance all
+add up. Use judgment proportional to the change; this guidance is not a checklist
+or a reason to spend extra time or tokens proving compliance.
 
-See [the measured optimization report](docs/testing/cold-suite-optimization-2026-10-17.md)
-for examples, timings, and the remaining first-run overhead caveat.
+- Prefer extending useful behavioral coverage over adding redundant tests.
+  Small, low-risk edits do not automatically need new tests.
+- Prefer small fixtures that still exercise the relevant boundary. Be mindful
+  of large data sets, repeated scenarios, runtime compilation, fixed sleeps,
+  and tests that serialize the suite.
+- Reuse setup or compilation when straightforward, while keeping test state
+  isolated. Controlled clocks and explicit synchronization can help avoid slow
+  or flaky waits. Preserve meaningful assertions and real integration coverage.
+- Consider cold-run cost too; warm caches can hide expensive work. Around
+  **60 seconds at `-j 6`** is a useful local full-suite reference, not a hard
+  limit or a requirement to benchmark every change. Investigate noticeable
+  regressions when worthwhile, without chasing small timing differences.
+- Use focused checks during iteration and broader checks when the change calls
+  for them. Avoid repeating expensive runs without a useful reason; documentation
+  edits generally only need a diff review.
+
+The [optimization report](docs/testing/cold-suite-optimization-2026-10-17.md)
+contains examples and timing context if needed.
 
 ## Local Build Verification
 
