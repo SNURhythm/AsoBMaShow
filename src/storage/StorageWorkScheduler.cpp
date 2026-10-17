@@ -1,7 +1,9 @@
 #include "StorageWorkScheduler.h"
+#include "../utils/ParallelWork.h"
 #include <algorithm>
 #include <atomic>
 #include <deque>
+#include <limits>
 #include <thread>
 #include <utility>
 #if defined(__APPLE__)
@@ -11,12 +13,11 @@
 namespace storage_management {
 StorageExecutionLimits DefaultStorageExecutionLimits() {
 #if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
-  // Native correctness is covered; mobile throughput/memory still needs device measurements.
-  constexpr std::size_t cap = 1;
+  // Match chart audio loading, including its headroom for foreground threads.
+  return {.audioWorkers = parallel_worker_count(std::numeric_limits<std::size_t>::max())};
 #else
-  constexpr std::size_t cap = 4;
+  return {.audioWorkers = std::clamp<std::size_t>(std::thread::hardware_concurrency(), 1, 4)};
 #endif
-  return {.audioWorkers = std::clamp<std::size_t>(std::thread::hardware_concurrency(), 1, cap)};
 }
 StorageWorkBudget::StorageWorkBudget(StorageExecutionLimits limits, std::function<std::optional<std::uint64_t>()> available)
     : limits_(limits), available_(std::move(available)) { limits_.audioWorkers = std::max<std::size_t>(1, limits_.audioWorkers); }

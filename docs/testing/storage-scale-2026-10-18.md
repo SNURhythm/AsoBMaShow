@@ -161,10 +161,19 @@ can run concurrently. Video stays at one job with two FFmpeg threads. Shared
 temporary-space reservations are released on every outcome and real free space
 is checked again before admission.
 
-Mobile scan and audio defaults are one worker until real-device throughput,
-memory and cancellation measurements support increasing them. Simulator/emulator
-correctness is not mobile performance evidence. External/slow volumes, Windows,
-physical mobile hardware and production Release codec builds are unmeasured.
+Following the user's request after the benchmark, both mobile scanning and audio
+conversion reuse chart audio loading's `parallel_worker_count()` policy instead
+of separate one-worker defaults. It reserves one logical
+processor at up to four processors, two at five through eight, and four above
+eight; unknown hardware uses the same four-processor fallback as chart loading.
+For example, six/eight processors allow four/six workers. Archive index builders
+use half the scan-worker count (at least one), and admitted scan jobs/result
+batches remain bounded by twice that count. Audio concurrency is bounded further
+by the number of available independent directories and temporary-space budgets.
+This shares an existing application policy; it is not a measured mobile optimum.
+Simulator/emulator correctness is not mobile performance evidence. External/slow
+volumes, Windows, physical mobile hardware and production Release codec builds
+are unmeasured.
 
 Focused regressions already cover depth-bounded prefix lookup with 10,000
 unrelated roots, bounded queues/spill/cancellation, and conversion checks that do
@@ -193,8 +202,8 @@ unavailable until explicit Refresh, avoiding recursive sibling scans.
 
 Native correctness checks after all fixes passed on iOS 27.1 Simulator and the
 Android 10 emulator: scan scheduler, work scheduler and transaction suites (three
-on each platform). This includes missing-spill-directory creation, conservative
-mobile worker defaults, concurrent commit/cancel with a shared journal, complete
+on each platform). This includes missing-spill-directory creation, platform
+worker defaults, concurrent commit/cancel with a shared journal, complete
 journal ancestor sync, and recovery after failure. The disposable Android
 emulator was stopped afterwards. These results do not establish physical-device
 throughput.
@@ -207,3 +216,10 @@ concurrent desktop/Android build attempt caused memory pressure, so desktop was
 interrupted and resumed successfully after Android; the remaining application
 build and audio benchmarks ran sequentially. Existing third-party compiler and
 duplicate-link-library warnings remain.
+
+The subsequent user-requested mobile worker-policy update passed its updated
+default-policy regressions on iOS Simulator (both failed against the old
+one-worker defaults first), five focused desktop scheduler/measurement/optimizer
+and shared-worker tests, and renewed desktop/iOS/Android application builds.
+Desktop benchmark settings and measurements are unchanged by this mobile-only
+policy update; physical-device speedup is still unmeasured.

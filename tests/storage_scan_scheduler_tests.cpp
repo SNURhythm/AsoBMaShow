@@ -1,9 +1,11 @@
 #include "../src/storage/StorageScanScheduler.h"
+#include "../src/utils/ParallelWork.h"
 #include "StorageTestSupport.h"
 
 #include <atomic>
 #include <condition_variable>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <set>
 #include <thread>
@@ -186,7 +188,8 @@ void firstScanCreatesItsPrivateSpillRoot() {
 int main() {
   try {
 #if defined(__ANDROID__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
-    require(DefaultStorageScanLimits().workers == 1, "unmeasured mobile defaults to one scan worker");
+    require(DefaultStorageScanLimits().workers == parallel_worker_count(std::numeric_limits<std::size_t>::max()),
+            "mobile storage scans use the chart loading worker policy");
 #endif
     independentDirectoriesOverlap();
     skewedRootsShareWorkers();

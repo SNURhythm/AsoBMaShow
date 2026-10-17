@@ -1,4 +1,5 @@
 #include "StorageScanScheduler.h"
+#include "../utils/ParallelWork.h"
 #include "../ChartScanWorkScheduler.h"
 #include "../Uuid.h"
 #include "../sqlite3.h"
@@ -173,12 +174,11 @@ struct DirectoryState {
 
 StorageScanLimits DefaultStorageScanLimits() {
 #if defined(__ANDROID__) || TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  constexpr std::size_t cap = 1; // Increase only after native device throughput/memory measurements.
+  const std::size_t workers = parallel_worker_count(std::numeric_limits<std::size_t>::max());
 #else
-  constexpr std::size_t cap = 8;
-#endif
   const auto hardware = std::thread::hardware_concurrency();
-  const auto workers = std::min<std::size_t>(cap, hardware ? hardware : 2);
+  const auto workers = std::min<std::size_t>(8, hardware ? hardware : 2);
+#endif
   return {.workers = workers, .archiveBuilders = std::max<std::size_t>(1, workers / 2), .maxSubmitted = workers * 2};
 }
 

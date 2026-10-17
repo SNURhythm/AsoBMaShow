@@ -124,8 +124,12 @@ removed; unrecognized files and unresolved recovery state are retained. Do not
 manually remove recovery files while an operation is pending.
 
 Independent folders can convert audio concurrently: up to four workers on
-desktop, one on mobile. A folder and its selected ancestors finish in order;
-video remains one job at a time. Cancellation waits for active transactions to
+desktop. Mobile scanning and audio conversion use the same worker policy as chart
+audio loading, reserving
+processor capacity for foreground threads (for example, four workers on six
+logical processors and six on eight). Actual concurrency is also limited by
+available independent folders and temporary space. A folder and its selected
+ancestors finish in order; video remains one job at a time. Cancellation waits for active transactions to
 settle before releasing library maintenance. A recovery failure stops new work
 across all workers. Temporary-space budgets cover concurrent outputs and are
 checked against available disk space before each file starts.

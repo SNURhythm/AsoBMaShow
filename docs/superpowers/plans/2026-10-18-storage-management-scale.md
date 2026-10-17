@@ -426,6 +426,14 @@ Simulator and Android emulator. No distribution action was performed.
 The [measurement report](../../testing/storage-scale-2026-10-18.md) and its raw
 75-run CSV document real directory/archive scans, ten-million-entry synthetic
 bounds, actual codec/commit timings and platform gaps. Desktop scan/audio caps
-remain 8/4; mobile defaults are 1/1. Four audio workers improved throughput by
-3.6–3.8× on the measured fixtures. Dense-directory safety checks retain their
+remain 8/4. After the user's follow-up, mobile scanning and audio conversion use
+the same processor headroom policy as chart audio loading. This supersedes the
+benchmark's initial one-worker mobile defaults without claiming new mobile
+performance evidence. Four audio workers improved throughput
+by 3.6–3.8× on the measured desktop fixtures. Dense-directory safety checks retain their
 local quadratic cost; uncertain strict ancestor totals require explicit Refresh.
+
+The follow-up shared mobile worker policy passed both updated native iOS default
+regressions RED→GREEN, all five affected desktop tests, and renewed desktop,
+iOS and Android build-only checks. The earlier 166-test combined result covers
+the complete scale implementation; this localized follow-up uses focused checks.
