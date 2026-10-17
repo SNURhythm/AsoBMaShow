@@ -23,6 +23,8 @@ struct InventoryRequest {
   // Trusted sandbox/bookmark boundaries; empty retains the full filesystem walk.
   std::vector<std::filesystem::path> pathAccessRoots;
   std::filesystem::path scanScratchRoot;
+  // Private app sandbox boundary for scratch files, separate from library access.
+  std::filesystem::path scanAccessRoot;
 };
 enum class AssetOperation { LosslessFlac, LossyVorbis, CompressH264, Delete };
 struct AssetCandidate {

@@ -30,7 +30,9 @@ void AppendStorageArchivePreflight(StoragePreflight &result, Checkpoint check) {
       if (root.empty()) root = fs::canonical(fs::temp_directory_path()) / "asobmashow-storage-archive-scan";
       fs::create_directories(root);
       std::string error;
-      require(IsSafeLocalPath(root, error, result.request.pathAccessRoots), "Unsafe archive scan directory", StorageReason::UnsafePath);
+      const auto &privateRoot = result.request.scanAccessRoot;
+      const std::vector<fs::path> scratchAccess = privateRoot.empty() ? std::vector<fs::path>{} : std::vector<fs::path>{privateRoot};
+      require(IsSafeLocalPath(root, error, scratchAccess), "Unsafe archive scan directory", StorageReason::UnsafePath);
       Scratch scratch;
       const auto privatePath = root / uuid::generateV4();
       require(fs::create_directory(privatePath), "Cannot create archive scan directory", StorageReason::IoError);

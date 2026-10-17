@@ -69,6 +69,36 @@ void selectedArchiveFoldersAreEligible() {
       "archive review reports logical group sizes and a deduplicated union");
   require(result.EligibleRoots() == std::vector<fs::path>{archive}, "archive admission reserves the container once");
 }
+void archiveReviewSeparatesPrivateAndLibraryAccess() {
+  storage_test::TempDirectory temp;
+  const auto library = temp.root / "Documents", privateRoot = temp.root / "ApplicationSupport";
+  fs::create_directories(library); fs::create_directories(privateRoot);
+  const auto archive = library / "library.zip";
+  writeArchive(archive, {{"song/a.wav", std::string(1000, 'a')}, {"song/movie.avi", std::string(500, 'v')}});
+  InventoryRequest request{.groups = {{"song", archive / "song", false, false, StorageSourceKind::Archive}},
+      .policy = {.audio = AudioAction::LosslessFlac, .bga = BgaAction::Delete},
+      .pathAccessRoots = {library}, .scanScratchRoot = privateRoot / "storage-management/scan",
+      .scanAccessRoot = privateRoot};
+  const auto review = BuildStoragePreflight(request);
+  require(review.complete && review.eligibleCount == 2 && review.eligibleBytes == 1500 &&
+      review.groups.front().reason.code == StorageReason::None,
+      "private archive index outside the library bookmark remains eligible");
+
+  // The private grant must not authorize a source outside the library grant.
+  const auto outside = privateRoot / "outside.zip";
+  writeArchive(outside, {{"song/movie.avi", "video"}});
+  request.groups.front().path = outside / "song";
+  const auto rejected = BuildStoragePreflight(request);
+  require(rejected.eligibleCount == 0 && rejected.groups.front().reason.code == StorageReason::UnsafePath,
+      "private scratch access does not grant archive source access");
+
+  request.groups.front().path = archive / "song";
+  fs::create_directory_symlink(library, privateRoot / "linked");
+  request.scanScratchRoot = privateRoot / "linked/scan";
+  const auto linked = BuildStoragePreflight(request);
+  require(linked.eligibleCount == 0 && linked.groups.front().reason.code == StorageReason::UnsafePath,
+      "symlink beneath the private boundary still rejects scratch storage");
+}
 std::map<std::string, std::string> readArchive(const fs::path &path) {
   auto reader = makeArchiveReadHandle(); archive_read_support_filter_all(reader.get()); archive_read_support_format_all(reader.get());
   require(archive_read_open_filename(reader.get(), path.string().c_str(), 65536) == ARCHIVE_OK, "open updated archive with independent reader");
@@ -315,6 +345,7 @@ void partialWritesAndForeignChanges() {
 void storageArchiveTests() {
   for (const auto &[name, run] : std::vector<std::pair<const char *, void(*)()>>{
       {"manifest", manifestsExtractEntries}, {"preflight", selectedArchiveFoldersAreEligible},
+      {"sandbox", archiveReviewSeparatesPrivateAndLibraryAccess},
       {"update", archiveUpdatesBatchWithoutFullCopy}, {"recovery", interruptedArchiveWritesRecover},
       {"zip64", sparseZip64AndLegacyNames}, {"invalid-encoding", malformedLegacyNamesAreRejected},
       {"playback", realArchiveOptimizerPreservesPlayback},

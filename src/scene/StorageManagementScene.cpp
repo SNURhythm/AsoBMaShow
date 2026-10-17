@@ -218,7 +218,11 @@ InventoryRequest StorageManagementScene::RequestFor(const std::vector<Track> &tr
   InventoryRequest request;
   request.policy = policy_;
   request.pathAccessRoots = pathAccessRoots_;
-  request.scanScratchRoot = StoragePrivateRoot(context) / "storage-management/scan";
+  const auto privateRoot = StoragePrivateRoot(context);
+  request.scanScratchRoot = privateRoot / "storage-management/scan";
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  request.scanAccessRoot = privateRoot;
+#endif
   for (const auto &track : tracks) {
     const auto &meta = track.representativeChart;
     const bool fallback = meta.Folder.empty();
