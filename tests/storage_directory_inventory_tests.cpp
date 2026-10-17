@@ -64,9 +64,11 @@ StorageDirectoryEntry audio(std::string name) {
 void largeDirectorySpillRetainsCollisionRules() {
   TempDirectory temp;
   temp.write("keep", "unrelated");
+  const auto scratch = temp.root / u8"임시-音楽-🎵";
+  fs::create_directory(scratch);
   {
     StorageDirectoryInventory memory(temp.root);
-    StorageDirectoryInventory disk(temp.root, {.records = 2, .bytes = 4096, .scratchRoot = temp.root});
+    StorageDirectoryInventory disk(temp.root, {.records = 2, .bytes = 4096, .scratchRoot = scratch});
     std::vector<StorageDirectoryEntry> entries{audio("sound.WAV"), audio("SOUND.flac"), audio("plain.wav"),
         {.name = "plain.mp3", .kind = StorageEntryKind::Directory},
         audio("link.wav"), {.name = "link.ogg", .kind = StorageEntryKind::Symlink}};
@@ -89,8 +91,8 @@ void largeDirectorySpillRetainsCollisionRules() {
     require(!disk.Find("sound.WAV", error), "retired entry stays absent");
     require(!disk.Visit([] { return false; }, [](const auto &) { return true; }, error), "spill iteration observes cancellation");
   }
-  require(std::distance(fs::directory_iterator(temp.root), fs::directory_iterator{}) == 1,
-          "spill cleanup preserves unrelated private files");
+  require(fs::is_empty(scratch) && fs::exists(temp.root / "keep"),
+          "Unicode spill cleanup preserves unrelated private files");
 }
 void skipDetailsAndSpillErrorsStayBounded() {
   TempDirectory temp;

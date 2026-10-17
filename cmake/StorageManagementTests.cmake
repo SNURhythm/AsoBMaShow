@@ -19,7 +19,7 @@ target_compile_features(storage_file_transaction_tests PRIVATE cxx_std_23)
 asobmashow_register_test(storage_file_transaction_tests)
 
 add_executable(storage_media_tests tests/storage_media_tests.cpp src/storage/AudioTranscoder.cpp
-    src/storage/BgaTranscoder.cpp src/storage/VideoCompressionGeometry.cpp src/storage/StoragePolicy.cpp
+    src/storage/VideoCompressionGeometry.cpp src/storage/StoragePolicy.cpp
     src/audio/ChartVisualAssetResolver.cpp)
 target_compile_features(storage_media_tests PRIVATE cxx_std_23)
 target_link_libraries(storage_media_tests PRIVATE SndFile::sndfile ${FFMPEG_LIBRARIES})

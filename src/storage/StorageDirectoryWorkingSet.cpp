@@ -128,7 +128,8 @@ struct StorageDirectoryInventory::Impl {
     if (!fs::create_directory(created)) throw std::runtime_error("Cannot create private directory metadata index");
     scratch = created;
     fs::permissions(scratch, fs::perms::owner_all, fs::perm_options::replace);
-    if (sqlite3_open_v2((scratch / "directory.sqlite").string().c_str(), &db,
+    const auto databasePath = (scratch / "directory.sqlite").u8string();
+    if (sqlite3_open_v2(reinterpret_cast<const char *>(databasePath.c_str()), &db,
         SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX, nullptr) != SQLITE_OK) fail();
     sql("PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF; PRAGMA cache_size=-8192;"
         "CREATE TABLE entries(name BLOB PRIMARY KEY, payload BLOB NOT NULL, stem BLOB NOT NULL, audio INTEGER NOT NULL, media INTEGER NOT NULL) WITHOUT ROWID;"

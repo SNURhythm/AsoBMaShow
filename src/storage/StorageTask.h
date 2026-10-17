@@ -22,7 +22,8 @@ class StorageTask {
 public:
   explicit StorageTask(StorageTaskDependencies);
   ~StorageTask();
-  bool Start(OptimizationRequest);
+  // Rejected admission leaves the reviewed request owned by the caller.
+  bool Start(OptimizationRequest &&);
   void RequestCancel();
   StorageTaskSnapshot Snapshot() const;
   // Application-thread handoff; reservation remains active until this call.

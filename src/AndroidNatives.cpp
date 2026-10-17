@@ -1514,14 +1514,20 @@ std::shared_ptr<void> ReserveAndroidStorageSubtrees(
   jmethodID method = activityClass ? env->GetMethodID(activityClass,
       "reserveStorageSubtrees", "([Ljava/lang/String;)Ljava/lang/AutoCloseable;") : nullptr;
   jobjectArray array = stringClass ? env->NewObjectArray(static_cast<jsize>(paths.size()), stringClass, nullptr) : nullptr;
-  if (array && method) {
+  bool complete = array && method;
+  if (complete) {
     for (std::size_t i = 0; i < paths.size() && !env->ExceptionCheck(); ++i) {
-      auto value = env->NewStringUTF(paths[i].string().c_str());
+      auto value = utf8ToJString(env, pathToUtf8(paths[i]).c_str());
+      if (!value || env->ExceptionCheck()) {
+        if (value) env->DeleteLocalRef(value);
+        complete = false;
+        break;
+      }
       env->SetObjectArrayElement(array, static_cast<jsize>(i), value);
       env->DeleteLocalRef(value);
     }
   }
-  jobject lease = array && method && !env->ExceptionCheck() ? env->CallObjectMethod(activity, method, array) : nullptr;
+  jobject lease = complete && !env->ExceptionCheck() ? env->CallObjectMethod(activity, method, array) : nullptr;
   jobject retained = lease && !env->ExceptionCheck() ? env->NewGlobalRef(lease) : nullptr;
   if (env->ExceptionCheck()) env->ExceptionClear();
   if (lease && !retained) {

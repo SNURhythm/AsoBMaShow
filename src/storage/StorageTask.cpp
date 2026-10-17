@@ -3,7 +3,7 @@
 namespace storage_management {
 StorageTask::StorageTask(StorageTaskDependencies dependencies) : dependencies_(std::move(dependencies)) {}
 StorageTask::~StorageTask() { Shutdown(); }
-bool StorageTask::Start(OptimizationRequest request) {
+bool StorageTask::Start(OptimizationRequest &&request) {
   std::lock_guard lifecycle(lifecycleMutex_);
   if (stopped_ || guard_ || worker_.joinable()) return false;
   std::string error;

@@ -1,5 +1,6 @@
 #include "../src/storage/AudioTranscoder.h"
-#include "../src/storage/BgaTranscoder.h"
+// Include the implementation to exercise malformed timeline boundaries directly.
+#include "../src/storage/BgaTranscoder.cpp"
 #include "StorageTestSupport.h"
 #include "StorageVideoTestSupport.h"
 
@@ -64,6 +65,31 @@ AssetCandidate candidate(const std::filesystem::path &path) {
   result.source = path;
   result.identity.bytes = std::filesystem::file_size(path);
   return result;
+}
+void timelineTests() {
+  const auto maximum = std::numeric_limits<std::int64_t>::max();
+  const auto minimum = std::numeric_limits<std::int64_t>::min();
+  for (const auto start : std::array<std::int64_t, 2>{minimum + 1, -10}) {
+    Timeline timeline;
+    timeline.add(start, 1);
+    bool rejected = false;
+    try { timeline.add(maximum - 2, 1); }
+    catch (const Failure &failure) { rejected = failure.reason == StorageReason::UnsupportedFormat; }
+    require(rejected, "reject overflowing presentation span before subtracting timestamps");
+  }
+  Timeline negative;
+  negative.add(minimum + 1, 1); negative.add(minimum + 2, 1);
+  require(!negative.discontinuous && negative.minimumInterval == 1,
+          "adjacent negative timestamps remain valid near the lower bound");
+  Timeline continuous;
+  continuous.add(-10, 10); continuous.add(0, 10);
+  require(!continuous.discontinuous && continuous.minimumInterval == 10,
+          "valid timeline may cross zero");
+  Timeline overlapping;
+  overlapping.add(-5, 10); overlapping.add(0, 1, 5);
+  require(!overlapping.discontinuous, "overlap at tolerance is accepted");
+  overlapping.add(1, 1);
+  require(!overlapping.discontinuous, "adjacent intervals remain continuous");
 }
 void audioTests() {
   storage_test::TempDirectory temp;
@@ -329,7 +355,7 @@ void videoTests() {
 }
 int main() {
   av_log_set_level(AV_LOG_ERROR);
-  try { audioTests(); videoTests(); }
+  try { timelineTests(); audioTests(); videoTests(); }
   catch (const std::exception &error) { std::cerr << error.what() << '\n'; return 1; }
   return 0;
 }

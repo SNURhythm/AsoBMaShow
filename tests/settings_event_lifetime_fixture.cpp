@@ -51,7 +51,8 @@ struct ApplicationContext {
   struct {
     int stops = 0;
     struct Result { bool success = true; std::string diagnostic; };
-    Result discardLoadedMedia() { ++stops; return {}; }
+    bool fail = false;
+    Result discardLoadedMedia() { ++stops; return {!fail, fail ? "backend busy" : ""}; }
   } jukebox;
   struct {
     struct { int video = 0; } audioVideo;
@@ -170,6 +171,12 @@ void testMaintenanceAdmission() {
     assert(a->releases == 0 && b->releases == 0);
   }
   a->busy = b->busy = false;
+  context.jukebox.fail = true;
+  assert(!admitMedia(context));
+  assert(context.musicPlayer.stops == 0);
+  assert(a->releases == 0 && b->releases == 0);
+  context.jukebox.fail = false;
+  context.jukebox.stops = 0;
   assert(admitMedia(context));
   assert(context.musicPlayer.stops == 1 && context.jukebox.stops == 1);
   assert(a->releases == 1 && b->releases == 1);

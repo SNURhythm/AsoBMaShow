@@ -16,8 +16,10 @@ int main() {
     transfer.preflight->groups.resize(1);
     const auto *ownedGroups = transfer.preflight->groups.data();
     bool ownershipMoved = false;
+    bool rejectAdmission = true;
     StorageTask moveTask({
-      .admit = [](const OptimizationRequest &, std::string &) -> std::optional<StorageMaintenanceGuard> {
+      .admit = [&](const OptimizationRequest &, std::string &error) -> std::optional<StorageMaintenanceGuard> {
+        if (rejectAdmission) { error = "busy"; return {}; }
         return StorageMaintenanceGuard({}, {});
       },
       .run = [&](OptimizationRequest received, Checkpoint, ProgressCallback) {
@@ -25,7 +27,12 @@ int main() {
         return StorageReport{};
       },
     });
-    require(moveTask.Start(std::move(transfer)), "owned preflight starts");
+    require(!moveTask.Start(std::move(transfer)), "busy admission rejects work");
+    require(transfer.preflight && transfer.preflight->groups.data() == ownedGroups,
+            "rejected admission retains reviewed preflight for retry");
+    require(moveTask.Snapshot().admissionError == "busy", "admission failure remains visible");
+    rejectAdmission = false;
+    require(moveTask.Start(std::move(transfer)), "owned preflight starts on retry");
     moveTask.CancelAndWait();
     require(ownershipMoved, "preflightOwnershipMovesWithoutAssetCopies");
     std::atomic<int> admitted{0}, released{0}, refreshed{0};

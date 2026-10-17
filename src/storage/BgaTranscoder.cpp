@@ -146,15 +146,20 @@ struct Timeline {
     if (pts == AV_NOPTS_VALUE || duration <= 0 || pts > std::numeric_limits<std::int64_t>::max() - duration ||
         (last != AV_NOPTS_VALUE && pts <= last))
       unsupported("Unknown or non-monotonic presentation timestamps");
+    const auto nextEnd = pts + duration;
+    // Bound the whole presentation span, not just each adjacent interval.
+    // This also makes pts-last, pts-end and end-first representable.
+    if (first != AV_NOPTS_VALUE && first < 0 &&
+        nextEnd > std::numeric_limits<std::int64_t>::max() + first)
+      unsupported("Timestamp range is invalid");
     if (first == AV_NOPTS_VALUE) first = pts;
     else {
-      if (pts < 0 && last < std::numeric_limits<std::int64_t>::min() - pts) unsupported("Timestamp range is invalid");
       const auto interval = pts - last;
       minimumInterval = minimumInterval ? std::min(minimumInterval, interval) : interval;
       maximumInterval = std::max(maximumInterval, interval);
       if (std::abs(pts - end) > overlapTolerance) discontinuous = true;
     }
-    last = pts; end = pts + duration; maximumDuration = std::max(maximumDuration, duration); ++frames;
+    last = pts; end = nextEnd; maximumDuration = std::max(maximumDuration, duration); ++frames;
   }
 };
 struct Scan {

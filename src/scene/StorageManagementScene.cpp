@@ -362,7 +362,7 @@ void StorageManagementScene::ReviewOrApply() {
   for (const auto &[id, row] : measurements_) request.measurementBaselines.push_back(row);
   preflight_.reset();
   inventoryTask_.Cancel();
-  (void)context.storageTask->Start(std::move(request));
+  if (!context.storageTask->Start(std::move(request))) preflight_ = std::move(request.preflight);
   shownTask_ = context.storageTask->Snapshot();
   RefreshState();
 }

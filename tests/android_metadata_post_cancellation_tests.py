@@ -75,7 +75,8 @@ class AndroidMetadataPostCancellationTests(unittest.TestCase):
                           "std::string callActivityStringMethodLong(",
                           "std::string callActivityStringMethod2Long(",
                           "std::string pathToUtf8(", "bool parseBridgeResult(",
-                          "bool DownloadURLToFileAndroid(", "bool PostURLTextAndroid("):
+                          "bool DownloadURLToFileAndroid(", "bool PostURLTextAndroid(",
+                          "std::shared_ptr<void> ReserveAndroidStorageSubtrees("):
             pieces.append(function(native, signature))
         callback = "Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeDownloadUrlTextCheckpoint("
         pieces.append('extern "C" JNIEXPORT jboolean JNICALL\n' + function(native, callback))
@@ -103,6 +104,9 @@ class AndroidMetadataPostCancellationTests(unittest.TestCase):
                                 text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         print(result.stdout, end="", flush=True)
+
+    def test_storage_reservation_unicode_paths(self):
+        self.run_scenario("storage-unicode")
 
     def test_cancel_stalled_post(self):
         for phase in ("output", "headers", "body", "redirect"):
