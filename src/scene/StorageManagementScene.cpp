@@ -383,6 +383,18 @@ void StorageManagementScene::RefreshState() {
   if (preflight_) {
     auto summary = i18n::format("storage.ui.preflight", {{"count", std::to_string(preflight_->eligibleCount)},
         {"bytes", bytes(preflight_->eligibleBytes)}, {"skipped", std::to_string(preflight_->skippedCount)}});
+    std::map<std::string, std::size_t> excluded;
+    for (const auto &group : preflight_->groups) {
+      if (group.reason.code == StorageReason::None) continue;
+      const auto why = group.sourceKind == StorageSourceKind::Archive
+          ? i18n::tr("storage.ui.archive_extract_required") : reason(group.reason.code);
+      ++excluded[why];
+    }
+    for (const auto &[why, count] : excluded)
+      summary += "\n" + i18n::format("storage.ui.excluded_folders", {
+          {"count", std::to_string(count)}, {"reason", why}});
+    if (policy_.audio == AudioAction::LosslessFlac)
+      summary += std::string("\n") + i18n::tr("storage.ui.flac_scope");
     summary += std::string("\n\n") + i18n::tr("storage.ui.confirm_warning");
     preflightText_->setText(summary);
   } else preflightText_->setText(i18n::tr("storage.ui.folder_scope"));
