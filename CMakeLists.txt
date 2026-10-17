@@ -2607,6 +2607,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 -m unittest
                 tests/settings_gameplay_skin_initialization_contract_tests.py -v)
     set_tests_properties(settings_gameplay_skin_initialization_contract PROPERTIES
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
     add_test(NAME gameplay_scene_feature_off_compile_contract
@@ -2628,6 +2629,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_test(NAME replay_export_cancellation_boundary
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/replay_export_cancellation_tests.py)
+    set_tests_properties(ios_foreground_ingress_tests ios_export_input_suppression_tests
+        background_gameplay_dispatch_tests replay_export_cancellation_boundary PROPERTIES
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}")
     add_test(NAME replay_video_ui_batch_contract
         COMMAND ${Python3_EXECUTABLE}
                 -m unittest
@@ -2705,6 +2709,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_test(NAME ios_now_playing_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ios_now_playing_tests.py)
     set_tests_properties(ios_now_playing_tests PROPERTIES
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
     add_test(NAME image_fade_shader_audit
@@ -6189,6 +6194,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_test(NAME ios_hardware_button_tests
             COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/ios_hardware_button_tests.py)
+        set_tests_properties(ios_guided_access_status_tests ios_hardware_button_tests PROPERTIES
+            ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}")
         add_test(NAME unzip_marker_io_tests
             COMMAND ${Python3_EXECUTABLE} ${transport_fixture_dir}/unzip_marker_io_tests.py)
         set_tests_properties(unzip_marker_io_tests PROPERTIES TIMEOUT 30)
@@ -9594,6 +9601,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/main_menu_tabs_tests.py)
     add_test(NAME responsive_scene_layout_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/responsive_scene_layout_tests.py)
+    set_tests_properties(settings_rotation_edit_tests settings_note_editing_tests
+        lane_cover_scene_input_tests main_menu_tabs_tests responsive_scene_layout_tests PROPERTIES
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}")
     add_test(NAME android_native_music_focus_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/android_native_music_focus_tests.py)
     add_test(NAME utility_tab_resume_tests
@@ -9603,7 +9613,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_test(NAME ui_scale_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ui_scale_tests.py)
     set_tests_properties(ui_scale_tests PROPERTIES
-        ENVIRONMENT "ASOBMASHOW_TEST_YOGA_LIBRARY=$<TARGET_FILE:yogacore>")
+        ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT};ASOBMASHOW_TEST_YOGA_LIBRARY=$<TARGET_FILE:yogacore>")
     asobmashow_register_test(result_gauge_history_tests)
     asobmashow_register_test(result_presentation_model_tests)
     asobmashow_register_test(remote_result_scene_tests)

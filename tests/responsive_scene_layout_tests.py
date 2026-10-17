@@ -5,6 +5,7 @@ import tempfile
 import unittest
 
 from gameplay_terminal_scene_extract import extract
+from support.fixture_compiler import FixtureCompiler
 
 
 class ResponsiveSceneLayoutTests(unittest.TestCase):
@@ -25,7 +26,7 @@ class ResponsiveSceneLayoutTests(unittest.TestCase):
         cpp = Path(cls.temp.name) / "layout.cpp"
         cls.binary = Path(cls.temp.name) / "layout"
         cpp.write_text(fixture)
-        subprocess.run(["c++", "-std=c++20", str(cpp), "-o", str(cls.binary)], check=True)
+        FixtureCompiler.from_environment().build([cpp], cls.binary, cpp.parent)
 
     def test_safe_area_edges_relayout_without_canvas_resize(self):
         for scene in ("music", "ir", "intro", "embedded-music", "embedded-ir"):

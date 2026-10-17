@@ -47,7 +47,9 @@ static bool checkReadback(uint16_t width, uint16_t height,
     passed = false;
   }
   double elapsed = 0;
-  for (int frame = 0; frame < 24; ++frame) {
+  // Two writes per mip catch stale contents; additional cycles repeat the same path.
+  constexpr int frameCount = 4;
+  for (int frame = 0; frame < frameCount; ++frame) {
     const uint8_t mip = mipmapped ? frame % 2 : 0;
     const uint16_t w = width >> mip, h = height >> mip;
     std::vector<uint8_t> expected(size_t(w) * h * 4);
@@ -74,7 +76,7 @@ static bool checkReadback(uint16_t width, uint16_t height,
     }
   }
   printf("Metal readback %ux%u format %d mipmapped %d: %.3f ms/frame\n",
-         width, height, int(format), mipmapped, elapsed / 24);
+         width, height, int(format), mipmapped, elapsed / frameCount);
   bgfx::destroy(source);
   bgfx::destroy(target);
   bgfx::frame();

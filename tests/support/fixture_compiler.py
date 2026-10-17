@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 
@@ -69,7 +69,8 @@ class FixtureCompiler:
             return [self.compiler, "/nologo", *map(str, objects), f"/Fe{executable}"]
         return [self.compiler, "-pthread", *map(str, objects), "-o", str(executable)]
 
-    def build(self, sources, executable, directory, standard=20, includes=(), objects=()):
+    def build(self, sources, executable, directory, standard=20, includes=(), objects=(),
+              compile_options=(), link_options=()):
         objects = list(objects)
         directory = Path(directory)
         for index, source in enumerate(sources):
@@ -79,8 +80,27 @@ class FixtureCompiler:
             if source.is_absolute() and source.parent == directory:
                 source = Path(source.name)
             output = Path(f"fixture-{index}.obj")
-            subprocess.run(self.compile_command(source, output, standard, includes),
+            subprocess.run([*self.compile_command(source, output, standard, includes),
+                            *compile_options],
                            cwd=directory, check=True, capture_output=True, text=True)
             objects.append(output)
-        subprocess.run(self.link_command(objects, Path(executable).name),
+        subprocess.run([*self.link_command(objects, Path(executable).name), *link_options],
                        cwd=directory, check=True, capture_output=True, text=True)
+
+
+@lru_cache(maxsize=1)
+def _macos_toolchain():
+    def resolve(option):
+        return subprocess.check_output(
+            ["xcrun", "--sdk", "macosx", *option], text=True).strip()
+    return resolve(["--find", "clang++"]), resolve(["--show-sdk-path"])
+
+
+def build_foundation_fixture(source, executable, includes=()):
+    # Resolve xcrun first so the cache sees the actual compiler and SDK identity.
+    clang, sdk = _macos_toolchain()
+    compiler = replace(FixtureCompiler.from_environment(), compiler=clang,
+                       frontend="GNU", compiler_id="AppleClang")
+    compiler.build([source], executable, Path(source).parent, includes=includes,
+                   compile_options=["-isysroot", sdk, "-fobjc-arc", "-fblocks"],
+                   link_options=["-isysroot", sdk, "-framework", "Foundation"])

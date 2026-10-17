@@ -5,6 +5,7 @@ import tempfile
 import unittest
 
 from gameplay_terminal_scene_extract import extract
+from support.fixture_compiler import FixtureCompiler
 
 
 class MainMenuTabsTests(unittest.TestCase):
@@ -652,7 +653,7 @@ int main(int argc,char **argv) {
         path = Path(cls.temp.name) / "test.cpp"
         cls.binary = Path(cls.temp.name) / "test"
         path.write_text(source)
-        subprocess.run(["c++", "-std=c++20", str(path), "-o", str(cls.binary)], check=True)
+        FixtureCompiler.from_environment().build([path], cls.binary, path.parent)
 
     def test_score_reorder_preserves_chart_after_page_release(self):
         root = Path(__file__).resolve().parents[1]
@@ -680,8 +681,8 @@ int main(int argc,char **argv) {
         with tempfile.TemporaryDirectory(prefix="asobmashow-menu-reorder-") as temp:
             source, binary = Path(temp) / "test.cpp", Path(temp) / "test"
             source.write_text(fixture)
-            subprocess.run(["c++", "-std=c++20", "-I", str(root / "src"),
-                            str(source), "-o", str(binary)], check=True)
+            FixtureCompiler.from_environment().build(
+                [source], binary, source.parent, includes=[root / "src"])
             subprocess.run([str(binary)], check=True)
 
     def test_filtered_out_selection_survives_tab_restoration(self):
@@ -816,7 +817,7 @@ int main() {
             cpp = Path(directory) / "idle.cpp"
             binary = Path(directory) / "idle"
             cpp.write_text(source)
-            subprocess.run(["c++", "-std=c++20", str(cpp), "-o", str(binary)], check=True)
+            FixtureCompiler.from_environment().build([cpp], binary, cpp.parent)
             subprocess.run([str(binary)], check=True, timeout=5)
 
 
@@ -832,7 +833,7 @@ int main() {
             cpp = Path(directory) / "hidden.cpp"
             binary = Path(directory) / "hidden"
             cpp.write_text(fixture.replace("SCENE_METHODS", methods))
-            subprocess.run(["c++", "-std=c++20", str(cpp), "-o", str(binary)], check=True)
+            FixtureCompiler.from_environment().build([cpp], binary, cpp.parent)
             subprocess.run([str(binary)], check=True, timeout=5)
 
 

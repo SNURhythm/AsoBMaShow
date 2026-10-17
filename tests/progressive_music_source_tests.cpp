@@ -179,8 +179,9 @@ void testEquivalence(const std::filesystem::path &root) {
 }
 void testCompressedSourceDecoderLifetime(const std::filesystem::path &root) {
   struct Case { int count; bool repeat; };
-  for (const auto [count, repeat] : {Case{17, false}, Case{32, false}, Case{33, false},
-                                    Case{64, false}, Case{64, true}, Case{192, false}}) {
+  // Cover the idle-cache boundary, voice retirement/reuse, and the FD ceiling.
+  for (const auto [count, repeat] : {Case{32, false}, Case{33, false},
+                                    Case{64, true}, Case{192, false}}) {
     const auto dir = root / ("overlapping-ogg-" + std::to_string(count) +
                              (repeat ? "-repeat" : ""));
     std::filesystem::create_directories(dir);
@@ -192,7 +193,8 @@ void testCompressedSourceDecoderLifetime(const std::filesystem::path &root) {
       info.format = SF_FORMAT_OGG | SF_FORMAT_VORBIS;
       auto file = asobmashow::audio::openSoundFileHandle(fixture, SFM_WRITE, info);
       require(bool(file), "could not create overlapping Ogg fixture");
-      std::vector<short> samples(count > 128 ? 32000 : 44100 * (repeat ? 1 : 3));
+      // Half a second still crosses five 4096-frame decode blocks.
+      std::vector<short> samples(count > 128 ? 32000 : 22050);
       for (std::size_t i = 0; i < samples.size(); ++i)
         samples[i] = static_cast<short>(static_cast<int>((i * 17) % 801) - 400);
       require(sf_write_short(file.get(), samples.data(), samples.size()) ==

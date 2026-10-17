@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 
 from gameplay_terminal_scene_extract import extract
+from support.fixture_compiler import build_foundation_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 PREAMBLE = r'''
@@ -129,9 +130,7 @@ def main():
         source = Path(temporary) / "test.mm"
         binary = Path(temporary) / "test"
         source.write_text(PREAMBLE + method + TEST)
-        subprocess.run(["xcrun", "--sdk", "macosx", "clang++", "-std=c++20",
-                        "-fobjc-arc", "-framework", "Foundation", "-I", str(ROOT / "src"),
-                        str(source), "-o", str(binary)], check=True)
+        build_foundation_fixture(source, binary, includes=[ROOT / "src"])
         subprocess.run([str(binary)], check=True)
     print("iPad native button orientation and window geometry tests passed")
 
