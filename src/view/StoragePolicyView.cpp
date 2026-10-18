@@ -75,6 +75,8 @@ public:
       const auto &support = capabilities[i];
       const bool available = ready && support.available && support.playbackAvailable;
       any = any || available;
+      // Layout display and render/input visibility are independent in View.
+      cards_[i]->setVisible(available);
       cards_[i]->setDisplay(available ? YGDisplayFlex : YGDisplayNone);
       choices_[i]->setEnabled(available);
       choices_[i]->setSelected(selected == static_cast<VideoCodec>(i));
@@ -83,6 +85,7 @@ public:
       playback_[i]->setLocalizedText(i18n::message(support.playbackHardware ?
           "storage.ui.codec_playback_hardware_help" : "storage.ui.codec_playback_software_help"));
     }
+    status_->setVisible(!any);
     status_->setDisplay(any ? YGDisplayNone : YGDisplayFlex);
     status_->setLocalizedText(i18n::message(ready ? "storage.ui.codec_none" : "storage.ui.codec_checking_help"));
     scroll_->refreshContentLayout();
@@ -265,6 +268,7 @@ void StoragePolicyView::Refresh() {
       capabilitiesReady_ ? "storage.ui.codec_unavailable_option" : "storage.ui.codec_checking", {{"codec", name}}));
   modal_view::styleThemedActionButton(codecButton_, codecButtonText_, enabled_ && compressing,
       app_theme::control, app_theme::controlHover, app_theme::controlPressed, app_theme::hairlineStrong);
+  codecStatus_->setVisible(compressing);
   codecStatus_->setDisplay(compressing ? YGDisplayFlex : YGDisplayNone);
   codecStatus_->setLocalizedText(i18n::message(!capabilitiesReady_ ? "storage.ui.codec_checking_help" :
       !available ? "storage.ui.codec_unavailable_help" : "storage.ui.codec_verified_help"));

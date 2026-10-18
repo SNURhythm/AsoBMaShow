@@ -91,11 +91,13 @@ void testStoragePolicyDirectSelection() {
   }, &portal);
   editor.setWidth(440);
   editor.applyYogaLayout();
+  TextView *codecStatus = nullptr;
   Button *codecButton = nullptr;
   Button *efficientButton = nullptr;
   CheckboxButtonContent *efficientContent = nullptr;
   std::vector<DropdownView *> fields;
   for (auto *row : editor.getChildren()) {
+    if (auto *text = dynamic_cast<TextView *>(row)) codecStatus = text;
     if (auto *button = dynamic_cast<Button *>(row)) {
       efficientButton = button;
       efficientContent = dynamic_cast<CheckboxButtonContent *>(button->getContentView());
@@ -108,6 +110,8 @@ void testStoragePolicyDirectSelection() {
   require(codecButton && efficientButton && efficientContent && !efficientButton->isEnabled() &&
               !efficientContent->checked(), "efficient-video opt-in defaults off and requires compression");
   require(fields.size() == 5, "storage policy values offer direct dropdown selection");
+  require(codecStatus && !codecStatus->getVisible(),
+          "inactive codec status must not render at the origin after layout hides it");
   auto choose = [&](int field, const std::string &id) {
     click(*fields[field]->triggerButton);
     for (auto &option : fields[field]->optionButtons) {
@@ -124,6 +128,7 @@ void testStoragePolicyDirectSelection() {
   choose(0, "2");
   require(changes == 1, "reselecting the current policy does not save or invalidate review");
   choose(1, "1");
+  require(codecStatus->getVisible(), "compression reveals the codec status");
   click(*efficientButton);
   require(selected.reencodeEfficientVideo && efficientContent->checked(),
           "efficient-video checkbox saves the explicit opt-in");
@@ -138,6 +143,9 @@ void testStoragePolicyDirectSelection() {
   const auto &cards = codecScroll->getContentView()->getChildren();
   require(cards.size() == 4 && YGNodeStyleGetDisplay(cards[1]->getNode()) == YGDisplayNone && YGNodeStyleGetDisplay(cards[2]->getNode()) == YGDisplayNone &&
               YGNodeStyleGetDisplay(cards[3]->getNode()) == YGDisplayNone, "pending capability checks hide codec options");
+  require(cards[0]->getVisible() && !cards[1]->getVisible() &&
+              !cards[2]->getVisible() && !cards[3]->getVisible(),
+          "pending codec cards and their text are excluded from rendering and input");
   StorageVideoCapabilities capabilities{};
   capabilities[0] = {.codec = VideoCodec::H264, .available = true, .hardware = false,
       .playbackAvailable = true};
@@ -150,6 +158,9 @@ void testStoragePolicyDirectSelection() {
   modal->handleEvents(wake);
   require(YGNodeStyleGetDisplay(cards[1]->getNode()) == YGDisplayFlex && YGNodeStyleGetDisplay(cards[2]->getNode()) == YGDisplayNone && YGNodeStyleGetDisplay(cards[3]->getNode()) == YGDisplayFlex,
           "codec modal only offers verified encoding and playback options");
+  require(!cards[0]->getVisible() && cards[1]->getVisible() &&
+              !cards[2]->getVisible() && cards[3]->getVisible(),
+          "ready modal hides the status and unavailable card from rendering and input");
   auto *h264Encoding = dynamic_cast<TextView *>(cards[1]->getChildren()[2]);
   auto *av1Encoding = dynamic_cast<TextView *>(cards[3]->getChildren()[2]);
   auto *av1Playback = dynamic_cast<TextView *>(cards[3]->getChildren()[3]);
@@ -187,6 +198,7 @@ void testStoragePolicyDirectSelection() {
               !fields[4]->current.enabled && !efficientButton->isEnabled() &&
               efficientContent->checked(),
           "deletion disables video details while retaining their saved values");
+  require(!codecStatus->getVisible(), "leaving compression hides the codec status again");
   const int previousChanges = changes;
   editor.SetPolicy({});
   require(changes == previousChanges && fields[0]->current.selectedId == "0",
