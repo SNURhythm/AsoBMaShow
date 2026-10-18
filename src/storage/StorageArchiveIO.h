@@ -21,12 +21,16 @@ public:
   void Truncate(std::uint64_t);
   void Sync();
   FileIdentity Identity() const;
+  std::string ChangeToken() const;
+  std::uint64_t BytesRead() const { return bytesRead_; }
   void CheckPath() const;
   const std::filesystem::path path;
 private:
   void CaptureWrite();
   std::vector<std::filesystem::path> accessRoots_;
   FileIdentity original_;
+  std::string originalToken_;
+  mutable std::uint64_t bytesRead_ = 0;
 #ifdef _WIN32
   void *handle_ = reinterpret_cast<void *>(-1);
 #else

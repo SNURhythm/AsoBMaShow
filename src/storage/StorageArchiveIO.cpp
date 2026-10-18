@@ -39,7 +39,7 @@ StorageArchiveIO::StorageArchiveIO(const std::filesystem::path &path,
     throw StorageArchiveError(StorageReason::IoError, "Archive is already being updated");
   }
 #endif
-  try { CheckPath(); }
+  try { originalToken_ = ChangeToken(); CheckPath(); }
   catch (...) {
 #ifdef _WIN32
     CloseHandle(handle_); handle_ = INVALID_HANDLE_VALUE;
@@ -71,12 +71,30 @@ FileIdentity StorageArchiveIO::Identity() const {
       .fileId = static_cast<std::uint64_t>(info.st_ino) };
 #endif
 }
+std::string StorageArchiveIO::ChangeToken() const {
+#ifdef _WIN32
+  FILE_BASIC_INFO info{};
+  require(GetFileInformationByHandleEx(handle_, FileBasicInfo, &info, sizeof(info)), "Cannot inspect archive change time");
+  return std::to_string(info.LastWriteTime.QuadPart) + ":" + std::to_string(info.ChangeTime.QuadPart);
+#else
+  struct stat info{};
+  require(fstat(fd_, &info) == 0, "Cannot inspect archive change time");
+#ifdef __APPLE__
+  const auto modified = info.st_mtimespec, changed = info.st_ctimespec;
+#else
+  const auto modified = info.st_mtim, changed = info.st_ctim;
+#endif
+  return std::to_string(modified.tv_sec) + ":" + std::to_string(modified.tv_nsec) + ":" +
+      std::to_string(changed.tv_sec) + ":" + std::to_string(changed.tv_nsec);
+#endif
+}
 void StorageArchiveIO::CheckPath() const {
   std::string error;
   const auto current = ReadFileIdentity(path, error, accessRoots_);
   const auto pinned = Identity();
   if (!current || current->device != original_.device || current->fileId != original_.fileId ||
-      current->device != pinned.device || current->fileId != pinned.fileId || current->bytes != pinned.bytes || current->modified != original_.modified)
+      current->device != pinned.device || current->fileId != pinned.fileId || current->bytes != pinned.bytes ||
+      current->modified != original_.modified || ChangeToken() != originalToken_)
     throw StorageArchiveError(StorageReason::StaleInput, "Archive path or identity changed");
 }
 void StorageArchiveIO::CaptureWrite() {
@@ -84,9 +102,11 @@ void StorageArchiveIO::CaptureWrite() {
   if (!current || current->device != original_.device || current->fileId != original_.fileId)
     throw StorageArchiveError(StorageReason::StaleInput, "Archive path changed during write");
   original_ = *current;
+  originalToken_ = ChangeToken();
 }
 void StorageArchiveIO::Read(std::uint64_t offset, std::span<char> buffer) const {
   range(offset, buffer.size());
+  bytesRead_ += buffer.size();
   while (!buffer.empty()) {
     const auto amount = std::min<std::size_t>(buffer.size(), 1024 * 1024);
 #ifdef _WIN32

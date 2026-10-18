@@ -5,6 +5,7 @@
 namespace storage_management {
 struct StorageArchiveMetrics {
   std::uint64_t archivesCompacted = 0, bytesWritten = 0, peakScratchBytes = 0;
+  std::uint64_t preparationBytesRead = 0, sourceBytesRead = 0, durableBatches = 0;
 };
 struct StorageArchiveDependencies {
   std::function<EncodeResult(const AssetCandidate &, const StoragePolicy &,

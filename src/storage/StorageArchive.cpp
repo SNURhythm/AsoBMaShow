@@ -128,7 +128,7 @@ StorageArchive::StorageArchive(const fs::path &path, const fs::path &manifest,
     : identity(identityOf(path, roots)), io(path, roots), db(std::make_unique<Database>(manifest, !resume)) {
   if (resume) {
     Statement q(db->value, "SELECT version,format,comment FROM control WHERE id=1");
-    require(q.step() && q.integer(0) == 1 && q.integer(1) <= 1, "Unknown archive recovery format");
+    require(q.step() && (q.integer(0) == 1 || q.integer(0) == 2) && q.integer(1) <= 1, "Unknown archive recovery format");
     format_ = static_cast<StorageArchiveFormat>(q.integer(1)); comment = q.bytes(2); return;
   }
   db->exec("CREATE TABLE entries(id INTEGER PRIMARY KEY, offset INTEGER NOT NULL UNIQUE, span INTEGER NOT NULL,"
@@ -152,11 +152,11 @@ StorageArchive::StorageArchive(const fs::path &path, const fs::path &manifest,
   } catch (...) { db->exec("ROLLBACK;"); throw; }
 }
 StorageArchive::~StorageArchive() = default;
-void StorageArchive::Add(const StorageArchiveEntry &entry) {
+void StorageArchive::Add(const StorageArchiveEntry &entry, Statement &q) {
   const auto path = fs::u8path(entry.name);
   auto stem = path; stem.replace_extension();
   const auto kind = asobmshow::chart_assets::ClassifyMediaPath(path);
-  Statement q(db->value, "INSERT INTO entries VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+  q.reset();
   q.bind(1, entry.id); q.bind(2, entry.offset); q.bind(3, entry.span); q.bind(4, entry.dataOffset);
   q.bind(5, entry.packed); q.bind(6, entry.bytes); q.bind(7, entry.crc); q.bind(8, entry.method);
   q.bind(9, entry.flags); q.bind(10, entry.directory); q.text(11, entry.name); q.bind(12, entry.rawName);
@@ -164,6 +164,7 @@ void StorageArchive::Add(const StorageArchiveEntry &entry) {
   q.step();
 }
 void StorageArchive::ParseZip(Checkpoint check) {
+  Statement insert(db->value, "INSERT INTO entries VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
   const auto tailSize = std::min<std::uint64_t>(identity.bytes, 65557);
   const auto tail = io.Read(identity.bytes - tailSize, tailSize);
   std::size_t end = std::string::npos;
@@ -191,16 +192,26 @@ void StorageArchive::ParseZip(Checkpoint check) {
   }
   require(plus(offset, size) == centralEnd && count <= size / 46, "Invalid ZIP central directory extent");
   comment = tail.substr(end + 22);
+  std::string centralBuffer;
+  std::uint64_t bufferOffset = offset;
+  auto readCentral = [&](std::uint64_t at, std::uint64_t length) {
+    require(plus(at, length) <= centralEnd, "Truncated ZIP central directory");
+    if (at < bufferOffset || plus(at, length) > plus(bufferOffset, centralBuffer.size())) {
+      bufferOffset = at;
+      centralBuffer = io.Read(at, std::min<std::uint64_t>(256 * 1024, centralEnd - at));
+    }
+    return centralBuffer.substr(at - bufferOffset, length);
+  };
   auto cursor = offset;
   for (std::uint64_t index = 1; index <= count; ++index) {
     active(check);
     require(plus(cursor, 46) <= centralEnd, "Truncated ZIP central directory");
-    auto central = io.Read(cursor, 46);
+    auto central = readCentral(cursor, 46);
     require(number(central, 0, 4) == 0x02014b50, "Invalid ZIP central record");
     const auto nameLength = number(central, 28, 2), extraLength = number(central, 30, 2), commentLength = number(central, 32, 2);
     const auto length = 46 + nameLength + extraLength + commentLength;
     require(plus(cursor, length) <= centralEnd, "Truncated ZIP entry metadata");
-    central += io.Read(cursor + 46, length - 46); cursor += length;
+    central += readCentral(cursor + 46, length - 46); cursor += length;
     StorageArchiveEntry entry{.id = index, .offset = number(central, 42, 4), .packed = number(central, 20, 4),
         .bytes = number(central, 24, 4), .crc = number(central, 16, 4), .method = static_cast<unsigned>(number(central, 10, 2)),
         .flags = static_cast<unsigned>(number(central, 8, 2)), .rawName = central.substr(46, nameLength), .metadata = central};
@@ -254,11 +265,12 @@ void StorageArchive::ParseZip(Checkpoint check) {
       finish += descriptorSize;
     } else require(localBytes == entry.bytes && localPacked == entry.packed && number(local, 14, 4) == entry.crc,
         "Inconsistent ZIP local sizes or checksum");
-    entry.span = finish - entry.offset; Add(entry);
+    entry.span = finish - entry.offset; Add(entry, insert);
   }
   require(cursor == centralEnd, "Unsupported trailing ZIP central metadata");
 }
 void StorageArchive::ParseTar(Checkpoint check) {
+  Statement insert(db->value, "INSERT INTO entries VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
   require(identity.bytes % 512 == 0, "TAR size is not block aligned");
   std::uint64_t offset = 0, id = 0;
   while (plus(offset, 512) <= identity.bytes) {
@@ -285,7 +297,7 @@ void StorageArchive::ParseTar(Checkpoint check) {
     if (!prefix.empty()) entry.rawName = prefix + "/" + entry.rawName;
     entry.name = decoded(entry.rawName, false); safeName(entry.name, entry.directory);
     require(!entry.directory || !entry.bytes, "Nonempty TAR directory");
-    offset = plus(offset, entry.span); require(offset <= identity.bytes, "Truncated TAR payload"); Add(entry);
+    offset = plus(offset, entry.span); require(offset <= identity.bytes, "Truncated TAR payload"); Add(entry, insert);
   }
   throw StorageArchiveError(StorageReason::UnsupportedFormat, "Missing TAR end record");
 }

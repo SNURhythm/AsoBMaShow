@@ -245,3 +245,58 @@ creation/index priming are outside that timing; the payloads are intentionally
 small. This measures metadata review, not device throughput or Apply time on an
 80 GiB archive. The archive regressions verify cached review, physical validation
 before encoding/writes, system-entry preservation and supported ZIP64/TAR layouts.
+
+
+## Archive confirmation and compaction follow-up
+
+The old Apply path hashed every raw entry before accepting work and reread the
+archive at completion. It also durably committed each small retained record and
+each 512 KiB write. The new format prepares metadata only, skips unchanged
+prefixes/deleted payloads, and compacts in batches of at most 8 MiB and 128
+chunks/records. Redo data is written sequentially to a private file of at most
+16 MiB; SQLite contains range descriptors instead of bulk redo blobs. Consecutive
+deletions and final central-directory writes also share batches. Physical ZIP
+layout validation reuses its insert statement and a 256 KiB central metadata
+buffer. Selected conversions still verify their encoded media.
+
+The opt-in benchmark makes a stored ZIP, primes its browsing index, deletes the
+first video, and preserves the remaining image entries:
+
+```sh
+cmake-build-debug/storage_scale_benchmark archive-update 1 256 1 8192
+cmake-build-debug/storage_scale_benchmark archive-update 1 16 1 8388608
+cmake-build-debug/storage_scale_benchmark archive-update 1 20000 1 17
+```
+
+[Raw before/after rows](archive-apply-2026-10-18.csv) use the existing harness
+schema: `verify_worker_s` is metadata preparation until `archive-ready`, and
+`commit_worker_s` is the rest of Apply, including compaction and cleanup. Review
+is reported separately. These are single warm-cache Mac runs, not physical iOS
+measurements; final runs were sequential with no application build running.
+
+| Stored fixture | Preparation before / after | Compaction before / after | Final peak RSS |
+| --- | ---: | ---: | ---: |
+| 256 × 8 KiB | 0.0221 / 0.0143 s | 0.4608 / 0.0572 s | 13.4 MiB |
+| 16 × 8 MiB (128 MiB) | 0.0771 / 0.0066 s | 0.6933 / 0.3847 s | 29.1 MiB |
+| 20,000 × 17 bytes | — / 0.1841 s | — / 2.7933 s | 22.3 MiB |
+
+The small-record compaction case improved about 8×; the 128 MiB preparation case
+improved about 12×. Necessary forward compaction still reads and writes retained
+bytes, so these results do not predict elapsed time for a 100 GiB library.
+Memory and redo scratch stay bounded independently of container size.
+
+Regressions count source reads to reject full-payload preparation/completion
+passes, exercise sparse ZIP64 offsets beyond 128 GiB, and recover a retained
+record spanning multiple 8 MiB batches. Further cases cover 260 consecutive
+deletions, preparation/byte progress, sparse leading-prefix cursor stability,
+checkpoint interruptions, foreign edits outside redo ranges, and edits after
+truncation. Ambiguous crashes between a source write/truncation and its durable
+timestamp checkpoint stop automatic recovery without further mutation and retain
+the journal for manual review. This deliberately avoids a whole-archive recovery
+scan; see [the recovery contract](../storage-management.md#progress-cancellation-and-recovery).
+
+Final validation passed all 10 selected storage, Find BMS and localization tests
+in 1.95 seconds, the desktop `main` build, and the unsigned iOS device build via
+`scripts/ios_firebase_deploy.sh --build-only --skip-init`. No build was uploaded.
+The final independent code review reported no remaining actionable findings.
+Physical-device throughput and Windows runtime recovery remain unmeasured.

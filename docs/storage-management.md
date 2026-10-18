@@ -125,16 +125,22 @@ Reported savings are the reduction in
 the archive's file length, which can differ from filesystem allocation.
 
 There is no second complete archive or extracted tree. A disk-backed index and
-bounded redo buffers accompany one extracted input, encoded output and prepared
+an 8 MiB copy batch with at most 128 chunks/records and a private redo file of
+at most 16 MiB accompany one extracted input, encoded output and prepared
 replacement at a time. The media staging budget is 1 GiB, additionally limited by
 free space; an entry must fit a conservative three-times-input estimate plus
 8 MiB. Oversized entries are skipped. A conversion must reduce the stored archive
 record too: a smaller FLAC can still be skipped when the original ZIP compression
-was more compact. Each batch compacts the archive once and rebuilds its metadata.
+was more compact. Each operation compacts the archive once and rebuilds its metadata.
+Confirmation reads physical layout metadata, not all payloads. There is no separate
+payload pass over deleted entries or unchanged prefixes. Compaction reads only the
+source and destination ranges needed for its bounded forward-copy batches. Completion does not reread the
+whole archive. Consecutive deletions and small retained files share durable batches.
 
 ## Progress, cancellation and recovery
 
-Progress separates scanning, encoding, verification and commit. Manual work stops
+Progress separates scanning, archive preparation, encoding, verification and commit.
+Archive compaction displays byte progress through the original container. Manual work stops
 music/preview readers and reserves library maintenance; competing playback or
 library operations cannot start during the mutation. Back requests cancellation
 and returns after the worker releases maintenance. Mobile backgrounding cancels
@@ -152,9 +158,16 @@ removed; unrecognized files and unresolved recovery state are retained. Do not
 manually remove recovery files while an operation is pending.
 
 Archives use durable forward recovery instead of a full backup. Before overwriting
-a bounded chunk, the updater saves its redo bytes and progress, then syncs the
-archive before advancing. Interruption recovery validates the file identity,
-completed output and remaining input before resuming. Cancellation stops new
+a bounded batch, the updater saves its before/after bytes and progress, then syncs
+the archive and records its modification/change timestamps before advancing.
+Recovery checks the pinned file identity and durable source timestamps, then
+validates only the bounded redo ranges. It does not hash the whole archive.
+A crash during a write or truncation, before the new source timestamp is durably
+recorded, is ambiguous with an external edit. Automatic recovery stops without
+further writes and retains the archive and journal for manual review; restarting
+alone cannot resolve that state. Checkpointed interruptions can resume normally.
+Legacy version-1 journals retain their original full-hash recovery check once
+before upgrading; new operations never create them. Cancellation stops new
 conversions and finishes the archive with the changes already accepted; this
 finalization can take time for a large archive. Archive recovery runs before
 playback and library readers are admitted. Keep both the archive and its private
@@ -227,6 +240,7 @@ that build reports native music playback unavailable. Windows build and filesyst
 execution were not available in this session; they remain release validation work.
 
 Archive update coverage includes desktop ZIP/TAR batching, sparse ZIP64 offsets,
-legacy filenames, real FLAC playback resolution, overlapping-write recovery and
+legacy filenames, real FLAC playback resolution, checkpointed batch recovery,
+fail-closed ambiguous writes/external edits and
 interrupted journal cleanup. The archive additions also pass iOS and Android
 build-only checks; giant-library device performance has not been measured.

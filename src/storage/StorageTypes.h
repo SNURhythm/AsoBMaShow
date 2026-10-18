@@ -22,13 +22,14 @@ StorageExecutionLimits DefaultStorageExecutionLimits();
 
 // May wait on the worker for foreground admission; false requests cancellation.
 using Checkpoint = std::function<bool()>;
-enum class StoragePhase { Inventory, Encode, Verify, Commit, Complete };
+enum class StoragePhase { Inventory, Encode, Verify, Commit, Complete, ArchivePrepare };
 struct StorageProgress {
   StoragePhase phase = StoragePhase::Inventory;
   std::filesystem::path currentPath;
   std::uint64_t filesDone = 0;
   std::uint64_t filesTotal = 0;
   std::uint64_t reclaimedBytes = 0;
+  std::uint64_t archiveBytesDone = 0, archiveBytesTotal = 0;
 };
 using ProgressCallback = std::function<void(const StorageProgress &)>;
 

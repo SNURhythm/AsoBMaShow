@@ -148,6 +148,103 @@ void reviewAndApplyPreserveSystemEntries() {
       files.at("._movie.avi") == "sidecar" && files.at("__MACOSX/other.avi") == "system" &&
       files.at("song/chart.bms") == "chart", "Apply changes exactly the reviewed media, preserving excluded system entries");
 }
+void archiveCompactionBatchesSmallRecords() {
+  storage_test::TempDirectory temp;
+  const auto path = temp.root / "songs.zip";
+  const std::vector<std::pair<std::string, std::string>> files = {
+      {"movie.avi", std::string(2000, 'v')}, {"one.png", std::string(300, 'a')},
+      {"two.png", std::string(400, 'b')}, {"three.png", std::string(500, 'c')}, {"chart.bms", "#TITLE preserved"}};
+  writeArchive(path, files);
+  InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+      .policy = {.bga = BgaAction::Delete}, .scanScratchRoot = temp.root / "scan"};
+  const auto review = BuildStoragePreflight(request);
+  unsigned advances = 0;
+  StorageArchiveDependencies deps{.faultPoint = [&](std::string_view point) {
+    if (point == "archive-cursor") ++advances;
+  }};
+  const auto report = UpdateStorageArchive(review.archives.front(), request.policy,
+      MakeStoragePlatformPaths(temp.root / "private", {temp.root}), deps);
+  require(report.deleted == 1 && !report.failed && !report.recoveryRequired, "batched compaction completes");
+  require(advances < 4, "small retained records share durable cursor advances instead of syncing each file");
+  const auto actual = readArchive(path);
+  require(actual.size() == 4, "only the selected video is deleted");
+  for (std::size_t i = 1; i < files.size(); ++i)
+    require(actual.at(files[i].first) == files[i].second, "batched compaction preserves each retained payload");
+}
+void archiveLargeRecordRecovery() {
+  for (const auto &point : {"archive-redo", "archive-source-synced", "foreign-outside-redo", "foreign-after-truncate"}) {
+    storage_test::TempDirectory temp;
+    const auto path = temp.root / "songs.zip";
+    const std::string image(9 * 1024 * 1024 + 17, 'i');
+    writeArchive(path, {{"movie.avi", std::string(2000, 'v')}, {"image.png", image}, {"chart.bms", "chart"}});
+    InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+        .policy = {.bga = BgaAction::Delete}, .scanScratchRoot = temp.root / "scan"};
+    const auto review = BuildStoragePreflight(request);
+    const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+    const std::string mode(point);
+    StorageArchiveDependencies deps{.faultPoint = [&](std::string_view name) {
+      if (name == mode || (mode == "foreign-outside-redo" && name == "archive-redo") ||
+          (mode == "foreign-after-truncate" && name == "archive-truncate")) throw std::runtime_error("batch interruption");
+    }};
+    require(UpdateStorageArchive(review.archives.front(), request.policy, paths, deps).recoveryRequired,
+        "interrupt an archive whose retained record exceeds the copy batch");
+    if (mode.starts_with("foreign")) {
+      StorageArchiveIO file(path, {}); file.Write(8 * 1024 * 1024 + 10000, "X"); file.Sync();
+    }
+    std::string error; const auto before = HashStorageFile(path, {}, error);
+    const auto result = RecoverStorageArchives(paths);
+    if (mode.starts_with("foreign")) {
+      require(result.recoveryRequired && HashStorageFile(path, {}, error) == before,
+          "foreign edits beyond redo ranges and after truncation block recovery without mutation");
+    } else {
+      require(!result.recoveryRequired && !result.failed && readArchive(path).at("image.png") == image,
+          "recovery resumes a retained record across multiple bounded batches");
+    }
+  }
+}
+void archiveConsecutiveDeletesAreBatched() {
+  storage_test::TempDirectory temp;
+  const auto path = temp.root / "songs.zip";
+  std::vector<std::pair<std::string, std::string>> files;
+  for (unsigned i = 0; i < 260; ++i) files.emplace_back(std::to_string(i) + ".avi", "video");
+  files.emplace_back("chart.bms", "chart"); writeArchive(path, files);
+  InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+      .policy = {.bga = BgaAction::Delete}, .scanScratchRoot = temp.root / "scan"};
+  const auto review = BuildStoragePreflight(request);
+  unsigned prepared = 0; StorageArchiveMetrics metrics;
+  StorageArchiveDependencies deps{.faultPoint = [&](std::string_view point) {
+    if (point == "archive-entry-ready") ++prepared;
+  }, .metrics = &metrics};
+  bool preparing = false, byteProgress = false;
+  const auto result = UpdateStorageArchive(review.archives.front(), request.policy,
+      MakeStoragePlatformPaths(temp.root / "private", {temp.root}), deps, {}, [&](const StorageProgress &progress) {
+        preparing |= progress.phase == StoragePhase::ArchivePrepare;
+        byteProgress |= progress.phase == StoragePhase::Commit && progress.archiveBytesDone > 0 && progress.archiveBytesTotal > 0;
+      });
+  require(result.deleted == 260 && !result.failed && !result.recoveryRequired && readArchive(path).at("chart.bms") == "chart",
+      "consecutive deletion batches preserve the retained chart");
+  require(prepared <= 3 && metrics.durableBatches <= 4, "deletions share durable batches instead of syncing each action");
+  require(preparing && byteProgress, "archive preparation and compaction publish distinct byte progress");
+}
+void archivePreparationDoesNotReadPayloads() {
+  storage_test::TempDirectory temp;
+  const auto path = temp.root / "songs.zip";
+  writeArchive(path, {{"movie.avi", std::string(2 * 1024 * 1024, 'v')}, {"chart.bms", "#TITLE preserved"}});
+  InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+      .policy = {.bga = BgaAction::Delete}, .scanScratchRoot = temp.root / "scan"};
+  const auto review = BuildStoragePreflight(request);
+  std::string error; const auto before = HashStorageFile(path, {}, error);
+  StorageArchiveMetrics metrics;
+  StorageArchiveDependencies deps{.faultPoint = [](std::string_view point) {
+    if (point == "archive-ready") throw StorageArchiveError(StorageReason::Cancelled, "stop before applying");
+  }, .metrics = &metrics};
+  const auto report = UpdateStorageArchive(review.archives.front(), request.policy,
+      MakeStoragePlatformPaths(temp.root / "private", {temp.root}), deps);
+  require(report.cancelled && !report.recoveryRequired && HashStorageFile(path, {}, error) == before,
+      "cancellation before applying keeps the original archive");
+  require(metrics.preparationBytesRead < 128 * 1024,
+      "confirmation reads archive metadata, not every payload byte");
+}
 std::map<std::string, std::string> readArchive(const fs::path &path) {
   auto reader = makeArchiveReadHandle(); archive_read_support_filter_all(reader.get()); archive_read_support_format_all(reader.get());
   require(archive_read_open_filename(reader.get(), path.string().c_str(), 65536) == ARCHIVE_OK, "open updated archive with independent reader");
@@ -188,12 +285,13 @@ void archiveUpdatesBatchWithoutFullCopy() {
       "archive changes report and compact one physical source");
   require(report.reclaimedBytes == before - fs::file_size(archive) && metrics.peakScratchBytes < before / 2,
       "archive savings use physical bytes with bounded per-entry staging");
+  require(metrics.sourceBytesRead < before * 5 / 2, "compaction does not reread the whole archive at completion");
   }
 }
 void interruptedArchiveWritesRecover() {
-  const std::vector<std::pair<std::string, unsigned>> faults = {{"archive-entry-ready", 1}, {"archive-redo", 3},
-      {"archive-write", 3}, {"archive-cursor", 3}, {"archive-before-truncate", 1}, {"archive-truncate", 1},
-      {"archive-cleanup-ready", 1}, {"archive-manifest-unlinked", 1}, {"archive-cleanup-remove", 1}};
+  const std::vector<std::pair<std::string, unsigned>> faults = {{"archive-entry-ready", 1}, {"archive-redo", 2},
+      {"archive-write", 3}, {"archive-source-synced", 1}, {"archive-cursor", 2}, {"archive-before-truncate", 1}, {"archive-truncate", 1},
+      {"archive-truncate-synced", 1}, {"archive-cleanup-ready", 1}, {"archive-manifest-unlinked", 1}, {"archive-cleanup-remove", 1}};
   for (const auto &[point, occurrence] : faults) {
     storage_test::TempDirectory temp;
     const auto archive = temp.root / "library.zip";
@@ -210,8 +308,14 @@ void interruptedArchiveWritesRecover() {
       return EncodeResult{.outcome = FileOutcome::Converted, .outputPath = output};
     }, .faultPoint = [&](std::string_view name) { if (name == point && ++calls == occurrence) throw std::runtime_error("injected archive interruption"); }};
     const auto interrupted = UpdateStorageArchive(review.archives.front(), request.policy, paths, dependencies);
-    require(calls == occurrence && interrupted.recoveryRequired, "injected archive write interruption retains recovery state");
+    if (calls != occurrence || !interrupted.recoveryRequired) throw std::runtime_error(point + ": missing injected interruption (" + std::to_string(calls) + ")");
+    std::string error; const auto beforeRecovery = HashStorageFile(archive, {}, error);
     const auto recovered = RecoverStorageArchives(paths);
+    if (point == "archive-write" || point == "archive-truncate") {
+      require(recovered.recoveryRequired && HashStorageFile(archive, {}, error) == beforeRecovery,
+          "ambiguous source writes retain recovery evidence without another mutation");
+      continue;
+    }
     if (recovered.recoveryRequired && !recovered.files.empty()) throw std::runtime_error(point + ": " + recovered.files.front().reason.detail);
     require(!recovered.failed && !recovered.recoveryRequired, "durable archive recovery finishes without encoding again");
     const auto files = readArchive(archive);
@@ -221,13 +325,15 @@ void interruptedArchiveWritesRecover() {
     require(RecoverStorageArchives(paths).changedRoots.empty(), "archive recovery is idempotent");
   }
 }
-void writeSparseZip64(const fs::path &path, std::uint64_t offset = 0x100000000ULL + 4096,
-    const std::string &audioName = "\x93\xfa\x96\x7b\x8c\xea.wav") {
+void writeSparseZip64(const fs::path &path, std::uint64_t offset = 128ULL * 1024 * 1024 * 1024 + 4096,
+    const std::string &audioName = "\x93\xfa\x96\x7b\x8c\xea.wav", bool prefix = false) {
   using storage_management::archive_detail::put;
   std::ofstream file(path, std::ios::binary);
   file.seekp(offset); std::string central;
-  for (const auto &[name, payload] : std::vector<std::pair<std::string, std::string>>{
-      {"movie.avi", std::string(1000, 'v')}, {audioName, std::string(10000, 'a')}, {"chart.bms", "fixture"}}) {
+  std::vector<std::pair<std::string, std::string>> files = {
+      {"movie.avi", std::string(1000, 'v')}, {audioName, std::string(10000, 'a')}, {"chart.bms", "fixture"}};
+  if (prefix) files.insert(files.begin(), {"prefix.png", "prefix"});
+  for (const auto &[name, payload] : files) {
     const auto crc = crc32(0, reinterpret_cast<const Bytef *>(payload.data()), payload.size());
     std::string local(30, '\0'); put(local, 0, 0x04034b50, 4); put(local, 4, 20, 2); put(local, 14, crc, 4);
     put(local, 18, payload.size(), 4); put(local, 22, payload.size(), 4); put(local, 26, name.size(), 2);
@@ -240,11 +346,38 @@ void writeSparseZip64(const fs::path &path, std::uint64_t offset = 0x100000000UL
   }
   file.write(central.data(), central.size());
   std::string end64(56, '\0'); put(end64, 0, 0x06064b50, 4); put(end64, 4, 44, 8); put(end64, 12, 45, 2); put(end64, 14, 45, 2);
-  put(end64, 24, 3, 8); put(end64, 32, 3, 8); put(end64, 40, central.size(), 8); put(end64, 48, offset, 8);
+  put(end64, 24, files.size(), 8); put(end64, 32, files.size(), 8); put(end64, 40, central.size(), 8); put(end64, 48, offset, 8);
   std::string locator(20, '\0'); put(locator, 0, 0x07064b50, 4); put(locator, 8, offset + central.size(), 8); put(locator, 16, 1, 4);
-  std::string end(22, '\0'); put(end, 0, 0x06054b50, 4); put(end, 8, 3, 2); put(end, 10, 3, 2);
+  std::string end(22, '\0'); put(end, 0, 0x06054b50, 4); put(end, 8, files.size(), 2); put(end, 10, files.size(), 2);
   put(end, 12, central.size(), 4); put(end, 16, 0xffffffff, 4); put(end, 20, 12, 2);
   const auto tail = end64 + locator + end + "archive-note"; file.write(tail.data(), tail.size()); require(file.good(), "write sparse ZIP64 fixture");
+}
+void sparsePrefixRecovery() {
+  for (bool prefix : {false, true}) for (const auto point : {"archive-redo", "archive-source-synced"}) {
+    storage_test::TempDirectory temp; const auto path = temp.root / "songs.zip";
+    writeSparseZip64(path, 4096, "audio.wav", prefix);
+    InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+        .policy = {.bga = BgaAction::Delete}, .scanScratchRoot = temp.root / "scan"};
+    const auto review = BuildStoragePreflight(request);
+    const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+    StorageArchiveDependencies deps{.faultPoint = [&](std::string_view name) {
+      if (name == point) throw std::runtime_error("sparse batch interruption");
+    }};
+    require(UpdateStorageArchive(review.archives.front(), request.policy, paths, deps).recoveryRequired,
+        "interrupt sparse archive compaction after a durable source checkpoint");
+    const auto result = RecoverStorageArchives(paths);
+    require(!result.failed && !result.recoveryRequired, "sparse batch cursor remains stable across recovery");
+    StorageArchive archive(path, temp.root / "checked.sqlite", {});
+    std::optional<std::uint64_t> cursor; unsigned count = 0;
+    while (const auto entry = archive.Next(cursor)) {
+      cursor = entry->offset; ++count;
+      if (count == 1) require(entry->offset == (prefix ? 4096 : 0), "recovery preserves the planned first output offset");
+      require(entry->name != "movie.avi", "recovery does not retain the selected deleted video");
+      archive.Extract(*entry, temp.root / (std::to_string(count) + ".bin"), {});
+    }
+    require(count == (prefix ? 3 : 2), "recovery preserves unchanged leading records and deletes only the selected entry");
+    require(RecoverStorageArchives(paths).changedRoots.empty(), "sparse recovery is idempotent");
+  }
 }
 void malformedLegacyNamesAreRejected() {
   storage_test::TempDirectory temp;
@@ -386,27 +519,37 @@ void partialWritesAndForeignChanges() {
         archive_detail::Statement q(db.value, "SELECT data_offset FROM entries WHERE name='image.png'"); require(q.step(), "find untouched source"); foreignOffset = q.integer(0);
         StorageArchiveIO file(path, {}); file.Write(foreignOffset, "X"); file.Sync();
       } else {
-        archive_detail::Statement q(db.value, "SELECT target,after FROM redo"); require(q.step(), "find overlapping redo");
-        StorageArchiveIO file(path, {}); const auto bytes = q.bytes(1); file.Write(q.integer(0), std::string_view(bytes).substr(0, bytes.size() / 2)); file.Sync();
+        archive_detail::Statement q(db.value, "SELECT target,scratch_offset,length FROM redo JOIN chunks ON chunks.id=redo.chunk ORDER BY target LIMIT 1");
+        require(q.step(), "find overlapping redo");
+        StorageArchiveIO scratch(journal / "redo.bin", {}, false), file(path, {});
+        const auto bytes = scratch.Read(q.integer(1) + q.integer(2), q.integer(2));
+        file.Write(q.integer(0), std::string_view(bytes).substr(0, bytes.size() / 2)); file.Sync();
       }
     }
     std::string error; const auto before = HashStorageFile(path, {}, error); auto result = RecoverStorageArchives(paths);
     if (foreign) {
       require(result.recoveryRequired && HashStorageFile(path, {}, error) == before, "foreign source changes block recovery before another write");
       { StorageArchiveIO file(path, {}); file.Write(foreignOffset, "i"); file.Sync(); }
+      const auto restored = HashStorageFile(path, {}, error);
       result = RecoverStorageArchives(paths);
+      require(result.recoveryRequired && HashStorageFile(path, {}, error) == restored,
+          "restoring bytes does not silently authorize an externally modified archive");
+      continue;
     }
-    require(!result.recoveryRequired && !result.failed && readArchive(path).at("image.png") == std::string(700000, 'i'),
-        "partial overlapping writes replay without losing future source bytes");
+    require(result.recoveryRequired && HashStorageFile(path, {}, error) == before,
+        "uncheckpointed partial writes remain fail-closed without a whole-archive scan");
   }
 }
 }
 void storageArchiveTests() {
   for (const auto &[name, run] : std::vector<std::pair<const char *, void(*)()>>{
+      {"sparse-prefix-recovery", sparsePrefixRecovery}, {"large-batch-recovery", archiveLargeRecordRecovery}, {"delete-batches", archiveConsecutiveDeletesAreBatched},
       {"manifest", manifestsExtractEntries}, {"preflight", selectedArchiveFoldersAreEligible},
       {"sandbox", archiveReviewSeparatesPrivateAndLibraryAccess},
       {"cached-review", reviewUsesCachedIndexAndApplyValidatesLayout},
       {"system-entries", reviewAndApplyPreserveSystemEntries},
+      {"metadata-preparation", archivePreparationDoesNotReadPayloads},
+      {"batched-compaction", archiveCompactionBatchesSmallRecords},
       {"update", archiveUpdatesBatchWithoutFullCopy}, {"recovery", interruptedArchiveWritesRecover},
       {"zip64", sparseZip64AndLegacyNames}, {"invalid-encoding", malformedLegacyNamesAreRejected},
       {"playback", realArchiveOptimizerPreservesPlayback},

@@ -3,6 +3,7 @@
 #include "../src/storage/StorageMeasurement.h"
 #include "../src/storage/StorageOptimizer.h"
 #include "../src/storage/AudioTranscoder.h"
+#include "../src/storage/StorageArchiveTransaction.h"
 #include "../src/ArchiveFile.h"
 #include "../src/ArchiveRAII.h"
 #include <archive_entry.h>
@@ -29,17 +30,21 @@ double peakMiB() {
   return usage.ru_maxrss / 1024.;
 #endif
 }
-void writeArchive(const fs::path &path, std::size_t groups, std::size_t files) {
+void writeArchive(const fs::path &path, std::size_t groups, std::size_t files,
+    std::size_t payloadBytes = 17, bool update = false) {
   auto writer = makeArchiveWriteHandle();
   require(archive_write_set_format_zip(writer.get()) == ARCHIVE_OK, "zip format");
+  if (update) require(archive_write_set_options(writer.get(), "zip:compression=store") == ARCHIVE_OK, "stored fixture");
   require(archive_write_open_filename(writer.get(), path.c_str()) == ARCHIVE_OK, "zip open");
+  const std::string payload(payloadBytes, 'a');
   for (std::size_t g = 0; g < groups; ++g) for (std::size_t f = 0; f < files; ++f) {
     auto *entry = archive_entry_new();
-    const auto name = "g" + std::to_string(g) + "/a" + std::to_string(f) + ".wav";
+    const auto name = "g" + std::to_string(g) + "/a" + std::to_string(f) +
+        (update ? (g == 0 && f == 0 ? ".avi" : ".png") : ".wav");
     archive_entry_set_pathname(entry, name.c_str());
-    archive_entry_set_filetype(entry, AE_IFREG); archive_entry_set_perm(entry, 0644); archive_entry_set_size(entry, 17);
+    archive_entry_set_filetype(entry, AE_IFREG); archive_entry_set_perm(entry, 0644); archive_entry_set_size(entry, payloadBytes);
     require(archive_write_header(writer.get(), entry) == ARCHIVE_OK, "zip header");
-    require(archive_write_data(writer.get(), "12345678901234567", 17) == 17, "zip data");
+    require(archive_write_data(writer.get(), payload.data(), payload.size()) == static_cast<la_ssize_t>(payload.size()), "zip data");
     archive_entry_free(entry);
   }
   require(archive_write_close(writer.get()) == ARCHIVE_OK, "zip close");
@@ -79,19 +84,21 @@ int main(int argc, char **argv) {
     StorageEvidenceMetrics evidence;
     const bool synthetic = mode == "synthetic" || mode == "cancel" || mode == "dispatch";
     const bool archiveReview = mode == "archive-review";
-    const bool archive = mode == "archive" || mode == "archives" || archiveReview;
+    const bool archiveUpdate = mode == "archive-update";
+    const bool archive = mode == "archive" || mode == "archives" || archiveReview || archiveUpdate;
     if (archive) {
       archive_file::setArchiveIndexCacheDirectory(temp.root / "indexes");
       const auto count = mode == "archives" ? dirs : 1;
       const auto groups = mode == "archives" ? 1 : dirs;
       for (std::size_t a = 0; a < count; ++a) {
         const auto path = root / ("p" + std::to_string(a) + ".zip");
-        writeArchive(path, groups, files);
+        writeArchive(path, groups, files, archiveUpdate ? std::stoull(variant) : 17, archiveUpdate);
         for (std::size_t g = 0; g < groups; ++g)
           request.groups.push_back({.groupId = std::to_string(a) + ":" + std::to_string(g),
               .path = path / ("g" + std::to_string(g)), .writableLocal = false, .sourceKind = StorageSourceKind::Archive});
       }
-      if (variant == "persisted") require(MeasureStorageGroups(request).complete, "prime persisted indexes");
+      if (archiveUpdate) require(MeasureStorageGroups(request).complete, "prime update index");
+      else if (variant == "persisted") require(MeasureStorageGroups(request).complete, "prime persisted indexes");
       else if (variant == "resident") {
         for (std::size_t a = 0; a < count; ++a) {
           std::vector<archive_file::Entry> entries;
@@ -143,7 +150,21 @@ int main(int argc, char **argv) {
     }
     const auto start = Clock::now();
     double preflightSeconds = 0;
-    if (archiveReview) {
+    if (archiveUpdate) {
+      request.policy.bga = BgaAction::Delete;
+      request.scanScratchRoot = deps.limits.scratchRoot;
+      const auto review = BuildStoragePreflight(request, {}, &metrics, deps);
+      require(review.complete && review.eligibleCount == 1, "one archive deletion");
+      preflightSeconds = seconds(start);
+      auto ready = Clock::now();
+      StorageArchiveDependencies updateDeps{.faultPoint = [&](std::string_view point) {
+        if (point == "archive-ready") { verifySeconds = seconds(ready); ready = Clock::now(); }
+      }};
+      const auto report = UpdateStorageArchive(review.archives.front(), request.policy,
+          MakeStoragePlatformPaths(temp.root / "private", {root}), updateDeps);
+      commitSeconds = seconds(ready);
+      require(report.deleted == 1 && !report.failed && !report.recoveryRequired, "archive compaction completed");
+    } else if (archiveReview) {
       request.policy.audio = AudioAction::LosslessFlac;
       request.scanScratchRoot = deps.limits.scratchRoot;
       const auto review = BuildStoragePreflight(request, {}, &metrics, deps);

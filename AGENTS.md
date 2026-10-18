@@ -108,6 +108,19 @@
 - To compile shaders from this machine, run:
   `cd shader_src && SHADERC=../bgfx/bgfx/.build/osx-arm64/bin/shadercRelease python3 make.py`
 
+## Archive Scale
+
+- BMS archives are normally tens or hundreds of gigabytes. Treat that scale as
+  the baseline, not an exceptional case that can use a slow fallback.
+- Reuse archive indexes for browsing, measurement and review. Confirmation must
+  read metadata only; do not hash, extract or scan every payload before starting.
+- Read payloads only for selected media work or necessary forward compaction.
+  Skip untouched prefixes and deleted payloads, batch durable writes with bounded
+  memory/scratch space, and do not reread the entire archive at completion.
+- Preserve crash recovery with bounded journals and explicit source identity
+  checks. Check large-archive behavior with byte counts and sparse fixtures as
+  well as representative timing; tiny archives alone hide scaling failures.
+
 ## Efficient Tests
 
 Keep test costs in mind: compilation, execution, disk use, and maintenance all

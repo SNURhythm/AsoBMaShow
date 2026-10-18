@@ -119,6 +119,7 @@ i18n::Text findBmsStorageProgressMessage(const storage_management::StorageProgre
   const char *key = "storage.ui.verifying";
   switch (progress.phase) {
   case StoragePhase::Inventory: key = "storage.ui.scanning"; break;
+  case StoragePhase::ArchivePrepare: key = "storage.ui.preparing_archive"; break;
   case StoragePhase::Encode: key = "storage.ui.encoding"; break;
   case StoragePhase::Verify: break;
   case StoragePhase::Commit: key = "storage.ui.committing"; break;

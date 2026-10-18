@@ -76,6 +76,7 @@ std::string reason(StorageReason code) {
 const char *phase(StoragePhase value) {
   switch (value) {
   case StoragePhase::Inventory: return "storage.ui.scanning";
+  case StoragePhase::ArchivePrepare: return "storage.ui.preparing_archive";
   case StoragePhase::Encode: return "storage.ui.encoding";
   case StoragePhase::Verify: return "storage.ui.verifying";
   case StoragePhase::Commit: return "storage.ui.committing";
@@ -407,9 +408,14 @@ void StorageManagementScene::RefreshState() {
   std::string status;
   if (shownTask_.recoveryRequired) status = i18n::tr("storage.ui.recovery_required");
   else if (shownTask_.running) {
-    status = std::string(i18n::tr(shownTask_.cancelling ? "storage.ui.cancelling" : phase(shownTask_.progress.phase))) +
+    const auto &progress = shownTask_.progress;
+    const bool compacting = progress.phase == StoragePhase::Commit && progress.archiveBytesTotal;
+    status = std::string(i18n::tr(shownTask_.cancelling ? "storage.ui.cancelling" :
+        compacting ? "storage.ui.compacting_archive" : phase(progress.phase))) +
         " · " + std::to_string(shownTask_.progress.filesDone) + "/" + std::to_string(shownTask_.progress.filesTotal) +
-        " · " + bytes(shownTask_.progress.reclaimedBytes) + "\n" + fspath_to_utf8(shownTask_.progress.currentPath.filename());
+        " · " + bytes(shownTask_.progress.reclaimedBytes);
+    if (compacting) status += "\n" + bytes(progress.archiveBytesDone) + " / " + bytes(progress.archiveBytesTotal);
+    status += "\n" + fspath_to_utf8(shownTask_.progress.currentPath.filename());
   } else if (measuring_) status = i18n::tr("storage.ui.scanning");
   else if (!shownTask_.admissionError.empty()) status = std::string(i18n::tr("storage.ui.busy")) + " " + shownTask_.admissionError;
   else if (shownTask_.lastReport) status = i18n::tr(shownTask_.lastReport->cancelled ? "storage.ui.cancelled" : "storage.ui.complete");
@@ -474,6 +480,8 @@ void StorageManagementScene::update(float) {
       task.lastReport != shownTask_.lastReport || task.progress.phase != shownTask_.progress.phase ||
       task.progress.filesDone != shownTask_.progress.filesDone || task.progress.filesTotal != shownTask_.progress.filesTotal ||
       task.progress.reclaimedBytes != shownTask_.progress.reclaimedBytes ||
+      task.progress.archiveBytesDone != shownTask_.progress.archiveBytesDone ||
+      task.progress.archiveBytesTotal != shownTask_.progress.archiveBytesTotal ||
       task.progress.currentPath != shownTask_.progress.currentPath)
     RefreshState();
   if (width_ != rendering::window_width || height_ != rendering::window_height) Layout();

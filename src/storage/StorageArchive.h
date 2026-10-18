@@ -3,7 +3,7 @@
 #include <memory>
 
 namespace storage_management {
-namespace archive_detail { struct Database; }
+namespace archive_detail { struct Database; struct Statement; }
 enum class StorageArchiveFormat { Zip, Tar };
 struct StorageArchiveEntry {
   std::uint64_t id = 0, offset = 0, span = 0, dataOffset = 0, packed = 0, bytes = 0, crc = 0;
@@ -41,7 +41,7 @@ public:
 private:
   void ParseZip(Checkpoint);
   void ParseTar(Checkpoint);
-  void Add(const StorageArchiveEntry &);
+  void Add(const StorageArchiveEntry &, archive_detail::Statement &);
   StorageArchiveFormat format_ = StorageArchiveFormat::Zip;
 };
 bool FindStorageArchive(const std::filesystem::path &virtualPath, std::filesystem::path &archive,
