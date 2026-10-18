@@ -66,7 +66,7 @@ StoragePreflight BuildStoragePreflight(const InventoryRequest &request, Checkpoi
   StoragePreflight result;
   result.request = request; result.totalBytes = 0;
   std::vector<fs::path> roots;
-  std::map<fs::path, std::vector<std::size_t>> positions;
+  std::map<fs::path, std::vector<std::size_t>, StoragePathLess> positions;
   const StoragePathIndex access(request.pathAccessRoots);
   for (const auto &group : request.groups) {
     GroupStorageMeasurement measured{.groupId = group.groupId, .root = group.path, .sourceKind = group.sourceKind};
