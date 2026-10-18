@@ -127,6 +127,7 @@ public:
   bool &started;
   const std::string originalSourceIdentity;
   bool recovering = false;
+  Checkpoint recoveryCheck;
   struct PendingRecord {
     std::uint64_t id, output, cursor = 0;
     unsigned complete = 0;
@@ -322,6 +323,7 @@ public:
     // output ranges must still match before any recovery mutation is allowed.
     Statement chunks(db.value, "SELECT id,source,length,kind,destination,hash,data,done FROM chunks ORDER BY id");
     while (chunks.step()) {
+      active(recoveryCheck);
       Chunk chunk{chunks.integer(0), chunks.integer(1), chunks.integer(2), chunks.integer(3), chunks.integer(4), chunks.bytes(5), chunks.bytes(6)};
       require(chunk.length && chunk.length <= chunkSize && chunk.kind <= 2, "Invalid archive recovery chunk");
       if (chunk.id == pending) continue;
@@ -329,10 +331,13 @@ public:
           Hash(archive.io.Read(chunk.destination, chunk.length)) == chunk.hash, "Previously written archive data changed", StorageReason::StaleInput);
       else ReadChunk(chunk);
     }
+    active(recoveryCheck);
     if (pending) { archive.io.Write(target, after); archive.io.Sync(); Done(pending); }
   }
-  void ValidateRecovery() {
+  void ValidateRecovery(Checkpoint check) {
     recovering = true;
+    recoveryCheck = std::move(check);
+    active(recoveryCheck);
     if (Value("version") == 1) {
       // Retained journals from the previous format carry full-range hashes.
       // Honor their recovery contract once before upgrading their metadata.
@@ -544,6 +549,9 @@ public:
     pendingChunks.clear(); pendingRecords.clear(); pendingBytes = 0; pendingDeletes = false;
     progress.archiveBytesDone = std::max(progress.archiveBytesDone, pendingSourceEnd);
     if (copyProgress) copyProgress(progress);
+    // Recovery may stop only after the source and its resume metadata agree.
+    // Ordinary Apply cancellation still finishes an already-started rewrite.
+    active(recoveryCheck);
   }
   void CopyRecord(const StorageArchiveEntry &entry, std::uint64_t action, std::uint64_t originalSpan,
       bool deleted = false, bool relocated = false) {
@@ -618,6 +626,7 @@ public:
     while (auto entry = nextArchiveEntry(next, cursor, state)) {
       cursor = entry->offset;
       auto action = state[0];
+      active(recoveryCheck);
       const bool cancelled = check && !check(); report.cancelled |= cancelled;
       if (cancelled && !started) return;
       bool deleted = false;
@@ -678,6 +687,7 @@ public:
           "FROM entries WHERE offset>? AND action!=2 ORDER BY offset LIMIT 1");
       std::uint64_t outputOffset[1]{};
       while (auto entry = nextArchiveEntry(next, cursor, outputOffset)) {
+        active(recoveryCheck);
         cursor = entry->offset; append(archive.Central(*entry, outputOffset[0])); ++count;
       }
       const auto centralSize = plus(destination, buffer.size()) - start;
@@ -696,6 +706,7 @@ public:
     Set("final_size", destination); Set("phase", 1); transaction.Commit();
   }
   void Finish() {
+    active(recoveryCheck);
     if (!started) return;
     if (Value("phase") == 0) { Relocations(); Trailer(); }
     if (Value("phase") == 1) {
@@ -1086,6 +1097,7 @@ StorageReport RecoverStorageArchives(const StoragePlatformPaths &paths, Checkpoi
   StorageReport result; std::error_code error; if (!fs::exists(paths.journalRoot, error) && !error) return result;
   StorageRecoveryProgress progress;
   try {
+    active(check);
     std::string pathError; require(IsSafeLocalPath(paths.journalRoot, pathError, paths.pathAccessRoots), "Unsafe archive recovery root", StorageReason::RecoveryRequired);
     for (const auto &entry : fs::directory_iterator(paths.journalRoot)) {
       active(check); const auto name = entry.path().filename().string(); if (!name.starts_with("archive-")) continue;
@@ -1095,7 +1107,7 @@ StorageReport RecoverStorageArchives(const StoragePlatformPaths &paths, Checkpoi
         progress.phase = StorageRecoveryPhase::FinalizingArchive;
         progress.currentPath = entry.path(); progress.archiveBytesDone = 0;
         NotifyStorageRecoveryProgress(notify, progress);
-        cleanup(entry.path(), deps); continue;
+        active(check); cleanup(entry.path(), deps); continue;
       }
       require(uuid::isCanonicalLowerV4(name.substr(8)) && !entry.is_symlink() && entry.is_directory(), "Invalid archive recovery directory", StorageReason::RecoveryRequired);
       const auto journal = entry.path(); fs::path source; bool started = true;
@@ -1112,8 +1124,9 @@ StorageReport RecoverStorageArchives(const StoragePlatformPaths &paths, Checkpoi
           progress.phase = StorageRecoveryPhase::CheckingArchive;
           progress.currentPath = source; progress.archiveBytesDone = 0;
           NotifyStorageRecoveryProgress(notify, progress);
+          active(check);
           authority(source, paths); StorageArchive archive(source, journal / "manifest.sqlite", paths.pathAccessRoots, {}, true);
-          Update update(archive, journal, deps, started, paths.pathAccessRoots); update.ValidateRecovery();
+          Update update(archive, journal, deps, started, paths.pathAccessRoots); update.ValidateRecovery(check);
           progress.phase = StorageRecoveryPhase::RestoringArchive;
           ProgressCallback copyProgress;
           if (notify) copyProgress = [&](const StorageProgress &value) {
@@ -1122,7 +1135,7 @@ StorageReport RecoverStorageArchives(const StoragePlatformPaths &paths, Checkpoi
               progress.archiveBytesDone = value.archiveBytesDone;
               NotifyStorageRecoveryProgress(notify, progress);
             };
-          update.Entries(nullptr, {}, {}, std::move(copyProgress));
+          update.Entries(nullptr, {}, check, std::move(copyProgress));
           progress.phase = StorageRecoveryPhase::FinalizingArchive; progress.currentPath = source;
           NotifyStorageRecoveryProgress(notify, progress);
           update.Finish();
@@ -1135,7 +1148,11 @@ StorageReport RecoverStorageArchives(const StoragePlatformPaths &paths, Checkpoi
           ++progress.completedOperations;
           NotifyStorageRecoveryProgress(notify, progress);
         }
-      } catch (const std::exception &error) { failure(result, source.empty() ? journal : source, error, true); }
+      } catch (const std::exception &error) {
+        const auto *cancelled = dynamic_cast<const StorageArchiveError *>(&error);
+        if (cancelled && cancelled->code == StorageReason::Cancelled) throw;
+        failure(result, source.empty() ? journal : source, error, true);
+      }
     }
   } catch (const std::exception &error) {
     const auto *cancelled = dynamic_cast<const StorageArchiveError *>(&error);

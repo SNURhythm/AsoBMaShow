@@ -30,6 +30,10 @@ StoragePlatformPaths MakeStoragePlatformPaths(
 std::optional<std::vector<std::filesystem::path>> StorageReservationRoots(
     const StoragePlatformPaths &, std::vector<std::filesystem::path> selected, std::string &error);
 
+// Startup only, before any scan worker exists. Unknown contents and links are
+// retained; transaction journals are never part of this disposable cache sweep.
+bool CleanupAbandonedStorageScans(const StoragePlatformPaths &, std::string &error, Checkpoint = {});
+
 using StorageCommitPrecondition = std::function<bool(const AssetCandidate &,
     const std::vector<StorageFileChange> &, Checkpoint, std::string &)>;
 

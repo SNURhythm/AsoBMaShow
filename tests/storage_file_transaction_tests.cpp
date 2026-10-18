@@ -53,6 +53,44 @@ std::string read(const fs::path &path) {
   std::ifstream stream(path, std::ios::binary);
   return {std::istreambuf_iterator<char>(stream), {}};
 }
+void testAbandonedScanCleanup() {
+  Fixture fixture;
+  const auto root = fixture.paths.scanRoot;
+  const std::string id = "12345678-1234-4234-8234-123456789abc";
+  for (const auto &[prefix, database] : std::vector<std::pair<std::string, std::string>>{
+      {"", "review.sqlite"}, {"storage-directory-", "directory.sqlite"}, {"storage-scan-", "frontier.sqlite"}}) {
+    const auto directory = root / (prefix + id);
+    fixture.temp.write(directory / database, "abandoned database");
+    fixture.temp.write(directory / (database + "-journal"), "abandoned journal");
+  }
+  const auto unknown = root / "storage-directory-old";
+  fixture.temp.write(unknown / "directory.sqlite", "unknown directory");
+  const auto mixed = root / "12345678-1234-4234-8234-123456789abd";
+  fixture.temp.write(mixed / "review.sqlite", "recognized database");
+  fixture.temp.write(mixed / "keep.txt", "unrelated file");
+  const auto linked = root / "12345678-1234-4234-8234-123456789abe";
+  fs::create_directory(linked);
+  std::error_code linkError;
+  fs::create_symlink(fixture.candidate.source, linked / "review.sqlite", linkError);
+  const auto hardlinked = root / "12345678-1234-4234-8234-123456789abf";
+  fs::create_directory(hardlinked);
+  fs::create_hard_link(fixture.candidate.source, hardlinked / "review.sqlite");
+  fixture.temp.write(fixture.paths.journalRoot / ("archive-" + id) / "manifest.sqlite", "recovery evidence");
+  std::string error;
+  require(!CleanupAbandonedStorageScans(fixture.paths, error, [] { return false; }) &&
+      fs::exists(root / id / "review.sqlite"), "quit preserves scratch for a later startup");
+  require(CleanupAbandonedStorageScans(fixture.paths, error), "startup sweeps abandoned scan databases");
+  require(!fs::exists(root / id) && !fs::exists(root / ("storage-directory-" + id)) &&
+      !fs::exists(root / ("storage-scan-" + id)), "all three owned scan formats are reclaimed");
+  require(fs::exists(unknown / "directory.sqlite") && fs::exists(mixed / "review.sqlite") &&
+      (linkError || fs::is_symlink(linked / "review.sqlite")) && fs::exists(hardlinked / "review.sqlite") &&
+      read(fixture.candidate.source) == std::string(1024, 's') &&
+      read(fixture.paths.journalRoot / ("archive-" + id) / "manifest.sqlite") == "recovery evidence",
+      "unknown files, links, source media and durable recovery evidence are preserved");
+  require(CleanupAbandonedStorageScans(fixture.paths, error), "scratch cleanup is idempotent");
+  fixture.paths.scanRoot = linkError ? fixture.candidate.source : linked / "review.sqlite";
+  require(!CleanupAbandonedStorageScans(fixture.paths, error), "unsafe scratch root is rejected");
+}
 void testReservationIncludesPendingRecoveryRoots() {
   Fixture fixture;
   const auto selected = fixture.temp.root / "other-library";
@@ -948,6 +986,7 @@ int main(int argc, char **argv) {
     }
     testSandboxedRecovery(argv[0]);
 #endif
+    testAbandonedScanCleanup();
     testReservationIncludesPendingRecoveryRoots();
     testConcurrentCommitAndCancellation();
     testRecoveryAfterContainerRelocation();

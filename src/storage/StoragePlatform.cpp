@@ -1,6 +1,7 @@
 #include "StoragePlatform.h"
 #include "../AtomicFile.h"
 #include "../FileChecksum.h"
+#include "../Uuid.h"
 
 #include <array>
 #include <cerrno>
@@ -263,6 +264,55 @@ StoragePlatformPaths MakeStoragePlatformPaths(const fs::path &privateRoot,
   }
   return {privateRoot / "storage-management/journal", privateRoot / "storage-management/temporary",
           std::move(allowedRoots), std::move(accessRoots), privateRoot / "storage-management/scan", syncRoot};
+}
+
+bool CleanupAbandonedStorageScans(const StoragePlatformPaths &paths, std::string &error, Checkpoint check) {
+  error.clear();
+  try {
+    const auto active = [&] {
+      if (check && !check()) { error = "Scan cleanup cancelled"; return false; }
+      return true;
+    };
+    if (!active()) return false;
+    if (paths.scanRoot.empty()) return true;
+    std::error_code ec;
+    const auto status = fs::symlink_status(paths.scanRoot, ec);
+    if (ec == std::errc::no_such_file_or_directory || (!ec && !fs::exists(status))) return true;
+    if (ec) { error = ec.message(); return false; }
+    if (!IsSafeLocalPath(paths.scanRoot, error, paths.pathAccessRoots)) return false;
+    for (const auto &directory : fs::directory_iterator(paths.scanRoot)) {
+      if (!active()) return false;
+      auto name = directory.path().filename().string();
+      std::string database = "review.sqlite";
+      if (name.starts_with("storage-directory-")) { name.erase(0, 18); database = "directory.sqlite"; }
+      else if (name.starts_with("storage-scan-")) { name.erase(0, 13); database = "frontier.sqlite"; }
+      if (!uuid::isCanonicalLowerV4(name) || !fs::is_directory(directory.symlink_status())) continue;
+      std::vector<std::pair<fs::path, FileIdentity>> files;
+      bool owned = true;
+      for (const auto &entry : fs::directory_iterator(directory.path())) {
+        if (!active()) return false;
+        const auto filename = entry.path().filename().string();
+        if (filename != database && filename != database + "-journal" &&
+            filename != database + "-wal" && filename != database + "-shm") { owned = false; break; }
+        std::string ignored;
+        const auto identity = ReadFileIdentity(entry.path(), ignored, paths.pathAccessRoots);
+        if (!identity) { owned = false; break; }
+        files.emplace_back(entry.path(), *identity);
+      }
+      if (!owned) continue;
+      for (const auto &[path, identity] : files) {
+        if (!active()) return false;
+        if (ReadFileIdentity(path, error, paths.pathAccessRoots) != identity) {
+          if (error.empty()) error = "Scan database changed during cleanup";
+          return false;
+        }
+        fs::remove(path);
+      }
+      // Only remove the now-empty directory; never recursively delete contents.
+      fs::remove(directory.path());
+    }
+    return true;
+  } catch (const std::exception &failure) { error = failure.what(); return false; }
 }
 
 std::optional<std::vector<fs::path>> StorageReservationRoots(

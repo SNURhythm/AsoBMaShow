@@ -1064,7 +1064,7 @@ void interruptedArchiveWritesRecover() {
   for (const auto &[point, occurrence] : faults) {
     storage_test::TempDirectory temp;
     const auto archive = temp.root / "library.zip";
-    std::string image(700000, 'i');
+    std::string image(point == "archive-entry-ready" ? 10 * 1024 * 1024 : 700000, 'i');
     for (std::size_t i = 0; i < image.size(); ++i) image[i] = static_cast<char>((i * 17) % 251);
     writeArchive(archive, {{"one/a.wav", std::string(10000, 'a')}, {"one/movie.avi", std::string(9000, 'v')},
         {"one/chart.bms", "#WAV01 a.wav"}, {"two/image.png", image}});
@@ -1079,6 +1079,24 @@ void interruptedArchiveWritesRecover() {
     const auto interrupted = UpdateStorageArchive(review.archives.front(), request.policy, paths, dependencies);
     if (calls != occurrence || !interrupted.recoveryRequired) throw std::runtime_error(point + ": missing injected interruption (" + std::to_string(calls) + ")");
     std::string error; const auto beforeRecovery = HashStorageFile(archive, {}, error);
+    if (point == "archive-entry-ready") {
+      for (const bool afterBatch : {false, true}) {
+        bool quit = false;
+        std::uint64_t stoppedAt = 0;
+        const auto cancelled = RecoverStorageArchives(paths, [&] { return !quit; }, {},
+            [&](const StorageRecoveryProgress &progress) {
+              stoppedAt = progress.archiveBytesDone;
+              if (afterBatch ? progress.archiveBytesDone > 0 :
+                  progress.phase == StorageRecoveryPhase::CheckingArchive) quit = true;
+            });
+        require(quit && cancelled.cancelled && !fs::is_empty(paths.journalRoot),
+            "quit during archive recovery retains a resumable journal");
+        if (afterBatch) require(stoppedAt > 0 && stoppedAt < image.size(),
+            "quit stops at a durable batch within a large archive entry");
+        if (!afterBatch) require(HashStorageFile(archive, {}, error) == beforeRecovery,
+            "quit before archive validation leaves source bytes unchanged");
+      }
+    }
     bool observed = false, completed = false, finalizing = false, validCompletion = true;
     const auto recovered = RecoverStorageArchives(paths, {}, {}, [&](const StorageRecoveryProgress &progress) {
       observed = true;

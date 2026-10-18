@@ -90,9 +90,11 @@ std::filesystem::path StoragePrivateRoot(ApplicationContext &) {
 }
 
 bool InitializeStorageServices(ApplicationContext &context, StorageRecoveryProgressCallback notify) {
+  const Checkpoint check = [&context] { return !context.quitFlag.load(); };
   StorageRecoveryProgress progress;
   NotifyStorageRecoveryProgress(notify, progress);
   std::string error;
+  if (!check()) return false;
   auto startup = accessFolders(context, error);
   if (!startup) { SDL_Log("Storage recovery: %s", error.c_str()); return false; }
 #if TARGET_OS_ANDROID
@@ -104,7 +106,11 @@ bool InitializeStorageServices(ApplicationContext &context, StorageRecoveryProgr
     if (!reservation) { SDL_Log("Storage recovery: %s", error.c_str()); return false; }
   }
 #endif
-  auto recovery = RecoverStorageArchives(startup->paths, {}, {}, [&](const auto &value) {
+  if (!check()) return false;
+  if (!CleanupAbandonedStorageScans(startup->paths, error, check))
+    SDL_Log("Storage scan cleanup: %s", error.c_str());
+  if (!check()) return false;
+  auto recovery = RecoverStorageArchives(startup->paths, check, {}, [&](const auto &value) {
     progress = value;
     NotifyStorageRecoveryProgress(notify, progress);
   });
@@ -112,7 +118,8 @@ bool InitializeStorageServices(ApplicationContext &context, StorageRecoveryProgr
     progress.phase = StorageRecoveryPhase::Files;
     progress.currentPath.clear(); progress.archiveBytesDone = 0;
     NotifyStorageRecoveryProgress(notify, progress);
-    recovery = StorageFileTransaction(startup->paths).Recover({}, {
+    if (!check()) return false;
+    recovery = StorageFileTransaction(startup->paths).Recover(check, {
       .before = [&](const auto &folder) {
         progress.currentPath = folder;
         NotifyStorageRecoveryProgress(notify, progress);
@@ -123,7 +130,7 @@ bool InitializeStorageServices(ApplicationContext &context, StorageRecoveryProgr
       },
     });
   }
-  if (recovery.recoveryRequired || recovery.cancelled) {
+  if (recovery.recoveryRequired || recovery.cancelled || !check()) {
     for (const auto &file : recovery.files)
       SDL_Log("Storage recovery: %s: %s", file.source.string().c_str(), file.reason.detail.c_str());
     return false;
