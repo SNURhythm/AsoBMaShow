@@ -48,11 +48,12 @@ bool descriptiveComment(std::string_view value) {
 struct WaveMetadata {
   bool preserve = false;
   bool last = false;
+  bool unpaddedData = false;
   std::uint64_t bytes = 20; // APPLICATION header, riff ID and RIFF/WAVE header.
 };
 // libsndfile tolerates truncated RIFF data and does not expose every custom loop
 // tag. Inspect only media container headers, never chart declarations.
-StorageDiagnostic inspectContainer(const fs::path &path, int format, SNDFILE *audio, Checkpoint check,
+StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, SNDFILE *audio, Checkpoint check,
                                    bool lossless, WaveMetadata &foreign) {
   const auto bad = StorageDiagnostic{StorageReason::ValidationFailed, "Truncated or invalid audio container"};
   const auto metadata = StorageDiagnostic{StorageReason::UnsupportedFormat, "Playback metadata cannot be preserved"};
@@ -61,7 +62,7 @@ StorageDiagnostic inspectContainer(const fs::path &path, int format, SNDFILE *au
   const auto bytes = fs::file_size(path, error);
   if (!input || error) return bad;
   std::array<unsigned char, 12> header{};
-  if ((format & SF_FORMAT_TYPEMASK) == SF_FORMAT_FLAC) {
+  if ((info.format & SF_FORMAT_TYPEMASK) == SF_FORMAT_FLAC) {
     if (!input.read(reinterpret_cast<char *>(header.data()), 4) || std::memcmp(header.data(), "fLaC", 4)) return bad;
     std::uint64_t offset = 4;
     bool last = false;
@@ -109,9 +110,20 @@ StorageDiagnostic inspectContainer(const fs::path &path, int format, SNDFILE *au
     if (end - offset < 8 || !input.read(reinterpret_cast<char *>(header.data()), 8)) return bad;
     const auto length = le32(header.data() + 4);
     offset += 8;
-    const std::uint64_t padded = std::uint64_t(length) + (length & 1);
-    if (padded > end - offset) return bad;
     const std::string_view type(reinterpret_cast<const char *>(header.data()), 4);
+    std::uint64_t padded = std::uint64_t(length) + (length & 1);
+    if (type == "data" && (length & 1) && length == end - offset) {
+      // Some WAV writers omit the final alignment byte. Accept only a complete
+      // terminal PCM payload, never missing samples or an unpadded middle chunk.
+      const int subtype = info.format & SF_FORMAT_SUBMASK;
+      const int sampleBytes = subtype == SF_FORMAT_PCM_U8 || subtype == SF_FORMAT_PCM_S8 ? 1
+          : subtype == SF_FORMAT_PCM_24 ? 3 : 0;
+      const int frameBytes = sampleBytes * info.channels;
+      if (frameBytes <= 0 || length % frameBytes || length / frameBytes != info.frames) return bad;
+      foreign.unpaddedData = true;
+      padded = length;
+    }
+    if (padded > end - offset) return bad;
     const auto stored = type == "data" ? 8 : 8 + padded;
     foreign.bytes += 8 + stored;
     oversized = oversized || stored > 0xffffff - 4;
@@ -206,7 +218,9 @@ StorageDiagnostic preserveWaveMetadata(const fs::path &source, const fs::path &d
       input.seekg(offset);
       if (sourceEnd - offset < 8 || !input.read(reinterpret_cast<char *>(header.data()), 8)) return bad;
       const auto size = le32(header.data() + 4);
-      const std::uint64_t padded = std::uint64_t(size) + (size & 1);
+      std::uint64_t padded = std::uint64_t(size) + (size & 1);
+      if (foreign.unpaddedData && !std::memcmp(header.data(), "data", 4) && size == sourceEnd - offset - 8)
+        padded = size;
       if (padded > sourceEnd - offset - 8) return bad;
       next = offset + 8 + padded;
       stored = std::memcmp(header.data(), "data", 4) ? 8 + padded : 8;
@@ -316,7 +330,7 @@ EncodeResult EncodeAudio(const AssetCandidate &candidate, const StoragePolicy &p
   }
   const bool lossless = policy.audio == AudioAction::LosslessFlac;
   WaveMetadata foreign;
-  const auto container = inspectContainer(candidate.source, info.format, input.get(), check, lossless, foreign);
+  const auto container = inspectContainer(candidate.source, info, input.get(), check, lossless, foreign);
   if (container.code == StorageReason::Cancelled) return cancelled();
   if (container.code != StorageReason::None)
     return finish(container.code == StorageReason::ValidationFailed ? FileOutcome::Failed : FileOutcome::Skipped,

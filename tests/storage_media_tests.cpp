@@ -234,6 +234,64 @@ void audioTests() {
       require(std::filesystem::exists(source), "encoding never retires source");
     }
   }
+  for (int bits : {8, 24}) {
+    // Older WAV writers omit the terminal pad byte after an odd PCM payload.
+    // Start with known PCM and shorten the declared payload by one full sample.
+    std::ifstream input(temp.root / (std::to_string(bits) + "-1.wav"), std::ios::binary);
+    const int sampleBytes = bits / 8;
+    std::string unpadded((std::istreambuf_iterator<char>(input)), {});
+    const auto data = unpadded.find("data");
+    require(data != std::string::npos && data + 8 + 8192 * sampleBytes == unpadded.size(),
+            "fixture has one terminal PCM data chunk");
+    auto put32 = [](std::string &bytes, std::size_t offset, std::uint32_t value) {
+      for (int i = 0; i < 4; ++i) bytes[offset + i] = static_cast<char>(value >> (8 * i));
+    };
+    unpadded.resize(unpadded.size() - sampleBytes);
+    put32(unpadded, data + 4, 8191 * sampleBytes);
+    put32(unpadded, 4, unpadded.size() - 8);
+    auto pcm = samples(8192, 1, bits); pcm.pop_back();
+    for (bool metadata : {false, true}) {
+      auto bytes = unpadded;
+      if (metadata) {
+        bytes.insert(12, std::string("Xfoo\x02\0\0\0ok", 10));
+        put32(bytes, 4, bytes.size() - 8);
+      }
+      const auto name = std::to_string(bits) + (metadata ? "-unpadded-metadata" : "-unpadded");
+      const auto source = temp.root / (std::string(name) + ".wav");
+      const auto output = temp.root / (std::string(name) + ".flac");
+      temp.write(source.filename(), bytes);
+      require(EncodeAudio(candidate(source), policy, output, {}, {}).outcome == FileOutcome::Converted,
+              "complete terminal odd PCM data does not require a non-audio pad byte");
+      require(readAudio(output, 1, 8191) == pcm, "unpadded WAV preserves every sample including the last");
+      if (metadata) verifyWaveMetadata(bytes, output);
+    }
+    // Missing a declared audio byte is still truncation, even with an accurate RIFF size.
+    auto truncated = unpadded; truncated.pop_back(); put32(truncated, 4, truncated.size() - 8);
+    temp.write("unpadded-truncated.wav", truncated);
+    require(EncodeAudio(candidate(temp.root / "unpadded-truncated.wav"), policy,
+                        temp.root / "unpadded-truncated.flac", {}, {}).reason.code == StorageReason::ValidationFailed,
+            "terminal padding tolerance never accepts missing declared PCM bytes");
+    if (bits == 24) {
+      auto partialFrame = unpadded; partialFrame.resize(partialFrame.size() - 2);
+      put32(partialFrame, data + 4, 8191 * sampleBytes - 2);
+      put32(partialFrame, 4, partialFrame.size() - 8);
+      temp.write("partial-frame.wav", partialFrame);
+      require(EncodeAudio(candidate(temp.root / "partial-frame.wav"), policy,
+                          temp.root / "partial-frame.flac", {}, {}).reason.code == StorageReason::ValidationFailed,
+              "an odd payload ending inside a PCM frame is not mistaken for missing padding");
+    }
+    // The exception cannot cover ancillary payloads or padding before another chunk.
+    for (bool ancillary : {false, true}) {
+      auto bytes = unpadded;
+      if (ancillary) bytes += std::string("\0Xfoo\x01\0\0\0x", 10);
+      else bytes += std::string("JUNK\0\0\0\0", 8);
+      put32(bytes, 4, bytes.size() - 8);
+      temp.write("unpadded-invalid.wav", bytes);
+      require(EncodeAudio(candidate(temp.root / "unpadded-invalid.wav"), policy,
+                          temp.root / "unpadded-invalid.flac", {}, {}).reason.code == StorageReason::ValidationFailed,
+              "padding remains mandatory between chunks and for ancillary metadata");
+    }
+  }
   for (int subtype : {SF_FORMAT_FLOAT, SF_FORMAT_PCM_32}) {
     auto source = temp.root / "unsupported.wav";
     writeAudio(source, SF_FORMAT_WAV | subtype, 1, samples(8192, 1, 24));
