@@ -33,7 +33,7 @@ SoundFile openRead(const fs::path &path, SF_INFO &info) {
 #endif
 }
 StorageDiagnostic validateFlacFrames(const fs::path &path, const SF_INFO &info, const Checkpoint &check) {
-  const auto invalid = StorageDiagnostic{StorageReason::ValidationFailed, "Existing FLAC did not decode completely"};
+  const auto invalid = StorageDiagnostic{StorageReason::ValidationFailed, "FLAC did not decode completely"};
   const auto cancelled = StorageDiagnostic{StorageReason::Cancelled, "Cancelled"};
   struct Decoder {
     AVFormatContext *input = nullptr;
@@ -533,6 +533,13 @@ EncodeResult EncodeAudio(const AssetCandidate &candidate, const StoragePolicy &p
     return finish(container.code == StorageReason::ValidationFailed ? FileOutcome::Failed : FileOutcome::Skipped,
                   container.code, container.detail);
   if (info.frames <= 0) return finish(FileOutcome::Failed, StorageReason::ValidationFailed, "Empty audio");
+  if ((info.format & SF_FORMAT_TYPEMASK) == SF_FORMAT_FLAC) {
+    if (progress) progress({StoragePhase::Verify, candidate.source});
+    const auto validation = validateFlacFrames(candidate.source, info, check);
+    if (validation.code == StorageReason::Cancelled) return cancelled();
+    if (validation.code != StorageReason::None)
+      return finish(FileOutcome::Failed, validation.code, validation.detail);
+  }
   SF_INFO outputInfo{};
   outputInfo.format = decision.format; outputInfo.channels = info.channels; outputInfo.samplerate = info.samplerate;
 #ifdef _WIN32

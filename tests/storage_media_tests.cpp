@@ -261,6 +261,12 @@ void existingAudioTests() {
       temp.write(path.filename(), understated);
       require(ValidateExistingAudio(path, action).code == StorageReason::ValidationFailed,
               "FLAC validation reaches physical EOF rather than stopping at an understated sample count");
+      StoragePolicy policy;
+      policy.audio = AudioAction::LossyVorbis;
+      const auto output = temp.root / "understated.ogg";
+      const auto result = EncodeAudio(candidate(path), policy, output, {}, {});
+      require(result.reason.code == StorageReason::ValidationFailed && !std::filesystem::exists(output),
+              "FLAC conversion cannot retire trailing samples hidden by an understated sample count");
     } else {
       const auto endPage = bytes.rfind("OggS");
       require(endPage != std::string::npos && endPage > 0, "Vorbis fixture has a terminal page");
