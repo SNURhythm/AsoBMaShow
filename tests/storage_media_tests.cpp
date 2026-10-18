@@ -293,6 +293,84 @@ void audioTests() {
           "existing MP3 is never recompressed");
 }
 
+void decodedColorTests() {
+  AVCodecParameters params{};
+  params.color_range = AVCOL_RANGE_MPEG; params.color_space = AVCOL_SPC_BT470BG;
+  params.color_primaries = AVCOL_PRI_BT470BG; params.color_trc = AVCOL_TRC_GAMMA28;
+  auto decoded = frame();
+  decoded->color_range = AVCOL_RANGE_JPEG; decoded->colorspace = AVCOL_SPC_BT709;
+  decoded->color_primaries = AVCOL_PRI_BT709; decoded->color_trc = AVCOL_TRC_BT709;
+  Scan observed;
+  observeVideoColor(observed, params, *decoded);
+  require(observed.colorRange == AVCOL_RANGE_JPEG && observed.colorSpace == AVCOL_SPC_BT709 &&
+              observed.colorPrimaries == AVCOL_PRI_BT709 && observed.colorTransfer == AVCOL_TRC_BT709,
+          "constant decoded color metadata overrides stream defaults");
+  observed.video.frames = 1;
+  observeVideoColor(observed, params, *decoded);
+  for (int field = 0; field < 4; ++field) {
+    auto changed = frame();
+    changed->color_range = decoded->color_range; changed->colorspace = decoded->colorspace;
+    changed->color_primaries = decoded->color_primaries; changed->color_trc = decoded->color_trc;
+    if (field == 0) changed->color_range = AVCOL_RANGE_MPEG;
+    if (field == 1) changed->colorspace = AVCOL_SPC_BT470BG;
+    if (field == 2) changed->color_primaries = AVCOL_PRI_BT470BG;
+    if (field == 3) changed->color_trc = AVCOL_TRC_GAMMA28;
+    bool rejected = false;
+    try { observeVideoColor(observed, params, *changed); }
+    catch (const Failure &failure) { rejected = failure.reason == StorageReason::UnsupportedFormat; }
+    require(rejected, "each changing decoded color property preserves the source");
+  }
+  Scan fallback;
+  auto unspecified = frame();
+  observeVideoColor(fallback, params, *unspecified);
+  require(fallback.colorRange == AVCOL_RANGE_MPEG && fallback.colorSpace == AVCOL_SPC_BT470BG &&
+              fallback.colorPrimaries == AVCOL_PRI_BT470BG && fallback.colorTransfer == AVCOL_TRC_GAMMA28,
+          "unspecified decoded colors use stream metadata");
+  Scan output;
+  observeVideoColor(output, params, *decoded);
+  observed.video = {}; observed.video.timeBase = output.video.timeBase = {1, 25};
+  observed.video.add(0, 1); output.video.add(0, 1);
+  output.description.h264 = true; output.description.width = output.description.height = 16;
+  VideoCompressionPlan plan; plan.width = plan.height = 16; plan.frameRate = {25, 1};
+  verify(observed, output, plan, {1});
+  for (int field = 0; field < 4; ++field) {
+    if (field == 0) output.colorRange = AVCOL_RANGE_UNSPECIFIED;
+    if (field == 1) output.colorSpace = AVCOL_SPC_UNSPECIFIED;
+    if (field == 2) output.colorPrimaries = AVCOL_PRI_UNSPECIFIED;
+    if (field == 3) output.colorTransfer = AVCOL_TRC_UNSPECIFIED;
+    bool rejected = false;
+    try { verify(observed, output, plan, {1}); }
+    catch (const Failure &failure) { rejected = failure.reason == StorageReason::ValidationFailed; }
+    require(rejected, "decode-back rejects lost color tags even when geometry and timing match");
+    output.colorRange = observed.colorRange; output.colorSpace = observed.colorSpace;
+    output.colorPrimaries = observed.colorPrimaries; output.colorTransfer = observed.colorTransfer;
+  }
+  for (const auto matrix : {AVCOL_SPC_BT2020_CL, AVCOL_SPC_YCGCO, AVCOL_SPC_RGB}) {
+    Scan unsupportedColor;
+    decoded->colorspace = matrix;
+    bool rejected = false;
+    try { observeVideoColor(unsupportedColor, params, *decoded); }
+    catch (const Failure &failure) { rejected = failure.reason == StorageReason::UnsupportedFormat; }
+    require(rejected, "unsupported matrices cannot silently use swscale default coefficients");
+  }
+}
+void decodedAudioFormatTests() {
+  auto audio = frame(); audio->sample_rate = 48000; audio->format = AV_SAMPLE_FMT_S16;
+  av_channel_layout_default(&audio->ch_layout, 2);
+  validateAudioFrame(*audio, *audio);
+  for (int field = 0; field < 4; ++field) {
+    auto changed = frame(); changed->sample_rate = 48000; changed->format = AV_SAMPLE_FMT_S16;
+    av_channel_layout_default(&changed->ch_layout, 2);
+    if (field == 0) changed->sample_rate = 44100;
+    if (field == 1) changed->format = AV_SAMPLE_FMT_S16P;
+    if (field == 2) changed->ch_layout.u.mask = AV_CH_LAYOUT_STEREO_DOWNMIX;
+    if (field == 3) { changed->ch_layout.order = AV_CHANNEL_ORDER_UNSPEC; changed->ch_layout.u.mask = 0; }
+    bool rejected = false;
+    try { validateAudioFrame(*audio, *changed); }
+    catch (const Failure &failure) { rejected = failure.reason == StorageReason::UnsupportedFormat; }
+    require(rejected, "decoded audio changes in rate, packing, channel identity or layout order preserve source");
+  }
+}
 void changingAspectRatioTests() {
   storage_test::TempDirectory temp;
   storage_test::VideoFixture fixture;
@@ -346,6 +424,8 @@ void videoTests() {
   // A cap must preserve an already compliant cadence, including every frame.
   for (const auto rate : {AVRational{30000, 1001}, AVRational{30, 1}}) {
     storage_test::VideoFixture fixture; fixture.rate = rate; fixture.millisecondContainer = fixture.lossless = true;
+    fixture.colorRange = AVCOL_RANGE_JPEG; fixture.colorSpace = AVCOL_SPC_BT709;
+    fixture.colorPrimaries = AVCOL_PRI_BT709; fixture.colorTransfer = AVCOL_TRC_BT709;
     for (int i = 0; i < 60; ++i) fixture.timestamps.push_back(i);
     const auto input = temp.root / (rate.den == 1 ? "rounded-30.webm" : "rounded-2997.webm");
     const auto output = temp.root / (rate.den == 1 ? "rounded-30.mp4" : "rounded-2997.mp4");
@@ -357,6 +437,10 @@ void videoTests() {
     result = EncodeBga(candidate(input), policy, output, {}, {});
     if (result.outcome != FileOutcome::Converted) std::cerr << "Quantized CFR: " << result.reason.detail << '\n';
     require(result.outcome == FileOutcome::Converted, "quantized CFR conversion succeeds below FPS cap");
+    const auto outputColor = scan(output, {});
+    require(outputColor.colorRange == AVCOL_RANGE_JPEG && outputColor.colorSpace == AVCOL_SPC_BT709 &&
+                outputColor.colorPrimaries == AVCOL_PRI_BT709 && outputColor.colorTransfer == AVCOL_TRC_BT709,
+            "encoded video preserves effective color tags through complete decode-back");
     const auto decoded = storage_test::inspectVideo(output);
     require(decoded.timestamps.size() == 60, "under-cap quantized CFR never drops frames");
     for (std::size_t i = 0; i < decoded.timestamps.size(); ++i)
@@ -460,7 +544,11 @@ void videoTests() {
 }
 int main() {
   av_log_set_level(AV_LOG_ERROR);
-  try { timelineTests(); declaredVideoTimelineTests(); crossStreamTimelineTests(); changingAspectRatioTests(); audioTests(); videoTests(); }
-  catch (const std::exception &error) { std::cerr << error.what() << '\n'; return 1; }
-  return 0;
+  int failures = 0;
+  for (const auto test : {decodedColorTests, decodedAudioFormatTests, timelineTests, declaredVideoTimelineTests,
+                          crossStreamTimelineTests, changingAspectRatioTests, audioTests, videoTests}) {
+    try { test(); }
+    catch (const std::exception &error) { std::cerr << error.what() << '\n'; ++failures; }
+  }
+  return failures ? 1 : 0;
 }

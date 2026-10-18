@@ -20,7 +20,9 @@ VideoCompressionPlan PlanVideoCompression(const VideoDescription &source, const 
   if (source.width < 2 || source.height < 2 || source.width > 16384 || source.height > 16384 ||
       source.sampleAspectRatio.num <= 0 || source.sampleAspectRatio.den <= 0 ||
       source.timeBase.num <= 0 || source.timeBase.den <= 0 ||
-      source.frameRate.num <= 0 || source.frameRate.den <= 0 || source.duration <= 0 || source.rotation % 90)
+      source.frameRate.num <= 0 || source.frameRate.den <= 0 ||
+      av_cmp_q(source.frameRate, {std::numeric_limits<int>::max() / 2, 1}) > 0 ||
+      source.duration <= 0 || source.rotation % 90)
     return skip(StorageReason::UnsupportedFormat, "Unknown video geometry, duration or timestamps");
   int longCap = 0, shortCap = 0;
   switch (policy.resolution) {

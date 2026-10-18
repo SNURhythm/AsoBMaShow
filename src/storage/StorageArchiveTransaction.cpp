@@ -147,6 +147,10 @@ public:
     Statement state(db.value, "INSERT INTO control(id,version,path,device,file_id,original_size,format,comment) VALUES(1,2,?,?,?,?,?,?)");
     state.text(1, pathText(archive.io.path)); state.bind(2, archive.identity.device); state.bind(3, archive.identity.fileId);
     state.bind(4, archive.identity.bytes); state.bind(5, static_cast<unsigned>(archive.Format())); state.bind(6, archive.comment); state.step();
+    // Preserve executable stubs and other leading ZIP bytes in place, including
+    // sparse prefixes, without scanning or staging that range.
+    Statement first(db.value, "SELECT offset FROM entries ORDER BY offset LIMIT 1");
+    if (first.step()) Set("cursor", first.integer(0));
     // Original payloads are read only when their bounded copy batch is needed.
     // The pinned source change token guards the untouched ranges between batches.
     active(check); archive.io.CheckPath(); CaptureSourceStamp();

@@ -4,6 +4,7 @@
 #include <iostream>
 #include <array>
 #include <cmath>
+#include <limits>
 
 using namespace storage_management;
 
@@ -107,6 +108,10 @@ int main() {
                    aligned.sampleAspectRatio.den / aligned.height) - (721.0 * 8 / 9 / 481)) < 0.000001,
          "sample aspect ratio compensates encoder alignment");
   video.width = 320; video.height = 240; video.sampleAspectRatio = {1, 1}; video.rotation = 0;
+  auto excessiveRate = video;
+  excessiveRate.frameRate = {std::numeric_limits<int>::max(), 1};
+  expect(PlanVideoCompression(excessiveRate, videoPolicy).reason.code == StorageReason::UnsupportedFormat,
+         "unrepresentable two-second GOP retains malformed extreme-rate video");
   videoPolicy.maxFps = 30;
   auto under = PlanVideoCompression(video, videoPolicy);
   expect(!under.reduceFps && under.frameRate.num == 30000 && under.frameRate.den == 1001,

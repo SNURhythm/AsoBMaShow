@@ -83,6 +83,10 @@ reduction is necessary; timing adjustment is bounded by one cap interval. A
 Embedded audio is retained: compatible streams are remuxed; supported other audio
 is converted to AAC at 128 kbit/s. Unsupported HDR, alpha, interlacing, stream
 layouts or essential metadata produce a skip rather than a destructive conversion.
+Decoded color properties must remain consistent and representable throughout the
+video. Embedded audio must retain its sample format, sample rate and full channel
+layout; changes preserve the original. Malformed frame rates that exceed encoder
+limits are rejected before computing keyframe intervals.
 
 Existing H.264 already within the caps is skipped, even if a different quality
 preset is selected. Every candidate is decoded and validated. **An output must
@@ -135,7 +139,10 @@ was more compact. Each operation compacts the archive once and rebuilds its meta
 Confirmation reads physical layout metadata, not all payloads. There is no separate
 payload pass over deleted entries or unchanged prefixes. Compaction reads only the
 source and destination ranges needed for its bounded forward-copy batches. Completion does not reread the
-whole archive. Consecutive deletions and small retained files share durable batches.
+whole archive. Leading ZIP stubs and other prefix bytes remain at their original
+offsets, including when the first entry is deleted or replaced; even huge sparse
+prefixes are preserved without being read or copied. Consecutive deletions and
+small retained files share durable batches.
 
 ## Progress, cancellation and recovery
 

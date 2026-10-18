@@ -353,30 +353,38 @@ void writeSparseZip64(const fs::path &path, std::uint64_t offset = 128ULL * 1024
   const auto tail = end64 + locator + end + "archive-note"; file.write(tail.data(), tail.size()); require(file.good(), "write sparse ZIP64 fixture");
 }
 void sparsePrefixRecovery() {
-  for (bool prefix : {false, true}) for (const auto point : {"archive-redo", "archive-source-synced"}) {
+  for (bool prefix : {false, true}) for (bool convert : {false, true})
+  for (const auto point : {"", "archive-redo", "archive-source-synced"}) {
     storage_test::TempDirectory temp; const auto path = temp.root / "songs.zip";
     writeSparseZip64(path, 4096, "audio.wav", prefix);
+    const std::string stub = "MZ executable stub and preserved leading metadata";
+    { std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary); file.write(stub.data(), stub.size()); }
     InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
-        .policy = {.bga = BgaAction::Delete}, .scanScratchRoot = temp.root / "scan"};
+        .policy = {.bga = convert ? BgaAction::CompressH264 : BgaAction::Delete}, .scanScratchRoot = temp.root / "scan"};
     const auto review = BuildStoragePreflight(request);
     const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
-    StorageArchiveDependencies deps{.faultPoint = [&](std::string_view name) {
+    StorageArchiveDependencies deps{.encode = [](const AssetCandidate &, const StoragePolicy &, const fs::path &output, Checkpoint, ProgressCallback) {
+      std::ofstream(output, std::ios::binary) << "smaller video"; return EncodeResult{FileOutcome::Converted, output};
+    }, .faultPoint = [&](std::string_view name) {
       if (name == point) throw std::runtime_error("sparse batch interruption");
     }};
-    require(UpdateStorageArchive(review.archives.front(), request.policy, paths, deps).recoveryRequired,
-        "interrupt sparse archive compaction after a durable source checkpoint");
+    const auto updated = UpdateStorageArchive(review.archives.front(), request.policy, paths, deps);
+    if (*point) require(updated.recoveryRequired, "interrupt a prefixed archive at a resumable checkpoint");
+    else require(!updated.failed && (convert ? updated.converted : updated.deleted) == 1, "apply changes to a prefixed archive");
     const auto result = RecoverStorageArchives(paths);
-    require(!result.failed && !result.recoveryRequired, "sparse batch cursor remains stable across recovery");
+    require(!result.failed && !result.recoveryRequired, "prefixed archive cursor remains stable across recovery");
+    std::ifstream leading(path, std::ios::binary); std::string preserved(stub.size(), '\0'); leading.read(preserved.data(), preserved.size());
+    require(preserved == stub, "deleting or replacing the first local entry preserves leading ZIP bytes");
     StorageArchive archive(path, temp.root / "checked.sqlite", {});
     std::optional<std::uint64_t> cursor; unsigned count = 0;
     while (const auto entry = archive.Next(cursor)) {
       cursor = entry->offset; ++count;
-      if (count == 1) require(entry->offset == (prefix ? 4096 : 0), "recovery preserves the planned first output offset");
-      require(entry->name != "movie.avi", "recovery does not retain the selected deleted video");
+      if (count == 1) require(entry->offset == 4096, "the first output record stays beyond the leading ZIP prefix");
+      require(entry->name != "movie.avi", "recovery does not retain the selected original video");
       archive.Extract(*entry, temp.root / (std::to_string(count) + ".bin"), {});
     }
-    require(count == (prefix ? 3 : 2), "recovery preserves unchanged leading records and deletes only the selected entry");
-    require(RecoverStorageArchives(paths).changedRoots.empty(), "sparse recovery is idempotent");
+    require(count == 2 + unsigned(prefix) + unsigned(convert), "prefix preservation retains exactly the expected archive entries");
+    require(RecoverStorageArchives(paths).changedRoots.empty(), "prefixed archive recovery is idempotent");
   }
 }
 void malformedLegacyNamesAreRejected() {
@@ -392,16 +400,19 @@ void malformedLegacyNamesAreRejected() {
 }
 void sparseZip64AndLegacyNames() {
   storage_test::TempDirectory temp; const auto path = temp.root / "large.zip"; writeSparseZip64(path);
+  const auto prefixBytes = 128ULL * 1024 * 1024 * 1024 + 4096;
+  StorageArchiveMetrics metrics;
   InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
       .policy = {.audio = AudioAction::LosslessFlac, .bga = BgaAction::Delete}, .scanScratchRoot = temp.root / "scan"};
   const auto review = BuildStoragePreflight(request);
   require(review.eligibleCount == 2 && review.archives.size() == 1, "ZIP64 offsets and CP932 names remain eligible");
   StorageArchiveDependencies dependencies{.encode = [](const AssetCandidate &, const StoragePolicy &, const fs::path &output, Checkpoint, ProgressCallback) {
     std::ofstream(output, std::ios::binary) << std::string(1000, 'f'); return EncodeResult{FileOutcome::Converted, output};
-  }};
+  }, .metrics = &metrics};
   const auto report = UpdateStorageArchive(review.archives.front(), request.policy, MakeStoragePlatformPaths(temp.root / "private", {temp.root}), dependencies);
-  require(report.converted == 1 && report.deleted == 1 && !report.recoveryRequired && fs::file_size(path) < 5000,
-      "ZIP64 sparse ranges compact without reading or staging the hole");
+  require(report.converted == 1 && report.deleted == 1 && !report.recoveryRequired &&
+      fs::file_size(path) > prefixBytes && fs::file_size(path) - prefixBytes < 5000 && metrics.sourceBytesRead < 128 * 1024,
+      "ZIP64 compaction preserves a huge sparse prefix without reading or staging the hole");
   StorageArchive archive(path, temp.root / "checked.sqlite", {});
   require(archive.comment == "archive-note", "archive comment survives ZIP64 compaction");
   const auto first = archive.Next(); require(first && first->name == "日本語.flac" && first->metadata.ends_with("entry-note"),

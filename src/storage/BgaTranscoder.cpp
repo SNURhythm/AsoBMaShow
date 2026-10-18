@@ -220,12 +220,42 @@ void validateDeclaredVideoTimeline(const AVStream &video, const Timeline &decode
 struct Scan {
   VideoDescription description;
   Timeline video, audio;
+  Frame audioFormat;
   std::int64_t originMicros = 0;
   AVColorRange colorRange = AVCOL_RANGE_UNSPECIFIED;
   AVColorSpace colorSpace = AVCOL_SPC_UNSPECIFIED;
   AVColorPrimaries colorPrimaries = AVCOL_PRI_UNSPECIFIED;
   AVColorTransferCharacteristic colorTransfer = AVCOL_TRC_UNSPECIFIED;
 };
+bool sameVideoColor(const Scan &left, const Scan &right) {
+  return left.colorRange == right.colorRange && left.colorSpace == right.colorSpace &&
+         left.colorPrimaries == right.colorPrimaries && left.colorTransfer == right.colorTransfer;
+}
+void observeVideoColor(Scan &result, const AVCodecParameters &params, const AVFrame &decoded) {
+  Scan effective;
+  effective.colorRange = decoded.color_range == AVCOL_RANGE_UNSPECIFIED ? params.color_range : decoded.color_range;
+  effective.colorSpace = decoded.colorspace == AVCOL_SPC_UNSPECIFIED ? params.color_space : decoded.colorspace;
+  effective.colorPrimaries = decoded.color_primaries == AVCOL_PRI_UNSPECIFIED ? params.color_primaries : decoded.color_primaries;
+  effective.colorTransfer = decoded.color_trc == AVCOL_TRC_UNSPECIFIED ? params.color_trc : decoded.color_trc;
+  // sws_getCoefficients silently substitutes its default for unsupported matrices.
+  // Only accept matrices that this conversion path can actually preserve.
+  switch (effective.colorSpace) {
+  case AVCOL_SPC_UNSPECIFIED: case AVCOL_SPC_BT709: case AVCOL_SPC_FCC:
+  case AVCOL_SPC_BT470BG: case AVCOL_SPC_SMPTE170M: case AVCOL_SPC_SMPTE240M:
+  case AVCOL_SPC_BT2020_NCL: break;
+  default: unsupported("Video color matrix cannot be preserved");
+  }
+  if (!av_color_range_name(effective.colorRange) || !av_color_primaries_name(effective.colorPrimaries) ||
+      !av_color_transfer_name(effective.colorTransfer)) unsupported("Unknown video color metadata");
+  if (result.video.frames && !sameVideoColor(result, effective)) unsupported("Video changes color metadata midstream");
+  result.colorRange = effective.colorRange; result.colorSpace = effective.colorSpace;
+  result.colorPrimaries = effective.colorPrimaries; result.colorTransfer = effective.colorTransfer;
+}
+void validateAudioFrame(const AVFrame &expected, const AVFrame &decoded) {
+  if (decoded.sample_rate != expected.sample_rate || decoded.format != expected.format ||
+      av_channel_layout_compare(&decoded.ch_layout, &expected.ch_layout) != 0)
+    unsupported("Embedded audio changes format midstream");
+}
 bool hdr(AVColorTransferCharacteristic transfer) {
   return transfer == AVCOL_TRC_SMPTE2084 || transfer == AVCOL_TRC_ARIB_STD_B67;
 }
@@ -248,9 +278,6 @@ Scan scan(const fs::path &path, const Checkpoint &check) {
   description.frameRate = av_guess_frame_rate(input.format, video, nullptr);
   description.h264 = params->codec_id == AV_CODEC_ID_H264;
   description.interlaced = params->field_order != AV_FIELD_UNKNOWN && params->field_order != AV_FIELD_PROGRESSIVE;
-  description.hdr = hdr(params->color_trc);
-  result.colorRange = params->color_range; result.colorSpace = params->color_space;
-  result.colorPrimaries = params->color_primaries; result.colorTransfer = params->color_trc;
   for (int i = 0; i < params->nb_coded_side_data; ++i) {
     const auto &side = params->coded_side_data[i];
     if (side.type == AV_PKT_DATA_DISPLAYMATRIX && side.size == 9 * sizeof(std::int32_t)) {
@@ -297,10 +324,11 @@ Scan scan(const fs::path &path, const Checkpoint &check) {
       if (!result.video.frames) description.sampleAspectRatio = aspectRatio;
       else if (av_cmp_q(description.sampleAspectRatio, aspectRatio))
         unsupported("Video changes display aspect ratio midstream");
+      observeVideoColor(result, *params, decoded);
       const auto pixel = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(decoded.format));
       if (!pixel) unsupported("Unknown pixel format");
       description.alpha |= (pixel->flags & AV_PIX_FMT_FLAG_ALPHA) != 0;
-      description.hdr |= hdr(decoded.color_trc) || av_frame_get_side_data(&decoded, AV_FRAME_DATA_MASTERING_DISPLAY_METADATA) ||
+      description.hdr |= hdr(result.colorTransfer) || av_frame_get_side_data(&decoded, AV_FRAME_DATA_MASTERING_DISPLAY_METADATA) ||
                          av_frame_get_side_data(&decoded, AV_FRAME_DATA_CONTENT_LIGHT_LEVEL);
       description.interlaced |= (decoded.flags & AV_FRAME_FLAG_INTERLACED) != 0;
       if (av_frame_get_side_data(&decoded, AV_FRAME_DATA_STEREO3D)) description.unsupportedContent = true;
@@ -317,8 +345,18 @@ Scan scan(const fs::path &path, const Checkpoint &check) {
         if (timestampDistance(pts - result.video.first, expected) > 1) description.variableFrameRate = true;
       } else description.variableFrameRate = true;
     } else {
-      if (decoded.sample_rate != description.audioSampleRate || decoded.ch_layout.nb_channels != description.audioChannels)
-        unsupported("Embedded audio changes format midstream");
+      if (!result.audioFormat) {
+        if (decoded.sample_rate != description.audioSampleRate || decoded.ch_layout.nb_channels != description.audioChannels ||
+            av_get_bytes_per_sample(static_cast<AVSampleFormat>(decoded.format)) <= 0 ||
+            !av_channel_layout_check(&decoded.ch_layout)) unsupported("Unknown embedded audio format");
+        const auto &layout = decoded.ch_layout;
+        description.audioLayoutSupported = layout.order == AV_CHANNEL_ORDER_UNSPEC ||
+            (layout.order == AV_CHANNEL_ORDER_NATIVE && (layout.u.mask == AV_CH_LAYOUT_MONO || layout.u.mask == AV_CH_LAYOUT_STEREO));
+        result.audioFormat = frame();
+        result.audioFormat->sample_rate = decoded.sample_rate; result.audioFormat->format = decoded.format;
+        checked(av_channel_layout_copy(&result.audioFormat->ch_layout, &layout), "Remember decoded audio layout");
+      }
+      validateAudioFrame(*result.audioFormat, decoded);
       const auto duration = rescaleTimestamp(decoded.nb_samples, {1, decoded.sample_rate}, result.audio.timeBase);
       result.audio.add(pts, duration, std::max<std::int64_t>(1, rescaleTimestamp(1, {1, decoded.sample_rate}, result.audio.timeBase)));
     }
@@ -429,7 +467,9 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
   video.color_range = sourceScan.colorRange; video.colorspace = sourceScan.colorSpace;
   video.color_primaries = sourceScan.colorPrimaries; video.color_trc = sourceScan.colorTransfer;
   video.thread_count = StorageExecutionLimits::videoThreads; video.max_b_frames = 0;
-  video.gop_size = std::max(1, static_cast<int>(std::ceil(av_q2d(plan.frameRate))) * 2);
+  const auto gop = ((std::int64_t(plan.frameRate.num) + plan.frameRate.den - 1) / plan.frameRate.den) * 2;
+  if (gop <= 0 || gop > std::numeric_limits<int>::max()) unsupported("Video frame rate exceeds encoder limits");
+  video.gop_size = static_cast<int>(gop);
   if (output.format->oformat->flags & AVFMT_GLOBALHEADER) video.flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
   checked(av_opt_set(video.priv_data, "preset", "medium", 0), "Set x264 preset");
   checked(av_opt_set_int(video.priv_data, "crf", plan.crf, 0), "Set x264 CRF");
@@ -466,16 +506,16 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
       auto &audio = *audioEncoder.value;
       audio.sample_rate = sourceScan.description.audioSampleRate; audio.time_base = {1, audio.sample_rate};
       audio.sample_fmt = AV_SAMPLE_FMT_FLTP; audio.bit_rate = 128000; audio.thread_count = 1;
-      const auto sourceDecoder = input.decoders[input.audio];
-      if (sourceDecoder->ch_layout.order == AV_CHANNEL_ORDER_UNSPEC)
+      const auto &sourceFormat = *sourceScan.audioFormat;
+      if (sourceFormat.ch_layout.order == AV_CHANNEL_ORDER_UNSPEC)
         av_channel_layout_default(&audio.ch_layout, sourceScan.description.audioChannels);
-      else checked(av_channel_layout_copy(&audio.ch_layout, &sourceDecoder->ch_layout), "Copy native audio layout");
+      else checked(av_channel_layout_copy(&audio.ch_layout, &sourceFormat.ch_layout), "Copy native audio layout");
       if (output.format->oformat->flags & AVFMT_GLOBALHEADER) audio.flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
       checked(avcodec_open2(&audio, audioCodec, nullptr), "Open AAC", StorageReason::UnsupportedFormat);
       checked(avcodec_parameters_from_context(audioStream->codecpar, &audio), "Configure MP4 audio");
       audioStream->time_base = audio.time_base;
       checked(swr_alloc_set_opts2(&audioBuffers.resampler, &audio.ch_layout, audio.sample_fmt, audio.sample_rate,
-                                  &audio.ch_layout, sourceDecoder->sample_fmt, audio.sample_rate, 0, nullptr), "Configure native audio conversion");
+                                  &audio.ch_layout, static_cast<AVSampleFormat>(sourceFormat.format), sourceFormat.sample_rate, 0, nullptr), "Configure native audio conversion");
       checked(swr_init(audioBuffers.resampler), "Initialize native audio conversion");
       audioBuffers.fifo = av_audio_fifo_alloc(audio.sample_fmt, audio.ch_layout.nb_channels, audio.frame_size * 2);
       if (!audioBuffers.fifo) throw std::bad_alloc();
@@ -532,6 +572,9 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
   };
   decode(input, check, [&](int index, const AVFrame &decoded) {
     if (index == input.video) {
+      Scan currentColor;
+      observeVideoColor(currentColor, *sourceVideo->codecpar, decoded);
+      if (!sameVideoColor(sourceScan, currentColor)) unsupported("Video color metadata changed after scanning");
       auto selected = selector.Select(decoded.best_effort_timestamp);
       if (!selected.valid) unsupported("Invalid video presentation timestamps");
       if (!selected.keep) return;
@@ -558,6 +601,7 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
         throw Failure{StorageReason::ValidationFailed, "Incomplete pixel conversion"};
       hasPending = true;
     } else if (audioEncoder.value) {
+      validateAudioFrame(*sourceScan.audioFormat, decoded);
       auto &audio = *audioEncoder.value;
       const auto pts = normalizedTimestamp(decoded.best_effort_timestamp, sourceAudio->time_base, sourceScan.originMicros, audio.time_base);
       if (audioPosition == AV_NOPTS_VALUE) audioPosition = pts;
@@ -602,11 +646,18 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
 
 void verify(const Scan &source, const Scan &output, const VideoCompressionPlan &plan, const EncodedSummary &summary) {
   const auto &description = output.description;
+  // H.264 omits the VUI full-range flag for its default limited range, so
+  // a correctly tagged limited-range encode may decode as unspecified.
+  const auto outputRange = description.h264 && output.colorRange == AVCOL_RANGE_UNSPECIFIED ? AVCOL_RANGE_MPEG : output.colorRange;
   auto invalid = [] { throw Failure{StorageReason::ValidationFailed, "MP4 decode-back geometry, content or timeline validation failed"}; };
   if (!description.h264 || description.width != plan.width || description.height != plan.height ||
       av_cmp_q(description.sampleAspectRatio, plan.sampleAspectRatio) || description.rotation != plan.rotation ||
       description.alpha || description.hdr || description.interlaced || description.unsupportedContent ||
-      description.hasAudio != source.description.hasAudio || output.video.frames != summary.frames) invalid();
+      description.hasAudio != source.description.hasAudio || output.video.frames != summary.frames ||
+      (source.colorRange != AVCOL_RANGE_UNSPECIFIED && source.colorRange != outputRange) ||
+      (source.colorSpace != AVCOL_SPC_UNSPECIFIED && source.colorSpace != output.colorSpace) ||
+      (source.colorPrimaries != AVCOL_PRI_UNSPECIFIED && source.colorPrimaries != output.colorPrimaries) ||
+      (source.colorTransfer != AVCOL_TRC_UNSPECIFIED && source.colorTransfer != output.colorTransfer)) invalid();
   const auto videoTolerance = timestampAdd(std::max(rescaleTimestamp(source.video.maximumDuration, source.video.timeBase, AV_TIME_BASE_Q),
                                        rescaleTimestamp(1, av_inv_q(plan.frameRate), AV_TIME_BASE_Q)), 1);
   const auto expectedStart = normalizedTimestamp(source.video.first, source.video.timeBase, source.originMicros, AV_TIME_BASE_Q);

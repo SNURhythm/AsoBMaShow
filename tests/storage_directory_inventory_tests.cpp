@@ -66,6 +66,21 @@ void independentSelectedFoldersComplete() {
   require(!interrupted.complete && interrupted.eligibleCount == 1 && interrupted.EligibleRoots().empty(),
           "interrupted scan cannot authorize even previously counted eligible files");
 }
+void unknownPermissionsRemainEligible() {
+  TempDirectory temp;
+  temp.write("charts/a.wav", "audio");
+  for (const auto permissions : {fs::perms::unknown, fs::perms::owner_read, fs::perms::owner_write}) {
+    StorageScanDependencies deps;
+    deps.enumerate = [&](const auto &path, const auto &root, auto mode, auto check, auto visit,
+        auto &stamp, auto *metrics, auto &error) {
+      const bool scanned = VisitStorageDirectory(path, root, mode, check, visit, stamp, metrics, error);
+      stamp.permissions = permissions; return scanned;
+    };
+    const auto preflight = BuildStoragePreflight(request(temp.root / "charts"), {}, nullptr, deps);
+    require(preflight.complete && preflight.eligibleCount == (permissions == fs::perms::owner_read ? 0 : 1),
+        "Windows unknown permissions remain eligible while known read-only parents are excluded");
+  }
+}
 void fingerprintsRejectChangedEntries() {
   TempDirectory temp;
   temp.write("charts/a.wav", "12345");
@@ -170,6 +185,7 @@ void failedSpillAndRestartNeverAuthorizeStaleMetadata() {
 }
 int storageDirectoryInventoryTests() {
   try {
+    unknownPermissionsRemainEligible();
     summariesDoNotRetainAllAssets();
     independentSelectedFoldersComplete();
     fingerprintsRejectChangedEntries();

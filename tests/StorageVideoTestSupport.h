@@ -17,6 +17,10 @@ struct VideoFixture {
   std::vector<std::int64_t> timestamps;
   bool h264 = false, audio = false;
   bool alpha = false, hdr = false, interlaced = false;
+  AVColorRange colorRange = AVCOL_RANGE_UNSPECIFIED;
+  AVColorSpace colorSpace = AVCOL_SPC_UNSPECIFIED;
+  AVColorPrimaries colorPrimaries = AVCOL_PRI_UNSPECIFIED;
+  AVColorTransferCharacteristic colorTransfer = AVCOL_TRC_UNSPECIFIED;
   AVRational sampleAspectRatio{1, 1}, laterSampleAspectRatio{0, 1};
   int rotation = 0;
   bool scaledDisplayMatrix = false;
@@ -50,6 +54,8 @@ inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
   encoder.pix_fmt = fixture.alpha ? AV_PIX_FMT_BGRA : AV_PIX_FMT_YUV420P;
   encoder.time_base = av_inv_q(fixture.rate); encoder.framerate = fixture.rate;
   encoder.sample_aspect_ratio = fixture.sampleAspectRatio; encoder.thread_count = 1;
+  encoder.color_range = fixture.colorRange; encoder.colorspace = fixture.colorSpace;
+  encoder.color_primaries = fixture.colorPrimaries; encoder.color_trc = fixture.colorTransfer;
   if (fixture.hdr) { encoder.color_trc = AVCOL_TRC_SMPTE2084; encoder.color_primaries = AVCOL_PRI_BT2020; }
   if (fixture.interlaced) { encoder.flags |= AV_CODEC_FLAG_INTERLACED_DCT; encoder.field_order = AV_FIELD_TT; }
   encoder.max_b_frames = 0; encoder.gop_size = 12; encoder.bit_rate = 3000000;
