@@ -38,7 +38,8 @@ bool StorageDirectoryEvidence::Load(Checkpoint check, std::string &error) {
       auto charts = std::make_unique<StorageDirectoryInventory>(path, limits_);
       std::string storeError;
       if (!entries.Visit(check, [&](const auto &entry) {
-        return !asobmshow::bms_chart_file::isBmsChartPath(entry.name) || charts->Add(entry, storeError);
+        return entry.kind == StorageEntryKind::Directory || !asobmshow::bms_chart_file::isBmsChartPath(entry.name) ||
+            charts->Add(entry, storeError);
       }, error)) { if (!storeError.empty()) error = storeError; return false; }
       // Only the stamp and path are needed once ancestor membership is verified.
       StorageDirectorySummary scope;
@@ -62,7 +63,7 @@ bool StorageDirectoryEvidence::CheckScopes(bool changingLocal, Checkpoint check,
     const auto roots = boundaries(scope.summary);
     std::string chartError;
     if (!scope.charts->Visit(check, [&](const auto &entry) {
-      if (!entry.identity) return true;
+      if (!entry.identity) { chartError = "Chart identity cannot be verified"; return false; }
       if (metrics_) ++metrics_->chartChecks;
       const auto current = ReadFileIdentity(scope.summary.directory / entry.name, chartError, roots);
       if (!current || *current != *entry.identity) { chartError = "Chart changed since preflight"; return false; }

@@ -251,6 +251,19 @@ void observeVideoColor(Scan &result, const AVCodecParameters &params, const AVFr
   result.colorRange = effective.colorRange; result.colorSpace = effective.colorSpace;
   result.colorPrimaries = effective.colorPrimaries; result.colorTransfer = effective.colorTransfer;
 }
+void validateVideoFrameTransform(const AVCodecParameters &params, const AVFrame &decoded) {
+  const auto frameMatrix = av_frame_get_side_data(&decoded, AV_FRAME_DATA_DISPLAYMATRIX);
+  if (!frameMatrix) return;
+  // Decoders may repeat the validated stream transform on each frame. That
+  // exact matrix survives the MP4 copy; frame-only transforms and changes do
+  // not (even identity can reset an earlier orientation).
+  const auto streamMatrix = av_packet_side_data_get(params.coded_side_data, params.nb_coded_side_data,
+                                                    AV_PKT_DATA_DISPLAYMATRIX);
+  constexpr auto matrixBytes = 9 * sizeof(std::int32_t);
+  if (!streamMatrix || frameMatrix->size != matrixBytes || streamMatrix->size != matrixBytes ||
+      std::memcmp(frameMatrix->data, streamMatrix->data, matrixBytes))
+    unsupported("Decoded video frame display transforms cannot be preserved");
+}
 void validateAudioFrame(const AVFrame &expected, const AVFrame &decoded) {
   if (decoded.sample_rate != expected.sample_rate || decoded.format != expected.format ||
       av_channel_layout_compare(&decoded.ch_layout, &expected.ch_layout) != 0)
@@ -308,6 +321,7 @@ Scan scan(const fs::path &path, const Checkpoint &check) {
   decode(input, check, [&](int index, const AVFrame &decoded) {
     const auto pts = decoded.best_effort_timestamp;
     if (index == input.video) {
+      validateVideoFrameTransform(*params, decoded);
       if (!result.video.frames && !(decoded.flags & AV_FRAME_FLAG_KEY))
         throw Failure{StorageReason::ValidationFailed, "Video does not start with an independently decodable frame"};
       if (decoded.width != description.width || decoded.height != description.height) unsupported("Video changes resolution midstream");
@@ -572,6 +586,7 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
   };
   decode(input, check, [&](int index, const AVFrame &decoded) {
     if (index == input.video) {
+      validateVideoFrameTransform(*sourceVideo->codecpar, decoded);
       Scan currentColor;
       observeVideoColor(currentColor, *sourceVideo->codecpar, decoded);
       if (!sameVideoColor(sourceScan, currentColor)) unsupported("Video color metadata changed after scanning");

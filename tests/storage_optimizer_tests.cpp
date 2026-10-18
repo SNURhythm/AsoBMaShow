@@ -445,6 +445,51 @@ void revalidateAtTheActualCommitBoundary() {
   require(!report.converted && !report.reclaimedBytes && fs::exists(temp.root / "charts/a.wav") && !fs::exists(temp.root / "charts/a.ogg"),
           "a resolver collision appearing during installation copy aborts before the durable commit");
 }
+void unsafeChartEvidenceRetainsAffectedScopes() {
+  TempDirectory temp;
+  temp.write("charts/linked/chart.bms", "#WAV01 sound.wav\n");
+  temp.write("charts/linked/nested/sound.wav", std::string(100, 'a'));
+  temp.write("charts/independent/sound.wav", std::string(100, 'b'));
+  fs::create_hard_link(temp.root / "charts/linked/chart.bms", temp.root / "outside.bms");
+  auto input = request(temp.root / "charts");
+  input.preflight = BuildStoragePreflight(input.inventory);
+  temp.write("outside.bms", "#WAV01 other.wav\n");
+  std::vector<std::string> events;
+  const auto report = StorageOptimizer(dependencies(temp, events)).Run(std::move(input));
+  require(report.converted == 1 && !report.recoveryRequired &&
+              fs::exists(temp.root / "charts/linked/nested/sound.wav") &&
+              fs::exists(temp.root / "charts/independent/sound.ogg"),
+          "unverifiable ancestor chart blocks its scope while independent media can convert");
+}
+void exceptionRecoveryClassification() {
+  for (int stage = 0; stage != 3; ++stage) {
+    TempDirectory temp;
+    temp.write("charts/a.wav", std::string(100, 'a'));
+    std::vector<std::string> events;
+    auto deps = dependencies(temp, events);
+    const auto factory = deps.transactions;
+    bool cancel = false;
+    deps.transactions = [&](const StoragePlatformPaths &paths, StorageCommitPrecondition beforeCommit) {
+      if (stage == 0 && beforeCommit) throw std::runtime_error("transaction setup failed");
+      auto transactions = factory(paths, std::move(beforeCommit));
+      if (stage == 1) transactions.recover = [](Checkpoint) -> StorageReport {
+        throw std::runtime_error("recovery interrupted");
+      };
+      if (stage == 2) transactions.replace = [&](const AssetCandidate &, const EncodeResult &, Checkpoint check) -> FileResult {
+        cancel = true; check();
+        throw std::runtime_error("commit interrupted after cancellation");
+      };
+      return transactions;
+    };
+    const auto report = StorageOptimizer(deps).Run(request(temp.root / "charts"), [&] { return !cancel; });
+    require(report.failed == 1 && report.recoveryRequired == (stage != 0),
+            "only interrupted recovery or commit requires recovery; setup failure releases maintenance");
+    require(!report.files.empty() && report.files.back().reason.code ==
+                (stage == 0 ? StorageReason::IoError : StorageReason::RecoveryRequired),
+            "cancellation cannot mask uncertain filesystem state");
+    require(fs::exists(temp.root / "charts/a.wav"), "exception fixture retains its original source");
+  }
+}
 void cleanupFailureAndFatalRecovery() {
   for (bool fatal : {false, true}) {
     TempDirectory temp;
@@ -582,6 +627,7 @@ int main(int argc, char **argv) {
     if (argc > 1 && std::string_view(argv[1]) == "--subset-refresh") { subsetRefreshNeverEnumeratesAncestorSiblings(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--parallel") { independentDirectoriesUseDistinctOutputs(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--sandbox-boundaries") { reviewedSelectionRetainsPrivateSandboxBoundary(); return 0; }
+    unsafeChartEvidenceRetainsAffectedScopes(); exceptionRecoveryClassification();
     reviewedSelectionRetainsPrivateSandboxBoundary();
     losslessGrowthOffsetsSavingsAcrossDirectories();
     independentDirectoriesUseDistinctOutputs();

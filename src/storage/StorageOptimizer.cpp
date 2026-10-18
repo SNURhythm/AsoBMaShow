@@ -131,15 +131,20 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
     }
   };
   auto complete = [&] { report.cancelled |= cancelled; state.reclaimedBytes = report.reclaimedBytes; state.addedBytes = report.addedBytes; state.phase = StoragePhase::Complete; emit(true); return report; };
+  bool recoveryActive = false;
   try {
     emit(true);
     auto lease = dependencies_.permit->Acquire(checkpoint);
     if (!lease) { report.cancelled = true; return complete(); }
+    recoveryActive = true;
     report = RecoverStorageArchives(dependencies_.paths, checkpoint);
+    recoveryActive = false;
     if (report.recoveryRequired || report.cancelled) return complete();
     auto transactions = dependencies_.transactions(dependencies_.paths, {});
+    recoveryActive = true;
     const auto recovery = transactions.recover(checkpoint);
     mergeReport(report, recovery);
+    recoveryActive = false;
     if (report.files.size() > 100) report.files.resize(100);
     if (report.recoveryRequired || report.cancelled) return complete();
     InventoryRequest inventoryRequest = request.inventory; inventoryRequest.policy = request.policy;
@@ -253,6 +258,7 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
       std::string error;
       std::error_code ec;
       StorageEvidenceMetrics metrics;
+      bool transactionUnresolved = false;
       auto emit = [&] { state.reclaimedBytes = report.reclaimedBytes; state.addedBytes = report.addedBytes; if (progress) progress(state); };
       auto finishDirectory = [&] {
         if (dependencies_.evidenceMetrics) {
@@ -350,8 +356,10 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
                       result.outcome = FileOutcome::Skipped; result.reason = {StorageReason::StaleInput, error};
                     } else {
                       state.phase = StoragePhase::Commit; emit(); transactionStarted = true;
+                      transactionUnresolved = true;
                       result = asset.operation == AssetOperation::Delete ? localTransactions.erase(asset, checkpoint) : localTransactions.replace(asset, encoded, checkpoint);
                       transactionFinished = true;
+                      transactionUnresolved = result.reason.code == StorageReason::RecoveryRequired;
                     }
                   }
                 }
@@ -361,7 +369,7 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
             result.outcome = FileOutcome::Failed;
             result.reason = {transactionStarted && !transactionFinished ? StorageReason::RecoveryRequired : StorageReason::IoError, exception.what()};
           }
-          if (cancelled && !transactionFinished) { result.outcome = FileOutcome::Cancelled; result.reason = {StorageReason::Cancelled, "Cancelled before commit"}; }
+          if (cancelled && !transactionStarted) { result.outcome = FileOutcome::Cancelled; result.reason = {StorageReason::Cancelled, "Cancelled before commit"}; }
           if (result.outcome == FileOutcome::Converted || result.outcome == FileOutcome::Deleted) {
             changedDirectory = true;
             // Exact physical changes include retained backups, independently of the detail cap.
@@ -409,9 +417,10 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
           }
         }
       } catch (const std::exception &exception) {
-        budget.StopForRecovery();
+        const bool needsRecovery = transactionUnresolved || report.recoveryRequired;
+        if (needsRecovery) budget.StopForRecovery();
         append(report, {.source = directoryPath, .outcome = FileOutcome::Failed,
-            .reason = {StorageReason::RecoveryRequired, exception.what()}});
+            .reason = {needsRecovery ? StorageReason::RecoveryRequired : StorageReason::IoError, exception.what()}});
         summary.reason = {StorageReason::StaleInput, exception.what()};
         std::lock_guard lock(aggregation);
         changedDirectories.push_back(directoryPath);
@@ -473,7 +482,8 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
     }
 
   } catch (const std::exception &exception) {
-    append(report, {.outcome = FileOutcome::Failed, .reason = {StorageReason::IoError, exception.what()}});
+    append(report, {.outcome = FileOutcome::Failed,
+        .reason = {recoveryActive ? StorageReason::RecoveryRequired : StorageReason::IoError, exception.what()}});
   }
   return complete();
 }

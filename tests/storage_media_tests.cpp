@@ -530,6 +530,41 @@ void audioTests() {
           "existing MP3 is never recompressed");
 }
 
+void decodedDisplayTransformTests() {
+  AVCodecParameters params{};
+  auto decoded = frame();
+  validateVideoFrameTransform(params, *decoded);
+  auto *side = av_frame_new_side_data(decoded.get(), AV_FRAME_DATA_DISPLAYMATRIX, 9 * sizeof(std::int32_t));
+  require(side != nullptr, "allocate decoded display transform");
+  auto *matrix = reinterpret_cast<std::int32_t *>(side->data);
+  const auto rejected = [&] {
+    bool rejected = false;
+    try { validateVideoFrameTransform(params, *decoded); }
+    catch (const Failure &failure) {
+      rejected = failure.reason == StorageReason::UnsupportedFormat && failure.outcome == FileOutcome::Skipped;
+    }
+    return rejected;
+  };
+  av_display_rotation_set(matrix, 90);
+  require(rejected(), "frame-only display transforms preserve the original video");
+  std::array<std::int32_t, 9> streamMatrix{};
+  av_display_rotation_set(streamMatrix.data(), 90);
+  AVPacketSideData streamSide{};
+  streamSide.type = AV_PKT_DATA_DISPLAYMATRIX;
+  streamSide.data = reinterpret_cast<std::uint8_t *>(streamMatrix.data());
+  streamSide.size = sizeof(streamMatrix);
+  params.coded_side_data = &streamSide; params.nb_coded_side_data = 1;
+  validateVideoFrameTransform(params, *decoded);
+  av_display_rotation_set(matrix, 0);
+  require(rejected(), "identity frame transform cannot reset the copied stream orientation");
+  av_display_rotation_set(matrix, 90);
+  av_display_matrix_flip(matrix, 1, 0);
+  require(rejected(), "frame reflection cannot silently disagree with the stream transform");
+  av_display_rotation_set(matrix, 90);
+  --side->size;
+  require(rejected(), "truncated frame display matrices preserve the original video");
+}
+
 void decodedColorTests() {
   AVCodecParameters params{};
   params.color_range = AVCOL_RANGE_MPEG; params.color_space = AVCOL_SPC_BT470BG;
@@ -782,8 +817,8 @@ void videoTests() {
 int main() {
   av_log_set_level(AV_LOG_ERROR);
   int failures = 0;
-  for (const auto test : {decodedColorTests, decodedAudioFormatTests, timelineTests, declaredVideoTimelineTests,
-                          crossStreamTimelineTests, changingAspectRatioTests, audioTests, videoTests}) {
+  for (const auto test : {decodedDisplayTransformTests, decodedColorTests, decodedAudioFormatTests, timelineTests,
+                          declaredVideoTimelineTests, crossStreamTimelineTests, changingAspectRatioTests, audioTests, videoTests}) {
     try { test(); }
     catch (const std::exception &error) { std::cerr << error.what() << '\n'; ++failures; }
   }
