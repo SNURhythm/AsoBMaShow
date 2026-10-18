@@ -3,6 +3,7 @@
 #include "StorageArchiveDb.h"
 #include "StoragePathIndex.h"
 #include "../AtomicFile.h"
+#include "../ArchiveSourceIdentity.h"
 #include "../FileChecksum.h"
 #include "../Uuid.h"
 #include "../utils/ParallelWork.h"
@@ -114,6 +115,7 @@ public:
   StorageReport report;
   StorageProgress progress;
   bool &started;
+  const std::string originalSourceIdentity;
   bool recovering = false;
   struct PendingRecord {
     std::uint64_t id, output, cursor = 0;
@@ -130,7 +132,9 @@ public:
   mutable std::map<std::string, std::unique_ptr<Statement>> statements;
   Update(StorageArchive &archive, fs::path journal, const StorageArchiveDependencies &deps, bool &started,
       const std::vector<fs::path> &accessRoots)
-      : archive(archive), db(*archive.db), journal(std::move(journal)), deps(deps), accessRoots(accessRoots), started(started) {
+      : archive(archive), db(*archive.db), journal(std::move(journal)), deps(deps), accessRoots(accessRoots), started(started),
+        originalSourceIdentity(deps.measurementBaselines.empty() ? std::string{} : archive_source_identity::KeyForPath(archive.io.path)) {
+    archive.io.CheckPath();
     progress.archiveBytesTotal = archive.identity.bytes;
   }
   Statement &Query(const std::string &sql) const {
@@ -660,9 +664,35 @@ public:
   StorageReport Result() {
     if (!started) return report;
     require(Value("phase") == 3, "Archive update still requires recovery", StorageReason::RecoveryRequired);
+    archive.io.CheckPath();
+    const auto nextSourceIdentity = deps.measurementBaselines.empty() ? std::string{} : archive_source_identity::KeyForPath(archive.io.path);
+    archive.io.CheckPath();
+    std::vector<fs::path> groupRoots;
+    for (const auto &row : deps.measurementBaselines) {
+      if (row.sourceKind != StorageSourceKind::Archive || !row.totalBytes || row.reason.code != StorageReason::None ||
+          originalSourceIdentity.empty() || nextSourceIdentity.empty() || row.sourceIdentity != originalSourceIdentity ||
+          !IsWithinFolder(row.root, archive.io.path)) continue;
+      groupRoots.push_back(row.root);
+      report.groupDeltas.push_back({.groupId = row.groupId, .baselineBytes = row.totalBytes,
+          .sourceIdentity = row.sourceIdentity, .nextSourceIdentity = nextSourceIdentity, .baselineGeneration = row.generation});
+    }
+    const StoragePathIndex groups(std::move(groupRoots));
     Statement q(db.value, "SELECT original_name,name,original_bytes,bytes,action FROM entries WHERE action!=0 ORDER BY offset");
     while (q.step()) {
       const bool deleted = q.integer(4) == 2; if (deleted) ++report.deleted; else ++report.converted;
+      const auto source = archive.io.path / fs::u8path(q.bytes(0));
+      const auto before = q.integer(2), after = deleted ? 0 : q.integer(3);
+      const auto kind = asobmshow::chart_assets::ClassifyMediaPath(source);
+      // This existing committed-entry traversal also updates cached totals;
+      // it never depends on the bounded diagnostic list or rereads the index.
+      for (const auto position : groups.Ancestors(source.parent_path())) {
+        auto &delta = report.groupDeltas[position];
+        delta.bytesBefore = plus(delta.bytesBefore, before); delta.bytesAfter = plus(delta.bytesAfter, after);
+        using asobmshow::chart_assets::MediaKind;
+        if (kind == MediaKind::Audio) { delta.audioBefore = plus(delta.audioBefore, before); delta.audioAfter = plus(delta.audioAfter, after); }
+        if (kind == MediaKind::Video) { delta.videoBefore = plus(delta.videoBefore, before); delta.videoAfter = plus(delta.videoAfter, after); }
+        if (kind == MediaKind::Image) { delta.imageBefore = plus(delta.imageBefore, before); delta.imageAfter = plus(delta.imageAfter, after); }
+      }
       if (report.files.size() < 100) RetainStorageReportDetail(report, {.source = archive.io.path / fs::u8path(q.bytes(0)),
           .destination = deleted ? fs::path{} : archive.io.path / fs::u8path(q.bytes(1)), .outcome = deleted ? FileOutcome::Deleted : FileOutcome::Converted,
           .bytesBefore = q.integer(2), .bytesAfter = deleted ? 0 : q.integer(3)});
@@ -853,6 +883,7 @@ StorageReport UpdateStorageArchive(const StorageArchiveSummary &summary, const S
     }
     cleanup(journal, deps); journal.clear();
   } catch (const std::exception &error) {
+    report.groupDeltas.clear();
     failure(report, summary.path, error, started);
     if (!started && !journal.empty()) { try { cleanup(journal); } catch (...) { report.cleanupPending = true; } }
   }

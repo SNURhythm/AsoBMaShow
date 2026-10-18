@@ -96,6 +96,7 @@ void mergeReport(StorageReport &report, StorageReport other) {
   report.cancelled |= other.cancelled; report.recoveryRequired |= other.recoveryRequired; report.cleanupPending |= other.cleanupPending;
   for (auto &file : other.files) RetainStorageReportDetail(report, std::move(file));
   report.changedRoots.insert(report.changedRoots.end(), other.changedRoots.begin(), other.changedRoots.end());
+  for (auto &delta : other.groupDeltas) report.groupDeltas.push_back(std::move(delta));
 }
 StorageDiagnostic missingCodec(AssetOperation operation, const StorageCodecCapabilities &caps) {
   const StorageCodecSupport *required = nullptr;
@@ -509,7 +510,14 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
     report.cancelled |= worked.cancelled; report.recoveryRequired |= worked.recoveryRequired;
     report.cleanupPending |= worked.cleanupPending;
     for (auto &file : worked.files) RetainStorageReportDetail(report, std::move(file));
-    for (const auto &archive : inventory.archives) {
+    std::vector<fs::path> archivePaths;
+    for (const auto &archive : inventory.archives) archivePaths.push_back(archive.path);
+    const StoragePathIndex archiveIndex(std::move(archivePaths));
+    std::vector<std::vector<GroupStorageMeasurement>> archiveBaselines(inventory.archives.size());
+    for (const auto &row : baselines) if (row.sourceKind == StorageSourceKind::Archive)
+      for (const auto position : archiveIndex.Ancestors(row.root)) archiveBaselines[position].push_back(row);
+    for (std::size_t archivePosition = 0; archivePosition < inventory.archives.size(); ++archivePosition) {
+      const auto &archive = inventory.archives[archivePosition];
       if (!archive.eligibleCount || report.recoveryRequired || !checkpoint()) continue;
       const auto beforeFiles = state.filesDone, beforeBytes = report.reclaimedBytes, beforeAdded = report.addedBytes;
       StorageArchiveDependencies archiveDependencies{
@@ -518,7 +526,8 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
           if (missing.code != StorageReason::None) return EncodeResult{.reason = missing};
           const auto &encoder = asset.operation == AssetOperation::CompressH264 ? dependencies_.encodeVideo : dependencies_.encodeAudio;
           return encoder(asset, policy, output, std::move(check), std::move(progress));
-        }, .validateExisting = dependencies_.validateExisting, .availableSpace = dependencies_.availableSpace};
+        }, .validateExisting = dependencies_.validateExisting, .availableSpace = dependencies_.availableSpace,
+        .measurementBaselines = archiveBaselines[archivePosition]};
       mergeReport(report, UpdateStorageArchive(archive, request.policy, dependencies_.paths, archiveDependencies, checkpoint,
           [&](const StorageProgress &value) {
             state = value; state.filesDone += beforeFiles; state.filesTotal = inventory.eligibleCount;

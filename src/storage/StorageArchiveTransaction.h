@@ -24,6 +24,9 @@ struct StorageArchiveDependencies {
   // Journal metadata and a bounded pair of redo buffers are additional.
   std::uint64_t scratchLimit = 1024ULL * 1024 * 1024;
   StorageArchiveMetrics *metrics = nullptr;
+  // Displayed rows for this container, including unchanged inner siblings.
+  // Successful updates advance their identities using committed entry deltas.
+  std::span<const GroupStorageMeasurement> measurementBaselines;
 };
 StorageReport UpdateStorageArchive(const StorageArchiveSummary &, const StoragePolicy &,
     const StoragePlatformPaths &, const StorageArchiveDependencies &, Checkpoint = {}, ProgressCallback = {});

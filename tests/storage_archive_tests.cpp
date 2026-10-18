@@ -2,6 +2,9 @@
 #include "../src/storage/StorageArchive.h"
 #include "../src/storage/StorageArchiveTransaction.h"
 #include "../src/storage/StorageArchiveDb.h"
+#include "../src/storage/StorageMeasurement.h"
+#include "../src/storage/StorageMeasurementState.h"
+#include "../src/ArchiveSourceIdentity.h"
 #include "../src/audio/decoder.h"
 #include "../src/ArchiveRAII.h"
 #include "../src/ArchiveFile.h"
@@ -635,6 +638,56 @@ void archiveSavingsUsePhysicalSize() {
   require(report.deleted == 1 && !report.failed && report.reclaimedBytes == before - fs::file_size(path) &&
       review.totalBytes && after.totalBytes && *review.totalBytes - *after.totalBytes == 100000 && report.reclaimedBytes < 1000,
       "archive row changes count uncompressed contents while reclaimed space counts physical ZIP reduction");
+}
+void archiveChangesUpdateCachedInnerMeasurements() {
+  for (bool tar : {false, true}) {
+    storage_test::TempDirectory temp;
+    const auto path = temp.root / (tar ? "library.tar" : "library.zip");
+    std::vector<std::pair<std::string, std::string>> files{
+        {"chosen/sound.wav", std::string(1000, 'a')}, {"chosen/art.png", std::string(20, 'i')},
+        {"chosen/chart.bms", "chart"}, {"sibling/movie.mp4", std::string(50, 'v')},
+        {"sibling/sound.flac", std::string(30, 'f')}, {"sibling/chart.bms", "chart"}};
+    for (unsigned i = 0; i < 101; ++i) files.emplace_back("chosen/nested/" + std::to_string(i) + ".avi", std::string(10, 'v'));
+    writeArchive(path, files, false, tar);
+    const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+    InventoryRequest displayed{.groups = {{"all", path, false, false, StorageSourceKind::Archive},
+        {"chosen", path / "chosen", false, false, StorageSourceKind::Archive},
+        {"nested", path / "chosen/nested", false, false, StorageSourceKind::Archive},
+        {"sibling", path / "sibling", false, false, StorageSourceKind::Archive}},
+        .policy = {.audio = AudioAction::LosslessFlac, .bga = BgaAction::Delete}, .scanScratchRoot = paths.scanRoot};
+    auto measured = MeasureStorageGroups(displayed);
+    require(measured.complete && measured.groups.size() == 4, "measure displayed archive groups before mutation");
+    StorageMeasurementRows rows;
+    for (auto &row : measured.groups) { row.generation = 7; rows.emplace(row.groupId, row); }
+    const auto previousIdentity = rows.at("all").sourceIdentity;
+    auto selected = displayed; selected.groups = {displayed.groups[1]};
+    const auto review = BuildStoragePreflight(selected);
+    auto dependencies = DefaultOptimizerDependencies(paths);
+    dependencies.encodeAudio = [](const auto &, const auto &, const fs::path &output, auto, auto) {
+      std::ofstream(output, std::ios::binary) << std::string(100, 'f');
+      return EncodeResult{FileOutcome::Converted, output};
+    };
+    const auto report = StorageOptimizer(dependencies).Run({.inventory = selected, .policy = selected.policy,
+        .preflight = review, .measurementBaselines = measured.groups});
+    require(!report.failed && !report.recoveryRequired && report.converted == 1 && report.deleted == 101,
+        "archive completes conversion and more deletions than the retained detail limit");
+    require(ApplyStorageReportMeasurements(rows, displayed.groups, report).empty(),
+        "successful archive changes update all displayed inner totals without requesting another index measurement");
+    require(rows.at("all").totalBytes == 210 && rows.at("all").audioBytes == 130 &&
+        rows.at("all").videoBytes == 50 && rows.at("all").imageBytes == 20,
+        "archive ancestor totals include every committed change beyond the detail limit");
+    require(rows.at("chosen").totalBytes == 125 && rows.at("chosen").audioBytes == 100 &&
+        rows.at("chosen").videoBytes == 0 && rows.at("chosen").imageBytes == 20 &&
+        rows.at("nested").totalBytes == 0 && rows.at("nested").videoBytes == 0,
+        "selected and nested totals receive exact logical media deltas");
+    require(rows.at("sibling").totalBytes == 85 && rows.at("sibling").audioBytes == 30 &&
+        rows.at("sibling").videoBytes == 50, "unaffected archive sibling totals remain available");
+    const auto nextIdentity = archive_source_identity::KeyForPath(path);
+    require(!nextIdentity.empty() && nextIdentity != previousIdentity, "archive source identity advances after commit");
+    for (const auto &[id, row] : rows)
+      require(row.sourceIdentity == nextIdentity && row.generation == 7,
+          "every retained archive row advances to the committed identity without changing its measured generation");
+  }
 }
 std::map<std::string, std::string> readArchive(const fs::path &path) {
   auto reader = makeArchiveReadHandle(); archive_read_support_filter_all(reader.get()); archive_read_support_format_all(reader.get());
@@ -1444,6 +1497,7 @@ void storageArchiveTests(const char *executable) {
   (void)executable;
 #endif
   for (const auto &[name, run] : std::vector<std::pair<const char *, void(*)()>>{
+      {"measurement-deltas", archiveChangesUpdateCachedInnerMeasurements},
       {"sparse-prefix-recovery", sparsePrefixRecovery}, {"large-batch-recovery", archiveLargeRecordRecovery}, {"delete-batches", archiveConsecutiveDeletesAreBatched},
       {"manifest", manifestsExtractEntries}, {"preflight", selectedArchiveFoldersAreEligible},
       {"deflate-boundary", deflatedPayloadRefillsAtExactOutputBoundary},

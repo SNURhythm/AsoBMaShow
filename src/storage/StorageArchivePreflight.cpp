@@ -2,6 +2,7 @@
 #include "StorageArchiveDb.h"
 #include "StoragePathIndex.h"
 #include "../ArchiveFile.h"
+#include "../ArchiveSourceIdentity.h"
 #include "../Uuid.h"
 
 namespace storage_management {
@@ -89,6 +90,8 @@ void AppendStorageArchivePreflight(StoragePreflight &result, Checkpoint check, S
       const auto identity = ReadFileIdentity(path, error, result.request.pathAccessRoots);
       require(identity.has_value(), "Unsafe archive source", StorageReason::UnsafePath);
       StorageArchiveIO source(path, result.request.pathAccessRoots);
+      const auto sourceIdentity = archive_source_identity::KeyForPath(path);
+      require(!sourceIdentity.empty(), "Cannot identify archive source", StorageReason::StaleInput);
       // Reject unsupported container families cheaply. Full entry/layout checks
       // run in UpdateStorageArchive before encoding, journaling or any write.
       checkContainer(source, identity->bytes, extension);
@@ -108,8 +111,7 @@ void AppendStorageArchivePreflight(StoragePreflight &result, Checkpoint check, S
       std::vector<GroupStorageMeasurement> measured;
       for (const auto position : positions) {
         auto row = result.groups[position]; row.totalBytes = 0;
-        row.sourceIdentity = "archive:" + std::to_string(identity->device) + ":" + std::to_string(identity->fileId) + ":" +
-            std::to_string(identity->bytes) + ":" + std::to_string(static_cast<long long>(identity->modified.time_since_epoch().count()));
+        row.sourceIdentity = sourceIdentity;
         measured.push_back(std::move(row));
         auto inner = result.groups[position].root.lexically_relative(path);
         if (inner == ".") inner.clear(); summary.innerRoots.push_back(std::move(inner));
