@@ -1,7 +1,7 @@
 #pragma once
 #include "Scene.h"
 #include "SceneReturnTarget.h"
-#include "../library/GroupedChartListModel.h"
+#include "../library/StorageArchiveList.h"
 #include "../storage/StorageInventoryTask.h"
 #include "../storage/StorageTask.h"
 #include "../storage/StorageMeasurementState.h"
@@ -50,6 +50,7 @@ private:
   std::string profileId_;
   GroupedChartListModel model_;
   StorageGroupSelection selection_;
+  StorageGroupArchives groupArchives_;
   std::vector<Track> groups_;
   std::set<std::string> expanded_;
   std::map<std::string, storage_management::GroupStorageMeasurement> measurements_;
@@ -67,9 +68,10 @@ private:
   View *root_ = nullptr, *body_ = nullptr, *browser_ = nullptr;
   ScrollView *controlsScroll_ = nullptr;
   StoragePolicyView *policyView_ = nullptr;
-  RecyclerView<Track> *list_ = nullptr;
+  RecyclerView<StorageArchiveRow> *list_ = nullptr;
   TextInputBox *search_ = nullptr;
   TextView *selectionText_ = nullptr, *statusText_ = nullptr, *preflightText_ = nullptr;
+  TextView *archiveHint_ = nullptr;
   TextView *reportText_ = nullptr, *applyText_ = nullptr, *backText_ = nullptr, *sortText_ = nullptr;
   Button *apply_ = nullptr, *cancel_ = nullptr;
   int width_ = -1, height_ = -1;

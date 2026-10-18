@@ -1,4 +1,5 @@
 #include "../src/library/GroupedChartListModel.h"
+#include "../src/library/StorageArchiveList.h"
 #include <cassert>
 #include "../src/view/StoragePolicyEditorState.h"
 
@@ -77,4 +78,44 @@ int main() {
   assert(selection.HiddenCount(model.Rows()) == 0);
   selection.SetGroups({b});
   assert(selection.Count() == 0); // Removed folders cannot linger as mutation targets.
+
+  // Interleaved songs stay together by full archive identity, not basename.
+  auto c = group("folder-c", "Gamma"), loose = group("local", "Local");
+  StorageGroupArchives archives{{a.groupId, "/one/pack.zip"}, {b.groupId, "/two/pack.zip"},
+      {c.groupId, "/one/pack.zip"}};
+  selection.SetGroups({a, b, c, loose});
+  selection.Toggle(a);
+  auto rows = MakeStorageArchiveRows({a, b, loose, c}, archives, selection);
+  assert(rows.size() == 6);
+  assert(rows[0].archiveHeader && rows[0].archivePath == "/one/pack.zip");
+  assert(rows[0].songCount == 2 && rows[0].selectedCount == 1);
+  assert(rows[0].visibleCount == 2 && rows[0].visibleSelectedCount == 1);
+  assert(rows[1].track.groupId == a.groupId && rows[2].track.groupId == c.groupId);
+  assert(rows[3].archiveHeader && rows[3].archivePath == "/two/pack.zip");
+  assert(rows[4].track.groupId == b.groupId && rows[5].track.groupId == loose.groupId);
+  assert(rows[0].IndentLevel() == 0 && rows[1].IndentLevel() == 1 && rows[5].IndentLevel() == 0);
+
+  // Filtered batch actions never add hidden songs or count chart variants twice.
+  auto child2 = child;
+  child2.trackId = "chart-a-2";
+  rows = MakeStorageArchiveRows({child, child2, b}, archives, selection);
+  assert(rows[0].songCount == 2 && rows[0].visibleCount == 1 && rows[0].visibleSelectedCount == 1);
+  assert(rows[1].IndentLevel() == 2 && rows[2].IndentLevel() == 2);
+  ToggleStorageArchiveSelection("/one/pack.zip", {child, child2, b}, archives, selection);
+  assert(selection.Count() == 0);
+  ToggleStorageArchiveSelection("/one/pack.zip", {child, child2, b}, archives, selection);
+  assert(selection.Count() == 1 && selection.Contains(a.groupId) && !selection.Contains(c.groupId));
+  ToggleStorageArchiveSelection("/one/pack.zip", {a, b, c}, archives, selection);
+  assert(selection.Count() == 2 && selection.Contains(c.groupId) && !selection.Contains(b.groupId));
+  selection.Toggle(child); // A single song can still be deselected within a batch.
+  assert(selection.Count() == 1 && selection.Contains(c.groupId));
+  rows = MakeStorageArchiveRows({a}, archives, selection);
+  assert(rows[0].selectedCount == 1 && rows[0].visibleSelectedCount == 0);
+  ToggleStorageArchiveSelection("/one/pack.zip", {a}, archives, selection);
+  ToggleStorageArchiveSelection("/one/pack.zip", {a}, archives, selection);
+  assert(selection.Count() == 1 && selection.Contains(c.groupId)); // Hidden selection survives.
+  assert(MakeStorageArchiveRows({}, archives, selection).empty());
+  loose.expandedChart = true;
+  rows = MakeStorageArchiveRows({loose}, archives, selection);
+  assert(rows.size() == 1 && rows[0].IndentLevel() == 1);
 }

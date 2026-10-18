@@ -59,7 +59,7 @@ target_compile_features(storage_task_tests PRIVATE cxx_std_23)
 asobmashow_register_test(storage_task_tests)
 
 add_executable(grouped_chart_list_tests tests/grouped_chart_list_tests.cpp
-    src/library/GroupedChartListModel.cpp src/path.cpp)
+    src/library/GroupedChartListModel.cpp src/library/StorageArchiveList.cpp src/path.cpp)
 target_compile_features(grouped_chart_list_tests PRIVATE cxx_std_23)
 target_link_libraries(grouped_chart_list_tests PRIVATE ${COMMON_LIBS})
 asobmashow_register_test(grouped_chart_list_tests)

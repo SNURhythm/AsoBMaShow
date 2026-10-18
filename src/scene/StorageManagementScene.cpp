@@ -29,13 +29,13 @@ TextView *text(const std::string &value, int size = 22) {
   view->setVAlign(TextView::MIDDLE);
   return view;
 }
-Button *button(const char *key, std::function<void()> click, TextView **label = nullptr) {
+Button *button(const char *key, std::function<void()> click, TextView **label = nullptr, int size = 22) {
   auto *result = new Button();
   result->setHeight(66)->setMinWidth(130)->setPadding(Edge::Left, 12)->setPadding(Edge::Right, 12)
       ->setCornerRadius(app_theme::controlRadius());
   result->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
                                    app_theme::controlPressed);
-  auto *content = text(i18n::tr(key));
+  auto *content = text(i18n::tr(key), size);
   content->setLocalizedText(i18n::message(key));
   content->setAlign(TextView::CENTER);
   result->setContentView(content);
@@ -43,6 +43,49 @@ Button *button(const char *key, std::function<void()> click, TextView **label = 
   if (label) *label = content;
   return result;
 }
+class StorageListRowView final : public View {
+public:
+  StorageListRowView() {
+    setHeight(82)->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignStretch);
+    song = new MusicTrackRowView();
+    song->setHeight(82)->setFlex(1)->setMinWidth(0);
+    song->setTrailingActionSize(66);
+    addView(song);
+    header = new View();
+    header->setFlex(1)->setMinWidth(0)->setPadding(Edge::All, 8)->setGap(8)
+        ->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)
+        ->setThemedBackgroundColor(app_theme::insetSurface);
+    auto *labels = new View();
+    labels->setFlex(1)->setMinWidth(0)->setFlexDirection(FlexDirection::Column)->setGap(4);
+    title = new TextView(app_theme::boldFont, 19);
+    title->setHeight(26);
+    title->setThemedColor(app_theme::textPrimary);
+    title->setOverflow(TextView::TextOverflow::Marquee);
+    labels->addView(title);
+    detail = new TextView(app_theme::font, 15);
+    detail->setHeight(22);
+    detail->setThemedColor(app_theme::textSecondary);
+    detail->setOverflow(TextView::TextOverflow::Marquee);
+    labels->addView(detail);
+    header->addView(labels);
+    select = button("storage.ui.archive_select_shown", [] {}, &selectText, 17);
+    select->setWidth(136)->setMinWidth(136)->setFlexShrink(0);
+    header->addView(select);
+    addView(header);
+  }
+  void ShowHeader(bool show, unsigned indent) {
+    setPadding(Edge::Left, indent * 24);
+    header->setDisplay(show ? YGDisplayFlex : YGDisplayNone);
+    header->setVisible(show);
+    song->setDisplay(show ? YGDisplayNone : YGDisplayFlex);
+    song->setVisible(!show);
+    if (show) song->setTrack({}, false, {}); // Release recycled artwork and callbacks.
+  }
+  MusicTrackRowView *song;
+  View *header;
+  TextView *title, *detail, *selectText;
+  Button *select;
+};
 std::string bytes(std::uint64_t value) {
   std::ostringstream out;
   if (value < 1024) out << value << " B";
@@ -147,23 +190,45 @@ void StorageManagementScene::BuildView() {
   browser_->addView(actions);
   selectionText_ = text("");
   browser_->addView(selectionText_);
-  list_ = new RecyclerView<Track>(music_playlist::SameTrackIdentity);
+  archiveHint_ = text(i18n::tr("storage.ui.archive_batch_hint"), 18);
+  archiveHint_->setLocalizedText(i18n::message("storage.ui.archive_batch_hint"));
+  archiveHint_->setThemedColor(app_theme::textSecondary);
+  browser_->addView(archiveHint_);
+  list_ = new RecyclerView<StorageArchiveRow>([](const auto &a, const auto &b) {
+    if (a.archiveHeader != b.archiveHeader) return false;
+    return a.archiveHeader ? a.archivePath == b.archivePath : music_playlist::SameTrackIdentity(a.track, b.track);
+  });
   list_->setFlex(1)->setMinHeight(100);
   list_->itemHeight = 82;
-  list_->onCreateView = [](const Track &) {
-    auto *row = new MusicTrackRowView();
-    row->setHeight(82);
-    row->setTrailingActionSize(66);
-    return row;
+  list_->onCreateView = [](const StorageArchiveRow &) { return new StorageListRowView(); };
+  list_->onBind = [this](View *view, const StorageArchiveRow &item, int, bool) {
+    auto *row = static_cast<StorageListRowView *>(view);
+    row->ShowHeader(item.archiveHeader, item.IndentLevel());
+    if (item.archiveHeader) {
+      row->title->setText(i18n::format("storage.ui.archive_group", {
+          {"name", fspath_to_utf8(item.archivePath.filename())}}));
+      row->detail->setText(i18n::format("storage.ui.archive_selection", {
+          {"selected", std::to_string(item.selectedCount)}, {"total", std::to_string(item.songCount)},
+          {"shown", std::to_string(item.visibleCount)}}) + " · " + fspath_to_utf8(item.archivePath.parent_path()));
+      const bool allShown = item.visibleSelectedCount == item.visibleCount;
+      row->selectText->setLocalizedText(i18n::message(allShown
+          ? "storage.ui.archive_clear_shown" : "storage.ui.archive_select_shown"));
+      row->select->setOnClickListener([this, archive = item.archivePath] {
+        if (shownTask_.running) return;
+        ToggleStorageArchiveSelection(archive, model_.Rows(), groupArchives_, selection_);
+        InvalidatePreflight(); RefreshRows();
+      });
+      return;
+    }
+    const auto &track = item.track;
+    row->song->setTrack(track, false,
+        {selection_.Contains(track.groupId) ? "☑" : "☐", selection_.Contains(track.groupId),
+         [this, track] { ToggleGroup(track); }},
+        trackDetail(track) + " · " + MeasurementText(track));
   };
-  list_->onBind = [this](View *view, const Track &track, int, bool) {
-    if (auto *row = dynamic_cast<MusicTrackRowView *>(view))
-      row->setTrack(track, false,
-          {selection_.Contains(track.groupId) ? "☑" : "☐", selection_.Contains(track.groupId),
-           [this, track] { ToggleGroup(track); }},
-          trackDetail(track) + " · " + MeasurementText(track));
+  list_->onSelectedByPointer = [this](const StorageArchiveRow &item, int) {
+    if (!item.archiveHeader) ToggleExpanded(item.track);
   };
-  list_->onSelectedByPointer = [this](const Track &track, int) { ToggleExpanded(track); };
   browser_->addView(list_);
   body_->addView(browser_);
   controlsScroll_ = new ScrollView();
@@ -253,6 +318,14 @@ void StorageManagementScene::ReloadGroups(bool invalidateAll) {
   }
 #endif
   groups_ = music_playlist::MakeTracks(context.musicPlaylistRepository.SelectLibraryTracks());
+  groupArchives_.clear();
+  for (const auto &group : groups_) {
+    const auto &meta = group.representativeChart;
+    std::filesystem::path archive, inner;
+    if (archive_file::splitVirtualPath(meta.Folder, archive, inner) ||
+        archive_file::splitVirtualPath(meta.BmsPath, archive, inner))
+      groupArchives_.emplace(group.groupId, std::move(archive));
+  }
   const auto request = RequestFor(groups_);
   std::vector<StorageGroupSource> sources;
   for (std::size_t i = 0; i < groups_.size(); ++i) {
@@ -354,7 +427,7 @@ void StorageManagementScene::RefreshRows() {
   });
   model_.SetGroups(groups_);
   const float scroll = list_->scrollOffset;
-  list_->setItems(model_.Rows());
+  list_->setItems(MakeStorageArchiveRows(model_.Rows(), groupArchives_, selection_));
   list_->scrollOffset = std::clamp(scroll, 0.0f, std::max(0.0f,
       static_cast<float>(list_->size() * list_->itemHeight - list_->getContentHeight())));
   list_->rebindVisibleItems();
@@ -378,6 +451,8 @@ void StorageManagementScene::RefreshState() {
   selectionText_->setText(i18n::format("storage.ui.selected", {
       {"count", std::to_string(selection_.Count())},
       {"hidden", std::to_string(selection_.HiddenCount(model_.Rows()))}}));
+  archiveHint_->setDisplay(groupArchives_.empty() ? YGDisplayNone : YGDisplayFlex);
+  archiveHint_->setVisible(!groupArchives_.empty());
   sortText_->setText(i18n::tr(sortBySize_ ? "storage.ui.sort_size" : "storage.ui.sort_title"));
   backText_->setText(i18n::tr(shownTask_.running ? "storage.ui.cancel_back" : "library.tasks.back.label"));
   policyView_->SetEnabled(!shownTask_.running && !returnWhenFinished_);
@@ -516,6 +591,6 @@ void StorageManagementScene::cleanupScene() {
   if (list_) { list_->onBind = {}; list_->onCreateView = {}; list_->onSelectedByPointer = {}; }
   root_ = body_ = browser_ = nullptr;
   controlsScroll_ = nullptr; policyView_ = nullptr; list_ = nullptr; search_ = nullptr;
-  selectionText_ = statusText_ = preflightText_ = reportText_ = applyText_ = backText_ = sortText_ = nullptr;
+  selectionText_ = statusText_ = preflightText_ = archiveHint_ = reportText_ = applyText_ = backText_ = sortText_ = nullptr;
   apply_ = cancel_ = nullptr;
 }

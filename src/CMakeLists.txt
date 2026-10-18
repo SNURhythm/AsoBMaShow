@@ -76,3 +76,4 @@ if (NOT IOS)
 endif ()
 
 target_sources(main PRIVATE library/GroupedChartListModel.cpp)
+target_sources(main PRIVATE library/StorageArchiveList.cpp)
