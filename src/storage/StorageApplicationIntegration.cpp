@@ -5,6 +5,7 @@
 #include "../context.h"
 #include "../scene/SceneManager.h"
 #include "../scene/Scene.h"
+#include "../view/ImageView.h"
 #include "../targets.h"
 #include <SDL3/SDL.h>
 #if TARGET_OS_ANDROID
@@ -177,6 +178,9 @@ bool InitializeStorageServices(ApplicationContext &context) {
       });
       if (!stopped.success) { error = stopped.diagnostic; return {}; }
       if (context.sceneManager && !context.sceneManager->prepareForStorageMaintenance(error)) return {};
+      // The storage list can keep requesting artwork while archives are moved.
+      // Retain this drain through recovery-required reports as part of the guard.
+      environment->scopes.push_back(pauseImageReadsForStorageMaintenance());
       return guard;
     },
     .run = [environment](OptimizationRequest request, Checkpoint check, ProgressCallback progress) {

@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <future>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -349,6 +350,63 @@ void testDiscardedDecodeDoesNotPublishStaleCompletion() {
          "discarded worker result cannot publish a stale completion");
 }
 
+void testMaintenancePauseDrainsCancelledLoadersAndResumesQueuedWork() {
+  ControlledLoader loader;
+  image_decode::ImageDecodeCoordinator coordinator(
+      [&](const auto &item) { return loader.load(item); }, 1);
+  const auto active = coordinator.request(request("active"));
+  {
+    std::unique_lock lock(loader.mutex);
+    loader.cv.wait(lock, [&] { return loader.active == 1; });
+  }
+  const auto queued = coordinator.request(request("queued"));
+  coordinator.cancel(active); // The loader still runs after its last ticket is gone.
+  std::promise<void> enteringPause, paused;
+  auto pauseEntered = enteringPause.get_future();
+  auto pauseFinished = paused.get_future();
+  std::jthread pauser([&] {
+    enteringPause.set_value();
+    coordinator.pauseAndWait();
+    paused.set_value();
+  });
+  pauseEntered.wait();
+  expect(pauseFinished.wait_for(std::chrono::milliseconds(20)) ==
+             std::future_status::timeout,
+         "maintenance waits for a cancelled but still-running loader");
+  loader.release("active");
+  pauseFinished.wait();
+  pauser.join();
+  const auto duringPause = coordinator.request(request("during-pause", true));
+  coordinator.pauseAndWait(); // Nested owners must each release their pause.
+  coordinator.resume();
+  expect(loader.callCount("queued") == 0 && loader.callCount("during-pause") == 0,
+         "queued and new requests remain deferred while a pause owner exists");
+  loader.release("queued");
+  loader.release("during-pause");
+  coordinator.resume();
+  expect(coordinator.waitTake(queued).state == image_decode::ImageDecodeWaitState::Ready &&
+             coordinator.waitTake(duringPause).state == image_decode::ImageDecodeWaitState::Ready,
+         "resuming maintenance preserves and completes queued artwork requests");
+  expect(loader.startOrder() == std::vector<std::string>{"active", "during-pause", "queued"},
+         "paused work retains its decode priority after the active loader drains");
+}
+
+void testShutdownDrainsPausedQueueWithoutStartingIt() {
+  ControlledLoader loader;
+  image_decode::ImageDecodeCoordinator coordinator(
+      [&](const auto &item) { return loader.load(item); }, 1);
+  coordinator.pauseAndWait();
+  const auto queued = coordinator.request(request("shutdown-paused"));
+  // If shutdown accidentally dequeues paused work, allow it to finish so the
+  // observable start count fails instead of leaving the test worker blocked.
+  loader.release("shutdown-paused");
+  coordinator.shutdown();
+  expect(loader.callCount("shutdown-paused") == 0 &&
+             coordinator.waitTake(queued).state == image_decode::ImageDecodeWaitState::Stopped,
+         "shutdown wakes paused workers without starting queued file reads");
+  coordinator.resume();
+}
+
 } // namespace
 
 int main() {
@@ -361,6 +419,8 @@ int main() {
   testLegacyCancellationDoesNotAccumulateTerminalTickets();
   testCompletionNotifierPublishesReadyFailureAndDrops();
   testDiscardedDecodeDoesNotPublishStaleCompletion();
+  testMaintenancePauseDrainsCancelledLoadersAndResumesQueuedWork();
+  testShutdownDrainsPausedQueueWithoutStartingIt();
   if (failures != 0) {
     std::cerr << failures << " image decode coordinator test(s) failed\n";
     return 1;

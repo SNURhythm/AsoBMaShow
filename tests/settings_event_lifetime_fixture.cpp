@@ -139,6 +139,14 @@ void SettingsScene::openStorage() {
   defer(PRODUCTION_STORAGE_OPEN, 0, true);
 }
 
+struct MaintenanceAccess { std::vector<std::shared_ptr<void>> scopes; };
+auto environment = std::make_shared<MaintenanceAccess>();
+bool imageReadsPaused = false;
+std::shared_ptr<void> pauseImageReadsForStorageMaintenance() {
+  imageReadsPaused = true;
+  return std::shared_ptr<void>(&imageReadsPaused, [](void *) { imageReadsPaused = false; });
+}
+
 bool admitMedia(ApplicationContext &context) {
   std::string error;
   bool guard = true;
@@ -171,6 +179,7 @@ void testMaintenanceAdmission() {
   assert(!admitMedia(context));
   assert(context.musicPlayer.stops == 0 && context.jukebox.stops == 0);
   assert(a->releases == 0 && b->releases == 0);
+  assert(!imageReadsPaused && environment->scopes.empty());
   // Exercise both traversal orders and direct SceneManager callers too.
   std::string error;
   for (auto *busy : {a, b}) {
@@ -184,16 +193,21 @@ void testMaintenanceAdmission() {
   assert(!admitMedia(context));
   assert(context.musicPlayer.stops == 0);
   assert(a->releases == 0 && b->releases == 0);
+  assert(!imageReadsPaused && environment->scopes.empty());
   context.jukebox.fail = false;
   context.jukebox.stops = 0;
   context.musicPlayer.fail = true;
   assert(!admitMedia(context));
   assert(context.jukebox.stops == 0 && context.musicPlayer.stops == 0);
   assert(a->releases == 0 && b->releases == 0);
+  assert(!imageReadsPaused && environment->scopes.empty());
   context.musicPlayer.fail = false;
   assert(admitMedia(context));
   assert(context.musicPlayer.stops == 1 && context.jukebox.stops == 1);
   assert(a->releases == 1 && b->releases == 1);
+  assert(imageReadsPaused && environment->scopes.size() == 1);
+  environment->scopes.clear(); // The maintenance guard releases its access scopes.
+  assert(!imageReadsPaused);
 }
 int main() {
   testMaintenanceAdmission();

@@ -177,6 +177,8 @@ music/preview readers and reserves library maintenance; competing playback or
 library operations cannot start during the mutation. Back requests cancellation
 and returns after the worker releases maintenance. Mobile backgrounding cancels
 manual work at a safe checkpoint.
+Active artwork reads drain before mutation; new artwork requests wait until
+maintenance releases its guard, including any recovery-required hold.
 All scene admission checks run before media is stopped, so a rejected request
 leaves existing playback alone.
 
