@@ -160,7 +160,8 @@ bool validTargets(const Record &record, const StoragePlatformPaths &paths, std::
          record.temporary == parent / (".asobmashow-storage-" + record.id + ".install") &&
          record.outputIdentity.fileId != 0 &&
          (record.phase == Phase::Copying || (record.outputIdentity.bytes > 0 &&
-                                             record.outputIdentity.bytes < record.sourceIdentity.bytes));
+                                             (record.operation == AssetOperation::LosslessFlac ||
+                                              record.outputIdentity.bytes < record.sourceIdentity.bytes)));
 }
 std::optional<Record> loadRecord(const fs::path &path, const StoragePlatformPaths &paths, std::string &error) {
   std::error_code ec;
@@ -215,7 +216,7 @@ bool removeOwned(const fs::path &path, const FileIdentity &identity, const std::
   return ops.remove(path, error) && ops.syncDirectory(path.parent_path(), error);
 }
 bool finishRecord(const Record &record, const FileTransactionDependencies &ops,
-                  std::uint64_t &reclaimed, std::string &error) {
+                  std::uint64_t &reclaimed, std::uint64_t &added, std::string &error) {
   const bool deletion = record.operation == AssetOperation::Delete;
   const bool hadBackup = entryExists(record.backup);
   if (record.phase == Phase::Committed) {
@@ -223,7 +224,8 @@ bool finishRecord(const Record &record, const FileTransactionDependencies &ops,
       error = "Installed output changed before recovery"; return false;
     }
     if (!removeOwned(record.backup, record.sourceIdentity, record.sourceHash, ops, true, error)) return false;
-    if (hadBackup) reclaimed = record.sourceIdentity.bytes - (deletion ? 0 : record.outputIdentity.bytes);
+    if (hadBackup) AccumulateStorageBytes(reclaimed, added, record.sourceIdentity.bytes,
+                                          deletion ? 0 : record.outputIdentity.bytes);
   } else {
     if (hadBackup && !matches(record.backup, record.sourceIdentity, record.sourceHash, ops, true, error)) {
       error = "Recovery backup changed"; return false;
@@ -332,7 +334,8 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
   if (!deletion) {
     if (encoded->outcome != FileOutcome::Converted) return fail(StorageReason::ValidationFailed, "No validated encoded output");
     const auto outputIdentity = dependencies_.identity(encoded->outputPath, error);
-    if (!outputIdentity || outputIdentity->bytes == 0 || outputIdentity->bytes >= sourceIdentity->bytes)
+    if (!outputIdentity || outputIdentity->bytes == 0 ||
+        (candidate.operation != AssetOperation::LosslessFlac && outputIdentity->bytes >= sourceIdentity->bytes))
       return fail(StorageReason::NotSmaller, "Encoded output is not smaller");
     auto hash = HashStorageFile(encoded->outputPath, check, error);
     if (!hash) return fail(checkpoint(check) ? StorageReason::IoError : StorageReason::Cancelled, error);
@@ -355,9 +358,9 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
     return fail(StorageReason::RecoveryRequired, error);
   }
   const auto rollback = [&](StorageReason reason, std::string detail) {
-    std::uint64_t ignored = 0;
+    std::uint64_t ignored = 0, ignoredAdded = 0;
     std::string rollbackError;
-    if (!finishRecord(record, dependencies_, ignored, rollbackError))
+    if (!finishRecord(record, dependencies_, ignored, ignoredAdded, rollbackError))
       return fail(StorageReason::RecoveryRequired, detail + "; " + rollbackError);
     if (reason == StorageReason::Cancelled) result.outcome = FileOutcome::Cancelled;
     return fail(reason, std::move(detail));
@@ -425,7 +428,7 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
   if (deletion || record.source != record.destination)
     result.filesystemChanges.push_back({record.source, std::nullopt});
   if (!deletion) result.filesystemChanges.push_back({record.destination, record.outputIdentity});
-  if (!finishRecord(record, dependencies_, result.reclaimedBytes, error)) {
+  if (!finishRecord(record, dependencies_, result.reclaimedBytes, result.addedBytes, error)) {
     const auto cleanupError = error;
     const bool outputIntact = deletion || matches(record.destination, record.outputIdentity,
                                                   record.outputHash, dependencies_, true, error);
@@ -457,13 +460,13 @@ StorageReport StorageFileTransaction::Recover(Checkpoint check) {
     // recovery follows only the published .json record.
     if (it->path().extension() != ".json") continue;
     const auto record = loadRecord(it->path(), paths_, error);
-    std::uint64_t reclaimed = 0;
-    if (!record || !finishRecord(*record, dependencies_, reclaimed, error)) {
+    std::uint64_t reclaimed = 0, added = 0;
+    if (!record || !finishRecord(*record, dependencies_, reclaimed, added, error)) {
       report.recoveryRequired = true;
       ++report.failed;
       if (report.files.size() < 100) report.files.push_back({.source = it->path(), .outcome = FileOutcome::Failed,
           .reason = {StorageReason::RecoveryRequired, error}});
-    } else report.reclaimedBytes += reclaimed;
+    } else AccumulateStorageBytes(report.reclaimedBytes, report.addedBytes, reclaimed, added);
   }
   if (ec) report.recoveryRequired = true;
   if (!report.recoveryRequired && !report.cancelled) cleanupAbandonedCandidates(paths_, dependencies_, check, report);

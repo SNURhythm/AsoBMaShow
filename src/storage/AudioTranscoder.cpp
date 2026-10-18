@@ -45,9 +45,15 @@ bool descriptiveComment(std::string_view value) {
          key == "ARTIST" || key == "COMMENT" || key == "DATE" || key == "ALBUM" ||
          key == "LICENSE" || key == "TRACKNUMBER" || key == "GENRE";
 }
+struct WaveMetadata {
+  bool broadcast = false;
+  bool last = false;
+  std::uint64_t bytes = 20; // APPLICATION header, riff ID and RIFF/WAVE header.
+};
 // libsndfile tolerates truncated RIFF data and does not expose every custom loop
 // tag. Inspect only media container headers, never chart declarations.
-StorageDiagnostic inspectContainer(const fs::path &path, int format, SNDFILE *audio, Checkpoint check) {
+StorageDiagnostic inspectContainer(const fs::path &path, int format, SNDFILE *audio, Checkpoint check,
+                                   bool lossless, WaveMetadata &foreign) {
   const auto bad = StorageDiagnostic{StorageReason::ValidationFailed, "Truncated or invalid audio container"};
   const auto metadata = StorageDiagnostic{StorageReason::UnsupportedFormat, "Playback metadata cannot be preserved"};
   std::ifstream input(path, std::ios::binary);
@@ -97,6 +103,7 @@ StorageDiagnostic inspectContainer(const fs::path &path, int format, SNDFILE *au
   if (end != bytes) return bad;
   std::uint64_t offset = 12;
   bool data = false;
+  bool oversized = false;
   while (offset < end) {
     if (check && !check()) return {StorageReason::Cancelled, "Cancelled"};
     if (end - offset < 8 || !input.read(reinterpret_cast<char *>(header.data()), 8)) return bad;
@@ -105,7 +112,11 @@ StorageDiagnostic inspectContainer(const fs::path &path, int format, SNDFILE *au
     const std::uint64_t padded = std::uint64_t(length) + (length & 1);
     if (padded > end - offset) return bad;
     const std::string_view type(reinterpret_cast<const char *>(header.data()), 4);
+    const auto stored = type == "data" ? 8 : 8 + padded;
+    foreign.bytes += 8 + stored;
+    oversized = oversized || stored > 0xffffff - 4;
     if (type == "data") { if (data) return bad; data = true; }
+    else if (type == "bext" && lossless) foreign.broadcast = true;
     else if (type == "LIST") {
       // Accept only descriptive INFO fields actually exposed by the decoder.
       // Unknown fields, conflicting duplicates and playback lists stay intact.
@@ -145,7 +156,85 @@ StorageDiagnostic inspectContainer(const fs::path &path, int format, SNDFILE *au
     input.seekg(padded, std::ios::cur);
     offset += padded;
   }
+  if (foreign.broadcast && oversized)
+    return {StorageReason::UnsupportedFormat, "WAV metadata chunk exceeds the FLAC metadata block limit"};
   return data ? StorageDiagnostic{} : bad;
+}
+// Match flac --keep-foreign-metadata: one riff APPLICATION block per RIFF
+// chunk, with only the RIFF/WAVE and data headers for the audio containers.
+// Copy opaque bext bytes rather than interpreting/rebuilding its versioned fields.
+StorageDiagnostic preserveWaveMetadata(const fs::path &source, const fs::path &destination,
+                                       WaveMetadata &foreign, Checkpoint check, bool verify) {
+  const auto bad = StorageDiagnostic{verify ? StorageReason::ValidationFailed : StorageReason::IoError,
+                                     verify ? "WAV metadata verification failed" : "Cannot preserve WAV metadata"};
+  std::ifstream input(source, std::ios::binary);
+  std::fstream output(destination, std::ios::binary | std::ios::in | (verify ? std::ios::openmode{} : std::ios::out));
+  std::array<char, 65536> buffer{}, comparison{};
+  std::array<unsigned char, 12> header{};
+  if (!input || !output || !output.read(reinterpret_cast<char *>(header.data()), 8) ||
+      std::memcmp(header.data(), "fLaC", 4) || (header[4] & 127) != 0 ||
+      header[5] != 0 || header[6] != 0 || header[7] != 34) return bad;
+  constexpr std::uint64_t insertion = 42; // Magic plus STREAMINFO header/body.
+  if (!verify) {
+    foreign.last = (header[4] & 128) != 0;
+    std::error_code error;
+    const auto size = fs::file_size(destination, error);
+    if (error || size < insertion) return bad;
+    // Move only this temporary encoded file backwards, with bounded scratch.
+    for (auto end = size; end > insertion;) {
+      if (check && !check()) return {StorageReason::Cancelled, "Cancelled"};
+      const auto count = std::min<std::uint64_t>(buffer.size(), end - insertion);
+      end -= count;
+      output.seekg(end);
+      if (!output.read(buffer.data(), count)) return bad;
+      output.seekp(end + foreign.bytes);
+      if (!output.write(buffer.data(), count)) return bad;
+    }
+    output.seekp(4); output.put(0); // Inserted blocks now follow STREAMINFO.
+    output.seekp(insertion);
+  } else output.seekg(insertion);
+  if (!input.read(reinterpret_cast<char *>(header.data()), 12) ||
+      std::memcmp(header.data(), "RIFF", 4) || std::memcmp(header.data() + 8, "WAVE", 4)) return bad;
+  const std::uint64_t sourceEnd = std::uint64_t(le32(header.data() + 4)) + 8;
+  std::uint64_t offset = 0, written = 0;
+  while (offset < sourceEnd) {
+    if (check && !check()) return {StorageReason::Cancelled, "Cancelled"};
+    std::uint64_t stored = 12, next = 12;
+    if (offset) {
+      input.seekg(offset);
+      if (sourceEnd - offset < 8 || !input.read(reinterpret_cast<char *>(header.data()), 8)) return bad;
+      const auto size = le32(header.data() + 4);
+      const std::uint64_t padded = std::uint64_t(size) + (size & 1);
+      if (padded > sourceEnd - offset - 8) return bad;
+      next = offset + 8 + padded;
+      stored = std::memcmp(header.data(), "data", 4) ? 8 + padded : 8;
+    }
+    if (stored > 0xffffff - 4 || written + 8 + stored > foreign.bytes) return bad;
+    const auto length = static_cast<std::uint32_t>(stored + 4);
+    const std::array<unsigned char, 8> block{
+        static_cast<unsigned char>(2 | (foreign.last && next == sourceEnd ? 128 : 0)),
+        static_cast<unsigned char>(length >> 16), static_cast<unsigned char>(length >> 8),
+        static_cast<unsigned char>(length), 'r', 'i', 'f', 'f'};
+    if (verify) {
+      if (!output.read(comparison.data(), block.size()) ||
+          std::memcmp(comparison.data(), block.data(), block.size())) return bad;
+    } else if (!output.write(reinterpret_cast<const char *>(block.data()), block.size())) return bad;
+    input.seekg(offset);
+    for (std::uint64_t remaining = stored; remaining;) {
+      if (check && !check()) return {StorageReason::Cancelled, "Cancelled"};
+      const auto count = std::min<std::uint64_t>(buffer.size(), remaining);
+      if (!input.read(buffer.data(), count)) return bad;
+      if (verify) {
+        if (!output.read(comparison.data(), count) || std::memcmp(buffer.data(), comparison.data(), count)) return bad;
+      } else if (!output.write(buffer.data(), count)) return bad;
+      remaining -= count;
+    }
+    written += 8 + stored;
+    offset = next;
+  }
+  if (written != foreign.bytes) return bad;
+  if (!verify) { output.flush(); if (!output) return bad; }
+  return {};
 }
 StorageCodecSupport support(bool available, const char *name) {
   return {available, available ? "" : std::string(name) + " is unavailable in this build"};
@@ -223,7 +312,9 @@ EncodeResult EncodeAudio(const AssetCandidate &candidate, const StoragePolicy &p
     if (!mono && !stereo)
       return finish(FileOutcome::Skipped, StorageReason::UnsupportedFormat, "Native channel assignments cannot be preserved");
   }
-  const auto container = inspectContainer(candidate.source, info.format, input.get(), check);
+  const bool lossless = policy.audio == AudioAction::LosslessFlac;
+  WaveMetadata foreign;
+  const auto container = inspectContainer(candidate.source, info.format, input.get(), check, lossless, foreign);
   if (container.code == StorageReason::Cancelled) return cancelled();
   if (container.code != StorageReason::None)
     return finish(container.code == StorageReason::ValidationFailed ? FileOutcome::Failed : FileOutcome::Skipped,
@@ -266,7 +357,6 @@ EncodeResult EncodeAudio(const AssetCandidate &candidate, const StoragePolicy &p
   std::vector<int> integers(blockFrames * info.channels);
   std::vector<float> floats(blockFrames * info.channels);
   sf_count_t total = 0;
-  const bool lossless = policy.audio == AudioAction::LosslessFlac;
   if (progress) progress({StoragePhase::Encode, candidate.source});
   for (;;) {
     if (check && !check()) return failOutput(StorageReason::Cancelled, "Cancelled");
@@ -284,7 +374,17 @@ EncodeResult EncodeAudio(const AssetCandidate &candidate, const StoragePolicy &p
   if (sf_error(input.get()) || total != info.frames)
     return failOutput(StorageReason::ValidationFailed, "Source audio did not decode completely");
   if (sf_close(output.release())) return finish(FileOutcome::Failed, StorageReason::IoError, "Audio encoder finalization failed");
+  if (foreign.broadcast) {
+    const auto metadata = preserveWaveMetadata(candidate.source, temporaryOutput, foreign, check, false);
+    if (metadata.code == StorageReason::Cancelled) return cancelled();
+    if (metadata.code != StorageReason::None) return finish(FileOutcome::Failed, metadata.code, metadata.detail);
+  }
   if (progress) progress({StoragePhase::Verify, candidate.source});
+  if (foreign.broadcast) {
+    const auto metadata = preserveWaveMetadata(candidate.source, temporaryOutput, foreign, check, true);
+    if (metadata.code == StorageReason::Cancelled) return cancelled();
+    if (metadata.code != StorageReason::None) return finish(FileOutcome::Failed, metadata.code, metadata.detail);
+  }
   SF_INFO verifyInfo{};
   auto verify = openRead(temporaryOutput, verifyInfo);
   if (!verify || (verifyInfo.format & (SF_FORMAT_TYPEMASK | SF_FORMAT_SUBMASK)) != decision.format ||
@@ -321,7 +421,7 @@ EncodeResult EncodeAudio(const AssetCandidate &candidate, const StoragePolicy &p
   if (error) return finish(FileOutcome::Failed, StorageReason::IoError, "Cannot measure output audio");
   const auto sourceBytes = fs::file_size(candidate.source, error);
   if (error) return finish(FileOutcome::Failed, StorageReason::IoError, "Cannot measure source audio");
-  if (outputBytes >= sourceBytes) return finish(FileOutcome::Skipped, StorageReason::NotSmaller, "Encoded audio is not smaller");
+  if (!lossless && outputBytes >= sourceBytes) return finish(FileOutcome::Skipped, StorageReason::NotSmaller, "Encoded audio is not smaller");
   return finish(FileOutcome::Converted, StorageReason::None, "");
 }
 } // namespace storage_management

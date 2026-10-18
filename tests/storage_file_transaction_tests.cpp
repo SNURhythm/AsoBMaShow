@@ -334,6 +334,51 @@ void testSuccessAndCancellation() {
               !fs::exists(f.candidate.source), "deletion reclaims bytes after unlink");
   requireNoRecoveryFiles(f);
 }
+void testLosslessReplacementWithoutSavings() {
+  for (const auto bytes : {1024u, 1152u}) {
+    for (const auto point : {"", "prepared", "published", "retired", "committed"}) {
+      Fixture f;
+      fs::rename(f.candidate.source, f.temp.root / "library/asset.wav");
+      f.candidate.source = f.temp.root / "library/asset.wav";
+      f.candidate.destination = f.temp.root / "library/asset.flac";
+      f.candidate.operation = AssetOperation::LosslessFlac;
+      f.candidate.kind = asobmshow::chart_assets::MediaKind::Audio;
+      f.temp.write("private/encoded.mp4", std::string(bytes, 'f'));
+      FileTransactionDependencies dependencies;
+      dependencies.faultPoint = [point](std::string_view reached) { if (reached == point) throw Crash{}; };
+      try {
+        const auto result = StorageFileTransaction(f.paths, dependencies).Replace(f.candidate, f.encoded);
+        require(std::string_view(point).empty(), "lossless crash boundary reached");
+        require(result.outcome == FileOutcome::Converted && result.reclaimedBytes == 0 &&
+                    result.addedBytes == bytes - 1024 && result.bytesAfter == bytes,
+                "equal or larger lossless output replaces WAV without claiming savings");
+      } catch (const Crash &) {}
+      const auto recovered = StorageFileTransaction(f.paths).Recover();
+      require(!recovered.recoveryRequired && !recovered.reclaimedBytes,
+              "equal or larger lossless journal recovers without unsigned savings");
+      require(recovered.addedBytes == (std::string_view(point) == "committed" ? bytes - 1024 : 0),
+              "recovery reports growth only when finalizing a committed backup");
+      const bool committed = std::string_view(point).empty() || std::string_view(point) == "committed";
+      require(committed ? !fs::exists(f.candidate.source) && read(f.candidate.destination) == std::string(bytes, 'f')
+                        : read(f.candidate.source) == std::string(1024, 's') && !fs::exists(f.candidate.destination),
+              "recovery preserves only the durable lossless conversion decision");
+      requireNoRecoveryFiles(f);
+    }
+  }
+  for (const auto operation : {AssetOperation::LossyVorbis, AssetOperation::CompressH264}) {
+    Fixture f;
+    if (operation == AssetOperation::LossyVorbis) {
+      fs::rename(f.candidate.source, f.temp.root / "library/asset.wav");
+      f.candidate.source = f.temp.root / "library/asset.wav";
+      f.candidate.destination = f.temp.root / "library/asset.ogg";
+      f.candidate.operation = operation;
+    }
+    f.temp.write("private/encoded.mp4", std::string(1024, 'f'));
+    const auto result = StorageFileTransaction(f.paths).Replace(f.candidate, f.encoded);
+    require(result.reason.code == StorageReason::NotSmaller && fs::exists(f.candidate.source) &&
+                !fs::exists(f.candidate.destination), "lossy replacements still require smaller output");
+  }
+}
 void testRestartAtEveryBoundary() {
   for (const bool samePath : {false, true}) {
     for (const auto point : {"copying", "copied", "prepared", "published-before-journal",
@@ -590,6 +635,7 @@ int main(int argc, char **argv) {
     testOverlappingRegisteredRootDoesNotBlockRecovery();
     testAbandonedCandidatesAfterRestart();
     testSuccessAndCancellation();
+    testLosslessReplacementWithoutSavings();
     testRestartAtEveryBoundary();
     testFailuresNeverClobberAndCleanupAccounting();
     testForeignIdentityAndCorruptJournalArePreserved();

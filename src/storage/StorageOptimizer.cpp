@@ -73,16 +73,17 @@ void append(StorageReport &report, FileResult result) {
   case FileOutcome::Cancelled: report.cancelled = true; break;
   }
   if (result.outcome != FileOutcome::Converted && result.outcome != FileOutcome::Deleted) {
-    result.reclaimedBytes = 0; result.bytesAfter.reset();
+    result.reclaimedBytes = result.addedBytes = 0; result.bytesAfter.reset();
   }
-  report.reclaimedBytes += result.reclaimedBytes;
+  AccumulateStorageBytes(report.reclaimedBytes, report.addedBytes, result.reclaimedBytes, result.addedBytes);
   report.recoveryRequired |= result.reason.code == StorageReason::RecoveryRequired;
   report.cleanupPending |= result.reason.code == StorageReason::CleanupFailed;
   if (report.files.size() < 100) report.files.push_back(std::move(result));
 }
 void mergeReport(StorageReport &report, StorageReport other) {
   report.converted += other.converted; report.deleted += other.deleted;
-  report.skipped += other.skipped; report.failed += other.failed; report.reclaimedBytes += other.reclaimedBytes;
+  report.skipped += other.skipped; report.failed += other.failed;
+  AccumulateStorageBytes(report.reclaimedBytes, report.addedBytes, other.reclaimedBytes, other.addedBytes);
   report.cancelled |= other.cancelled; report.recoveryRequired |= other.recoveryRequired; report.cleanupPending |= other.cleanupPending;
   for (auto &file : other.files) if (report.files.size() < 100) report.files.push_back(std::move(file));
   report.changedRoots.insert(report.changedRoots.end(), other.changedRoots.begin(), other.changedRoots.end());
@@ -129,7 +130,7 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
       notified = true; lastPhase = state.phase; lastNotification = now; progress(state);
     }
   };
-  auto complete = [&] { report.cancelled |= cancelled; state.reclaimedBytes = report.reclaimedBytes; state.phase = StoragePhase::Complete; emit(true); return report; };
+  auto complete = [&] { report.cancelled |= cancelled; state.reclaimedBytes = report.reclaimedBytes; state.addedBytes = report.addedBytes; state.phase = StoragePhase::Complete; emit(true); return report; };
   try {
     emit(true);
     auto lease = dependencies_.permit->Acquire(checkpoint);
@@ -252,7 +253,7 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
       std::string error;
       std::error_code ec;
       StorageEvidenceMetrics metrics;
-      auto emit = [&] { state.reclaimedBytes = report.reclaimedBytes; if (progress) progress(state); };
+      auto emit = [&] { state.reclaimedBytes = report.reclaimedBytes; state.addedBytes = report.addedBytes; if (progress) progress(state); };
       auto finishDirectory = [&] {
         if (dependencies_.evidenceMetrics) {
           std::lock_guard lock(aggregation);
@@ -418,19 +419,19 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
       }
       return finishDirectory();
     };
-    const auto recoveryBytes = report.reclaimedBytes;
+    const auto recoveryBytes = report.reclaimedBytes, recoveryAdded = report.addedBytes;
     auto worked = RunStorageDirectories(inventory, dependencies_.executionLimits,
         [&] { return dependencies_.availableSpace(jobPath); }, work, checkpoint,
-        [&](const StorageProgress &value) { state = value; state.reclaimedBytes += recoveryBytes; emit(); });
+        [&](const StorageProgress &value) { state = value; AccumulateStorageBytes(state.reclaimedBytes, state.addedBytes, recoveryBytes, recoveryAdded); emit(); });
     report.converted += worked.converted; report.deleted += worked.deleted;
     report.skipped += worked.skipped; report.failed += worked.failed;
-    report.reclaimedBytes += worked.reclaimedBytes;
+    AccumulateStorageBytes(report.reclaimedBytes, report.addedBytes, worked.reclaimedBytes, worked.addedBytes);
     report.cancelled |= worked.cancelled; report.recoveryRequired |= worked.recoveryRequired;
     report.cleanupPending |= worked.cleanupPending;
     for (auto &file : worked.files) if (report.files.size() < 100) report.files.push_back(std::move(file));
     for (const auto &archive : inventory.archives) {
       if (!archive.eligibleCount || report.recoveryRequired || !checkpoint()) continue;
-      const auto beforeFiles = state.filesDone, beforeBytes = report.reclaimedBytes;
+      const auto beforeFiles = state.filesDone, beforeBytes = report.reclaimedBytes, beforeAdded = report.addedBytes;
       StorageArchiveDependencies archiveDependencies{
         .encode = [&](const AssetCandidate &asset, const StoragePolicy &policy, const fs::path &output, Checkpoint check, ProgressCallback progress) {
           const auto missing = missingCodec(asset.operation, caps);
@@ -441,7 +442,7 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
       mergeReport(report, UpdateStorageArchive(archive, request.policy, dependencies_.paths, archiveDependencies, checkpoint,
           [&](const StorageProgress &value) {
             state = value; state.filesDone += beforeFiles; state.filesTotal = inventory.eligibleCount;
-            state.reclaimedBytes += beforeBytes; emit();
+            AccumulateStorageBytes(state.reclaimedBytes, state.addedBytes, beforeBytes, beforeAdded); emit();
           }));
     }
     // The changed subtree union is computed once, not once per asset/group pair.

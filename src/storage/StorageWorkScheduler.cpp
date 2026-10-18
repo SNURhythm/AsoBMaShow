@@ -52,7 +52,7 @@ namespace {
 void merge(StorageReport &target, StorageReport source) {
   target.converted += source.converted; target.deleted += source.deleted;
   target.skipped += source.skipped; target.failed += source.failed;
-  target.reclaimedBytes += source.reclaimedBytes;
+  AccumulateStorageBytes(target.reclaimedBytes, target.addedBytes, source.reclaimedBytes, source.addedBytes);
   target.cancelled |= source.cancelled; target.recoveryRequired |= source.recoveryRequired;
   target.cleanupPending |= source.cleanupPending;
   for (auto &file : source.files) if (target.files.size() < 100) target.files.push_back(std::move(file));
@@ -62,7 +62,7 @@ void merge(StorageReport &target, StorageReport source) {
 }
 StorageReport RunStorageDirectories(const StoragePreflight &inventory, StorageExecutionLimits limits,
     std::function<std::optional<std::uint64_t>()> available, DirectoryWork work, Checkpoint check, ProgressCallback progress) {
-  struct Job { const StorageDirectorySummary *summary; std::vector<std::size_t> children; std::uint64_t done = 0, reclaimed = 0; };
+  struct Job { const StorageDirectorySummary *summary; std::vector<std::size_t> children; std::uint64_t done = 0, reclaimed = 0, added = 0; };
   std::vector<Job> jobs;
   std::map<std::filesystem::path, std::size_t> positions;
   for (const auto &[path, summary] : inventory.directories) if (summary.eligibleCount) {
@@ -106,9 +106,12 @@ StorageReport RunStorageDirectories(const StoragePreflight &inventory, StorageEx
         local = work(*jobs[index].summary, budget, checkpoint, [&](const StorageProgress &value) {
           std::lock_guard lock(mutex);
           auto &job = jobs[index];
-          const auto done = std::max(job.done, value.filesDone), reclaimed = std::max(job.reclaimed, value.reclaimedBytes);
-          state.filesDone += done - job.done; state.reclaimedBytes += reclaimed - job.reclaimed;
-          job.done = done; job.reclaimed = reclaimed; state.phase = value.phase; state.currentPath = value.currentPath;
+          const auto done = std::max(job.done, value.filesDone);
+          state.filesDone += done - job.done;
+          AccumulateStorageBytes(state.reclaimedBytes, state.addedBytes, job.added, job.reclaimed);
+          AccumulateStorageBytes(state.reclaimedBytes, state.addedBytes, value.reclaimedBytes, value.addedBytes);
+          job.done = done; job.reclaimed = value.reclaimedBytes; job.added = value.addedBytes;
+          state.phase = value.phase; state.currentPath = value.currentPath;
           if (progress) progress(state);
         });
       } catch (const std::exception &error) {

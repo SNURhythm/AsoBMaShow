@@ -101,6 +101,40 @@ void reviewedSelectionRetainsPrivateSandboxBoundary() {
   require(fs::is_empty(deps.paths.temporaryRoot) && fs::is_empty(deps.paths.journalRoot),
           "sandboxed transactions settle private temporary files and journals");
 }
+void losslessGrowthOffsetsSavingsAcrossDirectories() {
+  for (const auto finalSize : {155u, 205u}) {
+    TempDirectory temp;
+    for (const auto path : {"charts/a/one.wav", "charts/a/two.wav", "charts/b/one.wav", "charts/b/two.wav"})
+      temp.write(path, std::string(100, 's'));
+    std::vector<std::string> events;
+    auto deps = dependencies(temp, events);
+    deps.transactions = DefaultOptimizerDependencies(deps.paths).transactions;
+    auto now = std::chrono::steady_clock::time_point{};
+    deps.now = [&] { now += std::chrono::milliseconds(101); return now; };
+    deps.encodeAudio = [&](const AssetCandidate &candidate, const StoragePolicy &, const fs::path &output, auto, auto) {
+      const auto size = candidate.source.filename() == "one.wav" ? 40u :
+          (candidate.source.parent_path().filename() == "a" ? 140u : finalSize);
+      std::ofstream(output, std::ios::binary) << std::string(size, 'f');
+      return EncodeResult{FileOutcome::Converted, output, {}};
+    };
+    auto input = request(temp.root / "charts");
+    input.policy.audio = AudioAction::LosslessFlac; input.inventory.policy = input.policy;
+    StorageProgress lastWork;
+    const auto report = StorageOptimizer(deps).Run(std::move(input), {}, [&](const StorageProgress &value) {
+      if (value.phase != StoragePhase::Complete) lastWork = value;
+    });
+    const auto savings = finalSize == 155 ? 25u : 0u;
+    require(report.converted == 4 && report.reclaimedBytes == savings &&
+                report.addedBytes == (finalSize == 205 ? 25u : 0u) && !report.failed,
+            "lossless growth offsets savings within and across directory reports");
+    require(lastWork.filesDone == 4 && lastWork.reclaimedBytes == savings &&
+                lastWork.addedBytes == (finalSize == 205 ? 25u : 0u),
+            "worker progress can decrease reclaimed bytes after larger lossless replacements");
+    require(report.groupDeltas.size() == 1 && report.groupDeltas.front().bytesBefore == 400 &&
+                report.groupDeltas.front().bytesAfter == (finalSize == 155 ? 375u : 425u),
+            "group measurement records the actual net size after lossless growth");
+  }
+}
 void independentDirectoriesUseDistinctOutputs() {
   TempDirectory temp;
   temp.write("charts/a/one.wav", std::string(100, 'a'));
@@ -545,6 +579,7 @@ int main(int argc, char **argv) {
     if (argc > 1 && std::string_view(argv[1]) == "--parallel") { independentDirectoriesUseDistinctOutputs(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--sandbox-boundaries") { reviewedSelectionRetainsPrivateSandboxBoundary(); return 0; }
     reviewedSelectionRetainsPrivateSandboxBoundary();
+    losslessGrowthOffsetsSavingsAcrossDirectories();
     independentDirectoriesUseDistinctOutputs();
     storageLibraryIntegration();
     extractedDownloadUsesWholePackage(); wholeFolderOrchestration(); deletionAndUnavailableGroups(); staleEvidenceNeverBecomesFreshByRescanning();

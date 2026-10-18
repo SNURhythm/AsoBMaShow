@@ -147,7 +147,7 @@ StorageArchive::StorageArchive(const fs::path &path, const fs::path &manifest,
     : identity(identityOf(path, roots)), io(path, roots), db(std::make_unique<Database>(manifest, !resume)) {
   if (resume) {
     Statement q(db->value, "SELECT version,format,comment FROM control WHERE id=1");
-    require(q.step() && (q.integer(0) == 1 || q.integer(0) == 2) && q.integer(1) <= 1, "Unknown archive recovery format");
+    require(q.step() && (q.integer(0) >= 1 && q.integer(0) <= 3) && q.integer(1) <= 1, "Unknown archive recovery format");
     format_ = static_cast<StorageArchiveFormat>(q.integer(1)); comment = q.bytes(2); return;
   }
   db->exec("CREATE TABLE entries(id INTEGER PRIMARY KEY, offset INTEGER NOT NULL UNIQUE, span INTEGER NOT NULL,"

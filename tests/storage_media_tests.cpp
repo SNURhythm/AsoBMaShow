@@ -244,6 +244,67 @@ void audioTests() {
     require(EncodeAudio(candidate(unknown), policy, temp.root / "unknown-info.flac", {}, {}).reason.code ==
         StorageReason::UnsupportedFormat, "unknown INFO fields keep the original audio");
   }
+  // Binary broadcast extensions include fields unavailable through libsndfile,
+  // unknown versions and a nonzero odd-length RIFF pad byte.
+  std::ifstream broadcastInput(tagged, std::ios::binary);
+  std::string broadcastBytes((std::istreambuf_iterator<char>(broadcastInput)), {});
+  std::string broadcastChunk("bext", 4);
+  const std::uint32_t broadcastLength = 65537;
+  for (int i = 0; i < 4; ++i) broadcastChunk.push_back(static_cast<char>(broadcastLength >> (8 * i)));
+  for (std::uint32_t i = 0; i < broadcastLength; ++i)
+    broadcastChunk.push_back(static_cast<char>((i * 37) & 255));
+  broadcastChunk[8 + 346] = '\x7f'; broadcastChunk[8 + 347] = '\x01';
+  broadcastChunk.push_back('P');
+  broadcastBytes.insert(12, broadcastChunk);
+  for (int i = 0; i < 4; ++i) broadcastBytes[4 + i] = static_cast<char>((broadcastBytes.size() - 8) >> (8 * i));
+  temp.write("broadcast.wav", broadcastBytes);
+  const auto broadcast = temp.root / "broadcast.wav";
+  const auto broadcastOutput = temp.root / "broadcast.flac";
+  require(EncodeAudio(candidate(broadcast), policy, broadcastOutput, {}, {}).outcome == FileOutcome::Converted,
+          "broadcast WAV converts without discarding bext");
+  require(readAudio(broadcastOutput, 1, 8192) == taggedPcm, "broadcast WAV retains exact PCM");
+  {
+    std::ifstream encoded(broadcastOutput, std::ios::binary);
+    char magic[4]{}; encoded.read(magic, 4);
+    require(std::string(magic, 4) == "fLaC", "broadcast output is native FLAC");
+    std::vector<std::string> foreign;
+    bool last = false;
+    while (!last) {
+      unsigned char header[4]{};
+      require(bool(encoded.read(reinterpret_cast<char *>(header), 4)), "read FLAC metadata header");
+      last = (header[0] & 128) != 0;
+      const auto size = (header[1] << 16) | (header[2] << 8) | header[3];
+      std::string block(size, '\0');
+      require(bool(encoded.read(block.data(), size)), "read FLAC metadata block");
+      if ((header[0] & 127) == 2 && block.compare(0, 4, "riff") == 0) foreign.push_back(block.substr(4));
+    }
+    std::vector<std::string> expected{broadcastBytes.substr(0, 12)};
+    for (std::size_t offset = 12; offset < broadcastBytes.size();) {
+      std::uint32_t size = 0;
+      for (int i = 0; i < 4; ++i) size |= std::uint32_t(static_cast<unsigned char>(broadcastBytes[offset + 4 + i])) << (8 * i);
+      expected.push_back(broadcastBytes.substr(offset, broadcastBytes.compare(offset, 4, "data") == 0 ? 8 : 8 + size + (size & 1)));
+      offset += 8 + size + (size & 1);
+    }
+    require(foreign == expected, "standard riff APPLICATION blocks retain every chunk, order and padding exactly");
+  }
+  const auto cancelledMetadata = temp.root / "cancelled-broadcast.flac";
+  require(EncodeAudio(candidate(broadcast), policy, cancelledMetadata, [&] {
+    std::error_code error;
+    const auto bytes = std::filesystem::file_size(cancelledMetadata, error);
+    return error || bytes < broadcastChunk.size();
+  }, {}).outcome == FileOutcome::Cancelled && !std::filesystem::exists(cancelledMetadata),
+          "cancel during foreign metadata insertion removes the temporary output");
+  const auto damagedMetadata = temp.root / "damaged-broadcast.flac";
+  require(EncodeAudio(candidate(broadcast), policy, damagedMetadata, {}, [&](const StorageProgress &value) {
+    if (value.phase != StoragePhase::Verify) return;
+    std::ifstream input(damagedMetadata, std::ios::binary);
+    std::string bytes((std::istreambuf_iterator<char>(input)), {});
+    const auto offset = bytes.find("riffbext");
+    require(offset != std::string::npos, "encoded broadcast metadata can be located");
+    std::fstream output(damagedMetadata, std::ios::in | std::ios::out | std::ios::binary);
+    output.seekp(offset + 12); output.put('!');
+  }).reason.code == StorageReason::ValidationFailed && !std::filesystem::exists(damagedMetadata),
+          "metadata decode-back detects corruption independently of unchanged PCM");
   auto loop = temp.root / "loop.wav";
   writeAudio(loop, SF_FORMAT_WAV | SF_FORMAT_PCM_16, 1, samples(8192, 1, 16), true);
   require(EncodeAudio(candidate(loop), policy, temp.root / "loop.flac", {}, {}).reason.code ==
@@ -254,11 +315,13 @@ void audioTests() {
               StorageReason::UnsupportedFormat, "two rear channels are not silently relabeled as front stereo");
   auto tiny = temp.root / "tiny.wav";
   writeAudio(tiny, SF_FORMAT_WAV | SF_FORMAT_PCM_16, 1, {1 << 28});
-  require(EncodeAudio(candidate(tiny), policy, temp.root / "tiny.flac", {}, {}).reason.code ==
-              StorageReason::NotSmaller, "larger output is discarded");
-  require(!std::filesystem::exists(temp.root / "tiny.flac"), "discarded output leaves no temporary file");
+  require(EncodeAudio(candidate(tiny), policy, temp.root / "tiny.flac", {}, {}).outcome ==
+              FileOutcome::Converted, "lossless policy keeps larger FLAC output");
+  require(std::filesystem::file_size(temp.root / "tiny.flac") > std::filesystem::file_size(tiny) &&
+      readAudio(temp.root / "tiny.flac", 1, 1) == std::vector<int>{1 << 28},
+      "larger FLAC remains sample-exact");
   // Set the source's harmless RIFF padding to the encoder's exact container
-  // size. Equality must still discard the result, not report a conversion.
+  // size. Lossless format preference applies to equality as well.
   writeAudio(temp.root / "calibration.flac", SF_FORMAT_FLAC | SF_FORMAT_PCM_16, 1, {1 << 28});
   const auto equalSize = std::filesystem::file_size(temp.root / "calibration.flac");
   const auto oldSize = std::filesystem::file_size(tiny);
@@ -272,8 +335,9 @@ void audioTests() {
     wave.seekp(0, std::ios::end); wave.write("JUNK", 4); put32(equalSize - oldSize - 8);
     wave << std::string(equalSize - oldSize - 8, '\0');
   }
-  require(EncodeAudio(candidate(tiny), policy, temp.root / "equal.flac", {}, {}).reason.code ==
-              StorageReason::NotSmaller, "equal-size output is discarded too");
+  require(EncodeAudio(candidate(tiny), policy, temp.root / "equal.flac", {}, {}).outcome ==
+              FileOutcome::Converted && std::filesystem::file_size(temp.root / "equal.flac") == equalSize,
+          "lossless policy keeps equal-size FLAC output");
 
   auto source = temp.root / "16-2.wav";
   const auto wrongContainer = temp.root / "wrong-container.flac";
@@ -302,6 +366,11 @@ void audioTests() {
               FileOutcome::Converted, "corrupt source retained");
 
   policy.audio = AudioAction::LossyVorbis;
+  require(EncodeAudio(candidate(broadcast), policy, temp.root / "broadcast.ogg", {}, {}).reason.code ==
+      StorageReason::UnsupportedFormat, "Vorbis does not silently discard broadcast metadata");
+  require(EncodeAudio(candidate(temp.root / "tiny.flac"), policy, temp.root / "tiny.ogg", {}, {}).reason.code ==
+      StorageReason::NotSmaller && !std::filesystem::exists(temp.root / "tiny.ogg"),
+      "larger lossy output is still discarded");
   auto truncatedFlac = temp.root / "truncated.flac";
   std::filesystem::copy_file(temp.root / "24-1.flac", truncatedFlac);
   std::filesystem::resize_file(truncatedFlac, std::filesystem::file_size(truncatedFlac) - 30);

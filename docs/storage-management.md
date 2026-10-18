@@ -57,7 +57,11 @@ cannot be preserved are skipped. Vorbis changes sample values; keep a separate
 backup if you may want the originals later.
 
 The output keeps the filename stem with `.flac` or `.ogg`. It replaces the source
-only after full decode validation and only if strictly smaller. Ambiguous
+only after full decode validation. Lossless FLAC is kept even when its size is
+equal or larger, so supported WAV files use one format consistently. Lossy Vorbis
+still requires a smaller output. Broadcast WAV `bext` chunks are preserved byte
+for byte in FLAC RIFF APPLICATION metadata, together with their RIFF envelopes;
+metadata chunks exceeding FLAC's block-size limit remain unsupported. Ambiguous
 same-stem alternatives or existing destinations are skipped, never overwritten.
 
 ## BGA video choices
@@ -135,9 +139,14 @@ an 8 MiB copy batch with at most 128 chunks/records and a private redo file of
 at most 16 MiB accompany one extracted input, encoded output and prepared
 replacement at a time. The media staging budget is 1 GiB, additionally limited by
 free space; an entry must fit a conservative three-times-input estimate plus
-8 MiB. Oversized entries are skipped. A conversion must reduce the stored archive
-record too: a smaller FLAC can still be skipped when the original ZIP compression
-was more compact. Each operation compacts the archive once and rebuilds its metadata.
+8 MiB. Encoded output and its replacement must also fit the staging budget.
+Oversized entries are skipped. Lossy conversions must reduce the stored archive
+record too. Lossless FLAC is retained even if the original ZIP compression was
+more compact. Growing records are appended to the source archive, their original
+slots are reclaimed by the forward compaction pass, and the appended records are
+then compacted into place before rebuilding metadata. This requires temporary
+space in the archive filesystem for the appended records, without a second full
+archive or repeated shifting of the remaining archive.
 Confirmation reads physical layout metadata, not all payloads. There is no separate
 payload pass over deleted entries or unchanged prefixes. Compaction reads only the
 source and destination ranges needed for its bounded forward-copy batches. Completion does not reread the
@@ -197,6 +206,8 @@ checked against available disk space before each file starts.
 
 The result includes converted, deleted, skipped and failed counts. Reclaimed
 bytes are counted only when obsolete originals/backups have actually been removed.
+Growth from lossless replacements offsets savings elsewhere in the same job; a
+net increase reports zero reclaimed bytes rather than unsigned wraparound.
 Common outcomes:
 
 | Outcome | Meaning |

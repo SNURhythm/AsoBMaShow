@@ -427,6 +427,74 @@ void archiveUpdatesBatchWithoutFullCopy() {
   require(metrics.sourceBytesRead < before * 5 / 2, "compaction does not reread the whole archive at completion");
   }
 }
+void growingFlacArchiveRecovery() {
+  for (bool tar : {false, true}) {
+    for (const std::string point : {"", "archive-entry-ready", "archive-growth-synced", "archive-redo",
+        "archive-source-synced", "archive-replacement-appended", "archive-relocations-synced", "archive-truncate-synced"}) {
+      storage_test::TempDirectory temp;
+      const auto path = temp.root / (tar ? "growing.tar" : "growing.zip");
+      writeArchive(path, {{"first.wav", "first"}, {"image.png", std::string(3000, 'i')},
+          {"middle.wav", "middle"}, {"movie.avi", "video"}, {"chart.bms", "#WAV01 first.wav"},
+          {"last.wav", "last"}}, !tar, tar);
+      const auto before = fs::file_size(path);
+      InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+          .policy = {.audio = AudioAction::LosslessFlac, .bga = BgaAction::Delete}, .scanScratchRoot = temp.root / "scan"};
+      const auto review = BuildStoragePreflight(request);
+      const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+      StorageArchiveMetrics metrics;
+      StorageArchiveDependencies deps{.encode = [](const auto &, const auto &, const fs::path &output, auto, auto) {
+        std::ofstream(output, std::ios::binary) << std::string(12000, 'f');
+        return EncodeResult{FileOutcome::Converted, output};
+      }, .faultPoint = [&](std::string_view name) {
+        if (!point.empty() && name == point) throw std::runtime_error("interrupt growing archive");
+      }, .metrics = &metrics};
+      auto report = UpdateStorageArchive(review.archives.front(), request.policy, paths, deps);
+      if (!point.empty()) {
+        require(report.recoveryRequired, "growing archive reaches its durable interruption point");
+        report = RecoverStorageArchives(paths);
+      }
+      if (report.recoveryRequired || report.failed) throw std::runtime_error(point + ": " + report.files.front().reason.detail);
+      const auto files = readArchive(path);
+      require(files.at("first.flac") == std::string(12000, 'f') && files.at("image.png") == std::string(3000, 'i') &&
+          files.at("chart.bms") == "#WAV01 first.wav", "growing FLAC recovery preserves replacement and retained records");
+      if (point.empty() || point == "archive-relocations-synced" || point == "archive-truncate-synced")
+        require(report.converted == 3 && report.deleted == 1 && files.at("middle.flac") == std::string(12000, 'f') &&
+            files.at("last.flac") == std::string(12000, 'f'), "all first, middle and last growing replacements survive compaction");
+      require(fs::is_empty(paths.journalRoot), "growing archive recovery retires its journal");
+      require(report.reclaimedBytes == 0 && fs::file_size(path) > before &&
+          report.addedBytes == fs::file_size(path) - before,
+          "larger archive does not underflow reclaimed bytes");
+      require(metrics.peakScratchBytes < 40000, "growing archives retain one-entry staging");
+    }
+  }
+}
+void growingArchiveMultiBatchRecovery() {
+  const std::string payload(9 * 1024 * 1024 + 17, 'f');
+  for (bool stopDuringRelocation : {false, true}) {
+    storage_test::TempDirectory temp;
+    const auto path = temp.root / "growing.zip";
+    writeArchive(path, {{"chart.bms", "chart"}, {"a.wav", "audio"}});
+    InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+        .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = temp.root / "scan"};
+    const auto review = BuildStoragePreflight(request);
+    const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+    bool appended = false;
+    StorageArchiveDependencies deps{.encode = [&](const auto &, const auto &, const fs::path &output, auto, auto) {
+      std::ofstream(output, std::ios::binary) << payload;
+      return EncodeResult{FileOutcome::Converted, output};
+    }, .faultPoint = [&](std::string_view point) {
+      if (point == "archive-replacement-appended") appended = true;
+      if (point == "archive-source-synced" && appended == stopDuringRelocation)
+        throw std::runtime_error("interrupt within a multi-batch replacement");
+    }};
+    require(UpdateStorageArchive(review.archives.front(), request.policy, paths, deps).recoveryRequired,
+        "interrupt during append or relocation before the entire record completes");
+    const auto recovered = RecoverStorageArchives(paths);
+    require(!recovered.failed && !recovered.recoveryRequired && recovered.converted == 1 &&
+        readArchive(path).at("a.flac") == payload && readArchive(path).at("chart.bms") == "chart",
+        "multi-batch growth resumes with exact replacement and retained contents");
+  }
+}
 void interruptedArchiveWritesRecover() {
   const std::vector<std::pair<std::string, unsigned>> faults = {{"archive-entry-ready", 1}, {"archive-redo", 2},
       {"archive-write", 3}, {"archive-source-synced", 1}, {"archive-cursor", 2}, {"archive-before-truncate", 1}, {"archive-truncate", 1},
@@ -546,19 +614,21 @@ void sparseZip64AndLegacyNames() {
   const auto review = BuildStoragePreflight(request);
   require(review.eligibleCount == 2 && review.archives.size() == 1, "ZIP64 offsets and CP932 names remain eligible");
   StorageArchiveDependencies dependencies{.encode = [](const AssetCandidate &, const StoragePolicy &, const fs::path &output, Checkpoint, ProgressCallback) {
-    std::ofstream(output, std::ios::binary) << std::string(1000, 'f'); return EncodeResult{FileOutcome::Converted, output};
+    std::ofstream(output, std::ios::binary) << std::string(12000, 'f'); return EncodeResult{FileOutcome::Converted, output};
   }, .metrics = &metrics};
   const auto report = UpdateStorageArchive(review.archives.front(), request.policy, MakeStoragePlatformPaths(temp.root / "private", {temp.root}), dependencies);
   require(report.converted == 1 && report.deleted == 1 && !report.recoveryRequired &&
-      fs::file_size(path) > prefixBytes && fs::file_size(path) - prefixBytes < 5000 && metrics.sourceBytesRead < 128 * 1024,
+      fs::file_size(path) > prefixBytes && fs::file_size(path) - prefixBytes < 15000 && metrics.sourceBytesRead < 128 * 1024,
       "ZIP64 compaction preserves a huge sparse prefix without reading or staging the hole");
   StorageArchive archive(path, temp.root / "checked.sqlite", {});
   require(archive.comment == "archive-note", "archive comment survives ZIP64 compaction");
-  const auto first = archive.Next(); require(first && first->name == "日本語.flac" && first->metadata.ends_with("entry-note"),
+  auto first = archive.Next();
+  while (first && first->name != "日本語.flac") first = archive.Next(first->offset);
+  require(first && first->metadata.ends_with("entry-note"),
       "CP932 stem and entry comment survive renaming");
   archive.Extract(*first, temp.root / "decoded.flac", {});
   std::ifstream input(temp.root / "decoded.flac", std::ios::binary); const std::string bytes((std::istreambuf_iterator<char>(input)), {});
-  require(bytes == std::string(1000, 'f'), "rewritten legacy-named payload verifies its CRC");
+  require(bytes == std::string(12000, 'f'), "rewritten legacy-named payload verifies its CRC");
 }
 void realArchiveOptimizerPreservesPlayback() {
   using storage_management::archive_detail::put;
@@ -612,7 +682,10 @@ void archivePolicyBoundaries() {
         [&](const StorageProgress &progress) { if (mode == "cancel" && progress.phase == StoragePhase::Commit) cancel = true; });
     require(!result.recoveryRequired && fs::is_empty(paths.journalRoot), "ordinary skips, cancellation and encoder failures settle the archive");
     const auto files = readArchive(path); require(files.at("chart.bms") == "chart", "policy boundary preserves charts");
-    if (mode == "compressed" || mode == "budget") {
+    if (mode == "compressed") {
+      require(result.converted == 2 && !result.skipped && files.at("a.flac") == std::string(1000, 'f') &&
+          files.at("b.flac") == std::string(1000, 'f'), "lossless FLAC replaces even better-compressed WAV records");
+    } else if (mode == "budget") {
       require(result.converted == 0 && result.skipped == 2 && ReadFileIdentity(path, error) == before,
           "not-smaller and insufficient-space batches do not modify the archive");
       if (mode == "budget") require(calls == 0, "staging budget is enforced before extraction or encoding");
@@ -806,7 +879,7 @@ void storageArchiveTests(const char *executable) {
       {"descriptor-boundaries", archiveDescriptorBoundaries},
       {"physical-savings", archiveSavingsUsePhysicalSize},
       {"batched-compaction", archiveCompactionBatchesSmallRecords},
-      {"update", archiveUpdatesBatchWithoutFullCopy}, {"recovery", interruptedArchiveWritesRecover},
+      {"growth-batches", growingArchiveMultiBatchRecovery}, {"growth", growingFlacArchiveRecovery}, {"update", archiveUpdatesBatchWithoutFullCopy}, {"recovery", interruptedArchiveWritesRecover},
       {"zip64", sparseZip64AndLegacyNames}, {"invalid-encoding", malformedLegacyNamesAreRejected},
       {"playback", realArchiveOptimizerPreservesPlayback},
       {"boundaries", archivePolicyBoundaries}, {"rejections", unsafeAndStaleArchivesAreRejected},

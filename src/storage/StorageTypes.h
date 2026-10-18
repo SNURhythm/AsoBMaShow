@@ -12,6 +12,21 @@
 
 namespace storage_management {
 
+// A net size change has only one nonzero side. Keep growth while combining
+// results so a larger lossless output offsets savings from other files.
+inline void AccumulateStorageBytes(std::uint64_t &reclaimed, std::uint64_t &added,
+                                   std::uint64_t reduction, std::uint64_t growth) {
+  if (reduction >= growth) {
+    const auto delta = reduction - growth;
+    if (delta >= added) { reclaimed += delta - added; added = 0; }
+    else added -= delta;
+  } else {
+    const auto delta = growth - reduction;
+    if (delta >= reclaimed) { added += delta - reclaimed; reclaimed = 0; }
+    else reclaimed -= delta;
+  }
+}
+
 struct StorageExecutionLimits {
   std::size_t audioWorkers = 1;
   // Video remains one codec job with the existing fixed FFmpeg thread count.
@@ -29,6 +44,7 @@ struct StorageProgress {
   std::uint64_t filesDone = 0;
   std::uint64_t filesTotal = 0;
   std::uint64_t reclaimedBytes = 0;
+  std::uint64_t addedBytes = 0;
   std::uint64_t archiveBytesDone = 0, archiveBytesTotal = 0;
 };
 using ProgressCallback = std::function<void(const StorageProgress &)>;
@@ -64,6 +80,7 @@ struct FileResult {
   std::optional<std::uint64_t> bytesBefore;
   std::optional<std::uint64_t> bytesAfter;
   std::uint64_t reclaimedBytes = 0;
+  std::uint64_t addedBytes = 0;
   // Exact committed changes, including a known retained recovery backup.
   std::vector<StorageFileChange> filesystemChanges;
 };
@@ -85,6 +102,7 @@ struct StorageReport {
   std::uint64_t skipped = 0;
   std::uint64_t failed = 0;
   std::uint64_t reclaimedBytes = 0;
+  std::uint64_t addedBytes = 0;
   bool cancelled = false;
   bool recoveryRequired = false;
   bool cleanupPending = false;

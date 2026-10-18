@@ -97,7 +97,8 @@ public:
   bool &started;
   struct PendingRecord {
     std::uint64_t id, output, cursor = 0;
-    bool complete = false, deleted = false;
+    unsigned complete = 0;
+    bool deleted = false;
   };
   std::vector<Chunk> pendingChunks;
   std::vector<PendingRecord> pendingRecords;
@@ -123,6 +124,7 @@ public:
     archive.io.CheckPath();
     Statement q(db.value, "UPDATE control SET source_stamp=? WHERE id=1");
     q.text(1, archive.io.ChangeToken()); q.step();
+    if (Value("version") >= 3) Set("source_size", archive.io.Identity().bytes);
   }
   void Fault(std::string_view name) { if (deps.faultPoint) deps.faultPoint(name); }
   void InsertChunk(std::uint64_t entry, std::uint64_t part, std::uint64_t source, std::string_view bytes, std::uint64_t kind, std::uint64_t destination = 0) {
@@ -133,7 +135,7 @@ public:
   void Initialize(Checkpoint check) {
     db.exec("CREATE TABLE control(id INTEGER PRIMARY KEY CHECK(id=1),version INTEGER,path TEXT,device INTEGER,file_id INTEGER,"
         "original_size INTEGER,format INTEGER,comment BLOB,ready INTEGER DEFAULT 0,started INTEGER DEFAULT 0,"
-        "phase INTEGER DEFAULT 0,cursor INTEGER DEFAULT 0,stage_entry INTEGER DEFAULT 0,final_size INTEGER DEFAULT 0,source_stamp TEXT);"
+        "phase INTEGER DEFAULT 0,cursor INTEGER DEFAULT 0,stage_entry INTEGER DEFAULT 0,final_size INTEGER DEFAULT 0,source_stamp TEXT,working_size INTEGER,source_size INTEGER);"
         "CREATE TABLE chunks(id INTEGER PRIMARY KEY,entry_id INTEGER,part INTEGER,source INTEGER,length INTEGER,hash TEXT,"
         "kind INTEGER,destination INTEGER,done INTEGER,data BLOB,UNIQUE(entry_id,part));"
         "CREATE INDEX chunks_pending ON chunks(entry_id,done,part);"
@@ -144,11 +146,14 @@ public:
         "ALTER TABLE entries ADD COLUMN original_bytes INTEGER;"
         "ALTER TABLE entries ADD COLUMN original_span INTEGER;"
         "ALTER TABLE entries ADD COLUMN original_name TEXT;"
+        "ALTER TABLE entries ADD COLUMN relocated_offset INTEGER DEFAULT 0;"
+        "CREATE INDEX entries_relocated ON entries(offset) WHERE action=3;"
         "UPDATE entries SET original_bytes=bytes,original_span=span,original_name=name;");
     SqlTransaction transaction(db);
-    Statement state(db.value, "INSERT INTO control(id,version,path,device,file_id,original_size,format,comment) VALUES(1,2,?,?,?,?,?,?)");
+    Statement state(db.value, "INSERT INTO control(id,version,path,device,file_id,original_size,format,comment) VALUES(1,3,?,?,?,?,?,?)");
     state.text(1, pathText(archive.io.path)); state.bind(2, archive.identity.device); state.bind(3, archive.identity.fileId);
     state.bind(4, archive.identity.bytes); state.bind(5, static_cast<unsigned>(archive.Format())); state.bind(6, archive.comment); state.step();
+    Set("working_size", archive.identity.bytes);
     // Preserve executable stubs and other leading ZIP bytes in place, including
     // sparse prefixes, without scanning or staging that range.
     Statement first(db.value, "SELECT offset FROM entries ORDER BY offset LIMIT 1");
@@ -173,7 +178,7 @@ public:
   std::string ReadChunk(const Chunk &chunk) {
     std::string bytes;
     if (chunk.kind == 0) {
-      require(plus(chunk.source, chunk.length) <= Value("original_size"), "Invalid original archive extent"); bytes = archive.io.Read(chunk.source, chunk.length);
+      require(plus(chunk.source, chunk.length) <= Capacity(), "Invalid original archive extent"); bytes = archive.io.Read(chunk.source, chunk.length);
     } else if (chunk.kind == 1) {
       StorageArchiveIO stage(journal / "replacement.bin", accessRoots, false);
       require(plus(chunk.source, chunk.length) <= stage.Identity().bytes, "Truncated archive replacement"); bytes = stage.Read(chunk.source, chunk.length);
@@ -231,7 +236,8 @@ public:
     }
     const auto identity = archive.io.Identity();
     require(identity.device == Value("device") && identity.fileId == Value("file_id") &&
-        (identity.bytes == Value("original_size") || (Value("phase") >= 2 && identity.bytes == Value("final_size"))),
+        (Value("version") >= 3 ? identity.bytes == Value("source_size") :
+         (identity.bytes == Value("original_size") || (Value("phase") >= 2 && identity.bytes == Value("final_size")))),
         "Archive identity or size changed since the interrupted update", StorageReason::StaleInput);
     Statement stamp(db.value, "SELECT source_stamp FROM control WHERE id=1");
     require(stamp.step() && stamp.bytes(0) == archive.io.ChangeToken(),
@@ -276,6 +282,16 @@ public:
     for (const auto &row : pending) { done.reset(); done.bind(1, row.chunk); done.step(); }
     db.exec("DELETE FROM redo"); CaptureSourceStamp(); transaction.Commit();
   }
+  std::uint64_t Capacity() const { return Value(Value("version") >= 3 ? "working_size" : "original_size"); }
+  void EnsureCapacity(std::uint64_t end) {
+    require(end <= Capacity(), "Archive write exceeds its reserved extent");
+    const auto bytes = archive.io.Identity().bytes;
+    if (end <= bytes) return;
+    require(started && Value("version") >= 3, "Archive growth was not authorized");
+    archive.io.Truncate(end); archive.io.Sync();
+    SqlTransaction transaction(db); CaptureSourceStamp(); transaction.Commit();
+    Fault("archive-growth-synced");
+  }
   void Start() { Set("started", 1); started = true; }
   void ValidateEntry(std::uint64_t entry) {
     archive.io.CheckPath();
@@ -307,6 +323,9 @@ public:
       if (chunk.hash.empty()) chunk.hash = file_checksum::sha256(payloads.back());
     }
     bool writes = false;
+    std::uint64_t writeEnd = 0;
+    for (const auto &chunk : pendingChunks) writeEnd = std::max(writeEnd, plus(chunk.destination, chunk.length));
+    EnsureCapacity(writeEnd);
     struct RedoRange { std::uint64_t offset = 0; std::string beforeHash; };
     std::vector<RedoRange> redoRanges(pendingChunks.size());
     const auto redoPath = journal / "redo.bin";
@@ -314,7 +333,7 @@ public:
     std::uint64_t redoOffset = 0;
     for (std::size_t i = 0; i < pendingChunks.size(); ++i) {
       const auto &chunk = pendingChunks[i];
-      require(plus(chunk.destination, chunk.length) <= Value("original_size") &&
+      require(plus(chunk.destination, chunk.length) <= Capacity() &&
           (chunk.kind != 0 || chunk.destination <= chunk.source), "Archive compaction would overwrite unread data");
       if (chunk.kind == 0 && chunk.destination == chunk.source) continue;
       require(started || pendingDeletes, "Archive write was not authorized by durable state");
@@ -368,10 +387,10 @@ public:
       SqlTransaction transaction(db);
       Statement done(db.value, "UPDATE chunks SET done=1 WHERE id=?");
       for (const auto &chunk : pendingChunks) { done.reset(); done.bind(1, chunk.id); done.step(); }
-      Statement complete(db.value, "UPDATE entries SET complete=1 WHERE id=?");
+      Statement complete(db.value, "UPDATE entries SET complete=? WHERE id=?");
       Statement retire(db.value, "DELETE FROM chunks WHERE entry_id=?");
       for (const auto &row : pendingRecords) if (row.complete) {
-        complete.reset(); complete.bind(1, row.id); complete.step();
+        complete.reset(); complete.bind(1, row.complete); complete.bind(2, row.id); complete.step();
         retire.reset(); retire.bind(1, row.id); retire.step(); Set("cursor", row.cursor);
       }
       db.exec("DELETE FROM redo"); CaptureSourceStamp(); transaction.Commit();
@@ -382,17 +401,17 @@ public:
     progress.archiveBytesDone = std::max(progress.archiveBytesDone, pendingSourceEnd);
     if (copyProgress) copyProgress(progress);
   }
-  void CopyRecord(const StorageArchiveEntry &entry, bool deleted = false) {
+  void CopyRecord(const StorageArchiveEntry &entry, bool deleted = false, bool relocated = false) {
     Statement state(db.value, "SELECT action,original_span FROM entries WHERE id=?"); state.bind(1, entry.id); require(state.step(), "Missing archive entry state");
-    const auto action = deleted ? 2 : state.integer(0), destination = (started || pendingDeletes || deleted) ? copyCursor.value_or(Value("cursor")) : entry.offset;
+    const auto action = deleted ? 2 : relocated ? 0 : state.integer(0), destination = (started || pendingDeletes || deleted) ? copyCursor.value_or(Value("cursor")) : entry.offset;
     require(destination <= entry.offset, "Archive destination is beyond unread source");
     const auto record = [&] {
       if (!pendingRecords.empty() && pendingRecords.back().id == entry.id) return;
       if (pendingRecords.size() == batchRecords) Flush();
-      pendingRecords.push_back({entry.id, destination, 0, false, deleted});
+      pendingRecords.push_back({entry.id, destination, 0, 0, deleted});
       pendingDeletes |= deleted;
     };
-    if (action != 2 && (action != 0 || destination != entry.offset)) {
+    if (action != 2 && action != 3 && (action != 0 || destination != entry.offset)) {
       Statement existing(db.value, "SELECT id,source,length,kind,destination,hash,data,done FROM chunks WHERE entry_id=? AND part=?");
       for (std::uint64_t part = 0, position = 0; position < entry.span; ++part) {
         const auto length = std::min(chunkSize, entry.span - position);
@@ -408,12 +427,39 @@ public:
         existing.reset();
         if (pendingBytes + length > batchBytes || pendingChunks.size() == batchRecords) Flush();
         record(); pendingChunks.push_back(std::move(chunk)); pendingBytes += length; position += length;
-        pendingSourceEnd = entry.offset + position;
+        pendingSourceEnd = relocated ? Value("original_size") : entry.offset + position;
       }
     }
-    record(); copyCursor = action == 2 ? destination : plus(destination, entry.span);
-    pendingRecords.back().cursor = *copyCursor; pendingRecords.back().complete = true;
-    pendingSourceEnd = plus(entry.offset, state.integer(1));
+    record(); copyCursor = (action == 2 || action == 3) ? destination : plus(destination, entry.span);
+    pendingRecords.back().cursor = *copyCursor; pendingRecords.back().complete = relocated ? 2 : 1;
+    pendingSourceEnd = relocated ? Value("original_size") : plus(entry.offset, state.integer(1));
+  }
+  // Growing records cannot overwrite the next unread record. Append each once,
+  // reclaim its original slot in the forward pass, then compact the appended
+  // records in their source order. Scratch remains bounded to one media entry.
+  void AppendReplacement(const StorageArchiveEntry &entry) {
+    Statement state(db.value, "SELECT action FROM entries WHERE id=?");
+    state.bind(1, entry.id); require(state.step(), "Missing archive append state");
+    if (state.integer(0) != 3) return;
+    Flush();
+    std::uint64_t previous = 0;
+    while (auto chunk = NextChunk(entry.id, previous)) { previous = chunk->id; WriteChunk(*chunk); }
+    Flush(); Fault("archive-replacement-appended");
+  }
+  void Relocations() {
+    if (Value("version") < 3) return;
+    std::optional<std::uint64_t> cursor;
+    Statement next(db.value, "SELECT id,offset,span,data_offset,packed,bytes,crc,method,flags,directory,name,raw_name,metadata "
+        "FROM entries INDEXED BY entries_relocated WHERE action=3 AND complete<2 AND offset>? ORDER BY offset LIMIT 1");
+    Statement state(db.value, "SELECT action,complete,relocated_offset FROM entries WHERE id=?");
+    while (auto entry = nextArchiveEntry(next, cursor)) {
+      cursor = entry->offset; state.reset(); state.bind(1, entry->id); state.step();
+      const auto action = state.integer(0), complete = state.integer(1), offset = state.integer(2); state.reset();
+      if (action != 3 || complete == 2) continue;
+      require(complete == 1, "Archive replacement append is incomplete");
+      entry->offset = offset; CopyRecord(*entry, false, true);
+    }
+    Flush(); Fault("archive-relocations-synced");
   }
   void Entries(const StorageArchiveSummary *summary, const StoragePolicy &policy, Checkpoint check, ProgressCallback notify) {
     copyProgress = notify;
@@ -449,7 +495,8 @@ public:
         }
       }
       progress.currentPath = archive.io.path / fs::u8path(entry->name);
-      progress.phase = StoragePhase::Commit; if (notify) notify(progress); CopyRecord(*entry, deleted);
+      progress.phase = StoragePhase::Commit; if (notify) notify(progress);
+      AppendReplacement(*entry); CopyRecord(*entry, deleted);
     }
     Flush(); RemoveStaging();
   }
@@ -482,11 +529,14 @@ public:
       put(end, 12, std::min<std::uint64_t>(centralSize, 0xffffffff), 4); put(end, 16, std::min<std::uint64_t>(start, 0xffffffff), 4); put(end, 20, archive.comment.size(), 2);
       append(end); append(archive.comment);
     }
-    flush(); require(destination < Value("original_size"), "Archive rewrite does not reclaim physical space"); Set("final_size", destination); Set("phase", 1); transaction.Commit();
+    flush();
+    if (Value("version") >= 3) Set("working_size", std::max(Capacity(), destination));
+    else require(destination < Value("original_size"), "Archive rewrite does not reclaim physical space");
+    Set("final_size", destination); Set("phase", 1); transaction.Commit();
   }
   void Finish() {
     if (!started) return;
-    if (Value("phase") == 0) Trailer();
+    if (Value("phase") == 0) { Relocations(); Trailer(); }
     if (Value("phase") == 1) {
       std::uint64_t previous = 0;
       while (auto chunk = NextChunk(0, previous)) { previous = chunk->id; WriteChunk(*chunk); }
@@ -509,7 +559,9 @@ public:
           .destination = deleted ? fs::path{} : archive.io.path / fs::u8path(q.bytes(1)), .outcome = deleted ? FileOutcome::Deleted : FileOutcome::Converted,
           .bytesBefore = q.integer(2), .bytesAfter = deleted ? 0 : q.integer(3)});
     }
-    report.reclaimedBytes = Value("original_size") - Value("final_size"); report.changedRoots.push_back(archive.io.path); return report;
+    const auto before = Value("original_size"), after = Value("final_size");
+    report.reclaimedBytes = before > after ? before - after : 0;
+    report.addedBytes = after > before ? after - before : 0; report.changedRoots.push_back(archive.io.path); return report;
   }
 };
 void Update::Prepare(StorageArchiveEntry &entry, const AssetCandidate &candidate, const StoragePolicy &policy, Checkpoint check, ProgressCallback notify) {
@@ -527,10 +579,11 @@ void Update::Prepare(StorageArchiveEntry &entry, const AssetCandidate &candidate
   std::string error; const auto identity = ReadFileIdentity(input, error, accessRoots);
   if (!identity) throw StorageArchiveError(StorageReason::IoError, "Cannot identify staged archive media: " + error);
   staged.identity = *identity;
+  const auto outputLimit = (std::min(deps.scratchLimit, *available) - entry.bytes - stagingReserve) / 2;
   bool tooLarge = false;
   auto checkpoint = [&] {
     if (check && !check()) return false;
-    std::error_code ec; const auto size = fs::file_size(output, ec); if (!ec && size > entry.bytes + 1024 * 1024) tooLarge = true; return !tooLarge;
+    std::error_code ec; const auto size = fs::file_size(output, ec); if (!ec && size > outputLimit) tooLarge = true; return !tooLarge;
   };
   require(static_cast<bool>(deps.encode), "Archive media encoder is unavailable", StorageReason::CodecUnavailable);
   EncodeResult encoded;
@@ -538,11 +591,15 @@ void Update::Prepare(StorageArchiveEntry &entry, const AssetCandidate &candidate
   catch (const std::exception &error) {
     RecordSkip(entry, FileOutcome::Failed, {StorageReason::IoError, error.what()}); RemoveStaging(); return;
   }
-  if (tooLarge) { RecordSkip(entry, FileOutcome::Skipped, {StorageReason::NotSmaller, "Encoded archive media exceeds the staging limit"}); RemoveStaging(); return; }
+  if (tooLarge) { RecordSkip(entry, FileOutcome::Skipped, {StorageReason::InsufficientSpace, "Encoded archive media exceeds the staging limit"}); RemoveStaging(); return; }
   if (encoded.outcome != FileOutcome::Converted) { RecordSkip(entry, encoded.outcome, encoded.reason); RemoveStaging(); return; }
   require(encoded.outputPath == output, "Archive encoder returned an unowned output", StorageReason::ValidationFailed);
   const auto encodedIdentity = ReadFileIdentity(output, error, accessRoots); require(encodedIdentity.has_value(), "Unsafe archive encoder output", StorageReason::ValidationFailed);
-  if (encodedIdentity->bytes >= entry.bytes) { RecordSkip(entry, FileOutcome::Skipped, {StorageReason::NotSmaller, "Encoded archive media is not smaller"}); RemoveStaging(); return; }
+  require(encodedIdentity->bytes != 0, "Empty archive encoder output", StorageReason::ValidationFailed);
+  if (encodedIdentity->bytes > outputLimit) {
+    RecordSkip(entry, FileOutcome::Skipped, {StorageReason::InsufficientSpace, "Encoded archive media exceeds the staging limit"}); RemoveStaging(); return;
+  }
+  if (candidate.operation != AssetOperation::LosslessFlac && encodedIdentity->bytes >= entry.bytes) { RecordSkip(entry, FileOutcome::Skipped, {StorageReason::NotSmaller, "Encoded archive media is not smaller"}); RemoveStaging(); return; }
   active(check); StorageArchiveIO encodedFile(output, accessRoots, false); auto crc = crc32(0, nullptr, 0);
   for (std::uint64_t position = 0; position < encodedIdentity->bytes;) {
     active(check); auto bytes = encodedFile.Read(position, std::min(chunkSize, encodedIdentity->bytes - position));
@@ -551,10 +608,12 @@ void Update::Prepare(StorageArchiveEntry &entry, const AssetCandidate &candidate
   auto replacement = entry; const auto header = archive.Replacement(replacement, candidate.destination.extension().string(), encodedIdentity->bytes, crc);
   std::uint64_t extra = 0;
   if (archive.Format() == StorageArchiveFormat::Zip) { const auto central = archive.Central(replacement, entry.offset); if (central.size() > entry.metadata.size()) extra = central.size() - entry.metadata.size(); }
-  if (plus(replacement.span, extra) >= entry.span) {
+  if (candidate.operation != AssetOperation::LosslessFlac && plus(replacement.span, extra) >= entry.span) {
     // CopyRecord removes staging after encodedFile has closed on every platform.
     RecordSkip(entry, FileOutcome::Skipped, {StorageReason::NotSmaller, "Encoded media does not reduce its compressed archive record"}); return;
   }
+  const bool relocate = replacement.span > entry.span;
+  const auto appendOffset = Capacity();
   const auto prepared = journal / "replacement.bin"; Output file(prepared); file.Write(header);
   for (std::uint64_t position = 0; position < encodedIdentity->bytes;) {
     active(check); const auto bytes = encodedFile.Read(position, std::min(chunkSize, encodedIdentity->bytes - position)); file.Write(bytes); position += bytes.size();
@@ -562,17 +621,25 @@ void Update::Prepare(StorageArchiveEntry &entry, const AssetCandidate &candidate
   const auto padding = replacement.span - header.size() - encodedIdentity->bytes; require(padding < 512, "Invalid archive replacement padding");
   file.Write(std::string(padding, '\0')); file.Close(); syncFile(prepared); syncDirectory(journal);
   require(ReadFileIdentity(output, error, accessRoots) == encodedIdentity, "Encoded archive media changed before installation", StorageReason::StaleInput);
+  if (relocate) {
+    const auto free = deps.availableSpace ? deps.availableSpace(archive.io.path) :
+        std::optional<std::uint64_t>(fs::space(archive.io.path).available);
+    if (!free || plus(replacement.span, stagingReserve) > *free) {
+      RecordSkip(entry, FileOutcome::Skipped, {StorageReason::InsufficientSpace, "Insufficient space to append FLAC archive entry"}); return;
+    }
+  }
   ValidateEntry(entry.id);
   if (deps.metrics) deps.metrics->peakScratchBytes = std::max(deps.metrics->peakScratchBytes, plus(entry.bytes, plus(encodedIdentity->bytes, replacement.span)));
   {
     StorageArchiveIO stage(prepared, accessRoots, false); SqlTransaction transaction(db);
     Statement remove(db.value, "DELETE FROM chunks WHERE entry_id=?"); remove.bind(1, entry.id); remove.step();
     for (std::uint64_t part = 0, position = 0; position < replacement.span; ++part) {
-      const auto bytes = stage.Read(position, std::min(chunkSize, replacement.span - position)); InsertChunk(entry.id, part, position, bytes, 1); position += bytes.size();
+      const auto bytes = stage.Read(position, std::min(chunkSize, replacement.span - position)); InsertChunk(entry.id, part, position, bytes, 1, relocate ? plus(appendOffset, position) : 0); position += bytes.size();
     }
-    Statement q(db.value, "UPDATE entries SET span=?,packed=?,bytes=?,crc=?,method=?,flags=?,name=?,raw_name=?,metadata=?,action=1 WHERE id=?");
+    Statement q(db.value, "UPDATE entries SET span=?,packed=?,bytes=?,crc=?,method=?,flags=?,name=?,raw_name=?,metadata=?,action=?,relocated_offset=? WHERE id=?");
     q.bind(1, replacement.span); q.bind(2, replacement.packed); q.bind(3, replacement.bytes); q.bind(4, replacement.crc);
-    q.bind(5, replacement.method); q.bind(6, replacement.flags); q.text(7, replacement.name); q.bind(8, replacement.rawName); q.bind(9, replacement.metadata); q.bind(10, entry.id); q.step();
+    q.bind(5, replacement.method); q.bind(6, replacement.flags); q.text(7, replacement.name); q.bind(8, replacement.rawName); q.bind(9, replacement.metadata); q.bind(10, relocate ? 3 : 1); q.bind(11, relocate ? appendOffset : 0); q.bind(12, entry.id); q.step();
+    if (relocate) Set("working_size", plus(appendOffset, replacement.span));
     Set("stage_entry", entry.id); Start(); transaction.Commit();
   }
   entry = std::move(replacement); Fault("archive-entry-ready");
@@ -641,12 +708,12 @@ StorageReport RecoverStorageArchives(const StoragePlatformPaths &paths, Checkpoi
         require(ReadFileIdentity(journal / "manifest.sqlite", pathError, paths.pathAccessRoots).has_value(), "Unsafe archive manifest", StorageReason::RecoveryRequired); bool ready = false;
         {
           Database db(journal / "manifest.sqlite", false); Statement q(db.value, "SELECT version,path,ready,started FROM control WHERE id=1");
-          require(q.step() && (q.integer(0) == 1 || q.integer(0) == 2), "Unknown archive recovery version"); source = fs::u8path(q.bytes(1)); ready = q.integer(2); started = q.integer(3);
+          require(q.step() && (q.integer(0) >= 1 && q.integer(0) <= 3), "Unknown archive recovery version"); source = fs::u8path(q.bytes(1)); ready = q.integer(2); started = q.integer(3);
         }
         if (ready && started) {
           authority(source, paths); StorageArchive archive(source, journal / "manifest.sqlite", paths.pathAccessRoots, {}, true);
           Update update(archive, journal, deps, started, paths.pathAccessRoots); update.ValidateRecovery(); update.Entries(nullptr, {}, {}, {}); update.Finish();
-          auto report = update.Result(); result.converted += report.converted; result.deleted += report.deleted; result.reclaimedBytes += report.reclaimedBytes;
+          auto report = update.Result(); result.converted += report.converted; result.deleted += report.deleted; AccumulateStorageBytes(result.reclaimedBytes, result.addedBytes, report.reclaimedBytes, report.addedBytes);
           for (auto &file : report.files) if (result.files.size() < 100) result.files.push_back(std::move(file)); result.changedRoots.push_back(source);
         }
         cleanup(journal, deps);
