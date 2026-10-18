@@ -86,6 +86,19 @@ int main() {
   selection.SetGroups({a, b, c, loose});
   selection.Toggle(a);
   auto rows = MakeStorageArchiveRows({a, b, loose, c}, archives, selection);
+  assert(rows.size() == 3); // Archives start folded; loose songs remain visible.
+  assert(rows[0].archiveHeader && !rows[0].expanded && rows[0].selectedCount == 1);
+  assert(rows[1].archivePath == "/two/pack.zip" && !rows[1].expanded);
+  assert(rows[2].track.groupId == loose.groupId);
+  std::set<std::filesystem::path> expandedArchives{"/one/pack.zip"};
+  rows = MakeStorageArchiveRows({a, b, loose, c}, archives, selection, expandedArchives);
+  assert(rows.size() == 5 && rows[0].expanded && !rows[3].expanded);
+  assert(rows[1].track.groupId == a.groupId && rows[2].track.groupId == c.groupId);
+  expandedArchives.clear();
+  rows = MakeStorageArchiveRows({a, b, loose, c}, archives, selection, expandedArchives);
+  assert(rows.size() == 3 && selection.Count() == 1 && selection.Contains(a.groupId));
+  expandedArchives = {"/one/pack.zip", "/two/pack.zip"};
+  rows = MakeStorageArchiveRows({a, b, loose, c}, archives, selection, expandedArchives);
   assert(rows.size() == 6);
   assert(rows[0].archiveHeader && rows[0].archivePath == "/one/pack.zip");
   assert(rows[0].songCount == 2 && rows[0].selectedCount == 1);
@@ -98,9 +111,16 @@ int main() {
   // Filtered batch actions never add hidden songs or count chart variants twice.
   auto child2 = child;
   child2.trackId = "chart-a-2";
-  rows = MakeStorageArchiveRows({child, child2, b}, archives, selection);
+  rows = MakeStorageArchiveRows({child, child2, b}, archives, selection, expandedArchives);
   assert(rows[0].songCount == 2 && rows[0].visibleCount == 1 && rows[0].visibleSelectedCount == 1);
-  assert(rows[1].IndentLevel() == 2 && rows[2].IndentLevel() == 2);
+  assert(rows[1].IndentLevel() == 1 && rows[2].IndentLevel() == 2); // Keep the song leader aligned.
+  rows = MakeStorageArchiveRows({child, child2, b}, archives, selection);
+  assert(rows.size() == 2 && rows[0].selectedCount == 1 && rows[0].visibleCount == 1);
+  rows = MakeStorageArchiveRows({child, child2, b}, archives, selection, expandedArchives);
+  assert(rows.size() == 5 && rows[1].track.trackId == child.trackId);
+  assert(rows[1].IndentLevel() == 1 && rows[2].IndentLevel() == 2);
+  rows = MakeStorageArchiveRows({child2}, archives, selection, expandedArchives);
+  assert(rows.size() == 2 && rows[1].IndentLevel() == 1); // First matching chart leads after filtering.
   ToggleStorageArchiveSelection("/one/pack.zip", {child, child2, b}, archives, selection);
   assert(selection.Count() == 0);
   ToggleStorageArchiveSelection("/one/pack.zip", {child, child2, b}, archives, selection);
@@ -116,6 +136,8 @@ int main() {
   assert(selection.Count() == 1 && selection.Contains(c.groupId)); // Hidden selection survives.
   assert(MakeStorageArchiveRows({}, archives, selection).empty());
   loose.expandedChart = true;
-  rows = MakeStorageArchiveRows({loose}, archives, selection);
-  assert(rows.size() == 1 && rows[0].IndentLevel() == 1);
+  auto looseChild = loose;
+  looseChild.trackId = "local-other-chart";
+  rows = MakeStorageArchiveRows({loose, looseChild}, archives, selection);
+  assert(rows.size() == 2 && rows[0].IndentLevel() == 0 && rows[1].IndentLevel() == 1);
 }

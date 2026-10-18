@@ -55,6 +55,9 @@ public:
     header->setFlex(1)->setMinWidth(0)->setPadding(Edge::All, 8)->setGap(8)
         ->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)
         ->setThemedBackgroundColor(app_theme::insetSurface);
+    disclosure = text("", 22);
+    disclosure->setWidth(24)->setHeight(28)->setFlexShrink(0);
+    header->addView(disclosure);
     auto *labels = new View();
     labels->setFlex(1)->setMinWidth(0)->setFlexDirection(FlexDirection::Column)->setGap(4);
     title = new TextView(app_theme::boldFont, 19);
@@ -68,7 +71,7 @@ public:
     detail->setOverflow(TextView::TextOverflow::Marquee);
     labels->addView(detail);
     header->addView(labels);
-    select = button("storage.ui.archive_select_shown", [] {}, &selectText, 17);
+    select = button("storage.ui.archive_select_matching", [] {}, &selectText, 17);
     select->setWidth(136)->setMinWidth(136)->setFlexShrink(0);
     header->addView(select);
     addView(header);
@@ -83,7 +86,7 @@ public:
   }
   MusicTrackRowView *song;
   View *header;
-  TextView *title, *detail, *selectText;
+  TextView *disclosure, *title, *detail, *selectText;
   Button *select;
 };
 std::string bytes(std::uint64_t value) {
@@ -205,14 +208,15 @@ void StorageManagementScene::BuildView() {
     auto *row = static_cast<StorageListRowView *>(view);
     row->ShowHeader(item.archiveHeader, item.IndentLevel());
     if (item.archiveHeader) {
+      row->disclosure->setText(item.expanded ? "▾" : "▸");
       row->title->setText(i18n::format("storage.ui.archive_group", {
           {"name", fspath_to_utf8(item.archivePath.filename())}}));
       row->detail->setText(i18n::format("storage.ui.archive_selection", {
           {"selected", std::to_string(item.selectedCount)}, {"total", std::to_string(item.songCount)},
-          {"shown", std::to_string(item.visibleCount)}}) + " · " + fspath_to_utf8(item.archivePath.parent_path()));
-      const bool allShown = item.visibleSelectedCount == item.visibleCount;
-      row->selectText->setLocalizedText(i18n::message(allShown
-          ? "storage.ui.archive_clear_shown" : "storage.ui.archive_select_shown"));
+          {"matching", std::to_string(item.visibleCount)}}) + " · " + fspath_to_utf8(item.archivePath.parent_path()));
+      const bool allMatching = item.visibleSelectedCount == item.visibleCount;
+      row->selectText->setLocalizedText(i18n::message(allMatching
+          ? "storage.ui.archive_clear_matching" : "storage.ui.archive_select_matching"));
       row->select->setOnClickListener([this, archive = item.archivePath] {
         if (shownTask_.running) return;
         ToggleStorageArchiveSelection(archive, model_.Rows(), groupArchives_, selection_);
@@ -227,7 +231,9 @@ void StorageManagementScene::BuildView() {
         trackDetail(track) + " · " + MeasurementText(track));
   };
   list_->onSelectedByPointer = [this](const StorageArchiveRow &item, int) {
-    if (!item.archiveHeader) ToggleExpanded(item.track);
+    if (!item.archiveHeader) { ToggleExpanded(item.track); return; }
+    if (!expandedArchives_.erase(item.archivePath)) expandedArchives_.insert(item.archivePath);
+    RefreshRows();
   };
   browser_->addView(list_);
   body_->addView(browser_);
@@ -427,7 +433,7 @@ void StorageManagementScene::RefreshRows() {
   });
   model_.SetGroups(groups_);
   const float scroll = list_->scrollOffset;
-  list_->setItems(MakeStorageArchiveRows(model_.Rows(), groupArchives_, selection_));
+  list_->setItems(MakeStorageArchiveRows(model_.Rows(), groupArchives_, selection_, expandedArchives_));
   list_->scrollOffset = std::clamp(scroll, 0.0f, std::max(0.0f,
       static_cast<float>(list_->size() * list_->itemHeight - list_->getContentHeight())));
   list_->rebindVisibleItems();
@@ -535,7 +541,7 @@ void StorageManagementScene::update(float) {
     profileId_ = context.profileManager.activeProfile().id;
     policy_ = context.settings.storagePreferences.manual;
     policyView_->SetPolicy(policy_);
-    selection_.Clear(); expanded_.clear(); ReloadGroups();
+    selection_.Clear(); expanded_.clear(); expandedArchives_.clear(); ReloadGroups();
   }
   if (!task.running && task.lastReport != appliedReport_) {
     appliedReport_ = task.lastReport;

@@ -53,6 +53,7 @@ private:
   StorageGroupArchives groupArchives_;
   std::vector<Track> groups_;
   std::set<std::string> expanded_;
+  std::set<std::filesystem::path> expandedArchives_;
   std::map<std::string, storage_management::GroupStorageMeasurement> measurements_;
   storage_management::StorageInventoryTask inventoryTask_;
   std::optional<storage_management::StoragePreflight> preflight_;

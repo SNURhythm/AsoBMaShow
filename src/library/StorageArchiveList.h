@@ -7,12 +7,15 @@ struct StorageArchiveRow {
   music_playlist::MusicTrack track;
   std::filesystem::path archivePath;
   bool archiveHeader = false;
+  bool expanded = false;
+  bool songLeader = true;
   std::size_t songCount = 0, selectedCount = 0, visibleCount = 0, visibleSelectedCount = 0;
   unsigned IndentLevel() const;
 };
 std::vector<StorageArchiveRow> MakeStorageArchiveRows(
     const std::vector<music_playlist::MusicTrack> &visible,
-    const StorageGroupArchives &, const StorageGroupSelection &);
+    const StorageGroupArchives &, const StorageGroupSelection &,
+    const std::set<std::filesystem::path> &expandedArchives = {});
 void ToggleStorageArchiveSelection(const std::filesystem::path &,
     const std::vector<music_playlist::MusicTrack> &visible,
     const StorageGroupArchives &, StorageGroupSelection &);
