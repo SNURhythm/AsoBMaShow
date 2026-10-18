@@ -8,7 +8,6 @@
 #include "../view/AppTheme.h"
 #include "../view/Button.h"
 #include "../view/ActionButtonStyle.h"
-#include "../view/DropdownView.h"
 #include "../view/OverlayPortal.h"
 #include "../view/MusicTrackRowView.h"
 #include "../view/RecyclerView.h"
@@ -193,13 +192,9 @@ void StorageManagementScene::BuildView() {
     if (shownTask_.running) return;
     selection_.Clear(); InvalidatePreflight(); RefreshRows();
   }));
-  sort_ = new DropdownView({
-      .onOpenChanged = [this](bool open) { sortOpen_ = open; RefreshState(); },
-      .onOptionSelected = [this](const std::string &id) {
-        sortBySize_ = id == "size"; sortOpen_ = false; RefreshRows();
-      }}, overlayPortal_);
-  sort_->setAlignSelf(YGAlignCenter);
-  actions->addView(sort_);
+  actions->addView(button("storage.ui.sort_title", [this] {
+    sortBySize_ = !sortBySize_; RefreshRows();
+  }, &sortText_));
   actions->addView(button("storage.ui.refresh", [this] {
     if (!shownTask_.running) ReloadGroups(true);
   }, nullptr, 22, ActionCategory::Information));
@@ -500,9 +495,7 @@ void StorageManagementScene::RefreshState() {
       {"hidden", std::to_string(selection_.HiddenCount(model_.Rows()))}}));
   archiveHint_->setDisplay(groupArchives_.empty() ? YGDisplayNone : YGDisplayFlex);
   archiveHint_->setVisible(!groupArchives_.empty());
-  sort_->refresh({.selectedId = sortBySize_ ? "size" : "title",
-      .options = {{"title", i18n::message("storage.ui.sort_title")},
-                  {"size", i18n::message("storage.ui.sort_size")}}, .open = sortOpen_});
+  sortText_->setLocalizedText(i18n::message(sortBySize_ ? "storage.ui.sort_size" : "storage.ui.sort_title"));
   backText_->setText(i18n::tr(shownTask_.running ? "storage.ui.cancel_back" : "library.tasks.back.label"));
   action_button::applyStyle(back_, backText_,
       shownTask_.running ? ActionCategory::Caution : ActionCategory::Neutral);
@@ -644,7 +637,7 @@ void StorageManagementScene::cleanupScene() {
   if (list_) { list_->onBind = {}; list_->onCreateView = {}; list_->onSelectedByPointer = {}; }
   root_ = body_ = browser_ = nullptr;
   controlsScroll_ = nullptr; policyView_ = nullptr; list_ = nullptr; search_ = nullptr;
-  selectionText_ = statusText_ = preflightText_ = archiveHint_ = reportText_ = applyText_ = backText_ = nullptr;
+  selectionText_ = statusText_ = preflightText_ = archiveHint_ = reportText_ = applyText_ = backText_ = sortText_ = nullptr;
   apply_ = cancel_ = back_ = nullptr;
-  sort_ = nullptr; overlayPortal_ = nullptr;
+  overlayPortal_ = nullptr;
 }

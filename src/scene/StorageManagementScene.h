@@ -7,7 +7,6 @@
 #include "../storage/StorageMeasurementState.h"
 
 class Button;
-class DropdownView;
 class OverlayPortal;
 class TextView;
 class TextInputBox;
@@ -68,18 +67,17 @@ private:
   storage_management::StoragePolicy policy_;
   storage_management::StorageTaskSnapshot shownTask_;
   bool measuring_ = false, measuringSelection_ = false;
-  bool sortBySize_ = false, sortOpen_ = false, returnWhenFinished_ = false;
+  bool sortBySize_ = false, returnWhenFinished_ = false;
   std::uint64_t libraryRevision_ = 0, measurementRevision_ = 0;
   View *root_ = nullptr, *body_ = nullptr, *browser_ = nullptr;
   ScrollView *controlsScroll_ = nullptr;
   StoragePolicyView *policyView_ = nullptr;
-  DropdownView *sort_ = nullptr;
   OverlayPortal *overlayPortal_ = nullptr;
   RecyclerView<StorageArchiveRow> *list_ = nullptr;
   TextInputBox *search_ = nullptr;
   TextView *selectionText_ = nullptr, *statusText_ = nullptr, *preflightText_ = nullptr;
   TextView *archiveHint_ = nullptr;
-  TextView *reportText_ = nullptr, *applyText_ = nullptr, *backText_ = nullptr;
+  TextView *reportText_ = nullptr, *applyText_ = nullptr, *backText_ = nullptr, *sortText_ = nullptr;
   Button *apply_ = nullptr, *cancel_ = nullptr, *back_ = nullptr;
   int width_ = -1, height_ = -1;
 };
