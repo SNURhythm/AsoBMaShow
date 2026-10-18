@@ -352,3 +352,47 @@ Regression coverage checks adjacent-write coalescing, reduced checkpoint counts
 for unchanged prefixes, and recovery of 1,100 distinct small records across batch
 boundaries. Existing overlap, multi-batch growth, foreign-edit rejection and sparse
 128 GiB ZIP64 tests remain enabled. Wall-clock timings are not test assertions.
+
+## Combined metadata reads and bounded hash workers
+
+A further pass compares `47115336` with combined entry/state lookups and parallel
+payload hashing, using the same three benchmark commands above. Each result is
+the median of three cached local runs on the Apple M1 Pro, with no concurrent
+build. Fixture creation, preflight and independent libarchive read-back remain
+outside the update timer.
+
+| Workload | Previous pass | This pass | Reduction |
+| --- | ---: | ---: | ---: |
+| 10,000 × 2 KiB retained entries, deletion at end | 426 ms | 255 ms | 40% |
+| 10,000 × 2 KiB retained entries, deletion at start | 708 ms | 457 ms | 35% |
+| One 64 MiB retained entry, hashing time only | 54.7 ms | 36.3 ms | 34% |
+
+Large-entry total update times still overlap substantially: 158–249 ms before
+and 148–291 ms after. Redo-file synchronization varies enough that these runs do
+not establish an overall large-file speedup. Source bytes read, archive bytes
+written, durable batches and write ranges are identical before and after.
+
+The entry loop now reads update state in the same SQLite row as archive metadata,
+refreshing the action only after media preparation can change it. Completed
+entries and deleted central-directory records are filtered in SQL. Fresh
+unchanged entries skip saved-chunk lookups; interrupted updates retain those
+lookups because a partially completed overlapping move can have consumed source
+bytes. Queries still copy just one metadata row and reset before mutations, so
+there is no unbounded metadata prefetch or long-lived read cursor.
+
+Batches of at least 1 MiB and four chunks use up to four hash workers, respecting
+the existing CPU headroom policy. Workers hash disjoint payload buffers already
+held within the 8 MiB batch. They do not access SQLite, files, progress callbacks
+or shared timing counters. All workers join and failures propagate before archive
+capacity changes, redo preparation or source writes. Before-image hashes remain
+serial; the hash timer includes worker launch/join time and reports wall time.
+The 64 MiB case used four workers in eight batches. The benchmark now reports
+`parallel_hash_batches` and `hash_workers` alongside the existing counters.
+
+Existing recovery coverage includes small-record batch boundaries, overlapping
+large records, growing FLAC relocations and sparse ZIP64 offsets. Retained v1/v2
+journal compatibility was reviewed in code; there are no dedicated legacy fixtures.
+A new regression corrupts a later chunk of a 2 MiB prepared replacement, checks
+that neither Apply nor recovery writes the archive, restores the staged byte,
+and verifies successful recovery and exact payloads with libarchive. The focused
+storage tests pass; no wall-clock threshold is enforced.

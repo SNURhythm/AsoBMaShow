@@ -7,6 +7,7 @@ struct StorageArchiveMetrics {
   std::uint64_t archivesCompacted = 0, bytesWritten = 0, peakScratchBytes = 0;
   std::uint64_t preparationBytesRead = 0, sourceBytesRead = 0, durableBatches = 0;
   std::uint64_t preparationReadCalls = 0, preparationBackwardReads = 0, sourceWriteRanges = 0;
+  std::uint64_t parallelHashBatches = 0, peakHashWorkers = 0;
   // Optional wall-clock diagnostics. Batch redo includes its durability barriers;
   // journal includes batch SQLite commits; sync measures the batch archive fsync.
   std::uint64_t totalNanoseconds = 0, preparationNanoseconds = 0;

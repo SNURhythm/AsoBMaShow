@@ -155,7 +155,11 @@ offsets, including when the first entry is deleted or replaced; even huge sparse
 prefixes are preserved without being read or copied. Consecutive deletions and
 small retained files share durable batches. Adjacent destination ranges share
 archive writes, using at most one additional 8 MiB memory buffer. Archive writes
-remain ordered; compaction does not start parallel writers.
+remain ordered. Batches of at least 1 MiB and four chunks hash their already-read
+payloads with up to four workers, reduced on machines with fewer available cores.
+Small batches stay serial. Workers finish and any hash failure is reported before
+the batch changes archive capacity or writes recovery evidence. File I/O and
+SQLite commits remain on the ordered writer; hashing adds no payload buffer.
 
 ## Progress, cancellation and recovery
 

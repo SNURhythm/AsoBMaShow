@@ -223,6 +223,40 @@ void smallArchiveRecordsRecoverAcrossBatches() {
       require(actual.at(std::to_string(i) + ".png") == "image" + std::to_string(i), "coalesced recovery preserves each distinct payload");
   }
 }
+void preparedArchiveHashFailurePrecedesWrites() {
+  storage_test::TempDirectory temp;
+  const auto path = temp.root / "prepared.zip";
+  writeArchive(path, {{"audio.wav", std::string(3 * 1024 * 1024, 'a')}, {"chart.bms", "chart"}});
+  InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+      .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = temp.root / "scan"};
+  const auto review = BuildStoragePreflight(request);
+  const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+  std::string error; const auto original = HashStorageFile(path, {}, error);
+  fs::path replacement;
+  StorageArchiveMetrics metrics;
+  const std::string encoded(2 * 1024 * 1024, 'f');
+  StorageArchiveDependencies deps{.encode = [&](const AssetCandidate &, const StoragePolicy &, const fs::path &output, Checkpoint, ProgressCallback) {
+    std::ofstream file(output, std::ios::binary); file << encoded; file.close();
+    return EncodeResult{.outcome = FileOutcome::Converted, .outputPath = output};
+  }, .faultPoint = [&](std::string_view name) {
+    if (name != "archive-entry-ready") return;
+    for (const auto &entry : fs::directory_iterator(paths.journalRoot)) replacement = entry.path() / "replacement.bin";
+    StorageArchiveIO file(replacement, {}); file.Write(1024 * 1024 + 123, "X"); file.Sync();
+  }, .metrics = &metrics};
+  const auto result = UpdateStorageArchive(review.archives.front(), request.policy, paths, deps);
+  require(result.recoveryRequired && metrics.sourceWriteRanges == 0 && HashStorageFile(path, {}, error) == original,
+      "a corrupt prepared chunk fails the whole hash batch before any archive write");
+  const auto failedRecovery = RecoverStorageArchives(paths);
+  require(failedRecovery.recoveryRequired && HashStorageFile(path, {}, error) == original,
+      "recovery also refuses the changed prepared payload before writing");
+  { StorageArchiveIO file(replacement, {}); file.Write(1024 * 1024 + 123, "f"); file.Sync(); }
+  const auto recovered = RecoverStorageArchives(paths);
+  require(!recovered.failed && !recovered.recoveryRequired && recovered.converted == 1,
+      "restoring prepared bytes permits recovery without re-encoding");
+  const auto actual = readArchive(path);
+  require(actual.size() == 2 && actual.at("audio.flac") == encoded && actual.at("chart.bms") == "chart",
+      "recovered hash batch installs exact prepared bytes and preserves the next entry");
+}
 void archiveLargeRecordRecovery() {
   for (const auto &point : {"archive-redo", "archive-source-synced", "foreign-outside-redo", "foreign-after-truncate"}) {
     storage_test::TempDirectory temp;
@@ -893,6 +927,7 @@ void storageArchiveCompactionBenchmark(std::size_t count, std::size_t payloadByt
   for (std::size_t i = 0; i < count; ++i) require(actual.at(std::to_string(i) + ".png") == payload, "benchmark retains exact payloads");
   std::cout << "archive compaction entries=" << count << " payload=" << payloadBytes << " delete_first=" << deleteFirst
       << " batches=" << metrics.durableBatches << " write_ranges=" << metrics.sourceWriteRanges << " read_bytes=" << metrics.sourceBytesRead << " write_bytes=" << metrics.bytesWritten
+      << " parallel_hash_batches=" << metrics.parallelHashBatches << " hash_workers=" << metrics.peakHashWorkers
       << " total_ms=" << metrics.totalNanoseconds / 1e6 << " prepare_ms=" << metrics.preparationNanoseconds / 1e6
       << " read_ms=" << metrics.readNanoseconds / 1e6 << " hash_ms=" << metrics.hashNanoseconds / 1e6
       << " redo_ms=" << metrics.redoNanoseconds / 1e6 << " journal_ms=" << metrics.journalNanoseconds / 1e6
@@ -950,6 +985,7 @@ void storageArchiveTests(const char *executable) {
       {"physical-savings", archiveSavingsUsePhysicalSize},
       {"batched-compaction", archiveCompactionBatchesSmallRecords}, {"prefix-checkpoints", unchangedArchivePrefixAvoidsFrequentCheckpoints},
       {"small-record-recovery", smallArchiveRecordsRecoverAcrossBatches},
+      {"prepared-hash-failure", preparedArchiveHashFailurePrecedesWrites},
       {"growth-batches", growingArchiveMultiBatchRecovery}, {"growth", growingFlacArchiveRecovery}, {"update", archiveUpdatesBatchWithoutFullCopy}, {"recovery", interruptedArchiveWritesRecover},
       {"zip64", sparseZip64AndLegacyNames}, {"invalid-encoding", malformedLegacyNamesAreRejected},
       {"playback", realArchiveOptimizerPreservesPlayback},

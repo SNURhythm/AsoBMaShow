@@ -340,11 +340,15 @@ std::optional<StorageArchiveEntry> StorageArchive::Next(std::optional<std::uint6
   Statement q(db->value, nextArchiveEntrySql);
   return nextArchiveEntry(q, after);
 }
-std::optional<StorageArchiveEntry> archive_detail::nextArchiveEntry(Statement &q, std::optional<std::uint64_t> after) {
+std::optional<StorageArchiveEntry> archive_detail::nextArchiveEntry(Statement &q, std::optional<std::uint64_t> after,
+    std::span<std::uint64_t> state) {
   q.reset();
   if (after) q.bind(1, *after); else sqlite3_bind_int64(q.value, 1, -1);
   std::optional<StorageArchiveEntry> entry;
-  if (q.step()) entry = row(q);
+  if (q.step()) {
+    entry = row(q);
+    for (std::size_t i = 0; i < state.size(); ++i) state[i] = q.integer(13 + i);
+  }
   q.reset(); return entry;
 }
 std::optional<AssetCandidate> StorageArchive::Candidate(const StorageArchiveEntry &entry, const StoragePolicy &policy, StorageDiagnostic &reason) const {
