@@ -3193,6 +3193,41 @@ void testIndexVisitorStreamsAndReleasesStorageOnlyIndexes() {
   assert(streamed && entries == 1000);
   assert(bounded_allocation_probe::largest < 64 * 1024);
   assert(archive_file::residentArchiveIndexCountForTesting() == 0);
+
+  const auto cacheFile = std::filesystem::directory_iterator(cache)->path();
+  const auto validCache = readTestFile(cacheFile);
+  auto corruptCache = validCache;
+  const auto secondPath = corruptCache.find(paths[1]);
+  assert(secondPath != std::string::npos);
+  corruptCache[secondPath] = '/';
+  {
+    std::ofstream output(cacheFile, std::ios::binary | std::ios::trunc);
+    output.write(corruptCache.data(), static_cast<std::streamsize>(corruptCache.size()));
+    assert(output);
+  }
+  // Stopping the visitor is not cache corruption, even if unread records are bad.
+  entries = 0;
+  assert(!archive_file::visitIndexEntries(archive, [&](const auto &) { ++entries; return false; }, &error));
+  assert(entries == 1 && readTestFile(cacheFile) == corruptCache);
+  error.clear();
+  entries = 0;
+  bounded_allocation_probe::largest = 0;
+  bounded_allocation_probe::enabled = true;
+  const bool corruptStreamed = archive_file::visitIndexEntries(
+      archive, [&](const auto &) { ++entries; return true; }, &error);
+  bounded_allocation_probe::enabled = false;
+  assert(!corruptStreamed && entries == 1 && !error.empty());
+  // A failed measurement must not materialize all archive entries to repair
+  // the cache. Discard it and leave rebuilding to a later independent request.
+  assert(bounded_allocation_probe::largest < 64 * 1024);
+  assert(!std::filesystem::exists(cacheFile));
+  assert(archive_file::residentArchiveIndexCountForTesting() == 0);
+  error.clear();
+  entries = 0;
+  assert(archive_file::visitIndexEntries(archive, [&](const auto &) { ++entries; return true; }, &error));
+  assert(entries == 1000 && readTestFile(cacheFile) == validCache);
+  assert(archive_file::residentArchiveIndexCountForTesting() == 0);
+
   std::vector<archive_file::Entry> resident;
   assert(archive_file::listEntries(archive, resident, &error));
   assert(archive_file::residentArchiveIndexCountForTesting() == 1);

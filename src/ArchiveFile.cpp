@@ -8928,10 +8928,13 @@ bool visitIndexEntries(const std::filesystem::path &archivePath,
     // A callback may have accumulated partial records. Never replay a rebuilt
     // index into that same consumer; callers discard unsuccessful measurements.
     if (delivered || stopped) {
-      // Repair malformed persisted state for the next scan, without replaying
-      // entries into a consumer that has already seen an incomplete stream.
-      if (delivered && !stopped) lease.index = cachedIndexForArchive(archivePath, nullptr, keepGoing,
-          std::numeric_limits<std::uint64_t>::max(), true, false);
+      // Discard malformed persisted state without materializing a full index
+      // during a failed measurement. A later independent request can rebuild.
+      // Cancellation alone does not invalidate otherwise usable cache records.
+      if (delivered && !stopped && !archiveIndexCacheDirectory().empty()) {
+        std::error_code ignored;
+        std::filesystem::remove(archiveIndexCacheFilePath(key), ignored);
+      }
       if (errorMessage && errorMessage->empty()) *errorMessage = "Archive index measurement did not complete.";
       return false;
     }
