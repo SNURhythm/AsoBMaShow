@@ -735,6 +735,7 @@
 				scene/CMakeLists.txt,
 				scene/play/CMakeLists.txt,
 				skin/CMakeLists.txt,
+				storage/CMakeLists.txt,
 				utils/CMakeLists.txt,
 				video/CMakeLists.txt,
 				view/CMakeLists.txt,

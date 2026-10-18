@@ -1,3 +1,5 @@
+include("${CMAKE_CURRENT_LIST_DIR}/BgfxMetalVideoSurfaces.cmake")
+
 # Apply to the generated Metal source on both desktop and the iOS bgfx project.
 function(asobmashow_patch_bgfx_metal_readback content_variable)
     set(source "${${content_variable}}")
@@ -102,6 +104,7 @@ function(asobmashow_fix_bgfx_metal)
     endif()
     file(READ "${original}" content)
     asobmashow_patch_bgfx_metal_readback(content)
+    asobmashow_patch_bgfx_metal_video_surfaces(content)
     set(patched "${CMAKE_CURRENT_BINARY_DIR}/generated/bgfx/renderer_mtl.mm")
     file(WRITE "${patched}.in" "${content}")
     configure_file("${patched}.in" "${patched}" COPYONLY)

@@ -95,9 +95,16 @@ hardware encoding; they never silently switch to another codec.
 
 The codec button opens an explanation of each available choice, with encoding
 and playback information from this device. A short background encode/decode test
-must succeed before an option appears. Playback uses the app's FFmpeg CPU decoder;
-hardware encoding support does not imply hardware playback. AV1 playback includes
-dav1d. Every complete output still passes the normal MP4 decode-back validation.
+must succeed before an option appears. Apple playback uses VideoToolbox and Metal
+for supported 8-bit SDR H.264/HEVC: decoded surfaces are sampled directly, with
+YUV-to-RGB conversion in the fragment shader and no CPU pixel upload. The probe
+checks native surface import and hardware decoder support for its stream before
+reporting hardware playback. Unsupported formats, renderers and failed imports
+use software decoding; skin movies with strict preallocation limits retain their
+CPU memory-budget contract. Other platforms currently use the FFmpeg CPU playback
+path, and AV1 playback includes dav1d. Hardware encoding support alone does not
+imply hardware playback. Every complete output still passes the normal MP4
+decode-back validation.
 
 High, Balanced and Smaller choose encoder-specific quality or bitrate targets;
 Balanced is the default. The x264 fallback uses the `fast` preset and CRF 18, 23
