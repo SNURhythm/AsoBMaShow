@@ -17,6 +17,7 @@ struct StorageArchiveMetrics {
 struct StorageArchiveDependencies {
   std::function<EncodeResult(const AssetCandidate &, const StoragePolicy &,
       const std::filesystem::path &, Checkpoint, ProgressCallback)> encode;
+  std::function<StorageDiagnostic(const AssetCandidate &, Checkpoint)> validateExisting;
   std::function<std::optional<std::uint64_t>(const std::filesystem::path &)> availableSpace;
   std::function<void(std::string_view)> faultPoint;
   // Includes the one extracted input, encoded output and prepared replacement.

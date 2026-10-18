@@ -41,6 +41,11 @@ std::shared_ptr<StorageConversionPermit> SharedStorageConversionPermit() {
 OptimizerDependencies DefaultOptimizerDependencies(StoragePlatformPaths paths) {
   return {.paths = std::move(paths), .permit = SharedStorageConversionPermit(), .probeCodecs = ProbeStorageCodecs,
           .encodeAudio = EncodeAudio, .encodeVideo = EncodeBga,
+          .validateExisting = [](const AssetCandidate &asset, Checkpoint check) {
+            return asset.operation == AssetOperation::CompressH264 ? ValidateExistingBga(asset.destination, std::move(check)) :
+                ValidateExistingAudio(asset.destination, asset.operation == AssetOperation::LosslessFlac ?
+                    AudioAction::LosslessFlac : AudioAction::LossyVorbis, std::move(check));
+          },
           .transactions = [](const StoragePlatformPaths &paths, StorageCommitPrecondition beforeCommit) {
             FileTransactionDependencies dependencies; dependencies.beforeCommit = std::move(beforeCommit);
             auto transaction = std::make_shared<StorageFileTransaction>(paths, std::move(dependencies));
@@ -48,6 +53,7 @@ OptimizerDependencies DefaultOptimizerDependencies(StoragePlatformPaths paths) {
                 .replace = [transaction](const AssetCandidate &asset, const EncodeResult &encoded, Checkpoint check) {
                   return transaction->Replace(asset, encoded, std::move(check));
                 }, .erase = [transaction](const AssetCandidate &asset, Checkpoint check) { return transaction->Delete(asset, std::move(check)); },
+                .reuse = [transaction](const AssetCandidate &asset, Checkpoint check) { return transaction->ReuseExisting(asset, std::move(check)); },
                 .recover = [transaction](Checkpoint check, const StorageRecoveryObserver &observer) {
                   return transaction->Recover(std::move(check), observer);
                 }};
@@ -362,6 +368,29 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
           try {
             if (staleScope || !evidence.Candidate(asset, checkpoint, error)) {
               result.reason = {StorageReason::StaleInput, error};
+            } else if (asset.reuseDestination) {
+              state.phase = StoragePhase::Verify; emit();
+              const auto beforeHash = HashStorageFile(asset.destination, checkpoint, error);
+              if (!beforeHash) result.reason = {StorageReason::IoError, error};
+              else if (!dependencies_.validateExisting || !localTransactions.reuse)
+                result.reason = {StorageReason::CodecUnavailable, "Existing destination validation is unavailable"};
+              else {
+                result.reason = dependencies_.validateExisting(asset, checkpoint);
+                if (result.reason.code == StorageReason::ValidationFailed) result.outcome = FileOutcome::Failed;
+                if (result.reason.code == StorageReason::None) {
+                  const auto afterHash = HashStorageFile(asset.destination, checkpoint, error);
+                  if (!afterHash || *afterHash != *beforeHash || !evidence.Candidate(asset, checkpoint, error))
+                    result.reason = {StorageReason::StaleInput, "Existing destination changed during validation"};
+                  else if (checkpoint()) {
+                    asset.existingDestinationHash = *afterHash;
+                    state.phase = StoragePhase::Commit; emit(); transactionStarted = true;
+                    transactionUnresolved = true;
+                    result = localTransactions.reuse(asset, checkpoint);
+                    transactionFinished = true;
+                    transactionUnresolved = result.reason.code == StorageReason::RecoveryRequired;
+                  }
+                }
+              }
             } else if (const auto missing = missingCodec(asset.operation, caps); missing.code != StorageReason::None) {
               result.reason = missing;
             } else {
@@ -489,7 +518,7 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
           if (missing.code != StorageReason::None) return EncodeResult{.reason = missing};
           const auto &encoder = asset.operation == AssetOperation::CompressH264 ? dependencies_.encodeVideo : dependencies_.encodeAudio;
           return encoder(asset, policy, output, std::move(check), std::move(progress));
-        }, .availableSpace = dependencies_.availableSpace};
+        }, .validateExisting = dependencies_.validateExisting, .availableSpace = dependencies_.availableSpace};
       mergeReport(report, UpdateStorageArchive(archive, request.policy, dependencies_.paths, archiveDependencies, checkpoint,
           [&](const StorageProgress &value) {
             state = value; state.filesDone += beforeFiles; state.filesTotal = inventory.eligibleCount;

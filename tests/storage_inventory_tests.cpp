@@ -180,6 +180,31 @@ void testUnsafeAndUnsupportedFiles() {
   fs::permissions(temp.root / "selected", fs::perms::owner_all);
   require(!unreadable.complete && unreadable.candidates.empty(), "unreadable folder is unavailable");
 }
+void testExistingDestinationCandidates() {
+  for (const auto operation : {AssetOperation::LosslessFlac, AssetOperation::LossyVorbis, AssetOperation::CompressH264}) {
+    TempDirectory temp;
+    const auto source = operation == AssetOperation::CompressH264 ? "movie.avi" : "sound.wav";
+    const auto target = operation == AssetOperation::LosslessFlac ? "sound.flac" :
+        operation == AssetOperation::LossyVorbis ? "sound.ogg" : "movie.mp4";
+    temp.write(source); temp.write(target);
+    auto input = request(temp.root);
+    if (operation == AssetOperation::LosslessFlac) input.policy.audio = AudioAction::LosslessFlac;
+    auto inventory = BuildInventory(input);
+    require(inventory.complete && inventory.candidates.size() == 1 &&
+                inventory.candidates.front().source.filename() == source &&
+                inventory.candidates.front().destination.filename() == target &&
+                inventory.candidates.front().reuseDestination && inventory.candidates.front().existingDestinationIdentity,
+            "existing target is a metadata-only reuse candidate while the retained target remains untouched");
+    require(inventory.candidates.front().existingDestinationHash.empty(), "inventory does not hash existing destination payloads");
+    fs::remove(temp.root / target);
+    fs::create_symlink(temp.root / source, temp.root / target);
+    require(BuildInventory(input).candidates.empty(), "symlink destinations never authorize source retirement");
+    fs::remove(temp.root / target);
+    temp.write("other.bin");
+    fs::create_hard_link(temp.root / "other.bin", temp.root / target);
+    require(BuildInventory(input).candidates.empty(), "hard-linked destinations never authorize source retirement");
+  }
+}
 }
 
 int main() {
@@ -189,6 +214,7 @@ int main() {
     testWholeFolderIncludesSabunsAndUnreferencedMedia();
     testAmbiguousStemsAndFreshness();
     testUnsafeAndUnsupportedFiles();
+    testExistingDestinationCandidates();
   } catch (const std::exception &error) {
     std::cerr << "FAIL: " << error.what() << '\n';
     return 1;

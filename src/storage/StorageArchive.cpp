@@ -398,6 +398,11 @@ std::optional<StorageArchiveEntry> StorageArchive::Next(std::optional<std::uint6
   Statement q(db->value, nextArchiveEntrySql);
   return nextArchiveEntry(q, after);
 }
+std::optional<StorageArchiveEntry> StorageArchive::Find(const fs::path &name) const {
+  Statement q(db->value, "SELECT id,offset,span,data_offset,packed,bytes,crc,method,flags,directory,name,raw_name,metadata FROM entries WHERE name=?");
+  q.text(1, pathText(name));
+  return q.step() ? std::optional(row(q)) : std::nullopt;
+}
 std::optional<StorageArchiveEntry> archive_detail::nextArchiveEntry(Statement &q, std::optional<std::uint64_t> after,
     std::span<std::uint64_t> state) {
   q.reset();
@@ -431,8 +436,11 @@ std::optional<AssetCandidate> archive_detail::archiveCandidate(const StorageArch
     auto stem = path; stem.replace_extension();
     q.reset();
     q.text(1, lower(pathText(stem))); q.bind(2, static_cast<unsigned>(kind)); q.text(3, pathText(candidate.destination)); q.bind(4, entry.id); q.step();
-    const bool ambiguous = q.integer(0) > 1; q.reset();
-    if (ambiguous) { reason = {StorageReason::Collision, "Same-stem archive media alternatives are ambiguous"}; return {}; }
+    const bool ambiguous = q.integer(0) > 1;
+    const auto existing = q.bytes(1); q.reset();
+    if (!existing.empty()) {
+      candidate.destination = fs::u8path(existing); candidate.reuseDestination = true;
+    } else if (ambiguous) { reason = {StorageReason::Collision, "Same-stem archive media alternatives are ambiguous"}; return {}; }
   }
   return candidate;
 }

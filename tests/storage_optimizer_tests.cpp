@@ -580,7 +580,8 @@ void reviewedCleanupAdvancesOnlyOwnedEvidence() {
     temp.write("charts/song/b.wav", std::string(100, 'b'));
     auto input = request(temp.root / "charts");
     input.preflight = BuildStoragePreflight(input.inventory);
-    require(input.preflight->eligibleCount == 1, "review includes pending recovery and one remaining candidate");
+    require(input.preflight->eligibleCount == (edit == 4 ? 2 : 1),
+            "review includes remaining media and potential reuse of an uncommitted destination");
     StorageMeasurementRows measurements;
     measurements.emplace("group", input.preflight->groups.front());
     const auto selections = input.inventory.groups;
@@ -598,7 +599,7 @@ void reviewedCleanupAdvancesOnlyOwnedEvidence() {
     } else if (edit == 4) {
       require(!report.converted && report.skipped && fs::exists(temp.root / "charts/song/a.wav") &&
                   fs::exists(temp.root / "charts/song/b.wav") && !fs::exists(temp.root / "charts/song/a.ogg"),
-              "rollback cannot authorize a source that was not an eligible reviewed candidate");
+              "rollback cannot change reviewed destination reuse into a new encoding operation");
     } else if (edit < 5) {
       require(!report.converted && report.skipped && report.reclaimedBytes == 96 &&
                   fs::exists(temp.root / "charts/song/b.wav") && !fs::exists(temp.root / "charts/song/b.ogg"),
@@ -663,6 +664,39 @@ void boundedReportsAndProgress() {
   require(report.skipped == 105 && report.files.size() == 100, "bounded details retain full outcome counters");
   require(notifications <= 4, "preparation and inventory transitions do not unthrottle codec callbacks");
 }
+void existingDestinationsAreValidatedBeforeRetirement() {
+  for (const auto operation : {AssetOperation::LosslessFlac, AssetOperation::LossyVorbis, AssetOperation::CompressH264}) {
+    for (int mode = 0; mode < 3; ++mode) {
+      TempDirectory temp;
+      const auto sourceName = operation == AssetOperation::CompressH264 ? "clip.wmv" : "sound.wav";
+      const auto destinationName = operation == AssetOperation::CompressH264 ? "clip.mp4" :
+          operation == AssetOperation::LosslessFlac ? "sound.flac" : "sound.ogg";
+      temp.write(fs::path("charts") / sourceName, "redundant source");
+      temp.write(fs::path("charts") / destinationName, "existing media bytes retained verbatim");
+      std::vector<std::string> events; auto deps = dependencies(temp, events);
+      deps.probeCodecs = [] { return StorageCodecCapabilities{}; };
+      deps.availableSpace = [](const auto &) { return std::optional<std::uint64_t>(0); };
+      unsigned validations = 0;
+      deps.validateExisting = [&](const AssetCandidate &asset, Checkpoint) {
+        ++validations;
+        require(asset.destination.filename() == destinationName, "validate the retained target, not the source");
+        if (mode == 1) return StorageDiagnostic{StorageReason::ValidationFailed, "invalid destination"};
+        if (mode == 2) temp.write(fs::path("charts") / destinationName, "external edit during validation");
+        return StorageDiagnostic{};
+      };
+      auto input = request(temp.root / "charts");
+      input.policy.audio = operation == AssetOperation::LosslessFlac ? AudioAction::LosslessFlac : AudioAction::LossyVorbis;
+      const auto result = StorageOptimizer(deps).Run(input);
+      require(validations == 1 && events.empty(), "reuse needs validation but no encoder or encoding scratch space");
+      require(fs::exists(temp.root / "charts" / destinationName), "retained destination always survives");
+      if (!mode) {
+        require(result.deleted == 1 && result.reclaimedBytes == std::string("redundant source").size() &&
+                    !fs::exists(temp.root / "charts" / sourceName), "valid existing destination retires only redundant source");
+      } else require(!result.deleted && fs::exists(temp.root / "charts" / sourceName),
+                     "invalid or changing destination preserves source");
+    }
+  }
+}
 void cancellableSingleConversionPermit() {
   StorageConversionPermit permit;
   auto held = permit.Acquire({}); require(held.has_value(), "first conversion obtains permit");
@@ -714,7 +748,7 @@ int main(int argc, char **argv) {
     ancestorChartsStayProtectedWithoutBlockingIndependentRoots(); committedDeltasSurviveDetailLimitAndRetainedBackups();
     partialFailureAndAccounting(); revalidateAtTheActualCommitBoundary(); cleanupFailureAndFatalRecovery();
     reviewedCleanupAdvancesOnlyOwnedEvidence(); cancellationCapabilitiesAndNoOp();
-    boundedReportsAndProgress(); cancellableSingleConversionPermit();
+    boundedReportsAndProgress(); existingDestinationsAreValidatedBeforeRetirement(); cancellableSingleConversionPermit();
   } catch (const std::exception &error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }
   return 0;
 }

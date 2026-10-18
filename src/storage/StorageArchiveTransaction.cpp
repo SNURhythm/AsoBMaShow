@@ -377,6 +377,7 @@ public:
     append(report, {.source = archive.io.path / fs::u8path(entry.name), .outcome = outcome, .reason = std::move(reason), .bytesBefore = entry.bytes});
   }
   void Prepare(StorageArchiveEntry &, const AssetCandidate &, const StoragePolicy &, Checkpoint, ProgressCallback);
+  bool Reuse(const StorageArchiveEntry &, const AssetCandidate &, Checkpoint);
   void Flush() {
     if (pendingRecords.empty() && pendingChunks.empty()) return;
     archive.io.CheckPath();
@@ -577,6 +578,14 @@ public:
             archive.io.CheckPath();
             if (!started && !pendingDeletes) Flush();
             deleted = true;
+          } else if (candidate->reuseDestination) {
+            Flush(); RemoveStaging();
+            progress.currentPath = archive.io.path / candidate->destination; progress.phase = StoragePhase::Verify; if (notify) notify(progress);
+            try { deleted = Reuse(*entry, *candidate, check); }
+            catch (const StorageArchiveError &error) {
+              if (error.code == StorageReason::Cancelled) { report.cancelled = true; if (!started) return; }
+              else throw;
+            }
           } else {
           Flush(); RemoveStaging();
           progress.currentPath = archive.io.path / candidate->source; progress.phase = StoragePhase::Encode; if (notify) notify(progress);
@@ -663,6 +672,47 @@ public:
     report.addedBytes = after > before ? after - before : 0; report.changedRoots.push_back(archive.io.path); return report;
   }
 };
+bool Update::Reuse(const StorageArchiveEntry &entry, const AssetCandidate &candidate, Checkpoint check) {
+  auto target = archive.Find(candidate.destination);
+  require(target && target->id != entry.id && !target->directory, "Existing archive destination disappeared", StorageReason::StaleInput);
+  // Flush has made earlier compaction durable. Resolve a retained entry at its
+  // current physical position rather than extracting its obsolete source range.
+  Statement state(db.value, "SELECT complete,output_offset,action FROM entries WHERE id=?");
+  state.bind(1, target->id); require(state.step(), "Missing existing archive destination");
+  require(state.integer(2) == 0, "Existing archive destination was changed", StorageReason::StaleInput);
+  if (state.integer(0)) {
+    target->dataOffset = plus(state.integer(1), target->dataOffset - target->offset);
+    target->offset = state.integer(1);
+  }
+  const auto required = plus(target->bytes, stagingReserve);
+  const auto available = deps.availableSpace ? deps.availableSpace(journal) : std::optional<std::uint64_t>(fs::space(journal).available);
+  if (required > deps.scratchLimit || !available || required > *available) {
+    RecordSkip(entry, FileOutcome::Skipped, {StorageReason::InsufficientSpace, "Existing archive destination exceeds the validation staging budget"});
+    return false;
+  }
+  if (!deps.validateExisting) {
+    RecordSkip(entry, FileOutcome::Skipped, {StorageReason::CodecUnavailable, "Existing destination validation is unavailable"});
+    return false;
+  }
+  const auto input = journal / ("input." + asobmshow::chart_assets::LowerMediaExtension(candidate.destination));
+  StorageDiagnostic reason;
+  try {
+    archive.io.CheckPath(); archive.Extract(*target, input, check);
+    auto staged = candidate; staged.destination = input;
+    reason = deps.validateExisting(staged, check);
+  } catch (const StorageArchiveError &error) {
+    if (error.code != StorageReason::ValidationFailed) throw;
+    reason = {error.code, error.what()};
+  } catch (const std::exception &error) {
+    reason = {StorageReason::IoError, error.what()};
+  }
+  RemoveStaging(); archive.io.CheckPath(); active(check);
+  if (reason.code == StorageReason::Cancelled) throw StorageArchiveError(reason.code, reason.detail);
+  if (reason.code != StorageReason::None) {
+    RecordSkip(entry, FileOutcome::Failed, std::move(reason)); return false;
+  }
+  return true;
+}
 void Update::Prepare(StorageArchiveEntry &entry, const AssetCandidate &candidate, const StoragePolicy &policy, Checkpoint check, ProgressCallback notify) {
   const auto required = plus(plus(entry.bytes, entry.bytes), plus(entry.bytes, stagingReserve));
   const auto available = deps.availableSpace ? deps.availableSpace(journal) : std::optional<std::uint64_t>(fs::space(journal).available);

@@ -67,8 +67,19 @@ without translating sampler loops or embedded tags into player-specific fields.
 Plain format/fact chunks and disposable JUNK/PAD padding alone do not trigger
 foreign-metadata storage. Malformed RIFF chunk bounds and metadata chunks exceeding
 FLAC's block-size limit remain unsupported. Vorbis retains its stricter metadata
-checks because it has no equivalent preservation path. Ambiguous
-same-stem alternatives or existing destinations are skipped, never overwritten.
+checks because it has no equivalent preservation path. A complete odd-sized PCM
+payload may omit its final WAV alignment byte, including when RIFF counts that
+byte; missing sample data still fails validation.
+
+BMS packs often include alternate encodings for legacy players. When the requested
+same-name FLAC, Vorbis or H.264/MP4 destination already exists, storage optimization
+fully validates it, retains its bytes and removes the redundant source through the
+recoverable transaction. This applies to local folders and ZIP/TAR entries. It
+assumes the alternatives contain the same recording; it does not compare their
+samples. Invalid, unsupported or changed destinations preserve the source.
+Reuse leaves the destination's existing quality, resolution and frame rate intact.
+Case-only local filename ambiguities and alternatives with no existing destination
+remain skipped. Existing destinations are never overwritten.
 
 ## BGA video choices
 
@@ -97,6 +108,9 @@ Decoded color properties must remain consistent and representable throughout the
 video. Embedded audio must retain its sample format, sample rate and full channel
 layout; changes preserve the original. Malformed frame rates that exceed encoder
 limits are rejected before computing keyframe intervals.
+WMV/ASF validation checks the physical packet/container extent and interprets its
+declared duration as a file-wide endpoint. Coarse audio timestamps are checked
+against an anchored sample clock so timestamp rounding cannot accumulate drift.
 
 Existing H.264 already within the caps is skipped, even if a different quality
 preset is selected. Every candidate is decoded and validated. **An output must

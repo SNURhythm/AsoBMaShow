@@ -262,11 +262,16 @@ StorageInventory BuildInventory(const InventoryRequest &request, Checkpoint chec
       const auto status = fs::symlink_status(candidate.destination, ec);
       destinationBlocked = fs::exists(status) ||
                            (ec && ec != std::errc::no_such_file_or_directory);
+      const auto destination = inventory.files.find(candidate.destination);
+      if (destinationBlocked && fs::is_regular_file(status) && destination != inventory.files.end()) {
+        candidate.reuseDestination = true;
+        candidate.existingDestinationIdentity = destination->second;
+      }
       ec.clear();
     }
     if (!writable(fs::status(path.parent_path(), ec).permissions()) || ec) {
       skip(inventory, path, StorageReason::UnsupportedSource, "Parent folder is not writable");
-    } else if (candidate.operation != AssetOperation::Delete &&
+    } else if (candidate.operation != AssetOperation::Delete && !candidate.reuseDestination &&
                (destinationBlocked || stems[{path.parent_path(), stemKey(path), kind == MediaKind::Audio}] > 1)) {
       skip(inventory, path, StorageReason::Collision, "Same-stem media alternatives are ambiguous");
     } else inventory.candidates.push_back(std::move(candidate));

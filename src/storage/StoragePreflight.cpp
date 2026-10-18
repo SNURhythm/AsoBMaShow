@@ -44,9 +44,19 @@ std::optional<AssetCandidate> StorageCandidateForEntry(const StorageDirectoryEnt
     std::string error;
     const auto destination = candidate.destination != path ? directory.Find(candidate.destination.filename(), error) : std::nullopt;
     if (!error.empty()) { reason = {StorageReason::IoError, error}; return {}; }
-    const auto count = directory.StemCount(entry.name, kind == MediaKind::Audio, error);
-    if (!error.empty()) { reason = {StorageReason::IoError, error}; return {}; }
-    if (destination || count > 1) { reason = {StorageReason::Collision, "Same-stem media alternatives are ambiguous"}; return {}; }
+    if (destination) {
+      if (destination->kind != StorageEntryKind::Regular || !destination->identity) {
+        reason = {StorageReason::UnsafePath, "Existing destination is not a safe regular file"}; return {};
+      }
+      // Review captures metadata only. Apply must validate the complete retained
+      // media before this existing destination can authorize source retirement.
+      candidate.reuseDestination = true;
+      candidate.existingDestinationIdentity = destination->identity;
+    } else {
+      const auto count = directory.StemCount(entry.name, kind == MediaKind::Audio, error);
+      if (!error.empty()) { reason = {StorageReason::IoError, error}; return {}; }
+      if (count > 1) { reason = {StorageReason::Collision, "Same-stem media alternatives are ambiguous"}; return {}; }
+    }
   }
   return candidate;
 }

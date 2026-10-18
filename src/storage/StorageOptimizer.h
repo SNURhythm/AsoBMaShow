@@ -34,6 +34,7 @@ std::shared_ptr<StorageConversionPermit> SharedStorageConversionPermit();
 struct OptimizerTransactions {
   std::function<FileResult(const AssetCandidate &, const EncodeResult &, Checkpoint)> replace;
   std::function<FileResult(const AssetCandidate &, Checkpoint)> erase;
+  std::function<FileResult(const AssetCandidate &, Checkpoint)> reuse;
   std::function<StorageReport(Checkpoint, const StorageRecoveryObserver &)> recover;
 };
 using StorageEncoder = std::function<EncodeResult(const AssetCandidate &, const StoragePolicy &,
@@ -43,6 +44,7 @@ struct OptimizerDependencies {
   std::shared_ptr<StorageConversionPermit> permit;
   std::function<StorageCodecCapabilities()> probeCodecs;
   StorageEncoder encodeAudio, encodeVideo;
+  std::function<StorageDiagnostic(const AssetCandidate &, Checkpoint)> validateExisting;
   std::function<OptimizerTransactions(const StoragePlatformPaths &, StorageCommitPrecondition)> transactions;
   std::function<std::optional<std::uint64_t>(const std::filesystem::path &)> availableSpace;
   std::function<std::chrono::steady_clock::time_point()> now;

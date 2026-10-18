@@ -26,6 +26,7 @@ public:
   StorageArchive(const StorageArchive &) = delete;
   StorageArchive &operator=(const StorageArchive &) = delete;
   std::optional<StorageArchiveEntry> Next(std::optional<std::uint64_t> afterOffset = {}) const;
+  std::optional<StorageArchiveEntry> Find(const std::filesystem::path &name) const;
   std::optional<AssetCandidate> Candidate(const StorageArchiveEntry &, const StoragePolicy &, StorageDiagnostic &) const;
   void ValidateBrowsingIndex(Checkpoint = {}) const;
   void Extract(const StorageArchiveEntry &, const std::filesystem::path &output, Checkpoint) const;

@@ -76,6 +76,10 @@ bool StorageDirectoryEvidence::Candidate(const AssetCandidate &asset, Checkpoint
   if (!CheckScopes(false, check, error)) return false;
   const auto identity = ReadFileIdentity(asset.source, error, boundaries(summary_));
   if (!identity || *identity != asset.identity) { error = "Source changed since preflight"; return false; }
+  if (asset.reuseDestination && (!asset.existingDestinationIdentity ||
+      ReadFileIdentity(asset.destination, error, boundaries(summary_)) != asset.existingDestinationIdentity)) {
+    error = "Existing destination changed since preflight"; return false;
+  }
   return true;
 }
 bool StorageDirectoryEvidence::CheckEntries(const std::vector<StorageFileChange> &owned, Checkpoint check,

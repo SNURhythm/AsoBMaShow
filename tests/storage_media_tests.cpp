@@ -233,6 +233,47 @@ void crossStreamTimelineTests() {
   require(rejectsRange([&] { encode({}, {}, source, plan, {}, created); }) && !created,
           "encoder rejects a shared origin outside the destination timestamp range");
 }
+void existingAudioTests() {
+  storage_test::TempDirectory temp;
+  for (const auto action : {AudioAction::LosslessFlac, AudioAction::LossyVorbis}) {
+    const bool flac = action == AudioAction::LosslessFlac;
+    const auto path = temp.root / (flac ? "existing.flac" : "existing.ogg");
+    writeAudio(path, flac ? SF_FORMAT_FLAC | SF_FORMAT_PCM_16 : SF_FORMAT_OGG | SF_FORMAT_VORBIS,
+               2, samples(8192, 2, 16), false, false, true);
+    require(ValidateExistingAudio(path, action).code == StorageReason::None,
+            "complete existing FLAC/Vorbis can be retained without re-encoding");
+    require(ValidateExistingAudio(path, flac ? AudioAction::LossyVorbis : AudioAction::LosslessFlac).code != StorageReason::None,
+            "existing destination must contain the requested audio codec");
+    require(ValidateExistingAudio(path, action, [] { return false; }).code == StorageReason::Cancelled,
+            "existing audio validation observes cancellation");
+    std::ifstream input(path, std::ios::binary);
+    const std::string bytes((std::istreambuf_iterator<char>(input)), {});
+    temp.write(path.filename(), bytes.substr(0, bytes.size() - 32));
+    require(ValidateExistingAudio(path, action).code == StorageReason::ValidationFailed,
+            "truncated existing audio cannot authorize source removal");
+    if (flac) {
+      auto understated = bytes;
+      require(understated.size() > 26, "FLAC fixture has a complete STREAMINFO block");
+      // Keep every encoded frame, but advertise only 1000 of the 8192 samples.
+      understated[21] &= 0xf0;
+      understated[22] = understated[23] = 0;
+      understated[24] = 3; understated[25] = static_cast<char>(0xe8);
+      temp.write(path.filename(), understated);
+      require(ValidateExistingAudio(path, action).code == StorageReason::ValidationFailed,
+              "FLAC validation reaches physical EOF rather than stopping at an understated sample count");
+    } else {
+      const auto endPage = bytes.rfind("OggS");
+      require(endPage != std::string::npos && endPage > 0, "Vorbis fixture has a terminal page");
+      temp.write(path.filename(), bytes.substr(0, endPage));
+      require(ValidateExistingAudio(path, action).code == StorageReason::ValidationFailed,
+              "clean page-boundary truncation still requires an Ogg end-of-stream marker");
+      auto corrupt = bytes; corrupt.back() ^= 0x40;
+      temp.write(path.filename(), corrupt);
+      require(ValidateExistingAudio(path, action).code == StorageReason::ValidationFailed,
+              "Ogg page checksum detects corruption that a tolerant decoder could conceal");
+    }
+  }
+}
 void audioTests() {
   storage_test::TempDirectory temp;
   StoragePolicy policy;
@@ -276,13 +317,17 @@ void audioTests() {
     put32(unpadded, data + 4, 8191 * sampleBytes);
     put32(unpadded, 4, unpadded.size() - 8);
     auto pcm = samples(8192, 1, bits); pcm.pop_back();
-    for (bool metadata : {false, true}) {
+    for (bool metadata : {false, true}) for (bool declaredPad : {false, true}) {
       auto bytes = unpadded;
       if (metadata) {
         bytes.insert(12, std::string("Xfoo\x02\0\0\0ok", 10));
         put32(bytes, 4, bytes.size() - 8);
       }
-      const auto name = std::to_string(bits) + (metadata ? "-unpadded-metadata" : "-unpadded");
+      // Some writers count the omitted alignment byte in the outer RIFF size.
+      // The declared data payload still ends exactly at the physical EOF.
+      if (declaredPad) put32(bytes, 4, bytes.size() - 8 + 1);
+      const auto name = std::to_string(bits) + (metadata ? "-unpadded-metadata" : "-unpadded") +
+          (declaredPad ? "-declared-pad" : "");
       const auto source = temp.root / (std::string(name) + ".wav");
       const auto output = temp.root / (std::string(name) + ".flac");
       temp.write(source.filename(), bytes);
@@ -291,12 +336,15 @@ void audioTests() {
       require(readAudio(output, 1, 8191) == pcm, "unpadded WAV preserves every sample including the last");
       if (metadata) verifyWaveMetadata(bytes, output);
     }
-    // Missing a declared audio byte is still truncation, even with an accurate RIFF size.
+    // Missing a declared audio byte is truncation with either outer RIFF size.
     auto truncated = unpadded; truncated.pop_back(); put32(truncated, 4, truncated.size() - 8);
-    temp.write("unpadded-truncated.wav", truncated);
-    require(EncodeAudio(candidate(temp.root / "unpadded-truncated.wav"), policy,
+    for (bool declaredPad : {false, true}) {
+      put32(truncated, 4, truncated.size() - 8 + (declaredPad ? 1 : 0));
+      temp.write("unpadded-truncated.wav", truncated);
+      require(EncodeAudio(candidate(temp.root / "unpadded-truncated.wav"), policy,
                         temp.root / "unpadded-truncated.flac", {}, {}).reason.code == StorageReason::ValidationFailed,
             "terminal padding tolerance never accepts missing declared PCM bytes");
+    }
     if (bits == 24) {
       auto partialFrame = unpadded; partialFrame.resize(partialFrame.size() - 2);
       put32(partialFrame, data + 4, 8191 * sampleBytes - 2);
@@ -709,6 +757,117 @@ void changingAspectRatioTests() {
               !std::filesystem::exists(output) && std::filesystem::exists(input),
           "changing decoded aspect ratio keeps original without creating an output");
 }
+void existingBgaTests() {
+  storage_test::TempDirectory temp;
+  storage_test::VideoFixture fixture;
+  fixture.h264 = true; fixture.rotation = 90; fixture.colorSpace = AVCOL_SPC_BT2020_CL;
+  fixture.width = fixture.height = 64;
+  const auto source = temp.root / "existing.mp4";
+  storage_test::makeVideo(source, fixture);
+  require(ValidateExistingBga(source).code == StorageReason::None,
+          "existing MP4 H264 is reusable without applying color-conversion or display-transform policy");
+  require(ValidateExistingBga(source, [] { return false; }).code == StorageReason::Cancelled,
+          "existing video validation cooperates with cancellation");
+  const auto truncated = temp.root / "truncated.mp4";
+  std::filesystem::copy_file(source, truncated);
+  std::filesystem::resize_file(truncated, std::filesystem::file_size(truncated) / 2);
+  require(ValidateExistingBga(truncated).code == StorageReason::ValidationFailed,
+          "truncated existing MP4 cannot authorize retiring the original video");
+  {
+    Input original(source);
+    auto encoded = packet();
+    std::int64_t lastVideo = -1;
+    while (av_read_frame(original.format, encoded.get()) >= 0) {
+      if (encoded->stream_index == original.video && encoded->size > 4) lastVideo = encoded->pos;
+      av_packet_unref(encoded.get());
+    }
+    std::ifstream input(source, std::ios::binary);
+    std::string bytes((std::istreambuf_iterator<char>(input)), {});
+    require(lastVideo >= 0 && static_cast<std::uint64_t>(lastVideo) + 4 <= bytes.size(),
+            "MP4 fixture exposes the final encoded video packet");
+    std::fill_n(bytes.begin() + lastVideo, 4, static_cast<char>(0xff));
+    const auto corrupt = temp.root / "late-corruption.mp4";
+    temp.write(corrupt.filename(), bytes);
+    Input header(corrupt);
+    require(header.format->streams[header.video]->codecpar->codec_id == AV_CODEC_ID_H264,
+            "late packet corruption retains readable MP4 headers and H264 identification");
+    require(ValidateExistingBga(corrupt).code == StorageReason::ValidationFailed,
+            "full decode rejects a corrupt late video packet even when header probing succeeds");
+  }
+  fixture.rotation = 0; fixture.colorSpace = AVCOL_SPC_UNSPECIFIED;
+  const auto disguised = temp.root / "disguised.mp4";
+  storage_test::makeVideo(disguised, fixture);
+  require(ValidateExistingBga(disguised).code == StorageReason::UnsupportedFormat,
+          "a filename extension cannot make H264 in another container a reusable MP4");
+}
+void quantizedAudioTimelineTests() {
+  std::int64_t next = AV_NOPTS_VALUE;
+  for (const auto pts : {0, 1008, 2064, 3072}) advanceAudioInput(pts, 1024, {1, 1000}, {1, 48000}, next);
+  require(next == 4096, "millisecond PCM timestamps keep the exact accumulated sample count");
+  bool gap = false;
+  try { advanceAudioInput(4240, 1024, {1, 1000}, {1, 48000}, next); }
+  catch (const Failure &failure) { gap = failure.reason == StorageReason::UnsupportedFormat; }
+  require(gap, "audio gaps beyond source-clock rounding remain unsupported");
+  next = AV_NOPTS_VALUE;
+  bool drift = false;
+  try {
+    for (int i = 0; i < 8; ++i) advanceAudioInput(i * 1008, 1024, {1, 1000}, {1, 48000}, next);
+  } catch (const Failure &failure) { drift = failure.reason == StorageReason::UnsupportedFormat; }
+  require(drift, "small per-packet timestamp errors cannot accumulate into accepted audio drift");
+}
+void asfTimelineTests() {
+  storage_test::TempDirectory temp;
+  StoragePolicy policy; policy.bga = BgaAction::CompressH264;
+  for (bool audio : {false, true}) {
+    storage_test::VideoFixture fixture;
+    fixture.asf = true; fixture.audio = audio; fixture.width = fixture.height = 64;
+    fixture.audioTailSamples = audio ? 4800 : 0;
+    for (int i = 2; i < 32; ++i) fixture.timestamps.push_back(i);
+    const auto source = temp.root / (audio ? "audio.wmv" : "video.wmv");
+    const auto output = temp.root / (audio ? "audio.mp4" : "video.mp4");
+    storage_test::makeVideo(source, fixture);
+    const auto original = storage_test::inspectVideo(source);
+    require(original.timestamps.size() == 30 && std::abs(original.timestamps.front() - .08) < .001 &&
+                std::abs(original.timestamps.back() - 1.24) < .001,
+            "ASF fixture has a complete nonzero-start WMV presentation timeline");
+    const auto result = EncodeBga(candidate(source), policy, output, {}, {});
+    if (result.outcome != FileOutcome::Converted) std::cerr << "ASF conversion: " << result.reason.detail << '\n';
+    require(result.outcome == FileOutcome::Converted,
+            "valid ASF global duration is not added to the individual video start again");
+    const auto converted = storage_test::inspectVideo(output);
+    require(converted.timestamps.size() == 30 && std::abs(converted.videoEnd - (audio ? 1.28 : 1.2)) < .002 &&
+                std::abs(converted.timestamps.front() - (audio ? .08 : 0)) < .002,
+            "WMV conversion preserves every frame and its offset relative to optional audio");
+    if (audio) require(std::abs(converted.audioEnd - 1.38) < .025,
+        "ASF global endpoint may belong to audio extending beyond the last video frame");
+  }
+}
+void truncatedAsfTests() {
+  storage_test::TempDirectory temp;
+  storage_test::VideoFixture fixture; fixture.asf = true; fixture.width = fixture.height = 64;
+  const auto source = temp.root / "complete.wmv", truncated = temp.root / "truncated.wmv";
+  storage_test::makeVideo(source, fixture);
+  std::ifstream input(source, std::ios::binary);
+  std::string bytes((std::istreambuf_iterator<char>(input)), {});
+  const auto fileHeader = bytes.find(std::string("\xa1\xdc\xab\x8c\x47\xa9\xcf\x11\x8e\xe4\x00\xc0\x0c\x20\x53\x65", 16));
+  const auto data = bytes.find(std::string("\x36\x26\xb2\x75\x8e\x66\xcf\x11\xa6\xd9\x00\xaa\x00\x62\xce\x6c", 16));
+  require(fileHeader != std::string::npos && data != std::string::npos, "fixture has ASF file and data objects");
+  const auto little = [&](std::size_t offset, int count) {
+    require(offset + count <= bytes.size(), "complete ASF fixture field");
+    std::uint64_t value = 0;
+    for (int i = 0; i < count; ++i) value |= std::uint64_t(static_cast<unsigned char>(bytes[offset + i])) << (i * 8);
+    return value;
+  };
+  const auto packets = little(fileHeader + 56, 8), packetBytes = little(fileHeader + 96, 4);
+  require(packets > 4 && packetBytes > 0, "fixture contains multiple fixed-size ASF packets");
+  bytes.resize(data + 50 + (packets / 2) * packetBytes);
+  temp.write(truncated, bytes);
+  StoragePolicy policy; policy.bga = BgaAction::CompressH264;
+  const auto output = temp.root / "truncated.mp4";
+  const auto result = EncodeBga(candidate(truncated), policy, output, {}, {});
+  require(result.reason.code == StorageReason::ValidationFailed && !std::filesystem::exists(output),
+          "packet-aligned ASF truncation cannot pass through a decoder's clean early EOF");
+}
 void videoTests() {
   storage_test::TempDirectory temp;
   StoragePolicy policy; policy.bga = BgaAction::CompressH264;
@@ -867,7 +1026,8 @@ int main() {
   av_log_set_level(AV_LOG_ERROR);
   int failures = 0;
   for (const auto test : {decodedDisplayTransformTests, decodedColorTests, decodedAudioFormatTests, timelineTests,
-                          declaredVideoTimelineTests, crossStreamTimelineTests, changingAspectRatioTests, audioTests, videoTests}) {
+                          declaredVideoTimelineTests, crossStreamTimelineTests, changingAspectRatioTests, quantizedAudioTimelineTests, asfTimelineTests,
+                          truncatedAsfTests, existingBgaTests, existingAudioTests, audioTests, videoTests}) {
     try { test(); }
     catch (const std::exception &error) { std::cerr << error.what() << '\n'; ++failures; }
   }

@@ -24,7 +24,8 @@ struct VideoFixture {
   AVRational sampleAspectRatio{1, 1}, laterSampleAspectRatio{0, 1};
   int rotation = 0;
   bool scaledDisplayMatrix = false;
-  bool millisecondContainer = false, lossless = false;
+  bool millisecondContainer = false, lossless = false, asf = false;
+  int audioTailSamples = 0;
 };
 inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
   struct Resources {
@@ -40,12 +41,13 @@ inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
   if (fixture.timestamps.empty()) for (int i = 0; i < 30; ++i) fixture.timestamps.push_back(i);
   // NUT preserves the codec's exact rational timestamps, including deliberate
   // VFR gaps, without a millisecond container clock rounding the fixture.
-  const char *container = fixture.millisecondContainer ? "matroska" :
+  const char *container = fixture.asf ? "asf" : fixture.millisecondContainer ? "matroska" :
                           fixture.rotation || fixture.scaledDisplayMatrix ? "mp4" : "nut";
   require(avformat_alloc_output_context2(&resources.mux, nullptr, container, path.string().c_str()) >= 0,
           "create fixture container");
   const auto codec = fixture.alpha || fixture.lossless ? avcodec_find_encoder(AV_CODEC_ID_FFV1) :
-                     fixture.h264 ? avcodec_find_encoder_by_name("libx264") : avcodec_find_encoder(AV_CODEC_ID_MPEG1VIDEO);
+                     fixture.h264 ? avcodec_find_encoder_by_name("libx264") :
+                     avcodec_find_encoder(fixture.asf ? AV_CODEC_ID_WMV2 : AV_CODEC_ID_MPEG1VIDEO);
   require(codec, "fixture encoder present");
   auto stream = avformat_new_stream(resources.mux, nullptr);
   resources.encoder = avcodec_alloc_context3(codec);
@@ -128,7 +130,8 @@ inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
   }
   require(avcodec_send_frame(&encoder, nullptr) >= 0, "fixture encoder flush"); drain();
   if (audio) {
-    const auto total = av_rescale_q(fixture.timestamps.back() + 1, encoder.time_base, audio->time_base);
+    const AVRational sampleClock{1, audio->codecpar->sample_rate};
+    const auto total = av_rescale_q(fixture.timestamps.back() + 1, encoder.time_base, sampleClock) + fixture.audioTailSamples;
     for (std::int64_t position = 0; position < total; position += 1024) {
       const int frames = static_cast<int>(std::min<std::int64_t>(1024, total - position));
       require(av_new_packet(resources.packet, frames * 4) >= 0, "fixture audio packet");
@@ -141,6 +144,7 @@ inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
       }
       resources.packet->pts = resources.packet->dts = position;
       resources.packet->duration = frames; resources.packet->stream_index = audio->index;
+      av_packet_rescale_ts(resources.packet, sampleClock, audio->time_base);
       require(av_interleaved_write_frame(resources.mux, resources.packet) >= 0, "fixture audio packet mux");
       av_packet_unref(resources.packet);
     }

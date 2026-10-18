@@ -133,6 +133,18 @@ void largeDirectorySpillRetainsCollisionRules() {
             "an unrelated directory extension does not block safe media");
     require(!StorageCandidateForEntry(audio("link.wav"), disk, {.audio = AudioAction::LossyVorbis}, {}, reason),
             "unsafe destination remains a collision");
+    for (const auto &entry : {audio("reuse.wav"), audio("reuse.flac"), audio("reuse.ogg"),
+                              audio("clip.wmv"), audio("clip.mp4")})
+      require(disk.Add(entry, error), "add existing destination fixtures");
+    for (const auto action : {AudioAction::LosslessFlac, AudioAction::LossyVorbis}) {
+      const auto reuse = StorageCandidateForEntry(audio("reuse.wav"), disk, {.audio = action}, {}, reason);
+      require(reuse && reuse->reuseDestination && reuse->existingDestinationIdentity,
+              "an existing audio destination is eligible for validation and reuse");
+    }
+    const auto reuseVideo = StorageCandidateForEntry(audio("clip.wmv"), disk, {.bga = BgaAction::CompressH264}, {}, reason);
+    require(reuseVideo && reuseVideo->reuseDestination, "an existing MP4 destination is eligible for reuse");
+    require(!StorageCandidateForEntry(audio("clip.mp4"), disk, {.bga = BgaAction::CompressH264}, {}, reason),
+            "the retained MP4 is not independently re-encoded while alternatives depend on it");
     require(disk.Remove("sound.WAV", error), "advance removes retired entry");
     auto changed = audio("sound.ogg");
     require(disk.Set(changed, error) && disk.Find("sound.ogg", error).has_value(), "advance retains installed entry");

@@ -32,6 +32,71 @@ SoundFile openRead(const fs::path &path, SF_INFO &info) {
   return {sf_open(path.c_str(), SFM_READ, &info), sf_close};
 #endif
 }
+StorageDiagnostic validateFlacFrames(const fs::path &path, const SF_INFO &info, const Checkpoint &check) {
+  const auto invalid = StorageDiagnostic{StorageReason::ValidationFailed, "Existing FLAC did not decode completely"};
+  const auto cancelled = StorageDiagnostic{StorageReason::Cancelled, "Cancelled"};
+  struct Decoder {
+    AVFormatContext *input = nullptr;
+    AVCodecContext *codec = nullptr;
+    AVPacket *packet = av_packet_alloc();
+    AVFrame *frame = av_frame_alloc();
+    ~Decoder() {
+      av_frame_free(&frame); av_packet_free(&packet);
+      avcodec_free_context(&codec); avformat_close_input(&input);
+    }
+  } decoder;
+  const auto utf8 = path.u8string();
+  const std::string name(utf8.begin(), utf8.end());
+  if (!decoder.packet || !decoder.frame ||
+      avformat_open_input(&decoder.input, name.c_str(), nullptr, nullptr) < 0 ||
+      avformat_find_stream_info(decoder.input, nullptr) < 0) return invalid;
+  int audio = -1;
+  for (unsigned i = 0; i < decoder.input->nb_streams; ++i) {
+    const auto stream = decoder.input->streams[i];
+    if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && audio < 0 &&
+        stream->codecpar->codec_id == AV_CODEC_ID_FLAC) audio = i;
+    else if (stream->codecpar->codec_type != AVMEDIA_TYPE_VIDEO ||
+             !(stream->disposition & AV_DISPOSITION_ATTACHED_PIC)) return invalid;
+  }
+  if (audio < 0) return invalid;
+  const auto codec = avcodec_find_decoder(AV_CODEC_ID_FLAC);
+  if (!codec || !(decoder.codec = avcodec_alloc_context3(codec)) ||
+      avcodec_parameters_to_context(decoder.codec, decoder.input->streams[audio]->codecpar) < 0) return invalid;
+  decoder.codec->thread_count = 1;
+  decoder.codec->err_recognition = AV_EF_CRCCHECK | AV_EF_BITSTREAM | AV_EF_BUFFER | AV_EF_EXPLODE;
+  if (avcodec_open2(decoder.codec, codec, nullptr) < 0) return invalid;
+  sf_count_t frames = 0;
+  const auto drain = [&](bool flushing) -> StorageDiagnostic {
+    for (;;) {
+      if (check && !check()) return cancelled;
+      const auto status = avcodec_receive_frame(decoder.codec, decoder.frame);
+      if (status == AVERROR_EOF || (!flushing && status == AVERROR(EAGAIN))) return {};
+      if (status < 0 || decoder.frame->decode_error_flags || (decoder.frame->flags & AV_FRAME_FLAG_CORRUPT) ||
+          decoder.frame->sample_rate != info.samplerate || decoder.frame->ch_layout.nb_channels != info.channels ||
+          decoder.frame->nb_samples <= 0 || decoder.frame->nb_samples > info.frames - frames) return invalid;
+      frames += decoder.frame->nb_samples;
+      av_frame_unref(decoder.frame);
+    }
+  };
+  // libsndfile stops at STREAMINFO's count, hiding extra or damaged frames when
+  // that count is understated. Read packets to physical EOF and flush instead.
+  int status = 0;
+  while ((status = av_read_frame(decoder.input, decoder.packet)) >= 0) {
+    if (check && !check()) return cancelled;
+    if (decoder.packet->stream_index == audio) {
+      if ((decoder.packet->flags & AV_PKT_FLAG_CORRUPT) ||
+          avcodec_send_packet(decoder.codec, decoder.packet) < 0) return invalid;
+      const auto result = drain(false);
+      if (result.code != StorageReason::None) return result;
+    }
+    av_packet_unref(decoder.packet);
+  }
+  if (status != AVERROR_EOF || (decoder.input->pb && decoder.input->pb->error < 0 &&
+      decoder.input->pb->error != AVERROR_EOF) || avcodec_send_packet(decoder.codec, nullptr) < 0) return invalid;
+  const auto result = drain(true);
+  if (result.code != StorageReason::None) return result;
+  return frames == info.frames ? StorageDiagnostic{} : invalid;
+}
 std::uint32_t le32(const unsigned char *p) {
   return std::uint32_t(p[0]) | (std::uint32_t(p[1]) << 8) |
          (std::uint32_t(p[2]) << 16) | (std::uint32_t(p[3]) << 24);
@@ -57,6 +122,7 @@ struct WaveMetadata {
   bool preserve = false;
   bool last = false;
   bool unpaddedData = false;
+  std::uint64_t sourceEnd = 0;
   std::uint64_t bytes = 20; // APPLICATION header, riff ID and RIFF/WAVE header.
 };
 // libsndfile tolerates truncated RIFF data and does not expose every custom loop
@@ -113,14 +179,21 @@ StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, SN
   }
   if (!input.read(reinterpret_cast<char *>(header.data()), 12) ||
       std::memcmp(header.data(), "RIFF", 4) || std::memcmp(header.data() + 8, "WAVE", 4)) return bad;
-  const std::uint64_t end = std::uint64_t(le32(header.data() + 4)) + 8;
-  if (end != bytes) return bad;
+  const std::uint64_t declaredEnd = std::uint64_t(le32(header.data() + 4)) + 8;
+  const auto sizeMismatch = StorageDiagnostic{StorageReason::ValidationFailed,
+      "WAV RIFF declares " + std::to_string(declaredEnd) + " bytes; file contains " + std::to_string(bytes)};
+  // A writer may count an omitted terminal data pad in the outer RIFF size.
+  // Defer this one-byte discrepancy until the complete PCM payload is checked.
+  if (declaredEnd != bytes && declaredEnd != bytes + 1) return sizeMismatch;
+  const std::uint64_t end = bytes;
+  foreign.sourceEnd = end;
   std::uint64_t offset = 12;
   bool data = false;
   bool oversized = false;
   while (offset < end) {
     if (check && !check()) return {StorageReason::Cancelled, "Cancelled"};
-    if (end - offset < 8 || !input.read(reinterpret_cast<char *>(header.data()), 8)) return bad;
+    if (end - offset < 8 || !input.read(reinterpret_cast<char *>(header.data()), 8))
+      return {StorageReason::ValidationFailed, "Incomplete WAV chunk header at byte " + std::to_string(offset)};
     const auto length = le32(header.data() + 4);
     offset += 8;
     const std::string_view type(reinterpret_cast<const char *>(header.data()), 4);
@@ -132,15 +205,22 @@ StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, SN
       const int sampleBytes = subtype == SF_FORMAT_PCM_U8 || subtype == SF_FORMAT_PCM_S8 ? 1
           : subtype == SF_FORMAT_PCM_24 ? 3 : 0;
       const int frameBytes = sampleBytes * info.channels;
-      if (frameBytes <= 0 || length % frameBytes || length / frameBytes != info.frames) return bad;
+      if (frameBytes <= 0 || length % frameBytes || length / frameBytes != info.frames)
+        return {StorageReason::ValidationFailed, "Unpadded WAV data does not contain complete declared PCM frames"};
       foreign.unpaddedData = true;
       padded = length;
     }
-    if (padded > end - offset) return bad;
+    if (padded > end - offset)
+      return {StorageReason::ValidationFailed, "WAV chunk '" + std::string(type) + "' at byte " +
+          std::to_string(offset - 8) + " requires " + std::to_string(padded) +
+          " payload/padding bytes; only " + std::to_string(end - offset) + " remain"};
     const auto stored = type == "data" ? 8 : 8 + padded;
     foreign.bytes += 8 + stored;
     oversized = oversized || stored > 0xffffff - 4;
-    if (type == "data") { if (data) return bad; data = true; }
+    if (type == "data") {
+      if (data) return {StorageReason::ValidationFailed, "WAV contains multiple data chunks"};
+      data = true;
+    }
     // FLAC's RIFF APPLICATION blocks retain ancillary chunks verbatim, including
     // unknown vendor metadata. Only lossy conversion needs a semantic whitelist.
     else if (lossless && type != "fmt " && type != "fact" && type != "JUNK" && type != "PAD ") foreign.preserve = true;
@@ -183,9 +263,10 @@ StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, SN
     input.seekg(padded, std::ios::cur);
     offset += padded;
   }
+  if (declaredEnd != end && !foreign.unpaddedData) return sizeMismatch;
   if (foreign.preserve && oversized)
     return {StorageReason::UnsupportedFormat, "WAV metadata chunk exceeds the FLAC metadata block limit"};
-  return data ? StorageDiagnostic{} : bad;
+  return data ? StorageDiagnostic{} : StorageDiagnostic{StorageReason::ValidationFailed, "WAV has no data chunk"};
 }
 // Match flac --keep-foreign-metadata: one riff APPLICATION block per RIFF
 // chunk, with only the RIFF/WAVE and data headers for the audio containers.
@@ -222,7 +303,7 @@ StorageDiagnostic preserveWaveMetadata(const fs::path &source, const fs::path &d
   } else output.seekg(insertion);
   if (!input.read(reinterpret_cast<char *>(header.data()), 12) ||
       std::memcmp(header.data(), "RIFF", 4) || std::memcmp(header.data() + 8, "WAVE", 4)) return bad;
-  const std::uint64_t sourceEnd = std::uint64_t(le32(header.data() + 4)) + 8;
+  const std::uint64_t sourceEnd = foreign.sourceEnd;
   std::uint64_t offset = 0, written = 0;
   while (offset < sourceEnd) {
     if (check && !check()) return {StorageReason::Cancelled, "Cancelled"};
@@ -309,6 +390,109 @@ AudioEncodingDecision ChooseAudioEncoding(int sourceFormat, int sampleRate, int 
   return {format, {}};
 }
 
+StorageDiagnostic ValidateExistingAudio(const fs::path &path, AudioAction action, Checkpoint check) {
+  const auto invalid = StorageDiagnostic{StorageReason::ValidationFailed, "Existing audio is incomplete or invalid"};
+  const auto cancelled = StorageDiagnostic{StorageReason::Cancelled, "Cancelled"};
+  if (check && !check()) return cancelled;
+  SF_INFO info{};
+  auto audio = openRead(path, info);
+  const bool flac = action == AudioAction::LosslessFlac;
+  if (!audio || info.frames <= 0 || info.channels <= 0 || info.channels > 32 || info.samplerate <= 0) return invalid;
+  if ((!flac && action != AudioAction::LossyVorbis) ||
+      (info.format & SF_FORMAT_TYPEMASK) != (flac ? SF_FORMAT_FLAC : SF_FORMAT_OGG) ||
+      (!flac && (info.format & SF_FORMAT_SUBMASK) != SF_FORMAT_VORBIS))
+    return {StorageReason::ValidationFailed, "Existing destination does not contain the requested audio codec"};
+  std::ifstream input(path, std::ios::binary);
+  std::error_code error;
+  const auto bytes = fs::file_size(path, error);
+  if (!input || error) return invalid;
+  if (flac) {
+    std::array<unsigned char, 34> header{};
+    if (!input.read(reinterpret_cast<char *>(header.data()), 4) || std::memcmp(header.data(), "fLaC", 4)) return invalid;
+    std::uint64_t offset = 4;
+    bool first = true, last = false;
+    while (!last) {
+      if (check && !check()) return cancelled;
+      if (!input.read(reinterpret_cast<char *>(header.data()), 4)) return invalid;
+      last = (header[0] & 128) != 0;
+      const auto type = header[0] & 127;
+      const std::uint32_t length = (header[1] << 16) | (header[2] << 8) | header[3];
+      offset += 4;
+      if (offset > bytes || length > bytes - offset || type == 127) return invalid;
+      if (first) {
+        if (type != 0 || length != 34 || !input.read(reinterpret_cast<char *>(header.data()), 34)) return invalid;
+        const std::uint64_t frames = (std::uint64_t(header[13] & 15) << 32) |
+            (std::uint64_t(header[14]) << 24) | (std::uint64_t(header[15]) << 16) |
+            (std::uint64_t(header[16]) << 8) | header[17];
+        if (!frames || frames != static_cast<std::uint64_t>(info.frames)) return invalid;
+      } else {
+        if (type == 0) return invalid;
+        // The target is retained verbatim, so no metadata whitelist is needed.
+        input.seekg(length, std::ios::cur);
+      }
+      first = false; offset += length;
+    }
+    if (offset >= bytes) return invalid;
+    audio.reset();
+    return validateFlacFrames(path, info, check);
+  } else {
+    // Verify every Ogg page, including EOS: tolerant decoders may otherwise
+    // accept a stream cut cleanly at a page boundary. Scratch stays under 64 KiB.
+    static constexpr auto crcTable = [] {
+      std::array<std::uint32_t, 256> table{};
+      for (std::uint32_t i = 0; i < table.size(); ++i) {
+        auto value = i << 24;
+        for (int bit = 0; bit < 8; ++bit) value = (value << 1) ^ ((value & 0x80000000u) ? 0x04c11db7u : 0);
+        table[i] = value;
+      }
+      return table;
+    }();
+    std::uint64_t offset = 0;
+    std::uint32_t serial = 0, sequence = 0;
+    bool ended = false;
+    while (offset < bytes) {
+      if (check && !check()) return cancelled;
+      std::vector<unsigned char> page(27);
+      if (ended || !input.read(reinterpret_cast<char *>(page.data()), 27) ||
+          std::memcmp(page.data(), "OggS", 4) || page[4] != 0 || (page[5] & ~7)) return invalid;
+      const auto flags = page[5];
+      if (!offset) serial = le32(page.data() + 14);
+      if (le32(page.data() + 14) != serial || le32(page.data() + 18) != sequence++ ||
+          bool(flags & 2) != (offset == 0)) return invalid;
+      const auto segments = page[26];
+      page.resize(27 + segments);
+      if (!input.read(reinterpret_cast<char *>(page.data() + 27), segments)) return invalid;
+      std::size_t payload = 0;
+      for (std::size_t i = 27; i < page.size(); ++i) payload += page[i];
+      const auto headerBytes = page.size();
+      page.resize(headerBytes + payload);
+      if (!input.read(reinterpret_cast<char *>(page.data() + headerBytes), payload)) return invalid;
+      const auto expected = le32(page.data() + 22);
+      std::fill(page.begin() + 22, page.begin() + 26, 0);
+      std::uint32_t crc = 0;
+      for (const auto byte : page) crc = (crc << 8) ^ crcTable[(crc >> 24) ^ byte];
+      if (crc != expected) return invalid;
+      offset += page.size(); ended = (flags & 4) != 0;
+      if (ended) {
+        const std::uint64_t frames = le32(page.data() + 6) | (std::uint64_t(le32(page.data() + 10)) << 32);
+        if (frames != static_cast<std::uint64_t>(info.frames)) return invalid;
+      }
+    }
+    if (!ended || offset != bytes) return invalid;
+  }
+  std::vector<float> samples(4096 * info.channels);
+  sf_count_t frames = 0;
+  for (;;) {
+    if (check && !check()) return cancelled;
+    const auto count = sf_readf_float(audio.get(), samples.data(), 4096);
+    if (!count) break;
+    if (count < 0 || count > info.frames - frames ||
+        !std::all_of(samples.begin(), samples.begin() + count * info.channels, [](float sample) { return std::isfinite(sample); }))
+      return invalid;
+    frames += count;
+  }
+  return sf_error(audio.get()) || frames != info.frames ? invalid : StorageDiagnostic{};
+}
 EncodeResult EncodeAudio(const AssetCandidate &candidate, const StoragePolicy &policy,
                          const fs::path &temporaryOutput, Checkpoint check, ProgressCallback progress) {
   bool created = false;

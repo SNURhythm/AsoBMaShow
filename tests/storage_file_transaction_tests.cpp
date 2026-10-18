@@ -379,6 +379,58 @@ void testLosslessReplacementWithoutSavings() {
                 !fs::exists(f.candidate.destination), "lossy replacements still require smaller output");
   }
 }
+void testExistingDestinationReuse() {
+  for (const auto point : {"", "prepared", "retired-before-journal", "retired", "committed"}) {
+    Fixture f;
+    f.temp.write("library/asset.mp4", std::string(2048, 'd'));
+    std::string error;
+    f.candidate.existingDestinationIdentity = ReadFileIdentity(f.candidate.destination, error);
+    f.candidate.existingDestinationHash = *HashStorageFile(f.candidate.destination, {}, error);
+    FileTransactionDependencies dependencies;
+    dependencies.faultPoint = [point](std::string_view reached) { if (reached == point) throw Crash{}; };
+    try {
+      const auto result = StorageFileTransaction(f.paths, dependencies).ReuseExisting(f.candidate);
+      require(std::string_view(point).empty(), "reuse reaches its requested crash boundary");
+      require(result.outcome == FileOutcome::Deleted && result.reclaimedBytes == 1024 && !result.addedBytes &&
+                  result.filesystemChanges.size() == 1 && result.filesystemChanges.front().path == f.candidate.source &&
+                  !result.filesystemChanges.front().after,
+              "reusing a larger existing destination reclaims the source without counting retained bytes twice");
+    } catch (const Crash &) {}
+    const auto recovered = StorageFileTransaction(f.paths).Recover();
+    const bool committed = std::string_view(point).empty() || std::string_view(point) == "committed";
+    require(!recovered.recoveryRequired && fs::exists(f.candidate.source) != committed &&
+                ReadFileIdentity(f.candidate.destination, error) == f.candidate.existingDestinationIdentity &&
+                read(f.candidate.destination) == std::string(2048, 'd'),
+            "reuse recovery restores only uncommitted sources and never replaces or removes the retained destination");
+    require(recovered.reclaimedBytes == (std::string_view(point) == "committed" ? 1024 : 0),
+            "committed reuse recovery counts the whole removed source once");
+    requireNoRecoveryFiles(f);
+  }
+  for (const auto point : {"before", "prepared", "retired", "committed"}) {
+    Fixture f;
+    f.temp.write("library/asset.mp4", std::string(128, 'd'));
+    std::string error;
+    f.candidate.existingDestinationIdentity = ReadFileIdentity(f.candidate.destination, error);
+    f.candidate.existingDestinationHash = *HashStorageFile(f.candidate.destination, {}, error);
+    auto changeDestination = [&] { f.temp.write("library/asset.mp4", "foreign destination edit"); };
+    if (std::string_view(point) == "before") changeDestination();
+    FileTransactionDependencies dependencies;
+    dependencies.faultPoint = [&](std::string_view reached) { if (reached == point) changeDestination(); };
+    const auto result = StorageFileTransaction(f.paths, dependencies).ReuseExisting(f.candidate);
+    require(result.reclaimedBytes == 0 && read(f.candidate.destination) == "foreign destination edit",
+            "changed retained destination is never overwritten or used to claim reclaimed bytes");
+    if (std::string_view(point) == "committed") {
+      require(result.reason.code == StorageReason::RecoveryRequired &&
+                  StorageFileTransaction(f.paths).Recover().recoveryRequired,
+              "changed destination after commit preserves the recovery backup");
+      bool originalRetained = false;
+      for (const auto &entry : fs::directory_iterator(f.candidate.source.parent_path()))
+        if (entry.path().extension() == ".backup") originalRetained |= read(entry.path()) == std::string(1024, 's');
+      require(originalRetained, "committed reuse retains source bytes when its destination changes");
+    } else require(result.outcome != FileOutcome::Deleted && read(f.candidate.source) == std::string(1024, 's'),
+                   "destination changes before commit preserve or restore the original source");
+  }
+}
 void testRestartAtEveryBoundary() {
   for (const bool samePath : {false, true}) {
     for (const auto point : {"copying", "copied", "prepared", "published-before-journal",
@@ -636,6 +688,7 @@ int main(int argc, char **argv) {
     testAbandonedCandidatesAfterRestart();
     testSuccessAndCancellation();
     testLosslessReplacementWithoutSavings();
+    testExistingDestinationReuse();
     testRestartAtEveryBoundary();
     testFailuresNeverClobberAndCleanupAccounting();
     testForeignIdentityAndCorruptJournalArePreserved();

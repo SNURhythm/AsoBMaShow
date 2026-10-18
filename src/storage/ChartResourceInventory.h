@@ -35,6 +35,11 @@ struct AssetCandidate {
   std::vector<std::string> groups;
   FileIdentity identity;
   std::string sourceHash; // Filled immediately before encoding, not during browsing.
+  // Preflight marks a potential reuse; Apply must validate and hash the target
+  // before a transaction may retire the source. Archive targets use the manifest.
+  bool reuseDestination = false;
+  std::optional<FileIdentity> existingDestinationIdentity;
+  std::string existingDestinationHash;
 };
 struct GroupStorageMeasurement {
   std::string groupId;

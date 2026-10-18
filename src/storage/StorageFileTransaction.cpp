@@ -19,6 +19,7 @@ enum class Phase { Copying, Prepared, Published, Retired, Committed };
 struct Record {
   std::string id;
   AssetOperation operation = AssetOperation::Delete;
+  bool reuse = false;
   Phase phase = Phase::Prepared;
   fs::path source, destination, temporary, backup, journal;
   FileIdentity sourceIdentity, outputIdentity;
@@ -110,7 +111,7 @@ FileIdentity readIdentity(const json &value) {
           value.at("device").get<std::uint64_t>(), value.at("fileId").get<std::uint64_t>()};
 }
 bool writeRecord(const Record &record, std::string &error) {
-  const auto encoded = json{{"version", 1}, {"id", record.id},
+  const auto encoded = json{{"version", record.reuse ? 2 : 1}, {"id", record.id}, {"reuse", record.reuse},
       {"operation", static_cast<int>(record.operation)}, {"phase", static_cast<int>(record.phase)},
       {"source", utf8(record.source)}, {"destination", utf8(record.destination)},
       {"temporary", utf8(record.temporary)}, {"backup", utf8(record.backup)},
@@ -154,10 +155,13 @@ bool validTargets(const Record &record, const StoragePlatformPaths &paths, std::
     if (extension != "mp4") expected.replace_extension("mp4");
     break;
   case AssetOperation::Delete:
-    return asobmshow::chart_assets::ClassifyMediaPath(record.source) == asobmshow::chart_assets::MediaKind::Video &&
+    return !record.reuse && asobmshow::chart_assets::ClassifyMediaPath(record.source) == asobmshow::chart_assets::MediaKind::Video &&
            record.destination == record.source && record.temporary.empty();
   default: return false;
   }
+  if (record.reuse) return record.destination == expected && record.destination != record.source &&
+      record.temporary.empty() && validHash(record.outputHash) && record.outputIdentity.fileId != 0 &&
+      record.outputIdentity.bytes > 0 && record.phase != Phase::Copying && record.phase != Phase::Published;
   return record.destination == expected && validHash(record.outputHash) &&
          record.temporary == parent / (".asobmashow-storage-" + record.id + ".install") &&
          record.outputIdentity.fileId != 0 &&
@@ -172,13 +176,16 @@ std::optional<Record> loadRecord(const fs::path &path, const StoragePlatformPath
     std::ifstream stream(path, std::ios::binary);
     json value;
     stream >> value;
-    if (!value.at("version").is_number_integer() || value.at("version") != 1 ||
+    if (!value.at("version").is_number_integer() || (value.at("version") != 1 && value.at("version") != 2) ||
         !value.at("operation").is_number_integer() || !value.at("phase").is_number_integer() ||
         value.at("operation") < 0 || value.at("operation") > static_cast<int>(AssetOperation::Delete) ||
         value.at("phase") < 0 || value.at("phase") > static_cast<int>(Phase::Committed)) {
       error = "Unknown or malformed journal version/state"; return {};
     }
     Record record;
+    if (value.contains("reuse") && !value.at("reuse").is_boolean()) throw std::runtime_error("Invalid retained destination state");
+    record.reuse = value.value("reuse", false);
+    if (record.reuse != (value.at("version") == 2)) throw std::runtime_error("Invalid retained destination journal version");
     record.id = value.at("id").get<std::string>();
     record.operation = static_cast<AssetOperation>(value.at("operation").get<int>());
     record.phase = static_cast<Phase>(value.at("phase").get<int>());
@@ -231,7 +238,7 @@ bool finishRecord(const Record &record, const FileTransactionDependencies &ops,
     }
     if (!removeOwned(record.backup, record.sourceIdentity, record.sourceHash, ops, true, error, changes)) return false;
     if (hadBackup) AccumulateStorageBytes(reclaimed, added, record.sourceIdentity.bytes,
-                                          deletion ? 0 : record.outputIdentity.bytes);
+                                          deletion || record.reuse ? 0 : record.outputIdentity.bytes);
   } else {
     if (hadBackup && !matches(record.backup, record.sourceIdentity, record.sourceHash, ops, true, error)) {
       error = "Recovery backup changed"; return false;
@@ -243,7 +250,7 @@ bool finishRecord(const Record &record, const FileTransactionDependencies &ops,
         (deletion || !matches(record.source, record.outputIdentity, record.outputHash, ops, true, error))) {
       error = "Source path occupied by an unrelated file during rollback"; return false;
     }
-    if (!deletion && entryExists(record.destination) &&
+    if (!deletion && !record.reuse && entryExists(record.destination) &&
         matches(record.destination, record.outputIdentity, record.outputHash, ops, true, error)) {
       if (!hadBackup && record.destination == record.source) {
         error = "Cannot roll back replacement without its backup"; return false;
@@ -317,12 +324,15 @@ bool StorageFileTransaction::PrepareJournalDirectory(std::string &error) {
 FileResult StorageFileTransaction::Replace(const AssetCandidate &candidate, const EncodeResult &encoded, Checkpoint check) {
   return Run(candidate, &encoded, std::move(check));
 }
+FileResult StorageFileTransaction::ReuseExisting(const AssetCandidate &candidate, Checkpoint check) {
+  return Run(candidate, nullptr, std::move(check), true);
+}
 FileResult StorageFileTransaction::Delete(const AssetCandidate &candidate, Checkpoint check) {
   return Run(candidate, nullptr, std::move(check));
 }
 
-FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const EncodeResult *encoded, Checkpoint check) {
-  const bool deletion = encoded == nullptr;
+FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const EncodeResult *encoded, Checkpoint check, bool reuse) {
+  const bool deletion = encoded == nullptr && !reuse;
   FileResult result{.source = candidate.source, .destination = candidate.destination,
                     .outcome = FileOutcome::Failed, .bytesBefore = candidate.identity.bytes};
   std::string error;
@@ -331,6 +341,9 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
     if (reason == StorageReason::Cancelled) result.outcome = FileOutcome::Cancelled;
     result.reason = {reason, std::move(detail)}; return result;
   };
+  if (reuse && (!candidate.existingDestinationIdentity || !validHash(candidate.existingDestinationHash) ||
+                candidate.operation == AssetOperation::Delete || candidate.source == candidate.destination))
+    return fail(StorageReason::ValidationFailed, "Missing validated existing destination");
   if (!authorized(candidate.source, paths_, error)) return fail(StorageReason::UnsafePath, error);
   const auto sourceIdentity = dependencies_.identity(candidate.source, error);
   if (!sourceIdentity || *sourceIdentity != candidate.identity) return fail(StorageReason::StaleInput, "Source changed since inventory");
@@ -342,13 +355,20 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
   record.source = candidate.source;
   record.destination = deletion ? candidate.source : candidate.destination;
   record.operation = deletion ? AssetOperation::Delete : candidate.operation;
+  record.reuse = reuse;
   record.sourceIdentity = *sourceIdentity;
   record.sourceHash = *sourceHash;
   record.backup = record.source.parent_path() / (".asobmashow-storage-" + record.id + ".backup");
   record.journal = paths_.journalRoot / (record.id + ".json");
   std::error_code ec;
   if (!PrepareJournalDirectory(error)) return fail(StorageReason::IoError, error);
-  if (!deletion) {
+  if (reuse) {
+    record.outputIdentity = *candidate.existingDestinationIdentity;
+    record.outputHash = candidate.existingDestinationHash;
+    if (!matches(record.destination, record.outputIdentity, record.outputHash, dependencies_, true, error, check))
+      return fail(checkpoint(check) ? StorageReason::StaleInput : StorageReason::Cancelled,
+                  "Existing destination changed since validation");
+  } else if (!deletion) {
     if (encoded->outcome != FileOutcome::Converted) return fail(StorageReason::ValidationFailed, "No validated encoded output");
     const auto outputIdentity = dependencies_.identity(encoded->outputPath, error);
     if (!outputIdentity || outputIdentity->bytes == 0 ||
@@ -382,7 +402,7 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
     if (reason == StorageReason::Cancelled) result.outcome = FileOutcome::Cancelled;
     return fail(reason, std::move(detail));
   };
-  if (!deletion) {
+  if (!deletion && !reuse) {
     if (dependencies_.faultPoint) dependencies_.faultPoint("copying");
     if (!dependencies_.copyAndSync(encoded->outputPath, record.temporary, record.outputIdentity, check, error))
       return rollback(checkpoint(check) ? StorageReason::IoError : StorageReason::Cancelled, error);
@@ -408,6 +428,7 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
     changes.push_back({record.backup, retired ? std::optional<FileIdentity>(record.sourceIdentity) : std::nullopt});
     if (retired && (deletion || record.source != record.destination)) changes.push_back({record.source, std::nullopt});
     if (published) changes.push_back({record.destination, record.outputIdentity});
+    if (reuse) changes.push_back({record.destination, record.outputIdentity});
     return dependencies_.beforeCommit(candidate, changes, check, error);
   };
   if (!validateScope(false, false))
@@ -423,28 +444,33 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
     if (dependencies_.faultPoint) dependencies_.faultPoint(point);
     return true;
   };
-  if (!deletion && record.destination != record.source) {
+  if (!deletion && !reuse && record.destination != record.source) {
     if (!rename(record.temporary, record.destination, Phase::Published, "published")) return rollback(StorageReason::IoError, error);
   }
   if (!matches(record.source, record.sourceIdentity, record.sourceHash, dependencies_, true, error, check))
     return rollback(checkpoint(check) ? StorageReason::StaleInput : StorageReason::Cancelled, "Source verification interrupted before retirement");
+  if (reuse && !matches(record.destination, record.outputIdentity, record.outputHash, dependencies_, true, error, check))
+    return rollback(checkpoint(check) ? StorageReason::StaleInput : StorageReason::Cancelled, "Existing destination changed before retirement");
   if (!rename(record.source, record.backup, Phase::Retired, "retired")) return rollback(StorageReason::IoError, error);
-  if (!deletion && record.destination == record.source) {
+  if (!deletion && !reuse && record.destination == record.source) {
     if (!rename(record.temporary, record.destination, Phase::Published, "published")) return rollback(StorageReason::IoError, error);
   }
   if (!checkpoint(check)) return rollback(StorageReason::Cancelled, "Cancelled before durable commit");
-  if (!validateScope(true, !deletion))
+  if (!validateScope(true, !deletion && !reuse))
     return rollback(checkpoint(check) ? StorageReason::StaleInput : StorageReason::Cancelled, error);
+  if (reuse && !matches(record.destination, record.outputIdentity, record.outputHash, dependencies_, true, error, check))
+    return rollback(checkpoint(check) ? StorageReason::StaleInput : StorageReason::Cancelled, "Existing destination changed before commit");
   record.phase = Phase::Committed;
   // A failed durability flush may have already published the committed record.
   // Leave both playable output and backup for restart instead of guessing.
   if (!writeRecord(record, error)) return fail(StorageReason::RecoveryRequired, error);
   if (dependencies_.faultPoint) dependencies_.faultPoint("committed");
-  result.outcome = deletion ? FileOutcome::Deleted : FileOutcome::Converted;
-  result.bytesAfter = deletion ? 0 : record.outputIdentity.bytes;
+  result.outcome = deletion || reuse ? FileOutcome::Deleted : FileOutcome::Converted;
+  if (reuse) result.reason.detail = "Removed redundant source; retained validated existing destination";
+  result.bytesAfter = deletion || reuse ? 0 : record.outputIdentity.bytes;
   if (deletion || record.source != record.destination)
     result.filesystemChanges.push_back({record.source, std::nullopt});
-  if (!deletion) result.filesystemChanges.push_back({record.destination, record.outputIdentity});
+  if (!deletion && !reuse) result.filesystemChanges.push_back({record.destination, record.outputIdentity});
   if (!finishRecord(record, dependencies_, result.reclaimedBytes, result.addedBytes, error)) {
     const auto cleanupError = error;
     const bool outputIntact = deletion || matches(record.destination, record.outputIdentity,

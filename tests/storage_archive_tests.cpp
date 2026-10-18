@@ -86,6 +86,49 @@ void deflatedPayloadRefillsAtExactOutputBoundary() {
   std::ifstream file(output, std::ios::binary); const std::string decoded((std::istreambuf_iterator<char>(file)), {});
   require(decoded == payload, "valid deflate refills input after output ends exactly at a chunk boundary");
 }
+void existingArchiveDestinationsAreReused() {
+  for (int variant = 0; variant < 3; ++variant) for (bool targetFirst : {false, true}) {
+    storage_test::TempDirectory temp;
+    const auto path = temp.root / (variant == 2 ? "library.tar" : "library.zip");
+    std::vector<std::pair<std::string, std::string>> files{{"prefix.wav", "redundant"}, {"prefix.flac", "valid prefix"}};
+    const std::pair<std::string, std::string> source{"song.wav", "redundant source"}, target{"song.flac", "valid target retained byte for byte"};
+    files.push_back(targetFirst ? target : source); files.push_back(targetFirst ? source : target);
+    files.emplace_back("chart.bms", "#WAV01 song.wav");
+    writeArchive(path, files, variant == 1, variant == 2);
+    const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+    InventoryRequest request{.groups = {{"archive", path, false, false, StorageSourceKind::Archive}},
+        .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = paths.scanRoot};
+    const auto review = BuildStoragePreflight(request);
+    require(review.eligibleCount == 2 && review.archives.size() == 1, "archive preflight offers existing destinations for reuse");
+    unsigned validations = 0;
+    StorageArchiveDependencies deps{.validateExisting = [&](const AssetCandidate &asset, Checkpoint) {
+      std::ifstream input(asset.destination, std::ios::binary);
+      const std::string bytes((std::istreambuf_iterator<char>(input)), {});
+      require(bytes == "valid prefix" || bytes == target.second, "validate retained target at its current compacted position");
+      ++validations; return StorageDiagnostic{};
+    }};
+    const auto result = UpdateStorageArchive(review.archives.front(), request.policy, paths, deps);
+    const auto retained = readArchive(path);
+    require(!result.failed && !result.recoveryRequired && result.deleted == 2 && validations == 2 &&
+        retained.size() == 3 && retained.at("song.flac") == target.second && retained.at("chart.bms") == files.back().second,
+        "ZIP and TAR remove only redundant sources and retain destination bytes in either physical order");
+  }
+  for (bool invalid : {false, true}) {
+    storage_test::TempDirectory temp; const auto path = temp.root / "library.zip";
+    const std::vector<std::pair<std::string, std::string>> files{{"song.wav", "source"}, {"song.ogg", "target"}};
+    writeArchive(path, files);
+    const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+    InventoryRequest request{.groups = {{"archive", path, false, false, StorageSourceKind::Archive}},
+        .policy = {.audio = AudioAction::LossyVorbis}, .scanScratchRoot = paths.scanRoot};
+    const auto review = BuildStoragePreflight(request);
+    require(review.archives.size() == 1 && review.eligibleCount == 1, "existing Vorbis is a potential archive target");
+    StorageArchiveDependencies deps{.validateExisting = [&](const auto &, Checkpoint) {
+      return StorageDiagnostic{invalid ? StorageReason::ValidationFailed : StorageReason::Cancelled, "preserve both files"};
+    }};
+    const auto result = UpdateStorageArchive(review.archives.front(), request.policy, paths, deps);
+    require(!result.deleted && readArchive(path).size() == 2, "invalid or cancelled destination validation never removes archived source");
+  }
+}
 void selectedArchiveFoldersAreEligible() {
   storage_test::TempDirectory temp;
   const auto archive = temp.root / "library.zip";
@@ -1145,6 +1188,21 @@ void realArchiveOptimizerPreservesPlayback() {
   require(decodeAudioToPCM(fspath_to_path_t(path / "songs/tone.wav"), pcm, info, cancelled) && pcm.size() == 16000 && info.samplerate == 16000,
       "gameplay resolves the authored WAV name inside the updated archive");
   require(pcm == originalPcm, "archive FLAC preserves gameplay samples exactly");
+  for (bool archived : {false, true}) {
+    const auto root = temp.root / (archived ? "alternatives.zip" : "alternatives");
+    if (archived) writeArchive(root, {{"tone.wav", wav}, {"tone.flac", files.at("songs/tone.flac")}});
+    else { temp.write("alternatives/tone.wav", wav); temp.write("alternatives/tone.flac", files.at("songs/tone.flac")); }
+    OptimizationRequest reuse;
+    reuse.policy = reuse.inventory.policy = {.audio = AudioAction::LosslessFlac};
+    reuse.inventory.groups = {{"alternatives", root, !archived, false, archived ? StorageSourceKind::Archive : StorageSourceKind::Local}};
+    reuse.inventory.scanScratchRoot = temp.root / "scan";
+    const auto result = StorageOptimizer(DefaultOptimizerDependencies(MakeStoragePlatformPaths(temp.root / "reuse-private", {temp.root}))).Run(reuse);
+    require(result.deleted == 1 && !result.failed && !result.recoveryRequired,
+            "real existing FLAC passes full validation and retires a local or archived WAV");
+    if (archived) require(readArchive(root).at("tone.flac") == files.at("songs/tone.flac"), "archived target stays byte-identical");
+    else require(!fs::exists(root / "tone.wav") && fs::file_size(root / "tone.flac") == files.at("songs/tone.flac").size(),
+                 "local existing FLAC is retained without encoding");
+  }
 }
 void archivePolicyBoundaries() {
   for (const std::string mode : {"compressed", "budget", "cancel", "failed", "throw"}) {
@@ -1203,6 +1261,13 @@ void unsafeAndStaleArchivesAreRejected() {
           MakeStoragePlatformPaths(temp.root / "private", {temp.root}), deps);
       require(result.failed == 1 && !result.recoveryRequired && encodes == 0 && HashStorageFile(path, {}, error) == before,
           "indexed candidates with unsafe layouts are rejected before encoding or mutation");
+    } else if (mode == "collision") {
+      require(review.eligibleCount == 1, "existing archive destination is eligible for validation");
+      auto deps = DefaultOptimizerDependencies(MakeStoragePlatformPaths(temp.root / "private", {temp.root}));
+      OptimizationRequest input{.inventory = request, .policy = request.policy, .preflight = review};
+      const auto result = StorageOptimizer(deps).Run(input);
+      require(result.failed == 1 && !result.deleted && readArchive(path).size() == 2,
+              "an invalid existing FLAC preserves both archive alternatives");
     } else if (mode != "stale") {
       require(review.eligibleCount == 0 && review.EligibleRoots().empty(), "unsupported, ambiguous or unsafe archives have no mutation admission");
     } else {
@@ -1403,7 +1468,7 @@ void storageArchiveTests(const char *executable) {
       {"unicode-index-disagreement", differingBrowsingUnicodePathsArePreserved},
       {"unicode-validation", unicodeZipPathsAreValidated},
       {"zip64", sparseZip64AndLegacyNames}, {"invalid-encoding", malformedLegacyNamesAreRejected},
-      {"playback", realArchiveOptimizerPreservesPlayback},
+      {"playback", realArchiveOptimizerPreservesPlayback}, {"existing-destinations", existingArchiveDestinationsAreReused},
       {"boundaries", archivePolicyBoundaries}, {"rejections", unsafeAndStaleArchivesAreRejected},
       {"partial", partialWritesAndForeignChanges}}) {
     try { run(); } catch (const std::exception &error) { throw std::runtime_error(std::string(name) + ": " + error.what()); }

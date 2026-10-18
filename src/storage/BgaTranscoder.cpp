@@ -17,6 +17,7 @@ extern "C" {
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -206,16 +207,103 @@ void rescalePacketTimestamps(AVPacket &packet, AVRational source, AVRational des
   if (packet.dts != AV_NOPTS_VALUE) packet.dts = rescaleTimestamp(packet.dts, source, destination);
   if (packet.duration > 0) packet.duration = rescaleTimestamp(packet.duration, source, destination);
 }
-void validateDeclaredVideoTimeline(const AVStream &video, const Timeline &decoded) {
+void advanceAudioInput(std::int64_t pts, int samples, AVRational sourceClock, AVRational sampleClock,
+                       std::int64_t &next) {
+  if (samples <= 0 || samples > 1048576) unsupported("Unsupported audio frame size");
+  const auto sourceTick = av_rescale_q_rnd(1, sourceClock, sampleClock, AV_ROUND_UP);
+  if (sourceTick <= 0) unsupported("Audio clock is out of range");
+  if (next == AV_NOPTS_VALUE) next = pts;
+  if (timestampDistance(pts, next) > static_cast<std::uint64_t>(sourceTick))
+    unsupported("Discontinuous audio cannot be transcoded faithfully");
+  // Coarse container timestamps round sample boundaries. Keep the first-frame
+  // sample clock as the anchor so bounded rounding cannot accumulate drift.
+  next = timestampAdd(next, samples);
+}
+void validateDeclaredVideoTimeline(const AVStream &video, const Timeline &decoded, bool checkDuration = true) {
   if (video.start_time == AV_NOPTS_VALUE) return;
   if (timestampDistance(decoded.first, video.start_time) > 1)
     throw Failure{StorageReason::ValidationFailed, "Decoder lost the opening presentation interval"};
-  if (video.duration <= 0) return;
+  if (!checkDuration || video.duration <= 0) return;
   if (video.start_time > std::numeric_limits<std::int64_t>::max() - video.duration)
     throw Failure{StorageReason::ValidationFailed, "Declared video end is out of range"};
   const auto declaredEnd = video.start_time + video.duration;
   if (timestampDistance(declaredEnd, decoded.end) > static_cast<std::uint64_t>(decoded.maximumDuration))
-    throw Failure{StorageReason::ValidationFailed, "Decoded video does not match its declared duration"};
+    throw Failure{StorageReason::ValidationFailed, "Decoded video does not match its declared duration (declared end=" +
+        std::to_string(declaredEnd) + ", decoded end=" + std::to_string(decoded.end) + ", tolerance=" +
+        std::to_string(decoded.maximumDuration) + ", time base=" + std::to_string(video.time_base.num) + "/" +
+        std::to_string(video.time_base.den) + ")"};
+}
+std::int64_t validateAsfContainer(const fs::path &path, const Checkpoint &check) {
+  // ASF assigns the file-wide play endpoint to every AVStream::duration.
+  // Validate physical extents independently: its demuxer can report clean EOF
+  // and discard duration metadata when complete trailing packets are missing.
+  std::error_code error;
+  const auto bytes = fs::file_size(path, error);
+  std::ifstream input(path, std::ios::binary);
+  const auto invalid = [](const std::string &detail) {
+    throw Failure{StorageReason::ValidationFailed, "Invalid ASF container: " + detail};
+  };
+  if (error || !input) invalid("cannot read file size or headers");
+  const auto read = [&](std::uint64_t offset, std::size_t size) {
+    checkpoint(check);
+    if (offset > bytes || size > bytes - offset || offset > std::uint64_t(std::numeric_limits<std::streamoff>::max()))
+      invalid("metadata exceeds physical file size");
+    std::string result(size, '\0');
+    input.seekg(static_cast<std::streamoff>(offset));
+    if (!input.read(result.data(), size)) invalid("truncated metadata");
+    return result;
+  };
+  const auto number = [](std::string_view data, std::size_t offset, unsigned size) {
+    std::uint64_t result = 0;
+    for (unsigned i = 0; i < size; ++i) result |= std::uint64_t(static_cast<unsigned char>(data[offset + i])) << (8 * i);
+    return result;
+  };
+  const auto header = read(0, 30);
+  if (header.compare(0, 16, "\x30\x26\xb2\x75\x8e\x66\xcf\x11\xa6\xd9\x00\xaa\x00\x62\xce\x6c", 16))
+    invalid("missing Header Object");
+  const auto headerSize = number(header, 16, 8), objects = number(header, 24, 4);
+  if (headerSize < 30 || headerSize > bytes || objects > (headerSize - 30) / 24) invalid("invalid Header Object extent");
+  std::string properties;
+  std::uint64_t offset = 30;
+  for (std::uint64_t i = 0; i < objects; ++i) {
+    if (headerSize - offset < 24) invalid("truncated Header Object child");
+    const auto object = read(offset, 24);
+    const auto size = number(object, 16, 8);
+    if (size < 24 || size > headerSize - offset) invalid("invalid Header Object child extent");
+    if (!object.compare(0, 16, "\xa1\xdc\xab\x8c\x47\xa9\xcf\x11\x8e\xe4\x00\xc0\x0c\x20\x53\x65", 16)) {
+      if (!properties.empty() || size < 104) invalid("duplicate or truncated File Properties Object");
+      properties = read(offset, 104);
+    }
+    offset += size;
+  }
+  if (offset != headerSize || properties.empty()) invalid("incomplete Header Object");
+  if (number(properties, 88, 4) & 1) unsupported("Broadcast ASF has no finalized extent for safe conversion");
+  const auto declaredSize = number(properties, 40, 8);
+  if (declaredSize != bytes) invalid("declared file bytes=" + std::to_string(declaredSize) +
+      ", physical bytes=" + std::to_string(bytes));
+  const auto packets = number(properties, 56, 8), minimumPacket = number(properties, 92, 4), maximumPacket = number(properties, 96, 4);
+  const auto data = read(offset, 50);
+  const auto dataSize = number(data, 16, 8);
+  if (data.compare(0, 16, "\x36\x26\xb2\x75\x8e\x66\xcf\x11\xa6\xd9\x00\xaa\x00\x62\xce\x6c", 16) ||
+      dataSize < 50 || dataSize > bytes - offset || data.compare(24, 16, properties, 24, 16) || number(data, 40, 8) != packets)
+    invalid("inconsistent Data Object extent, file ID or packet count");
+  const auto payload = dataSize - 50;
+  // Bounds cover variable-sized packets too; for fixed sizes they prove the
+  // exact packet count without scanning any packet payload or risking overflow.
+  if (!packets || !minimumPacket || maximumPacket < minimumPacket || packets > payload / minimumPacket ||
+      packets < payload / maximumPacket + (payload % maximumPacket != 0))
+    invalid("packet count and sizes do not fit the Data Object");
+  offset += dataSize;
+  while (offset < bytes) {
+    const auto object = read(offset, 24);
+    const auto size = number(object, 16, 8);
+    if (size < 24 || size > bytes - offset) invalid("truncated trailing object");
+    offset += size;
+  }
+  const auto playMilliseconds = number(properties, 64, 8) / 10000, preroll = number(properties, 80, 8);
+  if (playMilliseconds <= preroll || playMilliseconds - preroll > std::uint64_t(std::numeric_limits<std::int64_t>::max() / 1000))
+    invalid("play endpoint is out of range");
+  return static_cast<std::int64_t>(playMilliseconds - preroll) * 1000;
 }
 struct Scan {
   VideoDescription description;
@@ -276,12 +364,17 @@ bool audioCanRemux(AVCodecID codec) {
   return codec == AV_CODEC_ID_AAC || codec == AV_CODEC_ID_MP3 || codec == AV_CODEC_ID_MP2 ||
          codec == AV_CODEC_ID_ALAC || codec == AV_CODEC_ID_AC3 || codec == AV_CODEC_ID_EAC3;
 }
-Scan scan(const fs::path &path, const Checkpoint &check) {
+Scan scan(const fs::path &path, const Checkpoint &check, bool existingDestination = false) {
   checkpoint(check);
   Input input(path);
+  if (existingDestination && (!std::strstr(input.format->iformat->name, "mp4") ||
+      input.format->streams[input.video]->codecpar->codec_id != AV_CODEC_ID_H264))
+    unsupported("Existing video must contain H264 in a native MP4 container");
+  const bool asf = !std::strcmp(input.format->iformat->name, "asf") || !std::strcmp(input.format->iformat->name, "asf_o");
+  const auto asfEnd = asf ? validateAsfContainer(path, check) : 0;
   Scan result;
   auto &description = result.description;
-  description.codecs = ProbeStorageCodecs();
+  if (!existingDestination) description.codecs = ProbeStorageCodecs();
   const auto video = input.format->streams[input.video];
   const auto params = video->codecpar;
   description.width = params->width; description.height = params->height;
@@ -321,24 +414,27 @@ Scan scan(const fs::path &path, const Checkpoint &check) {
   decode(input, check, [&](int index, const AVFrame &decoded) {
     const auto pts = decoded.best_effort_timestamp;
     if (index == input.video) {
-      validateVideoFrameTransform(*params, decoded);
+      if (!existingDestination) validateVideoFrameTransform(*params, decoded);
       if (!result.video.frames && !(decoded.flags & AV_FRAME_FLAG_KEY))
         throw Failure{StorageReason::ValidationFailed, "Video does not start with an independently decodable frame"};
-      if (decoded.width != description.width || decoded.height != description.height) unsupported("Video changes resolution midstream");
+      if (!existingDestination && (decoded.width != description.width || decoded.height != description.height))
+        unsupported("Video changes resolution midstream");
       // Container SAR takes precedence in FFmpeg's display guess. Also track
       // coded frame SAR so that a fixed container value cannot hide changes.
       const auto codedAspectRatio = decoded.sample_aspect_ratio;
       if (codedAspectRatio.num > 0 && codedAspectRatio.den > 0) {
-        if (decodedAspectRatio.num > 0 && av_cmp_q(decodedAspectRatio, codedAspectRatio))
+        if (!existingDestination && decodedAspectRatio.num > 0 && av_cmp_q(decodedAspectRatio, codedAspectRatio))
           unsupported("Video changes sample aspect ratio midstream");
         decodedAspectRatio = codedAspectRatio;
       }
       auto aspectRatio = av_guess_sample_aspect_ratio(input.format, video, const_cast<AVFrame *>(&decoded));
       if (aspectRatio.num <= 0 || aspectRatio.den <= 0) aspectRatio = {1, 1};
       if (!result.video.frames) description.sampleAspectRatio = aspectRatio;
-      else if (av_cmp_q(description.sampleAspectRatio, aspectRatio))
+      else if (!existingDestination && av_cmp_q(description.sampleAspectRatio, aspectRatio))
         unsupported("Video changes display aspect ratio midstream");
-      observeVideoColor(result, *params, decoded);
+      // Reusing the existing bitstream does not transform its colors, geometry
+      // or display metadata. Only conversion needs these preservation checks.
+      if (!existingDestination) observeVideoColor(result, *params, decoded);
       const auto pixel = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(decoded.format));
       if (!pixel) unsupported("Unknown pixel format");
       description.alpha |= (pixel->flags & AV_PIX_FMT_FLAG_ALPHA) != 0;
@@ -360,7 +456,7 @@ Scan scan(const fs::path &path, const Checkpoint &check) {
       } else description.variableFrameRate = true;
     } else {
       if (!result.audioFormat) {
-        if (decoded.sample_rate != description.audioSampleRate || decoded.ch_layout.nb_channels != description.audioChannels ||
+        if ((!existingDestination && (decoded.sample_rate != description.audioSampleRate || decoded.ch_layout.nb_channels != description.audioChannels)) ||
             av_get_bytes_per_sample(static_cast<AVSampleFormat>(decoded.format)) <= 0 ||
             !av_channel_layout_check(&decoded.ch_layout)) unsupported("Unknown embedded audio format");
         const auto &layout = decoded.ch_layout;
@@ -370,14 +466,25 @@ Scan scan(const fs::path &path, const Checkpoint &check) {
         result.audioFormat->sample_rate = decoded.sample_rate; result.audioFormat->format = decoded.format;
         checked(av_channel_layout_copy(&result.audioFormat->ch_layout, &layout), "Remember decoded audio layout");
       }
-      validateAudioFrame(*result.audioFormat, decoded);
+      if (!existingDestination) validateAudioFrame(*result.audioFormat, decoded);
       const auto duration = rescaleTimestamp(decoded.nb_samples, {1, decoded.sample_rate}, result.audio.timeBase);
       result.audio.add(pts, duration, std::max<std::int64_t>(1, rescaleTimestamp(1, {1, decoded.sample_rate}, result.audio.timeBase)));
     }
   }, [](int, const AVPacket &) {});
   if (!result.video.frames || (description.hasAudio && !result.audio.frames))
     throw Failure{StorageReason::ValidationFailed, "Empty media stream"};
-  validateDeclaredVideoTimeline(*video, result.video);
+  validateDeclaredVideoTimeline(*video, result.video, !asf);
+  if (asf) {
+    auto decodedEnd = rescaleTimestamp(result.video.end, result.video.timeBase, AV_TIME_BASE_Q);
+    auto tolerance = rescaleTimestamp(result.video.maximumDuration, result.video.timeBase, AV_TIME_BASE_Q);
+    if (description.hasAudio) {
+      decodedEnd = std::max(decodedEnd, rescaleTimestamp(result.audio.end, result.audio.timeBase, AV_TIME_BASE_Q));
+      tolerance = std::max(tolerance, rescaleTimestamp(result.audio.maximumDuration, result.audio.timeBase, AV_TIME_BASE_Q));
+    }
+    if (timestampDistance(asfEnd, decodedEnd) > static_cast<std::uint64_t>(tolerance))
+      throw Failure{StorageReason::ValidationFailed, "Decoded ASF endpoint differs from the container (declared us=" +
+          std::to_string(asfEnd) + ", decoded us=" + std::to_string(decodedEnd) + ", tolerance us=" + std::to_string(tolerance) + ")"};
+  }
   description.duration = result.video.end - result.video.first;
   description.minimumFrameInterval = result.video.minimumInterval;
   description.audioDiscontinuous = result.audio.discontinuous;
@@ -620,10 +727,7 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
       auto &audio = *audioEncoder.value;
       const auto pts = normalizedTimestamp(decoded.best_effort_timestamp, sourceAudio->time_base, sourceScan.originMicros, audio.time_base);
       if (audioPosition == AV_NOPTS_VALUE) audioPosition = pts;
-      if (audioNextInput != AV_NOPTS_VALUE && timestampDistance(pts, audioNextInput) > 1)
-        unsupported("Discontinuous audio cannot be transcoded faithfully");
-      audioNextInput = timestampAdd(pts, decoded.nb_samples);
-      if (decoded.nb_samples <= 0 || decoded.nb_samples > 1048576) unsupported("Unsupported audio frame size");
+      advanceAudioInput(pts, decoded.nb_samples, sourceAudio->time_base, audio.time_base, audioNextInput);
       auto converted = frame();
       converted->format = audio.sample_fmt; converted->sample_rate = audio.sample_rate; converted->nb_samples = decoded.nb_samples;
       checked(av_channel_layout_copy(&converted->ch_layout, &audio.ch_layout), "Preserve converted audio layout");
@@ -693,6 +797,17 @@ void verify(const Scan &source, const Scan &output, const VideoCompressionPlan &
         timestampDistance(rescaleTimestamp(output.audio.end, output.audio.timeBase, AV_TIME_BASE_Q), end) > audioTolerance) invalid();
   }
 }
+}
+
+StorageDiagnostic ValidateExistingBga(const fs::path &path, Checkpoint check) {
+  try {
+    scan(path, check, true);
+    return {};
+  } catch (const Failure &failure) {
+    return {failure.reason, failure.detail};
+  } catch (const std::exception &error) {
+    return {StorageReason::IoError, error.what()};
+  }
 }
 
 EncodeResult EncodeBga(const AssetCandidate &candidate, const StoragePolicy &policy,
