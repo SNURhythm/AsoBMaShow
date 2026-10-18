@@ -677,6 +677,21 @@ void testBatchRefreshIndexesEveryRequestedRoot() {
   operations.run(request, {}, [](const auto &, const auto &) {}, [] { return true; });
   expect(repository.GetLibraryRevision() == changes.revision,
       "maintenance refresh does not invalidate resource deltas already applied by the storage job");
+  std::filesystem::rename(first / "sample.wav", first / "sample.flac");
+  std::filesystem::last_write_time(first, std::filesystem::last_write_time(first) + std::chrono::seconds(2));
+  request.refreshPaths = {first};
+  operations.run(request, {}, [](const auto &, const auto &) {}, [] { return true; });
+  const auto maintenance = repository.GetLibraryChangesSince(changes.revision);
+  expect(maintenance.revision > changes.revision && !maintenance.unknown && maintenance.roots.empty(),
+      "maintenance scanner folder updates publish library changes without invalidating exact storage measurements");
+  expect(repository.GetLibraryChangesSince(before).roots == std::vector<std::filesystem::path>{resources},
+      "maintenance revision preserves earlier ordinary source invalidations");
+  request.storageMeasurementsCurrent = false;
+  std::filesystem::rename(first / "sample.flac", first / "sample.ogg");
+  std::filesystem::last_write_time(first, std::filesystem::last_write_time(first) + std::chrono::seconds(2));
+  operations.run(request, {}, [](const auto &, const auto &) {}, [] { return true; });
+  expect(repository.GetLibraryChangesSince(maintenance.revision).roots == std::vector<std::filesystem::path>{first},
+      "ordinary scanner refresh still invalidates changed resource measurements");
 }
 
 void testAddingFolderRefreshesAccessForEveryEffectiveEntry() {

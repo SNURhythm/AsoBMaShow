@@ -42,7 +42,8 @@ namespace chart_repository_detail {
 bool EnsureCoreSchema(sqlite3 *database);
 bool EnsureDifficultySchema(sqlite3 *database);
 void InvalidateDifficultyLabelCache();
-void BumpLibraryRevision(const std::vector<std::filesystem::path> &roots = {});
+void BumpLibraryRevision(const std::vector<std::filesystem::path> &roots = {},
+                         bool storageMeasurementsCurrent = false);
 void SelectAllChartMeta(sqlite3 *database,
                         std::vector<bms_parser::ChartMeta> &chartMetas);
 ChartMetaPathBatchReadOutcome SelectChartMetaByPaths(

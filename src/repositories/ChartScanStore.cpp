@@ -614,8 +614,9 @@ bool ChartRepository::Session::InsertChartMeta(
 }
 
 struct ChartRepository::Session::ScanBatch::Impl {
-  explicit Impl(std::shared_ptr<ChartSessionStorage> storageValue)
+  explicit Impl(std::shared_ptr<ChartSessionStorage> storageValue, bool measurementsCurrent)
       : storage(std::move(storageValue)),
+        storageMeasurementsCurrent(measurementsCurrent),
         addDateSeconds(
             std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::system_clock::now().time_since_epoch())
@@ -652,7 +653,7 @@ struct ChartRepository::Session::ScanBatch::Impl {
     transaction.reset();
     if (unknownRoots || !changedRoots.empty()) {
       chart_repository_detail::BumpLibraryRevision(unknownRoots ? std::vector<std::filesystem::path>{} :
-          std::vector<std::filesystem::path>(changedRoots.begin(), changedRoots.end()));
+          std::vector<std::filesystem::path>(changedRoots.begin(), changedRoots.end()), storageMeasurementsCurrent);
       changedRoots.clear(); unknownRoots = false;
     }
     return true;
@@ -729,6 +730,7 @@ struct ChartRepository::Session::ScanBatch::Impl {
   SqliteStatementHandle chartInsertStatement;
   SqliteStatementHandle chartHasDocumentUpdateStatement;
   SqliteStatementHandle sourcePreferenceUpdateStatement;
+  const bool storageMeasurementsCurrent;
   const std::int64_t addDateSeconds;
   int changedCount = 0;
   std::set<std::filesystem::path> changedRoots;
@@ -1437,8 +1439,8 @@ ChartRepository::Session::LoadScanReconcileIdentities(const std::vector<std::fil
 }
 
 std::optional<ChartRepository::Session::ScanBatch>
-ChartRepository::Session::BeginScanBatch() {
-  auto batchImpl = std::make_unique<ScanBatch::Impl>(impl_->storage);
+ChartRepository::Session::BeginScanBatch(bool storageMeasurementsCurrent) {
+  auto batchImpl = std::make_unique<ScanBatch::Impl>(impl_->storage, storageMeasurementsCurrent);
   if (!batchImpl->ready) {
     return std::nullopt;
   }

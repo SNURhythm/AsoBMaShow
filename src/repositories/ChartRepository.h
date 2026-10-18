@@ -24,6 +24,9 @@ class ScoreRepository;
 
 struct ChartLibraryChanges {
   std::uint64_t revision = 0;
+  // Storage invalidation history excludes maintenance scans whose exact size
+  // changes are already supplied by the transaction report. Revision still
+  // advances for every committed library metadata change.
   bool unknown = false;
   std::vector<std::filesystem::path> roots;
 };
@@ -396,7 +399,7 @@ public:
     // Empty roots select the whole library; scoped roots use indexed path ranges.
     // Only identity columns are loaded, never full chart metadata.
     std::vector<ChartScanReconcileIdentity> LoadScanReconcileIdentities(const std::vector<std::filesystem::path> &roots = {});
-    std::optional<ScanBatch> BeginScanBatch();
+    std::optional<ScanBatch> BeginScanBatch(bool storageMeasurementsCurrent = false);
     bool ClearScanCheckpoint();
     bool ClearChartMetadataRebuildRequired();
     bool ReplaceDifficultyTable(const difficulty_table::Document &document);

@@ -529,11 +529,12 @@ ChartScanResult ChartLibraryScanner::ScanScopedWithResult(
     ChartScanProgressCallback progressCallback,
     ChartScanPauseCallback pauseCallback,
     ChartScanFlushRequestCallback flushRequestCallback,
-    ChartScanFlushCompleteCallback flushCompleteCallback) {
+    ChartScanFlushCompleteCallback flushCompleteCallback,
+    bool storageMeasurementsCurrent) {
   return ScanImpl(session, roots, ReconcileMode::Scoped, stopToken,
                   std::move(progressCallback), std::move(pauseCallback),
                   std::move(flushRequestCallback),
-                  std::move(flushCompleteCallback));
+                  std::move(flushCompleteCallback), false, storageMeasurementsCurrent);
 }
 
 ChartScanResult ChartLibraryScanner::ScanImpl(
@@ -545,7 +546,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     ChartScanPauseCallback pauseCallback,
     ChartScanFlushRequestCallback flushRequestCallback,
     ChartScanFlushCompleteCallback flushCompleteCallback,
-    bool requireReadableStorage) {
+    bool requireReadableStorage, bool storageMeasurementsCurrent) {
   if (stopRequested(stopToken)) {
     return {};
   }
@@ -2268,7 +2269,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         "Discarded stale chart scan checkpoint before parsing.");
   }
 
-  auto scanBatch = session.BeginScanBatch();
+  auto scanBatch = session.BeginScanBatch(storageMeasurementsCurrent);
   archive_file::appendDebugLogLine(
       scanBatch.has_value()
           ? "Chart scan batch begun."
