@@ -1,4 +1,5 @@
 #include "StorageWorkScheduler.h"
+#include "StorageReportDetail.h"
 #include "../utils/ParallelWork.h"
 #include <algorithm>
 #include <atomic>
@@ -55,7 +56,7 @@ void merge(StorageReport &target, StorageReport source) {
   AccumulateStorageBytes(target.reclaimedBytes, target.addedBytes, source.reclaimedBytes, source.addedBytes);
   target.cancelled |= source.cancelled; target.recoveryRequired |= source.recoveryRequired;
   target.cleanupPending |= source.cleanupPending;
-  for (auto &file : source.files) if (target.files.size() < 100) target.files.push_back(std::move(file));
+  for (auto &file : source.files) RetainStorageReportDetail(target, std::move(file));
   target.changedRoots.insert(target.changedRoots.end(), source.changedRoots.begin(), source.changedRoots.end());
   target.groupDeltas.insert(target.groupDeltas.end(), std::make_move_iterator(source.groupDeltas.begin()), std::make_move_iterator(source.groupDeltas.end()));
 }
@@ -116,7 +117,7 @@ StorageReport RunStorageDirectories(const StoragePreflight &inventory, StorageEx
         });
       } catch (const std::exception &error) {
         local.failed = 1; local.recoveryRequired = true;
-        local.files.push_back({.source = jobs[index].summary->directory, .outcome = FileOutcome::Failed,
+        RetainStorageReportDetail(local, {.source = jobs[index].summary->directory, .outcome = FileOutcome::Failed,
             .reason = {StorageReason::RecoveryRequired, error.what()}});
       }
       if (local.recoveryRequired) fatal = true;
@@ -132,7 +133,7 @@ StorageReport RunStorageDirectories(const StoragePreflight &inventory, StorageEx
     fatal = true; budget.StopForRecovery(); changed.notify_all();
     std::lock_guard lock(mutex);
     ++report.failed; report.recoveryRequired = true;
-    if (report.files.size() < 100) report.files.push_back({.outcome = FileOutcome::Failed,
+    RetainStorageReportDetail(report, {.outcome = FileOutcome::Failed,
         .reason = {StorageReason::RecoveryRequired, detail}});
   };
   auto worker = [&] {

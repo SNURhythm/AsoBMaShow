@@ -1,4 +1,5 @@
 #include "StorageArchiveTransaction.h"
+#include "StorageReportDetail.h"
 #include "StorageArchiveDb.h"
 #include "StoragePathIndex.h"
 #include "../AtomicFile.h"
@@ -96,7 +97,7 @@ void append(StorageReport &report, FileResult result) {
   if (result.outcome == FileOutcome::Failed) ++report.failed;
   else if (result.outcome == FileOutcome::Skipped) ++report.skipped;
   else if (result.outcome == FileOutcome::Cancelled) report.cancelled = true;
-  if (report.files.size() < 100) report.files.push_back(std::move(result));
+  RetainStorageReportDetail(report, std::move(result));
 }
 struct Chunk {
   std::uint64_t id = 0, source = 0, length = 0, kind = 0, destination = 0;
@@ -653,7 +654,7 @@ public:
     Statement q(db.value, "SELECT original_name,name,original_bytes,bytes,action FROM entries WHERE action!=0 ORDER BY offset");
     while (q.step()) {
       const bool deleted = q.integer(4) == 2; if (deleted) ++report.deleted; else ++report.converted;
-      if (report.files.size() < 100) report.files.push_back({.source = archive.io.path / fs::u8path(q.bytes(0)),
+      if (report.files.size() < 100) RetainStorageReportDetail(report, {.source = archive.io.path / fs::u8path(q.bytes(0)),
           .destination = deleted ? fs::path{} : archive.io.path / fs::u8path(q.bytes(1)), .outcome = deleted ? FileOutcome::Deleted : FileOutcome::Converted,
           .bytesBefore = q.integer(2), .bytesAfter = deleted ? 0 : q.integer(3)});
     }
@@ -670,7 +671,13 @@ void Update::Prepare(StorageArchiveEntry &entry, const AssetCandidate &candidate
   }
   RemoveStaging();
   const auto input = journal / ("input." + asobmshow::chart_assets::LowerMediaExtension(candidate.source));
-  const auto output = journal / ("output" + candidate.destination.extension().string()); archive.Extract(entry, input, check);
+  const auto output = journal / ("output" + candidate.destination.extension().string());
+  try { archive.Extract(entry, input, check); }
+  catch (const StorageArchiveError &error) {
+    if (error.code != StorageReason::ValidationFailed) throw;
+    archive.io.CheckPath();
+    RecordSkip(entry, FileOutcome::Failed, {error.code, error.what()}); RemoveStaging(); return;
+  }
   auto staged = candidate; staged.source = input; staged.destination = output;
   // App-private staging has its own trusted boundary on sandboxed platforms;
   // inspecting system parents above that boundary can fail despite file access.
@@ -816,7 +823,7 @@ StorageReport RecoverStorageArchives(const StoragePlatformPaths &paths, Checkpoi
           authority(source, paths); StorageArchive archive(source, journal / "manifest.sqlite", paths.pathAccessRoots, {}, true);
           Update update(archive, journal, deps, started, paths.pathAccessRoots); update.ValidateRecovery(); update.Entries(nullptr, {}, {}, {}); update.Finish();
           auto report = update.Result(); result.converted += report.converted; result.deleted += report.deleted; AccumulateStorageBytes(result.reclaimedBytes, result.addedBytes, report.reclaimedBytes, report.addedBytes);
-          for (auto &file : report.files) if (result.files.size() < 100) result.files.push_back(std::move(file)); result.changedRoots.push_back(source);
+          for (auto &file : report.files) RetainStorageReportDetail(result, std::move(file)); result.changedRoots.push_back(source);
         }
         cleanup(journal, deps);
       } catch (const std::exception &error) { failure(result, source.empty() ? journal : source, error, true); }

@@ -1,4 +1,5 @@
 #include "StorageOptimizer.h"
+#include "StorageReportDetail.h"
 #include "AudioTranscoder.h"
 #include "BgaTranscoder.h"
 #include "StoragePathIndex.h"
@@ -78,14 +79,14 @@ void append(StorageReport &report, FileResult result) {
   AccumulateStorageBytes(report.reclaimedBytes, report.addedBytes, result.reclaimedBytes, result.addedBytes);
   report.recoveryRequired |= result.reason.code == StorageReason::RecoveryRequired;
   report.cleanupPending |= result.reason.code == StorageReason::CleanupFailed;
-  if (report.files.size() < 100) report.files.push_back(std::move(result));
+  RetainStorageReportDetail(report, std::move(result));
 }
 void mergeReport(StorageReport &report, StorageReport other) {
   report.converted += other.converted; report.deleted += other.deleted;
   report.skipped += other.skipped; report.failed += other.failed;
   AccumulateStorageBytes(report.reclaimedBytes, report.addedBytes, other.reclaimedBytes, other.addedBytes);
   report.cancelled |= other.cancelled; report.recoveryRequired |= other.recoveryRequired; report.cleanupPending |= other.cleanupPending;
-  for (auto &file : other.files) if (report.files.size() < 100) report.files.push_back(std::move(file));
+  for (auto &file : other.files) RetainStorageReportDetail(report, std::move(file));
   report.changedRoots.insert(report.changedRoots.end(), other.changedRoots.begin(), other.changedRoots.end());
 }
 StorageDiagnostic missingCodec(AssetOperation operation, const StorageCodecCapabilities &caps) {
@@ -175,7 +176,7 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
       }
     }
     report.skipped += inventory.skippedCount;
-    for (auto &skipped : inventory.skips) if (report.files.size() < 100) report.files.push_back(std::move(skipped));
+    for (auto &skipped : inventory.skips) RetainStorageReportDetail(report, std::move(skipped));
     state.filesTotal = inventory.eligibleCount;
     if (!inventory.eligibleCount) return complete();
     std::error_code ec;
@@ -274,7 +275,7 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
         StorageDirectoryEvidence evidence(summary, inventory, {.scratchRoot = dependencies_.paths.scanRoot}, &metrics);
         auto skipDirectory = [&] {
           report.skipped += summary.eligibleCount;
-          if (report.files.size() < 100) report.files.push_back({.source = directoryPath,
+          RetainStorageReportDetail(report, {.source = directoryPath,
               .reason = {StorageReason::StaleInput, error}});
           state.filesDone += summary.eligibleCount;
           // A failed baseline cannot authorize descendants later in the job.
@@ -437,7 +438,7 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
     AccumulateStorageBytes(report.reclaimedBytes, report.addedBytes, worked.reclaimedBytes, worked.addedBytes);
     report.cancelled |= worked.cancelled; report.recoveryRequired |= worked.recoveryRequired;
     report.cleanupPending |= worked.cleanupPending;
-    for (auto &file : worked.files) if (report.files.size() < 100) report.files.push_back(std::move(file));
+    for (auto &file : worked.files) RetainStorageReportDetail(report, std::move(file));
     for (const auto &archive : inventory.archives) {
       if (!archive.eligibleCount || report.recoveryRequired || !checkpoint()) continue;
       const auto beforeFiles = state.filesDone, beforeBytes = report.reclaimedBytes, beforeAdded = report.addedBytes;

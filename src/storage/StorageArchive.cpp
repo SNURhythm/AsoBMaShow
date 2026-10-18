@@ -438,7 +438,7 @@ void StorageArchive::Extract(const StorageArchiveEntry &entry, const fs::path &o
   if (entry.method == 8) { require(inflateInit2(&stream, -MAX_WBITS) == Z_OK, "Cannot initialize ZIP decoder"); inflater.stream = &stream; }
   std::uint64_t position = 0, produced = 0; auto crc = crc32(0, nullptr, 0); bool ended = false;
   auto write = [&](std::string_view bytes) {
-    require(bytes.size() <= entry.bytes - produced, "ZIP output exceeds declared size");
+    require(bytes.size() <= entry.bytes - produced, "ZIP output exceeds declared size", StorageReason::ValidationFailed);
     require(std::fwrite(bytes.data(), 1, bytes.size(), raw) == bytes.size(), "Cannot stage archive payload", StorageReason::IoError);
     produced += bytes.size(); crc = crc32(crc, reinterpret_cast<const Bytef *>(bytes.data()), bytes.size());
   };
@@ -451,13 +451,18 @@ void StorageArchive::Extract(const StorageArchiveEntry &entry, const fs::path &o
       do {
         active(check); stream.next_out = reinterpret_cast<Bytef *>(decodedBytes.data()); stream.avail_out = decodedBytes.size();
         const auto rc = inflate(&stream, Z_NO_FLUSH);
-        require(rc == Z_OK || rc == Z_STREAM_END, "Invalid deflated ZIP payload");
+        // An exactly full output buffer can require one empty-input call
+        // before zlib tells us to refill. Final size, end and CRC checks below
+        // still reject a truncated stream when no more input remains.
+        if (rc == Z_BUF_ERROR && !stream.avail_in && stream.avail_out == decodedBytes.size()) break;
+        require(rc == Z_OK || rc == Z_STREAM_END, "Invalid deflated ZIP payload",
+            rc == Z_DATA_ERROR || rc == Z_BUF_ERROR ? StorageReason::ValidationFailed : StorageReason::UnsupportedFormat);
         write(std::string_view(decodedBytes.data(), decodedBytes.size() - stream.avail_out));
-        if (rc == Z_STREAM_END) { ended = true; require(!stream.avail_in && position == entry.packed, "Trailing deflated ZIP payload"); break; }
+        if (rc == Z_STREAM_END) { ended = true; require(!stream.avail_in && position == entry.packed, "Trailing deflated ZIP payload", StorageReason::ValidationFailed); break; }
       } while (stream.avail_in || !stream.avail_out);
     }
   }
-  require(produced == entry.bytes && (!inflater.stream || ended) && (format_ != StorageArchiveFormat::Zip || crc == entry.crc), "Archive payload checksum or size mismatch");
+  require(produced == entry.bytes && (!inflater.stream || ended) && (format_ != StorageArchiveFormat::Zip || crc == entry.crc), "Archive payload checksum or size mismatch", StorageReason::ValidationFailed);
   require(std::fflush(raw) == 0, "Cannot flush staged archive payload", StorageReason::IoError);
 }
 std::string StorageArchive::Central(const StorageArchiveEntry &entry, std::uint64_t offset) const {

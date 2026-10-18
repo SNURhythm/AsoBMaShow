@@ -61,6 +61,30 @@ void manifestsExtractEntries() {
     require(count == files.size(), "manifest visits all stored/deflated/TAR entries");
   }
 }
+void deflatedPayloadRefillsAtExactOutputBoundary() {
+  using storage_management::archive_detail::put;
+  storage_test::TempDirectory temp; const auto path = temp.root / "boundary.zip";
+  // A fixed block emits 14 zeroes, then stored blocks fill both 128 KiB
+  // buffers exactly before the final stored block needs fresh input.
+  const auto packed = std::string("\x62\x40\x01\x00\x00\xff\xff\x00\x00", 9) + std::string(65535, 'b') +
+      std::string("\x00\xf3\xff\x0c\x00", 5) + std::string(65523, 'c') + std::string("\x01\x01\x00\xfe\xff", 5) + "x";
+  const auto payload = std::string(14, '\0') + std::string(65535, 'b') + std::string(65523, 'c') + "x";
+  const std::string name = "audio.wav";
+  const auto crc = crc32(0, reinterpret_cast<const Bytef *>(payload.data()), payload.size());
+  std::string local(30, '\0'); put(local, 0, 0x04034b50, 4); put(local, 4, 20, 2); put(local, 8, 8, 2);
+  put(local, 14, crc, 4); put(local, 18, packed.size(), 4); put(local, 22, payload.size(), 4); put(local, 26, name.size(), 2);
+  std::string central(46, '\0'); put(central, 0, 0x02014b50, 4); put(central, 4, 20, 2); put(central, 6, 20, 2);
+  put(central, 10, 8, 2); put(central, 16, crc, 4); put(central, 20, packed.size(), 4); put(central, 24, payload.size(), 4);
+  put(central, 28, name.size(), 2); central += name;
+  std::string end(22, '\0'); put(end, 0, 0x06054b50, 4); put(end, 8, 1, 2); put(end, 10, 1, 2);
+  put(end, 12, central.size(), 4); put(end, 16, local.size() + name.size() + packed.size(), 4);
+  { std::ofstream file(path, std::ios::binary); file << local << name << packed << central << end; }
+  StorageArchive archive(path, temp.root / "manifest.sqlite", {});
+  const auto entry = archive.Next({}); require(entry.has_value(), "read deflate boundary entry");
+  const auto output = temp.root / "decoded"; archive.Extract(*entry, output, {});
+  std::ifstream file(output, std::ios::binary); const std::string decoded((std::istreambuf_iterator<char>(file)), {});
+  require(decoded == payload, "valid deflate refills input after output ends exactly at a chunk boundary");
+}
 void selectedArchiveFoldersAreEligible() {
   storage_test::TempDirectory temp;
   const auto archive = temp.root / "library.zip";
@@ -113,7 +137,12 @@ void reviewUsesCachedIndexAndApplyValidatesLayout() {
   storage_test::TempDirectory temp;
   archive_file::setArchiveIndexCacheDirectory(temp.root / "indexes");
   const auto path = temp.root / "songs.zip";
-  writeArchive(path, {{"a.wav", std::string(1000, 'a')}, {"b.wav", std::string(1000, 'b')}});
+  std::vector<std::pair<std::string, std::string>> files = {{"a.wav", std::string(1000, 'a')}, {"b.wav", std::string(1000, 'b')}};
+  for (int i = 0; i != 51; ++i) {
+    const auto stem = "conflict-" + std::to_string(i);
+    files.emplace_back(stem + ".wav", "wav"); files.emplace_back(stem + ".flac", "flac");
+  }
+  writeArchive(path, files);
   // Browsing reads ZIP's central directory. Review can reuse that index even
   // though a local header is invalid; Apply must validate physical records.
   {
@@ -125,20 +154,75 @@ void reviewUsesCachedIndexAndApplyValidatesLayout() {
   }
   require(archive_file::visitIndexEntries(path, [](const auto &) { return true; }), "prime browsing index after the edit");
   InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
-      .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = temp.root / "scan"};
+      .policy = {.audio = AudioAction::LossyVorbis}, .scanScratchRoot = temp.root / "scan"};
   StorageScanMetrics metrics;
   const auto review = BuildStoragePreflight(request, {}, &metrics);
-  require(review.complete && review.eligibleCount == 2 && metrics.archiveIndexVisits == 1 && metrics.archiveEntries == 2,
+  require(review.complete && review.eligibleCount == 2 && review.skippedCount == 102 &&
+      metrics.archiveIndexVisits == 1 && metrics.archiveEntries == 104,
       "review consumes one cached index without rebuilding physical layout metadata");
   std::string error; const auto before = HashStorageFile(path, {}, error);
   unsigned encodes = 0;
-  StorageArchiveDependencies deps{.encode = [&](const auto &, const auto &, const auto &, auto, auto) {
+  auto deps = DefaultOptimizerDependencies(MakeStoragePlatformPaths(temp.root / "private", {temp.root}));
+  deps.encodeAudio = [&](const auto &, const auto &, const auto &, auto, auto) {
     ++encodes; return EncodeResult{};
-  }};
-  const auto result = UpdateStorageArchive(review.archives.front(), request.policy,
-      MakeStoragePlatformPaths(temp.root / "private", {temp.root}), deps);
+  };
+  const auto result = StorageOptimizer(deps).Run({.inventory = request, .policy = request.policy, .preflight = review});
   require(result.failed == 1 && !result.recoveryRequired && encodes == 0 && HashStorageFile(path, {}, error) == before,
       "Apply validates physical layout before encoding or writing despite a cached review");
+  require(result.skipped == 102 && result.files.size() == 100 &&
+      result.files.front().outcome == FileOutcome::Failed && result.files.front().source == path &&
+      !result.files.front().reason.detail.empty(),
+      "archive rejection remains the first diagnostic when review skips fill the bounded report");
+}
+void damagedPayloadDoesNotAbortOtherSelectedSongs() {
+  for (int mode = 0; mode != 6; ++mode) {
+    storage_test::TempDirectory temp; const auto path = temp.root / "songs.zip";
+    std::vector<std::pair<std::string, std::string>> files = {
+        {"bad/audio.wav", std::string(1000, 'b')}, {"good/audio.wav", std::string(1000, 'g')}};
+    if (mode % 3 == 2) std::reverse(files.begin(), files.end());
+    writeArchive(path, files, mode >= 3);
+    std::string preserved;
+    std::uint64_t damagedOffset = 0;
+    {
+      StorageArchive archive(path, temp.root / "before.sqlite", {});
+      std::optional<std::uint64_t> cursor;
+      while (auto entry = archive.Next(cursor)) {
+        cursor = entry->offset;
+        if (entry->name != "bad/audio.wav") continue;
+        preserved = archive.io.Read(entry->offset, entry->span);
+        preserved[entry->dataOffset - entry->offset] = '\x07'; damagedOffset = entry->dataOffset;
+      }
+    }
+    require(!preserved.empty(), "locate payload checksum fixture");
+    { std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out); file.seekp(damagedOffset); file.put('\x07'); }
+    const bool selectAll = mode % 3 != 0;
+    InventoryRequest request{.groups = {{"selection", selectAll ? path : path / "good", false, false, StorageSourceKind::Archive}},
+        .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = temp.root / "scan"};
+    const auto review = BuildStoragePreflight(request);
+    require(review.eligibleCount == (selectAll ? 2 : 1), "review selects either all songs or just the unaffected song");
+    unsigned encodes = 0;
+    StorageArchiveDependencies deps{.encode = [&](const auto &, const auto &, const auto &output, auto, auto) {
+      ++encodes; std::ofstream(output, std::ios::binary) << "flac";
+      return EncodeResult{FileOutcome::Converted, output};
+    }};
+    const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+    const auto result = UpdateStorageArchive(review.archives.front(), request.policy, paths, deps);
+    require(result.converted == 1 && result.failed == (selectAll ? 1 : 0) && !result.recoveryRequired &&
+        encodes == 1 && fs::is_empty(paths.journalRoot),
+        "one damaged payload cannot abort other selected songs before or after a committed conversion");
+    if (selectAll) require(result.files.front().source == path / "bad/audio.wav" &&
+        result.files.front().reason.code == StorageReason::ValidationFailed,
+        "failed payload identifies the affected song instead of reporting only the container");
+    StorageArchive after(path, temp.root / "after.sqlite", {});
+    std::optional<std::uint64_t> cursor;
+    bool retained = false, converted = false;
+    while (auto entry = after.Next(cursor)) {
+      cursor = entry->offset;
+      if (entry->name == "bad/audio.wav") retained = after.io.Read(entry->offset, entry->span) == preserved;
+      if (entry->name == "good/audio.flac") converted = true;
+    }
+    require(retained && converted, "failed payload's original record is preserved exactly beside the successful conversion");
+  }
 }
 void reviewAndApplyPreserveSystemEntries() {
   storage_test::TempDirectory temp;
@@ -1152,9 +1236,11 @@ void storageArchiveTests(const char *executable) {
   for (const auto &[name, run] : std::vector<std::pair<const char *, void(*)()>>{
       {"sparse-prefix-recovery", sparsePrefixRecovery}, {"large-batch-recovery", archiveLargeRecordRecovery}, {"delete-batches", archiveConsecutiveDeletesAreBatched},
       {"manifest", manifestsExtractEntries}, {"preflight", selectedArchiveFoldersAreEligible},
+      {"deflate-boundary", deflatedPayloadRefillsAtExactOutputBoundary},
       {"sandbox", archiveReviewSeparatesPrivateAndLibraryAccess}, {"sandbox-staging", archiveStagingRespectsPrivateBoundary},
       {"cached-review", reviewUsesCachedIndexAndApplyValidatesLayout},
       {"system-entries", reviewAndApplyPreserveSystemEntries},
+      {"damaged-payload", damagedPayloadDoesNotAbortOtherSelectedSongs},
       {"metadata-preparation", archivePreparationDoesNotReadPayloads},
       {"metadata-traversal", archiveTraversalUsesOrderedMetadataReads},
       {"descriptor-boundaries", archiveDescriptorBoundaries},

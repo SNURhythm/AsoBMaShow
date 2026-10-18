@@ -1,4 +1,5 @@
 #include "StorageFileTransaction.h"
+#include "StorageReportDetail.h"
 #include "../AtomicFile.h"
 #include "../Uuid.h"
 #include <nlohmann/json.hpp>
@@ -44,7 +45,7 @@ void cleanupAbandonedCandidates(const StoragePlatformPaths &paths,
   auto failed = [&](const fs::path &path) {
     report.recoveryRequired = report.cleanupPending = true;
     ++report.failed;
-    if (report.files.size() < 100) report.files.push_back({.source = path, .outcome = FileOutcome::Failed,
+    RetainStorageReportDetail(report, {.source = path, .outcome = FileOutcome::Failed,
         .reason = {StorageReason::CleanupFailed, error}});
   };
   if (!IsSafeLocalPath(paths.temporaryRoot, error, paths.pathAccessRoots)) {
@@ -449,7 +450,7 @@ StorageReport StorageFileTransaction::Recover(Checkpoint check) {
   if (!PrepareJournalDirectory(error)) {
     report.recoveryRequired = true;
     report.failed = 1;
-    report.files.push_back({.source = paths_.journalRoot, .outcome = FileOutcome::Failed,
+    RetainStorageReportDetail(report, {.source = paths_.journalRoot, .outcome = FileOutcome::Failed,
         .reason = {StorageReason::RecoveryRequired, error}});
     return report;
   }
@@ -464,7 +465,7 @@ StorageReport StorageFileTransaction::Recover(Checkpoint check) {
     if (!record || !finishRecord(*record, dependencies_, reclaimed, added, error)) {
       report.recoveryRequired = true;
       ++report.failed;
-      if (report.files.size() < 100) report.files.push_back({.source = it->path(), .outcome = FileOutcome::Failed,
+      RetainStorageReportDetail(report, {.source = it->path(), .outcome = FileOutcome::Failed,
           .reason = {StorageReason::RecoveryRequired, error}});
     } else AccumulateStorageBytes(report.reclaimedBytes, report.addedBytes, reclaimed, added);
   }

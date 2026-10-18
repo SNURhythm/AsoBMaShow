@@ -541,7 +541,12 @@ void StorageManagementScene::RefreshState() {
     status += "\n" + fspath_to_utf8(shownTask_.progress.currentPath.filename());
   } else if (measuring_) status = i18n::tr("storage.ui.scanning");
   else if (!shownTask_.admissionError.empty()) status = std::string(i18n::tr("storage.ui.busy")) + " " + shownTask_.admissionError;
-  else if (shownTask_.lastReport) status = i18n::tr(shownTask_.lastReport->cancelled ? "storage.ui.cancelled" : "storage.ui.complete");
+  else if (shownTask_.lastReport) {
+    const auto &report = *shownTask_.lastReport;
+    status = i18n::tr(report.cancelled ? "storage.ui.cancelled" : report.failed
+        ? (report.converted || report.deleted ? "storage.ui.completed_with_errors" : "storage.ui.failed")
+        : "storage.ui.complete");
+  }
   else if (groups_.empty()) status = i18n::tr("storage.ui.empty");
   statusText_->setText(status);
   if (const auto &report = shownTask_.lastReport) {
