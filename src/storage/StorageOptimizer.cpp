@@ -297,7 +297,35 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
     std::vector<fs::path> changedDirectories;
     std::set<std::size_t> uncertainGroups;
     std::mutex aggregation;
+    std::vector<fs::path> archivePaths;
+    for (const auto &archive : inventory.archives) archivePaths.push_back(archive.path);
+    const StoragePathIndex archiveIndex(std::move(archivePaths));
+    std::vector<std::vector<GroupStorageMeasurement>> archiveBaselines(inventory.archives.size());
+    for (const auto &row : baselines) if (row.sourceKind == StorageSourceKind::Archive)
+      for (const auto position : archiveIndex.Ancestors(row.root)) archiveBaselines[position].push_back(row);
+    std::map<fs::path, std::size_t> archivePositions;
+    std::vector<StorageDirectorySummary> archiveOwners;
+    for (std::size_t i = 0; i < inventory.archives.size(); ++i) {
+      const auto &archive = inventory.archives[i];
+      archivePositions.emplace(archive.path, i);
+      archiveOwners.push_back({.directory = archive.path, .eligibleCount = archive.eligibleCount});
+    }
     auto work = [&](const StorageDirectorySummary &selected, StorageWorkBudget &budget, Checkpoint checkpoint, ProgressCallback progress) {
+      if (const auto found = archivePositions.find(selected.directory); found != archivePositions.end()) {
+        const auto position = found->second;
+        StorageArchiveDependencies archiveDependencies{
+          .encode = [&](const AssetCandidate &asset, const StoragePolicy &policy, const fs::path &output, Checkpoint check, ProgressCallback progress) {
+            const auto missing = missingCodec(asset.operation, caps);
+            if (missing.code != StorageReason::None) return EncodeResult{.reason = missing};
+            const auto &encoder = asset.operation == AssetOperation::CompressH264 ? dependencies_.encodeVideo : dependencies_.encodeAudio;
+            return encoder(asset, policy, output, std::move(check), std::move(progress));
+          }, .validateExisting = dependencies_.validateExisting, .availableSpace = dependencies_.availableSpace,
+          .measurementBaselines = archiveBaselines[position], .workBudget = &budget, .executionLimits = dependencies_.executionLimits};
+        auto result = UpdateStorageArchive(inventory.archives[position], request.policy, dependencies_.paths,
+            archiveDependencies, checkpoint, progress);
+        if (result.recoveryRequired) budget.StopForRecovery();
+        return result;
+      }
       // The scheduler gives each mapped summary one owner and publishes parent
       // completion before descendants can read that parent's updated evidence.
       const auto directoryPath = selected.directory;
@@ -351,21 +379,18 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
         const auto affectedGroups = groups.Ancestors(directoryPath);
         GroupStorageDelta directoryDelta;
         bool changedDirectory = false, staleScope = false;
-        const auto workerId = uuid::generateV4();
-        fs::path cursor;
-        while (auto entry = evidence.Candidates().Next(cursor, error)) {
-          cursor = entry->name;
-          StorageDiagnostic candidateReason;
-          auto next = StorageCandidateForEntry(*entry, evidence.Directory(), request.policy, {}, candidateReason);
-          if (!next) { ++report.skipped; ++state.filesDone; continue; }
-          auto asset = std::move(*next);
-          if (!checkpoint() || report.recoveryRequired) break;
+        std::mutex directoryMutex;
+        std::condition_variable directoryChanged;
+        auto process = [&](AssetCandidate asset, bool admitted) {
+          std::unique_lock lock(directoryMutex);
+          if (!checkpoint() || report.recoveryRequired) return EncodeResult{};
+          std::string error;
+          std::error_code ec;
           state.currentPath = asset.source;
           FileResult result{.source = asset.source, .destination = asset.destination, .bytesBefore = asset.identity.bytes};
           bool transactionStarted = false;
           bool transactionFinished = false;
-          const auto output = jobPath / ("candidate-" + workerId + "." + asobmshow::chart_assets::LowerMediaExtension(asset.destination));
-          std::optional<StorageWorkBudget::Lease> reservation;
+          const auto output = jobPath / ("candidate-" + uuid::generateV4() + "." + asobmshow::chart_assets::LowerMediaExtension(asset.destination));
           try {
             if (staleScope || !evidence.Candidate(asset, checkpoint, error)) {
               result.reason = {StorageReason::StaleInput, error};
@@ -395,26 +420,20 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
             } else if (const auto missing = missingCodec(asset.operation, caps); missing.code != StorageReason::None) {
               result.reason = missing;
             } else {
-              bool canEncode = true;
-              if (asset.operation != AssetOperation::Delete) {
-                constexpr std::uint64_t reserve = 1024 * 1024;
-                if (asset.identity.bytes <= std::numeric_limits<std::uint64_t>::max() - reserve) {
-                  auto acquired = budget.Acquire(asset.kind, asset.identity.bytes + reserve, checkpoint);
-                  if (acquired) reservation.emplace(std::move(*acquired));
-                }
-                if (!reservation) {
-                  canEncode = false; result.reason = {StorageReason::InsufficientSpace, "Insufficient private space before encoding"};
-                }
-              }
-              if (canEncode) {
+              if (!admitted && asset.operation != AssetOperation::Delete)
+                result.reason = {StorageReason::InsufficientSpace, "Insufficient private space before encoding"};
+              if (admitted || asset.operation == AssetOperation::Delete) {
+                lock.unlock();
                 const auto hash = HashStorageFile(asset.source, checkpoint, error);
                 if (!hash) { result.outcome = cancelled ? FileOutcome::Cancelled : FileOutcome::Failed; result.reason = {cancelled ? StorageReason::Cancelled : StorageReason::IoError, error}; }
                 else {
                   asset.sourceHash = *hash;
                   EncodeResult encoded;
                   if (asset.operation != AssetOperation::Delete) {
-                    state.phase = StoragePhase::Encode; emit();
-                    auto encoderProgress = [&](const StorageProgress &value) { state.phase = value.phase; emit(); };
+                    { std::lock_guard stateLock(directoryMutex); state.currentPath = asset.source; state.phase = StoragePhase::Encode; emit(); }
+                    auto encoderProgress = [&](const StorageProgress &value) {
+                      std::lock_guard stateLock(directoryMutex); state.currentPath = asset.source; state.phase = value.phase; emit();
+                    };
                     const auto &encoder = asset.operation == AssetOperation::CompressH264 ? dependencies_.encodeVideo : dependencies_.encodeAudio;
                     encoded = encoder(asset, request.policy, output, checkpoint, encoderProgress);
                     result.outcome = encoded.outcome; result.reason = encoded.reason;
@@ -423,8 +442,9 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
                       result.reason = {StorageReason::ValidationFailed, "Encoder returned an output outside this job"};
                     }
                   }
+                  lock.lock(); state.currentPath = asset.source;
                   if (checkpoint() && (asset.operation == AssetOperation::Delete || encoded.outcome == FileOutcome::Converted)) {
-                    if (!evidence.Candidate(asset, checkpoint, error)) {
+                    if (staleScope || !evidence.Candidate(asset, checkpoint, error)) {
                       result.outcome = FileOutcome::Skipped; result.reason = {StorageReason::StaleInput, error};
                     } else {
                       state.phase = StoragePhase::Commit; emit(); transactionStarted = true;
@@ -438,10 +458,19 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
               }
             }
           } catch (const std::exception &exception) {
+            if (!lock.owns_lock()) lock.lock();
             result.outcome = FileOutcome::Failed;
             result.reason = {transactionStarted && !transactionFinished ? StorageReason::RecoveryRequired : StorageReason::IoError, exception.what()};
           }
+          if (!lock.owns_lock()) lock.lock();
+          state.currentPath = asset.source;
           if (cancelled && !transactionStarted) { result.outcome = FileOutcome::Cancelled; result.reason = {StorageReason::Cancelled, "Cancelled before commit"}; }
+          if (!transactionStarted && result.outcome == FileOutcome::Converted) {
+            const bool recovery = budget.RecoveryRequired();
+            result.outcome = recovery ? FileOutcome::Skipped : FileOutcome::Cancelled;
+            result.reason = {recovery ? StorageReason::RecoveryRequired : StorageReason::Cancelled,
+                "Encoding completed but storage work stopped before commit"};
+          }
           if (result.outcome == FileOutcome::Converted || result.outcome == FileOutcome::Deleted) {
             changedDirectory = true;
             // Exact physical changes include retained backups, independently of the detail cap.
@@ -463,9 +492,63 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
           if (transactionFinished && !recover && !cancelled && !evidence.Advance(asset, result, checkpoint, error)) staleScope = true;
           append(report, std::move(result));
           fs::remove(output, ec); ec.clear();
-          reservation.reset();
           ++state.filesDone; emit();
-          if (report.cancelled || recover) break;
+          directoryChanged.notify_all();
+          return EncodeResult{};
+        };
+        // Keep candidate enumeration and evidence on one owner. Only admitted
+        // jobs create threads; their encode phase releases the directory lock.
+        const auto window = std::max<std::size_t>(8, dependencies_.executionLimits.audioWorkers + StorageExecutionLimits::videoWorkers);
+        std::vector<AssetCandidate> pending;
+        std::vector<std::unique_ptr<StorageEncodingJob>> active;
+        fs::path cursor;
+        bool exhausted = false;
+        while (!exhausted || !pending.empty() || !active.empty()) {
+          bool advanced = false;
+          for (auto it = active.begin(); it != active.end();) {
+            if ((*it)->Ready()) { (*it)->Take(); it = active.erase(it); advanced = true; }
+            else ++it;
+          }
+          if (!checkpoint()) { exhausted = true; pending.clear(); }
+          {
+            std::lock_guard lock(directoryMutex);
+            if (report.recoveryRequired || report.cancelled) { exhausted = true; pending.clear(); }
+            while (!exhausted && pending.size() + active.size() < window) {
+              auto entry = evidence.Candidates().Next(cursor, error);
+              if (!entry) { exhausted = true; break; }
+              cursor = entry->name;
+              StorageDiagnostic reason;
+              auto candidate = StorageCandidateForEntry(*entry, evidence.Directory(), request.policy, {}, reason);
+              if (candidate) pending.push_back(std::move(*candidate));
+              else { ++report.skipped; ++state.filesDone; }
+            }
+          }
+          for (auto it = pending.begin(); it != pending.end() && checkpoint();) {
+            if (it->operation == AssetOperation::Delete || it->reuseDestination || missingCodec(it->operation, caps).code != StorageReason::None) {
+              process(std::move(*it), false); it = pending.erase(it); advanced = true; continue;
+            }
+            constexpr std::uint64_t reserve = 1024 * 1024;
+            bool waiting = false;
+            std::optional<StorageWorkBudget::Lease> reservation;
+            if (it->identity.bytes <= std::numeric_limits<std::uint64_t>::max() - reserve) {
+              auto acquired = budget.TryAcquire(it->kind, it->identity.bytes + reserve, waiting);
+              if (acquired) reservation.emplace(std::move(*acquired));
+            }
+            if (!reservation) {
+              if (waiting) { ++it; continue; }
+              process(std::move(*it), false);
+            } else {
+              active.push_back(std::make_unique<StorageEncodingJob>(std::move(*reservation), [&, asset = std::move(*it)]() mutable {
+                try { return process(std::move(asset), true); }
+                catch (...) { budget.StopForRecovery(); throw; }
+              }));
+            }
+            it = pending.erase(it); advanced = true;
+          }
+          if (!advanced && (!pending.empty() || !active.empty())) {
+            std::unique_lock lock(directoryMutex);
+            directoryChanged.wait_for(lock, std::chrono::milliseconds(10));
+          }
         }
         const bool uncertain = !error.empty() || staleScope || !checkpoint() || report.recoveryRequired || !evidence.Finish(checkpoint, error);
         std::lock_guard lock(aggregation);
@@ -489,7 +572,7 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
           }
         }
       } catch (const std::exception &exception) {
-        const bool needsRecovery = transactionUnresolved || report.recoveryRequired;
+        const bool needsRecovery = transactionUnresolved || report.recoveryRequired || budget.RecoveryRequired();
         if (needsRecovery) budget.StopForRecovery();
         append(report, {.source = directoryPath, .outcome = FileOutcome::Failed,
             .reason = {needsRecovery ? StorageReason::RecoveryRequired : StorageReason::IoError, exception.what()}});
@@ -503,37 +586,9 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
     const auto recoveryBytes = report.reclaimedBytes, recoveryAdded = report.addedBytes;
     auto worked = RunStorageDirectories(inventory, dependencies_.executionLimits,
         [&] { return dependencies_.availableSpace(jobPath); }, work, checkpoint,
-        [&](const StorageProgress &value) { state = value; AccumulateStorageBytes(state.reclaimedBytes, state.addedBytes, recoveryBytes, recoveryAdded); emit(); });
-    report.converted += worked.converted; report.deleted += worked.deleted;
-    report.skipped += worked.skipped; report.failed += worked.failed;
-    AccumulateStorageBytes(report.reclaimedBytes, report.addedBytes, worked.reclaimedBytes, worked.addedBytes);
-    report.cancelled |= worked.cancelled; report.recoveryRequired |= worked.recoveryRequired;
-    report.cleanupPending |= worked.cleanupPending;
-    for (auto &file : worked.files) RetainStorageReportDetail(report, std::move(file));
-    std::vector<fs::path> archivePaths;
-    for (const auto &archive : inventory.archives) archivePaths.push_back(archive.path);
-    const StoragePathIndex archiveIndex(std::move(archivePaths));
-    std::vector<std::vector<GroupStorageMeasurement>> archiveBaselines(inventory.archives.size());
-    for (const auto &row : baselines) if (row.sourceKind == StorageSourceKind::Archive)
-      for (const auto position : archiveIndex.Ancestors(row.root)) archiveBaselines[position].push_back(row);
-    for (std::size_t archivePosition = 0; archivePosition < inventory.archives.size(); ++archivePosition) {
-      const auto &archive = inventory.archives[archivePosition];
-      if (!archive.eligibleCount || report.recoveryRequired || !checkpoint()) continue;
-      const auto beforeFiles = state.filesDone, beforeBytes = report.reclaimedBytes, beforeAdded = report.addedBytes;
-      StorageArchiveDependencies archiveDependencies{
-        .encode = [&](const AssetCandidate &asset, const StoragePolicy &policy, const fs::path &output, Checkpoint check, ProgressCallback progress) {
-          const auto missing = missingCodec(asset.operation, caps);
-          if (missing.code != StorageReason::None) return EncodeResult{.reason = missing};
-          const auto &encoder = asset.operation == AssetOperation::CompressH264 ? dependencies_.encodeVideo : dependencies_.encodeAudio;
-          return encoder(asset, policy, output, std::move(check), std::move(progress));
-        }, .validateExisting = dependencies_.validateExisting, .availableSpace = dependencies_.availableSpace,
-        .measurementBaselines = archiveBaselines[archivePosition]};
-      mergeReport(report, UpdateStorageArchive(archive, request.policy, dependencies_.paths, archiveDependencies, checkpoint,
-          [&](const StorageProgress &value) {
-            state = value; state.filesDone += beforeFiles; state.filesTotal = inventory.eligibleCount;
-            AccumulateStorageBytes(state.reclaimedBytes, state.addedBytes, beforeBytes, beforeAdded); emit();
-          }));
-    }
+        [&](const StorageProgress &value) { state = value; AccumulateStorageBytes(state.reclaimedBytes, state.addedBytes, recoveryBytes, recoveryAdded); emit(); },
+        {}, archiveOwners);
+    mergeReport(report, std::move(worked));
     // The changed subtree union is computed once, not once per asset/group pair.
     report.changedRoots.insert(report.changedRoots.end(), changedDirectories.begin(), changedDirectories.end());
     report.changedRoots = StoragePathIndex(std::move(report.changedRoots)).MinimalRoots();

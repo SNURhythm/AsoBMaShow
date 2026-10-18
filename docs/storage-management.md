@@ -89,8 +89,16 @@ remain skipped. Existing destinations are never overwritten.
 
 **Compress to H.264** uses software x264, an MP4 container and the `medium` preset.
 High, Balanced and Smaller quality correspond to CRF 18, 23 and 28; Balanced is
-the default. One conversion runs at a time, with at most two encoder threads.
+the default. Up to two videos encode at a time, each with two encoder threads.
 The main saving is replacing inefficient video such as MPEG-1; resizing is optional.
+
+Audio uses separate worker capacity, so a large video can overlap later audio
+and video targets, including files in the same folder or archive. Independent
+folders and archives also share that capacity. Pending work and temporary space
+are bounded; low free space or a full lookahead window applies backpressure.
+Folder commits remain serialized, and archive replacements are written in their
+original order. Cancel stops admission and waits for active encoders before
+removing temporary files or releasing the library for other work.
 
 Resolution choices are Original, 1920 × 1080, 1280 × 720, 854 × 480 and 640 × 360.
 They bound the displayed long and short edges, preserving aspect ratio and
@@ -188,10 +196,12 @@ the archive's file length, which can differ from filesystem allocation.
 
 There is no second complete archive or extracted tree. A disk-backed index and
 an 8 MiB copy batch with at most 1,024 chunks/records and a private redo file of
-at most 16 MiB accompany one extracted input, encoded output and prepared
-replacement at a time. The media staging budget is 1 GiB, additionally limited by
-free space; an entry must fit a conservative three-times-input estimate plus
-8 MiB. Encoded output and its replacement must also fit the staging budget.
+at most 16 MiB accompany a bounded window of extracted inputs and encoded outputs,
+plus one prepared replacement at a time. The aggregate media staging budget per
+archive is 1 GiB, additionally limited by shared free-space reservations. Each
+entry initially reserves three times its input size plus 8 MiB; growing outputs
+must reserve additional space before installation. Completed outputs retain their
+reservation until consumed or discarded.
 Oversized entries are skipped. Lossy conversions must reduce the stored archive
 record too. Lossless FLAC is retained even if the original ZIP compression was
 more compact. Growing records are appended to the source archive, their original

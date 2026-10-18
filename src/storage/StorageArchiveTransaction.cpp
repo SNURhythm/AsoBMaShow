@@ -2,6 +2,7 @@
 #include "StorageReportDetail.h"
 #include "StorageArchiveDb.h"
 #include "StoragePathIndex.h"
+#include "StorageWorkScheduler.h"
 #include "../AtomicFile.h"
 #include "../ArchiveSourceIdentity.h"
 #include "../FileChecksum.h"
@@ -63,9 +64,18 @@ struct Output {
   void Write(std::string_view bytes) { require(std::fwrite(bytes.data(), 1, bytes.size(), file) == bytes.size(), "Cannot write archive staging file", StorageReason::IoError); }
   void Close() { auto *value = file; file = nullptr; require(std::fclose(value) == 0, "Cannot flush archive staging file", StorageReason::IoError); }
 };
+bool speculativeFile(const fs::path &path) {
+  const auto stem = path.stem().string();
+  const auto prefix = stem.starts_with("input-") ? 6u : stem.starts_with("output-") ? 7u : 0u;
+  if (!prefix || stem.size() <= prefix || stem.size() > prefix + 20 || stem[prefix] < '1' || stem[prefix] > '9' ||
+      !std::all_of(stem.begin() + prefix, stem.end(), [](char c) { return c >= '0' && c <= '9'; })) return false;
+  return prefix == 6 ? asobmshow::chart_assets::ClassifyMediaPath(path) != asobmshow::chart_assets::MediaKind::Other :
+      (path.extension() == ".flac" || path.extension() == ".ogg" || path.extension() == ".mp4");
+}
 bool ownedFile(const std::string &name) {
   if (name == "manifest.sqlite" || name == "manifest.sqlite-journal" || name == "replacement.bin" || name == "redo.bin") return true;
   const auto path = fs::path(name);
+  if (speculativeFile(path)) return true;
   if (path.stem() == "input") return asobmshow::chart_assets::ClassifyMediaPath(path) != asobmshow::chart_assets::MediaKind::Other;
   return path.stem() == "output" && (path.extension() == ".flac" || path.extension() == ".ogg" || path.extension() == ".mp4");
 }
@@ -130,10 +140,31 @@ public:
   std::optional<std::uint64_t> copyCursor;
   ProgressCallback copyProgress;
   mutable std::map<std::string, std::unique_ptr<Statement>> statements;
+  struct PendingEncoding {
+    fs::path input, output;
+    std::uint64_t inputBytes = 0, reservedBytes = 0, outputLimit = 0;
+    std::atomic<bool> tooLarge = false;
+    StoragePhase phase = StoragePhase::Encode;
+    EncodeResult result;
+    std::shared_ptr<StorageWorkBudget::Lease> reservation;
+    // Destroy first: the encoder must stop touching paths and progress state.
+    std::unique_ptr<StorageEncodingJob> job;
+  };
+  StorageWorkBudget fallbackBudget;
+  StorageWorkBudget *workBudget;
+  std::mutex encodingMutex;
+  std::uint64_t pendingScratch = 0;
+  std::optional<std::uint64_t> encodingCursor;
+  bool encodingExhausted = false;
+  std::unique_ptr<StoragePathIndex> encodingSelection;
+  std::map<std::uint64_t, std::unique_ptr<PendingEncoding>> encodings;
   Update(StorageArchive &archive, fs::path journal, const StorageArchiveDependencies &deps, bool &started,
       const std::vector<fs::path> &accessRoots)
       : archive(archive), db(*archive.db), journal(std::move(journal)), deps(deps), accessRoots(accessRoots), started(started),
-        originalSourceIdentity(deps.measurementBaselines.empty() ? std::string{} : archive_source_identity::KeyForPath(archive.io.path)) {
+        originalSourceIdentity(deps.measurementBaselines.empty() ? std::string{} : archive_source_identity::KeyForPath(archive.io.path)),
+        fallbackBudget(deps.executionLimits, [this] {
+          return this->deps.availableSpace ? this->deps.availableSpace(this->journal) : std::optional<std::uint64_t>(fs::space(this->journal).available);
+        }), workBudget(deps.workBudget ? deps.workBudget : &fallbackBudget) {
     archive.io.CheckPath();
     progress.archiveBytesTotal = archive.identity.bytes;
   }
@@ -372,7 +403,7 @@ public:
   void RemoveStaging() {
     for (const auto &entry : fs::directory_iterator(journal)) {
       const auto name = entry.path().filename().string();
-      if (name != "manifest.sqlite" && name != "manifest.sqlite-journal" && ownedFile(name)) {
+      if (name != "manifest.sqlite" && name != "manifest.sqlite-journal" && ownedFile(name) && !speculativeFile(entry.path())) {
         require(!entry.is_symlink() && entry.is_regular_file(), "Unsafe archive staging file"); fs::remove(entry.path());
       }
     }
@@ -381,6 +412,10 @@ public:
     append(report, {.source = archive.io.path / fs::u8path(entry.name), .outcome = outcome, .reason = std::move(reason), .bytesBefore = entry.bytes});
   }
   void Prepare(StorageArchiveEntry &, const AssetCandidate &, const StoragePolicy &, Checkpoint, ProgressCallback);
+  void FillEncodings(const StoragePolicy &, Checkpoint);
+  bool ReserveOutput(PendingEncoding &, std::uint64_t);
+  void RemoveEncoding(std::uint64_t);
+  void ObserveScratch(std::uint64_t replacementBytes = 0);
   bool Reuse(const StorageArchiveEntry &, const AssetCandidate &, Checkpoint);
   void Flush() {
     if (pendingRecords.empty() && pendingChunks.empty()) return;
@@ -564,6 +599,7 @@ public:
   }
   void Entries(const StorageArchiveSummary *summary, const StoragePolicy &policy, Checkpoint check, ProgressCallback notify) {
     copyProgress = notify;
+    if (summary) encodingSelection = std::make_unique<StoragePathIndex>(summary->innerRoots);
     const StoragePathIndex selected(summary ? summary->innerRoots : std::vector<fs::path>{});
     std::optional<std::uint64_t> cursor;
     Statement next(db.value, "SELECT id,offset,span,data_offset,packed,bytes,crc,method,flags,directory,name,raw_name,metadata,action,original_span "
@@ -609,7 +645,9 @@ public:
       progress.phase = StoragePhase::Commit; if (notify) notify(progress);
       if (action == 3) AppendReplacement(*entry);
       CopyRecord(*entry, action, state[1], deleted);
+      RemoveEncoding(entry->id);
     }
+    encodings.clear();
     Flush(); RemoveStaging();
   }
   void Trailer() {
@@ -720,6 +758,12 @@ bool Update::Reuse(const StorageArchiveEntry &entry, const AssetCandidate &candi
     RecordSkip(entry, FileOutcome::Skipped, {StorageReason::InsufficientSpace, "Existing archive destination exceeds the validation staging budget"});
     return false;
   }
+  auto reservation = workBudget->Acquire(candidate.kind, required, check);
+  if (!reservation) {
+    active(check);
+    RecordSkip(entry, FileOutcome::Skipped, {StorageReason::InsufficientSpace, "Insufficient space for archive destination validation"});
+    return false;
+  }
   if (!deps.validateExisting) {
     RecordSkip(entry, FileOutcome::Skipped, {StorageReason::CodecUnavailable, "Existing destination validation is unavailable"});
     return false;
@@ -743,48 +787,149 @@ bool Update::Reuse(const StorageArchiveEntry &entry, const AssetCandidate &candi
   }
   return true;
 }
+bool Update::ReserveOutput(PendingEncoding &pending, std::uint64_t bytes) {
+  if (bytes <= pending.outputLimit) return true;
+  const auto required = plus(pending.inputBytes, plus(plus(bytes, bytes), stagingReserve));
+  std::lock_guard lock(encodingMutex);
+  const auto extra = required - pending.reservedBytes;
+  if (required > deps.scratchLimit || pendingScratch > deps.scratchLimit - extra || !pending.reservation->GrowTo(required)) return false;
+  pendingScratch += extra; pending.reservedBytes = required; pending.outputLimit = bytes; return true;
+}
+void Update::ObserveScratch(std::uint64_t replacementBytes) {
+  if (!deps.metrics) return;
+  auto bytes = replacementBytes;
+  for (const auto &[id, pending] : encodings) {
+    for (const auto &path : {pending->input, pending->output}) {
+      std::error_code error; const auto size = fs::file_size(path, error);
+      if (!error) bytes = plus(bytes, size);
+    }
+  }
+  deps.metrics->peakScratchBytes = std::max(deps.metrics->peakScratchBytes, bytes);
+}
+void Update::RemoveEncoding(std::uint64_t id) {
+  const auto found = encodings.find(id);
+  if (found == encodings.end()) return;
+  auto &pending = *found->second;
+  pending.job.reset(); // Join before deleting either path or releasing scratch.
+  ObserveScratch();
+  for (const auto &path : {pending.input, pending.output}) {
+    if (path.empty()) continue;
+    std::error_code error; const auto status = fs::symlink_status(path, error);
+    if (error == std::errc::no_such_file_or_directory || status.type() == fs::file_type::not_found) continue;
+    require(!error && fs::is_regular_file(status) && !fs::is_symlink(status), "Unsafe speculative archive staging file");
+    fs::remove(path);
+  }
+  { std::lock_guard lock(encodingMutex); pendingScratch -= pending.reservedBytes; }
+  encodings.erase(found);
+}
+void Update::FillEncodings(const StoragePolicy &policy, Checkpoint check) {
+  const auto window = std::max<std::size_t>(8, deps.executionLimits.audioWorkers + StorageExecutionLimits::videoWorkers);
+  if (!encodingSelection || encodingExhausted || encodings.size() >= window || (check && !check())) return;
+  Statement next(db.value, "SELECT id,offset,span,data_offset,packed,bytes,crc,method,flags,directory,name,raw_name,metadata "
+      "FROM entries WHERE offset>? AND complete=0 AND action=0 ORDER BY offset LIMIT 1"), collisions(db.value, candidateCollisionSql);
+  // Bound metadata lookahead as well as media staging. A long unselected tail
+  // must not delay consumption of an already completed encoder.
+  for (unsigned scanned = 0; scanned < 256 && encodings.size() < window && (!check || check()); ++scanned) {
+    const auto entry = nextArchiveEntry(next, encodingCursor);
+    if (!entry) { encodingExhausted = true; return; }
+    StorageDiagnostic reason;
+    const auto candidate = encodingSelection->Ancestors(fs::u8path(entry->name)).empty() ? std::optional<AssetCandidate>{} :
+        archiveCandidate(*entry, policy, reason, collisions);
+    if (!candidate || candidate->operation == AssetOperation::Delete) { encodingCursor = entry->offset; continue; }
+    // Reuse validation owns its staging synchronously. Do not reserve later
+    // media across this barrier; earlier encodes are consumed before reuse.
+    if (candidate->reuseDestination) return;
+    const auto required = plus(plus(entry->bytes, entry->bytes), plus(entry->bytes, stagingReserve));
+    auto pending = std::make_unique<PendingEncoding>();
+    pending->inputBytes = entry->bytes; pending->outputLimit = entry->bytes;
+    bool waiting = false;
+    {
+      std::lock_guard lock(encodingMutex);
+      if (required <= deps.scratchLimit) {
+        if (pendingScratch > deps.scratchLimit - required) return;
+        const auto available = deps.availableSpace ? deps.availableSpace(journal) : std::optional<std::uint64_t>(fs::space(journal).available);
+        if (available && required <= *available) {
+          auto lease = workBudget->TryAcquire(candidate->kind, required, waiting);
+          if (lease) pending->reservation = std::make_shared<StorageWorkBudget::Lease>(std::move(*lease));
+        } else if (!encodings.empty()) return;
+      }
+      if (!pending->reservation && waiting) return;
+      if (pending->reservation) { pendingScratch += required; pending->reservedBytes = required; }
+    }
+    encodingCursor = entry->offset;
+    auto &item = *pending;
+    encodings.emplace(entry->id, std::move(pending));
+    if (!item.reservation) {
+      item.result.reason = {StorageReason::InsufficientSpace, "Archive entry exceeds the bounded media staging budget"}; continue;
+    }
+    item.input = journal / ("input-" + std::to_string(entry->id) + "." + asobmshow::chart_assets::LowerMediaExtension(candidate->source));
+    item.output = journal / ("output-" + std::to_string(entry->id) + candidate->destination.extension().string());
+    try { archive.io.CheckPath(); archive.Extract(*entry, item.input, check); }
+    catch (const StorageArchiveError &error) {
+      if (error.code != StorageReason::ValidationFailed) throw;
+      archive.io.CheckPath();
+      item.result = {FileOutcome::Failed, {}, {error.code, error.what()}};
+      // Keep its reservation until the owner consumes and removes any partial input.
+      item.reservation->ReleaseEncoder(); continue;
+    }
+    auto staged = *candidate; staged.source = item.input; staged.destination = item.output;
+    std::string error; const auto identity = ReadFileIdentity(item.input, error, accessRoots);
+    if (!identity) throw StorageArchiveError(StorageReason::IoError, "Cannot identify staged archive media: " + error);
+    staged.identity = *identity;
+    require(static_cast<bool>(deps.encode), "Archive media encoder is unavailable", StorageReason::CodecUnavailable);
+    item.job = std::make_unique<StorageEncodingJob>(item.reservation, [&, staged = std::move(staged), policy, check, pending = &item] {
+      auto checkpoint = [&] {
+        if (check && !check()) return false;
+        std::error_code error; const auto size = fs::file_size(pending->output, error);
+        if (!error && !ReserveOutput(*pending, size)) pending->tooLarge = true;
+        return !pending->tooLarge;
+      };
+      return deps.encode(staged, policy, pending->output, checkpoint, [&](const StorageProgress &value) {
+        std::lock_guard lock(encodingMutex); pending->phase = value.phase;
+      });
+    });
+    ObserveScratch();
+  }
+}
 void Update::Prepare(StorageArchiveEntry &entry, const AssetCandidate &candidate, const StoragePolicy &policy, Checkpoint check, ProgressCallback notify) {
-  const auto required = plus(plus(entry.bytes, entry.bytes), plus(entry.bytes, stagingReserve));
-  const auto available = deps.availableSpace ? deps.availableSpace(journal) : std::optional<std::uint64_t>(fs::space(journal).available);
-  if (required > deps.scratchLimit || !available || required > *available) {
-    RecordSkip(entry, FileOutcome::Skipped, {StorageReason::InsufficientSpace, "Archive entry exceeds the bounded media staging budget"}); return;
-  }
   RemoveStaging();
-  const auto input = journal / ("input." + asobmshow::chart_assets::LowerMediaExtension(candidate.source));
-  const auto output = journal / ("output" + candidate.destination.extension().string());
-  try { archive.Extract(entry, input, check); }
-  catch (const StorageArchiveError &error) {
-    if (error.code != StorageReason::ValidationFailed) throw;
-    archive.io.CheckPath();
-    RecordSkip(entry, FileOutcome::Failed, {error.code, error.what()}); RemoveStaging(); return;
+  if (!encodingCursor || *encodingCursor < entry.offset)
+    encodingCursor = entry.offset ? std::optional<std::uint64_t>(entry.offset - 1) : std::nullopt;
+  while (!encodings.contains(entry.id)) {
+    active(check); FillEncodings(policy, check);
+    if (!encodings.contains(entry.id)) {
+      require(!encodingExhausted, "Missing archive encoding candidate", StorageReason::StaleInput);
+      std::unique_lock lock(encodingMutex); std::condition_variable changed;
+      changed.wait_for(lock, std::chrono::milliseconds(10));
+    }
   }
-  auto staged = candidate; staged.source = input; staged.destination = output;
-  // App-private staging has its own trusted boundary on sandboxed platforms;
-  // inspecting system parents above that boundary can fail despite file access.
-  std::string error; const auto identity = ReadFileIdentity(input, error, accessRoots);
-  if (!identity) throw StorageArchiveError(StorageReason::IoError, "Cannot identify staged archive media: " + error);
-  staged.identity = *identity;
-  const auto outputLimit = (std::min(deps.scratchLimit, *available) - entry.bytes - stagingReserve) / 2;
-  bool tooLarge = false;
-  auto checkpoint = [&] {
-    if (check && !check()) return false;
-    std::error_code ec; const auto size = fs::file_size(output, ec); if (!ec && size > outputLimit) tooLarge = true; return !tooLarge;
-  };
-  require(static_cast<bool>(deps.encode), "Archive media encoder is unavailable", StorageReason::CodecUnavailable);
-  EncodeResult encoded;
-  try { encoded = deps.encode(staged, policy, output, checkpoint, notify); }
-  catch (const std::exception &error) {
-    RecordSkip(entry, FileOutcome::Failed, {StorageReason::IoError, error.what()}); RemoveStaging(); return;
+  auto &pending = *encodings.at(entry.id);
+  if (pending.job) {
+    while (!pending.job->Ready()) {
+      FillEncodings(policy, check);
+      StorageProgress value;
+      { std::lock_guard lock(encodingMutex); value.phase = pending.phase; }
+      if (notify) notify(value);
+      pending.job->Wait();
+    }
+    try { pending.result = pending.job->Take(); }
+    catch (const std::exception &error) { pending.result = {FileOutcome::Failed, {}, {StorageReason::IoError, error.what()}}; }
+    catch (...) { pending.result = {FileOutcome::Failed, {}, {StorageReason::IoError, "Unhandled archive encoder failure"}}; }
   }
-  if (tooLarge) { RecordSkip(entry, FileOutcome::Skipped, {StorageReason::InsufficientSpace, "Encoded archive media exceeds the staging limit"}); RemoveStaging(); return; }
-  if (encoded.outcome != FileOutcome::Converted) { RecordSkip(entry, encoded.outcome, encoded.reason); RemoveStaging(); return; }
+  const auto &encoded = pending.result;
+  const auto &output = pending.output;
+  if (pending.tooLarge) { RecordSkip(entry, FileOutcome::Skipped, {StorageReason::InsufficientSpace, "Encoded archive media exceeds the staging limit"}); return; }
+  if (encoded.outcome != FileOutcome::Converted) { RecordSkip(entry, encoded.outcome, encoded.reason); return; }
   require(encoded.outputPath == output, "Archive encoder returned an unowned output", StorageReason::ValidationFailed);
+  std::string error;
   const auto encodedIdentity = ReadFileIdentity(output, error, accessRoots); require(encodedIdentity.has_value(), "Unsafe archive encoder output", StorageReason::ValidationFailed);
   require(encodedIdentity->bytes != 0, "Empty archive encoder output", StorageReason::ValidationFailed);
-  if (encodedIdentity->bytes > outputLimit) {
-    RecordSkip(entry, FileOutcome::Skipped, {StorageReason::InsufficientSpace, "Encoded archive media exceeds the staging limit"}); RemoveStaging(); return;
+  if (!ReserveOutput(pending, encodedIdentity->bytes)) {
+    RecordSkip(entry, FileOutcome::Skipped, {StorageReason::InsufficientSpace, "Encoded archive media exceeds the staging limit"}); return;
   }
-  if (candidate.operation != AssetOperation::LosslessFlac && encodedIdentity->bytes >= entry.bytes) { RecordSkip(entry, FileOutcome::Skipped, {StorageReason::NotSmaller, "Encoded archive media is not smaller"}); RemoveStaging(); return; }
+  if (candidate.operation != AssetOperation::LosslessFlac && encodedIdentity->bytes >= entry.bytes) {
+    RecordSkip(entry, FileOutcome::Skipped, {StorageReason::NotSmaller, "Encoded archive media is not smaller"}); return;
+  }
   active(check); StorageArchiveIO encodedFile(output, accessRoots, false); auto crc = crc32(0, nullptr, 0);
   for (std::uint64_t position = 0; position < encodedIdentity->bytes;) {
     active(check); auto bytes = encodedFile.Read(position, std::min(chunkSize, encodedIdentity->bytes - position));
@@ -822,7 +967,7 @@ void Update::Prepare(StorageArchiveEntry &entry, const AssetCandidate &candidate
     }
   }
   ValidateEntry(entry.id);
-  if (deps.metrics) deps.metrics->peakScratchBytes = std::max(deps.metrics->peakScratchBytes, plus(entry.bytes, plus(encodedIdentity->bytes, replacement.span)));
+  ObserveScratch(replacement.span);
   {
     StorageArchiveIO stage(prepared, accessRoots, false); SqlTransaction transaction(db);
     Statement remove(db.value, "DELETE FROM chunks WHERE entry_id=?"); remove.bind(1, entry.id); remove.step();

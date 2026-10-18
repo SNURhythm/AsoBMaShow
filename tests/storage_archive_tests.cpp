@@ -45,6 +45,123 @@ void writeArchive(const fs::path &path, const std::vector<std::pair<std::string,
   }
   require(archive_write_close(writer.get()) == ARCHIVE_OK, "finish fixture ZIP");
 }
+void archiveEncodersOverlapAndDrainSafely() {
+  for (const int mode : {0, 1, 2}) {
+    storage_test::TempDirectory temp;
+    const auto path = temp.root / "songs.zip";
+    const std::vector<std::pair<std::string, std::string>> files{
+        {"a.mpg", std::string(1000, 'a')}, {"b.mpg", std::string(1000, 'b')}, {"c.wav", std::string(1000, 'c')}};
+    writeArchive(path, files);
+    const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+    InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+        .policy = {.audio = AudioAction::LossyVorbis, .bga = BgaAction::CompressH264}, .scanScratchRoot = paths.scanRoot};
+    const auto review = BuildStoragePreflight(request);
+    require(review.eligibleCount == 3, "parallel archive fixture reviews both videos and audio");
+    std::mutex mutex; std::condition_variable changed;
+    unsigned laterEncoded = 0; bool release = false;
+    std::atomic<bool> cancelled = false;
+    StorageArchiveDependencies deps{.encode = [&](const AssetCandidate &asset, const StoragePolicy &, const fs::path &output,
+        Checkpoint check, ProgressCallback) {
+      std::ifstream input(asset.source, std::ios::binary); const auto kind = input.get(); input.close();
+      if (kind == 'a') { std::unique_lock lock(mutex); changed.wait(lock, [&] { return release; }); }
+      if (!check()) return EncodeResult{FileOutcome::Cancelled, {}, {StorageReason::Cancelled, "cancel"}};
+      { std::ofstream file(output); file << "tiny"; }
+      if (kind != 'a') { std::lock_guard lock(mutex); ++laterEncoded; changed.notify_all(); }
+      return EncodeResult{FileOutcome::Converted, output, {}};
+    }, .faultPoint = [&](std::string_view point) {
+      if (mode == 2 && point == "archive-entry-ready") throw std::runtime_error("interrupted prepared entry");
+    }};
+    auto run = std::async(std::launch::async, [&] {
+      return UpdateStorageArchive(review.archives.front(), request.policy, paths, deps, [&] { return !cancelled; });
+    });
+    bool overlapped;
+    { std::unique_lock lock(mutex);
+      overlapped = changed.wait_for(lock, std::chrono::seconds(2), [&] { return laterEncoded == 2; });
+      cancelled = mode == 1; release = true; changed.notify_all(); }
+    const auto report = run.get();
+    require(overlapped, "later archive video and audio finish encoding while the first video is held");
+    if (mode == 2) {
+      require(report.recoveryRequired, "interrupted mutation retains its durable journal");
+      const auto recovered = RecoverStorageArchives(paths);
+      require(!recovered.failed && !recovered.recoveryRequired, "recovery recognizes and cleans speculative encoder staging");
+    } else require(!report.failed && !report.recoveryRequired && report.cancelled == (mode == 1) &&
+        report.converted == (mode == 1 ? 0 : 3), "parallel archive encoding preserves ordered commit and cancellation");
+    const auto retained = readArchive(path);
+    require(retained.size() == 3 && retained.at(mode == 1 ? "a.mpg" : "a.mp4") == (mode == 1 ? files[0].second : "tiny") &&
+        retained.at(mode == 0 ? "b.mp4" : "b.mpg") == (mode == 0 ? "tiny" : files[1].second) &&
+        retained.at(mode == 0 ? "c.ogg" : "c.wav") == (mode == 0 ? "tiny" : files[2].second),
+        "only durable replacements survive cancellation or recovery");
+    require(fs::is_empty(paths.journalRoot), "all archive workers join before staging cleanup");
+  }
+}
+void independentArchivesAndDirectoriesShareEncodingCapacity() {
+  storage_test::TempDirectory temp;
+  const auto first = temp.root / "a.zip", second = temp.root / "b.zip";
+  writeArchive(first, {{"a.mpg", std::string(1000, 'a')}});
+  writeArchive(second, {{"b.mpg", std::string(1000, 'b')}});
+  temp.write("c/c.wav", std::string(1000, 'c'));
+  const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+  InventoryRequest input{.groups = {{"first", first, false, false, StorageSourceKind::Archive},
+      {"second", second, false, false, StorageSourceKind::Archive}, {"local", temp.root / "c"}},
+      .policy = {.audio = AudioAction::LossyVorbis, .bga = BgaAction::CompressH264}, .scanScratchRoot = paths.scanRoot};
+  auto deps = DefaultOptimizerDependencies(paths); deps.executionLimits.audioWorkers = 1;
+  deps.probeCodecs = [] { StorageCodecCapabilities caps; caps.vorbis.available = caps.x264.available = caps.mp4.available = true; return caps; };
+  std::mutex mutex; std::condition_variable changed;
+  bool release = false, firstEntered = false; unsigned laterEncoded = 0;
+  deps.encodeAudio = deps.encodeVideo = [&](const AssetCandidate &asset, const StoragePolicy &, const fs::path &output, auto, auto) {
+    std::ifstream source(asset.source); const auto kind = source.get(); source.close();
+    if (kind == 'a') {
+      std::unique_lock lock(mutex); firstEntered = true; changed.notify_all(); changed.wait(lock, [&] { return release; });
+    }
+    { std::ofstream file(output); file << "tiny"; }
+    if (kind != 'a') { std::lock_guard lock(mutex); ++laterEncoded; changed.notify_all(); }
+    return EncodeResult{FileOutcome::Converted, output, {}};
+  };
+  auto run = std::async(std::launch::async, [&] { return StorageOptimizer(deps).Run({.inventory = input, .policy = input.policy}); });
+  bool overlapped;
+  { std::unique_lock lock(mutex);
+    overlapped = changed.wait_for(lock, std::chrono::seconds(2), [&] { return firstEntered && laterEncoded == 2; });
+    release = true; changed.notify_all(); }
+  const auto report = run.get();
+  require(overlapped, "a held archive video does not block another archive or local directory");
+  require(report.converted == 3 && !report.failed && !report.recoveryRequired && report.groupDeltas.size() == 3 &&
+      readArchive(first).at("a.mp4") == "tiny" && readArchive(second).at("b.mp4") == "tiny" &&
+      fs::file_size(temp.root / "c/c.ogg") == 4 && fs::is_empty(paths.journalRoot) && fs::is_empty(paths.temporaryRoot),
+      "independent owners merge committed reports and drain their shared encoding budget");
+}
+void archiveLookaheadRespectsAggregateScratch() {
+  storage_test::TempDirectory temp;
+  const auto path = temp.root / "bounded.zip";
+  writeArchive(path, {{"a.wav", std::string(1000, 'a')}, {"b.wav", std::string(1000, 'b')}, {"c.wav", std::string(1000, 'c')}});
+  const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+  InventoryRequest input{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+      .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = paths.scanRoot};
+  const auto review = BuildStoragePreflight(input);
+  std::mutex mutex; std::condition_variable changed;
+  std::atomic<bool> entered = false;
+  bool release = false, observed = false, bounded = false;
+  StorageArchiveDependencies deps{.encode = [&](const AssetCandidate &asset, const StoragePolicy &, const fs::path &output, auto, auto) {
+    std::ifstream source(asset.source); const auto kind = source.get(); source.close();
+    if (kind == 'a') {
+      entered = true;
+      std::unique_lock lock(mutex);
+      require(changed.wait_for(lock, std::chrono::seconds(2), [&] { return release; }), "owner continues progress while its scratch window is full");
+    }
+    std::ofstream(output) << "tiny";
+    return EncodeResult{FileOutcome::Converted, output, {}};
+  }, .scratchLimit = 8 * 1024 * 1024 + 3000};
+  const auto report = UpdateStorageArchive(review.archives.front(), input.policy, paths, deps, {}, [&](const StorageProgress &) {
+    if (observed || !entered) return;
+    unsigned inputs = 0;
+    for (const auto &journal : fs::directory_iterator(paths.journalRoot))
+      for (const auto &file : fs::directory_iterator(journal.path()))
+        if (file.path().filename().string().starts_with("input-")) ++inputs;
+    observed = true; bounded = inputs == 1;
+    { std::lock_guard lock(mutex); release = true; changed.notify_all(); }
+  });
+  require(observed && bounded && report.converted == 3 && !report.failed && !report.recoveryRequired && fs::is_empty(paths.journalRoot),
+      "aggregate scratch admits one staged entry at a time and reuses its reservation without skipping later files");
+}
 void manifestsExtractEntries() {
   storage_test::TempDirectory temp;
   const std::vector<std::pair<std::string, std::string>> files = {{"music/a.wav", std::string(1024 * 300, 'a')},
@@ -208,7 +325,7 @@ void reviewUsesCachedIndexAndApplyValidatesLayout() {
       metrics.archiveIndexVisits == 1 && metrics.archiveEntries == 104,
       "review consumes one cached index without rebuilding physical layout metadata");
   std::string error; const auto before = HashStorageFile(path, {}, error);
-  unsigned encodes = 0;
+  std::atomic<unsigned> encodes = 0;
   auto deps = DefaultOptimizerDependencies(MakeStoragePlatformPaths(temp.root / "private", {temp.root}));
   deps.encodeAudio = [&](const auto &, const auto &, const auto &, auto, auto) {
     ++encodes; return EncodeResult{};
@@ -247,7 +364,7 @@ void damagedPayloadDoesNotAbortOtherSelectedSongs() {
         .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = temp.root / "scan"};
     const auto review = BuildStoragePreflight(request);
     require(review.eligibleCount == (selectAll ? 2 : 1), "review selects either all songs or just the unaffected song");
-    unsigned encodes = 0;
+    std::atomic<unsigned> encodes = 0;
     StorageArchiveDependencies deps{.encode = [&](const auto &, const auto &, const auto &output, auto, auto) {
       ++encodes; std::ofstream(output, std::ios::binary) << "flac";
       return EncodeResult{FileOutcome::Converted, output};
@@ -769,7 +886,7 @@ void growingFlacArchiveRecovery() {
       require(report.reclaimedBytes == 0 && fs::file_size(path) > before &&
           report.addedBytes == fs::file_size(path) - before,
           "larger archive does not underflow reclaimed bytes");
-      require(metrics.peakScratchBytes < 40000, "growing archives retain one-entry staging");
+      require(metrics.peakScratchBytes < 50000, "lookahead retains at most three 12 KB outputs and one replacement");
     }
   }
 }
@@ -1258,7 +1375,7 @@ void differingLocalUnicodePathsArePreserved() {
     const auto review = BuildStoragePreflight(request);
     require(review.eligibleCount == 1 && review.archives.size() == 1, "central metadata permits review without reading local Unicode paths");
     std::string error; const auto before = HashStorageFile(path, {}, error);
-    unsigned encodes = 0;
+    std::atomic<unsigned> encodes = 0;
     StorageArchiveDependencies deps{.encode = [&](const auto &, const auto &, const auto &, auto, auto) {
       ++encodes; return EncodeResult{};
     }};
@@ -1285,7 +1402,7 @@ void differingBrowsingUnicodePathsArePreserved() {
   const auto review = BuildStoragePreflight(request);
   require(review.eligibleCount == 1 && review.archives.size() == 1, "fallback spelling is eligible during index-only review");
   std::string error; const auto before = HashStorageFile(path, {}, error);
-  unsigned encodes = 0;
+  std::atomic<unsigned> encodes = 0;
   StorageArchiveDependencies deps{.encode = [&](const auto &, const auto &, const auto &, auto, auto) {
     ++encodes; return EncodeResult{};
   }};
@@ -1381,11 +1498,12 @@ void archivePolicyBoundaries() {
         .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = temp.root / "scan"};
     const auto review = BuildStoragePreflight(request);
     const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
-    std::string error; const auto before = ReadFileIdentity(path, error); bool cancel = false; unsigned calls = 0;
-    StorageArchiveDependencies dependencies{.encode = [&](const AssetCandidate &, const StoragePolicy &, const fs::path &output, Checkpoint, ProgressCallback) {
+    std::string error; const auto before = ReadFileIdentity(path, error); std::atomic<bool> cancel = false; std::atomic<unsigned> calls = 0;
+    StorageArchiveDependencies dependencies{.encode = [&](const AssetCandidate &asset, const StoragePolicy &, const fs::path &output, Checkpoint, ProgressCallback) {
       ++calls;
-      if (calls == 2 && mode == "throw") throw std::runtime_error("injected encoder exception");
-      if (calls == 2 && mode == "failed") return EncodeResult{.outcome = FileOutcome::Failed, .reason = {StorageReason::ValidationFailed, "injected validation failure"}};
+      std::ifstream source(asset.source); const bool second = source.get() == 'b'; source.close();
+      if (second && mode == "throw") throw std::runtime_error("injected encoder exception");
+      if (second && mode == "failed") return EncodeResult{.outcome = FileOutcome::Failed, .reason = {StorageReason::ValidationFailed, "injected validation failure"}};
       std::ofstream(output, std::ios::binary) << std::string(1000, 'f'); return EncodeResult{FileOutcome::Converted, output};
     }, .availableSpace = [&](const fs::path &) -> std::optional<std::uint64_t> { return mode == "budget" ? 1024 : 100000000; }};
     const auto result = UpdateStorageArchive(review.archives.front(), request.policy, paths, dependencies, [&] { return !cancel; },
@@ -1422,7 +1540,7 @@ void unsafeAndStaleArchivesAreRejected() {
     const auto review = BuildStoragePreflight(request);
     if ((mode == "encrypted" || mode == "traversal") && review.eligibleCount) {
       std::string error; const auto before = HashStorageFile(path, {}, error);
-      unsigned encodes = 0;
+      std::atomic<unsigned> encodes = 0;
       StorageArchiveDependencies deps{.encode = [&](const auto &, const auto &, const auto &, auto, auto) {
         ++encodes; return EncodeResult{};
       }};
@@ -1510,9 +1628,9 @@ void archiveStagingRespectsPrivateBoundary() {
     const auto identity = ReadFileIdentity(path, error, {library});
     require(identity.has_value(), "archive identity is accessible inside the library grant");
     const StorageArchiveSummary summary{.path = path, .identity = *identity, .innerRoots = {fs::path{}}, .eligibleCount = 2};
+    if (mode == "symlink") std::ofstream(privateRoot / "foreign") << std::string(1000, 'f');
     StorageArchiveDependencies deps{.encode = [&](const AssetCandidate &, const StoragePolicy &, const fs::path &output, Checkpoint, ProgressCallback) {
       if (mode == "symlink") {
-        std::ofstream(privateRoot / "foreign") << std::string(1000, 'f');
         fs::create_symlink(privateRoot / "foreign", output);
       } else std::ofstream(output, std::ios::binary) << std::string(1000, 'f');
       return EncodeResult{FileOutcome::Converted, output};
@@ -1591,6 +1709,7 @@ void storageArchiveDiscoverySandboxTest(const fs::path &root) {
         "archive review resolves folder and file grants without probing system ancestors");
   }
 }
+void storageArchiveParallelTests() { archiveEncodersOverlapAndDrainSafely(); independentArchivesAndDirectoriesShareEncodingCapacity(); archiveLookaheadRespectsAggregateScratch(); }
 void storageArchiveTests(const char *executable) {
 #if defined(__APPLE__) && TARGET_OS_OSX
   storage_test::TempDirectory temp;
@@ -1613,6 +1732,9 @@ void storageArchiveTests(const char *executable) {
   (void)executable;
 #endif
   for (const auto &[name, run] : std::vector<std::pair<const char *, void(*)()>>{
+      {"parallel-encoders", archiveEncodersOverlapAndDrainSafely},
+      {"parallel-owners", independentArchivesAndDirectoriesShareEncodingCapacity},
+      {"parallel-scratch", archiveLookaheadRespectsAggregateScratch},
       {"container-relocation", archiveRecoveryAfterContainerRelocation},
       {"measurement-deltas", archiveChangesUpdateCachedInnerMeasurements},
       {"sparse-prefix-recovery", sparsePrefixRecovery}, {"large-batch-recovery", archiveLargeRecordRecovery}, {"delete-batches", archiveConsecutiveDeletesAreBatched},

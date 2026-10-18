@@ -16,6 +16,7 @@ using storage_test::require;
 using storage_test::TempDirectory;
 void storageLibraryIntegration();
 void storageArchiveTests(const char *executable);
+void storageArchiveParallelTests();
 void storageArchiveTraversalBenchmark(std::size_t count);
 void storageArchiveCompactionBenchmark(std::size_t count, std::size_t payloadBytes, bool deleteFirst);
 void storageArchiveDiscoverySandboxTest(const std::filesystem::path &root);
@@ -32,28 +33,29 @@ OptimizationRequest request(const fs::path &root) {
 }
 OptimizerDependencies dependencies(TempDirectory &temp, std::vector<std::string> &events) {
   auto result = DefaultOptimizerDependencies(MakeStoragePlatformPaths(temp.root / "private", {temp.root / "charts"}));
+  const auto eventMutex = std::make_shared<std::mutex>();
   result.executionLimits.audioWorkers = 1;
   result.probeCodecs = [] {
     StorageCodecCapabilities caps;
     caps.flac.available = caps.vorbis.available = caps.x264.available = caps.aac.available = caps.mp4.available = true;
     return caps;
   };
-  result.encodeAudio = result.encodeVideo = [&](const AssetCandidate &candidate, const StoragePolicy &,
+  result.encodeAudio = result.encodeVideo = [&, eventMutex](const AssetCandidate &candidate, const StoragePolicy &,
       const fs::path &output, Checkpoint check, ProgressCallback progress) {
     require(!candidate.sourceHash.empty(), "source hash is captured before the encoder reads media");
-    events.push_back("encode:" + candidate.source.filename().string());
+    { std::lock_guard lock(*eventMutex); events.push_back("encode:" + candidate.source.filename().string()); }
     if (check && !check()) return EncodeResult{FileOutcome::Cancelled, {}, {StorageReason::Cancelled, "cancel"}};
     std::ofstream file(output, std::ios::binary); file << "tiny"; file.close();
     if (progress) progress({StoragePhase::Verify, candidate.source});
-    events.push_back("verify:" + candidate.source.filename().string());
+    { std::lock_guard lock(*eventMutex); events.push_back("verify:" + candidate.source.filename().string()); }
     return EncodeResult{FileOutcome::Converted, output, {}};
   };
   const auto factory = result.transactions;
-  result.transactions = [&, factory](const StoragePlatformPaths &paths, StorageCommitPrecondition beforeCommit) {
+  result.transactions = [&, factory, eventMutex](const StoragePlatformPaths &paths, StorageCommitPrecondition beforeCommit) {
     auto transactions = factory(paths, std::move(beforeCommit));
     const auto replace = transactions.replace;
-    transactions.replace = [&, replace](const AssetCandidate &candidate, const EncodeResult &encoded, Checkpoint check) {
-      events.push_back("commit:" + candidate.source.filename().string());
+    transactions.replace = [&, replace, eventMutex](const AssetCandidate &candidate, const EncodeResult &encoded, Checkpoint check) {
+      { std::lock_guard lock(*eventMutex); events.push_back("commit:" + candidate.source.filename().string()); }
       require(fs::exists(encoded.outputPath), "validated temporary output reaches transaction intact");
       return replace(candidate, encoded, check);
     };
@@ -157,6 +159,91 @@ void independentDirectoriesUseDistinctOutputs() {
   require(report.groupDeltas.size() == 1 && report.groupDeltas[0].bytesBefore == 200 && report.groupDeltas[0].bytesAfter == 8,
       "parallel directory deltas aggregate once into their parent");
 }
+void slowVideoDoesNotBlockFollowingFiles() {
+  for (const int mode : {0, 1, 2}) {
+    const bool cancel = mode == 1, changedSource = mode == 2;
+    TempDirectory temp;
+    for (const auto *name : {"a.mpg", "b.mpg", "c.wav"}) temp.write(fs::path("charts") / name, std::string(100, 's'));
+    std::vector<std::string> events;
+    auto deps = dependencies(temp, events);
+    const auto factory = DefaultOptimizerDependencies(deps.paths).transactions;
+    std::mutex mutex; std::condition_variable changed;
+    bool release = false; unsigned laterCommits = 0;
+    std::atomic<bool> cancelled = false;
+    deps.encodeAudio = deps.encodeVideo = [&](const AssetCandidate &asset, const StoragePolicy &,
+        const fs::path &output, Checkpoint check, ProgressCallback) {
+      require(!asset.sourceHash.empty(), "parallel encoder receives hashed source evidence");
+      if (asset.source.filename() == "a.mpg") {
+        std::unique_lock lock(mutex); changed.wait(lock, [&] { return release; });
+      }
+      if (!check()) return EncodeResult{FileOutcome::Cancelled, {}, {StorageReason::Cancelled, "cancel"}};
+      std::ofstream(output) << "tiny";
+      return EncodeResult{FileOutcome::Converted, output, {}};
+    };
+    deps.transactions = [&, factory](const auto &paths, auto beforeCommit) {
+      auto transactions = factory(paths, beforeCommit);
+      const auto replace = transactions.replace;
+      transactions.replace = [&, replace](const auto &asset, const auto &encoded, auto check) {
+        auto result = replace(asset, encoded, check);
+        if (asset.source.filename() != "a.mpg" && result.outcome == FileOutcome::Converted) {
+          std::lock_guard lock(mutex); ++laterCommits; changed.notify_all();
+        }
+        return result;
+      };
+      return transactions;
+    };
+    auto run = std::async(std::launch::async, [&] {
+      return StorageOptimizer(deps).Run(request(temp.root / "charts"), [&] { return !cancelled; });
+    });
+    bool progressed;
+    { std::unique_lock lock(mutex);
+      progressed = changed.wait_for(lock, std::chrono::seconds(2), [&] { return laterCommits == 2; });
+      if (changedSource) temp.write("charts/a.mpg", "external edit while encoding");
+      cancelled = cancel; release = true; changed.notify_all(); }
+    const auto report = run.get();
+    require(progressed, "later video and audio commit while the first same-directory video is held");
+    require(report.converted == (mode ? 2 : 3) && !report.failed && !report.recoveryRequired &&
+        report.cancelled == cancel && report.reclaimedBytes == (mode ? 192 : 288),
+        "parallel commits retain exact accounting and cancellation drains the held video");
+    require(fs::exists(temp.root / "charts/a.mpg") == (mode != 0) && fs::file_size(temp.root / "charts/b.mp4") == 4 &&
+        fs::file_size(temp.root / "charts/c.ogg") == 4 && fs::is_empty(deps.paths.temporaryRoot) && fs::is_empty(deps.paths.journalRoot),
+        "parallel outputs commit independently and all staging is removed after joining");
+  }
+}
+void recoveryStopsAnAlreadyEncodedPeerBeforeCommit() {
+  TempDirectory temp;
+  temp.write("charts/a.wav", std::string(100, 'a')); temp.write("charts/b.wav", std::string(100, 'b'));
+  std::vector<std::string> events;
+  auto deps = dependencies(temp, events); deps.executionLimits.audioWorkers = 2;
+  auto now = std::chrono::steady_clock::time_point{};
+  deps.now = [&] { return now += std::chrono::milliseconds(101); };
+  std::mutex mutex; std::condition_variable changed;
+  bool peerEntered = false, recoveryReported = false;
+  deps.encodeAudio = [&](const AssetCandidate &asset, const StoragePolicy &, const fs::path &output, auto, auto) {
+    { std::unique_lock lock(mutex);
+      if (asset.source.filename() == "b.wav") { peerEntered = true; changed.notify_all(); }
+      require(changed.wait_for(lock, std::chrono::seconds(2), [&] {
+        return asset.source.filename() == "a.wav" ? peerEntered : recoveryReported;
+      }), "both encoders reach the interrupted commit boundary"); }
+    std::ofstream(output) << "tiny";
+    return EncodeResult{FileOutcome::Converted, output, {}};
+  };
+  const auto factory = DefaultOptimizerDependencies(deps.paths).transactions;
+  deps.transactions = [factory](const auto &paths, auto beforeCommit) {
+    auto operations = factory(paths, beforeCommit); const auto replace = operations.replace;
+    operations.replace = [replace](const auto &asset, const auto &encoded, auto check) {
+      auto result = replace(asset, encoded, check);
+      result.reason = {StorageReason::RecoveryRequired, "retained uncertain transaction"}; return result;
+    };
+    return operations;
+  };
+  const auto report = StorageOptimizer(deps).Run(request(temp.root / "charts"), {}, [&](const StorageProgress &progress) {
+    if (progress.filesDone == 1) { std::lock_guard lock(mutex); recoveryReported = true; changed.notify_all(); }
+  });
+  require(report.recoveryRequired && !report.failed && report.converted == 1 && report.reclaimedBytes == 96 &&
+      fs::exists(temp.root / "charts/b.wav") && !fs::exists(temp.root / "charts/b.ogg"),
+      "encoded work stopped by peer recovery is not counted as a committed conversion");
+}
 void subsetRefreshNeverEnumeratesAncestorSiblings() {
   for (bool externalEdit : {false, true}) {
     TempDirectory temp;
@@ -238,9 +325,11 @@ void wholeFolderOrchestration() {
   require(report.converted == 6 && report.reclaimedBytes == 576 && !report.failed && !report.cancelled,
           "folder union converts representative, sabun, nested and unreferenced resources once");
   require(events.size() == 18, "each unique asset has one encode, verify and commit");
-  for (std::size_t i = 0; i < events.size(); i += 3) {
-    require(events[i].starts_with("encode:") && events[i + 1].starts_with("verify:") && events[i + 2].starts_with("commit:") &&
-                events[i].substr(7) == events[i + 1].substr(7) && events[i].substr(7) == events[i + 2].substr(7),
+  for (const auto *name : {"lead.wav", "lead.mpg", "sabun.flac", "sabun.avi", "extra.wav", "unused.m1v"}) {
+    const auto encoded = std::find(events.begin(), events.end(), std::string("encode:") + name);
+    const auto verified = std::find(events.begin(), events.end(), std::string("verify:") + name);
+    const auto committed = std::find(events.begin(), events.end(), std::string("commit:") + name);
+    require(encoded < verified && verified < committed && committed != events.end(),
             "installation always follows encode and validation for that source");
   }
   require(HashStorageFile(temp.root / "charts/leader.bms", {}, error) == chartHash &&
@@ -346,7 +435,8 @@ void unrelatedFoldersDoNotMultiplyCommitChecks() {
   input.preflight = BuildStoragePreflight(input.inventory);
   std::vector<std::string> events;
   auto deps = dependencies(temp, events);
-  int checkpoints = 0, commitChecks = 0;
+  std::atomic<int> checkpoints = 0;
+  int commitChecks = 0;
   const auto encoder = deps.encodeAudio;
   deps.encodeAudio = [&](const auto &asset, const auto &policy, const auto &output, auto check, auto progress) {
     auto encoded = encoder(asset, policy, output, check, progress);
@@ -526,7 +616,7 @@ void exceptionRecoveryClassification() {
     std::vector<std::string> events;
     auto deps = dependencies(temp, events);
     const auto factory = deps.transactions;
-    bool cancel = false;
+    std::atomic<bool> cancel = false;
     deps.transactions = [&](const StoragePlatformPaths &paths, StorageCommitPrecondition beforeCommit) {
       if (stage == 0 && beforeCommit) throw std::runtime_error("transaction setup failed");
       auto transactions = factory(paths, std::move(beforeCommit));
@@ -687,7 +777,7 @@ void cancellationCapabilitiesAndNoOp() {
   require(report.skipped == 1 && report.files.front().reason.code == StorageReason::InsufficientSpace && events.empty(),
           "space is checked before encoding");
   deps = dependencies(temp, events);
-  const auto encode = deps.encodeAudio; bool cancel = false;
+  const auto encode = deps.encodeAudio; std::atomic<bool> cancel = false;
   deps.encodeAudio = [&, encode](const AssetCandidate &asset, const StoragePolicy &policy, const fs::path &path,
                                 Checkpoint check, ProgressCallback progress) {
     auto encoded = encode(asset, policy, path, check, progress); cancel = true; return encoded;
@@ -788,17 +878,20 @@ int main(int argc, char **argv) {
     }
     if (argc > 1 && std::string_view(argv[1]) == "--directory-inventory") return storageDirectoryInventoryTests();
     if (argc > 1 && std::string_view(argv[1]) == "--archive") { storageArchiveTests(argv[0]); return 0; }
+    if (argc > 1 && std::string_view(argv[1]) == "--archive-parallel") { storageArchiveParallelTests(); return 0; }
     if (argc == 3 && std::string_view(argv[1]) == "--archive-discovery-sandbox") {
       storageArchiveDiscoverySandboxTest(argv[2]); return 0;
     }
     if (argc > 1 && std::string_view(argv[1]) == "--commit-cost") { unrelatedFoldersDoNotMultiplyCommitChecks(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--subset-refresh") { subsetRefreshNeverEnumeratesAncestorSiblings(); return 0; }
-    if (argc > 1 && std::string_view(argv[1]) == "--parallel") { independentDirectoriesUseDistinctOutputs(); return 0; }
+    if (argc > 1 && std::string_view(argv[1]) == "--parallel") { recoveryStopsAnAlreadyEncodedPeerBeforeCommit(); slowVideoDoesNotBlockFollowingFiles(); independentDirectoriesUseDistinctOutputs(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--sandbox-boundaries") { reviewedSelectionRetainsPrivateSandboxBoundary(); return 0; }
     unsafeChartEvidenceRetainsAffectedScopes(); exceptionRecoveryClassification();
     reviewedSelectionRetainsPrivateSandboxBoundary();
     losslessGrowthOffsetsSavingsAcrossDirectories();
     independentDirectoriesUseDistinctOutputs();
+    slowVideoDoesNotBlockFollowingFiles();
+    recoveryStopsAnAlreadyEncodedPeerBeforeCommit();
     storageLibraryIntegration();
     extractedDownloadUsesWholePackage(); wholeFolderOrchestration(); deletionAndUnavailableGroups(); staleEvidenceNeverBecomesFreshByRescanning();
     changedDirectoryIsSkippedWithoutAcceptingNewAssets(); unrelatedFoldersDoNotMultiplyCommitChecks();

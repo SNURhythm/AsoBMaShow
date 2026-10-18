@@ -22,30 +22,50 @@ StorageExecutionLimits DefaultStorageExecutionLimits() {
 }
 StorageWorkBudget::StorageWorkBudget(StorageExecutionLimits limits, std::function<std::optional<std::uint64_t>()> available)
     : limits_(limits), available_(std::move(available)) { limits_.audioWorkers = std::max<std::size_t>(1, limits_.audioWorkers); }
-StorageWorkBudget::Lease::Lease(Lease &&other) noexcept : owner_(std::exchange(other.owner_, nullptr)), kind_(other.kind_), bytes_(other.bytes_) {}
+StorageWorkBudget::Lease::Lease(Lease &&other) noexcept : owner_(std::exchange(other.owner_, nullptr)), kind_(other.kind_), bytes_(other.bytes_), encoding_(other.encoding_) {}
 StorageWorkBudget::Lease::~Lease() {
   if (!owner_) return;
   { std::lock_guard lock(owner_->mutex_);
-    --(kind_ == MediaKind::Video ? owner_->video_ : owner_->audio_);
-    owner_->reserved_ -= bytes_; }
+    if (encoding_) --(kind_ == MediaKind::Video ? owner_->video_ : owner_->audio_);
+    owner_->reserved_ -= bytes_; --owner_->leases_; }
   owner_->changed_.notify_all();
 }
+void StorageWorkBudget::Lease::ReleaseEncoder() {
+  if (!owner_) return;
+  { std::lock_guard lock(owner_->mutex_);
+    if (encoding_) { --(kind_ == MediaKind::Video ? owner_->video_ : owner_->audio_); encoding_ = false; } }
+  owner_->changed_.notify_all();
+}
+bool StorageWorkBudget::Lease::GrowTo(std::uint64_t bytes) {
+  if (!owner_) return false;
+  std::lock_guard lock(owner_->mutex_);
+  if (bytes <= bytes_) return true;
+  const auto available = owner_->available_();
+  if (!available || owner_->reserved_ > *available || bytes - bytes_ > *available - owner_->reserved_) return false;
+  owner_->reserved_ += bytes - bytes_; bytes_ = bytes; return true;
+}
 void StorageWorkBudget::StopForRecovery() { recoveryRequired_ = true; changed_.notify_all(); }
+std::optional<StorageWorkBudget::Lease> StorageWorkBudget::TryAcquire(MediaKind kind, std::uint64_t bytes, bool &waiting) {
+  waiting = false;
+  std::lock_guard lock(mutex_);
+  if (recoveryRequired_) return {};
+  const auto available = available_();
+  if (!available) return {};
+  auto &active = kind == MediaKind::Video ? video_ : audio_;
+  const auto slots = kind == MediaKind::Video ? StorageExecutionLimits::videoWorkers : limits_.audioWorkers;
+  if (active < slots && reserved_ <= *available && bytes <= *available - reserved_) {
+    ++active; ++leases_; reserved_ += bytes; return Lease(this, kind, bytes);
+  }
+  waiting = leases_ != 0;
+  return {};
+}
 std::optional<StorageWorkBudget::Lease> StorageWorkBudget::Acquire(MediaKind kind, std::uint64_t bytes, Checkpoint check) {
   for (;;) {
     if (recoveryRequired_ || (check && !check())) return {};
+    bool waiting;
+    auto acquired = TryAcquire(kind, bytes, waiting);
+    if (acquired || !waiting) return acquired;
     std::unique_lock lock(mutex_);
-    const auto available = available_();
-    if (!available) return {};
-    auto &active = kind == MediaKind::Video ? video_ : audio_;
-    const auto slots = kind == MediaKind::Video ? StorageExecutionLimits::videoWorkers : limits_.audioWorkers;
-    if (recoveryRequired_) return {};
-    if (active < slots && reserved_ <= *available && bytes <= *available - reserved_) {
-      ++active; reserved_ += bytes; return Lease(this, kind, bytes);
-    }
-    // A reservation can finish and release both its capacity and temporary file.
-    // With no active work, insufficient space cannot improve within this job.
-    if (!audio_ && !video_) return {};
     changed_.wait_for(lock, std::chrono::milliseconds(50));
   }
 }
@@ -62,13 +82,16 @@ void merge(StorageReport &target, StorageReport source) {
 }
 }
 StorageReport RunStorageDirectories(const StoragePreflight &inventory, StorageExecutionLimits limits,
-    std::function<std::optional<std::uint64_t>()> available, DirectoryWork work, Checkpoint check, ProgressCallback progress, StorageWorkerLauncher launch) {
+    std::function<std::optional<std::uint64_t>()> available, DirectoryWork work, Checkpoint check, ProgressCallback progress, StorageWorkerLauncher launch,
+    std::span<const StorageDirectorySummary> additionalOwners) {
   struct Job { const StorageDirectorySummary *summary; std::vector<std::size_t> children; std::uint64_t done = 0, reclaimed = 0, added = 0; };
   std::vector<Job> jobs;
   std::map<std::filesystem::path, std::size_t> positions;
   for (const auto &[path, summary] : inventory.directories) if (summary.eligibleCount) {
     positions.emplace(path, jobs.size()); jobs.push_back({&summary, {}});
   }
+  for (const auto &summary : additionalOwners) if (summary.eligibleCount && positions.emplace(summary.directory, jobs.size()).second)
+    jobs.push_back({&summary, {}});
   std::deque<std::size_t> ready;
   for (const auto &[path, position] : positions) {
     auto parent = path.parent_path(); bool dependent = false;
@@ -113,6 +136,7 @@ StorageReport RunStorageDirectories(const StoragePreflight &inventory, StorageEx
           AccumulateStorageBytes(state.reclaimedBytes, state.addedBytes, value.reclaimedBytes, value.addedBytes);
           job.done = done; job.reclaimed = value.reclaimedBytes; job.added = value.addedBytes;
           state.phase = value.phase; state.currentPath = value.currentPath;
+          state.archiveBytesDone = value.archiveBytesDone; state.archiveBytesTotal = value.archiveBytesTotal;
           if (progress) progress(state);
         });
       } catch (const std::exception &error) {
@@ -143,7 +167,7 @@ StorageReport RunStorageDirectories(const StoragePreflight &inventory, StorageEx
   };
   std::vector<std::thread> workers;
   try {
-    const auto count = std::min(jobs.size(), std::max<std::size_t>(1, limits.audioWorkers));
+    const auto count = std::min(jobs.size(), std::max<std::size_t>(1, limits.audioWorkers) + StorageExecutionLimits::videoWorkers);
     workers.reserve(count);
     for (std::size_t i = 0; i < count; ++i) workers.push_back(launch ? launch(worker) : std::thread(worker));
   } catch (...) {

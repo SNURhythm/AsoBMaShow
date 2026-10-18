@@ -29,8 +29,8 @@ inline void AccumulateStorageBytes(std::uint64_t &reclaimed, std::uint64_t &adde
 
 struct StorageExecutionLimits {
   std::size_t audioWorkers = 1;
-  // Video remains one codec job with the existing fixed FFmpeg thread count.
-  static constexpr std::size_t videoWorkers = 1;
+  // Bound independent videos separately from each codec's internal threads.
+  static constexpr std::size_t videoWorkers = 2;
   static constexpr int videoThreads = 2;
 };
 StorageExecutionLimits DefaultStorageExecutionLimits();

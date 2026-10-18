@@ -4,6 +4,7 @@
 #include "StorageRecoveryProgress.h"
 
 namespace storage_management {
+class StorageWorkBudget;
 struct StorageArchiveMetrics {
   std::uint64_t archivesCompacted = 0, bytesWritten = 0, peakScratchBytes = 0;
   std::uint64_t preparationBytesRead = 0, sourceBytesRead = 0, durableBatches = 0;
@@ -16,18 +17,22 @@ struct StorageArchiveMetrics {
   std::uint64_t journalNanoseconds = 0, writeNanoseconds = 0, syncNanoseconds = 0;
 };
 struct StorageArchiveDependencies {
+  // Encoders/checkpoints may run concurrently on private staged files. Archive
+  // progress, validation, fault points and all source writes stay on the owner.
   std::function<EncodeResult(const AssetCandidate &, const StoragePolicy &,
       const std::filesystem::path &, Checkpoint, ProgressCallback)> encode;
   std::function<StorageDiagnostic(const AssetCandidate &, Checkpoint)> validateExisting;
   std::function<std::optional<std::uint64_t>(const std::filesystem::path &)> availableSpace;
   std::function<void(std::string_view)> faultPoint;
-  // Includes the one extracted input, encoded output and prepared replacement.
+  // Includes every pending extracted input/output and the prepared replacement.
   // Journal metadata and a bounded pair of redo buffers are additional.
   std::uint64_t scratchLimit = 1024ULL * 1024 * 1024;
   StorageArchiveMetrics *metrics = nullptr;
   // Displayed rows for this container, including unchanged inner siblings.
   // Successful updates advance their identities using committed entry deltas.
   std::span<const GroupStorageMeasurement> measurementBaselines;
+  StorageWorkBudget *workBudget = nullptr;
+  StorageExecutionLimits executionLimits = DefaultStorageExecutionLimits();
 };
 StorageReport UpdateStorageArchive(const StorageArchiveSummary &, const StoragePolicy &,
     const StoragePlatformPaths &, const StorageArchiveDependencies &, Checkpoint = {}, ProgressCallback = {});
