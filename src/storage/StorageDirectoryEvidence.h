@@ -5,7 +5,7 @@ namespace storage_management {
 struct StorageEvidenceMetrics {
   std::uint64_t directoryChecks = 0, chartChecks = 0, membershipEnumerations = 0, membershipEntries = 0;
 };
-// One active directory, plus bounded chart-only evidence for its ancestors.
+// One active directory, plus bounded chart-only evidence for its ancestors and descendants.
 class StorageDirectoryEvidence {
 public:
   StorageDirectoryEvidence(StorageDirectorySummary &, const StoragePreflight &,
@@ -19,10 +19,8 @@ public:
   bool AdvanceRecovery(const std::vector<StorageFileChange> &, Checkpoint, std::string &);
   bool Finish(Checkpoint, std::string &);
 private:
-  struct ChartScope {
-    StorageDirectorySummary summary;
-    std::unique_ptr<StorageDirectoryInventory> charts;
-  };
+  bool CaptureCharts(const StorageDirectoryInventory &, Checkpoint, std::string &);
+  bool LoadDescendants(Checkpoint, std::string &);
   bool CheckScopes(bool changingLocal, Checkpoint, std::string &) const;
   bool CheckEntries(const std::vector<StorageFileChange> &, Checkpoint, std::string &, StorageDirectoryStamp &) const;
   bool CheckChanges(const std::vector<StorageFileChange> &, Checkpoint, std::string &) const;
@@ -31,7 +29,7 @@ private:
   const StoragePreflight &preflight_;
   StorageDirectoryLimits limits_;
   StorageEvidenceMetrics *metrics_;
-  std::unique_ptr<StorageDirectoryInventory> directory_, candidates_;
-  std::vector<ChartScope> scopes_;
+  std::unique_ptr<StorageDirectoryInventory> directory_, candidates_, charts_;
+  std::vector<StorageDirectorySummary> scopes_;
 };
 }

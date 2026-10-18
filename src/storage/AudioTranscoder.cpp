@@ -127,7 +127,7 @@ struct WaveMetadata {
 };
 // libsndfile tolerates truncated RIFF data and does not expose every custom loop
 // tag. Inspect only media container headers, never chart declarations.
-StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, SNDFILE *audio, Checkpoint check,
+StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, Checkpoint check,
                                    bool lossless, WaveMetadata &foreign) {
   const auto bad = StorageDiagnostic{StorageReason::ValidationFailed, "Truncated or invalid audio container"};
   const auto metadata = StorageDiagnostic{StorageReason::UnsupportedFormat, "Playback metadata cannot be preserved"};
@@ -140,7 +140,6 @@ StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, SN
     if (!input.read(reinterpret_cast<char *>(header.data()), 4) || std::memcmp(header.data(), "fLaC", 4)) return bad;
     std::uint64_t offset = 4;
     bool last = false;
-    std::array<bool, SF_STR_LAST + 1> seenTags{};
     while (!last) {
       if (check && !check()) return {StorageReason::Cancelled, "Cancelled"};
       if (!input.read(reinterpret_cast<char *>(header.data()), 4)) return bad;
@@ -163,10 +162,10 @@ StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, SN
           const auto size = le32(block.data() + pos); pos += 4;
           if (size > length - pos) return bad;
           const int tag = descriptiveCommentTag({reinterpret_cast<const char *>(block.data() + pos), size});
-          // libsndfile exposes one value per field, including SOFTWARE/ENCODER
-          // aliases. Retain the source whenever conversion would lose a value.
-          if (!tag || seenTags[tag]) return metadata;
-          seenTags[tag] = true;
+          // Descriptive text is best effort: repeated values and known aliases
+          // may collapse to libsndfile's single field. Unknown tags may control
+          // playback (loops, gain, cues), so those still retain the original.
+          if (!tag) return metadata;
           pos += size;
         }
       } else {
@@ -179,12 +178,9 @@ StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, SN
   }
   if (!input.read(reinterpret_cast<char *>(header.data()), 12) ||
       std::memcmp(header.data(), "RIFF", 4) || std::memcmp(header.data() + 8, "WAVE", 4)) return bad;
-  const std::uint64_t declaredEnd = std::uint64_t(le32(header.data() + 4)) + 8;
-  const auto sizeMismatch = StorageDiagnostic{StorageReason::ValidationFailed,
-      "WAV RIFF declares " + std::to_string(declaredEnd) + " bytes; file contains " + std::to_string(bytes)};
-  // A writer may count an omitted terminal data pad in the outer RIFF size.
-  // Defer this one-byte discrepancy until the complete PCM payload is checked.
-  if (declaredEnd != bytes && declaredEnd != bytes + 1) return sizeMismatch;
+  // Some otherwise playable WAVs have a stale outer RIFF size. Walk physical
+  // chunk bounds instead; declared data bytes, complete PCM frames and decoded
+  // samples remain mandatory, so this tolerance cannot conceal missing audio.
   const std::uint64_t end = bytes;
   foreign.sourceEnd = end;
   int sampleBytes = 0;
@@ -235,8 +231,8 @@ StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, SN
     // unknown vendor metadata. Only lossy conversion needs a semantic whitelist.
     else if (lossless && type != "fmt " && type != "fact" && type != "JUNK" && type != "PAD ") foreign.preserve = true;
     else if (type == "LIST") {
-      // Accept only descriptive INFO fields actually exposed by the decoder.
-      // Unknown fields, conflicting duplicates and playback lists stay intact.
+      // Known descriptive INFO text is best effort, including duplicate fields
+      // and imperfect strings. Unknown fields and playback lists stay intact.
       if (length > 65536) return metadata;
       std::string block(length, '\0');
       if (length < 4 || !input.read(block.data(), length)) return bad;
@@ -248,21 +244,9 @@ StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, SN
         pos += 8;
         const auto paddedSize = std::uint64_t(size) + (size & 1);
         if (paddedSize > block.size() - pos) return bad;
-        int tag = 0;
-        if (name == "INAM") tag = SF_STR_TITLE;
-        else if (name == "ICOP") tag = SF_STR_COPYRIGHT;
-        else if (name == "ISFT") tag = SF_STR_SOFTWARE;
-        else if (name == "IART") tag = SF_STR_ARTIST;
-        else if (name == "ICMT") tag = SF_STR_COMMENT;
-        else if (name == "ICRD") tag = SF_STR_DATE;
-        else if (name == "IPRD") tag = SF_STR_ALBUM;
-        else if (name == "ITRK") tag = SF_STR_TRACKNUMBER;
-        else if (name == "IGNR") tag = SF_STR_GENRE;
-        else return {StorageReason::UnsupportedFormat, "Cannot preserve WAV INFO field: " + std::string(name)};
-        auto value = std::string_view(block).substr(pos, size);
-        while (!value.empty() && value.back() == '\0') value.remove_suffix(1);
-        const char *decoded = sf_get_string(audio, tag);
-        if (value.find('\0') != std::string_view::npos || !decoded || value != decoded) return metadata;
+        if (name != "INAM" && name != "ICOP" && name != "ISFT" && name != "IART" &&
+            name != "ICMT" && name != "ICRD" && name != "IPRD" && name != "ITRK" && name != "IGNR")
+          return {StorageReason::UnsupportedFormat, "Cannot preserve WAV INFO field: " + std::string(name)};
         pos += paddedSize;
       }
       input.seekg(length & 1, std::ios::cur);
@@ -273,7 +257,6 @@ StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, SN
     input.seekg(padded, std::ios::cur);
     offset += padded;
   }
-  if (declaredEnd != end && !foreign.unpaddedData) return sizeMismatch;
   if (foreign.preserve && oversized)
     return {StorageReason::UnsupportedFormat, "WAV metadata chunk exceeds the FLAC metadata block limit"};
   return data ? StorageDiagnostic{} : StorageDiagnostic{StorageReason::ValidationFailed, "WAV has no data chunk"};
@@ -537,7 +520,7 @@ EncodeResult EncodeAudio(const AssetCandidate &candidate, const StoragePolicy &p
   }
   const bool lossless = policy.audio == AudioAction::LosslessFlac;
   WaveMetadata foreign;
-  const auto container = inspectContainer(candidate.source, info, input.get(), check, lossless, foreign);
+  const auto container = inspectContainer(candidate.source, info, check, lossless, foreign);
   if (container.code == StorageReason::Cancelled) return cancelled();
   if (container.code != StorageReason::None)
     return finish(container.code == StorageReason::ValidationFailed ? FileOutcome::Failed : FileOutcome::Skipped,
@@ -579,10 +562,12 @@ EncodeResult EncodeAudio(const AssetCandidate &candidate, const StoragePolicy &p
     if (!sf_command(output.get(), SFC_SET_VBR_ENCODING_QUALITY, &quality, sizeof(quality)))
       return failOutput(StorageReason::CodecUnavailable, "Vorbis quality control is unavailable");
   }
+  // These API strings are descriptive only. Preserve what the encoder supports,
+  // but text normalization or loss must not reject otherwise valid audio.
+  // Playback metadata is protected by container inspection and foreign blocks.
   for (int tag = SF_STR_FIRST; tag <= SF_STR_LAST; ++tag)
     if (const char *value = sf_get_string(input.get(), tag))
-      if (sf_set_string(output.get(), tag, value) != 0)
-        return failOutput(StorageReason::UnsupportedFormat, "Cannot preserve audio metadata");
+      sf_set_string(output.get(), tag, value);
   constexpr sf_count_t blockFrames = 4096;
   std::vector<int> integers(blockFrames * info.channels);
   std::vector<float> floats(blockFrames * info.channels);
@@ -625,16 +610,6 @@ EncodeResult EncodeAudio(const AssetCandidate &candidate, const StoragePolicy &p
   std::vector<int> reference(integers.size());
   total = 0;
   bool valid = true;
-  for (int tag = SF_STR_FIRST; tag <= SF_STR_LAST; ++tag) {
-    if (const char *value = sf_get_string(input.get(), tag)) {
-      const char *encoded = sf_get_string(verify.get(), tag);
-      // libsndfile appends its version to an editor attribution on write.
-      // Retain the original attribution while permitting that exact suffix.
-      const bool softwareAttribution = tag == SF_STR_SOFTWARE && encoded &&
-          std::string(encoded) == (*value ? std::string(value) + " (" + sf_version_string() + ")" : sf_version_string());
-      if (!encoded || (std::strcmp(value, encoded) && !softwareAttribution)) valid = false;
-    }
-  }
   for (;;) {
     if (check && !check()) { verify.reset(); return cancelled(); }
     const auto read = sf_readf_int(verify.get(), integers.data(), blockFrames);

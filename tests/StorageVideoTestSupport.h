@@ -25,6 +25,8 @@ struct VideoFixture {
   int rotation = 0;
   bool scaledDisplayMatrix = false;
   bool millisecondContainer = false, lossless = false, asf = false;
+  bool captions = false, descriptiveTag = false;
+  bool replayGain = false, audioReplayGain = false;
   int audioTailSamples = 0;
 };
 inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
@@ -42,9 +44,15 @@ inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
   // NUT preserves the codec's exact rational timestamps, including deliberate
   // VFR gaps, without a millisecond container clock rounding the fixture.
   const char *container = fixture.asf ? "asf" : fixture.millisecondContainer ? "matroska" :
-                          fixture.rotation || fixture.scaledDisplayMatrix ? "mp4" : "nut";
+                          fixture.rotation || fixture.scaledDisplayMatrix || fixture.captions ? "mp4" : "nut";
   require(avformat_alloc_output_context2(&resources.mux, nullptr, container, path.string().c_str()) >= 0,
           "create fixture container");
+  if (fixture.descriptiveTag)
+    require(av_dict_set(&resources.mux->metadata, "chart_editor_note", "A harmless custom description", 0) >= 0,
+            "write fixture descriptive tag");
+  if (fixture.replayGain)
+    require(av_dict_set(&resources.mux->metadata, "REPLAYGAIN_TRACK_GAIN", "-12.0 dB", 0) >= 0,
+            "write fixture playback gain");
   const auto codec = fixture.alpha || fixture.lossless ? avcodec_find_encoder(AV_CODEC_ID_FFV1) :
                      fixture.h264 ? avcodec_find_encoder_by_name("libx264") :
                      avcodec_find_encoder(fixture.asf ? AV_CODEC_ID_WMV2 : AV_CODEC_ID_MPEG1VIDEO);
@@ -80,6 +88,9 @@ inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
   AVStream *audio = nullptr;
   if (fixture.audio) {
     audio = avformat_new_stream(resources.mux, nullptr);
+    if (fixture.audioReplayGain)
+      require(av_dict_set(&audio->metadata, "replaygain_track_gain", "-12.0 dB", 0) >= 0,
+              "write fixture audio playback gain");
     audio->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
     audio->codecpar->codec_id = AV_CODEC_ID_PCM_S16LE;
     audio->codecpar->format = AV_SAMPLE_FMT_S16;
@@ -126,6 +137,11 @@ inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
       frame.pict_type = AV_PICTURE_TYPE_I;
     } else frame.pict_type = AV_PICTURE_TYPE_NONE;
     frame.pts = fixture.timestamps[i]; frame.duration = 1;
+    if (fixture.captions && i == fixture.timestamps.size() / 2) {
+      auto side = av_frame_new_side_data(&frame, AV_FRAME_DATA_A53_CC, 3);
+      require(side, "allocate fixture captions");
+      side->data[0] = 0xfc; side->data[1] = 0x94; side->data[2] = 0x2c;
+    }
     require(avcodec_send_frame(&encoder, &frame) >= 0, "fixture encode frame"); drain();
   }
   require(avcodec_send_frame(&encoder, nullptr) >= 0, "fixture encoder flush"); drain();

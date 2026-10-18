@@ -8,6 +8,7 @@ struct StorageDirectorySummary {
   std::filesystem::path directory, accessRoot;
   StorageDirectoryStamp stamp;
   std::string fingerprint;
+  std::string chartFingerprint; // Charts and child-directory membership, excluding media.
   std::vector<std::filesystem::path> childDirectories;
   StorageScanTotals totals;
   std::uint64_t eligibleCount = 0, eligibleBytes = 0, skippedCount = 0;

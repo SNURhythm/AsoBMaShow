@@ -407,6 +407,64 @@ void ancestorChartsStayProtectedWithoutBlockingIndependentRoots() {
   require(report.converted == 1 && report.skipped == 1 && fs::exists(temp.root / "charts/a/nested/a.wav") &&
       !fs::exists(temp.root / "charts/b/b.wav"), "ancestor chart edits protect nested assets while unrelated roots proceed");
 }
+void descendantChartsStayProtectedWithoutBlockingIndependentRoots() {
+  for (const bool duringEncode : {false, true}) {
+    TempDirectory temp;
+    temp.write("charts/a/shared.wav", std::string(100, 'a'));
+    temp.write("charts/a/sub/nested/chart.bms", "#WAV01 ../../shared.wav\n");
+    temp.write("charts/b/independent.wav", std::string(100, 'b'));
+    auto input = request(temp.root / "charts/a");
+    input.inventory.groups.push_back({"independent", temp.root / "charts/b"});
+    input.preflight = BuildStoragePreflight(input.inventory);
+    const auto parentModified = fs::last_write_time(temp.root / "charts/a");
+    const auto editChart = [&] {
+      temp.write("charts/a/sub/nested/chart.bms", "#WAV01 ../../shared.wav\n#TITLE External edit\n");
+      require(fs::last_write_time(temp.root / "charts/a") == parentModified,
+          "in-place descendant chart edits leave the candidate directory stamp unchanged");
+    };
+    if (!duringEncode) editChart();
+    std::vector<std::string> events;
+    auto deps = dependencies(temp, events); const auto encode = deps.encodeAudio;
+    deps.encodeAudio = [&, encode](const auto &asset, const auto &policy, const auto &output, auto check, auto progress) {
+      auto result = encode(asset, policy, output, check, progress);
+      if (duringEncode && asset.source.filename() == "shared.wav") editChart();
+      return result;
+    };
+    const auto report = StorageOptimizer(deps).Run(std::move(input));
+    require(report.converted == 1 && report.skipped == 1 && fs::exists(temp.root / "charts/a/shared.wav") &&
+        !fs::exists(temp.root / "charts/a/shared.ogg") && fs::exists(temp.root / "charts/b/independent.ogg"),
+        "descendant chart edits after review or during encoding retain parent media while independent roots proceed");
+  }
+}
+void descendantChartEvidenceSharesOneSpillBudget() {
+  TempDirectory temp;
+  temp.write("charts/shared.wav", std::string(100, 'a'));
+  for (const auto &folder : {fs::path("charts/sub % one"), fs::path(u8"charts/서브")})
+    for (const auto &name : {"a.bms", "b.bme", "c.pms"}) temp.write(folder / name, "#WAV01 ../shared.wav\n");
+  const auto input = request(temp.root / "charts");
+  auto preflight = BuildStoragePreflight(input.inventory);
+  const auto scratch = temp.root / "scratch";
+  StorageEvidenceMetrics metrics;
+  std::string error;
+  {
+    StorageDirectoryEvidence evidence(preflight.directories.at(temp.root / "charts"), preflight,
+        {.records = 4, .scratchRoot = scratch}, &metrics);
+    require(evidence.Load({}, error), "descendant chart evidence loads with a small aggregate memory budget");
+    require(std::distance(fs::directory_iterator(scratch), fs::directory_iterator{}) == 1,
+        "charts across small directories share one spill file instead of separate unbounded stores");
+    const auto entry = evidence.Candidates().Next({}, error);
+    require(entry.has_value(), "shared parent source remains an eligible candidate");
+    StorageDiagnostic reason;
+    const auto candidate = StorageCandidateForEntry(*entry, evidence.Directory(), input.policy, {}, reason);
+    require(candidate && evidence.Candidate(*candidate, {}, error) && evidence.Candidate(*candidate, {}, error),
+        "spilled chart keys preserve distinct nested paths and Unicode names");
+    require(metrics.chartChecks == 12 && metrics.membershipEnumerations == 0,
+        "candidate checks read only captured chart identities without subtree membership enumeration");
+    temp.write(fs::path(u8"charts/서브") / "b.bme", "#WAV01 ../shared.wav\n#TITLE Edited\n");
+    require(!evidence.Candidate(*candidate, {}, error), "spilled descendant chart identities still reject later edits");
+  }
+  require(fs::is_empty(scratch), "chart evidence releases its spill file when the active directory finishes");
+}
 void partialFailureAndAccounting() {
   TempDirectory temp;
   for (const auto &name : {"a.wav", "b.wav", "c.wav"}) temp.write(fs::path("charts") / name, std::string(100, 'a'));
@@ -745,7 +803,9 @@ int main(int argc, char **argv) {
     extractedDownloadUsesWholePackage(); wholeFolderOrchestration(); deletionAndUnavailableGroups(); staleEvidenceNeverBecomesFreshByRescanning();
     changedDirectoryIsSkippedWithoutAcceptingNewAssets(); unrelatedFoldersDoNotMultiplyCommitChecks();
     subsetRefreshNeverEnumeratesAncestorSiblings();
-    ancestorChartsStayProtectedWithoutBlockingIndependentRoots(); committedDeltasSurviveDetailLimitAndRetainedBackups();
+    ancestorChartsStayProtectedWithoutBlockingIndependentRoots(); descendantChartsStayProtectedWithoutBlockingIndependentRoots();
+    descendantChartEvidenceSharesOneSpillBudget();
+    committedDeltasSurviveDetailLimitAndRetainedBackups();
     partialFailureAndAccounting(); revalidateAtTheActualCommitBoundary(); cleanupFailureAndFatalRecovery();
     reviewedCleanupAdvancesOnlyOwnedEvidence(); cancellationCapabilitiesAndNoOp();
     boundedReportsAndProgress(); existingDestinationsAreValidatedBeforeRetirement(); cancellableSingleConversionPermit();

@@ -415,6 +415,48 @@ void audioTests() {
   require(EncodeAudio(candidate(tagged), policy, taggedOutput, {}, {}).outcome == FileOutcome::Converted,
           "descriptive RIFF INFO metadata permits lossless compression");
   require(readAudio(taggedOutput, 1, 8192) == taggedPcm, "tagged WAV preserves exact samples");
+  {
+    std::ifstream input(tagged, std::ios::binary);
+    const std::string original((std::istreambuf_iterator<char>(input)), {});
+    for (const int adjustment : {-100, 100}) {
+      auto bytes = original;
+      const auto declaredSize = static_cast<std::uint32_t>(bytes.size() - 8 + adjustment);
+      for (int i = 0; i < 4; ++i) bytes[4 + i] = static_cast<char>(declaredSize >> (8 * i));
+      const auto source = temp.root / ("stale-riff-" + std::to_string(adjustment) + ".wav");
+      const auto output = source.parent_path() / (source.stem().string() + ".flac");
+      temp.write(source.filename(), bytes);
+      require(EncodeAudio(candidate(source), policy, output, {}, {}).outcome == FileOutcome::Converted,
+              "stale outer RIFF sizes permit complete physically bounded WAV payloads");
+      require(readAudio(output, 1, 8192) == taggedPcm, "stale RIFF length never trims decoded samples");
+      verifyWaveMetadata(bytes, output);
+    }
+  }
+  {
+    std::ifstream input(temp.root / "16-1.wav", std::ios::binary);
+    const std::string original((std::istreambuf_iterator<char>(input)), {});
+    StoragePolicy lossy; lossy.audio = AudioAction::LossyVorbis;
+    for (const auto &second : {std::string("First title"), std::string("Second title"),
+                               std::string("Title\0hidden", 12)}) {
+      auto bytes = original;
+      const auto appendSize = [](std::string &target, std::uint32_t size) {
+        for (int i = 0; i < 4; ++i) target.push_back(static_cast<char>(size >> (8 * i)));
+      };
+      std::string info = "INFO";
+      for (const auto &title : {std::string("First title"), second}) {
+        info += "INAM"; appendSize(info, title.size() + 1);
+        info += title; info += '\0';
+        if ((title.size() + 1) & 1) info += '\0';
+      }
+      bytes += "LIST"; appendSize(bytes, info.size()); bytes += info;
+      for (int i = 0; i < 4; ++i) bytes[4 + i] = static_cast<char>((bytes.size() - 8) >> (8 * i));
+      const auto source = temp.root / "duplicate-info.wav", output = temp.root / "duplicate-info.ogg";
+      temp.write(source.filename(), bytes);
+      require(EncodeAudio(candidate(source), lossy, output, {}, {}).outcome == FileOutcome::Converted,
+              "duplicate or imperfect descriptive INFO text may collapse during Vorbis conversion");
+      readAudio(output, 1, 8192);
+      std::filesystem::remove(output);
+    }
+  }
   SF_INFO taggedInfo{};
   auto taggedSource = sf_open(tagged.string().c_str(), SFM_READ, &taggedInfo);
   auto taggedFile = sf_open(taggedOutput.string().c_str(), SFM_READ, &taggedInfo);
@@ -637,13 +679,14 @@ void audioTests() {
       const auto bytes = withFlacComments(original, comments);
       temp.write(taggedFlac, bytes);
       const auto result = EncodeAudio(candidate(taggedFlac), policy, output, {}, {});
-      require(result.outcome == FileOutcome::Skipped && result.reason.code == StorageReason::UnsupportedFormat &&
-                  !std::filesystem::exists(output),
-              "Vorbis retains FLAC originals when duplicate comments share one descriptive field");
-      std::ifstream retained(taggedFlac, std::ios::binary);
-      require(std::string((std::istreambuf_iterator<char>(retained)), {}) == bytes,
-              "retained FLAC preserves every duplicate comment and audio byte");
+      require(result.outcome == FileOutcome::Converted,
+              "duplicate descriptive FLAC fields and encoder aliases may collapse during conversion");
+      readAudio(output, 1, 8192);
+      std::filesystem::remove(output);
     }
+    temp.write(taggedFlac, withFlacComments(original, {"TITLE=Keysound", "LOOPSTART=10", "LOOPEND=100"}));
+    require(EncodeAudio(candidate(taggedFlac), policy, output, {}, {}).reason.code == StorageReason::UnsupportedFormat &&
+                !std::filesystem::exists(output), "descriptive tolerance never discards FLAC playback comments");
   }
   for (const auto &name : {"16-2.wav", "24-1.flac"}) {
     source = temp.root / name;
@@ -666,13 +709,13 @@ void audioTests() {
 void decodedDisplayTransformTests() {
   AVCodecParameters params{};
   auto decoded = frame();
-  validateVideoFrameTransform(params, *decoded);
+  validateVideoFramePresentation(params, *decoded);
   auto *side = av_frame_new_side_data(decoded.get(), AV_FRAME_DATA_DISPLAYMATRIX, 9 * sizeof(std::int32_t));
   require(side != nullptr, "allocate decoded display transform");
   auto *matrix = reinterpret_cast<std::int32_t *>(side->data);
   const auto rejected = [&] {
     bool rejected = false;
-    try { validateVideoFrameTransform(params, *decoded); }
+    try { validateVideoFramePresentation(params, *decoded); }
     catch (const Failure &failure) {
       rejected = failure.reason == StorageReason::UnsupportedFormat && failure.outcome == FileOutcome::Skipped;
     }
@@ -687,7 +730,7 @@ void decodedDisplayTransformTests() {
   streamSide.data = reinterpret_cast<std::uint8_t *>(streamMatrix.data());
   streamSide.size = sizeof(streamMatrix);
   params.coded_side_data = &streamSide; params.nb_coded_side_data = 1;
-  validateVideoFrameTransform(params, *decoded);
+  validateVideoFramePresentation(params, *decoded);
   av_display_rotation_set(matrix, 0);
   require(rejected(), "identity frame transform cannot reset the copied stream orientation");
   av_display_rotation_set(matrix, 90);
@@ -696,6 +739,37 @@ void decodedDisplayTransformTests() {
   av_display_rotation_set(matrix, 90);
   --side->size;
   require(rejected(), "truncated frame display matrices preserve the original video");
+  for (const auto type : {AV_FRAME_DATA_A53_CC, AV_FRAME_DATA_AFD, AV_FRAME_DATA_PANSCAN,
+                          AV_FRAME_DATA_SPHERICAL, AV_FRAME_DATA_ICC_PROFILE, AV_FRAME_DATA_DYNAMIC_HDR_PLUS,
+                          AV_FRAME_DATA_FILM_GRAIN_PARAMS, AV_FRAME_DATA_DOVI_METADATA}) {
+    AVCodecParameters plain{};
+    auto presentation = frame();
+    require(av_frame_new_side_data(presentation.get(), type, 32), "allocate playback frame metadata");
+    bool skipped = false;
+    try { validateVideoFramePresentation(plain, *presentation); }
+    catch (const Failure &failure) { skipped = failure.outcome == FileOutcome::Skipped; }
+    require(skipped, "unsupported decoded playback metadata keeps the original video");
+  }
+  AVCodecParameters plain{};
+  auto descriptive = frame();
+  require(av_frame_new_side_data(descriptive.get(), AV_FRAME_DATA_SEI_UNREGISTERED, 32),
+          "allocate harmless encoder metadata");
+  validateVideoFramePresentation(plain, *descriptive);
+  auto uncropped = frame(); uncropped->width = 160; uncropped->height = 120;
+  auto panData = av_frame_new_side_data(uncropped.get(), AV_FRAME_DATA_PANSCAN, sizeof(AVPanScan));
+  require(panData, "allocate decoded default pan-scan");
+  std::memset(panData->data, 0, panData->size);
+  validateVideoFramePresentation(plain, *uncropped);
+  auto &pan = *reinterpret_cast<AVPanScan *>(panData->data);
+  pan.width = 160 * 16; pan.height = 120 * 16;
+  validateVideoFramePresentation(plain, *uncropped);
+  for (bool offset : {false, true}) {
+    pan.width = (offset ? 160 : 120) * 16; pan.position[0][0] = offset ? 16 : 0;
+    bool skipped = false;
+    try { validateVideoFramePresentation(plain, *uncropped); }
+    catch (const Failure &failure) { skipped = failure.outcome == FileOutcome::Skipped; }
+    require(skipped, "actual pan-scan crops and offsets preserve the original video");
+  }
 }
 
 void decodedColorTests() {
@@ -902,8 +976,19 @@ void truncatedAsfTests() {
   StoragePolicy policy; policy.bga = BgaAction::CompressH264;
   const auto output = temp.root / "truncated.mp4";
   const auto result = EncodeBga(candidate(truncated), policy, output, {}, {});
-  require(result.reason.code == StorageReason::ValidationFailed && !std::filesystem::exists(output),
-          "packet-aligned ASF truncation cannot pass through a decoder's clean early EOF");
+  require(result.outcome == FileOutcome::Converted,
+          "clean packet-aligned ASF EOF intentionally tolerates stale size and packet declarations");
+  const auto original = storage_test::inspectVideo(truncated), converted = storage_test::inspectVideo(output);
+  // The source decoder omits frame duration at clean EOF. This fixture has a
+  // known CFR cadence, so its last decoded frame still occupies one full tick.
+  require(!original.timestamps.empty() && original.timestamps.size() < 30 &&
+              original.timestamps.size() == converted.timestamps.size() &&
+              std::abs(original.timestamps.back() + av_q2d(av_inv_q(fixture.rate)) -
+                       original.timestamps.front() - converted.videoEnd) < .002,
+          "ASF conversion preserves every frame actually decoded from the source");
+  for (std::size_t i = 0; i < original.timestamps.size(); ++i)
+    require(std::abs(converted.timestamps[i] - (original.timestamps[i] - original.timestamps.front())) < .002,
+            "tolerated ASF size mismatch retains each decoded frame timestamp");
 }
 void remuxVideoDisposition(const std::filesystem::path &source, const std::filesystem::path &destination,
                            const char *container, int disposition, int audioDisposition = AV_DISPOSITION_DEFAULT,
@@ -980,14 +1065,28 @@ void matroskaTimelineTests() {
     for (int i = 0; i < 2 && cut != std::string::npos; ++i) cut = bytes.find(cluster, cut + cluster.size());
     require(cut != std::string::npos, "small Matroska fixture has at least three complete clusters");
     bytes.resize(cut);
-    const auto truncated = temp.root / "truncated.webm", rejected = temp.root / "truncated.mp4";
+    const auto truncated = temp.root / "truncated.webm", partialOutput = temp.root / "truncated.mp4";
     temp.write(truncated, bytes);
     const auto partial = storage_test::inspectVideo(truncated);
     require(!partial.timestamps.empty() && partial.timestamps.size() < 30 && partial.videoEnd < .8,
             "cluster-boundary truncation leaves a decodable prefix but removes the declared endpoint");
-    const auto invalid = EncodeBga(candidate(truncated), policy, rejected, {}, {});
-    require(invalid.reason.code == StorageReason::ValidationFailed && !std::filesystem::exists(rejected),
-            "cluster-aligned Matroska truncation cannot replace the original with a shortened MP4");
+    const auto accepted = EncodeBga(candidate(truncated), policy, partialOutput, {}, {});
+    require(accepted.outcome == FileOutcome::Converted,
+            "clean Matroska EOF intentionally tolerates a stale declared endpoint");
+    const auto decodedPartial = storage_test::inspectVideo(partialOutput);
+    const auto origin = audio ? 0.0 : partial.timestamps.front();
+    const auto partialEnd = partial.timestamps.back() + av_q2d(av_inv_q(fixture.rate));
+    require(decodedPartial.timestamps.size() == partial.timestamps.size() &&
+                std::abs(decodedPartial.videoEnd - (partialEnd - origin)) < .002,
+            "Matroska conversion preserves the actual decoded source presentation");
+    for (std::size_t i = 0; i < partial.timestamps.size(); ++i)
+      require(std::abs(decodedPartial.timestamps[i] - (partial.timestamps[i] - origin)) < .002,
+              "tolerated Matroska metadata mismatch retains each decoded frame timestamp");
+    if (audio) require(decodedPartial.audioChannels == partial.audioChannels &&
+                           decodedPartial.audioRate == partial.audioRate &&
+                           std::abs(decodedPartial.audioEnd - partial.audioEnd) < .025,
+                       "tolerated Matroska endpoint mismatch retains decoded audio");
+    std::filesystem::remove(partialOutput);
   }
 }
 void videoDispositionTests() {
@@ -1049,6 +1148,74 @@ void videoDispositionTests() {
 void videoTests() {
   storage_test::TempDirectory temp;
   StoragePolicy policy; policy.bga = BgaAction::CompressH264;
+  {
+    storage_test::VideoFixture captioned; captioned.h264 = captioned.captions = true;
+    const auto input = temp.root / "captions.mp4", output = temp.root / "captions-capped.mp4";
+    storage_test::makeVideo(input, captioned);
+    Input media(input);
+    std::size_t captionFrames = 0;
+    decode(media, {}, [&](int, const AVFrame &decoded) {
+      if (av_frame_get_side_data(&decoded, AV_FRAME_DATA_A53_CC)) ++captionFrames;
+    }, [](int, const AVPacket &) {});
+    require(captionFrames > 0, "H264 fixture decodes real A53 closed captions");
+    policy.maxFps = 15;
+    const auto result = EncodeBga(candidate(input), policy, output, {}, {});
+    require(result.outcome == FileOutcome::Skipped && result.reason.code == StorageReason::UnsupportedFormat &&
+                !std::filesystem::exists(output), "conversion preserves source instead of dropping decoded captions");
+    require(ValidateExistingBga(input).code == StorageReason::None,
+            "unchanged existing H264 remains reusable with its original captions");
+    policy.maxFps = 0;
+  }
+  {
+    storage_test::VideoFixture tagged;
+    tagged.lossless = tagged.millisecondContainer = tagged.audio = tagged.descriptiveTag = true;
+    const auto input = temp.root / "tagged.webm", output = temp.root / "tagged.mp4";
+    storage_test::makeVideo(input, tagged);
+    Input source(input);
+    require(av_dict_get(source.format->metadata, "chart_editor_note", nullptr, 0),
+            "supported source contains an arbitrary descriptive container tag");
+    const auto original = storage_test::inspectVideo(input);
+    require(EncodeBga(candidate(input), policy, output, {}, {}).outcome == FileOutcome::Converted,
+            "unsupported descriptive container tags intentionally do not block conversion");
+    Input destination(output);
+    require(!av_dict_get(destination.format->metadata, "chart_editor_note", nullptr, 0),
+            "fixture demonstrates permitted harmless descriptive metadata loss in MP4");
+    const auto converted = storage_test::inspectVideo(output);
+    require(converted.timestamps.size() == original.timestamps.size() && converted.width == original.width &&
+                converted.height == original.height && std::abs(converted.videoEnd - original.videoEnd) < .002 &&
+                converted.audioChannels == original.audioChannels && converted.audioRate == original.audioRate &&
+                std::abs(converted.audioEnd - original.audioEnd) < .025,
+            "descriptive tag loss leaves decoded video and audio playback intact");
+    for (std::size_t i = 0; i < original.timestamps.size(); ++i)
+      require(std::abs(converted.timestamps[i] - original.timestamps[i]) < .00001,
+              "descriptive tag loss preserves every decoded presentation timestamp");
+  }
+  for (bool audioTag : {false, true}) {
+    storage_test::VideoFixture tagged;
+    tagged.lossless = tagged.millisecondContainer = tagged.audio = true;
+    tagged.replayGain = !audioTag; tagged.audioReplayGain = audioTag;
+    const auto input = temp.root / (audioTag ? "audio-gain.webm" : "container-gain.webm");
+    const auto output = temp.root / (audioTag ? "audio-gain.mp4" : "container-gain.mp4");
+    storage_test::makeVideo(input, tagged);
+    Input source(input);
+    const auto metadata = audioTag ? source.format->streams[source.audio]->metadata : source.format->metadata;
+    const auto gain = av_dict_get(metadata, "REPLAYGAIN_TRACK_GAIN", nullptr, 0);
+    require(gain && std::string_view(gain->value) == "-12.0 dB",
+            "Matroska fixture retains actual container or audio playback gain");
+    const auto result = EncodeBga(candidate(input), policy, output, {}, {});
+    require(result.outcome == FileOutcome::Skipped && result.reason.code == StorageReason::UnsupportedFormat &&
+                !std::filesystem::exists(output), "video conversion preserves playback gain instead of dropping it as descriptive text");
+  }
+  for (const auto key : {"replaygain_track_gain", "REPLAYGAIN_TRACK_PEAK", "REPLAYGAIN_ALBUM_GAIN",
+                         "REPLAYGAIN_ALBUM_PEAK", "R128_TRACK_GAIN", "r128_album_gain"}) {
+    AVDictionary *metadata = nullptr;
+    require(av_dict_set(&metadata, key, "1", 0) >= 0, "allocate playback gain dictionary");
+    bool skipped = false;
+    try { validatePlaybackGainMetadata(metadata); }
+    catch (const Failure &failure) { skipped = failure.outcome == FileOutcome::Skipped; }
+    av_dict_free(&metadata);
+    require(skipped, "known ReplayGain and R128 volume tags cannot be discarded as descriptions");
+  }
   const auto source = temp.root / "old.mpg";
   storage_test::makeVideo(source, {});
   auto result = EncodeBga(candidate(source), policy, temp.root / "old.mp4", {}, {});

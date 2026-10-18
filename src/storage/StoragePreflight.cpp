@@ -1,5 +1,6 @@
 #include "StoragePreflight.h"
 #include "StoragePathIndex.h"
+#include "../BmsChartFile.h"
 #include <algorithm>
 #include <limits>
 
@@ -103,10 +104,13 @@ StoragePreflight BuildStoragePreflight(const InventoryRequest &request, Checkpoi
     auto summary = std::make_shared<StorageDirectorySummary>();
     summary->directory = job.path; summary->accessRoot = job.accessRoot;
     StorageDirectoryInventory directory(job.path, {.scratchRoot = deps.limits.scratchRoot});
+    StorageDirectoryInventory charts(job.path, {.scratchRoot = deps.limits.scratchRoot});
     std::string error, storeError;
     bool scanned = deps.enumerate(job.path, job.accessRoot, StorageVisitMode::Preflight, active,
         [&](const StorageDirectoryEntry &entry) {
           if (!directory.Add(entry, storeError)) return false;
+          if ((entry.kind == StorageEntryKind::Directory || asobmshow::bms_chart_file::isBmsChartPath(entry.name)) &&
+              !charts.Add(entry, storeError)) return false;
           if (entry.kind == StorageEntryKind::Directory) {
             summary->childDirectories.push_back(entry.name);
             batch.children.push_back({.path = job.path / entry.name});
@@ -128,6 +132,10 @@ StoragePreflight BuildStoragePreflight(const InventoryRequest &request, Checkpoi
     if (scanned) {
       summary->fingerprint = directory.Fingerprint(active, error);
       scanned = !summary->fingerprint.empty();
+      if (scanned) {
+        summary->chartFingerprint = charts.Fingerprint(active, error);
+        scanned = !summary->chartFingerprint.empty();
+      }
     }
     if (scanned) scanned = directory.Visit(active, [&](const auto &entry) {
       StorageDiagnostic reason;

@@ -66,10 +66,12 @@ ancillary-chunk padding. This includes `smpl`, `inst`, `cue `, `LIST` (INFO and 
 without translating sampler loops or embedded tags into player-specific fields.
 Plain format/fact chunks and disposable JUNK/PAD padding alone do not trigger
 foreign-metadata storage. Malformed RIFF chunk bounds and metadata chunks exceeding
-FLAC's block-size limit remain unsupported. Vorbis retains its stricter metadata
-checks because it has no equivalent preservation path. A complete odd-sized PCM
-payload may omit its final WAV alignment byte, including when RIFF counts that
-byte; missing sample data still fails validation.
+FLAC's block-size limit remain unsupported. Vorbis skips playback metadata it
+cannot preserve, such as sampler loops and cue points. Known descriptive tags
+are best effort: duplicate fields, aliases and imperfect text may be normalized
+or dropped. Stale outer RIFF sizes are intentionally tolerated when physical
+chunk bounds and complete PCM samples validate. A complete odd-sized PCM payload
+may omit its final WAV alignment byte; missing sample data still fails validation.
 
 BMS packs often include alternate encodings for legacy players. When the requested
 same-name FLAC, Vorbis or H.264/MP4 destination already exists, storage optimization
@@ -108,12 +110,16 @@ Decoded color properties must remain consistent and representable throughout the
 video. Embedded audio must retain its sample format, sample rate and full channel
 layout; changes preserve the original. Malformed frame rates that exceed encoder
 limits are rejected before computing keyframe intervals.
-WMV/ASF validation checks the physical packet/container extent and interprets its
-declared duration as a file-wide endpoint. Coarse audio timestamps are checked
-against an anchored sample clock so timestamp rounding cannot accumulate drift.
-Matroska/WebM validation checks its declared container endpoint across both
-streams. Video and audio stream flags must survive MP4 conversion; flags the
-container cannot represent cause the original to be preserved.
+Source declarations are intentionally advisory: stale starts, durations, ASF
+sizes or packet counts, and Matroska/WebM endpoints do not block a clean decode.
+This includes clean early EOF; conversion preserves the presentation actually
+decoded from the source. Decoder errors still fail validation, and output and
+existing-target completeness checks remain strict. Coarse audio timestamps are
+checked against an anchored sample clock so rounding cannot accumulate drift.
+Descriptive container tags are best effort and may be dropped by MP4. Captions,
+ReplayGain/R128 volume metadata and unsupported visual playback metadata preserve
+the original instead. Video and audio stream flags must survive MP4 conversion;
+flags the container cannot represent cause the original to be preserved.
 
 Existing H.264 already within the caps is skipped, even if a different quality
 preset is selected. Every candidate is decoded and validated. **An output must
@@ -238,6 +244,15 @@ ancestors finish in order; video remains one job at a time. Cancellation waits f
 settle before releasing library maintenance. A recovery failure stops new work
 across all workers. Temporary-space budgets cover concurrent outputs and are
 checked against available disk space before each file starts.
+
+Before changing local media, the tool checks chart evidence in its folder and
+selected ancestors and descendants. A nested chart edit invalidates the parent
+media operation even when the parent's directory timestamp is unchanged.
+Descendant chart membership is checked once when a folder starts; bounded,
+spillable chart identities and directory stamps are checked again before commit.
+Independent selected roots can continue when another root becomes stale.
+These checks do not discover chart references in sibling folders; an edit there
+does not invalidate this folder's conversion.
 
 The result includes converted, deleted, skipped and failed counts. Reclaimed
 bytes are counted only when obsolete originals/backups have actually been removed.
