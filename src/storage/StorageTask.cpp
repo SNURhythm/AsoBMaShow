@@ -7,24 +7,24 @@ StorageTask::~StorageTask() { Shutdown(); }
 bool StorageTask::Start(OptimizationRequest &&request) {
   std::lock_guard lifecycle(lifecycleMutex_);
   if (stopped_ || guard_ || worker_.joinable()) return false;
-  std::string error;
-  auto admission = dependencies_.admit(request, error);
-  if (!admission) {
-    std::lock_guard state(stateMutex_);
-    snapshot_.admissionError = std::move(error);
-    return false;
-  }
-  guard_.emplace(std::move(*admission));
-  cancelled_ = false;
-  {
-    std::lock_guard state(stateMutex_);
-    snapshot_ = {.running = true};
-    snapshot_.progress.phase = StoragePhase::Prepare;
-    if (request.preflight) snapshot_.progress.filesTotal = request.preflight->eligibleCount;
-    finished_ = false;
-  }
   std::shared_ptr<OptimizationRequest> pending;
   try {
+    std::string error;
+    auto admission = dependencies_.admit(request, error);
+    if (!admission) {
+      std::lock_guard state(stateMutex_);
+      snapshot_.admissionError = std::move(error);
+      return false;
+    }
+    guard_.emplace(std::move(*admission));
+    cancelled_ = false;
+    {
+      std::lock_guard state(stateMutex_);
+      snapshot_ = {.running = true};
+      snapshot_.progress.phase = StoragePhase::Prepare;
+      if (request.preflight) snapshot_.progress.filesTotal = request.preflight->eligibleCount;
+      finished_ = false;
+    }
     // Keep ownership available to the caller if thread construction fails
     // after moving the reviewed request into the worker's startup state.
     pending = std::make_shared<OptimizationRequest>(std::move(request));
@@ -51,7 +51,7 @@ bool StorageTask::Start(OptimizationRequest &&request) {
     guard_.reset();
     std::lock_guard state(stateMutex_);
     snapshot_.running = false;
-    snapshot_.admissionError = "Could not start storage worker. Try again.";
+    snapshot_.admissionError = "Could not prepare or start storage work. Try again.";
     return false;
   }
   return true;

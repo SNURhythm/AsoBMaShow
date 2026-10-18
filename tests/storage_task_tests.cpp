@@ -28,6 +28,46 @@ void operator delete(void *value) noexcept { std::free(value); }
 void operator delete(void *value, std::size_t) noexcept { std::free(value); }
 
 namespace {
+void admissionFailureRetainsReview() {
+  unsigned guards = 0, releases = 0, runs = 0;
+  int failure = 0;
+  StorageTask task({
+    .admit = [&](const OptimizationRequest &, std::string &) -> std::optional<StorageMaintenanceGuard> {
+      if (failure == 0) throw std::runtime_error("repository unavailable");
+      StorageMaintenanceGuard guard({}, [&] { --guards; ++releases; });
+      ++guards;
+      if (failure == 1) throw std::runtime_error("scene preparation failed");
+      if (failure == 2) throw std::bad_alloc();
+      return guard;
+    },
+    .run = [&](OptimizationRequest, Checkpoint, ProgressCallback) { ++runs; return StorageReport{}; },
+  });
+  for (int stage = 0; stage < 3; ++stage) {
+    failure = stage;
+    OptimizationRequest request;
+    request.preflight.emplace();
+    request.preflight->groups.resize(1);
+    const auto *groups = request.preflight->groups.data();
+    const auto priorReleases = releases, priorRuns = runs;
+    bool accepted = false, threw = false;
+    try { accepted = task.Start(std::move(request)); }
+    catch (...) { threw = true; }
+    require(!threw && !accepted, "admission exceptions reject Apply without reaching the event loop");
+    const auto snapshot = task.Snapshot();
+    require(!snapshot.running && !snapshot.cancelling && !snapshot.recoveryRequired &&
+        !snapshot.admissionError.empty() && !task.TakeCompletion() && runs == priorRuns,
+        "failed admission reports an error without starting work or requiring recovery");
+    require(guards == 0 && releases == priorReleases + (stage != 0),
+        "partial admission releases its guard exactly once");
+    require(request.preflight && request.preflight->groups.data() == groups,
+        "admission exceptions preserve the caller's reviewed request");
+    failure = 3;
+    require(task.Start(std::move(request)), "admission can retry after a failure");
+    task.CancelAndWait();
+    require(guards == 0 && runs == priorRuns + 1 && task.Snapshot().admissionError.empty(),
+        "admission retry clears the error and completes normally");
+  }
+}
 void workerStartFailureRetainsReview() {
   unsigned guards = 0, runs = 0;
   StorageTask task({
@@ -119,6 +159,7 @@ void startupRecoveryKeepsPresentationAlive() {
 
 int main() {
   try {
+    admissionFailureRetainsReview();
     workerStartFailureRetainsReview();
     startupRecoveryKeepsPresentationAlive();
     // The handoff must preserve owned storage, not duplicate the confirmed tree.

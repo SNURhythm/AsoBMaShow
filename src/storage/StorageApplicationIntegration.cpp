@@ -6,6 +6,7 @@
 #include "../scene/SceneManager.h"
 #include "../scene/Scene.h"
 #include "../view/ImageView.h"
+#include "../RAII.h"
 #include "../targets.h"
 #include <SDL3/SDL.h>
 #if TARGET_OS_ANDROID
@@ -144,7 +145,11 @@ bool InitializeStorageServices(ApplicationContext &context, StorageRecoveryProgr
       if (auto reason = context.profileSwitchBlockers.firstReason()) { error = *reason; return {}; }
       const auto token = context.chartLibraryTasks->tryReserveMaintenance();
       if (!token) { error = "A chart library scan or import is active."; return {}; }
-      context.storageMaintenanceActive = true;
+      // Guard construction and its captured roots can allocate. Reserve cleanup
+      // first without allocating, and expose maintenance only once it is owned.
+      auto reservationRollback = makeScopeExit([&context, token] {
+        context.chartLibraryTasks->releaseMaintenance(*token);
+      });
       StorageMaintenanceGuard guard(
           [&context, token, roots = selectedRoots(request)](const StorageReport &report) {
             ++context.storageMeasurementRevision;
@@ -175,6 +180,8 @@ bool InitializeStorageServices(ApplicationContext &context, StorageRecoveryProgr
             context.chartLibraryTasks->releaseMaintenance(*token);
             context.storageMaintenanceActive = false;
           });
+      reservationRollback.dismiss();
+      context.storageMaintenanceActive = true;
       auto access = accessFolders(context, error);
       if (!access) return {};
       const auto roots = request.preflight ? request.preflight->EligibleRoots() : selectedRoots(request);
