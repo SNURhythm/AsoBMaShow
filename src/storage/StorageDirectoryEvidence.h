@@ -16,6 +16,7 @@ public:
   bool Candidate(const AssetCandidate &, Checkpoint, std::string &) const;
   bool BeforeCommit(const AssetCandidate &, const std::vector<StorageFileChange> &, Checkpoint, std::string &) const;
   bool Advance(const AssetCandidate &, const FileResult &, Checkpoint, std::string &);
+  bool AdvanceRecovery(const std::vector<StorageFileChange> &, Checkpoint, std::string &);
   bool Finish(Checkpoint, std::string &);
 private:
   struct ChartScope {
@@ -24,6 +25,8 @@ private:
   };
   bool CheckScopes(bool changingLocal, Checkpoint, std::string &) const;
   bool CheckEntries(const std::vector<StorageFileChange> &, Checkpoint, std::string &, StorageDirectoryStamp &) const;
+  bool CheckChanges(const std::vector<StorageFileChange> &, Checkpoint, std::string &) const;
+  bool ApplyChanges(const std::vector<StorageFileChange> &, std::string &);
   StorageDirectorySummary &summary_;
   const StoragePreflight &preflight_;
   StorageDirectoryLimits limits_;

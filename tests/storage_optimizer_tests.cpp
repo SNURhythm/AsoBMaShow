@@ -439,7 +439,7 @@ void revalidateAtTheActualCommitBoundary() {
     return OptimizerTransactions{
         .replace = [transaction](const AssetCandidate &asset, const EncodeResult &encoded, Checkpoint check) { return transaction->Replace(asset, encoded, check); },
         .erase = [transaction](const AssetCandidate &asset, Checkpoint check) { return transaction->Delete(asset, check); },
-        .recover = [transaction](Checkpoint check) { return transaction->Recover(check); }};
+        .recover = [transaction](Checkpoint check, const StorageRecoveryObserver &observer) { return transaction->Recover(check, observer); }};
   };
   const auto report = StorageOptimizer(deps).Run(request(temp.root / "charts"), {}, {});
   require(!report.converted && !report.reclaimedBytes && fs::exists(temp.root / "charts/a.wav") && !fs::exists(temp.root / "charts/a.ogg"),
@@ -472,7 +472,7 @@ void exceptionRecoveryClassification() {
     deps.transactions = [&](const StoragePlatformPaths &paths, StorageCommitPrecondition beforeCommit) {
       if (stage == 0 && beforeCommit) throw std::runtime_error("transaction setup failed");
       auto transactions = factory(paths, std::move(beforeCommit));
-      if (stage == 1) transactions.recover = [](Checkpoint) -> StorageReport {
+      if (stage == 1) transactions.recover = [](Checkpoint, const StorageRecoveryObserver &) -> StorageReport {
         throw std::runtime_error("recovery interrupted");
       };
       if (stage == 2) transactions.replace = [&](const AssetCandidate &, const EncodeResult &, Checkpoint check) -> FileResult {
@@ -508,7 +508,7 @@ void cleanupFailureAndFatalRecovery() {
       }
       auto transaction = std::make_shared<StorageFileTransaction>(paths, ops);
       OptimizerTransactions result;
-      result.recover = [transaction](Checkpoint check) { return transaction->Recover(check); };
+      result.recover = [transaction](Checkpoint check, const StorageRecoveryObserver &observer) { return transaction->Recover(check, observer); };
       result.replace = [transaction, fatal](const AssetCandidate &candidate, const EncodeResult &encoded, Checkpoint check) {
         auto file = transaction->Replace(candidate, encoded, check);
         if (fatal) file.reason = {StorageReason::RecoveryRequired, "inconsistent retained state"};
@@ -531,6 +531,82 @@ void cleanupFailureAndFatalRecovery() {
                   StorageFileTransaction(deps.paths).Recover().reclaimedBytes == 0,
               "later cleanup counts actual reclaimed bytes exactly once");
     }
+  }
+}
+void reviewedCleanupAdvancesOnlyOwnedEvidence() {
+  for (int edit = 0; edit != 7; ++edit) {
+    TempDirectory temp;
+    temp.write("charts/chart.bms", "#WAV01 song/b.wav\n");
+    temp.write("charts/song/a.wav", std::string(100, 'a'));
+    std::vector<std::string> events;
+    auto deps = dependencies(temp, events);
+    bool cleanup = false;
+    deps.transactions = [&](const StoragePlatformPaths &paths, StorageCommitPrecondition beforeCommit) {
+      auto ops = DefaultFileTransactionDependencies();
+      ops.beforeCommit = std::move(beforeCommit);
+      ops.faultPoint = [&](std::string_view point) {
+        if (edit == 4 && !cleanup && point == "published")
+          throw std::runtime_error("interrupted before retiring the source");
+      };
+      const auto remove = ops.remove;
+      ops.remove = [&, remove](const fs::path &path, std::string &error) {
+        if (edit == 5 && cleanup && path.extension() == ".json") { error = "journal cleanup failed"; return false; }
+        if (path.extension() == ".backup") {
+          if (!cleanup) { error = "retained backup"; return false; }
+          if (edit == 2) temp.write("charts/chart.bms", "#WAV01 changed-during-recovery.wav\n");
+          if (edit == 3) temp.write("charts/song/b.wav", "changed during recovery");
+        }
+        return remove(path, error);
+      };
+      const auto sync = ops.syncDirectory;
+      ops.syncDirectory = [&, sync](const fs::path &path, std::string &error) {
+        if (edit == 6 && cleanup && path == temp.root / "charts/song") { error = "backup removal flush failed"; return false; }
+        return sync(path, error);
+      };
+      auto transaction = std::make_shared<StorageFileTransaction>(paths, ops);
+      return OptimizerTransactions{
+        .replace = [transaction](const AssetCandidate &asset, const EncodeResult &encoded, Checkpoint check) {
+          return transaction->Replace(asset, encoded, check);
+        },
+        .erase = [transaction](const AssetCandidate &asset, Checkpoint check) { return transaction->Delete(asset, check); },
+        .recover = [transaction](Checkpoint check, const StorageRecoveryObserver &observer) { return transaction->Recover(check, observer); },
+      };
+    };
+    const auto first = StorageOptimizer(deps).Run(request(temp.root / "charts"));
+    if (edit == 4) require(first.recoveryRequired && fs::exists(temp.root / "charts/song/a.ogg"),
+                          "fixture retains an uncommitted output that hides its colliding source during review");
+    else require(first.converted == 1 && first.cleanupPending && !first.recoveryRequired,
+                 "fixture retains a committed backup for the next reviewed operation");
+    temp.write("charts/song/b.wav", std::string(100, 'b'));
+    auto input = request(temp.root / "charts");
+    input.preflight = BuildStoragePreflight(input.inventory);
+    require(input.preflight->eligibleCount == 1, "review includes pending recovery and one remaining candidate");
+    StorageMeasurementRows measurements;
+    measurements.emplace("group", input.preflight->groups.front());
+    const auto selections = input.inventory.groups;
+    if (edit == 1) temp.write("charts/song/b.wav", "changed before recovery");
+    cleanup = true;
+    const auto report = StorageOptimizer(deps).Run(std::move(input));
+    if (edit >= 5) require(report.recoveryRequired && !fs::is_empty(deps.paths.journalRoot),
+                          "partial cleanup failure retains the journal and recovery requirement");
+    else require(!report.recoveryRequired && fs::is_empty(deps.paths.journalRoot),
+                 "review freshness never prevents owned journal cleanup");
+    if (edit == 0) {
+      require(report.converted == 1 && report.reclaimedBytes == 192 &&
+                  !fs::exists(temp.root / "charts/song/b.wav") && fs::exists(temp.root / "charts/song/b.ogg"),
+              "owned backup cleanup preserves reviewed authority for remaining media");
+    } else if (edit == 4) {
+      require(!report.converted && report.skipped && fs::exists(temp.root / "charts/song/a.wav") &&
+                  fs::exists(temp.root / "charts/song/b.wav") && !fs::exists(temp.root / "charts/song/a.ogg"),
+              "rollback cannot authorize a source that was not an eligible reviewed candidate");
+    } else if (edit < 5) {
+      require(!report.converted && report.skipped && report.reclaimedBytes == 96 &&
+                  fs::exists(temp.root / "charts/song/b.wav") && !fs::exists(temp.root / "charts/song/b.ogg"),
+              "recovery does not adopt external media or ancestor chart edits into reviewed evidence");
+    }
+    ApplyStorageReportMeasurements(measurements, selections, report);
+    require(!measurements.at("group").totalBytes,
+            "recovery invalidates display totals that still include the removed backup");
   }
 }
 void cancellationCapabilitiesAndNoOp() {
@@ -563,7 +639,7 @@ void cancellationCapabilitiesAndNoOp() {
   deps = dependencies(temp, events);
   deps.transactions = [](const StoragePlatformPaths &, StorageCommitPrecondition) {
     OptimizerTransactions result;
-    result.recover = [](Checkpoint) {
+    result.recover = [](Checkpoint, const StorageRecoveryObserver &) {
       StorageReport report; report.recoveryRequired = true; report.failed = 123;
       report.files.push_back({.outcome = FileOutcome::Failed, .reason = {StorageReason::RecoveryRequired, "bounded recovery details"}});
       return report;
@@ -636,7 +712,8 @@ int main(int argc, char **argv) {
     changedDirectoryIsSkippedWithoutAcceptingNewAssets(); unrelatedFoldersDoNotMultiplyCommitChecks();
     subsetRefreshNeverEnumeratesAncestorSiblings();
     ancestorChartsStayProtectedWithoutBlockingIndependentRoots(); committedDeltasSurviveDetailLimitAndRetainedBackups();
-    partialFailureAndAccounting(); revalidateAtTheActualCommitBoundary(); cleanupFailureAndFatalRecovery(); cancellationCapabilitiesAndNoOp();
+    partialFailureAndAccounting(); revalidateAtTheActualCommitBoundary(); cleanupFailureAndFatalRecovery();
+    reviewedCleanupAdvancesOnlyOwnedEvidence(); cancellationCapabilitiesAndNoOp();
     boundedReportsAndProgress(); cancellableSingleConversionPermit();
   } catch (const std::exception &error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }
   return 0;

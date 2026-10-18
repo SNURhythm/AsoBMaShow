@@ -111,10 +111,16 @@ bool StorageDirectoryEvidence::BeforeCommit(const AssetCandidate &asset, const s
     Checkpoint check, std::string &error) const {
   error.clear();
   if (asset.source.parent_path() != summary_.directory || !CheckScopes(true, check, error)) return false;
-  bool sourceChanged = false;
+  const bool sourceChanged = std::ranges::any_of(owned, [&](const auto &change) { return change.path == asset.source; });
+  if (!sourceChanged && ReadFileIdentity(asset.source, error, boundaries(summary_)) != std::optional(asset.identity)) {
+    error = "Source changed before commit"; return false;
+  }
+  return CheckChanges(owned, std::move(check), error);
+}
+bool StorageDirectoryEvidence::CheckChanges(const std::vector<StorageFileChange> &owned,
+    Checkpoint check, std::string &error) const {
   for (const auto &change : owned) {
     if (change.path.parent_path() != summary_.directory) { error = "Unexpected transaction path"; return false; }
-    sourceChanged |= change.path == asset.source;
     if (change.after) {
       if (ReadFileIdentity(change.path, error, boundaries(summary_)) != change.after) {
         error = "Transaction file identity changed"; return false;
@@ -126,15 +132,21 @@ bool StorageDirectoryEvidence::BeforeCommit(const AssetCandidate &asset, const s
       }
     }
   }
-  if (!sourceChanged && ReadFileIdentity(asset.source, error, boundaries(summary_)) != std::optional(asset.identity)) {
-    error = "Source changed before commit"; return false;
-  }
   StorageDirectoryStamp stamp;
   return CheckEntries(owned, check, error, stamp);
 }
 bool StorageDirectoryEvidence::Advance(const AssetCandidate &asset, const FileResult &result, Checkpoint check, std::string &error) {
   if (!BeforeCommit(asset, result.filesystemChanges, check, error)) return false;
-  for (const auto &change : result.filesystemChanges) {
+  return ApplyChanges(result.filesystemChanges, error);
+}
+bool StorageDirectoryEvidence::AdvanceRecovery(const std::vector<StorageFileChange> &changes,
+    Checkpoint check, std::string &error) {
+  error.clear();
+  if (!CheckScopes(true, check, error) || !CheckChanges(changes, check, error)) return false;
+  return ApplyChanges(changes, error);
+}
+bool StorageDirectoryEvidence::ApplyChanges(const std::vector<StorageFileChange> &changes, std::string &error) {
+  for (const auto &change : changes) {
     if (change.after) {
       std::error_code ec; const auto permissions = fs::status(change.path, ec).permissions();
       if (ec) { error = ec.message(); return false; }

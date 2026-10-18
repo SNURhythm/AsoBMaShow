@@ -74,12 +74,48 @@ int main() {
     task.Shutdown();
     require(!task.Start({}), "shutdown rejects restart");
 
+    int refreshFailureLive = 0;
+    StorageTask refreshFailure({
+      .admit = [&](const OptimizationRequest &, std::string &) -> std::optional<StorageMaintenanceGuard> {
+        ++refreshFailureLive;
+        return StorageMaintenanceGuard([](const StorageReport &) {
+          throw std::runtime_error("refresh queue unavailable");
+        }, [&] { --refreshFailureLive; });
+      },
+      .run = [](const OptimizationRequest &, Checkpoint, ProgressCallback) {
+        StorageReport report;
+        report.converted = 1;
+        report.reclaimedBytes = 42;
+        return report;
+      },
+    });
+    require(refreshFailure.Start({}), "job with failing completion refresh starts");
+    auto refreshFailureReport = refreshFailure.CancelAndWait();
+    require(refreshFailureReport && !refreshFailureReport->recoveryRequired,
+            "refresh failure after settled transactions does not require recovery");
+    require(refreshFailureReport->converted == 1 && refreshFailureReport->reclaimedBytes == 42,
+            "refresh failure preserves committed results");
+    require(refreshFailureReport->failed == 1 && !refreshFailureReport->files.empty() &&
+        refreshFailureReport->files.front().outcome == FileOutcome::Failed &&
+        refreshFailureReport->files.front().reason.code == StorageReason::IoError &&
+        refreshFailureReport->files.front().reason.detail.find("refresh") != std::string::npos,
+        "refresh failure retains a visible diagnostic");
+    const auto refreshFailureSnapshot = refreshFailure.Snapshot();
+    require(!refreshFailureSnapshot.running && !refreshFailureSnapshot.recoveryRequired &&
+        refreshFailureSnapshot.lastReport && refreshFailureSnapshot.lastReport->failed == 1,
+        "refresh failure snapshot completes without requiring recovery");
+    require(refreshFailureLive == 0 && refreshFailure.Start({}),
+            "refresh failure releases admission and permits a later job");
+    refreshFailure.CancelAndWait();
+
     int live = 0;
     {
       StorageTask fatal({
         .admit = [&](const OptimizationRequest &, std::string &) -> std::optional<StorageMaintenanceGuard> {
           ++live;
-          return StorageMaintenanceGuard({}, [&] { --live; });
+          return StorageMaintenanceGuard([](const StorageReport &) {
+            throw std::runtime_error("completion failed during recovery");
+          }, [&] { --live; });
         },
         .run = [](const OptimizationRequest &, Checkpoint, ProgressCallback) {
           StorageReport report; report.recoveryRequired = true; return report;

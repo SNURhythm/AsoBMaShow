@@ -34,7 +34,7 @@ std::shared_ptr<StorageConversionPermit> SharedStorageConversionPermit();
 struct OptimizerTransactions {
   std::function<FileResult(const AssetCandidate &, const EncodeResult &, Checkpoint)> replace;
   std::function<FileResult(const AssetCandidate &, Checkpoint)> erase;
-  std::function<StorageReport(Checkpoint)> recover;
+  std::function<StorageReport(Checkpoint, const StorageRecoveryObserver &)> recover;
 };
 using StorageEncoder = std::function<EncodeResult(const AssetCandidate &, const StoragePolicy &,
     const std::filesystem::path &, Checkpoint, ProgressCallback)>;

@@ -36,14 +36,22 @@ std::uint32_t le32(const unsigned char *p) {
   return std::uint32_t(p[0]) | (std::uint32_t(p[1]) << 8) |
          (std::uint32_t(p[2]) << 16) | (std::uint32_t(p[3]) << 24);
 }
-bool descriptiveComment(std::string_view value) {
+int descriptiveCommentTag(std::string_view value) {
   const auto equal = value.find('=');
-  if (equal == std::string_view::npos) return false;
+  if (equal == std::string_view::npos) return 0;
   std::string key(value.substr(0, equal));
   for (char &c : key) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
-  return key == "TITLE" || key == "COPYRIGHT" || key == "SOFTWARE" || key == "ENCODER" ||
-         key == "ARTIST" || key == "COMMENT" || key == "DATE" || key == "ALBUM" ||
-         key == "LICENSE" || key == "TRACKNUMBER" || key == "GENRE";
+  if (key == "TITLE") return SF_STR_TITLE;
+  if (key == "COPYRIGHT") return SF_STR_COPYRIGHT;
+  if (key == "SOFTWARE" || key == "ENCODER") return SF_STR_SOFTWARE;
+  if (key == "ARTIST") return SF_STR_ARTIST;
+  if (key == "COMMENT") return SF_STR_COMMENT;
+  if (key == "DATE") return SF_STR_DATE;
+  if (key == "ALBUM") return SF_STR_ALBUM;
+  if (key == "LICENSE") return SF_STR_LICENSE;
+  if (key == "TRACKNUMBER") return SF_STR_TRACKNUMBER;
+  if (key == "GENRE") return SF_STR_GENRE;
+  return 0;
 }
 struct WaveMetadata {
   bool preserve = false;
@@ -66,6 +74,7 @@ StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, SN
     if (!input.read(reinterpret_cast<char *>(header.data()), 4) || std::memcmp(header.data(), "fLaC", 4)) return bad;
     std::uint64_t offset = 4;
     bool last = false;
+    std::array<bool, SF_STR_LAST + 1> seenTags{};
     while (!last) {
       if (check && !check()) return {StorageReason::Cancelled, "Cancelled"};
       if (!input.read(reinterpret_cast<char *>(header.data()), 4)) return bad;
@@ -87,7 +96,11 @@ StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, SN
           if (pos > length - 4) return bad;
           const auto size = le32(block.data() + pos); pos += 4;
           if (size > length - pos) return bad;
-          if (!descriptiveComment({reinterpret_cast<const char *>(block.data() + pos), size})) return metadata;
+          const int tag = descriptiveCommentTag({reinterpret_cast<const char *>(block.data() + pos), size});
+          // libsndfile exposes one value per field, including SOFTWARE/ENCODER
+          // aliases. Retain the source whenever conversion would lose a value.
+          if (!tag || seenTags[tag]) return metadata;
+          seenTags[tag] = true;
           pos += size;
         }
       } else {

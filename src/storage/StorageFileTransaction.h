@@ -4,6 +4,13 @@
 
 namespace storage_management {
 
+struct StorageRecoveryObserver {
+  // Observe one validated record at a time; failed recovery never advances
+  // reviewed evidence, even when its partial mutations invalidate estimates.
+  std::function<void(const std::filesystem::path &)> before;
+  std::function<void(const std::filesystem::path &, const std::vector<StorageFileChange> &)> after;
+};
+
 class StorageFileTransaction {
 public:
   StorageFileTransaction(StoragePlatformPaths, FileTransactionDependencies = {});
@@ -11,7 +18,7 @@ public:
   FileResult Delete(const AssetCandidate &, Checkpoint = {});
   // Call at startup before workers, or while holding the shared conversion permit.
   // After journal recovery, removes recognized private jobs abandoned by a crash.
-  StorageReport Recover(Checkpoint = {});
+  StorageReport Recover(Checkpoint = {}, const StorageRecoveryObserver & = {});
 
 private:
   bool PrepareJournalDirectory(std::string &);

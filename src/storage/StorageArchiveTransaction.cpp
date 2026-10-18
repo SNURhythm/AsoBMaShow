@@ -710,7 +710,15 @@ void Update::Prepare(StorageArchiveEntry &entry, const AssetCandidate &candidate
     active(check); auto bytes = encodedFile.Read(position, std::min(chunkSize, encodedIdentity->bytes - position));
     crc = crc32(crc, reinterpret_cast<const Bytef *>(bytes.data()), bytes.size()); position += bytes.size();
   }
-  auto replacement = entry; const auto header = archive.Replacement(replacement, candidate.destination.extension().string(), encodedIdentity->bytes, crc);
+  auto replacement = entry; std::string header;
+  try { header = archive.Replacement(replacement, candidate.destination.extension().string(), encodedIdentity->bytes, crc); }
+  catch (const StorageArchiveError &error) {
+    if (error.code != StorageReason::UnsupportedFormat) throw;
+    archive.io.CheckPath();
+    // Keep the original entry and continue. CopyRecord removes staging after
+    // encodedFile has closed, which is required on Windows.
+    RecordSkip(entry, FileOutcome::Skipped, {error.code, error.what()}); return;
+  }
   std::uint64_t extra = 0;
   if (archive.Format() == StorageArchiveFormat::Zip) { const auto central = archive.Central(replacement, entry.offset); if (central.size() > entry.metadata.size()) extra = central.size() - entry.metadata.size(); }
   if (candidate.operation != AssetOperation::LosslessFlac && plus(replacement.span, extra) >= entry.span) {

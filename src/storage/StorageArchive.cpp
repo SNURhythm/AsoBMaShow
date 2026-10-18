@@ -184,9 +184,23 @@ void StorageArchive::ValidateBrowsingIndex(Checkpoint check) const {
   const bool complete = archive_file::visitIndexEntries(io.path, [&](const auto &entry) {
     active(check);
     if (archive_file::isSystemEntry(entry.path)) return true;
-    lookup.reset(); lookup.text(1, pathText(entry.path));
-    require(lookup.step() && lookup.integer(1) == entry.size && (lookup.integer(2) != 0) == entry.directory,
-        "Browsing archive filenames or sizes differ from the physical update manifest");
+    const auto indexedName = pathText(entry.path);
+    auto physicalName = indexedName;
+    // Browsing retains a directory's terminal slash; safeName removes exactly
+    // that slash in the physical manifest. Keep all other spelling exact.
+    if (entry.directory && !physicalName.empty() && physicalName.back() == '/') physicalName.pop_back();
+    lookup.reset(); lookup.text(1, physicalName);
+    const bool found = lookup.step();
+    if (!found || lookup.integer(1) != entry.size || (lookup.integer(2) != 0) != entry.directory) {
+      std::string detail = found ? "Browsing archive entry metadata differs from the physical update manifest: " :
+          "Browsing archive entry has no matching physical filename: ";
+      detail += '"' + indexedName + "\" (indexed bytes=" + std::to_string(entry.size) +
+          ", directory=" + (entry.directory ? "true" : "false");
+      if (found) detail += "; physical bytes=" + std::to_string(lookup.integer(1)) +
+          ", directory=" + (lookup.integer(2) != 0 ? "true" : "false");
+      detail += ')';
+      throw StorageArchiveError(StorageReason::UnsupportedFormat, std::move(detail));
+    }
     matched.reset(); matched.bind(1, lookup.integer(0)); matched.step(); lookup.reset();
     return true;
   }, &error, check);
@@ -503,21 +517,25 @@ std::string StorageArchive::Replacement(StorageArchiveEntry &entry, std::string_
     tarChecksum(header); entry.metadata = header; entry.span = plus(512, rounded(bytes)); return header;
   }
   const auto oldName = number(entry.metadata, 28, 2), oldExtra = number(entry.metadata, 30, 2);
-  std::string extra, unicode;
+  std::string extra, localExtra, unicode;
   bool unicodePath = false;
   extras(std::string_view(entry.metadata).substr(46 + oldName, oldExtra), [&](auto tag, auto data) {
     if (tag == 1) return;
     if (tag == 0x7075) { unicodePath = true; return; }
     std::string field(4, '\0'); put(field, 0, tag, 2); put(field, 2, data.size(), 2); extra += field; extra += data;
   });
-  if (!unicodePath) {
-    // Some writers put Unicode paths only in the original local header.
-    // Inspect that bounded extra area before the source record is replaced.
-    const auto local = io.Read(entry.offset, 30);
-    extras(io.Read(entry.offset + 30 + oldName, number(local, 28, 2)), [&](auto tag, auto) {
-      if (tag == 0x7075) unicodePath = true;
-    });
-  }
+  // Local timestamps and ownership can differ from, or be absent in, the
+  // central header. Read only this bounded metadata area, never the payload.
+  const auto originalLocal = io.Read(entry.offset, 30);
+  extras(io.Read(entry.offset + 30 + oldName, number(originalLocal, 28, 2)), [&](auto tag, auto data) {
+    if (tag == 1) return; // Replacement sizes fit the ordinary local header.
+    if (tag == 0x7075) { unicodePath = true; return; }
+    // Preserve known name/payload-independent metadata. Unknown fields may
+    // contain content hashes, filenames or alignment and cannot be copied safely.
+    require(tag == 0x000a || tag == 0x5455 || tag == 0x5855 || tag == 0x7855 || tag == 0x7875 ||
+        tag == 0x6375 || (tag == 0x000d && data.size() == 12), "Unsupported local ZIP metadata for replacement");
+    std::string field(4, '\0'); put(field, 0, tag, 2); put(field, 2, data.size(), 2); localExtra += field; localExtra += data;
+  });
   if (unicodePath) {
     // The checksum identifies the raw filename, not the payload. Both names
     // change on conversion, so replace stale fields in both ZIP headers.
@@ -525,9 +543,9 @@ std::string StorageArchive::Replacement(StorageArchiveEntry &entry, std::string_
     unicode.resize(9, '\0'); put(unicode, 0, 0x7075, 2); put(unicode, 2, 5 + entry.name.size(), 2);
     put(unicode, 4, 1, 1);
     put(unicode, 5, crc32(0, reinterpret_cast<const Bytef *>(entry.rawName.data()), entry.rawName.size()), 4);
-    unicode += entry.name; extra += unicode;
+    unicode += entry.name; extra += unicode; localExtra += unicode;
   }
-  require(extra.size() <= 65535 && entry.rawName.size() <= 65535, "ZIP metadata is too long");
+  require(extra.size() <= 65535 && localExtra.size() <= 65535 && entry.rawName.size() <= 65535, "ZIP metadata is too long");
   auto central = entry.metadata.substr(0, 46);
   put(central, 28, entry.rawName.size(), 2); put(central, 30, extra.size(), 2);
   entry.metadata = central + entry.rawName + extra + entry.metadata.substr(46 + oldName + oldExtra);
@@ -535,7 +553,7 @@ std::string StorageArchive::Replacement(StorageArchiveEntry &entry, std::string_
   require(bytes < 0xffffffff, "Individual ZIP replacement exceeds staging limit");
   std::string local(30, '\0'); put(local, 0, 0x04034b50, 4); put(local, 4, 20, 2); put(local, 6, entry.flags, 2);
   local.replace(10, 4, central.substr(12, 4)); put(local, 14, crc, 4); put(local, 18, bytes, 4); put(local, 22, bytes, 4); put(local, 26, entry.rawName.size(), 2);
-  put(local, 28, unicode.size(), 2);
-  local += entry.rawName; local += unicode; entry.span = plus(local.size(), bytes); return local;
+  put(local, 28, localExtra.size(), 2);
+  local += entry.rawName; local += localExtra; entry.span = plus(local.size(), bytes); return local;
 }
 }

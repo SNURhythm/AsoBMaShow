@@ -48,7 +48,9 @@ OptimizerDependencies DefaultOptimizerDependencies(StoragePlatformPaths paths) {
                 .replace = [transaction](const AssetCandidate &asset, const EncodeResult &encoded, Checkpoint check) {
                   return transaction->Replace(asset, encoded, std::move(check));
                 }, .erase = [transaction](const AssetCandidate &asset, Checkpoint check) { return transaction->Delete(asset, std::move(check)); },
-                .recover = [transaction](Checkpoint check) { return transaction->Recover(std::move(check)); }};
+                .recover = [transaction](Checkpoint check, const StorageRecoveryObserver &observer) {
+                  return transaction->Recover(std::move(check), observer);
+                }};
           },
           .availableSpace = [](const fs::path &path) -> std::optional<std::uint64_t> {
             std::error_code error; const auto space = fs::space(path, error);
@@ -142,8 +144,43 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
     recoveryActive = false;
     if (report.recoveryRequired || report.cancelled) return complete();
     auto transactions = dependencies_.transactions(dependencies_.paths, {});
+    std::unique_ptr<StorageDirectoryEvidence> recoveryEvidence;
+    StorageDirectorySummary *recoverySummary = nullptr;
+    StorageRecoveryObserver observer{
+      .before = [&](const fs::path &directory) {
+        recoveryEvidence.reset(); recoverySummary = nullptr;
+        if (!request.preflight) return;
+        const auto found = request.preflight->directories.find(directory);
+        if (found == request.preflight->directories.end()) return;
+        recoverySummary = &found->second;
+        recoveryEvidence = std::make_unique<StorageDirectoryEvidence>(*recoverySummary, *request.preflight,
+            StorageDirectoryLimits{.scratchRoot = dependencies_.paths.scanRoot});
+        std::string error;
+        if (!recoveryEvidence->Load(checkpoint, error)) {
+          recoverySummary->reason = {StorageReason::StaleInput, error};
+          recoveryEvidence.reset();
+        }
+      },
+      .after = [&](const fs::path &, const std::vector<StorageFileChange> &changes) {
+        if (!recoveryEvidence) return;
+        std::string error;
+        // Keep unmodified reviewed entries exactly as loaded before recovery;
+        // never bless unrelated changes by taking a new filesystem snapshot.
+        const bool cleanupOnly = std::ranges::all_of(changes, [](const auto &change) {
+          const auto extension = change.path.extension();
+          return !change.after && (extension == ".backup" || extension == ".install");
+        });
+        // A rollback can restore media or remove a collision, changing which
+        // files are eligible. Those candidates need a new explicit review.
+        if (!cleanupOnly) recoverySummary->reason = {StorageReason::StaleInput, "Recovered media changed after preflight"};
+        else if (!changes.empty() && (!recoveryEvidence->AdvanceRecovery(changes, checkpoint, error) ||
+                                !recoveryEvidence->Finish(checkpoint, error)))
+          recoverySummary->reason = {StorageReason::StaleInput, error};
+        recoveryEvidence.reset();
+      },
+    };
     recoveryActive = true;
-    const auto recovery = transactions.recover(checkpoint);
+    const auto recovery = transactions.recover(checkpoint, observer);
     mergeReport(report, recovery);
     recoveryActive = false;
     if (report.files.size() > 100) report.files.resize(100);
@@ -244,6 +281,10 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
     for (std::size_t i = 0; i < baselines.size(); ++i) if (!baselineValid[i] && inventory.directories.contains(baselines[i].root))
       for (const auto ancestor : groups.Ancestors(baselines[i].root))
         if (cachedAncestorStamps.contains(ancestor)) baselineValid[ancestor] = false;
+    // Recovery advances mutation evidence, but these display totals still
+    // include its old backup/install files. Do not apply incomplete deltas.
+    for (const auto &changed : recovery.changedRoots)
+      for (const auto position : groups.Ancestors(changed)) baselineValid[position] = false;
     totals.clear();
     std::map<std::size_t, GroupStorageDelta> deltas;
     std::vector<fs::path> changedDirectories;

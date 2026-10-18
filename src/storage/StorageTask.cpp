@@ -1,4 +1,5 @@
 #include "StorageTask.h"
+#include "StorageReportDetail.h"
 
 namespace storage_management {
 StorageTask::StorageTask(StorageTaskDependencies dependencies) : dependencies_(std::move(dependencies)) {}
@@ -73,13 +74,20 @@ std::optional<StorageReport> StorageTask::takeCompletionLocked() {
     report = std::move(completion_);
     completion_.reset();
   }
+  bool refreshFailed = false;
   try {
     guard_->Complete(*report);
   } catch (...) {
-    report->recoveryRequired = true;
+    // The worker has settled its transactions. Refresh scheduling cannot add
+    // a recovery requirement or keep otherwise safe storage reserved.
+    refreshFailed = true;
     ++report->failed;
   }
   if (!report->recoveryRequired) guard_.reset();
+  if (refreshFailed) RetainStorageReportDetail(*report, {
+      .outcome = FileOutcome::Failed,
+      .reason = {StorageReason::IoError,
+          "Could not refresh optimized chart folders. Refresh the library manually."}});
   {
     std::lock_guard state(stateMutex_);
     snapshot_.running = false;

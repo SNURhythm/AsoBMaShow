@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <fstream>
 #include <iterator>
+#include <set>
 #include <stdexcept>
 #include <system_error>
 
@@ -209,22 +210,26 @@ bool matches(const fs::path &path, const FileIdentity &expected, const std::stri
   return actual && *actual == hash;
 }
 bool removeOwned(const fs::path &path, const FileIdentity &identity, const std::string &hash,
-                 const FileTransactionDependencies &ops, bool content, std::string &error) {
+                 const FileTransactionDependencies &ops, bool content, std::string &error,
+                 std::vector<StorageFileChange> *changes = nullptr) {
   if (!entryExists(path)) return true;
   if (!matches(path, identity, hash, ops, content, error)) {
     error = "Recorded path has an unrelated or changed file"; return false;
   }
-  return ops.remove(path, error) && ops.syncDirectory(path.parent_path(), error);
+  if (!ops.remove(path, error)) return false;
+  if (changes) changes->push_back({path, std::nullopt});
+  return ops.syncDirectory(path.parent_path(), error);
 }
 bool finishRecord(const Record &record, const FileTransactionDependencies &ops,
-                  std::uint64_t &reclaimed, std::uint64_t &added, std::string &error) {
+                  std::uint64_t &reclaimed, std::uint64_t &added, std::string &error,
+                  std::vector<StorageFileChange> *changes = nullptr) {
   const bool deletion = record.operation == AssetOperation::Delete;
   const bool hadBackup = entryExists(record.backup);
   if (record.phase == Phase::Committed) {
     if (!deletion && !matches(record.destination, record.outputIdentity, record.outputHash, ops, true, error)) {
       error = "Installed output changed before recovery"; return false;
     }
-    if (!removeOwned(record.backup, record.sourceIdentity, record.sourceHash, ops, true, error)) return false;
+    if (!removeOwned(record.backup, record.sourceIdentity, record.sourceHash, ops, true, error, changes)) return false;
     if (hadBackup) AccumulateStorageBytes(reclaimed, added, record.sourceIdentity.bytes,
                                           deletion ? 0 : record.outputIdentity.bytes);
   } else {
@@ -243,14 +248,25 @@ bool finishRecord(const Record &record, const FileTransactionDependencies &ops,
       if (!hadBackup && record.destination == record.source) {
         error = "Cannot roll back replacement without its backup"; return false;
       }
-      if (!ops.remove(record.destination, error) || !ops.syncDirectory(record.destination.parent_path(), error)) return false;
+      if (!ops.remove(record.destination, error)) return false;
+      if (changes) changes->push_back({record.destination, std::nullopt});
+      if (!ops.syncDirectory(record.destination.parent_path(), error)) return false;
     }
     if (hadBackup) {
-      if (!ops.renameNoReplace(record.backup, record.source, error) || !ops.syncDirectory(record.source.parent_path(), error)) return false;
+      if (!ops.renameNoReplace(record.backup, record.source, error)) return false;
+      if (changes) {
+        changes->push_back({record.backup, std::nullopt});
+        // In-place rollback may have removed this path above. Publish its
+        // final restored identity once, while retaining partial failure paths.
+        const auto source = std::ranges::find_if(*changes, [&](const auto &change) { return change.path == record.source; });
+        if (source != changes->end()) source->after = record.sourceIdentity;
+        else changes->push_back({record.source, record.sourceIdentity});
+      }
+      if (!ops.syncDirectory(record.source.parent_path(), error)) return false;
     }
   }
   if (!record.temporary.empty() && !removeOwned(record.temporary, record.outputIdentity, record.outputHash,
-                                               ops, record.phase != Phase::Copying, error)) return false;
+                                               ops, record.phase != Phase::Copying, error, changes)) return false;
   return ops.remove(record.journal, error) && ops.syncDirectory(record.journal.parent_path(), error);
 }
 void fillDefaults(FileTransactionDependencies &ops) {
@@ -443,8 +459,9 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
   return result;
 }
 
-StorageReport StorageFileTransaction::Recover(Checkpoint check) {
+StorageReport StorageFileTransaction::Recover(Checkpoint check, const StorageRecoveryObserver &observer) {
   StorageReport report;
+  std::set<fs::path> changedDirectories;
   std::error_code ec;
   std::string error;
   if (!PrepareJournalDirectory(error)) {
@@ -462,13 +479,23 @@ StorageReport StorageFileTransaction::Recover(Checkpoint check) {
     if (it->path().extension() != ".json") continue;
     const auto record = loadRecord(it->path(), paths_, error);
     std::uint64_t reclaimed = 0, added = 0;
-    if (!record || !finishRecord(*record, dependencies_, reclaimed, added, error)) {
+    // Each validated record changes at most its source, output, backup and
+    // install paths. Publish exact owned changes before loading another record.
+    std::vector<StorageFileChange> changes;
+    if (record && observer.before) observer.before(record->source.parent_path());
+    const bool finished = record && finishRecord(*record, dependencies_, reclaimed, added, error, &changes);
+    if (!changes.empty()) changedDirectories.insert(record->source.parent_path());
+    if (!finished) {
       report.recoveryRequired = true;
       ++report.failed;
       RetainStorageReportDetail(report, {.source = it->path(), .outcome = FileOutcome::Failed,
           .reason = {StorageReason::RecoveryRequired, error}});
-    } else AccumulateStorageBytes(report.reclaimedBytes, report.addedBytes, reclaimed, added);
+    } else {
+      AccumulateStorageBytes(report.reclaimedBytes, report.addedBytes, reclaimed, added);
+      if (observer.after) observer.after(record->source.parent_path(), changes);
+    }
   }
+  report.changedRoots.assign(changedDirectories.begin(), changedDirectories.end());
   if (ec) report.recoveryRequired = true;
   if (!report.recoveryRequired && !report.cancelled) cleanupAbandonedCandidates(paths_, dependencies_, check, report);
   return report;

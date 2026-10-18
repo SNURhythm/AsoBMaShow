@@ -94,6 +94,32 @@ void verifyWaveMetadata(const std::string &source, const std::filesystem::path &
   }
   require(foreign == expected, "standard riff APPLICATION blocks retain every chunk, order and padding exactly");
 }
+std::string withFlacComments(std::string bytes, const std::vector<std::string> &comments) {
+  std::string block;
+  const auto appendSize = [&](std::uint32_t value) {
+    for (int i = 0; i < 4; ++i) block.push_back(static_cast<char>(value >> (8 * i)));
+  };
+  appendSize(7); block += "fixture";
+  appendSize(static_cast<std::uint32_t>(comments.size()));
+  for (const auto &comment : comments) {
+    appendSize(static_cast<std::uint32_t>(comment.size())); block += comment;
+  }
+  require(bytes.compare(0, 4, "fLaC") == 0, "comment fixture is native FLAC");
+  for (std::size_t offset = 4; offset + 4 <= bytes.size();) {
+    const auto type = static_cast<unsigned char>(bytes[offset]);
+    const auto size = (static_cast<unsigned char>(bytes[offset + 1]) << 16) |
+        (static_cast<unsigned char>(bytes[offset + 2]) << 8) | static_cast<unsigned char>(bytes[offset + 3]);
+    require(size <= bytes.size() - offset - 4, "comment fixture has complete metadata blocks");
+    if ((type & 127) == 4) {
+      bytes.replace(offset + 4, size, block);
+      for (int i = 0; i < 3; ++i) bytes[offset + 1 + i] = static_cast<char>(block.size() >> (16 - 8 * i));
+      return bytes;
+    }
+    if (type & 128) break;
+    offset += 4 + size;
+  }
+  throw std::runtime_error("FLAC fixture has no comment block");
+}
 void timelineTests() {
   const auto maximum = std::numeric_limits<std::int64_t>::max();
   const auto minimum = std::numeric_limits<std::int64_t>::min();
@@ -512,6 +538,29 @@ void audioTests() {
   std::filesystem::resize_file(truncatedFlac, std::filesystem::file_size(truncatedFlac) - 30);
   require(EncodeAudio(candidate(truncatedFlac), policy, temp.root / "truncated.ogg", {}, {}).reason.code ==
               StorageReason::ValidationFailed, "truncated FLAC must not be silently shortened");
+  {
+    std::ifstream input(temp.root / "24-1.flac", std::ios::binary);
+    const std::string original((std::istreambuf_iterator<char>(input)), {});
+    const auto taggedFlac = temp.root / "comments.flac", output = temp.root / "comments.ogg";
+    temp.write(taggedFlac, withFlacComments(original, {"ARTIST=First artist", "ALBUM=Chart album"}));
+    require(EncodeAudio(candidate(taggedFlac), policy, output, {}, {}).outcome == FileOutcome::Converted,
+            "distinct descriptive FLAC comments still permit Vorbis conversion");
+    std::filesystem::remove(output);
+    for (const auto &comments : std::vector<std::vector<std::string>>{
+             {"ARTIST=First artist", "ARTIST=Second artist"},
+             {"ARTIST=First artist", "aRtIsT=Second artist"},
+             {"SOFTWARE=First encoder", "eNcOdEr=Second encoder"}}) {
+      const auto bytes = withFlacComments(original, comments);
+      temp.write(taggedFlac, bytes);
+      const auto result = EncodeAudio(candidate(taggedFlac), policy, output, {}, {});
+      require(result.outcome == FileOutcome::Skipped && result.reason.code == StorageReason::UnsupportedFormat &&
+                  !std::filesystem::exists(output),
+              "Vorbis retains FLAC originals when duplicate comments share one descriptive field");
+      std::ifstream retained(taggedFlac, std::ios::binary);
+      require(std::string((std::istreambuf_iterator<char>(retained)), {}) == bytes,
+              "retained FLAC preserves every duplicate comment and audio byte");
+    }
+  }
   for (const auto &name : {"16-2.wav", "24-1.flac"}) {
     source = temp.root / name;
     const int channels = name == std::string("16-2.wav") ? 2 : 1;
