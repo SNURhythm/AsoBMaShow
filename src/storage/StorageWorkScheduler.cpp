@@ -36,6 +36,16 @@ void StorageWorkBudget::Lease::ReleaseEncoder() {
     if (encoding_) { --(kind_ == MediaKind::Video ? owner_->video_ : owner_->audio_); encoding_ = false; } }
   owner_->changed_.notify_all();
 }
+bool StorageWorkBudget::Lease::TryStartEncoder() {
+  if (!owner_) return false;
+  std::lock_guard lock(owner_->mutex_);
+  if (owner_->recoveryRequired_) return false;
+  if (encoding_) return true;
+  auto &active = kind_ == MediaKind::Video ? owner_->video_ : owner_->audio_;
+  const auto slots = kind_ == MediaKind::Video ? StorageExecutionLimits::videoWorkers : owner_->limits_.audioWorkers;
+  if (active >= slots) return false;
+  ++active; encoding_ = true; return true;
+}
 bool StorageWorkBudget::Lease::GrowTo(std::uint64_t bytes) {
   if (!owner_) return false;
   std::lock_guard lock(owner_->mutex_);
@@ -46,6 +56,12 @@ bool StorageWorkBudget::Lease::GrowTo(std::uint64_t bytes) {
 }
 void StorageWorkBudget::StopForRecovery() { recoveryRequired_ = true; changed_.notify_all(); }
 std::optional<StorageWorkBudget::Lease> StorageWorkBudget::TryAcquire(MediaKind kind, std::uint64_t bytes, bool &waiting) {
+  return TryAcquire(kind, bytes, waiting, true);
+}
+std::optional<StorageWorkBudget::Lease> StorageWorkBudget::TryReserve(MediaKind kind, std::uint64_t bytes, bool &waiting) {
+  return TryAcquire(kind, bytes, waiting, false);
+}
+std::optional<StorageWorkBudget::Lease> StorageWorkBudget::TryAcquire(MediaKind kind, std::uint64_t bytes, bool &waiting, bool encoding) {
   waiting = false;
   std::lock_guard lock(mutex_);
   if (recoveryRequired_) return {};
@@ -53,8 +69,9 @@ std::optional<StorageWorkBudget::Lease> StorageWorkBudget::TryAcquire(MediaKind 
   if (!available) return {};
   auto &active = kind == MediaKind::Video ? video_ : audio_;
   const auto slots = kind == MediaKind::Video ? StorageExecutionLimits::videoWorkers : limits_.audioWorkers;
-  if (active < slots && reserved_ <= *available && bytes <= *available - reserved_) {
-    ++active; ++leases_; reserved_ += bytes; return Lease(this, kind, bytes);
+  if ((!encoding || active < slots) && reserved_ <= *available && bytes <= *available - reserved_) {
+    if (encoding) ++active;
+    ++leases_; reserved_ += bytes; return Lease(this, kind, bytes, encoding);
   }
   waiting = leases_ != 0;
   return {};

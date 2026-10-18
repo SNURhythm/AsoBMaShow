@@ -18,10 +18,12 @@ public:
     ~Lease();
     // Encoded output still occupies scratch until the lease is destroyed.
     void ReleaseEncoder();
+    bool TryStartEncoder();
     bool GrowTo(std::uint64_t temporaryBytes);
   private:
     friend class StorageWorkBudget;
-    Lease(StorageWorkBudget *owner, MediaKind kind, std::uint64_t bytes) : owner_(owner), kind_(kind), bytes_(bytes) {}
+    Lease(StorageWorkBudget *owner, MediaKind kind, std::uint64_t bytes, bool encoding)
+        : owner_(owner), kind_(kind), bytes_(bytes), encoding_(encoding) {}
     StorageWorkBudget *owner_;
     MediaKind kind_;
     std::uint64_t bytes_;
@@ -31,9 +33,12 @@ public:
   std::optional<Lease> Acquire(MediaKind, std::uint64_t temporaryBytes, Checkpoint);
   // A busy caller must drain its own completed work before retrying.
   std::optional<Lease> TryAcquire(MediaKind, std::uint64_t temporaryBytes, bool &waiting);
+  // Reserve archive staging in source order before waiting for a codec slot.
+  std::optional<Lease> TryReserve(MediaKind, std::uint64_t temporaryBytes, bool &waiting);
   void StopForRecovery();
   bool RecoveryRequired() const { return recoveryRequired_; }
 private:
+  std::optional<Lease> TryAcquire(MediaKind, std::uint64_t temporaryBytes, bool &waiting, bool encoding);
   StorageExecutionLimits limits_;
   std::function<std::optional<std::uint64_t>()> available_;
   std::mutex mutex_;

@@ -141,6 +141,7 @@ public:
   ProgressCallback copyProgress;
   mutable std::map<std::string, std::unique_ptr<Statement>> statements;
   struct PendingEncoding {
+    std::optional<AssetCandidate> staged;
     fs::path input, output;
     std::uint64_t inputBytes = 0, reservedBytes = 0, outputLimit = 0;
     std::atomic<bool> tooLarge = false;
@@ -420,6 +421,7 @@ public:
   }
   void Prepare(StorageArchiveEntry &, const AssetCandidate &, const StoragePolicy &, Checkpoint, ProgressCallback);
   void FillEncodings(const StoragePolicy &, Checkpoint);
+  void StartEncoding(PendingEncoding &, const StoragePolicy &, Checkpoint);
   void PollEncodings();
   bool ReserveOutput(PendingEncoding &, std::uint64_t);
   void RemoveEncoding(std::uint64_t);
@@ -844,7 +846,10 @@ void Update::PollEncodings() {
   }
 }
 void Update::FillEncodings(const StoragePolicy &policy, Checkpoint check) {
+  require(!workBudget->RecoveryRequired(), "Storage work stopped for recovery", StorageReason::RecoveryRequired);
   PollEncodings();
+  // Dispatch already staged work even when the read-ahead budget is full.
+  for (auto &[id, pending] : encodings) StartEncoding(*pending, policy, check);
   const auto window = std::max<std::size_t>(8, deps.executionLimits.audioWorkers + StorageExecutionLimits::videoWorkers);
   // Reserved entries are bounded by aggregate scratch (each includes the
   // staging reserve). Completed outputs must not fill the encoder lookahead
@@ -866,6 +871,8 @@ void Update::FillEncodings(const StoragePolicy &policy, Checkpoint check) {
     // Reuse validation owns its staging synchronously. Do not reserve later
     // media across this barrier; earlier encodes are consumed before reuse.
     if (candidate->reuseDestination) return;
+    // Reserve in source order, even when this codec is busy. A later staged
+    // result must never occupy space needed by the next entry to commit.
     const auto required = plus(plus(entry->bytes, entry->bytes), plus(entry->bytes, stagingReserve));
     auto pending = std::make_unique<PendingEncoding>();
     pending->inputBytes = entry->bytes; pending->outputLimit = entry->bytes;
@@ -876,7 +883,7 @@ void Update::FillEncodings(const StoragePolicy &policy, Checkpoint check) {
         if (pendingScratch > deps.scratchLimit - required) return;
         const auto available = deps.availableSpace ? deps.availableSpace(journal) : std::optional<std::uint64_t>(fs::space(journal).available);
         if (available && required <= *available) {
-          auto lease = workBudget->TryAcquire(candidate->kind, required, waiting);
+          auto lease = workBudget->TryReserve(candidate->kind, required, waiting);
           if (lease) pending->reservation = std::make_shared<StorageWorkBudget::Lease>(std::move(*lease));
         } else if (!encodings.empty()) return;
       }
@@ -905,20 +912,26 @@ void Update::FillEncodings(const StoragePolicy &policy, Checkpoint check) {
     if (!identity) throw StorageArchiveError(StorageReason::IoError, "Cannot identify staged archive media: " + error);
     staged.identity = *identity;
     require(static_cast<bool>(deps.encode), "Archive media encoder is unavailable", StorageReason::CodecUnavailable);
-    item.job = std::make_unique<StorageEncodingJob>(item.reservation, [&, staged = std::move(staged), policy, check, pending = &item] {
-      auto checkpoint = [&] {
-        if (stopEncoding || (check && !check())) return false;
-        std::error_code error; const auto size = fs::file_size(pending->output, error);
-        if (!error && !ReserveOutput(*pending, size)) pending->tooLarge = true;
-        return !pending->tooLarge;
-      };
-      return deps.encode(staged, policy, pending->output, checkpoint, [&](const StorageProgress &value) {
-        std::lock_guard lock(encodingMutex); pending->phase = value.phase;
-      });
-    });
-    ++progress.encodesActive;
+    item.staged = std::move(staged);
+    StartEncoding(item, policy, check);
     ObserveScratch();
   }
+}
+void Update::StartEncoding(PendingEncoding &item, const StoragePolicy &policy, Checkpoint check) {
+  if (!item.staged || stopEncoding || (check && !check()) || !item.reservation->TryStartEncoder()) return;
+  item.job = std::make_unique<StorageEncodingJob>(item.reservation, [&, staged = std::move(*item.staged), policy, check, pending = &item] {
+    auto checkpoint = [&] {
+      if (stopEncoding || (check && !check())) return false;
+      std::error_code error; const auto size = fs::file_size(pending->output, error);
+      if (!error && !ReserveOutput(*pending, size)) pending->tooLarge = true;
+      return !pending->tooLarge;
+    };
+    return deps.encode(staged, policy, pending->output, checkpoint, [&](const StorageProgress &value) {
+      std::lock_guard lock(encodingMutex); pending->phase = value.phase;
+    });
+  });
+  item.staged.reset();
+  ++progress.encodesActive;
 }
 void Update::Prepare(StorageArchiveEntry &entry, const AssetCandidate &candidate, const StoragePolicy &policy, Checkpoint check, ProgressCallback notify) {
   RemoveStaging();
@@ -933,12 +946,16 @@ void Update::Prepare(StorageArchiveEntry &entry, const AssetCandidate &candidate
     }
   }
   auto &pending = *encodings.at(entry.id);
-  while (pending.job) {
-    FillEncodings(policy, check);
+  while (pending.staged || pending.job) {
+    active(check); FillEncodings(policy, check);
     StorageProgress value;
     { std::lock_guard lock(encodingMutex); value.phase = pending.phase; }
     if (notify) notify(value);
     if (pending.job) pending.job->Wait();
+    else if (pending.staged) {
+      std::unique_lock lock(encodingMutex); std::condition_variable changed;
+      changed.wait_for(lock, std::chrono::milliseconds(10));
+    }
   }
   const auto &encoded = pending.result;
   const auto &output = pending.output;

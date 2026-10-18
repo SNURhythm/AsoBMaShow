@@ -110,6 +110,23 @@ void completedEncodersRetainScratchUntilConsumed() {
   other.reset();
   require(output->GrowTo(100), "output growth can use scratch released by a settled peer");
 }
+void stagedInputsWaitForIndependentCodecSlots() {
+  StorageWorkBudget budget({.audioWorkers = 1}, space);
+  bool waiting = false;
+  auto first = budget.TryAcquire(MediaKind::Video, 10, waiting);
+  auto second = budget.TryAcquire(MediaKind::Video, 10, waiting);
+  auto queued = budget.TryReserve(MediaKind::Video, 60, waiting);
+  require(first && second && queued && !queued->TryStartEncoder(), "staging can read past both occupied video slots");
+  auto audio = budget.TryAcquire(MediaKind::Audio, 20, waiting);
+  require(audio && !budget.TryReserve(MediaKind::Audio, 1, waiting) && waiting,
+      "queued input retains scratch without reducing independent audio capacity");
+  first->ReleaseEncoder();
+  require(queued->TryStartEncoder() && queued->TryStartEncoder(), "staged input starts exactly once when its codec slot frees");
+  require(!budget.TryAcquire(MediaKind::Video, 0, waiting) && waiting, "deferred startup still enforces the video cap");
+  queued->ReleaseEncoder();
+  budget.StopForRecovery();
+  require(!queued->TryStartEncoder(), "recovery stops deferred codec admission");
+}
 void independentDirectoriesOverlapWithinBudget() {
   std::mutex mutex; std::condition_variable changed; int entered = 0;
   std::uint64_t done = 0, encoded = 0, activeEncoders = 0, peakEncoders = 0; std::atomic<int> callbacks = 0;
@@ -278,6 +295,7 @@ int main(int argc, char **argv) {
     if (filter.empty() || filter == "startup") encoderLaunchFailureReturnsEveryReservation();
     if (filter.empty() || filter == "video-overlap") twoVideosLeaveAudioCapacity();
     if (filter.empty() || filter == "video-overlap") completedEncodersRetainScratchUntilConsumed();
+    if (filter.empty() || filter == "video-overlap") stagedInputsWaitForIndependentCodecSlots();
     if (filter.empty() || filter == "defaults") platformDefaultsUseExistingWorkerPolicy();
     if (filter.empty() || filter == "exception") workerExceptionsBecomeRecoveryReports();
     if (filter.empty() || filter == "startup") startupFailureRequiresRecoveryOnlyAfterWorkersStart();

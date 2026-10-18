@@ -101,6 +101,9 @@ original order. Cancel stops admission and waits for active encoders before
 removing temporary files or releasing the library for other work.
 Completed archive encodes retain their temporary-space reservations, but do not
 fill the encoder queue. Later targets continue while scratch space is available.
+Archive read-ahead reserves and extracts inputs in source order, including queued
+videos, so a busy video pool does not hide later audio. Staged inputs wait for
+their own codec pool without occupying encoder slots in the other pool.
 The status shows active and finished archive encodes separately from the
 source-order file count, so a slow video does not hide that activity.
 
@@ -206,6 +209,9 @@ archive is 1 GiB, additionally limited by shared free-space reservations. Each
 entry initially reserves three times its input size plus 8 MiB; growing outputs
 must reserve additional space before installation. Completed outputs retain their
 reservation until consumed or discarded.
+If extraction fails before any archive mutation, the original archive stays
+unchanged and partial staging is cleaned up. After earlier changes have begun,
+the journal is retained for recovery; a failed input never replaces its original.
 Oversized entries are skipped. Lossy conversions must reduce the stored archive
 record too. Lossless FLAC is retained even if the original ZIP compression was
 more compact. Growing records are appended to the source archive, their original

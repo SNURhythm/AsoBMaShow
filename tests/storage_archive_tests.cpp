@@ -139,13 +139,52 @@ void independentArchivesAndDirectoriesShareEncodingCapacity() {
       fs::file_size(temp.root / "c/c.ogg") == 4 && fs::is_empty(paths.journalRoot) && fs::is_empty(paths.temporaryRoot),
       "independent owners merge committed reports and drain their shared encoding budget");
 }
+void archiveReadAheadKeepsFullAudioCapacityWithVideos() {
+  storage_test::TempDirectory temp;
+  const auto path = temp.root / "mixed.zip";
+  std::vector<std::pair<std::string, std::string>> files;
+  for (unsigned i = 0; i < 3; ++i) files.emplace_back("video-" + std::to_string(i) + ".mpg", std::string(1000, 'v'));
+  for (unsigned i = 0; i < 5; ++i) files.emplace_back("audio-" + std::to_string(i) + ".wav", std::string(1000, 'a'));
+  writeArchive(path, files);
+  const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+  InventoryRequest input{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+      .policy = {.audio = AudioAction::LossyVorbis, .bga = BgaAction::CompressH264}, .scanScratchRoot = paths.scanRoot};
+  const auto review = BuildStoragePreflight(input);
+  std::mutex mutex; std::condition_variable changed;
+  unsigned audio = 0, video = 0, peakAudio = 0, peakVideo = 0;
+  bool release = false;
+  StorageArchiveDependencies deps{.encode = [&](const AssetCandidate &asset, const StoragePolicy &, const fs::path &output, auto, auto) {
+    const bool isVideo = asset.kind == asobmshow::chart_assets::MediaKind::Video;
+    { std::unique_lock lock(mutex);
+      ++(isVideo ? video : audio);
+      peakAudio = std::max(peakAudio, audio); peakVideo = std::max(peakVideo, video);
+      changed.notify_all(); changed.wait(lock, [&] { return release; });
+      --(isVideo ? video : audio); }
+    std::ofstream(output) << "tiny";
+    return EncodeResult{FileOutcome::Converted, output, {}};
+  }, .executionLimits = {.audioWorkers = 4}};
+  auto run = std::async(std::launch::async, [&] { return UpdateStorageArchive(review.archives.front(), input.policy, paths, deps); });
+  bool overlapped;
+  { std::unique_lock lock(mutex);
+    overlapped = changed.wait_for(lock, std::chrono::seconds(2), [&] { return audio == 4 && video == 2; });
+    release = true; changed.notify_all(); }
+  const auto report = run.get();
+  require(overlapped && peakAudio == 4 && peakVideo == 2,
+      "queued archive video does not reduce the full independent audio worker allocation");
+  require(report.converted == 8 && !report.failed && !report.skipped && !report.recoveryRequired && fs::is_empty(paths.journalRoot),
+      "bounded media read-ahead commits every queued target and cleans staging");
+  const auto retained = readArchive(path);
+  require(retained.size() == 8, "read-ahead preserves every archive entry");
+  for (unsigned i = 0; i < 3; ++i) require(retained.at("video-" + std::to_string(i) + ".mp4") == "tiny", "video output is committed once");
+  for (unsigned i = 0; i < 5; ++i) require(retained.at("audio-" + std::to_string(i) + ".ogg") == "tiny", "audio output is committed once");
+}
 void archiveLookaheadRespectsAggregateScratch() {
   storage_test::TempDirectory temp;
   const auto path = temp.root / "bounded.zip";
-  writeArchive(path, {{"a.wav", std::string(1000, 'a')}, {"b.wav", std::string(1000, 'b')}, {"c.wav", std::string(1000, 'c')}});
+  writeArchive(path, {{"a.wav", std::string(1000, 'a')}, {"b.mpg", std::string(1000, 'b')}, {"c.wav", std::string(1000, 'c')}});
   const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
   InventoryRequest input{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
-      .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = paths.scanRoot};
+      .policy = {.audio = AudioAction::LosslessFlac, .bga = BgaAction::CompressH264}, .scanScratchRoot = paths.scanRoot};
   const auto review = BuildStoragePreflight(input);
   std::mutex mutex; std::condition_variable changed;
   std::atomic<bool> entered = false;
@@ -160,7 +199,9 @@ void archiveLookaheadRespectsAggregateScratch() {
     std::ofstream(output) << "tiny";
     return EncodeResult{FileOutcome::Converted, output, {}};
   }, .scratchLimit = 8 * 1024 * 1024 + 3000};
-  const auto report = UpdateStorageArchive(review.archives.front(), input.policy, paths, deps, {}, [&](const StorageProgress &) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  const auto report = UpdateStorageArchive(review.archives.front(), input.policy, paths, deps,
+      [&] { return std::chrono::steady_clock::now() < deadline; }, [&](const StorageProgress &) {
     if (observed || !entered) return;
     unsigned inputs = 0;
     for (const auto &journal : fs::directory_iterator(paths.journalRoot))
@@ -1539,6 +1580,72 @@ void realArchiveOptimizerPreservesPlayback() {
                  "local existing FLAC is retained without encoding");
   }
 }
+void archiveQueuedEncodingStopsForSharedRecovery() {
+  storage_test::TempDirectory temp; const auto path = temp.root / "queued.zip";
+  writeArchive(path, {{"video.mpg", std::string(1000, 'v')}});
+  const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+  InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+      .policy = {.bga = BgaAction::CompressH264}, .scanScratchRoot = paths.scanRoot};
+  const auto review = BuildStoragePreflight(request);
+  StorageWorkBudget budget({}, [] { return std::optional<std::uint64_t>(100000000); });
+  auto first = budget.Acquire(asobmshow::chart_assets::MediaKind::Video, 0, {});
+  auto second = budget.Acquire(asobmshow::chart_assets::MediaKind::Video, 0, {});
+  unsigned encodes = 0; bool signalled = false;
+  StorageArchiveDependencies deps{.encode = [&](const auto &, const auto &, const fs::path &, auto, auto) {
+    ++encodes; return EncodeResult{};
+  }, .workBudget = &budget};
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  const auto report = UpdateStorageArchive(review.archives.front(), request.policy, paths, deps,
+      [&] { return std::chrono::steady_clock::now() < deadline; }, [&](const StorageProgress &) {
+    if (!signalled && fs::exists(paths.journalRoot)) for (const auto &journal : fs::directory_iterator(paths.journalRoot))
+      if (fs::exists(journal.path() / "input-1.mpg")) { signalled = true; budget.StopForRecovery(); }
+  });
+  require(signalled && !encodes && report.failed && !report.cancelled && report.files.size() == 1 &&
+      report.files.front().reason.code == StorageReason::RecoveryRequired && fs::is_empty(paths.journalRoot),
+      "queued archive work observes shared recovery without depending on its caller checkpoint");
+  require(readArchive(path).at("video.mpg") == std::string(1000, 'v'), "shared recovery retains the queued original");
+}
+void archiveStagingFailurePreservesOriginals() {
+  for (const bool afterCommit : {false, true}) {
+    storage_test::TempDirectory temp; const auto path = temp.root / "space.zip";
+    const std::string original(300000, 'a');
+    writeArchive(path, {{"a.wav", original}, {"b.wav", original}});
+    const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+    InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+        .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = paths.scanRoot};
+    const auto review = BuildStoragePreflight(request);
+    std::string error; const auto before = HashStorageFile(path, {}, error);
+    StorageArchiveDependencies deps{.encode = [](const auto &, const auto &, const fs::path &output, auto, auto) {
+      std::ofstream(output) << "tiny"; return EncodeResult{FileOutcome::Converted, output};
+    }, .scratchLimit = 8 * 1024 * 1024 + 3 * original.size()};
+    bool injected = false;
+    const auto report = UpdateStorageArchive(review.archives.front(), request.policy, paths, deps, [&] {
+      if (!injected && fs::exists(paths.journalRoot)) for (const auto &journal : fs::directory_iterator(paths.journalRoot)) {
+        std::error_code failure;
+        const auto bytes = fs::file_size(journal.path() / (afterCommit ? "input-2.wav" : "input-1.wav"), failure);
+        if (!failure && bytes > 0) {
+          injected = true;
+          throw std::system_error(std::make_error_code(std::errc::no_space_on_device), "injected partial input staging failure");
+        }
+      }
+      return true;
+    });
+    require(injected && report.failed && report.recoveryRequired == afterCommit,
+        "partial staging failure reports whether earlier archive changes need recovery");
+    if (!afterCommit) require(HashStorageFile(path, {}, error) == before && fs::is_empty(paths.journalRoot),
+        "staging failure before mutation leaves archive byte-identical and removes partial input");
+    else {
+      require(!fs::is_empty(paths.journalRoot), "staging failure after a commit retains its recovery journal");
+      const auto recovered = RecoverStorageArchives(paths);
+      require(!recovered.failed && !recovered.recoveryRequired && fs::is_empty(paths.journalRoot),
+          "recovery after space returns removes partial input and finishes the archive");
+    }
+    const auto files = readArchive(path);
+    require(files.size() == 2 && files.at("b.wav") == original &&
+        (afterCommit ? files.at("a.flac") == "tiny" : files.at("a.wav") == original),
+        "staging failure preserves the failed entry and any earlier accepted conversion");
+  }
+}
 void archivePolicyBoundaries() {
   for (const std::string mode : {"compressed", "budget", "cancel", "failed", "throw"}) {
     storage_test::TempDirectory temp; const auto path = temp.root / "songs.zip";
@@ -1758,7 +1865,7 @@ void storageArchiveDiscoverySandboxTest(const fs::path &root) {
         "archive review resolves folder and file grants without probing system ancestors");
   }
 }
-void storageArchiveParallelTests() { archiveFailureStopsPeersBeforeJoiningEncoders(); archiveEncodersOverlapAndDrainSafely(); independentArchivesAndDirectoriesShareEncodingCapacity(); archiveLookaheadRespectsAggregateScratch(); }
+void storageArchiveParallelTests() { archiveQueuedEncodingStopsForSharedRecovery(); archiveStagingFailurePreservesOriginals(); archiveReadAheadKeepsFullAudioCapacityWithVideos(); archiveFailureStopsPeersBeforeJoiningEncoders(); archiveEncodersOverlapAndDrainSafely(); independentArchivesAndDirectoriesShareEncodingCapacity(); archiveLookaheadRespectsAggregateScratch(); }
 void storageArchiveTests(const char *executable) {
 #if defined(__APPLE__) && TARGET_OS_OSX
   storage_test::TempDirectory temp;
@@ -1783,7 +1890,10 @@ void storageArchiveTests(const char *executable) {
   for (const auto &[name, run] : std::vector<std::pair<const char *, void(*)()>>{
       {"parallel-encoders", archiveEncodersOverlapAndDrainSafely},
       {"parallel-owners", independentArchivesAndDirectoriesShareEncodingCapacity},
+      {"parallel-media-read-ahead", archiveReadAheadKeepsFullAudioCapacityWithVideos},
       {"parallel-scratch", archiveLookaheadRespectsAggregateScratch},
+      {"staging-disk-full", archiveStagingFailurePreservesOriginals},
+      {"queued-recovery", archiveQueuedEncodingStopsForSharedRecovery},
       {"parallel-failure", archiveFailureStopsPeersBeforeJoiningEncoders},
       {"container-relocation", archiveRecoveryAfterContainerRelocation},
       {"measurement-deltas", archiveChangesUpdateCachedInnerMeasurements},
