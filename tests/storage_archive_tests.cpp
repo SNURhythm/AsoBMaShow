@@ -49,16 +49,17 @@ void archiveEncodersOverlapAndDrainSafely() {
   for (const int mode : {0, 1, 2}) {
     storage_test::TempDirectory temp;
     const auto path = temp.root / "songs.zip";
-    const std::vector<std::pair<std::string, std::string>> files{
+    std::vector<std::pair<std::string, std::string>> files{
         {"a.mpg", std::string(1000, 'a')}, {"b.mpg", std::string(1000, 'b')}, {"c.wav", std::string(1000, 'c')}};
+    for (unsigned i = 0; i < 9; ++i) files.emplace_back("later-" + std::to_string(i) + ".wav", std::string(1000, 'd'));
     writeArchive(path, files);
     const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
     InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
         .policy = {.audio = AudioAction::LossyVorbis, .bga = BgaAction::CompressH264}, .scanScratchRoot = paths.scanRoot};
     const auto review = BuildStoragePreflight(request);
-    require(review.eligibleCount == 3, "parallel archive fixture reviews both videos and audio");
+    require(review.eligibleCount == 12, "parallel archive fixture exceeds the former eight-file staging window");
     std::mutex mutex; std::condition_variable changed;
-    unsigned laterEncoded = 0; bool release = false;
+    unsigned laterEncoded = 0; bool release = false, progressVisible = false;
     std::atomic<bool> cancelled = false;
     StorageArchiveDependencies deps{.encode = [&](const AssetCandidate &asset, const StoragePolicy &, const fs::path &output,
         Checkpoint check, ProgressCallback) {
@@ -72,25 +73,34 @@ void archiveEncodersOverlapAndDrainSafely() {
       if (mode == 2 && point == "archive-entry-ready") throw std::runtime_error("interrupted prepared entry");
     }};
     auto run = std::async(std::launch::async, [&] {
-      return UpdateStorageArchive(review.archives.front(), request.policy, paths, deps, [&] { return !cancelled; });
+      return UpdateStorageArchive(review.archives.front(), request.policy, paths, deps, [&] { return !cancelled; },
+          [&](const StorageProgress &progress) {
+            std::lock_guard lock(mutex);
+            if (!release && progress.encodesDone == 11 && progress.encodesActive == 1 && progress.filesDone == 0)
+              progressVisible = true;
+            changed.notify_all();
+          });
     });
     bool overlapped;
     { std::unique_lock lock(mutex);
-      overlapped = changed.wait_for(lock, std::chrono::seconds(2), [&] { return laterEncoded == 2; });
+      overlapped = changed.wait_for(lock, std::chrono::seconds(2), [&] { return laterEncoded == 11 && progressVisible; });
       cancelled = mode == 1; release = true; changed.notify_all(); }
     const auto report = run.get();
-    require(overlapped, "later archive video and audio finish encoding while the first video is held");
+    require(overlapped, "all later archive encodes finish and publish activity while source-order commits wait for the first video");
     if (mode == 2) {
       require(report.recoveryRequired, "interrupted mutation retains its durable journal");
       const auto recovered = RecoverStorageArchives(paths);
       require(!recovered.failed && !recovered.recoveryRequired, "recovery recognizes and cleans speculative encoder staging");
     } else require(!report.failed && !report.recoveryRequired && report.cancelled == (mode == 1) &&
-        report.converted == (mode == 1 ? 0 : 3), "parallel archive encoding preserves ordered commit and cancellation");
+        report.converted == (mode == 1 ? 0 : 12), "parallel archive encoding preserves ordered commit and cancellation");
     const auto retained = readArchive(path);
-    require(retained.size() == 3 && retained.at(mode == 1 ? "a.mpg" : "a.mp4") == (mode == 1 ? files[0].second : "tiny") &&
+    require(retained.size() == 12 && retained.at(mode == 1 ? "a.mpg" : "a.mp4") == (mode == 1 ? files[0].second : "tiny") &&
         retained.at(mode == 0 ? "b.mp4" : "b.mpg") == (mode == 0 ? "tiny" : files[1].second) &&
         retained.at(mode == 0 ? "c.ogg" : "c.wav") == (mode == 0 ? "tiny" : files[2].second),
         "only durable replacements survive cancellation or recovery");
+    for (unsigned i = 0; i < 9; ++i)
+      require(retained.at("later-" + std::to_string(i) + (mode == 0 ? ".ogg" : ".wav")) ==
+          (mode == 0 ? "tiny" : std::string(1000, 'd')), "later staged files commit once or retain their original payloads");
     require(fs::is_empty(paths.journalRoot), "all archive workers join before staging cleanup");
   }
 }

@@ -140,7 +140,7 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
       notified = true; lastPhase = state.phase; lastNotification = now; progress(state);
     }
   };
-  auto complete = [&] { report.cancelled |= cancelled; state.reclaimedBytes = report.reclaimedBytes; state.addedBytes = report.addedBytes; state.phase = StoragePhase::Complete; emit(true); return report; };
+  auto complete = [&] { report.cancelled |= cancelled; state.reclaimedBytes = report.reclaimedBytes; state.addedBytes = report.addedBytes; state.encodesActive = 0; state.phase = StoragePhase::Complete; emit(true); return report; };
   bool recoveryActive = false;
   try {
     emit(true);

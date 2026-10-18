@@ -46,6 +46,8 @@ struct StorageProgress {
   std::uint64_t reclaimedBytes = 0;
   std::uint64_t addedBytes = 0;
   std::uint64_t archiveBytesDone = 0, archiveBytesTotal = 0;
+  // Encoder activity is separate from source-order archive completion.
+  std::uint64_t encodesActive = 0, encodesDone = 0;
 };
 using ProgressCallback = std::function<void(const StorageProgress &)>;
 

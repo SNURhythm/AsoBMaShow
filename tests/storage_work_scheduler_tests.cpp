@@ -112,21 +112,25 @@ void completedEncodersRetainScratchUntilConsumed() {
 }
 void independentDirectoriesOverlapWithinBudget() {
   std::mutex mutex; std::condition_variable changed; int entered = 0;
-  std::uint64_t done = 0; std::atomic<int> callbacks = 0;
+  std::uint64_t done = 0, encoded = 0, activeEncoders = 0, peakEncoders = 0; std::atomic<int> callbacks = 0;
   auto result = RunStorageDirectories(input({"/a", "/b"}), {.audioWorkers = 2}, space,
       [&](const auto &, auto &budget, auto check, auto progress) {
         auto lease = budget.Acquire(MediaKind::Audio, 40, check);
         require(lease.has_value(), "scratch and audio slot admitted");
+        progress({.encodesActive = 1});
         std::unique_lock lock(mutex); ++entered; changed.notify_all();
         require(changed.wait_for(lock, 2s, [&] { return entered == 2; }), "independent directories overlap");
-        lock.unlock(); progress({.filesDone = 1});
+        lock.unlock(); progress({.filesDone = 1, .encodesDone = 1});
         StorageReport report; report.converted = 1; report.files.resize(80); return report;
       }, {}, [&](const auto &value) {
         require(++callbacks == 1 && value.filesDone >= done && value.filesDone <= 2,
             "progress is serialized and aggregate completed count is monotonic");
-        done = value.filesDone; --callbacks;
+        done = value.filesDone; encoded = value.encodesDone; activeEncoders = value.encodesActive;
+        peakEncoders = std::max(peakEncoders, activeEncoders); --callbacks;
       });
   require(done == 2, "progress includes both workers");
+  require(encoded == 2 && activeEncoders == 0 && peakEncoders == 2,
+      "encoder activity aggregates across owners without double-counting completed work");
   require(result.converted == 2 && result.files.size() == 100, "aggregate counters survive bounded details");
 }
 void directoryAndVideoLimitsAreRespected() {

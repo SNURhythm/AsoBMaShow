@@ -538,6 +538,9 @@ void StorageManagementScene::RefreshState() {
         " · " + bytes(shownTask_.progress.reclaimedBytes);
     if (progress.addedBytes) status += " · " + i18n::format("storage.ui.added", {{"bytes", bytes(progress.addedBytes)}});
     if (compacting) status += "\n" + bytes(progress.archiveBytesDone) + " / " + bytes(progress.archiveBytesTotal);
+    if (progress.encodesActive || progress.encodesDone)
+      status += "\n" + i18n::format("storage.ui.encoding_activity", {
+          {"active", std::to_string(progress.encodesActive)}, {"done", std::to_string(progress.encodesDone)}});
     status += "\n" + fspath_to_utf8(shownTask_.progress.currentPath.filename());
   } else if (measuring_) status = i18n::tr("storage.ui.scanning");
   else if (!shownTask_.admissionError.empty()) status = std::string(i18n::tr("storage.ui.busy")) + " " + shownTask_.admissionError;
@@ -613,6 +616,7 @@ void StorageManagementScene::update(float) {
   if (task.running != shownTask_.running || task.cancelling != shownTask_.cancelling ||
       task.lastReport != shownTask_.lastReport || task.progress.phase != shownTask_.progress.phase ||
       task.progress.filesDone != shownTask_.progress.filesDone || task.progress.filesTotal != shownTask_.progress.filesTotal ||
+      task.progress.encodesActive != shownTask_.progress.encodesActive || task.progress.encodesDone != shownTask_.progress.encodesDone ||
       task.progress.reclaimedBytes != shownTask_.progress.reclaimedBytes ||
       task.progress.addedBytes != shownTask_.progress.addedBytes ||
       task.progress.archiveBytesDone != shownTask_.progress.archiveBytesDone ||

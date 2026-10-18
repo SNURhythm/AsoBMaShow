@@ -2155,6 +2155,7 @@
 {"storage.ui.download_policy", "Automatic download policy", "다운로드 자동 처리 정책", "ダウンロードの自動処理設定", "下载自动处理策略", "下載自動處理策略"},
 {"storage.ui.empty", "No chart folders in this library", "라이브러리에 채보 폴더가 없습니다", "ライブラリーに譜面フォルダーがありません", "此曲库没有谱面文件夹", "此曲庫沒有譜面資料夾"},
 {"storage.ui.encoding", "Encoding…", "인코딩 중…", "エンコード中…", "正在编码…", "正在編碼…"},
+{"storage.ui.encoding_activity", "Archive encoding: {active} active · {done} finished", "압축 파일 인코딩: {active}개 진행 중 · {done}개 완료", "アーカイブのエンコード: {active}件実行中 · {done}件完了", "压缩包编码：{active} 个进行中 · {done} 个已完成", "壓縮檔編碼：{active} 個進行中 · {done} 個已完成"},
 {"storage.ui.excluded_folders", "Excluded folders: {count} · {reason}", "제외된 폴더: {count}개 · {reason}", "対象外フォルダー: {count} · {reason}", "排除的文件夹：{count} · {reason}", "排除的資料夾：{count} · {reason}"},
 {"storage.ui.failed", "Storage operation failed", "저장 공간 작업 실패", "ストレージ処理に失敗しました", "存储操作失败", "儲存空間操作失敗"},
 {"storage.ui.flac", "Lossless FLAC", "무손실 FLAC", "可逆FLAC", "无损 FLAC", "無損 FLAC"},

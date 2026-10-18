@@ -84,7 +84,11 @@ void merge(StorageReport &target, StorageReport source) {
 StorageReport RunStorageDirectories(const StoragePreflight &inventory, StorageExecutionLimits limits,
     std::function<std::optional<std::uint64_t>()> available, DirectoryWork work, Checkpoint check, ProgressCallback progress, StorageWorkerLauncher launch,
     std::span<const StorageDirectorySummary> additionalOwners) {
-  struct Job { const StorageDirectorySummary *summary; std::vector<std::size_t> children; std::uint64_t done = 0, reclaimed = 0, added = 0; };
+  struct Job {
+    const StorageDirectorySummary *summary;
+    std::vector<std::size_t> children;
+    std::uint64_t done = 0, reclaimed = 0, added = 0, encodesActive = 0, encodesDone = 0;
+  };
   std::vector<Job> jobs;
   std::map<std::filesystem::path, std::size_t> positions;
   for (const auto &[path, summary] : inventory.directories) if (summary.eligibleCount) {
@@ -132,6 +136,10 @@ StorageReport RunStorageDirectories(const StoragePreflight &inventory, StorageEx
           auto &job = jobs[index];
           const auto done = std::max(job.done, value.filesDone);
           state.filesDone += done - job.done;
+          const auto encoded = std::max(job.encodesDone, value.encodesDone);
+          state.encodesDone += encoded - job.encodesDone;
+          state.encodesActive = state.encodesActive - job.encodesActive + value.encodesActive;
+          job.encodesActive = value.encodesActive; job.encodesDone = encoded;
           AccumulateStorageBytes(state.reclaimedBytes, state.addedBytes, job.added, job.reclaimed);
           AccumulateStorageBytes(state.reclaimedBytes, state.addedBytes, value.reclaimedBytes, value.addedBytes);
           job.done = done; job.reclaimed = value.reclaimedBytes; job.added = value.addedBytes;
@@ -147,6 +155,7 @@ StorageReport RunStorageDirectories(const StoragePreflight &inventory, StorageEx
       if (local.recoveryRequired) fatal = true;
       if (local.cancelled) cancelled = true;
       lock.lock(); merge(report, std::move(local)); ++finished;
+      state.encodesActive -= jobs[index].encodesActive; jobs[index].encodesActive = 0;
       // Publishing completion under this lock also publishes the updated owned
       // summary. Descendants may read it only after their parent has settled.
       for (const auto child : jobs[index].children) ready.push_back(child);

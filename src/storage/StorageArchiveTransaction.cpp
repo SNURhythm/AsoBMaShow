@@ -420,6 +420,7 @@ public:
   }
   void Prepare(StorageArchiveEntry &, const AssetCandidate &, const StoragePolicy &, Checkpoint, ProgressCallback);
   void FillEncodings(const StoragePolicy &, Checkpoint);
+  void PollEncodings();
   bool ReserveOutput(PendingEncoding &, std::uint64_t);
   void RemoveEncoding(std::uint64_t);
   void ObserveScratch(std::uint64_t replacementBytes = 0);
@@ -655,6 +656,7 @@ public:
       RemoveEncoding(entry->id);
     }
     encodings.clear();
+    progress.encodesActive = 0;
     Flush(); RemoveStaging();
   }
   void Trailer() {
@@ -829,14 +831,32 @@ void Update::RemoveEncoding(std::uint64_t id) {
   { std::lock_guard lock(encodingMutex); pendingScratch -= pending.reservedBytes; }
   encodings.erase(found);
 }
+void Update::PollEncodings() {
+  progress.encodesActive = 0;
+  for (auto &[id, pending] : encodings) {
+    if (!pending->job) continue;
+    if (!pending->job->Ready()) { ++progress.encodesActive; continue; }
+    try { pending->result = pending->job->Take(); }
+    catch (const std::exception &error) { pending->result = {FileOutcome::Failed, {}, {StorageReason::IoError, error.what()}}; }
+    catch (...) { pending->result = {FileOutcome::Failed, {}, {StorageReason::IoError, "Unhandled archive encoder failure"}}; }
+    pending->job.reset();
+    ++progress.encodesDone;
+  }
+}
 void Update::FillEncodings(const StoragePolicy &policy, Checkpoint check) {
+  PollEncodings();
   const auto window = std::max<std::size_t>(8, deps.executionLimits.audioWorkers + StorageExecutionLimits::videoWorkers);
-  if (!encodingSelection || encodingExhausted || encodings.size() >= window || (check && !check())) return;
+  // Reserved entries are bounded by aggregate scratch (each includes the
+  // staging reserve). Completed outputs must not fill the encoder lookahead
+  // while an earlier video holds source-order commits. Bound unreserved error
+  // results separately, since they consume metadata without consuming scratch.
+  auto unreserved = std::count_if(encodings.begin(), encodings.end(), [](const auto &entry) { return !entry.second->reservation; });
+  if (!encodingSelection || encodingExhausted || unreserved >= window || (check && !check())) return;
   Statement next(db.value, "SELECT id,offset,span,data_offset,packed,bytes,crc,method,flags,directory,name,raw_name,metadata "
       "FROM entries WHERE offset>? AND complete=0 AND action=0 ORDER BY offset LIMIT 1"), collisions(db.value, candidateCollisionSql);
   // Bound metadata lookahead as well as media staging. A long unselected tail
   // must not delay consumption of an already completed encoder.
-  for (unsigned scanned = 0; scanned < 256 && encodings.size() < window && (!check || check()); ++scanned) {
+  for (unsigned scanned = 0; scanned < 256 && unreserved < window && (!check || check()); ++scanned) {
     const auto entry = nextArchiveEntry(next, encodingCursor);
     if (!entry) { encodingExhausted = true; return; }
     StorageDiagnostic reason;
@@ -867,6 +887,7 @@ void Update::FillEncodings(const StoragePolicy &policy, Checkpoint check) {
     auto &item = *pending;
     encodings.emplace(entry->id, std::move(pending));
     if (!item.reservation) {
+      ++unreserved;
       item.result.reason = {StorageReason::InsufficientSpace, "Archive entry exceeds the bounded media staging budget"}; continue;
     }
     item.input = journal / ("input-" + std::to_string(entry->id) + "." + asobmshow::chart_assets::LowerMediaExtension(candidate->source));
@@ -895,6 +916,7 @@ void Update::FillEncodings(const StoragePolicy &policy, Checkpoint check) {
         std::lock_guard lock(encodingMutex); pending->phase = value.phase;
       });
     });
+    ++progress.encodesActive;
     ObserveScratch();
   }
 }
@@ -911,17 +933,12 @@ void Update::Prepare(StorageArchiveEntry &entry, const AssetCandidate &candidate
     }
   }
   auto &pending = *encodings.at(entry.id);
-  if (pending.job) {
-    while (!pending.job->Ready()) {
-      FillEncodings(policy, check);
-      StorageProgress value;
-      { std::lock_guard lock(encodingMutex); value.phase = pending.phase; }
-      if (notify) notify(value);
-      pending.job->Wait();
-    }
-    try { pending.result = pending.job->Take(); }
-    catch (const std::exception &error) { pending.result = {FileOutcome::Failed, {}, {StorageReason::IoError, error.what()}}; }
-    catch (...) { pending.result = {FileOutcome::Failed, {}, {StorageReason::IoError, "Unhandled archive encoder failure"}}; }
+  while (pending.job) {
+    FillEncodings(policy, check);
+    StorageProgress value;
+    { std::lock_guard lock(encodingMutex); value.phase = pending.phase; }
+    if (notify) notify(value);
+    if (pending.job) pending.job->Wait();
   }
   const auto &encoded = pending.result;
   const auto &output = pending.output;

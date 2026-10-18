@@ -99,6 +99,10 @@ are bounded; low free space or a full lookahead window applies backpressure.
 Folder commits remain serialized, and archive replacements are written in their
 original order. Cancel stops admission and waits for active encoders before
 removing temporary files or releasing the library for other work.
+Completed archive encodes retain their temporary-space reservations, but do not
+fill the encoder queue. Later targets continue while scratch space is available.
+The status shows active and finished archive encodes separately from the
+source-order file count, so a slow video does not hide that activity.
 
 Resolution choices are Original, 1920 × 1080, 1280 × 720, 854 × 480 and 640 × 360.
 They bound the displayed long and short edges, preserving aspect ratio and
