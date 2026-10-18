@@ -3,14 +3,14 @@
 #include "../storage/StoragePolicy.h"
 #include <functional>
 #include <vector>
-class Button;
-class TextView;
+class DropdownView;
+class OverlayPortal;
 
 // A value editor. Its owner decides how and when to persist the policy.
 class StoragePolicyView : public View {
 public:
   using Policy = storage_management::StoragePolicy;
-  StoragePolicyView(Policy, std::function<void(Policy)> onChange);
+  StoragePolicyView(Policy, std::function<void(Policy)> onChange, OverlayPortal *portal = nullptr);
   void SetPolicy(Policy);
   void SetEnabled(bool);
   void onLanguageChanged() override;
@@ -18,7 +18,7 @@ private:
   void Refresh();
   Policy policy_;
   bool enabled_ = true;
-  std::vector<Button *> buttons_;
+  int openDropdown_ = -1;
+  std::vector<DropdownView *> dropdowns_;
   std::function<void(Policy)> onChange_;
-  std::vector<TextView *> values_;
 };

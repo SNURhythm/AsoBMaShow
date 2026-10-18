@@ -7,6 +7,9 @@
 #include "../rendering/common.h"
 #include "../view/AppTheme.h"
 #include "../view/Button.h"
+#include "../view/ActionButtonStyle.h"
+#include "../view/DropdownView.h"
+#include "../view/OverlayPortal.h"
 #include "../view/MusicTrackRowView.h"
 #include "../view/RecyclerView.h"
 #include "../view/ScrollView.h"
@@ -21,6 +24,7 @@
 #include <sstream>
 
 using namespace storage_management;
+using app_theme::ActionCategory;
 namespace {
 TextView *text(const std::string &value, int size = 22) {
   auto *view = new TextView(app_theme::font, size);
@@ -30,15 +34,15 @@ TextView *text(const std::string &value, int size = 22) {
   view->setVAlign(TextView::MIDDLE);
   return view;
 }
-Button *button(const char *key, std::function<void()> click, TextView **label = nullptr, int size = 22) {
+Button *button(const char *key, std::function<void()> click, TextView **label = nullptr, int size = 22,
+               ActionCategory category = ActionCategory::Neutral) {
   auto *result = new Button();
   result->setHeight(66)->setMinWidth(130)->setPadding(Edge::Left, 12)->setPadding(Edge::Right, 12)
       ->setCornerRadius(app_theme::controlRadius());
-  result->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
-                                   app_theme::controlPressed);
   auto *content = text(i18n::tr(key), size);
   content->setLocalizedText(i18n::message(key));
   content->setAlign(TextView::CENTER);
+  action_button::applyStyle(result, content, category);
   result->setContentView(content);
   result->setOnClickListener(std::move(click));
   if (label) *label = content;
@@ -148,13 +152,17 @@ void StorageManagementScene::BuildView() {
   root_->setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch)
       ->setPadding(Edge::All, 16)->setGap(10)->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
   addView(root_);
+  overlayPortal_ = new OverlayPortal(0, 0, rendering::window_width, rendering::window_height);
+  overlayPortal_->setPositionType(YGPositionTypeAbsolute);
+  overlayPortal_->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0)->setZIndex(900);
   auto *header = new View();
   header->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(12);
   auto *title = text(i18n::tr("storage.ui.title"), 34);
   title->setLocalizedText(i18n::message("storage.ui.title"));
   title->setFlex(1)->setMinHeight(66);
   header->addView(title);
-  header->addView(button("library.tasks.back.label", [this] { GoBack(); }, &backText_));
+  back_ = button("library.tasks.back.label", [this] { GoBack(); }, &backText_);
+  header->addView(back_);
   root_->addView(header);
   body_ = new View();
   body_->setFlex(1)->setMinHeight(0)->setGap(16)->setAlignItems(YGAlignStretch);
@@ -180,17 +188,21 @@ void StorageManagementScene::BuildView() {
     for (const auto &row : model_.Rows())
       if (!selection_.Contains(row.groupId)) selection_.Toggle(row);
     InvalidatePreflight(); RefreshRows();
-  }));
+  }, nullptr, 22, ActionCategory::Primary));
   actions->addView(button("storage.ui.clear", [this] {
     if (shownTask_.running) return;
     selection_.Clear(); InvalidatePreflight(); RefreshRows();
   }));
-  actions->addView(button("storage.ui.sort_title", [this] {
-    sortBySize_ = !sortBySize_; RefreshRows();
-  }, &sortText_));
+  sort_ = new DropdownView({
+      .onOpenChanged = [this](bool open) { sortOpen_ = open; RefreshState(); },
+      .onOptionSelected = [this](const std::string &id) {
+        sortBySize_ = id == "size"; sortOpen_ = false; RefreshRows();
+      }}, overlayPortal_);
+  sort_->setAlignSelf(YGAlignCenter);
+  actions->addView(sort_);
   actions->addView(button("storage.ui.refresh", [this] {
     if (!shownTask_.running) ReloadGroups(true);
-  }));
+  }, nullptr, 22, ActionCategory::Information));
   browser_->addView(actions);
   selectionText_ = text("");
   browser_->addView(selectionText_);
@@ -221,6 +233,8 @@ void StorageManagementScene::BuildView() {
       const bool allMatching = item.visibleSelectedCount == item.visibleCount;
       row->selectText->setLocalizedText(i18n::message(allMatching
           ? "storage.ui.archive_clear_matching" : "storage.ui.archive_select_matching"));
+      action_button::applyStyle(row->select, row->selectText,
+          allMatching ? ActionCategory::Neutral : ActionCategory::Primary);
       row->select->setOnClickListener([this, archive = item.archivePath] {
         if (shownTask_.running) return;
         ToggleStorageArchiveSelection(archive, model_.Rows(), groupArchives_, selection_);
@@ -250,7 +264,7 @@ void StorageManagementScene::BuildView() {
     context.settings.storagePreferences.manual = policy;
     if (!context.saveSettings()) SDL_Log("Failed to save storage policy");
     InvalidatePreflight(); RefreshState();
-  });
+  }, overlayPortal_);
   controls->addView(policyView_);
   auto *help = text(i18n::tr("storage.ui.logical_bytes"), 20);
   help->setLocalizedText(i18n::message("storage.ui.logical_bytes"));
@@ -263,7 +277,7 @@ void StorageManagementScene::BuildView() {
   cancel_ = button("storage.ui.cancel", [this] {
     if (context.storageTask && shownTask_.running) context.storageTask->RequestCancel();
     else { inventoryTask_.Cancel(); measuring_ = false; pendingMeasurements_.clear(); InvalidatePreflight(); RefreshState(); }
-  });
+  }, nullptr, 22, ActionCategory::Caution);
   controls->addView(cancel_);
   reportText_ = text("", 20);
   controls->addView(reportText_);
@@ -271,12 +285,14 @@ void StorageManagementScene::BuildView() {
   body_->addView(controlsScroll_);
   statusText_ = text("", 20);
   root_->addView(statusText_);
+  root_->addView(overlayPortal_); // Destroy dropdown owners before their portal.
   Layout();
 }
 void StorageManagementScene::Layout() {
   width_ = rendering::window_width; height_ = rendering::window_height;
   const bool compact = width_ < 850;
   root_->setSize(width_, height_);
+  overlayPortal_->setSize(width_, height_);
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   const auto safe = GetIOSSafeAreaInsetsNormalized();
   root_->setPadding(Edge::Top, 16 + safe.top * height_)
@@ -484,13 +500,19 @@ void StorageManagementScene::RefreshState() {
       {"hidden", std::to_string(selection_.HiddenCount(model_.Rows()))}}));
   archiveHint_->setDisplay(groupArchives_.empty() ? YGDisplayNone : YGDisplayFlex);
   archiveHint_->setVisible(!groupArchives_.empty());
-  sortText_->setText(i18n::tr(sortBySize_ ? "storage.ui.sort_size" : "storage.ui.sort_title"));
+  sort_->refresh({.selectedId = sortBySize_ ? "size" : "title",
+      .options = {{"title", i18n::message("storage.ui.sort_title")},
+                  {"size", i18n::message("storage.ui.sort_size")}}, .open = sortOpen_});
   backText_->setText(i18n::tr(shownTask_.running ? "storage.ui.cancel_back" : "library.tasks.back.label"));
+  action_button::applyStyle(back_, backText_,
+      shownTask_.running ? ActionCategory::Caution : ActionCategory::Neutral);
   policyView_->SetEnabled(!shownTask_.running && !returnWhenFinished_);
   apply_->setEnabled(context.storageTask && !shownTask_.running && !(measuring_ && measuringSelection_) &&
       !shownTask_.recoveryRequired && !IsNoOp(policy_) && selection_.Count() > 0 &&
       (!preflight_ || (preflight_->complete && preflight_->eligibleCount != 0)));
   applyText_->setText(i18n::tr(preflight_ ? "storage.ui.confirm_apply" : "storage.ui.review"));
+  action_button::applyStyle(apply_, applyText_, !preflight_ ? ActionCategory::Information
+      : policy_.bga == BgaAction::Delete ? ActionCategory::Destructive : ActionCategory::Confirmation);
   cancel_->setEnabled(shownTask_.running || measuring_);
   if (preflight_) {
     auto summary = i18n::format("storage.ui.preflight", {{"count", std::to_string(preflight_->eligibleCount)},
@@ -622,6 +644,7 @@ void StorageManagementScene::cleanupScene() {
   if (list_) { list_->onBind = {}; list_->onCreateView = {}; list_->onSelectedByPointer = {}; }
   root_ = body_ = browser_ = nullptr;
   controlsScroll_ = nullptr; policyView_ = nullptr; list_ = nullptr; search_ = nullptr;
-  selectionText_ = statusText_ = preflightText_ = archiveHint_ = reportText_ = applyText_ = backText_ = sortText_ = nullptr;
-  apply_ = cancel_ = nullptr;
+  selectionText_ = statusText_ = preflightText_ = archiveHint_ = reportText_ = applyText_ = backText_ = nullptr;
+  apply_ = cancel_ = back_ = nullptr;
+  sort_ = nullptr; overlayPortal_ = nullptr;
 }

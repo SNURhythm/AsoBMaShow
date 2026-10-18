@@ -5597,6 +5597,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/SdlTtfRuntime.cpp
         src/view/ScrollView.cpp
         src/view/SnappedSlider.cpp
+        src/view/StoragePolicyView.cpp
         src/view/TextInputBox.cpp
         src/view/TextView.cpp
         src/view/View.cpp

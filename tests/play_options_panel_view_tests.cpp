@@ -12,6 +12,8 @@
 #endif
 #include "view/PlayOptionsPanelView.h"
 #include "view/ScrollView.h"
+#include "view/StoragePolicyView.h"
+#include "view/OverlayPortal.h"
 #include "view/SnappedSlider.h"
 #include "view/ColorPickerView.h"
 #include "view/ColorPickerPopup.h"
@@ -67,6 +69,63 @@ void click(Button &button) {
   up.button.type = SDL_EVENT_MOUSE_BUTTON_UP;
   button.handleEvents(down);
   button.handleEvents(up);
+}
+
+void testStoragePolicyDirectSelection() {
+  using namespace storage_management;
+  StoragePolicy selected;
+  int changes = 0;
+  OverlayPortal portal;
+  StoragePolicyView editor(selected, [&](StoragePolicy policy) {
+    selected = policy;
+    ++changes;
+  }, &portal);
+  editor.setWidth(440);
+  editor.applyYogaLayout();
+  std::vector<DropdownView *> fields;
+  for (auto *row : editor.getChildren())
+    for (auto *child : row->getChildren())
+      if (auto *dropdown = dynamic_cast<DropdownView *>(child)) fields.push_back(dropdown);
+  require(fields.size() == 5, "storage policy values offer direct dropdown selection");
+  auto choose = [&](int field, const std::string &id) {
+    click(*fields[field]->triggerButton);
+    for (auto &option : fields[field]->optionButtons) {
+      if (option.id == id) { click(*option.button); return; }
+    }
+    require(false, "storage dropdown exposes the requested choice");
+  };
+  require(!fields[2]->current.enabled && !fields[3]->current.enabled &&
+              !fields[4]->current.enabled,
+          "video details stay disabled until compression is selected");
+  choose(0, "2");
+  require(selected.audio == AudioAction::LossyVorbis && changes == 1,
+          "choosing Vorbis skips intermediate policies and saves once");
+  choose(0, "2");
+  require(changes == 1, "reselecting the current policy does not save or invalidate review");
+  choose(1, "1");
+  choose(3, "4");
+  choose(4, "24");
+  require(selected.bga == BgaAction::CompressH264 &&
+              selected.resolution == ResolutionCap::Low && selected.maxFps == 24,
+          "resolution and FPS apply the selected values directly");
+  click(*fields[2]->triggerButton);
+  click(*fields[4]->triggerButton);
+  require(!fields[2]->current.open && fields[4]->current.open &&
+              !portal.isPresented(fields[2]->menuScroll) && portal.isPresented(fields[4]->menuScroll),
+          "only the active storage menu appears in the unclipped overlay portal");
+  editor.SetEnabled(false);
+  require(!fields[4]->current.open && !fields[0]->current.enabled &&
+              !portal.isPresented(fields[4]->menuScroll),
+          "starting a storage task closes menus and disables editing");
+  editor.SetEnabled(true);
+  choose(1, "2");
+  require(selected.bga == BgaAction::Delete && selected.maxFps == 24 &&
+              !fields[4]->current.enabled,
+          "deletion disables video details while retaining their saved values");
+  const int previousChanges = changes;
+  editor.SetPolicy({});
+  require(changes == previousChanges && fields[0]->current.selectedId == "0",
+          "external policy refresh updates selection without saving again");
 }
 
 void testColorPickerColorSpace() {
@@ -685,6 +744,7 @@ int main() {
   testRetainedDropdownChangesDensity();
   testChartFilterRowsContainCompactDropdowns();
   testDropdownSelectionDefersTeardownUntilItsCallbackReturns();
+  testStoragePolicyDirectSelection();
 
   {
     GameplayRuleset selected = GameplayRuleset::LR2;
