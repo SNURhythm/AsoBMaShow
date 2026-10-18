@@ -94,7 +94,8 @@ void verifyWaveMetadata(const std::string &source, const std::filesystem::path &
   }
   require(foreign == expected, "standard riff APPLICATION blocks retain every chunk, order and padding exactly");
 }
-std::string withFlacComments(std::string bytes, const std::vector<std::string> &comments) {
+std::string withFlacComments(std::string bytes, const std::vector<std::string> &comments,
+                             std::string_view trailing = {}) {
   std::string block;
   const auto appendSize = [&](std::uint32_t value) {
     for (int i = 0; i < 4; ++i) block.push_back(static_cast<char>(value >> (8 * i)));
@@ -104,6 +105,7 @@ std::string withFlacComments(std::string bytes, const std::vector<std::string> &
   for (const auto &comment : comments) {
     appendSize(static_cast<std::uint32_t>(comment.size())); block += comment;
   }
+  block += trailing;
   require(bytes.compare(0, 4, "fLaC") == 0, "comment fixture is native FLAC");
   for (std::size_t offset = 4; offset + 4 <= bytes.size();) {
     const auto type = static_cast<unsigned char>(bytes[offset]);
@@ -683,6 +685,19 @@ void audioTests() {
               "duplicate descriptive FLAC fields and encoder aliases may collapse during conversion");
       readAudio(output, 1, 8192);
       std::filesystem::remove(output);
+    }
+    // Even a length-prefixed string outside the declared count is not a comment.
+    const std::string uncountedLoop = std::string("\x0c\0\0\0", 4) + "LOOPSTART=10";
+    for (const auto &trailing : {std::string(8, '\0'), uncountedLoop}) {
+      const auto bytes = withFlacComments(original, {"ARTIST=First artist", "ALBUM=Chart album"}, trailing);
+      temp.write(taggedFlac, bytes);
+      const auto result = EncodeAudio(candidate(taggedFlac), policy, output, {}, {});
+      require(result.outcome == FileOutcome::Failed && result.reason.code == StorageReason::ValidationFailed &&
+                  !std::filesystem::exists(output),
+              "FLAC decoder rejects unused comment bytes before conversion can replace the source");
+      std::ifstream retained(taggedFlac, std::ios::binary);
+      require(std::string((std::istreambuf_iterator<char>(retained)), {}) == bytes,
+              "decoder-rejected comment blocks retain all original metadata and audio bytes");
     }
     temp.write(taggedFlac, withFlacComments(original, {"TITLE=Keysound", "LOOPSTART=10", "LOOPEND=100"}));
     require(EncodeAudio(candidate(taggedFlac), policy, output, {}, {}).reason.code == StorageReason::UnsupportedFormat &&

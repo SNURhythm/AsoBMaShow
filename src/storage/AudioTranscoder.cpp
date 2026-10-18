@@ -168,6 +168,10 @@ StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, Ch
           if (!tag) return metadata;
           pos += size;
         }
+        // Intentionally leave undeclared trailing bytes to decoder acceptance,
+        // rather than adding a stricter metadata-only pos == length rule. The
+        // current FLAC decoder rejects them when opening the source, before
+        // this inspection; declared playback tags and audio remain validated.
       } else {
         if (type != 0 && type != 1 && type != 3) return metadata;
         input.seekg(length, std::ios::cur);
