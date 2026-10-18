@@ -395,6 +395,48 @@ void testInstallationIdentityFailurePreservesOwnership() {
     }
   }
 }
+void testInitialJournalFailureReportsUnsettledStateOnly() {
+  for (int failure = 0; failure < 4; ++failure) {
+    Fixture f;
+    auto dependencies = DefaultFileTransactionDependencies();
+    const auto create = dependencies.createExclusive;
+    const auto remove = dependencies.remove;
+    const auto sync = dependencies.syncDirectory;
+    fs::path installation, journal, blocker;
+    dependencies.createExclusive = [&](const fs::path &path, std::string &error) {
+      auto created = create(path, error);
+      require(created.ready, "create installation before journal failure");
+      installation = path;
+      const auto id = path.stem().string().substr(std::string(".asobmashow-storage-").size());
+      journal = f.paths.journalRoot / (id + ".json");
+      blocker = failure == 3 ? journal : fs::path(journal.string() + ".tmp");
+      fs::create_directory(blocker);
+      std::ofstream(blocker / "foreign") << "retain";
+      return created;
+    };
+    dependencies.remove = [&](const fs::path &path, std::string &error) {
+      if (failure == 1 && path == installation) { error = "injected install removal failure"; return false; }
+      return remove(path, error);
+    };
+    dependencies.syncDirectory = [&](const fs::path &path, std::string &error) {
+      if (failure == 2 && path == f.candidate.source.parent_path()) {
+        error = "injected install cleanup flush failure"; return false;
+      }
+      return sync(path, error);
+    };
+    const auto result = StorageFileTransaction(f.paths, dependencies).Replace(f.candidate, f.encoded);
+    require(result.outcome == FileOutcome::Failed && read(f.candidate.source) == std::string(1024, 's') &&
+                !fs::exists(f.candidate.destination) && read(blocker / "foreign") == "retain",
+            "initial journal failure preserves the source and unrelated journal artifacts");
+    require(result.reason.code == (failure == 0 ? StorageReason::IoError : StorageReason::RecoveryRequired),
+            "unpublished journal failure releases maintenance only after installation cleanup is durable");
+    require(fs::exists(installation) == (failure == 1), "initial journal failure attempts owned installation cleanup");
+    if (failure == 0) {
+      require(!fs::exists(journal) && !StorageFileTransaction(f.paths).Recover().recoveryRequired,
+              "clean unpublished failure leaves no transaction for startup recovery");
+    }
+  }
+}
 void testLosslessReplacementWithoutSavings() {
   for (const auto bytes : {1024u, 1152u}) {
     for (const auto point : {"", "prepared", "published", "retired", "committed"}) {
@@ -749,6 +791,7 @@ int main(int argc, char **argv) {
     testAbandonedCandidatesAfterRestart();
     testSuccessAndCancellation();
     testInstallationIdentityFailurePreservesOwnership();
+    testInitialJournalFailureReportsUnsettledStateOnly();
     testLosslessReplacementWithoutSavings();
     testExistingDestinationReuse();
     testRestartAtEveryBoundary();

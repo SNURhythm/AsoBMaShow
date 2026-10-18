@@ -393,8 +393,13 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
     return fail(StorageReason::UnsafePath, "Unsupported transaction target");
   }
   if (!writeRecord(record, error)) {
-    if (!record.temporary.empty()) removeOwned(record.temporary, record.outputIdentity, {}, dependencies_, false, error);
-    return fail(StorageReason::RecoveryRequired, error);
+    std::string cleanupError;
+    const bool cleaned = record.temporary.empty() ||
+        removeOwned(record.temporary, record.outputIdentity, {}, dependencies_, false, cleanupError);
+    if (!cleaned && !cleanupError.empty()) error += "; " + cleanupError;
+    // Atomic writing can fail before publication or after the journal rename.
+    // Only a durably cleaned installation with no published journal is settled.
+    return fail(cleaned && !entryExists(record.journal) ? StorageReason::IoError : StorageReason::RecoveryRequired, error);
   }
   const auto rollback = [&](StorageReason reason, std::string detail) {
     std::uint64_t ignored = 0, ignoredAdded = 0;
