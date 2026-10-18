@@ -240,7 +240,7 @@ void StorageArchive::ParseZip(Checkpoint check) {
     const auto mode = number(central, 38, 4) >> 16;
     require(!(mode & 0170000) || (mode & 0170000) == 0100000 || (mode & 0170000) == 0040000, "ZIP links or special entries cannot be updated", StorageReason::UnsafePath);
     bool zip64 = false;
-    entry.name = decoded(entry.rawName, entry.flags & 0x800);
+    std::optional<std::string> unicodeName;
     extras(std::string_view(central).substr(46 + nameLength, extraLength), [&](auto tag, auto data) {
       if (tag == 1) {
         require(!zip64, "Duplicate ZIP64 extra field"); zip64 = true; std::size_t pos = 0;
@@ -248,9 +248,15 @@ void StorageArchive::ParseZip(Checkpoint check) {
       }
       if (tag == 0x7075 && data.size() >= 5 && data[0] == 1 && number(data, 1, 4) == crc32(0, reinterpret_cast<const Bytef *>(entry.rawName.data()), entry.rawName.size())) {
         const std::string unicode(data.substr(5));
-        require(asobmashow::text::validUtf8(unicode) && unicode == entry.name, "Ambiguous Unicode ZIP filename");
+        require(asobmashow::text::validUtf8(unicode), "Invalid Unicode ZIP filename");
+        require(!unicodeName || *unicodeName == unicode, "Ambiguous Unicode ZIP filename");
+        unicodeName = unicode;
       }
     });
+    // A checked Unicode path is authoritative for legacy names, including raw
+    // encodings the CP932 fallback cannot decode. EFS names must still agree.
+    entry.name = unicodeName && !(entry.flags & 0x800) ? *unicodeName : decoded(entry.rawName, entry.flags & 0x800);
+    require(!unicodeName || *unicodeName == entry.name, "Ambiguous Unicode ZIP filename");
     require(zip64 || (entry.bytes != 0xffffffff && entry.packed != 0xffffffff && entry.offset != 0xffffffff), "Missing ZIP64 entry values");
     entry.directory = !entry.rawName.empty() && entry.rawName.back() == '/'; safeName(entry.name, entry.directory);
     require(!entry.directory || !entry.bytes, "Nonempty ZIP directory");

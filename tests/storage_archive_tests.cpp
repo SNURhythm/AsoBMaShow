@@ -720,12 +720,21 @@ void sparseZip64AndLegacyNames() {
 }
 void renamedZipRetainsUnicodePath() {
   using storage_management::archive_detail::number;
+  struct NameCase { const char *raw, *unicode, *renamedRaw, *renamedUnicode, *decomposedUnicode; bool centralRequired; };
+  for (const NameCase name : {
+      NameCase{"\x93\xfa\x96\x7b\x8c\xea.wav", "日本語.wav", "\x93\xfa\x96\x7b\x8c\xea.flac", "日本語.flac", "日本語.flac", false},
+      // CP437 names can disagree with CP932 or be invalid in that encoding.
+      NameCase{"\xa4.wav", "ñ.wav", "\xa4.flac", "ñ.flac", "n\xcc\x83.flac", true},
+      NameCase{"\x82.wav", "é.wav", "\x82.flac", "é.flac", "e\xcc\x81.flac", true}})
   for (bool unicodeCentral : {false, true}) for (bool recover : {false, true}) {
+    if (name.centralRequired && !unicodeCentral) continue;
     storage_test::TempDirectory temp; const auto path = temp.root / "unicode.zip";
-    writeSparseZip64(path, 0, "\x93\xfa\x96\x7b\x8c\xea.wav", false, "日本語.wav", unicodeCentral);
+    writeSparseZip64(path, 0, name.raw, false, name.unicode, unicodeCentral);
     InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
         .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = temp.root / "scan"};
     const auto review = BuildStoragePreflight(request);
+    require(review.complete && review.eligibleCount == 1 && review.archives.size() == 1,
+        "browsing index recognizes Unicode-named media before Apply");
     const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
     StorageArchiveDependencies deps{.encode = [](const AssetCandidate &, const StoragePolicy &, const fs::path &output, Checkpoint, ProgressCallback) {
       std::ofstream(output, std::ios::binary) << "converted"; return EncodeResult{FileOutcome::Converted, output};
@@ -740,8 +749,8 @@ void renamedZipRetainsUnicodePath() {
     } else require(!report.failed && report.converted == 1, "convert legacy media with Unicode path metadata");
     StorageArchive archive(path, temp.root / "checked.sqlite", {});
     auto entry = archive.Next();
-    while (entry && entry->name != "日本語.flac") entry = archive.Next(entry->offset);
-    require(entry && !(entry->flags & 0x800) && entry->rawName == "\x93\xfa\x96\x7b\x8c\xea.flac",
+    while (entry && entry->name != name.renamedUnicode) entry = archive.Next(entry->offset);
+    require(entry && !(entry->flags & 0x800) && entry->rawName == name.renamedRaw,
         "rename retains the original legacy filename encoding");
     const auto validate = [&](std::string_view extra) {
       unsigned matches = 0;
@@ -752,7 +761,7 @@ void renamedZipRetainsUnicodePath() {
           ++matches;
           require(number(extra, at + 4, 1) == 1 && number(extra, at + 5, 4) ==
               crc32(0, reinterpret_cast<const Bytef *>(entry->rawName.data()), entry->rawName.size()) &&
-              extra.substr(at + 9, length - 5) == "日本語.flac", "Unicode path and raw-name CRC match the renamed entry");
+              extra.substr(at + 9, length - 5) == name.renamedUnicode, "Unicode path and raw-name CRC match the renamed entry");
         }
         at += 4 + length;
       }
@@ -762,9 +771,39 @@ void renamedZipRetainsUnicodePath() {
     const auto local = archive.io.Read(entry->offset, 30);
     validate(archive.io.Read(entry->offset + 30 + entry->rawName.size(), number(local, 28, 2)));
     const auto files = readArchive(path);
-    require(files.at("日本語.flac") == "converted" && files.at("chart.bms") == "fixture",
+    // libarchive decomposes accented names on macOS. Accept that equivalent
+    // reader spelling; the exact Unicode bytes in both headers were checked above.
+    const auto readerName = files.contains(name.renamedUnicode) ? name.renamedUnicode : name.decomposedUnicode;
+    require(files.contains(readerName) && files.at(readerName) == "converted" && files.at("chart.bms") == "fixture",
         "independent ZIP reader resolves the renamed Unicode path and exact payload");
   }
+}
+void unicodeZipPathsAreValidated() {
+  for (const auto &unicode : {"../escape.wav", "/absolute.wav", "chart.bms", "\xff.wav"}) {
+    storage_test::TempDirectory temp;
+    const auto path = temp.root / "unsafe.zip";
+    writeSparseZip64(path, 0, "safe.wav", false, unicode);
+    bool rejected = false;
+    try { StorageArchive archive(path, temp.root / "manifest.sqlite", {}); }
+    catch (const StorageArchiveError &) { rejected = true; }
+    require(rejected, "authoritative Unicode paths still reject traversal, duplicate names and invalid UTF-8");
+  }
+  // A stale Unicode path must not override the raw filename after a rename.
+  storage_test::TempDirectory temp;
+  const auto path = temp.root / "stale.zip";
+  writeSparseZip64(path, 0, "safe.wav", false, "other.wav");
+  std::ifstream input(path, std::ios::binary);
+  std::string bytes((std::istreambuf_iterator<char>(input)), {}); input.close();
+  unsigned fields = 0;
+  for (std::size_t at = 0; (at = bytes.find("\x75\x70", at)) != std::string::npos; at += 9) {
+    bytes.at(at + 5) ^= 1; ++fields; // Invalidate NameCRC32 in both headers.
+  }
+  require(fields == 2, "fixture contains local and central Unicode fields");
+  temp.write("stale.zip", bytes);
+  StorageArchive archive(path, temp.root / "manifest.sqlite", {});
+  auto entry = archive.Next();
+  while (entry && entry->name != "safe.wav") entry = archive.Next(entry->offset);
+  require(entry && entry->rawName == "safe.wav", "CRC-mismatched Unicode fields use the original filename");
 }
 void realArchiveOptimizerPreservesPlayback() {
   using storage_management::archive_detail::put;
@@ -1046,6 +1085,7 @@ void storageArchiveTests(const char *executable) {
       {"prepared-hash-failure", preparedArchiveHashFailurePrecedesWrites},
       {"growth-batches", growingArchiveMultiBatchRecovery}, {"growth", growingFlacArchiveRecovery}, {"update", archiveUpdatesBatchWithoutFullCopy}, {"recovery", interruptedArchiveWritesRecover},
       {"unicode-rename", renamedZipRetainsUnicodePath},
+      {"unicode-validation", unicodeZipPathsAreValidated},
       {"zip64", sparseZip64AndLegacyNames}, {"invalid-encoding", malformedLegacyNamesAreRejected},
       {"playback", realArchiveOptimizerPreservesPlayback},
       {"boundaries", archivePolicyBoundaries}, {"rejections", unsafeAndStaleArchivesAreRejected},
