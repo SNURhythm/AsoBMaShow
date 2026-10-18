@@ -12,6 +12,7 @@
 #include "../AndroidNatives.h"
 #elif TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../iOSNatives.hpp"
+#include "../repositories/ChartStorageIdentity.h"
 #endif
 
 namespace storage_management {
@@ -46,6 +47,14 @@ std::optional<Access> accessFolders(ApplicationContext &context, std::string &er
   auto root = StoragePrivateRoot(context);
   if (root.empty()) { error = "Private storage is unavailable."; return {}; }
   access.paths = MakeStoragePlatformPaths(root, std::move(roots), TARGET_OS_ANDROID || TARGET_OS_IOS || TARGET_OS_SIMULATOR);
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  // Documents and Library survive app updates even when iOS relocates their
+  // enclosing container. Only the OS-derived Documents root can retarget paths;
+  // recovery still checks current registration authority and recorded identities.
+  access.paths.resolveRecoveryPath = [documents = std::filesystem::path(GetIOSDocumentsPath())](const auto &path) {
+    return chart_storage_identity::RebaseLegacyIOSDocumentsPath(path, documents).value_or(path);
+  };
+#endif
   return access;
 }
 std::vector<std::filesystem::path> selectedRoots(const OptimizationRequest &request) {

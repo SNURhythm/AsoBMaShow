@@ -909,6 +909,9 @@ StorageReport RecoverStorageArchives(const StoragePlatformPaths &paths, Checkpoi
           require(q.step() && (q.integer(0) >= 1 && q.integer(0) <= 3), "Unknown archive recovery version"); source = fs::u8path(q.bytes(1)); ready = q.integer(2); started = q.integer(3);
         }
         if (ready && started) {
+          require(source.is_absolute() && source == source.lexically_normal(), "Invalid archive journal path");
+          if (paths.resolveRecoveryPath) source = paths.resolveRecoveryPath(source);
+          require(source.is_absolute() && source == source.lexically_normal(), "Invalid relocated archive journal path");
           authority(source, paths); StorageArchive archive(source, journal / "manifest.sqlite", paths.pathAccessRoots, {}, true);
           Update update(archive, journal, deps, started, paths.pathAccessRoots); update.ValidateRecovery(); update.Entries(nullptr, {}, {}, {}); update.Finish();
           auto report = update.Result(); result.converted += report.converted; result.deleted += report.deleted; AccumulateStorageBytes(result.reclaimedBytes, result.addedBytes, report.reclaimedBytes, report.addedBytes);

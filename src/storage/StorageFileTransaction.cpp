@@ -69,9 +69,9 @@ void cleanupAbandonedCandidates(const StoragePlatformPaths &paths,
       const auto path = files->path();
       const auto name = path.filename();
       const auto stem = path.stem().string();
-      const auto extension = path.extension();
+      const auto extension = asobmshow::chart_assets::LowerMediaExtension(path);
       const bool workerCandidate = stem.starts_with("candidate-") && uuid::isCanonicalLowerV4(stem.substr(10)) &&
-          (extension == ".flac" || extension == ".ogg" || extension == ".mp4");
+          (extension == "flac" || extension == "ogg" || extension == "mp4");
       if (!workerCandidate && name != "candidate.flac" && name != "candidate.ogg" && name != "candidate.mp4") {
         recognized = false; break;
       }
@@ -193,6 +193,16 @@ std::optional<Record> loadRecord(const fs::path &path, const StoragePlatformPath
     record.destination = pathFromUtf8(value.at("destination"));
     record.temporary = pathFromUtf8(value.at("temporary"));
     record.backup = pathFromUtf8(value.at("backup"));
+    for (auto *target : {&record.source, &record.destination, &record.temporary, &record.backup}) {
+      if (target->empty()) continue;
+      // The trusted platform mapping may normalize a relocated container name,
+      // but must never turn a malformed journal path into an authorized one.
+      if (!target->is_absolute() || *target != target->lexically_normal())
+        throw std::runtime_error("Invalid journal path");
+      if (paths.resolveRecoveryPath) *target = paths.resolveRecoveryPath(*target);
+      if (!target->is_absolute() || *target != target->lexically_normal())
+        throw std::runtime_error("Invalid relocated journal path");
+    }
     record.journal = path;
     record.sourceIdentity = readIdentity(value.at("sourceIdentity"));
     record.outputIdentity = readIdentity(value.at("outputIdentity"));

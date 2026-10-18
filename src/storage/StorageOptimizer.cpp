@@ -364,7 +364,7 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
           FileResult result{.source = asset.source, .destination = asset.destination, .bytesBefore = asset.identity.bytes};
           bool transactionStarted = false;
           bool transactionFinished = false;
-          const auto output = jobPath / ("candidate-" + workerId + asset.destination.extension().string());
+          const auto output = jobPath / ("candidate-" + workerId + "." + asobmshow::chart_assets::LowerMediaExtension(asset.destination));
           std::optional<StorageWorkBudget::Lease> reservation;
           try {
             if (staleScope || !evidence.Candidate(asset, checkpoint, error)) {

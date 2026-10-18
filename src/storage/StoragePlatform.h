@@ -15,6 +15,9 @@ struct StoragePlatformPaths {
   // Existing ancestor captured before journal creation; copied to every worker
   // so retries/concurrent first use cannot mistake an unsynced new directory for it.
   std::filesystem::path journalSyncRoot;
+  // Optional application-owned relocation mapping. Recovery still validates
+  // canonical paths, current authority, and recorded file identities afterward.
+  std::function<std::filesystem::path(const std::filesystem::path &)> resolveRecoveryPath;
 };
 // On sandboxed platforms, roots must come from the OS private directory and
 // authorized library/bookmark registrations, never from recovery records.

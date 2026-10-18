@@ -837,6 +837,55 @@ void interruptedArchiveWritesRecover() {
     require(RecoverStorageArchives(paths).changedRoots.empty(), "archive recovery is idempotent");
   }
 }
+void archiveRecoveryAfterContainerRelocation() {
+  for (const std::string_view scenario : {"relocated", "foreign", "traversal"}) {
+    storage_test::TempDirectory temp;
+    const auto oldRoot = temp.root / "old-container", newRoot = temp.root / "new-container";
+    fs::create_directories(oldRoot / "Documents");
+    const auto archive = oldRoot / "Documents/library.zip";
+    writeArchive(archive, {{"movie.avi", std::string(1000, 'v')}, {"chart.bms", "unchanged chart"}});
+    auto paths = MakeStoragePlatformPaths(oldRoot / "Library", {oldRoot / "Documents"}, true);
+    InventoryRequest request{.groups = {{"archive", archive, false, false, StorageSourceKind::Archive}},
+        .policy = {.bga = BgaAction::Delete}, .pathAccessRoots = {oldRoot / "Documents"},
+        .scanScratchRoot = paths.scanRoot};
+    const auto review = BuildStoragePreflight(request);
+    require(review.archives.size() == 1, "review relocation archive fixture");
+    StorageArchiveDependencies dependencies{.faultPoint = [](std::string_view point) {
+      if (point == "archive-redo") throw std::runtime_error("interrupt before archive write");
+    }};
+    require(UpdateStorageArchive(review.archives.front(), request.policy, paths, dependencies).recoveryRequired,
+        "relocation fixture retains a durable archive redo record");
+    if (scenario == "traversal") {
+      const auto journal = fs::directory_iterator(paths.journalRoot)->path();
+      archive_detail::Database db(journal / "manifest.sqlite", false);
+      archive_detail::Statement update(db.value, "UPDATE control SET path=? WHERE id=1");
+      update.text(1, (oldRoot / "Documents/../Documents/library.zip").string()); update.step();
+    }
+    fs::rename(oldRoot, newRoot);
+    const auto relocated = newRoot / "Documents/library.zip";
+    paths = MakeStoragePlatformPaths(newRoot / "Library", {newRoot / "Documents"}, true);
+    paths.resolveRecoveryPath = [=](const fs::path &path) {
+      return IsWithinFolder(path, oldRoot / "Documents") ?
+          (newRoot / path.lexically_relative(oldRoot)).lexically_normal() : path;
+    };
+    if (scenario == "foreign") {
+      fs::rename(relocated, newRoot / "Documents/original.zip");
+      writeArchive(relocated, {{"foreign.bms", "foreign chart"}});
+    }
+    std::string error; const auto before = HashStorageFile(relocated, {}, error);
+    const auto recovered = RecoverStorageArchives(paths);
+    if (scenario != "relocated") {
+      require(recovered.recoveryRequired && HashStorageFile(relocated, {}, error) == before &&
+          !fs::is_empty(paths.journalRoot), "relocated archive recovery rejects foreign inodes and parent traversal");
+    } else {
+      require(!recovered.recoveryRequired && fs::is_empty(paths.journalRoot),
+          "archive recovery resolves source paths after the containing directory moves");
+      const auto files = readArchive(relocated);
+      require(files.size() == 1 && files.at("chart.bms") == "unchanged chart",
+          "relocated archive recovery finishes deletion without changing retained chart bytes");
+    }
+  }
+}
 void writeSparseZip64(const fs::path &path, std::uint64_t offset = 128ULL * 1024 * 1024 * 1024 + 4096,
     const std::string &audioName = "\x93\xfa\x96\x7b\x8c\xea.wav", bool prefix = false,
     const std::string &unicodeName = {}, bool unicodeCentral = true, bool zip64 = true,
@@ -1497,6 +1546,7 @@ void storageArchiveTests(const char *executable) {
   (void)executable;
 #endif
   for (const auto &[name, run] : std::vector<std::pair<const char *, void(*)()>>{
+      {"container-relocation", archiveRecoveryAfterContainerRelocation},
       {"measurement-deltas", archiveChangesUpdateCachedInnerMeasurements},
       {"sparse-prefix-recovery", sparsePrefixRecovery}, {"large-batch-recovery", archiveLargeRecordRecovery}, {"delete-batches", archiveConsecutiveDeletesAreBatched},
       {"manifest", manifestsExtractEntries}, {"preflight", selectedArchiveFoldersAreEligible},

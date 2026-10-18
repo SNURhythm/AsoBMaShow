@@ -94,6 +94,61 @@ void testConcurrentCommitAndCancellation() {
   require(!recovered.recoveryRequired && !recovered.failed && fs::is_empty(paths.journalRoot),
           "both workers settle shared journal storage before recovery");
 }
+void testRecoveryAfterContainerRelocation() {
+  for (const std::string_view point : {"copying", "retired", "committed", "foreign", "traversal"}) {
+    storage_test::TempDirectory temp;
+    const auto oldRoot = temp.root / "old-container", newRoot = temp.root / "new-container";
+    temp.write("old-container/Documents/library/asset.mpg", std::string(1024, 's'));
+    temp.write("old-container/Library/encoded.mp4", std::string(128, 'v'));
+    auto paths = MakeStoragePlatformPaths(oldRoot / "Library", {oldRoot / "Documents"}, true);
+    std::string error;
+    AssetCandidate candidate{.source = oldRoot / "Documents/library/asset.mpg",
+        .destination = oldRoot / "Documents/library/asset.mp4", .operation = AssetOperation::CompressH264};
+    candidate.identity = *ReadFileIdentity(candidate.source, error);
+    FileTransactionDependencies dependencies;
+    dependencies.faultPoint = [&](std::string_view reached) {
+      if (reached == (point == "foreign" || point == "traversal" ? "retired" : point)) throw Crash{};
+    };
+    try {
+      StorageFileTransaction(paths, dependencies).Replace(candidate,
+          {.outcome = FileOutcome::Converted, .outputPath = oldRoot / "Library/encoded.mp4"});
+      require(false, "relocation fixture reaches an interrupted transaction");
+    } catch (const Crash &) {}
+    if (point == "traversal") {
+      const auto journal = fs::directory_iterator(paths.journalRoot)->path();
+      auto record = nlohmann::json::parse(read(journal));
+      record["source"] = (oldRoot / "Documents/library/../library/asset.mpg").string();
+      std::ofstream(journal) << record;
+    }
+    fs::rename(oldRoot, newRoot);
+    paths = MakeStoragePlatformPaths(newRoot / "Library", {newRoot / "Documents"}, true);
+    paths.resolveRecoveryPath = [=](const fs::path &path) {
+      return IsWithinFolder(path, oldRoot / "Documents") ?
+          (newRoot / path.lexically_relative(oldRoot)).lexically_normal() : path;
+    };
+    const auto source = newRoot / "Documents/library/asset.mpg";
+    const auto destination = newRoot / "Documents/library/asset.mp4";
+    if (point == "foreign") temp.write("new-container/Documents/library/asset.mpg", "foreign source");
+    const auto recovered = StorageFileTransaction(paths).Recover();
+    if (point == "foreign") {
+      require(recovered.recoveryRequired && read(source) == "foreign source" && !fs::is_empty(paths.journalRoot),
+          "relocation never overwrites a foreign file at the restored source path");
+      continue;
+    }
+    if (point == "traversal") {
+      require(recovered.recoveryRequired && !fs::exists(source) && read(destination) == std::string(128, 'v') &&
+          !fs::is_empty(paths.journalRoot), "relocation cannot authorize a journal containing parent traversal");
+      continue;
+    }
+    require(!recovered.recoveryRequired && fs::is_empty(paths.journalRoot),
+        "recovery resolves journals after the containing directory moves");
+    require(point == "committed" ? !fs::exists(source) && read(destination) == std::string(128, 'v') :
+        read(source) == std::string(1024, 's') && !fs::exists(destination),
+        "relocated recovery preserves the durable commit or restores the source");
+    require(std::distance(fs::directory_iterator(source.parent_path()), fs::directory_iterator{}) == 1,
+        "relocated recovery removes owned backups and installation files");
+  }
+}
 void testJournalHierarchyIsDurableBeforeMutation() {
   for (bool recoverFirst : {false, true}) {
     Fixture fixture;
@@ -248,7 +303,8 @@ void testAbandonedCandidatesAfterRestart() {
   constexpr auto job = "12345678-1234-4234-8234-123456789abc";
   for (const bool journal : {false, true}) {
     Fixture f;
-    const auto candidate = f.paths.temporaryRoot / job / "candidate.mp4";
+    const auto candidate = f.paths.temporaryRoot / job /
+        (journal ? "candidate.mp4" : "candidate-12345678-1234-4234-8234-123456789abd.MP4");
     f.temp.write(fs::relative(candidate, f.temp.root), "abandoned encoded data");
     f.temp.write(fs::relative(f.paths.temporaryRoot / "unknown/data", f.temp.root), "foreign data");
     if (journal) {
@@ -784,6 +840,7 @@ int main(int argc, char **argv) {
     testSandboxedRecovery(argv[0]);
 #endif
     testConcurrentCommitAndCancellation();
+    testRecoveryAfterContainerRelocation();
     testJournalHierarchyIsDurableBeforeMutation();
     testTwoWorkerJournalsAfterRestart();
     testReplacementPermissions();
