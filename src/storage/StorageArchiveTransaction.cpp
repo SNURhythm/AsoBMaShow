@@ -6,6 +6,8 @@
 #include "../Uuid.h"
 #include <algorithm>
 #include <cstdio>
+#include <chrono>
+#include <map>
 #include <set>
 #include <zlib.h>
 
@@ -15,7 +17,20 @@ using namespace archive_detail;
 namespace {
 constexpr std::uint64_t chunkSize = 512 * 1024, stagingReserve = 8 * 1024 * 1024;
 constexpr std::uint64_t batchBytes = 8 * 1024 * 1024;
-constexpr std::size_t batchRecords = 128;
+constexpr std::size_t batchRecords = 1024;
+class Timer {
+  using Clock = std::chrono::steady_clock;
+  std::uint64_t *elapsed;
+  Clock::time_point start;
+public:
+  explicit Timer(std::uint64_t *elapsed) : elapsed(elapsed), start(elapsed ? Clock::now() : Clock::time_point{}) {}
+  ~Timer() { Stop(); }
+  void Stop() {
+    if (!elapsed) return;
+    *elapsed += std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - start).count();
+    elapsed = nullptr;
+  }
+};
 std::string pathText(const fs::path &path) { const auto text = path.generic_u8string(); return {text.begin(), text.end()}; }
 void syncDirectory(const fs::path &path) {
   std::string error; if (!atomic_file::syncDirectory(path, error)) throw StorageArchiveError(StorageReason::IoError, error);
@@ -107,18 +122,25 @@ public:
   bool pendingDeletes = false;
   std::optional<std::uint64_t> copyCursor;
   ProgressCallback copyProgress;
+  mutable std::map<std::string, std::unique_ptr<Statement>> statements;
   Update(StorageArchive &archive, fs::path journal, const StorageArchiveDependencies &deps, bool &started,
       const std::vector<fs::path> &accessRoots)
       : archive(archive), db(*archive.db), journal(std::move(journal)), deps(deps), accessRoots(accessRoots), started(started) {
     progress.archiveBytesTotal = archive.identity.bytes;
   }
+  Statement &Query(const std::string &sql) const {
+    auto &query = statements[sql];
+    if (!query) query = std::make_unique<Statement>(db.value, sql.c_str());
+    query->reset(); return *query;
+  }
   std::uint64_t Value(const char *column) const {
     const auto sql = std::string("SELECT ") + column + " FROM control WHERE id=1";
-    Statement q(db.value, sql.c_str()); require(q.step(), "Missing archive recovery state"); return q.integer(0);
+    auto &q = Query(sql); require(q.step(), "Missing archive recovery state");
+    const auto value = q.integer(0); q.reset(); return value;
   }
   void Set(const char *column, std::uint64_t value) {
     const auto sql = std::string("UPDATE control SET ") + column + "=? WHERE id=1";
-    Statement q(db.value, sql.c_str()); q.bind(1, value); q.step();
+    auto &q = Query(sql); q.bind(1, value); q.step(); q.reset();
   }
   void CaptureSourceStamp() {
     archive.io.CheckPath();
@@ -127,9 +149,13 @@ public:
     if (Value("version") >= 3) Set("source_size", archive.io.Identity().bytes);
   }
   void Fault(std::string_view name) { if (deps.faultPoint) deps.faultPoint(name); }
+  std::string Hash(std::string_view bytes) const {
+    Timer timer(deps.metrics ? &deps.metrics->hashNanoseconds : nullptr);
+    return file_checksum::sha256(bytes);
+  }
   void InsertChunk(std::uint64_t entry, std::uint64_t part, std::uint64_t source, std::string_view bytes, std::uint64_t kind, std::uint64_t destination = 0) {
     Statement q(db.value, "INSERT INTO chunks(entry_id,part,source,length,hash,kind,destination,done,data) VALUES(?,?,?,?,?,?,?,0,?)");
-    q.bind(1, entry); q.bind(2, part); q.bind(3, source); q.bind(4, bytes.size()); q.text(5, file_checksum::sha256(bytes));
+    q.bind(1, entry); q.bind(2, part); q.bind(3, source); q.bind(4, bytes.size()); q.text(5, Hash(bytes));
     q.bind(6, kind); q.bind(7, destination); q.bind(8, kind == 2 ? bytes : std::string_view{}); q.step();
   }
   void Initialize(Checkpoint check) {
@@ -175,16 +201,18 @@ public:
     Chunk chunk{q.integer(0), q.integer(1), q.integer(2), q.integer(3), q.integer(4), q.bytes(5), q.bytes(6)};
     require(chunk.length && chunk.length <= chunkSize && chunk.kind <= 2 && chunk.hash.size() == 64, "Invalid archive recovery chunk"); return chunk;
   }
-  std::string ReadChunk(const Chunk &chunk) {
+  std::string ReadChunk(const Chunk &chunk, std::optional<std::uint64_t> capacity = {}) {
+    Timer timer(deps.metrics ? &deps.metrics->readNanoseconds : nullptr);
     std::string bytes;
     if (chunk.kind == 0) {
-      require(plus(chunk.source, chunk.length) <= Capacity(), "Invalid original archive extent"); bytes = archive.io.Read(chunk.source, chunk.length);
+      require(plus(chunk.source, chunk.length) <= (capacity ? *capacity : Capacity()), "Invalid original archive extent"); bytes = archive.io.Read(chunk.source, chunk.length);
     } else if (chunk.kind == 1) {
       StorageArchiveIO stage(journal / "replacement.bin", accessRoots, false);
       require(plus(chunk.source, chunk.length) <= stage.Identity().bytes, "Truncated archive replacement"); bytes = stage.Read(chunk.source, chunk.length);
     } else bytes = chunk.data;
+    timer.Stop();
     require(bytes.size() == chunk.length && ((chunk.id == 0 && chunk.kind == 0 && chunk.hash.empty()) ||
-        file_checksum::sha256(bytes) == chunk.hash), "Archive or prepared media changed", StorageReason::StaleInput); return bytes;
+        Hash(bytes) == chunk.hash), "Archive or prepared media changed", StorageReason::StaleInput); return bytes;
   }
   void Done(std::uint64_t id) {
     SqlTransaction transaction(db); Statement q(db.value, "UPDATE chunks SET done=1 WHERE id=?"); q.bind(1, id); q.step();
@@ -207,7 +235,7 @@ public:
       pending = redo.integer(0); target = redo.integer(1); before = redo.bytes(2); after = redo.bytes(3);
       require(started && !after.empty() && after.size() <= chunkSize && before.size() == after.size() && plus(target, after.size()) <= identity.bytes, "Invalid archive redo record");
       Statement q(db.value, "SELECT destination,length,hash,done FROM chunks WHERE id=?"); q.bind(1, pending);
-      require(q.step() && q.integer(0) == target && q.integer(1) == after.size() && !q.integer(3) && q.bytes(2) == file_checksum::sha256(after), "Archive redo evidence is inconsistent");
+      require(q.step() && q.integer(0) == target && q.integer(1) == after.size() && !q.integer(3) && q.bytes(2) == Hash(after), "Archive redo evidence is inconsistent");
       const auto current = archive.io.Read(target, after.size());
       for (std::size_t i = 0; i < current.size(); ++i) require(current[i] == before[i] || current[i] == after[i], "Archive changed outside the interrupted write", StorageReason::StaleInput);
     }
@@ -219,7 +247,7 @@ public:
       require(chunk.length && chunk.length <= chunkSize && chunk.kind <= 2, "Invalid archive recovery chunk");
       if (chunk.id == pending) continue;
       if (chunks.integer(7)) require(plus(chunk.destination, chunk.length) <= identity.bytes &&
-          file_checksum::sha256(archive.io.Read(chunk.destination, chunk.length)) == chunk.hash, "Previously written archive data changed", StorageReason::StaleInput);
+          Hash(archive.io.Read(chunk.destination, chunk.length)) == chunk.hash, "Previously written archive data changed", StorageReason::StaleInput);
       else ReadChunk(chunk);
     }
     if (pending) { archive.io.Write(target, after); archive.io.Sync(); Done(pending); }
@@ -262,7 +290,7 @@ public:
       require(scratch->Identity().bytes <= 2 * batchBytes && plus(offset, 2 * length) <= scratch->Identity().bytes,
           "Invalid archive redo scratch extent");
       const auto before = scratch->Read(offset, length), after = scratch->Read(offset + length, length);
-      require(redo.bytes(2) == file_checksum::sha256(before) && chunk.bytes(2) == file_checksum::sha256(after),
+      require(redo.bytes(2) == Hash(before) && chunk.bytes(2) == Hash(after),
           "Archive redo scratch changed", StorageReason::StaleInput);
       const auto current = archive.io.Read(target, after.size());
       for (std::size_t i = 0; i < current.size(); ++i)
@@ -315,12 +343,13 @@ public:
   void Flush() {
     if (pendingRecords.empty() && pendingChunks.empty()) return;
     archive.io.CheckPath();
+    const auto capacity = Capacity();
     std::vector<std::string> payloads;
     payloads.reserve(pendingChunks.size());
     // Read the complete bounded batch before any overlapping destination write.
     for (auto &chunk : pendingChunks) {
-      payloads.push_back(ReadChunk(chunk));
-      if (chunk.hash.empty()) chunk.hash = file_checksum::sha256(payloads.back());
+      payloads.push_back(ReadChunk(chunk, capacity));
+      if (chunk.hash.empty()) chunk.hash = Hash(payloads.back());
     }
     bool writes = false;
     std::uint64_t writeEnd = 0;
@@ -333,19 +362,25 @@ public:
     std::uint64_t redoOffset = 0;
     for (std::size_t i = 0; i < pendingChunks.size(); ++i) {
       const auto &chunk = pendingChunks[i];
-      require(plus(chunk.destination, chunk.length) <= Capacity() &&
+      require(plus(chunk.destination, chunk.length) <= capacity &&
           (chunk.kind != 0 || chunk.destination <= chunk.source), "Archive compaction would overwrite unread data");
       if (chunk.kind == 0 && chunk.destination == chunk.source) continue;
       require(started || pendingDeletes, "Archive write was not authorized by durable state");
       if (!redoFile) { fs::remove(redoPath); redoFile = std::make_unique<Output>(redoPath); }
-      const auto before = archive.io.Read(chunk.destination, chunk.length);
-      redoRanges[i] = {redoOffset, file_checksum::sha256(before)};
+      Timer readTimer(deps.metrics ? &deps.metrics->readNanoseconds : nullptr);
+      const auto before = archive.io.Read(chunk.destination, chunk.length); readTimer.Stop();
+      redoRanges[i] = {redoOffset, Hash(before)};
+      Timer redoTimer(deps.metrics ? &deps.metrics->redoNanoseconds : nullptr);
       redoFile->Write(before); redoFile->Write(payloads[i]); redoOffset += 2 * chunk.length; writes = true;
     }
-    if (redoFile) { redoFile->Close(); syncFile(redoPath); syncDirectory(journal); }
+    if (redoFile) {
+      Timer timer(deps.metrics ? &deps.metrics->redoNanoseconds : nullptr);
+      redoFile->Close(); syncFile(redoPath); syncDirectory(journal);
+    }
     // Keep bulk redo bytes out of SQLite's rollback journal. Only bounded range
     // descriptors are committed here, after the sequential scratch file is durable.
     {
+      Timer journalTimer(deps.metrics ? &deps.metrics->journalNanoseconds : nullptr);
       SqlTransaction transaction(db);
       Statement record(db.value, "UPDATE entries SET output_offset=?,action=CASE WHEN ? THEN 2 ELSE action END WHERE id=?");
       for (const auto &row : pendingRecords) {
@@ -372,27 +407,51 @@ public:
     }
     if (pendingDeletes) Fault("archive-entry-ready");
     if (writes) Fault("archive-redo");
-    for (std::size_t i = 0; i < pendingChunks.size(); ++i) {
+    // Adjacent records already have durable per-chunk redo evidence. Submit
+    // their bytes together so small entries share path checks and write calls.
+    // The joined buffer is bounded by the same 8 MiB batch limit.
+    for (std::size_t i = 0; i < pendingChunks.size();) {
       const auto &chunk = pendingChunks[i];
-      if (chunk.kind == 0 && chunk.destination == chunk.source) continue;
-      archive.io.Write(chunk.destination, payloads[i]); Fault("archive-write");
-      if (deps.metrics) deps.metrics->bytesWritten += chunk.length;
+      if (chunk.kind == 0 && chunk.destination == chunk.source) { ++i; continue; }
+      auto end = i + 1;
+      auto length = chunk.length;
+      while (end < pendingChunks.size()) {
+        const auto &next = pendingChunks[end];
+        if (next.destination != chunk.destination + length || (next.kind == 0 && next.destination == next.source)) break;
+        length += next.length; ++end;
+      }
+      std::string joined;
+      std::string_view bytes = payloads[i];
+      if (end > i + 1) {
+        joined.reserve(length);
+        for (auto part = i; part < end; ++part) joined += payloads[part];
+        bytes = joined;
+      }
+      Timer writeTimer(deps.metrics ? &deps.metrics->writeNanoseconds : nullptr);
+      archive.io.Write(chunk.destination, bytes); writeTimer.Stop(); Fault("archive-write");
+      if (deps.metrics) { deps.metrics->bytesWritten += length; ++deps.metrics->sourceWriteRanges; }
+      i = end;
     }
     if (writes) {
-      archive.io.Sync();
+      Timer syncTimer(deps.metrics ? &deps.metrics->syncNanoseconds : nullptr);
+      archive.io.Sync(); syncTimer.Stop();
+      Timer journalTimer(deps.metrics ? &deps.metrics->journalNanoseconds : nullptr);
       SqlTransaction transaction(db); CaptureSourceStamp(); transaction.Commit();
       Fault("archive-source-synced");
     }
     {
+      Timer journalTimer(deps.metrics ? &deps.metrics->journalNanoseconds : nullptr);
       SqlTransaction transaction(db);
       Statement done(db.value, "UPDATE chunks SET done=1 WHERE id=?");
       for (const auto &chunk : pendingChunks) { done.reset(); done.bind(1, chunk.id); done.step(); }
       Statement complete(db.value, "UPDATE entries SET complete=? WHERE id=?");
       Statement retire(db.value, "DELETE FROM chunks WHERE entry_id=?");
+      std::optional<std::uint64_t> completedCursor;
       for (const auto &row : pendingRecords) if (row.complete) {
         complete.reset(); complete.bind(1, row.complete); complete.bind(2, row.id); complete.step();
-        retire.reset(); retire.bind(1, row.id); retire.step(); Set("cursor", row.cursor);
+        retire.reset(); retire.bind(1, row.id); retire.step(); completedCursor = row.cursor;
       }
+      if (completedCursor) Set("cursor", *completedCursor);
       db.exec("DELETE FROM redo"); CaptureSourceStamp(); transaction.Commit();
     }
     if (deps.metrics) ++deps.metrics->durableBatches;
@@ -402,8 +461,9 @@ public:
     if (copyProgress) copyProgress(progress);
   }
   void CopyRecord(const StorageArchiveEntry &entry, bool deleted = false, bool relocated = false) {
-    Statement state(db.value, "SELECT action,original_span FROM entries WHERE id=?"); state.bind(1, entry.id); require(state.step(), "Missing archive entry state");
-    const auto action = deleted ? 2 : relocated ? 0 : state.integer(0), destination = (started || pendingDeletes || deleted) ? copyCursor.value_or(Value("cursor")) : entry.offset;
+    auto &state = Query("SELECT action,original_span FROM entries WHERE id=?"); state.bind(1, entry.id); require(state.step(), "Missing archive entry state");
+    const auto action = deleted ? 2 : relocated ? 0 : state.integer(0), originalSpan = state.integer(1); state.reset();
+    const auto destination = (started || pendingDeletes || deleted) ? (copyCursor ? *copyCursor : Value("cursor")) : entry.offset;
     require(destination <= entry.offset, "Archive destination is beyond unread source");
     const auto record = [&] {
       if (!pendingRecords.empty() && pendingRecords.back().id == entry.id) return;
@@ -412,14 +472,14 @@ public:
       pendingDeletes |= deleted;
     };
     if (action != 2 && action != 3 && (action != 0 || destination != entry.offset)) {
-      Statement existing(db.value, "SELECT id,source,length,kind,destination,hash,data,done FROM chunks WHERE entry_id=? AND part=?");
+      auto &existing = Query("SELECT id,source,length,kind,destination,hash,data,done FROM chunks WHERE entry_id=? AND part=?");
       for (std::uint64_t part = 0, position = 0; position < entry.span; ++part) {
         const auto length = std::min(chunkSize, entry.span - position);
         Chunk chunk{.source = plus(entry.offset, position), .length = length, .destination = plus(destination, position),
             .entry = entry.id, .part = part};
         existing.reset(); existing.bind(1, entry.id); existing.bind(2, part);
         if (existing.step()) {
-          if (existing.integer(7)) { position += length; continue; }
+          if (existing.integer(7)) { existing.reset(); position += length; continue; }
           chunk = {existing.integer(0), existing.integer(1), existing.integer(2), existing.integer(3),
               destination + position, existing.bytes(5), existing.bytes(6), entry.id, part};
           require(chunk.length == length, "Archive chunk extent changed");
@@ -432,15 +492,16 @@ public:
     }
     record(); copyCursor = (action == 2 || action == 3) ? destination : plus(destination, entry.span);
     pendingRecords.back().cursor = *copyCursor; pendingRecords.back().complete = relocated ? 2 : 1;
-    pendingSourceEnd = relocated ? Value("original_size") : plus(entry.offset, state.integer(1));
+    pendingSourceEnd = relocated ? Value("original_size") : plus(entry.offset, originalSpan);
   }
   // Growing records cannot overwrite the next unread record. Append each once,
   // reclaim its original slot in the forward pass, then compact the appended
   // records in their source order. Scratch remains bounded to one media entry.
   void AppendReplacement(const StorageArchiveEntry &entry) {
-    Statement state(db.value, "SELECT action FROM entries WHERE id=?");
+    auto &state = Query("SELECT action FROM entries WHERE id=?");
     state.bind(1, entry.id); require(state.step(), "Missing archive append state");
-    if (state.integer(0) != 3) return;
+    const auto action = state.integer(0); state.reset();
+    if (action != 3) return;
     Flush();
     std::uint64_t previous = 0;
     while (auto chunk = NextChunk(entry.id, previous)) { previous = chunk->id; WriteChunk(*chunk); }
@@ -662,6 +723,7 @@ void failure(StorageReport &report, const fs::path &path, const std::exception &
 }
 StorageReport UpdateStorageArchive(const StorageArchiveSummary &summary, const StoragePolicy &policy,
     const StoragePlatformPaths &paths, const StorageArchiveDependencies &deps, Checkpoint check, ProgressCallback progress) {
+  Timer total(deps.metrics ? &deps.metrics->totalNanoseconds : nullptr);
   StorageReport report; fs::path journal; bool started = false;
   try {
     authority(summary.path, paths); active(check); std::string error; const auto current = ReadFileIdentity(summary.path, error, paths.pathAccessRoots);
@@ -669,6 +731,7 @@ StorageReport UpdateStorageArchive(const StorageArchiveSummary &summary, const S
     if (progress) progress({.phase = StoragePhase::ArchivePrepare, .currentPath = summary.path, .filesTotal = summary.eligibleCount});
     active(check); journal = createJournal(paths);
     {
+      Timer preparing(deps.metrics ? &deps.metrics->preparationNanoseconds : nullptr);
       StorageArchive archive(summary.path, journal / "manifest.sqlite", paths.pathAccessRoots, check);
       require(archive.identity == summary.identity, "Archive changed while starting update", StorageReason::StaleInput);
       {
@@ -680,6 +743,7 @@ StorageReport UpdateStorageArchive(const StorageArchiveSummary &summary, const S
       const auto ready = journal.parent_path() / ("archive-" + journal.filename().string().substr(18));
       fs::rename(journal, ready); journal = ready; syncDirectory(journal.parent_path());
       archive.db = std::make_unique<Database>(journal / "manifest.sqlite", false);
+      preparing.Stop();
       Update update(archive, journal, deps, started, paths.pathAccessRoots); update.progress.filesTotal = summary.eligibleCount;
       update.Entries(&summary, policy, check, progress); update.Finish(); report = update.Result();
       if (deps.metrics) deps.metrics->sourceBytesRead += archive.io.BytesRead();

@@ -135,7 +135,7 @@ Reported savings are the reduction in
 the archive's file length, which can differ from filesystem allocation.
 
 There is no second complete archive or extracted tree. A disk-backed index and
-an 8 MiB copy batch with at most 128 chunks/records and a private redo file of
+an 8 MiB copy batch with at most 1,024 chunks/records and a private redo file of
 at most 16 MiB accompany one extracted input, encoded output and prepared
 replacement at a time. The media staging budget is 1 GiB, additionally limited by
 free space; an entry must fit a conservative three-times-input estimate plus
@@ -153,7 +153,9 @@ source and destination ranges needed for its bounded forward-copy batches. Compl
 whole archive. Leading ZIP stubs and other prefix bytes remain at their original
 offsets, including when the first entry is deleted or replaced; even huge sparse
 prefixes are preserved without being read or copied. Consecutive deletions and
-small retained files share durable batches.
+small retained files share durable batches. Adjacent destination ranges share
+archive writes, using at most one additional 8 MiB memory buffer. Archive writes
+remain ordered; compaction does not start parallel writers.
 
 ## Progress, cancellation and recovery
 

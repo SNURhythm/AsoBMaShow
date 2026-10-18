@@ -6,7 +6,12 @@ namespace storage_management {
 struct StorageArchiveMetrics {
   std::uint64_t archivesCompacted = 0, bytesWritten = 0, peakScratchBytes = 0;
   std::uint64_t preparationBytesRead = 0, sourceBytesRead = 0, durableBatches = 0;
-  std::uint64_t preparationReadCalls = 0, preparationBackwardReads = 0;
+  std::uint64_t preparationReadCalls = 0, preparationBackwardReads = 0, sourceWriteRanges = 0;
+  // Optional wall-clock diagnostics. Batch redo includes its durability barriers;
+  // journal includes batch SQLite commits; sync measures the batch archive fsync.
+  std::uint64_t totalNanoseconds = 0, preparationNanoseconds = 0;
+  std::uint64_t readNanoseconds = 0, hashNanoseconds = 0, redoNanoseconds = 0;
+  std::uint64_t journalNanoseconds = 0, writeNanoseconds = 0, syncNanoseconds = 0;
 };
 struct StorageArchiveDependencies {
   std::function<EncodeResult(const AssetCandidate &, const StoragePolicy &,

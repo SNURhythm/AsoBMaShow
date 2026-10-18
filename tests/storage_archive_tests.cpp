@@ -166,18 +166,62 @@ void archiveCompactionBatchesSmallRecords() {
   InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
       .policy = {.bga = BgaAction::Delete}, .scanScratchRoot = temp.root / "scan"};
   const auto review = BuildStoragePreflight(request);
-  unsigned advances = 0;
+  unsigned advances = 0; StorageArchiveMetrics metrics;
   StorageArchiveDependencies deps{.faultPoint = [&](std::string_view point) {
     if (point == "archive-cursor") ++advances;
-  }};
+  }, .metrics = &metrics};
   const auto report = UpdateStorageArchive(review.archives.front(), request.policy,
       MakeStoragePlatformPaths(temp.root / "private", {temp.root}), deps);
   require(report.deleted == 1 && !report.failed && !report.recoveryRequired, "batched compaction completes");
   require(advances < 4, "small retained records share durable cursor advances instead of syncing each file");
+  require(metrics.sourceWriteRanges <= 2, "adjacent retained records share one write range before the trailer");
   const auto actual = readArchive(path);
   require(actual.size() == 4, "only the selected video is deleted");
   for (std::size_t i = 1; i < files.size(); ++i)
     require(actual.at(files[i].first) == files[i].second, "batched compaction preserves each retained payload");
+}
+void unchangedArchivePrefixAvoidsFrequentCheckpoints() {
+  storage_test::TempDirectory temp;
+  const auto path = temp.root / "prefix.zip";
+  std::vector<std::pair<std::string, std::string>> files;
+  for (unsigned i = 0; i < 512; ++i) files.emplace_back(std::to_string(i) + ".png", "image");
+  files.emplace_back("movie.avi", "video"); writeArchive(path, files);
+  InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+      .policy = {.bga = BgaAction::Delete}, .scanScratchRoot = temp.root / "scan"};
+  const auto review = BuildStoragePreflight(request);
+  StorageArchiveMetrics metrics;
+  const auto report = UpdateStorageArchive(review.archives.front(), request.policy,
+      MakeStoragePlatformPaths(temp.root / "private", {temp.root}), {.metrics = &metrics});
+  require(report.deleted == 1 && !report.failed && metrics.durableBatches <= 3,
+      "unchanged prefix metadata does not force frequent durable checkpoints");
+  const auto actual = readArchive(path);
+  require(actual.size() == 512 && !actual.contains("movie.avi"), "prefix batching deletes only the selected video");
+  for (unsigned i = 0; i < 512; ++i) require(actual.at(std::to_string(i) + ".png") == "image", "prefix batching preserves each image");
+}
+void smallArchiveRecordsRecoverAcrossBatches() {
+  for (const auto point : {"archive-redo", "archive-source-synced"}) {
+    storage_test::TempDirectory temp;
+    const auto path = temp.root / "small-records.zip";
+    std::vector<std::pair<std::string, std::string>> files = {{"movie.avi", "video"}};
+    for (unsigned i = 0; i < 1100; ++i) files.emplace_back(std::to_string(i) + ".png", "image" + std::to_string(i));
+    writeArchive(path, files);
+    InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+        .policy = {.bga = BgaAction::Delete}, .scanScratchRoot = temp.root / "scan"};
+    const auto review = BuildStoragePreflight(request);
+    const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+    StorageArchiveDependencies deps{.faultPoint = [&](std::string_view name) {
+      if (name == point) throw std::runtime_error("interrupt a coalesced small-record batch");
+    }};
+    require(UpdateStorageArchive(review.archives.front(), request.policy, paths, deps).recoveryRequired,
+        "small-record batch reaches a durable interruption point");
+    const auto recovered = RecoverStorageArchives(paths);
+    require(!recovered.failed && !recovered.recoveryRequired && recovered.deleted == 1,
+        "recovery accepts bounded redo with many small records");
+    const auto actual = readArchive(path);
+    require(actual.size() == 1100 && !actual.contains("movie.avi"), "coalesced recovery removes only the selected video");
+    for (unsigned i = 0; i < 1100; ++i)
+      require(actual.at(std::to_string(i) + ".png") == "image" + std::to_string(i), "coalesced recovery preserves each distinct payload");
+  }
 }
 void archiveLargeRecordRecovery() {
   for (const auto &point : {"archive-redo", "archive-source-synced", "foreign-outside-redo", "foreign-after-truncate"}) {
@@ -497,7 +541,7 @@ void growingArchiveMultiBatchRecovery() {
 }
 void interruptedArchiveWritesRecover() {
   const std::vector<std::pair<std::string, unsigned>> faults = {{"archive-entry-ready", 1}, {"archive-redo", 2},
-      {"archive-write", 3}, {"archive-source-synced", 1}, {"archive-cursor", 2}, {"archive-before-truncate", 1}, {"archive-truncate", 1},
+      {"archive-write", 1}, {"archive-source-synced", 1}, {"archive-cursor", 2}, {"archive-before-truncate", 1}, {"archive-truncate", 1},
       {"archive-truncate-synced", 1}, {"archive-cleanup-ready", 1}, {"archive-manifest-unlinked", 1}, {"archive-cleanup-remove", 1}};
   for (const auto &[point, occurrence] : faults) {
     storage_test::TempDirectory temp;
@@ -828,6 +872,32 @@ void archiveStagingRespectsPrivateBoundary() {
 }
 }
 void storageArchiveTraversalBenchmark(std::size_t count) { archiveTraversal(count, false); }
+void storageArchiveCompactionBenchmark(std::size_t count, std::size_t payloadBytes, bool deleteFirst) {
+  storage_test::TempDirectory temp;
+  const auto path = temp.root / "compact.zip";
+  const std::string payload(payloadBytes, 'i');
+  std::vector<std::pair<std::string, std::string>> files;
+  if (deleteFirst) files.emplace_back("movie.avi", "video");
+  for (std::size_t i = 0; i < count; ++i) files.emplace_back(std::to_string(i) + ".png", payload);
+  if (!deleteFirst) files.emplace_back("movie.avi", "video");
+  writeArchive(path, files);
+  InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+      .policy = {.bga = BgaAction::Delete}, .scanScratchRoot = temp.root / "scan"};
+  const auto review = BuildStoragePreflight(request);
+  StorageArchiveMetrics metrics;
+  const auto report = UpdateStorageArchive(review.archives.front(), request.policy,
+      MakeStoragePlatformPaths(temp.root / "private", {temp.root}), {.metrics = &metrics});
+  require(report.deleted == 1 && !report.failed && !report.recoveryRequired, "benchmark archive compacts successfully");
+  const auto actual = readArchive(path);
+  require(actual.size() == count, "benchmark retains all non-deleted entries");
+  for (std::size_t i = 0; i < count; ++i) require(actual.at(std::to_string(i) + ".png") == payload, "benchmark retains exact payloads");
+  std::cout << "archive compaction entries=" << count << " payload=" << payloadBytes << " delete_first=" << deleteFirst
+      << " batches=" << metrics.durableBatches << " write_ranges=" << metrics.sourceWriteRanges << " read_bytes=" << metrics.sourceBytesRead << " write_bytes=" << metrics.bytesWritten
+      << " total_ms=" << metrics.totalNanoseconds / 1e6 << " prepare_ms=" << metrics.preparationNanoseconds / 1e6
+      << " read_ms=" << metrics.readNanoseconds / 1e6 << " hash_ms=" << metrics.hashNanoseconds / 1e6
+      << " redo_ms=" << metrics.redoNanoseconds / 1e6 << " journal_ms=" << metrics.journalNanoseconds / 1e6
+      << " write_ms=" << metrics.writeNanoseconds / 1e6 << " sync_ms=" << metrics.syncNanoseconds / 1e6 << '\n';
+}
 void storageArchiveDiscoverySandboxTest(const fs::path &root) {
   std::error_code error;
   (void)fs::symlink_status(root.parent_path(), error);
@@ -878,7 +948,8 @@ void storageArchiveTests(const char *executable) {
       {"metadata-traversal", archiveTraversalUsesOrderedMetadataReads},
       {"descriptor-boundaries", archiveDescriptorBoundaries},
       {"physical-savings", archiveSavingsUsePhysicalSize},
-      {"batched-compaction", archiveCompactionBatchesSmallRecords},
+      {"batched-compaction", archiveCompactionBatchesSmallRecords}, {"prefix-checkpoints", unchangedArchivePrefixAvoidsFrequentCheckpoints},
+      {"small-record-recovery", smallArchiveRecordsRecoverAcrossBatches},
       {"growth-batches", growingArchiveMultiBatchRecovery}, {"growth", growingFlacArchiveRecovery}, {"update", archiveUpdatesBatchWithoutFullCopy}, {"recovery", interruptedArchiveWritesRecover},
       {"zip64", sparseZip64AndLegacyNames}, {"invalid-encoding", malformedLegacyNamesAreRejected},
       {"playback", realArchiveOptimizerPreservesPlayback},

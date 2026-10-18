@@ -300,3 +300,55 @@ in 1.95 seconds, the desktop `main` build, and the unsigned iOS device build via
 `scripts/ios_firebase_deploy.sh --build-only --skip-init`. No build was uploaded.
 The final independent code review reported no remaining actionable findings.
 Physical-device throughput and Windows runtime recovery remain unmeasured.
+
+## Small-entry batching and query reuse follow-up
+
+The next pass compares `33ade0af` plus timing instrumentation with the optimized
+implementation, using the same instrumented debug executable on an Apple M1 Pro.
+Each case creates a stored ZIP, deletes one video, validates the resulting archive
+with libarchive, and compares every retained payload. Fixture creation, preflight
+and the independent read-back are outside the measured update interval. These
+are local, cached synthetic workloads, not cold-storage or phone measurements.
+The table reports medians of three runs per case.
+
+| Workload | Before | After | Durable batches, before → after | Archive write ranges, before → after |
+| --- | ---: | ---: | ---: | ---: |
+| 10,000 × 2 KiB retained entries, deletion at end | 621 ms | 445 ms | 81 → 12 | 2 → 1 |
+| 10,000 × 2 KiB retained entries, deletion at start | 1,376 ms | 705 ms | 80 → 11 | 10,002 → 11 |
+| One 64 MiB retained entry, deletion at start | 259 ms | 225 ms | 10 → 10 | 130 → 10 |
+
+The small-entry move is about 49% faster; the unchanged-prefix case is about 28%
+faster. Large-entry results varied substantially (190–286 ms before and
+162–261 ms after), so they do not establish a reliable throughput improvement.
+Source bytes read and archive bytes written were identical before and after in
+all three cases. Write ranges count calls into `StorageArchiveIO::Write`; that
+method can split a range into multiple system calls.
+
+The changes reuse hot SQLite statements, avoid querying the durable cursor when
+an in-memory cursor is already available, read the capacity once per copy batch,
+and persist only the last completed cursor in each transaction. Batches now admit
+up to 1,024 records while retaining the 8 MiB payload and 16 MiB redo limits.
+Adjacent destination ranges are joined in a buffer of at most 8 MiB and submitted
+together. Per-chunk recovery hashes and before/after evidence remain intact.
+There are still no parallel archive writers or full-archive copy fallbacks.
+
+Run the opt-in benchmark after building `storage_optimizer_tests`:
+
+```sh
+cmake-build-debug/storage_optimizer_tests --archive-compaction-benchmark 10000 2048 0
+cmake-build-debug/storage_optimizer_tests --archive-compaction-benchmark 10000 2048 1
+cmake-build-debug/storage_optimizer_tests --archive-compaction-benchmark 1 67108864 1
+```
+
+Arguments are retained-entry count, payload bytes per entry, and whether the
+removed video comes first. The output includes total/preparation time and batch
+read, hash, redo, journal, write and archive-sync times. Redo timing includes its
+own file/directory synchronization; journal timing includes SQLite commits.
+The remaining total includes entry traversal, path checks and other bookkeeping;
+these counters are diagnostics, not an exhaustive profiler. Timing calls are
+inactive unless a metrics collector is supplied.
+
+Regression coverage checks adjacent-write coalescing, reduced checkpoint counts
+for unchanged prefixes, and recovery of 1,100 distinct small records across batch
+boundaries. Existing overlap, multi-batch growth, foreign-edit rejection and sparse
+128 GiB ZIP64 tests remain enabled. Wall-clock timings are not test assertions.

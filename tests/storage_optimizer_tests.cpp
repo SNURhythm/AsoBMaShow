@@ -17,6 +17,7 @@ using storage_test::TempDirectory;
 void storageLibraryIntegration();
 void storageArchiveTests(const char *executable);
 void storageArchiveTraversalBenchmark(std::size_t count);
+void storageArchiveCompactionBenchmark(std::size_t count, std::size_t payloadBytes, bool deleteFirst);
 void storageArchiveDiscoverySandboxTest(const std::filesystem::path &root);
 int storageDirectoryInventoryTests();
 namespace fs = std::filesystem;
@@ -566,6 +567,9 @@ void cancellableSingleConversionPermit() {
 }
 int main(int argc, char **argv) {
   try {
+    if (argc == 5 && std::string_view(argv[1]) == "--archive-compaction-benchmark") {
+      storageArchiveCompactionBenchmark(std::stoul(argv[2]), std::stoul(argv[3]), std::stoi(argv[4]) != 0); return 0;
+    }
     if (argc == 3 && std::string_view(argv[1]) == "--archive-traversal-benchmark") {
       storageArchiveTraversalBenchmark(std::stoul(argv[2])); return 0;
     }
