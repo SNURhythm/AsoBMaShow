@@ -137,6 +137,31 @@ void workerExceptionsBecomeRecoveryReports() {
       [](const auto &, auto &, auto, auto) -> StorageReport { throw 42; });
   require(result.recoveryRequired && result.failed == 1, "nonstandard worker exception is also contained");
 }
+void startupFailureRequiresRecoveryOnlyAfterWorkersStart() {
+  for (const bool startWorker : {false, true}) {
+    std::mutex mutex; std::condition_variable changed;
+    bool entered = false, settled = false; int launches = 0;
+    auto result = RunStorageDirectories(input({"/a", "/b"}), {.audioWorkers = 2}, space,
+        [&](const auto &, auto &, auto check, auto) {
+          { std::lock_guard lock(mutex); entered = true; changed.notify_all(); }
+          while (check()) std::this_thread::yield();
+          settled = true; return StorageReport{};
+        }, {}, {}, [&](std::function<void()> worker) -> std::thread {
+          if (startWorker && launches++ == 0) return std::thread(std::move(worker));
+          if (startWorker) {
+            std::unique_lock lock(mutex);
+            require(changed.wait_for(lock, 2s, [&] { return entered; }), "first worker starts before later launch fails");
+          }
+          throw std::system_error(std::make_error_code(std::errc::resource_unavailable_try_again));
+        });
+    require(result.failed == 1 && !result.cancelled && result.recoveryRequired == startWorker,
+        "failed first worker launch must not require recovery when no work began");
+    require(result.files.size() == 1 && result.files.front().reason.code ==
+        (startWorker ? StorageReason::RecoveryRequired : StorageReason::IoError),
+        "startup failure reports whether a transaction could have begun");
+    require(entered == startWorker && settled == startWorker, "all launched workers settle before startup failure returns");
+  }
+}
 void filesystemRootIsAnAncestor() {
   std::mutex mutex; std::condition_variable changed;
   bool parentDone = false, childStarted = false; int checks = 0;
@@ -166,6 +191,7 @@ int main(int argc, char **argv) {
     const std::string filter = argc > 1 ? argv[1] : "";
     if (filter.empty() || filter == "defaults") platformDefaultsUseExistingWorkerPolicy();
     if (filter.empty() || filter == "exception") workerExceptionsBecomeRecoveryReports();
+    if (filter.empty() || filter == "startup") startupFailureRequiresRecoveryOnlyAfterWorkersStart();
     if (filter.empty() || filter == "overlap") independentDirectoriesOverlapWithinBudget();
     if (filter.empty() || filter == "serialize") sameDirectoryAndVideoNeverOverlap();
     if (filter.empty()) { reservationsWaitReleaseAndRecheckSpace(); activeWorkDrainsBeforeReturn(); recoverySignalStopsActiveFileAdmission(); filesystemRootIsAnAncestor(); }

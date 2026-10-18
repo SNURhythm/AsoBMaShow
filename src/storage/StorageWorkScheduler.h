@@ -3,6 +3,7 @@
 #include <condition_variable>
 #include <atomic>
 #include <mutex>
+#include <thread>
 
 namespace storage_management {
 class StorageWorkBudget {
@@ -36,6 +37,7 @@ private:
 // Each directory has one worker; ancestors settle before descendant admission.
 // Work/checkpoints may run concurrently. Progress delivery is serialized.
 using DirectoryWork = std::function<StorageReport(const StorageDirectorySummary &, StorageWorkBudget &, Checkpoint, ProgressCallback)>;
+using StorageWorkerLauncher = std::function<std::thread(std::function<void()>)>;
 StorageReport RunStorageDirectories(const StoragePreflight &, StorageExecutionLimits,
-    std::function<std::optional<std::uint64_t>()>, DirectoryWork, Checkpoint = {}, ProgressCallback = {});
+    std::function<std::optional<std::uint64_t>()>, DirectoryWork, Checkpoint = {}, ProgressCallback = {}, StorageWorkerLauncher = {});
 }

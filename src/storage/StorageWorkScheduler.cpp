@@ -62,7 +62,7 @@ void merge(StorageReport &target, StorageReport source) {
 }
 }
 StorageReport RunStorageDirectories(const StoragePreflight &inventory, StorageExecutionLimits limits,
-    std::function<std::optional<std::uint64_t>()> available, DirectoryWork work, Checkpoint check, ProgressCallback progress) {
+    std::function<std::optional<std::uint64_t>()> available, DirectoryWork work, Checkpoint check, ProgressCallback progress, StorageWorkerLauncher launch) {
   struct Job { const StorageDirectorySummary *summary; std::vector<std::size_t> children; std::uint64_t done = 0, reclaimed = 0, added = 0; };
   std::vector<Job> jobs;
   std::map<std::filesystem::path, std::size_t> positions;
@@ -144,9 +144,15 @@ StorageReport RunStorageDirectories(const StoragePreflight &inventory, StorageEx
   std::vector<std::thread> workers;
   try {
     const auto count = std::min(jobs.size(), std::max<std::size_t>(1, limits.audioWorkers));
-    for (std::size_t i = 0; i < count; ++i) workers.emplace_back(worker);
+    workers.reserve(count);
+    for (std::size_t i = 0; i < count; ++i) workers.push_back(launch ? launch(worker) : std::thread(worker));
   } catch (...) {
-    failedWorker("Unable to start storage worker");
+    if (workers.empty()) {
+      // No directory could have started a transaction, so admission can reopen.
+      ++report.failed;
+      RetainStorageReportDetail(report, {.outcome = FileOutcome::Failed,
+          .reason = {StorageReason::IoError, "Unable to start storage worker"}});
+    } else failedWorker("Unable to start storage worker");
   }
   for (auto &thread : workers) thread.join();
   report.cancelled |= cancelled; report.recoveryRequired |= fatal || budget.RecoveryRequired();
