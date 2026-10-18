@@ -551,12 +551,64 @@ void partialWritesAndForeignChanges() {
         "uncheckpointed partial writes remain fail-closed without a whole-archive scan");
   }
 }
+void archiveStagingRespectsPrivateBoundary() {
+  storage_test::TempDirectory temp;
+  fs::create_directories(temp.root / "system/app/private");
+  fs::create_directory_symlink(temp.root / "system", temp.root / "system-alias");
+  const auto library = temp.root / "library", privateRoot = temp.root / "system-alias/app/private";
+  fs::create_directory(library);
+  // A system alias above the trusted boundary models an ancestor that the app
+  // must not inspect. Private descendants must still be checked for symlinks.
+  std::string boundaryError;
+  require(!IsSafeLocalPath(privateRoot, boundaryError) && IsSafeLocalPath(privateRoot, boundaryError, {privateRoot}),
+      "fixture requires starting validation at the granted private boundary");
+  const auto paths = MakeStoragePlatformPaths(privateRoot, {library}, true);
+  for (const std::string mode : {"complete", "recover", "symlink"}) {
+    const auto path = library / (mode + ".zip");
+    writeArchive(path, {{"a.wav", std::string(10000, 'a')}, {"b.wav", std::string(9000, 'b')}, {"chart.bms", "chart"}});
+    std::string error;
+    const auto identity = ReadFileIdentity(path, error, {library});
+    require(identity.has_value(), "archive identity is accessible inside the library grant");
+    const StorageArchiveSummary summary{.path = path, .identity = *identity, .innerRoots = {fs::path{}}, .eligibleCount = 2};
+    StorageArchiveDependencies deps{.encode = [&](const AssetCandidate &, const StoragePolicy &, const fs::path &output, Checkpoint, ProgressCallback) {
+      if (mode == "symlink") {
+        std::ofstream(privateRoot / "foreign") << std::string(1000, 'f');
+        fs::create_symlink(privateRoot / "foreign", output);
+      } else std::ofstream(output, std::ios::binary) << std::string(1000, 'f');
+      return EncodeResult{FileOutcome::Converted, output};
+    }, .faultPoint = [&](std::string_view point) {
+      if (mode == "recover" && point == "archive-redo") throw std::runtime_error("simulated interruption");
+    }};
+    const auto result = UpdateStorageArchive(summary, {.audio = AudioAction::LosslessFlac}, paths, deps);
+    if (mode == "complete") {
+      if (result.failed && !result.files.empty()) throw std::runtime_error(result.files.front().reason.detail);
+      require(result.converted == 2 && !result.recoveryRequired && fs::is_empty(paths.journalRoot),
+          "consecutive archive conversions stay within authorized private storage");
+      const auto files = readArchive(path);
+      require(files.at("a.flac") == std::string(1000, 'f') && files.at("b.flac") == std::string(1000, 'f') &&
+          files.at("chart.bms") == "chart", "sandboxed compaction retains converted media and charts");
+    } else if (mode == "recover") {
+      require(result.recoveryRequired, "fixture leaves a durable archive redo batch");
+      const auto recovered = RecoverStorageArchives(paths);
+      require(!recovered.failed && !recovered.recoveryRequired && recovered.converted == 1 && fs::is_empty(paths.journalRoot),
+          "archive recovery reads private replacement and redo files without inspecting system parents");
+      const auto files = readArchive(path);
+      require(files.at("a.flac") == std::string(1000, 'f') && files.at("b.wav") == std::string(9000, 'b') &&
+          files.at("chart.bms") == "chart", "recovery preserves accepted conversion and untouched entries");
+    } else {
+      require(result.failed == 1 && !result.recoveryRequired && result.converted == 0,
+          "trusted private root never permits a symlink in staged output");
+      require(readArchive(path).at("a.wav") == std::string(10000, 'a') && fs::file_size(privateRoot / "foreign") == 1000,
+          "unsafe staged output leaves original and foreign files untouched");
+    }
+  }
+}
 }
 void storageArchiveTests() {
   for (const auto &[name, run] : std::vector<std::pair<const char *, void(*)()>>{
       {"sparse-prefix-recovery", sparsePrefixRecovery}, {"large-batch-recovery", archiveLargeRecordRecovery}, {"delete-batches", archiveConsecutiveDeletesAreBatched},
       {"manifest", manifestsExtractEntries}, {"preflight", selectedArchiveFoldersAreEligible},
-      {"sandbox", archiveReviewSeparatesPrivateAndLibraryAccess},
+      {"sandbox", archiveReviewSeparatesPrivateAndLibraryAccess}, {"sandbox-staging", archiveStagingRespectsPrivateBoundary},
       {"cached-review", reviewUsesCachedIndexAndApplyValidatesLayout},
       {"system-entries", reviewAndApplyPreserveSystemEntries},
       {"metadata-preparation", archivePreparationDoesNotReadPayloads},

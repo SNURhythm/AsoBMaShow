@@ -91,6 +91,7 @@ public:
   Database &db;
   fs::path journal;
   const StorageArchiveDependencies &deps;
+  const std::vector<fs::path> &accessRoots;
   StorageReport report;
   StorageProgress progress;
   bool &started;
@@ -105,8 +106,9 @@ public:
   bool pendingDeletes = false;
   std::optional<std::uint64_t> copyCursor;
   ProgressCallback copyProgress;
-  Update(StorageArchive &archive, fs::path journal, const StorageArchiveDependencies &deps, bool &started)
-      : archive(archive), db(*archive.db), journal(std::move(journal)), deps(deps), started(started) {
+  Update(StorageArchive &archive, fs::path journal, const StorageArchiveDependencies &deps, bool &started,
+      const std::vector<fs::path> &accessRoots)
+      : archive(archive), db(*archive.db), journal(std::move(journal)), deps(deps), accessRoots(accessRoots), started(started) {
     progress.archiveBytesTotal = archive.identity.bytes;
   }
   std::uint64_t Value(const char *column) const {
@@ -169,7 +171,7 @@ public:
     if (chunk.kind == 0) {
       require(plus(chunk.source, chunk.length) <= Value("original_size"), "Invalid original archive extent"); bytes = archive.io.Read(chunk.source, chunk.length);
     } else if (chunk.kind == 1) {
-      StorageArchiveIO stage(journal / "replacement.bin", {}, false);
+      StorageArchiveIO stage(journal / "replacement.bin", accessRoots, false);
       require(plus(chunk.source, chunk.length) <= stage.Identity().bytes, "Truncated archive replacement"); bytes = stage.Read(chunk.source, chunk.length);
     } else bytes = chunk.data;
     require(bytes.size() == chunk.length && ((chunk.id == 0 && chunk.kind == 0 && chunk.hash.empty()) ||
@@ -246,7 +248,7 @@ public:
           target >= end && ids.insert(id).second && bytes <= batchBytes && pending.size() < batchRecords,
           "Invalid archive redo batch");
       end = target + length;
-      if (!scratch) scratch = std::make_unique<StorageArchiveIO>(journal / "redo.bin", std::vector<fs::path>{}, false);
+      if (!scratch) scratch = std::make_unique<StorageArchiveIO>(journal / "redo.bin", accessRoots, false);
       require(scratch->Identity().bytes <= 2 * batchBytes && plus(offset, 2 * length) <= scratch->Identity().bytes,
           "Invalid archive redo scratch extent");
       const auto before = scratch->Read(offset, length), after = scratch->Read(offset + length, length);
@@ -511,8 +513,11 @@ void Update::Prepare(StorageArchiveEntry &entry, const AssetCandidate &candidate
   const auto input = journal / ("input." + asobmshow::chart_assets::LowerMediaExtension(candidate.source));
   const auto output = journal / ("output" + candidate.destination.extension().string()); archive.Extract(entry, input, check);
   auto staged = candidate; staged.source = input; staged.destination = output;
-  std::string error; const auto identity = ReadFileIdentity(input, error);
-  require(identity.has_value(), "Cannot identify staged archive media", StorageReason::IoError); staged.identity = *identity;
+  // App-private staging has its own trusted boundary on sandboxed platforms;
+  // inspecting system parents above that boundary can fail despite file access.
+  std::string error; const auto identity = ReadFileIdentity(input, error, accessRoots);
+  if (!identity) throw StorageArchiveError(StorageReason::IoError, "Cannot identify staged archive media: " + error);
+  staged.identity = *identity;
   bool tooLarge = false;
   auto checkpoint = [&] {
     if (check && !check()) return false;
@@ -527,9 +532,9 @@ void Update::Prepare(StorageArchiveEntry &entry, const AssetCandidate &candidate
   if (tooLarge) { RecordSkip(entry, FileOutcome::Skipped, {StorageReason::NotSmaller, "Encoded archive media exceeds the staging limit"}); RemoveStaging(); return; }
   if (encoded.outcome != FileOutcome::Converted) { RecordSkip(entry, encoded.outcome, encoded.reason); RemoveStaging(); return; }
   require(encoded.outputPath == output, "Archive encoder returned an unowned output", StorageReason::ValidationFailed);
-  const auto encodedIdentity = ReadFileIdentity(output, error); require(encodedIdentity.has_value(), "Unsafe archive encoder output", StorageReason::ValidationFailed);
+  const auto encodedIdentity = ReadFileIdentity(output, error, accessRoots); require(encodedIdentity.has_value(), "Unsafe archive encoder output", StorageReason::ValidationFailed);
   if (encodedIdentity->bytes >= entry.bytes) { RecordSkip(entry, FileOutcome::Skipped, {StorageReason::NotSmaller, "Encoded archive media is not smaller"}); RemoveStaging(); return; }
-  active(check); StorageArchiveIO encodedFile(output, {}, false); auto crc = crc32(0, nullptr, 0);
+  active(check); StorageArchiveIO encodedFile(output, accessRoots, false); auto crc = crc32(0, nullptr, 0);
   for (std::uint64_t position = 0; position < encodedIdentity->bytes;) {
     active(check); auto bytes = encodedFile.Read(position, std::min(chunkSize, encodedIdentity->bytes - position));
     crc = crc32(crc, reinterpret_cast<const Bytef *>(bytes.data()), bytes.size()); position += bytes.size();
@@ -547,11 +552,11 @@ void Update::Prepare(StorageArchiveEntry &entry, const AssetCandidate &candidate
   }
   const auto padding = replacement.span - header.size() - encodedIdentity->bytes; require(padding < 512, "Invalid archive replacement padding");
   file.Write(std::string(padding, '\0')); file.Close(); syncFile(prepared); syncDirectory(journal);
-  require(ReadFileIdentity(output, error) == encodedIdentity, "Encoded archive media changed before installation", StorageReason::StaleInput);
+  require(ReadFileIdentity(output, error, accessRoots) == encodedIdentity, "Encoded archive media changed before installation", StorageReason::StaleInput);
   ValidateEntry(entry.id);
   if (deps.metrics) deps.metrics->peakScratchBytes = std::max(deps.metrics->peakScratchBytes, plus(entry.bytes, plus(encodedIdentity->bytes, replacement.span)));
   {
-    StorageArchiveIO stage(prepared, {}, false); SqlTransaction transaction(db);
+    StorageArchiveIO stage(prepared, accessRoots, false); SqlTransaction transaction(db);
     Statement remove(db.value, "DELETE FROM chunks WHERE entry_id=?"); remove.bind(1, entry.id); remove.step();
     for (std::uint64_t part = 0, position = 0; position < replacement.span; ++part) {
       const auto bytes = stage.Read(position, std::min(chunkSize, replacement.span - position)); InsertChunk(entry.id, part, position, bytes, 1); position += bytes.size();
@@ -591,7 +596,7 @@ StorageReport UpdateStorageArchive(const StorageArchiveSummary &summary, const S
       StorageArchive archive(summary.path, journal / "manifest.sqlite", paths.pathAccessRoots, check);
       require(archive.identity == summary.identity, "Archive changed while starting update", StorageReason::StaleInput);
       {
-        Update preparing(archive, journal, deps, started); preparing.Initialize(check);
+        Update preparing(archive, journal, deps, started, paths.pathAccessRoots); preparing.Initialize(check);
       }
       // A preparation crash cannot have modified the source. Publish the ready
       // journal only after its database is closed, while retaining the file lock.
@@ -599,7 +604,7 @@ StorageReport UpdateStorageArchive(const StorageArchiveSummary &summary, const S
       const auto ready = journal.parent_path() / ("archive-" + journal.filename().string().substr(18));
       fs::rename(journal, ready); journal = ready; syncDirectory(journal.parent_path());
       archive.db = std::make_unique<Database>(journal / "manifest.sqlite", false);
-      Update update(archive, journal, deps, started); update.progress.filesTotal = summary.eligibleCount;
+      Update update(archive, journal, deps, started, paths.pathAccessRoots); update.progress.filesTotal = summary.eligibleCount;
       update.Entries(&summary, policy, check, progress); update.Finish(); report = update.Result();
       if (deps.metrics) deps.metrics->sourceBytesRead += archive.io.BytesRead();
     }
@@ -631,7 +636,7 @@ StorageReport RecoverStorageArchives(const StoragePlatformPaths &paths, Checkpoi
         }
         if (ready && started) {
           authority(source, paths); StorageArchive archive(source, journal / "manifest.sqlite", paths.pathAccessRoots, {}, true);
-          Update update(archive, journal, deps, started); update.ValidateRecovery(); update.Entries(nullptr, {}, {}, {}); update.Finish();
+          Update update(archive, journal, deps, started, paths.pathAccessRoots); update.ValidateRecovery(); update.Entries(nullptr, {}, {}, {}); update.Finish();
           auto report = update.Result(); result.converted += report.converted; result.deleted += report.deleted; result.reclaimedBytes += report.reclaimedBytes;
           for (auto &file : report.files) if (result.files.size() < 100) result.files.push_back(std::move(file)); result.changedRoots.push_back(source);
         }
