@@ -23,6 +23,7 @@ asobmashow_register_test(storage_file_transaction_tests)
 
 add_executable(storage_media_tests tests/storage_media_tests.cpp src/storage/AudioTranscoder.cpp
     src/storage/VideoCompressionGeometry.cpp src/storage/StoragePolicy.cpp
+    src/storage/StorageVideoEncoder.cpp src/storage/StorageVideoCapabilities.cpp
     src/audio/ChartVisualAssetResolver.cpp)
 target_compile_features(storage_media_tests PRIVATE cxx_std_23)
 target_link_libraries(storage_media_tests PRIVATE SndFile::sndfile ${FFMPEG_LIBRARIES})
@@ -42,6 +43,7 @@ add_executable(storage_optimizer_tests tests/storage_optimizer_tests.cpp
     src/storage/StorageDirectoryInventory.cpp src/storage/StoragePathIndex.cpp src/storage/StorageScanScheduler.cpp
     src/ChartScanWorkScheduler.cpp src/storage/AudioTranscoder.cpp src/storage/BgaTranscoder.cpp
     src/storage/VideoCompressionGeometry.cpp src/storage/StoragePolicy.cpp
+    src/storage/StorageVideoEncoder.cpp src/storage/StorageVideoCapabilities.cpp
     src/storage/ChartResourceInventory.cpp src/storage/StorageFileTransaction.cpp src/storage/StoragePlatform.cpp
     src/audio/ChartVisualAssetResolver.cpp src/AtomicFile.cpp src/FileChecksum.cpp src/Uuid.cpp)
 target_compile_features(storage_optimizer_tests PRIVATE cxx_std_23)
@@ -131,3 +133,9 @@ if(APPLE)
     target_link_libraries(storage_scale_benchmark PRIVATE iconv)
 endif()
 endif()
+
+add_executable(storage_video_capability_tests tests/storage_video_capability_tests.cpp
+    src/storage/StorageVideoCapabilities.cpp src/storage/StorageVideoEncoder.cpp src/storage/StoragePolicy.cpp)
+target_compile_features(storage_video_capability_tests PRIVATE cxx_std_23)
+target_link_libraries(storage_video_capability_tests PRIVATE ${FFMPEG_LIBRARIES} Threads::Threads)
+asobmashow_register_test(storage_video_capability_tests)

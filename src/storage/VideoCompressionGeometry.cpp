@@ -10,12 +10,13 @@ extern "C" {
 namespace storage_management {
 VideoCompressionPlan PlanVideoCompression(const VideoDescription &source, const StoragePolicy &policy) {
   VideoCompressionPlan result;
+  result.codec = policy.videoCodec;
   auto skip = [&](StorageReason code, const char *detail) {
     result.reason = {code, detail}; return result;
   };
   if (!IsValid(policy) || policy.bga != BgaAction::CompressH264)
     return skip(StorageReason::PolicyKeep, "BGA compression is not selected");
-  if (source.h264)
+  if (source.h264 && !policy.reencodeEfficientVideo)
     return skip(StorageReason::AlreadyOptimized, "H.264 is preserved; requested caps are not applied");
   if (source.alpha || source.hdr || source.interlaced || source.unsupportedContent)
     return skip(StorageReason::UnsupportedFormat, "Video contains content or metadata that cannot be preserved");
@@ -42,8 +43,8 @@ VideoCompressionPlan PlanVideoCompression(const VideoDescription &source, const 
       av_cmp_q(source.frameRate, {policy.maxFps, 1}) > 0 :
       (source.minimumFrameInterval <= 0 ||
        av_compare_ts(source.minimumFrameInterval, source.timeBase, 1, {1, policy.maxFps}) < 0));
-  if (!source.codecs.x264.available || !source.codecs.mp4.available)
-    return skip(StorageReason::CodecUnavailable, "libx264 or MP4 is unavailable in this build");
+  if (!source.codecs.CanEncode(policy.videoCodec) || !source.codecs.mp4.available)
+    return skip(StorageReason::CodecUnavailable, "Selected video encoder or MP4 is unavailable in this build");
   result.width = static_cast<int>(std::floor(source.width * scale)) & ~1;
   result.height = static_cast<int>(std::floor(source.height * scale)) & ~1;
   if (result.width < 2 || result.height < 2)

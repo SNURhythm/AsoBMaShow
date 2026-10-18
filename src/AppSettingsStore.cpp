@@ -733,7 +733,9 @@ json storagePolicyToJson(const storage_management::StoragePolicy &policy) {
           {"bga", static_cast<int>(policy.bga)},
           {"videoQuality", static_cast<int>(policy.videoQuality)},
           {"resolution", static_cast<int>(policy.resolution)},
-          {"maxFps", policy.maxFps}};
+          {"maxFps", policy.maxFps},
+          {"videoCodec", static_cast<int>(policy.videoCodec)},
+          {"reencodeEfficientVideo", policy.reencodeEfficientVideo}};
 }
 
 bool readStoragePolicy(const json &document, std::string_view key,
@@ -754,6 +756,10 @@ bool readStoragePolicy(const json &document, std::string_view key,
     read("videoQuality", policy.videoQuality);
     read("resolution", policy.resolution);
     read("maxFps", policy.maxFps);
+    read("videoCodec", policy.videoCodec);
+    if (found->contains("reencodeEfficientVideo") &&
+        !readValue(*found, "reencodeEfficientVideo", policy.reencodeEfficientVideo, diagnostics))
+      valid = false;
     valid = storage_management::IsValid(policy) && valid;
   }
   if (!valid) {

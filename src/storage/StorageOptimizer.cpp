@@ -98,12 +98,15 @@ void mergeReport(StorageReport &report, StorageReport other) {
   report.changedRoots.insert(report.changedRoots.end(), other.changedRoots.begin(), other.changedRoots.end());
   for (auto &delta : other.groupDeltas) report.groupDeltas.push_back(std::move(delta));
 }
-StorageDiagnostic missingCodec(AssetOperation operation, const StorageCodecCapabilities &caps) {
+StorageDiagnostic missingCodec(AssetOperation operation, const StorageCodecCapabilities &caps, const StoragePolicy &policy) {
   const StorageCodecSupport *required = nullptr;
   switch (operation) {
   case AssetOperation::LosslessFlac: required = &caps.flac; break;
   case AssetOperation::LossyVorbis: required = &caps.vorbis; break;
-  case AssetOperation::CompressH264: required = caps.x264.available ? &caps.mp4 : &caps.x264; break;
+  case AssetOperation::CompressH264:
+    if (!caps.CanEncode(policy.videoCodec))
+      return {StorageReason::CodecUnavailable, "Selected video encoder is unavailable in this build"};
+    required = &caps.mp4; break;
   case AssetOperation::Delete: break;
   }
   return required && !required->available ? StorageDiagnostic{StorageReason::CodecUnavailable,
@@ -315,7 +318,7 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
         const auto position = found->second;
         StorageArchiveDependencies archiveDependencies{
           .encode = [&](const AssetCandidate &asset, const StoragePolicy &policy, const fs::path &output, Checkpoint check, ProgressCallback progress) {
-            const auto missing = missingCodec(asset.operation, caps);
+            const auto missing = missingCodec(asset.operation, caps, request.policy);
             if (missing.code != StorageReason::None) return EncodeResult{.reason = missing};
             const auto &encoder = asset.operation == AssetOperation::CompressH264 ? dependencies_.encodeVideo : dependencies_.encodeAudio;
             return encoder(asset, policy, output, std::move(check), std::move(progress));
@@ -425,7 +428,7 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
                   }
                 }
               }
-            } else if (const auto missing = missingCodec(asset.operation, caps); missing.code != StorageReason::None) {
+            } else if (const auto missing = missingCodec(asset.operation, caps, request.policy); missing.code != StorageReason::None) {
               result.reason = missing;
             } else {
               if (!admitted && asset.operation != AssetOperation::Delete)
@@ -545,7 +548,7 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
             }
           }
           for (auto it = pending.begin(); it != pending.end() && checkpoint();) {
-            if (it->operation == AssetOperation::Delete || it->reuseDestination || missingCodec(it->operation, caps).code != StorageReason::None) {
+            if (it->operation == AssetOperation::Delete || it->reuseDestination || missingCodec(it->operation, caps, request.policy).code != StorageReason::None) {
               process(std::move(*it), nullptr); it = pending.erase(it); advanced = true; continue;
             }
             constexpr std::uint64_t reserve = 1024 * 1024;

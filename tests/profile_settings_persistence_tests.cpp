@@ -1079,11 +1079,14 @@ void testStoragePoliciesPersistIndependentlyAndFailClosed() {
   const auto path = temp.path() / "storage.json";
   AppSettings settings;
   settings.storagePreferences.manual.audio = AudioAction::LosslessFlac;
+  settings.storagePreferences.manual.videoCodec = VideoCodec::Hevc;
+  settings.storagePreferences.manual.reencodeEfficientVideo = true;
   settings.storagePreferences.download.audio = AudioAction::LossyVorbis;
   settings.storagePreferences.download.bga = BgaAction::CompressH264;
   settings.storagePreferences.download.resolution = ResolutionCap::Hd;
   settings.storagePreferences.download.videoQuality = VideoQuality::Smaller;
   settings.storagePreferences.download.maxFps = 30;
+  settings.storagePreferences.download.videoCodec = VideoCodec::Av1;
   settings.storagePreferences.afterDownload = true;
   std::string error;
   expect(AppSettingsStore::Save(path, settings, error), "save storage policies: " + error);
@@ -1098,16 +1101,21 @@ void testStoragePoliciesPersistIndependentlyAndFailClosed() {
   expect(AppSettingsStore::Load(path).settings.storagePreferences == StoragePreferences{},
          "older profiles keep safe storage defaults");
   write({{"schemaVersion", 8}, {"storagePreferences", {{"afterDownload", true},
-          {"download", {{"audio", 1}}}}}});
+          {"download", {{"audio", 1}, {"bga", 1}}}}}});
   const auto partial = AppSettingsStore::Load(path).settings.storagePreferences;
   expect(partial.afterDownload && partial.download.audio == AudioAction::LosslessFlac &&
-             partial.download.maxFps == 0 && partial.download.bga == BgaAction::Keep,
+             partial.download.maxFps == 0 && partial.download.bga == BgaAction::CompressH264 &&
+             partial.download.videoCodec == VideoCodec::H264 &&
+             !partial.download.reencodeEfficientVideo,
          "missing optional policy fields use defaults");
 
   for (const auto &bad : std::vector<nlohmann::json>{
            {{"bga", 2}, {"maxFps", "30"}}, {{"bga", 2}, {"maxFps", 30.5}},
            {{"bga", 2}, {"maxFps", 29}}, {{"bga", 2}, {"audio", 999}},
            {{"bga", 2}, {"resolution", -1}}, {{"bga", 2}, {"videoQuality", nullptr}},
+           {{"bga", 1}, {"videoCodec", 99}}, {{"bga", 1}, {"videoCodec", -1}},
+           {{"bga", 1}, {"videoCodec", "hevc"}},
+           {{"bga", 1}, {"reencodeEfficientVideo", "true"}},
            {{"bga", 2}, {"maxFps", 18446744073709551615ULL}}, nullptr, "delete"}) {
     write({{"schemaVersion", 8}, {"storagePreferences", {{"afterDownload", true},
             {"download", bad}}}});

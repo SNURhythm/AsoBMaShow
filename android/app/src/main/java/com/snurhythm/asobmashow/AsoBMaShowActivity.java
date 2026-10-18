@@ -571,6 +571,14 @@ public class AsoBMaShowActivity extends SDLActivity {
         return AndroidReplayCodec.findEncoder(width, height, fps, bitrate);
     }
 
+    public String findStorageVideoEncoder(String mime, int width, int height, int fps, int bitrate) {
+        return AndroidStorageCodec.findEncoder(mime, width, height, fps, bitrate);
+    }
+
+    public String getStorageVideoEncoderPixelFormat(String codecName, String mime) {
+        return AndroidStorageCodec.getPixelFormat(codecName, mime);
+    }
+
     public String getInternalFilesDirPath() {
         return getFilesDir().getAbsolutePath();
     }

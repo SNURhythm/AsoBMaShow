@@ -4,6 +4,7 @@ namespace storage_management {
 
 enum class AudioAction { Keep, LosslessFlac, LossyVorbis };
 enum class BgaAction { Keep, CompressH264, Delete };
+enum class VideoCodec { H264, Hevc, Av1 };
 enum class VideoQuality { High, Balanced, Smaller };
 enum class ResolutionCap { Original, FullHd, Hd, Sd, Low };
 
@@ -13,6 +14,8 @@ struct StoragePolicy {
   VideoQuality videoQuality = VideoQuality::Balanced;
   ResolutionCap resolution = ResolutionCap::Original;
   int maxFps = 0;
+  VideoCodec videoCodec = VideoCodec::H264;
+  bool reencodeEfficientVideo = false;
   bool operator==(const StoragePolicy &) const = default;
 };
 

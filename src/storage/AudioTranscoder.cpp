@@ -365,11 +365,20 @@ bool canFormat(int format) {
 }
 
 StorageCodecCapabilities ProbeStorageCodecs() {
+  // Registry checks are cheap enough for per-file audio decisions. Device
+  // availability and playback are tested separately on the video worker.
+  const auto hardware = [](std::initializer_list<const char *> names) {
+    for (const auto name : names) if (avcodec_find_encoder_by_name(name)) return true;
+    return false;
+  };
   return {support(canFormat(SF_FORMAT_FLAC | SF_FORMAT_PCM_16), "FLAC"),
           support(canFormat(SF_FORMAT_OGG | SF_FORMAT_VORBIS), "Vorbis"),
           support(avcodec_find_encoder_by_name("libx264") != nullptr, "libx264"),
           support(avcodec_find_encoder(AV_CODEC_ID_AAC) != nullptr, "AAC"),
-          support(av_guess_format("mp4", nullptr, nullptr) != nullptr, "MP4")};
+          support(av_guess_format("mp4", nullptr, nullptr) != nullptr, "MP4"),
+          support(hardware({"h264_videotoolbox", "h264_nvenc", "h264_qsv", "h264_amf", "h264_mf", "h264_mediacodec"}), "Hardware H.264"),
+          support(hardware({"hevc_videotoolbox", "hevc_nvenc", "hevc_qsv", "hevc_amf", "hevc_mf", "hevc_mediacodec"}), "Hardware HEVC"),
+          support(hardware({"av1_nvenc", "av1_qsv", "av1_amf", "av1_mf", "av1_mediacodec"}), "Hardware AV1")};
 }
 
 AudioEncodingDecision ChooseAudioEncoding(int sourceFormat, int sampleRate, int channels,

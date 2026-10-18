@@ -123,6 +123,15 @@ struct StorageCodecSupport {
 };
 struct StorageCodecCapabilities {
   StorageCodecSupport flac, vorbis, x264, aac, mp4;
+  StorageCodecSupport h264Hardware, hevc, av1;
+  bool CanEncode(VideoCodec codec) const {
+    switch (codec) {
+    case VideoCodec::H264: return x264.available || h264Hardware.available;
+    case VideoCodec::Hevc: return hevc.available;
+    case VideoCodec::Av1: return av1.available;
+    }
+    return false;
+  }
 };
 StorageCodecCapabilities ProbeStorageCodecs();
 

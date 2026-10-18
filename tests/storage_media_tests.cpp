@@ -225,18 +225,18 @@ void crossStreamTimelineTests() {
   require(rejected, "cross-stream origin rejects an unrepresentable normalized video timestamp");
   plan.timeBase = AV_TIME_BASE_Q;
   bool created = false;
-  require(rejectsRange([&] { encode({}, {}, source, plan, {}, created); }) && !created,
+  require(rejectsRange([&] { encode({}, {}, source, plan, {}, {}, {}, created); }) && !created,
           "encoder rejects cross-stream overflow before opening an output");
   source.video = {}; source.video.timeBase = AV_TIME_BASE_Q; source.video.add(0, 1);
   source.audio = {}; source.audio.timeBase = AV_TIME_BASE_Q; source.audio.add(maximum - 2, 1);
   source.description.hasAudio = true;
   source.description.audioSampleRate = 48000;
   plan.audio = VideoAudioTreatment::Remux;
-  require(rejectsRange([&] { encode({}, {}, source, plan, {}, created); }) && !created,
+  require(rejectsRange([&] { encode({}, {}, source, plan, {}, {}, {}, created); }) && !created,
           "encoder also validates a distant remuxed audio endpoint");
   plan.audio = VideoAudioTreatment::Aac;
   source.originMicros = minimum + 1;
-  require(rejectsRange([&] { encode({}, {}, source, plan, {}, created); }) && !created,
+  require(rejectsRange([&] { encode({}, {}, source, plan, {}, {}, {}, created); }) && !created,
           "encoder rejects a shared origin outside the destination timestamp range");
 }
 void existingAudioTests() {
@@ -1546,6 +1546,48 @@ void efficientVideoPreservationTests() {
   require(result.outcome == FileOutcome::Skipped && result.reason.code == StorageReason::AlreadyOptimized &&
               !encoded && !std::filesystem::exists(output),
           "H264 is preserved before full decoding even when resolution and FPS caps are exceeded");
+  policy.reencodeEfficientVideo = true;
+  encoded = false;
+  const auto optedIn = EncodeBga(candidate(source), policy, output, {},
+      [&](const StorageProgress &progress) { encoded |= progress.phase == StoragePhase::Encode; });
+  require(encoded && optedIn.reason.code != StorageReason::AlreadyOptimized &&
+              (optedIn.outcome == FileOutcome::Converted || optedIn.reason.code == StorageReason::NotSmaller),
+          "explicit opt-in permits an efficient source to use the selected video conversion");
+}
+void selectedVideoCodecTests() {
+  storage_test::TempDirectory temp;
+  storage_test::VideoFixture fixture;
+  fixture.width = 320; fixture.height = 240; fixture.lossless = true;
+  fixture.colorRange = AVCOL_RANGE_MPEG; fixture.colorSpace = AVCOL_SPC_BT709;
+  fixture.colorPrimaries = AVCOL_PRI_BT709; fixture.colorTransfer = AVCOL_TRC_BT709;
+  fixture.chromaLocation = AVCHROMA_LOC_CENTER;
+  const auto input = temp.root / "selected-codec.webm";
+  storage_test::makeVideo(input, fixture);
+  const auto source = scan(input, {});
+  for (const auto &support : RequestStorageVideoCapabilities().get()) {
+    StoragePolicy policy; policy.bga = BgaAction::CompressH264; policy.videoCodec = support.codec;
+    const auto destination = temp.root / (std::to_string(static_cast<int>(support.codec)) + ".mp4");
+    if (!support.available) {
+      require(EncodeBga(candidate(input), policy, destination, {}, {}).reason.code == StorageReason::CodecUnavailable &&
+                  !std::filesystem::exists(destination), "unavailable stored codec preserves the source");
+      continue;
+    }
+    const auto plan = PlanVideoCompression(source.description, policy);
+    require(plan.reason.code == StorageReason::None, "selected available video codec plans conversion");
+    const auto candidates = StorageVideoEncoderCandidates(support.codec, 320, 240, 25,
+        StorageVideoEncoderBitrate(support.codec, policy.videoQuality, 320, 240, 25));
+    const auto selected = std::find_if(candidates.begin(), candidates.end(),
+        [&](const auto &encoder) { return encoder.name == support.encoder; });
+    require(selected != candidates.end(), "probed encoder is used by real conversion");
+    bool created = false;
+    const auto summary = encode(input, destination, source, plan, policy, *selected, {}, created);
+    require(created, "selected encoder produces native MP4");
+    const auto output = scan(destination, {}, ScanPurpose::EncodedOutput);
+    require(output.codecId == StorageVideoCodecId(policy.videoCodec), "output retains the selected codec");
+    verify(source, output, plan, summary);
+    require(ValidateExistingBga(destination).code == StorageReason::None,
+            "verified selected-codec MP4 can be reused without transcoding");
+  }
 }
 void videoTests() {
   storage_test::TempDirectory temp;
@@ -1774,7 +1816,7 @@ void videoTests() {
 int main() {
   av_log_set_level(AV_LOG_ERROR);
   int failures = 0;
-  for (const auto test : {efficientCodecHeaderTests, efficientVideoPreservationTests, decodedDisplayTransformTests, decodedColorTests, chromaLocationTests, decodedAudioFormatTests, decodedAudioPresentationTests,
+  for (const auto test : {selectedVideoCodecTests, efficientCodecHeaderTests, efficientVideoPreservationTests, decodedDisplayTransformTests, decodedColorTests, chromaLocationTests, decodedAudioFormatTests, decodedAudioPresentationTests,
                           encodedAudioPresentationTests, embeddedAudioSideDataTests, audioRemuxTrimTests, audioRemuxContentTests, timelineTests,
                           declaredVideoTimelineTests, crossStreamTimelineTests, changingAspectRatioTests, quantizedAudioTimelineTests, asfTimelineTests,
                           truncatedAsfTests, matroskaTimelineTests, existingBgaTests, existingAudioTests, audioTests, videoDispositionTests, videoTests}) {

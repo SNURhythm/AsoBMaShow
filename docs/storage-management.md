@@ -76,7 +76,7 @@ tolerated when physical chunk bounds and complete PCM samples validate. A comple
 may omit its final WAV alignment byte; missing sample data still fails validation.
 
 BMS packs often include alternate encodings for legacy players. When the requested
-same-name FLAC, Vorbis or H.264/MP4 destination already exists, storage optimization
+same-name FLAC, Vorbis or H.264/HEVC/AV1 MP4 destination already exists, storage optimization
 fully validates it, retains its bytes and removes the redundant source through the
 recoverable transaction. This applies to local folders and ZIP/TAR entries. It
 assumes the alternatives contain the same recording; it does not compare their
@@ -87,14 +87,28 @@ remain skipped. Existing destinations are never overwritten.
 
 ## BGA video choices
 
-**Compress to H.264** uses software x264, an MP4 container and the `fast` preset.
-High, Balanced and Smaller quality correspond to CRF 18, 23 and 28; Balanced is
-the default. Up to two videos encode at a time, each with two encoder threads.
+**Compress video** writes MP4, with H.264 selected by default. It prefers working
+hardware encoders (VideoToolbox on Apple, MediaCodec on Android, and supported
+GPU encoders on Windows). H.264 falls back to software x264 when hardware cannot
+encode or preserve a particular file. HEVC and AV1 are offered only with working
+hardware encoding; they never silently switch to another codec.
+
+The codec button opens an explanation of each available choice, with encoding
+and playback information from this device. A short background encode/decode test
+must succeed before an option appears. Playback uses the app's FFmpeg CPU decoder;
+hardware encoding support does not imply hardware playback. AV1 playback includes
+dav1d. Every complete output still passes the normal MP4 decode-back validation.
+
+High, Balanced and Smaller choose encoder-specific quality or bitrate targets;
+Balanced is the default. The x264 fallback uses the `fast` preset and CRF 18, 23
+or 28 respectively. Up to two videos encode at a time, each with at most two
+software encoder threads. Hardware drivers manage their own execution.
+
 The main saving is replacing inefficient video such as MPEG-1; resizing is optional.
-Sources already using H.264, HEVC/H.265, VP9, AV1 or VVC/H.266 are preserved,
-regardless of the container, quality selection or requested caps. The codec check
-happens before full decoding, so these files do not occupy the encoder for a
-complete scan.
+By default, H.264, HEVC/H.265, VP9, AV1 and VVC/H.266 sources are preserved before
+full decoding. Enable **Include already efficient videos** to apply the selected
+codec, quality and caps to those files too. Re-encoding is lossy, and an output
+replaces its source only when validation succeeds and the result is smaller.
 
 Audio uses separate worker capacity, so a large video can overlap later audio
 and video targets, including files in the same folder or archive. Independent

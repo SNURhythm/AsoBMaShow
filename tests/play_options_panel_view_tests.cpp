@@ -6,6 +6,7 @@
 #endif
 #define private public
 #include "view/DropdownView.h"
+#include "view/OverlayPortal.h"
 #undef private
 #if defined(__clang__)
 #pragma clang diagnostic pop
@@ -30,6 +31,14 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+
+namespace storage_management {
+std::promise<StorageVideoCapabilities> storageCapabilityPromise;
+const auto storageCapabilityFuture = storageCapabilityPromise.get_future().share();
+std::shared_future<StorageVideoCapabilities> RequestStorageVideoCapabilities(std::function<void()>) {
+  return storageCapabilityFuture;
+}
+} // namespace storage_management
 
 namespace rendering {
 bgfx::VertexLayout PosTexCoord0Vertex::ms_decl;
@@ -82,10 +91,22 @@ void testStoragePolicyDirectSelection() {
   }, &portal);
   editor.setWidth(440);
   editor.applyYogaLayout();
+  Button *codecButton = nullptr;
+  Button *efficientButton = nullptr;
+  CheckboxButtonContent *efficientContent = nullptr;
   std::vector<DropdownView *> fields;
-  for (auto *row : editor.getChildren())
-    for (auto *child : row->getChildren())
+  for (auto *row : editor.getChildren()) {
+    if (auto *button = dynamic_cast<Button *>(row)) {
+      efficientButton = button;
+      efficientContent = dynamic_cast<CheckboxButtonContent *>(button->getContentView());
+    }
+    for (auto *child : row->getChildren()) {
       if (auto *dropdown = dynamic_cast<DropdownView *>(child)) fields.push_back(dropdown);
+      if (auto *button = dynamic_cast<Button *>(child)) codecButton = button;
+    }
+  }
+  require(codecButton && efficientButton && efficientContent && !efficientButton->isEnabled() &&
+              !efficientContent->checked(), "efficient-video opt-in defaults off and requires compression");
   require(fields.size() == 5, "storage policy values offer direct dropdown selection");
   auto choose = [&](int field, const std::string &id) {
     click(*fields[field]->triggerButton);
@@ -103,6 +124,49 @@ void testStoragePolicyDirectSelection() {
   choose(0, "2");
   require(changes == 1, "reselecting the current policy does not save or invalidate review");
   choose(1, "1");
+  click(*efficientButton);
+  require(selected.reencodeEfficientVideo && efficientContent->checked(),
+          "efficient-video checkbox saves the explicit opt-in");
+  click(*codecButton);
+  require(portal.presented.size() == 1, "codec selection opens a root-level modal");
+  auto *modal = portal.presented.front();
+  auto *panel = modal->getChildren().front();
+  ScrollView *codecScroll = nullptr;
+  for (auto *child : panel->getChildren())
+    if (auto *scroll = dynamic_cast<ScrollView *>(child)) codecScroll = scroll;
+  require(codecScroll, "codec explanations remain scrollable on short displays");
+  const auto &cards = codecScroll->getContentView()->getChildren();
+  require(cards.size() == 4 && YGNodeStyleGetDisplay(cards[1]->getNode()) == YGDisplayNone && YGNodeStyleGetDisplay(cards[2]->getNode()) == YGDisplayNone &&
+              YGNodeStyleGetDisplay(cards[3]->getNode()) == YGDisplayNone, "pending capability checks hide codec options");
+  StorageVideoCapabilities capabilities{};
+  capabilities[0] = {.codec = VideoCodec::H264, .available = true, .hardware = false,
+      .playbackAvailable = true};
+  capabilities[1] = {.codec = VideoCodec::Hevc, .available = false, .hardware = true,
+      .playbackAvailable = true};
+  capabilities[2] = {.codec = VideoCodec::Av1, .available = true, .hardware = true,
+      .playbackAvailable = true};
+  storageCapabilityPromise.set_value(capabilities);
+  SDL_Event wake{}; wake.type = SDL_EVENT_USER;
+  modal->handleEvents(wake);
+  require(YGNodeStyleGetDisplay(cards[1]->getNode()) == YGDisplayFlex && YGNodeStyleGetDisplay(cards[2]->getNode()) == YGDisplayNone && YGNodeStyleGetDisplay(cards[3]->getNode()) == YGDisplayFlex,
+          "codec modal only offers verified encoding and playback options");
+  auto *h264Encoding = dynamic_cast<TextView *>(cards[1]->getChildren()[2]);
+  auto *av1Encoding = dynamic_cast<TextView *>(cards[3]->getChildren()[2]);
+  auto *av1Playback = dynamic_cast<TextView *>(cards[3]->getChildren()[3]);
+  require(h264Encoding->getText() != av1Encoding->getText() &&
+              av1Playback->getText() == i18n::tr("storage.ui.codec_playback_software_help"),
+          "modal explains actual hardware encoding and software playback independently");
+  auto saved = selected;
+  saved.videoCodec = VideoCodec::Hevc;
+  const int changesBeforeRefresh = changes;
+  editor.SetPolicy(saved);
+  require(portal.presented.empty() && changes == changesBeforeRefresh &&
+              dynamic_cast<TextView *>(codecButton->getContentView())->getText().find("HEVC") != std::string::npos,
+          "unsupported saved codec remains visible without silently saving a replacement");
+  click(*codecButton);
+  click(*dynamic_cast<Button *>(cards[3]->getChildren().back()));
+  require(selected.videoCodec == VideoCodec::Av1 && changes == changesBeforeRefresh + 1 &&
+              portal.presented.empty(), "choosing a supported codec saves once and dismisses the modal");
   choose(3, "4");
   choose(4, "24");
   require(selected.bga == BgaAction::CompressH264 &&
@@ -120,7 +184,8 @@ void testStoragePolicyDirectSelection() {
   editor.SetEnabled(true);
   choose(1, "2");
   require(selected.bga == BgaAction::Delete && selected.maxFps == 24 &&
-              !fields[4]->current.enabled,
+              !fields[4]->current.enabled && !efficientButton->isEnabled() &&
+              efficientContent->checked(),
           "deletion disables video details while retaining their saved values");
   const int previousChanges = changes;
   editor.SetPolicy({});

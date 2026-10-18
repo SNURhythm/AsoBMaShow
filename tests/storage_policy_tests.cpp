@@ -25,7 +25,9 @@ int main() {
          "new preferences never mutate media");
   expect(preferences.manual.videoQuality == VideoQuality::Balanced &&
              preferences.manual.resolution == ResolutionCap::Original &&
-             preferences.manual.maxFps == 0,
+             preferences.manual.maxFps == 0 &&
+             preferences.manual.videoCodec == VideoCodec::H264 &&
+             !preferences.manual.reencodeEfficientVideo,
          "default compression preserves geometry and frame timing");
   preferences.download.audio = AudioAction::LosslessFlac;
   expect(IsNoOp(EffectiveDownloadPolicy(preferences)),
@@ -37,7 +39,7 @@ int main() {
   expect(EffectiveDownloadPolicy(preferences).bga == BgaAction::Keep,
          "manual destructive choice never affects downloads");
 
-  for (int field = 0; field < 5; ++field) {
+  for (int field = 0; field < 6; ++field) {
     auto invalid = preferences;
     switch (field) {
     case 0: invalid.download.audio = static_cast<AudioAction>(-1); break;
@@ -45,6 +47,7 @@ int main() {
     case 2: invalid.download.videoQuality = static_cast<VideoQuality>(99); break;
     case 3: invalid.download.resolution = static_cast<ResolutionCap>(99); break;
     case 4: invalid.download.maxFps = 29; break;
+    case 5: invalid.download.videoCodec = static_cast<VideoCodec>(99); break;
     }
     auto safe = Sanitize(invalid);
     expect(!safe.afterDownload && IsNoOp(safe.download),

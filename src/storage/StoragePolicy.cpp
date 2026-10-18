@@ -9,6 +9,7 @@ bool IsValid(const StoragePolicy &policy) {
          policy.bga >= BgaAction::Keep && policy.bga <= BgaAction::Delete &&
          policy.videoQuality >= VideoQuality::High && policy.videoQuality <= VideoQuality::Smaller &&
          policy.resolution >= ResolutionCap::Original && policy.resolution <= ResolutionCap::Low &&
+         policy.videoCodec >= VideoCodec::H264 && policy.videoCodec <= VideoCodec::Av1 &&
          (policy.maxFps == 0 || policy.maxFps == 15 || policy.maxFps == 24 ||
           policy.maxFps == 30 || policy.maxFps == 60);
 }

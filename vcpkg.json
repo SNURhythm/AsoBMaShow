@@ -9,9 +9,20 @@
         {
             "name": "ffmpeg",
             "features": [
+                "dav1d",
                 "gpl",
                 "x264"
             ]
+        },
+        {
+            "name": "ffmpeg",
+            "default-features": false,
+            "features": [
+                "amf",
+                "nvcodec",
+                "qsv"
+            ],
+            "platform": "windows & !uwp & (x64 | x86)"
         },
         {
             "name": "curl",

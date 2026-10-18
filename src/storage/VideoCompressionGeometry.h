@@ -24,6 +24,7 @@ struct VideoDescription {
   StorageCodecCapabilities codecs;
 };
 struct VideoCompressionPlan {
+  VideoCodec codec = VideoCodec::H264;
   int width = 0, height = 0;
   AVRational sampleAspectRatio{1, 1};
   int rotation = 0, crf = 23;

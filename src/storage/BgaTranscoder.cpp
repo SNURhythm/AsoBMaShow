@@ -1,7 +1,10 @@
 #include "BgaTranscoder.h"
+#include "StorageVideoCapabilities.h"
+#include "StorageVideoEncoder.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
+#include <libavcodec/bsf.h>
 #include <libavformat/avformat.h>
 #include <libavutil/audio_fifo.h>
 #include <libavutil/display.h>
@@ -297,6 +300,7 @@ struct AudioSampleHasher {
   }
 };
 struct Scan {
+  AVCodecID codecId = AV_CODEC_ID_NONE;
   VideoDescription description;
   Timeline video, audio;
   int videoDisposition = 0, audioDisposition = 0;
@@ -525,10 +529,12 @@ Scan scan(const fs::path &path, const Checkpoint &check, ScanPurpose purpose = S
   checkpoint(check);
   Input input(path, preserveEfficientVideo);
   const bool existingDestination = purpose == ScanPurpose::ExistingDestination;
+  const auto codecId = input.format->streams[input.video]->codecpar->codec_id;
   if (existingDestination && (!std::strstr(input.format->iformat->name, "mp4") ||
-      input.format->streams[input.video]->codecpar->codec_id != AV_CODEC_ID_H264))
-    unsupported("Existing video must contain H264 in a native MP4 container");
+      (codecId != AV_CODEC_ID_H264 && codecId != AV_CODEC_ID_HEVC && codecId != AV_CODEC_ID_AV1)))
+    unsupported("Existing video must contain H.264, HEVC or AV1 in a native MP4 container");
   Scan result;
+  result.codecId = codecId;
   auto &description = result.description;
   if (!existingDestination) {
     description.codecs = ProbeStorageCodecs();
@@ -779,38 +785,57 @@ struct ScaleBuffer {
   }
   ~ScaleBuffer() { sws_freeContext(value); }
 };
+struct VideoMetadataFilter {
+  AVBSFContext *value = nullptr;
+  ~VideoMetadataFilter() { av_bsf_free(&value); }
+  void initialize(const AVCodecContext &encoder, AVStream &stream, bool hardware) {
+    if (!hardware || (encoder.codec_id != AV_CODEC_ID_H264 && encoder.codec_id != AV_CODEC_ID_HEVC)) return;
+    // Hardware consumes the supplied NV12 grid without resampling it, but some
+    // drivers (including VideoToolbox) omit its chroma-siting VUI. Describe the
+    // actual scaler output in the bitstream before muxing; decode-back must
+    // still verify exactly the original siting and all other presentation data.
+    const auto filter = av_bsf_get_by_name(encoder.codec_id == AV_CODEC_ID_H264 ? "h264_metadata" : "hevc_metadata");
+    if (!filter) throw Failure{StorageReason::CodecUnavailable, "Video chroma metadata filter is unavailable", FileOutcome::Skipped};
+    checked(av_bsf_alloc(filter, &value), "Allocate video metadata filter");
+    checked(avcodec_parameters_from_context(value->par_in, &encoder), "Configure video metadata filter");
+    value->time_base_in = encoder.time_base;
+    checked(av_opt_set_int(value->priv_data, "chroma_sample_loc_type", encoder.chroma_sample_location - AVCHROMA_LOC_LEFT, 0),
+            "Preserve encoded chroma location");
+    checked(av_bsf_init(value), "Initialize video metadata filter");
+    checked(avcodec_parameters_copy(stream.codecpar, value->par_out), "Copy corrected video metadata");
+  }
+};
 struct EncodedSummary { std::uint64_t frames = 0; };
 EncodedSummary encode(const fs::path &source, const fs::path &destination, const Scan &sourceScan,
-                       const VideoCompressionPlan &plan, const Checkpoint &check, bool &created) {
+                       const VideoCompressionPlan &plan, const StoragePolicy &policy,
+                       const StorageVideoEncoderCandidate &candidate, const Checkpoint &check, bool &created) {
   validateTimelineOrigin(sourceScan.video, sourceScan.originMicros, plan.timeBase);
   if (sourceScan.description.hasAudio)
     validateTimelineOrigin(sourceScan.audio, sourceScan.originMicros,
         plan.audio == VideoAudioTreatment::Remux ? sourceScan.audio.timeBase : AVRational{1, sourceScan.description.audioSampleRate});
   Input input(source); Output output; output.open(destination, created);
   Codec videoEncoder, audioEncoder;
+  VideoMetadataFilter videoMetadata;
   ScaleBuffer scale; AudioBuffers audioBuffers;
-  const auto videoCodec = avcodec_find_encoder_by_name("libx264");
-  if (!videoCodec) throw Failure{StorageReason::CodecUnavailable, "libx264 is unavailable", FileOutcome::Skipped};
+  const auto videoCodec = avcodec_find_encoder_by_name(candidate.name.c_str());
+  if (!videoCodec) throw Failure{StorageReason::CodecUnavailable, "Selected encoder is unavailable", FileOutcome::Skipped};
   videoEncoder.value = avcodec_alloc_context3(videoCodec);
   if (!videoEncoder.value) throw std::bad_alloc();
   auto &video = *videoEncoder.value;
-  video.width = plan.width; video.height = plan.height; video.pix_fmt = AV_PIX_FMT_YUV420P;
+  video.width = plan.width; video.height = plan.height;
   video.time_base = plan.timeBase; video.framerate = plan.frameRate;
   video.sample_aspect_ratio = plan.sampleAspectRatio;
   video.color_range = sourceScan.colorRange; video.colorspace = sourceScan.colorSpace;
   video.color_primaries = sourceScan.colorPrimaries; video.color_trc = sourceScan.colorTransfer;
   video.chroma_sample_location = sourceScan.chromaLocation;
-  video.thread_count = StorageExecutionLimits::videoThreads; video.max_b_frames = 0;
-  const auto gop = ((std::int64_t(plan.frameRate.num) + plan.frameRate.den - 1) / plan.frameRate.den) * 2;
-  if (gop <= 0 || gop > std::numeric_limits<int>::max()) unsupported("Video frame rate exceeds encoder limits");
-  video.gop_size = static_cast<int>(gop);
   if (output.format->oformat->flags & AVFMT_GLOBALHEADER) video.flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-  checked(av_opt_set(video.priv_data, "preset", "fast", 0), "Set x264 preset");
-  checked(av_opt_set_int(video.priv_data, "crf", plan.crf, 0), "Set x264 CRF");
-  checked(avcodec_open2(&video, videoCodec, nullptr), "Open x264", StorageReason::CodecUnavailable);
+  std::string encoderError;
+  if (!ConfigureStorageVideoEncoder(&video, candidate, policy, encoderError))
+    throw Failure{StorageReason::CodecUnavailable, std::move(encoderError), FileOutcome::Skipped};
   auto videoStream = avformat_new_stream(output.format, nullptr);
   if (!videoStream) throw std::bad_alloc();
   checked(avcodec_parameters_from_context(videoStream->codecpar, &video), "Configure MP4 video");
+  videoMetadata.initialize(video, *videoStream, candidate.hardware);
   videoStream->time_base = plan.timeBase; videoStream->sample_aspect_ratio = plan.sampleAspectRatio;
   const auto sourceVideo = input.format->streams[input.video];
   // Dictionary copies are best effort: MP4 cannot represent every descriptive
@@ -865,9 +890,24 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
   checked(av_opt_set_int(output.format->priv_data, "movie_timescale", AV_TIME_BASE, 0), "Set MP4 movie clock");
   checked(avformat_write_header(output.format, nullptr), "Write MP4 header", StorageReason::IoError);
   auto compressed = packet();
-  // x264 buffers a bounded lookahead. Associate packet durations with its input
+  // Encoders may buffer a bounded lookahead. Associate packet durations with its input
   // timestamps so VFR gaps and the final presentation interval survive muxing.
   std::deque<std::pair<std::int64_t, std::int64_t>> durations;
+  auto mux = [&](const AVCodecContext &encoder, AVStream *stream) {
+    rescalePacketTimestamps(*compressed, encoder.time_base, stream->time_base);
+    compressed->stream_index = stream->index;
+    checked(av_interleaved_write_frame(output.format, compressed.get()), "Write MP4 packet", StorageReason::IoError);
+    av_packet_unref(compressed.get());
+  };
+  auto filterVideo = [&](AVPacket *input) {
+    checked(av_bsf_send_packet(videoMetadata.value, input), "Correct video metadata");
+    int filtered;
+    while ((filtered = av_bsf_receive_packet(videoMetadata.value, compressed.get())) >= 0) {
+      checkpoint(check);
+      mux(video, videoStream);
+    }
+    if (filtered != AVERROR(EAGAIN) && filtered != AVERROR_EOF) checked(filtered, "Read corrected video packet");
+  };
   auto send = [&](AVCodecContext &encoder, AVStream *stream, AVFrame *decoded) {
     checkpoint(check);
     if (&encoder == &video && decoded) durations.emplace_back(decoded->pts, decoded->duration);
@@ -885,10 +925,8 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
           compressed->duration = compressed->pts >= end ? 0 :
               std::min(compressed->duration, timestampSubtract(end, compressed->pts));
       }
-      rescalePacketTimestamps(*compressed, encoder.time_base, stream->time_base);
-      compressed->stream_index = stream->index;
-      checked(av_interleaved_write_frame(output.format, compressed.get()), "Write MP4 packet", StorageReason::IoError);
-      av_packet_unref(compressed.get());
+      if (&encoder == &video && videoMetadata.value) filterVideo(compressed.get());
+      else mux(encoder, stream);
     }
     if (status != AVERROR(EAGAIN) && status != AVERROR_EOF) checked(status, "Read encoded packet");
   };
@@ -976,6 +1014,7 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
   if (pending->duration <= 0) unsupported("Invalid final video duration");
   send(video, videoStream, pending.get()); ++summary.frames;
   send(video, videoStream, nullptr);
+  if (videoMetadata.value) filterVideo(nullptr);
   if (!durations.empty()) throw Failure{StorageReason::ValidationFailed, "Encoder did not produce all video frames"};
   flushAudio(true);
   if (audioEncoder.value) send(*audioEncoder.value, audioStream, nullptr);
@@ -994,7 +1033,8 @@ void verify(const Scan &source, const Scan &output, const VideoCompressionPlan &
   if (output.videoDisposition != (source.videoDisposition | AV_DISPOSITION_DEFAULT) ||
       (description.hasAudio && output.audioDisposition != (source.audioDisposition | AV_DISPOSITION_DEFAULT)))
     throw Failure{StorageReason::ValidationFailed, "MP4 decode-back stream disposition validation failed"};
-  if (!description.h264 || description.width != plan.width || description.height != plan.height ||
+  if ((plan.codec == VideoCodec::H264 ? !description.h264 : output.codecId != StorageVideoCodecId(plan.codec)) ||
+      description.width != plan.width || description.height != plan.height ||
       av_cmp_q(description.sampleAspectRatio, plan.sampleAspectRatio) || description.rotation != plan.rotation ||
       description.alpha || description.hdr || description.interlaced || description.unsupportedContent ||
       description.hasAudio != source.description.hasAudio || output.video.frames != summary.frames ||
@@ -1054,28 +1094,51 @@ EncodeResult EncodeBga(const AssetCandidate &candidate, const StoragePolicy &pol
     if (policy.bga != BgaAction::CompressH264) return {FileOutcome::Skipped, {}, {StorageReason::PolicyKeep, "BGA compression is not selected"}};
     if (asobmshow::chart_assets::ClassifyMediaPath(candidate.source) != asobmshow::chart_assets::MediaKind::Video)
       return {FileOutcome::Skipped, {}, {StorageReason::UnsupportedSource, "Only supported video paths are eligible"}};
-    const auto source = scan(candidate.source, check, ScanPurpose::SourceConversion, true);
+    const auto source = scan(candidate.source, check, ScanPurpose::SourceConversion, !policy.reencodeEfficientVideo);
     const auto plan = PlanVideoCompression(source.description, policy);
     if (plan.reason.code != StorageReason::None) return {FileOutcome::Skipped, {}, plan.reason};
-    if (progress) progress({StoragePhase::Encode, candidate.source});
-    const auto summary = encode(candidate.source, temporaryOutput, source, plan, check, created);
-    if (progress) progress({StoragePhase::Verify, candidate.source});
-    try { verify(source, scan(temporaryOutput, check, ScanPurpose::EncodedOutput), plan, summary); }
-    catch (const Failure &failure) {
-      if (failure.reason == StorageReason::Cancelled) throw;
-      throw Failure{StorageReason::ValidationFailed, failure.detail};
-    }
+    const auto pendingCapabilities = RequestStorageVideoCapabilities();
+    while (pendingCapabilities.wait_for(std::chrono::milliseconds(25)) != std::future_status::ready)
+      checkpoint(check);
     checkpoint(check);
-    std::error_code error;
-    const auto before = fs::file_size(candidate.source, error);
-    if (error) throw Failure{StorageReason::IoError, "Cannot measure source video"};
-    const auto after = fs::file_size(temporaryOutput, error);
-    if (error) throw Failure{StorageReason::IoError, "Cannot measure encoded video"};
-    if (after >= before) {
-      discard();
-      return {FileOutcome::Skipped, {}, {StorageReason::NotSmaller, "Encoded video is not smaller; requested caps were not applied"}};
+    const auto capabilities = pendingCapabilities.get();
+    const auto &support = capabilities[static_cast<std::size_t>(policy.videoCodec)];
+    if (!support.available)
+      return {FileOutcome::Skipped, {}, {StorageReason::CodecUnavailable, support.reason}};
+    const int fps = static_cast<int>(std::ceil(av_q2d(plan.frameRate)));
+    const int bitrate = StorageVideoEncoderBitrate(policy.videoCodec, policy.videoQuality, plan.width, plan.height, fps);
+    const auto encoders = StorageVideoEncoderCandidates(policy.videoCodec, plan.width, plan.height, fps, bitrate);
+    StorageDiagnostic last{StorageReason::CodecUnavailable, "No encoder supports this video on this device"};
+    FileOutcome lastOutcome = FileOutcome::Skipped;
+    for (const auto &encoder : encoders) {
+      checkpoint(check);
+      try {
+        if (progress) progress({StoragePhase::Encode, candidate.source});
+        const auto summary = encode(candidate.source, temporaryOutput, source, plan, policy, encoder, check, created);
+        if (progress) progress({StoragePhase::Verify, candidate.source});
+        try { verify(source, scan(temporaryOutput, check, ScanPurpose::EncodedOutput), plan, summary); }
+        catch (const Failure &failure) {
+          if (failure.reason == StorageReason::Cancelled) throw;
+          throw Failure{StorageReason::ValidationFailed, failure.detail};
+        }
+        checkpoint(check);
+        std::error_code error;
+        const auto before = fs::file_size(candidate.source, error);
+        if (error) throw Failure{StorageReason::IoError, "Cannot measure source video"};
+        const auto after = fs::file_size(temporaryOutput, error);
+        if (error) throw Failure{StorageReason::IoError, "Cannot measure encoded video"};
+        if (after >= before)
+          throw Failure{StorageReason::NotSmaller, "Encoded video is not smaller; requested caps were not applied", FileOutcome::Skipped};
+        return {FileOutcome::Converted, temporaryOutput, {}};
+      } catch (const Failure &failure) {
+        discard(); created = false;
+        // Retry another encoder only for codec-specific limitations. Cancellation
+        // and filesystem failures must stop immediately, retaining the source.
+        if (!encoder.hardware || failure.reason == StorageReason::Cancelled || failure.reason == StorageReason::IoError) throw;
+        last = {failure.reason, failure.detail}; lastOutcome = failure.outcome;
+      }
     }
-    return {FileOutcome::Converted, temporaryOutput, {}};
+    return {lastOutcome, {}, std::move(last)};
   } catch (const Failure &failure) {
     discard(); return {failure.outcome, {}, {failure.reason, failure.detail}};
   } catch (const std::exception &error) {

@@ -6264,6 +6264,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/storage/StoragePreflight.cpp src/storage/StorageDirectoryWorkingSet.cpp
         src/storage/StorageDirectoryInventory.cpp src/storage/StoragePathIndex.cpp src/storage/StorageScanScheduler.cpp
         src/ChartScanWorkScheduler.cpp src/storage/AudioTranscoder.cpp src/storage/BgaTranscoder.cpp
+        src/storage/StorageVideoEncoder.cpp src/storage/StorageVideoCapabilities.cpp
         src/storage/VideoCompressionGeometry.cpp src/storage/ChartResourceInventory.cpp
         src/storage/StorageFileTransaction.cpp src/storage/StoragePlatform.cpp
         src/audio/ChartVisualAssetResolver.cpp src/AtomicFile.cpp src/FileChecksum.cpp
