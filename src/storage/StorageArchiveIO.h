@@ -23,6 +23,8 @@ public:
   FileIdentity Identity() const;
   std::string ChangeToken() const;
   std::uint64_t BytesRead() const { return bytesRead_; }
+  std::uint64_t ReadCalls() const { return readCalls_; }
+  std::uint64_t BackwardReads() const { return backwardReads_; }
   void CheckPath() const;
   const std::filesystem::path path;
 private:
@@ -31,6 +33,7 @@ private:
   FileIdentity original_;
   std::string originalToken_;
   mutable std::uint64_t bytesRead_ = 0;
+  mutable std::uint64_t readCalls_ = 0, backwardReads_ = 0, readEnd_ = 0;
 #ifdef _WIN32
   void *handle_ = reinterpret_cast<void *>(-1);
 #else

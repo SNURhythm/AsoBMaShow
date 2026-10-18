@@ -154,7 +154,7 @@ StorageArchive::StorageArchive(const fs::path &path, const fs::path &manifest,
       " data_offset INTEGER NOT NULL, packed INTEGER NOT NULL, bytes INTEGER NOT NULL, crc INTEGER NOT NULL,"
       " method INTEGER NOT NULL, flags INTEGER NOT NULL, directory INTEGER NOT NULL, name TEXT NOT NULL COLLATE NOCASE UNIQUE,"
       " raw_name BLOB NOT NULL, metadata BLOB NOT NULL, stem TEXT NOT NULL, media INTEGER NOT NULL);"
-      "CREATE INDEX entry_stems ON entries(stem, media); BEGIN;");
+      "BEGIN;");
   try {
     require(identity.bytes >= 4, "Archive is too short");
     const auto signature = io.Read(0, 4);
@@ -167,7 +167,8 @@ StorageArchive::StorageArchive(const fs::path &path, const fs::path &manifest,
     Statement q(db->value, "SELECT offset, span FROM entries ORDER BY offset");
     while (q.step()) { active(check); require(q.integer(0) >= end, "Overlapping archive entries"); end = plus(q.integer(0), q.integer(1)); }
     require(identityOf(path, roots) == identity, "Archive changed while indexing", StorageReason::StaleInput);
-    db->exec("COMMIT;");
+    // Build the lookup index in bulk once all validated rows are present.
+    db->exec("CREATE INDEX entry_stems ON entries(stem, media); COMMIT;");
   } catch (...) { db->exec("ROLLBACK;"); throw; }
 }
 StorageArchive::~StorageArchive() = default;
@@ -254,14 +255,25 @@ void StorageArchive::ParseZip(Checkpoint check) {
     entry.directory = !entry.rawName.empty() && entry.rawName.back() == '/'; safeName(entry.name, entry.directory);
     require(!entry.directory || !entry.bytes, "Nonempty ZIP directory");
     require(entry.method != 0 || entry.bytes == entry.packed, "Invalid stored ZIP sizes");
-    require(plus(entry.offset, 30) <= offset, "ZIP local header outside data area");
-    const auto local = io.Read(entry.offset, 30);
+    Add(entry, insert);
+  }
+  require(cursor == centralEnd, "Unsupported trailing ZIP central metadata");
+  // Central order is arbitrary. Validate local records in physical order using
+  // the existing temporary manifest, with bounded memory and forward reads.
+  Statement next(db->value, nextArchiveEntrySql);
+  Statement update(db->value, "UPDATE entries SET span=?,data_offset=? WHERE id=?");
+  std::optional<std::uint64_t> previous;
+  while (auto record = nextArchiveEntry(next, previous)) {
+    active(check);
+    auto &entry = *record; previous = entry.offset;
+    require(plus(entry.offset, 30 + entry.rawName.size()) <= offset, "ZIP local header outside data area");
+    const auto local = io.Read(entry.offset, 30 + entry.rawName.size());
     require(number(local, 0, 4) == 0x04034b50 && number(local, 6, 2) == entry.flags && number(local, 8, 2) == entry.method,
         "Inconsistent ZIP local header");
     const auto localName = number(local, 26, 2), localExtra = number(local, 28, 2);
     entry.dataOffset = plus(entry.offset, 30 + localName + localExtra);
     require(plus(entry.dataOffset, entry.packed) <= offset && localName == entry.rawName.size() &&
-        io.Read(entry.offset + 30, localName) == entry.rawName, "Inconsistent ZIP local filename or extent");
+        std::string_view(local).substr(30) == entry.rawName, "Inconsistent ZIP local filename or extent");
     auto localBytes = number(local, 22, 4), localPacked = number(local, 18, 4);
     bool local64 = false;
     extras(io.Read(entry.offset + 30 + localName, localExtra), [&](auto tag, auto data) {
@@ -273,20 +285,19 @@ void StorageArchive::ParseZip(Checkpoint check) {
     auto finish = plus(entry.dataOffset, entry.packed);
     if (entry.flags & 8) {
       const bool wide = local64 || entry.bytes >= 0xffffffff || entry.packed >= 0xffffffff;
-      require(plus(finish, 4) <= offset, "Missing ZIP data descriptor");
-      const auto marker = io.Read(finish, 4);
-      const auto prefix = number(marker, 0, 4) == 0x08074b50 ? 4U : 0U;
+      // Read the largest descriptor once. Unsigned descriptors can include up
+      // to four lookahead bytes; only their actual length belongs to this span.
+      const auto descriptor = io.Read(finish, std::min<std::uint64_t>(wide ? 24 : 16, offset - finish));
+      const auto prefix = number(descriptor, 0, 4) == 0x08074b50 ? 4U : 0U;
       const auto descriptorSize = prefix + 4 + (wide ? 16 : 8);
       require(plus(finish, descriptorSize) <= offset, "Truncated ZIP data descriptor");
-      const auto descriptor = io.Read(finish, descriptorSize);
       require(number(descriptor, prefix, 4) == entry.crc && number(descriptor, prefix + 4, wide ? 8 : 4) == entry.packed &&
           number(descriptor, prefix + 4 + (wide ? 8 : 4), wide ? 8 : 4) == entry.bytes, "Inconsistent ZIP data descriptor");
       finish += descriptorSize;
     } else require(localBytes == entry.bytes && localPacked == entry.packed && number(local, 14, 4) == entry.crc,
         "Inconsistent ZIP local sizes or checksum");
-    entry.span = finish - entry.offset; Add(entry, insert);
+    update.reset(); update.bind(1, finish - entry.offset); update.bind(2, entry.dataOffset); update.bind(3, entry.id); update.step();
   }
-  require(cursor == centralEnd, "Unsupported trailing ZIP central metadata");
 }
 void StorageArchive::ParseTar(Checkpoint check) {
   Statement insert(db->value, "INSERT INTO entries VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
@@ -321,9 +332,15 @@ void StorageArchive::ParseTar(Checkpoint check) {
   throw StorageArchiveError(StorageReason::UnsupportedFormat, "Missing TAR end record");
 }
 std::optional<StorageArchiveEntry> StorageArchive::Next(std::optional<std::uint64_t> after) const {
-  Statement q(db->value, "SELECT id,offset,span,data_offset,packed,bytes,crc,method,flags,directory,name,raw_name,metadata FROM entries WHERE offset > ? ORDER BY offset LIMIT 1");
+  Statement q(db->value, nextArchiveEntrySql);
+  return nextArchiveEntry(q, after);
+}
+std::optional<StorageArchiveEntry> archive_detail::nextArchiveEntry(Statement &q, std::optional<std::uint64_t> after) {
+  q.reset();
   if (after) q.bind(1, *after); else sqlite3_bind_int64(q.value, 1, -1);
-  if (!q.step()) return {}; return row(q);
+  std::optional<StorageArchiveEntry> entry;
+  if (q.step()) entry = row(q);
+  q.reset(); return entry;
 }
 std::optional<AssetCandidate> StorageArchive::Candidate(const StorageArchiveEntry &entry, const StoragePolicy &policy, StorageDiagnostic &reason) const {
   Statement collisions(db->value, candidateCollisionSql);
@@ -347,7 +364,8 @@ std::optional<AssetCandidate> archive_detail::archiveCandidate(const StorageArch
     auto stem = path; stem.replace_extension();
     q.reset();
     q.text(1, lower(pathText(stem))); q.bind(2, static_cast<unsigned>(kind)); q.text(3, pathText(candidate.destination)); q.bind(4, entry.id); q.step();
-    if (q.integer(0) > 1) { reason = {StorageReason::Collision, "Same-stem archive media alternatives are ambiguous"}; return {}; }
+    const bool ambiguous = q.integer(0) > 1; q.reset();
+    if (ambiguous) { reason = {StorageReason::Collision, "Same-stem archive media alternatives are ambiguous"}; return {}; }
   }
   return candidate;
 }

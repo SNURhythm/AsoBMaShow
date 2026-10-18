@@ -157,7 +157,11 @@ public:
     // The pinned source change token guards the untouched ranges between batches.
     active(check); archive.io.CheckPath(); CaptureSourceStamp();
     Set("ready", 1); transaction.Commit(); syncFile(journal / "manifest.sqlite"); syncDirectory(journal); syncDirectory(journal.parent_path());
-    if (deps.metrics) deps.metrics->preparationBytesRead += archive.io.BytesRead();
+    if (deps.metrics) {
+      deps.metrics->preparationBytesRead += archive.io.BytesRead();
+      deps.metrics->preparationReadCalls += archive.io.ReadCalls();
+      deps.metrics->preparationBackwardReads += archive.io.BackwardReads();
+    }
     Fault("archive-ready");
   }
   std::optional<Chunk> NextChunk(std::uint64_t entry, std::uint64_t after = 0) {
@@ -415,15 +419,18 @@ public:
     copyProgress = notify;
     const StoragePathIndex selected(summary ? summary->innerRoots : std::vector<fs::path>{});
     std::optional<std::uint64_t> cursor;
-    while (auto entry = archive.Next(cursor)) {
+    Statement next(db.value, nextArchiveEntrySql), collisions(db.value, candidateCollisionSql);
+    Statement state(db.value, "SELECT complete,action FROM entries WHERE id=?");
+    while (auto entry = nextArchiveEntry(next, cursor)) {
       cursor = entry->offset;
-      Statement state(db.value, "SELECT complete,action FROM entries WHERE id=?"); state.bind(1, entry->id); require(state.step(), "Missing archive entry");
-      if (state.integer(0)) continue;
+      state.reset(); state.bind(1, entry->id); require(state.step(), "Missing archive entry");
+      const auto completed = state.integer(0), action = state.integer(1); state.reset();
+      if (completed) continue;
       const bool cancelled = check && !check(); report.cancelled |= cancelled;
       if (cancelled && !started) return;
       bool deleted = false;
-      if (summary && !report.cancelled && !state.integer(1) && !selected.Ancestors(fs::u8path(entry->name)).empty()) {
-        StorageDiagnostic reason; const auto candidate = archive.Candidate(*entry, policy, reason);
+      if (summary && !report.cancelled && !action && !selected.Ancestors(fs::u8path(entry->name)).empty()) {
+        StorageDiagnostic reason; const auto candidate = archiveCandidate(*entry, policy, reason, collisions);
         if (candidate) {
           if (candidate->operation == AssetOperation::Delete) {
             archive.io.CheckPath();
@@ -459,9 +466,11 @@ public:
     if (archive.Format() == StorageArchiveFormat::Tar) append(std::string(1024, '\0'));
     else {
       std::optional<std::uint64_t> cursor;
-      while (auto entry = archive.Next(cursor)) {
-        cursor = entry->offset; Statement q(db.value, "SELECT action,output_offset FROM entries WHERE id=?"); q.bind(1, entry->id); q.step();
-        if (q.integer(0) == 2) continue; append(archive.Central(*entry, q.integer(1))); ++count;
+      Statement next(db.value, nextArchiveEntrySql), state(db.value, "SELECT action,output_offset FROM entries WHERE id=?");
+      while (auto entry = nextArchiveEntry(next, cursor)) {
+        cursor = entry->offset; state.reset(); state.bind(1, entry->id); state.step();
+        const auto action = state.integer(0), outputOffset = state.integer(1); state.reset();
+        if (action == 2) continue; append(archive.Central(*entry, outputOffset)); ++count;
       }
       const auto centralSize = plus(destination, buffer.size()) - start;
       if (count >= 0xffff || centralSize >= 0xffffffff || start >= 0xffffffff) {

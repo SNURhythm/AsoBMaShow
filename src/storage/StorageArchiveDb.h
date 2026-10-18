@@ -66,6 +66,10 @@ struct Statement {
 // Both the lightweight review index and the physical update manifest use these
 // columns. Stop after two matches: only ambiguity, not the full count, matters.
 inline constexpr auto candidateCollisionSql = "SELECT count(*) FROM (SELECT 1 FROM entries WHERE (stem=? AND media=?) OR (name=? AND id!=?) LIMIT 2)";
+inline constexpr auto nextArchiveEntrySql = "SELECT id,offset,span,data_offset,packed,bytes,crc,method,flags,directory,name,raw_name,metadata FROM entries WHERE offset > ? ORDER BY offset LIMIT 1";
+// Keyset queries are reset after copying each row, before callers mutate the
+// manifest. Their owner keeps them within one database open/close lifetime.
+std::optional<StorageArchiveEntry> nextArchiveEntry(Statement &, std::optional<std::uint64_t> after = {});
 std::optional<AssetCandidate> archiveCandidate(const StorageArchiveEntry &, const StoragePolicy &,
     StorageDiagnostic &, Statement &collisions);
 struct Database {

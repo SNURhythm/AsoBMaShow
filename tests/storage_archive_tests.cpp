@@ -8,6 +8,7 @@
 #include "StorageTestSupport.h"
 #include <archive_entry.h>
 #include <zlib.h>
+#include <iostream>
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
 #if TARGET_OS_OSX
@@ -251,6 +252,135 @@ void archivePreparationDoesNotReadPayloads() {
       "cancellation before applying keeps the original archive");
   require(metrics.preparationBytesRead < 128 * 1024,
       "confirmation reads archive metadata, not every payload byte");
+}
+void archiveTraversal(std::size_t count, bool enforceBudget) {
+  using storage_management::archive_detail::number;
+  storage_test::TempDirectory temp;
+  const auto path = temp.root / "reverse-directory.zip";
+  std::vector<std::pair<std::string, std::string>> files;
+  for (std::size_t i = 0; i < count; ++i)
+    files.emplace_back("song/" + std::to_string(i) + ".wav", std::string(2048, 'a'));
+  writeArchive(path, files);
+  // Central directory order is independent of physical local-record order.
+  // Reverse only the central records to exercise a valid but seek-heavy ZIP.
+  {
+    std::fstream file(path, std::ios::in | std::ios::out | std::ios::binary);
+    file.seekg(-22, std::ios::end); std::string end(22, '\0'); file.read(end.data(), end.size());
+    require(number(end, 0, 4) == 0x06054b50, "fixture has an ordinary ZIP end record");
+    const auto offset = number(end, 16, 4);
+    std::string central(number(end, 12, 4), '\0'); file.seekg(offset); file.read(central.data(), central.size());
+    std::vector<std::string_view> records;
+    for (std::size_t at = 0; at < central.size();) {
+      const auto size = 46 + number(central, at + 28, 2) + number(central, at + 30, 2) + number(central, at + 32, 2);
+      require(size <= central.size() - at, "complete fixture central record");
+      records.push_back(std::string_view(central).substr(at, size)); at += size;
+    }
+    file.seekp(offset);
+    for (auto i = records.rbegin(); i != records.rend(); ++i) file.write(i->data(), i->size());
+    require(file.good(), "reverse fixture central directory");
+  }
+  const auto start = std::chrono::steady_clock::now();
+  StorageArchive archive(path, temp.root / "manifest.sqlite", {});
+  const auto prepared = std::chrono::steady_clock::now();
+  const auto calls = archive.io.ReadCalls(), backwards = archive.io.BackwardReads(), bytes = archive.io.BytesRead();
+  storage_management::archive_detail::Statement next(archive.db->value, storage_management::archive_detail::nextArchiveEntrySql);
+  storage_management::archive_detail::Statement collisions(archive.db->value, storage_management::archive_detail::candidateCollisionSql);
+  std::optional<std::uint64_t> cursor;
+  std::size_t visited = 0;
+  while (auto entry = storage_management::archive_detail::nextArchiveEntry(next, cursor)) {
+    cursor = entry->offset;
+    StorageDiagnostic reason;
+    require(visited < files.size() && entry->name == files[visited].first && entry->bytes == 2048 &&
+        storage_management::archive_detail::archiveCandidate(*entry, {.audio = AudioAction::LosslessFlac}, reason, collisions).has_value(),
+        "physical traversal retains names, sizes and compression eligibility");
+    ++visited;
+  }
+  const auto done = std::chrono::steady_clock::now();
+  require(visited == count, "traversal retains every entry");
+  std::cout << "archive traversal entries=" << count << " reads=" << calls << " backwards=" << backwards << " bytes=" << bytes
+      << " prepare_ms=" << std::chrono::duration<double, std::milli>(prepared - start).count()
+      << " traverse_ms=" << std::chrono::duration<double, std::milli>(done - prepared).count() << '\n';
+  if (enforceBudget) {
+    require(calls <= 3 * count + 8, "archive metadata reads are combined rather than split per field");
+    require(backwards <= 3, "local validation walks physical offsets even when the central directory is reversed");
+    require(bytes < 65557 + count * 300, "metadata traversal does not prefetch media payloads");
+  }
+}
+void archiveTraversalUsesOrderedMetadataReads() { archiveTraversal(32, true); }
+void archiveDescriptorBoundaries() {
+  using storage_management::archive_detail::put;
+  for (bool wide : {false, true}) for (bool signedDescriptor : {false, true}) for (int damage = 0; damage < 3; ++damage) {
+    storage_test::TempDirectory temp;
+    const auto path = temp.root / "descriptors.zip";
+    std::string contents;
+    std::vector<std::string> central;
+    const std::vector<std::pair<std::string, std::string>> files = {{"movie.avi", "video"}, {"chart.bms", "#TITLE retained"}};
+    for (const auto &[name, payload] : files) {
+      const auto offset = contents.size();
+      const auto crc = crc32(0, reinterpret_cast<const Bytef *>(payload.data()), payload.size());
+      std::string extra(wide ? 20 : 0, '\0');
+      if (wide) { put(extra, 0, 1, 2); put(extra, 2, 16, 2); put(extra, 4, payload.size(), 8); put(extra, 12, payload.size(), 8); }
+      std::string local(30, '\0'); put(local, 0, 0x04034b50, 4); put(local, 4, wide ? 45 : 20, 2); put(local, 6, 8, 2);
+      put(local, 18, wide ? 0xffffffff : 0, 4); put(local, 22, wide ? 0xffffffff : 0, 4);
+      put(local, 26, name.size(), 2); put(local, 28, extra.size(), 2);
+      const unsigned prefix = signedDescriptor ? 4 : 0, sizeWidth = wide ? 8 : 4;
+      std::string descriptor(prefix + 4 + 2 * sizeWidth, '\0');
+      if (signedDescriptor) put(descriptor, 0, 0x08074b50, 4);
+      put(descriptor, prefix, crc, 4); put(descriptor, prefix + 4, payload.size(), sizeWidth);
+      put(descriptor, prefix + 4 + sizeWidth, payload.size(), sizeWidth);
+      if (name == "chart.bms") {
+        if (damage == 1) descriptor.pop_back();
+        if (damage == 2) descriptor[prefix] ^= 1;
+      }
+      contents += local + name + extra + payload + descriptor;
+      std::string row(46, '\0'); put(row, 0, 0x02014b50, 4); put(row, 4, 45, 2); put(row, 6, wide ? 45 : 20, 2);
+      put(row, 8, 8, 2); put(row, 16, crc, 4); put(row, 20, payload.size(), 4); put(row, 24, payload.size(), 4);
+      put(row, 28, name.size(), 2); put(row, 42, offset, 4); central.push_back(row + name);
+    }
+    const auto centralOffset = contents.size();
+    for (auto row = central.rbegin(); row != central.rend(); ++row) contents += *row;
+    std::string end(22, '\0'); put(end, 0, 0x06054b50, 4); put(end, 8, files.size(), 2); put(end, 10, files.size(), 2);
+    put(end, 12, contents.size() - centralOffset, 4); put(end, 16, centralOffset, 4); contents += end;
+    { std::ofstream output(path, std::ios::binary); output.write(contents.data(), contents.size()); }
+    if (!damage) {
+      StorageArchive archive(path, temp.root / "manifest.sqlite", {});
+      const auto first = archive.Next(); require(first.has_value(), "first descriptor entry exists");
+      const auto second = archive.Next(first->offset);
+      require(first->name == "movie.avi" && second && second->name == "chart.bms" &&
+          first->offset + first->span == second->offset && second->offset + second->span == centralOffset,
+          "signed and unsigned classic/ZIP64 descriptors retain exact spans in physical order");
+    }
+    InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+        .policy = {.bga = BgaAction::Delete}, .scanScratchRoot = temp.root / "scan"};
+    const auto review = BuildStoragePreflight(request);
+    require(review.archives.size() == 1, "central directory remains readable for descriptor fixture");
+    const auto report = UpdateStorageArchive(review.archives.front(), request.policy,
+        MakeStoragePlatformPaths(temp.root / "private", {temp.root}), {});
+    if (damage) {
+      std::ifstream input(path, std::ios::binary); const std::string after((std::istreambuf_iterator<char>(input)), {});
+      require(report.failed == 1 && !report.recoveryRequired && after == contents,
+          "truncated and corrupt descriptors reject Apply before archive mutation");
+    } else {
+      const auto remaining = readArchive(path);
+      require(report.deleted == 1 && !report.failed && remaining.size() == 1 && remaining.at("chart.bms") == files.back().second,
+          "reverse central order and descriptor lookahead preserve the retained payload through compaction");
+    }
+  }
+}
+void archiveSavingsUsePhysicalSize() {
+  storage_test::TempDirectory temp;
+  const auto path = temp.root / "compressed.zip";
+  writeArchive(path, {{"movie.avi", std::string(100000, 'v')}, {"chart.bms", "#TITLE retained"}}, true);
+  const auto before = fs::file_size(path);
+  InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+      .policy = {.bga = BgaAction::Delete}, .scanScratchRoot = temp.root / "scan"};
+  const auto review = BuildStoragePreflight(request);
+  const auto report = UpdateStorageArchive(review.archives.front(), request.policy,
+      MakeStoragePlatformPaths(temp.root / "private", {temp.root}), {});
+  const auto after = BuildStoragePreflight(request);
+  require(report.deleted == 1 && !report.failed && report.reclaimedBytes == before - fs::file_size(path) &&
+      review.totalBytes && after.totalBytes && *review.totalBytes - *after.totalBytes == 100000 && report.reclaimedBytes < 1000,
+      "archive row changes count uncompressed contents while reclaimed space counts physical ZIP reduction");
 }
 std::map<std::string, std::string> readArchive(const fs::path &path) {
   auto reader = makeArchiveReadHandle(); archive_read_support_filter_all(reader.get()); archive_read_support_format_all(reader.get());
@@ -622,6 +752,7 @@ void archiveStagingRespectsPrivateBoundary() {
   }
 }
 }
+void storageArchiveTraversalBenchmark(std::size_t count) { archiveTraversal(count, false); }
 void storageArchiveDiscoverySandboxTest(const fs::path &root) {
   std::error_code error;
   (void)fs::symlink_status(root.parent_path(), error);
@@ -669,6 +800,9 @@ void storageArchiveTests(const char *executable) {
       {"cached-review", reviewUsesCachedIndexAndApplyValidatesLayout},
       {"system-entries", reviewAndApplyPreserveSystemEntries},
       {"metadata-preparation", archivePreparationDoesNotReadPayloads},
+      {"metadata-traversal", archiveTraversalUsesOrderedMetadataReads},
+      {"descriptor-boundaries", archiveDescriptorBoundaries},
+      {"physical-savings", archiveSavingsUsePhysicalSize},
       {"batched-compaction", archiveCompactionBatchesSmallRecords},
       {"update", archiveUpdatesBatchWithoutFullCopy}, {"recovery", interruptedArchiveWritesRecover},
       {"zip64", sparseZip64AndLegacyNames}, {"invalid-encoding", malformedLegacyNamesAreRejected},

@@ -120,6 +120,8 @@ void StorageArchiveIO::Read(std::uint64_t offset, std::span<char> buffer) const 
   bytesRead_ += buffer.size();
   while (!buffer.empty()) {
     const auto amount = std::min<std::size_t>(buffer.size(), 1024 * 1024);
+    ++readCalls_;
+    if (offset < readEnd_) ++backwardReads_;
 #ifdef _WIN32
     LARGE_INTEGER position; position.QuadPart = static_cast<LONGLONG>(offset);
     require(SetFilePointerEx(handle_, position, nullptr, FILE_BEGIN), "Cannot seek archive");
@@ -131,7 +133,7 @@ void StorageArchiveIO::Read(std::uint64_t offset, std::span<char> buffer) const 
     requireSystem(got >= 0, "Cannot read archive");
     require(got > 0, "Unexpected end of archive");
 #endif
-    offset += got; buffer = buffer.subspan(got);
+    offset += got; readEnd_ = offset; buffer = buffer.subspan(got);
   }
 }
 std::string StorageArchiveIO::Read(std::uint64_t offset, std::size_t length) const {

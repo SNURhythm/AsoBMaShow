@@ -427,6 +427,8 @@ void StorageManagementScene::RefreshState() {
         {"deleted", std::to_string(report->deleted)}, {"skipped", std::to_string(report->skipped)},
         {"failed", std::to_string(report->failed)}, {"bytes", bytes(report->reclaimedBytes)}});
     if (report->cleanupPending) value += std::string("\n") + i18n::tr("storage.ui.cleanup_pending");
+    if (std::ranges::any_of(report->changedRoots, [](const auto &path) { return archive_file::hasSupportedArchiveExtension(path); }))
+      value += std::string("\n") + i18n::tr("storage.ui.archive_savings_hint");
     for (const auto &file : report->files)
       if (file.reason.code != StorageReason::None) {
         value += "\n" + fspath_to_utf8(file.source.filename()) + ": " + reason(file.reason.code);
