@@ -106,8 +106,16 @@ reduction is necessary; timing adjustment is bounded by one cap interval. A
 Embedded audio is retained: compatible streams are remuxed; supported other audio
 is converted to AAC at 128 kbit/s. Unsupported HDR, alpha, interlacing, stream
 layouts or essential metadata produce a skip rather than a destructive conversion.
-Decoded color properties must remain consistent and representable throughout the
-video. Embedded audio must retain its sample format, sample rate and full channel
+AAC conversion also skips meaningful matrix-surround, downmix and audio-service
+instructions that cannot survive in its sample-only input. Default values are
+accepted; codec-native instructions remain intact when their bitstream is remuxed.
+Remuxed audio must also decode to the same samples after conversion, including
+trimmed intervals. This comparison uses the required decode passes and does not
+add another file scan; decoder-ignored source metadata remains advisory.
+Decoded color properties and chroma sample positioning must remain consistent
+and representable throughout the video, including when resizing. MP4 uses a
+microsecond movie clock to retain fractional-millisecond audio/video offsets.
+Embedded audio must retain its sample format, sample rate and full channel
 layout; changes preserve the original. Malformed frame rates that exceed encoder
 limits are rejected before computing keyframe intervals.
 Source declarations are intentionally advisory: stale starts, durations, ASF
@@ -146,6 +154,11 @@ can also be updated in place:
 
 Encrypted/split ZIPs, links, overlapping or ambiguous entries, compressed TARs,
 GNU/PAX/sparse TAR records, RAR and 7z are not supported by the in-place updater.
+ZIPs with archive-wide certificate stores or central-directory signatures also
+remain unchanged. Converted entries require safe extra fields in both local and
+central headers: timestamps, ownership and unchanged comments are retained,
+Unicode filenames and ZIP64 values are regenerated, and unsupported fields skip
+that entry. Untouched entries retain their original extra fields.
 ZIP padding or extra records between local entries or before the central directory
 are rejected before mutation; leading prefixes remain supported.
 Apply also rejects conflicting Unicode names or any filename/size disagreement
@@ -153,6 +166,12 @@ between the browsing index and physical archive, including reader normalization.
 Reading these formats elsewhere in the app remains separate from update support.
 Android SAF/content-provider references require the existing local import flow.
 Symlinks, hard links, special files and unsafe filesystem paths are rejected.
+On iOS, active folder grants cover their descendants. A failed overlapping
+bookmark does not revoke an active parent or child grant; access validation uses
+the most specific active boundary and still excludes unauthorized siblings.
+Android document renames identify open writers by filesystem identity before
+moving their reservations, covering both case aliases and distinct case-sensitive
+siblings.
 
 Selecting several folders inside one archive creates one batch. Only the selected
 media changes; charts, images and unselected entry contents stay intact. Review

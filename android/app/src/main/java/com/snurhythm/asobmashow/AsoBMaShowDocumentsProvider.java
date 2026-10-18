@@ -262,8 +262,7 @@ public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
             DocumentsMutationGuard.requireUnreserved(destination, false);
             if (source.equals(destination)) return documentId;
             if (destination.exists()) throw new IOException("A document with that name already exists");
-            Files.move(source.toPath(), destination.toPath());
-            DocumentsMutationGuard.pathRenamed(source, destination);
+            DocumentsMutationGuard.rename(source, destination);
             String renamed = policy.documentId(destination);
             changed(documentId);
             changed(renamed);

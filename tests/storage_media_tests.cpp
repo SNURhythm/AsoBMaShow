@@ -5,6 +5,9 @@
 #include "StorageVideoTestSupport.h"
 
 #include <sndfile.h>
+extern "C" {
+#include <libavutil/downmix_info.h>
+}
 #include <cmath>
 #include <iostream>
 #include <vector>
@@ -828,17 +831,19 @@ void decodedColorTests() {
   output.description.h264 = true; output.description.width = output.description.height = 16;
   VideoCompressionPlan plan; plan.width = plan.height = 16; plan.frameRate = {25, 1};
   verify(observed, output, plan, {1});
-  for (int field = 0; field < 4; ++field) {
+  for (int field = 0; field < 5; ++field) {
     if (field == 0) output.colorRange = AVCOL_RANGE_UNSPECIFIED;
     if (field == 1) output.colorSpace = AVCOL_SPC_UNSPECIFIED;
     if (field == 2) output.colorPrimaries = AVCOL_PRI_UNSPECIFIED;
     if (field == 3) output.colorTransfer = AVCOL_TRC_UNSPECIFIED;
+    if (field == 4) output.chromaLocation = AVCHROMA_LOC_LEFT;
     bool rejected = false;
     try { verify(observed, output, plan, {1}); }
     catch (const Failure &failure) { rejected = failure.reason == StorageReason::ValidationFailed; }
     require(rejected, "decode-back rejects lost color tags even when geometry and timing match");
     output.colorRange = observed.colorRange; output.colorSpace = observed.colorSpace;
     output.colorPrimaries = observed.colorPrimaries; output.colorTransfer = observed.colorTransfer;
+    output.chromaLocation = observed.chromaLocation;
   }
   for (const auto matrix : {AVCOL_SPC_BT2020_CL, AVCOL_SPC_YCGCO, AVCOL_SPC_RGB}) {
     Scan unsupportedColor;
@@ -847,6 +852,101 @@ void decodedColorTests() {
     try { observeVideoColor(unsupportedColor, params, *decoded); }
     catch (const Failure &failure) { rejected = failure.reason == StorageReason::UnsupportedFormat; }
     require(rejected, "unsupported matrices cannot silently use swscale default coefficients");
+  }
+}
+void chromaLocationTests() {
+  storage_test::TempDirectory temp;
+  const auto checkLocation = [](const std::filesystem::path &path, AVChromaLocation expected) {
+    Input input(path);
+    bool found = false;
+    decode(input, {}, [&](int index, const AVFrame &decoded) {
+      if (index != input.video) return;
+      found = true;
+      require(decoded.chroma_location == expected, "encoded video retains the chroma sample location");
+    }, [](int, const AVPacket &) {});
+    require(found, "chroma fixture contains decoded video");
+  };
+  for (bool scaled : {false, true}) {
+    storage_test::VideoFixture fixture;
+    fixture.h264 = scaled;
+    if (scaled) {
+      fixture.width = 192; fixture.height = 128;
+      fixture.sampleAspectRatio = {4, 1};
+      fixture.chromaLocation = AVCHROMA_LOC_TOPLEFT;
+    }
+    const auto source = temp.root / (scaled ? "top-left.mp4" : "center.mpg");
+    const auto output = temp.root / (scaled ? "scaled.mp4" : "converted.mp4");
+    storage_test::makeVideo(source, fixture);
+    const auto expected = scaled ? AVCHROMA_LOC_TOPLEFT : AVCHROMA_LOC_CENTER;
+    checkLocation(source, expected);
+    StoragePolicy policy; policy.bga = BgaAction::CompressH264;
+    if (scaled) policy.resolution = ResolutionCap::Low;
+    const auto result = EncodeBga(candidate(source), policy, output, {}, {});
+    require(result.outcome == FileOutcome::Converted, "ordinary center-sited and scaled top-left video can be compressed");
+    checkLocation(output, expected);
+    if (scaled) require(scan(output, {}).description.width < fixture.width, "chroma regression exercises spatial scaling");
+  }
+  AVCodecParameters params{};
+  params.color_space = AVCOL_SPC_UNSPECIFIED;
+  params.color_primaries = AVCOL_PRI_UNSPECIFIED; params.color_trc = AVCOL_TRC_UNSPECIFIED;
+  auto decoded = frame(); decoded->format = AV_PIX_FMT_YUV420P;
+  decoded->chroma_location = AVCHROMA_LOC_CENTER;
+  Scan observed; observeVideoColor(observed, params, *decoded); observed.video.frames = 1;
+  decoded->chroma_location = AVCHROMA_LOC_LEFT;
+  bool rejected = false;
+  try { observeVideoColor(observed, params, *decoded); }
+  catch (const Failure &failure) { rejected = failure.reason == StorageReason::UnsupportedFormat; }
+  require(rejected, "changing decoded chroma sample locations retain the original video");
+  decoded->chroma_location = AVCHROMA_LOC_UNSPECIFIED;
+  params.chroma_location = AVCHROMA_LOC_TOP;
+  Scan fallback; observeVideoColor(fallback, params, *decoded);
+  require(fallback.chromaLocation == AVCHROMA_LOC_TOP, "unspecified decoded chroma uses the stream location");
+  params.chroma_location = AVCHROMA_LOC_UNSPECIFIED;
+  observeVideoColor(fallback, params, *decoded);
+  require(fallback.chromaLocation == AVCHROMA_LOC_CENTER, "absent chroma tags retain swscale's center assumption");
+  decoded->format = AV_PIX_FMT_YUV444P;
+  decoded->chroma_location = AVCHROMA_LOC_TOPLEFT;
+  Scan fullChroma; observeVideoColor(fullChroma, params, *decoded); fullChroma.video.frames = 1;
+  decoded->chroma_location = AVCHROMA_LOC_BOTTOM;
+  observeVideoColor(fullChroma, params, *decoded);
+  require(fullChroma.chromaLocation == AVCHROMA_LOC_CENTER, "full-resolution chroma is independent of advisory siting tags");
+  decoded->format = AV_PIX_FMT_YUV422P;
+  decoded->chroma_location = AVCHROMA_LOC_LEFT;
+  Scan horizontalChroma; observeVideoColor(horizontalChroma, params, *decoded); horizontalChroma.video.frames = 1;
+  for (const auto location : {AVCHROMA_LOC_TOPLEFT, AVCHROMA_LOC_BOTTOMLEFT}) {
+    decoded->chroma_location = location;
+    observeVideoColor(horizontalChroma, params, *decoded);
+    require(horizontalChroma.chromaLocation == AVCHROMA_LOC_LEFT, "4:2:2 ignores changes on its full-rate vertical axis");
+  }
+  decoded->chroma_location = AVCHROMA_LOC_CENTER;
+  rejected = false;
+  try { observeVideoColor(horizontalChroma, params, *decoded); }
+  catch (const Failure &failure) { rejected = failure.reason == StorageReason::UnsupportedFormat; }
+  require(rejected, "4:2:2 still retains the source when its horizontal chroma position changes");
+
+  // Check the actual scaler grid, not only the output tag: matching tags can
+  // still hide a half-pixel shift if swscale used its default input positions.
+  ScaleBuffer scaler;
+  AVCodecContext destination{};
+  destination.width = destination.height = 32; destination.pix_fmt = AV_PIX_FMT_YUV420P;
+  decoded->width = decoded->height = 64;
+  struct PositionCase { AVPixelFormat format; AVChromaLocation location; int x, y, outX, outY; };
+  for (const auto &test : {PositionCase{AV_PIX_FMT_YUV420P, AVCHROMA_LOC_CENTER, 128, 128, 128, 128},
+                          PositionCase{AV_PIX_FMT_YUV420P, AVCHROMA_LOC_LEFT, 0, 128, 0, 128},
+                          PositionCase{AV_PIX_FMT_YUV420P, AVCHROMA_LOC_TOPLEFT, 0, 0, 0, 0},
+                          PositionCase{AV_PIX_FMT_YUV422P, AVCHROMA_LOC_CENTER, 128, 0, 128, 128},
+                          PositionCase{AV_PIX_FMT_YUV444P, AVCHROMA_LOC_BOTTOMLEFT, 0, 0, 0, 256},
+                          PositionCase{AV_PIX_FMT_YUV411P, AVCHROMA_LOC_CENTER, 384, 0, 128, 128}}) {
+    decoded->format = test.format; destination.chroma_sample_location = test.location;
+    scaler.configure(*decoded, destination, test.location);
+    const std::pair<const char *, int> positions[] = {
+        {"src_h_chr_pos", test.x}, {"src_v_chr_pos", test.y},
+        {"dst_h_chr_pos", test.outX}, {"dst_v_chr_pos", test.outY}};
+    for (const auto &[name, expected] : positions) {
+      std::int64_t position = -1;
+      require(av_opt_get_int(scaler.value, name, 0, &position) >= 0 && position == expected,
+              "spatial scaling uses native source and destination chroma sample grids");
+    }
   }
 }
 void decodedAudioFormatTests() {
@@ -865,6 +965,214 @@ void decodedAudioFormatTests() {
     catch (const Failure &failure) { rejected = failure.reason == StorageReason::UnsupportedFormat; }
     require(rejected, "decoded audio changes in rate, packing, channel identity or layout order preserve source");
   }
+}
+void decodedAudioPresentationTests() {
+  auto audio = frame(); audio->sample_rate = 48000; audio->format = AV_SAMPLE_FMT_S16;
+  av_channel_layout_default(&audio->ch_layout, 2);
+  const auto rejects = [&] {
+    try { validateAudioFrame(*audio, *audio); }
+    catch (const Failure &failure) {
+      return failure.reason == StorageReason::UnsupportedFormat && failure.outcome == FileOutcome::Skipped;
+    }
+    return false;
+  };
+  auto matrix = av_frame_new_side_data(audio.get(), AV_FRAME_DATA_MATRIXENCODING, sizeof(AVMatrixEncoding));
+  require(matrix, "allocate decoded audio matrix metadata");
+  auto &encoding = *reinterpret_cast<AVMatrixEncoding *>(matrix->data);
+  encoding = AV_MATRIX_ENCODING_NONE;
+  validateAudioFrame(*audio, *audio);
+  encoding = AV_MATRIX_ENCODING_DOLBY;
+  require(rejects(), "AAC conversion must retain the source when decoded audio needs Dolby matrix playback");
+  av_frame_remove_side_data(audio.get(), AV_FRAME_DATA_MATRIXENCODING);
+
+  auto service = av_frame_new_side_data(audio.get(), AV_FRAME_DATA_AUDIO_SERVICE_TYPE, sizeof(AVAudioServiceType));
+  require(service, "allocate decoded audio service metadata");
+  auto &serviceType = *reinterpret_cast<AVAudioServiceType *>(service->data);
+  serviceType = AV_AUDIO_SERVICE_TYPE_MAIN;
+  validateAudioFrame(*audio, *audio);
+  serviceType = AV_AUDIO_SERVICE_TYPE_VISUALLY_IMPAIRED;
+  require(rejects(), "AAC conversion must retain decoded accessibility audio service semantics");
+  validateAudioFrame(*audio, *audio, true, AV_AUDIO_SERVICE_TYPE_VISUALLY_IMPAIRED);
+  bool mismatch = false;
+  try { validateAudioFrame(*audio, *audio, true, AV_AUDIO_SERVICE_TYPE_MAIN); }
+  catch (const Failure &failure) { mismatch = failure.outcome == FileOutcome::Skipped; }
+  require(mismatch, "remux cannot replace an external service override with a different codec-native service");
+  av_frame_remove_side_data(audio.get(), AV_FRAME_DATA_AUDIO_SERVICE_TYPE);
+
+  auto downmix = av_downmix_info_update_side_data(audio.get());
+  require(downmix, "allocate decoded audio downmix metadata");
+  *downmix = {};
+  validateAudioFrame(*audio, *audio);
+  downmix->preferred_downmix_type = AV_DOWNMIX_TYPE_DPLII;
+  require(rejects(), "AAC conversion must retain decoded matrix downmix instructions");
+  av_frame_remove_side_data(audio.get(), AV_FRAME_DATA_DOWNMIX_INFO);
+
+  require(av_dict_set(&audio->metadata, "chart_editor_note", "Descriptive metadata", 0) >= 0,
+          "allocate harmless decoded audio description");
+  validateAudioFrame(*audio, *audio);
+  require(av_dict_set(&audio->metadata, "replaygain_track_gain", "-12 dB", 0) >= 0,
+          "allocate decoded audio playback gain");
+  require(rejects(), "AAC conversion must retain decoded playback gain dictionary entries");
+}
+void encodedAudioPresentationTests() {
+  storage_test::TempDirectory temp;
+  StoragePolicy policy; policy.bga = BgaAction::CompressH264;
+  for (int kind = 0; kind < 3; ++kind) {
+    storage_test::VideoFixture fixture;
+    fixture.audio = true; fixture.audioMatrix = kind != 0;
+    fixture.audioCodec = kind == 2 ? AV_CODEC_ID_AC3 : AV_CODEC_ID_DTS;
+    for (int i = 0; i < 32; ++i) fixture.timestamps.push_back(i);
+    const auto source = temp.root / ("matrix-" + std::to_string(kind) + ".mpg");
+    const auto output = temp.root / ("matrix-" + std::to_string(kind) + ".mp4");
+    storage_test::makeVideo(source, fixture);
+    std::ifstream originalFile(source, std::ios::binary);
+    const std::string original((std::istreambuf_iterator<char>(originalFile)), {});
+    int matrixFrames = 0;
+    const auto inspectMatrix = [&](const std::filesystem::path &path) {
+      Input input(path);
+      decode(input, {}, [&](int index, const AVFrame &decoded) {
+        if (index != input.audio) return;
+        const auto matrix = av_frame_get_side_data(&decoded, AV_FRAME_DATA_MATRIXENCODING);
+        require(matrix && matrix->size == sizeof(AVMatrixEncoding), "fixture decoder emits audio matrix metadata");
+        AVMatrixEncoding encoding; std::memcpy(&encoding, matrix->data, sizeof(encoding));
+        require(encoding == (fixture.audioMatrix ? AV_MATRIX_ENCODING_DOLBY : AV_MATRIX_ENCODING_NONE),
+                "real decoder exposes the intended default or Dolby matrix playback");
+        ++matrixFrames;
+      }, [](int, const AVPacket &) {});
+    };
+    inspectMatrix(source);
+    require(matrixFrames > 0, "fixture includes decoded audio matrix frames");
+    const auto result = EncodeBga(candidate(source), policy, output, {}, {});
+    if (kind == 1) {
+      require(result.outcome == FileOutcome::Skipped && result.reason.code == StorageReason::UnsupportedFormat &&
+                  !std::filesystem::exists(output), "DTS Dolby matrix audio retains its source instead of losing playback metadata in AAC");
+      std::ifstream retained(source, std::ios::binary);
+      require(std::string((std::istreambuf_iterator<char>(retained)), {}) == original, "skipped DTS retains original bytes");
+    } else {
+      require(result.outcome == FileOutcome::Converted,
+              ("ordinary DTS converts to AAC and codec-native AC3 matrix metadata permits remuxing: case " +
+                  std::to_string(kind) + ", " + result.reason.detail).c_str());
+      if (kind == 2) {
+        require(storage_test::audioPackets(source) == storage_test::audioPackets(output),
+                "AC3 matrix playback retains the exact encoded audio packets");
+        inspectMatrix(output);
+        const auto before = scan(source, {}), after = scan(output, {});
+        const auto expectedStart = av_rescale_q(before.video.first, before.video.timeBase, AV_TIME_BASE_Q) - before.originMicros;
+        const auto actualStart = av_rescale_q(after.video.first, after.video.timeBase, AV_TIME_BASE_Q);
+        require(expectedStart == 5333 && std::abs(actualStart - expectedStart) <= 2,
+                "MP4 edit lists preserve the fractional-millisecond video offset from AC3 encoder delay");
+      }
+    }
+  }
+}
+void embeddedAudioSideDataTests() {
+  const auto rejects = [](const AVPacketSideData &side, bool remux) {
+    try { validateAudioSideData(&side, 1, remux); }
+    catch (const Failure &failure) { return failure.outcome == FileOutcome::Skipped; }
+    return false;
+  };
+  AVPacketSideData side{};
+  AVAudioServiceType service = AV_AUDIO_SERVICE_TYPE_MAIN;
+  side.type = AV_PKT_DATA_AUDIO_SERVICE_TYPE;
+  side.data = reinterpret_cast<std::uint8_t *>(&service); side.size = sizeof(service);
+  for (bool remux : {false, true}) {
+    service = AV_AUDIO_SERVICE_TYPE_MAIN;
+    validateAudioSideData(&side, 1, remux);
+    service = AV_AUDIO_SERVICE_TYPE_COMMENTARY;
+    require(rejects(side, remux), "container-only audio service cannot disappear during AAC conversion or remux");
+  }
+  std::uint8_t channel = 2;
+  side.type = AV_PKT_DATA_JP_DUALMONO; side.data = &channel; side.size = 1;
+  validateAudioSideData(&side, 1, true);
+  for (const auto selection : {0, 1}) {
+    channel = selection;
+    validateAudioSideData(&side, 1, false);
+    require(rejects(side, true), "remux cannot discard packet-only dual-mono channel selection");
+  }
+  for (const auto type : {AV_PKT_DATA_IAMF_MIX_GAIN_PARAM, AV_PKT_DATA_IAMF_DEMIXING_INFO_PARAM,
+                          AV_PKT_DATA_IAMF_RECON_GAIN_INFO_PARAM}) {
+    side.type = type;
+    require(rejects(side, false) && rejects(side, true), "audio samples or copied packets cannot replace IAMF presentation parameters");
+  }
+  for (const auto type : {AV_PKT_DATA_STRINGS_METADATA, AV_PKT_DATA_METADATA_UPDATE}) {
+    const std::string description("chart_editor_note\0Description\0", 30);
+    const std::string gain("rEpLaYgAiN_tRaCk_GaIn\0-12 dB\0", 29);
+    side.type = type;
+    side.data = reinterpret_cast<std::uint8_t *>(const_cast<char *>(description.data())); side.size = description.size();
+    validateAudioSideData(&side, 1, false); validateAudioSideData(&side, 1, true);
+    side.data = reinterpret_cast<std::uint8_t *>(const_cast<char *>(gain.data())); side.size = gain.size();
+    require(rejects(side, false) && rejects(side, true), "packet metadata updates cannot silently lose playback gain");
+  }
+}
+void audioRemuxTrimTests() {
+  storage_test::TempDirectory temp;
+  storage_test::VideoFixture fixture;
+  fixture.audio = true; fixture.audioCodec = AV_CODEC_ID_AC3; fixture.millisecondContainer = true;
+  fixture.audioTrimPacket = 10;
+  for (int i = 0; i < 32; ++i) fixture.timestamps.push_back(i);
+  const auto source = temp.root / "trimmed-audio.avi", output = temp.root / "trimmed-audio.mp4";
+  for (const auto trim : {600, 2000}) {
+    fixture.audioTrimSamples = trim;
+    storage_test::makeVideo(source, fixture);
+    std::ifstream input(source, std::ios::binary);
+    const std::string original((std::istreambuf_iterator<char>(input)), {});
+    Input decoded(source);
+    std::int64_t sampleCount = 0;
+    decode(decoded, {}, [&](int index, const AVFrame &audio) {
+      if (index == decoded.audio) sampleCount += audio.nb_samples;
+    }, [](int, const AVPacket &) {});
+    require(sampleCount == (trim == 600 ? 60840 : 61440),
+            ("fixture applies valid discard padding and ignores padding larger than an AC3 frame: trim=" +
+                std::to_string(trim) + ", samples=" + std::to_string(sampleCount)).c_str());
+    StoragePolicy policy; policy.bga = BgaAction::CompressH264;
+    const auto result = EncodeBga(candidate(source), policy, output, {}, {});
+    if (trim == 600)
+      require(result.outcome != FileOutcome::Converted && !std::filesystem::exists(output),
+              "audio remux cannot restore the 600 interior samples removed by Matroska discard padding");
+    else
+      require(result.outcome == FileOutcome::Converted,
+              "decoder-ignored oversized discard padding does not prevent unchanged audio remuxing");
+    std::ifstream retained(source, std::ios::binary);
+    require(std::string((std::istreambuf_iterator<char>(retained)), {}) == original,
+            "discarded remux retains the original trimmed audio bytes");
+  }
+}
+void audioRemuxContentTests() {
+  storage_test::TempDirectory temp;
+  storage_test::VideoFixture fixture; fixture.audio = true; fixture.audioCodec = AV_CODEC_ID_AC3;
+  for (int i = 0; i < 32; ++i) fixture.timestamps.push_back(i);
+  const auto source = temp.root / "audio-packets.mpg", output = temp.root / "audio-packets.mp4";
+  storage_test::makeVideo(source, fixture);
+  StoragePolicy policy; policy.bga = BgaAction::CompressH264;
+  const auto result = EncodeBga(candidate(source), policy, output, {}, [&](const StorageProgress &progress) {
+    if (progress.phase != StoragePhase::Verify) return;
+    std::array<std::int64_t, 2> positions{};
+    std::array<std::string, 2> payloads;
+    {
+      Input input(output); auto compressed = packet(); int audioPacket = 0;
+      while (av_read_frame(input.format, compressed.get()) >= 0) {
+        if (compressed->stream_index == input.audio) {
+          if (audioPacket == 10 || audioPacket == 11) {
+            const auto index = audioPacket - 10;
+            positions[index] = compressed->pos;
+            payloads[index].assign(reinterpret_cast<const char *>(compressed->data), compressed->size);
+          }
+          ++audioPacket;
+        }
+        av_packet_unref(compressed.get());
+      }
+    }
+    require(positions[0] > 0 && positions[1] > 0 && !payloads[0].empty() &&
+                payloads[0].size() == payloads[1].size() && payloads[0] != payloads[1],
+            "fixture exposes distinct complete AC3 packets with equal decoded sample counts");
+    std::fstream bytes(output, std::ios::binary | std::ios::in | std::ios::out);
+    for (int index = 0; index < 2; ++index) {
+      bytes.seekp(positions[index]); bytes.write(payloads[1 - index].data(), payloads[1 - index].size());
+    }
+    require(bytes.good(), "swap valid AC3 payloads without changing MP4 timestamps or sample count");
+  });
+  require(result.outcome == FileOutcome::Failed && result.reason.code == StorageReason::ValidationFailed &&
+              !std::filesystem::exists(output), "remux verification rejects changed audio even when sample count and endpoints match");
 }
 void changingAspectRatioTests() {
   storage_test::TempDirectory temp;
@@ -1385,10 +1693,12 @@ void videoTests() {
 int main() {
   av_log_set_level(AV_LOG_ERROR);
   int failures = 0;
-  for (const auto test : {decodedDisplayTransformTests, decodedColorTests, decodedAudioFormatTests, timelineTests,
+  for (const auto test : {decodedDisplayTransformTests, decodedColorTests, chromaLocationTests, decodedAudioFormatTests, decodedAudioPresentationTests,
+                          encodedAudioPresentationTests, embeddedAudioSideDataTests, audioRemuxTrimTests, audioRemuxContentTests, timelineTests,
                           declaredVideoTimelineTests, crossStreamTimelineTests, changingAspectRatioTests, quantizedAudioTimelineTests, asfTimelineTests,
                           truncatedAsfTests, matroskaTimelineTests, existingBgaTests, existingAudioTests, audioTests, videoDispositionTests, videoTests}) {
     try { test(); }
+    catch (const Failure &failure) { std::cerr << failure.detail << '\n'; ++failures; }
     catch (const std::exception &error) { std::cerr << error.what() << '\n'; ++failures; }
   }
   return failures ? 1 : 0;

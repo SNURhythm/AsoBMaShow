@@ -60,14 +60,30 @@ final class DocumentsMutationGuard {
 
     // Ordinary provider renames remain supported while a writer is open.
     // Move its lease with the subtree so maintenance cannot miss the open FD.
-    static void pathRenamed(File source, File destination) {
+    static void rename(File source, File destination) throws IOException {
         synchronized (LOCK) {
             Path from = source.toPath();
             Path to = destination.toPath();
+            ArrayList<Reservation> affected = new ArrayList<>();
             for (Reservation writer : writers) {
                 Path path = writer.canonicalOutput.toPath();
-                if (isSameOrDescendant(path, from))
-                    writer.canonicalOutput = to.resolve(from.relativize(path)).toFile();
+                if (isSameOrDescendant(path, from)) {
+                    Path prefix = path;
+                    while (prefix.getNameCount() > from.getNameCount()) prefix = prefix.getParent();
+                    // Case aliases can also be distinct siblings. Identify the
+                    // actual subtree while both paths still exist, before moving.
+                    if (Files.isSameFile(prefix, from)) affected.add(writer);
+                }
+            }
+            Files.move(from, to);
+            for (Reservation writer : affected) {
+                Path path = writer.canonicalOutput.toPath();
+                // Relativize compares case-sensitive components and can produce
+                // ".." for an alias. Keep only the already identified suffix.
+                int prefixLength = from.getNameCount();
+                writer.canonicalOutput = path.getNameCount() == prefixLength
+                        ? to.toFile()
+                        : to.resolve(path.subpath(prefixLength, path.getNameCount())).toFile();
             }
         }
     }

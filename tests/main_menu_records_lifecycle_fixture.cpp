@@ -241,6 +241,7 @@ struct MainMenuScene {
     } jukebox;
     SceneManager *sceneManager;
     std::atomic_bool appInBackground = false;
+    std::atomic_bool storageMaintenanceActive = false;
   } context;
   ProfileSelections profileSelections;
   ReplayRecordsModal modal;

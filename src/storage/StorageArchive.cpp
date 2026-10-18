@@ -285,6 +285,10 @@ void StorageArchive::ParseZip(Checkpoint check) {
     bool zip64 = false;
     std::optional<std::string> unicodeName;
     extras(std::string_view(central).substr(46 + nameLength, extraLength), [&](auto tag, auto data) {
+      // APPNOTE 4.5.9/4.5.11: the first central record can own the
+      // archive's certificate store or directory signature. Even deleting
+      // that entry or changing a different entry can invalidate this metadata.
+      require(tag != 0x0014 && tag != 0x0016, "Signed ZIP archives cannot be updated in place");
       if (tag == 1) {
         require(!zip64, "Duplicate ZIP64 extra field"); zip64 = true; std::size_t pos = 0;
         for (auto *value : {&entry.bytes, &entry.packed, &entry.offset}) if (*value == 0xffffffff) { *value = number(data, pos, 8); pos += 8; }
@@ -527,9 +531,17 @@ std::string StorageArchive::Replacement(StorageArchiveEntry &entry, std::string_
   const auto oldName = number(entry.metadata, 28, 2), oldExtra = number(entry.metadata, 30, 2);
   std::string extra, localExtra, unicode;
   bool unicodePath = false;
+  const auto retainMetadata = [](auto tag, auto data) {
+    // Timestamps, ownership and the unchanged comment are independent of the
+    // replacement name/payload. Apply the same rule to both ZIP headers:
+    // unknown fields may contain signatures, hashes, names or alignment.
+    require(tag == 0x000a || tag == 0x5455 || tag == 0x5855 || tag == 0x7855 || tag == 0x7875 ||
+        tag == 0x6375 || (tag == 0x000d && data.size() == 12), "Unsupported ZIP metadata for replacement");
+  };
   extras(std::string_view(entry.metadata).substr(46 + oldName, oldExtra), [&](auto tag, auto data) {
     if (tag == 1) return;
     if (tag == 0x7075) { unicodePath = true; return; }
+    retainMetadata(tag, data);
     std::string field(4, '\0'); put(field, 0, tag, 2); put(field, 2, data.size(), 2); extra += field; extra += data;
   });
   // Local timestamps and ownership can differ from, or be absent in, the
@@ -538,10 +550,7 @@ std::string StorageArchive::Replacement(StorageArchiveEntry &entry, std::string_
   extras(io.Read(entry.offset + 30 + oldName, number(originalLocal, 28, 2)), [&](auto tag, auto data) {
     if (tag == 1) return; // Replacement sizes fit the ordinary local header.
     if (tag == 0x7075) { unicodePath = true; return; }
-    // Preserve known name/payload-independent metadata. Unknown fields may
-    // contain content hashes, filenames or alignment and cannot be copied safely.
-    require(tag == 0x000a || tag == 0x5455 || tag == 0x5855 || tag == 0x7855 || tag == 0x7875 ||
-        tag == 0x6375 || (tag == 0x000d && data.size() == 12), "Unsupported local ZIP metadata for replacement");
+    retainMetadata(tag, data);
     std::string field(4, '\0'); put(field, 0, tag, 2); put(field, 2, data.size(), 2); localExtra += field; localExtra += data;
   });
   if (unicodePath) {

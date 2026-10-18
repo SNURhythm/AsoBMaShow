@@ -889,7 +889,8 @@ void archiveRecoveryAfterContainerRelocation() {
 void writeSparseZip64(const fs::path &path, std::uint64_t offset = 128ULL * 1024 * 1024 * 1024 + 4096,
     const std::string &audioName = "\x93\xfa\x96\x7b\x8c\xea.wav", bool prefix = false,
     const std::string &unicodeName = {}, bool unicodeCentral = true, bool zip64 = true,
-    const std::string &audioLocalExtra = {}) {
+    const std::string &audioLocalExtra = {}, const std::string &audioCentralExtra = {},
+    const std::string &firstCentralExtra = {}) {
   using storage_management::archive_detail::put;
   std::ofstream file(path, std::ios::binary);
   file.seekp(offset); std::string central;
@@ -915,6 +916,8 @@ void writeSparseZip64(const fs::path &path, std::uint64_t offset = 128ULL * 1024
     std::string extra;
     if (zip64) { extra.resize(12, '\0'); put(extra, 0, 1, 2); put(extra, 2, 8, 2); put(extra, 4, offset, 8); }
     if (unicodeCentral) extra += unicode;
+    if (name == audioName) extra += audioCentralExtra;
+    if (name == files.front().first) extra += firstCentralExtra;
     put(row, 30, extra.size(), 2);
     central += row + name + extra + "entry-note"; offset += record.size();
   }
@@ -1065,11 +1068,12 @@ void renamedZipRetainsLocalMetadata() {
   // metadata may exist only locally, so neither can be rebuilt from central data.
   const auto metadata = std::string("\x55\x54\x0d\x00\x07\x00\xf1\x53\x65\x01\xf1\x53\x65\x02\xf1\x53\x65", 17) +
       std::string("\x75\x78\x0b\x00\x01\x04\xe8\x03\x00\x00\x04\xe9\x03\x00\x00", 15);
+  const auto centralMetadata = std::string("\x55\x54\x05\x00\x01\x00\xf1\x53\x65", 9) + metadata.substr(17);
   std::string zip64(20, '\0'); put(zip64, 0, 1, 2); put(zip64, 2, 16, 2);
   put(zip64, 4, 10000, 8); put(zip64, 12, 10000, 8);
   for (bool recover : {false, true}) {
     storage_test::TempDirectory temp; const auto path = temp.root / "metadata.zip";
-    writeSparseZip64(path, 0, "audio.wav", false, "audio.wav", true, false, metadata + zip64);
+    writeSparseZip64(path, 0, "audio.wav", false, "audio.wav", true, false, metadata + zip64, centralMetadata);
     InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
         .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = temp.root / "scan"};
     const auto review = BuildStoragePreflight(request);
@@ -1106,50 +1110,99 @@ void renamedZipRetainsLocalMetadata() {
       at += length + 4;
     }
     require(retained == metadata && unicodeFields == 1, "local timestamps and Unix ownership survive replacement exactly");
+    const auto centralExtra = entry->metadata.substr(46 + entry->rawName.size(), number(entry->metadata, 30, 2));
+    require(centralExtra.substr(0, centralMetadata.size()) == centralMetadata &&
+        centralExtra.size() == centralMetadata.size() + 19,
+        "central timestamps and ownership survive independently of the longer local timestamps");
     require(readArchive(path).at("audio.flac") == "converted", "independent reader extracts media after metadata-preserving replacement");
   }
 }
-void unsupportedLocalZipMetadataPreservesEntry() {
-  storage_test::TempDirectory temp; const auto path = temp.root / "unsupported-metadata.zip";
-  const std::string unknown("\xfe\xca\x03\x00xyz", 7);
-  writeSparseZip64(path, 0, "audio.wav", false, {}, true, false, unknown);
-  // Keep the fixed-width fixture names and offsets while adding a selected
-  // healthy WAV physically after the unsupported entry.
-  {
-    std::ifstream input(path, std::ios::binary); std::string bytes((std::istreambuf_iterator<char>(input)), {});
-    for (auto at = bytes.find("chart.bms"); at != std::string::npos; at = bytes.find("chart.bms", at + 9))
-      bytes.replace(at, 9, "later.wav");
-    temp.write("unsupported-metadata.zip", bytes);
-  }
-  std::string original;
-  {
-    StorageArchive archive(path, temp.root / "original.sqlite", {});
+void unsupportedZipReplacementMetadataPreservesEntry() {
+  using storage_management::archive_detail::number;
+  // A signature depends on the original payload; an unknown vendor field may
+  // also encode the filename, CRC, size or alignment. Neither can follow a
+  // converted payload, even when it appears only in the central directory.
+  for (const auto &[centralOnly, unsupported] : std::vector<std::pair<bool, std::string>>{
+      {true, std::string("\x15\x00\x03\x00sig", 7)},
+      {true, std::string("\xfe\xca\x03\x00xyz", 7)},
+      {false, std::string("\xfe\xca\x03\x00xyz", 7)}}) {
+    storage_test::TempDirectory temp; const auto path = temp.root / "unsupported-metadata.zip";
+    writeSparseZip64(path, 0, "audio.wav", false, {}, true, false,
+        centralOnly ? std::string{} : unsupported, centralOnly ? unsupported : std::string{});
+    // Keep the fixed-width fixture names and offsets while adding a selected
+    // healthy WAV physically after the unsupported entry.
+    {
+      std::ifstream input(path, std::ios::binary); std::string bytes((std::istreambuf_iterator<char>(input)), {});
+      for (auto at = bytes.find("chart.bms"); at != std::string::npos; at = bytes.find("chart.bms", at + 9))
+        bytes.replace(at, 9, "later.wav");
+      temp.write("unsupported-metadata.zip", bytes);
+    }
+    std::string original, originalExtra;
+    {
+      StorageArchive archive(path, temp.root / "original.sqlite", {});
+      auto entry = archive.Next();
+      while (entry && entry->name != "audio.wav") entry = archive.Next(entry->offset);
+      require(entry.has_value(), "find unsupported metadata fixture entry");
+      original = archive.io.Read(entry->offset, entry->span);
+      originalExtra = entry->metadata.substr(46 + entry->rawName.size(), number(entry->metadata, 30, 2));
+    }
+    InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+        .policy = {.audio = AudioAction::LosslessFlac, .bga = BgaAction::Delete}, .scanScratchRoot = temp.root / "scan"};
+    const auto review = BuildStoragePreflight(request);
+    require(review.complete && review.eligibleCount == 3 && review.archives.size() == 1, "review both selected WAV entries and the preceding video");
+    StorageArchiveDependencies deps{.encode = [](const AssetCandidate &, const StoragePolicy &, const fs::path &output, Checkpoint, ProgressCallback) {
+      std::ofstream(output, std::ios::binary) << "converted"; return EncodeResult{FileOutcome::Converted, output};
+    }};
+    const auto report = UpdateStorageArchive(review.archives.front(), request.policy,
+        MakeStoragePlatformPaths(temp.root / "private", {temp.root}), deps);
+    require(!report.failed && !report.recoveryRequired && report.skipped == 1 && report.converted == 1 && report.deleted == 1,
+        "unsupported replacement metadata skips one entry and continues to the healthy WAV");
+    require(std::any_of(report.files.begin(), report.files.end(), [](const auto &file) {
+      return file.source.filename() == "audio.wav" && file.outcome == FileOutcome::Skipped && file.reason.code == StorageReason::UnsupportedFormat;
+    }), "report the unsupported metadata skip");
+    StorageArchive archive(path, temp.root / "checked.sqlite", {});
     auto entry = archive.Next();
     while (entry && entry->name != "audio.wav") entry = archive.Next(entry->offset);
-    require(entry.has_value(), "find unsupported metadata fixture entry");
-    original = archive.io.Read(entry->offset, entry->span);
+    require(entry && archive.io.Read(entry->offset, entry->span) == original, "skipped local record retains its exact metadata and payload");
+    require(entry->metadata.substr(46 + entry->rawName.size(), number(entry->metadata, 30, 2)) == originalExtra,
+        "skipped entry retains central extras exactly");
+    const auto files = readArchive(path);
+    require(files.at("audio.wav") == std::string(10000, 'a') && files.at("later.flac") == "converted",
+        "independent ZIP reader reads the preserved entry and later conversion");
   }
-  InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
-      .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = temp.root / "scan"};
-  const auto review = BuildStoragePreflight(request);
-  require(review.complete && review.eligibleCount == 2 && review.archives.size() == 1, "review both selected WAV entries");
-  StorageArchiveDependencies deps{.encode = [](const AssetCandidate &, const StoragePolicy &, const fs::path &output, Checkpoint, ProgressCallback) {
-    std::ofstream(output, std::ios::binary) << "converted"; return EncodeResult{FileOutcome::Converted, output};
-  }};
-  const auto report = UpdateStorageArchive(review.archives.front(), request.policy,
-      MakeStoragePlatformPaths(temp.root / "private", {temp.root}), deps);
-  require(!report.failed && !report.recoveryRequired && report.skipped == 1 && report.converted == 1,
-      "unsupported local metadata skips one entry and continues to the healthy WAV");
-  require(std::any_of(report.files.begin(), report.files.end(), [](const auto &file) {
-    return file.source.filename() == "audio.wav" && file.outcome == FileOutcome::Skipped && file.reason.code == StorageReason::UnsupportedFormat;
-  }), "report the unsupported metadata skip");
-  StorageArchive archive(path, temp.root / "checked.sqlite", {});
-  auto entry = archive.Next();
-  while (entry && entry->name != "audio.wav") entry = archive.Next(entry->offset);
-  require(entry && archive.io.Read(entry->offset, entry->span) == original, "skipped local record retains its exact metadata and payload");
-  const auto files = readArchive(path);
-  require(files.at("audio.wav") == std::string(10000, 'a') && files.at("later.flac") == "converted",
-      "independent ZIP reader reads the preserved entry and later conversion");
+}
+void archiveWideZipSignaturesPreventUpdates() {
+  // APPNOTE 4.5.9/4.5.11 put the certificate store and central-directory
+  // signature in the first central record. Deleting that entry can orphan
+  // other file signatures, and editing any entry invalidates a directory signature.
+  for (const auto tag : {0x0014, 0x0016}) for (bool deleteFirst : {false, true}) {
+    storage_test::TempDirectory temp; const auto path = temp.root / "signed.zip";
+    std::string metadata(4, '\0');
+    archive_detail::put(metadata, 0, tag, 2); archive_detail::put(metadata, 2, 3, 2); metadata += "sig";
+    writeSparseZip64(path, 0, "audio.wav", false, {}, true, false, {}, {}, metadata);
+    std::string error; const auto originalIdentity = ReadFileIdentity(path, error);
+    std::ifstream input(path, std::ios::binary); const std::string original((std::istreambuf_iterator<char>(input)), {});
+    InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+        .policy = {.audio = deleteFirst ? AudioAction::Keep : AudioAction::LosslessFlac,
+            .bga = deleteFirst ? BgaAction::Delete : BgaAction::Keep}, .scanScratchRoot = temp.root / "scan"};
+    const auto review = BuildStoragePreflight(request);
+    require(review.complete && review.archives.size() == 1, "review signed ZIP from browsing metadata");
+    bool encoded = false;
+    StorageArchiveMetrics metrics;
+    StorageArchiveDependencies deps{.encode = [&](const AssetCandidate &, const StoragePolicy &, const fs::path &output, Checkpoint, ProgressCallback) {
+      encoded = true; std::ofstream(output, std::ios::binary) << "converted"; return EncodeResult{FileOutcome::Converted, output};
+    }, .metrics = &metrics};
+    const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+    const auto report = UpdateStorageArchive(review.archives.front(), request.policy, paths, deps);
+    require(report.failed == 1 && !report.recoveryRequired && !report.converted && !report.deleted && !encoded && !metrics.bytesWritten,
+        "archive-wide signature metadata rejects editing before payload encoding or source writes");
+    require(std::any_of(report.files.begin(), report.files.end(), [](const auto &file) {
+      return file.reason.code == StorageReason::UnsupportedFormat;
+    }), "report unsupported archive-wide signature metadata");
+    std::ifstream checked(path, std::ios::binary); const std::string contents((std::istreambuf_iterator<char>(checked)), {});
+    require(ReadFileIdentity(path, error) == originalIdentity && contents == original && fs::is_empty(paths.journalRoot),
+        "signed archive stays byte-for-byte unchanged without a recovery journal");
+  }
 }
 void unicodeZipFolderSelectionMatchesApply() {
   storage_test::TempDirectory temp; const auto path = temp.root / "unicode-folder.zip";
@@ -1566,7 +1619,8 @@ void storageArchiveTests(const char *executable) {
       {"growth-batches", growingArchiveMultiBatchRecovery}, {"growth", growingFlacArchiveRecovery}, {"update", archiveUpdatesBatchWithoutFullCopy}, {"recovery", interruptedArchiveWritesRecover},
       {"unicode-rename", renamedZipRetainsUnicodePath},
       {"local-metadata", renamedZipRetainsLocalMetadata},
-      {"unsupported-local-metadata", unsupportedLocalZipMetadataPreservesEntry},
+      {"unsupported-replacement-metadata", unsupportedZipReplacementMetadataPreservesEntry},
+      {"archive-wide-signatures", archiveWideZipSignaturesPreventUpdates},
       {"unicode-folder", unicodeZipFolderSelectionMatchesApply},
       {"unicode-local-disagreement", differingLocalUnicodePathsArePreserved},
       {"unicode-index-disagreement", differingBrowsingUnicodePathsArePreserved},

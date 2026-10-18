@@ -8,6 +8,7 @@ extern "C" {
 #include <libavutil/display.h>
 }
 #include <cmath>
+#include <cstring>
 #include <vector>
 
 namespace storage_test {
@@ -21,22 +22,27 @@ struct VideoFixture {
   AVColorSpace colorSpace = AVCOL_SPC_UNSPECIFIED;
   AVColorPrimaries colorPrimaries = AVCOL_PRI_UNSPECIFIED;
   AVColorTransferCharacteristic colorTransfer = AVCOL_TRC_UNSPECIFIED;
+  AVChromaLocation chromaLocation = AVCHROMA_LOC_UNSPECIFIED;
   AVRational sampleAspectRatio{1, 1}, laterSampleAspectRatio{0, 1};
   int rotation = 0;
   bool scaledDisplayMatrix = false;
   bool millisecondContainer = false, lossless = false, asf = false;
   bool captions = false, descriptiveTag = false;
   bool replayGain = false, audioReplayGain = false;
+  AVCodecID audioCodec = AV_CODEC_ID_PCM_S16LE;
+  bool audioMatrix = false;
+  int audioTrimPacket = -1, audioTrimSamples = 0;
   int audioTailSamples = 0;
 };
 inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
   struct Resources {
     AVFormatContext *mux = nullptr;
     AVCodecContext *encoder = nullptr;
+    AVCodecContext *audioEncoder = nullptr;
     AVFrame *frame = av_frame_alloc();
     AVPacket *packet = av_packet_alloc();
     ~Resources() {
-      av_packet_free(&packet); av_frame_free(&frame); avcodec_free_context(&encoder);
+      av_packet_free(&packet); av_frame_free(&frame); avcodec_free_context(&encoder); avcodec_free_context(&audioEncoder);
       if (mux) { if (mux->pb) avio_closep(&mux->pb); avformat_free_context(mux); }
     }
   } resources;
@@ -66,6 +72,7 @@ inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
   encoder.sample_aspect_ratio = fixture.sampleAspectRatio; encoder.thread_count = 1;
   encoder.color_range = fixture.colorRange; encoder.colorspace = fixture.colorSpace;
   encoder.color_primaries = fixture.colorPrimaries; encoder.color_trc = fixture.colorTransfer;
+  encoder.chroma_sample_location = fixture.chromaLocation;
   if (fixture.hdr) { encoder.color_trc = AVCOL_TRC_SMPTE2084; encoder.color_primaries = AVCOL_PRI_BT2020; }
   if (fixture.interlaced) { encoder.flags |= AV_CODEC_FLAG_INTERLACED_DCT; encoder.field_order = AV_FIELD_TT; }
   encoder.max_b_frames = 0; encoder.gop_size = 12; encoder.bit_rate = 3000000;
@@ -100,6 +107,25 @@ inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
     audio->codecpar->block_align = 4;
     audio->codecpar->bit_rate = 48000 * 32;
     audio->time_base = {1, 48000};
+    if (fixture.audioCodec != AV_CODEC_ID_PCM_S16LE) {
+      const auto codec = avcodec_find_encoder(fixture.audioCodec);
+      require(codec, "fixture compressed audio encoder present");
+      resources.audioEncoder = avcodec_alloc_context3(codec);
+      require(resources.audioEncoder, "allocate fixture compressed audio encoder");
+      auto &compressed = *resources.audioEncoder;
+      compressed.sample_rate = 48000; compressed.time_base = {1, 48000};
+      compressed.sample_fmt = fixture.audioCodec == AV_CODEC_ID_DTS ? AV_SAMPLE_FMT_S32 : AV_SAMPLE_FMT_FLTP;
+      av_channel_layout_default(&compressed.ch_layout, 2);
+      compressed.bit_rate = fixture.audioCodec == AV_CODEC_ID_DTS ? 768000 : 192000;
+      compressed.strict_std_compliance = FF_COMPLIANCE_EXPERIMENTAL; compressed.thread_count = 1;
+      if (fixture.audioCodec == AV_CODEC_ID_AC3 && fixture.audioMatrix)
+        require(av_opt_set_int(compressed.priv_data, "dsur_mode", 2, 0) >= 0, "set fixture AC3 Dolby matrix");
+      require(avcodec_open2(&compressed, codec, nullptr) >= 0, "open fixture compressed audio encoder");
+      require(avcodec_parameters_from_context(audio->codecpar, &compressed) >= 0, "fixture compressed audio parameters");
+      // Keep the explicit packet-trimming fixture independent of Matroska's
+      // optional CodecDelay (NUT also omits that encoder-delay declaration).
+      if (fixture.audioTrimPacket >= 0) audio->codecpar->initial_padding = 0;
+    }
   }
   require(avio_open(&resources.mux->pb, path.string().c_str(), AVIO_FLAG_WRITE) >= 0 &&
               avformat_write_header(resources.mux, nullptr) >= 0, "fixture header");
@@ -148,6 +174,54 @@ inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
   if (audio) {
     const AVRational sampleClock{1, audio->codecpar->sample_rate};
     const auto total = av_rescale_q(fixture.timestamps.back() + 1, encoder.time_base, sampleClock) + fixture.audioTailSamples;
+    if (resources.audioEncoder) {
+      auto &compressed = *resources.audioEncoder;
+      av_frame_unref(&frame);
+      frame.format = compressed.sample_fmt; frame.sample_rate = compressed.sample_rate;
+      frame.nb_samples = compressed.frame_size;
+      require(av_channel_layout_copy(&frame.ch_layout, &compressed.ch_layout) >= 0 &&
+                  av_frame_get_buffer(&frame, 0) >= 0, "allocate fixture compressed audio samples");
+      int audioPacketIndex = 0;
+      const auto drainAudio = [&] {
+        int status;
+        while ((status = avcodec_receive_packet(&compressed, resources.packet)) >= 0) {
+          if (fixture.audioCodec == AV_CODEC_ID_DTS && fixture.audioMatrix) {
+            // DTS core AMODE is six bits at bit offset 60. Stereo-total (4)
+            // has the same two coded channels as stereo (2), with Dolby
+            // matrix playback signalled in the header. This encoder emits no CRC.
+            require(resources.packet->size > 8 && resources.packet->data[0] == 0x7f &&
+                        !(resources.packet->data[4] & 2), "fixture DTS core header without CRC");
+            resources.packet->data[7] = (resources.packet->data[7] & 0xf0) | 1;
+            resources.packet->data[8] &= 0x3f;
+          }
+          if (audioPacketIndex++ == fixture.audioTrimPacket) {
+            auto side = av_packet_new_side_data(resources.packet, AV_PKT_DATA_SKIP_SAMPLES, 10);
+            require(side, "allocate fixture audio discard padding");
+            std::memset(side, 0, 10);
+            for (int byte = 0; byte < 4; ++byte) side[4 + byte] = (fixture.audioTrimSamples >> (8 * byte)) & 255;
+          }
+          av_packet_rescale_ts(resources.packet, compressed.time_base, audio->time_base);
+          resources.packet->stream_index = audio->index;
+          require(av_interleaved_write_frame(resources.mux, resources.packet) >= 0, "mux fixture compressed audio");
+          av_packet_unref(resources.packet);
+        }
+        require(status == AVERROR(EAGAIN) || status == AVERROR_EOF, "drain fixture compressed audio");
+      };
+      for (std::int64_t position = 0; position < total; position += frame.nb_samples) {
+        require(av_frame_make_writable(&frame) >= 0, "fixture writable compressed audio samples");
+        for (int i = 0; i < frame.nb_samples; ++i) {
+          const float value = std::sin((position + i) * .06) * .3f;
+          for (int channel = 0; channel < 2; ++channel) {
+            if (compressed.sample_fmt == AV_SAMPLE_FMT_S32)
+              reinterpret_cast<std::int32_t *>(frame.data[0])[i * 2 + channel] = static_cast<std::int32_t>(value * 2147483647.0);
+            else reinterpret_cast<float *>(frame.data[channel])[i] = value;
+          }
+        }
+        frame.pts = position;
+        require(avcodec_send_frame(&compressed, &frame) >= 0, "encode fixture compressed audio"); drainAudio();
+      }
+      require(avcodec_send_frame(&compressed, nullptr) >= 0, "flush fixture compressed audio"); drainAudio();
+    } else {
     for (std::int64_t position = 0; position < total; position += 1024) {
       const int frames = static_cast<int>(std::min<std::int64_t>(1024, total - position));
       require(av_new_packet(resources.packet, frames * 4) >= 0, "fixture audio packet");
@@ -163,6 +237,7 @@ inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
       av_packet_rescale_ts(resources.packet, sampleClock, audio->time_base);
       require(av_interleaved_write_frame(resources.mux, resources.packet) >= 0, "fixture audio packet mux");
       av_packet_unref(resources.packet);
+    }
     }
   }
   require(av_write_trailer(resources.mux) >= 0, "fixture trailer");

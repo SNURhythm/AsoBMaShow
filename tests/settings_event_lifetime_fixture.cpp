@@ -1,7 +1,9 @@
 // Real scene ownership and Settings event dispatch; graphics and display
 // services are substituted. Run with ASan to detect reads after Back deletes
 // the dynamically allocated Settings scene, as Intro and selectors do.
+#include <algorithm>
 #include <atomic>
+#include <filesystem>
 #include <cassert>
 #include <cstdint>
 #include <functional>
@@ -15,6 +17,9 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace i18n {
 std::uint64_t revision() { return 0; }
@@ -34,7 +39,14 @@ class SceneManager;
 namespace audio::playback { struct BackendOperationResult { bool success = true; std::string diagnostic; }; }
 namespace player_settings { enum class PresentationOrientation { Landscape, Portrait }; }
 struct BackgroundTasks { void setGameplayPaused(bool) {} };
+struct FolderEntry { std::filesystem::path path; std::string iosBookmark; };
+struct ChartRepositoryFixture {
+  std::vector<FolderEntry> entries;
+  auto *OpenSession() { return this; }
+  const auto &SelectAllEntries() const { return entries; }
+};
 struct ApplicationContext {
+  ChartRepositoryFixture chartRepository;
   Uint64 currentFrame = 0;
   int uiBatchRenderer = 0;
   SceneManager *sceneManager = nullptr;
@@ -70,6 +82,108 @@ struct ApplicationContext {
     void setActivePresentationOrientation(player_settings::PresentationOrientation value) { orientation = value; }
   } settings;
 };
+// Exercise real iOS storage admission with only repository and OS services
+// substituted. Paths and symlink validation use the production implementations.
+PRODUCTION_STORAGE_PATH_INDEX
+namespace storage_management {
+namespace fs = std::filesystem;
+PRODUCTION_STORAGE_PLATFORM
+PRODUCTION_SAFE_STORAGE_PATH
+}
+#undef TARGET_OS_IOS
+#undef TARGET_OS_SIMULATOR
+#undef TARGET_OS_ANDROID
+#define TARGET_OS_IOS 1
+#define TARGET_OS_SIMULATOR 0
+#define TARGET_OS_ANDROID 0
+namespace chart_library_platform {
+std::filesystem::path resolveFolderEntryPath(const FolderEntry &entry) { return entry.path; }
+}
+namespace chart_storage_identity {
+std::optional<std::filesystem::path> RebaseLegacyIOSDocumentsPath(
+    const std::filesystem::path &, const std::filesystem::path &) { return {}; }
+}
+namespace fs = std::filesystem;
+struct BookmarkResponse { fs::path resolved; bool handle = true; bool accessing = true; };
+std::map<std::string, BookmarkResponse> bookmarkResponses;
+int outstandingBookmarkHandles = 0;
+fs::path privateStorageRoot;
+std::string fspath_to_utf8(const fs::path &path) { return path.string(); }
+std::string GetIOSDocumentsPath() { return (privateStorageRoot / "Documents").string(); }
+void *StartIOSSecurityScopedResource(const std::string &path, const std::string &bookmark,
+                                    std::string &resolved, std::string &error) {
+  const auto &response = bookmarkResponses.at(bookmark);
+  resolved = response.resolved.empty() ? path : response.resolved.string();
+  error = response.accessing ? "" : "Failed to start folder access";
+  if (!response.handle) { error = "Failed to resolve folder access"; return nullptr; }
+  ++outstandingBookmarkHandles;
+  return new int;
+}
+void StopIOSSecurityScopedResource(void *handle) {
+  --outstandingBookmarkHandles;
+  delete static_cast<int *>(handle);
+}
+namespace storage_management {
+fs::path StoragePrivateRoot(ApplicationContext &) { return privateStorageRoot; }
+PRODUCTION_STORAGE_ACCESS
+bool admitStorageRoots(ApplicationContext &context, const std::vector<fs::path> &roots) {
+  std::string error;
+  auto access = accessFolders(context, error);
+  if (!access) return false;
+  PRODUCTION_STORAGE_ROOT_ADMISSION
+  return true;
+}
+}
+void testBookmarkScopeAdmission() {
+  storage_test::TempDirectory temp;
+  privateStorageRoot = temp.root / "private";
+  fs::create_directory(privateStorageRoot);
+  temp.write("library/child/song.wav");
+  temp.write("library/sibling/song.wav");
+  temp.write("library/child/archive.zip");
+  temp.write("library-other/song.wav");
+  const auto parent = temp.root / "library", child = parent / "child";
+  bookmarkResponses = {{"active", {}}, {"stale", {{}, false, false}},
+                       {"denied", {{}, true, false}}};
+  ApplicationContext context;
+  auto check = [&](std::vector<FolderEntry> entries, const fs::path &selected,
+                   bool expected, const char *message) {
+    context.chartRepository.entries = std::move(entries);
+    storage_test::require(storage_management::admitStorageRoots(context, {selected}) == expected, message);
+    storage_test::require(outstandingBookmarkHandles == 0, "all bookmark wrappers released after admission");
+  };
+  check({{parent, "stale"}, {child, "active"}}, child, true,
+        "active child bookmark survives an unavailable parent registration");
+  check({{parent, "stale"}, {child, "active"}}, child / "archive.zip", true,
+        "local archive inherits its active child folder grant");
+  check({{parent, "stale"}, {child, "active"}}, parent / "sibling", false,
+        "child grant never authorizes an unavailable parent's sibling subtree");
+  check({{parent, "active"}, {child, "stale"}}, child, true,
+        "failed child bookmark does not revoke an active parent directory grant");
+  for (bool reversed : {false, true}) {
+    std::vector<FolderEntry> duplicate{{child, "active"}, {child / "", "stale"}};
+    if (reversed) std::reverse(duplicate.begin(), duplicate.end());
+    check(std::move(duplicate), child, true, "duplicate active grant wins independently of registration order");
+  }
+  check({{child, "active"}}, temp.root / "library-other", false,
+        "component-prefix sibling is outside the active grant");
+  check({{child, "denied"}}, child, false,
+        "resolved wrapper with failed native access is not an active grant");
+  check({{parent, "active"}, {child, "denied"}}, child, true,
+        "active parent still covers a resolved child with failed access");
+  check({{child, ""}}, child, true, "ordinary registered sandbox folder needs no bookmark");
+  bookmarkResponses["moved"] = {child, true, true};
+  check({{temp.root / "old", "moved"}, {parent, "stale"}}, child, true,
+        "active scope is classified at its resolved current location");
+  bookmarkResponses["moved-denied"] = {child, true, false};
+  check({{temp.root / "old", "moved-denied"}}, child, false,
+        "failed access is classified at its resolved current location");
+  fs::create_directory_symlink(parent / "sibling", child / "link");
+  check({{child, "active"}}, child / "link", false, "active grant does not bypass symlink validation");
+}
+#undef TARGET_OS_IOS
+#undef TARGET_OS_SIMULATOR
+#undef TARGET_OS_ANDROID
 struct RenderContext {
   explicit RenderContext(int) {}
   struct UiBatchScope { explicit UiBatchScope(RenderContext &) {} };
@@ -210,6 +324,7 @@ void testMaintenanceAdmission() {
   assert(!imageReadsPaused);
 }
 int main() {
+  testBookmarkScopeAdmission();
   testMaintenanceAdmission();
   ApplicationContext context;
   int destructions = 0;

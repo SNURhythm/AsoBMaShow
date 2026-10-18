@@ -20,7 +20,7 @@ namespace {
 struct Access {
   StoragePlatformPaths paths;
   std::vector<std::shared_ptr<void>> scopes;
-  std::vector<std::filesystem::path> unavailableRoots;
+  std::vector<std::filesystem::path> availableRoots;
 };
 std::optional<Access> accessFolders(ApplicationContext &context, std::string &error) {
   auto session = context.chartRepository.OpenSession();
@@ -29,12 +29,15 @@ std::optional<Access> accessFolders(ApplicationContext &context, std::string &er
   std::vector<std::filesystem::path> roots;
   for (const auto &entry : session->SelectAllEntries()) {
     auto path = chart_library_platform::resolveFolderEntryPath(entry);
+    bool available = true;
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
     if (!entry.iosBookmark.empty()) {
       std::string resolved;
       void *handle = StartIOSSecurityScopedResource(fspath_to_utf8(path), entry.iosBookmark, resolved, error);
       if (handle) access.scopes.emplace_back(handle, [](void *value) { StopIOSSecurityScopedResource(value); });
-      else access.unavailableRoots.push_back(path);
+      // The native API can return a wrapper even when starting access failed.
+      // Retain it for balanced cleanup, but do not treat it as a new grant.
+      available = handle && error.empty();
       error.clear();
       if (!resolved.empty()) path = std::filesystem::path(resolved);
     }
@@ -42,11 +45,18 @@ std::optional<Access> accessFolders(ApplicationContext &context, std::string &er
     // Local archive files inherit their registered folder's authority; SAF
     // references do not grant local filesystem authority. Missing roots may contain recovery records;
     // retain their absolute names so recovery can fail closed on actual access.
-    if (path.is_absolute()) roots.push_back(path.lexically_normal());
+    if (path.is_absolute()) {
+      path = path.lexically_normal();
+      roots.push_back(path);
+      if (available) access.availableRoots.push_back(path);
+    }
   }
   auto root = StoragePrivateRoot(context);
   if (root.empty()) { error = "Private storage is unavailable."; return {}; }
-  access.paths = MakeStoragePlatformPaths(root, std::move(roots), TARGET_OS_ANDROID || TARGET_OS_IOS || TARGET_OS_SIMULATOR);
+  access.paths = MakeStoragePlatformPaths(root, access.availableRoots, TARGET_OS_ANDROID || TARGET_OS_IOS || TARGET_OS_SIMULATOR);
+  // Retain all registrations for recovery authority, but only active grants may
+  // bypass inaccessible system ancestors. Recovery still fails closed on IO.
+  access.paths.allowedRoots = std::move(roots);
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   // Documents and Library survive app updates even when iOS relocates their
   // enclosing container. Only the OS-derived Documents root can retarget paths;
@@ -150,13 +160,16 @@ bool InitializeStorageServices(ApplicationContext &context) {
       if (!access) return {};
       const auto roots = request.preflight ? request.preflight->EligibleRoots() : selectedRoots(request);
       if (roots.empty()) { error = "Select a local chart folder."; return {}; }
-      const StoragePathIndex allowed(access->paths.allowedRoots), unavailable(access->unavailableRoots),
+      // Grants form a union: a failed overlapping bookmark does not revoke an
+      // active parent or child grant. Anchor validation at the most specific
+      // active boundary and keep siblings outside that grant unauthorized.
+      const StoragePathIndex allowed(access->availableRoots),
           boundaries(access->paths.pathAccessRoots);
       for (const auto &root : roots) {
         const auto matches = boundaries.Ancestors(root);
         const auto localBoundaries = matches.empty() ? std::vector<std::filesystem::path>{} :
             std::vector<std::filesystem::path>{access->paths.pathAccessRoots[matches.back()]};
-        if (!IsSafeLocalPath(root, error, localBoundaries) || !unavailable.Ancestors(root).empty() || allowed.Ancestors(root).empty()) {
+        if (!IsSafeLocalPath(root, error, localBoundaries) || allowed.Ancestors(root).empty()) {
           error = "The selected folder is not a registered local chart folder."; return {};
         }
       }
