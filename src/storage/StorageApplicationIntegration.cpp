@@ -180,7 +180,11 @@ bool InitializeStorageServices(ApplicationContext &context) {
       return guard;
     },
     .run = [environment](OptimizationRequest request, Checkpoint check, ProgressCallback progress) {
-      return StorageOptimizer(DefaultOptimizerDependencies(environment->paths)).Run(std::move(request), std::move(check), std::move(progress));
+      auto report = StorageOptimizer(DefaultOptimizerDependencies(environment->paths)).Run(std::move(request), std::move(check), std::move(progress));
+      for (const auto &file : report.files)
+        if (file.outcome == FileOutcome::Failed)
+          SDL_Log("Storage optimization failed for %s: %s", fspath_to_utf8(file.source).c_str(), file.reason.detail.c_str());
+      return report;
     },
     .wake = [] { SharedStorageConversionPermit()->Notify(); },
   });

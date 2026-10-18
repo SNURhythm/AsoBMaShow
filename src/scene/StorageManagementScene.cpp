@@ -427,8 +427,11 @@ void StorageManagementScene::RefreshState() {
         {"failed", std::to_string(report->failed)}, {"bytes", bytes(report->reclaimedBytes)}});
     if (report->cleanupPending) value += std::string("\n") + i18n::tr("storage.ui.cleanup_pending");
     for (const auto &file : report->files)
-      if (file.reason.code != StorageReason::None)
+      if (file.reason.code != StorageReason::None) {
         value += "\n" + fspath_to_utf8(file.source.filename()) + ": " + reason(file.reason.code);
+        if (file.outcome == FileOutcome::Failed && !file.reason.detail.empty())
+          value += "\n" + file.reason.detail;
+      }
     reportText_->setText(value);
   }
   root_->applyYogaLayout();

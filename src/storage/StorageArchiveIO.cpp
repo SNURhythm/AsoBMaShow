@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <limits>
+#include <system_error>
 #ifdef _WIN32
 #include <windows.h>
 #else
@@ -15,6 +16,15 @@ namespace storage_management {
 namespace {
 void require(bool value, const char *message) {
   if (!value) throw StorageArchiveError(StorageReason::IoError, message);
+}
+void requireSystem(bool value, const char *message) {
+  if (value) return;
+#ifdef _WIN32
+  const auto error = std::error_code(GetLastError(), std::system_category());
+#else
+  const auto error = std::error_code(errno, std::generic_category());
+#endif
+  throw StorageArchiveError(StorageReason::IoError, std::string(message) + ": " + error.message());
 }
 void range(std::uint64_t offset, std::uint64_t length) {
   constexpr auto maximum = std::uint64_t(std::numeric_limits<std::int64_t>::max());
@@ -30,13 +40,14 @@ StorageArchiveIO::StorageArchiveIO(const std::filesystem::path &path,
 #ifdef _WIN32
   handle_ = CreateFileW(path.c_str(), GENERIC_READ | (write ? GENERIC_WRITE : 0), FILE_SHARE_READ,
       nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
-  require(handle_ != INVALID_HANDLE_VALUE, "Cannot lock archive for storage maintenance");
+  requireSystem(handle_ != INVALID_HANDLE_VALUE, "Cannot lock archive for storage maintenance");
 #else
   fd_ = open(path.c_str(), (write ? O_RDWR : O_RDONLY) | O_NOFOLLOW | O_CLOEXEC);
-  require(fd_ >= 0, "Cannot open writable archive");
+  requireSystem(fd_ >= 0, write ? "Cannot open writable archive" : "Cannot open archive for reading");
   if (flock(fd_, LOCK_EX | LOCK_NB) != 0) {
+    const auto error = std::error_code(errno, std::generic_category());
     close(fd_); fd_ = -1;
-    throw StorageArchiveError(StorageReason::IoError, "Archive is already being updated");
+    throw StorageArchiveError(StorageReason::IoError, "Cannot lock archive: " + error.message());
   }
 #endif
   try { originalToken_ = ChangeToken(); CheckPath(); }
@@ -117,7 +128,8 @@ void StorageArchiveIO::Read(std::uint64_t offset, std::span<char> buffer) const 
 #else
     const auto got = pread(fd_, buffer.data(), amount, static_cast<off_t>(offset));
     if (got < 0 && errno == EINTR) continue;
-    require(got > 0, "Cannot read archive");
+    requireSystem(got >= 0, "Cannot read archive");
+    require(got > 0, "Unexpected end of archive");
 #endif
     offset += got; buffer = buffer.subspan(got);
   }
@@ -137,7 +149,8 @@ void StorageArchiveIO::Write(std::uint64_t offset, std::string_view bytes) {
 #else
     const auto put = pwrite(fd_, bytes.data(), amount, static_cast<off_t>(offset));
     if (put < 0 && errno == EINTR) continue;
-    require(put > 0, "Cannot write archive");
+    requireSystem(put >= 0, "Cannot write archive");
+    require(put > 0, "Archive write made no progress");
 #endif
     offset += put; bytes.remove_prefix(put);
   }
@@ -149,15 +162,15 @@ void StorageArchiveIO::Truncate(std::uint64_t length) {
   LARGE_INTEGER position; position.QuadPart = static_cast<LONGLONG>(length);
   require(SetFilePointerEx(handle_, position, nullptr, FILE_BEGIN) && SetEndOfFile(handle_), "Cannot truncate archive");
 #else
-  require(ftruncate(fd_, static_cast<off_t>(length)) == 0, "Cannot truncate archive");
+  requireSystem(ftruncate(fd_, static_cast<off_t>(length)) == 0, "Cannot truncate archive");
 #endif
   CaptureWrite();
 }
 void StorageArchiveIO::Sync() {
 #ifdef _WIN32
-  require(FlushFileBuffers(handle_), "Cannot sync archive");
+  requireSystem(FlushFileBuffers(handle_), "Cannot sync archive");
 #else
-  require(fsync(fd_) == 0, "Cannot sync archive");
+  requireSystem(fsync(fd_) == 0, "Cannot sync archive");
 #endif
 }
 }
