@@ -23,11 +23,15 @@ bool StorageTask::Start(OptimizationRequest &&request) {
     if (request.preflight) snapshot_.progress.filesTotal = request.preflight->eligibleCount;
     finished_ = false;
   }
+  std::shared_ptr<OptimizationRequest> pending;
   try {
-    worker_ = std::thread([this, request = std::move(request)]() mutable {
+    // Keep ownership available to the caller if thread construction fails
+    // after moving the reviewed request into the worker's startup state.
+    pending = std::make_shared<OptimizationRequest>(std::move(request));
+    worker_ = std::thread([this, pending]() {
       StorageReport report;
       try {
-        report = dependencies_.run(std::move(request), [this] { return !cancelled_.load(); },
+        report = dependencies_.run(std::move(*pending), [this] { return !cancelled_.load(); },
             [this](const StorageProgress &progress) {
               std::lock_guard state(stateMutex_);
               snapshot_.progress = progress;
@@ -43,10 +47,12 @@ bool StorageTask::Start(OptimizationRequest &&request) {
       finished_ = true;
     });
   } catch (...) {
+    if (pending) request = std::move(*pending);
     guard_.reset();
     std::lock_guard state(stateMutex_);
     snapshot_.running = false;
-    throw;
+    snapshot_.admissionError = "Could not start storage worker. Try again.";
+    return false;
   }
   return true;
 }

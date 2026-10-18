@@ -2,14 +2,77 @@
 #include "../src/storage/StorageRecoveryPresentation.h"
 #include "StorageTestSupport.h"
 #include <atomic>
+#include <cstdlib>
 #include <future>
 #include <iostream>
+#include <new>
 #include <semaphore>
 
 using namespace storage_management;
 using storage_test::require;
 
 namespace {
+thread_local bool observeStartAllocations = false;
+thread_local std::size_t startAllocations = 0, failedStartAllocation = static_cast<std::size_t>(-1);
+}
+
+void *operator new(std::size_t size) {
+  if (observeStartAllocations && startAllocations++ == failedStartAllocation) {
+    observeStartAllocations = false;
+    throw std::bad_alloc();
+  }
+  if (void *value = std::malloc(size ? size : 1)) return value;
+  throw std::bad_alloc();
+}
+void operator delete(void *value) noexcept { std::free(value); }
+void operator delete(void *value, std::size_t) noexcept { std::free(value); }
+
+namespace {
+void workerStartFailureRetainsReview() {
+  unsigned guards = 0, runs = 0;
+  StorageTask task({
+    .admit = [&](const OptimizationRequest &, std::string &) -> std::optional<StorageMaintenanceGuard> {
+      ++guards;
+      return StorageMaintenanceGuard({}, [&] { --guards; });
+    },
+    .run = [&](OptimizationRequest, Checkpoint, ProgressCallback) { ++runs; return StorageReport{}; },
+  });
+  // Measure only owner-thread startup allocations, then fail each once. This
+  // exercises real thread construction without a production-only test hook.
+  startAllocations = 0;
+  observeStartAllocations = true;
+  const bool started = task.Start({});
+  observeStartAllocations = false;
+  const auto allocations = startAllocations;
+  require(started && allocations != 0, "real worker construction allocates startup state");
+  task.CancelAndWait();
+  for (std::size_t index = 0; index < allocations; ++index) {
+    OptimizationRequest request;
+    request.preflight.emplace();
+    request.preflight->groups.resize(1);
+    const auto *groups = request.preflight->groups.data();
+    const auto priorRuns = runs;
+    failedStartAllocation = index;
+    startAllocations = 0;
+    observeStartAllocations = true;
+    bool accepted = false, threw = false;
+    try { accepted = task.Start(std::move(request)); }
+    catch (...) { threw = true; }
+    observeStartAllocations = false;
+    require(!threw && !accepted, "worker-start failure returns a rejected task instead of escaping Apply");
+    const auto snapshot = task.Snapshot();
+    require(guards == 0 && runs == priorRuns && !snapshot.running && !snapshot.cancelling &&
+        !snapshot.recoveryRequired && !snapshot.admissionError.empty() && !task.TakeCompletion(),
+        "failed startup releases admission and exposes an error without claiming work or recovery");
+    require(request.preflight && request.preflight->groups.data() == groups,
+        "failed worker startup returns the original reviewed request without copying its assets");
+    require(task.Start(std::move(request)), "reviewed request can retry after startup resources recover");
+    task.CancelAndWait();
+    require(guards == 0 && runs == priorRuns + 1 && task.Snapshot().admissionError.empty(),
+        "retry runs exactly once and clears the startup error");
+  }
+  failedStartAllocation = static_cast<std::size_t>(-1);
+}
 void startupRecoveryKeepsPresentationAlive() {
   const auto owner = std::this_thread::get_id();
   std::atomic_bool entered = false, completed = false;
@@ -56,6 +119,7 @@ void startupRecoveryKeepsPresentationAlive() {
 
 int main() {
   try {
+    workerStartFailureRetainsReview();
     startupRecoveryKeepsPresentationAlive();
     // The handoff must preserve owned storage, not duplicate the confirmed tree.
     OptimizationRequest transfer;
