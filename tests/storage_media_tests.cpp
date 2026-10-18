@@ -90,6 +90,7 @@ void verifyWaveMetadata(const std::string &source, const std::filesystem::path &
   }
   std::vector<std::string> expected{source.substr(0, 12)};
   for (std::size_t offset = 12; offset < source.size();) {
+    if (source.size() - offset < 8) { expected.push_back(source.substr(offset)); break; }
     std::uint32_t size = 0;
     for (int i = 0; i < 4; ++i) size |= std::uint32_t(static_cast<unsigned char>(source[offset + 4 + i])) << (8 * i);
     expected.push_back(source.substr(offset, source.compare(offset, 4, "data") == 0 ? 8 : 8 + size + (size & 1)));
@@ -313,7 +314,7 @@ void audioTests() {
       require(std::filesystem::exists(source), "encoding never retires source");
     }
   }
-  const auto rejectPartialFrame = [&](const std::filesystem::path &source, int missingBytes,
+  const auto recoverPartialFrame = [&](const std::filesystem::path &source, int missingBytes,
                                        const StoragePolicy &selectedPolicy) {
     std::ifstream input(source, std::ios::binary);
     std::string bytes((std::istreambuf_iterator<char>(input)), {});
@@ -329,15 +330,23 @@ void audioTests() {
     const auto malformed = temp.root / "incomplete-frame.wav";
     const auto output = temp.root / "incomplete-frame-output";
     temp.write(malformed, bytes);
-    require(EncodeAudio(candidate(malformed), selectedPolicy, output, {}, {}).reason.code ==
-                StorageReason::ValidationFailed && !std::filesystem::exists(output),
-            "complete RIFF bounds and padding cannot hide an incomplete native audio frame");
+    require(EncodeAudio(candidate(malformed), selectedPolicy, output, {}, {}).outcome == FileOutcome::Converted,
+            "partial trailing PCM frame permits recovery of every complete decoded frame");
+    SF_INFO sourceInfo{};
+    auto native = sf_open(source.string().c_str(), SFM_READ, &sourceInfo);
+    require(native, "open partial-frame reference"); sf_close(native);
+    const auto actual = readAudio(output, sourceInfo.channels, 8191);
+    if (selectedPolicy.audio == AudioAction::LosslessFlac) {
+      auto expected = samples(8192, sourceInfo.channels, 16); expected.resize(8191 * sourceInfo.channels);
+      require(actual == expected, "partial frame recovery preserves exact complete samples");
+    }
+    std::filesystem::remove(output);
     std::ifstream retained(malformed, std::ios::binary);
     require(std::string((std::istreambuf_iterator<char>(retained)), {}) == bytes,
             "incomplete PCM frames retain every original byte");
   };
-  rejectPartialFrame(temp.root / "16-2.wav", 2, policy); // Even payload: final left channel only.
-  rejectPartialFrame(temp.root / "16-1.wav", 1, policy); // Odd payload with a complete RIFF pad.
+  recoverPartialFrame(temp.root / "16-2.wav", 2, policy); // Even payload: final left channel only.
+  recoverPartialFrame(temp.root / "16-1.wav", 1, policy); // Odd payload with a complete RIFF pad.
   for (int bits : {8, 24}) {
     // Older WAV writers omit the terminal pad byte after an odd PCM payload.
     // Start with known PCM and shorten the declared payload by one full sample.
@@ -378,9 +387,12 @@ void audioTests() {
     for (bool declaredPad : {false, true}) {
       put32(truncated, 4, truncated.size() - 8 + (declaredPad ? 1 : 0));
       temp.write("unpadded-truncated.wav", truncated);
-      require(EncodeAudio(candidate(temp.root / "unpadded-truncated.wav"), policy,
-                        temp.root / "unpadded-truncated.flac", {}, {}).reason.code == StorageReason::ValidationFailed,
-            "terminal padding tolerance never accepts missing declared PCM bytes");
+      const auto recovered = temp.root / "unpadded-truncated.flac";
+      require(EncodeAudio(candidate(temp.root / "unpadded-truncated.wav"), policy, recovered, {}, {}).outcome ==
+                  FileOutcome::Converted, "truncated data declaration uses complete readable PCM frames");
+      auto expected = samples(8192, 1, bits); expected.resize(8190);
+      require(readAudio(recovered, 1, 8190) == expected, "missing final byte preserves all remaining complete samples");
+      std::filesystem::remove(recovered);
     }
     if (bits == 24) {
       auto partialFrame = unpadded; partialFrame.resize(partialFrame.size() - 2);
@@ -388,19 +400,24 @@ void audioTests() {
       put32(partialFrame, 4, partialFrame.size() - 8);
       temp.write("partial-frame.wav", partialFrame);
       require(EncodeAudio(candidate(temp.root / "partial-frame.wav"), policy,
-                          temp.root / "partial-frame.flac", {}, {}).reason.code == StorageReason::ValidationFailed,
-              "an odd payload ending inside a PCM frame is not mistaken for missing padding");
+                          temp.root / "partial-frame.flac", {}, {}).outcome == FileOutcome::Converted,
+              "24-bit partial final sample permits recovery of complete samples");
+      auto expected = samples(8192, 1, bits); expected.resize(8190);
+      require(readAudio(temp.root / "partial-frame.flac", 1, 8190) == expected,
+              "24-bit recovery never pads an incomplete sample into audible data");
     }
-    // The exception cannot cover ancillary payloads or padding before another chunk.
+    // Tolerate missing ancillary padding and retain the readable audio.
     for (bool ancillary : {false, true}) {
       auto bytes = unpadded;
       if (ancillary) bytes += std::string("\0Xfoo\x01\0\0\0x", 10);
       else bytes += std::string("JUNK\0\0\0\0", 8);
       put32(bytes, 4, bytes.size() - 8);
       temp.write("unpadded-invalid.wav", bytes);
-      require(EncodeAudio(candidate(temp.root / "unpadded-invalid.wav"), policy,
-                          temp.root / "unpadded-invalid.flac", {}, {}).reason.code == StorageReason::ValidationFailed,
-              "padding remains mandatory between chunks and for ancillary metadata");
+      const auto recovered = temp.root / "unpadded-invalid.flac";
+      require(EncodeAudio(candidate(temp.root / "unpadded-invalid.wav"), policy, recovered, {}, {}).outcome ==
+                  FileOutcome::Converted, "malformed ancillary alignment does not reject readable PCM");
+      require(readAudio(recovered, 1, 8191) == pcm, "ancillary damage never changes decoded samples");
+      std::filesystem::remove(recovered);
     }
   }
   for (int subtype : {SF_FORMAT_FLOAT, SF_FORMAT_PCM_32}) {
@@ -410,7 +427,7 @@ void audioTests() {
                 StorageReason::UnsupportedFormat, "lossless mode never quantizes float or 32-bit PCM");
     if (subtype == SF_FORMAT_PCM_32) {
       StoragePolicy lossy; lossy.audio = AudioAction::LossyVorbis;
-      rejectPartialFrame(source, 2, lossy);
+      recoverPartialFrame(source, 2, lossy);
     }
   }
   const auto tagged = temp.root / "tagged.wav";
@@ -626,14 +643,22 @@ void audioTests() {
             "common and unknown RIFF chunks permit lossless conversion");
     verifyWaveMetadata(bytes, output);
     require(readAudio(output, 1, 8192) == taggedPcm, "ancillary chunks preserve exact PCM");
-    // An out-of-bounds vendor chunk must still fail even though its ID is allowed.
+    // Preserve a truncated vendor header without inventing its missing payload.
     bytes += "Xbad"; bytes.append("\xff\xff\xff\x7f", 4);
     for (int i = 0; i < 4; ++i) bytes[4 + i] = static_cast<char>((bytes.size() - 8) >> (8 * i));
     temp.write("truncated-chunk.wav", bytes);
     const auto invalidOutput = temp.root / "truncated-chunk.flac";
-    require(EncodeAudio(candidate(temp.root / "truncated-chunk.wav"), policy, invalidOutput, {}, {}).reason.code ==
-        StorageReason::ValidationFailed && !std::filesystem::exists(invalidOutput),
-        "opaque metadata still requires complete RIFF chunk bounds");
+    require(EncodeAudio(candidate(temp.root / "truncated-chunk.wav"), policy, invalidOutput, {}, {}).outcome ==
+        FileOutcome::Converted, "truncated vendor chunk preserves its physically present bytes with readable PCM");
+    verifyWaveMetadata(bytes, invalidOutput);
+    require(readAudio(invalidOutput, 1, 8192) == taggedPcm, "truncated ancillary declarations do not shorten PCM");
+    bytes.resize(bytes.size() - 5); // Only three bytes of the final vendor header remain.
+    temp.write("partial-header.wav", bytes);
+    const auto partialHeader = temp.root / "partial-header.flac";
+    require(EncodeAudio(candidate(temp.root / "partial-header.wav"), policy, partialHeader, {}, {}).outcome ==
+                FileOutcome::Converted, "incomplete trailing chunk header permits lossless sample recovery");
+    verifyWaveMetadata(bytes, partialHeader);
+    require(readAudio(partialHeader, 1, 8192) == taggedPcm, "partial ancillary header retains exact PCM");
   }
   auto rear = temp.root / "rear.wav";
   writeAudio(rear, SF_FORMAT_WAVEX | SF_FORMAT_PCM_16, 2, samples(8192, 2, 16), false, true);
@@ -685,8 +710,12 @@ void audioTests() {
   auto truncated = temp.root / "truncated.wav";
   std::filesystem::copy_file(source, truncated);
   std::filesystem::resize_file(truncated, std::filesystem::file_size(truncated) - 20);
-  require(EncodeAudio(candidate(truncated), policy, temp.root / "truncated.flac", {}, {}).reason.code ==
-              StorageReason::ValidationFailed, "truncated WAV must not be silently shortened");
+  require(EncodeAudio(candidate(truncated), policy, temp.root / "truncated.flac", {}, {}).outcome ==
+              FileOutcome::Converted, "truncated WAV recovers the complete PCM frames actually present");
+  auto recoveredPcm = samples(8192, 2, 16); recoveredPcm.resize(8187 * 2);
+  require(readAudio(temp.root / "truncated.flac", 2, 8187) == recoveredPcm,
+          "best-effort WAV recovery preserves exactly the readable source samples");
+  std::filesystem::remove(temp.root / "truncated.flac");
   temp.write("corrupt.wav", "not audio");
   require(EncodeAudio(candidate(temp.root / "corrupt.wav"), policy, temp.root / "corrupt.flac", {}, {}).outcome !=
               FileOutcome::Converted, "corrupt source retained");
@@ -1353,7 +1382,7 @@ void truncatedAsfTests() {
 }
 void remuxVideoDisposition(const std::filesystem::path &source, const std::filesystem::path &destination,
                            const char *container, int disposition, int audioDisposition = AV_DISPOSITION_DEFAULT,
-                           int clusterMilliseconds = 0) {
+                           int clusterMilliseconds = 0, std::function<void(AVPacket &)> editPacket = {}) {
   struct Resources {
     AVFormatContext *input = nullptr, *output = nullptr;
     AVPacket *packet = av_packet_alloc();
@@ -1376,6 +1405,7 @@ void remuxVideoDisposition(const std::filesystem::path &source, const std::files
     require(output && avcodec_parameters_copy(output->codecpar, input->codecpar) >= 0,
             "copy disposition fixture codec parameters");
     output->codecpar->codec_tag = 0; output->time_base = input->time_base;
+    output->avg_frame_rate = input->avg_frame_rate;
     output->disposition = input->codecpar->codec_type == AVMEDIA_TYPE_VIDEO ? disposition : audioDisposition;
   }
   require(avio_open(&resources.output->pb, destination.string().c_str(), AVIO_FLAG_WRITE) >= 0 &&
@@ -1385,10 +1415,49 @@ void remuxVideoDisposition(const std::filesystem::path &source, const std::files
     const auto input = resources.input->streams[resources.packet->stream_index];
     const auto output = resources.output->streams[resources.packet->stream_index];
     av_packet_rescale_ts(resources.packet, input->time_base, output->time_base);
+    if (editPacket) editPacket(*resources.packet);
     require(av_interleaved_write_frame(resources.output, resources.packet) >= 0, "remux disposition fixture packet");
     av_packet_unref(resources.packet);
   }
   require(status == AVERROR_EOF && av_write_trailer(resources.output) >= 0, "complete disposition fixture");
+}
+void recoverableMpegPacketTests() {
+  storage_test::TempDirectory temp;
+  const auto source = temp.root / "clean.mpg";
+  storage_test::makeVideo(source, {});
+  StoragePolicy policy; policy.bga = BgaAction::CompressH264;
+  for (const bool brokenPacket : {false, true}) {
+    const auto damaged = temp.root / (brokenPacket ? "bad-packet.mpg" : "padding.mpg");
+    const auto output = temp.root / (brokenPacket ? "bad-packet.mp4" : "padding.mp4");
+    int packetIndex = 0;
+    remuxVideoDisposition(source, damaged, "nut", AV_DISPOSITION_DEFAULT, AV_DISPOSITION_DEFAULT, 0,
+        [&](AVPacket &packet) {
+          if (packetIndex++ != 5) return;
+          if (brokenPacket) {
+            std::memset(packet.data, 0xff, packet.size);
+            std::memcpy(packet.data, "\0\0\1\0", 4); // Invalid MPEG picture coding type.
+          } else {
+            const int size = packet.size;
+            require(av_grow_packet(&packet, 64) >= 0, "extend MPEG packet fixture");
+            std::memset(packet.data + size, 0xff, 64);
+          }
+        });
+    bool strictRejected = false;
+    try {
+      Input input(damaged);
+      decode(input, {}, [](int, const AVFrame &) {}, [](int, const AVPacket &) {});
+    } catch (const Failure &) { strictRejected = true; }
+    require(brokenPacket || strictRejected, "padded MPEG fixture reproduces strict decoder rejection");
+    const auto result = EncodeBga(candidate(damaged), policy, output, {}, {});
+    if (result.outcome != FileOutcome::Converted) std::cerr << "MPEG recovery: " << result.reason.detail << '\n';
+    require(result.outcome == FileOutcome::Converted, "readable MPEG frames survive recoverable packet errors");
+    const auto playback = storage_test::inspectVideo(output);
+    require(playback.timestamps.size() >= 29 && std::abs(playback.videoEnd - 1.2) < .002,
+            ("recovery continues through the final frame without collapsing the timeline: broken=" +
+            std::to_string(brokenPacket) + " frames=" + std::to_string(playback.timestamps.size()) +
+            " end=" + std::to_string(playback.videoEnd)).c_str());
+    require(ValidateExistingBga(output).code == StorageReason::None, "best-effort source produces strictly valid MP4");
+  }
 }
 void matroskaTimelineTests() {
   storage_test::TempDirectory temp;
@@ -1803,14 +1872,7 @@ void videoTests() {
   temp.write("corrupt.mpg", "bad packet stream");
   require(EncodeBga(candidate(temp.root / "corrupt.mpg"), policy, temp.root / "corrupt.mp4", {}, {}).reason.code ==
               StorageReason::ValidationFailed, "corrupt video is retained");
-  std::ifstream original(source, std::ios::binary);
-  std::string corruptBytes((std::istreambuf_iterator<char>(original)), {});
-  const auto picture = corruptBytes.find(std::string("\0\0\1\0", 4));
-  require(picture != std::string::npos && picture + 80 < corruptBytes.size(), "fixture contains a real MPEG picture packet");
-  corruptBytes.replace(picture + 4, 64, 64, '\xff');
-  temp.write("corrupt-packet.mpg", corruptBytes);
-  require(EncodeBga(candidate(temp.root / "corrupt-packet.mpg"), policy, temp.root / "corrupt-packet.mp4", {}, {}).outcome !=
-              FileOutcome::Converted, "corrupt MPEG packet must never install a concealed decode");
+
 }
 }
 int main() {
@@ -1819,7 +1881,7 @@ int main() {
   for (const auto test : {selectedVideoCodecTests, efficientCodecHeaderTests, efficientVideoPreservationTests, decodedDisplayTransformTests, decodedColorTests, chromaLocationTests, decodedAudioFormatTests, decodedAudioPresentationTests,
                           encodedAudioPresentationTests, embeddedAudioSideDataTests, audioRemuxTrimTests, audioRemuxContentTests, timelineTests,
                           declaredVideoTimelineTests, crossStreamTimelineTests, changingAspectRatioTests, quantizedAudioTimelineTests, asfTimelineTests,
-                          truncatedAsfTests, matroskaTimelineTests, existingBgaTests, existingAudioTests, audioTests, videoDispositionTests, videoTests}) {
+                          truncatedAsfTests, recoverableMpegPacketTests, matroskaTimelineTests, existingBgaTests, existingAudioTests, audioTests, videoDispositionTests, videoTests}) {
     try { test(); }
     catch (const Failure &failure) { std::cerr << failure.detail << '\n'; ++failures; }
     catch (const std::exception &error) { std::cerr << error.what() << '\n'; ++failures; }

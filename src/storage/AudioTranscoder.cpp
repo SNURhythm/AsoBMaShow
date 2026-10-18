@@ -133,12 +133,11 @@ int descriptiveCommentTag(std::string_view value) {
 struct WaveMetadata {
   bool preserve = false;
   bool last = false;
-  bool unpaddedData = false;
   std::uint64_t sourceEnd = 0;
   std::uint64_t bytes = 20; // APPLICATION header, riff ID and RIFF/WAVE header.
 };
-// libsndfile tolerates truncated RIFF data and does not expose every custom loop
-// tag. Inspect only media container headers, never chart declarations.
+// Use the source decoder's complete readable samples for damaged WAVs. Inspect
+// ancillary chunks within physical bounds to preserve custom playback metadata.
 StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, Checkpoint check,
                                    bool lossless, WaveMetadata &foreign) {
   const auto bad = StorageDiagnostic{StorageReason::ValidationFailed, "Truncated or invalid audio container"};
@@ -194,48 +193,27 @@ StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, Ch
   }
   if (!input.read(reinterpret_cast<char *>(header.data()), 12) ||
       std::memcmp(header.data(), "RIFF", 4) || std::memcmp(header.data() + 8, "WAVE", 4)) return bad;
-  // Some otherwise playable WAVs have a stale outer RIFF size. Walk physical
-  // chunk bounds instead; declared data bytes, complete PCM frames and decoded
-  // samples remain mandatory, so this tolerance cannot conceal missing audio.
+  // Old WAV writers can leave stale RIFF/data sizes, partial final samples and
+  // missing padding. Physical bytes bound inspection; decode-back verifies the
+  // complete samples libsndfile actually reads, rather than stale declarations.
   const std::uint64_t end = bytes;
   foreign.sourceEnd = end;
-  int sampleBytes = 0;
-  switch (info.format & SF_FORMAT_SUBMASK) {
-  case SF_FORMAT_PCM_U8: case SF_FORMAT_PCM_S8: sampleBytes = 1; break;
-  case SF_FORMAT_PCM_16: sampleBytes = 2; break;
-  case SF_FORMAT_PCM_24: sampleBytes = 3; break;
-  case SF_FORMAT_PCM_32: case SF_FORMAT_FLOAT: sampleBytes = 4; break;
-  case SF_FORMAT_DOUBLE: sampleBytes = 8; break;
-  }
-  const int frameBytes = sampleBytes * info.channels;
   std::uint64_t offset = 12;
   bool data = false;
   bool oversized = false;
   while (offset < end) {
     if (check && !check()) return {StorageReason::Cancelled, "Cancelled"};
-    if (end - offset < 8 || !input.read(reinterpret_cast<char *>(header.data()), 8))
-      return {StorageReason::ValidationFailed, "Incomplete WAV chunk header at byte " + std::to_string(offset)};
+    if (end - offset < 8) {
+      if (!data) return bad;
+      // Keep even an incomplete trailing ancillary header in lossless output.
+      if (lossless) { foreign.preserve = true; foreign.bytes += 8 + end - offset; }
+      break;
+    }
+    if (!input.read(reinterpret_cast<char *>(header.data()), 8)) return bad;
     const auto length = le32(header.data() + 4);
     offset += 8;
     const std::string_view type(reinterpret_cast<const char *>(header.data()), 4);
-    std::uint64_t padded = std::uint64_t(length) + (length & 1);
-    // libsndfile rounds partial PCM frames down without reporting an error.
-    // Check the declared payload even when RIFF bounds and padding are valid.
-    if (type == "data" && frameBytes > 0 &&
-        (length % frameBytes || length / frameBytes != info.frames))
-      return {StorageReason::ValidationFailed, "WAV data does not contain complete declared native audio frames"};
-    if (type == "data" && (length & 1) && length == end - offset) {
-      // Some WAV writers omit the final alignment byte. Accept only a complete
-      // terminal PCM payload, never missing samples or an unpadded middle chunk.
-      if (frameBytes <= 0)
-        return {StorageReason::ValidationFailed, "Unpadded WAV data does not contain complete declared PCM frames"};
-      foreign.unpaddedData = true;
-      padded = length;
-    }
-    if (padded > end - offset)
-      return {StorageReason::ValidationFailed, "WAV chunk '" + std::string(type) + "' at byte " +
-          std::to_string(offset - 8) + " requires " + std::to_string(padded) +
-          " payload/padding bytes; only " + std::to_string(end - offset) + " remain"};
+    const auto padded = std::min<std::uint64_t>(std::uint64_t(length) + (length & 1), end - offset);
     const auto stored = type == "data" ? 8 : 8 + padded;
     foreign.bytes += 8 + stored;
     oversized = oversized || stored > 0xffffff - 4;
@@ -250,22 +228,23 @@ StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, Ch
       // Known descriptive INFO text is best effort, including duplicate fields
       // and imperfect strings. Unknown fields and playback lists stay intact.
       if (length > 65536) return metadata;
-      std::string block(length, '\0');
-      if (length < 4 || !input.read(block.data(), length)) return bad;
+      const auto readable = std::min<std::uint64_t>(length, end - offset);
+      std::string block(readable, '\0');
+      if (readable < 4 || !input.read(block.data(), readable)) return bad;
       if (block.compare(0, 4, "INFO") != 0) return metadata;
       for (std::size_t pos = 4; pos < block.size();) {
-        if (block.size() - pos < 8) return bad;
+        if (block.size() - pos < 8) break;
         const auto name = std::string_view(block).substr(pos, 4);
         const auto size = le32(reinterpret_cast<const unsigned char *>(block.data() + pos + 4));
         pos += 8;
         const auto paddedSize = std::uint64_t(size) + (size & 1);
-        if (paddedSize > block.size() - pos) return bad;
         if (name != "INAM" && name != "ICOP" && name != "ISFT" && name != "IART" &&
             name != "ICMT" && name != "ICRD" && name != "IPRD" && name != "ITRK" && name != "IGNR")
           return {StorageReason::UnsupportedFormat, "Cannot preserve WAV INFO field: " + std::string(name)};
+        if (paddedSize > block.size() - pos) break;
         pos += paddedSize;
       }
-      input.seekg(length & 1, std::ios::cur);
+      input.seekg(padded - readable, std::ios::cur);
       offset += padded;
       continue;
     } else if (type != "fmt " && type != "fact" && type != "JUNK" && type != "PAD ")
@@ -319,14 +298,16 @@ StorageDiagnostic preserveWaveMetadata(const fs::path &source, const fs::path &d
     std::uint64_t stored = 12, next = 12;
     if (offset) {
       input.seekg(offset);
-      if (sourceEnd - offset < 8 || !input.read(reinterpret_cast<char *>(header.data()), 8)) return bad;
-      const auto size = le32(header.data() + 4);
-      std::uint64_t padded = std::uint64_t(size) + (size & 1);
-      if (foreign.unpaddedData && !std::memcmp(header.data(), "data", 4) && size == sourceEnd - offset - 8)
-        padded = size;
-      if (padded > sourceEnd - offset - 8) return bad;
-      next = offset + 8 + padded;
-      stored = std::memcmp(header.data(), "data", 4) ? 8 + padded : 8;
+      const auto remaining = sourceEnd - offset;
+      if (remaining < 8) {
+        stored = remaining; next = sourceEnd;
+      } else {
+        if (!input.read(reinterpret_cast<char *>(header.data()), 8)) return bad;
+        const auto size = le32(header.data() + 4);
+        const auto padded = std::min<std::uint64_t>(std::uint64_t(size) + (size & 1), remaining - 8);
+        next = offset + 8 + padded;
+        stored = std::memcmp(header.data(), "data", 4) ? 8 + padded : 8;
+      }
     }
     if (stored > 0xffffff - 4 || written + 8 + stored > foreign.bytes) return bad;
     const auto length = static_cast<std::uint32_t>(stored + 4);

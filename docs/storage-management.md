@@ -65,15 +65,17 @@ ancillary-chunk padding. This includes `smpl`, `inst`, `cue `, `LIST` (INFO and 
 `id3 `/`ID3 `, XML, cart and unknown vendor chunks. Their contents are retained
 without translating sampler loops or embedded tags into player-specific fields.
 Plain format/fact chunks and disposable JUNK/PAD padding alone do not trigger
-foreign-metadata storage. Malformed RIFF chunk bounds and metadata chunks exceeding
-FLAC's block-size limit remain unsupported. Vorbis skips playback metadata it
-cannot preserve, such as sampler loops and cue points. Known descriptive tags
+foreign-metadata storage. Truncated ancillary chunks retain their physically present
+bytes; metadata exceeding FLAC's block-size limit remains unsupported. Vorbis
+skips playback metadata it cannot preserve, such as sampler loops and cue points. Known descriptive tags
 are best effort: duplicate fields, aliases and imperfect text may be normalized
 or dropped. Invalid UTF-8 descriptions are not passed to the encoder, avoiding
 unsafe FLAC comment handling for legacy WAV tags; lossless RIFF APPLICATION
 blocks still preserve their original bytes. Stale outer RIFF sizes are intentionally
-tolerated when physical chunk bounds and complete PCM samples validate. A complete odd-sized PCM payload
-may omit its final WAV alignment byte; missing sample data still fails validation.
+tolerated. Malformed data lengths, missing alignment bytes and incomplete final
+samples use the complete PCM frames the source decoder can read. Lossless output
+must match those decoded samples exactly; it does not invent missing samples.
+Empty or undecodable audio still preserves the original.
 
 BMS packs often include alternate encodings for legacy players. When the requested
 same-name FLAC, Vorbis or H.264/HEVC/AV1 MP4 destination already exists, storage optimization
@@ -159,9 +161,11 @@ limits are rejected before computing keyframe intervals.
 Source declarations are intentionally advisory: stale starts, durations, ASF
 sizes or packet counts, and Matroska/WebM endpoints do not block a clean decode.
 This includes clean early EOF; conversion preserves the presentation actually
-decoded from the source. Decoder errors still fail validation, and output and
-existing-target completeness checks remain strict. Coarse audio timestamps are
-checked against an anchored sample clock so rounding cannot accumulate drift.
+decoded from the source. Source decoding also accepts concealed frames and skips
+recoverably invalid packets, continuing to later readable frames. Unrecoverable
+I/O errors, unusable timelines and empty streams still preserve the original.
+Output and existing-target decoding and completeness checks remain strict. Coarse
+audio timestamps are checked against an anchored sample clock so rounding cannot accumulate drift.
 Descriptive container tags are best effort and may be dropped by MP4. Captions,
 ReplayGain/R128 volume metadata and unsupported visual playback metadata preserve
 the original instead. Video and audio stream flags must survive MP4 conversion;

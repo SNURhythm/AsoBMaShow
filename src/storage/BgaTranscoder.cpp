@@ -88,7 +88,8 @@ struct Input {
   AVFormatContext *format = nullptr;
   std::vector<AVCodecContext *> decoders;
   int video = -1, audio = -1;
-  explicit Input(const fs::path &path, bool preserveEfficient = false) {
+  bool bestEffort = false;
+  explicit Input(const fs::path &path, bool preserveEfficient = false, bool recover = false) : bestEffort(recover) {
     try {
       checked(avformat_open_input(&format, mediaPath(path).c_str(), nullptr, nullptr), "Open media");
       const std::string_view container = format->iformat->name;
@@ -115,7 +116,8 @@ struct Input {
         context->pkt_timebase = stream->time_base;
         context->thread_count = StorageExecutionLimits::videoThreads;
         context->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT;
-        context->err_recognition = AV_EF_CRCCHECK | AV_EF_BITSTREAM | AV_EF_BUFFER | AV_EF_EXPLODE;
+        context->err_recognition = bestEffort ? AV_EF_IGNORE_ERR :
+            AV_EF_CRCCHECK | AV_EF_BITSTREAM | AV_EF_BUFFER | AV_EF_EXPLODE;
         checked(avcodec_open2(context, decoder, nullptr), "Open source decoder");
       }
       if (video < 0) unsupported("No ordinary video stream");
@@ -132,31 +134,63 @@ template<class OnFrame, class OnPacket>
 void decode(Input &input, const Checkpoint &check, OnFrame onFrame, OnPacket onPacket) {
   auto decoded = frame(); auto compressed = packet();
   auto drain = [&](int index) {
-    int status;
-    while ((status = avcodec_receive_frame(input.decoders[index], decoded.get())) >= 0) {
+    unsigned errors = 0;
+    for (;;) {
       checkpoint(check);
-      if ((decoded->flags & AV_FRAME_FLAG_CORRUPT) || decoded->decode_error_flags)
+      const auto status = avcodec_receive_frame(input.decoders[index], decoded.get());
+      if (status == AVERROR(EAGAIN) || status == AVERROR_EOF) return;
+      if (input.bestEffort && status == AVERROR_INVALIDDATA) {
+        // Bad packets can leave delayed frames available. Bound recovery if a
+        // decoder repeatedly returns an error without consuming its input.
+        if (++errors == 64) return;
+        continue;
+      }
+      checked(status, "Decode media frame");
+      errors = 0;
+      if (!input.bestEffort && ((decoded->flags & AV_FRAME_FLAG_CORRUPT) || decoded->decode_error_flags))
         throw Failure{StorageReason::ValidationFailed, "Corrupt decoded media frame"};
       onFrame(index, *decoded);
       av_frame_unref(decoded.get());
     }
-    if (status != AVERROR(EAGAIN) && status != AVERROR_EOF) checked(status, "Decode media frame");
   };
-  int status;
-  while ((status = av_read_frame(input.format, compressed.get())) >= 0) {
+  unsigned stalledErrors = 0;
+  for (;;) {
     checkpoint(check);
+    const auto before = input.format->pb ? avio_tell(input.format->pb) : -1;
+    const auto status = av_read_frame(input.format, compressed.get());
+    if (status == AVERROR_EOF) break;
+    if (input.bestEffort && status == AVERROR_INVALIDDATA) {
+      av_packet_unref(compressed.get());
+      if (before >= 0 && avio_tell(input.format->pb) > before) stalledErrors = 0;
+      else if (++stalledErrors == 64) break;
+      // Demuxers can advance buffered parser state without reading more bytes.
+      // Permit that recovery too, but never spin indefinitely on one bad input.
+      continue;
+    }
+    checked(status, "Read media packet");
+    stalledErrors = 0;
     const int index = compressed->stream_index;
-    if (index < 0 || index >= static_cast<int>(input.decoders.size()) || (compressed->flags & AV_PKT_FLAG_CORRUPT))
+    if (index < 0 || index >= static_cast<int>(input.decoders.size()) ||
+        (!input.bestEffort && (compressed->flags & AV_PKT_FLAG_CORRUPT)))
       throw Failure{StorageReason::ValidationFailed, "Corrupt media packet"};
-    onPacket(index, *compressed);
-    checked(avcodec_send_packet(input.decoders[index], compressed.get()), "Send media packet");
+    auto sent = avcodec_send_packet(input.decoders[index], compressed.get());
+    if (sent == AVERROR(EAGAIN)) {
+      drain(index);
+      sent = avcodec_send_packet(input.decoders[index], compressed.get());
+    }
+    if (!input.bestEffort || sent != AVERROR_INVALIDDATA) {
+      checked(sent, "Send media packet");
+      onPacket(index, *compressed);
+    }
     drain(index); av_packet_unref(compressed.get());
   }
-  if (status != AVERROR_EOF) checked(status, "Read media packet");
   if (input.format->pb && input.format->pb->error < 0 && input.format->pb->error != AVERROR_EOF)
     checked(input.format->pb->error, "Read media file");
   for (int index = 0; index < static_cast<int>(input.decoders.size()); ++index) {
-    checked(avcodec_send_packet(input.decoders[index], nullptr), "Flush media decoder"); drain(index);
+    const auto status = avcodec_send_packet(input.decoders[index], nullptr);
+    if (status != AVERROR_EOF && (!input.bestEffort || status != AVERROR_INVALIDDATA))
+      checked(status, "Flush media decoder");
+    drain(index);
   }
 }
 
@@ -527,7 +561,7 @@ enum class ScanPurpose { SourceConversion, ExistingDestination, EncodedOutput };
 Scan scan(const fs::path &path, const Checkpoint &check, ScanPurpose purpose = ScanPurpose::SourceConversion,
           bool preserveEfficientVideo = false) {
   checkpoint(check);
-  Input input(path, preserveEfficientVideo);
+  Input input(path, preserveEfficientVideo, purpose == ScanPurpose::SourceConversion);
   const bool existingDestination = purpose == ScanPurpose::ExistingDestination;
   const auto codecId = input.format->streams[input.video]->codecpar->codec_id;
   if (existingDestination && (!std::strstr(input.format->iformat->name, "mp4") ||
@@ -595,7 +629,7 @@ Scan scan(const fs::path &path, const Checkpoint &check, ScanPurpose purpose = S
     const auto pts = decoded.best_effort_timestamp;
     if (index == input.video) {
       if (!existingDestination) validateVideoFramePresentation(*params, decoded);
-      if (!result.video.frames && !(decoded.flags & AV_FRAME_FLAG_KEY))
+      if (purpose != ScanPurpose::SourceConversion && !result.video.frames && !(decoded.flags & AV_FRAME_FLAG_KEY))
         throw Failure{StorageReason::ValidationFailed, "Video does not start with an independently decodable frame"};
       if (!existingDestination && (decoded.width != description.width || decoded.height != description.height))
         unsupported("Video changes resolution midstream");
@@ -813,7 +847,7 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
   if (sourceScan.description.hasAudio)
     validateTimelineOrigin(sourceScan.audio, sourceScan.originMicros,
         plan.audio == VideoAudioTreatment::Remux ? sourceScan.audio.timeBase : AVRational{1, sourceScan.description.audioSampleRate});
-  Input input(source); Output output; output.open(destination, created);
+  Input input(source, false, true); Output output; output.open(destination, created);
   Codec videoEncoder, audioEncoder;
   VideoMetadataFilter videoMetadata;
   ScaleBuffer scale; AudioBuffers audioBuffers;
