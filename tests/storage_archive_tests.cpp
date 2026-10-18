@@ -822,14 +822,28 @@ void interruptedArchiveWritesRecover() {
     const auto interrupted = UpdateStorageArchive(review.archives.front(), request.policy, paths, dependencies);
     if (calls != occurrence || !interrupted.recoveryRequired) throw std::runtime_error(point + ": missing injected interruption (" + std::to_string(calls) + ")");
     std::string error; const auto beforeRecovery = HashStorageFile(archive, {}, error);
-    const auto recovered = RecoverStorageArchives(paths);
+    bool observed = false, completed = false, finalizing = false, validCompletion = true;
+    const auto recovered = RecoverStorageArchives(paths, {}, {}, [&](const StorageRecoveryProgress &progress) {
+      observed = true;
+      if (progress.phase == StorageRecoveryPhase::FinalizingArchive) finalizing = true;
+      if (progress.phase == StorageRecoveryPhase::Complete) {
+        completed = true;
+        validCompletion &= progress.completedOperations == 1 && progress.currentPath == archive &&
+            fs::is_empty(paths.journalRoot);
+      }
+      throw std::runtime_error("injected progress display failure");
+    });
+    require(observed, "interrupted archive recovery publishes a visible phase");
     if (point == "archive-write" || point == "archive-truncate") {
-      require(recovered.recoveryRequired && HashStorageFile(archive, {}, error) == beforeRecovery,
+      require(recovered.recoveryRequired && !completed && HashStorageFile(archive, {}, error) == beforeRecovery,
           "ambiguous source writes retain recovery evidence without another mutation");
       continue;
     }
     if (recovered.recoveryRequired && !recovered.files.empty()) throw std::runtime_error(point + ": " + recovered.files.front().reason.detail);
     require(!recovered.failed && !recovered.recoveryRequired, "durable archive recovery finishes without encoding again");
+    require(finalizing && validCompletion && (point.starts_with("archive-cleanup-") ||
+        point == "archive-manifest-unlinked" || completed),
+        "progress reaches finalization and counts completed archive operations only after durable cleanup");
     const auto files = readArchive(archive);
     require(files.at("one/a.flac") == std::string(1000, 'f') && files.at("two/image.png") == image &&
         files.at("one/chart.bms") == "#WAV01 a.wav", "recovery preserves completed media and overlapping copied payloads");

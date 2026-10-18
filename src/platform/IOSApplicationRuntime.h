@@ -40,6 +40,7 @@ std::uint64_t GetIOSCompletedPumpLifecycleGeneration();
 void ResumeIOSGameplayTouchInput(std::uint64_t expectedGeneration);
 bool TakeIOSApplicationOverflow();
 void SetIOSApplicationEventDiscardHandler(std::function<void(const SDL_Event &)> handler);
+void SetIOSApplicationInputSuppressed(bool suppressed);
 void PostIOSApplicationWork(std::function<void()> work);
 bool PollIOSApplicationWork();
 void BeginIOSReplayExport(std::stop_source stop);

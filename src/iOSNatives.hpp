@@ -17,6 +17,11 @@ void ShowIOSReplayExportProgress(std::function<void()> cancel);
 void SetIOSReplayExportProgress(double fraction, const std::string &message);
 void HideIOSReplayExportProgress();
 
+// UIKit main thread only. Recovery has no user cancellation path.
+void ShowIOSStorageRecoveryProgress();
+void SetIOSStorageRecoveryProgress(const std::string &message);
+void HideIOSStorageRecoveryProgress();
+
 struct IOSNormalizedSafeAreaInsets {
   float top = 0.0f;
   float left = 0.0f;

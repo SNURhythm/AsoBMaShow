@@ -777,9 +777,16 @@ void testFailuresNeverClobberAndCleanupAccounting() {
     require(result.outcome == FileOutcome::Converted && result.reclaimedBytes == 0 &&
                 result.reason.code == StorageReason::CleanupFailed,
             "retained original backup is not reported as reclaimed space");
-    const auto recovered = StorageFileTransaction(f.paths, {}).Recover({});
+    unsigned beforeRecovery = 0, afterRecovery = 0;
+    bool observedFolder = true;
+    const auto recovered = StorageFileTransaction(f.paths, {}).Recover({}, {
+      .before = [&](const fs::path &folder) { ++beforeRecovery; observedFolder &= folder == f.candidate.source.parent_path(); },
+      .after = [&](const fs::path &folder, const auto &) { ++afterRecovery; observedFolder &= folder == f.candidate.source.parent_path(); },
+    });
     require(!recovered.recoveryRequired && recovered.reclaimedBytes == 896,
             "later recovery accounts for successful cleanup");
+    require(beforeRecovery == 1 && afterRecovery == 1 && observedFolder,
+            "recovery reports the current folder and one completed operation without a counting scan");
     requireNoRecoveryFiles(f);
   }
 }

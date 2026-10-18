@@ -88,7 +88,9 @@ std::filesystem::path StoragePrivateRoot(ApplicationContext &) {
 #endif
 }
 
-bool InitializeStorageServices(ApplicationContext &context) {
+bool InitializeStorageServices(ApplicationContext &context, StorageRecoveryProgressCallback notify) {
+  StorageRecoveryProgress progress;
+  NotifyStorageRecoveryProgress(notify, progress);
   std::string error;
   auto startup = accessFolders(context, error);
   if (!startup) { SDL_Log("Storage recovery: %s", error.c_str()); return false; }
@@ -101,9 +103,26 @@ bool InitializeStorageServices(ApplicationContext &context) {
     if (!reservation) { SDL_Log("Storage recovery: %s", error.c_str()); return false; }
   }
 #endif
-  auto recovery = RecoverStorageArchives(startup->paths);
-  if (!recovery.recoveryRequired) recovery = StorageFileTransaction(startup->paths).Recover();
-  if (recovery.recoveryRequired) {
+  auto recovery = RecoverStorageArchives(startup->paths, {}, {}, [&](const auto &value) {
+    progress = value;
+    NotifyStorageRecoveryProgress(notify, progress);
+  });
+  if (!recovery.recoveryRequired && !recovery.cancelled) {
+    progress.phase = StorageRecoveryPhase::Files;
+    progress.currentPath.clear(); progress.archiveBytesDone = 0;
+    NotifyStorageRecoveryProgress(notify, progress);
+    recovery = StorageFileTransaction(startup->paths).Recover({}, {
+      .before = [&](const auto &folder) {
+        progress.currentPath = folder;
+        NotifyStorageRecoveryProgress(notify, progress);
+      },
+      .after = [&](const auto &, const auto &) {
+        ++progress.completedOperations;
+        NotifyStorageRecoveryProgress(notify, progress);
+      },
+    });
+  }
+  if (recovery.recoveryRequired || recovery.cancelled) {
     for (const auto &file : recovery.files)
       SDL_Log("Storage recovery: %s: %s", file.source.string().c_str(), file.reason.detail.c_str());
     return false;

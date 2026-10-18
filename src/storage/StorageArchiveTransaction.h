@@ -1,6 +1,7 @@
 #pragma once
 #include "StorageArchive.h"
 #include "StoragePlatform.h"
+#include "StorageRecoveryProgress.h"
 
 namespace storage_management {
 struct StorageArchiveMetrics {
@@ -31,5 +32,5 @@ struct StorageArchiveDependencies {
 StorageReport UpdateStorageArchive(const StorageArchiveSummary &, const StoragePolicy &,
     const StoragePlatformPaths &, const StorageArchiveDependencies &, Checkpoint = {}, ProgressCallback = {});
 StorageReport RecoverStorageArchives(const StoragePlatformPaths &, Checkpoint = {},
-    const StorageArchiveDependencies & = {});
+    const StorageArchiveDependencies & = {}, StorageRecoveryProgressCallback = {});
 }

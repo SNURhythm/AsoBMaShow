@@ -171,6 +171,31 @@ void testResizePublishesViewportBeforeEvent(SDL_Window *window) {
   });
   require(result == 0, "resize publication worker failed");
 }
+
+void testStartupInputSuppression(SDL_Window *window) {
+  const int result = platform::runSDLApplication(window, [&] {
+    SDL_Event event{};
+    while (platform::pollApplicationEvent(&event)) {}
+    platform::setApplicationInputSuppressed(true);
+    platform::onMain([] {
+      SDL_Event key{}; key.type = SDL_EVENT_KEY_DOWN; SDL_PushEvent(&key);
+      SDL_Event device{}; device.type = SDL_EVENT_JOYSTICK_ADDED; SDL_PushEvent(&device);
+      SDL_Event quit{}; quit.type = SDL_EVENT_QUIT; SDL_PushEvent(&quit);
+    });
+    platform::onMain([] {});
+    platform::setApplicationInputSuppressed(false);
+    platform::onMain([] {});
+    bool device = false, quit = false;
+    while (platform::pollApplicationEvent(&event)) {
+      require(event.type != SDL_EVENT_KEY_DOWN, "startup replayed suppressed user input");
+      device |= event.type == SDL_EVENT_JOYSTICK_ADDED;
+      quit |= event.type == SDL_EVENT_QUIT;
+    }
+    require(device && quit, "startup suppression lost device or quit state");
+    return 0;
+  });
+  require(result == 0, "startup input suppression failed");
+}
 void testOwnerWorkKeepsNativeCancellationAlive(SDL_Window *window) {
   const auto result = platform::runSDLApplication(window, [&] {
     require(platform::isApplicationThread(), "application owner identity missing");
@@ -310,6 +335,7 @@ int main() {
   require(window, SDL_GetError());
   testRuntimeKeepsMainAliveAndOwnsPayloads(window);
   testResizePublishesViewportBeforeEvent(window);
+  testStartupInputSuppression(window);
   testOwnerWorkKeepsNativeCancellationAlive(window);
   testOwnerWorkDiscardsInputAtBothBoundaries(window, false);
   testOwnerWorkDiscardsInputAtBothBoundaries(window, true);

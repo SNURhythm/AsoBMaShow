@@ -423,6 +423,39 @@ void audioTests() {
   {
     std::ifstream input(tagged, std::ios::binary);
     const std::string original((std::istreambuf_iterator<char>(input)), {});
+    // Invalid first comment used an uninitialized pointer; invalid subsequent
+    // comments reused the previous comment's pointer and double-freed on close.
+    for (const auto &field : {std::string("Chart keysound"), std::string("Wave editor")})
+        for (const auto &invalid : {std::string("\x82"), std::string("\xef\xbf\xbe"), std::string("\xef\xbf\xbf")}) {
+      auto bytes = original;
+      const auto offset = bytes.find(field);
+      require(offset != std::string::npos, "legacy tag fixture contains descriptive text");
+      // Legacy code-page bytes and the two noncharacters libFLAC rejects.
+      bytes.replace(offset, invalid.size(), invalid);
+      const auto source = temp.root / "legacy-tags.wav", output = temp.root / "legacy-tags.flac";
+      temp.write(source.filename(), bytes);
+      require(EncodeAudio(candidate(source), policy, output, {}, {}).outcome == FileOutcome::Converted,
+              "invalid descriptive text does not crash FLAC finalization or reject playable audio");
+      require(readAudio(output, 1, 8192) == taggedPcm, "legacy descriptive tags retain exact PCM");
+      verifyWaveMetadata(bytes, output);
+      std::filesystem::remove(output);
+    }
+    auto bytes = original;
+    const std::string unicodeTitle = "키音🎵....";
+    bytes.replace(bytes.find("Chart keysound"), unicodeTitle.size(), unicodeTitle);
+    temp.write("unicode-tags.wav", bytes);
+    const auto output = temp.root / "unicode-tags.flac";
+    require(EncodeAudio(candidate(temp.root / "unicode-tags.wav"), policy, output, {}, {}).outcome ==
+                FileOutcome::Converted, "valid multibyte descriptive tags remain supported");
+    SF_INFO info{};
+    auto file = sf_open(output.string().c_str(), SFM_READ, &info);
+    require(file && sf_get_string(file, SF_STR_TITLE) && sf_get_string(file, SF_STR_TITLE) == unicodeTitle,
+            "valid UTF-8 is copied into native FLAC comments");
+    sf_close(file);
+  }
+  {
+    std::ifstream input(tagged, std::ios::binary);
+    const std::string original((std::istreambuf_iterator<char>(input)), {});
     for (const int adjustment : {-100, 100}) {
       auto bytes = original;
       const auto declaredSize = static_cast<std::uint32_t>(bytes.size() - 8 + adjustment);

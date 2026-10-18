@@ -27,6 +27,7 @@ def generate(source):
     methods = "\n".join(function(source, signature) for signature in (
         "void BeginIOSReplayExport(", "void EndIOSReplayExport(",
         "void ResumeIOSGameplayTouchInput(", "bool PollIOSApplicationEvent(",
+        "void SetIOSApplicationInputSuppressed(",
     ))
     fixture = (root / "tests/ios_export_input_suppression_fixture.cpp").read_text()
     return fixture.replace("RUNTIME_DEFINITIONS", runtime).replace("RUNTIME_METHODS", methods).replace("PRODUCER_PUMP", pump)

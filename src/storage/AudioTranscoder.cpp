@@ -4,11 +4,13 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/avstring.h>
 }
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <fstream>
 #include <memory>
@@ -25,6 +27,16 @@ namespace storage_management {
 namespace fs = std::filesystem;
 namespace {
 using SoundFile = std::unique_ptr<SNDFILE, decltype(&sf_close)>;
+bool validEncoderText(const char *value) {
+  const auto *cursor = reinterpret_cast<const std::uint8_t *>(value);
+  const auto *end = cursor + std::strlen(value);
+  while (cursor < end) {
+    std::int32_t codepoint;
+    // libFLAC also rejects U+FFFE/U+FFFF, which ordinary UTF-8 validation permits.
+    if (av_utf8_decode(&codepoint, &cursor, end, 0) < 0) return false;
+  }
+  return true;
+}
 SoundFile openRead(const fs::path &path, SF_INFO &info) {
 #ifdef _WIN32
   return {sf_wchar_open(path.c_str(), SFM_READ, &info), sf_close};
@@ -569,8 +581,12 @@ EncodeResult EncodeAudio(const AssetCandidate &candidate, const StoragePolicy &p
   // These API strings are descriptive only. Preserve what the encoder supports,
   // but text normalization or loss must not reject otherwise valid audio.
   // Playback metadata is protected by container inspection and foreign blocks.
+  // Legacy WAV tags may not be UTF-8. libsndfile's FLAC writer ignores failed
+  // comment construction and can reuse/free an invalid or already-owned entry.
+  // Do not pass malformed text to the encoder; lossless foreign blocks still
+  // retain the original RIFF metadata bytes.
   for (int tag = SF_STR_FIRST; tag <= SF_STR_LAST; ++tag)
-    if (const char *value = sf_get_string(input.get(), tag))
+    if (const char *value = sf_get_string(input.get(), tag); value && validEncoderText(value))
       sf_set_string(output.get(), tag, value);
   constexpr sf_count_t blockFrames = 4096;
   std::vector<int> integers(blockFrames * info.channels);

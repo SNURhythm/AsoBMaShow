@@ -161,6 +161,16 @@ void setApplicationEventDiscardHandler(std::function<void(const SDL_Event &)> ha
   });
 }
 
+void setApplicationInputSuppressed(bool suppressed) {
+  runOnMain([suppressed] {
+    if (const auto state = currentRuntime()) {
+      state->events.discardUserInput(state->discardEvent);
+      if (suppressed) state->inputSuppressed = true;
+      state->finishInputSuppression = !suppressed;
+    }
+  });
+}
+
 bool isApplicationThread() { return applicationOwner; }
 
 void postApplicationWork(std::function<void()> work, std::stop_source stop) {

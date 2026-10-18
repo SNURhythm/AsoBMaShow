@@ -6179,9 +6179,68 @@ SDL_Surface *RenderIOSSystemTextSurface(const std::string &utf8, int fontSize,
 //   [view addGestureRecognizer:tapGesture];
 // }
 namespace {
+UIView *storageRecoveryOverlay = nil;
+UILabel *storageRecoveryLabel = nil;
 UIView *replayExportOverlay = nil;
 UILabel *replayExportLabel = nil;
 UIProgressView *replayExportProgress = nil;
+}
+
+void ShowIOSStorageRecoveryProgress() {
+  HideIOSStorageRecoveryProgress();
+  UIWindow *window = FindActiveWindow();
+  if (window == nil) return;
+  storageRecoveryOverlay = [[UIView alloc] initWithFrame:window.bounds];
+  storageRecoveryOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+  storageRecoveryOverlay.backgroundColor = [UIColor colorWithWhite:0.06 alpha:1];
+  storageRecoveryOverlay.accessibilityViewIsModal = YES;
+  UIStackView *stack = [[UIStackView alloc] init];
+  stack.axis = UILayoutConstraintAxisVertical;
+  stack.alignment = UIStackViewAlignmentCenter;
+  stack.spacing = 20;
+  stack.translatesAutoresizingMaskIntoConstraints = NO;
+  UILabel *title = [[UILabel alloc] init];
+  title.text = @"Recovering interrupted storage operation";
+  title.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
+  title.adjustsFontForContentSizeCategory = YES;
+  title.textColor = UIColor.whiteColor;
+  title.numberOfLines = 0;
+  title.textAlignment = NSTextAlignmentCenter;
+  UIActivityIndicatorView *spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
+  spinner.color = UIColor.whiteColor;
+  [spinner startAnimating];
+  storageRecoveryLabel = [[UILabel alloc] init];
+  storageRecoveryLabel.text = @"Checking registered folders…";
+  storageRecoveryLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+  storageRecoveryLabel.adjustsFontForContentSizeCategory = YES;
+  storageRecoveryLabel.textColor = UIColor.whiteColor;
+  storageRecoveryLabel.numberOfLines = 5;
+  storageRecoveryLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
+  storageRecoveryLabel.textAlignment = NSTextAlignmentCenter;
+  [stack addArrangedSubview:title];
+  [stack addArrangedSubview:spinner];
+  [stack addArrangedSubview:storageRecoveryLabel];
+  [storageRecoveryOverlay addSubview:stack];
+  [NSLayoutConstraint activateConstraints:@[
+    [stack.centerXAnchor constraintEqualToAnchor:storageRecoveryOverlay.safeAreaLayoutGuide.centerXAnchor],
+    [stack.centerYAnchor constraintEqualToAnchor:storageRecoveryOverlay.safeAreaLayoutGuide.centerYAnchor],
+    [stack.widthAnchor constraintLessThanOrEqualToConstant:420],
+    [stack.leadingAnchor constraintGreaterThanOrEqualToAnchor:storageRecoveryOverlay.safeAreaLayoutGuide.leadingAnchor constant:24],
+    [stack.trailingAnchor constraintLessThanOrEqualToAnchor:storageRecoveryOverlay.safeAreaLayoutGuide.trailingAnchor constant:-24],
+    [title.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
+    [storageRecoveryLabel.widthAnchor constraintEqualToAnchor:stack.widthAnchor]
+  ]];
+  [window addSubview:storageRecoveryOverlay];
+}
+
+void SetIOSStorageRecoveryProgress(const std::string &message) {
+  storageRecoveryLabel.text = NSStringFromUtf8(message);
+}
+
+void HideIOSStorageRecoveryProgress() {
+  [storageRecoveryOverlay removeFromSuperview];
+  storageRecoveryOverlay = nil;
+  storageRecoveryLabel = nil;
 }
 
 void ShowIOSReplayExportProgress(std::function<void()> cancel) {

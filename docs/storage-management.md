@@ -69,8 +69,10 @@ foreign-metadata storage. Malformed RIFF chunk bounds and metadata chunks exceed
 FLAC's block-size limit remain unsupported. Vorbis skips playback metadata it
 cannot preserve, such as sampler loops and cue points. Known descriptive tags
 are best effort: duplicate fields, aliases and imperfect text may be normalized
-or dropped. Stale outer RIFF sizes are intentionally tolerated when physical
-chunk bounds and complete PCM samples validate. A complete odd-sized PCM payload
+or dropped. Invalid UTF-8 descriptions are not passed to the encoder, avoiding
+unsafe FLAC comment handling for legacy WAV tags; lossless RIFF APPLICATION
+blocks still preserve their original bytes. Stale outer RIFF sizes are intentionally
+tolerated when physical chunk bounds and complete PCM samples validate. A complete odd-sized PCM payload
 may omit its final WAV alignment byte; missing sample data still fails validation.
 
 BMS packs often include alternate encodings for legacy players. When the requested
@@ -229,7 +231,11 @@ uncommitted originals; it does not roll back the entire batch. Output is staged
 privately, validated, then installed using a journal and same-volume temporary
 files/backups. On POSIX systems, replacements preserve the source's access
 permission bits. Startup recovery checks interrupted transactions before admitting
-new work. After successful recovery, abandoned private encoding candidates are
+new work. Every platform displays a recovery screen with an activity indicator,
+the current phase and item, completed operations, and the durable position within
+the current archive when available. It stays responsive during filesystem work;
+it does not estimate a percentage or scan archives merely to calculate one.
+After successful recovery, abandoned private encoding candidates are
 removed; unrecognized files and unresolved recovery state are retained. Do not
 manually remove recovery files while an operation is pending.
 On iOS, recovery resolves app-owned Documents paths against the current app

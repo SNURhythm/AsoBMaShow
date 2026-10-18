@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -194,14 +195,18 @@ void testDatabaseFailuresFailClosed() {
 }
 
 void testStorageRecoveryFailureBlocksRuntime() {
-  bool fatal = false, runtime = false;
-  auto exitCode = application_startup::execute(true, Dependencies{
-    .initializeDatabases = [] { return Status{true, true, true, true}; },
-    .reportFatal = [&](const Result &result) { fatal = result.failure == Failure::StorageRecovery; },
-    .recoverStorage = [] { return false; },
-    .runReadyApplication = [&] { runtime = true; },
-  });
-  expect(exitCode == EXIT_FAILURE && fatal && !runtime, "uncertain storage blocks runtime");
+  for (const bool throws : {false, true}) {
+    bool fatal = false, runtime = false, reconciled = false;
+    auto exitCode = application_startup::execute(true, Dependencies{
+      .initializeDatabases = [] { return Status{true, true, true, true}; },
+      .reportFatal = [&](const Result &result) { fatal = result.failure == Failure::StorageRecovery; },
+      .recoverStorage = [=] { if (throws) throw std::runtime_error("recovery failed"); return false; },
+      .reconcileReplayFiles = [&] { reconciled = true; },
+      .runReadyApplication = [&] { runtime = true; },
+    });
+    expect(exitCode == EXIT_FAILURE && fatal && !runtime && !reconciled,
+           "failed or throwing storage recovery blocks reconciliation and runtime");
+  }
 }
 
 void testBgfxTransientBuffersAreExpanded() {

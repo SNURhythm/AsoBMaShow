@@ -10,6 +10,9 @@ namespace platform {
 inline void setApplicationEventDiscardHandler(std::function<void(const SDL_Event &)> handler) {
   SetIOSApplicationEventDiscardHandler(std::move(handler));
 }
+inline void setApplicationInputSuppressed(bool suppressed) {
+  SetIOSApplicationInputSuppressed(suppressed);
+}
 #endif
 // SDL errors are thread-local. Preserve a failed operation's diagnostic on its
 // caller, rather than reporting an unrelated error from the worker's TLS.

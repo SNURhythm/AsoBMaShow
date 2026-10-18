@@ -889,8 +889,10 @@ StorageReport UpdateStorageArchive(const StorageArchiveSummary &summary, const S
   }
   return report;
 }
-StorageReport RecoverStorageArchives(const StoragePlatformPaths &paths, Checkpoint check, const StorageArchiveDependencies &deps) {
+StorageReport RecoverStorageArchives(const StoragePlatformPaths &paths, Checkpoint check, const StorageArchiveDependencies &deps,
+                                    StorageRecoveryProgressCallback notify) {
   StorageReport result; std::error_code error; if (!fs::exists(paths.journalRoot, error) && !error) return result;
+  StorageRecoveryProgress progress;
   try {
     std::string pathError; require(IsSafeLocalPath(paths.journalRoot, pathError, paths.pathAccessRoots), "Unsafe archive recovery root", StorageReason::RecoveryRequired);
     for (const auto &entry : fs::directory_iterator(paths.journalRoot)) {
@@ -898,6 +900,9 @@ StorageReport RecoverStorageArchives(const StoragePlatformPaths &paths, Checkpoi
       if (name.starts_with("archive-preparing-") || name.starts_with("archive-cleanup-")) {
         const auto prefix = name.starts_with("archive-preparing-") ? 18 : 16;
         require(uuid::isCanonicalLowerV4(name.substr(prefix)) && !entry.is_symlink() && entry.is_directory(), "Invalid archive cleanup directory", StorageReason::RecoveryRequired);
+        progress.phase = StorageRecoveryPhase::FinalizingArchive;
+        progress.currentPath = entry.path(); progress.archiveBytesDone = 0;
+        NotifyStorageRecoveryProgress(notify, progress);
         cleanup(entry.path(), deps); continue;
       }
       require(uuid::isCanonicalLowerV4(name.substr(8)) && !entry.is_symlink() && entry.is_directory(), "Invalid archive recovery directory", StorageReason::RecoveryRequired);
@@ -912,12 +917,32 @@ StorageReport RecoverStorageArchives(const StoragePlatformPaths &paths, Checkpoi
           require(source.is_absolute() && source == source.lexically_normal(), "Invalid archive journal path");
           if (paths.resolveRecoveryPath) source = paths.resolveRecoveryPath(source);
           require(source.is_absolute() && source == source.lexically_normal(), "Invalid relocated archive journal path");
+          progress.phase = StorageRecoveryPhase::CheckingArchive;
+          progress.currentPath = source; progress.archiveBytesDone = 0;
+          NotifyStorageRecoveryProgress(notify, progress);
           authority(source, paths); StorageArchive archive(source, journal / "manifest.sqlite", paths.pathAccessRoots, {}, true);
-          Update update(archive, journal, deps, started, paths.pathAccessRoots); update.ValidateRecovery(); update.Entries(nullptr, {}, {}, {}); update.Finish();
+          Update update(archive, journal, deps, started, paths.pathAccessRoots); update.ValidateRecovery();
+          progress.phase = StorageRecoveryPhase::RestoringArchive;
+          ProgressCallback copyProgress;
+          if (notify) copyProgress = [&](const StorageProgress &value) {
+              if (progress.phase == StorageRecoveryPhase::RestoringArchive)
+                progress.currentPath = value.currentPath.empty() ? source : value.currentPath;
+              progress.archiveBytesDone = value.archiveBytesDone;
+              NotifyStorageRecoveryProgress(notify, progress);
+            };
+          update.Entries(nullptr, {}, {}, std::move(copyProgress));
+          progress.phase = StorageRecoveryPhase::FinalizingArchive; progress.currentPath = source;
+          NotifyStorageRecoveryProgress(notify, progress);
+          update.Finish();
           auto report = update.Result(); result.converted += report.converted; result.deleted += report.deleted; AccumulateStorageBytes(result.reclaimedBytes, result.addedBytes, report.reclaimedBytes, report.addedBytes);
           for (auto &file : report.files) RetainStorageReportDetail(result, std::move(file)); result.changedRoots.push_back(source);
         }
         cleanup(journal, deps);
+        if (ready && started) {
+          progress.phase = StorageRecoveryPhase::Complete; progress.currentPath = source;
+          ++progress.completedOperations;
+          NotifyStorageRecoveryProgress(notify, progress);
+        }
       } catch (const std::exception &error) { failure(result, source.empty() ? journal : source, error, true); }
     }
   } catch (const std::exception &error) {

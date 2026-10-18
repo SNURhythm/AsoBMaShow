@@ -38,6 +38,9 @@
 #include "view/TextInputBox.h"
 #include "view/FontCacheSession.h"
 #include "view/ImageView.h"
+#include "view/TextView.h"
+#include "view/AppTheme.h"
+#include "storage/StorageRecoveryPresentation.h"
 #include <cstdlib>
 #include <iostream>
 #include <string>
@@ -126,6 +129,7 @@ static SDL_Window *s_window = nullptr;
 #if TARGET_OS_ANDROID
 static AndroidNativeWindowOwner s_androidNativeWindow;
 static AndroidNativeWindowOwner s_androidPreviousWindow;
+static bool s_androidRenderSuspended = false;
 #endif
 static rendering::PostProcessPipeline s_postProcess;
 static rendering::BlurPass *s_blurPass = nullptr;
@@ -1092,8 +1096,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     }
   };
 #if TARGET_OS_ANDROID
-  bool androidSystemSuspended = false;
-  bool androidRenderSuspended = false;
+  bool androidSystemSuspended = context.appInBackground.load(std::memory_order_acquire);
+  bool &androidRenderSuspended = s_androidRenderSuspended;
   bool androidResumeResizePending = false;
 #endif
   while (!context.quitFlag) {
@@ -2074,6 +2078,177 @@ static void runReadyApplication(ApplicationContext &context) {
       });
 }
 
+static std::string storageRecoveryMessage(const storage_management::StorageRecoveryProgress &progress) {
+  using Phase = storage_management::StorageRecoveryPhase;
+  std::string message;
+  switch (progress.phase) {
+  case Phase::CheckingFolders: message = "Checking registered folders…"; break;
+  case Phase::CheckingArchive: message = "Checking interrupted archive…"; break;
+  case Phase::RestoringArchive: message = "Restoring archive…"; break;
+  case Phase::FinalizingArchive: message = "Finalizing archive…"; break;
+  case Phase::Files: message = "Recovering files and cleaning temporary data…"; break;
+  case Phase::Complete: message = "Archive recovered. Checking remaining operations…"; break;
+  }
+  if (!progress.currentPath.empty())
+    message += "\n" + fspath_to_utf8(progress.currentPath.filename());
+  message += "\nRecovered operations: " + std::to_string(progress.completedOperations);
+  if (progress.archiveBytesDone != 0)
+    message += "\nArchive recovery position: " + std::to_string(progress.archiveBytesDone / (1024 * 1024)) + " MiB";
+  return message;
+}
+
+#if !TARGET_OS_IPHONE
+class StartupRecoveryScreen {
+  rendering::UiBatchRenderer renderer;
+  std::unique_ptr<TextView> title, detail, spinner;
+  std::chrono::steady_clock::time_point nextTextUpdate{};
+  storage_management::StorageRecoveryPhase lastPhase = storage_management::StorageRecoveryPhase::CheckingFolders;
+  bool failed = false;
+public:
+  ~StartupRecoveryScreen() {
+    // The normal runtime establishes its own view configuration after recovery.
+    renderer.discard();
+    bgfx::setViewClear(rendering::ui_view, BGFX_CLEAR_DEPTH, 0);
+  }
+  void present(const storage_management::StorageRecoveryProgress &progress) {
+    bool canPresent = platform::applicationCanPresent();
+#if TARGET_OS_ANDROID
+    const bool shouldSuspend = !canPresent || IsAndroidSurfaceRenderPauseRequested() ||
+        IsAndroidExternalActivityRenderPauseRequested();
+    if (shouldSuspend != s_androidRenderSuspended) {
+      if (!shouldSuspend) {
+        auto window = acquireAndroidNativeWindow(s_window);
+        if (!window) return;
+        bgfx::PlatformData data{}; data.nwh = window.get(); bgfx::setPlatformData(data);
+        s_androidPreviousWindow = std::move(s_androidNativeWindow);
+        s_androidNativeWindow = std::move(window);
+      }
+      bgfx::reset(rendering::render_width, rendering::render_height,
+                  s_bgfxResetFlags | (shouldSuspend ? BGFX_RESET_SUSPEND : 0));
+      // Retire the previous present before acknowledging surface destruction.
+      bgfx::frame(); bgfx::frame();
+      s_androidPreviousWindow.reset();
+      s_androidRenderSuspended = shouldSuspend;
+    }
+    if (s_androidRenderSuspended) {
+      NotifyAndroidExternalActivityRenderPaused();
+      NotifyAndroidSurfaceRenderPaused();
+      return;
+    }
+#endif
+    if (!canPresent || failed) return;
+    try {
+      int width = 0, height = 0;
+      platform::windowSizeInPixels(s_window, &width, &height);
+      if (width <= 0 || height <= 0) return;
+      if (width != rendering::render_width || height != rendering::render_height) {
+        rendering::updateUIScale(width, height);
+        bgfx::reset(width, height, s_bgfxResetFlags);
+      }
+      if (!title) {
+        title = std::make_unique<TextView>(app_theme::boldFont, 30);
+        detail = std::make_unique<TextView>(app_theme::font, 22);
+        spinner = std::make_unique<TextView>(app_theme::font, 34);
+        title->setText("Recovering interrupted storage operation");
+        for (auto *text : {title.get(), detail.get(), spinner.get()}) {
+          text->setColor({240, 242, 247, 255}); text->setAlign(TextView::CENTER);
+          text->setVAlign(TextView::MIDDLE); text->setWrap(true);
+          text->setOverflow(TextView::TextOverflow::Hidden);
+        }
+      }
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= nextTextUpdate || progress.phase != lastPhase) {
+        detail->setText(storageRecoveryMessage(progress));
+        nextTextUpdate = now + std::chrono::milliseconds(200);
+        lastPhase = progress.phase;
+      }
+      constexpr const char *frames[] = {"◐", "◓", "◑", "◒"};
+      spinner->setText(frames[(SDL_GetTicks() / 150) % 4]);
+      const int canvasWidth = rendering::window_width, canvasHeight = rendering::window_height;
+      const int contentWidth = std::max(1, std::min(720, canvasWidth - 48));
+      const int left = (canvasWidth - contentWidth) / 2;
+      title->setPosition(left, canvasHeight / 2 - 180); title->setSize(contentWidth, 100);
+      spinner->setPosition(left, canvasHeight / 2 - 75); spinner->setSize(contentWidth, 70);
+      detail->setPosition(left, canvasHeight / 2); detail->setSize(contentWidth, 200);
+      for (auto *text : {title.get(), detail.get(), spinner.get()}) text->applyYogaLayout();
+      float ortho[16];
+      bx::mtxOrtho(ortho, 0.0f, canvasWidth, canvasHeight, 0.0f, 0.0f, 100.0f, 0.0f,
+                   bgfx::getCaps()->homogeneousDepth);
+      bgfx::setViewTransform(rendering::ui_view, nullptr, ortho);
+      bgfx::setViewRect(rendering::ui_view, 0, 0, width, height);
+      bgfx::setViewMode(rendering::ui_view, bgfx::ViewMode::Sequential);
+      bgfx::setViewClear(rendering::ui_view, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH, 0x101418ff);
+      renderer.beginFrame();
+      RenderContext renderContext(renderer);
+      {
+        RenderContext::UiBatchScope batch(renderContext);
+        title->render(renderContext); spinner->render(renderContext); detail->render(renderContext);
+      }
+      bgfx::touch(rendering::ui_view);
+      bgfx::frame();
+    } catch (...) {
+      renderer.discard();
+      failed = true;
+      SDL_Log("Could not render storage recovery progress");
+    }
+  }
+};
+#endif
+
+static bool recoverStorageWithProgress(ApplicationContext &context) {
+  const auto pumpEvents = [&] {
+    SDL_Event event;
+#if TARGET_OS_IPHONE
+    while (PollIOSApplicationEvent(&event)) {
+#else
+    while (platform::pollApplicationEvent(&event)) {
+#endif
+      if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_TERMINATING) context.quitFlag = true;
+      if (input::isBackgroundLifecycleEvent(event)) context.appInBackground = true;
+      if (input::isForegroundLifecycleEvent(event)) context.appInBackground = false;
+      context.inputDeviceRegistry.discardRealtimeSdlInput(event);
+    }
+  };
+  const auto inputCleanup = makeScopeExit([&] {
+    try {
+      pumpEvents();
+      context.inputDeviceRegistry.clearSdlInputState();
+      context.inputDeviceRegistry.reconcileSdlDevices();
+      platform::setApplicationInputSuppressed(false);
+    } catch (...) { SDL_Log("Could not restore input after storage recovery"); }
+  });
+  try { platform::setApplicationInputSuppressed(true); }
+  catch (...) { SDL_Log("Could not suppress input during storage recovery"); }
+#if TARGET_OS_IPHONE
+  // The existing application host keeps UIKit pumping independently of this
+  // worker, including while recovery is inside a long filesystem operation.
+  const auto presentationCleanup = makeScopeExit([] {
+    try { RunIOSMainThread([] { HideIOSStorageRecoveryProgress(); }); }
+    catch (...) { SDL_Log("Could not dismiss storage recovery progress"); }
+  });
+  try { RunIOSMainThread([] { ShowIOSStorageRecoveryProgress(); }); }
+  catch (...) { SDL_Log("Could not show storage recovery progress"); }
+  auto nextUpdate = std::chrono::steady_clock::time_point{};
+  auto lastPhase = storage_management::StorageRecoveryPhase::CheckingFolders;
+  return storage_management::InitializeStorageServices(context, [&](const auto &progress) {
+    pumpEvents();
+    const auto now = std::chrono::steady_clock::now();
+    if (now < nextUpdate && progress.phase == lastPhase) return;
+    nextUpdate = now + std::chrono::milliseconds(200);
+    lastPhase = progress.phase;
+    const auto message = storageRecoveryMessage(progress);
+    // Synchronous worker -> main dispatch leaves no backlog of queued progress
+    // blocks, and the throttle also bounds updates across thousands of files.
+    RunIOSMainThread([&] { SetIOSStorageRecoveryProgress(message); });
+  });
+#else
+  StartupRecoveryScreen screen;
+  return storage_management::RunStorageRecoveryPresentation(
+      [&](auto notify) { return storage_management::InitializeStorageServices(context, std::move(notify)); },
+      [&](const auto &progress) { pumpEvents(); screen.present(progress); });
+#endif
+}
+
 int run() {
   text_runtime::FontCacheSession fontCacheSession;
   ApplicationContext context;
@@ -2096,9 +2271,10 @@ int run() {
               [&context](const application_startup::Result &result) {
                 reportStartupFailure(context, result);
               },
-          .recoverStorage = [&context] { return storage_management::InitializeStorageServices(context); },
+          .recoverStorage = [&context] { return recoverStorageWithProgress(context); },
           .reconcileReplayFiles =
               [&context] {
+                if (context.quitFlag) return;
                 const auto report = replay::reconcileProfileReplayFiles(
                     context.replayRepository,
                     std::chrono::system_clock::now() - std::chrono::hours(24));
@@ -2107,7 +2283,7 @@ int run() {
                           failure.c_str());
                 }
               },
-          .runReadyApplication = [&context] { runReadyApplication(context); },
+          .runReadyApplication = [&context] { if (!context.quitFlag) runReadyApplication(context); },
       });
 }
 

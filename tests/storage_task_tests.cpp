@@ -1,4 +1,5 @@
 #include "../src/storage/StorageTask.h"
+#include "../src/storage/StorageRecoveryPresentation.h"
 #include "StorageTestSupport.h"
 #include <atomic>
 #include <future>
@@ -8,8 +9,54 @@
 using namespace storage_management;
 using storage_test::require;
 
+namespace {
+void startupRecoveryKeepsPresentationAlive() {
+  const auto owner = std::this_thread::get_id();
+  std::atomic_bool entered = false, completed = false;
+  std::binary_semaphore phasePresented{0};
+  bool firstFrameBeforeWork = false, onOwner = true, released = false;
+  unsigned frames = 0;
+  const bool recovered = RunStorageRecoveryPresentation([&](auto notify) {
+    entered = true;
+    StorageRecoveryProgress progress{.phase = StorageRecoveryPhase::CheckingArchive,
+        .currentPath = "library/songs.zip"};
+    notify(progress);
+    // A large burst must not enqueue thousands of display messages, while a
+    // new phase must bypass throttling before its next long I/O operation.
+    for (unsigned i = 0; i < 20000; ++i) { progress.completedOperations = i; notify(progress); }
+    progress.phase = StorageRecoveryPhase::FinalizingArchive;
+    progress.archiveBytesDone = 123456;
+    notify(progress);
+    require(phasePresented.try_acquire_for(std::chrono::seconds(2)),
+        "presentation continues while recovery is blocked on an operation");
+    completed = true;
+    return true;
+  }, [&](const StorageRecoveryProgress &progress) {
+    if (++frames == 1) firstFrameBeforeWork = !entered;
+    onOwner &= std::this_thread::get_id() == owner;
+    if (!released && progress.phase == StorageRecoveryPhase::FinalizingArchive &&
+        progress.completedOperations == 19999 && progress.archiveBytesDone == 123456) {
+      released = true;
+      phasePresented.release();
+    }
+    throw std::runtime_error("unavailable progress display");
+  });
+  require(recovered && completed && firstFrameBeforeWork && onOwner && released && frames > 1,
+      "startup displays first, preserves renderer ownership, ignores display errors and joins recovery");
+  require(!RunStorageRecoveryPresentation([](auto) { return false; }, [](const auto &) {}),
+      "failed recovery never becomes successful through its presentation loop");
+  bool propagated = false;
+  try {
+    RunStorageRecoveryPresentation([](auto) -> bool { throw std::runtime_error("recovery failed"); },
+        [](const auto &) { throw std::runtime_error("display failed"); });
+  } catch (const std::runtime_error &error) { propagated = std::string(error.what()) == "recovery failed"; }
+  require(propagated, "recovery exception reaches the startup failure gate after joining");
+}
+}
+
 int main() {
   try {
+    startupRecoveryKeepsPresentationAlive();
     // The handoff must preserve owned storage, not duplicate the confirmed tree.
     OptimizationRequest transfer;
     transfer.preflight.emplace();
