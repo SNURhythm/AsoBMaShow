@@ -25,9 +25,16 @@ StoragePlatformPaths MakeStoragePlatformPaths(
 using StorageCommitPrecondition = std::function<bool(const AssetCandidate &,
     const std::vector<StorageFileChange> &, Checkpoint, std::string &)>;
 
+struct StorageFileCreation {
+  bool created = false;
+  bool ready = false;
+  // Captured from the creating handle, including when its flush fails.
+  FileIdentity identity;
+};
+
 struct FileTransactionDependencies {
   std::function<std::optional<FileIdentity>(const std::filesystem::path &, std::string &)> identity;
-  std::function<bool(const std::filesystem::path &, std::string &)> createExclusive;
+  std::function<StorageFileCreation(const std::filesystem::path &, std::string &)> createExclusive;
   std::function<bool(const std::filesystem::path &, const std::filesystem::path &,
                      const FileIdentity &, Checkpoint, std::string &)> copyAndSync;
   std::function<bool(const std::filesystem::path &, const FileIdentity &,

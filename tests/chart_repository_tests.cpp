@@ -28,6 +28,7 @@
 #include <tuple>
 #include <limits>
 #include <mutex>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -4260,7 +4261,7 @@ void testScopedScanReadsOnlyRequestedPaths() {
   assert(execute(database.get(), "UPDATE chart_meta SET path='" + key + "/a.bms' WHERE rowid=1;"
       "UPDATE chart_meta SET path='" + key + "/nested/b.bms' WHERE rowid=2;"
       "UPDATE chart_meta SET path='" + key + "neighbor/c.bms' WHERE rowid=3;"
-      "INSERT INTO solid_archives(path) VALUES('" + key + "/pack.zip'),('" + key + "neighbor/pack.zip')"));
+      "INSERT INTO solid_archives(path) VALUES('" + key + "/nested/pack.zip'),('" + key + "neighbor/pack.zip')"));
   auto session = repository.OpenSession();
   const std::vector<std::filesystem::path> roots{scope, scope / "nested", scope};
   scopedScanFullSteps = scopedScanVmSteps = 0; observingScopedScan = true;
@@ -4274,6 +4275,20 @@ void testScopedScanReadsOnlyRequestedPaths() {
   assert(exact.size() == 1 && exact.front().path == scope / "a.bms");
   assert(session->LoadScanReconcileIdentities({root / "missing"}).empty());
   assert(session->LoadScanReconcileIdentities().size() == 3000);
+  const auto sibling = std::filesystem::path(key + "-extra");
+  assert(execute(database.get(), "UPDATE chart_meta SET path='" + sibling.generic_string() + "/c.bms' WHERE rowid=4;"
+      "INSERT INTO solid_archives(path) VALUES('" + sibling.generic_string() + "/pack.zip');"
+      "INSERT INTO archive_scan_cache(path,solid,chart_count) VALUES('" + key + "/nested/pack.zip',1,2),('" +
+          sibling.generic_string() + "/pack.zip',1,1)"));
+  // The sibling sorts between the ancestor and its descendant; all retained
+  // ancestors must still suppress overlapping range queries.
+  const std::vector<std::filesystem::path> interleaved{scope / "nested", sibling, scope, scope};
+  const auto uniqueRows = session->LoadScanReconcileIdentities(interleaved);
+  std::set<std::filesystem::path> uniquePaths;
+  for (const auto &row : uniqueRows) uniquePaths.insert(row.path);
+  assert(uniqueRows.size() == 3 && uniquePaths.size() == uniqueRows.size());
+  const auto uniqueSnapshot = session->LoadScanSnapshot(ChartScanSnapshotLoad::Reconcile, interleaved);
+  assert(uniqueSnapshot.solidArchives.size() == 2 && uniqueSnapshot.archiveCache.size() == 2);
 }
 
 void testScratchlessTableMembership() {

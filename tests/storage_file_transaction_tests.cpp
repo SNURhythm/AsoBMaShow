@@ -334,6 +334,67 @@ void testSuccessAndCancellation() {
               !fs::exists(f.candidate.source), "deletion reclaims bytes after unlink");
   requireNoRecoveryFiles(f);
 }
+void testInstallationIdentityFailurePreservesOwnership() {
+  for (bool foreign : {false, true}) {
+    Fixture f;
+    auto dependencies = DefaultFileTransactionDependencies();
+    const auto identity = dependencies.identity;
+    bool failed = false;
+    fs::path installation;
+    dependencies.identity = [&](const fs::path &path, std::string &error) -> std::optional<FileIdentity> {
+      if (!failed && path.extension() == ".install") {
+        failed = true; installation = path;
+        if (foreign) {
+          fs::rename(path, f.temp.root / "private/displaced.install");
+          std::ofstream(path) << "foreign replacement";
+        }
+        error = "injected installation identity failure"; return {};
+      }
+      return identity(path, error);
+    };
+    const auto result = StorageFileTransaction(f.paths, dependencies).Replace(f.candidate, f.encoded);
+    require(failed && result.outcome == FileOutcome::Failed && !result.reclaimedBytes &&
+                read(f.candidate.source) == std::string(1024, 's') && !fs::exists(f.candidate.destination),
+            "installation identity failure never retires the source");
+    if (foreign) {
+      require(result.reason.code == StorageReason::RecoveryRequired && read(installation) == "foreign replacement",
+              "identity failure never unlinks a foreign replacement at the installation path");
+    } else {
+      require(result.reason.code != StorageReason::RecoveryRequired && !fs::exists(installation),
+              "owned installation identity failure settles cleanup without leaking an unjournaled file");
+      requireNoRecoveryFiles(f);
+    }
+  }
+  for (bool foreign : {false, true}) {
+    Fixture f;
+    auto dependencies = DefaultFileTransactionDependencies();
+    const auto create = dependencies.createExclusive;
+    fs::path installation;
+    dependencies.createExclusive = [&](const fs::path &path, std::string &error) {
+      auto result = create(path, error);
+      if (!result.ready) return result;
+      installation = path;
+      if (foreign) {
+        fs::rename(path, f.temp.root / "private/displaced.install");
+        std::ofstream(path) << "foreign replacement";
+      }
+      result.ready = false; error = "injected initial installation flush failure";
+      return result;
+    };
+    const auto result = StorageFileTransaction(f.paths, dependencies).Replace(f.candidate, f.encoded);
+    require(result.outcome == FileOutcome::Failed && read(f.candidate.source) == std::string(1024, 's') &&
+                !fs::exists(f.candidate.destination), "failed creation flush never retires the source");
+    if (foreign) {
+      require(result.reason.code == StorageReason::RecoveryRequired && read(installation) == "foreign replacement" &&
+                  !fs::is_empty(f.paths.journalRoot),
+              "failed creation flush journals owned identity and preserves an unrelated replacement");
+    } else {
+      require(result.reason.code == StorageReason::IoError && !fs::exists(installation),
+              "failed creation flush removes only its owned installation and reports ordinary failure");
+      requireNoRecoveryFiles(f);
+    }
+  }
+}
 void testLosslessReplacementWithoutSavings() {
   for (const auto bytes : {1024u, 1152u}) {
     for (const auto point : {"", "prepared", "published", "retired", "committed"}) {
@@ -687,6 +748,7 @@ int main(int argc, char **argv) {
     testOverlappingRegisteredRootDoesNotBlockRecovery();
     testAbandonedCandidatesAfterRestart();
     testSuccessAndCancellation();
+    testInstallationIdentityFailurePreservesOwnership();
     testLosslessReplacementWithoutSavings();
     testExistingDestinationReuse();
     testRestartAtEveryBoundary();

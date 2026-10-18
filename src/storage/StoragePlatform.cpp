@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cerrno>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -22,22 +23,51 @@
 namespace storage_management {
 namespace fs = std::filesystem;
 namespace {
-bool createExclusive(const fs::path &path, std::string &error) {
+StorageFileCreation createExclusive(const fs::path &path, std::string &error) {
+  StorageFileCreation result;
 #ifdef _WIN32
-  const auto handle = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr,
+  const auto handle = CreateFileW(path.c_str(), GENERIC_WRITE | FILE_READ_ATTRIBUTES, 0, nullptr,
                                   CREATE_NEW, FILE_ATTRIBUTE_NORMAL, nullptr);
-  if (handle == INVALID_HANDLE_VALUE) { error = "Exclusive creation failed"; return false; }
-  const bool ok = FlushFileBuffers(handle);
+  if (handle == INVALID_HANDLE_VALUE) { error = "Exclusive creation failed"; return result; }
+  result.created = true;
+  BY_HANDLE_FILE_INFORMATION info{};
+  if (GetFileInformationByHandle(handle, &info)) {
+    result.identity.device = info.dwVolumeSerialNumber;
+    result.identity.fileId = (std::uint64_t(info.nFileIndexHigh) << 32) | info.nFileIndexLow;
+    result.identity.bytes = (std::uint64_t(info.nFileSizeHigh) << 32) | info.nFileSizeLow;
+    const std::uint64_t ticks = (std::uint64_t(info.ftLastWriteTime.dwHighDateTime) << 32) | info.ftLastWriteTime.dwLowDateTime;
+    const auto sinceUnix = std::chrono::duration<std::int64_t, std::ratio<1, 10000000>>(
+        static_cast<std::int64_t>(ticks) - 116444736000000000LL);
+    result.identity.modified = std::chrono::time_point_cast<fs::file_time_type::duration>(
+        fs::file_time_type::clock::from_sys(std::chrono::sys_time(sinceUnix)));
+    result.ready = info.nNumberOfLinks == 1 && result.identity.bytes == 0 && result.identity.fileId != 0 &&
+        !(info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) && FlushFileBuffers(handle);
+  }
+  if (!result.ready) error = "Cannot identify or flush exclusively created installation file";
   CloseHandle(handle);
-  return ok;
 #else
   const int fd = open(path.c_str(), O_CREAT | O_EXCL | O_WRONLY | O_CLOEXEC | O_NOFOLLOW, 0600);
-  if (fd < 0) { error = std::strerror(errno); return false; }
-  const bool ok = fsync(fd) == 0;
-  if (!ok) error = std::strerror(errno);
-  close(fd);
-  return ok;
+  if (fd < 0) { error = std::strerror(errno); return result; }
+  result.created = true;
+  struct stat info{};
+  if (fstat(fd, &info) == 0) {
+    result.identity.device = static_cast<std::uint64_t>(info.st_dev);
+    result.identity.fileId = static_cast<std::uint64_t>(info.st_ino);
+    result.identity.bytes = static_cast<std::uint64_t>(info.st_size);
+#ifdef __APPLE__
+    const auto modified = info.st_mtimespec;
+#else
+    const auto modified = info.st_mtim;
 #endif
+    const auto sinceUnix = std::chrono::seconds(modified.tv_sec) + std::chrono::nanoseconds(modified.tv_nsec);
+    result.identity.modified = std::chrono::time_point_cast<fs::file_time_type::duration>(
+        fs::file_time_type::clock::from_sys(std::chrono::sys_time(sinceUnix)));
+    result.ready = S_ISREG(info.st_mode) && info.st_nlink == 1 && info.st_size == 0 && result.identity.fileId != 0 && fsync(fd) == 0;
+  }
+  if (!result.ready) error = "Cannot identify or flush exclusively created installation file";
+  close(fd);
+#endif
+  return result;
 }
 
 bool copyAndSync(const fs::path &from, const fs::path &to, const FileIdentity &expected,

@@ -361,6 +361,7 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
   record.backup = record.source.parent_path() / (".asobmashow-storage-" + record.id + ".backup");
   record.journal = paths_.journalRoot / (record.id + ".json");
   std::error_code ec;
+  std::string creationError;
   if (!PrepareJournalDirectory(error)) return fail(StorageReason::IoError, error);
   if (reuse) {
     record.outputIdentity = *candidate.existingDestinationIdentity;
@@ -380,11 +381,12 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
     record.temporary = record.source.parent_path() / (".asobmashow-storage-" + record.id + ".install");
     const auto space = fs::space(record.source.parent_path(), ec);
     if (ec || space.available < outputIdentity->bytes) return fail(StorageReason::InsufficientSpace, "Insufficient installation space");
-    if (!dependencies_.createExclusive(record.temporary, error)) return fail(StorageReason::IoError, error);
-    const auto emptyIdentity = dependencies_.identity(record.temporary, error);
-    if (!emptyIdentity) return fail(StorageReason::RecoveryRequired, error);
-    record.outputIdentity = *emptyIdentity;
+    const auto created = dependencies_.createExclusive(record.temporary, error);
+    if (!created.created) return fail(StorageReason::IoError, error);
+    if (!created.identity.fileId) return fail(StorageReason::RecoveryRequired, error);
+    record.outputIdentity = created.identity;
     record.phase = Phase::Copying;
+    if (!created.ready) creationError = error.empty() ? "Installation creation could not be flushed" : error;
   }
   if (!validTargets(record, paths_, error)) {
     if (!record.temporary.empty()) removeOwned(record.temporary, record.outputIdentity, {}, dependencies_, false, error);
@@ -402,6 +404,9 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
     if (reason == StorageReason::Cancelled) result.outcome = FileOutcome::Cancelled;
     return fail(reason, std::move(detail));
   };
+  // Even a failed initial flush has an owned inode. Journal it before cleanup
+  // so a second I/O failure leaves recoverable evidence, never an orphan.
+  if (!creationError.empty()) return rollback(StorageReason::IoError, std::move(creationError));
   if (!deletion && !reuse) {
     if (dependencies_.faultPoint) dependencies_.faultPoint("copying");
     if (!dependencies_.copyAndSync(encoded->outputPath, record.temporary, record.outputIdentity, check, error))

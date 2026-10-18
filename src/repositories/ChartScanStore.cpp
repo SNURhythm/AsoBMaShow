@@ -18,6 +18,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <string_view>
 #include <utility>
 
 namespace {
@@ -513,12 +514,24 @@ void visitScopedRows(sqlite3 *database, const char *selectSql,
   }
   std::ranges::sort(keys);
   std::vector<std::string> minimal;
-  std::string previousPrefix;
+  std::set<std::string, std::less<>> retainedPrefixes;
   for (const auto &key : keys) {
-    if (!minimal.empty() && (key == minimal.back() || key.starts_with(previousPrefix))) continue;
-    minimal.push_back(key); previousPrefix = key;
-    if (previousPrefix.back() != std::filesystem::path::preferred_separator)
-      previousPrefix += std::filesystem::path::preferred_separator;
+    if (!minimal.empty() && key == minimal.back()) continue;
+    bool covered = false;
+    for (auto separator = key.find(std::filesystem::path::preferred_separator);
+         separator != std::string::npos;
+         separator = key.find(std::filesystem::path::preferred_separator, separator + 1)) {
+      if (retainedPrefixes.contains(std::string_view(key).substr(0, separator + 1))) {
+        covered = true;
+        break;
+      }
+    }
+    if (covered) continue;
+    minimal.push_back(key);
+    auto prefix = key;
+    if (prefix.back() != std::filesystem::path::preferred_separator)
+      prefix += std::filesystem::path::preferred_separator;
+    retainedPrefixes.insert(std::move(prefix));
   }
   const bool scoped = !roots.empty();
   std::string query = selectSql;
