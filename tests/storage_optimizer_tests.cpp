@@ -4,6 +4,7 @@
 #include "StorageTestSupport.h"
 #include "../src/bms_search/DownloadStorageOptimization.h"
 
+#include <algorithm>
 #include <condition_variable>
 #include <fstream>
 #include <iostream>
@@ -103,6 +104,49 @@ void reviewedSelectionRetainsPrivateSandboxBoundary() {
           "sandboxed transactions install encoded audio and remove the selected video");
   require(fs::is_empty(deps.paths.temporaryRoot) && fs::is_empty(deps.paths.journalRoot),
           "sandboxed transactions settle private temporary files and journals");
+}
+void growingOutputsRespectSharedScratch() {
+  for (const bool pollDuringEncode : {true, false}) {
+    TempDirectory temp;
+    temp.write("charts/a/a.wav", std::string(1000, 'a'));
+    temp.write("charts/b/b.wav", std::string(1000, 'b'));
+    std::vector<std::string> events;
+    auto deps = dependencies(temp, events); deps.executionLimits.audioWorkers = 2;
+    auto now = std::chrono::steady_clock::time_point{};
+    deps.now = [&] { now += std::chrono::milliseconds(101); return now; };
+    deps.availableSpace = [](const fs::path &) { return std::optional<std::uint64_t>(5 * 1024 * 1024); };
+    std::mutex mutex; std::condition_variable changed;
+    unsigned entered = 0; bool release = false, growthRejected = false;
+    deps.encodeAudio = [&](const AssetCandidate &asset, const StoragePolicy &, const fs::path &output, Checkpoint check, auto) {
+      { std::unique_lock lock(mutex); ++entered; changed.notify_all();
+        require(changed.wait_for(lock, std::chrono::seconds(2), [&] { return entered == 2; }), "both owners reserve their encoding space"); }
+      if (asset.source.filename() == "a.wav") {
+        { std::ofstream file(output, std::ios::binary); file.seekp(7 * 512 * 1024 - 1); file.put('x'); }
+        if (pollDuringEncode) growthRejected = !check();
+      } else {
+        std::unique_lock lock(mutex);
+        require(changed.wait_for(lock, std::chrono::seconds(2), [&] { return release; }), "growing owner settles while peer retains scratch");
+        std::ofstream(output) << "tiny";
+      }
+      // Also exercise an encoder that returns success after its last checkpoint.
+      return EncodeResult{FileOutcome::Converted, output, {}};
+    };
+    auto input = request(temp.root / "charts");
+    input.policy.audio = AudioAction::LosslessFlac; input.inventory.policy = input.policy;
+    const auto report = StorageOptimizer(deps).Run(input, {}, [&](const StorageProgress &progress) {
+      if (progress.filesDone && (progress.phase == StoragePhase::Encode || progress.phase == StoragePhase::Commit)) {
+        std::lock_guard lock(mutex); release = true; changed.notify_all();
+      }
+    });
+    require((!pollDuringEncode || growthRejected) && report.converted == 1 && report.skipped == 1 &&
+        !report.failed && !report.cancelled && !report.recoveryRequired,
+        "growing output cannot consume another owner's shared scratch reservation");
+    require(std::any_of(report.files.begin(), report.files.end(), [](const FileResult &file) {
+      return file.source.filename() == "a.wav" && file.reason.code == StorageReason::InsufficientSpace;
+    }) && fs::exists(temp.root / "charts/a/a.wav") && !fs::exists(temp.root / "charts/a/a.flac") &&
+        fs::file_size(temp.root / "charts/b/b.flac") == 4 && fs::is_empty(deps.paths.temporaryRoot),
+        "over-budget output is discarded before commit and the peer completes normally");
+  }
 }
 void losslessGrowthOffsetsSavingsAcrossDirectories() {
   for (const auto finalSize : {155u, 205u}) {
@@ -884,12 +928,13 @@ int main(int argc, char **argv) {
     }
     if (argc > 1 && std::string_view(argv[1]) == "--commit-cost") { unrelatedFoldersDoNotMultiplyCommitChecks(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--subset-refresh") { subsetRefreshNeverEnumeratesAncestorSiblings(); return 0; }
-    if (argc > 1 && std::string_view(argv[1]) == "--parallel") { recoveryStopsAnAlreadyEncodedPeerBeforeCommit(); slowVideoDoesNotBlockFollowingFiles(); independentDirectoriesUseDistinctOutputs(); return 0; }
+    if (argc > 1 && std::string_view(argv[1]) == "--parallel") { growingOutputsRespectSharedScratch(); recoveryStopsAnAlreadyEncodedPeerBeforeCommit(); slowVideoDoesNotBlockFollowingFiles(); independentDirectoriesUseDistinctOutputs(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--sandbox-boundaries") { reviewedSelectionRetainsPrivateSandboxBoundary(); return 0; }
     unsafeChartEvidenceRetainsAffectedScopes(); exceptionRecoveryClassification();
     reviewedSelectionRetainsPrivateSandboxBoundary();
     losslessGrowthOffsetsSavingsAcrossDirectories();
     independentDirectoriesUseDistinctOutputs();
+    growingOutputsRespectSharedScratch();
     slowVideoDoesNotBlockFollowingFiles();
     recoveryStopsAnAlreadyEncodedPeerBeforeCommit();
     storageLibraryIntegration();

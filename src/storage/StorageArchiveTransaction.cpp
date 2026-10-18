@@ -156,6 +156,7 @@ public:
   std::uint64_t pendingScratch = 0;
   std::optional<std::uint64_t> encodingCursor;
   bool encodingExhausted = false;
+  std::atomic<bool> stopEncoding = false;
   std::unique_ptr<StoragePathIndex> encodingSelection;
   std::map<std::uint64_t, std::unique_ptr<PendingEncoding>> encodings;
   Update(StorageArchive &archive, fs::path journal, const StorageArchiveDependencies &deps, bool &started,
@@ -167,6 +168,12 @@ public:
         }), workBudget(deps.workBudget ? deps.workBudget : &fallbackBudget) {
     archive.io.CheckPath();
     progress.archiveBytesTotal = archive.identity.bytes;
+  }
+  ~Update() {
+    // Member destruction joins the futures. Publish an unresolved mutation
+    // first so those encoders and other owners stop without waiting for us.
+    if (std::uncaught_exceptions() && started) workBudget->StopForRecovery();
+    stopEncoding = true;
   }
   Statement &Query(const std::string &sql) const {
     auto &query = statements[sql];
@@ -879,7 +886,7 @@ void Update::FillEncodings(const StoragePolicy &policy, Checkpoint check) {
     require(static_cast<bool>(deps.encode), "Archive media encoder is unavailable", StorageReason::CodecUnavailable);
     item.job = std::make_unique<StorageEncodingJob>(item.reservation, [&, staged = std::move(staged), policy, check, pending = &item] {
       auto checkpoint = [&] {
-        if (check && !check()) return false;
+        if (stopEncoding || (check && !check())) return false;
         std::error_code error; const auto size = fs::file_size(pending->output, error);
         if (!error && !ReserveOutput(*pending, size)) pending->tooLarge = true;
         return !pending->tooLarge;

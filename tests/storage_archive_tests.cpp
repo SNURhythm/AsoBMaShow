@@ -162,6 +162,45 @@ void archiveLookaheadRespectsAggregateScratch() {
   require(observed && bounded && report.converted == 3 && !report.failed && !report.recoveryRequired && fs::is_empty(paths.journalRoot),
       "aggregate scratch admits one staged entry at a time and reuses its reservation without skipping later files");
 }
+void archiveFailureStopsPeersBeforeJoiningEncoders() {
+  storage_test::TempDirectory temp;
+  const auto path = temp.root / "failure.zip";
+  writeArchive(path, {{"a.mpg", std::string(1000, 'a')}, {"b.mpg", std::string(1000, 'b')}});
+  const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+  InventoryRequest input{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+      .policy = {.bga = BgaAction::CompressH264}, .scanScratchRoot = paths.scanRoot};
+  const auto review = BuildStoragePreflight(input);
+  StorageWorkBudget budget({}, [] { return std::optional<std::uint64_t>(1024 * 1024 * 1024); });
+  std::mutex mutex; std::condition_variable changed;
+  bool pendingEntered = false, failed = false, cancelled = false, admissionStopped = false;
+  StorageArchiveDependencies deps{.encode = [&](const AssetCandidate &asset, const StoragePolicy &, const fs::path &output,
+      Checkpoint check, ProgressCallback) {
+    std::ifstream source(asset.source); const auto kind = source.get(); source.close();
+    if (kind == 'b') {
+      std::unique_lock lock(mutex); pendingEntered = true; changed.notify_all();
+      require(changed.wait_for(lock, std::chrono::seconds(2), [&] { return failed; }), "first archive entry reaches mutation failure");
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+      while (check() && std::chrono::steady_clock::now() < deadline) changed.wait_for(lock, std::chrono::milliseconds(5));
+      cancelled = !check();
+      bool waiting = false;
+      admissionStopped = budget.RecoveryRequired() && !budget.TryAcquire(asobmshow::chart_assets::MediaKind::Audio, 1, waiting);
+      return EncodeResult{FileOutcome::Cancelled, {}, {StorageReason::Cancelled, "cancel"}};
+    }
+    std::ofstream(output) << "tiny";
+    return EncodeResult{FileOutcome::Converted, output, {}};
+  }, .faultPoint = [&](std::string_view point) {
+    if (point != "archive-entry-ready") return;
+    std::unique_lock lock(mutex);
+    require(changed.wait_for(lock, std::chrono::seconds(2), [&] { return pendingEntered; }), "speculative encoder is active at mutation failure");
+    failed = true; changed.notify_all();
+    throw std::runtime_error("interrupted archive mutation");
+  }, .workBudget = &budget};
+  const auto report = UpdateStorageArchive(review.archives.front(), input.policy, paths, deps, [&] { return !budget.RecoveryRequired(); });
+  require(report.recoveryRequired && cancelled && admissionStopped,
+      "archive failure cancels pending encoders and stops peer admission before joining them");
+  const auto recovered = RecoverStorageArchives(paths);
+  require(!recovered.failed && !recovered.recoveryRequired && fs::is_empty(paths.journalRoot), "failed parallel archive remains recoverable");
+}
 void manifestsExtractEntries() {
   storage_test::TempDirectory temp;
   const std::vector<std::pair<std::string, std::string>> files = {{"music/a.wav", std::string(1024 * 300, 'a')},
@@ -1709,7 +1748,7 @@ void storageArchiveDiscoverySandboxTest(const fs::path &root) {
         "archive review resolves folder and file grants without probing system ancestors");
   }
 }
-void storageArchiveParallelTests() { archiveEncodersOverlapAndDrainSafely(); independentArchivesAndDirectoriesShareEncodingCapacity(); archiveLookaheadRespectsAggregateScratch(); }
+void storageArchiveParallelTests() { archiveFailureStopsPeersBeforeJoiningEncoders(); archiveEncodersOverlapAndDrainSafely(); independentArchivesAndDirectoriesShareEncodingCapacity(); archiveLookaheadRespectsAggregateScratch(); }
 void storageArchiveTests(const char *executable) {
 #if defined(__APPLE__) && TARGET_OS_OSX
   storage_test::TempDirectory temp;
@@ -1735,6 +1774,7 @@ void storageArchiveTests(const char *executable) {
       {"parallel-encoders", archiveEncodersOverlapAndDrainSafely},
       {"parallel-owners", independentArchivesAndDirectoriesShareEncodingCapacity},
       {"parallel-scratch", archiveLookaheadRespectsAggregateScratch},
+      {"parallel-failure", archiveFailureStopsPeersBeforeJoiningEncoders},
       {"container-relocation", archiveRecoveryAfterContainerRelocation},
       {"measurement-deltas", archiveChangesUpdateCachedInnerMeasurements},
       {"sparse-prefix-recovery", sparsePrefixRecovery}, {"large-batch-recovery", archiveLargeRecordRecovery}, {"delete-batches", archiveConsecutiveDeletesAreBatched},

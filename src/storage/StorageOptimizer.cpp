@@ -381,7 +381,8 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
         bool changedDirectory = false, staleScope = false;
         std::mutex directoryMutex;
         std::condition_variable directoryChanged;
-        auto process = [&](AssetCandidate asset, bool admitted) {
+        auto process = [&](AssetCandidate asset, StorageWorkBudget::Lease *reservation) {
+          const bool admitted = reservation != nullptr;
           std::unique_lock lock(directoryMutex);
           if (!checkpoint() || report.recoveryRequired) return EncodeResult{};
           std::string error;
@@ -435,7 +436,20 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
                       std::lock_guard stateLock(directoryMutex); state.currentPath = asset.source; state.phase = value.phase; emit();
                     };
                     const auto &encoder = asset.operation == AssetOperation::CompressH264 ? dependencies_.encodeVideo : dependencies_.encodeAudio;
-                    encoded = encoder(asset, request.policy, output, checkpoint, encoderProgress);
+                    bool tooLarge = false;
+                    auto encoderCheckpoint = [&] {
+                      if (!checkpoint()) return false;
+                      std::error_code sizeError; const auto bytes = fs::file_size(output, sizeError);
+                      constexpr std::uint64_t reserve = 1024 * 1024;
+                      if (!sizeError && (bytes > std::numeric_limits<std::uint64_t>::max() - reserve ||
+                          !reservation->GrowTo(bytes + reserve))) tooLarge = true;
+                      return !tooLarge;
+                    };
+                    encoded = encoder(asset, request.policy, output, encoderCheckpoint, encoderProgress);
+                    // A codec may finish writing after its last checkpoint.
+                    encoderCheckpoint();
+                    if (tooLarge) encoded = {FileOutcome::Skipped, {},
+                        {StorageReason::InsufficientSpace, "Encoded media exceeds the shared staging budget"}};
                     result.outcome = encoded.outcome; result.reason = encoded.reason;
                     if (encoded.outcome == FileOutcome::Converted && encoded.outputPath != output) {
                       encoded.outcome = result.outcome = FileOutcome::Failed;
@@ -525,7 +539,7 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
           }
           for (auto it = pending.begin(); it != pending.end() && checkpoint();) {
             if (it->operation == AssetOperation::Delete || it->reuseDestination || missingCodec(it->operation, caps).code != StorageReason::None) {
-              process(std::move(*it), false); it = pending.erase(it); advanced = true; continue;
+              process(std::move(*it), nullptr); it = pending.erase(it); advanced = true; continue;
             }
             constexpr std::uint64_t reserve = 1024 * 1024;
             bool waiting = false;
@@ -536,10 +550,11 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
             }
             if (!reservation) {
               if (waiting) { ++it; continue; }
-              process(std::move(*it), false);
+              process(std::move(*it), nullptr);
             } else {
-              active.push_back(std::make_unique<StorageEncodingJob>(std::move(*reservation), [&, asset = std::move(*it)]() mutable {
-                try { return process(std::move(asset), true); }
+              auto sharedReservation = std::make_shared<StorageWorkBudget::Lease>(std::move(*reservation));
+              active.push_back(std::make_unique<StorageEncodingJob>(sharedReservation, [&, asset = std::move(*it), sharedReservation]() mutable {
+                try { return process(std::move(asset), sharedReservation.get()); }
                 catch (...) { budget.StopForRecovery(); throw; }
               }));
             }

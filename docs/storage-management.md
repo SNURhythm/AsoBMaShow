@@ -269,16 +269,16 @@ recovery directory intact if recovery is required.
 Completed archive journals enter a durable cleanup-only state before their
 metadata is removed, so interrupted cleanup can finish on the next startup.
 
-Independent folders can convert audio concurrently: up to four workers on
+Audio targets can convert concurrently: up to four workers on
 desktop. Mobile scanning and audio conversion use the same worker policy as chart
 audio loading, reserving
 processor capacity for foreground threads (for example, four workers on six
 logical processors and six on eight). Actual concurrency is also limited by
-available independent folders and temporary space. A folder and its selected
-ancestors finish in order; video remains one job at a time. Cancellation waits for active transactions to
+available targets and temporary space. A folder and its selected
+ancestors finish in order; up to two videos encode concurrently. Cancellation waits for active transactions to
 settle before releasing library maintenance. A recovery failure stops new work
 across all workers. Temporary-space budgets cover concurrent outputs and are
-checked against available disk space before each file starts.
+checked against available disk space before each file starts and as encoded outputs grow.
 
 Before changing local media, the tool checks chart evidence in its folder and
 selected ancestors and descendants. A nested chart edit invalidates the parent

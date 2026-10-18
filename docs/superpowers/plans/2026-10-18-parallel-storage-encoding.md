@@ -78,8 +78,13 @@ aggregate archive reports through the existing synchronized progress handoff.
 
 **Files:** `docs/storage-management.md`, implementation and tests above.
 
-- [ ] Update scheduling documentation and run `git diff --check`.
-- [ ] Build `main tests_library tests_audio tests_archives` together at `-j 6`;
+- [x] Update scheduling documentation and run `git diff --check`.
+- [x] Build `main tests_library tests_audio tests_archives` together at `-j 6`;
   run CTest with `-L '^area_(library|audio|archives)$' -j 6 --output-on-failure`.
-- [ ] Obtain an independent review of the full change, address actionable findings,
+- [x] Obtain an independent review of the full change, address actionable findings,
   then commit and push verified task changes to the current upstream.
+
+Validation: desktop application build and all 87 affected library/audio/archive
+tests passed. Independent review identified delayed recovery-stop publication
+and unaccounted directory output growth; both were fixed with failing-then-passing
+regressions before the final test run.
