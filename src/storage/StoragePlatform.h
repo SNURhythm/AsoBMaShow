@@ -25,6 +25,11 @@ StoragePlatformPaths MakeStoragePlatformPaths(
     const std::filesystem::path &privateApplicationRoot,
     std::vector<std::filesystem::path> allowedRoots, bool sandboxedAncestors = false);
 
+// Include global recovery scopes only while journals are pending. The caller
+// collapses overlaps before reserving; inspection failures reject admission.
+std::optional<std::vector<std::filesystem::path>> StorageReservationRoots(
+    const StoragePlatformPaths &, std::vector<std::filesystem::path> selected, std::string &error);
+
 using StorageCommitPrecondition = std::function<bool(const AssetCandidate &,
     const std::vector<StorageFileChange> &, Checkpoint, std::string &)>;
 

@@ -83,23 +83,13 @@ bool InitializeStorageServices(ApplicationContext &context) {
   auto startup = accessFolders(context, error);
   if (!startup) { SDL_Log("Storage recovery: %s", error.c_str()); return false; }
 #if TARGET_OS_ANDROID
-  // Reserve only existing roots. Recovery itself rejects inaccessible targets.
-  std::vector<std::filesystem::path> existing;
-  for (const auto &root : startup->paths.allowedRoots) {
-    std::error_code ec;
-    if (std::filesystem::is_directory(root, ec) || std::filesystem::is_regular_file(root, ec)) existing.push_back(root);
-  }
-  // Registered roots can overlap; reserve their union once.
-  OptimizationRequest scopeRequest;
-  for (const auto &root : existing) scopeRequest.inventory.groups.push_back({.path = root});
+  const auto recoveryRoots = StorageReservationRoots(startup->paths, {}, error);
+  if (!recoveryRoots) { SDL_Log("Storage recovery: %s", error.c_str()); return false; }
   std::shared_ptr<void> reservation;
-  std::error_code journalError;
-  if (std::filesystem::exists(startup->paths.journalRoot, journalError) &&
-      !std::filesystem::is_empty(startup->paths.journalRoot, journalError)) {
-    reservation = ReserveAndroidStorageSubtrees(selectedRoots(scopeRequest), error);
+  if (!recoveryRoots->empty()) {
+    reservation = ReserveAndroidStorageSubtrees(StoragePathIndex(*recoveryRoots).MinimalRoots(), error);
     if (!reservation) { SDL_Log("Storage recovery: %s", error.c_str()); return false; }
   }
-  if (journalError) return false;
 #endif
   auto recovery = RecoverStorageArchives(startup->paths);
   if (!recovery.recoveryRequired) recovery = StorageFileTransaction(startup->paths).Recover();
@@ -171,7 +161,9 @@ bool InitializeStorageServices(ApplicationContext &context) {
         }
       }
 #if TARGET_OS_ANDROID
-      auto reservation = ReserveAndroidStorageSubtrees(roots, error);
+      const auto reservationRoots = StorageReservationRoots(access->paths, roots, error);
+      if (!reservationRoots) return {};
+      auto reservation = ReserveAndroidStorageSubtrees(StoragePathIndex(*reservationRoots).MinimalRoots(), error);
       if (!reservation) return {};
       access->scopes.push_back(std::move(reservation));
 #endif

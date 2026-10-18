@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 
 #include <iostream>
+#include <algorithm>
 #include <iterator>
 #include <array>
 #include <condition_variable>
@@ -46,6 +47,49 @@ struct Fixture {
 std::string read(const fs::path &path) {
   std::ifstream stream(path, std::ios::binary);
   return {std::istreambuf_iterator<char>(stream), {}};
+}
+void testReservationIncludesPendingRecoveryRoots() {
+  Fixture fixture;
+  const auto selected = fixture.temp.root / "other-library";
+  fs::create_directory(selected);
+  const auto archive = fixture.temp.root / "registered.zip";
+  fixture.temp.write("registered.zip", "registered archive");
+  fixture.paths.allowedRoots.push_back(selected);
+  fixture.paths.allowedRoots.push_back(archive);
+  fixture.paths.allowedRoots.push_back(fixture.temp.root / "missing-library");
+  std::string error;
+  require(StorageReservationRoots(fixture.paths, {selected}, error) == std::vector<fs::path>{selected},
+          "absent journals reserve only the requested folder");
+  fs::create_directories(fixture.paths.journalRoot);
+  require(StorageReservationRoots(fixture.paths, {selected}, error) == std::vector<fs::path>{selected},
+          "empty journals do not block writers in unrelated folders");
+  auto dependencies = DefaultFileTransactionDependencies();
+  const auto remove = dependencies.remove;
+  dependencies.remove = [remove](const fs::path &path, std::string &error) {
+    if (path.extension() == ".backup") { error = "Injected cleanup failure"; return false; }
+    return remove(path, error);
+  };
+  const auto result = StorageFileTransaction(fixture.paths, dependencies).Replace(fixture.candidate, fixture.encoded);
+  require(result.outcome == FileOutcome::Converted && result.reason.code == StorageReason::CleanupFailed,
+          "committed cleanup-only recovery can remain after maintenance admission reopens");
+  auto roots = StorageReservationRoots(fixture.paths, {selected}, error);
+  require(roots.has_value(), "pending cleanup roots can be inspected");
+  std::ranges::sort(*roots);
+  roots->erase(std::unique(roots->begin(), roots->end()), roots->end());
+  require(*roots == std::vector<fs::path>{fixture.temp.root / "library", selected, archive},
+          "new folder job reserves all existing registered recovery roots including archives");
+  fixture.temp.write("not-a-directory", "unreadable journal inventory");
+  auto invalid = fixture.paths;
+  invalid.journalRoot = fixture.temp.root / "not-a-directory";
+  require(!StorageReservationRoots(invalid, {selected}, error) && !error.empty(),
+          "journal inspection errors reject maintenance rather than omit recovery reservations");
+#ifndef _WIN32
+  fs::create_symlink("loop", fixture.temp.root / "loop");
+  invalid = fixture.paths;
+  invalid.allowedRoots.push_back(fixture.temp.root / "loop");
+  require(!StorageReservationRoots(invalid, {selected}, error) && !error.empty(),
+          "registered root stat errors reject recovery admission");
+#endif
 }
 void testConcurrentCommitAndCancellation() {
   storage_test::TempDirectory temp;
@@ -839,6 +883,7 @@ int main(int argc, char **argv) {
     }
     testSandboxedRecovery(argv[0]);
 #endif
+    testReservationIncludesPendingRecoveryRoots();
     testConcurrentCommitAndCancellation();
     testRecoveryAfterContainerRelocation();
     testJournalHierarchyIsDurableBeforeMutation();

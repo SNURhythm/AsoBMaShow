@@ -202,6 +202,31 @@ StoragePlatformPaths MakeStoragePlatformPaths(const fs::path &privateRoot,
           std::move(allowedRoots), std::move(accessRoots), privateRoot / "storage-management/scan", syncRoot};
 }
 
+std::optional<std::vector<fs::path>> StorageReservationRoots(
+    const StoragePlatformPaths &paths, std::vector<fs::path> selected, std::string &error) {
+  error.clear();
+  std::error_code ec;
+  const auto journal = fs::symlink_status(paths.journalRoot, ec);
+  if (ec == std::errc::no_such_file_or_directory || (!ec && !fs::exists(journal))) return selected;
+  if (ec || !fs::is_directory(journal)) {
+    error = ec ? ec.message() : "Storage journal directory is unsafe";
+    return {};
+  }
+  const bool empty = fs::is_empty(paths.journalRoot, ec);
+  if (ec) { error = ec.message(); return {}; }
+  if (empty) return selected;
+  // Apply recovers the global journal before processing its selection. Reserve
+  // every existing authorized root so an unrelated provider writer cannot race
+  // backup cleanup or archive recovery. Missing roots remain recovery's concern.
+  for (const auto &root : paths.allowedRoots) {
+    const auto status = fs::status(root, ec);
+    if (ec == std::errc::no_such_file_or_directory || (!ec && !fs::exists(status))) continue;
+    if (ec) { error = root.string() + ": " + ec.message(); return {}; }
+    if (fs::is_directory(status) || fs::is_regular_file(status)) selected.push_back(root);
+  }
+  return selected;
+}
+
 FileTransactionDependencies DefaultFileTransactionDependencies() {
   return {.identity = [](const fs::path &path, std::string &error) { return ReadFileIdentity(path, error); },
           .createExclusive = createExclusive,
