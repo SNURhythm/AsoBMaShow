@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <filesystem>
 #ifdef _WIN32
 #include <limits>
@@ -31,6 +32,12 @@ struct StoragePathComponentLess {
   bool operator()(const std::filesystem::path &left, const std::filesystem::path &right) const {
     if (comparison == StoragePathComparison::CaseSensitive) return left.compare(right) < 0;
     return CompareStoragePathComponent(left, right) < 0;
+  }
+};
+struct StoragePathLess {
+  bool operator()(const std::filesystem::path &left, const std::filesystem::path &right) const {
+    return std::lexicographical_compare(left.begin(), left.end(), right.begin(), right.end(),
+                                        StoragePathComponentLess{});
   }
 };
 }

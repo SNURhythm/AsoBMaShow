@@ -33,6 +33,23 @@ void summariesDoNotRetainAllAssets() {
   for (const auto &[path, summary] : preflight.directories)
     require(summary.samples.empty() && summary.fingerprint.size() == 64, "directory summaries contain hashes, not asset samples");
 }
+void nativePathAliasesRetainPreflightTotals() {
+#ifdef _WIN32
+  TempDirectory temp;
+  temp.write("Charts/Sub/a.wav", "12345");
+  auto input = request(temp.root / "Charts");
+  input.groups.push_back({"alias", temp.root / "charts"});
+  input.groups.push_back({"child", temp.root / "CHARTS/sub"});
+  const auto preflight = BuildStoragePreflight(input);
+  require(preflight.complete && preflight.totalBytes == 5 && preflight.eligibleCount == 1 &&
+      preflight.directories.size() == 2, "native aliases scan each directory and candidate once");
+  for (const auto &group : preflight.groups)
+    require(group.totalBytes == 5, "case-variant overlapping groups all receive their subtree totals");
+  require(preflight.directories.contains(temp.root / "charts/SUB") &&
+      preflight.EligibleRoots() == std::vector<fs::path>{temp.root / "Charts"},
+      "case-variant preflight evidence remains usable for admission");
+#endif
+}
 void independentSelectedFoldersComplete() {
   TempDirectory temp;
   temp.write("one/nested/a.wav", "12345");
@@ -197,6 +214,7 @@ void failedSpillAndRestartNeverAuthorizeStaleMetadata() {
 }
 int storageDirectoryInventoryTests() {
   try {
+    nativePathAliasesRetainPreflightTotals();
     unknownPermissionsRemainEligible();
     summariesDoNotRetainAllAssets();
     independentSelectedFoldersComplete();

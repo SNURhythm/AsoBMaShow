@@ -139,3 +139,5 @@ add_executable(storage_video_capability_tests tests/storage_video_capability_tes
 target_compile_features(storage_video_capability_tests PRIVATE cxx_std_23)
 target_link_libraries(storage_video_capability_tests PRIVATE ${FFMPEG_LIBRARIES} Threads::Threads)
 asobmashow_register_test(storage_video_capability_tests)
+
+add_test(NAME storage_video_capability_startup_failure_tests COMMAND storage_video_capability_tests --fail-startup)

@@ -2,6 +2,7 @@
 #include "ChartResourceInventory.h"
 #include "StorageScanScheduler.h"
 #include "StorageArchive.h"
+#include "StoragePathComparison.h"
 
 namespace storage_management {
 struct StorageDirectorySummary {
@@ -19,7 +20,7 @@ struct StorageDirectorySummary {
 struct StoragePreflight {
   InventoryRequest request;
   std::vector<GroupStorageMeasurement> groups;
-  std::map<std::filesystem::path, StorageDirectorySummary> directories;
+  std::map<std::filesystem::path, StorageDirectorySummary, StoragePathLess> directories;
   std::vector<StorageArchiveSummary> archives;
   std::vector<FileResult> skips;
   std::optional<std::uint64_t> totalBytes;

@@ -171,22 +171,30 @@ std::shared_future<StorageVideoCapabilities> RequestStorageVideoCapabilities(std
   static ProbeCache cache;
   std::unique_lock lock(cache.mutex);
   if (!cache.future.valid()) {
-    std::promise<StorageVideoCapabilities> promise;
-    auto future = promise.get_future().share();
-    cache.worker = std::jthread([promise = std::move(promise)]() mutable {
-      StorageVideoCapabilities result;
-      try { result = ProbeStorageVideoCapabilities(); }
-      catch (const std::exception &error) { result = unavailable(error.what()); }
-      catch (...) { result = unavailable("Video capability probe failed"); }
-      std::vector<std::function<void()>> callbacks;
-      {
-        std::lock_guard guard(cache.mutex);
-        promise.set_value(std::move(result));
-        callbacks.swap(cache.callbacks);
-      }
-      for (auto &callback : callbacks) { try { callback(); } catch (...) {} }
-    });
-    cache.future = std::move(future);
+    try {
+      std::promise<StorageVideoCapabilities> promise;
+      auto future = promise.get_future().share();
+      cache.worker = std::jthread([promise = std::move(promise)]() mutable {
+        StorageVideoCapabilities result;
+        try { result = ProbeStorageVideoCapabilities(); }
+        catch (const std::exception &error) { result = unavailable(error.what()); }
+        catch (...) { result = unavailable("Video capability probe failed"); }
+        std::vector<std::function<void()>> callbacks;
+        {
+          std::lock_guard guard(cache.mutex);
+          promise.set_value(std::move(result));
+          callbacks.swap(cache.callbacks);
+        }
+        for (auto &callback : callbacks) { try { callback(); } catch (...) {} }
+      });
+      cache.future = std::move(future);
+    } catch (...) {
+      // Thread construction may already have consumed the worker's promise.
+      // Publish a fresh ready result instead of retaining a broken future.
+      std::promise<StorageVideoCapabilities> failed;
+      failed.set_value(unavailable("Could not start the video capability probe"));
+      cache.future = failed.get_future().share();
+    }
   }
   const auto result = cache.future;
   if (wake && result.wait_for(std::chrono::seconds(0)) != std::future_status::ready) {
