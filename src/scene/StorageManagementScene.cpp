@@ -1,6 +1,7 @@
 #include "StorageManagementScene.h"
 #include "SceneManager.h"
 #include "../ArchiveFile.h"
+#include "../archive/ArchiveSourceAccess.h"
 #include "../storage/StorageApplicationIntegration.h"
 #include "../path.h"
 #include "../rendering/common.h"
@@ -211,9 +212,12 @@ void StorageManagementScene::BuildView() {
       row->disclosure->setText(item.expanded ? "▾" : "▸");
       row->title->setText(i18n::format("storage.ui.archive_group", {
           {"name", fspath_to_utf8(item.archivePath.filename())}}));
-      row->detail->setText(i18n::format("storage.ui.archive_selection", {
+      auto detail = i18n::format("storage.ui.archive_selection", {
           {"selected", std::to_string(item.selectedCount)}, {"total", std::to_string(item.songCount)},
-          {"matching", std::to_string(item.visibleCount)}}) + " · " + fspath_to_utf8(item.archivePath.parent_path()));
+          {"matching", std::to_string(item.visibleCount)}}) + " · " + fspath_to_utf8(item.archivePath.parent_path());
+      const auto size = archiveSizes_.find(item.archivePath);
+      if (size != archiveSizes_.end() && size->second) detail = bytes(*size->second) + " · " + detail;
+      row->detail->setText(detail);
       const bool allMatching = item.visibleSelectedCount == item.visibleCount;
       row->selectText->setLocalizedText(i18n::message(allMatching
           ? "storage.ui.archive_clear_matching" : "storage.ui.archive_select_matching"));
@@ -332,6 +336,7 @@ void StorageManagementScene::ReloadGroups(bool invalidateAll) {
         archive_file::splitVirtualPath(meta.BmsPath, archive, inner))
       groupArchives_.emplace(group.groupId, std::move(archive));
   }
+  RefreshArchiveSizes();
   const auto request = RequestFor(groups_);
   std::vector<StorageGroupSource> sources;
   for (std::size_t i = 0; i < groups_.size(); ++i) {
@@ -360,6 +365,16 @@ void StorageManagementScene::ReloadGroups(bool invalidateAll) {
   RefreshRows();
   MeasureGroups(pendingMeasurements_);
 }
+void StorageManagementScene::RefreshArchiveSizes() {
+  archiveSizes_.clear();
+  for (const auto &[id, archive] : groupArchives_) {
+    auto [entry, added] = archiveSizes_.try_emplace(archive);
+    if (!added) continue;
+    std::uintmax_t fileBytes = 0;
+    std::filesystem::file_time_type modified;
+    if (archive_source::fileState(archive, fileBytes, modified)) entry->second = fileBytes;
+  }
+}
 void StorageManagementScene::MeasureGroups(const std::set<std::string> &ids) {
   std::vector<Track> groups;
   for (const auto &group : groups_) if (ids.contains(group.groupId)) groups.push_back(group);
@@ -384,6 +399,7 @@ void StorageManagementScene::ApplyReport(const StorageReport &report) {
   pendingMeasurements_.clear();
   const auto changed = ApplyStorageReportMeasurements(measurements_, RequestFor(groups_).groups, report);
   pendingMeasurements_.insert(changed.begin(), changed.end());
+  if (!report.changedRoots.empty()) RefreshArchiveSizes();
   RefreshRows(); MeasureGroups(pendingMeasurements_);
 }
 void StorageManagementScene::InvalidatePreflight() {
@@ -433,7 +449,16 @@ void StorageManagementScene::RefreshRows() {
   });
   model_.SetGroups(groups_);
   const float scroll = list_->scrollOffset;
-  list_->setItems(MakeStorageArchiveRows(model_.Rows(), groupArchives_, selection_, expandedArchives_));
+  StorageArchiveSizeLookup sizeOrder;
+  if (sortBySize_) sizeOrder = [this](const std::filesystem::path &archive, const std::string &id) {
+    if (!archive.empty()) {
+      const auto size = archiveSizes_.find(archive);
+      return size == archiveSizes_.end() ? std::optional<std::uint64_t>{} : size->second;
+    }
+    const auto size = measurements_.find(id);
+    return size == measurements_.end() ? std::optional<std::uint64_t>{} : size->second.totalBytes;
+  };
+  list_->setItems(MakeStorageArchiveRows(model_.Rows(), groupArchives_, selection_, expandedArchives_, sizeOrder));
   list_->scrollOffset = std::clamp(scroll, 0.0f, std::max(0.0f,
       static_cast<float>(list_->size() * list_->itemHeight - list_->getContentHeight())));
   list_->rebindVisibleItems();

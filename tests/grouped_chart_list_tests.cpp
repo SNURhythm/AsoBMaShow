@@ -108,6 +108,28 @@ int main() {
   assert(rows[4].track.groupId == b.groupId && rows[5].track.groupId == loose.groupId);
   assert(rows[0].IndentLevel() == 0 && rows[1].IndentLevel() == 1 && rows[5].IndentLevel() == 0);
 
+  // Archive sections use their file size, independently of the first matching
+  // song's uncompressed size. Member order stays intact within each section.
+  std::map<std::filesystem::path, std::optional<std::uint64_t>> archiveBytes{
+      {"/one/pack.zip", 100}, {"/two/pack.zip", 500}};
+  std::map<std::string, std::optional<std::uint64_t>> groupBytes{
+      {a.groupId, 900}, {b.groupId, 1}, {c.groupId, 200}, {loose.groupId, 300}};
+  const StorageArchiveSizeLookup sizeOrder = [&](const auto &archive, const auto &id) {
+    return archive.empty() ? groupBytes.at(id) : archiveBytes.at(archive);
+  };
+  rows = MakeStorageArchiveRows({a, loose, c, b}, archives, selection, expandedArchives, sizeOrder);
+  assert(rows.size() == 6 && rows[0].archivePath == "/two/pack.zip");
+  assert(rows[1].track.groupId == b.groupId && rows[2].track.groupId == loose.groupId);
+  assert(rows[3].archivePath == "/one/pack.zip");
+  assert(rows[4].track.groupId == a.groupId && rows[5].track.groupId == c.groupId);
+  rows = MakeStorageArchiveRows({c, b}, archives, selection, {}, sizeOrder);
+  assert(rows.size() == 2 && rows[0].archivePath == "/two/pack.zip");
+  archiveBytes["/two/pack.zip"] = std::nullopt;
+  archiveBytes["/one/pack.zip"] = 0;
+  rows = MakeStorageArchiveRows({a, loose, b}, archives, selection, {}, sizeOrder);
+  assert(rows[0].track.groupId == loose.groupId);
+  assert(rows[1].archivePath == "/one/pack.zip" && rows[2].archivePath == "/two/pack.zip");
+
   // Filtered batch actions never add hidden songs or count chart variants twice.
   auto child2 = child;
   child2.trackId = "chart-a-2";

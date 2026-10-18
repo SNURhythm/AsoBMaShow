@@ -7,15 +7,16 @@ unsigned StorageArchiveRow::IndentLevel() const {
 std::vector<StorageArchiveRow> MakeStorageArchiveRows(
     const std::vector<music_playlist::MusicTrack> &visible,
     const StorageGroupArchives &archives, const StorageGroupSelection &selection,
-    const std::set<std::filesystem::path> &expandedArchives) {
+    const std::set<std::filesystem::path> &expandedArchives, const StorageArchiveSizeLookup &sizeOrder) {
   struct Section {
     StorageArchiveRow header;
     std::vector<const music_playlist::MusicTrack *> tracks;
     std::set<std::string> visibleGroups;
+    std::optional<std::uint64_t> bytes;
   };
   std::vector<Section> sections;
   std::map<std::filesystem::path, std::size_t> positions;
-  // The first matching song places the section; songs keep their sorted order.
+  // Songs keep their sorted order. Section size ordering happens separately.
   for (const auto &track : visible) {
     const auto archive = archives.find(track.groupId);
     if (archive == archives.end()) {
@@ -38,6 +39,13 @@ std::vector<StorageArchiveRow> MakeStorageArchiveRows(
     auto &header = sections[position->second].header;
     ++header.songCount;
     if (selection.Contains(id)) ++header.selectedCount;
+  }
+  if (sizeOrder) {
+    for (auto &section : sections)
+      section.bytes = sizeOrder(section.header.archivePath, section.tracks.front()->groupId);
+    std::stable_sort(sections.begin(), sections.end(), [](const auto &a, const auto &b) {
+      return a.bytes > b.bytes; // Unknown sizes follow known sizes, including zero.
+    });
   }
   std::vector<StorageArchiveRow> result;
   std::size_t rowCount = 0;

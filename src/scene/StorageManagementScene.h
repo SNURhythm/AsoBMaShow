@@ -33,6 +33,7 @@ private:
   void BuildView();
   void Layout();
   void ReloadGroups(bool invalidateAll = false);
+  void RefreshArchiveSizes();
   void MeasureGroups(const std::set<std::string> &);
   void ApplyReport(const storage_management::StorageReport &);
   void RefreshRows();
@@ -51,6 +52,7 @@ private:
   GroupedChartListModel model_;
   StorageGroupSelection selection_;
   StorageGroupArchives groupArchives_;
+  std::map<std::filesystem::path, std::optional<std::uint64_t>> archiveSizes_;
   std::vector<Track> groups_;
   std::set<std::string> expanded_;
   std::set<std::filesystem::path> expandedArchives_;
