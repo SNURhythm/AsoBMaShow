@@ -202,6 +202,7 @@ void crossStreamTimelineTests() {
   require(rejectsRange([&] { rescalePacketTimestamps(remux, {1, 1}, AV_TIME_BASE_Q); }),
           "remux rescaling rejects timestamps that cannot fit the muxer clock");
   Scan source, output;
+  output.videoDisposition = AV_DISPOSITION_DEFAULT;
   source.video.timeBase = output.video.timeBase = AV_TIME_BASE_Q;
   source.audio.timeBase = AV_TIME_BASE_Q;
   source.video.add(maximum - 2, 1);
@@ -731,6 +732,7 @@ void decodedColorTests() {
               fallback.colorPrimaries == AVCOL_PRI_BT470BG && fallback.colorTransfer == AVCOL_TRC_GAMMA28,
           "unspecified decoded colors use stream metadata");
   Scan output;
+  output.videoDisposition = AV_DISPOSITION_DEFAULT;
   observeVideoColor(output, params, *decoded);
   observed.video = {}; observed.video.timeBase = output.video.timeBase = {1, 25};
   observed.video.add(0, 1); output.video.add(0, 1);
@@ -903,6 +905,97 @@ void truncatedAsfTests() {
   require(result.reason.code == StorageReason::ValidationFailed && !std::filesystem::exists(output),
           "packet-aligned ASF truncation cannot pass through a decoder's clean early EOF");
 }
+void remuxVideoDisposition(const std::filesystem::path &source, const std::filesystem::path &destination,
+                           const char *container, int disposition, int audioDisposition = AV_DISPOSITION_DEFAULT) {
+  struct Resources {
+    AVFormatContext *input = nullptr, *output = nullptr;
+    AVPacket *packet = av_packet_alloc();
+    ~Resources() {
+      av_packet_free(&packet); avformat_close_input(&input);
+      if (output) { if (output->pb) avio_closep(&output->pb); avformat_free_context(output); }
+    }
+  } resources;
+  require(avformat_open_input(&resources.input, source.string().c_str(), nullptr, nullptr) >= 0 &&
+              avformat_find_stream_info(resources.input, nullptr) >= 0 && resources.input->nb_streams <= 2,
+          "open disposition fixture");
+  require(avformat_alloc_output_context2(&resources.output, nullptr, container, destination.string().c_str()) >= 0,
+          "create disposition fixture container");
+  for (unsigned i = 0; i < resources.input->nb_streams; ++i) {
+    const auto input = resources.input->streams[i];
+    const auto output = avformat_new_stream(resources.output, nullptr);
+    require(output && avcodec_parameters_copy(output->codecpar, input->codecpar) >= 0,
+            "copy disposition fixture codec parameters");
+    output->codecpar->codec_tag = 0; output->time_base = input->time_base;
+    output->disposition = input->codecpar->codec_type == AVMEDIA_TYPE_VIDEO ? disposition : audioDisposition;
+  }
+  require(avio_open(&resources.output->pb, destination.string().c_str(), AVIO_FLAG_WRITE) >= 0 &&
+              avformat_write_header(resources.output, nullptr) >= 0, "write disposition fixture header");
+  int status;
+  while ((status = av_read_frame(resources.input, resources.packet)) >= 0) {
+    const auto input = resources.input->streams[resources.packet->stream_index];
+    const auto output = resources.output->streams[resources.packet->stream_index];
+    av_packet_rescale_ts(resources.packet, input->time_base, output->time_base);
+    require(av_interleaved_write_frame(resources.output, resources.packet) >= 0, "remux disposition fixture packet");
+    av_packet_unref(resources.packet);
+  }
+  require(status == AVERROR_EOF && av_write_trailer(resources.output) >= 0, "complete disposition fixture");
+}
+void videoDispositionTests() {
+  storage_test::TempDirectory temp;
+  storage_test::VideoFixture fixture; fixture.lossless = fixture.millisecondContainer = fixture.audio = true;
+  fixture.width = fixture.height = 64;
+  const auto plain = temp.root / "plain.webm", source = temp.root / "flags.webm", output = temp.root / "flags.mp4";
+  storage_test::makeVideo(plain, fixture);
+  StoragePolicy policy; policy.bga = BgaAction::CompressH264;
+  const int flags = AV_DISPOSITION_DEFAULT | AV_DISPOSITION_FORCED | AV_DISPOSITION_COMMENT | AV_DISPOSITION_DUB;
+  const int audioFlags = AV_DISPOSITION_DEFAULT | AV_DISPOSITION_COMMENT | AV_DISPOSITION_DUB;
+  remuxVideoDisposition(plain, source, "matroska", flags, audioFlags);
+  {
+    Input input(source);
+    require(input.format->streams[input.video]->disposition == flags, "source fixture carries requested video dispositions");
+    require(input.audio >= 0 && input.format->streams[input.audio]->disposition == audioFlags,
+            "source fixture carries requested audio dispositions");
+  }
+  const auto converted = EncodeBga(candidate(source), policy, output, {}, {});
+  require(converted.outcome == FileOutcome::Converted, "representable video dispositions permit compression");
+  {
+    Input input(output);
+    require(input.format->streams[input.video]->disposition == flags, "MP4 preserves forced, default, commentary and dub video flags");
+    require(input.audio >= 0 && input.format->streams[input.audio]->disposition == audioFlags,
+            "MP4 preserves embedded audio dispositions when converting PCM to AAC");
+  }
+  policy.maxFps = 15;
+  const auto remuxed = temp.root / "remuxed.mp4";
+  require(EncodeBga(candidate(output), policy, remuxed, {}, {}).outcome == FileOutcome::Converted &&
+              storage_test::audioPackets(output) == storage_test::audioPackets(remuxed),
+          "compatible flagged audio is remuxed without changing its packets");
+  {
+    Input input(remuxed);
+    require(input.format->streams[input.video]->disposition == flags &&
+                input.audio >= 0 && input.format->streams[input.audio]->disposition == audioFlags,
+            "video and audio dispositions survive compatible-audio remux");
+  }
+  policy.maxFps = 0;
+  std::filesystem::remove(output);
+  for (bool video : {true, false}) {
+    const auto corrupted = EncodeBga(candidate(source), policy, output, {}, [&](const StorageProgress &progress) {
+      if (progress.phase != StoragePhase::Verify) return;
+      const auto replacement = temp.root / "no-flags.mp4";
+      remuxVideoDisposition(output, replacement, "mp4", video ? AV_DISPOSITION_DEFAULT : flags,
+                            video ? audioFlags : AV_DISPOSITION_DEFAULT);
+      std::filesystem::remove(output); std::filesystem::rename(replacement, output);
+    });
+    require(corrupted.reason.code == StorageReason::ValidationFailed && !std::filesystem::exists(output),
+            "decode-back rejects dropped video or audio dispositions despite unchanged media packets");
+  }
+  for (bool video : {true, false}) {
+    remuxVideoDisposition(plain, source, "matroska", AV_DISPOSITION_DEFAULT | (video ? AV_DISPOSITION_ORIGINAL : 0),
+                          AV_DISPOSITION_DEFAULT | (video ? 0 : AV_DISPOSITION_ORIGINAL));
+    const auto unsupported = EncodeBga(candidate(source), policy, output, {}, {});
+    require(unsupported.reason.code == StorageReason::UnsupportedFormat && !std::filesystem::exists(output),
+            "video or audio dispositions that MP4 cannot represent preserve the original file");
+  }
+}
 void videoTests() {
   storage_test::TempDirectory temp;
   StoragePolicy policy; policy.bga = BgaAction::CompressH264;
@@ -1062,7 +1155,7 @@ int main() {
   int failures = 0;
   for (const auto test : {decodedDisplayTransformTests, decodedColorTests, decodedAudioFormatTests, timelineTests,
                           declaredVideoTimelineTests, crossStreamTimelineTests, changingAspectRatioTests, quantizedAudioTimelineTests, asfTimelineTests,
-                          truncatedAsfTests, existingBgaTests, existingAudioTests, audioTests, videoTests}) {
+                          truncatedAsfTests, existingBgaTests, existingAudioTests, audioTests, videoDispositionTests, videoTests}) {
     try { test(); }
     catch (const std::exception &error) { std::cerr << error.what() << '\n'; ++failures; }
   }

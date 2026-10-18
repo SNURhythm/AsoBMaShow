@@ -308,6 +308,7 @@ std::int64_t validateAsfContainer(const fs::path &path, const Checkpoint &check)
 struct Scan {
   VideoDescription description;
   Timeline video, audio;
+  int videoDisposition = 0, audioDisposition = 0;
   Frame audioFormat;
   std::int64_t originMicros = 0;
   AVColorRange colorRange = AVCOL_RANGE_UNSPECIFIED;
@@ -364,6 +365,18 @@ bool audioCanRemux(AVCodecID codec) {
   return codec == AV_CODEC_ID_AAC || codec == AV_CODEC_ID_MP3 || codec == AV_CODEC_ID_MP2 ||
          codec == AV_CODEC_ID_ALAC || codec == AV_CODEC_ID_AC3 || codec == AV_CODEC_ID_EAC3;
 }
+void validateDisposition(int disposition) {
+  // MP4 track-kind tags combine each accessibility pair. A lone flag would
+  // gain a different meaning on decode-back, so only accept complete pairs.
+  constexpr int captions = AV_DISPOSITION_HEARING_IMPAIRED | AV_DISPOSITION_CAPTIONS;
+  constexpr int descriptions = AV_DISPOSITION_VISUAL_IMPAIRED | AV_DISPOSITION_DESCRIPTIONS;
+  constexpr int supported = AV_DISPOSITION_DEFAULT | AV_DISPOSITION_FORCED | AV_DISPOSITION_COMMENT |
+                            AV_DISPOSITION_DUB | captions | descriptions;
+  if ((disposition & ~supported) ||
+      ((disposition & captions) && (disposition & captions) != captions) ||
+      ((disposition & descriptions) && (disposition & descriptions) != descriptions))
+    unsupported("Stream disposition cannot be preserved in MP4");
+}
 Scan scan(const fs::path &path, const Checkpoint &check, bool existingDestination = false) {
   checkpoint(check);
   Input input(path);
@@ -376,6 +389,8 @@ Scan scan(const fs::path &path, const Checkpoint &check, bool existingDestinatio
   auto &description = result.description;
   if (!existingDestination) description.codecs = ProbeStorageCodecs();
   const auto video = input.format->streams[input.video];
+  result.videoDisposition = video->disposition;
+  if (!existingDestination) validateDisposition(result.videoDisposition);
   const auto params = video->codecpar;
   description.width = params->width; description.height = params->height;
   description.sampleAspectRatio = av_guess_sample_aspect_ratio(input.format, video, nullptr);
@@ -402,6 +417,8 @@ Scan scan(const fs::path &path, const Checkpoint &check, bool existingDestinatio
   }
   if (input.audio >= 0) {
     const auto audio = input.format->streams[input.audio];
+    result.audioDisposition = audio->disposition;
+    if (!existingDestination) validateDisposition(result.audioDisposition);
     description.hasAudio = true; result.audio.timeBase = audio->time_base;
     description.audioChannels = audio->codecpar->ch_layout.nb_channels;
     description.audioSampleRate = audio->codecpar->sample_rate;
@@ -601,6 +618,7 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
   videoStream->time_base = plan.timeBase; videoStream->sample_aspect_ratio = plan.sampleAspectRatio;
   const auto sourceVideo = input.format->streams[input.video];
   av_dict_copy(&videoStream->metadata, sourceVideo->metadata, 0);
+  videoStream->disposition = sourceVideo->disposition;
   av_dict_copy(&output.format->metadata, input.format->metadata, 0);
   if (const auto matrix = av_packet_side_data_get(sourceVideo->codecpar->coded_side_data,
                                                  sourceVideo->codecpar->nb_coded_side_data, AV_PKT_DATA_DISPLAYMATRIX)) {
@@ -769,6 +787,11 @@ void verify(const Scan &source, const Scan &output, const VideoCompressionPlan &
   // a correctly tagged limited-range encode may decode as unspecified.
   const auto outputRange = description.h264 && output.colorRange == AVCOL_RANGE_UNSPECIFIED ? AVCOL_RANGE_MPEG : output.colorRange;
   auto invalid = [] { throw Failure{StorageReason::ValidationFailed, "MP4 decode-back geometry, content or timeline validation failed"}; };
+  // The MP4 muxer enables the sole track of each type, adding DEFAULT even
+  // when the source container omitted it. No other disposition may change.
+  if (output.videoDisposition != (source.videoDisposition | AV_DISPOSITION_DEFAULT) ||
+      (description.hasAudio && output.audioDisposition != (source.audioDisposition | AV_DISPOSITION_DEFAULT)))
+    throw Failure{StorageReason::ValidationFailed, "MP4 decode-back stream disposition validation failed"};
   if (!description.h264 || description.width != plan.width || description.height != plan.height ||
       av_cmp_q(description.sampleAspectRatio, plan.sampleAspectRatio) || description.rotation != plan.rotation ||
       description.alpha || description.hdr || description.interlaced || description.unsupportedContent ||
