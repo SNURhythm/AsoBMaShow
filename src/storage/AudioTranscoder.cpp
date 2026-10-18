@@ -187,6 +187,15 @@ StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, SN
   if (declaredEnd != bytes && declaredEnd != bytes + 1) return sizeMismatch;
   const std::uint64_t end = bytes;
   foreign.sourceEnd = end;
+  int sampleBytes = 0;
+  switch (info.format & SF_FORMAT_SUBMASK) {
+  case SF_FORMAT_PCM_U8: case SF_FORMAT_PCM_S8: sampleBytes = 1; break;
+  case SF_FORMAT_PCM_16: sampleBytes = 2; break;
+  case SF_FORMAT_PCM_24: sampleBytes = 3; break;
+  case SF_FORMAT_PCM_32: case SF_FORMAT_FLOAT: sampleBytes = 4; break;
+  case SF_FORMAT_DOUBLE: sampleBytes = 8; break;
+  }
+  const int frameBytes = sampleBytes * info.channels;
   std::uint64_t offset = 12;
   bool data = false;
   bool oversized = false;
@@ -198,14 +207,15 @@ StorageDiagnostic inspectContainer(const fs::path &path, const SF_INFO &info, SN
     offset += 8;
     const std::string_view type(reinterpret_cast<const char *>(header.data()), 4);
     std::uint64_t padded = std::uint64_t(length) + (length & 1);
+    // libsndfile rounds partial PCM frames down without reporting an error.
+    // Check the declared payload even when RIFF bounds and padding are valid.
+    if (type == "data" && frameBytes > 0 &&
+        (length % frameBytes || length / frameBytes != info.frames))
+      return {StorageReason::ValidationFailed, "WAV data does not contain complete declared native audio frames"};
     if (type == "data" && (length & 1) && length == end - offset) {
       // Some WAV writers omit the final alignment byte. Accept only a complete
       // terminal PCM payload, never missing samples or an unpadded middle chunk.
-      const int subtype = info.format & SF_FORMAT_SUBMASK;
-      const int sampleBytes = subtype == SF_FORMAT_PCM_U8 || subtype == SF_FORMAT_PCM_S8 ? 1
-          : subtype == SF_FORMAT_PCM_24 ? 3 : 0;
-      const int frameBytes = sampleBytes * info.channels;
-      if (frameBytes <= 0 || length % frameBytes || length / frameBytes != info.frames)
+      if (frameBytes <= 0)
         return {StorageReason::ValidationFailed, "Unpadded WAV data does not contain complete declared PCM frames"};
       foreign.unpaddedData = true;
       padded = length;

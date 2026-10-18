@@ -307,6 +307,31 @@ void audioTests() {
       require(std::filesystem::exists(source), "encoding never retires source");
     }
   }
+  const auto rejectPartialFrame = [&](const std::filesystem::path &source, int missingBytes,
+                                       const StoragePolicy &selectedPolicy) {
+    std::ifstream input(source, std::ios::binary);
+    std::string bytes((std::istreambuf_iterator<char>(input)), {});
+    const auto data = bytes.find("data");
+    require(data != std::string::npos && data + 8 < bytes.size(), "fixture has PCM data");
+    const auto length = bytes.size() - data - 8 - missingBytes;
+    bytes.resize(data + 8 + length);
+    if (length & 1) bytes += '\0';
+    for (int i = 0; i < 4; ++i) {
+      bytes[data + 4 + i] = static_cast<char>(length >> (8 * i));
+      bytes[4 + i] = static_cast<char>((bytes.size() - 8) >> (8 * i));
+    }
+    const auto malformed = temp.root / "incomplete-frame.wav";
+    const auto output = temp.root / "incomplete-frame-output";
+    temp.write(malformed, bytes);
+    require(EncodeAudio(candidate(malformed), selectedPolicy, output, {}, {}).reason.code ==
+                StorageReason::ValidationFailed && !std::filesystem::exists(output),
+            "complete RIFF bounds and padding cannot hide an incomplete native audio frame");
+    std::ifstream retained(malformed, std::ios::binary);
+    require(std::string((std::istreambuf_iterator<char>(retained)), {}) == bytes,
+            "incomplete PCM frames retain every original byte");
+  };
+  rejectPartialFrame(temp.root / "16-2.wav", 2, policy); // Even payload: final left channel only.
+  rejectPartialFrame(temp.root / "16-1.wav", 1, policy); // Odd payload with a complete RIFF pad.
   for (int bits : {8, 24}) {
     // Older WAV writers omit the terminal pad byte after an odd PCM payload.
     // Start with known PCM and shorten the declared payload by one full sample.
@@ -377,6 +402,10 @@ void audioTests() {
     writeAudio(source, SF_FORMAT_WAV | subtype, 1, samples(8192, 1, 24));
     require(EncodeAudio(candidate(source), policy, temp.root / "unsupported.flac", {}, {}).reason.code ==
                 StorageReason::UnsupportedFormat, "lossless mode never quantizes float or 32-bit PCM");
+    if (subtype == SF_FORMAT_PCM_32) {
+      StoragePolicy lossy; lossy.audio = AudioAction::LossyVorbis;
+      rejectPartialFrame(source, 2, lossy);
+    }
   }
   const auto tagged = temp.root / "tagged.wav";
   const auto taggedOutput = temp.root / "tagged.flac";
