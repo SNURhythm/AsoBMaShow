@@ -2,12 +2,13 @@
 
 #include "../BmsChartFile.h"
 #include "../CanonicalDigest.h"
+#include "../RAII.h"
 #include "../bms_parser.hpp"
+#include "../sqlite3.h"
 
 #include <algorithm>
 #include <array>
 #include <fstream>
-#include <map>
 #include <thread>
 #include <cctype>
 #include <limits>
@@ -87,12 +88,27 @@ BmsSearchPendingArtifact extractedArtifact(
               request.downloadRoot / "_archives" / request.archiveName};
 }
 
-// Verify every chart's path and content, including sabuns unrelated to the
-// selected hash. Stream hashes so package size does not bound working memory.
-using ChartIdentities = std::map<std::filesystem::path, std::array<unsigned char, 32>>;
-std::optional<ChartIdentities> chartIdentities(const std::filesystem::path &root,
-                                              const storage_management::Checkpoint &checkpoint) {
-  ChartIdentities result;
+// SQLite owns the private temporary file and removes it on close. Both hashing
+// and the identity set stay bounded; no chart-count-sized map survives a pass.
+UniqueResource<sqlite3, sqlite3_close> chartIdentityDatabase() {
+  sqlite3 *raw = nullptr;
+  const auto opened = sqlite3_open_v2("", &raw, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX, nullptr);
+  UniqueResource<sqlite3, sqlite3_close> database(raw);
+  if (opened != SQLITE_OK || sqlite3_exec(raw,
+      "PRAGMA temp_store=FILE; PRAGMA cache_size=-1024; PRAGMA cache_spill=ON;"
+      "PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;"
+      "CREATE TABLE charts(path BLOB PRIMARY KEY, digest BLOB NOT NULL) WITHOUT ROWID; BEGIN;",
+      nullptr, nullptr, nullptr) != SQLITE_OK)
+    throw std::runtime_error("Cannot create chart identity index");
+  return database;
+}
+bool chartIdentities(const std::filesystem::path &root,
+                     const storage_management::Checkpoint &checkpoint, sqlite3 *database, bool verify) {
+  sqlite3_stmt *raw = nullptr;
+  const auto prepared = sqlite3_prepare_v2(database, verify
+      ? "DELETE FROM charts WHERE path=? AND digest=?" : "INSERT INTO charts VALUES(?,?)", -1, &raw, nullptr);
+  UniqueResource<sqlite3_stmt, sqlite3_finalize> statement(raw);
+  if (prepared != SQLITE_OK) return false;
   std::error_code error;
   if (!std::filesystem::is_directory(std::filesystem::symlink_status(root, error)) || error) return {};
   std::filesystem::recursive_directory_iterator it(root, error), end;
@@ -113,10 +129,19 @@ std::optional<ChartIdentities> chartIdentities(const std::filesystem::path &root
     }
     if (!input.eof()) return {};
     std::array<unsigned char, 32> digest{}; hash.final(digest.data());
-    result.emplace(it->path().lexically_relative(root), digest);
+    const auto path = it->path().lexically_relative(root).generic_u8string();
+    if (sqlite3_bind_blob64(raw, 1, path.data(), path.size(), SQLITE_TRANSIENT) != SQLITE_OK ||
+        sqlite3_bind_blob(raw, 2, digest.data(), digest.size(), SQLITE_TRANSIENT) != SQLITE_OK ||
+        sqlite3_step(raw) != SQLITE_DONE || (verify && sqlite3_changes(database) != 1) ||
+        sqlite3_reset(raw) != SQLITE_OK || sqlite3_clear_bindings(raw) != SQLITE_OK) return false;
   }
   if (error || !checkpoint()) return {};
-  return result;
+  if (!verify) return true;
+  // A changed/added chart fails its DELETE; any row left here is a removed chart.
+  statement.reset(); raw = nullptr;
+  const auto remaining = sqlite3_prepare_v2(database, "SELECT 1 FROM charts LIMIT 1", -1, &raw, nullptr);
+  statement.reset(raw);
+  return remaining == SQLITE_OK && sqlite3_step(raw) == SQLITE_DONE;
 }
 
 } // namespace
@@ -377,8 +402,9 @@ bool processDownloadedArchive(
     try {
       if (!dependencies.optimizeExtracted)
         return failOptimization("library.find_bms.storage.unavailable", "Storage optimization is unavailable.");
-      const auto before = chartIdentities(request.attempt.extractedPath, checkpoint);
-      if (!before) return failOptimization("library.find_bms.storage.identity_failed", "Could not verify downloaded chart identities.");
+      const auto identities = chartIdentityDatabase();
+      if (!chartIdentities(request.attempt.extractedPath, checkpoint, identities.get(), false))
+        return failOptimization("library.find_bms.storage.identity_failed", "Could not verify downloaded chart identities.");
       result.storageReport = dependencies.optimizeExtracted(request.attempt.extractedPath,
           request.options.storagePolicy, checkpoint, storageProgress);
       const auto &report = *result.storageReport;
@@ -387,8 +413,7 @@ bool processDownloadedArchive(
       if (report.recoveryRequired || report.cleanupPending)
         return failOptimization("library.find_bms.storage.recovery_failed", "Storage cleanup did not finish; downloaded files were not installed.");
       storageProgress({.phase = storage_management::StoragePhase::Verify});
-      const auto after = chartIdentities(request.attempt.extractedPath, checkpoint);
-      if (!after || *before != *after)
+      if (!chartIdentities(request.attempt.extractedPath, checkpoint, identities.get(), true))
         return failOptimization("library.find_bms.storage.identity_failed", "Downloaded chart identities changed; files were not installed.");
       storageProgress({.phase = storage_management::StoragePhase::Commit});
       if (!checkpoint() || reportCancelled(cancelled, result)) {

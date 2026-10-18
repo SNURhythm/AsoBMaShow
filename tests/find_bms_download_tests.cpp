@@ -21,10 +21,26 @@
 #include <cstdlib>
 #include <new>
 #include <iostream>
+#if defined(__APPLE__)
+#include <malloc/malloc.h>
+#elif defined(__linux__)
+#include <malloc.h>
+#endif
 
 namespace verification_allocation_guard {
 thread_local bool enabled = false;
 thread_local std::size_t rejected = 0;
+thread_local std::int64_t liveBytes = 0, baselineBytes = 0;
+thread_local bool boundLiveBytes = false;
+std::size_t allocationSize(void *memory) {
+#if defined(__APPLE__)
+  return memory ? malloc_size(memory) : 0;
+#elif defined(__linux__)
+  return memory ? malloc_usable_size(memory) : 0;
+#else
+  return 0;
+#endif
+}
 }
 
 void *operator new(std::size_t size) {
@@ -32,15 +48,26 @@ void *operator new(std::size_t size) {
     verification_allocation_guard::rejected = size;
     throw std::bad_alloc();
   }
-  if (void *memory = std::malloc(size ? size : 1)) return memory;
+  if (void *memory = std::malloc(size ? size : 1)) {
+    using namespace verification_allocation_guard;
+    const auto allocated = static_cast<std::int64_t>(allocationSize(memory));
+    if (boundLiveBytes && liveBytes + allocated > baselineBytes + 64 * 1024) {
+      std::free(memory); throw std::bad_alloc();
+    }
+    liveBytes += allocated;
+    return memory;
+  }
   throw std::bad_alloc();
 }
 
 void *operator new[](std::size_t size) { return ::operator new(size); }
-void operator delete(void *memory) noexcept { std::free(memory); }
-void operator delete[](void *memory) noexcept { std::free(memory); }
-void operator delete(void *memory, std::size_t) noexcept { std::free(memory); }
-void operator delete[](void *memory, std::size_t) noexcept { std::free(memory); }
+void operator delete(void *memory) noexcept {
+  verification_allocation_guard::liveBytes -= verification_allocation_guard::allocationSize(memory);
+  std::free(memory);
+}
+void operator delete[](void *memory) noexcept { ::operator delete(memory); }
+void operator delete(void *memory, std::size_t) noexcept { ::operator delete(memory); }
+void operator delete[](void *memory, std::size_t) noexcept { ::operator delete(memory); }
 
 namespace {
 
@@ -854,10 +881,10 @@ asobmshow::bms_search::DownloadedArchiveWorkflowRequest workflowRequest(
 void testWorkflowStoragePolicyAndCommitBoundaries() {
   using namespace asobmshow::bms_search;
   using namespace storage_management;
-  enum class Case { NoOp, Success, Warning, ArchiveMismatch, ExtractedMismatch,
+  enum class Case { NoOp, Success, BoundedCharts, Warning, ArchiveMismatch, ExtractedMismatch,
                     Inconclusive, ChangedChart, AddedChart, RemovedChart,
                     CancelEncoding, CancelBeforeCommit, PauseCancel, Recovery, Cleanup };
-  for (auto scenario : {Case::NoOp, Case::Success, Case::Warning, Case::ArchiveMismatch,
+  for (auto scenario : {Case::NoOp, Case::Success, Case::BoundedCharts, Case::Warning, Case::ArchiveMismatch,
       Case::ExtractedMismatch, Case::Inconclusive, Case::ChangedChart, Case::AddedChart,
       Case::RemovedChart, Case::CancelEncoding, Case::CancelBeforeCommit, Case::PauseCancel, Case::Recovery, Case::Cleanup}) {
     CleanupPaths cleanup;
@@ -885,10 +912,18 @@ void testWorkflowStoragePolicyAndCommitBoundaries() {
         writeText(root / "chart.bms", "#TITLE Original\n");
         writeText(root / "nested/sabun.bme", "#TITLE Sabun\n");
         writeText(root / "nested/unreferenced.wav", "media");
+        if (scenario == Case::BoundedCharts)
+          for (int i = 0; i < 512; ++i) writeText(root / "nested" / (std::to_string(i) + ".bms"), "#TITLE Small chart\n");
         return true;
       },
       .decideExtracted = [&](const auto &, const auto &, auto, auto) {
         steps.push_back("verify");
+        if (scenario == Case::BoundedCharts) {
+          // Limit live C++ allocations, not individual reads; many small map
+          // nodes must not evade the budget. SQLite has its own bounded cache.
+          verification_allocation_guard::baselineBytes = verification_allocation_guard::liveBytes;
+          verification_allocation_guard::boundLiveBytes = true;
+        }
         return ExtractedArchiveDecision{.disposition = scenario == Case::ExtractedMismatch
             ? ExtractedArchiveDisposition::HashMismatch : scenario == Case::Inconclusive
             ? ExtractedArchiveDisposition::Inconclusive : ExtractedArchiveDisposition::Match,
@@ -928,9 +963,11 @@ void testWorkflowStoragePolicyAndCommitBoundaries() {
           if (scenario == Case::CancelBeforeCommit && progress.storageProgress->phase == StoragePhase::Commit)
             cancelled = true;
         }, result, dependencies);
+    verification_allocation_guard::boundLiveBytes = false;
     assert(request.options.skipUnarchivingForNonSolidArchives); // effective override never persists
     const bool mismatch = scenario == Case::ArchiveMismatch || scenario == Case::ExtractedMismatch;
-    const bool success = scenario == Case::NoOp || scenario == Case::Success || scenario == Case::Warning;
+    const bool success = scenario == Case::NoOp || scenario == Case::Success || scenario == Case::BoundedCharts || scenario == Case::Warning;
+    if (processed != (success || mismatch)) std::cerr << "storage workflow case " << static_cast<int>(scenario) << ": " << result.message << '\n';
     assert(processed == (success || mismatch));
     assert(committed == success);
     assert(optimized == !(scenario == Case::NoOp || mismatch || scenario == Case::Inconclusive || scenario == Case::PauseCancel));

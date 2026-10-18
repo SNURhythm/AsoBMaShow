@@ -113,6 +113,8 @@ can also be updated in place:
 
 Encrypted/split ZIPs, links, overlapping or ambiguous entries, compressed TARs,
 GNU/PAX/sparse TAR records, RAR and 7z are not supported by the in-place updater.
+ZIP padding or extra records between local entries or before the central directory
+are rejected before mutation; leading prefixes remain supported.
 Reading these formats elsewhere in the app remains separate from update support.
 Android SAF/content-provider references require the existing local import flow.
 Symlinks, hard links, special files and unsafe filesystem paths are rejected.
@@ -218,6 +220,10 @@ A non-no-op enabled policy forces extraction for that attempt, even when
 Keep/Keep does not force extraction. Processing happens after chart verification,
 inside private extracted staging, before package promotion and library registration.
 All chart paths and content are verified unchanged again before commit.
+This comparison streams hashes into a private temporary SQLite identity table
+with a 1 MiB page-cache target and disk spilling, then checks and removes each
+matching row. Changed, added or missing charts prevent installation. The table
+is removed when verification ends, including cancellation or failure.
 
 Ordinary per-file skips/failures keep originals and allow a verified download to
 finish with a warning summary. Cancellation, unsettled recovery or cleanup state

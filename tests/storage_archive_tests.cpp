@@ -309,7 +309,7 @@ void archiveTraversal(std::size_t count, bool enforceBudget) {
 void archiveTraversalUsesOrderedMetadataReads() { archiveTraversal(32, true); }
 void archiveDescriptorBoundaries() {
   using storage_management::archive_detail::put;
-  for (bool wide : {false, true}) for (bool signedDescriptor : {false, true}) for (int damage = 0; damage < 3; ++damage) {
+  for (bool wide : {false, true}) for (bool signedDescriptor : {false, true}) for (int damage = 0; damage < 5; ++damage) {
     storage_test::TempDirectory temp;
     const auto path = temp.root / "descriptors.zip";
     std::string contents;
@@ -333,6 +333,8 @@ void archiveDescriptorBoundaries() {
         if (damage == 2) descriptor[prefix] ^= 1;
       }
       contents += local + name + extra + payload + descriptor;
+      if ((damage == 3 && name == "movie.avi") || (damage == 4 && name == "chart.bms"))
+        contents += "padding or extra archive data";
       std::string row(46, '\0'); put(row, 0, 0x02014b50, 4); put(row, 4, 45, 2); put(row, 6, wide ? 45 : 20, 2);
       put(row, 8, 8, 2); put(row, 16, crc, 4); put(row, 20, payload.size(), 4); put(row, 24, payload.size(), 4);
       put(row, 28, name.size(), 2); put(row, 42, offset, 4); central.push_back(row + name);
@@ -359,7 +361,7 @@ void archiveDescriptorBoundaries() {
     if (damage) {
       std::ifstream input(path, std::ios::binary); const std::string after((std::istreambuf_iterator<char>(input)), {});
       require(report.failed == 1 && !report.recoveryRequired && after == contents,
-          "truncated and corrupt descriptors reject Apply before archive mutation");
+          "invalid descriptors and unmodeled ZIP gaps reject Apply before archive mutation");
     } else {
       const auto remaining = readArchive(path);
       require(report.deleted == 1 && !report.failed && remaining.size() == 1 && remaining.at("chart.bms") == files.back().second,

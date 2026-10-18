@@ -85,6 +85,8 @@ void thousandArchiveGroupsVisitIndexOnce() {
           "one archive pass computes implicit, nested and duplicate folder sizes");
   require(metrics.archiveIndexVisits == 1 && metrics.archiveEntries == 2000 && metrics.metadataReads == 0,
           "thousands of groups share one archive index visit without file extraction");
+  require(metrics.peakArchiveAggregationRecords <= request.groups.size(),
+          "archive aggregation retains only selected rows, not every encountered directory");
   require(archive_file::residentArchiveIndexCountForTesting() == 0, "storage-only scan does not accumulate resident indexes");
 }
 void archiveRootsAreSourceScoped() {

@@ -37,6 +37,7 @@ void add(StorageScanTotals &to, const StorageScanTotals &value) {
 void add(StorageScanMetrics &to, const StorageScanMetrics &value) {
   add(to.entries, value.entries); add(to.metadataReads, value.metadataReads); add(to.rootIndexSteps, value.rootIndexSteps);
   add(to.archiveIndexVisits, value.archiveIndexVisits); add(to.archiveEntries, value.archiveEntries);
+  to.peakArchiveAggregationRecords = std::max(to.peakArchiveAggregationRecords, value.peakArchiveAggregationRecords);
 }
 // The coordinator exclusively owns this expendable queue and its statements.
 class PendingJobs {

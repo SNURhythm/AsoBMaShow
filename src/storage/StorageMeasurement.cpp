@@ -17,6 +17,7 @@ void add(std::uint64_t &value, std::uint64_t bytes) {
 void add(StorageScanMetrics &to, const StorageScanMetrics &from) {
   to.entries += from.entries; to.metadataReads += from.metadataReads; to.rootIndexSteps += from.rootIndexSteps;
   to.archiveIndexVisits += from.archiveIndexVisits; to.archiveEntries += from.archiveEntries;
+  to.peakArchiveAggregationRecords = std::max(to.peakArchiveAggregationRecords, from.peakArchiveAggregationRecords);
 }
 fs::path normalizedRoot(const FolderSelection &group) {
   auto path = group.chartPathFallback ? group.path.parent_path() : group.path;

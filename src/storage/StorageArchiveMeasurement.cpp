@@ -58,7 +58,10 @@ std::vector<GroupStorageMeasurement> MeasureArchiveGroups(const fs::path &archiv
   }
   if (validGroups.empty()) return result;
   const StoragePathIndex roots(innerRoots);
-  std::map<fs::path, StorageScanTotals> directories;
+  std::vector<bool> seen(validGroups.size());
+  for (std::size_t i = 0; i < innerRoots.size(); ++i) seen[i] = innerRoots[i].empty();
+  if (metrics) metrics->peakArchiveAggregationRecords = std::max<std::uint64_t>(
+      metrics->peakArchiveAggregationRecords, result.size());
   bool solid = false, cancelled = false;
   std::string error;
   bool completed = false;
@@ -68,30 +71,26 @@ std::vector<GroupStorageMeasurement> MeasureArchiveGroups(const fs::path &archiv
       if (check && !check()) { cancelled = true; return false; }
       if (metrics) ++metrics->archiveEntries;
       if (entry.solid) { solid = true; return false; }
-      if (entry.directory) { directories.try_emplace(entry.path); return true; }
-      auto &totals = directories[entry.path.parent_path()];
-      add(totals.bytes, entry.size); ++totals.files;
+      // Aggregate into selected rows as entries stream past. Unselected archive
+      // directories must not create a second, archive-sized metadata inventory.
       const auto kind = asobmshow::chart_assets::ClassifyMediaPath(entry.path);
       using asobmshow::chart_assets::MediaKind;
-      if (kind == MediaKind::Audio) add(totals.audio, entry.size);
-      if (kind == MediaKind::Video) add(totals.video, entry.size);
-      if (kind == MediaKind::Image) add(totals.image, entry.size);
+      for (const auto index : roots.Ancestors(entry.directory ? entry.path : entry.path.parent_path(),
+                                             metrics ? &metrics->rootIndexSteps : nullptr)) {
+        seen[index] = true;
+        if (entry.directory) continue;
+        auto &measurement = result[validGroups[index]];
+        add(*measurement.totalBytes, entry.size);
+        if (kind == MediaKind::Audio) add(measurement.audioBytes, entry.size);
+        if (kind == MediaKind::Video) add(measurement.videoBytes, entry.size);
+        if (kind == MediaKind::Image) add(measurement.imageBytes, entry.size);
+      }
       return true;
     }, &error, [&] {
       if (check && !check()) cancelled = true;
       return !cancelled;
     });
     if (completed) {
-      std::vector<bool> seen(validGroups.size());
-      for (std::size_t i = 0; i < innerRoots.size(); ++i) seen[i] = innerRoots[i].empty();
-      for (const auto &[directory, totals] : directories) {
-        for (const auto index : roots.Ancestors(directory, metrics ? &metrics->rootIndexSteps : nullptr)) {
-          seen[index] = true;
-          auto &measurement = result[validGroups[index]];
-          add(*measurement.totalBytes, totals.bytes); add(measurement.audioBytes, totals.audio);
-          add(measurement.videoBytes, totals.video); add(measurement.imageBytes, totals.image);
-        }
-      }
       for (std::size_t i = 0; i < seen.size(); ++i) if (!seen[i]) {
         auto &measurement = result[validGroups[i]];
         measurement.totalBytes.reset();

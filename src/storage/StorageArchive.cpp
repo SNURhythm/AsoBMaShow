@@ -262,10 +262,13 @@ void StorageArchive::ParseZip(Checkpoint check) {
   // the existing temporary manifest, with bounded memory and forward reads.
   Statement next(db->value, nextArchiveEntrySql);
   Statement update(db->value, "UPDATE entries SET span=?,data_offset=? WHERE id=?");
-  std::optional<std::uint64_t> previous;
+  std::optional<std::uint64_t> previous, previousEnd;
   while (auto record = nextArchiveEntry(next, previous)) {
     active(check);
     auto &entry = *record; previous = entry.offset;
+    // The leading prefix is preserved separately. Interior/trailing gaps have
+    // no journal records, so refuse them before any in-place mutation.
+    require(!previousEnd || entry.offset == *previousEnd, "ZIP gaps or overlapping records cannot be updated in place");
     require(plus(entry.offset, 30 + entry.rawName.size()) <= offset, "ZIP local header outside data area");
     const auto local = io.Read(entry.offset, 30 + entry.rawName.size());
     require(number(local, 0, 4) == 0x04034b50 && number(local, 6, 2) == entry.flags && number(local, 8, 2) == entry.method,
@@ -296,8 +299,10 @@ void StorageArchive::ParseZip(Checkpoint check) {
       finish += descriptorSize;
     } else require(localBytes == entry.bytes && localPacked == entry.packed && number(local, 14, 4) == entry.crc,
         "Inconsistent ZIP local sizes or checksum");
+    previousEnd = finish;
     update.reset(); update.bind(1, finish - entry.offset); update.bind(2, entry.dataOffset); update.bind(3, entry.id); update.step();
   }
+  require(!previousEnd || *previousEnd == offset, "ZIP trailing data cannot be updated in place");
 }
 void StorageArchive::ParseTar(Checkpoint check) {
   Statement insert(db->value, "INSERT INTO entries VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
