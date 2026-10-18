@@ -2166,6 +2166,7 @@
 {"storage.ui.pending", "Measuring…", "측정 중…", "測定中…", "正在测量…", "正在測量…"},
 {"storage.ui.preflight", "Eligible: {count} files · {bytes}\nSkipped files: {skipped}", "처리 가능: {count}개 파일 · {bytes}\n건너뛴 파일: {skipped}개", "対象: {count}ファイル · {bytes}\nスキップ: {skipped}ファイル", "可处理：{count} 个文件 · {bytes}\n跳过文件：{skipped}", "可處理：{count} 個檔案 · {bytes}\n略過檔案：{skipped}"},
 {"storage.ui.preparing_archive", "Preparing archive…", "압축 파일 준비 중…", "アーカイブを準備中…", "正在准备压缩包…", "正在準備壓縮檔…"},
+{"storage.ui.preparing", "Preparing storage…", "저장 공간 작업 준비 중…", "ストレージ処理を準備中…", "正在准备存储操作…", "正在準備儲存作業…"},
 {"storage.ui.quality", "Video quality", "영상 품질", "動画品質", "视频质量", "影片品質"},
 {"storage.ui.recovery_required", "Recovery is required. Restart the app before using this library.", "복구가 필요합니다. 라이브러리를 사용하기 전에 앱을 다시 시작하세요.", "復旧が必要です。このライブラリーを使用する前にアプリを再起動してください。", "需要恢复。请重启应用后再使用此曲库。", "需要復原。請重新啟動應用程式後再使用此曲庫。"},
 {"storage.ui.refresh", "Refresh sizes", "용량 새로 고침", "サイズを更新", "刷新大小", "重新整理大小"},

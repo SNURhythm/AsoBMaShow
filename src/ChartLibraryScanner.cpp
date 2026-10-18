@@ -105,9 +105,29 @@ std::optional<bool> isIncompleteUnzipFolder(
 std::optional<bool> hasIncompleteUnzipParent(
     std::filesystem::path path, ChartRepository::Session &session) {
   path = path.lexically_normal();
+  const auto pending = session.LoadUnzipRecovery();
+  if (!pending) return std::nullopt;
+  if (pending->empty()) return false;
+  // Only owned recovery outputs can hide charts. Do not probe marker names
+  // above a folder grant: sandboxed system ancestors may be inaccessible.
   while (!path.empty()) {
-    const auto incomplete = isIncompleteUnzipFolder(path, session);
-    if (!incomplete || *incomplete) return incomplete;
+    std::error_code error;
+    const bool accessible = std::filesystem::exists(path, error);
+    for (const auto &record : *pending) {
+      const auto relative = path.lexically_relative(record.outputFolder.lexically_normal());
+      const bool inside = !relative.empty() &&
+          std::none_of(relative.begin(), relative.end(), [](const auto &part) { return part == ".."; });
+      std::error_code equivalentError;
+      const bool same = accessible && !error &&
+          std::filesystem::equivalent(path, record.outputFolder, equivalentError);
+      if (!inside && !same) continue;
+      const bool matches = archive_file::unzipFolderHasMatchingIncompleteMarker(
+          record.outputFolder, record.archivePath, record.archiveKey, &equivalentError);
+      if (equivalentError && equivalentError != std::errc::no_such_file_or_directory &&
+          equivalentError != std::errc::not_a_directory) return std::nullopt;
+      if (matches) return true;
+    }
+    if (!accessible || error) break;
     const auto parent = path.parent_path();
     if (parent == path) break;
     path = parent;

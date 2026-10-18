@@ -10,7 +10,7 @@ storage_management::StorageReport optimizeExtractedDownload(
   OptimizationRequest request;
   request.policy = policy;
   request.inventory = {.groups = {{"download", root}}, .policy = policy, .isolatedStaging = true};
-  auto paths = MakeStoragePlatformPaths(root.parent_path(), {root}, TARGET_OS_IOS || TARGET_OS_SIMULATOR);
+  auto paths = MakeStoragePlatformPaths(root.parent_path(), {root}, TARGET_OS_ANDROID || TARGET_OS_IOS || TARGET_OS_SIMULATOR);
   return StorageOptimizer(DefaultOptimizerDependencies(std::move(paths))).Run(
       request, std::move(checkpoint), std::move(progress));
 }

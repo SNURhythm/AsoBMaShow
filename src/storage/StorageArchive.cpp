@@ -108,20 +108,39 @@ StorageArchiveEntry row(const Statement &q) {
       .name = q.bytes(10), .rawName = q.bytes(11), .metadata = q.bytes(12)};
 }
 }
-bool FindStorageArchive(const fs::path &virtualPath, fs::path &archive, fs::path &inner) {
+bool FindStorageArchive(const fs::path &virtualPath, fs::path &archive, fs::path &inner,
+    const std::vector<fs::path> &accessRoots) {
+  archive.clear(); inner.clear();
   if (!virtualPath.is_absolute()) return false;
-  fs::path prefix;
-  for (const auto &component : virtualPath) {
-    if (component == "..") return false;
-    prefix /= component;
+  for (const auto &component : virtualPath) if (component == "..") return false;
+  auto prefix = virtualPath.root_path();
+  bool anchored = accessRoots.empty();
+  for (auto root : accessRoots) {
+    if (!root.is_absolute() || root != root.lexically_normal()) continue;
+    while (root != root.root_path() && root.filename().empty()) root = root.parent_path();
+    if (IsWithinFolder(virtualPath, root) && (!anchored || IsWithinFolder(prefix, root))) {
+      prefix = std::move(root); anchored = true;
+    }
+  }
+  if (!anchored) return false;
+  const auto relative = virtualPath.lexically_relative(prefix);
+  auto component = relative.begin();
+  // A bare Windows drive name or UNC server is not a filesystem directory.
+  // Without a grant, start at the first full component below root_path().
+  if (accessRoots.empty()) {
+    if (component == relative.end() || *component == ".") return false;
+    prefix /= *component++;
+  }
+  for (;;) {
     std::error_code error; const auto status = fs::symlink_status(prefix, error);
     if (!error && fs::is_regular_file(status)) {
       archive = prefix; inner = virtualPath.lexically_relative(prefix);
       if (inner == ".") inner.clear(); return true;
     }
     if (error || (!fs::is_directory(status) && !fs::is_symlink(status))) return false;
+    if (component == relative.end()) return false;
+    prefix /= *component++;
   }
-  return false;
 }
 StorageArchive::StorageArchive(const fs::path &path, const fs::path &manifest,
     const std::vector<fs::path> &roots, Checkpoint check, bool resume)

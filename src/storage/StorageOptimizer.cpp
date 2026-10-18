@@ -116,17 +116,22 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
   std::atomic<bool> cancelled{false};
   Checkpoint checkpoint = [&] { if (!cancelled && check && !check()) cancelled = true; return !cancelled; };
   StorageProgress state;
+  state.phase = StoragePhase::Prepare;
+  if (request.preflight) state.filesTotal = request.preflight->eligibleCount;
   bool notified = false;
+  StoragePhase lastPhase = state.phase;
   std::chrono::steady_clock::time_point lastNotification;
   auto emit = [&](bool force = false) {
     if (!progress) return;
     const auto now = dependencies_.now();
-    if (force || !notified || now - lastNotification >= std::chrono::milliseconds(100)) {
-      notified = true; lastNotification = now; progress(state);
+    const bool preparing = state.phase == StoragePhase::Prepare || state.phase == StoragePhase::ArchivePrepare;
+    if (force || !notified || (preparing && state.phase != lastPhase) || now - lastNotification >= std::chrono::milliseconds(100)) {
+      notified = true; lastPhase = state.phase; lastNotification = now; progress(state);
     }
   };
   auto complete = [&] { report.cancelled |= cancelled; state.reclaimedBytes = report.reclaimedBytes; state.phase = StoragePhase::Complete; emit(true); return report; };
   try {
+    emit(true);
     auto lease = dependencies_.permit->Acquire(checkpoint);
     if (!lease) { report.cancelled = true; return complete(); }
     report = RecoverStorageArchives(dependencies_.paths, checkpoint);
@@ -144,6 +149,7 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
     }
     StorageScanDependencies scan;
     scan.limits.scratchRoot = dependencies_.paths.scanRoot;
+    if (!request.preflight) { state.phase = StoragePhase::Inventory; emit(true); }
     auto inventory = request.preflight ? std::move(*request.preflight) : BuildStoragePreflight(inventoryRequest, checkpoint, nullptr, scan);
     inventory.request.pathAccessRoots = inventoryRequest.pathAccessRoots;
     if (inventory.cancelled || !checkpoint()) return complete();

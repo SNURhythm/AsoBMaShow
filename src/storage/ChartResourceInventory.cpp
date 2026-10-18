@@ -81,6 +81,7 @@ bool IsSafeLocalPath(const fs::path &path, std::string &error, const std::vector
   // system parents. Validate the trusted boundary itself and every child below it.
   if (!accessRoots.empty() && !inspect(current)) return false;
   for (const auto &part : path.lexically_relative(current)) {
+    if (part == ".") continue;
     current /= part;
     if (!inspect(current)) return false;
   }

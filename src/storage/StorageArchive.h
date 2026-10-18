@@ -45,5 +45,5 @@ private:
   StorageArchiveFormat format_ = StorageArchiveFormat::Zip;
 };
 bool FindStorageArchive(const std::filesystem::path &virtualPath, std::filesystem::path &archive,
-    std::filesystem::path &inner);
+    std::filesystem::path &inner, const std::vector<std::filesystem::path> &accessRoots);
 }

@@ -37,6 +37,10 @@ void rootIndexUsesComponentsAndUnions() {
 void metadataVisitIsIndependentOfUnrelatedRoots() {
   TempDirectory temp;
   temp.write("group/a.wav", "12345");
+  std::string fileError;
+  const auto file = temp.root / "group/a.wav";
+  require(ReadFileIdentity(file, fileError, {file}) == ReadFileIdentity(file, fileError),
+      "an explicit file grant validates the file itself without appending a directory component");
   temp.write("group/sub/inside.wav");
   fs::create_hard_link(temp.root / "group/a.wav", temp.root / "group/hard.wav");
   fs::create_symlink(temp.root / "group/sub", temp.root / "group/link");

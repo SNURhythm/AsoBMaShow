@@ -24,13 +24,17 @@ std::vector<int> samples(int frames, int channels, int bits) {
   return result;
 }
 void writeAudio(const std::filesystem::path &path, int format, int channels,
-                const std::vector<int> &pcm, bool loop = false, bool rearChannels = false) {
+                const std::vector<int> &pcm, bool loop = false, bool rearChannels = false, bool tags = false) {
   SF_INFO info{};
   info.samplerate = 22050;
   info.channels = channels;
   info.format = format;
   auto file = sf_open(path.string().c_str(), SFM_WRITE, &info);
   require(file, "open generated audio");
+  if (tags) {
+    require(sf_set_string(file, SF_STR_TITLE, "Chart keysound") == 0 &&
+        sf_set_string(file, SF_STR_SOFTWARE, "Wave editor") == 0, "write descriptive WAV tags");
+  }
   if (rearChannels) {
     int map[2] = {SF_CHANNEL_MAP_REAR_LEFT, SF_CHANNEL_MAP_REAR_RIGHT};
     require(sf_command(file, SFC_SET_CHANNEL_MAP_INFO, map, sizeof(map)), "write nonstandard channel layout");
@@ -211,6 +215,34 @@ void audioTests() {
     writeAudio(source, SF_FORMAT_WAV | subtype, 1, samples(8192, 1, 24));
     require(EncodeAudio(candidate(source), policy, temp.root / "unsupported.flac", {}, {}).reason.code ==
                 StorageReason::UnsupportedFormat, "lossless mode never quantizes float or 32-bit PCM");
+  }
+  const auto tagged = temp.root / "tagged.wav";
+  const auto taggedOutput = temp.root / "tagged.flac";
+  const auto taggedPcm = samples(8192, 1, 16);
+  writeAudio(tagged, SF_FORMAT_WAV | SF_FORMAT_PCM_16, 1, taggedPcm, false, false, true);
+  require(EncodeAudio(candidate(tagged), policy, taggedOutput, {}, {}).outcome == FileOutcome::Converted,
+          "descriptive RIFF INFO metadata permits lossless compression");
+  require(readAudio(taggedOutput, 1, 8192) == taggedPcm, "tagged WAV preserves exact samples");
+  SF_INFO taggedInfo{};
+  auto taggedSource = sf_open(tagged.string().c_str(), SFM_READ, &taggedInfo);
+  auto taggedFile = sf_open(taggedOutput.string().c_str(), SFM_READ, &taggedInfo);
+  require(taggedSource && taggedFile && sf_get_string(taggedFile, SF_STR_TITLE) &&
+      std::string(sf_get_string(taggedFile, SF_STR_TITLE)) == "Chart keysound" &&
+      sf_get_string(taggedFile, SF_STR_SOFTWARE) &&
+      std::string(sf_get_string(taggedFile, SF_STR_SOFTWARE)) == sf_get_string(taggedSource, SF_STR_SOFTWARE),
+      "descriptive tags survive encoding");
+  sf_close(taggedSource);
+  sf_close(taggedFile);
+  {
+    std::ifstream input(tagged, std::ios::binary);
+    std::string bytes((std::istreambuf_iterator<char>(input)), {});
+    const auto field = bytes.find("ISFT");
+    require(field != std::string::npos, "tagged fixture contains an INFO software field");
+    bytes.replace(field, 4, "ZZZZ");
+    temp.write("unknown-info.wav", bytes);
+    const auto unknown = temp.root / "unknown-info.wav";
+    require(EncodeAudio(candidate(unknown), policy, temp.root / "unknown-info.flac", {}, {}).reason.code ==
+        StorageReason::UnsupportedFormat, "unknown INFO fields keep the original audio");
   }
   auto loop = temp.root / "loop.wav";
   writeAudio(loop, SF_FORMAT_WAV | SF_FORMAT_PCM_16, 1, samples(8192, 1, 16), true);

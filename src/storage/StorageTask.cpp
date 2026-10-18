@@ -18,6 +18,8 @@ bool StorageTask::Start(OptimizationRequest &&request) {
   {
     std::lock_guard state(stateMutex_);
     snapshot_ = {.running = true};
+    snapshot_.progress.phase = StoragePhase::Prepare;
+    if (request.preflight) snapshot_.progress.filesTotal = request.preflight->eligibleCount;
     finished_ = false;
   }
   try {

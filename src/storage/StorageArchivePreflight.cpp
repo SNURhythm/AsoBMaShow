@@ -72,7 +72,9 @@ void AppendStorageArchivePreflight(StoragePreflight &result, Checkpoint check, S
   for (std::size_t i = 0; i < result.groups.size(); ++i) {
     auto &group = result.groups[i]; if (group.sourceKind != StorageSourceKind::Archive) continue;
     fs::path archive, inner;
-    if (!FindStorageArchive(group.root, archive, inner))
+    if (!result.request.pathAccessRoots.empty() && StoragePathIndex(result.request.pathAccessRoots).Ancestors(group.root).empty())
+      group.reason = {StorageReason::UnsafePath, "Archive is outside authorized storage roots"};
+    else if (!FindStorageArchive(group.root, archive, inner, result.request.pathAccessRoots))
       group.reason = {StorageReason::UnsupportedSource, "Archive is not a writable local file"};
     else if (!result.request.pathAccessRoots.empty() && StoragePathIndex(result.request.pathAccessRoots).Ancestors(archive).empty())
       group.reason = {StorageReason::UnsafePath, "Archive is outside authorized storage roots"};

@@ -47,7 +47,7 @@ bool descriptiveComment(std::string_view value) {
 }
 // libsndfile tolerates truncated RIFF data and does not expose every custom loop
 // tag. Inspect only media container headers, never chart declarations.
-StorageDiagnostic inspectContainer(const fs::path &path, int format, Checkpoint check) {
+StorageDiagnostic inspectContainer(const fs::path &path, int format, SNDFILE *audio, Checkpoint check) {
   const auto bad = StorageDiagnostic{StorageReason::ValidationFailed, "Truncated or invalid audio container"};
   const auto metadata = StorageDiagnostic{StorageReason::UnsupportedFormat, "Playback metadata cannot be preserved"};
   std::ifstream input(path, std::ios::binary);
@@ -106,7 +106,42 @@ StorageDiagnostic inspectContainer(const fs::path &path, int format, Checkpoint 
     if (padded > end - offset) return bad;
     const std::string_view type(reinterpret_cast<const char *>(header.data()), 4);
     if (type == "data") { if (data) return bad; data = true; }
-    else if (type != "fmt " && type != "fact" && type != "JUNK" && type != "PAD ") return metadata;
+    else if (type == "LIST") {
+      // Accept only descriptive INFO fields actually exposed by the decoder.
+      // Unknown fields, conflicting duplicates and playback lists stay intact.
+      if (length > 65536) return metadata;
+      std::string block(length, '\0');
+      if (length < 4 || !input.read(block.data(), length)) return bad;
+      if (block.compare(0, 4, "INFO") != 0) return metadata;
+      for (std::size_t pos = 4; pos < block.size();) {
+        if (block.size() - pos < 8) return bad;
+        const auto name = std::string_view(block).substr(pos, 4);
+        const auto size = le32(reinterpret_cast<const unsigned char *>(block.data() + pos + 4));
+        pos += 8;
+        const auto paddedSize = std::uint64_t(size) + (size & 1);
+        if (paddedSize > block.size() - pos) return bad;
+        int tag = 0;
+        if (name == "INAM") tag = SF_STR_TITLE;
+        else if (name == "ICOP") tag = SF_STR_COPYRIGHT;
+        else if (name == "ISFT") tag = SF_STR_SOFTWARE;
+        else if (name == "IART") tag = SF_STR_ARTIST;
+        else if (name == "ICMT") tag = SF_STR_COMMENT;
+        else if (name == "ICRD") tag = SF_STR_DATE;
+        else if (name == "IPRD") tag = SF_STR_ALBUM;
+        else if (name == "ITRK") tag = SF_STR_TRACKNUMBER;
+        else if (name == "IGNR") tag = SF_STR_GENRE;
+        else return {StorageReason::UnsupportedFormat, "Cannot preserve WAV INFO field: " + std::string(name)};
+        auto value = std::string_view(block).substr(pos, size);
+        while (!value.empty() && value.back() == '\0') value.remove_suffix(1);
+        const char *decoded = sf_get_string(audio, tag);
+        if (value.find('\0') != std::string_view::npos || !decoded || value != decoded) return metadata;
+        pos += paddedSize;
+      }
+      input.seekg(length & 1, std::ios::cur);
+      offset += padded;
+      continue;
+    } else if (type != "fmt " && type != "fact" && type != "JUNK" && type != "PAD ")
+      return {StorageReason::UnsupportedFormat, "Cannot preserve WAV metadata chunk: " + std::string(type)};
     input.seekg(padded, std::ios::cur);
     offset += padded;
   }
@@ -188,7 +223,7 @@ EncodeResult EncodeAudio(const AssetCandidate &candidate, const StoragePolicy &p
     if (!mono && !stereo)
       return finish(FileOutcome::Skipped, StorageReason::UnsupportedFormat, "Native channel assignments cannot be preserved");
   }
-  const auto container = inspectContainer(candidate.source, info.format, check);
+  const auto container = inspectContainer(candidate.source, info.format, input.get(), check);
   if (container.code == StorageReason::Cancelled) return cancelled();
   if (container.code != StorageReason::None)
     return finish(container.code == StorageReason::ValidationFailed ? FileOutcome::Failed : FileOutcome::Skipped,
@@ -260,6 +295,16 @@ EncodeResult EncodeAudio(const AssetCandidate &candidate, const StoragePolicy &p
   std::vector<int> reference(integers.size());
   total = 0;
   bool valid = true;
+  for (int tag = SF_STR_FIRST; tag <= SF_STR_LAST; ++tag) {
+    if (const char *value = sf_get_string(input.get(), tag)) {
+      const char *encoded = sf_get_string(verify.get(), tag);
+      // libsndfile appends its version to an editor attribution on write.
+      // Retain the original attribution while permitting that exact suffix.
+      const bool softwareAttribution = tag == SF_STR_SOFTWARE && encoded &&
+          std::string(encoded) == (*value ? std::string(value) + " (" + sf_version_string() + ")" : sf_version_string());
+      if (!encoded || (std::strcmp(value, encoded) && !softwareAttribution)) valid = false;
+    }
+  }
   for (;;) {
     if (check && !check()) { verify.reset(); return cancelled(); }
     const auto read = sf_readf_int(verify.get(), integers.data(), blockFrames);

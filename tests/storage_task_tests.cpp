@@ -14,6 +14,7 @@ int main() {
     OptimizationRequest transfer;
     transfer.preflight.emplace();
     transfer.preflight->groups.resize(1);
+    transfer.preflight->eligibleCount = 42;
     const auto *ownedGroups = transfer.preflight->groups.data();
     bool ownershipMoved = false;
     bool rejectAdmission = true;
@@ -33,6 +34,8 @@ int main() {
     require(moveTask.Snapshot().admissionError == "busy", "admission failure remains visible");
     rejectAdmission = false;
     require(moveTask.Start(std::move(transfer)), "owned preflight starts on retry");
+    require(moveTask.Snapshot().progress.phase == StoragePhase::Prepare &&
+        moveTask.Snapshot().progress.filesTotal == 42, "confirmed work starts with preparation and reviewed totals");
     moveTask.CancelAndWait();
     require(ownershipMoved, "preflightOwnershipMovesWithoutAssetCopies");
     std::atomic<int> admitted{0}, released{0}, refreshed{0};

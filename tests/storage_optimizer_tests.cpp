@@ -15,7 +15,8 @@ using namespace storage_management;
 using storage_test::require;
 using storage_test::TempDirectory;
 void storageLibraryIntegration();
-void storageArchiveTests();
+void storageArchiveTests(const char *executable);
+void storageArchiveDiscoverySandboxTest(const std::filesystem::path &root);
 int storageDirectoryInventoryTests();
 namespace fs = std::filesystem;
 namespace {
@@ -503,7 +504,7 @@ void boundedReportsAndProgress() {
   int notifications = 0;
   const auto report = StorageOptimizer(deps).Run(request(temp.root / "charts"), {}, [&](const StorageProgress &) { ++notifications; });
   require(report.skipped == 105 && report.files.size() == 100, "bounded details retain full outcome counters");
-  require(notifications <= 3, "progress notifications are throttled independently of codec callback count");
+  require(notifications <= 4, "preparation and inventory transitions do not unthrottle codec callbacks");
 }
 void cancellableSingleConversionPermit() {
   StorageConversionPermit permit;
@@ -531,7 +532,10 @@ void cancellableSingleConversionPermit() {
 int main(int argc, char **argv) {
   try {
     if (argc > 1 && std::string_view(argv[1]) == "--directory-inventory") return storageDirectoryInventoryTests();
-    if (argc > 1 && std::string_view(argv[1]) == "--archive") { storageArchiveTests(); return 0; }
+    if (argc > 1 && std::string_view(argv[1]) == "--archive") { storageArchiveTests(argv[0]); return 0; }
+    if (argc == 3 && std::string_view(argv[1]) == "--archive-discovery-sandbox") {
+      storageArchiveDiscoverySandboxTest(argv[2]); return 0;
+    }
     if (argc > 1 && std::string_view(argv[1]) == "--commit-cost") { unrelatedFoldersDoNotMultiplyCommitChecks(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--subset-refresh") { subsetRefreshNeverEnumeratesAncestorSiblings(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--parallel") { independentDirectoriesUseDistinctOutputs(); return 0; }

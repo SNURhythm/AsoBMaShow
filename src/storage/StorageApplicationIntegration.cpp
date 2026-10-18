@@ -44,7 +44,7 @@ std::optional<Access> accessFolders(ApplicationContext &context, std::string &er
   }
   auto root = StoragePrivateRoot(context);
   if (root.empty()) { error = "Private storage is unavailable."; return {}; }
-  access.paths = MakeStoragePlatformPaths(root, std::move(roots), TARGET_OS_IOS || TARGET_OS_SIMULATOR);
+  access.paths = MakeStoragePlatformPaths(root, std::move(roots), TARGET_OS_ANDROID || TARGET_OS_IOS || TARGET_OS_SIMULATOR);
   return access;
 }
 std::vector<std::filesystem::path> selectedRoots(const OptimizationRequest &request) {

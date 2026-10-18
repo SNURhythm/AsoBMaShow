@@ -76,6 +76,7 @@ std::string reason(StorageReason code) {
 const char *phase(StoragePhase value) {
   switch (value) {
   case StoragePhase::Inventory: return "storage.ui.scanning";
+  case StoragePhase::Prepare: return "storage.ui.preparing";
   case StoragePhase::ArchivePrepare: return "storage.ui.preparing_archive";
   case StoragePhase::Encode: return "storage.ui.encoding";
   case StoragePhase::Verify: return "storage.ui.verifying";
@@ -221,7 +222,7 @@ InventoryRequest StorageManagementScene::RequestFor(const std::vector<Track> &tr
   request.pathAccessRoots = pathAccessRoots_;
   const auto privateRoot = StoragePrivateRoot(context);
   request.scanScratchRoot = privateRoot / "storage-management/scan";
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+#if TARGET_OS_ANDROID || TARGET_OS_IOS || TARGET_OS_SIMULATOR
   request.scanAccessRoot = privateRoot;
 #endif
   for (const auto &track : tracks) {
@@ -242,7 +243,7 @@ void StorageManagementScene::ReloadGroups(bool invalidateAll) {
   const auto changes = context.chartRepository.GetLibraryChangesSince(libraryRevision_);
   libraryRevision_ = changes.revision;
   measurementRevision_ = context.storageMeasurementRevision;
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+#if TARGET_OS_ANDROID || TARGET_OS_IOS || TARGET_OS_SIMULATOR
   pathAccessRoots_.clear();
   if (auto session = context.chartRepository.OpenSession()) {
     for (const auto &entry : session->SelectAllEntries()) {
@@ -429,7 +430,7 @@ void StorageManagementScene::RefreshState() {
     for (const auto &file : report->files)
       if (file.reason.code != StorageReason::None) {
         value += "\n" + fspath_to_utf8(file.source.filename()) + ": " + reason(file.reason.code);
-        if (file.outcome == FileOutcome::Failed && !file.reason.detail.empty())
+        if (!file.reason.detail.empty())
           value += "\n" + file.reason.detail;
       }
     reportText_->setText(value);

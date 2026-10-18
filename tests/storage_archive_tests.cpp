@@ -8,6 +8,13 @@
 #include "StorageTestSupport.h"
 #include <archive_entry.h>
 #include <zlib.h>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_OSX
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+#endif
 
 using namespace storage_management;
 using storage_test::require;
@@ -428,13 +435,24 @@ void realArchiveOptimizerPreservesPlayback() {
   put(wav, 16, 16, 4); put(wav, 20, 1, 2); put(wav, 22, 1, 2); put(wav, 24, 16000, 4); put(wav, 28, 32000, 4);
   put(wav, 32, 2, 2); put(wav, 34, 16, 2); wav.replace(36, 4, "data"); put(wav, 40, 32000, 4);
   for (std::size_t i = 0; i < 16000; ++i) put(wav, 44 + 2 * i, i % 100, 2);
+  std::string metadata(32, '\0'); metadata.replace(0, 4, "LIST"); put(metadata, 4, 24, 4);
+  metadata.replace(8, 8, "INFOISFT"); put(metadata, 16, 12, 4); metadata.replace(20, 11, "Wave editor");
+  wav += metadata; put(wav, 4, wav.size() - 8, 4);
   writeArchive(path, {{"songs/tone.wav", wav}, {"songs/video.avi", std::string(1000, 'v')}, {"songs/chart.bms", "#WAV01 tone.wav"}, {"other/image.png", "image"}});
   std::vector<short> originalPcm; SF_INFO originalInfo{}; std::atomic_bool originalCancelled = false;
   require(decodeAudioToPCM(fspath_to_path_t(path / "songs/tone.wav"), originalPcm, originalInfo, originalCancelled), "decode original archive audio");
   OptimizationRequest request; request.policy = request.inventory.policy = {.audio = AudioAction::LosslessFlac, .bga = BgaAction::Delete};
   request.inventory.groups = {{"songs", path / "songs", false, false, StorageSourceKind::Archive}, {"overlap", path / "songs", false, false, StorageSourceKind::Archive}};
   request.inventory.scanScratchRoot = temp.root / "scan"; request.preflight = BuildStoragePreflight(request.inventory);
-  const auto report = StorageOptimizer(DefaultOptimizerDependencies(MakeStoragePlatformPaths(temp.root / "private", {temp.root}))).Run(request);
+  auto dependencies = DefaultOptimizerDependencies(MakeStoragePlatformPaths(temp.root / "private", {temp.root}));
+  dependencies.now = [] { return std::chrono::steady_clock::time_point{}; };
+  bool preparing = false;
+  const auto report = StorageOptimizer(std::move(dependencies)).Run(request, {}, [&](const StorageProgress &progress) {
+    require(progress.phase != StoragePhase::Inventory && progress.filesTotal == request.preflight->eligibleCount,
+        "confirmed archive apply keeps reviewed totals without publishing a folder rescan");
+    preparing |= progress.phase == StoragePhase::ArchivePrepare;
+  });
+  require(preparing, "archive preparation bypasses the throttle before the metadata pass");
   if (report.failed && !report.files.empty()) throw std::runtime_error(report.files.front().reason.detail);
   require(report.converted == 1 && report.deleted == 1 && report.changedRoots == std::vector<fs::path>{path}, "optimizer batches overlapping archive folders through real codecs");
   const auto files = readArchive(path); require(files.contains("songs/tone.flac") && files.at("songs/chart.bms") == "#WAV01 tone.wav" && files.at("other/image.png") == "image", "real codec archive retains chart and sibling bytes");
@@ -604,7 +622,46 @@ void archiveStagingRespectsPrivateBoundary() {
   }
 }
 }
-void storageArchiveTests() {
+void storageArchiveDiscoverySandboxTest(const fs::path &root) {
+  std::error_code error;
+  (void)fs::symlink_status(root.parent_path(), error);
+  require(error == std::errc::operation_not_permitted || error == std::errc::permission_denied,
+      "fixture denies metadata access above the library grant");
+  const auto privateRoot = root.parent_path().parent_path() / "private";
+  archive_file::setArchiveIndexCacheDirectory(privateRoot / "indexes");
+  const auto archive = root / "nested.zip/songs.zip";
+  for (const auto &grant : {root, archive}) {
+    InventoryRequest request{.groups = {{"song", archive / "song", false, false, StorageSourceKind::Archive}},
+        .policy = {.audio = AudioAction::LosslessFlac}, .pathAccessRoots = {grant},
+        .scanScratchRoot = privateRoot / "scan", .scanAccessRoot = privateRoot};
+    const auto review = BuildStoragePreflight(request);
+    if (review.eligibleCount != 1 && !review.groups.empty()) throw std::runtime_error(review.groups.front().reason.detail);
+    require(review.complete && review.archives.size() == 1 && review.archives.front().path == archive &&
+        review.archives.front().innerRoots == std::vector<fs::path>{"song"},
+        "archive review resolves folder and file grants without probing system ancestors");
+  }
+}
+void storageArchiveTests(const char *executable) {
+#if defined(__APPLE__) && TARGET_OS_OSX
+  storage_test::TempDirectory temp;
+  fs::create_directories(temp.root / "system/library/nested.zip");
+  fs::create_directory(temp.root / "private");
+  writeArchive(temp.root / "system/library/nested.zip/songs.zip", {{"song/a.wav", std::string(10000, 'a')}});
+  const auto profile = "(version 1) (allow default) (deny file-read-metadata (literal \"" +
+      (temp.root / "system").string() + "\"))";
+  const auto child = fork();
+  require(child >= 0, "start sandboxed archive discovery subprocess");
+  if (!child) {
+    execl("/usr/bin/sandbox-exec", "sandbox-exec", "-p", profile.c_str(), executable,
+        "--archive-discovery-sandbox", (temp.root / "system/library").c_str(), nullptr);
+    _exit(127);
+  }
+  int status = 0;
+  require(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0,
+      "archive review respects sandbox boundaries");
+#else
+  (void)executable;
+#endif
   for (const auto &[name, run] : std::vector<std::pair<const char *, void(*)()>>{
       {"sparse-prefix-recovery", sparsePrefixRecovery}, {"large-batch-recovery", archiveLargeRecordRecovery}, {"delete-batches", archiveConsecutiveDeletesAreBatched},
       {"manifest", manifestsExtractEntries}, {"preflight", selectedArchiveFoldersAreEligible},
