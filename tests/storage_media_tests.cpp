@@ -906,7 +906,8 @@ void truncatedAsfTests() {
           "packet-aligned ASF truncation cannot pass through a decoder's clean early EOF");
 }
 void remuxVideoDisposition(const std::filesystem::path &source, const std::filesystem::path &destination,
-                           const char *container, int disposition, int audioDisposition = AV_DISPOSITION_DEFAULT) {
+                           const char *container, int disposition, int audioDisposition = AV_DISPOSITION_DEFAULT,
+                           int clusterMilliseconds = 0) {
   struct Resources {
     AVFormatContext *input = nullptr, *output = nullptr;
     AVPacket *packet = av_packet_alloc();
@@ -920,6 +921,9 @@ void remuxVideoDisposition(const std::filesystem::path &source, const std::files
           "open disposition fixture");
   require(avformat_alloc_output_context2(&resources.output, nullptr, container, destination.string().c_str()) >= 0,
           "create disposition fixture container");
+  if (clusterMilliseconds)
+    require(av_opt_set_int(resources.output->priv_data, "cluster_time_limit", clusterMilliseconds, 0) >= 0,
+            "bound fixture cluster duration");
   for (unsigned i = 0; i < resources.input->nb_streams; ++i) {
     const auto input = resources.input->streams[i];
     const auto output = avformat_new_stream(resources.output, nullptr);
@@ -939,6 +943,52 @@ void remuxVideoDisposition(const std::filesystem::path &source, const std::files
     av_packet_unref(resources.packet);
   }
   require(status == AVERROR_EOF && av_write_trailer(resources.output) >= 0, "complete disposition fixture");
+}
+void matroskaTimelineTests() {
+  storage_test::TempDirectory temp;
+  StoragePolicy policy; policy.bga = BgaAction::CompressH264;
+  for (bool audio : {false, true}) {
+    storage_test::VideoFixture fixture;
+    fixture.millisecondContainer = fixture.lossless = true;
+    fixture.audio = audio; fixture.width = fixture.height = 64;
+    fixture.audioTailSamples = audio ? 4800 : 0;
+    for (int i = 2; i < 32; ++i) fixture.timestamps.push_back(i);
+    const auto plain = temp.root / "plain.webm";
+    const auto source = temp.root / (audio ? "audio.webm" : "video.webm");
+    const auto output = temp.root / (audio ? "audio.mp4" : "video.mp4");
+    storage_test::makeVideo(plain, fixture);
+    remuxVideoDisposition(plain, source, "matroska", AV_DISPOSITION_DEFAULT, AV_DISPOSITION_DEFAULT, 200);
+    {
+      Input input(source);
+      require(input.format->streams[input.video]->duration == AV_NOPTS_VALUE &&
+                  std::abs(input.format->duration / double(AV_TIME_BASE) - (audio ? 1.38 : 1.28)) < .002,
+              "Matroska declares the final presentation endpoint at container level only");
+    }
+    const auto result = EncodeBga(candidate(source), policy, output, {}, {});
+    if (result.outcome != FileOutcome::Converted) std::cerr << "Matroska conversion: " << result.reason.detail << '\n';
+    require(result.outcome == FileOutcome::Converted,
+            "complete Matroska retains nonzero video starts and audio extending beyond video");
+    const auto converted = storage_test::inspectVideo(output);
+    require(converted.timestamps.size() == 30 && std::abs(converted.videoEnd - (audio ? 1.28 : 1.2)) < .002,
+            "Matroska conversion preserves the complete video presentation");
+    if (audio) require(std::abs(converted.audioEnd - 1.38) < .025,
+        "Matroska container endpoint can belong to a longer audio stream");
+    std::ifstream input(source, std::ios::binary);
+    std::string bytes((std::istreambuf_iterator<char>(input)), {});
+    const std::string cluster("\x1f\x43\xb6\x75", 4);
+    auto cut = bytes.find(cluster);
+    for (int i = 0; i < 2 && cut != std::string::npos; ++i) cut = bytes.find(cluster, cut + cluster.size());
+    require(cut != std::string::npos, "small Matroska fixture has at least three complete clusters");
+    bytes.resize(cut);
+    const auto truncated = temp.root / "truncated.webm", rejected = temp.root / "truncated.mp4";
+    temp.write(truncated, bytes);
+    const auto partial = storage_test::inspectVideo(truncated);
+    require(!partial.timestamps.empty() && partial.timestamps.size() < 30 && partial.videoEnd < .8,
+            "cluster-boundary truncation leaves a decodable prefix but removes the declared endpoint");
+    const auto invalid = EncodeBga(candidate(truncated), policy, rejected, {}, {});
+    require(invalid.reason.code == StorageReason::ValidationFailed && !std::filesystem::exists(rejected),
+            "cluster-aligned Matroska truncation cannot replace the original with a shortened MP4");
+  }
 }
 void videoDispositionTests() {
   storage_test::TempDirectory temp;
@@ -1155,7 +1205,7 @@ int main() {
   int failures = 0;
   for (const auto test : {decodedDisplayTransformTests, decodedColorTests, decodedAudioFormatTests, timelineTests,
                           declaredVideoTimelineTests, crossStreamTimelineTests, changingAspectRatioTests, quantizedAudioTimelineTests, asfTimelineTests,
-                          truncatedAsfTests, existingBgaTests, existingAudioTests, audioTests, videoDispositionTests, videoTests}) {
+                          truncatedAsfTests, matroskaTimelineTests, existingBgaTests, existingAudioTests, audioTests, videoDispositionTests, videoTests}) {
     try { test(); }
     catch (const std::exception &error) { std::cerr << error.what() << '\n'; ++failures; }
   }

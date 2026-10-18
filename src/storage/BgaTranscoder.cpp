@@ -384,7 +384,12 @@ Scan scan(const fs::path &path, const Checkpoint &check, bool existingDestinatio
       input.format->streams[input.video]->codecpar->codec_id != AV_CODEC_ID_H264))
     unsupported("Existing video must contain H264 in a native MP4 container");
   const bool asf = !std::strcmp(input.format->iformat->name, "asf") || !std::strcmp(input.format->iformat->name, "asf_o");
-  const auto asfEnd = asf ? validateAsfContainer(path, check) : 0;
+  const bool matroska = std::strstr(input.format->iformat->name, "matroska") || std::strstr(input.format->iformat->name, "webm");
+  // Matroska/WebM can report clean packet EOF after a complete cluster is
+  // removed. Its duration is the final presentation timestamp, stored at the
+  // container level rather than on AVStream, including nonzero stream starts.
+  const auto containerEnd = asf ? validateAsfContainer(path, check) :
+      matroska && input.format->duration > 0 ? input.format->duration : 0;
   Scan result;
   auto &description = result.description;
   if (!existingDestination) description.codecs = ProbeStorageCodecs();
@@ -491,16 +496,16 @@ Scan scan(const fs::path &path, const Checkpoint &check, bool existingDestinatio
   if (!result.video.frames || (description.hasAudio && !result.audio.frames))
     throw Failure{StorageReason::ValidationFailed, "Empty media stream"};
   validateDeclaredVideoTimeline(*video, result.video, !asf);
-  if (asf) {
+  if (containerEnd > 0) {
     auto decodedEnd = rescaleTimestamp(result.video.end, result.video.timeBase, AV_TIME_BASE_Q);
     auto tolerance = rescaleTimestamp(result.video.maximumDuration, result.video.timeBase, AV_TIME_BASE_Q);
     if (description.hasAudio) {
       decodedEnd = std::max(decodedEnd, rescaleTimestamp(result.audio.end, result.audio.timeBase, AV_TIME_BASE_Q));
       tolerance = std::max(tolerance, rescaleTimestamp(result.audio.maximumDuration, result.audio.timeBase, AV_TIME_BASE_Q));
     }
-    if (timestampDistance(asfEnd, decodedEnd) > static_cast<std::uint64_t>(tolerance))
-      throw Failure{StorageReason::ValidationFailed, "Decoded ASF endpoint differs from the container (declared us=" +
-          std::to_string(asfEnd) + ", decoded us=" + std::to_string(decodedEnd) + ", tolerance us=" + std::to_string(tolerance) + ")"};
+    if (timestampDistance(containerEnd, decodedEnd) > static_cast<std::uint64_t>(tolerance))
+      throw Failure{StorageReason::ValidationFailed, "Decoded media endpoint differs from the container (declared us=" +
+          std::to_string(containerEnd) + ", decoded us=" + std::to_string(decodedEnd) + ", tolerance us=" + std::to_string(tolerance) + ")"};
   }
   description.duration = result.video.end - result.video.first;
   description.minimumFrameInterval = result.video.minimumInterval;

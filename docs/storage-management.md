@@ -111,6 +111,9 @@ limits are rejected before computing keyframe intervals.
 WMV/ASF validation checks the physical packet/container extent and interprets its
 declared duration as a file-wide endpoint. Coarse audio timestamps are checked
 against an anchored sample clock so timestamp rounding cannot accumulate drift.
+Matroska/WebM validation checks its declared container endpoint across both
+streams. Video and audio stream flags must survive MP4 conversion; flags the
+container cannot represent cause the original to be preserved.
 
 Existing H.264 already within the caps is skipped, even if a different quality
 preset is selected. Every candidate is decoded and validated. **An output must
@@ -204,6 +207,8 @@ permission bits. Startup recovery checks interrupted transactions before admitti
 new work. After successful recovery, abandoned private encoding candidates are
 removed; unrecognized files and unresolved recovery state are retained. Do not
 manually remove recovery files while an operation is pending.
+On iOS, recovery resolves app-owned Documents paths against the current app
+container, while still requiring the recorded file identities and contents.
 
 Archives use durable forward recovery instead of a full backup. Before overwriting
 a bounded batch, the updater saves its before/after bytes and progress, then syncs
