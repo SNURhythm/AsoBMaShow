@@ -611,7 +611,8 @@ void interruptedArchiveWritesRecover() {
   }
 }
 void writeSparseZip64(const fs::path &path, std::uint64_t offset = 128ULL * 1024 * 1024 * 1024 + 4096,
-    const std::string &audioName = "\x93\xfa\x96\x7b\x8c\xea.wav", bool prefix = false) {
+    const std::string &audioName = "\x93\xfa\x96\x7b\x8c\xea.wav", bool prefix = false,
+    const std::string &unicodeName = {}, bool unicodeCentral = true) {
   using storage_management::archive_detail::put;
   std::ofstream file(path, std::ios::binary);
   file.seekp(offset); std::string central;
@@ -622,11 +623,20 @@ void writeSparseZip64(const fs::path &path, std::uint64_t offset = 128ULL * 1024
     const auto crc = crc32(0, reinterpret_cast<const Bytef *>(payload.data()), payload.size());
     std::string local(30, '\0'); put(local, 0, 0x04034b50, 4); put(local, 4, 20, 2); put(local, 14, crc, 4);
     put(local, 18, payload.size(), 4); put(local, 22, payload.size(), 4); put(local, 26, name.size(), 2);
-    const auto record = local + name + payload; file.write(record.data(), record.size());
+    std::string unicode;
+    if (name == audioName && !unicodeName.empty()) {
+      unicode.resize(9, '\0'); put(unicode, 0, 0x7075, 2); put(unicode, 2, 5 + unicodeName.size(), 2);
+      put(unicode, 4, 1, 1); put(unicode, 5, crc32(0, reinterpret_cast<const Bytef *>(name.data()), name.size()), 4);
+      unicode += unicodeName;
+    }
+    put(local, 28, unicode.size(), 2);
+    const auto record = local + name + unicode + payload; file.write(record.data(), record.size());
     std::string row(46, '\0'); put(row, 0, 0x02014b50, 4); put(row, 4, 45, 2); put(row, 6, 45, 2); put(row, 16, crc, 4);
     put(row, 20, payload.size(), 4); put(row, 24, payload.size(), 4); put(row, 28, name.size(), 2); put(row, 30, 12, 2);
     put(row, 32, 10, 2); put(row, 42, 0xffffffff, 4);
     std::string extra(12, '\0'); put(extra, 0, 1, 2); put(extra, 2, 8, 2); put(extra, 4, offset, 8);
+    if (unicodeCentral) extra += unicode;
+    put(row, 30, extra.size(), 2);
     central += row + name + extra + "entry-note"; offset += record.size();
   }
   file.write(central.data(), central.size());
@@ -707,6 +717,54 @@ void sparseZip64AndLegacyNames() {
   archive.Extract(*first, temp.root / "decoded.flac", {});
   std::ifstream input(temp.root / "decoded.flac", std::ios::binary); const std::string bytes((std::istreambuf_iterator<char>(input)), {});
   require(bytes == std::string(12000, 'f'), "rewritten legacy-named payload verifies its CRC");
+}
+void renamedZipRetainsUnicodePath() {
+  using storage_management::archive_detail::number;
+  for (bool unicodeCentral : {false, true}) for (bool recover : {false, true}) {
+    storage_test::TempDirectory temp; const auto path = temp.root / "unicode.zip";
+    writeSparseZip64(path, 0, "\x93\xfa\x96\x7b\x8c\xea.wav", false, "日本語.wav", unicodeCentral);
+    InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+        .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = temp.root / "scan"};
+    const auto review = BuildStoragePreflight(request);
+    const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+    StorageArchiveDependencies deps{.encode = [](const AssetCandidate &, const StoragePolicy &, const fs::path &output, Checkpoint, ProgressCallback) {
+      std::ofstream(output, std::ios::binary) << "converted"; return EncodeResult{FileOutcome::Converted, output};
+    }, .faultPoint = [&](std::string_view point) {
+      if (recover && point == "archive-entry-ready") throw std::runtime_error("interrupt renamed Unicode media");
+    }};
+    const auto report = UpdateStorageArchive(review.archives.front(), request.policy, paths, deps);
+    if (recover) {
+      require(report.recoveryRequired, "retain prepared Unicode rename for recovery");
+      const auto result = RecoverStorageArchives(paths);
+      require(!result.failed && !result.recoveryRequired && result.converted == 1, "recover renamed Unicode media");
+    } else require(!report.failed && report.converted == 1, "convert legacy media with Unicode path metadata");
+    StorageArchive archive(path, temp.root / "checked.sqlite", {});
+    auto entry = archive.Next();
+    while (entry && entry->name != "日本語.flac") entry = archive.Next(entry->offset);
+    require(entry && !(entry->flags & 0x800) && entry->rawName == "\x93\xfa\x96\x7b\x8c\xea.flac",
+        "rename retains the original legacy filename encoding");
+    const auto validate = [&](std::string_view extra) {
+      unsigned matches = 0;
+      for (std::size_t at = 0; at < extra.size();) {
+        const auto length = number(extra, at + 2, 2);
+        require(length <= extra.size() - at - 4, "bounded extra field");
+        if (number(extra, at, 2) == 0x7075) {
+          ++matches;
+          require(number(extra, at + 4, 1) == 1 && number(extra, at + 5, 4) ==
+              crc32(0, reinterpret_cast<const Bytef *>(entry->rawName.data()), entry->rawName.size()) &&
+              extra.substr(at + 9, length - 5) == "日本語.flac", "Unicode path and raw-name CRC match the renamed entry");
+        }
+        at += 4 + length;
+      }
+      require(matches == 1, "one updated Unicode path field survives in each ZIP header");
+    };
+    validate(std::string_view(entry->metadata).substr(46 + entry->rawName.size(), number(entry->metadata, 30, 2)));
+    const auto local = archive.io.Read(entry->offset, 30);
+    validate(archive.io.Read(entry->offset + 30 + entry->rawName.size(), number(local, 28, 2)));
+    const auto files = readArchive(path);
+    require(files.at("日本語.flac") == "converted" && files.at("chart.bms") == "fixture",
+        "independent ZIP reader resolves the renamed Unicode path and exact payload");
+  }
 }
 void realArchiveOptimizerPreservesPlayback() {
   using storage_management::archive_detail::put;
@@ -987,6 +1045,7 @@ void storageArchiveTests(const char *executable) {
       {"small-record-recovery", smallArchiveRecordsRecoverAcrossBatches},
       {"prepared-hash-failure", preparedArchiveHashFailurePrecedesWrites},
       {"growth-batches", growingArchiveMultiBatchRecovery}, {"growth", growingFlacArchiveRecovery}, {"update", archiveUpdatesBatchWithoutFullCopy}, {"recovery", interruptedArchiveWritesRecover},
+      {"unicode-rename", renamedZipRetainsUnicodePath},
       {"zip64", sparseZip64AndLegacyNames}, {"invalid-encoding", malformedLegacyNamesAreRejected},
       {"playback", realArchiveOptimizerPreservesPlayback},
       {"boundaries", archivePolicyBoundaries}, {"rejections", unsafeAndStaleArchivesAreRejected},

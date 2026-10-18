@@ -157,5 +157,6 @@ i18n::Text findBmsStoragePolicyMessage(const BmsSearchDownloadOptions &options) 
 i18n::Text findBmsStorageReportMessage(const storage_management::StorageReport &report) {
   return i18n::message("library.find_bms.storage.report", {{"converted", std::to_string(report.converted)},
       {"deleted", std::to_string(report.deleted)}, {"skipped", std::to_string(report.skipped)},
-      {"failed", std::to_string(report.failed)}, {"bytes", formatFindBmsBytes(report.reclaimedBytes)}});
+      {"failed", std::to_string(report.failed)}, {"bytes", formatFindBmsBytes(report.reclaimedBytes)},
+      {"added", formatFindBmsBytes(report.addedBytes)}});
 }

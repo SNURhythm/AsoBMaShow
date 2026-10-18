@@ -454,11 +454,31 @@ std::string StorageArchive::Replacement(StorageArchiveEntry &entry, std::string_
     tarChecksum(header); entry.metadata = header; entry.span = plus(512, rounded(bytes)); return header;
   }
   const auto oldName = number(entry.metadata, 28, 2), oldExtra = number(entry.metadata, 30, 2);
-  std::string extra;
+  std::string extra, unicode;
+  bool unicodePath = false;
   extras(std::string_view(entry.metadata).substr(46 + oldName, oldExtra), [&](auto tag, auto data) {
-    if (tag == 1 || tag == 0x7075) return;
+    if (tag == 1) return;
+    if (tag == 0x7075) { unicodePath = true; return; }
     std::string field(4, '\0'); put(field, 0, tag, 2); put(field, 2, data.size(), 2); extra += field; extra += data;
   });
+  if (!unicodePath) {
+    // Some writers put Unicode paths only in the original local header.
+    // Inspect that bounded extra area before the source record is replaced.
+    const auto local = io.Read(entry.offset, 30);
+    extras(io.Read(entry.offset + 30 + oldName, number(local, 28, 2)), [&](auto tag, auto) {
+      if (tag == 0x7075) unicodePath = true;
+    });
+  }
+  if (unicodePath) {
+    // The checksum identifies the raw filename, not the payload. Both names
+    // change on conversion, so replace stale fields in both ZIP headers.
+    require(entry.name.size() <= 65535 - 9, "Unicode ZIP filename is too long");
+    unicode.resize(9, '\0'); put(unicode, 0, 0x7075, 2); put(unicode, 2, 5 + entry.name.size(), 2);
+    put(unicode, 4, 1, 1);
+    put(unicode, 5, crc32(0, reinterpret_cast<const Bytef *>(entry.rawName.data()), entry.rawName.size()), 4);
+    unicode += entry.name; extra += unicode;
+  }
+  require(extra.size() <= 65535 && entry.rawName.size() <= 65535, "ZIP metadata is too long");
   auto central = entry.metadata.substr(0, 46);
   put(central, 28, entry.rawName.size(), 2); put(central, 30, extra.size(), 2);
   entry.metadata = central + entry.rawName + extra + entry.metadata.substr(46 + oldName + oldExtra);
@@ -466,6 +486,7 @@ std::string StorageArchive::Replacement(StorageArchiveEntry &entry, std::string_
   require(bytes < 0xffffffff, "Individual ZIP replacement exceeds staging limit");
   std::string local(30, '\0'); put(local, 0, 0x04034b50, 4); put(local, 4, 20, 2); put(local, 6, entry.flags, 2);
   local.replace(10, 4, central.substr(12, 4)); put(local, 14, crc, 4); put(local, 18, bytes, 4); put(local, 22, bytes, 4); put(local, 26, entry.rawName.size(), 2);
-  local += entry.rawName; entry.span = plus(local.size(), bytes); return local;
+  put(local, 28, unicode.size(), 2);
+  local += entry.rawName; local += unicode; entry.span = plus(local.size(), bytes); return local;
 }
 }

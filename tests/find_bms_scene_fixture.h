@@ -458,6 +458,17 @@ void testCapturedStoragePolicySurvivesAttemptAndRetainedCompletion() {
   BmsSearchDownloadProgress progress{.message = "Downloading archive", .downloadedBytes = 900,
       .totalBytes = 900, .storageProgress = StorageProgress{.phase = StoragePhase::Encode, .filesDone = 1, .filesTotal = 3}};
   i18n::setLanguage(i18n::Language::English);
+  for (const auto &[reclaimed, added] : std::vector<std::pair<std::uint64_t, std::uint64_t>>{
+      {0, 512}, {1024, 256}, {0, 0}}) {
+    const auto report = findBmsStorageReportMessage(StorageReport{.converted = 1,
+        .reclaimedBytes = reclaimed, .addedBytes = added});
+    const auto english = report.resolve();
+    assert(english.find("Media reclaimed: " + formatFindBmsBytes(reclaimed)) != std::string::npos);
+    assert(english.find("Added: " + formatFindBmsBytes(added)) != std::string::npos);
+    i18n::setLanguage(i18n::Language::Korean);
+    assert(report.resolve().find("증가 용량: " + formatFindBmsBytes(added)) != std::string::npos);
+    i18n::setLanguage(i18n::Language::English);
+  }
   auto text = findBmsProgressEventDisplayText(progress, true);
   assert(text.find("900") == std::string::npos && text.find("33%") == std::string::npos);
   assert(findBmsProgressFractionFor(progress, 0.98) < 1.0);

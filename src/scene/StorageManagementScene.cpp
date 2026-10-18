@@ -415,6 +415,7 @@ void StorageManagementScene::RefreshState() {
         compacting ? "storage.ui.compacting_archive" : phase(progress.phase))) +
         " · " + std::to_string(shownTask_.progress.filesDone) + "/" + std::to_string(shownTask_.progress.filesTotal) +
         " · " + bytes(shownTask_.progress.reclaimedBytes);
+    if (progress.addedBytes) status += " · " + i18n::format("storage.ui.added", {{"bytes", bytes(progress.addedBytes)}});
     if (compacting) status += "\n" + bytes(progress.archiveBytesDone) + " / " + bytes(progress.archiveBytesTotal);
     status += "\n" + fspath_to_utf8(shownTask_.progress.currentPath.filename());
   } else if (measuring_) status = i18n::tr("storage.ui.scanning");
@@ -425,7 +426,8 @@ void StorageManagementScene::RefreshState() {
   if (const auto &report = shownTask_.lastReport) {
     auto value = i18n::format("storage.ui.report", {{"converted", std::to_string(report->converted)},
         {"deleted", std::to_string(report->deleted)}, {"skipped", std::to_string(report->skipped)},
-        {"failed", std::to_string(report->failed)}, {"bytes", bytes(report->reclaimedBytes)}});
+        {"failed", std::to_string(report->failed)}, {"bytes", bytes(report->reclaimedBytes)},
+        {"added", bytes(report->addedBytes)}});
     if (report->cleanupPending) value += std::string("\n") + i18n::tr("storage.ui.cleanup_pending");
     if (std::ranges::any_of(report->changedRoots, [](const auto &path) { return archive_file::hasSupportedArchiveExtension(path); }))
       value += std::string("\n") + i18n::tr("storage.ui.archive_savings_hint");
@@ -486,6 +488,7 @@ void StorageManagementScene::update(float) {
       task.lastReport != shownTask_.lastReport || task.progress.phase != shownTask_.progress.phase ||
       task.progress.filesDone != shownTask_.progress.filesDone || task.progress.filesTotal != shownTask_.progress.filesTotal ||
       task.progress.reclaimedBytes != shownTask_.progress.reclaimedBytes ||
+      task.progress.addedBytes != shownTask_.progress.addedBytes ||
       task.progress.archiveBytesDone != shownTask_.progress.archiveBytesDone ||
       task.progress.archiveBytesTotal != shownTask_.progress.archiveBytesTotal ||
       task.progress.currentPath != shownTask_.progress.currentPath)
