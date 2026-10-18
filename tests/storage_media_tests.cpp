@@ -901,7 +901,7 @@ void chromaLocationTests() {
   };
   for (bool scaled : {false, true}) {
     storage_test::VideoFixture fixture;
-    fixture.h264 = scaled;
+    fixture.lossless = fixture.millisecondContainer = scaled;
     if (scaled) {
       fixture.width = 192; fixture.height = 128;
       fixture.sampleAspectRatio = {4, 1};
@@ -1260,6 +1260,11 @@ void existingBgaTests() {
             "late packet corruption retains readable MP4 headers and H264 identification");
     require(ValidateExistingBga(corrupt).code == StorageReason::ValidationFailed,
             "full decode rejects a corrupt late video packet even when header probing succeeds");
+    StoragePolicy policy; policy.bga = BgaAction::CompressH264;
+    const auto unused = temp.root / "preserved.mp4";
+    require(EncodeBga(candidate(corrupt), policy, unused, {}, {}).reason.code == StorageReason::AlreadyOptimized &&
+                !std::filesystem::exists(unused),
+            "compression preserves efficient source bytes without validating their late payload");
   }
   fixture.rotation = 0; fixture.colorSpace = AVCOL_SPC_UNSPECIFIED;
   const auto disguised = temp.root / "disguised.mp4";
@@ -1471,8 +1476,11 @@ void videoDispositionTests() {
   }
   policy.maxFps = 15;
   const auto remuxed = temp.root / "remuxed.mp4";
-  require(EncodeBga(candidate(output), policy, remuxed, {}, {}).outcome == FileOutcome::Converted &&
-              storage_test::audioPackets(output) == storage_test::audioPackets(remuxed),
+  fixture.audioCodec = AV_CODEC_ID_AAC;
+  storage_test::makeVideo(plain, fixture);
+  remuxVideoDisposition(plain, source, "matroska", flags, audioFlags);
+  require(EncodeBga(candidate(source), policy, remuxed, {}, {}).outcome == FileOutcome::Converted &&
+              storage_test::audioPackets(source) == storage_test::audioPackets(remuxed),
           "compatible flagged audio is remuxed without changing its packets");
   {
     Input input(remuxed);
@@ -1501,6 +1509,44 @@ void videoDispositionTests() {
             "video or audio dispositions that MP4 cannot represent preserve the original file");
   }
 }
+void efficientCodecHeaderTests() {
+  std::unique_ptr<AVFormatContext, decltype(&avformat_free_context)> format(avformat_alloc_context(), avformat_free_context);
+  require(bool(format), "allocate codec header fixture");
+  const auto stream = avformat_new_stream(format.get(), nullptr);
+  require(stream, "allocate video header fixture");
+  stream->codecpar->codec_type = AVMEDIA_TYPE_VIDEO;
+  const std::pair<AVCodecID, bool> cases[] = {
+      {AV_CODEC_ID_H264, true}, {AV_CODEC_ID_HEVC, true}, {AV_CODEC_ID_VP9, true},
+      {AV_CODEC_ID_AV1, true}, {AV_CODEC_ID_VVC, true}, {AV_CODEC_ID_MPEG1VIDEO, false},
+      {AV_CODEC_ID_MPEG2VIDEO, false}, {AV_CODEC_ID_MPEG4, false}, {AV_CODEC_ID_VP8, false}, {AV_CODEC_ID_FFV1, false}};
+  for (const auto [codec, efficient] : cases) {
+    stream->codecpar->codec_id = codec;
+    bool preserved = false;
+    try { preserveEfficientVideo(*format); }
+    catch (const Failure &failure) {
+      preserved = failure.reason == StorageReason::AlreadyOptimized && failure.outcome == FileOutcome::Skipped;
+    }
+    require(preserved == efficient, "detected efficient codecs are retained while legacy codecs remain eligible");
+  }
+  stream->codecpar->codec_id = AV_CODEC_ID_H264;
+  stream->disposition = AV_DISPOSITION_ATTACHED_PIC;
+  preserveEfficientVideo(*format);
+}
+void efficientVideoPreservationTests() {
+  storage_test::TempDirectory temp;
+  storage_test::VideoFixture fixture; fixture.h264 = true;
+  fixture.width = 192; fixture.height = 128; fixture.sampleAspectRatio = {4, 1};
+  const auto source = temp.root / "efficient.avi", output = temp.root / "unused.mp4";
+  storage_test::makeVideo(source, fixture);
+  StoragePolicy policy; policy.bga = BgaAction::CompressH264;
+  policy.resolution = ResolutionCap::Low; policy.maxFps = 15;
+  int checkpoints = 0; bool encoded = false;
+  const auto result = EncodeBga(candidate(source), policy, output, [&] { return ++checkpoints <= 3; },
+      [&](const StorageProgress &progress) { encoded |= progress.phase == StoragePhase::Encode; });
+  require(result.outcome == FileOutcome::Skipped && result.reason.code == StorageReason::AlreadyOptimized &&
+              !encoded && !std::filesystem::exists(output),
+          "H264 is preserved before full decoding even when resolution and FPS caps are exceeded");
+}
 void videoTests() {
   storage_test::TempDirectory temp;
   StoragePolicy policy; policy.bga = BgaAction::CompressH264;
@@ -1516,8 +1562,8 @@ void videoTests() {
     require(captionFrames > 0, "H264 fixture decodes real A53 closed captions");
     policy.maxFps = 15;
     const auto result = EncodeBga(candidate(input), policy, output, {}, {});
-    require(result.outcome == FileOutcome::Skipped && result.reason.code == StorageReason::UnsupportedFormat &&
-                !std::filesystem::exists(output), "conversion preserves source instead of dropping decoded captions");
+    require(result.outcome == FileOutcome::Skipped && result.reason.code == StorageReason::AlreadyOptimized &&
+                !std::filesystem::exists(output), "efficient source is retained with its original captions");
     require(ValidateExistingBga(input).code == StorageReason::None,
             "unchanged existing H264 remains reusable with its original captions");
     policy.maxFps = 0;
@@ -1651,13 +1697,13 @@ void videoTests() {
   require(fastGaps.timestamps.size() == 7 && std::abs(fastGaps.timestamps[2] - .2) < .00001 &&
               std::abs(fastGaps.timestamps[4] - .4) < .00001 && std::abs(fastGaps.videoEnd - .5) < .001,
           "capped VFR drops burst frames while retaining gaps and end time");
-  storage_test::VideoFixture large; large.h264 = true; large.width = 800; large.height = 600;
+  storage_test::VideoFixture large; large.width = 800; large.height = 600;
   for (int i = 0; i < 12; ++i) large.timestamps.push_back(i);
   storage_test::makeVideo(temp.root / "large.avi", large); policy.resolution = ResolutionCap::Low;
   result = EncodeBga(candidate(temp.root / "large.avi"), policy, temp.root / "large.mp4", {}, {});
-  require(result.outcome == FileOutcome::Converted, "H264 exceeding a cap is converted");
+  require(result.outcome == FileOutcome::Converted, "legacy MPEG exceeding a cap is converted");
   const auto scaled = storage_test::inspectVideo(temp.root / "large.mp4");
-  require(scaled.width == 480 && scaled.height == 360, "real H264 obeys orientation-independent cap");
+  require(scaled.width == 480 && scaled.height == 360, "legacy MPEG obeys orientation-independent cap");
   auto oriented = large; oriented.rotation = 90; oriented.sampleAspectRatio = {16, 15};
   storage_test::makeVideo(temp.root / "oriented.mp4", oriented);
   result = EncodeBga(candidate(temp.root / "oriented.mp4"), policy, temp.root / "oriented-small.mp4", {}, {});
@@ -1679,15 +1725,17 @@ void videoTests() {
   require(audio.audioChannels == 2 && audio.audioRate == 48000 && std::abs(audio.audioEnd - 1.2) < .022,
           "embedded audio keeps native layout, rate and timeline within one packet");
   policy.maxFps = 15;
-  result = EncodeBga(candidate(temp.root / "audio.mp4"), policy, temp.root / "remux.mp4", {}, {});
+  audioFixture.audioCodec = AV_CODEC_ID_AAC;
+  storage_test::makeVideo(temp.root / "legacy-aac.avi", audioFixture);
+  result = EncodeBga(candidate(temp.root / "legacy-aac.avi"), policy, temp.root / "remux.mp4", {}, {});
   require(result.outcome == FileOutcome::Converted &&
-              storage_test::audioPackets(temp.root / "audio.mp4") == storage_test::audioPackets(temp.root / "remux.mp4"),
+              storage_test::audioPackets(temp.root / "legacy-aac.avi") == storage_test::audioPackets(temp.root / "remux.mp4"),
           "compatible embedded audio is remuxed without another lossy encode");
   policy.maxFps = 0;
   for (int kind = 0; kind < 3; ++kind) {
     storage_test::VideoFixture unsupported; unsupported.timestamps = {0, 1};
     unsupported.alpha = kind == 0; unsupported.hdr = kind == 1; unsupported.interlaced = kind == 2;
-    unsupported.h264 = !unsupported.alpha;
+    unsupported.lossless = unsupported.millisecondContainer = unsupported.hdr || unsupported.interlaced;
     const auto path = temp.root / ("unsupported-" + std::to_string(kind) + ".avi");
     storage_test::makeVideo(path, unsupported);
     require(EncodeBga(candidate(path), policy, temp.root / "unsupported.mp4", {}, {}).reason.code ==
@@ -1726,7 +1774,7 @@ void videoTests() {
 int main() {
   av_log_set_level(AV_LOG_ERROR);
   int failures = 0;
-  for (const auto test : {decodedDisplayTransformTests, decodedColorTests, chromaLocationTests, decodedAudioFormatTests, decodedAudioPresentationTests,
+  for (const auto test : {efficientCodecHeaderTests, efficientVideoPreservationTests, decodedDisplayTransformTests, decodedColorTests, chromaLocationTests, decodedAudioFormatTests, decodedAudioPresentationTests,
                           encodedAudioPresentationTests, embeddedAudioSideDataTests, audioRemuxTrimTests, audioRemuxContentTests, timelineTests,
                           declaredVideoTimelineTests, crossStreamTimelineTests, changingAspectRatioTests, quantizedAudioTimelineTests, asfTimelineTests,
                           truncatedAsfTests, matroskaTimelineTests, existingBgaTests, existingAudioTests, audioTests, videoDispositionTests, videoTests}) {

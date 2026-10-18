@@ -22,8 +22,15 @@ void StorageInventoryTask::Cancel() {
   state_.reset();
 }
 void StorageInventoryTask::Start(InventoryRequest request, StorageInventoryMode mode) {
-  Cancel(); state_ = std::make_shared<State>(); state_->generation = ++generation_;
-  worker_ = std::jthread([state = state_, builders = builders_, request = std::move(request), mode](std::stop_token stop) {
+  Cancel(); ++generation_;
+  std::shared_ptr<InventoryRequest> pending;
+  try {
+    state_ = std::make_shared<State>(); state_->generation = generation_;
+    // Retain the selected groups if allocation or thread construction fails
+    // after moving the request into the worker's startup state.
+    pending = std::make_shared<InventoryRequest>(std::move(request));
+    worker_ = std::jthread([state = state_, builders = builders_, pending, mode](std::stop_token stop) {
+    const auto &request = *pending;
     std::set<std::string> groups;
     for (const auto &group : request.groups) groups.insert(group.groupId);
     const auto check = [stop] { return !stop.stop_requested(); };
@@ -66,7 +73,20 @@ void StorageInventoryTask::Start(InventoryRequest request, StorageInventoryMode 
       std::lock_guard lock(state->mutex); state->finished = true; state->result = std::move(result);
     }
     builders.wake();
-  });
+    });
+  } catch (...) {
+    if (!state_) { state_ = std::make_shared<State>(); state_->generation = generation_; }
+    const auto &failed = pending ? *pending : request;
+    {
+      std::lock_guard lock(state_->mutex);
+      for (const auto &group : failed.groups) state_->measurements[group.groupId] = {
+          .groupId = group.groupId, .root = group.path,
+          .reason = {StorageReason::IoError, "Could not start folder scan. Try again."},
+          .sourceKind = group.sourceKind, .generation = state_->generation};
+      state_->result = StorageInventoryTaskResult{.mode = mode}; state_->finished = true;
+    }
+    builders_.wake();
+  }
 }
 void StorageInventoryTask::StartMeasurements(InventoryRequest request) { Start(std::move(request), StorageInventoryMode::Measurements); }
 void StorageInventoryTask::StartPreflight(InventoryRequest request) { Start(std::move(request), StorageInventoryMode::Preflight); }

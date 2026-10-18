@@ -682,6 +682,48 @@ void exceptionRecoveryClassification() {
     require(fs::exists(temp.root / "charts/a.wav"), "exception fixture retains its original source");
   }
 }
+void encodingWorkerFailureRecoveryClassification() {
+  for (const bool afterCommit : {false, true}) {
+    TempDirectory temp;
+    temp.write("charts/a.wav", std::string(100, 'a'));
+    std::vector<std::string> events;
+    auto deps = dependencies(temp, events);
+    const auto factory = deps.transactions;
+    std::thread::id directoryOwner;
+    std::atomic<bool> ready = false, injected = false;
+    deps.transactions = [&](const StoragePlatformPaths &paths, StorageCommitPrecondition beforeCommit) {
+      if (beforeCommit) { directoryOwner = std::this_thread::get_id(); ready = true; }
+      return factory(paths, std::move(beforeCommit));
+    };
+    auto now = std::chrono::steady_clock::time_point{};
+    deps.now = [&] { return now += std::chrono::milliseconds(101); };
+    const auto report = StorageOptimizer(deps).Run(request(temp.root / "charts"), [&] {
+      // Only the encoding thread's first checkpoint runs after directory setup
+      // and before any candidate preparation or transaction has started.
+      if (!afterCommit && ready && std::this_thread::get_id() != directoryOwner && !injected.exchange(true))
+        throw std::bad_alloc();
+      return true;
+    }, [&](const StorageProgress &progress) {
+      if (afterCommit && progress.filesDone == 1 && !injected.exchange(true)) throw std::bad_alloc();
+    });
+    require(injected && report.failed == 1 && !report.recoveryRequired && !report.cleanupPending && !report.cancelled &&
+                report.converted == (afterCommit ? 1 : 0),
+            "encoding worker failure outside an unresolved transaction does not require restart recovery");
+    require(std::ranges::any_of(report.files, [](const auto &file) {
+              return file.outcome == FileOutcome::Failed && file.reason.code == StorageReason::IoError;
+            }) && (!fs::exists(deps.paths.journalRoot) || fs::is_empty(deps.paths.journalRoot)) &&
+                fs::is_empty(deps.paths.temporaryRoot),
+            "known filesystem state reports an ordinary failure and leaves no recovery or staging files");
+    require(fs::exists(temp.root / "charts/a.wav") == !afterCommit &&
+                fs::exists(temp.root / "charts/a.ogg") == afterCommit,
+            "worker setup failure preserves its source and post-commit failure preserves its completed output");
+    if (!afterCommit) {
+      const auto retried = StorageOptimizer(deps).Run(request(temp.root / "charts"));
+      require(retried.converted == 1 && !retried.failed && !retried.recoveryRequired,
+              "worker setup failure allows an immediate successful retry");
+    }
+  }
+}
 void cleanupFailureAndFatalRecovery() {
   for (bool fatal : {false, true}) {
     TempDirectory temp;
@@ -930,7 +972,8 @@ int main(int argc, char **argv) {
     if (argc > 1 && std::string_view(argv[1]) == "--subset-refresh") { subsetRefreshNeverEnumeratesAncestorSiblings(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--parallel") { growingOutputsRespectSharedScratch(); recoveryStopsAnAlreadyEncodedPeerBeforeCommit(); slowVideoDoesNotBlockFollowingFiles(); independentDirectoriesUseDistinctOutputs(); return 0; }
     if (argc > 1 && std::string_view(argv[1]) == "--sandbox-boundaries") { reviewedSelectionRetainsPrivateSandboxBoundary(); return 0; }
-    unsafeChartEvidenceRetainsAffectedScopes(); exceptionRecoveryClassification();
+    if (argc > 1 && std::string_view(argv[1]) == "--worker-failures") { encodingWorkerFailureRecoveryClassification(); exceptionRecoveryClassification(); recoveryStopsAnAlreadyEncodedPeerBeforeCommit(); return 0; }
+    unsafeChartEvidenceRetainsAffectedScopes(); exceptionRecoveryClassification(); encodingWorkerFailureRecoveryClassification();
     reviewedSelectionRetainsPrivateSandboxBoundary();
     losslessGrowthOffsetsSavingsAcrossDirectories();
     independentDirectoriesUseDistinctOutputs();

@@ -67,17 +67,35 @@ struct Codec {
   AVCodecContext *value = nullptr;
   ~Codec() { avcodec_free_context(&value); }
 };
+void preserveEfficientVideo(const AVFormatContext &format) {
+  for (unsigned i = 0; i < format.nb_streams; ++i) {
+    const auto stream = format.streams[i];
+    if (stream->codecpar->codec_type != AVMEDIA_TYPE_VIDEO ||
+        (stream->disposition & AV_DISPOSITION_ATTACHED_PIC)) continue;
+    switch (stream->codecpar->codec_id) {
+    case AV_CODEC_ID_H264: case AV_CODEC_ID_HEVC: case AV_CODEC_ID_VP9:
+    case AV_CODEC_ID_AV1: case AV_CODEC_ID_VVC:
+      throw Failure{StorageReason::AlreadyOptimized,
+          "H.264 or a more efficient video codec is preserved; requested caps are not applied", FileOutcome::Skipped};
+    default: break;
+    }
+  }
+}
 struct Input {
   AVFormatContext *format = nullptr;
   std::vector<AVCodecContext *> decoders;
   int video = -1, audio = -1;
-  explicit Input(const fs::path &path) {
+  explicit Input(const fs::path &path, bool preserveEfficient = false) {
     try {
       checked(avformat_open_input(&format, mediaPath(path).c_str(), nullptr, nullptr), "Open media");
       const std::string_view container = format->iformat->name;
       if (container.find("image2") != std::string_view::npos || container.ends_with("_pipe") ||
           container == "gif" || container == "apng") unsupported("Still images and image sequences are preserved");
+      // Most containers identify codecs in their headers. Avoid even decoder
+      // probing when possible; elementary streams may need stream discovery.
+      if (preserveEfficient) preserveEfficientVideo(*format);
       checked(avformat_find_stream_info(format, nullptr), "Read media streams");
+      if (preserveEfficient) preserveEfficientVideo(*format);
       if (format->nb_streams > 2 || format->nb_chapters) unsupported("Extra streams or chapters cannot be preserved");
       for (unsigned i = 0; i < format->nb_streams; ++i) {
         const auto stream = format->streams[i];
@@ -502,9 +520,10 @@ void validateDisposition(int disposition) {
     unsupported("Stream disposition cannot be preserved in MP4");
 }
 enum class ScanPurpose { SourceConversion, ExistingDestination, EncodedOutput };
-Scan scan(const fs::path &path, const Checkpoint &check, ScanPurpose purpose = ScanPurpose::SourceConversion) {
+Scan scan(const fs::path &path, const Checkpoint &check, ScanPurpose purpose = ScanPurpose::SourceConversion,
+          bool preserveEfficientVideo = false) {
   checkpoint(check);
-  Input input(path);
+  Input input(path, preserveEfficientVideo);
   const bool existingDestination = purpose == ScanPurpose::ExistingDestination;
   if (existingDestination && (!std::strstr(input.format->iformat->name, "mp4") ||
       input.format->streams[input.video]->codecpar->codec_id != AV_CODEC_ID_H264))
@@ -786,7 +805,7 @@ EncodedSummary encode(const fs::path &source, const fs::path &destination, const
   if (gop <= 0 || gop > std::numeric_limits<int>::max()) unsupported("Video frame rate exceeds encoder limits");
   video.gop_size = static_cast<int>(gop);
   if (output.format->oformat->flags & AVFMT_GLOBALHEADER) video.flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-  checked(av_opt_set(video.priv_data, "preset", "medium", 0), "Set x264 preset");
+  checked(av_opt_set(video.priv_data, "preset", "fast", 0), "Set x264 preset");
   checked(av_opt_set_int(video.priv_data, "crf", plan.crf, 0), "Set x264 CRF");
   checked(avcodec_open2(&video, videoCodec, nullptr), "Open x264", StorageReason::CodecUnavailable);
   auto videoStream = avformat_new_stream(output.format, nullptr);
@@ -1035,7 +1054,7 @@ EncodeResult EncodeBga(const AssetCandidate &candidate, const StoragePolicy &pol
     if (policy.bga != BgaAction::CompressH264) return {FileOutcome::Skipped, {}, {StorageReason::PolicyKeep, "BGA compression is not selected"}};
     if (asobmshow::chart_assets::ClassifyMediaPath(candidate.source) != asobmshow::chart_assets::MediaKind::Video)
       return {FileOutcome::Skipped, {}, {StorageReason::UnsupportedSource, "Only supported video paths are eligible"}};
-    const auto source = scan(candidate.source, check);
+    const auto source = scan(candidate.source, check, ScanPurpose::SourceConversion, true);
     const auto plan = PlanVideoCompression(source.description, policy);
     if (plan.reason.code != StorageReason::None) return {FileOutcome::Skipped, {}, plan.reason};
     if (progress) progress({StoragePhase::Encode, candidate.source});

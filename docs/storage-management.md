@@ -87,10 +87,14 @@ remain skipped. Existing destinations are never overwritten.
 
 ## BGA video choices
 
-**Compress to H.264** uses software x264, an MP4 container and the `medium` preset.
+**Compress to H.264** uses software x264, an MP4 container and the `fast` preset.
 High, Balanced and Smaller quality correspond to CRF 18, 23 and 28; Balanced is
 the default. Up to two videos encode at a time, each with two encoder threads.
 The main saving is replacing inefficient video such as MPEG-1; resizing is optional.
+Sources already using H.264, HEVC/H.265, VP9, AV1 or VVC/H.266 are preserved,
+regardless of the container, quality selection or requested caps. The codec check
+happens before full decoding, so these files do not occupy the encoder for a
+complete scan.
 
 Audio uses separate worker capacity, so a large video can overlap later audio
 and video targets, including files in the same folder or archive. Independent
@@ -104,6 +108,9 @@ fill the encoder queue. Later targets continue while scratch space is available.
 Archive read-ahead reserves and extracts inputs in source order, including queued
 videos, so a busy video pool does not hide later audio. Staged inputs wait for
 their own codec pool without occupying encoder slots in the other pool.
+Read-ahead continues across images, unchanged audio and unselected entries without
+waiting between metadata batches. Scratch limits and existing-destination
+validation can still pause admission; archive writes remain in source order.
 The status shows active and finished archive encodes separately from the
 source-order file count, so a slow video does not hide that activity.
 
@@ -146,8 +153,7 @@ ReplayGain/R128 volume metadata and unsupported visual playback metadata preserv
 the original instead. Video and audio stream flags must survive MP4 conversion;
 flags the container cannot represent cause the original to be preserved.
 
-Existing H.264 already within the caps is skipped, even if a different quality
-preset is selected. Every candidate is decoded and validated. **An output must
+Videos that require conversion are fully decoded and validated. **An output must
 be smaller to be installed, even when caps were requested.** A “not smaller” result
 means the original remains and its requested caps were not applied.
 
@@ -339,10 +345,6 @@ backgrounding and remains cancellable.
 
 ## Developer verification
 
-See [scale measurements and platform limits](testing/storage-scale-2026-10-18.md)
-for the opt-in benchmark, selected worker defaults and remaining dense-directory
-validation cost.
-
 Storage tests belong to the library, audio, video, settings and UI groups listed
 in [the testing guide](testing/README.md). `storage_optimizer_tests` includes a
 disposable library with real FLAC, Vorbis and H.264 encoders, caps, deletion,
@@ -351,15 +353,23 @@ and resource resolution/decoding after replacement. Download workflow fixtures
 cover extraction precedence, cancellation, warnings, mismatch handling and commit
 ordering without fetching a real package.
 
-Verification for this implementation used the desktop grouped suites and a real
-disposable-library conversion, plus the iOS and Android build-only paths and native
-codec/file transaction tests on iOS 27.1 Simulator and the Android 10 emulator.
-The desktop music UI was inspected, but
-that build reports native music playback unavailable. Windows build and filesystem
-execution were not available in this session; they remain release validation work.
+Archive update coverage includes ZIP/TAR batching, sparse ZIP64 offsets, legacy
+filenames, real FLAC playback resolution, checkpointed recovery, ambiguous
+writes/external edits and interrupted journal cleanup. Native Windows filesystem
+behavior and physical-device throughput still need release validation.
 
-Archive update coverage includes desktop ZIP/TAR batching, sparse ZIP64 offsets,
-legacy filenames, real FLAC playback resolution, checkpointed batch recovery,
-fail-closed ambiguous writes/external edits and
-interrupted journal cleanup. The archive additions also pass iOS and Android
-build-only checks; giant-library device performance has not been measured.
+Opt-in benchmarks use disposable fixtures and are excluded from normal CTest:
+
+```sh
+cmake --build cmake-build-debug --target storage_scale_benchmark storage_optimizer_tests -j 6
+cmake-build-debug/storage_scale_benchmark synthetic 10000 1000 4 wide
+cmake-build-debug/storage_scale_benchmark audio 8 32 4 wav-flac
+cmake-build-debug/storage_scale_benchmark archive-review 20 1000 6 persisted
+cmake-build-debug/storage_optimizer_tests --archive-traversal-benchmark 20000
+cmake-build-debug/storage_optimizer_tests --archive-compaction-benchmark 10000 2048 1
+```
+
+The scale harness is POSIX-only. Cached synthetic timings do not predict cold
+storage or phone throughput. Conversion still revalidates directory membership
+at each commit; a densely populated directory can require quadratic traversal
+work even though memory stays bounded.

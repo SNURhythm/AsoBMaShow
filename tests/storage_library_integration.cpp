@@ -76,10 +76,10 @@ void storageLibraryIntegration() {
   report = run({.audio = AudioAction::LossyVorbis});
   require(report.converted == 4, "all four lossless files become smaller Vorbis files");
   decodeSounds();
-  storage_test::VideoFixture large; large.h264 = true; large.width = 800; large.height = 600;
+  storage_test::VideoFixture large; large.width = 800; large.height = 600;
   storage_test::makeVideo(root / "large.avi", large);
   report = run({.bga = BgaAction::CompressH264, .resolution = ResolutionCap::Low, .maxFps = 15});
-  require(report.converted >= 1, "cap request installs smaller outputs when available");
+  require(report.converted == 1, "caps convert legacy video while retaining previously encoded H264");
   const auto capped = storage_test::inspectVideo(root / "large.mp4");
   require(capped.width == 480 && capped.height == 360, "installed output obeys resolution cap");
   for (std::size_t i = 1; i < capped.timestamps.size(); ++i)

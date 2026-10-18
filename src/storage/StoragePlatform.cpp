@@ -11,6 +11,7 @@
 
 #ifdef _WIN32
 #include <windows.h>
+#include <aclapi.h>
 #else
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -135,7 +136,69 @@ bool preservePermissions(const fs::path &source, const FileIdentity &sourceIdent
                          const fs::path &installed, const FileIdentity &installedIdentity,
                          std::string &error) {
 #ifdef _WIN32
-  (void)source; (void)sourceIdentity; (void)installed; (void)installedIdentity; (void)error;
+  struct Handle {
+    HANDLE value;
+    ~Handle() { if (value != INVALID_HANDLE_VALUE) CloseHandle(value); }
+  } input{CreateFileW(source.c_str(), READ_CONTROL | FILE_READ_ATTRIBUTES, FILE_SHARE_READ,
+                       nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr)},
+    output{CreateFileW(installed.c_str(), GENERIC_WRITE | FILE_READ_ATTRIBUTES | READ_CONTROL | WRITE_DAC, 0,
+                        nullptr, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, nullptr)};
+  const auto matches = [](HANDLE handle, const FileIdentity &identity) {
+    BY_HANDLE_FILE_INFORMATION info{};
+    return handle != INVALID_HANDLE_VALUE && GetFileInformationByHandle(handle, &info) &&
+        info.nNumberOfLinks == 1 && !(info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) &&
+        info.dwVolumeSerialNumber == identity.device &&
+        ((std::uint64_t(info.nFileIndexHigh) << 32) | info.nFileIndexLow) == identity.fileId &&
+        ((std::uint64_t(info.nFileSizeHigh) << 32) | info.nFileSizeLow) == identity.bytes;
+  };
+  if (!matches(input.value, sourceIdentity) || !matches(output.value, installedIdentity)) {
+    error = "File identity changed or security access denied before preserving permissions"; return false;
+  }
+  struct Security {
+    PSECURITY_DESCRIPTOR descriptor = nullptr;
+    PSID owner = nullptr, group = nullptr;
+    PACL dacl = nullptr;
+    SECURITY_DESCRIPTOR_CONTROL control = 0;
+    ~Security() { if (descriptor) LocalFree(descriptor); }
+    bool read(HANDLE handle) {
+      DWORD revision = 0;
+      return GetSecurityInfo(handle, SE_FILE_OBJECT,
+          OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+          &owner, &group, &dacl, nullptr, &descriptor) == ERROR_SUCCESS &&
+          GetSecurityDescriptorControl(descriptor, &control, &revision) && (control & SE_DACL_PRESENT) &&
+          owner && group && IsValidSid(owner) && IsValidSid(group) && (!dacl || IsValidAcl(dacl));
+    }
+  } original, before, after;
+  if (!original.read(input.value) || !before.read(output.value)) {
+    error = "Cannot read source or installation access permissions"; return false;
+  }
+  // Owner/group affect ACL interpretation (including owner-rights ACEs). Do
+  // not silently change those identities or request privilege escalation.
+  if (!EqualSid(original.owner, before.owner) || !EqualSid(original.group, before.group)) {
+    error = "Cannot preserve source security ownership"; return false;
+  }
+  const auto protection = (original.control & SE_DACL_PROTECTED) ?
+      PROTECTED_DACL_SECURITY_INFORMATION : UNPROTECTED_DACL_SECURITY_INFORMATION;
+  if (SetSecurityInfo(output.value, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION | protection,
+                      nullptr, nullptr, original.dacl, nullptr) != ERROR_SUCCESS || !after.read(output.value)) {
+    error = "Cannot preserve source access permissions"; return false;
+  }
+  const auto sameAcl = [](PACL left, PACL right) {
+    if (!left || !right) return left == right;
+    if (left->AceCount != right->AceCount) return false;
+    for (DWORD i = 0; i < left->AceCount; ++i) {
+      void *a = nullptr, *b = nullptr;
+      if (!GetAce(left, i, &a) || !GetAce(right, i, &b)) return false;
+      const auto bytes = static_cast<ACE_HEADER *>(a)->AceSize;
+      if (bytes != static_cast<ACE_HEADER *>(b)->AceSize || std::memcmp(a, b, bytes) != 0) return false;
+    }
+    return true;
+  };
+  if (!EqualSid(original.owner, after.owner) || !EqualSid(original.group, after.group) ||
+      ((original.control ^ after.control) & SE_DACL_PROTECTED) || !sameAcl(original.dacl, after.dacl) ||
+      !FlushFileBuffers(output.value)) {
+    error = "Cannot verify or flush preserved source access permissions"; return false;
+  }
   return true;
 #else
   struct Descriptor {

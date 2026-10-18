@@ -57,7 +57,7 @@ std::vector<GroupStorageMeasurement> MeasureArchiveGroups(const fs::path &archiv
     result.push_back(std::move(measurement));
   }
   if (validGroups.empty()) return result;
-  const StoragePathIndex roots(innerRoots);
+  const StoragePathIndex roots(innerRoots, StoragePathComparison::CaseSensitive);
   std::vector<bool> seen(validGroups.size());
   for (std::size_t i = 0; i < innerRoots.size(); ++i) seen[i] = innerRoots[i].empty();
   if (metrics) metrics->peakArchiveAggregationRecords = std::max<std::uint64_t>(

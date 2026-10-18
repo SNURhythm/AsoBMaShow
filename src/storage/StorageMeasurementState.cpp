@@ -29,7 +29,8 @@ std::set<std::string> ReconcileStorageMeasurements(StorageMeasurementRows &rows,
     next[group.groupId] = source; paths.push_back(root(group));
   }
   for (const auto &[id, source] : previous) if (!next.contains(id)) changedPaths.push_back(root(source.selection));
-  const StoragePathIndex groupIndex(paths), changedIndex(changedPaths);
+  const StoragePathIndex groupIndex(paths, StoragePathComparison::CaseSensitive),
+      changedIndex(changedPaths, StoragePathComparison::CaseSensitive);
   for (const auto &path : changedPaths)
     for (const auto index : groupIndex.Ancestors(path)) {
       const auto &group = current[index].selection;
@@ -46,7 +47,8 @@ std::set<std::string> ApplyStorageReportMeasurements(StorageMeasurementRows &row
     const std::vector<FolderSelection> &groups, const StorageReport &report) {
   std::vector<std::filesystem::path> paths;
   for (const auto &group : groups) paths.push_back(root(group));
-  const StoragePathIndex groupIndex(paths), changedIndex(report.changedRoots);
+  const StoragePathIndex groupIndex(paths, StoragePathComparison::CaseSensitive),
+      changedIndex(report.changedRoots, StoragePathComparison::CaseSensitive);
   std::set<std::string> affected;
   for (const auto &changed : report.changedRoots)
     for (const auto index : groupIndex.Ancestors(changed)) affected.insert(groups[index].groupId);

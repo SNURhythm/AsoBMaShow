@@ -85,6 +85,7 @@ inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
   require(avcodec_open2(&encoder, codec, nullptr) >= 0, "open fixture encoder");
   require(avcodec_parameters_from_context(stream->codecpar, &encoder) >= 0, "fixture video parameters");
   stream->time_base = encoder.time_base; stream->avg_frame_rate = fixture.rate;
+  stream->sample_aspect_ratio = fixture.sampleAspectRatio;
   if (fixture.rotation || fixture.scaledDisplayMatrix) {
     auto side = av_packet_side_data_new(&stream->codecpar->coded_side_data, &stream->codecpar->nb_coded_side_data,
                                         AV_PKT_DATA_DISPLAYMATRIX, sizeof(std::int32_t) * 9, 0);

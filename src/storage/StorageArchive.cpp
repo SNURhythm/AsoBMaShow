@@ -119,27 +119,37 @@ bool FindStorageArchive(const fs::path &virtualPath, fs::path &archive, fs::path
   for (auto root : accessRoots) {
     if (!root.is_absolute() || root != root.lexically_normal()) continue;
     while (root != root.root_path() && root.filename().empty()) root = root.parent_path();
-    if (IsWithinFolder(virtualPath, root) && (!anchored || IsWithinFolder(prefix, root))) {
+    if (IsWithinLocalFolder(virtualPath, root) && (!anchored || IsWithinFolder(prefix, root))) {
       prefix = std::move(root); anchored = true;
     }
   }
   if (!anchored) return false;
-  const auto relative = virtualPath.lexically_relative(prefix);
-  auto component = relative.begin();
+  auto component = virtualPath.begin();
+  fs::path requestedPrefix;
+  for (const auto &part : prefix) {
+    if (component == virtualPath.end()) return false;
+    requestedPrefix /= *component++;
+  }
+  if (!accessRoots.empty()) {
+    std::string error;
+    if (!IsSafeLocalPath(requestedPrefix, error, accessRoots)) return false;
+  }
+  prefix = std::move(requestedPrefix);
   // A bare Windows drive name or UNC server is not a filesystem directory.
   // Without a grant, start at the first full component below root_path().
   if (accessRoots.empty()) {
-    if (component == relative.end() || *component == ".") return false;
+    if (component == virtualPath.end() || *component == ".") return false;
     prefix /= *component++;
   }
   for (;;) {
     std::error_code error; const auto status = fs::symlink_status(prefix, error);
     if (!error && fs::is_regular_file(status)) {
-      archive = prefix; inner = virtualPath.lexically_relative(prefix);
-      if (inner == ".") inner.clear(); return true;
+      archive = prefix;
+      for (; component != virtualPath.end(); ++component) inner /= *component;
+      return true;
     }
     if (error || (!fs::is_directory(status) && !fs::is_symlink(status))) return false;
-    if (component == relative.end()) return false;
+    if (component == virtualPath.end()) return false;
     prefix /= *component++;
   }
 }

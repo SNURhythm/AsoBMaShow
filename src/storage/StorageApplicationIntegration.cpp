@@ -188,7 +188,11 @@ bool InitializeStorageServices(ApplicationContext &context, StorageRecoveryProgr
         const auto matches = boundaries.Ancestors(root);
         const auto localBoundaries = matches.empty() ? std::vector<std::filesystem::path>{} :
             std::vector<std::filesystem::path>{access->paths.pathAccessRoots[matches.back()]};
-        if (!IsSafeLocalPath(root, error, localBoundaries) || allowed.Ancestors(root).empty()) {
+        const auto allowedMatches = allowed.Ancestors(root);
+        if (!IsSafeLocalPath(root, error, localBoundaries) ||
+            !std::ranges::any_of(allowedMatches, [&](const auto index) {
+              return IsWithinLocalFolder(root, access->availableRoots[index]);
+            })) {
           error = "The selected folder is not a registered local chart folder."; return {};
         }
       }

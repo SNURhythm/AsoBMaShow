@@ -137,6 +137,10 @@ int main() {
   video.h264 = true; video.frameRate = {30000, 1001};
   expect(PlanVideoCompression(video, videoPolicy).reason.code == StorageReason::AlreadyOptimized,
          "H264 under caps is not repeatedly reencoded");
+  auto efficientLarge = video; efficientLarge.width = 3840; efficientLarge.height = 2160;
+  efficientLarge.frameRate = {60, 1};
+  expect(PlanVideoCompression(efficientLarge, videoPolicy).reason.code == StorageReason::AlreadyOptimized,
+         "H264 is preserved even when requested geometry or FPS caps would reduce it");
   video.h264 = false;
   for (int flag = 0; flag < 3; ++flag) {
     auto unsupported = video;

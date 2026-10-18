@@ -34,6 +34,8 @@
 
 namespace bounded_allocation_probe {
 thread_local bool enabled = false;
+thread_local bool observeStartup = false;
+thread_local std::size_t startupAllocations = 0, failedStartupAllocation = static_cast<std::size_t>(-1);
 thread_local std::size_t largest = 0;
 thread_local std::stop_source *cancelOnChunk = nullptr;
 std::atomic_size_t observedEntrySize{0};
@@ -46,6 +48,10 @@ const std::length_error injectedLengthError("injected archive length failure");
 }
 
 void *operator new(std::size_t size) {
+  if (bounded_allocation_probe::observeStartup &&
+      bounded_allocation_probe::startupAllocations++ == bounded_allocation_probe::failedStartupAllocation) {
+    bounded_allocation_probe::observeStartup = false; throw std::bad_alloc();
+  }
   if (bounded_allocation_probe::rejectEntryAllocation &&
       size == bounded_allocation_probe::rejectedEntrySize.load()) {
     ++bounded_allocation_probe::rejectedAllocations;

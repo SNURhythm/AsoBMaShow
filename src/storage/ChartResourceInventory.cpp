@@ -1,4 +1,5 @@
 #include "ChartResourceInventory.h"
+#include "StoragePathComparison.h"
 
 #include <algorithm>
 #include <set>
@@ -41,8 +42,44 @@ void skip(StorageInventory &inventory, const fs::path &path, StorageReason reaso
 bool IsWithinFolder(const fs::path &path, const fs::path &folder) {
   auto child = path.begin();
   for (auto parent = folder.begin(); parent != folder.end(); ++parent, ++child) {
-    if (child == path.end() || *child != *parent) return false;
+    if (child == path.end() || CompareStoragePathComponent(*child, *parent) != 0) return false;
   }
+  return true;
+}
+
+bool IsWithinLocalFolder(const fs::path &path, const fs::path &folder) {
+  for (const auto &part : path) if (part == "..") return false;
+  for (const auto &part : folder) if (part == "..") return false;
+  auto root = folder.lexically_normal();
+  while (root != root.root_path() && root.filename().empty()) root = root.parent_path();
+  if (!path.is_absolute() || !root.is_absolute() || !IsWithinFolder(path, root)) return false;
+#ifdef _WIN32
+  auto child = path.begin();
+  fs::path requestedPrefix;
+  for (auto parent = root.begin(); parent != root.end(); ++parent, ++child) requestedPrefix /= *child;
+  if (root.native() != requestedPrefix.native()) {
+    // Windows can opt individual directories into case-sensitive lookup. A
+    // folded lexical match must still identify the actual granted object.
+    const auto sameObject = [&] {
+      struct Handle {
+        HANDLE value;
+        ~Handle() { if (value != INVALID_HANDLE_VALUE) CloseHandle(value); }
+      } granted{CreateFileW(root.c_str(), FILE_READ_ATTRIBUTES,
+          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+          FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr)},
+        requested{CreateFileW(requestedPrefix.c_str(), FILE_READ_ATTRIBUTES,
+          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+          FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr)};
+      BY_HANDLE_FILE_INFORMATION a{}, b{};
+      return granted.value != INVALID_HANDLE_VALUE && requested.value != INVALID_HANDLE_VALUE &&
+          GetFileInformationByHandle(granted.value, &a) && GetFileInformationByHandle(requested.value, &b) &&
+          !(a.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) && !(b.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
+          a.dwVolumeSerialNumber == b.dwVolumeSerialNumber &&
+          a.nFileIndexHigh == b.nFileIndexHigh && a.nFileIndexLow == b.nFileIndexLow;
+    };
+    return sameObject();
+  }
+#endif
   return true;
 }
 
@@ -56,7 +93,7 @@ bool IsSafeLocalPath(const fs::path &path, std::string &error, const std::vector
   for (auto root : accessRoots) {
     if (!root.is_absolute() || root != root.lexically_normal()) continue;
     while (root != root.root_path() && root.filename().empty()) root = root.parent_path();
-    if (IsWithinFolder(path, root) && (!anchored || IsWithinFolder(current, root))) {
+    if (IsWithinLocalFolder(path, root) && (!anchored || IsWithinFolder(current, root))) {
       current = std::move(root); anchored = true;
     }
   }
@@ -80,9 +117,22 @@ bool IsSafeLocalPath(const fs::path &path, std::string &error, const std::vector
   // iOS grants an app/bookmark subtree without granting metadata access to its
   // system parents. Validate the trusted boundary itself and every child below it.
   if (!accessRoots.empty() && !inspect(current)) return false;
-  for (const auto &part : path.lexically_relative(current)) {
-    if (part == ".") continue;
-    current /= part;
+  // lexically_relative uses case-sensitive components even on Windows. Walk
+  // the already-matched prefix so differently cased grants cannot introduce
+  // synthetic ".." components or skip validation of a child.
+  auto child = path.begin();
+  fs::path requestedPrefix;
+  for (const auto &part : current) {
+    if (child == path.end() || CompareStoragePathComponent(*child, part) != 0) {
+      error = "Path is outside accessible storage roots: " + path.string(); return false;
+    }
+    requestedPrefix /= *child;
+    ++child;
+  }
+  current = std::move(requestedPrefix);
+  for (; child != path.end(); ++child) {
+    if (child->empty() || *child == ".") continue;
+    current /= *child;
     if (!inspect(current)) return false;
   }
   return true;

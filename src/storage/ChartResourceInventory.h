@@ -74,6 +74,9 @@ std::optional<FileIdentity> ReadFileIdentity(const std::filesystem::path &path,
                                            std::string &error,
                                            const std::vector<std::filesystem::path> &accessRoots = {});
 bool IsWithinFolder(const std::filesystem::path &path, const std::filesystem::path &folder);
+// Native mutation authority: differently spelled Windows prefixes must identify
+// the same physical object, including in case-sensitive directory trees.
+bool IsWithinLocalFolder(const std::filesystem::path &path, const std::filesystem::path &folder);
 StorageInventory BuildInventory(const InventoryRequest &, Checkpoint = {}, ProgressCallback = {});
 bool RevalidateInventory(const StorageInventory &, Checkpoint, std::string &error);
 

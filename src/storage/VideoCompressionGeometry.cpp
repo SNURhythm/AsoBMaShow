@@ -15,6 +15,8 @@ VideoCompressionPlan PlanVideoCompression(const VideoDescription &source, const 
   };
   if (!IsValid(policy) || policy.bga != BgaAction::CompressH264)
     return skip(StorageReason::PolicyKeep, "BGA compression is not selected");
+  if (source.h264)
+    return skip(StorageReason::AlreadyOptimized, "H.264 is preserved; requested caps are not applied");
   if (source.alpha || source.hdr || source.interlaced || source.unsupportedContent)
     return skip(StorageReason::UnsupportedFormat, "Video contains content or metadata that cannot be preserved");
   if (source.width < 2 || source.height < 2 || source.width > 16384 || source.height > 16384 ||
@@ -40,8 +42,6 @@ VideoCompressionPlan PlanVideoCompression(const VideoDescription &source, const 
       av_cmp_q(source.frameRate, {policy.maxFps, 1}) > 0 :
       (source.minimumFrameInterval <= 0 ||
        av_compare_ts(source.minimumFrameInterval, source.timeBase, 1, {1, policy.maxFps}) < 0));
-  if (source.h264 && scale >= 1.0 && !result.reduceFps)
-    return skip(StorageReason::AlreadyOptimized, "H.264 already satisfies the requested caps");
   if (!source.codecs.x264.available || !source.codecs.mp4.available)
     return skip(StorageReason::CodecUnavailable, "libx264 or MP4 is unavailable in this build");
   result.width = static_cast<int>(std::floor(source.width * scale)) & ~1;

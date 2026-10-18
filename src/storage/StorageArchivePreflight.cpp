@@ -116,7 +116,7 @@ void AppendStorageArchivePreflight(StoragePreflight &result, Checkpoint check, S
         auto inner = result.groups[position].root.lexically_relative(path);
         if (inner == ".") inner.clear(); summary.innerRoots.push_back(std::move(inner));
       }
-      const StoragePathIndex selected(summary.innerRoots);
+      const StoragePathIndex selected(summary.innerRoots, StoragePathComparison::CaseSensitive);
       std::uint64_t total = 0, skippedCount = 0;
       std::vector<FileResult> skipped;
       Statement entries(db.value, "SELECT id,name,bytes,directory FROM entries ORDER BY id");

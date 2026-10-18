@@ -143,13 +143,25 @@ void archiveReadAheadKeepsFullAudioCapacityWithVideos() {
   storage_test::TempDirectory temp;
   const auto path = temp.root / "mixed.zip";
   std::vector<std::pair<std::string, std::string>> files;
-  for (unsigned i = 0; i < 3; ++i) files.emplace_back("video-" + std::to_string(i) + ".mpg", std::string(1000, 'v'));
-  for (unsigned i = 0; i < 5; ++i) files.emplace_back("audio-" + std::to_string(i) + ".wav", std::string(1000, 'a'));
+  for (unsigned i = 0; i < 3; ++i) files.emplace_back("song/video-" + std::to_string(i) + ".mpg", std::string(1000, 'v'));
+  // Cross several metadata batches: images, already-compressed audio, other
+  // files, and eligible media outside the selected subtree must not starve audio.
+  for (unsigned i = 0; i < 2048; ++i) {
+    const auto name = std::to_string(i);
+    switch (i % 4) {
+    case 0: files.emplace_back("song/image-" + name + ".png", "image"); break;
+    case 1: files.emplace_back("song/kept-" + name + ".ogg", "audio"); break;
+    case 2: files.emplace_back("song/readme-" + name + ".txt", "text"); break;
+    case 3: files.emplace_back("unselected/audio-" + name + ".wav", "outside"); break;
+    }
+  }
+  for (unsigned i = 0; i < 5; ++i) files.emplace_back("song/audio-" + std::to_string(i) + ".wav", std::string(1000, 'a'));
   writeArchive(path, files);
   const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
-  InventoryRequest input{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+  InventoryRequest input{.groups = {{"song", path / "song", false, false, StorageSourceKind::Archive}},
       .policy = {.audio = AudioAction::LossyVorbis, .bga = BgaAction::CompressH264}, .scanScratchRoot = paths.scanRoot};
   const auto review = BuildStoragePreflight(input);
+  require(review.eligibleCount == 8, "only selected convertible media enters archive encoding");
   std::mutex mutex; std::condition_variable changed;
   unsigned audio = 0, video = 0, peakAudio = 0, peakVideo = 0;
   bool release = false;
@@ -163,20 +175,25 @@ void archiveReadAheadKeepsFullAudioCapacityWithVideos() {
     std::ofstream(output) << "tiny";
     return EncodeResult{FileOutcome::Converted, output, {}};
   }, .executionLimits = {.audioWorkers = 4}};
+  const auto started = std::chrono::steady_clock::now();
   auto run = std::async(std::launch::async, [&] { return UpdateStorageArchive(review.archives.front(), input.policy, paths, deps); });
   bool overlapped;
   { std::unique_lock lock(mutex);
     overlapped = changed.wait_for(lock, std::chrono::seconds(2), [&] { return audio == 4 && video == 2; });
     release = true; changed.notify_all(); }
+  const auto readAheadMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
   const auto report = run.get();
+  std::cout << "archive ineligible-gap dispatch ms=" << readAheadMs << '\n';
   require(overlapped && peakAudio == 4 && peakVideo == 2,
       "queued archive video does not reduce the full independent audio worker allocation");
   require(report.converted == 8 && !report.failed && !report.skipped && !report.recoveryRequired && fs::is_empty(paths.journalRoot),
       "bounded media read-ahead commits every queued target and cleans staging");
   const auto retained = readArchive(path);
-  require(retained.size() == 8, "read-ahead preserves every archive entry");
-  for (unsigned i = 0; i < 3; ++i) require(retained.at("video-" + std::to_string(i) + ".mp4") == "tiny", "video output is committed once");
-  for (unsigned i = 0; i < 5; ++i) require(retained.at("audio-" + std::to_string(i) + ".ogg") == "tiny", "audio output is committed once");
+  require(retained.size() == files.size(), "read-ahead preserves every archive entry");
+  for (unsigned i = 0; i < 3; ++i) require(retained.at("song/video-" + std::to_string(i) + ".mp4") == "tiny", "video output is committed once");
+  for (unsigned i = 0; i < 5; ++i) require(retained.at("song/audio-" + std::to_string(i) + ".ogg") == "tiny", "audio output is committed once");
+  for (std::size_t i = 3; i < 2051; ++i)
+    require(retained.at(files[i].first) == files[i].second, "read-ahead leaves skipped and unselected entries unchanged");
 }
 void archiveLookaheadRespectsAggregateScratch() {
   storage_test::TempDirectory temp;
@@ -356,6 +373,39 @@ void selectedArchiveFoldersAreEligible() {
   require(result.totalBytes == 3580 && result.groups[0].totalBytes == 1550 && result.groups[1].totalBytes == 2030,
       "archive review reports logical group sizes and a deduplicated union");
   require(result.EligibleRoots() == std::vector<fs::path>{archive}, "archive admission reserves the container once");
+}
+void archiveFolderSelectionPreservesCase() {
+  storage_test::TempDirectory temp;
+  const auto archive = temp.root / "library.zip";
+  writeArchive(archive, {{"Song/selected.avi", std::string(20, 'a')},
+      {"song/retained.avi", std::string(30, 'b')}});
+#ifdef _WIN32
+  fs::path resolved, inner;
+  require(FindStorageArchive(archive / "Song", resolved, inner, {temp.root / "LIBRARY.ZIP"}) &&
+              resolved == archive && inner == "Song",
+          "archive file grants with different case preserve the requested native prefix and inner spelling");
+#endif
+  InventoryRequest request{.groups = {{"upper", archive / "Song", false, false, StorageSourceKind::Archive},
+      {"lower", archive / "song", false, false, StorageSourceKind::Archive}},
+      .policy = {.bga = BgaAction::Delete}};
+  const auto measured = MeasureStorageGroups(request);
+  require(measured.groups.size() == 2 && measured.groups[0].totalBytes == 20 && measured.groups[1].totalBytes == 30,
+          "case-distinct archive folders have independent measured totals on every host");
+  request.groups.resize(1);
+  const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+  request.scanScratchRoot = paths.scanRoot;
+  const auto review = BuildStoragePreflight(request);
+  require(review.complete && review.archives.size() == 1 && review.eligibleCount == 1 && review.eligibleBytes == 20,
+          "archive review selects only the exact-cased inner folder");
+  StorageArchiveDependencies dependencies;
+  dependencies.measurementBaselines = measured.groups;
+  const auto report = UpdateStorageArchive(review.archives.front(), request.policy, paths, dependencies);
+  require(report.deleted == 1 && !report.failed && !report.recoveryRequired &&
+              readArchive(archive) == std::map<std::string, std::string>{{"song/retained.avi", std::string(30, 'b')}},
+          "archive apply never deletes a differently cased sibling folder");
+  for (const auto &delta : report.groupDeltas)
+    if (delta.groupId == "lower") require(delta.bytesBefore == 0 && delta.bytesAfter == 0,
+        "archive delta aggregation leaves the case-distinct sibling unchanged");
 }
 void archiveReviewSeparatesPrivateAndLibraryAccess() {
   storage_test::TempDirectory temp;
@@ -1899,6 +1949,7 @@ void storageArchiveTests(const char *executable) {
       {"measurement-deltas", archiveChangesUpdateCachedInnerMeasurements},
       {"sparse-prefix-recovery", sparsePrefixRecovery}, {"large-batch-recovery", archiveLargeRecordRecovery}, {"delete-batches", archiveConsecutiveDeletesAreBatched},
       {"manifest", manifestsExtractEntries}, {"preflight", selectedArchiveFoldersAreEligible},
+      {"case-sensitive-selection", archiveFolderSelectionPreservesCase},
       {"deflate-boundary", deflatedPayloadRefillsAtExactOutputBoundary},
       {"sandbox", archiveReviewSeparatesPrivateAndLibraryAccess}, {"sandbox-staging", archiveStagingRespectsPrivateBoundary},
       {"cached-review", reviewUsesCachedIndexAndApplyValidatesLayout},

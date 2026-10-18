@@ -7,6 +7,10 @@
 #include <iostream>
 using namespace storage_management;
 using storage_test::require;
+namespace bounded_allocation_probe {
+extern thread_local bool observeStartup;
+extern thread_local std::size_t startupAllocations, failedStartupAllocation;
+}
 namespace {
 void measurementsArriveBeforeScanCompletion() {
   std::latch entered(1), secondPublished(1);
@@ -67,6 +71,58 @@ void selectedReviewCancelsUnrelatedScan() {
   require(task.TakeMeasurements().empty() && done->preflight && done->preflight->eligibleCount == 1,
           "replaced scan cannot publish old rows or evidence");
 }
+void startupFailuresPublishUnavailableAndAllowRetry() {
+  using namespace bounded_allocation_probe;
+  for (const auto mode : {StorageInventoryMode::Measurements, StorageInventoryMode::Preflight}) {
+    std::atomic<unsigned> runs = 0, wakes = 0;
+    StorageInventoryTask task({.measurements = [&](const auto &request, auto, auto, auto) {
+      ++runs; StorageMeasurements result;
+      result.groups.push_back({.groupId = request.groups.front().groupId, .totalBytes = 42}); return result;
+    }, .preflight = [&](const auto &, auto, auto) {
+      ++runs; StoragePreflight result; result.eligibleCount = 1; return result;
+    }, .wake = [&] { ++wakes; }});
+    const auto start = [&](InventoryRequest request) {
+      if (mode == StorageInventoryMode::Measurements) task.StartMeasurements(std::move(request));
+      else task.StartPreflight(std::move(request));
+    };
+    InventoryRequest initial{.groups = {{"folder", "/folder"}}};
+    startupAllocations = 0; observeStartup = true;
+    start(std::move(initial));
+    observeStartup = false;
+    const auto allocations = startupAllocations;
+    while (!task.TakeResult()) std::this_thread::yield();
+    task.Cancel();
+    require(allocations != 0 && runs == 1, "inventory startup uses real asynchronous worker construction");
+    for (std::size_t index = 0; index < allocations; ++index) {
+      InventoryRequest request{.groups = {{"folder", "/folder"}}};
+      const auto priorRuns = runs.load(), priorWakes = wakes.load();
+      failedStartupAllocation = index; startupAllocations = 0; observeStartup = true;
+      bool threw = false;
+      try { start(std::move(request)); } catch (...) { threw = true; }
+      observeStartup = false;
+      require(!threw, "inventory startup failure must not escape into the scene");
+      const auto result = task.TakeResult();
+      const auto rows = task.TakeMeasurements();
+      require(result && result->mode == mode && !result->complete && !result->cancelled && !result->preflight &&
+          rows.size() == 1 && rows.front().groupId == "folder" && !rows.front().totalBytes &&
+          rows.front().reason.code == StorageReason::IoError && !rows.front().reason.detail.empty() &&
+          runs == priorRuns && wakes == priorWakes + 1,
+          "failed startup finishes with unavailable rows and wakes the scene without running a builder");
+      const auto generation = rows.front().generation;
+      start({.groups = {{"folder", "/folder"}}});
+      std::optional<StorageInventoryTaskResult> retried;
+      while (!(retried = task.TakeResult())) std::this_thread::yield();
+      require(retried->complete && runs == priorRuns + 1 && !task.TakeResult(), "inventory can retry once resources recover");
+      if (mode == StorageInventoryMode::Measurements) {
+        const auto rows = task.TakeMeasurements();
+        require(rows.size() == 1 && rows.front().totalBytes == 42 && rows.front().generation > generation,
+            "retry replaces failed measurement provenance with the new generation");
+      } else require(retried->preflight && retried->preflight->eligibleCount == 1, "retry publishes usable review evidence");
+      task.Cancel();
+    }
+    failedStartupAllocation = static_cast<std::size_t>(-1);
+  }
+}
 void failuresRemainUnavailable() {
   StorageInventoryTask task({.measurements = [](const auto &, auto, auto, auto) -> StorageMeasurements {
     throw std::runtime_error("unreadable");
@@ -81,7 +137,7 @@ void failuresRemainUnavailable() {
 }
 }
 int RunStorageInventoryTaskTests() {
-  try { measurementsArriveBeforeScanCompletion(); selectedReviewCancelsUnrelatedScan(); failuresRemainUnavailable(); }
+  try { startupFailuresPublishUnavailableAndAllowRetry(); measurementsArriveBeforeScanCompletion(); selectedReviewCancelsUnrelatedScan(); failuresRemainUnavailable(); }
   catch (const std::exception &error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }
   return 0;
 }

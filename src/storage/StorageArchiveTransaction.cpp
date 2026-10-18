@@ -100,7 +100,7 @@ void cleanup(fs::path journal, const StorageArchiveDependencies &deps = {}) {
   fs::remove(journal); syncDirectory(journal.parent_path());
 }
 void authority(const fs::path &path, const StoragePlatformPaths &paths) {
-  require(path.is_absolute() && !StoragePathIndex(paths.allowedRoots).Ancestors(path).empty(), "Archive is outside authorized library roots", StorageReason::UnsafePath);
+  require(path.is_absolute() && std::ranges::any_of(paths.allowedRoots, [&](const auto &root) { return IsWithinLocalFolder(path, root); }), "Archive is outside authorized library roots", StorageReason::UnsafePath);
   require(!IsWithinFolder(path, paths.journalRoot) && !IsWithinFolder(path, paths.temporaryRoot), "Private recovery files cannot be optimized", StorageReason::UnsafePath);
   std::string error; require(IsSafeLocalPath(path, error, paths.pathAccessRoots), "Unsafe archive path", StorageReason::UnsafePath);
 }
@@ -420,7 +420,7 @@ public:
     append(report, {.source = archive.io.path / fs::u8path(entry.name), .outcome = outcome, .reason = std::move(reason), .bytesBefore = entry.bytes});
   }
   void Prepare(StorageArchiveEntry &, const AssetCandidate &, const StoragePolicy &, Checkpoint, ProgressCallback);
-  void FillEncodings(const StoragePolicy &, Checkpoint);
+  bool FillEncodings(const StoragePolicy &, Checkpoint);
   void StartEncoding(PendingEncoding &, const StoragePolicy &, Checkpoint);
   void PollEncodings();
   bool ReserveOutput(PendingEncoding &, std::uint64_t);
@@ -609,8 +609,8 @@ public:
   }
   void Entries(const StorageArchiveSummary *summary, const StoragePolicy &policy, Checkpoint check, ProgressCallback notify) {
     copyProgress = notify;
-    if (summary) encodingSelection = std::make_unique<StoragePathIndex>(summary->innerRoots);
-    const StoragePathIndex selected(summary ? summary->innerRoots : std::vector<fs::path>{});
+    if (summary) encodingSelection = std::make_unique<StoragePathIndex>(summary->innerRoots, StoragePathComparison::CaseSensitive);
+    const StoragePathIndex selected(summary ? summary->innerRoots : std::vector<fs::path>{}, StoragePathComparison::CaseSensitive);
     std::optional<std::uint64_t> cursor;
     Statement next(db.value, "SELECT id,offset,span,data_offset,packed,bytes,crc,method,flags,directory,name,raw_name,metadata,action,original_span "
         "FROM entries WHERE offset>? AND complete=0 ORDER BY offset LIMIT 1"), collisions(db.value, candidateCollisionSql);
@@ -725,7 +725,7 @@ public:
       report.groupDeltas.push_back({.groupId = row.groupId, .baselineBytes = row.totalBytes,
           .sourceIdentity = row.sourceIdentity, .nextSourceIdentity = nextSourceIdentity, .baselineGeneration = row.generation});
     }
-    const StoragePathIndex groups(std::move(groupRoots));
+    const StoragePathIndex groups(std::move(groupRoots), StoragePathComparison::CaseSensitive);
     Statement q(db.value, "SELECT original_name,name,original_bytes,bytes,action FROM entries WHERE action!=0 ORDER BY offset");
     while (q.step()) {
       const bool deleted = q.integer(4) == 2; if (deleted) ++report.deleted; else ++report.converted;
@@ -845,7 +845,7 @@ void Update::PollEncodings() {
     ++progress.encodesDone;
   }
 }
-void Update::FillEncodings(const StoragePolicy &policy, Checkpoint check) {
+bool Update::FillEncodings(const StoragePolicy &policy, Checkpoint check) {
   require(!workBudget->RecoveryRequired(), "Storage work stopped for recovery", StorageReason::RecoveryRequired);
   PollEncodings();
   // Dispatch already staged work even when the read-ahead budget is full.
@@ -856,21 +856,22 @@ void Update::FillEncodings(const StoragePolicy &policy, Checkpoint check) {
   // while an earlier video holds source-order commits. Bound unreserved error
   // results separately, since they consume metadata without consuming scratch.
   auto unreserved = std::count_if(encodings.begin(), encodings.end(), [](const auto &entry) { return !entry.second->reservation; });
-  if (!encodingSelection || encodingExhausted || unreserved >= window || (check && !check())) return;
+  if (!encodingSelection || encodingExhausted || unreserved >= window || (check && !check())) return false;
   Statement next(db.value, "SELECT id,offset,span,data_offset,packed,bytes,crc,method,flags,directory,name,raw_name,metadata "
       "FROM entries WHERE offset>? AND complete=0 AND action=0 ORDER BY offset LIMIT 1"), collisions(db.value, candidateCollisionSql);
   // Bound metadata lookahead as well as media staging. A long unselected tail
   // must not delay consumption of an already completed encoder.
-  for (unsigned scanned = 0; scanned < 256 && unreserved < window && (!check || check()); ++scanned) {
+  unsigned scanned = 0;
+  for (; scanned < 256 && unreserved < window && (!check || check()); ++scanned) {
     const auto entry = nextArchiveEntry(next, encodingCursor);
-    if (!entry) { encodingExhausted = true; return; }
+    if (!entry) { encodingExhausted = true; return false; }
     StorageDiagnostic reason;
     const auto candidate = encodingSelection->Ancestors(fs::u8path(entry->name)).empty() ? std::optional<AssetCandidate>{} :
         archiveCandidate(*entry, policy, reason, collisions);
     if (!candidate || candidate->operation == AssetOperation::Delete) { encodingCursor = entry->offset; continue; }
     // Reuse validation owns its staging synchronously. Do not reserve later
     // media across this barrier; earlier encodes are consumed before reuse.
-    if (candidate->reuseDestination) return;
+    if (candidate->reuseDestination) return false;
     // Reserve in source order, even when this codec is busy. A later staged
     // result must never occupy space needed by the next entry to commit.
     const auto required = plus(plus(entry->bytes, entry->bytes), plus(entry->bytes, stagingReserve));
@@ -880,14 +881,14 @@ void Update::FillEncodings(const StoragePolicy &policy, Checkpoint check) {
     {
       std::lock_guard lock(encodingMutex);
       if (required <= deps.scratchLimit) {
-        if (pendingScratch > deps.scratchLimit - required) return;
+        if (pendingScratch > deps.scratchLimit - required) return false;
         const auto available = deps.availableSpace ? deps.availableSpace(journal) : std::optional<std::uint64_t>(fs::space(journal).available);
         if (available && required <= *available) {
           auto lease = workBudget->TryReserve(candidate->kind, required, waiting);
           if (lease) pending->reservation = std::make_shared<StorageWorkBudget::Lease>(std::move(*lease));
-        } else if (!encodings.empty()) return;
+        } else if (!encodings.empty()) return false;
       }
-      if (!pending->reservation && waiting) return;
+      if (!pending->reservation && waiting) return false;
       if (pending->reservation) { pendingScratch += required; pending->reservedBytes = required; }
     }
     encodingCursor = entry->offset;
@@ -916,6 +917,10 @@ void Update::FillEncodings(const StoragePolicy &policy, Checkpoint check) {
     StartEncoding(item, policy, check);
     ObserveScratch();
   }
+  // A metadata batch boundary is cooperative work, not resource backpressure.
+  // Continue scanning promptly after publishing progress; sleeping here leaves
+  // codec slots idle across long runs of preserved or unselected entries.
+  return scanned == 256 && unreserved < window;
 }
 void Update::StartEncoding(PendingEncoding &item, const StoragePolicy &policy, Checkpoint check) {
   if (!item.staged || stopEncoding || (check && !check()) || !item.reservation->TryStartEncoder()) return;
@@ -938,8 +943,8 @@ void Update::Prepare(StorageArchiveEntry &entry, const AssetCandidate &candidate
   if (!encodingCursor || *encodingCursor < entry.offset)
     encodingCursor = entry.offset ? std::optional<std::uint64_t>(entry.offset - 1) : std::nullopt;
   while (!encodings.contains(entry.id)) {
-    active(check); FillEncodings(policy, check);
-    if (!encodings.contains(entry.id)) {
+    active(check); const bool moreMetadata = FillEncodings(policy, check);
+    if (!encodings.contains(entry.id) && !moreMetadata) {
       require(!encodingExhausted, "Missing archive encoding candidate", StorageReason::StaleInput);
       std::unique_lock lock(encodingMutex); std::condition_variable changed;
       changed.wait_for(lock, std::chrono::milliseconds(10));
@@ -947,10 +952,11 @@ void Update::Prepare(StorageArchiveEntry &entry, const AssetCandidate &candidate
   }
   auto &pending = *encodings.at(entry.id);
   while (pending.staged || pending.job) {
-    active(check); FillEncodings(policy, check);
+    active(check); const bool moreMetadata = FillEncodings(policy, check);
     StorageProgress value;
     { std::lock_guard lock(encodingMutex); value.phase = pending.phase; }
     if (notify) notify(value);
+    if (moreMetadata) continue;
     if (pending.job) pending.job->Wait();
     else if (pending.staged) {
       std::unique_lock lock(encodingMutex); std::condition_variable changed;

@@ -6306,7 +6306,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         target_link_libraries(find_bms_download_tests PRIVATE iconv)
     endif()
     if(WIN32)
-        target_link_libraries(find_bms_download_tests PRIVATE shell32 ole32)
+        target_link_libraries(find_bms_download_tests PRIVATE shell32 ole32 advapi32)
     endif()
 
     add_executable(ir_credential_store_tests

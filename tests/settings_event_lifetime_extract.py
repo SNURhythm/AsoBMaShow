@@ -22,7 +22,7 @@ def main():
     fixture = fixture.replace("PRODUCTION_STORAGE_PLATFORM", extract(
         platform, "StoragePlatformPaths MakeStoragePlatformPaths("))
     fixture = fixture.replace("PRODUCTION_SAFE_STORAGE_PATH", "\n".join(extract(inventory, signature) for signature in (
-        "bool IsWithinFolder(", "bool IsSafeLocalPath(")))
+        "bool IsWithinFolder(", "bool IsWithinLocalFolder(", "bool IsSafeLocalPath(")))
     for marker, filename in (
         ("PRODUCTION_SCENE_HEADER", "src/scene/Scene.h"),
         ("PRODUCTION_MANAGER_HEADER", "src/scene/SceneManager.h"),

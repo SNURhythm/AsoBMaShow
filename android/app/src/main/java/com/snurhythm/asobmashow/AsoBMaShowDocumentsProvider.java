@@ -188,7 +188,13 @@ public final class AsoBMaShowDocumentsProvider extends DocumentsProvider {
             if (!file.isFile()) throw new FileNotFoundException("Not a regular file");
             int access = ParcelFileDescriptor.parseMode(mode);
             if ((access & ParcelFileDescriptor.MODE_WRITE_ONLY) == 0) {
-                return ParcelFileDescriptor.open(file, access);
+                DocumentsMutationGuard.Reservation reader = DocumentsMutationGuard.reserveReader(file);
+                try {
+                    return ParcelFileDescriptor.open(file, access, closeHandler, error -> reader.close());
+                } catch (IOException | RuntimeException error) {
+                    reader.close();
+                    throw error;
+                }
             }
             policy.requireWritable(file);
             DocumentsMutationGuard.Reservation writer = DocumentsMutationGuard.reserveWriter(file);

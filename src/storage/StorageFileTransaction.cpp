@@ -129,7 +129,7 @@ bool validHash(const std::string &hash) {
 bool authorized(const fs::path &source, const StoragePlatformPaths &paths, std::string &error) {
   if (!source.is_absolute() || source != source.lexically_normal() ||
       !std::ranges::any_of(paths.allowedRoots, [&](const auto &root) {
-        return root.is_absolute() && IsWithinFolder(source, root.lexically_normal());
+        return root.is_absolute() && IsWithinLocalFolder(source, root.lexically_normal());
       }) || !IsSafeLocalPath(source.parent_path(), error, paths.pathAccessRoots)) {
     error = "Transaction is outside an authorized local folder"; return false;
   }

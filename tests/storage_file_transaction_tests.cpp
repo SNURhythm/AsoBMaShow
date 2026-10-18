@@ -8,6 +8,11 @@
 #include <array>
 #include <condition_variable>
 #include <thread>
+#ifdef _WIN32
+#include <windows.h>
+#include <aclapi.h>
+#include <sddl.h>
+#endif
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
 #if TARGET_OS_OSX
@@ -266,8 +271,43 @@ void testSandboxedRecovery(const char *executable) {
           "startup recovery works when system ancestors deny metadata access");
 }
 #endif
+#ifdef _WIN32
+std::wstring fileDacl(const fs::path &path) {
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  require(GetNamedSecurityInfoW(path.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+              nullptr, nullptr, nullptr, nullptr, &descriptor) == ERROR_SUCCESS, "read fixture DACL");
+  LPWSTR text = nullptr;
+  const auto converted = ConvertSecurityDescriptorToStringSecurityDescriptorW(
+      descriptor, SDDL_REVISION_1, DACL_SECURITY_INFORMATION, &text, nullptr);
+  LocalFree(descriptor);
+  require(converted, "format fixture DACL");
+  const std::wstring result(text);
+  LocalFree(text);
+  return result;
+}
+void restrictFileDacl(const fs::path &path) {
+  PSECURITY_DESCRIPTOR descriptor = nullptr;
+  require(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+      L"D:P(A;;FA;;;OW)(A;;FA;;;SY)", SDDL_REVISION_1, &descriptor, nullptr), "create private fixture DACL");
+  const auto applied = SetFileSecurityW(path.c_str(),
+      DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION, descriptor);
+  LocalFree(descriptor);
+  require(applied, "apply private fixture DACL");
+}
+#endif
 void testReplacementPermissions() {
-#ifndef _WIN32
+#ifdef _WIN32
+  for (bool samePath : {false, true}) {
+    Fixture f(samePath);
+    restrictFileDacl(f.candidate.source);
+    const auto expected = fileDacl(f.candidate.source);
+    require(StorageFileTransaction(f.paths).Replace(f.candidate, f.encoded).outcome == FileOutcome::Converted,
+            "Windows replacement succeeds with an explicit protected source DACL");
+    require(fileDacl(f.candidate.destination) == expected,
+            "Windows replacement preserves explicit DACL entries and inheritance protection");
+    requireNoRecoveryFiles(f);
+  }
+#else
   for (bool samePath : {false, true}) {
     for (auto mode : {fs::perms::owner_read | fs::perms::owner_write,
                       fs::perms::owner_read | fs::perms::owner_write | fs::perms::group_read,
@@ -296,6 +336,24 @@ void testReplacementPermissions() {
           "permission preservation failure leaves the original media and mode intact");
   requireNoRecoveryFiles(failed);
 #endif
+}
+void testPermissionCopyRejectsChangedIdentity() {
+  Fixture f;
+  std::string error;
+  const auto installed = f.temp.root / "library/install.tmp";
+  f.temp.write("library/install.tmp", "installation");
+  const auto installedIdentity = *ReadFileIdentity(installed, error);
+  auto sourceIdentity = f.candidate.identity;
+  ++sourceIdentity.fileId;
+  const auto preserve = DefaultFileTransactionDependencies().preservePermissions;
+  require(!preserve(f.candidate.source, sourceIdentity, installed, installedIdentity, error),
+          "permission copying rejects a substituted source identity");
+  auto changedInstalledIdentity = installedIdentity;
+  ++changedInstalledIdentity.fileId;
+  require(!preserve(f.candidate.source, f.candidate.identity, installed, changedInstalledIdentity, error),
+          "permission copying rejects a substituted installation identity");
+  require(read(f.candidate.source) == std::string(1024, 's') && read(installed) == "installation",
+          "identity rejection leaves both file contents unchanged");
 }
 void testOverlappingRegisteredRootDoesNotBlockRecovery() {
   Fixture f;
@@ -896,6 +954,7 @@ int main(int argc, char **argv) {
     testJournalHierarchyIsDurableBeforeMutation();
     testTwoWorkerJournalsAfterRestart();
     testReplacementPermissions();
+    testPermissionCopyRejectsChangedIdentity();
     testOverlappingRegisteredRootDoesNotBlockRecovery();
     testAbandonedCandidatesAfterRestart();
     testSuccessAndCancellation();

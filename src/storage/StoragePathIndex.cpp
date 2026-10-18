@@ -15,7 +15,9 @@ fs::path normalize(fs::path path) {
   return path == "." ? fs::path{} : path;
 }
 }
-StoragePathIndex::StoragePathIndex(std::vector<fs::path> roots) : roots_(std::move(roots)), nodes_(1) {
+StoragePathIndex::StoragePathIndex(std::vector<fs::path> roots, StoragePathComparison comparison)
+    : roots_(std::move(roots)) {
+  nodes_.emplace_back(comparison);
   for (std::size_t index = 0; index < roots_.size(); ++index) {
     if (hasParentTraversal(roots_[index])) continue;
     auto &root = roots_[index];
@@ -27,7 +29,7 @@ StoragePathIndex::StoragePathIndex(std::vector<fs::path> roots) : roots_(std::mo
       else {
         const auto next = nodes_.size();
         nodes_[node].children.emplace(part, next);
-        nodes_.emplace_back();
+        nodes_.emplace_back(comparison);
         node = next;
       }
     }

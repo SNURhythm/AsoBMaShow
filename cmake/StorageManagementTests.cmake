@@ -16,6 +16,9 @@ add_executable(storage_file_transaction_tests tests/storage_file_transaction_tes
     src/storage/ChartResourceInventory.cpp src/storage/StoragePolicy.cpp
     src/audio/ChartVisualAssetResolver.cpp src/AtomicFile.cpp src/FileChecksum.cpp src/Uuid.cpp)
 target_compile_features(storage_file_transaction_tests PRIVATE cxx_std_23)
+if(WIN32)
+    target_link_libraries(storage_file_transaction_tests PRIVATE advapi32)
+endif()
 asobmashow_register_test(storage_file_transaction_tests)
 
 add_executable(storage_media_tests tests/storage_media_tests.cpp src/storage/AudioTranscoder.cpp
@@ -47,7 +50,7 @@ if(APPLE)
     target_link_libraries(storage_optimizer_tests PRIVATE iconv)
 endif()
 if(WIN32)
-    target_link_libraries(storage_optimizer_tests PRIVATE shell32 ole32)
+    target_link_libraries(storage_optimizer_tests PRIVATE shell32 ole32 advapi32)
 endif()
 asobmashow_register_test(storage_optimizer_tests)
 add_test(NAME storage_archive_tests COMMAND storage_optimizer_tests --archive)

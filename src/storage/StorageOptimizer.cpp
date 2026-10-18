@@ -391,6 +391,13 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
           FileResult result{.source = asset.source, .destination = asset.destination, .bytesBefore = asset.identity.bytes};
           bool transactionStarted = false;
           bool transactionFinished = false;
+          struct StopUnresolvedTransaction {
+            StorageWorkBudget &budget;
+            bool unresolved = false;
+            // Stop peers before unwinding releases the directory lock. Candidate
+            // setup, encoding and settled-result failures do not require recovery.
+            ~StopUnresolvedTransaction() { if (unresolved) budget.StopForRecovery(); }
+          } candidateTransaction{budget};
           const auto output = jobPath / ("candidate-" + uuid::generateV4() + "." + asobmshow::chart_assets::LowerMediaExtension(asset.destination));
           try {
             if (staleScope || !evidence.Candidate(asset, checkpoint, error)) {
@@ -411,10 +418,10 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
                   else if (checkpoint()) {
                     asset.existingDestinationHash = *afterHash;
                     state.phase = StoragePhase::Commit; emit(); transactionStarted = true;
-                    transactionUnresolved = true;
+                    transactionUnresolved = candidateTransaction.unresolved = true;
                     result = localTransactions.reuse(asset, checkpoint);
                     transactionFinished = true;
-                    transactionUnresolved = result.reason.code == StorageReason::RecoveryRequired;
+                    transactionUnresolved = candidateTransaction.unresolved = result.reason.code == StorageReason::RecoveryRequired;
                   }
                 }
               }
@@ -462,10 +469,10 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
                       result.outcome = FileOutcome::Skipped; result.reason = {StorageReason::StaleInput, error};
                     } else {
                       state.phase = StoragePhase::Commit; emit(); transactionStarted = true;
-                      transactionUnresolved = true;
+                      transactionUnresolved = candidateTransaction.unresolved = true;
                       result = asset.operation == AssetOperation::Delete ? localTransactions.erase(asset, checkpoint) : localTransactions.replace(asset, encoded, checkpoint);
                       transactionFinished = true;
-                      transactionUnresolved = result.reason.code == StorageReason::RecoveryRequired;
+                      transactionUnresolved = candidateTransaction.unresolved = result.reason.code == StorageReason::RecoveryRequired;
                     }
                   }
                 }
@@ -554,8 +561,7 @@ StorageReport StorageOptimizer::Run(OptimizationRequest request, Checkpoint chec
             } else {
               auto sharedReservation = std::make_shared<StorageWorkBudget::Lease>(std::move(*reservation));
               active.push_back(std::make_unique<StorageEncodingJob>(sharedReservation, [&, asset = std::move(*it), sharedReservation]() mutable {
-                try { return process(std::move(asset), sharedReservation.get()); }
-                catch (...) { budget.StopForRecovery(); throw; }
+                return process(std::move(asset), sharedReservation.get());
               }));
             }
             it = pending.erase(it); advanced = true;
