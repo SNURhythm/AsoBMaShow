@@ -27,6 +27,7 @@ public:
   StorageArchive &operator=(const StorageArchive &) = delete;
   std::optional<StorageArchiveEntry> Next(std::optional<std::uint64_t> afterOffset = {}) const;
   std::optional<AssetCandidate> Candidate(const StorageArchiveEntry &, const StoragePolicy &, StorageDiagnostic &) const;
+  void ValidateBrowsingIndex(Checkpoint = {}) const;
   void Extract(const StorageArchiveEntry &, const std::filesystem::path &output, Checkpoint) const;
   // Generates a replacement record header and central metadata, keeping the raw
   // filename encoding. The caller streams the already verified encoded payload.

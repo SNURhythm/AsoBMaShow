@@ -771,6 +771,7 @@ StorageReport UpdateStorageArchive(const StorageArchiveSummary &summary, const S
       Timer preparing(deps.metrics ? &deps.metrics->preparationNanoseconds : nullptr);
       StorageArchive archive(summary.path, journal / "manifest.sqlite", paths.pathAccessRoots, check);
       require(archive.identity == summary.identity, "Archive changed while starting update", StorageReason::StaleInput);
+      archive.ValidateBrowsingIndex(check);
       {
         Update preparing(archive, journal, deps, started, paths.pathAccessRoots); preparing.Initialize(check);
       }

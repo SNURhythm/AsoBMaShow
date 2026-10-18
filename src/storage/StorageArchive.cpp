@@ -2,6 +2,7 @@
 #include "StorageArchiveDb.h"
 #include "../text/Utf8.h"
 #include "../archive/ArchiveEntryFilter.h"
+#include "../ArchiveFile.h"
 #include <algorithm>
 #include <array>
 #include <climits>
@@ -172,6 +173,34 @@ StorageArchive::StorageArchive(const fs::path &path, const fs::path &manifest,
   } catch (...) { db->exec("ROLLBACK;"); throw; }
 }
 StorageArchive::~StorageArchive() = default;
+void StorageArchive::ValidateBrowsingIndex(Checkpoint check) const {
+  // Readers can expose a different spelling (for example Darwin libarchive's
+  // decomposed Unicode). Refuse that disagreement before selecting any physical
+  // records. Both inventories stream through file-backed SQLite metadata only.
+  db->exec("CREATE TEMP TABLE reviewed_entries(id INTEGER PRIMARY KEY); BEGIN;");
+  Statement lookup(db->value, "SELECT id,bytes,directory FROM entries WHERE name=?1 COLLATE NOCASE AND name=?1 COLLATE BINARY");
+  Statement matched(db->value, "INSERT INTO reviewed_entries VALUES(?)");
+  std::string error;
+  const bool complete = archive_file::visitIndexEntries(io.path, [&](const auto &entry) {
+    active(check);
+    if (archive_file::isSystemEntry(entry.path)) return true;
+    lookup.reset(); lookup.text(1, pathText(entry.path));
+    require(lookup.step() && lookup.integer(1) == entry.size && (lookup.integer(2) != 0) == entry.directory,
+        "Browsing archive filenames or sizes differ from the physical update manifest");
+    matched.reset(); matched.bind(1, lookup.integer(0)); matched.step(); lookup.reset();
+    return true;
+  }, &error, check);
+  active(check);
+  require(complete, "Cannot validate the browsing archive index", StorageReason::IncompleteInventory);
+  Statement missing(db->value, "SELECT name FROM entries WHERE id NOT IN (SELECT id FROM reviewed_entries)");
+  while (missing.step()) {
+    active(check);
+    require(archive_file::isSystemEntry(fs::u8path(missing.bytes(0))),
+        "Physical archive contains entries absent from the browsing index");
+  }
+  db->exec("COMMIT; DROP TABLE reviewed_entries;");
+  io.CheckPath();
+}
 void StorageArchive::Add(const StorageArchiveEntry &entry, Statement &q) {
   const auto path = fs::u8path(entry.name);
   auto stem = path; stem.replace_extension();
@@ -289,6 +318,15 @@ void StorageArchive::ParseZip(Checkpoint check) {
       if (tag == 1) {
         require(!local64, "Duplicate local ZIP64 field"); local64 = true; std::size_t pos = 0;
         for (auto *value : {&localBytes, &localPacked}) if (*value == 0xffffffff) { *value = number(data, pos, 8); pos += 8; }
+      }
+      if (tag == 0x7075 && data.size() >= 5 && data[0] == 1 &&
+          number(data, 1, 4) == crc32(0, reinterpret_cast<const Bytef *>(entry.rawName.data()), entry.rawName.size())) {
+        std::string unicode(data.substr(5));
+        require(asobmashow::text::validUtf8(unicode), "Invalid local Unicode ZIP filename");
+        safeName(unicode, entry.directory);
+        // Review uses only central metadata. A differing local-only name cannot
+        // safely change the selected scope or be rewritten as the fallback name.
+        require(unicode == entry.name, "Local Unicode ZIP filename differs from the reviewed central filename");
       }
     });
     auto finish = plus(entry.dataOffset, entry.packed);

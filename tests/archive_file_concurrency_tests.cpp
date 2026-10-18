@@ -2490,6 +2490,12 @@ void testSingleEntryZipPreservesIndexedFilename() {
   std::ofstream output(path, std::ios::binary);
   output.write(reinterpret_cast<const char *>(fixture), sizeof(fixture));
   output.close();
+  std::filesystem::path indexedName;
+  assert(archive_file::visitIndexEntries(path, [&](const auto &entry) {
+    indexedName = entry.path;
+    return true;
+  }));
+  assert(indexedName == "mapped.bin");
   for (std::size_t workers : {1, 4}) {
     archive_file::UnzipBudget budget{.limits = {.maximumWorkers = workers}};
     std::string error;
@@ -2497,10 +2503,10 @@ void testSingleEntryZipPreservesIndexedFilename() {
         path, temporary.path() / std::to_string(workers), &error, nullptr,
         nullptr, nullptr, false, nullptr, &budget);
     assert(result && budget.writtenBytes == 1024);
-    std::ifstream input(result->outputFolder / "listed.bin", std::ios::binary);
+    std::ifstream input(result->outputFolder / indexedName, std::ios::binary);
     const std::string actual((std::istreambuf_iterator<char>(input)), {});
     assert(actual == std::string(1024, 'x'));
-    assert(!std::filesystem::exists(result->outputFolder / "mapped.bin"));
+    assert(!std::filesystem::exists(result->outputFolder / "listed.bin"));
   }
 }
 

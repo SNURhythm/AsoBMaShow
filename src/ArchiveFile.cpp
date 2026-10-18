@@ -535,8 +535,8 @@ std::atomic_bool gZipMappingEnabledForTesting{true};
 #endif
 
 constexpr std::size_t kDebugLogMaxLines = 1000;
-// Version 6 excludes encrypted ZIP/libarchive entries from browsing indexes.
-constexpr std::uint8_t kArchiveIndexCacheVersion = 6;
+// Version 7 uses checked central Unicode ZIP paths consistently with updates.
+constexpr std::uint8_t kArchiveIndexCacheVersion = 7;
 std::mutex gDebugLogMutex;
 std::deque<std::string> gDebugLogLines;
 std::uint64_t gDebugLogRevision = 0;
@@ -4652,8 +4652,33 @@ std::uint32_t readZipLe32(const unsigned char *data) {
          (static_cast<std::uint32_t>(data[3]) << 24);
 }
 
+class ZipCentralMetadataReader {
+  mz_zip_archive *archive_;
+  bool buffered_;
+  std::uint64_t bufferOffset_ = 0;
+  std::string buffer_;
+public:
+  explicit ZipCentralMetadataReader(mz_zip_archive *archive, bool buffered = false)
+      : archive_(archive), buffered_(buffered) {}
+  std::optional<std::string> Read(std::uint64_t offset, std::size_t length) {
+    const auto size = mz_zip_get_central_dir_size(archive_);
+    if (offset > size || length > size - offset) return {};
+    if (!length) return std::string{};
+    if (offset < bufferOffset_ || offset - bufferOffset_ > buffer_.size() ||
+        length > buffer_.size() - static_cast<std::size_t>(offset - bufferOffset_)) {
+      bufferOffset_ = offset;
+      buffer_.resize(buffered_ ? std::min<std::uint64_t>(256 * 1024, size - offset) : length);
+      const auto base = archive_->m_central_directory_file_ofs;
+      if (base > archive_->m_archive_size || offset > archive_->m_archive_size - base ||
+          buffer_.size() > archive_->m_archive_size - base - offset ||
+          mz_zip_read_archive_data(archive_, base + offset, buffer_.data(), buffer_.size()) != buffer_.size()) return {};
+    }
+    return buffer_.substr(static_cast<std::size_t>(offset - bufferOffset_), length);
+  }
+};
+
 std::optional<std::string> minizFilename(mz_zip_archive *archive,
-                                         mz_uint fileIndex) {
+                                         mz_uint fileIndex, ZipCentralMetadataReader *metadata = nullptr) {
   const mz_uint size = mz_zip_reader_get_filename(archive, fileIndex, nullptr, 0);
   if (size == 0) {
     return std::nullopt;
@@ -4666,7 +4691,38 @@ std::optional<std::string> minizFilename(mz_zip_archive *archive,
   if (!filename.empty() && filename.back() == '\0') {
     filename.pop_back();
   }
-  return filename;
+  // Keep every indexed/read path on the checked central Unicode spelling.
+  // Local-only fields are intentionally left to Apply's physical validation;
+  // browsing and review must not seek through every local header.
+  mz_zip_archive_file_stat stat{};
+  if (!mz_zip_reader_file_stat(archive, fileIndex, &stat)) return {};
+  ZipCentralMetadataReader direct(archive);
+  auto &reader = metadata ? *metadata : direct;
+  const auto header = reader.Read(stat.m_central_dir_ofs, 46);
+  if (!header) return {};
+  const auto *bytes = reinterpret_cast<const unsigned char *>(header->data());
+  if (readZipLe32(bytes) != 0x02014b50 || readZipLe16(bytes + 28) != filename.size()) return {};
+  const auto extra = reader.Read(stat.m_central_dir_ofs + 46 + filename.size(), readZipLe16(bytes + 30));
+  if (!extra) return {};
+  std::optional<std::string> unicode;
+  for (std::size_t at = 0; at < extra->size();) {
+    if (extra->size() - at < 4) return {};
+    const auto *field = reinterpret_cast<const unsigned char *>(extra->data() + at);
+    const auto length = readZipLe16(field + 2);
+    if (length > extra->size() - at - 4) return {};
+    if (readZipLe16(field) == 0x7075 && length >= 5 && field[4] == 1 &&
+        readZipLe32(field + 5) == mz_crc32(MZ_CRC32_INIT,
+            reinterpret_cast<const unsigned char *>(filename.data()), filename.size())) {
+      const auto name = extra->substr(at + 9, length - 5);
+      if (!isValidUtf8(name) || (unicode && *unicode != name)) return {};
+      unicode = name;
+    }
+    at += 4 + length;
+  }
+  if (stat.m_bit_flag & 0x800) {
+    if (!isValidUtf8(filename) || (unicode && *unicode != filename)) return {};
+  }
+  return unicode ? unicode : std::optional<std::string>(std::move(filename));
 }
 
 enum class ZipNameMatch { Matches, Mismatches, Unknown };
@@ -5058,6 +5114,7 @@ bool listZipEntries(const std::filesystem::path &archivePath,
     return fail("Archive exceeds the verification entry-count limit.");
   }
   entries.reserve(fileCount);
+  ZipCentralMetadataReader metadata(&archive, true);
   for (mz_uint fileIndex = 0; fileIndex < fileCount; ++fileIndex) {
     if (fileIndex > 0 && fileIndex % kZipIndexPauseCheckInterval == 0 &&
         !pauseIfNeeded(pauseCallback, errorMessage)) {
@@ -5073,7 +5130,7 @@ bool listZipEntries(const std::filesystem::path &archivePath,
       continue;
     }
 
-    const auto filename = minizFilename(&archive, fileIndex);
+    const auto filename = minizFilename(&archive, fileIndex, &metadata);
     if (!filename.has_value()) {
       return fail("Could not read ZIP central directory filename.");
     }
@@ -5379,12 +5436,13 @@ bool readZipEntriesByName(
   std::vector<ZipReadTarget> readTargets;
   readTargets.reserve(exactTargets.size());
   const mz_uint fileCount = mz_zip_reader_get_num_files(&archive);
+  ZipCentralMetadataReader metadata(&archive, true);
   for (mz_uint fileIndex = 0; fileIndex < fileCount && !exactTargets.empty();
        ++fileIndex) {
     if (!pauseIfNeeded(pauseCallback, errorMessage)) {
       return fail("Operation cancelled");
     }
-    const auto filename = minizFilename(&archive, fileIndex);
+    const auto filename = minizFilename(&archive, fileIndex, &metadata);
     if (!filename.has_value()) {
       continue;
     }
@@ -5634,6 +5692,7 @@ bool readZipEntriesByIndex(
   };
 
   const mz_uint fileCount = mz_zip_reader_get_num_files(&archive);
+  ZipCentralMetadataReader metadata(&archive, true);
   for (const ZipReadTarget &target : readTargets) {
     if (!pauseIfNeeded(pauseCallback, errorMessage)) {
       return fail("Operation cancelled");
@@ -5653,7 +5712,7 @@ bool readZipEntriesByIndex(
     if (stat.m_uncomp_size != target.size) {
       return fail("ZIP central directory size did not match archive index.");
     }
-    const auto filename = minizFilename(&archive, fileIndex);
+    const auto filename = minizFilename(&archive, fileIndex, &metadata);
     if (!filename.has_value()) {
       return fail("Could not read ZIP central directory filename.");
     }
@@ -5772,6 +5831,7 @@ bool readZipEntriesByIndexStreaming(
   };
 
   const mz_uint fileCount = mz_zip_reader_get_num_files(&archive);
+  ZipCentralMetadataReader metadata(&archive, true);
   if (maximumBytes != std::numeric_limits<std::size_t>::max()) {
     for (const auto &target : readTargets) {
       if (!pauseIfNeeded(pauseCallback, errorMessage)) return fail("Operation cancelled");
@@ -5802,7 +5862,7 @@ bool readZipEntriesByIndexStreaming(
     if (stat.m_uncomp_size != target.size) {
       return fail("ZIP central directory size did not match archive index.");
     }
-    const auto filename = minizFilename(&archive, fileIndex);
+    const auto filename = minizFilename(&archive, fileIndex, &metadata);
     if (!filename.has_value()) {
       return fail("Could not read ZIP central directory filename.");
     }
@@ -10642,6 +10702,7 @@ std::optional<bool> extractZipArchiveFullyConcurrently(
       }
       const auto close = makeScopeExit([&] { mz_zip_reader_end(&archive); });
       std::array<unsigned char, 64 * 1024> buffer{};
+      ZipCentralMetadataReader metadata(&archive, true);
       while (fileIndex < files.size() && checkpoint()) {
         const auto &entry = *files[fileIndex];
         if (entry.order >= mz_zip_reader_get_num_files(&archive)) {
@@ -10650,7 +10711,7 @@ std::optional<bool> extractZipArchiveFullyConcurrently(
         }
         const auto order = static_cast<mz_uint>(entry.order);
         mz_zip_archive_file_stat stat{};
-        const auto filename = minizFilename(&archive, order);
+        const auto filename = minizFilename(&archive, order, &metadata);
         if (!mz_zip_reader_file_stat(&archive, order, &stat) || !filename ||
             compareZipEntryName(*filename, normalizeEntryName(genericPathUtf8(entry.path))) == ZipNameMatch::Mismatches ||
             stat.m_is_directory || stat.m_is_encrypted || !stat.m_is_supported) {

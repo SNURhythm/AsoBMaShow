@@ -125,6 +125,8 @@ Encrypted/split ZIPs, links, overlapping or ambiguous entries, compressed TARs,
 GNU/PAX/sparse TAR records, RAR and 7z are not supported by the in-place updater.
 ZIP padding or extra records between local entries or before the central directory
 are rejected before mutation; leading prefixes remain supported.
+Apply also rejects conflicting Unicode names or any filename/size disagreement
+between the browsing index and physical archive, including reader normalization.
 Reading these formats elsewhere in the app remains separate from update support.
 Android SAF/content-provider references require the existing local import flow.
 Symlinks, hard links, special files and unsafe filesystem paths are rejected.

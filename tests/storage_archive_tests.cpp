@@ -612,7 +612,7 @@ void interruptedArchiveWritesRecover() {
 }
 void writeSparseZip64(const fs::path &path, std::uint64_t offset = 128ULL * 1024 * 1024 * 1024 + 4096,
     const std::string &audioName = "\x93\xfa\x96\x7b\x8c\xea.wav", bool prefix = false,
-    const std::string &unicodeName = {}, bool unicodeCentral = true) {
+    const std::string &unicodeName = {}, bool unicodeCentral = true, bool zip64 = true) {
   using storage_management::archive_detail::put;
   std::ofstream file(path, std::ios::binary);
   file.seekp(offset); std::string central;
@@ -633,8 +633,9 @@ void writeSparseZip64(const fs::path &path, std::uint64_t offset = 128ULL * 1024
     const auto record = local + name + unicode + payload; file.write(record.data(), record.size());
     std::string row(46, '\0'); put(row, 0, 0x02014b50, 4); put(row, 4, 45, 2); put(row, 6, 45, 2); put(row, 16, crc, 4);
     put(row, 20, payload.size(), 4); put(row, 24, payload.size(), 4); put(row, 28, name.size(), 2); put(row, 30, 12, 2);
-    put(row, 32, 10, 2); put(row, 42, 0xffffffff, 4);
-    std::string extra(12, '\0'); put(extra, 0, 1, 2); put(extra, 2, 8, 2); put(extra, 4, offset, 8);
+    put(row, 32, 10, 2); put(row, 42, zip64 ? 0xffffffff : offset, 4);
+    std::string extra;
+    if (zip64) { extra.resize(12, '\0'); put(extra, 0, 1, 2); put(extra, 2, 8, 2); put(extra, 4, offset, 8); }
     if (unicodeCentral) extra += unicode;
     put(row, 30, extra.size(), 2);
     central += row + name + extra + "entry-note"; offset += record.size();
@@ -644,8 +645,9 @@ void writeSparseZip64(const fs::path &path, std::uint64_t offset = 128ULL * 1024
   put(end64, 24, files.size(), 8); put(end64, 32, files.size(), 8); put(end64, 40, central.size(), 8); put(end64, 48, offset, 8);
   std::string locator(20, '\0'); put(locator, 0, 0x07064b50, 4); put(locator, 8, offset + central.size(), 8); put(locator, 16, 1, 4);
   std::string end(22, '\0'); put(end, 0, 0x06054b50, 4); put(end, 8, files.size(), 2); put(end, 10, files.size(), 2);
-  put(end, 12, central.size(), 4); put(end, 16, 0xffffffff, 4); put(end, 20, 12, 2);
-  const auto tail = end64 + locator + end + "archive-note"; file.write(tail.data(), tail.size()); require(file.good(), "write sparse ZIP64 fixture");
+  put(end, 12, central.size(), 4); put(end, 16, zip64 ? 0xffffffff : offset, 4); put(end, 20, 12, 2);
+  const auto tail = (zip64 ? end64 + locator : std::string{}) + end + "archive-note";
+  file.write(tail.data(), tail.size()); require(file.good(), "write ZIP fixture");
 }
 void sparsePrefixRecovery() {
   for (bool prefix : {false, true}) for (bool convert : {false, true})
@@ -729,7 +731,7 @@ void renamedZipRetainsUnicodePath() {
   for (bool unicodeCentral : {false, true}) for (bool recover : {false, true}) {
     if (name.centralRequired && !unicodeCentral) continue;
     storage_test::TempDirectory temp; const auto path = temp.root / "unicode.zip";
-    writeSparseZip64(path, 0, name.raw, false, name.unicode, unicodeCentral);
+    writeSparseZip64(path, 0, name.raw, false, name.unicode, unicodeCentral, false);
     InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
         .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = temp.root / "scan"};
     const auto review = BuildStoragePreflight(request);
@@ -777,6 +779,83 @@ void renamedZipRetainsUnicodePath() {
     require(files.contains(readerName) && files.at(readerName) == "converted" && files.at("chart.bms") == "fixture",
         "independent ZIP reader resolves the renamed Unicode path and exact payload");
   }
+}
+void unicodeZipFolderSelectionMatchesApply() {
+  storage_test::TempDirectory temp; const auto path = temp.root / "unicode-folder.zip";
+  writeSparseZip64(path, 0, "\xa4/song.wav", false, "ñ/song.wav", true, false);
+  std::filesystem::path selected;
+  require(archive_file::visitIndexEntries(path, [&](const auto &entry) {
+    if (entry.path.extension() == ".wav") selected = entry.path.parent_path();
+    return true;
+  }), "index Unicode ZIP folder");
+  require(selected == fs::path(u8"ñ"), "browsing uses the checked central Unicode folder");
+  InventoryRequest request{.groups = {{"song", path / selected, false, false, StorageSourceKind::Archive}},
+      .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = temp.root / "scan"};
+  const auto review = BuildStoragePreflight(request);
+  require(review.complete && review.eligibleCount == 1 && review.archives.size() == 1,
+      "review includes the selected Unicode folder's WAV");
+  StorageArchiveDependencies deps{.encode = [](const AssetCandidate &, const StoragePolicy &, const fs::path &output, Checkpoint, ProgressCallback) {
+    std::ofstream(output, std::ios::binary) << "converted"; return EncodeResult{FileOutcome::Converted, output};
+  }};
+  const auto report = UpdateStorageArchive(review.archives.front(), request.policy,
+      MakeStoragePlatformPaths(temp.root / "private", {temp.root}), deps);
+  require(!report.failed && report.converted == 1, "Apply converts exactly the reviewed Unicode folder");
+  std::vector<unsigned char> payload;
+  require(archive_file::readFile(path / fs::path(u8"ñ/song.flac"), payload) &&
+      std::string(payload.begin(), payload.end()) == "converted", "renamed Unicode entry remains readable through the indexed reader");
+}
+void differingLocalUnicodePathsArePreserved() {
+  for (bool central : {false, true}) {
+    storage_test::TempDirectory temp; const auto path = temp.root / "local-unicode.zip";
+    writeSparseZip64(path, 0, "\xa4.wav", false, "ñ.wav", central, false);
+    if (central) {
+      std::ifstream input(path, std::ios::binary);
+      std::string bytes((std::istreambuf_iterator<char>(input)), {}); input.close();
+      const auto local = bytes.find("ñ.wav"); require(local != std::string::npos, "find local Unicode path");
+      bytes.replace(local, std::string("ñ.wav").size(), "é.wav");
+      temp.write("local-unicode.zip", bytes);
+    }
+    InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+        .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = temp.root / "scan"};
+    const auto review = BuildStoragePreflight(request);
+    require(review.eligibleCount == 1 && review.archives.size() == 1, "central metadata permits review without reading local Unicode paths");
+    std::string error; const auto before = HashStorageFile(path, {}, error);
+    unsigned encodes = 0;
+    StorageArchiveDependencies deps{.encode = [&](const auto &, const auto &, const auto &, auto, auto) {
+      ++encodes; return EncodeResult{};
+    }};
+    const auto report = UpdateStorageArchive(review.archives.front(), request.policy,
+        MakeStoragePlatformPaths(temp.root / "private", {temp.root}), deps);
+    require(report.failed == 1 && !report.recoveryRequired && encodes == 0 &&
+        report.files.front().reason.code == StorageReason::UnsupportedFormat && HashStorageFile(path, {}, error) == before,
+        "differing local Unicode names reject Apply before encoding or mutation");
+  }
+}
+void differingBrowsingUnicodePathsArePreserved() {
+  storage_test::TempDirectory temp; const auto path = temp.root / "fallback-unicode.zip";
+  writeSparseZip64(path, 0, "\xa4/song.wav", false, "ñ/song.wav");
+  fs::path selected;
+  require(archive_file::visitIndexEntries(path, [&](const auto &entry) {
+    if (entry.path.extension() == ".wav") selected = entry.path.parent_path();
+    return true;
+  }), "index fallback Unicode ZIP folder");
+  // Darwin libarchive decomposes the checked Unicode name. Other backends
+  // can retain the exact spelling and are covered by the conversion regression.
+  if (selected == fs::path(u8"ñ")) return;
+  InventoryRequest request{.groups = {{"song", path / selected, false, false, StorageSourceKind::Archive}},
+      .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = temp.root / "scan"};
+  const auto review = BuildStoragePreflight(request);
+  require(review.eligibleCount == 1 && review.archives.size() == 1, "fallback spelling is eligible during index-only review");
+  std::string error; const auto before = HashStorageFile(path, {}, error);
+  unsigned encodes = 0;
+  StorageArchiveDependencies deps{.encode = [&](const auto &, const auto &, const auto &, auto, auto) {
+    ++encodes; return EncodeResult{};
+  }};
+  const auto report = UpdateStorageArchive(review.archives.front(), request.policy,
+      MakeStoragePlatformPaths(temp.root / "private", {temp.root}), deps);
+  require(report.failed == 1 && !report.recoveryRequired && encodes == 0 &&
+      report.files.front().reason.code == StorageReason::UnsupportedFormat && HashStorageFile(path, {}, error) == before,
+      "different indexed and physical names reject Apply without touching the original");
 }
 void unicodeZipPathsAreValidated() {
   for (const auto &unicode : {"../escape.wav", "/absolute.wav", "chart.bms", "\xff.wav"}) {
@@ -1085,6 +1164,9 @@ void storageArchiveTests(const char *executable) {
       {"prepared-hash-failure", preparedArchiveHashFailurePrecedesWrites},
       {"growth-batches", growingArchiveMultiBatchRecovery}, {"growth", growingFlacArchiveRecovery}, {"update", archiveUpdatesBatchWithoutFullCopy}, {"recovery", interruptedArchiveWritesRecover},
       {"unicode-rename", renamedZipRetainsUnicodePath},
+      {"unicode-folder", unicodeZipFolderSelectionMatchesApply},
+      {"unicode-local-disagreement", differingLocalUnicodePathsArePreserved},
+      {"unicode-index-disagreement", differingBrowsingUnicodePathsArePreserved},
       {"unicode-validation", unicodeZipPathsAreValidated},
       {"zip64", sparseZip64AndLegacyNames}, {"invalid-encoding", malformedLegacyNamesAreRejected},
       {"playback", realArchiveOptimizerPreservesPlayback},
