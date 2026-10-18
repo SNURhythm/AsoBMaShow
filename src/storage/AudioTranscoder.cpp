@@ -46,7 +46,7 @@ bool descriptiveComment(std::string_view value) {
          key == "LICENSE" || key == "TRACKNUMBER" || key == "GENRE";
 }
 struct WaveMetadata {
-  bool broadcast = false;
+  bool preserve = false;
   bool last = false;
   std::uint64_t bytes = 20; // APPLICATION header, riff ID and RIFF/WAVE header.
 };
@@ -116,7 +116,9 @@ StorageDiagnostic inspectContainer(const fs::path &path, int format, SNDFILE *au
     foreign.bytes += 8 + stored;
     oversized = oversized || stored > 0xffffff - 4;
     if (type == "data") { if (data) return bad; data = true; }
-    else if (type == "bext" && lossless) foreign.broadcast = true;
+    // FLAC's RIFF APPLICATION blocks retain ancillary chunks verbatim, including
+    // unknown vendor metadata. Only lossy conversion needs a semantic whitelist.
+    else if (lossless && type != "fmt " && type != "fact" && type != "JUNK" && type != "PAD ") foreign.preserve = true;
     else if (type == "LIST") {
       // Accept only descriptive INFO fields actually exposed by the decoder.
       // Unknown fields, conflicting duplicates and playback lists stay intact.
@@ -156,13 +158,13 @@ StorageDiagnostic inspectContainer(const fs::path &path, int format, SNDFILE *au
     input.seekg(padded, std::ios::cur);
     offset += padded;
   }
-  if (foreign.broadcast && oversized)
+  if (foreign.preserve && oversized)
     return {StorageReason::UnsupportedFormat, "WAV metadata chunk exceeds the FLAC metadata block limit"};
   return data ? StorageDiagnostic{} : bad;
 }
 // Match flac --keep-foreign-metadata: one riff APPLICATION block per RIFF
 // chunk, with only the RIFF/WAVE and data headers for the audio containers.
-// Copy opaque bext bytes rather than interpreting/rebuilding its versioned fields.
+// Copy opaque ancillary bytes rather than interpreting or rebuilding their fields.
 StorageDiagnostic preserveWaveMetadata(const fs::path &source, const fs::path &destination,
                                        WaveMetadata &foreign, Checkpoint check, bool verify) {
   const auto bad = StorageDiagnostic{verify ? StorageReason::ValidationFailed : StorageReason::IoError,
@@ -374,13 +376,13 @@ EncodeResult EncodeAudio(const AssetCandidate &candidate, const StoragePolicy &p
   if (sf_error(input.get()) || total != info.frames)
     return failOutput(StorageReason::ValidationFailed, "Source audio did not decode completely");
   if (sf_close(output.release())) return finish(FileOutcome::Failed, StorageReason::IoError, "Audio encoder finalization failed");
-  if (foreign.broadcast) {
+  if (foreign.preserve) {
     const auto metadata = preserveWaveMetadata(candidate.source, temporaryOutput, foreign, check, false);
     if (metadata.code == StorageReason::Cancelled) return cancelled();
     if (metadata.code != StorageReason::None) return finish(FileOutcome::Failed, metadata.code, metadata.detail);
   }
   if (progress) progress({StoragePhase::Verify, candidate.source});
-  if (foreign.broadcast) {
+  if (foreign.preserve) {
     const auto metadata = preserveWaveMetadata(candidate.source, temporaryOutput, foreign, check, true);
     if (metadata.code == StorageReason::Cancelled) return cancelled();
     if (metadata.code != StorageReason::None) return finish(FileOutcome::Failed, metadata.code, metadata.detail);

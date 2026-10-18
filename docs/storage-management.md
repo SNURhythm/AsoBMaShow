@@ -59,9 +59,15 @@ backup if you may want the originals later.
 The output keeps the filename stem with `.flac` or `.ogg`. It replaces the source
 only after full decode validation. Lossless FLAC is kept even when its size is
 equal or larger, so supported WAV files use one format consistently. Lossy Vorbis
-still requires a smaller output. Broadcast WAV `bext` chunks are preserved byte
-for byte in FLAC RIFF APPLICATION metadata, together with their RIFF envelopes;
-metadata chunks exceeding FLAC's block-size limit remain unsupported. Ambiguous
+still requires a smaller output. WAV ancillary chunks are preserved byte for byte
+in FLAC RIFF APPLICATION metadata, together with their RIFF envelopes, order and
+ancillary-chunk padding. This includes `smpl`, `inst`, `cue `, `LIST` (INFO and cue labels), `bext`,
+`id3 `/`ID3 `, XML, cart and unknown vendor chunks. Their contents are retained
+without translating sampler loops or embedded tags into player-specific fields.
+Plain format/fact chunks and disposable JUNK/PAD padding alone do not trigger
+foreign-metadata storage. Malformed RIFF chunk bounds and metadata chunks exceeding
+FLAC's block-size limit remain unsupported. Vorbis retains its stricter metadata
+checks because it has no equivalent preservation path. Ambiguous
 same-stem alternatives or existing destinations are skipped, never overwritten.
 
 ## BGA video choices

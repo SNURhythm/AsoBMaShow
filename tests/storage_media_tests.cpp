@@ -70,6 +70,30 @@ AssetCandidate candidate(const std::filesystem::path &path) {
   result.identity.bytes = std::filesystem::file_size(path);
   return result;
 }
+void verifyWaveMetadata(const std::string &source, const std::filesystem::path &output) {
+  std::ifstream encoded(output, std::ios::binary);
+  char magic[4]{}; encoded.read(magic, 4);
+  require(std::string(magic, 4) == "fLaC", "metadata output is native FLAC");
+  std::vector<std::string> foreign;
+  bool last = false;
+  while (!last) {
+    unsigned char header[4]{};
+    require(bool(encoded.read(reinterpret_cast<char *>(header), 4)), "read FLAC metadata header");
+    last = (header[0] & 128) != 0;
+    const auto size = (header[1] << 16) | (header[2] << 8) | header[3];
+    std::string block(size, '\0');
+    require(bool(encoded.read(block.data(), size)), "read FLAC metadata block");
+    if ((header[0] & 127) == 2 && block.compare(0, 4, "riff") == 0) foreign.push_back(block.substr(4));
+  }
+  std::vector<std::string> expected{source.substr(0, 12)};
+  for (std::size_t offset = 12; offset < source.size();) {
+    std::uint32_t size = 0;
+    for (int i = 0; i < 4; ++i) size |= std::uint32_t(static_cast<unsigned char>(source[offset + 4 + i])) << (8 * i);
+    expected.push_back(source.substr(offset, source.compare(offset, 4, "data") == 0 ? 8 : 8 + size + (size & 1)));
+    offset += 8 + size + (size & 1);
+  }
+  require(foreign == expected, "standard riff APPLICATION blocks retain every chunk, order and padding exactly");
+}
 void timelineTests() {
   const auto maximum = std::numeric_limits<std::int64_t>::max();
   const auto minimum = std::numeric_limits<std::int64_t>::min();
@@ -241,8 +265,14 @@ void audioTests() {
     bytes.replace(field, 4, "ZZZZ");
     temp.write("unknown-info.wav", bytes);
     const auto unknown = temp.root / "unknown-info.wav";
-    require(EncodeAudio(candidate(unknown), policy, temp.root / "unknown-info.flac", {}, {}).reason.code ==
-        StorageReason::UnsupportedFormat, "unknown INFO fields keep the original audio");
+    const auto output = temp.root / "unknown-info.flac";
+    require(EncodeAudio(candidate(unknown), policy, output, {}, {}).outcome == FileOutcome::Converted,
+            "unknown INFO fields permit lossless conversion without interpretation");
+    verifyWaveMetadata(bytes, output);
+    require(readAudio(output, 1, 8192) == taggedPcm, "unknown INFO fields retain exact PCM");
+    StoragePolicy lossy; lossy.audio = AudioAction::LossyVorbis;
+    require(EncodeAudio(candidate(unknown), lossy, temp.root / "unknown-info.ogg", {}, {}).reason.code ==
+        StorageReason::UnsupportedFormat, "unknown INFO fields remain protected in lossy conversion");
   }
   // Binary broadcast extensions include fields unavailable through libsndfile,
   // unknown versions and a nonzero odd-length RIFF pad byte.
@@ -263,30 +293,7 @@ void audioTests() {
   require(EncodeAudio(candidate(broadcast), policy, broadcastOutput, {}, {}).outcome == FileOutcome::Converted,
           "broadcast WAV converts without discarding bext");
   require(readAudio(broadcastOutput, 1, 8192) == taggedPcm, "broadcast WAV retains exact PCM");
-  {
-    std::ifstream encoded(broadcastOutput, std::ios::binary);
-    char magic[4]{}; encoded.read(magic, 4);
-    require(std::string(magic, 4) == "fLaC", "broadcast output is native FLAC");
-    std::vector<std::string> foreign;
-    bool last = false;
-    while (!last) {
-      unsigned char header[4]{};
-      require(bool(encoded.read(reinterpret_cast<char *>(header), 4)), "read FLAC metadata header");
-      last = (header[0] & 128) != 0;
-      const auto size = (header[1] << 16) | (header[2] << 8) | header[3];
-      std::string block(size, '\0');
-      require(bool(encoded.read(block.data(), size)), "read FLAC metadata block");
-      if ((header[0] & 127) == 2 && block.compare(0, 4, "riff") == 0) foreign.push_back(block.substr(4));
-    }
-    std::vector<std::string> expected{broadcastBytes.substr(0, 12)};
-    for (std::size_t offset = 12; offset < broadcastBytes.size();) {
-      std::uint32_t size = 0;
-      for (int i = 0; i < 4; ++i) size |= std::uint32_t(static_cast<unsigned char>(broadcastBytes[offset + 4 + i])) << (8 * i);
-      expected.push_back(broadcastBytes.substr(offset, broadcastBytes.compare(offset, 4, "data") == 0 ? 8 : 8 + size + (size & 1)));
-      offset += 8 + size + (size & 1);
-    }
-    require(foreign == expected, "standard riff APPLICATION blocks retain every chunk, order and padding exactly");
-  }
+  verifyWaveMetadata(broadcastBytes, broadcastOutput);
   const auto cancelledMetadata = temp.root / "cancelled-broadcast.flac";
   require(EncodeAudio(candidate(broadcast), policy, cancelledMetadata, [&] {
     std::error_code error;
@@ -307,8 +314,79 @@ void audioTests() {
           "metadata decode-back detects corruption independently of unchanged PCM");
   auto loop = temp.root / "loop.wav";
   writeAudio(loop, SF_FORMAT_WAV | SF_FORMAT_PCM_16, 1, samples(8192, 1, 16), true);
-  require(EncodeAudio(candidate(loop), policy, temp.root / "loop.flac", {}, {}).reason.code ==
-              StorageReason::UnsupportedFormat, "unrepresentable loop metadata keeps original");
+  const auto loopOutput = temp.root / "loop.flac";
+  require(EncodeAudio(candidate(loop), policy, loopOutput, {}, {}).outcome == FileOutcome::Converted,
+          "WAV sampler metadata permits lossless conversion");
+  require(readAudio(loopOutput, 1, 8192) == taggedPcm, "sampler WAV retains exact PCM");
+  std::ifstream loopInput(loop, std::ios::binary);
+  const std::string loopBytes((std::istreambuf_iterator<char>(loopInput)), {});
+  verifyWaveMetadata(loopBytes, loopOutput);
+  StoragePolicy vorbis; vorbis.audio = AudioAction::LossyVorbis;
+  require(EncodeAudio(candidate(loop), vorbis, temp.root / "loop.ogg", {}, {}).reason.code ==
+              StorageReason::UnsupportedFormat, "Vorbis keeps sampler metadata in the original WAV");
+  // ID3v2.4 with a title frame and an odd chunk length. Keep the original ID,
+  // binary contents and nonzero pad byte, including metadata after PCM data.
+  const std::string id3Payload("ID3\x04\0\0\0\0\0\x0fTIT2\0\0\0\x05\0\0\x03test", 25);
+  for (bool upper : {false, true}) {
+    const std::string id = upper ? "ID3 " : "id3 ";
+    std::string chunk = id;
+    chunk.append("\x19\0\0\0", 4); chunk += id3Payload; chunk += 'P';
+    // Exercise the ID3 trigger by itself, then both triggers in one source.
+    auto bytes = upper ? loopBytes : std::string{};
+    if (!upper) {
+      std::ifstream input(tagged, std::ios::binary);
+      bytes.assign(std::istreambuf_iterator<char>(input), {});
+    }
+    if (upper) bytes.insert(12, chunk); else bytes += chunk;
+    for (int i = 0; i < 4; ++i) bytes[4 + i] = static_cast<char>((bytes.size() - 8) >> (8 * i));
+    const auto name = upper ? "sampler-ID3" : "id3";
+    const auto source = temp.root / (std::string(name) + ".wav");
+    const auto output = temp.root / (std::string(name) + ".flac");
+    temp.write(source.filename().string(), bytes);
+    require(EncodeAudio(candidate(source), policy, output, {}, {}).outcome == FileOutcome::Converted,
+            "WAV ID3 chunks permit lossless conversion");
+    verifyWaveMetadata(bytes, output);
+    require(readAudio(output, 1, 8192) == taggedPcm, "ID3 WAV retains exact PCM");
+    const auto lossy = temp.root / (std::string(name) + ".ogg");
+    require(EncodeAudio(candidate(source), vorbis, lossy, {}, {}).reason.code == StorageReason::UnsupportedFormat &&
+                !std::filesystem::exists(lossy), "Vorbis does not discard WAV ID3 metadata");
+  }
+  {
+    std::ifstream input(temp.root / "16-1.wav", std::ios::binary);
+    std::string bytes((std::istreambuf_iterator<char>(input)), {});
+    // Common ancillary chunks plus duplicate and unknown vendor chunks. Their
+    // payloads are opaque to the transcoder; no whitelist should be necessary.
+    for (const auto &[id, payload] : std::vector<std::pair<std::string, std::string>>{
+        {"cue ", std::string(4, '\0')}, {"inst", std::string(7, '\0')},
+        {"LIST", std::string("adtllabl\x06\0\0\0\x01\0\0\0" "A\0", 18)},
+        {"iXML", "<BWFXML><PROJECT>Session</PROJECT></BWFXML>"},
+        {"axml", "<metadata>Copyright</metadata>"},
+        {"cart", "0101" + std::string(2044, '\0')},
+        {"DISP", std::string("\x01\0\0\0" "Sample\0", 11)},
+        {"PEAK", std::string("\x01\0\0\0", 4) + std::string(12, '\0')},
+        {"acid", std::string(24, '\0')}, {"iXML", "<extra/>"},
+        {"Xfoo", std::string("\0\xff!", 3)}, {"Xnil", ""}}) {
+      bytes += id;
+      for (int i = 0; i < 4; ++i) bytes += static_cast<char>(payload.size() >> (8 * i));
+      bytes += payload;
+      if (payload.size() & 1) bytes += 'P';
+    }
+    for (int i = 0; i < 4; ++i) bytes[4 + i] = static_cast<char>((bytes.size() - 8) >> (8 * i));
+    temp.write("ancillary.wav", bytes);
+    const auto source = temp.root / "ancillary.wav", output = temp.root / "ancillary.flac";
+    require(EncodeAudio(candidate(source), policy, output, {}, {}).outcome == FileOutcome::Converted,
+            "common and unknown RIFF chunks permit lossless conversion");
+    verifyWaveMetadata(bytes, output);
+    require(readAudio(output, 1, 8192) == taggedPcm, "ancillary chunks preserve exact PCM");
+    // An out-of-bounds vendor chunk must still fail even though its ID is allowed.
+    bytes += "Xbad"; bytes.append("\xff\xff\xff\x7f", 4);
+    for (int i = 0; i < 4; ++i) bytes[4 + i] = static_cast<char>((bytes.size() - 8) >> (8 * i));
+    temp.write("truncated-chunk.wav", bytes);
+    const auto invalidOutput = temp.root / "truncated-chunk.flac";
+    require(EncodeAudio(candidate(temp.root / "truncated-chunk.wav"), policy, invalidOutput, {}, {}).reason.code ==
+        StorageReason::ValidationFailed && !std::filesystem::exists(invalidOutput),
+        "opaque metadata still requires complete RIFF chunk bounds");
+  }
   auto rear = temp.root / "rear.wav";
   writeAudio(rear, SF_FORMAT_WAVEX | SF_FORMAT_PCM_16, 2, samples(8192, 2, 16), false, true);
   require(EncodeAudio(candidate(rear), policy, temp.root / "rear.flac", {}, {}).reason.code ==
