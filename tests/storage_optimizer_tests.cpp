@@ -570,6 +570,42 @@ void descendantChartsStayProtectedWithoutBlockingIndependentRoots() {
         "descendant chart edits after review or during encoding retain parent media while independent roots proceed");
   }
 }
+void timestampPreservingChartEditsInvalidateEvidence() {
+  for (const auto *name : {"charts/chart.bms", "charts/song/chart.bms", "charts/song/sub/chart.bms"}) {
+    for (bool beforeLoad : {false, true}) for (bool spill : {false, true}) {
+      TempDirectory temp;
+      temp.write("charts/song/sound.wav", std::string(100, 'a'));
+      temp.write(name, "#TITLE Before\n");
+      const auto input = request(temp.root / "charts");
+      auto preflight = BuildStoragePreflight(input.inventory);
+      const auto chart = temp.root / name;
+      std::string error;
+      const auto identity = ReadFileIdentity(chart, error);
+      const auto parentTime = fs::last_write_time(chart.parent_path());
+      const auto edit = [&] {
+        temp.write(name, "#TITLE After!\n");
+        fs::last_write_time(chart, identity->modified);
+        require(ReadFileIdentity(chart, error) == identity && fs::last_write_time(chart.parent_path()) == parentTime,
+            "in-place rewrite preserves size, mtime, inode and parent directory stamp");
+      };
+      StorageDirectoryEvidence evidence(preflight.directories.at(temp.root / "charts/song"), preflight,
+          {.records = spill ? 0u : 100u, .scratchRoot = temp.root / "scratch"});
+      if (beforeLoad) {
+        edit();
+        require(!evidence.Load({}, error), "timestamp-preserving chart rewrite invalidates reviewed fingerprints");
+      } else {
+        require(evidence.Load({}, error), "unchanged charts load in memory and on disk");
+        const auto entry = evidence.Candidates().Next({}, error);
+        StorageDiagnostic reason;
+        const auto candidate = StorageCandidateForEntry(*entry, evidence.Directory(), input.policy, {}, reason);
+        require(candidate && evidence.Candidate(*candidate, {}, error), "unchanged chart evidence authorizes candidate");
+        edit();
+        require(!evidence.Candidate(*candidate, {}, error) && !evidence.BeforeCommit(*candidate, {}, {}, error),
+            "local, ancestor and descendant rewrites block candidates and the commit boundary after spill");
+      }
+    }
+  }
+}
 void descendantChartEvidenceSharesOneSpillBudget() {
   TempDirectory temp;
   temp.write("charts/shared.wav", std::string(100, 'a'));
@@ -1001,6 +1037,7 @@ int main(int argc, char **argv) {
     changedDirectoryIsSkippedWithoutAcceptingNewAssets(); unrelatedFoldersDoNotMultiplyCommitChecks();
     subsetRefreshNeverEnumeratesAncestorSiblings();
     ancestorChartsStayProtectedWithoutBlockingIndependentRoots(); descendantChartsStayProtectedWithoutBlockingIndependentRoots();
+    timestampPreservingChartEditsInvalidateEvidence();
     descendantChartEvidenceSharesOneSpillBudget();
     committedDeltasSurviveDetailLimitAndRetainedBackups();
     partialFailureAndAccounting(); revalidateAtTheActualCommitBoundary(); cleanupFailureAndFatalRecovery();

@@ -130,14 +130,16 @@ bool StorageDirectoryEvidence::CheckScopes(bool changingLocal, Checkpoint check,
   }
   std::string chartError;
   if (!charts_->Visit(check, [&](const auto &entry) {
-    if (!entry.identity) { chartError = "Chart identity cannot be verified"; return false; }
+    if (!entry.identity || !entry.chartChange) { chartError = "Chart identity cannot be verified"; return false; }
     if (metrics_) ++metrics_->chartChecks;
     const auto path = chartPath(entry.name);
     if (!path) { chartError = "Chart path cannot be verified"; return false; }
     const auto scope = preflight_.directories.find(path->parent_path());
     if (scope == preflight_.directories.end()) { chartError = "Chart scope cannot be verified"; return false; }
     const auto current = ReadFileIdentity(*path, chartError, boundaries(scope->second));
-    if (!current || *current != *entry.identity) { chartError = "Chart changed since preflight"; return false; }
+    if (!current || *current != *entry.identity || ReadStorageChartChangeStamp(*path, chartError) != entry.chartChange) {
+      chartError = "Chart changed since preflight"; return false;
+    }
     return true;
   }, error)) { if (!chartError.empty()) error = chartError; return false; }
   return true;

@@ -2,16 +2,22 @@
 
 #include "StorageTypes.h"
 #include <memory>
+#include <array>
 
 namespace storage_management {
 enum class StorageVisitMode { SizeOnly, Preflight };
 enum class StorageEntryKind { Regular, Directory, Symlink, Other };
+// Chart-only change time detects in-place writes even when mtime is restored.
+// Keep it separate from FileIdentity: transaction renames legitimately change it.
+using StorageChartChangeStamp = std::array<std::uint64_t, 2>;
+std::optional<StorageChartChangeStamp> ReadStorageChartChangeStamp(const std::filesystem::path &, std::string &);
 struct StorageDirectoryEntry {
   std::filesystem::path name;
   StorageEntryKind kind = StorageEntryKind::Other;
   std::uint64_t bytes = 0;
   std::filesystem::perms permissions = std::filesystem::perms::unknown;
   std::optional<FileIdentity> identity;
+  std::optional<StorageChartChangeStamp> chartChange;
 };
 struct StorageDirectoryStamp {
   std::uint64_t device = 0, fileId = 0;

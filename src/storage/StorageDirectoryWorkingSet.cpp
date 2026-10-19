@@ -40,6 +40,9 @@ std::string payload(const StorageDirectoryEntry &entry) {
     number(bytes, std::bit_cast<std::uint64_t>(static_cast<std::int64_t>(seconds.count())));
     number(bytes, nanos.count());
   }
+  number(bytes, entry.chartChange.has_value());
+  number(bytes, entry.chartChange ? (*entry.chartChange)[0] : 0);
+  number(bytes, entry.chartChange ? (*entry.chartChange)[1] : 0);
   return bytes;
 }
 StorageDirectoryEntry decode(sqlite3_stmt *statement) {
@@ -47,7 +50,7 @@ StorageDirectoryEntry decode(sqlite3_stmt *statement) {
   const auto nameSize = sqlite3_column_bytes(statement, 0);
   const auto *data = static_cast<const unsigned char *>(sqlite3_column_blob(statement, 1));
   const auto size = sqlite3_column_bytes(statement, 1);
-  if (!name || nameSize <= 0 || !data || (size != 32 && size != 64))
+  if (!name || nameSize <= 0 || !data || (size != 56 && size != 88))
     throw std::runtime_error("Invalid directory metadata record");
   const auto read = [&](int offset) {
     std::uint64_t value = 0;
@@ -57,7 +60,7 @@ StorageDirectoryEntry decode(sqlite3_stmt *statement) {
   StorageDirectoryEntry entry{.name = Key(name, name + nameSize), .kind = static_cast<StorageEntryKind>(read(0)),
       .bytes = read(8), .permissions = static_cast<fs::perms>(read(16))};
   if (read(24)) {
-    if (size != 64) throw std::runtime_error("Truncated directory identity");
+    if (size != 88) throw std::runtime_error("Truncated directory identity");
     const auto seconds = std::chrono::seconds(std::bit_cast<std::int64_t>(read(48)));
     const auto nanos = std::chrono::nanoseconds(read(56));
     entry.identity = FileIdentity{.bytes = entry.bytes,
@@ -65,6 +68,7 @@ StorageDirectoryEntry decode(sqlite3_stmt *statement) {
             std::chrono::duration_cast<fs::file_time_type::duration>(nanos)),
         .device = read(32), .fileId = read(40)};
   }
+  if (read(size - 24)) entry.chartChange = StorageChartChangeStamp{read(size - 16), read(size - 8)};
   return entry;
 }
 bool validName(const fs::path &path) {

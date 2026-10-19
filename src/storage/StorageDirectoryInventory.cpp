@@ -1,5 +1,6 @@
 #include "StorageDirectoryInventory.h"
 #include "ChartResourceInventory.h"
+#include "../BmsChartFile.h"
 
 #include <cerrno>
 #include <chrono>
@@ -40,12 +41,20 @@ fs::file_time_type modified(const FILETIME &value) {
   return std::chrono::time_point_cast<fs::file_time_type::duration>(
       std::chrono::clock_cast<fs::file_time_type::clock>(std::chrono::sys_time(sinceUnix)));
 }
-bool inspect(const fs::path &path, BY_HANDLE_FILE_INFORMATION &info, std::string &error) {
+bool inspect(const fs::path &path, BY_HANDLE_FILE_INFORMATION &info, std::string &error,
+    StorageChartChangeStamp *change = nullptr) {
   Handle handle{CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
       FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS, nullptr)};
   if (handle.value == INVALID_HANDLE_VALUE || !GetFileInformationByHandle(handle.value, &info)) {
     error = "Cannot inspect directory entry"; return false;
+  }
+  if (change) {
+    FILE_BASIC_INFO basic{};
+    if (!GetFileInformationByHandleEx(handle.value, FileBasicInfo, &basic, sizeof(basic))) {
+      error = "Cannot inspect chart change time"; return false;
+    }
+    *change = {static_cast<std::uint64_t>(basic.ChangeTime.QuadPart), 0};
   }
   return true;
 }
@@ -65,11 +74,37 @@ fs::file_time_type modified(const struct stat &info) {
   return std::chrono::time_point_cast<fs::file_time_type::duration>(
       fs::file_time_type::clock::from_sys(std::chrono::sys_time(sinceUnix)));
 }
+StorageChartChangeStamp chartChangeStamp(const struct stat &info) {
+#ifdef __APPLE__
+  const auto value = info.st_ctimespec;
+#else
+  const auto value = info.st_ctim;
+#endif
+  return {static_cast<std::uint64_t>(value.tv_sec), static_cast<std::uint64_t>(value.tv_nsec)};
+}
 StorageDirectoryStamp directoryStamp(const struct stat &info) {
   return {static_cast<std::uint64_t>(info.st_dev), static_cast<std::uint64_t>(info.st_ino),
       modified(info), static_cast<fs::perms>(info.st_mode & 07777)};
 }
 struct DirectoryCloser { void operator()(DIR *directory) const { closedir(directory); } };
+#endif
+}
+
+std::optional<StorageChartChangeStamp> ReadStorageChartChangeStamp(const fs::path &path, std::string &error) {
+#ifdef _WIN32
+  BY_HANDLE_FILE_INFORMATION info{};
+  StorageChartChangeStamp change{};
+  if (!inspect(path, info, error, &change) || info.nNumberOfLinks != 1 ||
+      (info.dwFileAttributes & (FILE_ATTRIBUTE_REPARSE_POINT | FILE_ATTRIBUTE_DIRECTORY))) {
+    error = "Cannot verify chart change time"; return {};
+  }
+  return change;
+#else
+  struct stat info{};
+  if (lstat(path.c_str(), &info) != 0 || !S_ISREG(info.st_mode) || info.st_nlink != 1) {
+    error = "Cannot verify chart change time"; return {};
+  }
+  return chartChangeStamp(info);
 #endif
 }
 
@@ -111,7 +146,10 @@ bool VisitStorageDirectory(const fs::path &path, const fs::path &accessRoot,
   while (iterator != end) {
     if (!keepGoing(check, error)) return false;
     BY_HANDLE_FILE_INFORMATION info{};
-    if (!inspect(iterator->path(), info, error)) return false;
+    const bool chart = mode == StorageVisitMode::Preflight &&
+        asobmshow::bms_chart_file::isBmsChartPath(iterator->path());
+    StorageChartChangeStamp change{};
+    if (!inspect(iterator->path(), info, error, chart ? &change : nullptr)) return false;
     StorageDirectoryEntry entry{.name = iterator->path().filename()};
     if (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) entry.kind = StorageEntryKind::Symlink;
     else if (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) entry.kind = StorageEntryKind::Directory;
@@ -122,6 +160,7 @@ bool VisitStorageDirectory(const fs::path &path, const fs::path &accessRoot,
         entry.identity = FileIdentity{entry.bytes, modified(info.ftLastWriteTime), info.dwVolumeSerialNumber,
             (std::uint64_t(info.nFileIndexHigh) << 32) | info.nFileIndexLow};
     }
+    if (entry.identity && chart) entry.chartChange = change;
     if (metrics) { ++metrics->entries; ++metrics->metadataReads; }
     if (visit && !visit(entry)) { error = "Visitor stopped"; return false; }
     iterator.increment(ec);
@@ -168,6 +207,8 @@ bool VisitStorageDirectory(const fs::path &path, const fs::path &accessRoot,
         entry.identity = FileIdentity{entry.bytes, modified(info),
             static_cast<std::uint64_t>(info.st_dev), static_cast<std::uint64_t>(info.st_ino)};
     }
+    if (entry.identity && asobmshow::bms_chart_file::isBmsChartPath(entry.name))
+      entry.chartChange = chartChangeStamp(info);
     if (metrics) { ++metrics->entries; ++metrics->metadataReads; }
     if (visit && !visit(entry)) { error = "Visitor stopped"; return false; }
   }
