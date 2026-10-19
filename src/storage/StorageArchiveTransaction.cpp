@@ -1062,13 +1062,21 @@ StorageReport UpdateStorageArchive(const StorageArchiveSummary &summary, const S
   StorageReport report; fs::path journal; bool started = false;
   try {
     authority(summary.path, paths); active(check); std::string error; const auto current = ReadFileIdentity(summary.path, error, paths.pathAccessRoots);
-    require(current && *current == summary.identity, "Archive changed since review", StorageReason::StaleInput);
+    require(current && *current == summary.identity && !summary.sourceIdentity.empty() &&
+        archive_source_identity::KeyForPath(summary.path) == summary.sourceIdentity,
+        "Archive changed since review", StorageReason::StaleInput);
     if (progress) progress({.phase = StoragePhase::ArchivePrepare, .currentPath = summary.path, .filesTotal = summary.eligibleCount});
     active(check); journal = createJournal(paths);
     {
       Timer preparing(deps.metrics ? &deps.metrics->preparationNanoseconds : nullptr);
       StorageArchive archive(summary.path, journal / "manifest.sqlite", paths.pathAccessRoots, check);
-      require(archive.identity == summary.identity, "Archive changed while starting update", StorageReason::StaleInput);
+      // Opening the pinned file can race a same-size edit that restores mtime.
+      // Keep the review's change token authoritative after physical parsing;
+      // the pinned IO checks continue protecting it through every later write.
+      require(archive.identity == summary.identity &&
+          archive_source_identity::KeyForPath(summary.path) == summary.sourceIdentity,
+          "Archive changed while starting update", StorageReason::StaleInput);
+      archive.io.CheckPath();
       archive.ValidateBrowsingIndex(check);
       {
         Update preparing(archive, journal, deps, started, paths.pathAccessRoots); preparing.Initialize(check);

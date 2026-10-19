@@ -1845,6 +1845,58 @@ void unsafeAndStaleArchivesAreRejected() {
     }
   }
 }
+void archiveReviewRejectsPreservedMetadataChanges() {
+  for (bool duringStart : {false, true}) {
+    storage_test::TempDirectory temp;
+    const auto path = temp.root / "reviewed.zip", replacementPath = temp.root / "replacement.zip";
+    writeArchive(path, {{"audio.wav", std::string(256, 'a')}, {"movie.avi", "old video"}, {"chart.bms", "chart"}});
+    writeArchive(replacementPath, {{"audio.wav", std::string(256, 'b')}, {"movie.avi", "new video"}, {"chart.bms", "chart"}});
+    std::ifstream replacementFile(replacementPath, std::ios::binary);
+    const std::string replacement((std::istreambuf_iterator<char>(replacementFile)), {});
+    const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+    InventoryRequest request{.groups = {{"all", path, false, false, StorageSourceKind::Archive}},
+        .policy = {.audio = AudioAction::LosslessFlac, .bga = BgaAction::Delete}, .scanScratchRoot = paths.scanRoot};
+    const auto review = BuildStoragePreflight(request);
+    require(review.complete && review.archives.size() == 1 && review.eligibleCount == 2,
+        "review the original archive before its contents change");
+    const auto originalIdentity = review.archives.front().identity;
+    const auto originalSource = archive_source_identity::KeyForPath(path);
+    bool changed = false;
+    const auto replaceInPlace = [&] {
+      require(replacement.size() == originalIdentity.bytes, "replacement archive retains the reviewed byte count");
+      {
+        std::fstream output(path, std::ios::binary | std::ios::in | std::ios::out);
+        output.write(replacement.data(), replacement.size()); output.close();
+        require(!output.fail(), "overwrite the existing archive without replacing its inode");
+      }
+      fs::last_write_time(path, originalIdentity.modified);
+      std::string error;
+      require(ReadFileIdentity(path, error) == originalIdentity,
+          "in-place archive replacement preserves inode, size and restored modification time");
+      require(archive_source_identity::KeyForPath(path) != originalSource &&
+          readArchive(path).at("audio.wav") == std::string(256, 'b'),
+          "replacement is valid but its source change token differs from the reviewed archive");
+      changed = true;
+    };
+    if (!duringStart) replaceInPlace();
+    std::atomic<unsigned> encodes = 0;
+    StorageArchiveMetrics metrics;
+    StorageArchiveDependencies deps{.encode = [&](const auto &, const auto &, const fs::path &output, auto, auto) {
+      ++encodes; std::ofstream(output) << "converted"; return EncodeResult{FileOutcome::Converted, output};
+    }, .metrics = &metrics};
+    const auto report = UpdateStorageArchive(review.archives.front(), request.policy, paths, deps, {},
+        [&](const StorageProgress &progress) {
+          if (duringStart && !changed && progress.phase == StoragePhase::ArchivePrepare) replaceInPlace();
+        });
+    require(changed && report.failed == 1 && !report.recoveryRequired && !report.converted && !report.deleted &&
+        encodes == 0 && metrics.bytesWritten == 0 && report.files.front().reason.code == StorageReason::StaleInput,
+        "stale archive review rejects preserved-metadata changes before encoding or mutation");
+    std::ifstream checked(path, std::ios::binary);
+    require(std::string((std::istreambuf_iterator<char>(checked)), {}) == replacement &&
+        (!fs::exists(paths.journalRoot) || fs::is_empty(paths.journalRoot)),
+        "stale review leaves the replacement archive byte-identical without recovery work");
+  }
+}
 void partialWritesAndForeignChanges() {
   for (bool foreign : {false, true}) {
     storage_test::TempDirectory temp; const auto path = temp.root / "songs.zip";
@@ -1906,7 +1958,8 @@ void archiveStagingRespectsPrivateBoundary() {
     std::string error;
     const auto identity = ReadFileIdentity(path, error, {library});
     require(identity.has_value(), "archive identity is accessible inside the library grant");
-    const StorageArchiveSummary summary{.path = path, .identity = *identity, .innerRoots = {fs::path{}}, .eligibleCount = 2};
+    const StorageArchiveSummary summary{.path = path, .identity = *identity,
+        .sourceIdentity = archive_source_identity::KeyForPath(path), .innerRoots = {fs::path{}}, .eligibleCount = 2};
     if (mode == "symlink") std::ofstream(privateRoot / "foreign") << std::string(1000, 'f');
     StorageArchiveDependencies deps{.encode = [&](const AssetCandidate &, const StoragePolicy &, const fs::path &output, Checkpoint, ProgressCallback) {
       if (mode == "symlink") {
@@ -2049,6 +2102,7 @@ void storageArchiveTests(const char *executable) {
       {"playback", realArchiveOptimizerPreservesPlayback}, {"existing-destinations", existingArchiveDestinationsAreReused},
       {"case-distinct-destinations", archiveReuseRequiresExactParentAndStem},
       {"boundaries", archivePolicyBoundaries}, {"rejections", unsafeAndStaleArchivesAreRejected},
+      {"stale-review-identity", archiveReviewRejectsPreservedMetadataChanges},
       {"partial", partialWritesAndForeignChanges}}) {
     try { run(); } catch (const std::exception &error) { throw std::runtime_error(std::string(name) + ": " + error.what()); }
   }

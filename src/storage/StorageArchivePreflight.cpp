@@ -107,7 +107,7 @@ void AppendStorageArchivePreflight(StoragePreflight &result, Checkpoint check, S
       scratch.path = privatePath; fs::permissions(privatePath, fs::perms::owner_all, fs::perm_options::replace);
       Database db(privatePath / "review.sqlite");
       indexEntries(db, path, check, metrics);
-      StorageArchiveSummary summary{.path = path, .identity = *identity};
+      StorageArchiveSummary summary{.path = path, .identity = *identity, .sourceIdentity = sourceIdentity};
       std::vector<GroupStorageMeasurement> measured;
       for (const auto position : positions) {
         auto row = result.groups[position]; row.totalBytes = 0;

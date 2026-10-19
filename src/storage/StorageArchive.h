@@ -14,6 +14,7 @@ struct StorageArchiveEntry {
 struct StorageArchiveSummary {
   std::filesystem::path path;
   FileIdentity identity;
+  std::string sourceIdentity;
   std::vector<std::filesystem::path> innerRoots;
   std::uint64_t eligibleCount = 0, eligibleBytes = 0;
 };
