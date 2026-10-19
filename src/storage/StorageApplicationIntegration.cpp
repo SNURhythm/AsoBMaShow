@@ -150,7 +150,8 @@ bool InitializeStorageServices(ApplicationContext &context, StorageRecoveryProgr
         error = "Finish gameplay, export, or the profile operation before managing storage.";
         return {};
       }
-      if (context.chartLibraryFolderActions && context.chartLibraryFolderActions->active()) {
+      if (context.chartLibraryFolderActions && (context.chartLibraryFolderActions->active() ||
+          context.chartLibraryFolderActions->hasPendingSelection())) {
         error = "A chart folder picker is active."; return {};
       }
       if (auto reason = context.profileSwitchBlockers.firstReason()) { error = *reason; return {}; }

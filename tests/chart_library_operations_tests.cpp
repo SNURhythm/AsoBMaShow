@@ -1353,11 +1353,50 @@ void testDesktopFolderRepickPreservesTheUnpolledSelection() {
          "each selected folder queues exactly one scan across repeated polls");
 }
 
+void testDesktopFolderSelectionWaitsForMaintenanceHandoff() {
+  TempDirectory temp;
+  ChartRepository repository(temp.path() / "chart.db");
+  expect(repository.EnsureReady(), "maintenance picker repository is ready");
+  chart_library_tasks::ChartLibraryTaskService tasks(
+      [](const auto &, const auto &, auto, auto) {
+        return chart_library_tasks::TaskRunResult{};
+      });
+  chart_library_platform::FolderActionService picker(repository, tasks);
+  desktopPickerResult = (temp.path() / "pending folder").string();
+  picker.requestAddFolder();
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (picker.active() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::yield();
+  }
+  expect(!picker.active(), "native picker publishes its result before maintenance");
+  expect(picker.hasPendingSelection(), "completed unpolled selection still blocks storage admission");
+  const auto reservation = tasks.tryReserveMaintenance();
+  expect(reservation.has_value(), "idle task service reserves maintenance before picker handoff");
+  if (!reservation) return;
+  picker.poll();
+  picker.poll();
+  expect(repository.OpenSession()->SelectEffectiveEntries().empty(),
+         "maintenance defers registration of a completed desktop selection");
+  expect(tasks.snapshot().tasks.empty(), "maintenance defers the selected folder scan");
+  expect(picker.hasPendingSelection(), "maintenance leaves the completed selection pending");
+  tasks.releaseMaintenance(*reservation);
+  picker.poll();
+  picker.poll();
+  const auto entries = repository.OpenSession()->SelectEffectiveEntries();
+  expect(entries.size() == 1 && std::filesystem::path(entries.front().path) ==
+             std::filesystem::path(desktopPickerResult),
+         "released maintenance registers the retained desktop selection");
+  expect(tasks.snapshot().tasks.size() == 1,
+         "released maintenance queues the retained selection exactly once");
+  expect(!picker.hasPendingSelection(), "registration and scan handoff consume the completed selection");
+}
+
 int main() {
   testDesktopFolderPickerShutdownAbandonsAnOpenDialog();
   testDesktopFolderPickerWaitsForOtherNativeDialogs();
   testDesktopFolderPickingRegistersAndQueuesScan();
   testDesktopFolderRepickPreservesTheUnpolledSelection();
+  testDesktopFolderSelectionWaitsForMaintenanceHandoff();
   testRefreshAcknowledgesMissingSourceAndIndexesPreservedOutput();
   testUnavailableRecoveryDoesNotBlockHealthyLibraryRoots();
   testStartupRefreshRecoversDeletedArchiveBeforeClearingTheJournal();
