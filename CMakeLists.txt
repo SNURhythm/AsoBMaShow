@@ -9479,7 +9479,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         DEPENDS tests/settings_event_lifetime_extract.py tests/settings_event_lifetime_fixture.cpp
                 tests/gameplay_terminal_scene_extract.py tests/result_skin_timeout_extract.py
                 src/scene/SettingsScene.cpp src/scene/Scene.h
-                src/scene/SettingsSceneStorage.cpp src/scene/SceneReturnTarget.h src/scene/SceneReturnTarget.cpp
+                src/scene/SettingsSceneStorage.cpp src/scene/StorageManagementScene.cpp
+                src/scene/SceneReturnTarget.h src/scene/SceneReturnTarget.cpp
                 src/scene/SceneManager.h src/scene/SceneManager.cpp
                 src/storage/StorageApplicationIntegration.cpp
                 src/storage/StoragePlatform.h src/storage/StoragePlatform.cpp

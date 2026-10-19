@@ -30,11 +30,16 @@ Uint64 SDL_GetTicks() { return 1; }
 enum {
   SDL_EVENT_WILL_ENTER_BACKGROUND = 1, SDL_EVENT_DID_ENTER_BACKGROUND,
   SDL_EVENT_WINDOW_FOCUS_LOST, SDL_EVENT_WINDOW_MINIMIZED,
-  SDL_EVENT_WINDOW_HIDDEN, SDL_EVENT_MOUSE_BUTTON_UP
+  SDL_EVENT_WINDOW_HIDDEN, SDL_EVENT_MOUSE_BUTTON_UP, SDL_EVENT_KEY_DOWN
 };
 constexpr int SDL_EVENT_WINDOW_FIRST = SDL_EVENT_WINDOW_FOCUS_LOST;
 constexpr int SDL_EVENT_WINDOW_LAST = SDL_EVENT_WINDOW_HIDDEN;
-struct SDL_Event { int type = SDL_EVENT_MOUSE_BUTTON_UP; struct { int event = 0; } window; };
+constexpr int SDLK_ESCAPE = 27;
+struct SDL_Event {
+  int type = SDL_EVENT_MOUSE_BUTTON_UP;
+  struct { int event = 0; } window;
+  struct { int key = 0; } key;
+};
 class SceneManager;
 namespace audio::playback { struct BackendOperationResult { bool success = true; std::string diagnostic; }; }
 namespace player_settings { enum class PresentationOrientation { Landscape, Portrait }; }
@@ -272,9 +277,13 @@ PRODUCTION_SETTINGS_EVENTS
 
 struct StorageManagementScene : SettingsScene {
   SceneReturnTarget target;
+  int backCount = 0;
   StorageManagementScene(ApplicationContext &context, SceneReturnTarget value)
       : SettingsScene(context), target(std::move(value)) {}
+  void GoBack() { ++backCount; }
+  EventHandleResult handleEvents(SDL_Event &event) override;
 };
+PRODUCTION_STORAGE_EVENTS
 void SettingsScene::openStorage() {
   defer(PRODUCTION_STORAGE_OPEN, 0, true);
 }
@@ -396,6 +405,18 @@ int main() {
   ++context.currentFrame;
   manager.handleDeferred();
   assert(dynamic_cast<StorageManagementScene *>(manager.currentScene));
+  auto *storage = static_cast<StorageManagementScene *>(manager.currentScene);
+  int modalEvents = 0;
+  storage->views.front()->eventCallback = [&] { ++modalEvents; return false; };
+  SDL_Event escape;
+  escape.type = SDL_EVENT_KEY_DOWN;
+  escape.key.key = SDLK_ESCAPE;
+  manager.handleEvents(escape);
+  assert(modalEvents == 1 && storage->backCount == 0 &&
+         "Escape must reach the modal without leaving storage management");
+  storage->views.front()->eventCallback = [] { return true; };
+  manager.handleEvents(escape);
+  assert(storage->backCount == 1 && "unconsumed Escape returns from storage management");
   assert(manager.hasBackgroundScene(retained));
   assert(returnToScene(manager, SceneReturnTarget::Retained(retained)));
   manager.handleDeferred();

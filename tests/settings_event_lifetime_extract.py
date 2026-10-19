@@ -34,6 +34,9 @@ def main():
     fixture = fixture.replace("PRODUCTION_SETTINGS_EVENTS", extract(
         (args.root / "src/scene/SettingsScene.cpp").read_text(),
         "EventHandleResult SettingsScene::handleEvents(SDL_Event &event)"))
+    fixture = fixture.replace("PRODUCTION_STORAGE_EVENTS", extract(
+        (args.root / "src/scene/StorageManagementScene.cpp").read_text(),
+        "EventHandleResult StorageManagementScene::handleEvents(SDL_Event &event)"))
     fixture = fixture.replace("PRODUCTION_RETURN_TARGET", without_includes(
         (args.root / "src/scene/SceneReturnTarget.h").read_text()))
     fixture = fixture.replace("PRODUCTION_RETURN_METHOD", without_includes(

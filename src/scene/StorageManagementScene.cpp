@@ -638,8 +638,12 @@ bool StorageManagementScene::prepareForStorageMaintenance(std::string &) {
   return true;
 }
 EventHandleResult StorageManagementScene::handleEvents(SDL_Event &event) {
+  for (auto *view : views) {
+    // Overlays consume Escape; navigation callbacks may also destroy this scene.
+    if (!view->handleEvents(event)) return {};
+  }
   if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) { GoBack(); return {}; }
-  return Scene::handleEvents(event);
+  return {};
 }
 void StorageManagementScene::cleanupScene() {
   inventoryTask_.Cancel();
