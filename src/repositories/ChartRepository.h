@@ -399,7 +399,7 @@ public:
     // Empty roots select the whole library; scoped roots use indexed path ranges.
     // Only identity columns are loaded, never full chart metadata.
     std::vector<ChartScanReconcileIdentity> LoadScanReconcileIdentities(const std::vector<std::filesystem::path> &roots = {});
-    std::optional<ScanBatch> BeginScanBatch(bool storageMeasurementsCurrent = false);
+    std::optional<ScanBatch> BeginScanBatch();
     bool ClearScanCheckpoint();
     bool ClearChartMetadataRebuildRequired();
     bool ReplaceDifficultyTable(const difficulty_table::Document &document);

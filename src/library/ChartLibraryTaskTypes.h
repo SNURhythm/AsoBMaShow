@@ -57,7 +57,8 @@ struct TaskRequest {
   bool rebuildLibraryMetadata = false;
   bool folderRegistrationCompleted = false;
   std::vector<std::filesystem::path> refreshPaths;
-  // The storage job already applied these resource deltas to its displayed sizes.
+  // Skip unconditional scope invalidation for already-applied storage deltas.
+  // Changes discovered by the scan still invalidate the affected measurements.
   bool storageMeasurementsCurrent = false;
 };
 

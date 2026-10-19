@@ -223,16 +223,9 @@ constexpr std::size_t kLibraryChangeRootLimit = 4096;
 std::string columnString(sqlite3_stmt *stmt, int idx);
 void invalidateDifficultyLabelCache();
 
-void bumpLibraryRevision(const std::vector<std::filesystem::path> &roots = {},
-                          bool storageMeasurementsCurrent = false) {
+void bumpLibraryRevision(const std::vector<std::filesystem::path> &roots = {}) {
   std::lock_guard lock(gLibraryChangesMutex);
   const auto revision = gLibraryRevision.load(std::memory_order_relaxed) + 1;
-  if (storageMeasurementsCurrent) {
-    // Keep earlier ordinary invalidations: an owned refresh must not hide a
-    // change that predates it from a scene that has not reloaded yet.
-    gLibraryRevision.store(revision, std::memory_order_release);
-    return;
-  }
   bool unknown = roots.empty();
   for (auto root : roots) {
     if (root.empty()) { unknown = true; break; }
@@ -1425,9 +1418,8 @@ void chart_repository_detail::InvalidateDifficultyLabelCache() {
   invalidateDifficultyLabelCache();
 }
 
-void chart_repository_detail::BumpLibraryRevision(const std::vector<std::filesystem::path> &roots,
-                                                  bool storageMeasurementsCurrent) {
-  bumpLibraryRevision(roots, storageMeasurementsCurrent);
+void chart_repository_detail::BumpLibraryRevision(const std::vector<std::filesystem::path> &roots) {
+  bumpLibraryRevision(roots);
 }
 
 int ChartRepository::Session::CountAllChartMeta() {

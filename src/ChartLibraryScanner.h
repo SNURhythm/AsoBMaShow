@@ -85,8 +85,7 @@ public:
       ChartScanProgressCallback progressCallback = nullptr,
       ChartScanPauseCallback pauseCallback = nullptr,
       ChartScanFlushRequestCallback flushRequestCallback = nullptr,
-      ChartScanFlushCompleteCallback flushCompleteCallback = nullptr,
-      bool storageMeasurementsCurrent = false);
+      ChartScanFlushCompleteCallback flushCompleteCallback = nullptr);
 
 private:
   enum class ReconcileMode { None, Scoped, Full };
@@ -100,6 +99,5 @@ private:
       ChartScanPauseCallback pauseCallback,
       ChartScanFlushRequestCallback flushRequestCallback,
       ChartScanFlushCompleteCallback flushCompleteCallback,
-      bool requireReadableStorage = false,
-      bool storageMeasurementsCurrent = false);
+      bool requireReadableStorage = false);
 };
