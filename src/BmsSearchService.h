@@ -44,6 +44,8 @@ struct BmsSearchPendingArtifact {
   std::string archiveName;
   std::string storageKey;
   std::filesystem::path alternateDestinationPath;
+  // Private disk-backed inventory of files replaced by an optimized download.
+  std::filesystem::path originalFilesIndexPath;
 };
 
 enum class BmsSearchPendingArtifactDecision { Keep, Delete };

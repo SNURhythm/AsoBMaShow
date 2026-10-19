@@ -174,11 +174,12 @@ void largeDirectorySpillRetainsCollisionRules() {
             "an unrelated directory extension does not block safe media");
     require(!StorageCandidateForEntry(audio("link.wav"), disk, {.audio = AudioAction::LossyVorbis}, {}, reason),
             "unsafe destination remains a collision");
-    for (const auto &entry : {audio("reuse.wav"), audio("reuse.flac"), audio("reuse.ogg"),
+    for (const auto &entry : {audio("reuse.wav"), audio("reuse.flac"), audio("lossy.wav"), audio("lossy.ogg"),
                               audio("clip.wmv"), audio("clip.mp4")})
       require(disk.Add(entry, error), "add existing destination fixtures");
     for (const auto action : {AudioAction::LosslessFlac, AudioAction::LossyVorbis}) {
-      const auto reuse = StorageCandidateForEntry(audio("reuse.wav"), disk, {.audio = action}, {}, reason);
+      const auto reuse = StorageCandidateForEntry(audio(action == AudioAction::LosslessFlac ? "reuse.wav" : "lossy.wav"),
+          disk, {.audio = action}, {}, reason);
       require(reuse && reuse->reuseDestination && reuse->existingDestinationIdentity,
               "an existing audio destination is eligible for validation and reuse");
     }
@@ -194,6 +195,25 @@ void largeDirectorySpillRetainsCollisionRules() {
   }
   require(fs::is_empty(scratch) && fs::exists(temp.root / "keep"),
           "Unicode spill cleanup preserves unrelated private files");
+}
+void existingDestinationDoesNotBypassAlternatives() {
+  TempDirectory temp;
+  for (bool spill : {false, true}) {
+    StorageDirectoryInventory directory(temp.root, {.records = spill ? 0u : 100u, .scratchRoot = temp.root});
+    std::string error;
+    require(directory.Add(audio("sound.wav"), error) && directory.Add(audio("sound.ogg"), error),
+        "add source and retained destination");
+    for (auto alternative : {audio("sound.flac"), audio("SOUND.FLAC"), audio("SOUND.WAV"),
+            StorageDirectoryEntry{.name = "sound.flac", .kind = StorageEntryKind::Regular},
+            StorageDirectoryEntry{.name = "sound.flac", .kind = StorageEntryKind::Symlink}}) {
+      require(directory.Add(alternative, error), "add same-stem alternative");
+      StorageDiagnostic reason;
+      require(!StorageCandidateForEntry(audio("sound.wav"), directory, {.audio = AudioAction::LossyVorbis}, {}, reason) &&
+          reason.code == StorageReason::Collision,
+          "existing destination cannot bypass regular, unsafe or case-alias alternatives in either index");
+      require(directory.Remove(alternative.name, error), "remove same-stem alternative");
+    }
+  }
 }
 void skipDetailsAndSpillErrorsStayBounded() {
   TempDirectory temp;
@@ -243,6 +263,7 @@ int storageDirectoryInventoryTests() {
     summariesDoNotRetainAllAssets();
     independentSelectedFoldersComplete();
     fingerprintsRejectChangedEntries();
+    existingDestinationDoesNotBypassAlternatives();
     largeDirectorySpillRetainsCollisionRules();
     failedSpillAndRestartNeverAuthorizeStaleMetadata();
     skipDetailsAndSpillErrorsStayBounded();

@@ -314,6 +314,22 @@ void deflatedPayloadRefillsAtExactOutputBoundary() {
   require(decoded == payload, "valid deflate refills input after output ends exactly at a chunk boundary");
 }
 void existingArchiveDestinationsAreReused() {
+  for (bool tar : {false, true}) for (const auto alternative : {"song.flac", "SONG.FLAC"}) {
+    storage_test::TempDirectory temp;
+    const auto path = temp.root / (tar ? "library.tar" : "library.zip");
+    writeArchive(path, {{"song.wav", "authored source"}, {"song.ogg", "retained target"},
+        {alternative, "different recording"}}, false, tar);
+    const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+    InventoryRequest request{.groups = {{"archive", path, false, false, StorageSourceKind::Archive}},
+        .policy = {.audio = AudioAction::LossyVorbis}, .scanScratchRoot = paths.scanRoot};
+    const auto review = BuildStoragePreflight(request);
+    require(review.complete && review.archives.size() == 1 && !review.eligibleCount,
+        "archive review rejects existing destinations with a third same-stem or case-alias alternative");
+    StorageArchive archive(path, temp.root / "manifest.sqlite", {});
+    StorageDiagnostic reason;
+    require(!archive.Candidate(*archive.Find("song.wav"), request.policy, reason) && reason.code == StorageReason::Collision,
+        "physical archive manifest also rejects ambiguous existing destinations");
+  }
   for (int variant = 0; variant < 3; ++variant) for (bool targetFirst : {false, true}) {
     storage_test::TempDirectory temp;
     const auto path = temp.root / (variant == 2 ? "library.tar" : "library.zip");

@@ -321,8 +321,9 @@ StorageInventory BuildInventory(const InventoryRequest &request, Checkpoint chec
     }
     if (!writable(fs::status(path.parent_path(), ec).permissions()) || ec) {
       skip(inventory, path, StorageReason::UnsupportedSource, "Parent folder is not writable");
-    } else if (candidate.operation != AssetOperation::Delete && !candidate.reuseDestination &&
-               (destinationBlocked || stems[{path.parent_path(), stemKey(path), kind == MediaKind::Audio}] > 1)) {
+    } else if (candidate.operation != AssetOperation::Delete &&
+               ((destinationBlocked && !candidate.reuseDestination) ||
+                stems[{path.parent_path(), stemKey(path), kind == MediaKind::Audio}] > (candidate.reuseDestination ? 2u : 1u))) {
       skip(inventory, path, StorageReason::Collision, "Same-stem media alternatives are ambiguous");
     } else inventory.candidates.push_back(std::move(candidate));
   }

@@ -245,6 +245,12 @@ void testExistingDestinationCandidates() {
                 inventory.candidates.front().reuseDestination && inventory.candidates.front().existingDestinationIdentity,
             "existing target is a metadata-only reuse candidate while the retained target remains untouched");
     require(inventory.candidates.front().existingDestinationHash.empty(), "inventory does not hash existing destination payloads");
+    const auto alternative = operation == AssetOperation::CompressH264 ? "movie.mpg" : "sound.mp3";
+    temp.write("other.bin");
+    fs::create_hard_link(temp.root / "other.bin", temp.root / alternative);
+    require(BuildInventory(input).candidates.empty(),
+        "existing destination does not bypass an unsafe same-stem alternative");
+    fs::remove(temp.root / alternative);
     fs::remove(temp.root / target);
     fs::create_symlink(temp.root / source, temp.root / target);
     require(BuildInventory(input).candidates.empty(), "symlink destinations never authorize source retirement");

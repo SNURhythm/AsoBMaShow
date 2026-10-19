@@ -989,6 +989,105 @@ void testWorkflowStoragePolicyAndCommitBoundaries() {
   }
 }
 
+void testOptimizedDownloadDoesNotRestoreRetiredMedia() {
+  using namespace asobmshow::bms_search;
+  CleanupPaths cleanup;
+  std::string error;
+  const auto attempt = createFindBmsDownloadAttempt("package.zip", error);
+  assert(attempt); cleanup.add(attempt->root);
+  const auto downloadRoot = testDownloadRoot(*attempt);
+  cleanup.add(downloadRoot.parent_path());
+  const auto destination = downloadRoot / "package";
+  writeText(attempt->archivePath, "archive");
+  const std::vector<std::filesystem::path> retired{
+      "nested/sound.wav", "nested/lossless.flac", "nested/movie.avi", "nested/deleted.mp4"};
+  // Create the old spelling first: on case-insensitive volumes, writing the
+  // lowercase package name below retains this uppercase directory entry.
+  writeText(destination / "nested/SOUND.WAV", "old media");
+  for (const auto &path : retired) writeText(destination / path, "old media");
+  const bool nativeCaseAlias = std::filesystem::equivalent(
+      destination / "nested/SOUND.WAV", destination / "nested/sound.wav");
+  writeText(destination / "nested/extra.wav", "unrelated media");
+  writeText(destination / "sabun.bms", "unrelated chart");
+  writeText(destination / "nested/failed.wav", "old retained input");
+  std::filesystem::create_hard_link(destination / "nested/failed.wav",
+      destination / "nested/preserved-failed-copy.wav");
+  auto request = workflowRequest(*attempt, downloadRoot);
+  request.options.storagePolicy.audio = storage_management::AudioAction::LosslessFlac;
+  DownloadedArchiveWorkflowDependencies dependencies{
+      .decideArchive = [](const auto &, const auto &, bool, auto) {
+        return DirectArchiveDecision{.disposition = DirectArchiveDisposition::Unarchive};
+      },
+      .extractArchive = [&](const auto &, const auto &root, auto &, auto, auto) {
+        writeText(root / "chart.bms", "#TITLE Original\n");
+        for (const auto &path : retired) writeText(root / path, "downloaded media");
+        writeText(root / "nested/failed.wav", "retained after conversion failure");
+        return true;
+      },
+      .decideExtracted = [](const auto &, const auto &, auto, auto) {
+        return ExtractedArchiveDecision{.disposition = ExtractedArchiveDisposition::Match,
+                                        .foundBmsFile = true};
+      },
+      .optimizeExtracted = [&](const auto &root, const auto &, auto, auto) {
+        // Model the optimizer's committed conversions/deletion; promotion and
+        // the workflow's ownership tracking remain real.
+        for (const auto &path : retired) std::filesystem::remove(root / path);
+        writeText(root / "nested/sound.ogg", "optimized audio");
+        writeText(root / "nested/lossless.ogg", "optimized lossless input");
+        writeText(root / "nested/movie.mp4", "optimized video");
+        return storage_management::StorageReport{.converted = 3, .failed = 1};
+      },
+      .commitArtifact = [&](const auto &artifact, auto &failure, auto &removed) {
+        // A retired name cannot swallow an unrelated directory subtree.
+        std::filesystem::remove(destination / "nested/movie.avi");
+        writeText(destination / "nested/movie.avi/unrelated.txt", "preserved subtree");
+        assert(!commitFindBmsPendingArtifact(artifact, failure, {}, &removed));
+        assert(readText(destination / "nested/movie.avi/unrelated.txt") == "preserved subtree");
+        std::filesystem::remove_all(destination / "nested/movie.avi");
+        writeText(destination / "nested/movie.avi", "old media");
+        // An unrelated hard link is not evidence of a filename alias. Fail
+        // before swapping rather than discard it with a retired source.
+        std::filesystem::create_hard_link(destination / "nested/sound.wav",
+            destination / "nested/unrelated-link.wav");
+        assert(!commitFindBmsPendingArtifact(artifact, failure, {}, &removed));
+        assert(readText(destination / "nested/unrelated-link.wav") == "old media");
+        assert(readText(destination / "nested/sound.wav") == "old media");
+        std::filesystem::remove(destination / "nested/unrelated-link.wav");
+        // A failed promotion must restore the old destination and keep the
+        // private ownership index usable for a retry.
+        const auto failSwap = [&](const auto &from, const auto &to, auto &renameError) {
+          if (from.filename() == "commit" && to == destination)
+            renameError = std::make_error_code(std::errc::io_error);
+          else
+            std::filesystem::rename(from, to, renameError);
+        };
+        assert(!commitFindBmsPendingArtifact(artifact, failure, failSwap, &removed));
+        for (const auto &path : retired) assert(readText(destination / path) == "old media");
+        assert(readText(destination / "nested/extra.wav") == "unrelated media");
+        assert(!std::filesystem::exists(destination / "nested/sound.ogg"));
+        assert(!std::filesystem::exists(downloadRoot / ".asobmashow-transactions"));
+        return commitFindBmsPendingArtifact(artifact, failure, {}, &removed);
+      }};
+  std::atomic_bool cancelled = false;
+  BmsSearchResult result;
+  assert(processDownloadedArchive(request, cancelled, {}, result, dependencies));
+  for (const auto &path : retired) assert(!std::filesystem::exists(destination / path));
+  if (nativeCaseAlias)
+    assert(!std::filesystem::exists(destination / "nested/SOUND.WAV"));
+  else
+    assert(readText(destination / "nested/SOUND.WAV") == "old media");
+  assert(readText(destination / "nested/sound.ogg") == "optimized audio");
+  assert(readText(destination / "nested/lossless.ogg") == "optimized lossless input");
+  assert(readText(destination / "nested/movie.mp4") == "optimized video");
+  assert(readText(destination / "nested/extra.wav") == "unrelated media");
+  assert(readText(destination / "sabun.bms") == "unrelated chart");
+  assert(readText(destination / "chart.bms") == "#TITLE Original\n");
+  assert(readText(destination / "nested/failed.wav") == "retained after conversion failure");
+  assert(readText(destination / "nested/preserved-failed-copy.wav") == "old retained input");
+  assert(!std::filesystem::exists(attempt->root));
+  assert(!std::filesystem::exists(destination / "original-files.sqlite"));
+}
+
 void testWorkflowKeepsDirectArchiveWithoutExtraction() {
   CleanupPaths cleanup;
   std::string error;
@@ -1535,6 +1634,7 @@ int main(int argc, char **argv) {
   testDirectArchiveMd5AndNoHashBehavior();
   testDirectArchiveNoHashUnreadableBmsFallsBack();
   testWorkflowStoragePolicyAndCommitBoundaries();
+  testOptimizedDownloadDoesNotRestoreRetiredMedia();
   testWorkflowKeepsDirectArchiveWithoutExtraction();
   testWorkflowStagesDirectArchiveMismatch();
   testWorkflowCommitsFallbackExtractionMatch();

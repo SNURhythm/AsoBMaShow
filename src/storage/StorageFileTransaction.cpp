@@ -244,9 +244,14 @@ bool finishRecord(const Record &record, const FileTransactionDependencies &ops,
   const bool deletion = record.operation == AssetOperation::Delete;
   const bool hadBackup = entryExists(record.backup);
   if (record.phase == Phase::Committed) {
-    if (!deletion && !matches(record.destination, record.outputIdentity, record.outputHash, ops, true, error)) {
+    // Once both owned artifacts are gone, only journal cleanup remains. The
+    // released media may already have been edited or deleted by another writer.
+    const bool journalOnly = !hadBackup && !entryExists(record.temporary);
+    if (!deletion && !journalOnly && !matches(record.destination, record.outputIdentity, record.outputHash, ops, true, error)) {
       error = "Installed output changed before recovery"; return false;
     }
+    // A previous unlink may have succeeded while its directory flush failed.
+    if (journalOnly && !ops.syncDirectory(record.source.parent_path(), error)) return false;
     if (!removeOwned(record.backup, record.sourceIdentity, record.sourceHash, ops, true, error, changes)) return false;
     if (hadBackup) AccumulateStorageBytes(reclaimed, added, record.sourceIdentity.bytes,
                                           deletion || record.reuse ? 0 : record.outputIdentity.bytes);

@@ -930,6 +930,93 @@ void testFailuresNeverClobberAndCleanupAccounting() {
     requireNoRecoveryFiles(f);
   }
 }
+void testSettledCommittedJournalDoesNotOwnLaterMediaChanges() {
+  for (const auto operation : {"replace", "in-place", "reuse", "delete"}) {
+    for (const bool removeMedia : {false, true}) {
+      const bool deletion = std::string_view(operation) == "delete";
+      const bool reuse = std::string_view(operation) == "reuse";
+      Fixture f(std::string_view(operation) == "in-place", deletion);
+      if (reuse) {
+        f.temp.write(f.candidate.destination, std::string(128, 'd'));
+        std::string error;
+        f.candidate.existingDestinationIdentity = ReadFileIdentity(f.candidate.destination, error);
+        f.candidate.existingDestinationHash = *HashStorageFile(f.candidate.destination, {}, error);
+      }
+      auto dependencies = DefaultFileTransactionDependencies();
+      const auto remove = dependencies.remove;
+      fs::path journal;
+      dependencies.remove = [&](const fs::path &path, std::string &error) {
+        if (path.extension() == ".json") {
+          journal = path; error = "injected journal cleanup failure"; return false;
+        }
+        return remove(path, error);
+      };
+      StorageFileTransaction transaction(f.paths, dependencies);
+      const auto result = deletion ? transaction.Delete(f.candidate) : reuse ? transaction.ReuseExisting(f.candidate) :
+          transaction.Replace(f.candidate, f.encoded);
+      require(result.reason.code == StorageReason::CleanupFailed && fs::exists(journal),
+              "journal removal failure leaves a committed cleanup warning");
+      const auto record = nlohmann::json::parse(read(journal));
+      require(!fs::exists(fs::path(record.at("backup").get<std::string>())) &&
+                  (record.at("temporary") == "" || !fs::exists(fs::path(record.at("temporary").get<std::string>()))),
+              "backup and installation cleanup completed before the journal failure");
+      const auto media = deletion ? f.candidate.source : f.candidate.destination;
+      if (removeMedia) fs::remove(media);
+      else f.temp.write(media, "later user media");
+      const auto recovered = StorageFileTransaction(f.paths).Recover();
+      require(!recovered.recoveryRequired && !recovered.failed && !recovered.reclaimedBytes && !recovered.addedBytes &&
+                  recovered.changedRoots.empty(),
+              "settled committed journal cleanup accepts later media changes without claiming them");
+      require(removeMedia ? !fs::exists(media) : read(media) == "later user media",
+              "journal-only recovery leaves later media edits and deletions intact");
+      requireNoRecoveryFiles(f);
+    }
+  }
+}
+void testSettledCommittedJournalStillValidatesCleanup() {
+  for (const auto failure : {"foreign-install", "invalid-target", "directory-flush"}) {
+    Fixture f;
+    auto dependencies = DefaultFileTransactionDependencies();
+    const auto remove = dependencies.remove;
+    fs::path journal;
+    dependencies.remove = [&](const fs::path &path, std::string &error) {
+      if (path.extension() == ".json") {
+        journal = path; error = "injected journal cleanup failure"; return false;
+      }
+      return remove(path, error);
+    };
+    require(StorageFileTransaction(f.paths, dependencies).Replace(f.candidate, f.encoded).reason.code ==
+                StorageReason::CleanupFailed, "leave a settled committed journal for validation");
+    auto record = nlohmann::json::parse(read(journal));
+    const auto installation = fs::path(record.at("temporary").get<std::string>());
+    dependencies = DefaultFileTransactionDependencies();
+    if (std::string_view(failure) == "foreign-install") f.temp.write(installation, "foreign installation");
+    else if (std::string_view(failure) == "invalid-target") {
+      record["destination"] = (f.temp.root / "private/encoded.mp4").string();
+      std::ofstream(journal) << record;
+    } else {
+      const auto sync = dependencies.syncDirectory;
+      dependencies.syncDirectory = [&, sync](const fs::path &path, std::string &error) {
+        if (path == f.candidate.source.parent_path()) {
+          error = "injected cleanup durability failure"; return false;
+        }
+        return sync(path, error);
+      };
+    }
+    const auto recovered = StorageFileTransaction(f.paths, dependencies).Recover();
+    require(recovered.recoveryRequired && fs::exists(journal) && !recovered.reclaimedBytes &&
+                read(f.candidate.destination) == std::string(128, 'v'),
+            "settled journal still rejects foreign artifacts, invalid targets and failed cleanup durability");
+    if (std::string_view(failure) == "foreign-install")
+      require(read(installation) == "foreign installation", "foreign installation is never removed");
+    if (std::string_view(failure) == "directory-flush") {
+      fs::remove(f.candidate.destination);
+      require(!StorageFileTransaction(f.paths).Recover().recoveryRequired,
+              "cleanup durability retry does not require released output to remain present");
+      requireNoRecoveryFiles(f);
+    }
+  }
+}
 void testForeignIdentityAndCorruptJournalArePreserved() {
   Fixture f(true);
   FileTransactionDependencies dependencies;
@@ -1048,6 +1135,8 @@ int main(int argc, char **argv) {
     testExistingDestinationReuse();
     testRestartAtEveryBoundary();
     testFailuresNeverClobberAndCleanupAccounting();
+    testSettledCommittedJournalDoesNotOwnLaterMediaChanges();
+    testSettledCommittedJournalStillValidatesCleanup();
     testForeignIdentityAndCorruptJournalArePreserved();
   } catch (const std::exception &error) {
     std::cerr << "FAIL: " << error.what() << '\n'; return 1;

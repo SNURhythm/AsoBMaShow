@@ -8,6 +8,7 @@
 #include "../view/ImageView.h"
 #include "../RAII.h"
 #include "../targets.h"
+#include <map>
 #include <SDL3/SDL.h>
 #if TARGET_OS_ANDROID
 #include "../AndroidNatives.h"
@@ -28,11 +29,15 @@ std::optional<Access> accessFolders(ApplicationContext &context, std::string &er
   if (!session) { error = "Chart library is unavailable."; return {}; }
   Access access;
   std::vector<std::filesystem::path> roots;
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+  std::map<std::filesystem::path, std::filesystem::path> recoveryRelocations;
+#endif
   for (const auto &entry : session->SelectAllEntries()) {
     auto path = chart_library_platform::resolveFolderEntryPath(entry);
     bool available = true;
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
     if (!entry.iosBookmark.empty()) {
+      const auto previousPath = path;
       std::string resolved;
       void *handle = StartIOSSecurityScopedResource(fspath_to_utf8(path), entry.iosBookmark, resolved, error);
       if (handle) access.scopes.emplace_back(handle, [](void *value) { StopIOSSecurityScopedResource(value); });
@@ -41,6 +46,19 @@ std::optional<Access> accessFolders(ApplicationContext &context, std::string &er
       available = handle && error.empty();
       error.clear();
       if (!resolved.empty()) path = std::filesystem::path(resolved);
+      if (available && path.is_absolute()) {
+        const auto remember = [&](std::filesystem::path previous) {
+          if (!previous.is_absolute()) return;
+          previous = previous.lexically_normal();
+          while (previous != previous.root_path() && previous.filename().empty()) previous = previous.parent_path();
+          const auto target = path.lexically_normal();
+          const auto [found, added] = recoveryRelocations.try_emplace(previous, target);
+          // Conflicting grants cannot safely identify a journal's original root.
+          if (!added && found->second != target) found->second.clear();
+        };
+        remember(std::filesystem::path(entry.path));
+        remember(previousPath);
+      }
     }
 #endif
     // Local archive files inherit their registered folder's authority; SAF
@@ -59,10 +77,20 @@ std::optional<Access> accessFolders(ApplicationContext &context, std::string &er
   // bypass inaccessible system ancestors. Recovery still fails closed on IO.
   access.paths.allowedRoots = std::move(roots);
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  // Documents and Library survive app updates even when iOS relocates their
-  // enclosing container. Only the OS-derived Documents root can retarget paths;
-  // recovery still checks current registration authority and recorded identities.
-  access.paths.resolveRecoveryPath = [documents = std::filesystem::path(GetIOSDocumentsPath())](const auto &path) {
+  // Only active OS-resolved bookmarks and the current Documents container can
+  // retarget recovery. Recorded file identities and current authority still apply.
+  access.paths.resolveRecoveryPath = [documents = std::filesystem::path(GetIOSDocumentsPath()),
+                                      relocations = std::move(recoveryRelocations)](const auto &path) {
+    for (auto ancestor = path; !ancestor.empty();) {
+      if (const auto found = relocations.find(ancestor); found != relocations.end()) {
+        if (found->second.empty()) return std::filesystem::path{};
+        if (path == ancestor) return found->second;
+        return (found->second / path.lexically_relative(ancestor)).lexically_normal();
+      }
+      const auto parent = ancestor.parent_path();
+      if (parent == ancestor) break;
+      ancestor = parent;
+    }
     return chart_storage_identity::RebaseLegacyIOSDocumentsPath(path, documents).value_or(path);
   };
 #endif

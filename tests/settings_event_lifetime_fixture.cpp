@@ -103,7 +103,11 @@ PRODUCTION_SAFE_STORAGE_PATH
 #define TARGET_OS_SIMULATOR 0
 #define TARGET_OS_ANDROID 0
 namespace chart_library_platform {
-std::filesystem::path resolveFolderEntryPath(const FolderEntry &entry) { return entry.path; }
+std::map<std::filesystem::path, std::filesystem::path> folderPathAliases;
+std::filesystem::path resolveFolderEntryPath(const FolderEntry &entry) {
+  const auto found = folderPathAliases.find(entry.path);
+  return found == folderPathAliases.end() ? entry.path : found->second;
+}
 }
 namespace chart_storage_identity {
 std::optional<std::filesystem::path> RebaseLegacyIOSDocumentsPath(
@@ -163,6 +167,43 @@ void testRecoveryCheckpointConsumesQueuedQuit() {
       });
   assert(stopped && !completed && context.quitFlag && notifications == 1);
   storage_management::cleanupScans = {};
+}
+void testMovedBookmarkRecoveryPaths() {
+  storage_test::TempDirectory temp;
+  privateStorageRoot = temp.root / "private";
+  fs::create_directory(privateStorageRoot);
+  const auto old = temp.root / "old", moved = temp.root / "moved";
+  const auto nested = temp.root / "nested";
+  chart_library_platform::folderPathAliases = {{old, temp.root / "previous"}};
+  bookmarkResponses = {{"moved", {moved}}, {"nested", {nested}},
+                       {"denied", {temp.root / "denied-new", true, false}}};
+  ApplicationContext context;
+  context.chartRepository.entries = {{old, "moved"}, {old / "child", "nested"},
+                                     {temp.root / "denied-old", "denied"}};
+  std::string error;
+  {
+    const auto access = accessFolders(context, error);
+    assert(access && error.empty());
+    const auto &resolve = access->paths.resolveRecoveryPath;
+    assert(resolve(old) == moved);
+    for (const auto *name : {"song.wav", "song.flac", ".storage-id.backup", ".storage-id.install", "pack.zip"})
+      assert(resolve(old / name) == moved / name && "all transaction paths follow the resolved bookmark");
+    assert(resolve(temp.root / "previous/song.wav") == moved / "song.wav" &&
+           "previously resolved library paths retain their bookmark mapping");
+    assert(resolve(old / "child/song.wav") == nested / "song.wav" &&
+           "the most specific registered bookmark determines recovery relocation");
+    assert(resolve(temp.root / "old-other/song.wav") == temp.root / "old-other/song.wav");
+    assert(resolve(temp.root / "denied-old/song.wav") == temp.root / "denied-old/song.wav" &&
+           "failed bookmark access does not authorize recovery relocation");
+  }
+  context.chartRepository.entries = {{old, "moved"}, {old, "nested"}};
+  {
+    const auto access = accessFolders(context, error);
+    assert(access && access->paths.resolveRecoveryPath(old / "song.wav").empty() &&
+           "conflicting bookmark mappings fail closed");
+  }
+  chart_library_platform::folderPathAliases.clear();
+  assert(outstandingBookmarkHandles == 0);
 }
 }
 void testBookmarkScopeAdmission() {
@@ -278,12 +319,41 @@ PRODUCTION_SETTINGS_EVENTS
 struct StorageManagementScene : SettingsScene {
   SceneReturnTarget target;
   int backCount = 0;
+  struct Track { std::string groupId; };
+  std::vector<Track> groups_;
+  struct InventoryTask {
+    int starts = 0;
+    void StartMeasurements(int) { ++starts; }
+    void StartPreflight(int) { ++starts; }
+  } inventoryTask_;
+  struct Selection { std::vector<Track> SelectedGroups() const { return {}; } } selection_;
+  bool measuring_ = false, measuringSelection_ = false;
+  std::set<std::string> pendingMeasurements_;
   StorageManagementScene(ApplicationContext &context, SceneReturnTarget value)
       : SettingsScene(context), target(std::move(value)) {}
   void GoBack() { ++backCount; }
+  int RequestFor(const std::vector<Track> &) const { return 0; }
+  void RefreshState() {}
+  void MeasureGroups(const std::set<std::string> &);
+  void Measure(bool);
   EventHandleResult handleEvents(SDL_Event &event) override;
 };
 PRODUCTION_STORAGE_EVENTS
+PRODUCTION_STORAGE_MEASUREMENT_ADMISSION
+void testStorageMeasurementRespectsRetainedMaintenance() {
+  ApplicationContext context;
+  StorageManagementScene scene(context, {});
+  scene.groups_.push_back({"group"});
+  context.storageMaintenanceActive = true;
+  scene.MeasureGroups({"group"});
+  scene.Measure(false);
+  scene.Measure(true);
+  assert(scene.inventoryTask_.starts == 0 && !scene.measuring_ &&
+         "retained maintenance blocks report, refresh and review measurement workers");
+  context.storageMaintenanceActive = false;
+  scene.MeasureGroups({"group"});
+  assert(scene.inventoryTask_.starts == 1 && scene.measuring_);
+}
 void SettingsScene::openStorage() {
   defer(PRODUCTION_STORAGE_OPEN, 0, true);
 }
@@ -359,7 +429,9 @@ void testMaintenanceAdmission() {
   assert(!imageReadsPaused);
 }
 int main() {
+  testStorageMeasurementRespectsRetainedMaintenance();
   storage_management::testRecoveryCheckpointConsumesQueuedQuit();
+  storage_management::testMovedBookmarkRecoveryPaths();
   testBookmarkScopeAdmission();
   testMaintenanceAdmission();
   ApplicationContext context;

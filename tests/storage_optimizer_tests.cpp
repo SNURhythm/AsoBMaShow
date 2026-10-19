@@ -899,6 +899,22 @@ void boundedReportsAndProgress() {
   require(notifications <= 4, "preparation and inventory transitions do not unthrottle codec callbacks");
 }
 void existingDestinationsAreValidatedBeforeRetirement() {
+  {
+    TempDirectory temp;
+    temp.write("charts/sound.wav", "authored source");
+    temp.write("charts/sound.ogg", "valid retained destination");
+    temp.write("other.flac", "different recording");
+    fs::create_hard_link(temp.root / "other.flac", temp.root / "charts/sound.flac");
+    temp.write("charts/chart.bms", "#WAV01 sound.wav");
+    std::vector<std::string> events; auto deps = dependencies(temp, events);
+    unsigned validations = 0;
+    deps.validateExisting = [&](const auto &, Checkpoint) { ++validations; return StorageDiagnostic{}; };
+    const auto result = StorageOptimizer(deps).Run(request(temp.root / "charts"));
+    require(!result.deleted && !result.converted && !validations && events.empty() &&
+        fs::exists(temp.root / "charts/sound.wav") && fs::exists(temp.root / "charts/sound.ogg") &&
+        fs::exists(temp.root / "charts/sound.flac"),
+        "existing Vorbis cannot retire authored WAV while an ineligible FLAC would win runtime fallback");
+  }
   for (const auto operation : {AssetOperation::LosslessFlac, AssetOperation::LossyVorbis, AssetOperation::CompressH264}) {
     for (int mode = 0; mode < 3; ++mode) {
       TempDirectory temp;

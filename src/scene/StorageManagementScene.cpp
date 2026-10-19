@@ -387,6 +387,7 @@ void StorageManagementScene::RefreshArchiveSizes() {
   }
 }
 void StorageManagementScene::MeasureGroups(const std::set<std::string> &ids) {
+  if (context.storageMaintenanceActive) return;
   std::vector<Track> groups;
   for (const auto &group : groups_) if (ids.contains(group.groupId)) groups.push_back(group);
   if (groups.empty()) return;
@@ -395,6 +396,7 @@ void StorageManagementScene::MeasureGroups(const std::set<std::string> &ids) {
   RefreshState();
 }
 void StorageManagementScene::Measure(bool selectedOnly) {
+  if (context.storageMaintenanceActive) return;
   measuring_ = true; measuringSelection_ = selectedOnly;
   pendingMeasurements_.clear();
   if (selectedOnly) inventoryTask_.StartPreflight(RequestFor(selection_.SelectedGroups()));
@@ -409,9 +411,12 @@ void StorageManagementScene::ApplyReport(const StorageReport &report) {
   inventoryTask_.Cancel(); measuring_ = false;
   pendingMeasurements_.clear();
   const auto changed = ApplyStorageReportMeasurements(measurements_, RequestFor(groups_).groups, report);
-  pendingMeasurements_.insert(changed.begin(), changed.end());
-  if (!report.changedRoots.empty()) RefreshArchiveSizes();
-  RefreshRows(); MeasureGroups(pendingMeasurements_);
+  if (!report.recoveryRequired) {
+    pendingMeasurements_.insert(changed.begin(), changed.end());
+    if (!report.changedRoots.empty()) RefreshArchiveSizes();
+  }
+  RefreshRows();
+  if (!report.recoveryRequired) MeasureGroups(pendingMeasurements_);
 }
 void StorageManagementScene::InvalidatePreflight() {
   preflight_.reset();

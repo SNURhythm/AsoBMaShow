@@ -5,6 +5,7 @@
 #include "../RAII.h"
 #include "../bms_parser.hpp"
 #include "../sqlite3.h"
+#include "../path.h"
 
 #include <algorithm>
 #include <array>
@@ -88,16 +89,17 @@ BmsSearchPendingArtifact extractedArtifact(
               request.downloadRoot / "_archives" / request.archiveName};
 }
 
-// SQLite owns the private temporary file and removes it on close. Both hashing
-// and the identity set stay bounded; no chart-count-sized map survives a pass.
-UniqueResource<sqlite3, sqlite3_close> chartIdentityDatabase() {
+// The attempt owns this private index, outside the promoted extracted tree.
+// File names and chart identities stay on disk with a bounded SQLite cache.
+UniqueResource<sqlite3, sqlite3_close> chartIdentityDatabase(const std::filesystem::path &path) {
   sqlite3 *raw = nullptr;
-  const auto opened = sqlite3_open_v2("", &raw, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX, nullptr);
+  const auto opened = sqlite3_open_v2(fspath_to_utf8(path).c_str(), &raw, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX, nullptr);
   UniqueResource<sqlite3, sqlite3_close> database(raw);
   if (opened != SQLITE_OK || sqlite3_exec(raw,
       "PRAGMA temp_store=FILE; PRAGMA cache_size=-1024; PRAGMA cache_spill=ON;"
       "PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;"
-      "CREATE TABLE charts(path BLOB PRIMARY KEY, digest BLOB NOT NULL) WITHOUT ROWID; BEGIN;",
+      "CREATE TABLE charts(path BLOB PRIMARY KEY, digest BLOB NOT NULL) WITHOUT ROWID;"
+      "CREATE TABLE original_files(path BLOB PRIMARY KEY) WITHOUT ROWID; BEGIN;",
       nullptr, nullptr, nullptr) != SQLITE_OK)
     throw std::runtime_error("Cannot create chart identity index");
   return database;
@@ -109,6 +111,11 @@ bool chartIdentities(const std::filesystem::path &root,
       ? "DELETE FROM charts WHERE path=? AND digest=?" : "INSERT INTO charts VALUES(?,?)", -1, &raw, nullptr);
   UniqueResource<sqlite3_stmt, sqlite3_finalize> statement(raw);
   if (prepared != SQLITE_OK) return false;
+  sqlite3_stmt *filesRaw = nullptr;
+  const auto filesPrepared = verify ? SQLITE_OK : sqlite3_prepare_v2(database,
+      "INSERT INTO original_files VALUES(?)", -1, &filesRaw, nullptr);
+  UniqueResource<sqlite3_stmt, sqlite3_finalize> filesStatement(filesRaw);
+  if (filesPrepared != SQLITE_OK) return false;
   std::error_code error;
   if (!std::filesystem::is_directory(std::filesystem::symlink_status(root, error)) || error) return {};
   std::filesystem::recursive_directory_iterator it(root, error), end;
@@ -116,6 +123,11 @@ bool chartIdentities(const std::filesystem::path &root,
     if (!checkpoint()) return {};
     const auto status = it->symlink_status(error);
     if (error || std::filesystem::is_symlink(status)) return {};
+    const auto path = it->path().lexically_relative(root).generic_u8string();
+    if (!verify && std::filesystem::is_regular_file(status) &&
+        (sqlite3_bind_blob64(filesRaw, 1, path.data(), path.size(), SQLITE_TRANSIENT) != SQLITE_OK ||
+         sqlite3_step(filesRaw) != SQLITE_DONE || sqlite3_reset(filesRaw) != SQLITE_OK ||
+         sqlite3_clear_bindings(filesRaw) != SQLITE_OK)) return false;
     if (!asobmshow::bms_chart_file::isBmsChartPath(it->path())) continue;
     if (!std::filesystem::is_regular_file(status) || std::filesystem::hard_link_count(it->path(), error) != 1 || error) return {};
     std::ifstream input(it->path(), std::ios::binary);
@@ -129,7 +141,6 @@ bool chartIdentities(const std::filesystem::path &root,
     }
     if (!input.eof()) return {};
     std::array<unsigned char, 32> digest{}; hash.final(digest.data());
-    const auto path = it->path().lexically_relative(root).generic_u8string();
     if (sqlite3_bind_blob64(raw, 1, path.data(), path.size(), SQLITE_TRANSIENT) != SQLITE_OK ||
         sqlite3_bind_blob(raw, 2, digest.data(), digest.size(), SQLITE_TRANSIENT) != SQLITE_OK ||
         sqlite3_step(raw) != SQLITE_DONE || (verify && sqlite3_changes(database) != 1) ||
@@ -380,6 +391,7 @@ bool processDownloadedArchive(
     return true;
   }
 
+  auto artifact = extractedArtifact(request);
   if (optimize) {
     const auto checkpoint = [&] {
       while (!cancelled.load() && request.options.storagePauseRequested &&
@@ -402,7 +414,8 @@ bool processDownloadedArchive(
     try {
       if (!dependencies.optimizeExtracted)
         return failOptimization("library.find_bms.storage.unavailable", "Storage optimization is unavailable.");
-      const auto identities = chartIdentityDatabase();
+      artifact.originalFilesIndexPath = request.attempt.root / "original-files.sqlite";
+      const auto identities = chartIdentityDatabase(artifact.originalFilesIndexPath);
       if (!chartIdentities(request.attempt.extractedPath, checkpoint, identities.get(), false))
         return failOptimization("library.find_bms.storage.identity_failed", "Could not verify downloaded chart identities.");
       result.storageReport = dependencies.optimizeExtracted(request.attempt.extractedPath,
@@ -415,6 +428,8 @@ bool processDownloadedArchive(
       storageProgress({.phase = storage_management::StoragePhase::Verify});
       if (!chartIdentities(request.attempt.extractedPath, checkpoint, identities.get(), true))
         return failOptimization("library.find_bms.storage.identity_failed", "Downloaded chart identities changed; files were not installed.");
+      if (sqlite3_exec(identities.get(), "COMMIT", nullptr, nullptr, nullptr) != SQLITE_OK)
+        return failOptimization("library.find_bms.storage.failed", "Could not save downloaded file ownership; files were not installed.");
       storageProgress({.phase = storage_management::StoragePhase::Commit});
       if (!checkpoint() || reportCancelled(cancelled, result)) {
         reportCancelled(cancelled, result); return false;
@@ -424,7 +439,6 @@ bool processDownloadedArchive(
     }
   }
   if (reportCancelled(cancelled, result)) return false;
-  const auto artifact = extractedArtifact(request);
   std::string commitError;
   std::vector<std::filesystem::path> removedPaths;
   if (!dependencies.commitArtifact(artifact, commitError, removedPaths)) {

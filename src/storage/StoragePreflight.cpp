@@ -53,10 +53,13 @@ std::optional<AssetCandidate> StorageCandidateForEntry(const StorageDirectoryEnt
       // media before this existing destination can authorize source retirement.
       candidate.reuseDestination = true;
       candidate.existingDestinationIdentity = destination->identity;
-    } else {
-      const auto count = directory.StemCount(entry.name, kind == MediaKind::Audio, error);
-      if (!error.empty()) { reason = {StorageReason::IoError, error}; return {}; }
-      if (count > 1) { reason = {StorageReason::Collision, "Same-stem media alternatives are ambiguous"}; return {}; }
+    }
+    // A retained target only accounts for one alternative. Any other media,
+    // including unsafe entries, could win runtime fallback after retirement.
+    const auto count = directory.StemCount(entry.name, kind == MediaKind::Audio, error);
+    if (!error.empty()) { reason = {StorageReason::IoError, error}; return {}; }
+    if (count > (destination ? 2u : 1u)) {
+      reason = {StorageReason::Collision, "Same-stem media alternatives are ambiguous"}; return {};
     }
   }
   return candidate;

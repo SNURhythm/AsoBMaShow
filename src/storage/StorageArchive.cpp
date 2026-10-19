@@ -450,8 +450,11 @@ std::optional<AssetCandidate> archive_detail::archiveCandidate(const StorageArch
     auto stem = path; stem.replace_extension();
     q.reset();
     q.text(1, lower(pathText(stem))); q.bind(2, static_cast<unsigned>(kind)); q.text(3, pathText(candidate.destination)); q.bind(4, entry.id); q.step();
-    const bool ambiguous = q.integer(0) > 1;
+    const auto count = q.integer(0);
     const auto existing = q.bytes(1); q.reset();
+    if (count > (existing.empty() ? 1u : 2u)) {
+      reason = {StorageReason::Collision, "Same-stem archive media alternatives are ambiguous"}; return {};
+    }
     if (!existing.empty()) {
       const auto destination = fs::u8path(existing);
       auto existingStem = destination; existingStem.replace_extension();
@@ -461,7 +464,7 @@ std::optional<AssetCandidate> archive_detail::archiveCandidate(const StorageArch
         reason = {StorageReason::Collision, "Existing archive destination differs in parent or stem case"}; return {};
       }
       candidate.destination = destination; candidate.reuseDestination = true;
-    } else if (ambiguous) { reason = {StorageReason::Collision, "Same-stem archive media alternatives are ambiguous"}; return {}; }
+    }
   }
   return candidate;
 }
