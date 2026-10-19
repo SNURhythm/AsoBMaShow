@@ -591,6 +591,50 @@ void testInstallationIdentityFailurePreservesOwnership() {
     }
   }
 }
+void testTargetRevalidationRetainsCleanupEvidence() {
+  {
+    Fixture f;
+    f.candidate.destination = f.temp.root / "library/unsupported.ogg";
+    auto dependencies = DefaultFileTransactionDependencies();
+    const auto create = dependencies.createExclusive;
+    bool created = false;
+    dependencies.createExclusive = [&](const fs::path &path, std::string &error) {
+      created = true; return create(path, error);
+    };
+    const auto result = StorageFileTransaction(f.paths, dependencies).Replace(f.candidate, f.encoded);
+    require(result.reason.code == StorageReason::UnsafePath && !created,
+        "invalid static targets are rejected before creating an installation");
+    requireNoRecoveryFiles(f);
+  }
+  Fixture f;
+  const auto parent = f.candidate.source.parent_path(), moved = f.temp.root / "moved-library";
+  std::error_code linkError;
+  fs::create_directory_symlink(parent, moved, linkError);
+  if (linkError) return; // Symlinks may require additional privileges on Windows.
+  fs::remove(moved);
+  auto dependencies = DefaultFileTransactionDependencies();
+  const auto create = dependencies.createExclusive;
+  fs::path installation;
+  dependencies.createExclusive = [&](const fs::path &path, std::string &error) {
+    auto result = create(path, error);
+    require(result.ready, "create installation before parent replacement");
+    installation = path;
+    fs::rename(parent, moved);
+    fs::create_directory_symlink(moved, parent);
+    return result;
+  };
+  const auto result = StorageFileTransaction(f.paths, dependencies).Replace(f.candidate, f.encoded);
+  require(result.reason.code == StorageReason::RecoveryRequired && fs::exists(installation) &&
+      !fs::is_empty(f.paths.journalRoot), "failed revalidation cleanup retains a recovery journal");
+  require(StorageFileTransaction(f.paths).Recover().recoveryRequired,
+      "recovery refuses a replaced parent until access is safe again");
+  fs::remove(parent); fs::rename(moved, parent);
+  const auto recovered = StorageFileTransaction(f.paths).Recover();
+  require(!recovered.recoveryRequired && !fs::exists(installation) &&
+      read(f.candidate.source) == std::string(1024, 's') && !fs::exists(f.candidate.destination),
+      "restoring the parent lets startup clean the owned installation without changing source media");
+  requireNoRecoveryFiles(f);
+}
 void testInitialJournalFailureReportsUnsettledStateOnly() {
   for (int failure = 0; failure < 4; ++failure) {
     Fixture f;
@@ -998,6 +1042,7 @@ int main(int argc, char **argv) {
     testAbandonedCandidatesAfterRestart();
     testSuccessAndCancellation();
     testInstallationIdentityFailurePreservesOwnership();
+    testTargetRevalidationRetainsCleanupEvidence();
     testInitialJournalFailureReportsUnsettledStateOnly();
     testLosslessReplacementWithoutSavings();
     testExistingDestinationReuse();

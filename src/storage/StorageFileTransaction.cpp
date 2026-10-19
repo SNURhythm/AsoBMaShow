@@ -135,7 +135,8 @@ bool authorized(const fs::path &source, const StoragePlatformPaths &paths, std::
   }
   return true;
 }
-bool validTargets(const Record &record, const StoragePlatformPaths &paths, std::string &error) {
+bool validTargets(const Record &record, const StoragePlatformPaths &paths, std::string &error,
+                  bool beforeCreation = false) {
   if (!uuid::isCanonicalLowerV4(record.id) || !authorized(record.source, paths, error)) return false;
   const auto parent = record.source.parent_path();
   if (record.journal != paths.journalRoot / (record.id + ".json") ||
@@ -164,7 +165,7 @@ bool validTargets(const Record &record, const StoragePlatformPaths &paths, std::
       record.outputIdentity.bytes > 0 && record.phase != Phase::Copying && record.phase != Phase::Published;
   return record.destination == expected && validHash(record.outputHash) &&
          record.temporary == parent / (".asobmashow-storage-" + record.id + ".install") &&
-         record.outputIdentity.fileId != 0 &&
+         (beforeCreation ? record.phase == Phase::Copying : record.outputIdentity.fileId != 0) &&
          (record.phase == Phase::Copying || (record.outputIdentity.bytes > 0 &&
                                              (record.operation == AssetOperation::LosslessFlac ||
                                               record.outputIdentity.bytes < record.sourceIdentity.bytes)));
@@ -389,17 +390,29 @@ FileResult StorageFileTransaction::Run(const AssetCandidate &candidate, const En
     if (!hash) return fail(checkpoint(check) ? StorageReason::IoError : StorageReason::Cancelled, error);
     record.outputHash = *hash;
     record.temporary = record.source.parent_path() / (".asobmashow-storage-" + record.id + ".install");
+    record.phase = Phase::Copying;
+    // Reject invalid destination/operation combinations before creating a file
+    // whose identity is not available yet. Revalidate again after creation.
+    if (!validTargets(record, paths_, error, true))
+      return fail(StorageReason::UnsafePath, "Unsupported transaction target");
     const auto space = fs::space(record.source.parent_path(), ec);
     if (ec || space.available < outputIdentity->bytes) return fail(StorageReason::InsufficientSpace, "Insufficient installation space");
     const auto created = dependencies_.createExclusive(record.temporary, error);
     if (!created.created) return fail(StorageReason::IoError, error);
     if (!created.identity.fileId) return fail(StorageReason::RecoveryRequired, error);
     record.outputIdentity = created.identity;
-    record.phase = Phase::Copying;
     if (!created.ready) creationError = error.empty() ? "Installation creation could not be flushed" : error;
   }
   if (!validTargets(record, paths_, error)) {
-    if (!record.temporary.empty()) removeOwned(record.temporary, record.outputIdentity, {}, dependencies_, false, error);
+    std::string cleanupError;
+    if (!record.temporary.empty() &&
+        !removeOwned(record.temporary, record.outputIdentity, {}, dependencies_, false, cleanupError)) {
+      // The static targets passed before creation, but their parent may now be
+      // unavailable. Keep the owned identity so recovery can retry when safe.
+      std::string journalError;
+      if (!writeRecord(record, journalError)) cleanupError += "; " + journalError;
+      return fail(StorageReason::RecoveryRequired, "Transaction target changed; " + cleanupError);
+    }
     return fail(StorageReason::UnsafePath, "Unsupported transaction target");
   }
   if (!writeRecord(record, error)) {
