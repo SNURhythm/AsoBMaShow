@@ -64,8 +64,11 @@ void dirtyScopesInvalidateStableRepresentative() {
 }
 
 void invalidationUsesSourceCaseRules() {
+  storage_test::TempDirectory temp;
+  const auto library = temp.root / "library";
+  std::filesystem::create_directory(library);
   for (const auto kind : {StorageSourceKind::Local, StorageSourceKind::Archive}) {
-    const std::filesystem::path base = kind == StorageSourceKind::Local ? "/library" : "/library/pack.zip";
+    const std::filesystem::path base = kind == StorageSourceKind::Local ? library : library / "pack.zip";
     const std::vector<FolderSelection> groups{
         {.groupId = "parent", .path = base, .sourceKind = kind},
         {.groupId = "upper", .path = base / "Song", .sourceKind = kind},
