@@ -38,7 +38,7 @@ fs::file_time_type modified(const FILETIME &value) {
   const auto sinceUnix = std::chrono::duration<std::int64_t, std::ratio<1, 10000000>>(
       static_cast<std::int64_t>(ticks) - 116444736000000000LL);
   return std::chrono::time_point_cast<fs::file_time_type::duration>(
-      fs::file_time_type::clock::from_sys(std::chrono::sys_time(sinceUnix)));
+      std::chrono::clock_cast<fs::file_time_type::clock>(std::chrono::sys_time(sinceUnix)));
 }
 bool inspect(const fs::path &path, BY_HANDLE_FILE_INFORMATION &info, std::string &error) {
   Handle handle{CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,

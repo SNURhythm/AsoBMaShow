@@ -63,8 +63,37 @@ void dirtyScopesInvalidateStableRepresentative() {
       "unknown revision conservatively invalidates every source");
 }
 
+void invalidationUsesSourceCaseRules() {
+  for (const auto kind : {StorageSourceKind::Local, StorageSourceKind::Archive}) {
+    const std::filesystem::path base = kind == StorageSourceKind::Local ? "/library" : "/library/pack.zip";
+    const std::vector<FolderSelection> groups{
+        {.groupId = "parent", .path = base, .sourceKind = kind},
+        {.groupId = "upper", .path = base / "Song", .sourceKind = kind},
+        {.groupId = "lower", .path = base / "song", .sourceKind = kind}};
+    const StorageMeasurementRows original{{"parent", {.groupId = "parent", .totalBytes = 100}},
+        {"upper", {.groupId = "upper", .totalBytes = 60}}, {"lower", {.groupId = "lower", .totalBytes = 40}}};
+    std::set<std::string> expected{"upper"};
+#ifdef _WIN32
+    if (kind == StorageSourceKind::Local) expected.insert("lower");
+#endif
+    auto rows = original;
+    const StorageReport report{.changedRoots = {base / "Song"}};
+    require(ApplyStorageReportMeasurements(rows, groups, report) == expected && !rows.at("parent").totalBytes &&
+        !rows.at("upper").totalBytes && rows.at("lower").totalBytes.has_value() == !expected.contains("lower"),
+        "Apply invalidates native local aliases while preserving case-distinct archive folders");
+    std::vector<StorageGroupSource> current;
+    std::map<std::string, StorageGroupSource> previous;
+    for (const auto &group : groups) {
+      current.push_back({group, "same"}); previous[group.groupId] = current.back();
+    }
+    rows = original;
+    require(ReconcileStorageMeasurements(rows, previous, current, false, report.changedRoots) == expected &&
+        !rows.at("parent").totalBytes && !rows.contains("upper") && rows.contains("lower") == !expected.contains("lower"),
+        "dirty-scope refresh uses local filesystem casing and exact archive entry casing");
+  }
+}
 }
 int main() {
-  try { subsetApplyNeverStartsFullMeasurement(); jobRefreshPreservesUnrelatedSizes(); sourceChangesInvalidateContainingRollups(); dirtyScopesInvalidateStableRepresentative(); }
+  try { subsetApplyNeverStartsFullMeasurement(); jobRefreshPreservesUnrelatedSizes(); sourceChangesInvalidateContainingRollups(); dirtyScopesInvalidateStableRepresentative(); invalidationUsesSourceCaseRules(); }
   catch (const std::exception &error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }
 }

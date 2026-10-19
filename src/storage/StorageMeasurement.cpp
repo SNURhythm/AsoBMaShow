@@ -127,7 +127,7 @@ StorageMeasurements MeasureStorageGroups(const InventoryRequest &request, Checkp
         roots.push_back(completed[i].root); totals[completed[i].root] = completed[i].totalBytes;
         result.groups[bundle.positions[i]] = completed[i];
       }
-      for (const auto &root : StoragePathIndex(roots).MinimalRoots()) {
+      for (const auto &root : StoragePathIndex(roots, StoragePathComparison::CaseSensitive).MinimalRoots()) {
         if (result.totalBytes && totals.at(root)) add(*result.totalBytes, *totals.at(root));
         else result.totalBytes.reset();
       }

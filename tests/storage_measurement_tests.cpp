@@ -104,6 +104,16 @@ void archiveRootsAreSourceScoped() {
   const auto trailing = MeasureStorageGroups(request);
   require(trailing.complete && trailing.groups[0].totalBytes == 2, "single trailing archive folder retains complete union totals");
 }
+void archiveInnerCaseRemainsDistinct() {
+  TempDirectory temp;
+  const auto archive = temp.root / "case.zip";
+  writeArchive(archive, {{"Song/a.wav", "12"}, {"song/b.wav", "12345"}});
+  InventoryRequest request;
+  request.groups = {archiveGroup("upper", archive / "Song"), archiveGroup("lower", archive / "song")};
+  const auto measured = MeasureStorageGroups(request);
+  require(measured.complete && measured.groups.at(0).totalBytes == 2 && measured.groups.at(1).totalBytes == 5 &&
+      measured.totalBytes == 7, "case-distinct archive folders retain separate rows and contribute to the union");
+}
 void solidArchivesStayExcluded() {
   TempDirectory temp;
   const auto archive = temp.root / "solid.7z";
@@ -182,6 +192,7 @@ int RunStorageMeasurementTests() {
     sizeOnlyDoesNotBuildPreflight();
     thousandArchiveGroupsVisitIndexOnce();
     archiveRootsAreSourceScoped();
+    archiveInnerCaseRemainsDistinct();
     solidArchivesStayExcluded();
     invalidCachePublishesNoTotals();
     encryptedEntriesFollowDiscoveryRules();

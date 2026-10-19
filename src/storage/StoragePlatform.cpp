@@ -41,7 +41,7 @@ StorageFileCreation createExclusive(const fs::path &path, std::string &error) {
     const auto sinceUnix = std::chrono::duration<std::int64_t, std::ratio<1, 10000000>>(
         static_cast<std::int64_t>(ticks) - 116444736000000000LL);
     result.identity.modified = std::chrono::time_point_cast<fs::file_time_type::duration>(
-        fs::file_time_type::clock::from_sys(std::chrono::sys_time(sinceUnix)));
+        std::chrono::clock_cast<fs::file_time_type::clock>(std::chrono::sys_time(sinceUnix)));
     result.ready = info.nNumberOfLinks == 1 && result.identity.bytes == 0 && result.identity.fileId != 0 &&
         !(info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)) && FlushFileBuffers(handle);
   }

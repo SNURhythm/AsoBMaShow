@@ -61,7 +61,8 @@ StorageDirectoryEntry decode(sqlite3_stmt *statement) {
     const auto seconds = std::chrono::seconds(std::bit_cast<std::int64_t>(read(48)));
     const auto nanos = std::chrono::nanoseconds(read(56));
     entry.identity = FileIdentity{.bytes = entry.bytes,
-        .modified = fs::file_time_type(std::chrono::duration_cast<fs::file_time_type::duration>(seconds + nanos)),
+        .modified = fs::file_time_type(std::chrono::duration_cast<fs::file_time_type::duration>(seconds) +
+            std::chrono::duration_cast<fs::file_time_type::duration>(nanos)),
         .device = read(32), .fileId = read(40)};
   }
   return entry;

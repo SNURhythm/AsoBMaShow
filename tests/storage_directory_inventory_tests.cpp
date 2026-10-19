@@ -115,6 +115,10 @@ void fingerprintsRejectChangedEntries() {
   std::string error;
   auto loaded = LoadStorageDirectory(preflight.directories.at(temp.root / "charts"), input, {}, error);
   require(loaded && loaded->Size() == 1, "unchanged directory loads its bounded working set");
+  const auto original = loaded->Find("a.wav", error);
+  require(original && original->identity &&
+      original->identity->modified == fs::last_write_time(temp.root / "charts/a.wav"),
+      "native inventory timestamps use the filesystem clock epoch");
   fs::last_write_time(temp.root / "charts/a.wav", fs::last_write_time(temp.root / "charts/a.wav") + std::chrono::seconds(1));
   require(!LoadStorageDirectory(preflight.directories.at(temp.root / "charts"), input, {}, error),
           "changed source metadata invalidates directory fingerprint");
@@ -146,12 +150,23 @@ void largeDirectorySpillRetainsCollisionRules() {
     std::vector<StorageDirectoryEntry> entries{audio("sound.WAV"), audio("SOUND.flac"), audio("plain.wav"),
         {.name = "plain.mp3", .kind = StorageEntryKind::Directory},
         audio("link.wav"), {.name = "link.ogg", .kind = StorageEntryKind::Symlink}};
+    for (auto &entry : entries) if (entry.identity) entry.identity->modified = fs::file_time_type::clock::now();
+    using FileDuration = fs::file_time_type::duration;
+    const auto wideSeconds = std::chrono::seconds(13'000'000'000LL);
+    if (std::chrono::duration<long double>(FileDuration::max()) >= std::chrono::duration<long double>(wideSeconds))
+      entries.front().identity->modified = fs::file_time_type(
+          std::chrono::duration_cast<FileDuration>(wideSeconds) +
+          std::chrono::duration_cast<FileDuration>(std::chrono::nanoseconds(123'456'700)));
     std::string error;
     for (const auto &entry : entries) require(memory.Add(entry, error), "add in-memory entry");
     std::reverse(entries.begin(), entries.end());
     for (const auto &entry : entries) require(disk.Add(entry, error), "add spilled entry");
     require(!memory.Spilled() && disk.Spilled() && disk.Size() == 6, "large directory spills without retaining all entries");
     require(memory.Fingerprint({}, error) == disk.Fingerprint({}, error), "ordered fingerprint is independent of enumeration and spill");
+    for (const auto &entry : entries) {
+      const auto restored = disk.Find(entry.name, error);
+      require(restored && restored->identity == entry.identity, "spilled metadata preserves full filesystem timestamps");
+    }
     StorageDiagnostic reason;
     require(!StorageCandidateForEntry(audio("sound.WAV"), disk, {.audio = AudioAction::LossyVorbis}, {}, reason) &&
                 reason.code == StorageReason::Collision, "case-varied same-stem alternatives stay ambiguous after spill");
