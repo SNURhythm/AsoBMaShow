@@ -12,6 +12,7 @@ struct ServiceCalls {
   std::string sha256, md5, title, artist, candidateId;
   std::filesystem::path root;
   bool skipUnarchiving = false;
+  storage_management::StoragePolicy storagePolicy;
   bool cancellationObserved = false;
   bool promptForRetry = false;
   bool retryApproved = false;
@@ -37,6 +38,7 @@ BmsSearchResult BmsSearchService::findAndDownload(
   calls.sha256 = sha256; calls.md5 = md5; calls.root = root;
   calls.title = title; calls.artist = artist;
   calls.skipUnarchiving = options.skipUnarchivingForNonSolidArchives;
+  calls.storagePolicy = options.storagePolicy;
   progress({"Downloading archive", 20, 100});
   progress({"Downloading archive", 40, 100});
   if (calls.promptForRetry) {
@@ -86,6 +88,7 @@ struct FindBmsModal {
   void setVisible(bool value) { assert(owner == std::this_thread::get_id()); visible = value; }
 };
 struct FindBmsModalCallbacks {
+  std::function<bool()> admit;
   std::function<std::filesystem::path()> downloadRoot;
   std::function<BmsSearchDownloadOptions()> downloadOptions;
   std::function<void()> downloadStarted;
@@ -102,10 +105,13 @@ public:
   FindBmsTask findBmsTask;
   FindBmsModal modal;
   FindBmsModal *findBmsModalRoot = &modal;
-  struct { struct { bool findBmsSkipUnarchivingForNonSolidArchives = true; } settings; } context;
+  struct { std::atomic_bool storageMaintenanceActive = false, backgroundTasksPausedForForegroundScene = false, appInBackground = false;
+    struct { bool findBmsSkipUnarchivingForNonSolidArchives = true; storage_management::StoragePreferences storagePreferences; } settings; } context;
   bool findBmsAwaitingConfirmation = false;
   ChartMetaRecord findBmsModalChart;
   BmsSearchResult findBmsResult;
+  BmsSearchDownloadOptions findBmsCapturedOptions;
+  std::optional<storage_management::StorageProgress> findBmsStorageProgress;
   std::optional<BmsSearchPendingArtifactDecision> findBmsPendingDecision;
   std::string findBmsProgressMessage;
   std::uint64_t findBmsProgressCurrent = 0, findBmsProgressTotal = 0;
@@ -286,10 +292,13 @@ void testSceneDownloadPromptRetriesExistingWorker() {
     calls.promptForRetry = true;
     calls.result = {.status = BmsSearchResult::Status::DownloadFailed};
     MainMenuScene scene;
+    scene.context.settings.storagePreferences = {.download = {.audio = storage_management::AudioAction::LossyVorbis}, .afterDownload = true};
     scene.showFindBmsModal({{"sha256", "md5", "Title", "Artist"}});
     waitForRetryPrompt(scene.findBmsTask);
     scene.applyFindBmsUpdates();
     const auto refreshes = scene.refreshes;
+    scene.context.settings.storagePreferences = {};
+    assert(calls.storagePolicy.audio == storage_management::AudioAction::LossyVorbis);
     scene.hideFindBmsModal();
     assert(scene.modal.visible);
     assert(calls.lookups == 1 && scene.indexed.empty());
@@ -421,3 +430,48 @@ void testSceneCandidateAndPendingArtifactDecisions() {
   assert(scene.indexed[0].removed == std::vector<std::filesystem::path>{"obsolete.bms"});
 }
 } // namespace
+
+void testCapturedStoragePolicySurvivesAttemptAndRetainedCompletion() {
+  using namespace storage_management;
+  for (bool candidate : {false, true}) {
+    ServiceCalls calls; serviceCalls = &calls; Gate gate; calls.gate = &gate;
+    calls.result = {.status = BmsSearchResult::Status::Downloaded, .outputPath = "optimized"};
+    calls.result.storageReport = StorageReport{.converted = 2, .failed = 1, .reclaimedBytes = 456};
+    MainMenuScene scene;
+    scene.context.settings.storagePreferences = {.download = {.audio = AudioAction::LosslessFlac}, .afterDownload = true};
+    if (candidate) {
+      scene.findBmsResult.candidates = {BmsSearchCandidate{.id = "candidate"}};
+      scene.startFindBmsCandidateDownload(0);
+    } else scene.showFindBmsModal({{"sha", "md5", "title", "artist"}});
+    gate.wait();
+    scene.context.settings.storagePreferences = {}; // another profile/policy
+    assert(calls.storagePolicy.audio == AudioAction::LosslessFlac);
+    assert(scene.findBmsCapturedOptions.storagePolicy.audio == AudioAction::LosslessFlac);
+    assert(scene.indexed.empty());
+    gate.release.set_value(); applyUntilIdle(scene);
+    assert(scene.findBmsResult.storageReport->reclaimedBytes == 456);
+    scene.applyFindBmsUpdates();
+    assert(scene.indexed.size() == 1 && scene.indexed[0].path == "optimized");
+    scene.hideFindBmsModal();
+    assert(scene.findBmsResult.storageReport->failed == 1);
+  }
+  BmsSearchDownloadProgress progress{.message = "Downloading archive", .downloadedBytes = 900,
+      .totalBytes = 900, .storageProgress = StorageProgress{.phase = StoragePhase::Encode, .filesDone = 1, .filesTotal = 3}};
+  i18n::setLanguage(i18n::Language::English);
+  for (const auto &[reclaimed, added] : std::vector<std::pair<std::uint64_t, std::uint64_t>>{
+      {0, 512}, {1024, 256}, {0, 0}}) {
+    const auto report = findBmsStorageReportMessage(StorageReport{.converted = 1,
+        .reclaimedBytes = reclaimed, .addedBytes = added});
+    const auto english = report.resolve();
+    assert(english.find("Media reclaimed: " + formatFindBmsBytes(reclaimed)) != std::string::npos);
+    assert(english.find("Added: " + formatFindBmsBytes(added)) != std::string::npos);
+    i18n::setLanguage(i18n::Language::Korean);
+    assert(report.resolve().find("증가 용량: " + formatFindBmsBytes(added)) != std::string::npos);
+    i18n::setLanguage(i18n::Language::English);
+  }
+  auto text = findBmsProgressEventDisplayText(progress, true);
+  assert(text.find("900") == std::string::npos && text.find("33%") == std::string::npos);
+  assert(findBmsProgressFractionFor(progress, 0.98) < 1.0);
+  progress.storageProgress->phase = StoragePhase::Complete;
+  assert(findBmsProgressFractionFor(progress, 0.98) < 1.0);
+}

@@ -66,7 +66,7 @@ public:
   void PlaybackWorker(music_playlist::MusicTrack, std::uint64_t, bool,
                       Status, const std::stop_token &);
   bool ProcessNativeControlEvents(Status &);
-  bool queueCanAdvance = false;
+  bool queueCanAdvance = false, storageMaintenance = false;
   bool PlayPreviousAsync(Status &) { return queueCanAdvance; }
   bool PlayNextAsync(Status &, Status = {}) { return queueCanAdvance; }
   void PublishNativeControlStatus(const Status &);
@@ -75,7 +75,7 @@ public:
   void EnsureNativeControlEventPump() {}
   std::atomic<std::uint64_t> playbackRequestRevision{1};
   std::atomic_bool renderCancelled{false};
-  std::mutex stateMutex, nativeControlStatusMutex;
+  std::mutex stateMutex, nativeControlStatusMutex, playbackAdmissionMutex;
   int playbackRate = 100;
   std::optional<music_playlist::MusicTrack> loadedTrack;
   Status nativeControlStatusMessage;

@@ -64,6 +64,20 @@ int execute(bool profileReady, const Dependencies &dependencies) {
     return EXIT_FAILURE;
   }
 
+  if (dependencies.recoverStorage) {
+    bool recovered = false;
+    try { recovered = dependencies.recoverStorage(); } catch (...) {}
+    if (dependencies.quitRequested && dependencies.quitRequested()) return EXIT_SUCCESS;
+    if (!recovered) {
+      dependencies.reportFatal(Result{
+          .failure = Failure::StorageRecovery,
+          .userMessage = "AsoBMaShow could not recover an interrupted storage operation. "
+                         "Your files have been retained. The application will close to protect your data.",
+      });
+      return EXIT_FAILURE;
+    }
+  }
+
   if (dependencies.reconcileReplayFiles) {
     try {
       dependencies.reconcileReplayFiles();

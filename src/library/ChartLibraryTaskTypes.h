@@ -56,6 +56,10 @@ struct TaskRequest {
   std::shared_ptr<AndroidArchiveImportOwner> androidArchiveOwner;
   bool rebuildLibraryMetadata = false;
   bool folderRegistrationCompleted = false;
+  std::vector<std::filesystem::path> refreshPaths;
+  // Skip unconditional scope invalidation for already-applied storage deltas.
+  // Changes discovered by the scan still invalidate the affected measurements.
+  bool storageMeasurementsCurrent = false;
 };
 
 struct TaskInfo {

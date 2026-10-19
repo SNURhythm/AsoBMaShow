@@ -34,6 +34,9 @@ class DocumentsMutationGuardTests(unittest.TestCase):
             "com.snurhythm.asobmashow.DocumentsMutationGuardTests", scenario,
         ], check=True, timeout=15)
 
+    def test_maintenance_excludes_open_writers_and_releases_subtrees(self):
+        self.run_scenario("maintenance")
+
     def test_existing_files_directories_and_dangling_symlinks_are_rejected(self):
         self.run_scenario("existing")
 

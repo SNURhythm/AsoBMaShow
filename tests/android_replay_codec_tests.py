@@ -1,4 +1,4 @@
-"""Exercise hardware encoder selection against controlled Android capabilities."""
+"""Exercise replay and storage encoder selection against Android capabilities."""
 
 from pathlib import Path
 import os
@@ -8,6 +8,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 JAVA = ROOT / "android/app/src/main/java/com/snurhythm/asobmashow/AndroidReplayCodec.java"
+STORAGE_JAVA = JAVA.with_name("AndroidStorageCodec.java")
 
 STUBS = {
     "android/os/Build.java": """
@@ -40,11 +41,14 @@ public class MediaCodecInfo {
     public String[] getSupportedTypes() { return types; }
     public CodecCapabilities getCapabilitiesForType(String type) {
         if (broken) throw new IllegalArgumentException("unavailable codec");
-        if (!type.equals("video/avc")) throw new AssertionError(type);
+        if (!java.util.Arrays.asList(types).contains(type)) throw new AssertionError(type);
         return caps;
     }
     public static class CodecCapabilities {
         public static final int COLOR_FormatSurface = 0x7f000789;
+        public static final int COLOR_FormatYUV420Planar = 19;
+        public static final int COLOR_FormatYUV420SemiPlanar = 21;
+        public static final int COLOR_FormatYUV420Flexible = 0x7f420888;
         public int[] colorFormats = {COLOR_FormatSurface};
         public VideoCapabilities video = new VideoCapabilities();
         public VideoCapabilities getVideoCapabilities() { return video; }
@@ -59,8 +63,8 @@ public class MediaCodecInfo {
         public BitrateRange getBitrateRange() { return bitrate; }
     }
     public static class BitrateRange {
-        public int max = 80000000;
-        public boolean contains(Integer value) { return value > 0 && value <= max; }
+        public int min = 1, max = 80000000;
+        public boolean contains(Integer value) { return value >= min && value <= max; }
     }
 }
 """,
@@ -70,6 +74,84 @@ HARNESS = """
 package com.snurhythm.asobmashow;
 import android.media.*;
 public class ReplayCodecTest {
+    static void expectStorage(String expected, String mime, MediaCodecInfo... codecs) {
+        MediaCodecList.codecs = codecs;
+        String actual = AndroidStorageCodec.findEncoder(mime, 1280, 720, 30, 4000000);
+        if (!actual.equals(expected)) throw new AssertionError(expected + " != " + actual);
+    }
+    static void testStorage() {
+        android.os.Build.VERSION.SDK_INT = 33;
+        MediaCodecInfo hardware = new MediaCodecInfo("c2.vendor.avc.encoder");
+        hardware.caps.colorFormats = new int[]{19, 21};
+        MediaCodecInfo surface = new MediaCodecInfo("c2.vendor.surface.encoder");
+        MediaCodecInfo flexible = new MediaCodecInfo("c2.vendor.flexible.encoder");
+        flexible.caps.colorFormats = new int[]{0x7f420888};
+        MediaCodecInfo software = new MediaCodecInfo("c2.android.avc.encoder");
+        software.hardware = false;
+        software.caps.colorFormats = new int[]{19, 21};
+        MediaCodecInfo decoder = new MediaCodecInfo("c2.vendor.decoder");
+        decoder.encoder = false;
+        decoder.caps.colorFormats = new int[]{21};
+        MediaCodecInfo small = new MediaCodecInfo("c2.vendor.small.encoder");
+        small.caps.colorFormats = new int[]{21};
+        small.caps.video.maxWidth = 640;
+        MediaCodecInfo slow = new MediaCodecInfo("c2.vendor.slow.encoder");
+        slow.caps.colorFormats = new int[]{21};
+        slow.caps.video.maxRate = 24;
+        MediaCodecInfo bitrate = new MediaCodecInfo("c2.vendor.bitrate.encoder");
+        bitrate.caps.colorFormats = new int[]{21};
+        bitrate.caps.video.bitrate.min = 5000000;
+        MediaCodecInfo broken = new MediaCodecInfo("c2.vendor.broken.encoder");
+        broken.broken = true;
+        expectStorage(hardware.name, "video/avc", surface, flexible, software, decoder,
+                      small, slow, bitrate, broken, hardware);
+        expectStorage("", "video/avc", surface, flexible, software, decoder,
+                      small, slow, bitrate, broken);
+        if (!AndroidStorageCodec.getPixelFormat(surface.name, "video/avc").isEmpty() ||
+            !AndroidStorageCodec.getPixelFormat(flexible.name, "video/avc").isEmpty() ||
+            !AndroidStorageCodec.getPixelFormat(software.name, "video/avc").isEmpty() ||
+            !AndroidStorageCodec.getPixelFormat(broken.name, "video/avc").isEmpty())
+            throw new AssertionError("unsupported buffer layout must not be guessed");
+        bitrate.caps.video.bitrate.min = 1;
+        bitrate.caps.video.bitrate.max = 3000000;
+        expectStorage("", "video/avc", bitrate);
+        for (String mime : new String[]{"video/avc", "video/hevc", "video/av01"}) {
+            hardware.types = new String[]{mime};
+            expectStorage(hardware.name, mime.toUpperCase(java.util.Locale.ROOT), hardware);
+            if (!AndroidStorageCodec.getPixelFormat(hardware.name, mime).equals("nv12"))
+                throw new AssertionError("NV12 preferred when advertised");
+            hardware.caps.colorFormats = new int[]{19};
+            expectStorage(hardware.name, mime, hardware);
+            if (!AndroidStorageCodec.getPixelFormat(hardware.name, mime).equals("yuv420p"))
+                throw new AssertionError("planar-only encoder needs planar input");
+            hardware.caps.colorFormats = new int[]{19, 21};
+        }
+        expectStorage("", "video/avc", hardware);
+        hardware.types = new String[]{"video/avc"};
+        expectStorage(hardware.name, "video/avc", hardware);
+        if (!AndroidStorageCodec.getPixelFormat("missing", "video/avc").isEmpty() ||
+            !AndroidStorageCodec.getPixelFormat(hardware.name, "video/hevc").isEmpty())
+            throw new AssertionError("pixel format belongs to the selected codec and MIME");
+        for (int[] parameters : new int[][]{{0,720,30,4000000}, {1280,-1,30,4000000},
+                {1280,720,0,4000000}, {1280,720,30,0}}) {
+            if (!AndroidStorageCodec.findEncoder("video/avc", parameters[0], parameters[1],
+                    parameters[2], parameters[3]).isEmpty())
+                throw new AssertionError("invalid encoder parameters");
+        }
+        expectStorage("", null, hardware);
+        expectStorage("", "", hardware);
+        android.os.Build.VERSION.SDK_INT = 28;
+        for (String name : new String[]{"OMX.google.h264.encoder", "c2.android.avc.encoder",
+                "c2.google.avc.encoder", "OMX.vendor.sw.encoder", "unknown.encoder"}) {
+            software.name = name;
+            expectStorage("", "video/avc", software);
+        }
+        expectStorage(hardware.name, "video/avc", software, hardware);
+        MediaCodecList.codecs = null;
+        if (!AndroidStorageCodec.findEncoder("video/avc", 1280, 720, 30, 4000000).isEmpty() ||
+            !AndroidStorageCodec.getPixelFormat(hardware.name, "video/avc").isEmpty())
+            throw new AssertionError("unavailable media service must allow fallback");
+    }
     static void expect(String expected, MediaCodecInfo... codecs) {
         MediaCodecList.codecs = codecs;
         String actual = AndroidReplayCodec.findEncoder(2400, 1080, 60, 25920000);
@@ -104,14 +186,16 @@ public class ReplayCodecTest {
         MediaCodecList.codecs = new MediaCodecInfo[]{hardware};
         if (!AndroidReplayCodec.findEncoder(0, 1080, 60, 25920000).isEmpty())
             throw new AssertionError("invalid dimensions");
+        testStorage();
     }
 }
 """
 
 
 class AndroidReplayCodecTests(unittest.TestCase):
-    def test_hardware_surface_selection_and_software_fallback(self):
+    def test_hardware_selection_and_surface_or_buffer_input(self):
         self.assertTrue(JAVA.exists(), "Hardware replay codec selection is missing")
+        self.assertTrue(STORAGE_JAVA.exists(), "Hardware storage codec selection is missing")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             sources = []
@@ -125,7 +209,8 @@ class AndroidReplayCodecTests(unittest.TestCase):
             java_home = os.environ.get("JAVA_HOME")
             javac = str(Path(java_home) / "bin/javac") if java_home else "javac"
             java = str(Path(java_home) / "bin/java") if java_home else "java"
-            subprocess.run([javac, "-d", directory, *sources, str(JAVA), str(harness)], check=True)
+            subprocess.run([javac, "-d", directory, *sources, str(JAVA), str(STORAGE_JAVA),
+                            str(harness)], check=True)
             subprocess.run([java, "-cp", directory, "com.snurhythm.asobmashow.ReplayCodecTest"], check=True)
 
 

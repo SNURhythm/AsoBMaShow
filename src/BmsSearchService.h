@@ -1,6 +1,7 @@
 #pragma once
 
 #include "i18n/Localization.h"
+#include "storage/StorageTypes.h"
 
 #include <atomic>
 #include <filesystem>
@@ -13,6 +14,7 @@ struct BmsSearchDownloadProgress {
   std::string message;
   std::uint64_t downloadedBytes = 0;
   std::uint64_t totalBytes = 0;
+  std::optional<storage_management::StorageProgress> storageProgress;
 };
 
 using BmsSearchDownloadProgressCallback =
@@ -26,6 +28,9 @@ using BmsSearchDownloadRetryCallback =
 struct BmsSearchDownloadOptions {
   bool skipUnarchivingForNonSolidArchives = false;
   BmsSearchDownloadRetryCallback requestRetry;
+  storage_management::StoragePolicy storagePolicy;
+  // Application-owned probe; never captures a view or mutable settings.
+  std::function<bool()> storagePauseRequested;
 };
 
 enum class BmsSearchPendingArtifactKind { Archive, ExtractedDirectory };
@@ -39,6 +44,8 @@ struct BmsSearchPendingArtifact {
   std::string archiveName;
   std::string storageKey;
   std::filesystem::path alternateDestinationPath;
+  // Private disk-backed inventory of files replaced by an optimized download.
+  std::filesystem::path originalFilesIndexPath;
 };
 
 enum class BmsSearchPendingArtifactDecision { Keep, Delete };
@@ -82,6 +89,7 @@ struct BmsSearchResult {
   // App-owned presentation retains its identity; transport diagnostics stay raw.
   i18n::Text presentationMessage;
   long downloadHttpStatus = 0;
+  std::optional<storage_management::StorageReport> storageReport;
 };
 
 class BmsSearchService {

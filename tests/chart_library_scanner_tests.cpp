@@ -7,6 +7,7 @@
 #include "../src/repositories/ChartRepository.h"
 #include "../src/repositories/ChartStorageIdentity.h"
 #include "../src/sqlite3.h"
+#include "../src/targets.h"
 #include "fixtures/archive/mixed_encryption_zip.h"
 #include "fixtures/parser/pms_scan_baseline.h"
 
@@ -31,6 +32,10 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#if defined(__APPLE__) && TARGET_OS_OSX
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -3254,6 +3259,71 @@ void testOwnedIncompleteMarkersRemainExcluded(bool requireReadable, bool registe
   assert(session->LoadUnzipRecovery()->size() == 1);
 }
 
+void testOwnedIncompleteMarkerThroughAlias() {
+  TempDirectory temporary;
+  const auto library = temporary.path() / "library";
+  const auto output = library / "partial";
+  writeChart(output / "song", "chart", "Incomplete Alias Chart");
+  const auto alias = temporary.path() / "alias";
+  std::filesystem::create_directory_symlink(library, alias);
+  const ArchiveUnzipRecoveryRecord record{
+      .archivePath = temporary.path() / "source.zip", .outputFolder = output, .archiveKey = "key"};
+  std::ofstream(output / ".asobmashow_unzip_incomplete") << record.archiveKey << '\n'
+      << fspath_to_utf8(record.archivePath) << '\n';
+  TestChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session && session->SaveUnzipRecovery(record));
+  ChartLibraryScanner scanner;
+  const auto skipped = scanner.ScanAddedWithResult(*session, {alias / "partial/song"});
+  assert(skipped.completed && session->CountAllChartMeta() == 0);
+  std::ofstream(output / ".asobmashow_unzip_incomplete") << "unowned-key\n"
+      << fspath_to_utf8(record.archivePath) << '\n';
+  const auto visible = scanner.ScanAddedWithResult(*session, {alias / "partial/song"});
+  assert(visible.completed && visible.committed && session->CountAllChartMeta() == 1);
+  assert(std::filesystem::remove(output / ".asobmashow_unzip_incomplete"));
+  const auto completed = scanner.ScanScopedWithResult(*session, {alias / "partial/song"});
+  assert(completed.completed && completed.committed && session->CountAllChartMeta() == 1);
+}
+
+#if defined(__APPLE__) && TARGET_OS_OSX
+void testSandboxedScanChild(const std::filesystem::path &root) {
+  std::error_code error;
+  (void)std::filesystem::symlink_status(root.parent_path(), error);
+  assert(error == std::errc::operation_not_permitted || error == std::errc::permission_denied);
+  TestChartRepository repository(root.parent_path().parent_path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session);
+  ChartLibraryScanner scanner;
+  const auto scanned = scanner.ScanAddedWithResult(*session, {root});
+  assert(scanned.completed && scanned.committed && session->CountAllChartMeta() == 1);
+  // Unrelated pending work must not reintroduce probes above this grant.
+  assert(session->SaveUnzipRecovery({.archivePath = root / "absent.zip",
+      .outputFolder = root.parent_path().parent_path() / "other", .archiveKey = "unrelated"}));
+  const auto refreshed = scanner.ScanScopedWithResult(*session, {root / "song"});
+  assert(refreshed.completed && refreshed.committed && session->CountAllChartMeta() == 1);
+}
+void testSandboxedScan(const char *executable) {
+  TempDirectory temporary;
+  const auto base = std::filesystem::canonical(temporary.path());
+  const auto root = base / "system/library";
+  writeChart(root / "song", "chart", "Sandbox Chart");
+  const auto profile = "(version 1) (allow default) (deny file-read-metadata (literal \"" +
+      (base / "system").string() + "\") (literal \"" +
+      (base / "system/.asobmashow_unzip_incomplete").string() + "\"))";
+  const auto child = fork();
+  assert(child >= 0);
+  if (!child) {
+    execl("/usr/bin/sandbox-exec", "sandbox-exec", "-p", profile.c_str(), executable,
+        "--sandbox-scan", root.c_str(), nullptr);
+    _exit(127);
+  }
+  int status = 0;
+  assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 0);
+}
+#endif
+
 void testUnavailableMarkerJournalDoesNotDeleteExistingCharts() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -3367,6 +3437,12 @@ void testScopedRefreshPreservesLibraryCompletedMarkersAndIndexFiles() {
 } // namespace
 
 int main(int argc, char **argv) {
+#if defined(__APPLE__) && TARGET_OS_OSX
+  if (argc == 3 && std::string_view(argv[1]) == "--sandbox-scan") {
+    testSandboxedScanChild(argv[2]); return 0;
+  }
+  testSandboxedScan(argv[0]);
+#endif
   if (argc == 2 && std::string_view(argv[1]) == "--unicode-archive-test") {
     testUnicodeArchiveInnerPathSurvivesScanning();
     return 0;
@@ -3375,6 +3451,7 @@ int main(int argc, char **argv) {
   testPmsFormatSurvivesBufferedChartLoading();
   testHistoricalPmsMetadataRebuildsUnchangedSources();
   testUntrustedIncompleteMarkersDoNotHideCharts();
+  testOwnedIncompleteMarkerThroughAlias();
   for (bool requireReadable : {false, true}) {
     for (bool registerDuringScan : {false, true}) {
       testOwnedIncompleteMarkersRemainExcluded(requireReadable, registerDuringScan);

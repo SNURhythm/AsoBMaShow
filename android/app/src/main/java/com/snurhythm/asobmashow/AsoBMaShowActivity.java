@@ -571,6 +571,14 @@ public class AsoBMaShowActivity extends SDLActivity {
         return AndroidReplayCodec.findEncoder(width, height, fps, bitrate);
     }
 
+    public String findStorageVideoEncoder(String mime, int width, int height, int fps, int bitrate) {
+        return AndroidStorageCodec.findEncoder(mime, width, height, fps, bitrate);
+    }
+
+    public String getStorageVideoEncoderPixelFormat(String codecName, String mime) {
+        return AndroidStorageCodec.getPixelFormat(codecName, mime);
+    }
+
     public String getInternalFilesDirPath() {
         return getFilesDir().getAbsolutePath();
     }
@@ -918,6 +926,10 @@ public class AsoBMaShowActivity extends SDLActivity {
             return ERROR_PREFIX + "Folder selection was cancelled.";
         }
         return startPendingImportCopy(uri, archivePickerName.get(), true, "", "move".equals(operation));
+    }
+
+    public AutoCloseable reserveStorageSubtrees(String[] paths) throws IOException {
+        return DocumentsMutationGuard.reserveExistingSubtrees(paths);
     }
 
     public Object getDocumentsMutationLock() {
@@ -1846,6 +1858,13 @@ public class AsoBMaShowActivity extends SDLActivity {
             return "OK";
         } catch (Exception e) {
             return ERROR_PREFIX + messageForException(e, "Could not pause music.");
+        }
+    }
+
+    public String unloadNativeMusic() {
+        synchronized (nativeMusicLock) {
+            releaseNativeMusicPlayerLocked();
+            return "OK";
         }
     }
 

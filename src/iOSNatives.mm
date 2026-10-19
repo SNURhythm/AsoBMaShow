@@ -5622,6 +5622,44 @@ bool StopIOSNativeMusic(std::string &errorMessage) {
   }
 }
 
+bool UnloadIOSNativeMusic(std::string &errorMessage) {
+  errorMessage.clear();
+  @autoreleasepool {
+    @synchronized(IOSNativeMusicLock()) {
+      AVAudioSession *session = [AVAudioSession sharedInstance];
+      NSString *category = session.category;
+      NSString *mode = session.mode;
+      const auto options = session.categoryOptions;
+      // Admission may reject this unload. Keep the transport and its owners
+      // intact until the fallible session handoff has completed.
+      if (!RestoreIOSForegroundAudioSession(errorMessage)) {
+        // A failed handoff may already have deactivated or recategorized the
+        // session. Restore its actual configuration (paused streams can use
+        // Ambient) without replacing the original handoff diagnostic.
+        NSError *ignored = nil;
+        [session setCategory:category mode:mode options:options error:&ignored];
+        ignored = nil;
+        [session setActive:YES error:&ignored];
+        return false;
+      }
+      ++gIOSNativeMusicTransportGeneration;
+      gIOSNativeMusicResumeAfterInterruption = false;
+      if (gIOSNativeMusicFinishedObserver != nil) {
+        [[NSNotificationCenter defaultCenter] removeObserver:gIOSNativeMusicFinishedObserver];
+        gIOSNativeMusicFinishedObserver = nil;
+      }
+      [gIOSNativeMusicPlayer pause];
+      gIOSNativeMusicPlayer = nil;
+      // The feeder never takes this monitor; its destruction joins safely.
+      gIOSNativeMusicStream.reset();
+      gIOSNativeMusicMetadata = {};
+      gIOSNativeMusicQueue = {};
+      PublishIOSNativeMusicNowPlayingInfoLocked(nil, false);
+      return true;
+    }
+  }
+}
+
 bool SeekIOSNativeMusic(long long positionMicros, std::string &errorMessage) {
   errorMessage.clear();
   @autoreleasepool {
@@ -6141,9 +6179,68 @@ SDL_Surface *RenderIOSSystemTextSurface(const std::string &utf8, int fontSize,
 //   [view addGestureRecognizer:tapGesture];
 // }
 namespace {
+UIView *storageRecoveryOverlay = nil;
+UILabel *storageRecoveryLabel = nil;
 UIView *replayExportOverlay = nil;
 UILabel *replayExportLabel = nil;
 UIProgressView *replayExportProgress = nil;
+}
+
+void ShowIOSStorageRecoveryProgress() {
+  HideIOSStorageRecoveryProgress();
+  UIWindow *window = FindActiveWindow();
+  if (window == nil) return;
+  storageRecoveryOverlay = [[UIView alloc] initWithFrame:window.bounds];
+  storageRecoveryOverlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+  storageRecoveryOverlay.backgroundColor = [UIColor colorWithWhite:0.06 alpha:1];
+  storageRecoveryOverlay.accessibilityViewIsModal = YES;
+  UIStackView *stack = [[UIStackView alloc] init];
+  stack.axis = UILayoutConstraintAxisVertical;
+  stack.alignment = UIStackViewAlignmentCenter;
+  stack.spacing = 20;
+  stack.translatesAutoresizingMaskIntoConstraints = NO;
+  UILabel *title = [[UILabel alloc] init];
+  title.text = @"Recovering interrupted storage operation";
+  title.font = [UIFont preferredFontForTextStyle:UIFontTextStyleHeadline];
+  title.adjustsFontForContentSizeCategory = YES;
+  title.textColor = UIColor.whiteColor;
+  title.numberOfLines = 0;
+  title.textAlignment = NSTextAlignmentCenter;
+  UIActivityIndicatorView *spinner = [[UIActivityIndicatorView alloc] initWithActivityIndicatorStyle:UIActivityIndicatorViewStyleLarge];
+  spinner.color = UIColor.whiteColor;
+  [spinner startAnimating];
+  storageRecoveryLabel = [[UILabel alloc] init];
+  storageRecoveryLabel.text = @"Checking registered folders…";
+  storageRecoveryLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
+  storageRecoveryLabel.adjustsFontForContentSizeCategory = YES;
+  storageRecoveryLabel.textColor = UIColor.whiteColor;
+  storageRecoveryLabel.numberOfLines = 5;
+  storageRecoveryLabel.lineBreakMode = NSLineBreakByTruncatingMiddle;
+  storageRecoveryLabel.textAlignment = NSTextAlignmentCenter;
+  [stack addArrangedSubview:title];
+  [stack addArrangedSubview:spinner];
+  [stack addArrangedSubview:storageRecoveryLabel];
+  [storageRecoveryOverlay addSubview:stack];
+  [NSLayoutConstraint activateConstraints:@[
+    [stack.centerXAnchor constraintEqualToAnchor:storageRecoveryOverlay.safeAreaLayoutGuide.centerXAnchor],
+    [stack.centerYAnchor constraintEqualToAnchor:storageRecoveryOverlay.safeAreaLayoutGuide.centerYAnchor],
+    [stack.widthAnchor constraintLessThanOrEqualToConstant:420],
+    [stack.leadingAnchor constraintGreaterThanOrEqualToAnchor:storageRecoveryOverlay.safeAreaLayoutGuide.leadingAnchor constant:24],
+    [stack.trailingAnchor constraintLessThanOrEqualToAnchor:storageRecoveryOverlay.safeAreaLayoutGuide.trailingAnchor constant:-24],
+    [title.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
+    [storageRecoveryLabel.widthAnchor constraintEqualToAnchor:stack.widthAnchor]
+  ]];
+  [window addSubview:storageRecoveryOverlay];
+}
+
+void SetIOSStorageRecoveryProgress(const std::string &message) {
+  storageRecoveryLabel.text = NSStringFromUtf8(message);
+}
+
+void HideIOSStorageRecoveryProgress() {
+  [storageRecoveryOverlay removeFromSuperview];
+  storageRecoveryOverlay = nil;
+  storageRecoveryLabel = nil;
 }
 
 void ShowIOSReplayExportProgress(std::function<void()> cancel) {

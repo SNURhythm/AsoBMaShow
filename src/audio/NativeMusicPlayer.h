@@ -61,9 +61,12 @@ bool LoadStream(std::shared_ptr<music_stream::Source> source,
 bool Play(std::string &errorMessage);
 bool Pause(std::string &errorMessage);
 bool Stop(std::string &errorMessage);
+// Discards all retained media so platform remote Play cannot resume stale data.
+bool Unload(std::string &errorMessage);
 bool Seek(long long positionMicros, std::string &errorMessage);
 bool SetPlaybackRate(audio::PlaybackRate rate, std::string &errorMessage);
 PlaybackState GetState();
+void SetControlEventsEnabled(bool enabled);
 void NotifyControlEvent(ControlEvent event);
 std::vector<ControlEvent> DrainControlEvents();
 void NotifyPlaybackError(std::string message);

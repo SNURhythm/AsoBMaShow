@@ -213,7 +213,7 @@ FolderActionService::~FolderActionService() {
 }
 
 void FolderActionService::requestAddFolder() {
-  if (!impl_) return;
+  if (!impl_ || impl_->tasks->maintenanceReserved()) return;
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
   if (impl_->pickerActive.exchange(true)) return;
   try {
@@ -299,7 +299,7 @@ void FolderActionService::requestAddFolder() {
 
 void FolderActionService::requestImportFolder(bool moveSource) {
 #if TARGET_OS_ANDROID
-  if (impl_) impl_->requestImport(true, moveSource);
+  if (impl_ && !impl_->tasks->maintenanceReserved()) impl_->requestImport(true, moveSource);
 #else
   (void)moveSource;
 #endif
@@ -307,13 +307,13 @@ void FolderActionService::requestImportFolder(bool moveSource) {
 
 void FolderActionService::requestImportArchive() {
 #if TARGET_OS_ANDROID
-  if (impl_) impl_->requestImport(false);
+  if (impl_ && !impl_->tasks->maintenanceReserved()) impl_->requestImport(false);
 #endif
 }
 
 void FolderActionService::poll() {
 #if !TARGET_OS_IOS && !TARGET_OS_SIMULATOR && !TARGET_OS_ANDROID
-  if (!impl_) return;
+  if (!impl_ || impl_->tasks->maintenanceReserved()) return;
   std::optional<std::string> folder;
   {
     std::lock_guard lock(impl_->desktopPicker->mutex);
@@ -331,6 +331,16 @@ bool FolderActionService::active() const noexcept {
   return impl_->desktopPicker->active.load(std::memory_order_acquire);
 #else
   if (impl_->pickerActive.load(std::memory_order_acquire)) return true;
+  return false;
+#endif
+}
+
+bool FolderActionService::hasPendingSelection() const {
+#if !TARGET_OS_IOS && !TARGET_OS_SIMULATOR && !TARGET_OS_ANDROID
+  if (!impl_) return false;
+  std::lock_guard lock(impl_->desktopPicker->mutex);
+  return impl_->desktopPicker->folder.has_value();
+#else
   return false;
 #endif
 }

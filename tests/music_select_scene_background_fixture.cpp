@@ -54,6 +54,7 @@ struct MusicSelectScene {
   struct Lifecycle { bool presentationReady() const { return true; } };
   struct Context {
     std::atomic_bool appInBackground = false;
+    std::atomic_bool storageMaintenanceActive = false;
     Lifecycle *gameplaySkinLifecycle = nullptr;
   } context;
   bool sceneActive_ = true;

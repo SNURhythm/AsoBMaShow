@@ -96,4 +96,23 @@ int main() {
   bool fresh = false;
   while (PollIOSApplicationEvent(&event)) fresh |= event.type == SDL_EVENT_KEY_DOWN;
   require(fresh && discarded == 3, "iOS input admission remained suppressed after export");
+
+  send(SDL_EVENT_KEY_DOWN);
+  pump();
+  SetIOSApplicationInputSuppressed(true);
+  send(SDL_EVENT_KEY_DOWN);
+  send(SDL_EVENT_DID_ENTER_BACKGROUND);
+  pump();
+  send(SDL_EVENT_KEY_DOWN);
+  send(SDL_EVENT_QUIT);
+  beforeNativePoll = [] { SetIOSApplicationInputSuppressed(false); };
+  pump();
+  bool background = false, quit = false;
+  while (PollIOSApplicationEvent(&event)) {
+    require(event.type != SDL_EVENT_KEY_DOWN, "startup recovery replayed buffered or tail input");
+    background |= event.type == SDL_EVENT_DID_ENTER_BACKGROUND;
+    quit |= event.type == SDL_EVENT_QUIT;
+  }
+  require(discarded == 6 && background && quit && !state->inputSuppressed,
+          "startup input suppression preserves lifecycle/quit and reopens after its native batch");
 }

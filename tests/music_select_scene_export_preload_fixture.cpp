@@ -184,6 +184,7 @@ struct Context {
   Repository chartRepository;
   Repository scoreRepository;
   std::atomic_bool appInBackground = false;
+  std::atomic_bool storageMaintenanceActive = false;
   std::atomic_uint64_t irAccountEvidenceRevision = 0;
   struct SceneManager *sceneManager = nullptr;
   std::atomic_bool visualsLoaded = false;

@@ -164,7 +164,8 @@ TaskRunResult ChartLibraryOperations::runPathRefresh(
   };
   ChartLibraryScanner scanner;
   const auto result = scanner.ScanScopedWithResult(
-      *session, {request.refreshPath}, &stopToken, publishScanProgress,
+      *session, request.refreshPaths.empty() ? std::vector<std::filesystem::path>{request.refreshPath} : request.refreshPaths,
+      &stopToken, publishScanProgress,
       checkpoint, dependencies_.pendingScanFlushRequest,
       dependencies_.completeScanFlush);
   SDL_Log("Chart folder refresh changed %d entries", result.changedCount);
@@ -176,6 +177,9 @@ TaskRunResult ChartLibraryOperations::runPathRefresh(
   if (!result.completed) {
     throw TaskError(i18n::message("library.tasks.folder_refresh_failed"));
   }
+  if (!request.storageMeasurementsCurrent)
+    dependencies_.repository.NotifyStorageSourceRefresh(request.refreshPaths.empty() ?
+        std::vector<std::filesystem::path>{request.refreshPath} : request.refreshPaths);
   if (dependencies_.requestReload) {
     dependencies_.requestReload(true);
   }
@@ -370,6 +374,7 @@ TaskRunResult ChartLibraryOperations::runRefresh(
         std::to_string(scanPaused));
     throw TaskError(i18n::message("library.tasks.refresh_failed"));
   }
+  dependencies_.repository.NotifyStorageSourceRefresh(roots);
   if (dependencies_.requestReload) {
     dependencies_.requestReload(true);
   }

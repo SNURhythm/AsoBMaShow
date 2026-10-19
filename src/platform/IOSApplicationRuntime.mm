@@ -163,6 +163,16 @@ void SetIOSApplicationEventDiscardHandler(std::function<void(const SDL_Event &)>
   });
 }
 
+void SetIOSApplicationInputSuppressed(bool suppressed) {
+  RunIOSMainThread([suppressed] {
+    if (const auto state = currentRuntime()) {
+      state->events.discardUserInput(state->discardEvent);
+      if (suppressed) state->inputSuppressed = true;
+      state->finishInputSuppression = !suppressed;
+    }
+  });
+}
+
 bool PollIOSApplicationEvent(SDL_Event *event) {
   auto state = currentRuntime();
   if (!state) return SDL_PollEvent(event);

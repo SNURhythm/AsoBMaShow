@@ -205,6 +205,44 @@ public final class DocumentsMutabilityTests {
         denied(() -> provider.renameDocument(ROOT + "BMS", "MovedBMS"));
     }
 
+    private static void maintenanceReaders(AsoBMaShowDocumentsProvider provider, Context context,
+                                           Path documents) throws Exception {
+        seed(documents, "BMS/charts.zip");
+        seed(documents, "other.zip");
+        Path archive = documents.resolve("BMS/charts.zip");
+        DocumentsLibraryChanges changes = AsoBMaShowDocumentsProvider.changes(context);
+        try (ParcelFileDescriptor first = provider.openDocument(ROOT + "BMS/charts.zip", "r", null)) {
+            try (ParcelFileDescriptor second = provider.openDocument(ROOT + "BMS/charts.zip", "r", null)) {
+                check(Arrays.equals(second.readBytes(), SENTINEL), "Concurrent export must remain readable");
+                denied(() -> DocumentsMutationGuard.reserveExistingSubtrees(new String[]{archive.toString()}));
+            }
+            denied(() -> DocumentsMutationGuard.reserveExistingSubtrees(new String[]{archive.toString()}));
+            denied(() -> DocumentsMutationGuard.reserveExistingSubtrees(new String[]{archive.getParent().toString()}));
+            check(Arrays.equals(first.readBytes(), SENTINEL), "Maintenance rejection must preserve export bytes");
+        }
+        check(changes.readyRevision(android.os.SystemClock.elapsedRealtime() + 3000) == 0,
+                "Reader close must not schedule a library refresh");
+        check(!context.getSharedPreferences("documents-provider", Context.MODE_PRIVATE)
+                        .getBoolean("library-dirty", false), "Readers must not mark the library dirty");
+        try (AutoCloseable maintenance = DocumentsMutationGuard.reserveExistingSubtrees(new String[]{archive.toString()})) {
+            int opened = ParcelFileDescriptor.opened;
+            denied(() -> provider.openDocument(ROOT + "BMS/charts.zip", "r", null));
+            check(ParcelFileDescriptor.opened == opened, "Maintenance must reject readers before opening the file");
+            try (ParcelFileDescriptor sibling = provider.openDocument(ROOT + "other.zip", "r", null)) {
+                check(Arrays.equals(sibling.readBytes(), SENTINEL), "Unrelated export must remain available");
+            }
+        }
+        try (ParcelFileDescriptor reader = provider.openDocument(ROOT + "BMS/charts.zip", "r", null)) {
+            provider.renameDocument(ROOT + "BMS/charts.zip", "renamed.zip");
+            provider.renameDocument(ROOT + "BMS", "Moved");
+            denied(() -> DocumentsMutationGuard.reserveExistingSubtrees(
+                    new String[]{documents.resolve("Moved/renamed.zip").toString()}));
+            check(Arrays.equals(reader.readBytes(), SENTINEL), "Renaming must preserve the open export");
+        }
+        try (AutoCloseable maintenance = DocumentsMutationGuard.reserveExistingSubtrees(
+                new String[]{documents.resolve("Moved").toString()})) {}
+    }
+
     public static void main(String[] args) throws Exception {
         Path temporary = Files.createTempDirectory("documents-mutability-").toRealPath();
         try {
@@ -221,7 +259,9 @@ public final class DocumentsMutabilityTests {
             String scenario = args[0];
             String[] databases = {"db/chart.db", "db/chart.db-wal", "db/chart.db-shm",
                     "profiles/player/scores.db", "profiles/player/replays.db-journal"};
-            if (scenario.equals("renamed-writers")) {
+            if (scenario.equals("maintenance-readers")) {
+                maintenanceReaders(provider, context, documents);
+            } else if (scenario.equals("renamed-writers")) {
                 renamedWriterRefresh(provider, context);
             } else if (scenario.startsWith("refresh-")) {
                 aliasRefresh(provider, context, scenario.substring("refresh-".length()));

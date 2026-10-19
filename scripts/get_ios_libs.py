@@ -28,10 +28,10 @@ dependency = {
     "lib7zip": ["lib7zip"],
 }
 extra_static_dependencies = {
-    "ffmpeg": ["libx264"],
+    "ffmpeg": ["libx264", "libdav1d"],
 }
 package_specs = {
-    "ffmpeg": "ffmpeg[gpl,x264]",
+    "ffmpeg": "ffmpeg[dav1d,gpl,x264]",
     "libarchive": "libarchive[core,bzip2,lz4,lzma,zstd]",
     "lib7zip": "7zip",
 }
@@ -89,6 +89,7 @@ copy_xcframework("ffmpeg")
 [copy_includes(name, True) for name in dependency["ffmpeg"]]
 copy_license("ffmpeg", "ffmpeg.txt")
 copy_license("x264", "x264.txt")
+copy_license("dav1d", "dav1d.txt")
 
 install_package("libsndfile")
 merge_all_dependents("libsndfile")

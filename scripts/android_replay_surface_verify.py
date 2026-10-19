@@ -75,7 +75,7 @@ def main():
             "-I" + str(ROOT / "src"), "-I" + str(args.ffmpeg_prefix / "include"),
             str(ROOT / "tests/android_replay_surface_tests.cpp"),
             "-L" + str(args.ffmpeg_prefix / "lib"), "-lavformat", "-lavcodec",
-            "-lswresample", "-lavutil", "-lx264", "-lm", "-ldl", "-landroid",
+            "-lswresample", "-lavutil", "-lx264", "-ldav1d", "-lm", "-ldl", "-landroid",
             "-lmediandk", "-lEGL", "-lGLESv2", "-llog", "-o", str(executable)], check=True)
         remote = "/data/local/tmp/" + temporary.name
         try:

@@ -2,8 +2,15 @@
 
 #include "../BmsChartFile.h"
 #include "../CanonicalDigest.h"
+#include "../RAII.h"
+#include "../bms_parser.hpp"
+#include "../sqlite3.h"
+#include "../path.h"
 
 #include <algorithm>
+#include <array>
+#include <fstream>
+#include <thread>
 #include <cctype>
 #include <limits>
 #include <new>
@@ -80,6 +87,72 @@ BmsSearchPendingArtifact extractedArtifact(
           .storageKey = request.storageKey,
           .alternateDestinationPath =
               request.downloadRoot / "_archives" / request.archiveName};
+}
+
+// The attempt owns this private index, outside the promoted extracted tree.
+// File names and chart identities stay on disk with a bounded SQLite cache.
+UniqueResource<sqlite3, sqlite3_close> chartIdentityDatabase(const std::filesystem::path &path) {
+  sqlite3 *raw = nullptr;
+  const auto opened = sqlite3_open_v2(fspath_to_utf8(path).c_str(), &raw, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_NOMUTEX, nullptr);
+  UniqueResource<sqlite3, sqlite3_close> database(raw);
+  if (opened != SQLITE_OK || sqlite3_exec(raw,
+      "PRAGMA temp_store=FILE; PRAGMA cache_size=-1024; PRAGMA cache_spill=ON;"
+      "PRAGMA journal_mode=OFF; PRAGMA synchronous=OFF;"
+      "CREATE TABLE charts(path BLOB PRIMARY KEY, digest BLOB NOT NULL) WITHOUT ROWID;"
+      "CREATE TABLE original_files(path BLOB PRIMARY KEY) WITHOUT ROWID; BEGIN;",
+      nullptr, nullptr, nullptr) != SQLITE_OK)
+    throw std::runtime_error("Cannot create chart identity index");
+  return database;
+}
+bool chartIdentities(const std::filesystem::path &root,
+                     const storage_management::Checkpoint &checkpoint, sqlite3 *database, bool verify) {
+  sqlite3_stmt *raw = nullptr;
+  const auto prepared = sqlite3_prepare_v2(database, verify
+      ? "DELETE FROM charts WHERE path=? AND digest=?" : "INSERT INTO charts VALUES(?,?)", -1, &raw, nullptr);
+  UniqueResource<sqlite3_stmt, sqlite3_finalize> statement(raw);
+  if (prepared != SQLITE_OK) return false;
+  sqlite3_stmt *filesRaw = nullptr;
+  const auto filesPrepared = verify ? SQLITE_OK : sqlite3_prepare_v2(database,
+      "INSERT INTO original_files VALUES(?)", -1, &filesRaw, nullptr);
+  UniqueResource<sqlite3_stmt, sqlite3_finalize> filesStatement(filesRaw);
+  if (filesPrepared != SQLITE_OK) return false;
+  std::error_code error;
+  if (!std::filesystem::is_directory(std::filesystem::symlink_status(root, error)) || error) return {};
+  std::filesystem::recursive_directory_iterator it(root, error), end;
+  for (; !error && it != end; it.increment(error)) {
+    if (!checkpoint()) return {};
+    const auto status = it->symlink_status(error);
+    if (error || std::filesystem::is_symlink(status)) return {};
+    const auto path = it->path().lexically_relative(root).generic_u8string();
+    if (!verify && std::filesystem::is_regular_file(status) &&
+        (sqlite3_bind_blob64(filesRaw, 1, path.data(), path.size(), SQLITE_TRANSIENT) != SQLITE_OK ||
+         sqlite3_step(filesRaw) != SQLITE_DONE || sqlite3_reset(filesRaw) != SQLITE_OK ||
+         sqlite3_clear_bindings(filesRaw) != SQLITE_OK)) return false;
+    if (!asobmshow::bms_chart_file::isBmsChartPath(it->path())) continue;
+    if (!std::filesystem::is_regular_file(status) || std::filesystem::hard_link_count(it->path(), error) != 1 || error) return {};
+    std::ifstream input(it->path(), std::ios::binary);
+    if (!input) return {};
+    bms_parser::SHA256 hash; hash.init();
+    std::array<unsigned char, archiveVerificationChunkBytes> buffer;
+    while (input) {
+      if (!checkpoint()) return {};
+      input.read(reinterpret_cast<char *>(buffer.data()), buffer.size());
+      if (input.gcount() > 0) hash.update(buffer.data(), static_cast<unsigned int>(input.gcount()));
+    }
+    if (!input.eof()) return {};
+    std::array<unsigned char, 32> digest{}; hash.final(digest.data());
+    if (sqlite3_bind_blob64(raw, 1, path.data(), path.size(), SQLITE_TRANSIENT) != SQLITE_OK ||
+        sqlite3_bind_blob(raw, 2, digest.data(), digest.size(), SQLITE_TRANSIENT) != SQLITE_OK ||
+        sqlite3_step(raw) != SQLITE_DONE || (verify && sqlite3_changes(database) != 1) ||
+        sqlite3_reset(raw) != SQLITE_OK || sqlite3_clear_bindings(raw) != SQLITE_OK) return false;
+  }
+  if (error || !checkpoint()) return {};
+  if (!verify) return true;
+  // A changed/added chart fails its DELETE; any row left here is a removed chart.
+  statement.reset(); raw = nullptr;
+  const auto remaining = sqlite3_prepare_v2(database, "SELECT 1 FROM charts LIMIT 1", -1, &raw, nullptr);
+  statement.reset(raw);
+  return remaining == SQLITE_OK && sqlite3_step(raw) == SQLITE_DONE;
 }
 
 } // namespace
@@ -189,6 +262,7 @@ bool processDownloadedArchive(
   result.removedPaths.clear();
   result.pendingArtifact.reset();
   result.presentationMessage = {};
+  result.storageReport.reset();
   if (!dependencies.decideArchive || !dependencies.commitArtifact) {
     result.status = BmsSearchResult::Status::DownloadFailed;
     result.message = "Find BMS archive processing is unavailable.";
@@ -199,13 +273,15 @@ bool processDownloadedArchive(
     return false;
   }
 
-  if (request.options.skipUnarchivingForNonSolidArchives) {
+  const bool optimize = !storage_management::IsNoOp(request.options.storagePolicy);
+  const bool keepArchive = request.options.skipUnarchivingForNonSolidArchives && !optimize;
+  if (keepArchive) {
     reportProgress(progressCallback, "Inspecting downloaded archive");
     reportProgress(progressCallback, "Validating archive contents");
   }
   const auto directDecision = dependencies.decideArchive(
       request.attempt.archivePath, request.archiveKey,
-      request.options.skipUnarchivingForNonSolidArchives,
+      keepArchive,
       [&cancelled] { return !cancelled.load(); });
   if (reportCancelled(cancelled, result)) {
     return false;
@@ -315,7 +391,54 @@ bool processDownloadedArchive(
     return true;
   }
 
-  const auto artifact = extractedArtifact(request);
+  auto artifact = extractedArtifact(request);
+  if (optimize) {
+    const auto checkpoint = [&] {
+      while (!cancelled.load() && request.options.storagePauseRequested &&
+             request.options.storagePauseRequested()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+      }
+      return !cancelled.load();
+    };
+    auto failOptimization = [&](const char *key, const std::string &message) {
+      if (!reportCancelled(cancelled, result)) {
+        result.status = BmsSearchResult::Status::DownloadFailed;
+        result.message = message;
+        result.presentationMessage = i18n::message(key);
+      }
+      return false;
+    };
+    auto storageProgress = [&](const storage_management::StorageProgress &progress) {
+      if (progressCallback) progressCallback({.message = "Optimizing downloaded media", .storageProgress = progress});
+    };
+    try {
+      if (!dependencies.optimizeExtracted)
+        return failOptimization("library.find_bms.storage.unavailable", "Storage optimization is unavailable.");
+      artifact.originalFilesIndexPath = request.attempt.root / "original-files.sqlite";
+      const auto identities = chartIdentityDatabase(artifact.originalFilesIndexPath);
+      if (!chartIdentities(request.attempt.extractedPath, checkpoint, identities.get(), false))
+        return failOptimization("library.find_bms.storage.identity_failed", "Could not verify downloaded chart identities.");
+      result.storageReport = dependencies.optimizeExtracted(request.attempt.extractedPath,
+          request.options.storagePolicy, checkpoint, storageProgress);
+      const auto &report = *result.storageReport;
+      if (report.cancelled) cancelled.store(true);
+      if (reportCancelled(cancelled, result)) return false;
+      if (report.recoveryRequired || report.cleanupPending)
+        return failOptimization("library.find_bms.storage.recovery_failed", "Storage cleanup did not finish; downloaded files were not installed.");
+      storageProgress({.phase = storage_management::StoragePhase::Verify});
+      if (!chartIdentities(request.attempt.extractedPath, checkpoint, identities.get(), true))
+        return failOptimization("library.find_bms.storage.identity_failed", "Downloaded chart identities changed; files were not installed.");
+      if (sqlite3_exec(identities.get(), "COMMIT", nullptr, nullptr, nullptr) != SQLITE_OK)
+        return failOptimization("library.find_bms.storage.failed", "Could not save downloaded file ownership; files were not installed.");
+      storageProgress({.phase = storage_management::StoragePhase::Commit});
+      if (!checkpoint() || reportCancelled(cancelled, result)) {
+        reportCancelled(cancelled, result); return false;
+      }
+    } catch (const std::exception &) {
+      return failOptimization("library.find_bms.storage.failed", "Could not safely optimize downloaded media; files were not installed.");
+    }
+  }
+  if (reportCancelled(cancelled, result)) return false;
   std::string commitError;
   std::vector<std::filesystem::path> removedPaths;
   if (!dependencies.commitArtifact(artifact, commitError, removedPaths)) {

@@ -15,6 +15,7 @@ template <typename T> class RecyclerView;
 std::filesystem::path findBmsDownloadRoot(ChartRepository::Session *session);
 
 struct FindBmsModalCallbacks {
+  std::function<bool()> admit;
   std::function<std::filesystem::path()> downloadRoot;
   std::function<BmsSearchDownloadOptions()> downloadOptions;
   std::function<void()> downloadStarted;
@@ -80,6 +81,8 @@ private:
   bool findBmsAwaitingConfirmation = false;
   ChartMetaRecord findBmsModalChart;
   BmsSearchResult findBmsResult;
+  BmsSearchDownloadOptions findBmsCapturedOptions;
+  std::optional<storage_management::StorageProgress> findBmsStorageProgress;
   std::optional<BmsSearchPendingArtifactDecision> findBmsPendingDecision;
   std::string findBmsProgressMessage;
   std::uint64_t findBmsProgressCurrent = 0;

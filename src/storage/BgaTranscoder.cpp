@@ -1,0 +1,1199 @@
+#include "BgaTranscoder.h"
+#include "StorageVideoCapabilities.h"
+#include "StorageVideoEncoder.h"
+
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavcodec/bsf.h>
+#include <libavformat/avformat.h>
+#include <libavutil/audio_fifo.h>
+#include <libavutil/display.h>
+#include <libavutil/downmix_info.h>
+#include <libavutil/opt.h>
+#include <libavutil/pixdesc.h>
+#include <libavutil/sha.h>
+#include <libswresample/swresample.h>
+#include <libswscale/swscale.h>
+}
+#include <algorithm>
+#include <array>
+#include <cerrno>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <deque>
+#include <limits>
+#include <memory>
+#include <optional>
+#include <stdexcept>
+#include <fcntl.h>
+#ifdef _WIN32
+#include <io.h>
+#include <sys/stat.h>
+#else
+#include <unistd.h>
+#endif
+
+namespace storage_management {
+namespace fs = std::filesystem;
+namespace {
+struct Failure {
+  StorageReason reason;
+  std::string detail;
+  FileOutcome outcome = FileOutcome::Failed;
+};
+void checked(int status, const char *operation, StorageReason reason = StorageReason::ValidationFailed) {
+  if (status >= 0) return;
+  char error[AV_ERROR_MAX_STRING_SIZE]{}; av_strerror(status, error, sizeof(error));
+  throw Failure{reason, std::string(operation) + ": " + error};
+}
+void checkpoint(const Checkpoint &check) {
+  if (check && !check()) throw Failure{StorageReason::Cancelled, "Cancelled", FileOutcome::Cancelled};
+}
+void unsupported(const char *message) {
+  throw Failure{StorageReason::UnsupportedFormat, message, FileOutcome::Skipped};
+}
+std::string mediaPath(const fs::path &path) {
+  const auto utf8 = path.u8string(); return {utf8.begin(), utf8.end()};
+}
+struct FrameDeleter { void operator()(AVFrame *frame) const { av_frame_free(&frame); } };
+struct PacketDeleter { void operator()(AVPacket *packet) const { av_packet_free(&packet); } };
+using Frame = std::unique_ptr<AVFrame, FrameDeleter>;
+using Packet = std::unique_ptr<AVPacket, PacketDeleter>;
+Frame frame() {
+  Frame result(av_frame_alloc()); if (!result) throw std::bad_alloc(); return result;
+}
+Packet packet() {
+  Packet result(av_packet_alloc()); if (!result) throw std::bad_alloc(); return result;
+}
+struct Codec {
+  AVCodecContext *value = nullptr;
+  ~Codec() { avcodec_free_context(&value); }
+};
+void preserveEfficientVideo(const AVFormatContext &format) {
+  for (unsigned i = 0; i < format.nb_streams; ++i) {
+    const auto stream = format.streams[i];
+    if (stream->codecpar->codec_type != AVMEDIA_TYPE_VIDEO ||
+        (stream->disposition & AV_DISPOSITION_ATTACHED_PIC)) continue;
+    switch (stream->codecpar->codec_id) {
+    case AV_CODEC_ID_H264: case AV_CODEC_ID_HEVC: case AV_CODEC_ID_VP9:
+    case AV_CODEC_ID_AV1: case AV_CODEC_ID_VVC:
+      throw Failure{StorageReason::AlreadyOptimized,
+          "H.264 or a more efficient video codec is preserved; requested caps are not applied", FileOutcome::Skipped};
+    default: break;
+    }
+  }
+}
+struct Input {
+  AVFormatContext *format = nullptr;
+  std::vector<AVCodecContext *> decoders;
+  int video = -1, audio = -1;
+  bool bestEffort = false;
+  explicit Input(const fs::path &path, bool preserveEfficient = false, bool recover = false) : bestEffort(recover) {
+    try {
+      checked(avformat_open_input(&format, mediaPath(path).c_str(), nullptr, nullptr), "Open media");
+      const std::string_view container = format->iformat->name;
+      if (container.find("image2") != std::string_view::npos || container.ends_with("_pipe") ||
+          container == "gif" || container == "apng") unsupported("Still images and image sequences are preserved");
+      // Most containers identify codecs in their headers. Avoid even decoder
+      // probing when possible; elementary streams may need stream discovery.
+      if (preserveEfficient) preserveEfficientVideo(*format);
+      checked(avformat_find_stream_info(format, nullptr), "Read media streams");
+      if (preserveEfficient) preserveEfficientVideo(*format);
+      if (format->nb_streams > 2 || format->nb_chapters) unsupported("Extra streams or chapters cannot be preserved");
+      for (unsigned i = 0; i < format->nb_streams; ++i) {
+        const auto stream = format->streams[i];
+        if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO && video < 0 && !(stream->disposition & AV_DISPOSITION_ATTACHED_PIC)) video = i;
+        else if (stream->codecpar->codec_type == AVMEDIA_TYPE_AUDIO && audio < 0) audio = i;
+        else unsupported("Only one video stream and one optional audio stream are supported");
+        if (stream->time_base.num <= 0 || stream->time_base.den <= 0) unsupported("Unknown stream time base");
+        const auto decoder = avcodec_find_decoder(stream->codecpar->codec_id);
+        if (!decoder) unsupported("Source decoder is unavailable");
+        auto context = avcodec_alloc_context3(decoder);
+        if (!context) throw std::bad_alloc();
+        decoders.push_back(context);
+        checked(avcodec_parameters_to_context(context, stream->codecpar), "Read decoder parameters");
+        context->pkt_timebase = stream->time_base;
+        context->thread_count = StorageExecutionLimits::videoThreads;
+        context->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT;
+        context->err_recognition = bestEffort ? AV_EF_IGNORE_ERR :
+            AV_EF_CRCCHECK | AV_EF_BITSTREAM | AV_EF_BUFFER | AV_EF_EXPLODE;
+        checked(avcodec_open2(context, decoder, nullptr), "Open source decoder");
+      }
+      if (video < 0) unsupported("No ordinary video stream");
+    } catch (...) { close(); throw; }
+  }
+  void close() {
+    for (auto &decoder : decoders) avcodec_free_context(&decoder);
+    decoders.clear(); avformat_close_input(&format);
+  }
+  ~Input() { close(); }
+};
+
+template<class OnFrame, class OnPacket>
+void decode(Input &input, const Checkpoint &check, OnFrame onFrame, OnPacket onPacket) {
+  auto decoded = frame(); auto compressed = packet();
+  auto drain = [&](int index) {
+    unsigned errors = 0;
+    for (;;) {
+      checkpoint(check);
+      const auto status = avcodec_receive_frame(input.decoders[index], decoded.get());
+      if (status == AVERROR(EAGAIN) || status == AVERROR_EOF) return;
+      if (input.bestEffort && status == AVERROR_INVALIDDATA) {
+        // Bad packets can leave delayed frames available. Bound recovery if a
+        // decoder repeatedly returns an error without consuming its input.
+        if (++errors == 64) return;
+        continue;
+      }
+      checked(status, "Decode media frame");
+      errors = 0;
+      if (!input.bestEffort && ((decoded->flags & AV_FRAME_FLAG_CORRUPT) || decoded->decode_error_flags))
+        throw Failure{StorageReason::ValidationFailed, "Corrupt decoded media frame"};
+      onFrame(index, *decoded);
+      av_frame_unref(decoded.get());
+    }
+  };
+  unsigned stalledErrors = 0;
+  for (;;) {
+    checkpoint(check);
+    const auto before = input.format->pb ? avio_tell(input.format->pb) : -1;
+    const auto status = av_read_frame(input.format, compressed.get());
+    if (status == AVERROR_EOF) break;
+    if (input.bestEffort && status == AVERROR_INVALIDDATA) {
+      av_packet_unref(compressed.get());
+      if (before >= 0 && avio_tell(input.format->pb) > before) stalledErrors = 0;
+      else if (++stalledErrors == 64) break;
+      // Demuxers can advance buffered parser state without reading more bytes.
+      // Permit that recovery too, but never spin indefinitely on one bad input.
+      continue;
+    }
+    checked(status, "Read media packet");
+    stalledErrors = 0;
+    const int index = compressed->stream_index;
+    if (index < 0 || index >= static_cast<int>(input.decoders.size()) ||
+        (!input.bestEffort && (compressed->flags & AV_PKT_FLAG_CORRUPT)))
+      throw Failure{StorageReason::ValidationFailed, "Corrupt media packet"};
+    auto sent = avcodec_send_packet(input.decoders[index], compressed.get());
+    if (sent == AVERROR(EAGAIN)) {
+      drain(index);
+      sent = avcodec_send_packet(input.decoders[index], compressed.get());
+    }
+    if (!input.bestEffort || sent != AVERROR_INVALIDDATA) {
+      checked(sent, "Send media packet");
+      onPacket(index, *compressed);
+    }
+    drain(index); av_packet_unref(compressed.get());
+  }
+  if (input.format->pb && input.format->pb->error < 0 && input.format->pb->error != AVERROR_EOF)
+    checked(input.format->pb->error, "Read media file");
+  for (int index = 0; index < static_cast<int>(input.decoders.size()); ++index) {
+    const auto status = avcodec_send_packet(input.decoders[index], nullptr);
+    if (status != AVERROR_EOF && (!input.bestEffort || status != AVERROR_INVALIDDATA))
+      checked(status, "Flush media decoder");
+    drain(index);
+  }
+}
+
+struct Timeline {
+  AVRational timeBase{0, 1};
+  std::int64_t first = AV_NOPTS_VALUE, last = AV_NOPTS_VALUE, end = AV_NOPTS_VALUE;
+  std::int64_t minimumInterval = 0, maximumInterval = 0, maximumDuration = 0;
+  std::uint64_t frames = 0;
+  bool discontinuous = false;
+  void add(std::int64_t pts, std::int64_t duration, std::int64_t overlapTolerance = 0) {
+    if (pts == AV_NOPTS_VALUE || duration <= 0 || pts > std::numeric_limits<std::int64_t>::max() - duration ||
+        (last != AV_NOPTS_VALUE && pts <= last))
+      unsupported("Unknown or non-monotonic presentation timestamps");
+    const auto nextEnd = pts + duration;
+    // Bound the whole presentation span, not just each adjacent interval.
+    // This also makes pts-last, pts-end and end-first representable.
+    if (first != AV_NOPTS_VALUE && first < 0 &&
+        nextEnd > std::numeric_limits<std::int64_t>::max() + first)
+      unsupported("Timestamp range is invalid");
+    if (first == AV_NOPTS_VALUE) first = pts;
+    else {
+      const auto interval = pts - last;
+      minimumInterval = minimumInterval ? std::min(minimumInterval, interval) : interval;
+      maximumInterval = std::max(maximumInterval, interval);
+      if (std::abs(pts - end) > overlapTolerance) discontinuous = true;
+    }
+    last = pts; end = nextEnd; maximumDuration = std::max(maximumDuration, duration); ++frames;
+  }
+};
+std::uint64_t timestampDistance(std::int64_t left, std::int64_t right) {
+  // Unsigned subtraction represents the full signed timestamp span exactly,
+  // including distances greater than INT64_MAX, without overflowing abs().
+  return left >= right ? static_cast<std::uint64_t>(left) - static_cast<std::uint64_t>(right) :
+                         static_cast<std::uint64_t>(right) - static_cast<std::uint64_t>(left);
+}
+std::int64_t timestampAdd(std::int64_t left, std::int64_t right) {
+  if ((right > 0 && left > std::numeric_limits<std::int64_t>::max() - right) ||
+      (right < 0 && left < std::numeric_limits<std::int64_t>::min() - right))
+    unsupported("Timestamp addition is out of range");
+  const auto result = left + right;
+  if (result == AV_NOPTS_VALUE) unsupported("Timestamp is out of range");
+  return result;
+}
+std::int64_t timestampSubtract(std::int64_t left, std::int64_t right) {
+  if ((right < 0 && left > std::numeric_limits<std::int64_t>::max() + right) ||
+      (right > 0 && left < std::numeric_limits<std::int64_t>::min() + right))
+    unsupported("Timestamp difference is out of range");
+  const auto result = left - right;
+  if (result == AV_NOPTS_VALUE) unsupported("Timestamp is out of range");
+  return result;
+}
+std::int64_t rescaleTimestamp(std::int64_t value, AVRational source, AVRational destination) {
+  if (value == AV_NOPTS_VALUE || source.num <= 0 || source.den <= 0 || destination.num <= 0 || destination.den <= 0)
+    unsupported("Unknown timestamp or time base");
+  const auto result = av_rescale_q(value, source, destination);
+  // FFmpeg returns INT64_MIN when the rescaled value is unrepresentable.
+  if (result == AV_NOPTS_VALUE) unsupported("Rescaled timestamp is out of range");
+  return result;
+}
+std::int64_t normalizedTimestamp(std::int64_t value, AVRational source, std::int64_t originMicros,
+                                 AVRational destination) {
+  return timestampSubtract(rescaleTimestamp(value, source, destination),
+                           rescaleTimestamp(originMicros, AV_TIME_BASE_Q, destination));
+}
+void validateTimelineOrigin(const Timeline &timeline, std::int64_t originMicros, AVRational destination) {
+  normalizedTimestamp(timeline.first, timeline.timeBase, originMicros, destination);
+  normalizedTimestamp(timeline.end, timeline.timeBase, originMicros, destination);
+}
+void rescalePacketTimestamps(AVPacket &packet, AVRational source, AVRational destination) {
+  if (packet.pts != AV_NOPTS_VALUE) packet.pts = rescaleTimestamp(packet.pts, source, destination);
+  if (packet.dts != AV_NOPTS_VALUE) packet.dts = rescaleTimestamp(packet.dts, source, destination);
+  if (packet.duration > 0) packet.duration = rescaleTimestamp(packet.duration, source, destination);
+}
+void advanceAudioInput(std::int64_t pts, int samples, AVRational sourceClock, AVRational sampleClock,
+                       std::int64_t &next) {
+  if (samples <= 0 || samples > 1048576) unsupported("Unsupported audio frame size");
+  const auto sourceTick = av_rescale_q_rnd(1, sourceClock, sampleClock, AV_ROUND_UP);
+  if (sourceTick <= 0) unsupported("Audio clock is out of range");
+  if (next == AV_NOPTS_VALUE) next = pts;
+  if (timestampDistance(pts, next) > static_cast<std::uint64_t>(sourceTick))
+    unsupported("Discontinuous audio cannot be transcoded faithfully");
+  // Coarse container timestamps round sample boundaries. Keep the first-frame
+  // sample clock as the anchor so bounded rounding cannot accumulate drift.
+  next = timestampAdd(next, samples);
+}
+void validateDeclaredVideoTimeline(const AVStream &video, const Timeline &decoded) {
+  if (video.start_time == AV_NOPTS_VALUE) return;
+  if (timestampDistance(decoded.first, video.start_time) > 1)
+    throw Failure{StorageReason::ValidationFailed, "Decoder lost the opening presentation interval"};
+  if (video.duration <= 0) return;
+  if (video.start_time > std::numeric_limits<std::int64_t>::max() - video.duration)
+    throw Failure{StorageReason::ValidationFailed, "Declared video end is out of range"};
+  const auto declaredEnd = video.start_time + video.duration;
+  if (timestampDistance(declaredEnd, decoded.end) > static_cast<std::uint64_t>(decoded.maximumDuration))
+    throw Failure{StorageReason::ValidationFailed, "Decoded video does not match its declared duration (declared end=" +
+        std::to_string(declaredEnd) + ", decoded end=" + std::to_string(decoded.end) + ", tolerance=" +
+        std::to_string(decoded.maximumDuration) + ", time base=" + std::to_string(video.time_base.num) + "/" +
+        std::to_string(video.time_base.den) + ")"};
+}
+void validateDeclaredAudioEnd(const AVStream &audio, const Timeline &decoded) {
+  if (audio.start_time == AV_NOPTS_VALUE || audio.duration <= 0) return;
+  if (audio.start_time > std::numeric_limits<std::int64_t>::max() - audio.duration)
+    throw Failure{StorageReason::ValidationFailed, "Declared audio end is out of range"};
+  const auto declaredEnd = audio.start_time + audio.duration;
+  // MP4 edit lists and codec padding need not end on the same sample that a
+  // decoder exposes. Allow one decoded frame plus one container-clock tick,
+  // rather than a fixed time allowance that varies with rate and codec.
+  const auto tolerance = static_cast<std::uint64_t>(decoded.maximumDuration) + 1;
+  if (timestampDistance(declaredEnd, decoded.end) > tolerance)
+    throw Failure{StorageReason::ValidationFailed, "Decoded audio does not match its declared duration"};
+}
+using AudioDigest = std::array<std::array<std::uint8_t, 32>, 2>;
+struct AudioSampleHasher {
+  struct Deleter { void operator()(AVSHA *value) const { av_free(value); } };
+  std::array<std::unique_ptr<AVSHA, Deleter>, 2> channels;
+  void add(const AVFrame &decoded) {
+    const auto format = static_cast<AVSampleFormat>(decoded.format);
+    const int channelCount = decoded.ch_layout.nb_channels;
+    // Only mono/stereo can enter the conversion plan. Keep scratch bounded
+    // even when scanning a source that the plan will preserve unchanged.
+    if (channelCount < 1 || channelCount > 2) return;
+    const int sampleBytes = av_get_bytes_per_sample(format);
+    const bool planar = av_sample_fmt_is_planar(format);
+    std::array<std::uint8_t, 4096> scratch;
+    for (int channel = 0; channel < channelCount; ++channel) {
+      auto &hash = channels[channel];
+      if (!hash) {
+        hash.reset(av_sha_alloc()); if (!hash) throw std::bad_alloc();
+        checked(av_sha_init(hash.get(), 256), "Initialize audio fingerprint");
+      }
+      if (planar || channelCount == 1) {
+        av_sha_update(hash.get(), decoded.extended_data[planar ? channel : 0], std::size_t(decoded.nb_samples) * sampleBytes);
+      } else {
+        // Canonical channel order makes fingerprints independent of packing,
+        // frame boundaries and buffer alignment, without per-sample SHA calls.
+        for (int first = 0; first < decoded.nb_samples;) {
+          const int count = std::min<int>(decoded.nb_samples - first, scratch.size() / sampleBytes);
+          for (int sample = 0; sample < count; ++sample)
+            std::memcpy(scratch.data() + sample * sampleBytes,
+                        decoded.extended_data[0] + (std::size_t(first + sample) * channelCount + channel) * sampleBytes, sampleBytes);
+          av_sha_update(hash.get(), scratch.data(), std::size_t(count) * sampleBytes);
+          first += count;
+        }
+      }
+    }
+  }
+  std::optional<AudioDigest> finish() {
+    if (!channels[0]) return std::nullopt;
+    AudioDigest digest{};
+    for (std::size_t channel = 0; channel < channels.size(); ++channel)
+      if (channels[channel]) av_sha_final(channels[channel].get(), digest[channel].data());
+    return digest;
+  }
+};
+struct Scan {
+  AVCodecID codecId = AV_CODEC_ID_NONE;
+  VideoDescription description;
+  Timeline video, audio;
+  int videoDisposition = 0, audioDisposition = 0;
+  Frame audioFormat;
+  std::int64_t audioSamples = 0;
+  std::optional<AudioDigest> audioDigest;
+  std::int64_t originMicros = 0;
+  AVColorRange colorRange = AVCOL_RANGE_UNSPECIFIED;
+  AVColorSpace colorSpace = AVCOL_SPC_UNSPECIFIED;
+  AVColorPrimaries colorPrimaries = AVCOL_PRI_UNSPECIFIED;
+  AVColorTransferCharacteristic colorTransfer = AVCOL_TRC_UNSPECIFIED;
+  AVChromaLocation chromaLocation = AVCHROMA_LOC_CENTER;
+};
+bool sameVideoColor(const Scan &left, const Scan &right) {
+  return left.colorRange == right.colorRange && left.colorSpace == right.colorSpace &&
+         left.colorPrimaries == right.colorPrimaries && left.colorTransfer == right.colorTransfer &&
+         left.chromaLocation == right.chromaLocation;
+}
+void observeVideoColor(Scan &result, const AVCodecParameters &params, const AVFrame &decoded) {
+  Scan effective;
+  effective.colorRange = decoded.color_range == AVCOL_RANGE_UNSPECIFIED ? params.color_range : decoded.color_range;
+  effective.colorSpace = decoded.colorspace == AVCOL_SPC_UNSPECIFIED ? params.color_space : decoded.colorspace;
+  effective.colorPrimaries = decoded.color_primaries == AVCOL_PRI_UNSPECIFIED ? params.color_primaries : decoded.color_primaries;
+  effective.colorTransfer = decoded.color_trc == AVCOL_TRC_UNSPECIFIED ? params.color_trc : decoded.color_trc;
+  effective.chromaLocation = decoded.chroma_location == AVCHROMA_LOC_UNSPECIFIED ? params.chroma_location : decoded.chroma_location;
+  const auto pixel = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(decoded.format));
+  // Unspecified siting uses swscale's historical center assumption. Full-rate
+  // axes have no displaced sample grid, so their advisory siting tags are inert.
+  if (effective.chromaLocation == AVCHROMA_LOC_UNSPECIFIED ||
+      (pixel && !pixel->log2_chroma_w && !pixel->log2_chroma_h))
+    effective.chromaLocation = AVCHROMA_LOC_CENTER;
+  if (effective.chromaLocation < AVCHROMA_LOC_LEFT || effective.chromaLocation >= AVCHROMA_LOC_NB)
+    unsupported("Unknown video chroma sample location");
+  if (pixel && (!pixel->log2_chroma_w || !pixel->log2_chroma_h)) {
+    int x = 0, y = 0;
+    checked(av_chroma_location_enum_to_pos(&x, &y, effective.chromaLocation), "Read video chroma sample location");
+    // Use center on inert axes so equivalent source grids use one output tag.
+    if (!pixel->log2_chroma_w) x = 128;
+    if (!pixel->log2_chroma_h) y = 128;
+    effective.chromaLocation = av_chroma_location_pos_to_enum(x, y);
+  }
+  // sws_getCoefficients silently substitutes its default for unsupported matrices.
+  // Only accept matrices that this conversion path can actually preserve.
+  switch (effective.colorSpace) {
+  case AVCOL_SPC_UNSPECIFIED: case AVCOL_SPC_BT709: case AVCOL_SPC_FCC:
+  case AVCOL_SPC_BT470BG: case AVCOL_SPC_SMPTE170M: case AVCOL_SPC_SMPTE240M:
+  case AVCOL_SPC_BT2020_NCL: break;
+  default: unsupported("Video color matrix cannot be preserved");
+  }
+  if (!av_color_range_name(effective.colorRange) || !av_color_primaries_name(effective.colorPrimaries) ||
+      !av_color_transfer_name(effective.colorTransfer)) unsupported("Unknown video color metadata");
+  if (result.video.frames && !sameVideoColor(result, effective)) unsupported("Video changes color metadata midstream");
+  result.colorRange = effective.colorRange; result.colorSpace = effective.colorSpace;
+  result.colorPrimaries = effective.colorPrimaries; result.colorTransfer = effective.colorTransfer;
+  result.chromaLocation = effective.chromaLocation;
+}
+void validateVideoFramePresentation(const AVCodecParameters &params, const AVFrame &decoded) {
+  // The encoder receives newly scaled frames, so these playback properties
+  // would disappear. Preserve the source instead. Encoder hints, timecodes and
+  // descriptive SEI are intentionally allowed to disappear; they do not change
+  // the decoded presentation. Existing-target reuse never calls this check.
+  for (int i = 0; i < decoded.nb_side_data; ++i) {
+    const auto &side = *decoded.side_data[i];
+    switch (side.type) {
+    case AV_FRAME_DATA_PANSCAN: {
+      if (side.size != sizeof(AVPanScan)) unsupported("Invalid decoded pan-scan metadata");
+      const auto &pan = *reinterpret_cast<const AVPanScan *>(side.data);
+      // MPEG decoders attach an empty default to ordinary frames. A full-frame
+      // rectangle with no offset is also redundant with the copied geometry.
+      // Only an actual crop/offset needs preservation beyond the scaled pixels.
+      const bool unchangedSize = (!pan.width && !pan.height) ||
+          (pan.width == std::int64_t(decoded.width) * 16 && pan.height == std::int64_t(decoded.height) * 16);
+      if (!unchangedSize) unsupported("Decoded pan-scan crop cannot be preserved");
+      for (const auto &position : pan.position)
+        if (position[0] || position[1]) unsupported("Decoded pan-scan offset cannot be preserved");
+      break;
+    }
+    case AV_FRAME_DATA_A53_CC:
+    case AV_FRAME_DATA_AFD:
+    case AV_FRAME_DATA_STEREO3D: case AV_FRAME_DATA_SPHERICAL:
+    case AV_FRAME_DATA_VIEW_ID: case AV_FRAME_DATA_3D_REFERENCE_DISPLAYS:
+    case AV_FRAME_DATA_ICC_PROFILE:
+    case AV_FRAME_DATA_MASTERING_DISPLAY_METADATA: case AV_FRAME_DATA_CONTENT_LIGHT_LEVEL:
+    case AV_FRAME_DATA_DYNAMIC_HDR_PLUS: case AV_FRAME_DATA_DYNAMIC_HDR_VIVID:
+    case AV_FRAME_DATA_DOVI_RPU_BUFFER: case AV_FRAME_DATA_DOVI_METADATA:
+    case AV_FRAME_DATA_AMBIENT_VIEWING_ENVIRONMENT:
+    case AV_FRAME_DATA_FILM_GRAIN_PARAMS: case AV_FRAME_DATA_LCEVC:
+      unsupported("Decoded video playback metadata cannot be preserved");
+    default: break;
+    }
+  }
+  const auto frameMatrix = av_frame_get_side_data(&decoded, AV_FRAME_DATA_DISPLAYMATRIX);
+  if (!frameMatrix) return;
+  // Decoders may repeat the validated stream transform on each frame. That
+  // exact matrix survives the MP4 copy; frame-only transforms and changes do
+  // not (even identity can reset an earlier orientation).
+  const auto streamMatrix = av_packet_side_data_get(params.coded_side_data, params.nb_coded_side_data,
+                                                    AV_PKT_DATA_DISPLAYMATRIX);
+  constexpr auto matrixBytes = 9 * sizeof(std::int32_t);
+  if (!streamMatrix || frameMatrix->size != matrixBytes || streamMatrix->size != matrixBytes ||
+      std::memcmp(frameMatrix->data, streamMatrix->data, matrixBytes))
+    unsupported("Decoded video frame display transforms cannot be preserved");
+}
+void validatePlaybackGainMetadata(const AVDictionary *metadata) {
+  // Descriptions remain best effort, including unknown custom text. These
+  // known gain/peak tags instead control playback volume and cannot disappear
+  // when MP4 drops the source dictionary. Matching is case-insensitive.
+  for (const auto key : {"REPLAYGAIN_TRACK_GAIN", "REPLAYGAIN_TRACK_PEAK",
+                         "REPLAYGAIN_ALBUM_GAIN", "REPLAYGAIN_ALBUM_PEAK",
+                         "R128_TRACK_GAIN", "R128_ALBUM_GAIN"})
+    if (av_dict_get(metadata, key, nullptr, 0))
+      unsupported("Audio playback gain metadata cannot be preserved in MP4");
+}
+void validateAudioFrame(const AVFrame &expected, const AVFrame &decoded, bool remux = false,
+                        AVAudioServiceType nativeService = AV_AUDIO_SERVICE_TYPE_MAIN) {
+  if (decoded.sample_rate != expected.sample_rate || decoded.format != expected.format ||
+      av_channel_layout_compare(&decoded.ch_layout, &expected.ch_layout) != 0)
+    unsupported("Embedded audio changes format midstream");
+  validatePlaybackGainMetadata(decoded.metadata);
+  if (av_frame_get_side_data(&decoded, AV_FRAME_DATA_REPLAYGAIN))
+    unsupported("Decoded audio playback gain cannot be preserved in MP4");
+  // Remux keeps codec-native presentation instructions in the compressed
+  // bitstream. AAC receives only samples, so meaningful frame instructions
+  // would disappear. Ordinary DTS also exports an explicit NONE matrix.
+  for (int i = 0; i < decoded.nb_side_data; ++i) {
+    const auto &side = *decoded.side_data[i];
+    switch (side.type) {
+    case AV_FRAME_DATA_MATRIXENCODING: {
+      if (remux) break;
+      AVMatrixEncoding matrix;
+      if (side.size != sizeof(matrix)) unsupported("Unsupported decoded audio matrix metadata");
+      std::memcpy(&matrix, side.data, sizeof(matrix));
+      if (matrix != AV_MATRIX_ENCODING_NONE) unsupported("Decoded audio matrix encoding cannot be preserved in AAC");
+      break;
+    }
+    case AV_FRAME_DATA_AUDIO_SERVICE_TYPE: {
+      AVAudioServiceType service;
+      if (side.size != sizeof(service)) unsupported("Unsupported decoded audio service metadata");
+      std::memcpy(&service, side.data, sizeof(service));
+      if (service != (remux ? nativeService : AV_AUDIO_SERVICE_TYPE_MAIN))
+        unsupported("Decoded audio service type cannot be preserved");
+      break;
+    }
+    case AV_FRAME_DATA_DOWNMIX_INFO: {
+      if (remux) break;
+      AVDownmixInfo downmix;
+      if (side.size != sizeof(downmix)) unsupported("Unsupported decoded audio downmix metadata");
+      std::memcpy(&downmix, side.data, sizeof(downmix));
+      if (downmix.preferred_downmix_type != AV_DOWNMIX_TYPE_UNKNOWN || downmix.center_mix_level ||
+          downmix.center_mix_level_ltrt || downmix.surround_mix_level || downmix.surround_mix_level_ltrt || downmix.lfe_mix_level)
+        unsupported("Decoded audio downmix instructions cannot be preserved in AAC");
+      break;
+    }
+    default: break;
+    }
+  }
+}
+void validateAudioSideData(const AVPacketSideData *sides, int count, bool remux, bool codecService = false) {
+  // These are container/packet instructions, not part of the copied codec
+  // bitstream. MP4 does not preserve them merely because audio is remuxed.
+  for (int i = 0; i < count; ++i) {
+    const auto &side = sides[i];
+    switch (side.type) {
+    case AV_PKT_DATA_REPLAYGAIN:
+      unsupported("Embedded audio playback gain cannot be preserved in MP4");
+    case AV_PKT_DATA_AUDIO_SERVICE_TYPE: {
+      AVAudioServiceType service;
+      if (side.size != sizeof(service)) unsupported("Unsupported embedded audio service metadata");
+      std::memcpy(&service, side.data, sizeof(service));
+      // AC3/EAC3 MP4 service atoms are rebuilt from the coded bsmod. The
+      // decoder maps this side data to each frame, where it must match the
+      // service in that frame's bitstream before a remux is permitted.
+      if (remux && codecService) break;
+      if (service != AV_AUDIO_SERVICE_TYPE_MAIN) unsupported("Embedded audio service metadata cannot be preserved in MP4");
+      break;
+    }
+    case AV_PKT_DATA_JP_DUALMONO:
+      // AAC decoding has already applied channel selection to samples. A
+      // remux instead loses the external instruction; 2 explicitly plays both.
+      if (remux && (side.size != 1 || side.data[0] != 2))
+        unsupported("Embedded audio channel selection cannot be preserved in MP4");
+      break;
+    case AV_PKT_DATA_IAMF_MIX_GAIN_PARAM:
+    case AV_PKT_DATA_IAMF_DEMIXING_INFO_PARAM:
+    case AV_PKT_DATA_IAMF_RECON_GAIN_INFO_PARAM:
+      unsupported("Immersive audio presentation parameters cannot be preserved in MP4");
+    case AV_PKT_DATA_STRINGS_METADATA: case AV_PKT_DATA_METADATA_UPDATE: {
+      AVDictionary *metadata = nullptr;
+      // Decoder-tolerated malformed descriptive dictionaries remain advisory.
+      // Inspect the decoded entries without imposing a new source-validity rule.
+      av_packet_unpack_dictionary(side.data, side.size, &metadata);
+      try { validatePlaybackGainMetadata(metadata); }
+      catch (...) { av_dict_free(&metadata); throw; }
+      av_dict_free(&metadata);
+      break;
+    }
+    default: break;
+    }
+  }
+}
+bool hdr(AVColorTransferCharacteristic transfer) {
+  return transfer == AVCOL_TRC_SMPTE2084 || transfer == AVCOL_TRC_ARIB_STD_B67;
+}
+bool audioCanRemux(AVCodecID codec) {
+  return codec == AV_CODEC_ID_AAC || codec == AV_CODEC_ID_MP3 || codec == AV_CODEC_ID_MP2 ||
+         codec == AV_CODEC_ID_ALAC || codec == AV_CODEC_ID_AC3 || codec == AV_CODEC_ID_EAC3;
+}
+bool audioHasNativeService(AVCodecID codec) {
+  return codec == AV_CODEC_ID_AC3 || codec == AV_CODEC_ID_EAC3;
+}
+void validateDisposition(int disposition) {
+  // MP4 track-kind tags combine each accessibility pair. A lone flag would
+  // gain a different meaning on decode-back, so only accept complete pairs.
+  constexpr int captions = AV_DISPOSITION_HEARING_IMPAIRED | AV_DISPOSITION_CAPTIONS;
+  constexpr int descriptions = AV_DISPOSITION_VISUAL_IMPAIRED | AV_DISPOSITION_DESCRIPTIONS;
+  constexpr int supported = AV_DISPOSITION_DEFAULT | AV_DISPOSITION_FORCED | AV_DISPOSITION_COMMENT |
+                            AV_DISPOSITION_DUB | captions | descriptions;
+  if ((disposition & ~supported) ||
+      ((disposition & captions) && (disposition & captions) != captions) ||
+      ((disposition & descriptions) && (disposition & descriptions) != descriptions))
+    unsupported("Stream disposition cannot be preserved in MP4");
+}
+enum class ScanPurpose { SourceConversion, ExistingDestination, EncodedOutput };
+Scan scan(const fs::path &path, const Checkpoint &check, ScanPurpose purpose = ScanPurpose::SourceConversion,
+          bool preserveEfficientVideo = false) {
+  checkpoint(check);
+  Input input(path, preserveEfficientVideo, purpose == ScanPurpose::SourceConversion);
+  const bool existingDestination = purpose == ScanPurpose::ExistingDestination;
+  const auto codecId = input.format->streams[input.video]->codecpar->codec_id;
+  if (existingDestination && (!std::strstr(input.format->iformat->name, "mp4") ||
+      (codecId != AV_CODEC_ID_H264 && codecId != AV_CODEC_ID_HEVC && codecId != AV_CODEC_ID_AV1)))
+    unsupported("Existing video must contain H.264, HEVC or AV1 in a native MP4 container");
+  Scan result;
+  result.codecId = codecId;
+  auto &description = result.description;
+  if (!existingDestination) {
+    description.codecs = ProbeStorageCodecs();
+    validatePlaybackGainMetadata(input.format->metadata);
+    for (unsigned i = 0; i < input.format->nb_stream_groups; ++i) {
+      const auto type = input.format->stream_groups[i]->type;
+      if (type == AV_STREAM_GROUP_PARAMS_IAMF_AUDIO_ELEMENT || type == AV_STREAM_GROUP_PARAMS_IAMF_MIX_PRESENTATION)
+        unsupported("Immersive audio stream groups cannot be preserved in MP4");
+    }
+  }
+  const auto video = input.format->streams[input.video];
+  result.videoDisposition = video->disposition;
+  if (!existingDestination) validateDisposition(result.videoDisposition);
+  const auto params = video->codecpar;
+  description.width = params->width; description.height = params->height;
+  description.sampleAspectRatio = av_guess_sample_aspect_ratio(input.format, video, nullptr);
+  if (description.sampleAspectRatio.num <= 0) description.sampleAspectRatio = {1, 1};
+  description.timeBase = result.video.timeBase = video->time_base;
+  description.frameRate = av_guess_frame_rate(input.format, video, nullptr);
+  description.h264 = params->codec_id == AV_CODEC_ID_H264;
+  description.interlaced = params->field_order != AV_FIELD_UNKNOWN && params->field_order != AV_FIELD_PROGRESSIVE;
+  for (int i = 0; i < params->nb_coded_side_data; ++i) {
+    const auto &side = params->coded_side_data[i];
+    if (side.type == AV_PKT_DATA_DISPLAYMATRIX && side.size == 9 * sizeof(std::int32_t)) {
+      const auto matrix = reinterpret_cast<const std::int32_t *>(side.data);
+      const double angle = av_display_rotation_get(matrix);
+      if (!std::isfinite(angle) || std::abs(angle - std::round(angle / 90) * 90) > .01 ||
+          matrix[2] || matrix[5] || matrix[6] || matrix[7] || matrix[8] != (1 << 30))
+        description.unsupportedContent = true;
+      else {
+        description.rotation = static_cast<int>(std::round(angle / 90)) * 90;
+        std::int32_t expected[9]{};
+        av_display_rotation_set(expected, -description.rotation);
+        if (!std::equal(expected, expected + 9, matrix)) description.unsupportedContent = true;
+      }
+    } else if (side.type != AV_PKT_DATA_CPB_PROPERTIES) description.unsupportedContent = true;
+  }
+  if (input.audio >= 0) {
+    const auto audio = input.format->streams[input.audio];
+    if (!existingDestination) {
+      validatePlaybackGainMetadata(audio->metadata);
+      validateAudioSideData(audio->codecpar->coded_side_data, audio->codecpar->nb_coded_side_data,
+                            audioCanRemux(audio->codecpar->codec_id), audioHasNativeService(audio->codecpar->codec_id));
+    }
+    result.audioDisposition = audio->disposition;
+    if (!existingDestination) validateDisposition(result.audioDisposition);
+    description.hasAudio = true; result.audio.timeBase = audio->time_base;
+    description.audioChannels = audio->codecpar->ch_layout.nb_channels;
+    description.audioSampleRate = audio->codecpar->sample_rate;
+    description.mp4CompatibleAudio = audioCanRemux(audio->codecpar->codec_id);
+    const auto &layout = audio->codecpar->ch_layout;
+    description.audioLayoutSupported = layout.order == AV_CHANNEL_ORDER_UNSPEC ||
+        (layout.order == AV_CHANNEL_ORDER_NATIVE && (layout.u.mask == AV_CH_LAYOUT_MONO || layout.u.mask == AV_CH_LAYOUT_STEREO));
+  }
+  AVRational decodedAspectRatio{0, 1};
+  AudioSampleHasher audioHasher;
+  decode(input, check, [&](int index, const AVFrame &decoded) {
+    const auto pts = decoded.best_effort_timestamp;
+    if (index == input.video) {
+      if (!existingDestination) validateVideoFramePresentation(*params, decoded);
+      if (purpose != ScanPurpose::SourceConversion && !result.video.frames && !(decoded.flags & AV_FRAME_FLAG_KEY))
+        throw Failure{StorageReason::ValidationFailed, "Video does not start with an independently decodable frame"};
+      if (!existingDestination && (decoded.width != description.width || decoded.height != description.height))
+        unsupported("Video changes resolution midstream");
+      // Container SAR takes precedence in FFmpeg's display guess. Also track
+      // coded frame SAR so that a fixed container value cannot hide changes.
+      const auto codedAspectRatio = decoded.sample_aspect_ratio;
+      if (codedAspectRatio.num > 0 && codedAspectRatio.den > 0) {
+        if (!existingDestination && decodedAspectRatio.num > 0 && av_cmp_q(decodedAspectRatio, codedAspectRatio))
+          unsupported("Video changes sample aspect ratio midstream");
+        decodedAspectRatio = codedAspectRatio;
+      }
+      auto aspectRatio = av_guess_sample_aspect_ratio(input.format, video, const_cast<AVFrame *>(&decoded));
+      if (aspectRatio.num <= 0 || aspectRatio.den <= 0) aspectRatio = {1, 1};
+      if (!result.video.frames) description.sampleAspectRatio = aspectRatio;
+      else if (!existingDestination && av_cmp_q(description.sampleAspectRatio, aspectRatio))
+        unsupported("Video changes display aspect ratio midstream");
+      // Reusing the existing bitstream does not transform its colors, geometry
+      // or display metadata. Only conversion needs these preservation checks.
+      if (!existingDestination) observeVideoColor(result, *params, decoded);
+      const auto pixel = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(decoded.format));
+      if (!pixel) unsupported("Unknown pixel format");
+      description.alpha |= (pixel->flags & AV_PIX_FMT_FLAG_ALPHA) != 0;
+      description.hdr |= hdr(result.colorTransfer) || av_frame_get_side_data(&decoded, AV_FRAME_DATA_MASTERING_DISPLAY_METADATA) ||
+                         av_frame_get_side_data(&decoded, AV_FRAME_DATA_CONTENT_LIGHT_LEVEL);
+      description.interlaced |= (decoded.flags & AV_FRAME_FLAG_INTERLACED) != 0;
+      if (av_frame_get_side_data(&decoded, AV_FRAME_DATA_STEREO3D)) description.unsupportedContent = true;
+      auto duration = decoded.duration;
+      if (duration <= 0 && description.frameRate.num > 0 && description.frameRate.den > 0)
+        duration = rescaleTimestamp(1, av_inv_q(description.frameRate), video->time_base);
+      result.video.add(pts, duration);
+      // Container clocks (notably Matroska milliseconds) round rational CFR
+      // timestamps. Check the entire cadence within one input tick, rather
+      // than treating alternating rounded intervals as genuine VFR bursts.
+      if (description.frameRate.num > 0 && description.frameRate.den > 0) {
+        const auto expected = rescaleTimestamp(result.video.frames - 1,
+            av_inv_q(description.frameRate), video->time_base);
+        if (timestampDistance(pts - result.video.first, expected) > 1) description.variableFrameRate = true;
+      } else description.variableFrameRate = true;
+    } else {
+      if (!result.audioFormat) {
+        if ((!existingDestination && (decoded.sample_rate != description.audioSampleRate || decoded.ch_layout.nb_channels != description.audioChannels)) ||
+            av_get_bytes_per_sample(static_cast<AVSampleFormat>(decoded.format)) <= 0 ||
+            !av_channel_layout_check(&decoded.ch_layout)) unsupported("Unknown embedded audio format");
+        const auto &layout = decoded.ch_layout;
+        description.audioLayoutSupported = layout.order == AV_CHANNEL_ORDER_UNSPEC ||
+            (layout.order == AV_CHANNEL_ORDER_NATIVE && (layout.u.mask == AV_CH_LAYOUT_MONO || layout.u.mask == AV_CH_LAYOUT_STEREO));
+        result.audioFormat = frame();
+        result.audioFormat->sample_rate = decoded.sample_rate; result.audioFormat->format = decoded.format;
+        checked(av_channel_layout_copy(&result.audioFormat->ch_layout, &layout), "Remember decoded audio layout");
+      }
+      if (!existingDestination) validateAudioFrame(*result.audioFormat, decoded, description.mp4CompatibleAudio,
+          audioHasNativeService(input.format->streams[index]->codecpar->codec_id) ?
+              input.decoders[index]->audio_service_type : AV_AUDIO_SERVICE_TYPE_MAIN);
+      const auto duration = rescaleTimestamp(decoded.nb_samples, {1, decoded.sample_rate}, result.audio.timeBase);
+      result.audio.add(pts, duration, std::max<std::int64_t>(1, rescaleTimestamp(1, {1, decoded.sample_rate}, result.audio.timeBase)));
+      if (!existingDestination) {
+        result.audioSamples = timestampAdd(result.audioSamples, decoded.nb_samples);
+        if (description.mp4CompatibleAudio) audioHasher.add(decoded);
+      }
+    }
+  }, [&](int index, const AVPacket &compressed) {
+    if (!existingDestination && index == input.audio) {
+      validateAudioSideData(compressed.side_data, compressed.side_data_elems, description.mp4CompatibleAudio,
+                            audioHasNativeService(input.format->streams[index]->codecpar->codec_id));
+      validatePlaybackGainMetadata(input.format->metadata);
+      validatePlaybackGainMetadata(input.format->streams[index]->metadata);
+    }
+  });
+  if (!result.video.frames || (description.hasAudio && !result.audio.frames))
+    throw Failure{StorageReason::ValidationFailed, "Empty media stream"};
+  result.audioDigest = audioHasher.finish();
+  // Source declarations are intentionally advisory: old files can have stale
+  // starts, durations, ASF sizes/counts or Matroska endpoints despite a clean
+  // decode. Preserve the actual decoded timeline, including clean early EOF.
+  // Targets still need strict completeness checks before replacing a source.
+  if (purpose != ScanPurpose::SourceConversion) validateDeclaredVideoTimeline(*video, result.video);
+  // Clean physical EOF can hide missing complete audio packets after the last
+  // video frame. Reused files have no source/output comparison to catch this;
+  // newly encoded files retain the stronger sample and timeline checks below.
+  if (existingDestination && input.audio >= 0)
+    validateDeclaredAudioEnd(*input.format->streams[input.audio], result.audio);
+  description.duration = result.video.end - result.video.first;
+  description.minimumFrameInterval = result.video.minimumInterval;
+  description.audioDiscontinuous = result.audio.discontinuous;
+  result.originMicros = rescaleTimestamp(result.video.first, result.video.timeBase, AV_TIME_BASE_Q);
+  if (description.hasAudio) result.originMicros = std::min(result.originMicros, rescaleTimestamp(result.audio.first, result.audio.timeBase, AV_TIME_BASE_Q));
+  validateTimelineOrigin(result.video, result.originMicros, AV_TIME_BASE_Q);
+  if (description.hasAudio) validateTimelineOrigin(result.audio, result.originMicros, AV_TIME_BASE_Q);
+  return result;
+}
+
+struct Output {
+  AVFormatContext *format = nullptr;
+  AVIOContext *io = nullptr;
+  std::FILE *file = nullptr;
+  static std::int64_t tell(std::FILE *file) {
+#ifdef _WIN32
+    return _ftelli64(file);
+#else
+    return ftello(file);
+#endif
+  }
+  static int seekFile(std::FILE *file, std::int64_t offset, int whence) {
+#ifdef _WIN32
+    return _fseeki64(file, offset, whence);
+#else
+    return fseeko(file, offset, whence);
+#endif
+  }
+  static int write(void *opaque, const std::uint8_t *data, int bytes) {
+    return std::fwrite(data, 1, bytes, static_cast<std::FILE *>(opaque)) == static_cast<std::size_t>(bytes) ? bytes : AVERROR(EIO);
+  }
+  static std::int64_t seek(void *opaque, std::int64_t offset, int whence) {
+    auto file = static_cast<std::FILE *>(opaque);
+    if (whence & AVSEEK_SIZE) {
+      const auto position = tell(file);
+      if (seekFile(file, 0, SEEK_END)) return AVERROR(EIO);
+      const auto size = tell(file); seekFile(file, position, SEEK_SET); return size;
+    }
+    return seekFile(file, offset, whence & ~AVSEEK_FORCE) ? AVERROR(EIO) : tell(file);
+  }
+  void open(const fs::path &path, bool &created) {
+#ifdef _WIN32
+    int descriptor = _wopen(path.c_str(), _O_CREAT | _O_EXCL | _O_RDWR | _O_BINARY, _S_IREAD | _S_IWRITE);
+    if (descriptor >= 0) { created = true; file = _fdopen(descriptor, "w+b"); }
+    if (descriptor >= 0 && !file) _close(descriptor);
+#else
+    int descriptor = ::open(path.c_str(), O_CREAT | O_EXCL | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (descriptor >= 0) { created = true; file = fdopen(descriptor, "w+b"); }
+    if (descriptor >= 0 && !file) ::close(descriptor);
+#endif
+    if (!file) throw Failure{StorageReason::IoError, "Cannot create exclusive temporary video"};
+    auto buffer = static_cast<unsigned char *>(av_malloc(65536));
+    if (!buffer) throw std::bad_alloc();
+    io = avio_alloc_context(buffer, 65536, 1, file, nullptr, write, seek);
+    if (!io) { av_free(buffer); throw std::bad_alloc(); }
+    checked(avformat_alloc_output_context2(&format, nullptr, "mp4", nullptr), "Create MP4", StorageReason::CodecUnavailable);
+    format->pb = io; format->flags |= AVFMT_FLAG_CUSTOM_IO;
+    format->max_interleave_delta = AV_TIME_BASE;
+    format->avoid_negative_ts = AVFMT_AVOID_NEG_TS_DISABLED;
+  }
+  void finish() {
+    checked(av_write_trailer(format), "Finalize MP4", StorageReason::IoError);
+    avio_flush(io);
+    if (io->error < 0) checked(io->error, "Flush MP4", StorageReason::IoError);
+    if (std::fflush(file)) throw Failure{StorageReason::IoError, "Flush temporary video failed"};
+  }
+  ~Output() {
+    if (format) avformat_free_context(format);
+    if (io) { av_freep(&io->buffer); avio_context_free(&io); }
+    if (file) std::fclose(file);
+  }
+};
+
+struct AudioBuffers {
+  SwrContext *resampler = nullptr;
+  AVAudioFifo *fifo = nullptr;
+  ~AudioBuffers() { swr_free(&resampler); if (fifo) av_audio_fifo_free(fifo); }
+};
+struct ScaleBuffer {
+  SwsContext *value = nullptr;
+  std::array<int, 8> configuration{};
+  void configure(const AVFrame &source, const AVCodecContext &destination, AVChromaLocation sourceLocation) {
+    const std::array<int, 8> requested{source.width, source.height, source.format,
+        destination.width, destination.height, destination.pix_fmt, sourceLocation, destination.chroma_sample_location};
+    if (value && configuration == requested) return;
+    const auto positions = [](AVPixelFormat format, AVChromaLocation location) {
+      const auto pixel = av_pix_fmt_desc_get(format);
+      if (!pixel) unsupported("Unknown scaler pixel format");
+      std::array<int, 2> result{};
+      checked(av_chroma_location_enum_to_pos(&result[0], &result[1], location), "Read chroma sample position");
+      // Enum positions describe 4:2:0. Adapt to the actual subsampling grid;
+      // unsubsampled axes have zero offset, while 4:1:1 spans three luma steps.
+      result[0] *= (1 << pixel->log2_chroma_w) - 1;
+      result[1] *= (1 << pixel->log2_chroma_h) - 1;
+      return result;
+    };
+    const auto sourcePosition = positions(static_cast<AVPixelFormat>(source.format), sourceLocation);
+    const auto destinationPosition = positions(destination.pix_fmt, destination.chroma_sample_location);
+    std::unique_ptr<SwsContext, decltype(&sws_freeContext)> next(sws_alloc_context(), sws_freeContext);
+    if (!next) throw std::bad_alloc();
+    const std::pair<const char *, int> options[] = {
+        {"srcw", source.width}, {"srch", source.height}, {"src_format", source.format},
+        {"dstw", destination.width}, {"dsth", destination.height}, {"dst_format", destination.pix_fmt},
+        {"sws_flags", SWS_BICUBIC},
+        {"src_h_chr_pos", sourcePosition[0]}, {"src_v_chr_pos", sourcePosition[1]},
+        {"dst_h_chr_pos", destinationPosition[0]}, {"dst_v_chr_pos", destinationPosition[1]}};
+    for (const auto &[name, setting] : options)
+      checked(av_opt_set_int(next.get(), name, setting, 0), "Configure video scaler");
+    checked(sws_init_context(next.get(), nullptr, nullptr), "Initialize video scaler");
+    sws_freeContext(value); value = next.release(); configuration = requested;
+  }
+  ~ScaleBuffer() { sws_freeContext(value); }
+};
+struct VideoMetadataFilter {
+  AVBSFContext *value = nullptr;
+  ~VideoMetadataFilter() { av_bsf_free(&value); }
+  void initialize(const AVCodecContext &encoder, AVStream &stream, bool hardware) {
+    if (!hardware || (encoder.codec_id != AV_CODEC_ID_H264 && encoder.codec_id != AV_CODEC_ID_HEVC)) return;
+    // Hardware consumes the supplied NV12 grid without resampling it, but some
+    // drivers (including VideoToolbox) omit its chroma-siting VUI. Describe the
+    // actual scaler output in the bitstream before muxing; decode-back must
+    // still verify exactly the original siting and all other presentation data.
+    const auto filter = av_bsf_get_by_name(encoder.codec_id == AV_CODEC_ID_H264 ? "h264_metadata" : "hevc_metadata");
+    if (!filter) throw Failure{StorageReason::CodecUnavailable, "Video chroma metadata filter is unavailable", FileOutcome::Skipped};
+    checked(av_bsf_alloc(filter, &value), "Allocate video metadata filter");
+    checked(avcodec_parameters_from_context(value->par_in, &encoder), "Configure video metadata filter");
+    value->time_base_in = encoder.time_base;
+    checked(av_opt_set_int(value->priv_data, "chroma_sample_loc_type", encoder.chroma_sample_location - AVCHROMA_LOC_LEFT, 0),
+            "Preserve encoded chroma location");
+    checked(av_bsf_init(value), "Initialize video metadata filter");
+    checked(avcodec_parameters_copy(stream.codecpar, value->par_out), "Copy corrected video metadata");
+  }
+};
+struct EncodedSummary { std::uint64_t frames = 0; };
+EncodedSummary encode(const fs::path &source, const fs::path &destination, const Scan &sourceScan,
+                       const VideoCompressionPlan &plan, const StoragePolicy &policy,
+                       const StorageVideoEncoderCandidate &candidate, const Checkpoint &check, bool &created) {
+  validateTimelineOrigin(sourceScan.video, sourceScan.originMicros, plan.timeBase);
+  if (sourceScan.description.hasAudio)
+    validateTimelineOrigin(sourceScan.audio, sourceScan.originMicros,
+        plan.audio == VideoAudioTreatment::Remux ? sourceScan.audio.timeBase : AVRational{1, sourceScan.description.audioSampleRate});
+  Input input(source, false, true); Output output; output.open(destination, created);
+  Codec videoEncoder, audioEncoder;
+  VideoMetadataFilter videoMetadata;
+  ScaleBuffer scale; AudioBuffers audioBuffers;
+  const auto videoCodec = avcodec_find_encoder_by_name(candidate.name.c_str());
+  if (!videoCodec) throw Failure{StorageReason::CodecUnavailable, "Selected encoder is unavailable", FileOutcome::Skipped};
+  videoEncoder.value = avcodec_alloc_context3(videoCodec);
+  if (!videoEncoder.value) throw std::bad_alloc();
+  auto &video = *videoEncoder.value;
+  video.width = plan.width; video.height = plan.height;
+  video.time_base = plan.timeBase; video.framerate = plan.frameRate;
+  video.sample_aspect_ratio = plan.sampleAspectRatio;
+  video.color_range = sourceScan.colorRange; video.colorspace = sourceScan.colorSpace;
+  video.color_primaries = sourceScan.colorPrimaries; video.color_trc = sourceScan.colorTransfer;
+  video.chroma_sample_location = sourceScan.chromaLocation;
+  if (output.format->oformat->flags & AVFMT_GLOBALHEADER) video.flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+  std::string encoderError;
+  if (!ConfigureStorageVideoEncoder(&video, candidate, policy, encoderError))
+    throw Failure{StorageReason::CodecUnavailable, std::move(encoderError), FileOutcome::Skipped};
+  auto videoStream = avformat_new_stream(output.format, nullptr);
+  if (!videoStream) throw std::bad_alloc();
+  checked(avcodec_parameters_from_context(videoStream->codecpar, &video), "Configure MP4 video");
+  videoMetadata.initialize(video, *videoStream, candidate.hardware);
+  videoStream->time_base = plan.timeBase; videoStream->sample_aspect_ratio = plan.sampleAspectRatio;
+  const auto sourceVideo = input.format->streams[input.video];
+  // Dictionary copies are best effort: MP4 cannot represent every descriptive
+  // source tag. Harmless tag loss is intentional; known playback gain tags and
+  // other playback properties are validated separately before this copy.
+  av_dict_copy(&videoStream->metadata, sourceVideo->metadata, 0);
+  videoStream->disposition = sourceVideo->disposition;
+  av_dict_copy(&output.format->metadata, input.format->metadata, 0);
+  if (const auto matrix = av_packet_side_data_get(sourceVideo->codecpar->coded_side_data,
+                                                 sourceVideo->codecpar->nb_coded_side_data, AV_PKT_DATA_DISPLAYMATRIX)) {
+    auto side = av_packet_side_data_new(&videoStream->codecpar->coded_side_data,
+                                        &videoStream->codecpar->nb_coded_side_data, matrix->type, matrix->size, 0);
+    if (!side) throw std::bad_alloc();
+    std::memcpy(side->data, matrix->data, matrix->size);
+  }
+  AVStream *audioStream = nullptr;
+  const AVStream *sourceAudio = input.audio >= 0 ? input.format->streams[input.audio] : nullptr;
+  if (sourceAudio) {
+    audioStream = avformat_new_stream(output.format, nullptr);
+    if (!audioStream) throw std::bad_alloc();
+    av_dict_copy(&audioStream->metadata, sourceAudio->metadata, 0);
+    audioStream->disposition = sourceAudio->disposition;
+    if (plan.audio == VideoAudioTreatment::Remux) {
+      checked(avcodec_parameters_copy(audioStream->codecpar, sourceAudio->codecpar), "Copy embedded audio");
+      audioStream->codecpar->codec_tag = 0; audioStream->time_base = sourceAudio->time_base;
+    } else {
+      const auto audioCodec = avcodec_find_encoder(AV_CODEC_ID_AAC);
+      if (!audioCodec) throw Failure{StorageReason::CodecUnavailable, "AAC is unavailable", FileOutcome::Skipped};
+      audioEncoder.value = avcodec_alloc_context3(audioCodec);
+      if (!audioEncoder.value) throw std::bad_alloc();
+      auto &audio = *audioEncoder.value;
+      audio.sample_rate = sourceScan.description.audioSampleRate; audio.time_base = {1, audio.sample_rate};
+      audio.sample_fmt = AV_SAMPLE_FMT_FLTP; audio.bit_rate = 128000; audio.thread_count = 1;
+      const auto &sourceFormat = *sourceScan.audioFormat;
+      if (sourceFormat.ch_layout.order == AV_CHANNEL_ORDER_UNSPEC)
+        av_channel_layout_default(&audio.ch_layout, sourceScan.description.audioChannels);
+      else checked(av_channel_layout_copy(&audio.ch_layout, &sourceFormat.ch_layout), "Copy native audio layout");
+      if (output.format->oformat->flags & AVFMT_GLOBALHEADER) audio.flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+      checked(avcodec_open2(&audio, audioCodec, nullptr), "Open AAC", StorageReason::UnsupportedFormat);
+      checked(avcodec_parameters_from_context(audioStream->codecpar, &audio), "Configure MP4 audio");
+      audioStream->time_base = audio.time_base;
+      checked(swr_alloc_set_opts2(&audioBuffers.resampler, &audio.ch_layout, audio.sample_fmt, audio.sample_rate,
+                                  &audio.ch_layout, static_cast<AVSampleFormat>(sourceFormat.format), sourceFormat.sample_rate, 0, nullptr), "Configure native audio conversion");
+      checked(swr_init(audioBuffers.resampler), "Initialize native audio conversion");
+      audioBuffers.fifo = av_audio_fifo_alloc(audio.sample_fmt, audio.ch_layout.nb_channels, audio.frame_size * 2);
+      if (!audioBuffers.fifo) throw std::bad_alloc();
+    }
+  }
+  // Track starts can differ by a fractional millisecond (for example AC3
+  // encoder delay). MP4's default 1 kHz movie clock rounds edit-list offsets,
+  // so retain the same microsecond precision used for the shared origin.
+  checked(av_opt_set_int(output.format->priv_data, "movie_timescale", AV_TIME_BASE, 0), "Set MP4 movie clock");
+  checked(avformat_write_header(output.format, nullptr), "Write MP4 header", StorageReason::IoError);
+  auto compressed = packet();
+  // Encoders may buffer a bounded lookahead. Associate packet durations with its input
+  // timestamps so VFR gaps and the final presentation interval survive muxing.
+  std::deque<std::pair<std::int64_t, std::int64_t>> durations;
+  auto mux = [&](const AVCodecContext &encoder, AVStream *stream) {
+    rescalePacketTimestamps(*compressed, encoder.time_base, stream->time_base);
+    compressed->stream_index = stream->index;
+    checked(av_interleaved_write_frame(output.format, compressed.get()), "Write MP4 packet", StorageReason::IoError);
+    av_packet_unref(compressed.get());
+  };
+  auto filterVideo = [&](AVPacket *input) {
+    checked(av_bsf_send_packet(videoMetadata.value, input), "Correct video metadata");
+    int filtered;
+    while ((filtered = av_bsf_receive_packet(videoMetadata.value, compressed.get())) >= 0) {
+      checkpoint(check);
+      mux(video, videoStream);
+    }
+    if (filtered != AVERROR(EAGAIN) && filtered != AVERROR_EOF) checked(filtered, "Read corrected video packet");
+  };
+  auto send = [&](AVCodecContext &encoder, AVStream *stream, AVFrame *decoded) {
+    checkpoint(check);
+    if (&encoder == &video && decoded) durations.emplace_back(decoded->pts, decoded->duration);
+    checked(avcodec_send_frame(&encoder, decoded), "Encode media frame");
+    int status;
+    while ((status = avcodec_receive_packet(&encoder, compressed.get())) >= 0) {
+      checkpoint(check);
+      if (&encoder == &video) {
+        if (durations.empty() || durations.front().first != compressed->pts)
+          throw Failure{StorageReason::ValidationFailed, "Encoder changed video presentation timestamps"};
+        compressed->duration = durations.front().second; durations.pop_front();
+      } else {
+        const auto end = normalizedTimestamp(sourceScan.audio.end, sourceScan.audio.timeBase, sourceScan.originMicros, encoder.time_base);
+        if (compressed->pts != AV_NOPTS_VALUE && compressed->duration > 0)
+          compressed->duration = compressed->pts >= end ? 0 :
+              std::min(compressed->duration, timestampSubtract(end, compressed->pts));
+      }
+      if (&encoder == &video && videoMetadata.value) filterVideo(compressed.get());
+      else mux(encoder, stream);
+    }
+    if (status != AVERROR(EAGAIN) && status != AVERROR_EOF) checked(status, "Read encoded packet");
+  };
+  auto pending = frame(); bool hasPending = false;
+  VideoTimestampSelector selector(plan);
+  const auto videoOffset = normalizedTimestamp(sourceScan.video.first, sourceScan.video.timeBase, sourceScan.originMicros, video.time_base);
+  EncodedSummary summary;
+  std::int64_t audioPosition = AV_NOPTS_VALUE, audioNextInput = AV_NOPTS_VALUE;
+  auto flushAudio = [&](bool final) {
+    if (!audioEncoder.value) return;
+    auto &audio = *audioEncoder.value;
+    while (av_audio_fifo_size(audioBuffers.fifo) >= audio.frame_size || (final && av_audio_fifo_size(audioBuffers.fifo))) {
+      auto samples = frame();
+      samples->format = audio.sample_fmt; samples->sample_rate = audio.sample_rate;
+      samples->nb_samples = std::min(audio.frame_size, av_audio_fifo_size(audioBuffers.fifo));
+      samples->pts = audioPosition; samples->duration = samples->nb_samples;
+      checked(av_channel_layout_copy(&samples->ch_layout, &audio.ch_layout), "Prepare audio layout");
+      checked(av_frame_get_buffer(samples.get(), 0), "Allocate bounded AAC frame");
+      if (av_audio_fifo_read(audioBuffers.fifo, reinterpret_cast<void **>(samples->extended_data), samples->nb_samples) != samples->nb_samples)
+        throw Failure{StorageReason::ValidationFailed, "Read native audio samples failed"};
+      audioPosition = timestampAdd(audioPosition, samples->nb_samples); send(audio, audioStream, samples.get());
+    }
+  };
+  decode(input, check, [&](int index, const AVFrame &decoded) {
+    if (index == input.video) {
+      validateVideoFramePresentation(*sourceVideo->codecpar, decoded);
+      Scan currentColor;
+      observeVideoColor(currentColor, *sourceVideo->codecpar, decoded);
+      if (!sameVideoColor(sourceScan, currentColor)) unsupported("Video color metadata changed after scanning");
+      auto selected = selector.Select(decoded.best_effort_timestamp);
+      if (!selected.valid) unsupported("Invalid video presentation timestamps");
+      if (!selected.keep) return;
+      if (selected.timestamp == AV_NOPTS_VALUE) unsupported("Selected video timestamp is out of range");
+      selected.timestamp = timestampAdd(selected.timestamp, videoOffset);
+      if (hasPending) {
+        pending->duration = timestampSubtract(selected.timestamp, pending->pts);
+        send(video, videoStream, pending.get()); ++summary.frames;
+        av_frame_unref(pending.get());
+      }
+      pending->format = video.pix_fmt; pending->width = video.width; pending->height = video.height;
+      pending->pts = selected.timestamp; pending->sample_aspect_ratio = video.sample_aspect_ratio;
+      pending->color_range = video.color_range; pending->colorspace = video.colorspace;
+      pending->color_primaries = video.color_primaries; pending->color_trc = video.color_trc;
+      pending->chroma_location = video.chroma_sample_location;
+      checked(av_frame_get_buffer(pending.get(), 32), "Allocate bounded video frame");
+      scale.configure(decoded, video, sourceScan.chromaLocation);
+      const int matrix = video.colorspace == AVCOL_SPC_UNSPECIFIED ? SWS_CS_DEFAULT : static_cast<int>(video.colorspace);
+      const auto coefficients = sws_getCoefficients(matrix);
+      checked(sws_setColorspaceDetails(scale.value, coefficients, video.color_range == AVCOL_RANGE_JPEG,
+                                       coefficients, video.color_range == AVCOL_RANGE_JPEG, 0, 1 << 16, 1 << 16), "Preserve video color matrix");
+      if (sws_scale(scale.value, decoded.data, decoded.linesize, 0, decoded.height, pending->data, pending->linesize) != video.height)
+        throw Failure{StorageReason::ValidationFailed, "Incomplete pixel conversion"};
+      hasPending = true;
+    } else if (audioEncoder.value) {
+      validateAudioFrame(*sourceScan.audioFormat, decoded);
+      auto &audio = *audioEncoder.value;
+      const auto pts = normalizedTimestamp(decoded.best_effort_timestamp, sourceAudio->time_base, sourceScan.originMicros, audio.time_base);
+      if (audioPosition == AV_NOPTS_VALUE) audioPosition = pts;
+      advanceAudioInput(pts, decoded.nb_samples, sourceAudio->time_base, audio.time_base, audioNextInput);
+      auto converted = frame();
+      converted->format = audio.sample_fmt; converted->sample_rate = audio.sample_rate; converted->nb_samples = decoded.nb_samples;
+      checked(av_channel_layout_copy(&converted->ch_layout, &audio.ch_layout), "Preserve converted audio layout");
+      checked(av_frame_get_buffer(converted.get(), 0), "Allocate bounded audio conversion buffer");
+      const int count = swr_convert(audioBuffers.resampler, converted->extended_data, converted->nb_samples,
+                                     const_cast<const std::uint8_t **>(decoded.extended_data), decoded.nb_samples);
+      checked(count, "Convert native audio sample format");
+      if (count != decoded.nb_samples) unsupported("Audio conversion changed sample timing");
+      checked(av_audio_fifo_realloc(audioBuffers.fifo, av_audio_fifo_size(audioBuffers.fifo) + count), "Allocate bounded audio FIFO");
+      if (av_audio_fifo_write(audioBuffers.fifo, reinterpret_cast<void **>(converted->extended_data), count) != count)
+        throw Failure{StorageReason::IoError, "Buffer native audio samples failed"};
+      flushAudio(false);
+    }
+  }, [&](int index, const AVPacket &sourcePacket) {
+    if (index != input.audio || plan.audio != VideoAudioTreatment::Remux) return;
+    if (sourcePacket.pts == AV_NOPTS_VALUE || sourcePacket.dts == AV_NOPTS_VALUE) unsupported("Embedded audio packet has no timestamp");
+    auto copy = packet(); checked(av_packet_ref(copy.get(), &sourcePacket), "Retain embedded audio packet");
+    const auto origin = rescaleTimestamp(sourceScan.originMicros, AV_TIME_BASE_Q, sourceAudio->time_base);
+    copy->pts = timestampSubtract(copy->pts, origin); copy->dts = timestampSubtract(copy->dts, origin);
+    rescalePacketTimestamps(*copy, sourceAudio->time_base, audioStream->time_base); copy->stream_index = audioStream->index;
+    checked(av_interleaved_write_frame(output.format, copy.get()), "Remux embedded audio", StorageReason::IoError);
+  });
+  if (!hasPending) throw Failure{StorageReason::ValidationFailed, "No selected video frames"};
+  pending->duration = timestampSubtract(normalizedTimestamp(sourceScan.video.end, sourceScan.video.timeBase,
+                                                           sourceScan.originMicros, video.time_base), pending->pts);
+  if (pending->duration <= 0) unsupported("Invalid final video duration");
+  send(video, videoStream, pending.get()); ++summary.frames;
+  send(video, videoStream, nullptr);
+  if (videoMetadata.value) filterVideo(nullptr);
+  if (!durations.empty()) throw Failure{StorageReason::ValidationFailed, "Encoder did not produce all video frames"};
+  flushAudio(true);
+  if (audioEncoder.value) send(*audioEncoder.value, audioStream, nullptr);
+  checkpoint(check); output.finish();
+  return summary;
+}
+
+void verify(const Scan &source, const Scan &output, const VideoCompressionPlan &plan, const EncodedSummary &summary) {
+  const auto &description = output.description;
+  // H.264 omits the VUI full-range flag for its default limited range, so
+  // a correctly tagged limited-range encode may decode as unspecified.
+  const auto outputRange = description.h264 && output.colorRange == AVCOL_RANGE_UNSPECIFIED ? AVCOL_RANGE_MPEG : output.colorRange;
+  auto invalid = [] { throw Failure{StorageReason::ValidationFailed, "MP4 decode-back geometry, content or timeline validation failed"}; };
+  // The MP4 muxer enables the sole track of each type, adding DEFAULT even
+  // when the source container omitted it. No other disposition may change.
+  if (output.videoDisposition != (source.videoDisposition | AV_DISPOSITION_DEFAULT) ||
+      (description.hasAudio && output.audioDisposition != (source.audioDisposition | AV_DISPOSITION_DEFAULT)))
+    throw Failure{StorageReason::ValidationFailed, "MP4 decode-back stream disposition validation failed"};
+  if ((plan.codec == VideoCodec::H264 ? !description.h264 : output.codecId != StorageVideoCodecId(plan.codec)) ||
+      description.width != plan.width || description.height != plan.height ||
+      av_cmp_q(description.sampleAspectRatio, plan.sampleAspectRatio) || description.rotation != plan.rotation ||
+      description.alpha || description.hdr || description.interlaced || description.unsupportedContent ||
+      description.hasAudio != source.description.hasAudio || output.video.frames != summary.frames ||
+      source.chromaLocation != output.chromaLocation ||
+      (source.colorRange != AVCOL_RANGE_UNSPECIFIED && source.colorRange != outputRange) ||
+      (source.colorSpace != AVCOL_SPC_UNSPECIFIED && source.colorSpace != output.colorSpace) ||
+      (source.colorPrimaries != AVCOL_PRI_UNSPECIFIED && source.colorPrimaries != output.colorPrimaries) ||
+      (source.colorTransfer != AVCOL_TRC_UNSPECIFIED && source.colorTransfer != output.colorTransfer)) invalid();
+  const auto videoTolerance = timestampAdd(std::max(rescaleTimestamp(source.video.maximumDuration, source.video.timeBase, AV_TIME_BASE_Q),
+                                       rescaleTimestamp(1, av_inv_q(plan.frameRate), AV_TIME_BASE_Q)), 1);
+  const auto expectedStart = normalizedTimestamp(source.video.first, source.video.timeBase, source.originMicros, AV_TIME_BASE_Q);
+  const auto expectedEnd = normalizedTimestamp(source.video.end, source.video.timeBase, source.originMicros, AV_TIME_BASE_Q);
+  if (timestampDistance(rescaleTimestamp(output.video.first, output.video.timeBase, AV_TIME_BASE_Q), expectedStart) > 2 ||
+      timestampDistance(rescaleTimestamp(output.video.end, output.video.timeBase, AV_TIME_BASE_Q), expectedEnd) > videoTolerance) invalid();
+  // Unreduced CFR retains its source-clock rounding; the encoder has already
+  // verified every presentation timestamp. Enforce the exact grid on reductions.
+  if (plan.reduceFps && output.video.minimumInterval > 0 &&
+      av_compare_ts(output.video.minimumInterval, output.video.timeBase, 1, {1, plan.maxFps}) < 0) invalid();
+  if (description.hasAudio) {
+    if (description.audioChannels != source.description.audioChannels || description.audioSampleRate != source.description.audioSampleRate) invalid();
+    // Copied packets can still lose container trimming in MP4. Compare the
+    // actual decoded samples, not advisory skip declarations or endpoints;
+    // equal-length changes and relocated trimming must also retain the source.
+    if (plan.audio == VideoAudioTreatment::Remux &&
+        (source.audioSamples != output.audioSamples || !source.audioDigest || !output.audioDigest ||
+         source.audioDigest != output.audioDigest ||
+         av_get_packed_sample_fmt(static_cast<AVSampleFormat>(source.audioFormat->format)) !=
+             av_get_packed_sample_fmt(static_cast<AVSampleFormat>(output.audioFormat->format))))
+      throw Failure{StorageReason::ValidationFailed, "MP4 remux changed decoded audio samples"};
+    const auto audioTolerance = timestampAdd(std::max(rescaleTimestamp(source.audio.maximumDuration, source.audio.timeBase, AV_TIME_BASE_Q),
+                                         rescaleTimestamp(output.audio.maximumDuration, output.audio.timeBase, AV_TIME_BASE_Q)), 2);
+    const auto start = normalizedTimestamp(source.audio.first, source.audio.timeBase, source.originMicros, AV_TIME_BASE_Q);
+    const auto end = normalizedTimestamp(source.audio.end, source.audio.timeBase, source.originMicros, AV_TIME_BASE_Q);
+    if (timestampDistance(rescaleTimestamp(output.audio.first, output.audio.timeBase, AV_TIME_BASE_Q), start) > audioTolerance ||
+        timestampDistance(rescaleTimestamp(output.audio.end, output.audio.timeBase, AV_TIME_BASE_Q), end) > audioTolerance) invalid();
+  }
+}
+}
+
+StorageDiagnostic ValidateExistingBga(const fs::path &path, Checkpoint check) {
+  try {
+    scan(path, check, ScanPurpose::ExistingDestination);
+    return {};
+  } catch (const Failure &failure) {
+    return {failure.reason, failure.detail};
+  } catch (const std::exception &error) {
+    return {StorageReason::IoError, error.what()};
+  }
+}
+
+EncodeResult EncodeBga(const AssetCandidate &candidate, const StoragePolicy &policy,
+                       const fs::path &temporaryOutput, Checkpoint check, ProgressCallback progress) {
+  bool created = false;
+  auto discard = [&] { if (created) { std::error_code ignored; fs::remove(temporaryOutput, ignored); } };
+  try {
+    checkpoint(check);
+    if (policy.bga != BgaAction::CompressH264) return {FileOutcome::Skipped, {}, {StorageReason::PolicyKeep, "BGA compression is not selected"}};
+    if (asobmshow::chart_assets::ClassifyMediaPath(candidate.source) != asobmshow::chart_assets::MediaKind::Video)
+      return {FileOutcome::Skipped, {}, {StorageReason::UnsupportedSource, "Only supported video paths are eligible"}};
+    const auto source = scan(candidate.source, check, ScanPurpose::SourceConversion, !policy.reencodeEfficientVideo);
+    const auto plan = PlanVideoCompression(source.description, policy);
+    if (plan.reason.code != StorageReason::None) return {FileOutcome::Skipped, {}, plan.reason};
+    const auto pendingCapabilities = RequestStorageVideoCapabilities();
+    while (pendingCapabilities.wait_for(std::chrono::milliseconds(25)) != std::future_status::ready)
+      checkpoint(check);
+    checkpoint(check);
+    const auto capabilities = pendingCapabilities.get();
+    const auto &support = capabilities[static_cast<std::size_t>(policy.videoCodec)];
+    if (!support.available)
+      return {FileOutcome::Skipped, {}, {StorageReason::CodecUnavailable, support.reason}};
+    const int fps = static_cast<int>(std::ceil(av_q2d(plan.frameRate)));
+    const int bitrate = StorageVideoEncoderBitrate(policy.videoCodec, policy.videoQuality, plan.width, plan.height, fps);
+    const auto encoders = StorageVideoEncoderCandidates(policy.videoCodec, plan.width, plan.height, fps, bitrate);
+    StorageDiagnostic last{StorageReason::CodecUnavailable, "No encoder supports this video on this device"};
+    FileOutcome lastOutcome = FileOutcome::Skipped;
+    for (const auto &encoder : encoders) {
+      checkpoint(check);
+      try {
+        if (progress) progress({StoragePhase::Encode, candidate.source});
+        const auto summary = encode(candidate.source, temporaryOutput, source, plan, policy, encoder, check, created);
+        if (progress) progress({StoragePhase::Verify, candidate.source});
+        try { verify(source, scan(temporaryOutput, check, ScanPurpose::EncodedOutput), plan, summary); }
+        catch (const Failure &failure) {
+          if (failure.reason == StorageReason::Cancelled) throw;
+          throw Failure{StorageReason::ValidationFailed, failure.detail};
+        }
+        checkpoint(check);
+        std::error_code error;
+        const auto before = fs::file_size(candidate.source, error);
+        if (error) throw Failure{StorageReason::IoError, "Cannot measure source video"};
+        const auto after = fs::file_size(temporaryOutput, error);
+        if (error) throw Failure{StorageReason::IoError, "Cannot measure encoded video"};
+        if (after >= before)
+          throw Failure{StorageReason::NotSmaller, "Encoded video is not smaller; requested caps were not applied", FileOutcome::Skipped};
+        return {FileOutcome::Converted, temporaryOutput, {}};
+      } catch (const Failure &failure) {
+        discard(); created = false;
+        // Retry another encoder only for codec-specific limitations. Cancellation
+        // and filesystem failures must stop immediately, retaining the source.
+        if (!encoder.hardware || failure.reason == StorageReason::Cancelled || failure.reason == StorageReason::IoError) throw;
+        last = {failure.reason, failure.detail}; lastOutcome = failure.outcome;
+      }
+    }
+    return {lastOutcome, {}, std::move(last)};
+  } catch (const Failure &failure) {
+    discard(); return {failure.outcome, {}, {failure.reason, failure.detail}};
+  } catch (const std::exception &error) {
+    discard(); return {FileOutcome::Failed, {}, {StorageReason::IoError, error.what()}};
+  }
+}
+} // namespace storage_management

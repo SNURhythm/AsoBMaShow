@@ -90,6 +90,7 @@ public:
   ~SettingsScene() override;
 
   void onInputQueueOverflow() override;
+  bool canPrepareForStorageMaintenance(std::string &error) override;
   void init() override;
   void update(float dt) override;
   void onLanguageChanged() override;
@@ -496,6 +497,7 @@ private:
   View *buildAudioTab(const settings_scene::LayoutMetrics &metrics);
   View *buildDisplayTab(const settings_scene::LayoutMetrics &metrics);
   View *buildDifficultyTablesTab(const settings_scene::LayoutMetrics &metrics);
+  View *buildStorageControls(const settings_scene::LayoutMetrics &metrics);
   View *buildBmsLibraryTab(const settings_scene::LayoutMetrics &metrics);
   View *buildGameplaySkinsTab(const settings_scene::LayoutMetrics &metrics);
   View *buildIrTab(const settings_scene::LayoutMetrics &metrics);

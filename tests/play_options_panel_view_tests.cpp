@@ -6,12 +6,15 @@
 #endif
 #define private public
 #include "view/DropdownView.h"
+#include "view/OverlayPortal.h"
 #undef private
 #if defined(__clang__)
 #pragma clang diagnostic pop
 #endif
 #include "view/PlayOptionsPanelView.h"
 #include "view/ScrollView.h"
+#include "view/StoragePolicyView.h"
+#include "view/OverlayPortal.h"
 #include "view/SnappedSlider.h"
 #include "view/ColorPickerView.h"
 #include "view/ColorPickerPopup.h"
@@ -28,6 +31,14 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+
+namespace storage_management {
+std::promise<StorageVideoCapabilities> storageCapabilityPromise;
+const auto storageCapabilityFuture = storageCapabilityPromise.get_future().share();
+std::shared_future<StorageVideoCapabilities> RequestStorageVideoCapabilities(std::function<void()>) {
+  return storageCapabilityFuture;
+}
+} // namespace storage_management
 
 namespace rendering {
 bgfx::VertexLayout PosTexCoord0Vertex::ms_decl;
@@ -67,6 +78,131 @@ void click(Button &button) {
   up.button.type = SDL_EVENT_MOUSE_BUTTON_UP;
   button.handleEvents(down);
   button.handleEvents(up);
+}
+
+void testStoragePolicyDirectSelection() {
+  using namespace storage_management;
+  StoragePolicy selected;
+  int changes = 0;
+  OverlayPortal portal;
+  StoragePolicyView editor(selected, [&](StoragePolicy policy) {
+    selected = policy;
+    ++changes;
+  }, &portal);
+  editor.setWidth(440);
+  editor.applyYogaLayout();
+  TextView *codecStatus = nullptr;
+  Button *codecButton = nullptr;
+  Button *efficientButton = nullptr;
+  CheckboxButtonContent *efficientContent = nullptr;
+  std::vector<DropdownView *> fields;
+  for (auto *row : editor.getChildren()) {
+    if (auto *text = dynamic_cast<TextView *>(row)) codecStatus = text;
+    if (auto *button = dynamic_cast<Button *>(row)) {
+      efficientButton = button;
+      efficientContent = dynamic_cast<CheckboxButtonContent *>(button->getContentView());
+    }
+    for (auto *child : row->getChildren()) {
+      if (auto *dropdown = dynamic_cast<DropdownView *>(child)) fields.push_back(dropdown);
+      if (auto *button = dynamic_cast<Button *>(child)) codecButton = button;
+    }
+  }
+  require(codecButton && efficientButton && efficientContent && !efficientButton->isEnabled() &&
+              !efficientContent->checked(), "efficient-video opt-in defaults off and requires compression");
+  require(fields.size() == 5, "storage policy values offer direct dropdown selection");
+  require(codecStatus && !codecStatus->getVisible(),
+          "inactive codec status must not render at the origin after layout hides it");
+  auto choose = [&](int field, const std::string &id) {
+    click(*fields[field]->triggerButton);
+    for (auto &option : fields[field]->optionButtons) {
+      if (option.id == id) { click(*option.button); return; }
+    }
+    require(false, "storage dropdown exposes the requested choice");
+  };
+  require(!fields[2]->current.enabled && !fields[3]->current.enabled &&
+              !fields[4]->current.enabled,
+          "video details stay disabled until compression is selected");
+  choose(0, "2");
+  require(selected.audio == AudioAction::LossyVorbis && changes == 1,
+          "choosing Vorbis skips intermediate policies and saves once");
+  choose(0, "2");
+  require(changes == 1, "reselecting the current policy does not save or invalidate review");
+  choose(1, "1");
+  require(codecStatus->getVisible(), "compression reveals the codec status");
+  click(*efficientButton);
+  require(selected.reencodeEfficientVideo && efficientContent->checked(),
+          "efficient-video checkbox saves the explicit opt-in");
+  click(*codecButton);
+  require(portal.presented.size() == 1, "codec selection opens a root-level modal");
+  auto *modal = portal.presented.front();
+  auto *panel = modal->getChildren().front();
+  ScrollView *codecScroll = nullptr;
+  for (auto *child : panel->getChildren())
+    if (auto *scroll = dynamic_cast<ScrollView *>(child)) codecScroll = scroll;
+  require(codecScroll, "codec explanations remain scrollable on short displays");
+  const auto &cards = codecScroll->getContentView()->getChildren();
+  require(cards.size() == 4 && YGNodeStyleGetDisplay(cards[1]->getNode()) == YGDisplayNone && YGNodeStyleGetDisplay(cards[2]->getNode()) == YGDisplayNone &&
+              YGNodeStyleGetDisplay(cards[3]->getNode()) == YGDisplayNone, "pending capability checks hide codec options");
+  require(cards[0]->getVisible() && !cards[1]->getVisible() &&
+              !cards[2]->getVisible() && !cards[3]->getVisible(),
+          "pending codec cards and their text are excluded from rendering and input");
+  StorageVideoCapabilities capabilities{};
+  capabilities[0] = {.codec = VideoCodec::H264, .available = true, .hardware = false,
+      .playbackAvailable = true};
+  capabilities[1] = {.codec = VideoCodec::Hevc, .available = false, .hardware = true,
+      .playbackAvailable = true};
+  capabilities[2] = {.codec = VideoCodec::Av1, .available = true, .hardware = true,
+      .playbackAvailable = true};
+  storageCapabilityPromise.set_value(capabilities);
+  SDL_Event wake{}; wake.type = SDL_EVENT_USER;
+  modal->handleEvents(wake);
+  require(YGNodeStyleGetDisplay(cards[1]->getNode()) == YGDisplayFlex && YGNodeStyleGetDisplay(cards[2]->getNode()) == YGDisplayNone && YGNodeStyleGetDisplay(cards[3]->getNode()) == YGDisplayFlex,
+          "codec modal only offers verified encoding and playback options");
+  require(!cards[0]->getVisible() && cards[1]->getVisible() &&
+              !cards[2]->getVisible() && cards[3]->getVisible(),
+          "ready modal hides the status and unavailable card from rendering and input");
+  auto *h264Encoding = dynamic_cast<TextView *>(cards[1]->getChildren()[2]);
+  auto *av1Encoding = dynamic_cast<TextView *>(cards[3]->getChildren()[2]);
+  auto *av1Playback = dynamic_cast<TextView *>(cards[3]->getChildren()[3]);
+  require(h264Encoding->getText() != av1Encoding->getText() &&
+              av1Playback->getText() == i18n::tr("storage.ui.codec_playback_software_help"),
+          "modal explains actual hardware encoding and software playback independently");
+  auto saved = selected;
+  saved.videoCodec = VideoCodec::Hevc;
+  const int changesBeforeRefresh = changes;
+  editor.SetPolicy(saved);
+  require(portal.presented.empty() && changes == changesBeforeRefresh &&
+              dynamic_cast<TextView *>(codecButton->getContentView())->getText().find("HEVC") != std::string::npos,
+          "unsupported saved codec remains visible without silently saving a replacement");
+  click(*codecButton);
+  click(*dynamic_cast<Button *>(cards[3]->getChildren().back()));
+  require(selected.videoCodec == VideoCodec::Av1 && changes == changesBeforeRefresh + 1 &&
+              portal.presented.empty(), "choosing a supported codec saves once and dismisses the modal");
+  choose(3, "4");
+  choose(4, "24");
+  require(selected.bga == BgaAction::CompressH264 &&
+              selected.resolution == ResolutionCap::Low && selected.maxFps == 24,
+          "resolution and FPS apply the selected values directly");
+  click(*fields[2]->triggerButton);
+  click(*fields[4]->triggerButton);
+  require(!fields[2]->current.open && fields[4]->current.open &&
+              !portal.isPresented(fields[2]->menuScroll) && portal.isPresented(fields[4]->menuScroll),
+          "only the active storage menu appears in the unclipped overlay portal");
+  editor.SetEnabled(false);
+  require(!fields[4]->current.open && !fields[0]->current.enabled &&
+              !portal.isPresented(fields[4]->menuScroll),
+          "starting a storage task closes menus and disables editing");
+  editor.SetEnabled(true);
+  choose(1, "2");
+  require(selected.bga == BgaAction::Delete && selected.maxFps == 24 &&
+              !fields[4]->current.enabled && !efficientButton->isEnabled() &&
+              efficientContent->checked(),
+          "deletion disables video details while retaining their saved values");
+  require(!codecStatus->getVisible(), "leaving compression hides the codec status again");
+  const int previousChanges = changes;
+  editor.SetPolicy({});
+  require(changes == previousChanges && fields[0]->current.selectedId == "0",
+          "external policy refresh updates selection without saving again");
 }
 
 void testColorPickerColorSpace() {
@@ -685,6 +821,7 @@ int main() {
   testRetainedDropdownChangesDensity();
   testChartFilterRowsContainCompactDropdowns();
   testDropdownSelectionDefersTeardownUntilItsCallbackReturns();
+  testStoragePolicyDirectSelection();
 
   {
     GameplayRuleset selected = GameplayRuleset::LR2;

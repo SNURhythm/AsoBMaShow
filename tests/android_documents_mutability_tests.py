@@ -222,6 +222,9 @@ class AndroidDocumentsMutabilityTests(unittest.TestCase):
     def test_import_reservation_blocks_all_provider_mutations(self):
         self.scenario("reserved-import")
 
+    def test_read_descriptors_exclude_maintenance_until_all_readers_close(self):
+        self.scenario("maintenance-readers")
+
     def test_move_keeps_completed_children_protected_until_root_finishes(self):
         self.scenario("reserved-move")
 

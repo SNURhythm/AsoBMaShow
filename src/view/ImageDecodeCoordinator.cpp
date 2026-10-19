@@ -226,6 +226,20 @@ void ImageDecodeCoordinator::dropAll() {
   if (changed && notifier_) notifier_();
 }
 
+void ImageDecodeCoordinator::pauseAndWait() {
+  std::unique_lock lock(mutex_);
+  ++pauseCount_;
+  cv_.wait(lock, [this] { return activeLoads_ == 0; });
+}
+
+void ImageDecodeCoordinator::resume() {
+  {
+    std::lock_guard lock(mutex_);
+    if (pauseCount_ != 0) --pauseCount_;
+  }
+  cv_.notify_all();
+}
+
 void ImageDecodeCoordinator::shutdown() {
   std::lock_guard shutdownLock(shutdownMutex_);
   {
@@ -302,7 +316,8 @@ void ImageDecodeCoordinator::run() {
     {
       std::unique_lock lock(mutex_);
       cv_.wait(lock, [this] {
-        return stopping_ || !priorityQueue_.empty() || !queue_.empty();
+        return stopping_ || (pauseCount_ == 0 &&
+                             (!priorityQueue_.empty() || !queue_.empty()));
       });
       if (stopping_) {
         return;
@@ -326,6 +341,7 @@ void ImageDecodeCoordinator::run() {
       if (!found) {
         continue;
       }
+      ++activeLoads_;
     }
 
     std::optional<DecodedImageData> decoded;
@@ -338,6 +354,8 @@ void ImageDecodeCoordinator::run() {
     }
 
     std::unique_lock lock(mutex_);
+    --activeLoads_;
+    cv_.notify_all();
     const auto work = work_.find(request.key);
     if (work == work_.end() || work->second.id != workId ||
         work->second.state != WorkState::InFlight) {

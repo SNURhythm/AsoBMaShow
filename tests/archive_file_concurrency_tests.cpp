@@ -34,6 +34,8 @@
 
 namespace bounded_allocation_probe {
 thread_local bool enabled = false;
+thread_local bool observeStartup = false;
+thread_local std::size_t startupAllocations = 0, failedStartupAllocation = static_cast<std::size_t>(-1);
 thread_local std::size_t largest = 0;
 thread_local std::stop_source *cancelOnChunk = nullptr;
 std::atomic_size_t observedEntrySize{0};
@@ -46,6 +48,10 @@ const std::length_error injectedLengthError("injected archive length failure");
 }
 
 void *operator new(std::size_t size) {
+  if (bounded_allocation_probe::observeStartup &&
+      bounded_allocation_probe::startupAllocations++ == bounded_allocation_probe::failedStartupAllocation) {
+    bounded_allocation_probe::observeStartup = false; throw std::bad_alloc();
+  }
   if (bounded_allocation_probe::rejectEntryAllocation &&
       size == bounded_allocation_probe::rejectedEntrySize.load()) {
     ++bounded_allocation_probe::rejectedAllocations;
@@ -2490,6 +2496,12 @@ void testSingleEntryZipPreservesIndexedFilename() {
   std::ofstream output(path, std::ios::binary);
   output.write(reinterpret_cast<const char *>(fixture), sizeof(fixture));
   output.close();
+  std::filesystem::path indexedName;
+  assert(archive_file::visitIndexEntries(path, [&](const auto &entry) {
+    indexedName = entry.path;
+    return true;
+  }));
+  assert(indexedName == "mapped.bin");
   for (std::size_t workers : {1, 4}) {
     archive_file::UnzipBudget budget{.limits = {.maximumWorkers = workers}};
     std::string error;
@@ -2497,10 +2509,10 @@ void testSingleEntryZipPreservesIndexedFilename() {
         path, temporary.path() / std::to_string(workers), &error, nullptr,
         nullptr, nullptr, false, nullptr, &budget);
     assert(result && budget.writtenBytes == 1024);
-    std::ifstream input(result->outputFolder / "listed.bin", std::ios::binary);
+    std::ifstream input(result->outputFolder / indexedName, std::ios::binary);
     const std::string actual((std::istreambuf_iterator<char>(input)), {});
     assert(actual == std::string(1024, 'x'));
-    assert(!std::filesystem::exists(result->outputFolder / "mapped.bin"));
+    assert(!std::filesystem::exists(result->outputFolder / "listed.bin"));
   }
 }
 
@@ -3163,6 +3175,75 @@ void testArchiveIndexRejectsPreservedMetadataReplacement(bool coldCache,
   assert(archive_file::listEntries(archivePath, entries, &error));
   assert(entries.size() == 1 && entries.front().path == "new.wav");
   archive_file::clearArchiveIndexCacheForTesting();
+}
+
+void testIndexVisitorStreamsAndReleasesStorageOnlyIndexes() {
+  TempDirectory temporary;
+  const auto archive = temporary.path() / "visit.zip";
+  const auto cache = temporary.path() / "index";
+  std::vector<std::string> paths;
+  for (int i = 0; i < 1000; ++i) paths.push_back("folder/entry-" + std::to_string(i) + ".wav");
+  writeStoredZip(archive, paths);
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cache);
+  std::string error;
+  std::size_t entries = 0;
+  assert(archive_file::visitIndexEntries(archive, [&](const auto &) { ++entries; return true; }, &error));
+  assert(entries == 1000);
+  assert(archive_file::residentArchiveIndexCountForTesting() == 0);
+  bounded_allocation_probe::largest = 0;
+  bounded_allocation_probe::enabled = true;
+  entries = 0;
+  const bool streamed = archive_file::visitIndexEntries(archive, [&](const auto &) { ++entries; return true; }, &error);
+  bounded_allocation_probe::enabled = false;
+  assert(streamed && entries == 1000);
+  assert(bounded_allocation_probe::largest < 64 * 1024);
+  assert(archive_file::residentArchiveIndexCountForTesting() == 0);
+
+  const auto cacheFile = std::filesystem::directory_iterator(cache)->path();
+  const auto validCache = readTestFile(cacheFile);
+  auto corruptCache = validCache;
+  const auto secondPath = corruptCache.find(paths[1]);
+  assert(secondPath != std::string::npos);
+  corruptCache[secondPath] = '/';
+  {
+    std::ofstream output(cacheFile, std::ios::binary | std::ios::trunc);
+    output.write(corruptCache.data(), static_cast<std::streamsize>(corruptCache.size()));
+    assert(output);
+  }
+  // Stopping the visitor is not cache corruption, even if unread records are bad.
+  entries = 0;
+  assert(!archive_file::visitIndexEntries(archive, [&](const auto &) { ++entries; return false; }, &error));
+  assert(entries == 1 && readTestFile(cacheFile) == corruptCache);
+  error.clear();
+  entries = 0;
+  bounded_allocation_probe::largest = 0;
+  bounded_allocation_probe::enabled = true;
+  const bool corruptStreamed = archive_file::visitIndexEntries(
+      archive, [&](const auto &) { ++entries; return true; }, &error);
+  bounded_allocation_probe::enabled = false;
+  assert(!corruptStreamed && entries == 1 && !error.empty());
+  // A failed measurement must not materialize all archive entries to repair
+  // the cache. Discard it and leave rebuilding to a later independent request.
+  assert(bounded_allocation_probe::largest < 64 * 1024);
+  assert(!std::filesystem::exists(cacheFile));
+  assert(archive_file::residentArchiveIndexCountForTesting() == 0);
+  error.clear();
+  entries = 0;
+  assert(archive_file::visitIndexEntries(archive, [&](const auto &) { ++entries; return true; }, &error));
+  assert(entries == 1000 && readTestFile(cacheFile) == validCache);
+  assert(archive_file::residentArchiveIndexCountForTesting() == 0);
+
+  std::vector<archive_file::Entry> resident;
+  assert(archive_file::listEntries(archive, resident, &error));
+  assert(archive_file::residentArchiveIndexCountForTesting() == 1);
+  assert(archive_file::visitIndexEntries(archive, [](const auto &) { return true; }, &error));
+  assert(archive_file::residentArchiveIndexCountForTesting() == 1);
+  archive_file::clearArchiveIndexCacheForTesting();
+  entries = 0;
+  assert(!archive_file::visitIndexEntries(archive, [&](const auto &) { ++entries; return false; }, &error));
+  assert(entries == 1 && archive_file::residentArchiveIndexCountForTesting() == 0);
+  archive_file::setArchiveIndexCacheDirectory({});
 }
 
 void testArchiveIndexPersistsAcrossColdCacheRestart() {
@@ -3884,7 +3965,15 @@ void testConcurrentZipMappingFallback() {
 
 } // namespace
 
+int RunStorageMeasurementTests();
+int RunStorageInventoryTaskTests();
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string(argv[1]) == "--storage-inventory-task") return RunStorageInventoryTaskTests();
+  if (argc == 2 && std::string(argv[1]) == "--storage-measurement") return RunStorageMeasurementTests();
+  if (argc == 2 && std::string(argv[1]) == "--index-visitor") {
+    testIndexVisitorStreamsAndReleasesStorageOnlyIndexes();
+    return 0;
+  }
   if (argc == 2 && std::string(argv[1]) == "--bounded-reader") {
     testBoundedZipReaderReusesDirectory();
     return 0;
@@ -4068,6 +4157,7 @@ int main(int argc, char **argv) {
     testFullUnzipRuntimeByteLimitCannotRestartFallback(extension);
     testFullUnzipExactBudgetAndReuseDoNotChargeEstimatedBytes(extension);
   }
+  testIndexVisitorStreamsAndReleasesStorageOnlyIndexes();
   testArchiveIndexPersistsAcrossColdCacheRestart();
   for (const bool coldCache : {true, false}) {
     for (const bool replaceFile : {false, true}) {

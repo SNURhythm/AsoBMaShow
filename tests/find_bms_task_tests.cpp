@@ -230,6 +230,7 @@ int main() {
   testRetryPromptKeepsWorkerAndNeedsExplicitDecision();
   testDestructionUnblocksRetryPrompt();
   testImmediateArtifactCompletionKeepsActionsGatedUntilHandoff();
+  testCapturedStoragePolicySurvivesAttemptAndRetainedCompletion();
   testSceneLookupProgressAndIndexHandoff();
   testSceneDownloadPromptRetriesExistingWorker();
   testSceneExtractionProgressPreservesHistoryAcrossLanguages();

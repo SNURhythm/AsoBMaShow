@@ -64,3 +64,5 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
   )
 endif()
 add_subdirectory(play)
+
+target_sources(main PRIVATE StorageManagementScene.cpp SettingsSceneStorage.cpp)

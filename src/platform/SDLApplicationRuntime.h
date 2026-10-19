@@ -28,6 +28,7 @@ bool applicationCanPresent();
 bool takeApplicationOverflow();
 // Synchronous registration on the pump thread; clear before captured state dies.
 void setApplicationEventDiscardHandler(std::function<void(const SDL_Event &)> handler);
+void setApplicationInputSuppressed(bool suppressed);
 void pollApplicationDiagnostics();
 bool isApplicationThread();
 // Queue renderer work at an owner-loop boundary. Native quit/background events

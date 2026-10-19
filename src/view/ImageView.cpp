@@ -555,6 +555,15 @@ void submitTexturedRoundedRect(const RenderContext &context,
 }
 } // namespace
 
+std::shared_ptr<void> pauseImageReadsForStorageMaintenance() {
+  struct Pause {
+    image_decode::ImageDecodeCoordinator &coordinator = imageDecodeCoordinator();
+    Pause() { coordinator.pauseAndWait(); }
+    ~Pause() { coordinator.resume(); }
+  };
+  return std::make_shared<Pause>();
+}
+
 bool imageResourceAvailable(const std::filesystem::path &path) {
   return imageResourceAvailable(path, {});
 }

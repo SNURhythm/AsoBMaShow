@@ -75,6 +75,8 @@ public:
   void requestImportArchive();
   void poll();
   [[nodiscard]] bool active() const noexcept;
+  // A completed desktop selection still needs registration and a library scan.
+  [[nodiscard]] bool hasPendingSelection() const;
 
 private:
   struct Impl;

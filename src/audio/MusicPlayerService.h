@@ -107,6 +107,7 @@ public:
     return native_music_player::GetState();
   }
 
+  bool SetStorageMaintenance(bool active, std::string &errorMessage);
   bool PlayCurrent(std::string &errorMessage);
   bool PlayNext(std::string &errorMessage);
   bool PlayPrevious(std::string &errorMessage);
@@ -189,6 +190,8 @@ private:
   MusicPlaylistRepository &repository;
   ChartRepository &charts;
   mutable std::mutex stateMutex;
+  std::mutex playbackAdmissionMutex;
+  bool storageMaintenance = false;
   std::atomic<std::uint64_t> contentRevision{0};
   mutable std::mutex nativeControlStatusMutex;
   std::mutex nativeControlThreadMutex;

@@ -96,7 +96,7 @@ Release checklist:
 
 ## FFmpeg
 
-AsoBMaShow links FFmpeg for replay video and audio export. The vcpkg manifest
+AsoBMaShow links FFmpeg for media playback, storage optimization, and replay export. The vcpkg manifest
 enables FFmpeg's `gpl` and `x264` features, so the resulting FFmpeg libraries
 are distributed under GPL-2.0-or-later rather than LGPL terms.
 
@@ -116,7 +116,7 @@ Release checklist:
 
 ## x264
 
-AsoBMaShow links x264 through FFmpeg for H.264 replay video export.
+AsoBMaShow links x264 through FFmpeg for H.264 replay export and software storage compression.
 
 Current desktop vcpkg package checked for this notice: `x264` 0.164.3108#2.
 x264 is distributed under GPL-2.0 terms in this build. Its complete
@@ -129,6 +129,13 @@ Release checklist:
   the exact package used for the binary.
 - Preserve the GPL source-availability obligations described above for
   binaries that include x264.
+
+## dav1d
+
+AsoBMaShow links dav1d 1.5.2 through FFmpeg for CPU-based AV1 playback and
+storage conversion validation. Its BSD-2-Clause license is reproduced in
+`assets/legal/dav1d.txt`. Keep this notice in app bundles and release archives;
+the iOS library generation script refreshes it from the installed package.
 
 ## simdutf
 

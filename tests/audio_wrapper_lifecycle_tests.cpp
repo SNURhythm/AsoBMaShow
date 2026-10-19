@@ -871,6 +871,25 @@ void testFailedStopRetainsSingleAndAllStorage() {
   }
 }
 
+void testUnloadAdmissionRetainsStorageUntilAllOwnersAccept() {
+  WrapperFixture fixture;
+  const path_t path = PATH("retain-on-native-unload-failure");
+  fixture.load(path);
+  int callbacks = 0;
+  const auto rejected = fixture.wrapper->unloadSounds([&] {
+    ++callbacks;
+    return audio::playback::BackendOperationResult{.success = false, .diagnostic = "native unload failed"};
+  });
+  require(callbacks == 1 && !rejected.success && rejected.diagnostic == "native unload failed" &&
+      fixture.wrapper->getSoundDurationMicros(path).has_value(),
+      "failed native admission preserves loaded shared PCM");
+  const auto accepted = fixture.wrapper->unloadSounds([&] {
+    ++callbacks; return audio::playback::BackendOperationResult{.success = true};
+  });
+  require(accepted.success && callbacks == 2 && !fixture.wrapper->getSoundDurationMicros(path).has_value(),
+      "successful retry releases shared PCM after native admission");
+}
+
 void testDestructorReleasesBackendBeforeDependentStorageOnStopFailure() {
   Stopwatch stopwatch;
   auto control = std::make_shared<BackendControl>();
@@ -3334,6 +3353,7 @@ int main() {
     testBatchPruneSerializesProducerAgainstWholeErase();
     testConcurrentStartThenUnloadUsesOneLockOrder();
     testFailedStopRetainsSingleAndAllStorage();
+    testUnloadAdmissionRetainsStorageUntilAllOwnersAccept();
     testDestructorReleasesBackendBeforeDependentStorageOnStopFailure();
     testJukeboxLifecycleActionsRunOnlyAfterConfirmation();
     testPlayingSeekAtomicallyExcludesStaleSchedulerAndReaders();

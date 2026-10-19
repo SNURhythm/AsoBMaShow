@@ -15,6 +15,7 @@ add_executable(find_bms_task_tests
     src/scene/FindBmsDialogPolicy.cpp
     src/scene/FindBmsProgressPresentation.cpp
     src/scene/FindBmsTask.cpp
+    src/storage/StoragePolicy.cpp
 )
 target_include_directories(find_bms_task_tests PRIVATE
     ${CMAKE_SOURCE_DIR}/src ${CMAKE_CURRENT_BINARY_DIR}/generated)

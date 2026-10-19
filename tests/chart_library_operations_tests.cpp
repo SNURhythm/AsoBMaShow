@@ -641,6 +641,65 @@ void testConcurrentScannerCheckpointsReturnPausedForEveryScanOperation() {
   }
 }
 
+void testBatchRefreshIndexesEveryRequestedRoot() {
+  using namespace chart_library_tasks;
+  TempDirectory temporary;
+  const auto first = temporary.path() / "first";
+  const auto second = temporary.path() / "second";
+  writeChart(first); writeChart(second);
+  std::ofstream(first / "sample.wav") << "initial resource";
+  ChartRepository repository(temporary.path() / "chart.db");
+  expect(repository.EnsureReady(), "batch refresh repository is ready");
+  bool reloadRequested = false;
+  ChartLibraryOperations operations(dependencies(repository, temporary.path(), reloadRequested));
+  TaskRequest request;
+  request.kind = TaskKind::RefreshPath;
+  request.refreshPaths = {first, second};
+  const auto result = operations.run(request, {}, [](const auto &, const auto &) {}, [] { return true; });
+  auto session = repository.OpenSession();
+  expect(result.disposition == TaskRunDisposition::Complete && session->CountAllChartMeta() == 2 && reloadRequested,
+      "one batch refresh indexes both disjoint roots and publishes completion");
+  // No charts means the scanner has no row mutation to publish. Editing an
+  // existing resource also preserves directory membership and its timestamp.
+  const auto resources = temporary.path() / "resources";
+  std::filesystem::create_directories(resources);
+  std::ofstream(resources / "sample.wav") << "initial";
+  request.refreshPaths = {resources};
+  operations.run(request, {}, [](const auto &, const auto &) {}, [] { return true; });
+  const auto before = repository.GetLibraryRevision();
+  std::ofstream(resources / "sample.wav") << "resource-only change";
+  operations.run(request, {}, [](const auto &, const auto &) {}, [] { return true; });
+  const auto changes = repository.GetLibraryChangesSince(before);
+  expect(changes.revision > before && !changes.unknown &&
+      changes.roots == std::vector<std::filesystem::path>{resources},
+      "resource-only refresh publishes only its storage scope without changing chart rows");
+  request.storageMeasurementsCurrent = true;
+  operations.run(request, {}, [](const auto &, const auto &) {}, [] { return true; });
+  expect(repository.GetLibraryRevision() == changes.revision,
+      "maintenance refresh does not invalidate resource deltas already applied by the storage job");
+  std::filesystem::rename(first / "sample.wav", first / "sample.flac");
+  std::filesystem::last_write_time(first, std::filesystem::last_write_time(first) + std::chrono::seconds(2));
+  // This edit happens after the optimizer's final evidence check. Its report
+  // covers the first folder's conversion, not this external resource change.
+  std::ofstream(second / "external.wav") << "external resource";
+  std::filesystem::last_write_time(second, std::filesystem::last_write_time(second) + std::chrono::seconds(2));
+  request.refreshPaths = {first, second};
+  operations.run(request, {}, [](const auto &, const auto &) {}, [] { return true; });
+  const auto maintenance = repository.GetLibraryChangesSince(changes.revision);
+  expect(maintenance.revision > changes.revision && !maintenance.unknown &&
+      maintenance.roots == std::vector<std::filesystem::path>{first, second},
+      "maintenance scans preserve discovered invalidations, including edits absent from the optimizer report");
+  expect(repository.GetLibraryChangesSince(before).roots == std::vector<std::filesystem::path>{first, resources, second},
+      "maintenance revision preserves earlier ordinary source invalidations");
+  request.storageMeasurementsCurrent = false;
+  request.refreshPaths = {first};
+  std::filesystem::rename(first / "sample.flac", first / "sample.ogg");
+  std::filesystem::last_write_time(first, std::filesystem::last_write_time(first) + std::chrono::seconds(2));
+  operations.run(request, {}, [](const auto &, const auto &) {}, [] { return true; });
+  expect(repository.GetLibraryChangesSince(maintenance.revision).roots == std::vector<std::filesystem::path>{first},
+      "ordinary scanner refresh still invalidates changed resource measurements");
+}
+
 void testAddingFolderRefreshesAccessForEveryEffectiveEntry() {
   TempDirectory temporary;
   const auto existingRoot = temporary.path() / "existing";
@@ -1294,11 +1353,50 @@ void testDesktopFolderRepickPreservesTheUnpolledSelection() {
          "each selected folder queues exactly one scan across repeated polls");
 }
 
+void testDesktopFolderSelectionWaitsForMaintenanceHandoff() {
+  TempDirectory temp;
+  ChartRepository repository(temp.path() / "chart.db");
+  expect(repository.EnsureReady(), "maintenance picker repository is ready");
+  chart_library_tasks::ChartLibraryTaskService tasks(
+      [](const auto &, const auto &, auto, auto) {
+        return chart_library_tasks::TaskRunResult{};
+      });
+  chart_library_platform::FolderActionService picker(repository, tasks);
+  desktopPickerResult = (temp.path() / "pending folder").string();
+  picker.requestAddFolder();
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (picker.active() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::yield();
+  }
+  expect(!picker.active(), "native picker publishes its result before maintenance");
+  expect(picker.hasPendingSelection(), "completed unpolled selection still blocks storage admission");
+  const auto reservation = tasks.tryReserveMaintenance();
+  expect(reservation.has_value(), "idle task service reserves maintenance before picker handoff");
+  if (!reservation) return;
+  picker.poll();
+  picker.poll();
+  expect(repository.OpenSession()->SelectEffectiveEntries().empty(),
+         "maintenance defers registration of a completed desktop selection");
+  expect(tasks.snapshot().tasks.empty(), "maintenance defers the selected folder scan");
+  expect(picker.hasPendingSelection(), "maintenance leaves the completed selection pending");
+  tasks.releaseMaintenance(*reservation);
+  picker.poll();
+  picker.poll();
+  const auto entries = repository.OpenSession()->SelectEffectiveEntries();
+  expect(entries.size() == 1 && std::filesystem::path(entries.front().path) ==
+             std::filesystem::path(desktopPickerResult),
+         "released maintenance registers the retained desktop selection");
+  expect(tasks.snapshot().tasks.size() == 1,
+         "released maintenance queues the retained selection exactly once");
+  expect(!picker.hasPendingSelection(), "registration and scan handoff consume the completed selection");
+}
+
 int main() {
   testDesktopFolderPickerShutdownAbandonsAnOpenDialog();
   testDesktopFolderPickerWaitsForOtherNativeDialogs();
   testDesktopFolderPickingRegistersAndQueuesScan();
   testDesktopFolderRepickPreservesTheUnpolledSelection();
+  testDesktopFolderSelectionWaitsForMaintenanceHandoff();
   testRefreshAcknowledgesMissingSourceAndIndexesPreservedOutput();
   testUnavailableRecoveryDoesNotBlockHealthyLibraryRoots();
   testStartupRefreshRecoversDeletedArchiveBeforeClearingTheJournal();
@@ -1310,6 +1408,7 @@ int main() {
   testRebuildTaskRetriesPreserveInitializationAndArchiveProgress(true, true, true);
   testFailedFolderRegistrationCanBeRetriedThroughTheService();
   testConcurrentScannerCheckpointsReturnPausedForEveryScanOperation();
+  testBatchRefreshIndexesEveryRequestedRoot();
   testAddingFolderRefreshesAccessForEveryEffectiveEntry();
   testPathRefreshReconcilesOnlyTheRequestedSubtree();
   testPathRefreshReparsesSamePathAndFolderPreview();

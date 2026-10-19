@@ -30,6 +30,11 @@ public:
   ChartLibraryTaskService(const ChartLibraryTaskService &) = delete;
   ChartLibraryTaskService &operator=(const ChartLibraryTaskService &) = delete;
 
+  std::optional<std::uint64_t> tryReserveMaintenance();
+  void releaseMaintenance(std::uint64_t token);
+  bool maintenanceReserved() const;
+  std::uint64_t enqueueMaintenanceRefresh(std::uint64_t token, TaskRequest request);
+
   void start();
   void shutdown() noexcept;
   void setGameplayPaused(bool paused);
@@ -60,6 +65,7 @@ private:
   static bool isActive(TaskStatus status) noexcept;
   // Requires lifecycleMutex_; admission holds it through the state commit.
   void startWorkerLocked();
+  std::uint64_t enqueueLocked(TaskRequest request);
   void run(const std::stop_token &stopToken);
   bool waitForResume(std::uint64_t id, const std::stop_token &stopToken);
   void publishProgress(std::uint64_t id, const ChartScanProgress &progress,
@@ -90,6 +96,7 @@ private:
   std::optional<std::uint64_t> activeTaskId_;
   ProgressSnapshot progress_;
   std::uint64_t nextTaskId_ = 1;
+  std::optional<std::uint64_t> maintenanceToken_;
   std::uint64_t revision_ = 0;
   std::uint64_t progressRevision_ = 0;
   bool gameplayPaused_ = false;

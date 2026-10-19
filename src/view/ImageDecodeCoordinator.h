@@ -76,6 +76,10 @@ public:
   void drop(std::string_view key);
   void dropPrefix(std::string_view prefix);
   void dropAll();
+  // Defer new loads and wait for all active loaders, including cancelled work.
+  // Each call must be paired with resume(); queued requests retain their tickets.
+  void pauseAndWait();
+  void resume();
   void shutdown();
 
   [[nodiscard]] std::size_t pendingCount(std::string_view key) const;
@@ -115,6 +119,8 @@ private:
   std::uint64_t nextWorkId_ = 1;
   std::size_t configuredWorkerCount_ = 0;
   std::size_t readyBytes_ = 0;
+  std::size_t pauseCount_ = 0;
+  std::size_t activeLoads_ = 0;
   bool stopping_ = false;
 };
 

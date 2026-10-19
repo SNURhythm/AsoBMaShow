@@ -1,0 +1,322 @@
+#include "../src/storage/StoragePreflight.h"
+#include "../src/storage/StorageMeasurement.h"
+#include "../src/storage/StoragePathIndex.h"
+#include "StorageTestSupport.h"
+#include <algorithm>
+#include <iostream>
+
+using namespace storage_management;
+using storage_test::require;
+using storage_test::TempDirectory;
+namespace fs = std::filesystem;
+namespace {
+InventoryRequest request(const fs::path &path) {
+  return {.groups = {{"root", path}}, .policy = {.audio = AudioAction::LossyVorbis}};
+}
+void summariesDoNotRetainAllAssets() {
+  TempDirectory temp;
+  temp.write("charts/a.wav", std::string(10, 'a'));
+  temp.write("charts/b.wav", std::string(20, 'b'));
+  temp.write("charts/sub/c.wav", std::string(30, 'c'));
+  temp.write("charts/sub/readme.txt", "12345");
+  temp.write("charts/chart.bms", "1234");
+  temp.write("outside.wav", "1234567");
+  fs::create_hard_link(temp.root / "outside.wav", temp.root / "charts/hard.wav");
+  auto input = request(temp.root / "charts");
+  input.groups.push_back({"sub", temp.root / "charts/sub"});
+  input.groups.push_back({"duplicate", temp.root / "charts"});
+  const auto preflight = BuildStoragePreflight(input);
+  require(preflight.complete && preflight.directories.size() == 2, "preflight retains one summary per directory");
+  require(preflight.eligibleCount == 3 && preflight.eligibleBytes == 60 && preflight.totalBytes == 76,
+          "preflight sums eligible assets once while measuring ineligible hard links");
+  require(preflight.groups.at(0).totalBytes == 76 && preflight.groups.at(1).totalBytes == 35 &&
+              preflight.groups.at(2).totalBytes == 76, "recursive and duplicate groups retain their sizes");
+  require(preflight.skippedCount == 1 && preflight.skips.size() == 1, "skip counts survive compact summaries");
+  for (const auto &[path, summary] : preflight.directories)
+    require(summary.samples.empty() && summary.fingerprint.size() == 64, "directory summaries contain hashes, not asset samples");
+}
+void nativePathAliasesRetainTotals() {
+#ifdef _WIN32
+  TempDirectory temp;
+  temp.write("Charts/Sub/a.wav", "12345");
+  auto input = request(temp.root / "Charts");
+  input.groups.push_back({"alias", temp.root / "charts"});
+  input.groups.push_back({"child", temp.root / "CHARTS/sub"});
+  const auto preflight = BuildStoragePreflight(input);
+  require(preflight.complete && preflight.totalBytes == 5 && preflight.eligibleCount == 1 &&
+      preflight.directories.size() == 2, "native aliases scan each directory and candidate once");
+  for (const auto &group : preflight.groups)
+    require(group.totalBytes == 5, "case-variant overlapping groups all receive their subtree totals");
+  require(preflight.directories.contains(temp.root / "charts/SUB") &&
+      preflight.EligibleRoots() == std::vector<fs::path>{temp.root / "Charts"},
+      "case-variant preflight evidence remains usable for admission");
+  std::size_t published = 0;
+  const auto measured = MeasureStorageGroups(input, {}, [&](const auto &rows) { published += rows.size(); });
+  require(measured.complete && measured.totalBytes == 5 && measured.directories.size() == 2 &&
+      measured.groups.size() == 3 && published == 3,
+      "measurement publishes parent, duplicate and nested aliases while counting their union once");
+  for (const auto &group : measured.groups)
+    require(group.totalBytes == 5 && group.audioBytes == 5 && group.reason.code == StorageReason::None,
+        "case-variant overlapping measurement rows all receive their subtree totals");
+#endif
+}
+void caseSensitiveWindowsSiblingsRetainSeparateTotals() {
+#ifdef _WIN32
+  TempDirectory temp;
+  const auto parent = temp.root / "Charts";
+  fs::create_directory(parent);
+  const auto handle = CreateFileW(parent.c_str(), FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+  require(handle != INVALID_HANDLE_VALUE, "open Windows case-sensitive fixture directory");
+  FILE_CASE_SENSITIVE_INFO info{1}; // FILE_CS_FLAG_CASE_SENSITIVE_DIR
+  const bool enabled = SetFileInformationByHandle(handle,
+      static_cast<FILE_INFO_BY_HANDLE_CLASS>(23), &info, sizeof(info));
+  const auto failure = enabled ? ERROR_SUCCESS : GetLastError();
+  CloseHandle(handle);
+  if (!enabled) {
+    require(failure == ERROR_NOT_SUPPORTED || failure == ERROR_INVALID_PARAMETER ||
+                failure == ERROR_ACCESS_DENIED || failure == ERROR_PRIVILEGE_NOT_HELD,
+            "unexpected failure enabling NTFS case-sensitive fixture");
+    std::cout << "SKIP: NTFS case-sensitive directory unavailable (Windows error " << failure << ")\n";
+    return;
+  }
+  temp.write("Charts/Song/a.wav", "123");
+  temp.write("Charts/song/b.wav", "12345");
+  const auto upper = parent / "Song", lower = parent / "song";
+  StoragePathIndex index({upper, lower});
+  require(index.MinimalRoots().size() == 2 &&
+      index.Ancestors(upper / "a.wav") == std::vector<std::size_t>{0} &&
+      index.Ancestors(lower / "b.wav") == std::vector<std::size_t>{1},
+      "case-sensitive siblings remain separate roots and memberships");
+  require(!IsWithinFolder(upper / "a.wav", lower) && !IsWithinLocalFolder(lower / "b.wav", upper),
+      "case-sensitive siblings cannot authorize each other's contents");
+  const auto tree = BuildStoragePreflight(request(parent));
+  require(tree.complete && tree.totalBytes == 8 && tree.eligibleCount == 2 && tree.directories.size() == 3 &&
+      tree.directories.at(upper).eligibleBytes == 3 && tree.directories.at(lower).eligibleBytes == 5,
+      "selecting a common parent retains both case-sensitive directory summaries");
+  auto input = request(upper);
+  input.groups.push_back({"lower", lower});
+  const auto preflight = BuildStoragePreflight(input);
+  require(preflight.complete && preflight.eligibleCount == 2 && preflight.totalBytes == 8 &&
+      preflight.groups.at(0).totalBytes == 3 && preflight.groups.at(1).totalBytes == 5,
+      "selecting both case-sensitive siblings retains independent preflight totals");
+  const auto measured = MeasureStorageGroups(input);
+  require(measured.complete && measured.totalBytes == 8 && measured.groups.at(0).totalBytes == 3 &&
+      measured.groups.at(1).totalBytes == 5,
+      "case-sensitive sibling measurements never reuse another root's total");
+  std::cout << "PASS: NTFS case-sensitive sibling coverage exercised\n";
+#endif
+}
+void independentSelectedFoldersComplete() {
+  TempDirectory temp;
+  temp.write("one/nested/a.wav", "12345");
+  temp.write("two/b.wav", "1234567");
+  auto input = request(temp.root / "one");
+  input.groups.push_back({"other", temp.root / "two"});
+  input.groups.push_back({"missing", temp.root / "missing"});
+  input.groups.push_back({"archive", temp.root / "archive.zip", false, false, StorageSourceKind::Archive});
+  temp.write("unchanged/readme.txt", "kept");
+  input.groups.push_back({"unchanged", temp.root / "unchanged"});
+  const auto preflight = BuildStoragePreflight(input);
+  require(preflight.complete && preflight.eligibleCount == 2 && preflight.eligibleBytes == 12,
+          "completed review permits eligible folders alongside unavailable selections");
+  require(!preflight.totalBytes && !preflight.groups.at(2).totalBytes && !preflight.groups.at(3).totalBytes,
+          "skipped selections retain unknown sizes and their diagnostics");
+  require(preflight.groups.at(2).reason.code == StorageReason::IncompleteInventory &&
+              preflight.groups.at(3).reason.code == StorageReason::UnsupportedSource,
+          "unavailable groups explain their exclusion");
+  require(preflight.EligibleRoots() == std::vector<fs::path>{temp.root / "one", temp.root / "two"},
+          "admission reserves whole eligible folders without unavailable or unchanged selections");
+  StorageScanDependencies failed;
+  failed.limits.workers = failed.limits.maxSubmitted = 1;
+  failed.enumerate = [](const auto &path, const auto &root, auto mode, auto check, auto visit,
+      auto &stamp, auto *metrics, auto &error) {
+    if (path.filename() == "two") throw std::runtime_error("injected worker failure");
+    return VisitStorageDirectory(path, root, mode, check, visit, stamp, metrics, error);
+  };
+  auto interruptedInput = input;
+  interruptedInput.groups.front().path /= "nested"; // Finish one candidate before the second worker fails.
+  const auto interrupted = BuildStoragePreflight(interruptedInput, {}, nullptr, failed);
+  require(!interrupted.complete && interrupted.eligibleCount == 1 && interrupted.EligibleRoots().empty(),
+          "interrupted scan cannot authorize even previously counted eligible files");
+}
+void unknownPermissionsRemainEligible() {
+  TempDirectory temp;
+  temp.write("charts/a.wav", "audio");
+  for (const auto permissions : {fs::perms::unknown, fs::perms::owner_read, fs::perms::owner_write}) {
+    StorageScanDependencies deps;
+    deps.enumerate = [&](const auto &path, const auto &root, auto mode, auto check, auto visit,
+        auto &stamp, auto *metrics, auto &error) {
+      const bool scanned = VisitStorageDirectory(path, root, mode, check, visit, stamp, metrics, error);
+      stamp.permissions = permissions; return scanned;
+    };
+    const auto preflight = BuildStoragePreflight(request(temp.root / "charts"), {}, nullptr, deps);
+    require(preflight.complete && preflight.eligibleCount == (permissions == fs::perms::owner_read ? 0 : 1),
+        "Windows unknown permissions remain eligible while known read-only parents are excluded");
+  }
+}
+void fingerprintsRejectChangedEntries() {
+  TempDirectory temp;
+  temp.write("charts/a.wav", "12345");
+  auto input = request(temp.root / "charts");
+  auto preflight = BuildStoragePreflight(input);
+  std::string error;
+  auto loaded = LoadStorageDirectory(preflight.directories.at(temp.root / "charts"), input, {}, error);
+  require(loaded && loaded->Size() == 1, "unchanged directory loads its bounded working set");
+  const auto original = loaded->Find("a.wav", error);
+  require(original && original->identity &&
+      original->identity->modified == fs::last_write_time(temp.root / "charts/a.wav"),
+      "native inventory timestamps use the filesystem clock epoch");
+  fs::last_write_time(temp.root / "charts/a.wav", fs::last_write_time(temp.root / "charts/a.wav") + std::chrono::seconds(1));
+  require(!LoadStorageDirectory(preflight.directories.at(temp.root / "charts"), input, {}, error),
+          "changed source metadata invalidates directory fingerprint");
+  preflight = BuildStoragePreflight(input);
+  temp.write("charts/a.ogg", "collision");
+  require(!LoadStorageDirectory(preflight.directories.at(temp.root / "charts"), input, {}, error),
+          "new destination never becomes part of confirmed evidence");
+  preflight = BuildStoragePreflight(input);
+  const auto oldTime = fs::last_write_time(temp.root / "charts");
+  fs::rename(temp.root / "charts", temp.root / "retired");
+  temp.write("charts/a.wav", "12345"); temp.write("charts/a.ogg", "collision");
+  fs::last_write_time(temp.root / "charts", oldTime);
+  require(!LoadStorageDirectory(preflight.directories.at(temp.root / "charts"), input, {}, error),
+          "directory replacement is rejected even with restored timestamps");
+}
+StorageDirectoryEntry audio(std::string name) {
+  return {.name = std::move(name), .kind = StorageEntryKind::Regular, .bytes = 10,
+          .permissions = fs::perms::owner_read | fs::perms::owner_write,
+          .identity = FileIdentity{.bytes = 10, .modified = fs::file_time_type{}, .device = 1, .fileId = 2}};
+}
+void largeDirectorySpillRetainsCollisionRules() {
+  TempDirectory temp;
+  temp.write("keep", "unrelated");
+  const auto scratch = temp.root / u8"임시-音楽-🎵";
+  fs::create_directory(scratch);
+  {
+    StorageDirectoryInventory memory(temp.root);
+    StorageDirectoryInventory disk(temp.root, {.records = 2, .bytes = 4096, .scratchRoot = scratch});
+    std::vector<StorageDirectoryEntry> entries{audio("sound.WAV"), audio("SOUND.flac"), audio("plain.wav"),
+        {.name = "plain.mp3", .kind = StorageEntryKind::Directory},
+        audio("link.wav"), {.name = "link.ogg", .kind = StorageEntryKind::Symlink}};
+    for (auto &entry : entries) if (entry.identity) entry.identity->modified = fs::file_time_type::clock::now();
+    using FileDuration = fs::file_time_type::duration;
+    const auto wideSeconds = std::chrono::seconds(13'000'000'000LL);
+    if (std::chrono::duration<long double>(FileDuration::max()) >= std::chrono::duration<long double>(wideSeconds))
+      entries.front().identity->modified = fs::file_time_type(
+          std::chrono::duration_cast<FileDuration>(wideSeconds) +
+          std::chrono::duration_cast<FileDuration>(std::chrono::nanoseconds(123'456'700)));
+    std::string error;
+    for (const auto &entry : entries) require(memory.Add(entry, error), "add in-memory entry");
+    std::reverse(entries.begin(), entries.end());
+    for (const auto &entry : entries) require(disk.Add(entry, error), "add spilled entry");
+    require(!memory.Spilled() && disk.Spilled() && disk.Size() == 6, "large directory spills without retaining all entries");
+    require(memory.Fingerprint({}, error) == disk.Fingerprint({}, error), "ordered fingerprint is independent of enumeration and spill");
+    for (const auto &entry : entries) {
+      const auto restored = disk.Find(entry.name, error);
+      require(restored && restored->identity == entry.identity, "spilled metadata preserves full filesystem timestamps");
+    }
+    StorageDiagnostic reason;
+    require(!StorageCandidateForEntry(audio("sound.WAV"), disk, {.audio = AudioAction::LossyVorbis}, {}, reason) &&
+                reason.code == StorageReason::Collision, "case-varied same-stem alternatives stay ambiguous after spill");
+    require(StorageCandidateForEntry(audio("plain.wav"), disk, {.audio = AudioAction::LossyVorbis}, {}, reason).has_value(),
+            "an unrelated directory extension does not block safe media");
+    require(!StorageCandidateForEntry(audio("link.wav"), disk, {.audio = AudioAction::LossyVorbis}, {}, reason),
+            "unsafe destination remains a collision");
+    for (const auto &entry : {audio("reuse.wav"), audio("reuse.flac"), audio("lossy.wav"), audio("lossy.ogg"),
+                              audio("clip.wmv"), audio("clip.mp4")})
+      require(disk.Add(entry, error), "add existing destination fixtures");
+    for (const auto action : {AudioAction::LosslessFlac, AudioAction::LossyVorbis}) {
+      const auto reuse = StorageCandidateForEntry(audio(action == AudioAction::LosslessFlac ? "reuse.wav" : "lossy.wav"),
+          disk, {.audio = action}, {}, reason);
+      require(reuse && reuse->reuseDestination && reuse->existingDestinationIdentity,
+              "an existing audio destination is eligible for validation and reuse");
+    }
+    const auto reuseVideo = StorageCandidateForEntry(audio("clip.wmv"), disk, {.bga = BgaAction::CompressH264}, {}, reason);
+    require(reuseVideo && reuseVideo->reuseDestination, "an existing MP4 destination is eligible for reuse");
+    require(!StorageCandidateForEntry(audio("clip.mp4"), disk, {.bga = BgaAction::CompressH264}, {}, reason),
+            "the retained MP4 is not independently re-encoded while alternatives depend on it");
+    require(disk.Remove("sound.WAV", error), "advance removes retired entry");
+    auto changed = audio("sound.ogg");
+    require(disk.Set(changed, error) && disk.Find("sound.ogg", error).has_value(), "advance retains installed entry");
+    require(!disk.Find("sound.WAV", error), "retired entry stays absent");
+    require(!disk.Visit([] { return false; }, [](const auto &) { return true; }, error), "spill iteration observes cancellation");
+  }
+  require(fs::is_empty(scratch) && fs::exists(temp.root / "keep"),
+          "Unicode spill cleanup preserves unrelated private files");
+}
+void existingDestinationDoesNotBypassAlternatives() {
+  TempDirectory temp;
+  for (bool spill : {false, true}) {
+    StorageDirectoryInventory directory(temp.root, {.records = spill ? 0u : 100u, .scratchRoot = temp.root});
+    std::string error;
+    require(directory.Add(audio("sound.wav"), error) && directory.Add(audio("sound.ogg"), error),
+        "add source and retained destination");
+    for (auto alternative : {audio("sound.flac"), audio("SOUND.FLAC"), audio("SOUND.WAV"),
+            StorageDirectoryEntry{.name = "sound.flac", .kind = StorageEntryKind::Regular},
+            StorageDirectoryEntry{.name = "sound.flac", .kind = StorageEntryKind::Symlink}}) {
+      require(directory.Add(alternative, error), "add same-stem alternative");
+      StorageDiagnostic reason;
+      require(!StorageCandidateForEntry(audio("sound.wav"), directory, {.audio = AudioAction::LossyVorbis}, {}, reason) &&
+          reason.code == StorageReason::Collision,
+          "existing destination cannot bypass regular, unsafe or case-alias alternatives in either index");
+      require(directory.Remove(alternative.name, error), "remove same-stem alternative");
+    }
+  }
+}
+void skipDetailsAndSpillErrorsStayBounded() {
+  TempDirectory temp;
+  StorageScanDependencies deps;
+  deps.limits.scratchRoot = temp.root;
+  deps.enumerate = [](const auto &, const auto &, auto, auto check, auto visit, auto &, auto *, auto &) {
+    for (int i = 0; i < 5000; ++i) {
+      if (!check() || !visit(StorageDirectoryEntry{.name = std::to_string(i) + ".wav",
+          .kind = StorageEntryKind::Symlink})) return false;
+    }
+    return true;
+  };
+  const auto preflight = BuildStoragePreflight(request(temp.root / "synthetic"), {}, nullptr, deps);
+  require(preflight.complete && preflight.skippedCount == 5000 && preflight.skips.size() == 100 &&
+      preflight.directories.begin()->second.reasons.at(StorageReason::UnsafePath) == 5000,
+      "large directory keeps exact reason counts and only bounded detail samples");
+  require(fs::is_empty(temp.root), "completed preflight releases its private spill");
+  std::string error;
+  StorageDirectoryInventory directory(temp.root, {.records = 0, .scratchRoot = temp.root});
+  require(directory.Add(audio("first.wav"), error), "force first entry to disk");
+  require(!directory.Add(audio("first.wav"), error) && directory.Size() == 1,
+      "duplicate insert cannot alter inventory cardinality");
+  require(!directory.Add(audio("../escape.wav"), error), "reject nonlocal names");
+  auto next = directory.Next({}, error);
+  require(next && next->name == "first.wav" && !directory.Next(next->name, error), "ordered seek ends at final entry");
+}
+void failedSpillAndRestartNeverAuthorizeStaleMetadata() {
+  TempDirectory temp;
+  temp.write("not-directory", "keep");
+  std::string error;
+  StorageDirectoryInventory blocked(temp.root, {.records = 1, .scratchRoot = temp.root / "not-directory"});
+  require(blocked.Add(audio("one.wav"), error), "first record fits memory");
+  require(!blocked.Add(audio("two.wav"), error) && !error.empty(), "spill creation failure is explicit");
+  temp.write("storage-directory-old/directory.sqlite", "unknown old scan");
+  StorageDirectoryInventory restarted(temp.root, {.records = 1, .scratchRoot = temp.root});
+  require(restarted.Add(audio("live.wav"), error) && restarted.Size() == 1 && !restarted.Find("one.wav", error),
+          "restart starts from live enumeration rather than prior spill state");
+  require(fs::exists(temp.root / "storage-directory-old/directory.sqlite"), "unknown stale private state remains untouched");
+  const auto cancelled = BuildStoragePreflight(request(temp.root), [] { return false; });
+  require(cancelled.cancelled && !cancelled.complete && cancelled.eligibleCount == 0, "cancelled preflight authorizes no candidates");
+}
+}
+int storageDirectoryInventoryTests() {
+  try {
+    nativePathAliasesRetainTotals();
+    caseSensitiveWindowsSiblingsRetainSeparateTotals();
+    unknownPermissionsRemainEligible();
+    summariesDoNotRetainAllAssets();
+    independentSelectedFoldersComplete();
+    fingerprintsRejectChangedEntries();
+    existingDestinationDoesNotBypassAlternatives();
+    largeDirectorySpillRetainsCollisionRules();
+    failedSpillAndRestartNeverAuthorizeStaleMetadata();
+    skipDetailsAndSpillErrorsStayBounded();
+  } catch (const std::exception &error) { std::cerr << "FAIL: " << error.what() << '\n'; return 1; }
+  return 0;
+}

@@ -2,6 +2,7 @@
 #include "REPOSITORY_ROOT/src/BmsSearchService.h"
 #include "REPOSITORY_ROOT/src/library/ChartLibraryTaskTypes.h"
 #include <atomic>
+#include "REPOSITORY_ROOT/src/storage/StoragePolicy.cpp"
 #include <cassert>
 
 TOOLBAR_ENUM
@@ -46,10 +47,10 @@ struct Toolbar {
 struct MusicSelectScene {
   bool sceneActive_ = true, failed_ = false, blocked = false;
   struct Context {
-    std::atomic_bool appInBackground = false;
+    std::atomic_bool appInBackground = false, storageMaintenanceActive = false, backgroundTasksPausedForForegroundScene = false;
     TaskService *chartLibraryTasks = nullptr;
     void *sceneManager = nullptr;
-    struct { bool findBmsSkipUnarchivingForNonSolidArchives = false; } settings;
+    struct { bool findBmsSkipUnarchivingForNonSolidArchives = false; storage_management::StoragePreferences storagePreferences; } settings;
   } context;
   struct Bars {
     std::vector<MusicSelectBar> rows;
@@ -120,6 +121,16 @@ int main() {
   assert(modal->shows == 1);
   assert(modal->callbacks.downloadRoot() == "download-root" && rootCalls == 1);
   assert(modal->callbacks.downloadOptions().skipUnarchivingForNonSolidArchives);
+  scene.context.settings.storagePreferences = {.download = {.bga = storage_management::BgaAction::Delete}, .afterDownload = true};
+  auto captured = modal->callbacks.downloadOptions();
+  assert(captured.storagePolicy.bga == storage_management::BgaAction::Delete);
+  scene.context.settings.storagePreferences = {};
+  assert(captured.storagePolicy.bga == storage_management::BgaAction::Delete);
+  assert(storage_management::IsNoOp(modal->callbacks.downloadOptions().storagePolicy));
+  assert(!captured.storagePauseRequested());
+  scene.context.backgroundTasksPausedForForegroundScene = true;
+  assert(captured.storagePauseRequested());
+  scene.context.backgroundTasksPausedForForegroundScene = false;
   BmsSearchResult result;
   result.outputPath = "download-root/chart.zip";
   result.removedPaths = {"download-root/old.zip"};

@@ -151,6 +151,7 @@ std::size_t pruneArchiveIndexCache(
 // from disk (or rebuilds). Not used in production paths.
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
 void clearArchiveIndexCacheForTesting();
+std::size_t residentArchiveIndexCountForTesting();
 #endif
 void appendDebugLogLine(const std::string &message);
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
@@ -170,6 +171,12 @@ bool splitVirtualPath(const std::filesystem::path &path,
                       std::filesystem::path &innerPath);
 std::filesystem::path makeVirtualPath(const std::filesystem::path &archivePath,
                                       const std::filesystem::path &innerPath);
+
+// Visits borrowed records without retaining a new resident index. Discard all
+// accumulated results if validation/cancellation returns false.
+bool visitIndexEntries(const std::filesystem::path &archivePath,
+    const std::function<bool(const Entry &)> &visitor,
+    std::string *errorMessage = nullptr, PauseCallback pauseCallback = nullptr);
 
 bool listEntries(const std::filesystem::path &archivePath,
                  std::vector<Entry> &entries,

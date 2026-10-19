@@ -77,7 +77,8 @@ bool PickAndroidArchiveForImport(std::filesystem::path &path, std::string &) {
   path = pick(); return true;
 }
 bool AndroidBuildHasManageExternalStorage() { return allFilesAccess; }
-void UnregisterAndroidImportTasks(int &) {}
+struct LibraryTasks { bool maintenanceReserved() const { return false; } };
+void UnregisterAndroidImportTasks(LibraryTasks &) {}
 void SDL_Log(const char *, ...) {}
 std::string fspath_to_utf8(const std::filesystem::path &path) { return path.string(); }
 
@@ -91,7 +92,8 @@ class FolderActionService {
   struct Impl {
     std::jthread pickerThread;
     std::atomic_bool pickerActive = false;
-    int *tasks = nullptr;
+    LibraryTasks taskState;
+    LibraryTasks *tasks = &taskState;
     std::atomic_int enqueued = 0;
     void enqueueFolder(const std::filesystem::path &, const std::string &) { ++enqueued; }
 #if TARGET_OS_ANDROID

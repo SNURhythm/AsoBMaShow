@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <iostream>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -60,6 +61,7 @@ void testSuccessRunsBodyExactlyOnce() {
                           .music = true};
           },
           .reportFatal = [&](const Result &) { ++reportCalls; },
+          .recoverStorage = [&] { events.push_back("storage"); return true; },
           .reconcileReplayFiles = [&] {
             ++reconciliationCalls;
             events.push_back("reconcile");
@@ -74,7 +76,7 @@ void testSuccessRunsBodyExactlyOnce() {
   expect(reportCalls == 0, "success does not report fatal");
   expect(runtimeCalls == 1, "success runs application once");
   expect(reconciliationCalls == 1, "success reconciles replay files once");
-  expect(events == std::vector<std::string_view>{"databases", "reconcile",
+  expect(events == std::vector<std::string_view>{"databases", "storage", "reconcile",
                                                  "runtime"},
          "database readiness and reconciliation precede runtime");
 }
@@ -192,6 +194,37 @@ void testDatabaseFailuresFailClosed() {
   }
 }
 
+void testStorageRecoveryFailureBlocksRuntime() {
+  for (const bool throws : {false, true}) {
+    bool fatal = false, runtime = false, reconciled = false;
+    auto exitCode = application_startup::execute(true, Dependencies{
+      .initializeDatabases = [] { return Status{true, true, true, true}; },
+      .reportFatal = [&](const Result &result) { fatal = result.failure == Failure::StorageRecovery; },
+      .recoverStorage = [=] { if (throws) throw std::runtime_error("recovery failed"); return false; },
+      .reconcileReplayFiles = [&] { reconciled = true; },
+      .runReadyApplication = [&] { runtime = true; },
+    });
+    expect(exitCode == EXIT_FAILURE && fatal && !runtime && !reconciled,
+           "failed or throwing storage recovery blocks reconciliation and runtime");
+  }
+}
+
+void testQuitDuringRecoveryClosesWithoutFailureDialog() {
+  for (const bool recovered : {false, true}) {
+    bool quit = false, fatal = false, runtime = false, reconciled = false;
+    const auto exitCode = application_startup::execute(true, Dependencies{
+      .initializeDatabases = [] { return Status{true, true, true, true}; },
+      .reportFatal = [&](const Result &) { fatal = true; },
+      .recoverStorage = [&] { quit = true; return recovered; },
+      .quitRequested = [&] { return quit; },
+      .reconcileReplayFiles = [&] { reconciled = true; },
+      .runReadyApplication = [&] { runtime = true; },
+    });
+    expect(exitCode == EXIT_SUCCESS && !fatal && !runtime && !reconciled,
+           "quit during recovery exits without a modal, reconciliation, or runtime");
+  }
+}
+
 void testBgfxTransientBuffersAreExpanded() {
   struct Limits {
     uint32_t maxTransientVbSize = 0;
@@ -209,6 +242,8 @@ void testBgfxTransientBuffersAreExpanded() {
 
 int main() {
   testSuccessRunsBodyExactlyOnce();
+  testStorageRecoveryFailureBlocksRuntime();
+  testQuitDuringRecoveryClosesWithoutFailureDialog();
   testReplayReconciliationFailureDoesNotBlockResultsOrRuntime();
   testProfileFailureShortCircuitsEverything();
   testDatabaseFailuresFailClosed();

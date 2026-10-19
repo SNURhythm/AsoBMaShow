@@ -1,6 +1,7 @@
 #include "Internal.h"
 #include "DownloadedArchiveWorkflow.h"
 #include "DownloadStorageIdentity.h"
+#include "DownloadStorageOptimization.h"
 #include "GoogleDriveDriver.h"
 
 #include "../RAII.h"
@@ -745,6 +746,7 @@ static bool downloadAndExtractArchiveAttempt(
                                             std::move(extractionCancelled));
           },
       .decideExtracted = decideExtractedArchive,
+      .optimizeExtracted = optimizeExtractedDownload,
       .commitArtifact =
           [](const BmsSearchPendingArtifact &artifact,
              std::string &errorMessage,

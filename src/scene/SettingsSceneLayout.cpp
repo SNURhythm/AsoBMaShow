@@ -2376,6 +2376,8 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
       metrics, i18n::message("settings.misc.archive_preview.label"), i18n::message("settings.misc.preview_charts_inside_archives.message"),
       archivePreviewControls, metrics.modeCardHeight, metrics.cardsWidth));
 
+  cardsColumn->addView(buildStorageControls(metrics));
+
   auto *findBmsArchiveControls = new View();
   findBmsArchiveControls->setFlexDirection(FlexDirection::Column);
   findBmsArchiveControls->setGap(metrics.compact ? 12.0f : 16.0f);

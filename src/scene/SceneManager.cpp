@@ -89,6 +89,7 @@ void SceneManager::changeScene(std::unique_ptr<Scene> newScene,
     return;
   }
 
+  if (context.storageMaintenanceActive && newScene->pausesBackgroundTasksForPerformance()) return;
   Scene *newScenePtr = newScene.get();
   if (currentScene && !keepBackground) {
     Scene *sceneToRelease = currentScene;
@@ -116,6 +117,7 @@ void SceneManager::changeScene(std::unique_ptr<Scene> newScene,
 }
 
 void SceneManager::changeScene(Scene *newScene, bool keepBackground) {
+  if (context.storageMaintenanceActive && newScene && newScene->pausesBackgroundTasksForPerformance()) return;
   // Check if the new scene is already in backgroundScenes (O(1) lookup)
   auto it = backgroundScenes.find(newScene);
   
@@ -213,6 +215,23 @@ void SceneManager::render() {
   if (currentScene) {
     currentScene->render();
   }
+}
+
+bool SceneManager::canPrepareForStorageMaintenance(std::string &error) {
+  auto scenes = backgroundScenes;
+  if (currentScene) scenes.insert(currentScene);
+  for (auto &[name, scene] : registeredScenes) if (scene) scenes.insert(scene.get());
+  for (auto *scene : scenes) if (!scene->canPrepareForStorageMaintenance(error)) return false;
+  return true;
+}
+
+bool SceneManager::prepareForStorageMaintenance(std::string &error) {
+  if (!canPrepareForStorageMaintenance(error)) return false;
+  auto scenes = backgroundScenes;
+  if (currentScene) scenes.insert(currentScene);
+  for (auto &[name, scene] : registeredScenes) if (scene) scenes.insert(scene.get());
+  for (auto *scene : scenes) if (!scene->prepareForStorageMaintenance(error)) return false;
+  return true;
 }
 
 void SceneManager::cleanup() {

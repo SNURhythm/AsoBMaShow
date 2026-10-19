@@ -20,6 +20,8 @@
 imageResourceAvailable(const std::filesystem::path &path);
 [[nodiscard]] bool imageResourceAvailable(const std::filesystem::path &path,
                                           std::stop_token stop);
+// Drains asynchronous artwork reads and defers new requests until release.
+[[nodiscard]] std::shared_ptr<void> pauseImageReadsForStorageMaintenance();
 
 class ImageView : public View {
 public:
