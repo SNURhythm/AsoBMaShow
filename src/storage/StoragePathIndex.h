@@ -19,10 +19,12 @@ public:
 private:
   struct Node {
 #ifdef _WIN32
-    explicit Node(StoragePathComparison comparison) : children(StoragePathComponentLess{comparison}) {}
+    explicit Node(StoragePathComparison comparison, std::filesystem::path parent = {})
+        : path(std::move(parent)), children(StoragePathComponentLess{comparison, path}) {}
+    std::filesystem::path path;
     std::map<std::filesystem::path, std::size_t, StoragePathComponentLess> children;
 #else
-    explicit Node(StoragePathComparison) {}
+    explicit Node(StoragePathComparison, const std::filesystem::path & = {}) {}
     std::unordered_map<std::filesystem::path, std::size_t> children;
 #endif
     std::vector<std::size_t> roots;

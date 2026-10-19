@@ -46,27 +46,47 @@ void rootIndexUsesPlatformCaseRules() {
               archiveRoots.MinimalRoots() == std::vector<fs::path>{"Pack", "pack"},
           "archive inner roots remain case-sensitive on every host platform");
 #ifdef _WIN32
-  const fs::path root = L"C:\\Charts\\\u00c4udio";
-  const fs::path child = L"c:\\charts\\\u00e4UDIO\\song.wav";
-  StoragePathIndex index({root, L"c:\\CHARTS\\\u00e4udio", root / "sub"});
+  TempDirectory temp;
+  temp.write(fs::path(L"Charts\\\u00c4udio\\song.wav"));
+  const fs::path root = temp.root / L"Charts\\\u00c4udio";
+  auto alias = temp.root / L"charts\\\u00e4UDIO";
+  auto aliasText = alias.native();
+  if (aliasText.size() >= 2 && aliasText[1] == L':') {
+    auto &drive = aliasText[0];
+    drive = drive >= L'A' && drive <= L'Z' ? drive + (L'a' - L'A') : drive - (L'a' - L'A');
+    alias = aliasText;
+  }
+  const fs::path child = alias / "song.wav";
+  StoragePathIndex index({root, alias, root / "sub"});
   require(index.Ancestors(child) == std::vector<std::size_t>{0, 1},
           "Windows root lookup matches drive and Unicode component case");
   require(index.MinimalRoots() == std::vector<fs::path>{root},
           "Windows equivalent roots are deduplicated and retain original spelling");
   require(IsWithinFolder(child, root), "containment shares Windows root index case rules");
-  require(index.Ancestors(L"c:/charts/\u00e4UDIO/song.wav") == std::vector<std::size_t>{0, 1} &&
-              IsWithinFolder(L"c:/charts/\u00e4UDIO/song.wav", root),
+  require(index.Ancestors(fs::path(child.generic_wstring())) == std::vector<std::size_t>{0, 1} &&
+              IsWithinFolder(fs::path(child.generic_wstring()), root),
           "Windows matching accepts either path separator");
-  require(index.Ancestors(L"C:\\Charts\\\u00e4udio2\\song.wav").empty() &&
-              !IsWithinFolder(L"C:\\Charts\\\u00e4udio2\\song.wav", root),
+  require(index.Ancestors(temp.root / L"Charts\\\u00e4udio2\\song.wav").empty() &&
+              !IsWithinFolder(temp.root / L"Charts\\\u00e4udio2\\song.wav", root),
           "case-insensitive containment still rejects component prefix siblings");
   require(index.Ancestors(root / ".." / "other" / "song.wav").empty(),
           "Windows index rejects parent traversal before matching components");
   StoragePathIndex unc({L"\\\\Server\\Share\\Charts"});
-  require(unc.Ancestors(L"\\\\server\\share\\charts\\song.wav") == std::vector<std::size_t>{0},
-          "UNC server and share components use Windows case rules");
-  TempDirectory temp;
-  temp.write(fs::path(L"Charts\\\u00c4udio\\song.wav"));
+  require(unc.Ancestors(L"\\\\server\\share\\Charts\\song.wav") == std::vector<std::size_t>{0},
+          "UNC server and share namespace components use Windows case rules");
+  StoragePathIndex unavailable({temp.root / "missing/Item", temp.root / "missing/item"});
+  require(unavailable.MinimalRoots().size() == 2,
+          "unavailable parent case metadata never merges uncertain aliases");
+  std::map<fs::path, int, StoragePathLess> snapshot;
+  snapshot.emplace(temp.root / "missing/Item", 1);
+  snapshot.emplace(temp.root / "missing/item", 2);
+  fs::create_directories(temp.root / "missing/Item");
+  require(snapshot.size() == 2 && snapshot.at(temp.root / "missing/Item") == 1 &&
+              snapshot.at(temp.root / "missing/item") == 2 &&
+              unavailable.Ancestors(temp.root / "missing/item/song.wav") == std::vector<std::size_t>{1},
+          "an existing comparison snapshot stays stable when parent metadata changes");
+  require(StoragePathIndex({temp.root / "missing/Item", temp.root / "missing/item"}).MinimalRoots().size() == 1,
+          "a new index captures current parent rules rather than a process-wide stale cache");
   std::string error;
   const auto file = temp.root / L"charts\\\u00e4UDIO\\song.wav";
   require(IsWithinLocalFolder(file, temp.root / L"CHARTS\\\u00c4udio"),

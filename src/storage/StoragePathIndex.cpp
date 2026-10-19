@@ -28,8 +28,13 @@ StoragePathIndex::StoragePathIndex(std::vector<fs::path> roots, StoragePathCompa
       if (found != nodes_[node].children.end()) node = found->second;
       else {
         const auto next = nodes_.size();
+#ifdef _WIN32
+        const auto prefix = nodes_[node].path / part;
+#else
+        const fs::path prefix;
+#endif
         nodes_[node].children.emplace(part, next);
-        nodes_.emplace_back(comparison);
+        nodes_.emplace_back(comparison, prefix);
         node = next;
       }
     }

@@ -41,8 +41,12 @@ void skip(StorageInventory &inventory, const fs::path &path, StorageReason reaso
 
 bool IsWithinFolder(const fs::path &path, const fs::path &folder) {
   auto child = path.begin();
+  fs::path prefix;
   for (auto parent = folder.begin(); parent != folder.end(); ++parent, ++child) {
-    if (child == path.end() || CompareStoragePathComponent(*child, *parent) != 0) return false;
+    if (child == path.end() || CompareStoragePathComponent(*child, *parent, prefix) != 0) return false;
+#ifdef _WIN32
+    prefix /= *parent;
+#endif
   }
   return true;
 }
@@ -123,7 +127,7 @@ bool IsSafeLocalPath(const fs::path &path, std::string &error, const std::vector
   auto child = path.begin();
   fs::path requestedPrefix;
   for (const auto &part : current) {
-    if (child == path.end() || CompareStoragePathComponent(*child, part) != 0) {
+    if (child == path.end() || CompareStoragePathComponent(*child, part, requestedPrefix) != 0) {
       error = "Path is outside accessible storage roots: " + path.string(); return false;
     }
     requestedPrefix /= *child;

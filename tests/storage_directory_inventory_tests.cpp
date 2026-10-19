@@ -1,5 +1,6 @@
 #include "../src/storage/StoragePreflight.h"
 #include "../src/storage/StorageMeasurement.h"
+#include "../src/storage/StoragePathIndex.h"
 #include "StorageTestSupport.h"
 #include <algorithm>
 #include <iostream>
@@ -57,6 +58,54 @@ void nativePathAliasesRetainTotals() {
   for (const auto &group : measured.groups)
     require(group.totalBytes == 5 && group.audioBytes == 5 && group.reason.code == StorageReason::None,
         "case-variant overlapping measurement rows all receive their subtree totals");
+#endif
+}
+void caseSensitiveWindowsSiblingsRetainSeparateTotals() {
+#ifdef _WIN32
+  TempDirectory temp;
+  const auto parent = temp.root / "Charts";
+  fs::create_directory(parent);
+  const auto handle = CreateFileW(parent.c_str(), FILE_READ_ATTRIBUTES | FILE_WRITE_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+  require(handle != INVALID_HANDLE_VALUE, "open Windows case-sensitive fixture directory");
+  FILE_CASE_SENSITIVE_INFO info{1}; // FILE_CS_FLAG_CASE_SENSITIVE_DIR
+  const bool enabled = SetFileInformationByHandle(handle,
+      static_cast<FILE_INFO_BY_HANDLE_CLASS>(23), &info, sizeof(info));
+  const auto failure = enabled ? ERROR_SUCCESS : GetLastError();
+  CloseHandle(handle);
+  if (!enabled) {
+    require(failure == ERROR_NOT_SUPPORTED || failure == ERROR_INVALID_PARAMETER ||
+                failure == ERROR_ACCESS_DENIED || failure == ERROR_PRIVILEGE_NOT_HELD,
+            "unexpected failure enabling NTFS case-sensitive fixture");
+    std::cout << "SKIP: NTFS case-sensitive directory unavailable (Windows error " << failure << ")\n";
+    return;
+  }
+  temp.write("Charts/Song/a.wav", "123");
+  temp.write("Charts/song/b.wav", "12345");
+  const auto upper = parent / "Song", lower = parent / "song";
+  StoragePathIndex index({upper, lower});
+  require(index.MinimalRoots().size() == 2 &&
+      index.Ancestors(upper / "a.wav") == std::vector<std::size_t>{0} &&
+      index.Ancestors(lower / "b.wav") == std::vector<std::size_t>{1},
+      "case-sensitive siblings remain separate roots and memberships");
+  require(!IsWithinFolder(upper / "a.wav", lower) && !IsWithinLocalFolder(lower / "b.wav", upper),
+      "case-sensitive siblings cannot authorize each other's contents");
+  const auto tree = BuildStoragePreflight(request(parent));
+  require(tree.complete && tree.totalBytes == 8 && tree.eligibleCount == 2 && tree.directories.size() == 3 &&
+      tree.directories.at(upper).eligibleBytes == 3 && tree.directories.at(lower).eligibleBytes == 5,
+      "selecting a common parent retains both case-sensitive directory summaries");
+  auto input = request(upper);
+  input.groups.push_back({"lower", lower});
+  const auto preflight = BuildStoragePreflight(input);
+  require(preflight.complete && preflight.eligibleCount == 2 && preflight.totalBytes == 8 &&
+      preflight.groups.at(0).totalBytes == 3 && preflight.groups.at(1).totalBytes == 5,
+      "selecting both case-sensitive siblings retains independent preflight totals");
+  const auto measured = MeasureStorageGroups(input);
+  require(measured.complete && measured.totalBytes == 8 && measured.groups.at(0).totalBytes == 3 &&
+      measured.groups.at(1).totalBytes == 5,
+      "case-sensitive sibling measurements never reuse another root's total");
+  std::cout << "PASS: NTFS case-sensitive sibling coverage exercised\n";
 #endif
 }
 void independentSelectedFoldersComplete() {
@@ -259,6 +308,7 @@ void failedSpillAndRestartNeverAuthorizeStaleMetadata() {
 int storageDirectoryInventoryTests() {
   try {
     nativePathAliasesRetainTotals();
+    caseSensitiveWindowsSiblingsRetainSeparateTotals();
     unknownPermissionsRemainEligible();
     summariesDoNotRetainAllAssets();
     independentSelectedFoldersComplete();
