@@ -52,6 +52,7 @@ struct ApplicationContext {
   SceneManager *sceneManager = nullptr;
   std::atomic_bool backgroundTasksPausedForForegroundScene = false;
   std::atomic_bool storageMaintenanceActive = false;
+  std::atomic_bool quitFlag = false;
   BackgroundTasks *chartLibraryTasks = nullptr;
   std::function<void()> notifyBackgroundTaskPauseStateChanged;
   std::function<void(bool)> setGameplayOrientationLocked;
@@ -126,12 +127,37 @@ void StopIOSSecurityScopedResource(void *handle) {
 namespace storage_management {
 fs::path StoragePrivateRoot(ApplicationContext &) { return privateStorageRoot; }
 PRODUCTION_STORAGE_ACCESS
+std::function<bool(Checkpoint)> cleanupScans;
+bool CleanupAbandonedStorageScans(const StoragePlatformPaths &, std::string &, Checkpoint check) {
+  return cleanupScans(std::move(check));
+}
+void SDL_Log(const char *, ...) {}
+PRODUCTION_STORAGE_STARTUP_CHECKPOINTS
 bool admitStorageRoots(ApplicationContext &context, const std::vector<fs::path> &roots) {
   std::string error;
   auto access = accessFolders(context, error);
   if (!access) return false;
   PRODUCTION_STORAGE_ROOT_ADMISSION
   return true;
+}
+void testRecoveryCheckpointConsumesQueuedQuit() {
+  storage_test::TempDirectory temp;
+  privateStorageRoot = temp.root;
+  ApplicationContext context;
+  bool queuedQuit = false, stopped = false;
+  unsigned notifications = 0;
+  storage_management::cleanupScans = [&](storage_management::Checkpoint check) {
+    queuedQuit = true;
+    // A recovery phase can checkpoint repeatedly without publishing progress.
+    stopped = !check();
+    return !stopped;
+  };
+  const bool completed = storage_management::InitializeStorageServices(context,
+      [&](const auto &) { ++notifications; }, [&] {
+        if (queuedQuit) context.quitFlag = true;
+      });
+  assert(stopped && !completed && context.quitFlag && notifications == 1);
+  storage_management::cleanupScans = {};
 }
 }
 void testBookmarkScopeAdmission() {
@@ -324,6 +350,7 @@ void testMaintenanceAdmission() {
   assert(!imageReadsPaused);
 }
 int main() {
+  storage_management::testRecoveryCheckpointConsumesQueuedQuit();
   testBookmarkScopeAdmission();
   testMaintenanceAdmission();
   ApplicationContext context;

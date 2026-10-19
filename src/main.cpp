@@ -2231,7 +2231,6 @@ static bool recoverStorageWithProgress(ApplicationContext &context) {
   auto nextUpdate = std::chrono::steady_clock::time_point{};
   auto lastPhase = storage_management::StorageRecoveryPhase::CheckingFolders;
   return storage_management::InitializeStorageServices(context, [&](const auto &progress) {
-    pumpEvents();
     const auto now = std::chrono::steady_clock::now();
     if (now < nextUpdate && progress.phase == lastPhase) return;
     nextUpdate = now + std::chrono::milliseconds(200);
@@ -2240,7 +2239,7 @@ static bool recoverStorageWithProgress(ApplicationContext &context) {
     // Synchronous worker -> main dispatch leaves no backlog of queued progress
     // blocks, and the throttle also bounds updates across thousands of files.
     RunIOSMainThread([&] { SetIOSStorageRecoveryProgress(message); });
-  });
+  }, pumpEvents);
 #else
   StartupRecoveryScreen screen;
   return storage_management::RunStorageRecoveryPresentation(
@@ -2272,6 +2271,7 @@ int run() {
                 reportStartupFailure(context, result);
               },
           .recoverStorage = [&context] { return recoverStorageWithProgress(context); },
+          .quitRequested = [&context] { return context.quitFlag.load(); },
           .reconcileReplayFiles =
               [&context] {
                 if (context.quitFlag) return;

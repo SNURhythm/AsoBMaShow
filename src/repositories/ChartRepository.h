@@ -24,9 +24,8 @@ class ScoreRepository;
 
 struct ChartLibraryChanges {
   std::uint64_t revision = 0;
-  // Storage invalidation history excludes maintenance scans whose exact size
-  // changes are already supplied by the transaction report. Revision still
-  // advances for every committed library metadata change.
+  // Includes maintenance scans so every consumer sees committed metadata
+  // changes, even when storage sizes were already updated by a transaction.
   bool unknown = false;
   std::vector<std::filesystem::path> roots;
 };

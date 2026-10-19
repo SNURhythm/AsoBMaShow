@@ -356,6 +356,45 @@ void existingArchiveDestinationsAreReused() {
     require(!result.deleted && readArchive(path).size() == 2, "invalid or cancelled destination validation never removes archived source");
   }
 }
+void archiveReuseRequiresExactParentAndStem() {
+  for (bool tar : {false, true}) for (const auto targetName : {"song/a.flac", "Song/A.flac", "Song/a.FLAC"}) {
+    storage_test::TempDirectory temp;
+    const auto path = temp.root / (tar ? "library.tar" : "library.zip");
+    const bool extensionOnly = std::string_view(targetName) == "Song/a.FLAC";
+    const std::vector<std::pair<std::string, std::string>> files{
+        {"Song/a.wav", "selected recording"}, {targetName, "existing recording"}};
+    writeArchive(path, files, false, tar);
+    const auto paths = MakeStoragePlatformPaths(temp.root / "private", {temp.root});
+    InventoryRequest request{.groups = {{"selected", path / "Song", false, false, StorageSourceKind::Archive}},
+        .policy = {.audio = AudioAction::LosslessFlac}, .scanScratchRoot = paths.scanRoot};
+    const auto review = BuildStoragePreflight(request);
+    require(review.complete && review.archives.size() == 1, "review case-distinct archive alternatives");
+    unsigned validations = 0;
+    std::atomic<unsigned> encodes = 0;
+    StorageArchiveDependencies deps{.encode = [&](const auto &, const auto &, const auto &, auto, auto) {
+      ++encodes; return EncodeResult{};
+    }, .validateExisting = [&](const AssetCandidate &, Checkpoint) {
+      ++validations; return StorageDiagnostic{};
+    }};
+    // Exercise Apply directly even when review has excluded the candidate, so
+    // its physical manifest must enforce the same spelling rule independently.
+    const auto result = UpdateStorageArchive(review.archives.front(), request.policy, paths, deps);
+    const auto retained = readArchive(path);
+    require(!result.failed && !result.recoveryRequired && !result.converted && !encodes && fs::is_empty(paths.journalRoot),
+        "archive case checks settle without encoding or recovery");
+    if (extensionOnly) {
+      require(review.eligibleCount == 1 && result.deleted == 1 && validations == 1 &&
+          retained == std::map<std::string, std::string>{{"Song/a.FLAC", "existing recording"}},
+          "extension-only case differences still reuse the exact parent and stem");
+    } else {
+      require(!result.deleted && !validations && retained == std::map<std::string, std::string>(files.begin(), files.end()),
+          "case-distinct archive parents or stems never validate an unrelated target or delete the source");
+      require(review.eligibleCount == 0 && review.skippedCount == 1 && review.skips.size() == 1 &&
+          review.skips.front().reason.code == StorageReason::Collision,
+          "review excludes case-distinct archive destinations as collisions");
+    }
+  }
+}
 void selectedArchiveFoldersAreEligible() {
   storage_test::TempDirectory temp;
   const auto archive = temp.root / "library.zip";
@@ -1992,6 +2031,7 @@ void storageArchiveTests(const char *executable) {
       {"unicode-validation", unicodeZipPathsAreValidated},
       {"zip64", sparseZip64AndLegacyNames}, {"invalid-encoding", malformedLegacyNamesAreRejected},
       {"playback", realArchiveOptimizerPreservesPlayback}, {"existing-destinations", existingArchiveDestinationsAreReused},
+      {"case-distinct-destinations", archiveReuseRequiresExactParentAndStem},
       {"boundaries", archivePolicyBoundaries}, {"rejections", unsafeAndStaleArchivesAreRejected},
       {"partial", partialWritesAndForeignChanges}}) {
     try { run(); } catch (const std::exception &error) { throw std::runtime_error(std::string(name) + ": " + error.what()); }

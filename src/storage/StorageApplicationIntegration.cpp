@@ -89,8 +89,12 @@ std::filesystem::path StoragePrivateRoot(ApplicationContext &) {
 #endif
 }
 
-bool InitializeStorageServices(ApplicationContext &context, StorageRecoveryProgressCallback notify) {
-  const Checkpoint check = [&context] { return !context.quitFlag.load(); };
+bool InitializeStorageServices(ApplicationContext &context, StorageRecoveryProgressCallback notify,
+                               std::function<void()> pollEvents) {
+  const Checkpoint check = [&] {
+    if (pollEvents) pollEvents();
+    return !context.quitFlag.load();
+  };
   StorageRecoveryProgress progress;
   NotifyStorageRecoveryProgress(notify, progress);
   std::string error;

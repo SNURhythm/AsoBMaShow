@@ -38,7 +38,7 @@ StorageMeasurements MeasureStorageGroups(const InventoryRequest &request, Checkp
   StorageMeasurements result;
   result.totalBytes = 0;
   std::vector<fs::path> localRoots;
-  std::unordered_map<fs::path, std::vector<std::size_t>> localGroups;
+  std::map<fs::path, std::vector<std::size_t>, StoragePathLess> localGroups;
   std::map<fs::path, bool> archiveBoundaries;
   std::unordered_map<std::string, std::size_t> archivePositions;
   std::vector<ArchiveWork> archives;

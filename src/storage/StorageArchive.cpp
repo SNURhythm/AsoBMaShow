@@ -453,7 +453,14 @@ std::optional<AssetCandidate> archive_detail::archiveCandidate(const StorageArch
     const bool ambiguous = q.integer(0) > 1;
     const auto existing = q.bytes(1); q.reset();
     if (!existing.empty()) {
-      candidate.destination = fs::u8path(existing); candidate.reuseDestination = true;
+      const auto destination = fs::u8path(existing);
+      auto existingStem = destination; existingStem.replace_extension();
+      // Archive folders and stems are case-sensitive even though the collision
+      // lookup also detects case aliases. Only the extension may differ in case.
+      if (existingStem != stem) {
+        reason = {StorageReason::Collision, "Existing archive destination differs in parent or stem case"}; return {};
+      }
+      candidate.destination = destination; candidate.reuseDestination = true;
     } else if (ambiguous) { reason = {StorageReason::Collision, "Same-stem archive media alternatives are ambiguous"}; return {}; }
   }
   return candidate;

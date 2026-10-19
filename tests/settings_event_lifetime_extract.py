@@ -13,7 +13,8 @@ def main():
     args = parser.parse_args()
     fixture = (args.root / "tests/settings_event_lifetime_fixture.cpp").read_text()
     fixture = f'#include "{(args.root / "src/ui/PresentationSchedule.h").as_posix()}"\n' + fixture
-    for filename in ("src/storage/StoragePlatform.h", "src/storage/StoragePathIndex.h", "tests/StorageTestSupport.h"):
+    for filename in ("src/storage/StoragePlatform.h", "src/storage/StoragePathIndex.h",
+                     "src/storage/StorageRecoveryProgress.h", "tests/StorageTestSupport.h"):
         fixture = f'#include "{(args.root / filename).as_posix()}"\n' + fixture
     fixture = fixture.replace("PRODUCTION_STORAGE_PATH_INDEX", without_includes(
         (args.root / "src/storage/StoragePathIndex.cpp").read_text()))
@@ -41,6 +42,9 @@ def main():
     fixture = fixture.replace("PRODUCTION_STORAGE_OPEN", extract(
         storage[storage.index("defer("):], "[this]"))
     integration = (args.root / "src/storage/StorageApplicationIntegration.cpp").read_text()
+    startup = integration[integration.index("bool InitializeStorageServices("):]
+    startup = startup[:startup.index("  auto recovery = RecoverStorageArchives(")]
+    fixture = fixture.replace("PRODUCTION_STORAGE_STARTUP_CHECKPOINTS", startup + "  return true;\n}\n")
     fixture = fixture.replace("PRODUCTION_STORAGE_ACCESS", integration[
         integration.index("struct Access {"):integration.index("std::vector<std::filesystem::path> selectedRoots(")])
     roots_start = integration.index("      const StoragePathIndex allowed(")

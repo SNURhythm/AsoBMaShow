@@ -67,6 +67,7 @@ int execute(bool profileReady, const Dependencies &dependencies) {
   if (dependencies.recoverStorage) {
     bool recovered = false;
     try { recovered = dependencies.recoverStorage(); } catch (...) {}
+    if (dependencies.quitRequested && dependencies.quitRequested()) return EXIT_SUCCESS;
     if (!recovered) {
       dependencies.reportFatal(Result{
           .failure = Failure::StorageRecovery,

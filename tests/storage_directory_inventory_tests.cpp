@@ -1,4 +1,5 @@
 #include "../src/storage/StoragePreflight.h"
+#include "../src/storage/StorageMeasurement.h"
 #include "StorageTestSupport.h"
 #include <algorithm>
 #include <iostream>
@@ -33,7 +34,7 @@ void summariesDoNotRetainAllAssets() {
   for (const auto &[path, summary] : preflight.directories)
     require(summary.samples.empty() && summary.fingerprint.size() == 64, "directory summaries contain hashes, not asset samples");
 }
-void nativePathAliasesRetainPreflightTotals() {
+void nativePathAliasesRetainTotals() {
 #ifdef _WIN32
   TempDirectory temp;
   temp.write("Charts/Sub/a.wav", "12345");
@@ -48,6 +49,14 @@ void nativePathAliasesRetainPreflightTotals() {
   require(preflight.directories.contains(temp.root / "charts/SUB") &&
       preflight.EligibleRoots() == std::vector<fs::path>{temp.root / "Charts"},
       "case-variant preflight evidence remains usable for admission");
+  std::size_t published = 0;
+  const auto measured = MeasureStorageGroups(input, {}, [&](const auto &rows) { published += rows.size(); });
+  require(measured.complete && measured.totalBytes == 5 && measured.directories.size() == 2 &&
+      measured.groups.size() == 3 && published == 3,
+      "measurement publishes parent, duplicate and nested aliases while counting their union once");
+  for (const auto &group : measured.groups)
+    require(group.totalBytes == 5 && group.audioBytes == 5 && group.reason.code == StorageReason::None,
+        "case-variant overlapping measurement rows all receive their subtree totals");
 #endif
 }
 void independentSelectedFoldersComplete() {
@@ -214,7 +223,7 @@ void failedSpillAndRestartNeverAuthorizeStaleMetadata() {
 }
 int storageDirectoryInventoryTests() {
   try {
-    nativePathAliasesRetainPreflightTotals();
+    nativePathAliasesRetainTotals();
     unknownPermissionsRemainEligible();
     summariesDoNotRetainAllAssets();
     independentSelectedFoldersComplete();

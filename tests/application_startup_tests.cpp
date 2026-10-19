@@ -209,6 +209,22 @@ void testStorageRecoveryFailureBlocksRuntime() {
   }
 }
 
+void testQuitDuringRecoveryClosesWithoutFailureDialog() {
+  for (const bool recovered : {false, true}) {
+    bool quit = false, fatal = false, runtime = false, reconciled = false;
+    const auto exitCode = application_startup::execute(true, Dependencies{
+      .initializeDatabases = [] { return Status{true, true, true, true}; },
+      .reportFatal = [&](const Result &) { fatal = true; },
+      .recoverStorage = [&] { quit = true; return recovered; },
+      .quitRequested = [&] { return quit; },
+      .reconcileReplayFiles = [&] { reconciled = true; },
+      .runReadyApplication = [&] { runtime = true; },
+    });
+    expect(exitCode == EXIT_SUCCESS && !fatal && !runtime && !reconciled,
+           "quit during recovery exits without a modal, reconciliation, or runtime");
+  }
+}
+
 void testBgfxTransientBuffersAreExpanded() {
   struct Limits {
     uint32_t maxTransientVbSize = 0;
@@ -227,6 +243,7 @@ void testBgfxTransientBuffersAreExpanded() {
 int main() {
   testSuccessRunsBodyExactlyOnce();
   testStorageRecoveryFailureBlocksRuntime();
+  testQuitDuringRecoveryClosesWithoutFailureDialog();
   testReplayReconciliationFailureDoesNotBlockResultsOrRuntime();
   testProfileFailureShortCircuitsEverything();
   testDatabaseFailuresFailClosed();

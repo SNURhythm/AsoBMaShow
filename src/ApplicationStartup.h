@@ -31,6 +31,7 @@ struct Dependencies {
       initializeDatabases;
   std::function<void(const Result &)> reportFatal;
   std::function<bool()> recoverStorage;
+  std::function<bool()> quitRequested;
   std::function<void()> reconcileReplayFiles;
   std::function<void()> runReadyApplication;
 };
