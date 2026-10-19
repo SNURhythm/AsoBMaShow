@@ -290,6 +290,18 @@ void validateDeclaredVideoTimeline(const AVStream &video, const Timeline &decode
         std::to_string(decoded.maximumDuration) + ", time base=" + std::to_string(video.time_base.num) + "/" +
         std::to_string(video.time_base.den) + ")"};
 }
+void validateDeclaredAudioEnd(const AVStream &audio, const Timeline &decoded) {
+  if (audio.start_time == AV_NOPTS_VALUE || audio.duration <= 0) return;
+  if (audio.start_time > std::numeric_limits<std::int64_t>::max() - audio.duration)
+    throw Failure{StorageReason::ValidationFailed, "Declared audio end is out of range"};
+  const auto declaredEnd = audio.start_time + audio.duration;
+  // MP4 edit lists and codec padding need not end on the same sample that a
+  // decoder exposes. Allow one decoded frame plus one container-clock tick,
+  // rather than a fixed time allowance that varies with rate and codec.
+  const auto tolerance = static_cast<std::uint64_t>(decoded.maximumDuration) + 1;
+  if (timestampDistance(declaredEnd, decoded.end) > tolerance)
+    throw Failure{StorageReason::ValidationFailed, "Decoded audio does not match its declared duration"};
+}
 using AudioDigest = std::array<std::array<std::uint8_t, 32>, 2>;
 struct AudioSampleHasher {
   struct Deleter { void operator()(AVSHA *value) const { av_free(value); } };
@@ -706,6 +718,11 @@ Scan scan(const fs::path &path, const Checkpoint &check, ScanPurpose purpose = S
   // decode. Preserve the actual decoded timeline, including clean early EOF.
   // Targets still need strict completeness checks before replacing a source.
   if (purpose != ScanPurpose::SourceConversion) validateDeclaredVideoTimeline(*video, result.video);
+  // Clean physical EOF can hide missing complete audio packets after the last
+  // video frame. Reused files have no source/output comparison to catch this;
+  // newly encoded files retain the stronger sample and timeline checks below.
+  if (existingDestination && input.audio >= 0)
+    validateDeclaredAudioEnd(*input.format->streams[input.audio], result.audio);
   description.duration = result.video.end - result.video.first;
   description.minimumFrameInterval = result.video.minimumInterval;
   description.audioDiscontinuous = result.audio.discontinuous;

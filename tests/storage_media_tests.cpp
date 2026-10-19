@@ -1301,6 +1301,56 @@ void existingBgaTests() {
   require(ValidateExistingBga(disguised).code == StorageReason::UnsupportedFormat,
           "a filename extension cannot make H264 in another container a reusable MP4");
 }
+void existingBgaAudioTailTests() {
+  storage_test::TempDirectory temp;
+  storage_test::VideoFixture fixture;
+  fixture.width = fixture.height = 64;
+  fixture.h264 = fixture.audio = fixture.faststart = true;
+  fixture.audioCodec = AV_CODEC_ID_AAC;
+  fixture.audioTailSamples = 96000;
+  const auto source = temp.root / "complete-audio-tail.mp4";
+  const auto truncated = temp.root / "truncated-audio-tail.mp4";
+  storage_test::makeVideo(source, fixture);
+  require(ValidateExistingBga(source).code == StorageReason::None,
+          "complete faststart MP4 with audio longer than video remains reusable");
+  std::int64_t cut = -1, videoBytesEnd = 0;
+  {
+    Input input(source);
+    auto compressed = packet();
+    int status;
+    while ((status = av_read_frame(input.format, compressed.get())) >= 0) {
+      if (compressed->stream_index == input.video)
+        videoBytesEnd = std::max(videoBytesEnd, compressed->pos + compressed->size);
+      else if (cut < 0 && compressed->pts != AV_NOPTS_VALUE &&
+               av_compare_ts(compressed->pts, input.format->streams[input.audio]->time_base, 2, {1, 1}) >= 0)
+        cut = compressed->pos;
+      av_packet_unref(compressed.get());
+    }
+    require(status == AVERROR_EOF && cut >= videoBytesEnd && videoBytesEnd > 0,
+            "audio-tail truncation starts at a packet boundary after every complete video packet");
+  }
+  std::filesystem::copy_file(source, truncated);
+  std::filesystem::resize_file(truncated, cut);
+  Input input(truncated);
+  const auto audio = input.format->streams[input.audio];
+  require(audio->duration > 0 && av_compare_ts(audio->duration, audio->time_base, 3, {1, 1}) > 0,
+          "truncated faststart file retains its declared audio tail and readable headers");
+  std::uint64_t videoFrames = 0;
+  std::int64_t decodedAudioEnd = AV_NOPTS_VALUE;
+  decode(input, {}, [&](int index, const AVFrame &decoded) {
+    if (index == input.video) ++videoFrames;
+    else decodedAudioEnd = decoded.best_effort_timestamp +
+        av_rescale_q(decoded.nb_samples, {1, decoded.sample_rate}, audio->time_base);
+  }, [](int, const AVPacket &) {});
+  require(videoFrames == 30 && decodedAudioEnd != AV_NOPTS_VALUE &&
+              av_compare_ts(decodedAudioEnd, audio->time_base, 2, {1, 1}) >= 0 &&
+              av_compare_ts(decodedAudioEnd, audio->time_base, 5, {1, 2}) < 0,
+          "truncated MP4 cleanly decodes all video and only an incomplete audio prefix to EOF");
+  require(ValidateExistingBga(truncated).code == StorageReason::ValidationFailed,
+          "missing embedded audio tail cannot authorize retiring the original video");
+  require(scan(truncated, {}, ScanPurpose::SourceConversion).audio.end == decodedAudioEnd,
+          "source conversion still permits recovery of the complete readable audio prefix");
+}
 void quantizedAudioTimelineTests() {
   std::int64_t next = AV_NOPTS_VALUE;
   for (const auto pts : {0, 1008, 2064, 3072}) advanceAudioInput(pts, 1024, {1, 1000}, {1, 48000}, next);
@@ -1881,7 +1931,7 @@ int main() {
   for (const auto test : {selectedVideoCodecTests, efficientCodecHeaderTests, efficientVideoPreservationTests, decodedDisplayTransformTests, decodedColorTests, chromaLocationTests, decodedAudioFormatTests, decodedAudioPresentationTests,
                           encodedAudioPresentationTests, embeddedAudioSideDataTests, audioRemuxTrimTests, audioRemuxContentTests, timelineTests,
                           declaredVideoTimelineTests, crossStreamTimelineTests, changingAspectRatioTests, quantizedAudioTimelineTests, asfTimelineTests,
-                          truncatedAsfTests, recoverableMpegPacketTests, matroskaTimelineTests, existingBgaTests, existingAudioTests, audioTests, videoDispositionTests, videoTests}) {
+                          truncatedAsfTests, recoverableMpegPacketTests, matroskaTimelineTests, existingBgaTests, existingBgaAudioTailTests, existingAudioTests, audioTests, videoDispositionTests, videoTests}) {
     try { test(); }
     catch (const Failure &failure) { std::cerr << failure.detail << '\n'; ++failures; }
     catch (const std::exception &error) { std::cerr << error.what() << '\n'; ++failures; }

@@ -26,7 +26,7 @@ struct VideoFixture {
   AVRational sampleAspectRatio{1, 1}, laterSampleAspectRatio{0, 1};
   int rotation = 0;
   bool scaledDisplayMatrix = false;
-  bool millisecondContainer = false, lossless = false, asf = false;
+  bool millisecondContainer = false, lossless = false, asf = false, faststart = false;
   bool captions = false, descriptiveTag = false;
   bool replayGain = false, audioReplayGain = false;
   AVCodecID audioCodec = AV_CODEC_ID_PCM_S16LE;
@@ -50,9 +50,12 @@ inline void makeVideo(const std::filesystem::path &path, VideoFixture fixture) {
   // NUT preserves the codec's exact rational timestamps, including deliberate
   // VFR gaps, without a millisecond container clock rounding the fixture.
   const char *container = fixture.asf ? "asf" : fixture.millisecondContainer ? "matroska" :
-                          fixture.rotation || fixture.scaledDisplayMatrix || fixture.captions ? "mp4" : "nut";
+                          fixture.rotation || fixture.scaledDisplayMatrix || fixture.captions || fixture.faststart ? "mp4" : "nut";
   require(avformat_alloc_output_context2(&resources.mux, nullptr, container, path.string().c_str()) >= 0,
           "create fixture container");
+  if (fixture.faststart)
+    require(av_opt_set(resources.mux->priv_data, "movflags", "+faststart", 0) >= 0,
+            "place MP4 fixture metadata before media packets");
   if (fixture.descriptiveTag)
     require(av_dict_set(&resources.mux->metadata, "chart_editor_note", "A harmless custom description", 0) >= 0,
             "write fixture descriptive tag");
