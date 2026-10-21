@@ -97,6 +97,6 @@ The output contains source hashes, compile/link commands and raw per-rate logs.
 Use a separate `--sample-seconds 5` run for profiling to avoid contaminating the
 timing comparison. Source charts and assets are read in place.
 
-Next candidates are bounded native-PCM retention for large previews and reducing
-48 kHz conversion work. Any further filesystem optimization must preserve asset
-invalidation; archive extraction needs a separate representative benchmark.
+The [Android follow-up](2026-10-21-android-audio-preparation.md) investigates
+preview memory, 48 kHz conversion, direct Ogg loading and a real ZIP. Gameplay
+audio must remain fully resident; the proposed retention cap was rejected.

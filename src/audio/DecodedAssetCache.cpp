@@ -67,6 +67,26 @@ std::string fileIdentity(std::filesystem::path source) {
            std::to_string(status.st_ctim.tv_sec) + ':' + std::to_string(status.st_ctim.tv_nsec);
   }
 #endif
+#if !defined(_WIN32)
+  // A single stat follows symlinks and snapshots every invalidation field.
+  // Canonicalizing each path component and then querying size/time/identity
+  // separately is especially costly on Android's emulated storage.
+  if (!archive_source::isReference(source)) {
+    struct stat status{};
+    if (::stat(source.c_str(), &status) != 0 || !S_ISREG(status.st_mode)) return {};
+#if defined(__APPLE__)
+    const auto modified = status.st_mtimespec;
+    const auto changed = status.st_ctimespec;
+#else
+    const auto modified = status.st_mtim;
+    const auto changed = status.st_ctim;
+#endif
+    return std::to_string(status.st_dev) + ':' + std::to_string(status.st_ino) + ':' +
+        std::to_string(status.st_size) + ':' + std::to_string(modified.tv_sec) + ':' +
+        std::to_string(modified.tv_nsec) + ':' + std::to_string(changed.tv_sec) + ':' +
+        std::to_string(changed.tv_nsec);
+  }
+#endif
   if (!archive_source::isReference(source)) {
     std::error_code error;
     auto canonical = std::filesystem::weakly_canonical(source, error);

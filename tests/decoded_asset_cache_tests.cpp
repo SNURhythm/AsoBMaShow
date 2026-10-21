@@ -2,6 +2,7 @@
 #include "RAII.h"
 #include "Uuid.h"
 #include "audio/DecodedAssetCache.h"
+#include "audio/ChartAudioFileLookup.h"
 #include "audio/SoundFileIO.h"
 #include "audio/decoder.h"
 #include "support/AllocationFailure.h"
@@ -51,6 +52,44 @@ void zipWav(const std::filesystem::path &zip, const std::vector<unsigned char> &
   require(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK, "write ZIP header");
   require(archive_write_data(writer.get(), bytes.data(), bytes.size()) == static_cast<la_ssize_t>(bytes.size()), "write ZIP bytes");
   require(archive_write_close(writer.get()) == ARCHIVE_OK, "close ZIP");
+}
+void testChartAudioFileLookup(const std::filesystem::path &root) {
+  const auto folder = root / "lookup";
+  std::filesystem::create_directory(folder);
+  std::ofstream(folder / "tone.ogg") << "ogg";
+  std::ofstream(folder / "priority.wav") << "wav";
+  std::ofstream(folder / "priority.ogg") << "ogg";
+  std::atomic_bool cancelled{false};
+  audio::ChartAudioFileLookup lookup(cancelled);
+  const std::vector<std::string_view> extensions{".wav", ".ogg"};
+  const auto check = [&](const std::filesystem::path &path) {
+    require(lookup.Find(path, extensions) == archive_file::findFileWithExtensions(path, extensions),
+            "directory lookup preserves extension resolution");
+  };
+  check(folder / "tone.wav");
+  check(folder / "priority.ogg");
+  check(folder / "absent.wav");
+  check(folder / "TONE.wav");
+  // A directory change must invalidate negative results in this same batch.
+  const auto oldTime = std::filesystem::last_write_time(folder);
+  std::ofstream(folder / "new.wav") << "new";
+  std::filesystem::last_write_time(folder, oldTime + std::chrono::seconds(1));
+  check(folder / "new.wav");
+  check(folder / "absent.wav"); // Rebuild the negative snapshot after refresh.
+  const auto restoredTime = std::filesystem::last_write_time(folder);
+  std::ofstream(folder / "restored.wav") << "new with restored directory mtime";
+  std::filesystem::last_write_time(folder, restoredTime);
+  check(folder / "restored.wav");
+#ifndef _WIN32
+  std::filesystem::create_symlink(folder / "missing-target", folder / "dangling.wav");
+  std::ofstream(folder / "dangling.ogg") << "ogg";
+  check(folder / "dangling.wav");
+#endif
+  std::ofstream(folder / std::filesystem::path(u8"音.ogg")) << "ogg";
+  check(folder / std::filesystem::path(u8"音.wav"));
+  check(folder / "tone.wav");
+  cancelled = true;
+  require(!lookup.Find(folder / "tone.wav", extensions), "lookup observes cancellation");
 }
 void testWholeLoadAndConcurrentReuse(const std::filesystem::path &root) {
   const auto path = root / "tone.wav";
@@ -132,6 +171,19 @@ void testEvictionAndIdentity(const std::filesystem::path &root) {
   std::filesystem::rename(replacement, first);
   require(!unlimited.Contains(first) && unlimited.Load(first, cancelled) != old,
           "inode replacement invalidates even equal size and mtime");
+  old = unlimited.Load(first, cancelled);
+  const auto unchangedTime = std::filesystem::last_write_time(first);
+  {
+    std::fstream file(first, std::ios::binary | std::ios::in | std::ios::out);
+    file.seekg(-1, std::ios::end);
+    const char changed = static_cast<char>(file.get() ^ 1);
+    file.seekp(-1, std::ios::end);
+    file.put(changed);
+    require(bool(file), "rewrite PCM without replacing the inode or changing size");
+  }
+  std::filesystem::last_write_time(first, unchangedTime);
+  require(!unlimited.Contains(first) && unlimited.Load(first, cancelled) != old,
+          "change time invalidates an in-place rewrite with restored size and mtime");
   const auto link = root / "link.wav";
   std::filesystem::create_symlink(first, link);
   old = unlimited.Load(link, cancelled);
@@ -270,6 +322,7 @@ int main() {
   const auto root = std::filesystem::temp_directory_path() / ("decoded-asset-tests-" + uuid::generateV4());
   try {
     std::filesystem::create_directories(root);
+    testChartAudioFileLookup(root);
     testRejectsExcessiveDecodeBeforeAllocation(root);
     testWholeLoadAndConcurrentReuse(root);
     testCancellationAndInvalidAssets(root);

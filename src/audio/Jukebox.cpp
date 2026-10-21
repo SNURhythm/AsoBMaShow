@@ -1,5 +1,6 @@
 #include "Jukebox.h"
 #include "ChartVisualAssetResolver.h"
+#include "ChartAudioFileLookup.h"
 #include "../ArchiveSourceIdentity.h"
 #include "../targets.h"
 #if TARGET_OS_ANDROID
@@ -2708,6 +2709,7 @@ Jukebox::resolveSoundAssets(bms_parser::Chart &chart,
                             std::atomic_bool &isCancelled) {
   const auto audioExtensionViews = makeAudioExtensionViews();
   std::unordered_map<path_t, ArchiveEntryLookup> lookups;
+  audio::ChartAudioFileLookup looseLookup(isCancelled);
   std::vector<ResolvedSoundAsset> assets;
   assets.reserve(wavTable.size());
 
@@ -2731,7 +2733,7 @@ Jukebox::resolveSoundAssets(bms_parser::Chart &chart,
       }
     } else {
       resolvedPath =
-          archive_file::findFileWithExtensions(basePath, audioExtensionViews);
+          looseLookup.Find(basePath, audioExtensionViews);
     }
 
     if (!resolvedPath.has_value()) {

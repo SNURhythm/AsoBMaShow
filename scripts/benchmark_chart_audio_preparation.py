@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Measure production chart audio preparation and preview-to-gameplay handoff.
 
-Uses the existing jukebox_restore_tests headless backend and real loaders. Builds
+Uses a headless backend and real loaders with the existing test dependency closure. Builds
 optimized objects outside the checkout and links installed release dependencies.
 Charts and assets are read in place; paths and raw logs remain in the output dir.
 No real audio device, visual asset loading, or app UI is involved.
@@ -11,6 +11,7 @@ import argparse
 import concurrent.futures
 import hashlib
 import json
+import os
 from pathlib import Path
 import shlex
 import subprocess
@@ -22,6 +23,7 @@ parser.add_argument('--charts-from', type=Path, required=True, help='One chart p
 parser.add_argument('--build-dir', type=Path, default=root / 'cmake-build-debug')
 parser.add_argument('--output', type=Path)
 parser.add_argument('--rounds', type=int, default=3)
+parser.add_argument('--cache-bytes', type=int, help='Probe a retention budget; default is unlimited')
 parser.add_argument('--sample-rates', type=int, nargs='+', default=[44100, 48000], choices=[44100, 48000])
 parser.add_argument('--sample-seconds', type=int, default=0,
                     help='Optional macOS sample duration per rate; use a separate profiling run')
@@ -34,6 +36,8 @@ if out.is_relative_to(root) or out == build:
     parser.error('--output must be outside the checkout/build directory')
 charts = [str(Path(line).expanduser().resolve())
           for line in options.charts_from.read_text().splitlines() if line]
+if options.cache_bytes is not None and options.cache_bytes < 0:
+    parser.error('--cache-bytes must be nonnegative')
 if not charts:
     parser.error('--charts-from is empty')
 out.mkdir(parents=True, exist_ok=True)
@@ -50,6 +54,9 @@ for entry in commands:
 objects, extras, jobs = {}, [], []
 for entry in selected.values():
     args = shlex.split(entry['command'])
+    if Path(entry['file']) == root / 'tests/jukebox_restore_tests.cpp':
+        entry['file'] = str(root / 'tests/chart_audio_preparation_benchmark.cpp')
+        args[args.index('-c') + 1] = entry['file']
     original = args[args.index('-o') + 1]
     destination = (out / original).resolve()
     if not destination.is_relative_to(out):
@@ -61,7 +68,7 @@ for entry in selected.values():
     args[args.index('-o') + 1] = str(destination)
     args = [arg for arg in args if arg not in
             ('-g', '-g1', '-g0', '-gline-tables-only', '-O0', '-O1', '-O2', '-O3', '-Os', '-Oz', '-Ofast')]
-    args.extend(['-O2', '-g1', '-DASOBMASHOW_CHART_AUDIO_BENCHMARK=1'])
+    args.extend(['-O2', '-g1'])
     jobs.append((args, entry['directory']))
 
 
@@ -99,16 +106,22 @@ manifest = {
     'revision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
     'charts': charts, 'rounds': options.rounds, 'sample_rates': options.sample_rates,
     'sample_seconds': options.sample_seconds, 'dependency_build': str(build),
-    'sources': {path: hashlib.sha256(Path(path).read_bytes()).hexdigest() for path in selected},
+    'cache_bytes': options.cache_bytes,
+    'sources': {entry['file']: hashlib.sha256(Path(entry['file']).read_bytes()).hexdigest()
+                for entry in selected.values()},
     'compile_commands': [args for args, _ in jobs], 'link_command': args,
 }
 (out / 'commands.json').write_text(json.dumps(manifest, indent=2) + '\n')
+environment = os.environ.copy()
+environment.pop('ASOBMASHOW_BENCHMARK_CACHE_BYTES', None)
+if options.cache_bytes is not None:
+    environment['ASOBMASHOW_BENCHMARK_CACHE_BYTES'] = str(options.cache_bytes)
 for rate in options.sample_rates:
     with (out / f'benchmark-{rate}.log').open('w') as log, \
          (out / f'benchmark-{rate}.stderr.log').open('w') as errors:
         process = subprocess.Popen([str(out / 'benchmark'), '--benchmark-chart-audio',
                                     str(rate), str(options.rounds), *charts],
-                                   cwd=root, stdout=log, stderr=errors)
+                                   cwd=root, stdout=log, stderr=errors, env=environment)
         sampler = None
         if options.sample_seconds:
             sampler = subprocess.Popen(['sample', str(process.pid), str(options.sample_seconds),
