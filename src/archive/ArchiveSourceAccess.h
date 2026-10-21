@@ -79,6 +79,10 @@ public:
     if (source_) std::ifstream::open(source_.path, mode);
     else setstate(std::ios::failbit);
   }
+  void close() {
+    std::ifstream::close();
+    source_ = {};
+  }
 private:
   Access source_;
 };

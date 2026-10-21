@@ -5,6 +5,9 @@ The changes live in `ArchiveFile`, so callers share the improvements rather than
 requiring gameplay-specific optimizations. Gameplay PCM ownership is unchanged:
 all gameplay audio remains fully resident.
 
+The [other-format follow-up](2026-10-22-other-archive-reading.md) extends reader
+reuse and selected-read optimizations to 7z, RAR and TAR backends.
+
 ## Implementation and coverage
 
 | Access path | Change or verified behavior |

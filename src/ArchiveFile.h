@@ -162,6 +162,11 @@ void setZipMappingEnabledForTesting(bool enabled);
 std::uint64_t zipStreamingOpenCountForTesting();
 std::uint64_t zipDirectoryOpenCountForTesting();
 std::uint64_t indexLookupBuildCountForTesting();
+struct ArchiveReaderStatsForTesting {
+  std::uint64_t sevenZipOpens, rarOpens, libarchiveOpens, libarchiveHeaders;
+};
+ArchiveReaderStatsForTesting archiveReaderStatsForTesting();
+void forceRar5WorkersForTesting(bool force);
 void resetSingleFlightWaiterCountForTesting();
 std::uint32_t singleFlightWaiterCountForTesting();
 #endif
