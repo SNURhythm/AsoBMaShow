@@ -1,4 +1,5 @@
 #include "decoder.h"
+#include "AudioDecodeProfiling.h"
 #include "../ArchiveFile.h"
 #include "../FileExtensionResolver.h"
 #include "../RAII.h"
@@ -114,20 +115,32 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
       static_cast<std::size_t>(fileInfo.channels);
   // Prepare a buffer to hold the PCM data
   buffer.resize(sampleCount, 0);
-  // Read through libsndfile's floating-point path, then convert explicitly.
-  // Direct int16 reads can produce audible differences for some keysounds.
-  // Bound scratch space by a small number of complete interleaved frames,
-  // rather than keeping a second, double-precision copy of the entire clip.
+  // PCM16 WAV can be read directly into the final buffer. Preserve the old
+  // normalized-double scaling below rather than exposing sf_readf_short's
+  // different amplitude convention. Vorbis already decodes to float internally;
+  // widening it to double in libsndfile only adds scratch traffic.
+  const int container = fileInfo.format & SF_FORMAT_TYPEMASK;
+  const bool pcm16 = (fileInfo.format & SF_FORMAT_SUBMASK) == SF_FORMAT_PCM_16 &&
+      (container == SF_FORMAT_WAV || container == SF_FORMAT_WAVEX ||
+       container == SF_FORMAT_RF64);
+  const bool vorbis = container == SF_FORMAT_OGG &&
+      (fileInfo.format & SF_FORMAT_SUBMASK) == SF_FORMAT_VORBIS;
   const sf_count_t chunkFrames = std::min<sf_count_t>(fileInfo.frames, 4096);
   const auto channels = static_cast<std::size_t>(fileInfo.channels);
-  std::vector<double> tempBuffer(static_cast<std::size_t>(chunkFrames) * channels);
+  const auto scratchSamples = static_cast<std::size_t>(chunkFrames) * channels;
+  std::vector<double> tempBuffer(pcm16 || vorbis ? 0 : scratchSamples);
+  std::vector<float> floatBuffer(vorbis ? scratchSamples : 0);
   sf_count_t numFrames = 0;
   while (numFrames < fileInfo.frames) {
     if (isCancelled) {
       return false;
     }
     const sf_count_t requested = std::min(chunkFrames, fileInfo.frames - numFrames);
-    const sf_count_t read = sf_readf_double(fileHandle.get(), tempBuffer.data(), requested);
+    auto *output = buffer.data() + static_cast<std::size_t>(numFrames) * channels;
+    const sf_count_t read = ASOBM_AUDIO_MEASURE(read,
+        pcm16 ? sf_readf_short(fileHandle.get(), output, requested) :
+        vorbis ? sf_readf_float(fileHandle.get(), floatBuffer.data(), requested) :
+                 sf_readf_double(fileHandle.get(), tempBuffer.data(), requested));
     if (isCancelled) {
       return false;
     }
@@ -138,10 +151,22 @@ bool decodeAudioFile(SNDFILE *file, const path_t &displayPath,
       return false;
     }
     const auto readSamples = static_cast<std::size_t>(read) * channels;
-    std::transform(
-        tempBuffer.begin(), tempBuffer.begin() + readSamples,
-        buffer.begin() + static_cast<std::size_t>(numFrames) * channels,
-        audioSampleToPcm16);
+    ASOBM_AUDIO_MEASURE(convert, [&] {
+      if (pcm16) {
+        // trunc(sample * 32767 / 32768), exactly, for all 65,536 int16 values.
+        // The independent integer operations also allow CPU auto-vectorization.
+        for (std::size_t i = 0; i < readSamples; ++i) {
+          const int value = output[i];
+          output[i] = static_cast<short>(value - (value > 0) + (value < 0));
+        }
+      } else if (vorbis) {
+        std::transform(floatBuffer.begin(), floatBuffer.begin() + readSamples,
+                       output, [](float value) { return audioSampleToPcm16(value); });
+      } else {
+        std::transform(tempBuffer.begin(), tempBuffer.begin() + readSamples,
+                       output, audioSampleToPcm16);
+      }
+    }());
     numFrames += read;
     if (read < requested) {
       break;
@@ -250,7 +275,8 @@ bool decodeAudioBytesToPCMBounded(const path_t &displayPath,
       .write = memoryFileWrite,
       .tell = memoryFileTell,
   };
-  SNDFILE *file = sf_open_virtual(&io, SFM_READ, &fileInfo, &memoryFile);
+  SNDFILE *file = ASOBM_AUDIO_MEASURE(open,
+      sf_open_virtual(&io, SFM_READ, &fileInfo, &memoryFile));
   return decodeAudioFile(file, displayPath, buffer, fileInfo, isCancelled,
                          maximumPcmSamples);
 }
@@ -321,9 +347,9 @@ bool decodeAudioToPCMBounded(const path_t &filePath,
   if (archive_file::isVirtualPath(fsPath)) {
     std::vector<unsigned char> bytes;
     std::string errorMessage;
-    if (!archive_file::readFileBounded(fsPath, bytes,
+    if (!ASOBM_AUDIO_MEASURE(input, archive_file::readFileBounded(fsPath, bytes,
                                        limits.maximumEncodedBytes,
-                                       &errorMessage, stop)) {
+                                       &errorMessage, stop))) {
       SDL_Log("Failed to read archived audio file %s: %s",
               path_t_to_utf8(filePath).c_str(), errorMessage.c_str());
       return false;
@@ -344,7 +370,8 @@ bool decodeAudioToPCMBounded(const path_t &filePath,
       close(*descriptor);
       return false;
     }
-    SNDFILE *file = sf_open_fd(*descriptor, SFM_READ, &fileInfo, SF_TRUE);
+    SNDFILE *file = ASOBM_AUDIO_MEASURE(open,
+        sf_open_fd(*descriptor, SFM_READ, &fileInfo, SF_TRUE));
     if (!file) close(*descriptor);
     return decodeAudioFile(file, filePath, buffer, fileInfo, isCancelled,
                            limits.maximumPcmSamples);
@@ -359,7 +386,8 @@ bool decodeAudioToPCMBounded(const path_t &filePath,
     return false;
   }
 
-  SNDFILE *file = asobmashow::audio::openSoundFile(resolvedPath, SFM_READ, fileInfo);
+  SNDFILE *file = ASOBM_AUDIO_MEASURE(open,
+      asobmashow::audio::openSoundFile(resolvedPath, SFM_READ, fileInfo));
   return decodeAudioFile(file, filePath, buffer, fileInfo, isCancelled,
                          limits.maximumPcmSamples);
 }
