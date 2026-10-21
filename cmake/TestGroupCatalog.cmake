@@ -64,6 +64,8 @@ asobmashow_label_tests(area_audio
 )
 
 asobmashow_label_tests(area_video
+    hardware_video_frame_tests
+    hardware_video_frame_threaded_tests
     ios_now_playing_tests
     music_player_video_lifecycle_tests
     skin_movie_catalog_types_tests

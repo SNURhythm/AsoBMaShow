@@ -11,6 +11,7 @@
 #include <vector>
 #include "VideoFrameLayout.h"
 #include "VideoMemoryBudget.h"
+#include "HardwareVideoFrame.h"
 #include "../utils/Stopwatch.h"
 #include "../rendering/common.h"
 #include <thread>
@@ -55,6 +56,7 @@ public:
         bgfx::UniformHandle{bgfx::kInvalidHandle}};
     bgfx::TransientVertexBuffer vertexBuffer{};
     bgfx::TransientIndexBuffer indexBuffer{};
+    std::optional<std::array<std::array<float, 4>, 3>> colorRows;
   };
 
   struct LoadLimits {
@@ -146,6 +148,7 @@ private:
   void stopPredecoding();
 
   bool updateVideoTexture(int width, int height);
+  bool restartSoftwareDecoder();
   mutable std::mutex videoFrameMutex;
 
   int videoFrameWidth;
@@ -158,6 +161,16 @@ private:
   bgfx::UniformHandle s_texV = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle fullscreenProgram = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle embeddedProgram = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle nativeFullscreenProgram = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle nativeEmbeddedProgram = BGFX_INVALID_HANDLE;
+  std::array<bgfx::UniformHandle, 3> videoColorUniforms{
+      bgfx::UniformHandle{bgfx::kInvalidHandle},
+      bgfx::UniformHandle{bgfx::kInvalidHandle},
+      bgfx::UniformHandle{bgfx::kInvalidHandle}};
+  video::HardwareVideoTextures hardwareTextures;
+  bool presentingHardwareFrame = false;
+  bool hardwareDecoderConfigured = false;
+  std::atomic<bool> softwareFallbackRequested{false};
 
   int64_t startPTS = 0;
   unsigned int getPrecisePosition();

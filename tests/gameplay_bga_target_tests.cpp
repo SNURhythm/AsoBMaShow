@@ -11,6 +11,7 @@
 #include "skin/beatoraja/SkinDestinationEvaluator.cpp"
 #include "utils/Stopwatch.h"
 #include "video/VideoPlayer.h"
+#include "StorageVideoTestSupport.h"
 
 #include <bx/math.h>
 
@@ -1314,6 +1315,91 @@ void testRealVideoAdapterHonorsBoundedGeneratedFixture() {
           "within its pre-allocation decoded budget");
 }
 
+void testNativeVideoPlaybackSelectsSurfaceRendering() {
+  storage_test::TempDirectory directory;
+  storage_test::VideoFixture fixture;
+  fixture.h264 = true; fixture.width = 320; fixture.height = 240;
+  fixture.timestamps = {0, 1, 2, 3, 4, 5};
+  fixture.colorRange = AVCOL_RANGE_MPEG; fixture.colorSpace = AVCOL_SPC_BT709;
+  const auto path = directory.root / "native-bga.nut";
+  storage_test::makeVideo(path, fixture);
+  Stopwatch stopwatch;
+  VideoPlayer player(&stopwatch);
+  std::atomic_bool cancelled{false};
+  require(player.loadVideo(path.string(), cancelled), "native BGA fixture loads");
+  player.playFrom(0);
+  const std::array<video::VideoQuadPoint, 4> corners{{{0, 24}, {32, 24}, {32, 0}, {0, 0}}};
+  const std::array<video::VideoQuadPoint, 4> uvs{{{0, 1}, {1, 1}, {1, 0}, {0, 0}}};
+  const auto quad = video::makeEmbeddedYuvQuadLayout(corners, uvs, {});
+  std::optional<VideoPlayer::PreparedEmbeddedSubmission> submission;
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (!submission && std::chrono::steady_clock::now() < deadline) {
+    player.update();
+    submission = player.prepareEmbeddedSubmission(*quad, BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    if (!submission) std::this_thread::yield();
+  }
+  require(submission.has_value(), "native BGA decoder presents a frame");
+  const auto nativeProgram = rendering::ShaderManager::getInstance().getProgram(
+      "vs_skin_yuvrgb.bin", "fs_skin_video_nv12.bin");
+  require(submission->program.idx == nativeProgram.idx,
+          "H264 playback samples native decoder surfaces instead of CPU-uploaded YUV planes");
+
+  const auto output = bgfx::createTexture2D(32, 24, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
+  const auto readback = bgfx::createTexture2D(32, 24, false, 1, bgfx::TextureFormat::RGBA8,
+      BGFX_TEXTURE_READ_BACK | BGFX_TEXTURE_BLIT_DST);
+  const auto framebuffer = bgfx::createFrameBuffer(1, &output, false);
+  float projection[16];
+  bx::mtxOrtho(projection, 0.0F, 32.0F, 24.0F, 0.0F, 0.0F, 100.0F, 0.0F,
+               bgfx::getCaps()->homogeneousDepth);
+  bgfx::setViewFrameBuffer(0, framebuffer);
+  bgfx::setViewRect(0, 0, 0, 32, 24);
+  bgfx::setViewTransform(0, nullptr, projection);
+  const auto renderPixels = [&] {
+    player.update();
+    player.renderEmbedded(0, *quad, BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+    bgfx::blit(1, readback, 0, 0, output);
+    std::vector<uint8_t> pixels(32 * 24 * 4);
+    const auto ready = bgfx::readTexture(readback, pixels.data());
+    while (bgfx::frame() < ready) {}
+    return pixels;
+  };
+  const auto firstFrame = renderPixels();
+  const auto awaitPixels = [&](bool same) {
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (std::chrono::steady_clock::now() < until) {
+      if ((renderPixels() == firstFrame) == same) return true;
+      std::this_thread::yield();
+    }
+    return false;
+  };
+  player.playFrom(160'000);
+  require(awaitPixels(false), "native playback replaces the visible surface after forward seek");
+  player.playFrom(0);
+  require(awaitPixels(true), "native playback reproduces its first frame after backward seek");
+  player.stop();
+  require(!player.prepareEmbeddedSubmission(*quad, 0), "stopped native video no longer submits an image");
+  bgfx::setViewFrameBuffer(0, BGFX_INVALID_HANDLE);
+  bgfx::destroy(framebuffer); bgfx::destroy(output); bgfx::destroy(readback);
+
+  // This matrix is valid video but deliberately outside the native shader's
+  // supported set. Import must fail safely and reopen the ordinary decoder.
+  fixture.colorSpace = AVCOL_SPC_SMPTE240M;
+  storage_test::makeVideo(path, fixture);
+  require(player.loadVideo(path.string(), cancelled), "software fallback fixture loads");
+  player.playFrom(0);
+  submission.reset();
+  const auto fallbackDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+  while (!submission && std::chrono::steady_clock::now() < fallbackDeadline) {
+    player.update();
+    submission = player.prepareEmbeddedSubmission(*quad, BGFX_STATE_WRITE_RGB);
+    if (!submission) std::this_thread::yield();
+  }
+  const auto softwareProgram = rendering::ShaderManager::getInstance().getProgram(
+      "vs_skin_yuvrgb.bin", "fs_skin_yuvrgb.bin");
+  require(submission && submission->program.idx == softwareProgram.idx,
+          "failed native surface import resumes software playback at the current clock");
+}
+
 void testEmbeddedImageResetsSkinSamplingOnMetal() {
   const auto fixtureDirectory = std::filesystem::temp_directory_path() /
       ("asobmashow-bga-sampling-" + std::to_string(SDL_GetPerformanceCounter()));
@@ -1488,6 +1574,7 @@ int main(int argc, char **argv) {
   rendering::PosColorVertex::init();
   rendering::PosTexVertex::init();
   if (metalSampling) {
+    testNativeVideoPlaybackSelectsSurfaceRendering();
     testEmbeddedImageResetsSkinSamplingOnMetal();
   } else {
   testGameplayBgaCompositeStateDefaultsToBuiltInFullscreen();

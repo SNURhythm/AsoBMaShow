@@ -530,6 +530,15 @@ void StorageManagementScene::RefreshState() {
     if (policy_.audio == AudioAction::LosslessFlac)
       summary += std::string("\n") + i18n::tr("storage.ui.flac_scope");
     summary += std::string("\n\n") + i18n::tr("storage.ui.confirm_warning");
+    if (policy_.audio != AudioAction::Keep || policy_.bga == BgaAction::CompressH264)
+      summary += std::string("\n") + i18n::tr("storage.ui.confirm_replace_originals");
+    if (policy_.audio == AudioAction::LossyVorbis)
+      summary += std::string("\n") + i18n::tr("storage.ui.confirm_lossy_audio");
+    if (policy_.bga == BgaAction::CompressH264)
+      summary += std::string("\n") + i18n::tr("storage.ui.confirm_lossy_video");
+    if (policy_.bga == BgaAction::Delete)
+      summary += std::string("\n") + i18n::tr("storage.ui.confirm_delete_video");
+    summary += std::string("\n") + i18n::tr("storage.ui.confirm_cancel");
     preflightText_->setText(summary);
   } else preflightText_->setText(i18n::tr("storage.ui.folder_scope"));
   std::string status;

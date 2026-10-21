@@ -28,6 +28,7 @@ function(asobmashow_ios_bgfx_metal_compatibility)
     endif()
     string(REPLACE "${old_gate}" "${new_gate}" content "${content}")
     asobmashow_patch_bgfx_metal_readback(content)
+    asobmashow_patch_bgfx_metal_video_surfaces(content)
     asobmashow_patch_ios_bgfx_main_thread_layer(content)
 
     # Compile a generated copy, leaving the pinned upstream submodule intact.

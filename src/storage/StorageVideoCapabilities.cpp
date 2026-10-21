@@ -1,5 +1,7 @@
 #include "StorageVideoCapabilities.h"
 #include "StorageVideoEncoder.h"
+#include "../video/HardwareVideoDecoder.h"
+#include "../video/HardwareVideoFrame.h"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -39,7 +41,8 @@ struct Parameters {
   Parameters() { if (!value) throw std::bad_alloc(); }
   ~Parameters() { avcodec_parameters_free(&value); }
 };
-void probe(const StorageVideoEncoderCandidate &candidate, StorageVideoCodecSupport &support) {
+void probe(const StorageVideoEncoderCandidate &candidate, StorageVideoCodecSupport &support,
+           bool preferHardware = true) {
   StoragePolicy policy; policy.videoCodec = support.codec;
   Codec encoder, decoder;
   const auto codec = avcodec_find_encoder_by_name(candidate.name.c_str());
@@ -60,7 +63,7 @@ void probe(const StorageVideoEncoderCandidate &candidate, StorageVideoCodecSuppo
   if (!ConfigureStorageVideoEncoder(&context, candidate, policy, reason))
     throw std::runtime_error(reason);
 
-  // Match VideoPlayer's decoder selection and CPU-frame conversion. A device
+  // Match VideoPlayer's decoder negotiation and native import. A device
   // decoder advertised by the OS alone is not sufficient for app playback.
   const auto playback = avcodec_find_decoder(StorageVideoCodecId(support.codec));
   if (!playback) throw std::runtime_error("App playback decoder is unavailable");
@@ -71,6 +74,7 @@ void probe(const StorageVideoEncoderCandidate &candidate, StorageVideoCodecSuppo
   require(avcodec_parameters_to_context(decoder.value, parameters.value), "Configure playback probe");
   decoder.value->pkt_timebase = context.time_base;
   decoder.value->thread_count = 1;
+  if (preferHardware) video::configureHardwareVideoDecoder(decoder.value);
   require(avcodec_open2(decoder.value, playback, nullptr), "Open app playback decoder");
 
   Frame input, decoded, pixels;
@@ -85,6 +89,7 @@ void probe(const StorageVideoEncoderCandidate &candidate, StorageVideoCodecSuppo
   pixels.value->width = context.width; pixels.value->height = context.height;
   require(av_frame_get_buffer(pixels.value, 32), "Allocate playback pixels");
   int frames = 0;
+  bool nativeFrames = true;
   auto receiveDecoded = [&] {
     int status;
     while ((status = avcodec_receive_frame(decoder.value, decoded.value)) >= 0) {
@@ -92,12 +97,18 @@ void probe(const StorageVideoEncoderCandidate &candidate, StorageVideoCodecSuppo
           decoded.value->width != context.width || decoded.value->height != context.height ||
           decoded.value->pts != frames)
         throw std::runtime_error("Playback probe changed frame geometry or timestamps");
-      std::unique_ptr<SwsContext, decltype(&sws_freeContext)> scaler(
-          sws_getContext(context.width, context.height, static_cast<AVPixelFormat>(decoded.value->format),
-                         context.width, context.height, AV_PIX_FMT_YUV420P, SWS_BILINEAR, nullptr, nullptr, nullptr), sws_freeContext);
-      if (!scaler || sws_scale(scaler.get(), decoded.value->data, decoded.value->linesize, 0, context.height,
-                              pixels.value->data, pixels.value->linesize) != context.height)
-        throw std::runtime_error("App playback cannot convert decoded frames");
+      if (decoded.value->format == AV_PIX_FMT_VIDEOTOOLBOX) {
+        if (!video::probeHardwareVideoFrame(*decoded.value))
+          throw std::runtime_error("App playback cannot import the native video surface");
+      } else {
+        nativeFrames = false;
+        std::unique_ptr<SwsContext, decltype(&sws_freeContext)> scaler(
+            sws_getContext(context.width, context.height, static_cast<AVPixelFormat>(decoded.value->format),
+                           context.width, context.height, AV_PIX_FMT_YUV420P, SWS_BILINEAR, nullptr, nullptr, nullptr), sws_freeContext);
+        if (!scaler || sws_scale(scaler.get(), decoded.value->data, decoded.value->linesize, 0, context.height,
+                                pixels.value->data, pixels.value->linesize) != context.height)
+          throw std::runtime_error("App playback cannot convert decoded frames");
+      }
       ++frames;
       av_frame_unref(decoded.value);
     }
@@ -133,7 +144,8 @@ void probe(const StorageVideoEncoderCandidate &candidate, StorageVideoCodecSuppo
   if (frames != 3) throw std::runtime_error("Playback probe did not decode all frames");
   support.available = true; support.hardware = candidate.hardware;
   support.encoder = candidate.name; support.playbackAvailable = true;
-  support.playbackHardware = false; support.decoder = playback->name;
+  support.playbackHardware = nativeFrames && video::probeHardwareVideoDecoder(*decoder.value);
+  support.decoder = nativeFrames ? "VideoToolbox" : playback->name;
   support.reason.clear();
 }
 StorageVideoCapabilities unavailable(const char *reason) {
@@ -161,7 +173,11 @@ StorageVideoCapabilities ProbeStorageVideoCapabilities() {
     }
     const int bitrate = StorageVideoEncoderBitrate(support.codec, VideoQuality::Balanced, 320, 240, 25);
     for (const auto &candidate : StorageVideoEncoderCandidates(support.codec, 320, 240, 25, bitrate)) {
-      try { probe(candidate, support); break; }
+      try {
+        try { probe(candidate, support); }
+        catch (...) { probe(candidate, support, false); }
+        break;
+      }
       catch (const std::exception &error) { support.reason = error.what(); }
     }
   }

@@ -1,6 +1,7 @@
 #include "VideoPlayer.h"
 #include "VideoDecodeState.h"
 #include "VideoFrameLayout.h"
+#include "HardwareVideoDecoder.h"
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
 #include "../rendering/UniformCache.h"
@@ -115,6 +116,19 @@ VideoPlayer::VideoPlayer(Stopwatch *stopwatch)
   } catch (...) {
     embeddedProgram = BGFX_INVALID_HANDLE;
   }
+  if (video::hardwareVideoRenderingAvailable()) {
+    try {
+      nativeFullscreenProgram = rendering::ShaderManager::getInstance().getProgram(
+          "vs_yuvrgb.bin", "fs_video_nv12.bin");
+      nativeEmbeddedProgram = rendering::ShaderManager::getInstance().getProgram(
+          "vs_skin_yuvrgb.bin", "fs_skin_video_nv12.bin");
+      videoColorUniforms = {uniforms.getVec4("u_videoColor0"),
+                            uniforms.getVec4("u_videoColor1"),
+                            uniforms.getVec4("u_videoColor2")};
+    } catch (...) {
+      nativeFullscreenProgram = nativeEmbeddedProgram = BGFX_INVALID_HANDLE;
+    }
+  }
 }
 
 VideoPlayer::~VideoPlayer() { unloadVideo(); }
@@ -145,6 +159,8 @@ VideoPlayer::DecodeBatch::~DecodeBatch() {
 
 void VideoPlayer::destroyVideoTextures() {
   std::lock_guard<std::mutex> lock(videoFrameMutex);
+  video::destroyHardwareVideoTextures(hardwareTextures);
+  presentingHardwareFrame = false;
   if (bgfx::isValid(videoTextureY)) {
     bgfx::destroy(videoTextureY);
     videoTextureY = BGFX_INVALID_HANDLE;
@@ -183,6 +199,8 @@ void VideoPlayer::unloadVideo() {
     seekPositionSeconds = 0.0;
   }
   destroyVideoTextures();
+  hardwareDecoderConfigured = false;
+  softwareFallbackRequested = false;
   reservedDecodedBytes = 0;
   {
     std::lock_guard<std::mutex> lock(recycleMutex);
@@ -299,8 +317,19 @@ bool VideoPlayer::loadVideo(const std::string &videoPath,
         codecContext->extradata_size = codecParams->extradata_size;
       }
     }
+    // Bounded skin movies keep their established CPU allocation contract.
+    // Native decoder pools have platform-owned allocations outside that bound.
+    if (!limits.requirePreallocationBounds && bgfx::isValid(nativeFullscreenProgram) &&
+        bgfx::isValid(nativeEmbeddedProgram)) {
+      hardwareDecoderConfigured = video::configureHardwareVideoDecoder(codecContext);
+    }
     if (avcodec_open2(codecContext, codec, nullptr) < 0) {
-      return fail();
+      if (!hardwareDecoderConfigured) return fail();
+      avcodec_free_context(&codecContext);
+      hardwareDecoderConfigured = false;
+      codecContext = avcodec_alloc_context3(codec);
+      if (!codecContext || avcodec_parameters_to_context(codecContext, videoStream->codecpar) < 0 ||
+          avcodec_open2(codecContext, codec, nullptr) < 0) return fail();
     }
     const auto decodedLayout =
         boundedLayout(codecContext->width, codecContext->height);
@@ -375,6 +404,10 @@ void VideoPlayer::update() {
   if (formatContext == nullptr || videoStreamIndex < 0) {
     return;
   }
+  if (softwareFallbackRequested.exchange(false, std::memory_order_acq_rel)) {
+    if (!restartSoftwareDecoder()) isPlaying = false;
+    return;
+  }
   if (bufferSize.load(std::memory_order_acquire) == 0) {
     return;
   }
@@ -403,6 +436,24 @@ void VideoPlayer::update() {
   if (currentFrame == nullptr) return;
   freeSpace.notify_one();
 
+  if (currentFrame->format == AV_PIX_FMT_VIDEOTOOLBOX) {
+    bool imported;
+    {
+      std::lock_guard<std::mutex> frameLock(videoFrameMutex);
+      imported = video::importHardwareVideoFrame(*currentFrame, hardwareTextures);
+      if (imported) {
+        presentingHardwareFrame = true;
+        lastFramePTS = frameTime;
+        hasVideoFrame = true;
+      }
+    }
+    recycleFrame(currentFrame);
+    if (!imported) softwareFallbackRequested.store(true, std::memory_order_release);
+    return;
+  }
+
+  std::lock_guard<std::mutex> frameLock(videoFrameMutex);
+
   // Upload to BGFX textures.
   // Use bgfx::copy + explicit pitch because decoder output can be padded
   // (linesize > plane width), and the frame is recycled right after upload.
@@ -430,6 +481,8 @@ void VideoPlayer::update() {
 
   lastFramePTS = frameTime;
   hasVideoFrame = true;
+  presentingHardwareFrame = false;
+  video::destroyHardwareVideoTextures(hardwareTextures);
 
   // Recycle the displayed frame
   recycleFrame(currentFrame);
@@ -441,12 +494,14 @@ unsigned int VideoPlayer::getPrecisePosition() {
 
 void VideoPlayer::render(bgfx::ViewId viewId, float viewX, float viewY,
                          float viewWidth, float viewHeight) const {
+  std::lock_guard<std::mutex> frameLock(videoFrameMutex);
   if (!hasVideoFrame)
     return;
   if (!isPlaying) {
     return;
   }
-  if (!bgfx::isValid(fullscreenProgram)) {
+  const auto program = presentingHardwareFrame ? nativeFullscreenProgram : fullscreenProgram;
+  if (!bgfx::isValid(program)) {
     return;
   }
 
@@ -499,11 +554,18 @@ void VideoPlayer::render(bgfx::ViewId viewId, float viewX, float viewY,
                  BGFX_STATE_BLEND_ALPHA);
   bgfx::setVertexBuffer(0, &tvb);
   bgfx::setIndexBuffer(&tib);
-  bgfx::setTexture(0, s_texY, videoTextureY);
-  bgfx::setTexture(1, s_texU, videoTextureU);
-  bgfx::setTexture(2, s_texV, videoTextureV);
+  if (presentingHardwareFrame) {
+    bgfx::setTexture(0, s_texY, hardwareTextures.planes[0]);
+    bgfx::setTexture(1, s_texU, hardwareTextures.planes[1]);
+    for (size_t row = 0; row < 3; ++row)
+      bgfx::setUniform(videoColorUniforms[row], hardwareTextures.colorRows[row].data());
+  } else {
+    bgfx::setTexture(0, s_texY, videoTextureY);
+    bgfx::setTexture(1, s_texU, videoTextureU);
+    bgfx::setTexture(2, s_texV, videoTextureV);
+  }
 
-  bgfx::submit(viewId, fullscreenProgram);
+  bgfx::submit(viewId, program);
 }
 
 void VideoPlayer::renderEmbedded(
@@ -530,6 +592,17 @@ VideoPlayer::prepareEmbeddedSubmission(
     const video::EmbeddedYuvQuadLayout &quad, std::uint64_t state,
     std::optional<rendering::DrawableScissor> scissor) const {
   std::lock_guard<std::mutex> frameLock(videoFrameMutex);
+  if (presentingHardwareFrame) {
+    if (!hasVideoFrame || !isPlaying || !bgfx::isValid(nativeEmbeddedProgram) ||
+        !bgfx::isValid(hardwareTextures.planes[0]) || !bgfx::isValid(hardwareTextures.planes[1]))
+      return std::nullopt;
+    return PreparedEmbeddedSubmission{
+        .quad = quad, .state = state, .scissor = scissor,
+        .program = nativeEmbeddedProgram,
+        .textures = {hardwareTextures.planes[0], hardwareTextures.planes[1], BGFX_INVALID_HANDLE},
+        .samplers = {s_texY, s_texU, s_texV},
+        .colorRows = hardwareTextures.colorRows};
+  }
   if (!hasVideoFrame || !isPlaying || !bgfx::isValid(embeddedProgram) ||
       !bgfx::isValid(videoTextureY) || !bgfx::isValid(videoTextureU) ||
       !bgfx::isValid(videoTextureV) || !bgfx::isValid(s_texY) ||
@@ -591,8 +664,12 @@ void VideoPlayer::submitPreparedEmbedded(
                    samplerFlags);
   bgfx::setTexture(1, submission.samplers[1], submission.textures[1],
                    samplerFlags);
-  bgfx::setTexture(2, submission.samplers[2], submission.textures[2],
-                   samplerFlags);
+  if (submission.colorRows) {
+    for (size_t row = 0; row < 3; ++row)
+      bgfx::setUniform(videoColorUniforms[row], (*submission.colorRows)[row].data());
+  } else {
+    bgfx::setTexture(2, submission.samplers[2], submission.textures[2], samplerFlags);
+  }
   bgfx::submit(viewId, submission.program);
 }
 
@@ -801,7 +878,14 @@ void VideoPlayer::predecodeFrames() {
       return;
     }
 
-    if (canReferenceYuvFrame(*decodedFrame, videoFrameWidth, videoFrameHeight)) {
+    const bool nativeFrame = decodedFrame->format == AV_PIX_FMT_VIDEOTOOLBOX;
+    if (nativeFrame && (decodedFrame->width != videoFrameWidth || decodedFrame->height != videoFrameHeight ||
+                       !decodedFrame->data[3])) {
+      softwareFallbackRequested.store(true, std::memory_order_release);
+      recycleFrame(targetFrame);
+      return;
+    }
+    if (nativeFrame || canReferenceYuvFrame(*decodedFrame, videoFrameWidth, videoFrameHeight)) {
       {
         std::lock_guard<std::mutex> lock(recycleMutex);
         retainRecycledBuffers = false;
@@ -932,6 +1016,7 @@ void VideoPlayer::predecodeFrames() {
           decodeState.onReceive(video::VideoReceiveResult::EndOfStream);
         } else {
           SDL_Log("Video decoder receive failed: %d", result);
+          if (hardwareDecoderConfigured) softwareFallbackRequested.store(true, std::memory_order_release);
           decodeState.onReceive(video::VideoReceiveResult::Error);
         }
       } else if (action == video::VideoDecodeAction::ReadPacket) {
@@ -962,6 +1047,7 @@ void VideoPlayer::predecodeFrames() {
           decodeState.onPacketSend(video::VideoSendResult::EndOfStream);
         } else {
           SDL_Log("Video decoder rejected a packet: %d", result);
+          if (hardwareDecoderConfigured) softwareFallbackRequested.store(true, std::memory_order_release);
           av_packet_unref(localPacket);
           decodeState.onPacketSend(video::VideoSendResult::Error);
         }
@@ -975,6 +1061,7 @@ void VideoPlayer::predecodeFrames() {
           decodeState.onFlushSend(video::VideoSendResult::EndOfStream);
         } else {
           SDL_Log("Video decoder flush failed: %d", result);
+          if (hardwareDecoderConfigured) softwareFallbackRequested.store(true, std::memory_order_release);
           decodeState.onFlushSend(video::VideoSendResult::Error);
         }
       }
@@ -984,6 +1071,46 @@ void VideoPlayer::predecodeFrames() {
   av_packet_unref(localPacket);
   av_frame_free(&decodedFrame);
   av_packet_free(&localPacket);
+}
+
+bool VideoPlayer::restartSoftwareDecoder() {
+  // Stop both producer and queue before replacing the context. Keep the last
+  // presented surface alive while software decoding seeks to the same clock.
+  stopPredecoding();
+  const auto position = std::max<int64_t>(0, stopwatch->elapsedMicros() - startTime);
+  std::lock_guard<std::mutex> videoLock(videoMutex);
+  if (!formatContext || videoStreamIndex < 0) return false;
+  const auto *stream = formatContext->streams[videoStreamIndex];
+  const auto *codec = avcodec_find_decoder(stream->codecpar->codec_id);
+  AVCodecContext *replacement = codec ? avcodec_alloc_context3(codec) : nullptr;
+  if (!replacement || avcodec_parameters_to_context(replacement, stream->codecpar) < 0 ||
+      avcodec_open2(replacement, codec, nullptr) < 0) {
+    avcodec_free_context(&replacement);
+    SDL_Log("Cannot reopen video with software decoding");
+    return false;
+  }
+  const auto target = startPTS + av_rescale_q(position, {1, AV_TIME_BASE}, stream->time_base);
+  if (av_seek_frame(formatContext, videoStreamIndex, target, AVSEEK_FLAG_BACKWARD) < 0) {
+    avcodec_free_context(&replacement);
+    SDL_Log("Cannot seek video for software decoding fallback");
+    return false;
+  }
+  avcodec_free_context(&codecContext);
+  codecContext = replacement;
+  hardwareDecoderConfigured = false;
+  softwareFallbackRequested = false;
+  seekPositionSeconds = static_cast<double>(position) / 1000000.0;
+  decodeGeneration.fetch_add(1, std::memory_order_release);
+  isEOF = false;
+  predecodingActive = true;
+  try {
+    predecodeThread = std::thread(&VideoPlayer::predecodeFrames, this);
+  } catch (...) {
+    predecodingActive = false;
+    return false;
+  }
+  SDL_Log("Video playback switched to software decoding at %" PRId64 " us", position);
+  return true;
 }
 
 void VideoPlayer::stopPredecoding() {

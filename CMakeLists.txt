@@ -45,6 +45,9 @@ if (APPLE AND NOT IOS)
 else()
     set(PLATFORM_MACOS OFF)
 endif()
+if(APPLE)
+    set_source_files_properties(src/video/HardwareVideoFrameApple.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+endif()
 if (ANDROID)
     set(PLATFORM_ANDROID ON)
 else()
@@ -9798,5 +9801,28 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                     ${CMAKE_SOURCE_DIR}/tests/test_groups_tests.py -v)
     endif()
 
+    if(APPLE)
+        add_executable(hardware_video_frame_tests tests/hardware_video_frame_tests.mm
+            src/video/HardwareVideoFrameApple.mm)
+        target_include_directories(hardware_video_frame_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_compile_features(hardware_video_frame_tests PRIVATE cxx_std_23)
+        target_compile_definitions(hardware_video_frame_tests PRIVATE ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+        target_link_libraries(hardware_video_frame_tests PRIVATE bgfx ${FFMPEG_LIBRARIES}
+            "-framework CoreVideo" "-framework Metal" "-framework Foundation" "-framework VideoToolbox" "-framework CoreMedia")
+        asobmashow_register_test(hardware_video_frame_tests)
+        add_test(NAME hardware_video_frame_threaded_tests COMMAND hardware_video_frame_tests --threaded)
+    endif()
+
     include("${CMAKE_SOURCE_DIR}/cmake/TestGroupCatalog.cmake")
+endif()
+
+if(APPLE)
+    foreach(video_target IN ITEMS main jukebox_restore_tests gameplay_bga_target_tests visual_catch_up_tests
+            skin_movie_clock_tests storage_video_capability_tests storage_media_tests storage_optimizer_tests find_bms_download_tests)
+        if(TARGET ${video_target})
+            target_sources(${video_target} PRIVATE src/video/HardwareVideoFrameApple.mm)
+            target_link_libraries(${video_target} PRIVATE bgfx "-framework CoreVideo" "-framework Metal"
+                "-framework Foundation" "-framework VideoToolbox" "-framework CoreMedia")
+        endif()
+    endforeach()
 endif()
