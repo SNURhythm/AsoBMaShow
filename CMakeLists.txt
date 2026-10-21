@@ -9818,7 +9818,8 @@ endif()
 
 if(APPLE)
     foreach(video_target IN ITEMS main jukebox_restore_tests gameplay_bga_target_tests visual_catch_up_tests
-            skin_movie_clock_tests storage_video_capability_tests storage_media_tests storage_optimizer_tests find_bms_download_tests)
+            skin_movie_clock_tests storage_video_capability_tests storage_media_tests storage_optimizer_tests
+            storage_scale_benchmark find_bms_download_tests)
         if(TARGET ${video_target})
             target_sources(${video_target} PRIVATE src/video/HardwareVideoFrameApple.mm)
             target_link_libraries(${video_target} PRIVATE bgfx "-framework CoreVideo" "-framework Metal"

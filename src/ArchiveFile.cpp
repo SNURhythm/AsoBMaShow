@@ -292,6 +292,20 @@ std::string genericPathUtf8(const std::filesystem::path &path) {
 }
 
 std::string normalizeEntryName(std::string value) {
+  // Most central-directory names are already canonical. Avoid constructing,
+  // normalizing and serializing a filesystem path for every such name.
+  if (!value.empty() && value.front() != '/' && value.back() != '/' &&
+      value.find_first_of("\\:") == std::string::npos) {
+    std::size_t begin = 0;
+    for (;;) {
+      const auto end = value.find('/', begin);
+      const auto part = std::string_view(value).substr(begin,
+          end == std::string::npos ? end : end - begin);
+      if (part.empty() || part == "." || part == "..") break;
+      if (end == std::string::npos) return value;
+      begin = end + 1;
+    }
+  }
   value = replaceAll(std::move(value), "\\", "/");
   std::filesystem::path path(utf8_to_path_t(value));
   path = path.lexically_normal();
@@ -506,17 +520,49 @@ struct CachedIndex {
   bool liveSourceManifest = false;
   mutable std::atomic_bool retainForBrowsing{false};
   std::vector<Entry> entries;
-  std::unordered_map<std::string, std::size_t> exact;
-  std::unordered_map<std::string, std::size_t> lower;
+  mutable std::once_flag lookupOnce;
+  mutable std::unordered_map<std::string, std::size_t> exact;
+  mutable std::unordered_map<std::string, std::size_t> lower;
+  mutable std::atomic_uint64_t lastUse{0};
+  std::uint64_t retainedBytes = 0;
 };
 
 std::mutex gIndexMutex;
-// NOTE: gIndexCache is intentionally unbounded (one full entry list per
-// archive retained for browsing, bounded by library size). Storage measurement
-// uses transient leases and does not retain newly built indexes. An LRU eviction of
-// least-recently-used archive indexes is a possible follow-up if memory
-// becomes a concern on very large libraries.
+// Active callers own shared leases. Eviction drops only cache ownership and
+// never invalidates their borrowed records or the persisted index. Keep the
+// newest index even if it alone exceeds the budget, avoiding rebuild thrash.
 std::unordered_map<std::string, std::shared_ptr<const CachedIndex>> gIndexCache;
+std::atomic_uint64_t gIndexUseCounter{0};
+std::size_t gIndexCacheMaximumCount = 16;
+std::uint64_t gIndexCacheMaximumBytes = 64U * 1024U * 1024U;
+
+void trimIndexCacheLocked() {
+  std::uint64_t bytes = 0;
+  for (const auto &[key, index] : gIndexCache) addClamped(bytes, index->retainedBytes);
+  while (!gIndexCache.empty() &&
+         (gIndexCache.size() > gIndexCacheMaximumCount ||
+          (gIndexCache.size() > 1 && bytes > gIndexCacheMaximumBytes))) {
+    const auto oldest = std::min_element(gIndexCache.begin(), gIndexCache.end(),
+        [](const auto &a, const auto &b) { return a.second->lastUse.load() < b.second->lastUse.load(); });
+    bytes -= oldest->second->retainedBytes;
+    gIndexCache.erase(oldest);
+  }
+}
+
+void accountIndexMetadata(CachedIndex &index) {
+  index.retainedBytes = sizeof(CachedIndex) + index.entries.capacity() * sizeof(Entry);
+  // Include a conservative reservation for lazy hash nodes, buckets, strings,
+  // and filesystem path components. This is a retention budget, not an RSS cap.
+  for (const auto &entry : index.entries) {
+    addClamped(index.retainedBytes, 256 + entry.path.native().size() *
+        3 * sizeof(std::filesystem::path::value_type));
+    for (const auto &part : entry.path) {
+      (void)part;
+      addClamped(index.retainedBytes, 2 * sizeof(std::filesystem::path));
+    }
+  }
+  index.lastUse = ++gIndexUseCounter;
+}
 
 // Directory for persisting archive entry indexes across app restarts. Empty
 // means disk persistence is disabled. Guarded by gIndexCacheMutex.
@@ -543,6 +589,8 @@ std::uint64_t gDebugLogRevision = 0;
 
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
 std::atomic_uint64_t gZipStreamingOpenCount{0};
+std::atomic_uint64_t gZipDirectoryOpenCount{0};
+std::atomic_uint64_t gIndexLookupBuildCount{0};
 std::mutex gStreamingEntryObserverMutex;
 StreamingEntryObserverForTesting gStreamingEntryObserver;
 
@@ -904,6 +952,110 @@ private:
   HANDLE mappingHandle_ = nullptr;
 #endif
 };
+
+#if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
+// Only parsed directory state is idle-cached. A lease owns its cursor exclusively
+// and reopens the source, so idle readers neither pin descriptors nor block rename.
+struct ZipReaderState {
+  mz_zip_archive archive{};
+  std::unique_ptr<RandomAccessFile> file;
+  archive_source::Access source;
+  std::string identity;
+  std::uint64_t retainedBytes = 0;
+  ~ZipReaderState() { if (archive.m_pState) mz_zip_reader_end(&archive); }
+};
+constexpr std::uint64_t kZipDirectoryCacheBytes = 64U * 1024U * 1024U;
+constexpr std::size_t kZipDirectoryCacheReaders = 4;
+std::mutex gZipReaderMutex;
+std::deque<std::unique_ptr<ZipReaderState>> gIdleZipReaders;
+
+class ZipReaderLease {
+  std::unique_ptr<ZipReaderState> state_;
+public:
+  ZipReaderLease() = default;
+  ZipReaderLease(const ZipReaderLease &) = delete;
+  ZipReaderLease &operator=(const ZipReaderLease &) = delete;
+  ~ZipReaderLease() { release(); }
+  mz_zip_archive &archive() { return state_->archive; }
+  bool open(const std::filesystem::path &path, std::string *errorMessage) {
+    const auto identity = archive_source_identity::KeyForPath(path);
+    if (identity.empty()) {
+      if (errorMessage) *errorMessage = "ZIP source is unavailable.";
+      return false;
+    }
+    {
+      std::lock_guard lock(gZipReaderMutex);
+      for (auto it = gIdleZipReaders.begin(); it != gIdleZipReaders.end(); ++it) {
+        if ((*it)->identity == identity) {
+          state_ = std::move(*it);
+          gIdleZipReaders.erase(it);
+          break;
+        }
+      }
+    }
+    if (!state_) state_ = std::make_unique<ZipReaderState>();
+    state_->source = archive_source::resolve(path);
+    state_->file = std::make_unique<RandomAccessFile>();
+    if (!state_->source || !state_->file->open(state_->source.path, errorMessage) ||
+        archive_source_identity::KeyForPath(path) != identity) {
+      state_.reset();
+      if (errorMessage && errorMessage->empty()) *errorMessage = "ZIP source changed while opening.";
+      return false;
+    }
+    if (!state_->archive.m_pState) {
+      std::uintmax_t size = 0;
+      std::filesystem::file_time_type mtime{};
+      if (!fileState(path, size, mtime)) { state_.reset(); return false; }
+      state_->archive.m_pIO_opaque = state_.get();
+      state_->archive.m_pRead = [](void *opaque, mz_uint64 offset, void *bytes, size_t count) -> size_t {
+        auto &state = *static_cast<ZipReaderState *>(opaque);
+        return state.file && state.file->readAt(offset, bytes, count, nullptr) ? count : 0;
+      };
+#if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
+      ++gZipDirectoryOpenCount;
+#endif
+      if (!mz_zip_reader_init(&state_->archive, size, MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY)) {
+        if (errorMessage) *errorMessage = "Could not open ZIP central directory.";
+        state_.reset();
+        return false;
+      }
+      state_->identity = identity;
+      // Conservative allowance for miniz's directory offsets and allocator state.
+      state_->retainedBytes = mz_zip_get_central_dir_size(&state_->archive) +
+          std::uint64_t(mz_zip_reader_get_num_files(&state_->archive)) * 32 + 65536;
+    }
+    if (archive_source_identity::KeyForPath(path) != identity) {
+      state_.reset();
+      if (errorMessage) *errorMessage = "ZIP source changed while reading its directory.";
+      return false;
+    }
+    mz_zip_clear_last_error(&state_->archive);
+    return true;
+  }
+  void release() noexcept {
+    if (!state_) return;
+    state_->file.reset();
+    state_->source = {};
+    if (!state_->archive.m_pState) {
+      state_.reset();
+      return;
+    }
+    try {
+      std::lock_guard lock(gZipReaderMutex);
+      // As with indexes, one oversized directory may remain alone. Otherwise
+      // million-entry packs would reparse their directory on every small read.
+      std::uint64_t bytes = state_->retainedBytes;
+      for (const auto &idle : gIdleZipReaders) bytes += idle->retainedBytes;
+      while (!gIdleZipReaders.empty() &&
+             (bytes > kZipDirectoryCacheBytes || gIdleZipReaders.size() >= kZipDirectoryCacheReaders)) {
+        bytes -= gIdleZipReaders.front()->retainedBytes;
+        gIdleZipReaders.pop_front();
+      }
+      gIdleZipReaders.push_back(std::move(state_));
+    } catch (...) { state_.reset(); }
+  }
+};
+#endif
 
 bool readRegularFile(const std::filesystem::path &path,
                      std::vector<unsigned char> &bytes,
@@ -2782,7 +2934,7 @@ bool listSevenZipEntries(const std::filesystem::path &archivePath,
 
 #if ASOBMSHOW_ARCHIVEFILE_HAS_LIBARCHIVE
 
-bool isValidUtf8(const std::string &value) {
+bool isValidUtf8(std::string_view value) {
   const auto *bytes = reinterpret_cast<const unsigned char *>(value.data());
   size_t i = 0;
   while (i < value.size()) {
@@ -3650,7 +3802,10 @@ bool listUnarrRarEntries(const std::filesystem::path &archivePath,
                          std::uint64_t maximumEntries);
 #endif
 
-void buildIndexLookups(CachedIndex &index) {
+void buildIndexLookups(const CachedIndex &index) {
+#if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
+  ++gIndexLookupBuildCount;
+#endif
   index.exact.clear();
   index.lower.clear();
   index.exact.reserve(index.entries.size());
@@ -3999,6 +4154,7 @@ cachedIndexForArchiveIfFresh(const std::filesystem::path &archivePath, bool reta
   if (it != gIndexCache.end() && it->second != nullptr &&
       it->second->size == size && it->second->mtime == mtime &&
       it->second->sourceIdentity == sourceIdentity) {
+    it->second->lastUse = ++gIndexUseCounter;
     if (retainInMemory) it->second->retainForBrowsing.store(true);
     return it->second;
   }
@@ -4012,6 +4168,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
                       std::uint64_t maximumEntries = std::numeric_limits<std::uint64_t>::max(),
                       bool requireLiveSource = false, bool retainInMemory = true) {
   const auto boundedIndex = [&](std::shared_ptr<const CachedIndex> index) {
+    if (index) index->lastUse = ++gIndexUseCounter;
     if (index && retainInMemory) index->retainForBrowsing.store(true);
     if (index && index->entries.size() > maximumEntries) {
       if (errorMessage) *errorMessage = "Archive exceeds the verification entry-count limit.";
@@ -4050,7 +4207,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   if (!hadCachedIndex && !requireLiveSource) {
     auto diskIndex = readCachedIndexFromDisk(key, size, mtime, sourceIdentity, maximumEntries);
     if (diskIndex != nullptr) {
-      buildIndexLookups(*diskIndex);
+      accountIndexMetadata(*diskIndex);
       appendDebugLogLineImpl("Loaded archive index from disk cache: " +
                              pathForLog(archivePath) + " entries=" +
                              std::to_string(diskIndex->entries.size()));
@@ -4060,6 +4217,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
         return boundedIndex(current->second);
       }
       gIndexCache[key] = diskIndex;
+      trimIndexCacheLocked();
       return boundedIndex(diskIndex);
     }
   }
@@ -4241,7 +4399,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
     appendDebugLogLineImpl("Skipped encrypted archive entries while indexing: " +
                            pathForLog(archivePath));
   }
-  buildIndexLookups(*loaded);
+  accountIndexMetadata(*loaded);
   loaded->liveSourceManifest = true;
   appendDebugLogLineImpl("Indexed archive with " + backendName(loaded->backend) +
                          ": " + pathForLog(archivePath) + " entries=" +
@@ -4254,6 +4412,7 @@ cachedIndexForArchive(const std::filesystem::path &archivePath,
   {
     std::lock_guard<std::mutex> lock(gIndexMutex);
     gIndexCache[key] = loaded;
+    trimIndexCacheLocked();
   }
   buildScope.complete(true);
   return boundedIndex(loaded);
@@ -4273,6 +4432,7 @@ const Entry *findIndexedEntry(const CachedIndex &index,
     return nullptr;
   }
 
+  std::call_once(index.lookupOnce, [&] { buildIndexLookups(index); });
   const auto exactIt = index.exact.find(target);
   if (exactIt != index.exact.end() && exactIt->second < index.entries.size()) {
     return &index.entries[exactIt->second];
@@ -4677,8 +4837,32 @@ public:
   }
 };
 
+std::optional<std::string> checkedZipFilename(std::string filename, mz_uint flags,
+                                               std::string_view extra) {
+  std::optional<std::string> unicode;
+  for (std::size_t at = 0; at < extra.size();) {
+    if (extra.size() - at < 4) return {};
+    const auto *field = reinterpret_cast<const unsigned char *>(extra.data() + at);
+    const auto length = readZipLe16(field + 2);
+    if (length > extra.size() - at - 4) return {};
+    if (readZipLe16(field) == 0x7075 && length >= 5 && field[4] == 1 &&
+        readZipLe32(field + 5) == mz_crc32(MZ_CRC32_INIT,
+            reinterpret_cast<const unsigned char *>(filename.data()), filename.size())) {
+      const auto name = extra.substr(at + 9, length - 5);
+      if (!isValidUtf8(name) || (unicode && *unicode != name)) return {};
+      unicode = std::string(name);
+    }
+    at += 4 + length;
+  }
+  if (flags & 0x800) {
+    if (!isValidUtf8(filename) || (unicode && *unicode != filename)) return {};
+  }
+  return unicode ? unicode : std::optional<std::string>(std::move(filename));
+}
+
 std::optional<std::string> minizFilename(mz_zip_archive *archive,
-                                         mz_uint fileIndex, ZipCentralMetadataReader *metadata = nullptr) {
+                                         mz_uint fileIndex, ZipCentralMetadataReader *metadata = nullptr,
+                                         const mz_zip_archive_file_stat *knownStat = nullptr) {
   const mz_uint size = mz_zip_reader_get_filename(archive, fileIndex, nullptr, 0);
   if (size == 0) {
     return std::nullopt;
@@ -4694,8 +4878,9 @@ std::optional<std::string> minizFilename(mz_zip_archive *archive,
   // Keep every indexed/read path on the checked central Unicode spelling.
   // Local-only fields are intentionally left to Apply's physical validation;
   // browsing and review must not seek through every local header.
-  mz_zip_archive_file_stat stat{};
-  if (!mz_zip_reader_file_stat(archive, fileIndex, &stat)) return {};
+  mz_zip_archive_file_stat localStat{};
+  if (!knownStat && !mz_zip_reader_file_stat(archive, fileIndex, &localStat)) return {};
+  const auto &stat = knownStat ? *knownStat : localStat;
   ZipCentralMetadataReader direct(archive);
   auto &reader = metadata ? *metadata : direct;
   const auto header = reader.Read(stat.m_central_dir_ofs, 46);
@@ -4704,25 +4889,7 @@ std::optional<std::string> minizFilename(mz_zip_archive *archive,
   if (readZipLe32(bytes) != 0x02014b50 || readZipLe16(bytes + 28) != filename.size()) return {};
   const auto extra = reader.Read(stat.m_central_dir_ofs + 46 + filename.size(), readZipLe16(bytes + 30));
   if (!extra) return {};
-  std::optional<std::string> unicode;
-  for (std::size_t at = 0; at < extra->size();) {
-    if (extra->size() - at < 4) return {};
-    const auto *field = reinterpret_cast<const unsigned char *>(extra->data() + at);
-    const auto length = readZipLe16(field + 2);
-    if (length > extra->size() - at - 4) return {};
-    if (readZipLe16(field) == 0x7075 && length >= 5 && field[4] == 1 &&
-        readZipLe32(field + 5) == mz_crc32(MZ_CRC32_INIT,
-            reinterpret_cast<const unsigned char *>(filename.data()), filename.size())) {
-      const auto name = extra->substr(at + 9, length - 5);
-      if (!isValidUtf8(name) || (unicode && *unicode != name)) return {};
-      unicode = name;
-    }
-    at += 4 + length;
-  }
-  if (stat.m_bit_flag & 0x800) {
-    if (!isValidUtf8(filename) || (unicode && *unicode != filename)) return {};
-  }
-  return unicode ? unicode : std::optional<std::string>(std::move(filename));
+  return checkedZipFilename(std::move(filename), stat.m_bit_flag, *extra);
 }
 
 enum class ZipNameMatch { Matches, Mismatches, Unknown };
@@ -4871,7 +5038,7 @@ bool prepareZipDirectReadTarget(mz_zip_archive *archive,
     }
     return false;
   }
-  const auto filename = minizFilename(archive, fileIndex);
+  const auto filename = minizFilename(archive, fileIndex, nullptr, &stat);
   if (!filename.has_value()) {
     if (errorMessage != nullptr) {
       *errorMessage = "Could not read ZIP central directory filename.";
@@ -5087,25 +5254,16 @@ bool listZipEntries(const std::filesystem::path &archivePath,
     return false;
   }
 
-  mz_zip_archive archive{};
-  mz_zip_zero_struct(&archive);
-  const auto sourceAccess = archive_source::resolve(archivePath);
-  const std::string archiveText = fspath_to_utf8(sourceAccess.path);
-  if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
-                                  MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0,
-                                  0)) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Could not open ZIP central directory.";
-    }
-    return false;
-  }
+  ZipReaderLease reader;
+  if (!reader.open(archivePath, errorMessage)) return false;
+  auto &archive = reader.archive();
 
   auto fail = [&](const std::string &message) {
     if (errorMessage != nullptr) {
       *errorMessage = message;
     }
     entries.clear();
-    mz_zip_reader_end(&archive);
+    reader.release();
     return false;
   };
 
@@ -5115,22 +5273,67 @@ bool listZipEntries(const std::filesystem::path &archivePath,
   }
   entries.reserve(fileCount);
   ZipCentralMetadataReader metadata(&archive, true);
+  std::uint64_t centralOffset = 0;
   for (mz_uint fileIndex = 0; fileIndex < fileCount; ++fileIndex) {
     if (fileIndex > 0 && fileIndex % kZipIndexPauseCheckInterval == 0 &&
         !pauseIfNeeded(pauseCallback, errorMessage)) {
       return fail("Operation cancelled");
     }
+    // Listing needs names, sizes and flags, not DOS timestamps. miniz's full
+    // stat performs an expensive local-time conversion for every record.
+    const auto header = metadata.Read(centralOffset, 46);
+    if (!header) return fail("Could not read ZIP central directory entry.");
+    const auto *bytes = reinterpret_cast<const unsigned char *>(header->data());
+    if (readZipLe32(bytes) != 0x02014b50) return fail("Invalid ZIP central directory record.");
+    const std::uint64_t recordBytes = 46 + readZipLe16(bytes + 28) +
+        readZipLe16(bytes + 30) + readZipLe16(bytes + 32);
+    if (recordBytes > mz_zip_get_central_dir_size(&archive) - centralOffset)
+      return fail("Truncated ZIP central directory record.");
+    // Consume each complete record once. Reading header/extra/header separately
+    // otherwise bounces the buffered reader at central-directory boundaries.
+    const auto record = metadata.Read(centralOffset, static_cast<std::size_t>(recordBytes));
+    if (!record) return fail("Could not read ZIP central directory record.");
+    bytes = reinterpret_cast<const unsigned char *>(record->data());
+    const auto nameLength = readZipLe16(bytes + 28);
+    const auto extra = std::string_view(*record).substr(46 + nameLength, readZipLe16(bytes + 30));
     mz_zip_archive_file_stat stat{};
-    if (!mz_zip_reader_file_stat(&archive, fileIndex, &stat)) {
-      return fail("Could not read ZIP central directory entry.");
+    stat.m_central_dir_ofs = centralOffset;
+    stat.m_bit_flag = readZipLe16(bytes + 8);
+    stat.m_uncomp_size = readZipLe32(bytes + 24);
+    stat.m_is_directory = mz_zip_reader_is_file_a_directory(&archive, fileIndex);
+    stat.m_is_encrypted = mz_zip_reader_is_file_encrypted(&archive, fileIndex);
+    std::array<std::uint64_t, 3> sizesAndOffset{
+        stat.m_uncomp_size, readZipLe32(bytes + 20), readZipLe32(bytes + 42)};
+    if (std::find(sizesAndOffset.begin(), sizesAndOffset.end(), 0xffffffffU) != sizesAndOffset.end()) {
+      for (std::size_t at = 0; at < extra.size();) {
+        if (extra.size() - at < 4) return fail("Truncated ZIP64 field header.");
+        const auto *field = reinterpret_cast<const unsigned char *>(extra.data() + at);
+        const auto length = readZipLe16(field + 2);
+        if (length > extra.size() - at - 4) return fail("Truncated ZIP64 field.");
+        if (readZipLe16(field) == 1) {
+          std::size_t cursor = 4;
+          // ZIP64 includes only values whose corresponding 32-bit field is
+          // saturated, in uncompressed/compressed/local-offset order.
+          for (auto &value : sizesAndOffset) if (value == 0xffffffffU) {
+            if (length + 4 - cursor < 8) return fail("Truncated ZIP64 size or offset.");
+            value = std::uint64_t(readZipLe32(field + cursor)) |
+                    (std::uint64_t(readZipLe32(field + cursor + 4)) << 32);
+            cursor += 8;
+          }
+          break;
+        }
+        at += 4 + length;
+      }
+      stat.m_uncomp_size = sizesAndOffset[0];
     }
+    centralOffset += recordBytes;
 
     if (stat.m_is_encrypted) {
       if (hasEncryptedEntries) *hasEncryptedEntries = true;
       continue;
     }
 
-    const auto filename = minizFilename(&archive, fileIndex, &metadata);
+    const auto filename = checkedZipFilename(record->substr(46, nameLength), stat.m_bit_flag, extra);
     if (!filename.has_value()) {
       return fail("Could not read ZIP central directory filename.");
     }
@@ -5151,7 +5354,7 @@ bool listZipEntries(const std::filesystem::path &archivePath,
     return fail("Operation cancelled");
   }
 
-  mz_zip_reader_end(&archive);
+  reader.release();
   return true;
 }
 
@@ -5367,7 +5570,7 @@ bool readZipTargetByFileIndex(mz_zip_archive *archive,
     }
     return false;
   }
-  const auto filename = minizFilename(archive, fileIndex);
+  const auto filename = minizFilename(archive, fileIndex, nullptr, &stat);
   if (!filename.has_value()) {
     if (errorMessage != nullptr) {
       *errorMessage = "Could not read ZIP central directory filename.";
@@ -5385,127 +5588,6 @@ bool readZipTargetByFileIndex(mz_zip_archive *archive,
                                  errorMessage, pauseCallback, readScratch);
 }
 
-bool readZipEntriesByName(
-    const std::filesystem::path &archivePath,
-    const std::vector<std::filesystem::path> &innerPaths,
-    std::vector<FileData> &files, std::string *errorMessage,
-    const PauseCallback &pauseCallback = nullptr) {
-  files.clear();
-  if (innerPaths.empty()) {
-    return true;
-  }
-
-  std::unordered_map<std::string, std::filesystem::path> exactTargets;
-  std::unordered_map<std::string, std::filesystem::path> lowerTargets;
-  exactTargets.reserve(innerPaths.size());
-  lowerTargets.reserve(innerPaths.size());
-  for (const auto &innerPath : innerPaths) {
-    const std::string target = normalizeEntryName(genericPathUtf8(innerPath));
-    if (target.empty()) {
-      continue;
-    }
-    exactTargets.emplace(target, innerPath);
-    lowerTargets.emplace(lowerCopy(target), innerPath);
-  }
-  if (exactTargets.empty()) {
-    return true;
-  }
-
-  mz_zip_archive archive{};
-  mz_zip_zero_struct(&archive);
-  const auto sourceAccess = archive_source::resolve(archivePath);
-  const std::string archiveText = fspath_to_utf8(sourceAccess.path);
-  if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
-                                  MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0,
-                                  0)) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Could not open ZIP central directory.";
-    }
-    return false;
-  }
-
-  auto fail = [&](const std::string &message) {
-    if (errorMessage != nullptr) {
-      *errorMessage = message;
-    }
-    files.clear();
-    mz_zip_reader_end(&archive);
-    return false;
-  };
-
-  std::vector<ZipReadTarget> readTargets;
-  readTargets.reserve(exactTargets.size());
-  const mz_uint fileCount = mz_zip_reader_get_num_files(&archive);
-  ZipCentralMetadataReader metadata(&archive, true);
-  for (mz_uint fileIndex = 0; fileIndex < fileCount && !exactTargets.empty();
-       ++fileIndex) {
-    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
-      return fail("Operation cancelled");
-    }
-    const auto filename = minizFilename(&archive, fileIndex, &metadata);
-    if (!filename.has_value()) {
-      continue;
-    }
-
-    const auto normalized = normalizedZipEntryName(*filename, nullptr);
-    if (!normalized.has_value()) {
-      continue;
-    }
-
-    auto targetIt = exactTargets.find(*normalized);
-    if (targetIt == exactTargets.end()) {
-      const auto lowerIt = lowerTargets.find(lowerCopy(*normalized));
-      if (lowerIt == lowerTargets.end()) {
-        continue;
-      }
-      targetIt = exactTargets.find(normalizeEntryName(
-          genericPathUtf8(lowerIt->second)));
-      if (targetIt == exactTargets.end()) {
-        continue;
-      }
-    }
-
-    mz_zip_archive_file_stat stat{};
-    if (!mz_zip_reader_file_stat(&archive, fileIndex, &stat)) {
-      return fail("Could not read ZIP central directory entry.");
-    }
-    if (stat.m_is_directory || stat.m_is_encrypted || !stat.m_is_supported) {
-      return fail("ZIP entry is not supported by direct reader.");
-    }
-    if (stat.m_uncomp_size >
-        static_cast<mz_uint64>(std::numeric_limits<std::size_t>::max())) {
-      return fail("ZIP entry is too large to read into memory.");
-    }
-
-    readTargets.push_back({
-        .normalized = *normalized,
-        .entryPath = targetIt->second,
-        .order = static_cast<std::size_t>(fileIndex),
-        .size = static_cast<std::uint64_t>(stat.m_uncomp_size),
-    });
-    lowerTargets.erase(lowerCopy(targetIt->first));
-    exactTargets.erase(targetIt);
-  }
-
-  for (const ZipReadTarget &target : readTargets) {
-    if (!pauseIfNeeded(pauseCallback, errorMessage)) {
-      return fail("Operation cancelled");
-    }
-    FileData file;
-    std::string readError;
-    if (!readZipEntryByFileIndex(&archive, static_cast<mz_uint>(target.order),
-                                 target.entryPath, file, &readError,
-                                 pauseCallback)) {
-      return fail(readError.empty() ? "Could not extract ZIP entry by name."
-                                    : readError);
-    }
-    files.push_back(std::move(file));
-  }
-
-  mz_zip_reader_end(&archive);
-  return true;
-}
-
 bool readZipEntryBounded(const std::filesystem::path &archivePath,
                          const Entry &entry, std::vector<unsigned char> &bytes,
                          std::size_t maximumBytes, std::string *errorMessage,
@@ -5518,18 +5600,9 @@ bool readZipEntryBounded(const std::filesystem::path &archivePath,
     return false;
   }
 
-  mz_zip_archive archive{};
-  mz_zip_zero_struct(&archive);
-  const auto sourceAccess = archive_source::resolve(archivePath);
-  const std::string archiveText = fspath_to_utf8(sourceAccess.path);
-  if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
-                                  MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0,
-                                  0)) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Could not open ZIP central directory.";
-    }
-    return false;
-  }
+  ZipReaderLease reader;
+  if (!reader.open(archivePath, errorMessage)) return false;
+  auto &archive = reader.archive();
 
   auto fail = [&](const std::string &message, bool wasOversize = false) {
     if (wasOversize) {
@@ -5539,7 +5612,7 @@ bool readZipEntryBounded(const std::filesystem::path &archivePath,
       *errorMessage = message;
     }
     bytes.clear();
-    mz_zip_reader_end(&archive);
+    reader.release();
     return false;
   };
 
@@ -5560,7 +5633,7 @@ bool readZipEntryBounded(const std::filesystem::path &archivePath,
   if (stat.m_uncomp_size != entry.size) {
     return fail("ZIP central directory size did not match archive index.");
   }
-  const auto filename = minizFilename(&archive, fileIndex);
+  const auto filename = minizFilename(&archive, fileIndex, nullptr, &stat);
   if (!filename.has_value()) {
     return fail("Could not read ZIP central directory filename.");
   }
@@ -5610,7 +5683,7 @@ bool readZipEntryBounded(const std::filesystem::path &archivePath,
   if (bytes.size() != static_cast<std::size_t>(stat.m_uncomp_size)) {
     return fail("ZIP entry extraction did not produce the declared size.");
   }
-  mz_zip_reader_end(&archive);
+  reader.release();
   return true;
 }
 
@@ -5669,25 +5742,16 @@ bool readZipEntriesByIndex(
               return a.order < b.order;
             });
 
-  mz_zip_archive archive{};
-  mz_zip_zero_struct(&archive);
-  const auto sourceAccess = archive_source::resolve(archivePath);
-  const std::string archiveText = fspath_to_utf8(sourceAccess.path);
-  if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
-                                  MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0,
-                                  0)) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Could not open ZIP central directory.";
-    }
-    return false;
-  }
+  ZipReaderLease reader;
+  if (!reader.open(archivePath, errorMessage)) return false;
+  auto &archive = reader.archive();
 
   auto fail = [&](const std::string &message) {
     if (errorMessage != nullptr) {
       *errorMessage = message;
     }
     files.clear();
-    mz_zip_reader_end(&archive);
+    reader.release();
     return false;
   };
 
@@ -5712,7 +5776,7 @@ bool readZipEntriesByIndex(
     if (stat.m_uncomp_size != target.size) {
       return fail("ZIP central directory size did not match archive index.");
     }
-    const auto filename = minizFilename(&archive, fileIndex, &metadata);
+    const auto filename = minizFilename(&archive, fileIndex, &metadata, &stat);
     if (!filename.has_value()) {
       return fail("Could not read ZIP central directory filename.");
     }
@@ -5730,25 +5794,19 @@ bool readZipEntriesByIndex(
     if (!readZipEntryByFileIndex(&archive, fileIndex, target.entryPath, file,
                                   errorMessage, pauseCallback)) {
       files.clear();
-      mz_zip_reader_end(&archive);
+      reader.release();
       return false;
     }
     files.push_back(std::move(file));
   }
 
-  mz_zip_reader_end(&archive);
+  reader.release();
   return true;
 }
 
 struct ZipStreamingReader {
-  archive_source::Access source;
-  mz_zip_archive archive{};
-  void reset() {
-    if (archive.m_pState) mz_zip_reader_end(&archive);
-    mz_zip_zero_struct(&archive);
-    source = {};
-  }
-  ~ZipStreamingReader() { reset(); }
+  std::unique_ptr<ZipReaderLease> lease;
+  void reset() { lease.reset(); }
 };
 
 bool readZipEntriesByIndexStreaming(
@@ -5809,19 +5867,14 @@ bool readZipEntriesByIndexStreaming(
 
   ZipStreamingReader localReader;
   auto &reader = retainedReader ? *retainedReader : localReader;
-  auto &archive = reader.archive;
-  if (!archive.m_pState) {
-    reader.source = archive_source::resolve(archivePath);
-    const std::string archiveText = fspath_to_utf8(reader.source.path);
-    if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
-                                    MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0, 0)) {
-      if (errorMessage != nullptr) *errorMessage = "Could not open ZIP central directory.";
-      return false;
-    }
+  if (!reader.lease) {
+    reader.lease = std::make_unique<ZipReaderLease>();
+    if (!reader.lease->open(archivePath, errorMessage)) { reader.reset(); return false; }
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
     ++gZipStreamingOpenCount;
 #endif
   }
+  auto &archive = reader.lease->archive();
 
   auto fail = [&](const std::string &message) {
     if (errorMessage != nullptr) {
@@ -5862,7 +5915,7 @@ bool readZipEntriesByIndexStreaming(
     if (stat.m_uncomp_size != target.size) {
       return fail("ZIP central directory size did not match archive index.");
     }
-    const auto filename = minizFilename(&archive, fileIndex, &metadata);
+    const auto filename = minizFilename(&archive, fileIndex, &metadata, &stat);
     if (!filename.has_value()) {
       return fail("Could not read ZIP central directory filename.");
     }
@@ -5982,23 +6035,14 @@ bool readZipEntriesByIndexConcurrent(
   if (!headerFile.open(archivePath, errorMessage)) {
     return false;
   }
-  mz_zip_archive prepareArchive{};
-  mz_zip_zero_struct(&prepareArchive);
-  const auto sourceAccess = archive_source::resolve(archivePath);
-  const std::string archiveText = fspath_to_utf8(sourceAccess.path);
-  if (!mz_zip_reader_init_file_v2(&prepareArchive, archiveText.c_str(),
-                                  MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0,
-                                  0)) {
-    if (errorMessage != nullptr) {
-      *errorMessage = "Could not open ZIP central directory.";
-    }
-    return false;
-  }
+  ZipReaderLease preparedReader;
+  if (!preparedReader.open(archivePath, errorMessage)) return false;
+  auto &prepareArchive = preparedReader.archive();
   auto failPrepare = [&](const std::string &message) {
     if (errorMessage != nullptr) {
       *errorMessage = message;
     }
-    mz_zip_reader_end(&prepareArchive);
+    preparedReader.release();
     return false;
   };
 
@@ -6016,7 +6060,7 @@ bool readZipEntriesByIndexConcurrent(
     }
     directTargets.push_back(std::move(directTarget));
   }
-  mz_zip_reader_end(&prepareArchive);
+  preparedReader.release();
 
   if (directTargets.empty()) {
     return true;
@@ -8753,6 +8797,17 @@ std::size_t pruneArchiveIndexCache(
 }
 
 #if defined(ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS)
+std::uint64_t zipDirectoryOpenCountForTesting() { return gZipDirectoryOpenCount.load(); }
+
+std::uint64_t indexLookupBuildCountForTesting() { return gIndexLookupBuildCount.load(); }
+
+void setArchiveIndexCacheLimitsForTesting(std::size_t count, std::uint64_t bytes) {
+  std::lock_guard lock(gIndexMutex);
+  gIndexCacheMaximumCount = count;
+  gIndexCacheMaximumBytes = bytes;
+  trimIndexCacheLocked();
+}
+
 std::size_t residentArchiveIndexCountForTesting() {
   std::lock_guard lock(gIndexMutex);
   return gIndexCache.size();
@@ -9929,17 +9984,6 @@ bool readFile(const std::filesystem::path &path,
     return false;
   }
 
-#if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
-  if (hasZipArchiveExtension(archivePath)) {
-    std::vector<FileData> files;
-    if (readZipEntriesByName(archivePath, {innerPath}, files, nullptr) &&
-        !files.empty()) {
-      bytes = std::move(files.front().bytes);
-      return true;
-    }
-  }
-#endif
-
   const auto resolvedInner = resolveInnerPath(archivePath, innerPath);
   if (!resolvedInner.has_value()) {
     if (errorMessage != nullptr) {
@@ -10659,12 +10703,9 @@ std::optional<bool> extractZipArchiveFullyConcurrently(
     }
   }
   if (files.empty()) return std::nullopt;
-  mz_zip_archive preflight{};
-  const auto sourceAccess = archive_source::resolve(archivePath);
-  const auto archiveText = fspath_to_utf8(sourceAccess.path);
-  if (!mz_zip_reader_init_file_v2(&preflight, archiveText.c_str(),
-                                 MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0, 0)) return std::nullopt;
-  const auto closePreflight = makeScopeExit([&] { mz_zip_reader_end(&preflight); });
+  ZipReaderLease preflightReader;
+  if (!preflightReader.open(archivePath, errorMessage)) return std::nullopt;
+  auto &preflight = preflightReader.archive();
   for (const auto *entry : files) {
     if (!unzipCheckpoint(stopToken, pause, errorMessage)) return false;
     mz_zip_archive_file_stat stat{};
@@ -10681,6 +10722,7 @@ std::optional<bool> extractZipArchiveFullyConcurrently(
       if (names.contains(lowerCopy(genericPathUtf8(parent)))) return std::nullopt;
     }
   }
+  preflightReader.release();
   workers = std::min(workers, files.size());
   std::atomic_size_t nextFile{workers};
   std::atomic_bool failed{false};
@@ -10695,15 +10737,10 @@ std::optional<bool> extractZipArchiveFullyConcurrently(
   const auto checkpoint = [&] { return !failed && unzipCheckpoint(stopToken, pause); };
   const auto worker = [&](std::size_t fileIndex) {
     try {
-      mz_zip_archive archive{};
-      const auto sourceAccess = archive_source::resolve(archivePath);
-      const auto archiveText = fspath_to_utf8(sourceAccess.path);
-      if (!mz_zip_reader_init_file_v2(&archive, archiveText.c_str(),
-                                     MZ_ZIP_FLAG_DO_NOT_SORT_CENTRAL_DIRECTORY, 0, 0)) {
-        fail("Could not open ZIP central directory.");
-        return;
-      }
-      const auto close = makeScopeExit([&] { mz_zip_reader_end(&archive); });
+      ZipReaderLease reader;
+      std::string openError;
+      if (!reader.open(archivePath, &openError)) { fail(openError); return; }
+      auto &archive = reader.archive();
       std::array<unsigned char, 64 * 1024> buffer{};
       ZipCentralMetadataReader metadata(&archive, true);
       while (fileIndex < files.size() && checkpoint()) {
@@ -10714,8 +10751,9 @@ std::optional<bool> extractZipArchiveFullyConcurrently(
         }
         const auto order = static_cast<mz_uint>(entry.order);
         mz_zip_archive_file_stat stat{};
-        const auto filename = minizFilename(&archive, order, &metadata);
-        if (!mz_zip_reader_file_stat(&archive, order, &stat) || !filename ||
+        const bool haveStat = mz_zip_reader_file_stat(&archive, order, &stat);
+        const auto filename = haveStat ? minizFilename(&archive, order, &metadata, &stat) : std::nullopt;
+        if (!haveStat || !filename ||
             compareZipEntryName(*filename, normalizeEntryName(genericPathUtf8(entry.path))) == ZipNameMatch::Mismatches ||
             stat.m_is_directory || stat.m_is_encrypted || !stat.m_is_supported) {
           fail("ZIP entry does not match the extraction index.");

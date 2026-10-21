@@ -6,6 +6,7 @@
 #include "fixtures/archive/rar_fixtures.h"
 #include "fixtures/archive/sevenzip_block_fixtures.h"
 #include "fixtures/archive/mixed_encryption_sevenzip.h"
+#include "fixtures/archive/zip64_metadata_fixture.h"
 
 #include <archive_entry.h>
 
@@ -3906,6 +3907,135 @@ void testTemporaryCacheFacadeUsesPrivateRootAndLiveProtectionIdentity() {
   assert(error == "Materialize cancelled." && !std::filesystem::exists(root));
 }
 
+void testZipMetadataListingKeepsZip64UnicodeAndDirectoryFlags() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "metadata.zip";
+  {
+    std::ofstream output(path, std::ios::binary);
+    output.write(reinterpret_cast<const char *>(zip64MetadataFixture), sizeof(zip64MetadataFixture));
+  }
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(path, entries));
+  assert(entries.size() == 3);
+  assert(entries[0].path == "first.wav" && entries[0].size == 5);
+  assert(entries[1].path == std::filesystem::path(u8"곡.wav") && entries[1].size == 6);
+  assert(entries[2].path == "folder" && entries[2].directory);
+  std::vector<unsigned char> bytes;
+  assert(archive_file::readFile(archive_file::makeVirtualPath(path, entries[1].path), bytes));
+  assert(std::string(bytes.begin(), bytes.end()) == "second");
+}
+
+void testArchiveIndexRetentionKeepsActiveVisitorsValid() {
+  TempDirectory temporary;
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheLimitsForTesting(2, 1024 * 1024);
+  std::vector<archive_file::Entry> entries;
+  const auto first = temporary.path() / "first.zip";
+  writeStoredZipContents(first, "sound.wav", "first", true);
+  assert(archive_file::listEntries(first, entries));
+  assert(archive_file::visitIndexEntries(first, [&](const auto &borrowed) {
+    for (int i = 0; i < 4; ++i) {
+      const auto path = temporary.path() / (std::to_string(i) + ".zip");
+      writeStoredZipContents(path, "other.wav", "other", true);
+      assert(archive_file::listEntries(path, entries));
+      assert(archive_file::residentArchiveIndexCountForTesting() <= 2);
+    }
+    assert(borrowed.path == "sound.wav" && borrowed.size == 5);
+    return true;
+  }));
+  // An evicted index remains readable and can be reconstructed on demand.
+  std::vector<unsigned char> bytes;
+  assert(archive_file::readFile(archive_file::makeVirtualPath(first, "sound.wav"), bytes));
+  assert(std::string(bytes.begin(), bytes.end()) == "first");
+  archive_file::setArchiveIndexCacheLimitsForTesting(16, 1);
+  assert(archive_file::residentArchiveIndexCountForTesting() == 1);
+  assert(archive_file::listEntries(first, entries));
+  assert(entries.size() == 1 && archive_file::residentArchiveIndexCountForTesting() == 1);
+  archive_file::setArchiveIndexCacheLimitsForTesting(16, 64U * 1024U * 1024U);
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
+void testMetadataVisitorsDoNotBuildFilenameTables() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "metadata.zip";
+  writeStoredZipContents(path, "sound.wav", "first", true);
+  const auto builds = archive_file::indexLookupBuildCountForTesting();
+  std::size_t visits = 0;
+  assert(archive_file::visitIndexEntries(path, [&](const auto &) { ++visits; return true; }));
+  assert(visits == 1);
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(path, entries));
+  assert(entries.size() == 1);
+  assert(archive_file::indexLookupBuildCountForTesting() == builds &&
+         "storage visits and browsing lists must not allocate filename lookup tables");
+  std::vector<unsigned char> bytes;
+  assert(archive_file::readFile(archive_file::makeVirtualPath(path, "sound.wav"), bytes));
+  assert(archive_file::indexLookupBuildCountForTesting() == builds + 1);
+  assert(archive_file::readFile(archive_file::makeVirtualPath(path, "SOUND.WAV"), bytes));
+  assert(archive_file::indexLookupBuildCountForTesting() == builds + 1);
+}
+
+void testSharedZipReadersReuseDirectory() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "shared.zip";
+  writeStoredZipContents(path, "sound.wav", "first", true);
+  const auto opens = archive_file::zipDirectoryOpenCountForTesting();
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(path, entries));
+  const auto file = archive_file::makeVirtualPath(path, "sound.wav");
+  auto consume = [](archive_file::FileData &&data) {
+    assert(std::string(data.bytes.begin(), data.bytes.end()) == "first");
+    return true;
+  };
+  for (int batch = 0; batch < 3; ++batch) {
+    std::vector<unsigned char> bytes;
+    assert(archive_file::readFile(file, bytes));
+    assert(std::string(bytes.begin(), bytes.end()) == "first");
+    assert(archive_file::readFileBounded(file, bytes, 1024));
+    std::vector<archive_file::FileData> files;
+    assert(archive_file::readArchiveEntries(path, {"sound.wav"}, files));
+    assert(files.size() == 1);
+    assert(archive_file::readArchiveEntriesStreaming(path, {"sound.wav"}, consume));
+    assert(archive_file::readArchiveEntriesStreamingBounded(path, {"sound.wav"}, consume, 1024));
+    assert(archive_file::readArchiveEntriesConcurrently(path, {"sound.wav"}, consume, 2, 1024));
+    assert(archive_file::readArchiveEntriesInRange(path, {"sound.wav"}, {0, 10}, files));
+  }
+  assert(archive_file::zipDirectoryOpenCountForTesting() - opens == 1 &&
+         "all shared ZIP paths must reuse validated central directory state");
+  const auto mtime = std::filesystem::last_write_time(path);
+  const auto replacement = temporary.path() / "replacement.zip";
+  writeStoredZipContents(replacement, "sound.wav", "other", true);
+  std::filesystem::last_write_time(replacement, mtime);
+  std::filesystem::rename(replacement, path);
+  std::vector<unsigned char> bytes;
+  assert(archive_file::readFile(file, bytes));
+  assert(std::string(bytes.begin(), bytes.end()) == "other");
+  assert(archive_file::zipDirectoryOpenCountForTesting() - opens == 2);
+  // A consumer may read another entry while other readers of this archive are
+  // active. Each cursor must remain exclusive; no cache lock spans callbacks.
+  std::mutex mutex;
+  std::condition_variable ready;
+  unsigned arrived = 0;
+  std::vector<std::future<bool>> tasks;
+  for (int i = 0; i < 3; ++i) tasks.push_back(std::async(std::launch::async, [&] {
+    return archive_file::readArchiveEntriesStreamingBounded(path, {"sound.wav"},
+        [&](archive_file::FileData &&data) {
+          assert(std::string(data.bytes.begin(), data.bytes.end()) == "other");
+          {
+            std::unique_lock lock(mutex);
+            ++arrived;
+            ready.notify_all();
+            ready.wait(lock, [&] { return arrived == 3; });
+          }
+          std::vector<unsigned char> nested;
+          assert(archive_file::readFileBounded(file, nested, 1024));
+          assert(std::string(nested.begin(), nested.end()) == "other");
+          return true;
+        }, 1024);
+  }));
+  for (auto &task : tasks) assert(task.get());
+}
+
 void testBoundedZipReaderReusesDirectory() {
   TempDirectory temporary;
   const auto path = temporary.path() / "preview.zip";
@@ -3971,10 +4101,14 @@ int main(int argc, char **argv) {
   if (argc == 2 && std::string(argv[1]) == "--storage-inventory-task") return RunStorageInventoryTaskTests();
   if (argc == 2 && std::string(argv[1]) == "--storage-measurement") return RunStorageMeasurementTests();
   if (argc == 2 && std::string(argv[1]) == "--index-visitor") {
+    testZipMetadataListingKeepsZip64UnicodeAndDirectoryFlags();
+    testArchiveIndexRetentionKeepsActiveVisitorsValid();
+    testMetadataVisitorsDoNotBuildFilenameTables();
     testIndexVisitorStreamsAndReleasesStorageOnlyIndexes();
     return 0;
   }
   if (argc == 2 && std::string(argv[1]) == "--bounded-reader") {
+    testSharedZipReadersReuseDirectory();
     testBoundedZipReaderReusesDirectory();
     return 0;
   }
@@ -4157,6 +4291,9 @@ int main(int argc, char **argv) {
     testFullUnzipRuntimeByteLimitCannotRestartFallback(extension);
     testFullUnzipExactBudgetAndReuseDoNotChargeEstimatedBytes(extension);
   }
+  testZipMetadataListingKeepsZip64UnicodeAndDirectoryFlags();
+  testArchiveIndexRetentionKeepsActiveVisitorsValid();
+  testMetadataVisitorsDoNotBuildFilenameTables();
   testIndexVisitorStreamsAndReleasesStorageOnlyIndexes();
   testArchiveIndexPersistsAcrossColdCacheRestart();
   for (const bool coldCache : {true, false}) {

@@ -1,5 +1,7 @@
 # Remaining large-archive read bottlenecks
 
+Follow-up implementation and measurements: [shared archive reading](2026-10-22-shared-archive-reading.md).
+
 Investigation against `d4b0e431`, following the archive audio preparation changes.
 This is a diagnosis; production behavior is unchanged. Gameplay must continue to
 hold all decoded audio in memory, with no new reading or decoding during play.

@@ -77,12 +77,15 @@ void thousandArchiveGroupsVisitIndexOnce() {
   request.groups.push_back(archiveGroup("all", archive));
   request.groups.push_back(archiveGroup("duplicate", archive / "song0"));
   writeArchive(archive, files);
+  const auto lookupBuilds = archive_file::indexLookupBuildCountForTesting();
   StorageScanMetrics metrics;
   const auto measured = MeasureStorageGroups(request, {}, {}, &metrics);
   require(measured.complete && measured.groups.size() == 1002, "archive measurements cover all virtual groups");
   require(measured.groups[0].totalBytes == 8 && measured.groups[999].audioBytes == 5 &&
               measured.groups[1000].totalBytes == 8000 && measured.groups[1001].totalBytes == 8,
           "one archive pass computes implicit, nested and duplicate folder sizes");
+  require(archive_file::indexLookupBuildCountForTesting() == lookupBuilds,
+          "storage measurements must not build unused filename lookup tables");
   require(metrics.archiveIndexVisits == 1 && metrics.archiveEntries == 2000 && metrics.metadataReads == 0,
           "thousands of groups share one archive index visit without file extraction");
   require(metrics.peakArchiveAggregationRecords <= request.groups.size(),
