@@ -2874,7 +2874,8 @@ Jukebox::reconcileChartResources(
       bool reusable = oldPaths.contains(asset.key);
       std::filesystem::path archivePath;
       std::filesystem::path innerPath;
-      if (archive_file::splitVirtualPath(asset.path, archivePath, innerPath)) {
+      const bool archived = archive_file::splitVirtualPath(asset.path, archivePath, innerPath);
+      if (archived) {
         const auto archiveKey = fspath_to_path_t(archivePath.lexically_normal());
         auto [identity, inserted] = currentIdentities.try_emplace(archiveKey);
         if (inserted) {
@@ -2894,10 +2895,13 @@ Jukebox::reconcileChartResources(
                    previous != soundArchiveIdentities.end() &&
                    previous->second == identity->second;
       }
+      // A regular file always uses loadSound, which validates/reuses the cache
+      // itself. The early cache query only selects the archive extraction path;
+      // avoid repeating filesystem identity work for every loose keysound.
       if (reusable) {
         retainedSounds[asset.id] = asset.key;
         retainedPaths.insert(asset.key);
-      } else if (audio.hasCachedDecodedAsset(asset.key) ||
+      } else if (!archived || audio.hasCachedDecodedAsset(asset.key) ||
                  !addArchiveChartAssetTarget(
                      archiveBatches, archiveBatchOrder, asset.path, asset.id,
                      ArchiveChartAssetKind::Sound)) {
