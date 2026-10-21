@@ -122,3 +122,7 @@ python3 scripts/benchmark_android_chart_audio.py \
 The desktop runner now uses the same standalone benchmark source. Its optional
 `--cache-bytes` argument is diagnostic only and does not alter production policy.
 Private charts, paths and raw logs are not committed.
+
+The [archive follow-up](2026-10-21-archive-audio-preparation.md) removes duplicate
+index processing and batches cached PCM handoff, with real-device and sparse
+128 GiB scale measurements.

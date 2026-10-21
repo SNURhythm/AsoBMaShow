@@ -179,6 +179,11 @@ public:
   // Loader-only reuse of the active preview session's immutable PCM buffers.
   void setDecodedAssetCache(std::shared_ptr<audio::DecodedAssetCache> cache);
   [[nodiscard]] bool hasCachedDecodedAsset(const path_t &path) const;
+  [[nodiscard]] std::shared_ptr<audio::DecodedAssetCache> decodedAssetCacheSnapshot() const;
+  // Loader has validated the archive batch; retain the same native/output PCM.
+  bool loadPreparedSound(const path_t &path,
+                         const audio::DecodedAssetCache::DecodedSound &sound,
+                         std::atomic<bool> &isCancelled);
   bool loadSound(const path_t &path, std::atomic<bool> &isCancelled);
   bool loadSoundFromMemory(const path_t &path,
                            const std::vector<unsigned char> &bytes,
