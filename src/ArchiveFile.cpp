@@ -4726,10 +4726,9 @@ bool readArchiveEntriesByCachedOrderStreaming(
     return readTarEntriesByOffset(archivePath, *index, innerPaths, range, onFile,
                                   errorMessage, pauseCallback, maximumBytes);
 
-  std::size_t emitted = 0;
   const auto fail = [&](const std::string &message) {
-    if (errorMessage) *errorMessage =
-        (emitted || index->backend == ArchiveIndexBackend::LibArchive ? "Indexed archive read: " : "") + message;
+    if (errorMessage) *errorMessage = archiveReadCancelled(message)
+        ? message : "Indexed archive read: " + message;
     return false;
   };
   std::vector<const Entry *> targets;
@@ -4742,6 +4741,28 @@ bool readArchiveEntriesByCachedOrderStreaming(
   std::sort(targets.begin(), targets.end(), [](const auto *a, const auto *b) { return a->order < b->order; });
   targets.erase(std::unique(targets.begin(), targets.end()), targets.end());
   if (targets.empty()) return true;
+
+  if (index->backend != ArchiveIndexBackend::LibArchive) {
+    // Other backends count headers differently (e.g. miniz includes .DS_Store).
+    // Apply ranges in the originating index, then match selected names rather
+    // than interpreting those ordinals in libarchive's filtered header stream.
+    std::vector<std::filesystem::path> selectedPaths;
+    selectedPaths.reserve(targets.size());
+    for (const auto *target : targets) selectedPaths.push_back(target->path);
+    const auto sourceMatches = [&] {
+      return index->sourceIdentity.empty() ||
+          archive_source_identity::KeyForPath(archivePath) == index->sourceIdentity;
+    };
+    if (!sourceMatches()) return fail("Archive changed after indexing.");
+    std::size_t emitted = 0;
+    std::string scanError;
+    if (!readArchiveEntriesUncachedStreaming(archivePath, selectedPaths, std::nullopt,
+        [&](FileData &&file) { ++emitted; return onFile(std::move(file)); },
+        &scanError, pauseCallback, maximumBytes)) return fail(scanError);
+    if (emitted != targets.size()) return fail("Selected entry is missing.");
+    if (!sourceMatches()) return fail("Archive changed during extraction.");
+    return true;
+  }
 
   auto cursor = takeSequentialReader(index->sourceIdentity, targets.front()->order);
   const bool resumed = cursor != nullptr;
@@ -4791,7 +4812,6 @@ bool readArchiveEntriesByCachedOrderStreaming(
       if (archive_entry_size_is_set(header) && file.bytes.size() != target->size)
         return fail("Payload size does not match the index.");
       if (!emitFileData(std::move(file), onFile, errorMessage)) return false;
-      ++emitted;
       break;
     }
   }
