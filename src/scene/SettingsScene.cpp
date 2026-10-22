@@ -328,6 +328,15 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
     previewPanelFolded = false;
     lastLayoutWidth = -1;
   }
+  const bool gainsFocus = event.type == SDL_EVENT_WINDOW_FOCUS_GAINED ||
+                          event.type == SDL_EVENT_DID_ENTER_FOREGROUND;
+  if (gainsFocus && calibrationActive && previewPaused && calibrationError.empty()) {
+    // Rebuild on the next frame to restart the shared chart/audio clock together.
+    // An interrupted measurement still waits for an explicit Start.
+    previewPaused = false;
+    previewRendererDirty = true;
+    lastLayoutWidth = -1;
+  }
   if (losesFocus && audioVideoSession != nullptr &&
       audioVideoSession->hasDisplayPreview()) {
     const auto result = audioVideoSession->onFocusLost();
