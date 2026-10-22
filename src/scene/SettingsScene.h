@@ -346,6 +346,7 @@ private:
   std::string calibrationError;
   TextView *calibrationStatusText = nullptr;
   TextView *calibrationValueText = nullptr;
+  TextView *calibrationSummaryText = nullptr;
   std::optional<std::int64_t> previewEventSteadyMicros;
   void startCalibration();
   void finishCalibration(bool apply);
@@ -354,7 +355,7 @@ private:
   void updateCalibration();
   void recordCalibrationTap(long long rawTimeMicros);
   void playCalibrationKeysound();
-  void buildCalibrationPanel(View *panel, const settings_scene::LayoutMetrics &metrics);
+  void buildCalibrationPanel(View *panel, const settings_scene::LayoutMetrics &metrics, View *selectionRow);
   void refreshCalibrationText();
   long long previewInputTimeMicros(double inputDelay) const;
   bool previewActive = false;

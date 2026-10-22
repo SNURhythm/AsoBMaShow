@@ -64,6 +64,7 @@ int resolvePreviewPanelWidth(const LayoutMetrics &metrics, int foldButtonSize,
 void SettingsScene::resetViewState() {
   calibrationStatusText = nullptr;
   calibrationValueText = nullptr;
+  calibrationSummaryText = nullptr;
   previewKeyModeDropdown = nullptr;
   for (auto *view : views) {
     delete view;
@@ -637,14 +638,14 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     }
   }
 #endif
-  previewPanel->addView(previewSelectionRow);
   if (calibrationActive) {
-    buildCalibrationPanel(previewPanel, metrics);
+    buildCalibrationPanel(previewPanel, metrics, previewSelectionRow);
     rootLayout->addView(previewPanel);
     rootLayout->applyYogaLayout();
     refreshCalibrationText();
     return;
   }
+  previewPanel->addView(previewSelectionRow);
   auto *playbackControls = new View();
   playbackControls->setFlexDirection(FlexDirection::Row);
   playbackControls->setGap(selectionGap);
