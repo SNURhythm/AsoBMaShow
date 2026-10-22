@@ -81,8 +81,8 @@ void SettingsScene::startCalibrationAudio() {
       int beat = 0;
       for (auto time = timing.firstClickMicros; time < timing.loopMicros; time += timing.beatMicros, ++beat)
         plan.clicks.push_back({time, beat % calibrationChartOptions.beatsPerMeasure == 0});
-      if (!context.jukebox.audioRuntime().loadGeneratedSound(
-              kCalibrationKeysound, calibrationKeysoundPcm(), 2, 48000)) {
+      if (!context.jukebox.loadGeneratedKeySound(
+              kCalibrationKeysoundWav, kCalibrationKeysound, calibrationKeysoundPcm(), 2, 48000)) {
         calibrationError = "Unable to load calibration keysound";
         previewPaused = true;
         calibrationMeasuring = false;
@@ -92,7 +92,7 @@ void SettingsScene::startCalibrationAudio() {
         return;
       }
       std::atomic_bool cancelled{false};
-      context.jukebox.schedule(*previewChart, false, cancelled, std::nullopt, &plan);
+      context.jukebox.schedule(*previewChart, !context.settings.inputKeysoundEnabled, cancelled, std::nullopt, &plan);
       const auto started = context.jukebox.play();
       calibrationAudioRunning = started.success;
       if (!started.success) calibrationError = started.diagnostic;
@@ -159,8 +159,8 @@ bms_parser::Note *SettingsScene::releaseLaneAt(int lane, std::int64_t timestampM
 }
 
 void SettingsScene::playCalibrationKeysound() {
-  if (calibrationAudioRunning && !previewPaused)
-    context.jukebox.audioRuntime().playSound(kCalibrationKeysound, audio::Bus::Keysound);
+  if (calibrationAudioRunning && !previewPaused && context.settings.inputKeysoundEnabled)
+    context.jukebox.playKeySound(kCalibrationKeysoundWav);
 }
 
 void SettingsScene::recordCalibrationTap(long long rawTimeMicros) {
@@ -312,6 +312,15 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
       std::to_string(calibrationChartOptions.beatsPerMeasure), {{"4", "4/4"}, {"3", "3/4"}},
       [this, restart](const std::string &id) { calibrationChartOptions.beatsPerMeasure = std::stoi(id); restart(); });
   body->addView(rhythm);
+  addDropdown(body, i18n::message("records.keysound.label"),
+      context.settings.inputKeysoundEnabled ? "input" : "auto",
+      {{"input", i18n::message("settings.controls.keysound.input_trigger.label")},
+       {"auto", i18n::message("settings.controls.keysound.auto_timed.label")}},
+      [this, restart](const std::string &id) {
+        context.settings.inputKeysoundEnabled = id == "input";
+        persistSettings();
+        restart();
+      });
   auto *aids = new View();
   aids->setFlexDirection(FlexDirection::Row);
   aids->setFlexWrap(YGWrapWrap);

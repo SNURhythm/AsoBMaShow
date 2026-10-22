@@ -202,7 +202,7 @@ void testCalibration() {
       for (const auto *timeline : measure->TimeLines) {
         for (const auto *note : timeline->Notes) {
           if (!note) continue;
-          assert(dynamic_cast<const bms_parser::LongNote *>(note) == nullptr && note->Wav == bms_parser::Parser::NoWav);
+          assert(dynamic_cast<const bms_parser::LongNote *>(note) == nullptr && note->Wav == kCalibrationKeysoundWav);
           assert(std::ranges::find(lanes, note->Lane) != lanes.end());
           assert(timeline->Timing >= 3'000'000);
           if (count) assert(timeline->Timing - previous == 500'000);
@@ -229,7 +229,10 @@ void testCalibrationPatternsAndTempo() {
         int beats = 0, notes = 0;
         for (const auto *timeline : chart->Measures.front()->TimeLines) {
           std::vector<int> actual;
-          for (const auto *note : timeline->Notes) if (note) actual.push_back(note->Lane);
+          for (const auto *note : timeline->Notes) if (note) {
+            assert(note->Wav == kCalibrationKeysoundWav);
+            actual.push_back(note->Lane);
+          }
           if (actual.empty()) continue;
           assert(timeline->Timing == (6 + beats) * beatMicros);
           std::vector<int> expected;

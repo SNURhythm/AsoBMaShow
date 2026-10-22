@@ -175,7 +175,7 @@ void RhythmInputHandler::handleScratchMove(SDL_FingerID fingerIndex,
       const int previousDirection = flickState.lastFlickDirection;
       flickState.lastFlickDirection = direction;
       if (hasActiveScratchPress) {
-        (void)applyTouchLane(lane, false, previousDirection);
+        (void)applyTouchLane(lane, false, previousDirection, true);
         fingerLanePressed[fingerIndex] = false;
       }
       auto *note = applyTouchLane(lane, true, direction);
@@ -662,12 +662,12 @@ RhythmInputHandler::RhythmInputHandler(
 RhythmInputHandler::~RhythmInputHandler() { stopListen(); }
 
 bms_parser::Note *RhythmInputHandler::applyTouchLane(
-    int lane, bool pressed, std::optional<int> scratchDirection) {
+    int lane, bool pressed, std::optional<int> scratchDirection, bool backSpin) {
   if (logicalInputPipeline == nullptr) {
     return nullptr;
   }
   const int player = (keyMode == 10 || keyMode == 14) && lane >= 8 ? 2 : 1;
   return logicalInputPipeline->consumePhysicalTouchLane(
       {.player = player, .keyMode = keyMode}, lane, pressed,
-      scratchDirection, touchEventTimestampMicros());
+      scratchDirection, touchEventTimestampMicros(), backSpin);
 }

@@ -74,14 +74,14 @@ void LogicalGameplayInputAdapter::apply(
 }
 
 bms_parser::Note *LogicalGameplayInputAdapter::applyTouch(
-    const input::LogicalInputTransition &transition) {
-  applyOwned(std::span(&transition, 1), OwnerKind::Touch);
+    const input::LogicalInputTransition &transition, bool backSpin) {
+  applyOwned(std::span(&transition, 1), OwnerKind::Touch, backSpin);
   return latestPressedNote_;
 }
 
 void LogicalGameplayInputAdapter::applyOwned(
     std::span<const input::LogicalInputTransition> transitions,
-    OwnerKind ownerKind) {
+    OwnerKind ownerKind, bool touchBackSpin) {
   latestPressedNote_ = nullptr;
   for (std::size_t index = 0; index < transitions.size(); ++index) {
     auto transition = transitions[index];
@@ -106,7 +106,7 @@ void LogicalGameplayInputAdapter::applyOwned(
           transition.action.kind == input::LogicalActionKind::ScratchClockwise
               ? ScratchDirection::Clockwise
               : ScratchDirection::CounterClockwise;
-      bool reversing = false;
+      bool reversing = ownerKind == OwnerKind::Touch && touchBackSpin && !transition.pressed;
       bool oppositeReleasedInBatch = false;
       if (!transition.pressed) {
         const int lane = physicalScratchLane(transition.scope);
@@ -487,13 +487,13 @@ bool LogicalGameplayInputPipeline::consumeDirectKeyboard(int scancode,
 }
 
 bms_parser::Note *LogicalGameplayInputPipeline::consumeTouchTransition(
-    const input::LogicalInputTransition &transition) {
-  return adapter_.applyTouch(transition);
+    const input::LogicalInputTransition &transition, bool backSpin) {
+  return adapter_.applyTouch(transition, backSpin);
 }
 
 bms_parser::Note *LogicalGameplayInputPipeline::consumePhysicalTouchLane(
     input::InputScope scope, int lane, bool pressed,
-    std::optional<int> scratchDirection, std::uint64_t timestampMicros) {
+    std::optional<int> scratchDirection, std::uint64_t timestampMicros, bool backSpin) {
   const input::LogicalActionKind action =
       !scratchDirection.has_value()
           ? input::LogicalActionKind::Lane
@@ -506,7 +506,7 @@ bms_parser::Note *LogicalGameplayInputPipeline::consumePhysicalTouchLane(
       .pressed = pressed,
       .value = pressed ? 1.0F : 0.0F,
       .timestampMicros = timestampMicros,
-  });
+  }, backSpin);
 }
 
 void LogicalGameplayInputPipeline::setBindings(

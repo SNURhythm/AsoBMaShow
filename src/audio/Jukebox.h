@@ -231,6 +231,9 @@ public:
       std::span<const ScheduledAudioEvent> events);
   void seekVisualsToSongTime(long long rawSongMicros);
   void renderVisualsAt(long long micro);
+  // Register generated PCM while playback is stopped, for direct or chart-timed keysounds.
+  bool loadGeneratedKeySound(int wav, const path_t &path, std::vector<short> pcm,
+                             int channels, int sampleRate);
   void playKeySound(int wav);
   [[nodiscard]] std::optional<audio::RealtimeSoundHandle>
   resolveRealtimeKeySound(int wav) const;

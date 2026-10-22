@@ -3054,6 +3054,7 @@ void verifyPausedAppearanceDraftUpdatesAndRestoresPreview() {
 struct PreviewRecordingControl : IRhythmControl {
   std::vector<int> presses;
   std::vector<int> releases;
+  std::vector<bool> backSpins;
   bms_parser::Note *pressLane(int lane, double) override {
     presses.push_back(lane);
     return nullptr;
@@ -3061,8 +3062,9 @@ struct PreviewRecordingControl : IRhythmControl {
   bms_parser::Note *pressLane(int lane, int, double delay) override {
     return pressLane(lane, delay);
   }
-  bms_parser::Note *releaseLane(int lane, double, bool) override {
+  bms_parser::Note *releaseLane(int lane, double, bool backSpin) override {
     releases.push_back(lane);
+    backSpins.push_back(backSpin);
     return nullptr;
   }
 };
@@ -3320,7 +3322,6 @@ void verifyPreviewKeyModeTouchRouting(const RenderTarget &target) {
            "preview routes the displayed lane count for each key mode");
     if (!scene.previewTouchRouter) continue;
     for (std::size_t index = 0; index < layout.lanes.size(); ++index) {
-      if (layout.scratch[index]) continue;
       const float fraction = (static_cast<float>(index) + 0.5f) / layout.lanes.size();
       const float leftX = (layout.bottomLeft.x + layout.topLeft.x) * 0.5f;
       const float rightX = (layout.bottomRight.x + layout.topRight.x) * 0.5f;
@@ -3331,6 +3332,24 @@ void verifyPreviewKeyModeTouchRouting(const RenderTarget &target) {
           .normalizedX = leftX + (rightX - leftX) * fraction,
           .normalizedY = leftY + (rightY - leftY) * fraction, .steadyTimestampMicros = 100'000};
       expect(scene.previewTouchRouter->consume(down), "preview touch press is accepted");
+      if (layout.scratch[index]) {
+        const auto presses = control.presses.size();
+        const auto releases = control.releases.size();
+        auto move = down;
+        move.phase = gameplay::RealtimeTouchPhase::Move;
+        move.normalizedY -= 0.03F;
+        move.steadyTimestampMicros += 10'000;
+        expect(scene.previewTouchRouter->consume(move), "preview scratch starts clockwise");
+        move.normalizedY += 0.06F;
+        move.steadyTimestampMicros += 10'000;
+        expect(scene.previewTouchRouter->consume(move), "preview scratch reverses counterclockwise");
+        move.normalizedY -= 0.06F;
+        move.steadyTimestampMicros += 10'000;
+        expect(scene.previewTouchRouter->consume(move), "preview scratch reverses clockwise again");
+        expect(control.presses.size() == presses + 3 && control.releases.size() == releases + 2 &&
+                   control.backSpins[releases] && control.backSpins[releases + 1],
+               "each preview scratch reversal releases with backspin and presses the new direction");
+      }
       expect(!control.presses.empty() && control.presses.back() == layout.lanes[index],
              "preview touch reaches the displayed raw lane, including scratchless and DP modes");
       auto up = down;
@@ -3341,6 +3360,56 @@ void verifyPreviewKeyModeTouchRouting(const RenderTarget &target) {
              "preview release clears the same displayed lane");
     }
   }
+}
+
+void verifyPreviewScratchUsesLiveHoldState(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  const auto chart = settings_scene::makePreviewChart(7);
+  const auto model = buildPlayfieldChartVisualModel(*chart, 0);
+  PlayfieldVisualStateStore store(model);
+  Judge judge(chart->Meta.Rank);
+  auto renderer = std::make_unique<BMSRenderer>(chart.get(), judge.timingWindows, 500, true);
+  renderer->configure(presentationConfig(0));
+  SettingsScene scene;
+  scene.previewChart = chart.get();
+  scene.previewRenderer = renderer.get();
+  scene.previewVisualStateStore = &store;
+  scene.previewPresentation = std::move(renderer);
+  for (const auto *timeline : chart->Measures.front()->TimeLines) {
+    for (const auto *note : timeline->Notes)
+      if (note) scene.previewVisualNoteSources.push_back(note);
+    for (const auto *note : timeline->LandmineNotes)
+      if (note) scene.previewVisualNoteSources.push_back(note);
+  }
+  scene.resetPreviewHudSample();
+  scene.previewElapsedMicros = 3'500'000;
+  scene.pressLane(7, 0);
+  InputDeviceRegistry registry(std::vector<InputDeviceRegistry::BackendFactory>{});
+  PreviewRecordingControl control;
+  RhythmInputHandler handler(&control, chart->Meta, registry, makeDefaultInputProfile(),
+                              makeGameplayInputScopes(7));
+  scene.previewInputHandler = &handler;
+  scene.syncPreviewTouchLayout();
+  const auto layout = scene.previewPresentation->touchLayout();
+  const auto index = std::ranges::find(layout.lanes, 7) - layout.lanes.begin();
+  const float fraction = (index + 0.5F) / layout.lanes.size();
+  const float leftX = (layout.bottomLeft.x + layout.topLeft.x) * 0.5F;
+  const float rightX = (layout.bottomRight.x + layout.topRight.x) * 0.5F;
+  gameplay::RealtimeTouchSample sample{
+      .fingerId = 1, .phase = gameplay::RealtimeTouchPhase::Down,
+      .normalizedX = leftX + (rightX - leftX) * fraction,
+      .normalizedY = (layout.bottomLeft.y + layout.topLeft.y) * 0.5F,
+      .steadyTimestampMicros = 3'500'000};
+  expect(scene.previewTouchRouter->consume(sample), "held scratch accepts touch");
+  sample.phase = gameplay::RealtimeTouchPhase::Move;
+  sample.normalizedY -= 0.03F;
+  expect(scene.previewTouchRouter->consume(sample), "held scratch begins flick");
+  sample.normalizedY += 0.005F;
+  expect(scene.previewTouchRouter->consume(sample) && control.releases.empty(),
+         "live simulation hold suppresses small reverse jitter despite immutable parser state");
+  sample.normalizedY += 0.02F;
+  expect(scene.previewTouchRouter->consume(sample) && control.releases.size() == 1 &&
+             control.backSpins.back(), "held scratch accepts a deliberate backspin");
 }
 
 void verifyPreviewNotesMoveThroughoutOpening() {
@@ -4310,6 +4379,7 @@ int main() {
       verifyLegacyAuthoredSkinTouchRouting();
       verifyLegacyScratchlessTouchLayout(target);
   verifyPreviewKeyModeTouchRouting(target);
+  verifyPreviewScratchUsesLiveHoldState(target);
       verifyPreviewPacemakerDiff(target);
       verifyPreviewPacemakerMatchesChartScore();
   verifyPreviewNotesMoveThroughoutOpening();

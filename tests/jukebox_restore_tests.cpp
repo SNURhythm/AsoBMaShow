@@ -1032,6 +1032,39 @@ void testNativePauseKeepsPcmAndScheduleOnTheGeneratedTimeline(
           "an explicit paused seek replaces the old frozen position");
 }
 
+void testGeneratedKeysoundUsesChartSchedulingMode() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+  require(jukebox.loadGeneratedKeySound(0, PATH("generated-chart-note"), {16000}, 1, 44100),
+          "generated keysound is registered for chart playback");
+  bms_parser::Chart chart;
+  auto *measure = new bms_parser::Measure;
+  auto *timeline = new bms_parser::TimeLine(8, false);
+  timeline->Timing = 10'000;
+  timeline->SetNote(0, new bms_parser::Note(0));
+  measure->TimeLines.push_back(timeline);
+  chart.Measures.push_back(measure);
+  std::atomic_bool cancelled{false};
+  for (const bool autoTimed : {false, true}) {
+    jukebox.schedule(chart, autoTimed, cancelled);
+    require(jukebox.play().success, "generated chart schedule starts");
+    std::array<short, 882 * 2> output{};
+    control->renderCallback(output.data(), 882, 2, control->renderUserData);
+    const auto first = std::ranges::find_if(output, [](short value) { return value != 0; });
+    require(autoTimed ? first != output.end() && (first - output.begin()) / 2 == 441
+                      : first == output.end(),
+            "auto timed notes sound at their chart time; input mode remains silent until input");
+    if (!autoTimed) {
+      jukebox.playKeySound(0);
+      control->renderCallback(output.data(), 882, 2, control->renderUserData);
+      require(std::ranges::any_of(output, [](short value) { return value != 0; }),
+              "input mode plays the same registered generated keysound on demand");
+    }
+    require(jukebox.stop().success, "generated keysound mode switch drains playback");
+  }
+}
+
 void testRateScaledSnapshotRestoresBgaTimeline() {
   const std::filesystem::path imageFolder =
       std::filesystem::path(ASOBMASHOW_SOURCE_DIR) / "SDL" / "test";
@@ -1318,6 +1351,7 @@ int main(int argc, char **argv) {
         testNativePauseKeepsPcmAndScheduleOnTheGeneratedTimeline(queuedOutput, bus);
       }
     }
+    testGeneratedKeysoundUsesChartSchedulingMode();
     testRateScaledSnapshotRestoresBgaTimeline();
     testNegativeCountInKeepsBgaAtPreChartState();
     testPoorBgaSchedulePreservesRawSequencesAndResources();

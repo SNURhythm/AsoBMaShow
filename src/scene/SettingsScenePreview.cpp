@@ -363,19 +363,26 @@ void SettingsScene::syncPreviewTouchLayout() {
           .context = this,
           .emit = [](void *opaque, const gameplay::RealtimeGameplayInput &input) {
             auto &scene = *static_cast<SettingsScene *>(opaque);
-            const auto scratches = scene.previewChart->Meta.GetScratchLaneIndices();
-            const bool scratch = std::ranges::find(scratches, input.lane) != scratches.end();
+            std::optional<int> direction;
+            if (input.hasReplayControl) {
+              if (input.replayControl.kind == replay::LogicalControlKind::ScratchClockwise) direction = 1;
+              else if (input.replayControl.kind == replay::LogicalControlKind::ScratchCounterClockwise) direction = -1;
+            }
             (void)scene.previewInputHandler->applyTouchLane(input.lane,
                 input.type == gameplay::RealtimeGameplayInputType::Press,
-                scratch ? std::optional<int>(input.backSpin ? -1 : 1) : std::nullopt);
+                direction, input.backSpin);
             return true;
           },
           .scratchLongNoteHeld = [](void *opaque, int lane) {
             auto &scene = *static_cast<SettingsScene *>(opaque);
-            return std::ranges::any_of(scene.previewVisualNoteSources, [lane](const auto *note) {
-              const auto *longNote = dynamic_cast<const bms_parser::LongNote *>(note);
-              return longNote && longNote->Lane == lane && longNote->IsHolding;
-            });
+            if (!scene.previewSimulation) return false;
+            for (std::size_t index = 0; index < scene.previewVisualNoteSources.size(); ++index) {
+              const auto *note = scene.previewVisualNoteSources[index];
+              if (note->Lane == lane && dynamic_cast<const bms_parser::LongNote *>(note) &&
+                  scene.previewSimulation->noteState(static_cast<gameplay::NoteId>(index)).holding)
+                return true;
+            }
+            return false;
           }});
 }
 
@@ -803,7 +810,7 @@ bms_parser::Note *SettingsScene::pressLane(int mainLane, int compensateLane,
        .laneBeamTimeMicros = previewElapsedMicros,
        .inputDelayMicros = calibrationActive ? 0 : static_cast<std::int64_t>(inputDelay * 1'000'000)});
   consumePreviewTransactions(result.transactions);
-  if (calibrationActive && result.noteId < previewVisualNoteSources.size()) playCalibrationKeysound();
+  if (calibrationActive && result.soundNoteId != gameplay::kInvalidNoteId) playCalibrationKeysound();
   return result.noteId < previewVisualNoteSources.size()
       ? const_cast<bms_parser::Note *>(previewVisualNoteSources[result.noteId]) : nullptr;
 }

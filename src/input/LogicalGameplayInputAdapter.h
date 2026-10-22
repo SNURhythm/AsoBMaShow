@@ -42,7 +42,7 @@ public:
 
   void apply(std::span<const input::LogicalInputTransition> transitions);
   [[nodiscard]] bms_parser::Note *
-  applyTouch(const input::LogicalInputTransition &transition);
+  applyTouch(const input::LogicalInputTransition &transition, bool backSpin = false);
   [[nodiscard]] static int physicalScratchLane(input::InputScope scope);
   void reset();
 
@@ -69,7 +69,7 @@ private:
   bms_parser::Note *pressPhysicalLane(int lane, std::uint64_t timestampMicros);
   void releasePhysicalLane(int lane, bool backSpin, std::uint64_t timestampMicros);
   void applyOwned(std::span<const input::LogicalInputTransition> transitions,
-                  OwnerKind ownerKind);
+                  OwnerKind ownerKind, bool touchBackSpin = false);
   void applyLane(const input::LogicalInputTransition &transition,
                  OwnerKind ownerKind);
   void applyScratch(const input::LogicalInputTransition &transition,
@@ -119,10 +119,11 @@ public:
   bool consumeRegistryEvent(const input::PhysicalInputEvent &event);
   bool consumeDirectKeyboard(int scancode, bool pressed);
   [[nodiscard]] bms_parser::Note *consumeTouchTransition(
-      const input::LogicalInputTransition &transition);
+      const input::LogicalInputTransition &transition, bool backSpin = false);
   [[nodiscard]] bms_parser::Note *consumePhysicalTouchLane(
       input::InputScope scope, int lane, bool pressed,
-      std::optional<int> scratchDirection, std::uint64_t timestampMicros = 0);
+      std::optional<int> scratchDirection, std::uint64_t timestampMicros = 0,
+      bool backSpin = false);
   void setBindings(const InputProfile &profile,
                    std::vector<input::InputScope> activeScopes);
   void disconnectDevice(std::string_view stableId);

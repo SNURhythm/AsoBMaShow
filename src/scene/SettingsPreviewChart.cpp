@@ -164,6 +164,7 @@ std::unique_ptr<bms_parser::Chart> makeCalibrationChart(int keyMode, Calibration
       const auto index = static_cast<std::size_t>(tick - firstNoteTick);
       const auto add = [&](int target) {
         addPreviewNote(timeline.get(), target);
+        timeline->Notes[target]->Wav = kCalibrationKeysoundWav;
         ++chart->Meta.TotalNotes;
         if (std::ranges::find(scratches, target) != scratches.end()) ++chart->Meta.TotalScratchNotes;
       };
