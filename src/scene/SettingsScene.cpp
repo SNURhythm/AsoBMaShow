@@ -324,6 +324,8 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
     stopCalibrationAudio();
     previewPaused = true;
     calibrationSamples.reset();
+    calibrationMeasuring = false;
+    previewPanelFolded = false;
     lastLayoutWidth = -1;
   }
   if (losesFocus && audioVideoSession != nullptr &&

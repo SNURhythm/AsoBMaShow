@@ -32,7 +32,7 @@ inline double calibrationLogicalJudgementScrollDelta(int visualOffsetMs,
 }
 
 // Measure against the unadjusted audio timeline: gameplay = raw + audio offset.
-// One observation per beat also rejects chords and touch/keyboard duplicates.
+// One observation per scheduled group rejects chords and input duplicates.
 class OffsetCalibration {
 public:
   struct Estimate { int offsetMs; int spreadMs; };
@@ -51,6 +51,12 @@ public:
     errors_[count_++] = error;
     return true;
   }
+  bool tapDisplay(long long rawTimeMicros, int audioOffsetMs,
+                  int visualOffsetMs, int noteDisplayTimingMs) {
+    // Match the note's drawn crossing, not its audio/gameplay crossing.
+    return tap(rawTimeMicros + (static_cast<long long>(audioOffsetMs) -
+                               visualOffsetMs + noteDisplayTimingMs) * 1000);
+  }
   void reset() { count_ = 0; lastBeat_ = -1; }
   // A new chart loop retains the measurements but starts a fresh beat identity.
   void beginLoop() { lastBeat_ = -1; }
@@ -67,6 +73,13 @@ public:
     std::ranges::sort(deviations);
     return Estimate{static_cast<int>(std::lround(-median / 1000.0)),
                     static_cast<int>(std::lround((deviations[7] + deviations[8]) / 2000.0))};
+  }
+  std::optional<Estimate> displayEstimate(int noteDisplayTimingMs) const {
+    auto result = estimate();
+    // The measured visual delay is independent of the trial offset. Keep the
+    // existing note-display timing when expressing its absolute replacement.
+    if (result) result->offsetMs += noteDisplayTimingMs;
+    return result;
   }
 private:
   CalibrationTiming timing_ = calibrationTiming();

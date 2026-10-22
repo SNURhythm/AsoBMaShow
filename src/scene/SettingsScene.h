@@ -331,6 +331,7 @@ private:
   std::string inputLastViewSignature;
   settings_scene::CalibrationChartOptions calibrationChartOptions;
   bool calibrationActive = false;
+  bool calibrationMeasuring = false;
   bool calibrationDisplay = false;
   bool calibrationMetronomeMuted = false;
   bool calibrationNotesHidden = false;

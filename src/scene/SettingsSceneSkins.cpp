@@ -510,6 +510,10 @@ DropdownView *SettingsScene::buildGameplaySkinSelectionDropdown(
        .onOptionSelectedResult =
            [this, skinType,
             entries = std::move(dropdownEntries)](const std::string &id) {
+             if (calibrationActive) {
+               calibrationMeasuring = false;
+               calibrationSamples.reset();
+             }
              gameplaySkinTraitDropdownOpen = false;
              gameplaySkinConfigurationDropdownOpenKey.clear();
              if (id == "@follow-original") {

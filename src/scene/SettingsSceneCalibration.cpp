@@ -32,6 +32,7 @@ void SettingsScene::startCalibration() {
   calibrationSamples.configure(calibrationChartOptions.bpm, calibrationChartOptions.beatsPerMeasure);
   calibrationError.clear();
   calibrationDisplay = false;
+  calibrationMeasuring = false;
   calibrationActive = true;
   previewAutoPlay = false;
   previewRandomTiming = false;
@@ -45,6 +46,7 @@ void SettingsScene::finishCalibration(bool apply) {
   stopCalibrationAudio();
   destroyPreviewRenderer();
   calibrationActive = false;
+  calibrationMeasuring = false;
   previewActive = false;
   previewAutoPlay = calibrationSavedAutoPlay;
   previewRandomTiming = calibrationSavedRandomTiming;
@@ -83,6 +85,9 @@ void SettingsScene::startCalibrationAudio() {
               kCalibrationKeysound, calibrationKeysoundPcm(), 2, 48000)) {
         calibrationError = "Unable to load calibration keysound";
         previewPaused = true;
+        calibrationMeasuring = false;
+        previewPanelFolded = false;
+        lastLayoutWidth = -1;
         refreshCalibrationText();
         return;
       }
@@ -94,6 +99,11 @@ void SettingsScene::startCalibrationAudio() {
     }
   }
   previewPaused = !calibrationError.empty();
+  if (previewPaused) {
+    calibrationMeasuring = false;
+    previewPanelFolded = false;
+    lastLayoutWidth = -1;
+  }
   refreshCalibrationText();
 }
 
@@ -114,7 +124,7 @@ void SettingsScene::updateCalibration() {
     // Loop the renderer without replacing controls or closing an open dropdown.
     const auto layoutWidth = lastLayoutWidth;
     resetPreviewSimulation();
-    if (previewError.empty()) lastLayoutWidth = layoutWidth;
+    if (previewError.empty() && calibrationError.empty()) lastLayoutWidth = layoutWidth;
     return;
   }
   previewElapsedMicros = raw + calibrationAudioOffsetMs * 1000LL;
@@ -154,10 +164,22 @@ void SettingsScene::playCalibrationKeysound() {
 }
 
 void SettingsScene::recordCalibrationTap(long long rawTimeMicros) {
-  if (calibrationDisplay || !calibrationAudioRunning || previewPaused) return;
-  if (!calibrationSamples.tap(rawTimeMicros)) return;
-  if (const auto estimate = calibrationSamples.estimate()) {
-    calibrationAudioOffsetMs = clampOffset(estimate->offsetMs);
+  if (!calibrationMeasuring || !calibrationAudioRunning || previewPaused ||
+      (calibrationDisplay && (calibrationNotesHidden || calibrationChartOptions.subdivision != 4))) return;
+  const bool accepted = calibrationDisplay
+      ? calibrationSamples.tapDisplay(rawTimeMicros, calibrationAudioOffsetMs,
+          calibrationVisualOffsetMs, context.settings.notesDisplayTimingMilliseconds)
+      : calibrationSamples.tap(rawTimeMicros);
+  if (!accepted) return;
+  const auto estimate = calibrationDisplay
+      ? calibrationSamples.displayEstimate(context.settings.notesDisplayTimingMilliseconds)
+      : calibrationSamples.estimate();
+  if (estimate) {
+    if (calibrationDisplay) calibrationVisualOffsetMs = clampVisualOffset(estimate->offsetMs);
+    else calibrationAudioOffsetMs = clampOffset(estimate->offsetMs);
+    calibrationMeasuring = false;
+    previewPanelFolded = false;
+    lastLayoutWidth = -1;
     // Restart on the next frame, after the input callback has returned.
     previewRendererDirty = true;
   }
@@ -172,11 +194,15 @@ void SettingsScene::refreshCalibrationText() {
   if (!calibrationStatusText) return;
   auto status = i18n::message("settings.calibration.progress",
       {{"count", std::to_string(calibrationSamples.count())}});
-  if (calibrationDisplay) status = i18n::Text("");
-  else if (const auto estimate = calibrationSamples.estimate())
-    status = i18n::message("settings.calibration.result",
-        {{"offset", std::to_string(estimate->offsetMs)},
+  if (!calibrationMeasuring) status = i18n::message("settings.calibration.ready");
+  if (const auto estimate = calibrationSamples.estimate())
+    status = i18n::message(calibrationDisplay ? "settings.calibration.display_result" : "settings.calibration.result",
+        {{"offset", std::to_string(calibrationDisplay ? calibrationVisualOffsetMs : calibrationAudioOffsetMs)},
          {"spread", std::to_string(estimate->spreadMs)}});
+  if (calibrationDisplay && calibrationChartOptions.subdivision != 4)
+    status = i18n::message("settings.calibration.display_spacing");
+  if (calibrationDisplay && calibrationNotesHidden)
+    status = i18n::message("settings.calibration.display_hidden");
   if (previewPaused) status = i18n::message("settings.calibration.paused");
   if (!calibrationError.empty()) status = i18n::message("settings.calibration.error",
                                                        {{"error", calibrationError}});
@@ -207,6 +233,7 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
     return button;
   };
   const auto restart = [this] {
+    calibrationMeasuring = false;
     calibrationSamples.configure(calibrationChartOptions.bpm, calibrationChartOptions.beatsPerMeasure);
     previewPaused = false;
     previewRendererDirty = true;
@@ -306,6 +333,11 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
     button->setOnClickListener([this, value = &enabled, content, restartAudio] {
       *value = !*value;
       content->setChecked(*value);
+      if (calibrationDisplay && value == &calibrationNotesHidden) {
+        calibrationMeasuring = false;
+        calibrationSamples.reset();
+        lastLayoutWidth = -1;
+      }
       // Start a fresh count-in with the changed sound schedule; taps survive.
       if (restartAudio) previewRendererDirty = true;
       ui::invalidate();
@@ -325,6 +357,8 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
         [this, display] {
           if (calibrationDisplay == display) return;
           calibrationDisplay = display;
+          calibrationMeasuring = false;
+          calibrationSamples.configure(calibrationChartOptions.bpm, calibrationChartOptions.beatsPerMeasure);
           previewPaused = false;
           resetPreviewSimulation();
           lastLayoutWidth = -1;
@@ -346,28 +380,37 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
   for (const int delta : {-10, -1, 1, 10}) {
     addButton(adjustments, i18n::Text((delta > 0 ? "+" : "") + std::to_string(delta) + " ms"),
         [this, delta] {
+          calibrationMeasuring = false;
+          calibrationSamples.reset();
           if (calibrationDisplay) calibrationVisualOffsetMs = clampVisualOffset(calibrationVisualOffsetMs + delta);
           else {
             calibrationAudioOffsetMs = clampOffset(calibrationAudioOffsetMs + delta);
-            calibrationSamples.reset();
             previewRendererDirty = true;
           }
           refreshCalibrationText();
         });
   }
   body->addView(adjustments);
-  addButton(body, i18n::message("settings.input.actions.retry.label"), [this] {
-    calibrationSamples.reset();
-    previewPaused = false;
-    resetPreviewSimulation();
-    lastLayoutWidth = -1;
-  });
   scroll->setContentView(body);
   panel->addView(scroll);
   auto *actions = new View();
   actions->setFlexDirection(FlexDirection::Row);
   actions->setFlexWrap(YGWrapWrap);
   actions->setGap(8);
+  auto *startButton = addButton(actions, i18n::message("settings.calibration.start"), [this] {
+    calibrationSamples.reset();
+    calibrationMeasuring = true;
+    previewPanelFolded = true;
+    previewPaused = false;
+    resetPreviewSimulation();
+    if (!previewError.empty()) {
+      calibrationMeasuring = false;
+      previewPanelFolded = false;
+    }
+    lastLayoutWidth = -1;
+  });
+  startButton->setEnabled(!calibrationDisplay ||
+      (!calibrationNotesHidden && calibrationChartOptions.subdivision == 4));
   addButton(actions, i18n::message("settings.audio.apply.label"), [this] { finishCalibration(true); });
   addButton(actions, i18n::message("settings.input.cancel.label"), [this] { finishCalibration(false); });
   panel->addView(actions);

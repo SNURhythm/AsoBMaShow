@@ -301,6 +301,8 @@ struct SettingsScene : Scene {
   int displayDraft = 0;
   bool previewActive = false;
   bool calibrationActive = false;
+  bool calibrationMeasuring = false;
+  bool previewPanelFolded = false;
   bool previewPaused = false;
   int calibrationStops = 0;
   int lastLayoutWidth = 0;
@@ -466,6 +468,8 @@ int main() {
     active->audioVideoSession = &display;
     context.settings.audioVideo.video = 42;
     active->calibrationActive = previewActive;
+    active->calibrationMeasuring = previewActive;
+    active->previewPanelFolded = previewActive;
     if (previewActive) assert(active->calibrationSamples.tap(3'030'000));
     event.type = SDL_EVENT_WINDOW_FOCUS_LOST;
     manager.handleEvents(event);
@@ -476,6 +480,7 @@ int main() {
     assert(active->calibrationStops == (previewActive ? 1 : 0));
     assert(active->previewPaused == previewActive);
     assert(active->calibrationSamples.count() == 0);
+    assert(!active->calibrationMeasuring && !active->previewPanelFolded);
     assert(active->previewEvents == (previewActive ? 1 : 0));
     event.type = SDL_EVENT_MOUSE_BUTTON_UP;
     active->views.front()->eventCallback = [&manager] {

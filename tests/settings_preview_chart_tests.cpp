@@ -171,6 +171,28 @@ void testCalibration() {
   assert(!calibration.tap(3'249'000)); // outside acceptance window
   assert(!calibration.tap(-500'000));
 
+  // Visual taps include the current audio/display offsets. A 40 ms visual
+  // delay must produce -30 ms with the existing +10 ms note-display timing,
+  // regardless of the starting trial offset. Simultaneous notes count once.
+  for (const int trialOffset : {-80, 70}) {
+    calibration.configure(120, 4);
+    for (int note = 0; note < 16; ++note) {
+      const auto raw = 3'000'000LL + note * 500'000 + 30'000 +
+                       trialOffset * 1000LL - 10'000 + 40'000;
+      assert(calibration.tapDisplay(raw, -30, trialOffset, 10));
+      assert(!calibration.tapDisplay(raw + 1000, -30, trialOffset, 10)); // chord
+      if (note < 15) assert(!calibration.displayEstimate(10));
+    }
+    const auto display = calibration.displayEstimate(10);
+    assert(display && display->offsetMs == -30 && display->spreadMs == 0);
+    calibration.reset();
+    assert(!calibration.displayEstimate(10));
+  }
+  calibration.configure(120, 4);
+  for (int beat = 0; beat < 16; ++beat)
+    assert(calibration.tapDisplay(3'000'000LL + beat * 500'000 - 25'000, 0, 0, 0));
+  assert(calibration.displayEstimate(0)->offsetMs == 25);
+
   for (int mode : kPreviewKeyModes) {
     const auto chart = makeCalibrationChart(mode);
     const auto lanes = chart->Meta.GetKeyLaneIndices();

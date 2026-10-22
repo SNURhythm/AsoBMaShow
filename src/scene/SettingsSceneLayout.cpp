@@ -609,6 +609,10 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         const auto mode = std::stoi(id);
         previewKeyModeDropdownOpen = false;
         if (previewKeyMode != mode) {
+          if (calibrationActive) {
+            calibrationMeasuring = false;
+            calibrationSamples.reset();
+          }
           previewKeyMode = mode;
           previewRendererDirty = true;
           lastLayoutWidth = -1;
