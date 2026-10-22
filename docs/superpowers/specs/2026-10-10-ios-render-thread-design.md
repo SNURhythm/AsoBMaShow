@@ -168,9 +168,14 @@ The overlay avoids reentrant scene callbacks during scene destruction.
   took 17–155 microseconds, and four afterward took 26–46 microseconds. Main
   serviced 3,911 iterations during the stall, and gameplay paused normally
   afterward. These tiny simulator samples are a concurrency check, not a
-  statistical latency benchmark. Reproduce with `ASOBMASHOW_IOS_TOUCH_PROBE=1`,
+  statistical latency benchmark. At commit `96b33475`, reproduce with `ASOBMASHOW_IOS_TOUCH_PROBE=1`,
   `ASOBMASHOW_IOS_RENDER_STALL_AFTER_TOUCHES=3`, and
   `ASOBMASHOW_IOS_RENDER_STALL_MS=5000` in a Debug build.
+
+The iOS acceptance probes were removed on 2026-10-22 after establishing this
+thread separation. The results above remain historical evidence; the probe
+environment variables no longer affect current builds. Firebase and TestFlight
+retain the same assertion settings.
 
 The simulator checks used generated local chart/audio fixtures. Unicode IME
 composition and physical-device timing/background behavior were not verified.

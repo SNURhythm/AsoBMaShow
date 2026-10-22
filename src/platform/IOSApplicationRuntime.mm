@@ -15,7 +15,6 @@
 #include <exception>
 #include <memory>
 #include <mutex>
-#include <thread>
 #include <deque>
 
 namespace {
@@ -26,11 +25,6 @@ struct Runtime {
   platform::IOSApplicationLifecycle lifecycle;
   std::atomic_bool ingressPaused{false};
   std::atomic_uint64_t completedPumpLifecycleGeneration{0};
-#ifndef NDEBUG
-  std::atomic_uint64_t mainServiceCount{0};
-  unsigned ownerIterations = 0;
-  bool stallProbeRan = false;
-#endif
   std::mutex viewportMutex;
   IOSWindowSnapshot viewport;
   std::mutex wakeMutex;
@@ -142,9 +136,6 @@ int RunIOSApplication(SDL_Window *window, std::function<int()> application) {
         state->finishInputSuppression = false;
       }
       state->completedPumpLifecycleGeneration.store(pumpGeneration, std::memory_order_release);
-#ifndef NDEBUG
-      state->mainServiceCount.fetch_add(1, std::memory_order_relaxed);
-#endif
       WaitIOSMainRunLoopForMicros(1000);
     }
   }, [](std::exception_ptr failure) {
@@ -242,31 +233,6 @@ void PostIOSApplicationWork(std::function<void()> work) {
 bool PollIOSApplicationWork() {
   const auto state = currentRuntime();
   if (!state) return false;
-#ifndef NDEBUG
-  // Opt-in acceptance probe, bounded and absent from release builds. Main's
-  // service count measures scheduling independence, not hardware input latency.
-  ++state->ownerIterations;
-  const char *afterTouches = std::getenv("ASOBMASHOW_IOS_RENDER_STALL_AFTER_TOUCHES");
-  const bool probeDue = afterTouches
-      ? IOSGameplayTouchProbeCount() >= static_cast<unsigned>(std::max(1, std::atoi(afterTouches)))
-      : state->ownerIterations >= 120;
-  if (!state->stallProbeRan && probeDue) {
-    state->stallProbeRan = true;
-    if (const char *value = std::getenv("ASOBMASHOW_IOS_RENDER_STALL_MS")) {
-      const int milliseconds = std::clamp(std::atoi(value), 0, 5000);
-      const auto before = state->mainServiceCount.load(std::memory_order_relaxed);
-      SDL_Log("iOS render stall probe begin: %d ms", milliseconds);
-      std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
-      SDL_Log("iOS render stall probe end: main serviced %llu iterations",
-          static_cast<unsigned long long>(state->mainServiceCount.load(std::memory_order_relaxed) - before));
-      if (std::getenv("ASOBMASHOW_IOS_PROBE_QUIT")) {
-        SDL_Event quit{};
-        quit.type = SDL_EVENT_QUIT;
-        SDL_PushEvent(&quit);
-      }
-    }
-  }
-#endif
   if (state->work.empty()) return false;
   // One job per safe scene-loop boundary. Destruction invalidates pending jobs.
   auto work = std::move(state->work.front());
