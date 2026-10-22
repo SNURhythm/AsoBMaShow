@@ -815,18 +815,6 @@ bms_parser::Note *SettingsScene::pressLane(int mainLane, int compensateLane,
   if (!previewActive || (calibrationActive && previewPaused) || previewAutoPlay || !previewSimulation) return nullptr;
   const auto inputTime = previewInputTimeMicros(inputDelay);
   if (calibrationActive) recordCalibrationTap(inputTime - calibrationAudioOffsetMs * 1000LL);
-  if (calibrationActive && calibrationDisplay) {
-    // A delayed visual cue may coincide with a later note's gameplay timestamp.
-    // Display taps provide feedback without consuming either note.
-    ui::invalidate();
-    if (previewPresentationEvents)
-      previewPresentationEvents->onLanePressed(mainLane, JudgeResult(None, 0), previewElapsedMicros);
-    if (std::ranges::any_of(previewVisualNoteSources, [mainLane, compensateLane](const auto *note) {
-          return note->Wav != bms_parser::Parser::NoWav &&
-                 (note->Lane == mainLane || note->Lane == compensateLane);
-        })) playCalibrationKeysound();
-    return nullptr;
-  }
   const auto result = previewSimulation->pressLane(mainLane, compensateLane,
       {.songTimeMicros = inputTime,
        .laneBeamTimeMicros = previewElapsedMicros,
@@ -840,12 +828,6 @@ bms_parser::Note *SettingsScene::pressLane(int mainLane, int compensateLane,
 bms_parser::Note *SettingsScene::releaseLane(int lane, double inputDelay,
                                             bool isBackSpin) {
   if (!previewActive || (calibrationActive && previewPaused) || previewAutoPlay || !previewSimulation) return nullptr;
-  if (calibrationActive && calibrationDisplay) {
-    ui::invalidate();
-    if (previewPresentationEvents)
-      previewPresentationEvents->onLaneReleased(lane, previewElapsedMicros);
-    return nullptr;
-  }
   const auto result = previewSimulation->releaseLane(lane,
       {.songTimeMicros = previewInputTimeMicros(inputDelay),
        .laneBeamTimeMicros = previewElapsedMicros,

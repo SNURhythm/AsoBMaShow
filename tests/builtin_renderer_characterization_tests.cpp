@@ -2842,15 +2842,12 @@ struct SettingsScene {
   std::uint64_t previewFrameSerial = 0;
   int previewKeyMode = 7;
   bool calibrationActive = false;
-  bool calibrationDisplay = false;
-  int calibrationTapCount = 0;
-  int calibrationKeysoundCount = 0;
   bool calibrationLogicalJudgementLine = false;
   int calibrationAudioOffsetMs = 0;
   int calibrationVisualOffsetMs = 0;
   void updateCalibration() { std::abort(); }
-  void recordCalibrationTap(long long) { ++calibrationTapCount; }
-  void playCalibrationKeysound() { ++calibrationKeysoundCount; }
+  void recordCalibrationTap(long long) { std::abort(); }
+  void playCalibrationKeysound() { std::abort(); }
   long long previewInputTimeMicros(double) const { return previewElapsedMicros; }
   bool previewActive = true;
   bool previewPaused = false;
@@ -3526,44 +3523,6 @@ void verifyDenseCalibrationHasChartSizedJudgementBuffers() {
   expect(!scene.previewSimulation->scoreState().gaugeHistoryOverflowed() &&
              scene.previewSimulation->replayEvents().size() == chart->Meta.TotalNotes,
          "calibration retains complete gauge and judgement history past 4096 events");
-}
-
-void verifyDisplayCalibrationPreservesUpcomingNotes() {
-  const auto chart = settings_scene::makeCalibrationChart(7);
-  const auto model = buildPlayfieldChartVisualModel(*chart, 0);
-  PlayfieldVisualStateStore store(model);
-  Judge judge(chart->Meta.Rank);
-  BMSRenderer renderer(chart.get(), judge.timingWindows, 500, true);
-  SettingsScene scene;
-  scene.previewChart = chart.get();
-  scene.previewRenderer = &renderer;
-  scene.previewVisualStateStore = &store;
-  scene.previewChartVisualModel = &model;
-  for (const auto *timeline : chart->Measures.front()->TimeLines)
-    for (const auto *note : timeline->Notes)
-      if (note) scene.previewVisualNoteSources.push_back(note);
-  scene.previewPresentationEvents = std::make_unique<PlayfieldPresentationEventFanout>(store, renderer);
-  scene.resetPreviewHudSample();
-  scene.calibrationActive = scene.calibrationDisplay = true;
-  scene.calibrationVisualOffsetMs = 500;
-  // The first cue crosses visually at 3.5s, when the next note is due for judgement.
-  scene.previewElapsedMicros = 3'500'000;
-  scene.pressLane(3, 0);
-  expect(renderer.lanePressedForTesting(3), "display calibration retains lane press feedback");
-  scene.releaseLane(3, 0);
-  scene.capturePreviewVisualState();
-  expect(!renderer.lanePressedForTesting(3) && scene.calibrationTapCount == 1 &&
-             scene.calibrationKeysoundCount == 1,
-         "display calibration retains tap measurement, release feedback and keysound requests");
-  for (std::size_t index = 0; index < model.notes.size(); ++index)
-    expect(!scene.previewSimulation->noteState(static_cast<gameplay::NoteId>(index)).played,
-           "display calibration must not judge an upcoming visual cue");
-  expect(scene.previewPassedNotes == 0 && scene.previewScore == 0,
-         "display taps do not publish gameplay judgements");
-  scene.calibrationDisplay = false;
-  scene.pressLane(3, 0);
-  expect(scene.previewPassedNotes == 1,
-         "audio calibration continues to judge gameplay input");
 }
 
 void verifyPreviewInputTimingSamples() {
@@ -4448,7 +4407,6 @@ int main() {
   verifyPreviewNotesMoveThroughoutOpening();
   verifyPreviewScoreUsesRealJudgements();
   verifyDenseCalibrationHasChartSizedJudgementBuffers();
-  verifyDisplayCalibrationPreservesUpcomingNotes();
   verifyPreviewInputTimingSamples();
   verifyPreviewPause();
   verifyPausedAppearanceDraftUpdatesAndRestoresPreview();
