@@ -43,6 +43,8 @@ public:
   // never by re-enabling the built-in playfield.
   virtual void submitSyntheticStartLaneIndicators(
       RenderContext &, const skin::SyntheticStartLaneIndicatorFrameInput &) {}
+  virtual void submitLogicalJudgementLine(
+      RenderContext &, const skin::LogicalJudgementLineFrameInput &) {}
   [[nodiscard]] virtual std::optional<skin::SelectedSkinHudGeometry>
   selectedSkinHudGeometry(std::uint64_t) const {
     return std::nullopt;

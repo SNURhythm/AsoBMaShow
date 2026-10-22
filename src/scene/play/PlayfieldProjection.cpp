@@ -632,8 +632,9 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
     activity.damaged = reached && !activity.active;
     return activity;
   };
-  const auto isBeforeVisibleNoteStart =
+  const auto isNoteHidden =
       [&notes, &request, &timelines](const ChartVisualNote *note) {
+        if (request.hideNotes) return true;
         if (!request.minimumVisibleNoteTimeMicros || note == nullptr) {
           return false;
         }
@@ -833,7 +834,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
 #if defined(ASOBMASHOW_PLAYFIELD_PROJECTION_TESTING)
         ++workStats.noteDescriptorsExamined;
 #endif
-        if (isBeforeVisibleNoteStart(note)) {
+        if (isNoteHidden(note)) {
           continue;
         }
         const auto source = effectiveSource(*note);
@@ -916,8 +917,8 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
   std::unordered_set<ChartVisualId> candidateLongHeadIds;
   const auto appendCandidateLongHead =
       [&candidateLongHeads, &candidateLongHeadIds,
-       &isBeforeVisibleNoteStart](const ChartVisualNote *head) {
-        if (head != nullptr && head->inActiveSlot && !isBeforeVisibleNoteStart(head) &&
+       &isNoteHidden](const ChartVisualNote *head) {
+        if (head != nullptr && head->inActiveSlot && !isNoteHidden(head) &&
             candidateLongHeadIds.insert(head->id).second) {
           candidateLongHeads.push_back(head);
         }
@@ -934,7 +935,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
     if (consumedLongEndpoints.contains(note->id)) {
       return;
     }
-    if (isBeforeVisibleNoteStart(note)) {
+    if (isNoteHidden(note)) {
       return;
     }
     const auto timelineIt = timelines.find(note->timelineId);
@@ -1189,7 +1190,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
         continue;
       }
       for (const auto *note : row->second) {
-        if (isBeforeVisibleNoteStart(note)) {
+        if (isNoteHidden(note)) {
           continue;
         }
         const auto source = effectiveSource(*note);
@@ -1267,7 +1268,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
       };
   const auto appendBuiltInNote = [&](const ChartVisualNote &note,
                                      const ChartVisualTimeline &timeline) {
-    if (isBeforeVisibleNoteStart(&note)) {
+    if (isNoteHidden(&note)) {
       return;
     }
     if (note.kind == ChartVisualNoteKind::LongHead ||
@@ -1377,7 +1378,7 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
         headTimeline->timeMicros > tailTimelineIt->second->timeMicros) {
       continue;
     }
-    if (isBeforeVisibleNoteStart(head)) {
+    if (isNoteHidden(head)) {
       continue;
     }
     const auto *tailTimeline = tailTimelineIt->second;

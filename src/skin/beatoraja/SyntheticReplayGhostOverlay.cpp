@@ -253,6 +253,44 @@ selectedSkinHudGeometry(const SyntheticReplayGhostGeometry &geometry) {
                                  .laneCount = laneCount};
 }
 
+SkinCommandBuffer buildLogicalJudgementLineOverlay(
+    const SyntheticReplayGhostGeometry &geometry,
+    const LogicalJudgementLineFrameInput &input) {
+  SkinCommandBuffer result{.frameSerial = input.frameSerial};
+  if (input.frameSerial == 0 || input.frameSerial != geometry.frameSerial ||
+      !geometry.viewport.valid || !std::isfinite(input.scrollDelta) ||
+      !std::isfinite(input.hispeed) || input.hispeed < 0 ||
+      !std::isfinite(input.visibleLaneHeightRatio)) return result;
+  const double height = geometry.noteScrollHeight;
+  const double shift = input.scrollDelta * height * input.hispeed;
+  const auto &transform = geometry.viewport.authoredToUi;
+  const double scale = std::hypot(transform.m01, transform.m11);
+  if (!std::isfinite(height) || height <= 0 || !std::isfinite(geometry.noteOriginY) || !std::isfinite(shift) ||
+      !std::isfinite(scale) || scale <= 0) return result;
+  const double thickness = 1.5 / scale;
+  const double visibleRatio = std::clamp(input.visibleLaneHeightRatio, 0.0, 1.0);
+  const double top = geometry.visibleScroll
+      ? geometry.visibleScroll->visibleTopY - height * (1 - visibleRatio)
+      : geometry.sharedLaneOriginY + geometry.sharedLaneHeight - height * (1 - visibleRatio);
+  std::uint32_t ordinal = 0;
+  for (const auto &lane : geometry.lanes) {
+    if (!validRect(lane.normalNote) || !validRect(lane.clip)) continue;
+    const double y = geometry.noteOriginY + shift;
+    const double clipTop = std::min(lane.clip.y + lane.clip.height, top);
+    // A negative delay puts the logical line just below the drawn line.
+    // Keep that visible, while clipping the far edge to the lane cover.
+    const double bottom = std::min(lane.clip.y, y);
+    const AuthoredRect clip{.x = lane.clip.x, .y = bottom,
+                            .width = lane.clip.width, .height = clipTop - bottom};
+    const AuthoredRect line{.x = lane.normalNote.x, .y = y,
+                            .width = lane.normalNote.width, .height = thickness};
+    if (validRect(clip) && intersects(line, clip))
+      appendGhostStrip(result, geometry.viewport, line, clip,
+                       {0.0F, 229.0F / 255.0F, 1.0F, 1.0F}, ordinal++);
+  }
+  return result;
+}
+
 SkinCommandBuffer buildSyntheticReplayGhostOverlay(
     const SyntheticReplayGhostGeometry &geometry,
     const SyntheticReplayGhostFrameInput &input) {

@@ -394,6 +394,15 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
       }
     }
     if (pending.selectedSkinHudState) {
+      if (const auto delta = pending.selectedSkinHudState->configuration.logicalJudgementScrollDelta) {
+        try {
+          skin_->submitLogicalJudgementLine(context,
+              {.frameSerial = pending.frameSerial, .scrollDelta = *delta,
+               .hispeed = pending.replayGhostFrame.hispeed,
+               .visibleLaneHeightRatio = pending.startLaneIndicatorVisibleLaneHeightRatio});
+        } catch (...) {
+        }
+      }
       if (const auto geometry =
               skin_->selectedSkinHudGeometry(pending.frameSerial)) {
         try {

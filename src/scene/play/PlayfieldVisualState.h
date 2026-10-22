@@ -88,6 +88,8 @@ struct PlayfieldPresentationConfig {
   built_in_notes::SharedModeStyles builtInNotes;
   built_in_judge_line::Style builtInJudgeLine;
   built_in_lane::Style builtInLane;
+  // Optional calibration overlay, in the same bar units as note scroll.
+  std::optional<double> logicalJudgementScrollDelta;
   bool laneBeamClockUsesRenderTime = false;
   bool showInvisibleNotes = false;
   bool showPastNotes = false;

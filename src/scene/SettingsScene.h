@@ -332,6 +332,9 @@ private:
   settings_scene::CalibrationChartOptions calibrationChartOptions;
   bool calibrationActive = false;
   bool calibrationDisplay = false;
+  bool calibrationMetronomeMuted = false;
+  bool calibrationNotesHidden = false;
+  bool calibrationLogicalJudgementLine = false;
   bool calibrationAudioRunning = false;
   bool calibrationSavedAutoPlay = false;
   bool calibrationSavedRandomTiming = false;

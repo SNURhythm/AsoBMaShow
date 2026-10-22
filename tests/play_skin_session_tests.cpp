@@ -6035,6 +6035,76 @@ void testSelectedSkinHudUsesThePublishedSkinNoteLaneSpan() {
          "judgement line from published SkinNote geometry");
 }
 
+void testLogicalJudgementLineUsesSelectedLaneGeometry() {
+  SyntheticReplayGhostGeometry geometry{
+      .frameSerial = 9,
+      .viewport = {.authoredToUi = {.m00 = 1, .m11 = -1, .ty = 720},
+                   .drawableAuthoredBounds = {.x = 0, .y = 0, .width = 1280, .height = 720},
+                   .safeUiBounds = {.x = 0, .y = 0, .width = 1280, .height = 720},
+                   .valid = true},
+      .sharedLaneHeight = 500,
+      .noteOriginY = 100,
+      .noteScrollHeight = 500,
+      .lanes = {{.lane = 0,
+                 .normalNote = {.x = 100, .y = 100, .width = 30, .height = 8},
+                 .clip = {.x = 100, .y = 100, .width = 30, .height = 500}},
+                {.lane = 1,
+                 .normalNote = {.x = 140, .y = 250, .width = 30, .height = 8},
+                 .clip = {.x = 140, .y = 100, .width = 30, .height = 500}}}};
+  for (const double delta : {0.01, 0.0, -0.01}) {
+    const auto overlay = buildLogicalJudgementLineOverlay(
+        geometry, {.frameSerial = 9, .scrollDelta = delta, .hispeed = 2});
+    expect(overlay.commands.size() == 2, "logical line draws one thin strip per lane");
+    if (overlay.commands.empty()) continue;
+    const auto &quad = std::get<SkinPrimitiveCommand>(overlay.commands.front().payload);
+    expect(std::abs(quad.vertices.front().y - (620 - delta * 1000)) < 0.001,
+           "positive display delay moves the perfect-time line above the authored judgement line");
+    expect(std::abs(quad.vertices[0].y - quad.vertices[2].y) <= 2.01,
+           "logical line stays thin in UI coordinates");
+    const auto &second = std::get<SkinPrimitiveCommand>(overlay.commands.back().payload);
+    expect(second.vertices.front().y == quad.vertices.front().y,
+           "logical line uses the renderer's shared origin even when lane destinations differ");
+  }
+  expect(buildLogicalJudgementLineOverlay(
+      geometry, {.frameSerial = 10, .scrollDelta = 0.01, .hispeed = 2}).commands.empty(),
+      "logical line never uses stale skin geometry");
+}
+
+void testLogicalJudgementLineMatchesLiftedNotes() {
+  for (const float zoom : {1.0F, 2.0F}) {
+    SessionFixture fixture;
+    if (!fixture.ready()) return;
+    fixture.addTouchGeometry();
+    fixture.enableTouchLaneNotes();
+    ViewportSettings settings;
+    settings.centerPlayArea = zoom > 1;
+    settings.playAreaZoom = zoom;
+    fixture.session().setViewport(settings);
+    auto state = stateAt(1);
+    state.authority.liftEnabled = true;
+    state.authority.liftRatio = 0.2F;
+    auto projection = projectionAt(1);
+    projection.builtInTraversal = BuiltInRendererTraversal{.hispeed = 2.0F};
+    projection.notes.push_back({.lane = 0, .scrollDelta = 0.01});
+    const auto frame = fixture.session().prepareFrame(state, projection, {});
+    expect(frame.ready() && frame.evaluation.syntheticReplayGhostGeometry,
+           "lifted skin publishes its note geometry");
+    if (!frame.ready() || !frame.evaluation.syntheticReplayGhostGeometry) continue;
+    const auto overlay = buildLogicalJudgementLineOverlay(
+        *frame.evaluation.syntheticReplayGhostGeometry,
+        {.frameSerial = 1, .scrollDelta = 0.01, .hispeed = 2});
+    const auto note = std::ranges::find(frame.evaluation.submitReady->commands,
+        81, &SkinDrawCommand::sourceObject);
+    expect(note != frame.evaluation.submitReady->commands.end() && !overlay.commands.empty(),
+           "lifted notes and logical line both render");
+    if (note == frame.evaluation.submitReady->commands.end() || overlay.commands.empty()) continue;
+    const auto &quad = std::get<SkinTexturedQuadCommand>(note->payload);
+    const auto &line = std::get<SkinPrimitiveCommand>(overlay.commands.front().payload);
+    expect(std::abs(quad.vertices.front().y - line.vertices.front().y) < 0.001,
+           "logical line exactly matches perfect-time note travel with Lift, including cropped viewports");
+  }
+}
+
 void testPmsPoorDestinationUsesFirstSelectedSkinLane() {
   SessionFixture fixture;
   if (!fixture.ready()) {
@@ -11290,6 +11360,8 @@ int main(int argc, char **argv) {
   testEvaluatorFailureDiscardsWriterTransaction();
   testSerialMismatchDoesNotConsumeRuntimeFrame();
   testSyntheticReplayGhostUsesMatchingLaneGeometry();
+  testLogicalJudgementLineUsesSelectedLaneGeometry();
+  testLogicalJudgementLineMatchesLiftedNotes();
   testSelectedSkinHudUsesThePublishedSkinNoteLaneSpan();
   testPmsPoorDestinationUsesFirstSelectedSkinLane();
   testSyntheticStartLaneIndicatorsUseSelectedSkinLaneGeometry();

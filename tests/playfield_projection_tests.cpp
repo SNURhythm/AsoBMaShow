@@ -2139,5 +2139,18 @@ int main() {
     return EXIT_FAILURE;
   }
 
+  const auto hidden = projection.project(
+      builtInPlanModel, builtInPlanState,
+      {.hideNotes = true,
+       .builtInTraversal = BuiltInRendererTraversal{.judgeY = 0.0F,
+           .upperBound = 1.5F, .rxhs = 1.0F, .hispeed = 1.25F}});
+  if (!hidden.notes.empty() || !hidden.longNotes.empty() ||
+      !hidden.builtInPlan.notes.empty() || !hidden.builtInPlan.longNotes.empty() ||
+      hidden.lines.size() != builtInPlanResult.lines.size() ||
+      hidden.builtInPlan.traversedTimelineOrdinals.empty()) {
+    std::cerr << "hidden notes must preserve lane lines and timeline traversal\n";
+    return EXIT_FAILURE;
+  }
+
   return EXIT_SUCCESS;
 }

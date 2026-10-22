@@ -1,6 +1,7 @@
 #include "SettingsSceneShared.h"
 #include "../view/ScrollView.h"
 #include "../view/DropdownView.h"
+#include "../view/CheckboxButtonContent.h"
 #include <numbers>
 
 using namespace settings_scene;
@@ -73,7 +74,7 @@ void SettingsScene::startCalibrationAudio() {
     } else {
       // Use the same generated clicks, mixer, scheduling and clock as gameplay.
       prep_metronome::PrepMetronomePlan plan;
-      plan.enabled = true;
+      plan.enabled = !calibrationMetronomeMuted;
       const auto timing = calibrationTiming(calibrationChartOptions.bpm, calibrationChartOptions.beatsPerMeasure);
       int beat = 0;
       for (auto time = timing.firstClickMicros; time < timing.loopMicros; time += timing.beatMicros, ++beat)
@@ -284,6 +285,37 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
       std::to_string(calibrationChartOptions.beatsPerMeasure), {{"4", "4/4"}, {"3", "3/4"}},
       [this, restart](const std::string &id) { calibrationChartOptions.beatsPerMeasure = std::stoi(id); restart(); });
   body->addView(rhythm);
+  auto *aids = new View();
+  aids->setFlexDirection(FlexDirection::Row);
+  aids->setFlexWrap(YGWrapWrap);
+  aids->setGap(8);
+  const auto addToggle = [&](const char *key, bool &enabled, bool restartAudio) {
+    auto *content = new CheckboxButtonContent(i18n::tr(key), metrics.smallTextSize, 20);
+    content->setThemedColor(app_theme::textPrimary);
+    content->setChecked(enabled);
+    auto *button = new Button();
+    button->setHeight(metrics.actionButtonHeight);
+    button->setPadding(Edge::Left, 12);
+    button->setPadding(Edge::Right, 12);
+    button->setAlignItems(YGAlignCenter);
+    button->setJustifyContent(YGJustifyCenter);
+    button->setFlexShrink(0);
+    button->setCornerRadius(app_theme::controlRadius());
+    button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
+    button->addView(content);
+    button->setOnClickListener([this, value = &enabled, content, restartAudio] {
+      *value = !*value;
+      content->setChecked(*value);
+      // Start a fresh count-in with the changed sound schedule; taps survive.
+      if (restartAudio) previewRendererDirty = true;
+      ui::invalidate();
+    });
+    aids->addView(button);
+  };
+  addToggle("settings.calibration.mute_metronome", calibrationMetronomeMuted, true);
+  addToggle("settings.calibration.hide_notes", calibrationNotesHidden, false);
+  addToggle("settings.calibration.logical_line", calibrationLogicalJudgementLine, false);
+  body->addView(aids);
   auto *modes = new View();
   modes->setFlexDirection(FlexDirection::Row);
   modes->setFlexWrap(YGWrapWrap);

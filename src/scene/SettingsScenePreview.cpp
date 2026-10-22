@@ -279,6 +279,10 @@ void SettingsScene::syncPreviewPresentationConfiguration() {
   }
   auto configuration =
       previewPresentationConfiguration(context.settings, *previewChart, previewKeyMode, previewNoteStyles);
+  if (calibrationActive && calibrationLogicalJudgementLine)
+    configuration.logicalJudgementScrollDelta = calibrationLogicalJudgementScrollDelta(
+        calibrationVisualOffsetMs, context.settings.notesDisplayTimingMilliseconds,
+        previewChart->Meta.Bpm);
   if (appearanceColorPreview) appearanceColorPreview(configuration);
   previewVisualStateStore->setConfiguration(configuration);
   previewPresentation->configure(configuration);
@@ -292,6 +296,7 @@ PlayfieldProjectionResult SettingsScene::projectPreviewFrame() {
            ? std::optional<long long>(state.clock.visualTimeMicros +
                context.settings.notesDisplayTimingMilliseconds * 1000LL) : std::nullopt,
        .includeInvisibleNotes = state.configuration.showInvisibleNotes,
+       .hideNotes = calibrationActive && calibrationNotesHidden,
        .latePoorTimingMicros = previewRenderer->projectionLatePoorTimingMicros(),
        .pmsPoorDestination = previewPresentation->pmsPoorDestinationGeometry(),
        .buildBuiltInPlan = previewPresentation->activeMode() == PresentationMode::BuiltIn,

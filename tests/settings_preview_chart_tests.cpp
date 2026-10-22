@@ -259,6 +259,10 @@ void testCalibrationPatternsAndTempo() {
 }
 
 int main() {
+  assert(std::abs(settings_scene::calibrationLogicalJudgementScrollDelta(20, 0, 120) - 0.01) < 1e-9);
+  assert(std::abs(settings_scene::calibrationLogicalJudgementScrollDelta(-20, 0, 120) + 0.01) < 1e-9);
+  assert(settings_scene::calibrationLogicalJudgementScrollDelta(20, 20, 120) == 0.0);
+  assert(std::abs(settings_scene::calibrationLogicalJudgementScrollDelta(20, 0, 240) - 0.02) < 1e-9);
   testCalibrationPatternsAndTempo();
   testCalibration();
   testDenseAppearanceModesHaveCompletePreviewCharts();

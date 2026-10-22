@@ -6284,6 +6284,13 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
             .sharedLaneHeight =
                 layout->note->lanes.front().laneDestination.height,
             .visibleScroll = inputs.visibleScroll};
+        const auto laneCover = inputs.state.laneCoverState();
+        const double liftOffset = laneCover.supported && laneCover.liftEnabled
+            ? replayGhostGeometry.sharedLaneHeight * laneCover.lift : 0.0;
+        replayGhostGeometry.noteOriginY =
+            replayGhostGeometry.sharedLaneOriginY + liftOffset + offsetY;
+        replayGhostGeometry.noteScrollHeight = inputs.visibleScroll
+            ? inputs.visibleScroll->height : replayGhostGeometry.sharedLaneHeight - liftOffset;
         for (std::size_t laneIndex = 0; laneIndex < layout->note->lanes.size();
              ++laneIndex) {
           const auto &lane = layout->note->lanes[laneIndex];

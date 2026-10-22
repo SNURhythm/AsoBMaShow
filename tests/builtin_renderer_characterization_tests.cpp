@@ -8,6 +8,7 @@
 #include "rendering/common.h"
 #include "scene/play/BMSRenderer.h"
 #include "scene/SettingsPreviewChart.h"
+#include "scene/OffsetCalibration.h"
 #include "scene/SettingsSceneShared.h"
 #include "scene/play/StartLaneIndicatorGeometry.h"
 #include "settings/BuiltInNoteEditing.h"
@@ -155,6 +156,8 @@ std::string submissionKindName(characterization::SubmissionKind kind) {
     return "background";
   case Kind::JudgeLine:
     return "judgeLine";
+  case Kind::LogicalJudgeLine:
+    return "logicalJudgeLine";
   case Kind::MeasureLine:
     return "measureLine";
   case Kind::NormalNote:
@@ -2771,6 +2774,34 @@ void verifyGreenNumberUsesLiveConfiguredHispeed() {
          "controls note travel");
 }
 
+void verifyLogicalJudgementLine(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  const auto chart = settings_scene::makeCalibrationChart(7);
+  Judge judge(chart->Meta.Rank);
+  BMSRenderer renderer(chart.get(), judge.timingWindows, 500, false);
+  RenderContext context;
+  for (const auto delta : {std::optional<double>(0.01), std::optional<double>(-0.01),
+                            std::optional<double>()}) {
+    auto config = presentationConfig(0);
+    config.logicalJudgementScrollDelta = delta;
+    renderer.configure(config);
+    const auto traversal = renderer.projectionTraversal();
+    Recorder recorder;
+    renderer.setCharacterizationRecorder(&recorder);
+    renderer.render(context, 1'000'000, 1'000'000);
+    const auto line = std::ranges::find(recorder.submissions,
+        characterization::SubmissionKind::LogicalJudgeLine, &characterization::Submission::kind);
+    expect((line != recorder.submissions.end()) == delta.has_value(),
+           "logical judgement line is submitted only while enabled");
+    if (line != recorder.submissions.end())
+      expect(std::abs(line->rect.y - (traversal.judgeY + *delta * traversal.rxhs)) < 1e-5 &&
+                 line->rect.height < recorder.frames.back().noteRenderWidth * 0.02F,
+             "logical line uses the exact note traversal scale and stays thin");
+    renderer.setCharacterizationRecorder(nullptr);
+    bgfx::frame();
+  }
+}
+
 // The scene lifetime and disk persistence boundary are substituted. Extracted
 // editors, popup wiring, preview synchronization, widgets, renderer, camera,
 // input handler, and logical input pipeline are production code.
@@ -2810,6 +2841,7 @@ struct SettingsScene {
   std::uint64_t previewFrameSerial = 0;
   int previewKeyMode = 7;
   bool calibrationActive = false;
+  bool calibrationLogicalJudgementLine = false;
   int calibrationAudioOffsetMs = 0;
   int calibrationVisualOffsetMs = 0;
   void updateCalibration() { std::abort(); }
@@ -4250,6 +4282,7 @@ int main() {
                                         capturedCursorAdvanced);
       verifyVisibleTimeDurationUsesMilliseconds();
       verifyGreenNumberUsesLiveConfiguredHispeed();
+      verifyLogicalJudgementLine(target);
       verifyExplicitZeroConfiguredHispeedDoesNotFallBack();
       verifyBuiltInLiftMovesJudgementAndScrollOrigin(target);
       verifyPreparedFrameRetainsRecentJudgementIndicatorSamples();

@@ -23,6 +23,14 @@ inline CalibrationTiming calibrationTiming(int bpm = 120, int beatsPerMeasure = 
   return {beat, 2 * beat, firstNote, firstNote + kCalibrationBeats * beat};
 }
 
+// A perfectly timed note is at gameplay time, while its drawing uses
+// gameplay - visual offset + note-display timing. Scroll is measured in bars.
+inline double calibrationLogicalJudgementScrollDelta(int visualOffsetMs,
+                                                      int noteDisplayTimingMs,
+                                                      double bpm) {
+  return (visualOffsetMs - noteDisplayTimingMs) * bpm / 240'000.0;
+}
+
 // Measure against the unadjusted audio timeline: gameplay = raw + audio offset.
 // One observation per beat also rejects chords and touch/keyboard duplicates.
 class OffsetCalibration {
