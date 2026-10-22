@@ -1,5 +1,6 @@
 #include "Jukebox.h"
 #include "ChartVisualAssetResolver.h"
+#include "ChartAudioFileLookup.h"
 #include "../ArchiveSourceIdentity.h"
 #include "../targets.h"
 #if TARGET_OS_ANDROID
@@ -2707,43 +2708,59 @@ Jukebox::resolveSoundAssets(bms_parser::Chart &chart,
                             const ChartResourceTable &wavTable,
                             std::atomic_bool &isCancelled) {
   const auto audioExtensionViews = makeAudioExtensionViews();
-  std::unordered_map<path_t, ArchiveEntryLookup> lookups;
+  struct ArchiveRequests {
+    std::filesystem::path path;
+    std::vector<std::filesystem::path> innerPaths;
+    std::vector<std::size_t> positions;
+  };
+  std::unordered_map<path_t, ArchiveRequests> requests;
+  audio::ChartAudioFileLookup looseLookup(isCancelled);
   std::vector<ResolvedSoundAsset> assets;
   assets.reserve(wavTable.size());
 
   for (const auto &[wavId, wavPath] : wavTable) {
-    if (isCancelled) {
-      break;
-    }
-
-    const std::filesystem::path basePath =
-        chart.Meta.Folder / utf8_to_path_t(wavPath);
-    std::filesystem::path archivePath;
-    std::filesystem::path innerPath;
-    std::optional<std::filesystem::path> resolvedPath;
+    if (isCancelled) break;
+    const std::filesystem::path basePath = chart.Meta.Folder / utf8_to_path_t(wavPath);
+    std::filesystem::path archivePath, innerPath;
     if (archive_file::splitVirtualPath(basePath, archivePath, innerPath)) {
-      if (ArchiveEntryLookup *lookup = getArchiveLookup(archivePath, lookups)) {
-        if (const auto resolvedInner = lookup->find(innerPath,
-                                                    audioExtensionViews)) {
-          resolvedPath = archive_file::makeVirtualPath(archivePath,
-                                                       *resolvedInner);
-        }
-      }
+      auto &batch = requests[fspath_to_path_t(archivePath)];
+      batch.path = std::move(archivePath);
+      batch.innerPaths.push_back(std::move(innerPath));
+      batch.positions.push_back(assets.size());
+      assets.push_back({.id = wavId, .path = {}, .key = {}});
+    } else if (const auto resolved = looseLookup.Find(basePath, audioExtensionViews)) {
+      assets.push_back({.id = wavId, .path = *resolved, .key = fspath_to_path_t(*resolved)});
     } else {
-      resolvedPath =
-          archive_file::findFileWithExtensions(basePath, audioExtensionViews);
+      SDL_Log("Failed to load sound for all extensions: %s", fspath_to_utf8(basePath).c_str());
     }
-
-    if (!resolvedPath.has_value()) {
-      SDL_Log("Failed to load sound for all extensions: %s",
-              fspath_to_utf8(basePath).c_str());
-      continue;
-    }
-
-    const path_t key = fspath_to_path_t(*resolvedPath);
-    assets.push_back({.id = wavId, .path = *resolvedPath, .key = key});
   }
 
+  // Resolve only this chart's references against the existing index. Building a
+  // second complete archive listing and two filename maps scales with unrelated
+  // songs in a large archive, even when every requested sound is already decoded.
+  for (const auto &[key, batch] : requests) {
+    if (isCancelled) break;
+    std::vector<std::optional<std::filesystem::path>> resolved;
+    std::string error;
+    if (!archive_file::resolveArchiveEntriesWithExtensions(
+            batch.path, batch.innerPaths, audioExtensionViews, resolved, &error,
+            [&] { return !isCancelled.load(std::memory_order_relaxed); })) {
+      SDL_Log("Failed to resolve archive sounds: %s", error.c_str());
+      continue;
+    }
+    for (std::size_t index = 0; index < resolved.size(); ++index) {
+      if (isCancelled) break;
+      auto &asset = assets[batch.positions[index]];
+      if (!resolved[index]) {
+        SDL_Log("Failed to load sound for all extensions: %s",
+                fspath_to_utf8(batch.path / batch.innerPaths[index]).c_str());
+        continue;
+      }
+      asset.path = archive_file::makeVirtualPath(batch.path, *resolved[index]);
+      asset.key = fspath_to_path_t(asset.path);
+    }
+  }
+  std::erase_if(assets, [](const auto &asset) { return asset.path.empty(); });
   return assets;
 }
 
@@ -2857,6 +2874,9 @@ Jukebox::reconcileChartResources(
   std::vector<path_t> archiveBatchOrder;
   std::unordered_map<path_t, std::vector<int>> regularSoundIds;
   std::vector<path_t> regularSoundPaths;
+  const auto decodedCache = audio.decodedAssetCacheSnapshot();
+  std::unordered_map<path_t, std::optional<audio::DecodedAssetCache::ArchiveBatch>> cacheBatches;
+  std::unordered_map<path_t, std::shared_ptr<const audio::DecodedAssetCache::DecodedSound>> preparedSounds;
 
   if (sounds != nullptr) {
     std::unordered_set<path_t> oldPaths;
@@ -2874,7 +2894,15 @@ Jukebox::reconcileChartResources(
       bool reusable = oldPaths.contains(asset.key);
       std::filesystem::path archivePath;
       std::filesystem::path innerPath;
-      if (archive_file::splitVirtualPath(asset.path, archivePath, innerPath)) {
+      const bool archived = archive_file::splitVirtualPath(asset.path, archivePath, innerPath);
+      const audio::DecodedAssetCache::ArchiveBatch *cacheBatch = nullptr;
+      if (archived && decodedCache) {
+        const auto archiveKey = fspath_to_path_t(archivePath.lexically_normal());
+        auto [batch, inserted] = cacheBatches.try_emplace(archiveKey);
+        if (inserted) batch->second = decodedCache->BeginArchiveBatch(archivePath);
+        if (batch->second) cacheBatch = &*batch->second;
+      }
+      if (archived) {
         const auto archiveKey = fspath_to_path_t(archivePath.lexically_normal());
         auto [identity, inserted] = currentIdentities.try_emplace(archiveKey);
         if (inserted) {
@@ -2894,10 +2922,19 @@ Jukebox::reconcileChartResources(
                    previous != soundArchiveIdentities.end() &&
                    previous->second == identity->second;
       }
+      // Resolve cached archive sounds once against a shared source snapshot.
+      // Repeating Contains + Load would re-resolve the indexed filename and
+      // revalidate the same archive for every keysound. Check the batch again
+      // before returning success, after all sound/visual preparation has joined.
+      std::shared_ptr<const audio::DecodedAssetCache::DecodedSound> prepared;
+      if (!reusable && cacheBatch) {
+        prepared = decodedCache->FindArchiveAsset(*cacheBatch, asset.path);
+        if (prepared) preparedSounds.emplace(asset.key, prepared);
+      }
       if (reusable) {
         retainedSounds[asset.id] = asset.key;
         retainedPaths.insert(asset.key);
-      } else if (audio.hasCachedDecodedAsset(asset.key) ||
+      } else if (!archived || prepared ||
                  !addArchiveChartAssetTarget(
                      archiveBatches, archiveBatchOrder, asset.path, asset.id,
                      ArchiveChartAssetKind::Sound)) {
@@ -2951,9 +2988,12 @@ Jukebox::reconcileChartResources(
   std::mutex soundMapMutex;
   parallel_for_each_index(regularSoundPaths.size(), [&](size_t index) {
     const auto &path = regularSoundPaths[index];
-    if (isCancelled || !audio.loadSound(path, isCancelled)) {
-      return;
-    }
+    if (isCancelled) return;
+    const auto prepared = preparedSounds.find(path);
+    const bool loaded = prepared != preparedSounds.end()
+        ? audio.loadPreparedSound(path, *prepared->second, isCancelled)
+        : audio.loadSound(path, isCancelled);
+    if (!loaded) return;
     std::lock_guard<std::mutex> lock(soundMapMutex);
     for (const int id : regularSoundIds.at(path)) {
       wavTableAbs[id] = path;
@@ -3056,6 +3096,18 @@ Jukebox::reconcileChartResources(
           fspath_to_utf8(batch.archivePath) +
           " targets=" + std::to_string(batch.innerPaths.size()) +
           " files=" + std::to_string(consumedPaths.size()));
+    }
+  }
+  for (const auto &[key, batch] : cacheBatches) {
+    if (batch && !decodedCache->ArchiveBatchUnchanged(*batch)) {
+      // Never publish a mixture of cached old PCM and newly extracted data.
+      // Preparation runs with the playback session stopped.
+      const auto unloaded = audio.unloadSounds();
+      if (!unloaded.success) return unloaded;
+      wavTableAbs.clear();
+      soundArchiveIdentities.clear();
+      return {.success = false,
+              .diagnostic = "Jukebox::reconcileChartResources: audio archive changed during preparation"};
     }
   }
   return {.success = true};

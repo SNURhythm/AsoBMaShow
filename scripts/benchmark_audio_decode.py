@@ -22,6 +22,9 @@ parser.add_argument('--baseline', required=True, help='Git revision before the d
 parser.add_argument('--files-from', type=Path, required=True, help='One local audio path per line')
 parser.add_argument('--build-dir', type=Path, default=root / 'cmake-build-debug')
 parser.add_argument('--output', type=Path)
+parser.add_argument('--profile', action='store_true', help='Enable per-stage clocks (adds timing overhead)')
+parser.add_argument('--release-audio-libs', action='store_true',
+                    help='Use the existing release libsndfile and codec libraries for both decoders')
 options = parser.parse_args()
 build = options.build_dir.resolve()
 out = (options.output or Path(tempfile.mkdtemp(prefix='asobmashow-audio-'))).resolve()
@@ -59,8 +62,14 @@ for entry in commands:
     args = [arg for arg in args if arg not in
             ('-g', '-O0', '-O1', '-O2', '-O3', '-Os', '-Oz', '-Ofast')]
     args.extend(['-O2', '-g0', '-DASOBMASHOW_AUDIO_DECODE_BENCHMARK=1'])
+    if options.profile:
+        args.append('-DASOBMASHOW_AUDIO_DECODE_PROFILE=1')
     jobs.append((args, entry['directory']))
     if Path(entry['file']) == root / 'src/audio/decoder.cpp':
+        cache_args = args.copy()
+        cache_args[cache_args.index('-c') + 1] = str(root / 'src/audio/DecodedAssetCache.cpp')
+        cache_args[cache_args.index('-o') + 1] = str(out / 'decoded-asset-cache.o')
+        jobs.append((cache_args, entry['directory']))
         previous = args.copy()
         previous[previous.index('-o') + 1] = str(out / 'baseline-decoder.o')
         previous[previous.index('-c') + 1] = str(baseline)
@@ -95,7 +104,17 @@ tokens = shlex.split(link)
 if tokens[:2] != [':', '&&'] or tokens[-2:] != ['&&', ':'] or tokens.count('&&') != 2:
     raise RuntimeError('Unsupported link command; expected the CMake Unix Ninja layout')
 args = [objects.get(arg, arg) for arg in tokens[2:-2]]
+if options.release_audio_libs:
+    audio_libraries = {'libsndfile.a', 'libvorbis.a', 'libvorbisenc.a', 'libogg.a',
+                       'libFLAC.a', 'libopus.a', 'libmpg123.a', 'libmp3lame.a'}
+    for index, arg in enumerate(args):
+        if Path(arg).name in audio_libraries and '/debug/lib/' in arg:
+            release = arg.replace('/debug/lib/', '/lib/')
+            if not (build / release).is_file():
+                raise RuntimeError('Missing release audio library: ' + release)
+            args[index] = release
 args.insert(1, str(out / 'baseline-decoder.o'))
+args.insert(1, str(out / 'decoded-asset-cache.o'))
 args[args.index('-o') + 1] = str(out / 'benchmark')
 subprocess.run(args, cwd=build, check=True)
 manifest = {
@@ -103,7 +122,8 @@ manifest = {
     'baseline_decoder_sha256': hashlib.sha256(baseline.read_bytes()).hexdigest(),
     'current_decoder_sha256': hashlib.sha256((root / 'src/audio/decoder.cpp').read_bytes()).hexdigest(),
     'compile_commands': [args for args, _ in jobs], 'link_command': args,
-    'dependency_build': str(build),
+    'dependency_build': str(build), 'release_audio_libs': options.release_audio_libs,
+    'profile': options.profile,
 }
 (out / 'commands.json').write_text(json.dumps(manifest, indent=2) + '\n')
 log = out / 'benchmark.log'

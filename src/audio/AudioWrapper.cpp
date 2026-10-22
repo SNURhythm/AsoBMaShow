@@ -939,6 +939,18 @@ bool AudioWrapper::hasCachedDecodedAsset(const path_t &path) const {
   return cache && cache->Contains(std::filesystem::path(path));
 }
 
+std::shared_ptr<audio::DecodedAssetCache> AudioWrapper::decodedAssetCacheSnapshot() const {
+  std::lock_guard lock(soundDataListMutex);
+  return decodedAssetCache;
+}
+
+bool AudioWrapper::loadPreparedSound(
+    const path_t &path, const audio::DecodedAssetCache::DecodedSound &sound,
+    std::atomic<bool> &isCancelled) {
+  return loadDecodedSound(path, sound.pcm, sound.info.channels,
+                           sound.info.samplerate, isCancelled, &sound);
+}
+
 bool AudioWrapper::loadSound(const path_t &path,
                              std::atomic<bool> &isCancelled) {
   std::shared_ptr<audio::DecodedAssetCache> cache;

@@ -769,6 +769,45 @@ void testArchivedChartReusesSharedSoundsAndInvalidatesReplacement(bool sevenZip)
           "empty chart retires all old assets");
 }
 
+void testArchivedHandoffRejectsSourceChangeDuringPreparation() {
+  TemporaryArchivedVisualFixture fixture;
+  writeChartArchive(fixture.archivePath,
+                    {{"song/cached.wav", shortWave()},
+                     {"song/uncached.wav", shortWave()}});
+  std::atomic_bool cancelled{false};
+  auto cache = std::make_shared<audio::DecodedAssetCache>();
+  require(bool(cache->Load(fixture.archivePath / "song/cached.wav", cancelled)),
+          "prepare one archived keysound before handoff");
+  const auto beforeHits = cache->GetStatistics().cacheHitFrames;
+  const auto modified = std::filesystem::last_write_time(fixture.archivePath);
+  std::atomic_bool changed{false};
+  struct ResetNormalizer {
+    ~ResetNormalizer() { archive_file::setCachePathNormalizer({}); }
+  } reset;
+  // The uncached entry's extraction consults the source after the cached PCM
+  // has been found. Mutate there without sleeps or a racing background thread.
+  archive_file::setCachePathNormalizer([&](std::filesystem::path &path) {
+    if (path == fixture.archivePath &&
+        cache->GetStatistics().cacheHitFrames > beforeHits && !changed.exchange(true))
+      std::filesystem::last_write_time(path, modified + std::chrono::seconds(1));
+  });
+  Stopwatch stopwatch;
+  Jukebox jukebox(&stopwatch,
+                  std::make_unique<TestFactory>(std::make_shared<BackendControl>()));
+  jukebox.setDecodedAssetCache(cache);
+  bms_parser::Chart chart;
+  chart.Meta.Folder = fixture.archivePath / "song";
+  chart.Meta.BmsPath = chart.Meta.Folder / "chart.bms";
+  chart.ReferencedWavTable = {{1, "cached.wav"}, {2, "uncached.wav"}};
+  const auto loaded = jukebox.loadChartPreservingDevice(chart, true, cancelled);
+  archive_file::setCachePathNormalizer({});
+  require(changed && !loaded.success && !jukebox.hasLoadedResources(),
+          "source change during handoff fails and retires partially attached PCM");
+  require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success &&
+              jukebox.resolveRealtimeKeySound(1) && jukebox.resolveRealtimeKeySound(2),
+          "next preparation can load the changed archive cleanly");
+}
+
 void testArchivedChartReloadsPreservedMetadataReplacement(bool sevenZip,
                                                         bool replaceFile) {
   TemporaryArchivedVisualFixture fixture;
@@ -795,8 +834,15 @@ void testArchivedChartReloadsPreservedMetadataReplacement(bool sevenZip,
   chart.Meta.BmsPath = chart.Meta.Folder / "chart.bms";
   chart.ReferencedWavTable = {{1, "shared.wav"}};
   std::atomic_bool cancelled = false;
+  auto cache = std::make_shared<audio::DecodedAssetCache>();
+  require(bool(cache->Load(chart.Meta.Folder / "shared.wav", cancelled)),
+          "preview caches the original archive PCM");
+  const auto previewFrames = cache->GetStatistics().decodedFrames;
+  jukebox.setDecodedAssetCache(cache);
   require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success,
           "original archive sound loads");
+  require(cache->GetStatistics().decodedFrames == previewFrames,
+          "archive handoff reuses the prepared decode");
   const auto original = jukebox.resolveRealtimeKeySound(1);
   require(original && original->valid(), "original decoded sound is live");
   auto renderSound = [&] {
@@ -1228,6 +1274,7 @@ void testPausedSchedulerSleepsAndWakesForResumeAndStop() {
           "stop promptly wakes and joins the paused scheduler");
 }
 
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -1238,6 +1285,7 @@ int main(int argc, char **argv) {
   require(bgfx::init(init), "headless bgfx initializes for image resources");
 
   try {
+    testArchivedHandoffRejectsSourceChangeDuringPreparation();
     testGameplaySharesPreparedPcm();
     testPreviewGameplayPreparationRetainsVisuals();
     testUnicodeChartAssetReferences();

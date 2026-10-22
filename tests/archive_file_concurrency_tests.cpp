@@ -6,6 +6,7 @@
 #include "fixtures/archive/rar_fixtures.h"
 #include "fixtures/archive/sevenzip_block_fixtures.h"
 #include "fixtures/archive/mixed_encryption_sevenzip.h"
+#include "fixtures/archive/zip64_metadata_fixture.h"
 
 #include <archive_entry.h>
 
@@ -14,6 +15,7 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <clocale>
 #include <condition_variable>
 #include <cstdint>
 #include <cstring>
@@ -752,7 +754,7 @@ void testBatchCancellationDoesNotRestartFallback(bool sevenZip, bool ranged) {
   }
 }
 
-void testCachedSevenZipHandleWaitCancellation(int operation) {
+void testIndependentSevenZipHandleConsumers(int operation) {
   TempDirectory temporary;
   const auto archivePath = temporary.path() / "held-handle.7z";
   writeSevenZip(archivePath, "entry");
@@ -784,7 +786,7 @@ void testCachedSevenZipHandleWaitCancellation(int operation) {
   std::vector<archive_file::FileData> files;
   std::vector<unsigned char> bytes;
   auto waiter = std::async(std::launch::async, [&] {
-    auto checkpoint = [&] { return ++checkpoints != 32 || operation == 5; };
+    auto checkpoint = [&] { ++checkpoints; return true; };
     switch (operation) {
     case 0:
       return archive_file::readArchiveEntries(
@@ -810,7 +812,7 @@ void testCachedSevenZipHandleWaitCancellation(int operation) {
           nullptr, checkpoint).has_value();
     }
   });
-  const bool cancelledWhileHeld =
+  const bool completedWhileHeld =
       waiter.wait_for(10s) == std::future_status::ready;
   assert(holder.wait_for(0s) == std::future_status::timeout);
   releaseHolder.set_value();
@@ -818,12 +820,12 @@ void testCachedSevenZipHandleWaitCancellation(int operation) {
   assert(holder.get());
   assert(waiter.wait_for(10s) == std::future_status::ready);
   const bool read = waiter.get();
-  assert(cancelledWhileHeld);
-  assert(read == (operation == 5));
-  if (operation != 5) assert(checkpoints == 32);
-  assert(files.empty());
-  assert(bytes.empty());
-  assert(error == (operation == 5 ? "" : "Operation cancelled"));
+  assert(completedWhileHeld);
+  assert(read);
+  assert(checkpoints > 0);
+  if (operation <= 2) assert(files.size() == 1);
+  if (operation == 3) assert(std::string(bytes.begin(), bytes.end()) == "entry");
+  assert(error.empty());
 
   error.clear();
   assert(archive_file::readArchiveEntries(
@@ -1346,6 +1348,79 @@ void testBoundedReadRejectsOversizedSevenZipEntry() {
       payload.size() - 1U, &error));
   assert(bytes.empty());
   assert(error.find("exceeds bounded read limit") != std::string::npos);
+}
+
+void testBzipZipFallbackUsesNamesAfterFilteredMetadata() {
+  // Python zipfile ZIP_BZIP2: .DS_Store precedes two supported media paths.
+  // miniz indexes the raw positions 1 and 2; libarchive skips .DS_Store.
+  constexpr unsigned char fixture[] = {
+      0x50,0x4b,0x03,0x04,0x2e,0x00,0x00,0x00,0x0c,0x00,0x00,0x00,0x21,0x5c,0x14,0x34,
+      0x14,0x4f,0x2b,0x00,0x00,0x00,0x08,0x00,0x00,0x00,0x09,0x00,0x00,0x00,0x2e,0x44,
+      0x53,0x5f,0x53,0x74,0x6f,0x72,0x65,0x42,0x5a,0x68,0x39,0x31,0x41,0x59,0x26,0x53,
+      0x59,0x01,0xfe,0xbf,0xbc,0x00,0x00,0x02,0x81,0x80,0x26,0x02,0x04,0x00,0x20,0x00,
+      0x30,0xcd,0x00,0xc1,0xa0,0xad,0x21,0x38,0xbb,0x92,0x29,0xc2,0x84,0x80,0x0f,0xf5,
+      0xfd,0xe0,0x50,0x4b,0x03,0x04,0x2e,0x00,0x00,0x00,0x0c,0x00,0x00,0x00,0x21,0x5c,
+      0x57,0xee,0x71,0x92,0x2a,0x00,0x00,0x00,0x05,0x00,0x00,0x00,0x09,0x00,0x00,0x00,
+      0x66,0x69,0x72,0x73,0x74,0x2e,0x77,0x61,0x76,0x42,0x5a,0x68,0x39,0x31,0x41,0x59,
+      0x26,0x53,0x59,0xb2,0x39,0x0b,0xdd,0x00,0x00,0x00,0x01,0x80,0x01,0x20,0x1c,0x00,
+      0x20,0x00,0x21,0x83,0x41,0x9a,0x02,0x5c,0x71,0x77,0x24,0x53,0x85,0x09,0x0b,0x23,
+      0x90,0xbd,0xd0,0x50,0x4b,0x03,0x04,0x2e,0x00,0x00,0x00,0x0c,0x00,0x00,0x00,0x21,
+      0x5c,0x69,0x11,0x1f,0xb6,0x2a,0x00,0x00,0x00,0x06,0x00,0x00,0x00,0x0a,0x00,0x00,
+      0x00,0x73,0x65,0x63,0x6f,0x6e,0x64,0x2e,0x77,0x61,0x76,0x42,0x5a,0x68,0x39,0x31,
+      0x41,0x59,0x26,0x53,0x59,0x26,0x8a,0x02,0x34,0x00,0x00,0x02,0x81,0x80,0x0e,0x01,
+      0x88,0x00,0x20,0x00,0x22,0x18,0x68,0x30,0x07,0x02,0x98,0x5d,0xc9,0x14,0xe1,0x42,
+      0x40,0x9a,0x28,0x08,0xd0,0x50,0x4b,0x01,0x02,0x2e,0x03,0x2e,0x00,0x00,0x00,0x0c,
+      0x00,0x00,0x00,0x21,0x5c,0x14,0x34,0x14,0x4f,0x2b,0x00,0x00,0x00,0x08,0x00,0x00,
+      0x00,0x09,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x80,0x01,0x00,
+      0x00,0x00,0x00,0x2e,0x44,0x53,0x5f,0x53,0x74,0x6f,0x72,0x65,0x50,0x4b,0x01,0x02,
+      0x2e,0x03,0x2e,0x00,0x00,0x00,0x0c,0x00,0x00,0x00,0x21,0x5c,0x57,0xee,0x71,0x92,
+      0x2a,0x00,0x00,0x00,0x05,0x00,0x00,0x00,0x09,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+      0x00,0x00,0x00,0x00,0x80,0x01,0x52,0x00,0x00,0x00,0x66,0x69,0x72,0x73,0x74,0x2e,
+      0x77,0x61,0x76,0x50,0x4b,0x01,0x02,0x2e,0x03,0x2e,0x00,0x00,0x00,0x0c,0x00,0x00,
+      0x00,0x21,0x5c,0x69,0x11,0x1f,0xb6,0x2a,0x00,0x00,0x00,0x06,0x00,0x00,0x00,0x0a,
+      0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x80,0x01,0xa3,0x00,0x00,
+      0x00,0x73,0x65,0x63,0x6f,0x6e,0x64,0x2e,0x77,0x61,0x76,0x50,0x4b,0x05,0x06,0x00,
+      0x00,0x00,0x00,0x03,0x00,0x03,0x00,0xa6,0x00,0x00,0x00,0xf5,0x00,0x00,0x00,0x00,
+      0x00,
+  };
+  TempDirectory temporary;
+  const auto path = temporary.path() / "metadata-bzip.zip";
+  {
+    std::ofstream output(path, std::ios::binary);
+    output.write(reinterpret_cast<const char *>(fixture), sizeof(fixture));
+  }
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(path, entries) && entries.size() == 2);
+  assert(entries[0].order == 1 && entries[1].order == 2);
+  const std::vector<std::filesystem::path> paths{"first.wav", "second.wav"};
+  std::vector<std::string> contents;
+  const auto consume = [&](archive_file::FileData &&file) {
+    contents.emplace_back(file.bytes.begin(), file.bytes.end());
+    return true;
+  };
+  std::string error;
+  assert(archive_file::readArchiveEntriesStreamingBounded(path, paths, consume, 6, &error));
+  assert((contents == std::vector<std::string>{"first", "second"}));
+  contents.clear();
+  archive_file::BoundedArchiveReader retained(path);
+  assert(retained.read(paths, consume, 6, &error));
+  assert((contents == std::vector<std::string>{"first", "second"}));
+  contents.clear();
+  assert(archive_file::readArchiveEntriesStreaming(path, paths, consume, &error));
+  assert((contents == std::vector<std::string>{"first", "second"}));
+  std::vector<archive_file::FileData> files;
+  assert(archive_file::readArchiveEntries(path, paths, files, &error) && files.size() == 2);
+  assert(std::string(files[0].bytes.begin(), files[0].bytes.end()) == "first");
+  assert(std::string(files[1].bytes.begin(), files[1].bytes.end()) == "second");
+  assert(archive_file::readArchiveEntriesInRange(path, paths, {2, 2}, files, &error));
+  assert(files.size() == 1 && files.front().path == "second.wav");
+  assert(std::string(files.front().bytes.begin(), files.front().bytes.end()) == "second");
+  contents.clear();
+  assert(!retained.read(paths, consume, 4, &error) && contents.empty());
+  unsigned callbacks = 0;
+  assert(!archive_file::readArchiveEntriesStreaming(path, paths,
+      [&](auto &&) { ++callbacks; return false; }, &error));
+  assert(callbacks == 1);
 }
 
 void testBzipZipFallbackStopsBeforeOversizedAllocation() {
@@ -3906,6 +3981,481 @@ void testTemporaryCacheFacadeUsesPrivateRootAndLiveProtectionIdentity() {
   assert(error == "Materialize cancelled." && !std::filesystem::exists(root));
 }
 
+void testCompressedTarForwardCursorReuse(std::string extension = ".tar.gz") {
+  TempDirectory temporary;
+  const auto path = temporary.path() / ("forward" + extension);
+  constexpr std::size_t payloadSize = 32 * 1024 + 17;
+  const auto payloadFor = [](unsigned index) {
+    std::string payload(payloadSize, '\0');
+    std::uint32_t random = index + 1;
+    for (auto &byte : payload) { random = random * 1664525U + 1013904223U; byte = static_cast<char>(random >> 24); }
+    return payload;
+  };
+  {
+    auto writer = makeArchiveWriteHandle();
+    assert(archive_write_set_format_pax_restricted(writer.get()) == ARCHIVE_OK);
+    if (extension == ".tar.gz") assert(archive_write_add_filter_gzip(writer.get()) == ARCHIVE_OK);
+    if (extension == ".tar.bz2") assert(archive_write_add_filter_bzip2(writer.get()) == ARCHIVE_OK);
+    if (extension == ".tar.xz") assert(archive_write_add_filter_xz(writer.get()) == ARCHIVE_OK);
+    if (extension == ".tar.zst") assert(archive_write_add_filter_zstd(writer.get()) == ARCHIVE_OK);
+    assert(archive_write_open_filename(writer.get(), path.string().c_str()) == ARCHIVE_OK);
+    for (unsigned i = 0; i < 6; ++i) {
+      ArchiveEntryHandle entry(archive_entry_new(), archive_entry_free);
+      const auto name = std::to_string(i) + ".txt";
+      const auto payload = payloadFor(i);
+      archive_entry_set_pathname(entry.get(), name.c_str());
+      archive_entry_set_filetype(entry.get(), AE_IFREG);
+      archive_entry_set_size(entry.get(), payload.size());
+      assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+      assert(archive_write_data(writer.get(), payload.data(), payload.size()) == static_cast<la_ssize_t>(payload.size()));
+    }
+    assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+  }
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(path, entries));
+  const auto before = archive_file::archiveReaderStatsForTesting();
+  for (unsigned i = 0; i < 6; ++i) {
+    const auto name = std::to_string(i) + ".txt";
+    const auto virtualPath = archive_file::makeVirtualPath(path, name);
+    auto consume = [&](archive_file::FileData &&file) {
+      assert(std::string(file.bytes.begin(), file.bytes.end()) == payloadFor(i));
+      return true;
+    };
+    std::vector<archive_file::FileData> files;
+    std::vector<unsigned char> bytes;
+    switch (i) {
+    case 0: assert(archive_file::readArchiveEntriesStreamingBounded(path, {name}, consume, payloadSize)); break;
+    case 1: assert(archive_file::readArchiveEntriesStreaming(path, {name}, consume)); break;
+    case 2:
+      assert(archive_file::readArchiveEntries(path, {name}, files) && files.size() == 1);
+      assert(consume(std::move(files.front()))); break;
+    case 3:
+      assert(archive_file::readFileBounded(virtualPath, bytes, payloadSize));
+      assert(std::string(bytes.begin(), bytes.end()) == payloadFor(3)); break;
+    case 4:
+      assert(archive_file::readFile(virtualPath, bytes));
+      assert(std::string(bytes.begin(), bytes.end()) == payloadFor(4)); break;
+    default:
+      assert(archive_file::readArchiveEntriesInRange(path, {name}, {i, i}, files) && files.size() == 1);
+      assert(consume(std::move(files.front()))); break;
+    }
+  }
+  const auto after = archive_file::archiveReaderStatsForTesting();
+  const bool retained = extension == ".tar.gz" || extension == ".tar.bz2";
+  assert(after.libarchiveOpens == before.libarchiveOpens + (retained ? 1 : 6));
+  assert(after.libarchiveHeaders == before.libarchiveHeaders + (retained ? 6 : 21));
+  std::vector<unsigned char> earlier;
+  assert(archive_file::readFileBounded(archive_file::makeVirtualPath(path, "0.txt"), earlier, payloadSize));
+  assert(std::string(earlier.begin(), earlier.end()) == payloadFor(0));
+  assert(archive_file::archiveReaderStatsForTesting().libarchiveOpens == after.libarchiveOpens + 1);
+
+  const auto replacement = temporary.path() / ("replacement" + extension);
+  const auto mtime = std::filesystem::last_write_time(path);
+  std::filesystem::copy_file(path, replacement);
+  std::filesystem::last_write_time(replacement, mtime);
+  std::filesystem::rename(replacement, path);
+  const auto replacementOpens = archive_file::archiveReaderStatsForTesting().libarchiveOpens;
+  assert(archive_file::readFileBounded(archive_file::makeVirtualPath(path, "1.txt"), earlier, payloadSize));
+  assert(std::string(earlier.begin(), earlier.end()) == payloadFor(1));
+  // Replacement rebuilds the index and opens a fresh payload cursor.
+  assert(archive_file::archiveReaderStatsForTesting().libarchiveOpens == replacementOpens + 2);
+  unsigned cancelledCallbacks = 0;
+  assert(!archive_file::readArchiveEntriesStreamingBounded(path, {"2.txt"},
+      [&](auto &&) { ++cancelledCallbacks; return false; }, payloadSize));
+  assert(cancelledCallbacks == 1);
+  const auto failedOpens = archive_file::archiveReaderStatsForTesting().libarchiveOpens;
+  assert(archive_file::readFileBounded(archive_file::makeVirtualPath(path, "3.txt"), earlier, payloadSize));
+  assert(std::string(earlier.begin(), earlier.end()) == payloadFor(3));
+  assert(archive_file::archiveReaderStatsForTesting().libarchiveOpens == failedOpens + 1);
+}
+
+void testTarGlobalPaxUsesSequentialReader() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "global.tar";
+  const auto members = temporary.path() / "members.tar";
+  {
+    auto writer = makeArchiveWriteHandle();
+    assert(archive_write_set_format_ustar(writer.get()) == ARCHIVE_OK);
+    assert(archive_write_open_filename(writer.get(), members.string().c_str()) == ARCHIVE_OK);
+    for (const auto *name : {"first.bin", "last.bin"}) {
+      ArchiveEntryHandle entry(archive_entry_new(), archive_entry_free);
+      archive_entry_set_pathname(entry.get(), name);
+      archive_entry_set_filetype(entry.get(), AE_IFREG);
+      archive_entry_set_size(entry.get(), 4);
+      assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+      assert(archive_write_data(writer.get(), "data", 4) == 4);
+    }
+    assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+  }
+  std::array<char, 512> header{};
+  std::memcpy(header.data(), "GlobalPax", 9);
+  std::snprintf(header.data() + 100, 8, "%07o", 0644);
+  std::snprintf(header.data() + 108, 8, "%07o", 0);
+  std::snprintf(header.data() + 116, 8, "%07o", 0);
+  const std::string attributes = "11 uid=123\n";
+  std::snprintf(header.data() + 124, 12, "%011llo", static_cast<unsigned long long>(attributes.size()));
+  std::snprintf(header.data() + 136, 12, "%011o", 0);
+  std::memset(header.data() + 148, ' ', 8);
+  header[156] = 'g';
+  std::memcpy(header.data() + 257, "ustar", 5);
+  std::memcpy(header.data() + 263, "00", 2);
+  unsigned checksum = 0;
+  for (const unsigned char value : header) checksum += value;
+  std::snprintf(header.data() + 148, 7, "%06o", checksum);
+  header[155] = ' ';
+  {
+    std::ofstream output(path, std::ios::binary);
+    output.write(header.data(), header.size());
+    output.write(attributes.data(), attributes.size());
+    const std::string padding(512 - attributes.size(), '\0');
+    output.write(padding.data(), padding.size());
+    std::ifstream input(members, std::ios::binary);
+    output << input.rdbuf();
+  }
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(path, entries) && entries.size() == 2);
+  const auto before = archive_file::archiveReaderStatsForTesting().libarchiveHeaders;
+  std::vector<unsigned char> bytes;
+  assert(archive_file::readFileBounded(archive_file::makeVirtualPath(path, "last.bin"), bytes, 4));
+  assert(std::string(bytes.begin(), bytes.end()) == "data");
+  assert(archive_file::archiveReaderStatsForTesting().libarchiveHeaders == before + 2);
+}
+
+void testTarSparseAndPersistedOffsetValidation() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "sparse.tar";
+  const auto cache = temporary.path() / "cache";
+  std::string payload(128 * 1024 + 7, '\0');
+  payload.replace(0, 4, "head");
+  payload.replace(payload.size() - 4, 4, "tail");
+  {
+    auto writer = makeArchiveWriteHandle();
+    assert(archive_write_set_format_pax(writer.get()) == ARCHIVE_OK);
+    assert(archive_write_open_filename(writer.get(), path.string().c_str()) == ARCHIVE_OK);
+    for (unsigned i = 0; i < 2; ++i) {
+      ArchiveEntryHandle entry(archive_entry_new(), archive_entry_free);
+      archive_entry_set_pathname(entry.get(), i ? "sparse.wav" : "earlier.txt");
+      archive_entry_set_filetype(entry.get(), AE_IFREG);
+      archive_entry_set_size(entry.get(), i ? payload.size() : 0);
+      if (i) {
+        archive_entry_sparse_add_entry(entry.get(), 0, 4);
+        archive_entry_sparse_add_entry(entry.get(), payload.size() - 4, 4);
+      }
+      assert(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK);
+      if (i) assert(archive_write_data(writer.get(), payload.data(), payload.size()) == static_cast<la_ssize_t>(payload.size()));
+    }
+    assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+  }
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cache);
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(path, entries));
+  assert(entries.size() == 2 && entries.back().offset > 0);
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cache);
+  std::vector<unsigned char> bytes;
+  const auto file = archive_file::makeVirtualPath(path, "sparse.wav");
+  assert(archive_file::readFileBounded(file, bytes, payload.size()));
+  assert(std::string(bytes.begin(), bytes.end()) == payload);
+  assert(!archive_file::readFileBounded(file, bytes, payload.size() - 1) && bytes.empty());
+  // A corrupt private cache can point at another valid TAR header. Reparse the
+  // selected header rather than trusting cached offsets/names as payload data.
+  const auto cachePath = std::filesystem::directory_iterator(cache)->path();
+  std::ifstream input(cachePath, std::ios::binary);
+  std::string stored((std::istreambuf_iterator<char>(input)), {});
+  input.close();
+  const auto position = stored.find("sparse.wav");
+  assert(position != std::string::npos);
+  const std::uint64_t wrongOffset = 0;
+  std::memcpy(stored.data() + position + std::strlen("sparse.wav") + 17, &wrongOffset, sizeof(wrongOffset));
+  { std::ofstream output(cachePath, std::ios::binary | std::ios::trunc); output.write(stored.data(), stored.size()); }
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheDirectory(cache);
+  assert(!archive_file::readFile(file, bytes) && bytes.empty());
+  std::size_t callbacks = 0;
+  assert(!archive_file::readArchiveEntriesStreaming(path, {"sparse.wav"},
+      [&](auto &&) { ++callbacks; return true; }));
+  assert(callbacks == 0);
+  archive_file::setArchiveIndexCacheDirectory({});
+}
+
+void testRar5WorkersReuseExclusiveReaders() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "workers.rar";
+  {
+    std::ofstream output(path, std::ios::binary);
+    output.write(reinterpret_cast<const char *>(archive_rar_fixtures::nonSolid),
+                 sizeof(archive_rar_fixtures::nonSolid));
+  }
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(path, entries));
+  std::vector<std::filesystem::path> paths;
+  for (const auto &entry : entries) if (!entry.directory) paths.push_back(entry.path);
+  archive_file::forceRar5WorkersForTesting(true);
+  const auto opens = archive_file::archiveReaderStatsForTesting().sevenZipOpens;
+  for (int round = 0; round < 2; ++round) {
+    std::mutex mutex;
+    std::condition_variable ready;
+    unsigned arrived = 0;
+    assert(archive_file::readArchiveEntriesConcurrently(path, paths,
+        [&](archive_file::FileData &&file) {
+          const auto expected = static_cast<unsigned char>('a' + file.path.string()[4] - '0');
+          assert(file.bytes.size() == 1024 * 1024);
+          assert(std::all_of(file.bytes.begin(), file.bytes.end(), [&](auto byte) { return byte == expected; }));
+          std::unique_lock lock(mutex);
+          ++arrived;
+          ready.notify_all();
+          assert(ready.wait_for(lock, 5s, [&] { return arrived >= 2; }));
+          return true;
+        }, 2, 2 * 1024 * 1024));
+    assert(arrived == paths.size());
+    assert(archive_file::archiveReaderStatsForTesting().sevenZipOpens == opens + 1);
+  }
+  archive_file::forceRar5WorkersForTesting(false);
+}
+
+void testTarReadersUseIndexedHeaders(bool gnu = false) {
+  // The fixture writer runs before the production reader initializes its UTF-8
+  // locale in this focused test. libarchive needs both native and UTF-8 names.
+  bool utf8Locale = false;
+  for (const char *locale : {"C.UTF-8", "en_US.UTF-8", ".UTF-8"}) {
+    if (std::setlocale(LC_CTYPE, locale)) { utf8Locale = true; break; }
+  }
+  assert(utf8Locale);
+  TempDirectory temporary;
+  const auto path = temporary.path() / "indexed.tar";
+  const std::string name = (gnu ? "long/" : "곡/") + std::string(130, 'x') + ".wav";
+  {
+    auto writer = makeArchiveWriteHandle();
+    assert((gnu ? archive_write_set_format_gnutar(writer.get()) :
+        archive_write_set_format_pax_restricted(writer.get())) == ARCHIVE_OK);
+    assert(archive_write_open_filename(writer.get(), path.string().c_str()) == ARCHIVE_OK);
+    for (unsigned i = 0; i < 65; ++i) {
+      ArchiveEntryHandle entry(archive_entry_new(), archive_entry_free);
+      const auto entryName = i == 64 ? name : std::to_string(i) + ".txt";
+      archive_entry_set_pathname_utf8(entry.get(), entryName.c_str());
+      archive_entry_set_filetype(entry.get(), AE_IFREG);
+      archive_entry_set_size(entry.get(), i == 64 ? 4 : 0);
+      const auto status = archive_write_header(writer.get(), entry.get());
+      if (status != ARCHIVE_OK) std::cerr << "TAR fixture header: " << archive_error_string(writer.get()) << '\n';
+      assert(status == ARCHIVE_OK);
+      if (i == 64) assert(archive_write_data(writer.get(), "last", 4) == 4);
+    }
+    assert(archive_write_close(writer.get()) == ARCHIVE_OK);
+  }
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(path, entries));
+  assert(entries.size() == 65 && entries.back().offset >= 64 * 512);
+  const auto before = archive_file::archiveReaderStatsForTesting().libarchiveHeaders;
+  // libarchive applies the platform Unicode normalization when listing.
+  const auto listedName = entries.back().path;
+  const auto file = archive_file::makeVirtualPath(path, listedName);
+  std::vector<unsigned char> bytes;
+  std::string readError;
+  const bool read = archive_file::readFile(file, bytes, &readError);
+  if (!read) std::cerr << "TAR indexed " << gnu << " indexed=" << entries.back().path << " requested=" << name << " error=" << readError << '\n';
+  assert(read);
+  assert(std::string(bytes.begin(), bytes.end()) == "last");
+  assert(archive_file::readFileBounded(file, bytes, 4));
+  assert(std::string(bytes.begin(), bytes.end()) == "last");
+  auto consume = [](archive_file::FileData &&data) {
+    assert(std::string(data.bytes.begin(), data.bytes.end()) == "last"); return true;
+  };
+  std::vector<archive_file::FileData> files;
+  assert(archive_file::readArchiveEntries(path, {listedName}, files) && files.size() == 1);
+  assert(consume(std::move(files.front())));
+  assert(archive_file::readArchiveEntriesStreaming(path, {listedName}, consume));
+  assert(archive_file::readArchiveEntriesStreamingBounded(path, {listedName}, consume, 4));
+  assert(archive_file::readArchiveEntriesInRange(path, {listedName}, {64, 64}, files) && files.size() == 1);
+  assert(consume(std::move(files.front())));
+  assert(archive_file::archiveReaderStatsForTesting().libarchiveHeaders - before == 6 &&
+         "selected TAR reads must not walk preceding headers");
+  assert(!archive_file::readFileBounded(file, bytes, 3) && bytes.empty());
+  unsigned callbacks = 0;
+  assert(!archive_file::readArchiveEntriesStreaming(path, {listedName},
+      [&](auto &&) { ++callbacks; return false; }));
+  assert(callbacks == 1);
+  std::filesystem::resize_file(path, entries.back().offset + 512);
+  assert(!archive_file::readFileBounded(file, bytes, 4));
+}
+
+void testSevenZipReadersAreExclusiveAndReusable() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "shared.7z";
+  writeSevenZip(path, "entry");
+  const auto opens = archive_file::archiveReaderStatsForTesting().sevenZipOpens;
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(path, entries));
+  for (int round = 0; round < 2; ++round) {
+    assert(archive_file::readArchiveEntriesStreamingBounded(path, {"readme.txt"},
+        [&](archive_file::FileData &&data) {
+          assert(std::string(data.bytes.begin(), data.bytes.end()) == "entry");
+          std::vector<unsigned char> nested;
+          unsigned checkpoints = 0;
+          // The old shared handle waits on its own callback. Cancel that wait
+          // deterministically so the regression fails instead of hanging.
+          const bool read = archive_file::readFileBoundedWithCheckpoint(
+              archive_file::makeVirtualPath(path, "readme.txt"), nested, 1024,
+              nullptr, {}, [&] { return ++checkpoints < 64; });
+          assert(read && "nested SDK consumers need independent reader leases");
+          assert(std::string(nested.begin(), nested.end()) == "entry");
+          return true;
+        }, 1024));
+  }
+  assert(archive_file::archiveReaderStatsForTesting().sevenZipOpens == opens + 2);
+}
+
+void testBoundedRarBatchOpensOnce() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "batch.rar";
+  {
+    std::ofstream output(path, std::ios::binary);
+    output.write(reinterpret_cast<const char *>(archive_rar_fixtures::rar4),
+                 sizeof(archive_rar_fixtures::rar4));
+  }
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(path, entries));
+  std::vector<std::filesystem::path> paths;
+  for (const auto &entry : entries) if (!entry.directory) paths.push_back(entry.path);
+  assert(paths.size() > 1);
+  const auto opens = archive_file::archiveReaderStatsForTesting().rarOpens;
+  std::size_t emitted = 0;
+  assert(archive_file::readArchiveEntriesStreamingBounded(path, paths,
+      [&](archive_file::FileData &&file) { assert(!file.bytes.empty()); ++emitted; return true; }, 1024));
+  assert(emitted == paths.size());
+  assert(archive_file::archiveReaderStatsForTesting().rarOpens == opens + 1 &&
+         "one bounded RAR batch must not reopen the archive per member");
+}
+
+void testZipMetadataListingKeepsZip64UnicodeAndDirectoryFlags() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "metadata.zip";
+  {
+    std::ofstream output(path, std::ios::binary);
+    output.write(reinterpret_cast<const char *>(zip64MetadataFixture), sizeof(zip64MetadataFixture));
+  }
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(path, entries));
+  assert(entries.size() == 3);
+  assert(entries[0].path == "first.wav" && entries[0].size == 5);
+  assert(entries[1].path == std::filesystem::path(u8"곡.wav") && entries[1].size == 6);
+  assert(entries[2].path == "folder" && entries[2].directory);
+  std::vector<unsigned char> bytes;
+  assert(archive_file::readFile(archive_file::makeVirtualPath(path, entries[1].path), bytes));
+  assert(std::string(bytes.begin(), bytes.end()) == "second");
+}
+
+void testArchiveIndexRetentionKeepsActiveVisitorsValid() {
+  TempDirectory temporary;
+  archive_file::clearArchiveIndexCacheForTesting();
+  archive_file::setArchiveIndexCacheLimitsForTesting(2, 1024 * 1024);
+  std::vector<archive_file::Entry> entries;
+  const auto first = temporary.path() / "first.zip";
+  writeStoredZipContents(first, "sound.wav", "first", true);
+  assert(archive_file::listEntries(first, entries));
+  assert(archive_file::visitIndexEntries(first, [&](const auto &borrowed) {
+    for (int i = 0; i < 4; ++i) {
+      const auto path = temporary.path() / (std::to_string(i) + ".zip");
+      writeStoredZipContents(path, "other.wav", "other", true);
+      assert(archive_file::listEntries(path, entries));
+      assert(archive_file::residentArchiveIndexCountForTesting() <= 2);
+    }
+    assert(borrowed.path == "sound.wav" && borrowed.size == 5);
+    return true;
+  }));
+  // An evicted index remains readable and can be reconstructed on demand.
+  std::vector<unsigned char> bytes;
+  assert(archive_file::readFile(archive_file::makeVirtualPath(first, "sound.wav"), bytes));
+  assert(std::string(bytes.begin(), bytes.end()) == "first");
+  archive_file::setArchiveIndexCacheLimitsForTesting(16, 1);
+  assert(archive_file::residentArchiveIndexCountForTesting() == 1);
+  assert(archive_file::listEntries(first, entries));
+  assert(entries.size() == 1 && archive_file::residentArchiveIndexCountForTesting() == 1);
+  archive_file::setArchiveIndexCacheLimitsForTesting(16, 64U * 1024U * 1024U);
+  archive_file::clearArchiveIndexCacheForTesting();
+}
+
+void testMetadataVisitorsDoNotBuildFilenameTables() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "metadata.zip";
+  writeStoredZipContents(path, "sound.wav", "first", true);
+  const auto builds = archive_file::indexLookupBuildCountForTesting();
+  std::size_t visits = 0;
+  assert(archive_file::visitIndexEntries(path, [&](const auto &) { ++visits; return true; }));
+  assert(visits == 1);
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(path, entries));
+  assert(entries.size() == 1);
+  assert(archive_file::indexLookupBuildCountForTesting() == builds &&
+         "storage visits and browsing lists must not allocate filename lookup tables");
+  std::vector<unsigned char> bytes;
+  assert(archive_file::readFile(archive_file::makeVirtualPath(path, "sound.wav"), bytes));
+  assert(archive_file::indexLookupBuildCountForTesting() == builds + 1);
+  assert(archive_file::readFile(archive_file::makeVirtualPath(path, "SOUND.WAV"), bytes));
+  assert(archive_file::indexLookupBuildCountForTesting() == builds + 1);
+}
+
+void testSharedZipReadersReuseDirectory() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "shared.zip";
+  writeStoredZipContents(path, "sound.wav", "first", true);
+  const auto opens = archive_file::zipDirectoryOpenCountForTesting();
+  std::vector<archive_file::Entry> entries;
+  assert(archive_file::listEntries(path, entries));
+  const auto file = archive_file::makeVirtualPath(path, "sound.wav");
+  auto consume = [](archive_file::FileData &&data) {
+    assert(std::string(data.bytes.begin(), data.bytes.end()) == "first");
+    return true;
+  };
+  for (int batch = 0; batch < 3; ++batch) {
+    std::vector<unsigned char> bytes;
+    assert(archive_file::readFile(file, bytes));
+    assert(std::string(bytes.begin(), bytes.end()) == "first");
+    assert(archive_file::readFileBounded(file, bytes, 1024));
+    std::vector<archive_file::FileData> files;
+    assert(archive_file::readArchiveEntries(path, {"sound.wav"}, files));
+    assert(files.size() == 1);
+    assert(archive_file::readArchiveEntriesStreaming(path, {"sound.wav"}, consume));
+    assert(archive_file::readArchiveEntriesStreamingBounded(path, {"sound.wav"}, consume, 1024));
+    assert(archive_file::readArchiveEntriesConcurrently(path, {"sound.wav"}, consume, 2, 1024));
+    assert(archive_file::readArchiveEntriesInRange(path, {"sound.wav"}, {0, 10}, files));
+  }
+  assert(archive_file::zipDirectoryOpenCountForTesting() - opens == 1 &&
+         "all shared ZIP paths must reuse validated central directory state");
+  const auto mtime = std::filesystem::last_write_time(path);
+  const auto replacement = temporary.path() / "replacement.zip";
+  writeStoredZipContents(replacement, "sound.wav", "other", true);
+  std::filesystem::last_write_time(replacement, mtime);
+  std::filesystem::rename(replacement, path);
+  std::vector<unsigned char> bytes;
+  assert(archive_file::readFile(file, bytes));
+  assert(std::string(bytes.begin(), bytes.end()) == "other");
+  assert(archive_file::zipDirectoryOpenCountForTesting() - opens == 2);
+  // A consumer may read another entry while other readers of this archive are
+  // active. Each cursor must remain exclusive; no cache lock spans callbacks.
+  std::mutex mutex;
+  std::condition_variable ready;
+  unsigned arrived = 0;
+  std::vector<std::future<bool>> tasks;
+  for (int i = 0; i < 3; ++i) tasks.push_back(std::async(std::launch::async, [&] {
+    return archive_file::readArchiveEntriesStreamingBounded(path, {"sound.wav"},
+        [&](archive_file::FileData &&data) {
+          assert(std::string(data.bytes.begin(), data.bytes.end()) == "other");
+          {
+            std::unique_lock lock(mutex);
+            ++arrived;
+            ready.notify_all();
+            ready.wait(lock, [&] { return arrived == 3; });
+          }
+          std::vector<unsigned char> nested;
+          assert(archive_file::readFileBounded(file, nested, 1024));
+          assert(std::string(nested.begin(), nested.end()) == "other");
+          return true;
+        }, 1024);
+  }));
+  for (auto &task : tasks) assert(task.get());
+}
+
 void testBoundedZipReaderReusesDirectory() {
   TempDirectory temporary;
   const auto path = temporary.path() / "preview.zip";
@@ -3968,13 +4518,42 @@ void testConcurrentZipMappingFallback() {
 int RunStorageMeasurementTests();
 int RunStorageInventoryTaskTests();
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string(argv[1]) == "--zip-name-fallback") {
+    testBzipZipFallbackUsesNamesAfterFilteredMetadata();
+    return 0;
+  }
   if (argc == 2 && std::string(argv[1]) == "--storage-inventory-task") return RunStorageInventoryTaskTests();
   if (argc == 2 && std::string(argv[1]) == "--storage-measurement") return RunStorageMeasurementTests();
+  if (argc == 2 && std::string(argv[1]) == "--sdk-reader-reuse") {
+    testSevenZipReadersAreExclusiveAndReusable();
+    testRar5WorkersReuseExclusiveReaders();
+    return 0;
+  }
+  if (argc == 2 && std::string(argv[1]) == "--sequential-reuse") {
+    for (const auto *extension : {".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst"})
+      testCompressedTarForwardCursorReuse(extension);
+    return 0;
+  }
+  if (argc == 2 && std::string(argv[1]) == "--tar-indexed") {
+    testTarReadersUseIndexedHeaders();
+    testTarReadersUseIndexedHeaders(true);
+    testTarSparseAndPersistedOffsetValidation();
+    testTarGlobalPaxUsesSequentialReader();
+    return 0;
+  }
+  if (argc == 2 && std::string(argv[1]) == "--rar-batch-reuse") {
+    testBoundedRarBatchOpensOnce();
+    return 0;
+  }
   if (argc == 2 && std::string(argv[1]) == "--index-visitor") {
+    testZipMetadataListingKeepsZip64UnicodeAndDirectoryFlags();
+    testArchiveIndexRetentionKeepsActiveVisitorsValid();
+    testMetadataVisitorsDoNotBuildFilenameTables();
     testIndexVisitorStreamsAndReleasesStorageOnlyIndexes();
     return 0;
   }
   if (argc == 2 && std::string(argv[1]) == "--bounded-reader") {
+    testSharedZipReadersReuseDirectory();
     testBoundedZipReaderReusesDirectory();
     return 0;
   }
@@ -4072,6 +4651,7 @@ int main(int argc, char **argv) {
   testFileExtensionResolutionSharesPriorityAcrossStorage(true);
   testZipBoundedReadRejectsCentralDirectoryUnderstatedSize();
   testBoundedReadRejectsOversizedSevenZipEntry();
+  testBzipZipFallbackUsesNamesAfterFilteredMetadata();
   testBzipZipFallbackStopsBeforeOversizedAllocation();
   testSevenZipReadUsesCurrentOperationPauseCallback();
   testEncodedHeaderSevenZipUsesSdk();
@@ -4157,6 +4737,18 @@ int main(int argc, char **argv) {
     testFullUnzipRuntimeByteLimitCannotRestartFallback(extension);
     testFullUnzipExactBudgetAndReuseDoNotChargeEstimatedBytes(extension);
   }
+  testSevenZipReadersAreExclusiveAndReusable();
+  testRar5WorkersReuseExclusiveReaders();
+  testTarReadersUseIndexedHeaders();
+  testTarReadersUseIndexedHeaders(true);
+  testTarSparseAndPersistedOffsetValidation();
+  testTarGlobalPaxUsesSequentialReader();
+  for (const auto *extension : {".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst"})
+    testCompressedTarForwardCursorReuse(extension);
+  testBoundedRarBatchOpensOnce();
+  testZipMetadataListingKeepsZip64UnicodeAndDirectoryFlags();
+  testArchiveIndexRetentionKeepsActiveVisitorsValid();
+  testMetadataVisitorsDoNotBuildFilenameTables();
   testIndexVisitorStreamsAndReleasesStorageOnlyIndexes();
   testArchiveIndexPersistsAcrossColdCacheRestart();
   for (const bool coldCache : {true, false}) {
@@ -4193,7 +4785,7 @@ int main(int argc, char **argv) {
     }
   }
   for (int operation = 0; operation < 6; ++operation) {
-    testCachedSevenZipHandleWaitCancellation(operation);
+    testIndependentSevenZipHandleConsumers(operation);
   }
   testDebugLogRetainsNewestThousandLines();
   return 0;
