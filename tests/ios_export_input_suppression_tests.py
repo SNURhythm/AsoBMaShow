@@ -23,7 +23,7 @@ def function(source, signature):
 def generate(source):
     runtime = source[source.index("struct Runtime {"):source.index("bool SDLCALL lifecycleWatch")]
     pump_start = source.index("const auto pumpGeneration =")
-    pump = source[pump_start:source.index("#ifndef NDEBUG", pump_start)]
+    pump = source[pump_start:source.index("WaitIOSMainRunLoopForMicros(", pump_start)]
     methods = "\n".join(function(source, signature) for signature in (
         "void BeginIOSReplayExport(", "void EndIOSReplayExport(",
         "void ResumeIOSGameplayTouchInput(", "bool PollIOSApplicationEvent(",

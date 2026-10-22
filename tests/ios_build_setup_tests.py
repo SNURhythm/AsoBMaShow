@@ -195,7 +195,7 @@ int main() { return 0; }
             self.assertIn("IPHONEOS_DEPLOYMENT_TARGET = 15.0;", configuration)
             self.assertIn("MARKETING_VERSION = 0.0.1;", configuration)
 
-    def test_ios_target_enables_lua_gameplay_skins_in_effective_build_settings(self):
+    def test_ios_target_enables_skins_and_movies_in_effective_build_settings(self):
         for configuration in ("Debug", "Release"):
             with self.subTest(configuration=configuration):
                 result = subprocess.run(
@@ -220,6 +220,9 @@ int main() { return 0; }
                 )
                 self.assertIn(
                     "ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1", definitions
+                )
+                self.assertIn(
+                    "ASOBMASHOW_ENABLE_SKIN_MOVIE_DEVICE=1", definitions
                 )
 
     def test_skin_acceptance_build_identity_is_compiled_and_mirrored_to_plist(self):
