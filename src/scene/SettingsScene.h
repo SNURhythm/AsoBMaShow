@@ -10,6 +10,8 @@
 #include "SettingsCacheMaintenance.h"
 #include "SettingsLibraryTask.h"
 #include "SettingsPreviewPlayback.h"
+#include "OffsetCalibration.h"
+#include "SettingsPreviewChart.h"
 #include "../view/ColorPickerPopup.h"
 #include "../view/AppTheme.h"
 #include "SettingsPreviewAutoPlay.h"
@@ -100,6 +102,8 @@ public:
   void renderScene() override;
   void cleanupScene() override;
   EventHandleResult handleEvents(SDL_Event &event) override;
+  bms_parser::Note *pressLaneAt(int lane, std::int64_t timestampMicros) override;
+  bms_parser::Note *releaseLaneAt(int lane, std::int64_t timestampMicros, bool backSpin = false) override;
   bms_parser::Note *pressLane(int lane, double inputDelay = 0) override;
   bms_parser::Note *pressLane(int mainLane, int compensateLane,
                               double inputDelay = 0) override;
@@ -325,6 +329,30 @@ private:
   bool inputVirtualControllerEditorVisible = false;
   settings_scene::InputSettingsRebuildGate inputViewRebuildGate;
   std::string inputLastViewSignature;
+  settings_scene::CalibrationChartOptions calibrationChartOptions;
+  bool calibrationActive = false;
+  bool calibrationDisplay = false;
+  bool calibrationAudioRunning = false;
+  bool calibrationSavedAutoPlay = false;
+  bool calibrationSavedRandomTiming = false;
+  audio::PlaybackRate calibrationSavedRate;
+  int calibrationAudioOffsetMs = 0;
+  int calibrationVisualOffsetMs = 0;
+  settings_scene::OffsetCalibration calibrationSamples;
+  std::string calibrationError;
+  TextView *calibrationStatusText = nullptr;
+  TextView *calibrationValueText = nullptr;
+  std::optional<std::int64_t> previewEventSteadyMicros;
+  void startCalibration();
+  void finishCalibration(bool apply);
+  void startCalibrationAudio();
+  void stopCalibrationAudio();
+  void updateCalibration();
+  void recordCalibrationTap(long long rawTimeMicros);
+  void playCalibrationKeysound();
+  void buildCalibrationPanel(View *panel, const settings_scene::LayoutMetrics &metrics);
+  void refreshCalibrationText();
+  long long previewInputTimeMicros(double inputDelay) const;
   bool previewActive = false;
   bool lastLaidOutPreviewActive = false;
   int lastLaidOutPreviewPanelPage = 0;

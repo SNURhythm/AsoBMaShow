@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <cassert>
 #include <cstdint>
+#include <chrono>
+#include "scene/OffsetCalibration.h"
 #include <functional>
 #include <map>
 #include <memory>
@@ -27,6 +29,7 @@ std::string tr(const char *key) { return key; }
 }
 using Uint64 = std::uint64_t;
 Uint64 SDL_GetTicks() { return 1; }
+Uint64 SDL_GetTicksNS() { return 1'000'000; }
 enum {
   SDL_EVENT_WILL_ENTER_BACKGROUND = 1, SDL_EVENT_DID_ENTER_BACKGROUND,
   SDL_EVENT_WINDOW_FOCUS_LOST, SDL_EVENT_WINDOW_MINIMIZED,
@@ -37,6 +40,7 @@ constexpr int SDL_EVENT_WINDOW_LAST = SDL_EVENT_WINDOW_HIDDEN;
 constexpr int SDLK_ESCAPE = 27;
 struct SDL_Event {
   int type = SDL_EVENT_MOUSE_BUTTON_UP;
+  struct { Uint64 timestamp = 0; } common;
   struct { int event = 0; } window;
   struct { int key = 0; } key;
 };
@@ -296,6 +300,13 @@ struct SettingsScene : Scene {
   View *appearanceColorPopup = nullptr;
   int displayDraft = 0;
   bool previewActive = false;
+  bool calibrationActive = false;
+  bool previewPaused = false;
+  int calibrationStops = 0;
+  int lastLayoutWidth = 0;
+  settings_scene::OffsetCalibration calibrationSamples;
+  std::optional<std::int64_t> previewEventSteadyMicros;
+  void stopCalibrationAudio() { ++calibrationStops; }
   int previewEvents = 0;
   int previewInputCleanups = 0;
   int *destructions = nullptr;
@@ -454,12 +465,17 @@ int main() {
     DisplaySession display;
     active->audioVideoSession = &display;
     context.settings.audioVideo.video = 42;
+    active->calibrationActive = previewActive;
+    if (previewActive) assert(active->calibrationSamples.tap(3'030'000));
     event.type = SDL_EVENT_WINDOW_FOCUS_LOST;
     manager.handleEvents(event);
     assert(display.focusLosses == 1 && active->displayDraft == 42);
     assert(active->displayStatus == "Display restored");
     assert(active->displayPreviewUpdates == 1);
     assert(active->previewInputCleanups == (previewActive ? 1 : 0));
+    assert(active->calibrationStops == (previewActive ? 1 : 0));
+    assert(active->previewPaused == previewActive);
+    assert(active->calibrationSamples.count() == 0);
     assert(active->previewEvents == (previewActive ? 1 : 0));
     event.type = SDL_EVENT_MOUSE_BUTTON_UP;
     active->views.front()->eventCallback = [&manager] {

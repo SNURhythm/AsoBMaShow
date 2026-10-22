@@ -2808,6 +2808,14 @@ struct SettingsScene {
   const PlayfieldChartVisualModel *previewChartVisualModel = nullptr;
   std::unique_ptr<PlayfieldVisualState> previewCapturedVisualState;
   std::uint64_t previewFrameSerial = 0;
+  int previewKeyMode = 7;
+  bool calibrationActive = false;
+  int calibrationAudioOffsetMs = 0;
+  int calibrationVisualOffsetMs = 0;
+  void updateCalibration() { std::abort(); }
+  void recordCalibrationTap(long long) { std::abort(); }
+  void playCalibrationKeysound() { std::abort(); }
+  long long previewInputTimeMicros(double) const { return previewElapsedMicros; }
   bool previewActive = true;
   bool previewPaused = false;
   bool previewAutoPlay = false;
@@ -2905,6 +2913,7 @@ void verifyPausedAppearanceDraftUpdatesAndRestoresPreview() {
         OverlayPortal portal;
         SettingsScene scene;
         scene.overlayPortal = &portal;
+        scene.previewKeyMode = keyMode;
         scene.previewPaused = true;
         scene.previewChart = chart.get();
         scene.previewVisualStateStore = &store;
@@ -3256,11 +3265,12 @@ void verifyPreviewKeyModeTouchRouting(const RenderTarget &target) {
   InputDeviceRegistry registry(std::vector<InputDeviceRegistry::BackendFactory>{});
   const auto profile = makeDefaultInputProfile();
   for (const auto mode : settings_scene::kPreviewKeyModes) {
-    const auto chart = settings_scene::makePreviewChart(mode);
+    const auto chart = settings_scene::makeCalibrationChart(mode);
     Judge judge(chart->Meta.Rank);
     auto renderer = std::make_unique<BMSRenderer>(chart.get(), judge.timingWindows, 500, true);
-    auto config = presentationConfig(0);
-    config.hideEmptyScratchLane = true;
+    AppSettings settings;
+    built_in_notes::SharedModeStyles styles;
+    auto config = previewPresentationConfiguration(settings, *chart, mode, styles);
     renderer->configure(config);
     PreviewRecordingControl control;
     RhythmInputHandler handler(&control, chart->Meta, registry, profile,
@@ -3269,6 +3279,7 @@ void verifyPreviewKeyModeTouchRouting(const RenderTarget &target) {
     scene.previewChart = chart.get();
     scene.previewRenderer = renderer.get();
     scene.previewPresentation = std::move(renderer);
+    scene.previewKeyMode = mode;
     scene.previewInputHandler = &handler;
     scene.syncPreviewTouchLayout();
     const auto layout = scene.previewPresentation->touchLayout();
@@ -3490,6 +3501,13 @@ void verifyPreviewPause() {
   expect(scene.previewFrameSerial > serial &&
              scene.previewCapturedVisualState->configuration.builtInJudgeLine == config.builtInJudgeLine,
          "paused frames still capture live appearance changes without advancing chart time");
+  scene.calibrationActive = true;
+  scene.calibrationVisualOffsetMs = 80;
+  scene.capturePreviewVisualState();
+  expect(scene.previewCapturedVisualState->clock.gameplayTimeMicros == 1'000'000 &&
+             scene.previewCapturedVisualState->clock.visualTimeMicros == 920'000,
+         "positive display calibration delays the lane without shifting judgement time");
+  scene.calibrationActive = false;
   scene.previewPaused = false;
   scene.advancePreviewPlayback(0.5F);
   expect(scene.previewElapsedMicros == 1'500'000 && scene.previewPassedNotes == 8 &&

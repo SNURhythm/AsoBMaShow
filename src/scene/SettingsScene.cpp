@@ -320,6 +320,12 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
                             event.type == SDL_EVENT_WINDOW_MINIMIZED ||
                             event.type == SDL_EVENT_WINDOW_HIDDEN));
   if (losesFocus && previewActive) destroyPreviewInputHandler();
+  if (losesFocus && calibrationActive) {
+    stopCalibrationAudio();
+    previewPaused = true;
+    calibrationSamples.reset();
+    lastLayoutWidth = -1;
+  }
   if (losesFocus && audioVideoSession != nullptr &&
       audioVideoSession->hasDisplayPreview()) {
     const auto result = audioVideoSession->onFocusLost();
@@ -341,12 +347,20 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
     }
   }
   if (previewActive) {
+    if (calibrationActive && event.common.timestamp != 0) {
+      const auto now = std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+      previewEventSteadyMicros = now + static_cast<std::int64_t>(event.common.timestamp / 1000) -
+                                static_cast<std::int64_t>(SDL_GetTicksNS() / 1000);
+    }
     forwardPreviewInputEvent(event);
+    previewEventSteadyMicros.reset();
   }
   return {};
 }
 
 void SettingsScene::cleanupScene() {
+  if (calibrationActive) finishCalibration(false);
   closeAppearanceColorPopup();
   context.profileSwitchBlockers.scene = nullptr;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS

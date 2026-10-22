@@ -1,4 +1,5 @@
 #include "SettingsPreviewChart.h"
+#include "OffsetCalibration.h"
 #include "../bms_parser.hpp"
 #include <algorithm>
 #include <stdexcept>
@@ -122,6 +123,65 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart(int keyMode) {
 
   chart->Measures.push_back(measure.get());
   (void)measure.release();
+  return chart;
+}
+std::unique_ptr<bms_parser::Chart> makeCalibrationChart(int keyMode, CalibrationChartOptions options) {
+  if (std::ranges::find(kPreviewKeyModes, keyMode) == kPreviewKeyModes.end())
+    throw std::invalid_argument("Unsupported calibration key mode");
+  options.bpm = std::clamp(options.bpm, 40, 300);
+  const auto timing = calibrationTiming(options.bpm, options.beatsPerMeasure);
+  const int beatsPerMeasure = options.beatsPerMeasure == 3 ? 3 : 4;
+  constexpr std::array subdivisions{4, 8, 16, 24, 32};
+  const int notesPerBeat = std::ranges::find(subdivisions, options.subdivision) != subdivisions.end()
+      ? options.subdivision / 4 : 1;
+  auto chart = std::make_unique<bms_parser::Chart>();
+  chart->Meta.Title = "Offset Calibration";
+  chart->Meta.Artist = "AsoBMaShow";
+  chart->Meta.Bpm = chart->Meta.MinBpm = chart->Meta.MaxBpm = options.bpm;
+  chart->Meta.KeyMode = std::abs(keyMode);
+  chart->Meta.IsDP = keyMode == 10 || keyMode == 14;
+  chart->Meta.Rank = 3;
+  chart->Meta.TotalLength = timing.loopMicros;
+  const auto keys = chart->Meta.GetKeyLaneIndices();
+  const auto lanes = keyMode < 0 ? keys : chart->Meta.GetTotalLaneIndices();
+  const auto scratches = chart->Meta.GetScratchLaneIndices();
+  const int laneCount = std::max(16, *std::ranges::max_element(lanes) + 1);
+  const int lane = std::ranges::find(lanes, options.lane) != lanes.end()
+      ? options.lane : keys[keys.size() / 2];
+  auto measure = std::make_unique<bms_parser::Measure>();
+  measure->Timing = 0;
+  measure->Scale = timing.loopMicros / (4.0 * timing.beatMicros);
+  measure->Pos = 0.0;
+  const int firstNoteTick = (2 + beatsPerMeasure) * notesPerBeat;
+  const int totalTicks = firstNoteTick + kCalibrationBeats * notesPerBeat;
+  for (int tick = 0; tick < totalTicks; ++tick) {
+    const auto time = tick * timing.beatMicros / notesPerBeat;
+    auto timeline = makePreviewTimeline(laneCount, time,
+        tick >= 2 * notesPerBeat && (tick - 2 * notesPerBeat) % (beatsPerMeasure * notesPerBeat) == 0);
+    timeline->Bpm = options.bpm;
+    timeline->BeatPosition = tick / (4.0 * notesPerBeat);
+    if (tick >= firstNoteTick) {
+      const auto index = static_cast<std::size_t>(tick - firstNoteTick);
+      const auto add = [&](int target) {
+        addPreviewNote(timeline.get(), target);
+        ++chart->Meta.TotalNotes;
+        if (std::ranges::find(scratches, target) != scratches.end()) ++chart->Meta.TotalScratchNotes;
+      };
+      switch (options.pattern) {
+      case CalibrationPattern::SingleLane: add(lane); break;
+      case CalibrationPattern::Stairs: add(keys[index % keys.size()]); break;
+      case CalibrationPattern::ReverseStairs: add(keys[keys.size() - 1 - index % keys.size()]); break;
+      case CalibrationPattern::Denim:
+        for (std::size_t i = index % 2; i < keys.size(); i += 2) add(keys[i]);
+        break;
+      }
+      chart->Meta.PlayLength = time;
+    }
+    measure->TimeLines.push_back(timeline.get());
+    timeline.release();
+  }
+  chart->Measures.push_back(measure.get());
+  measure.release();
   return chart;
 }
 } // namespace settings_scene

@@ -62,6 +62,8 @@ int resolvePreviewPanelWidth(const LayoutMetrics &metrics, int foldButtonSize,
 } // namespace
 
 void SettingsScene::resetViewState() {
+  calibrationStatusText = nullptr;
+  calibrationValueText = nullptr;
   previewKeyModeDropdown = nullptr;
   for (auto *view : views) {
     delete view;
@@ -574,7 +576,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewHeader->setAlignItems(YGAlignCenter);
   previewHeader->setJustifyContent(YGJustifySpaceBetween);
   previewHeader->addView(
-      makeHeading(i18n::message("settings.preview_layout.preview.label"), metrics.sectionTitleSize));
+      makeHeading(i18n::message(calibrationActive ? "settings.calibration.title" : "settings.preview_layout.preview.label"), metrics.sectionTitleSize));
 
   auto *headerActions = new View();
   headerActions->setFlexDirection(FlexDirection::Row);
@@ -632,6 +634,13 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   }
 #endif
   previewPanel->addView(previewSelectionRow);
+  if (calibrationActive) {
+    buildCalibrationPanel(previewPanel, metrics);
+    rootLayout->addView(previewPanel);
+    rootLayout->applyYogaLayout();
+    refreshCalibrationText();
+    return;
+  }
   auto *playbackControls = new View();
   playbackControls->setFlexDirection(FlexDirection::Row);
   playbackControls->setGap(selectionGap);
@@ -1193,6 +1202,11 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
 
 View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
+  auto *calibrate = makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+      makeText(i18n::message("settings.calibration.title"), metrics.bodyTextSize,
+               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+  calibrate->setOnClickListener([this]() { startCalibration(); });
+  cardsColumn->addView(calibrate);
   auto *offsetControls = new View();
   offsetControls->setFlexDirection(FlexDirection::Row);
   offsetControls->setFlexWrap(YGWrapWrap);

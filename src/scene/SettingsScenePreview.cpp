@@ -29,10 +29,10 @@ namespace {
 
 PlayfieldPresentationConfig
 previewPresentationConfiguration(const AppSettings &settings,
-                                 const bms_parser::Chart &chart,
+                                 const bms_parser::Chart &chart, int keyMode,
                                  built_in_notes::SharedModeStyles &noteStyles) {
   noteStyles = built_in_notes::snapshotModeStyles(
-      settings.builtInNotesForKeyMode(gameplay::presentationKeyMode(chart)), noteStyles);
+      settings.builtInNotesForKeyMode(keyMode), noteStyles);
   const gameplay_hispeed::State hispeed(
       {.mode = gameplay_hispeed::fixModeFromEncoded(
            static_cast<int>(settings.hispeedFixMode)),
@@ -48,22 +48,21 @@ previewPresentationConfiguration(const AppSettings &settings,
       .configuredHispeed = hispeed.hispeed(),
       .visibleTimeUseMilliseconds = settings.visibleTimeUseMilliseconds,
       .hispeedFixMode = settings.hispeedFixMode,
-      .playAreaWidth = settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(chart)),
+      .playAreaWidth = settings.playAreaWidthForKeyMode(keyMode),
       .orientation = settings.activePresentationOrientation(),
       .laneLength = settings.presentation().laneLength,
       .laneAngleDegrees = settings.presentation().laneAngleDegrees,
       .scratchLaneOnRight = settings.presentation().scratchLaneOnRight,
-      .hideEmptyScratchLane = chart.Meta.KeyMode == 5
-          ? settings.presentation().hideEmptyScratchLane5K
-          : settings.presentation().hideEmptyScratchLane7K,
+      // The preview mode is explicit, regardless of its fixture notes.
+      .hideEmptyScratchLane = keyMode < 0,
       .laneBeamsEnabled = true,
       .laneCoverHispeedFactor = 1.0F,
       .laneCoverEnabled = settings.presentation().laneCoverEnabled,
       .laneBeamLengthPercent = settings.presentation().laneBeamLengthPercent,
       .noteStartPositionPercent = settings.presentation().noteStartPositionPercent,
       .builtInNotes = noteStyles,
-      .builtInJudgeLine = settings.builtInJudgeLineForKeyMode(gameplay::presentationKeyMode(chart)),
-      .builtInLane = settings.builtInLaneForKeyMode(gameplay::presentationKeyMode(chart)),
+      .builtInJudgeLine = settings.builtInJudgeLineForKeyMode(keyMode),
+      .builtInLane = settings.builtInLaneForKeyMode(keyMode),
       .laneBeamClockUsesRenderTime = true,
       .showInvisibleNotes = settings.showInvisibleNotes,
       .markProcessedNotes = settings.markProcessedNotes,
@@ -76,7 +75,7 @@ previewPresentationConfiguration(const AppSettings &settings,
           AppSettings::JudgementIndicatorRenderMode::Hud2D,
       .judgementIndicatorRangeMilliseconds =
           settings.presentation().judgementIndicatorRangeMilliseconds,
-      .keybombs = settings.keybombsForKeyMode(gameplay::presentationKeyMode(chart)),
+      .keybombs = settings.keybombsForKeyMode(keyMode),
       .judgementTextVisibility = settings.presentation().judgementTextVisibility,
       .judgementTextY = settings.presentation().judgementTextY,
       .judgementTimingY = settings.presentation().judgementTimingY,
@@ -137,6 +136,7 @@ previewNoteSources(const bms_parser::Chart &chart) {
 } // namespace
 
 SettingsScene::~SettingsScene() {
+  stopCalibrationAudio();
   previewSkinStop.request_stop();
   context.profileSwitchBlockers.scene = nullptr;
   libraryTask.stopAndWait();
@@ -160,6 +160,7 @@ void SettingsScene::startLanePreview() {
 }
 
 void SettingsScene::stopLanePreview() {
+  if (calibrationActive) { finishCalibration(false); return; }
   previewActive = false;
   destroyPreviewInputHandler();
   destroyPreviewRenderer();
@@ -187,12 +188,14 @@ void SettingsScene::ensurePreviewRenderer() {
     previewRendererDirty = false;
   }
   if (previewChart == nullptr) {
-    previewChart = makePreviewChart(previewKeyMode);
+    previewChart = calibrationActive ? makeCalibrationChart(previewKeyMode, calibrationChartOptions)
+                                     : makePreviewChart(previewKeyMode);
   }
   if (previewRenderer == nullptr && previewChart != nullptr) {
     ui::invalidate();
     previewChartVisualModel = std::make_unique<PlayfieldChartVisualModel>(
         buildPlayfieldChartVisualModel(*previewChart, 0));
+    previewChartVisualModel->scratchlessSinglePlay = previewKeyMode < 0;
     previewVisualStateStore = std::make_unique<PlayfieldVisualStateStore>(
         *previewChartVisualModel);
     previewVisualStateStore->setSceneStartMicros(0);
@@ -264,6 +267,7 @@ void SettingsScene::ensurePreviewRenderer() {
       previewError = session.failure->diagnostic.message;
     }
 #endif
+    if (calibrationActive) startCalibrationAudio();
     lastLayoutWidth = -1;
   }
 }
@@ -274,7 +278,7 @@ void SettingsScene::syncPreviewPresentationConfiguration() {
     return;
   }
   auto configuration =
-      previewPresentationConfiguration(context.settings, *previewChart, previewNoteStyles);
+      previewPresentationConfiguration(context.settings, *previewChart, previewKeyMode, previewNoteStyles);
   if (appearanceColorPreview) appearanceColorPreview(configuration);
   previewVisualStateStore->setConfiguration(configuration);
   previewPresentation->configure(configuration);
@@ -284,7 +288,10 @@ void SettingsScene::syncPreviewPresentationConfiguration() {
 PlayfieldProjectionResult SettingsScene::projectPreviewFrame() {
   const auto &state = *previewCapturedVisualState;
   return previewProjection->project(*previewChartVisualModel, state,
-      {.includeInvisibleNotes = state.configuration.showInvisibleNotes,
+      {.noteDisplayTimeMicros = calibrationActive
+           ? std::optional<long long>(state.clock.visualTimeMicros +
+               context.settings.notesDisplayTimingMilliseconds * 1000LL) : std::nullopt,
+       .includeInvisibleNotes = state.configuration.showInvisibleNotes,
        .latePoorTimingMicros = previewRenderer->projectionLatePoorTimingMicros(),
        .pmsPoorDestination = previewPresentation->pmsPoorDestinationGeometry(),
        .buildBuiltInPlan = previewPresentation->activeMode() == PresentationMode::BuiltIn,
@@ -382,7 +389,7 @@ void SettingsScene::syncPreviewAuthority() {
   const int playedNotes = std::clamp(previewPassedNotes, 0, target.totalNotes);
   const int targetScore = pacemaker::targetScoreAtPlayedNotes(target, playedNotes);
   const PlayfieldAuthorityUpdate authority{
-      .currentBpm = kPreviewBpm,
+      .currentBpm = previewChart->Meta.Bpm,
       .judgementCounters = previewJudgeCount,
       .judgementFastSlowCounters = previewJudgeFastSlowCount,
       .comboBreak = previewComboBreak,
@@ -458,8 +465,10 @@ void SettingsScene::capturePreviewVisualState() {
     noteStates.push_back(noteState);
   }
   previewVisualStateStore->setNoteStates(std::move(noteStates));
-  const auto clock = previewFrameClock(++previewFrameSerial, previewElapsedMicros,
+  auto clock = previewFrameClock(++previewFrameSerial, previewElapsedMicros,
                                        previewChart->Meta.PlayLength);
+  if (calibrationActive)
+    clock.visualTimeMicros -= static_cast<long long>(calibrationVisualOffsetMs) * 1000;
   if (previewCapturedVisualState == nullptr) {
     previewCapturedVisualState = std::make_unique<PlayfieldVisualState>(
         previewVisualStateStore->capture(clock));
@@ -469,6 +478,7 @@ void SettingsScene::capturePreviewVisualState() {
 }
 
 void SettingsScene::destroyPreviewRenderer() {
+  stopCalibrationAudio();
   destroyPreviewInputHandler();
   previewPresentationEvents.reset();
   previewSkinStop.request_stop();
@@ -506,9 +516,9 @@ void SettingsScene::ensurePreviewInputHandler() {
     previewInputHandler = std::make_unique<RhythmInputHandler>(
         this, previewChart->Meta, context.inputDeviceRegistry,
         context.inputProfile,
-        makeGameplayInputScopes(gameplay::presentationKeyMode(*previewChart)),
+        makeGameplayInputScopes(previewKeyMode),
         LogicalGameplayInputAdapter::CommandCallback{},
-        context.settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(*previewChart)),
+        context.settings.playAreaWidthForKeyMode(previewKeyMode),
         LogicalGameplayRegistryPolicy{.acceptKeyboardFromRegistry = false});
     previewInputHandler->discardPendingTouchEvents();
     previewInputHandler->setTouchEventCallback(
@@ -560,7 +570,7 @@ void SettingsScene::syncPreviewInputLayout() {
     return;
   }
   previewInputHandler->setPlayAreaWidth(
-      context.settings.playAreaWidthForKeyMode(gameplay::presentationKeyMode(*previewChart)));
+      context.settings.playAreaWidthForKeyMode(previewKeyMode));
   previewInputHandler->setTouchLaneOrder(
       (previewPresentation ? previewPresentation.get() : previewRenderer)->touchLayout().lanes);
 }
@@ -673,7 +683,7 @@ void SettingsScene::resetPreviewHudSample() {
                                   GaugeAutoShiftMode::None, 74.0f,
                                   *previewGaugeRules);
   syncPreviewAuthority();
-  if (previewPresentationEvents != nullptr) {
+  if (previewPresentationEvents != nullptr && !calibrationActive) {
     const PlayfieldJudgeEventClock clock =
         makePlayfieldJudgeEventClock(0, 0, 0);
     previewPresentationEvents->onJudge(JudgeResult(Great, 50000),
@@ -745,6 +755,7 @@ void SettingsScene::consumePreviewTransactions(
 
 void SettingsScene::advancePreviewPlayback(float dt) {
   if (previewPaused) return;
+  if (calibrationActive) { updateCalibration(); return; }
   previewElapsedMicros +=
       static_cast<long long>(std::max(0.0f, dt) * 1000000.0f);
   advancePreviewSimulation();
@@ -779,23 +790,26 @@ bms_parser::Note *SettingsScene::pressLane(int lane, double inputDelay) {
 
 bms_parser::Note *SettingsScene::pressLane(int mainLane, int compensateLane,
                                           double inputDelay) {
-  if (!previewActive || previewAutoPlay || !previewSimulation) return nullptr;
+  if (!previewActive || (calibrationActive && previewPaused) || previewAutoPlay || !previewSimulation) return nullptr;
+  const auto inputTime = previewInputTimeMicros(inputDelay);
+  if (calibrationActive) recordCalibrationTap(inputTime - calibrationAudioOffsetMs * 1000LL);
   const auto result = previewSimulation->pressLane(mainLane, compensateLane,
-      {.songTimeMicros = previewElapsedMicros,
+      {.songTimeMicros = inputTime,
        .laneBeamTimeMicros = previewElapsedMicros,
-       .inputDelayMicros = static_cast<std::int64_t>(inputDelay * 1'000'000)});
+       .inputDelayMicros = calibrationActive ? 0 : static_cast<std::int64_t>(inputDelay * 1'000'000)});
   consumePreviewTransactions(result.transactions);
+  if (calibrationActive && result.noteId < previewVisualNoteSources.size()) playCalibrationKeysound();
   return result.noteId < previewVisualNoteSources.size()
       ? const_cast<bms_parser::Note *>(previewVisualNoteSources[result.noteId]) : nullptr;
 }
 
 bms_parser::Note *SettingsScene::releaseLane(int lane, double inputDelay,
                                             bool isBackSpin) {
-  if (!previewActive || previewAutoPlay || !previewSimulation) return nullptr;
+  if (!previewActive || (calibrationActive && previewPaused) || previewAutoPlay || !previewSimulation) return nullptr;
   const auto result = previewSimulation->releaseLane(lane,
-      {.songTimeMicros = previewElapsedMicros,
+      {.songTimeMicros = previewInputTimeMicros(inputDelay),
        .laneBeamTimeMicros = previewElapsedMicros,
-       .inputDelayMicros = static_cast<std::int64_t>(inputDelay * 1'000'000)}, isBackSpin);
+       .inputDelayMicros = calibrationActive ? 0 : static_cast<std::int64_t>(inputDelay * 1'000'000)}, isBackSpin);
   consumePreviewTransactions(result.transactions);
   return result.noteId < previewVisualNoteSources.size()
       ? const_cast<bms_parser::Note *>(previewVisualNoteSources[result.noteId]) : nullptr;

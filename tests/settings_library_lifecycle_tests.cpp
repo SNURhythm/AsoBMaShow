@@ -41,6 +41,7 @@ public:
   NoopOwner archiveCacheMaintenance;
   NoopOwner inputProfileReplacementRegistration;
   void stopProfileArchiveWork() {}
+  void stopCalibrationAudio() {}
 };
 
 #include "settings_library_lifecycle_methods.inc"

@@ -1,4 +1,5 @@
 #include "scene/SettingsPreviewChart.h"
+#include "scene/OffsetCalibration.h"
 #include "bms_parser.hpp"
 #include "GameplayKeyMode.h"
 
@@ -148,7 +149,118 @@ void testDenseAppearanceModesHaveCompletePreviewCharts() {
   }
 }
 
+void testCalibration() {
+  using namespace settings_scene;
+  // Late taps must move gameplay earlier relative to the audio clock.
+  OffsetCalibration calibration;
+  assert(!calibration.tap(1'020'000)); // count-in
+  for (int beat = 0; beat < 16; ++beat) {
+    const auto time = 3'000'000LL + beat * 500'000;
+    assert(calibration.tap(time + (beat == 7 ? 160'000 : 40'000)));
+    assert(!calibration.tap(time + 45'000)); // chord / duplicate
+  }
+  const auto estimate = calibration.estimate();
+  assert(estimate && estimate->offsetMs == -40 && estimate->spreadMs == 0);
+  assert(!calibration.tap(12'040'000)); // completed sample set is stable
+  calibration.reset();
+  assert(!calibration.estimate());
+  for (int beat = 0; beat < 16; ++beat)
+    assert(calibration.tap(3'000'000LL + beat * 500'000 - 25'000));
+  assert(calibration.estimate()->offsetMs == 25);
+  calibration.reset();
+  assert(!calibration.tap(3'249'000)); // outside acceptance window
+  assert(!calibration.tap(-500'000));
+
+  for (int mode : kPreviewKeyModes) {
+    const auto chart = makeCalibrationChart(mode);
+    const auto lanes = chart->Meta.GetKeyLaneIndices();
+    int count = 0;
+    long long previous = 0;
+    for (const auto *measure : chart->Measures) {
+      for (const auto *timeline : measure->TimeLines) {
+        for (const auto *note : timeline->Notes) {
+          if (!note) continue;
+          assert(dynamic_cast<const bms_parser::LongNote *>(note) == nullptr && note->Wav == bms_parser::Parser::NoWav);
+          assert(std::ranges::find(lanes, note->Lane) != lanes.end());
+          assert(timeline->Timing >= 3'000'000);
+          if (count) assert(timeline->Timing - previous == 500'000);
+          previous = timeline->Timing;
+          ++count;
+        }
+      }
+    }
+    assert(count >= 32 && chart->Meta.TotalNotes == count);
+    assert(chart->Meta.TotalLength > previous);
+  }
+}
+
+void testCalibrationPatternsAndTempo() {
+  using namespace settings_scene;
+  for (const int mode : {5, -7, 14, 48}) {
+    for (const int bpm : {60, 120, 240}) {
+      for (const auto pattern : {CalibrationPattern::SingleLane, CalibrationPattern::Stairs,
+                                CalibrationPattern::ReverseStairs, CalibrationPattern::Denim}) {
+        const auto chart = makeCalibrationChart(mode, {.pattern = pattern, .lane = 1, .bpm = bpm});
+        assert(chart->Meta.Bpm == bpm);
+        const auto keys = chart->Meta.GetKeyLaneIndices();
+        const long long beatMicros = 60'000'000 / bpm;
+        int beats = 0, notes = 0;
+        for (const auto *timeline : chart->Measures.front()->TimeLines) {
+          std::vector<int> actual;
+          for (const auto *note : timeline->Notes) if (note) actual.push_back(note->Lane);
+          if (actual.empty()) continue;
+          assert(timeline->Timing == (6 + beats) * beatMicros);
+          std::vector<int> expected;
+          if (pattern == CalibrationPattern::SingleLane) expected = {1};
+          else if (pattern == CalibrationPattern::Stairs) expected = {keys[beats % keys.size()]};
+          else if (pattern == CalibrationPattern::ReverseStairs)
+            expected = {keys[keys.size() - 1 - beats % keys.size()]};
+          else for (std::size_t i = beats % 2; i < keys.size(); i += 2) expected.push_back(keys[i]);
+          std::ranges::sort(expected);
+          assert(actual == expected);
+          notes += actual.size();
+          ++beats;
+        }
+        assert(beats == kCalibrationBeats && chart->Meta.TotalNotes == notes);
+        assert(chart->Meta.TotalLength == 70 * beatMicros);
+      }
+    }
+  }
+  for (const int subdivision : {4, 8, 16, 24, 32}) {
+    for (const int meter : {3, 4}) {
+      const auto chart = makeCalibrationChart(7, {.subdivision = subdivision, .beatsPerMeasure = meter});
+      const auto timing = calibrationTiming(120, meter);
+      const int notesPerBeat = subdivision / 4;
+      int notes = 0;
+      for (const auto *timeline : chart->Measures.front()->TimeLines) {
+        for (const auto *note : timeline->Notes) {
+          if (!note) continue;
+          assert(timeline->Timing == timing.firstNoteMicros + notes * timing.beatMicros / notesPerBeat);
+          ++notes;
+        }
+      }
+      assert(notes == kCalibrationBeats * notesPerBeat);
+      assert(chart->Meta.TotalLength == timing.loopMicros);
+    }
+  }
+  for (const int bpm : {40, 123, 300}) {
+    for (const int meter : {3, 4}) {
+      OffsetCalibration samples;
+      samples.configure(bpm, meter);
+      const auto timing = calibrationTiming(bpm, meter);
+      assert(!samples.tap(timing.firstClickMicros));
+      for (int beat = 0; beat < OffsetCalibration::sampleCount; ++beat)
+        assert(samples.tap(timing.firstNoteMicros + beat * timing.beatMicros + 15'000));
+      assert(samples.estimate()->offsetMs == -15);
+    }
+  }
+  const auto scratch = makeCalibrationChart(7, {.lane = 7});
+  assert(scratch->Meta.TotalScratchNotes == kCalibrationBeats);
+}
+
 int main() {
+  testCalibrationPatternsAndTempo();
+  testCalibration();
   testDenseAppearanceModesHaveCompletePreviewCharts();
   testAllLaneChordCycles();
   testRecipe();
