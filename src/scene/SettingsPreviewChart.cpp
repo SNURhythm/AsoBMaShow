@@ -170,8 +170,8 @@ std::unique_ptr<bms_parser::Chart> makeCalibrationChart(int keyMode, Calibration
       };
       switch (options.pattern) {
       case CalibrationPattern::SingleLane: add(lane); break;
-      case CalibrationPattern::Stairs: add(keys[index % keys.size()]); break;
-      case CalibrationPattern::ReverseStairs: add(keys[keys.size() - 1 - index % keys.size()]); break;
+      case CalibrationPattern::Stairs: add(lanes[index % lanes.size()]); break;
+      case CalibrationPattern::ReverseStairs: add(lanes[lanes.size() - 1 - index % lanes.size()]); break;
       case CalibrationPattern::Denim:
         for (std::size_t i = index % 2; i < keys.size(); i += 2) add(keys[i]);
         break;

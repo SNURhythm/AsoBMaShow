@@ -76,7 +76,7 @@ void SettingsScene::startCalibrationAudio() {
     } else {
       // Use the same generated clicks, mixer, scheduling and clock as gameplay.
       prep_metronome::PrepMetronomePlan plan;
-      plan.enabled = !calibrationMetronomeMuted;
+      plan.enabled = !calibrationMuted;
       const auto timing = calibrationTiming(calibrationChartOptions.bpm, calibrationChartOptions.beatsPerMeasure);
       int beat = 0;
       for (auto time = timing.firstClickMicros; time < timing.loopMicros; time += timing.beatMicros, ++beat)
@@ -92,7 +92,7 @@ void SettingsScene::startCalibrationAudio() {
         return;
       }
       std::atomic_bool cancelled{false};
-      context.jukebox.schedule(*previewChart, !context.settings.inputKeysoundEnabled, cancelled, std::nullopt, &plan);
+      context.jukebox.schedule(*previewChart, !calibrationMuted && !context.settings.inputKeysoundEnabled, cancelled, std::nullopt, &plan);
       const auto started = context.jukebox.play();
       calibrationAudioRunning = started.success;
       if (!started.success) calibrationError = started.diagnostic;
@@ -159,7 +159,7 @@ bms_parser::Note *SettingsScene::releaseLaneAt(int lane, std::int64_t timestampM
 }
 
 void SettingsScene::playCalibrationKeysound() {
-  if (calibrationAudioRunning && !previewPaused && context.settings.inputKeysoundEnabled)
+  if (calibrationAudioRunning && !previewPaused && !calibrationMuted && context.settings.inputKeysoundEnabled)
     context.jukebox.playKeySound(kCalibrationKeysoundWav);
 }
 
@@ -353,7 +353,7 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
     });
     aids->addView(button);
   };
-  addToggle("settings.calibration.mute_metronome", calibrationMetronomeMuted, true);
+  addToggle("settings.calibration.mute", calibrationMuted, true);
   addToggle("settings.calibration.hide_notes", calibrationNotesHidden, false);
   addToggle("settings.calibration.logical_line", calibrationLogicalJudgementLine, false);
   body->addView(aids);

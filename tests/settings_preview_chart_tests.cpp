@@ -218,13 +218,14 @@ void testCalibration() {
 
 void testCalibrationPatternsAndTempo() {
   using namespace settings_scene;
-  for (const int mode : {5, -7, 14, 48}) {
+  for (const int mode : {5, -5, 7, -7, 10, 14, 48}) {
     for (const int bpm : {60, 120, 240}) {
       for (const auto pattern : {CalibrationPattern::SingleLane, CalibrationPattern::Stairs,
                                 CalibrationPattern::ReverseStairs, CalibrationPattern::Denim}) {
         const auto chart = makeCalibrationChart(mode, {.pattern = pattern, .lane = 1, .bpm = bpm});
         assert(chart->Meta.Bpm == bpm);
         const auto keys = chart->Meta.GetKeyLaneIndices();
+        const auto lanes = mode < 0 ? keys : chart->Meta.GetTotalLaneIndices();
         const long long beatMicros = 60'000'000 / bpm;
         int beats = 0, notes = 0;
         for (const auto *timeline : chart->Measures.front()->TimeLines) {
@@ -237,9 +238,9 @@ void testCalibrationPatternsAndTempo() {
           assert(timeline->Timing == (6 + beats) * beatMicros);
           std::vector<int> expected;
           if (pattern == CalibrationPattern::SingleLane) expected = {1};
-          else if (pattern == CalibrationPattern::Stairs) expected = {keys[beats % keys.size()]};
+          else if (pattern == CalibrationPattern::Stairs) expected = {lanes[beats % lanes.size()]};
           else if (pattern == CalibrationPattern::ReverseStairs)
-            expected = {keys[keys.size() - 1 - beats % keys.size()]};
+            expected = {lanes[lanes.size() - 1 - beats % lanes.size()]};
           else for (std::size_t i = beats % 2; i < keys.size(); i += 2) expected.push_back(keys[i]);
           std::ranges::sort(expected);
           assert(actual == expected);

@@ -9,6 +9,7 @@
 #include "../GameplayKeyMode.h"
 #include "play/BMSRenderer.h"
 #include "play/JudgementTimingSample.h"
+#include "play/RealtimeGameplayAuthorityPolicy.h"
 #include "play/PlayfieldProjection.h"
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include "../ArchiveFile.h"
@@ -682,6 +683,12 @@ void SettingsScene::resetPreviewHudSample() {
                                                   previewAutoPlayRandom)
       : std::vector<settings_scene::PreviewAutoPlayEvent>{};
   previewAutoPlayNextEvent = 0;
+  // Dense generated charts need the same admission sizing as normal gameplay.
+  const auto noteCount = previewDefinition->noteCount();
+  const auto duration = previewDefinition->metadata().finalTimelineTimeMicros;
+  const auto automaticCapacity = std::max<std::size_t>(4096, noteCount * 3 + 1024);
+  const auto gaugeCapacity = std::max(automaticCapacity,
+      skinGameplayGaugeHistoryCapacityHint(duration));
   previewSimulation = std::make_unique<gameplay::GameplaySimulation>(
       *previewDefinition, gameplay::GameplaySimulationConfig{
           .judge = gameplay::CompiledGameplayJudge::from(gameplay::compileGameplayJudgeRules(
@@ -690,7 +697,10 @@ void SettingsScene::resetPreviewHudSample() {
               previewChart->Meta.KeyMode)),
           .gaugeRules = *previewGaugeRules,
           .notePriorityMode = context.settings.notePriorityMode,
-          .attempt = {.startingGaugePercent = 74}});
+          .attempt = {.startingGaugePercent = 74,
+                      .replayCapacity = gameplay::realtimeGameplayReplayCapacity(noteCount, duration),
+                      .automaticResultCapacity = automaticCapacity,
+                      .gaugeHistoryCapacity = gaugeCapacity}});
   previewRenderer->setGaugeStatus(GaugeType::Normal,
                                   GaugeAutoShiftMode::None, 74.0f,
                                   *previewGaugeRules);

@@ -1,4 +1,5 @@
 #include "scene/play/GameplaySimulation.h"
+#include "scene/play/RealtimeGameplayAuthorityPolicy.h"
 #include "scene/play/JudgementTimingSample.h"
 #include "GameplayKeyMode.h"
 #include "input/RhythmInputHandler.h"
@@ -3506,6 +3507,27 @@ void verifyPreviewScoreUsesRealJudgements() {
          "restarting clears preview score, note progression, and timing counters");
 }
 
+void verifyDenseCalibrationHasChartSizedJudgementBuffers() {
+  const auto chart = settings_scene::makeCalibrationChart(48,
+      {.pattern = settings_scene::CalibrationPattern::Denim, .subdivision = 32});
+  Judge judge(chart->Meta.Rank);
+  BMSRenderer renderer(chart.get(), judge.timingWindows, 500, true);
+  SettingsScene scene;
+  scene.previewChart = chart.get();
+  scene.previewRenderer = &renderer;
+  scene.calibrationActive = true;
+  scene.resetPreviewHudSample();
+  expect(chart->Meta.TotalNotes > 4096, "dense calibration crosses the default buffer capacity");
+  const auto afterMissWindows = chart->Meta.TotalLength + 1'000'000;
+  const auto result = scene.previewSimulation->advanceTo(afterMissWindows, afterMissWindows);
+  expect(result.transactions.size() == chart->Meta.TotalNotes &&
+             scene.previewSimulation->scoreState().stagePassedNotes == chart->Meta.TotalNotes,
+         "every dense calibration note is judged even in a single catch-up update");
+  expect(!scene.previewSimulation->scoreState().gaugeHistoryOverflowed() &&
+             scene.previewSimulation->replayEvents().size() == chart->Meta.TotalNotes,
+         "calibration retains complete gauge and judgement history past 4096 events");
+}
+
 void verifyDisplayCalibrationPreservesUpcomingNotes() {
   const auto chart = settings_scene::makeCalibrationChart(7);
   const auto model = buildPlayfieldChartVisualModel(*chart, 0);
@@ -4425,6 +4447,7 @@ int main() {
       verifyPreviewPacemakerMatchesChartScore();
   verifyPreviewNotesMoveThroughoutOpening();
   verifyPreviewScoreUsesRealJudgements();
+  verifyDenseCalibrationHasChartSizedJudgementBuffers();
   verifyDisplayCalibrationPreservesUpcomingNotes();
   verifyPreviewInputTimingSamples();
   verifyPreviewPause();

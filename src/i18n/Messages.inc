@@ -1236,7 +1236,7 @@
 {"settings.calibration.hide_notes", "Hide notes", "노트 숨기기", "ノーツを隠す", "隐藏音符", "隱藏音符"},
 {"settings.calibration.logical_line", "Logical judgement line", "논리 판정선", "論理判定ライン", "逻辑判定线", "邏輯判定線"},
 {"settings.calibration.meter", "Metronome", "메트로놈", "メトロノーム", "节拍器", "節拍器"},
-{"settings.calibration.mute_metronome", "Mute metronome", "메트로놈 음소거", "メトロノームをミュート", "节拍器静音", "節拍器靜音"},
+{"settings.calibration.mute", "Mute", "음소거", "ミュート", "静音", "靜音"},
 {"settings.calibration.paused", "Calibration paused. Press Start calibration for a fresh count-in.", "보정을 일시 정지했습니다. 보정 시작을 눌러 준비 박자부터 시작하세요.", "調整を一時停止しました。「調整開始」でカウントから始めます。", "校准已暂停。点击开始校准以重新预备计拍。", "校準已暫停。點擊開始校準以重新預備計拍。"},
 {"settings.calibration.progress", "Measuring: {count} / 16 taps. Changes are saved only when you Apply.", "측정 중: {count} / 16회. 적용을 눌러야 변경 사항이 저장됩니다.", "測定中: {count} / 16回。「適用」で変更を保存します。", "测量中：{count} / 16 次。仅在应用后保存更改。", "測量中：{count} / 16 次。僅在套用後儲存變更。"},
 {"settings.calibration.ready", "Press Start calibration when ready. The panel will hide during measurement and reopen with the result.", "준비되면 보정 시작을 누르세요. 측정 중에는 패널을 숨기고 결과가 나오면 다시 엽니다.", "準備ができたら「調整開始」を押してください。測定中はパネルを隠し、結果とともに再表示します。", "准备好后点击开始校准。测量时面板会隐藏，完成后重新打开并显示结果。", "準備好後點擊開始校準。測量時面板會隱藏，完成後重新開啟並顯示結果。"},

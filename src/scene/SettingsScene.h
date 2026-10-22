@@ -333,7 +333,7 @@ private:
   bool calibrationActive = false;
   bool calibrationMeasuring = false;
   bool calibrationDisplay = false;
-  bool calibrationMetronomeMuted = false;
+  bool calibrationMuted = false;
   bool calibrationNotesHidden = false;
   bool calibrationLogicalJudgementLine = false;
   bool calibrationAudioRunning = false;
