@@ -1876,7 +1876,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   for (size_t index = 0; index < tabLabels.size(); ++index) {
     TextView *text = nullptr;
     auto *button = makeSelectorButton(i18n::message(tabMessages[index]), 22, &text, tabIcons[index]);
-    button->getContentView()->setPadding(Edge::Left, 8)->setPadding(Edge::Right, 8)->setGap(8);
+    button->getContentView()->setPadding(Edge::Left, 12)->setPadding(Edge::Right, 8)->setGap(8);
     text->setFlex(1);
     text->setAlign(TextView::CENTER);
     button->setName(std::string("mainMenuTab:") + tabLabels[index]);

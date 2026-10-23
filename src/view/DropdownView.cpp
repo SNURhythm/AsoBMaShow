@@ -134,7 +134,9 @@ DropdownView::~DropdownView() {
 void DropdownView::buildView() {
   triggerButton = new Button(0, 0, 160, static_cast<int>(triggerHeight()));
   triggerButton->setHeight(triggerHeight());
-  triggerButton->setWidthPercent(100.0f);
+  // Stretch to the container's resolved width, including intrinsic sizing.
+  // A percentage width can collapse while an auto-width parent is measured.
+  triggerButton->setWidth(YGUndefined);
   triggerButton->setFlexGrow(1.0f);
   triggerButton->setFlexBasis(0.0f);
   triggerButton->setFlexShrink(1.0f);

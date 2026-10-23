@@ -648,6 +648,22 @@ void testDropdownPreservesAllocatedWidthAcrossRefreshes() {
   }
 }
 
+void testNaturalDropdownRemainsVisibleInSettingsColumn() {
+  View root(0, 0, 440, 700);
+  root.setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignFlexStart);
+  auto *dropdown = new DropdownView({});
+  dropdown->refresh({.selectedId = "system",
+                     .options = {{.id = "system", .label = "System default"},
+                                 {.id = "en", .label = "English"}}});
+  root.addView(dropdown);
+  root.applyYogaLayout();
+  require(dropdown->getWidth() >= 160 && dropdown->getHeight() >= 42,
+          "natural settings dropdown retains a visible control area");
+  require(dropdown->triggerButton->getWidth() == dropdown->getWidth() &&
+              dropdown->triggerButton->getHeight() >= 42,
+          "natural settings dropdown trigger fills its control area");
+}
+
 void testDropdownFitsContentAndRevealsSelection() {
   const int previousHeight = rendering::window_height;
   rendering::window_height = 900;
@@ -878,6 +894,7 @@ int main() {
   require(bgfx::init(init), "headless bgfx initializes for panel resources");
 
   testDropdownPreservesAllocatedWidthAcrossRefreshes();
+  testNaturalDropdownRemainsVisibleInSettingsColumn();
   testDropdownFitsContentAndRevealsSelection();
   testColorPickerPopup();
   testColorPickerColorSpace();
