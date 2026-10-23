@@ -257,6 +257,34 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
                        .options = std::move(options), .maxVisibleItems = 8});
     row->addView(dropdown);
   };
+  const auto addToggle = [&](View *parent, const char *key, bool &enabled, bool restartAudio) {
+    auto *content = new CheckboxButtonContent(i18n::tr(key), metrics.smallTextSize, 20);
+    content->setThemedColor(app_theme::textPrimary);
+    content->setChecked(enabled);
+    auto *button = new Button();
+    button->setHeight(controlHeight);
+    button->setPadding(Edge::Left, 12);
+    button->setPadding(Edge::Right, 12);
+    button->setAlignItems(YGAlignCenter);
+    button->setJustifyContent(YGJustifyCenter);
+    button->setFlexShrink(0);
+    button->setCornerRadius(app_theme::controlRadius());
+    button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
+    button->addView(content);
+    button->setOnClickListener([this, value = &enabled, content, restartAudio] {
+      *value = !*value;
+      content->setChecked(*value);
+      if (calibrationDisplay && value == &calibrationNotesHidden) {
+        calibrationMeasuring = false;
+        calibrationSamples.reset();
+        lastLayoutWidth = -1;
+      }
+      // Start a fresh count-in with the changed sound schedule; taps survive.
+      if (restartAudio) previewRendererDirty = true;
+      ui::invalidate();
+    });
+    parent->addView(button);
+  };
   auto *modes = new View();
   modes->setFlexDirection(FlexDirection::Row);
   modes->setFlexWrap(YGWrapWrap);
@@ -278,6 +306,13 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
     modeButton->setFlexBasis(0);
   }
   body->addView(modes);
+  auto *modeAid = new View();
+  modeAid->setFlexDirection(FlexDirection::Row);
+  if (calibrationDisplay)
+    addToggle(modeAid, "settings.calibration.mute", calibrationMuted, true);
+  else
+    addToggle(modeAid, "settings.calibration.hide_notes", calibrationNotesHidden, false);
+  body->addView(modeAid);
   body->addView(makeWrappedText(i18n::message(calibrationDisplay
       ? "settings.calibration.display_help" : "settings.calibration.audio_help",
       {{"beats", std::to_string(calibrationChartOptions.beatsPerMeasure)}}),
@@ -309,6 +344,10 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
     adjustments->addView(step);
   }
   body->addView(adjustments);
+  auto *logicalLine = new View();
+  logicalLine->setFlexDirection(FlexDirection::Row);
+  addToggle(logicalLine, "settings.calibration.logical_line", calibrationLogicalJudgementLine, false);
+  body->addView(logicalLine);
   calibrationStatusText = makeWrappedText({}, metrics.smallTextSize, app_theme::textSecondary());
   body->addView(calibrationStatusText);
   auto *startButton = addButton(body, i18n::message("settings.calibration.start"), [this] {
@@ -344,45 +383,7 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
         persistSettings();
         restart();
       });
-  auto *aids = new View();
-  aids->setFlexDirection(FlexDirection::Row);
-  aids->setFlexWrap(YGWrapWrap);
-  aids->setGap(8);
-  const auto addToggle = [&](View *parent, const char *key, bool &enabled, bool restartAudio) {
-    auto *content = new CheckboxButtonContent(i18n::tr(key), metrics.smallTextSize, 20);
-    content->setThemedColor(app_theme::textPrimary);
-    content->setChecked(enabled);
-    auto *button = new Button();
-    button->setHeight(controlHeight);
-    button->setPadding(Edge::Left, 12);
-    button->setPadding(Edge::Right, 12);
-    button->setAlignItems(YGAlignCenter);
-    button->setJustifyContent(YGJustifyCenter);
-    button->setFlexShrink(0);
-    button->setCornerRadius(app_theme::controlRadius());
-    button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
-    button->addView(content);
-    button->setOnClickListener([this, value = &enabled, content, restartAudio] {
-      *value = !*value;
-      content->setChecked(*value);
-      if (calibrationDisplay && value == &calibrationNotesHidden) {
-        calibrationMeasuring = false;
-        calibrationSamples.reset();
-        lastLayoutWidth = -1;
-      }
-      // Start a fresh count-in with the changed sound schedule; taps survive.
-      if (restartAudio) previewRendererDirty = true;
-      ui::invalidate();
-    });
-    parent->addView(button);
-  };
-  if (calibrationDisplay)
-    addToggle(sound, "settings.calibration.mute", calibrationMuted, true);
   body->addView(sound);
-  if (!calibrationDisplay)
-    addToggle(aids, "settings.calibration.hide_notes", calibrationNotesHidden, false);
-  addToggle(aids, "settings.calibration.logical_line", calibrationLogicalJudgementLine, false);
-  body->addView(aids);
   auto *setupTabs = new View();
   setupTabs->setFlexDirection(FlexDirection::Row);
   setupTabs->setGap(metrics.compact ? 8.0f : 10.0f);
