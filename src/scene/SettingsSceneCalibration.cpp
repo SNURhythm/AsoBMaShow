@@ -2,6 +2,7 @@
 #include "../view/ScrollView.h"
 #include "../view/DropdownView.h"
 #include "../view/CheckboxButtonContent.h"
+#include "../view/ActionButtonStyle.h"
 #include <numbers>
 
 using namespace settings_scene;
@@ -32,6 +33,7 @@ void SettingsScene::startCalibration() {
   calibrationSamples.configure(calibrationChartOptions.bpm, calibrationChartOptions.beatsPerMeasure);
   calibrationError.clear();
   calibrationDisplay = false;
+  calibrationScrollSettings = false;
   calibrationMeasuring = false;
   calibrationActive = true;
   previewAutoPlay = false;
@@ -211,27 +213,28 @@ void SettingsScene::refreshCalibrationText() {
   calibrationStatusText->setLocalizedText(std::move(status));
 }
 
-void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metrics, View *selectionRow) {
-  const int controlHeight = std::max(44, metrics.actionButtonHeight * 2 / 3);
-  const int stepWidth = metrics.compact ? 44 : 52;
+void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metrics,
+                                           View *selectionRow, float contentWidth) {
+  const int controlHeight = metrics.actionButtonHeight;
+  const int stepWidth = metrics.offsetButtonWidthSmall;
+  const bool stackAdjustments = contentWidth < stepWidth * 4 + metrics.bodyTextSize * 6 + 32;
   auto *scroll = new ScrollView();
   scroll->setFlexGrow(1);
   scroll->setFlexShrink(1);
   scroll->setMinHeight(0);
+  scroll->setContentPadding(Edge::Right, metrics.compact ? 10.0f : 12.0f);
+  scrollView = scroll;
   auto *body = new View();
   body->setFlexDirection(FlexDirection::Column);
-  body->setGap(12);
+  body->setGap(metrics.compact ? 12.0f : 16.0f);
   const auto addButton = [&](View *parent, const i18n::Text &label,
                              std::function<void()> action, bool selected = false, bool primary = false) {
-    auto *labelView = makeText(label, metrics.smallTextSize, app_theme::textPrimary(),
+    auto *labelView = makeText(label, metrics.bodyTextSize + 2, app_theme::textPrimary(),
                                TextView::CENTER, TextView::MIDDLE);
-    auto *button = makeControlButton(kFitContentWidth, controlHeight, labelView);
+    auto *button = selected || primary
+        ? makeAccentButton(kFitContentWidth, controlHeight, labelView, app_theme::cyan())
+        : makeControlButton(kFitContentWidth, controlHeight, labelView);
     button->setSelected(selected);
-    if (selected || primary) {
-      button->setThemedBackgroundColors(app_theme::action, app_theme::actionHover,
-                                        app_theme::actionPressed);
-      labelView->setThemedColor(app_theme::onAction);
-    }
     button->setOnClickListener(std::move(action));
     parent->addView(button);
     return button;
@@ -247,7 +250,8 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
                                std::vector<DropdownView::Option> options,
                                std::function<void(const std::string &)> choose) {
     auto *dropdown = new DropdownView({.onOptionSelected = std::move(choose)}, overlayPortal);
-    dropdown->setTriggerWidth(metrics.compact ? 160 : 210);
+    dropdown->setTriggerWidth(metrics.compact ? 200 : 240);
+    dropdown->setHeight(controlHeight);
     dropdown->refresh({.label = label, .selectedId = std::move(selected),
                        .options = std::move(options), .maxVisibleItems = 8});
     row->addView(dropdown);
@@ -255,7 +259,7 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
   auto *modes = new View();
   modes->setFlexDirection(FlexDirection::Row);
   modes->setFlexWrap(YGWrapWrap);
-  modes->setGap(8);
+  modes->setGap(metrics.compact ? 8.0f : 10.0f);
   for (const bool display : {false, true}) {
     auto *modeButton = addButton(modes, i18n::message(display ? "settings.calibration.display" : "settings.calibration.audio"),
         [this, display] {
@@ -275,32 +279,31 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
       ? "settings.calibration.display_help" : "settings.calibration.audio_help",
       {{"beats", std::to_string(calibrationChartOptions.beatsPerMeasure)}}),
       metrics.smallTextSize, app_theme::textSecondary()));
+  calibrationValueText = makeText({}, metrics.bodyTextSize, app_theme::textPrimary(),
+                                  TextView::CENTER, TextView::MIDDLE);
+  calibrationValueText->setFlexGrow(1);
+  calibrationValueText->setMinWidth(80);
+  if (stackAdjustments) body->addView(calibrationValueText);
   auto *adjustments = new View();
   adjustments->setFlexDirection(FlexDirection::Row);
   adjustments->setAlignItems(YGAlignCenter);
   adjustments->setGap(8);
   for (const int delta : {-10, -1, 1, 10}) {
-    if (delta == 1) {
-      calibrationValueText = makeText({}, metrics.bodyTextSize, app_theme::textPrimary(),
-                                      TextView::CENTER, TextView::MIDDLE);
-      calibrationValueText->setFlexGrow(1);
-      calibrationValueText->setMinWidth(80);
-      adjustments->addView(calibrationValueText);
-    }
-    auto *step = addButton(adjustments, i18n::Text((delta > 0 ? "+" : "") + std::to_string(delta)),
-        [this, delta] {
-          calibrationMeasuring = false;
-          calibrationSamples.reset();
-          if (calibrationDisplay) calibrationVisualOffsetMs = clampVisualOffset(calibrationVisualOffsetMs + delta);
-          else {
-            calibrationAudioOffsetMs = clampOffset(calibrationAudioOffsetMs + delta);
-            previewRendererDirty = true;
-          }
-          refreshCalibrationText();
-        });
-    step->setWidth(stepWidth);
-    step->setPadding(Edge::Left, 4);
-    step->setPadding(Edge::Right, 4);
+    if (delta == 1 && !stackAdjustments) adjustments->addView(calibrationValueText);
+    auto *step = makeStepButton(metrics, stepWidth,
+        i18n::Text((delta > 0 ? "+" : "") + std::to_string(delta)));
+    step->setOnClickListener([this, delta] {
+      calibrationMeasuring = false;
+      calibrationSamples.reset();
+      if (calibrationDisplay) calibrationVisualOffsetMs = clampVisualOffset(calibrationVisualOffsetMs + delta);
+      else {
+        calibrationAudioOffsetMs = clampOffset(calibrationAudioOffsetMs + delta);
+        previewRendererDirty = true;
+      }
+      refreshCalibrationText();
+    });
+    if (stackAdjustments) step->setFlex(1)->setMinWidth(0);
+    adjustments->addView(step);
   }
   body->addView(adjustments);
   calibrationStatusText = makeWrappedText({}, metrics.smallTextSize, app_theme::textSecondary());
@@ -324,130 +327,150 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
   previewHeading->setMargin(Edge::Top, 12);
   body->addView(previewHeading);
   body->addView(selectionRow);
-  auto *chartControls = new View();
-  chartControls->setFlexDirection(FlexDirection::Row);
-  chartControls->setFlexWrap(YGWrapWrap);
-  chartControls->setGap(8);
-  std::vector<DropdownView::Option> patterns;
-  for (const auto &[pattern, key] : std::array{
-      std::pair{CalibrationPattern::SingleLane, "settings.calibration.single"},
-      std::pair{CalibrationPattern::Stairs, "settings.calibration.stairs"},
-      std::pair{CalibrationPattern::ReverseStairs, "settings.calibration.reverse_stairs"},
-      std::pair{CalibrationPattern::Denim, "settings.calibration.denim"}})
-    patterns.push_back({.id = std::to_string(static_cast<int>(pattern)), .label = i18n::message(key)});
-  addDropdown(chartControls, i18n::message("settings.calibration.chart"),
-      std::to_string(static_cast<int>(calibrationChartOptions.pattern)), std::move(patterns),
-      [this, restart](const std::string &id) {
-        calibrationChartOptions.pattern = static_cast<CalibrationPattern>(std::stoi(id));
-        restart();
-      });
-  if (calibrationChartOptions.pattern == CalibrationPattern::SingleLane && previewChart) {
-    const auto keys = previewChart->Meta.GetKeyLaneIndices();
-    const auto scratches = previewChart->Meta.GetScratchLaneIndices();
-    const auto lanes = previewKeyMode < 0 ? keys : previewChart->Meta.GetTotalLaneIndices();
-    if (std::ranges::find(lanes, calibrationChartOptions.lane) == lanes.end())
-      calibrationChartOptions.lane = keys[keys.size() / 2];
-    std::vector<DropdownView::Option> options;
-    for (const int lane : lanes) {
-      const auto scratch = std::ranges::find(scratches, lane);
-      const auto key = std::ranges::find(keys, lane);
-      const auto label = scratch != scratches.end()
-          ? (scratches.size() == 1 ? "S" : scratch == scratches.begin() ? "LS" : "RS")
-          : std::to_string(key - keys.begin() + 1);
-      options.push_back({.id = std::to_string(lane), .label = label});
-    }
-    addDropdown(chartControls, i18n::message("settings.preview_layout.lane.label"),
-        std::to_string(calibrationChartOptions.lane), std::move(options),
-        [this, restart](const std::string &id) { calibrationChartOptions.lane = std::stoi(id); restart(); });
+  auto *setupTabs = new View();
+  setupTabs->setFlexDirection(FlexDirection::Row);
+  setupTabs->setGap(metrics.compact ? 8.0f : 10.0f);
+  for (const bool scrollSettings : {false, true}) {
+    auto *tab = addButton(setupTabs, i18n::message(scrollSettings
+        ? "settings.preview_layout.scroll.label" : "settings.calibration.chart"),
+        [this, scrollSettings] {
+          if (calibrationScrollSettings == scrollSettings) return;
+          calibrationScrollSettings = scrollSettings;
+          if (scrollView) scrollView->setScrollOffset(0);
+          lastLayoutWidth = -1;
+        }, calibrationScrollSettings == scrollSettings);
+    tab->setFlexGrow(1);
+    tab->setFlexBasis(0);
   }
-  body->addView(chartControls);
-  auto *tempo = new View();
-  tempo->setFlexDirection(FlexDirection::Row);
-  tempo->setAlignItems(YGAlignCenter);
-  tempo->setGap(8);
-  for (const int delta : {-10, -1, 1, 10}) {
-    if (delta == 1) {
-      auto *value = makeText(std::to_string(calibrationChartOptions.bpm) + " BPM",
-                             metrics.bodyTextSize, app_theme::textPrimary(),
-                             TextView::CENTER, TextView::MIDDLE);
-      value->setFlexGrow(1);
-      value->setMinWidth(80);
-      tempo->addView(value);
-    }
-    auto *step = addButton(tempo, i18n::Text((delta > 0 ? "+" : "") + std::to_string(delta)), [this, restart, delta] {
-      calibrationChartOptions.bpm = std::clamp(calibrationChartOptions.bpm + delta, 40, 300);
-      restart();
-    });
-    step->setWidth(stepWidth);
-    step->setPadding(Edge::Left, 4);
-    step->setPadding(Edge::Right, 4);
-  }
-  body->addView(tempo);
-  auto *rhythm = new View();
-  rhythm->setFlexDirection(FlexDirection::Row);
-  rhythm->setFlexWrap(YGWrapWrap);
-  rhythm->setGap(8);
-  std::vector<DropdownView::Option> subdivisions;
-  for (int denominator : {4, 8, 16, 24, 32})
-    subdivisions.push_back({.id = std::to_string(denominator), .label = "1/" + std::to_string(denominator)});
-  addDropdown(rhythm, i18n::message("settings.calibration.spacing"),
-      std::to_string(calibrationChartOptions.subdivision), std::move(subdivisions),
-      [this, restart](const std::string &id) { calibrationChartOptions.subdivision = std::stoi(id); restart(); });
-  addDropdown(rhythm, i18n::message("settings.calibration.meter"),
-      std::to_string(calibrationChartOptions.beatsPerMeasure), {{"4", "4/4"}, {"3", "3/4"}},
-      [this, restart](const std::string &id) { calibrationChartOptions.beatsPerMeasure = std::stoi(id); restart(); });
-  body->addView(rhythm);
-  auto *sound = new View();
-  sound->setFlexDirection(FlexDirection::Row);
-  sound->setFlexWrap(YGWrapWrap);
-  sound->setAlignItems(YGAlignFlexEnd);
-  sound->setGap(8);
-  addDropdown(sound, i18n::message("records.keysound.label"),
-      context.settings.inputKeysoundEnabled ? "input" : "auto",
-      {{"input", i18n::message("settings.controls.keysound.input_trigger.label")},
-       {"auto", i18n::message("settings.controls.keysound.auto_timed.label")}},
-      [this, restart](const std::string &id) {
-        context.settings.inputKeysoundEnabled = id == "input";
-        persistSettings();
-        restart();
-      });
-  auto *aids = new View();
-  aids->setFlexDirection(FlexDirection::Row);
-  aids->setFlexWrap(YGWrapWrap);
-  aids->setGap(8);
-  const auto addToggle = [&](View *parent, const char *key, bool &enabled, bool restartAudio) {
-    auto *content = new CheckboxButtonContent(i18n::tr(key), metrics.smallTextSize, 20);
-    content->setThemedColor(app_theme::textPrimary);
-    content->setChecked(enabled);
-    auto *button = new Button();
-    button->setHeight(controlHeight);
-    button->setPadding(Edge::Left, 12);
-    button->setPadding(Edge::Right, 12);
-    button->setAlignItems(YGAlignCenter);
-    button->setJustifyContent(YGJustifyCenter);
-    button->setFlexShrink(0);
-    button->setCornerRadius(app_theme::controlRadius());
-    button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
-    button->addView(content);
-    button->setOnClickListener([this, value = &enabled, content, restartAudio] {
-      *value = !*value;
-      content->setChecked(*value);
-      if (calibrationDisplay && value == &calibrationNotesHidden) {
-        calibrationMeasuring = false;
-        calibrationSamples.reset();
-        lastLayoutWidth = -1;
+  body->addView(setupTabs);
+  if (calibrationScrollSettings) {
+    body->addView(buildPreviewScrollControls(metrics));
+  } else {
+    auto *chartControls = new View();
+    chartControls->setFlexDirection(FlexDirection::Row);
+    chartControls->setFlexWrap(YGWrapWrap);
+    chartControls->setGap(8);
+    std::vector<DropdownView::Option> patterns;
+    for (const auto &[pattern, key] : std::array{
+        std::pair{CalibrationPattern::SingleLane, "settings.calibration.single"},
+        std::pair{CalibrationPattern::Stairs, "settings.calibration.stairs"},
+        std::pair{CalibrationPattern::ReverseStairs, "settings.calibration.reverse_stairs"},
+        std::pair{CalibrationPattern::Denim, "settings.calibration.denim"}})
+      patterns.push_back({.id = std::to_string(static_cast<int>(pattern)), .label = i18n::message(key)});
+    addDropdown(chartControls, i18n::message("settings.calibration.chart"),
+        std::to_string(static_cast<int>(calibrationChartOptions.pattern)), std::move(patterns),
+        [this, restart](const std::string &id) {
+          calibrationChartOptions.pattern = static_cast<CalibrationPattern>(std::stoi(id));
+          restart();
+        });
+    if (calibrationChartOptions.pattern == CalibrationPattern::SingleLane && previewChart) {
+      const auto keys = previewChart->Meta.GetKeyLaneIndices();
+      const auto scratches = previewChart->Meta.GetScratchLaneIndices();
+      const auto lanes = previewKeyMode < 0 ? keys : previewChart->Meta.GetTotalLaneIndices();
+      if (std::ranges::find(lanes, calibrationChartOptions.lane) == lanes.end())
+        calibrationChartOptions.lane = keys[keys.size() / 2];
+      std::vector<DropdownView::Option> options;
+      for (const int lane : lanes) {
+        const auto scratch = std::ranges::find(scratches, lane);
+        const auto key = std::ranges::find(keys, lane);
+        const auto label = scratch != scratches.end()
+            ? (scratches.size() == 1 ? "S" : scratch == scratches.begin() ? "LS" : "RS")
+            : std::to_string(key - keys.begin() + 1);
+        options.push_back({.id = std::to_string(lane), .label = label});
       }
-      // Start a fresh count-in with the changed sound schedule; taps survive.
-      if (restartAudio) previewRendererDirty = true;
-      ui::invalidate();
-    });
-    parent->addView(button);
-  };
-  addToggle(sound, "settings.calibration.mute", calibrationMuted, true);
-  body->addView(sound);
-  addToggle(aids, "settings.calibration.hide_notes", calibrationNotesHidden, false);
-  addToggle(aids, "settings.calibration.logical_line", calibrationLogicalJudgementLine, false);
-  body->addView(aids);
+      addDropdown(chartControls, i18n::message("settings.preview_layout.lane.label"),
+          std::to_string(calibrationChartOptions.lane), std::move(options),
+          [this, restart](const std::string &id) { calibrationChartOptions.lane = std::stoi(id); restart(); });
+    }
+    body->addView(chartControls);
+    auto *tempoValue = makeText(std::to_string(calibrationChartOptions.bpm) + " BPM",
+                                metrics.bodyTextSize, app_theme::textPrimary(),
+                                TextView::CENTER, TextView::MIDDLE);
+    tempoValue->setFlexGrow(1);
+    tempoValue->setMinWidth(80);
+    if (stackAdjustments) body->addView(tempoValue);
+    auto *tempo = new View();
+    tempo->setFlexDirection(FlexDirection::Row);
+    tempo->setAlignItems(YGAlignCenter);
+    tempo->setGap(8);
+    for (const int delta : {-10, -1, 1, 10}) {
+      if (delta == 1 && !stackAdjustments) tempo->addView(tempoValue);
+      auto *step = makeStepButton(metrics, stepWidth,
+          i18n::Text((delta > 0 ? "+" : "") + std::to_string(delta)));
+      step->setOnClickListener([this, restart, delta] {
+        calibrationChartOptions.bpm = std::clamp(calibrationChartOptions.bpm + delta, 40, 300);
+        restart();
+      });
+      if (stackAdjustments) step->setFlex(1)->setMinWidth(0);
+      tempo->addView(step);
+    }
+    body->addView(tempo);
+    auto *rhythm = new View();
+    rhythm->setFlexDirection(FlexDirection::Row);
+    rhythm->setFlexWrap(YGWrapWrap);
+    rhythm->setGap(8);
+    std::vector<DropdownView::Option> subdivisions;
+    for (int denominator : {4, 8, 16, 24, 32})
+      subdivisions.push_back({.id = std::to_string(denominator), .label = "1/" + std::to_string(denominator)});
+    addDropdown(rhythm, i18n::message("settings.calibration.spacing"),
+        std::to_string(calibrationChartOptions.subdivision), std::move(subdivisions),
+        [this, restart](const std::string &id) { calibrationChartOptions.subdivision = std::stoi(id); restart(); });
+    addDropdown(rhythm, i18n::message("settings.calibration.meter"),
+        std::to_string(calibrationChartOptions.beatsPerMeasure), {{"4", "4/4"}, {"3", "3/4"}},
+        [this, restart](const std::string &id) { calibrationChartOptions.beatsPerMeasure = std::stoi(id); restart(); });
+    body->addView(rhythm);
+    auto *sound = new View();
+    sound->setFlexDirection(FlexDirection::Row);
+    sound->setFlexWrap(YGWrapWrap);
+    sound->setAlignItems(YGAlignFlexEnd);
+    sound->setGap(8);
+    addDropdown(sound, i18n::message("records.keysound.label"),
+        context.settings.inputKeysoundEnabled ? "input" : "auto",
+        {{"input", i18n::message("settings.controls.keysound.input_trigger.label")},
+         {"auto", i18n::message("settings.controls.keysound.auto_timed.label")}},
+        [this, restart](const std::string &id) {
+          context.settings.inputKeysoundEnabled = id == "input";
+          persistSettings();
+          restart();
+        });
+    auto *aids = new View();
+    aids->setFlexDirection(FlexDirection::Row);
+    aids->setFlexWrap(YGWrapWrap);
+    aids->setGap(8);
+    const auto addToggle = [&](View *parent, const char *key, bool &enabled, bool restartAudio) {
+      auto *content = new CheckboxButtonContent(i18n::tr(key), metrics.smallTextSize, 20);
+      content->setThemedColor(app_theme::textPrimary);
+      content->setChecked(enabled);
+      auto *button = new Button();
+      button->setHeight(controlHeight);
+      button->setPadding(Edge::Left, 12);
+      button->setPadding(Edge::Right, 12);
+      button->setAlignItems(YGAlignCenter);
+      button->setJustifyContent(YGJustifyCenter);
+      button->setFlexShrink(0);
+      button->setCornerRadius(app_theme::controlRadius());
+      button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
+      button->addView(content);
+      button->setOnClickListener([this, value = &enabled, content, restartAudio] {
+        *value = !*value;
+        content->setChecked(*value);
+        if (calibrationDisplay && value == &calibrationNotesHidden) {
+          calibrationMeasuring = false;
+          calibrationSamples.reset();
+          lastLayoutWidth = -1;
+        }
+        // Start a fresh count-in with the changed sound schedule; taps survive.
+        if (restartAudio) previewRendererDirty = true;
+        ui::invalidate();
+      });
+      parent->addView(button);
+    };
+    addToggle(sound, "settings.calibration.mute", calibrationMuted, true);
+    body->addView(sound);
+    addToggle(aids, "settings.calibration.hide_notes", calibrationNotesHidden, false);
+    addToggle(aids, "settings.calibration.logical_line", calibrationLogicalJudgementLine, false);
+    body->addView(aids);
+  }
   scroll->setContentView(body);
   panel->addView(scroll);
   calibrationSummaryText = makeWrappedText({}, metrics.smallTextSize, app_theme::textSecondary());
@@ -456,7 +479,14 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
   actions->setFlexDirection(FlexDirection::Row);
   actions->setJustifyContent(YGJustifySpaceBetween);
   actions->setGap(8);
-  addButton(actions, i18n::message("settings.input.cancel.label"), [this] { finishCalibration(false); });
-  addButton(actions, i18n::message("settings.audio.apply.label"), [this] { finishCalibration(true); }, false, true);
+  auto *cancel = addButton(actions, i18n::message("settings.input.cancel.label"),
+      [this] { finishCalibration(false); });
+  auto *applyText = makeText(i18n::message("settings.audio.apply.label"), metrics.bodyTextSize + 2,
+                             app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
+  auto *apply = makeControlButton(kFitContentWidth, controlHeight, applyText);
+  action_button::applyStyle(apply, applyText, app_theme::ActionCategory::Confirmation);
+  apply->setOnClickListener([this] { finishCalibration(true); });
+  actions->addView(apply);
+  for (auto *button : {cancel, apply}) button->setWidth(0)->setMinWidth(0)->setFlex(1);
   panel->addView(actions);
 }

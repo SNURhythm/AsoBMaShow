@@ -347,6 +347,7 @@ private:
   TextView *calibrationStatusText = nullptr;
   TextView *calibrationValueText = nullptr;
   TextView *calibrationSummaryText = nullptr;
+  bool calibrationScrollSettings = false;
   std::optional<std::int64_t> previewEventSteadyMicros;
   void startCalibration();
   void finishCalibration(bool apply);
@@ -355,7 +356,8 @@ private:
   void updateCalibration();
   void recordCalibrationTap(long long rawTimeMicros);
   void playCalibrationKeysound();
-  void buildCalibrationPanel(View *panel, const settings_scene::LayoutMetrics &metrics, View *selectionRow);
+  void buildCalibrationPanel(View *panel, const settings_scene::LayoutMetrics &metrics,
+                             View *selectionRow, float contentWidth);
   void refreshCalibrationText();
   long long previewInputTimeMicros(double inputDelay) const;
   bool previewActive = false;
@@ -512,6 +514,7 @@ private:
   View *buildKeybombControls(const settings_scene::LayoutMetrics &metrics, int keyMode, bool previewStyle);
   View *buildJudgementFeedbackStyleControls(const settings_scene::LayoutMetrics &metrics,
                                               bool previewStyle = false);
+  View *buildPreviewScrollControls(const settings_scene::LayoutMetrics &metrics);
   View *buildVisibleTimeControls(const settings_scene::LayoutMetrics &metrics,
                                  bool includeDescription,
                                  bool compactAdjustments);
