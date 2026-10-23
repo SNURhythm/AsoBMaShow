@@ -1,5 +1,7 @@
 #include "scene/play/GameplaySimulation.h"
+#include "scene/play/RealtimeGameplayAuthorityPolicy.h"
 #include "scene/play/JudgementTimingSample.h"
+#include "scene/play/GameplayCandidateSelection.h"
 #include "GameplayKeyMode.h"
 #include "input/RhythmInputHandler.h"
 #include "rendering/RenderPlan.h"
@@ -8,6 +10,7 @@
 #include "rendering/common.h"
 #include "scene/play/BMSRenderer.h"
 #include "scene/SettingsPreviewChart.h"
+#include "scene/OffsetCalibration.h"
 #include "scene/SettingsSceneShared.h"
 #include "scene/play/StartLaneIndicatorGeometry.h"
 #include "settings/BuiltInNoteEditing.h"
@@ -155,6 +158,8 @@ std::string submissionKindName(characterization::SubmissionKind kind) {
     return "background";
   case Kind::JudgeLine:
     return "judgeLine";
+  case Kind::LogicalJudgeLine:
+    return "logicalJudgeLine";
   case Kind::MeasureLine:
     return "measureLine";
   case Kind::NormalNote:
@@ -2771,6 +2776,34 @@ void verifyGreenNumberUsesLiveConfiguredHispeed() {
          "controls note travel");
 }
 
+void verifyLogicalJudgementLine(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  const auto chart = settings_scene::makeCalibrationChart(7);
+  Judge judge(chart->Meta.Rank);
+  BMSRenderer renderer(chart.get(), judge.timingWindows, 500, false);
+  RenderContext context;
+  for (const auto delta : {std::optional<double>(0.01), std::optional<double>(-0.01),
+                            std::optional<double>()}) {
+    auto config = presentationConfig(0);
+    config.logicalJudgementScrollDelta = delta;
+    renderer.configure(config);
+    const auto traversal = renderer.projectionTraversal();
+    Recorder recorder;
+    renderer.setCharacterizationRecorder(&recorder);
+    renderer.render(context, 1'000'000, 1'000'000);
+    const auto line = std::ranges::find(recorder.submissions,
+        characterization::SubmissionKind::LogicalJudgeLine, &characterization::Submission::kind);
+    expect((line != recorder.submissions.end()) == delta.has_value(),
+           "logical judgement line is submitted only while enabled");
+    if (line != recorder.submissions.end())
+      expect(std::abs(line->rect.y - (traversal.judgeY + *delta * traversal.rxhs)) < 1e-5 &&
+                 line->rect.height < recorder.frames.back().noteRenderWidth * 0.02F,
+             "logical line uses the exact note traversal scale and stays thin");
+    renderer.setCharacterizationRecorder(nullptr);
+    bgfx::frame();
+  }
+}
+
 // The scene lifetime and disk persistence boundary are substituted. Extracted
 // editors, popup wiring, preview synchronization, widgets, renderer, camera,
 // input handler, and logical input pipeline are production code.
@@ -2794,6 +2827,10 @@ struct SettingsScene {
   std::unique_ptr<PlayfieldPresentation> previewPresentation;
   std::unique_ptr<gameplay::RealtimeTouchInputRouter> previewTouchRouter;
   std::uint64_t previewTouchLayoutRevision = 0;
+  std::optional<SDL_FingerID> previewLaneCoverFinger;
+  bool previewLaneCoverMouse = false;
+  bool previewLaneCoverChanged = false;
+  float previewLaneCoverGrabOffset = 0;
   std::vector<const bms_parser::Note *> previewVisualNoteSources;
   RhythmInputHandler *previewInputHandler = nullptr;
   PlayfieldVisualStateStore *previewVisualStateStore = nullptr;
@@ -2805,9 +2842,23 @@ struct SettingsScene {
   std::unique_ptr<GameplayGaugeRules> previewGaugeRules;
   std::unique_ptr<gameplay::GameplayDefinition> previewDefinition;
   std::unique_ptr<gameplay::GameplaySimulation> previewSimulation;
+  std::unique_ptr<PlayfieldProjection> previewProjection;
   const PlayfieldChartVisualModel *previewChartVisualModel = nullptr;
   std::unique_ptr<PlayfieldVisualState> previewCapturedVisualState;
   std::uint64_t previewFrameSerial = 0;
+  int previewKeyMode = 7;
+  bool calibrationActive = false;
+  bool calibrationLogicalJudgementLine = false;
+  bool calibrationDisplay = false;
+  bool calibrationNotesHidden = false;
+  bool calibrationFeedbackHidden = false;
+  int calibrationAudioOffsetMs = 0;
+  int calibrationVisualOffsetMs = 0;
+  void updateCalibration() { std::abort(); }
+  std::vector<std::pair<long long, long long>> calibrationTaps;
+  void recordCalibrationTap(long long raw, long long note) { calibrationTaps.emplace_back(raw, note); }
+  void playCalibrationKeysound() {}
+  long long previewInputTimeMicros(double) const { return previewElapsedMicros; }
   bool previewActive = true;
   bool previewPaused = false;
   bool previewAutoPlay = false;
@@ -2846,9 +2897,13 @@ struct SettingsScene {
   void persistSettings() { ++settingsCommits; }
   void destroyPreviewInputHandler() {}
   void syncPreviewTouchLayout();
+  bool handlePreviewLaneCoverEvent(SDL_Event &event, bool capturedOnly = false);
+  void cancelPreviewLaneCoverDrag();
+  void forwardPreviewInputEvent(SDL_Event &event);
   void syncPreviewAuthority();
   void resetPreviewHudSample();
   void capturePreviewVisualState();
+  PlayfieldProjectionResult projectPreviewFrame();
   settings_scene::PreviewEndAnimation previewEndAnimation;
   int previewRestartCount = 0;
   void resetPreviewSimulation() { ++previewRestartCount; previewElapsedMicros = 0; }
@@ -2905,6 +2960,7 @@ void verifyPausedAppearanceDraftUpdatesAndRestoresPreview() {
         OverlayPortal portal;
         SettingsScene scene;
         scene.overlayPortal = &portal;
+        scene.previewKeyMode = keyMode;
         scene.previewPaused = true;
         scene.previewChart = chart.get();
         scene.previewVisualStateStore = &store;
@@ -3013,6 +3069,7 @@ void verifyPausedAppearanceDraftUpdatesAndRestoresPreview() {
 struct PreviewRecordingControl : IRhythmControl {
   std::vector<int> presses;
   std::vector<int> releases;
+  std::vector<bool> backSpins;
   bms_parser::Note *pressLane(int lane, double) override {
     presses.push_back(lane);
     return nullptr;
@@ -3020,8 +3077,9 @@ struct PreviewRecordingControl : IRhythmControl {
   bms_parser::Note *pressLane(int lane, int, double delay) override {
     return pressLane(lane, delay);
   }
-  bms_parser::Note *releaseLane(int lane, double, bool) override {
+  bms_parser::Note *releaseLane(int lane, double, bool backSpin) override {
     releases.push_back(lane);
+    backSpins.push_back(backSpin);
     return nullptr;
   }
 };
@@ -3251,16 +3309,95 @@ void verifyLegacyScratchlessTouchLayout(const RenderTarget &target) {
   }
 }
 
+void verifyPreviewLaneCoverHandleDrag(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  InputDeviceRegistry registry(std::vector<InputDeviceRegistry::BackendFactory>{});
+  const auto profile = makeDefaultInputProfile();
+  for (const bool mouse : {false, true}) {
+    const auto chart = settings_scene::makeCalibrationChart(7);
+    Judge judge(chart->Meta.Rank);
+    auto renderer = std::make_unique<BMSRenderer>(chart.get(), judge.timingWindows, 500, true);
+    SettingsScene scene;
+    scene.previewChart = chart.get();
+    scene.previewRenderer = renderer.get();
+    scene.previewPresentation = std::move(renderer);
+    scene.calibrationActive = true;
+    PreviewRecordingControl control;
+    RhythmInputHandler handler(&control, chart->Meta, registry, profile, makeGameplayInputScopes(7));
+    if (mouse) scene.previewInputHandler = &handler;
+    scene.context.settings.presentation().laneCoverEnabled = true;
+    scene.context.settings.presentation().noteStartPositionPercent = 30;
+    built_in_notes::SharedModeStyles styles;
+    scene.previewRenderer->configure(previewPresentationConfiguration(
+        scene.context.settings, *chart, 7, styles));
+    Recorder recorder;
+    scene.previewRenderer->setCharacterizationRecorder(&recorder);
+    RenderContext context;
+    scene.previewRenderer->render(context, 1'000'000, 1'000'000);
+    const auto &frame = recorder.frames.back();
+    const float centerX = frame.laneCoverHandle.x + frame.laneCoverHandle.width * 0.5F;
+    const auto handle = rendering::game_camera.project({centerX,
+        frame.laneCoverHandle.y + frame.laneCoverHandle.height * 0.5F, 0});
+    const auto destination = rendering::game_camera.project({centerX,
+        frame.judgeY + (frame.upperBound - frame.judgeY) * 0.5F, 0});
+    const auto send = [&](int phase, const bx::Vec3 &point) {
+      SDL_Event event{};
+      if (mouse) {
+        event.type = phase == 0 ? SDL_EVENT_MOUSE_BUTTON_DOWN
+            : phase == 1 ? SDL_EVENT_MOUSE_MOTION : SDL_EVENT_MOUSE_BUTTON_UP;
+        if (phase == 1) {
+          event.motion.x = point.x / rendering::widthScale;
+          event.motion.y = point.y / rendering::heightScale;
+        } else {
+          event.button.button = SDL_BUTTON_LEFT;
+          event.button.x = point.x / rendering::widthScale;
+          event.button.y = point.y / rendering::heightScale;
+        }
+      } else {
+        event.type = phase == 0 ? SDL_EVENT_FINGER_DOWN
+            : phase == 1 ? SDL_EVENT_FINGER_MOTION : SDL_EVENT_FINGER_UP;
+        event.tfinger.fingerID = 42;
+        event.tfinger.x = point.x / rendering::render_width;
+        event.tfinger.y = point.y / rendering::render_height;
+      }
+      scene.forwardPreviewInputEvent(event);
+    };
+    send(0, handle);
+    send(1, destination);
+    expect(scene.context.settings.presentation().noteStartPositionPercent != 30,
+           "preview cover handle moves with mouse and touch even without a note input handler");
+    expect(scene.settingsCommits == 0, "cover drag does not save settings on every motion");
+    send(2, destination);
+    expect(scene.settingsCommits == 1 && !scene.previewLaneCoverFinger,
+           "cover drag persists once on release and clears pointer capture");
+    expect(control.presses.empty() && control.releases.empty(),
+           "cover drag never reaches gameplay note input");
+    scene.context.settings.presentation().noteStartPositionPercent = 30;
+    scene.previewRenderer->setNoteStartPositionPercent(30);
+    send(0, handle);
+    send(1, destination);
+    scene.cancelPreviewLaneCoverDrag();
+    const auto cancelledAt = scene.context.settings.presentation().noteStartPositionPercent;
+    send(1, handle);
+    expect(!scene.previewLaneCoverFinger && scene.settingsCommits == 2 &&
+               scene.context.settings.presentation().noteStartPositionPercent == cancelledAt,
+           "focus/rebuild cancellation saves the last position and stops further dragging");
+    scene.previewRenderer->setCharacterizationRecorder(nullptr);
+    bgfx::frame();
+  }
+}
+
 void verifyPreviewKeyModeTouchRouting(const RenderTarget &target) {
   configureGeometryAndViews(target.framebuffer);
   InputDeviceRegistry registry(std::vector<InputDeviceRegistry::BackendFactory>{});
   const auto profile = makeDefaultInputProfile();
   for (const auto mode : settings_scene::kPreviewKeyModes) {
-    const auto chart = settings_scene::makePreviewChart(mode);
+    const auto chart = settings_scene::makeCalibrationChart(mode);
     Judge judge(chart->Meta.Rank);
     auto renderer = std::make_unique<BMSRenderer>(chart.get(), judge.timingWindows, 500, true);
-    auto config = presentationConfig(0);
-    config.hideEmptyScratchLane = true;
+    AppSettings settings;
+    built_in_notes::SharedModeStyles styles;
+    auto config = previewPresentationConfiguration(settings, *chart, mode, styles);
     renderer->configure(config);
     PreviewRecordingControl control;
     RhythmInputHandler handler(&control, chart->Meta, registry, profile,
@@ -3269,6 +3406,7 @@ void verifyPreviewKeyModeTouchRouting(const RenderTarget &target) {
     scene.previewChart = chart.get();
     scene.previewRenderer = renderer.get();
     scene.previewPresentation = std::move(renderer);
+    scene.previewKeyMode = mode;
     scene.previewInputHandler = &handler;
     scene.syncPreviewTouchLayout();
     const auto layout = scene.previewPresentation->touchLayout();
@@ -3277,7 +3415,6 @@ void verifyPreviewKeyModeTouchRouting(const RenderTarget &target) {
            "preview routes the displayed lane count for each key mode");
     if (!scene.previewTouchRouter) continue;
     for (std::size_t index = 0; index < layout.lanes.size(); ++index) {
-      if (layout.scratch[index]) continue;
       const float fraction = (static_cast<float>(index) + 0.5f) / layout.lanes.size();
       const float leftX = (layout.bottomLeft.x + layout.topLeft.x) * 0.5f;
       const float rightX = (layout.bottomRight.x + layout.topRight.x) * 0.5f;
@@ -3288,6 +3425,24 @@ void verifyPreviewKeyModeTouchRouting(const RenderTarget &target) {
           .normalizedX = leftX + (rightX - leftX) * fraction,
           .normalizedY = leftY + (rightY - leftY) * fraction, .steadyTimestampMicros = 100'000};
       expect(scene.previewTouchRouter->consume(down), "preview touch press is accepted");
+      if (layout.scratch[index]) {
+        const auto presses = control.presses.size();
+        const auto releases = control.releases.size();
+        auto move = down;
+        move.phase = gameplay::RealtimeTouchPhase::Move;
+        move.normalizedY -= 0.03F;
+        move.steadyTimestampMicros += 10'000;
+        expect(scene.previewTouchRouter->consume(move), "preview scratch starts clockwise");
+        move.normalizedY += 0.06F;
+        move.steadyTimestampMicros += 10'000;
+        expect(scene.previewTouchRouter->consume(move), "preview scratch reverses counterclockwise");
+        move.normalizedY -= 0.06F;
+        move.steadyTimestampMicros += 10'000;
+        expect(scene.previewTouchRouter->consume(move), "preview scratch reverses clockwise again");
+        expect(control.presses.size() == presses + 3 && control.releases.size() == releases + 2 &&
+                   control.backSpins[releases] && control.backSpins[releases + 1],
+               "each preview scratch reversal releases with backspin and presses the new direction");
+      }
       expect(!control.presses.empty() && control.presses.back() == layout.lanes[index],
              "preview touch reaches the displayed raw lane, including scratchless and DP modes");
       auto up = down;
@@ -3298,6 +3453,56 @@ void verifyPreviewKeyModeTouchRouting(const RenderTarget &target) {
              "preview release clears the same displayed lane");
     }
   }
+}
+
+void verifyPreviewScratchUsesLiveHoldState(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  const auto chart = settings_scene::makePreviewChart(7);
+  const auto model = buildPlayfieldChartVisualModel(*chart, 0);
+  PlayfieldVisualStateStore store(model);
+  Judge judge(chart->Meta.Rank);
+  auto renderer = std::make_unique<BMSRenderer>(chart.get(), judge.timingWindows, 500, true);
+  renderer->configure(presentationConfig(0));
+  SettingsScene scene;
+  scene.previewChart = chart.get();
+  scene.previewRenderer = renderer.get();
+  scene.previewVisualStateStore = &store;
+  scene.previewPresentation = std::move(renderer);
+  for (const auto *timeline : chart->Measures.front()->TimeLines) {
+    for (const auto *note : timeline->Notes)
+      if (note) scene.previewVisualNoteSources.push_back(note);
+    for (const auto *note : timeline->LandmineNotes)
+      if (note) scene.previewVisualNoteSources.push_back(note);
+  }
+  scene.resetPreviewHudSample();
+  scene.previewElapsedMicros = 3'500'000;
+  scene.pressLane(7, 0);
+  InputDeviceRegistry registry(std::vector<InputDeviceRegistry::BackendFactory>{});
+  PreviewRecordingControl control;
+  RhythmInputHandler handler(&control, chart->Meta, registry, makeDefaultInputProfile(),
+                              makeGameplayInputScopes(7));
+  scene.previewInputHandler = &handler;
+  scene.syncPreviewTouchLayout();
+  const auto layout = scene.previewPresentation->touchLayout();
+  const auto index = std::ranges::find(layout.lanes, 7) - layout.lanes.begin();
+  const float fraction = (index + 0.5F) / layout.lanes.size();
+  const float leftX = (layout.bottomLeft.x + layout.topLeft.x) * 0.5F;
+  const float rightX = (layout.bottomRight.x + layout.topRight.x) * 0.5F;
+  gameplay::RealtimeTouchSample sample{
+      .fingerId = 1, .phase = gameplay::RealtimeTouchPhase::Down,
+      .normalizedX = leftX + (rightX - leftX) * fraction,
+      .normalizedY = (layout.bottomLeft.y + layout.topLeft.y) * 0.5F,
+      .steadyTimestampMicros = 3'500'000};
+  expect(scene.previewTouchRouter->consume(sample), "held scratch accepts touch");
+  sample.phase = gameplay::RealtimeTouchPhase::Move;
+  sample.normalizedY -= 0.03F;
+  expect(scene.previewTouchRouter->consume(sample), "held scratch begins flick");
+  sample.normalizedY += 0.005F;
+  expect(scene.previewTouchRouter->consume(sample) && control.releases.empty(),
+         "live simulation hold suppresses small reverse jitter despite immutable parser state");
+  sample.normalizedY += 0.02F;
+  expect(scene.previewTouchRouter->consume(sample) && control.releases.size() == 1 &&
+             control.backSpins.back(), "held scratch accepts a deliberate backspin");
 }
 
 void verifyPreviewNotesMoveThroughoutOpening() {
@@ -3389,6 +3594,209 @@ void verifyPreviewScoreUsesRealJudgements() {
              scene.previewJudgeCount.at(PGreat) == 0 &&
              scene.previewJudgeFastSlowCount.empty(),
          "restarting clears preview score, note progression, and timing counters");
+}
+
+void verifyCalibrationUsesJudgedTargets() {
+  for (const bool display : {false, true}) {
+    for (const int visualOffset : {-80, 70}) {
+      for (const auto priority : {AppSettings::NotePriorityMode::Lowest,
+                                 AppSettings::NotePriorityMode::Duration}) {
+        const auto chart = settings_scene::makeCalibrationChart(7, {.lane = 1, .subdivision = 32});
+        Judge judge(chart->Meta.Rank);
+        BMSRenderer renderer(chart.get(), judge.timingWindows, 500, true);
+        SettingsScene scene;
+        scene.previewChart = chart.get();
+        scene.previewRenderer = &renderer;
+        scene.calibrationActive = true;
+        scene.calibrationDisplay = display;
+        scene.calibrationAudioOffsetMs = -30;
+        scene.calibrationVisualOffsetMs = visualOffset;
+        scene.context.settings.notesDisplayTimingMilliseconds = 10;
+        scene.context.settings.notePriorityMode = priority;
+        scene.resetPreviewHudSample();
+        const auto noteTime = settings_scene::calibrationTiming().firstNoteMicros;
+        scene.previewElapsedMicros = noteTime - 400'000;
+        scene.pressLane(1, 0);
+        scene.releaseLane(1, 0);
+        expect(scene.calibrationTaps.empty(), "a KPOOR/fallback sound does not create a calibration sample");
+        scene.previewElapsedMicros = noteTime + 40'000;
+        const auto raw = scene.previewElapsedMicros - scene.calibrationAudioOffsetMs * 1000LL;
+        scene.pressLane(2, 0);
+        scene.releaseLane(2, 0);
+        expect(scene.calibrationTaps.empty(), "an empty lane cannot create a calibration sample");
+        scene.pressLane(1, 0);
+        const auto target = priority == AppSettings::NotePriorityMode::Lowest ? noteTime : noteTime + 62'500;
+        expect(scene.calibrationTaps.size() == 1 && scene.calibrationTaps.front() == std::pair{raw, target},
+               "calibration follows the configured judging priority and preserves raw time in both modes");
+        scene.pressLane(1, 0);
+        expect(scene.calibrationTaps.size() == 1,
+               "an already-held lane cannot create another calibration sample");
+        scene.releaseLane(1, 0);
+        expect(scene.previewSimulation->replayEvents().back().songTimeMicros == scene.previewElapsedMicros,
+               "display offset does not change the release judgement clock");
+      }
+    }
+  }
+}
+
+void verifyCalibrationOffsetOnlyMovesNotes(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  for (const bool display : {false, true}) {
+    for (const int offset : {-80, 0, 70}) {
+      const auto chart = settings_scene::makeCalibrationChart(7, {.lane = 1});
+      const auto model = buildPlayfieldChartVisualModel(*chart, 0);
+      PlayfieldVisualStateStore store(model);
+      Judge judge(chart->Meta.Rank);
+      SettingsScene scene;
+      scene.previewPresentation = std::make_unique<BMSRenderer>(chart.get(), judge.timingWindows, 500, true);
+      auto &renderer = static_cast<BMSRenderer &>(*scene.previewPresentation);
+      scene.previewChart = chart.get();
+      scene.previewRenderer = &renderer;
+      scene.previewChartVisualModel = &model;
+      scene.previewVisualStateStore = &store;
+      scene.previewProjection = std::make_unique<PlayfieldProjection>();
+      scene.previewPresentationEvents = std::make_unique<PlayfieldPresentationEventFanout>(store, renderer);
+      scene.calibrationActive = true;
+      scene.calibrationDisplay = display;
+      scene.calibrationVisualOffsetMs = offset;
+      scene.context.settings.notesDisplayTimingMilliseconds = 10;
+      scene.resetPreviewHudSample();
+      const auto inputTime = settings_scene::calibrationTiming().firstNoteMicros + 40'000;
+      scene.previewElapsedMicros = inputTime;
+      scene.pressLane(1, 0);
+      scene.previewElapsedMicros += 80'000;
+      const auto verifyEffects = [&] {
+        scene.capturePreviewVisualState();
+        const auto &state = *scene.previewCapturedVisualState;
+        expect(state.clock.visualTimeMicros == scene.previewElapsedMicros &&
+                   state.lastJudgeVisualMicros == inputTime &&
+                   state.judgementIndicatorSampleCount == 1 &&
+                   state.judgementIndicatorSamples[0].visualTimeMicros == inputTime &&
+                   state.lastJudge.Diff == 40'000,
+               "display offset preserves judgement effect age and measured timing");
+        const auto lane = std::ranges::find_if(state.lanes, [](const auto &value) {
+          return value.keybomb.judgement != None;
+        });
+        expect(lane != state.lanes.end() && lane->pressMicros == inputTime &&
+                   lane->keybomb.timeMicros == inputTime &&
+                   state.clock.visualTimeMicros - lane->keybomb.timeMicros == 80'000,
+               "keybombs and lane beams use the input clock independently of display offset");
+        const auto projection = scene.projectPreviewFrame();
+        const auto noteTime = scene.previewElapsedMicros - scene.calibrationVisualOffsetMs * 1000LL + 10'000;
+        expect(std::abs(projection.currentScrollPosition - noteTime / 2'000'000.0) < 1e-9,
+               "the display offset and note timing still move the projected notes");
+      };
+      verifyEffects();
+      scene.calibrationVisualOffsetMs += 100;
+      verifyEffects();
+      scene.releaseLane(1, 0);
+      scene.calibrationVisualOffsetMs = offset;
+      const auto measureTime = settings_scene::calibrationTiming().firstNoteMicros;
+      for (const auto relative : {-40'000LL, 0LL, 1LL}) {
+        scene.previewElapsedMicros = measureTime + offset * 1000LL - 10'000 + relative;
+        scene.capturePreviewVisualState();
+        const auto projection = scene.projectPreviewFrame();
+        Recorder recorder;
+        renderer.setCharacterizationRecorder(&recorder);
+        RenderContext renderContext;
+        renderer.render(renderContext, *scene.previewCapturedVisualState, projection);
+        const auto line = std::ranges::find_if(recorder.submissions, [&](const auto &submission) {
+          return submission.kind == characterization::SubmissionKind::MeasureLine &&
+                 submission.timelineMicros == measureTime;
+        });
+        expect((line != recorder.submissions.end()) == (relative <= 0),
+               "measure lines disappear only after crossing the drawn judgement line");
+        renderer.setCharacterizationRecorder(nullptr);
+        bgfx::frame();
+      }
+    }
+  }
+}
+
+void verifyCalibrationFeedbackVisibility(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  for (const bool effectsEnabled : {false, true}) {
+    const auto chart = settings_scene::makeCalibrationChart(7, {.lane = 1});
+    const auto model = buildPlayfieldChartVisualModel(*chart, 0);
+    PlayfieldVisualStateStore store(model);
+    Judge judge(chart->Meta.Rank);
+    SettingsScene scene;
+    scene.previewPresentation = std::make_unique<BMSRenderer>(chart.get(), judge.timingWindows, 500, true);
+    auto &renderer = static_cast<BMSRenderer &>(*scene.previewPresentation);
+    scene.previewChart = chart.get();
+    scene.previewRenderer = &renderer;
+    scene.previewChartVisualModel = &model;
+    scene.previewVisualStateStore = &store;
+    scene.previewProjection = std::make_unique<PlayfieldProjection>();
+    scene.previewPresentationEvents = std::make_unique<PlayfieldPresentationEventFanout>(store, renderer);
+    scene.calibrationActive = true;
+    scene.resetPreviewHudSample();
+    auto config = presentationConfig(0);
+    config.fastSlowCriteria = AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow;
+    config.millisecondsCriteria = AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow;
+    config.laneBeamsEnabled = effectsEnabled;
+    config.keybombs[PGreat].visible = effectsEnabled;
+    store.setConfiguration(config);
+    const auto inputTime = settings_scene::calibrationTiming().firstNoteMicros + 40'000;
+    scene.previewElapsedMicros = inputTime;
+    scene.pressLane(1, 0);
+    scene.pressLane(2, 0); // Empty presses still get neutral input effects.
+    const auto actual = store.capture({});
+    expect(actual.lastJudge.judgement != None && actual.lastJudge.judgement != PGreat &&
+               actual.lastJudge.Diff == 40'000 && scene.calibrationTaps.size() == 1,
+           "feedback visibility retains the real non-PGREAT calibration input");
+    for (const bool hidden : {false, true, false}) {
+      scene.calibrationFeedbackHidden = hidden;
+      scene.capturePreviewVisualState();
+      const auto &state = *scene.previewCapturedVisualState;
+      const auto neutralPresses = std::ranges::count_if(state.lanes, [&](const auto &lane) {
+        return lane.pressMicros == inputTime && lane.keybomb.timeMicros == inputTime &&
+               lane.keybomb.judgement == PGreat && lane.lastPressedJudge.judgement == PGreat &&
+               lane.lastPressedJudge.Diff == 0 && lane.beatorajaJudgeValue == 1;
+      });
+      expect(hidden ? (state.lastJudge.judgement == None &&
+                         state.lastJudgeVisualMicros == kPlayfieldTimestampOff &&
+                         state.judgementIndicatorSampleCount == 0 && neutralPresses == 2)
+                    : (state.lastJudge.judgement == actual.lastJudge.judgement &&
+                         state.lastJudge.Diff == 40'000 && state.judgementIndicatorSampleCount == 1),
+             "the captured frame hides grading and uses PGREAT effects without changing stored results");
+      expect(state.configuration.laneBeamsEnabled == effectsEnabled &&
+                 state.configuration.keybombs[PGreat].visible == effectsEnabled,
+             "hiding feedback never enables disabled lane beams or keybombs");
+      RenderContext context;
+      renderer.render(context, state, scene.projectPreviewFrame());
+      const auto views = renderer.judgementFeedbackTextViewsForTesting();
+      expect(views[0]->getVisible() == !hidden && views[1]->getVisible() == !hidden &&
+                 views[2]->getVisible() == !hidden,
+             "judgement, FAST/SLOW and milliseconds hide immediately and restore when unchecked");
+      const auto retained = store.capture({});
+      expect(retained.lastJudge.judgement == actual.lastJudge.judgement &&
+                 retained.lastJudge.Diff == 40'000 && scene.calibrationTaps.size() == 1,
+             "presentation masking leaves real judgements and calibration samples untouched");
+      bgfx::frame();
+    }
+  }
+}
+
+void verifyDenseCalibrationHasChartSizedJudgementBuffers() {
+  const auto chart = settings_scene::makeCalibrationChart(48,
+      {.pattern = settings_scene::CalibrationPattern::Denim, .subdivision = 32});
+  Judge judge(chart->Meta.Rank);
+  BMSRenderer renderer(chart.get(), judge.timingWindows, 500, true);
+  SettingsScene scene;
+  scene.previewChart = chart.get();
+  scene.previewRenderer = &renderer;
+  scene.calibrationActive = true;
+  scene.resetPreviewHudSample();
+  expect(chart->Meta.TotalNotes > 4096, "dense calibration crosses the default buffer capacity");
+  const auto afterMissWindows = chart->Meta.TotalLength + 1'000'000;
+  const auto result = scene.previewSimulation->advanceTo(afterMissWindows, afterMissWindows);
+  expect(result.transactions.size() == chart->Meta.TotalNotes &&
+             scene.previewSimulation->scoreState().stagePassedNotes == chart->Meta.TotalNotes,
+         "every dense calibration note is judged even in a single catch-up update");
+  expect(!scene.previewSimulation->scoreState().gaugeHistoryOverflowed() &&
+             scene.previewSimulation->replayEvents().size() == chart->Meta.TotalNotes,
+         "calibration retains complete gauge and judgement history past 4096 events");
 }
 
 void verifyPreviewInputTimingSamples() {
@@ -3490,6 +3898,13 @@ void verifyPreviewPause() {
   expect(scene.previewFrameSerial > serial &&
              scene.previewCapturedVisualState->configuration.builtInJudgeLine == config.builtInJudgeLine,
          "paused frames still capture live appearance changes without advancing chart time");
+  scene.calibrationActive = true;
+  scene.calibrationVisualOffsetMs = 80;
+  scene.capturePreviewVisualState();
+  expect(scene.previewCapturedVisualState->clock.gameplayTimeMicros == 1'000'000 &&
+             scene.previewCapturedVisualState->clock.visualTimeMicros == 1'000'000,
+         "display calibration leaves effect and judgement clocks unchanged");
+  scene.calibrationActive = false;
   scene.previewPaused = false;
   scene.advancePreviewPlayback(0.5F);
   expect(scene.previewElapsedMicros == 1'500'000 && scene.previewPassedNotes == 8 &&
@@ -4232,6 +4647,7 @@ int main() {
                                         capturedCursorAdvanced);
       verifyVisibleTimeDurationUsesMilliseconds();
       verifyGreenNumberUsesLiveConfiguredHispeed();
+      verifyLogicalJudgementLine(target);
       verifyExplicitZeroConfiguredHispeedDoesNotFallBack();
       verifyBuiltInLiftMovesJudgementAndScrollOrigin(target);
       verifyPreparedFrameRetainsRecentJudgementIndicatorSamples();
@@ -4258,11 +4674,17 @@ int main() {
       verifyPreviewInputLanePosition(target);
       verifyLegacyAuthoredSkinTouchRouting();
       verifyLegacyScratchlessTouchLayout(target);
+  verifyPreviewLaneCoverHandleDrag(target);
   verifyPreviewKeyModeTouchRouting(target);
+  verifyPreviewScratchUsesLiveHoldState(target);
       verifyPreviewPacemakerDiff(target);
       verifyPreviewPacemakerMatchesChartScore();
   verifyPreviewNotesMoveThroughoutOpening();
   verifyPreviewScoreUsesRealJudgements();
+  verifyCalibrationUsesJudgedTargets();
+  verifyCalibrationOffsetOnlyMovesNotes(target);
+  verifyCalibrationFeedbackVisibility(target);
+  verifyDenseCalibrationHasChartSizedJudgementBuffers();
   verifyPreviewInputTimingSamples();
   verifyPreviewPause();
   verifyPausedAppearanceDraftUpdatesAndRestoresPreview();

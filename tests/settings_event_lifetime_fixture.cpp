@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <cassert>
 #include <cstdint>
+#include <chrono>
+#include "scene/OffsetCalibration.h"
 #include <functional>
 #include <map>
 #include <memory>
@@ -27,16 +29,19 @@ std::string tr(const char *key) { return key; }
 }
 using Uint64 = std::uint64_t;
 Uint64 SDL_GetTicks() { return 1; }
+Uint64 SDL_GetTicksNS() { return 1'000'000; }
 enum {
   SDL_EVENT_WILL_ENTER_BACKGROUND = 1, SDL_EVENT_DID_ENTER_BACKGROUND,
   SDL_EVENT_WINDOW_FOCUS_LOST, SDL_EVENT_WINDOW_MINIMIZED,
-  SDL_EVENT_WINDOW_HIDDEN, SDL_EVENT_MOUSE_BUTTON_UP, SDL_EVENT_KEY_DOWN
+  SDL_EVENT_WINDOW_HIDDEN, SDL_EVENT_WINDOW_FOCUS_GAINED,
+  SDL_EVENT_DID_ENTER_FOREGROUND, SDL_EVENT_MOUSE_BUTTON_UP, SDL_EVENT_KEY_DOWN
 };
 constexpr int SDL_EVENT_WINDOW_FIRST = SDL_EVENT_WINDOW_FOCUS_LOST;
-constexpr int SDL_EVENT_WINDOW_LAST = SDL_EVENT_WINDOW_HIDDEN;
+constexpr int SDL_EVENT_WINDOW_LAST = SDL_EVENT_WINDOW_FOCUS_GAINED;
 constexpr int SDLK_ESCAPE = 27;
 struct SDL_Event {
   int type = SDL_EVENT_MOUSE_BUTTON_UP;
+  struct { Uint64 timestamp = 0; } common;
   struct { int event = 0; } window;
   struct { int key = 0; } key;
 };
@@ -296,6 +301,17 @@ struct SettingsScene : Scene {
   View *appearanceColorPopup = nullptr;
   int displayDraft = 0;
   bool previewActive = false;
+  bool calibrationActive = false;
+  bool calibrationMeasuring = false;
+  bool previewPanelFolded = false;
+  bool previewPaused = false;
+  bool previewRendererDirty = false;
+  std::string calibrationError;
+  int calibrationStops = 0;
+  int lastLayoutWidth = 0;
+  settings_scene::OffsetCalibration calibrationSamples;
+  std::optional<std::int64_t> previewEventSteadyMicros;
+  void stopCalibrationAudio() { ++calibrationStops; }
   int previewEvents = 0;
   int previewInputCleanups = 0;
   int *destructions = nullptr;
@@ -304,6 +320,8 @@ struct SettingsScene : Scene {
   ~SettingsScene() override { if (destructions) ++*destructions; }
   void setDisplayStatus(const std::string &status, Color) { displayStatus = status; }
   void updateDisplayPreviewUi() { ++displayPreviewUpdates; }
+  bool coverPointerCaptured = false;
+  bool handlePreviewLaneCoverEvent(SDL_Event &, bool) { return coverPointerCaptured; }
   void forwardPreviewInputEvent(SDL_Event &) { ++previewEvents; }
   void destroyPreviewInputHandler() { ++previewInputCleanups; }
   void init() override { addView(new View); }
@@ -447,6 +465,13 @@ int main() {
     SDL_Event event;
     manager.handleEvents(event);
     assert(active->previewEvents == (previewActive ? 1 : 0));
+    if (previewActive) {
+      active->coverPointerCaptured = true;
+      active->views.front()->eventCallback = [] { assert(false && "captured cover pointer bypasses the panel"); return false; };
+      manager.handleEvents(event);
+      assert(active->previewEvents == 1 && "captured cover pointer cannot judge a lane");
+      active->coverPointerCaptured = false;
+    }
     active->views.front()->eventCallback = [] { return false; };
     manager.handleEvents(event);
     assert(active->previewEvents == (previewActive ? 1 : 0) &&
@@ -454,13 +479,48 @@ int main() {
     DisplaySession display;
     active->audioVideoSession = &display;
     context.settings.audioVideo.video = 42;
+    active->calibrationActive = previewActive;
+    active->calibrationMeasuring = previewActive;
+    active->previewPanelFolded = previewActive;
+    if (previewActive) assert(active->calibrationSamples.tap(3'030'000, 3'000'000));
     event.type = SDL_EVENT_WINDOW_FOCUS_LOST;
     manager.handleEvents(event);
     assert(display.focusLosses == 1 && active->displayDraft == 42);
     assert(active->displayStatus == "Display restored");
     assert(active->displayPreviewUpdates == 1);
     assert(active->previewInputCleanups == (previewActive ? 1 : 0));
+    assert(active->calibrationStops == (previewActive ? 1 : 0));
+    assert(active->previewPaused == previewActive);
+    assert(active->calibrationSamples.count() == 0);
+    assert(!active->calibrationMeasuring && !active->previewPanelFolded);
     assert(active->previewEvents == (previewActive ? 1 : 0));
+    event.type = SDL_EVENT_WINDOW_FOCUS_GAINED;
+    manager.handleEvents(event);
+    assert(!active->previewPaused && active->previewRendererDirty == previewActive);
+    assert(!active->calibrationMeasuring && !active->previewPanelFolded);
+    active->previewRendererDirty = false;
+    manager.handleEvents(event);
+    assert(!active->previewRendererDirty && "duplicate focus gain must not restart a running preview");
+    if (previewActive) {
+      event.type = SDL_EVENT_WILL_ENTER_BACKGROUND;
+      manager.handleEvents(event);
+      event.type = SDL_EVENT_DID_ENTER_BACKGROUND;
+      manager.handleEvents(event);
+      event.type = SDL_EVENT_DID_ENTER_FOREGROUND;
+      manager.handleEvents(event);
+      assert(!active->previewPaused && active->previewRendererDirty);
+      active->previewRendererDirty = false;
+      active->previewPaused = true;
+      active->calibrationError = "Audio device unavailable";
+      manager.handleEvents(event);
+      assert(active->previewPaused && !active->previewRendererDirty &&
+             "focus gain must preserve an audio failure");
+      active->calibrationError.clear();
+      active->calibrationActive = false;
+      manager.handleEvents(event);
+      assert(active->previewPaused && !active->previewRendererDirty &&
+             "focus gain must preserve a manually paused regular preview");
+    }
     event.type = SDL_EVENT_MOUSE_BUTTON_UP;
     active->views.front()->eventCallback = [&manager] {
       manager.changeScene("Intro");

@@ -83,6 +83,7 @@ enum class Surface {
 enum class SubmissionKind {
   Background,
   JudgeLine,
+  LogicalJudgeLine,
   MeasureLine,
   NormalNote,
   InvisiblePrimitive,
@@ -298,6 +299,7 @@ private:
 
   built_in_notes::SharedModeStyles builtInNotes;
   built_in_judge_line::Style builtInJudgeLine;
+  std::optional<double> logicalJudgementScrollDelta;
   built_in_lane::Style builtInLane;
   long long currentRenderMicros = 0;
   float lowerBound = -1.0f;

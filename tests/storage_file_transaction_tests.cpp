@@ -237,6 +237,21 @@ void testRecoveryAfterContainerRelocation() {
   }
 }
 void testJournalHierarchyIsDurableBeforeMutation() {
+  {
+    Fixture fixture;
+    // SDL_GetPrefPath returns an existing directory with a trailing separator.
+    const auto privateRoot = fixture.temp.root / "private";
+    auto paths = MakeStoragePlatformPaths(privateRoot / "", {fixture.temp.root / "library"});
+    std::vector<fs::path> synced;
+    auto dependencies = DefaultFileTransactionDependencies();
+    const auto sync = dependencies.syncDirectory;
+    dependencies.syncDirectory = [&](const fs::path &path, std::string &error) {
+      synced.push_back(path); return sync(path, error);
+    };
+    const auto recovered = StorageFileTransaction(paths, dependencies).Recover();
+    require(!recovered.recoveryRequired && synced.size() == 3 && synced.back() == privateRoot,
+            "SDL private paths with trailing separators recover and sync through the private root");
+  }
   for (bool recoverFirst : {false, true}) {
     Fixture fixture;
     const auto privateRoot = fixture.temp.root / "new/private";

@@ -62,6 +62,9 @@ int resolvePreviewPanelWidth(const LayoutMetrics &metrics, int foldButtonSize,
 } // namespace
 
 void SettingsScene::resetViewState() {
+  calibrationStatusText = nullptr;
+  calibrationValueText = nullptr;
+  calibrationSummaryText = nullptr;
   previewKeyModeDropdown = nullptr;
   for (auto *view : views) {
     delete view;
@@ -492,6 +495,81 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
   return visibleTimeControls;
 }
 
+View *SettingsScene::buildPreviewScrollControls(const LayoutMetrics &metrics) {
+  auto *controls = new View();
+  controls->setFlexDirection(FlexDirection::Column);
+  controls->setWidthPercent(100);
+  controls->setGap(metrics.compact ? 12.0f : 16.0f);
+  controls->setAlignItems(YGAlignFlexStart);
+  controls->addView(makeWrappedText(
+      i18n::message("settings.preview_layout.visible_time.label"),
+      metrics.bodyTextSize, app_theme::textPrimary()));
+  controls->addView(buildVisibleTimeControls(metrics, false, true));
+
+  controls->addView(makeWrappedText(
+      i18n::message("settings.preview_layout.note_start.label"),
+      metrics.bodyTextSize, app_theme::textPrimary()));
+  constexpr std::array coverLabels{"SUDDEN+", "HIDDEN+", "LIFT"};
+  for (std::size_t index = 0; index < coverLabels.size(); ++index) {
+    const auto read = [this, index]() {
+      const auto state = context.settings.presentation().laneCoverState();
+      return static_cast<int>(std::lround(index == 0 ? state.laneCoverPercent * 10
+          : index == 1 ? state.hiddenRatio * 1000 : state.liftRatio * 1000));
+    };
+    const auto apply = [this, index](int amount) {
+      auto state = context.settings.presentation().laneCoverState();
+      amount = std::clamp(amount, 0, 1000);
+      if (index == 0) state.laneCoverPercent = static_cast<float>(amount) / 10;
+      else if (index == 1) state.hiddenRatio = static_cast<float>(amount) / 1000;
+      else state.liftRatio = static_cast<float>(amount) / 1000;
+      context.settings.presentation().setLaneCoverState(state);
+      persistSettings();
+    };
+    auto *content = new CheckboxButtonContent(coverLabels[index], metrics.bodyTextSize, 20);
+    content->setThemedColor(app_theme::textPrimary);
+    const auto state = context.settings.presentation().laneCoverState();
+    const bool enabled = index == 0 ? state.laneCoverEnabled
+        : index == 1 ? state.hiddenEnabled : state.liftEnabled;
+    content->setChecked(enabled);
+    auto *toggle = new Button(0, 0, metrics.actionButtonWidth, metrics.actionButtonHeight);
+    toggle->setCornerRadius(app_theme::controlRadius());
+    toggle->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
+    toggle->setContentView(content);
+    toggle->setSelected(enabled);
+    toggle->setOnClickListener([this, index, toggle, content]() {
+      auto value = context.settings.presentation().laneCoverState();
+      bool &enabled = index == 0 ? value.laneCoverEnabled
+          : index == 1 ? value.hiddenEnabled : value.liftEnabled;
+      enabled = !enabled;
+      content->setChecked(enabled);
+      toggle->setSelected(enabled);
+      context.settings.presentation().setLaneCoverState(value);
+      persistSettings();
+    });
+    controls->addView(toggle);
+    auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
+    input->setEditingText(std::to_string(read()));
+    input->onEditingFinished([input, read, apply](const std::string &text) {
+      apply(sanitizeOffsetComponent(text, read()));
+      input->setEditingText(std::to_string(read()));
+    });
+    auto *reset = makeResetButton(metrics);
+    reset->setOnClickListener([input, read, apply, index]() {
+      apply(index == 0 ? 0 : 100);
+      input->setEditingText(std::to_string(read()));
+    });
+    controls->addView(makeSteppedValueRow(metrics, input, "10",
+        [input, read, apply](int direction) {
+          apply(read() + direction * 10);
+          input->setEditingText(std::to_string(read()));
+        }, reset));
+  }
+  controls->addView(makeWrappedText(
+      i18n::message("settings.lane.covers.shortcuts"),
+      metrics.smallTextSize, app_theme::textSecondary()));
+  return controls;
+}
+
 void SettingsScene::refreshPreviewKeyModeDropdown() {
   if (!previewKeyModeDropdown) return;
   std::vector<DropdownView::Option> options;
@@ -574,7 +652,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewHeader->setAlignItems(YGAlignCenter);
   previewHeader->setJustifyContent(YGJustifySpaceBetween);
   previewHeader->addView(
-      makeHeading(i18n::message("settings.preview_layout.preview.label"), metrics.sectionTitleSize));
+      makeHeading(i18n::message(calibrationActive ? "settings.calibration.title" : "settings.preview_layout.preview.label"), metrics.sectionTitleSize));
 
   auto *headerActions = new View();
   headerActions->setFlexDirection(FlexDirection::Row);
@@ -596,7 +674,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewSelectionRow->setFlexDirection(FlexDirection::Row);
   previewSelectionRow->setAlignItems(YGAlignCenter);
   const float selectionGap = metrics.compact ? 8.0F : 10.0F;
-  const float selectionWidth = static_cast<float>(panelWidth - metrics.cardPadding * 2);
+  const float selectionWidth = static_cast<float>(panelWidth - metrics.cardPadding * 2 -
+      (calibrationActive ? (metrics.compact ? 10 : 12) : 0));
   previewSelectionRow->setGap(selectionGap);
   previewKeyModeDropdown = new DropdownView({
       .onOpenChanged = [this](bool open) {
@@ -607,6 +686,10 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         const auto mode = std::stoi(id);
         previewKeyModeDropdownOpen = false;
         if (previewKeyMode != mode) {
+          if (calibrationActive) {
+            calibrationMeasuring = false;
+            calibrationSamples.reset();
+          }
           previewKeyMode = mode;
           previewRendererDirty = true;
           lastLayoutWidth = -1;
@@ -631,6 +714,14 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     }
   }
 #endif
+  if (calibrationActive) {
+    buildCalibrationPanel(previewPanel, metrics, previewSelectionRow, selectionWidth);
+    rootLayout->addView(previewPanel);
+    rootLayout->applyYogaLayout();
+    refreshSettingsText();
+    refreshCalibrationText();
+    return;
+  }
   previewPanel->addView(previewSelectionRow);
   auto *playbackControls = new View();
   playbackControls->setFlexDirection(FlexDirection::Row);
@@ -738,72 +829,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
   previewPanel->addView(previewScroll);
 
   if (previewPanelPage == 0) {
-    previewControls->addView(makeWrappedText(
-        i18n::message("settings.preview_layout.visible_time.label"),
-        metrics.bodyTextSize, app_theme::textPrimary()));
-    previewControls->addView(buildVisibleTimeControls(metrics, false, true));
-
-    previewControls->addView(makeWrappedText(
-        i18n::message("settings.preview_layout.note_start.label"),
-        metrics.bodyTextSize, app_theme::textPrimary()));
-    constexpr std::array coverLabels{"SUDDEN+", "HIDDEN+", "LIFT"};
-    for (std::size_t index = 0; index < coverLabels.size(); ++index) {
-      const auto read = [this, index]() {
-        const auto state = context.settings.presentation().laneCoverState();
-        return static_cast<int>(std::lround(index == 0 ? state.laneCoverPercent * 10
-            : index == 1 ? state.hiddenRatio * 1000 : state.liftRatio * 1000));
-      };
-      const auto apply = [this, index](int amount) {
-        auto state = context.settings.presentation().laneCoverState();
-        amount = std::clamp(amount, 0, 1000);
-        if (index == 0) state.laneCoverPercent = static_cast<float>(amount) / 10;
-        else if (index == 1) state.hiddenRatio = static_cast<float>(amount) / 1000;
-        else state.liftRatio = static_cast<float>(amount) / 1000;
-        context.settings.presentation().setLaneCoverState(state);
-        persistSettings();
-      };
-      auto *content = new CheckboxButtonContent(coverLabels[index], metrics.bodyTextSize, 20);
-      content->setThemedColor(app_theme::textPrimary);
-      const auto state = context.settings.presentation().laneCoverState();
-      const bool enabled = index == 0 ? state.laneCoverEnabled
-          : index == 1 ? state.hiddenEnabled : state.liftEnabled;
-      content->setChecked(enabled);
-      auto *toggle = new Button(0, 0, metrics.actionButtonWidth, metrics.actionButtonHeight);
-      toggle->setCornerRadius(app_theme::controlRadius());
-      toggle->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
-      toggle->setContentView(content);
-      toggle->setSelected(enabled);
-      toggle->setOnClickListener([this, index, toggle, content]() {
-        auto value = context.settings.presentation().laneCoverState();
-        bool &enabled = index == 0 ? value.laneCoverEnabled
-            : index == 1 ? value.hiddenEnabled : value.liftEnabled;
-        enabled = !enabled;
-        content->setChecked(enabled);
-        toggle->setSelected(enabled);
-        context.settings.presentation().setLaneCoverState(value);
-        persistSettings();
-      });
-      previewControls->addView(toggle);
-      auto *input = makeTextInput(metrics, metrics.compact ? 116 : 136);
-      input->setEditingText(std::to_string(read()));
-      input->onEditingFinished([input, read, apply](const std::string &text) {
-        apply(sanitizeOffsetComponent(text, read()));
-        input->setEditingText(std::to_string(read()));
-      });
-      auto *reset = makeResetButton(metrics);
-      reset->setOnClickListener([input, read, apply, index]() {
-        apply(index == 0 ? 0 : 100);
-        input->setEditingText(std::to_string(read()));
-      });
-      previewControls->addView(makeSteppedValueRow(metrics, input, "10",
-          [input, read, apply](int direction) {
-            apply(read() + direction * 10);
-            input->setEditingText(std::to_string(read()));
-          }, reset));
-    }
-    previewControls->addView(makeWrappedText(
-        i18n::message("settings.lane.covers.shortcuts"),
-        metrics.smallTextSize, app_theme::textSecondary()));
+    previewControls->addView(buildPreviewScrollControls(metrics));
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   } else if (previewPanelPage == 1 && previewSkinRow != nullptr) {
     previewControls->addView(makeWrappedText(
@@ -1193,6 +1219,11 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
 
 View *SettingsScene::buildTimingTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
+  auto *calibrate = makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+      makeText(i18n::message("settings.calibration.title"), metrics.bodyTextSize,
+               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+  calibrate->setOnClickListener([this]() { startCalibration(); });
+  cardsColumn->addView(calibrate);
   auto *offsetControls = new View();
   offsetControls->setFlexDirection(FlexDirection::Row);
   offsetControls->setFlexWrap(YGWrapWrap);

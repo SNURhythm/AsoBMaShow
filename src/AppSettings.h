@@ -82,10 +82,10 @@ public:
     Light = 1,
   };
 
-  static constexpr int kMinAudioOffsetMs = -300;
-  static constexpr int kMaxAudioOffsetMs = 300;
-  static constexpr int kMinVisualOffsetMs = -500;
-  static constexpr int kMaxVisualOffsetMs = 500;
+  static constexpr int kMinAudioOffsetMs = -1000;
+  static constexpr int kMaxAudioOffsetMs = 1000;
+  static constexpr int kMinVisualOffsetMs = -1000;
+  static constexpr int kMaxVisualOffsetMs = 1000;
   // Beatoraja PlayConfig.DURATION_MIN/MAX.  Duration is canonical in
   // milliseconds; green number is the derived IntegerProperty 313 value.
   static constexpr int kMinVisibleTimeMs = 1;

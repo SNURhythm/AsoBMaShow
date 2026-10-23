@@ -77,6 +77,8 @@ struct PresentationStats {
   double syntheticStartLaneIndicatorVisibleLaneHeightRatio = 0.0;
   std::vector<int> syntheticStartLaneIndicatorLanes;
   int selectedSkinHudCalls = 0;
+  int logicalLineCalls = 0;
+  skin::LogicalJudgementLineFrameInput logicalLine;
   skin::SelectedSkinHudGeometry selectedSkinHudGeometry;
   std::uint64_t selectedSkinHudStateSerial = 0;
   std::optional<skin::SelectedSkinHudGeometry> publishedSkinHudGeometry;
@@ -263,6 +265,12 @@ public:
       return std::nullopt;
     }
     return stats_->publishedSkinHudGeometry;
+  }
+  void submitLogicalJudgementLine(RenderContext &,
+      const skin::LogicalJudgementLineFrameInput &input) override {
+    ++stats_->logicalLineCalls;
+    stats_->logicalLine = input;
+    recordEvent(stats_, "skin.logical_line");
   }
   void setViewport(skin::ViewportSettings viewport) override {
     ++stats_->viewportCalls;
@@ -603,6 +611,8 @@ void testSelectedSkinRendersBuiltInHudFromPublishedLaneGeometry() {
   });
   PlayfieldProjectionResult projection;
   auto state = frame(68);
+  state.configuration.logicalJudgementScrollDelta = 0.01;
+  projection.builtInTraversal = BuiltInRendererTraversal{.hispeed = 2.0F};
   expect(coordinator.prepareFrame(state, projection) ==
              PresentationFrameOutcome::Ready,
          "selected-skin HUD frame prepares successfully");
@@ -616,6 +626,15 @@ void testSelectedSkinRendersBuiltInHudFromPublishedLaneGeometry() {
                  eventIndex(*order, "builtin.skin_hud"),
          "selected skin retains ownership while the built-in HUD follows its "
          "published lane geometry");
+  expect(skinStats->logicalLineCalls == 1 && skinStats->logicalLine.scrollDelta == 0.01 &&
+             skinStats->logicalLine.hispeed == 2.0 && skinStats->logicalLine.frameSerial == 68 &&
+             eventIndex(*order, "skin.render") < eventIndex(*order, "skin.logical_line"),
+         "logical line uses captured note speed after the selected skin frame");
+  state.clock.serial = 69;
+  state.configuration.logicalJudgementScrollDelta.reset();
+  (void)coordinator.prepareFrame(state, projection);
+  (void)coordinator.render(context);
+  expect(skinStats->logicalLineCalls == 1, "disabled logical line submits no overlay");
 }
 
 void testCriticalSkinFailureNeverSubstitutesBuiltInPresentation() {

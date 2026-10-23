@@ -10,6 +10,8 @@
 #include "SettingsCacheMaintenance.h"
 #include "SettingsLibraryTask.h"
 #include "SettingsPreviewPlayback.h"
+#include "OffsetCalibration.h"
+#include "SettingsPreviewChart.h"
 #include "../view/ColorPickerPopup.h"
 #include "../view/AppTheme.h"
 #include "SettingsPreviewAutoPlay.h"
@@ -100,6 +102,8 @@ public:
   void renderScene() override;
   void cleanupScene() override;
   EventHandleResult handleEvents(SDL_Event &event) override;
+  bms_parser::Note *pressLaneAt(int lane, std::int64_t timestampMicros) override;
+  bms_parser::Note *releaseLaneAt(int lane, std::int64_t timestampMicros, bool backSpin = false) override;
   bms_parser::Note *pressLane(int lane, double inputDelay = 0) override;
   bms_parser::Note *pressLane(int mainLane, int compensateLane,
                               double inputDelay = 0) override;
@@ -325,6 +329,38 @@ private:
   bool inputVirtualControllerEditorVisible = false;
   settings_scene::InputSettingsRebuildGate inputViewRebuildGate;
   std::string inputLastViewSignature;
+  settings_scene::CalibrationChartOptions calibrationChartOptions;
+  bool calibrationActive = false;
+  bool calibrationMeasuring = false;
+  bool calibrationDisplay = false;
+  bool calibrationMuted = false;
+  bool calibrationNotesHidden = false;
+  bool calibrationFeedbackHidden = false;
+  bool calibrationLogicalJudgementLine = false;
+  bool calibrationAudioRunning = false;
+  bool calibrationSavedAutoPlay = false;
+  bool calibrationSavedRandomTiming = false;
+  audio::PlaybackRate calibrationSavedRate;
+  int calibrationAudioOffsetMs = 0;
+  int calibrationVisualOffsetMs = 0;
+  settings_scene::OffsetCalibration calibrationSamples;
+  std::string calibrationError;
+  TextView *calibrationStatusText = nullptr;
+  TextView *calibrationValueText = nullptr;
+  TextView *calibrationSummaryText = nullptr;
+  bool calibrationScrollSettings = false;
+  std::optional<std::int64_t> previewEventSteadyMicros;
+  void startCalibration();
+  void finishCalibration(bool apply);
+  void startCalibrationAudio();
+  void stopCalibrationAudio();
+  void updateCalibration();
+  void recordCalibrationTap(long long rawTimeMicros, long long noteTimeMicros);
+  void playCalibrationKeysound();
+  void buildCalibrationPanel(View *panel, const settings_scene::LayoutMetrics &metrics,
+                             View *selectionRow, float contentWidth);
+  void refreshCalibrationText();
+  long long previewInputTimeMicros(double inputDelay) const;
   bool previewActive = false;
   bool lastLaidOutPreviewActive = false;
   int lastLaidOutPreviewPanelPage = 0;
@@ -342,6 +378,10 @@ private:
   std::array<double, 4> previewSkinBounds{};
   std::unique_ptr<gameplay::RealtimeTouchInputRouter> previewTouchRouter;
   std::uint64_t previewTouchLayoutRevision = 0;
+  std::optional<SDL_FingerID> previewLaneCoverFinger;
+  bool previewLaneCoverMouse = false;
+  bool previewLaneCoverChanged = false;
+  float previewLaneCoverGrabOffset = 0;
   std::unique_ptr<bms_parser::Chart> previewChart;
   std::unique_ptr<PlayfieldChartVisualModel> previewChartVisualModel;
   std::unique_ptr<PlayfieldVisualStateStore> previewVisualStateStore;
@@ -479,6 +519,7 @@ private:
   View *buildKeybombControls(const settings_scene::LayoutMetrics &metrics, int keyMode, bool previewStyle);
   View *buildJudgementFeedbackStyleControls(const settings_scene::LayoutMetrics &metrics,
                                               bool previewStyle = false);
+  View *buildPreviewScrollControls(const settings_scene::LayoutMetrics &metrics);
   View *buildVisibleTimeControls(const settings_scene::LayoutMetrics &metrics,
                                  bool includeDescription,
                                  bool compactAdjustments);
@@ -527,6 +568,8 @@ private:
   void commitVirtualControllerSetting(int keyMode, input::VirtualControllerConfig config);
   void commitPlayfieldTouchSetting(int keyMode, input::PlayfieldTouchConfig config);
   std::string inputViewSignature() const;
+  bool handlePreviewLaneCoverEvent(SDL_Event &event, bool capturedOnly = false);
+  void cancelPreviewLaneCoverDrag();
   void forwardPreviewInputEvent(SDL_Event &event);
   void syncPreviewInputLayout();
   void resetPreviewHudSample();

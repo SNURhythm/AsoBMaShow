@@ -3093,8 +3093,9 @@ void BMSRenderer::renderFrame(
       if (!timelineWasTraversed(line.retainedOrdinal)) {
         return;
       }
-      if (!gameplay_scroll_geometry::shouldDrawMeasureLine(
-              line.timeMicros, chartTimeMicros, lineY, judgeY, upperBound)) {
+      // Projection already clipped against note-display time. The effect
+      // clock can differ, so only recheck the drawn lane bounds here.
+      if (!(lineY >= judgeY && lineY <= upperBound)) {
         return;
       }
       if (!chartEntityRenderBudget.tryConsume(
@@ -3758,6 +3759,21 @@ void BMSRenderer::renderFrame(
   simpleBatchRenderer.setSubmitView(rendering::main_view);
   simpleBatchRenderer.setSubmitDepth(start_lane_indicator::kLaneCoverDepth);
   simpleBatchRenderer.begin();
+  if (logicalJudgementScrollDelta && std::isfinite(*logicalJudgementScrollDelta)) {
+    const float logicalY = judgeY + static_cast<float>(*logicalJudgementScrollDelta) * rxhs;
+    const float thickness = std::max(0.001F, noteRenderWidth * 0.0125F);
+    if (logicalY >= lowerBound && logicalY <= noteVisibleUpperBound) {
+      drawRect(playAreaWidth, thickness, playAreaLeftX, logicalY, Color(0xFF00E5FF));
+#if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
+      recordCharacterizationSubmission(
+          bms_renderer_characterization::SubmissionKind::LogicalJudgeLine,
+          bms_renderer_characterization::Surface::Main,
+          start_lane_indicator::kLaneCoverDepth, nullptr, nullptr, -1, 0,
+          bms_renderer_characterization::LongBodyState::None,
+          {.x = playAreaLeftX, .y = logicalY, .width = playAreaWidth, .height = thickness});
+#endif
+    }
+  }
   drawLaneCover();
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
   recordCharacterizationSubmission(
@@ -4155,6 +4171,7 @@ void BMSRenderer::configure(
   builtInNotes = configuration.builtInNotes;
   builtInJudgeLine = built_in_judge_line::sanitizeStyle(configuration.builtInJudgeLine);
   builtInLane = built_in_lane::sanitizeStyle(configuration.builtInLane);
+  logicalJudgementScrollDelta = configuration.logicalJudgementScrollDelta;
   setVisibleTimeDurationMilliseconds(
       configuration.visibleTimeDurationMilliseconds);
   if (configuration.configuredHispeed &&

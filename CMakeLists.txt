@@ -818,6 +818,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
 
     if(APPLE AND NOT IOS)
+        add_executable(sdl_cocoa_pointer_tests tests/sdl_cocoa_pointer_tests.mm)
+        target_compile_features(sdl_cocoa_pointer_tests PRIVATE cxx_std_23)
+        target_link_libraries(sdl_cocoa_pointer_tests PRIVATE SDL3::SDL3 "-framework Cocoa")
         set(settings_preview_input_source
             ${CMAKE_CURRENT_BINARY_DIR}/generated/settings_preview_input.inc)
         add_custom_command(
@@ -9349,6 +9352,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             RESOURCE_LOCK metal_device
         )
     endif()
+    if(TARGET sdl_cocoa_pointer_tests)
+        asobmashow_register_test(sdl_cocoa_pointer_tests)
+    endif()
     if(TARGET builtin_renderer_characterization_tests)
         asobmashow_register_test(builtin_renderer_characterization_tests)
         set_tests_properties(builtin_renderer_characterization_tests PROPERTIES
@@ -9493,6 +9499,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     add_executable(settings_event_lifetime_tests ${settings_event_lifetime_source})
     target_compile_features(settings_event_lifetime_tests PRIVATE cxx_std_23)
+    target_include_directories(settings_event_lifetime_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     asobmashow_register_test(settings_event_lifetime_tests)
     add_custom_command(
         OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/replay_result_skin_fixture.cpp

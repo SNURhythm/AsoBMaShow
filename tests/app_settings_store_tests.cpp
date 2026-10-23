@@ -247,6 +247,8 @@ void testJsonRoundTripIncludesAudioAndVideo() {
   TempDirectory temp;
   const auto path = temp.path() / "settings.json";
   AppSettings expected = makeDistinctSettings();
+  expected.audioOffsetMs = -1000;
+  expected.visualOffsetMs = 1000;
   expected.presentation().noteStartPositionPercent = 33.4F;
   expected.selectedPlaybackRatePercent = 75;
   expected.selectedPlaybackMode = audio::PlaybackMode::PitchShift;
@@ -1867,12 +1869,12 @@ void testInvalidValuesAreSanitizedWithDiagnostics() {
   const auto path = temp.path() / "settings.json";
   writeFile(
       path,
-      R"({"schemaVersion":1,"audioOffsetMs":9999,"laneLength":"bad","audio":{"masterVolume":-2.0},"video":{"frameCap":1001}})");
+      R"({"schemaVersion":1,"audioOffsetMs":9999,"visualOffsetMs":-9999,"laneLength":"bad","audio":{"masterVolume":-2.0},"video":{"frameCap":1001}})");
   const auto result = AppSettingsStore::Load(path);
   expect(result.status == AppSettingsLoadStatus::Loaded,
          "document with invalid individual values still loads");
-  expect(result.settings.audioOffsetMs == AppSettings::kMaxAudioOffsetMs,
-         "numeric value is sanitized");
+  expect(result.settings.audioOffsetMs == 1000 && result.settings.visualOffsetMs == -1000,
+         "offsets outside the supported range clamp to plus or minus 1000 ms");
   expect(result.settings.presentation().laneLength == AppSettings::kDefaultLaneLength,
          "wrong-typed value falls back");
   expect(result.settings.audioVideo.audio.masterVolume == 0.0f,

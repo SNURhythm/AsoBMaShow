@@ -79,7 +79,7 @@ public:
   // Authored skin geometry routes into the same logical touch ownership as built-in lanes.
   [[nodiscard]] bms_parser::Note *
   applyTouchLane(int lane, bool pressed,
-                 std::optional<int> scratchDirection);
+                 std::optional<int> scratchDirection, bool backSpin = false);
   IRhythmControl *control;
   RhythmInputHandler(
       IRhythmControl *control, const bms_parser::ChartMeta &meta,

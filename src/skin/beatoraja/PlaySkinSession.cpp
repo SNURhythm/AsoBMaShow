@@ -1505,6 +1505,15 @@ void PlaySkinSession::submitSyntheticReplayGhosts(
                                         renderContext, context_.quadRenderer);
 }
 
+void PlaySkinSession::submitLogicalJudgementLine(
+    RenderContext &renderContext, const LogicalJudgementLineFrameInput &input) {
+  if (!publishedReplayGhostGeometry_) return;
+  const auto overlay = buildLogicalJudgementLineOverlay(*publishedReplayGhostGeometry_, input);
+  if (!overlay.commands.empty())
+    (void)context_.renderer.submitOverlay(overlay, context_.resources,
+                                         renderContext, context_.quadRenderer);
+}
+
 void PlaySkinSession::submitSyntheticStartLaneIndicators(
     RenderContext &renderContext,
     const SyntheticStartLaneIndicatorFrameInput &input) {

@@ -79,6 +79,8 @@ struct PlayfieldProjectionRequest {
   std::size_t maxTimelines = 0;
   std::size_t maxNotes = 0;
   bool includeInvisibleNotes = false;
+  // Calibration can keep the lane, clock and input active without note cues.
+  bool hideNotes = false;
   // PlayerConfig.showpastnote. LaneRenderer retains only an unprocessed
   // normal note after its timeline passes the judgement line.
   bool showPastNormalNotes = false;

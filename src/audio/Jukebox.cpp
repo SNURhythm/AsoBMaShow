@@ -3630,6 +3630,13 @@ void Jukebox::playOverlappingAudioAt(long long micro) {
   }
 }
 
+bool Jukebox::loadGeneratedKeySound(int wav, const path_t &path,
+                                   std::vector<short> pcm, int channels, int sampleRate) {
+  if (!audio.loadGeneratedSound(path, std::move(pcm), channels, sampleRate)) return false;
+  wavTableAbs[wav] = path;
+  return true;
+}
+
 void Jukebox::ensurePrepMetronomeSoundsLoaded() {
   audio.loadGeneratedSound(kPrepMetronomeAccentPath,
                            prep_metronome_audio::makeClick(

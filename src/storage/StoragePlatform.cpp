@@ -256,6 +256,10 @@ StoragePlatformPaths MakeStoragePlatformPaths(const fs::path &privateRoot,
     accessRoots.push_back(privateRoot);
   }
   auto syncRoot = privateRoot.lexically_normal();
+  // SDL preference paths end in a separator. Remove its empty component so
+  // ancestry checks and the parent-by-parent durability barrier agree.
+  while (syncRoot != syncRoot.root_path() && syncRoot.filename().empty())
+    syncRoot = syncRoot.parent_path();
   std::error_code error;
   while (!syncRoot.empty() && !fs::exists(syncRoot, error) && !error) {
     const auto parent = syncRoot.parent_path();

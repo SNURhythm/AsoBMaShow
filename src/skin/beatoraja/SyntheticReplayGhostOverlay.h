@@ -32,6 +32,10 @@ struct SyntheticReplayGhostGeometry {
   double sharedLaneOriginY = 0.0;
   double sharedLaneHeight = 0.0;
   std::optional<PlaySkinVisibleScroll> visibleScroll;
+  // Exact shared origin/span used by normal-note lowering, including Lift,
+  // destination offsets and crop compensation. Used by calibration guides.
+  double noteOriginY = 0.0;
+  double noteScrollHeight = 0.0;
   std::vector<SyntheticReplayGhostLaneGeometry> lanes;
 };
 
@@ -47,6 +51,16 @@ struct SelectedSkinHudGeometry {
 
 [[nodiscard]] std::optional<SelectedSkinHudGeometry>
 selectedSkinHudGeometry(const SyntheticReplayGhostGeometry &);
+
+struct LogicalJudgementLineFrameInput {
+  std::uint64_t frameSerial = 0;
+  double scrollDelta = 0.0;
+  double hispeed = 0.0;
+  double visibleLaneHeightRatio = 1.0;
+};
+
+[[nodiscard]] SkinCommandBuffer buildLogicalJudgementLineOverlay(
+    const SyntheticReplayGhostGeometry &, const LogicalJudgementLineFrameInput &);
 
 struct SyntheticReplayGhostFrameInput {
   std::uint64_t frameSerial = 0;

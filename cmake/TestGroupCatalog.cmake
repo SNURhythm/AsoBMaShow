@@ -85,6 +85,7 @@ asobmashow_label_tests(area_input
     android_raw_touch_input_tests
     android_touch_input_tests
     custom_touch_cancel_tests
+    sdl_cocoa_pointer_tests
     desktop_realtime_ingress_tests
     foundation_input_capture
     foundation_input_gameplay

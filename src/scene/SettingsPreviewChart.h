@@ -11,4 +11,15 @@ inline constexpr double kPreviewBpm = 120.0;
 inline constexpr std::array<int, 12> kPreviewKeyModes{4, -5, 5, 6, -7, 7, 8, 9, 10, 14, 24, 48};
 
 [[nodiscard]] std::unique_ptr<bms_parser::Chart> makePreviewChart(int keyMode = 7);
+inline constexpr int kCalibrationKeysoundWav = 0;
+enum class CalibrationPattern { SingleLane, Stairs, ReverseStairs, Denim };
+struct CalibrationChartOptions {
+  CalibrationPattern pattern = CalibrationPattern::SingleLane;
+  int lane = -1; // A negative or unavailable lane selects the middle key.
+  int bpm = 120;
+  int subdivision = 4;
+  int beatsPerMeasure = 4;
+};
+[[nodiscard]] std::unique_ptr<bms_parser::Chart> makeCalibrationChart(
+    int keyMode = 7, CalibrationChartOptions options = {});
 } // namespace settings_scene

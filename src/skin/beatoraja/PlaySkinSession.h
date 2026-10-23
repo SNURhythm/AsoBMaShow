@@ -185,6 +185,8 @@ public:
       RenderContext &, const SyntheticReplayGhostFrameInput &) override;
   void submitSyntheticStartLaneIndicators(
       RenderContext &, const SyntheticStartLaneIndicatorFrameInput &) override;
+  void submitLogicalJudgementLine(
+      RenderContext &, const LogicalJudgementLineFrameInput &) override;
   [[nodiscard]] std::optional<SelectedSkinHudGeometry>
   selectedSkinHudGeometry(std::uint64_t frameSerial) const override;
   void setViewport(ViewportSettings) override;

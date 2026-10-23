@@ -320,6 +320,23 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
                             event.type == SDL_EVENT_WINDOW_MINIMIZED ||
                             event.type == SDL_EVENT_WINDOW_HIDDEN));
   if (losesFocus && previewActive) destroyPreviewInputHandler();
+  if (losesFocus && calibrationActive) {
+    stopCalibrationAudio();
+    previewPaused = true;
+    calibrationSamples.reset();
+    calibrationMeasuring = false;
+    previewPanelFolded = false;
+    lastLayoutWidth = -1;
+  }
+  const bool gainsFocus = event.type == SDL_EVENT_WINDOW_FOCUS_GAINED ||
+                          event.type == SDL_EVENT_DID_ENTER_FOREGROUND;
+  if (gainsFocus && calibrationActive && previewPaused && calibrationError.empty()) {
+    // Rebuild on the next frame to restart the shared chart/audio clock together.
+    // An interrupted measurement still waits for an explicit Start.
+    previewPaused = false;
+    previewRendererDirty = true;
+    lastLayoutWidth = -1;
+  }
   if (losesFocus && audioVideoSession != nullptr &&
       audioVideoSession->hasDisplayPreview()) {
     const auto result = audioVideoSession->onFocusLost();
@@ -334,6 +351,8 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
     appearanceColorPopup->handleEvents(event);
     return {};
   }
+  // A drag that began on the cover keeps its pointer even over the panel.
+  if (previewActive && handlePreviewLaneCoverEvent(event, true)) return {};
   for (auto *view : views) {
     if (!view->handleEvents(event)) {
       // Navigation callbacks can destroy this scene while consuming the event.
@@ -341,12 +360,20 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
     }
   }
   if (previewActive) {
+    if (calibrationActive && event.common.timestamp != 0) {
+      const auto now = std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+      previewEventSteadyMicros = now + static_cast<std::int64_t>(event.common.timestamp / 1000) -
+                                static_cast<std::int64_t>(SDL_GetTicksNS() / 1000);
+    }
     forwardPreviewInputEvent(event);
+    previewEventSteadyMicros.reset();
   }
   return {};
 }
 
 void SettingsScene::cleanupScene() {
+  if (calibrationActive) finishCalibration(false);
   closeAppearanceColorPopup();
   context.profileSwitchBlockers.scene = nullptr;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
