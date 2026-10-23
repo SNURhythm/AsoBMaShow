@@ -178,3 +178,20 @@ Authority activated 21 ms after the initial missing layout. Score and FAILED
 status remained visible after force-stop/relaunch and reselecting the chart.
 This verifies failed-clear persistence; a successful full-chart clear was not
 performed during this follow-up. The final version-code-5 build remains installed.
+
+## Follow-up: compact Records modal
+
+Compact footer buttons used half the panel content width without subtracting its
+two border pixels. Two buttons plus the gap exceeded Yoga's available width,
+wrapping all four actions into separate rows and placing the final actions below
+the modal. Constructor and resize calculations now use the bordered inner width.
+
+The existing rotation test now enables all four actions and checks each against
+the panel bounds, plus the intended two-by-two arrangement. It failed before the
+fix and passes afterward at 585×1266, 1266×585 and 480×1000. The same test executable
+also verifies desktop restoration and compact export-options scrolling.
+
+Signed Android build/lint passed; version code **5** was reused as requested.
+After reinstalling on the connected phone and selecting an existing record,
+Watch, G-BATTLE, View Result and Export Video were all fully visible in two rows.
+No settings were changed for this check.

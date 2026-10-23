@@ -174,7 +174,7 @@ ReplayRecordsModal::Create(View *parent,
       static_cast<float>(rendering::window_height - safe.top - safe.bottom - 24)) : 660.0f;
   constexpr float kModalPanelPadding = 22.0f;
   const float kModalContentWidth =
-      kModalPanelWidth - kModalPanelPadding * 2.0f;
+      kModalPanelWidth - kModalPanelPadding * 2.0f - 2.0f;
   const float kModalContentHeight = phone ? std::max(80.0f, kModalPanelHeight - 330) : 418.0f;
 
   auto *root = new BlockingOverlayView(0, 0, rendering::window_width,
@@ -1170,7 +1170,9 @@ void ReplayRecordsModal::resize(int width, int height) {
   auto *panel = root_->findViewByName("recordsPanel");
   const float panelWidth = std::max(200.0f, std::min(760.0f, float(width - safe.left - safe.right - 24)));
   const float panelHeight = std::max(200.0f, std::min(660.0f, float(height - safe.top - safe.bottom - 24)));
-  const float contentWidth = panelWidth - 44;
+  // Yoga includes the panel border in its width. Match the footer's inner
+  // width so two half-width actions plus their gap fit on the same row.
+  const float contentWidth = panelWidth - 44 - 2;
   const float contentHeight = std::max(80.0f, panelHeight - (compact ? 330 : 242));
   auto *footer = root_->findViewByName("recordsFooter");
   footer->setHeight(compact ? 152 : 72);

@@ -344,9 +344,13 @@ void testPhoneRecordDialogFitsAndRotates() {
   rendering::window_width = 585;
   rendering::window_height = 1266;
   View root(0, 0, 585, 1266);
-  const auto record = modernChartRecord();
+  auto record = modernChartRecord();
+  record.capabilities.gBattle = true;
+  record.capabilities.resultRecall = true;
   auto modal = ReplayRecordsModal::Create(&root, {
-      .loadRecords = [&](const ChartMetaRecord &) { return std::vector<ResultRecordSummary>{record}; }});
+      .loadRecords = [&](const ChartMetaRecord &) { return std::vector<ResultRecordSummary>{record}; },
+      .gbattle = [](const ChartMetaRecord &, const ModernChartResultRecord &) {},
+      .recallModernChart = [](const ChartMetaRecord &, const ModernChartResultRecord &) {}});
   modal->showChart({});
   modal->selectRecord(record);
   for (const auto size : {std::pair{585, 1266}, std::pair{1266, 585}, std::pair{480, 1000}}) {
@@ -362,9 +366,20 @@ void testPhoneRecordDialogFitsAndRotates() {
            "phone records panel stays inside both orientations");
     auto *watch = findVisibleButton(modal->root(), i18n::tr("records.watch.label"));
     auto *exportVideo = findVisibleButton(modal->root(), i18n::tr("records.export_video.label"));
-    expect(watch && exportVideo && watch->getY() + watch->getHeight() <= size.second &&
-               exportVideo->getX() + exportVideo->getWidth() <= size.first,
-           "phone replay actions remain reachable inside the panel");
+    auto *gbattle = findVisibleButton(modal->root(), "G-BATTLE");
+    auto *result = findVisibleButton(modal->root(), i18n::tr("records.view_result.label"));
+    for (auto *button : {watch, gbattle, result, exportVideo}) {
+      expect(button && button->getX() >= panel->getX() &&
+                 button->getY() >= panel->getY() &&
+                 button->getX() + button->getWidth() <= panel->getX() + panel->getWidth() &&
+                 button->getY() + button->getHeight() <= panel->getY() + panel->getHeight(),
+             "every compact records action fits inside the panel");
+    }
+    expect(watch && gbattle && result && exportVideo &&
+               watch->getY() == gbattle->getY() &&
+               result->getY() == exportVideo->getY() &&
+               result->getY() >= watch->getY() + watch->getHeight(),
+           "four compact records actions form two rows of two");
   }
   rendering::compactMenuCanvasActive = false;
   rendering::window_width = 1920;
