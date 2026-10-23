@@ -532,12 +532,15 @@ void testLaneCoverControlsAreAvailableInPlayOptions() {
   require(changes > 3 && std::abs(selected.hiddenRatio - 0.5F) < 0.02F &&
               selected.liftRatio == 0.1F && selected.laneCoverPercent == 20.1F,
           "dragging hidden amount updates only the selected cover");
-  for (const int width : {240, 340}) {
+  const int toggleWidth = panel.findViewByName("lane-cover-sudden")->getWidth();
+  for (const int width : {240, 340, 760}) {
     panel.setWidth(width);
     panel.applyYogaLayout();
     for (const char *name : {"lane-cover-sudden", "lane-cover-hidden", "lane-cover-lift"}) {
       auto *button = dynamic_cast<Button *>(panel.findViewByName(name));
       auto *content = dynamic_cast<ToggleButtonContent *>(button->getContentView());
+      require(button->getWidth() == toggleWidth,
+              "lane cover toggles keep a compact width as the panel grows or wraps");
       require(content && content->checked() && button->getX() >= panel.getX() &&
                   button->getX() + button->getWidth() <= panel.getX() + width,
               "cover cycles retain their states and fit narrow panels");

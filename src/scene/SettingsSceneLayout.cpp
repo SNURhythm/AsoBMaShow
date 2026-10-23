@@ -474,7 +474,8 @@ View *SettingsScene::buildPreviewScrollControls(const LayoutMetrics &metrics) {
     const bool enabled = index == 0 ? state.laneCoverEnabled
         : index == 1 ? state.hiddenEnabled : state.liftEnabled;
     content->setChecked(enabled);
-    auto *toggle = new Button(0, 0, metrics.actionButtonWidth, metrics.actionButtonHeight);
+    auto *toggle = new Button(0, 0, LaneCoverControlsView::kToggleWidth, metrics.actionButtonHeight);
+    YGNodeStyleSetMaxWidthPercent(toggle->getNode(), 100);
     toggle->setCornerRadius(app_theme::controlRadius());
     toggle->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
     toggle->setContentView(content);
