@@ -87,8 +87,9 @@ Other settings retain their existing scope and saved values.
 
 Use this rule for new or revised built-in settings, including the same choices
 shown in Play Options and previews. Existing controls are not exceptions by
-precedent; apply the rule when revising them. This policy does not itself
-change existing controls or saved values.
+precedent; apply the rule when revising them. The [migration inventory](settings-choice-migration-2026-10-24.md) lists the
+Settings, Play Options, and preview controls aligned with it. Saved values
+retain their existing meaning.
 
 Use a cycle button for a toggle, visible buttons for a few choices that fit,
 and a dropdown for other cases. Users must always be able to see the current
@@ -96,8 +97,8 @@ value.
 
 | Control | Use when | Examples |
 | --- | --- | --- |
-| Cycling button | A toggle between two stable states: on/off or another clearly binary preference. One activation switches directly to the other state. | Show lane indicators: On / Off; appearance: Light / Dark. |
-| Multiple choice buttons | A few stable, mutually exclusive choices, normally 3–4, with labels that all fit legibly together on the current screen. | Auto / Landscape / Portrait. |
+| Cycling button | A toggle between two opposing states, such as On/Off, Show/Hide, or Light/Dark. Two options alone do not make a toggle. One activation switches directly to the other state. | Show lane indicators: On / Off; appearance: Light / Dark. |
+| Multiple choice buttons | A few stable, mutually exclusive choices, including two distinct modes or roughly 3–4 options, with labels that all fit legibly together on the current screen. | Flick / Tap; LR2 / Beatoraja; Auto / Landscape / Portrait. |
 | Dropdown | Other cases: larger sets, dynamic lists, long labels, or a small choice group that does not fit. A dynamic list does not become a toggle just because it currently has two entries. | Language, audio device, resolution, skin package, file choice. |
 
 Apply these rules in order: a toggle uses one cycling button; a small choice

@@ -1,5 +1,5 @@
 #include "view/Button.h"
-#include "view/CheckboxButtonContent.h"
+#include "view/ToggleButtonContent.h"
 #if defined(__clang__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wkeyword-macro"
@@ -8,6 +8,7 @@
 #include "view/DropdownView.h"
 #include "view/OverlayPortal.h"
 #undef private
+#include "view/ChoiceControlView.h"
 #if defined(__clang__)
 #pragma clang diagnostic pop
 #endif
@@ -24,10 +25,12 @@
 #include "rendering/UniformCache.h"
 #include "rendering/ResponsiveUi.h"
 #include "scene/SettingsSceneInputLayout.h"
+#include "scene/SettingsSceneShared.h"
 #include "scene/ChartFilterSortPanelView.h"
 
 #include <SDL3/SDL.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
@@ -94,13 +97,13 @@ void testStoragePolicyDirectSelection() {
   TextView *codecStatus = nullptr;
   Button *codecButton = nullptr;
   Button *efficientButton = nullptr;
-  CheckboxButtonContent *efficientContent = nullptr;
+  ToggleButtonContent *efficientContent = nullptr;
   std::vector<DropdownView *> fields;
   for (auto *row : editor.getChildren()) {
     if (auto *text = dynamic_cast<TextView *>(row)) codecStatus = text;
     if (auto *button = dynamic_cast<Button *>(row)) {
       efficientButton = button;
-      efficientContent = dynamic_cast<CheckboxButtonContent *>(button->getContentView());
+      efficientContent = dynamic_cast<ToggleButtonContent *>(button->getContentView());
     }
     for (auto *child : row->getChildren()) {
       if (auto *dropdown = dynamic_cast<DropdownView *>(child)) fields.push_back(dropdown);
@@ -131,7 +134,7 @@ void testStoragePolicyDirectSelection() {
   require(codecStatus->getVisible(), "compression reveals the codec status");
   click(*efficientButton);
   require(selected.reencodeEfficientVideo && efficientContent->checked(),
-          "efficient-video checkbox saves the explicit opt-in");
+          "efficient-video cycle saves the explicit opt-in");
   click(*codecButton);
   require(portal.presented.size() == 1, "codec selection opens a root-level modal");
   auto *modal = portal.presented.front();
@@ -416,10 +419,6 @@ void testSliderReleaseConsumedByDisabledSiblingEndsOnlyItsGesture() {
   }
 }
 
-const TextView *buttonText(const Button &button) {
-  return dynamic_cast<const TextView *>(button.getContentView());
-}
-
 TextInputBox *findInput(View &view) {
   if (auto *input = dynamic_cast<TextInputBox *>(&view)) return input;
   for (auto *child : view.getChildren()) {
@@ -443,7 +442,7 @@ void testLanguageRefreshPreservesPlayOptionsEditingAndScroll() {
       panel->findViewByName("ruleset-section-label"));
   require(heading != nullptr, "ruleset heading is inspectable");
   auto *club = dynamic_cast<Button *>(panel->findViewByName("club-mode"));
-  auto *clubContent = dynamic_cast<CheckboxButtonContent *>(
+  auto *clubContent = dynamic_cast<ToggleButtonContent *>(
       club == nullptr ? nullptr : club->getContentView());
   scroll.setScrollOffset(75.0f);
   const float offset = scroll.getScrollOffset();
@@ -461,7 +460,7 @@ void testLanguageRefreshPreservesPlayOptionsEditingAndScroll() {
   require(clubContent != nullptr && clubContent->checked() &&
               clubContent->labelView()->getText() ==
                   i18n::tr("play_options.club_beat.label"),
-          "checkbox label translates without changing selection");
+          "cycle label translates without changing selection");
   i18n::setLanguage(i18n::Language::English);
 }
 
@@ -480,16 +479,17 @@ void testPhoneOptionsReflowWithoutLosingSelection() {
       panel->setWidth(width);
       scroll.refreshContentLayout();
       scroll.applyYogaLayout();
-      for (const char *name : {"ruleset-lr2", "ruleset-beatoraja"}) {
-        auto *button = dynamic_cast<Button *>(panel->findViewByName(name));
-        require(button && button->getHeight() >= rendering::compactTouchTarget,
-                "phone ruleset buttons retain 44-point touch height after rotation");
-        require(button->getX() >= panel->getX() &&
-                    button->getX() + button->getWidth() <= panel->getX() + width,
-                "phone option buttons stay inside the resized panel");
-      }
+      auto *choice = panel->findViewByName("ruleset-choice");
+      auto *button = dynamic_cast<Button *>(choice->findViewByName("choice:beatoraja"));
+      require(button && button->getVisible() &&
+                  button->getHeight() >= rendering::compactTouchTarget,
+              "phone ruleset choices retain the minimum touch height after rotation");
+      require(button->getX() >= panel->getX() &&
+                  button->getX() + button->getWidth() <= panel->getX() + width,
+              "phone option choices stay inside the resized panel");
     }
-    click(*static_cast<Button *>(panel->findViewByName("ruleset-beatoraja")));
+    auto *choice = panel->findViewByName("ruleset-choice");
+    click(*static_cast<Button *>(choice->findViewByName("choice:beatoraja")));
     require(selected == GameplayRuleset::Beatoraja,
             "phone options remain interactive after rotating twice");
     scroll.scrollToBottom();
@@ -531,6 +531,170 @@ void testLaneCoverControlsAreAvailableInPlayOptions() {
   require(changes > 3 && std::abs(selected.hiddenRatio - 0.5F) < 0.02F &&
               selected.liftRatio == 0.1F && selected.laneCoverPercent == 20.1F,
           "dragging hidden amount updates only the selected cover");
+  for (const int width : {240, 340}) {
+    panel.setWidth(width);
+    panel.applyYogaLayout();
+    for (const char *name : {"lane-cover-sudden", "lane-cover-hidden", "lane-cover-lift"}) {
+      auto *button = dynamic_cast<Button *>(panel.findViewByName(name));
+      auto *content = dynamic_cast<ToggleButtonContent *>(button->getContentView());
+      require(content && content->checked() && button->getX() >= panel.getX() &&
+                  button->getX() + button->getWidth() <= panel.getX() + width,
+              "cover cycles retain their states and fit narrow panels");
+    }
+    require(slider->getX() >= panel.getX() &&
+                slider->getX() + slider->getWidth() <= panel.getX() + width,
+            "cover amounts reflow inside narrow panels");
+  }
+}
+
+ChoiceControlView &panelChoice(PlayOptionsPanelView &panel, const char *name) {
+  auto *choice = dynamic_cast<ChoiceControlView *>(panel.findViewByName(name));
+  require(choice != nullptr, "panel exposes the requested settings choice");
+  return *choice;
+}
+
+DropdownView &choiceDropdown(ChoiceControlView &choice) {
+  auto *dropdown = dynamic_cast<DropdownView *>(choice.findViewByName("choice-dropdown"));
+  require(dropdown != nullptr, "settings choice has a dropdown presentation");
+  return *dropdown;
+}
+
+void choosePanelOption(PlayOptionsPanelView &panel, const char *name, const std::string &id) {
+  auto &choice = panelChoice(panel, name);
+  if (choice.findViewByName("choice-buttons")->getVisible()) {
+    auto *button = dynamic_cast<Button *>(choice.findViewByName("choice:" + id));
+    require(button != nullptr, "visible choice row contains the requested option");
+    click(*button);
+  } else {
+    auto &dropdown = choiceDropdown(choice);
+    require(dropdown.getVisible(), "larger choice sets use a dropdown");
+    click(*dropdown.triggerButton);
+    if (!dropdown.current.enabled) {
+      require(!dropdown.current.open, "locked dropdown cannot open");
+      return;
+    }
+    bool found = false;
+    for (const auto &option : dropdown.optionButtons) {
+      if (option.id != id) continue;
+      click(*option.button);
+      found = true;
+      break;
+    }
+    require(found, "dropdown contains the requested option");
+  }
+  View::dispatchDeferredEventCallbacks();
+  panel.applyYogaLayout();
+}
+
+void testPlayOptionsChoiceCallbacksLocksAndPopupClosure() {
+  OverlayPortal portal;
+  PlayOptionsPanelState selected;
+  int changes = 0;
+  PlayOptionsPanelView *owner = nullptr;
+  auto changed = [&] { ++changes; owner->refresh(selected); };
+  PlayOptionsPanelView panel(
+      {.onGaugeSelected = [&](GaugeType gauge, GaugeAutoShiftMode mode) {
+         selected.gaugeType = gauge;
+         selected.gaugeAutoShift = mode;
+         changed();
+       },
+       .onGaugeLowerBoundSelected = [&](GaugeType gauge) {
+         selected.gaugeAutoShiftLowerBound = gauge;
+         changed();
+       },
+       .onPlayOptionSelected = [&](const std::string &id) { selected.playOption = id; changed(); },
+       .isPlayOptionAllowed = [](const std::string &id) { return id != "RANDOM"; },
+       .onLongNoteModeSelected = [&](const std::string &id) { selected.longNoteMode = id; changed(); },
+       .onAssistOptionSelected = [&](const std::string &id) { selected.assistOption = id; changed(); },
+       .onPlaybackModeSelected = [&](const std::string &) { changed(); },
+       .onClubModeToggled = [&] { selected.clubMode = !selected.clubMode; changed(); },
+       .onPacemakerSelected = [&](const std::string &id) { selected.pacemakerTarget = id; changed(); }},
+      {.width = 620}, &portal);
+  owner = &panel;
+  selected.gaugeType = GaugeType::Grade;
+  panel.refresh(selected);
+  panel.applyYogaLayout();
+  auto &savedGauge = choiceDropdown(panelChoice(panel, "gauge-choice"));
+  require(savedGauge.current.selectedId == "GRADE" && !savedGauge.current.options.back().available && changes == 0,
+          "an unsupported saved gauge remains visible without substituting Normal");
+  choosePanelOption(panel, "gauge-choice", "HARD");
+  require(selected.gaugeType == GaugeType::Hard && selected.gaugeAutoShift == GaugeAutoShiftMode::None,
+          "gauge selection preserves the auto-shift mode");
+  panel.refresh(selected);
+  choosePanelOption(panel, "gauge-auto-shift-choice", "Best Clear");
+  require(selected.gaugeType == GaugeType::Hard && selected.gaugeAutoShift == GaugeAutoShiftMode::BestClear,
+          "auto-shift selection preserves the starting gauge");
+  panel.refresh(selected);
+  panel.applyYogaLayout();
+  choosePanelOption(panel, "gauge-lower-bound-choice", "EASY");
+  require(selected.gaugeAutoShiftLowerBound == GaugeType::Easy,
+          "lower-bound selection invokes its dedicated callback");
+  choosePanelOption(panel, "play-option-choice", "RANDOM");
+  require(selected.playOption == "NORMAL", "disallowed play shuffle remains unselectable");
+  panel.closeDropdowns();
+  choosePanelOption(panel, "play-option-choice", "MIRROR");
+  require(selected.playOption == "MIRROR", "play shuffle applies directly through its dropdown");
+  selected.playOption = "RANDOM";
+  panel.refresh(selected);
+  auto &shuffle = choiceDropdown(panelChoice(panel, "play-option-choice"));
+  const auto random = std::ranges::find_if(shuffle.current.options,
+      [](const auto &option) { return option.id == "RANDOM"; });
+  require(shuffle.current.selectedId == "RANDOM" && random != shuffle.current.options.end() &&
+              !random->available,
+          "an unavailable saved shuffle stays selected and visible");
+  choosePanelOption(panel, "play-option-choice", "MIRROR");
+  choosePanelOption(panel, "long-note-mode-choice", "HCN");
+  choosePanelOption(panel, "assist-option-choice", "BPM-GUIDE");
+  choosePanelOption(panel, "pacemaker-choice", "AAA");
+  require(selected.longNoteMode == "HCN" && selected.assistOption == "BPM-GUIDE" &&
+              selected.pacemakerTarget == "AAA", "remaining groups preserve their option callbacks");
+  const int beforeReselect = changes;
+  choosePanelOption(panel, "pacemaker-choice", "AAA");
+  require(changes == beforeReselect, "reselecting the current panel option avoids another save");
+  auto *club = dynamic_cast<Button *>(panel.findViewByName("club-mode"));
+  auto *clubContent = dynamic_cast<ToggleButtonContent *>(club->getContentView());
+  click(*club);
+  require(selected.clubMode && clubContent->checked(), "Club Beat cycle saves and displays on");
+  click(*club);
+  require(!selected.clubMode && !clubContent->checked(), "Club Beat cycles back off on its next activation");
+  selected.longNoteModeLocked = true;
+  selected.assistOptionLocked = true;
+  selected.playbackLocked = true;
+  panel.refresh(selected);
+  panel.applyYogaLayout();
+  const int before = changes;
+  choosePanelOption(panel, "long-note-mode-choice", "LN");
+  choosePanelOption(panel, "assist-option-choice", "OFF");
+  require(changes == before && panelChoice(panel, "long-note-mode-choice").selectedId() == "HCN" &&
+              panelChoice(panel, "assist-option-choice").selectedId() == "BPM-GUIDE",
+          "locked choices retain their saved selections without callbacks");
+  auto *playback = dynamic_cast<DropdownView *>(panel.findViewByName("playback-mode-dropdown"));
+  require(playback && !playback->current.enabled && playback->current.selectedId == "pitch-shift" &&
+              playback->current.options.size() == 2 && !playback->current.options[1].available,
+          "playback lock preserves the visible unsupported time-stretch choice");
+  selected.playbackLocked = false;
+  panel.refresh(selected);
+  panel.applyYogaLayout();
+  click(*playback->triggerButton);
+  const int beforeUnsupported = changes;
+  click(*playback->optionButtons[1].button);
+  require(playback->current.selectedId == "pitch-shift" && changes == beforeUnsupported, "unsupported playback mode cannot replace pitch shift");
+  panel.closeDropdowns();
+  for (const char *name : {"gauge-choice", "gauge-auto-shift-choice", "gauge-lower-bound-choice",
+                           "play-option-choice", "pacemaker-choice"}) {
+    auto &dropdown = choiceDropdown(panelChoice(panel, name));
+    click(*dropdown.triggerButton);
+    require(dropdown.current.open && portal.isPresented(dropdown.menuScroll),
+            "panel dropdown uses the supplied overlay portal");
+    panel.closeDropdowns();
+    require(!dropdown.current.open && !portal.isPresented(dropdown.menuScroll),
+            "closing the panel dismisses each settings menu");
+  }
+  selected.gaugeAutoShift = GaugeAutoShiftMode::None;
+  panel.refresh(selected);
+  panel.applyYogaLayout();
+  require(!panel.findViewByName("gauge-auto-shift-bounds")->getVisible(),
+          "leaving bounded auto-shift hides lower-bound controls");
 }
 
 void testLaneOrderDraftTracksAuthoritativeSelectionAndProfile() {
@@ -693,6 +857,204 @@ void testNaturalDropdownsRemainVisibleAcrossParentLayouts() {
   }
   rendering::compactMenuCanvasActive = false;
   require(allVisible, "natural dropdown triggers fill their controls in every parent layout");
+}
+
+void testSettingsChoicePresentationAndSelection() {
+  View root(0, 0, 640, 500);
+  OverlayPortal portal;
+  int changes = 0;
+  bool accept = true;
+  auto *choice = new ChoiceControlView([&](const std::string &) {
+    ++changes;
+    return accept;
+  }, &portal, 18, 0, true);
+  root.addView(choice);
+  DropdownView::State state{.selectedId = "a",
+      .options = {{.id = "a", .label = "Off"}, {.id = "b", .label = "On"}}};
+  choice->refresh(state);
+  root.applyYogaLayout();
+  auto *cycle = dynamic_cast<Button *>(choice->findViewByName("choice-cycle"));
+  require(cycle && cycle->getVisible(), "opposing states use a cycling button");
+  click(*cycle);
+  require(choice->selectedId() == "b" && changes == 1, "toggle applies the other state once");
+  accept = false;
+  click(*cycle);
+  require(choice->selectedId() == "b", "failed toggle retains the previous state");
+  accept = true;
+  state.options.push_back({.id = "c", .label = "Auto"});
+  choice->refresh(state);
+  root.applyYogaLayout();
+  auto *first = dynamic_cast<Button *>(choice->findViewByName("choice:a"));
+  auto *third = dynamic_cast<Button *>(choice->findViewByName("choice:c"));
+  require(choice->findViewByName("choice-buttons")->getVisible(),
+          "three short choices use a single button row when it fits");
+  const int before = changes;
+  click(*first);
+  require(changes == before, "reselecting the current choice does not write settings");
+  click(*third);
+  require(choice->selectedId() == "c" && changes == before + 1,
+          "choice buttons select directly without applying intermediate states");
+  root.setWidth(180);
+  root.applyYogaLayout();
+  auto *dropdown = dynamic_cast<DropdownView *>(choice->findViewByName("choice-dropdown"));
+  require(dropdown && dropdown->getVisible() && choice->selectedId() == "c",
+          "narrow choice rows become dropdowns without changing selection");
+  click(*dropdown->triggerButton);
+  require(dropdown->current.open, "adaptive dropdown opens its menu");
+  root.setWidth(640);
+  root.applyYogaLayout();
+  require(!dropdown->current.open && !dropdown->menuScroll->getVisible(),
+          "changing presentation dismisses the old popup");
+  state.options[0].label = std::string(100, 'W');
+  choice->refresh(state);
+  require(dropdown->getVisible(), "long labels use a dropdown instead of shrinking buttons");
+  state.selectedId = "saved-unknown";
+  state.options[0].label = "Off";
+  choice->refresh(state);
+  require(dropdown->getVisible(), "unknown saved choices retain a visible dropdown value");
+  state.selectedId = "a";
+  state.options.push_back({.id = "d", .label = "Other"});
+  state.options.push_back({.id = "e", .label = "Last"});
+  state.enabled = false;
+  choice->refresh(state);
+  require(dropdown->getVisible() && !dropdown->current.enabled,
+          "larger or disabled sets preserve their dropdown state");
+  View::dispatchDeferredEventCallbacks();
+}
+
+void testLocalizedFlickTapModesUseDirectSelection() {
+  for (const auto language : {i18n::Language::English, i18n::Language::Japanese, i18n::Language::Korean}) {
+    i18n::setLanguage(language);
+    View root(0, 0, 640, 500);
+    std::string saved = "off";
+    int changes = 0;
+    auto *choice = new ChoiceControlView([&](const std::string &id) { saved = id; ++changes; return true; });
+    root.addView(choice);
+    choice->refresh({.selectedId = saved,
+        .options = {{.id = "off", .label = i18n::message("settings.input.tap_scratch_off.label")},
+                    {.id = "on", .label = i18n::message("settings.input.tap_scratch_on.label")}}});
+    root.applyYogaLayout();
+    require(choice->findViewByName("choice-buttons")->getVisible() &&
+                !choice->findViewByName("choice-cycle")->getVisible(),
+            "localized Flick/Tap modes use separate buttons when they fit");
+    auto *flick = dynamic_cast<Button *>(choice->findViewByName("choice:off"));
+    auto *tap = dynamic_cast<Button *>(choice->findViewByName("choice:on"));
+    require(static_cast<TextView *>(flick->getContentView())->getText() == i18n::tr("settings.input.tap_scratch_off.label") &&
+                static_cast<TextView *>(tap->getContentView())->getText() == i18n::tr("settings.input.tap_scratch_on.label"),
+            "touch mode buttons retain the actual localized Flick/Tap captions");
+    click(*tap);
+    require(saved == "on" && changes == 1, "Tap directly selects the enabled tap-to-scratch setting");
+    root.setWidth(180);
+    root.applyYogaLayout();
+    auto &dropdown = choiceDropdown(*choice);
+    require(dropdown.getVisible() && !choice->findViewByName("choice-cycle")->getVisible(),
+            "localized Flick/Tap modes use a dropdown when their buttons do not fit");
+    click(*dropdown.triggerButton);
+    click(*dropdown.optionButtons.front().button);
+    require(saved == "off" && changes == 2, "narrow Flick selection directly disables tap-to-scratch");
+    View::dispatchDeferredEventCallbacks();
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
+std::vector<uint32_t> renderedChoiceColors(Button &button) {
+  struct Backend final : rendering::UiBatchBackend {
+    std::vector<uint32_t> colors;
+    bool submit(const rendering::UiBatchSubmission &submission) noexcept override {
+      for (const auto &vertex : submission.colorVertices) colors.push_back(vertex.abgr);
+      return true;
+    }
+  } backend;
+  rendering::UiBatchRenderer renderer(backend);
+  RenderContext context(renderer);
+  const auto originalDirectory = std::filesystem::current_path();
+  std::filesystem::current_path(std::filesystem::path(__FILE__).parent_path().parent_path());
+  renderer.begin();
+  button.render(context);
+  renderer.end();
+  std::filesystem::current_path(originalDirectory);
+  require(!backend.colors.empty(), "choice button renders its surface and border");
+  return backend.colors;
+}
+
+void testDisabledChoicesKeepMutedSelectionVisible() {
+  const auto originalMode = ui_theme::activeMode();
+  for (const auto mode : {ui_theme::ThemeMode::Dark, ui_theme::ThemeMode::Light}) {
+    ui_theme::setActiveMode(mode);
+    View root(0, 0, 640, 500);
+    int changes = 0;
+    auto *choice = new ChoiceControlView([&](const std::string &) { ++changes; return true; });
+    root.addView(choice);
+    DropdownView::State state{.selectedId = "scratch",
+        .options = {{.id = "edge", .label = "Edge lane"},
+                    {.id = "scratch", .label = "Scratch", .available = false},
+                    {.id = "ignore", .label = "Ignore"}}};
+    choice->refresh(state);
+    root.applyYogaLayout();
+    auto *scratch = dynamic_cast<Button *>(choice->findViewByName("choice:scratch"));
+    auto *edge = dynamic_cast<Button *>(choice->findViewByName("choice:edge"));
+    auto *scratchText = dynamic_cast<TextView *>(scratch->getContentView());
+    const auto color = scratchText->currentColor();
+    const auto muted = app_theme::textMuted();
+    require(!scratch->isEnabled() && scratch->isSelected() &&
+                color.r == muted.r && color.g == muted.g && color.b == muted.b,
+            "unavailable saved Scratch is muted while retaining its selection marker");
+    click(*scratch);
+    require(changes == 0 && choice->selectedId() == "scratch",
+            "unavailable Scratch does not invoke its selection callback");
+    state.options[1].available = true;
+    choice->refresh(state);
+    const auto enabledColor = scratchText->currentColor();
+    require(enabledColor.r != color.r || enabledColor.g != color.g || enabledColor.b != color.b,
+            "making a saved choice available restores its enabled text styling");
+    state.enabled = false;
+    choice->refresh(state);
+    require(!scratch->isEnabled() && !edge->isEnabled() && scratch->isSelected() && !edge->isSelected(),
+            "locking the group preserves only the current selection marker");
+    const auto lockedColor = static_cast<TextView *>(edge->getContentView())->currentColor();
+    require(lockedColor.r == muted.r && lockedColor.g == muted.g && lockedColor.b == muted.b,
+            "locked unselected choices are visibly muted");
+    require(renderedChoiceColors(*scratch) != renderedChoiceColors(*edge),
+            "the current locked choice retains a visible surface or border distinction");
+    click(*edge);
+    require(changes == 0 && choice->selectedId() == "scratch", "locked choices do not invoke callbacks");
+  }
+  ui_theme::setActiveMode(originalMode);
+}
+
+void testSavedBgaNoExpandCanSelectFit() {
+  using Mode = AppSettings::BgaDisplayMode;
+  for (const auto language : {i18n::Language::English, i18n::Language::Japanese, i18n::Language::Korean}) {
+    i18n::setLanguage(language);
+    for (const int width : {1200, 180}) {
+      View root(0, 0, width, 500);
+      Mode saved = Mode::NoExpand;
+      int changes = 0;
+      auto *choice = settings_scene::makeEnumChoice(settings_scene::LayoutMetrics{}, nullptr, saved,
+          {Mode::Fit, Mode::Fill, Mode::Stretch}, settings_scene::formatBgaDisplayModeLabel,
+          [&](Mode value) { saved = value; ++changes; });
+      root.addView(choice);
+      root.applyYogaLayout();
+      auto *legacy = dynamic_cast<Button *>(choice->findViewByName("choice:3"));
+      require(legacy && legacy->isSelected() && !legacy->isEnabled() &&
+                  static_cast<TextView *>(legacy->getContentView())->getText() ==
+                      i18n::tr("settings.options.no_expansion.label") && changes == 0,
+              "saved No Expansion remains visibly selected without becoming an editable option");
+      if (choice->findViewByName("choice-buttons")->getVisible()) {
+        click(*dynamic_cast<Button *>(choice->findViewByName("choice:0")));
+      } else {
+        auto &dropdown = choiceDropdown(*choice);
+        require(dropdown.triggerText->getText() == i18n::tr("settings.options.no_expansion.label"),
+                "narrow BGA dropdown shows the saved No Expansion label");
+        click(*dropdown.triggerButton);
+        click(*dropdown.optionButtons.front().button);
+      }
+      require(saved == Mode::Fit && changes == 1 && choice->selectedId() == "0",
+              "explicit Fit replaces saved No Expansion through exactly one settings callback");
+      View::dispatchDeferredEventCallbacks();
+    }
+  }
+  i18n::setLanguage(i18n::Language::English);
 }
 
 void testDropdownFitsContentAndRevealsSelection() {
@@ -931,6 +1293,10 @@ int main() {
 
   testDropdownPreservesAllocatedWidthAcrossRefreshes();
   testNaturalDropdownsRemainVisibleAcrossParentLayouts();
+  testSettingsChoicePresentationAndSelection();
+  testLocalizedFlickTapModesUseDirectSelection();
+  testDisabledChoicesKeepMutedSelectionVisible();
+  testSavedBgaNoExpandCanSelectFit();
   testDropdownFitsContentAndRevealsSelection();
   testColorPickerPopup();
   testColorPickerColorSpace();
@@ -940,6 +1306,7 @@ int main() {
   testPhoneOptionsReflowWithoutLosingSelection();
   testLaneCoverControlsAreAvailableInPlayOptions();
   testLaneOrderDraftTracksAuthoritativeSelectionAndProfile();
+  testPlayOptionsChoiceCallbacksLocksAndPopupClosure();
   testScrollViewUsesPreciseWheelDeltaAndNaturalDirection();
   testScrollViewTargetsWheelEventPosition();
   testDropdownDefersOptionViewsUntilOpen();
@@ -971,42 +1338,42 @@ int main() {
     scroll.applyYogaLayout();
 
     panel->refresh({.ruleset = GameplayRuleset::LR2});
-    auto *lr2 = dynamic_cast<Button *>(panel->findViewByName("ruleset-lr2"));
-    auto *beatoraja =
-        dynamic_cast<Button *>(panel->findViewByName("ruleset-beatoraja"));
-    require(lr2 != nullptr && beatoraja != nullptr,
-            "ruleset buttons have stable names");
-    require(buttonText(*lr2) != nullptr && buttonText(*beatoraja) != nullptr &&
-                buttonText(*lr2)->getText() == "LR2" &&
-                buttonText(*beatoraja)->getText() == "Beatoraja",
-            "ruleset buttons have the approved labels");
-    require(lr2->isSelected() && !beatoraja->isSelected(),
-            "LR2 selected styling follows panel state");
+    auto *ruleset = dynamic_cast<ChoiceControlView *>(panel->findViewByName("ruleset-choice"));
+    auto *lr2 = dynamic_cast<Button *>(ruleset->findViewByName("choice:lr2"));
+    auto *beatoraja = dynamic_cast<Button *>(ruleset->findViewByName("choice:beatoraja"));
+    require(lr2 && beatoraja && ruleset->findViewByName("choice-buttons")->getVisible(),
+            "distinct rulesets offer two choice buttons");
+    require(ruleset->selectedId() == "lr2" &&
+                static_cast<TextView *>(lr2->getContentView())->getText() == "LR2",
+            "ruleset shows the approved LR2 label and current selection");
 
     auto *clubMode =
         dynamic_cast<Button *>(panel->findViewByName("club-mode"));
-    auto *clubContent = dynamic_cast<CheckboxButtonContent *>(
+    auto *clubContent = dynamic_cast<ToggleButtonContent *>(
         clubMode == nullptr ? nullptr : clubMode->getContentView());
     require(clubContent != nullptr && !clubContent->checked(),
-            "Club Beat starts with the FontAwesome unchecked icon");
+            "Club Beat starts with its off state");
     panel->refresh({.ruleset = GameplayRuleset::LR2, .clubMode = true});
     require(clubContent->checked(),
-            "Club Beat refresh switches to the FontAwesome checked icon");
+            "Club Beat refresh switches to its on state");
 
     click(*beatoraja);
     require(selected == GameplayRuleset::Beatoraja,
-            "Beatoraja button invokes the enum callback");
+            "ruleset choice invokes the Beatoraja enum callback");
     panel->refresh({.ruleset = GameplayRuleset::Beatoraja});
-    require(!lr2->isSelected() && beatoraja->isSelected(),
-            "Beatoraja selected styling follows panel state");
+    require(ruleset->selectedId() == "beatoraja" &&
+                static_cast<TextView *>(beatoraja->getContentView())->getText() == "Beatoraja",
+            "ruleset shows the approved Beatoraja label after refresh");
+    click(*lr2);
+    require(selected == GameplayRuleset::LR2, "LR2 can be selected directly");
 
     auto *rulesetLabel = panel->findViewByName("ruleset-section-label");
     auto *gaugeLabel = panel->findViewByName("gauge-section-label");
     require(rulesetLabel != nullptr && gaugeLabel != nullptr &&
                 rulesetLabel->getY() < gaugeLabel->getY(),
             "Ruleset appears before Gauge in scroll content");
-    require(lr2->getWidth() == beatoraja->getWidth() && lr2->getWidth() > 0,
-            "compact layout keeps equal-width ruleset buttons");
+    require(ruleset->getWidth() > 0 && ruleset->getWidth() <= panel->getWidth(),
+            "compact layout keeps the ruleset choices inside its panel");
     require(scroll.getHeight() == 400,
             "adding the ruleset row does not grow the modal viewport");
     scroll.scrollToBottom();
@@ -1014,6 +1381,7 @@ int main() {
             "the compact modal content remains scrollable");
   }
   rendering::UniformCache::getInstance().destroyAll();
+  rendering::ShaderManager::getInstance().release();
   bgfx::shutdown();
   return 0;
 }

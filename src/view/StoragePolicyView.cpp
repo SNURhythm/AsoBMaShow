@@ -1,7 +1,7 @@
 #include "StoragePolicyView.h"
 #include "DropdownView.h"
 #include "Button.h"
-#include "CheckboxButtonContent.h"
+#include "ToggleButtonContent.h"
 #include "BlockingOverlayView.h"
 #include "ModalViewHelpers.h"
 #include "OverlayPortal.h"
@@ -196,7 +196,7 @@ StoragePolicyView::StoragePolicyView(Policy policy, std::function<void(Policy)> 
   codecStatus_->setThemedColor(app_theme::textSecondary);
   addView(codecStatus_);
   efficientVideoButton_ = new Button();
-  efficientVideoContent_ = new CheckboxButtonContent("", 20, 24);
+  efficientVideoContent_ = new ToggleButtonContent("", 20, 24);
   efficientVideoContent_->setJustifyContent(YGJustifyFlexStart);
   efficientVideoContent_->setThemedColor(app_theme::textSecondary);
   auto *efficientLabel = efficientVideoContent_->labelView();

@@ -496,18 +496,14 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   notePriorityControls->setFlexDirection(FlexDirection::Column);
   notePriorityControls->setGap(metrics.compact ? 12.0f : 16.0f);
   notePriorityControls->setAlignItems(YGAlignFlexStart);
-  notePriorityModeText =
-      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
-               TextView::CENTER, TextView::MIDDLE);
-  notePriorityModeButton =
-      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                        notePriorityModeText);
-  notePriorityModeButton->setOnClickListener([this]() {
-    context.settings.notePriorityMode =
-        nextNotePriorityMode(context.settings.notePriorityMode);
-    persistSettings();
-  });
-  notePriorityControls->addView(notePriorityModeButton);
+  notePriorityControls->addView(makeEnumChoice(metrics, overlayPortal,
+      context.settings.notePriorityMode,
+      {AppSettings::NotePriorityMode::Lowest, AppSettings::NotePriorityMode::Combo,
+       AppSettings::NotePriorityMode::Duration, AppSettings::NotePriorityMode::Score},
+      formatNotePriorityModeLabel, [this](AppSettings::NotePriorityMode value) {
+        context.settings.notePriorityMode = value;
+        persistSettings();
+      }));
   cards->addView(makeCard(
       metrics, i18n::message("settings.timing.note_priority.label"), i18n::message("settings.timing.choose_which_nearby_note_press_judges.message"),
       notePriorityControls, metrics.modeCardHeight,
@@ -522,7 +518,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
                TextView::CENTER, TextView::MIDDLE);
   touchVisualizationModeButton =
       makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
-                        touchVisualizationModeText);
+                        touchVisualizationModeText, true);
   touchVisualizationModeButton->setOnClickListener([this]() {
     context.settings.touchVisualizationEnabled =
         !context.settings.touchVisualizationEnabled;
@@ -541,7 +537,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
                  TextView::CENTER, TextView::MIDDLE);
     ipadGestureReminderModeButton = makeControlButton(metrics.actionButtonWidth,
                                                      metrics.actionButtonHeight,
-                                                     ipadGestureReminderModeText);
+                                                     ipadGestureReminderModeText, true);
     ipadGestureReminderModeButton->setOnClickListener([this]() {
       context.settings.ipadGestureReminderEnabled =
           !context.settings.ipadGestureReminderEnabled;
@@ -566,28 +562,16 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
   selectorRow->setAlignItems(YGAlignStretch);
   selectorBody->addView(selectorRow);
 
-  inputPlayerDropdown =
-      new DropdownView({
-                           .onOpenChanged =
-                               [this](bool open) {
-                                 inputPlayerDropdownOpen = open;
-                                 if (open) {
-                                   inputKeyModeDropdownOpen = false;
-                                   inputDeviceDropdownOpen = false;
-                                 }
-                                 refreshInputDropdowns();
-                               },
-                           .onOptionSelected =
-                               [this](const std::string &id) {
-                                 inputCaptureController->cancel();
-                                 inputCaptureAction.reset();
-                                 inputSelectedPlayer =
-                                     std::clamp(std::stoi(id), 1, 2);
-                                 inputPlayerDropdownOpen = false;
-                                 requestInputViewRebuild();
-                               },
-                       },
-                       overlayPortal);
+  inputPlayerDropdown = new ChoiceControlView([this](const std::string &id) {
+    inputCaptureController->cancel();
+    inputCaptureAction.reset();
+    inputSelectedPlayer = std::clamp(std::stoi(id), 1, 2);
+    requestInputViewRebuild();
+    return true;
+  }, overlayPortal, metrics.smallTextSize, metrics.actionButtonHeight);
+  inputPlayerDropdown->setWidth(static_cast<float>(layout.selectorWidth));
+  inputPlayerDropdown->setFlexGrow(layout.stackSelectors ? 0.0F : 1.0F);
+  selectorRow->addView(inputPlayerDropdown);
   inputKeyModeDropdown =
       new DropdownView({
                            .onOpenChanged =
@@ -632,7 +616,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
                        },
                        overlayPortal);
   for (auto *dropdown :
-       {inputPlayerDropdown, inputKeyModeDropdown, inputDeviceDropdown}) {
+       {inputKeyModeDropdown, inputDeviceDropdown}) {
     dropdown->setTriggerWidth(static_cast<float>(layout.selectorWidth));
     dropdown->setFlexGrow(layout.stackSelectors ? 0.0F : 1.0F);
     selectorRow->addView(dropdown);
@@ -673,67 +657,41 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
     touchBody->setGap(metrics.compact ? 10.0F : 14.0F);
     const int touchKeyMode = inputSelectedKeyMode;
     const auto touchConfig = context.inputProfile.playfieldTouchForKeyMode(touchKeyMode);
-    const int labelWidth = std::min(220, bodyWidth / 4);
-    auto makeModeRow = [&](const char *label) {
-      auto *row = new View();
-      row->setFlexDirection(FlexDirection::Row);
-      row->setAlignItems(YGAlignCenter);
-      row->setGap(static_cast<float>(layout.selectorGap));
-      auto *text = makeText(i18n::message(label), metrics.bodyTextSize,
-                            app_theme::textPrimary(), TextView::LEFT, TextView::MIDDLE);
-      text->setWidth(static_cast<float>(labelWidth));
-      text->setHeight(static_cast<float>(metrics.actionButtonHeight));
-      text->setFlexShrink(0.0F);
-      text->setAutoFitText(true);
-      row->addView(text);
-      auto *buttons = new View();
-      buttons->setFlexDirection(FlexDirection::Row);
-      buttons->setFlexWrap(YGWrapWrap);
-      buttons->setGap(static_cast<float>(layout.selectorGap));
-      buttons->setWidth(static_cast<float>(std::max(0, bodyWidth - labelWidth - layout.selectorGap)));
-      row->addView(buttons);
-      touchBody->addView(row);
-      return buttons;
-    };
-    auto makeModeButton = [&](const char *label, bool selected, bool available = true) {
-      auto *text = makeText(i18n::message(label), metrics.bodyTextSize + 1,
-                            available ? app_theme::textPrimary() : app_theme::textSecondary(),
-                            TextView::CENTER, TextView::MIDDLE);
-      auto *button = selected
-          ? makeAccentButton(kFitContentWidth, metrics.actionButtonHeight, text, app_theme::cyan())
-          : makeControlButton(kFitContentWidth, metrics.actionButtonHeight, text);
-      button->setFlexShrink(0.0F);
-      button->setEnabled(available);
-      return button;
+    const auto appendChoice = [&](const i18n::Text &label, DropdownView::State state,
+                                  ChoiceControlView::Select select) {
+      touchBody->addView(makeWrappedText(label, metrics.smallTextSize, app_theme::textSecondary()));
+      auto *control = new ChoiceControlView(std::move(select), overlayPortal,
+                                            metrics.smallTextSize, metrics.actionButtonHeight);
+      control->refresh(std::move(state));
+      touchBody->addView(control);
     };
     if (input::PlayfieldTouchConfig::supportsTapToScratch(touchKeyMode)) {
-      auto *scratchModes = makeModeRow("settings.input.scratch_mode.label");
-      for (const auto &[tap, label] : {
-               std::pair{false, "settings.input.tap_scratch_off.label"},
-               std::pair{true, "settings.input.tap_scratch_on.label"}}) {
-        auto *button = makeModeButton(label, touchConfig.tapToScratch == tap);
-        button->setOnClickListener([this, touchKeyMode, touchConfig, tap]() {
+      appendChoice(i18n::message("settings.input.scratch_mode.label"),
+          {.selectedId = touchConfig.tapToScratch ? "on" : "off",
+           .options = {{.id = "off", .label = i18n::message("settings.input.tap_scratch_off.label")},
+                       {.id = "on", .label = i18n::message("settings.input.tap_scratch_on.label")}}},
+          [this, touchKeyMode, touchConfig](const std::string &id) {
+            auto next = touchConfig;
+            next.tapToScratch = id == "on";
+            commitPlayfieldTouchSetting(touchKeyMode, next);
+            return inputPlayfieldTouchSettingsError.empty();
+          });
+    }
+    appendChoice(i18n::message("settings.input.side_taps.label"),
+        {.selectedId = std::to_string(static_cast<int>(touchConfig.sideTapMode)),
+         .options = {
+             {.id = std::to_string(static_cast<int>(input::SideTapMode::EdgeLane)),
+              .label = i18n::message("settings.input.side_taps_edge.label")},
+             {.id = std::to_string(static_cast<int>(input::SideTapMode::Scratch)),
+              .label = i18n::message("settings.input.side_taps_scratch.label"), .available = touchConfig.tapToScratch},
+             {.id = std::to_string(static_cast<int>(input::SideTapMode::Ignore)),
+              .label = i18n::message("settings.input.side_taps_ignore.label")}}},
+        [this, touchKeyMode, touchConfig](const std::string &id) {
           auto next = touchConfig;
-          next.tapToScratch = tap;
+          next.sideTapMode = static_cast<input::SideTapMode>(std::stoi(id));
           commitPlayfieldTouchSetting(touchKeyMode, next);
+          return inputPlayfieldTouchSettingsError.empty();
         });
-        scratchModes->addView(button);
-      }
-    }
-    auto *sideModes = makeModeRow("settings.input.side_taps.label");
-    for (const auto &[mode, label] : {
-             std::pair{input::SideTapMode::EdgeLane, "settings.input.side_taps_edge.label"},
-             std::pair{input::SideTapMode::Scratch, "settings.input.side_taps_scratch.label"},
-             std::pair{input::SideTapMode::Ignore, "settings.input.side_taps_ignore.label"}}) {
-      auto *button = makeModeButton(label, touchConfig.sideTapMode == mode,
-          mode != input::SideTapMode::Scratch || touchConfig.tapToScratch);
-      button->setOnClickListener([this, touchKeyMode, touchConfig, mode]() {
-        auto next = touchConfig;
-        next.sideTapMode = mode;
-        commitPlayfieldTouchSetting(touchKeyMode, next);
-      });
-      sideModes->addView(button);
-    }
     touchBody->addView(makeWrappedText(
         inputPlayfieldTouchSettingsError.empty()
             ? ""
@@ -761,7 +719,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
                                                  : i18n::message("settings.input.virtual_controller_off.label"),
                  metrics.bodyTextSize + 1, app_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE),
-        virtualControllerConfig.enabled ? app_theme::cyan() : app_theme::coral());
+        virtualControllerConfig.enabled ? app_theme::cyan() : app_theme::coral(), true);
     virtualControllerToggle->setOnClickListener(
         [this, controllerKeyMode, virtualControllerConfig]() {
           auto next = virtualControllerConfig;
@@ -777,7 +735,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
                          ? i18n::message("settings.input.virtual_scratch_on.label")
                          : i18n::message("settings.input.virtual_scratch_off.label"),
                      metrics.bodyTextSize + 1, app_theme::textPrimary(),
-                     TextView::CENTER, TextView::MIDDLE));
+                     TextView::CENTER, TextView::MIDDLE), true);
         scratchToggle->setOnClickListener([this, controllerKeyMode, virtualControllerConfig]() {
           auto next = virtualControllerConfig;
           next.scratchEnabled = !next.scratchEnabled;
@@ -786,40 +744,29 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
         virtualControllerBody->addView(scratchToggle);
       }
       if (virtualControllerConfig.scratchEnabled) {
-        const bool spinScratch = virtualControllerConfig.scratchMode ==
-                                 input::VirtualControllerScratchMode::Spin;
-        auto *scratchModeButton = makeControlButton(
-            std::min(bodyWidth, metrics.actionButtonWidth),
-            metrics.actionButtonHeight,
-            makeText(spinScratch ? i18n::message("settings.input.scratch_spin_mode.label") : i18n::message("settings.input.scratch_flick_mode.label"),
-                     metrics.bodyTextSize + 1, app_theme::textPrimary(),
-                     TextView::CENTER, TextView::MIDDLE));
-        scratchModeButton->setOnClickListener(
-            [this, controllerKeyMode, virtualControllerConfig, spinScratch]() {
+        virtualControllerBody->addView(makeEnumChoice(metrics, overlayPortal,
+            virtualControllerConfig.scratchMode,
+            {input::VirtualControllerScratchMode::Flick, input::VirtualControllerScratchMode::Spin},
+            [](input::VirtualControllerScratchMode mode) { return i18n::message(
+                mode == input::VirtualControllerScratchMode::Spin
+                    ? "settings.input.scratch_spin_mode.label" : "settings.input.scratch_flick_mode.label"); },
+            [this, controllerKeyMode, virtualControllerConfig](input::VirtualControllerScratchMode mode) {
               auto next = virtualControllerConfig;
-              next.scratchMode = spinScratch
-                                     ? input::VirtualControllerScratchMode::Flick
-                                     : input::VirtualControllerScratchMode::Spin;
+              next.scratchMode = mode;
               commitVirtualControllerSetting(controllerKeyMode, next);
-            });
-        virtualControllerBody->addView(scratchModeButton);
+            }));
       }
-      const bool playerTwo = virtualControllerConfig.player ==
-                             input::VirtualControllerPlayer::Player2;
-      auto *playerButton = makeControlButton(
-          std::min(bodyWidth, metrics.actionButtonWidth),
-          metrics.actionButtonHeight,
-          makeText(playerTwo ? i18n::message("settings.input.player_2_p.label") : i18n::message("settings.input.player_1_p.label"),
-                   metrics.bodyTextSize + 1, app_theme::textPrimary(),
-                   TextView::CENTER, TextView::MIDDLE));
-      playerButton->setOnClickListener(
-          [this, controllerKeyMode, virtualControllerConfig, playerTwo]() {
+      virtualControllerBody->addView(makeEnumChoice(metrics, overlayPortal,
+          virtualControllerConfig.player,
+          {input::VirtualControllerPlayer::Player1, input::VirtualControllerPlayer::Player2},
+          [](input::VirtualControllerPlayer player) { return i18n::message(
+              player == input::VirtualControllerPlayer::Player2
+                  ? "settings.input.player_2_p.label" : "settings.input.player_1_p.label"); },
+          [this, controllerKeyMode, virtualControllerConfig](input::VirtualControllerPlayer player) {
             auto next = virtualControllerConfig;
-            next.player = playerTwo ? input::VirtualControllerPlayer::Player1
-                                    : input::VirtualControllerPlayer::Player2;
+            next.player = player;
             commitVirtualControllerSetting(controllerKeyMode, next);
-          });
-      virtualControllerBody->addView(playerButton);
+          }));
       auto *editButton =
           makeControlButton(std::min(bodyWidth, metrics.actionButtonWidth),
                             metrics.actionButtonHeight,

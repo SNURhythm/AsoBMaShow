@@ -37,7 +37,8 @@ dropdownOptions(const ChoiceControlModel &control) {
   return options;
 }
 
-void refreshDropdown(DropdownView *dropdown, const ChoiceControlModel &control,
+template <typename Control>
+void refreshDropdown(Control *dropdown, const ChoiceControlModel &control,
                      bool open, const i18n::Text &label, float width) {
   if (dropdown == nullptr) {
     return;
@@ -52,7 +53,7 @@ void refreshDropdown(DropdownView *dropdown, const ChoiceControlModel &control,
 }
 
 View *makeChoiceField(const LayoutMetrics &metrics, const i18n::Text &title,
-                      DropdownView *dropdown, const i18n::Text &explanation) {
+                      View *dropdown, const i18n::Text &explanation) {
   auto *field = new View();
   field->setFlexDirection(FlexDirection::Column);
   field->setGap(metrics.compact ? 7.0F : 9.0F);
@@ -285,23 +286,17 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
   keysoundControls->setFlexDirection(FlexDirection::Column);
   keysoundControls->setGap(metrics.compact ? 12.0f : 16.0f);
   keysoundControls->setAlignItems(YGAlignFlexStart);
-  keysoundModeText =
-      makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
-               TextView::CENTER, TextView::MIDDLE);
-  keysoundModeButton = makeControlButton(
-      metrics.actionButtonWidth, metrics.actionButtonHeight, keysoundModeText);
-  keysoundModeButton->setOnClickListener([this]() {
-    context.settings.inputKeysoundEnabled =
-        !context.settings.inputKeysoundEnabled;
-    persistSettings();
-  });
-  keysoundControls->addView(keysoundModeButton);
+  keysoundControls->addView(makeEnumChoice(metrics, overlayPortal,
+      context.settings.inputKeysoundEnabled, {true, false},
+      [](bool input) { return i18n::message(input
+          ? "settings.controls.keysound.input_trigger.label" : "settings.controls.keysound.auto_timed.label"); },
+      [this](bool input) { context.settings.inputKeysoundEnabled = input; persistSettings(); }));
   prepMetronomeModeText =
       makeText("", metrics.bodyTextSize + 6, app_theme::textPrimary(),
                TextView::CENTER, TextView::MIDDLE);
   prepMetronomeModeButton =
-      makeControlButton(kFitContentWidth, metrics.actionButtonHeight,
-                        prepMetronomeModeText);
+      makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+                        prepMetronomeModeText, true);
   prepMetronomeModeButton->setOnClickListener([this]() {
     context.settings.prepMetronomeEnabled =
         !context.settings.prepMetronomeEnabled;
@@ -457,26 +452,22 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
   ensureAudioVideoSession();
   auto *cardsColumn = makeAudioVideoCardsColumn(metrics);
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR || TARGET_OS_ANDROID
-  auto *orientationControls = new View();
-  orientationControls->setFlexDirection(FlexDirection::Row)->setGap(12);
+  std::vector<GameplaySkinChoiceButton> orientations;
   for (const auto &[mode, label] : {
            std::pair{screen_orientation::Mode::Auto, "settings.display.orientation_auto.label"},
            std::pair{screen_orientation::Mode::Landscape, "settings.display.orientation_landscape.label"},
            std::pair{screen_orientation::Mode::Portrait, "settings.display.orientation_portrait.label"}}) {
-    auto *text = makeText(i18n::message(label), metrics.bodyTextSize,
-                          app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
-    auto *button = context.settings.screenOrientation == mode
-        ? makeAccentButton(0, metrics.actionButtonHeight, text, app_theme::cyan())
-        : makeControlButton(0, metrics.actionButtonHeight, text);
-    button->setFlex(1)->setMinWidth(0);
-    button->setOnClickListener([this, mode] {
+    orientations.push_back({.label = i18n::message(label),
+        .selected = context.settings.screenOrientation == mode,
+        .action = [this, mode] {
       context.settings.screenOrientation = mode;
       persistSettings();
       // Rebuild on the next update, after this button's callback returns.
       lastLayoutWidth = -1;
-    });
-    orientationControls->addView(button);
+    }});
   }
+  auto *orientationControls = makeGameplaySkinChoiceRow(metrics, overlayPortal, "", true,
+                                                        std::move(orientations));
   cardsColumn->addView(makeCard(
       metrics, i18n::message("settings.display.orientation.label"),
       i18n::message("settings.display.orientation_help.message"),
@@ -509,20 +500,11 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
     refreshAudioVideoControls();
   };
 
-  displayModeDropdown =
-      new DropdownView({
-                           .onOpenChanged =
-                               [closeOtherDisplayDropdowns](bool open) {
-                                 closeOtherDisplayDropdowns(0, open);
-                               },
-                           .onOptionSelected =
-                               [this](const std::string &id) {
-                                 displayDraft.mode = parseDisplayMode(id);
-                                 displayModeDropdownOpen = false;
-                                 refreshAudioVideoControls();
-                               },
-                       },
-                       overlayPortal);
+  displayModeDropdown = new ChoiceControlView([this](const std::string &id) {
+    displayDraft.mode = parseDisplayMode(id);
+    refreshAudioVideoControls();
+    return true;
+  }, overlayPortal, metrics.smallTextSize, metrics.actionButtonHeight);
   displayIndexDropdown = new DropdownView(
       {
           .onOpenChanged =
@@ -566,20 +548,11 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
               },
       },
       overlayPortal);
-  displayVsyncDropdown =
-      new DropdownView({
-                           .onOpenChanged =
-                               [closeOtherDisplayDropdowns](bool open) {
-                                 closeOtherDisplayDropdowns(3, open);
-                               },
-                           .onOptionSelected =
-                               [this](const std::string &id) {
-                                 displayDraft.vsync = id == "on";
-                                 displayVsyncDropdownOpen = false;
-                                 refreshAudioVideoControls();
-                               },
-                       },
-                       overlayPortal);
+  displayVsyncDropdown = new ChoiceControlView([this](const std::string &id) {
+    displayDraft.vsync = id == "on";
+    refreshAudioVideoControls();
+    return true;
+  }, overlayPortal, metrics.smallTextSize, metrics.actionButtonHeight, true);
   displayFrameCapDropdown =
       new DropdownView({
                            .onOpenChanged =

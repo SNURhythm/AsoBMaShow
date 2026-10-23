@@ -3,7 +3,7 @@
 #include "../LaneCover.h"
 #include "../i18n/Localization.h"
 #include "Button.h"
-#include "CheckboxButtonContent.h"
+#include "ToggleButtonContent.h"
 #include "SnappedSlider.h"
 #include "TextView.h"
 #include "AppTheme.h"
@@ -26,15 +26,16 @@ public:
     for (std::size_t i = 0; i < controls_.size(); ++i) {
       auto &control = controls_[i];
       auto *row = new View();
-      row->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(10)->setHeight(rowHeight)->setFlexShrink(0);
+      row->setFlexDirection(FlexDirection::Row)->setFlexWrap(YGWrapWrap)
+          ->setAlignItems(YGAlignCenter)->setGap(10)->setMinHeight(rowHeight)->setFlexShrink(0);
       row->setWidthPercent(100);
       YGNodeStyleSetMaxWidth(row->getNode(), 760);
-      control.button = new Button(0, 0, 140, 48);
-      control.button->setHeight(rowHeight)->setFlexShrink(0);
+      control.button = new Button(0, 0, 190, 48);
+      control.button->setHeight(rowHeight)->setFlexGrow(1)->setFlexShrink(1)->setMinWidth(0);
       control.button->setName(std::string("lane-cover-") + names[i]);
       control.button->setCornerRadius(app_theme::controlRadius());
       control.button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
-      control.content = new CheckboxButtonContent(labels[i], 18, 20);
+      control.content = new ToggleButtonContent(labels[i], 18, 20);
       control.content->setJustifyContent(YGJustifyFlexStart)->setPadding(Edge::Left, 10);
       control.content->setThemedColor(app_theme::textPrimary);
       control.button->setContentView(control.content);
@@ -44,6 +45,9 @@ public:
         changed();
       });
       row->addView(control.button);
+      auto *amount = new View();
+      amount->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(10);
+      amount->setFlexGrow(1)->setFlexBasis(108)->setMinWidth(108)->setHeight(rowHeight);
       control.slider = new SnappedSlider([this, i](int value) {
         if (i == 0) state_.laneCoverPercent = static_cast<float>(value) / 10;
         else if (i == 1) state_.hiddenRatio = static_cast<float>(value) / 1000;
@@ -52,13 +56,14 @@ public:
       });
       control.slider->setName(std::string("lane-cover-") + names[i] + "-amount");
       control.slider->setFlex(1)->setMinWidth(50)->setHeight(rowHeight);
-      row->addView(control.slider);
+      amount->addView(control.slider);
       control.number = new TextView(app_theme::font, 18);
       control.number->setWidth(48)->setFlexShrink(0);
       control.number->setAlign(TextView::RIGHT);
       control.number->setVAlign(TextView::MIDDLE);
       control.number->setThemedColor(app_theme::textPrimary);
-      row->addView(control.number);
+      amount->addView(control.number);
+      row->addView(amount);
       addView(row);
     }
     auto *help = new TextView(app_theme::font, 16);
@@ -87,7 +92,7 @@ public:
 private:
   struct Control {
     Button *button = nullptr;
-    CheckboxButtonContent *content = nullptr;
+    ToggleButtonContent *content = nullptr;
     SnappedSlider *slider = nullptr;
     TextView *number = nullptr;
   };

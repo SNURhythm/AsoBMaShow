@@ -6,7 +6,7 @@
 #include "../view/ActionButtonContent.h"
 #include "../view/OverlayPortal.h"
 #include "../view/DropdownView.h"
-#include "../view/CheckboxButtonContent.h"
+#include "../view/ToggleButtonContent.h"
 #include "play/StartLaneIndicatorGeometry.h"
 #include "../view/AppTheme.h"
 #include "../settings/BuiltInNoteEditing.h"
@@ -125,11 +125,11 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
       lastLayoutWidth = -1;
     };
     body->addView(makeGameplaySkinChoiceRow(
-        metrics, i18n::message("settings.skins.hide_empty_scratch.label"), true,
+        metrics, overlayPortal, i18n::message("settings.skins.hide_empty_scratch.label"), true,
         {{.label = i18n::message("settings.skins.judgement_hud.off.label"),
           .selected = !hide, .action = [apply] { apply(false); }},
          {.label = i18n::message("settings.skins.judgement_hud.on.label"),
-          .selected = hide, .action = [apply] { apply(true); }}}));
+          .selected = hide, .action = [apply] { apply(true); }}}, true));
   }
   if (followsOriginal) {
     body->addView(makeWrappedText(
@@ -229,13 +229,14 @@ void SettingsScene::appendScratchlessModeSettings(
   scratchlessControls->addView(makeWrappedText(
       i18n::message("settings.scratchless.description"), metrics.smallTextSize,
       app_theme::textSecondary()));
-  auto *scratchlessMode = new DropdownView(
-      {.onOptionSelected = [this, keyMode](const std::string &id) {
+  auto *scratchlessMode = new ChoiceControlView(
+      [this, keyMode](const std::string &id) {
         context.settings.scratchlessForKeyMode(keyMode).mode =
             static_cast<AppSettings::ScratchlessMode>(std::stoi(id));
         persistSettings();
         lastLayoutWidth = -1;
-      }}, overlayPortal);
+        return true;
+      }, overlayPortal, metrics.smallTextSize, metrics.actionButtonHeight);
   scratchlessMode->refresh({
       .selectedId = std::to_string(static_cast<int>(policy.mode)),
       .options = {{.id = "0", .label = i18n::message("settings.scratchless.disabled.label")},
@@ -252,7 +253,7 @@ void SettingsScene::appendScratchlessModeSettings(
         metrics.bodyTextSize, app_theme::textSecondary()));
     for (const auto &table : difficultyTables) {
       if (table.sourceUrl.empty()) continue;
-      auto *content = new CheckboxButtonContent(table.name, metrics.bodyTextSize,
+      auto *content = new ToggleButtonContent(table.name, metrics.bodyTextSize,
                                                 metrics.bodyTextSize);
       content->setThemedColor(app_theme::textPrimary);
       content->setJustifyContent(YGJustifyFlexStart);
