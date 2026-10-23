@@ -33,6 +33,7 @@ void SettingsScene::startCalibration() {
   calibrationSamples.configure(calibrationChartOptions.bpm, calibrationChartOptions.beatsPerMeasure);
   calibrationError.clear();
   calibrationDisplay = false;
+  calibrationMuted = false;
   calibrationScrollSettings = false;
   calibrationMeasuring = false;
   calibrationActive = true;
@@ -265,6 +266,8 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
         [this, display] {
           if (calibrationDisplay == display) return;
           calibrationDisplay = display;
+          if (display) calibrationNotesHidden = false;
+          else calibrationMuted = false;
           calibrationMeasuring = false;
           calibrationSamples.configure(calibrationChartOptions.bpm, calibrationChartOptions.beatsPerMeasure);
           previewPaused = false;
@@ -373,9 +376,11 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
     });
     parent->addView(button);
   };
-  addToggle(sound, "settings.calibration.mute", calibrationMuted, true);
+  if (calibrationDisplay)
+    addToggle(sound, "settings.calibration.mute", calibrationMuted, true);
   body->addView(sound);
-  addToggle(aids, "settings.calibration.hide_notes", calibrationNotesHidden, false);
+  if (!calibrationDisplay)
+    addToggle(aids, "settings.calibration.hide_notes", calibrationNotesHidden, false);
   addToggle(aids, "settings.calibration.logical_line", calibrationLogicalJudgementLine, false);
   body->addView(aids);
   auto *setupTabs = new View();
