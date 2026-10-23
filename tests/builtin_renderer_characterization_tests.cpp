@@ -3637,7 +3637,8 @@ void verifyCalibrationUsesJudgedTargets() {
   }
 }
 
-void verifyCalibrationOffsetOnlyMovesNotes() {
+void verifyCalibrationOffsetOnlyMovesNotes(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
   for (const bool display : {false, true}) {
     for (const int offset : {-80, 0, 70}) {
       const auto chart = settings_scene::makeCalibrationChart(7, {.lane = 1});
@@ -3688,6 +3689,25 @@ void verifyCalibrationOffsetOnlyMovesNotes() {
       scene.calibrationVisualOffsetMs += 100;
       verifyEffects();
       scene.releaseLane(1, 0);
+      scene.calibrationVisualOffsetMs = offset;
+      const auto measureTime = settings_scene::calibrationTiming().firstNoteMicros;
+      for (const auto relative : {-40'000LL, 0LL, 1LL}) {
+        scene.previewElapsedMicros = measureTime + offset * 1000LL - 10'000 + relative;
+        scene.capturePreviewVisualState();
+        const auto projection = scene.projectPreviewFrame();
+        Recorder recorder;
+        renderer.setCharacterizationRecorder(&recorder);
+        RenderContext renderContext;
+        renderer.render(renderContext, *scene.previewCapturedVisualState, projection);
+        const auto line = std::ranges::find_if(recorder.submissions, [&](const auto &submission) {
+          return submission.kind == characterization::SubmissionKind::MeasureLine &&
+                 submission.timelineMicros == measureTime;
+        });
+        expect((line != recorder.submissions.end()) == (relative <= 0),
+               "measure lines disappear only after crossing the drawn judgement line");
+        renderer.setCharacterizationRecorder(nullptr);
+        bgfx::frame();
+      }
     }
   }
 }
@@ -4596,7 +4616,7 @@ int main() {
   verifyPreviewNotesMoveThroughoutOpening();
   verifyPreviewScoreUsesRealJudgements();
   verifyCalibrationUsesJudgedTargets();
-  verifyCalibrationOffsetOnlyMovesNotes();
+  verifyCalibrationOffsetOnlyMovesNotes(target);
   verifyDenseCalibrationHasChartSizedJudgementBuffers();
   verifyPreviewInputTimingSamples();
   verifyPreviewPause();

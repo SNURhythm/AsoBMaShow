@@ -3093,8 +3093,9 @@ void BMSRenderer::renderFrame(
       if (!timelineWasTraversed(line.retainedOrdinal)) {
         return;
       }
-      if (!gameplay_scroll_geometry::shouldDrawMeasureLine(
-              line.timeMicros, chartTimeMicros, lineY, judgeY, upperBound)) {
+      // Projection already clipped against note-display time. The effect
+      // clock can differ, so only recheck the drawn lane bounds here.
+      if (!(lineY >= judgeY && lineY <= upperBound)) {
         return;
       }
       if (!chartEntityRenderBudget.tryConsume(
