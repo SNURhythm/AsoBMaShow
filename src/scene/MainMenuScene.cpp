@@ -4364,7 +4364,8 @@ void MainMenuScene::refreshPlayOptionsPanel() {
        .playbackLocked = playbackLocked,
        .clubMode = context.settings.gameplayClubModeEnabled,
        .pacemakerTarget = profileSelections.pacemakerTarget,
-       .profileId = context.profileManager.activeProfile().id});
+       .profileId = context.profileManager.activeProfile().id,
+       .laneCovers = context.settings.presentation().laneCoverState()});
 }
 
 bool MainMenuScene::playbackSelectionLockedForCourse() const {
@@ -6769,6 +6770,13 @@ void MainMenuScene::buildPlayOptionsModal() {
        .onClubModeToggled = [this]() { toggleGameplayClubMode(); },
        .onPacemakerSelected = [this](const std::string &target) {
          setPacemakerTargetSelection(target);
+       },
+       .onLaneCoversChanged = [this](const lane_cover::State &covers) {
+         context.settings.presentation().setLaneCoverState(covers);
+         if (!context.saveSettings()) {
+           SDL_Log("Failed to save lane cover settings");
+         }
+         refreshPlayOptionsPanel();
        }}, overlayPortal);
   if (!playOptionsModal) return;
   playOptionsModalRoot = playOptionsModal->root();

@@ -320,6 +320,7 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
           resetPreviewSimulation();
           lastLayoutWidth = -1;
         }, calibrationDisplay == display);
+    tab_button::style(modeButton, calibrationDisplay == display);
     modeButton->setFlexGrow(1);
     modeButton->setFlexBasis(0);
   }

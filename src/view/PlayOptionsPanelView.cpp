@@ -338,9 +338,7 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
     std::vector<DropdownView::Option> options;
     for (const auto mode : kAutoShiftModes) {
       const std::string label = gaugeAutoShiftMenuLabel(mode);
-      options.push_back({.id = label, .label = label,
-          .leadingColor = gaugeAutoShiftEnabled(mode) ? Color(255, 205, 37, 242)
-                                                     : Color(128, 136, 150, 232)});
+      options.push_back({.id = label, .label = label});
     }
     gaugeAutoShiftChoice->refresh({.selectedId = gaugeAutoShiftMenuLabel(state.gaugeAutoShift),
                                     .options = std::move(options)});

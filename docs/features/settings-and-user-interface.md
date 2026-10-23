@@ -130,8 +130,9 @@ values use a slider or editable numeric control rather than this rule.
   commit only the chosen option, and retain the previous value if applying it
   fails. Preserve an unavailable saved value visibly rather than silently
   substituting another choice. Menu rows use the 66-unit touch target in both
-  wide and compact layouts. Gauge options show leading color bars using the
-  clear-lamp palette, including the selected trigger.
+  wide and compact layouts. Gauge types and gauge bounds show leading color
+  bars using the clear-lamp palette, including the selected trigger. Auto-shift
+  modes have no lamp color bars.
 - Keep the same labels, option order, selected value, and meaning wherever a
   setting appears. If a compact surface needs a different control, preserve
   those semantics. Use the same cycling-button convention for toggles across

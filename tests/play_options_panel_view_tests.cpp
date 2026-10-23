@@ -1018,7 +1018,7 @@ void testToggleSemanticColorsAndGaugeBars() {
             ? app_theme::textOn(app_theme::primaryAction()) : app_theme::textPrimary());
       }
     }
-    for (const char *name : {"gauge-choice", "gauge-lower-bound-choice", "gauge-auto-shift-choice"}) {
+    for (const char *name : {"gauge-choice", "gauge-lower-bound-choice"}) {
       auto *control = panel->findViewByName(name);
       auto *dropdown = dynamic_cast<DropdownView *>(control->findViewByName("choice-dropdown"));
       for (const auto &option : dropdown->current.options)
@@ -1029,6 +1029,10 @@ void testToggleSemanticColorsAndGaugeBars() {
         require(option.indicator->getVisible(), "gauge popup rows retain their color bars");
       dropdown->setOpen(false);
     }
+    auto *autoShift = dynamic_cast<DropdownView *>(panel->findViewByName("gauge-auto-shift-choice")->findViewByName("choice-dropdown"));
+    require(autoShift->triggerIndicator->getWidth() == 0, "auto-shift modes do not represent a clear lamp");
+    for (const auto &option : autoShift->current.options)
+      require(!option.leadingColor, "auto-shift choices have no lamp color bars");
     auto *gauge = dynamic_cast<DropdownView *>(panel->findViewByName("gauge-choice")->findViewByName("choice-dropdown"));
     for (const auto type : {GaugeType::AssistedEasy, GaugeType::Easy, GaugeType::Normal,
                            GaugeType::Hard, GaugeType::ExHard, GaugeType::Hazard}) {

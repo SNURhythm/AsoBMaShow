@@ -9,6 +9,31 @@ from support.fixture_compiler import FixtureCompiler
 
 
 class LaneCoverSceneInputTests(unittest.TestCase):
+    def test_main_menu_play_options_load_and_persist_lane_covers(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "src/scene/MainMenuScene.cpp").read_text()
+        header = (root / "src/view/PlayOptionsPanelView.h").read_text()
+        methods = "\n".join(extract(source, signature) for signature in (
+            "void MainMenuScene::buildPlayOptionsModal()",
+            "void MainMenuScene::refreshPlayOptionsPanel()",
+            "void MainMenuScene::showPlayOptionsModal()",
+            "void MainMenuScene::hidePlayOptionsModal()",
+        ))
+        contracts = "\n".join(extract(header, signature) + ";" for signature in (
+            "struct PlayOptionsPanelState", "struct PlayOptionsPanelCallbacks"))
+        fixture = (root / "tests/main_menu_lane_cover_fixture.cpp").read_text()
+        fixture = fixture.replace("PANEL_CONTRACTS", contracts).replace("PRODUCTION_METHODS", methods)
+        compiler = FixtureCompiler.from_environment()
+        with tempfile.TemporaryDirectory(prefix="main-menu-lane-cover-") as directory:
+            directory = Path(directory)
+            source = directory / "fixture.cpp"
+            source.write_text(fixture)
+            binary = directory / ("fixture" + compiler.executable_suffix)
+            compiler.build([source, root / "src/settings/AudioVideoSettings.cpp"],
+                           binary, directory, standard=23, includes=[root / "src"])
+            result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_replay_adjustments_leave_recorded_and_personal_covers_untouched(self):
         root = Path(__file__).resolve().parents[1]
         source = (root / "src/scene/play/GamePlayScene.cpp").read_text()
