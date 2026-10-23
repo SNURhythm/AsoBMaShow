@@ -97,3 +97,43 @@ were retained; existing user scores were not replaced. No production assets were
 converted. Local screenshots, logs, probes, benchmark results, and fixture copies
 are in `/tmp/asobmashow-device-test-20261023`; these temporary artifacts are not
 committed and may disappear after cleanup/reboot.
+
+## Fix follow-up on `fix/android-device-storage-files`
+
+Attribution against the release baseline:
+
+- Storage conversion's exclusive rename was introduced October 17 in `5da6a59c`.
+- The failing Files directory-document launch was introduced October 6 in
+  `d45d18db` / `5d2701e2`. Launching the provider root successfully opened the
+  same system Files app on this device.
+- Replay hard-link installation dates to July 28 (`7fd2ecd56`) and is unchanged
+  since the release baseline. The baseline also used external storage for
+  profiles, so this appears to be a pre-existing Android incompatibility. The
+  old release APK was not rerun to establish an observed before/after result.
+
+Version code 4 was built and installed locally with no distribution. The Files
+entry point now launches the system browser's supported root URI. Android storage
+and replay publication share the DocumentsProvider mutation monitor and use a
+scoped regular-file rename when exclusive rename is unsupported. The fallback
+rejects occupied destinations and applies only inside app-owned containers;
+arbitrary all-files-access folders still require native exclusive-rename support.
+
+Device retest:
+
+- Open in Files opens AsoBMaShow; navigating into BMS lists the existing library
+  and generated fixture without a DocumentsUI crash.
+- Loose-folder FLAC/H.264 conversion: 2 converted, 0 failures, 3.1 MiB saved.
+  Resulting folder contains the unchanged BMS, FLAC and MP4 (637,272 bytes total).
+  Decoded FLAC matches all 192,000 PCM bytes from the source WAV; full MP4 decode
+  passes. Existing library media was not selected.
+- Completing the converted chart creates a 1,364-byte `.brd` replay. Its record
+  offers Watch, including input keysound mode. Saved-replay playback completed
+  with the same 0 EX / 32 POOR result.
+
+Host verification: the new publication test and existing storage transaction /
+replay store tests pass. The affected library, replay, results and Android groups
+pass **125/125**. The signed Android build and lint also pass. Regression coverage
+includes file identity preservation, occupied files/directories/dangling links,
+unsafe sources, out-of-scope paths, and serialized competing publishers. Existing
+transaction tests cover interruption/recovery; physical power-loss recovery was
+not exercised on the phone.

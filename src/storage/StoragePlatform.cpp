@@ -2,6 +2,9 @@
 #include "../AtomicFile.h"
 #include "../FileChecksum.h"
 #include "../Uuid.h"
+#if defined(__ANDROID__)
+#include "../platform/AndroidFilePublication.h"
+#endif
 
 #include <array>
 #include <cerrno>
@@ -235,6 +238,10 @@ bool renameNoReplace(const fs::path &from, const fs::path &to, std::string &erro
 #elif defined(__APPLE__)
   if (renamex_np(from.c_str(), to.c_str(), RENAME_EXCL) == 0) return true;
   error = std::strerror(errno);
+#elif defined(__ANDROID__)
+  std::error_code ec;
+  if (android_file::renameNoReplace(from, to, ec)) return true;
+  error = ec.message();
 #elif defined(__linux__) && defined(SYS_renameat2)
   // RENAME_NOREPLACE = 1. Fail closed on kernels/filesystems without support.
   if (syscall(SYS_renameat2, AT_FDCWD, from.c_str(), AT_FDCWD, to.c_str(), 1) == 0) return true;

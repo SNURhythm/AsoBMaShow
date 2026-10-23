@@ -3,6 +3,7 @@
 include("${CMAKE_CURRENT_LIST_DIR}/TestGroups.cmake")
 
 asobmashow_label_tests(area_core
+    android_file_publication_tests
     curl_redirect_policy_tests
     file_checksum_tests
     foundation_math_quaternion

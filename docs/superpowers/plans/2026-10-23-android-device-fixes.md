@@ -32,9 +32,9 @@
 
 **Interfaces:** Keep `openDocumentsFolder(): String`; launch the existing root intent with the selected system component.
 
-- [ ] Extend the Activity test to require a root URI and root MIME type; run `python3 tests/android_documents_activity_tests.py` and observe failure.
-- [ ] Reuse the root intent for launch, retaining canonical BMS validation and system-handler selection.
-- [ ] Run the same test, expecting all scenarios to pass; commit.
+- [x] Extend the Activity test to require a root URI and root MIME type; run `python3 tests/android_documents_activity_tests.py` and observe failure.
+- [x] Reuse the root intent for launch, retaining canonical BMS validation and system-handler selection.
+- [x] Run the same test, expecting all scenarios to pass; commit.
 
 ### Task 2: Repair Android regular-file publication
 
@@ -42,10 +42,10 @@
 
 **Interfaces:** `android_file::renameNoReplace(from, to, std::error_code&)` is Android-only and acquires the provider monitor. A host-testable `renameUnderMutationLock(from, to, roots, error)` validates scope, regular source, missing destination and performs one rename using pinned parent descriptors. Callers retain responsibility for directory fsync.
 
-- [ ] Add behavioral coverage for successful publication preserving inode/bytes; existing regular file/dangling link/directory refusal; unsafe source; outside-root refusal; serialized competing publishers. Confirm missing implementation fails before adding it.
-- [ ] Implement the scoped fallback and JNI monitor wrapper. Use it after unsupported exclusive rename in storage, and instead of hard-link installation/restoration on Android replay paths. Keep desktop behavior.
-- [ ] Build/run the new test plus storage-file transaction and replay-file-store tests. Expected: all pass, including existing recovery/collision cases.
-- [ ] Run affected library/replay/results/Android groups and build the Android release APK with manual version code 4. Retest folder FLAC/H.264, replay save/playback, and Files navigation on the phone; commit changes and evidence.
+- [x] Add behavioral coverage for successful publication preserving inode/bytes; existing regular file/dangling link/directory refusal; unsafe source; outside-root refusal; serialized competing publishers. Confirm missing implementation fails before adding it.
+- [x] Implement the scoped fallback and JNI monitor wrapper. Use it after unsupported exclusive rename in storage, and instead of hard-link installation/restoration on Android replay paths. Keep desktop behavior.
+- [x] Build/run the new test plus storage-file transaction and replay-file-store tests. Expected: all pass, including existing recovery/collision cases.
+- [x] Run affected library/replay/results/Android groups and build the Android release APK with manual version code 4. Retest folder FLAC/H.264, replay save/playback, and Files navigation on the phone; commit changes and evidence.
 
 ### Task 3: Review and publish branch
 
