@@ -2842,6 +2842,7 @@ struct SettingsScene {
   std::unique_ptr<GameplayGaugeRules> previewGaugeRules;
   std::unique_ptr<gameplay::GameplayDefinition> previewDefinition;
   std::unique_ptr<gameplay::GameplaySimulation> previewSimulation;
+  std::unique_ptr<PlayfieldProjection> previewProjection;
   const PlayfieldChartVisualModel *previewChartVisualModel = nullptr;
   std::unique_ptr<PlayfieldVisualState> previewCapturedVisualState;
   std::uint64_t previewFrameSerial = 0;
@@ -2849,6 +2850,7 @@ struct SettingsScene {
   bool calibrationActive = false;
   bool calibrationLogicalJudgementLine = false;
   bool calibrationDisplay = false;
+  bool calibrationNotesHidden = false;
   int calibrationAudioOffsetMs = 0;
   int calibrationVisualOffsetMs = 0;
   void updateCalibration() { std::abort(); }
@@ -2900,6 +2902,7 @@ struct SettingsScene {
   void syncPreviewAuthority();
   void resetPreviewHudSample();
   void capturePreviewVisualState();
+  PlayfieldProjectionResult projectPreviewFrame();
   settings_scene::PreviewEndAnimation previewEndAnimation;
   int previewRestartCount = 0;
   void resetPreviewSimulation() { ++previewRestartCount; previewElapsedMicros = 0; }
@@ -3634,6 +3637,61 @@ void verifyCalibrationUsesJudgedTargets() {
   }
 }
 
+void verifyCalibrationOffsetOnlyMovesNotes() {
+  for (const bool display : {false, true}) {
+    for (const int offset : {-80, 0, 70}) {
+      const auto chart = settings_scene::makeCalibrationChart(7, {.lane = 1});
+      const auto model = buildPlayfieldChartVisualModel(*chart, 0);
+      PlayfieldVisualStateStore store(model);
+      Judge judge(chart->Meta.Rank);
+      SettingsScene scene;
+      scene.previewPresentation = std::make_unique<BMSRenderer>(chart.get(), judge.timingWindows, 500, true);
+      auto &renderer = static_cast<BMSRenderer &>(*scene.previewPresentation);
+      scene.previewChart = chart.get();
+      scene.previewRenderer = &renderer;
+      scene.previewChartVisualModel = &model;
+      scene.previewVisualStateStore = &store;
+      scene.previewProjection = std::make_unique<PlayfieldProjection>();
+      scene.previewPresentationEvents = std::make_unique<PlayfieldPresentationEventFanout>(store, renderer);
+      scene.calibrationActive = true;
+      scene.calibrationDisplay = display;
+      scene.calibrationVisualOffsetMs = offset;
+      scene.context.settings.notesDisplayTimingMilliseconds = 10;
+      scene.resetPreviewHudSample();
+      const auto inputTime = settings_scene::calibrationTiming().firstNoteMicros + 40'000 +
+          (display ? offset * 1000LL - 10'000 : 0);
+      scene.previewElapsedMicros = inputTime;
+      scene.pressLane(1, 0);
+      scene.previewElapsedMicros += 80'000;
+      const auto verifyEffects = [&] {
+        scene.capturePreviewVisualState();
+        const auto &state = *scene.previewCapturedVisualState;
+        expect(state.clock.visualTimeMicros == scene.previewElapsedMicros &&
+                   state.lastJudgeVisualMicros == inputTime &&
+                   state.judgementIndicatorSampleCount == 1 &&
+                   state.judgementIndicatorSamples[0].visualTimeMicros == inputTime &&
+                   state.lastJudge.Diff == 40'000,
+               "display offset preserves judgement effect age and measured timing");
+        const auto lane = std::ranges::find_if(state.lanes, [](const auto &value) {
+          return value.keybomb.judgement != None;
+        });
+        expect(lane != state.lanes.end() && lane->pressMicros == inputTime &&
+                   lane->keybomb.timeMicros == inputTime &&
+                   state.clock.visualTimeMicros - lane->keybomb.timeMicros == 80'000,
+               "keybombs and lane beams use the input clock independently of display offset");
+        const auto projection = scene.projectPreviewFrame();
+        const auto noteTime = scene.previewElapsedMicros - scene.calibrationVisualOffsetMs * 1000LL + 10'000;
+        expect(std::abs(projection.currentScrollPosition - noteTime / 2'000'000.0) < 1e-9,
+               "the display offset and note timing still move the projected notes");
+      };
+      verifyEffects();
+      scene.calibrationVisualOffsetMs += 100;
+      verifyEffects();
+      scene.releaseLane(1, 0);
+    }
+  }
+}
+
 void verifyDenseCalibrationHasChartSizedJudgementBuffers() {
   const auto chart = settings_scene::makeCalibrationChart(48,
       {.pattern = settings_scene::CalibrationPattern::Denim, .subdivision = 32});
@@ -3758,8 +3816,8 @@ void verifyPreviewPause() {
   scene.calibrationVisualOffsetMs = 80;
   scene.capturePreviewVisualState();
   expect(scene.previewCapturedVisualState->clock.gameplayTimeMicros == 1'000'000 &&
-             scene.previewCapturedVisualState->clock.visualTimeMicros == 920'000,
-         "positive display calibration delays the lane without shifting judgement time");
+             scene.previewCapturedVisualState->clock.visualTimeMicros == 1'000'000,
+         "display calibration leaves effect and judgement clocks unchanged");
   scene.calibrationActive = false;
   scene.previewPaused = false;
   scene.advancePreviewPlayback(0.5F);
@@ -4538,6 +4596,7 @@ int main() {
   verifyPreviewNotesMoveThroughoutOpening();
   verifyPreviewScoreUsesRealJudgements();
   verifyCalibrationUsesJudgedTargets();
+  verifyCalibrationOffsetOnlyMovesNotes();
   verifyDenseCalibrationHasChartSizedJudgementBuffers();
   verifyPreviewInputTimingSamples();
   verifyPreviewPause();

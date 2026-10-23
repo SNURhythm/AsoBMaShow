@@ -295,8 +295,8 @@ PlayfieldProjectionResult SettingsScene::projectPreviewFrame() {
   const auto &state = *previewCapturedVisualState;
   return previewProjection->project(*previewChartVisualModel, state,
       {.noteDisplayTimeMicros = calibrationActive
-           ? std::optional<long long>(state.clock.visualTimeMicros +
-               context.settings.notesDisplayTimingMilliseconds * 1000LL) : std::nullopt,
+           ? std::optional<long long>(calibrationDisplayTimelineMicros(state.clock.gameplayTimeMicros,
+               calibrationVisualOffsetMs, context.settings.notesDisplayTimingMilliseconds)) : std::nullopt,
        .includeInvisibleNotes = state.configuration.showInvisibleNotes,
        .hideNotes = calibrationActive && calibrationNotesHidden,
        .latePoorTimingMicros = previewRenderer->projectionLatePoorTimingMicros(),
@@ -479,10 +479,9 @@ void SettingsScene::capturePreviewVisualState() {
     noteStates.push_back(noteState);
   }
   previewVisualStateStore->setNoteStates(std::move(noteStates));
-  auto clock = previewFrameClock(++previewFrameSerial, previewElapsedMicros,
+  // Effects share the unshifted event clock. Only projection moves the notes.
+  const auto clock = previewFrameClock(++previewFrameSerial, previewElapsedMicros,
                                        previewChart->Meta.PlayLength);
-  if (calibrationActive)
-    clock.visualTimeMicros -= static_cast<long long>(calibrationVisualOffsetMs) * 1000;
   if (previewCapturedVisualState == nullptr) {
     previewCapturedVisualState = std::make_unique<PlayfieldVisualState>(
         previewVisualStateStore->capture(clock));
@@ -837,9 +836,16 @@ void SettingsScene::consumePreviewTransactions(
       else
         previewPresentationEvents->onLaneReleased(event.lane, event.visualTimeMicros);
     }
+    auto effectTime = transaction.hasReplayEvent
+        ? transaction.replayEvent.songTimeMicros : previewElapsedMicros;
+    if (calibrationActive && calibrationDisplay && transaction.hasReplayEvent) {
+      // Display judging uses the note's crossing clock; feedback still starts
+      // at the original input time, without changing the measured judge diff.
+      effectTime += (static_cast<long long>(calibrationVisualOffsetMs) -
+                     context.settings.notesDisplayTimingMilliseconds) * 1000;
+    }
     if (transaction.hasJudge)
-      publishPreviewJudgement(transaction.judge,
-          transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros : previewElapsedMicros,
+      publishPreviewJudgement(transaction.judge, effectTime,
           transaction.hasReplayEvent ? transaction.replayEvent.lane : -1);
     const auto *timingNote =
         previewDefinition && transaction.noteId < previewDefinition->noteCount()
@@ -853,8 +859,7 @@ void SettingsScene::consumePreviewTransactions(
     if (sampleInputTiming && previewPresentationEvents) {
       previewPresentationEvents->onTimingSample(
           transaction.judge,
-          makePlayfieldJudgeEventClock(transaction.replayEvent.songTimeMicros,
-                                       0, 0));
+          makePlayfieldJudgeEventClock(effectTime, 0, 0));
     }
   }
 }
