@@ -836,14 +836,8 @@ void SettingsScene::consumePreviewTransactions(
       else
         previewPresentationEvents->onLaneReleased(event.lane, event.visualTimeMicros);
     }
-    auto effectTime = transaction.hasReplayEvent
+    const auto effectTime = transaction.hasReplayEvent
         ? transaction.replayEvent.songTimeMicros : previewElapsedMicros;
-    if (calibrationActive && calibrationDisplay && transaction.hasReplayEvent) {
-      // Display judging uses the note's crossing clock; feedback still starts
-      // at the original input time, without changing the measured judge diff.
-      effectTime += (static_cast<long long>(calibrationVisualOffsetMs) -
-                     context.settings.notesDisplayTimingMilliseconds) * 1000;
-    }
     if (transaction.hasJudge)
       publishPreviewJudgement(transaction.judge, effectTime,
           transaction.hasReplayEvent ? transaction.replayEvent.lane : -1);
@@ -903,11 +897,8 @@ bms_parser::Note *SettingsScene::pressLane(int mainLane, int compensateLane,
                                           double inputDelay) {
   if (!previewActive || (calibrationActive && previewPaused) || previewAutoPlay || !previewSimulation) return nullptr;
   const auto inputTime = previewInputTimeMicros(inputDelay);
-  const auto judgeTime = calibrationActive && calibrationDisplay
-      ? calibrationDisplayTimelineMicros(inputTime, calibrationVisualOffsetMs,
-          context.settings.notesDisplayTimingMilliseconds) : inputTime;
   const auto result = previewSimulation->pressLane(mainLane, compensateLane,
-      {.songTimeMicros = judgeTime,
+      {.songTimeMicros = inputTime,
        .laneBeamTimeMicros = previewElapsedMicros,
        .inputDelayMicros = calibrationActive ? 0 : static_cast<std::int64_t>(inputDelay * 1'000'000)});
   consumePreviewTransactions(result.transactions);
@@ -924,11 +915,8 @@ bms_parser::Note *SettingsScene::releaseLane(int lane, double inputDelay,
                                             bool isBackSpin) {
   if (!previewActive || (calibrationActive && previewPaused) || previewAutoPlay || !previewSimulation) return nullptr;
   const auto inputTime = previewInputTimeMicros(inputDelay);
-  const auto judgeTime = calibrationActive && calibrationDisplay
-      ? calibrationDisplayTimelineMicros(inputTime, calibrationVisualOffsetMs,
-          context.settings.notesDisplayTimingMilliseconds) : inputTime;
   const auto result = previewSimulation->releaseLane(lane,
-      {.songTimeMicros = judgeTime,
+      {.songTimeMicros = inputTime,
        .laneBeamTimeMicros = previewElapsedMicros,
        .inputDelayMicros = calibrationActive ? 0 : static_cast<std::int64_t>(inputDelay * 1'000'000)}, isBackSpin);
   consumePreviewTransactions(result.transactions);

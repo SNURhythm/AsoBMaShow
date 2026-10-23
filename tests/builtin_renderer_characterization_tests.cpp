@@ -3614,12 +3614,11 @@ void verifyCalibrationUsesJudgedTargets() {
         scene.context.settings.notePriorityMode = priority;
         scene.resetPreviewHudSample();
         const auto noteTime = settings_scene::calibrationTiming().firstNoteMicros;
-        const auto visualShift = display ? visualOffset * 1000LL - 10'000 : 0;
-        scene.previewElapsedMicros = noteTime - 400'000 + visualShift;
+        scene.previewElapsedMicros = noteTime - 400'000;
         scene.pressLane(1, 0);
         scene.releaseLane(1, 0);
         expect(scene.calibrationTaps.empty(), "a KPOOR/fallback sound does not create a calibration sample");
-        scene.previewElapsedMicros = noteTime + 40'000 + visualShift;
+        scene.previewElapsedMicros = noteTime + 40'000;
         const auto raw = scene.previewElapsedMicros - scene.calibrationAudioOffsetMs * 1000LL;
         scene.pressLane(2, 0);
         scene.releaseLane(2, 0);
@@ -3632,6 +3631,8 @@ void verifyCalibrationUsesJudgedTargets() {
         expect(scene.calibrationTaps.size() == 1,
                "an already-held lane cannot create another calibration sample");
         scene.releaseLane(1, 0);
+        expect(scene.previewSimulation->replayEvents().back().songTimeMicros == scene.previewElapsedMicros,
+               "display offset does not change the release judgement clock");
       }
     }
   }
@@ -3659,8 +3660,7 @@ void verifyCalibrationOffsetOnlyMovesNotes(const RenderTarget &target) {
       scene.calibrationVisualOffsetMs = offset;
       scene.context.settings.notesDisplayTimingMilliseconds = 10;
       scene.resetPreviewHudSample();
-      const auto inputTime = settings_scene::calibrationTiming().firstNoteMicros + 40'000 +
-          (display ? offset * 1000LL - 10'000 : 0);
+      const auto inputTime = settings_scene::calibrationTiming().firstNoteMicros + 40'000;
       scene.previewElapsedMicros = inputTime;
       scene.pressLane(1, 0);
       scene.previewElapsedMicros += 80'000;

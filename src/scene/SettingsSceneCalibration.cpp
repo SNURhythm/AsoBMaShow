@@ -132,8 +132,9 @@ void SettingsScene::updateCalibration() {
     return;
   }
   previewElapsedMicros = raw + calibrationAudioOffsetMs * 1000LL;
-  // Display calibration defers automatic misses so notes remain available
-  // until input judges them at their drawn crossing time.
+  // Keep Display calibration's note cues visible even when their drawn
+  // crossing falls after the audio-timeline miss window. Input still judges
+  // against the audio timeline in both modes.
   if (!calibrationDisplay) advancePreviewSimulation();
   refreshCalibrationText();
 }

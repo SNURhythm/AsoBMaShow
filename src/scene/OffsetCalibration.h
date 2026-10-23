@@ -38,7 +38,7 @@ inline double calibrationLogicalJudgementScrollDelta(int visualOffsetMs,
   return (visualOffsetMs - noteDisplayTimingMs) * bpm / 240'000.0;
 }
 
-// Display judging follows the note's drawn crossing on the gameplay timeline.
+// Note movement uses a display timeline independent of gameplay judging.
 inline long long calibrationDisplayTimelineMicros(long long gameplayTimeMicros,
                                                   int visualOffsetMs,
                                                   int noteDisplayTimingMs) {
