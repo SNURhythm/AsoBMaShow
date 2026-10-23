@@ -35,7 +35,7 @@ void SettingsScene::startCalibration() {
   calibrationError.clear();
   calibrationDisplay = false;
   calibrationMuted = false;
-  calibrationFeedbackHidden = false;
+  calibrationFeedbackHidden = true;
   calibrationScrollSettings = false;
   calibrationMeasuring = false;
   calibrationActive = true;
@@ -298,7 +298,7 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
           if (calibrationDisplay == display) return;
           calibrationDisplay = display;
           if (display) calibrationNotesHidden = false;
-          else calibrationMuted = false;
+          calibrationMuted = display;
           calibrationMeasuring = false;
           calibrationSamples.configure(calibrationChartOptions.beatsPerMeasure,
               calibrationChartOptions.subdivision);
