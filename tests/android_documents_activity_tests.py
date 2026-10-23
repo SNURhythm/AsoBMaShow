@@ -28,8 +28,9 @@ public class Intent {
     public static final String ACTION_VIEW = "view";
     public static final int FLAG_ACTIVITY_NEW_TASK = 1;
     public Uri data;
+    public String mimeType;
     public Intent(String action) {}
-    public Intent setDataAndType(Uri value, String mime) { data = value; return this; }
+    public Intent setDataAndType(Uri value, String mime) { data = value; mimeType = mime; return this; }
     public Intent setComponent(ComponentName component) { return this; }
     public Intent addFlags(int flags) { return this; }
 }

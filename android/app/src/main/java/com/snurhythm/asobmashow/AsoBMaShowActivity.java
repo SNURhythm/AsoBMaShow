@@ -1310,7 +1310,7 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     public String openDocumentsFolder() {
         try {
-            DocumentsPathPolicy paths = AsoBMaShowDocumentsProvider.initializeDocuments(this);
+            AsoBMaShowDocumentsProvider.initializeDocuments(this);
             File bms = documentsBmsDirectory();
             if (!bms.isDirectory() && !bms.mkdirs()) {
                 throw new IOException("Could not create BMS folder.");
@@ -1331,11 +1331,10 @@ public class AsoBMaShowActivity extends SDLActivity {
                             && browser.activityInfo.name.equals(preferred.activityInfo.name)) chosen = browser;
                 }
             }
-            Intent intent = new Intent(Intent.ACTION_VIEW).setComponent(new android.content.ComponentName(
+            // Use the root entry point that this system browser advertises. Some
+            // DocumentsUI versions crash when explicitly opened on a document URI.
+            Intent intent = rootIntent.setComponent(new android.content.ComponentName(
                     chosen.activityInfo.packageName, chosen.activityInfo.name));
-            intent.setDataAndType(DocumentsContract.buildDocumentUri(
-                    AsoBMaShowDocumentsProvider.AUTHORITY, paths.documentId(bms)),
-                    DocumentsContract.Document.MIME_TYPE_DIR);
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
             startActivity(intent);
             return SUCCESS_RESULT;
