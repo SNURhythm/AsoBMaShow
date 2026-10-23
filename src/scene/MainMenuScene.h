@@ -271,9 +271,8 @@ private:
   Button *unzipButton = nullptr;
   TextView *unzipButtonText = nullptr;
   Button *parseLogButton = nullptr;
-  TextView *parseLogButtonText = nullptr;
   Button *tasksButton = nullptr;
-  TextView *tasksButtonText = nullptr;
+  TextView *tasksCountBadge = nullptr;
   TextView *replayButtonText = nullptr;
   TextView *startButtonText = nullptr;
   View *playOptionsModalRoot = nullptr;

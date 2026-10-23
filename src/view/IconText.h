@@ -43,6 +43,8 @@ inline constexpr uint32_t kBars = 0xf0c9;
 inline constexpr uint32_t kGauge = 0xf3fd;
 inline constexpr uint32_t kPlay = 0xf04b;
 inline constexpr uint32_t kFlagCheckered = 0xf11e;
+inline constexpr uint32_t kFileLines = 0xf15c;
+inline constexpr uint32_t kFolderPlus = 0xf65e;
 
 inline std::string textForCodepoint(uint32_t codepoint) {
   std::string result;

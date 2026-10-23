@@ -44,6 +44,8 @@
 #include "../view/ChartListItemView.h"
 #include "../view/ChartDetailsView.h"
 #include "../view/IconText.h"
+#include "../view/IconButtonContent.h"
+#include "../view/SelectorButtonContent.h"
 #include "../view/LibraryFolderItemView.h"
 #include "../view/OverlayPortal.h"
 #include "MainMenuPreviewController.h"
@@ -128,7 +130,7 @@ using modal_view::styleThemedActionButton;
 
 
 void styleMenuButton(Button *button, TextView *text, bool primary = false) {
-  if (!button || !text) return;
+  if (!button) return;
   button->setCornerRadius(0);
   button->setStyledBorderWidth(primary ? 0 : 1);
   button->setThemedBackgroundColors(
@@ -137,7 +139,7 @@ void styleMenuButton(Button *button, TextView *text, bool primary = false) {
       primary ? main_menu_theme::actionPressed : main_menu_theme::pressed);
   button->setThemedBorderColors(main_menu_theme::rule,
                                 main_menu_theme::accent, main_menu_theme::accent);
-  text->setThemedColor(primary ? main_menu_theme::onAction : main_menu_theme::ink);
+  if (text) text->setThemedColor(primary ? main_menu_theme::onAction : main_menu_theme::ink);
   if (auto *icon = dynamic_cast<TextView *>(button->getContentView()->findViewByName("selectorButtonIcon")))
     icon->setThemedColor(primary ? main_menu_theme::onAction : main_menu_theme::ink);
 }
@@ -145,26 +147,7 @@ void styleMenuButton(Button *button, TextView *text, bool primary = false) {
 Button *makeSelectorButton(const i18n::Text &label, int size, TextView **out = nullptr,
                            uint32_t glyph = 0, bool trailing = false) {
   auto *button = new Button(0, 0, 160, 56);
-  auto *content = new View();
-  content->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter);
-  content->setJustifyContent(YGJustifyCenter)->setGap(10);
-  auto *text = new TextView(main_menu_theme::font, size);
-  text->setName("selectorButtonLabel");
-  text->setLocalizedText(label);
-  text->setHeight(40)->setMinWidth(0);
-  text->setVAlign(TextView::MIDDLE);
-  auto *icon = new TextView(ui_icons::kFontAwesomeSolidPath, size - 3);
-  icon->setName("selectorButtonIcon");
-  icon->setText(glyph ? ui_icons::textForCodepoint(glyph) : "");
-  icon->setWidth(glyph ? size : 0)->setHeight(40)->setFlexShrink(0);
-  icon->setVAlign(TextView::MIDDLE);
-  icon->setThemedColor(main_menu_theme::ink);
-  if (!trailing && glyph) content->addView(icon);
-  content->addView(text);
-  if (trailing && glyph) content->addView(icon);
-  if (!glyph) delete icon;
-  button->setContentView(content);
-  if (out) *out = text;
+  button->setContentView(selector_button::makeContent(label, size, out, glyph, trailing));
   return button;
 }
 
@@ -1248,13 +1231,7 @@ void MainMenuScene::requestLibraryScanFlush() {
 }
 
 void MainMenuScene::refreshTasksButton() {
-  if (tasksButtonText == nullptr) {
-    return;
-  }
-  const int count = activeLibraryTaskCount();
-  tasksButtonText->setLocalizedText(i18n::message(
-      count == 1 ? "menu.task_count.one" : "menu.task_count.other",
-      {{"count", std::to_string(count)}}));
+  icon_button::setBadgeCount(tasksCountBadge, activeLibraryTaskCount());
 }
 
 void MainMenuScene::initView(ApplicationContext &context) {
@@ -1298,9 +1275,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   unzipButton = nullptr;
   unzipButtonText = nullptr;
   parseLogButton = nullptr;
-  parseLogButtonText = nullptr;
   tasksButton = nullptr;
-  tasksButtonText = nullptr;
+  tasksCountBadge = nullptr;
   replayButtonText = nullptr;
   recordsModal_.reset();
   startButtonText = nullptr;
@@ -1895,9 +1871,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   const std::array<const char *, 4> tabLabels{"PLAY", "COURSE", "MUSIC", "IR"};
   const std::array<const char *, 4> tabMessages{
       "menu.tabs.play", "menu.tabs.course", "menu.tabs.music", "menu.tabs.ir"};
+  const std::array<uint32_t, 4> tabIcons{ui_icons::kPlay, ui_icons::kFlagCheckered,
+                                         ui_icons::kMusic, ui_icons::kGlobe};
   for (size_t index = 0; index < tabLabels.size(); ++index) {
     TextView *text = nullptr;
-    auto *button = makeSelectorButton(i18n::message(tabMessages[index]), 22, &text);
+    auto *button = makeSelectorButton(i18n::message(tabMessages[index]), 22, &text, tabIcons[index]);
     button->setName(std::string("mainMenuTab:") + tabLabels[index]);
     button->setWidth(112)->setHeight(kMenuHeaderHeight - 14);
     styleMenuButton(button, text, index == 0);
@@ -1917,17 +1895,16 @@ void MainMenuScene::initView(ApplicationContext &context) {
   libraryActions->setFlexShrink(0);
   nav->addView(libraryActions);
 
-  auto *addFolderButton = new Button(0, 0, kLibraryControlWidth, kMenuActionHeight);
-  addFolderButton_ = addFolderButton;
-  auto *addFolderText = new TextView(main_menu_theme::font, 18);
+  TextView *addFolderText = nullptr;
 #if TARGET_OS_ANDROID
-  addFolderText->setLocalizedText(i18n::message("menu.manage_files.label"));
+  auto *addFolderButton = makeSelectorButton(i18n::message("menu.manage_files.label"),
+                                              18, &addFolderText, ui_icons::kReveal);
 #else
-  addFolderText->setLocalizedText(i18n::message("menu.add_folder.label"));
+  auto *addFolderButton = makeSelectorButton(i18n::message("menu.add_folder.label"),
+                                              18, &addFolderText, ui_icons::kFolderPlus);
 #endif
-  addFolderText->setAlign(TextView::CENTER);
-  addFolderText->setVAlign(TextView::MIDDLE);
-  addFolderButton->setContentView(addFolderText);
+  addFolderButton_ = addFolderButton;
+  addFolderButton->setName("mainMenuFiles");
   styleMenuButton(addFolderButton, addFolderText);
   addFolderButton->setCornerRadius(0);
   addFolderButton->setStyledBorderWidth(1);
@@ -1972,23 +1949,23 @@ void MainMenuScene::initView(ApplicationContext &context) {
   libraryHeader->setGap(12);
   libraryHeader->setHeight(kMenuActionHeight);
 
-  parseLogButton = makeSelectorButton(i18n::message("menu.log.label"), 18, &parseLogButtonText);
-  parseLogButton->setWidth(112);
-  parseLogButton->setHeight(kMenuActionHeight);
+  parseLogButton = new Button(0, 0, kMenuActionHeight, kMenuActionHeight);
+  parseLogButton->setName("mainMenuLogs");
+  parseLogButton->setContentView(icon_button::makeContent(ui_icons::kFileLines));
   parseLogButton->setOnClickListener([this]() { showParseLogModal(); });
-  styleMenuButton(parseLogButton, parseLogButtonText);
+  styleMenuButton(parseLogButton, nullptr);
   libraryHeader->addView(parseLogButton);
 
-  tasksButton = makeSelectorButton(i18n::message("menu.task_count.empty"), 18, &tasksButtonText);
-  tasksButton->setWidth(142);
-  tasksButton->setHeight(kMenuActionHeight);
+  tasksButton = new Button(0, 0, kMenuActionHeight, kMenuActionHeight);
+  tasksButton->setName("mainMenuTasks");
+  tasksButton->setContentView(icon_button::makeContent(ui_icons::kTasks, &tasksCountBadge));
   tasksButton->setOnClickListener([this]() { showTasksModal(); });
-  styleMenuButton(tasksButton, tasksButtonText);
+  styleMenuButton(tasksButton, nullptr);
   libraryHeader->addView(tasksButton);
   libraryHeader->setPadding(Edge::Right, 24);
   header->addView(libraryHeader);
   addFolderButton->moveTo(*libraryHeader);
-  addFolderButton->setWidth(130);
+  addFolderButton->setWidth(140);
   addFolderButton->setStyledBorderWidth(0);
   for (auto *button : {parseLogButton, tasksButton})
     button->setStyledBorderWidth(0);
@@ -2570,6 +2547,7 @@ void MainMenuScene::updatePhonePanelLayout() {
     if (std::string_view(name) != "mainMenuLibraryActions") row->setHeight(height);
     for (auto *child : row->getChildren()) child->setHeight(height);
   }
+  for (auto *button : {parseLogButton, tasksButton}) button->setWidth(height);
   searchBox->setHeight(height);
   for (auto *button : {chartFilterButton, chartSortButton}) button->setWidth(66)->setHeight(height);
   records->setHeight(height);
@@ -2686,12 +2664,11 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
   toolbar->setFlex(0)->setMinWidth(0);
   toolbar->setWidth(YGUndefined);
   if (narrowHeader) toolbar->setWidthPercent(100);
-  size_t toolbarIndex = 0;
-  constexpr std::array<float, 4> toolbarWidths{64, 86, 110, 110};
   for (auto *view : toolbar->getChildren()) {
-    view->setFlex(narrowHeader ? 1 : 0)->setMinWidth(0);
-    view->setWidth(narrowHeader ? YGUndefined : toolbarWidths[std::min(toolbarIndex, toolbarWidths.size() - 1)]);
-    ++toolbarIndex;
+    const bool iconOnly = view == parseLogButton || view == tasksButton;
+    view->setFlex(narrowHeader && !iconOnly ? 1 : 0)->setMinWidth(0);
+    view->setWidth(iconOnly ? height : narrowHeader ? YGUndefined
+                                  : view == addFolderButton_ ? 140 : 110);
   }
   auto *summary = readyPlayOptionsButton->getContentView();
   summary->setFlexDirection(FlexDirection::Row)->setFlexWrap(portrait ? YGWrapWrap : YGWrapNoWrap);
@@ -8431,9 +8408,8 @@ void MainMenuScene::cleanupScene() {
   unzipButton = nullptr;
   unzipButtonText = nullptr;
   parseLogButton = nullptr;
-  parseLogButtonText = nullptr;
   tasksButton = nullptr;
-  tasksButtonText = nullptr;
+  tasksCountBadge = nullptr;
   replayButtonText = nullptr;
   recordsModal_.reset();
   startButtonText = nullptr;
