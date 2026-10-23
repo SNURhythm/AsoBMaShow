@@ -183,7 +183,6 @@ private:
   View *exportProgressTrack_ = nullptr;
   View *exportProgressFill_ = nullptr;
   TextView *title_ = nullptr;
-  TextView *status_ = nullptr;
   TextView *exportProgressMessageText_ = nullptr;
   TextView *exportProgressPercentText_ = nullptr;
   ResultRecordListView *list_ = nullptr;

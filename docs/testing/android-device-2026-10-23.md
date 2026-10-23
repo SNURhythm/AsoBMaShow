@@ -97,3 +97,116 @@ were retained; existing user scores were not replaced. No production assets were
 converted. Local screenshots, logs, probes, benchmark results, and fixture copies
 are in `/tmp/asobmashow-device-test-20261023`; these temporary artifacts are not
 committed and may disappear after cleanup/reboot.
+
+## Fix follow-up on `fix/android-device-storage-files`
+
+Attribution against the release baseline:
+
+- Storage conversion's exclusive rename was introduced October 17 in `5da6a59c`.
+- The failing Files directory-document launch was introduced October 6 in
+  `d45d18db` / `5d2701e2`. Launching the provider root successfully opened the
+  same system Files app on this device.
+- Replay hard-link installation dates to July 28 (`7fd2ecd56`) and is unchanged
+  since the release baseline. The baseline also used external storage for
+  profiles, so this appears to be a pre-existing Android incompatibility. The
+  old release APK was not rerun to establish an observed before/after result.
+
+Version code 4 was built and installed locally with no distribution. The Files
+entry point now launches the system browser's supported root URI. Android storage
+and replay publication share the DocumentsProvider mutation monitor and use a
+scoped regular-file rename when exclusive rename is unsupported. The fallback
+rejects occupied destinations and applies only inside app-owned containers;
+external-container fallback additionally requires Android 11+. On earlier or
+unknown versions, other apps may write there without participating in the
+monitor; see [Android's external directory access restrictions](https://developer.android.com/about/versions/11/privacy/storage#other-apps-data).
+Internal-container fallback remains available on older versions. Arbitrary
+all-files-access folders still require native exclusive-rename support.
+
+Device retest:
+
+- Open in Files opens AsoBMaShow; navigating into BMS lists the existing library
+  and generated fixture without a DocumentsUI crash.
+- Loose-folder FLAC/H.264 conversion: 2 converted, 0 failures, 3.1 MiB saved.
+  Resulting folder contains the unchanged BMS, FLAC and MP4 (637,272 bytes total).
+  Decoded FLAC matches all 192,000 PCM bytes from the source WAV; full MP4 decode
+  passes. Existing library media was not selected.
+- Completing the converted chart creates a 1,364-byte `.brd` replay. Its record
+  offers Watch, including input keysound mode. Saved-replay playback completed
+  with the same 0 EX / 32 POOR result.
+
+Host verification: the new publication test and existing storage transaction /
+replay store tests pass. The affected library, replay, results and Android groups
+pass **125/125**. The signed Android build and lint also pass. Regression coverage
+includes file identity preservation, occupied files/directories/dangling links,
+unsafe sources, out-of-scope paths, and serialized competing publishers. Existing
+transaction tests cover interruption/recovery; physical power-loss recovery was
+not exercised on the phone.
+
+Fresh review identified the older-Android external-directory race before push.
+Regression cases for unknown SDK, API 28/29, and API 30/33 demonstrated failure
+before adding the version gate and passed afterward. The affected 125-test set
+was rerun for that change. Profile/UI settings were restored exactly, generated
+chart files removed, and the version-code-4 build retained. Test scores and the
+new test replay remain. No new app or DocumentsUI crash was captured during the
+fix retest.
+
+## Follow-up: custom-skin score and clear display
+
+The reported `"P" stands for "Party!" [Another]` attempts were present in the
+score database with replays, but both had `Modified` eligibility, so best-score
+and clear queries correctly excluded them. Their normal play settings did not
+cause that classification. LITONE12 initially had no published touch layout;
+Android required that layout but lacked the iOS retry after the first skin frame.
+Fallback judgements then invalidated ranking. Android's layout requirement was
+added in `9d6bed07` on October 7, after the October 5 release baseline.
+
+The retry now includes Android. A fallback judgement or mine also cancels the
+pending retry, preventing a late frame from replacing already committed fallback
+results with a fresh worker. Such late-layout attempts remain Modified; historical
+Modified attempts are not rewritten.
+
+Version code 5 was built locally. On the same chart, skin and unchanged EX-HARD
+settings, the initial empty layout was followed by canonical authority activation
+17 ms later. The completed attempt saved with a replay and Verified eligibility;
+the selector immediately displayed `0 / 2886` and `FAILED`. The policy and realtime
+worker tests pass (2/2), and the signed Android build/lint pass. Fresh review
+confirmed the fallback handoff guards. Settings remained unchanged.
+
+The final guard build was reinstalled and retested with injected touch input:
+1 BAD, 5 POOR and 3 KPOOR were saved with Verified eligibility and a replay.
+Authority activated 21 ms after the initial missing layout. Score and FAILED
+status remained visible after force-stop/relaunch and reselecting the chart.
+This verifies failed-clear persistence; a successful full-chart clear was not
+performed during this follow-up. The final version-code-5 build remains installed.
+
+## Follow-up: compact Records modal
+
+Compact footer buttons used half the panel content width without subtracting its
+two border pixels. Two buttons plus the gap exceeded Yoga's available width,
+wrapping all four actions into separate rows and placing the final actions below
+the modal. Constructor and resize calculations now use the bordered inner width.
+
+The existing rotation test now enables all four actions and checks each against
+the panel bounds, plus the intended two-by-two arrangement. It failed before the
+fix and passes afterward at 585×1266, 1266×585 and 480×1000. The same test executable
+also verifies desktop restoration and compact export-options scrolling.
+
+Signed Android build/lint passed; version code **5** was reused as requested.
+After reinstalling on the connected phone and selecting an existing record,
+Watch, G-BATTLE, View Result and Export Video were all fully visible in two rows.
+No settings were changed for this check.
+
+The redundant status-message row was removed entirely, moving Share/Delete up
+and giving the records list 44 additional layout pixels. Status feedback uses
+the existing temporary title message instead. Existing modal layout, scrolling
+and rotation checks pass.
+
+The requested final layout uses a single row of four compact actions. Its footer
+is 72 pixels tall instead of 152, giving the list another 80 pixels. The rotation
+regression now checks one-row alignment, non-overlap and containment of all four
+actions at the existing portrait, landscape and narrow sizes.
+
+The final signed version-code-5 build and modal tests pass. Device inspection
+confirmed the removed status gap, one-row action captions, and four fully visible
+records instead of two. Temporary feedback now restores the active options-page
+title as well as the list title. Settings were unchanged.

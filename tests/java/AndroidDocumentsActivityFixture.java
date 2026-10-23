@@ -64,8 +64,9 @@ public final class AndroidDocumentsActivityFixture extends Context {
             }
             String opened = activity.openDocumentsFolder();
             check(SUCCESS_RESULT.equals(opened), "Open in Files failed: " + opened);
-            check(activity.launched != null && "documents:BMS".equals(activity.launched.data.documentId),
-                    "Open in Files must launch the BMS document ID");
+            check(activity.launched != null && "documents".equals(activity.launched.data.documentId)
+                            && DocumentsContract.Root.MIME_TYPE_ITEM.equals(activity.launched.mimeType),
+                    "Open in Files must launch the provider root using its root MIME type");
             File bms = activity.documentsBmsDirectory();
             check(bms.equals(realFiles.resolve("Documents/BMS").toFile()),
                     "Activity import destination must use the policy's canonical root");

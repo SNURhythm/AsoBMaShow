@@ -7210,7 +7210,7 @@ void GamePlayScene::renderScene() {
                                      commandScratchPressed);
     }
   }
-#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
+#if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
   if (!realtimeGameplayAuthorityActive() && !options.autoPlay &&
       gameplay::shouldRetryRealtimeGameplayAuthorityAfterSkinFrame(
           realtimeGameplayAuthorityWaitingForSkinGeometry,
@@ -8381,6 +8381,10 @@ void GamePlayScene::detonateLandmine(bms_parser::LandmineNote *note,
   note->PlayedTime = judgeTimeMicros;
 
   if (state != nullptr) {
+    if (!realtimeGameplayAuthorityActive() && !isReplayPlayback()) {
+      // A fresh worker cannot inherit already committed fallback mine state.
+      realtimeGameplayAuthorityWaitingForSkinGeometry = false;
+    }
     if (!realtimeGameplayAuthorityActive() && !isReplayPlayback() &&
         attemptProvenance.eligibility == ScoreEligibility::Verified) {
       attemptProvenance.eligibility = ScoreEligibility::Modified;
@@ -8411,11 +8415,16 @@ void GamePlayScene::onJudge(const JudgeResult &judgeResult,
   if (backgroundGaugeFailurePending || state == nullptr || state->isEnding) {
     return;
   }
+  if (judgeResult.judgement != None && !realtimeGameplayAuthorityActive()) {
+    // Keep one scoring engine once a judgement is committed. A fresh worker
+    // would replace these counts without inheriting already judged notes.
+    realtimeGameplayAuthorityWaitingForSkinGeometry = false;
+  }
   if (gameplay::fallbackJudgementInvalidatesRanking(
           judgeResult.judgement, realtimeGameplayAuthorityActive(),
           isReplayPlayback()) &&
       attemptProvenance.eligibility == ScoreEligibility::Verified) {
-    // Defer invalidation until fallback scoring actually occurs: iOS may
+    // Defer invalidation until fallback scoring actually occurs: mobile input may
     // obtain its touch layout and start the worker after the first skin frame.
     attemptProvenance.eligibility = ScoreEligibility::Modified;
     recordedReplay.provenance = attemptProvenance;

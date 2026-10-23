@@ -135,7 +135,7 @@ void testExistingExclusionsAndNormalActivationRemain() {
                   false, true) &&
               !gameplay::shouldRetryRealtimeGameplayAuthorityAfterSkinFrame(
                   true, false),
-          "a deferred iOS authority starts only after a skin publishes lane "
+          "a deferred mobile authority starts only after a skin publishes lane "
           "geometry");
 
   const std::size_t longSparseReplayCapacity =

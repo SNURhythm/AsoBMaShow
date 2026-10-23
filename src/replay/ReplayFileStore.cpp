@@ -4,6 +4,9 @@
 #include "ReplayFormat.h"
 #include "../AtomicFile.h"
 #include "../FileChecksum.h"
+#if defined(__ANDROID__)
+#include "../platform/AndroidFilePublication.h"
+#endif
 
 #include <algorithm>
 #include <array>
@@ -43,6 +46,17 @@ constexpr std::string_view kCleanupLeaseFilename =
 constexpr std::string_view kShareDirectoryPrefix =
     "asobmashow-replay-share-";
 constexpr std::size_t kShareDirectoryTokenBytes = 24;
+
+void publishRegularFile(const std::filesystem::path &from,
+                        const std::filesystem::path &to, std::error_code &error) {
+#if defined(__ANDROID__)
+  // A move preserves missing-or-complete publication without requiring hard
+  // links, which Android emulated external storage does not support.
+  android_file::renameNoReplace(from, to, error);
+#else
+  std::filesystem::create_hard_link(from, to, error);
+#endif
+}
 
 std::mutex &cleanupThreadMutex() {
   static std::mutex mutex;
@@ -483,7 +497,7 @@ bool restoreQuarantinedRegularFile(
     const std::filesystem::path &quarantineDirectory,
     const std::filesystem::path &replayDirectory, std::string &diagnostic) {
   std::error_code linkError;
-  std::filesystem::create_hard_link(quarantined, original, linkError);
+  publishRegularFile(quarantined, original, linkError);
   if (linkError) {
     diagnostic += diagnostic.empty() ? "" : "; ";
     diagnostic += "Unmatched replay bytes were preserved in private cleanup "
@@ -492,6 +506,7 @@ bool restoreQuarantinedRegularFile(
     return false;
   }
   if (!atomic_file::syncDirectory(replayDirectory, diagnostic) ||
+      !atomic_file::syncDirectory(quarantineDirectory, diagnostic) ||
       !removeEntryAndSync(quarantined, quarantineDirectory, diagnostic) ||
       !removeEmptyDirectoryAndSync(quarantineDirectory, replayDirectory,
                                    diagnostic)) {
@@ -762,7 +777,7 @@ ReplayFileStore::install(const ReplayFileReservation &reservation,
   }
 
   std::error_code linkError;
-  std::filesystem::create_hard_link(temporaryPath, finalPath, linkError);
+  publishRegularFile(temporaryPath, finalPath, linkError);
   if (linkError) {
     const auto raced =
         inspectAt(profileRoot_, reservation.expectedMetadata, limits_);

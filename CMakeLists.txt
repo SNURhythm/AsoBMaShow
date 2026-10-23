@@ -6034,6 +6034,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}"
         LABELS "platform_android" TIMEOUT 30)
 
+    if(UNIX)
+        add_executable(android_file_publication_tests tests/android_file_publication_tests.cpp)
+        target_include_directories(android_file_publication_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_compile_features(android_file_publication_tests PRIVATE cxx_std_23)
+        target_link_libraries(android_file_publication_tests PRIVATE Threads::Threads)
+        add_test(NAME android_file_publication_tests COMMAND android_file_publication_tests)
+    endif()
+
     add_executable(application_ui_state_store_tests
         tests/application_ui_state_store_tests.cpp
         src/ApplicationUiState.cpp

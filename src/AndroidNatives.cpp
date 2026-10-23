@@ -11,6 +11,8 @@
 #include <sys/stat.h>
 #include <thread>
 #include "PlatformDocumentHandoff.h"
+#include "platform/AndroidFilePublication.h"
+#include <sys/syscall.h>
 #include "skin/package/SkinDirectoryRename.h"
 #include "audio/NativeMusicPlayer.h"
 #include "audio/ProgressiveMusicSource.h"
@@ -1556,11 +1558,9 @@ std::shared_ptr<void> ReserveAndroidStorageSubtrees(
   });
 }
 
-namespace skin {
-int renameAndroidSkinDirectoryWithMutationLock(int sourceParent,
-                                               const char *sourceName,
-                                               int destinationParent,
-                                               const char *destinationName) noexcept {
+namespace {
+template <typename Rename>
+int withDocumentsMutationLock(Rename &&rename) {
   auto *env = static_cast<JNIEnv *>(SDL_GetAndroidJNIEnv());
   auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
   if (env == nullptr || activity == nullptr) {
@@ -1585,12 +1585,50 @@ int renameAndroidSkinDirectoryWithMutationLock(int sourceParent,
     errno = EIO;
     return -1;
   }
-  const int result = skinRenameDirectoryUnderMutationLock(
-      sourceParent, sourceName, destinationParent, destinationName);
-  const int renameError = errno;
-  // Keep the retained monitor, even if the Activity is destroyed during rename.
-  env->MonitorExit(monitor);
-  env->DeleteLocalRef(monitor);
+  // Release the monitor even if path allocation or canonicalization throws.
+  struct MonitorScope {
+    JNIEnv *env;
+    jobject monitor;
+    ~MonitorScope() { env->MonitorExit(monitor); env->DeleteLocalRef(monitor); }
+  } scope{env, monitor};
+  return rename();
+}
+} // namespace
+
+namespace android_file {
+bool renameNoReplace(const std::filesystem::path &from,
+                     const std::filesystem::path &to, std::error_code &error) {
+  error.clear();
+  const int result = withDocumentsMutationLock([&] {
+    if (::syscall(SYS_renameat2, AT_FDCWD, from.c_str(), AT_FDCWD, to.c_str(), 1) == 0) return 0;
+    const int failure = errno;
+    if (failure != EINVAL && failure != EOPNOTSUPP && failure != ENOSYS) {
+      error = std::error_code(failure, std::generic_category());
+      return -1;
+    }
+    // Do not extend the check-then-rename fallback to arbitrary all-files
+    // folders: their writers do not participate in our JVM monitor.
+    const auto roots = publicationRoots(SDL_GetAndroidSDKVersion(),
+        GetAndroidExternalFilesDir(), GetAndroidInternalFilesDir());
+    return renameUnderMutationLock(from, to, roots, error) ? 0 : -1;
+  });
+  if (result != 0 && !error) error = std::make_error_code(std::errc::io_error);
+  return result == 0;
+}
+} // namespace android_file
+
+namespace skin {
+int renameAndroidSkinDirectoryWithMutationLock(int sourceParent,
+                                               const char *sourceName,
+                                               int destinationParent,
+                                               const char *destinationName) noexcept {
+  int renameError = EIO;
+  const int result = withDocumentsMutationLock([&] {
+    const int renamed = skinRenameDirectoryUnderMutationLock(
+        sourceParent, sourceName, destinationParent, destinationName);
+    renameError = errno;
+    return renamed;
+  });
   errno = renameError;
   return result;
 }
