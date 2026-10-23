@@ -2851,6 +2851,7 @@ struct SettingsScene {
   bool calibrationLogicalJudgementLine = false;
   bool calibrationDisplay = false;
   bool calibrationNotesHidden = false;
+  bool calibrationFeedbackHidden = false;
   int calibrationAudioOffsetMs = 0;
   int calibrationVisualOffsetMs = 0;
   void updateCalibration() { std::abort(); }
@@ -3708,6 +3709,71 @@ void verifyCalibrationOffsetOnlyMovesNotes(const RenderTarget &target) {
         renderer.setCharacterizationRecorder(nullptr);
         bgfx::frame();
       }
+    }
+  }
+}
+
+void verifyCalibrationFeedbackVisibility(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  for (const bool effectsEnabled : {false, true}) {
+    const auto chart = settings_scene::makeCalibrationChart(7, {.lane = 1});
+    const auto model = buildPlayfieldChartVisualModel(*chart, 0);
+    PlayfieldVisualStateStore store(model);
+    Judge judge(chart->Meta.Rank);
+    SettingsScene scene;
+    scene.previewPresentation = std::make_unique<BMSRenderer>(chart.get(), judge.timingWindows, 500, true);
+    auto &renderer = static_cast<BMSRenderer &>(*scene.previewPresentation);
+    scene.previewChart = chart.get();
+    scene.previewRenderer = &renderer;
+    scene.previewChartVisualModel = &model;
+    scene.previewVisualStateStore = &store;
+    scene.previewProjection = std::make_unique<PlayfieldProjection>();
+    scene.previewPresentationEvents = std::make_unique<PlayfieldPresentationEventFanout>(store, renderer);
+    scene.calibrationActive = true;
+    scene.resetPreviewHudSample();
+    auto config = presentationConfig(0);
+    config.fastSlowCriteria = AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow;
+    config.millisecondsCriteria = AppSettings::JudgementTimingDisplayCriteria::PGreatOrBelow;
+    config.laneBeamsEnabled = effectsEnabled;
+    config.keybombs[PGreat].visible = effectsEnabled;
+    store.setConfiguration(config);
+    const auto inputTime = settings_scene::calibrationTiming().firstNoteMicros + 40'000;
+    scene.previewElapsedMicros = inputTime;
+    scene.pressLane(1, 0);
+    scene.pressLane(2, 0); // Empty presses still get neutral input effects.
+    const auto actual = store.capture({});
+    expect(actual.lastJudge.judgement != None && actual.lastJudge.judgement != PGreat &&
+               actual.lastJudge.Diff == 40'000 && scene.calibrationTaps.size() == 1,
+           "feedback visibility retains the real non-PGREAT calibration input");
+    for (const bool hidden : {false, true, false}) {
+      scene.calibrationFeedbackHidden = hidden;
+      scene.capturePreviewVisualState();
+      const auto &state = *scene.previewCapturedVisualState;
+      const auto neutralPresses = std::ranges::count_if(state.lanes, [&](const auto &lane) {
+        return lane.pressMicros == inputTime && lane.keybomb.timeMicros == inputTime &&
+               lane.keybomb.judgement == PGreat && lane.lastPressedJudge.judgement == PGreat &&
+               lane.lastPressedJudge.Diff == 0 && lane.beatorajaJudgeValue == 1;
+      });
+      expect(hidden ? (state.lastJudge.judgement == None &&
+                         state.lastJudgeVisualMicros == kPlayfieldTimestampOff &&
+                         state.judgementIndicatorSampleCount == 0 && neutralPresses == 2)
+                    : (state.lastJudge.judgement == actual.lastJudge.judgement &&
+                         state.lastJudge.Diff == 40'000 && state.judgementIndicatorSampleCount == 1),
+             "the captured frame hides grading and uses PGREAT effects without changing stored results");
+      expect(state.configuration.laneBeamsEnabled == effectsEnabled &&
+                 state.configuration.keybombs[PGreat].visible == effectsEnabled,
+             "hiding feedback never enables disabled lane beams or keybombs");
+      RenderContext context;
+      renderer.render(context, state, scene.projectPreviewFrame());
+      const auto views = renderer.judgementFeedbackTextViewsForTesting();
+      expect(views[0]->getVisible() == !hidden && views[1]->getVisible() == !hidden &&
+                 views[2]->getVisible() == !hidden,
+             "judgement, FAST/SLOW and milliseconds hide immediately and restore when unchecked");
+      const auto retained = store.capture({});
+      expect(retained.lastJudge.judgement == actual.lastJudge.judgement &&
+                 retained.lastJudge.Diff == 40'000 && scene.calibrationTaps.size() == 1,
+             "presentation masking leaves real judgements and calibration samples untouched");
+      bgfx::frame();
     }
   }
 }
@@ -4617,6 +4683,7 @@ int main() {
   verifyPreviewScoreUsesRealJudgements();
   verifyCalibrationUsesJudgedTargets();
   verifyCalibrationOffsetOnlyMovesNotes(target);
+  verifyCalibrationFeedbackVisibility(target);
   verifyDenseCalibrationHasChartSizedJudgementBuffers();
   verifyPreviewInputTimingSamples();
   verifyPreviewPause();

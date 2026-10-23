@@ -1232,6 +1232,7 @@
 {"settings.calibration.display_hidden", "Show notes to measure.", "측정하려면 노트를 표시하세요.", "測定するにはノーツを表示してください。", "请显示音符以开始测量。", "請顯示音符以開始測量。"},
 {"settings.calibration.display_result", "Suggested display: {offset} ms · Variation: {spread} ms", "추천 화면: {offset} ms · 편차: {spread} ms", "推奨表示: {offset} ms · ばらつき: {spread} ms", "建议显示：{offset} ms · 偏差：{spread} ms", "建議顯示：{offset} ms · 偏差：{spread} ms"},
 {"settings.calibration.error", "Audio unavailable: {error}", "오디오 오류: {error}", "音声エラー: {error}", "音频不可用：{error}", "音訊無法使用：{error}"},
+{"settings.calibration.hide_feedback", "Hide judgement feedback", "판정 피드백 숨기기", "判定フィードバックを隠す", "隐藏判定反馈", "隱藏判定回饋"},
 {"settings.calibration.hide_notes", "Hide notes", "노트 숨기기", "ノーツを隠す", "隐藏音符", "隱藏音符"},
 {"settings.calibration.logical_line", "Logical judgement line", "논리 판정선", "論理判定ライン", "逻辑判定线", "邏輯判定線"},
 {"settings.calibration.meter", "Metronome", "메트로놈", "メトロノーム", "节拍器", "節拍器"},

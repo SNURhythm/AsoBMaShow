@@ -35,6 +35,7 @@ void SettingsScene::startCalibration() {
   calibrationError.clear();
   calibrationDisplay = false;
   calibrationMuted = false;
+  calibrationFeedbackHidden = false;
   calibrationScrollSettings = false;
   calibrationMeasuring = false;
   calibrationActive = true;
@@ -311,10 +312,13 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
   body->addView(modes);
   auto *modeAid = new View();
   modeAid->setFlexDirection(FlexDirection::Row);
+  modeAid->setFlexWrap(YGWrapWrap);
+  modeAid->setGap(metrics.compact ? 8.0f : 10.0f);
   if (calibrationDisplay)
     addToggle(modeAid, "settings.calibration.mute", calibrationMuted, true);
   else
     addToggle(modeAid, "settings.calibration.hide_notes", calibrationNotesHidden, false);
+  addToggle(modeAid, "settings.calibration.hide_feedback", calibrationFeedbackHidden, false);
   body->addView(modeAid);
   body->addView(makeWrappedText(i18n::message(calibrationDisplay
       ? "settings.calibration.display_help" : "settings.calibration.audio_help",

@@ -488,6 +488,33 @@ void SettingsScene::capturePreviewVisualState() {
   } else {
     *previewCapturedVisualState = previewVisualStateStore->capture(clock);
   }
+  if (calibrationActive && calibrationFeedbackHidden) {
+    // Mask only the presentation copy: scoring, target selection and calibration
+    // retain the actual judgements, and unchecking restores the stored feedback.
+    auto &state = *previewCapturedVisualState;
+    state.configuration.judgementTextVisibility = {
+        .pgreat = false, .great = false, .good = false, .bad = false,
+        .poor = false, .kpoor = false, .combo = false};
+    state.configuration.fastSlowCriteria = AppSettings::JudgementTimingDisplayCriteria::Off;
+    state.configuration.millisecondsCriteria = AppSettings::JudgementTimingDisplayCriteria::Off;
+    state.configuration.judgementIndicatorEnabled = false;
+    state.configuration.judgementCounterEnabled = false;
+    state.lastJudge = JudgeResult(None, 0);
+    state.lastJudgeVisualMicros = kPlayfieldTimestampOff;
+    state.fastSlowMicros = 0;
+    state.judgementIndicatorSampleCount = 0;
+    state.judgementIndicatorAverageBeforeSamples = {};
+    for (auto &lane : state.lanes) {
+      const bool hasPress = lane.pressMicros != kPlayfieldTimestampOff;
+      lane.lastPressedJudge = JudgeResult(hasPress ? PGreat : None, 0);
+      lane.beatorajaJudgeValue = hasPress ? 1 : 0;
+      lane.lastJudgement = {};
+      // Input effects stay enabled/disabled by their existing configuration.
+      // Empty presses get the same neutral effect; automatic misses add none.
+      lane.keybomb = {hasPress ? PGreat : None, lane.pressMicros};
+      lane.bombMicros = lane.pressMicros;
+    }
+  }
 }
 
 void SettingsScene::destroyPreviewRenderer() {

@@ -335,6 +335,7 @@ private:
   bool calibrationDisplay = false;
   bool calibrationMuted = false;
   bool calibrationNotesHidden = false;
+  bool calibrationFeedbackHidden = false;
   bool calibrationLogicalJudgementLine = false;
   bool calibrationAudioRunning = false;
   bool calibrationSavedAutoPlay = false;
