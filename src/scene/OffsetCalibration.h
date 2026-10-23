@@ -10,7 +10,6 @@ inline constexpr long long kCalibrationBeatMicros = 500'000;
 inline constexpr long long kCalibrationFirstClickMicros = 1'000'000;
 inline constexpr long long kCalibrationFirstNoteMicros = 3'000'000;
 inline constexpr int kCalibrationBeats = 64;
-inline constexpr int kCalibrationReferenceBeats = 4;
 inline constexpr long long kCalibrationLoopMicros = 35'000'000;
 struct CalibrationTiming {
   long long beatMicros;
@@ -39,78 +38,53 @@ inline double calibrationLogicalJudgementScrollDelta(int visualOffsetMs,
   return (visualOffsetMs - noteDisplayTimingMs) * bpm / 240'000.0;
 }
 
-// Measure against the unadjusted audio timeline: gameplay = raw + audio offset.
-// One observation per scheduled group rejects chords and input duplicates.
+// Display judging follows the note's drawn crossing on the gameplay timeline.
+inline long long calibrationDisplayTimelineMicros(long long gameplayTimeMicros,
+                                                  int visualOffsetMs,
+                                                  int noteDisplayTimingMs) {
+  return gameplayTimeMicros + (static_cast<long long>(noteDisplayTimingMs) - visualOffsetMs) * 1000;
+}
+
+// Measure the target selected by gameplay judging against the raw audio clock.
+// One observation per scheduled group rejects chords and repeated judgements.
 class OffsetCalibration {
 public:
   struct Estimate { int offsetMs; int spreadMs; };
-  static constexpr int sampleCount = 16;
-  void configure(int bpm, int beatsPerMeasure, int subdivision = 4) {
-    timing_ = calibrationTiming(bpm, beatsPerMeasure);
-    notesPerBeat_ = calibrationNotesPerBeat(subdivision);
+  void configure(int beatsPerMeasure, int subdivision = 4) {
+    requiredCount_ = 4 * (beatsPerMeasure == 3 ? 3 : 4) * calibrationNotesPerBeat(subdivision);
     reset();
   }
-  bool tap(long long rawTimeMicros) {
-    const auto beatWindow = std::min(200'000LL, timing_.beatMicros * 2 / 5);
-    if (count_ == sampleCount || rawTimeMicros < timing_.firstNoteMicros - beatWindow)
-      return false;
-    long long group;
-    long long reference = 0;
-    auto window = beatWindow;
-    const auto denseStart = timing_.firstNoteMicros + kCalibrationReferenceBeats * timing_.beatMicros;
-    const bool densePhase = notesPerBeat_ > 1 && rawTimeMicros >= denseStart - beatWindow;
-    if (densePhase) {
-      // Quarter-note lead-in samples establish a robust reference before
-      // dense notes, whose periodic grid alone cannot identify absolute latency.
-      if (count_ < kCalibrationReferenceBeats - 1) return false;
-      reference = referenceMicros_;
-      window = std::min(200'000LL, timing_.beatMicros * 2 / (5 * notesPerBeat_));
-      group = std::llround(static_cast<double>(rawTimeMicros - timing_.firstNoteMicros - reference) *
-                           notesPerBeat_ / timing_.beatMicros);
-    } else {
-      // The lead-in and the 1/4 pattern use quarter-note boundaries.
-      group = ((rawTimeMicros - timing_.firstNoteMicros + timing_.beatMicros / 2) /
-               timing_.beatMicros) * notesPerBeat_;
-    }
-    if (group <= lastGroup_ || group >= kCalibrationBeats * notesPerBeat_ ||
-        (densePhase && group < kCalibrationReferenceBeats * notesPerBeat_)) return false;
-    const auto error = rawTimeMicros -
-        (timing_.firstNoteMicros + group * timing_.beatMicros / notesPerBeat_);
-    if (std::abs(error - reference) > window) return false;
-    lastGroup_ = group;
-    errors_[count_++] = error;
-    if (notesPerBeat_ > 1 && !densePhase && count_ <= kCalibrationReferenceBeats &&
-        count_ >= kCalibrationReferenceBeats - 1) {
-      // Three samples still tolerate one outlier if a lead-in note was missed.
-      std::array<long long, kCalibrationReferenceBeats> referenceErrors{};
-      std::copy_n(errors_.begin(), count_, referenceErrors.begin());
-      std::sort(referenceErrors.begin(), referenceErrors.begin() + count_);
-      referenceMicros_ = (referenceErrors[(count_ - 1) / 2] + referenceErrors[count_ / 2]) / 2;
-    }
+  bool tap(long long rawTimeMicros, long long noteTimeMicros) {
+    if (count_ == requiredCount_ ||
+        std::find(noteTimes_.begin() + loopStart_, noteTimes_.begin() + count_, noteTimeMicros) !=
+            noteTimes_.begin() + count_) return false;
+    noteTimes_[count_] = noteTimeMicros;
+    errors_[count_++] = rawTimeMicros - noteTimeMicros;
     return true;
   }
-  bool tapDisplay(long long rawTimeMicros, int audioOffsetMs,
+  bool tapDisplay(long long rawTimeMicros, long long noteTimeMicros, int audioOffsetMs,
                   int visualOffsetMs, int noteDisplayTimingMs) {
-    // Match the note's drawn crossing, not its audio/gameplay crossing.
-    return tap(rawTimeMicros + (static_cast<long long>(audioOffsetMs) -
-                               visualOffsetMs + noteDisplayTimingMs) * 1000);
+    return tap(calibrationDisplayTimelineMicros(rawTimeMicros + audioOffsetMs * 1000LL,
+                                                visualOffsetMs, noteDisplayTimingMs), noteTimeMicros);
   }
-  void reset() { count_ = 0; lastGroup_ = -1; }
-  // A new chart loop retains the measurements but starts a fresh group identity.
-  void beginLoop() { lastGroup_ = -1; }
+  void reset() { count_ = 0; loopStart_ = 0; }
+  // A new chart loop retains measurements and permits those note groups again.
+  void beginLoop() { loopStart_ = count_; }
   int count() const { return count_; }
+  int requiredCount() const { return requiredCount_; }
   std::optional<Estimate> estimate() const {
-    if (count_ < sampleCount) return std::nullopt;
+    if (count_ < requiredCount_) return std::nullopt;
     auto sorted = errors_;
-    std::ranges::sort(sorted);
-    const auto median = (sorted[7] + sorted[8]) / 2;
-    std::array<long long, sampleCount> deviations{};
-    std::ranges::transform(sorted, deviations.begin(), [median](auto value) {
+    std::sort(sorted.begin(), sorted.begin() + count_);
+    const auto median = (sorted[count_ / 2 - 1] + sorted[count_ / 2]) / 2;
+    std::array<long long, maxSampleCount> deviations{};
+    std::transform(sorted.begin(), sorted.begin() + count_, deviations.begin(), [median](auto value) {
       return std::abs(value - median);
     });
-    std::ranges::sort(deviations);
+    std::sort(deviations.begin(), deviations.begin() + count_);
     return Estimate{static_cast<int>(std::lround(-median / 1000.0)),
-                    static_cast<int>(std::lround((deviations[7] + deviations[8]) / 2000.0))};
+                    static_cast<int>(std::lround((deviations[count_ / 2 - 1] +
+                                                 deviations[count_ / 2]) / 2000.0))};
   }
   std::optional<Estimate> displayEstimate(int noteDisplayTimingMs) const {
     auto result = estimate();
@@ -120,11 +94,11 @@ public:
     return result;
   }
 private:
-  CalibrationTiming timing_ = calibrationTiming();
-  std::array<long long, sampleCount> errors_{};
-  long long referenceMicros_ = 0;
-  int notesPerBeat_ = 1;
+  static constexpr int maxSampleCount = 4 * 4 * 8;
+  std::array<long long, maxSampleCount> errors_{};
+  std::array<long long, maxSampleCount> noteTimes_{};
+  int requiredCount_ = 16;
   int count_ = 0;
-  long long lastGroup_ = -1;
+  int loopStart_ = 0;
 };
 } // namespace settings_scene

@@ -482,7 +482,7 @@ int main() {
     active->calibrationActive = previewActive;
     active->calibrationMeasuring = previewActive;
     active->previewPanelFolded = previewActive;
-    if (previewActive) assert(active->calibrationSamples.tap(3'030'000));
+    if (previewActive) assert(active->calibrationSamples.tap(3'030'000, 3'000'000));
     event.type = SDL_EVENT_WINDOW_FOCUS_LOST;
     manager.handleEvents(event);
     assert(display.focusLosses == 1 && active->displayDraft == 42);

@@ -151,47 +151,53 @@ void testDenseAppearanceModesHaveCompletePreviewCharts() {
 
 void testCalibration() {
   using namespace settings_scene;
-  // Late taps must move gameplay earlier relative to the audio clock.
+  // Judging supplies the actual target. Chords and repeated judgements count
+  // once even if another lane's older target is selected out of time order.
   OffsetCalibration calibration;
-  assert(!calibration.tap(1'020'000)); // count-in
-  for (int beat = 0; beat < 16; ++beat) {
-    const auto time = 3'000'000LL + beat * 500'000;
-    assert(calibration.tap(time + (beat == 7 ? 160'000 : 40'000)));
-    assert(!calibration.tap(time + 45'000)); // chord / duplicate
+  for (int group = 0; group < calibration.requiredCount(); ++group) {
+    const auto time = 3'000'000LL + (group ^ 1) * 500'000;
+    assert(calibration.tap(time + (group == 7 ? 160'000 : 40'000), time));
+    assert(!calibration.tap(time + 45'000, time));
+    if (group + 1 < calibration.requiredCount()) assert(!calibration.estimate());
   }
   const auto estimate = calibration.estimate();
   assert(estimate && estimate->offsetMs == -40 && estimate->spreadMs == 0);
-  assert(!calibration.tap(12'040'000)); // completed sample set is stable
+  assert(!calibration.tap(12'040'000, 12'000'000));
   calibration.reset();
   assert(!calibration.estimate());
-  for (int beat = 0; beat < 16; ++beat)
-    assert(calibration.tap(3'000'000LL + beat * 500'000 - 25'000));
+  for (int group = 0; group < calibration.requiredCount(); ++group) {
+    const auto time = 3'000'000LL + group * 500'000;
+    assert(calibration.tap(time - 25'000, time));
+  }
   assert(calibration.estimate()->offsetMs == 25);
-  calibration.reset();
-  assert(!calibration.tap(3'249'000)); // outside acceptance window
-  assert(!calibration.tap(-500'000));
 
-  // Visual taps include the current audio/display offsets. A 40 ms visual
-  // delay must produce -30 ms with the existing +10 ms note-display timing,
-  // regardless of the starting trial offset. Simultaneous notes count once.
+  // Display estimates retain note-display timing and remove the trial offsets.
   for (const int trialOffset : {-80, 70}) {
-    calibration.configure(120, 4);
-    for (int note = 0; note < 16; ++note) {
-      const auto raw = 3'000'000LL + note * 500'000 + 30'000 +
-                       trialOffset * 1000LL - 10'000 + 40'000;
-      assert(calibration.tapDisplay(raw, -30, trialOffset, 10));
-      assert(!calibration.tapDisplay(raw + 1000, -30, trialOffset, 10)); // chord
-      if (note < 15) assert(!calibration.displayEstimate(10));
+    calibration.configure(4);
+    for (int group = 0; group < calibration.requiredCount(); ++group) {
+      const auto target = 3'000'000LL + group * 500'000;
+      const auto raw = target + 30'000 + trialOffset * 1000LL - 10'000 + 40'000;
+      assert(calibration.tapDisplay(raw, target, -30, trialOffset, 10));
+      assert(!calibration.tapDisplay(raw + 1000, target, -30, trialOffset, 10));
+      if (group + 1 < calibration.requiredCount()) assert(!calibration.displayEstimate(10));
     }
     const auto display = calibration.displayEstimate(10);
     assert(display && display->offsetMs == -30 && display->spreadMs == 0);
-    calibration.reset();
-    assert(!calibration.displayEstimate(10));
   }
-  calibration.configure(120, 4);
-  for (int beat = 0; beat < 16; ++beat)
-    assert(calibration.tapDisplay(3'000'000LL + beat * 500'000 - 25'000, 0, 0, 0));
-  assert(calibration.displayEstimate(0)->offsetMs == 25);
+  // Loop identity is separate from sample identity, and configure clears both.
+  calibration.configure(3, 8);
+  assert(calibration.requiredCount() == 24 && !calibration.estimate());
+  for (int loop = 0; loop < 2; ++loop) {
+    calibration.beginLoop();
+    for (int group = 0; group < 12; ++group) {
+      const auto target = 3'000'000LL + group * 250'000;
+      assert(calibration.tap(target + 40'000, target));
+      assert(!calibration.tap(target + 41'000, target));
+    }
+  }
+  assert(calibration.estimate()->offsetMs == -40);
+  calibration.configure(4, 32);
+  assert(calibration.requiredCount() == 128 && calibration.count() == 0 && !calibration.estimate());
 
   for (int mode : kPreviewKeyModes) {
     const auto chart = makeCalibrationChart(mode);
@@ -261,103 +267,48 @@ void testCalibrationPatternsAndTempo() {
       for (const auto *timeline : chart->Measures.front()->TimeLines) {
         for (const auto *note : timeline->Notes) {
           if (!note) continue;
-          assert(timeline->Timing == timing.firstNoteMicros + (notes < kCalibrationReferenceBeats
-              ? notes * timing.beatMicros
-              : kCalibrationReferenceBeats * timing.beatMicros +
-                (notes - kCalibrationReferenceBeats) * timing.beatMicros / notesPerBeat));
+          assert(timeline->Timing == timing.firstNoteMicros + notes * timing.beatMicros / notesPerBeat);
           ++notes;
         }
       }
-      assert(notes == kCalibrationReferenceBeats +
-          (kCalibrationBeats - kCalibrationReferenceBeats) * notesPerBeat);
+      assert(notes == kCalibrationBeats * notesPerBeat);
       assert(chart->Meta.TotalLength == timing.loopMicros);
     }
   }
+  // Four measures of actual chart targets are required at every spacing/meter.
+  // Dense target identity preserves delays larger than half a note interval.
   for (const int bpm : {40, 123, 300}) {
     for (const int meter : {3, 4}) {
-      OffsetCalibration samples;
-      samples.configure(bpm, meter);
-      const auto timing = calibrationTiming(bpm, meter);
-      assert(!samples.tap(timing.firstClickMicros));
-      for (int beat = 0; beat < OffsetCalibration::sampleCount; ++beat)
-        assert(samples.tap(timing.firstNoteMicros + beat * timing.beatMicros + 15'000));
-      assert(samples.estimate()->offsetMs == -15);
-    }
-  }
-  // Every generated group must be measurable, including taps whose latency
-  // is longer than half a dense subdivision. Chords still count only once.
-  for (const int bpm : {40, 123, 300}) {
-    for (const int subdivision : {4, 8, 16, 24, 32}) {
-      for (const bool display : {false, true}) {
-        for (const auto delay : {-40'000LL, 40'000LL}) {
+      for (const int subdivision : {4, 8, 16, 24, 32}) {
+        for (const bool display : {false, true}) {
           OffsetCalibration samples;
-          samples.configure(bpm, 3, subdivision);
+          samples.configure(meter, subdivision);
+          const int expectedCount = 4 * meter * subdivision / 4;
+          assert(samples.requiredCount() == expectedCount);
           const auto chart = makeCalibrationChart(7, {.bpm = bpm,
-              .subdivision = subdivision, .beatsPerMeasure = 3});
+              .subdivision = subdivision, .beatsPerMeasure = meter});
           int groups = 0;
           for (const auto *timeline : chart->Measures.front()->TimeLines) {
             if (std::ranges::none_of(timeline->Notes, [](const auto *note) { return note != nullptr; })) continue;
+            const auto delay = (groups == 0 ? 100'000LL : 40'000LL);
             const auto raw = timeline->Timing + delay;
             const auto tap = [&](long long value) {
-              return display ? samples.tapDisplay(value + 30'000 + 70'000 - 10'000, -30, 70, 10)
-                             : samples.tap(value);
+              return display ? samples.tapDisplay(value + 30'000 + 70'000 - 10'000,
+                                                    timeline->Timing, -30, 70, 10)
+                             : samples.tap(value, timeline->Timing);
             };
             assert(tap(raw));
             assert(!tap(raw + 1000));
-            if (++groups == OffsetCalibration::sampleCount) break;
+            if (++groups == expectedCount) break;
+            assert(!samples.estimate());
           }
-          assert(samples.count() == OffsetCalibration::sampleCount);
+          assert(samples.count() == expectedCount);
           const auto estimate = display ? samples.displayEstimate(10) : samples.estimate();
-          assert(estimate && estimate->offsetMs == -delay / 1000 + (display ? 10 : 0) && estimate->spreadMs == 0);
+          assert(estimate && estimate->offsetMs == (display ? -30 : -40) && estimate->spreadMs == 0);
         }
       }
     }
   }
-  // A first-tap outlier must not shift the dense pattern's phase or estimate.
-  for (const auto firstDelay : {0LL, 100'000LL}) {
-    OffsetCalibration dense;
-    dense.configure(120, 4, 32);
-    const auto chart = makeCalibrationChart(7, {.subdivision = 32});
-    int sample = 0;
-    for (const auto *timeline : chart->Measures.front()->TimeLines) {
-      if (std::ranges::none_of(timeline->Notes, [](const auto *note) { return note != nullptr; })) continue;
-      assert(dense.tap(timeline->Timing + (sample == 0 ? firstDelay : 40'000)));
-      if (++sample == OffsetCalibration::sampleCount) break;
-    }
-    assert(dense.estimate()->offsetMs == -40 && dense.estimate()->spreadMs == 0);
-  }
-  // Missing one lead-in note still permits a robust reference and completion.
-  OffsetCalibration missedLeadIn;
-  missedLeadIn.configure(120, 4, 32);
-  const auto missedChart = makeCalibrationChart(7, {.subdivision = 32});
-  int noteIndex = 0;
-  for (const auto *timeline : missedChart->Measures.front()->TimeLines) {
-    if (std::ranges::none_of(timeline->Notes, [](const auto *note) { return note != nullptr; })) continue;
-    if (noteIndex++ == 1) continue;
-    assert(missedLeadIn.tap(timeline->Timing + (noteIndex == 1 ? 100'000 : 40'000)));
-    if (missedLeadIn.estimate()) break;
-  }
-  assert(missedLeadIn.estimate()->offsetMs == -40);
-  // The established reference survives skipped dense groups and a loop restart.
-  OffsetCalibration dense;
-  dense.configure(300, 4, 32);
-  const auto denseTiming = calibrationTiming(300, 4);
-  assert(!dense.tap(denseTiming.firstClickMicros));
-  for (int beat = 0; beat < kCalibrationReferenceBeats; ++beat)
-    assert(dense.tap(denseTiming.firstNoteMicros + beat * denseTiming.beatMicros + 40'000));
-  assert(!dense.tap(denseTiming.firstNoteMicros +
-      kCalibrationReferenceBeats * denseTiming.beatMicros - 50'000));
-  for (int sample = 4; sample < OffsetCalibration::sampleCount; ++sample) {
-    if (sample == 10) dense.beginLoop();
-    const auto group = kCalibrationReferenceBeats * 8 + ((sample - 4) % 6) * 2;
-    const auto jitter = sample % 2 == 0 ? 0 : 2000;
-    const auto time = denseTiming.firstNoteMicros + group * denseTiming.beatMicros / 8 + 40'000 + jitter;
-    assert(dense.tap(time));
-    assert(!dense.tap(time + 1000));
-  }
-  assert(dense.estimate()->offsetMs == -40 && dense.estimate()->spreadMs == 0);
-  dense.reset();
-  assert(dense.tap(denseTiming.firstNoteMicros - 40'000));
   const auto scratch = makeCalibrationChart(7, {.lane = 7});
   assert(scratch->Meta.TotalScratchNotes == kCalibrationBeats);
 }

@@ -9,6 +9,7 @@
 #include "../GameplayKeyMode.h"
 #include "play/BMSRenderer.h"
 #include "play/JudgementTimingSample.h"
+#include "play/GameplayCandidateSelection.h"
 #include "play/RealtimeGameplayAuthorityPolicy.h"
 #include "play/PlayfieldProjection.h"
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -776,7 +777,7 @@ void SettingsScene::resetPreviewHudSample() {
       *previewDefinition, gameplay::GameplaySimulationConfig{
           .judge = gameplay::CompiledGameplayJudge::from(gameplay::compileGameplayJudgeRules(
               kDefaultGameplayRuleset, previewChart->Meta.Rank, 100, 100,
-              CourseJudgementConstraint::None, gameplay::CandidateSelectionMode::Lowest,
+              CourseJudgementConstraint::None, candidateSelectionForNotePriority(context.settings.notePriorityMode),
               previewChart->Meta.KeyMode)),
           .gaugeRules = *previewGaugeRules,
           .notePriorityMode = context.settings.notePriorityMode,
@@ -897,13 +898,19 @@ bms_parser::Note *SettingsScene::pressLane(int mainLane, int compensateLane,
                                           double inputDelay) {
   if (!previewActive || (calibrationActive && previewPaused) || previewAutoPlay || !previewSimulation) return nullptr;
   const auto inputTime = previewInputTimeMicros(inputDelay);
-  if (calibrationActive) recordCalibrationTap(inputTime - calibrationAudioOffsetMs * 1000LL);
+  const auto judgeTime = calibrationActive && calibrationDisplay
+      ? calibrationDisplayTimelineMicros(inputTime, calibrationVisualOffsetMs,
+          context.settings.notesDisplayTimingMilliseconds) : inputTime;
   const auto result = previewSimulation->pressLane(mainLane, compensateLane,
-      {.songTimeMicros = inputTime,
+      {.songTimeMicros = judgeTime,
        .laneBeamTimeMicros = previewElapsedMicros,
        .inputDelayMicros = calibrationActive ? 0 : static_cast<std::int64_t>(inputDelay * 1'000'000)});
   consumePreviewTransactions(result.transactions);
   if (calibrationActive && result.soundNoteId != gameplay::kInvalidNoteId) playCalibrationKeysound();
+  if (calibrationActive && result.hasJudge && result.judge.isNotePlayed() &&
+      result.noteId < previewDefinition->noteCount())
+    recordCalibrationTap(inputTime - calibrationAudioOffsetMs * 1000LL,
+                         previewDefinition->note(result.noteId).timingMicros);
   return result.noteId < previewVisualNoteSources.size()
       ? const_cast<bms_parser::Note *>(previewVisualNoteSources[result.noteId]) : nullptr;
 }
@@ -911,8 +918,12 @@ bms_parser::Note *SettingsScene::pressLane(int mainLane, int compensateLane,
 bms_parser::Note *SettingsScene::releaseLane(int lane, double inputDelay,
                                             bool isBackSpin) {
   if (!previewActive || (calibrationActive && previewPaused) || previewAutoPlay || !previewSimulation) return nullptr;
+  const auto inputTime = previewInputTimeMicros(inputDelay);
+  const auto judgeTime = calibrationActive && calibrationDisplay
+      ? calibrationDisplayTimelineMicros(inputTime, calibrationVisualOffsetMs,
+          context.settings.notesDisplayTimingMilliseconds) : inputTime;
   const auto result = previewSimulation->releaseLane(lane,
-      {.songTimeMicros = previewInputTimeMicros(inputDelay),
+      {.songTimeMicros = judgeTime,
        .laneBeamTimeMicros = previewElapsedMicros,
        .inputDelayMicros = calibrationActive ? 0 : static_cast<std::int64_t>(inputDelay * 1'000'000)}, isBackSpin);
   consumePreviewTransactions(result.transactions);

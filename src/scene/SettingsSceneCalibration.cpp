@@ -30,7 +30,7 @@ void SettingsScene::startCalibration() {
   calibrationSavedAutoPlay = previewAutoPlay;
   calibrationSavedRandomTiming = previewRandomTiming;
   calibrationSavedRate = context.jukebox.playbackRate();
-  calibrationSamples.configure(calibrationChartOptions.bpm, calibrationChartOptions.beatsPerMeasure,
+  calibrationSamples.configure(calibrationChartOptions.beatsPerMeasure,
       calibrationChartOptions.subdivision);
   calibrationError.clear();
   calibrationDisplay = false;
@@ -132,8 +132,8 @@ void SettingsScene::updateCalibration() {
     return;
   }
   previewElapsedMicros = raw + calibrationAudioOffsetMs * 1000LL;
-  // Display calibration leaves notes unjudged so they cross the line at their
-  // visual time even when the trial offset is outside the judgement window.
+  // Display calibration defers automatic misses so notes remain available
+  // until input judges them at their drawn crossing time.
   if (!calibrationDisplay) advancePreviewSimulation();
   refreshCalibrationText();
 }
@@ -167,13 +167,13 @@ void SettingsScene::playCalibrationKeysound() {
     context.jukebox.playKeySound(kCalibrationKeysoundWav);
 }
 
-void SettingsScene::recordCalibrationTap(long long rawTimeMicros) {
+void SettingsScene::recordCalibrationTap(long long rawTimeMicros, long long noteTimeMicros) {
   if (!calibrationMeasuring || !calibrationAudioRunning || previewPaused ||
       (calibrationDisplay && calibrationNotesHidden)) return;
   const bool accepted = calibrationDisplay
-      ? calibrationSamples.tapDisplay(rawTimeMicros, calibrationAudioOffsetMs,
+      ? calibrationSamples.tapDisplay(rawTimeMicros, noteTimeMicros, calibrationAudioOffsetMs,
           calibrationVisualOffsetMs, context.settings.notesDisplayTimingMilliseconds)
-      : calibrationSamples.tap(rawTimeMicros);
+      : calibrationSamples.tap(rawTimeMicros, noteTimeMicros);
   if (!accepted) return;
   const auto estimate = calibrationDisplay
       ? calibrationSamples.displayEstimate(context.settings.notesDisplayTimingMilliseconds)
@@ -199,7 +199,8 @@ void SettingsScene::refreshCalibrationText() {
                                       {"visual", std::to_string(calibrationVisualOffsetMs)}}));
   if (!calibrationStatusText) return;
   auto status = i18n::message("settings.calibration.progress",
-      {{"count", std::to_string(calibrationSamples.count())}});
+      {{"count", std::to_string(calibrationSamples.count())},
+       {"total", std::to_string(calibrationSamples.requiredCount())}});
   if (!calibrationMeasuring) status = i18n::message("settings.calibration.ready");
   if (const auto estimate = calibrationSamples.estimate())
     status = i18n::message(calibrationDisplay ? "settings.calibration.display_result" : "settings.calibration.result",
@@ -241,7 +242,7 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
   };
   const auto restart = [this] {
     calibrationMeasuring = false;
-    calibrationSamples.configure(calibrationChartOptions.bpm, calibrationChartOptions.beatsPerMeasure,
+    calibrationSamples.configure(calibrationChartOptions.beatsPerMeasure,
         calibrationChartOptions.subdivision);
     previewPaused = false;
     previewRendererDirty = true;
@@ -297,7 +298,7 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
           if (display) calibrationNotesHidden = false;
           else calibrationMuted = false;
           calibrationMeasuring = false;
-          calibrationSamples.configure(calibrationChartOptions.bpm, calibrationChartOptions.beatsPerMeasure,
+          calibrationSamples.configure(calibrationChartOptions.beatsPerMeasure,
               calibrationChartOptions.subdivision);
           previewPaused = false;
           resetPreviewSimulation();

@@ -1,6 +1,7 @@
 #include "scene/play/GameplaySimulation.h"
 #include "scene/play/RealtimeGameplayAuthorityPolicy.h"
 #include "scene/play/JudgementTimingSample.h"
+#include "scene/play/GameplayCandidateSelection.h"
 #include "GameplayKeyMode.h"
 #include "input/RhythmInputHandler.h"
 #include "rendering/RenderPlan.h"
@@ -2847,11 +2848,13 @@ struct SettingsScene {
   int previewKeyMode = 7;
   bool calibrationActive = false;
   bool calibrationLogicalJudgementLine = false;
+  bool calibrationDisplay = false;
   int calibrationAudioOffsetMs = 0;
   int calibrationVisualOffsetMs = 0;
   void updateCalibration() { std::abort(); }
-  void recordCalibrationTap(long long) { std::abort(); }
-  void playCalibrationKeysound() { std::abort(); }
+  std::vector<std::pair<long long, long long>> calibrationTaps;
+  void recordCalibrationTap(long long raw, long long note) { calibrationTaps.emplace_back(raw, note); }
+  void playCalibrationKeysound() {}
   long long previewInputTimeMicros(double) const { return previewElapsedMicros; }
   bool previewActive = true;
   bool previewPaused = false;
@@ -3587,6 +3590,48 @@ void verifyPreviewScoreUsesRealJudgements() {
              scene.previewJudgeCount.at(PGreat) == 0 &&
              scene.previewJudgeFastSlowCount.empty(),
          "restarting clears preview score, note progression, and timing counters");
+}
+
+void verifyCalibrationUsesJudgedTargets() {
+  for (const bool display : {false, true}) {
+    for (const int visualOffset : {-80, 70}) {
+      for (const auto priority : {AppSettings::NotePriorityMode::Lowest,
+                                 AppSettings::NotePriorityMode::Duration}) {
+        const auto chart = settings_scene::makeCalibrationChart(7, {.lane = 1, .subdivision = 32});
+        Judge judge(chart->Meta.Rank);
+        BMSRenderer renderer(chart.get(), judge.timingWindows, 500, true);
+        SettingsScene scene;
+        scene.previewChart = chart.get();
+        scene.previewRenderer = &renderer;
+        scene.calibrationActive = true;
+        scene.calibrationDisplay = display;
+        scene.calibrationAudioOffsetMs = -30;
+        scene.calibrationVisualOffsetMs = visualOffset;
+        scene.context.settings.notesDisplayTimingMilliseconds = 10;
+        scene.context.settings.notePriorityMode = priority;
+        scene.resetPreviewHudSample();
+        const auto noteTime = settings_scene::calibrationTiming().firstNoteMicros;
+        const auto visualShift = display ? visualOffset * 1000LL - 10'000 : 0;
+        scene.previewElapsedMicros = noteTime - 400'000 + visualShift;
+        scene.pressLane(1, 0);
+        scene.releaseLane(1, 0);
+        expect(scene.calibrationTaps.empty(), "a KPOOR/fallback sound does not create a calibration sample");
+        scene.previewElapsedMicros = noteTime + 40'000 + visualShift;
+        const auto raw = scene.previewElapsedMicros - scene.calibrationAudioOffsetMs * 1000LL;
+        scene.pressLane(2, 0);
+        scene.releaseLane(2, 0);
+        expect(scene.calibrationTaps.empty(), "an empty lane cannot create a calibration sample");
+        scene.pressLane(1, 0);
+        const auto target = priority == AppSettings::NotePriorityMode::Lowest ? noteTime : noteTime + 62'500;
+        expect(scene.calibrationTaps.size() == 1 && scene.calibrationTaps.front() == std::pair{raw, target},
+               "calibration follows the configured judging priority and preserves raw time in both modes");
+        scene.pressLane(1, 0);
+        expect(scene.calibrationTaps.size() == 1,
+               "an already-held lane cannot create another calibration sample");
+        scene.releaseLane(1, 0);
+      }
+    }
+  }
 }
 
 void verifyDenseCalibrationHasChartSizedJudgementBuffers() {
@@ -4492,6 +4537,7 @@ int main() {
       verifyPreviewPacemakerMatchesChartScore();
   verifyPreviewNotesMoveThroughoutOpening();
   verifyPreviewScoreUsesRealJudgements();
+  verifyCalibrationUsesJudgedTargets();
   verifyDenseCalibrationHasChartSizedJudgementBuffers();
   verifyPreviewInputTimingSamples();
   verifyPreviewPause();

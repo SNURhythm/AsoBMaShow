@@ -354,7 +354,7 @@ private:
   void startCalibrationAudio();
   void stopCalibrationAudio();
   void updateCalibration();
-  void recordCalibrationTap(long long rawTimeMicros);
+  void recordCalibrationTap(long long rawTimeMicros, long long noteTimeMicros);
   void playCalibrationKeysound();
   void buildCalibrationPanel(View *panel, const settings_scene::LayoutMetrics &metrics,
                              View *selectionRow, float contentWidth);
