@@ -457,7 +457,7 @@ inline View *makeSteppedValueRow(const LayoutMetrics &metrics, TextInputBox *inp
   row->setJustifyContent(YGJustifyFlexStart);
   row->setAlignItems(YGAlignCenter);
   row->setGap(metrics.compact ? 8.0F : 10.0F);
-  input->setAlign(TextView::LEFT);
+  input->setAlign(TextView::CENTER);
   for (const int direction : {-1, 1}) {
     auto *step = makeStepButton(metrics, metrics.offsetButtonWidthSmall,
                                 (direction < 0 ? "-" : "+") + stepLabel);
@@ -490,11 +490,12 @@ inline View *makeCard(const LayoutMetrics &metrics, const i18n::Text &title,
   card->setPadding(Edge::All, static_cast<float>(metrics.cardPadding));
   if (metrics.flatSections) {
     card->setName("settingsSection");
+    card->setPadding(Edge::Left, 0)->setPadding(Edge::Right, 0);
     auto *rule = new View();
     rule->setPositionType(YGPositionTypeAbsolute);
     rule->setName("settingsSectionDivider");
-    rule->setPosition(Edge::Left, metrics.cardPadding)
-        ->setPosition(Edge::Right, metrics.cardPadding)
+    rule->setPosition(Edge::Left, 0)
+        ->setPosition(Edge::Right, 0)
         ->setPosition(Edge::Top, 0);
     rule->setHeight(1);
     rule->setThemedBackgroundColor(app_theme::hairline);

@@ -146,7 +146,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
 
   auto *rulesetSectionLabel = makeLabel(i18n::message("play_options.ruleset.label"));
   rulesetSectionLabel->setName("ruleset-section-label");
-  addView(makeSectionHeader(rulesetSectionLabel));
+  addView(rulesetSectionLabel);
   auto *rulesetRow = makeRow();
   for (const GameplayRuleset ruleset : {GameplayRuleset::LR2,
                                         GameplayRuleset::Beatoraja}) {
@@ -260,6 +260,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
     addView(gaugeAutoShiftBoundsSection);
   }
 
+  addView(makeSectionHeader(makeLabel(i18n::message("play_options.section.play_option.label"))));
   playOptionSection = new PlayOptionSectionView(
       {.onOptionSelected =
            [this](const std::string &option) {
@@ -281,7 +282,8 @@ PlayOptionsPanelView::PlayOptionsPanelView(
       {.columns = layout.playOptionColumns,
        .rowHeight = rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 48.0f,
        .buttonFontSize = 15,
-       .showLaneOrder = layout.showLaneOrder});
+       .showLaneOrder = layout.showLaneOrder,
+       .showHeading = false});
   playOptionSection->setWidthPercent(100);
   addView(playOptionSection);
 

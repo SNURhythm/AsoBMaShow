@@ -84,11 +84,13 @@ PlayOptionSectionView::PlayOptionSectionView(
   setAlignItems(YGAlignStretch);
   setGap(10);
 
-  auto *heading = makeText(i18n::message("play_options.section.play_option.label"), 20);
-  heading->setThemedColor(app_theme::textSecondary);
-  heading->setAlign(TextView::LEFT);
-  heading->setHeight(28);
-  addView(heading);
+  if (layout.showHeading) {
+    auto *heading = makeText(i18n::message("play_options.section.play_option.label"), 20);
+    heading->setThemedColor(app_theme::textSecondary);
+    heading->setAlign(TextView::LEFT);
+    heading->setHeight(28);
+    addView(heading);
+  }
 
   const int columns = std::max(1, layout.columns);
   View *row = nullptr;

@@ -1861,7 +1861,7 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
       metrics, i18n::message("settings.lane.gameplay_preview.label"), i18n::message("settings.lane.preview_current_lane_hud.message"),
       previewControls, metrics.modeCardHeight, metrics.cardsWidth));
 
-  auto *visibleTimeControls = buildVisibleTimeControls(metrics, true, false);
+  auto *visibleTimeControls = buildVisibleTimeControls(metrics, true, metrics.cardsWidth < 1000);
   cardsColumn->addView(makeCard(
       metrics, i18n::message("settings.lane.visible_time.label"), i18n::message("settings.lane.set_how_long_notes_remain_visible.message"),
       visibleTimeControls, metrics.visibleTimeCardHeight, metrics.cardsWidth));
@@ -2730,26 +2730,26 @@ void SettingsScene::initView() {
   };
   profileTabButton =
       makeTabButton(SettingsTab::Profile, i18n::message("settings.navigation.profile.label"), &profileTabText);
+  inputTabButton = makeTabButton(SettingsTab::Input, i18n::message("settings.navigation.input.label"), &inputTabText);
   timingTabButton =
       makeTabButton(SettingsTab::Timing, i18n::message("settings.navigation.timing.label"), &timingTabText);
+  laneTabButton = makeTabButton(SettingsTab::Lane, i18n::message("settings.navigation.lane.label"), &laneTabText);
   hudTabButton = makeTabButton(SettingsTab::Hud, "HUD", &hudTabText);
   backgroundTabButton =
       makeTabButton(SettingsTab::Background, i18n::message("settings.navigation.background.label"), &backgroundTabText);
-  laneTabButton = makeTabButton(SettingsTab::Lane, i18n::message("settings.navigation.lane.label"), &laneTabText);
-  inputTabButton = makeTabButton(SettingsTab::Input, i18n::message("settings.navigation.input.label"), &inputTabText);
-  generalTabButton = makeTabButton(SettingsTab::General, i18n::message("settings.navigation.general.label"), &generalTabText);
-  audioTabButton = makeTabButton(SettingsTab::Audio, i18n::message("settings.navigation.audio.label"), &audioTabText);
-  displayTabButton =
-      makeTabButton(SettingsTab::Display, i18n::message("settings.navigation.display.label"), &displayTabText);
-  difficultyTablesTabButton =
-      makeTabButton(SettingsTab::DifficultyTables, i18n::message("settings.navigation.difficulty_tables.label"),
-                    &difficultyTablesTabText);
-  bmsLibraryTabButton =
-      makeTabButton(SettingsTab::BmsLibrary, i18n::message("settings.navigation.bms_library.label"), &bmsLibraryTabText);
   gameplaySkinsTabButton = makeTabButton(SettingsTab::GameplaySkins,
                                          i18n::message("settings.navigation.skins.label"),
                                          &gameplaySkinsTabText);
+  audioTabButton = makeTabButton(SettingsTab::Audio, i18n::message("settings.navigation.audio.label"), &audioTabText);
+  displayTabButton =
+      makeTabButton(SettingsTab::Display, i18n::message("settings.navigation.display.label"), &displayTabText);
+  bmsLibraryTabButton =
+      makeTabButton(SettingsTab::BmsLibrary, i18n::message("settings.navigation.bms_library.label"), &bmsLibraryTabText);
+  difficultyTablesTabButton =
+      makeTabButton(SettingsTab::DifficultyTables, i18n::message("settings.navigation.difficulty_tables.label"),
+                    &difficultyTablesTabText);
   irTabButton = makeTabButton(SettingsTab::Ir, "IR", &irTabText);
+  generalTabButton = makeTabButton(SettingsTab::General, i18n::message("settings.navigation.general.label"), &generalTabText);
   tabControls->addView(profileTabButton);
   tabControls->addView(inputTabButton);
   tabControls->addView(timingTabButton);

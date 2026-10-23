@@ -109,7 +109,7 @@ DropdownView::DropdownView(Callbacks callbacks, OverlayPortal *portal)
     : View(), callbacks(std::move(callbacks)), overlayPortal(portal) {
   setFlexDirection(FlexDirection::Column);
   setAlignItems(YGAlignStretch);
-  setWidth(kDefaultWidth);
+  setMinWidth(kDefaultWidth);
   lastTriggerHeight = triggerHeight();
   setHeight(lastTriggerHeight);
   setMinHeight(triggerHeight());
@@ -229,6 +229,9 @@ void DropdownView::applyRefresh(State state) {
 }
 
 void DropdownView::setTriggerWidth(float width) {
+  if (triggerWidth > 0.0f) {
+    setWidth(YGUndefined);
+  }
   triggerWidth = std::isfinite(width) ? std::max(0.0f, width) : 0.0f;
   refreshWidths();
   updateMenuPlacement();
@@ -236,8 +239,18 @@ void DropdownView::setTriggerWidth(float width) {
 
 void DropdownView::refreshWidths() {
   resolvedWidth = std::max({triggerWidth, current.menuWidth, preferredWidth()});
-  setWidth(triggerWidth > 0.0f ? triggerWidth : resolvedWidth);
-  setMinWidth(triggerWidth > 0.0f ? 0.0f : resolvedWidth);
+  if (triggerWidth > 0.0f) {
+    setWidth(triggerWidth);
+    setMinWidth(0);
+    return;
+  }
+  // Label measurement sizes natural triggers and the popup, but must not
+  // replace a width or flexible allocation supplied by the parent layout.
+  const auto width = YGNodeStyleGetWidth(getNode());
+  const bool naturalWidth = (width.unit == YGUnitAuto || width.unit == YGUnitUndefined) &&
+                            YGNodeStyleGetFlexGrow(getNode()) <= 0.0f &&
+                            !(YGNodeStyleGetFlex(getNode()) > 0.0f);
+  setMinWidth(naturalWidth ? resolvedWidth : 0.0f);
 }
 
 void DropdownView::rebuildOptions() {
@@ -404,7 +417,7 @@ void DropdownView::updateMenuPlacement() {
       static_cast<int>(std::round(optionHeight() + (kMenuPadding + kMenuBorder) * 2.0f));
 
   const int menuWidth =
-      static_cast<int>(std::round(std::max(1.0f, resolvedWidth)));
+      static_cast<int>(std::round(std::max({1.0f, resolvedWidth, static_cast<float>(getWidth())})));
 
   const OverlayPlacement placement = placeAnchoredOverlay(
       {.x = getX(), .y = getY(), .width = getWidth(), .height = getHeight()},

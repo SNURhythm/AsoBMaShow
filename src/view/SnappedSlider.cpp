@@ -121,7 +121,7 @@ void SnappedSlider::renderImpl(RenderContext &context) {
   const float thumbX = trackX + trackWidth * fraction;
   const float thumbY = static_cast<float>(getY()) + height * 0.5F;
 
-  Color trackColor = app_theme::control();
+  Color trackColor = app_theme::hairlineStrong();
   Color fillColor = app_theme::cyan();
   Color thumbColor = hovered || mouseDragging || activeTouchId != -1
                          ? app_theme::textPrimary()

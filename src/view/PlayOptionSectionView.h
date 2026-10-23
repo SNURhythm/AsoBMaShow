@@ -22,6 +22,7 @@ struct PlayOptionSectionLayout {
   float rowHeight = 58.0f;
   int buttonFontSize = 15;
   bool showLaneOrder = true;
+  bool showHeading = true;
 };
 
 class PlayOptionSectionView : public View {

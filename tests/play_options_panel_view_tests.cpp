@@ -620,6 +620,34 @@ void testScrollViewTargetsWheelEventPosition() {
           "a wheel event outside the view must not scroll it");
 }
 
+void testDropdownPreservesAllocatedWidthAcrossRefreshes() {
+  for (int sizing : {0, 1, 2}) {
+    View root(0, 0, 440, 700);
+    root.setFlexDirection(FlexDirection::Row);
+    auto *dropdown = new DropdownView({});
+    if (sizing == 0) dropdown->setWidth(220);
+    else if (sizing == 1) dropdown->setWidthPercent(100);
+    else {
+      auto *sibling = new View();
+      sibling->setWidth(220)->setFlexShrink(0);
+      root.addView(sibling);
+      dropdown->setFlex(1);
+    }
+    root.addView(dropdown);
+    for (int length : {5, 100, 5}) {
+      dropdown->refresh({.options = {{.id = "one", .label = std::string(length, 'W')}},
+                          .open = true});
+      root.applyYogaLayout();
+      require(dropdown->getWidth() == (sizing == 1 ? 440 : 220),
+              "dropdown refresh must preserve its assigned row width");
+      require(dropdown->triggerButton->getWidth() == dropdown->getWidth(),
+              "dropdown trigger fills its allocated width");
+      require(dropdown->menuScroll->getWidth() >= dropdown->getWidth(),
+              "dropdown popup is at least as wide as its trigger when space allows");
+    }
+  }
+}
+
 void testDropdownFitsContentAndRevealsSelection() {
   const int previousHeight = rendering::window_height;
   rendering::window_height = 900;
@@ -849,6 +877,7 @@ int main() {
   init.resolution.height = 64;
   require(bgfx::init(init), "headless bgfx initializes for panel resources");
 
+  testDropdownPreservesAllocatedWidthAcrossRefreshes();
   testDropdownFitsContentAndRevealsSelection();
   testColorPickerPopup();
   testColorPickerColorSpace();

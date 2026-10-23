@@ -7,6 +7,7 @@
 #include "SnappedSlider.h"
 #include "TextView.h"
 #include "AppTheme.h"
+#include "../rendering/ResponsiveUi.h"
 
 #include <array>
 #include <functional>
@@ -19,17 +20,22 @@ public:
   explicit LaneCoverControlsView(std::function<void(const lane_cover::State &)> onChange)
       : onChange_(std::move(onChange)) {
     setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch)->setGap(10);
+    const float rowHeight = rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 48.0f;
     constexpr std::array names{"sudden", "hidden", "lift"};
     constexpr std::array labels{"SUDDEN+", "HIDDEN+", "LIFT"};
     for (std::size_t i = 0; i < controls_.size(); ++i) {
       auto &control = controls_[i];
       auto *row = new View();
-      row->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(10)->setHeight(48)->setFlexShrink(0);
+      row->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(10)->setHeight(rowHeight)->setFlexShrink(0);
+      row->setWidthPercent(100);
+      YGNodeStyleSetMaxWidth(row->getNode(), 760);
       control.button = new Button(0, 0, 140, 48);
+      control.button->setHeight(rowHeight)->setFlexShrink(0);
       control.button->setName(std::string("lane-cover-") + names[i]);
       control.button->setCornerRadius(app_theme::controlRadius());
       control.button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
       control.content = new CheckboxButtonContent(labels[i], 18, 20);
+      control.content->setJustifyContent(YGJustifyFlexStart)->setPadding(Edge::Left, 10);
       control.content->setThemedColor(app_theme::textPrimary);
       control.button->setContentView(control.content);
       control.button->setOnClickListener([this, i] {
@@ -45,10 +51,10 @@ public:
         changed();
       });
       control.slider->setName(std::string("lane-cover-") + names[i] + "-amount");
-      control.slider->setFlex(1)->setMinWidth(50);
+      control.slider->setFlex(1)->setMinWidth(50)->setHeight(rowHeight);
       row->addView(control.slider);
       control.number = new TextView(app_theme::font, 18);
-      control.number->setWidth(48);
+      control.number->setWidth(48)->setFlexShrink(0);
       control.number->setAlign(TextView::RIGHT);
       control.number->setVAlign(TextView::MIDDLE);
       control.number->setThemedColor(app_theme::textPrimary);
