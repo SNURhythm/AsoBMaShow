@@ -378,8 +378,11 @@ void testPhoneRecordDialogFitsAndRotates() {
     expect(watch && gbattle && result && exportVideo &&
                watch->getY() == gbattle->getY() &&
                result->getY() == exportVideo->getY() &&
-               result->getY() >= watch->getY() + watch->getHeight(),
-           "four compact records actions form two rows of two");
+               result->getY() == watch->getY() &&
+               gbattle->getX() >= watch->getX() + watch->getWidth() &&
+               result->getX() >= gbattle->getX() + gbattle->getWidth() &&
+               exportVideo->getX() >= result->getX() + result->getWidth(),
+           "four compact records actions share one row without overlap");
   }
   rendering::compactMenuCanvasActive = false;
   rendering::window_width = 1920;

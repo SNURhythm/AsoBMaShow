@@ -175,7 +175,7 @@ ReplayRecordsModal::Create(View *parent,
   constexpr float kModalPanelPadding = 22.0f;
   const float kModalContentWidth =
       kModalPanelWidth - kModalPanelPadding * 2.0f - 2.0f;
-  const float kModalContentHeight = phone ? std::max(80.0f, kModalPanelHeight - 330) : 418.0f;
+  const float kModalContentHeight = phone ? std::max(80.0f, kModalPanelHeight - 206) : 462.0f;
 
   auto *root = new BlockingOverlayView(0, 0, rendering::window_width,
                                        rendering::window_height);
@@ -247,12 +247,6 @@ ReplayRecordsModal::Create(View *parent,
   headerRule->setPosition(Edge::Right, kModalPanelPadding);
   headerRule->setHeight(1)->setThemedBackgroundColor(app_theme::hairlineStrong);
   panel->addView(headerRule);
-
-  auto *status = makeText({}, 18, app_theme::textSecondary);
-  status->setHeight(30);
-  status->setOverflow(TextView::TextOverflow::Hidden);
-  status->setVisible(false);
-  panel->addView(status);
 
   auto *contentFrame = new View();
   contentFrame->setWidth(kModalContentWidth)
@@ -913,8 +907,8 @@ ReplayRecordsModal::Create(View *parent,
   footer->setAlignItems(YGAlignStretch);
   footer->setGap(8);
   footer->setName("recordsFooter");
-  footer->setHeight(phone ? 152 : 72);
-  footer->setFlexWrap(phone ? YGWrapWrap : YGWrapNoWrap);
+  footer->setHeight(72);
+  footer->setFlexWrap(YGWrapNoWrap);
   footer->setFlexShrink(0);
 
   auto *watchButton = makeModalButton(i18n::message("records.watch.label"), 20, &modal->watchButtonText_, 0xf04b);
@@ -1067,7 +1061,6 @@ ReplayRecordsModal::Create(View *parent,
   modal->exportProgressTrack_ = exportProgressTrack;
   modal->exportProgressFill_ = exportProgressFill;
   modal->title_ = title;
-  modal->status_ = status;
   modal->exportProgressMessageText_ = exportProgressMessageText;
   modal->exportProgressPercentText_ = exportProgressPercentText;
   modal->list_ = list;
@@ -1171,12 +1164,12 @@ void ReplayRecordsModal::resize(int width, int height) {
   const float panelWidth = std::max(200.0f, std::min(760.0f, float(width - safe.left - safe.right - 24)));
   const float panelHeight = std::max(200.0f, std::min(660.0f, float(height - safe.top - safe.bottom - 24)));
   // Yoga includes the panel border in its width. Match the footer's inner
-  // width so two half-width actions plus their gap fit on the same row.
+  // width so all four compact actions and their gaps fit on the same row.
   const float contentWidth = panelWidth - 44 - 2;
-  const float contentHeight = std::max(80.0f, panelHeight - (compact ? 330 : 242));
+  const float contentHeight = std::max(80.0f, panelHeight - (compact ? 206 : 198));
   auto *footer = root_->findViewByName("recordsFooter");
-  footer->setHeight(compact ? 152 : 72);
-  footer->setFlexWrap(compact ? YGWrapWrap : YGWrapNoWrap);
+  footer->setHeight(72);
+  footer->setFlexWrap(YGWrapNoWrap);
   panel->setWidth(panelWidth)->setHeight(panelHeight);
   contentFrame_->setWidth(contentWidth)->setHeight(contentHeight);
   for (auto *page : {listContent_, filterSortContent_, watchOptionsContent_,
@@ -1211,7 +1204,7 @@ void ReplayRecordsModal::resize(int width, int height) {
   size_t index = 0;
   for (auto *button : {watchButton_, gbattleButton_, resultButton_, exportButton_}) {
     if (button) {
-      button->setWidth(button->getVisible() ? (compact ? (contentWidth - 8) / 2 : widths[index]) : 0);
+      button->setWidth(button->getVisible() ? (compact ? (contentWidth - 24) / 4 : widths[index]) : 0);
       button->setDisplay(button->getVisible() ? YGDisplayFlex : YGDisplayNone);
     }
     ++index;
@@ -1234,14 +1227,11 @@ bool ReplayRecordsModal::handleEvents(SDL_Event &event) {
 void ReplayRecordsModal::update() { updateTitleReset(); }
 
 void ReplayRecordsModal::setStatus(i18n::Text text) {
-  if (status_ == nullptr) {
+  if (text.empty()) {
+    titleResetPending_ = false;
     return;
   }
-  status_->setLocalizedText(text);
-  status_->setVisible(!text.empty());
-  if (root_ != nullptr) {
-    root_->applyYogaLayoutFromRoot();
-  }
+  showIrFeedback(text);
 }
 
 void ReplayRecordsModal::saveReplayPreferences() {
@@ -1951,9 +1941,14 @@ void ReplayRecordsModal::updateTitleReset() {
     return;
   }
   titleResetPending_ = false;
-  if (root_ != nullptr && root_->getVisible() && listContent_ != nullptr &&
-      listContent_->getVisible() && title_ != nullptr) {
-    title_->setLocalizedText(i18n::message("records.records.label"));
+  if (root_ != nullptr && root_->getVisible() && title_ != nullptr) {
+    const char *key = nullptr;
+    if (listContent_ && listContent_->getVisible()) key = "records.records.label";
+    else if (watchOptionsContent_ && watchOptionsContent_->getVisible()) key = "records.watch_options.label";
+    else if (exportOptionsContent_ && exportOptionsContent_->getVisible()) key = "records.export_options.label";
+    else if (filterSortContent_ && filterSortContent_->getVisible()) key = "records.filter_sort.label";
+    else if (deleteConfirmationContent_ && deleteConfirmationContent_->getVisible()) key = "records.confirm_replay_deletion.label";
+    if (key) title_->setLocalizedText(i18n::message(key));
     root_->applyYogaLayoutFromRoot();
   }
 }

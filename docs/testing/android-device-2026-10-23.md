@@ -195,3 +195,18 @@ Signed Android build/lint passed; version code **5** was reused as requested.
 After reinstalling on the connected phone and selecting an existing record,
 Watch, G-BATTLE, View Result and Export Video were all fully visible in two rows.
 No settings were changed for this check.
+
+The redundant status-message row was removed entirely, moving Share/Delete up
+and giving the records list 44 additional layout pixels. Status feedback uses
+the existing temporary title message instead. Existing modal layout, scrolling
+and rotation checks pass.
+
+The requested final layout uses a single row of four compact actions. Its footer
+is 72 pixels tall instead of 152, giving the list another 80 pixels. The rotation
+regression now checks one-row alignment, non-overlap and containment of all four
+actions at the existing portrait, landscape and narrow sizes.
+
+The final signed version-code-5 build and modal tests pass. Device inspection
+confirmed the removed status gap, one-row action captions, and four fully visible
+records instead of two. Temporary feedback now restores the active options-page
+title as well as the list title. Settings were unchanged.
