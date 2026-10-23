@@ -648,20 +648,51 @@ void testDropdownPreservesAllocatedWidthAcrossRefreshes() {
   }
 }
 
-void testNaturalDropdownRemainsVisibleInSettingsColumn() {
-  View root(0, 0, 440, 700);
-  root.setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignFlexStart);
-  auto *dropdown = new DropdownView({});
-  dropdown->refresh({.selectedId = "system",
-                     .options = {{.id = "system", .label = "System default"},
-                                 {.id = "en", .label = "English"}}});
-  root.addView(dropdown);
-  root.applyYogaLayout();
-  require(dropdown->getWidth() >= 160 && dropdown->getHeight() >= 42,
-          "natural settings dropdown retains a visible control area");
-  require(dropdown->triggerButton->getWidth() == dropdown->getWidth() &&
-              dropdown->triggerButton->getHeight() >= 42,
-          "natural settings dropdown trigger fills its control area");
+void testNaturalDropdownsRemainVisibleAcrossParentLayouts() {
+  bool allVisible = true;
+  for (const bool compact : {false, true}) {
+    rendering::compactMenuCanvasActive = compact;
+    for (int layout = 0; layout < 4; ++layout) {
+      // General settings: start-aligned column. Skin choices/safety: wrapping
+      // label rows. Also cover stretched columns and non-wrapping filter rows.
+      OverlayPortal portal;
+      View root(0, 0, layout == 3 ? 240 : 440, 700);
+      root.setFlexDirection(layout < 2 ? FlexDirection::Column : FlexDirection::Row);
+      root.setAlignItems(layout == 0 ? YGAlignFlexStart : layout == 1 ? YGAlignStretch : YGAlignCenter);
+      if (layout >= 2) {
+        root.setFlexWrap(layout == 3 ? YGWrapWrap : YGWrapNoWrap)->setGap(10);
+        auto *label = new View(0, 0, 120, 30);
+        label->setFlexShrink(0);
+        root.addView(label);
+      }
+      auto *dropdown = new DropdownView({}, layout == 2 ? nullptr : &portal);
+      dropdown->refresh({.selectedId = "system",
+                         .options = {{.id = "system", .label = "System default"},
+                                     {.id = "en", .label = "English"}}});
+      root.addView(dropdown);
+      root.applyYogaLayout();
+      const int height = compact ? rendering::compactTouchTarget : 42;
+      const bool visible = dropdown->getWidth() >= 160 &&
+          dropdown->triggerButton->getWidth() == dropdown->getWidth() &&
+          dropdown->triggerButton->getHeight() == height;
+      if (!visible) {
+        std::cerr << "collapsed dropdown: layout=" << layout << " compact=" << compact
+                  << " outer=" << dropdown->getWidth()
+                  << " trigger=" << dropdown->triggerButton->getWidth() << '\n';
+        allVisible = false;
+        continue;
+      }
+      click(*dropdown->triggerButton);
+      require(dropdown->current.open && dropdown->menuScroll->getVisible(),
+              "natural dropdowns open from their visible trigger");
+      click(*dropdown->optionButtons[1].button);
+      require(dropdown->current.selectedId == "en" && !dropdown->current.open,
+              "natural dropdown choices remain selectable");
+      View::dispatchDeferredEventCallbacks();
+    }
+  }
+  rendering::compactMenuCanvasActive = false;
+  require(allVisible, "natural dropdown triggers fill their controls in every parent layout");
 }
 
 void testDropdownFitsContentAndRevealsSelection() {
@@ -855,6 +886,11 @@ void testChartFilterRowsContainCompactDropdowns() {
                 require(control->getWidth() > 0 && control->getX() >= row->getX() &&
                             control->getX() + control->getWidth() <= row->getX() + row->getWidth(),
                         "narrow chart filter rows retain controls within the available width");
+                if (auto *dropdown = dynamic_cast<DropdownView *>(control)) {
+                  require(dropdown->triggerButton->getWidth() == dropdown->getWidth() &&
+                              dropdown->triggerButton->getHeight() == rowHeight,
+                          "chart filter triggers fill their visible dropdown bounds");
+                }
               }
             }
             int bottom = panel->getY();
@@ -894,7 +930,7 @@ int main() {
   require(bgfx::init(init), "headless bgfx initializes for panel resources");
 
   testDropdownPreservesAllocatedWidthAcrossRefreshes();
-  testNaturalDropdownRemainsVisibleInSettingsColumn();
+  testNaturalDropdownsRemainVisibleAcrossParentLayouts();
   testDropdownFitsContentAndRevealsSelection();
   testColorPickerPopup();
   testColorPickerColorSpace();
