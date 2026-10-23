@@ -9,6 +9,7 @@
 #include "../rendering/common.h"
 #include "../targets.h"
 #include "../view/Button.h"
+#include "../view/TabButtonStyle.h"
 #include "../view/MusicTrackRowView.h"
 #include "../library/GroupedChartListModel.h"
 #include "../view/CheckboxButtonContent.h"
@@ -2658,19 +2659,10 @@ void MusicPlayerScene::refreshUi() {
 }
 
 void MusicPlayerScene::refreshNavigation() {
-  const auto styleNav = [this](Button *button, TextView *text,
-                               MusicPlayerTab tab) {
-    if (button == nullptr) {
-      return;
-    }
-    const bool selected = activeTab == tab;
-    button->setThemedBackgroundColors(
-        selected ? main_menu_theme::action : main_menu_theme::control,
-        selected ? main_menu_theme::actionHover : main_menu_theme::hover,
-        selected ? main_menu_theme::actionPressed : main_menu_theme::pressed);
-    button->setStyledBorderWidth(0);
-    text->setThemedColor(selected ? main_menu_theme::onAction
-                                 : main_menu_theme::ink);
+  const auto safe = getSafeAreaInsetsUi();
+  const bool vertical = rendering::window_width - safe.left - safe.right >= 900;
+  const auto styleNav = [this, vertical](Button *button, TextView *, MusicPlayerTab tab) {
+    tab_button::style(button, activeTab == tab, vertical);
   };
   styleNav(libraryNavButton, libraryNavText, MusicPlayerTab::Library);
   styleNav(favoritesNavButton, favoritesNavText, MusicPlayerTab::Favorites);
@@ -4074,19 +4066,7 @@ void MusicPlayerScene::refreshClubModeControl() {
   }
   const bool enabled = context.musicPlayer.ClubMode();
   clubModeButtonContent->setChecked(enabled);
-  if (enabled) {
-    styleButton(clubModeButton, clubModeButtonContent->labelView(),
-                app_theme::primaryAction, app_theme::primaryActionHover,
-                app_theme::primaryActionPressed, app_theme::accentBorderStrong);
-    clubModeButtonContent->setThemedColor(
-        [] { return app_theme::textOn(app_theme::primaryAction()); });
-  } else {
-    styleButton(clubModeButton, clubModeButtonContent->labelView(),
-                app_theme::control, app_theme::controlHover,
-                app_theme::controlPressed, app_theme::hairlineStrong);
-    clubModeButtonContent->setThemedColor(
-        [] { return app_theme::textOn(app_theme::control()); });
-  }
+  toggle_button::style(clubModeButton, enabled);
 }
 
 void MusicPlayerScene::setSleepTimerFromInput() {
@@ -4189,13 +4169,7 @@ void MusicPlayerScene::refreshSystemPlaybackPrivacyButtons() {
       text->setText(i18n::format(visible ? "music_player.display_option.enabled" : "music_player.display_option.disabled",
                                  {{"name", label}}));
     }
-    if (button != nullptr) {
-      styleButton(
-          button, text, visible ? app_theme::successAction : app_theme::control,
-          visible ? app_theme::successActionHover : app_theme::controlHover,
-          visible ? app_theme::successActionPressed : app_theme::controlPressed,
-          visible ? app_theme::accentBorder : app_theme::hairlineStrong);
-    }
+    toggle_button::style(button, visible);
   };
   refreshToggle(systemPlaybackJacketButton, systemPlaybackJacketText, i18n::tr("music_player.jacket.label"),
                 context.settings.systemPlaybackShowJacket);

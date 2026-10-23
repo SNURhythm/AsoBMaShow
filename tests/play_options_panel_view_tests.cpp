@@ -1,5 +1,6 @@
 #include "view/Button.h"
 #include "view/ToggleButtonContent.h"
+#include "view/ClearLampColors.h"
 #if defined(__clang__)
 #pragma clang diagnostic push
 #pragma clang diagnostic ignored "-Wkeyword-macro"
@@ -977,6 +978,121 @@ std::vector<uint32_t> renderedChoiceColors(Button &button) {
   return backend.colors;
 }
 
+void requireToggleForeground(View *view, const Color &expected) {
+  if (auto *text = dynamic_cast<TextView *>(view)) {
+    const auto actual = text->currentColor();
+    require(actual.r == expected.r && actual.g == expected.g && actual.b == expected.b,
+            "toggle caption, state, and icon share a contrasting foreground");
+  }
+  for (auto *child : view->getChildren()) requireToggleForeground(child, expected);
+}
+
+void testToggleSemanticColorsAndGaugeBars() {
+  const auto originalTheme = app_theme::activeMode();
+  for (const auto theme : {app_theme::ThemeMode::Dark, app_theme::ThemeMode::Light}) {
+    app_theme::setActiveMode(theme);
+    View root(0, 0, 640, 2600);
+    auto *panel = new PlayOptionsPanelView({}, {.width = 640}, nullptr);
+    root.addView(panel);
+    auto *choice = new ChoiceControlView({}, nullptr, 18, 0, true);
+    root.addView(choice);
+    for (const bool active : {false, true, false}) {
+      PlayOptionsPanelState state;
+      state.clubMode = active;
+      state.gaugeAutoShift = GaugeAutoShiftMode::BestClear;
+      state.laneCovers.laneCoverEnabled = active;
+      panel->refresh(state);
+      choice->refresh({.selectedId = active ? "on" : "off",
+          .options = {{.id = "off", .label = "Off"}, {.id = "on", .label = "On"}}});
+      root.applyYogaLayout();
+      for (const char *name : {"club-mode", "lane-cover-sudden", "choice-cycle"}) {
+        auto *button = dynamic_cast<Button *>((std::string_view(name) == "choice-cycle" ? choice : static_cast<View *>(panel))->findViewByName(name));
+        require(button && button->isSelected() == active,
+                "all toggles mark the active state consistently with Club Beat");
+        require(button->getHeight() >= 48, "toggle remains a usable target in a vertical panel");
+        const auto surface = active ? app_theme::primaryAction() : app_theme::control();
+        const auto colors = renderedChoiceColors(*button);
+        require(std::ranges::find(colors, surface.toABGR()) != colors.end(),
+                "all toggles use the Club Beat active or inactive surface");
+        requireToggleForeground(button->getContentView(), active
+            ? app_theme::textOn(app_theme::primaryAction()) : app_theme::textPrimary());
+      }
+    }
+    for (const char *name : {"gauge-choice", "gauge-lower-bound-choice", "gauge-auto-shift-choice"}) {
+      auto *control = panel->findViewByName(name);
+      auto *dropdown = dynamic_cast<DropdownView *>(control->findViewByName("choice-dropdown"));
+      for (const auto &option : dropdown->current.options)
+        require(option.leadingColor.has_value(), "every gauge-related option supplies a color bar");
+      require(dropdown->triggerIndicator->getVisible(), "selected gauge color appears on the trigger");
+      dropdown->setOpen(true);
+      for (const auto &option : dropdown->optionButtons)
+        require(option.indicator->getVisible(), "gauge popup rows retain their color bars");
+      dropdown->setOpen(false);
+    }
+    auto *gauge = dynamic_cast<DropdownView *>(panel->findViewByName("gauge-choice")->findViewByName("choice-dropdown"));
+    for (const auto type : {GaugeType::AssistedEasy, GaugeType::Easy, GaugeType::Normal,
+                           GaugeType::Hard, GaugeType::ExHard, GaugeType::Hazard}) {
+      panel->refresh({.gaugeType = type});
+      const auto selected = std::ranges::find_if(gauge->current.options, [&](const auto &option) {
+        return option.id == gauge->current.selectedId;
+      });
+      require(selected != gauge->current.options.end() && selected->leadingColor &&
+                  selected->leadingColor->toABGR() == clearLampColorForRank(gaugeTypeToClearRank(type)).toABGR(),
+              "gauge bars reuse the established clear-lamp palette");
+    }
+  }
+  app_theme::setActiveMode(originalTheme);
+}
+
+void testTabsStayDistinctFromSettingChoices() {
+  const auto originalTheme = app_theme::activeMode();
+  for (const auto theme : {app_theme::ThemeMode::Dark, app_theme::ThemeMode::Light}) {
+    app_theme::setActiveMode(theme);
+    for (const bool fitContent : {false, true}) {
+      View root(0, 0, 400, 160);
+      auto *label = new TextView(app_theme::font, 18);
+      label->setText("Settings tab");
+      auto *button = settings_scene::makeAccentButton(fitContent ? settings_scene::kFitContentWidth : 240,
+          66, label, app_theme::cyan());
+      button->setWidth(240);
+      root.addView(button);
+      int activations = 0;
+      button->setOnClickListener([&] { ++activations; });
+      for (const int step : {0, 1, 2, 3}) {
+        const bool active = step % 2 == 1;
+        // Reuse the same button across a responsive rail/underline transition.
+        const bool vertical = step < 2;
+        tab_button::style(button, active, vertical);
+        root.applyYogaLayout();
+        auto *indicator = button->findViewByName("tab-active-indicator");
+        require(indicator && indicator->getVisible() == active,
+                "tab indicator follows selection without rebuilding content");
+        require(button->getChildren().size() == (fitContent ? 2 : 1),
+                "refreshing a tab reuses its single selection indicator");
+        require(indicator->getX() >= button->getX() && indicator->getY() >= button->getY() &&
+                    indicator->getX() + indicator->getWidth() <= button->getX() + button->getWidth() &&
+                    indicator->getY() + indicator->getHeight() <= button->getY() + button->getHeight(),
+                "tab indicator stays inside the control");
+        require(vertical ? indicator->getWidth() == 3 && indicator->getHeight() == 50
+                         : indicator->getHeight() == 3 && indicator->getWidth() == 224,
+                "vertical tabs have a rail and horizontal tabs have an underline");
+        requireToggleForeground(label, active
+            ? app_theme::textPrimary() : app_theme::textSecondary());
+        if (active) {
+          const auto colors = renderedChoiceColors(*button);
+          require(std::ranges::find(colors, app_theme::accentBorderStrong().toABGR()) != colors.end(),
+                  "the active navigation indicator is rendered");
+          require(std::ranges::find(colors, app_theme::primaryAction().toABGR()) == colors.end(),
+                  "tabs do not use the filled primary surface of setting choices");
+        }
+      }
+      click(*button);
+      require(activations == 1, "tab decorations preserve activation");
+    }
+  }
+  app_theme::setActiveMode(originalTheme);
+}
+
 void testDisabledChoicesKeepMutedSelectionVisible() {
   const auto originalMode = ui_theme::activeMode();
   for (const auto mode : {ui_theme::ThemeMode::Dark, ui_theme::ThemeMode::Light}) {
@@ -1077,6 +1193,9 @@ void testDropdownFitsContentAndRevealsSelection() {
         dropdown.setOpen(true);
       }
       View::dispatchDeferredEventCallbacks();
+      for (const auto &item : dropdown.optionButtons)
+        require(item.button->getHeight() >= rendering::compactTouchTarget,
+                "dropdown entries have comfortable default touch targets");
       auto *menu = dropdown.menuScroll;
       auto *last = dropdown.optionButtons.back().button;
       require(menu->getY() >= 10 && menu->getY() + menu->getHeight() <= 890,
@@ -1295,6 +1414,8 @@ int main() {
   testNaturalDropdownsRemainVisibleAcrossParentLayouts();
   testSettingsChoicePresentationAndSelection();
   testLocalizedFlickTapModesUseDirectSelection();
+  testToggleSemanticColorsAndGaugeBars();
+  testTabsStayDistinctFromSettingChoices();
   testDisabledChoicesKeepMutedSelectionVisible();
   testSavedBgaNoExpandCanSelectFit();
   testDropdownFitsContentAndRevealsSelection();

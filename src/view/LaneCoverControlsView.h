@@ -82,7 +82,7 @@ public:
     for (std::size_t i = 0; i < controls_.size(); ++i) {
       auto &control = controls_[i];
       control.content->setChecked(enabled(i));
-      control.button->setSelected(enabled(i));
+      toggle_button::style(control.button, enabled(i));
       const int value = static_cast<int>(std::lround(std::clamp(amounts[i], 0.0F, 1000.0F)));
       control.slider->refresh({.minimum = 0, .maximum = 1000, .step = 1, .value = value});
       control.number->setText(std::to_string(value));

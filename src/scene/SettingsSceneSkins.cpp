@@ -1084,7 +1084,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
         .action = [setToolbarHidden] { setToolbarHidden(false); }},
        {.label = i18n::message("settings.skins.hidden.label"),
         .selected = toolbarMode == MusicSelectToolbarMode::Hidden,
-        .action = [setToolbarHidden] { setToolbarHidden(true); }}}, true));
+        .action = [setToolbarHidden] { setToolbarHidden(true); }}}, true, 0));
   // Typed path (advanced fallback on every platform) because desktop has no
   // gate-less picker; empty keeps the bundled assets fallback. Resolution
   // happens live in MusicSelectScene.
@@ -1290,20 +1290,10 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   traitTabs->setFlexShrink(0.0f);
   for (const auto &trait : traits) {
     const bool active = trait.skinType == gameplaySkinActiveTraitSkinType;
-    auto *tab = active
-                    ? makeAccentButton(
-                          traitTabWidth, metrics.actionButtonHeight,
-                          makeText(std::string(trait.label),
-                                   metrics.smallTextSize,
-                                   app_theme::textPrimary(), TextView::CENTER,
-                                   TextView::MIDDLE),
-                          app_theme::cyan())
-                    : makeControlButton(
-                          traitTabWidth, metrics.actionButtonHeight,
-                          makeText(std::string(trait.label),
-                                   metrics.smallTextSize,
-                                   app_theme::textPrimary(), TextView::CENTER,
-                                   TextView::MIDDLE));
+    auto *tab = makeControlButton(traitTabWidth, metrics.actionButtonHeight,
+        makeText(std::string(trait.label), metrics.smallTextSize,
+                 app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+    tab_button::style(tab, active, true);
     tab->setOnClickListener([this, skinType = trait.skinType]() {
       if (gameplaySkinActiveTraitSkinType == skinType) {
         return;

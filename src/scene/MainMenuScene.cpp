@@ -1,3 +1,4 @@
+#include "../view/TabButtonStyle.h"
 #include "../rendering/ResponsiveUi.h"
 #include "../GameplayKeyMode.h"
 #include "../platform/SDLMainThread.h"
@@ -902,9 +903,7 @@ void MainMenuScene::refreshTabPresentation() {
   const std::array<const char *, 4> labels{"PLAY", "COURSE", "MUSIC", "IR"};
   for (size_t index = 0; index < labels.size(); ++index) {
     auto *button = static_cast<Button *>(rootLayout->findViewByName(std::string("mainMenuTab:") + labels[index]));
-    auto *label = dynamic_cast<TextView *>(button->getContentView()->findViewByName("selectorButtonLabel"));
-    styleMenuButton(button, label, index == static_cast<size_t>(activeTab_));
-    button->setStyledBorderWidth(0);
+    tab_button::style(button, index == static_cast<size_t>(activeTab_));
   }
   const float inset = getSafeAreaInsetsUi().top +
       kMenuHeaderHeight * (rendering::window_width < 1000 ? 2 : 1);

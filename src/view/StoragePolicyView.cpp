@@ -259,6 +259,7 @@ void StoragePolicyView::Refresh() {
   const bool compressing = policy_.bga == BgaAction::CompressH264;
   efficientVideoButton_->setEnabled(enabled_ && compressing);
   efficientVideoContent_->setChecked(policy_.reencodeEfficientVideo);
+  toggle_button::style(efficientVideoButton_, policy_.reencodeEfficientVideo);
   const int codec = static_cast<int>(policy_.videoCodec);
   const bool available = capabilitiesReady_ && codec >= 0 && codec < 3 &&
       capabilities_[codec].available && capabilities_[codec].playbackAvailable;

@@ -1,8 +1,38 @@
 #pragma once
 
 #include "AppTheme.h"
+#include "Button.h"
 #include "IconText.h"
 #include "TextView.h"
+
+namespace toggle_button {
+inline void setForeground(View *content, const View::ThemeColorProvider &color) {
+  if (!content) return;
+  if (auto *text = dynamic_cast<TextView *>(content)) text->setThemedColor(color);
+  for (auto *child : content->getChildren()) setForeground(child, color);
+}
+
+// Club Beat's active/neutral palette, shared by named and current-value toggles.
+inline void style(Button *button, bool active) {
+  if (!button) return;
+  const bool enabled = button->isEnabled();
+  button->setSelected(active);
+  button->setCornerRadius(app_theme::controlRadius());
+  button->setStyledBorderWidth(1);
+  const View::ThemeColorProvider normal = !enabled ? app_theme::panelSubtle
+      : active ? app_theme::primaryAction : app_theme::control;
+  button->setThemedBackgroundColors(normal,
+      !enabled ? normal : active ? app_theme::primaryActionHover : app_theme::controlHover,
+      !enabled ? normal : active ? app_theme::primaryActionPressed : app_theme::controlPressed);
+  button->setThemedBorderColors(active ? app_theme::accentBorderStrong : app_theme::hairlineSubtle,
+      active ? app_theme::accentBorderStrong : app_theme::hairlineStrong, app_theme::accentBorder);
+  const View::ThemeColorProvider foreground = !enabled ? app_theme::textMuted
+      : active ? View::ThemeColorProvider{[] { return app_theme::textOn(app_theme::primaryAction()); }}
+               : View::ThemeColorProvider{app_theme::textPrimary};
+  setForeground(button->getContentView(), foreground);
+  for (auto *child : button->getChildren()) setForeground(child, foreground);
+}
+} // namespace toggle_button
 
 namespace cycle_button {
 inline View *makeContent(TextView *value) {
@@ -13,7 +43,8 @@ inline View *makeContent(TextView *value) {
   icon->setText(ui_icons::textForCodepoint(ui_icons::kRotate));
   icon->setWidth(20)->setHeight(24)->setFlexShrink(0);
   icon->setVAlign(TextView::MIDDLE);
-  icon->setThemedColor(app_theme::textSecondary);
+  icon->setThemedColor(app_theme::textPrimary);
+  icon->setName("cycle-icon");
   content->addView(icon);
   value->setFlex(1)->setMinWidth(0);
   YGNodeStyleSetHeightPercent(value->getNode(), 100);

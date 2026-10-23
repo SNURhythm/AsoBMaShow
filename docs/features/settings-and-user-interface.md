@@ -118,12 +118,20 @@ values use a slider or editable numeric control rather than this rule.
 - A cycling button displays the **current** state and a visible cycle
   affordance. One activation switches to the other state; the next switches
   back. Users must be able to distinguish it from an action button or a
-  dropdown that opens a list.
+  dropdown that opens a list. Use the Club Beat palette consistently: active
+  (On/Show) uses the primary accent, inactive (Off/Hide) uses the neutral control
+  surface. Captions and cycle icons share a contrasting foreground in both
+  themes; disabled toggles use muted text.
+- Navigation tabs use transparent surfaces with an accent underline (or a left
+  indicator for vertical navigation), keeping them distinct from filled setting
+  choice buttons.
 - A dropdown displays the current value and a disclosure indicator. Opening
   it does not change the setting. Indicate the selected option in the list;
   commit only the chosen option, and retain the previous value if applying it
   fails. Preserve an unavailable saved value visibly rather than silently
-  substituting another choice.
+  substituting another choice. Menu rows use the 66-unit touch target in both
+  wide and compact layouts. Gauge options show leading color bars using the
+  clear-lamp palette, including the selected trigger.
 - Keep the same labels, option order, selected value, and meaning wherever a
   setting appears. If a compact surface needs a different control, preserve
   those semantics. Use the same cycling-button convention for toggles across

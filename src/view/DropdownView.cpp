@@ -17,7 +17,8 @@ namespace {
 constexpr uint32_t kIconCaretUp = 0xf0d8;
 constexpr uint32_t kIconCaretDown = 0xf0d7;
 float triggerHeight() { return rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 42.0f; }
-float optionHeight() { return rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 38.0f; }
+// Keep menu entries comfortable for touch in both wide and compact layouts.
+float optionHeight() { return rendering::compactTouchTarget; }
 constexpr float kMenuPadding = 4.0f;
 constexpr float kOptionGap = 4.0f;
 constexpr float kMenuBorder = 1.0f;

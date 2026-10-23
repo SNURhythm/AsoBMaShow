@@ -720,6 +720,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
                  metrics.bodyTextSize + 1, app_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE),
         virtualControllerConfig.enabled ? app_theme::cyan() : app_theme::coral(), true);
+    toggle_button::style(virtualControllerToggle, virtualControllerConfig.enabled);
     virtualControllerToggle->setOnClickListener(
         [this, controllerKeyMode, virtualControllerConfig]() {
           auto next = virtualControllerConfig;
@@ -736,6 +737,7 @@ View *SettingsScene::buildInputTab(const LayoutMetrics &metrics) {
                          : i18n::message("settings.input.virtual_scratch_off.label"),
                      metrics.bodyTextSize + 1, app_theme::textPrimary(),
                      TextView::CENTER, TextView::MIDDLE), true);
+        toggle_button::style(scratchToggle, virtualControllerConfig.scratchEnabled);
         scratchToggle->setOnClickListener([this, controllerKeyMode, virtualControllerConfig]() {
           auto next = virtualControllerConfig;
           next.scratchEnabled = !next.scratchEnabled;

@@ -478,14 +478,14 @@ View *SettingsScene::buildPreviewScrollControls(const LayoutMetrics &metrics) {
     toggle->setCornerRadius(app_theme::controlRadius());
     toggle->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
     toggle->setContentView(content);
-    toggle->setSelected(enabled);
+    toggle_button::style(toggle, enabled);
     toggle->setOnClickListener([this, index, toggle, content]() {
       auto value = context.settings.presentation().laneCoverState();
       bool &enabled = index == 0 ? value.laneCoverEnabled
           : index == 1 ? value.hiddenEnabled : value.liftEnabled;
       enabled = !enabled;
       content->setChecked(enabled);
-      toggle->setSelected(enabled);
+      toggle_button::style(toggle, enabled);
       context.settings.presentation().setLaneCoverState(value);
       persistSettings();
     });
@@ -680,6 +680,7 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
         ? makeAccentButton(playbackToggleWidth, metrics.actionButtonHeight, label, app_theme::cyan(), true)
         : makeControlButton(playbackToggleWidth, metrics.actionButtonHeight, label, true);
     button->setEnabled(enabled);
+    toggle_button::style(button, selected);
     button->setOnClickListener([this, action = std::move(action)]() {
       action();
       resetPreviewSimulation();
@@ -732,12 +733,8 @@ void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
     auto *labelText =
         makeText(label, metrics.bodyTextSize + 2, app_theme::textPrimary(),
                  TextView::CENTER, TextView::MIDDLE);
-    auto *button =
-        previewPanelPage == page
-            ? makeAccentButton(previewTabWidth, metrics.actionButtonHeight,
-                               labelText, app_theme::cyan())
-            : makeControlButton(previewTabWidth, metrics.actionButtonHeight,
-                                labelText);
+    auto *button = makeControlButton(previewTabWidth, metrics.actionButtonHeight, labelText);
+    tab_button::style(button, previewPanelPage == page);
     button->setOnClickListener([this, page]() {
       if (previewPanelPage == page) {
         return;
@@ -859,13 +856,14 @@ View *SettingsScene::buildScratchLanePositionControl(const LayoutMetrics &metric
   row->addView(label);
   auto *value = makeText("", metrics.bodyTextSize, app_theme::textPrimary(),
                          TextView::CENTER, TextView::MIDDLE);
-  const auto refresh = [this, value]() {
+  auto *toggle = makeControlButton(metrics.compact ? 132 : 156,
+                                   metrics.actionButtonHeight, value, true);
+  const auto refresh = [this, value, toggle]() {
+    toggle_button::style(toggle, context.settings.presentation().scratchLaneOnRight);
     value->setLocalizedText(i18n::message(context.settings.presentation().scratchLaneOnRight
         ? "settings.skins.right.label" : "settings.skins.left.label"));
   };
   refresh();
-  auto *toggle = makeControlButton(metrics.compact ? 132 : 156,
-                                   metrics.actionButtonHeight, value, true);
   toggle->setOnClickListener([this, refresh]() {
     auto &enabled = context.settings.presentation().scratchLaneOnRight;
     enabled = !enabled;
@@ -1045,13 +1043,14 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
     });
     auto *weightText = makeText("", metrics.bodyTextSize, app_theme::textPrimary(),
                                 TextView::CENTER, TextView::MIDDLE);
-    const auto refreshWeight = [this, weightText, boldMember]() {
+    auto *weight = makeControlButton(metrics.compact ? 132 : 156,
+                                     metrics.actionButtonHeight, weightText, true);
+    const auto refreshWeight = [this, weight, weightText, boldMember]() {
+      toggle_button::style(weight, context.settings.presentation().*boldMember);
       weightText->setLocalizedText(i18n::message(context.settings.presentation().*boldMember
           ? "settings.skins.feedback.bold.label" : "settings.skins.feedback.regular.label"));
     };
     refreshWeight();
-    auto *weight = makeControlButton(metrics.compact ? 132 : 156,
-                                     metrics.actionButtonHeight, weightText, true);
     weight->setOnClickListener([this, boldMember, refreshWeight]() {
       auto &bold = context.settings.presentation().*boldMember;
       bold = !bold;
@@ -1095,6 +1094,7 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
       metrics.bodyTextSize, app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
   auto *separationToggle = makeControlButton(metrics.compact ? 132 : 156,
                                               metrics.actionButtonHeight, separationText, true);
+  toggle_button::style(separationToggle, context.settings.presentation().judgementComboSeparated);
   separationToggle->setOnClickListener([this]() {
     auto &separated = context.settings.presentation().judgementComboSeparated;
     separated = !separated;
@@ -2829,7 +2829,7 @@ void styleGameplaySkinChoiceButton(Button *button, bool selected) {
 
 View *makeGameplaySkinChoiceRow(
     const LayoutMetrics &metrics, OverlayPortal *portal, const i18n::Text &label, bool enabled,
-    std::vector<GameplaySkinChoiceButton> choices, bool oppositeStates) {
+    std::vector<GameplaySkinChoiceButton> choices, bool oppositeStates, size_t activeChoice) {
   auto *row = new View();
   row->setFlexDirection(FlexDirection::Column);
   row->setWidthPercent(100);
@@ -2857,7 +2857,7 @@ View *makeGameplaySkinChoiceRow(
         if (choice.tryAction) return choice.tryAction();
         if (choice.action) choice.action();
         return true;
-      }, portal, metrics.smallTextSize, metrics.actionButtonHeight, oppositeStates);
+      }, portal, metrics.smallTextSize, metrics.actionButtonHeight, oppositeStates, std::to_string(activeChoice));
   control->refresh({.selectedId = selected, .options = std::move(options), .enabled = enabled});
   row->addView(control);
   return row;

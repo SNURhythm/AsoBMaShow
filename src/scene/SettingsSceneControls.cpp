@@ -146,9 +146,8 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
     auto *text = makeText(label, metrics.smallTextSize, app_theme::textPrimary(),
                           TextView::CENTER, TextView::MIDDLE);
     const int width = std::max(metrics.compact ? 96 : 116, text->textureWidth() + 32);
-    auto *button = builtInSkinTab == page
-        ? makeAccentButton(width, metrics.actionButtonHeight, text, app_theme::cyan())
-        : makeControlButton(width, metrics.actionButtonHeight, text);
+    auto *button = makeControlButton(width, metrics.actionButtonHeight, text);
+    tab_button::style(button, builtInSkinTab == page);
     button->setOnClickListener([this, page]() {
       if (builtInSkinTab == page) return;
       builtInSkinTab = page;
@@ -269,12 +268,14 @@ void SettingsScene::appendScratchlessModeSettings(
       button->setContentView(content);
       button->setWidthPercent(100)->setMinWidth(0);
       button->setEnabled(enabled);
-      button->setOnClickListener([this, keyMode, url = table.sourceUrl, content]() {
+      toggle_button::style(button, content->checked());
+      button->setOnClickListener([this, keyMode, url = table.sourceUrl, button, content]() {
         auto &urls = context.settings.scratchlessForKeyMode(keyMode).tableUrls;
         const auto found = std::ranges::find(urls, url);
         if (found == urls.end()) urls.push_back(url);
         else urls.erase(found);
         content->setChecked(std::ranges::find(urls, url) != urls.end());
+        toggle_button::style(button, content->checked());
         persistSettings();
       });
       scratchlessControls->addView(button);
@@ -495,9 +496,8 @@ void applySemanticButtonStyle(Button *button, TextView *text,
 }
 } // namespace
 
-void SettingsScene::styleVisibilityButton(Button *button, TextView *text, bool visible) {
-  applySemanticButtonStyle(button, text,
-      visible ? SettingsButtonTone::Success : SettingsButtonTone::Danger);
+void SettingsScene::styleVisibilityButton(Button *button, TextView *, bool visible) {
+  toggle_button::style(button, visible);
 }
 
 void SettingsScene::refreshSettingsText(bool syncInputs) {
@@ -767,62 +767,28 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
                            context.settings.inputKeysoundEnabled
                                ? SettingsButtonTone::Info
                                : SettingsButtonTone::Warning);
-  applySemanticButtonStyle(prepMetronomeModeButton, prepMetronomeModeText,
-                           context.settings.prepMetronomeEnabled
-                               ? SettingsButtonTone::Success
-                               : SettingsButtonTone::Info);
+  toggle_button::style(prepMetronomeModeButton, context.settings.prepMetronomeEnabled);
   applySemanticButtonStyle(notePriorityModeButton, notePriorityModeText,
                            context.settings.notePriorityMode ==
                                    AppSettings::NotePriorityMode::Lowest
                                ? SettingsButtonTone::Info
                                : SettingsButtonTone::Success);
-  applySemanticButtonStyle(
-      showInvisibleNotesModeButton, showInvisibleNotesModeText,
-      context.settings.showInvisibleNotes ? SettingsButtonTone::Success
-                                          : SettingsButtonTone::Info);
-  applySemanticButtonStyle(
-      markProcessedNotesModeButton, markProcessedNotesModeText,
-      context.settings.markProcessedNotes ? SettingsButtonTone::Success
-                                           : SettingsButtonTone::Info);
-  applySemanticButtonStyle(
-      ipadGestureReminderModeButton, ipadGestureReminderModeText,
-      context.settings.ipadGestureReminderEnabled ? SettingsButtonTone::Success
-                                                  : SettingsButtonTone::Info);
-  applySemanticButtonStyle(
-      startLaneIndicatorsModeButton, startLaneIndicatorsModeText,
-      context.settings.startLaneIndicatorsEnabled ? SettingsButtonTone::Success
-                                                  : SettingsButtonTone::Info);
-  applySemanticButtonStyle(
-      touchVisualizationModeButton, touchVisualizationModeText,
-      context.settings.touchVisualizationEnabled ? SettingsButtonTone::Success
-                                                 : SettingsButtonTone::Info);
-  applySemanticButtonStyle(
-      hispeedAutoAdjustModeButton, hispeedAutoAdjustModeText,
-      context.settings.hispeedAutoAdjust ? SettingsButtonTone::Success
-                                          : SettingsButtonTone::Info);
-  applySemanticButtonStyle(
-      archiveChartPreviewModeButton, archiveChartPreviewModeText,
-      context.settings.archiveChartPreviewEnabled ? SettingsButtonTone::Success
-                                                  : SettingsButtonTone::Danger);
-  applySemanticButtonStyle(
-      findBmsSkipUnarchivingModeButton, findBmsSkipUnarchivingModeText,
-      context.settings.findBmsSkipUnarchivingForNonSolidArchives
-          ? SettingsButtonTone::Success
-          : SettingsButtonTone::Info);
-  applySemanticButtonStyle(
-      judgementIndicatorModeButton, judgementIndicatorModeText,
-      context.settings.presentation().judgementIndicatorEnabled ? SettingsButtonTone::Success
-                                                 : SettingsButtonTone::Danger);
+  toggle_button::style(showInvisibleNotesModeButton, context.settings.showInvisibleNotes);
+  toggle_button::style(markProcessedNotesModeButton, context.settings.markProcessedNotes);
+  toggle_button::style(ipadGestureReminderModeButton, context.settings.ipadGestureReminderEnabled);
+  toggle_button::style(startLaneIndicatorsModeButton, context.settings.startLaneIndicatorsEnabled);
+  toggle_button::style(touchVisualizationModeButton, context.settings.touchVisualizationEnabled);
+  toggle_button::style(hispeedAutoAdjustModeButton, context.settings.hispeedAutoAdjust);
+  toggle_button::style(archiveChartPreviewModeButton, context.settings.archiveChartPreviewEnabled);
+  toggle_button::style(findBmsSkipUnarchivingModeButton, context.settings.findBmsSkipUnarchivingForNonSolidArchives);
+  toggle_button::style(judgementIndicatorModeButton, context.settings.presentation().judgementIndicatorEnabled);
   applySemanticButtonStyle(
       judgementIndicatorRenderModeButton, judgementIndicatorRenderModeText,
       context.settings.presentation().judgementIndicatorRenderMode ==
               AppSettings::JudgementIndicatorRenderMode::Hud2D
           ? SettingsButtonTone::Success
           : SettingsButtonTone::Info);
-  applySemanticButtonStyle(judgementCounterModeButton, judgementCounterModeText,
-                           context.settings.presentation().judgementCounterEnabled
-                               ? SettingsButtonTone::Success
-                               : SettingsButtonTone::Danger);
+  toggle_button::style(judgementCounterModeButton, context.settings.presentation().judgementCounterEnabled);
   SettingsButtonTone judgementCounterPositionTone = SettingsButtonTone::Neutral;
   if (context.settings.presentation().judgementCounterEnabled) {
     judgementCounterPositionTone =
@@ -866,32 +832,11 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
                                    AppSettings::GaugeBarPosition::World
                                ? SettingsButtonTone::Info
                                : SettingsButtonTone::Success);
-  applySemanticButtonStyle(bgaModeButton, bgaModeText,
-                           context.settings.bgaEnabled
-                               ? SettingsButtonTone::Success
-                               : SettingsButtonTone::Danger);
-  applySemanticButtonStyle(uiThemeModeButton, uiThemeModeText,
-                           context.settings.uiThemeMode ==
-                                   AppSettings::UiThemeMode::Dark
-                               ? SettingsButtonTone::Violet
-                               : SettingsButtonTone::Warning);
+  toggle_button::style(bgaModeButton, context.settings.bgaEnabled);
+  toggle_button::style(uiThemeModeButton, context.settings.uiThemeMode == AppSettings::UiThemeMode::Dark);
 
-  auto applyTabStyle = [this](Button *button, TextView *text, SettingsTab tab) {
-    if (button == nullptr) {
-      return;
-    }
-    if (activeTab == tab) {
-      applySemanticButtonStyle(button, text, SettingsButtonTone::Primary);
-    } else {
-      applySemanticButtonStyle(button, text, SettingsButtonTone::Neutral);
-      button->setThemedBackgroundColors(
-          [] { return Color(0, 0, 0, 0); }, app_theme::controlHover,
-          app_theme::controlPressed);
-    }
-    action_button::setIconColor(button, activeTab == tab
-        ? View::ThemeColorProvider([] { return app_theme::textOn(app_theme::primaryAction()); })
-        : View::ThemeColorProvider(app_theme::textSecondary));
-    button->setStyledBorderWidth(0);
+  auto applyTabStyle = [this](Button *button, TextView *, SettingsTab tab) {
+    tab_button::style(button, activeTab == tab, true);
   };
   applyTabStyle(profileTabButton, profileTabText, SettingsTab::Profile);
   applyTabStyle(timingTabButton, timingTabText, SettingsTab::Timing);

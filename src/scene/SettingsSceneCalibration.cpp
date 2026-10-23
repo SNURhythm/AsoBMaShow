@@ -286,9 +286,11 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
     button->setCornerRadius(app_theme::controlRadius());
     button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
     button->addView(content);
-    button->setOnClickListener([this, value = &enabled, content, restartAudio] {
+    toggle_button::style(button, enabled);
+    button->setOnClickListener([this, value = &enabled, button, content, restartAudio] {
       *value = !*value;
       content->setChecked(*value);
+      toggle_button::style(button, *value);
       if (calibrationDisplay && value == &calibrationNotesHidden) {
         calibrationMeasuring = false;
         calibrationSamples.reset();
@@ -414,6 +416,7 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
           if (scrollView) scrollView->setScrollOffset(0);
           lastLayoutWidth = -1;
         }, calibrationScrollSettings == scrollSettings);
+    tab_button::style(tab, calibrationScrollSettings == scrollSettings);
     tab->setFlexGrow(1);
     tab->setFlexBasis(0);
   }

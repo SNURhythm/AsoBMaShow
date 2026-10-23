@@ -5,6 +5,7 @@
 #include "DropdownView.h"
 #include "IconText.h"
 #include "TextView.h"
+#include "ToggleButtonContent.h"
 #include "../rendering/ResponsiveUi.h"
 
 // Static settings choices. Only opposing states opt into cycling.
@@ -13,8 +14,8 @@ class ChoiceControlView final : public View {
 public:
   using Select = std::function<bool(const std::string &)>;
   explicit ChoiceControlView(Select select, OverlayPortal *portal = nullptr,
-                             int fontSize = 18, float height = 0, bool oppositeStates = false)
-      : select_(std::move(select)), fontSize_(fontSize), height_(height), oppositeStates_(oppositeStates) {
+                             int fontSize = 18, float height = 0, bool oppositeStates = false, std::string activeStateId = {})
+      : select_(std::move(select)), fontSize_(fontSize), height_(height), oppositeStates_(oppositeStates), activeStateId_(std::move(activeStateId)) {
     View::LayoutBatchScope batch;
     setWidthPercent(100)->setMinWidth(0)->setFlexShrink(0);
     setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch);
@@ -103,6 +104,7 @@ private:
   int fontSize_;
   float height_;
   bool oppositeStates_;
+  std::string activeStateId_;
   bool needsUpdate_ = true, lastCompact_ = false;
   float lastWidth_ = -1;
   Button *cycle_ = nullptr;
@@ -171,7 +173,9 @@ private:
       show(buttons_, buttons);
       show(dropdown_, menu);
       cycle_->setEnabled(state_.enabled);
-      style(cycle_, cycleText_, false, state_.enabled);
+      const auto activeId = activeStateId_.empty() && !state_.options.empty()
+          ? state_.options.back().id : activeStateId_;
+      toggle_button::style(cycle_, state_.selectedId == activeId);
       for (const auto &option : state_.options) if (option.id == state_.selectedId) {
         const auto label = state_.label.resolve();
         cycleText_->setText(label.empty() ? option.label.resolve() : label + ": " + option.label.resolve());

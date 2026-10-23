@@ -9,6 +9,7 @@
 #include "ActionButtonContent.h"
 #include "ToggleButtonContent.h"
 #include "ChoiceControlView.h"
+#include "ClearLampColors.h"
 #include "DropdownView.h"
 #include "OverlayPortal.h"
 #include "PlayOptionSectionView.h"
@@ -64,9 +65,7 @@ View *makeRow(float height = 48.0f) {
 
 Button *makeButton(const i18n::Text &label, int fontSize, TextView **textOut) {
   auto *button = new Button(0, 0, 0, rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 48);
-  button->setFlexGrow(1.0f);
-  button->setFlexBasis(rendering::compactMenuCanvasActive ? 120.0f : 0.0f);
-  button->setFlexShrink(1.0f);
+  button->setFlexShrink(0.0f);
   button->setCornerRadius(app_theme::controlRadius());
   button->setStyledBorderWidth(1);
   button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
@@ -85,38 +84,6 @@ Button *makeButton(const i18n::Text &label, int fontSize, TextView **textOut) {
     *textOut = text;
   }
   return button;
-}
-
-void styleButton(Button *button, TextView *text, bool selected, bool enabled) {
-  if (button == nullptr || text == nullptr) {
-    return;
-  }
-  button->setEnabled(enabled);
-  button->setSelected(selected);
-  if (selected) {
-    button->setThemedBackgroundColors(app_theme::primaryAction,
-                                      app_theme::primaryActionHover,
-                                      app_theme::primaryActionPressed);
-    button->setThemedBorderColors(app_theme::accentBorderStrong,
-                                  app_theme::accentBorderStrong,
-                                  app_theme::accentBorderStrong);
-    text->setThemedColor(
-        [] { return app_theme::textOn(app_theme::primaryAction()); });
-  } else if (!enabled) {
-    button->setThemedBackgroundColors(
-        app_theme::panelSubtle, app_theme::panelSubtle, app_theme::panelSubtle);
-    button->setThemedBorderColors(app_theme::hairlineSubtle,
-                                  app_theme::hairlineSubtle,
-                                  app_theme::hairlineSubtle);
-    text->setThemedColor(app_theme::textMuted);
-  } else {
-    button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
-                                      app_theme::controlPressed);
-    button->setThemedBorderColors(app_theme::hairlineSubtle,
-                                  app_theme::hairlineStrong,
-                                  app_theme::accentBorder);
-    text->setThemedColor(app_theme::textPrimary);
-  }
 }
 
 std::string gaugeLabel(GaugeType type, GaugeAutoShiftMode autoShift) {
@@ -153,11 +120,13 @@ std::vector<DropdownView::Option> gaugeOptions(GaugeType selected) {
   std::vector<DropdownView::Option> options;
   for (const auto type : kGaugeTypes) {
     const auto label = gaugeLabel(type, GaugeAutoShiftMode::None);
-    options.push_back({.id = label, .label = label});
+    options.push_back({.id = label, .label = label,
+                       .leadingColor = clearLampColorForRank(gaugeTypeToClearRank(type))});
   }
   if (std::ranges::find(kGaugeTypes, selected) == kGaugeTypes.end()) {
     const auto label = gaugeLabel(selected, GaugeAutoShiftMode::None);
-    options.push_back({.id = label, .label = label, .available = false});
+    options.push_back({.id = label, .label = label, .available = false,
+                       .leadingColor = clearLampColorForRank(gaugeTypeToClearRank(selected))});
   }
   return options;
 }
@@ -369,7 +338,9 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
     std::vector<DropdownView::Option> options;
     for (const auto mode : kAutoShiftModes) {
       const std::string label = gaugeAutoShiftMenuLabel(mode);
-      options.push_back({.id = label, .label = label});
+      options.push_back({.id = label, .label = label,
+          .leadingColor = gaugeAutoShiftEnabled(mode) ? Color(255, 205, 37, 242)
+                                                     : Color(128, 136, 150, 232)});
     }
     gaugeAutoShiftChoice->refresh({.selectedId = gaugeAutoShiftMenuLabel(state.gaugeAutoShift),
                                     .options = std::move(options)});
@@ -440,14 +411,7 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
   }
   if (clubModeButton != nullptr && clubModeButtonContent != nullptr) {
     clubModeButtonContent->setChecked(state.clubMode);
-    styleButton(clubModeButton, clubModeButtonContent->labelView(),
-                state.clubMode, true);
-    clubModeButtonContent->setThemedColor(
-        state.clubMode
-            ? View::ThemeColorProvider{[] {
-                return app_theme::textOn(app_theme::primaryAction());
-              }}
-            : View::ThemeColorProvider{app_theme::textPrimary});
+    toggle_button::style(clubModeButton, state.clubMode);
   }
   if (pacemakerChoice) {
     std::vector<DropdownView::Option> options;

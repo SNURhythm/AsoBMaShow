@@ -10,6 +10,7 @@
 #include "../view/Button.h"
 #include "../view/ChoiceControlView.h"
 #include "../view/ToggleButtonContent.h"
+#include "../view/TabButtonStyle.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #include "../view/AppTheme.h"
@@ -1029,7 +1030,8 @@ struct GameplaySkinChoiceButton {
 void styleGameplaySkinChoiceButton(Button *button, bool selected);
 View *makeGameplaySkinChoiceRow(const LayoutMetrics &metrics, OverlayPortal *portal,
                                 const i18n::Text &label, bool enabled,
-                                std::vector<GameplaySkinChoiceButton> choices, bool oppositeStates = false);
+                                std::vector<GameplaySkinChoiceButton> choices, bool oppositeStates = false,
+                                size_t activeChoice = 1);
 template <typename Enum, typename Format, typename Apply>
 ChoiceControlView *makeEnumChoice(const LayoutMetrics &metrics, OverlayPortal *portal,
                                  Enum selected, std::initializer_list<Enum> values,
