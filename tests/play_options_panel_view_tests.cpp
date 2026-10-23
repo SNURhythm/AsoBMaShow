@@ -409,8 +409,10 @@ void testSliderReleaseConsumedByDisabledSiblingEndsOnlyItsGesture() {
                 changes == beforeRelease,
             "released slider cannot keep changing on later pointer motion");
     down = pointer(touch ? SDL_EVENT_FINGER_DOWN : SDL_EVENT_MOUSE_BUTTON_DOWN, 220, 25, 9);
-    require(!root.handleEvents(down) && slider->value() > 50,
-            "slider accepts a fresh pointer after the covered release");
+    require(!root.handleEvents(down), "slider accepts a fresh pointer after the covered release");
+    up = pointer(touch ? SDL_EVENT_FINGER_UP : SDL_EVENT_MOUSE_BUTTON_UP, 220, 25, 9);
+    root.handleEvents(up);
+    require(slider->value() > 50, "fresh slider tap commits on release");
   }
 }
 
@@ -618,6 +620,47 @@ void testScrollViewTargetsWheelEventPosition() {
           "a wheel event outside the view must not scroll it");
 }
 
+void testDropdownFitsContentAndRevealsSelection() {
+  const int previousHeight = rendering::window_height;
+  rendering::window_height = 900;
+  for (bool compact : {false, true}) {
+    rendering::compactMenuCanvasActive = compact;
+    for (const int count : {2, 8, 40}) {
+      OverlayPortal portal;
+      DropdownView dropdown({}, count == 40 ? &portal : nullptr);
+      dropdown.setPosition(100, 80, YGPositionTypeAbsolute);
+      DropdownView::State state;
+      for (int i = 0; i < count; ++i) {
+        state.options.push_back({.id = std::to_string(i), .label = "Option"});
+      }
+      state.selectedId = std::to_string(count - 1);
+      {
+        View::LayoutBatchScope batch;
+        dropdown.refresh(state);
+        dropdown.setOpen(true);
+      }
+      View::dispatchDeferredEventCallbacks();
+      auto *menu = dropdown.menuScroll;
+      auto *last = dropdown.optionButtons.back().button;
+      require(menu->getY() >= 10 && menu->getY() + menu->getHeight() <= 890,
+              "dropdown stays inside the viewport margin");
+      require(last->getY() >= menu->getY() + 5 &&
+                  last->getY() + last->getHeight() <= menu->getY() + menu->getHeight() - 5,
+              "opening a constrained dropdown reveals the selected option");
+      if (count <= 8) {
+        menu->scrollToBottom();
+        require(menu->getScrollOffset() == 0,
+                "short dropdowns fit all rows, gaps, padding, and borders without scrolling");
+      } else {
+        require(menu->getHeight() > 600,
+                "long dropdowns use available space instead of a fixed row cap");
+      }
+    }
+  }
+  rendering::compactMenuCanvasActive = false;
+  rendering::window_height = previousHeight;
+}
+
 void testDropdownDefersOptionViewsUntilOpen() {
   DropdownView dropdown({}, nullptr);
   DropdownView::State state;
@@ -806,6 +849,7 @@ int main() {
   init.resolution.height = 64;
   require(bgfx::init(init), "headless bgfx initializes for panel resources");
 
+  testDropdownFitsContentAndRevealsSelection();
   testColorPickerPopup();
   testColorPickerColorSpace();
   testColorPickerDragAndRelease();

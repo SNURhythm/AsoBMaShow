@@ -4043,7 +4043,6 @@ void MusicPlayerScene::refreshPlaybackRateControl() {
                   {.id = "time-stretch", .label = i18n::tr("music_player.time_stretch.label")}},
       .open = playbackModeDropdownOpen,
       .enabled = true,
-      .maxVisibleItems = 2,
   });
   playbackRateSlider->refresh(
       {.minimum = 50, .maximum = 200, .step = 5, .value = rate.percent});

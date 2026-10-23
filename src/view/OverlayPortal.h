@@ -1,6 +1,7 @@
 #pragma once
 
 #include "View.h"
+#include "../rendering/UiSafeArea.h"
 
 #include <algorithm>
 #include <vector>
@@ -56,19 +57,27 @@ struct OverlayPlacement {
 [[nodiscard]] inline OverlayPlacement
 placeAnchoredOverlay(const OverlayAnchor &anchor, int desiredWidth,
                      int desiredHeight, int minimumHeight, int viewportWidth,
-                     int viewportHeight, int margin, int gap) {
+                     int viewportHeight, int margin, int gap,
+                     rendering::UiSafeAreaInsets insets = {}) {
   const int safeMargin = std::max(0, margin);
   const int safeGap = std::max(0, gap);
-  const int availableWidth = std::max(0, viewportWidth - safeMargin * 2);
+  const int viewportRight = std::max(0, viewportWidth);
+  const int viewportBottom = std::max(0, viewportHeight);
+  const int left = std::clamp(std::max(0, insets.left) + safeMargin, 0, viewportRight);
+  const int right = std::clamp(viewportRight - std::max(0, insets.right) - safeMargin,
+                               left, viewportRight);
+  const int top = std::clamp(std::max(0, insets.top) + safeMargin, 0, viewportBottom);
+  const int bottom = std::clamp(viewportBottom - std::max(0, insets.bottom) - safeMargin,
+                                top, viewportBottom);
   const int requestedWidth =
       desiredWidth > 0 ? desiredWidth : std::max(0, anchor.width);
-  const int width = std::min(requestedWidth, availableWidth);
-  const int maximumX = std::max(safeMargin, viewportWidth - safeMargin - width);
-  const int x = std::clamp(anchor.x, safeMargin, maximumX);
+  const int width = std::min(requestedWidth, right - left);
+  const int x = std::clamp(anchor.x, left, right - width);
 
-  const int belowSpace = std::max(0, viewportHeight - safeMargin - safeGap -
-                                         anchor.y - anchor.height);
-  const int aboveSpace = std::max(0, anchor.y - safeMargin - safeGap);
+  const int belowY = std::clamp(anchor.y + anchor.height + safeGap, top, bottom);
+  const int aboveBottom = std::clamp(anchor.y - safeGap, top, bottom);
+  const int belowSpace = bottom - belowY;
+  const int aboveSpace = aboveBottom - top;
   const int requestedHeight = std::max(0, desiredHeight);
   const int preferredMinimum = std::max(0, minimumHeight);
   const bool belowFits = belowSpace >= requestedHeight;
@@ -89,8 +98,7 @@ placeAnchoredOverlay(const OverlayAnchor &anchor, int desiredWidth,
 
   const int height =
       std::min(requestedHeight, opensBelow ? belowSpace : aboveSpace);
-  const int y = opensBelow ? anchor.y + anchor.height + safeGap
-                           : anchor.y - safeGap - height;
+  const int y = opensBelow ? belowY : aboveBottom - height;
   return {.x = x,
           .y = y,
           .width = width,

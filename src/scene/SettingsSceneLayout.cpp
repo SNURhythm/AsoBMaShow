@@ -349,7 +349,7 @@ View *SettingsScene::buildVisibleTimeControls(const LayoutMetrics &metrics,
         i18n::message("settings.visible_time_controls.fixed_hi_speed.label"),
         metrics.smallTextSize, app_theme::textSecondary()));
     fixedHispeed->refresh({.selectedId = std::to_string(static_cast<int>(context.settings.hispeedFixMode)),
-                           .options = std::move(modes), .maxVisibleItems = 5});
+                           .options = std::move(modes)});
     fixedHispeed->setWidthPercent(100)->setMinWidth(0);
     fixedHispeed->setHeight(metrics.actionButtonHeight);
     visibleTimeControls->addView(fixedHispeed);
@@ -578,8 +578,7 @@ void SettingsScene::refreshPreviewKeyModeDropdown() {
   previewKeyModeDropdown->refresh({
       .label = i18n::message("settings.input.mode.label"),
       .selectedId = std::to_string(previewKeyMode),
-      .options = std::move(options), .open = previewKeyModeDropdownOpen,
-      .maxVisibleItems = 9});
+      .options = std::move(options), .open = previewKeyModeDropdownOpen});
 }
 
 void SettingsScene::buildPreviewLayout(const LayoutMetrics &metrics) {
@@ -2009,8 +2008,7 @@ View *SettingsScene::buildGeneralTab(const LayoutMetrics &metrics) {
                    {.id = "ko", .label = "한국어"},
                    {.id = "ja", .label = "日本語"},
                    {.id = "zh-Hans", .label = "简体中文"},
-                   {.id = "zh-Hant", .label = "繁體中文"}},
-       .maxVisibleItems = 6});
+                   {.id = "zh-Hant", .label = "繁體中文"}}});
   languageControls->addView(languageDropdown);
   languageControls->addView(languageStatus);
   cardsColumn->addView(makeCard(
@@ -2800,7 +2798,7 @@ void SettingsScene::initView() {
     navigation->setFlexShrink(0);
     navigation->refresh({.selectedId = std::to_string(static_cast<int>(activeTab)),
                          .options = std::move(navigationOptions),
-                         .enabled = !profilePipelineBusy, .maxVisibleItems = 8});
+                         .enabled = !profilePipelineBusy});
     content->addView(navigation);
   }
 

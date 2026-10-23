@@ -257,7 +257,7 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
     dropdown->setTriggerWidth(metrics.compact ? 200 : 240);
     dropdown->setHeight(controlHeight);
     dropdown->refresh({.label = label, .selectedId = std::move(selected),
-                       .options = std::move(options), .maxVisibleItems = 8});
+                       .options = std::move(options)});
     row->addView(dropdown);
   };
   const auto addToggle = [&](View *parent, const char *key, bool &enabled, bool restartAudio) {

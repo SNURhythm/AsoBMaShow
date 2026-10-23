@@ -482,7 +482,6 @@ void PracticePanelView::refreshControls() {
                          .options = std::move(options),
                          .open = dropdownOpen[static_cast<size_t>(index)],
                          .enabled = true,
-                         .maxVisibleItems = 6,
                          .menuWidth = 330});
     }
   };

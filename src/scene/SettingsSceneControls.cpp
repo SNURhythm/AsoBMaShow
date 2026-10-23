@@ -240,8 +240,7 @@ void SettingsScene::appendScratchlessModeSettings(
       .options = {{.id = "0", .label = i18n::message("settings.scratchless.disabled.label")},
                   {.id = "1", .label = i18n::message("settings.scratchless.enabled.label")},
                   {.id = "2", .label = i18n::message("settings.scratchless.selected_tables.label")}},
-      .enabled = enabled,
-      .maxVisibleItems = 3});
+      .enabled = enabled});
   scratchlessMode->setWidthPercent(100)->setMinWidth(0);
   scratchlessMode->setHeight(metrics.actionButtonHeight);
   scratchlessControls->addView(scratchlessMode);

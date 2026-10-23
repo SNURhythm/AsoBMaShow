@@ -48,7 +48,6 @@ void refreshDropdown(DropdownView *dropdown, const ChoiceControlModel &control,
                      .options = dropdownOptions(control),
                      .open = open,
                      .enabled = control.enabled,
-                     .maxVisibleItems = 7,
                      .menuWidth = width});
 }
 

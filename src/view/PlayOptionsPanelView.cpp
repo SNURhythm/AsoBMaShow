@@ -479,8 +479,7 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
                       .label = i18n::message("play_options.time_stretch_unavailable.label"),
                       .available = false}},
          .open = playbackModeDropdownOpen,
-         .enabled = !state.playbackLocked,
-         .maxVisibleItems = 2});
+         .enabled = !state.playbackLocked});
   }
   if (clubModeButton != nullptr && clubModeButtonContent != nullptr) {
     clubModeButtonContent->setChecked(state.clubMode);

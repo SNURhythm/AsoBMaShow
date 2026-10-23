@@ -542,7 +542,6 @@ DropdownView *SettingsScene::buildGameplaySkinSelectionDropdown(
        .options = std::move(dropdownOptions),
        .open = gameplaySkinTraitDropdownOpen,
        .enabled = ordinaryActionsEnabled,
-       .maxVisibleItems = metrics.compact ? 5 : 7,
        .menuWidth = menuWidth});
   return skinDropdown;
 }
@@ -621,7 +620,6 @@ void SettingsScene::appendGameplaySkinCatalogSettings(
            .options = std::move(options),
            .open = gameplaySkinConfigurationDropdownOpenKey == dropdownKey,
            .enabled = ordinaryActionsEnabled,
-           .maxVisibleItems = metrics.compact ? 5 : 7,
            .menuWidth = 0.0f});
       auto *dropdownRow = new View();
       dropdownRow->setFlexDirection(FlexDirection::Row);
@@ -712,7 +710,6 @@ void SettingsScene::appendGameplaySkinCatalogSettings(
            .options = std::move(options),
            .open = gameplaySkinConfigurationDropdownOpenKey == dropdownKey,
            .enabled = ordinaryActionsEnabled,
-           .maxVisibleItems = metrics.compact ? 5 : 7,
            .menuWidth = 0.0f});
       auto *dropdownRow = new View();
       dropdownRow->setFlexDirection(FlexDirection::Row);
@@ -1209,7 +1206,6 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                    {.id = "2", .label = safetyLevelLabel(skin::SkinSafetyLevel::Unrestricted), .available = ordinaryActionsEnabled}},
        .open = gameplaySkinSafetyDropdownOpen,
        .enabled = ordinaryActionsEnabled,
-       .maxVisibleItems = 3,
        .menuWidth = 0.0f});
   safetyRow->addView(safetyDropdown);
   overview->addView(safetyRow);

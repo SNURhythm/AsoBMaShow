@@ -19,6 +19,8 @@ constexpr uint32_t kIconCaretDown = 0xf0d7;
 float triggerHeight() { return rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 42.0f; }
 float optionHeight() { return rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 38.0f; }
 constexpr float kMenuPadding = 4.0f;
+constexpr float kOptionGap = 4.0f;
+constexpr float kMenuBorder = 1.0f;
 constexpr float kMenuGap = 4.0f;
 constexpr float kWindowMargin = 10.0f;
 constexpr float kIndicatorWidth = 5.0f;
@@ -176,7 +178,7 @@ void DropdownView::buildView() {
   menuContent = new View();
   menuContent->setFlexDirection(FlexDirection::Column);
   menuContent->setAlignItems(YGAlignStretch);
-  menuContent->setGap(4);
+  menuContent->setGap(kOptionGap);
 
   menuScroll = new ScrollView(0, static_cast<int>(triggerHeight() + kMenuGap),
                               160, static_cast<int>(optionHeight()));
@@ -184,7 +186,7 @@ void DropdownView::buildView() {
   menuScroll->setContentPadding(Edge::All, kMenuPadding);
   menuScroll->setThemedBackgroundColor(app_theme::panelStrong);
   menuScroll->setThemedBorderColor(app_theme::hairlineStrong);
-  menuScroll->setBorderWidth(1);
+  menuScroll->setBorderWidth(kMenuBorder);
   menuScroll->setCornerRadius(app_theme::controlRadius());
   menuScroll->setThemedShadow(app_theme::shadow, app_theme::kPanelShadow);
   menuScroll->setZIndex(100);
@@ -199,9 +201,7 @@ void DropdownView::buildView() {
 
 void DropdownView::refresh(const State &state) {
   State next = state;
-  if (next.maxVisibleItems <= 0) {
-    next.maxVisibleItems = 1;
-  }
+  next.maxVisibleItems = std::max(0, next.maxVisibleItems);
 
   if (dispatchingOptionCallback && refreshRequiresOptionRebuild(next)) {
     pendingRefresh = std::move(next);
@@ -319,6 +319,7 @@ void DropdownView::rebuildOptions() {
     menuScroll->setScrollOffset(0.0f);
     menuScroll->refreshContentLayout();
   }
+  scheduleSelectionReveal();
 }
 
 void DropdownView::clearOptionViews() {
@@ -393,12 +394,14 @@ void DropdownView::updateMenuPlacement() {
   placementUpdating = true;
   const int optionCount = static_cast<int>(current.options.size());
   const int visibleOptions =
-      std::clamp(optionCount, 1, std::max(1, current.maxVisibleItems));
+      current.maxVisibleItems > 0 ? std::min(optionCount, current.maxVisibleItems)
+                                  : optionCount;
   const int desiredHeight = static_cast<int>(
       std::round(static_cast<float>(visibleOptions) * optionHeight() +
-                 kMenuPadding * 2.0f));
+                 static_cast<float>(visibleOptions - 1) * kOptionGap +
+                 (kMenuPadding + kMenuBorder) * 2.0f));
   const int minimumHeight =
-      static_cast<int>(std::round(optionHeight() + kMenuPadding * 2.0f));
+      static_cast<int>(std::round(optionHeight() + (kMenuPadding + kMenuBorder) * 2.0f));
 
   const int menuWidth =
       static_cast<int>(std::round(std::max(1.0f, resolvedWidth)));
@@ -407,7 +410,7 @@ void DropdownView::updateMenuPlacement() {
       {.x = getX(), .y = getY(), .width = getWidth(), .height = getHeight()},
       menuWidth, desiredHeight, minimumHeight, rendering::window_width,
       rendering::window_height, static_cast<int>(kWindowMargin),
-      static_cast<int>(kMenuGap));
+      static_cast<int>(kMenuGap), rendering::uiSafeAreaInsets());
   const int left = menuOwnedByPortal ? placement.x : placement.x - getX();
   const int top = menuOwnedByPortal ? placement.y : placement.y - getY();
   menuScroll->setPositionNoLayout(left, top, YGPositionTypeAbsolute);
@@ -463,6 +466,36 @@ void DropdownView::scheduleDeferredRefresh() {
     State next = std::move(*pendingRefresh);
     pendingRefresh.reset();
     applyRefresh(std::move(next));
+  });
+}
+
+void DropdownView::scheduleSelectionReveal() {
+  if (deferredSelectionRevealScheduled) return;
+  deferredSelectionRevealScheduled = true;
+  std::weak_ptr<bool> aliveToken = lifetimeToken;
+  // Opening can run inside a layout batch. Reveal after the event so both the
+  // portal menu and its independently owned content have their final geometry.
+  View::deferAfterEvent([this, aliveToken]() {
+    const auto alive = aliveToken.lock();
+    if (!alive || !*alive) return;
+    deferredSelectionRevealScheduled = false;
+    if (!current.open || !current.enabled || menuScroll == nullptr) return;
+    for (const auto &item : optionButtons) {
+      if (item.id != current.selectedId) continue;
+      const int viewportTop =
+          menuScroll->getContentY() + static_cast<int>(kMenuPadding);
+      const int viewportBottom = menuScroll->getContentY() +
+          menuScroll->getContentHeight() - static_cast<int>(kMenuPadding);
+      const int bottom = item.button->getY() + item.button->getHeight();
+      if (bottom > viewportBottom) {
+        menuScroll->setScrollOffset(
+            menuScroll->getScrollOffset() + bottom - viewportBottom);
+      } else if (item.button->getY() < viewportTop) {
+        menuScroll->setScrollOffset(
+            menuScroll->getScrollOffset() + item.button->getY() - viewportTop);
+      }
+      break;
+    }
   });
 }
 

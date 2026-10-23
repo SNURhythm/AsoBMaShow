@@ -470,15 +470,13 @@ void SettingsScene::refreshInputDropdowns() {
         {.label = i18n::message("settings.input.mode.label"),
          .selectedId = std::to_string(inputSelectedKeyMode),
          .options = std::move(keyModeOptions),
-         .open = inputKeyModeDropdownOpen,
-         .maxVisibleItems = 7});
+         .open = inputKeyModeDropdownOpen});
   }
   if (inputDeviceDropdown != nullptr) {
     inputDeviceDropdown->refresh({.label = i18n::message("settings.input.device.label"),
                                   .selectedId = inputSelectedDeviceId,
                                   .options = std::move(deviceOptions),
-                                  .open = inputDeviceDropdownOpen,
-                                  .maxVisibleItems = 7});
+                                  .open = inputDeviceDropdownOpen});
   }
 }
 

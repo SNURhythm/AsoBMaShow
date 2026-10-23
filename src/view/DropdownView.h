@@ -32,7 +32,8 @@ public:
     std::vector<Option> options;
     bool open = false;
     bool enabled = true;
-    int maxVisibleItems = 6;
+    // Zero lets the menu fit its content up to the safe viewport bounds.
+    int maxVisibleItems = 0;
     float menuWidth = 0.0f;
   };
 
@@ -73,6 +74,7 @@ private:
   std::optional<State> pendingRefresh;
   std::shared_ptr<bool> lifetimeToken = std::make_shared<bool>(true);
   bool placementUpdating = false;
+  bool deferredSelectionRevealScheduled = false;
   bool menuOwnedByPortal = false;
   bool dispatchingOptionCallback = false;
   bool deferredRefreshScheduled = false;
@@ -94,6 +96,7 @@ private:
   void updateMenuPlacement();
   void scheduleDeferredRefresh();
   void scheduleOptionViewClear();
+  void scheduleSelectionReveal();
   [[nodiscard]] float preferredWidth() const;
   [[nodiscard]] std::string selectedLabel() const;
   [[nodiscard]] std::optional<Color> selectedLeadingColor() const;

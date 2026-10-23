@@ -169,12 +169,12 @@ void ContextMenuView::updatePlacement() {
     return;
   }
   const int actionCount = static_cast<int>(actions.size());
-  const int desiredHeight = kPanelPadding * 2 + actionCount * kActionHeight +
+  const int desiredHeight = (kPanelPadding + 1) * 2 + actionCount * kActionHeight +
                             std::max(0, actionCount - 1) * kActionGap;
   const OverlayPlacement placement = placeAnchoredOverlay(
       anchor, requestedMenuWidth, desiredHeight,
-      kPanelPadding * 2 + kActionHeight, viewportWidth, viewportHeight,
-      kViewportMargin, kAnchorGap);
+      (kPanelPadding + 1) * 2 + kActionHeight, viewportWidth, viewportHeight,
+      kViewportMargin, kAnchorGap, rendering::uiSafeAreaInsets());
   panel->setPositionNoLayout(placement.x, placement.y,
                              YGPositionTypeAbsolute);
   panel->setSize(placement.width, placement.height);
