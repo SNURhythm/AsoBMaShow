@@ -327,6 +327,57 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
   previewHeading->setMargin(Edge::Top, 12);
   body->addView(previewHeading);
   body->addView(selectionRow);
+  auto *sound = new View();
+  sound->setFlexDirection(FlexDirection::Row);
+  sound->setFlexWrap(YGWrapWrap);
+  sound->setAlignItems(YGAlignFlexEnd);
+  sound->setGap(8);
+  addDropdown(sound, i18n::message("records.keysound.label"),
+      context.settings.inputKeysoundEnabled ? "input" : "auto",
+      {{"input", i18n::message("settings.controls.keysound.input_trigger.label")},
+       {"auto", i18n::message("settings.controls.keysound.auto_timed.label")}},
+      [this, restart](const std::string &id) {
+        context.settings.inputKeysoundEnabled = id == "input";
+        persistSettings();
+        restart();
+      });
+  auto *aids = new View();
+  aids->setFlexDirection(FlexDirection::Row);
+  aids->setFlexWrap(YGWrapWrap);
+  aids->setGap(8);
+  const auto addToggle = [&](View *parent, const char *key, bool &enabled, bool restartAudio) {
+    auto *content = new CheckboxButtonContent(i18n::tr(key), metrics.smallTextSize, 20);
+    content->setThemedColor(app_theme::textPrimary);
+    content->setChecked(enabled);
+    auto *button = new Button();
+    button->setHeight(controlHeight);
+    button->setPadding(Edge::Left, 12);
+    button->setPadding(Edge::Right, 12);
+    button->setAlignItems(YGAlignCenter);
+    button->setJustifyContent(YGJustifyCenter);
+    button->setFlexShrink(0);
+    button->setCornerRadius(app_theme::controlRadius());
+    button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
+    button->addView(content);
+    button->setOnClickListener([this, value = &enabled, content, restartAudio] {
+      *value = !*value;
+      content->setChecked(*value);
+      if (calibrationDisplay && value == &calibrationNotesHidden) {
+        calibrationMeasuring = false;
+        calibrationSamples.reset();
+        lastLayoutWidth = -1;
+      }
+      // Start a fresh count-in with the changed sound schedule; taps survive.
+      if (restartAudio) previewRendererDirty = true;
+      ui::invalidate();
+    });
+    parent->addView(button);
+  };
+  addToggle(sound, "settings.calibration.mute", calibrationMuted, true);
+  body->addView(sound);
+  addToggle(aids, "settings.calibration.hide_notes", calibrationNotesHidden, false);
+  addToggle(aids, "settings.calibration.logical_line", calibrationLogicalJudgementLine, false);
+  body->addView(aids);
   auto *setupTabs = new View();
   setupTabs->setFlexDirection(FlexDirection::Row);
   setupTabs->setGap(metrics.compact ? 8.0f : 10.0f);
@@ -419,57 +470,6 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
         std::to_string(calibrationChartOptions.beatsPerMeasure), {{"4", "4/4"}, {"3", "3/4"}},
         [this, restart](const std::string &id) { calibrationChartOptions.beatsPerMeasure = std::stoi(id); restart(); });
     body->addView(rhythm);
-    auto *sound = new View();
-    sound->setFlexDirection(FlexDirection::Row);
-    sound->setFlexWrap(YGWrapWrap);
-    sound->setAlignItems(YGAlignFlexEnd);
-    sound->setGap(8);
-    addDropdown(sound, i18n::message("records.keysound.label"),
-        context.settings.inputKeysoundEnabled ? "input" : "auto",
-        {{"input", i18n::message("settings.controls.keysound.input_trigger.label")},
-         {"auto", i18n::message("settings.controls.keysound.auto_timed.label")}},
-        [this, restart](const std::string &id) {
-          context.settings.inputKeysoundEnabled = id == "input";
-          persistSettings();
-          restart();
-        });
-    auto *aids = new View();
-    aids->setFlexDirection(FlexDirection::Row);
-    aids->setFlexWrap(YGWrapWrap);
-    aids->setGap(8);
-    const auto addToggle = [&](View *parent, const char *key, bool &enabled, bool restartAudio) {
-      auto *content = new CheckboxButtonContent(i18n::tr(key), metrics.smallTextSize, 20);
-      content->setThemedColor(app_theme::textPrimary);
-      content->setChecked(enabled);
-      auto *button = new Button();
-      button->setHeight(controlHeight);
-      button->setPadding(Edge::Left, 12);
-      button->setPadding(Edge::Right, 12);
-      button->setAlignItems(YGAlignCenter);
-      button->setJustifyContent(YGJustifyCenter);
-      button->setFlexShrink(0);
-      button->setCornerRadius(app_theme::controlRadius());
-      button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
-      button->addView(content);
-      button->setOnClickListener([this, value = &enabled, content, restartAudio] {
-        *value = !*value;
-        content->setChecked(*value);
-        if (calibrationDisplay && value == &calibrationNotesHidden) {
-          calibrationMeasuring = false;
-          calibrationSamples.reset();
-          lastLayoutWidth = -1;
-        }
-        // Start a fresh count-in with the changed sound schedule; taps survive.
-        if (restartAudio) previewRendererDirty = true;
-        ui::invalidate();
-      });
-      parent->addView(button);
-    };
-    addToggle(sound, "settings.calibration.mute", calibrationMuted, true);
-    body->addView(sound);
-    addToggle(aids, "settings.calibration.hide_notes", calibrationNotesHidden, false);
-    addToggle(aids, "settings.calibration.logical_line", calibrationLogicalJudgementLine, false);
-    body->addView(aids);
   }
   scroll->setContentView(body);
   panel->addView(scroll);
