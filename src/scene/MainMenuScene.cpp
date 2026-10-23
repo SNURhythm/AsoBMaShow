@@ -1878,7 +1878,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     auto *button = makeSelectorButton(i18n::message(tabMessages[index]), 22, &text, tabIcons[index]);
     button->getContentView()->setPadding(Edge::Left, 8)->setPadding(Edge::Right, 8)->setGap(8);
     text->setFlex(1);
-    text->setAlign(TextView::RIGHT);
+    text->setAlign(TextView::CENTER);
     button->setName(std::string("mainMenuTab:") + tabLabels[index]);
     button->setWidth(112)->setHeight(kMenuHeaderHeight - 14);
     styleMenuButton(button, text, index == 0);
