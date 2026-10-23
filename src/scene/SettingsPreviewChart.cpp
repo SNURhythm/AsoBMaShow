@@ -131,9 +131,7 @@ std::unique_ptr<bms_parser::Chart> makeCalibrationChart(int keyMode, Calibration
   options.bpm = std::clamp(options.bpm, 40, 300);
   const auto timing = calibrationTiming(options.bpm, options.beatsPerMeasure);
   const int beatsPerMeasure = options.beatsPerMeasure == 3 ? 3 : 4;
-  constexpr std::array subdivisions{4, 8, 16, 24, 32};
-  const int notesPerBeat = std::ranges::find(subdivisions, options.subdivision) != subdivisions.end()
-      ? options.subdivision / 4 : 1;
+  const int notesPerBeat = calibrationNotesPerBeat(options.subdivision);
   auto chart = std::make_unique<bms_parser::Chart>();
   chart->Meta.Title = "Offset Calibration";
   chart->Meta.Artist = "AsoBMaShow";
@@ -160,8 +158,12 @@ std::unique_ptr<bms_parser::Chart> makeCalibrationChart(int keyMode, Calibration
         tick >= 2 * notesPerBeat && (tick - 2 * notesPerBeat) % (beatsPerMeasure * notesPerBeat) == 0);
     timeline->Bpm = options.bpm;
     timeline->BeatPosition = tick / (4.0 * notesPerBeat);
-    if (tick >= firstNoteTick) {
-      const auto index = static_cast<std::size_t>(tick - firstNoteTick);
+    const int noteTick = tick - firstNoteTick;
+    if (noteTick >= 0 && (noteTick >= kCalibrationReferenceBeats * notesPerBeat ||
+                         noteTick % notesPerBeat == 0)) {
+      const auto index = static_cast<std::size_t>(noteTick < kCalibrationReferenceBeats * notesPerBeat
+          ? noteTick / notesPerBeat
+          : kCalibrationReferenceBeats + noteTick - kCalibrationReferenceBeats * notesPerBeat);
       const auto add = [&](int target) {
         addPreviewNote(timeline.get(), target);
         timeline->Notes[target]->Wav = kCalibrationKeysoundWav;

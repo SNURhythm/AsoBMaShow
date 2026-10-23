@@ -30,7 +30,8 @@ void SettingsScene::startCalibration() {
   calibrationSavedAutoPlay = previewAutoPlay;
   calibrationSavedRandomTiming = previewRandomTiming;
   calibrationSavedRate = context.jukebox.playbackRate();
-  calibrationSamples.configure(calibrationChartOptions.bpm, calibrationChartOptions.beatsPerMeasure);
+  calibrationSamples.configure(calibrationChartOptions.bpm, calibrationChartOptions.beatsPerMeasure,
+      calibrationChartOptions.subdivision);
   calibrationError.clear();
   calibrationDisplay = false;
   calibrationMuted = false;
@@ -168,7 +169,7 @@ void SettingsScene::playCalibrationKeysound() {
 
 void SettingsScene::recordCalibrationTap(long long rawTimeMicros) {
   if (!calibrationMeasuring || !calibrationAudioRunning || previewPaused ||
-      (calibrationDisplay && (calibrationNotesHidden || calibrationChartOptions.subdivision != 4))) return;
+      (calibrationDisplay && calibrationNotesHidden)) return;
   const bool accepted = calibrationDisplay
       ? calibrationSamples.tapDisplay(rawTimeMicros, calibrationAudioOffsetMs,
           calibrationVisualOffsetMs, context.settings.notesDisplayTimingMilliseconds)
@@ -204,8 +205,6 @@ void SettingsScene::refreshCalibrationText() {
     status = i18n::message(calibrationDisplay ? "settings.calibration.display_result" : "settings.calibration.result",
         {{"offset", std::to_string(calibrationDisplay ? calibrationVisualOffsetMs : calibrationAudioOffsetMs)},
          {"spread", std::to_string(estimate->spreadMs)}});
-  if (calibrationDisplay && calibrationChartOptions.subdivision != 4)
-    status = i18n::message("settings.calibration.display_spacing");
   if (calibrationDisplay && calibrationNotesHidden)
     status = i18n::message("settings.calibration.display_hidden");
   if (previewPaused) status = i18n::message("settings.calibration.paused");
@@ -242,7 +241,8 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
   };
   const auto restart = [this] {
     calibrationMeasuring = false;
-    calibrationSamples.configure(calibrationChartOptions.bpm, calibrationChartOptions.beatsPerMeasure);
+    calibrationSamples.configure(calibrationChartOptions.bpm, calibrationChartOptions.beatsPerMeasure,
+        calibrationChartOptions.subdivision);
     previewPaused = false;
     previewRendererDirty = true;
     lastLayoutWidth = -1;
@@ -297,7 +297,8 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
           if (display) calibrationNotesHidden = false;
           else calibrationMuted = false;
           calibrationMeasuring = false;
-          calibrationSamples.configure(calibrationChartOptions.bpm, calibrationChartOptions.beatsPerMeasure);
+          calibrationSamples.configure(calibrationChartOptions.bpm, calibrationChartOptions.beatsPerMeasure,
+              calibrationChartOptions.subdivision);
           previewPaused = false;
           resetPreviewSimulation();
           lastLayoutWidth = -1;
@@ -362,8 +363,7 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
     }
     lastLayoutWidth = -1;
   }, false, true);
-  startButton->setEnabled(!calibrationDisplay ||
-      (!calibrationNotesHidden && calibrationChartOptions.subdivision == 4));
+  startButton->setEnabled(!calibrationDisplay || !calibrationNotesHidden);
   auto *previewHeading = makeText(i18n::message("settings.preview_layout.preview.label"),
                                   metrics.bodyTextSize, app_theme::textPrimary());
   previewHeading->setMargin(Edge::Top, 12);
