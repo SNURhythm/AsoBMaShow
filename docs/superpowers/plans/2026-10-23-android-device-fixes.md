@@ -51,4 +51,4 @@
 
 - [x] Obtain a fresh whole-branch code review; address material findings with regression coverage.
 - [x] Update the device report with attribution, fix results, and remaining limitations.
-- [ ] Verify diff and clean working tree, then push the new branch. Do not merge or deploy.
+- [x] Verify diff and clean working tree, then push the new branch. Do not merge or deploy.
