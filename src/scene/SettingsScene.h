@@ -377,6 +377,10 @@ private:
   std::array<double, 4> previewSkinBounds{};
   std::unique_ptr<gameplay::RealtimeTouchInputRouter> previewTouchRouter;
   std::uint64_t previewTouchLayoutRevision = 0;
+  std::optional<SDL_FingerID> previewLaneCoverFinger;
+  bool previewLaneCoverMouse = false;
+  bool previewLaneCoverChanged = false;
+  float previewLaneCoverGrabOffset = 0;
   std::unique_ptr<bms_parser::Chart> previewChart;
   std::unique_ptr<PlayfieldChartVisualModel> previewChartVisualModel;
   std::unique_ptr<PlayfieldVisualStateStore> previewVisualStateStore;
@@ -563,6 +567,8 @@ private:
   void commitVirtualControllerSetting(int keyMode, input::VirtualControllerConfig config);
   void commitPlayfieldTouchSetting(int keyMode, input::PlayfieldTouchConfig config);
   std::string inputViewSignature() const;
+  bool handlePreviewLaneCoverEvent(SDL_Event &event, bool capturedOnly = false);
+  void cancelPreviewLaneCoverDrag();
   void forwardPreviewInputEvent(SDL_Event &event);
   void syncPreviewInputLayout();
   void resetPreviewHudSample();

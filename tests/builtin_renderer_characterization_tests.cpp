@@ -2826,6 +2826,10 @@ struct SettingsScene {
   std::unique_ptr<PlayfieldPresentation> previewPresentation;
   std::unique_ptr<gameplay::RealtimeTouchInputRouter> previewTouchRouter;
   std::uint64_t previewTouchLayoutRevision = 0;
+  std::optional<SDL_FingerID> previewLaneCoverFinger;
+  bool previewLaneCoverMouse = false;
+  bool previewLaneCoverChanged = false;
+  float previewLaneCoverGrabOffset = 0;
   std::vector<const bms_parser::Note *> previewVisualNoteSources;
   RhythmInputHandler *previewInputHandler = nullptr;
   PlayfieldVisualStateStore *previewVisualStateStore = nullptr;
@@ -2887,6 +2891,9 @@ struct SettingsScene {
   void persistSettings() { ++settingsCommits; }
   void destroyPreviewInputHandler() {}
   void syncPreviewTouchLayout();
+  bool handlePreviewLaneCoverEvent(SDL_Event &event, bool capturedOnly = false);
+  void cancelPreviewLaneCoverDrag();
+  void forwardPreviewInputEvent(SDL_Event &event);
   void syncPreviewAuthority();
   void resetPreviewHudSample();
   void capturePreviewVisualState();
@@ -3292,6 +3299,84 @@ void verifyLegacyScratchlessTouchLayout(const RenderTarget &target) {
       expect(handler.touchToLane({screen.x, screen.y, 0}) == displayed.front(),
              "legacy touch rejects lanes absent from the chart");
     }
+  }
+}
+
+void verifyPreviewLaneCoverHandleDrag(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  InputDeviceRegistry registry(std::vector<InputDeviceRegistry::BackendFactory>{});
+  const auto profile = makeDefaultInputProfile();
+  for (const bool mouse : {false, true}) {
+    const auto chart = settings_scene::makeCalibrationChart(7);
+    Judge judge(chart->Meta.Rank);
+    auto renderer = std::make_unique<BMSRenderer>(chart.get(), judge.timingWindows, 500, true);
+    SettingsScene scene;
+    scene.previewChart = chart.get();
+    scene.previewRenderer = renderer.get();
+    scene.previewPresentation = std::move(renderer);
+    scene.calibrationActive = true;
+    PreviewRecordingControl control;
+    RhythmInputHandler handler(&control, chart->Meta, registry, profile, makeGameplayInputScopes(7));
+    if (mouse) scene.previewInputHandler = &handler;
+    scene.context.settings.presentation().laneCoverEnabled = true;
+    scene.context.settings.presentation().noteStartPositionPercent = 30;
+    built_in_notes::SharedModeStyles styles;
+    scene.previewRenderer->configure(previewPresentationConfiguration(
+        scene.context.settings, *chart, 7, styles));
+    Recorder recorder;
+    scene.previewRenderer->setCharacterizationRecorder(&recorder);
+    RenderContext context;
+    scene.previewRenderer->render(context, 1'000'000, 1'000'000);
+    const auto &frame = recorder.frames.back();
+    const float centerX = frame.laneCoverHandle.x + frame.laneCoverHandle.width * 0.5F;
+    const auto handle = rendering::game_camera.project({centerX,
+        frame.laneCoverHandle.y + frame.laneCoverHandle.height * 0.5F, 0});
+    const auto destination = rendering::game_camera.project({centerX,
+        frame.judgeY + (frame.upperBound - frame.judgeY) * 0.5F, 0});
+    const auto send = [&](int phase, const bx::Vec3 &point) {
+      SDL_Event event{};
+      if (mouse) {
+        event.type = phase == 0 ? SDL_EVENT_MOUSE_BUTTON_DOWN
+            : phase == 1 ? SDL_EVENT_MOUSE_MOTION : SDL_EVENT_MOUSE_BUTTON_UP;
+        if (phase == 1) {
+          event.motion.x = point.x / rendering::widthScale;
+          event.motion.y = point.y / rendering::heightScale;
+        } else {
+          event.button.button = SDL_BUTTON_LEFT;
+          event.button.x = point.x / rendering::widthScale;
+          event.button.y = point.y / rendering::heightScale;
+        }
+      } else {
+        event.type = phase == 0 ? SDL_EVENT_FINGER_DOWN
+            : phase == 1 ? SDL_EVENT_FINGER_MOTION : SDL_EVENT_FINGER_UP;
+        event.tfinger.fingerID = 42;
+        event.tfinger.x = point.x / rendering::render_width;
+        event.tfinger.y = point.y / rendering::render_height;
+      }
+      scene.forwardPreviewInputEvent(event);
+    };
+    send(0, handle);
+    send(1, destination);
+    expect(scene.context.settings.presentation().noteStartPositionPercent != 30,
+           "preview cover handle moves with mouse and touch even without a note input handler");
+    expect(scene.settingsCommits == 0, "cover drag does not save settings on every motion");
+    send(2, destination);
+    expect(scene.settingsCommits == 1 && !scene.previewLaneCoverFinger,
+           "cover drag persists once on release and clears pointer capture");
+    expect(control.presses.empty() && control.releases.empty(),
+           "cover drag never reaches gameplay note input");
+    scene.context.settings.presentation().noteStartPositionPercent = 30;
+    scene.previewRenderer->setNoteStartPositionPercent(30);
+    send(0, handle);
+    send(1, destination);
+    scene.cancelPreviewLaneCoverDrag();
+    const auto cancelledAt = scene.context.settings.presentation().noteStartPositionPercent;
+    send(1, handle);
+    expect(!scene.previewLaneCoverFinger && scene.settingsCommits == 2 &&
+               scene.context.settings.presentation().noteStartPositionPercent == cancelledAt,
+           "focus/rebuild cancellation saves the last position and stops further dragging");
+    scene.previewRenderer->setCharacterizationRecorder(nullptr);
+    bgfx::frame();
   }
 }
 
@@ -4400,6 +4485,7 @@ int main() {
       verifyPreviewInputLanePosition(target);
       verifyLegacyAuthoredSkinTouchRouting();
       verifyLegacyScratchlessTouchLayout(target);
+  verifyPreviewLaneCoverHandleDrag(target);
   verifyPreviewKeyModeTouchRouting(target);
   verifyPreviewScratchUsesLiveHoldState(target);
       verifyPreviewPacemakerDiff(target);

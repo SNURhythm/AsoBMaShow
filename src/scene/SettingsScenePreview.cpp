@@ -558,6 +558,7 @@ void SettingsScene::ensurePreviewInputHandler() {
 }
 
 void SettingsScene::destroyPreviewInputHandler() {
+  cancelPreviewLaneCoverDrag();
   if (previewTouchRouter) {
     (void)previewTouchRouter->cancelAll(static_cast<std::int64_t>(SDL_GetTicks()) * 1000);
     previewTouchRouter.reset();
@@ -588,7 +589,89 @@ void SettingsScene::syncPreviewInputLayout() {
       (previewPresentation ? previewPresentation.get() : previewRenderer)->touchLayout().lanes);
 }
 
+bool SettingsScene::handlePreviewLaneCoverEvent(SDL_Event &event, bool capturedOnly) {
+  if (!previewActive || !previewRenderer || !previewPresentation ||
+      previewPresentation->activeMode() != PresentationMode::BuiltIn ||
+      (capturedOnly && !previewLaneCoverFinger)) return false;
+
+  ReplayTouchAction action;
+  SDL_FingerID finger = 0;
+  bool mouse = false;
+  float x = 0, y = 0;
+  switch (event.type) {
+  case SDL_EVENT_FINGER_DOWN:
+  case SDL_EVENT_FINGER_MOTION:
+  case SDL_EVENT_FINGER_UP:
+  case SDL_EVENT_FINGER_CANCELED:
+    if (event.tfinger.touchID == SDL_MOUSE_TOUCHID) return false;
+    action = event.type == SDL_EVENT_FINGER_DOWN ? ReplayTouchAction::Down
+        : event.type == SDL_EVENT_FINGER_MOTION ? ReplayTouchAction::Move
+        : event.type == SDL_EVENT_FINGER_CANCELED ? ReplayTouchAction::Cancel
+        : ReplayTouchAction::Up;
+    finger = event.tfinger.fingerID;
+    x = event.tfinger.x * rendering::render_width;
+    y = event.tfinger.y * rendering::render_height;
+    break;
+  case SDL_EVENT_MOUSE_BUTTON_DOWN:
+  case SDL_EVENT_MOUSE_BUTTON_UP:
+    if (event.button.button != SDL_BUTTON_LEFT || event.button.which == SDL_TOUCH_MOUSEID)
+      return false;
+    mouse = true;
+    action = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN ? ReplayTouchAction::Down : ReplayTouchAction::Up;
+    x = event.button.x * rendering::widthScale;
+    y = event.button.y * rendering::heightScale;
+    break;
+  case SDL_EVENT_MOUSE_MOTION:
+    if (event.motion.which == SDL_TOUCH_MOUSEID) return false;
+    mouse = true;
+    action = ReplayTouchAction::Move;
+    x = event.motion.x * rendering::widthScale;
+    y = event.motion.y * rendering::heightScale;
+    break;
+  default:
+    return false;
+  }
+
+  if (action == ReplayTouchAction::Down && !previewLaneCoverFinger) {
+    if (const auto grab = previewRenderer->laneCoverHandleGrabOffset(x, y)) {
+      previewLaneCoverFinger = finger;
+      previewLaneCoverMouse = mouse;
+      previewLaneCoverGrabOffset = *grab;
+      previewLaneCoverChanged = false;
+      return true;
+    }
+    return false;
+  }
+  if (!previewLaneCoverFinger || *previewLaneCoverFinger != finger || previewLaneCoverMouse != mouse)
+    return false;
+
+  if (action == ReplayTouchAction::Move || (action == ReplayTouchAction::Up && previewLaneCoverChanged)) {
+    const int next = previewRenderer->dragLaneCoverHandleTo(x, y, previewLaneCoverGrabOffset);
+    if (context.settings.presentation().noteStartPositionPercent != next) {
+      context.settings.presentation().noteStartPositionPercent = next;
+      previewLaneCoverChanged = true;
+      syncPreviewPresentationConfiguration();
+      ui::invalidate();
+    }
+  }
+  if (action == ReplayTouchAction::Up || action == ReplayTouchAction::Cancel)
+    cancelPreviewLaneCoverDrag();
+  return true;
+}
+
+void SettingsScene::cancelPreviewLaneCoverDrag() {
+  previewLaneCoverFinger.reset();
+  previewLaneCoverGrabOffset = 0;
+  if (previewLaneCoverChanged) {
+    previewLaneCoverChanged = false;
+    persistSettings();
+    // Refresh the scroll settings' numeric cover field after the gesture ends.
+    lastLayoutWidth = -1;
+  }
+}
+
 void SettingsScene::forwardPreviewInputEvent(SDL_Event &event) {
+  if (handlePreviewLaneCoverEvent(event)) return;
   if (previewInputHandler == nullptr) {
     return;
   }

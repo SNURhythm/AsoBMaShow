@@ -351,6 +351,8 @@ EventHandleResult SettingsScene::handleEvents(SDL_Event &event) {
     appearanceColorPopup->handleEvents(event);
     return {};
   }
+  // A drag that began on the cover keeps its pointer even over the panel.
+  if (previewActive && handlePreviewLaneCoverEvent(event, true)) return {};
   for (auto *view : views) {
     if (!view->handleEvents(event)) {
       // Navigation callbacks can destroy this scene while consuming the event.

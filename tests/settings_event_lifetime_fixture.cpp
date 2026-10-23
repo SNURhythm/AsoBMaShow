@@ -320,6 +320,8 @@ struct SettingsScene : Scene {
   ~SettingsScene() override { if (destructions) ++*destructions; }
   void setDisplayStatus(const std::string &status, Color) { displayStatus = status; }
   void updateDisplayPreviewUi() { ++displayPreviewUpdates; }
+  bool coverPointerCaptured = false;
+  bool handlePreviewLaneCoverEvent(SDL_Event &, bool) { return coverPointerCaptured; }
   void forwardPreviewInputEvent(SDL_Event &) { ++previewEvents; }
   void destroyPreviewInputHandler() { ++previewInputCleanups; }
   void init() override { addView(new View); }
@@ -463,6 +465,13 @@ int main() {
     SDL_Event event;
     manager.handleEvents(event);
     assert(active->previewEvents == (previewActive ? 1 : 0));
+    if (previewActive) {
+      active->coverPointerCaptured = true;
+      active->views.front()->eventCallback = [] { assert(false && "captured cover pointer bypasses the panel"); return false; };
+      manager.handleEvents(event);
+      assert(active->previewEvents == 1 && "captured cover pointer cannot judge a lane");
+      active->coverPointerCaptured = false;
+    }
     active->views.front()->eventCallback = [] { return false; };
     manager.handleEvents(event);
     assert(active->previewEvents == (previewActive ? 1 : 0) &&
