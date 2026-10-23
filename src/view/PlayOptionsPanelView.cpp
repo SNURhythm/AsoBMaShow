@@ -6,6 +6,7 @@
 #include "../LongNoteModeUtils.h"
 #include "../scene/play/Pacemaker.h"
 #include "Button.h"
+#include "ActionButtonContent.h"
 #include "CheckboxButtonContent.h"
 #include "DropdownView.h"
 #include "OverlayPortal.h"
@@ -30,17 +31,20 @@ TextView *makeLabel(const i18n::Text &label) {
   return text;
 }
 
-View *makeSectionHeader(TextView *label) {
+View *makeSectionHeader(TextView *label, uint32_t glyph, bool separator = true) {
   auto *header = new View();
   header->setFlexDirection(FlexDirection::Column);
-  header->setPadding(Edge::Top, 10);
+  header->setPadding(Edge::Top, separator ? 10 : 0);
   auto *rule = new View();
   rule->setPositionType(YGPositionTypeAbsolute);
   rule->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
   rule->setWidthPercent(100)->setHeight(1);
   rule->setThemedBackgroundColor(app_theme::hairline);
+  rule->setVisible(separator);
   header->addView(rule);
-  header->addView(label);
+  auto *title = action_button::makeInlineContent(label, glyph);
+  title->setHeight(28);
+  header->addView(title);
   return header;
 }
 
@@ -146,7 +150,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
 
   auto *rulesetSectionLabel = makeLabel(i18n::message("play_options.ruleset.label"));
   rulesetSectionLabel->setName("ruleset-section-label");
-  addView(rulesetSectionLabel);
+  addView(makeSectionHeader(rulesetSectionLabel, ui_icons::kRuleset, false));
   auto *rulesetRow = makeRow();
   for (const GameplayRuleset ruleset : {GameplayRuleset::LR2,
                                         GameplayRuleset::Beatoraja}) {
@@ -170,7 +174,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   if (layout.showGauge) {
     gaugeSectionLabel = makeLabel(i18n::message("play_options.gauge.label"));
     gaugeSectionLabel->setName("gauge-section-label");
-    addView(makeSectionHeader(gaugeSectionLabel));
+    addView(makeSectionHeader(gaugeSectionLabel, ui_icons::kHeart));
     auto addGaugeButton = [this](View *row, GaugeType type) {
       TextView *text = nullptr;
       const std::string label = gaugeLabel(type, GaugeAutoShiftMode::None);
@@ -198,7 +202,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
     addGaugeButton(gaugeRowB, GaugeType::Hazard);
     addView(gaugeRowB);
 
-    addView(makeSectionHeader(makeLabel(i18n::message("play_options.auto_shift.label"))));
+    addView(makeSectionHeader(makeLabel(i18n::message("play_options.auto_shift.label")), ui_icons::kRotate));
     auto addAutoShiftButton = [this](View *row, GaugeAutoShiftMode mode) {
       TextView *text = nullptr;
       const std::string label = gaugeAutoShiftMenuLabel(mode);
@@ -233,7 +237,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
     gaugeAutoShiftBoundsSection->setGap(8);
     gaugeAutoShiftBoundsSection->setDisplay(YGDisplayNone);
     gaugeAutoShiftBoundsSection->setVisible(false);
-    gaugeAutoShiftBoundsSection->addView(makeSectionHeader(makeLabel(i18n::message("play_options.auto_shift_lower_bound.label"))));
+    gaugeAutoShiftBoundsSection->addView(makeSectionHeader(makeLabel(i18n::message("play_options.auto_shift_lower_bound.label")), ui_icons::kArrowDown));
     auto addLowerBoundButton = [this](View *row, GaugeType type) {
       TextView *text = nullptr;
       const std::string label = gaugeLabel(type, GaugeAutoShiftMode::None);
@@ -260,7 +264,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
     addView(gaugeAutoShiftBoundsSection);
   }
 
-  addView(makeSectionHeader(makeLabel(i18n::message("play_options.section.play_option.label"))));
+  addView(makeSectionHeader(makeLabel(i18n::message("play_options.section.play_option.label")), ui_icons::kShuffle));
   playOptionSection = new PlayOptionSectionView(
       {.onOptionSelected =
            [this](const std::string &option) {
@@ -287,7 +291,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   playOptionSection->setWidthPercent(100);
   addView(playOptionSection);
 
-  addView(makeSectionHeader(makeLabel(i18n::message("play_options.long_note_mode.label"))));
+  addView(makeSectionHeader(makeLabel(i18n::message("play_options.long_note_mode.label")), ui_icons::kGripLines));
   auto *longNoteModeRow = makeRow();
   for (const char *mode : long_note_mode::kPlayableIds) {
     TextView *text = nullptr;
@@ -303,7 +307,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   addView(longNoteModeRow);
 
   assistOptionLabel = makeLabel(i18n::message("play_options.assist_option.label"));
-  addView(makeSectionHeader(assistOptionLabel));
+  addView(makeSectionHeader(assistOptionLabel, ui_icons::kLifeRing));
   auto *assistRow = makeRow();
   for (const char *option : {assist_options::kOff, assist_options::kDrag,
                              assist_options::kBpmGuide}) {
@@ -320,7 +324,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   }
   addView(assistRow);
 
-  addView(makeSectionHeader(makeLabel(i18n::message("settings.lane.covers.title"))));
+  addView(makeSectionHeader(makeLabel(i18n::message("settings.lane.covers.title")), ui_icons::kBars));
   laneCoverControls = new LaneCoverControlsView([this](const lane_cover::State &covers) {
     state.laneCovers = covers;
     if (callbacks.onLaneCoversChanged) callbacks.onLaneCoversChanged(covers);
@@ -331,7 +335,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   playbackGroup->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setGap(8);
-  playbackGroup->addView(makeSectionHeader(makeLabel(i18n::message("play_options.playback_rate.label"))));
+  playbackGroup->addView(makeSectionHeader(makeLabel(i18n::message("play_options.playback_rate.label")), ui_icons::kGauge));
   auto *playbackRateRow = makeRow();
   playbackRateSlider = new SnappedSlider([this](int percent) {
     if (callbacks.onPlaybackRateSelected) {
@@ -365,7 +369,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   playbackGroup->addView(playbackModeDropdown);
   addView(playbackGroup);
 
-  addView(makeSectionHeader(makeLabel(i18n::message("play_options.club_mode.label"))));
+  addView(makeSectionHeader(makeLabel(i18n::message("play_options.club_mode.label")), ui_icons::kPlay));
   clubModeButton = makeButton("", 18, nullptr);
   clubModeButton->setName("club-mode");
   clubModeButtonContent = new CheckboxButtonContent("", 18, 17);
@@ -380,7 +384,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   addView(clubModeButton);
 
   if (layout.showPacemaker) {
-    addView(makeSectionHeader(makeLabel(i18n::message("play_options.pacemaker.label"))));
+    addView(makeSectionHeader(makeLabel(i18n::message("play_options.pacemaker.label")), ui_icons::kFlagCheckered));
     View *row = nullptr;
     for (size_t i = 0; i < pacemaker::kSelectableTargets.size(); ++i) {
       if (i % 3 == 0) {

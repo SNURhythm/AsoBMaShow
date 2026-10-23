@@ -119,6 +119,46 @@ void testCompactActionCaptionsFitLocalizedControls() {
   i18n::setLanguage(i18n::Language::English);
 }
 
+void testInlineIconsPreserveCompactLocalizedLabels() {
+  require(TTF_Init(), "icon font verification initializes SDL_ttf");
+  auto *font = TTF_OpenFont(ui_icons::kFontAwesomeSolidPath, 18);
+  require(font != nullptr, "bundled icon font opens");
+  for (const auto glyph : {ui_icons::kUser, ui_icons::kKeyboard, ui_icons::kClock,
+                          ui_icons::kRoad, ui_icons::kDisplay, ui_icons::kImage,
+                          ui_icons::kVolume, ui_icons::kGlobe, ui_icons::kRuleset,
+                          ui_icons::kHeart, ui_icons::kRotate, ui_icons::kArrowDown,
+                          ui_icons::kShuffle, ui_icons::kGripLines, ui_icons::kLifeRing,
+                          ui_icons::kBars, ui_icons::kGauge, ui_icons::kPlay,
+                          ui_icons::kFlagCheckered}) {
+    require(TTF_FontHasGlyph(font, glyph), "readability icons exist in the shipped font");
+  }
+  TTF_CloseFont(font);
+  TTF_Quit();
+  for (const auto language : {i18n::Language::English, i18n::Language::Japanese,
+                              i18n::Language::Korean}) {
+    i18n::setLanguage(language);
+    for (const int width : {150, 280}) {
+      Button button(0, 0, width, 58);
+      auto *caption = settings_scene::makeText(
+          i18n::message("settings.navigation.difficulty_tables.label"), 20,
+          app_theme::textPrimary());
+      auto *content = action_button::makeInlineContent(caption, ui_icons::kChartLine);
+      content->setPadding(Edge::Left, 14)->setPadding(Edge::Right, 14);
+      button.setContentView(content);
+      button.applyYogaLayout();
+      auto *icon = button.getContentView()->findViewByName("actionIcon");
+      require(icon && icon->getX() == 14 &&
+                  icon->getX() + icon->getWidth() + 10 <= caption->getX(),
+              "inline icons reserve a stable slot before the localized label");
+      requireFits(renderedTextBounds(*caption), caption->getX(), button.getY(),
+                  width - 14 - caption->getX(), 58);
+      requireFits(renderedTextBounds(*icon), button.getX(), button.getY(), width, 58);
+      require(button.getHeight() == 58, "icons do not increase compact navigation height");
+    }
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
 void testApplicationThemePreservesGameplayPalette() {
   const auto originalMode = ui_theme::activeMode();
   const auto same = [](Color a, Color b) { return a.toABGR() == b.toABGR(); };
@@ -272,6 +312,7 @@ int main() {
   init.resolution.height = 64;
   assert(bgfx::init(init));
   testCompactActionCaptionsFitLocalizedControls();
+  testInlineIconsPreserveCompactLocalizedLabels();
   testFlatSettingsSectionUsesContentHeight();
   testFixedJapaneseButtonsShrinkOnlyTheirRenderedText();
   testNestedButtonLabelsFitButOrdinaryTextKeepsItsOverflow();

@@ -9,6 +9,7 @@
 #include "../view/CheckboxButtonContent.h"
 #include "../view/DropdownView.h"
 #include "../view/IconText.h"
+#include "../view/ActionButtonContent.h"
 #include "../view/LaneCoverControlsView.h"
 #include "../view/OverlayPortal.h"
 #include "../view/ScrollView.h"
@@ -2704,6 +2705,24 @@ void SettingsScene::initView() {
     lastLayoutWidth = -1;
   };
   const int tabHeight = metrics.compact ? metrics.actionButtonHeight : 72;
+  const auto tabIcon = [](SettingsTab tab) -> uint32_t {
+    switch (tab) {
+    case SettingsTab::Profile: return ui_icons::kUser;
+    case SettingsTab::Input: return ui_icons::kKeyboard;
+    case SettingsTab::Timing: return ui_icons::kClock;
+    case SettingsTab::Lane: return ui_icons::kRoad;
+    case SettingsTab::Hud: return ui_icons::kRecords;
+    case SettingsTab::Background: return ui_icons::kImage;
+    case SettingsTab::GameplaySkins: return ui_icons::kPalette;
+    case SettingsTab::Audio: return ui_icons::kVolume;
+    case SettingsTab::Display: return ui_icons::kDisplay;
+    case SettingsTab::BmsLibrary: return ui_icons::kMusic;
+    case SettingsTab::DifficultyTables: return ui_icons::kChartLine;
+    case SettingsTab::Ir: return ui_icons::kGlobe;
+    case SettingsTab::General: return ui_icons::kSettings;
+    }
+    return ui_icons::kSettings;
+  };
   std::vector<DropdownView::Option> navigationOptions;
   auto makeTabButton = [&](SettingsTab tab, const i18n::Text &label,
                            TextView **labelOut) {
@@ -2714,17 +2733,11 @@ void SettingsScene::initView() {
     if (labelOut != nullptr) {
       *labelOut = labelText;
     }
-    auto *button =
-        makeButton(kFitContentWidth, tabHeight, labelText,
-                   app_theme::control(), app_theme::controlHover(),
-                   app_theme::controlPressed(), app_theme::hairline(),
-                   app_theme::accentBorder(), app_theme::accentBorderStrong());
-    labelText->setAlign(TextView::LEFT);
-    labelText->setWidthPercent(100)->setMinWidth(0);
-    labelText->setAutoFitText(true);
-    button->setWidth(tabColumnWidth);
-    button->setPadding(Edge::Left, 14);
-    button->setPadding(Edge::Right, 14);
+    auto *button = new Button(0, 0, tabColumnWidth, tabHeight);
+    button->setFlexShrink(0);
+    auto *tabContent = action_button::makeInlineContent(labelText, tabIcon(tab));
+    tabContent->setPadding(Edge::Left, 14)->setPadding(Edge::Right, 14);
+    button->setContentView(tabContent);
     button->setOnClickListener([selectTab, tab]() { selectTab(tab); });
     return button;
   };

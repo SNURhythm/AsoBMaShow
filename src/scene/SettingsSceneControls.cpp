@@ -3,6 +3,7 @@
 #include "SettingsSceneShared.h"
 #include "../view/ScrollView.h"
 #include "../view/IconText.h"
+#include "../view/ActionButtonContent.h"
 #include "../view/OverlayPortal.h"
 #include "../view/DropdownView.h"
 #include "../view/CheckboxButtonContent.h"
@@ -886,6 +887,9 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
           [] { return Color(0, 0, 0, 0); }, app_theme::controlHover,
           app_theme::controlPressed);
     }
+    action_button::setIconColor(button, activeTab == tab
+        ? View::ThemeColorProvider([] { return app_theme::textOn(app_theme::primaryAction()); })
+        : View::ThemeColorProvider(app_theme::textSecondary));
     button->setStyledBorderWidth(0);
   };
   applyTabStyle(profileTabButton, profileTabText, SettingsTab::Profile);
