@@ -474,11 +474,7 @@ View *SettingsScene::buildPreviewScrollControls(const LayoutMetrics &metrics) {
     const bool enabled = index == 0 ? state.laneCoverEnabled
         : index == 1 ? state.hiddenEnabled : state.liftEnabled;
     content->setChecked(enabled);
-    auto *toggle = new Button(0, 0, LaneCoverControlsView::kToggleWidth, metrics.actionButtonHeight);
-    YGNodeStyleSetMaxWidthPercent(toggle->getNode(), 100);
-    toggle->setCornerRadius(app_theme::controlRadius());
-    toggle->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
-    toggle->setContentView(content);
+    auto *toggle = toggle_button::makeButton(content, metrics.actionButtonHeight);
     toggle_button::style(toggle, enabled);
     toggle->setOnClickListener([this, index, toggle, content]() {
       auto value = context.settings.presentation().laneCoverState();
@@ -860,9 +856,9 @@ View *SettingsScene::buildScratchLanePositionControl(const LayoutMetrics &metric
   auto *toggle = makeControlButton(metrics.compact ? 132 : 156,
                                    metrics.actionButtonHeight, value, true);
   const auto refresh = [this, value, toggle]() {
-    toggle_button::style(toggle, false);
     value->setLocalizedText(i18n::message(context.settings.presentation().scratchLaneOnRight
         ? "settings.skins.right.label" : "settings.skins.left.label"));
+    toggle_button::style(toggle, false);
   };
   refresh();
   toggle->setOnClickListener([this, refresh]() {
@@ -1047,9 +1043,9 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
     auto *weight = makeControlButton(metrics.compact ? 132 : 156,
                                      metrics.actionButtonHeight, weightText, true);
     const auto refreshWeight = [this, weight, weightText, boldMember]() {
-      toggle_button::style(weight, false);
       weightText->setLocalizedText(i18n::message(context.settings.presentation().*boldMember
           ? "settings.skins.feedback.bold.label" : "settings.skins.feedback.regular.label"));
+      toggle_button::style(weight, false);
     };
     refreshWeight();
     weight->setOnClickListener([this, boldMember, refreshWeight]() {

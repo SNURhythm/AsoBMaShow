@@ -1851,10 +1851,16 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   playbackRateValueText->setVAlign(TextView::MIDDLE);
   playbackRateValueText->setThemedColor(app_theme::textPrimary);
 
-  clubModeButton = makeButton("", 17, nullptr);
   clubModeButtonContent = new CheckboxButtonContent(i18n::tr("music_player.club_beat.label"), 17, 16);
+  clubModeButtonContent->setPadding(Edge::Left, 12)->setPadding(Edge::Right, 12);
+  clubModeButtonContent->iconView()->setFlexShrink(0);
+  clubModeButtonContent->labelView()->setFlex(1)->setMinWidth(0);
+  clubModeButton = new toggle_button::CompactButton([this] {
+    auto *label = clubModeButtonContent->labelView();
+    return label->measureTextWidth(label->getText()) + 24.0f + 7 + 24;
+  });
+  clubModeButton->setHeight(52);
   clubModeButton->setContentView(clubModeButtonContent);
-  clubModeButton->setFlex(1.0f);
   clubModeButton->setOnClickListener([this]() { toggleClubMode(); });
 
   transportRow->addView(previousButton);
@@ -2033,18 +2039,15 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   auto *privacyRow = new View();
   privacyRow->setHeight(52)->setFlexDirection(FlexDirection::Row)->setGap(10);
   systemPlaybackJacketButton =
-      makeButton(i18n::message("music_player.jacket_on.label"), 16, &systemPlaybackJacketText);
-  systemPlaybackJacketButton->setFlex(1);
+      makeButton(i18n::message("music_player.jacket_on.label"), 16, &systemPlaybackJacketText, true);
   systemPlaybackJacketButton->setOnClickListener(
       [this]() { toggleSystemPlaybackJacket(); });
   systemPlaybackTitleButton =
-      makeButton(i18n::message("music_player.title_on.label"), 16, &systemPlaybackTitleText);
-  systemPlaybackTitleButton->setFlex(1);
+      makeButton(i18n::message("music_player.title_on.label"), 16, &systemPlaybackTitleText, true);
   systemPlaybackTitleButton->setOnClickListener(
       [this]() { toggleSystemPlaybackTitle(); });
   systemPlaybackArtistButton =
-      makeButton(i18n::message("music_player.artist_on.label"), 16, &systemPlaybackArtistText);
-  systemPlaybackArtistButton->setFlex(1);
+      makeButton(i18n::message("music_player.artist_on.label"), 16, &systemPlaybackArtistText, true);
   systemPlaybackArtistButton->setOnClickListener(
       [this]() { toggleSystemPlaybackArtist(); });
   privacyRow->addView(systemPlaybackJacketButton);
@@ -2068,12 +2071,13 @@ View *MusicPlayerScene::makePanel(const i18n::Text &,
 }
 
 Button *MusicPlayerScene::makeButton(const i18n::Text &label, int fontSize,
-                                     TextView **textOut) {
-  auto *button = new Button();
+                                     TextView **textOut, bool compactToggle) {
+  auto *text = new TextView(fontSize >= 26 ? app_theme::boldFont : kFontPath, fontSize);
+  Button *button = compactToggle ? new toggle_button::CompactButton([text] {
+    return text->measureTextWidth(text->getText()) + 24.0f;
+  }) : new Button();
   button->setHeight(52);
   button->setCornerRadius(app_theme::controlRadius());
-
-  auto *text = new TextView(fontSize >= 26 ? app_theme::boldFont : kFontPath, fontSize);
   text->setLocalizedText(label);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);

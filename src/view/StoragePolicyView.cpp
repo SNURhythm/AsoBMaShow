@@ -195,7 +195,6 @@ StoragePolicyView::StoragePolicyView(Policy policy, std::function<void(Policy)> 
   codecStatus_->setWrap(true);
   codecStatus_->setThemedColor(app_theme::textSecondary);
   addView(codecStatus_);
-  efficientVideoButton_ = new Button();
   efficientVideoContent_ = new ToggleButtonContent("", 20, 24);
   efficientVideoContent_->setJustifyContent(YGJustifyFlexStart);
   efficientVideoContent_->setThemedColor(app_theme::textSecondary);
@@ -204,8 +203,7 @@ StoragePolicyView::StoragePolicyView(Policy policy, std::function<void(Policy)> 
   efficientLabel->setDisplay(YGDisplayFlex);
   efficientLabel->setWrap(true);
   efficientLabel->setFlex(1)->setMinWidth(0)->setHeight(66);
-  efficientVideoButton_->setContentView(efficientVideoContent_);
-  efficientVideoButton_->setHeight(66);
+  efficientVideoButton_ = toggle_button::makeButton(efficientVideoContent_, 66);
   efficientVideoButton_->setOnClickListener([this] {
     if (!enabled_ || policy_.bga != BgaAction::CompressH264) return;
     policy_.reencodeEfficientVideo = !policy_.reencodeEfficientVideo;

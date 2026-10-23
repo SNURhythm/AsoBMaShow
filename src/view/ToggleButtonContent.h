@@ -5,7 +5,29 @@
 #include "IconText.h"
 #include "TextView.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace toggle_button {
+// All toggle forms hug their content and yield only when the parent is narrower.
+class CompactButton final : public Button {
+public:
+  explicit CompactButton(std::function<float()> preferredWidth)
+      : preferredWidth_(std::move(preferredWidth)) {
+    setAlignSelf(YGAlignFlexStart)->setFlexGrow(0)->setFlexShrink(1)->setMinWidth(0);
+    YGNodeStyleSetMaxWidthPercent(getNode(), 100);
+  }
+  void refreshWidth() {
+    setWidth(std::max(96.0f, std::ceil(preferredWidth_())));
+  }
+  void propagateLanguageChange() override {
+    Button::propagateLanguageChange();
+    refreshWidth();
+  }
+private:
+  std::function<float()> preferredWidth_;
+};
+
 inline void setForeground(View *content, const View::ThemeColorProvider &color) {
   if (!content) return;
   if (auto *text = dynamic_cast<TextView *>(content)) text->setThemedColor(color);
@@ -15,6 +37,7 @@ inline void setForeground(View *content, const View::ThemeColorProvider &color) 
 // Club Beat's active/neutral palette, shared by named and current-value toggles.
 inline void style(Button *button, bool active) {
   if (!button) return;
+  if (auto *compact = dynamic_cast<CompactButton *>(button)) compact->refreshWidth();
   const bool enabled = button->isEnabled();
   button->setSelected(active);
   button->setCornerRadius(app_theme::controlRadius());
@@ -35,6 +58,7 @@ inline void style(Button *button, bool active) {
 } // namespace toggle_button
 
 namespace cycle_button {
+inline constexpr float kContentInset = 12 * 2 + 20 + 8;
 inline View *makeContent(TextView *value) {
   auto *content = new View();
   content->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter);
@@ -83,6 +107,13 @@ public:
     state_->setLocalizedText(i18n::message(value ? "settings.skins.judgement_hud.on.label"
                                                : "settings.skins.judgement_hud.off.label"));
   }
+  float preferredWidth() {
+    const float stateWidth = std::max(
+        state_->measureTextWidth(i18n::tr("settings.skins.judgement_hud.on.label")),
+        state_->measureTextWidth(i18n::tr("settings.skins.judgement_hud.off.label")));
+    return label_->measureTextWidth(label_->getText()) + stateWidth +
+        YGNodeStyleGetWidth(icon_->getNode()).value + 12 * 2 + 8 * 2;
+  }
   bool checked() const { return checked_; }
   TextView *labelView() { return label_; }
   TextView *iconView() { return icon_; }
@@ -95,3 +126,14 @@ private:
   TextView *icon_ = nullptr, *label_ = nullptr, *state_ = nullptr;
   bool checked_ = false;
 };
+
+namespace toggle_button {
+inline CompactButton *makeButton(ToggleButtonContent *content, float height) {
+  auto *button = new CompactButton([content] { return content->preferredWidth(); });
+  content->setPadding(Edge::Left, 12)->setPadding(Edge::Right, 12);
+  button->setHeight(height);
+  button->setContentView(content);
+  button->refreshWidth();
+  return button;
+}
+} // namespace toggle_button

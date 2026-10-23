@@ -124,6 +124,11 @@ values use a slider or editable numeric control rather than this rule.
   Regular/Bold, Combined/Separated, and Light/Dark—stay neutral in both states.
   Captions and cycle icons share a contrasting foreground in both themes;
   disabled toggles use muted text.
+- Cycling toggles use compact content widths: label, state, icon, and padding,
+  capped at the available parent width. Align them to the start of their row;
+  do not grow them to fill unused space. Keep the normal touch-target height
+  and refresh the width when the label or language changes. This applies to
+  named toggles, current-value cycles, and two-state choice controls alike.
 - Navigation tabs use transparent surfaces with an accent underline (or a left
   indicator for vertical navigation), keeping them distinct from filled setting
   choice buttons.

@@ -35,6 +35,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iostream>
+#include <map>
 
 namespace storage_management {
 std::promise<StorageVideoCapabilities> storageCapabilityPromise;
@@ -532,14 +533,16 @@ void testLaneCoverControlsAreAvailableInPlayOptions() {
   require(changes > 3 && std::abs(selected.hiddenRatio - 0.5F) < 0.02F &&
               selected.liftRatio == 0.1F && selected.laneCoverPercent == 20.1F,
           "dragging hidden amount updates only the selected cover");
-  const int toggleWidth = panel.findViewByName("lane-cover-sudden")->getWidth();
+  std::map<std::string, int> toggleWidths;
+  for (const char *name : {"lane-cover-sudden", "lane-cover-hidden", "lane-cover-lift"})
+    toggleWidths[name] = panel.findViewByName(name)->getWidth();
   for (const int width : {240, 340, 760}) {
     panel.setWidth(width);
     panel.applyYogaLayout();
     for (const char *name : {"lane-cover-sudden", "lane-cover-hidden", "lane-cover-lift"}) {
       auto *button = dynamic_cast<Button *>(panel.findViewByName(name));
       auto *content = dynamic_cast<ToggleButtonContent *>(button->getContentView());
-      require(button->getWidth() == toggleWidth,
+      require(button->getWidth() == toggleWidths[name],
               "lane cover toggles keep a compact width as the panel grows or wraps");
       require(content && content->checked() && button->getX() >= panel.getX() &&
                   button->getX() + button->getWidth() <= panel.getX() + width,
@@ -990,6 +993,61 @@ void requireToggleForeground(View *view, const Color &expected) {
   for (auto *child : view->getChildren()) requireToggleForeground(child, expected);
 }
 
+void testToggleWidthsFollowContentAcrossLayouts() {
+  const bool originalCompact = rendering::compactMenuCanvasActive;
+  for (const bool compact : {false, true}) {
+    rendering::compactMenuCanvasActive = compact;
+    View root(0, 0, 760, 3000);
+    auto *panel = new PlayOptionsPanelView({}, {.width = 760}, nullptr);
+    panel->refresh({});
+    root.addView(panel);
+    auto *choice = new ChoiceControlView({}, nullptr, 18, 0, true);
+    choice->refresh({.selectedId = "on", .options = {
+        {.id = "off", .label = i18n::message("settings.skins.judgement_hud.off.label")},
+        {.id = "on", .label = i18n::message("settings.skins.judgement_hud.on.label")}}});
+    root.addView(choice);
+    auto *caption = settings_scene::makeText(i18n::message("settings.skins.feedback.regular.label"),
+        18, app_theme::textPrimary());
+    auto *legacy = settings_scene::makeControlButton(760, compact ? 66 : 48, caption, true);
+    root.addView(legacy);
+    const std::array buttons{
+        dynamic_cast<Button *>(panel->findViewByName("club-mode")),
+        dynamic_cast<Button *>(panel->findViewByName("lane-cover-sudden")),
+        dynamic_cast<Button *>(choice->findViewByName("choice-cycle")), legacy};
+    for (const auto language : {i18n::Language::English, i18n::Language::Japanese, i18n::Language::Korean}) {
+      i18n::setLanguage(language);
+      root.propagateLanguageChange();
+      root.setWidth(760);
+      panel->setWidth(760);
+      root.applyYogaLayout();
+      std::array<int, 4> compactWidths{};
+      for (size_t index = 0; index < buttons.size(); ++index) {
+        auto *button = buttons[index];
+        compactWidths[index] = button->getWidth();
+        require(button->getWidth() >= 66 && button->getWidth() < 380,
+                "named, current-value, and choice toggles stay compact in wide parents");
+        require(button->getHeight() >= (compact ? 66 : 48), "compact toggle sizing preserves touch height");
+      }
+      root.setWidth(640);
+      panel->setWidth(640);
+      root.applyYogaLayout();
+      for (size_t index = 0; index < buttons.size(); ++index)
+        require(buttons[index]->getWidth() == compactWidths[index],
+                "spare parent width does not stretch any toggle construction path");
+      root.setWidth(180);
+      panel->setWidth(180);
+      root.applyYogaLayout();
+      for (auto *button : buttons)
+        require(button->getWidth() <= 180 && button->getX() >= root.getX(),
+                "compact toggles still respect narrow parent bounds");
+      require(caption->getWidth() >= caption->textureWidth(),
+              "localized short toggle labels retain their natural text width");
+    }
+  }
+  rendering::compactMenuCanvasActive = originalCompact;
+  i18n::setLanguage(i18n::Language::English);
+}
+
 void testToggleSemanticColorsAndGaugeBars() {
   const auto originalTheme = app_theme::activeMode();
   for (const auto theme : {app_theme::ThemeMode::Dark, app_theme::ThemeMode::Light}) {
@@ -1421,6 +1479,7 @@ int main() {
   testNaturalDropdownsRemainVisibleAcrossParentLayouts();
   testSettingsChoicePresentationAndSelection();
   testLocalizedFlickTapModesUseDirectSelection();
+  testToggleWidthsFollowContentAcrossLayouts();
   testToggleSemanticColorsAndGaugeBars();
   testTabsStayDistinctFromSettingChoices();
   testDisabledChoicesKeepMutedSelectionVisible();

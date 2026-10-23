@@ -17,8 +17,6 @@
 // combined with the others, as in Beatoraja's PlayConfig.
 class LaneCoverControlsView final : public View {
 public:
-  static constexpr int kToggleWidth = 190;
-
   explicit LaneCoverControlsView(std::function<void(const lane_cover::State &)> onChange)
       : onChange_(std::move(onChange)) {
     setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch)->setGap(10);
@@ -32,15 +30,10 @@ public:
           ->setAlignItems(YGAlignCenter)->setGap(10)->setMinHeight(rowHeight)->setFlexShrink(0);
       row->setWidthPercent(100);
       YGNodeStyleSetMaxWidth(row->getNode(), 760);
-      control.button = new Button(0, 0, kToggleWidth, 48);
-      control.button->setHeight(rowHeight)->setFlexShrink(1)->setMinWidth(0);
-      control.button->setName(std::string("lane-cover-") + names[i]);
-      control.button->setCornerRadius(app_theme::controlRadius());
-      control.button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
       control.content = new ToggleButtonContent(labels[i], 18, 20);
-      control.content->setJustifyContent(YGJustifyFlexStart)->setPadding(Edge::Left, 10);
-      control.content->setThemedColor(app_theme::textPrimary);
-      control.button->setContentView(control.content);
+      control.content->setJustifyContent(YGJustifyFlexStart);
+      control.button = toggle_button::makeButton(control.content, rowHeight);
+      control.button->setName(std::string("lane-cover-") + names[i]);
       control.button->setOnClickListener([this, i] {
         bool &value = enabled(i);
         value = !value;

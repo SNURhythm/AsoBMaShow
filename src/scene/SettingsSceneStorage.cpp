@@ -27,6 +27,8 @@ View *SettingsScene::buildStorageControls(const LayoutMetrics &metrics) {
   auto *toggleText = makeText("", metrics.bodyTextSize, app_theme::textPrimary(),
                               TextView::CENTER, TextView::MIDDLE);
   auto *toggle = makeControlButton(-1, metrics.actionButtonHeight, toggleText);
+  YGNodeStyleSetMaxWidthPercent(toggle->getNode(), 100);
+  toggle->setFlexShrink(1);
   auto editorState = std::make_shared<DownloadStoragePolicyEditorState>();
   auto refresh = [this, toggle, toggleText, editorState] {
     const auto &preferences = context.settings.storagePreferences;

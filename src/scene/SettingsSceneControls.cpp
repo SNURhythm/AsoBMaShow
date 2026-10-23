@@ -262,11 +262,7 @@ void SettingsScene::appendScratchlessModeSettings(
       content->setChecked(std::ranges::find(policy.tableUrls,
                                            table.sourceUrl) !=
                           policy.tableUrls.end());
-      auto *button = makeControlButton(0, metrics.actionButtonHeight,
-                                       makeText("", metrics.bodyTextSize,
-                                                app_theme::textPrimary()));
-      button->setContentView(content);
-      button->setWidthPercent(100)->setMinWidth(0);
+      auto *button = toggle_button::makeButton(content, metrics.actionButtonHeight);
       button->setEnabled(enabled);
       toggle_button::style(button, content->checked());
       button->setOnClickListener([this, keyMode, url = table.sourceUrl, button, content]() {

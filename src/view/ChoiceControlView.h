@@ -19,7 +19,15 @@ public:
     View::LayoutBatchScope batch;
     setWidthPercent(100)->setMinWidth(0)->setFlexShrink(0);
     setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch);
-    cycle_ = new Button();
+    cycle_ = new toggle_button::CompactButton([this] {
+      if (!cycleText_) return 96.0f;
+      float width = 0;
+      const auto label = state_.label.resolve();
+      for (const auto &option : state_.options)
+        width = std::max(width, static_cast<float>(cycleText_->measureTextWidth(
+            label.empty() ? option.label.resolve() : label + ": " + option.label.resolve())));
+      return width + cycle_button::kContentInset;
+    });
     cycle_->setName("choice-cycle");
     auto *content = new View();
     content->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter);
@@ -175,12 +183,12 @@ private:
       cycle_->setEnabled(state_.enabled);
       const auto activeId = activeStateId_.empty() && !state_.options.empty()
           ? state_.options.back().id : activeStateId_;
-      toggle_button::style(cycle_, state_.selectedId == activeId);
       for (const auto &option : state_.options) if (option.id == state_.selectedId) {
         const auto label = state_.label.resolve();
         cycleText_->setText(label.empty() ? option.label.resolve() : label + ": " + option.label.resolve());
         break;
       }
+      toggle_button::style(cycle_, state_.selectedId == activeId);
     }
     updating_ = false;
   }

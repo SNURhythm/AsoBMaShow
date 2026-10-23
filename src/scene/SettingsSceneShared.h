@@ -306,8 +306,14 @@ inline Button *makeButton(int width, int height, TextView *label,
                           const Color &pressedBackground,
                           const Color &normalBorder, const Color &hoverBorder,
                           const Color &pressedBorder, int borderWidth = 1, bool cycle = false) {
-  const bool fitContent = width == kFitContentWidth;
-  auto *button = fitContent ? new Button() : new Button(0, 0, width, height);
+  // Cycling toggles share content sizing; the requested width is for ordinary buttons.
+  const bool fitContent = width == kFitContentWidth && !cycle;
+  Button *button = cycle
+      ? new toggle_button::CompactButton([label] {
+          return label->measureTextWidth(label->getText()) + cycle_button::kContentInset;
+        })
+      : fitContent ? new Button() : new Button(0, 0, width, height);
+  if (cycle) button->setHeight(height);
   label->setAlign(TextView::CENTER);
   label->setVAlign(TextView::MIDDLE);
   if (fitContent) {
@@ -346,6 +352,7 @@ inline Button *makeButton(int width, int height, TextView *label,
                                   pressedBorderProvider);
   }
   button->setStyledBorderWidth(borderWidth);
+  if (auto *compact = dynamic_cast<toggle_button::CompactButton *>(button)) compact->refreshWidth();
   return button;
 }
 

@@ -63,28 +63,6 @@ View *makeRow(float height = 48.0f) {
   return row;
 }
 
-Button *makeButton(const i18n::Text &label, int fontSize, TextView **textOut) {
-  auto *button = new Button(0, 0, 0, rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 48);
-  button->setFlexShrink(0.0f);
-  button->setCornerRadius(app_theme::controlRadius());
-  button->setStyledBorderWidth(1);
-  button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
-                                    app_theme::controlPressed);
-  button->setThemedBorderColors(app_theme::hairlineSubtle,
-                                app_theme::hairlineStrong,
-                                app_theme::accentBorder);
-  auto *text = new TextView(kFont, fontSize);
-  text->setLocalizedText(label);
-  text->setAlign(TextView::CENTER);
-  text->setVAlign(TextView::MIDDLE);
-  text->setOverflow(TextView::TextOverflow::Hidden);
-  text->setThemedColor(app_theme::textPrimary);
-  button->setContentView(text);
-  if (textOut != nullptr) {
-    *textOut = text;
-  }
-  return button;
-}
 
 std::string gaugeLabel(GaugeType type, GaugeAutoShiftMode autoShift) {
   if (gaugeAutoShiftEnabled(autoShift)) {
@@ -295,12 +273,11 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   addView(playbackGroup);
 
   addView(makeSectionHeader(makeLabel(i18n::message("play_options.club_mode.label")), ui_icons::kPlay));
-  clubModeButton = makeButton("", 18, nullptr);
-  clubModeButton->setName("club-mode");
   clubModeButtonContent = new ToggleButtonContent("", 18, 17);
   clubModeButtonContent->labelView()->setLocalizedText(i18n::message("play_options.club_beat.label"));
-  clubModeButton->setContentView(clubModeButtonContent);
-  clubModeButton->setWidthPercent(100.0f);
+  clubModeButton = toggle_button::makeButton(clubModeButtonContent,
+      rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 48);
+  clubModeButton->setName("club-mode");
   clubModeButton->setOnClickListener([this]() {
     if (callbacks.onClubModeToggled) {
       callbacks.onClubModeToggled();

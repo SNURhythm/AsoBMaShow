@@ -276,16 +276,7 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
     auto *content = new ToggleButtonContent(i18n::tr(key), metrics.smallTextSize, 20);
     content->setThemedColor(app_theme::textPrimary);
     content->setChecked(enabled);
-    auto *button = new Button();
-    button->setHeight(controlHeight);
-    button->setPadding(Edge::Left, 12);
-    button->setPadding(Edge::Right, 12);
-    button->setAlignItems(YGAlignCenter);
-    button->setJustifyContent(YGJustifyCenter);
-    button->setFlexShrink(0);
-    button->setCornerRadius(app_theme::controlRadius());
-    button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
-    button->addView(content);
+    auto *button = toggle_button::makeButton(content, controlHeight);
     toggle_button::style(button, enabled);
     button->setOnClickListener([this, value = &enabled, button, content, restartAudio] {
       *value = !*value;
