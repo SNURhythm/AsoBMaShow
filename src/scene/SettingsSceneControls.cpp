@@ -833,7 +833,7 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
                                ? SettingsButtonTone::Info
                                : SettingsButtonTone::Success);
   toggle_button::style(bgaModeButton, context.settings.bgaEnabled);
-  toggle_button::style(uiThemeModeButton, context.settings.uiThemeMode == AppSettings::UiThemeMode::Dark);
+  toggle_button::style(uiThemeModeButton, false);
 
   auto applyTabStyle = [this](Button *button, TextView *, SettingsTab tab) {
     tab_button::style(button, activeTab == tab, true);

@@ -860,7 +860,7 @@ View *SettingsScene::buildScratchLanePositionControl(const LayoutMetrics &metric
   auto *toggle = makeControlButton(metrics.compact ? 132 : 156,
                                    metrics.actionButtonHeight, value, true);
   const auto refresh = [this, value, toggle]() {
-    toggle_button::style(toggle, context.settings.presentation().scratchLaneOnRight);
+    toggle_button::style(toggle, false);
     value->setLocalizedText(i18n::message(context.settings.presentation().scratchLaneOnRight
         ? "settings.skins.right.label" : "settings.skins.left.label"));
   };
@@ -1047,7 +1047,7 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
     auto *weight = makeControlButton(metrics.compact ? 132 : 156,
                                      metrics.actionButtonHeight, weightText, true);
     const auto refreshWeight = [this, weight, weightText, boldMember]() {
-      toggle_button::style(weight, context.settings.presentation().*boldMember);
+      toggle_button::style(weight, false);
       weightText->setLocalizedText(i18n::message(context.settings.presentation().*boldMember
           ? "settings.skins.feedback.bold.label" : "settings.skins.feedback.regular.label"));
     };
@@ -1095,7 +1095,7 @@ View *SettingsScene::buildJudgementFeedbackStyleControls(const LayoutMetrics &me
       metrics.bodyTextSize, app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE);
   auto *separationToggle = makeControlButton(metrics.compact ? 132 : 156,
                                               metrics.actionButtonHeight, separationText, true);
-  toggle_button::style(separationToggle, context.settings.presentation().judgementComboSeparated);
+  toggle_button::style(separationToggle, false);
   separationToggle->setOnClickListener([this]() {
     auto &separated = context.settings.presentation().judgementComboSeparated;
     separated = !separated;

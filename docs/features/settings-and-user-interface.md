@@ -120,8 +120,10 @@ values use a slider or editable numeric control rather than this rule.
   back. Users must be able to distinguish it from an action button or a
   dropdown that opens a list. Use the Club Beat palette consistently: active
   (On/Show) uses the primary accent, inactive (Off/Hide) uses the neutral control
-  surface. Captions and cycle icons share a contrasting foreground in both
-  themes; disabled toggles use muted text.
+  surface. Opposing values without an enabled/disabled meaning—Left/Right,
+  Regular/Bold, Combined/Separated, and Light/Dark—stay neutral in both states.
+  Captions and cycle icons share a contrasting foreground in both themes;
+  disabled toggles use muted text.
 - Navigation tabs use transparent surfaces with an accent underline (or a left
   indicator for vertical navigation), keeping them distinct from filled setting
   choice buttons.
