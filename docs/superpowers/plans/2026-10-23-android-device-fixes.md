@@ -52,3 +52,10 @@
 - [x] Obtain a fresh whole-branch code review; address material findings with regression coverage.
 - [x] Update the device report with attribution, fix results, and remaining limitations.
 - [x] Verify diff and clean working tree, then push the new branch. Do not merge or deploy.
+
+### Follow-up: Android custom-skin score eligibility
+
+- [x] Inspect the user's reported chart attempts, persisted provenance and runtime logs.
+- [x] Enable the deferred touch-layout authority retry on Android; retain Modified eligibility for actual fallback scoring.
+- [x] Review the handoff and cancel deferred startup after a fallback judgement or mine, preserving already committed state.
+- [x] Run focused authority/worker tests, build and install version code 5, and verify score/clear display on the reported chart immediately and after restart.

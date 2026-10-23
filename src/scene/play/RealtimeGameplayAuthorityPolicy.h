@@ -58,7 +58,7 @@ shouldSuspendRealtimeGameplayForPause(bool pausePlayback) noexcept {
 }
 
 // A skin session publishes authored lane and control geometry only after its
-// first submitted frame. iOS raw input authority retries at that boundary,
+// first submitted frame. Mobile touch input authority retries at that boundary,
 // never against an empty startup layout.
 [[nodiscard]] constexpr bool
 shouldRetryRealtimeGameplayAuthorityAfterSkinFrame(

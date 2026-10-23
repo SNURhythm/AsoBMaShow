@@ -149,3 +149,32 @@ was rerun for that change. Profile/UI settings were restored exactly, generated
 chart files removed, and the version-code-4 build retained. Test scores and the
 new test replay remain. No new app or DocumentsUI crash was captured during the
 fix retest.
+
+## Follow-up: custom-skin score and clear display
+
+The reported `"P" stands for "Party!" [Another]` attempts were present in the
+score database with replays, but both had `Modified` eligibility, so best-score
+and clear queries correctly excluded them. Their normal play settings did not
+cause that classification. LITONE12 initially had no published touch layout;
+Android required that layout but lacked the iOS retry after the first skin frame.
+Fallback judgements then invalidated ranking. Android's layout requirement was
+added in `9d6bed07` on October 7, after the October 5 release baseline.
+
+The retry now includes Android. A fallback judgement or mine also cancels the
+pending retry, preventing a late frame from replacing already committed fallback
+results with a fresh worker. Such late-layout attempts remain Modified; historical
+Modified attempts are not rewritten.
+
+Version code 5 was built locally. On the same chart, skin and unchanged EX-HARD
+settings, the initial empty layout was followed by canonical authority activation
+17 ms later. The completed attempt saved with a replay and Verified eligibility;
+the selector immediately displayed `0 / 2886` and `FAILED`. The policy and realtime
+worker tests pass (2/2), and the signed Android build/lint pass. Fresh review
+confirmed the fallback handoff guards. Settings remained unchanged.
+
+The final guard build was reinstalled and retested with injected touch input:
+1 BAD, 5 POOR and 3 KPOOR were saved with Verified eligibility and a replay.
+Authority activated 21 ms after the initial missing layout. Score and FAILED
+status remained visible after force-stop/relaunch and reselecting the chart.
+This verifies failed-clear persistence; a successful full-chart clear was not
+performed during this follow-up. The final version-code-5 build remains installed.
