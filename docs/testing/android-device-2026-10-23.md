@@ -116,7 +116,11 @@ entry point now launches the system browser's supported root URI. Android storag
 and replay publication share the DocumentsProvider mutation monitor and use a
 scoped regular-file rename when exclusive rename is unsupported. The fallback
 rejects occupied destinations and applies only inside app-owned containers;
-arbitrary all-files-access folders still require native exclusive-rename support.
+external-container fallback additionally requires Android 11+. On earlier or
+unknown versions, other apps may write there without participating in the
+monitor; see [Android's external directory access restrictions](https://developer.android.com/about/versions/11/privacy/storage#other-apps-data).
+Internal-container fallback remains available on older versions. Arbitrary
+all-files-access folders still require native exclusive-rename support.
 
 Device retest:
 
@@ -137,3 +141,11 @@ includes file identity preservation, occupied files/directories/dangling links,
 unsafe sources, out-of-scope paths, and serialized competing publishers. Existing
 transaction tests cover interruption/recovery; physical power-loss recovery was
 not exercised on the phone.
+
+Fresh review identified the older-Android external-directory race before push.
+Regression cases for unknown SDK, API 28/29, and API 30/33 demonstrated failure
+before adding the version gate and passed afterward. The affected 125-test set
+was rerun for that change. Profile/UI settings were restored exactly, generated
+chart files removed, and the version-code-4 build retained. Test scores and the
+new test replay remain. No new app or DocumentsUI crash was captured during the
+fix retest.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <filesystem>
 #include <span>
 #include <system_error>
@@ -11,6 +12,14 @@
 #include <unistd.h>
 
 namespace android_file {
+
+inline std::array<std::filesystem::path, 2> publicationRoots(
+    int androidSdk, const std::filesystem::path &external,
+    const std::filesystem::path &internal) {
+  // Before Android 11, storage-authorized apps can mutate another app's
+  // external directory without taking our monitor. Unknown SDKs fail closed.
+  return {androidSdk >= 30 ? external : std::filesystem::path{}, internal};
+}
 
 // Android's emulated external storage can reject both hard links and
 // RENAME_NOREPLACE. Only app-owned containers can use this fallback: every

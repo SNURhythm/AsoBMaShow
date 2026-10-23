@@ -14,7 +14,7 @@
 
 - Work on `fix/android-device-storage-files` in the current checkout; no worktree.
 - Preserve no-clobber publication, bounded memory, and existing crash recovery.
-- Android fallback applies only within app-owned storage, with the DocumentsProvider mutation monitor held. Unsupported arbitrary external folders fail closed.
+- Android fallback applies only within app-owned storage, with the DocumentsProvider mutation monitor held; external roots additionally require API 30+. Unsupported arbitrary external folders and older external roots fail closed.
 - Use focused subsystem tests and a signed build-only Android build; no distribution.
 - Restore device settings and remove only generated test fixtures.
 
@@ -49,6 +49,6 @@
 
 ### Task 3: Review and publish branch
 
-- [ ] Obtain a fresh whole-branch code review; address material findings with regression coverage.
-- [ ] Update the device report with attribution, fix results, and remaining limitations.
+- [x] Obtain a fresh whole-branch code review; address material findings with regression coverage.
+- [x] Update the device report with attribution, fix results, and remaining limitations.
 - [ ] Verify diff and clean working tree, then push the new branch. Do not merge or deploy.

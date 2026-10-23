@@ -88,6 +88,30 @@ int main() {
   expect(published[0] != published[1] &&
              read(destination) == (published[0] ? "first" : "second") &&
              fs::exists(published[0] ? second : source), "competing publishers retain loser bytes");
+
+  const auto external = root / "external";
+  fs::create_directory(external);
+  for (const int sdk : {-1, 0, 28, 29, 30, 33}) {
+    const auto scopedRoots = android_file::publicationRoots(sdk, external, owned);
+    const auto staged = external / "stage";
+    const auto installed = external / "final";
+    write(staged, "external bytes");
+    const bool moved = android_file::renameUnderMutationLock(staged, installed, scopedRoots, error);
+    if (sdk < 30) {
+      expect(!moved && error == std::errc::operation_not_supported &&
+                 fs::exists(staged) && !fs::exists(installed),
+             "older or unknown Android cannot use nonexclusive external rename");
+    } else {
+      expect(moved && read(installed) == "external bytes",
+             "Android 11+ app external storage can use the serialized fallback");
+    }
+    fs::remove(staged); fs::remove(installed);
+    write(owned / "internal-stage", "private bytes");
+    expect(android_file::renameUnderMutationLock(owned / "internal-stage", owned / "internal-final",
+                                                scopedRoots, error),
+           "private internal storage remains supported on older or unknown Android");
+    fs::remove(owned / "internal-final");
+  }
   fs::remove_all(root);
   return failures ? 1 : 0;
 }

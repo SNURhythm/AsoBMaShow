@@ -1608,8 +1608,8 @@ bool renameNoReplace(const std::filesystem::path &from,
     }
     // Do not extend the check-then-rename fallback to arbitrary all-files
     // folders: their writers do not participate in our JVM monitor.
-    const std::array<std::filesystem::path, 2> roots{
-        GetAndroidExternalFilesDir(), GetAndroidInternalFilesDir()};
+    const auto roots = publicationRoots(SDL_GetAndroidSDKVersion(),
+        GetAndroidExternalFilesDir(), GetAndroidInternalFilesDir());
     return renameUnderMutationLock(from, to, roots, error) ? 0 : -1;
   });
   if (result != 0 && !error) error = std::make_error_code(std::errc::io_error);
