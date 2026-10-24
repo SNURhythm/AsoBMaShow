@@ -26,6 +26,9 @@
         },
         {
             "name": "curl",
+            "features": [
+                "c-ares"
+            ],
             "platform": "!ios"
         },
         {

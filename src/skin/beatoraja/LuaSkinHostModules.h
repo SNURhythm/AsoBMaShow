@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -60,6 +61,8 @@ struct LuaSkinHostModulesOptions {
       std::numeric_limits<std::size_t>::max();
   bool allowProcessGlobalOperations = false;
   bool allowOsLibrary = true;
+  bool externalActionsEnabled = true;
+  std::function<bool(std::string_view)> openBrowser;
   void *coroutineContext = nullptr;
   LuaCoroutineCreatedCallback coroutineCreated = nullptr;
 };
@@ -87,6 +90,7 @@ public:
   std::optional<SkinDiagnostic> enableStateAccessors();
   void setFrameState(ISkinFrameState *) noexcept;
   void setFrameCallbackActive(bool) noexcept;
+  bool setExternalActionsEnabled(bool) noexcept;
   void setEventExecutor(LuaSkinEventExecutor) noexcept;
   LuaFileHandleInvalidationResult invalidateFileHandles() noexcept;
   std::span<const SkinCompatibilityDiagnostic> diagnostics() const noexcept;

@@ -104,7 +104,9 @@ void MusicSelectSongIndex::add(const ChartMetaRecord &record,
       .path = meta.BmsPath,
       .id = {directoryContext_ + ":" + identity},
       .title = meta.Title,
-      .titleKey = lowerAscii(meta.Title),
+      .titleKey = lowerAscii((record.unavailable || meta.BmsPath.empty()) &&
+                                    !meta.SubTitle.empty()
+                                ? meta.Title + " " + meta.SubTitle : meta.Title),
       .artistKey = lowerAscii(meta.Artist),
       .maxBpm = meta.MaxBpm,
       .level = meta.PlayLevel,
@@ -251,11 +253,10 @@ std::pair<std::string, std::string> MusicSelectSongIndex::configure(
 
 int MusicSelectSongIndex::compare(const Entry &left, const Entry &right,
                                   std::string_view sort) {
-  if (sort == "ARTIST" || sort == "BPM" || sort == "LENGTH" || sort == "LEVEL") {
-    if (!left.exists && !right.exists) return 0;
-    if (!left.exists) return 1;
-    if (!right.exists) return -1;
+  if (!left.exists && !right.exists) {
+    return left.titleKey < right.titleKey ? -1 : left.titleKey > right.titleKey;
   }
+  if (left.exists != right.exists) return left.exists ? -1 : 1;
   if (sort == "ARTIST") {
     return left.artistKey < right.artistKey ? -1 : left.artistKey > right.artistKey;
   }

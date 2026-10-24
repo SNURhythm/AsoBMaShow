@@ -2,6 +2,9 @@
 
 #include "RAII.h"
 #include "targets.h"
+#if TARGET_OS_ANDROID
+#include "AndroidCurlTrustStore.h"
+#endif
 
 #include <curl/curl.h>
 #include <string_view>
@@ -25,11 +28,23 @@ CurlRedirectProtocolsForInitialUrl(std::string_view url) {
   return "http,https";
 }
 
-inline void ConfigureCurlTrustStore(CURL *curl) {
+[[nodiscard]] inline bool ConfigureCurlTrustStore(CURL *curl) noexcept {
   if (curl == nullptr) {
-    return;
+    return false;
   }
 #if TARGET_OS_ANDROID
-  curl_easy_setopt(curl, CURLOPT_CAPATH, "/system/etc/security/cacerts");
+  // Intentionally process-lived: async workers can outlive other static
+  // destructors. Each easy handle still owns its own COPY of this bounded data.
+  static const std::string *const bundle = []() noexcept -> const std::string * {
+    try {
+      return new std::string(android_curl_trust::loadBundle(
+          "/apex/com.android.conscrypt/cacerts", "/system/etc/security/cacerts"));
+    } catch (...) {
+      return nullptr;
+    }
+  }();
+  return android_curl_trust::configure(curl, bundle ? std::string_view(*bundle) : std::string_view{});
+#else
+  return true;
 #endif
 }

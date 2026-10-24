@@ -4517,7 +4517,9 @@ void testConcurrentZipMappingFallback() {
 
 int RunStorageMeasurementTests();
 int RunStorageInventoryTaskTests();
+int RunChartReadmeTests();
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string(argv[1]) == "--chart-readme") return RunChartReadmeTests();
   if (argc == 2 && std::string(argv[1]) == "--zip-name-fallback") {
     testBzipZipFallbackUsesNamesAfterFilteredMetadata();
     return 0;

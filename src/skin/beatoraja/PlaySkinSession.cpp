@@ -306,6 +306,7 @@ struct PlaySkinSession::OwnedActivation final {
   std::function<void(std::size_t, bool)> applyPracticeMenuItem;
   std::function<void(int)> applyPracticeVisibleItems;
   std::function<LuaSkinLegacyInputGeneration()> captureLegacyInputGeneration;
+  std::function<bool()> externalActionsAllowed;
   ViewportSettings viewportSettings;
   UiLogicalRect safeUiBounds;
   PlaySkinViewport viewport;
@@ -452,7 +453,8 @@ PlaySkinSession::PlaySkinSession(
                .applyPracticeItemScroll = owned_->applyPracticeItemScroll,
                .applyPracticeMenuItem = owned_->applyPracticeMenuItem,
                .applyPracticeVisibleItems = owned_->applyPracticeVisibleItems,
-               .gaugeRandomSource = owned_->gaugeRandom.get()},
+               .gaugeRandomSource = owned_->gaugeRandom.get(),
+               .externalActionsAllowed = owned_->externalActionsAllowed},
       touchLayoutRevision_(context_.sessionSerial == 0
                                ? 1
                                : context_.sessionSerial),
@@ -726,7 +728,10 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
                return value;
              },
          .safetyPolicy = context.safetyPolicy,
-         .stop = context.stop});
+         .stop = context.stop,
+         .externalActionsEnabled = context.externalActionsEnabled &&
+             (!context.externalActionsAllowed || context.externalActionsAllowed()),
+         .openBrowser = std::move(context.openBrowser)});
     (void)recordSkinLoadingPhase(result.loadingTelemetry,
                                  SkinLoadingPhase::Document,
                                  loadingMicros(documentStarted));
@@ -912,6 +917,11 @@ PlaySkinSession::create(ValidatedSkinActivation activation,
         std::move(context.captureLegacyInputGeneration),
         context.viewport, context.safeUiBounds, viewport,
         context.safetyPolicy, pomyuMotionCyclesMillis);
+    owned->externalActionsAllowed =
+        [enabled = context.externalActionsEnabled,
+         allowed = std::move(context.externalActionsAllowed)] {
+          return enabled && (!allowed || allowed());
+        };
     owned->renderer.setGeneratedTextureLiveCounters(
         context.liveResourceCounters);
     owned->renderer.prepareModelIndex(context.sessionSerial, owned->model);
@@ -988,6 +998,9 @@ PlaySkinFrameTransactionResult PlaySkinSession::runFrameTransaction(
         "skin.session.serial_invalid",
         "Gameplay skin session serial must be nonzero."));
     return result;
+  }
+  if (context_.runtime != nullptr && context_.externalActionsAllowed) {
+    (void)context_.runtime->setExternalActionsEnabled(context_.externalActionsAllowed());
   }
   if (context_.runtime != nullptr && context_.captureLegacyInputGeneration) {
     try {

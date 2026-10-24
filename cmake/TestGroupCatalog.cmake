@@ -108,6 +108,7 @@ asobmashow_label_tests(area_input
     ipad_hardware_button_tests
     lane_cover_scene_input_tests
     legacy_skin_touch_tests
+    lua_skin_legacy_input_tests
     native_keyboard_input_tests
     realtime_gameplay_input_registration_tests
     realtime_touch_input_router_tests
@@ -278,6 +279,9 @@ asobmashow_label_tests(area_library
     android_library_picker_startup_tests
     android_native_storage_paths_tests
     android_temporary_storage_tests
+    readme_translation_apple_tests
+    readme_translation_tests
+    chart_readme_tests
     chart_library_operations_tests
     chart_library_scanner_tests
     chart_library_task_service_tests
@@ -453,9 +457,11 @@ asobmashow_label_tests(area_skin_runtime
     lua_skin_coroutine_header
     lua_skin_file_system_tests
     lua_skin_foundation_http_transport_tests
+    lua_skin_foundation_http_network_tests
     lua_skin_gauge_live_integration_tests
     lua_skin_host_modules_tests
     lua_skin_http_transport_tests
+    lua_skin_async_http_tests
     lua_skin_java_pattern_foundation_oracle_tests
     lua_skin_java_pattern_oracle_tests
     lua_skin_note_live_integration_tests
@@ -551,6 +557,7 @@ asobmashow_label_tests(area_ui
     scrollbar_fade_tests
     text_animation_timing_tests
     text_input_box_tests
+    legal_notices_tests
     ui_presentation_schedule_tests
     ui_scale_tests
     utf8_tests

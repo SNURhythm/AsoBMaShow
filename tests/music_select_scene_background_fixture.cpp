@@ -43,8 +43,8 @@ struct MusicSelectScene {
   bool recordsResumeAudioPending_ = false;
   struct { void cancelAndWait() {} bool active() const { return false; } } recordsTask_;
   void finishRecordsLoading() {}
-  struct UnzipModal { void cancelAndWait() {} };
-  UnzipModal *archiveUnzipModal_ = nullptr, *findBmsModal_ = nullptr;
+  struct UnzipModal { void hide() {} void cancelAndWait() {} };
+  UnzipModal *archiveUnzipModal_ = nullptr, *findBmsModal_ = nullptr, *readmeModal_ = nullptr;
   std::atomic_bool launchCancelled_ = false;
   std::uint64_t launchGeneration_ = 0;
   std::jthread launchThread_;

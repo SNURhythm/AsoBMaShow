@@ -169,7 +169,8 @@ replayGameplaySkinSessionServices(ApplicationContext &context,
               context.skinLiveResourceCounters),
           .configurationWrites = context.skinConfigurationWriteQueue.get(),
           .diagnosticHistory = context.skinDiagnosticHistory.get(),
-          .stop = stop};
+          .stop = stop,
+          .externalActionsEnabled = false};
 #else
   (void)context;
   (void)stop;
@@ -232,7 +233,8 @@ public:
                .drawableHeight = rendering::render_height};
          },
          .safetyPolicy = skin::SkinSafetyPolicy(acquisition.request->safetyLevel),
-         .stop = stop});
+         .stop = stop,
+         .externalActionsEnabled = false});
     for (const auto &diagnostic : created.diagnostics)
       replayExportLog(log, "Replay result skin: %s", diagnostic.message.c_str());
     session_ = std::move(created.session);

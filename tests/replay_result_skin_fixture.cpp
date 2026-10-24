@@ -74,6 +74,7 @@ struct SessionContext {
   std::function<LuaSkinLegacyInputGeneration()> captureLegacyInputGeneration;
   SkinSafetyPolicy safetyPolicy;
   std::stop_token stop;
+  bool externalActionsEnabled = true;
 };
 struct ResultSkinSession;
 struct Created {
@@ -87,6 +88,7 @@ struct ResultSkinSession {
   static inline std::vector<std::uint64_t> serials;
   static inline int skinType = 0, audio = 0, alive = 0;
   static inline bool failCreate = false, failRender = false;
+  static inline bool externalActionsEnabled = true;
   static inline std::stop_token stop;
   static inline std::function<LuaSkinLegacyInputGeneration()> captureInput;
   ResultSkinSession() { ++alive; }
@@ -95,6 +97,7 @@ struct ResultSkinSession {
     initial = context.initialData;
     skinType = context.expectedSkinType;
     audio = context.audioBackend;
+    externalActionsEnabled = context.externalActionsEnabled;
     stop = context.stop;
     captureInput = std::move(context.captureLegacyInputGeneration);
     if (failCreate) return {nullptr, {{"decode failed"}}};
@@ -283,6 +286,8 @@ int main() {
     rendering::render_height = 1080;
     check(presentation.prepare(app, data, type, stop.get_token(), error, nullptr) &&
               presentation.active(), "selected result skin activates for chart/stage/course");
+    check(!Session::externalActionsEnabled,
+          "replay result loading disables external actions before Lua executes");
     check(app.gameplaySkinLifecycle->target == type && !app.gameplaySkinLifecycle->boundary &&
               Session::skinType == type, "acquisition uses exact target without a chart boundary");
     check(!Session::initial.showControls && Session::initial.outGraphPlaceholder == nullptr &&

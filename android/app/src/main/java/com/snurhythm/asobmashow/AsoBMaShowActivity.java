@@ -22,6 +22,7 @@ import android.media.MediaPlayer;
 import android.media.PlaybackParams;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
+import android.net.ConnectivityManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -73,6 +74,18 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class AsoBMaShowActivity extends SDLActivity {
+    private ReadmeTranslator readmeTranslator;
+    public void translateReadme(long id, byte[] data, String target) {
+        runOnUiThread(() -> {
+            if (isDestroyed()) return;
+            if (readmeTranslator == null) readmeTranslator = new ReadmeTranslator(this);
+            readmeTranslator.start(id, data, target);
+        });
+    }
+    public void cancelReadmeTranslation(long id) {
+        runOnUiThread(() -> { if (readmeTranslator != null) readmeTranslator.cancel(id); });
+    }
+
     @Override
     protected SDLSurface createSDLSurface(Context context) {
         return new AsoBMaShowSurface(context);
@@ -394,6 +407,7 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     @Override
     protected void onDestroy() {
+        if (readmeTranslator != null) readmeTranslator.cancel(0);
         stopDocumentsLibraryRefresh();
         folderPickerRequests.destroy();
         cancelPendingChartImports();
@@ -479,6 +493,22 @@ public class AsoBMaShowActivity extends SDLActivity {
     }
 
     @Override
+    public void loadLibraries() {
+        super.loadLibraries();
+        if (!AndroidTextRasterizer.initializeNative()) {
+            throw new IllegalStateException("Could not initialize Android text rendering");
+        }
+        // SDL invokes this before starting its native application thread. Use
+        // application context because c-ares retains the manager process-wide.
+        ConnectivityManager connectivityManager = (ConnectivityManager)
+                getApplicationContext().getSystemService(Context.CONNECTIVITY_SERVICE);
+        int status = nativeInitializeDns(connectivityManager);
+        if (status != 0) {
+            throw new IllegalStateException("Could not initialize Android DNS (" + status + ")");
+        }
+    }
+
+    @Override
     protected String[] getLibraries() {
         return new String[] {
                 "SDL3",
@@ -487,6 +517,7 @@ public class AsoBMaShowActivity extends SDLActivity {
         };
     }
 
+    private static native int nativeInitializeDns(ConnectivityManager connectivityManager);
     private static native void nativeDownloadUrlToFileResponse(long progressToken, int statusCode);
     private static native void nativeDownloadUrlToFileProgress(long progressToken,
                                                                long downloadedBytes,
@@ -765,6 +796,35 @@ public class AsoBMaShowActivity extends SDLActivity {
     public String clearTransientTreeFileCache() {
         transientDocumentIdCache.clear();
         return "OK";
+    }
+
+    public String listTreeTextFiles(String treeUriText, String relativeDir) {
+        try {
+            Uri treeUri = Uri.parse(treeUriText);
+            String directory = normalizeRelativePath(relativeDir);
+            String parentId = resolveDocumentId(treeUri, directory);
+            if (parentId == null) return ERROR_PREFIX + "Directory is unavailable.";
+            Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId);
+            String[] columns = {Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE};
+            org.json.JSONArray names = new org.json.JSONArray();
+            try (Cursor cursor = getContentResolver().query(children, columns, null, null, null)) {
+                requireChartFilesCursor(cursor);
+                while (cursor.moveToNext()) {
+                    String name = cursor.getString(1);
+                    if (Document.MIME_TYPE_DIR.equals(cursor.getString(2)) || name == null
+                            || !name.toLowerCase(Locale.ROOT).endsWith(".txt")) continue;
+                    if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) continue;
+                    String relative = directory.isEmpty() ? name : directory + "/" + name;
+                    transientDocumentIdCache.put(cacheKey(treeUri, relative), cursor.getString(0));
+                    names.put(name);
+                    // One overflow item lets the reader report its explicit file limit.
+                    if (names.length() > 1024) break;
+                }
+            }
+            return names.toString();
+        } catch (Exception e) {
+            return ERROR_PREFIX + e.getMessage();
+        }
     }
 
     public String cacheTreeDirectory(String treeUriText, String relativeDir) {

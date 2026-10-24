@@ -19,6 +19,7 @@
 #include <cmath>
 #include <deque>
 #include <mutex>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -364,6 +365,10 @@ void InputDeviceRegistry::clearSdlInputState() {
   pressedSdlScancodes_.reset();
   pressedGdxKeys_.reset();
   pressedGdxKeyCounts_.fill(0);
+  pressedMouseButtons_.reset();
+  legacyTouches_.fill(std::nullopt);
+  pendingLegacyEdges_ = {};
+  currentLegacyEdges_ = {};
 }
 
 void InputDeviceRegistry::reconcileSdlDevices() {
@@ -394,15 +399,74 @@ void InputDeviceRegistry::handleSdlEvent(const SDL_Event &event) {
     const std::lock_guard lock(legacyInputMutex_);
     pointerPosition_ = pointer;
   }
+  {
+    const std::lock_guard lock(legacyInputMutex_);
+    const bool mouseMotion = event.type == SDL_EVENT_MOUSE_MOTION && event.motion.which != SDL_TOUCH_MOUSEID;
+    const bool mouseButton = (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN || event.type == SDL_EVENT_MOUSE_BUTTON_UP) &&
+                             event.button.which != SDL_TOUCH_MOUSEID;
+    if (mouseMotion || mouseButton) {
+      const float x = mouseMotion ? event.motion.x : event.button.x;
+      const float y = mouseMotion ? event.motion.y : event.button.y;
+      if (std::isfinite(x) && std::isfinite(y)) legacyPointerPosition_ = PointerPosition{x, y, false};
+      if (mouseMotion) {
+        if (std::isfinite(event.motion.xrel)) pendingLegacyEdges_.mouseDeltaX += event.motion.xrel;
+        if (std::isfinite(event.motion.yrel)) pendingLegacyEdges_.mouseDeltaY += event.motion.yrel;
+      } else {
+        int button = -1;
+        switch (event.button.button) {
+        case SDL_BUTTON_LEFT: button = 0; break;
+        case SDL_BUTTON_RIGHT: button = 1; break;
+        case SDL_BUTTON_MIDDLE: button = 2; break;
+        case SDL_BUTTON_X1: button = 3; break;
+        case SDL_BUTTON_X2: button = 4; break;
+        default: break;
+        }
+        if (button >= 0) {
+          const bool down = event.type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+          if (down && !pressedMouseButtons_.test(button)) pendingLegacyEdges_.justTouched = true;
+          pressedMouseButtons_.set(button, down);
+        }
+      }
+    }
+    const bool touchDown = event.type == SDL_EVENT_FINGER_DOWN;
+    const bool touchMotion = event.type == SDL_EVENT_FINGER_MOTION;
+    const bool touchUp = event.type == SDL_EVENT_FINGER_UP || event.type == SDL_EVENT_FINGER_CANCELED;
+    if ((touchDown || touchMotion || touchUp) && event.tfinger.touchID != SDL_MOUSE_TOUCHID) {
+      const auto &touch = event.tfinger;
+      auto found = std::ranges::find_if(legacyTouches_, [&](const auto &slot) {
+        return slot && slot->device == touch.touchID && slot->finger == touch.fingerID;
+      });
+      const bool finite = std::isfinite(touch.x) && std::isfinite(touch.y);
+      if (touchDown && finite && found == legacyTouches_.end()) {
+        found = std::ranges::find_if(legacyTouches_, [](const auto &slot) { return !slot; });
+        if (found != legacyTouches_.end()) {
+          *found = LegacyTouch{touch.touchID, touch.fingerID};
+          pendingLegacyEdges_.justTouched = true;
+        }
+      }
+      if (found != legacyTouches_.end()) {
+        if (found == legacyTouches_.begin() && finite) {
+          // Derive touch delta from coordinates: native iOS/Android bridge events
+          // intentionally carry no SDL dx/dy values.
+          if (touchMotion && legacyPointerPosition_ && legacyPointerPosition_->normalized) {
+            pendingLegacyEdges_.touchDeltaX += touch.x - legacyPointerPosition_->x;
+            pendingLegacyEdges_.touchDeltaY += touch.y - legacyPointerPosition_->y;
+          }
+          legacyPointerPosition_ = PointerPosition{touch.x, touch.y, true};
+        }
+        if (touchUp) found->reset();
+      }
+      if (event.type == SDL_EVENT_FINGER_CANCELED) {
+        pendingLegacyEdges_ = {};
+        currentLegacyEdges_ = {};
+      }
+    }
+  }
   for (const auto &backend : backends_) {
     backend->handleSdlEvent(event);
   }
-  if ((event.type >= SDL_EVENT_WINDOW_FIRST && event.type <= SDL_EVENT_WINDOW_LAST) &&
-      event.type == SDL_EVENT_WINDOW_FOCUS_LOST) {
-    const std::lock_guard lock(legacyInputMutex_);
-    pressedSdlScancodes_.reset();
-    pressedGdxKeys_.reset();
-    pressedGdxKeyCounts_.fill(0);
+  if (event.type == SDL_EVENT_WINDOW_FOCUS_LOST || event.type == SDL_EVENT_WILL_ENTER_BACKGROUND) {
+    clearSdlInputState();
     return;
   }
   if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) {
@@ -422,6 +486,7 @@ void InputDeviceRegistry::handleSdlEvent(const SDL_Event &event) {
           static_cast<std::size_t>(gdxKeyCode) < pressedGdxKeys_.size()) {
         auto &count = pressedGdxKeyCounts_[static_cast<std::size_t>(gdxKeyCode)];
         if (pressed) {
+          if (!event.key.repeat) pendingLegacyEdges_.keys.set(static_cast<std::size_t>(gdxKeyCode));
           ++count;
         } else if (count != 0) {
           --count;
@@ -657,6 +722,31 @@ input::LegacyInputGeneration InputDeviceRegistry::legacyInputGeneration(
   result.drawableHeight = std::max(0, drawableHeight);
   result.anyKeyPressed = pressedSdlScancodes_.any();
   result.pressedGdxKeys = pressedGdxKeys_;
+  result.justPressedGdxKeys = currentLegacyEdges_.keys;
+  result.justTouched = currentLegacyEdges_.justTouched;
+  result.pressedMouseButtons = pressedMouseButtons_;
+  if (std::ranges::any_of(legacyTouches_, [](const auto &slot) { return slot.has_value(); })) {
+    result.pressedMouseButtons.set(0);
+  }
+  // Graphics dimensions already use drawable pixels; keep pointer coordinates
+  // in that same top-left screen space, without the scene's Y-axis inversion.
+  const double scaleX = legacyLogicalWidth_ > 0 ? double(result.drawableWidth) / legacyLogicalWidth_ : 0.0;
+  const double scaleY = legacyLogicalHeight_ > 0 ? double(result.drawableHeight) / legacyLogicalHeight_ : 0.0;
+  const auto screenInteger = [](double value) {
+    if (!std::isfinite(value)) return 0;
+    return static_cast<int>(std::clamp(value, double(std::numeric_limits<int>::min()),
+                                     double(std::numeric_limits<int>::max())));
+  };
+  if (legacyPointerPosition_) {
+    result.pointerX = screenInteger(legacyPointerPosition_->x *
+        (legacyPointerPosition_->normalized ? result.drawableWidth : scaleX));
+    result.pointerY = screenInteger(legacyPointerPosition_->y *
+        (legacyPointerPosition_->normalized ? result.drawableHeight : scaleY));
+  }
+  result.deltaX = screenInteger(currentLegacyEdges_.mouseDeltaX * scaleX +
+                               currentLegacyEdges_.touchDeltaX * result.drawableWidth);
+  result.deltaY = screenInteger(currentLegacyEdges_.mouseDeltaY * scaleY +
+                               currentLegacyEdges_.touchDeltaY * result.drawableHeight);
   return result;
 }
 
@@ -675,4 +765,17 @@ void InputDeviceRegistry::enqueueInput(input::PhysicalInputEvent event) {
 
 void InputDeviceRegistry::enqueueDevice(input::InputDeviceSnapshot device) {
   queueState_->enqueue(QueuedPayload(std::move(device)));
+}
+
+void InputDeviceRegistry::advanceLegacyInputFrame(int logicalWidth, int logicalHeight) noexcept {
+  const std::lock_guard lock(legacyInputMutex_);
+  currentLegacyEdges_ = std::exchange(pendingLegacyEdges_, {});
+  legacyLogicalWidth_ = std::max(0, logicalWidth);
+  legacyLogicalHeight_ = std::max(0, logicalHeight);
+}
+
+bool InputDeviceRegistry::hasCurrentLegacyPressEdge() const noexcept {
+  const std::lock_guard lock(legacyInputMutex_);
+  return currentLegacyEdges_.justTouched || currentLegacyEdges_.keys.test(66) ||
+         currentLegacyEdges_.keys.test(62);
 }

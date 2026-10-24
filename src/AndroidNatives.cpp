@@ -4,6 +4,7 @@
 #if TARGET_OS_ANDROID
 
 #include "StableHash.h"
+#include "nlohmann/json.hpp"
 #include "ArchiveFile.h"
 #include "archive/ArchiveReferenceRegistry.h"
 #include "i18n/Localization.h"
@@ -30,6 +31,7 @@
 #include <SDL3/SDL_log.h>
 #include <SDL3/SDL_system.h>
 #include <SDL3/SDL_timer.h>
+#include <ares.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -47,6 +49,32 @@
 #include <vector>
 #include <unistd.h>
 #include <time.h>
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeInitializeDns(
+    JNIEnv *env, jclass, jobject connectivityManager) {
+  // Called from loadLibraries(), before SDL starts native application workers.
+  // c-ares owns a global reference to the application-context manager and asks
+  // it for the current network's DNS servers whenever it creates a channel.
+  static std::once_flag initialized;
+  static int result = ARES_ENOTINITIALIZED;
+  try {
+    std::call_once(initialized, [&] {
+      JavaVM *vm = nullptr;
+      if (connectivityManager == nullptr || env->GetJavaVM(&vm) != JNI_OK) return;
+      result = ares_library_init(ARES_LIB_INIT_ALL);
+      if (result != ARES_SUCCESS) return;
+      ares_library_init_jvm(vm);
+      result = ares_library_init_android(connectivityManager);
+      // Keep our library reference for the process lifetime: Activity teardown
+      // must not clear c-ares JNI state while native HTTP workers still use it.
+      if (result != ARES_SUCCESS) ares_library_cleanup();
+    });
+  } catch (...) {
+    return ARES_ENOTINITIALIZED;
+  }
+  return result;
+}
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeSetInputTimestamp(
@@ -1908,6 +1936,39 @@ bool ListAndroidTreeChartFiles(const std::filesystem::path &rootPath,
                                                    : line),
         .hasDocument = hasDocument && line[separator + 1] == '1',
     });
+  }
+  return true;
+}
+
+bool ListAndroidTreeTextFiles(const std::filesystem::path &directoryPath,
+                              std::vector<std::filesystem::path> &files,
+                              std::string &errorMessage) {
+  files.clear();
+  std::string treeId;
+  std::filesystem::path relativePath;
+  if (!splitAndroidTreePath(directoryPath, treeId, relativePath)) {
+    errorMessage = "Android directory path is invalid.";
+    return false;
+  }
+  const auto uri = treeUriForId(treeId);
+  if (!uri) { errorMessage = "Android directory permission is not registered."; return false; }
+  const auto result = callActivityStringMethod2(
+      "listTreeTextFiles", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+      uri->c_str(), relativePath.generic_string().c_str(), errorMessage);
+  std::string value;
+  if (!errorMessage.empty() || !parseBridgeResult(result, value, errorMessage)) return false;
+  const auto names = nlohmann::json::parse(value, nullptr, false);
+  if (!names.is_array() || names.size() > 1025) {
+    errorMessage = "Invalid Android readme listing.";
+    return false;
+  }
+  for (const auto &item : names) {
+    if (!item.is_string()) { files.clear(); return false; }
+    const auto name = item.get<std::string>();
+    if (name.empty() || name == "." || name == ".." || name.find_first_of("/\\") != std::string::npos) {
+      files.clear(); errorMessage = "Invalid Android readme filename."; return false;
+    }
+    files.push_back(directoryPath / std::filesystem::u8path(name));
   }
   return true;
 }

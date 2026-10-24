@@ -73,6 +73,12 @@ struct SkinFileExistsResult {
   std::optional<SkinFileFailure> failure;
 };
 
+struct SkinFileTypeResult {
+  bool isFile = false;
+  bool isDirectory = false;
+  std::optional<SkinFileFailure> failure;
+};
+
 struct SkinFileWriteResult {
   std::uint64_t resultingBytes = 0;
   std::uint64_t resultingFiles = 0;
@@ -188,6 +194,12 @@ public:
   // by its mutable Files-visible pathname.
   LuaSkinFileOpenResult openLuaFile(std::string_view virtualPath,
                                     LuaSkinFileOpenMode);
+  // Updated main_state/File paths reject links independently of legacy io
+  // and resource policies. Facades revalidate their stored path on each use.
+  SkinFileResolveResult normalizeDirectPath(std::string_view virtualPath) const;
+  SkinFileTypeResult fileType(std::string_view virtualPath) const;
+  SkinFileListResult listFileFacades(std::string_view virtualDirectory) const;
+  SkinFileWriteResult deleteData(std::string_view virtualPath);
   SkinFileExistsResult exists(std::string_view virtualPath) const;
   SkinFileListResult list(std::string_view virtualDirectory,
                           std::string_view luaPattern,

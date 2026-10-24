@@ -127,7 +127,9 @@ DecodedGameplaySkinDocument decodeLua(GameplaySkinDocumentRequest &request,
        .safetyPolicy = request.safetyPolicy,
        .httpTransport = std::move(request.luaHttpTransport),
        .audioBackend = std::move(request.luaAudioBackend),
-       .stop = request.stop});
+       .stop = request.stop,
+       .externalActionsEnabled = configured && request.externalActionsEnabled,
+       .openBrowser = std::move(request.openBrowser)});
   if (!runtime.runtime) {
     appendFailure(result.diagnostics, std::move(runtime.failure),
                   "skin_lua_runtime_create_failed",
@@ -302,7 +304,9 @@ DecodedGameplaySkinDocument decodeJson(GameplaySkinDocumentRequest &request,
          .safetyPolicy = request.safetyPolicy,
          .httpTransport = std::move(request.luaHttpTransport),
          .audioBackend = std::move(request.luaAudioBackend),
-         .stop = request.stop});
+         .stop = request.stop,
+         .externalActionsEnabled = request.externalActionsEnabled,
+         .openBrowser = std::move(request.openBrowser)});
     if (!created.runtime) {
       appendFailure(result.diagnostics, std::move(created.failure),
                     "skin_lua_runtime_create_failed",

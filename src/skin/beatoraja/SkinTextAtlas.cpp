@@ -3,6 +3,7 @@
 
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include "../../view/SdlTtfRuntime.h"
+#include "../../view/SystemTextRasterizer.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3_ttf/SDL_ttf.h>
@@ -86,6 +87,12 @@ struct OpenFace {
   OpenFace &operator=(OpenFace &&other) noexcept { std::swap(font, other.font); return *this; }
 };
 using GlyphBitmap = skin::SkinPreparedGlyphBitmap;
+
+bool isTextFormatControl(char32_t codepoint) {
+  return codepoint == U'\u200c' || codepoint == U'\u200d' ||
+         codepoint == U'\ufe0e' || codepoint == U'\ufe0f' ||
+         (codepoint >= U'\U000e0100' && codepoint <= U'\U000e01ef');
+}
 
 #if defined(ASOBMASHOW_SKIN_RESOURCE_TESTING)
 std::atomic_size_t paintBlendOperationsForTesting{0};
@@ -176,6 +183,8 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     result.error = "font atlas key or limits are invalid";
     return result;
   }
+  text_runtime::SystemTextRasterizer systemText(
+      key.pointSize, text_runtime::SystemTextRasterizer::GlyphFallback::BundledThenSystem);
   if (!text_runtime::acquire()) {
     result.error = "SDL_ttf initialization failed";
     return result;
@@ -347,21 +356,33 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
   const auto rasterizeGlyph = [&](char32_t codepoint)
       -> std::optional<GlyphBitmap> {
     if (codepoint == U'\n' || codepoint == U'\r') return std::nullopt;
+    if (isTextFormatControl(codepoint)) return GlyphBitmap{.codepoint = codepoint};
     auto [faceIndex, sourceCodepoint] = selectGlyphSource(codepoint);
+    const std::size_t maximumAtlasBytes =
+        skinResourceLimit(safetyPolicy, SkinResourcePolicy::maximumAtlasBytes);
+    auto systemGlyph = faceIndex == opened.size() || sourceCodepoint != codepoint
+        ? systemText.glyph(codepoint, maximumAtlasBytes - temporaryGlyphBytes)
+        : std::nullopt;
     // Unsupported codepoints (commonly from chart runtime strings such as the
     // title or artist) fall back to the synthetic missing-glyph box below
     // instead of rejecting the whole atlas. Rejecting here made legitimate
     // charts with a single exotic character drop every value-bearing text
     // object rendered by the face, and also discarded the glyphs rasterized
     // before the offending codepoint on every attempt.
-    const bool syntheticMissing = faceIndex == opened.size();
+    const bool syntheticMissing = !systemGlyph && faceIndex == opened.size();
     if (syntheticMissing) faceIndex = 0;
     int minX = 0, maxX = 0, minY = 0, maxY = 0, advance = 0;
     const int missingHeight = std::max(8, key.pointSize);
     const int missingWidth = std::max(
         6, static_cast<int>(std::lround(missingHeight * 0.75)));
     const int missingStroke = std::max(1, missingHeight / 12);
-    if (syntheticMissing) {
+    if (systemGlyph) {
+      minX = systemGlyph->offsetX;
+      maxX = minX + systemGlyph->width;
+      maxY = systemGlyph->ascent;
+      minY = maxY - systemGlyph->height;
+      advance = systemGlyph->advance;
+    } else if (syntheticMissing) {
       maxX = missingWidth;
       maxY = missingHeight;
       advance = missingWidth + missingStroke;
@@ -379,8 +400,6 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
         static_cast<std::int64_t>(maxX) - minX + 2LL * padding;
     const auto estimatedHeight =
         static_cast<std::int64_t>(maxY) - minY + 2LL * padding;
-    const std::size_t maximumAtlasBytes =
-        skinResourceLimit(safetyPolicy, SkinResourcePolicy::maximumAtlasBytes);
     if (estimatedWidth <= 0 || estimatedHeight <= 0 ||
         estimatedWidth > skinResourceDimensionLimit(safetyPolicy) ||
         estimatedHeight > skinResourceDimensionLimit(safetyPolicy) ||
@@ -392,7 +411,11 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
       return std::nullopt;
     }
     SDL_Surface *surface = nullptr;
-    if (syntheticMissing) {
+    if (systemGlyph) {
+      surface = SDL_CreateSurfaceFrom(systemGlyph->width, systemGlyph->height,
+                                     SDL_PIXELFORMAT_RGBA32,
+                                     systemGlyph->rgba.data(), systemGlyph->width * 4);
+    } else if (syntheticMissing) {
       surface = SDL_CreateSurface(missingWidth, missingHeight, SDL_PIXELFORMAT_RGBA32);
       if (surface != nullptr) {
         SDL_FillSurfaceRect(surface, nullptr,
@@ -448,6 +471,7 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     int alphaMaxX = -1;
     int alphaMaxY = -1;
     std::size_t opaquePixels = 0;
+    bool hasColor = false;
     for (int y = 0; y < surface->h; ++y) {
       if (cancellationRequested && cancellationRequested()) {
         SDL_UnlockSurface(surface);
@@ -462,6 +486,9 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
         if (alpha == 0) {
           continue;
         }
+        const auto *pixel = pixels + static_cast<std::size_t>(y) * surface->pitch +
+                            static_cast<std::size_t>(x) * 4U;
+        hasColor |= pixel[0] != 255 || pixel[1] != 255 || pixel[2] != 255;
         ++opaquePixels;
         alphaMinX = std::min(alphaMinX, x);
         alphaMinY = std::min(alphaMinY, y);
@@ -486,6 +513,8 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     }
     std::vector<unsigned char> alpha(
         static_cast<std::size_t>(contentWidth) * contentHeight, 0);
+    std::vector<unsigned char> colorRgb;
+    if (hasColor) colorRgb.resize(alpha.size() * 3U);
     for (int y = alphaMinY; hasPixels && y <= alphaMaxY; ++y) {
       if (cancellationRequested && cancellationRequested()) {
         SDL_UnlockSurface(surface);
@@ -494,15 +523,24 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
         return std::nullopt;
       }
       for (int x = alphaMinX; x <= alphaMaxX; ++x) {
-        alpha[static_cast<std::size_t>(y - alphaMinY) * contentWidth +
-              static_cast<std::size_t>(x - alphaMinX)] =
-            pixels[static_cast<std::size_t>(y) * surface->pitch +
-                   static_cast<std::size_t>(x) * 4U + 3U];
+        const auto index = static_cast<std::size_t>(y - alphaMinY) * contentWidth +
+                           static_cast<std::size_t>(x - alphaMinX);
+        const auto *pixel = pixels + static_cast<std::size_t>(y) * surface->pitch +
+                            static_cast<std::size_t>(x) * 4U;
+        alpha[index] = pixel[3];
+        if (hasColor) std::copy_n(pixel, 3, colorRgb.data() + index * 3U);
       }
     }
     SDL_UnlockSurface(surface);
     SDL_DestroySurface(surface);
-    const int selectedFaceAscent = TTF_GetFontAscent(opened[faceIndex].font);
+    // Native rasters report bearings relative to their own baseline. Keep
+    // that baseline on the primary face's line, rather than aligning ascents.
+    const int selectedFaceAscent = systemGlyph ? primaryAscent
+                                               : TTF_GetFontAscent(opened[faceIndex].font);
+    if (systemGlyph && hasPixels) {
+      minX = systemGlyph->offsetX + alphaMinX;
+      maxY = systemGlyph->ascent - alphaMinY;
+    }
     return GlyphBitmap{
         .codepoint = codepoint,
         .face = faceIndex,
@@ -519,7 +557,8 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
         .contentWidth = contentWidth,
         .contentHeight = contentHeight,
         .opaquePixels = opaquePixels,
-        .alpha = std::move(alpha)};
+        .alpha = std::move(alpha),
+        .colorRgb = std::move(colorRgb)};
   };
   for (char32_t codepoint : codepoints) {
     if (cancellationRequested && cancellationRequested()) {
@@ -675,7 +714,24 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
         }
         for (const auto [ox, oy] : outlineOffsets)
           put(glyphX + ox, glyphY + oy, key.outlineRgba, alpha, true);
-        put(glyphX, glyphY, {255,255,255,255}, alpha, false);
+      }
+    }
+    // Paint ink after every effect pixel. A later neighbor's outline must not
+    // replace foreground pixels, especially the intrinsic colors of emoji.
+    for (int y = 0; y < glyph.contentHeight; ++y) {
+      if (cancellationRequested && cancellationRequested()) {
+        result.error = "font atlas preparation cancelled";
+        return result;
+      }
+      for (int x = 0; x < glyph.contentWidth; ++x) {
+        const auto alpha = glyph.alpha[static_cast<std::size_t>(y) * glyph.contentWidth + x];
+        if (alpha == 0) continue;
+        std::array<std::uint8_t, 4> color{255, 255, 255, 255};
+        if (!glyph.colorRgb.empty()) {
+          const auto index = (static_cast<std::size_t>(y) * glyph.contentWidth + x) * 3U;
+          std::copy_n(glyph.colorRgb.data() + index, 3, color.data());
+        }
+        put(x + glyph.padding, y + glyph.padding, color, alpha, false);
       }
     }
   }
@@ -710,7 +766,8 @@ SkinTextAtlasBuildResult buildSkinBitmapTextAtlas(
     const std::vector<SkinTextAtlasBitmapFace> &faces,
     const std::set<char32_t> &codepoints,
     const std::set<std::pair<char32_t, char32_t>> &pairs,
-    SkinSafetyPolicy safetyPolicy) {
+    SkinSafetyPolicy safetyPolicy,
+    const std::function<bool()> &cancellationRequested) {
   SkinTextAtlasBuildResult result;
   if (id == 0 || !canonicalizeSkinTextAtlasKey(key, safetyPolicy) ||
       faces.empty() || codepoints.size() > skinResourceLimit(
@@ -787,6 +844,27 @@ SkinTextAtlasBuildResult buildSkinBitmapTextAtlas(
     return 0;
   };
   const int primaryYOffset = representativeYOffset(faces.front().font);
+  int primaryBaseline = faces.front().font.base;
+  if (!faces.front().font.auxiliaryMetricsComplete) {
+    // The parser's libGDX fallback stores base - capHeight in `base`.
+    // Recover the authored baseline for native glyphs without changing the
+    // existing bitmap layout metrics.
+    int capHeight = 0;
+    for (const char32_t codepoint : std::u32string_view(U"MNBDCEFKAGHIJLOPQRSTUVWXYZ")) {
+      const auto found = faces.front().font.glyphs.find(codepoint);
+      if (found != faces.front().font.glyphs.end() && found->second.region.h > 0) {
+        capHeight = found->second.region.h;
+        break;
+      }
+    }
+    if (capHeight <= 0) {
+      for (const auto &[codepoint, glyph] : faces.front().font.glyphs) {
+        (void)codepoint;
+        capHeight = std::max(capHeight, glyph.region.h);
+      }
+    }
+    primaryBaseline += capHeight;
+  }
   struct SelectedGlyph {
     const SkinBitmapGlyph *glyph = nullptr;
     std::size_t face = 0;
@@ -804,11 +882,15 @@ SkinTextAtlasBuildResult buildSkinBitmapTextAtlas(
     }
     return {};
   };
-  const auto select = [&](char32_t codepoint) {
+  const auto authored = [&](char32_t codepoint) {
     auto selected = exact(codepoint);
     if (selected.glyph) return selected;
     if (codepoint == U'\u301c') selected = exact(U'\uff5e');
     else if (codepoint == U'\uff5e') selected = exact(U'\u301c');
+    return selected;
+  };
+  const auto select = [&](char32_t codepoint) {
+    auto selected = authored(codepoint);
     if (selected.glyph) return selected;
     constexpr std::u32string_view missing = U"\u25a1\u25a2\u2610\u25a0?";
     for (std::size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex) {
@@ -827,8 +909,31 @@ SkinTextAtlasBuildResult buildSkinBitmapTextAtlas(
 
   std::map<char32_t, SkinPreparedGlyphMetrics> metrics;
   std::map<char32_t, SelectedGlyph> selections;
+  text_runtime::SystemTextRasterizer systemText(
+      faces.front().font.resource.originalSize,
+      text_runtime::SystemTextRasterizer::GlyphFallback::BundledThenSystem);
+  std::map<char32_t, text_runtime::SystemTextRaster> systemGlyphs;
+  std::size_t systemGlyphBytes = 0;
+  const auto systemGlyphBudget =
+      skinResourceLimit(safetyPolicy, SkinResourcePolicy::maximumAtlasBytes);
   for (const char32_t codepoint : codepoints) {
+    if (cancellationRequested && cancellationRequested()) {
+      result.error = "font atlas preparation cancelled";
+      return result;
+    }
     if (codepoint == U'\r' || codepoint == U'\n') continue;
+    if (isTextFormatControl(codepoint)) {
+      metrics.emplace(codepoint, SkinPreparedGlyphMetrics{
+          .bitmapFontType = faces.front().font.resource.type});
+      continue;
+    }
+    if (!authored(codepoint).glyph) {
+      if (auto glyph = systemText.glyph(codepoint, systemGlyphBudget - systemGlyphBytes)) {
+        systemGlyphBytes += glyph->rgba.size();
+        systemGlyphs.emplace(codepoint, std::move(*glyph));
+        continue;
+      }
+    }
     const auto selected = select(codepoint);
     if (!selected.glyph) {
       continue;
@@ -854,6 +959,87 @@ SkinTextAtlasBuildResult buildSkinBitmapTextAtlas(
                                [static_cast<std::size_t>(glyph.page)],
             .bitmapFontType = faces[selected.face].font.resource.type});
     selections.emplace(codepoint, selected);
+  }
+
+  // Pack native fallback rasters into a few tightly sized color pages. Keep
+  // authored bitmap/SDF pages unchanged and give fallback glyphs normal RGBA
+  // sampling, even when the primary face uses a distance-field shader.
+  struct SystemPage { int width = 512; int height = 1; };
+  std::vector<SystemPage> systemPages;
+  const auto firstSystemPage = pages.size();
+  int cursorX = 1, cursorY = 1, rowHeight = 0;
+  for (const auto &[codepoint, glyph] : systemGlyphs) {
+    const int width = glyph.width + 2, height = glyph.height + 2;
+    const int dimension = skinResourceDimensionLimit(safetyPolicy);
+    if (width > dimension || height > dimension) {
+      result.error = "system fallback glyph exceeds atlas dimensions";
+      return result;
+    }
+    if (systemPages.empty() || width > systemPages.back().width) {
+      systemPages.push_back({.width = std::min(dimension, std::max(512, width))});
+      cursorX = 1; cursorY = 1; rowHeight = 0;
+    }
+    if (cursorX + glyph.width + 1 > systemPages.back().width) {
+      cursorX = 1; cursorY += rowHeight; rowHeight = 0;
+    }
+    if (cursorY + glyph.height + 1 > std::min(dimension, std::max(512, height))) {
+      systemPages.push_back({.width = std::min(dimension, std::max(512, width))});
+      cursorX = 1; cursorY = 1; rowHeight = 0;
+    }
+    metrics.emplace(codepoint, SkinPreparedGlyphMetrics{
+        .region = {.x = cursorX, .y = cursorY, .w = glyph.width, .h = glyph.height},
+        .bearingX = glyph.offsetX,
+        .advance = glyph.advance,
+        .layoutOffsetY = glyph.ascent - primaryBaseline - glyph.height,
+        .page = firstSystemPage + systemPages.size() - 1,
+        .bitmapFontType = 0});
+    cursorX += width;
+    rowHeight = std::max(rowHeight, height);
+    systemPages.back().height = std::max(systemPages.back().height, cursorY + glyph.height + 1);
+  }
+  std::size_t packedBytes = 0;
+  const auto systemKey = "system-glyph:" + std::to_string(id) + ":" +
+                        scalableTextAtlasContentKey(key, codepoints, {}, safetyPolicy);
+  for (const auto &page : systemPages) {
+    const auto bytes = static_cast<std::size_t>(page.width) * page.height * 4U;
+    if (bytes > systemGlyphBudget - packedBytes ||
+        pages.size() >= skinResourceLimit(safetyPolicy, SkinResourcePolicy::maximumResources)) {
+      result.error = "system fallback pages exceed atlas limits";
+      return result;
+    }
+    packedBytes += bytes;
+    pages.push_back({.physicalKey = systemKey + ":" + std::to_string(pages.size()),
+                    .pixels = image_decode::DecodedImageData{
+                        .width = page.width, .height = page.height,
+                        .rgba = std::make_shared<std::vector<unsigned char>>(bytes, 0)},
+                    .bitmapFontType = 0});
+  }
+  for (const auto &[codepoint, glyph] : systemGlyphs) {
+    if (cancellationRequested && cancellationRequested()) {
+      result.error = "font atlas preparation cancelled";
+      return result;
+    }
+    const auto &metric = metrics.at(codepoint);
+    auto &page = *pages[metric.page].pixels;
+    for (int y = 0; y < glyph.height; ++y) {
+      std::copy_n(glyph.rgba.data() + static_cast<std::size_t>(y) * glyph.width * 4U,
+                  glyph.width * 4U, page.rgba->data() +
+                  (static_cast<std::size_t>(metric.region.y + y) * page.width + metric.region.x) * 4U);
+    }
+  }
+  const auto controlPage = std::ranges::find_if(
+      pages, [](const auto &page) { return page.pixels.has_value(); });
+  for (const auto codepoint : codepoints) {
+    if (!isTextFormatControl(codepoint)) continue;
+    // Empty controls still pass through ordinary glyph/page validation. An
+    // unavailable authored page zero must not invalidate otherwise usable text.
+    if (controlPage == pages.end()) {
+      metrics.erase(codepoint);
+    } else {
+      auto &metric = metrics.at(codepoint);
+      metric.page = static_cast<std::size_t>(controlPage - pages.begin());
+      metric.bitmapFontType = controlPage->bitmapFontType;
+    }
   }
 
   std::map<std::pair<char32_t, char32_t>, int> kerning;

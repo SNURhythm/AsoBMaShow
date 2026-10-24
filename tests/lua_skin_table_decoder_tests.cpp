@@ -458,7 +458,7 @@ return {
   type=0,
   source={{id="atlas", path="../shared/atlas.png"}},
   font={{id="shared", path="../shared/font.ttf",
-         fallback={{path="/Library/Fonts/Arial.ttf"}}}},
+         fallback={"fonts/fallback.ttf", {path="/Library/Fonts/Arial.ttf"}}}},
   text={{id="caption", font="shared", size=24, ref=10}},
   destination={{id="caption", dst={{}}}}
 }
@@ -977,6 +977,13 @@ void testResourcePathsFollowBeatorajaResolution() {
   expect(decoded.model && decoded.diagnostics.empty() && text != nullptr &&
              text->font == SkinResourceId{2},
          "authored resource paths reach Beatoraja-style resolution");
+  const auto *font = decoded.model && decoded.model->resources.size() > 1
+      ? std::get_if<SkinFontResource>(&decoded.model->resources[1])
+      : nullptr;
+  expect(font && font->fallbacks.size() == 2 &&
+             font->fallbacks[0].virtualPath == "fonts/fallback.ttf" &&
+             font->fallbacks[1].virtualPath == "/Library/Fonts/Arial.ttf",
+         "beatoraja 0.8.9 preserves both string and object font fallback paths");
 }
 
 void testReconciliationDefaultsSanitizesAndIndexesConfiguration() {

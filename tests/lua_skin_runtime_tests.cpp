@@ -119,6 +119,46 @@ public:
                                "runtime_contract";
     const fs::path source = temp.root() / "source";
     fs::copy(committed, source, fs::copy_options::recursive);
+    // Keep historical conformance fixtures untouched; exercise the current
+    // File object and key-lookup contracts in this runtime's private copy.
+    const auto legacyPath = source / "skin/legacy_facade.luaskin";
+    auto legacy = readText(legacyPath);
+    const auto firstMember = legacy.find("local members = 0");
+    const auto createDirectory = legacy.find("assert(luajava.new(File, \"legacy-created\")");
+    legacy.replace(firstMember, createDirectory - firstMember, R"lua(
+assert(directory:isDirectory() and not directory:isFile())
+assert(type(directory:getPath()) == "string")
+assert(type(directory:getName()) == "string")
+assert(not pcall(function() return directory:getAbsolutePath() end))
+local listed = directory:listFiles()
+assert(type(listed) == "table" and #listed > 0)
+for _, file in ipairs(listed) do
+  assert(type(file) == "table")
+  local path = file:getPath()
+  assert(path:match("^/") or path:match("^%a:/"))
+  assert(path:find("RuntimeContract", 1, true))
+end
+)lua");
+    const auto unknown = legacy.find("Input.Keys[\"not a key\"] == -1");
+    legacy.replace(unknown, std::string_view("Input.Keys[\"not a key\"] == -1").size(),
+                   "Input.Keys[\"not a key\"] == nil");
+    writeText(legacyPath, legacy);
+    const auto historyPath = source / "skin/dynamic_history.luaskin";
+    auto history = readText(historyPath);
+    for (std::size_t position = 0;
+         (position = history.find("entries[1]:match", position)) != std::string::npos;) {
+      history.replace(position, std::string_view("entries[1]:match").size(),
+                      "entries[1]:getPath():match");
+      position += std::string_view("entries[1]:getPath():match").size();
+    }
+    writeText(historyPath, history);
+    const auto forbiddenPath = source / "skin/forbidden_capabilities.luaskin";
+    auto forbidden = readText(forbiddenPath);
+    const auto unknownKey = forbidden.find("Input.Keys[\"not a key\"] == -1");
+    forbidden.replace(unknownKey, std::string_view("Input.Keys[\"not a key\"] == -1").size(),
+                      "Input.Keys[\"not a key\"] == nil");
+    writeText(forbiddenPath, forbidden);
+
     const fs::path visible = roots.visiblePackages / package.directoryName;
     fs::create_directories(visible.parent_path());
     fs::copy(source, visible, fs::copy_options::recursive);
@@ -179,7 +219,9 @@ makeHarness(LuaRuntimePurpose purpose, std::string_view entryFixture,
             bool forceWriteCapableFileSystem = false,
             bool entryAtPackageRoot = false,
             SkinSafetyLevel safetyLevel = SkinSafetyLevel::Standard,
-            bool preservePinnedLuaSandbox = false) {
+            bool preservePinnedLuaSandbox = false,
+            bool externalActionsEnabled = true,
+            std::function<bool(std::string_view)> openBrowser = {}) {
   static std::atomic_uint64_t profileSerial{0};
   RuntimePackageFixture &package = runtimePackage();
   if (!package.prepared) {
@@ -224,7 +266,9 @@ makeHarness(LuaRuntimePurpose purpose, std::string_view entryFixture,
        .fileSystem = std::move(fileSystem.fileSystem),
        .safetyPolicy = SkinSafetyPolicy(
            safetyLevel, std::numeric_limits<std::uint64_t>::max(),
-           preservePinnedLuaSandbox)});
+           preservePinnedLuaSandbox),
+       .externalActionsEnabled = externalActionsEnabled,
+       .openBrowser = std::move(openBrowser)});
   expect(created.runtime != nullptr && !created.failure,
          "bounded Lua runtime is created");
   if (!created.runtime) {
@@ -264,6 +308,62 @@ void loadThroughConfigured(RuntimeHarness &harness,
          "fixture header phase succeeds");
   expect(harness.runtime->loadConfigured(configuration).value.has_value(),
          "fixture configured phase succeeds");
+}
+
+void testExternalActionsCapabilityFollowsRuntimeAndRestores() {
+  for (const auto purpose : {LuaRuntimePurpose::Gameplay, LuaRuntimePurpose::MusicSelect}) {
+    int browserCalls = 0;
+    auto harness = makeHarness(purpose, "two_phase.luaskin", false, false,
+                               SkinSafetyLevel::BeatorajaCompatibility, false, false,
+                               [&](std::string_view url) {
+                                 if (url != "https://example.com/skin") return false;
+                                 ++browserCalls;
+                                 return true;
+                               });
+    if (!harness) return;
+    loadThroughConfigured(*harness);
+    const auto callback = harness->runtime->compileCallbackScript(
+        "(function() local m = require('main_state'); "
+        "m.file_write('external-action.txt', 'keep'); "
+        "return m.file_delete('external-action.txt') end)()",
+        LuaCallbackScriptKind::ReturnExpression);
+    expect(callback.callback.has_value(), "external-action behavior compiles");
+    if (!callback.callback) return;
+    const auto browser = harness->runtime->compileCallbackScript(
+        "require('main_state').open_url('https://example.com/skin')",
+        LuaCallbackScriptKind::ReturnExpression);
+    expect(browser.callback.has_value(), "injected browser action compiles");
+    if (!browser.callback) return;
+    (void)harness->runtime->setLegacyInputSnapshot({.justPressedKeys = {66}});
+    expect(harness->runtime->enterRenderPhase().ok && harness->runtime->beginFrame(1).ok,
+           "external-action fixture enters render");
+    const auto deleted = [&] {
+      const auto result = harness->runtime->invoke(*callback.callback, {});
+      expect(!result.failure && result.value && std::holds_alternative<bool>(*result.value),
+             "external-action behavior returns a boolean");
+      return result.value && std::get_if<bool>(&*result.value) && std::get<bool>(*result.value);
+    };
+    const auto openBrowser = [&] {
+      const auto result = harness->runtime->invoke(*browser.callback, {});
+      return result.value && std::get_if<bool>(&*result.value) && std::get<bool>(*result.value);
+    };
+    expect(!deleted(), "explicit preview capability denies deletion from the first live frame");
+    expect(!openBrowser() && browserCalls == 0, "disabled capability rejects a real current input gesture");
+    expect(!harness->runtime->setExternalActionsEnabled(true), "enabling returns the prior denied state");
+    expect(deleted(), "live runtime can perform deletion after explicit enable");
+    expect(openBrowser() && browserCalls == 1, "runtime forwards browser callback and current input to its host");
+    const bool previous = harness->runtime->setExternalActionsEnabled(false);
+    expect(previous && !deleted(), "temporary export gate blocks deletion in an enabled runtime");
+    expect(!harness->runtime->setExternalActionsEnabled(previous) && deleted(),
+           "restoring the prior capability restores live behavior");
+  }
+  for (const auto purpose : {LuaRuntimePurpose::Catalog, LuaRuntimePurpose::Validation}) {
+    auto harness = makeHarness(purpose, "two_phase.luaskin");
+    if (!harness) return;
+    expect(!harness->runtime->setExternalActionsEnabled(true) &&
+               !harness->runtime->setExternalActionsEnabled(false),
+           "non-live runtime cannot enable external actions");
+  }
 }
 
 void testPurposeSpecificBudgetsAreFixed() {
@@ -1395,6 +1495,7 @@ void testDirtyTransitionInvalidatesAllHandlesWithoutOverlayMutation() {
 } // namespace
 
 int main(int argc, char **argv) {
+  testExternalActionsCapabilityFollowsRuntimeAndRestores();
   testRuntimeContractsUseSourceAuthoritiesAndProvenance();
   testFilesystemReadsTheSelectedEntryWithoutAHostPath();
   testCatalogEntrySourceIsBoundedBeforeHostAllocation();

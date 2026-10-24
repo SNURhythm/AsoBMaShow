@@ -93,16 +93,18 @@ int titleCompare(const MusicSelectBar &left, const MusicSelectBar &right) {
 
 int sourceCompare(const MusicSelectBar &left, const MusicSelectBar &right,
                   std::string_view sortId) {
+  const bool leftMissing = left.kind == skin::MusicSelectBarKind::Song &&
+                           !left.presentation.exists;
+  const bool rightMissing = right.kind == skin::MusicSelectBarKind::Song &&
+                            !right.presentation.exists;
+  if (leftMissing && rightMissing) {
+    const auto a = lowerAscii(left.title);
+    const auto b = lowerAscii(right.title);
+    return a < b ? -1 : a > b;
+  }
+  if (leftMissing != rightMissing) return leftMissing ? 1 : -1;
   if (sortId == "TITLE" || !left.chart || !right.chart) {
     return titleCompare(left, right);
-  }
-  if ((sortId == "ARTIST" || sortId == "BPM" || sortId == "LENGTH" ||
-       sortId == "LEVEL") &&
-      left.kind == skin::MusicSelectBarKind::Song &&
-      right.kind == skin::MusicSelectBarKind::Song) {
-    if (!left.presentation.exists && !right.presentation.exists) return 0;
-    if (!left.presentation.exists) return 1;
-    if (!right.presentation.exists) return -1;
   }
   const auto &a = left.chart->meta;
   const auto &b = right.chart->meta;

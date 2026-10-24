@@ -50,7 +50,7 @@ protected:
   };
   struct SelectedFont {
     TTF_Font *font = nullptr;
-    bool iosSystemFont = false;
+    bool nativeSystemFont = false;
   };
   struct FontRun {
     SelectedFont source;
@@ -65,22 +65,25 @@ protected:
   [[nodiscard]] int textLineHeight() const;
   [[nodiscard]] int rasterTextLineHeight() const;
   [[nodiscard]] int measureRasterTextWidth(const std::string &utf8,
-                                           int *rasterHeight = nullptr);
+                                           int *rasterHeight = nullptr,
+                                           int *leftPadding = nullptr);
   SelectedFont selectFont(Uint32 codepoint);
   [[nodiscard]] bool hasFontSource(const SelectedFont &source) const;
   [[nodiscard]] bool sameFontSource(const SelectedFont &lhs,
                                     const SelectedFont &rhs) const;
   [[nodiscard]] int measureFontSourceTextWidth(const SelectedFont &source,
                                                const std::string &utf8,
-                                               int *rasterHeight = nullptr);
-  [[nodiscard]] int fontSourceAscent(const SelectedFont &source);
+                                               int *rasterHeight = nullptr,
+                                               int *ascent = nullptr,
+                                               int *offsetX = nullptr,
+                                               int *inkWidth = nullptr);
   [[nodiscard]] SDL_Surface *
   renderFontSourceTextSurface(const SelectedFont &source,
                               const std::string &utf8);
   [[nodiscard]] bool primaryFontSupportsText(const std::string &utf8) const;
   void ensureFontsForText(const std::string &utf8);
   void includeFontMetrics(TTF_Font *loadedFont);
-  void includeIOSSystemFontMetrics();
+  void includeNativeSystemFontMetrics();
   [[nodiscard]] TTF_Font *loadFallbackFontAt(size_t pathIndex, bool required);
   [[nodiscard]] const std::vector<std::string> &wrappedTextLines(int wrapWidth);
   [[nodiscard]] SDL_Surface *renderFallbackTextSurface(int wrapWidth,
@@ -103,10 +106,10 @@ protected:
   int fontLineSkip = 0;
   int fontAscent = 0;
   int fontDescent = 0;
-  int iosSystemFontLineHeight = 0;
-  int iosSystemFontAscent = 0;
-  int iosSystemFontDescent = 0;
-  bool iosSystemFontMetricsIncluded = false;
+  int nativeSystemFontLineHeight = 0;
+  int nativeSystemFontAscent = 0;
+  int nativeSystemFontDescent = 0;
+  bool nativeSystemFontMetricsIncluded = false;
   bool ttfInitialized = false;
 
   SDL_Color color{};

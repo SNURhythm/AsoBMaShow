@@ -571,6 +571,30 @@ void testCompatibilityFilesystemLiftsOnlyProtectiveWriteGuard() {
          "Beatoraja compatibility retains catastrophic path containment");
 }
 
+void testDirectFileDeletionAndReadOnlyDenial() {
+  PackageFixture fixture;
+  if (!fixture.prepared) return;
+  const fs::path visible = fixture.roots.visiblePackages / fixture.package.directoryName;
+  fs::create_directories(visible.parent_path());
+  fs::copy(fixture.temp.root() / "source", visible, fs::copy_options::recursive);
+  auto writable = fixture.create(fixture.entry, true);
+  auto readOnly = fixture.create(fixture.entry, false);
+  if (!writable.fileSystem || !readOnly.fileSystem) return;
+  const fs::path root = writable.fileSystem->skinDirectory();
+  writeText(root / "delete.txt", "retained until authorized");
+  expect(readOnly.fileSystem->deleteData("delete.txt").failure.has_value() &&
+             fs::is_regular_file(root / "delete.txt"),
+         "read-only direct file deletion fails without changing the file");
+  expect(writable.fileSystem->deleteData("data").failure.has_value() &&
+             fs::is_directory(root / "data"),
+         "direct file deletion cannot remove directories");
+  expect(!writable.fileSystem->deleteData((root / "data/../delete.txt").generic_string()).failure &&
+             !fs::exists(root / "delete.txt"),
+         "direct file deletion accepts normalized absolute regular files");
+  expect(writable.fileSystem->deleteData("delete.txt").failure.has_value(),
+         "direct file deletion reports missing files as failure");
+}
+
 void testLinkedVisibleSkinChildCannotEscapeLuaIoBoundary() {
   PackageFixture fixture;
   if (!fixture.prepared) {
@@ -631,11 +655,41 @@ void testLinkedVisibleSkinChildCannotEscapeLuaIoBoundary() {
   if (!pinned.fileSystem) {
     return;
   }
+  for (const std::string path : {"escape/secret.lua", "dangling", "dangling/new.txt", "escape/new.txt"}) {
+    if (path == "dangling") fs::create_symlink(outside / "missing", visiblePackage / "entry/dangling");
+    expect(pinned.fileSystem->normalizeDirectPath(path).failure.has_value() &&
+               pinned.fileSystem->fileType(path).failure.has_value() &&
+               pinned.fileSystem->listFileFacades(path).failure.has_value(),
+           "updated File facade operations reject links on every call");
+    expect(pinned.fileSystem->exists(path).failure.has_value(),
+           "updated direct existence rejects linked ancestors and dangling links");
+    expect(pinned.fileSystem->read(path, SkinFileUse::DataRead, 4096).failure.has_value(),
+           "updated direct reads reject links even with pinned Lua path semantics");
+    expect(pinned.fileSystem->writeData(path, bytesOf("denied"), false).failure.has_value(),
+           "updated direct writes reject links even with pinned Lua path semantics");
+    expect(pinned.fileSystem->mkdirData(path).failure.has_value(),
+           "updated direct mkdir rejects linked paths");
+    expect(pinned.fileSystem->deleteData(path).failure.has_value(),
+           "updated deletion rejects linked ancestors and dangling links");
+    expect(pinned.fileSystem->list(path, {}, 4096).failure.has_value(),
+           "updated direct lists reject linked paths");
+  }
   const auto pinnedRead =
       pinned.fileSystem->readLuaPath("escape/secret.lua", 4096);
   expect(!pinnedRead.failure &&
              bytesToString(pinnedRead.bytes) == "return 'outside'\n",
          "type-5 follows linked paths after SkinLuaPathResolver's lexical check");
+  const auto legacyIo = pinned.fileSystem->openLuaFile(
+      "escape/secret.lua", LuaSkinFileOpenMode::Read);
+  expect(legacyIo.file != nullptr && !legacyIo.failure,
+         "updated direct-helper policy does not change pinned legacy io");
+  if (legacyIo.file) std::fclose(legacyIo.file);
+  const auto resource = pinned.fileSystem->resolveResourceCandidates(
+      "escape/secret.lua", "");
+  expect(resource.normalizedVirtualPath &&
+             !pinned.fileSystem->readResolvedResource(
+                 *resource.normalizedVirtualPath, 4096).failure,
+         "updated direct-helper policy does not change resource resolution");
 }
 
 } // namespace
@@ -647,6 +701,7 @@ int main(int argc, char **argv) {
   testReadOnlyFilesystemRejectsDataWrites();
   testCompatibilityFilesystemLiftsOnlyProtectiveWriteGuard();
   testUnrestrictedFilesystemLiftsWriteAndContainmentGuards();
+  testDirectFileDeletionAndReadOnlyDenial();
   testLinkedVisibleSkinChildCannotEscapeLuaIoBoundary();
   testCompatibilityDiagnosticsDeduplicateAndRetainCriticality();
   return gameplay_skin_ledger_evidence::finish(

@@ -23,6 +23,19 @@
 namespace skin {
 namespace {
 
+class SuppressExternalActions final {
+public:
+  explicit SuppressExternalActions(LuaSkinRuntime *runtime) noexcept
+      : runtime_(runtime),
+        previous_(runtime && runtime->setExternalActionsEnabled(false)) {}
+  ~SuppressExternalActions() {
+    if (runtime_) (void)runtime_->setExternalActionsEnabled(previous_);
+  }
+private:
+  LuaSkinRuntime *runtime_;
+  bool previous_;
+};
+
 class DeterministicResultGaugeRandomSource final
     : public ISkinGaugeRandomSource {
 public:
@@ -309,6 +322,7 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
         {.sourceFormat = *format, .entry = activation.entry,
          .documentFileSystem = *resourceFiles.fileSystem,
          .luaFileSystem = std::move(luaFiles),
+         .luaHttpTransport = std::move(context.httpTransport),
          .luaAudioBackend = std::move(context.audioBackend),
          .desiredSettings = &activation.reconciledSettings,
          .expectedConfigurationDigest = activation.configurationDigest,
@@ -337,7 +351,9 @@ ResultSkinSessionCreateResult ResultSkinSession::create(
            LuaFrameStateBinding frameState(&runtime, &bridge);
            return loadAndDecode();
          },
-         .safetyPolicy = context.safetyPolicy, .stop = context.stop});
+         .safetyPolicy = context.safetyPolicy, .stop = context.stop,
+         .externalActionsEnabled = context.externalActionsEnabled,
+         .openBrowser = std::move(context.openBrowser)});
     result.diagnostics = std::move(loaded.diagnostics);
     if (loaded.cancelled || !loaded.document || hasErrors(result.diagnostics)) {
       return result;
@@ -437,6 +453,7 @@ bool ResultSkinSession::renderForExport(RenderContext &renderContext,
                                         const ResultSkinData &data,
                                         std::uint64_t frameSerial,
                                         std::int64_t elapsedMillis) {
+  SuppressExternalActions externalActions(runtime_.get());
   struct RestoreActions {
     bool &suppressed;
     bool previous;
@@ -455,6 +472,7 @@ bool ResultSkinSession::renderForVideoExport(RenderContext &renderContext,
                                              const ResultSkinData &data,
                                              std::uint64_t frameSerial,
                                              std::int64_t elapsedMillis) {
+  SuppressExternalActions externalActions(runtime_.get());
   struct RestoreActions {
     bool &suppressed;
     bool previous;

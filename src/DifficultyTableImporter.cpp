@@ -220,7 +220,10 @@ std::optional<std::string> fetchUrlText(const std::string &url,
                      difficultyTableCurlProgress);
     curl_easy_setopt(curl.get(), CURLOPT_XFERINFODATA, &checkpoint);
   }
-  ConfigureCurlTrustStore(curl.get());
+  if (!ConfigureCurlTrustStore(curl.get())) {
+    if (errorMessage != nullptr) *errorMessage = "HTTP certificate trust store could not be configured";
+    return std::nullopt;
+  }
 
   const CURLcode result = curl_easy_perform(curl.get());
   long statusCode = 0;

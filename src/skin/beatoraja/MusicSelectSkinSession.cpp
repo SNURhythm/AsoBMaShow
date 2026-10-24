@@ -470,6 +470,7 @@ MusicSelectSkinSessionPreparationResult MusicSelectSkinSession::prepare(
          .entry = activation.entry,
          .documentFileSystem = *resourceFiles.fileSystem,
          .luaFileSystem = std::move(luaFiles.fileSystem),
+         .luaHttpTransport = std::move(context.httpTransport),
          .luaAudioBackend = std::move(context.audioBackend),
          .desiredSettings = &activation.reconciledSettings,
          .expectedConfigurationDigest = activation.configurationDigest,
@@ -495,7 +496,9 @@ MusicSelectSkinSessionPreparationResult MusicSelectSkinSession::prepare(
            return loadAndDecode();
          },
          .safetyPolicy = safetyPolicy,
-         .stop = context.stop});
+         .stop = context.stop,
+         .externalActionsEnabled = context.externalActionsEnabled,
+         .openBrowser = std::move(context.openBrowser)});
     result.diagnostics = std::move(loaded.diagnostics);
     if (loaded.cancelled || context.stop.stop_requested()) {
       result.cancelled = true;
@@ -682,7 +685,10 @@ MusicSelectSkinSessionCreateResult MusicSelectSkinSession::create(
        .builtinImageReader = std::move(context.builtinImageReader),
        .audioBackend = std::move(context.audioBackend),
        .initialLegacyInputGeneration = std::move(initialGeneration),
-       .stop = context.stop});
+       .stop = context.stop,
+       .httpTransport = std::move(context.httpTransport),
+       .externalActionsEnabled = context.externalActionsEnabled,
+       .openBrowser = std::move(context.openBrowser)});
   MusicSelectSkinSessionCreateResult result;
   result.diagnostics = std::move(preparation.diagnostics);
   if (!preparation.prepared) return result;

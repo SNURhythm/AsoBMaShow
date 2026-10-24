@@ -23,6 +23,10 @@ if(IOS)
     target_sources(main PRIVATE
         beatoraja/LuaSkinFoundationHttpTransport.mm
     )
+    set_source_files_properties(
+        "${CMAKE_CURRENT_SOURCE_DIR}/beatoraja/LuaSkinFoundationHttpTransport.mm"
+        TARGET_DIRECTORY main
+        PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 endif()
 
 if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
@@ -46,6 +50,7 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         beatoraja/ResultSkinSession.cpp
         beatoraja/PomyuCharaResource.cpp
         beatoraja/LuaSkinHostModules.cpp
+        beatoraja/LuaSkinAsyncHttp.cpp
         beatoraja/LuaSkinAudioHost.cpp
         beatoraja/LuaSkinLegacyInputHost.cpp
         beatoraja/LuaSkinApplicationAudioBackend.cpp

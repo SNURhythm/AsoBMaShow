@@ -60,7 +60,8 @@ public:
     void reset() { ++resets; }
     struct Scope { int player, keyMode; };
     bms_parser::Note *consumePhysicalTouchLane(Scope, int lane, bool pressed,
-                                               std::optional<int>, std::uint64_t timestamp) {
+                                               std::optional<int>, std::uint64_t timestamp,
+                                               bool backSpin = false) {
       (pressed ? owner->presses : owner->releases).push_back(lane);
       owner->laneTimestamps.push_back(timestamp);
       return nullptr;
@@ -81,7 +82,8 @@ public:
   std::map<SDL_FingerID, Vector3> activeTouchPoints;
   std::function<bool(SDL_FingerID, ReplayTouchAction, Vector3, std::uint64_t)> touchEventCallback;
   std::function<std::optional<bool>(int)> longNoteHeldCallback;
-  bms_parser::Note *applyTouchLane(int lane, bool pressed, std::optional<int>);
+  bms_parser::Note *applyTouchLane(int lane, bool pressed, std::optional<int>,
+                                 bool backSpin = false);
   std::uint64_t ingressTimestamp = 0;
   std::uint64_t touchEventTimestampMicros() const { return ingressTimestamp; }
   bool notifyTouchEvent(SDL_FingerID, ReplayTouchAction, Vector3);

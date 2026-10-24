@@ -261,6 +261,9 @@ struct SkinPreparedGlyphBitmap {
   int contentHeight = 0;
   std::size_t opaquePixels = 0;
   std::vector<unsigned char> alpha;
+  // Empty for tintable white glyphs; otherwise straight RGB, three bytes per
+  // content pixel. Keep the alpha mask for outlines and shadows.
+  std::vector<unsigned char> colorRgb;
 };
 // Content digest of everything that determines a rasterized scalable atlas
 // (or a single cached glyph): the atlas key, the codepoint/pair corpus, and

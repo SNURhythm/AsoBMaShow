@@ -161,6 +161,9 @@ function(asobmashow_add_sdl)
 endfunction()
 asobmashow_add_sdl()
 list(APPEND COMMON_LIBS SDL3::SDL3 SDL3_ttf::SDL3_ttf)
+if(APPLE)
+    list(APPEND COMMON_LIBS "-framework CoreText" "-framework CoreGraphics")
+endif()
 # Header-only contract tests also consume SDL event and key types.
 include_directories(SDL/include SDL_ttf/include)
 if (IOS)
@@ -171,11 +174,12 @@ if (IOS)
 
     find_library(UIKIT UIKit)
     find_library(FOUNDATION Foundation)
+    find_library(CFNETWORK CFNetwork)
     find_library(CORE_GRAPHICS CoreGraphics)
     find_library(CORE_TEXT CoreText)
     find_library(PHOTOS Photos)
     find_library(SECURITY Security)
-    list(APPEND COMMON_LIBS ${UIKIT} ${FOUNDATION} ${CORE_GRAPHICS}
+    list(APPEND COMMON_LIBS ${UIKIT} ${FOUNDATION} ${CFNETWORK} ${CORE_GRAPHICS}
         ${CORE_TEXT} ${PHOTOS} ${SECURITY})
 
 elseif(ANDROID)
@@ -187,7 +191,8 @@ elseif(ANDROID)
     list(APPEND COMMON_LIBS ${FFMPEG_LIBRARIES})
 
     find_package(CURL REQUIRED)
-    list(APPEND COMMON_LIBS CURL::libcurl)
+    find_package(c-ares CONFIG REQUIRED)
+    list(APPEND COMMON_LIBS CURL::libcurl c-ares::cares)
 
     # Reuse the bundled TLS dependency for hardware-dispatched native checksums.
     find_package(OpenSSL REQUIRED COMPONENTS Crypto)
@@ -560,6 +565,7 @@ asobmashow_stage_sevenzip_runtime(main)
 # Platform specific system libs for macOS
 if (PLATFORM_MACOS)
     find_library(FOUNDATION Foundation)
+    find_library(CFNETWORK CFNetwork)
     find_library(AUDIO_TOOLBOX AudioToolbox)
     find_library(VIDEO_TOOLBOX VideoToolbox)
     find_library(CORE_AUDIO CoreAudio)
@@ -669,6 +675,16 @@ include(cmake/BgfxMetalReadback.cmake)
 asobmashow_fix_bgfx_metal()
 add_subdirectory(src)
 target_sources(main PRIVATE src/CourseIdentity.cpp)
+if(APPLE)
+    enable_language(Swift)
+    add_subdirectory(cmake/ReadmeTranslationApple)
+    if(TARGET readme_translation_apple_tests)
+        add_test(NAME readme_translation_apple_tests COMMAND readme_translation_apple_tests)
+    endif()
+    target_link_libraries(main PRIVATE asobmashow_readme_translation)
+    set_target_properties(main PROPERTIES LINKER_LANGUAGE CXX)
+endif()
+
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(ios_gyroscope_motion_adapter_tests
         tests/ios_gyroscope_motion_adapter_tests.cpp
@@ -815,6 +831,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
         target_compile_features(curl_redirect_policy_tests PRIVATE cxx_std_23)
         target_link_libraries(curl_redirect_policy_tests PRIVATE CURL::libcurl)
+        if(TARGET OpenSSL::SSL)
+            target_sources(curl_redirect_policy_tests PRIVATE
+                tests/android_curl_trust_store_tests.cpp)
+            target_compile_definitions(curl_redirect_policy_tests PRIVATE
+                ASOBMASHOW_TEST_ANDROID_CURL_TRUST=1)
+            target_link_libraries(curl_redirect_policy_tests PRIVATE
+                OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
+            if(WIN32)
+                target_link_libraries(curl_redirect_policy_tests PRIVATE ws2_32)
+            endif()
+        endif()
     endif()
 
     if(APPLE AND NOT IOS)
@@ -890,6 +917,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/view/DecodedImageCache.cpp
             src/view/ImageFileDecoder.cpp
             src/view/SdlTtfRuntime.cpp
+            src/view/SystemTextRasterizer.cpp
             src/view/TextView.cpp
             src/view/View.cpp
             bgfx/bimg/3rdparty/lodepng/lodepng.cpp
@@ -981,6 +1009,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
@@ -1037,6 +1066,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
@@ -1314,6 +1344,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
@@ -1364,6 +1395,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
@@ -1418,6 +1450,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
@@ -1483,6 +1516,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -1805,6 +1839,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
@@ -1870,6 +1905,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
@@ -1936,6 +1972,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
@@ -2047,6 +2084,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
@@ -2112,6 +2150,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/SkinStoragePaths.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
@@ -2153,14 +2192,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(lua_skin_http_transport_tests
             tests/lua_skin_http_transport_tests.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/LuaSkinCurlHttpTransport.cpp
         )
         target_include_directories(lua_skin_http_transport_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src
         )
         target_compile_features(lua_skin_http_transport_tests PRIVATE cxx_std_23)
+        target_compile_definitions(lua_skin_http_transport_tests PRIVATE
+            ASOBMASHOW_TEST_CURL_HTTP_TRANSPORT=1)
         target_link_libraries(lua_skin_http_transport_tests PRIVATE
             CURL::libcurl
+            Threads::Threads
         )
         if(WIN32)
             target_link_libraries(lua_skin_http_transport_tests PRIVATE ws2_32)
@@ -2183,6 +2226,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -2355,6 +2399,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -3510,6 +3555,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${ir_ranking_view_source}
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/ir/IrRankingModal.cpp
         src/rendering/Color.cpp
@@ -4219,6 +4265,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(archive_file_concurrency_tests
         tests/archive_file_concurrency_tests.cpp
+        tests/chart_readme_tests.cpp
+        src/library/ChartReadme.cpp
+        src/Utils.cpp
+        src/input/Utf16ToUtf8.cpp
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
@@ -4235,6 +4285,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS=1
     )
     target_link_libraries(archive_file_concurrency_tests PRIVATE ${COMMON_LIBS})
+    if(WIN32)
+        target_link_libraries(archive_file_concurrency_tests PRIVATE shell32 ole32)
+    endif()
+    add_test(NAME chart_readme_tests COMMAND archive_file_concurrency_tests --chart-readme)
     add_test(NAME archive_bounded_reader_tests COMMAND archive_file_concurrency_tests --bounded-reader)
     add_test(NAME archive_reference_reader_tests COMMAND archive_file_concurrency_tests --source-reference)
     add_test(NAME archive_unicode_artwork_read_tests COMMAND archive_file_concurrency_tests --unicode-entry read)
@@ -4366,6 +4420,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/UniformCache.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
         ${ARCHIVE_UNZIP_TEST_SOURCES}
@@ -5065,6 +5120,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/view/ImageDecodeCoordinator.cpp
             src/view/ImageFileDecoder.cpp
             src/view/SdlTtfRuntime.cpp
+            src/view/SystemTextRasterizer.cpp
             src/FileChecksum.cpp
             src/Utils.cpp
             src/path.cpp
@@ -5085,6 +5141,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -5141,6 +5198,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/view/ImageDecodeCoordinator.cpp
             src/view/ImageFileDecoder.cpp
             src/view/SdlTtfRuntime.cpp
+            src/view/SystemTextRasterizer.cpp
             src/FileChecksum.cpp
             src/Utils.cpp
             src/path.cpp
@@ -5172,6 +5230,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/view/ImageDecodeCoordinator.cpp
             src/view/ImageFileDecoder.cpp
             src/view/SdlTtfRuntime.cpp
+            src/view/SystemTextRasterizer.cpp
             src/FileChecksum.cpp
             src/Utils.cpp
             src/path.cpp
@@ -5263,6 +5322,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/ImageFileDecoder.cpp
         src/view/ImageView.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/View.cpp
         src/rendering/Color.cpp
         src/rendering/common.cpp
@@ -5299,6 +5359,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/ImageFileDecoder.cpp
         src/view/ImageView.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/Button.cpp
         src/view/TextView.cpp
         src/view/View.cpp
@@ -5353,6 +5414,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/ImageFileDecoder.cpp
         src/view/ImageView.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
         src/rendering/Color.cpp
@@ -5412,6 +5474,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/ContextMenuView.cpp
         src/view/ScrollView.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
     )
@@ -5453,6 +5516,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/UiBatchRenderer.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextInputBox.cpp
         src/view/TextView.cpp
         src/view/View.cpp
@@ -5485,8 +5549,24 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             tests/gameplay_terminal_scene_extract.py src/scene/play/GamePlayScene.cpp
         VERBATIM
     )
+    add_executable(readme_translation_tests tests/readme_translation_tests.cpp src/library/ReadmeTranslation.cpp)
+    target_compile_features(readme_translation_tests PRIVATE cxx_std_20)
+    target_include_directories(readme_translation_tests PRIVATE src)
+    add_test(NAME readme_translation_tests COMMAND readme_translation_tests)
     add_executable(text_input_box_tests
         tests/text_input_box_tests.cpp
+        src/scene/ChartReadmeModal.cpp
+        src/library/ReadmeTranslation.cpp
+        src/library/ChartReadme.cpp
+        src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/path.cpp
+        src/Utils.cpp
+        src/input/Utf16ToUtf8.cpp
         ${CMAKE_CURRENT_BINARY_DIR}/guided_access_reminder_ui.inc
         src/rendering/Color.cpp
         src/rendering/common.cpp
@@ -5495,6 +5575,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/DropdownView.cpp
         src/view/ScrollView.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextInputBox.cpp
         src/view/TextView.cpp
         src/view/View.cpp
@@ -5512,6 +5593,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_link_libraries(text_input_box_tests PRIVATE
         ${COMMON_LIBS} bgfx yogacore
     )
+    if(APPLE)
+        target_link_libraries(text_input_box_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(text_input_box_tests PRIVATE shell32 ole32)
+    endif()
 
     add_executable(bgfx_unix_platform_data_tests tests/bgfx_unix_platform_data_tests.cpp)
     target_include_directories(bgfx_unix_platform_data_tests PRIVATE
@@ -5553,6 +5640,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
     )
@@ -5605,6 +5693,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/PlayOptionSectionView.cpp
         src/view/PlayOptionsPanelView.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/ScrollView.cpp
         src/view/SnappedSlider.cpp
         src/view/StoragePolicyView.cpp
@@ -5628,6 +5717,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/UniformCache.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
         src/scene/play/GameplayGaugeRules.cpp
@@ -5652,6 +5742,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/UniformCache.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
         src/scene/play/GameplayGaugeRules.cpp
@@ -5683,6 +5774,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/Button.cpp
         src/view/ScrollView.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
         src/scene/play/GameplayGaugeRules.cpp
@@ -5704,6 +5796,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/ImageFileDecoder.cpp
         src/view/ImageView.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/Button.cpp
         src/view/CheckboxButtonContent.cpp
         src/view/TextView.cpp
@@ -6025,6 +6118,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/practice_panel_message_tests.py)
     set_tests_properties(practice_panel_message_tests PROPERTIES
         ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}")
+    add_test(NAME legal_notices_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/legal_notices_tests.py)
     add_test(NAME localization_catalog_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/localization_catalog_tests.py)
     add_test(NAME android_locale_tests
@@ -6064,6 +6159,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/MusicSelectToolbarView.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
         src/rendering/Color.cpp
@@ -6085,6 +6181,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/NewcomerTutorialView.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
         src/rendering/Color.cpp
@@ -6592,6 +6689,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -6639,6 +6737,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/view/ImageDecodeCoordinator.cpp
             src/view/ImageFileDecoder.cpp
             src/view/SdlTtfRuntime.cpp
+            src/view/SystemTextRasterizer.cpp
         )
         target_include_directories(gameplay_skin_session_factory_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src
@@ -6697,6 +6796,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/GameplaySkinBuiltinCatalog.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -6775,6 +6875,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -6825,6 +6926,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/view/ImageDecodeCoordinator.cpp
             src/view/ImageFileDecoder.cpp
             src/view/SdlTtfRuntime.cpp
+            src/view/SystemTextRasterizer.cpp
         )
         target_include_directories(play_skin_session_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src
@@ -6979,6 +7081,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/skin/beatoraja/LuaSkinBindingDecoder.cpp
             src/skin/beatoraja/LuaSkinFileSystem.cpp
             src/skin/beatoraja/LuaSkinHostModules.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/LuaSkinAudioHost.cpp
             src/skin/beatoraja/LuaSkinLegacyInputHost.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
@@ -7028,6 +7131,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/view/ImageDecodeCoordinator.cpp
             src/view/ImageFileDecoder.cpp
             src/view/SdlTtfRuntime.cpp
+            src/view/SystemTextRasterizer.cpp
             src/view/TextView.cpp
             src/view/View.cpp
             src/video/RendererAccessCoordinator.cpp
@@ -7726,6 +7830,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/skin/DefaultSkin.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
     )
@@ -7784,6 +7889,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/skin/DefaultSkin.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
     )
@@ -8644,6 +8750,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
                 ${CMAKE_SOURCE_DIR}/tests/lua_skin_java_pattern_oracle_tests.py
                 $<TARGET_FILE:lua_skin_java_pattern_tests>)
     endif()
+    add_executable(lua_skin_async_http_tests
+        tests/lua_skin_async_http_tests.cpp
+        src/skin/beatoraja/LuaSkinAsyncHttp.cpp
+        src/skin/beatoraja/LuaSkinHttpClient.cpp)
+    target_include_directories(lua_skin_async_http_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(lua_skin_async_http_tests PRIVATE cxx_std_23)
+    target_link_libraries(lua_skin_async_http_tests PRIVATE Threads::Threads)
+    add_test(NAME lua_skin_async_http_tests COMMAND lua_skin_async_http_tests)
+
     if(APPLE AND NOT IOS)
         add_executable(lua_skin_java_pattern_foundation_tests
             tests/lua_skin_java_pattern_tests.cpp
@@ -8668,6 +8783,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(lua_skin_foundation_http_transport_tests
             tests/lua_skin_foundation_http_transport_tests.cpp
             src/skin/beatoraja/LuaSkinFoundationHttpTransport.mm
+            src/skin/beatoraja/LuaSkinHttpClient.cpp
         )
         target_include_directories(lua_skin_foundation_http_transport_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src
@@ -8676,13 +8792,32 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             cxx_std_23)
         target_compile_definitions(lua_skin_foundation_http_transport_tests PRIVATE
             ASOBMASHOW_TEST_FOUNDATION_HTTP_TRANSPORT=1)
+        target_compile_options(lua_skin_foundation_http_transport_tests PRIVATE
+            $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
         target_link_libraries(lua_skin_foundation_http_transport_tests PRIVATE
-            "-framework Foundation")
+            "-framework Foundation" "-framework CFNetwork")
         add_test(NAME lua_skin_foundation_http_transport_tests
                  COMMAND lua_skin_foundation_http_transport_tests)
+
+        add_executable(lua_skin_foundation_http_network_tests
+            tests/lua_skin_http_transport_tests.cpp
+            src/skin/beatoraja/LuaSkinFoundationHttpTransport.mm
+            src/skin/beatoraja/LuaSkinHttpClient.cpp)
+        target_include_directories(lua_skin_foundation_http_network_tests PRIVATE
+            ${CMAKE_SOURCE_DIR}/src)
+        target_compile_features(lua_skin_foundation_http_network_tests PRIVATE cxx_std_23)
+        target_compile_definitions(lua_skin_foundation_http_network_tests PRIVATE
+            ASOBMASHOW_TEST_FOUNDATION_HTTP_TRANSPORT=1)
+        target_compile_options(lua_skin_foundation_http_network_tests PRIVATE
+            $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
+        target_link_libraries(lua_skin_foundation_http_network_tests PRIVATE
+            "-framework Foundation" "-framework CFNetwork" Threads::Threads)
+        add_test(NAME lua_skin_foundation_http_network_tests
+                 COMMAND lua_skin_foundation_http_network_tests)
     endif()
 
     foreach(archive_file_target IN ITEMS
+        text_input_box_tests
         builtin_renderer_characterization_tests
         ir_upload_candidates_tests
         music_playlist_repository_tests
@@ -9313,6 +9448,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/rendering/UiBatchRenderer.cpp
             src/rendering/UniformCache.cpp
             src/view/SdlTtfRuntime.cpp
+            src/view/SystemTextRasterizer.cpp
             src/view/TextView.cpp
             src/view/View.cpp
         )

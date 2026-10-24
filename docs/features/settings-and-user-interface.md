@@ -211,6 +211,13 @@ and complete production launch/delivery methods with controlled repository and
 import operations. `settings_library_lifecycle_tests` compiles the production
 destructor to verify stop/join before callback dependencies are destroyed.
 
+## Legal information
+
+The Legal section provides an offline license and copyright notice selector,
+including the application GPL license and automatic translation disclaimer.
+Its text viewport scrolls independently and keeps legal notices in their original
+language. See [Legal information](legal-information.md) for sources and maintenance.
+
 ## Related pages
 
 - [Profiles and data transfer](profiles-and-data-transfer.md)

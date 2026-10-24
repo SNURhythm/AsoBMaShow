@@ -121,6 +121,9 @@ bool ListAndroidTreeChartFiles(const std::filesystem::path &rootPath,
                                std::vector<AndroidTreeChartFile> &chartFiles,
                                std::string &errorMessage,
                                const std::stop_token *stopToken = nullptr);
+bool ListAndroidTreeTextFiles(const std::filesystem::path &directoryPath,
+                              std::vector<std::filesystem::path> &files,
+                              std::string &errorMessage);
 bool ClearAndroidTreeTransientFileCache(std::string &errorMessage);
 bool CacheAndroidTreeDirectory(const std::filesystem::path &directoryPath,
                                std::string &errorMessage);

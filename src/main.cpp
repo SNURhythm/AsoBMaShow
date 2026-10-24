@@ -1619,6 +1619,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       }
     }
 #endif
+    // Publish once per scene frame, including input collected during pacing
+    // waits. Ordinary backend pumps and repeated skin captures do not expire edges.
+    int legacyLogicalWidth = 0, legacyLogicalHeight = 0;
+    platform::windowSize(s_window, &legacyLogicalWidth, &legacyLogicalHeight);
+    context.inputDeviceRegistry.advanceLegacyInputFrame(legacyLogicalWidth, legacyLogicalHeight);
     if (hasDeferredRenderResize &&
         applyWindowResize(deferredRenderResizeW, deferredRenderResizeH)) {
       hasDeferredRenderResize = false;

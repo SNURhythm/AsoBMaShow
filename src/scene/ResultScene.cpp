@@ -60,6 +60,8 @@
 #include "../skin/beatoraja/BgfxSkinTextureDevice.h"
 #include "../skin/beatoraja/LuaSkinApplicationAudioBackend.h"
 #include "../skin/beatoraja/ResultSkinSession.h"
+#include "../skin/beatoraja/LuaSkinCurlHttpTransport.h"
+#include "../PlatformOpen.h"
 #endif
 
 #include <algorithm>
@@ -755,7 +757,15 @@ bool ResultScene::startSelectedResultSkin() {
          return context.inputDeviceRegistry.legacyInputGeneration(
              rendering::render_width, rendering::render_height);
        },
-       .safetyPolicy = skin::SkinSafetyPolicy(acquisition.request->safetyLevel)});
+       .safetyPolicy = skin::SkinSafetyPolicy(acquisition.request->safetyLevel),
+       .httpTransport = skin::createLuaSkinProductionHttpTransport(),
+       .openBrowser = [this](std::string_view url) {
+         if (context.replayVideoExportActive.load(std::memory_order_acquire) ||
+             context.rendererAccess.exportRequested() ||
+             !context.inputDeviceRegistry.hasCurrentLegacyPressEdge()) return false;
+         std::string error;
+         return platform_open::openExternalUrl(url, error);
+       }});
   for (auto &diagnostic : created.diagnostics) {
     appendDiagnostic(entry, revisionDigest, configurationDigest,
                      std::move(diagnostic));

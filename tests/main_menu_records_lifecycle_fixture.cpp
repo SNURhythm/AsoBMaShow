@@ -246,6 +246,7 @@ struct MainMenuScene {
   ProfileSelections profileSelections;
   ReplayRecordsModal modal;
   ReplayRecordsModal *recordsModal_ = &modal;
+  ReplayRecordsModal *readmeModal_ = nullptr;
   PreviewWorker *previewWorker_ = nullptr;
   // Explicit owner teardown must stop the modal before callback dependencies.
   std::unique_ptr<FindBmsModal> findBmsModal_ = std::make_unique<FindBmsModal>();

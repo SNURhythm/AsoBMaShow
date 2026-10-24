@@ -45,6 +45,9 @@ struct MusicSelectSkinSessionContext {
   rendering::SkinQuadBatchBackend *quadBackend = nullptr;
   std::function<LuaSkinLegacyInputGeneration()> captureLegacyInputGeneration;
   std::stop_token stop;
+  std::unique_ptr<LuaSkinHttpTransport> httpTransport;
+  bool externalActionsEnabled = true;
+  std::function<bool(std::string_view)> openBrowser;
 };
 
 [[nodiscard]] constexpr SkinSafetyPolicy
@@ -90,6 +93,9 @@ struct MusicSelectSkinSessionPreparationContext {
   std::shared_ptr<LuaSkinAudioBackend> audioBackend;
   std::optional<LuaSkinLegacyInputGeneration> initialLegacyInputGeneration;
   std::stop_token stop;
+  std::unique_ptr<LuaSkinHttpTransport> httpTransport;
+  bool externalActionsEnabled = true;
+  std::function<bool(std::string_view)> openBrowser;
 };
 
 struct MusicSelectSkinSessionPrepared {

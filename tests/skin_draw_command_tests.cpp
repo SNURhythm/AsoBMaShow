@@ -7010,6 +7010,43 @@ void testGeneratedBpmPixmapPreservesSourceRasterRevealAndIntegration() {
          "without a steady-frame CPU allocation");
 }
 
+void testAuthoredNoteDistributionUsesActivePracticeRangeAndSpeed() {
+  RuntimeHarness runtime;
+  Skin2DRenderer renderer;
+  FakeResources resources;
+  FakeState state;
+  std::array<SkinNormalDistribution, 10> buckets{};
+  buckets[0][0] = 1;
+  state.graphResult.normalDistribution = buckets;
+  state.timerResults[41] = 0;
+  state.practiceResult.supported = true;
+  state.practiceResult.active = true;
+  state.practiceResult.startTimeMillis = 1'000;
+  state.practiceResult.endTimeMillis = 5'000;
+  state.practiceResult.frequencyPercent = 150;
+  ValidatedBeatorajaSkinModel model;
+  model.model.objects = {{.id = 1, .authoredName = "distribution",
+                          .payload = SkinNoteDistributionGraphObject{},
+                          .authoredOrdinal = 1}};
+  model.model.destinations = {noteDistributionDestination(1)};
+  const auto active = evaluate(renderer, runtime, model, resources, state, 1, 2'000'000);
+  const auto textures = generatedCommands(active);
+  expect(active.submitReady && textures.size() == 3 &&
+             generatedRgba(*textures[2], 5, 0) == 0x80ff80ffU &&
+             generatedRgba(*textures[2], 25, 0) == 0xff8080ffU &&
+             generatedRgba(*textures[2], 15, 0) == 0xffffffffU &&
+             generatedRgba(*textures[2], 10, 0) == 0U,
+         "authored graph draws practice start/end and a 150 percent play cursor");
+  state.practiceResult.active = false;
+  const auto playing = evaluate(renderer, runtime, model, resources, state, 2, 2'100'000);
+  const auto normal = generatedCommands(playing);
+  expect(playing.submitReady && normal.size() == 3 &&
+             generatedRgba(*normal[2], 5, 0) == 0U &&
+             generatedRgba(*normal[2], 25, 0) == 0U &&
+             generatedRgba(*normal[2], 10, 0) == 0xffffffffU,
+         "outside the practice menu authored graphs keep the ordinary play cursor");
+}
+
 SkinGameplayGraphStateView generatedGaugeState(std::span<const float> history,
                                                 int type = 0) {
   return {.gaugeHistory = history,
@@ -7864,6 +7901,7 @@ int main(int argc, char **argv) {
   testHiddenNoteStillPreparesEveryLaneSourceInPinnedOrder();
   testSoftwarePixmapMatchesPinnedGdx2dCompositing();
   testGeneratedBpmPixmapPreservesSourceRasterRevealAndIntegration();
+  testAuthoredNoteDistributionUsesActivePracticeRangeAndSpeed();
   testGeneratedGaugePixmapPreservesLayersCrossingAndBudget();
   testGeneratedCourseGaugePixmapMarksStageBoundaries();
   testGeneratedNotePixmapPreservesPmsOrderGapsCursorAndFloatReveal();

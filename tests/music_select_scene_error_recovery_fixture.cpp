@@ -89,11 +89,12 @@ struct MusicSelectScene : Scene {
   std::unique_ptr<RevealMenu> revealContextMenu_;
 
   struct UnzipModal {
+    bool handleEvents(SDL_Event &) { return true; }
     bool cancelled = false;
     void cancelAndWait() { cancelled = true; }
   } unzipModal;
   UnzipModal *archiveUnzipModal_ = &unzipModal;
-  UnzipModal *findBmsModal_ = nullptr;
+  UnzipModal *findBmsModal_ = nullptr, *readmeModal_ = nullptr;
   SceneManager manager;
   struct { SceneManager *sceneManager; } context{&manager};
   bool failed_ = false;

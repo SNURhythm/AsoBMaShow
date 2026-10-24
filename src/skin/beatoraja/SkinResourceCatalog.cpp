@@ -1177,7 +1177,7 @@ std::optional<SkinTextAtlasBuildResult> prepareFontAtlas(
     if (!faces) return std::nullopt;
     return buildSkinBitmapTextAtlas(id, request.key, *faces,
                                     request.codepoints, request.pairs,
-                                    safetyPolicy);
+                                    safetyPolicy, cancellationRequested);
   }
   const std::string contentKey = scalableTextAtlasContentKey(
       request.key, request.codepoints, request.pairs, safetyPolicy);
@@ -2833,12 +2833,13 @@ SkinResourcePreparationService::findCachedGlyph(
 void SkinResourcePreparationService::storeCachedGlyph(
     std::string revisionKey, std::string glyphKey,
     SkinPreparedGlyphBitmap glyph) {
-  const std::size_t bytes = glyph.alpha.size();
+  const std::size_t bytes = glyph.alpha.size() + glyph.colorRgb.size();
   std::unique_lock lock(textAtlasCacheMutex_);
   auto &entries = glyphCache_[std::move(revisionKey)];
   const auto previous = entries.find(glyphKey);
   if (previous != entries.end()) {
-    const std::size_t previousBytes = previous->second.alpha.size();
+    const std::size_t previousBytes = previous->second.alpha.size() +
+                                      previous->second.colorRgb.size();
     glyphCacheBytes_ =
         glyphCacheBytes_ > previousBytes ? glyphCacheBytes_ - previousBytes : 0;
   }

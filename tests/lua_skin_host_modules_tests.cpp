@@ -33,6 +33,7 @@ extern "C" {
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -96,6 +97,7 @@ struct FakeHttpCall {
 };
 
 struct FakeHttpState {
+  std::function<void()> onRead;
   std::vector<FakeHttpCall> calls;
   int connects = 0;
   int responses = 0;
@@ -108,6 +110,10 @@ class FakeHttpConnection final : public LuaSkinHttpConnection {
 public:
   FakeHttpConnection(std::shared_ptr<FakeHttpState> state, std::size_t call)
       : state_(std::move(state)), call_(call), url_(state_->calls[call].url) {}
+
+  void setResponseLimitBytes(std::size_t maximumBytes) noexcept override {
+    state_->calls[call_].limits.maximumBytes = maximumBytes;
+  }
 
   std::optional<std::string> connect() noexcept override {
     ++state_->connects;
@@ -129,6 +135,7 @@ public:
   }
 
   LuaSkinHttpBodyResult readBody() noexcept override {
+    if (state_->onRead) state_->onRead();
     ++state_->reads;
     ++state_->calls[call_].reads;
     if (url_.ends_with("/read-error")) {
@@ -469,7 +476,7 @@ if not skin_config then
   return {type = 0}
 end
 
-local http_names = {http_get = true, http_get_lines = true}
+local http_names = {http_get = true, http_get_lines = true, http_get_async = true, http_poll = true, http_cancel = true}
 local http_count = 0
 for name, value in pairs(main_state) do
   if name:sub(1, 5) == "http_" then
@@ -478,7 +485,7 @@ for name, value in pairs(main_state) do
     http_count = http_count + 1
   end
 end
-assert(http_count == 2)
+assert(http_count == 5)
 
 local lines, lines_ok = main_state.http_get_lines("https://fixture/utf8")
 assert(lines_ok == true and #lines == 3)
@@ -487,16 +494,16 @@ local text, text_ok = main_state.http_get("http://fixture/utf8")
 assert(text_ok == true and text == "alpha\n\237\149\156\234\184\128\nomega")
 
 local bounded, bounded_ok = main_state.http_get_lines("https://fixture/line-limit")
-assert(bounded_ok == true and #bounded == 1024 and bounded[1024] == "x")
+assert(bounded_ok == true and #bounded == 1025 and bounded[1025] == "x")
 local exact, exact_ok = main_state.http_get("https://fixture/char-limit")
 assert(exact_ok == true and #exact == 65536)
 local exact_with_newline, newline_ok = main_state.http_get("https://fixture/char-limit-with-newline")
 assert(newline_ok == true and #exact_with_newline == 65537)
 local utf16_exact, utf16_exact_ok = main_state.http_get("https://fixture/utf16-limit")
 assert(utf16_exact_ok == true and #utf16_exact == 131072)
-local overflow, overflow_error = main_state.http_get_lines("https://fixture/char-overflow")
+local overflow, overflow_error = main_state.http_get_lines("https://fixture/char-overflow", nil, 65536)
 assert(overflow == nil and overflow_error == "response is too large")
-local utf16_overflow, utf16_overflow_error = main_state.http_get_lines("https://fixture/utf16-overflow")
+local utf16_overflow, utf16_overflow_error = main_state.http_get_lines("https://fixture/utf16-overflow", nil, 131072)
 assert(utf16_overflow == nil and utf16_overflow_error == "response is too large")
 
 local malformed, malformed_ok = main_state.http_get_lines("https://fixture/malformed")
@@ -526,13 +533,14 @@ assert(url_members == 1)
 local connection = url:openConnection()
 local connection_members = {
   setRequestMethod = true, setConnectTimeout = true, connect = true,
-  getResponseCode = true, getInputStream = true,
+  getResponseCode = true, getInputStream = true, setResponseLimitBytes = true,
 }
 local connection_count = 0
 for name in pairs(connection) do
   assert(connection_members[name]); connection_count = connection_count + 1
 end
-assert(connection_count == 5)
+assert(connection_count == 6)
+assert(connection:setResponseLimitBytes(1048576) == nil)
 assert(connection:setRequestMethod("GET") == nil)
 assert(select('#', connection:setRequestMethod("GET")) == 1)
 assert(connection:setConnectTimeout(-7) == nil)
@@ -540,18 +548,21 @@ assert(select('#', connection:setConnectTimeout(-7)) == 1)
 assert(connection:connect() == nil and connection:connect() == nil)
 assert(select('#', connection:connect()) == 1)
 assert(connection:getResponseCode() == 206)
+connection:setResponseLimitBytes(2 * 1048576)
 local input = connection:getInputStream()
 assert(luajava.newInstance("java.io.InputStreamReader", input) == input)
 local reader = luajava.newInstance("java.io.BufferedReader", input)
 assert(reader == input)
 local reader_members = 0
-for name in pairs(reader) do assert(name == "readLine"); reader_members = reader_members + 1 end
-assert(reader_members == 1)
+for name in pairs(reader) do assert(name == "readLine" or name == "close"); reader_members = reader_members + 1 end
+assert(reader_members == 2)
 assert(reader:readLine() == "first")
 assert(reader:readLine() == "\237\149\156\234\184\128")
 assert(reader:readLine() == "last")
 assert(reader:readLine() == nil and reader:readLine() == nil)
 assert(select('#', reader:readLine()) == 1)
+assert(reader:close() == nil)
+assert(not pcall(function() reader:readLine() end))
 
 local default_connection = luajava.newInstance("java.net.URL", "https://fixture/default"):openConnection()
 assert(default_connection:getResponseCode() == 204)
@@ -578,6 +589,7 @@ local malformed_uri = luajava.newInstance("java.net.URL", "http://bad host/x"):o
 local malformed_uri_ok, malformed_uri_error = pcall(function() malformed_uri:connect() end)
 assert(not malformed_uri_ok and tostring(malformed_uri_error):find("Legacy Lua skin HTTP connection failed: Illegal character in URI", 1, true))
 local too_large = luajava.newInstance("java.net.URL", "https://fixture/char-overflow"):openConnection()
+too_large:setResponseLimitBytes(65536)
 local too_large_ok, too_large_error = pcall(function() too_large:getInputStream() end)
 assert(not too_large_ok and tostring(too_large_error):find("Legacy Lua skin HTTP read failed: response is too large", 1, true))
 
@@ -627,12 +639,25 @@ return {
         source / pathFromUtf8(
                      "skin/\xE6\x97\xA5\xE6\x9C\xAC\xE8\xAA\x9E/\xE8\xAA\xAD\xE3\x81\xBF\xE8\xBE\xBC\xE3\x81\xBF.txt"),
         "utf8-host-path");
-    fs::copy_file(
-        fs::path(ASOBMASHOW_SOURCE_DIR) /
-            "tests/fixtures/beatoraja_skin/packages/runtime_contract/skin/"
-            "main_state_file_surface.luaskin",
-        source / "skin/main_state_file_surface.luaskin",
-        fs::copy_options::overwrite_existing);
+    // Keep the historical oracle source pinned; adapt only this current-host test.
+    {
+      std::ifstream input(fs::path(ASOBMASHOW_SOURCE_DIR) /
+          "tests/fixtures/beatoraja_skin/packages/runtime_contract/skin/"
+          "main_state_file_surface.luaskin");
+      std::string script{std::istreambuf_iterator<char>(input),
+                         std::istreambuf_iterator<char>()};
+      const auto replace = [&](std::string_view oldText, std::string_view newText) {
+        const auto position = script.find(oldText);
+        expect(position != std::string::npos, "current file contract adaptation finds its expectation");
+        if (position != std::string::npos) script.replace(position, oldText.size(), newText);
+      };
+      replace("file_append = true,", "file_append = true, file_delete = true,");
+      replace("file_function_count == 8", "file_function_count == 9");
+      replace("legacy_entries[1]:match", "legacy_entries[1]:getPath():match");
+      replace("legacy_entries[1]:match", "legacy_entries[1]:getPath():match");
+      replace("legacy_entries[1]:match", "legacy_entries[1]:getPath():match");
+      writeText(source / "skin/main_state_file_surface.luaskin", script);
+    }
     writeText(source / "skin/file_surface_source.txt",
               "alpha\n\xED\x95\x9C\xEA\xB8\x80\r\nomega");
     writeText(source / "skin/file_surface_invalid_utf8.txt", "\xFF\n");
@@ -698,8 +723,8 @@ local Controllers = luajava.bindClass("com.badlogic.gdx.controllers.Controllers"
 local Controller = luajava.bindClass("com.badlogic.gdx.controllers.Controller")
 expect_members(Gdx, {graphics = true, input = true})
 expect_members(Gdx.graphics, {getWidth = true, getHeight = true})
-expect_members(Gdx.input, {isKeyPressed = true})
-expect_members(Input, {Keys = true})
+expect_members(Gdx.input, {isKeyPressed = true, isKeyJustPressed = true, isButtonPressed = true, getX = true, getY = true, getDeltaX = true, getDeltaY = true, justTouched = true})
+expect_members(Input, {Keys = true, Buttons = true})
 expect_members(Input.Keys, {})
 expect_members(Controllers, {getControllers = true})
 expect_members(Controller, {})
@@ -710,10 +735,16 @@ assert(Input.Keys.A == 29)
 assert(Input.Keys.Escape == 131)
 assert(Input.Keys.F1 == 244)
 assert(Input.Keys["Numpad 0"] == 144)
-assert(Input.Keys["Not A Key"] == -1)
+assert(Input.Keys["Not A Key"] == nil)
+assert(Input.Keys.ESCAPE == 131 and Input.Keys.space == 62)
+assert(Input.Buttons.LEFT == 0 and Input.Buttons.RIGHT == 1)
 assert(Gdx.input:isKeyPressed(Input.Keys.A) == true)
 assert(Gdx.input:isKeyPressed(Input.Keys.Escape) == false)
-assert(Gdx.input:isKeyPressed(Input.Keys["Not A Key"]) == true)
+assert(Gdx.input:isKeyPressed(Input.Keys.ANY_KEY) == true)
+assert(not Gdx.input:isKeyJustPressed(Input.Keys.A))
+assert(Gdx.input:getX() == 0 and Gdx.input:getY() == 0)
+assert(Gdx.input:getDeltaX() == 0 and Gdx.input:getDeltaY() == 0)
+assert(not Gdx.input:justTouched() and not Gdx.input:isButtonPressed(0))
 
 local controllers = Controllers:getControllers()
 expect_members(controllers, {size = true, first = true})
@@ -736,8 +767,8 @@ for _, probe in ipairs({
   function() return luajava.newInstance("com.badlogic.gdx.Gdx") end,
   function() return Gdx.files end,
   function() return Gdx.graphics.density end,
-  function() return Gdx.input.getX end,
-  function() return Input.Buttons end,
+  function() return Gdx.input.getPressure end,
+  function() return Input.Peripheral end,
   function() return Controllers.addListener end,
   function() return Controller.getAxis end,
   function() return controllers.get(0) end,
@@ -1250,6 +1281,78 @@ void testSelectedMainStateSurfaceUsesBoundConfiguredState() {
   harness->runtime->setFrameState(nullptr);
 }
 
+void testUpdatedFileFacadeAndDeletion() {
+  auto fileSystem = fixture().createFileSystem("shape.luaskin", true);
+  if (!fileSystem) return;
+  const fs::path root = fileSystem->skinDirectory();
+  writeText(root / "updated-files/child.txt", "keep");
+  fs::create_directories(root / "updated-files/folder");
+  fs::create_symlink("child.txt", root / "updated-files/link");
+  fs::create_symlink("missing", root / "updated-files/dangling");
+  lua_State *state = luaL_newstate();
+  luaL_openlibs(state);
+  {
+    auto modules = LuaSkinHostModules::create(state, {.fileSystem = fileSystem.get()});
+    expect(modules.modules && !modules.modules->enableStateAccessors(),
+           "updated file contract installs host accessors");
+    const auto run = [&](const char *script, std::string_view message) {
+      const int status = luaL_dostring(state, script);
+      if (status != 0) { std::cerr << lua_tostring(state, -1) << '\n'; lua_pop(state, 1); }
+      expect(status == 0, message);
+    };
+    run(R"lua(
+local File = luajava.bindClass("java.io.File")
+updated = luajava.newInstance("java.io.File", "updated-files/./folder/..")
+assert(updated:isDirectory() and not updated:isFile())
+assert(updated:getName() == "updated-files")
+assert(tostring(updated) == updated:getPath())
+assert(luajava.new(File, updated:getPath()):isDirectory())
+local entries = assert(updated:listFiles())
+assert(#entries == 2)
+for _, entry in ipairs(entries) do
+  assert(type(entry) == "table")
+  if entry:getName() == "child.txt" then
+    assert(entry:isFile() and not entry:isDirectory())
+  else assert(entry:getName() == "folder" and entry:isDirectory()) end
+end
+local missing = luajava.new(File, "updated-files/missing")
+assert(not missing:isFile() and not missing:isDirectory() and missing:listFiles() == nil)
+assert(missing:mkdir() and not missing:mkdir())
+assert(not pcall(luajava.newInstance, "java.io.File", "updated-files/link"))
+assert(not pcall(luajava.new, File, "updated-files/dangling"))
+saved = luajava.new(File, "updated-files/folder")
+)lua", "83574048 File facades expose normalized paths, types and File-valued lists excluding links");
+    fs::remove(root / "updated-files/folder");
+    fs::create_directory_symlink(root / "updated-files/missing", root / "updated-files/folder");
+    run(R"lua(
+assert(not pcall(function() return saved:isDirectory() end))
+assert(not pcall(function() return saved:isFile() end))
+assert(saved:listFiles() == nil and saved:mkdir() == false)
+local m = require("main_state")
+assert(not m.file_delete("updated-files/folder"))
+assert(not m.file_delete("updated-files/link"))
+assert(not m.file_delete("updated-files/dangling"))
+assert(not m.file_delete("updated-files/missing"))
+assert(not m.file_delete("../../outside"))
+assert(m.file_delete("updated-files/child.txt"))
+assert(not m.file_delete("updated-files/child.txt"))
+)lua", "mutable File paths are revalidated and deletion removes only regular files");
+    expect(!fs::exists(root / "updated-files/child.txt") &&
+               fs::is_symlink(root / "updated-files/link") &&
+               fs::is_directory(root / "updated-files/missing"),
+           "deletion preserves links and directories");
+    fs::create_directories(root / "updated-many");
+    for (int i = 0; i < 4096; ++i) writeText(root / "updated-many" / std::to_string(i), "");
+    run("many = luajava.newInstance('java.io.File', 'updated-many'); assert(#many:listFiles() == 4096)",
+        "File lists admit exactly 4096 children");
+    writeText(root / "updated-many/overflow", "");
+    run("assert(many:listFiles() == nil)", "File lists reject more than 4096 children without partial results");
+  }
+  lua_close(state);
+  fs::remove_all(root / "updated-many");
+  fs::remove_all(root / "updated-files");
+}
+
 void testPinnedMainStateFileSurfaceAndClosedLegacyFileFacade() {
   auto harness = fixture().createWritable("main_state_file_surface.luaskin",
                                           LuaRuntimePurpose::Gameplay);
@@ -1265,7 +1368,7 @@ void testPinnedMainStateFileSurfaceAndClosedLegacyFileFacade() {
               << configured.failure->message << '\n';
   }
   expect(configured.value.has_value() && !configured.failure,
-         "the eight pinned file functions and closed legacy File facade execute");
+         "the updated file functions and closed File facade execute");
   if (!configured.value) {
     return;
   }
@@ -1339,7 +1442,7 @@ void testPinnedBoundedHttpAndClosedLegacyReaderFacade() {
     const FakeHttpCall *legacy = callFor("https://fixture/legacy");
     expect(legacy != nullptr && legacy->connects == 1 &&
                legacy->responses == 1 && legacy->reads == 1 &&
-               legacy->disconnects == 1,
+               legacy->disconnects == 1 && legacy->limits.maximumBytes == 2 * 1048576,
            "legacy HTTP preserves idempotent connection, response, read, and "
            "disconnect stages");
     const FakeHttpCall *responseFailure =
@@ -1357,8 +1460,8 @@ void testPinnedBoundedHttpAndClosedLegacyReaderFacade() {
                callsFor("http://bad host/x") == 0,
            "denied schemes, malformed URIs, and methods never reach the transport");
     expect(std::ranges::all_of(state->calls, [](const FakeHttpCall &call) {
-             return call.limits.maximumLines == 1024 &&
-                    call.limits.maximumCharacters == 65536;
+             return call.limits.maximumBytes >= 1 &&
+                    call.limits.maximumBytes <= LuaSkinHttpClient::maximumBytes;
            }),
            "every transport call receives the pinned response bounds");
     const auto renderGet =
@@ -1849,6 +1952,190 @@ void testLuaHostPhysicalPathsPreserveUtf8Bytes() {
                            roundTripped.size()};
   expect(actual == authoredPath,
          "Lua host I/O preserves UTF-8 virtual path bytes when constructing a physical path");
+}
+
+struct FailingLuaAllocator {
+  lua_Alloc original = nullptr;
+  void *context = nullptr;
+  std::atomic_bool reject = false;
+  std::size_t minimumBytes = 1;
+  std::atomic_int failures = 0;
+
+  static void *allocate(void *opaque, void *memory, std::size_t oldSize,
+                        std::size_t newSize) {
+    auto &self = *static_cast<FailingLuaAllocator *>(opaque);
+    if (newSize >= self.minimumBytes && self.reject.load()) {
+      ++self.failures;
+      return nullptr;
+    }
+    return self.original(self.context, memory, oldSize, newSize);
+  }
+};
+
+void testHttpLuaAllocationFailureCanRecover() {
+  auto fileSystem = fixture().createFileSystem("shape.luaskin");
+  lua_State *state = luaL_newstate();
+  if (!fileSystem || !state) {
+    expect(false, "HTTP allocation fixture creates");
+    if (state) lua_close(state);
+    return;
+  }
+  luaL_openlibs(state);
+  FailingLuaAllocator allocator;
+  allocator.original = lua_getallocf(state, &allocator.context);
+  lua_setallocf(state, FailingLuaAllocator::allocate, &allocator);
+  auto calls = std::make_shared<FakeHttpState>();
+  FakeHttpTransport transport(calls);
+  {
+    auto modules = LuaSkinHostModules::create(
+        state, {.fileSystem = fileSystem.get(), .httpTransport = &transport});
+    expect(modules.modules && !modules.modules->enableStateAccessors(),
+           "HTTP allocation fixture installs modules");
+    if (modules.modules) {
+      for (const char *expression : {
+               "return main_state.http_get('https://fixture/line-limit')",
+               "return main_state.http_get_lines('https://fixture/line-limit')",
+               "return luajava.newInstance('java.net.URL', 'https://fixture/line-limit'):openConnection():getInputStream()"}) {
+        expect(luaL_loadstring(state, expression) == 0, "allocation probe compiles before failure injection");
+        allocator.failures = 0;
+        calls->onRead = [&] { allocator.reject = true; };
+        const int status = lua_pcall(state, 0, LUA_MULTRET, 0);
+        allocator.reject = false;
+        calls->onRead = {};
+        expect(status != 0 && allocator.failures > 0,
+               "HTTP result marshalling propagates allocation failure through a protected boundary");
+        lua_settop(state, 0);
+        lua_gc(state, LUA_GCCOLLECT, 0);
+        expect(luaL_dostring(state, "assert(main_state.http_get('https://fixture/default') == 'ok')") == 0,
+               "HTTP host remains usable after result allocation failure");
+      }
+      // Small pending tables remain allocatable; the completed 1025-line array
+      // fails after the native result is consumed, inside its protected writer.
+      allocator.minimumBytes = 1024;
+      expect(luaL_dostring(state,
+          "request_id = assert(main_state.http_get_async('https://fixture/line-limit')); function poll_result() return main_state.http_poll(request_id) end") == 0,
+          "async allocation probe starts");
+      allocator.failures = 0;
+      allocator.reject = true;
+      int status = 0;
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+      while (status == 0 && std::chrono::steady_clock::now() < deadline) {
+        lua_getglobal(state, "poll_result");
+        status = lua_pcall(state, 0, 1, 0);
+        if (status == 0) lua_pop(state, 1);
+        std::this_thread::yield();
+      }
+      allocator.reject = false;
+      expect(status != 0 && allocator.failures > 0, "async consumed-result marshalling handles Lua allocation failure");
+      lua_settop(state, 0);
+      lua_gc(state, LUA_GCCOLLECT, 0);
+      expect(luaL_dostring(state, "assert(main_state.http_poll(request_id).status == 'failed')") == 0,
+             "failed Lua allocation does not retain an already-consumed async result");
+    }
+  }
+  lua_close(state);
+}
+
+void testRuntimeExternalActionsAndAsyncHttpSurface() {
+  auto fileSystem = fixture().createFileSystem("shape.luaskin", true);
+  lua_State *state = luaL_newstate();
+  if (!fileSystem || !state) {
+    expect(false, "external-actions fixture creates");
+    if (state) lua_close(state);
+    return;
+  }
+  luaL_openlibs(state);
+  auto calls = std::make_shared<FakeHttpState>();
+  FakeHttpTransport transport(calls);
+  LuaSkinLegacyInputHost input;
+  int navigations = 0;
+  {
+    auto modules = LuaSkinHostModules::create(state,
+        {.fileSystem = fileSystem.get(), .httpTransport = &transport,
+         .legacyInputHost = &input,
+         .openBrowser = [&](std::string_view url) {
+           ++navigations;
+           return url == "https://example.com/skin";
+         }});
+    expect(modules.modules != nullptr, "external-actions host installs");
+    if (modules.modules) {
+      expect(!modules.modules->enableStateAccessors(), "external-actions exports install");
+      const auto run = [&](const char *source) {
+        const int status = luaL_dostring(state, source);
+        if (status != 0) {
+          std::cerr << lua_tostring(state, -1) << '\n';
+          lua_pop(state, 1);
+        }
+        expect(status == 0, "external-actions Lua contract");
+      };
+      run(R"lua(
+local m = main_state
+assert(not m.open_url('https://example.com/skin'))
+for _, limit in ipairs({0, -1, 1.5, 8388609, math.huge, 0/0}) do
+  local id, err = m.http_get_async('https://fixture/utf8', 1000, limit)
+  assert(id == nil and type(err) == 'string')
+end
+for _, args in ipairs({{}, {false}, {{}} , {'https://fixture/utf8', {}}, {'https://fixture/utf8', 1000, {}}}) do
+  local ok, id, err = pcall(m.http_get_async, unpack(args))
+  assert(ok and id == nil and type(err) == 'string')
+end
+assert(m.http_poll(99).status == 'failed' and not m.http_cancel(99))
+)lua");
+      LuaSkinLegacyInputGeneration edge;
+      edge.justPressedGdxKeys.set(66);
+      edge.pressedMouseButtons.set(1);
+      edge.pointerX = 27;
+      edge.pointerY = 32;
+      edge.deltaX = -4;
+      edge.deltaY = 5;
+      edge.justTouched = true;
+      input.publish(edge);
+      run(R"lua(
+local g = luajava.bindClass('com.badlogic.gdx.Gdx').input
+assert(g:isKeyJustPressed(66) and not g:isKeyJustPressed(-1))
+assert(g:isButtonPressed(1) and not g:isButtonPressed(0))
+assert(g:getX() == 27 and g:getY() == 32)
+assert(g:getDeltaX() == -4 and g:getDeltaY() == 5 and g:justTouched())
+for _, url in ipairs({'file:///tmp/a', 'https://user@example.com/a', 'https://', string.rep('x',2049)}) do
+  assert(not main_state.open_url(url))
+end
+assert(main_state.open_url('https://example.com/skin'))
+assert(not main_state.open_url('https://example.com/skin'))
+)lua");
+      expect(navigations == 1, "browser needs a current gesture, valid URL and cooldown");
+      modules.modules->setFrameCallbackActive(true);
+      run("request_id = assert(main_state.http_get_async('https://fixture/utf8',1000,64))");
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+      bool pending = true;
+      while (pending && std::chrono::steady_clock::now() < deadline) {
+        run("response = main_state.http_poll(request_id); return response.status");
+        const char *status = lua_tostring(state, -1);
+        pending = status && std::string_view(status) == "pending";
+        lua_pop(state, 1);
+        if (pending) std::this_thread::yield();
+      }
+      run(R"lua(
+assert(response.status == 'completed' and response.status_code == 204 and response.error == '')
+assert(#response.lines == 3 and response.lines[1] == 'alpha' and response.lines[3] == 'omega')
+assert(main_state.http_poll(request_id).status == 'failed')
+assert(not main_state.http_cancel(request_id))
+)lua");
+      expect(modules.modules->setExternalActionsEnabled(false), "external actions can be temporarily disabled");
+      run(R"lua(
+assert(not main_state.open_url('https://example.com/skin'))
+assert(select(1, main_state.http_get_async('https://fixture/utf8')) == nil)
+local disabled = main_state.http_poll(request_id)
+assert(disabled.status == 'failed' and disabled.error == 'HTTP disabled')
+assert(not main_state.http_cancel(request_id))
+assert(main_state.file_write('temporary-delete.txt','keep'))
+assert(not main_state.file_delete('temporary-delete.txt'))
+assert(main_state.file_exists('temporary-delete.txt'))
+)lua");
+      expect(!modules.modules->setExternalActionsEnabled(true), "external actions restore prior capability");
+      run("assert(main_state.file_delete('temporary-delete.txt'))");
+    }
+  }
+  lua_close(state);
 }
 
 void testMainStateArgumentsUsePinnedLuaJConversions() {
@@ -2345,6 +2632,12 @@ void testIndexedNumericCatalogMatchesExactAdmission() {
 } // namespace
 
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "--file-contract-only") {
+    LuaRuntimeTestHooks::setWallTime(std::chrono::steady_clock::time_point{});
+    testUpdatedFileFacadeAndDeletion();
+    testPinnedMainStateFileSurfaceAndClosedLegacyFileFacade();
+    return failures == 0 ? 0 : 1;
+  }
   if (argc == 2 && std::string_view(argv[1]) == "--benchmark-files") {
     benchmarkFileHelpers();
     return failures == 0 ? 0 : 1;
@@ -2354,6 +2647,8 @@ int main(int argc, char **argv) {
   LuaRuntimeTestHooks::setWallTime(std::chrono::steady_clock::time_point{});
   testIndexedNumericCatalogMatchesExactAdmission();
   testAudioAndHttpArgumentsUsePinnedLuaJConversions();
+  testHttpLuaAllocationFailureCanRecover();
+  testRuntimeExternalActionsAndAsyncHttpSurface();
   testMainStateArgumentsUsePinnedLuaJConversions();
   testTimerAndEventUtilityClosures();
   testExactShapeAndEnabledOptionsPreserveAuthoredDuplicates();
@@ -2363,6 +2658,7 @@ int main(int argc, char **argv) {
   testGetPathCanLoadAnEntryParentSibling();
   testUnknownDirectMainStateLookupsReturnDefaults();
   testSelectedMainStateSurfaceUsesBoundConfiguredState();
+  testUpdatedFileFacadeAndDeletion();
   testPinnedMainStateFileSurfaceAndClosedLegacyFileFacade();
   testPinnedBoundedHttpAndClosedLegacyReaderFacade();
   testPinnedAudioSurfaceOwnsResolvedBackendIdentities();

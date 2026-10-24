@@ -114,6 +114,11 @@ class AndroidDocumentsActivityTests(unittest.TestCase):
         path = Path(cls.output.name) / "AndroidDocumentsActivityFixture.java"
         path.write_text(fixture.replace("// PRODUCTION_METHODS", methods))
         sources.append(str(path))
+        readme = (ROOT / "tests/java/AndroidReadmeListingFixture.java").read_text()
+        readme_method = method(activity, "public String listTreeTextFiles(").replace("org.json.JSONArray", "JsonNames")
+        readme_path = Path(cls.output.name) / "AndroidReadmeListingFixture.java"
+        readme_path.write_text(readme.replace("// PRODUCTION_METHOD", readme_method))
+        sources.append(str(readme_path))
         sources += [str(JAVA / name) for name in (
             "DocumentsPathPolicy.java", "DocumentsLibraryChanges.java", "DocumentsMutationGuard.java",
             "AsoBMaShowDocumentsProvider.java", "ChartFolderImport.java", "ChartImportCopyControl.java",
@@ -123,6 +128,11 @@ class AndroidDocumentsActivityTests(unittest.TestCase):
     def scenario(self, name):
         subprocess.run([self.java, "-cp", self.output.name,
                         "com.snurhythm.asobmashow.AndroidDocumentsActivityFixture", name],
+                       check=True, timeout=15)
+
+    def test_readme_listing_filters_direct_children_and_reports_overflow(self):
+        subprocess.run([self.java, "-cp", self.output.name,
+                        "com.snurhythm.asobmashow.AndroidReadmeListingFixture"],
                        check=True, timeout=15)
 
     def test_internal_alias_opens_files_and_imports_copy_and_move(self):

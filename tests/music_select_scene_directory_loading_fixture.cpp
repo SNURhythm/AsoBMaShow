@@ -59,6 +59,7 @@ MusicSelectBar song() {
                          .title = "Loaded song",
                          .chart = ChartMetaRecord{}};
   result.chart->meta.BmsPath = "/songs/loaded.bms";
+  result.presentation.exists = true;
   return result;
 }
 
@@ -282,6 +283,7 @@ void testMissingChartActivationOffersDownload() {
   MusicSelectScene scene;
   auto missing = song();
   missing.chart->unavailable = true;
+  missing.presentation.exists = false;
   missing.chart->meta.BmsPath.clear();
   scene.bars_.refresh({.bars = {missing}, .root = {missing.id}});
   scene.selectedBarMoved();

@@ -5254,6 +5254,14 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
           currentMillis = inputs.visualTimeMicros / 1000 -
                           playTimerStart / 1000;
         }
+        const auto practice = inputs.state.practiceState();
+        const bool practiceActive = practice.supported && practice.active;
+        if (practiceActive && currentMillis && practice.frequencyPercent > 0) {
+          // SkinNoteDistributionGraph uses a float cursor before truncation.
+          const float scaled = static_cast<float>(*currentMillis) *
+                               (practice.frequencyPercent / 100.0F);
+          currentMillis = static_cast<std::int64_t>(scaled);
+        }
         auto lowered = renderSkinNoteDistributionGraph(
             {.sourceObject = object->id,
              .authoredOrdinal = destination.presentation.authoredOrdinal,
@@ -5263,6 +5271,12 @@ SkinFrameEvaluationResult Skin2DRenderer::evaluateFrameImpl(
              .viewport = inputs.viewport,
              .pmsMode = inputs.model.model.header.type == 4,
              .elapsedMillis = inputs.visualTimeMicros / 1000,
+             .startMillis = practiceActive && practice.startTimeMillis >= 0
+                                ? std::optional<std::int64_t>(practice.startTimeMillis)
+                                : std::nullopt,
+             .endMillis = practiceActive && practice.endTimeMillis >= 0
+                              ? std::optional<std::int64_t>(practice.endTimeMillis)
+                              : std::nullopt,
              .currentMillis = currentMillis,
              .maximumCommands =
                  skinFrameMaximumCommands(inputs) - buffer.commands.size(),

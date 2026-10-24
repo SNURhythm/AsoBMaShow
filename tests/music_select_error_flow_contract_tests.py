@@ -849,6 +849,7 @@ struct MusicSelectScene {
   std::vector<std::string> invoked;
   bool allowAction = true;
   bool toolbarControlAvailable(MusicSelectToolbarControl) const { return allowAction; }
+  void openSelectedReadme() { assert(!selectorInputBlocked()); invoked.push_back("readme"); }
   void openChartViewer() { assert(!selectorInputBlocked()); invoked.push_back("viewer"); }
   void openChartRecords() { assert(!selectorInputBlocked()); invoked.push_back("records"); }
   void openMusicPlayer() { assert(!selectorInputBlocked()); invoked.push_back("music"); }
@@ -894,7 +895,7 @@ int main() {
   scene.revealChart();
   assert(platform_open::calls == 3 && scene.revealContextMenu_->isOpen());
   const auto &menu = *scene.revealContextMenu_;
-  assert(menu.width == 220 && menu.actions.size() == 2);
+  assert(menu.width == 220 && menu.actions.size() == 3);
   assert(menu.actions[0].label.resolve() == "Show Same Folder" && menu.actions[0].enabled);
   assert(menu.actions[1].label.resolve() == "Reveal File" && menu.actions[1].enabled);
   scene.revealChart();
@@ -914,7 +915,7 @@ int main() {
   assert(!menu.isOpen());
   scene.bars_ = Bars{};
   scene.openToolbarMenu(MusicSelectToolbarControl::ChartMenu);
-  assert(menu.actions.size() == 4 && menu.actions[0].label.resolve() == "View chart");
+  assert(menu.actions.size() == 5 && menu.actions[0].label.resolve() == "View chart");
   scene.revealContextMenu_->select(0);
   assert(scene.invoked == std::vector<std::string>{"viewer"});
   scene.openToolbarMenu(MusicSelectToolbarControl::ChartMenu);
@@ -922,6 +923,9 @@ int main() {
   assert(scene.invoked.back() == "records");
   scene.openToolbarMenu(MusicSelectToolbarControl::ChartMenu);
   assert(!menu.actions[2].enabled && menu.actions[3].enabled);
+  scene.revealContextMenu_->select(4);
+  assert(scene.invoked.back() == "readme" && !menu.isOpen());
+  scene.openToolbarMenu(MusicSelectToolbarControl::ChartMenu);
   scene.revealContextMenu_->select(3);
   assert(platform_open::calls == 5 && !menu.isOpen());
   const std::vector<std::string> moreActions{"music", "tasks", "ir", "settings"};

@@ -660,11 +660,57 @@ struct LuaSkinFileSystem::Impl {
                             authored);
   }
 
+  NormalizedReference normalizeDirect(std::string_view authored,
+                                      bool directory = false) const {
+    const auto normalized = normalizeSelected(authored, directory);
+    if (!normalized.path) return normalized;
+    fs::path target = pathFromUtf8(*normalized.path);
+    if (target.filename().empty() && target != target.root_path()) {
+      target = target.parent_path();
+    }
+    // Unrestricted mode can address siblings of the selected package. Start
+    // at their shared ancestor, preserving host aliases above the skin tree
+    // (for example macOS /var), just as the normal resolver does.
+    fs::path component = packageRoot;
+    while (!isWithinDirectory(target, component) &&
+           component != component.root_path()) {
+      component = component.parent_path();
+    }
+    const auto inspect = [&]() -> std::optional<SkinFileFailure> {
+      std::error_code error;
+      const auto status = fs::symlink_status(component, error);
+      // symlink_status also identifies dangling links, unlike exists/status.
+      if (error == std::errc::no_such_file_or_directory ||
+          status.type() == fs::file_type::not_found) {
+        return std::nullopt;
+      }
+      if (fs::is_symlink(status) ||
+          (!error && aliases && aliases->inspectNoFollow(component) !=
+                                   SkinRejectedLinkKind::None)) {
+        return failure(SkinFileError::EscapesPackage, authored,
+                       "skin file path contains a linked entry");
+      }
+      if (error) {
+        return failure(SkinFileError::IoError, authored,
+                       "skin file path could not be inspected");
+      }
+      return std::nullopt;
+    };
+    if (const auto rejected = inspect()) return {.failure = rejected};
+    const fs::path relative = target.lexically_relative(component);
+    for (const auto &name : relative) {
+      if (name.empty() || name == ".") continue;
+      component /= name;
+      if (const auto rejected = inspect()) return {.failure = rejected};
+    }
+    return {.path = utf8Path(target)};
+  }
+
   NormalizedReference normalize(std::string_view authored,
                                 bool allowPackageRoot = false) const {
     // Existing Lua module-loader compatibility accepts virtual shared paths.
-    // Modern file/io/File/audio calls use
-    // normalizeSelected instead and retain SkinLuaPathResolver isolation.
+    // Legacy io/audio calls use normalizeSelected; updated direct file/File
+    // calls add no-follow checks through normalizeDirect.
     constexpr std::string_view beatorajaRootPrefix = "skin/";
     if (authored.starts_with(beatorajaRootPrefix)) {
       const std::string packagePrefix =
@@ -1057,7 +1103,7 @@ SkinFileReadResult LuaSkinFileSystem::read(std::string_view virtualPath,
                                "write use cannot be read")};
   }
   const auto normalized = use == SkinFileUse::DataRead
-                              ? impl_->normalizeSelected(virtualPath)
+                              ? impl_->normalizeDirect(virtualPath)
                               : impl_->normalize(virtualPath);
   if (!normalized.path) {
     return {.failure = normalized.failure};
@@ -1161,10 +1207,88 @@ LuaSkinFileSystem::openLuaFile(std::string_view virtualPath,
   return {.file = stream};
 }
 
+SkinFileResolveResult
+LuaSkinFileSystem::normalizeDirectPath(std::string_view virtualPath) const {
+  const std::scoped_lock lock(impl_->operationMutex);
+  const auto normalized = impl_->normalizeDirect(virtualPath, true);
+  return {.normalizedVirtualPath = normalized.path, .failure = normalized.failure};
+}
+
+SkinFileTypeResult
+LuaSkinFileSystem::fileType(std::string_view virtualPath) const {
+  const std::scoped_lock lock(impl_->operationMutex);
+  const auto normalized = impl_->normalizeDirect(virtualPath, true);
+  if (!normalized.path) return {.failure = normalized.failure};
+  const auto status = statDirectPath(pathFromUtf8(*normalized.path));
+  return {.isFile = status.kind == HostEntryKind::Regular,
+          .isDirectory = status.kind == HostEntryKind::Directory};
+}
+
+SkinFileListResult
+LuaSkinFileSystem::listFileFacades(std::string_view virtualDirectory) const {
+  const std::scoped_lock lock(impl_->operationMutex);
+  const auto normalized = impl_->normalizeDirect(virtualDirectory, true);
+  if (!normalized.path) return {.failure = normalized.failure};
+  std::error_code error;
+  std::vector<std::string> entries;
+  for (fs::directory_iterator iterator(pathFromUtf8(*normalized.path), error), end;
+       !error && iterator != end; iterator.increment(error)) {
+    const auto status = iterator->symlink_status(error);
+    if (error) break;
+    if (fs::is_symlink(status)) continue;
+    if (entries.size() == 4096) {
+      return impl_->finishScan({.failure = failure(
+          SkinFileError::LimitExceeded, virtualDirectory,
+          "too many skin directory entries")});
+    }
+    const auto child = impl_->normalizeDirect(utf8Path(iterator->path()), true);
+    if (!child.path) return impl_->finishScan({.failure = child.failure});
+    entries.push_back(*child.path);
+  }
+  if (error) {
+    return impl_->finishScan({.failure = failure(
+        SkinFileError::IoError, virtualDirectory, "skin directory could not be listed")});
+  }
+  return impl_->finishScan({.entries = std::move(entries)});
+}
+
+SkinFileWriteResult LuaSkinFileSystem::deleteData(std::string_view virtualPath) {
+  const std::scoped_lock lock(impl_->operationMutex);
+  if (!impl_->allowDataWrites &&
+      impl_->safetyPolicy.enforces(SkinSafetyGuard::CatalogWriteAuthorization)) {
+    return {.failure = failure(SkinFileError::WrongUse, virtualPath,
+                               "Lua data writes are unavailable in this phase")};
+  }
+  const auto normalized = impl_->normalizeDirect(virtualPath);
+  if (!normalized.path) return {.failure = normalized.failure};
+  const fs::path target = pathFromUtf8(*normalized.path);
+#if defined(_WIN32)
+  std::error_code error;
+  const auto status = fs::symlink_status(target, error);
+  if (!error && fs::is_regular_file(status) && fs::remove(target, error) && !error) {
+    return {};
+  }
+#else
+  fs::path leaf;
+  auto parent = openVerifiedParentDirectory(
+      isWithinDirectory(target, impl_->packageRoot) ? impl_->packageRoot
+                                                   : target.root_path(),
+      target, false, leaf);
+  struct stat status {};
+  if (parent && ::fstatat(parent->get(), leaf.c_str(), &status,
+                          AT_SYMLINK_NOFOLLOW) == 0 && S_ISREG(status.st_mode) &&
+      ::unlinkat(parent->get(), leaf.c_str(), 0) == 0) {
+    return {};
+  }
+#endif
+  return {.failure = failure(SkinFileError::IoError, virtualPath,
+                             "skin regular file could not be deleted")};
+}
+
 SkinFileExistsResult
 LuaSkinFileSystem::exists(std::string_view virtualPath) const {
   const std::scoped_lock lock(impl_->operationMutex);
-  const auto normalized = impl_->normalizeSelected(virtualPath, true);
+  const auto normalized = impl_->normalizeDirect(virtualPath, true);
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
@@ -1179,10 +1303,8 @@ SkinFileListResult LuaSkinFileSystem::list(std::string_view virtualDirectory,
   const std::scoped_lock lock(impl_->operationMutex);
   (void)maximumEntries;
   const auto normalized =
-      impl_->normalizeSelected(virtualDirectory, true);
-  // LegacySkinLuaApi#fileFacade returns nil when the path cannot be resolved
-  // or Files.newDirectoryStream fails.  It does not cap or sort the host
-  // directory stream.
+      impl_->normalizeDirect(virtualDirectory, true);
+  // main_state.file_list retains its uncapped, unsorted string contract.
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
@@ -1225,7 +1347,7 @@ LuaSkinFileSystem::writeData(std::string_view virtualPath,
     return {.failure = failure(SkinFileError::WrongUse, virtualPath,
                                "Lua data writes are unavailable in this phase")};
   }
-  const auto normalized = impl_->normalizeSelectedDataWrite(virtualPath);
+  const auto normalized = impl_->normalizeDirect(virtualPath);
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }
@@ -1283,7 +1405,7 @@ LuaSkinFileSystem::mkdirData(std::string_view virtualDirectory,
                         "Lua data writes are unavailable in this phase")};
   }
   const auto normalized =
-      impl_->normalizeSelectedDataWrite(virtualDirectory, true);
+      impl_->normalizeDirect(virtualDirectory, true);
   if (!normalized.path) {
     return {.failure = normalized.failure};
   }

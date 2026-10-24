@@ -68,3 +68,10 @@ ownership, and focused test locations.
 - libsndfile
 - 7-Zip SDK (archive reading; see [third-party notices](THIRD_PARTY_NOTICES.md))
 - [bms-parser-cpp](https://github.com/SNURhythm/bms-parser-cpp) for fast BMS parsing
+
+## License
+
+Copyright (C) 2024-2026 VioletXF. AsoBMaShow is licensed under the
+[GNU General Public License version 3](LICENSE). See [COPYRIGHT](COPYRIGHT)
+for the application notice and [third-party notices](THIRD_PARTY_NOTICES.md)
+for bundled components.

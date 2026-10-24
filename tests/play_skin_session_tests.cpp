@@ -8462,6 +8462,118 @@ bool renderCustomObjectFrames(ActivationFixture &fixture, int skinType,
   });
 }
 
+
+void testExternalActionsFollowGameplayExportAndPreviewEligibility() {
+  const std::string callbacks = R"lua(
+customTimers = {{id = 10000, timer = function()
+  assert(main_state.file_write('external-victim.txt', 'keep'))
+  assert(main_state.file_write('configured-phase-marker.txt',
+    tostring(main_state.file_delete('external-victim.txt'))))
+  return 0
+end}}
+)lua";
+  for (const bool preview : {false, true}) {
+    ActivationFixture fixture({.customObjectCallbacks = callbacks});
+    if (!fixture.ready()) return;
+    bool exporting = false;
+    auto context = fixture.context();
+    context.safetyPolicy = SkinSafetyPolicy(SkinSafetyLevel::BeatorajaCompatibility);
+    context.externalActionsEnabled = !preview;
+    context.externalActionsAllowed = [&] { return !exporting; };
+    auto created = PlaySkinSession::create(fixture.takeActivation(), std::move(context));
+    expect(created.session != nullptr, "external-action gameplay session creates");
+    if (!created.session) return;
+    for (const auto [serial, duringExport] : std::array{
+             std::pair{2, false}, std::pair{3, true}, std::pair{4, false}}) {
+      exporting = duringExport;
+      const auto frame = created.session->prepareFrame(stateAt(serial), projectionAt(serial), {});
+      std::ifstream marker(fixture.configuredMarkerPath());
+      std::string value;
+      marker >> value;
+      expect(frame.ready() && value == (preview || exporting ? "false" : "true"),
+             "gameplay runtime gates deletion during export and keeps preview denied after export");
+    }
+  }
+}
+
+void testResultCaptureTemporarilySuppressesRuntimeExternalActions() {
+  const std::string callbacks = R"lua(
+customTimers = {{id = 10000, timer = function()
+  assert(main_state.file_write('external-victim.txt', 'keep'))
+  assert(main_state.file_write('configured-phase-marker.txt',
+    tostring(main_state.file_delete('external-victim.txt'))))
+  return 0
+end}}
+)lua";
+  for (const int type : {7, 15}) {
+    ActivationFixture fixture({.skinType = type, .customObjectCallbacks = callbacks});
+    if (!fixture.ready()) return;
+    auto context = fixture.resultContext();
+    context.safetyPolicy = SkinSafetyPolicy(SkinSafetyLevel::BeatorajaCompatibility);
+    auto created = ResultSkinSession::create(fixture.takeActivation(), std::move(context));
+    expect(created.session != nullptr, "external-action result session creates");
+    if (!created.session) return;
+    RenderContext renderContext;
+    const auto check = [&](bool rendered, const char *expected) {
+      std::ifstream marker(fixture.configuredMarkerPath());
+      std::string value;
+      marker >> value;
+      expect(rendered && value == expected, "result capture gates deletion and restores live runtime capability");
+    };
+    check(created.session->render(renderContext, {}, 2, 20), "true");
+    check(created.session->renderForExport(renderContext, {}, 3, 30), "false");
+    check(created.session->render(renderContext, {}, 4, 40), "true");
+    check(created.session->renderForVideoExport(renderContext, {}, 5, 50), "false");
+    check(created.session->render(renderContext, {}, 6, 60), "true");
+  }
+}
+
+void testLiveSelectorAndResultReceiveInjectedHttpTransport() {
+  class Connection final : public LuaSkinHttpConnection {
+  public:
+    std::optional<std::string> connect() noexcept override { return {}; }
+    LuaSkinHttpCodeResult responseCode() noexcept override { return {.code = 200}; }
+    LuaSkinHttpBodyResult readBody() noexcept override { return {.body = "session-wired"}; }
+    void disconnect() noexcept override {}
+  };
+  class Transport final : public LuaSkinHttpTransport {
+  public:
+    explicit Transport(int &opens) : opens_(opens) {}
+    LuaSkinHttpOpenResult open(std::string_view url, int, LuaSkinHttpLimits) override {
+      if (url != "https://example.com/session") return {.failure = "unexpected URL"};
+      ++opens_;
+      return {.connection = std::make_unique<Connection>()};
+    }
+    int &opens_;
+  };
+  for (const int type : {5, 7}) {
+    ActivationFixture fixture({.skinType = type, .configuredCode = R"lua(
+local body, ok = main_state.http_get('https://example.com/session')
+assert(ok and body:find('session-wired', 1, true))
+)lua"});
+    if (!fixture.ready()) return;
+    int opens = 0;
+    bool created = false;
+    if (type == 5) {
+      auto context = fixture.musicSelectContext();
+      context.httpTransport = std::make_unique<Transport>(opens);
+      context.externalActionsEnabled = false;
+      auto result = MusicSelectSkinSession::create(
+          {.sessionSerial = 118, .profileId = fixture.profile(), .activation = fixture.takeActivation()},
+          std::move(context));
+      created = result.session != nullptr;
+    } else {
+      auto context = fixture.resultContext();
+      context.httpTransport = std::make_unique<Transport>(opens);
+      context.externalActionsEnabled = false;
+      auto result = ResultSkinSession::create(fixture.takeActivation(), std::move(context));
+      created = result.session != nullptr;
+    }
+    expect(created && opens == 1,
+           "selector/result document runtime owns injected transport; synchronous HTTP remains available with external actions disabled");
+  }
+}
+
 void testResultScreenAndInputSnapshotDuringConfiguredLoad() {
   for (const int skinType : {7, 15}) {
     ActivationFixture fixture({.skinType = skinType,
@@ -11417,6 +11529,9 @@ int main(int argc, char **argv) {
   testRetainedBlendPublishesOnlySubmittedLiveFrames();
   testVolumeWritesRespectFailedFramesAndResultExports();
   testCompatibilityVolumeSettersRetainJavaFloatValues();
+  testExternalActionsFollowGameplayExportAndPreviewEligibility();
+  testResultCaptureTemporarilySuppressesRuntimeExternalActions();
+  testLiveSelectorAndResultReceiveInjectedHttpTransport();
   testResultScreenAndInputSnapshotDuringConfiguredLoad();
   testResultInputSnapshotsRefreshAndIsolateVideoFrames();
   testNamedMusicSelectVolumeWritersAreVisibleBeforePublishingActions();

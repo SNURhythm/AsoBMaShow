@@ -255,7 +255,8 @@ void SettingsScene::ensurePreviewRenderer() {
         },
         .configurationWrites = context.skinConfigurationWriteQueue.get(),
         .diagnosticHistory = context.skinDiagnosticHistory.get(),
-        .stop = previewSkinStop.get_token()}, {
+        .stop = previewSkinStop.get_token(),
+        .externalActionsEnabled = false}, {
         .keyMode = previewKeyMode,
         .chartModel = previewChartVisualModel.get(),
         .initialState = previewCapturedVisualState.get(),

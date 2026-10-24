@@ -64,6 +64,8 @@ private:
     }
   }
 
+protected:
+  bool isTouchScrolling() const { return touchMomentum.isActive(); }
   inline bool handleEventsImpl(SDL_Event &event) override {
     EventDispatchLifetime lifetime(*this);
     if (sdl_pointer_event::isMouseSynthesizedTouch(event)) {

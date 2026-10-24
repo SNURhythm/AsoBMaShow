@@ -611,8 +611,13 @@ bool DropdownView::refreshIndicator(View *indicator,
 }
 
 bool DropdownView::handleEventsImpl(SDL_Event &event) {
+  dismissOnOutsidePress(event);
+  return true;
+}
+
+void DropdownView::dismissOnOutsidePress(const SDL_Event &event) {
   if (!current.open) {
-    return true;
+    return;
   }
 
   if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
@@ -626,7 +631,7 @@ bool DropdownView::handleEventsImpl(SDL_Event &event) {
         callbacks.onOpenChanged(false);
       }
     }
-    return true;
+    return;
   }
 
   if (event.type == SDL_EVENT_FINGER_DOWN) {
@@ -639,10 +644,10 @@ bool DropdownView::handleEventsImpl(SDL_Event &event) {
         callbacks.onOpenChanged(false);
       }
     }
-    return true;
+    return;
   }
 
-  return true;
+  return;
 }
 
 void DropdownView::refreshDensity() {

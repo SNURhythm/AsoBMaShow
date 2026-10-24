@@ -314,14 +314,14 @@ void testLiveTextAndFontSemantics() {
                font->authoredOrdinal == 1 && font->fallbacks.size() == 4,
            "font becomes the next typed resource with exact metadata");
     if (font && font->fallbacks.size() == 4) {
-      expect(font->fallbacks[0].virtualPath.empty() &&
+      expect(font->fallbacks[0].virtualPath == "fonts/string.fnt" &&
                  font->fallbacks[0].type == 0 &&
                  font->fallbacks[1].virtualPath == "fonts/table.fnt" &&
                  font->fallbacks[1].type == 3 &&
                  font->fallbacks[2].virtualPath.empty() &&
                  font->fallbacks[2].type == 4 &&
                  font->fallbacks[3].virtualPath.empty(),
-             "only fallback.path populates a path while every slot is preserved");
+             "string and table fallback paths populate while every slot is preserved");
     }
   }
 

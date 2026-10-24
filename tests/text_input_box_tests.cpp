@@ -1,4 +1,13 @@
 #include "scene/play/GuidedAccessInstructionView.h"
+#include "scene/ChartReadmeModal.h"
+#include "view/LegalNoticeReader.h"
+#include "library/DocumentLinks.h"
+#include "library/ReadmeTranslation.h"
+#include "rendering/ResponsiveUi.h"
+#include "StorageTestSupport.h"
+#include "view/RecyclerView.h"
+#include <thread>
+#include <chrono>
 #include "rendering/UniformCache.h"
 #include "view/TextInputBox.h"
 #include "view/TextView.h"
@@ -26,6 +35,25 @@
 #undef TTF_GetStringSize
 extern "C" bool SDLCALL TTF_GetStringSize(
     TTF_Font *, const char *, size_t, int *, int *);
+
+// Keep modal tests deterministic and independent of system model downloads.
+namespace readme_translation {
+namespace test {
+bool qualitySupported = true;
+std::uint64_t active = 0;
+int starts = 0;
+bool highFidelity = false;
+std::string source, target;
+}
+bool supported() { return true; }
+bool qualitySelectionSupported() { return test::qualitySupported; }
+void start(std::uint64_t id, const std::string &, const std::string &target,
+           const std::string &source, bool highFidelity) {
+  test::active = id; ++test::starts;
+  test::source = source; test::target = target; test::highFidelity = highFidelity;
+}
+void stop(std::uint64_t id) { if (test::active == id) test::active = 0; }
+}
 
 namespace rendering {
 bgfx::VertexLayout PosTexCoord0Vertex::ms_decl;
@@ -1066,6 +1094,254 @@ extern "C" bool SDLCALL TextInputBoxTest_GetStringSize(
   return TTF_GetStringSize(font, text, length, width, height);
 }
 
+void testReadmeModalDisplaysAndCloses() {
+  const bool previousCompact = rendering::compactMenuCanvasActive;
+  rendering::compactMenuCanvasActive = true;
+  storage_test::TempDirectory directory;
+  directory.write("chart.bms");
+  std::string document = "Artist notes\n한글 notes\n";
+  for (int i = 0; i < 100; ++i) document += "More notes\n";
+  directory.write("readme.txt", document);
+  View root(0, 0, 400, 600);
+  auto modal = ChartReadmeModal::Create(&root);
+  modal->resize(400, 600);
+  modal->show(directory.root / "chart.bms", "Test chart");
+  expect(modal->isVisible(), "readme menu opens a visible modal");
+  auto *lines = dynamic_cast<DocumentTextReader *>(root.findViewByName("chartReadmeLines"));
+  expect(lines != nullptr, "readme uses virtualized text rows");
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (lines->size() == 0 && std::chrono::steady_clock::now() < deadline) {
+    modal->update();
+    std::this_thread::yield();
+  }
+  expect(lines->size() >= 2 && lines->get(0).text == "Artist notes", "readme reader displays decoded selected file");
+  auto *copy = dynamic_cast<Button *>(root.findViewByName("chartReadmeCopy"));
+  auto *translate = dynamic_cast<Button *>(root.findViewByName("chartReadmeTranslate"));
+  expect(copy && copy->isEnabled(), "loaded readme enables copying");
+  expect(translate != nullptr, "readme exposes on-device translation action");
+  auto *optionsScroll = dynamic_cast<ScrollView *>(root.findViewByName("chartReadmeTranslationScroll"));
+  expect(optionsScroll != nullptr, "translation options have a bounded scrolling viewport");
+  auto *content = optionsScroll->getContentView();
+  expect(content->findViewByName("chartReadmeSource") != nullptr, "source language lives in translation settings");
+  auto *standard = dynamic_cast<Button *>(content->findViewByName("chartReadmeStandard"));
+  auto *fidelity = dynamic_cast<Button *>(content->findViewByName("chartReadmeHighFidelity"));
+  expect(standard && fidelity, "readme owns both translation quality choices");
+  expect(standard->isSelected() && !fidelity->isSelected(), "translation defaults to faster standard quality");
+  auto *options = root.findViewByName("chartReadmeTranslationOptions");
+  expect(options && !options->getVisible(), "translation settings are hidden in a dedicated modal");
+  const auto clickButton = [&](const char *name) {
+    auto *choice = root.findViewByName(name);
+    if (!choice) choice = content->findViewByName(name);
+    expect(choice != nullptr, "requested readme control exists");
+    const int x = choice->getX() + choice->getWidth() / 2;
+    const int y = choice->getY() + choice->getHeight() / 2;
+    auto down = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_DOWN, x, y);
+    auto up = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_UP, x, y);
+    modal->handleEvents(down); modal->handleEvents(up);
+  };
+  lines->scrollOffset = 240;
+  lines->rebindVisibleItems();
+  const int starts = readme_translation::test::starts;
+  clickButton("chartReadmeTranslate");
+  expect(options->getVisible() && readme_translation::test::starts == starts,
+         "Translate opens settings without starting translation");
+  SDL_Event arrow{}; arrow.type = SDL_EVENT_KEY_DOWN; arrow.key.key = SDLK_DOWN;
+  modal->handleEvents(arrow);
+  expect(lines->scrollOffset == 240, "translation modal blocks reader keyboard scrolling");
+  clickButton("chartReadmeSource");
+  SDL_Event dropdownBack{}; dropdownBack.type = SDL_EVENT_KEY_DOWN; dropdownBack.key.key = SDLK_ESCAPE;
+  modal->handleEvents(dropdownBack);
+  expect(options->getVisible(), "Escape closes the dropdown before translation settings");
+  dropdownBack.type = SDL_EVENT_KEY_UP; modal->handleEvents(dropdownBack);
+  clickButton("chartReadmeSource");
+  auto outsideDown = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_DOWN,
+      optionsScroll->getX() + 10, optionsScroll->getY() - 20);
+  auto outsideUp = outsideDown; outsideUp.type = SDL_EVENT_MOUSE_BUTTON_UP;
+  modal->handleEvents(outsideDown); modal->handleEvents(outsideUp);
+  dropdownBack.type = SDL_EVENT_KEY_DOWN; modal->handleEvents(dropdownBack);
+  expect(!options->getVisible(), "tap on modal heading dismisses dropdown outside options scroll viewport");
+  dropdownBack.type = SDL_EVENT_KEY_UP; modal->handleEvents(dropdownBack);
+  clickButton("chartReadmeTranslate");
+  clickButton("chartReadmeHighFidelity");
+  expect(fidelity->isSelected() && !standard->isSelected(), "quality selection is exclusive inside translation modal");
+  clickButton("chartReadmeTranslationCancel");
+  expect(!options->getVisible() && lines->scrollOffset == 240 && readme_translation::test::starts == starts,
+         "cancelling translation settings preserves the document and scroll");
+  clickButton("chartReadmeTranslate");
+  clickButton("chartReadmeTranslationStart");
+  expect(!options->getVisible() && readme_translation::test::starts == starts + 1 &&
+             readme_translation::test::highFidelity && readme_translation::test::source == "auto",
+         "confirming translation submits the chosen options");
+  const auto scrollRange = [&] { return std::max(0, lines->size() * lines->itemHeight - lines->getHeight()); };
+  const auto atProgress = [&](double progress) {
+    return std::abs(lines->scrollOffset - progress * scrollRange()) < 0.01;
+  };
+  const double originalProgress = lines->scrollOffset / scrollRange();
+  readme_translation::deliver(readme_translation::test::active, readme_translation::State::Complete, document + document);
+  modal->update();
+  expect(atProgress(originalProgress), "first translated view inherits proportional reading position");
+  lines->scrollOffset = 0.65 * scrollRange();
+  lines->rebindVisibleItems();
+  clickButton("chartReadmeOriginal");
+  expect(atProgress(0.65), "switching to original shares the translated proportional position");
+  lines->scrollOffset = 0.25 * scrollRange();
+  lines->rebindVisibleItems();
+  clickButton("chartReadmeTranslated");
+  expect(atProgress(0.25), "switching to translated shares the new original proportional position");
+  lines->scrollOffset = scrollRange();
+  clickButton("chartReadmeOriginal");
+  expect(atProgress(1.0), "document bottom maps to the other document bottom");
+  lines->scrollOffset = 0;
+  clickButton("chartReadmeTranslated");
+  expect(atProgress(0.0), "document top maps to the other document top");
+  lines->scrollOffset = 0.4 * scrollRange();
+  lines->rebindVisibleItems();
+  const double positionBeforeOptions = lines->scrollOffset;
+  clickButton("chartReadmeTranslate");
+  SDL_Event back{}; back.type = SDL_EVENT_KEY_DOWN; back.key.key = SDLK_ESCAPE;
+  modal->handleEvents(back);
+  expect(modal->isVisible() && !options->getVisible() && lines->scrollOffset == positionBeforeOptions,
+         "Escape closes translation settings without closing or resetting the reader");
+  back.type = SDL_EVENT_KEY_UP; modal->handleEvents(back);
+  clickButton("chartReadmeTranslate");
+  clickButton("chartReadmeTranslationStart");
+  const double beforeShortResult = lines->scrollOffset / scrollRange();
+  readme_translation::deliver(readme_translation::test::active, readme_translation::State::Complete, "Short result");
+  modal->update();
+  expect(scrollRange() == 0 && lines->scrollOffset == 0, "short translation stays within its scroll bounds");
+  clickButton("chartReadmeOriginal");
+  expect(atProgress(beforeShortResult), "switching back from a short translation retains shared progress");
+  auto *encoding = root.findViewByName("chartReadmeEncoding");
+  expect(encoding && copy->getY() >= encoding->getY() + encoding->getHeight(),
+         "reader actions do not overlap larger mobile dropdown targets");
+  modal->resize(280, 420);
+  expect(lines->getWidth() <= 280 && lines->getHeight() > 0, "readme reader fits narrow viewport");
+  SDL_Event escape{};
+  escape.type = SDL_EVENT_KEY_DOWN;
+  escape.key.key = SDLK_ESCAPE;
+  expect(!modal->handleEvents(escape) && !modal->isVisible(), "readme close consumes Escape");
+  escape.type = SDL_EVENT_KEY_UP;
+  expect(!modal->handleEvents(escape), "closing key release cannot reach the selector");
+  modal->show(directory.root / "chart.bms", "Reopened");
+  modal->hide();
+  modal->update();
+  expect(!modal->isVisible(), "late readme completion cannot reopen a closed modal");
+  rendering::compactMenuCanvasActive = previousCompact;
+}
+
+namespace platform_open {
+bool openExternalUrl(std::string_view, std::string &) { return true; }
+}
+
+void testDocumentLinksDoNotHijackScrolling() {
+  const auto links = document_links::find("Text <https://example.com/a?q=1&x=2>. (https://example.org/wiki/A_(B)). javascript:evil www.example.net");
+  expect(links.size() == 3 && links[0].url == "https://example.com/a?q=1&x=2" &&
+      links[1].url == "https://example.org/wiki/A_(B)" && links[2].url == "https://www.example.net",
+      "document links preserve URL punctuation and accept bare www addresses");
+  View root(0, 0, 400, 300);
+  auto *reader = new LegalNoticeReader();
+  reader->setWidthPercent(100)->setHeight(300);
+  root.addView(reader);
+  std::vector<std::string> opened;
+  reader->onOpenUrl = [&](const std::string &url) { opened.push_back(url); };
+  reader->setNotice("https://example.com/" + std::string(120, 'x') + "\n" + std::string(100, '\n'));
+  root.applyYogaLayout();
+  const auto send = [&](bool touch, Uint32 type, int x, int y) {
+    auto event = selectionPointer(touch, type, x, y);
+    root.handleEvents(event);
+  };
+  send(false, SDL_EVENT_MOUSE_BUTTON_DOWN, 20, 10);
+  expect(opened.empty(), "link does not activate on mouse press");
+  send(false, SDL_EVENT_MOUSE_BUTTON_UP, 20, 10);
+  expect(opened.size() == 1 && opened.back().size() == 140,
+      "completed click opens the full wrapped URL");
+  send(true, SDL_EVENT_FINGER_DOWN, 20, 45);
+  send(true, SDL_EVENT_FINGER_UP, 20, 45);
+  expect(opened.size() == 2 && opened.back() == opened.front(), "wrapped URL continuation is clickable");
+  send(true, SDL_EVENT_FINGER_DOWN, 20, 80);
+  send(true, SDL_EVENT_FINGER_MOTION, 20, 20);
+  send(true, SDL_EVENT_FINGER_UP, 20, 20);
+  expect(opened.size() == 2 && reader->scrollOffset > 0, "swiping over a link scrolls without opening it");
+  reader->scrollOffset = 0;
+  send(false, SDL_EVENT_MOUSE_BUTTON_DOWN, 20, 10);
+  send(false, SDL_EVENT_MOUSE_MOTION, 60, 10);
+  send(false, SDL_EVENT_MOUSE_MOTION, 20, 10);
+  send(false, SDL_EVENT_MOUSE_BUTTON_UP, 20, 10);
+  expect(opened.size() == 2, "drag returning to its origin cannot activate a link");
+  send(false, SDL_EVENT_MOUSE_BUTTON_DOWN, 20, 10);
+  SDL_Event wheel{}; wheel.type = SDL_EVENT_MOUSE_WHEEL;
+  wheel.wheel.mouse_x = 20; wheel.wheel.mouse_y = 10; wheel.wheel.y = -1;
+  root.handleEvents(wheel);
+  send(false, SDL_EVENT_MOUSE_BUTTON_UP, 20, 10);
+  expect(opened.size() == 2, "wheel scrolling cancels an armed link");
+  reader->scrollOffset = 0;
+  send(true, SDL_EVENT_FINGER_DOWN, 20, 10);
+  root.cancelPointerInput();
+  send(true, SDL_EVENT_FINGER_UP, 20, 10);
+  expect(opened.size() == 2, "cancelled pointer cannot open a link");
+  reader->setNotice("https://example.com/" + std::string(120, 'x') + "\n" + std::string(100, '\n'));
+  send(true, SDL_EVENT_FINGER_DOWN, 20, 80);
+  send(true, SDL_EVENT_FINGER_MOTION, 20, 20);
+  auto secondDown = selectionPointer(true, SDL_EVENT_FINGER_DOWN, 20, 10, 8);
+  root.handleEvents(secondDown);
+  auto secondUp = selectionPointer(true, SDL_EVENT_FINGER_UP, 20, 10, 8);
+  root.handleEvents(secondUp);
+  expect(opened.size() == 2, "second finger cannot activate a link during a scroll gesture");
+  send(true, SDL_EVENT_FINGER_UP, 20, 20);
+
+  const std::string url = "https://example.com/" + std::string(120, 'x');
+  reader->setNotice(url + std::string(100, '\n'));
+  root.applyYogaLayout();
+  const std::string fragment = reader->get(1).text;
+  reader->setNotice(url + "\n" + std::string(20, '\n') + fragment + std::string(20, '\n'));
+  reader->setHeight(30);
+  root.applyYogaLayout();
+  expect(reader->getViewByIndex(1)->findViewByName("documentLinkUnderline") != nullptr,
+      "wrapped URL fragment is underlined");
+  int plainRow = 0;
+  for (int i = 10; i < reader->size(); ++i) if (reader->get(i).text == fragment) { plainRow = i; break; }
+  expect(plainRow > 0, "fixture contains an identical non-link row");
+  reader->scrollOffset = plainRow * reader->itemHeight;
+  reader->onLayout();
+  expect(reader->getViewByIndex(plainRow)->findViewByName("documentLinkUnderline") == nullptr,
+      "identical standalone text does not inherit a URL underline during recycling");
+
+}
+
+void testLegalNoticeReaderReflowsAndResets() {
+  View root(0, 0, 400, 300);
+  auto *reader = new LegalNoticeReader();
+  reader->setWidthPercent(100)->setHeight(300);
+  root.addView(reader);
+  std::string notice;
+  for (int i = 0; i < 200; ++i) notice += "Copyright notice with enough words to wrap on a narrow phone screen.\n";
+  reader->setNotice(notice);
+  root.applyYogaLayout();
+  const auto wideCount = reader->size();
+  expect(wideCount >= 200, "long legal notices retain every line");
+  root.setWidth(200);
+  root.applyYogaLayout();
+  expect(reader->size() > wideCount, "legal notice reflows after orientation/width change");
+  SDL_Event wheel{};
+  wheel.type = SDL_EVENT_MOUSE_WHEEL;
+  wheel.wheel.mouse_x = 50;
+  wheel.wheel.mouse_y = 100;
+  wheel.wheel.y = -10;
+  root.handleEvents(wheel);
+  expect(reader->scrollOffset > 0, "wheel reaches the legal viewport through its page");
+  reader->scrollOffset = 0;
+  auto down = selectionPointer(true, SDL_EVENT_FINGER_DOWN, 50, 200);
+  root.handleEvents(down);
+  auto move = selectionPointer(true, SDL_EVENT_FINGER_MOTION, 50, 100);
+  root.handleEvents(move);
+  expect(reader->scrollOffset > 0, "touch drag scrolls legal text through its page");
+  auto up = selectionPointer(true, SDL_EVENT_FINGER_UP, 50, 100);
+  root.handleEvents(up);
+  reader->setNotice("Replacement notice");
+  expect(reader->scrollOffset == 0, "changing notice resets scroll");
+  expect(reader->size() < 10, "changing notice replaces old license lines");
+}
+
 int main() {
   bgfx::Init init;
   init.type = bgfx::RendererType::Noop;
@@ -1073,6 +1349,9 @@ int main() {
   init.resolution.height = 64;
   expect(bgfx::init(init), "headless bgfx initializes for text input tests");
 
+  testDocumentLinksDoNotHijackScrolling();
+  testLegalNoticeReaderReflowsAndResets();
+  testReadmeModalDisplaysAndCloses();
   testTextPresentationInvalidationAndDeadlines();
 
   testConsumedReleaseEndsTextSelectionWithoutEndingEditing();
