@@ -14,7 +14,8 @@ On iOS, Android, macOS and Windows, the text uses the operating system's native
 selection and copy controls. Manual text selection stays independent of practice
 highlights; copying never modifies the source file.
 Syntax colors distinguish directives, control flow, resource/channel identifiers,
-numbers, text, channel data and comments. The viewer scans decoded source once
+numbers, text, channel data and comments. Empty `00` data cells use a muted gray;
+consecutive empty cells share a single color run. The viewer scans decoded source once
 when opened and colors only bounded visible regions, reusing cached tokens while
 scrolling or changing themes. Chart parsing and library scanning are unchanged.
 Switching focus to another application and back preserves the open source viewer,

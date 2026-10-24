@@ -10,6 +10,9 @@ the application worker, and emits sorted non-overlapping UTF-16 spans. It makes
 linear passes over decoded UTF-8 without regex, copied token strings, or one
 token per note cell. A whole channel payload is one span. Styles distinguish
 directives, control flow, resource/channel IDs, numbers, text, data and comments.
+Empty `00` cells use a muted color. Only viewport painting splits data into
+coalesced empty/populated runs, preserving two-character cell alignment and
+sharing the existing foreground-run budget. The cached payload remains one span.
 
 Native foreground attributes are limited to the visible text plus bounded
 overscan. Scrolling uses binary search into cached spans; theme changes reuse

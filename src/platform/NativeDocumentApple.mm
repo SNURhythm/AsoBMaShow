@@ -455,23 +455,25 @@ private:
     if (visible.location == NSNotFound || visible.location > syntax_->length) return;
     const auto visibleEnd = std::min<std::size_t>(NSMaxRange(visible), syntax_->length);
     if (!force && syntaxPainted_ && paintedSyntax_.contains(visible.location, visibleEnd)) return;
-    const auto window = bms_syntax::paintWindow(*syntax_, visible.location, visibleEnd);
-    if (!force && syntaxPainted_ && window.begin == paintedSyntax_.begin && window.end == paintedSyntax_.end) return;
+    auto window = bms_syntax::paintWindow(*syntax_, visible.location, visibleEnd);
+    if (!force && syntaxPainted_ && window.begin == requestedSyntax_.begin && window.end == requestedSyntax_.end) return;
+    requestedSyntax_ = window;
 #if TARGET_OS_IPHONE
     [view.textStorage beginEditing];
 #endif
     clearSyntaxColors();
-    for (std::size_t i = window.firstSpan; i < window.lastSpan; ++i) {
-      const auto &span = syntax_->spans[i];
-      const auto begin = std::max(span.begin, window.begin), end = std::min(span.end, window.end);
-      const auto range = NSMakeRange(begin, end - begin);
+    std::size_t budget = bms_syntax::maxPaintSpans;
+    NSString *source = view.textStorage.string;
+    window.end = bms_syntax::paintRuns(*syntax_, window,
+        [&](auto position) { return [source characterAtIndex:position]; }, [&](auto span) {
+      const auto range = NSMakeRange(span.begin, span.end - span.begin);
       id color = syntaxColors_[static_cast<std::size_t>(span.kind)];
 #if TARGET_OS_IPHONE
       [view.textStorage addAttribute:NSForegroundColorAttributeName value:color range:range];
 #else
       [layout addTemporaryAttribute:NSForegroundColorAttributeName value:color forCharacterRange:range];
 #endif
-    }
+    }, budget);
     paintedSyntax_ = window;
     syntaxPainted_ = true;
 #if TARGET_OS_IPHONE
@@ -527,7 +529,7 @@ private:
   std::vector<text_range::Range> highlights_;
   std::shared_ptr<const bms_syntax::Document> syntax_;
   NSArray *__strong syntaxColors_ = nil;
-  bms_syntax::PaintWindow paintedSyntax_;
+  bms_syntax::PaintWindow paintedSyntax_, requestedSyntax_;
   bool syntaxPainted_ = false, paintingSyntax_ = false;
 };
 }

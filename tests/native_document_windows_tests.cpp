@@ -388,6 +388,9 @@ int main() {
   requireColor(nativeChannel + 1, bms_syntax::Kind::Number);
   requireColor(nativeChannel + 4, bms_syntax::Kind::Identifier);
   requireColor(nativeChannel + 7, bms_syntax::Kind::Data);
+  requireColor(nativeChannel + 9, bms_syntax::Kind::EmptyData);
+  requireColor(nativeChannel + 10, bms_syntax::Kind::EmptyData);
+  requireColor(nativeChannel + 11, bms_syntax::Kind::Data);
   require(foreground(document, nativeFirst - 1) == static_cast<LONG>(rgb(appearance.foreground)),
       "collapsed CRLF separator retains the plain foreground");
   onWorker([&] { surface->highlight({{first, first + 6}, {second, second + 7}}, false); });

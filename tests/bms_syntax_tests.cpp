@@ -86,6 +86,51 @@ void scaleCases() {
     require(document->spans[i].begin < window.end && document->spans[i].end > window.begin,
         "window indices describe intersecting spans only");
 }
+void emptyDataCases() {
+  const std::string source = "#00111:0000010000100100\n#BPM 100\n#TITLE 00\n#00202:100\n";
+  const auto document = bms_syntax::tokenize(source);
+  const auto paint = [&](std::size_t begin, std::size_t end) {
+    auto window = bms_syntax::paintWindow(*document, begin, end);
+    window.begin = begin; window.end = end;
+    std::vector<bms_syntax::Span> runs;
+    std::size_t budget = bms_syntax::maxPaintSpans;
+    bms_syntax::paintRuns(*document, window, [&](auto p) { return source.at(p); },
+        [&](auto run) { runs.push_back(run); }, budget);
+    return runs;
+  };
+  const auto runs = paint(7, 23);
+  require(runs.size() == 5, "adjacent empty and populated cells coalesce into runs");
+  require(runs[0].begin == 7 && runs[0].end == 11 && runs[0].kind == Kind::EmptyData,
+      "consecutive 00 cells share one dimmed run");
+  require(runs[2].begin == 13 && runs[2].end == 17 && runs[2].kind == Kind::EmptyData,
+      "a second empty run is grouped");
+  require(runs[3].begin == 17 && runs[3].end == 21 && runs[3].kind == Kind::Data,
+      "00 across populated 10/01 cell boundaries is not dimmed");
+  const auto clipped = paint(8, 10);
+  require(clipped.size() == 1 && clipped[0].begin == 8 && clipped[0].end == 10 &&
+      clipped[0].kind == Kind::EmptyData, "viewport clipping preserves original pair alignment");
+  for (auto run : paint(24, source.size()))
+    require(run.kind != Kind::EmptyData, "00 outside channel data stays unchanged");
+
+  const std::string empty = "#00111:" + std::string(1000000, '0');
+  const auto large = bms_syntax::tokenize(empty);
+  auto window = bms_syntax::paintWindow(*large, 500000, 501000);
+  std::size_t reads = 0, count = 0, budget = bms_syntax::maxPaintSpans;
+  bms_syntax::paintRuns(*large, window, [&](auto p) { ++reads; return empty.at(p); },
+      [&](auto run) { ++count; require(run.kind == Kind::EmptyData, "large empty run is dimmed"); }, budget);
+  require(large->spans.size() == 3 && count == 1, "empty cells do not expand the document cache");
+  require(reads <= 2 * (window.end - window.begin + 2), "only the paint window is scanned");
+
+  std::string alternating = "#00111:";
+  for (int i = 0; i < 10000; ++i) alternating += "0001";
+  const auto dense = bms_syntax::tokenize(alternating);
+  window = bms_syntax::paintWindow(*dense, 0, alternating.size());
+  budget = bms_syntax::maxPaintSpans; count = 0;
+  const auto paintedEnd = bms_syntax::paintRuns(*dense, window, [&](auto p) { return alternating.at(p); },
+      [&](auto) { ++count; }, budget);
+  require(count == bms_syntax::maxPaintSpans && budget == 0 && paintedEnd < window.end,
+      "alternating cells honor a shared foreground-run budget");
+}
 void benchmark() {
   const auto run = [](const char *name, const std::string &text) {
     const auto start = std::chrono::steady_clock::now();
@@ -115,5 +160,6 @@ void benchmark() {
 int main(int argc, char **argv) {
   lexicalCases();
   scaleCases();
+  emptyDataCases();
   if (argc == 2 && std::string_view(argv[1]) == "--benchmark") benchmark();
 }

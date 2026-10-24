@@ -269,16 +269,28 @@ struct Control : std::enable_shared_from_this<Control> {
     for (const auto &window : syntaxWindowsPainted)
       colorRange({static_cast<LONG>(window.begin), static_cast<LONG>(window.end)},
           rgb(appearance.foreground), true);
-    for (const auto &window : next) {
-      for (auto i = window.firstSpan; i < window.lastSpan; ++i) {
-        const auto &span = syntax->spans[i];
-        const auto begin = std::max(span.begin, window.begin), end = std::min(span.end, window.end);
+    std::size_t budget = bms_syntax::maxPaintSpans, painted = 0;
+    std::array<wchar_t, bms_syntax::maxPaintCharacters + 3> source;
+    for (auto &window : next) {
+      if (!budget) break;
+      // Read only this visible row slice, plus one character at either edge
+      // so clipped two-character cells keep their original alignment.
+      const auto readBegin = window.begin ? window.begin - 1 : 0;
+      const auto readEnd = window.end + (window.end < syntax->length ? 1 : 0);
+      TEXTRANGEW sample{{static_cast<LONG>(readBegin), static_cast<LONG>(readEnd)}, source.data()};
+      const auto copied = SendMessageW(edit, EM_GETTEXTRANGE, 0, reinterpret_cast<LPARAM>(&sample));
+      window.end = bms_syntax::paintRuns(*syntax, window, [&](auto position) {
+        const auto offset = position - readBegin;
+        return offset < static_cast<std::size_t>(std::max<LRESULT>(0, copied)) ? source[offset] : L'?';
+      }, [&](auto span) {
         const auto kind = static_cast<std::size_t>(span.kind);
-        if (begin < end && kind < appearance.syntax.size())
-          colorRange({static_cast<LONG>(begin), static_cast<LONG>(end)},
+        if (kind < appearance.syntax.size())
+          colorRange({static_cast<LONG>(span.begin), static_cast<LONG>(span.end)},
               rgb(appearance.syntax[kind]), true);
-      }
+      }, budget);
+      ++painted;
     }
+    next.resize(painted);
     syntaxWindowsPainted.swap(next);
     syntaxViewport.swap(visible);
     syntaxPainted = syntax != nullptr;

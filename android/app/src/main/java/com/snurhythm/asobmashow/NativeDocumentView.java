@@ -48,7 +48,7 @@ final class NativeDocumentView {
     private int focusOffset = -1;
     // Flat original UTF-16 (begin, end, Kind) triples, supplied once by JNI.
     private int[] syntax = new int[0];
-    private final int[] syntaxColors = new int[7];
+    private final int[] syntaxColors = new int[8];
     private final SyntaxWindow syntaxWindow = new SyntaxWindow();
     private final SyntaxColorSpan[] syntaxSpans = new SyntaxColorSpan[SyntaxWindow.MAX_SPANS];
     private int activeSyntaxSpans;
@@ -232,21 +232,44 @@ final class NativeDocumentView {
         // spans remain attached, and CharacterStyle never requests text reflow.
         for (int i = 0; i < activeSyntaxSpans; ++i) content.removeSpan(syntaxSpans[i]);
         activeSyntaxSpans = 0;
+        int paintedThrough = syntaxWindow.end;
         for (int i = syntaxWindow.firstSpan; i < syntaxWindow.lastSpan; ++i) {
             int begin = Math.max(syntaxWindow.begin, syntax[i * 3]);
             int end = Math.min(syntaxWindow.end, syntax[i * 3 + 1]);
             int kind = syntax[i * 3 + 2];
             if (begin >= end || kind < 0 || kind >= syntaxColors.length) continue;
-            SyntaxColorSpan span = syntaxSpans[activeSyntaxSpans];
-            if (span == null) syntaxSpans[activeSyntaxSpans] = span = new SyntaxColorSpan();
-            span.color = syntaxColors[kind];
-            content.setSpan(span, begin, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-            ++activeSyntaxSpans;
+            while (begin < end && activeSyntaxSpans < syntaxSpans.length) {
+                int next = end, paintKind = kind;
+                if (kind == 6) { // Data: split the viewport, never the cached document.
+                    int dataBegin = syntax[i * 3], dataEnd = syntax[i * 3 + 1];
+                    boolean empty = emptyDataCell(content, dataBegin, dataEnd, begin);
+                    next = begin;
+                    do {
+                        next += Math.min(2 - (next - dataBegin) % 2, end - next);
+                    } while (next < end && emptyDataCell(content, dataBegin, dataEnd, next) == empty);
+                    if (empty) paintKind = 7;
+                }
+                SyntaxColorSpan span = syntaxSpans[activeSyntaxSpans];
+                if (span == null) syntaxSpans[activeSyntaxSpans] = span = new SyntaxColorSpan();
+                span.color = syntaxColors[paintKind];
+                content.setSpan(span, begin, next, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                ++activeSyntaxSpans;
+                begin = next;
+            }
+            if (activeSyntaxSpans == syntaxSpans.length) {
+                paintedThrough = begin;
+                break;
+            }
         }
         paintedBegin = syntaxWindow.begin;
-        paintedEnd = syntaxWindow.end;
+        paintedEnd = paintedThrough;
         lastVisibleBegin = visibleBegin;
         lastVisibleEnd = visibleEnd;
+    }
+
+    private static boolean emptyDataCell(CharSequence source, int dataBegin, int dataEnd, int position) {
+        int cell = position - (position - dataBegin) % 2;
+        return dataEnd - cell >= 2 && source.charAt(cell) == '0' && source.charAt(cell + 1) == '0';
     }
 
     private static final class SyntaxColorSpan extends CharacterStyle implements UpdateAppearance {

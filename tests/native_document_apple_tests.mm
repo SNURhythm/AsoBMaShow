@@ -100,7 +100,7 @@ int main(int argc, char **argv) {
     require(nativeWindow != nil, "SDL exposes its own Cocoa window");
     NSView *host = nativeWindow.contentView;
     const NSUInteger initialChildren = host.subviews.count;
-    std::string source = "#TITLE π😀\r\n#00111:0100\n#00211:0200\n";
+    std::string source = "#TITLE π😀\r\n#00111:0100000001\n#00211:0200\n";
     for (int i = 0; i < 100; ++i) source += "#00311:01000200\n";
     const auto wrapped = source.size();
     source += "#00411:" + std::string(2000, '1') + "\n";
@@ -135,6 +135,14 @@ int main(int argc, char **argv) {
     require(syntaxColor(text, 0) != nil && syntaxColor(text, 7) != nil,
         "native directive and Unicode string have syntax colors");
     require(![syntaxColor(text, 0) isEqual:syntaxColor(text, 7)], "token categories have distinct colors");
+    const NSUInteger data = [text.string rangeOfString:@"0100000001"].location;
+    NSRange emptyRun{};
+    NSColor *emptyColor = [[text.layoutManager temporaryAttribute:NSForegroundColorAttributeName
+        atCharacterIndex:data + 2 effectiveRange:&emptyRun] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+    require(emptyRun.location == data + 2 && emptyRun.length == 6,
+        "consecutive 00 cells share one native foreground run");
+    require(std::abs(emptyColor.redComponent - 0x87 / 255.0) < 0.01 &&
+        ![syntaxColor(text, data) isEqual:syntaxColor(text, data + 2)], "empty cells use the muted palette");
     require(NSEqualRanges(text.selectedRange, NSMakeRange(7, 3)), "syntax setup preserves native selection");
     boundedSyntax(text);
     onWorker([&] { surface->highlight({{first, first + 4}, {second, second + 4}}, false); });

@@ -27,20 +27,22 @@ final class NativeDocumentInstrumentationChecks {
                         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
         await(instrumentation, () -> activity.nativeDocumentSurface() != null &&
                 activity.nativeDocumentSurface().getWidth() > 0);
-        String row = "#TITLE 한글😀 source fixture with enough text to wrap on a phone screen\r\n";
+        String header = "#TITLE 한글😀 source fixture with enough text to wrap on a phone screen\r\n";
+        String row = header + "#00111:010000000100\r\n";
         StringBuilder source = new StringBuilder();
         ArrayList<Integer> spans = new ArrayList<>();
         while (source.length() < 1024 * 1024) {
             int start = source.length();
             source.append(row);
             spans.add(start); spans.add(start + 6); spans.add(0);
-            spans.add(start + 7); spans.add(source.length() - 2); spans.add(4);
+            spans.add(start + 7); spans.add(start + header.length() - 2); spans.add(4);
+            spans.add(start + header.length() + 7); spans.add(source.length() - 2); spans.add(6);
         }
         String original = source.toString();
         int[] triples = new int[spans.size()];
         for (int i = 0; i < triples.length; ++i) triples[i] = spans.get(i);
         int[] colors = {0x70d6ffff, 0xc69af5ff, 0xe6bb78ff, 0xffab82ff,
-                0x7bda92ff, 0x99a7bbff, 0xb2c6e5ff};
+                0x7bda92ff, 0x99a7bbff, 0xb2c6e5ff, 0x8792a3ff};
         NativeDocumentView document = new NativeDocumentView(activity, 0);
         long opened = SystemClock.elapsedRealtime();
         try {
@@ -62,6 +64,14 @@ final class NativeDocumentInstrumentationChecks {
                         "Initial native focus moved the caret to the end");
                 require(text.getKeyListener() == null && text.isTextSelectable(), "Not read-only/selectable");
                 require(colorAt(text, 0) == 0xff70d6ff, "Initial directive not colored");
+                Spannable content = (Spannable) text.getText();
+                int data = header.length() + 7;
+                require(colorAt(text, data) == 0xffb2c6e5 && colorAt(text, data + 2) == 0xff8792a3 &&
+                        colorAt(text, data + 8) == 0xffb2c6e5, "Empty data is muted without dimming populated cells");
+                boolean grouped = false;
+                for (CharacterStyle span : content.getSpans(data + 2, data + 3, CharacterStyle.class))
+                    grouped |= content.getSpanStart(span) == data + 2 && content.getSpanEnd(span) == data + 8;
+                require(grouped, "Consecutive 00 cells did not share one native run");
                 Selection.setSelection((Spannable) text.getText(), 7, 11); // Korean plus emoji.
                 require(text.onTextContextMenuItem(android.R.id.copy), "Native Copy failed");
                 ClipboardManager clipboard = (ClipboardManager) activity.getSystemService(Context.CLIPBOARD_SERVICE);

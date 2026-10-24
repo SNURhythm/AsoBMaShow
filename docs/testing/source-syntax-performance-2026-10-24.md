@@ -14,6 +14,11 @@ practice background attributes. Android transfers span triples once and releases
 the native copy; Windows maps CRLF offsets once on the worker. Windows paints
 disjoint visible row slices under a shared budget, so a long unwrapped row does
 not consume the budget with its hidden tail and leave shorter visible rows plain.
+Empty `00` data cells are muted during viewport painting. Adjacent empty cells
+and adjacent populated cells each coalesce into one run. This scans only the
+bounded visible data (plus one character at each clipped edge), keeps the global
+payload token intact, and shares the 4,096-run limit with other syntax colors.
+Cell alignment prevents accidentally dimming the `00` across a `10`/`01` boundary.
 
 ## Local measurements
 
@@ -32,8 +37,10 @@ Storage scales with syntax runs/lines, rather than note-cell count; dense
 short-line input intentionally exercises the less favorable storage case.
 
 The native AppKit fixture contained 4,194,375 bytes and 447,400 cached spans.
-Attaching syntax took 47.85 ms including main-thread dispatch and initial visible
-layout, retaining **200 foreground runs over 1,700 UTF-16 units**. It did not
+Attaching syntax initially took 47.85 ms including main-thread dispatch and initial visible
+layout, retaining **200 foreground runs over 1,700 UTF-16 units**. With grouped
+empty-cell dimming added, another run took 49.96 ms and retained **563 runs over
+the same 1,700 units** (control creation: 34.54 ms). It did not
 install hundreds of thousands of native attributes.
 
 The same native benchmark exposed repeated layout during initial text setup.
@@ -92,3 +99,12 @@ not just syntax painting. It also verified Unicode clipboard contents, immediate
 distant practice focus, preserved selection/backgrounds, retired foreground
 colors, the 16,384-character/4,096-span limits, theme changes and resizing.
 The fixture adds no library files. See `android/README.md` for the command.
+
+After adding empty-cell dimming, the device fixture was expanded to include
+grouped data cells on separate short lines (1,048,616 UTF-16 units, 34,194 cached
+spans). Native assertions verify a six-zero stretch shares one foreground span
+and neighboring populated cells retain their color. This expanded fixture took
+3,431–3,598 ms to open/layout/color; the identical fixture with data splitting
+disabled took 3,526 ms. These samples show no measurable startup increase from
+empty-cell coloring, while illustrating the native layout cost of more short
+lines. They are not directly comparable with the earlier header-only fixture.
