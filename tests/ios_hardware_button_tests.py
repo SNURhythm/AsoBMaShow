@@ -60,12 +60,13 @@ enum UIInterfaceOrientation { UIInterfaceOrientationUnknown = 0,
 @interface UIView : NSObject
 @property CGRect bounds;
 @property CGRect screenFrame;
+@property(strong) id expectedCoordinateSpace;
 - (CGRect)convertRect:(CGRect)rect toCoordinateSpace:(id)space;
 @end
 @implementation UIView
 - (CGRect)convertRect:(CGRect)rect toCoordinateSpace:(id)space {
   assert(NSEqualRects(rect, self.bounds));
-  assert(space == UIScreen.mainScreen.coordinateSpace);
+  assert(space == self.expectedCoordinateSpace);
   return self.screenFrame;
 }
 @end
@@ -80,10 +81,17 @@ enum UIInterfaceOrientation { UIInterfaceOrientationUnknown = 0,
 @end
 @implementation UIWindowSceneGeometry
 @end
+static NSString *const UIWindowSceneSessionRoleApplication = @"application";
+@interface UISceneSession : NSObject
+@property(copy) NSString *role;
+@end
+@implementation UISceneSession
+@end
 @interface UIWindowScene : NSObject
 @property UIInterfaceOrientation interfaceOrientation;
 @property(strong) UIScreen *screen;
 @property(strong) UIWindowSceneGeometry *effectiveGeometry;
+@property(strong) UISceneSession *session;
 @end
 @implementation UIWindowScene
 @end
@@ -110,8 +118,11 @@ int main() {
     testWindow.screen.coordinateSpace = [NSObject new];
     testWindow.windowScene = [UIWindowScene new];
     testWindow.windowScene.screen = testWindow.screen;
+    testWindow.windowScene.session = [UISceneSession new];
+    testWindow.windowScene.session.role = UIWindowSceneSessionRoleApplication;
     testWindow.rootViewController = [UIViewController new];
     UIView *view = [UIView new];
+    view.expectedCoordinateSpace = testWindow.screen.coordinateSpace;
     testWindow.rootViewController.view = view;
     view.bounds = testWindow.screen.bounds;
     view.screenFrame = testWindow.screen.bounds;
@@ -167,7 +178,44 @@ int main() {
     assert(GetIOSHardwareButtonLocation().edge == Edge::Unknown);
     view.screenFrame = UIScreen.mainScreen.bounds;
     assert(GetIOSHardwareButtonLocation().edge == Edge::Left);
-    testWindow.screen = [UIScreen new]; // External screen
+    // 27.2 beta on iPad17,2: the full-screen application's screen differs
+    // from the deprecated process-global mainScreen.
+    UIScreen *sceneScreen = [UIScreen new];
+    sceneScreen.bounds = NSMakeRect(0, 0, 1210, 834);
+    sceneScreen.coordinateSpace = [NSObject new];
+    testWindow.screen = sceneScreen;
+    scene.screen = sceneScreen;
+    view.bounds = sceneScreen.bounds;
+    view.screenFrame = sceneScreen.bounds;
+    view.expectedCoordinateSpace = sceneScreen.coordinateSpace;
+    scene.effectiveGeometry = [UIWindowSceneGeometry new];
+    scene.effectiveGeometry.interfaceOrientation = UIInterfaceOrientationLandscapeRight;
+    cue = GetIOSHardwareButtonLocation();
+    assert(cue.button == Button::Top && cue.edge == Edge::Left);
+    assert(std::abs(cue.y - 0.070693F) < 0.00001F);
+    assert(cueLogReasons.back() == "visible");
+    assert(exportedCueLogs.back().find("screen=(0.00,0.00,1210.00,834.00)") != std::string::npos);
+    testWindow.screen = UIScreen.mainScreen; // Ignore a stale legacy window screen.
+    assert(GetIOSHardwareButtonLocation().edge == Edge::Left);
+    // Effective scene geometry wins over a stale legacy orientation.
+    scene.interfaceOrientation = UIInterfaceOrientationUnknown;
+    scene.effectiveGeometry.interfaceOrientation = UIInterfaceOrientationLandscapeLeft;
+    assert(GetIOSHardwareButtonLocation().edge == Edge::Right);
+    scene.effectiveGeometry.interfaceOrientation = UIInterfaceOrientationUnknown;
+    assert(GetIOSHardwareButtonLocation().edge == Edge::Unknown);
+    scene.effectiveGeometry.interfaceOrientation = UIInterfaceOrientationLandscapeLeft;
+    view.screenFrame = NSMakeRect(0, 0, 605, 834);
+    assert(GetIOSHardwareButtonLocation().edge == Edge::Unknown);
+    view.screenFrame = sceneScreen.bounds;
+    scene.session.role = @"external-display";
+    assert(GetIOSHardwareButtonLocation().edge == Edge::Unknown);
+    scene.session.role = UIWindowSceneSessionRoleApplication;
+    scene.screen = nil;
+    assert(GetIOSHardwareButtonLocation().edge == Edge::Unknown);
+    scene.screen = sceneScreen;
+    // Scene-less external windows retain the legacy screen guard.
+    testWindow.windowScene = nil;
+    testWindow.screen = sceneScreen;
     assert(GetIOSHardwareButtonLocation().edge == Edge::Unknown);
     assert(cueLogReasons.back() == "screen-mismatch");
     testWindow.screen = UIScreen.mainScreen;

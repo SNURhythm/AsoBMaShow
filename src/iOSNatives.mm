@@ -5999,19 +5999,30 @@ ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() {
     return uname(&systemInfo) == 0 ? modelForIdentifier(systemInfo.machine) : Model{};
   }();
   UIWindow *window = FindActiveWindow();
+  UIWindowScene *scene = window.windowScene;
+  UIScreen *display = scene != nil ? scene.screen : window.screen;
+  // SDL's application display comes from its application scene. On iPadOS
+  // 27.2 that screen need not be the deprecated process-global mainScreen.
+  const bool applicationDisplay = scene != nil
+      ? [scene.session.role isEqualToString:UIWindowSceneSessionRoleApplication]
+      : display != nil && display == UIScreen.mainScreen;
   Orientation orientation = Orientation::Unknown;
-  bool fillsBuiltInScreen = false;
+  bool fillsScreen = false;
   UIInterfaceOrientation current = UIInterfaceOrientationUnknown;
   CGRect viewport{};
   CGRect screen{};
-  if (window != nil && window.screen == UIScreen.mainScreen) {
+  if (window != nil && display != nil) {
     // Interface and device orientation reverse the landscape enum names.
     // Use UIKit's interface orientation so rotation lock and a tablet lying
     // flat remain correct. SDL also supports windows without a UIWindowScene;
     // messaging that nil scene yields Unknown and hides both reminder cues.
-    current = window.windowScene != nil
-        ? window.windowScene.interfaceOrientation
+    current = scene != nil
+        ? scene.interfaceOrientation
         : window.rootViewController.interfaceOrientation;
+    if (@available(iOS 16.0, *)) {
+      if (scene.effectiveGeometry != nil)
+        current = scene.effectiveGeometry.interfaceOrientation;
+    }
     switch (current) {
       case UIInterfaceOrientationPortrait: orientation = Orientation::Portrait; break;
       case UIInterfaceOrientationPortraitUpsideDown:
@@ -6023,30 +6034,33 @@ ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() {
     UIView *view = window.rootViewController.view;
     if (view != nil) {
       viewport = [view convertRect:view.bounds
-                             toCoordinateSpace:window.screen.coordinateSpace];
-      screen = window.screen.bounds;
-      // Split View, Stage Manager, and external displays cannot place a cue
+                             toCoordinateSpace:display.coordinateSpace];
+      screen = display.bounds;
+      // Split View and Stage Manager partial windows cannot place a cue
       // against the hardware by treating the app's edges as screen edges.
-      fillsBuiltInScreen = screen.size.width > 0 && screen.size.height > 0 &&
+      fillsScreen = screen.size.width > 0 && screen.size.height > 0 &&
           std::abs(viewport.origin.x - screen.origin.x) < 1.0 &&
           std::abs(viewport.origin.y - screen.origin.y) < 1.0 &&
           std::abs(viewport.size.width - screen.size.width) < 1.0 &&
           std::abs(viewport.size.height - screen.size.height) < 1.0;
     }
   }
-  const auto location = locateButton(model, orientation, fillsBuiltInScreen);
+  const auto location = locateButton(model, orientation, applicationDisplay && fillsScreen);
   const char *reason = window == nil ? "no-window"
-      : window.screen != UIScreen.mainScreen ? "screen-mismatch"
+      : display == nil ? "no-screen"
+      : !applicationDisplay ? (scene != nil ? "external-scene" : "screen-mismatch")
       : window.rootViewController.view == nil ? "no-root-view"
       : orientation == Orientation::Unknown ? "unknown-orientation"
-      : !fillsBuiltInScreen ? "partial-viewport"
+      : !fillsScreen ? "partial-viewport"
       : model.portraitX < 0.0F ? "unmapped-hardware" : "visible";
-  // This query runs every reminder frame. Log only a changed suppression reason
-  // or orientation so a device report identifies the failed gate without spam.
+  // This query runs every reminder frame. Log only a changed suppression reason,
+  // display or orientation so a device report identifies the failed gate without spam.
   static const char *lastReason = nullptr;
+  static __weak UIScreen *lastDisplay = nil;
   static UIInterfaceOrientation lastOrientation = UIInterfaceOrientationUnknown;
-  if (reason != lastReason || current != lastOrientation) {
+  if (reason != lastReason || display != lastDisplay || current != lastOrientation) {
     lastReason = reason;
+    lastDisplay = display;
     lastOrientation = current;
     struct utsname systemInfo{};
     uname(&systemInfo);
@@ -6056,11 +6070,11 @@ ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() {
     char diagnostic[1024];
     std::snprintf(diagnostic, sizeof(diagnostic),
             "iOS hardware button cue: %s; model=%s button=%d edge=%d "
-            "scene=%d sceneMain=%d orientation=%ld geometryOrientation=%ld root=%s "
+            "scene=%d applicationDisplay=%d orientation=%ld geometryOrientation=%ld root=%s "
             "viewport=(%.2f,%.2f,%.2f,%.2f) screen=(%.2f,%.2f,%.2f,%.2f)",
             reason, systemInfo.machine, static_cast<int>(model.button),
             static_cast<int>(location.edge), window.windowScene != nil,
-            window.windowScene.screen == UIScreen.mainScreen,
+            applicationDisplay,
             static_cast<long>(current), static_cast<long>(geometryOrientation),
             NSStringFromClass(window.rootViewController.view.class).UTF8String ?: "nil",
             viewport.origin.x, viewport.origin.y, viewport.size.width, viewport.size.height,

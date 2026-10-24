@@ -48,7 +48,8 @@ The Mini 6, Air 11 M4 (drawing shared with M2/M3), Pro 11 M4, and Pro 11 generat
 | iPad Pro 13-inch (M4) | 0.940670 | [Drawing](https://developer.apple.com/download/files/accessories/dimensional-drawings/ipad-pro-13-inch-m4.pdf) |
 | iPad Pro 13-inch (M5) | 0.940670 | [Drawing](https://developer.apple.com/download/files/accessories/dimensional-drawings/ipad-pro-13-inch-m5.pdf) |
 
-Use the active window scene's **interface** orientation, not accelerometer/device
+Use the active window scene's `effectiveGeometry.interfaceOrientation` on iOS 16+,
+with its legacy interface orientation on older systems, not accelerometer/device
 orientation. For SDL windows without a `UIWindowScene`, use the root view
 controller's interface orientation, matching the app's rotation-lock code.
 Reading a missing scene instead yields Unknown and suppresses both the marker
@@ -57,8 +58,10 @@ LandscapeLeft places Home on the left; LandscapeRight places Home on the right.
 The normalized mappings from portrait `(x, y)` are `(1-y, x)` for LandscapeLeft,
 `(y, 1-x)` for LandscapeRight, and `(1-x, 1-y)` upside down.
 
-A location is shown only when the app fills the built-in screen. Unknown
-orientation, external displays, and partial windows use the existing centered
+A location is shown when the application scene's root view fills that scene's
+screen. Use `windowScene.screen` for both the coordinate conversion and screen
+bounds; equality with `UIScreen.mainScreen` is not a valid scene-display test.
+Dedicated external-display scene roles, unknown orientation, and partial windows use the existing centered
 instructions without a duplicate floating label. Back and Skip this session are
 large text buttons in the central controls, leaving all screen edges free.
 The cue is recalculated while the reminder is visible, and confirms alongside
@@ -74,14 +77,22 @@ open **Parsing Logs**. Look for `iOS hardware button cue`, or choose **Export Lo
 to save/share `AsoBMaShow-performance-log.txt`. Do this in the same app session;
 the displayed log buffer is bounded and is not retained across app restarts.
 The diagnostic is also sent to the device console.
-The bridge reports its suppression reason, model, screen identity comparison,
-legacy and effective scene orientations, root view class, and measured viewport.
-It logs only when the reason or orientation changes. This distinguishes an
+The bridge reports its suppression reason, model, application-display eligibility,
+chosen and effective scene orientations, root view class, and measured viewport.
+It logs only when the reason, display or orientation changes. This distinguishes an
 unknown orientation from the strict full-screen check rejecting a window.
-The reported M5 11-inch failure on iPadOS 27.2 beta remains unconfirmed on hardware;
-both landscape orientations fail there, while the available 27.1 iPhone simulator
-passes the native geometry check with the M5 model mapping. `UIScreen.mainScreen`
-is deprecated since iOS 26, but deprecation alone does not establish the cause.
+The M5 11-inch device log on iPadOS 27.2 beta confirmed `screen-mismatch` with
+`sceneMain=0` and a valid effective landscape orientation. The old main-screen
+identity guard exited before measuring the viewport, suppressing both cues.
+The bridge regression covers a full-screen application scene with a different
+screen from `UIScreen.mainScreen`, both landscape orientations, stale legacy
+screen/orientation values, missing screens and partial/external scenes.
+
+Application-role eligibility matches SDL's scene selection. It does not identify
+the physical display when an interactive application scene is moved to an
+external monitor: UIKit uses the same application role there. The cue follows
+that application's full-screen display. Scene-less legacy windows retain the
+main-screen guard. Post-fix confirmation on the reported iPad remains pending.
 
 Skipping is kept only for the current gameplay session, including in-game and
 result-screen retries, practice restarts, and course continuation. Returning to
