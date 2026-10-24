@@ -4,11 +4,11 @@ Settings → Legal provides an offline selector and a virtualized reader for the
 
 ## Updating notices
 
-Keep `assets/legal/*.txt` and `src/legal/Notices.inc` in sync when dependencies change. Full texts are packaged through the existing assets pipeline on desktop, Android and iOS. `tests/legal_notices_tests.py` checks catalog completeness, UTF-8 and the application license against root LICENSE.
+Keep `assets/legal/*.txt` and `src/legal/Notices.inc` in sync when dependencies change. Full texts are packaged through the existing assets pipeline on desktop, Android and iOS. `tests/legal_notices_tests.py` checks catalog completeness, UTF-8 and the application notice against root COPYRIGHT followed by the unchanged root LICENSE.
 
 Sources for the notices added with this page:
 
-- `asobmashow.txt`: `LICENSE`
+- `asobmashow.txt`: `COPYRIGHT`, a blank line, then `LICENSE`
 - `sdl.txt`: `SDL/LICENSE.txt`
 - `sdl-ttf.txt`: `SDL_ttf/LICENSE.txt`
 - `bgfx.txt`: `bgfx/bgfx/LICENSE`

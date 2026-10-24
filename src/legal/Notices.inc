@@ -1,5 +1,5 @@
 // Offline notices. Keep in sync with assets/legal; see docs/features/legal-information.md.
-{"asobmashow.txt", "AsoBMaShow — GNU GPL v3"},
+{"asobmashow.txt", "AsoBMaShow — Copyright / GNU GPL v3"},
 {"7zip.txt", "7zip"},
 {"bgfx.txt", "bgfx"},
 {"bimg.txt", "bimg"},

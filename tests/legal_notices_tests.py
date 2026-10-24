@@ -16,7 +16,8 @@ class LegalNoticesTests(unittest.TestCase):
             self.assertGreater(len(data), 100, name)
             self.assertLess(len(data), 1024 * 1024, name)
             self.assertNotIn('\x00', data.decode('utf-8'), name)
-        self.assertEqual((ROOT / 'assets/legal/asobmashow.txt').read_bytes(), (ROOT / 'LICENSE').read_bytes())
+        self.assertEqual((ROOT / 'assets/legal/asobmashow.txt').read_bytes(),
+                         (ROOT / 'COPYRIGHT').read_bytes() + b'\n' + (ROOT / 'LICENSE').read_bytes())
         for name in ['sdl', 'sdl-ttf', 'bgfx', 'bx', 'bimg', 'yoga', 'pcre2', 'miniaudio', 'stb-image', 'sol2', 'libsndfile', 'translation']:
             self.assertIn(name + '.txt', files)
 
