@@ -157,6 +157,7 @@ asobmashow_label_tests(area_gameplay
 )
 
 asobmashow_label_tests(area_practice
+    play_options_panel_view_tests
     chart_practice_range_tests
     gameplay_practice_boundary_tests
     gameplay_practice_input_boundary_tests

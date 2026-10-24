@@ -59,6 +59,19 @@ Button *makeButton(std::string label, int width = 96,
   return button;
 }
 
+void styleMarkerButton(Button *button, bool selected,
+                       const View::ThemeColorProvider &accent) {
+  button->setSelected(selected);
+  button->setThemedBackgroundColors(selected ? accent : app_theme::control,
+      selected ? accent : app_theme::controlHover,
+      selected ? accent : app_theme::controlPressed);
+  button->setThemedBorderColors(accent, accent, accent);
+  auto *text = static_cast<TextView *>(button->getContentView());
+  text->setThemedColor(selected
+      ? View::ThemeColorProvider{[accent] { return app_theme::textOn(accent()); }}
+      : View::ThemeColorProvider{app_theme::textPrimary});
+}
+
 View *makeRow(std::string label, View *control) {
   auto *row = new View();
   row->setFlexDirection(FlexDirection::Column);
@@ -159,10 +172,11 @@ void PracticePanelView::build(OverlayPortal *portal) {
   auto *markerRow = new View();
   markerRow->setFlexDirection(FlexDirection::Row);
   markerRow->setGap(8);
-  auto *startMarkerButton = makeButton(i18n::tr("practice.controls.set_start.label"), 0);
+  startMarkerButton = makeButton(i18n::tr("practice.controls.set_start.label"), 0);
+  startMarkerButton->setName("practice-set-start");
   startMarkerButton->setFlex(1.0f);
-  startMarkerButton->setBorderColors(app_theme::cyan(), app_theme::cyan(),
-                                     app_theme::cyan());
+  styleMarkerButton(startMarkerButton, activeMarker == practice::Marker::Start,
+                    app_theme::cyan);
   startMarkerButton->setOnClickListener([this]() {
     activeMarker = practice::Marker::Start;
     if (onMarkerSelected) {
@@ -171,10 +185,11 @@ void PracticePanelView::build(OverlayPortal *portal) {
     refreshControls();
   });
   markerRow->addView(startMarkerButton);
-  auto *endMarkerButton = makeButton(i18n::tr("practice.controls.set_end.label"), 0);
+  endMarkerButton = makeButton(i18n::tr("practice.controls.set_end.label"), 0);
+  endMarkerButton->setName("practice-set-end");
   endMarkerButton->setFlex(1.0f);
-  endMarkerButton->setBorderColors(app_theme::amber(), app_theme::amber(),
-                                   app_theme::amber());
+  styleMarkerButton(endMarkerButton, activeMarker == practice::Marker::End,
+                    app_theme::amber);
   endMarkerButton->setOnClickListener([this]() {
     activeMarker = practice::Marker::End;
     if (onMarkerSelected) {
@@ -464,6 +479,10 @@ void PracticePanelView::publishConfiguration() {
 }
 
 void PracticePanelView::refreshControls() {
+  styleMarkerButton(startMarkerButton, activeMarker == practice::Marker::Start,
+                    app_theme::cyan);
+  styleMarkerButton(endMarkerButton, activeMarker == practice::Marker::End,
+                    app_theme::amber);
   if (rangeText != nullptr) {
     rangeText->setText(
         "Start " + formatMicros(currentConfiguration.startMicros) +

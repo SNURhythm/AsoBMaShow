@@ -1,4 +1,5 @@
 #include "view/Button.h"
+#include "scene/PracticePanelView.h"
 #include "view/ToggleButtonContent.h"
 #include "view/ClearLampColors.h"
 #if defined(__clang__)
@@ -993,6 +994,57 @@ void requireToggleForeground(View *view, const Color &expected) {
   for (auto *child : view->getChildren()) requireToggleForeground(child, expected);
 }
 
+void testPracticeMarkerSelectionIsVisible() {
+  const auto originalTheme = app_theme::activeMode();
+  for (const auto theme : {app_theme::ThemeMode::Dark, app_theme::ThemeMode::Light}) {
+    app_theme::setActiveMode(theme);
+    int notifications = 0;
+    auto selected = practice::Marker::Start;
+    PracticePanelView panel(10'000'000, {}, nullptr, [&](practice::Marker marker) {
+      selected = marker;
+      ++notifications;
+    });
+    panel.setHeight(1400);
+    ScrollView *scroll = nullptr;
+    for (auto *child : panel.getChildren()) {
+      if (auto *candidate = dynamic_cast<ScrollView *>(child)) scroll = candidate;
+    }
+    require(scroll, "practice controls have a scroll container");
+    auto *start = dynamic_cast<Button *>(scroll->getContentView()->findViewByName("practice-set-start"));
+    auto *end = dynamic_cast<Button *>(scroll->getContentView()->findViewByName("practice-set-end"));
+    require(start && end, "practice exposes both marker controls");
+    auto checkSelection = [&](practice::Marker active) {
+      panel.applyYogaLayout();
+      for (auto *button : {start, end}) {
+        const bool isStart = button == start;
+        const bool expected = isStart == (active == practice::Marker::Start);
+        require(button->isSelected() == expected, "exactly the active marker is selected");
+        const auto accent = isStart ? app_theme::cyan() : app_theme::amber();
+        const auto colors = renderedChoiceColors(*button);
+        require((std::ranges::find(colors, app_theme::control().toABGR()) == colors.end()) == expected,
+                "active marker has a solid accent fill; inactive marker stays neutral");
+        requireToggleForeground(button->getContentView(), expected
+            ? app_theme::textOn(accent) : app_theme::textPrimary());
+      }
+    };
+    checkSelection(practice::Marker::Start);
+    click(*end);
+    require(selected == practice::Marker::End && notifications == 1,
+            "end marker click notifies the viewer");
+    checkSelection(practice::Marker::End);
+    click(*start);
+    require(selected == practice::Marker::Start && notifications == 2,
+            "start marker click notifies the viewer");
+    checkSelection(practice::Marker::Start);
+    practice::Configuration configuration;
+    configuration.endMicros = 10'000'000;
+    panel.refresh(configuration, {}, std::nullopt, practice::Marker::End);
+    checkSelection(practice::Marker::End);
+    require(notifications == 2, "external refresh does not emit marker input");
+  }
+  app_theme::setActiveMode(originalTheme);
+}
+
 void testToggleWidthsFollowContentAcrossLayouts() {
   const bool originalCompact = rendering::compactMenuCanvasActive;
   for (const bool compact : {false, true}) {
@@ -1479,6 +1531,7 @@ int main() {
   testNaturalDropdownsRemainVisibleAcrossParentLayouts();
   testSettingsChoicePresentationAndSelection();
   testLocalizedFlickTapModesUseDirectSelection();
+  testPracticeMarkerSelectionIsVisible();
   testToggleWidthsFollowContentAcrossLayouts();
   testToggleSemanticColorsAndGaugeBars();
   testTabsStayDistinctFromSettingChoices();
