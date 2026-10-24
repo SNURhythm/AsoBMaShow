@@ -531,10 +531,35 @@ void testSystemEmojiPixelsAndMissingSkinGlyphs() {
   const auto scalable = skin::buildSkinTextAtlas(
       1, {.font = 1, .pointSize = 32, .fallbackChainDigest = "missing-emoji"},
       {{.encoded = std::vector<std::byte>(bytes.begin(), bytes.end())}},
-      {U'\U0001f642', U'\ufe0f'}, {});
+      {U'A', U'\U0001f642', U'\ufe0f'}, {});
   expect(scalable.atlas && colored(*scalable.atlas->pixels.rgba) &&
              scalable.atlas->glyphs.at(U'\ufe0f').advance == 0,
          "a scalable skin font missing emoji uses the native color glyph instead of a box");
+  if (scalable.atlas) {
+    const auto baseline = [](const auto &glyph) {
+      return glyph.layoutOffsetY + glyph.region.h - glyph.bearingY;
+    };
+    expect(baseline(scalable.atlas->glyphs.at(U'A')) ==
+               baseline(scalable.atlas->glyphs.at(U'\U0001f642')),
+           "native emoji and authored scalable glyphs share the same baseline");
+  }
+  std::ifstream colorInput(std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
+      "tests/fixtures/color-font/color-emoji.ttf", std::ios::binary);
+  const std::string colorEncoded((std::istreambuf_iterator<char>(colorInput)), {});
+  const auto colorBytes = std::as_bytes(std::span(colorEncoded));
+  const auto mixed = skin::buildSkinTextAtlas(
+      3, {.font = 3, .pointSize = 32, .fallbackChainDigest = "different-ascents"},
+      {{.encoded = std::vector<std::byte>(colorBytes.begin(), colorBytes.end())}},
+      {U'\U0001f642', U'\U0001f600'}, {});
+  expect(mixed.atlas.has_value(), "fonts with different ascents prepare together");
+  if (mixed.atlas) {
+    const auto baseline = [](const auto &glyph) {
+      return glyph.layoutOffsetY + glyph.region.h - glyph.bearingY;
+    };
+    expect(baseline(mixed.atlas->glyphs.at(U'\U0001f642')) ==
+               baseline(mixed.atlas->glyphs.at(U'\U0001f600')),
+           "native emoji keep the primary baseline when the two fonts have different ascents");
+  }
 
   constexpr std::string_view descriptor =
       "info size=32\ncommon lineHeight=32 base=26 scaleW=8 scaleH=8 pages=1\n"
@@ -558,6 +583,24 @@ void testSystemEmojiPixelsAndMissingSkinGlyphs() {
              bitmap.atlas->glyphs.at(U'A').page == 0 &&
              bitmap.atlas->glyphs.at(U'\ufe0f').advance == 0,
          "a bitmap skin uses a color emoji page while retaining its authored distance-field glyphs");
+  const auto nativeGlyph = rasterizer.colorGlyph(U'\U0001f642', budget);
+  expect(nativeGlyph && glyph.layoutOffsetY + glyph.region.h - nativeGlyph->ascent == -26,
+         "native bitmap emoji use the authored BMFont baseline, not the canvas top");
+  const auto incomplete = skin::parseSkinBitmapFont(
+      {.id = 2, .virtualPath = "emoji-test.fnt", .type = 2},
+      std::as_bytes(std::span(descriptor.substr(descriptor.find('\n') + 1))),
+      skin::SkinBitmapFontSourceFormat::BmFont);
+  expect(incomplete.font.has_value(), "the bitmap face without auxiliary size parses");
+  if (incomplete.font) {
+    const auto incompleteAtlas = skin::buildSkinBitmapTextAtlas(
+        4, {.font = 2, .pointSize = 1, .fallbackChainDigest = "incomplete-bitmap"},
+        {{.font = *incomplete.font, .pages = {{.physicalKey = "emoji-source-page", .pixels = bitmapPage(8, 8, 255)}}}},
+        {U'\U0001f642'}, {});
+    expect(incompleteAtlas.atlas && nativeGlyph &&
+               incompleteAtlas.atlas->glyphs.at(U'\U0001f642').layoutOffsetY +
+                   nativeGlyph->height - nativeGlyph->ascent == -26,
+           "a missing auxiliary size does not change the authored emoji baseline");
+  }
 }
 #endif
 

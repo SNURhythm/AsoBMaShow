@@ -134,12 +134,11 @@ NSInteger Utf16OffsetFromUtf8ByteOffset(NSString *value,
 }
 
 CTFontRef CreateIOSSystemFont(int fontSize) {
-  if (!platform::isMainThread())
-    return platform::onMain([&] { return CreateIOSSystemFont(fontSize); });
-  const CGFloat pointSize = std::max(1, fontSize);
-  UIFont *font = [UIFont systemFontOfSize:pointSize];
-  return CTFontCreateWithName((__bridge CFStringRef)font.fontName, pointSize,
-                              nullptr);
+  // Private UIFont names are not valid CoreText font lookup names: iOS may
+  // substitute Times New Roman, giving measurement a different baseline from
+  // SystemTextRasterizer. Use the same system-font API as rasterization.
+  return CTFontCreateUIFontForLanguage(kCTFontUIFontSystem,
+                                       std::max(1, fontSize), nullptr);
 }
 
 CTLineRef CreateIOSSystemTextLine(const std::string &utf8, int fontSize) {

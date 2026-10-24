@@ -531,7 +531,9 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     }
     SDL_UnlockSurface(surface);
     SDL_DestroySurface(surface);
-    const int selectedFaceAscent = systemGlyph ? systemGlyph->ascent
+    // Native rasters report bearings relative to their own baseline. Keep
+    // that baseline on the primary face's line, rather than aligning ascents.
+    const int selectedFaceAscent = systemGlyph ? primaryAscent
                                                : TTF_GetFontAscent(opened[faceIndex].font);
     if (systemGlyph && hasPixels) {
       minX = alphaMinX;
@@ -840,6 +842,27 @@ SkinTextAtlasBuildResult buildSkinBitmapTextAtlas(
     return 0;
   };
   const int primaryYOffset = representativeYOffset(faces.front().font);
+  int primaryBaseline = faces.front().font.base;
+  if (!faces.front().font.auxiliaryMetricsComplete) {
+    // The parser's libGDX fallback stores base - capHeight in `base`.
+    // Recover the authored baseline for native glyphs without changing the
+    // existing bitmap layout metrics.
+    int capHeight = 0;
+    for (const char32_t codepoint : std::u32string_view(U"MNBDCEFKAGHIJLOPQRSTUVWXYZ")) {
+      const auto found = faces.front().font.glyphs.find(codepoint);
+      if (found != faces.front().font.glyphs.end() && found->second.region.h > 0) {
+        capHeight = found->second.region.h;
+        break;
+      }
+    }
+    if (capHeight <= 0) {
+      for (const auto &[codepoint, glyph] : faces.front().font.glyphs) {
+        (void)codepoint;
+        capHeight = std::max(capHeight, glyph.region.h);
+      }
+    }
+    primaryBaseline += capHeight;
+  }
   struct SelectedGlyph {
     const SkinBitmapGlyph *glyph = nullptr;
     std::size_t face = 0;
@@ -958,7 +981,7 @@ SkinTextAtlasBuildResult buildSkinBitmapTextAtlas(
     metrics.emplace(codepoint, SkinPreparedGlyphMetrics{
         .region = {.x = cursorX, .y = cursorY, .w = glyph.width, .h = glyph.height},
         .advance = glyph.advance,
-        .layoutOffsetY = -primaryYOffset - glyph.height,
+        .layoutOffsetY = glyph.ascent - primaryBaseline - glyph.height,
         .page = firstSystemPage + systemPages.size() - 1,
         .bitmapFontType = 0});
     cursorX += width;
