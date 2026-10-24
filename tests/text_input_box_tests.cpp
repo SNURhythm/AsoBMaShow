@@ -1172,21 +1172,45 @@ void testReadmeModalDisplaysAndCloses() {
   expect(!options->getVisible() && readme_translation::test::starts == starts + 1 &&
              readme_translation::test::highFidelity && readme_translation::test::source == "auto",
          "confirming translation submits the chosen options");
-  readme_translation::deliver(readme_translation::test::active, readme_translation::State::Complete, document + "Translated\n");
+  const auto scrollRange = [&] { return std::max(0, lines->size() * lines->itemHeight - lines->getHeight()); };
+  const auto atProgress = [&](double progress) {
+    return std::abs(lines->scrollOffset - progress * scrollRange()) < 0.01;
+  };
+  const double originalProgress = lines->scrollOffset / scrollRange();
+  readme_translation::deliver(readme_translation::test::active, readme_translation::State::Complete, document + document);
   modal->update();
-  expect(lines->scrollOffset == 240, "first translated view inherits the reading position");
-  lines->scrollOffset = 450;
+  expect(atProgress(originalProgress), "first translated view inherits proportional reading position");
+  lines->scrollOffset = 0.65 * scrollRange();
   lines->rebindVisibleItems();
   clickButton("chartReadmeOriginal");
-  expect(lines->scrollOffset == 240, "switching to original restores its reading position");
+  expect(atProgress(0.65), "switching to original shares the translated proportional position");
+  lines->scrollOffset = 0.25 * scrollRange();
+  lines->rebindVisibleItems();
   clickButton("chartReadmeTranslated");
-  expect(lines->scrollOffset == 450, "switching to translated restores its own reading position");
+  expect(atProgress(0.25), "switching to translated shares the new original proportional position");
+  lines->scrollOffset = scrollRange();
+  clickButton("chartReadmeOriginal");
+  expect(atProgress(1.0), "document bottom maps to the other document bottom");
+  lines->scrollOffset = 0;
+  clickButton("chartReadmeTranslated");
+  expect(atProgress(0.0), "document top maps to the other document top");
+  lines->scrollOffset = 0.4 * scrollRange();
+  lines->rebindVisibleItems();
+  const double positionBeforeOptions = lines->scrollOffset;
   clickButton("chartReadmeTranslate");
   SDL_Event back{}; back.type = SDL_EVENT_KEY_DOWN; back.key.key = SDLK_ESCAPE;
   modal->handleEvents(back);
-  expect(modal->isVisible() && !options->getVisible() && lines->scrollOffset == 450,
+  expect(modal->isVisible() && !options->getVisible() && lines->scrollOffset == positionBeforeOptions,
          "Escape closes translation settings without closing or resetting the reader");
   back.type = SDL_EVENT_KEY_UP; modal->handleEvents(back);
+  clickButton("chartReadmeTranslate");
+  clickButton("chartReadmeTranslationStart");
+  const double beforeShortResult = lines->scrollOffset / scrollRange();
+  readme_translation::deliver(readme_translation::test::active, readme_translation::State::Complete, "Short result");
+  modal->update();
+  expect(scrollRange() == 0 && lines->scrollOffset == 0, "short translation stays within its scroll bounds");
+  clickButton("chartReadmeOriginal");
+  expect(atProgress(beforeShortResult), "switching back from a short translation retains shared progress");
   auto *encoding = root.findViewByName("chartReadmeEncoding");
   expect(encoding && copy->getY() >= encoding->getY() + encoding->getHeight(),
          "reader actions do not overlap larger mobile dropdown targets");

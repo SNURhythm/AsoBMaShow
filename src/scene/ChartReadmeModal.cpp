@@ -49,7 +49,7 @@ struct ChartReadmeModal::Impl {
   ScrollView *translationScroll = nullptr;
   OverlayPortal *translationPortal = nullptr;
   Button *translationStart = nullptr, *translationCancel = nullptr;
-  std::optional<double> originalScroll, translatedScroll;
+  double readingProgress = 0;
   View *panel = nullptr;
   TextView *title = nullptr;
   TextView *status = nullptr;
@@ -112,17 +112,17 @@ struct ChartReadmeModal::Impl {
     translationOptions->setVisible(false);
   }
   void showText(bool translatedMode) {
-    const double currentOffset = lines->scrollOffset;
-    (showingTranslation ? translatedScroll : originalScroll) = currentOffset;
-    const double destination = (translatedMode ? translatedScroll : originalScroll).value_or(currentOffset);
+    const int previousRange = std::max(0, lines->size() * lines->itemHeight - lines->getHeight());
+    // Keep the shared position when a short version fits entirely in the viewport.
+    if (previousRange > 0) readingProgress = std::clamp(lines->scrollOffset / previousRange, 0.0, 1.0);
     showingTranslation = translatedMode;
     text = translatedMode ? translatedText : originalText;
     setStatusVisible(false);
     refreshActions();
     root->applyYogaLayout();
     reflow(false);
-    lines->scrollOffset = std::clamp(destination, 0.0,
-        static_cast<double>(std::max(0, lines->size() * lines->itemHeight - lines->getHeight())));
+    lines->scrollOffset = readingProgress *
+        std::max(0, lines->size() * lines->itemHeight - lines->getHeight());
     lines->rebindVisibleItems();
   }
   void reflow(bool resetScroll) {
@@ -139,7 +139,7 @@ struct ChartReadmeModal::Impl {
   void beginLoad() {
     cancelTranslation();
     originalText.clear(); translatedText.clear(); showingTranslation = false;
-    originalScroll.reset(); translatedScroll.reset();
+    readingProgress = 0;
     loading = true;
     text.clear();
     refreshActions();
@@ -306,7 +306,7 @@ ChartReadmeModal::ChartReadmeModal(View *parent) : impl_(std::make_unique<Impl>(
     auto &v = *impl_;
     v.closeTranslationOptions();
     v.showText(false);
-    v.translatedText.clear(); v.translatedScroll.reset();
+    v.translatedText.clear();
     v.translating = true;
     v.status->setLocalizedText(i18n::message("readme.translation.preparing")); v.setStatusVisible(true);
     readme_translation::start(v.translation.begin(), v.originalText, v.targetSelection.selectedId,

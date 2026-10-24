@@ -18,10 +18,11 @@ controls scrollable on small screens and actions visible. Editing options alone
 must preserve the displayed result; confirmation starts translation. Back/Escape
 closes a dropdown first, then the translation modal, then the reader.
 
-Switching Original/Translated preserves separate reading offsets. The first
-translated view inherits the current original offset, bounded by the result's
-length. New files/encodings reset both offsets; a new translation resets only its
-saved offset. The existing native Apple translation host is unchanged. Whole-text
+Switching Original/Translated shares one proportional reading position, as clarified
+by the user: divide the current offset by the current scrollable range and apply
+that fraction to the other version's range after reflow. Top/bottom remain aligned;
+a non-scrollable version retains the shared fraction for switching back. New
+files/encodings reset the position. The existing native Apple translation host is unchanged. Whole-text
 platform calls expose no intermediate percentage, so use stage indicators.
 
 ## Standard-mode URL protection

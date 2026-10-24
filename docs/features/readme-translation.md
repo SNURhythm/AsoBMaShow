@@ -7,10 +7,12 @@ systems. The target defaults to the app language. Cancel/Back closes this modal
 without discarding the displayed translation; Translate confirms the selected
 options and starts a new request. Options remain selected when reopening the modal.
 
-Original and Translated select which text is displayed and copied. Each view
-remembers its scroll offset; the first translated view inherits the original's
-current offset, clamped to the translated document's bounds. Changing file or
-encoding clears the translation and reading positions. Nothing is written back
+Original and Translated select which text is displayed and copied. They share a
+proportional scroll position: switching at 40% of one version's scrollable range
+opens the other at 40%, roughly locating the same passage despite different lengths.
+Top and bottom map to top and bottom. A version that fits entirely on screen retains
+the shared position for switching back. Changing file or encoding clears the
+translation and reading position. Nothing is written back
 to the chart folder or archive.
 
 Android translation is powered by [Google Translate](https://cloud.google.com/translate)
