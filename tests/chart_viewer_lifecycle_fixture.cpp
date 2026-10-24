@@ -53,7 +53,6 @@ public:
   ~ChartViewerScene() override;
   void cleanupScene() override;
   void onPause();
-  void onApplicationBackgroundChanged(bool background);
   std::unique_ptr<Chart> chart;
   bool listenActive = false, listenAudioLoaded = false, retainedListenResourcesForReload = false;
   long long listenEndMicros = 0;
@@ -130,8 +129,9 @@ int main() {
     scene.onApplicationBackgroundChanged(false);
     assert(scene.sourceOverlay->visible);
     scene.onApplicationBackgroundChanged(true);
-    assert(!scene.sourceOverlay->visible);
-    scene.sourceOverlay->visible = true;
+    assert(scene.sourceOverlay->visible);
+    scene.onApplicationBackgroundChanged(false);
+    assert(scene.sourceOverlay->visible);
     scene.onPause();
     assert(!scene.sourceOverlay->visible);
   }

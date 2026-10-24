@@ -8,7 +8,8 @@ surface in its document rectangle. Use UITextView, Android TextView, NSTextView,
 and Windows Rich Edit respectively. Practice highlights remain independent of
 manual selection. Convert source UTF-8 ranges to native UTF-16 indices once per
 highlight update. Backends marshal view operations to the correct UI thread and
-remove their controls on close, scene cleanup or pause. Escape/back requests
+remove their controls on close, scene cleanup or scene pause. Window focus loss
+and application backgrounding preserve the open viewer. Escape/back requests
 cross back through owned state, never an asynchronous scene pointer.
 
 - [x] Implement and test common Unicode range conversion and native lifetime contract.
@@ -28,7 +29,8 @@ compilation and the registered native Windows integration test require a Windows
 toolchain unavailable on this machine. Mobile gestures and Windows native input
 still need platform runtime smoke testing.
 
-Review fixes: application backgrounding closes the source surface through the
-application lifecycle callback, and Escape suppression uses SDL event timestamps
-to catch a delayed duplicate of the native closing key. Focused lifecycle and
-overlay regression tests cover both cases.
+Escape suppression uses SDL event timestamps to catch a delayed duplicate of the
+native closing key. The lifecycle regression test preserves the source across
+background/foreground transitions and still closes it when leaving the scene.
+Highlight focus jumps directly to the first matched line after layout, without
+animation; the AppKit test covers long wrapped ranges and a resized viewport.

@@ -2414,10 +2414,6 @@ void ChartViewerScene::onPause() {
   if (sourceOverlay != nullptr) sourceOverlay->hide();
 }
 
-void ChartViewerScene::onApplicationBackgroundChanged(bool background) {
-  if (background) onPause();
-}
-
 void ChartViewerScene::setPracticeLaunchRequest(
     practice::LaunchRequest request) {
   pendingPracticeLaunchRequest = std::move(request);

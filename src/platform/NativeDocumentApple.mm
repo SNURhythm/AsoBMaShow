@@ -341,10 +341,7 @@ public:
     onDocumentMain([&] {
       highlights_ = converted;
       paintHighlights();
-      if (focus && !highlights_.empty()) {
-        const auto first = highlights_.front();
-        [container_.textView scrollRangeToVisible:NSMakeRange(first.begin, first.end - first.begin)];
-      }
+      if (focus && !highlights_.empty()) focusCharacter(highlights_.front().begin);
     });
   }
 
@@ -384,6 +381,30 @@ public:
   }
 
 private:
+  void focusCharacter(std::size_t character) {
+    auto *view = container_.textView;
+    // Revealing an entire wrapped range can favor its end and UIKit may animate
+    // that reveal. Anchor its first line explicitly after layout instead.
+#if TARGET_OS_IPHONE
+    [view layoutIfNeeded];
+#endif
+    auto *layout = view.layoutManager;
+    [layout ensureLayoutForTextContainer:view.textContainer];
+    const NSUInteger glyph = [layout glyphIndexForCharacterAtIndex:character];
+    const CGRect line = [layout lineFragmentRectForGlyphAtIndex:glyph effectiveRange:nullptr];
+#if TARGET_OS_IPHONE
+    [view layoutIfNeeded];
+    const CGFloat end = std::max<CGFloat>(0, view.contentSize.height - view.bounds.size.height);
+    [view setContentOffset:CGPointMake(0, std::clamp(line.origin.y, CGFloat(0), end)) animated:NO];
+#else
+    NSClipView *clip = container_.scrollView.contentView;
+    const CGFloat end = std::max<CGFloat>(0, view.frame.size.height - clip.bounds.size.height);
+    const CGFloat top = line.origin.y + view.textContainerOrigin.y - view.textContainerInset.height;
+    [clip scrollToPoint:NSMakePoint(0, std::clamp(top, CGFloat(0), end))];
+    [container_.scrollView reflectScrolledClipView:clip];
+#endif
+  }
+
   void paintHighlights() {
     NSTextStorage *storage = container_.textView.textStorage;
     [storage beginEditing];

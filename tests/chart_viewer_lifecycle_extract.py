@@ -15,10 +15,10 @@ def main():
     fixture = (args.root / "tests/chart_viewer_lifecycle_fixture.cpp").read_text()
     fixture = fixture.replace("BASE_METHODS", "\n".join(extract(base, signature) for signature in (
         "inline void cleanup()", "virtual ~Scene()", "void destroyOwnedViews()",
-        "void clearPostedDeferred()")))
+        "void clearPostedDeferred()", "virtual void onApplicationBackgroundChanged(")))
     fixture = fixture.replace("VIEWER_METHODS", "\n".join(extract(scene, signature) for signature in (
         "ChartViewerScene::~ChartViewerScene()", "void ChartViewerScene::cleanupScene()",
-        "void ChartViewerScene::onPause()", "void ChartViewerScene::onApplicationBackgroundChanged(")))
+        "void ChartViewerScene::onPause()")))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(fixture)
 

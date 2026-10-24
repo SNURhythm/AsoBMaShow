@@ -61,6 +61,9 @@ int main() {
     const NSUInteger initialChildren = host.subviews.count;
     std::string source = "#TITLE π😀\r\n#00111:0100\n#00211:0200\n";
     for (int i = 0; i < 100; ++i) source += "#00311:01000200\n";
+    const auto wrapped = source.size();
+    source += "#00411:" + std::string(2000, '1') + "\n";
+    for (int i = 0; i < 40; ++i) source += "#00511:01000200\n";
     source += "#LAST\n";
     const auto first = source.find("#001"), second = source.find("#002"), last = source.find("#LAST");
     native_document::Appearance appearance;
@@ -126,12 +129,25 @@ int main() {
         atIndex:[text.string rangeOfString:@"#LAST"].location effectiveRange:nullptr] == nil,
         "empty highlights clear practice attributes");
 
+    const auto checkJump = [&] {
+      onWorker([&] { surface->highlight({{wrapped + 7, source.size()}}, true); });
+      const NSUInteger character = [text.string rangeOfString:@"#00411:"].location + 7;
+      const NSUInteger glyph = [text.layoutManager glyphIndexForCharacterAtIndex:character];
+      const NSRect line = [text.layoutManager lineFragmentRectForGlyphAtIndex:glyph effectiveRange:nullptr];
+      const CGFloat visibleY = line.origin.y + text.textContainerOrigin.y - scroll.contentView.bounds.origin.y;
+      require(visibleY >= 0 && visibleY <= text.textContainerInset.height + 1,
+          "highlight jumps immediately to the first wrapped match at the viewport top");
+      require(NSEqualRanges(text.selectedRange, NSMakeRange(7, 3)), "direct jump preserves manual selection");
+    };
+    checkJump();
+
     [nativeWindow setContentSize:NSMakeSize(800, 600)];
     near(scroll.frame.size.width, 640, "native resize reapplies normalized width without worker update");
     near(scroll.frame.origin.y, 120, "native resize preserves top-left position");
     onWorker([&] { surface->setFrame({0.25f, 0.1f, 0.5f, 0.8f}); }, true);
     near(scroll.frame.origin.x, 200, "worker frame updates use resized client bounds");
     near(scroll.frame.size.height, 480, "worker frame updates resize native viewport");
+    checkJump();
     require([text performKeyEquivalent:key(nativeWindow, @"a", 0, NSEventModifierFlagCommand)],
         "Command-A works without an application Edit menu");
     require(text.selectedRange.length == text.string.length, "Command-A selects source text");

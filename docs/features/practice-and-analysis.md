@@ -13,9 +13,12 @@ full-page, read-only overlay using the chart loader's encoding detection.
 On iOS, Android, macOS and Windows, the text uses the operating system's native
 selection and copy controls. Manual text selection stays independent of practice
 highlights; copying never modifies the source file.
-**Highlight selection** marks data cells in the practice range and scrolls to
-the first match in source order. It uses the loaded chart's BPM, STOPs, measure
-lengths, and random choices, with an exclusive range end. Empty (`00`) cells
+Switching focus to another application and back preserves the open source viewer,
+its scroll position and native selection.
+**Highlight selection** marks data cells in the practice range and jumps directly
+to the first match in source order, without scrolling animation. It uses the
+loaded chart's BPM, STOPs, measure lengths, and random choices, with an exclusive
+range end. Empty (`00`) cells
 remain eligible so selected rests can be inspected too. Close, Escape, or
 gamepad back returns to the viewer without moving practice markers.
 
