@@ -60,6 +60,31 @@ int main() {
   assert(nested.substr(ranges[0].begin, ranges[0].end - ranges[0].begin) == "01");
   assert(nested.substr(ranges[1].begin, ranges[1].end - ranges[1].begin) == "02");
 
+  // Random directive arguments use the same ASCII/control trimming as the loader.
+  parser.SetRandomValues({2});
+  for (const auto &[randomArgument, ifArgument] :
+       std::vector<std::pair<std::string, std::string>>{
+           {" 2", "2"}, {"2\t ", "2"}, {"2", " \t+2\t "},
+           {"\t+2\x1f", "\x1f" "2\t"}}) {
+    const std::string spaced = "#BPM 120\n#RANDOM " + randomArgument +
+        "\n#IF 1\n#00011:01\n#ENDIF\n#IF " + ifArgument +
+        "\n#00011:02\n#ENDIF\n#ENDRANDOM\n";
+    raw = nullptr;
+    parser.Parse(std::vector<unsigned char>(spaced.begin(), spaced.end()), &raw, false, false, cancelled);
+    std::unique_ptr<bms_parser::Chart> spacedChart(raw);
+    assert(spacedChart && spacedChart->Meta.RandomValues == std::vector<int>{2});
+    ranges = chart_source::highlights(spaced, *spacedChart, 0, 1000000);
+    assert(ranges.size() == 1);
+    assert(spaced.substr(ranges[0].begin, ranges[0].end - ranges[0].begin) == "02");
+  }
+  const std::string emptyArguments = "#BPM 120\n#RANDOM \t \n#IF \t \n#00011:01\n#ENDIF\n";
+  raw = nullptr;
+  parser.Parse(std::vector<unsigned char>(emptyArguments.begin(), emptyArguments.end()), &raw, false, false, cancelled);
+  std::unique_ptr<bms_parser::Chart> emptyArgumentsChart(raw);
+  assert(emptyArgumentsChart && emptyArgumentsChart->Meta.RandomValues.empty());
+  ranges = chart_source::highlights(emptyArguments, *emptyArgumentsChart, 0, 1000000);
+  assert(ranges.size() == 1);
+
   // UTF-16 follows the chart loader's BOM detection and CR-only lines work too.
   const std::u16string utf16 = u"#TITLE 日本語\r#BPM 120\r#00011:01\r";
   std::vector<unsigned char> utf16Bytes{0xff, 0xfe};

@@ -123,11 +123,13 @@ public:
       case SDLK_PAGEDOWN: offset += reader_->getContentHeight(); break;
       case SDLK_HOME: offset = 0; break;
       case SDLK_END: offset = reader_->size() * reader_->itemHeight; break;
-      default: break;
+      default: return true;
       }
       reader_->scrollOffset = std::clamp(offset, 0.0,
           static_cast<double>(std::max(0, reader_->size() * reader_->itemHeight - reader_->getContentHeight())));
       reader_->rebindVisibleItems();
+      // RecyclerView interprets arrows as row selection and would undo this scroll.
+      return true;
     }
     (void)handleEvents(event);
     return true;

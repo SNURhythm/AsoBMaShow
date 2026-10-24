@@ -1258,9 +1258,27 @@ void testChartSourceOverlayNavigation() {
   expect(reader->scrollOffset > 0, "selection action focuses the matching source data");
   SDL_Event event{};
   event.type = SDL_EVENT_KEY_DOWN;
+  const double highlightedOffset = reader->scrollOffset;
+  event.key.key = SDLK_DOWN;
+  expect(overlay->consumeEvent(event) && reader->scrollOffset == highlightedOffset + reader->itemHeight,
+      "Down scrolls one row after highlighting without resetting to the top");
+  event.key.key = SDLK_UP;
+  expect(overlay->consumeEvent(event) && reader->scrollOffset == highlightedOffset,
+      "Up scrolls one row from the current document position");
+  event.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+  event.gbutton.button = SDL_GAMEPAD_BUTTON_DPAD_DOWN;
+  expect(overlay->consumeEvent(event) && reader->scrollOffset == highlightedOffset + reader->itemHeight,
+      "gamepad Down scrolls one document row");
+  event.gbutton.button = SDL_GAMEPAD_BUTTON_DPAD_UP;
+  expect(overlay->consumeEvent(event) && reader->scrollOffset == highlightedOffset,
+      "gamepad Up scrolls one document row");
+  event.type = SDL_EVENT_KEY_DOWN;
   event.key.key = SDLK_HOME;
   expect(overlay->consumeEvent(event) && reader->scrollOffset == 0,
       "source handles keyboard scrolling before chart shortcuts");
+  event.key.key = SDLK_DOWN;
+  expect(overlay->consumeEvent(event) && reader->scrollOffset == reader->itemHeight,
+      "Down advances from the top of an unselectable source document");
   event.key.key = SDLK_ESCAPE;
   expect(overlay->consumeEvent(event) && !overlay->getVisible(), "Escape closes only the source overlay");
   event.key.repeat = true;

@@ -71,6 +71,12 @@ inline std::vector<text_range::Range> highlights(
     const auto integer = [&](size_t start) -> std::optional<int> {
       if (start >= line.size()) return std::nullopt;
       auto value = line.substr(start);
+      // Match the loader's javaTrimmedHeaderValue, including ASCII controls.
+      while (!value.empty() && static_cast<unsigned char>(value.front()) <= 0x20)
+        value.remove_prefix(1);
+      while (!value.empty() && static_cast<unsigned char>(value.back()) <= 0x20)
+        value.remove_suffix(1);
+      if (value.empty()) return std::nullopt;
       if (value.front() == '+') value.remove_prefix(1);
       int parsed = 0;
       const auto [last, error] = std::from_chars(value.data(), value.data() + value.size(), parsed);
