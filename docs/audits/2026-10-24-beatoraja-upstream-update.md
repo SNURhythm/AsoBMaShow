@@ -18,6 +18,103 @@ original commits, not a claim of compatibility with this new HEAD.
 This is a source comparison and adoption recommendation. No game behavior was
 changed, and neither game was built or runtime-tested for this report.
 
+## Filtering the 0.8.9 release notes against our previous pin
+
+The user-provided release notes summarize the release interval, which is much
+larger than our update interval. **New for this review means absent at
+`ad42f56c` and introduced by `83574048`.** The recommendations below already use
+that commit delta; the broad release-note wording should not expand their scope.
+
+### Remove from the new-work list: already present at `ad42f56c`
+
+- **Random-selection folder expansion:** `1e269906` and earlier work.
+- **ZIP/RAR playback, including without temporary extraction:** `d9ab59be`,
+  `721856fb`. Only archive-aware Explorer handling changed in our interval.
+- **Per-player tags/favorites in `songreview.db`:** `a44948c3`.
+- **Song/table update progress indicators:** `e4150d25`. Keep only the later
+  updater exception/cleanup fix as new.
+- **Difficulty, scratch, long-note and speed-change filters:** `9c8a9987`,
+  `0db8ac8e`.
+- **Named properties and named/negated `op`/`draw`:** `6018645f`, `56d11123`,
+  `532cc93b`.
+- **Editable skin text and search input:** `8d847213`, `de7ec990`.
+- **Skin previews and `skin.skinpreview`:** `b211fb72`, `187b78d5`, `8e815d5e`.
+- **Practice skin definitions, properties and events:** `1a624e75`. The new
+  practice distribution-graph wiring is a later fix to this existing feature.
+- **Clipping:** `4d7141b1`.
+- **Unicode, emoji and general fallback-font support:** `94f6b227`, `76251867`,
+  `0dde1aa1`. Keep only the Lua fallback-entry decoding fix as new.
+- **Numeric-display spacing at different resolutions:** `060815d4`.
+- **WebP/animated WebP:** `389aa5ea` and its preceding image support. Later
+  changes to the pixmap pool concern ownership/diagnostics, not format support.
+- **Existing Lua property/timer/event/file/HTTP/audio APIs:** `e6d39ad4`,
+  `39351940` and earlier API work. The new subset is listed separately below.
+- **macOS CoreAudio and Linux ALSA through PortAudio:** `983d5577`, `396df302`.
+- **PortAudio device-selection fallback:** `b823f46d` already improved fallback
+  and shutdown. Further lifecycle/ASIO work is new, not initial fallback support.
+- **8-bit PCM and lower-allocation PCM conversion:** `05cb9663`, `4f09014a`.
+- **Guide SE long-note fix:** predates the pin; the key-sound processor is
+  unchanged across our interval, and BMSPlayer's interval diff adds playtime
+  measurement rather than Guide SE behavior.
+- **Pitch-preserving practice time stretching:** `7ea055bb`, `97c55cc3`,
+  `e8885d01`.
+- **Video stride/right-edge and seek-buffer fixes, looping, first-frame and
+  audio-track compatibility:** `7593a9f5`, `3a227a30`, `a9720c03`, `2ca5803e`,
+  `35df11bd`, `5f2579ec`. Keep the later shutdown/resource cleanup as new.
+- **GDX AudioDevice output:** `a64dceb5`, `13964aa2`.
+- **Custom Judge `longnoteMargin`:** `84b65ebb` and earlier judge support.
+- **`#SPEED` and its Constant-mode behavior:** `5856331e`, merged by `3b39f2e4`.
+- **Score-log fixes and `avgjudge`/`oldavgjudge`:** `968b731a`.
+- **Last-play timestamp, ranking/player-score and username skin properties:**
+  already in the pin's `IntegerPropertyFactory`/`StringPropertyFactory`, which
+  are unchanged in our interval. Last-play timestamp is different from the new
+  actual performance-duration field.
+- **Sequential background rival-score retrieval:** `ad42f56c` itself, with
+  incremental synchronization in `0da9509d`.
+- **General rendering/font/audio/database memory and GC improvements:** much
+  of this predates the pin, including `8d501c49`, `5739cf4e`, `4f09014a`,
+  `bd8b341e`, and shared FreeType generators in `ef715a2f`. Keep the specific
+  later leaks/lifecycle fixes below; do not count the whole optimization effort.
+- **Restricted Lua Java/file/OS access and limited luajava facade:** present in
+  the pin's `SkinLuaAccessor`, `e6d39ad4`, `6cee0663`. The facade is expanded
+  after the pin; its initial introduction/restriction is not new.
+- **IR plugin isolation/removal of direct application access:** `91cba5dd`.
+- **Backup advice:** operational advice, not an incoming implementation change.
+
+### Retain from those notes: genuinely new parts of mixed or new bullets
+
+- **Updater failure recovery:** `8320241d`.
+- **Lua font-fallback decoding:** `69f2c6b3`.
+- **Lua additions in `0cb03d9d`:** async HTTP/poll/cancel, byte-based HTTP
+  capacity, input-gated browser opening, file deletion, richer File/input
+  facades, and direct file-helper symlink rejection. Existing property/timer/
+  event/audio APIs are not newly introduced by this commit.
+- **Further PortAudio/ASIO lifecycle fixes and diagnostics:** `43b36b3c`,
+  `d6ac510b`, `047dac73`, `a8daecc7`, `9cedde7f`, `db211724`.
+- **Font texture, unused skin resource, shared pool and video shutdown cleanup:**
+  `523fcdd2`, `51f76ca0`, `ff1f1d5d`; memory diagnostics in `fca09e56`.
+- **Specific malformed-input fixes:** course/practice JSON, JSON skin headers,
+  broken `.brd`, null song distribution and invalid sort ID in `e11b20a7`,
+  `2ed69380`, `741790ee`, `9996715f`, `76a59aed`, `3bed7bc2`. Validation existed
+  before the pin; these are additional cases.
+- **No-follow skin/system-sound discovery:** `2d380751`.
+
+### Additional incoming changes not clearly named in the supplied notes
+
+- Archive-aware Explorer action (`adcde8f3`).
+- Practice distribution graph preparation (`60c64638`).
+- Gauge-tip alpha restoration (`4ca20052`).
+- Missing-chart ordering across sort modes (`7d01f715`).
+- Configurable sorter cycling, marked WIP (`939f6c66`).
+- Shared settings-bound constants (`4d593d3d`).
+- Actual performance duration in gameplay/course/IR records (`83574048`).
+
+Being present in the old beatoraja pin does **not** prove that AsoBMaShow has
+implemented that feature. It means it belongs to an existing parity backlog,
+not to this newly pulled change set. The adoption priorities below remain:
+font decoding, missing-chart ordering and practice graphs first; the new Lua
+contract next; measured duration and diagnostics as follow-ups.
+
 ## What changed upstream
 
 1. **Malformed local data handling.** Course loading filters actual JSON files,
