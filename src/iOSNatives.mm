@@ -1,7 +1,6 @@
 #include "view/SystemTextRasterizer.h"
 #include "iOSNatives.hpp"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-#include "ArchiveFile.h"
 #include "RAII.h"
 #include "bms_search/DownloadRetryWait.h"
 #include "audio/NativeMusicPlayer.h"
@@ -6008,15 +6007,12 @@ ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() {
       : display != nil && display == UIScreen.mainScreen;
   Orientation orientation = Orientation::Unknown;
   bool fillsScreen = false;
-  UIInterfaceOrientation current = UIInterfaceOrientationUnknown;
-  CGRect viewport{};
-  CGRect screen{};
   if (window != nil && display != nil) {
     // Interface and device orientation reverse the landscape enum names.
     // Use UIKit's interface orientation so rotation lock and a tablet lying
     // flat remain correct. SDL also supports windows without a UIWindowScene;
     // messaging that nil scene yields Unknown and hides both reminder cues.
-    current = scene != nil
+    UIInterfaceOrientation current = scene != nil
         ? scene.interfaceOrientation
         : window.rootViewController.interfaceOrientation;
     if (@available(iOS 16.0, *)) {
@@ -6033,9 +6029,9 @@ ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() {
     }
     UIView *view = window.rootViewController.view;
     if (view != nil) {
-      viewport = [view convertRect:view.bounds
+      const CGRect viewport = [view convertRect:view.bounds
                              toCoordinateSpace:display.coordinateSpace];
-      screen = display.bounds;
+      const CGRect screen = display.bounds;
       // Split View and Stage Manager partial windows cannot place a cue
       // against the hardware by treating the app's edges as screen edges.
       fillsScreen = screen.size.width > 0 && screen.size.height > 0 &&
@@ -6045,44 +6041,7 @@ ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() {
           std::abs(viewport.size.height - screen.size.height) < 1.0;
     }
   }
-  const auto location = locateButton(model, orientation, applicationDisplay && fillsScreen);
-  const char *reason = window == nil ? "no-window"
-      : display == nil ? "no-screen"
-      : !applicationDisplay ? (scene != nil ? "external-scene" : "screen-mismatch")
-      : window.rootViewController.view == nil ? "no-root-view"
-      : orientation == Orientation::Unknown ? "unknown-orientation"
-      : !fillsScreen ? "partial-viewport"
-      : model.portraitX < 0.0F ? "unmapped-hardware" : "visible";
-  // This query runs every reminder frame. Log only a changed suppression reason,
-  // display or orientation so a device report identifies the failed gate without spam.
-  static const char *lastReason = nullptr;
-  static __weak UIScreen *lastDisplay = nil;
-  static UIInterfaceOrientation lastOrientation = UIInterfaceOrientationUnknown;
-  if (reason != lastReason || display != lastDisplay || current != lastOrientation) {
-    lastReason = reason;
-    lastDisplay = display;
-    lastOrientation = current;
-    struct utsname systemInfo{};
-    uname(&systemInfo);
-    UIInterfaceOrientation geometryOrientation = UIInterfaceOrientationUnknown;
-    if (@available(iOS 16.0, *))
-      geometryOrientation = window.windowScene.effectiveGeometry.interfaceOrientation;
-    char diagnostic[1024];
-    std::snprintf(diagnostic, sizeof(diagnostic),
-            "iOS hardware button cue: %s; model=%s button=%d edge=%d "
-            "scene=%d applicationDisplay=%d orientation=%ld geometryOrientation=%ld root=%s "
-            "viewport=(%.2f,%.2f,%.2f,%.2f) screen=(%.2f,%.2f,%.2f,%.2f)",
-            reason, systemInfo.machine, static_cast<int>(model.button),
-            static_cast<int>(location.edge), window.windowScene != nil,
-            applicationDisplay,
-            static_cast<long>(current), static_cast<long>(geometryOrientation),
-            NSStringFromClass(window.rootViewController.view.class).UTF8String ?: "nil",
-            viewport.origin.x, viewport.origin.y, viewport.size.width, viewport.size.height,
-            screen.origin.x, screen.origin.y, screen.size.width, screen.size.height);
-    SDL_Log("%s", diagnostic);
-    archive_file::appendDebugLogLine(diagnostic);
-  }
-  return location;
+  return locateButton(model, orientation, applicationDisplay && fillsScreen);
 }
 
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized() {

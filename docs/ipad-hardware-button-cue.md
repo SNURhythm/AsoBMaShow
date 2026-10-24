@@ -72,15 +72,6 @@ visible until gameplay starts. This adds no time to the existing two-second
 startup delay. Interruption resets the cue to idle.
 Text stays upright in app coordinates; the edge marker changes axis with orientation.
 
-When investigating a missing cue, return from the reminder to song selection and
-open **Parsing Logs**. Look for `iOS hardware button cue`, or choose **Export Log**
-to save/share `AsoBMaShow-performance-log.txt`. Do this in the same app session;
-the displayed log buffer is bounded and is not retained across app restarts.
-The diagnostic is also sent to the device console.
-The bridge reports its suppression reason, model, application-display eligibility,
-chosen and effective scene orientations, root view class, and measured viewport.
-It logs only when the reason, display or orientation changes. This distinguishes an
-unknown orientation from the strict full-screen check rejecting a window.
 The M5 11-inch device log on iPadOS 27.2 beta confirmed `screen-mismatch` with
 `sceneMain=0` and a valid effective landscape orientation. The old main-screen
 identity guard exited before measuring the viewport, suppressing both cues.
@@ -92,7 +83,8 @@ Application-role eligibility matches SDL's scene selection. It does not identify
 the physical display when an interactive application scene is moved to an
 external monitor: UIKit uses the same application role there. The cue follows
 that application's full-screen display. Scene-less legacy windows retain the
-main-screen guard. Post-fix confirmation on the reported iPad remains pending.
+main-screen guard. The fix was confirmed on the reported iPad; temporary cue
+diagnostics have been removed.
 
 Skipping is kept only for the current gameplay session, including in-game and
 result-screen retries, practice restarts, and course continuation. Returning to
