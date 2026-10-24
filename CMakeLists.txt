@@ -161,6 +161,9 @@ function(asobmashow_add_sdl)
 endfunction()
 asobmashow_add_sdl()
 list(APPEND COMMON_LIBS SDL3::SDL3 SDL3_ttf::SDL3_ttf)
+if(APPLE)
+    list(APPEND COMMON_LIBS "-framework CoreText" "-framework CoreGraphics")
+endif()
 # Header-only contract tests also consume SDL event and key types.
 include_directories(SDL/include SDL_ttf/include)
 if (IOS)
@@ -892,6 +895,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/view/DecodedImageCache.cpp
             src/view/ImageFileDecoder.cpp
             src/view/SdlTtfRuntime.cpp
+            src/view/SystemTextRasterizer.cpp
             src/view/TextView.cpp
             src/view/View.cpp
             bgfx/bimg/3rdparty/lodepng/lodepng.cpp
@@ -3525,6 +3529,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${ir_ranking_view_source}
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/ir/IrRankingModal.cpp
         src/rendering/Color.cpp
@@ -4381,6 +4386,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/UniformCache.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
         ${ARCHIVE_UNZIP_TEST_SOURCES}
@@ -5080,6 +5086,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/view/ImageDecodeCoordinator.cpp
             src/view/ImageFileDecoder.cpp
             src/view/SdlTtfRuntime.cpp
+            src/view/SystemTextRasterizer.cpp
             src/FileChecksum.cpp
             src/Utils.cpp
             src/path.cpp
@@ -5157,6 +5164,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/view/ImageDecodeCoordinator.cpp
             src/view/ImageFileDecoder.cpp
             src/view/SdlTtfRuntime.cpp
+            src/view/SystemTextRasterizer.cpp
             src/FileChecksum.cpp
             src/Utils.cpp
             src/path.cpp
@@ -5188,6 +5196,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/view/ImageDecodeCoordinator.cpp
             src/view/ImageFileDecoder.cpp
             src/view/SdlTtfRuntime.cpp
+            src/view/SystemTextRasterizer.cpp
             src/FileChecksum.cpp
             src/Utils.cpp
             src/path.cpp
@@ -5279,6 +5288,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/ImageFileDecoder.cpp
         src/view/ImageView.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/View.cpp
         src/rendering/Color.cpp
         src/rendering/common.cpp
@@ -5315,6 +5325,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/ImageFileDecoder.cpp
         src/view/ImageView.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/Button.cpp
         src/view/TextView.cpp
         src/view/View.cpp
@@ -5369,6 +5380,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/ImageFileDecoder.cpp
         src/view/ImageView.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
         src/rendering/Color.cpp
@@ -5428,6 +5440,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/ContextMenuView.cpp
         src/view/ScrollView.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
     )
@@ -5469,6 +5482,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/UiBatchRenderer.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextInputBox.cpp
         src/view/TextView.cpp
         src/view/View.cpp
@@ -5511,6 +5525,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/DropdownView.cpp
         src/view/ScrollView.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextInputBox.cpp
         src/view/TextView.cpp
         src/view/View.cpp
@@ -5569,6 +5584,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/common.cpp
         src/rendering/UniformCache.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
     )
@@ -5621,6 +5637,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/PlayOptionSectionView.cpp
         src/view/PlayOptionsPanelView.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/ScrollView.cpp
         src/view/SnappedSlider.cpp
         src/view/StoragePolicyView.cpp
@@ -5644,6 +5661,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/UniformCache.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
         src/scene/play/GameplayGaugeRules.cpp
@@ -5668,6 +5686,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/rendering/UniformCache.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
         src/scene/play/GameplayGaugeRules.cpp
@@ -5699,6 +5718,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/Button.cpp
         src/view/ScrollView.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
         src/scene/play/GameplayGaugeRules.cpp
@@ -5720,6 +5740,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/ImageFileDecoder.cpp
         src/view/ImageView.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/Button.cpp
         src/view/CheckboxButtonContent.cpp
         src/view/TextView.cpp
@@ -6080,6 +6101,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/MusicSelectToolbarView.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
         src/rendering/Color.cpp
@@ -6101,6 +6123,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/NewcomerTutorialView.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
         src/rendering/Color.cpp
@@ -6656,6 +6679,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/view/ImageDecodeCoordinator.cpp
             src/view/ImageFileDecoder.cpp
             src/view/SdlTtfRuntime.cpp
+            src/view/SystemTextRasterizer.cpp
         )
         target_include_directories(gameplay_skin_session_factory_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src
@@ -6844,6 +6868,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/view/ImageDecodeCoordinator.cpp
             src/view/ImageFileDecoder.cpp
             src/view/SdlTtfRuntime.cpp
+            src/view/SystemTextRasterizer.cpp
         )
         target_include_directories(play_skin_session_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src
@@ -7048,6 +7073,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/view/ImageDecodeCoordinator.cpp
             src/view/ImageFileDecoder.cpp
             src/view/SdlTtfRuntime.cpp
+            src/view/SystemTextRasterizer.cpp
             src/view/TextView.cpp
             src/view/View.cpp
             src/video/RendererAccessCoordinator.cpp
@@ -7746,6 +7772,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/skin/DefaultSkin.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
     )
@@ -7804,6 +7831,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/skin/DefaultSkin.cpp
         src/view/Button.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
     )
@@ -9361,6 +9389,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             src/rendering/UiBatchRenderer.cpp
             src/rendering/UniformCache.cpp
             src/view/SdlTtfRuntime.cpp
+            src/view/SystemTextRasterizer.cpp
             src/view/TextView.cpp
             src/view/View.cpp
         )

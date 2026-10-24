@@ -301,10 +301,14 @@ bool isBreakableSpace(Uint32 codepoint) {
   return codepoint == ' ' || codepoint == '\t' || codepoint == 0x3000;
 }
 
-bool isIgnorableUnsupportedCodepoint(Uint32 codepoint) {
-  return codepoint == 0x200B || codepoint == 0x200C || codepoint == 0x200D ||
+bool isTextPresentationControl(Uint32 codepoint) {
+  return codepoint == 0x200C || codepoint == 0x200D ||
          codepoint == 0xFE0E || codepoint == 0xFE0F ||
-         (codepoint >= 0xE0100 && codepoint <= 0xE01EF) ||
+         (codepoint >= 0xE0100 && codepoint <= 0xE01EF);
+}
+
+bool isIgnorableUnsupportedCodepoint(Uint32 codepoint) {
+  return codepoint == 0x200B || isTextPresentationControl(codepoint) ||
          (codepoint >= 0x0300 && codepoint <= 0x036F) ||
          (codepoint >= 0x1AB0 && codepoint <= 0x1AFF) ||
          (codepoint >= 0x1DC0 && codepoint <= 0x1DFF) ||
@@ -818,6 +822,10 @@ int TextView::measureRasterTextWidth(const std::string &utf8, int *rasterHeight)
       break;
     }
 
+    if (isTextPresentationControl(token.codepoint) && hasFontSource(runSource)) {
+      runText += token.bytes;
+      continue;
+    }
     SelectedFont tokenSource = selectFont(token.codepoint);
     if (!hasFontSource(tokenSource)) {
       continue;
@@ -978,6 +986,10 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
     size_t tokenIndex = 0;
     Utf8Token token;
     while (decodeNextUtf8(line, tokenIndex, token)) {
+      if (isTextPresentationControl(token.codepoint) && !runs.empty()) {
+        runs.back().text += token.bytes;
+        continue;
+      }
       SelectedFont tokenSource = selectFont(token.codepoint);
       if (!hasFontSource(tokenSource)) {
         continue;

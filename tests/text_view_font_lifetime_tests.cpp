@@ -37,11 +37,63 @@ class FontProbeView : public TextView {
 public:
   using TextView::TextView;
   TTF_Font *fontForGlyph(Uint32 codepoint) { return selectFont(codepoint).font; }
+  int rasterWidth(const std::string &text) { return measureRasterTextWidth(text); }
+  void addFirstFallback(const std::string &path) {
+    fallbackFontPaths.insert(fallbackFontPaths.begin() + nextFallbackFontPath, path);
+  }
+  SDL_Surface *fallbackSurface() {
+    int width = 0, height = 0;
+    return renderFallbackTextSurface(0, width, height);
+  }
   TTF_Font *primaryFont() const {
     assert(!fontFaces.empty());
     return fontFaces.front().font;
   }
 };
+
+void testEmojiFallbackKeepsVariationSelectors() {
+  FontProbeView view(ASOBMASHOW_SOURCE_DIR
+      "/bgfx/bgfx/examples/runtime/font/signika-regular.ttf", 24);
+  view.addFirstFallback(ASOBMASHOW_SOURCE_DIR "/tests/fixtures/color-font/color-emoji.ttf");
+  TTF_Font *emoji = view.fontForGlyph(0x1f642);
+  assert(emoji && emoji != view.primaryFont());
+  const std::string variant = "\xf0\x9f\x99\x82\xef\xb8\x8f";
+  const std::string plain = "\xf0\x9f\x99\x82";
+  int expected = 0, plainWidth = 0, height = 0;
+  {
+    text_runtime::OperationGuard operation;
+    assert(TTF_GetStringSize(emoji, variant.c_str(), variant.size(), &expected, &height));
+    assert(TTF_GetStringSize(emoji, plain.c_str(), plain.size(), &plainWidth, &height));
+  }
+  assert(expected > plainWidth);
+  assert(view.rasterWidth(variant) == expected);
+  const auto inkWidth = [](SDL_Surface *source) {
+    assert(source);
+    SDL_Surface *surface = SDL_ConvertSurface(source, SDL_PIXELFORMAT_RGBA32);
+    assert(surface);
+    int left = surface->w, right = -1;
+    for (int y = 0; y < surface->h; ++y) {
+      const auto *row = static_cast<const unsigned char *>(surface->pixels) + y * surface->pitch;
+      for (int x = 0; x < surface->w; ++x) {
+        if (row[x * 4 + 3] == 0) continue;
+        left = std::min(left, x); right = std::max(right, x);
+      }
+    }
+    SDL_DestroySurface(surface);
+    return right - left + 1;
+  };
+  view.setDeferredTextureMaterialization(true);
+  view.setText(variant);
+  SDL_Surface *actual = view.fallbackSurface();
+  SDL_Surface *reference = nullptr;
+  {
+    text_runtime::OperationGuard operation;
+    reference = TTF_RenderText_Blended(emoji, variant.c_str(), variant.size(), {255, 255, 255, 255});
+  }
+  assert(inkWidth(actual) == inkWidth(reference));
+  SDL_DestroySurface(actual);
+  SDL_DestroySurface(reference);
+}
 
 void testConstructorRollback(const std::string &path) {
   const auto initialReferences = text_runtime::activeReferencesForTesting();
@@ -296,6 +348,7 @@ int main() {
   testConstructorRollback(path);
   testFontCacheUsesCreatingThread(path);
   testWarmFontCache(path);
+  testEmojiFallbackKeepsVariationSelectors();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
 }

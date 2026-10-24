@@ -83,6 +83,7 @@ void resetSkinTextAtlasGlyphCacheHitsForTesting() noexcept;
     const std::vector<SkinTextAtlasBitmapFace> &faces,
     const std::set<char32_t> &codepoints,
     const std::set<std::pair<char32_t, char32_t>> &pairs,
-    SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{});
+    SkinSafetyPolicy safetyPolicy = SkinSafetyPolicy{},
+    const std::function<bool()> &cancellationRequested = {});
 
 } // namespace skin

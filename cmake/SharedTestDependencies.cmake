@@ -186,6 +186,7 @@ asobmashow_share_test_sources(dependencies
         src/view/ImageView.cpp
         src/view/ScrollView.cpp
         src/view/SdlTtfRuntime.cpp
+        src/view/SystemTextRasterizer.cpp
         src/view/TextView.cpp
         src/view/View.cpp
     TARGETS

@@ -10,6 +10,7 @@
 #include "skin/package/SkinTreeSnapshotter.h"
 #include "view/ImageFileDecoder.h"
 #include "view/SdlTtfRuntime.h"
+#include "view/SystemTextRasterizer.h"
 
 #include <atomic>
 #include <algorithm>
@@ -431,6 +432,134 @@ void testTextAtlasKeyRejectsNegativePaintExtents() {
   expect(skin::stableFallbackChainDigest(1, 0, oversizedChain).empty(),
          "the public fallback-chain builder refuses an oversized identity");
 }
+
+void testScalableColorGlyphsSurviveFallbackAndCache() {
+  const auto readFont = [](const std::filesystem::path &relative) {
+    std::ifstream input(std::filesystem::path(ASOBMASHOW_SOURCE_DIR) / relative,
+                        std::ios::binary);
+    const std::string encoded((std::istreambuf_iterator<char>(input)),
+                              std::istreambuf_iterator<char>());
+    const auto bytes = std::as_bytes(std::span(encoded));
+    return skin::SkinTextAtlasFontBytes{
+        .encoded = std::vector<std::byte>(bytes.begin(), bytes.end())};
+  };
+  const std::vector<skin::SkinTextAtlasFontBytes> faces{
+      readFont("bgfx/bgfx/examples/runtime/font/signika-regular.ttf"),
+      readFont("tests/fixtures/color-font/color-emoji.ttf")};
+  const skin::SkinTextAtlasKey key{
+      .font = 1, .pointSize = 32, .outlineRgba = {0, 0, 255, 255},
+      .outlineWidth = 1, .fallbackChainDigest = "color-emoji-fixture"};
+  skin::SkinResourcePreparationService service;
+  skin::ScalableGlyphCacheAccessor cache{
+      .find = [&](char32_t codepoint) {
+        return service.findCachedGlyph("color", std::to_string(codepoint));
+      },
+      .store = [&](char32_t codepoint, skin::SkinPreparedGlyphBitmap glyph) {
+        service.storeCachedGlyph("color", std::to_string(codepoint),
+                                 std::move(glyph));
+      }};
+  for (const bool warmed : {false, true}) {
+    const auto corpus = warmed ? std::set<char32_t>{U'A', U'\U0001f642'}
+                               : std::set<char32_t>{U'\U0001f642'};
+    skin::resetSkinTextAtlasGlyphCacheHitsForTesting();
+    const auto built = skin::buildSkinTextAtlas(
+        1, key, faces, corpus, {}, skin::SkinSafetyPolicy{},
+        skin::SkinResourcePolicy::maximumScalableFontPaintBlendOperations,
+        {}, {}, &cache);
+    expect(built.atlas.has_value(), "the color-font fallback produces an atlas");
+    if (!built.atlas) continue;
+    const auto &atlas = *built.atlas;
+    const auto countColor = [&](char32_t codepoint,
+                                std::array<unsigned char, 4> color) {
+      const auto &region = atlas.glyphs.at(codepoint).region;
+      std::size_t count = 0;
+      for (int y = region.y; y < region.y + region.h; ++y) {
+        for (int x = region.x; x < region.x + region.w; ++x) {
+          const auto offset = (static_cast<std::size_t>(y) * atlas.pixels.width + x) * 4;
+          if (std::equal(color.begin(), color.end(), atlas.pixels.rgba->begin() + offset)) ++count;
+        }
+      }
+      return count;
+    };
+    expect(countColor(U'\U0001f642', {255, 0, 0, 255}) > 0 &&
+               countColor(U'\U0001f642', {0, 255, 0, 255}) > 0,
+           warmed ? "cached emoji retain both original font colors"
+                  : "emoji retain both original font colors when rasterized");
+    expect(countColor(U'\U0001f642', {0, 0, 255, 255}) > 0,
+           "color glyphs retain their authored outline");
+    if (warmed) {
+      expect(skin::skinTextAtlasGlyphCacheHitsForTesting() == 1,
+             "a later text corpus reuses the cached emoji");
+    }
+  }
+}
+
+#if defined(__APPLE__)
+void testSystemEmojiPixelsAndMissingSkinGlyphs() {
+  constexpr std::size_t budget = 1024U * 1024U;
+  text_runtime::SystemTextRasterizer rasterizer(32);
+  const auto colored = [](const auto &pixels) {
+    for (std::size_t i = 0; i + 3 < pixels.size(); i += 4) {
+      if (pixels[i + 3] > 64 &&
+          (pixels[i] != pixels[i + 1] || pixels[i + 1] != pixels[i + 2])) return true;
+    }
+    return false;
+  };
+  const auto emoji = rasterizer.text("\xf0\x9f\x99\x82", {255, 255, 255, 255}, budget);
+  expect(emoji && colored(emoji->rgba), "native system emoji retain their color pixels");
+  const auto red = rasterizer.text("A", {255, 0, 0, 128}, budget);
+  bool redInk = false;
+  if (red) {
+    for (std::size_t i = 0; i < red->rgba.size(); i += 4) {
+      if (red->rgba[i + 3] == 0) continue;
+      redInk = true;
+      expect(red->rgba[i] >= 253 && red->rgba[i + 1] == 0 &&
+                 red->rgba[i + 2] == 0 && red->rgba[i + 3] <= 128,
+             "native text retains its requested tint and straight alpha");
+    }
+  }
+  expect(redInk && !rasterizer.colorGlyph(U'A', budget) &&
+             !rasterizer.colorGlyph(U'\U0010ffff', budget) &&
+             !rasterizer.colorGlyph(U'\U0001f642', 1),
+         "system emoji fallback excludes ordinary and missing glyphs and obeys its byte budget");
+
+  const auto fontPath = std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
+      "bgfx/bgfx/examples/runtime/font/signika-regular.ttf";
+  std::ifstream input(fontPath, std::ios::binary);
+  const std::string encoded((std::istreambuf_iterator<char>(input)), {});
+  const auto bytes = std::as_bytes(std::span(encoded));
+  const auto scalable = skin::buildSkinTextAtlas(
+      1, {.font = 1, .pointSize = 32, .fallbackChainDigest = "missing-emoji"},
+      {{.encoded = std::vector<std::byte>(bytes.begin(), bytes.end())}},
+      {U'\U0001f642', U'\ufe0f'}, {});
+  expect(scalable.atlas && colored(*scalable.atlas->pixels.rgba) &&
+             scalable.atlas->glyphs.at(U'\ufe0f').advance == 0,
+         "a scalable skin font missing emoji uses the native color glyph instead of a box");
+
+  constexpr std::string_view descriptor =
+      "info size=32\ncommon lineHeight=32 base=26 scaleW=8 scaleH=8 pages=1\n"
+      "page id=0 file=page.png\n"
+      "char id=65 x=0 y=0 width=8 height=8 xoffset=0 yoffset=2 xadvance=8 page=0\n"
+      "char id=9633 x=0 y=0 width=8 height=8 xoffset=0 yoffset=2 xadvance=8 page=0\n";
+  const auto parsed = skin::parseSkinBitmapFont(
+      {.id = 2, .virtualPath = "emoji-test.fnt", .type = 2},
+      std::as_bytes(std::span(descriptor)), skin::SkinBitmapFontSourceFormat::BmFont);
+  expect(parsed.font.has_value(), "the bitmap emoji fixture parses");
+  if (!parsed.font) return;
+  const auto bitmap = skin::buildSkinBitmapTextAtlas(
+      2, {.font = 2, .pointSize = 1, .fallbackChainDigest = "missing-bitmap-emoji"},
+      {{.font = *parsed.font, .pages = {{.physicalKey = "emoji-source-page", .pixels = bitmapPage(8, 8, 255)}}}},
+      {U'A', U'\U0001f642', U'\ufe0f'}, {});
+  expect(bitmap.atlas.has_value(), "the bitmap emoji atlas prepares");
+  if (!bitmap.atlas) return;
+  const auto &glyph = bitmap.atlas->glyphs.at(U'\U0001f642');
+  expect(glyph.bitmapFontType == 0 &&
+             colored(*bitmap.atlas->pages[glyph.page].pixels->rgba) &&
+             bitmap.atlas->glyphs.at(U'A').page == 0 &&
+             bitmap.atlas->glyphs.at(U'\ufe0f').advance == 0,
+         "a bitmap skin uses a color emoji page while retaining its authored distance-field glyphs");
+}
+#endif
 
 void testScalableFontOutlineWorkIsBounded() {
   const std::filesystem::path fontPath =
@@ -2381,6 +2510,40 @@ expect(practiceBgaPlan.plan && practiceBgaPlan.plan->atlases.size() == 1 &&
         .decodedBytes = planned.plan->decodedBytes};
   };
   {
+    constexpr std::string_view descriptor =
+        "info size=32\ncommon lineHeight=32 base=26 scaleW=8 scaleH=8 pages=2\n"
+        "page id=0 file=missing.png\npage id=1 file=available.png\n"
+        "char id=65 x=0 y=0 width=8 height=8 xoffset=0 yoffset=2 xadvance=8 page=1\n";
+    const auto parsed = skin::parseSkinBitmapFont(
+        {.id = 1, .virtualPath = "partial.fnt"}, std::as_bytes(std::span(descriptor)),
+        skin::SkinBitmapFontSourceFormat::BmFont);
+    expect(parsed.font.has_value(), "the partially available bitmap font parses");
+    if (parsed.font) {
+      const auto availablePage = bitmapPage(8, 8, 255);
+      for (const bool withControl : {false, true}) {
+        auto corpus = std::set<char32_t>{U'A'};
+        if (withControl) corpus.insert(U'\ufe0f');
+        auto built = skin::buildSkinBitmapTextAtlas(
+            1, {.font = 1, .pointSize = 1, .fallbackChainDigest = "partial-page"},
+            {{.font = *parsed.font,
+              .pages = {{.physicalKey = "missing-page", .pixels = std::nullopt},
+                        {.physicalKey = "available-page", .pixels = availablePage}}}},
+            corpus, {});
+        expect(built.atlas.has_value(), "the partially available bitmap atlas prepares");
+        if (!built.atlas) continue;
+        skin::SkinResourceUploadPlan plan{
+            .revision = planned.plan->revision.clone(),
+            .atlases = {std::move(*built.atlas)},
+            .textAtlasesByObject = {{1, 1}}, .decodedBytes = availablePage.byteSize()};
+        const auto uploaded = skin::SkinResourceCatalog::upload(
+            std::move(plan), std::make_shared<FakeTextureDevice>());
+        expect(uploaded.catalog != nullptr,
+               withControl ? "a variation selector cannot reject a bitmap font with an unavailable first page"
+                           : "visible glyphs on an available later bitmap page upload");
+      }
+    }
+  }
+  {
     const skin::SkinSourceRect crop{.x = 3, .y = 2, .w = 10, .h = 8};
     const skin::SkinSourceRect blank{.x = 13, .y = 2, .w = 3, .h = 8};
     const skin::SkinSourceRect aliasCrop{.x = 5, .y = 5, .w = 5, .h = 4};
@@ -3633,6 +3796,10 @@ int main(int argc, char **argv) {
   testSharedSdlTtfRuntimeFinalRelease();
   testSpriteBoundsAndNormalizedGridCells();
   testTextAtlasKeyRejectsNegativePaintExtents();
+  testScalableColorGlyphsSurviveFallbackAndCache();
+#if defined(__APPLE__)
+  testSystemEmojiPixelsAndMissingSkinGlyphs();
+#endif
   testScalableFontOutlineWorkIsBounded();
   testSharedSessionAccountingRejectsDistributedAggregateOverages();
   testWildcardImagesResolveListedPathsOnlyOnce();

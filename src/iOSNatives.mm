@@ -1,3 +1,4 @@
+#include "view/SystemTextRasterizer.h"
 #include "iOSNatives.hpp"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "RAII.h"
@@ -6095,73 +6096,24 @@ int MeasureIOSSystemTextWidth(const std::string &utf8, int fontSize) {
 
 SDL_Surface *RenderIOSSystemTextSurface(const std::string &utf8, int fontSize,
                                         SDL_Color color) {
-  @autoreleasepool {
-    if (utf8.empty()) {
-      return nullptr;
-    }
-
-    CTLineRef line = CreateIOSSystemTextLine(utf8, fontSize);
-    if (line == nullptr) {
-      return nullptr;
-    }
-
-    CGFloat ascent = 0.0;
-    CGFloat descent = 0.0;
-    CGFloat leading = 0.0;
-    const double textWidth =
-        CTLineGetTypographicBounds(line, &ascent, &descent, &leading);
-    const IOSSystemTextMetrics metrics = GetIOSSystemTextMetrics(fontSize);
-    const int width = std::max(1, static_cast<int>(std::ceil(textWidth)));
-    const int height = std::max(1, metrics.height);
-
-    std::vector<Uint8> alpha(
-        static_cast<size_t>(width) * static_cast<size_t>(height), 0);
-    CGContextRef context = CGBitmapContextCreate(
-        alpha.data(), width, height, 8, width, nullptr, kCGImageAlphaOnly);
-    if (context == nullptr) {
-      CFRelease(line);
-      return nullptr;
-    }
-
-    CGContextSetShouldAntialias(context, true);
-    CGContextSetAllowsAntialiasing(context, true);
-    CGContextSetGrayFillColor(context, 1.0, 1.0);
-    CGContextSetTextMatrix(context, CGAffineTransformIdentity);
-    const CGFloat baseline =
-        static_cast<CGFloat>(std::max(0, height - metrics.ascent));
-    CGContextSetTextPosition(context, 0.0, baseline);
-    CTLineDraw(line, context);
-    CGContextRelease(context);
-    CFRelease(line);
-
-    SDL_Surface *surface = SDL_CreateSurface(width, height, SDL_PIXELFORMAT_BGRA32);
-    if (surface == nullptr) {
-      return nullptr;
-    }
-
-    SDL_FillSurfaceRect(surface, nullptr, SDL_MapSurfaceRGBA(surface, 0, 0, 0, 0));
-    if (SDL_MUSTLOCK(surface)) {
-      SDL_LockSurface(surface);
-    }
-
-    for (int y = 0; y < height; ++y) {
-      auto *row = static_cast<Uint8 *>(surface->pixels) + y * surface->pitch;
-      for (int x = 0; x < width; ++x) {
-        const Uint8 coverage = alpha[static_cast<size_t>(y) * width + x];
-        const Uint8 alphaValue =
-            static_cast<Uint8>((static_cast<int>(coverage) * color.a) / 255);
-        Uint32 pixel =
-            SDL_MapSurfaceRGBA(surface, color.r, color.g, color.b, alphaValue);
-        std::memcpy(row + x * sizeof(Uint32), &pixel, sizeof(pixel));
-      }
-    }
-
-    if (SDL_MUSTLOCK(surface)) {
-      SDL_UnlockSurface(surface);
-    }
-    return surface;
+  text_runtime::SystemTextRasterizer rasterizer(fontSize);
+  const auto raster = rasterizer.text(
+      utf8, {color.r, color.g, color.b, color.a}, 128U * 1024U * 1024U);
+  if (!raster) return nullptr;
+  SDL_Surface *surface = SDL_CreateSurface(
+      raster->width, raster->height, SDL_PIXELFORMAT_RGBA32);
+  if (!surface) return nullptr;
+  if (!SDL_LockSurface(surface)) {
+    SDL_DestroySurface(surface);
+    return nullptr;
   }
-  return nullptr;
+  for (int y = 0; y < raster->height; ++y) {
+    std::memcpy(static_cast<Uint8 *>(surface->pixels) + y * surface->pitch,
+                raster->rgba.data() + static_cast<std::size_t>(y) * raster->width * 4U,
+                static_cast<std::size_t>(raster->width) * 4U);
+  }
+  SDL_UnlockSurface(surface);
+  return surface;
 }
 
 // register touch event
