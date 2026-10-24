@@ -20,6 +20,8 @@ struct ApplicationContext { Jukebox jukebox; };
 struct View {
   explicit View(Jukebox &audio) : audio(audio) {}
   virtual ~View() { audio.events.push_back("view"); }
+  void hide() { visible = false; }
+  bool visible = true;
   Jukebox &audio;
 };
 class Scene {
@@ -50,6 +52,7 @@ public:
   explicit ChartViewerScene(ApplicationContext &context) : Scene(context) {}
   ~ChartViewerScene() override;
   void cleanupScene() override;
+  void onPause();
   std::unique_ptr<Chart> chart;
   bool listenActive = false, listenAudioLoaded = false, retainedListenResourcesForReload = false;
   long long listenEndMicros = 0;
@@ -58,7 +61,7 @@ public:
   std::unique_ptr<int> practicePresetStore;
   int loadedGhostReplayId = -1, selectedGhostReplayIndex = -1;
   long long practiceChartEndMicros = 0;
-  View *rootLayout = nullptr, *canvasView = nullptr, *titleText = nullptr,
+  View *sourceOverlay = nullptr, *rootLayout = nullptr, *canvasView = nullptr, *titleText = nullptr,
        *subtitleText = nullptr, *statusText = nullptr, *randomSummaryText = nullptr,
        *zoomText = nullptr, *selectionText = nullptr, *listenPauseText = nullptr,
        *listenPauseButton = nullptr, *listenStopButton = nullptr, *ghostLoadButton = nullptr,
@@ -119,4 +122,17 @@ int main() {
   ApplicationContext context;
   { ChartViewerScene neverInitialized(context); }
   assert(context.jukebox.playing && context.jukebox.events.empty());
+  {
+    ChartViewerScene scene(context);
+    scene.sourceOverlay = new View(context.jukebox);
+    scene.views.push_back(scene.sourceOverlay);
+    scene.onApplicationBackgroundChanged(false);
+    assert(scene.sourceOverlay->visible);
+    scene.onApplicationBackgroundChanged(true);
+    assert(scene.sourceOverlay->visible);
+    scene.onApplicationBackgroundChanged(false);
+    assert(scene.sourceOverlay->visible);
+    scene.onPause();
+    assert(!scene.sourceOverlay->visible);
+  }
 }

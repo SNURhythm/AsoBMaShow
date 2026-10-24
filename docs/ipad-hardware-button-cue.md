@@ -49,7 +49,10 @@ The Mini 6, Air 11 M4 (drawing shared with M2/M3), Pro 11 M4, and Pro 11 generat
 | iPad Pro 13-inch (M5) | 0.940670 | [Drawing](https://developer.apple.com/download/files/accessories/dimensional-drawings/ipad-pro-13-inch-m5.pdf) |
 
 Use the active window scene's **interface** orientation, not accelerometer/device
-orientation. UIKit's landscape names differ from UIDeviceOrientation: interface
+orientation. For SDL windows without a `UIWindowScene`, use the root view
+controller's interface orientation, matching the app's rotation-lock code.
+Reading a missing scene instead yields Unknown and suppresses both the marker
+and floating label, even for a known full-screen iPad. UIKit's landscape names differ from UIDeviceOrientation: interface
 LandscapeLeft places Home on the left; LandscapeRight places Home on the right.
 The normalized mappings from portrait `(x, y)` are `(1-y, x)` for LandscapeLeft,
 `(y, 1-x)` for LandscapeRight, and `(1-x, 1-y)` upside down.
@@ -65,6 +68,16 @@ Enabled text. The spring settles in place and the success cue remains fully
 visible until gameplay starts. This adds no time to the existing two-second
 startup delay. Interruption resets the cue to idle.
 Text stays upright in app coordinates; the edge marker changes axis with orientation.
+
+When investigating a missing cue, search device logs for `iOS hardware button cue`.
+The bridge reports its suppression reason, model, screen identity comparison,
+legacy and effective scene orientations, root view class, and measured viewport.
+It logs only when the reason or orientation changes. This distinguishes an
+unknown orientation from the strict full-screen check rejecting a window.
+The reported M5 11-inch failure on iPadOS 27.2 beta remains unconfirmed on hardware;
+both landscape orientations fail there, while the available 27.1 iPhone simulator
+passes the native geometry check with the M5 model mapping. `UIScreen.mainScreen`
+is deprecated since iOS 26, but deprecation alone does not establish the cause.
 
 Skipping is kept only for the current gameplay session, including in-game and
 result-screen retries, practice restarts, and course continuation. Returning to

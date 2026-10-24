@@ -732,6 +732,8 @@
 				ir/CMakeLists.txt,
 				math/CMakeLists.txt,
 				music_select/CMakeLists.txt,
+				platform/NativeDocumentAndroid.cpp,
+				platform/NativeDocumentWindows.cpp,
 				practice/CMakeLists.txt,
 				rendering/CMakeLists.txt,
 				scene/CMakeLists.txt,

@@ -12,7 +12,17 @@ PREAMBLE = r'''
 #import <Foundation/Foundation.h>
 #include "platform/IPadHardwareButton.h"
 #include <cassert>
+#include <cstdarg>
+#include <string>
 #include <utility>
+#include <vector>
+static std::vector<std::string> cueLogReasons;
+void SDL_Log(const char *format, ...) {
+  va_list args;
+  va_start(args, format);
+  cueLogReasons.emplace_back(va_arg(args, const char *));
+  va_end(args);
+}
 // Geometry fixture runs synchronously on its simulated UIKit owner.
 namespace platform {
 inline bool isMainThread() { return true; }
@@ -52,11 +62,19 @@ enum UIInterfaceOrientation { UIInterfaceOrientationUnknown = 0,
 @end
 @interface UIViewController : NSObject
 @property(strong) UIView *view;
+@property UIInterfaceOrientation interfaceOrientation;
 @end
 @implementation UIViewController
 @end
+@interface UIWindowSceneGeometry : NSObject
+@property UIInterfaceOrientation interfaceOrientation;
+@end
+@implementation UIWindowSceneGeometry
+@end
 @interface UIWindowScene : NSObject
 @property UIInterfaceOrientation interfaceOrientation;
+@property(strong) UIScreen *screen;
+@property(strong) UIWindowSceneGeometry *effectiveGeometry;
 @end
 @implementation UIWindowScene
 @end
@@ -74,13 +92,15 @@ TEST = r'''
 int main() {
   @autoreleasepool {
     using namespace ipad_hardware;
-    setenv("SIMULATOR_MODEL_IDENTIFIER", "iPad12,1", 1);
+    setenv("SIMULATOR_MODEL_IDENTIFIER", "iPad17,2", 1);
     assert(GetIOSHardwareButtonLocation().edge == Edge::Unknown);
+    assert(cueLogReasons.back() == "no-window");
     testWindow = [UIWindow new];
     testWindow.screen = UIScreen.mainScreen;
     testWindow.screen.bounds = NSMakeRect(0, 0, 1024, 768);
     testWindow.screen.coordinateSpace = [NSObject new];
     testWindow.windowScene = [UIWindowScene new];
+    testWindow.windowScene.screen = testWindow.screen;
     testWindow.rootViewController = [UIViewController new];
     UIView *view = [UIView new];
     testWindow.rootViewController.view = view;
@@ -88,31 +108,54 @@ int main() {
     view.screenFrame = testWindow.screen.bounds;
     testWindow.windowScene.interfaceOrientation = UIInterfaceOrientationLandscapeRight;
     auto cue = GetIOSHardwareButtonLocation();
-    assert(cue.button == Button::Home && cue.edge == Edge::Right);
-    assert(cue.x == 1 && cue.y == 0.5F);
+    assert(cue.button == Button::Top && cue.edge == Edge::Left);
+    assert(cue.x == 0 && std::abs(cue.y - 0.070693F) < 0.00001F);
+    assert(cueLogReasons.back() == "visible");
+    const auto logCount = cueLogReasons.size();
+    GetIOSHardwareButtonLocation();
+    assert(cueLogReasons.size() == logCount); // No per-frame log spam.
     testWindow.windowScene.interfaceOrientation = UIInterfaceOrientationLandscapeLeft;
     cue = GetIOSHardwareButtonLocation();
-    assert(cue.edge == Edge::Left && cue.x == 0);
+    assert(cue.edge == Edge::Right && cue.x == 1);
     testWindow.windowScene.interfaceOrientation = UIInterfaceOrientationPortrait;
-    assert(GetIOSHardwareButtonLocation().edge == Edge::Bottom);
-    testWindow.windowScene.interfaceOrientation = UIInterfaceOrientationPortraitUpsideDown;
     assert(GetIOSHardwareButtonLocation().edge == Edge::Top);
+    testWindow.windowScene.interfaceOrientation = UIInterfaceOrientationPortraitUpsideDown;
+    assert(GetIOSHardwareButtonLocation().edge == Edge::Bottom);
     testWindow.windowScene.interfaceOrientation = UIInterfaceOrientationUnknown;
     assert(GetIOSHardwareButtonLocation().edge == Edge::Unknown);
+    assert(cueLogReasons.back() == "unknown-orientation");
     testWindow.windowScene.interfaceOrientation = UIInterfaceOrientationLandscapeRight;
+
+    // SDL can host a full-screen window without adopting the UIScene lifecycle.
+    UIWindowScene *scene = testWindow.windowScene;
+    testWindow.windowScene = nil;
+    testWindow.rootViewController.interfaceOrientation = UIInterfaceOrientationLandscapeRight;
+    cue = GetIOSHardwareButtonLocation();
+    assert(cue.button == Button::Top && cue.edge == Edge::Left);
+    assert(std::abs(cue.y - 0.070693F) < 0.00001F);
+    testWindow.rootViewController.interfaceOrientation = UIInterfaceOrientationLandscapeLeft;
+    assert(GetIOSHardwareButtonLocation().edge == Edge::Right);
+    testWindow.rootViewController.interfaceOrientation = UIInterfaceOrientationUnknown;
+    assert(GetIOSHardwareButtonLocation().edge == Edge::Unknown);
+    testWindow.windowScene = scene;
+    // A valid scene remains authoritative over a stale controller orientation.
+    testWindow.rootViewController.interfaceOrientation = UIInterfaceOrientationLandscapeLeft;
+    assert(GetIOSHardwareButtonLocation().edge == Edge::Left);
 
     // The view's screen-space rectangle matters, not just its local size.
     view.screenFrame = NSMakeRect(512, 0, 512, 768);
     cue = GetIOSHardwareButtonLocation();
-    assert(cue.button == Button::Home && cue.edge == Edge::Unknown);
+    assert(cue.button == Button::Top && cue.edge == Edge::Unknown);
+    assert(cueLogReasons.back() == "partial-viewport");
     view.screenFrame = NSMakeRect(20, 20, 1024, 768);
     assert(GetIOSHardwareButtonLocation().edge == Edge::Unknown);
     view.screenFrame = NSMakeRect(0, 0, 1024, 740);
     assert(GetIOSHardwareButtonLocation().edge == Edge::Unknown);
     view.screenFrame = UIScreen.mainScreen.bounds;
-    assert(GetIOSHardwareButtonLocation().edge == Edge::Right);
+    assert(GetIOSHardwareButtonLocation().edge == Edge::Left);
     testWindow.screen = [UIScreen new]; // External screen
     assert(GetIOSHardwareButtonLocation().edge == Edge::Unknown);
+    assert(cueLogReasons.back() == "screen-mismatch");
     testWindow.screen = UIScreen.mainScreen;
     testWindow.rootViewController.view = nil;
     assert(GetIOSHardwareButtonLocation().edge == Edge::Unknown);
