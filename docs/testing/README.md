@@ -132,3 +132,21 @@ library, declare `asobmashow_test_build_targets(test_name target...)` in the
 catalog. Required CTest fixtures are included transitively in group builds.
 Tests in new CMake subdirectories need their own classification/finalization;
 the current catalog covers tests registered in the repository root directory.
+
+## Android system emoji
+
+After assembling an APK, run `scripts/android_emoji_verify.sh` with one connected
+arm64 Android device (or set `ANDROID_SERIAL`). An optional first argument selects
+the APK; it must match the current source headers. The runner uses that APK's Java
+and native libraries, including the phone's real system fonts, without installing
+anything or changing app data. It requires SDK/build tools 36, NDK 28.2.13676358,
+and JDK 17. `ANDROID_EMOJI_TEST_OUTPUT` can select the evidence directory.
+Set `ANDROID_SDK_ROOT` to the SDK actually in use; on this machine it is
+`/opt/homebrew/share/android-commandlinetools`.
+
+This checks native color and monochrome emoji, missing-glyph and memory limits,
+straight alpha, JNI worker attachment, built-in fallback pixels, and scalable and
+bitmap skin baselines. It saves the built-in text raster for visual review and
+removes its temporary device files. These device checks complement the host
+`text_view_font_lifetime_tests` and `skin_resource_catalog_tests`; desktop font
+fixtures alone cannot detect an Android system font changing to COLRv1.

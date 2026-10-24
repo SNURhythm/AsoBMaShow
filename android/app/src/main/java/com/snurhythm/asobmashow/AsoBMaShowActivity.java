@@ -482,6 +482,9 @@ public class AsoBMaShowActivity extends SDLActivity {
     @Override
     public void loadLibraries() {
         super.loadLibraries();
+        if (!AndroidTextRasterizer.initializeNative()) {
+            throw new IllegalStateException("Could not initialize Android text rendering");
+        }
         // SDL invokes this before starting its native application thread. Use
         // application context because c-ares retains the manager process-wide.
         ConnectivityManager connectivityManager = (ConnectivityManager)

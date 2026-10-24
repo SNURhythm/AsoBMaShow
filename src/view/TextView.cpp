@@ -2,6 +2,9 @@
 #include "TextAnimationTiming.h"
 #include "SdlTtfRuntime.h"
 #include "FontCacheSession.h"
+#if defined(__ANDROID__)
+#include "SystemTextRasterizer.h"
+#endif
 #include "../RAII.h"
 #include <bgfx/bgfx.h>
 #include <bgfx/platform.h>
@@ -110,6 +113,8 @@ std::vector<std::string> systemFontFallbackPaths() {
 #elif TARGET_OS_IOS || TARGET_OS_SIMULATOR
   // iOS system font files are not app-readable; CoreText fallback is used
   // instead when bundled SDL_ttf fonts cannot render a glyph.
+#elif TARGET_OS_ANDROID
+  // Android system fallback uses Canvas: SDL_ttf cannot render COLRv1 emoji.
 #elif defined(_WIN32)
   addUniquePath(paths, "C:/Windows/Fonts/segoeui.ttf");
   addUniquePath(paths, "C:/Windows/Fonts/malgun.ttf");
@@ -621,20 +626,28 @@ void TextView::includeFontMetrics(TTF_Font *loadedFont) {
   fontDescent = std::max(fontDescent, -TTF_GetFontDescent(loadedFont));
 }
 
-void TextView::includeIOSSystemFontMetrics() {
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  if (iosSystemFontMetricsIncluded) {
+void TextView::includeNativeSystemFontMetrics() {
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR || TARGET_OS_ANDROID
+  if (nativeSystemFontMetricsIncluded) {
     return;
   }
 
+#if TARGET_OS_ANDROID
+  text_runtime::SystemTextRasterizer rasterizer(fontRasterSize);
+  const auto measured = rasterizer.measure("Mg", 32U * 1024U * 1024U);
+  if (!measured) return;
+  struct { int height, ascent, descent; } metrics{
+      measured->height, measured->ascent, measured->height - measured->ascent};
+#else
   const IOSSystemTextMetrics metrics = GetIOSSystemTextMetrics(fontRasterSize);
-  iosSystemFontLineHeight = metrics.height;
-  iosSystemFontAscent = metrics.ascent;
-  iosSystemFontDescent = metrics.descent;
+#endif
+  nativeSystemFontLineHeight = metrics.height;
+  nativeSystemFontAscent = metrics.ascent;
+  nativeSystemFontDescent = metrics.descent;
   fontLineHeight = std::max(fontLineHeight, metrics.height);
   fontAscent = std::max(fontAscent, metrics.ascent);
   fontDescent = std::max(fontDescent, metrics.descent);
-  iosSystemFontMetricsIncluded = true;
+  nativeSystemFontMetricsIncluded = true;
 #endif
 }
 
@@ -663,54 +676,82 @@ TTF_Font *TextView::loadFallbackFontAt(size_t pathIndex, bool required) {
 }
 
 bool TextView::hasFontSource(const SelectedFont &source) const {
-  return source.font != nullptr || source.iosSystemFont;
+  return source.font != nullptr || source.nativeSystemFont;
 }
 
 bool TextView::sameFontSource(const SelectedFont &lhs,
                               const SelectedFont &rhs) const {
-  return lhs.font == rhs.font && lhs.iosSystemFont == rhs.iosSystemFont;
+  return lhs.font == rhs.font && lhs.nativeSystemFont == rhs.nativeSystemFont;
 }
 
 int TextView::measureFontSourceTextWidth(const SelectedFont &source,
                                          const std::string &utf8,
-                                         int *rasterHeight) {
+                                         int *rasterHeight, int *ascent,
+                                         int *offsetX, int *inkWidth) {
   if (rasterHeight != nullptr) *rasterHeight = 0;
-  if (utf8.empty()) {
-    return 0;
-  }
+  if (ascent != nullptr) *ascent = 0;
+  if (offsetX != nullptr) *offsetX = 0;
+  if (inkWidth != nullptr) *inkWidth = 0;
+  if (utf8.empty()) return 0;
 
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  if (source.iosSystemFont) {
-    includeIOSSystemFontMetrics();
-    if (rasterHeight != nullptr) *rasterHeight = iosSystemFontLineHeight;
-    return MeasureIOSSystemTextWidth(utf8, fontRasterSize);
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR || TARGET_OS_ANDROID
+  if (source.nativeSystemFont) {
+    includeNativeSystemFontMetrics();
+#if TARGET_OS_ANDROID
+    text_runtime::SystemTextRasterizer rasterizer(fontRasterSize);
+    const auto measured = rasterizer.measure(utf8, 32U * 1024U * 1024U);
+    if (!measured) return 0;
+    fontAscent = std::max(fontAscent, measured->ascent);
+    fontDescent = std::max(fontDescent, measured->height - measured->ascent);
+    if (rasterHeight != nullptr) *rasterHeight = measured->height;
+    if (ascent != nullptr) *ascent = measured->ascent;
+    if (offsetX != nullptr) *offsetX = measured->offsetX;
+    if (inkWidth != nullptr) *inkWidth = measured->width;
+    return measured->advance;
+#else
+    const int width = MeasureIOSSystemTextWidth(utf8, fontRasterSize);
+    if (rasterHeight != nullptr) *rasterHeight = nativeSystemFontLineHeight;
+    if (ascent != nullptr) *ascent = nativeSystemFontAscent;
+    if (inkWidth != nullptr) *inkWidth = width;
+    return width;
+#endif
   }
 #endif
 
   const RasterTextSize size = sizeUtf8(source.font, utf8);
   if (rasterHeight != nullptr) *rasterHeight = size.height;
-  return size.width;
-}
-
-int TextView::fontSourceAscent(const SelectedFont &source) {
-  text_runtime::OperationGuard operation;
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  if (source.iosSystemFont) {
-    includeIOSSystemFontMetrics();
-    return iosSystemFontAscent;
+  if (inkWidth != nullptr) *inkWidth = size.width;
+  if (ascent != nullptr && source.font != nullptr) {
+    text_runtime::OperationGuard operation;
+    *ascent = TTF_GetFontAscent(source.font);
   }
-#endif
-
-  return source.font == nullptr ? 0 : TTF_GetFontAscent(source.font);
+  return size.width;
 }
 
 SDL_Surface *TextView::renderFontSourceTextSurface(const SelectedFont &source,
                                                    const std::string &utf8) {
   text_runtime::OperationGuard operation;
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
-  if (source.iosSystemFont) {
-    includeIOSSystemFontMetrics();
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR || TARGET_OS_ANDROID
+  if (source.nativeSystemFont) {
+    includeNativeSystemFontMetrics();
+#if TARGET_OS_ANDROID
+    text_runtime::SystemTextRasterizer rasterizer(fontRasterSize);
+    const auto raster = rasterizer.text(utf8, {color.r, color.g, color.b, color.a},
+                                       32U * 1024U * 1024U);
+    if (!raster) return nullptr;
+    SurfacePtr surface(SDL_CreateSurface(raster->width, raster->height,
+                                         SDL_PIXELFORMAT_RGBA32));
+    if (!surface || !SDL_LockSurface(surface.get())) return nullptr;
+    for (int y = 0; y < raster->height; ++y) {
+      std::memcpy(static_cast<unsigned char *>(surface->pixels) + y * surface->pitch,
+                  raster->rgba.data() + static_cast<std::size_t>(y) * raster->width * 4U,
+                  static_cast<std::size_t>(raster->width) * 4U);
+    }
+    SDL_UnlockSurface(surface.get());
+    return surface.release();
+#else
     return RenderIOSSystemTextSurface(utf8, fontRasterSize, color);
+#endif
   }
 #endif
 
@@ -756,9 +797,9 @@ TextView::SelectedFont TextView::selectFont(Uint32 codepoint) {
     }
   }
 
-#if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+#if TARGET_OS_IOS || TARGET_OS_SIMULATOR || TARGET_OS_ANDROID
   SelectedFont source = {nullptr, true};
-  includeIOSSystemFontMetrics();
+  includeNativeSystemFontMetrics();
   fontSelectionCache[codepoint] = source;
   return source;
 #else
@@ -792,7 +833,9 @@ int TextView::measureTextWidth(const std::string &utf8) {
   return logicalLengthFor(measureRasterTextWidth(utf8));
 }
 
-int TextView::measureRasterTextWidth(const std::string &utf8, int *rasterHeight) {
+int TextView::measureRasterTextWidth(const std::string &utf8, int *rasterHeight,
+                                       int *leftPadding) {
+  if (leftPadding != nullptr) *leftPadding = 0;
   if (rasterHeight != nullptr) *rasterHeight = 0;
   if (utf8.empty() || fontFaces.empty()) {
     return 0;
@@ -802,17 +845,21 @@ int TextView::measureRasterTextWidth(const std::string &utf8, int *rasterHeight)
     *rasterHeight = rasterTextLineHeight();
   }
 
-  int totalWidth = 0;
+  int totalWidth = 0, inkLeft = 0, inkRight = 0;
   SelectedFont runSource;
   std::string runText;
   const auto measureRun = [&]() {
-    int runHeight = 0;
-    totalWidth += measureFontSourceTextWidth(runSource, runText, &runHeight);
+    int runHeight = 0, runAscent = 0, offsetX = 0, inkWidth = 0;
+    const int advance = measureFontSourceTextWidth(
+        runSource, runText, &runHeight, &runAscent, &offsetX, &inkWidth);
+    inkLeft = std::min(inkLeft, totalWidth + offsetX);
+    inkRight = std::max(inkRight, totalWidth + offsetX + inkWidth);
+    totalWidth += advance;
     if (rasterHeight != nullptr) {
       // Font-wide height/descent can exclude ink below the baseline. Match the
       // actual SDL_ttf run surface, including its baseline-alignment offset.
       *rasterHeight = std::max(*rasterHeight,
-          fontAscent - fontSourceAscent(runSource) + runHeight);
+          fontAscent - runAscent + runHeight);
     }
   };
   size_t index = 0;
@@ -841,7 +888,11 @@ int TextView::measureRasterTextWidth(const std::string &utf8, int *rasterHeight)
   if (!runText.empty()) {
     measureRun();
   }
-  return totalWidth;
+  if (rasterHeight != nullptr) {
+    *rasterHeight = std::max(*rasterHeight, rasterTextLineHeight());
+  }
+  if (leftPadding != nullptr) *leftPadding = -inkLeft;
+  return std::max(totalWidth, inkRight) - inkLeft;
 }
 
 void TextView::ensureFontsForText(const std::string &utf8) {
@@ -952,21 +1003,23 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
 
   ensureFontsForText(text);
 
-  TextLineMetrics metrics = {fontAscent, fontDescent, rasterTextLineHeight()};
-  if (metrics.height <= 0) {
+  if (rasterTextLineHeight() <= 0) {
     return nullptr;
   }
 
   const auto &lines =
       wrapWidth > 0 ? wrappedTextLines(wrapWidth) : wrappedTextLines(0);
   int width = 0;
-  int lineHeight = metrics.height;
+  int lineHeight = rasterTextLineHeight();
   for (const auto &line : lines) {
     int measuredHeight = 0;
     width = std::max(width, measureRasterTextWidth(line, &measuredHeight));
     lineHeight = std::max(lineHeight, measuredHeight);
   }
 
+  // Measuring native runs can discover ink outside the default font metrics.
+  const TextLineMetrics metrics = {fontAscent, fontDescent, rasterTextLineHeight()};
+  lineHeight = std::max(lineHeight, metrics.height);
   const int targetWidth = std::max(1, width);
   const int targetHeight =
       std::max(1, lineHeight * static_cast<int>(lines.size()));
@@ -1001,9 +1054,10 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
       runs.back().text += token.bytes;
     }
 
-    const int spareWidth = targetWidth - measureRasterTextWidth(line);
-    int x = align == TextAlign::CENTER ? spareWidth / 2
-            : align == TextAlign::RIGHT ? spareWidth : 0;
+    int leftPadding = 0;
+    const int spareWidth = targetWidth - measureRasterTextWidth(line, nullptr, &leftPadding);
+    int x = leftPadding + (align == TextAlign::CENTER ? spareWidth / 2
+                           : align == TextAlign::RIGHT ? spareWidth : 0);
     const int lineTop = lineHeight * static_cast<int>(lineIndex);
     for (const auto &run : runs) {
       if (!hasFontSource(run.source) || run.text.empty()) {
@@ -1017,11 +1071,14 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
       }
 
       SDL_SetSurfaceBlendMode(runSurface.get(), SDL_BLENDMODE_NONE);
-      SDL_Rect dst = {x,
-                      lineTop + metrics.ascent - fontSourceAscent(run.source),
+      int runAscent = 0, offsetX = 0;
+      const int advance = measureFontSourceTextWidth(
+          run.source, run.text, nullptr, &runAscent, &offsetX);
+      SDL_Rect dst = {x + offsetX,
+                      lineTop + metrics.ascent - runAscent,
                       runSurface->w, runSurface->h};
       SDL_BlitSurface(runSurface.get(), nullptr, surface.get(), &dst);
-      x += measureFontSourceTextWidth(run.source, run.text);
+      x += advance;
     }
   }
 
@@ -1173,6 +1230,7 @@ void TextView::updateTextMetrics(bool markDirty, int requestedWrapWidth) {
       rasterWidth = std::max(rasterWidth, measureRasterTextWidth(line, &measuredHeight));
       lineHeight = std::max(lineHeight, measuredHeight);
     }
+    lineHeight = std::max(lineHeight, rasterTextLineHeight());
     rasterHeight =
         lineHeight * static_cast<int>(std::max<std::size_t>(1, lines.size()));
   }

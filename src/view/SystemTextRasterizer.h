@@ -13,6 +13,7 @@ struct SystemTextRaster {
   int height = 0;
   int ascent = 0;
   int advance = 0;
+  int offsetX = 0; // Raster left edge relative to the pen; advance stays unchanged.
   std::vector<unsigned char> rgba;
 };
 
@@ -27,10 +28,15 @@ public:
   SystemTextRasterizer &operator=(const SystemTextRasterizer &) = delete;
   [[nodiscard]] std::optional<SystemTextRaster> colorGlyph(
       char32_t codepoint, std::size_t maximumBytes);
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__ANDROID__)
   [[nodiscard]] std::optional<SystemTextRaster> text(
       std::string_view utf8, std::array<unsigned char, 4> color,
       std::size_t maximumBytes);
+#endif
+#if defined(__ANDROID__)
+  // Same dimensions/baseline as text(), without allocating a bitmap.
+  [[nodiscard]] std::optional<SystemTextRaster> measure(
+      std::string_view utf8, std::size_t maximumBytes);
 #endif
 private:
   struct Impl;

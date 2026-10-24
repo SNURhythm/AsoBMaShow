@@ -12,6 +12,10 @@
 #if defined(__APPLE__)
 #include <CoreGraphics/CoreGraphics.h>
 #include <CoreText/CoreText.h>
+#elif defined(__ANDROID__)
+#include <jni.h>
+#include <atomic>
+#include <cstdint>
 #else
 #include <SDL3_ttf/SDL_ttf.h>
 #endif
@@ -122,6 +126,114 @@ struct SystemTextRasterizer::Impl {
     return result;
   }
 };
+#elif defined(__ANDROID__)
+namespace {
+struct AndroidTextBridge {
+  JavaVM *vm = nullptr;
+  jclass type = nullptr;
+  jmethodID rasterize = nullptr;
+  std::once_flag once;
+  std::atomic<bool> ready{false};
+};
+AndroidTextBridge androidTextBridge;
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_snurhythm_asobmashow_AndroidTextRasterizer_initializeNative(
+    JNIEnv *env, jclass type) {
+  try {
+    std::call_once(androidTextBridge.once, [&] {
+      auto method = env->GetStaticMethodID(type, "rasterize", "([BIIJZZ)[I");
+      if (env->ExceptionCheck()) { env->ExceptionClear(); return; }
+      JavaVM *vm = nullptr;
+      if (!method || env->GetJavaVM(&vm) != JNI_OK) return;
+      auto global = static_cast<jclass>(env->NewGlobalRef(type));
+      if (env->ExceptionCheck()) { env->ExceptionClear(); return; }
+      if (!global) return;
+      // Process lifetime, with no Activity reference. Initialize on the Java
+      // loading thread so worker threads never depend on FindClass loaders.
+      androidTextBridge.vm = vm;
+      androidTextBridge.type = global;
+      androidTextBridge.rasterize = method;
+      androidTextBridge.ready.store(true, std::memory_order_release);
+    });
+  } catch (...) { return JNI_FALSE; }
+  return androidTextBridge.ready.load(std::memory_order_acquire);
+}
+
+struct SystemTextRasterizer::Impl {
+  int pointSize;
+  explicit Impl(int size) : pointSize(size) {}
+
+  std::optional<SystemTextRaster> render(
+      std::string_view utf8, std::array<unsigned char, 4> color,
+      std::size_t maximumBytes, bool colorOnly, bool metricsOnly = false) {
+    if (utf8.empty() || utf8.size() > 65536 || maximumBytes < 4 ||
+        !androidTextBridge.ready.load(std::memory_order_acquire)) return std::nullopt;
+    maximumBytes = std::min(maximumBytes, std::size_t{32U * 1024U * 1024U});
+    JNIEnv *env = nullptr;
+    const auto status = androidTextBridge.vm->GetEnv(
+        reinterpret_cast<void **>(&env), JNI_VERSION_1_6);
+    bool attached = false;
+    if (status == JNI_EDETACHED) {
+      if (androidTextBridge.vm->AttachCurrentThread(&env, nullptr) != JNI_OK) return std::nullopt;
+      attached = true;
+    } else if (status != JNI_OK) return std::nullopt;
+    ScopeExit detach([&] { if (attached) androidTextBridge.vm->DetachCurrentThread(); });
+    if (env->PushLocalFrame(8) < 0) { env->ExceptionClear(); return std::nullopt; }
+    ScopeExit frame([&] { env->PopLocalFrame(nullptr); });
+    const auto failed = [&] {
+      if (!env->ExceptionCheck()) return false;
+      env->ExceptionClear();
+      return true;
+    };
+    auto input = env->NewByteArray(static_cast<jsize>(utf8.size()));
+    if (failed() || !input) return std::nullopt;
+    env->SetByteArrayRegion(input, 0, static_cast<jsize>(utf8.size()),
+                           reinterpret_cast<const jbyte *>(utf8.data()));
+    if (failed()) return std::nullopt;
+    const auto argb = (std::uint32_t(color[3]) << 24) |
+                      (std::uint32_t(color[0]) << 16) |
+                      (std::uint32_t(color[1]) << 8) | color[2];
+    auto output = static_cast<jintArray>(env->CallStaticObjectMethod(
+        androidTextBridge.type, androidTextBridge.rasterize, input,
+        static_cast<jint>(pointSize), static_cast<jint>(argb),
+        static_cast<jlong>(maximumBytes), static_cast<jboolean>(colorOnly),
+        static_cast<jboolean>(metricsOnly)));
+    if (failed() || !output) return std::nullopt;
+    const auto length = env->GetArrayLength(output);
+    if (length < 5) return std::nullopt;
+    jint header[5];
+    env->GetIntArrayRegion(output, 0, 5, header);
+    if (failed() || !fits(header[0], header[1], maximumBytes) ||
+        header[0] > 8192 || header[1] > 8192 || header[2] < 0 ||
+        header[2] > header[1] || header[3] < 0 || header[3] > header[0] ||
+        header[4] > 0 || header[4] < -header[0]) return std::nullopt;
+    const auto count = static_cast<std::size_t>(header[0]) * header[1];
+    if (static_cast<std::size_t>(length) != 5U + (metricsOnly ? 0U : count)) return std::nullopt;
+    SystemTextRaster result{.width = header[0], .height = header[1],
+                            .ascent = header[2], .advance = header[3], .offsetX = header[4]};
+    if (!metricsOnly) {
+      result.rgba.resize(count * 4U);
+      std::array<jint, 1024> pixels;
+      for (std::size_t offset = 0; offset < count; offset += pixels.size()) {
+        const auto batch = std::min(pixels.size(), count - offset);
+        env->GetIntArrayRegion(output, static_cast<jsize>(5U + offset),
+                               static_cast<jsize>(batch), pixels.data());
+        if (failed()) return std::nullopt;
+        for (std::size_t i = 0; i < batch; ++i) {
+          const auto pixel = static_cast<std::uint32_t>(pixels[i]);
+          const auto destination = (offset + i) * 4U;
+          result.rgba[destination] = (pixel >> 16) & 255;
+          result.rgba[destination + 1] = (pixel >> 8) & 255;
+          result.rgba[destination + 2] = pixel & 255;
+          result.rgba[destination + 3] = pixel >> 24;
+        }
+      }
+    }
+    return result;
+  }
+};
 #else
 struct SystemTextRasterizer::Impl {
   std::vector<TTF_Font *> fonts;
@@ -129,8 +241,6 @@ struct SystemTextRasterizer::Impl {
     OperationGuard operation;
 #if defined(_WIN32)
     const char *paths[]{"C:/Windows/Fonts/seguiemj.ttf"};
-#elif defined(__ANDROID__)
-    const char *paths[]{"/system/fonts/NotoColorEmoji.ttf"};
 #else
     const char *paths[]{"/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf",
                         "/usr/share/fonts/noto/NotoColorEmoji.ttf"};
@@ -175,7 +285,7 @@ struct SystemTextRasterizer::Impl {
 #endif
 
 SystemTextRasterizer::SystemTextRasterizer(int pointSize) : pointSize_(pointSize) {
-#if !defined(__APPLE__)
+#if !defined(__APPLE__) && !defined(__ANDROID__)
   if (pointSize > 0 && pointSize <= 8192) ownsTtfRuntime_ = acquire();
 #endif
 }
@@ -188,24 +298,32 @@ std::optional<SystemTextRaster> SystemTextRasterizer::colorGlyph(
     char32_t codepoint, std::size_t maximumBytes) {
   if (pointSize_ <= 0 || pointSize_ > 8192 || codepoint <= 0x7f || codepoint > 0x10ffff ||
       (codepoint >= 0xd800 && codepoint <= 0xdfff)) return std::nullopt;
-#if !defined(__APPLE__)
+#if !defined(__APPLE__) && !defined(__ANDROID__)
   if (!ownsTtfRuntime_) return std::nullopt;
 #endif
   if (!impl_) impl_ = std::make_unique<Impl>(pointSize_);
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__ANDROID__)
   return impl_->render(utf8For(codepoint), {255, 255, 255, 255}, maximumBytes, true);
 #else
   return impl_->render(codepoint, maximumBytes);
 #endif
 }
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__ANDROID__)
 std::optional<SystemTextRaster> SystemTextRasterizer::text(
     std::string_view utf8, std::array<unsigned char, 4> color,
     std::size_t maximumBytes) {
   if (pointSize_ <= 0 || pointSize_ > 8192) return std::nullopt;
   if (!impl_) impl_ = std::make_unique<Impl>(pointSize_);
   return impl_->render(utf8, color, maximumBytes, false);
+}
+#endif
+#if defined(__ANDROID__)
+std::optional<SystemTextRaster> SystemTextRasterizer::measure(
+    std::string_view utf8, std::size_t maximumBytes) {
+  if (pointSize_ <= 0 || pointSize_ > 8192) return std::nullopt;
+  if (!impl_) impl_ = std::make_unique<Impl>(pointSize_);
+  return impl_->render(utf8, {255, 255, 255, 255}, maximumBytes, false, true);
 }
 #endif
 } // namespace text_runtime

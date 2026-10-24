@@ -376,7 +376,8 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
         6, static_cast<int>(std::lround(missingHeight * 0.75)));
     const int missingStroke = std::max(1, missingHeight / 12);
     if (systemGlyph) {
-      maxX = systemGlyph->width;
+      minX = systemGlyph->offsetX;
+      maxX = minX + systemGlyph->width;
       maxY = systemGlyph->ascent;
       minY = maxY - systemGlyph->height;
       advance = systemGlyph->advance;
@@ -536,7 +537,7 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     const int selectedFaceAscent = systemGlyph ? primaryAscent
                                                : TTF_GetFontAscent(opened[faceIndex].font);
     if (systemGlyph && hasPixels) {
-      minX = alphaMinX;
+      minX = systemGlyph->offsetX + alphaMinX;
       maxY = systemGlyph->ascent - alphaMinY;
     }
     return GlyphBitmap{
@@ -980,6 +981,7 @@ SkinTextAtlasBuildResult buildSkinBitmapTextAtlas(
     }
     metrics.emplace(codepoint, SkinPreparedGlyphMetrics{
         .region = {.x = cursorX, .y = cursorY, .w = glyph.width, .h = glyph.height},
+        .bearingX = glyph.offsetX,
         .advance = glyph.advance,
         .layoutOffsetY = glyph.ascent - primaryBaseline - glyph.height,
         .page = firstSystemPage + systemPages.size() - 1,
