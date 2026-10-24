@@ -675,6 +675,16 @@ include(cmake/BgfxMetalReadback.cmake)
 asobmashow_fix_bgfx_metal()
 add_subdirectory(src)
 target_sources(main PRIVATE src/CourseIdentity.cpp)
+if(APPLE)
+    enable_language(Swift)
+    add_subdirectory(cmake/ReadmeTranslationApple)
+    if(TARGET readme_translation_apple_tests)
+        add_test(NAME readme_translation_apple_tests COMMAND readme_translation_apple_tests)
+    endif()
+    target_link_libraries(main PRIVATE asobmashow_readme_translation)
+    set_target_properties(main PROPERTIES LINKER_LANGUAGE CXX)
+endif()
+
 if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(ios_gyroscope_motion_adapter_tests
         tests/ios_gyroscope_motion_adapter_tests.cpp
@@ -5539,9 +5549,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             tests/gameplay_terminal_scene_extract.py src/scene/play/GamePlayScene.cpp
         VERBATIM
     )
+    add_executable(readme_translation_tests tests/readme_translation_tests.cpp src/library/ReadmeTranslation.cpp)
+    target_compile_features(readme_translation_tests PRIVATE cxx_std_20)
+    target_include_directories(readme_translation_tests PRIVATE src)
+    add_test(NAME readme_translation_tests COMMAND readme_translation_tests)
     add_executable(text_input_box_tests
         tests/text_input_box_tests.cpp
         src/scene/ChartReadmeModal.cpp
+        src/library/ReadmeTranslation.cpp
+        src/platform/ReadmeTranslationPlatform.cpp
         src/library/ChartReadme.cpp
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
@@ -5575,6 +5591,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         SDL_SetTextInputArea=TextInputBoxTest_SetTextInputArea
         TTF_GetStringSize=TextInputBoxTest_GetStringSize
     )
+    if(APPLE)
+        target_link_libraries(text_input_box_tests PRIVATE asobmashow_readme_translation)
+        set_target_properties(text_input_box_tests PROPERTIES LINKER_LANGUAGE CXX)
+    endif()
     target_link_libraries(text_input_box_tests PRIVATE
         ${COMMON_LIBS} bgfx yogacore
     )

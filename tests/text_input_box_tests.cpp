@@ -1,5 +1,6 @@
 #include "scene/play/GuidedAccessInstructionView.h"
 #include "scene/ChartReadmeModal.h"
+#include "rendering/ResponsiveUi.h"
 #include "StorageTestSupport.h"
 #include "view/RecyclerView.h"
 #include <thread>
@@ -1072,6 +1073,8 @@ extern "C" bool SDLCALL TextInputBoxTest_GetStringSize(
 }
 
 void testReadmeModalDisplaysAndCloses() {
+  const bool previousCompact = rendering::compactMenuCanvasActive;
+  rendering::compactMenuCanvasActive = true;
   storage_test::TempDirectory directory;
   directory.write("chart.bms");
   directory.write("readme.txt", "Artist notes\n한글 notes\n");
@@ -1088,6 +1091,13 @@ void testReadmeModalDisplaysAndCloses() {
     std::this_thread::yield();
   }
   expect(lines->size() >= 2 && lines->get(0) == "Artist notes", "readme reader displays decoded selected file");
+  auto *copy = dynamic_cast<Button *>(root.findViewByName("chartReadmeCopy"));
+  auto *translate = dynamic_cast<Button *>(root.findViewByName("chartReadmeTranslate"));
+  expect(copy && copy->isEnabled(), "loaded readme enables copying");
+  expect(translate != nullptr, "readme exposes on-device translation action");
+  auto *encoding = root.findViewByName("chartReadmeEncoding");
+  expect(encoding && copy->getY() >= encoding->getY() + encoding->getHeight(),
+         "reader actions do not overlap larger mobile dropdown targets");
   modal->resize(280, 420);
   expect(lines->getWidth() <= 280 && lines->getHeight() > 0, "readme reader fits narrow viewport");
   SDL_Event escape{};
@@ -1100,6 +1110,7 @@ void testReadmeModalDisplaysAndCloses() {
   modal->hide();
   modal->update();
   expect(!modal->isVisible(), "late readme completion cannot reopen a closed modal");
+  rendering::compactMenuCanvasActive = previousCompact;
 }
 
 int main() {

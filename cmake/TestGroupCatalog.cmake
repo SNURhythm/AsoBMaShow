@@ -279,6 +279,8 @@ asobmashow_label_tests(area_library
     android_library_picker_startup_tests
     android_native_storage_paths_tests
     android_temporary_storage_tests
+    readme_translation_apple_tests
+    readme_translation_tests
     chart_readme_tests
     chart_library_operations_tests
     chart_library_scanner_tests

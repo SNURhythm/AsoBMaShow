@@ -346,7 +346,13 @@ decodeImageFile(const std::filesystem::path &path,
     return decoded;
   }
 #endif
-  if (!archive_file::isVirtualPath(path)) {
+  // Bundled Android images are APK assets, not files visible to std::ifstream.
+#if TARGET_OS_ANDROID
+  const bool bundledAsset = !path.is_absolute() && path.generic_string().starts_with("assets/");
+#else
+  constexpr bool bundledAsset = false;
+#endif
+  if (!archive_file::isVirtualPath(path) && !bundledAsset) {
 #if !TARGET_OS_WINDOWS
     std::error_code statusError;
     const auto status = std::filesystem::status(path, statusError);

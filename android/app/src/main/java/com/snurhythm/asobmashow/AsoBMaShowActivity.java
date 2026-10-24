@@ -74,6 +74,18 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class AsoBMaShowActivity extends SDLActivity {
+    private ReadmeTranslator readmeTranslator;
+    public void translateReadme(long id, byte[] data, String target) {
+        runOnUiThread(() -> {
+            if (isDestroyed()) return;
+            if (readmeTranslator == null) readmeTranslator = new ReadmeTranslator(this);
+            readmeTranslator.start(id, data, target);
+        });
+    }
+    public void cancelReadmeTranslation(long id) {
+        runOnUiThread(() -> { if (readmeTranslator != null) readmeTranslator.cancel(id); });
+    }
+
     @Override
     protected SDLSurface createSDLSurface(Context context) {
         return new AsoBMaShowSurface(context);
@@ -395,6 +407,7 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     @Override
     protected void onDestroy() {
+        if (readmeTranslator != null) readmeTranslator.cancel(0);
         stopDocumentsLibraryRefresh();
         folderPickerRequests.destroy();
         cancelPendingChartImports();
