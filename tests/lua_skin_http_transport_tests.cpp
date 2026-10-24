@@ -632,8 +632,16 @@ void testRequestOptions() {
       std::array<unsigned char, 4>{0, 1, 2, 3}, {100, 64, 1, 1}, {172, 16, 1, 1},
       {192, 0, 2, 1}, {198, 18, 0, 1}, {198, 51, 100, 1}, {203, 0, 113, 1}, {224, 0, 0, 1}})
     expect(!LuaSkinHttpClient::isPublicAddress(address), "non-public IPv4 range denied");
-  const std::array<unsigned char, 4> publicV4{8, 8, 8, 8};
-  expect(LuaSkinHttpClient::isPublicAddress(publicV4), "public IPv4 accepted");
+  for (const std::array<unsigned char, 4> address : {
+      std::array<unsigned char, 4>{192, 0, 0, 0}, {192, 0, 0, 255},
+      {192, 0, 2, 0}, {192, 0, 2, 255}, {198, 51, 100, 0}, {198, 51, 100, 255},
+      {192, 168, 0, 0}, {192, 168, 255, 255}, {198, 18, 0, 0}, {198, 19, 255, 255}})
+    expect(!LuaSkinHttpClient::isPublicAddress(address), "reserved IPv4 prefix endpoints denied");
+  for (const std::array<unsigned char, 4> address : {
+      std::array<unsigned char, 4>{8, 8, 8, 8}, {192, 0, 1, 0}, {192, 0, 1, 255},
+      {192, 0, 3, 0}, {192, 0, 78, 17}, {198, 51, 99, 1}, {198, 51, 99, 255},
+      {198, 51, 101, 0}})
+    expect(LuaSkinHttpClient::isPublicAddress(address), "public IPv4 outside reserved prefixes accepted");
   std::array<unsigned char, 16> ipv6{0x20, 0x01, 0x48, 0x60};
   expect(LuaSkinHttpClient::isPublicAddress(ipv6), "global IPv6 accepted");
   ipv6[2] = 0x0d; ipv6[3] = 0xb8;
