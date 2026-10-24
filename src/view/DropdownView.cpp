@@ -57,12 +57,13 @@ void styleButton(Button *button, TextView *text, bool selected, bool enabled) {
   }
   button->setCornerRadius(app_theme::controlRadius());
   button->setStyledBorderWidth(1);
+  button->setSelected(selected);
   if (!enabled) {
     button->setThemedBackgroundColors(
         app_theme::panelSubtle, app_theme::panelSubtle, app_theme::panelSubtle);
-    button->setThemedBorderColors(app_theme::hairlineSubtle,
-                                  app_theme::hairlineSubtle,
-                                  app_theme::hairlineSubtle);
+    const View::ThemeColorProvider border =
+        selected ? app_theme::accentBorder : app_theme::hairlineSubtle;
+    button->setThemedBorderColors(border, border, border);
     text->setThemedColor(app_theme::textMuted);
     return;
   }

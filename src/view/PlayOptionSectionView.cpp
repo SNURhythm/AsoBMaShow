@@ -160,6 +160,11 @@ void PlayOptionSectionView::refresh(const std::string &selectedOption,
     options.push_back({.id = id, .label = id,
         .available = !callbacks.isOptionAllowed || callbacks.isOptionAllowed(id)});
   }
+  if (play_options::laneAssignNotationFromOption(normalized).has_value()) {
+    options.push_back({.id = normalized,
+        .label = play_options::formatPlayOptionLabel(normalized),
+        .available = false});
+  }
   optionChoice->refresh({.label = i18n::message("play_options.section.play_option.label"),
                          .selectedId = normalized, .options = std::move(options)});
 

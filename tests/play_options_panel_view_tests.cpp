@@ -742,6 +742,48 @@ void testLaneOrderDraftTracksAuthoritativeSelectionAndProfile() {
           "new profile clears draft even when lane configuration matches");
 }
 
+void testCustomLaneOrderRemainsVisibleInShuffleDropdown() {
+  PlayOptionsPanelState state{.defaultLaneOrder = "1234567", .laneOrderEnabled = true};
+  int changes = 0;
+  PlayOptionsPanelView *owner = nullptr;
+  PlayOptionsPanelView panel(
+      {.onPlayOptionSelected = [&](const std::string &id) {
+        state.playOption = id;
+        ++changes;
+        owner->refresh(state);
+      }}, {.width = 340.0f, .showLaneOrder = true}, nullptr);
+  owner = &panel;
+  auto &choice = panelChoice(panel, "play-option-choice");
+  auto &dropdown = choiceDropdown(choice);
+  for (const char *notation : {"7654321", "2345671"}) {
+    state.playOption = std::string("ASSIGN:") + notation;
+    panel.refresh(state);
+    panel.applyYogaLayout();
+    require(dropdown.triggerText->getText().ends_with(std::string(": ASSIGN ") + notation),
+            "shuffle trigger displays the actual custom lane assignment");
+    require(findInput(panel)->getText() == notation,
+            "custom shuffle label agrees with the lane-order editor");
+    click(*dropdown.triggerButton);
+    const auto current = std::ranges::find(dropdown.optionButtons, state.playOption,
+                                         &DropdownView::OptionButton::id);
+    require(current != dropdown.optionButtons.end() && current->button->isSelected() &&
+                !current->available,
+            "custom assignment remains visibly selected and read-only in the menu");
+    click(*current->button);
+    require(changes == 0 && choice.selectedId() == state.playOption,
+            "custom display entry cannot change the active assignment");
+    panel.closeDropdowns();
+    View::dispatchDeferredEventCallbacks();
+  }
+  choosePanelOption(panel, "play-option-choice", "MIRROR");
+  require(changes == 1 && state.playOption == "MIRROR" &&
+              dropdown.triggerText->getText().ends_with(": MIRROR"),
+          "a named shuffle replaces the custom assignment through one callback");
+  require(std::ranges::none_of(dropdown.current.options, [](const auto &option) {
+    return option.id.starts_with("ASSIGN:");
+  }), "custom display entries disappear after selecting a named shuffle");
+}
+
 void testScrollViewUsesPreciseWheelDeltaAndNaturalDirection() {
   ScrollView scroll(0, 0, 360, 200);
   auto *content = new View();
@@ -1546,6 +1588,7 @@ int main() {
   testPhoneOptionsReflowWithoutLosingSelection();
   testLaneCoverControlsAreAvailableInPlayOptions();
   testLaneOrderDraftTracksAuthoritativeSelectionAndProfile();
+  testCustomLaneOrderRemainsVisibleInShuffleDropdown();
   testPlayOptionsChoiceCallbacksLocksAndPopupClosure();
   testScrollViewUsesPreciseWheelDeltaAndNaturalDirection();
   testScrollViewTargetsWheelEventPosition();
