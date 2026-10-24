@@ -22,3 +22,8 @@ add_custom_command(
 add_executable(chart_viewer_lifecycle_tests ${chart_viewer_lifecycle_source})
 target_compile_features(chart_viewer_lifecycle_tests PRIVATE cxx_std_23)
 target_link_libraries(chart_viewer_lifecycle_tests PRIVATE Threads::Threads)
+
+add_executable(chart_source_tests tests/chart_source_tests.cpp src/bms_parser.cpp)
+target_include_directories(chart_source_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(chart_source_tests PRIVATE cxx_std_23)
+target_compile_definitions(chart_source_tests PRIVATE BMS_PARSER_VERBOSE=0)

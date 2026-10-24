@@ -2,6 +2,7 @@
 #include "AppTheme.h"
 #include "RecyclerView.h"
 #include "TextView.h"
+#include "TextRange.h"
 #include "../library/ChartReadme.h"
 #include "../library/DocumentLinks.h"
 #include <optional>
@@ -30,6 +31,17 @@ public:
       row->markers->setHeight(itemHeight);
       row->markers->clearChildren();
       if (index < 0 || index >= static_cast<int>(regions_.size())) return;
+      if (index < static_cast<int>(highlightRegions_.size())) {
+        for (const auto &region : highlightRegions_[index]) {
+          auto *highlight = new View();
+          highlight->setName("documentTextHighlight");
+          highlight->setPositionType(YGPositionTypeAbsolute);
+          highlight->setPosition(Edge::Left, region.left)->setPosition(Edge::Top, 0);
+          highlight->setSize(std::max(1.0f, region.right - region.left), measure_.lineHeight());
+          highlight->setThemedBackgroundColor([] { return app_theme::withAlpha(app_theme::amber(), 90); });
+          row->markers->addView(highlight);
+        }
+      }
       for (const auto &region : regions_[index]) {
         auto *underline = new View();
         underline->setName("documentLinkUnderline");
@@ -45,11 +57,33 @@ public:
     if (text != text_) {
       cancelPointerInput();
       text_ = std::move(text);
+      highlights_.clear();
+      highlightRegions_.clear();
       links_ = document_links::find(text_);
       width_ = -1;
     }
     if (resetScroll) { cancelPointerInput(); scrollOffset = 0; }
     reflow();
+    rebindVisibleItems();
+  }
+  void setHighlights(std::vector<text_range::Range> ranges, bool focusFirst = false) {
+    cancelPointerInput();
+    highlights_ = std::move(ranges);
+    std::erase_if(highlights_, [this](const auto &range) {
+      return range.begin >= range.end || range.end > text_.size();
+    });
+    std::sort(highlights_.begin(), highlights_.end(), [](const auto &a, const auto &b) {
+      return a.begin < b.begin;
+    });
+    rebuildHighlights();
+    if (focusFirst && !highlights_.empty() && !getItems().empty()) {
+      const auto &items = getItems();
+      const auto next = std::upper_bound(items.begin(), items.end(), highlights_.front().begin,
+          [](std::size_t offset, const auto &line) { return offset < line.offset; });
+      const auto index = next == items.begin() ? 0 : std::prev(next) - items.begin();
+      scrollOffset = std::clamp(static_cast<double>(index * itemHeight), 0.0,
+          static_cast<double>(std::max(0, size() * itemHeight - getContentHeight())));
+    }
     rebindVisibleItems();
   }
   void onLayout() override {
@@ -144,7 +178,7 @@ private:
       text->setDeferredTextureMaterialization(true);
       text->setThemedColor(app_theme::textPrimary);
       text->setOverflow(TextView::TextOverflow::Hidden);
-      for (View *child : {static_cast<View *>(text), markers}) {
+      for (View *child : {markers, static_cast<View *>(text)}) {
         child->setPositionType(YGPositionTypeAbsolute);
         child->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
         child->setWidthPercent(100);
@@ -162,6 +196,8 @@ private:
   std::string text_;
   std::vector<document_links::Link> links_;
   std::vector<std::vector<Region>> regions_;
+  std::vector<text_range::Range> highlights_;
+  std::vector<std::vector<Region>> highlightRegions_;
   std::optional<Press> press_;
   std::set<SDL_FingerID> activeTouches_;
   bool multiTouch_ = false;
@@ -174,6 +210,25 @@ private:
     for (const auto &region : regions_[row])
       if (x - getContentX() >= region.left && x - getContentX() < region.right) return region.link;
     return std::nullopt;
+  }
+  void rebuildHighlights() {
+    const auto &items = getItems();
+    highlightRegions_.clear();
+    highlightRegions_.resize(items.size());
+    std::size_t first = 0;
+    for (std::size_t row = 0; row < items.size(); ++row) {
+      const auto &line = items[row];
+      const auto end = line.offset + line.text.size();
+      while (first < highlights_.size() && highlights_[first].end <= line.offset) ++first;
+      for (auto i = first; i < highlights_.size() && highlights_[i].begin < end; ++i) {
+        const auto begin = std::max(line.offset, highlights_[i].begin) - line.offset;
+        const auto finish = std::min(end, highlights_[i].end) - line.offset;
+        if (finish <= begin) continue;
+        highlightRegions_[row].push_back({
+            static_cast<float>(measure_.measureTextWidth(line.text.substr(0, begin))),
+            static_cast<float>(measure_.measureTextWidth(line.text.substr(0, finish))), 0});
+      }
+    }
   }
   void reflow() {
     const int width = std::max(1, getVisibleItemWidth() - 4);
@@ -202,7 +257,9 @@ private:
       start = end;
       if (start < text_.size() && text_[start] == '\n') ++start;
     }
+    highlightRegions_.clear();
     setItems(std::move(items));
+    rebuildHighlights();
     scrollOffset = std::clamp(offset, 0.0,
         static_cast<double>(std::max(0, size() * itemHeight - getHeight())));
     rebindVisibleItems();

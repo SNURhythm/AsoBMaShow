@@ -8,6 +8,14 @@ inspect replay-backed timing analysis after play. Entry points live in the chart
 viewer, gameplay, results, and replay flows so the same section can be resumed
 without changing its chart-time meaning.
 
+The chart viewer's **View source** button opens the original chart text in a
+full-page, read-only overlay using the chart loader's encoding detection.
+**Highlight selection** marks data cells in the practice range and scrolls to
+the first match in source order. It uses the loaded chart's BPM, STOPs, measure
+lengths, and random choices, with an exclusive range end. Empty (`00`) cells
+remain eligible so selected rests can be inspected too. Close, Escape, or
+gamepad back returns to the viewer without moving practice markers.
+
 ## Code map
 
 - `src/practice/PracticeConfiguration.*`, `PracticeSession.*`, and
@@ -35,7 +43,9 @@ leave the shared jukebox untouched.
 Use `practice_configuration_tests`, `practice_session_tests`,
 `practice_rule_override_tests`, `practice_analytics_tests`,
 `practice_result_*_tests`, `gameplay_practice_*_tests`, and
-`chart_viewer_lifecycle_tests`.
+`chart_viewer_lifecycle_tests`. Source display and selection use
+`chart_source_tests` and the document-reader/overlay cases in
+`text_input_box_tests`.
 
 ## Related pages
 

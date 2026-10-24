@@ -4,6 +4,8 @@
 #include "ChartViewerScene.h"
 #include "ChartViewerNoteGeometry.h"
 #include "ChartListenStart.h"
+#include "ChartSourceDocument.h"
+#include "ChartSourceOverlay.h"
 
 #include "../ArchiveFile.h"
 #include "../ChartPlaybackDuration.h"
@@ -2414,6 +2416,7 @@ void ChartViewerScene::setPracticeLaunchRequest(
 }
 
 EventHandleResult ChartViewerScene::handleEvents(SDL_Event &event) {
+  if (sourceOverlay != nullptr && sourceOverlay->consumeEvent(event)) return {};
   if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
     goBack();
     return {};
@@ -2493,6 +2496,7 @@ void ChartViewerScene::update(float dt) {
     lastSafeRight = safe.right;
     rootLayout->setSize(rendering::window_width, rendering::window_height);
     rootLayout->applyYogaLayout();
+    if (sourceOverlay != nullptr) sourceOverlay->resize();
     if (randomDrawerRoot != nullptr) {
       randomDrawerRoot->setSize(rendering::window_width,
                                 rendering::window_height);
@@ -2532,6 +2536,7 @@ void ChartViewerScene::cleanupScene() {
   ghostReplaySummaries.clear();
   loadedGhostReplayId = kNoGhostReplayId;
   selectedGhostReplayIndex = -1;
+  sourceOverlay = nullptr;
   rootLayout = nullptr;
   canvasView = nullptr;
   titleText = nullptr;
@@ -2715,6 +2720,11 @@ void ChartViewerScene::initView() {
   selectionText->setHeight(42);
   toolbar->addView(selectionText);
 
+  auto *sourceButton = makeButton(i18n::tr("chart_viewer.source.view"), 140, 18);
+  sourceButton->setName("chartViewerSource");
+  sourceButton->setOnClickListener([this]() { showSource(); });
+  toolbar->addView(sourceButton);
+
   auto *listenButton = makeButton(i18n::tr("chart_viewer.listen.label"), 104, 19);
   listenButton->setOnClickListener([this]() { startListeningFromSelection(); });
   toolbar->addView(listenButton);
@@ -2808,6 +2818,23 @@ void ChartViewerScene::initView() {
   rebuildOptionsDrawer();
   rebuildRandomDrawer();
   rootLayout->addView(overlayPortal);
+  sourceOverlay = new ChartSourceOverlay();
+  rootLayout->addView(sourceOverlay);
+  rootLayout->applyYogaLayout();
+}
+
+void ChartViewerScene::showSource() {
+  if (sourceOverlay == nullptr || chart == nullptr || chartSourceBytes.empty()) {
+    if (statusText != nullptr)
+      statusText->setText(i18n::tr("chart_viewer.chart_unavailable.label"));
+    return;
+  }
+  auto text = chart_source::decode(chartSourceBytes);
+  auto ranges = chart_source::highlights(text, *chart,
+      practiceConfiguration.startMicros, practiceConfiguration.endMicros);
+  rootLayout->cancelPointerInput();
+  sourceOverlay->show(std::move(text), std::move(ranges),
+      std::string(i18n::tr("chart_viewer.source.view")) + " — " + fspath_to_utf8(record.meta.BmsPath.filename()));
   rootLayout->applyYogaLayout();
 }
 

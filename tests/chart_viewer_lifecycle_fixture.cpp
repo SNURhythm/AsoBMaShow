@@ -58,7 +58,7 @@ public:
   std::unique_ptr<int> practicePresetStore;
   int loadedGhostReplayId = -1, selectedGhostReplayIndex = -1;
   long long practiceChartEndMicros = 0;
-  View *rootLayout = nullptr, *canvasView = nullptr, *titleText = nullptr,
+  View *sourceOverlay = nullptr, *rootLayout = nullptr, *canvasView = nullptr, *titleText = nullptr,
        *subtitleText = nullptr, *statusText = nullptr, *randomSummaryText = nullptr,
        *zoomText = nullptr, *selectionText = nullptr, *listenPauseText = nullptr,
        *listenPauseButton = nullptr, *listenStopButton = nullptr, *ghostLoadButton = nullptr,

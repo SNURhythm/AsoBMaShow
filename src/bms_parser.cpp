@@ -3079,6 +3079,12 @@ std::optional<ChartScanResult> Parser::Scan(
   return result;
 }
 
+std::string Parser::DecodeText(const std::vector<unsigned char> &bytes) {
+  std::string content;
+  decodeBmsText(bytes, content);
+  return content;
+}
+
 Parser::Parser() : BpmTable{}, StopLengthTable{}, ScrollTable{}, SpeedTable{} {
   std::random_device seeder;
   Seed = seeder();

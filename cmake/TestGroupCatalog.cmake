@@ -123,6 +123,7 @@ asobmashow_label_tests(area_gameplay
     bounded_duration_graph_tests
     chart_viewer_lifecycle_tests
     chart_viewer_note_geometry_tests
+    chart_source_tests
     course_continuation_tests
     course_gameplay_session_builder_tests
     course_identity_tests

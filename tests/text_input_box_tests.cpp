@@ -1,5 +1,6 @@
 #include "scene/play/GuidedAccessInstructionView.h"
 #include "scene/ChartReadmeModal.h"
+#include "scene/ChartSourceOverlay.h"
 #include "view/LegalNoticeReader.h"
 #include "library/DocumentLinks.h"
 #include "library/ReadmeTranslation.h"
@@ -1233,6 +1234,100 @@ namespace platform_open {
 bool openExternalUrl(std::string_view, std::string &) { return true; }
 }
 
+void testChartSourceOverlayNavigation() {
+  View root(0, 0, 400, 300);
+  auto *overlay = new ChartSourceOverlay();
+  root.addView(overlay);
+  const std::string prefix(40, '\n');
+  overlay->show(prefix + "#00111:01020304\n" + std::string(40, '\n'),
+      {{prefix.size() + 7, prefix.size() + 11}}, "Chart source");
+  root.applyYogaLayout();
+  expect(overlay->getWidth() == 400 && overlay->getHeight() == 300,
+      "source overlay fills the viewer");
+  auto *reader = dynamic_cast<DocumentTextReader *>(root.findViewByName("chartSourceText"));
+  auto *highlight = dynamic_cast<Button *>(root.findViewByName("chartSourceHighlight"));
+  expect(reader && highlight, "source overlay exposes text and highlight action");
+  {
+    auto down = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_DOWN,
+        highlight->getX() + highlight->getWidth() / 2, highlight->getY() + highlight->getHeight() / 2);
+    auto up = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_UP,
+        highlight->getX() + highlight->getWidth() / 2, highlight->getY() + highlight->getHeight() / 2);
+    overlay->consumeEvent(down);
+    overlay->consumeEvent(up);
+  }
+  expect(reader->scrollOffset > 0, "selection action focuses the matching source data");
+  SDL_Event event{};
+  event.type = SDL_EVENT_KEY_DOWN;
+  event.key.key = SDLK_HOME;
+  expect(overlay->consumeEvent(event) && reader->scrollOffset == 0,
+      "source handles keyboard scrolling before chart shortcuts");
+  event.key.key = SDLK_ESCAPE;
+  expect(overlay->consumeEvent(event) && !overlay->getVisible(), "Escape closes only the source overlay");
+  event.key.repeat = true;
+  expect(overlay->consumeEvent(event), "held Escape cannot back out of the chart viewer");
+  event.type = SDL_EVENT_KEY_UP;
+  expect(overlay->consumeEvent(event), "source consumes its closing key release");
+  event.type = SDL_EVENT_KEY_DOWN;
+  event.key.key = SDLK_RIGHT;
+  expect(!overlay->consumeEvent(event), "closed source restores practice marker shortcuts");
+  overlay->show("#00011:01", {}, "Reopened");
+  root.applyYogaLayout();
+  {
+    auto down = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_DOWN,
+        highlight->getX() + highlight->getWidth() / 2, highlight->getY() + highlight->getHeight() / 2);
+    auto up = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_UP,
+        highlight->getX() + highlight->getWidth() / 2, highlight->getY() + highlight->getHeight() / 2);
+    overlay->consumeEvent(down);
+    overlay->consumeEvent(up);
+  }
+  expect(reader->scrollOffset == 0, "empty matches leave source readable");
+  event.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+  event.gbutton.button = SDL_GAMEPAD_BUTTON_EAST;
+  expect(overlay->consumeEvent(event) && !overlay->getVisible(), "gamepad back closes the overlay");
+  event.type = SDL_EVENT_GAMEPAD_BUTTON_UP;
+  expect(overlay->consumeEvent(event), "source consumes its closing gamepad release");
+}
+
+void testDocumentHighlightsWrapAndFocus() {
+  View root(0, 0, 300, 180);
+  auto *reader = new DocumentTextReader();
+  reader->setWidthPercent(100)->setHeight(180);
+  root.addView(reader);
+  const std::string prefix(40, '\n');
+  const std::string data(180, '1');
+  reader->setDocumentText(prefix + "#00011:" + data + "\nTail");
+  root.applyYogaLayout();
+  reader->setHighlights({{prefix.size() + 7, prefix.size() + 7 + data.size()}}, true);
+  expect(reader->scrollOffset > 0, "highlight focuses the first matched source row");
+  bool found = false;
+  for (int i = 0; i < reader->size(); ++i) {
+    if (auto *row = reader->getViewByIndex(i)) {
+      if (row->findViewByName("documentTextHighlight")) found = true;
+    }
+  }
+  expect(found, "visible source data has highlight geometry");
+  root.setWidth(180);
+  root.applyYogaLayout();
+  reader->setHighlights({{prefix.size() + 7, prefix.size() + 7 + data.size()}}, true);
+  int marked = 0;
+  for (int i = 0; i < reader->size(); ++i) {
+    if (auto *row = reader->getViewByIndex(i)) {
+      if (row->findViewByName("documentTextHighlight")) ++marked;
+    }
+  }
+  expect(marked > 1, "highlights span wrapped rows after resizing");
+  reader->setHighlights({}, true);
+  for (int i = 0; i < reader->size(); ++i) {
+    if (auto *row = reader->getViewByIndex(i))
+      expect(!row->findViewByName("documentTextHighlight"), "recycled rows clear old highlights");
+  }
+  reader->setHighlights({{prefix.size() + 7, prefix.size() + 9}}, true);
+  reader->setDocumentText("Other source");
+  expect(reader->scrollOffset == 0 &&
+      !reader->getViewByIndex(0)->findViewByName("documentTextHighlight"),
+      "new source clears old highlights and scroll");
+}
+
 void testDocumentLinksDoNotHijackScrolling() {
   const auto links = document_links::find("Text <https://example.com/a?q=1&x=2>. (https://example.org/wiki/A_(B)). javascript:evil www.example.net");
   expect(links.size() == 3 && links[0].url == "https://example.com/a?q=1&x=2" &&
@@ -1349,6 +1444,8 @@ int main() {
   init.resolution.height = 64;
   expect(bgfx::init(init), "headless bgfx initializes for text input tests");
 
+  testChartSourceOverlayNavigation();
+  testDocumentHighlightsWrapAndFocus();
   testDocumentLinksDoNotHijackScrolling();
   testLegalNoticeReaderReflowsAndResets();
   testReadmeModalDisplaysAndCloses();

@@ -9086,6 +9086,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         lane_cover_number_geometry_tests
         lane_cover_controls_tests
         chart_viewer_note_geometry_tests
+        chart_source_tests
         chart_viewer_lifecycle_tests
         gameplay_scroll_geometry_tests
         gameplay_chart_entity_render_budget_tests

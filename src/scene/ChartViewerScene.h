@@ -18,6 +18,7 @@
 
 class Button;
 class ChartCanvasView;
+class ChartSourceOverlay;
 class ReplaySummaryListItemView;
 class ResultRecordListView;
 class ScrollView;
@@ -102,6 +103,7 @@ private:
   std::unique_ptr<bms_parser::Chart> chart;
   std::vector<unsigned char> chartSourceBytes;
 
+  ChartSourceOverlay *sourceOverlay = nullptr;
   View *rootLayout = nullptr;
   ChartCanvasView *canvasView = nullptr;
   TextView *titleText = nullptr;
@@ -162,6 +164,7 @@ private:
   std::string viewerAssistOption = assist_options::kOff;
 
   void initView();
+  void showSource();
   void rebuildRandomDrawer();
   void showRandomDrawer();
   void hideRandomDrawer();
