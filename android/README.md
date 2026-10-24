@@ -287,8 +287,10 @@ For the native chart source reader, run the matching instrumentation APK with
 `adb shell am instrument -w -e mode native-document
 com.snurhythm.asobmashow.test/com.snurhythm.asobmashow.PlatformBoundaryInstrumentation`.
 This opens a temporary overlay with roughly one million UTF-16 units and checks
-initial scroll/caret position, Unicode copying, distant practice focus, bounded
-syntax colors, theme/resize behavior and selection preservation. It writes the
+initial scroll/caret position, focus requested before the first layout, Unicode
+copying, distant practice focus after manual scrolling/flings, bounded syntax
+colors, theme/resize behavior and selection preservation. Focus assertions also
+run across subsequent display frames to detect motion overriding the jump. It writes the
 fixture's selected text to the clipboard, removes its overlay, and does not add
 files to the chart library. Inspect the `result=PASS` output; `am instrument` can
 exit successfully even when the reported test result is `FAIL`.

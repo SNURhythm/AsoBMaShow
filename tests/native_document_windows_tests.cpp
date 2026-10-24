@@ -407,6 +407,10 @@ int main() {
   POINT scroll{};
   SendMessageW(edit, EM_GETSCROLLPOS, 0, reinterpret_cast<LPARAM>(&scroll));
   require(scroll.y > 0, "focus scrolls to the first practice match");
+  SendMessageW(edit, WM_VSCROLL, SB_TOP, 0);
+  onWorker([&] { surface->highlight({{last, last + 5}}, true); });
+  SendMessageW(edit, EM_GETSCROLLPOS, 0, reinterpret_cast<LPARAM>(&scroll));
+  require(scroll.y > 0, "highlight refocuses after native/manual scrolling");
   requireColor(static_cast<LONG>(text.find(L"#LAST")), bms_syntax::Kind::Directive);
   require(background(document, static_cast<LONG>(text.find(L"#FIRST"))) != RGB(255, 0, 0),
       "old practice ranges are cleared");

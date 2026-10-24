@@ -54,7 +54,7 @@ final class NativeDocumentView {
     private int activeSyntaxSpans;
     private int paintedBegin = -1, paintedEnd = -1;
     private int lastVisibleBegin = -1, lastVisibleEnd = -1;
-    private boolean syntaxPaintQueued, syntaxDirty;
+    private boolean syntaxPaintQueued, syntaxDirty, focusQueued;
     private final ViewTreeObserver.OnGlobalLayoutListener layoutListener = this::layout;
 
     private static native void requestDismiss(long id);
@@ -166,7 +166,7 @@ final class NativeDocumentView {
             params.leftMargin = marginLeft; params.topMargin = marginTop;
             scroller.setLayoutParams(params);
         }
-        focusFirstRange();
+        scheduleFocus();
         scheduleSyntaxPaint(false);
     }
 
@@ -309,7 +309,7 @@ final class NativeDocumentView {
             ranges = endpoints;
             paintRanges();
             focusOffset = focus && ranges.length >= 2 ? ranges[0] : -1;
-            focusFirstRange();
+            scheduleFocus();
         });
     }
 
@@ -325,12 +325,27 @@ final class NativeDocumentView {
         }
     }
 
+    private void scheduleFocus() {
+        if (focusOffset < 0 || focusQueued) return;
+        focusQueued = true;
+        // Global-layout callbacks run before TextView's initial caret reveal.
+        // Apply explicit focus after that traversal, or it can jump back to 0.
+        post(() -> {
+            focusQueued = false;
+            focusFirstRange();
+        });
+    }
+
     private void focusFirstRange() {
         if (focusOffset < 0 || text == null || text.isLayoutRequested() || scroller.isLayoutRequested()) return;
         Layout layout = text.getLayout();
         if (layout == null || scroller.getHeight() == 0) return;
         if (focusOffset <= text.length()) {
             int line = layout.getLineForOffset(focusOffset);
+            // Retire a user's fling before the explicit jump. scrollTo alone
+            // leaves ScrollView's animator running at its old coordinates.
+            scroller.fling(0);
+            scroller.computeScroll(); // Consume the zero-velocity final frame before positioning.
             scroller.scrollTo(0, layout.getLineTop(line) + text.getTotalPaddingTop());
         }
         focusOffset = -1;

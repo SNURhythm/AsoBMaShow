@@ -99,13 +99,25 @@ NSColor *nativeColor(std::uint32_t value) {
 @public
   std::weak_ptr<State> dismissState;
   std::function<void()> syntaxViewportChanged;
+  bool viewportUpdateQueued;
 }
 @end
 
 @implementation AsoDocumentTextView
 - (void)layoutSubviews {
   [super layoutSubviews];
-  if (syntaxViewportChanged) syntaxViewportChanged();
+  // Updating NSTextStorage here invalidates the layout that UIKit is still
+  // completing. Coalesce the work until after this layout transaction. The
+  // weak view and detached callback also make closing before delivery safe.
+  if (!syntaxViewportChanged || viewportUpdateQueued) return;
+  viewportUpdateQueued = true;
+  __weak AsoDocumentTextView *weakView = self;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    AsoDocumentTextView *view = weakView;
+    if (!view) return;
+    view->viewportUpdateQueued = false;
+    if (view->syntaxViewportChanged) view->syntaxViewportChanged();
+  });
 }
 - (NSArray<UIKeyCommand *> *)keyCommands {
   NSMutableArray<UIKeyCommand *> *commands = [[super keyCommands] mutableCopy];
@@ -262,7 +274,18 @@ public:
         container_ = [[AsoDocumentContainer alloc] initWithFrame:host.bounds];
         container_.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
         container_.backgroundColor = UIColor.clearColor;
-        AsoDocumentTextView *view = [[AsoDocumentTextView alloc] initWithFrame:CGRectZero];
+        // This backend uses NSLayoutManager. Choose TextKit 1 before attaching
+        // the view instead of switching engines during its first layout.
+        NSTextStorage *storage = [NSTextStorage new];
+        NSLayoutManager *layout = [NSLayoutManager new];
+        [storage addLayoutManager:layout];
+        NSTextContainer *textContainer = [[NSTextContainer alloc] initWithSize:
+            CGSizeMake(0, std::numeric_limits<CGFloat>::max())];
+        [layout addTextContainer:textContainer];
+        AsoDocumentTextView *view = [[AsoDocumentTextView alloc] initWithFrame:CGRectZero textContainer:textContainer];
+        // Explicit jumps use absolute line geometry. UIKit's noncontiguous
+        // estimates shift after scrolling and can move the target offscreen.
+        view.layoutManager.allowsNonContiguousLayout = NO;
         view.editable = NO; // Selectable read-only UITextView never opens a software keyboard.
         view.selectable = YES;
         view.scrollEnabled = YES;
@@ -307,7 +330,10 @@ public:
             selector:@selector(syntaxViewportChanged:) name:NSViewBoundsDidChangeNotification object:scroll.contentView];
 #endif
         view->dismissState = state_;
-        view->syntaxViewportChanged = [this] { paintSyntax(false); };
+        view->syntaxViewportChanged = [this] {
+          if (pendingFocus_) focusCharacter(*pendingFocus_);
+          paintSyntax(false);
+        };
         [host addSubview:container_];
         setFrame(frame);
         setAppearance(appearance);
@@ -337,6 +363,7 @@ public:
       [container_ resizeSubviewsWithOldSize:container_.bounds.size];
 #endif
       paintSyntax(false);
+      if (pendingFocus_) focusCharacter(*pendingFocus_);
     });
   }
 
@@ -374,6 +401,7 @@ public:
     const auto converted = utf16Ranges(text_, ranges);
     onDocumentMain([&] {
       highlights_ = converted;
+      pendingFocus_.reset();
       paintHighlights();
       if (focus && !highlights_.empty()) focusCharacter(highlights_.front().begin);
     });
@@ -381,6 +409,7 @@ public:
 
   void scroll(Scroll action) override {
     onDocumentMain([&] {
+      pendingFocus_.reset();
       auto *view = container_.textView;
 #if TARGET_OS_IPHONE
       [view layoutIfNeeded];
@@ -483,9 +512,15 @@ private:
 
   void focusCharacter(std::size_t character) {
     auto *view = container_.textView;
+    if (view.bounds.size.width <= 0 || view.bounds.size.height <= 0) {
+      pendingFocus_ = character;
+      return;
+    }
+    pendingFocus_.reset();
     // Revealing an entire wrapped range can favor its end and UIKit may animate
     // that reveal. Anchor its first line explicitly after layout instead.
 #if TARGET_OS_IPHONE
+    [view setContentOffset:view.contentOffset animated:NO];
     [view layoutIfNeeded];
 #endif
     auto *layout = view.layoutManager;
@@ -527,6 +562,7 @@ private:
 #endif
   Appearance appearance_;
   std::vector<text_range::Range> highlights_;
+  std::optional<std::size_t> pendingFocus_;
   std::shared_ptr<const bms_syntax::Document> syntax_;
   NSArray *__strong syntaxColors_ = nil;
   bms_syntax::PaintWindow paintedSyntax_, requestedSyntax_;

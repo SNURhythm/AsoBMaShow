@@ -60,7 +60,7 @@ native_document::Appearance SelectableDocumentView::nativeAppearance() const {
   appearance.syntax = {rgba(app_theme::cyan()), rgba(light ? Color(112, 61, 165, 255) : Color(198, 154, 245, 255)),
       rgba(app_theme::amber()), rgba(app_theme::coral()), rgba(app_theme::lime()),
       rgba(app_theme::textSecondary()), rgba(light ? Color(50, 84, 128, 255) : Color(178, 198, 229, 255)),
-      rgba(app_theme::textMuted())};
+      rgba(light ? Color(218, 222, 228, 255) : Color(55, 63, 77, 255))};
   return appearance;
 }
 void SelectableDocumentView::onLayout() {

@@ -21,7 +21,7 @@ struct Appearance {
   float fontSize = 16;
   std::array<std::uint32_t, bms_syntax::kindCount> syntax = {
       0x70d6ffff, 0xc69af5ff, 0xe6bb78ff, 0xffab82ff,
-      0x7bda92ff, 0x99a7bbff, 0xb2c6e5ff, 0x8792a3ff};
+      0x7bda92ff, 0x99a7bbff, 0xb2c6e5ff, 0x373f4dff};
 };
 enum class Scroll { LineUp, LineDown, PageUp, PageDown, Start, End };
 struct State {

@@ -141,7 +141,7 @@ int main(int argc, char **argv) {
         atCharacterIndex:data + 2 effectiveRange:&emptyRun] colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
     require(emptyRun.location == data + 2 && emptyRun.length == 6,
         "consecutive 00 cells share one native foreground run");
-    require(std::abs(emptyColor.redComponent - 0x87 / 255.0) < 0.01 &&
+    require(std::abs(emptyColor.redComponent - 0x37 / 255.0) < 0.01 &&
         ![syntaxColor(text, data) isEqual:syntaxColor(text, data + 2)], "empty cells use the muted palette");
     require(NSEqualRanges(text.selectedRange, NSMakeRange(7, 3)), "syntax setup preserves native selection");
     boundedSyntax(text);
@@ -210,6 +210,10 @@ int main(int argc, char **argv) {
       boundedSyntax(text);
     };
     checkJump();
+
+    [scroll.contentView scrollToPoint:NSMakePoint(0, 150)];
+    [scroll reflectScrolledClipView:scroll.contentView];
+    checkJump(); // Repeat after native/manual scrolling, not only our scroll API.
 
     [nativeWindow setContentSize:NSMakeSize(800, 600)];
     near(scroll.frame.size.width, 640, "native resize reapplies normalized width without worker update");

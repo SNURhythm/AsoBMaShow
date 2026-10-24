@@ -14,7 +14,8 @@ practice background attributes. Android transfers span triples once and releases
 the native copy; Windows maps CRLF offsets once on the worker. Windows paints
 disjoint visible row slices under a shared budget, so a long unwrapped row does
 not consume the budget with its hidden tail and leave shorter visible rows plain.
-Empty `00` data cells are muted during viewport painting. Adjacent empty cells
+Empty `00` data cells are faint during viewport painting (dark RGB 55/63/77;
+light RGB 218/222/228). Adjacent empty cells
 and adjacent populated cells each coalesce into one run. This scans only the
 bounded visible data (plus one character at each clipped edge), keeps the global
 payload token intact, and shares the 4,096-run limit with other syntax colors.
@@ -68,8 +69,9 @@ restores them, theme/resize changes work, practice backgrounds remain independen
 native copying preserves Unicode, and a wrapped range jumps directly into view.
 
 Android JNI and Java compilation plus Java/C++ paint-window equivalence checks
-passed locally. UIKit device and simulator compile checks passed; iOS gestures
-and rendering performance still need device runtime checks. Windows native tests
+passed locally. UIKit device and simulator compile checks passed; the native
+simulator regression below also passed. Physical iOS gestures and rendering
+performance still need device runtime checks. Windows native tests
 require the Windows SDK/runtime unavailable on this machine; they are registered
 but were not compiled or run locally. Isolated Windows row-planning checks passed
 with sanitizers; native tests also cover mixed long/short rows and horizontal
@@ -108,3 +110,31 @@ and neighboring populated cells retain their color. This expanded fixture took
 disabled took 3,526 ms. These samples show no measurable startup increase from
 empty-cell coloring, while illustrating the native layout cost of more short
 lines. They are not directly comparable with the earlier header-only fixture.
+
+## Highlight focus after scrolling and early layout
+
+The UIKit simulator probe reproduced a missed jump after manually changing the
+native scroll position: the viewport was at y=133,788 while the target line was
+at y=105,520. UIKit's noncontiguous layout estimates changed as text was laid out.
+The backend now initializes TextKit 1 explicitly and uses contiguous geometry for
+absolute jumps. Syntax updates from `layoutSubviews` are coalesced onto the main
+queue after layout instead of mutating text storage inside that callback. Focus
+requested with a zero-size viewport is retained until the view can lay it out.
+A weak view reference and detached callback allow safe close before queued work.
+
+`scripts/ios_native_document_test.sh` exercises the production backend on an
+already booted simulator. Its wrapped-data fixture verifies early focus, manual
+and animated scrolling across display frames, resize, independent selection and
+backgrounds, bounded foreground runs, and queued close. It passed on the iOS 27.1
+simulator. The exact reported early-load crash was **not** reproduced locally;
+these checks validate the corrected layout paths, not a captured crash signature.
+Contiguous native layout has document-size-dependent costs; the existing bounds
+still apply to syntax attributes, not UIKit's own text layout.
+
+The Android device regression separately reproduced a live fling overriding an
+explicit jump (`1543 != 981027`). A zero-velocity fling plus consuming its final
+frame retires that animation before positioning. Early focus also waits until
+after the initial traversal so TextView's caret reveal cannot override it.
+The instrumentation passed on the connected Galaxy S20 FE with these cases
+in addition to its existing 1 MiB fixture (open/layout/color: 3,448 ms). AppKit's manual-scroll/refocus regression passes; the equivalent Windows
+assertion is added but remains unexecuted without a Windows SDK/runtime.
