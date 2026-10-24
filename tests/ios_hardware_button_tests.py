@@ -13,14 +13,23 @@ PREAMBLE = r'''
 #include "platform/IPadHardwareButton.h"
 #include <cassert>
 #include <cstdarg>
+#include <cstdio>
 #include <string>
 #include <utility>
 #include <vector>
 static std::vector<std::string> cueLogReasons;
+static std::vector<std::string> exportedCueLogs;
+namespace archive_file {
+void appendDebugLogLine(const std::string &message) {
+  exportedCueLogs.push_back(message);
+}
+}
 void SDL_Log(const char *format, ...) {
   va_list args;
   va_start(args, format);
-  cueLogReasons.emplace_back(va_arg(args, const char *));
+  const std::string message = va_arg(args, const char *);
+  const auto reasonStart = message.find(": ") + 2;
+  cueLogReasons.push_back(message.substr(reasonStart, message.find(';') - reasonStart));
   va_end(args);
 }
 // Geometry fixture runs synchronously on its simulated UIKit owner.
@@ -111,9 +120,13 @@ int main() {
     assert(cue.button == Button::Top && cue.edge == Edge::Left);
     assert(cue.x == 0 && std::abs(cue.y - 0.070693F) < 0.00001F);
     assert(cueLogReasons.back() == "visible");
+    assert(exportedCueLogs.back().find("iOS hardware button cue: visible;") == 0);
+    assert(exportedCueLogs.back().find("viewport=(0.00,0.00,1024.00,768.00)") != std::string::npos);
+    assert(exportedCueLogs.back().find("geometryOrientation=") != std::string::npos);
     const auto logCount = cueLogReasons.size();
     GetIOSHardwareButtonLocation();
     assert(cueLogReasons.size() == logCount); // No per-frame log spam.
+    assert(exportedCueLogs.size() == logCount);
     testWindow.windowScene.interfaceOrientation = UIInterfaceOrientationLandscapeLeft;
     cue = GetIOSHardwareButtonLocation();
     assert(cue.edge == Edge::Right && cue.x == 1);
@@ -147,6 +160,7 @@ int main() {
     cue = GetIOSHardwareButtonLocation();
     assert(cue.button == Button::Top && cue.edge == Edge::Unknown);
     assert(cueLogReasons.back() == "partial-viewport");
+    assert(exportedCueLogs.back().find("iOS hardware button cue: partial-viewport;") == 0);
     view.screenFrame = NSMakeRect(20, 20, 1024, 768);
     assert(GetIOSHardwareButtonLocation().edge == Edge::Unknown);
     view.screenFrame = NSMakeRect(0, 0, 1024, 740);

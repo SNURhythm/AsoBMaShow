@@ -69,7 +69,11 @@ visible until gameplay starts. This adds no time to the existing two-second
 startup delay. Interruption resets the cue to idle.
 Text stays upright in app coordinates; the edge marker changes axis with orientation.
 
-When investigating a missing cue, search device logs for `iOS hardware button cue`.
+When investigating a missing cue, return from the reminder to song selection and
+open **Parsing Logs**. Look for `iOS hardware button cue`, or choose **Export Log**
+to save/share `AsoBMaShow-performance-log.txt`. Do this in the same app session;
+the displayed log buffer is bounded and is not retained across app restarts.
+The diagnostic is also sent to the device console.
 The bridge reports its suppression reason, model, screen identity comparison,
 legacy and effective scene orientations, root view class, and measured viewport.
 It logs only when the reason or orientation changes. This distinguishes an

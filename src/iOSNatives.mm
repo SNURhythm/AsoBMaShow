@@ -1,6 +1,7 @@
 #include "view/SystemTextRasterizer.h"
 #include "iOSNatives.hpp"
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
+#include "ArchiveFile.h"
 #include "RAII.h"
 #include "bms_search/DownloadRetryWait.h"
 #include "audio/NativeMusicPlayer.h"
@@ -6052,7 +6053,9 @@ ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() {
     UIInterfaceOrientation geometryOrientation = UIInterfaceOrientationUnknown;
     if (@available(iOS 16.0, *))
       geometryOrientation = window.windowScene.effectiveGeometry.interfaceOrientation;
-    SDL_Log("iOS hardware button cue: %s; model=%s button=%d edge=%d "
+    char diagnostic[1024];
+    std::snprintf(diagnostic, sizeof(diagnostic),
+            "iOS hardware button cue: %s; model=%s button=%d edge=%d "
             "scene=%d sceneMain=%d orientation=%ld geometryOrientation=%ld root=%s "
             "viewport=(%.2f,%.2f,%.2f,%.2f) screen=(%.2f,%.2f,%.2f,%.2f)",
             reason, systemInfo.machine, static_cast<int>(model.button),
@@ -6062,6 +6065,8 @@ ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() {
             NSStringFromClass(window.rootViewController.view.class).UTF8String ?: "nil",
             viewport.origin.x, viewport.origin.y, viewport.size.width, viewport.size.height,
             screen.origin.x, screen.origin.y, screen.size.width, screen.size.height);
+    SDL_Log("%s", diagnostic);
+    archive_file::appendDebugLogLine(diagnostic);
   }
   return location;
 }
