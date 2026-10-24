@@ -74,6 +74,40 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 public class AsoBMaShowActivity extends SDLActivity {
+    // UI-thread fields; each JNI-owned document gates its own queued work.
+    NativeDocumentView nativeDocumentView;
+    boolean nativeDocumentDestroyed;
+    private boolean nativeDocumentBackKey;
+
+    public NativeDocumentView openNativeDocument(long id, byte[] text,
+            float x, float y, float width, float height,
+            int foreground, int background, int highlight, float fontSize) {
+        NativeDocumentView document = new NativeDocumentView(this, id);
+        document.open(text, x, y, width, height, foreground, background, highlight, fontSize);
+        return document;
+    }
+
+    View nativeDocumentSurface() { return mSurface; }
+
+    @Override public void onBackPressed() {
+        if (nativeDocumentView != null && nativeDocumentView.handleBack()) return;
+        super.onBackPressed();
+    }
+
+    @Override public boolean dispatchKeyEvent(android.view.KeyEvent event) {
+        int key = event.getKeyCode();
+        if ((key == android.view.KeyEvent.KEYCODE_BACK || key == android.view.KeyEvent.KEYCODE_ESCAPE)
+                && (nativeDocumentView != null || nativeDocumentBackKey)) {
+            if (event.getAction() == android.view.KeyEvent.ACTION_DOWN) nativeDocumentBackKey = true;
+            if (event.getAction() == android.view.KeyEvent.ACTION_UP) {
+                nativeDocumentBackKey = false;
+                if (!event.isCanceled() && nativeDocumentView != null) nativeDocumentView.handleBack();
+            }
+            return true;
+        }
+        return super.dispatchKeyEvent(event);
+    }
+
     private ReadmeTranslator readmeTranslator;
     public void translateReadme(long id, byte[] data, String target) {
         runOnUiThread(() -> {
@@ -407,6 +441,8 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     @Override
     protected void onDestroy() {
+        nativeDocumentDestroyed = true;
+        if (nativeDocumentView != null) nativeDocumentView.activityDestroyed();
         if (readmeTranslator != null) readmeTranslator.cancel(0);
         stopDocumentsLibraryRefresh();
         folderPickerRequests.destroy();

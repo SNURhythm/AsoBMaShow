@@ -558,6 +558,9 @@ asobmashow_label_tests(area_ui
     scrollbar_fade_tests
     text_animation_timing_tests
     text_input_box_tests
+    native_document_tests
+    native_document_apple_tests
+    native_document_windows_tests
     legal_notices_tests
     ui_presentation_schedule_tests
     ui_scale_tests

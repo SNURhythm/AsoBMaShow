@@ -1234,6 +1234,87 @@ namespace platform_open {
 bool openExternalUrl(std::string_view, std::string &) { return true; }
 }
 
+void testNativeSourceSurfaceLifetime() {
+  struct Calls {
+    int creates = 0, destroys = 0, highlights = 0, scrolls = 0, frames = 0;
+    native_document::Frame frame;
+    std::shared_ptr<native_document::State> state;
+  };
+  struct Surface final : native_document::Surface {
+    std::shared_ptr<Calls> calls;
+    explicit Surface(std::shared_ptr<Calls> value) : calls(std::move(value)) { calls->state = state_; }
+    ~Surface() override { ++calls->destroys; }
+    void setFrame(native_document::Frame value) override { calls->frame = value; ++calls->frames; }
+    void setAppearance(native_document::Appearance) override {}
+    void highlight(const std::vector<text_range::Range> &ranges, bool focus) override {
+      expect(focus && ranges.size() == 1 && ranges[0].begin == 7,
+          "native practice highlight receives original UTF-8 source range");
+      ++calls->highlights;
+    }
+    void scroll(native_document::Scroll) override { ++calls->scrolls; }
+  };
+  const auto calls = std::make_shared<Calls>();
+  {
+    View root(0, 0, 400, 300);
+    auto *overlay = new ChartSourceOverlay([&](const std::string &text,
+        native_document::Frame frame, native_document::Appearance) {
+      expect(text == "#00011:01", "native surface receives the decoded source unchanged");
+      ++calls->creates;
+      calls->frame = frame;
+      return std::make_unique<Surface>(calls);
+    });
+    root.addView(overlay);
+    overlay->show("#00011:01", {{7, 9}}, "Source");
+    root.applyYogaLayout();
+    auto *fallback = root.findViewByName("chartSourceText");
+    expect(fallback && !fallback->getVisible(), "native surface replaces custom text rendering");
+    auto *highlight = root.findViewByName("chartSourceHighlight");
+    auto down = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_DOWN,
+        highlight->getX() + 10, highlight->getY() + 10);
+    auto up = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_UP,
+        highlight->getX() + 10, highlight->getY() + 10);
+    overlay->consumeEvent(down);
+    overlay->consumeEvent(up);
+    expect(calls->highlights == 1, "toolbar highlights and focuses the native document");
+    SDL_Event key{};
+    key.type = SDL_EVENT_KEY_DOWN;
+    key.key.key = SDLK_DOWN;
+    expect(overlay->consumeEvent(key) && calls->scrolls == 0,
+        "native text owns keyboard selection and scrolling without duplicate SDL navigation");
+    key.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+    key.gbutton.button = SDL_GAMEPAD_BUTTON_DPAD_DOWN;
+    expect(overlay->consumeEvent(key) && calls->scrolls == 1,
+        "gamepad navigation reaches the native document");
+    const int oldFrames = calls->frames;
+    root.setSize(500, 400);
+    root.applyYogaLayout();
+    expect(calls->frames > oldFrames, "native surface follows source layout changes");
+    const auto oldState = calls->state;
+    const auto nativeEscapeTime = SDL_GetTicksNS();
+    oldState->requestDismiss();
+    overlay->updateNative();
+    expect(!overlay->getVisible() && calls->destroys == 1, "native Escape removes the surface");
+    key = {};
+    key.type = SDL_EVENT_KEY_DOWN;
+    key.key.key = SDLK_ESCAPE;
+    key.key.timestamp = nativeEscapeTime;
+    expect(overlay->consumeEvent(key), "delayed original native Escape cannot leave the chart viewer");
+    key.key.repeat = true;
+    expect(overlay->consumeEvent(key), "native dismissal swallows held Escape after focus returns");
+    key.key.repeat = false;
+    key.key.timestamp = std::numeric_limits<Uint64>::max();
+    expect(!overlay->consumeEvent(key), "a fresh Escape works even if native text consumed key-up");
+    overlay->show("#00011:01", {{7, 9}}, "Source");
+    oldState->requestDismiss();
+    overlay->updateNative();
+    expect(overlay->getVisible() && calls->creates == 2, "late dismissal cannot close a reopened document");
+    overlay->hide();
+    expect(calls->destroys == 2, "Close retires the native text surface");
+    overlay->show("#00011:01", {{7, 9}}, "Source");
+  }
+  expect(calls->destroys == 3, "scene destruction removes an open native surface");
+}
+
 void testChartSourceOverlayNavigation() {
   View root(0, 0, 400, 300);
   auto *overlay = new ChartSourceOverlay();
@@ -1462,6 +1543,7 @@ int main() {
   init.resolution.height = 64;
   expect(bgfx::init(init), "headless bgfx initializes for text input tests");
 
+  testNativeSourceSurfaceLifetime();
   testChartSourceOverlayNavigation();
   testDocumentHighlightsWrapAndFocus();
   testDocumentLinksDoNotHijackScrolling();

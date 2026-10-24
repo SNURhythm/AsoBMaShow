@@ -2,14 +2,14 @@
 
 #include "../rendering/UiSafeArea.h"
 #include "../view/BlockingOverlayView.h"
-#include "../view/DocumentTextReader.h"
+#include "../view/SelectableDocumentView.h"
 #include "../view/ModalViewHelpers.h"
 
 // The scene owns this full-page view; its source and range are a snapshot of
 // the loaded chart, so closing never changes practice markers or playback.
 class ChartSourceOverlay : public BlockingOverlayView {
 public:
-  ChartSourceOverlay() {
+  explicit ChartSourceOverlay(SelectableDocumentView::Factory factory = native_document::create) {
     setName("chartSourceOverlay");
     setPositionType(YGPositionTypeAbsolute);
     setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
@@ -33,7 +33,7 @@ public:
     modal_view::styleThemedActionButton(highlight, highlightLabel, true,
         app_theme::control, app_theme::controlHover, app_theme::controlPressed, app_theme::hairline);
     highlight->setOnClickListener([this] {
-      reader_->setHighlights(ranges_, true);
+      reader_->highlight(ranges_, true);
       status_->setVisible(ranges_.empty());
       applyYogaLayout();
     });
@@ -54,8 +54,8 @@ public:
     status_->setOverflow(TextView::TextOverflow::Hidden);
     status_->setVisible(false);
     addView(status_);
-    reader_ = new DocumentTextReader();
-    reader_->setName("chartSourceText");
+    reader_ = new SelectableDocumentView(std::move(factory));
+    reader_->setName("chartSourceDocument");
     reader_->setFlex(1)->setMinHeight(0)->setWidthPercent(100);
     addView(reader_);
   }
@@ -68,13 +68,20 @@ public:
     status_->setVisible(false);
     setVisible(true);
     resize();
-    reader_->setDocumentText(std::move(text));
-    reader_->setHighlights({});
+    reader_->open(std::move(text));
     applyYogaLayout();
   }
   void hide() {
     cancelPointerInput();
+    reader_->close();
     setVisible(false);
+  }
+  void updateNative() {
+    if (reader_->dismissRequested()) {
+      closingEscape_ = true;
+      nativeDismissalTime_ = SDL_GetTicksNS();
+      hide();
+    }
   }
   void resize() {
     const auto safe = rendering::uiSafeAreaInsets();
@@ -89,8 +96,14 @@ public:
   bool consumeEvent(SDL_Event &event) {
     if (closingEscape_ && (event.type == SDL_EVENT_KEY_UP || event.type == SDL_EVENT_KEY_DOWN) &&
         event.key.key == SDLK_ESCAPE) {
-      if (event.type == SDL_EVENT_KEY_UP) closingEscape_ = false;
-      return true;
+      if (event.type == SDL_EVENT_KEY_UP) { closingEscape_ = false; nativeDismissalTime_ = 0; return true; }
+      // Cocoa sends the same key to SDL and AppKit. Its original SDL keydown
+      // can reach the worker after native dismissal, even without repeat set.
+      if (event.key.repeat || (nativeDismissalTime_ && event.key.timestamp <= nativeDismissalTime_)) return true;
+      // Some native controls consume the release themselves. A fresh press
+      // must still work after focus returns to SDL.
+      closingEscape_ = false;
+      nativeDismissalTime_ = 0;
     }
     if (closingGamepad_ && event.type == SDL_EVENT_GAMEPAD_BUTTON_UP &&
         event.gbutton.button == SDL_GAMEPAD_BUTTON_EAST) {
@@ -110,35 +123,35 @@ public:
       return true;
     }
     if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
-      double offset = reader_->scrollOffset;
+      // Native text controls already handle keyboard selection, copying and
+      // navigation. SDL may report the same event; do not apply it twice.
+      if (event.type == SDL_EVENT_KEY_DOWN && reader_->hasNativeSurface()) return true;
       SDL_Keycode key = event.type == SDL_EVENT_KEY_DOWN ? event.key.key : SDLK_UNKNOWN;
       if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
         if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_UP) key = SDLK_UP;
         if (event.gbutton.button == SDL_GAMEPAD_BUTTON_DPAD_DOWN) key = SDLK_DOWN;
       }
+      using Scroll = native_document::Scroll;
       switch (key) {
-      case SDLK_UP: offset -= reader_->itemHeight; break;
-      case SDLK_DOWN: offset += reader_->itemHeight; break;
-      case SDLK_PAGEUP: offset -= reader_->getContentHeight(); break;
-      case SDLK_PAGEDOWN: offset += reader_->getContentHeight(); break;
-      case SDLK_HOME: offset = 0; break;
-      case SDLK_END: offset = reader_->size() * reader_->itemHeight; break;
+      case SDLK_UP: reader_->scroll(Scroll::LineUp); break;
+      case SDLK_DOWN: reader_->scroll(Scroll::LineDown); break;
+      case SDLK_PAGEUP: reader_->scroll(Scroll::PageUp); break;
+      case SDLK_PAGEDOWN: reader_->scroll(Scroll::PageDown); break;
+      case SDLK_HOME: reader_->scroll(Scroll::Start); break;
+      case SDLK_END: reader_->scroll(Scroll::End); break;
       default: return true;
       }
-      reader_->scrollOffset = std::clamp(offset, 0.0,
-          static_cast<double>(std::max(0, reader_->size() * reader_->itemHeight - reader_->getContentHeight())));
-      reader_->rebindVisibleItems();
-      // RecyclerView interprets arrows as row selection and would undo this scroll.
       return true;
     }
     (void)handleEvents(event);
     return true;
   }
 private:
-  DocumentTextReader *reader_ = nullptr;
+  SelectableDocumentView *reader_ = nullptr;
   TextView *title_ = nullptr;
   TextView *status_ = nullptr;
   std::vector<text_range::Range> ranges_;
   bool closingEscape_ = false;
+  Uint64 nativeDismissalTime_ = 0;
   bool closingGamepad_ = false;
 };

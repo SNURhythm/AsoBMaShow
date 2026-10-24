@@ -77,6 +77,8 @@ public:
   bool prepareForStorageMaintenance(std::string &error) override;
   void init() override;
   void onResume() override;
+  void onPause() override;
+  void onApplicationBackgroundChanged(bool background) override;
   EventHandleResult handleEvents(SDL_Event &event) override;
   void update(float dt) override;
   void renderScene() override;

@@ -10,6 +10,9 @@ without changing its chart-time meaning.
 
 The chart viewer's **View source** button opens the original chart text in a
 full-page, read-only overlay using the chart loader's encoding detection.
+On iOS, Android, macOS and Windows, the text uses the operating system's native
+selection and copy controls. Manual text selection stays independent of practice
+highlights; copying never modifies the source file.
 **Highlight selection** marks data cells in the practice range and scrolls to
 the first match in source order. It uses the loaded chart's BPM, STOPs, measure
 lengths, and random choices, with an exclusive range end. Empty (`00`) cells
@@ -45,7 +48,9 @@ Use `practice_configuration_tests`, `practice_session_tests`,
 `practice_result_*_tests`, `gameplay_practice_*_tests`, and
 `chart_viewer_lifecycle_tests`. Source display and selection use
 `chart_source_tests` and the document-reader/overlay cases in
-`text_input_box_tests`.
+`text_input_box_tests`. Native Unicode ranges use `native_document_tests`;
+`native_document_apple_tests` and `native_document_windows_tests` exercise their
+desktop text controls when built on the corresponding platform.
 
 ## Related pages
 

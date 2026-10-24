@@ -2410,6 +2410,14 @@ void ChartViewerScene::init() {
 
 void ChartViewerScene::onResume() { applyPendingPracticeLaunchRequest(); }
 
+void ChartViewerScene::onPause() {
+  if (sourceOverlay != nullptr) sourceOverlay->hide();
+}
+
+void ChartViewerScene::onApplicationBackgroundChanged(bool background) {
+  if (background) onPause();
+}
+
 void ChartViewerScene::setPracticeLaunchRequest(
     practice::LaunchRequest request) {
   pendingPracticeLaunchRequest = std::move(request);
@@ -2470,6 +2478,7 @@ bool ChartViewerScene::needsContinuousPresentation() const {
 
 void ChartViewerScene::update(float dt) {
   (void)dt;
+  if (sourceOverlay != nullptr) sourceOverlay->updateNative();
   if (listenActive && canvasView != nullptr) {
     const long long rawTime = context.jukebox.getTimeMicros();
     const long long displayTime =

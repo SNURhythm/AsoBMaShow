@@ -17,7 +17,8 @@ def main():
         "inline void cleanup()", "virtual ~Scene()", "void destroyOwnedViews()",
         "void clearPostedDeferred()")))
     fixture = fixture.replace("VIEWER_METHODS", "\n".join(extract(scene, signature) for signature in (
-        "ChartViewerScene::~ChartViewerScene()", "void ChartViewerScene::cleanupScene()")))
+        "ChartViewerScene::~ChartViewerScene()", "void ChartViewerScene::cleanupScene()",
+        "void ChartViewerScene::onPause()", "void ChartViewerScene::onApplicationBackgroundChanged(")))
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(fixture)
 
