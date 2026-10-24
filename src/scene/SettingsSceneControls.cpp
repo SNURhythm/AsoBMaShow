@@ -3,9 +3,10 @@
 #include "SettingsSceneShared.h"
 #include "../view/ScrollView.h"
 #include "../view/IconText.h"
+#include "../view/ActionButtonContent.h"
 #include "../view/OverlayPortal.h"
 #include "../view/DropdownView.h"
-#include "../view/CheckboxButtonContent.h"
+#include "../view/ToggleButtonContent.h"
 #include "play/StartLaneIndicatorGeometry.h"
 #include "../view/AppTheme.h"
 #include "../settings/BuiltInNoteEditing.h"
@@ -124,11 +125,11 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
       lastLayoutWidth = -1;
     };
     body->addView(makeGameplaySkinChoiceRow(
-        metrics, i18n::message("settings.skins.hide_empty_scratch.label"), true,
+        metrics, overlayPortal, i18n::message("settings.skins.hide_empty_scratch.label"), true,
         {{.label = i18n::message("settings.skins.judgement_hud.off.label"),
           .selected = !hide, .action = [apply] { apply(false); }},
          {.label = i18n::message("settings.skins.judgement_hud.on.label"),
-          .selected = hide, .action = [apply] { apply(true); }}}));
+          .selected = hide, .action = [apply] { apply(true); }}}, true));
   }
   if (followsOriginal) {
     body->addView(makeWrappedText(
@@ -145,9 +146,8 @@ void SettingsScene::appendBuiltInGameplayTraitSettings(
     auto *text = makeText(label, metrics.smallTextSize, app_theme::textPrimary(),
                           TextView::CENTER, TextView::MIDDLE);
     const int width = std::max(metrics.compact ? 96 : 116, text->textureWidth() + 32);
-    auto *button = builtInSkinTab == page
-        ? makeAccentButton(width, metrics.actionButtonHeight, text, app_theme::cyan())
-        : makeControlButton(width, metrics.actionButtonHeight, text);
+    auto *button = makeControlButton(width, metrics.actionButtonHeight, text);
+    tab_button::style(button, builtInSkinTab == page);
     button->setOnClickListener([this, page]() {
       if (builtInSkinTab == page) return;
       builtInSkinTab = page;
@@ -228,20 +228,20 @@ void SettingsScene::appendScratchlessModeSettings(
   scratchlessControls->addView(makeWrappedText(
       i18n::message("settings.scratchless.description"), metrics.smallTextSize,
       app_theme::textSecondary()));
-  auto *scratchlessMode = new DropdownView(
-      {.onOptionSelected = [this, keyMode](const std::string &id) {
+  auto *scratchlessMode = new ChoiceControlView(
+      [this, keyMode](const std::string &id) {
         context.settings.scratchlessForKeyMode(keyMode).mode =
             static_cast<AppSettings::ScratchlessMode>(std::stoi(id));
         persistSettings();
         lastLayoutWidth = -1;
-      }}, overlayPortal);
+        return true;
+      }, overlayPortal, metrics.smallTextSize, metrics.actionButtonHeight);
   scratchlessMode->refresh({
       .selectedId = std::to_string(static_cast<int>(policy.mode)),
       .options = {{.id = "0", .label = i18n::message("settings.scratchless.disabled.label")},
                   {.id = "1", .label = i18n::message("settings.scratchless.enabled.label")},
                   {.id = "2", .label = i18n::message("settings.scratchless.selected_tables.label")}},
-      .enabled = enabled,
-      .maxVisibleItems = 3});
+      .enabled = enabled});
   scratchlessMode->setWidthPercent(100)->setMinWidth(0);
   scratchlessMode->setHeight(metrics.actionButtonHeight);
   scratchlessControls->addView(scratchlessMode);
@@ -252,7 +252,7 @@ void SettingsScene::appendScratchlessModeSettings(
         metrics.bodyTextSize, app_theme::textSecondary()));
     for (const auto &table : difficultyTables) {
       if (table.sourceUrl.empty()) continue;
-      auto *content = new CheckboxButtonContent(table.name, metrics.bodyTextSize,
+      auto *content = new ToggleButtonContent(table.name, metrics.bodyTextSize,
                                                 metrics.bodyTextSize);
       content->setThemedColor(app_theme::textPrimary);
       content->setJustifyContent(YGJustifyFlexStart);
@@ -262,18 +262,16 @@ void SettingsScene::appendScratchlessModeSettings(
       content->setChecked(std::ranges::find(policy.tableUrls,
                                            table.sourceUrl) !=
                           policy.tableUrls.end());
-      auto *button = makeControlButton(0, metrics.actionButtonHeight,
-                                       makeText("", metrics.bodyTextSize,
-                                                app_theme::textPrimary()));
-      button->setContentView(content);
-      button->setWidthPercent(100)->setMinWidth(0);
+      auto *button = toggle_button::makeButton(content, metrics.actionButtonHeight);
       button->setEnabled(enabled);
-      button->setOnClickListener([this, keyMode, url = table.sourceUrl, content]() {
+      toggle_button::style(button, content->checked());
+      button->setOnClickListener([this, keyMode, url = table.sourceUrl, button, content]() {
         auto &urls = context.settings.scratchlessForKeyMode(keyMode).tableUrls;
         const auto found = std::ranges::find(urls, url);
         if (found == urls.end()) urls.push_back(url);
         else urls.erase(found);
         content->setChecked(std::ranges::find(urls, url) != urls.end());
+        toggle_button::style(button, content->checked());
         persistSettings();
       });
       scratchlessControls->addView(button);
@@ -494,9 +492,8 @@ void applySemanticButtonStyle(Button *button, TextView *text,
 }
 } // namespace
 
-void SettingsScene::styleVisibilityButton(Button *button, TextView *text, bool visible) {
-  applySemanticButtonStyle(button, text,
-      visible ? SettingsButtonTone::Success : SettingsButtonTone::Danger);
+void SettingsScene::styleVisibilityButton(Button *button, TextView *, bool visible) {
+  toggle_button::style(button, visible);
 }
 
 void SettingsScene::refreshSettingsText(bool syncInputs) {
@@ -766,62 +763,28 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
                            context.settings.inputKeysoundEnabled
                                ? SettingsButtonTone::Info
                                : SettingsButtonTone::Warning);
-  applySemanticButtonStyle(prepMetronomeModeButton, prepMetronomeModeText,
-                           context.settings.prepMetronomeEnabled
-                               ? SettingsButtonTone::Success
-                               : SettingsButtonTone::Info);
+  toggle_button::style(prepMetronomeModeButton, context.settings.prepMetronomeEnabled);
   applySemanticButtonStyle(notePriorityModeButton, notePriorityModeText,
                            context.settings.notePriorityMode ==
                                    AppSettings::NotePriorityMode::Lowest
                                ? SettingsButtonTone::Info
                                : SettingsButtonTone::Success);
-  applySemanticButtonStyle(
-      showInvisibleNotesModeButton, showInvisibleNotesModeText,
-      context.settings.showInvisibleNotes ? SettingsButtonTone::Success
-                                          : SettingsButtonTone::Info);
-  applySemanticButtonStyle(
-      markProcessedNotesModeButton, markProcessedNotesModeText,
-      context.settings.markProcessedNotes ? SettingsButtonTone::Success
-                                           : SettingsButtonTone::Info);
-  applySemanticButtonStyle(
-      ipadGestureReminderModeButton, ipadGestureReminderModeText,
-      context.settings.ipadGestureReminderEnabled ? SettingsButtonTone::Success
-                                                  : SettingsButtonTone::Info);
-  applySemanticButtonStyle(
-      startLaneIndicatorsModeButton, startLaneIndicatorsModeText,
-      context.settings.startLaneIndicatorsEnabled ? SettingsButtonTone::Success
-                                                  : SettingsButtonTone::Info);
-  applySemanticButtonStyle(
-      touchVisualizationModeButton, touchVisualizationModeText,
-      context.settings.touchVisualizationEnabled ? SettingsButtonTone::Success
-                                                 : SettingsButtonTone::Info);
-  applySemanticButtonStyle(
-      hispeedAutoAdjustModeButton, hispeedAutoAdjustModeText,
-      context.settings.hispeedAutoAdjust ? SettingsButtonTone::Success
-                                          : SettingsButtonTone::Info);
-  applySemanticButtonStyle(
-      archiveChartPreviewModeButton, archiveChartPreviewModeText,
-      context.settings.archiveChartPreviewEnabled ? SettingsButtonTone::Success
-                                                  : SettingsButtonTone::Danger);
-  applySemanticButtonStyle(
-      findBmsSkipUnarchivingModeButton, findBmsSkipUnarchivingModeText,
-      context.settings.findBmsSkipUnarchivingForNonSolidArchives
-          ? SettingsButtonTone::Success
-          : SettingsButtonTone::Info);
-  applySemanticButtonStyle(
-      judgementIndicatorModeButton, judgementIndicatorModeText,
-      context.settings.presentation().judgementIndicatorEnabled ? SettingsButtonTone::Success
-                                                 : SettingsButtonTone::Danger);
+  toggle_button::style(showInvisibleNotesModeButton, context.settings.showInvisibleNotes);
+  toggle_button::style(markProcessedNotesModeButton, context.settings.markProcessedNotes);
+  toggle_button::style(ipadGestureReminderModeButton, context.settings.ipadGestureReminderEnabled);
+  toggle_button::style(startLaneIndicatorsModeButton, context.settings.startLaneIndicatorsEnabled);
+  toggle_button::style(touchVisualizationModeButton, context.settings.touchVisualizationEnabled);
+  toggle_button::style(hispeedAutoAdjustModeButton, context.settings.hispeedAutoAdjust);
+  toggle_button::style(archiveChartPreviewModeButton, context.settings.archiveChartPreviewEnabled);
+  toggle_button::style(findBmsSkipUnarchivingModeButton, context.settings.findBmsSkipUnarchivingForNonSolidArchives);
+  toggle_button::style(judgementIndicatorModeButton, context.settings.presentation().judgementIndicatorEnabled);
   applySemanticButtonStyle(
       judgementIndicatorRenderModeButton, judgementIndicatorRenderModeText,
       context.settings.presentation().judgementIndicatorRenderMode ==
               AppSettings::JudgementIndicatorRenderMode::Hud2D
           ? SettingsButtonTone::Success
           : SettingsButtonTone::Info);
-  applySemanticButtonStyle(judgementCounterModeButton, judgementCounterModeText,
-                           context.settings.presentation().judgementCounterEnabled
-                               ? SettingsButtonTone::Success
-                               : SettingsButtonTone::Danger);
+  toggle_button::style(judgementCounterModeButton, context.settings.presentation().judgementCounterEnabled);
   SettingsButtonTone judgementCounterPositionTone = SettingsButtonTone::Neutral;
   if (context.settings.presentation().judgementCounterEnabled) {
     judgementCounterPositionTone =
@@ -865,29 +828,11 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
                                    AppSettings::GaugeBarPosition::World
                                ? SettingsButtonTone::Info
                                : SettingsButtonTone::Success);
-  applySemanticButtonStyle(bgaModeButton, bgaModeText,
-                           context.settings.bgaEnabled
-                               ? SettingsButtonTone::Success
-                               : SettingsButtonTone::Danger);
-  applySemanticButtonStyle(uiThemeModeButton, uiThemeModeText,
-                           context.settings.uiThemeMode ==
-                                   AppSettings::UiThemeMode::Dark
-                               ? SettingsButtonTone::Violet
-                               : SettingsButtonTone::Warning);
+  toggle_button::style(bgaModeButton, context.settings.bgaEnabled);
+  toggle_button::style(uiThemeModeButton, false);
 
-  auto applyTabStyle = [this](Button *button, TextView *text, SettingsTab tab) {
-    if (button == nullptr) {
-      return;
-    }
-    if (activeTab == tab) {
-      applySemanticButtonStyle(button, text, SettingsButtonTone::Primary);
-    } else {
-      applySemanticButtonStyle(button, text, SettingsButtonTone::Neutral);
-      button->setThemedBackgroundColors(
-          [] { return Color(0, 0, 0, 0); }, app_theme::controlHover,
-          app_theme::controlPressed);
-    }
-    button->setStyledBorderWidth(0);
+  auto applyTabStyle = [this](Button *button, TextView *, SettingsTab tab) {
+    tab_button::style(button, activeTab == tab, true);
   };
   applyTabStyle(profileTabButton, profileTabText, SettingsTab::Profile);
   applyTabStyle(timingTabButton, timingTabText, SettingsTab::Timing);

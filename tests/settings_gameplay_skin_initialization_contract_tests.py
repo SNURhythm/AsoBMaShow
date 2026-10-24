@@ -87,7 +87,7 @@ int main() {
         source = (ROOT / "src/scene/SettingsSceneControls.cpp").read_text()
         controls = extract(source, "void SettingsScene::appendScratchlessModeSettings(")
         mode_callback = extract(controls, "[this, keyMode](const std::string &id)")
-        table_callback = extract(controls, "[this, keyMode, url = table.sourceUrl, content]()")
+        table_callback = extract(controls, "[this, keyMode, url = table.sourceUrl, button, content]()")
         fixture = r'''
 #include "AppSettings.h"
 #include <algorithm>
@@ -96,9 +96,12 @@ int main() {
 #include <string>
 #include <vector>
 struct Checkbox {
-  bool checked = false;
-  void setChecked(bool value) { checked = value; }
+  bool value = false;
+  void setChecked(bool next) { value = next; }
+  bool checked() const { return value; }
 };
+struct Button {};
+namespace toggle_button { void style(Button *, bool) {} }
 struct Table { std::string sourceUrl; };
 struct SettingsScene {
   struct { AppSettings settings; } context;
@@ -109,6 +112,7 @@ struct SettingsScene {
     return MODE_CALLBACK;
   }
   std::function<void()> tableCallback(int keyMode, const Table &table, Checkbox *content) {
+    Button *button = nullptr;
     return TABLE_CALLBACK;
   }
 };
@@ -131,14 +135,14 @@ int main() {
   auto toggle7 = scene.tableCallback(-7, {original7.tableUrls.front()}, &remove7);
   add7();
   addExtra();
-  assert(add7To5.checked && extra5.checked);
+  assert(add7To5.checked() && extra5.checked());
   assert(scene.context.settings.scratchless5K.tableUrls.size() == 3);
   assert(scene.context.settings.scratchless7K.tableUrls == original7.tableUrls);
   toggle7();
-  assert(!remove7.checked && scene.context.settings.scratchless7K.tableUrls.empty());
+  assert(!remove7.checked() && scene.context.settings.scratchless7K.tableUrls.empty());
   assert(scene.context.settings.scratchless5K.tableUrls.size() == 3);
   add7();
-  assert(!add7To5.checked && extra5.checked);
+  assert(!add7To5.checked() && extra5.checked());
   assert(scene.context.settings.scratchless5K.tableUrls ==
          (std::vector<std::string>{original5.tableUrls.front(), "https://example.com/another.json"}));
   assert(scene.saves == 7);

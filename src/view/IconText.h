@@ -24,6 +24,27 @@ inline constexpr uint32_t kSettings = 0xf013;
 inline constexpr uint32_t kCollapse = 0xf053;
 inline constexpr uint32_t kExpand = 0xf054;
 inline constexpr uint32_t kHide = 0xf070;
+inline constexpr uint32_t kUser = 0xf007;
+inline constexpr uint32_t kKeyboard = 0xf11c;
+inline constexpr uint32_t kClock = 0xf017;
+inline constexpr uint32_t kRoad = 0xf018;
+inline constexpr uint32_t kDisplay = 0xf108;
+inline constexpr uint32_t kImage = 0xf03e;
+inline constexpr uint32_t kVolume = 0xf028;
+inline constexpr uint32_t kGlobe = 0xf0ac;
+inline constexpr uint32_t kRuleset = 0xf0e3;
+inline constexpr uint32_t kHeart = 0xf004;
+inline constexpr uint32_t kRotate = 0xf2f1;
+inline constexpr uint32_t kArrowDown = 0xf063;
+inline constexpr uint32_t kShuffle = 0xf074;
+inline constexpr uint32_t kGripLines = 0xf7a4;
+inline constexpr uint32_t kLifeRing = 0xf1cd;
+inline constexpr uint32_t kBars = 0xf0c9;
+inline constexpr uint32_t kGauge = 0xf3fd;
+inline constexpr uint32_t kPlay = 0xf04b;
+inline constexpr uint32_t kFlagCheckered = 0xf11e;
+inline constexpr uint32_t kFileLines = 0xf15c;
+inline constexpr uint32_t kFolderPlus = 0xf65e;
 
 inline std::string textForCodepoint(uint32_t codepoint) {
   std::string result;

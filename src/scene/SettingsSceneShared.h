@@ -8,6 +8,9 @@
 #include "../path.h"
 #include "../rendering/Color.h"
 #include "../view/Button.h"
+#include "../view/ChoiceControlView.h"
+#include "../view/ToggleButtonContent.h"
+#include "../view/TabButtonStyle.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #include "../view/AppTheme.h"
@@ -302,9 +305,15 @@ inline Button *makeButton(int width, int height, TextView *label,
                           const Color &hoverBackground,
                           const Color &pressedBackground,
                           const Color &normalBorder, const Color &hoverBorder,
-                          const Color &pressedBorder, int borderWidth = 1) {
-  const bool fitContent = width == kFitContentWidth;
-  auto *button = fitContent ? new Button() : new Button(0, 0, width, height);
+                          const Color &pressedBorder, int borderWidth = 1, bool cycle = false) {
+  // Cycling toggles share content sizing; the requested width is for ordinary buttons.
+  const bool fitContent = width == kFitContentWidth && !cycle;
+  Button *button = cycle
+      ? new toggle_button::CompactButton([label] {
+          return label->measureTextWidth(label->getText()) + cycle_button::kContentInset;
+        })
+      : fitContent ? new Button() : new Button(0, 0, width, height);
+  if (cycle) button->setHeight(height);
   label->setAlign(TextView::CENTER);
   label->setVAlign(TextView::MIDDLE);
   if (fitContent) {
@@ -317,7 +326,7 @@ inline Button *makeButton(int width, int height, TextView *label,
     button->setFlexShrink(0.0f);
     button->addView(label);
   } else {
-    button->setContentView(label);
+    button->setContentView(cycle ? cycle_button::makeContent(label) : label);
   }
   button->setCornerRadius(app_theme::controlRadius());
   button->setBackgroundColors(normalBackground, hoverBackground,
@@ -343,14 +352,15 @@ inline Button *makeButton(int width, int height, TextView *label,
                                   pressedBorderProvider);
   }
   button->setStyledBorderWidth(borderWidth);
+  if (auto *compact = dynamic_cast<toggle_button::CompactButton *>(button)) compact->refreshWidth();
   return button;
 }
 
-inline Button *makeControlButton(int width, int height, TextView *label) {
+inline Button *makeControlButton(int width, int height, TextView *label, bool cycle = false) {
   auto *button = makeButton(
       width, height, label, app_theme::control(), app_theme::controlHover(),
       app_theme::controlPressed(), app_theme::hairline(),
-      app_theme::accentBorder(), app_theme::accentBorderStrong());
+      app_theme::accentBorder(), app_theme::accentBorderStrong(), 1, cycle);
   button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
                                     app_theme::controlPressed);
   button->setThemedBorderColors(app_theme::hairline, app_theme::accentBorder,
@@ -359,10 +369,10 @@ inline Button *makeControlButton(int width, int height, TextView *label) {
 }
 
 inline Button *makeAccentButton(int width, int height, TextView *label,
-                                const Color &accent) {
+                                const Color &accent, bool cycle = false) {
   if (sameColor(accent, app_theme::cyan()) ||
       sameColor(accent, app_theme::lime())) {
-    auto *button = makeControlButton(width, height, label);
+    auto *button = makeControlButton(width, height, label, cycle);
     button->setThemedBackgroundColors(app_theme::action, app_theme::actionHover,
                                       app_theme::actionPressed);
     button->setThemedBorderColors(app_theme::action, app_theme::actionHover,
@@ -380,7 +390,7 @@ inline Button *makeAccentButton(int width, int height, TextView *label,
                             Color(accent.r, accent.g, accent.b, hoverAlpha),
                             Color(accent.r, accent.g, accent.b, pressedAlpha),
                             Color(accent.r, accent.g, accent.b, 178),
-                            Color(accent.r, accent.g, accent.b, 216), accent);
+                            Color(accent.r, accent.g, accent.b, 216), accent, 1, cycle);
   if (accentProvider) {
     auto withModeAlpha = [accentProvider](uint8_t lightAlpha,
                                           uint8_t darkAlpha) {
@@ -457,7 +467,7 @@ inline View *makeSteppedValueRow(const LayoutMetrics &metrics, TextInputBox *inp
   row->setJustifyContent(YGJustifyFlexStart);
   row->setAlignItems(YGAlignCenter);
   row->setGap(metrics.compact ? 8.0F : 10.0F);
-  input->setAlign(TextView::LEFT);
+  input->setAlign(TextView::CENTER);
   for (const int direction : {-1, 1}) {
     auto *step = makeStepButton(metrics, metrics.offsetButtonWidthSmall,
                                 (direction < 0 ? "-" : "+") + stepLabel);
@@ -490,11 +500,12 @@ inline View *makeCard(const LayoutMetrics &metrics, const i18n::Text &title,
   card->setPadding(Edge::All, static_cast<float>(metrics.cardPadding));
   if (metrics.flatSections) {
     card->setName("settingsSection");
+    card->setPadding(Edge::Left, 0)->setPadding(Edge::Right, 0);
     auto *rule = new View();
     rule->setPositionType(YGPositionTypeAbsolute);
     rule->setName("settingsSectionDivider");
-    rule->setPosition(Edge::Left, metrics.cardPadding)
-        ->setPosition(Edge::Right, metrics.cardPadding)
+    rule->setPosition(Edge::Left, 0)
+        ->setPosition(Edge::Right, 0)
         ->setPosition(Edge::Top, 0);
     rule->setHeight(1);
     rule->setThemedBackgroundColor(app_theme::hairline);
@@ -1024,9 +1035,28 @@ struct GameplaySkinChoiceButton {
 };
 
 void styleGameplaySkinChoiceButton(Button *button, bool selected);
-View *makeGameplaySkinChoiceRow(const LayoutMetrics &metrics,
+View *makeGameplaySkinChoiceRow(const LayoutMetrics &metrics, OverlayPortal *portal,
                                 const i18n::Text &label, bool enabled,
-                                std::vector<GameplaySkinChoiceButton> choices);
+                                std::vector<GameplaySkinChoiceButton> choices, bool oppositeStates = false,
+                                size_t activeChoice = 1);
+template <typename Enum, typename Format, typename Apply>
+ChoiceControlView *makeEnumChoice(const LayoutMetrics &metrics, OverlayPortal *portal,
+                                 Enum selected, std::initializer_list<Enum> values,
+                                 Format format, Apply apply) {
+  auto *control = new ChoiceControlView(
+      [apply](const std::string &id) { apply(static_cast<Enum>(std::stoi(id))); return true; },
+      portal, metrics.smallTextSize, metrics.actionButtonHeight);
+  std::vector<DropdownView::Option> options;
+  for (const auto value : values)
+    options.push_back({.id = std::to_string(static_cast<int>(value)), .label = format(value)});
+  if (std::find(values.begin(), values.end(), selected) == values.end())
+    options.push_back({.id = std::to_string(static_cast<int>(selected)),
+                       .label = format(selected), .available = false});
+  control->refresh({.selectedId = std::to_string(static_cast<int>(selected)),
+                    .options = std::move(options)});
+  return control;
+}
+
 int sanitizeOffsetComponent(std::string_view text, int fallback);
 
 } // namespace settings_scene

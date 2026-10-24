@@ -5588,6 +5588,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(play_options_panel_view_tests
         tests/play_options_panel_view_tests.cpp
+        src/scene/PracticePanelView.cpp
+        src/practice/PracticeConfiguration.cpp
+        src/scene/play/GameplayGaugeRules.cpp
+        src/bms_parser.cpp
         src/scene/ChartFilterSortPanelView.cpp
         src/rendering/Color.cpp
         src/rendering/common.cpp

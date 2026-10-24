@@ -224,6 +224,17 @@ contains examples and timing context if needed.
   `/Users/xf/vcpkg`), then `cmake --preset=debug`; the worktree gets its own
   `cmake-build-debug`.
 
+## Settings Choice Controls
+
+- Follow [Choosing a settings control](docs/features/settings-and-user-interface.md#choosing-a-settings-control)
+  when adding or revising settings: one cycling button for two opposing states (On/Off, Show/Hide, Light/Dark),
+  multiple buttons for distinct modes (including two choices such as Flick/Tap)
+  or a few stable choices (normally 3–4) when they fit
+  legibly, and a dropdown otherwise. Dynamic lists stay dropdowns even when
+  only two entries are available. Preserve labels, ordering, and meaning
+  across layouts, and bring revised controls into this convention rather
+  than copying existing inconsistencies.
+
 ## Formatting
 
 - Do not run a whole-file formatter (including `clang-format -i`) on this

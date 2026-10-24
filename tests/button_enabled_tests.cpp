@@ -490,6 +490,60 @@ void testDisabledSiblingDoesNotLeaveCoveredButtonGesturesStuck() {
 }
 } // namespace
 
+static void testSliderDistinguishesScrollDragAndTap() {
+  ScrollView scroll(0, 0, 300, 240);
+  auto *content = new View(0, 0, 300, 700);
+  int changes = 0;
+  auto *slider = new SnappedSlider([&](int) { ++changes; });
+  slider->setPosition(0, 120, YGPositionTypeAbsolute);
+  slider->setSize(300, 44);
+  slider->refresh({.value = 50});
+  content->addView(slider);
+  scroll.setContentView(content);
+  const auto send = [&](Uint32 type, int x, int y) {
+    auto event = fingerEvent(type, x, y);
+    scroll.handleEvents(event);
+  };
+  send(SDL_EVENT_FINGER_DOWN, 240, 140);
+  REQUIRE(slider->value() == 50 && changes == 0);
+  send(SDL_EVENT_FINGER_MOTION, 241, 138);
+  REQUIRE(slider->value() == 50 && scroll.getScrollOffset() == 0);
+  send(SDL_EVENT_FINGER_MOTION, 242, 100);
+  REQUIRE(std::abs(scroll.getScrollOffset() - 40) < 0.01F);
+  send(SDL_EVENT_FINGER_MOTION, 80, 90);
+  send(SDL_EVENT_FINGER_UP, 80, 90);
+  REQUIRE(slider->value() == 50 && changes == 0);
+  REQUIRE(std::abs(scroll.getScrollOffset() - 50) < 0.01F);
+
+  scroll.setScrollOffset(0);
+  send(SDL_EVENT_FINGER_DOWN, 150, 140);
+  send(SDL_EVENT_FINGER_MOTION, 152, 141);
+  send(SDL_EVENT_FINGER_MOTION, 240, 142);
+  REQUIRE(slider->value() > 50 && changes == 1);
+  send(SDL_EVENT_FINGER_MOTION, 260, 50);
+  send(SDL_EVENT_FINGER_UP, 260, 50);
+  REQUIRE(scroll.getScrollOffset() == 0);
+
+  const int beforeTap = changes;
+  send(SDL_EVENT_FINGER_DOWN, 80, 140);
+  REQUIRE(changes == beforeTap);
+  send(SDL_EVENT_FINGER_UP, 80, 140);
+  REQUIRE(slider->value() < 50 && changes == beforeTap + 1);
+  const int beforeCancel = changes;
+  send(SDL_EVENT_FINGER_DOWN, 240, 140);
+  send(SDL_EVENT_FINGER_CANCELED, 240, 140);
+  send(SDL_EVENT_FINGER_UP, 240, 140);
+  REQUIRE(changes == beforeCancel);
+
+  // SDL's mouse-to-touch emulation must not start a second slider gesture.
+  auto synthetic = fingerEvent(SDL_EVENT_FINGER_DOWN, 150, 140);
+  synthetic.tfinger.touchID = SDL_MOUSE_TOUCHID;
+  slider->handleEvents(synthetic);
+  synthetic.type = SDL_EVENT_FINGER_UP;
+  slider->handleEvents(synthetic);
+  REQUIRE(changes == beforeCancel);
+}
+
 static void testDisabledSiblingEndsCoveredScrollGestures() {
   for (bool touch : {false, true}) {
     View root(0, 0, 300, 300);
@@ -870,6 +924,7 @@ int main(int argc, char **argv) {
   const bool renderOnly = argc == 2 && std::string(argv[1]) == "--render-only";
   const bool metalOnly = argc == 2 && std::string(argv[1]) == "--metal-only";
   if (!renderOnly && !metalOnly) {
+    testSliderDistinguishesScrollDragAndTap();
     testProgrammaticWidgetChangesWakePresentationOnce();
     testThemedButtonChangesWakePresentationAndThenSettle();
     testNavigationMayDestroyDispatchingViews();

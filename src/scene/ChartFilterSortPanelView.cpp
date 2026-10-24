@@ -494,7 +494,6 @@ void ChartFilterPanelView::refreshDropdowns(const State &state) {
         .options = clearMarkOptions(),
         .open = state.clearMarkFilterVisible && state.clearMarkDropdownOpen,
         .enabled = state.clearMarkFilterVisible,
-        .maxVisibleItems = 6,
     });
   }
   setDisplayed(clearMarkLabel, state.clearMarkFilterVisible);
@@ -512,7 +511,6 @@ void ChartFilterPanelView::refreshDropdowns(const State &state) {
         .options = scoreRankOptions(),
         .open = scoreRankEnabled && state.scoreRankDropdownOpen,
         .enabled = scoreRankEnabled,
-        .maxVisibleItems = 6,
     });
   }
   if (scoreRankRow != nullptr) {
@@ -540,7 +538,6 @@ void ChartFilterPanelView::refreshDropdowns(const State &state) {
         .selectedId = optionalStringId(state.filters.difficultyMinLevel),
         .options = options,
         .open = showDifficulty && state.difficultyMinDropdownOpen,
-        .maxVisibleItems = 6,
     });
   }
   if (difficultyMaxDropdown != nullptr) {
@@ -549,7 +546,6 @@ void ChartFilterPanelView::refreshDropdowns(const State &state) {
         .selectedId = optionalStringId(state.filters.difficultyMaxLevel),
         .options = options,
         .open = showDifficulty && state.difficultyMaxDropdownOpen,
-        .maxVisibleItems = 6,
     });
   }
 }

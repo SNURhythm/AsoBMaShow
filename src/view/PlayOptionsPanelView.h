@@ -7,10 +7,10 @@
 
 #include <functional>
 #include <string>
-#include <vector>
 
 class Button;
-class CheckboxButtonContent;
+class ToggleButtonContent;
+class ChoiceControlView;
 class DropdownView;
 class OverlayPortal;
 class PlayOptionSectionView;
@@ -45,6 +45,7 @@ struct PlayOptionsPanelCallbacks {
   std::function<void(const std::string &)> onPlayOptionSelected;
   std::function<void(const std::string &)> onLaneOrderSubmitted;
   std::function<bool(const std::string &)> isPlayOptionAllowed;
+  std::function<bool(const std::string &)> canReselectPlayOption;
   std::function<void(const std::string &)> onLongNoteModeSelected;
   std::function<void(const std::string &)> onAssistOptionSelected;
   std::function<void(int)> onPlaybackRateSelected;
@@ -73,33 +74,24 @@ public:
   void closeDropdowns();
 
 private:
-  struct SelectionButton {
-    Button *button = nullptr;
-    TextView *text = nullptr;
-    std::string id;
-    GameplayRuleset ruleset = kDefaultGameplayRuleset;
-    GaugeType gaugeType = GaugeType::Normal;
-    GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;
-  };
-
   PlayOptionsPanelCallbacks callbacks;
   PlayOptionsPanelState state;
   PlayOptionSectionView *playOptionSection = nullptr;
   LaneCoverControlsView *laneCoverControls = nullptr;
-  std::vector<SelectionButton> rulesetButtons;
-  std::vector<SelectionButton> gaugeButtons;
-  std::vector<SelectionButton> gaugeAutoShiftButtons;
-  std::vector<SelectionButton> gaugeLowerBoundButtons;
+  ChoiceControlView *rulesetChoice = nullptr;
+  ChoiceControlView *gaugeChoice = nullptr;
+  ChoiceControlView *gaugeAutoShiftChoice = nullptr;
+  ChoiceControlView *gaugeLowerBoundChoice = nullptr;
   TextView *gaugeSectionLabel = nullptr;
   View *gaugeAutoShiftBoundsSection = nullptr;
-  std::vector<SelectionButton> longNoteModeButtons;
-  std::vector<SelectionButton> assistOptionButtons;
-  std::vector<SelectionButton> pacemakerButtons;
+  ChoiceControlView *longNoteModeChoice = nullptr;
+  ChoiceControlView *assistOptionChoice = nullptr;
+  ChoiceControlView *pacemakerChoice = nullptr;
   TextView *assistOptionLabel = nullptr;
   SnappedSlider *playbackRateSlider = nullptr;
   TextView *playbackRateText = nullptr;
   DropdownView *playbackModeDropdown = nullptr;
   bool playbackModeDropdownOpen = false;
   Button *clubModeButton = nullptr;
-  CheckboxButtonContent *clubModeButtonContent = nullptr;
+  ToggleButtonContent *clubModeButtonContent = nullptr;
 };

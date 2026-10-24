@@ -353,7 +353,7 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
       contentView->handleEvents(event);
       return false;
     }
-    if (!contentView->handleEvents(event)) {
+    if (!touchDragging && !contentView->handleEvents(event)) {
       touchCapturedByContent = true;
       return false;
     }
@@ -365,6 +365,9 @@ bool ScrollView::handleEventsImpl(SDL_Event &event) {
          std::fabs(uiY - pressedTouchUiY) >= kDragThresholdUi)) {
       touchDragging = true;
       cancelTouchClick = true;
+      // Once scrolling wins, children must not retain a pending tap or reclaim
+      // this gesture if its direction changes later.
+      contentView->cancelPointerInput();
     }
     if (touchDragging) {
       const float delta = lastTouchUiY - uiY;

@@ -3,11 +3,11 @@
 
 #include "../PlayOptionUtils.h"
 #include "Button.h"
+#include "ChoiceControlView.h"
 #include "TextInputBox.h"
 #include "TextView.h"
 #include "AppTheme.h"
 
-#include <algorithm>
 #include <utility>
 
 namespace {
@@ -43,75 +43,32 @@ Button *makeButton(const i18n::Text &label, int fontSize, TextView **textOut) {
   return button;
 }
 
-void styleButton(Button *button, TextView *text, bool selected, bool enabled) {
-  if (button == nullptr || text == nullptr) {
-    return;
-  }
-  button->setEnabled(enabled);
-  if (!enabled) {
-    button->setThemedBackgroundColors(
-        app_theme::panelSubtle, app_theme::panelSubtle, app_theme::panelSubtle);
-    button->setThemedBorderColors(app_theme::hairlineSubtle,
-                                  app_theme::hairlineSubtle,
-                                  app_theme::hairlineSubtle);
-    text->setThemedColor(app_theme::textMuted);
-    return;
-  }
-  if (selected) {
-    button->setThemedBackgroundColors(app_theme::primaryAction,
-                                      app_theme::primaryActionHover,
-                                      app_theme::primaryActionPressed);
-    button->setThemedBorderColors(app_theme::accentBorderStrong,
-                                  app_theme::accentBorderStrong,
-                                  app_theme::accentBorderStrong);
-    text->setThemedColor(
-        [] { return app_theme::textOn(app_theme::primaryAction()); });
-    return;
-  }
-  button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
-                                    app_theme::controlPressed);
-  button->setThemedBorderColors(app_theme::hairlineSubtle,
-                                app_theme::hairlineStrong,
-                                app_theme::accentBorder);
-  text->setThemedColor(app_theme::textPrimary);
-}
 } // namespace
 
 PlayOptionSectionView::PlayOptionSectionView(
-    PlayOptionSectionCallbacks callbacks, PlayOptionSectionLayout layout)
+    PlayOptionSectionCallbacks callbacks, PlayOptionSectionLayout layout,
+    OverlayPortal *overlayPortal)
     : callbacks(std::move(callbacks)) {
   setFlexDirection(FlexDirection::Column);
   setAlignItems(YGAlignStretch);
   setGap(10);
 
-  auto *heading = makeText(i18n::message("play_options.section.play_option.label"), 20);
-  heading->setThemedColor(app_theme::textSecondary);
-  heading->setAlign(TextView::LEFT);
-  heading->setHeight(28);
-  addView(heading);
-
-  const int columns = std::max(1, layout.columns);
-  View *row = nullptr;
-  for (size_t i = 0; i < play_options::kPlayOptions.size(); ++i) {
-    if (i % static_cast<size_t>(columns) == 0) {
-      row = new View();
-      row->setFlexDirection(FlexDirection::Row);
-      row->setAlignItems(YGAlignStretch);
-      row->setGap(10);
-      row->setHeight(layout.rowHeight);
-      addView(row);
-    }
-    TextView *text = nullptr;
-    const std::string option(play_options::kPlayOptions[i]);
-    auto *button = makeButton(option, layout.buttonFontSize, &text);
-    button->setOnClickListener([this, option]() {
-      if (this->callbacks.onOptionSelected) {
-        this->callbacks.onOptionSelected(option);
-      }
-    });
-    optionButtons.push_back({button, text, option});
-    row->addView(button);
+  if (layout.showHeading) {
+    auto *heading = makeText(i18n::message("play_options.section.play_option.label"), 20);
+    heading->setThemedColor(app_theme::textSecondary);
+    heading->setAlign(TextView::LEFT);
+    heading->setHeight(28);
+    addView(heading);
   }
+
+  optionChoice = new ChoiceControlView([this](const std::string &option) {
+    if (this->callbacks.isOptionAllowed && !this->callbacks.isOptionAllowed(option)) return false;
+    if (this->callbacks.onOptionSelected) this->callbacks.onOptionSelected(option);
+    return true;
+  }, overlayPortal, layout.buttonFontSize, layout.rowHeight);
+  optionChoice->setReselectionPredicate(this->callbacks.canReselectOption);
+  optionChoice->setName("play-option-choice");
+  addView(optionChoice);
 
   if (!layout.showLaneOrder) {
     return;
@@ -198,11 +155,19 @@ void PlayOptionSectionView::refresh(const std::string &selectedOption,
                                     bool laneOrderEnabled) {
   const std::string normalized =
       play_options::normalizePlayOption(selectedOption);
-  for (auto &item : optionButtons) {
-    const bool allowed =
-        !callbacks.isOptionAllowed || callbacks.isOptionAllowed(item.option);
-    styleButton(item.button, item.text, normalized == item.option, allowed);
+  std::vector<DropdownView::Option> options;
+  for (const auto option : play_options::kPlayOptions) {
+    const std::string id(option);
+    options.push_back({.id = id, .label = id,
+        .available = !callbacks.isOptionAllowed || callbacks.isOptionAllowed(id)});
   }
+  if (play_options::laneAssignNotationFromOption(normalized).has_value()) {
+    options.push_back({.id = normalized,
+        .label = play_options::formatPlayOptionLabel(normalized),
+        .available = false});
+  }
+  optionChoice->refresh({.label = i18n::message("play_options.section.play_option.label"),
+                         .selectedId = normalized, .options = std::move(options)});
 
   if (laneOrderInput != nullptr &&
       (!laneOrderSnapshotInitialized || lastLaneOrderOption != normalized ||
@@ -237,4 +202,8 @@ void PlayOptionSectionView::setLaneOrderMessage(i18n::Text message,
   laneOrderMessage->setLocalizedText(std::move(message));
   laneOrderMessage->setColor(
       app_theme::sdl(error ? app_theme::coral() : app_theme::textMuted()));
+}
+
+void PlayOptionSectionView::closeDropdowns() {
+  optionChoice->closeMenu();
 }

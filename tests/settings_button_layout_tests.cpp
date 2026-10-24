@@ -1,6 +1,8 @@
 #include "scene/SettingsSceneShared.h"
 #include "rendering/UniformCache.h"
 #include "view/ActionButtonContent.h"
+#include "view/IconButtonContent.h"
+#include "view/SelectorButtonContent.h"
 
 #include <cassert>
 #include <cmath>
@@ -117,6 +119,106 @@ void testCompactActionCaptionsFitLocalizedControls() {
     }
   }
   i18n::setLanguage(i18n::Language::English);
+}
+
+void testInlineIconsPreserveCompactLocalizedLabels() {
+  require(TTF_Init(), "icon font verification initializes SDL_ttf");
+  auto *font = TTF_OpenFont(ui_icons::kFontAwesomeSolidPath, 18);
+  require(font != nullptr, "bundled icon font opens");
+  for (const auto glyph : {ui_icons::kUser, ui_icons::kKeyboard, ui_icons::kClock,
+                          ui_icons::kRoad, ui_icons::kDisplay, ui_icons::kImage,
+                          ui_icons::kVolume, ui_icons::kGlobe, ui_icons::kRuleset,
+                          ui_icons::kHeart, ui_icons::kRotate, ui_icons::kArrowDown,
+                          ui_icons::kShuffle, ui_icons::kGripLines, ui_icons::kLifeRing,
+                          ui_icons::kBars, ui_icons::kGauge, ui_icons::kPlay,
+                          ui_icons::kFlagCheckered, ui_icons::kFileLines, ui_icons::kFolderPlus}) {
+    require(TTF_FontHasGlyph(font, glyph), "readability icons exist in the shipped font");
+  }
+  TTF_CloseFont(font);
+  TTF_Quit();
+  for (const auto language : {i18n::Language::English, i18n::Language::Japanese,
+                              i18n::Language::Korean}) {
+    i18n::setLanguage(language);
+    for (const int width : {150, 280}) {
+      Button button(0, 0, width, 58);
+      auto *caption = settings_scene::makeText(
+          i18n::message("settings.navigation.difficulty_tables.label"), 20,
+          app_theme::textPrimary());
+      auto *content = action_button::makeInlineContent(caption, ui_icons::kChartLine);
+      content->setPadding(Edge::Left, 14)->setPadding(Edge::Right, 14);
+      button.setContentView(content);
+      button.applyYogaLayout();
+      auto *icon = button.getContentView()->findViewByName("actionIcon");
+      require(icon && icon->getX() == 14 &&
+                  icon->getX() + icon->getWidth() + 10 <= caption->getX(),
+              "inline icons reserve a stable slot before the localized label");
+      requireFits(renderedTextBounds(*caption), caption->getX(), button.getY(),
+                  width - 14 - caption->getX(), 58);
+      requireFits(renderedTextBounds(*icon), button.getX(), button.getY(), width, 58);
+      require(button.getHeight() == 58, "icons do not increase compact navigation height");
+    }
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
+void testSelectorIconsKeepSpaceBesideLocalizedLabels() {
+  for (const auto language : {i18n::Language::English, i18n::Language::Japanese,
+                              i18n::Language::Korean}) {
+    i18n::setLanguage(language);
+    for (const auto key : {"menu.add_folder.label", "menu.manage_files.label"}) {
+      Button button(0, 0, 140, 56);
+      TextView *caption = nullptr;
+      button.setContentView(selector_button::makeContent(i18n::message(key), 18,
+                                                         &caption, ui_icons::kFolderPlus));
+      button.applyYogaLayout();
+      auto *icon = button.getContentView()->findViewByName("selectorButtonIcon");
+      require(icon->getWidth() == 18 && icon->getX() >= 0 &&
+                  icon->getX() + icon->getWidth() + 10 <= caption->getX(),
+              "localized file actions retain their icon slot and gap");
+      requireFits(renderedTextBounds(*icon), 0, 0, 140, 56);
+      requireFits(renderedTextBounds(*caption), caption->getX(), 0,
+                  140 - caption->getX(), 56);
+    }
+  }
+  i18n::setLanguage(i18n::Language::English);
+}
+
+void testTaskBadgeUpdatesWithoutMovingItsButton() {
+  Button button(0, 0, 56, 56);
+  TextView *badge = nullptr;
+  button.setContentView(icon_button::makeContent(ui_icons::kTasks, &badge));
+  int clicks = 0;
+  button.setOnClickListener([&] { ++clicks; });
+  button.applyYogaLayout();
+  auto *icon = button.getContentView()->findViewByName("selectorButtonIcon");
+  const int iconX = icon->getX(), iconY = icon->getY();
+  for (const int count : {0, 1, 12, 100, 0}) {
+    icon_button::setBadgeCount(badge, count);
+    button.applyYogaLayout();
+    require(badge->getVisible() == (count > 0), "task badge appears only for nonzero counts");
+    require(badge->getText() == (count > 99 ? "99+" : std::to_string(count)),
+            "task badge updates its count and bounds large labels");
+    require(button.getWidth() == 56 && button.getHeight() == 56 &&
+                icon->getX() == iconX && icon->getY() == iconY,
+            "task count updates do not move the icon or resize the hit target");
+    if (count > 0) {
+      requireFits(renderedTextBounds(*badge), badge->getX(), badge->getY(),
+                  badge->getWidth(), badge->getHeight());
+      require(badge->getX() >= 0 && badge->getY() >= 0 &&
+                  badge->getX() + badge->getWidth() <= 56 &&
+                  badge->getY() + badge->getHeight() <= 56,
+              "task badge stays inside the button bounds");
+      SDL_Event event{};
+      event.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+      event.button.button = SDL_BUTTON_LEFT;
+      event.button.x = badge->getX() + badge->getWidth() / 2;
+      event.button.y = badge->getY() + badge->getHeight() / 2;
+      button.handleEvents(event);
+      event.type = SDL_EVENT_MOUSE_BUTTON_UP;
+      button.handleEvents(event);
+    }
+  }
+  require(clicks == 3, "clicking the badge still opens the tasks button");
 }
 
 void testApplicationThemePreservesGameplayPalette() {
@@ -272,6 +374,9 @@ int main() {
   init.resolution.height = 64;
   assert(bgfx::init(init));
   testCompactActionCaptionsFitLocalizedControls();
+  testInlineIconsPreserveCompactLocalizedLabels();
+  testTaskBadgeUpdatesWithoutMovingItsButton();
+  testSelectorIconsKeepSpaceBesideLocalizedLabels();
   testFlatSettingsSectionUsesContentHeight();
   testFixedJapaneseButtonsShrinkOnlyTheirRenderedText();
   testNestedButtonLabelsFitButOrdinaryTextKeepsItsOverflow();

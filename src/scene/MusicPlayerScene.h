@@ -82,7 +82,7 @@ private:
   void buildVideoOverlay();
   View *makePanel(const i18n::Text &title, TextView **subtitleText = nullptr);
   Button *makeButton(const i18n::Text &label, int fontSize,
-                     TextView **textOut = nullptr);
+                     TextView **textOut = nullptr, bool compactToggle = false);
   Button *makeIconButton(uint32_t iconCodepoint, int fontSize,
                          TextView **textOut = nullptr);
   Button *makeDualIconButton(uint32_t leadingIconCodepoint,

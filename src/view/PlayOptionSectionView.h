@@ -5,9 +5,10 @@
 
 #include <functional>
 #include <string>
-#include <vector>
 
 class Button;
+class ChoiceControlView;
+class OverlayPortal;
 class TextInputBox;
 class TextView;
 
@@ -15,6 +16,7 @@ struct PlayOptionSectionCallbacks {
   std::function<void(const std::string &)> onOptionSelected;
   std::function<void(const std::string &)> onLaneOrderSubmitted;
   std::function<bool(const std::string &)> isOptionAllowed;
+  std::function<bool(const std::string &)> canReselectOption;
 };
 
 struct PlayOptionSectionLayout {
@@ -22,28 +24,25 @@ struct PlayOptionSectionLayout {
   float rowHeight = 58.0f;
   int buttonFontSize = 15;
   bool showLaneOrder = true;
+  bool showHeading = true;
 };
 
 class PlayOptionSectionView : public View {
 public:
   explicit PlayOptionSectionView(
       PlayOptionSectionCallbacks callbacks,
-      PlayOptionSectionLayout layout = PlayOptionSectionLayout{});
+      PlayOptionSectionLayout layout = PlayOptionSectionLayout{},
+      OverlayPortal *overlayPortal = nullptr);
 
   void refresh(const std::string &selectedOption,
                const std::string &defaultLaneOrder, bool laneOrderEnabled);
   void setLaneOrderMessage(i18n::Text message, bool error = false);
+  void closeDropdowns();
   void resetLaneOrderDraft() { laneOrderSnapshotInitialized = false; }
 
 private:
-  struct OptionButton {
-    Button *button = nullptr;
-    TextView *text = nullptr;
-    std::string option;
-  };
-
   PlayOptionSectionCallbacks callbacks;
-  std::vector<OptionButton> optionButtons;
+  ChoiceControlView *optionChoice = nullptr;
   TextInputBox *laneOrderInput = nullptr;
   bool laneOrderSnapshotInitialized = false;
   std::string lastLaneOrderOption;

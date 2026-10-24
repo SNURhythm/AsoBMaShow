@@ -6,7 +6,10 @@
 #include "../LongNoteModeUtils.h"
 #include "../scene/play/Pacemaker.h"
 #include "Button.h"
-#include "CheckboxButtonContent.h"
+#include "ActionButtonContent.h"
+#include "ToggleButtonContent.h"
+#include "ChoiceControlView.h"
+#include "ClearLampColors.h"
 #include "DropdownView.h"
 #include "OverlayPortal.h"
 #include "PlayOptionSectionView.h"
@@ -16,6 +19,7 @@
 #include "../rendering/ResponsiveUi.h"
 
 #include <algorithm>
+#include <array>
 #include <utility>
 
 namespace {
@@ -30,17 +34,20 @@ TextView *makeLabel(const i18n::Text &label) {
   return text;
 }
 
-View *makeSectionHeader(TextView *label) {
+View *makeSectionHeader(TextView *label, uint32_t glyph, bool separator = true) {
   auto *header = new View();
   header->setFlexDirection(FlexDirection::Column);
-  header->setPadding(Edge::Top, 10);
+  header->setPadding(Edge::Top, separator ? 10 : 0);
   auto *rule = new View();
   rule->setPositionType(YGPositionTypeAbsolute);
   rule->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
   rule->setWidthPercent(100)->setHeight(1);
   rule->setThemedBackgroundColor(app_theme::hairline);
+  rule->setVisible(separator);
   header->addView(rule);
-  header->addView(label);
+  auto *title = action_button::makeInlineContent(label, glyph);
+  title->setHeight(28);
+  header->addView(title);
   return header;
 }
 
@@ -56,62 +63,6 @@ View *makeRow(float height = 48.0f) {
   return row;
 }
 
-Button *makeButton(const i18n::Text &label, int fontSize, TextView **textOut) {
-  auto *button = new Button(0, 0, 0, rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 48);
-  button->setFlexGrow(1.0f);
-  button->setFlexBasis(rendering::compactMenuCanvasActive ? 120.0f : 0.0f);
-  button->setFlexShrink(1.0f);
-  button->setCornerRadius(app_theme::controlRadius());
-  button->setStyledBorderWidth(1);
-  button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
-                                    app_theme::controlPressed);
-  button->setThemedBorderColors(app_theme::hairlineSubtle,
-                                app_theme::hairlineStrong,
-                                app_theme::accentBorder);
-  auto *text = new TextView(kFont, fontSize);
-  text->setLocalizedText(label);
-  text->setAlign(TextView::CENTER);
-  text->setVAlign(TextView::MIDDLE);
-  text->setOverflow(TextView::TextOverflow::Hidden);
-  text->setThemedColor(app_theme::textPrimary);
-  button->setContentView(text);
-  if (textOut != nullptr) {
-    *textOut = text;
-  }
-  return button;
-}
-
-void styleButton(Button *button, TextView *text, bool selected, bool enabled) {
-  if (button == nullptr || text == nullptr) {
-    return;
-  }
-  button->setEnabled(enabled);
-  button->setSelected(selected);
-  if (selected) {
-    button->setThemedBackgroundColors(app_theme::primaryAction,
-                                      app_theme::primaryActionHover,
-                                      app_theme::primaryActionPressed);
-    button->setThemedBorderColors(app_theme::accentBorderStrong,
-                                  app_theme::accentBorderStrong,
-                                  app_theme::accentBorderStrong);
-    text->setThemedColor(
-        [] { return app_theme::textOn(app_theme::primaryAction()); });
-  } else if (!enabled) {
-    button->setThemedBackgroundColors(
-        app_theme::panelSubtle, app_theme::panelSubtle, app_theme::panelSubtle);
-    button->setThemedBorderColors(app_theme::hairlineSubtle,
-                                  app_theme::hairlineSubtle,
-                                  app_theme::hairlineSubtle);
-    text->setThemedColor(app_theme::textMuted);
-  } else {
-    button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover,
-                                      app_theme::controlPressed);
-    button->setThemedBorderColors(app_theme::hairlineSubtle,
-                                  app_theme::hairlineStrong,
-                                  app_theme::accentBorder);
-    text->setThemedColor(app_theme::textPrimary);
-  }
-}
 
 std::string gaugeLabel(GaugeType type, GaugeAutoShiftMode autoShift) {
   if (gaugeAutoShiftEnabled(autoShift)) {
@@ -128,11 +79,36 @@ std::string gaugeLabel(GaugeType type, GaugeAutoShiftMode autoShift) {
     return "EX-HARD";
   case GaugeType::Hazard:
     return "HAZARD";
+  case GaugeType::Grade:
+  case GaugeType::ExGrade:
+  case GaugeType::ExHardGrade:
+    return gaugeTypeToLabel(type);
   case GaugeType::Normal:
   default:
     return "NORMAL";
   }
 }
+constexpr std::array kGaugeTypes{GaugeType::AssistedEasy, GaugeType::Easy,
+    GaugeType::Normal, GaugeType::Hard, GaugeType::ExHard, GaugeType::Hazard};
+constexpr std::array kAutoShiftModes{GaugeAutoShiftMode::None,
+    GaugeAutoShiftMode::Continue, GaugeAutoShiftMode::SurvivalToGroove,
+    GaugeAutoShiftMode::BestClear, GaugeAutoShiftMode::SelectToUnder};
+
+std::vector<DropdownView::Option> gaugeOptions(GaugeType selected) {
+  std::vector<DropdownView::Option> options;
+  for (const auto type : kGaugeTypes) {
+    const auto label = gaugeLabel(type, GaugeAutoShiftMode::None);
+    options.push_back({.id = label, .label = label,
+                       .leadingColor = clearLampColorForRank(gaugeTypeToClearRank(type))});
+  }
+  if (std::ranges::find(kGaugeTypes, selected) == kGaugeTypes.end()) {
+    const auto label = gaugeLabel(selected, GaugeAutoShiftMode::None);
+    options.push_back({.id = label, .label = label, .available = false,
+                       .leadingColor = clearLampColorForRank(gaugeTypeToClearRank(selected))});
+  }
+  return options;
+}
+
 } // namespace
 
 PlayOptionsPanelView::PlayOptionsPanelView(
@@ -146,120 +122,65 @@ PlayOptionsPanelView::PlayOptionsPanelView(
 
   auto *rulesetSectionLabel = makeLabel(i18n::message("play_options.ruleset.label"));
   rulesetSectionLabel->setName("ruleset-section-label");
-  addView(makeSectionHeader(rulesetSectionLabel));
-  auto *rulesetRow = makeRow();
-  for (const GameplayRuleset ruleset : {GameplayRuleset::LR2,
-                                        GameplayRuleset::Beatoraja}) {
-    TextView *text = nullptr;
-    auto *button = makeButton(std::string(gameplayRulesetLabel(ruleset)), 18,
-                              &text);
-    button->setName("ruleset-" + std::string(gameplayRulesetId(ruleset)));
-    button->setOnClickListener([this, ruleset]() {
-      if (callbacks.onRulesetSelected) {
-        callbacks.onRulesetSelected(ruleset);
-      }
-    });
-    rulesetButtons.push_back({.button = button,
-                              .text = text,
-                              .id = std::string(gameplayRulesetId(ruleset)),
-                              .ruleset = ruleset});
-    rulesetRow->addView(button);
-  }
-  addView(rulesetRow);
+  addView(makeSectionHeader(rulesetSectionLabel, ui_icons::kRuleset, false));
+  rulesetChoice = new ChoiceControlView([this](const std::string &id) {
+    const auto ruleset = gameplayRulesetFromId(id);
+    if (!ruleset) return false;
+    if (callbacks.onRulesetSelected) callbacks.onRulesetSelected(*ruleset);
+    return true;
+  }, overlayPortal);
+  rulesetChoice->setName("ruleset-choice");
+  addView(rulesetChoice);
 
   if (layout.showGauge) {
     gaugeSectionLabel = makeLabel(i18n::message("play_options.gauge.label"));
     gaugeSectionLabel->setName("gauge-section-label");
-    addView(makeSectionHeader(gaugeSectionLabel));
-    auto addGaugeButton = [this](View *row, GaugeType type) {
-      TextView *text = nullptr;
-      const std::string label = gaugeLabel(type, GaugeAutoShiftMode::None);
-      auto *button = makeButton(label, 18, &text);
-      button->setOnClickListener([this, type]() {
-        if (callbacks.onGaugeSelected) {
-          callbacks.onGaugeSelected(type, state.gaugeAutoShift);
-        }
-      });
-      gaugeButtons.push_back({.button = button,
-                              .text = text,
-                              .id = label,
-                              .gaugeType = type,
-                              .gaugeAutoShift = GaugeAutoShiftMode::None});
-      row->addView(button);
-    };
-    auto *gaugeRowA = makeRow();
-    addGaugeButton(gaugeRowA, GaugeType::AssistedEasy);
-    addGaugeButton(gaugeRowA, GaugeType::Easy);
-    addGaugeButton(gaugeRowA, GaugeType::Normal);
-    addView(gaugeRowA);
-    auto *gaugeRowB = makeRow();
-    addGaugeButton(gaugeRowB, GaugeType::Hard);
-    addGaugeButton(gaugeRowB, GaugeType::ExHard);
-    addGaugeButton(gaugeRowB, GaugeType::Hazard);
-    addView(gaugeRowB);
+    addView(makeSectionHeader(gaugeSectionLabel, ui_icons::kHeart));
+    gaugeChoice = new ChoiceControlView([this](const std::string &id) {
+      for (const auto type : kGaugeTypes) {
+        if (id != gaugeLabel(type, GaugeAutoShiftMode::None)) continue;
+        if (callbacks.onGaugeSelected) callbacks.onGaugeSelected(type, state.gaugeAutoShift);
+        return true;
+      }
+      return false;
+    }, overlayPortal);
+    gaugeChoice->setName("gauge-choice");
+    addView(gaugeChoice);
 
-    addView(makeSectionHeader(makeLabel(i18n::message("play_options.auto_shift.label"))));
-    auto addAutoShiftButton = [this](View *row, GaugeAutoShiftMode mode) {
-      TextView *text = nullptr;
-      const std::string label = gaugeAutoShiftMenuLabel(mode);
-      auto *button = makeButton(label, 16, &text);
-      button->setOnClickListener([this, mode]() {
-        if (callbacks.onGaugeSelected) {
-          callbacks.onGaugeSelected(state.gaugeType, mode);
-        }
-      });
-      gaugeAutoShiftButtons.push_back(
-          {.button = button,
-           .text = text,
-           .id = label,
-           .gaugeAutoShift = mode});
-      row->addView(button);
-    };
-    auto *gaugeRowC = makeRow();
-    addAutoShiftButton(gaugeRowC, GaugeAutoShiftMode::None);
-    addAutoShiftButton(gaugeRowC, GaugeAutoShiftMode::Continue);
-    addView(gaugeRowC);
-    auto *gaugeRowD = makeRow();
-    addAutoShiftButton(gaugeRowD, GaugeAutoShiftMode::SurvivalToGroove);
-    addAutoShiftButton(gaugeRowD, GaugeAutoShiftMode::BestClear);
-    addView(gaugeRowD);
-    auto *gaugeRowE = makeRow();
-    addAutoShiftButton(gaugeRowE, GaugeAutoShiftMode::SelectToUnder);
-    addView(gaugeRowE);
+    addView(makeSectionHeader(makeLabel(i18n::message("play_options.auto_shift.label")), ui_icons::kRotate));
+    gaugeAutoShiftChoice = new ChoiceControlView([this](const std::string &id) {
+      for (const auto mode : kAutoShiftModes) {
+        if (id != gaugeAutoShiftMenuLabel(mode)) continue;
+        if (callbacks.onGaugeSelected) callbacks.onGaugeSelected(state.gaugeType, mode);
+        return true;
+      }
+      return false;
+    }, overlayPortal, 16);
+    gaugeAutoShiftChoice->setName("gauge-auto-shift-choice");
+    addView(gaugeAutoShiftChoice);
 
     gaugeAutoShiftBoundsSection = new View();
+    gaugeAutoShiftBoundsSection->setName("gauge-auto-shift-bounds");
     gaugeAutoShiftBoundsSection->setFlexDirection(FlexDirection::Column);
     gaugeAutoShiftBoundsSection->setAlignItems(YGAlignStretch);
     gaugeAutoShiftBoundsSection->setGap(8);
     gaugeAutoShiftBoundsSection->setDisplay(YGDisplayNone);
     gaugeAutoShiftBoundsSection->setVisible(false);
-    gaugeAutoShiftBoundsSection->addView(makeSectionHeader(makeLabel(i18n::message("play_options.auto_shift_lower_bound.label"))));
-    auto addLowerBoundButton = [this](View *row, GaugeType type) {
-      TextView *text = nullptr;
-      const std::string label = gaugeLabel(type, GaugeAutoShiftMode::None);
-      auto *button = makeButton(label, 18, &text);
-      button->setOnClickListener([this, type]() {
-        if (callbacks.onGaugeLowerBoundSelected) {
-          callbacks.onGaugeLowerBoundSelected(type);
-        }
-      });
-      gaugeLowerBoundButtons.push_back(
-          {.button = button, .text = text, .id = label, .gaugeType = type});
-      row->addView(button);
-    };
-    auto *lowerRowA = makeRow();
-    addLowerBoundButton(lowerRowA, GaugeType::AssistedEasy);
-    addLowerBoundButton(lowerRowA, GaugeType::Easy);
-    addLowerBoundButton(lowerRowA, GaugeType::Normal);
-    gaugeAutoShiftBoundsSection->addView(lowerRowA);
-    auto *lowerRowB = makeRow();
-    addLowerBoundButton(lowerRowB, GaugeType::Hard);
-    addLowerBoundButton(lowerRowB, GaugeType::ExHard);
-    addLowerBoundButton(lowerRowB, GaugeType::Hazard);
-    gaugeAutoShiftBoundsSection->addView(lowerRowB);
+    gaugeAutoShiftBoundsSection->addView(makeSectionHeader(makeLabel(i18n::message("play_options.auto_shift_lower_bound.label")), ui_icons::kArrowDown));
+    gaugeLowerBoundChoice = new ChoiceControlView([this](const std::string &id) {
+      for (const auto type : kGaugeTypes) {
+        if (id != gaugeLabel(type, GaugeAutoShiftMode::None)) continue;
+        if (callbacks.onGaugeLowerBoundSelected) callbacks.onGaugeLowerBoundSelected(type);
+        return true;
+      }
+      return false;
+    }, overlayPortal);
+    gaugeLowerBoundChoice->setName("gauge-lower-bound-choice");
+    gaugeAutoShiftBoundsSection->addView(gaugeLowerBoundChoice);
     addView(gaugeAutoShiftBoundsSection);
   }
 
+  addView(makeSectionHeader(makeLabel(i18n::message("play_options.section.play_option.label")), ui_icons::kShuffle));
   playOptionSection = new PlayOptionSectionView(
       {.onOptionSelected =
            [this](const std::string &option) {
@@ -277,48 +198,36 @@ PlayOptionsPanelView::PlayOptionsPanelView(
            [this](const std::string &option) {
              return !callbacks.isPlayOptionAllowed ||
                     callbacks.isPlayOptionAllowed(option);
-           }},
+           },
+       .canReselectOption = callbacks.canReselectPlayOption},
       {.columns = layout.playOptionColumns,
        .rowHeight = rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 48.0f,
        .buttonFontSize = 15,
-       .showLaneOrder = layout.showLaneOrder});
+       .showLaneOrder = layout.showLaneOrder,
+       .showHeading = false}, overlayPortal);
   playOptionSection->setWidthPercent(100);
   addView(playOptionSection);
 
-  addView(makeSectionHeader(makeLabel(i18n::message("play_options.long_note_mode.label"))));
-  auto *longNoteModeRow = makeRow();
-  for (const char *mode : long_note_mode::kPlayableIds) {
-    TextView *text = nullptr;
-    auto *button = makeButton(mode, 18, &text);
-    button->setOnClickListener([this, mode = std::string(mode)]() {
-      if (callbacks.onLongNoteModeSelected) {
-        callbacks.onLongNoteModeSelected(mode);
-      }
-    });
-    longNoteModeButtons.push_back({.button = button, .text = text, .id = mode});
-    longNoteModeRow->addView(button);
-  }
-  addView(longNoteModeRow);
+  addView(makeSectionHeader(makeLabel(i18n::message("play_options.long_note_mode.label")), ui_icons::kGripLines));
+  longNoteModeChoice = new ChoiceControlView([this](const std::string &id) {
+    if (state.longNoteModeLocked) return false;
+    if (callbacks.onLongNoteModeSelected) callbacks.onLongNoteModeSelected(id);
+    return true;
+  }, overlayPortal);
+  longNoteModeChoice->setName("long-note-mode-choice");
+  addView(longNoteModeChoice);
 
   assistOptionLabel = makeLabel(i18n::message("play_options.assist_option.label"));
-  addView(makeSectionHeader(assistOptionLabel));
-  auto *assistRow = makeRow();
-  for (const char *option : {assist_options::kOff, assist_options::kDrag,
-                             assist_options::kBpmGuide}) {
-    TextView *text = nullptr;
-    auto *button = makeButton(option, 18, &text);
-    button->setOnClickListener([this, option = std::string(option)]() {
-      if (callbacks.onAssistOptionSelected) {
-        callbacks.onAssistOptionSelected(option);
-      }
-    });
-    assistOptionButtons.push_back(
-        {.button = button, .text = text, .id = option});
-    assistRow->addView(button);
-  }
-  addView(assistRow);
+  addView(makeSectionHeader(assistOptionLabel, ui_icons::kLifeRing));
+  assistOptionChoice = new ChoiceControlView([this](const std::string &id) {
+    if (state.assistOptionLocked) return false;
+    if (callbacks.onAssistOptionSelected) callbacks.onAssistOptionSelected(id);
+    return true;
+  }, overlayPortal);
+  assistOptionChoice->setName("assist-option-choice");
+  addView(assistOptionChoice);
 
-  addView(makeSectionHeader(makeLabel(i18n::message("settings.lane.covers.title"))));
+  addView(makeSectionHeader(makeLabel(i18n::message("settings.lane.covers.title")), ui_icons::kBars));
   laneCoverControls = new LaneCoverControlsView([this](const lane_cover::State &covers) {
     state.laneCovers = covers;
     if (callbacks.onLaneCoversChanged) callbacks.onLaneCoversChanged(covers);
@@ -329,7 +238,7 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   playbackGroup->setFlexDirection(FlexDirection::Column)
       ->setAlignItems(YGAlignStretch)
       ->setGap(8);
-  playbackGroup->addView(makeSectionHeader(makeLabel(i18n::message("play_options.playback_rate.label"))));
+  playbackGroup->addView(makeSectionHeader(makeLabel(i18n::message("play_options.playback_rate.label")), ui_icons::kGauge));
   auto *playbackRateRow = makeRow();
   playbackRateSlider = new SnappedSlider([this](int percent) {
     if (callbacks.onPlaybackRateSelected) {
@@ -359,17 +268,17 @@ PlayOptionsPanelView::PlayOptionsPanelView(
                               }
                             }},
                        overlayPortal);
+  playbackModeDropdown->setName("playback-mode-dropdown");
   playbackModeDropdown->setWidthPercent(100.0f);
   playbackGroup->addView(playbackModeDropdown);
   addView(playbackGroup);
 
-  addView(makeSectionHeader(makeLabel(i18n::message("play_options.club_mode.label"))));
-  clubModeButton = makeButton("", 18, nullptr);
-  clubModeButton->setName("club-mode");
-  clubModeButtonContent = new CheckboxButtonContent("", 18, 17);
+  addView(makeSectionHeader(makeLabel(i18n::message("play_options.club_mode.label")), ui_icons::kPlay));
+  clubModeButtonContent = new ToggleButtonContent("", 18, 17);
   clubModeButtonContent->labelView()->setLocalizedText(i18n::message("play_options.club_beat.label"));
-  clubModeButton->setContentView(clubModeButtonContent);
-  clubModeButton->setWidthPercent(100.0f);
+  clubModeButton = toggle_button::makeButton(clubModeButtonContent,
+      rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 48);
+  clubModeButton->setName("club-mode");
   clubModeButton->setOnClickListener([this]() {
     if (callbacks.onClubModeToggled) {
       callbacks.onClubModeToggled();
@@ -378,26 +287,13 @@ PlayOptionsPanelView::PlayOptionsPanelView(
   addView(clubModeButton);
 
   if (layout.showPacemaker) {
-    addView(makeSectionHeader(makeLabel(i18n::message("play_options.pacemaker.label"))));
-    View *row = nullptr;
-    for (size_t i = 0; i < pacemaker::kSelectableTargets.size(); ++i) {
-      if (i % 3 == 0) {
-        row = makeRow();
-        addView(row);
-      }
-      const std::string target = pacemaker::kSelectableTargets[i];
-      TextView *text = nullptr;
-      auto *button =
-          makeButton(pacemaker::displayTargetLabel(target), 18, &text);
-      button->setOnClickListener([this, target]() {
-        if (callbacks.onPacemakerSelected) {
-          callbacks.onPacemakerSelected(target);
-        }
-      });
-      pacemakerButtons.push_back(
-          {.button = button, .text = text, .id = target});
-      row->addView(button);
-    }
+    addView(makeSectionHeader(makeLabel(i18n::message("play_options.pacemaker.label")), ui_icons::kFlagCheckered));
+    pacemakerChoice = new ChoiceControlView([this](const std::string &id) {
+      if (callbacks.onPacemakerSelected) callbacks.onPacemakerSelected(id);
+      return true;
+    }, overlayPortal);
+    pacemakerChoice->setName("pacemaker-choice");
+    addView(pacemakerChoice);
   }
 }
 
@@ -408,16 +304,22 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
     playOptionSection->resetLaneOrderDraft();
   }
   state = newState;
-  for (const auto &item : rulesetButtons) {
-    styleButton(item.button, item.text, item.ruleset == state.ruleset, true);
+  rulesetChoice->refresh({.label = i18n::message("play_options.ruleset.label"),
+      .selectedId = std::string(gameplayRulesetId(state.ruleset)),
+      .options = {{.id = "lr2", .label = std::string(gameplayRulesetLabel(GameplayRuleset::LR2))},
+                  {.id = "beatoraja", .label = std::string(gameplayRulesetLabel(GameplayRuleset::Beatoraja))}}});
+  if (gaugeChoice) {
+    gaugeChoice->refresh({.selectedId = gaugeLabel(state.gaugeType, GaugeAutoShiftMode::None),
+                           .options = gaugeOptions(state.gaugeType)});
   }
-  for (const auto &item : gaugeButtons) {
-    styleButton(item.button, item.text, item.gaugeType == state.gaugeType,
-                true);
-  }
-  for (const auto &item : gaugeAutoShiftButtons) {
-    styleButton(item.button, item.text,
-                item.gaugeAutoShift == state.gaugeAutoShift, true);
+  if (gaugeAutoShiftChoice) {
+    std::vector<DropdownView::Option> options;
+    for (const auto mode : kAutoShiftModes) {
+      const std::string label = gaugeAutoShiftMenuLabel(mode);
+      options.push_back({.id = label, .label = label});
+    }
+    gaugeAutoShiftChoice->refresh({.selectedId = gaugeAutoShiftMenuLabel(state.gaugeAutoShift),
+                                    .options = std::move(options)});
   }
   const bool showsBounds =
       state.gaugeAutoShift == GaugeAutoShiftMode::BestClear ||
@@ -433,24 +335,26 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
                                                         : YGDisplayNone);
     gaugeAutoShiftBoundsSection->setVisible(showsBounds);
   }
-  for (const auto &item : gaugeLowerBoundButtons) {
-    styleButton(item.button, item.text,
-                item.gaugeType == state.gaugeAutoShiftLowerBound, true);
+  if (gaugeLowerBoundChoice) {
+    gaugeLowerBoundChoice->refresh({
+        .selectedId = gaugeLabel(state.gaugeAutoShiftLowerBound, GaugeAutoShiftMode::None),
+        .options = gaugeOptions(state.gaugeAutoShiftLowerBound)});
   }
   if (playOptionSection != nullptr) {
     playOptionSection->refresh(state.playOption, state.defaultLaneOrder,
                                state.laneOrderEnabled);
   }
-  for (const auto &item : longNoteModeButtons) {
-    styleButton(item.button, item.text,
-                long_note_mode::parseId(item.id) == state.longNoteMode,
-                !state.longNoteModeLocked);
+  std::vector<DropdownView::Option> longNoteOptions;
+  for (const char *mode : long_note_mode::kPlayableIds) {
+    longNoteOptions.push_back({.id = mode, .label = mode});
   }
-  for (const auto &item : assistOptionButtons) {
-    styleButton(item.button, item.text,
-                assist_options::normalize(item.id) == state.assistOption,
-                !state.assistOptionLocked);
-  }
+  longNoteModeChoice->refresh({.selectedId = state.longNoteMode,
+      .options = std::move(longNoteOptions), .enabled = !state.longNoteModeLocked});
+  assistOptionChoice->refresh({.selectedId = state.assistOption,
+      .options = {{.id = assist_options::kOff, .label = assist_options::kOff},
+                  {.id = assist_options::kDrag, .label = assist_options::kDrag},
+                  {.id = assist_options::kBpmGuide, .label = assist_options::kBpmGuide}},
+      .enabled = !state.assistOptionLocked});
   if (assistOptionLabel != nullptr) {
     if (state.playbackRatePercent != 100) {
       assistOptionLabel->setLocalizedText(i18n::message("play_options.assist_option_light_assist_easy.label"));
@@ -479,25 +383,19 @@ void PlayOptionsPanelView::refresh(const PlayOptionsPanelState &newState) {
                       .label = i18n::message("play_options.time_stretch_unavailable.label"),
                       .available = false}},
          .open = playbackModeDropdownOpen,
-         .enabled = !state.playbackLocked,
-         .maxVisibleItems = 2});
+         .enabled = !state.playbackLocked});
   }
   if (clubModeButton != nullptr && clubModeButtonContent != nullptr) {
     clubModeButtonContent->setChecked(state.clubMode);
-    styleButton(clubModeButton, clubModeButtonContent->labelView(),
-                state.clubMode, true);
-    clubModeButtonContent->setThemedColor(
-        state.clubMode
-            ? View::ThemeColorProvider{[] {
-                return app_theme::textOn(app_theme::primaryAction());
-              }}
-            : View::ThemeColorProvider{app_theme::textPrimary});
+    toggle_button::style(clubModeButton, state.clubMode);
   }
-  for (const auto &item : pacemakerButtons) {
-    styleButton(item.button, item.text,
-                pacemaker::normalizeTargetId(item.id) ==
-                    pacemaker::normalizeTargetId(state.pacemakerTarget),
-                true);
+  if (pacemakerChoice) {
+    std::vector<DropdownView::Option> options;
+    for (const char *target : pacemaker::kSelectableTargets) {
+      options.push_back({.id = target, .label = pacemaker::displayTargetLabel(target)});
+    }
+    pacemakerChoice->refresh({.selectedId = pacemaker::normalizeTargetId(state.pacemakerTarget),
+                               .options = std::move(options)});
   }
 }
 
@@ -509,6 +407,12 @@ void PlayOptionsPanelView::setLaneOrderMessage(std::string message,
 }
 
 void PlayOptionsPanelView::closeDropdowns() {
+  for (auto *choice : {rulesetChoice, gaugeChoice, gaugeAutoShiftChoice,
+                      gaugeLowerBoundChoice, longNoteModeChoice,
+                      assistOptionChoice, pacemakerChoice}) {
+    if (choice) choice->closeMenu();
+  }
+  if (playOptionSection) playOptionSection->closeDropdowns();
   playbackModeDropdownOpen = false;
   refresh(state);
 }

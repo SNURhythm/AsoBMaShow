@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Button.h"
+#include "AppTheme.h"
 #include "IconText.h"
 #include "TextView.h"
 
@@ -22,6 +23,28 @@ inline View *makeContent(TextView *caption, uint32_t glyph) {
   caption->setAlign(TextView::CENTER);
   caption->setVAlign(TextView::MIDDLE);
   caption->setWidthPercent(100)->setHeight(26)->setFlexShrink(0);
+  caption->setAutoFitText(true);
+  content->addView(icon);
+  content->addView(caption);
+  return content;
+}
+
+// A single-line alternative for navigation and section labels. The glyph has
+// a stable slot; the caption receives the remaining width without adding height.
+inline View *makeInlineContent(TextView *caption, uint32_t glyph, int iconSize = 18) {
+  auto *content = new View();
+  content->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter);
+  content->setGap(10)->setMinWidth(0);
+  auto *icon = new TextView(ui_icons::kFontAwesomeSolidPath, iconSize);
+  icon->setName("actionIcon");
+  icon->setText(ui_icons::textForCodepoint(glyph));
+  icon->setAlign(TextView::CENTER);
+  icon->setVAlign(TextView::MIDDLE);
+  icon->setWidth(iconSize + 6)->setHeight(iconSize + 6)->setFlexShrink(0);
+  icon->setThemedColor(app_theme::textSecondary);
+  caption->setWidth(YGUndefined)->setMinWidth(0)->setFlex(1);
+  caption->setAlign(TextView::LEFT);
+  caption->setVAlign(TextView::MIDDLE);
   caption->setAutoFitText(true);
   content->addView(icon);
   content->addView(caption);

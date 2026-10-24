@@ -8,7 +8,7 @@
 class DropdownView;
 class OverlayPortal;
 class Button;
-class CheckboxButtonContent;
+class ToggleButtonContent;
 class TextView;
 class StorageCodecModal;
 
@@ -37,7 +37,7 @@ private:
   Button *codecButton_ = nullptr;
   TextView *codecButtonText_ = nullptr;
   Button *efficientVideoButton_ = nullptr;
-  CheckboxButtonContent *efficientVideoContent_ = nullptr;
+  ToggleButtonContent *efficientVideoContent_ = nullptr;
   TextView *codecStatus_ = nullptr;
   std::shared_future<storage_management::StorageVideoCapabilities> capabilitiesFuture_;
   storage_management::StorageVideoCapabilities capabilities_{};

@@ -1,7 +1,7 @@
 #include "StoragePolicyView.h"
 #include "DropdownView.h"
 #include "Button.h"
-#include "CheckboxButtonContent.h"
+#include "ToggleButtonContent.h"
 #include "BlockingOverlayView.h"
 #include "ModalViewHelpers.h"
 #include "OverlayPortal.h"
@@ -195,8 +195,7 @@ StoragePolicyView::StoragePolicyView(Policy policy, std::function<void(Policy)> 
   codecStatus_->setWrap(true);
   codecStatus_->setThemedColor(app_theme::textSecondary);
   addView(codecStatus_);
-  efficientVideoButton_ = new Button();
-  efficientVideoContent_ = new CheckboxButtonContent("", 20, 24);
+  efficientVideoContent_ = new ToggleButtonContent("", 20, 24);
   efficientVideoContent_->setJustifyContent(YGJustifyFlexStart);
   efficientVideoContent_->setThemedColor(app_theme::textSecondary);
   auto *efficientLabel = efficientVideoContent_->labelView();
@@ -204,8 +203,7 @@ StoragePolicyView::StoragePolicyView(Policy policy, std::function<void(Policy)> 
   efficientLabel->setDisplay(YGDisplayFlex);
   efficientLabel->setWrap(true);
   efficientLabel->setFlex(1)->setMinWidth(0)->setHeight(66);
-  efficientVideoButton_->setContentView(efficientVideoContent_);
-  efficientVideoButton_->setHeight(66);
+  efficientVideoButton_ = toggle_button::makeButton(efficientVideoContent_, 66);
   efficientVideoButton_->setOnClickListener([this] {
     if (!enabled_ || policy_.bga != BgaAction::CompressH264) return;
     policy_.reencodeEfficientVideo = !policy_.reencodeEfficientVideo;
@@ -259,6 +257,7 @@ void StoragePolicyView::Refresh() {
   const bool compressing = policy_.bga == BgaAction::CompressH264;
   efficientVideoButton_->setEnabled(enabled_ && compressing);
   efficientVideoContent_->setChecked(policy_.reencodeEfficientVideo);
+  toggle_button::style(efficientVideoButton_, policy_.reencodeEfficientVideo);
   const int codec = static_cast<int>(policy_.videoCodec);
   const bool available = capabilitiesReady_ && codec >= 0 && codec < 3 &&
       capabilities_[codec].available && capabilities_[codec].playbackAvailable;

@@ -542,7 +542,6 @@ DropdownView *SettingsScene::buildGameplaySkinSelectionDropdown(
        .options = std::move(dropdownOptions),
        .open = gameplaySkinTraitDropdownOpen,
        .enabled = ordinaryActionsEnabled,
-       .maxVisibleItems = metrics.compact ? 5 : 7,
        .menuWidth = menuWidth});
   return skinDropdown;
 }
@@ -575,10 +574,7 @@ void SettingsScene::appendGameplaySkinCatalogSettings(
     }
     const auto selectedIndex = static_cast<std::size_t>(
         std::distance(option.choices.begin(), selected));
-    const bool hasBeatorajaRandomChoice =
-        !option.choices.empty() && option.choices.back().label == "Random" &&
-        option.choices.back().value == -1;
-    if (option.choices.size() >= 3 || hasBeatorajaRandomChoice) {
+    {
       const std::string dropdownKey =
           row.entry.collisionKey + "|option|" + option.name;
       std::vector<DropdownView::Option> options;
@@ -621,7 +617,6 @@ void SettingsScene::appendGameplaySkinCatalogSettings(
            .options = std::move(options),
            .open = gameplaySkinConfigurationDropdownOpenKey == dropdownKey,
            .enabled = ordinaryActionsEnabled,
-           .maxVisibleItems = metrics.compact ? 5 : 7,
            .menuWidth = 0.0f});
       auto *dropdownRow = new View();
       dropdownRow->setFlexDirection(FlexDirection::Row);
@@ -637,22 +632,6 @@ void SettingsScene::appendGameplaySkinCatalogSettings(
       dropdownRow->addView(dropdownLabel);
       dropdownRow->addView(dropdown);
       entryBody->addView(dropdownRow);
-    } else {
-      std::vector<GameplaySkinChoiceButton> choices;
-      choices.reserve(option.choices.size());
-      for (const auto &choice : option.choices) {
-        choices.push_back(
-            {.label = choice.label,
-             .selected = choice.value == selected->value,
-             .tryAction = [this, entry = row.entry, name = option.name,
-                           value = choice.value]() {
-               return handleGameplaySkinActionResult(
-                   gameplaySkinSettingsController->setOption(entry, name,
-                                                             value));
-             }});
-      }
-      entryBody->addView(makeGameplaySkinChoiceRow(
-          metrics, option.name, ordinaryActionsEnabled, std::move(choices)));
     }
   };
 
@@ -672,7 +651,7 @@ void SettingsScene::appendGameplaySkinCatalogSettings(
     }
     const auto selectedIndex = static_cast<std::size_t>(
         std::distance(file.choices.begin(), current));
-    if (file.choices.size() >= 3) {
+    {
       const std::string dropdownKey =
           row.entry.collisionKey + "|file|" + file.name;
       std::vector<DropdownView::Option> options;
@@ -712,7 +691,6 @@ void SettingsScene::appendGameplaySkinCatalogSettings(
            .options = std::move(options),
            .open = gameplaySkinConfigurationDropdownOpenKey == dropdownKey,
            .enabled = ordinaryActionsEnabled,
-           .maxVisibleItems = metrics.compact ? 5 : 7,
            .menuWidth = 0.0f});
       auto *dropdownRow = new View();
       dropdownRow->setFlexDirection(FlexDirection::Row);
@@ -727,22 +705,6 @@ void SettingsScene::appendGameplaySkinCatalogSettings(
       dropdownRow->addView(dropdownLabel);
       dropdownRow->addView(dropdown);
       entryBody->addView(dropdownRow);
-    } else {
-      std::vector<GameplaySkinChoiceButton> choices;
-      choices.reserve(file.choices.size());
-      for (const auto &choice : file.choices) {
-        choices.push_back(
-            {.label = choice,
-             .selected = choice == *current,
-             .tryAction = [this, entry = row.entry, name = file.name,
-                           value = choice]() {
-               return handleGameplaySkinActionResult(
-                   gameplaySkinSettingsController->setFileChoice(entry, name,
-                                                                 value));
-             }});
-      }
-      entryBody->addView(makeGameplaySkinChoiceRow(
-          metrics, file.name, ordinaryActionsEnabled, std::move(choices)));
     }
   };
 
@@ -1116,13 +1078,13 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
     }
   };
   overview->addView(makeGameplaySkinChoiceRow(
-      metrics, i18n::message("settings.skins.music_select_toolbar.label"), true,
+      metrics, overlayPortal, i18n::message("settings.skins.music_select_toolbar.label"), true,
       {{.label = i18n::message("settings.skins.visible.label"),
         .selected = toolbarMode != MusicSelectToolbarMode::Hidden,
         .action = [setToolbarHidden] { setToolbarHidden(false); }},
        {.label = i18n::message("settings.skins.hidden.label"),
         .selected = toolbarMode == MusicSelectToolbarMode::Hidden,
-        .action = [setToolbarHidden] { setToolbarHidden(true); }}}));
+        .action = [setToolbarHidden] { setToolbarHidden(true); }}}, true, 0));
   // Typed path (advanced fallback on every platform) because desktop has no
   // gate-less picker; empty keeps the bundled assets fallback. Resolution
   // happens live in MusicSelectScene.
@@ -1170,7 +1132,8 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
 #endif
   overview->addView(soundSetRow);
   auto *safetyRow = new View();
-  safetyRow->setFlexDirection(FlexDirection::Row);
+  safetyRow->setFlexDirection(FlexDirection::Column);
+  safetyRow->setWidthPercent(100);
   safetyRow->setFlexWrap(YGWrapWrap);
   safetyRow->setAlignItems(YGAlignCenter);
   safetyRow->setGap(metrics.compact ? 8.0f : 10.0f);
@@ -1180,12 +1143,8 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   safetyLabel->setMinWidth(0.0f);
   safetyLabel->setFlexShrink(1.0f);
   safetyRow->addView(safetyLabel);
-  auto *safetyDropdown = new DropdownView(
-      {.onOpenChanged =
-           [this](bool open) {
-             gameplaySkinSafetyDropdownOpen = open;
-           },
-       .onOptionSelectedResult = [this](const std::string &id) {
+  auto *safetyDropdown = new ChoiceControlView(
+       [this](const std::string &id) {
          gameplaySkinSafetyDropdownOpen = false;
          int value = static_cast<int>(skin::SkinSafetyLevel::Standard);
          const auto parsed = std::from_chars(id.data(), id.data() + id.size(),
@@ -1199,8 +1158,7 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                    static_cast<skin::SkinSafetyLevel>(value)));
          }
          return false;
-       }},
-      overlayPortal);
+       }, overlayPortal, metrics.smallTextSize, metrics.actionButtonHeight);
   safetyDropdown->refresh(
       {.label = "",
        .selectedId = std::to_string(static_cast<int>(snapshot.safetyLevel)),
@@ -1209,7 +1167,6 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
                    {.id = "2", .label = safetyLevelLabel(skin::SkinSafetyLevel::Unrestricted), .available = ordinaryActionsEnabled}},
        .open = gameplaySkinSafetyDropdownOpen,
        .enabled = ordinaryActionsEnabled,
-       .maxVisibleItems = 3,
        .menuWidth = 0.0f});
   safetyRow->addView(safetyDropdown);
   overview->addView(safetyRow);
@@ -1333,20 +1290,10 @@ View *SettingsScene::buildGameplaySkinsTab(const LayoutMetrics &metrics) {
   traitTabs->setFlexShrink(0.0f);
   for (const auto &trait : traits) {
     const bool active = trait.skinType == gameplaySkinActiveTraitSkinType;
-    auto *tab = active
-                    ? makeAccentButton(
-                          traitTabWidth, metrics.actionButtonHeight,
-                          makeText(std::string(trait.label),
-                                   metrics.smallTextSize,
-                                   app_theme::textPrimary(), TextView::CENTER,
-                                   TextView::MIDDLE),
-                          app_theme::cyan())
-                    : makeControlButton(
-                          traitTabWidth, metrics.actionButtonHeight,
-                          makeText(std::string(trait.label),
-                                   metrics.smallTextSize,
-                                   app_theme::textPrimary(), TextView::CENTER,
-                                   TextView::MIDDLE));
+    auto *tab = makeControlButton(traitTabWidth, metrics.actionButtonHeight,
+        makeText(std::string(trait.label), metrics.smallTextSize,
+                 app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+    tab_button::style(tab, active, true);
     tab->setOnClickListener([this, skinType = trait.skinType]() {
       if (gameplaySkinActiveTraitSkinType == skinType) {
         return;

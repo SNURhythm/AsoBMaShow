@@ -83,6 +83,83 @@ Keybomb appearance is stored per key mode within each profile and orientation.
 Scratchless modes follow the parent mode when their skin is set to follow it.
 Other settings retain their existing scope and saved values.
 
+## Choosing a settings control
+
+Use this rule for new or revised built-in settings, including the same choices
+shown in Play Options and previews. Existing controls are not exceptions by
+precedent; apply the rule when revising them. The [migration inventory](settings-choice-migration-2026-10-24.md) lists the
+Settings, Play Options, and preview controls aligned with it. Saved values
+retain their existing meaning.
+
+Use a cycle button for a toggle, visible buttons for a few choices that fit,
+and a dropdown for other cases. Users must always be able to see the current
+value.
+
+| Control | Use when | Examples |
+| --- | --- | --- |
+| Cycling button | A toggle between two opposing states, such as On/Off, Show/Hide, or Light/Dark. Two options alone do not make a toggle. One activation switches directly to the other state. | Show lane indicators: On / Off; appearance: Light / Dark. |
+| Multiple choice buttons | A few stable, mutually exclusive choices, including two distinct modes or roughly 3–4 options, with labels that all fit legibly together on the current screen. | Flick / Tap; LR2 / Beatoraja; Auto / Landscape / Portrait. |
+| Dropdown | Other cases: larger sets, dynamic lists, long labels, or a small choice group that does not fit. A dynamic list does not become a toggle just because it currently has two entries. | Language, audio device, resolution, skin package, file choice. |
+
+Apply these rules in order: a toggle uses one cycling button; a small choice
+set uses multiple buttons if it fits; everything else uses a dropdown. Do not
+extend cycling to three or more states to save space. Continuous numeric
+values use a slider or editable numeric control rather than this rule.
+
+### Consistent presentation and behavior
+
+- Put a persistent setting label above the control and align the group with
+  the section's left edge. A selected value must not be the only explanation
+  of what the setting controls.
+- Multiple buttons form one single-selection group with a clear selected
+  state and consistent heights, spacing, and widths within the group. Selecting
+  the active choice is a no-op. Independent toggles use separate cycling
+  buttons, not a single mutually exclusive choice group.
+- A cycling button displays the **current** state and a visible cycle
+  affordance. One activation switches to the other state; the next switches
+  back. Users must be able to distinguish it from an action button or a
+  dropdown that opens a list. Use the Club Beat palette consistently: active
+  (On/Show) uses the primary accent, inactive (Off/Hide) uses the neutral control
+  surface. Opposing values without an enabled/disabled meaning—Left/Right,
+  Regular/Bold, Combined/Separated, and Light/Dark—stay neutral in both states.
+  Captions and cycle icons share a contrasting foreground in both themes;
+  disabled toggles use muted text.
+- Cycling toggles use compact content widths: label, state, icon, and padding,
+  with a 190-unit minimum when space permits, capped at the available parent width. Align them to the start of their row;
+  do not grow them to fill unused space. Keep the normal touch-target height
+  and refresh the width when the label or language changes. This applies to
+  named toggles, current-value cycles, and two-state choice controls alike.
+- Navigation tabs use transparent surfaces with an accent underline (or a left
+  indicator for vertical navigation), keeping them distinct from filled setting
+  choice buttons.
+- A dropdown displays the current value and a disclosure indicator. Opening
+  it does not change the setting. Indicate the selected option in the list;
+  commit only the chosen option, and retain the previous value if applying it
+  fails. Preserve an unavailable saved value visibly rather than silently
+  substituting another choice. Menu rows use the 66-unit touch target in both
+  wide and compact layouts. Gauge types and gauge bounds show leading color
+  bars using the clear-lamp palette, including the selected trigger. Auto-shift
+  modes have no lamp color bars.
+- Keep the same labels, option order, selected value, and meaning wherever a
+  setting appears. If a compact surface needs a different control, preserve
+  those semantics. Use the same cycling-button convention for toggles across
+  settings instead of mixing checkboxes, two-button groups, and dropdowns.
+
+### Compact layouts and localization
+
+Judge whether a button group fits at each supported size using supported
+translations, including the smallest layout. A group may use buttons on a
+wide screen and a dropdown on a narrow screen while retaining its selection.
+Keep readable labels and the existing touch-target metrics. If the group cannot fit in one
+row, use a dropdown instead of shrinking text excessively or leaving a lone
+wrapped button. Do not replace it with a cycling button just to make it fit.
+
+Dropdown menus use the shared safe-area placement and selected-option reveal
+behavior. Verify both the outer allocation and the inner trigger bounds; a
+visible row with a collapsed trigger is not a usable control. When changing
+the control type, check selection, persistence, and normal/compact layouts
+with the relevant existing UI tests.
+
 ## Code map
 
 - `src/scene/SceneManager.*` and `Scene.*` define scene navigation and shared

@@ -27,13 +27,16 @@ View *SettingsScene::buildStorageControls(const LayoutMetrics &metrics) {
   auto *toggleText = makeText("", metrics.bodyTextSize, app_theme::textPrimary(),
                               TextView::CENTER, TextView::MIDDLE);
   auto *toggle = makeControlButton(-1, metrics.actionButtonHeight, toggleText);
+  YGNodeStyleSetMaxWidthPercent(toggle->getNode(), 100);
+  toggle->setFlexShrink(1);
   auto editorState = std::make_shared<DownloadStoragePolicyEditorState>();
   auto refresh = [this, toggle, toggleText, editorState] {
     const auto &preferences = context.settings.storagePreferences;
-    action_button::applyStyle(toggle, toggleText,
-        editorState->AwaitingAcknowledgment() || (preferences.afterDownload && preferences.download.bga == BgaAction::Delete)
-            ? app_theme::ActionCategory::Destructive
-            : preferences.afterDownload ? app_theme::ActionCategory::Confirmation : app_theme::ActionCategory::Information);
+    toggle_button::style(toggle, preferences.afterDownload);
+    if (editorState->AwaitingAcknowledgment() ||
+        (preferences.afterDownload && preferences.download.bga == BgaAction::Delete)) {
+      action_button::applyStyle(toggle, toggleText, app_theme::ActionCategory::Destructive);
+    }
     toggleText->setLocalizedText(i18n::message(editorState->AwaitingAcknowledgment() ? "storage.ui.confirm_auto_delete" :
         (context.settings.storagePreferences.afterDownload ? "storage.ui.auto_on" : "storage.ui.auto_off")));
   };

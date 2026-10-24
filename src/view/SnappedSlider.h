@@ -32,6 +32,9 @@ private:
   bool mouseDragging = false;
   bool hovered = false;
   SDL_FingerID activeTouchId = -1;
+  bool touchDragging = false;
+  float pressedTouchX = 0.0F;
+  float pressedTouchY = 0.0F;
 
   [[nodiscard]] bool contains(float x, float y) const;
   [[nodiscard]] int snappedValueForX(float x) const;

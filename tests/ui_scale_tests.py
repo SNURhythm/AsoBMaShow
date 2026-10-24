@@ -283,6 +283,7 @@ struct MainMenuScene {
   View *primaryActionSlot_=nullptr;
   bool unzipButtonAvailable_=false,findBmsAvailableWithoutTutorial_=false;
   Tutorial *tutorial_=nullptr;
+  Button *parseLogButton=nullptr, *tasksButton=nullptr, *addFolderButton_=nullptr;
   void refreshPrimaryActionVisibility();
   void setFindBmsButtonVisible(bool visible);
   void setUnzipButtonVisible(bool visible);
@@ -312,9 +313,9 @@ int main() {
   songs.add(searchRow);searchRow.setFlexDirection(FlexDirection::Row)->setGap(10);
   searchRow.add(search);search.setFlex(1)->setMinWidth(0);searchRow.add(filter);searchRow.add(sort);
   toolbar.setFlexDirection(FlexDirection::Row)->setGap(12);
-  std::array<View,4> headerButtons={View("add"),View("refresh"),View("search"),View("tasks")};
-  int widths[]={112,122,154,142};
-  for(int i=0;i<4;++i){toolbar.add(headerButtons[i]);headerButtons[i].setWidth(widths[i]);}
+  std::array<Button,3> headerButtons={Button("logs"),Button("tasks"),Button("files")};
+  int widths[]={56,56,140};
+  for(int i=0;i<3;++i){toolbar.add(headerButtons[i]);headerButtons[i].setWidth(widths[i]);}
   details.setGap(12)->setPadding(Edge::Bottom,16);details.add(scroll);details.add(primary);details.add(controls);
   details.add(divider);YGNodeStyleSetPositionType(divider.node,YGPositionTypeAbsolute);
   controls.setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch)->setGap(8);
@@ -331,6 +332,9 @@ int main() {
   unzipSlot.add(unzip);findSlot.add(find);unzipSlot.setVisible(false);unzipSlot.setDisplay(YGDisplayNone);findSlot.setVisible(false);findSlot.setDisplay(YGDisplayNone);
   MainMenuScene scene{&root,&content,&controlsContent,&controlsScroll,nullptr,&chart,&options,&tools,&unzipSlot,&findSlot,&replaySlot,&replay,&ranking,&start,&unzip,&find,&search,&filter,&sort,&replayText,&rankingText};
   scene.primaryActionSlot_=&actionSlot;
+  scene.parseLogButton=&headerButtons[0];
+  scene.tasksButton=&headerButtons[1];
+  scene.addFolderButton_=&headerButtons[2];
   for (auto dimensions : {std::pair{800,1200},std::pair{1600,2200},std::pair{1080,1920},std::pair{1080,1440},std::pair{1080,1100},std::pair{1920,1080},std::pair{1440,1080},std::pair{1280,1080},std::pair{1080,1920}}) {
     rendering::window_width=dimensions.first;rendering::window_height=dimensions.second;
     root.setWidth(dimensions.first)->setHeight(dimensions.second);
@@ -358,6 +362,8 @@ int main() {
     }
     if(dimensions.first<1000)
       assert(YGNodeLayoutGetTop(toolbar.node)>=YGNodeLayoutGetHeight(tabs.node));
+    for (auto *iconButton : {scene.parseLogButton,scene.tasksButton})
+      assert(YGNodeLayoutGetWidth(iconButton->node)==YGNodeLayoutGetHeight(iconButton->node));
     assert(findSlot.parent==&actionSlot && unzipSlot.parent==&actionSlot && start.parent==&actionSlot);
     // Every replacement occupies the same slot, including across rotation.
     for (int action : {0,1,2,1,0}) {
@@ -446,6 +452,10 @@ int main() {
     assert(YGNodeLayoutGetHeight(browser.node)>200);
     assert(YGNodeLayoutGetHeight(start.node)==(dimensions.second>dimensions.first ? 66 : YGNodeLayoutGetHeight(dock.node)));
     assert(YGNodeLayoutGetHeight(search.node)==66);
+    for (auto *iconButton : {scene.parseLogButton,scene.tasksButton}) {
+      assert(YGNodeLayoutGetWidth(iconButton->node)==66);
+      assert(YGNodeLayoutGetHeight(iconButton->node)==66);
+    }
     assert(YGNodeLayoutGetWidth(search.node)>100);
     assert(YGNodeLayoutGetHeight(scroll.node)>0);
     assert(root.findViewByName("mainMenuPhoneLibrary")==nullptr);

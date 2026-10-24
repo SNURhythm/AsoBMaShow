@@ -81,6 +81,8 @@ private:
   TextView *presetMessageSecondLine = nullptr;
   View *gaugeLowerBoundRow = nullptr;
   TextInputBox *presetNameInput = nullptr;
+  Button *startMarkerButton = nullptr;
+  Button *endMarkerButton = nullptr;
   Button *loopButton = nullptr;
   TextView *loopButtonText = nullptr;
   SnappedSlider *countInSlider = nullptr;

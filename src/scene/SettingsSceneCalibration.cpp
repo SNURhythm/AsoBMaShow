@@ -1,7 +1,7 @@
 #include "SettingsSceneShared.h"
 #include "../view/ScrollView.h"
 #include "../view/DropdownView.h"
-#include "../view/CheckboxButtonContent.h"
+#include "../view/ToggleButtonContent.h"
 #include "../view/ActionButtonStyle.h"
 #include <numbers>
 
@@ -252,31 +252,36 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
   };
   const auto addDropdown = [&](View *row, const i18n::Text &label, std::string selected,
                                std::vector<DropdownView::Option> options,
-                               std::function<void(const std::string &)> choose) {
-    auto *dropdown = new DropdownView({.onOptionSelected = std::move(choose)}, overlayPortal);
-    dropdown->setTriggerWidth(metrics.compact ? 200 : 240);
-    dropdown->setHeight(controlHeight);
-    dropdown->refresh({.label = label, .selectedId = std::move(selected),
-                       .options = std::move(options), .maxVisibleItems = 8});
-    row->addView(dropdown);
+                               std::function<void(const std::string &)> choose,
+                               bool dynamic = false) {
+    auto *field = new View();
+    field->setFlexDirection(FlexDirection::Column)->setGap(8)->setWidthPercent(100);
+    field->addView(makeWrappedText(label, metrics.smallTextSize, app_theme::textSecondary()));
+    if (dynamic) {
+      auto *dropdown = new DropdownView({.onOptionSelected = std::move(choose)}, overlayPortal);
+      dropdown->setWidthPercent(100)->setHeight(controlHeight);
+      dropdown->refresh({.selectedId = std::move(selected), .options = std::move(options)});
+      field->addView(dropdown);
+    } else {
+      auto *choice = new ChoiceControlView([choose = std::move(choose)](const std::string &id) {
+        choose(id);
+        return true;
+      }, overlayPortal, metrics.smallTextSize, controlHeight);
+      choice->refresh({.selectedId = std::move(selected), .options = std::move(options)});
+      field->addView(choice);
+    }
+    row->addView(field);
   };
   const auto addToggle = [&](View *parent, const char *key, bool &enabled, bool restartAudio) {
-    auto *content = new CheckboxButtonContent(i18n::tr(key), metrics.smallTextSize, 20);
+    auto *content = new ToggleButtonContent(i18n::tr(key), metrics.smallTextSize, 20);
     content->setThemedColor(app_theme::textPrimary);
     content->setChecked(enabled);
-    auto *button = new Button();
-    button->setHeight(controlHeight);
-    button->setPadding(Edge::Left, 12);
-    button->setPadding(Edge::Right, 12);
-    button->setAlignItems(YGAlignCenter);
-    button->setJustifyContent(YGJustifyCenter);
-    button->setFlexShrink(0);
-    button->setCornerRadius(app_theme::controlRadius());
-    button->setThemedBackgroundColors(app_theme::control, app_theme::controlHover, app_theme::controlPressed);
-    button->addView(content);
-    button->setOnClickListener([this, value = &enabled, content, restartAudio] {
+    auto *button = toggle_button::makeButton(content, controlHeight);
+    toggle_button::style(button, enabled);
+    button->setOnClickListener([this, value = &enabled, button, content, restartAudio] {
       *value = !*value;
       content->setChecked(*value);
+      toggle_button::style(button, *value);
       if (calibrationDisplay && value == &calibrationNotesHidden) {
         calibrationMeasuring = false;
         calibrationSamples.reset();
@@ -306,6 +311,7 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
           resetPreviewSimulation();
           lastLayoutWidth = -1;
         }, calibrationDisplay == display);
+    tab_button::style(modeButton, calibrationDisplay == display);
     modeButton->setFlexGrow(1);
     modeButton->setFlexBasis(0);
   }
@@ -402,6 +408,7 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
           if (scrollView) scrollView->setScrollOffset(0);
           lastLayoutWidth = -1;
         }, calibrationScrollSettings == scrollSettings);
+    tab_button::style(tab, calibrationScrollSettings == scrollSettings);
     tab->setFlexGrow(1);
     tab->setFlexBasis(0);
   }
@@ -443,7 +450,7 @@ void SettingsScene::buildCalibrationPanel(View *panel, const LayoutMetrics &metr
       }
       addDropdown(chartControls, i18n::message("settings.preview_layout.lane.label"),
           std::to_string(calibrationChartOptions.lane), std::move(options),
-          [this, restart](const std::string &id) { calibrationChartOptions.lane = std::stoi(id); restart(); });
+          [this, restart](const std::string &id) { calibrationChartOptions.lane = std::stoi(id); restart(); }, true);
     }
     body->addView(chartControls);
     auto *tempoValue = makeText(std::to_string(calibrationChartOptions.bpm) + " BPM",
