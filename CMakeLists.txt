@@ -4255,6 +4255,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(archive_file_concurrency_tests
         tests/archive_file_concurrency_tests.cpp
+        tests/chart_readme_tests.cpp
+        src/library/ChartReadme.cpp
+        src/Utils.cpp
+        src/input/Utf16ToUtf8.cpp
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
         src/archive/UnzipOutput.cpp
@@ -4271,6 +4275,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ASOBMASHOW_ARCHIVE_FILE_STREAMING_TEST_HOOKS=1
     )
     target_link_libraries(archive_file_concurrency_tests PRIVATE ${COMMON_LIBS})
+    if(WIN32)
+        target_link_libraries(archive_file_concurrency_tests PRIVATE shell32 ole32)
+    endif()
+    add_test(NAME chart_readme_tests COMMAND archive_file_concurrency_tests --chart-readme)
     add_test(NAME archive_bounded_reader_tests COMMAND archive_file_concurrency_tests --bounded-reader)
     add_test(NAME archive_reference_reader_tests COMMAND archive_file_concurrency_tests --source-reference)
     add_test(NAME archive_unicode_artwork_read_tests COMMAND archive_file_concurrency_tests --unicode-entry read)
@@ -5533,6 +5541,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     add_executable(text_input_box_tests
         tests/text_input_box_tests.cpp
+        src/scene/ChartReadmeModal.cpp
+        src/library/ChartReadme.cpp
+        src/ArchiveFile.cpp
+        src/archive/TemporaryCache.cpp
+        src/archive/UnzipOutput.cpp
+        src/archive/IndexBuildCoordinator.cpp
+        src/MinizBridge.c
+        src/bms_parser.cpp
+        src/path.cpp
+        src/Utils.cpp
+        src/input/Utf16ToUtf8.cpp
         ${CMAKE_CURRENT_BINARY_DIR}/guided_access_reminder_ui.inc
         src/rendering/Color.cpp
         src/rendering/common.cpp
@@ -5559,6 +5578,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_link_libraries(text_input_box_tests PRIVATE
         ${COMMON_LIBS} bgfx yogacore
     )
+    if(APPLE)
+        target_link_libraries(text_input_box_tests PRIVATE iconv)
+    endif()
+    if(WIN32)
+        target_link_libraries(text_input_box_tests PRIVATE shell32 ole32)
+    endif()
 
     add_executable(bgfx_unix_platform_data_tests tests/bgfx_unix_platform_data_tests.cpp)
     target_include_directories(bgfx_unix_platform_data_tests PRIVATE
@@ -8775,6 +8800,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
 
     foreach(archive_file_target IN ITEMS
+        text_input_box_tests
         builtin_renderer_characterization_tests
         ir_upload_candidates_tests
         music_playlist_repository_tests

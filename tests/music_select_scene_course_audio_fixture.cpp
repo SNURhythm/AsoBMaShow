@@ -218,8 +218,8 @@ struct MusicSelectScene {
   FileActions *recordFileActions_ = nullptr;
   struct { void cancelAndWait() {} bool active() const { return false; } } recordsTask_;
   void finishRecordsLoading() {}
-  struct UnzipModal { void cancelAndWait() {} };
-  std::unique_ptr<UnzipModal> archiveUnzipModal_, findBmsModal_;
+  struct UnzipModal { void hide() {} void cancelAndWait() {} };
+  std::unique_ptr<UnzipModal> archiveUnzipModal_, findBmsModal_, readmeModal_;
   SceneManager manager;
   struct {
     Settings settings;

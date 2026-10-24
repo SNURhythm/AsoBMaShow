@@ -679,6 +679,7 @@ EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
       !archiveUnzipModal_->handleEvents(event)) {
     return {};
   }
+  if (readmeModal_ && !readmeModal_->handleEvents(event)) return {};
   if (findBmsModal_ != nullptr && !findBmsModal_->handleEvents(event)) {
     return {};
   }
@@ -998,6 +999,7 @@ bool MainMenuScene::prepareForStorageMaintenance(std::string &error) {
 }
 
 void MainMenuScene::onPause() {
+  if (readmeModal_) readmeModal_->hide();
   cancelPendingTabSwitch();
   if (auto *scene = activeUtilityTab()) scene->onPause();
   if (replayLoadTask_.active()) {
@@ -1242,6 +1244,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   detailsControlsScroll_ = nullptr;
   findBmsAvailableWithoutTutorial_ = false;
   archiveUnzipModal_.reset();
+  readmeModal_.reset();
   findBmsModal_.reset();
   // Initialize the view
   revealContextMenu.reset();
@@ -2330,6 +2333,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   revealMenuCallbacks.onActionSelected = [this](const std::string &actionId) {
     if (actionId == "show-same-folder") {
       showSelectedChartFolder();
+    } else if (actionId == "readme") {
+      openSelectedReadme();
     } else if (actionId == "reveal-file") {
       revealSelectedChartInFileManager();
     }
@@ -5041,7 +5046,8 @@ void MainMenuScene::toggleRevealContextMenu(View *anchor) {
       {{.id = "show-same-folder",
         .label = i18n::message("menu.show_same_folder.label"),
         .enabled = canShowSameFolder},
-       {.id = "reveal-file", .label = i18n::message("menu.reveal_file.label")}},
+       {.id = "reveal-file", .label = i18n::message("menu.reveal_file.label")},
+       {.id = "readme", .label = i18n::message("readme.reader.label")}},
       220);
 }
 
@@ -5104,6 +5110,16 @@ bool MainMenuScene::clearSameFolderScope() {
   }
   temporaryChartFolder.reset();
   return true;
+}
+
+void MainMenuScene::openSelectedReadme() {
+  if (willStart.load() || replayExportJob_.inProgress() || recyclerView == nullptr) return;
+  const auto record = selectedRecordSnapshot();
+  if (!record || record->courseStart || record->solidArchive ||
+      record->unavailable || record->meta.BmsPath.empty()) return;
+  if (revealContextMenu) revealContextMenu->dismiss();
+  if (!readmeModal_) readmeModal_ = ChartReadmeModal::Create(rootLayout);
+  if (readmeModal_) readmeModal_->show(record->meta.BmsPath, record->meta.Title);
 }
 
 void MainMenuScene::revealSelectedChartInFileManager() {
@@ -8231,6 +8247,10 @@ void MainMenuScene::update(float dt) {
   applyReplayFileDocumentHandoff();
   applyParseLogDocumentHandoff();
   observeReplayIrServiceRevisions();
+  if (readmeModal_) {
+    readmeModal_->resize(rendering::window_width, rendering::window_height);
+    readmeModal_->update();
+  }
   if (recordsModal_ != nullptr) {
     recordsModal_->update();
   }
@@ -8377,6 +8397,7 @@ void MainMenuScene::cleanupScene() {
     SDL_Log("Joining replayExportThread");
     replayExportJob_.cancelAndWait();
   }
+  readmeModal_.reset();
   findBmsModal_.reset();
   archiveUnzipModal_.reset();
   stopAndClearSelectedChart();

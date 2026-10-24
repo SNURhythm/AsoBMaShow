@@ -138,6 +138,7 @@ struct Modal {
   bool visible = false;
   bool progressVisible = false;
   std::string status;
+  void hide() { visible = false; }
   void resize(int, int) {}
   void update() {}
   void cancelAndWait() {}
@@ -341,7 +342,7 @@ struct MusicSelectScene {
 
   void resetFailedLaunch(std::uint64_t generation);
   bool recordsResumeAudioPending_ = false;
-  Modal *archiveUnzipModal_ = nullptr, *findBmsModal_ = nullptr;
+  Modal *archiveUnzipModal_ = nullptr, *findBmsModal_ = nullptr, *readmeModal_ = nullptr;
   bool selectorInputBlocked() const { return launching_; }
   void startArchiveUnzip(const ChartMetaRecord &) {}
   PublishedActions *skinSession_ = nullptr;

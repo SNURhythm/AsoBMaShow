@@ -9,6 +9,7 @@
 #include "RecordFileActions.h"
 #include "ArchiveUnzipModal.h"
 #include "FindBmsModal.h"
+#include "ChartReadmeModal.h"
 #include "../ReplayVideoExportTypes.h"
 #include "../replay/ReplayExportJob.h"
 #include "Scene.h"
@@ -151,6 +152,7 @@ private:
   void openToolbarMenu(MusicSelectToolbarControl control);
   [[nodiscard]] OverlayAnchor toolbarControlAnchor(MusicSelectToolbarControl control) const;
   void revealSelectedChartInFileManager();
+  void openSelectedReadme();
   [[nodiscard]] OverlayAnchor revealChartAnchor() const;
   void openMusicPlayer();
   void openTasks();
@@ -331,6 +333,7 @@ private:
 
   std::unique_ptr<ArchiveUnzipModal> archiveUnzipModal_;
   std::unique_ptr<FindBmsModal> findBmsModal_;
+  std::unique_ptr<ChartReadmeModal> readmeModal_;
   BlockingOverlayView *tasksModal_ = nullptr;
   TextView *tasksModalText_ = nullptr;
   DecideLoadingOverlay *decideOverlay_ = nullptr;

@@ -26,6 +26,21 @@ left while staying right-aligned. Portrait hides the wordmark in both layout
 and rendering. The play-options dock includes assist options without duplicate
 favorite or records controls in the details overflow.
 
+## Artist notes (Readme)
+
+Choose a chart, then **Reveal → Readme** to read its artist notes in the app.
+The custom selector's chart menu and skin event 17 (`open_document`, including
+its readme shortcut) use the same reader. A filename dropdown switches between
+notes; an Encoding dropdown corrects ambiguous Japanese/Korean legacy text.
+The text wraps and scrolls, and Close or Back/Escape returns to selection.
+
+Following beatoraja, discovery includes every immediate `.txt` sibling of the
+chart, ignoring extension case. It does not require a `readme` filename or search
+nested folders. Local files, indexed archives, and Android SAF folders are
+supported. Archive discovery uses metadata and reads only the chosen document.
+UTF-8, BOM-marked UTF-16, CP932, and CP949 are supported; the reader reports empty,
+unreadable, oversized (over 1 MiB), and excessive-file (over 1024) cases.
+
 ## Code map
 
 - `src/repositories/ChartRepository*` owns chart metadata queries and schema.

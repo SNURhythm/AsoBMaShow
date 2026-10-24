@@ -111,7 +111,7 @@ public:
   void cancelSkinPreparation();
   Evidence &e;
   ReplayRecordTask recordsTask_;
-  std::unique_ptr<Resource> recordFileActions_, archiveUnzipModal_, findBmsModal_, directoryLoader_, folderStatusLoader_;
+  std::unique_ptr<Resource> recordFileActions_, archiveUnzipModal_, findBmsModal_, readmeModal_, directoryLoader_, folderStatusLoader_;
   bool sceneActive_ = false;
   std::uint64_t launchGeneration_ = 0;
   std::atomic_bool launchCancelled_{false};

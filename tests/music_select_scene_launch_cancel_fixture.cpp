@@ -112,8 +112,8 @@ struct MusicSelectScene {
   struct { void cancelAndWait() {} } recordsTask_;
   struct FileActions { void close() {} };
   FileActions *recordFileActions_ = nullptr;
-  struct UnzipModal {};
-  std::unique_ptr<UnzipModal> archiveUnzipModal_, findBmsModal_;
+  struct UnzipModal { void hide() {}};
+  std::unique_ptr<UnzipModal> archiveUnzipModal_, findBmsModal_, readmeModal_;
   struct Context {
     struct { int skinPlayer2RandomOption = 0; } settings;
     Jukebox jukebox;

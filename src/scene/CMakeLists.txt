@@ -68,3 +68,5 @@ add_subdirectory(play)
 target_sources(main PRIVATE StorageManagementScene.cpp SettingsSceneStorage.cpp)
 
 target_sources(main PRIVATE SettingsSceneCalibration.cpp)
+
+target_sources(main PRIVATE ChartReadmeModal.cpp)

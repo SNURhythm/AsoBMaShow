@@ -46,6 +46,7 @@
 #include "RecordFileActions.h"
 #include "ReplayRecordTask.h"
 #include "FindBmsModal.h"
+#include "ChartReadmeModal.h"
 #include "ArchiveUnzipModal.h"
 #include <array>
 #include <atomic>
@@ -331,6 +332,7 @@ private:
   Button *tasksCloseButton = nullptr;
   TextView *tasksCloseButtonText = nullptr;
   std::unique_ptr<FindBmsModal> findBmsModal_;
+  std::unique_ptr<ChartReadmeModal> readmeModal_;
   TextView *readyGaugeText = nullptr;
   TextView *readySpeedText = nullptr;
   TextView *readyPlayOptionText = nullptr;
@@ -530,6 +532,7 @@ private:
   void showSelectedChartFolder();
   bool clearSameFolderScope();
   void revealSelectedChartInFileManager();
+  void openSelectedReadme();
   void startUnzipSelectedArchiveFolder();
   void startUnzipArchiveFolder(const ChartMetaRecord &record);
   void setPlayableChartActionsVisible(bool visible);

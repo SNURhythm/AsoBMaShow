@@ -4,6 +4,7 @@
 #if TARGET_OS_ANDROID
 
 #include "StableHash.h"
+#include "nlohmann/json.hpp"
 #include "ArchiveFile.h"
 #include "archive/ArchiveReferenceRegistry.h"
 #include "i18n/Localization.h"
@@ -1935,6 +1936,39 @@ bool ListAndroidTreeChartFiles(const std::filesystem::path &rootPath,
                                                    : line),
         .hasDocument = hasDocument && line[separator + 1] == '1',
     });
+  }
+  return true;
+}
+
+bool ListAndroidTreeTextFiles(const std::filesystem::path &directoryPath,
+                              std::vector<std::filesystem::path> &files,
+                              std::string &errorMessage) {
+  files.clear();
+  std::string treeId;
+  std::filesystem::path relativePath;
+  if (!splitAndroidTreePath(directoryPath, treeId, relativePath)) {
+    errorMessage = "Android directory path is invalid.";
+    return false;
+  }
+  const auto uri = treeUriForId(treeId);
+  if (!uri) { errorMessage = "Android directory permission is not registered."; return false; }
+  const auto result = callActivityStringMethod2(
+      "listTreeTextFiles", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+      uri->c_str(), relativePath.generic_string().c_str(), errorMessage);
+  std::string value;
+  if (!errorMessage.empty() || !parseBridgeResult(result, value, errorMessage)) return false;
+  const auto names = nlohmann::json::parse(value, nullptr, false);
+  if (!names.is_array() || names.size() > 1025) {
+    errorMessage = "Invalid Android readme listing.";
+    return false;
+  }
+  for (const auto &item : names) {
+    if (!item.is_string()) { files.clear(); return false; }
+    const auto name = item.get<std::string>();
+    if (name.empty() || name == "." || name == ".." || name.find_first_of("/\\") != std::string::npos) {
+      files.clear(); errorMessage = "Invalid Android readme filename."; return false;
+    }
+    files.push_back(directoryPath / std::filesystem::u8path(name));
   }
   return true;
 }

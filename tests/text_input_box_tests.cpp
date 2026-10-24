@@ -1,4 +1,9 @@
 #include "scene/play/GuidedAccessInstructionView.h"
+#include "scene/ChartReadmeModal.h"
+#include "StorageTestSupport.h"
+#include "view/RecyclerView.h"
+#include <thread>
+#include <chrono>
 #include "rendering/UniformCache.h"
 #include "view/TextInputBox.h"
 #include "view/TextView.h"
@@ -1066,6 +1071,37 @@ extern "C" bool SDLCALL TextInputBoxTest_GetStringSize(
   return TTF_GetStringSize(font, text, length, width, height);
 }
 
+void testReadmeModalDisplaysAndCloses() {
+  storage_test::TempDirectory directory;
+  directory.write("chart.bms");
+  directory.write("readme.txt", "Artist notes\n한글 notes\n");
+  View root(0, 0, 400, 600);
+  auto modal = ChartReadmeModal::Create(&root);
+  modal->resize(400, 600);
+  modal->show(directory.root / "chart.bms", "Test chart");
+  expect(modal->isVisible(), "readme menu opens a visible modal");
+  auto *lines = dynamic_cast<RecyclerView<std::string> *>(root.findViewByName("chartReadmeLines"));
+  expect(lines != nullptr, "readme uses virtualized text rows");
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (lines->size() == 0 && std::chrono::steady_clock::now() < deadline) {
+    modal->update();
+    std::this_thread::yield();
+  }
+  expect(lines->size() >= 2 && lines->get(0) == "Artist notes", "readme reader displays decoded selected file");
+  modal->resize(280, 420);
+  expect(lines->getWidth() <= 280 && lines->getHeight() > 0, "readme reader fits narrow viewport");
+  SDL_Event escape{};
+  escape.type = SDL_EVENT_KEY_DOWN;
+  escape.key.key = SDLK_ESCAPE;
+  expect(!modal->handleEvents(escape) && !modal->isVisible(), "readme close consumes Escape");
+  escape.type = SDL_EVENT_KEY_UP;
+  expect(!modal->handleEvents(escape), "closing key release cannot reach the selector");
+  modal->show(directory.root / "chart.bms", "Reopened");
+  modal->hide();
+  modal->update();
+  expect(!modal->isVisible(), "late readme completion cannot reopen a closed modal");
+}
+
 int main() {
   bgfx::Init init;
   init.type = bgfx::RendererType::Noop;
@@ -1073,6 +1109,7 @@ int main() {
   init.resolution.height = 64;
   expect(bgfx::init(init), "headless bgfx initializes for text input tests");
 
+  testReadmeModalDisplaysAndCloses();
   testTextPresentationInvalidationAndDeadlines();
 
   testConsumedReleaseEndsTextSelectionWithoutEndingEditing();

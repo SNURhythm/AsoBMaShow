@@ -379,43 +379,6 @@ previewSelection(const MusicSelectBarManagerReadView &snapshot,
   };
 }
 
-std::optional<std::vector<std::filesystem::path>>
-materializedArchiveDocuments(const std::filesystem::path &chartPath) {
-  std::filesystem::path archivePath;
-  std::filesystem::path chartInnerPath;
-  if (!archive_file::splitVirtualPath(chartPath, archivePath,
-                                      chartInnerPath)) {
-    return std::nullopt;
-  }
-  std::vector<archive_file::Entry> entries;
-  std::string error;
-  if (!archive_file::listEntries(archivePath, entries, &error)) {
-    SDL_Log("Failed to enumerate selector archive documents: %s",
-            error.c_str());
-    return std::vector<std::filesystem::path>{};
-  }
-  std::vector<std::filesystem::path> documents;
-  const auto folder = chartInnerPath.parent_path();
-  for (const auto &entry : entries) {
-    if (entry.directory || entry.path.parent_path() != folder) continue;
-    std::string extension = entry.path.extension().string();
-    std::ranges::transform(extension, extension.begin(),
-                           [](unsigned char value) {
-                             return static_cast<char>(std::tolower(value));
-                           });
-    if (extension != ".txt") continue;
-    const auto virtualPath =
-        archive_file::makeVirtualPath(archivePath, entry.path);
-    if (auto materialized = archive_file::materializeFile(virtualPath, &error)) {
-      documents.push_back(std::move(*materialized));
-    } else {
-      SDL_Log("Failed to materialize selector archive document: %s",
-              error.c_str());
-    }
-  }
-  return documents;
-}
-
 std::optional<MusicSelectControlKey> controlKey(SDL_Keycode key) {
   switch (key) {
   case SDLK_0: return MusicSelectControlKey::Num0;
@@ -683,6 +646,7 @@ bool MusicSelectScene::prepareForStorageMaintenance(std::string &error) {
 }
 
 void MusicSelectScene::onPause() {
+  if (readmeModal_) readmeModal_->hide();
   closeRankings();
   if (revealContextMenu_) revealContextMenu_->dismiss();
   recordsResumeAudioPending_ = false;
@@ -1518,6 +1482,7 @@ EventHandleResult MusicSelectScene::handleEvents(SDL_Event &event) {
     return {};
   }
   refreshToolbarAvailability();
+  if (readmeModal_ && !readmeModal_->handleEvents(event)) return {};
   if (selectorInputBlocked()) resetLogicalInput();
   if (rankingsModal_ && rankingsModal_->isOpen()) {
     if (modalOverlayPortal_) (void)modalOverlayPortal_->handleEvents(event);
@@ -2891,6 +2856,7 @@ void MusicSelectScene::consumeActions() {
   for (const auto &action : skinSession_->takePublishedActions()) {
     if (!sceneActive_ || failed_ ||
         context.appInBackground.load(std::memory_order_acquire)) return;
+    if (readmeModal_ && readmeModal_->isVisible()) break;
     if (archiveUnzipModal_ && archiveUnzipModal_->isVisible()) break;
     if (recordsExportJob_.inProgress() || recordsTask_.active() ||
         (recordsModal_ && recordsModal_->isVisible())) break;
@@ -2949,6 +2915,7 @@ bool MusicSelectScene::selectorInputBlocked() const {
   return launching_ || (revealContextMenu_ && revealContextMenu_->isOpen()) ||
          (archiveUnzipModal_ && archiveUnzipModal_->isVisible()) ||
          (findBmsModal_ && findBmsModal_->isVisible()) ||
+         (readmeModal_ && readmeModal_->isVisible()) ||
          (recordsModal_ != nullptr && recordsModal_->isVisible()) ||
          (rankingsModal_ && rankingsModal_->isOpen()) ||
          (tasksModal_ != nullptr && tasksModal_->getVisible()) ||
@@ -3227,16 +3194,7 @@ void MusicSelectScene::executeEvent(
       launchSelectedReplay(effect.value);
       return;
     case MusicSelectEventEffectKind::OpenDocument:
-      if (selected != nullptr && platform_open::desktopOpenSupported()) {
-        for (const auto &path : musicSelectDocumentPaths(
-                 *selected, materializedArchiveDocuments)) {
-          std::string error;
-          if (!platform_open::openPath(path, error)) {
-            SDL_Log("Failed to open chart document %s: %s",
-                    fspath_to_utf8(path).c_str(), error.c_str());
-          }
-        }
-      }
+      openSelectedReadme();
       break;
     case MusicSelectEventEffectKind::OpenExplorer:
       if (selected != nullptr && platform_open::desktopOpenSupported()) {
@@ -3440,6 +3398,10 @@ void MusicSelectScene::update(float) {
   if (playOptionsModal_ != nullptr) {
     playOptionsModal_->resize(rendering::window_width,
                               rendering::window_height);
+  }
+  if (readmeModal_) {
+    readmeModal_->resize(rendering::window_width, rendering::window_height);
+    readmeModal_->update();
   }
   if (recordsModal_ != nullptr) {
     recordsModal_->resize(rendering::window_width,
@@ -3679,6 +3641,8 @@ void MusicSelectScene::ensureToolbarContextMenu() {
             if (actionId == "show-same-folder") {
               if (toolbarControlAvailable(Control::RevealChart) && chartSession_)
                 (void)openSameFolder(true);
+            } else if (actionId == "readme") {
+              openSelectedReadme();
             } else if (actionId == "reveal-file") {
               if (toolbarControlAvailable(Control::RevealChart)) revealSelectedChartInFileManager();
             } else if (actionId == "chart-viewer") {
@@ -3722,6 +3686,8 @@ void MusicSelectScene::openToolbarMenu(MusicSelectToolbarControl control) {
                     (!chart->meta.Folder.empty() || !chart->meta.BmsPath.parent_path().empty())},
         {.id = "reveal-file", .label = i18n::message("music_select.reveal_file.label"),
          .enabled = toolbarControlAvailable(Control::RevealChart)},
+        {.id = "readme", .label = i18n::message("readme.reader.label"),
+         .enabled = toolbarControlAvailable(Control::RevealChart) && chart && !chart->solidArchive},
     };
   } else {
     actions = {
@@ -3766,7 +3732,22 @@ void MusicSelectScene::revealChart() {
       {{.id = "show-same-folder", .label = i18n::message("music_select.show_same_folder.label"),
         .enabled = chartSession_.has_value() && !selected.chart->solidArchive &&
                    !folder.empty()},
-       {.id = "reveal-file", .label = i18n::message("music_select.reveal_file.label")}}, 220);
+       {.id = "reveal-file", .label = i18n::message("music_select.reveal_file.label")},
+       {.id = "readme", .label = i18n::message("readme.reader.label")}}, 220);
+}
+
+void MusicSelectScene::openSelectedReadme() {
+  if (!sceneActive_ || failed_ || selectorInputBlocked()) return;
+  const auto snapshot = bars_.readView();
+  if (snapshot.selectedIndex >= snapshot.rowCount()) return;
+  const auto &selected = snapshot.rowAt(snapshot.selectedIndex);
+  if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart ||
+      selected.chart->solidArchive || selected.chart->unavailable ||
+      selected.chart->meta.BmsPath.empty()) return;
+  if (!readmeModal_) readmeModal_ = ChartReadmeModal::Create(modalLayer_);
+  if (!readmeModal_) return;
+  resetLogicalInput();
+  readmeModal_->show(selected.chart->meta.BmsPath, selected.chart->meta.Title);
 }
 
 void MusicSelectScene::revealSelectedChartInFileManager() {
@@ -4521,6 +4502,7 @@ void MusicSelectScene::cleanupScene() {
   recordsTask_.cancelAndWait();
   if (recordFileActions_) recordFileActions_->close();
   sceneActive_ = false;
+  readmeModal_.reset();
   findBmsModal_.reset();
   archiveUnzipModal_.reset();
   ++launchGeneration_;

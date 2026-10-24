@@ -785,6 +785,35 @@ public class AsoBMaShowActivity extends SDLActivity {
         return "OK";
     }
 
+    public String listTreeTextFiles(String treeUriText, String relativeDir) {
+        try {
+            Uri treeUri = Uri.parse(treeUriText);
+            String directory = normalizeRelativePath(relativeDir);
+            String parentId = resolveDocumentId(treeUri, directory);
+            if (parentId == null) return ERROR_PREFIX + "Directory is unavailable.";
+            Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId);
+            String[] columns = {Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE};
+            org.json.JSONArray names = new org.json.JSONArray();
+            try (Cursor cursor = getContentResolver().query(children, columns, null, null, null)) {
+                requireChartFilesCursor(cursor);
+                while (cursor.moveToNext()) {
+                    String name = cursor.getString(1);
+                    if (Document.MIME_TYPE_DIR.equals(cursor.getString(2)) || name == null
+                            || !name.toLowerCase(Locale.ROOT).endsWith(".txt")) continue;
+                    if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) continue;
+                    String relative = directory.isEmpty() ? name : directory + "/" + name;
+                    transientDocumentIdCache.put(cacheKey(treeUri, relative), cursor.getString(0));
+                    names.put(name);
+                    // One overflow item lets the reader report its explicit file limit.
+                    if (names.length() > 1024) break;
+                }
+            }
+            return names.toString();
+        } catch (Exception e) {
+            return ERROR_PREFIX + e.getMessage();
+        }
+    }
+
     public String cacheTreeDirectory(String treeUriText, String relativeDir) {
         try {
             Uri treeUri = Uri.parse(treeUriText);
