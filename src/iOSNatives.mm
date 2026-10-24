@@ -6002,8 +6002,13 @@ ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() {
   bool fillsBuiltInScreen = false;
   if (window != nil && window.screen == UIScreen.mainScreen) {
     // Interface and device orientation reverse the landscape enum names.
-    // Use the scene so rotation lock and a tablet lying flat remain correct.
-    switch (window.windowScene.interfaceOrientation) {
+    // Use UIKit's interface orientation so rotation lock and a tablet lying
+    // flat remain correct. SDL also supports windows without a UIWindowScene;
+    // messaging that nil scene yields Unknown and hides both reminder cues.
+    const UIInterfaceOrientation current = window.windowScene != nil
+        ? window.windowScene.interfaceOrientation
+        : window.rootViewController.interfaceOrientation;
+    switch (current) {
       case UIInterfaceOrientationPortrait: orientation = Orientation::Portrait; break;
       case UIInterfaceOrientationPortraitUpsideDown:
         orientation = Orientation::PortraitUpsideDown; break;

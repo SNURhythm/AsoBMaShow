@@ -49,7 +49,10 @@ The Mini 6, Air 11 M4 (drawing shared with M2/M3), Pro 11 M4, and Pro 11 generat
 | iPad Pro 13-inch (M5) | 0.940670 | [Drawing](https://developer.apple.com/download/files/accessories/dimensional-drawings/ipad-pro-13-inch-m5.pdf) |
 
 Use the active window scene's **interface** orientation, not accelerometer/device
-orientation. UIKit's landscape names differ from UIDeviceOrientation: interface
+orientation. For SDL windows without a `UIWindowScene`, use the root view
+controller's interface orientation, matching the app's rotation-lock code.
+Reading a missing scene instead yields Unknown and suppresses both the marker
+and floating label, even for a known full-screen iPad. UIKit's landscape names differ from UIDeviceOrientation: interface
 LandscapeLeft places Home on the left; LandscapeRight places Home on the right.
 The normalized mappings from portrait `(x, y)` are `(1-y, x)` for LandscapeLeft,
 `(y, 1-x)` for LandscapeRight, and `(1-x, 1-y)` upside down.
