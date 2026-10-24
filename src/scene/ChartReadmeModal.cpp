@@ -10,18 +10,14 @@
 #include "../view/DropdownView.h"
 #include "../view/ModalViewHelpers.h"
 #include "../view/OverlayPortal.h"
-#include "../view/RecyclerView.h"
+#include "../view/DocumentTextReader.h"
+#include "../PlatformOpen.h"
 #include <algorithm>
 #if TARGET_OS_ANDROID
 #include "../view/ImageView.h"
 #endif
 
 namespace {
-class ReadmeMeasurer : public TextView {
-public:
-  ReadmeMeasurer() : TextView(app_theme::font, 20) { setDeferredTextureMaterialization(true); }
-  int lineHeight() const { return textLineHeight(); }
-};
 i18n::Text errorText(chart_readme::Error error) {
   using E = chart_readme::Error;
   switch (error) {
@@ -41,7 +37,8 @@ struct ChartReadmeModal::Impl {
   Button *copy = nullptr, *translate = nullptr, *original = nullptr, *translated = nullptr;
   View *modes = nullptr;
   View *attribution = nullptr;
-  DropdownView *targetSelector = nullptr;
+  DropdownView *targetSelector = nullptr, *sourceSelector = nullptr;
+  DropdownView::State sourceSelection;
   DropdownView::State targetSelection;
   BlockingOverlayView *root = nullptr;
   View *panel = nullptr;
@@ -50,16 +47,14 @@ struct ChartReadmeModal::Impl {
   DropdownView *selector = nullptr;
   DropdownView *encodingSelector = nullptr;
   OverlayPortal *portal = nullptr;
-  RecyclerView<std::string> *lines = nullptr;
+  DocumentTextReader *lines = nullptr;
   Button *close = nullptr;
-  ReadmeMeasurer measure;
   DropdownView::State selection;
   DropdownView::State encodingSelection;
   chart_readme::Encoding encoding = chart_readme::Encoding::Auto;
   std::vector<std::filesystem::path> documents;
   std::string text;
   int width = rendering::window_width, height = rendering::window_height;
-  int textWidth = 0;
   bool loading = false;
   SDL_Keycode closingKey = 0;
   bool closingGamepad = false;
@@ -108,17 +103,7 @@ struct ChartReadmeModal::Impl {
     reflow(true);
   }
   void reflow(bool resetScroll) {
-    const int available = std::max(1, lines->getVisibleItemWidth() - 4);
-    if (available == textWidth && !resetScroll) return;
-    textWidth = available;
-    const double oldOffset = resetScroll ? 0 : lines->scrollOffset;
-    auto wrapped = text.empty() ? std::vector<std::string>{} : chart_readme::wrapLines(
-        text, available, [&](const auto &line) { return measure.measureTextWidth(line); });
-    lines->itemHeight = std::max(30, measure.lineHeight() + 4);
-    lines->setItems(std::move(wrapped));
-    lines->scrollOffset = std::clamp(oldOffset, 0.0,
-        static_cast<double>(std::max(0, lines->size() * lines->itemHeight - lines->getHeight())));
-    lines->rebindVisibleItems();
+    lines->setDocumentText(text, resetScroll);
   }
   void loadSelected() {
     const auto found = std::ranges::find_if(selection.options,
@@ -134,7 +119,7 @@ struct ChartReadmeModal::Impl {
     loading = true;
     text.clear();
     refreshActions();
-    lines->clear();
+    lines->setDocumentText("");
     status->setLocalizedText(i18n::message("readme.reader.loading"));
     setStatusVisible(true);
     ui::requestAnimationFrame();
@@ -167,6 +152,9 @@ ChartReadmeModal::ChartReadmeModal(View *parent) : impl_(std::make_unique<Impl>(
   v.portal->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
   v.portal->setZIndex(2000);
   v.root->addView(v.portal);
+  auto *settings = new View();
+  settings->setFlexDirection(FlexDirection::Row)->setGap(8)->setFlexShrink(0);
+  v.panel->addView(settings);
   v.selector = new DropdownView({
       .onOpenChanged = [this](bool open) { impl_->selection.open = open; },
       .onOptionSelected = [this](const std::string &id) {
@@ -179,11 +167,8 @@ ChartReadmeModal::ChartReadmeModal(View *parent) : impl_(std::make_unique<Impl>(
         v.selector->refresh(v.selection);
         v.loadSelected();
       }}, v.portal);
-  v.selector->setHeight(40)->setFlexShrink(0);
-  v.panel->addView(v.selector);
-  auto *settings = new View();
-  settings->setFlexDirection(FlexDirection::Row)->setGap(8)->setFlexShrink(0);
-  v.panel->addView(settings);
+  v.selector->setHeight(40)->setFlex(1)->setMinWidth(0);
+  settings->addView(v.selector);
   v.encodingSelector = new DropdownView({
       .onOpenChanged = [this](bool open) { impl_->encodingSelection.open = open; },
       .onOptionSelected = [this](const std::string &id) {
@@ -199,6 +184,23 @@ ChartReadmeModal::ChartReadmeModal(View *parent) : impl_(std::make_unique<Impl>(
   v.encodingSelector->setName("chartReadmeEncoding");
   v.encodingSelector->setHeight(40)->setFlex(1)->setMinWidth(0);
   settings->addView(v.encodingSelector);
+  auto *languages = new View();
+  languages->setFlexDirection(FlexDirection::Row)->setGap(8)->setFlexShrink(0);
+  v.panel->addView(languages);
+  v.sourceSelector = new DropdownView({
+      .onOpenChanged = [this](bool open) { impl_->sourceSelection.open = open; },
+      .onOptionSelected = [this](const std::string &id) {
+        auto &v = *impl_;
+        v.cancelTranslation();
+        v.translatedText.clear();
+        v.sourceSelection.selectedId = id;
+        v.sourceSelection.open = false;
+        v.sourceSelector->refresh(v.sourceSelection);
+        v.showText(false);
+      }}, v.portal);
+  v.sourceSelector->setName("chartReadmeSource");
+  v.sourceSelector->setHeight(40)->setFlex(1)->setMinWidth(0);
+  languages->addView(v.sourceSelector);
   v.targetSelector = new DropdownView({
       .onOpenChanged = [this](bool open) { impl_->targetSelection.open = open; },
       .onOptionSelected = [this](const std::string &id) {
@@ -211,7 +213,7 @@ ChartReadmeModal::ChartReadmeModal(View *parent) : impl_(std::make_unique<Impl>(
         v.showText(false);
       }}, v.portal);
   v.targetSelector->setHeight(40)->setFlex(1)->setMinWidth(0);
-  settings->addView(v.targetSelector);
+  languages->addView(v.targetSelector);
   const auto button = [](const char *key, const char *name) {
     auto *result = modal_view::makeModalButton(i18n::message(key), 18);
     result->setName(name);
@@ -243,7 +245,7 @@ ChartReadmeModal::ChartReadmeModal(View *parent) : impl_(std::make_unique<Impl>(
       v.showText(false);
       v.translating = true;
       v.status->setLocalizedText(i18n::message("readme.translation.preparing")); v.setStatusVisible(true);
-      readme_translation::start(v.translation.begin(), v.originalText, v.targetSelection.selectedId);
+      readme_translation::start(v.translation.begin(), v.originalText, v.targetSelection.selectedId, v.sourceSelection.selectedId);
       ui::requestAnimationFrame();
     }
     v.refreshActions(); v.root->applyYogaLayout(); v.reflow(false);
@@ -277,20 +279,17 @@ ChartReadmeModal::ChartReadmeModal(View *parent) : impl_(std::make_unique<Impl>(
   v.status->setWrap(true);
   v.status->setMinHeight(28)->setFlexShrink(0);
   v.panel->addView(v.status);
-  v.lines = new RecyclerView<std::string>([](const auto &a, const auto &b) { return a == b; });
+  v.lines = new DocumentTextReader();
   v.lines->setName("chartReadmeLines");
   v.lines->setWidthPercent(100)->setFlex(1)->setMinHeight(0);
-  v.lines->reserveScrollbarGutter = true;
-  v.lines->isSelectable = [](const auto &, int) { return false; };
-  v.lines->onCreateView = [](const std::string &) {
-    auto *line = new TextView(app_theme::font, 20);
-    line->setDeferredTextureMaterialization(true);
-    line->setThemedColor(app_theme::textPrimary);
-    line->setOverflow(TextView::TextOverflow::Hidden);
-    return line;
-  };
-  v.lines->onBind = [](View *view, const std::string &line, int, bool) {
-    static_cast<TextView *>(view)->setText(line);
+  v.lines->onOpenUrl = [this](const std::string &url) {
+    std::string error;
+    if (!platform_open::openExternalUrl(url, error)) {
+      auto &v = *impl_;
+      v.status->setLocalizedText(i18n::message("reader.link.open_error"));
+      v.setStatusVisible(true);
+      v.root->applyYogaLayout();
+    }
   };
   v.panel->addView(v.lines);
   v.close = modal_view::makeModalButton(i18n::message("readme.reader.close"), 20);
@@ -328,6 +327,10 @@ void ChartReadmeModal::show(const std::filesystem::path &chart, const std::strin
   if (std::string_view(target).starts_with("zh")) v.targetSelection.selectedId = "zh";
 #endif
   v.targetSelector->refresh(v.targetSelection);
+  v.sourceSelection = {.label = i18n::message("readme.translation.source"), .selectedId = "auto",
+      .options = {{"auto", i18n::message("readme.translation.auto_detect")},
+                  {"ja", "日本語"}, {"en", "English"}, {"ko", "한국어"}}};
+  v.sourceSelector->refresh(v.sourceSelection);
   v.selection = {.label = i18n::message("readme.reader.file"), .enabled = false};
   v.selector->refresh(v.selection);
   v.encoding = chart_readme::Encoding::Auto;
@@ -350,6 +353,8 @@ void ChartReadmeModal::hide() {
   v.cancelTranslation();
   v.targetSelection.open = false;
   v.targetSelector->refresh(v.targetSelection);
+  v.sourceSelection.open = false;
+  v.sourceSelector->refresh(v.sourceSelection);
   v.loading = false;
   v.selection.open = false;
   v.selector->refresh(v.selection);
@@ -370,7 +375,8 @@ void ChartReadmeModal::resize(int width, int height) {
   v.root->setPadding(Edge::Top, safe.top)->setPadding(Edge::Bottom, safe.bottom);
   v.panel->setSize(panelWidth, panelHeight);
   v.portal->setSize(width, height);
-  v.selector->setTriggerWidth(std::max(1, panelWidth - 24));
+  v.selector->setTriggerWidth(std::max(1, (panelWidth - 32) / 2));
+  v.sourceSelector->setTriggerWidth(std::max(1, (panelWidth - 32) / 2));
   v.encodingSelector->setTriggerWidth(std::max(1, (panelWidth - 32) / 2));
   v.targetSelector->setTriggerWidth(std::max(1, (panelWidth - 32) / 2));
   v.root->applyYogaLayout();
@@ -438,6 +444,7 @@ bool ChartReadmeModal::handleEvents(SDL_Event &event) {
     v.closingKey = event.key.key;
     if (v.selection.open) { v.selection.open = false; v.selector->refresh(v.selection); }
     else if (v.encodingSelection.open) { v.encodingSelection.open = false; v.encodingSelector->refresh(v.encodingSelection); }
+    else if (v.sourceSelection.open) { v.sourceSelection.open = false; v.sourceSelector->refresh(v.sourceSelection); }
     else if (v.targetSelection.open) { v.targetSelection.open = false; v.targetSelector->refresh(v.targetSelection); }
     else hide();
     return false;
@@ -445,7 +452,7 @@ bool ChartReadmeModal::handleEvents(SDL_Event &event) {
   if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && event.gbutton.button == SDL_GAMEPAD_BUTTON_EAST) {
     v.closingGamepad = true; hide(); return false;
   }
-  if (event.type == SDL_EVENT_KEY_DOWN && !v.selection.open && !v.encodingSelection.open && !v.targetSelection.open) {
+  if (event.type == SDL_EVENT_KEY_DOWN && !v.selection.open && !v.encodingSelection.open && !v.sourceSelection.open && !v.targetSelection.open) {
     double offset = v.lines->scrollOffset;
     switch (event.key.key) {
     case SDLK_UP: offset -= v.lines->itemHeight; break;

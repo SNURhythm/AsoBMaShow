@@ -15,6 +15,7 @@
 #include "../view/ScrollView.h"
 #include "../view/LegalNoticeReader.h"
 #include "../ArchiveFile.h"
+#include "../PlatformOpen.h"
 #include "play/BMSRenderer.h"
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include "GameplaySkinSettingsPresentation.h"
@@ -1898,11 +1899,28 @@ View *SettingsScene::buildLegalTab(const LayoutMetrics &metrics) {
   column->addView(makeHeading(i18n::message("settings.legal.title"), metrics.sectionTitleSize));
   column->addView(makeWrappedText(i18n::message("settings.legal.description"),
       metrics.bodyTextSize, app_theme::textSecondary()));
-  column->addView(makeWrappedText("AsoBMaShow — https://github.com/SNURhythm/AsoBMaShow",
-      metrics.smallTextSize, app_theme::textSecondary()));
+  auto *projectLink = new DocumentTextReader();
+  projectLink->setName("legalProjectLink");
+  const std::string projectText = "AsoBMaShow — " + std::string(kRepositoryUrl);
+  TextView linkMeasure(app_theme::font, 20);
+  linkMeasure.setDeferredTextureMaterialization(true);
+  const auto projectLines = chart_readme::wrapLines(projectText, std::max(1, metrics.cardsWidth - 4),
+      [&](const std::string &line) { return linkMeasure.measureTextWidth(line); });
+  projectLink->setWidthPercent(100)->setHeight(static_cast<float>(projectLines.size() * 30 + 4));
+  projectLink->setFlexShrink(0);
+  projectLink->setDocumentText(projectText);
+  projectLink->onOpenUrl = [](const std::string &url) {
+    std::string error;
+    if (!platform_open::openExternalUrl(url, error)) SDL_Log("%s", error.c_str());
+  };
+  column->addView(projectLink);
   auto *reader = new LegalNoticeReader();
   column->setFlex(1)->setMinHeight(0);
   reader->setWidthPercent(100)->setFlex(1)->setMinHeight(0);
+  reader->onOpenUrl = [](const std::string &url) {
+    std::string error;
+    if (!platform_open::openExternalUrl(url, error)) SDL_Log("%s", error.c_str());
+  };
   const auto loadNotice = [reader](const std::string &file) {
     std::vector<unsigned char> bytes;
     std::string error;

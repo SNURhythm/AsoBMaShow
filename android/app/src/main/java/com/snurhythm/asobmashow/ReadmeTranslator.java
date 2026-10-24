@@ -14,7 +14,6 @@ import com.google.mlkit.nl.translate.Translator;
 import com.google.mlkit.nl.translate.TranslatorOptions;
 import com.google.android.gms.tasks.Task;
 import com.google.android.gms.tasks.Tasks;
-import org.json.JSONArray;
 import org.json.JSONObject;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
@@ -24,10 +23,10 @@ final class ReadmeTranslator {
     private final Activity activity;
     private long request;
     private Translator translator;
-    private String translatorSource, destination;
+    private String source, destination;
     private LanguageIdentifier identifier;
     private AlertDialog prompt;
-    private JSONArray parts, samples;
+    private String input;
     private JSONObject labels;
     private final ReadmeTranslationOutput output = new ReadmeTranslationOutput(4 * 1024 * 1024);
     private static native void deliver(long id, int state, byte[] text);
@@ -43,8 +42,8 @@ final class ReadmeTranslator {
         if (prompt != null) { prompt.dismiss(); prompt = null; }
         if (identifier != null) { identifier.close(); identifier = null; }
         if (translator != null) { translator.close(); translator = null; }
-        translatorSource = null;
-        parts = null;
+        source = null;
+        input = null;
         output.clear();
     }
     private void finish(long id, int state, String text) {
@@ -70,12 +69,23 @@ final class ReadmeTranslator {
         request = id;
         try {
             labels = new JSONObject(new String(data, StandardCharsets.UTF_8));
-            parts = labels.getJSONArray("parts");
-            samples = labels.getJSONArray("samples");
+            input = labels.getString("text");
             destination = TranslateLanguage.fromLanguageTag(target);
             if (destination == null) { finish(id, 3, ""); return; }
-            identifier = LanguageIdentification.getClient();
-            identifyNext(id, 0);
+            String selected = labels.getString("source");
+            if (!"auto".equals(selected)) {
+                source = TranslateLanguage.fromLanguageTag(selected);
+                beginTranslation(id);
+            } else {
+                identifier = LanguageIdentification.getClient();
+                identifier.identifyLanguage(input)
+                    .addOnSuccessListener(language -> {
+                        if (!active(id)) return;
+                        identifier.close(); identifier = null;
+                        source = TranslateLanguage.fromLanguageTag(language);
+                        beginTranslation(id);
+                    }).addOnFailureListener(error -> fail(id, error));
+            }
         } catch (Exception error) { fail(id, error); }
     }
     private Task<Boolean> modelPresent(String language) {
@@ -83,61 +93,45 @@ final class ReadmeTranslator {
         if (TranslateLanguage.ENGLISH.equals(language)) return Tasks.forResult(true);
         return RemoteModelManager.getInstance().isModelDownloaded(new TranslateRemoteModel.Builder(language).build());
     }
-    private void prepare(long id, String source, int index) {
-        if (source.equals(translatorSource)) { translate(id, index); return; }
-        if (translator != null) translator.close();
+    private void beginTranslation(long id) {
+        if (!active(id)) return;
+        if (source == null) { finish(id, 3, ""); return; }
+        if (source.equals(destination)) {
+            finish(id, 2, input);
+            return;
+        }
         translator = Translation.getClient(new TranslatorOptions.Builder()
             .setSourceLanguage(source).setTargetLanguage(destination).build());
-        translatorSource = source;
         Tasks.whenAllSuccess(modelPresent(source), modelPresent(destination))
             .addOnSuccessListener(results -> {
                 if (!active(id)) return;
                 if (Boolean.TRUE.equals(results.get(0)) && Boolean.TRUE.equals(results.get(1))) {
-                    translate(id, index); return;
+                    translate(id); return;
                 }
                 prompt = new AlertDialog.Builder(activity)
                     .setTitle(labels.optString("translate"))
                     .setMessage(labels.optString("download_message") + "\n\n" +
                         Locale.forLanguageTag(source).getDisplayLanguage() + " → " +
                         Locale.forLanguageTag(destination).getDisplayLanguage())
-                    .setPositiveButton(labels.optString("download"), (dialog, which) -> download(id, index))
+                    .setPositiveButton(labels.optString("download"), (dialog, which) -> download(id))
                     .setNegativeButton(labels.optString("cancel"), (dialog, which) -> finish(id, 4, ""))
                     .setOnCancelListener(dialog -> finish(id, 4, ""))
                     .show();
             }).addOnFailureListener(error -> fail(id, error));
     }
-    private void download(long id, int index) {
+    private void download(long id) {
         if (!active(id)) return;
         publish(id, 0, "");
         translator.downloadModelIfNeeded(new DownloadConditions.Builder().build())
-            .addOnSuccessListener(unused -> { if (active(id)) translate(id, index); })
+            .addOnSuccessListener(unused -> { if (active(id)) translate(id); })
             .addOnFailureListener(error -> fail(id, error));
     }
-    private void identifyNext(long id, int index) {
-        if (!active(id)) return;
-        // Keep blank lines, decorative separators and numbers exactly as written.
-        while (index < parts.length() && !parts.optString(index).codePoints().anyMatch(Character::isLetter)) {
-            if (!append(id, parts.optString(index++))) return;
-        }
-        if (index == parts.length()) { finish(id, 2, output.toString()); return; }
-        publish(id, 1, "");
-        final int current = index;
-        identifier.identifyLanguage(parts.optString(samples.optInt(index, index))).addOnSuccessListener(language -> {
-            if (!active(id)) return;
-            String source = TranslateLanguage.fromLanguageTag(language);
-            // Short author names can be guessed as an unsupported language.
-            // Preserve those segments rather than discarding the translated notes.
-            if (source == null || destination.equals(source)) {
-                if (append(id, parts.optString(current))) identifyNext(id, current + 1);
-            } else prepare(id, source, current);
-        }).addOnFailureListener(error -> fail(id, error));
-    }
-    private void translate(long id, int index) {
+    private void translate(long id) {
         if (!active(id)) return;
         publish(id, 1, "");
-        translator.translate(parts.optString(index)).addOnSuccessListener(text -> {
+        translator.translate(input).addOnSuccessListener(text -> {
             if (!active(id)) return;
-            if (append(id, text)) identifyNext(id, index + 1);
+            if (append(id, text)) finish(id, 2, output.toString());
         }).addOnFailureListener(error -> fail(id, error));
     }
 }

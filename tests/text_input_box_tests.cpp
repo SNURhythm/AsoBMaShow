@@ -1,6 +1,7 @@
 #include "scene/play/GuidedAccessInstructionView.h"
 #include "scene/ChartReadmeModal.h"
 #include "view/LegalNoticeReader.h"
+#include "library/DocumentLinks.h"
 #include "rendering/ResponsiveUi.h"
 #include "StorageTestSupport.h"
 #include "view/RecyclerView.h"
@@ -1084,18 +1085,19 @@ void testReadmeModalDisplaysAndCloses() {
   modal->resize(400, 600);
   modal->show(directory.root / "chart.bms", "Test chart");
   expect(modal->isVisible(), "readme menu opens a visible modal");
-  auto *lines = dynamic_cast<RecyclerView<std::string> *>(root.findViewByName("chartReadmeLines"));
+  auto *lines = dynamic_cast<DocumentTextReader *>(root.findViewByName("chartReadmeLines"));
   expect(lines != nullptr, "readme uses virtualized text rows");
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
   while (lines->size() == 0 && std::chrono::steady_clock::now() < deadline) {
     modal->update();
     std::this_thread::yield();
   }
-  expect(lines->size() >= 2 && lines->get(0) == "Artist notes", "readme reader displays decoded selected file");
+  expect(lines->size() >= 2 && lines->get(0).text == "Artist notes", "readme reader displays decoded selected file");
   auto *copy = dynamic_cast<Button *>(root.findViewByName("chartReadmeCopy"));
   auto *translate = dynamic_cast<Button *>(root.findViewByName("chartReadmeTranslate"));
   expect(copy && copy->isEnabled(), "loaded readme enables copying");
   expect(translate != nullptr, "readme exposes on-device translation action");
+  expect(root.findViewByName("chartReadmeSource") != nullptr, "readme exposes manual source selection");
   auto *encoding = root.findViewByName("chartReadmeEncoding");
   expect(encoding && copy->getY() >= encoding->getY() + encoding->getHeight(),
          "reader actions do not overlap larger mobile dropdown targets");
@@ -1112,6 +1114,85 @@ void testReadmeModalDisplaysAndCloses() {
   modal->update();
   expect(!modal->isVisible(), "late readme completion cannot reopen a closed modal");
   rendering::compactMenuCanvasActive = previousCompact;
+}
+
+namespace platform_open {
+bool openExternalUrl(std::string_view, std::string &) { return true; }
+}
+
+void testDocumentLinksDoNotHijackScrolling() {
+  const auto links = document_links::find("Text <https://example.com/a?q=1&x=2>. (https://example.org/wiki/A_(B)). javascript:evil www.example.net");
+  expect(links.size() == 3 && links[0].url == "https://example.com/a?q=1&x=2" &&
+      links[1].url == "https://example.org/wiki/A_(B)" && links[2].url == "https://www.example.net",
+      "document links preserve URL punctuation and accept bare www addresses");
+  View root(0, 0, 400, 300);
+  auto *reader = new LegalNoticeReader();
+  reader->setWidthPercent(100)->setHeight(300);
+  root.addView(reader);
+  std::vector<std::string> opened;
+  reader->onOpenUrl = [&](const std::string &url) { opened.push_back(url); };
+  reader->setNotice("https://example.com/" + std::string(120, 'x') + "\n" + std::string(100, '\n'));
+  root.applyYogaLayout();
+  const auto send = [&](bool touch, Uint32 type, int x, int y) {
+    auto event = selectionPointer(touch, type, x, y);
+    root.handleEvents(event);
+  };
+  send(false, SDL_EVENT_MOUSE_BUTTON_DOWN, 20, 10);
+  expect(opened.empty(), "link does not activate on mouse press");
+  send(false, SDL_EVENT_MOUSE_BUTTON_UP, 20, 10);
+  expect(opened.size() == 1 && opened.back().size() == 140,
+      "completed click opens the full wrapped URL");
+  send(true, SDL_EVENT_FINGER_DOWN, 20, 45);
+  send(true, SDL_EVENT_FINGER_UP, 20, 45);
+  expect(opened.size() == 2 && opened.back() == opened.front(), "wrapped URL continuation is clickable");
+  send(true, SDL_EVENT_FINGER_DOWN, 20, 80);
+  send(true, SDL_EVENT_FINGER_MOTION, 20, 20);
+  send(true, SDL_EVENT_FINGER_UP, 20, 20);
+  expect(opened.size() == 2 && reader->scrollOffset > 0, "swiping over a link scrolls without opening it");
+  reader->scrollOffset = 0;
+  send(false, SDL_EVENT_MOUSE_BUTTON_DOWN, 20, 10);
+  send(false, SDL_EVENT_MOUSE_MOTION, 60, 10);
+  send(false, SDL_EVENT_MOUSE_MOTION, 20, 10);
+  send(false, SDL_EVENT_MOUSE_BUTTON_UP, 20, 10);
+  expect(opened.size() == 2, "drag returning to its origin cannot activate a link");
+  send(false, SDL_EVENT_MOUSE_BUTTON_DOWN, 20, 10);
+  SDL_Event wheel{}; wheel.type = SDL_EVENT_MOUSE_WHEEL;
+  wheel.wheel.mouse_x = 20; wheel.wheel.mouse_y = 10; wheel.wheel.y = -1;
+  root.handleEvents(wheel);
+  send(false, SDL_EVENT_MOUSE_BUTTON_UP, 20, 10);
+  expect(opened.size() == 2, "wheel scrolling cancels an armed link");
+  reader->scrollOffset = 0;
+  send(true, SDL_EVENT_FINGER_DOWN, 20, 10);
+  root.cancelPointerInput();
+  send(true, SDL_EVENT_FINGER_UP, 20, 10);
+  expect(opened.size() == 2, "cancelled pointer cannot open a link");
+  reader->setNotice("https://example.com/" + std::string(120, 'x') + "\n" + std::string(100, '\n'));
+  send(true, SDL_EVENT_FINGER_DOWN, 20, 80);
+  send(true, SDL_EVENT_FINGER_MOTION, 20, 20);
+  auto secondDown = selectionPointer(true, SDL_EVENT_FINGER_DOWN, 20, 10, 8);
+  root.handleEvents(secondDown);
+  auto secondUp = selectionPointer(true, SDL_EVENT_FINGER_UP, 20, 10, 8);
+  root.handleEvents(secondUp);
+  expect(opened.size() == 2, "second finger cannot activate a link during a scroll gesture");
+  send(true, SDL_EVENT_FINGER_UP, 20, 20);
+
+  const std::string url = "https://example.com/" + std::string(120, 'x');
+  reader->setNotice(url + std::string(100, '\n'));
+  root.applyYogaLayout();
+  const std::string fragment = reader->get(1).text;
+  reader->setNotice(url + "\n" + std::string(20, '\n') + fragment + std::string(20, '\n'));
+  reader->setHeight(30);
+  root.applyYogaLayout();
+  expect(reader->getViewByIndex(1)->findViewByName("documentLinkUnderline") != nullptr,
+      "wrapped URL fragment is underlined");
+  int plainRow = 0;
+  for (int i = 10; i < reader->size(); ++i) if (reader->get(i).text == fragment) { plainRow = i; break; }
+  expect(plainRow > 0, "fixture contains an identical non-link row");
+  reader->scrollOffset = plainRow * reader->itemHeight;
+  reader->onLayout();
+  expect(reader->getViewByIndex(plainRow)->findViewByName("documentLinkUnderline") == nullptr,
+      "identical standalone text does not inherit a URL underline during recycling");
+
 }
 
 void testLegalNoticeReaderReflowsAndResets() {
@@ -1155,6 +1236,7 @@ int main() {
   init.resolution.height = 64;
   expect(bgfx::init(init), "headless bgfx initializes for text input tests");
 
+  testDocumentLinksDoNotHijackScrolling();
   testLegalNoticeReaderReflowsAndResets();
   testReadmeModalDisplaysAndCloses();
   testTextPresentationInvalidationAndDeadlines();

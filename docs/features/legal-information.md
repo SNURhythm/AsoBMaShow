@@ -1,6 +1,6 @@
 # Legal information
 
-Settings → Legal provides an offline selector and a virtualized reader for the application license, third-party copyright/license notices and the translation disclaimer. Notice text is displayed verbatim; navigation is localized. Some components apply only to particular platforms or build configurations. User-supplied charts, music and skins retain their authors’ terms.
+Settings → Legal provides an offline selector and a virtualized reader for the application license, third-party copyright/license notices and the translation disclaimer. Notice text is displayed verbatim; navigation is localized. HTTP/HTTPS and `www.` links are underlined and open in the system browser on a completed click or tap; scrolling and dragging cancel link activation. Some components apply only to particular platforms or build configurations. User-supplied charts, music and skins retain their authors’ terms.
 
 ## Updating notices
 

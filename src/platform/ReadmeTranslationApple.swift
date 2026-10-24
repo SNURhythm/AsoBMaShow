@@ -15,14 +15,10 @@ private typealias TranslationCallback = @convention(c) (UInt64, Int32, UnsafePoi
 private final class ReadmeTranslationHost: ObservableObject {
     static var current: ReadmeTranslationHost?
     let id: UInt64
-    let parts: [String]
-    let samples: [Int]
+    let input: String
     let labels: [String: Any]
     @Published var configuration: TranslationSession.Configuration?
     let target: String
-    var source = ""
-    var supportedSources = Set<String>()
-    var index = 0
     var output = ReadmeTranslationOutput(maximumBytes: 4 * 1024 * 1024)
     let callback: TranslationCallback
     var session: TranslationSession?
@@ -32,17 +28,15 @@ private final class ReadmeTranslationHost: ObservableObject {
 #else
     var panel: NSPanel?
 #endif
-    init(id: UInt64, parts: [String], labels: [String: Any], target: String,
+    init(id: UInt64, input: String, labels: [String: Any], target: String,
          callback: @escaping TranslationCallback) {
         self.id = id
-        self.parts = parts
-        self.samples = labels["samples"] as? [Int] ?? Array(parts.indices)
+        self.input = input
         self.labels = labels
         self.callback = callback
         self.target = target
     }
     private func configure(source: String) {
-        self.source = source
         let language = Locale.Language(identifier: source)
         let destination = Locale.Language(identifier: target)
         if #available(iOS 26.4, macOS 26.4, *) {
@@ -50,26 +44,6 @@ private final class ReadmeTranslationHost: ObservableObject {
         } else {
             configuration = .init(source: language, target: destination)
         }
-    }
-    // Each session has one source language. Switch its configuration at language
-    // boundaries instead of letting an English heading determine the whole file.
-    private func nextSource() async throws -> String? {
-        while index < parts.count && !finished {
-            try Task.checkCancellation()
-            let part = parts[index]
-            if part.unicodeScalars.contains(where: { CharacterSet.letters.contains($0) }),
-               let language = NLLanguageRecognizer.dominantLanguage(for: parts[samples[index]])?.rawValue,
-               language != target,
-               let code = Locale.Language(identifier: language).languageCode?.identifier,
-               supportedSources.contains(code) {
-                return language
-            }
-            guard append(part) else { return nil }
-            index += 1
-            await Task.yield()
-        }
-        if !finished { finish(2, output.text) }
-        return nil
     }
     private func append(_ text: String) -> Bool {
         guard output.append(text) else { finish(3); return false }
@@ -84,9 +58,16 @@ private final class ReadmeTranslationHost: ObservableObject {
             let languages = await availability.supportedLanguages
             try Task.checkCancellation()
             guard !finished else { return }
-            supportedSources = Set(languages.compactMap { $0.languageCode?.identifier })
-            guard !supportedSources.isEmpty else { finish(3); return }
-            if let source = try await nextSource() { configure(source: source) }
+            let selected = labels["source"] as? String ?? "auto"
+            let detected = selected == "auto"
+                ? NLLanguageRecognizer.dominantLanguage(for: input)?.rawValue
+                : selected
+            guard let source = detected,
+                  let code = Locale.Language(identifier: source).languageCode?.identifier,
+                  languages.contains(where: { $0.languageCode?.identifier == code }) else { finish(3); return }
+            if Locale.Language(identifier: source) == Locale.Language(identifier: target) {
+                finish(2, input)
+            } else { configure(source: source) }
         } catch { finish(4) }
     }
     func label(_ name: String) -> String { labels[name] as? String ?? name }
@@ -146,16 +127,8 @@ private final class ReadmeTranslationHost: ObservableObject {
             try Task.checkCancellation()
             try await session.prepareTranslation()
             publish(1)
-            while !finished {
-                guard let language = try await nextSource() else { return }
-                if language != source {
-                    self.session = nil
-                    configure(source: language)
-                    return
-                }
-                guard append(try await session.translate(parts[index]).targetText) else { return }
-                index += 1
-            }
+            let translated = try await session.translate(input).targetText
+            if append(translated) { finish(2, output.text) }
         } catch is CancellationError {
             finish(4)
         } catch {
@@ -195,9 +168,9 @@ func readmeAppleTranslate(_ id: UInt64, _ json: UnsafePointer<CChar>, _ language
     DispatchQueue.main.async {
         guard #available(iOS 18.0, macOS 15.0, *),
               let labels = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let parts = labels["parts"] as? [String] else { callback(id, 3, nil); return }
+              let input = labels["text"] as? String else { callback(id, 3, nil); return }
         ReadmeTranslationHost.current?.finish(4)
-        let host = ReadmeTranslationHost(id: id, parts: parts, labels: labels, target: target, callback: callback)
+        let host = ReadmeTranslationHost(id: id, input: input, labels: labels, target: target, callback: callback)
         ReadmeTranslationHost.current = host
         host.present()
     }

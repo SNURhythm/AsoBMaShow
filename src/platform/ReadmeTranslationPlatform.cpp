@@ -53,10 +53,9 @@ bool supported() {
   return false;
 #endif
 }
-void start(std::uint64_t id, const std::string &text, const std::string &target) {
-  const auto parts = chunks(text);
+void start(std::uint64_t id, const std::string &text, const std::string &target, const std::string &source) {
   const auto json = nlohmann::json{
-      {"parts", parts}, {"samples", languageSamples(parts)},
+      {"text", text}, {"source", source},
       {"translate", i18n::tr("readme.translation.translate")},
       {"preparing", i18n::tr("readme.translation.preparing")},
       {"cancel", i18n::tr("readme.translation.cancel")},
