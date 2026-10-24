@@ -3,11 +3,16 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace readme_translation {
 inline constexpr std::size_t maximumOutputBytes = 4 * 1024 * 1024;
 enum class State { Preparing, Working, Complete, Failed, Cancelled };
 struct Result { State state; std::string text; };
+struct Part { std::string text; bool translate; };
+// Standard models receive prose separately; URLs and boundary whitespace stay verbatim.
+std::vector<Part> standardParts(std::string_view text);
 class Request {
 public:
   struct Mailbox;

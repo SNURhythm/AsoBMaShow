@@ -36,6 +36,25 @@
 extern "C" bool SDLCALL TTF_GetStringSize(
     TTF_Font *, const char *, size_t, int *, int *);
 
+// Keep modal tests deterministic and independent of system model downloads.
+namespace readme_translation {
+namespace test {
+bool qualitySupported = true;
+std::uint64_t active = 0;
+int starts = 0;
+bool highFidelity = false;
+std::string source, target;
+}
+bool supported() { return true; }
+bool qualitySelectionSupported() { return test::qualitySupported; }
+void start(std::uint64_t id, const std::string &, const std::string &target,
+           const std::string &source, bool highFidelity) {
+  test::active = id; ++test::starts;
+  test::source = source; test::target = target; test::highFidelity = highFidelity;
+}
+void stop(std::uint64_t id) { if (test::active == id) test::active = 0; }
+}
+
 namespace rendering {
 bgfx::VertexLayout PosTexCoord0Vertex::ms_decl;
 bgfx::VertexLayout PosColorVertex::ms_decl;
@@ -1080,7 +1099,9 @@ void testReadmeModalDisplaysAndCloses() {
   rendering::compactMenuCanvasActive = true;
   storage_test::TempDirectory directory;
   directory.write("chart.bms");
-  directory.write("readme.txt", "Artist notes\n한글 notes\n");
+  std::string document = "Artist notes\n한글 notes\n";
+  for (int i = 0; i < 100; ++i) document += "More notes\n";
+  directory.write("readme.txt", document);
   View root(0, 0, 400, 600);
   auto modal = ChartReadmeModal::Create(&root);
   modal->resize(400, 600);
@@ -1098,25 +1119,74 @@ void testReadmeModalDisplaysAndCloses() {
   auto *translate = dynamic_cast<Button *>(root.findViewByName("chartReadmeTranslate"));
   expect(copy && copy->isEnabled(), "loaded readme enables copying");
   expect(translate != nullptr, "readme exposes on-device translation action");
-  expect(root.findViewByName("chartReadmeSource") != nullptr, "readme exposes manual source selection");
-  auto *standard = dynamic_cast<Button *>(root.findViewByName("chartReadmeStandard"));
-  auto *fidelity = dynamic_cast<Button *>(root.findViewByName("chartReadmeHighFidelity"));
+  auto *optionsScroll = dynamic_cast<ScrollView *>(root.findViewByName("chartReadmeTranslationScroll"));
+  expect(optionsScroll != nullptr, "translation options have a bounded scrolling viewport");
+  auto *content = optionsScroll->getContentView();
+  expect(content->findViewByName("chartReadmeSource") != nullptr, "source language lives in translation settings");
+  auto *standard = dynamic_cast<Button *>(content->findViewByName("chartReadmeStandard"));
+  auto *fidelity = dynamic_cast<Button *>(content->findViewByName("chartReadmeHighFidelity"));
   expect(standard && fidelity, "readme owns both translation quality choices");
   expect(standard->isSelected() && !fidelity->isSelected(), "translation defaults to faster standard quality");
-  const bool qualitySupported = readme_translation::qualitySelectionSupported();
-  expect(root.findViewByName("chartReadmeQuality")->getVisible() == qualitySupported,
-         "translation quality is shown only on supported platforms");
-  if (qualitySupported) {
-    for (auto *choice : {fidelity, standard}) {
-      const int x = choice->getX() + choice->getWidth() / 2;
-      const int y = choice->getY() + choice->getHeight() / 2;
-      auto down = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_DOWN, x, y);
-      auto up = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_UP, x, y);
-      modal->handleEvents(down); modal->handleEvents(up);
-      expect(choice->isSelected() && standard->isSelected() != fidelity->isSelected(),
-             "quality buttons switch the selected mode exclusively");
-    }
-  }
+  auto *options = root.findViewByName("chartReadmeTranslationOptions");
+  expect(options && !options->getVisible(), "translation settings are hidden in a dedicated modal");
+  const auto clickButton = [&](const char *name) {
+    auto *choice = root.findViewByName(name);
+    if (!choice) choice = content->findViewByName(name);
+    expect(choice != nullptr, "requested readme control exists");
+    const int x = choice->getX() + choice->getWidth() / 2;
+    const int y = choice->getY() + choice->getHeight() / 2;
+    auto down = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_DOWN, x, y);
+    auto up = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_UP, x, y);
+    modal->handleEvents(down); modal->handleEvents(up);
+  };
+  lines->scrollOffset = 240;
+  lines->rebindVisibleItems();
+  const int starts = readme_translation::test::starts;
+  clickButton("chartReadmeTranslate");
+  expect(options->getVisible() && readme_translation::test::starts == starts,
+         "Translate opens settings without starting translation");
+  SDL_Event arrow{}; arrow.type = SDL_EVENT_KEY_DOWN; arrow.key.key = SDLK_DOWN;
+  modal->handleEvents(arrow);
+  expect(lines->scrollOffset == 240, "translation modal blocks reader keyboard scrolling");
+  clickButton("chartReadmeSource");
+  SDL_Event dropdownBack{}; dropdownBack.type = SDL_EVENT_KEY_DOWN; dropdownBack.key.key = SDLK_ESCAPE;
+  modal->handleEvents(dropdownBack);
+  expect(options->getVisible(), "Escape closes the dropdown before translation settings");
+  dropdownBack.type = SDL_EVENT_KEY_UP; modal->handleEvents(dropdownBack);
+  clickButton("chartReadmeSource");
+  auto outsideDown = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_DOWN,
+      optionsScroll->getX() + 10, optionsScroll->getY() - 20);
+  auto outsideUp = outsideDown; outsideUp.type = SDL_EVENT_MOUSE_BUTTON_UP;
+  modal->handleEvents(outsideDown); modal->handleEvents(outsideUp);
+  dropdownBack.type = SDL_EVENT_KEY_DOWN; modal->handleEvents(dropdownBack);
+  expect(!options->getVisible(), "tap on modal heading dismisses dropdown outside options scroll viewport");
+  dropdownBack.type = SDL_EVENT_KEY_UP; modal->handleEvents(dropdownBack);
+  clickButton("chartReadmeTranslate");
+  clickButton("chartReadmeHighFidelity");
+  expect(fidelity->isSelected() && !standard->isSelected(), "quality selection is exclusive inside translation modal");
+  clickButton("chartReadmeTranslationCancel");
+  expect(!options->getVisible() && lines->scrollOffset == 240 && readme_translation::test::starts == starts,
+         "cancelling translation settings preserves the document and scroll");
+  clickButton("chartReadmeTranslate");
+  clickButton("chartReadmeTranslationStart");
+  expect(!options->getVisible() && readme_translation::test::starts == starts + 1 &&
+             readme_translation::test::highFidelity && readme_translation::test::source == "auto",
+         "confirming translation submits the chosen options");
+  readme_translation::deliver(readme_translation::test::active, readme_translation::State::Complete, document + "Translated\n");
+  modal->update();
+  expect(lines->scrollOffset == 240, "first translated view inherits the reading position");
+  lines->scrollOffset = 450;
+  lines->rebindVisibleItems();
+  clickButton("chartReadmeOriginal");
+  expect(lines->scrollOffset == 240, "switching to original restores its reading position");
+  clickButton("chartReadmeTranslated");
+  expect(lines->scrollOffset == 450, "switching to translated restores its own reading position");
+  clickButton("chartReadmeTranslate");
+  SDL_Event back{}; back.type = SDL_EVENT_KEY_DOWN; back.key.key = SDLK_ESCAPE;
+  modal->handleEvents(back);
+  expect(modal->isVisible() && !options->getVisible() && lines->scrollOffset == 450,
+         "Escape closes translation settings without closing or resetting the reader");
+  back.type = SDL_EVENT_KEY_UP; modal->handleEvents(back);
   auto *encoding = root.findViewByName("chartReadmeEncoding");
   expect(encoding && copy->getY() >= encoding->getY() + encoding->getHeight(),
          "reader actions do not overlap larger mobile dropdown targets");

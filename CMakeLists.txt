@@ -5557,7 +5557,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         tests/text_input_box_tests.cpp
         src/scene/ChartReadmeModal.cpp
         src/library/ReadmeTranslation.cpp
-        src/platform/ReadmeTranslationPlatform.cpp
         src/library/ChartReadme.cpp
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
@@ -5591,10 +5590,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         SDL_SetTextInputArea=TextInputBoxTest_SetTextInputArea
         TTF_GetStringSize=TextInputBoxTest_GetStringSize
     )
-    if(APPLE)
-        target_link_libraries(text_input_box_tests PRIVATE asobmashow_readme_translation)
-        set_target_properties(text_input_box_tests PROPERTIES LINKER_LANGUAGE CXX)
-    endif()
     target_link_libraries(text_input_box_tests PRIVATE
         ${COMMON_LIBS} bgfx yogacore
     )

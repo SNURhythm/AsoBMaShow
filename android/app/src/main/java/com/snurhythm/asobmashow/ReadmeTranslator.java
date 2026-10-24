@@ -15,6 +15,7 @@ import com.google.mlkit.nl.translate.TranslatorOptions;
 import com.google.android.gms.tasks.Task;
 import com.google.android.gms.tasks.Tasks;
 import org.json.JSONObject;
+import org.json.JSONArray;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
@@ -27,6 +28,7 @@ final class ReadmeTranslator {
     private LanguageIdentifier identifier;
     private AlertDialog prompt;
     private String input;
+    private JSONArray parts;
     private JSONObject labels;
     private final ReadmeTranslationOutput output = new ReadmeTranslationOutput(4 * 1024 * 1024);
     private static native void deliver(long id, int state, byte[] text);
@@ -44,6 +46,7 @@ final class ReadmeTranslator {
         if (translator != null) { translator.close(); translator = null; }
         source = null;
         input = null;
+        parts = null;
         output.clear();
     }
     private void finish(long id, int state, String text) {
@@ -70,6 +73,7 @@ final class ReadmeTranslator {
         try {
             labels = new JSONObject(new String(data, StandardCharsets.UTF_8));
             input = labels.getString("text");
+            parts = labels.optJSONArray("parts");
             destination = TranslateLanguage.fromLanguageTag(target);
             if (destination == null) { finish(id, 3, ""); return; }
             String selected = labels.getString("source");
@@ -129,9 +133,31 @@ final class ReadmeTranslator {
     private void translate(long id) {
         if (!active(id)) return;
         publish(id, 1, "");
-        translator.translate(input).addOnSuccessListener(text -> {
-            if (!active(id)) return;
-            if (append(id, text)) finish(id, 2, output.toString());
-        }).addOnFailureListener(error -> fail(id, error));
+        if (parts == null) {
+            translator.translate(input).addOnSuccessListener(text -> {
+                if (!active(id)) return;
+                if (append(id, text)) finish(id, 2, output.toString());
+            }).addOnFailureListener(error -> fail(id, error));
+        } else translatePart(id, 0);
+    }
+    private void translatePart(long id, int index) {
+        if (!active(id)) return;
+        try {
+            while (index < parts.length()) {
+                JSONObject part = parts.getJSONObject(index++);
+                String text = part.getString("text");
+                if (!part.getBoolean("translate")) {
+                    if (!append(id, text)) return;
+                    continue;
+                }
+                final int next = index;
+                translator.translate(text).addOnSuccessListener(translated -> {
+                    if (!active(id) || !append(id, translated)) return;
+                    translatePart(id, next);
+                }).addOnFailureListener(error -> fail(id, error));
+                return;
+            }
+            finish(id, 2, output.toString());
+        } catch (Exception error) { fail(id, error); }
     }
 }

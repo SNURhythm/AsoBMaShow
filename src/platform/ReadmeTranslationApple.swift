@@ -131,8 +131,20 @@ private final class ReadmeTranslationHost: ObservableObject {
             try Task.checkCancellation()
             try await session.prepareTranslation()
             publish(1)
-            let translated = try await session.translate(input).targetText
-            if append(translated) { finish(2, output.text) }
+            if !(labels["highFidelity"] as? Bool ?? false), let parts = labels["parts"] as? [[String: Any]] {
+                for part in parts {
+                    try Task.checkCancellation()
+                    guard !finished, let text = part["text"] as? String,
+                          let translate = part["translate"] as? Bool else { finish(3); return }
+                    let value = translate ? try await session.translate(text).targetText : text
+                    guard !finished, append(value) else { return }
+                }
+                finish(2, output.text)
+            } else {
+                let translated = try await session.translate(input).targetText
+                guard !finished else { return }
+                if append(translated) { finish(2, output.text) }
+            }
         } catch is CancellationError {
             finish(4)
         } catch {

@@ -7,3 +7,30 @@ Pass the complete text to the selected platform detector once in Auto mode, bypa
 Reuse one virtualized document reader for both surfaces. Parse HTTP(S)/www URLs once per text change, map full URL ranges across wrapped lines, underline hit regions, and open only on a matched press/release with no intervening drag, scrolling or cancellation. Link rows remain passive so the recycler owns scrolling; taps stopping momentum do not activate links. Use the platform URL opener.
 
 Validate native gesture tests, source UI/cancellation integration, platform builds and real-device whole-text translation and URL scrolling.
+
+## Translation modal and reading positions
+
+The user requested moving source, target and quality controls into a dedicated
+translation modal so their purpose is unambiguous, leaving the reader's Translate
+action. Use an in-app overlay with a title, vertically stacked language selectors,
+a labeled quality section when supported, and Cancel/Translate actions. Keep
+controls scrollable on small screens and actions visible. Editing options alone
+must preserve the displayed result; confirmation starts translation. Back/Escape
+closes a dropdown first, then the translation modal, then the reader.
+
+Switching Original/Translated preserves separate reading offsets. The first
+translated view inherits the current original offset, bounded by the result's
+length. New files/encodings reset both offsets; a new translation resets only its
+saved offset. The existing native Apple translation host is unchanged. Whole-text
+platform calls expose no intermediate percentage, so use stage indicators.
+
+## Standard-mode URL protection
+
+The user subsequently requested URL tokenization only for Standard translation,
+because it corrupts links while High fidelity benefits from complete context.
+Detect language from the whole input as before. In Standard mode (also Android),
+split only around recognized HTTP(S)/www URLs, keep URLs and boundary whitespace
+literal, and translate the surrounding prose using the one prepared model pair.
+Do not tokenize High fidelity input. Documents without URLs stay one request.
+Apply the existing output budget to every appended piece and ignore cancelled
+requests between asynchronous translations.

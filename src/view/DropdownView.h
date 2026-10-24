@@ -50,6 +50,8 @@ public:
   // A positive width fixes the trigger allocation; the popup can remain wider.
   void setTriggerWidth(float width);
   void onLayout() override;
+  // A modal containing a scroll viewport can forward presses outside that viewport.
+  void dismissOnOutsidePress(const SDL_Event &event);
 
 private:
   struct OptionButton {

@@ -63,13 +63,19 @@ bool qualitySelectionSupported() {
 }
 void start(std::uint64_t id, const std::string &text, const std::string &target,
            const std::string &source, bool highFidelity) {
-  const auto json = nlohmann::json{
+  auto payload = nlohmann::json{
       {"text", text}, {"source", source}, {"highFidelity", highFidelity},
       {"translate", i18n::tr("readme.translation.translate")},
       {"preparing", i18n::tr("readme.translation.preparing")},
       {"cancel", i18n::tr("readme.translation.cancel")},
       {"download", i18n::tr("readme.translation.download")},
-      {"download_message", i18n::tr("readme.translation.download_message")}}.dump();
+      {"download_message", i18n::tr("readme.translation.download_message")}};
+  if (!highFidelity) {
+    payload["parts"] = nlohmann::json::array();
+    for (const auto &part : standardParts(text))
+      payload["parts"].push_back({{"text", part.text}, {"translate", part.translate}});
+  }
+  const auto json = payload.dump();
 #if TARGET_OS_ANDROID
   invoke(id, &json, &target);
 #elif defined(__APPLE__)
