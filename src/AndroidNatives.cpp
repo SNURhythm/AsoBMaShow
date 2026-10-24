@@ -30,6 +30,7 @@
 #include <SDL3/SDL_log.h>
 #include <SDL3/SDL_system.h>
 #include <SDL3/SDL_timer.h>
+#include <ares.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -47,6 +48,32 @@
 #include <vector>
 #include <unistd.h>
 #include <time.h>
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_snurhythm_asobmashow_AsoBMaShowActivity_nativeInitializeDns(
+    JNIEnv *env, jclass, jobject connectivityManager) {
+  // Called from loadLibraries(), before SDL starts native application workers.
+  // c-ares owns a global reference to the application-context manager and asks
+  // it for the current network's DNS servers whenever it creates a channel.
+  static std::once_flag initialized;
+  static int result = ARES_ENOTINITIALIZED;
+  try {
+    std::call_once(initialized, [&] {
+      JavaVM *vm = nullptr;
+      if (connectivityManager == nullptr || env->GetJavaVM(&vm) != JNI_OK) return;
+      result = ares_library_init(ARES_LIB_INIT_ALL);
+      if (result != ARES_SUCCESS) return;
+      ares_library_init_jvm(vm);
+      result = ares_library_init_android(connectivityManager);
+      // Keep our library reference for the process lifetime: Activity teardown
+      // must not clear c-ares JNI state while native HTTP workers still use it.
+      if (result != ARES_SUCCESS) ares_library_cleanup();
+    });
+  } catch (...) {
+    return ARES_ENOTINITIALIZED;
+  }
+  return result;
+}
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeSetInputTimestamp(

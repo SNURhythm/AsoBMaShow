@@ -1,5 +1,9 @@
 #include "skin/beatoraja/LuaSkinCurlHttpTransport.h"
 #include "skin/beatoraja/LuaSkinHttpClient.h"
+#if defined(ASOBMASHOW_TEST_CURL_HTTP_TRANSPORT)
+#include "skin/beatoraja/LuaSkinAsyncHttp.h"
+#include "skin/beatoraja/LuaSkinCurlHttpTransportTest.h"
+#endif
 #if defined(ASOBMASHOW_TEST_FOUNDATION_HTTP_TRANSPORT)
 #include "skin/beatoraja/LuaSkinFoundationHttpTransportTest.h"
 #endif
@@ -27,6 +31,7 @@ constexpr Socket invalidSocket = INVALID_SOCKET;
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/select.h>
 #include <unistd.h>
 using Socket = int;
 constexpr Socket invalidSocket = -1;
@@ -56,6 +61,139 @@ void closeSocket(Socket socket) noexcept {
   ::close(socket);
 #endif
 }
+
+#if defined(ASOBMASHOW_TEST_CURL_HTTP_TRANSPORT)
+// Receive real DNS queries without ever replying. No public resolver, HTTP
+// server, sleeping resolver thread, or destination-policy bypass is involved.
+class BlackholeDnsServer {
+public:
+  BlackholeDnsServer() {
+#if defined(_WIN32)
+    WSADATA data{};
+    startedSockets_ = WSAStartup(MAKEWORD(2, 2), &data) == 0;
+    if (!startedSockets_) return;
+#endif
+    socket_ = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (socket_ == invalidSocket) return;
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    socklen_t size = sizeof(address);
+    if (::bind(socket_, reinterpret_cast<sockaddr *>(&address), size) != 0 ||
+        ::getsockname(socket_, reinterpret_cast<sockaddr *>(&address), &size) != 0) return;
+    port_ = ntohs(address.sin_port);
+    setLuaSkinCurlDnsServersForTesting("127.0.0.1:" + std::to_string(port_));
+  }
+
+  ~BlackholeDnsServer() {
+    setLuaSkinCurlDnsServersForTesting({});
+    closeSocket(socket_);
+#if defined(_WIN32)
+    if (startedSockets_) WSACleanup();
+#endif
+  }
+
+  bool ready() const noexcept { return port_ != 0; }
+
+  bool waitForQueries(std::string_view first, std::string_view second) {
+    bool firstSeen = false, secondSeen = false;
+    const auto end = std::chrono::steady_clock::now() + 1s;
+    while (std::chrono::steady_clock::now() < end) {
+      fd_set readable;
+      FD_ZERO(&readable);
+      FD_SET(socket_, &readable);
+      timeval timeout{0, 10000};
+      if (::select(static_cast<int>(socket_ + 1), &readable, nullptr, nullptr, &timeout) <= 0) continue;
+      std::array<unsigned char, 512> packet{};
+      const auto size = ::recv(socket_, reinterpret_cast<char *>(packet.data()),
+                               static_cast<int>(packet.size()), 0);
+      if (size < 17 || (packet[2] & 0x80) != 0) continue;
+      std::string host;
+      std::size_t offset = 12;
+      while (offset < static_cast<std::size_t>(size) && packet[offset] != 0) {
+        const auto length = packet[offset++];
+        if (length > 63 || offset + length >= static_cast<std::size_t>(size)) break;
+        if (!host.empty()) host += '.';
+        host.append(reinterpret_cast<const char *>(packet.data() + offset), length);
+        offset += length;
+      }
+      firstSeen = firstSeen || host == first;
+      secondSeen = secondSeen || host == second;
+      if (firstSeen && secondSeen) return true;
+    }
+    return false;
+  }
+
+private:
+  Socket socket_ = invalidSocket;
+  std::uint16_t port_ = 0;
+#if defined(_WIN32)
+  bool startedSockets_ = false;
+#endif
+};
+
+template <typename Predicate>
+bool waitForHttpCleanup(Predicate ready) {
+  const auto end = std::chrono::steady_clock::now() + 750ms;
+  while (!ready()) {
+    if (std::chrono::steady_clock::now() >= end) return false;
+    std::this_thread::sleep_for(1ms);
+  }
+  return true;
+}
+
+void testStalledDnsReleasesAsyncWorkers() {
+  BlackholeDnsServer dns;
+  expect(dns.ready(), "local UDP DNS blackhole starts");
+  if (!dns.ready()) return;
+  auto transport = createLuaSkinProductionHttpTransport();
+  for (bool cancel : {true, false}) {
+    LuaSkinAsyncHttp owner(transport.get());
+    const std::string firstHost = cancel ? "cancel-first.test" : "deadline-first.test";
+    const std::string secondHost = cancel ? "cancel-second.test" : "deadline-second.test";
+    const int timeout = cancel ? 5000 : 300;
+    const auto first = owner.submit("http://" + firstHost + "/", timeout, 64);
+    const auto second = owner.submit("http://" + secondHost + "/", timeout, 64);
+    expect(first.id && second.id, "both native DNS requests accepted");
+    if (!first.id || !second.id) return;
+    // Distinct QNAMEs prove both shared workers entered DNS. Merely observing
+    // two packets could mistake one request's A/AAAA pair for two requests.
+    const bool resolving = dns.waitForQueries(firstHost, secondHost);
+    expect(resolving, "both native workers send queries to the DNS blackhole");
+    if (!resolving) return;
+    expect(owner.poll(*first.id).status == "pending" &&
+           owner.poll(*second.id).status == "pending" && owner.reservedBytes() == 128,
+           "unanswered DNS requests occupy both workers and retain capacity");
+
+    // Queue behind both stalled requests on the same owner/native transport.
+    // Reaching socket-policy rejection proves execution, unlike a timer result.
+    const auto probe = owner.submit("http://127.0.0.1:9/", 2000, 1);
+    expect(probe.id.has_value(), "subsequent native request queues behind DNS");
+    if (!probe.id) return;
+    if (cancel) {
+      expect(owner.cancel(*first.id) && owner.cancel(*second.id),
+             "both in-flight DNS requests cancel");
+    } else {
+      for (const int id : {*first.id, *second.id}) {
+        LuaSkinAsyncHttpResult result;
+        expect(waitForHttpCleanup([&] {
+          result = owner.poll(id);
+          return result.status != "pending";
+        }) && result.status == "failed" && result.error.find("timed out") != std::string::npos,
+               "total deadline reports timeout during real stalled DNS");
+      }
+    }
+    LuaSkinAsyncHttpResult result;
+    expect(waitForHttpCleanup([&] {
+      result = owner.poll(*probe.id);
+      return result.status != "pending";
+    }) && result.status == "failed" && result.error.find("Non-public") != std::string::npos,
+           "released DNS worker executes the queued request with destination policy intact");
+    expect(waitForHttpCleanup([&] { return owner.reservedBytes() == 0; }),
+           "both DNS connections finish cleanup and release reserved capacity");
+  }
+}
+#endif
 
 class LoopbackHttpServer {
 public:
@@ -577,6 +715,9 @@ int main() {
   expect(!LuaSkinHttpClient::readLines(std::string(65537, 'x')).failure, "default body accepts more than old character cap");
   expect(LuaSkinHttpClient::readLines(std::string(1048577, '\n')).failure.has_value(), "newlines count against raw byte cap");
   testRequestOptions();
+#if defined(ASOBMASHOW_TEST_CURL_HTTP_TRANSPORT)
+  testStalledDnsReleasesAsyncWorkers();
+#endif
 #if defined(ASOBMASHOW_TEST_FOUNDATION_HTTP_TRANSPORT)
   testFoundationCandidateFallback();
 #endif

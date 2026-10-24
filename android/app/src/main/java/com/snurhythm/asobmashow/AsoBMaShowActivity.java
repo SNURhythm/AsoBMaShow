@@ -22,6 +22,7 @@ import android.media.MediaPlayer;
 import android.media.PlaybackParams;
 import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
+import android.net.ConnectivityManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -479,6 +480,19 @@ public class AsoBMaShowActivity extends SDLActivity {
     }
 
     @Override
+    public void loadLibraries() {
+        super.loadLibraries();
+        // SDL invokes this before starting its native application thread. Use
+        // application context because c-ares retains the manager process-wide.
+        ConnectivityManager connectivityManager = (ConnectivityManager)
+                getApplicationContext().getSystemService(Context.CONNECTIVITY_SERVICE);
+        int status = nativeInitializeDns(connectivityManager);
+        if (status != 0) {
+            throw new IllegalStateException("Could not initialize Android DNS (" + status + ")");
+        }
+    }
+
+    @Override
     protected String[] getLibraries() {
         return new String[] {
                 "SDL3",
@@ -487,6 +501,7 @@ public class AsoBMaShowActivity extends SDLActivity {
         };
     }
 
+    private static native int nativeInitializeDns(ConnectivityManager connectivityManager);
     private static native void nativeDownloadUrlToFileResponse(long progressToken, int statusCode);
     private static native void nativeDownloadUrlToFileProgress(long progressToken,
                                                                long downloadedBytes,

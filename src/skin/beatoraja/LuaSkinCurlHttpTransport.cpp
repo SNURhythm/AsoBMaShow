@@ -1,4 +1,7 @@
 #include "LuaSkinCurlHttpTransport.h"
+#if defined(ASOBMASHOW_TEST_CURL_HTTP_TRANSPORT)
+#include "LuaSkinCurlHttpTransportTest.h"
+#endif
 
 #if defined(__APPLE__)
 #include <TargetConditionals.h>
@@ -32,6 +35,16 @@ namespace {
 
 std::once_flag curlInitialization;
 CURLcode curlInitializationResult = CURLE_FAILED_INIT;
+
+#if defined(ASOBMASHOW_TEST_CURL_HTTP_TRANSPORT)
+std::mutex testDnsMutex;
+std::string testDnsServers;
+
+std::string snapshotTestDnsServers() {
+  std::lock_guard lock(testDnsMutex);
+  return testDnsServers;
+}
+#endif
 
 bool initializeCurl() noexcept {
   std::call_once(curlInitialization, [] {
@@ -182,9 +195,14 @@ private:
       initializationFailure_ = "libcurl initialization failed";
       return false;
     }
+    const auto *version = curl_version_info(CURLVERSION_NOW);
+    // ASYNCHDNS also describes the threaded resolver, whose cleanup can join
+    // blocked system DNS calls after our deadline. Require c-ares so removing
+    // a transfer releases the worker without waiting for a resolver thread.
     if (limits_.restrictedDestinations &&
-        !(curl_version_info(CURLVERSION_NOW)->features & CURL_VERSION_ASYNCHDNS)) {
-      initializationFailure_ = "Bounded HTTP DNS resolution is unavailable";
+        (!version || !(version->features & CURL_VERSION_ASYNCHDNS) ||
+         !version->ares || version->ares[0] == '\0')) {
+      initializationFailure_ = "Cancellable HTTP DNS resolution requires libcurl with c-ares";
       return false;
     }
     curl_.reset(curl_easy_init());
@@ -226,6 +244,14 @@ private:
       curl_.reset();
       return false;
     }
+#if defined(ASOBMASHOW_TEST_CURL_HTTP_TRANSPORT)
+    if (!testDnsServers_.empty() &&
+        curl_easy_setopt(curl_.get(), CURLOPT_DNS_SERVERS, testDnsServers_.c_str()) != CURLE_OK) {
+      initializationFailure_ = "Test DNS server could not be configured";
+      curl_.reset();
+      return false;
+    }
+#endif
     if (limits_.restrictedDestinations &&
         (curl_easy_setopt(curl_.get(), CURLOPT_PROXY, "") != CURLE_OK ||
          curl_easy_setopt(curl_.get(), CURLOPT_OPENSOCKETFUNCTION, &CurlLuaSkinHttpConnection::openSocket) != CURLE_OK ||
@@ -234,7 +260,11 @@ private:
       curl_.reset();
       return false;
     }
-    ConfigureCurlTrustStore(curl_.get());
+    if (!ConfigureCurlTrustStore(curl_.get())) {
+      initializationFailure_ = "HTTP certificate trust store could not be configured";
+      curl_.reset();
+      return false;
+    }
     return true;
   }
 
@@ -475,6 +505,9 @@ private:
   int timeoutMilliseconds_ = 1000;
   LuaSkinHttpLimits limits_;
   std::stop_token stop_;
+#if defined(ASOBMASHOW_TEST_CURL_HTTP_TRANSPORT)
+  const std::string testDnsServers_ = snapshotTestDnsServers();
+#endif
   CurlEasyHandle curl_{nullptr};
   CURLM *multi_ = nullptr;
   std::array<char, CURL_ERROR_SIZE> error_{};
@@ -599,6 +632,13 @@ private:
 };
 
 } // namespace
+
+#if defined(ASOBMASHOW_TEST_CURL_HTTP_TRANSPORT)
+void setLuaSkinCurlDnsServersForTesting(std::string servers) {
+  std::lock_guard lock(testDnsMutex);
+  testDnsServers = std::move(servers);
+}
+#endif
 
 std::unique_ptr<LuaSkinHttpTransport>
 createLuaSkinProductionHttpTransport(std::stop_token stop) {

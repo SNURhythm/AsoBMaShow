@@ -191,7 +191,8 @@ elseif(ANDROID)
     list(APPEND COMMON_LIBS ${FFMPEG_LIBRARIES})
 
     find_package(CURL REQUIRED)
-    list(APPEND COMMON_LIBS CURL::libcurl)
+    find_package(c-ares CONFIG REQUIRED)
+    list(APPEND COMMON_LIBS CURL::libcurl c-ares::cares)
 
     # Reuse the bundled TLS dependency for hardware-dispatched native checksums.
     find_package(OpenSSL REQUIRED COMPONENTS Crypto)
@@ -820,6 +821,17 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
         target_compile_features(curl_redirect_policy_tests PRIVATE cxx_std_23)
         target_link_libraries(curl_redirect_policy_tests PRIVATE CURL::libcurl)
+        if(TARGET OpenSSL::SSL)
+            target_sources(curl_redirect_policy_tests PRIVATE
+                tests/android_curl_trust_store_tests.cpp)
+            target_compile_definitions(curl_redirect_policy_tests PRIVATE
+                ASOBMASHOW_TEST_ANDROID_CURL_TRUST=1)
+            target_link_libraries(curl_redirect_policy_tests PRIVATE
+                OpenSSL::SSL OpenSSL::Crypto Threads::Threads)
+            if(WIN32)
+                target_link_libraries(curl_redirect_policy_tests PRIVATE ws2_32)
+            endif()
+        endif()
     endif()
 
     if(APPLE AND NOT IOS)
@@ -2170,14 +2182,18 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(lua_skin_http_transport_tests
             tests/lua_skin_http_transport_tests.cpp
             src/skin/beatoraja/LuaSkinHttpClient.cpp
+            src/skin/beatoraja/LuaSkinAsyncHttp.cpp
             src/skin/beatoraja/LuaSkinCurlHttpTransport.cpp
         )
         target_include_directories(lua_skin_http_transport_tests PRIVATE
             ${CMAKE_SOURCE_DIR}/src
         )
         target_compile_features(lua_skin_http_transport_tests PRIVATE cxx_std_23)
+        target_compile_definitions(lua_skin_http_transport_tests PRIVATE
+            ASOBMASHOW_TEST_CURL_HTTP_TRANSPORT=1)
         target_link_libraries(lua_skin_http_transport_tests PRIVATE
             CURL::libcurl
+            Threads::Threads
         )
         if(WIN32)
             target_link_libraries(lua_skin_http_transport_tests PRIVATE ws2_32)

@@ -309,7 +309,10 @@ bool probeDownloadUrl(const std::string &url, std::string &errorMessage,
   curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
   curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR,
                    CurlRedirectProtocolsForInitialUrl(url));
-  ConfigureCurlTrustStore(curl.get());
+  if (!ConfigureCurlTrustStore(curl.get())) {
+    errorMessage = "HTTP certificate trust store could not be configured";
+    return false;
+  }
   const CURLcode result = curl_easy_perform(curl.get());
   long statusCode = 0;
   curl_easy_getinfo(curl.get(), CURLINFO_RESPONSE_CODE, &statusCode);
@@ -374,7 +377,10 @@ std::optional<std::string> fetchUrlText(
   curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
   curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR,
                    CurlRedirectProtocolsForInitialUrl(url));
-  ConfigureCurlTrustStore(curl.get());
+  if (!ConfigureCurlTrustStore(curl.get())) {
+    errorMessage = "HTTP certificate trust store could not be configured";
+    return std::nullopt;
+  }
 
   const CURLcode result = curl_easy_perform(curl.get());
   long statusCode = 0;
@@ -448,7 +454,10 @@ std::optional<std::string> postUrlText(
   curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
   curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR,
                    CurlRedirectProtocolsForInitialUrl(url));
-  ConfigureCurlTrustStore(curl.get());
+  if (!ConfigureCurlTrustStore(curl.get())) {
+    errorMessage = "HTTP certificate trust store could not be configured";
+    return std::nullopt;
+  }
 
   const CURLcode result = curl_easy_perform(curl.get());
   long statusCode = 0;
@@ -578,7 +587,10 @@ bool downloadUrlToFile(const std::string &url, const std::filesystem::path &path
   curl_easy_setopt(curl.get(), CURLOPT_PROTOCOLS_STR, "http,https");
   curl_easy_setopt(curl.get(), CURLOPT_REDIR_PROTOCOLS_STR,
                    CurlRedirectProtocolsForInitialUrl(url));
-  ConfigureCurlTrustStore(curl.get());
+  if (!ConfigureCurlTrustStore(curl.get())) {
+    errorMessage = "HTTP certificate trust store could not be configured";
+    return false;
+  }
 
   const CURLcode result = curl_easy_perform(curl.get());
   long statusCode = 0;

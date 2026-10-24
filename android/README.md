@@ -252,6 +252,19 @@ remain in force. Android's default for apps targeting API 28+ is to deny
 cleartext unless explicitly enabled; see the
 [Android network-security documentation](https://developer.android.com/privacy-and-security/security-config#CleartextTrafficPermitted).
 
+Native libcurl uses c-ares so cancelling DNS does not block the skin HTTP
+workers. `AsoBMaShowActivity.loadLibraries()` initializes c-ares with the JVM
+and application-context `ConnectivityManager` before native workers start.
+`ACCESS_NETWORK_STATE` lets new resolver channels use the current network's
+DNS configuration; no public resolver is hardcoded.
+
+Native TLS loads a bounded PEM bundle from the active Conscrypt APEX trust
+store, falling back to the system-image store only when the APEX store is
+absent. Android's old subject-hash filenames cannot be used directly as a
+modern OpenSSL `CAPATH`. Each curl handle owns its bundle copy; hostname and
+certificate verification stay enabled, and trust-store setup failure stops
+the request. The Java HTTP connector continues to use Android's platform TLS.
+
 The framework-only `PlatformBoundaryInstrumentation` is packaged only in the
 test APK. With the usual SDK, Java 17, vcpkg and release-signing environment,
 build it using `android/gradlew -p android :app:assembleRestricted_file_accessReleaseAndroidTest

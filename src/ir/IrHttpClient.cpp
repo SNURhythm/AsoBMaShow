@@ -364,7 +364,7 @@ public:
                      curl_easy_setopt(curl.get(), CURLOPT_HTTPGET, 1L) ==
                          CURLE_OK;
       }
-      ConfigureCurlTrustStore(curl.get());
+      optionsSet = optionsSet && ConfigureCurlTrustStore(curl.get());
       if (!optionsSet) {
         return invalidResponse("IR HTTP transport configuration failed");
       }
