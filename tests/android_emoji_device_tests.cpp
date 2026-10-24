@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <fstream>
 #include <thread>
+#include <tuple>
 #include <unistd.h>
 
 namespace {
@@ -21,6 +22,19 @@ bool colored(const std::vector<unsigned char> &pixels) {
         (pixels[i] != pixels[i + 1] || pixels[i + 1] != pixels[i + 2])) return true;
   }
   return false;
+}
+void saveRaster(const std::string &path, const std::vector<unsigned char> &pixels, int width, int height) {
+  auto *raw = SDL_CreateSurfaceFrom(width, height, SDL_PIXELFORMAT_RGBA32,
+                                     const_cast<unsigned char *>(pixels.data()), width * 4);
+  auto *background = SDL_CreateSurface(width, height, SDL_PIXELFORMAT_RGBA32);
+  if (raw && background) {
+    SDL_FillSurfaceRect(background, nullptr, SDL_MapSurfaceRGBA(background, 35, 35, 35, 255));
+    SDL_SetSurfaceBlendMode(raw, SDL_BLENDMODE_BLEND);
+    SDL_BlitSurface(raw, nullptr, background, nullptr);
+    SDL_SaveBMP(background, path.c_str());
+  }
+  if (raw) SDL_DestroySurface(raw);
+  if (background) SDL_DestroySurface(background);
 }
 bool hasInk(const text_runtime::SystemTextRaster &raster) {
   for (std::size_t i = 3; i < raster.rgba.size(); i += 4) if (raster.rgba[i]) return true;
@@ -53,23 +67,23 @@ public:
 
 void testNative(JavaVM *vm, int unavailableEmoji) {
   text_runtime::SystemTextRasterizer rasterizer(32);
-  if (unavailableEmoji >= 0) expect(!rasterizer.colorGlyph(unavailableEmoji, budget),
+  if (unavailableEmoji >= 0) expect(!rasterizer.glyph(unavailableEmoji, budget),
                                     "recognized but unavailable emoji is rejected through JNI");
-  const auto smile = rasterizer.colorGlyph(U'\U0001f642', budget);
+  const auto smile = rasterizer.glyph(U'\U0001f642', budget);
   expect(smile && colored(smile->rgba), "native smile has color pixels");
-  const auto grin = rasterizer.colorGlyph(U'\U0001f600', budget);
+  const auto grin = rasterizer.glyph(U'\U0001f600', budget);
   expect(grin && colored(grin->rgba), "native grin has color pixels");
-  const auto black = rasterizer.colorGlyph(U'\U0001f5a4', budget);
+  const auto black = rasterizer.glyph(U'\U0001f5a4', budget);
   expect(black && hasInk(*black), "monochrome emoji are retained");
-  expect(!rasterizer.colorGlyph(U'A', budget) && !rasterizer.colorGlyph(U'\u03a9', budget) &&
-             !rasterizer.colorGlyph(U'\U0010ffff', budget) && !rasterizer.colorGlyph(0xd800, budget),
-         "ordinary and unavailable glyphs are excluded from emoji fallback");
-  expect(!rasterizer.colorGlyph(U'\U0001f642', 1) &&
+  expect(rasterizer.glyph(U'A', budget) && rasterizer.glyph(U'\u03a9', budget) &&
+             !rasterizer.glyph(U'\U0010ffff', budget) && !rasterizer.glyph(0xd800, budget),
+         "ordinary glyphs render while unavailable glyphs are excluded");
+  expect(!rasterizer.glyph(U'\U0001f642', 1) &&
              !rasterizer.text(std::string(65537, 'A'), {255, 255, 255, 255}, budget) &&
-             !text_runtime::SystemTextRasterizer(8193).colorGlyph(U'\U0001f642', budget),
+             !text_runtime::SystemTextRasterizer(8193).glyph(U'\U0001f642', budget),
          "rasterization observes byte, input and point-size bounds");
   if (smile) {
-    expect(!rasterizer.colorGlyph(U'\U0001f642', smile->rgba.size() - 1),
+    expect(!rasterizer.glyph(U'\U0001f642', smile->rgba.size() - 1),
            "actual pixel allocation cannot exceed caller budget");
   }
   const auto red = rasterizer.text("A", {255, 0, 0, 128}, budget);
@@ -107,7 +121,7 @@ void testNative(JavaVM *vm, int unavailableEmoji) {
     expect(vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) == JNI_EDETACHED,
            "native worker begins detached");
     text_runtime::SystemTextRasterizer worker(24);
-    const auto glyph = worker.colorGlyph(U'\U0001f642', budget);
+    const auto glyph = worker.glyph(U'\U0001f642', budget);
     expect(glyph && colored(glyph->rgba), "native worker renders through JNI");
     expect(vm->GetEnv(reinterpret_cast<void **>(&env), JNI_VERSION_1_6) == JNI_EDETACHED,
            "renderer detaches only its own JNI worker attachment");
@@ -173,19 +187,61 @@ void testBuiltInInkBounds(const std::string &directory) {
   }
 }
 
+auto glyphInk(const skin::SkinPreparedGlyphAtlas &atlas, char32_t codepoint) {
+  const auto &glyph = atlas.glyphs.at(codepoint);
+  const auto &image = atlas.pages.empty() ? atlas.pixels : *atlas.pages.at(glyph.page).pixels;
+  const auto &region = glyph.region;
+  int left = region.w, top = region.h, right = -1, bottom = -1;
+  for (int y = 0; y < region.h; ++y) for (int x = 0; x < region.w; ++x) {
+    const auto offset = (static_cast<std::size_t>(region.y + y) * image.width + region.x + x) * 4;
+    if ((*image.rgba)[offset + 3] == 0) continue;
+    left = std::min(left, x); top = std::min(top, y);
+    right = std::max(right, x); bottom = std::max(bottom, y);
+  }
+  std::vector<unsigned char> pixels;
+  for (int y = top; y <= bottom; ++y) for (int x = left; x <= right; ++x) {
+    const auto offset = (static_cast<std::size_t>(region.y + y) * image.width + region.x + x) * 4;
+    for (int channel = 0; channel < 4; ++channel)
+      pixels.push_back((*image.rgba)[offset + 3] == 0 ? 0 : (*image.rgba)[offset + channel]);
+  }
+  return std::tuple{right - left + 1, bottom - top + 1, pixels};
+}
+
 void testAtlases(const std::string &directory) {
   std::ifstream input(directory + "/assets/fonts/roboto-condensed-regular.ttf", std::ios::binary);
   const std::string encoded((std::istreambuf_iterator<char>(input)), {});
   const auto bytes = std::as_bytes(std::span(encoded));
   const auto scalable = skin::buildSkinTextAtlas(
       1, {.font = 1, .pointSize = 32, .fallbackChainDigest = "android-emoji-test"},
-      {{.encoded = {bytes.begin(), bytes.end()}}}, {U'A', U'\U0001f642', U'\ufe0f'}, {});
+      {{.encoded = {bytes.begin(), bytes.end()}}}, {U'A', U'한', U'글', U'힣', U'\u3000', U'\U0001f642', U'\ufe0f'}, {});
+  std::ifstream bundledInput(directory + "/assets/fonts/notosanscjkjp.ttf", std::ios::binary);
+  const std::string bundledEncoded((std::istreambuf_iterator<char>(bundledInput)), {});
+  const auto bundledBytes = std::as_bytes(std::span(bundledEncoded));
+  const auto reference = skin::buildSkinTextAtlas(
+      4, {.font = 4, .pointSize = 32, .fallbackChainDigest = "explicit-bundled-reference"},
+      {{.encoded = {bundledBytes.begin(), bundledBytes.end()}}}, {U'한', U'글', U'힣'}, {});
+  expect(reference.atlas.has_value(), "explicit bundled Noto reference prepares");
   expect(scalable.atlas && colored(*scalable.atlas->pixels.rgba), "scalable skin has native color emoji");
   if (scalable.atlas) {
+    expect(scalable.atlas->glyphs.at(U'\u3000').advance == 32,
+           "scalable full-width space keeps bundled Noto advance");
     const auto baseline = [](const auto &g) { return g.layoutOffsetY + g.region.h - g.bearingY; };
     expect(baseline(scalable.atlas->glyphs.at(U'A')) == baseline(scalable.atlas->glyphs.at(U'\U0001f642')),
            "scalable authored glyph and native emoji share a baseline");
     expect(scalable.atlas->glyphs.at(U'\ufe0f').advance == 0, "skin selector has no advance");
+    text_runtime::SystemTextRasterizer system(32,
+        text_runtime::SystemTextRasterizer::GlyphFallback::BundledThenSystem);
+    for (char32_t codepoint : {U'한', U'글', U'힣'}) {
+      expect(reference.atlas && glyphInk(*reference.atlas, codepoint) == glyphInk(*scalable.atlas, codepoint),
+             "scalable Hangul pixels exactly match bundled Noto before system fonts");
+      const auto native = system.glyph(codepoint, budget);
+      const auto &glyph = scalable.atlas->glyphs.at(codepoint);
+      expect(native && hasInk(*native) && glyph.advance == native->advance &&
+                 baseline(glyph) == baseline(scalable.atlas->glyphs.at(U'A')),
+             "scalable skin renders Hangul on the authored baseline");
+    }
+    saveRaster(directory + "/skin-unicode.bmp", *scalable.atlas->pixels.rgba,
+               scalable.atlas->pixels.width, scalable.atlas->pixels.height);
   }
   constexpr std::string_view descriptor =
       "info size=32\ncommon lineHeight=32 base=26 scaleW=8 scaleH=8 pages=1\n"
@@ -202,17 +258,44 @@ void testAtlases(const std::string &directory) {
   const auto bitmap = skin::buildSkinBitmapTextAtlas(
       2, {.font = 2, .pointSize = 1, .fallbackChainDigest = "android-bitmap-emoji-test"},
       {{.font = *parsed.font, .pages = {{.physicalKey = "fixture", .pixels = pixels}}}},
-      {U'A', U'\U0001f642', U'\ufe0f'}, {});
+      {U'A', U'한', U'글', U'힣', U'\u3000', U'\U0001f642', U'\ufe0f'}, {});
   expect(bitmap.atlas.has_value(), "bitmap atlas prepares");
   if (!bitmap.atlas) return;
+  expect(bitmap.atlas->glyphs.at(U'\u3000').advance == 32,
+         "bitmap full-width space keeps bundled Noto advance");
   const auto &glyph = bitmap.atlas->glyphs.at(U'\U0001f642');
   expect(glyph.bitmapFontType == 0 && colored(*bitmap.atlas->pages[glyph.page].pixels->rgba) &&
              bitmap.atlas->glyphs.at(U'A').page == 0 && bitmap.atlas->glyphs.at(U'\ufe0f').advance == 0,
          "bitmap skin preserves authored glyphs and adds a native color page");
   text_runtime::SystemTextRasterizer rasterizer(32);
-  const auto native = rasterizer.colorGlyph(U'\U0001f642', budget);
+  const auto native = rasterizer.glyph(U'\U0001f642', budget);
   expect(native && glyph.layoutOffsetY + glyph.region.h - native->ascent == -26,
          "bitmap native emoji uses the authored baseline");
+  text_runtime::SystemTextRasterizer bundled(32,
+      text_runtime::SystemTextRasterizer::GlyphFallback::BundledThenSystem);
+  for (char32_t codepoint : {U'한', U'글', U'힣'}) {
+    expect(reference.atlas && glyphInk(*reference.atlas, codepoint) == glyphInk(*bitmap.atlas, codepoint),
+           "bitmap Hangul pixels exactly match bundled Noto before system fonts");
+    const auto native = bundled.glyph(codepoint, budget);
+    const auto &hangul = bitmap.atlas->glyphs.at(codepoint);
+    expect(native && hasInk(*native) && hangul.bitmapFontType == 0 &&
+               hangul.advance == native->advance &&
+               hangul.layoutOffsetY + hangul.region.h - native->ascent == -26,
+           "bitmap skin renders missing Hangul on the authored baseline");
+  }
+  auto authored = *parsed.font;
+  auto hangul = authored.glyphs.at(U'A');
+  hangul.codepoint = U'한';
+  hangul.xAdvance = 13;
+  authored.glyphs.emplace(U'한', hangul);
+  const auto prioritized = skin::buildSkinBitmapTextAtlas(
+      3, {.font = 3, .pointSize = 1, .fallbackChainDigest = "authored-hangul"},
+      {{.font = authored, .pages = {{.physicalKey = "fixture", .pixels = pixels}}}},
+      {U'한', U'글'}, {});
+  expect(prioritized.atlas && prioritized.atlas->glyphs.at(U'한').page == 0 &&
+             prioritized.atlas->glyphs.at(U'한').advance == 13 &&
+             prioritized.atlas->glyphs.at(U'글').bitmapFontType == 0,
+         "authored Hangul takes precedence while missing Hangul uses bundled fallback");
 }
 } // namespace
 

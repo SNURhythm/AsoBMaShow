@@ -133,7 +133,7 @@ catalog. Required CTest fixtures are included transitively in group builds.
 Tests in new CMake subdirectories need their own classification/finalization;
 the current catalog covers tests registered in the repository root directory.
 
-## Android system emoji
+## Android Unicode text and system emoji
 
 After assembling an APK, run `scripts/android_emoji_verify.sh` with one connected
 arm64 Android device (or set `ANDROID_SERIAL`). An optional first argument selects
@@ -146,7 +146,9 @@ Set `ANDROID_SDK_ROOT` to the SDK actually in use; on this machine it is
 
 This checks native color and monochrome emoji, missing-glyph and memory limits,
 straight alpha, JNI worker attachment, built-in fallback pixels, and scalable and
-bitmap skin baselines. It saves the built-in text raster for visual review and
-removes its temporary device files. These device checks complement the host
+bitmap skin baselines. Korean atlas pixels must match the bundled Noto font before
+system fallback, while authored skin glyphs retain priority. It saves built-in
+text and custom-skin atlas rasters for visual review and removes its temporary
+device files. These device checks complement the host
 `text_view_font_lifetime_tests` and `skin_resource_catalog_tests`; desktop font
 fixtures alone cannot detect an Android system font changing to COLRv1.

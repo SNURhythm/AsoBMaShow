@@ -67,9 +67,10 @@ PY
 "${JDK}/bin/javac" -cp "${ANDROID_JAR}" -d "${STAGE}/classes" \
   "${ROOT_DIR}/tests/android/EmojiDeviceTest.java"
 JAVA_HOME="${JDK}" "${BUILD_TOOLS}/d8" --lib "${ANDROID_JAR}" --output "${STAGE}/device" \
-  "${STAGE}/classes/com/snurhythm/asobmashow/EmojiDeviceTest.class"
+  "${STAGE}/classes/com/snurhythm/asobmashow/"*.class
 "${ADB}" push "${STAGE}/device/." "${REMOTE}/" >/dev/null
 "${ADB}" shell "CLASSPATH=${REMOTE}/classes.dex:${REMOTE}/app.jar LD_LIBRARY_PATH=${REMOTE} app_process /system/bin com.snurhythm.asobmashow.EmojiDeviceTest ${REMOTE}" \
   | tee "${OUTPUT}/results.txt"
 "${ADB}" pull "${REMOTE}/builtin-emoji.bmp" "${OUTPUT}/builtin-emoji.bmp" >/dev/null
+"${ADB}" pull "${REMOTE}/skin-unicode.bmp" "${OUTPUT}/skin-unicode.bmp" >/dev/null
 printf 'Emoji test evidence: %s\n' "${OUTPUT}"

@@ -12,10 +12,16 @@
 #include "view/SdlTtfRuntime.h"
 #include "view/SystemTextRasterizer.h"
 
+#if defined(__APPLE__)
+#include <CoreGraphics/CoreGraphics.h>
+#include <CoreText/CoreText.h>
+#endif
+
 #include <atomic>
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
@@ -264,6 +270,10 @@ void testBitmapFontsKeepSourceValidMetricsPagesAndMissingGlyphs() {
     return;
   }
 
+  auto authoredWave = primary.font->glyphs.at(U'A');
+  authoredWave.codepoint = U'\uff5e';
+  authoredWave.xAdvance = 11;
+  primary.font->glyphs.emplace(U'\uff5e', authoredWave);
   auto fallback = *primary.font;
   fallback.resource.type = 0;
   fallback.resource.virtualPath = "missing-fallback.fnt";
@@ -283,27 +293,32 @@ void testBitmapFontsKeepSourceValidMetricsPagesAndMissingGlyphs() {
   const auto built = skin::buildSkinBitmapTextAtlas(
       1,
       {.font = 1, .pointSize = 1, .fallbackChainDigest = "bitmap-chain"},
-      faces, std::set<char32_t>{U'A', U'B', U'X'},
+      faces, std::set<char32_t>{U'A', U'B', U'X', U'\u301c', U'\U0010ffff'},
       std::set<std::pair<char32_t, char32_t>>{{U'A', U'X'},
                                               {U'X', U'A'}});
   expect(built.atlas && built.error.empty() &&
              built.atlas->layoutKind == skin::SkinTextLayoutKind::Bitmap &&
-             built.atlas->pages.size() == 2 &&
+             built.atlas->pages.size() == 3 &&
              built.atlas->pages.front().pixels &&
-             !built.atlas->pages.back().pixels &&
+             !built.atlas->pages[1].pixels && built.atlas->pages.back().pixels &&
              built.atlas->pixels.rgba == nullptr &&
              built.atlas->pageWidth == 8192 &&
              built.atlas->pageHeight == 8 &&
              built.atlas->glyphs.contains(U'A') &&
-             !built.atlas->glyphs.contains(U'B') &&
-             !built.atlas->glyphs.contains(U'X') &&
+             built.atlas->glyphs.at(U'B').page == 2 &&
+             built.atlas->glyphs.at(U'X').page == 2 &&
+             !built.atlas->glyphs.contains(U'\U0010ffff') &&
              built.atlas->kerning.empty() &&
              built.atlas->glyphs.at(U'A').layoutOffsetY == -10,
          "bitmap pages remain separate, an unavailable fallback page is "
          "skipped, actual first-page metrics replace the failed auxiliary "
-         "scan, a glyph without a replacement is simply absent, and the "
+         "scan, missing letters use system fallback, unavailable glyphs remain absent, and the "
          "baseline offset is the glyph's yOffset plus its ink height "
          "(Beatoraja BitmapFont layout)");
+
+  expect(built.atlas && built.atlas->glyphs.at(U'\u301c').page == 0 &&
+             built.atlas->glyphs.at(U'\u301c').advance == 11,
+         "authored wave-dash aliases take precedence over system fallback");
 
   auto secondPageFont = *primary.font;
   secondPageFont.pagePaths = {"wide-a.png", "wide-b.png"};
@@ -494,6 +509,39 @@ void testScalableColorGlyphsSurviveFallbackAndCache() {
   }
 }
 
+void testBundledHangulFallbackPrecedesSystemFonts() {
+  const auto readFont = [](const char *path) {
+    std::ifstream input(std::filesystem::path(ASOBMASHOW_SOURCE_DIR) / path, std::ios::binary);
+    const std::string encoded((std::istreambuf_iterator<char>(input)), {});
+    const auto bytes = std::as_bytes(std::span(encoded));
+    return skin::SkinTextAtlasFontBytes{{bytes.begin(), bytes.end()}};
+  };
+  const auto latin = readFont("assets/fonts/roboto-condensed-regular.ttf");
+  const auto bundled = readFont("assets/fonts/notosanscjkjp.ttf");
+  const auto reference = skin::buildSkinTextAtlas(
+      1, {.font = 1, .pointSize = 32, .fallbackChainDigest = "bundled-reference"},
+      {bundled}, {U'한', U'글', U'힣', U'\u3000'}, {});
+  const auto fallback = skin::buildSkinTextAtlas(
+      2, {.font = 2, .pointSize = 32, .fallbackChainDigest = "bundled-fallback"},
+      {latin}, {U'한', U'글', U'힣', U'\u3000'}, {});
+  expect(reference.atlas && fallback.atlas, "bundled Hangul reference and fallback atlases prepare");
+  if (!reference.atlas || !fallback.atlas) return;
+  for (char32_t codepoint : {U'한', U'글', U'힣', U'\u3000'}) {
+    const auto &expected = reference.atlas->glyphs.at(codepoint);
+    const auto &actual = fallback.atlas->glyphs.at(codepoint);
+    bool equal = expected.advance == actual.advance &&
+        expected.region.w == actual.region.w && expected.region.h == actual.region.h;
+    for (int y = 0; equal && y < expected.region.h; ++y) {
+      const auto a = (static_cast<std::size_t>(actual.region.y + y) * fallback.atlas->pixels.width + actual.region.x) * 4;
+      const auto b = (static_cast<std::size_t>(expected.region.y + y) * reference.atlas->pixels.width + expected.region.x) * 4;
+      equal = std::equal(reference.atlas->pixels.rgba->begin() + b,
+                         reference.atlas->pixels.rgba->begin() + b + expected.region.w * 4,
+                         fallback.atlas->pixels.rgba->begin() + a);
+    }
+    expect(equal, "missing Hangul uses exact bundled Noto pixels before system fonts");
+  }
+}
+
 #if defined(__APPLE__)
 void testSystemEmojiPixelsAndMissingSkinGlyphs() {
   constexpr std::size_t budget = 1024U * 1024U;
@@ -518,10 +566,54 @@ void testSystemEmojiPixelsAndMissingSkinGlyphs() {
              "native text retains its requested tint and straight alpha");
     }
   }
-  expect(redInk && !rasterizer.colorGlyph(U'A', budget) &&
-             !rasterizer.colorGlyph(U'\U0010ffff', budget) &&
-             !rasterizer.colorGlyph(U'\U0001f642', 1),
-         "system emoji fallback excludes ordinary and missing glyphs and obeys its byte budget");
+  expect(redInk && rasterizer.glyph(U'A', budget) &&
+             !rasterizer.glyph(U'\U0010ffff', budget) &&
+             !rasterizer.glyph(U'\U0001f642', 1),
+         "system fallback renders ordinary glyphs, rejects missing glyphs, and obeys its byte budget");
+
+  // Compare overhanging system glyphs with an independently padded CoreText
+  // drawing, so allocation/bearing mistakes cannot pass by sharing metrics.
+  for (const auto *utf8 : {"\xdc\x93", "\xe0\xbd\xb3"}) { // U+0713, U+0F73
+    const char32_t codepoint = static_cast<unsigned char>(utf8[0]) == 0xdc ? 0x0713 : 0x0f73;
+    const auto glyph = rasterizer.glyph(codepoint, budget);
+    auto font = CTFontCreateUIFontForLanguage(kCTFontUIFontSystem, 32, nullptr);
+    auto string = CFStringCreateWithCString(nullptr, utf8, kCFStringEncodingUTF8);
+    const void *keys[]{kCTFontAttributeName, kCTForegroundColorFromContextAttributeName};
+    const void *values[]{font, kCFBooleanTrue};
+    auto attributes = CFDictionaryCreate(nullptr, keys, values, 2,
+                                         &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+    auto attributed = CFAttributedStringCreate(nullptr, string, attributes);
+    auto line = CTLineCreateWithAttributedString(attributed);
+    std::vector<unsigned char> pixels(256 * 256 * 4, 0);
+    auto space = CGColorSpaceCreateDeviceRGB();
+    auto context = CGBitmapContextCreate(pixels.data(), 256, 256, 8, 256 * 4, space,
+        static_cast<CGBitmapInfo>(kCGBitmapByteOrder32Big) | kCGImageAlphaPremultipliedLast);
+    CGContextSetShouldAntialias(context, true);
+    CGContextSetAllowsAntialiasing(context, true);
+    CGContextSetRGBFillColor(context, 1, 1, 1, 1);
+    CGContextSetTextMatrix(context, CGAffineTransformIdentity);
+    CGContextSetTextPosition(context, 128, 128);
+    CTLineDraw(line, context);
+    bool equal = glyph.has_value();
+    std::size_t referenceInk = 0, actualInk = 0;
+    if (glyph) {
+      for (std::size_t i = 3; i < glyph->rgba.size(); i += 4) if (glyph->rgba[i]) ++actualInk;
+      for (int y = 0; y < 256; ++y) for (int x = 0; x < 256; ++x) {
+        const auto alpha = pixels[(y * 256 + x) * 4 + 3];
+        if (!alpha) continue;
+        ++referenceInk;
+        const int rx = x - 128 - glyph->offsetX;
+        const int ry = y - 128 + glyph->ascent;
+        equal &= rx >= 0 && rx < glyph->width && ry >= 0 && ry < glyph->height &&
+            glyph->rgba[(static_cast<std::size_t>(ry) * glyph->width + rx) * 4 + 3] == alpha;
+      }
+      equal &= glyph->advance == std::ceil(CTLineGetTypographicBounds(line, nullptr, nullptr, nullptr));
+    }
+    expect(equal && referenceInk > 0 && referenceInk == actualInk,
+           "native system fallback preserves full ink and advance against padded CoreText reference");
+    CGContextRelease(context); CGColorSpaceRelease(space); CFRelease(line);
+    CFRelease(attributed); CFRelease(attributes); CFRelease(string); CFRelease(font);
+  }
 
   const auto fontPath = std::filesystem::path(ASOBMASHOW_SOURCE_DIR) /
       "bgfx/bgfx/examples/runtime/font/signika-regular.ttf";
@@ -531,10 +623,16 @@ void testSystemEmojiPixelsAndMissingSkinGlyphs() {
   const auto scalable = skin::buildSkinTextAtlas(
       1, {.font = 1, .pointSize = 32, .fallbackChainDigest = "missing-emoji"},
       {{.encoded = std::vector<std::byte>(bytes.begin(), bytes.end())}},
-      {U'A', U'\U0001f642', U'\ufe0f'}, {});
+      {U'A', U'한', U'\U0001f642', U'\ufe0f'}, {});
   expect(scalable.atlas && colored(*scalable.atlas->pixels.rgba) &&
              scalable.atlas->glyphs.at(U'\ufe0f').advance == 0,
          "a scalable skin font missing emoji uses the native color glyph instead of a box");
+  text_runtime::SystemTextRasterizer bundled(32,
+      text_runtime::SystemTextRasterizer::GlyphFallback::BundledThenSystem);
+  const auto korean = bundled.glyph(U'한', budget);
+  expect(korean && scalable.atlas &&
+             scalable.atlas->glyphs.at(U'한').advance == korean->advance,
+         "a scalable skin missing Hangul uses the bundled glyph instead of a square");
   if (scalable.atlas) {
     const auto baseline = [](const auto &glyph) {
       return glyph.layoutOffsetY + glyph.region.h - glyph.bearingY;
@@ -574,7 +672,7 @@ void testSystemEmojiPixelsAndMissingSkinGlyphs() {
   const auto bitmap = skin::buildSkinBitmapTextAtlas(
       2, {.font = 2, .pointSize = 1, .fallbackChainDigest = "missing-bitmap-emoji"},
       {{.font = *parsed.font, .pages = {{.physicalKey = "emoji-source-page", .pixels = bitmapPage(8, 8, 255)}}}},
-      {U'A', U'\U0001f642', U'\ufe0f'}, {});
+      {U'A', U'한', U'\U0001f642', U'\ufe0f'}, {});
   expect(bitmap.atlas.has_value(), "the bitmap emoji atlas prepares");
   if (!bitmap.atlas) return;
   const auto &glyph = bitmap.atlas->glyphs.at(U'\U0001f642');
@@ -583,7 +681,11 @@ void testSystemEmojiPixelsAndMissingSkinGlyphs() {
              bitmap.atlas->glyphs.at(U'A').page == 0 &&
              bitmap.atlas->glyphs.at(U'\ufe0f').advance == 0,
          "a bitmap skin uses a color emoji page while retaining its authored distance-field glyphs");
-  const auto nativeGlyph = rasterizer.colorGlyph(U'\U0001f642', budget);
+  const auto &koreanGlyph = bitmap.atlas->glyphs.at(U'한');
+  expect(korean && koreanGlyph.bitmapFontType == 0 && koreanGlyph.advance == korean->advance &&
+             koreanGlyph.layoutOffsetY + koreanGlyph.region.h - korean->ascent == -26,
+         "a bitmap skin missing Hangul uses a bundled glyph on the authored baseline");
+  const auto nativeGlyph = rasterizer.glyph(U'\U0001f642', budget);
   expect(nativeGlyph && glyph.layoutOffsetY + glyph.region.h - nativeGlyph->ascent == -26,
          "native bitmap emoji use the authored BMFont baseline, not the canvas top");
   const auto incomplete = skin::parseSkinBitmapFont(
@@ -3840,6 +3942,7 @@ int main(int argc, char **argv) {
   testSpriteBoundsAndNormalizedGridCells();
   testTextAtlasKeyRejectsNegativePaintExtents();
   testScalableColorGlyphsSurviveFallbackAndCache();
+  testBundledHangulFallbackPrecedesSystemFonts();
 #if defined(__APPLE__)
   testSystemEmojiPixelsAndMissingSkinGlyphs();
 #endif

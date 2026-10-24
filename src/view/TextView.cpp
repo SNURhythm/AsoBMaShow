@@ -2,6 +2,7 @@
 #include "TextAnimationTiming.h"
 #include "SdlTtfRuntime.h"
 #include "FontCacheSession.h"
+#include "BundledFontFallbacks.h"
 #if defined(__ANDROID__)
 #include "SystemTextRasterizer.h"
 #endif
@@ -163,9 +164,7 @@ std::vector<std::string> fontFallbackPaths(const std::string &primaryPath,
     addUniquePath(paths, fontPathForWeight(path, weight));
   };
   addFont(primaryPath);
-  addFont("assets/fonts/notosanscjkjp.ttf");
-  addFont("assets/fonts/notosanssymbols2.ttf");
-  addFont("assets/fonts/arial.ttf");
+  for (const auto *path : text_runtime::bundledFontFallbackPaths) addFont(path);
   for (const auto &path : systemFontFallbackPaths()) {
     addFont(path);
   }

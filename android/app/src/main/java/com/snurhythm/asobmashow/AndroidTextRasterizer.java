@@ -19,7 +19,7 @@ public final class AndroidTextRasterizer {
     // Header: width, height, ascent, advance, offsetX. Pixels are straight-alpha ARGB,
     // as returned by Bitmap.getPixels (not Bitmap's premultiplied storage).
     public static int[] rasterize(byte[] utf8, int size, int color,
-                                  long maximumBytes, boolean colorOnly,
+                                  long maximumBytes, boolean singleGlyph,
                                   boolean metricsOnly) {
         if (utf8 == null || utf8.length == 0 || utf8.length > 65536
                 || size <= 0 || size > 8192 || maximumBytes < 4) return null;
@@ -30,11 +30,11 @@ public final class AndroidTextRasterizer {
             paint.setTypeface(Typeface.DEFAULT);
             paint.setTextSize(size);
             paint.setColor(color);
-            if (colorOnly) {
+            if (singleGlyph) {
                 if (text.codePointCount(0, text.length()) != 1) return null;
                 int codepoint = text.codePointAt(0);
-                if (!UCharacter.hasBinaryProperty(codepoint, UProperty.EMOJI)) return null;
-                if (!UCharacter.hasBinaryProperty(codepoint, UProperty.EMOJI_PRESENTATION)) {
+                if (UCharacter.hasBinaryProperty(codepoint, UProperty.EMOJI)
+                        && !UCharacter.hasBinaryProperty(codepoint, UProperty.EMOJI_PRESENTATION)) {
                     text += "\ufe0f";
                 }
                 if (!paint.hasGlyph(text)) return null;

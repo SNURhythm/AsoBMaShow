@@ -183,7 +183,8 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     result.error = "font atlas key or limits are invalid";
     return result;
   }
-  text_runtime::SystemTextRasterizer systemText(key.pointSize);
+  text_runtime::SystemTextRasterizer systemText(
+      key.pointSize, text_runtime::SystemTextRasterizer::GlyphFallback::BundledThenSystem);
   if (!text_runtime::acquire()) {
     result.error = "SDL_ttf initialization failed";
     return result;
@@ -360,7 +361,7 @@ SkinTextAtlasBuildResult buildSkinTextAtlas(
     const std::size_t maximumAtlasBytes =
         skinResourceLimit(safetyPolicy, SkinResourcePolicy::maximumAtlasBytes);
     auto systemGlyph = faceIndex == opened.size() || sourceCodepoint != codepoint
-        ? systemText.colorGlyph(codepoint, maximumAtlasBytes - temporaryGlyphBytes)
+        ? systemText.glyph(codepoint, maximumAtlasBytes - temporaryGlyphBytes)
         : std::nullopt;
     // Unsupported codepoints (commonly from chart runtime strings such as the
     // title or artist) fall back to the synthetic missing-glyph box below
@@ -881,11 +882,15 @@ SkinTextAtlasBuildResult buildSkinBitmapTextAtlas(
     }
     return {};
   };
-  const auto select = [&](char32_t codepoint) {
+  const auto authored = [&](char32_t codepoint) {
     auto selected = exact(codepoint);
     if (selected.glyph) return selected;
     if (codepoint == U'\u301c') selected = exact(U'\uff5e');
     else if (codepoint == U'\uff5e') selected = exact(U'\u301c');
+    return selected;
+  };
+  const auto select = [&](char32_t codepoint) {
+    auto selected = authored(codepoint);
     if (selected.glyph) return selected;
     constexpr std::u32string_view missing = U"\u25a1\u25a2\u2610\u25a0?";
     for (std::size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex) {
@@ -904,7 +909,9 @@ SkinTextAtlasBuildResult buildSkinBitmapTextAtlas(
 
   std::map<char32_t, SkinPreparedGlyphMetrics> metrics;
   std::map<char32_t, SelectedGlyph> selections;
-  text_runtime::SystemTextRasterizer systemText(faces.front().font.resource.originalSize);
+  text_runtime::SystemTextRasterizer systemText(
+      faces.front().font.resource.originalSize,
+      text_runtime::SystemTextRasterizer::GlyphFallback::BundledThenSystem);
   std::map<char32_t, text_runtime::SystemTextRaster> systemGlyphs;
   std::size_t systemGlyphBytes = 0;
   const auto systemGlyphBudget =
@@ -920,8 +927,8 @@ SkinTextAtlasBuildResult buildSkinBitmapTextAtlas(
           .bitmapFontType = faces.front().font.resource.type});
       continue;
     }
-    if (!exact(codepoint).glyph) {
-      if (auto glyph = systemText.colorGlyph(codepoint, systemGlyphBudget - systemGlyphBytes)) {
+    if (!authored(codepoint).glyph) {
+      if (auto glyph = systemText.glyph(codepoint, systemGlyphBudget - systemGlyphBytes)) {
         systemGlyphBytes += glyph->rgba.size();
         systemGlyphs.emplace(codepoint, std::move(*glyph));
         continue;
@@ -965,7 +972,7 @@ SkinTextAtlasBuildResult buildSkinBitmapTextAtlas(
     const int width = glyph.width + 2, height = glyph.height + 2;
     const int dimension = skinResourceDimensionLimit(safetyPolicy);
     if (width > dimension || height > dimension) {
-      result.error = "system emoji glyph exceeds atlas dimensions";
+      result.error = "system fallback glyph exceeds atlas dimensions";
       return result;
     }
     if (systemPages.empty() || width > systemPages.back().width) {
@@ -991,13 +998,13 @@ SkinTextAtlasBuildResult buildSkinBitmapTextAtlas(
     systemPages.back().height = std::max(systemPages.back().height, cursorY + glyph.height + 1);
   }
   std::size_t packedBytes = 0;
-  const auto systemKey = "system-emoji:" + std::to_string(id) + ":" +
+  const auto systemKey = "system-glyph:" + std::to_string(id) + ":" +
                         scalableTextAtlasContentKey(key, codepoints, {}, safetyPolicy);
   for (const auto &page : systemPages) {
     const auto bytes = static_cast<std::size_t>(page.width) * page.height * 4U;
     if (bytes > systemGlyphBudget - packedBytes ||
         pages.size() >= skinResourceLimit(safetyPolicy, SkinResourcePolicy::maximumResources)) {
-      result.error = "system emoji pages exceed atlas limits";
+      result.error = "system fallback pages exceed atlas limits";
       return result;
     }
     packedBytes += bytes;

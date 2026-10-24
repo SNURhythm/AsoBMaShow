@@ -22,11 +22,14 @@ struct SystemTextRaster {
 // straight-alpha RGBA pixels; no font handle survives atlas preparation.
 class SystemTextRasterizer {
 public:
-  explicit SystemTextRasterizer(int pointSize);
+  enum class GlyphFallback { SystemOnly, BundledThenSystem };
+  explicit SystemTextRasterizer(int pointSize, GlyphFallback fallback = GlyphFallback::SystemOnly);
   ~SystemTextRasterizer();
   SystemTextRasterizer(const SystemTextRasterizer &) = delete;
   SystemTextRasterizer &operator=(const SystemTextRasterizer &) = delete;
-  [[nodiscard]] std::optional<SystemTextRaster> colorGlyph(
+  // Return a supported glyph in the selected fallback order, including ordinary
+  // Unicode text and intrinsic-color emoji. Missing glyphs return nullopt.
+  [[nodiscard]] std::optional<SystemTextRaster> glyph(
       char32_t codepoint, std::size_t maximumBytes);
 #if defined(__APPLE__) || defined(__ANDROID__)
   [[nodiscard]] std::optional<SystemTextRaster> text(
@@ -40,8 +43,10 @@ public:
 #endif
 private:
   struct Impl;
+  struct FontChain;
   int pointSize_;
   bool ownsTtfRuntime_ = false;
   std::unique_ptr<Impl> impl_;
+  std::unique_ptr<FontChain> bundledFonts_;
 };
 } // namespace text_runtime

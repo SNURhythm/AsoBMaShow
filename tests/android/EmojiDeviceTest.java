@@ -4,12 +4,12 @@ package com.snurhythm.asobmashow;
 public final class EmojiDeviceTest {
     private static native int verify(String directory, int unavailableEmoji);
 
-    private static int[] raster(String text, boolean colorOnly) throws Exception {
+    private static int[] raster(String text, boolean singleGlyph) throws Exception {
         return (int[]) Class.forName("com.snurhythm.asobmashow.AndroidTextRasterizer")
                 .getMethod("rasterize", byte[].class, int.class, int.class,
                            long.class, boolean.class, boolean.class)
                 .invoke(null, text.getBytes(java.nio.charset.StandardCharsets.UTF_8),
-                        32, -1, 1024L * 1024, colorOnly, false);
+                        32, -1, 1024L * 1024, singleGlyph, false);
     }
 
     private static void verifyInkBounds() throws Exception {
@@ -72,6 +72,19 @@ public final class EmojiDeviceTest {
         return -1;
     }
 
+    // SDL resolves relative bundled-font paths through the Activity files and
+    // asset APIs. Supply isolated extracted APK files, never application data.
+    public static final class TestActivity extends android.app.Activity {
+        private final java.io.File directory;
+        private final android.content.res.AssetManager assets;
+        TestActivity(String path, android.content.res.AssetManager manager) {
+            directory = new java.io.File(path);
+            assets = manager;
+        }
+        @Override public java.io.File getFilesDir() { return directory; }
+        @Override public android.content.res.AssetManager getAssets() { return assets; }
+    }
+
     public static void main(String[] arguments) throws Exception {
         // app_process bypasses ActivityThread's application/font initialization.
         // Android 12+ initializes its serialized font map there; older releases
@@ -86,12 +99,20 @@ public final class EmojiDeviceTest {
         for (String library : new String[]{"c++_shared", "SDL3", "SDL3_ttf", "main", "emoji_device_tests"}) {
             System.load(directory + "/lib" + library + ".so");
         }
+        if (android.os.Looper.myLooper() == null) android.os.Looper.prepareMainLooper();
+        Class<?> activityThread = Class.forName("android.app.ActivityThread");
+        Object thread = activityThread.getMethod("systemMain").invoke(null);
+        android.content.Context context = (android.content.Context)
+                activityThread.getMethod("getSystemContext").invoke(thread);
+        Class.forName("org.libsdl.app.SDL").getMethod("setContext", android.app.Activity.class)
+                .invoke(null, new TestActivity(directory, context.getAssets()));
+        Class.forName("org.libsdl.app.SDLActivity").getMethod("nativeSetupJNI").invoke(null);
         boolean initialized = (Boolean) Class.forName("com.snurhythm.asobmashow.AndroidTextRasterizer")
                 .getMethod("initializeNative").invoke(null);
         if (!initialized) throw new AssertionError("JNI initialization");
         verifyInkBounds();
         int failures = verify(directory, verifyMissingEmoji());
         if (failures != 0) throw new AssertionError(failures + " emoji checks failed");
-        System.out.println("PASS: Android emoji rendering, atlas baselines and bounds");
+        System.out.println("PASS: Android Korean bundled fallback, emoji rendering, atlas baselines and bounds");
     }
 }
