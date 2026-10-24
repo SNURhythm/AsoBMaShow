@@ -5557,6 +5557,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(text_input_box_tests
         tests/text_input_box_tests.cpp
         src/view/SelectableDocumentView.cpp
+        src/view/BmsSyntax.cpp
         src/platform/NativeDocument.cpp
         src/scene/ChartReadmeModal.cpp
         src/library/ReadmeTranslation.cpp

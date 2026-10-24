@@ -47,9 +47,50 @@ NSEvent *key(NSWindow *window, NSString *characters, unsigned short code,
 void near(CGFloat actual, CGFloat expected, const char *message) {
   require(std::abs(actual - expected) < 1, message);
 }
+NSColor *syntaxColor(NSTextView *text, NSUInteger character) {
+  return [text.layoutManager temporaryAttribute:NSForegroundColorAttributeName
+      atCharacterIndex:character effectiveRange:nullptr];
+}
+std::pair<std::size_t, std::size_t> boundedSyntax(NSTextView *text) {
+  std::size_t characters = 0, spans = 0;
+  for (NSUInteger i = 0; i < text.string.length;) {
+    NSRange effective{};
+    id color = [text.layoutManager temporaryAttribute:NSForegroundColorAttributeName
+        atCharacterIndex:i effectiveRange:&effective];
+    require(effective.length != 0, "temporary attribute enumeration makes progress");
+    if (color) { characters += effective.length; ++spans; }
+    i = NSMaxRange(effective);
+  }
+  require(characters <= bms_syntax::maxPaintCharacters && spans <= bms_syntax::maxPaintSpans,
+      "native syntax attributes stay bounded after scrolling");
+  return {characters, spans};
 }
 
-int main() {
+void benchmarkSyntax(NSView *host) {
+  std::string source;
+  const std::string line = "#TITLE source\n#WAV01 sounds/01.ogg\n#00111:01000200030004000500060007000800\n";
+  source.reserve(4 * 1024 * 1024 + line.size());
+  while (source.size() < 4 * 1024 * 1024) source += line;
+  const auto syntax = bms_syntax::tokenize(source);
+  const auto createStart = std::chrono::steady_clock::now();
+  auto surface = onWorker([&] { return native_document::detail::createApple(source, {0, 0, 1, 1}, {}); });
+  const auto createEnd = std::chrono::steady_clock::now();
+  NSTextView *text = findTextView(host);
+  require(surface && text, "create large native syntax benchmark surface");
+  const auto paintStart = std::chrono::steady_clock::now();
+  onWorker([&] { surface->setSyntax(syntax); });
+  const auto paintEnd = std::chrono::steady_clock::now();
+  const auto retained = boundedSyntax(text);
+  require(syntaxColor(text, 0) != nil, "large native document colors its visible text");
+  std::printf("AppKit syntax: bytes=%zu cached_spans=%zu active_characters=%zu active_runs=%zu create_ms=%.2f syntax_attach_ms=%.2f\n",
+      source.size(), syntax->spans.size(), retained.first, retained.second,
+      std::chrono::duration<double, std::milli>(createEnd - createStart).count(),
+      std::chrono::duration<double, std::milli>(paintEnd - paintStart).count());
+  onWorker([&] { surface.reset(); });
+}
+}
+
+int main(int argc, char **argv) {
   @autoreleasepool {
     require(SDL_Init(SDL_INIT_VIDEO), SDL_GetError());
     SDL_Window *window = SDL_CreateWindow("Native document regression", 640, 480, SDL_WINDOW_HIDDEN);
@@ -63,7 +104,7 @@ int main() {
     for (int i = 0; i < 100; ++i) source += "#00311:01000200\n";
     const auto wrapped = source.size();
     source += "#00411:" + std::string(2000, '1') + "\n";
-    for (int i = 0; i < 40; ++i) source += "#00511:01000200\n";
+    for (int i = 0; i < 2000; ++i) source += "#00511:01000200\n";
     source += "#LAST\n";
     const auto first = source.find("#001"), second = source.find("#002"), last = source.find("#LAST");
     native_document::Appearance appearance;
@@ -73,6 +114,8 @@ int main() {
     require(surface != nullptr, "create a native surface in the sole hidden SDL window");
     NSTextView *text = findTextView(host);
     require(text != nil && !text.editable && text.selectable, "native text is read-only and selectable");
+    require(text.font != nil && std::abs(text.font.pointSize - appearance.fontSize) < 0.01,
+        "initial source uses its final font before text layout");
     require(nativeWindow.firstResponder == text, "native text owns keyboard focus");
     require([text.string isEqualToString:[NSString stringWithUTF8String:source.c_str()]],
         "Unicode, CRLF and source bytes are displayed without normalization");
@@ -88,6 +131,12 @@ int main() {
         "document hits reach native controls");
 
     [text setSelectedRange:NSMakeRange(7, 3)]; // π + surrogate pair for 😀.
+    onWorker([&] { surface->setSyntax(bms_syntax::tokenize(source)); });
+    require(syntaxColor(text, 0) != nil && syntaxColor(text, 7) != nil,
+        "native directive and Unicode string have syntax colors");
+    require(![syntaxColor(text, 0) isEqual:syntaxColor(text, 7)], "token categories have distinct colors");
+    require(NSEqualRanges(text.selectedRange, NSMakeRange(7, 3)), "syntax setup preserves native selection");
+    boundedSyntax(text);
     onWorker([&] { surface->highlight({{first, first + 4}, {second, second + 4}}, false); });
     require(NSEqualRanges(text.selectedRange, NSMakeRange(7, 3)), "practice highlight preserves selection");
     for (NSString *match in @[@"#001", @"#002"]) {
@@ -97,6 +146,7 @@ int main() {
     }
     require([text.textStorage attribute:NSBackgroundColorAttributeName atIndex:8 effectiveRange:nullptr] == nil,
         "native selection does not become a practice highlight");
+    require(syntaxColor(text, 0) != nil, "practice background updates retain syntax foreground");
     NSPasteboard *pasteboard = [NSPasteboard pasteboardWithUniqueName];
     require([text writeSelectionToPasteboard:pasteboard types:text.writablePasteboardTypes],
         "native selection can be copied");
@@ -106,6 +156,7 @@ int main() {
 
     appearance.fontSize = 19;
     appearance.highlight = 0x12ab3480;
+    appearance.syntax[static_cast<std::size_t>(bms_syntax::Kind::Directive)] = 0x16aa22ff;
     onWorker([&] { surface->setAppearance(appearance); });
     require(NSEqualRanges(text.selectedRange, NSMakeRange(7, 3)), "theme updates preserve native selection");
     NSColor *color = [[text.textStorage attribute:NSBackgroundColorAttributeName
@@ -113,11 +164,20 @@ int main() {
         colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
     require(std::abs(color.redComponent - 0x12 / 255.0) < 0.01 &&
         std::abs(color.alphaComponent - 0x80 / 255.0) < 0.01, "appearance uses RRGGBBAA");
+    NSColor *directive = [syntaxColor(text, 0) colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+    require(directive != nil && std::abs(directive.redComponent - 0x16 / 255.0) < 0.01,
+        "theme changes repaint cached syntax with the new palette");
 
     onWorker([&] { surface->scroll(native_document::Scroll::End); });
     require(scroll.contentView.bounds.origin.y > 0, "scroll-to-end moves the native viewport");
+    require(syntaxColor(text, [text.string rangeOfString:@"#LAST"].location) != nil,
+        "a distant scroll paints syntax around the new viewport");
+    require(syntaxColor(text, 0) == nil, "scrolling retires offscreen syntax attributes");
+    boundedSyntax(text);
     onWorker([&] { surface->scroll(native_document::Scroll::Start); });
-    near(scroll.contentView.bounds.origin.y, 0, "scroll-to-start returns to the beginning");
+    near(text.visibleRect.origin.y, 0, "scroll-to-start returns to the beginning");
+    require(syntaxColor(text, 0) != nil, "scrolling back restores initial syntax colors");
+    boundedSyntax(text);
     onWorker([&] { surface->highlight({{last, last + 5}}, true); });
     require(scroll.contentView.bounds.origin.y > 0, "focus scrolls to the first practice highlight");
     require(NSEqualRanges(text.selectedRange, NSMakeRange(7, 3)), "focus scroll does not change selection");
@@ -134,10 +194,12 @@ int main() {
       const NSUInteger character = [text.string rangeOfString:@"#00411:"].location + 7;
       const NSUInteger glyph = [text.layoutManager glyphIndexForCharacterAtIndex:character];
       const NSRect line = [text.layoutManager lineFragmentRectForGlyphAtIndex:glyph effectiveRange:nullptr];
-      const CGFloat visibleY = line.origin.y + text.textContainerOrigin.y - scroll.contentView.bounds.origin.y;
+      const CGFloat visibleY = line.origin.y + text.textContainerOrigin.y - text.visibleRect.origin.y;
       require(visibleY >= 0 && visibleY <= text.textContainerInset.height + 1,
           "highlight jumps immediately to the first wrapped match at the viewport top");
       require(NSEqualRanges(text.selectedRange, NSMakeRange(7, 3)), "direct jump preserves manual selection");
+      require(syntaxColor(text, character) != nil, "direct jump colors the wrapped match");
+      boundedSyntax(text);
     };
     checkJump();
 
@@ -169,6 +231,7 @@ int main() {
     require(retiredText == nil || retiredText.superview == nil || retiredText.window == nil,
         "retained native selection objects cannot remain attached to the SDL window");
     require(!nativeWindow.visible, "the test never presents a desktop window");
+    if (argc == 2 && std::string_view(argv[1]) == "--benchmark") benchmarkSyntax(host);
     SDL_DestroyWindow(window);
     SDL_Quit();
   }

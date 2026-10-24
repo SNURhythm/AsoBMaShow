@@ -1,6 +1,8 @@
 #pragma once
 
 #include "../view/TextRange.h"
+#include "../view/BmsSyntax.h"
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <memory>
@@ -17,6 +19,9 @@ struct Appearance {
   std::uint32_t background = 0x181d27ff;
   std::uint32_t highlight = 0xffc04d70;
   float fontSize = 16;
+  std::array<std::uint32_t, bms_syntax::kindCount> syntax = {
+      0x70d6ffff, 0xc69af5ff, 0xe6bb78ff, 0xffab82ff,
+      0x7bda92ff, 0x99a7bbff, 0xb2c6e5ff};
 };
 enum class Scroll { LineUp, LineDown, PageUp, PageDown, Start, End };
 struct State {
@@ -29,6 +34,7 @@ public:
   virtual ~Surface() = default;
   virtual void setFrame(Frame frame) = 0;
   virtual void setAppearance(Appearance appearance) = 0;
+  virtual void setSyntax(std::shared_ptr<const bms_syntax::Document> syntax) = 0;
   // UTF-8 byte ranges in the original decoded text. Keep native selection
   // independent of practice highlights; focus scrolls to the first highlight.
   virtual void highlight(const std::vector<text_range::Range> &ranges, bool focus) = 0;

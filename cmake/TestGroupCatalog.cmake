@@ -559,6 +559,7 @@ asobmashow_label_tests(area_ui
     text_animation_timing_tests
     text_input_box_tests
     native_document_tests
+    bms_syntax_tests
     native_document_apple_tests
     native_document_windows_tests
     legal_notices_tests

@@ -9,7 +9,10 @@ import android.text.Layout;
 import android.text.Selection;
 import android.text.Spannable;
 import android.text.Spanned;
+import android.text.TextPaint;
 import android.text.style.BackgroundColorSpan;
+import android.text.style.CharacterStyle;
+import android.text.style.UpdateAppearance;
 import android.util.Log;
 import android.util.TypedValue;
 import android.view.ActionMode;
@@ -43,6 +46,15 @@ final class NativeDocumentView {
     private int highlightColor;
     private int[] ranges = new int[0];
     private int focusOffset = -1;
+    // Flat original UTF-16 (begin, end, Kind) triples, supplied once by JNI.
+    private int[] syntax = new int[0];
+    private final int[] syntaxColors = new int[7];
+    private final SyntaxWindow syntaxWindow = new SyntaxWindow();
+    private final SyntaxColorSpan[] syntaxSpans = new SyntaxColorSpan[SyntaxWindow.MAX_SPANS];
+    private int activeSyntaxSpans;
+    private int paintedBegin = -1, paintedEnd = -1;
+    private int lastVisibleBegin = -1, lastVisibleEnd = -1;
+    private boolean syntaxPaintQueued, syntaxDirty;
     private final ViewTreeObserver.OnGlobalLayoutListener layoutListener = this::layout;
 
     private static native void requestDismiss(long id);
@@ -84,7 +96,9 @@ final class NativeDocumentView {
             scroller = new ScrollView(activity);
             scroller.setFillViewport(true);
             scroller.setClipToPadding(true);
+            scroller.setOnScrollChangeListener((view, sx, sy, ox, oy) -> scheduleSyntaxPaint(false));
             text = new TextView(activity);
+            text.setOnScrollChangeListener((view, sx, sy, ox, oy) -> scheduleSyntaxPaint(false));
             text.setTypeface(Typeface.MONOSPACE);
             text.setTextIsSelectable(true);
             text.setKeyListener(null);
@@ -149,12 +163,19 @@ final class NativeDocumentView {
             scroller.setLayoutParams(params);
         }
         focusFirstRange();
+        scheduleSyntaxPaint(false);
     }
 
     private static int argb(int rgba) { return (rgba >>> 8) | (rgba << 24); }
 
-    public void setAppearance(int foreground, int background, int highlight, float fontSize) {
-        post(() -> appearance(foreground, background, highlight, fontSize));
+    public void setAppearance(int foreground, int background, int highlight, float fontSize, int[] colors) {
+        post(() -> {
+            if (colors != null && colors.length == syntaxColors.length) {
+                for (int i = 0; i < colors.length; ++i) syntaxColors[i] = argb(colors[i]);
+            }
+            appearance(foreground, background, highlight, fontSize);
+            scheduleSyntaxPaint(true);
+        });
     }
 
     private void appearance(int foreground, int background, int highlight, float fontSize) {
@@ -164,6 +185,96 @@ final class NativeDocumentView {
                 Float.isFinite(fontSize) && fontSize > 0 ? fontSize : 16);
         highlightColor = argb(highlight);
         paintRanges();
+    }
+
+    public void setSyntax(int[] triples, int length) {
+        post(() -> {
+            // The trusted native producer already guarantees sorted, disjoint
+            // spans; do not walk the document again on the main looper.
+            syntax = triples != null && triples.length % 3 == 0 && length == text.length()
+                    ? triples : new int[0];
+            scheduleSyntaxPaint(true);
+        });
+    }
+
+    private void scheduleSyntaxPaint(boolean force) {
+        if (closed.get()) return;
+        syntaxDirty |= force;
+        if (syntaxPaintQueued) return;
+        syntaxPaintQueued = true;
+        post(() -> {
+            syntaxPaintQueued = false;
+            paintSyntax();
+        });
+    }
+
+    private void paintSyntax() {
+        if (text == null || scroller == null || text.isLayoutRequested() ||
+                scroller.isLayoutRequested() || scroller.getHeight() == 0) return;
+        Layout layout = text.getLayout();
+        if (layout == null) return;
+        int top = scroller.getScrollY() + scroller.getPaddingTop() - text.getTop() +
+                text.getScrollY() - text.getTotalPaddingTop();
+        int bottom = top + Math.max(1, scroller.getHeight() - scroller.getPaddingTop() -
+                scroller.getPaddingBottom());
+        int visibleBegin = layout.getLineStart(layout.getLineForVertical(Math.max(0, top)));
+        int visibleEnd = layout.getLineEnd(layout.getLineForVertical(Math.max(0, bottom - 1)));
+        if (!syntaxDirty && ((paintedBegin <= visibleBegin && visibleEnd <= paintedEnd) ||
+                (visibleBegin == lastVisibleBegin && visibleEnd == lastVisibleEnd))) return;
+        syntaxDirty = false;
+        syntaxWindow.calculate(syntax, text.length(), visibleBegin, visibleEnd);
+        Spannable content = (Spannable) text.getText();
+        // Only remove our foreground objects. Selection and practice background
+        // spans remain attached, and CharacterStyle never requests text reflow.
+        for (int i = 0; i < activeSyntaxSpans; ++i) content.removeSpan(syntaxSpans[i]);
+        activeSyntaxSpans = 0;
+        for (int i = syntaxWindow.firstSpan; i < syntaxWindow.lastSpan; ++i) {
+            int begin = Math.max(syntaxWindow.begin, syntax[i * 3]);
+            int end = Math.min(syntaxWindow.end, syntax[i * 3 + 1]);
+            int kind = syntax[i * 3 + 2];
+            if (begin >= end || kind < 0 || kind >= syntaxColors.length) continue;
+            SyntaxColorSpan span = syntaxSpans[activeSyntaxSpans];
+            if (span == null) syntaxSpans[activeSyntaxSpans] = span = new SyntaxColorSpan();
+            span.color = syntaxColors[kind];
+            content.setSpan(span, begin, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+            ++activeSyntaxSpans;
+        }
+        paintedBegin = syntaxWindow.begin;
+        paintedEnd = syntaxWindow.end;
+        lastVisibleBegin = visibleBegin;
+        lastVisibleEnd = visibleEnd;
+    }
+
+    private static final class SyntaxColorSpan extends CharacterStyle implements UpdateAppearance {
+        int color;
+        @Override public void updateDrawState(TextPaint paint) { paint.setColor(color); }
+    }
+
+    // Mirrors bms_syntax::paintWindow: logarithmic lookup, bounded enumeration,
+    // and no substring copies even for a single very large wrapped data line.
+    static final class SyntaxWindow {
+        static final int MAX_CHARACTERS = 16384, MAX_SPANS = 4096, OVERSCAN = 1024;
+        int begin, end, firstSpan, lastSpan;
+
+        void calculate(int[] triples, int length, int visibleBegin, int visibleEnd) {
+            visibleBegin = Math.max(0, Math.min(length, visibleBegin));
+            visibleEnd = Math.max(visibleBegin, Math.min(length, visibleEnd));
+            begin = Math.max(0, visibleBegin - OVERSCAN);
+            end = (int) Math.min(length, Math.min((long) begin + MAX_CHARACTERS,
+                    (long) visibleEnd + OVERSCAN));
+            int low = 0, high = triples.length / 3;
+            while (low < high) {
+                int middle = low + (high - low) / 2;
+                if (triples[middle * 3 + 1] <= begin) low = middle + 1;
+                else high = middle;
+            }
+            firstSpan = low;
+            int limit = firstSpan + Math.min(MAX_SPANS, triples.length / 3 - firstSpan);
+            while (low < limit && triples[low * 3] < end) ++low;
+            lastSpan = low;
+            if (low < triples.length / 3 && triples[low * 3] < end)
+                end = Math.min(end, triples[(low - 1) * 3 + 1]);
+        }
     }
 
     public void highlight(int[] endpoints, boolean focus) {
@@ -251,17 +362,22 @@ final class NativeDocumentView {
         if (parent != null && parent.getViewTreeObserver().isAlive())
             parent.getViewTreeObserver().removeOnGlobalLayoutListener(layoutListener);
         if (text != null) {
+            text.setOnScrollChangeListener(null);
             text.cancelLongPress();
             text.clearFocus();
         }
         if (scroller != null && scroller.getParent() instanceof ViewGroup)
             ((ViewGroup) scroller.getParent()).removeView(scroller);
+        if (scroller != null) scroller.setOnScrollChangeListener(null);
         if (activity.nativeDocumentView == this) {
             activity.nativeDocumentView = null;
             if (surface != null && !activity.nativeDocumentDestroyed) surface.requestFocus();
         }
         text = null; scroller = null; parent = null; surface = null;
         ranges = new int[0];
+        syntax = new int[0];
+        java.util.Arrays.fill(syntaxSpans, null);
+        activeSyntaxSpans = 0;
     }
 
     private static final class BackApi33 {

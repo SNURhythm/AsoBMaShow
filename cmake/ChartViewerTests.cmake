@@ -34,9 +34,14 @@ target_compile_features(native_document_tests PRIVATE cxx_std_23)
 target_compile_definitions(native_document_tests PRIVATE ASOBMASHOW_NATIVE_DOCUMENT_TEST_STUB=1)
 add_test(NAME native_document_tests COMMAND native_document_tests)
 
+add_executable(bms_syntax_tests tests/bms_syntax_tests.cpp src/view/BmsSyntax.cpp)
+target_include_directories(bms_syntax_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(bms_syntax_tests PRIVATE cxx_std_23)
+add_test(NAME bms_syntax_tests COMMAND bms_syntax_tests)
+
 if(APPLE AND NOT IOS)
     add_executable(native_document_apple_tests tests/native_document_apple_tests.mm
-        src/platform/NativeDocumentApple.mm src/platform/NativeDocument.cpp)
+        src/platform/NativeDocumentApple.mm src/platform/NativeDocument.cpp src/view/BmsSyntax.cpp)
     target_include_directories(native_document_apple_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(native_document_apple_tests PRIVATE cxx_std_23)
     set_source_files_properties(tests/native_document_apple_tests.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
@@ -47,7 +52,7 @@ endif()
 
 if(WIN32)
     add_executable(native_document_windows_tests tests/native_document_windows_tests.cpp
-        src/platform/NativeDocumentWindows.cpp src/platform/NativeDocument.cpp)
+        src/platform/NativeDocumentWindows.cpp src/platform/NativeDocument.cpp src/view/BmsSyntax.cpp)
     target_include_directories(native_document_windows_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(native_document_windows_tests PRIVATE cxx_std_23)
     target_compile_definitions(native_document_windows_tests PRIVATE ASOBMASHOW_NATIVE_DOCUMENT_TEST_STUB=1)

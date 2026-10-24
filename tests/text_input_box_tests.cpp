@@ -1237,6 +1237,7 @@ bool openExternalUrl(std::string_view, std::string &) { return true; }
 void testNativeSourceSurfaceLifetime() {
   struct Calls {
     int creates = 0, destroys = 0, highlights = 0, scrolls = 0, frames = 0;
+    int syntaxUpdates = 0;
     native_document::Frame frame;
     std::shared_ptr<native_document::State> state;
   };
@@ -1246,6 +1247,11 @@ void testNativeSourceSurfaceLifetime() {
     ~Surface() override { ++calls->destroys; }
     void setFrame(native_document::Frame value) override { calls->frame = value; ++calls->frames; }
     void setAppearance(native_document::Appearance) override {}
+    void setSyntax(std::shared_ptr<const bms_syntax::Document> syntax) override {
+      expect(syntax->length == 9 && syntax->spans.size() == 3,
+          "native source receives compact cached syntax spans");
+      ++calls->syntaxUpdates;
+    }
     void highlight(const std::vector<text_range::Range> &ranges, bool focus) override {
       expect(focus && ranges.size() == 1 && ranges[0].begin == 7,
           "native practice highlight receives original UTF-8 source range");
@@ -1289,6 +1295,8 @@ void testNativeSourceSurfaceLifetime() {
     root.setSize(500, 400);
     root.applyYogaLayout();
     expect(calls->frames > oldFrames, "native surface follows source layout changes");
+    root.propagateThemeChange();
+    expect(calls->syntaxUpdates == 1, "highlighting, resizing and theme updates reuse syntax tokens");
     const auto oldState = calls->state;
     const auto nativeEscapeTime = SDL_GetTicksNS();
     oldState->requestDismiss();

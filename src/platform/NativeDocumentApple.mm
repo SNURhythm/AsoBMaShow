@@ -98,10 +98,15 @@ NSColor *nativeColor(std::uint32_t value) {
 @interface AsoDocumentTextView : UITextView {
 @public
   std::weak_ptr<State> dismissState;
+  std::function<void()> syntaxViewportChanged;
 }
 @end
 
 @implementation AsoDocumentTextView
+- (void)layoutSubviews {
+  [super layoutSubviews];
+  if (syntaxViewportChanged) syntaxViewportChanged();
+}
 - (NSArray<UIKeyCommand *> *)keyCommands {
   NSMutableArray<UIKeyCommand *> *commands = [[super keyCommands] mutableCopy];
   if (!commands) commands = [NSMutableArray array];
@@ -137,6 +142,7 @@ NSColor *nativeColor(std::uint32_t value) {
 @interface AsoDocumentTextView : NSTextView {
 @public
   std::weak_ptr<State> dismissState;
+  std::function<void()> syntaxViewportChanged;
 }
 @property(nonatomic, strong) NSMenu *selectionMenu;
 @end
@@ -178,9 +184,13 @@ NSColor *nativeColor(std::uint32_t value) {
 
 @implementation AsoDocumentContainer
 - (BOOL)isFlipped { return YES; }
+- (void)syntaxViewportChanged:(NSNotification *)notification {
+  if (self.textView && self.textView->syntaxViewportChanged) self.textView->syntaxViewportChanged();
+}
 - (void)resizeSubviewsWithOldSize:(NSSize)oldSize {
   [super resizeSubviewsWithOldSize:oldSize];
   self.scrollView.frame = documentRect(documentFrame, self.bounds);
+  [self syntaxViewportChanged:nil];
 }
 - (NSView *)hitTest:(NSPoint)point {
   NSView *hit = [super hitTest:point];
@@ -195,12 +205,13 @@ class AppleSurface final : public Surface {
 public:
   explicit AppleSurface(const std::string &text) : text_(text) {}
   ~AppleSurface() override {
-    // All operations are synchronous worker -> UI calls. There are no pending
-    // blocks retaining this Surface; native callbacks hold only a weak State.
+    // Worker -> UI calls are synchronous. Dismissal uses weak State; viewport
+    // callbacks run only on the UI thread and are detached before destruction.
     onDocumentMain([&] {
       @autoreleasepool {
         if (!container_) return;
         container_.textView->dismissState.reset();
+        container_.textView->syntaxViewportChanged = {};
 #if TARGET_OS_IPHONE
         [container_.textView resignFirstResponder];
         container_.textView.selectedTextRange = nil;
@@ -219,6 +230,7 @@ public:
         [previousResponder_ becomeFirstResponder];
         previousResponder_ = nil;
 #else
+        [[NSNotificationCenter defaultCenter] removeObserver:container_];
         [container_.textView.selectionMenu cancelTrackingWithoutAnimation];
         container_.textView.selectionMenu = nil;
         NSWindow *window = container_.window;
@@ -227,6 +239,7 @@ public:
         [window makeFirstResponder:host];
 #endif
         container_ = nil; // Release AppKit/UIKit objects on their owning thread.
+        syntaxColors_ = nil;
       }
     });
   }
@@ -257,7 +270,6 @@ public:
         view.contentInsetAdjustmentBehavior = UIScrollViewContentInsetAdjustmentNever;
         view.textContainerInset = UIEdgeInsetsMake(8, 8, 8, 8);
         view.dataDetectorTypes = UIDataDetectorTypeNone;
-        view.text = text;
         container_.textView = view;
         [container_ addSubview:view];
 #else
@@ -286,16 +298,25 @@ public:
         view.textContainer.containerSize = NSMakeSize(0, std::numeric_limits<CGFloat>::max());
         view.textContainer.widthTracksTextView = YES;
         view.textContainerInset = NSMakeSize(8, 8);
-        view.string = text;
         scroll.documentView = view;
         container_.textView = view;
         container_.scrollView = scroll;
         [container_ addSubview:scroll];
+        scroll.contentView.postsBoundsChangedNotifications = YES;
+        [[NSNotificationCenter defaultCenter] addObserver:container_
+            selector:@selector(syntaxViewportChanged:) name:NSViewBoundsDidChangeNotification object:scroll.contentView];
 #endif
         view->dismissState = state_;
+        view->syntaxViewportChanged = [this] { paintSyntax(false); };
         [host addSubview:container_];
         setFrame(frame);
         setAppearance(appearance);
+        // Install large text only after width/font are final. Assigning it to
+        // the initial zero-width control and then changing its font can force
+        // several full-document layouts before the source is ever visible.
+        NSDictionary *attributes = @{NSFontAttributeName: view.font,
+            NSForegroundColorAttributeName: nativeColor(appearance.foreground)};
+        [view.textStorage setAttributedString:[[NSAttributedString alloc] initWithString:text attributes:attributes]];
 #if TARGET_OS_IPHONE
         [view becomeFirstResponder];
 #else
@@ -315,12 +336,16 @@ public:
 #else
       [container_ resizeSubviewsWithOldSize:container_.bounds.size];
 #endif
+      paintSyntax(false);
     });
   }
 
   void setAppearance(Appearance appearance) override {
     onDocumentMain([&] {
       appearance_ = appearance;
+      NSMutableArray *colors = [NSMutableArray arrayWithCapacity:appearance.syntax.size()];
+      for (auto color : appearance.syntax) [colors addObject:nativeColor(color)];
+      syntaxColors_ = [colors copy];
       const CGFloat fontSize = std::isfinite(appearance.fontSize)
           ? std::clamp(appearance.fontSize, 1.0f, 256.0f) : 16;
       auto *view = container_.textView;
@@ -333,6 +358,15 @@ public:
       view.textColor = nativeColor(appearance.foreground);
       view.backgroundColor = nativeColor(appearance.background);
       paintHighlights();
+      paintSyntax(true);
+    });
+  }
+
+  void setSyntax(std::shared_ptr<const bms_syntax::Document> syntax) override {
+    onDocumentMain([&] {
+      clearSyntaxColors();
+      syntax_ = std::move(syntax);
+      paintSyntax(true);
     });
   }
 
@@ -352,6 +386,7 @@ public:
       [view layoutIfNeeded];
       CGPoint offset = view.contentOffset;
       const CGFloat page = view.bounds.size.height;
+      const CGFloat start = 0;
       const CGFloat end = std::max<CGFloat>(0, view.contentSize.height - page);
       const CGFloat line = view.font.lineHeight;
 #else
@@ -359,7 +394,10 @@ public:
       NSClipView *clip = container_.scrollView.contentView;
       NSPoint offset = clip.bounds.origin;
       const CGFloat page = clip.bounds.size.height;
-      const CGFloat end = std::max<CGFloat>(0, view.frame.size.height - page);
+      // AppKit can shift a growing/shrinking text document's frame origin to
+      // preserve its viewport. Clip coordinates must include that origin.
+      const CGFloat start = view.frame.origin.y;
+      const CGFloat end = std::max<CGFloat>(start, NSMaxY(view.frame) - page);
       const CGFloat line = [view.layoutManager defaultLineHeightForFont:view.font];
 #endif
       switch (action) {
@@ -367,20 +405,80 @@ public:
       case Scroll::LineDown: offset.y += line; break;
       case Scroll::PageUp: offset.y -= page; break;
       case Scroll::PageDown: offset.y += page; break;
-      case Scroll::Start: offset.y = 0; break;
+      case Scroll::Start: offset.y = start; break;
       case Scroll::End: offset.y = end; break;
       }
-      offset.y = std::clamp(offset.y, CGFloat(0), end);
+      offset.y = std::clamp(offset.y, start, end);
 #if TARGET_OS_IPHONE
       [view setContentOffset:offset animated:NO];
 #else
-      [clip scrollToPoint:offset];
+      NSRect target = clip.bounds;
+      target.origin = offset;
+      [clip scrollToPoint:[clip constrainBoundsRect:target].origin];
       [container_.scrollView reflectScrolledClipView:clip];
 #endif
+      paintSyntax(false);
     });
   }
 
 private:
+  void clearSyntaxColors() {
+    if (!syntaxPainted_) return;
+    const auto range = NSMakeRange(paintedSyntax_.begin, paintedSyntax_.end - paintedSyntax_.begin);
+#if TARGET_OS_IPHONE
+    [container_.textView.textStorage addAttribute:NSForegroundColorAttributeName
+        value:nativeColor(appearance_.foreground) range:range];
+#else
+    [container_.textView.layoutManager removeTemporaryAttribute:NSForegroundColorAttributeName forCharacterRange:range];
+#endif
+    syntaxPainted_ = false;
+  }
+
+  void paintSyntax(bool force) {
+    if (!syntax_ || paintingSyntax_ || !container_) return;
+    auto *view = container_.textView;
+    if (view.bounds.size.width <= 0 || view.bounds.size.height <= 0) return;
+    paintingSyntax_ = true;
+    struct Reset { bool &value; ~Reset() { value = false; } } reset{paintingSyntax_};
+    auto *layout = view.layoutManager;
+#if TARGET_OS_IPHONE
+    CGRect viewport = view.bounds;
+    viewport.origin.x -= view.textContainerInset.left;
+    viewport.origin.y -= view.textContainerInset.top;
+#else
+    CGRect viewport = view.visibleRect;
+    viewport.origin.x -= view.textContainerOrigin.x;
+    viewport.origin.y -= view.textContainerOrigin.y;
+#endif
+    const NSRange glyphs = [layout glyphRangeForBoundingRect:viewport inTextContainer:view.textContainer];
+    const NSRange visible = [layout characterRangeForGlyphRange:glyphs actualGlyphRange:nullptr];
+    if (visible.location == NSNotFound || visible.location > syntax_->length) return;
+    const auto visibleEnd = std::min<std::size_t>(NSMaxRange(visible), syntax_->length);
+    if (!force && syntaxPainted_ && paintedSyntax_.contains(visible.location, visibleEnd)) return;
+    const auto window = bms_syntax::paintWindow(*syntax_, visible.location, visibleEnd);
+    if (!force && syntaxPainted_ && window.begin == paintedSyntax_.begin && window.end == paintedSyntax_.end) return;
+#if TARGET_OS_IPHONE
+    [view.textStorage beginEditing];
+#endif
+    clearSyntaxColors();
+    for (std::size_t i = window.firstSpan; i < window.lastSpan; ++i) {
+      const auto &span = syntax_->spans[i];
+      const auto begin = std::max(span.begin, window.begin), end = std::min(span.end, window.end);
+      const auto range = NSMakeRange(begin, end - begin);
+      id color = syntaxColors_[static_cast<std::size_t>(span.kind)];
+#if TARGET_OS_IPHONE
+      [view.textStorage addAttribute:NSForegroundColorAttributeName value:color range:range];
+#else
+      [layout addTemporaryAttribute:NSForegroundColorAttributeName value:color forCharacterRange:range];
+#endif
+    }
+    paintedSyntax_ = window;
+    syntaxPainted_ = true;
+#if TARGET_OS_IPHONE
+    [view.textStorage endEditing];
+#endif
+  }
+
   void focusCharacter(std::size_t character) {
     auto *view = container_.textView;
     // Revealing an entire wrapped range can favor its end and UIKit may animate
@@ -398,11 +496,13 @@ private:
     [view setContentOffset:CGPointMake(0, std::clamp(line.origin.y, CGFloat(0), end)) animated:NO];
 #else
     NSClipView *clip = container_.scrollView.contentView;
-    const CGFloat end = std::max<CGFloat>(0, view.frame.size.height - clip.bounds.size.height);
     const CGFloat top = line.origin.y + view.textContainerOrigin.y - view.textContainerInset.height;
-    [clip scrollToPoint:NSMakePoint(0, std::clamp(top, CGFloat(0), end))];
+    NSRect target = clip.bounds;
+    target.origin = [view convertPoint:NSMakePoint(0, top) toView:clip];
+    [clip scrollToPoint:[clip constrainBoundsRect:target].origin];
     [container_.scrollView reflectScrolledClipView:clip];
 #endif
+    paintSyntax(false);
   }
 
   void paintHighlights() {
@@ -425,6 +525,10 @@ private:
 #endif
   Appearance appearance_;
   std::vector<text_range::Range> highlights_;
+  std::shared_ptr<const bms_syntax::Document> syntax_;
+  NSArray *__strong syntaxColors_ = nil;
+  bms_syntax::PaintWindow paintedSyntax_;
+  bool syntaxPainted_ = false, paintingSyntax_ = false;
 };
 }
 

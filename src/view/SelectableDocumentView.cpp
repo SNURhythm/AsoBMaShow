@@ -12,7 +12,8 @@ void SelectableDocumentView::open(std::string text) {
   applyYogaLayout();
   native_ = factory_(text, nativeFrame(), nativeAppearance());
   fallback_->setVisible(!native_);
-  if (!native_) fallback_->setDocumentText(std::move(text));
+  if (native_) native_->setSyntax(bms_syntax::tokenize(text));
+  else fallback_->setDocumentText(std::move(text));
 }
 void SelectableDocumentView::close() {
   native_.reset();
@@ -53,8 +54,13 @@ native_document::Appearance SelectableDocumentView::nativeAppearance() const {
     return (std::uint32_t(value.r) << 24) | (std::uint32_t(value.g) << 16) |
            (std::uint32_t(value.b) << 8) | value.a;
   };
-  return {rgba(app_theme::textPrimary()), rgba(app_theme::panelStrong()),
-          rgba(app_theme::withAlpha(app_theme::amber(), 90)), 16};
+  native_document::Appearance appearance{rgba(app_theme::textPrimary()), rgba(app_theme::panelStrong()),
+      rgba(app_theme::withAlpha(app_theme::amber(), 90)), 16};
+  const bool light = app_theme::activeMode() == app_theme::ThemeMode::Light;
+  appearance.syntax = {rgba(app_theme::cyan()), rgba(light ? Color(112, 61, 165, 255) : Color(198, 154, 245, 255)),
+      rgba(app_theme::amber()), rgba(app_theme::coral()), rgba(app_theme::lime()),
+      rgba(app_theme::textSecondary()), rgba(light ? Color(50, 84, 128, 255) : Color(178, 198, 229, 255))};
+  return appearance;
 }
 void SelectableDocumentView::onLayout() {
   if (native_) native_->setFrame(nativeFrame());

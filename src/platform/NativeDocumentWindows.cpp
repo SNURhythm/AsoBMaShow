@@ -73,6 +73,26 @@ struct NativeText {
                          collapsedLF.begin();
     return static_cast<LONG>(std::min(original - removed, text.size()));
   }
+  std::shared_ptr<const bms_syntax::Document> syntaxPositions(
+      std::shared_ptr<const bms_syntax::Document> syntax) const {
+    if (!syntax || syntax->length != text.size() + collapsedLF.size()) return nullptr;
+    if (collapsedLF.empty()) return syntax;
+    auto mapped = std::make_shared<bms_syntax::Document>();
+    mapped->length = static_cast<std::uint32_t>(text.size());
+    mapped->spans.reserve(syntax->spans.size());
+    std::size_t removed = 0;
+    const auto position = [&](std::uint32_t original) {
+      while (removed < collapsedLF.size() && collapsedLF[removed] < original) ++removed;
+      return static_cast<std::uint32_t>(original - removed);
+    };
+    // Sorted, non-overlapping endpoints and collapsed LFs merge in one pass on
+    // the caller's worker. UI scrolling only searches the cached native spans.
+    for (const auto &span : syntax->spans) {
+      const auto begin = position(span.begin), end = position(span.end);
+      if (begin < end) mapped->spans.push_back({begin, end, span.kind});
+    }
+    return mapped;
+  }
 };
 
 struct TextStream {
@@ -87,6 +107,37 @@ struct TextStream {
     return 0;
   }
 };
+
+// Each segment is a horizontal slice of one visible display line. Never join
+// across paragraph boundaries: a hidden tail can be millions of characters.
+// Charge both limits across the entire viewport, not once per row.
+std::vector<bms_syntax::PaintWindow> syntaxWindows(const bms_syntax::Document &syntax,
+    const std::vector<CHARRANGE> &visible) {
+  std::vector<bms_syntax::PaintWindow> windows;
+  windows.reserve(visible.size());
+  std::uint32_t characters = bms_syntax::maxPaintCharacters;
+  std::size_t spans = bms_syntax::maxPaintSpans;
+  for (const auto &segment : visible) {
+    if (!characters || !spans) break;
+    const auto begin = std::min(static_cast<std::uint32_t>(segment.cpMin), syntax.length);
+    auto end = std::min(static_cast<std::uint32_t>(segment.cpMax), syntax.length);
+    end = begin + std::min(end - begin, characters);
+    if (begin == end) continue;
+    const auto first = std::lower_bound(syntax.spans.begin(), syntax.spans.end(), begin,
+        [](const bms_syntax::Span &span, std::uint32_t position) { return span.end <= position; });
+    auto last = std::lower_bound(first, syntax.spans.end(), end,
+        [](const bms_syntax::Span &span, std::uint32_t position) { return span.begin < position; });
+    if (static_cast<std::size_t>(last - first) > spans) {
+      last = first + spans;
+      end = std::min(end, (last - 1)->end);
+    }
+    windows.push_back({begin, end, static_cast<std::size_t>(first - syntax.spans.begin()),
+        static_cast<std::size_t>(last - syntax.spans.begin())});
+    characters -= end - begin;
+    spans -= static_cast<std::size_t>(last - first);
+  }
+  return windows;
+}
 
 // Mutable native state is accessed only by the SDL/Win32 window owner; the
 // worker may retire the control and post to its atomic cancellation target.
@@ -103,8 +154,12 @@ struct Control : std::enable_shared_from_this<Control> {
   Frame frame;
   Appearance appearance;
   std::vector<CHARRANGE> ranges, paintedRanges;
+  std::shared_ptr<const bms_syntax::Document> syntax;
+  std::vector<bms_syntax::PaintWindow> syntaxWindowsPainted;
+  std::vector<CHARRANGE> syntaxViewport;
   LONG length = 0;
   bool startedTextInput = false, menuActive = false;
+  bool formatting = false, syntaxPainted = false;
 
   explicit Control(std::shared_ptr<State> shared) : state(std::move(shared)) {}
 
@@ -137,20 +192,108 @@ struct Control : std::enable_shared_from_this<Control> {
         SWP_NOACTIVATE);
   }
 
-  void colorRange(CHARRANGE span, COLORREF color) {
+  void colorRange(CHARRANGE span, COLORREF color, bool foreground = false) {
     ITextRange *range = nullptr;
     if (FAILED(document->Range(span.cpMin, span.cpMax, &range))) return;
     ITextFont *font = nullptr;
     if (SUCCEEDED(range->GetFont(&font))) {
-      font->SetBackColor(static_cast<LONG>(color));
+      if (foreground) font->SetForeColor(static_cast<LONG>(color));
+      else font->SetBackColor(static_cast<LONG>(color));
       font->Release();
     }
     range->Release();
   }
 
+  std::vector<CHARRANGE> visibleSegments() const {
+    std::vector<CHARRANGE> segments;
+    RECT client{}, format{}, visible{};
+    GetClientRect(edit, &client);
+    SendMessageW(edit, EM_GETRECT, 0, reinterpret_cast<LPARAM>(&format));
+    if (!IntersectRect(&visible, &client, &format) || !length) return segments;
+    const auto characterAt = [&](LONG x, LONG y) {
+      POINTL point{x, y};
+      return static_cast<LONG>(std::clamp<LRESULT>(SendMessageW(edit, EM_CHARFROMPOS,
+          0, reinterpret_cast<LPARAM>(&point)), 0, length));
+    };
+    const auto firstLine = SendMessageW(edit, EM_GETFIRSTVISIBLELINE, 0, 0);
+    const auto lastLine = SendMessageW(edit, EM_EXLINEFROMCHAR, 0,
+        characterAt(visible.left, visible.bottom - 1));
+    // Even pathological geometry has fixed query/allocation bounds. Empty rows
+    // count too; do not walk a document looking for the next nonempty line.
+    const auto lineCount = std::min<LRESULT>(std::max<LRESULT>(0, lastLine - firstLine + 1),
+        bms_syntax::maxPaintSpans);
+    segments.reserve(static_cast<std::size_t>(lineCount));
+    for (LRESULT row = 0; row < lineCount; ++row) {
+      const auto start = SendMessageW(edit, EM_LINEINDEX, firstLine + row, 0);
+      if (start < 0 || start >= length) break;
+      const LONG lineBegin = static_cast<LONG>(start);
+      const LONG lineEnd = lineBegin + static_cast<LONG>(std::clamp<LRESULT>(
+          SendMessageW(edit, EM_LINELENGTH, lineBegin, 0), 0, length - lineBegin));
+      if (lineBegin == lineEnd) continue;
+      POINTL origin{};
+      SendMessageW(edit, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&origin), lineBegin);
+      if (origin.y >= visible.bottom) break;
+      // Clamp the first partially visible row into the formatting rectangle.
+      // Hit-test each row at its own y; bottom-right alone includes hidden tails
+      // of all preceding rows. Clip EOL hits to this row, excluding its CR.
+      const LONG y = std::max(origin.y, visible.top);
+      const LONG begin = std::clamp(characterAt(visible.left, y), lineBegin, lineEnd);
+      const LONG right = std::clamp(characterAt(visible.right - 1, y), begin, lineEnd);
+      const LONG end = right < lineEnd ? right + 1 : lineEnd;
+      if (begin < end) segments.push_back({begin, end});
+    }
+    return segments;
+  }
+
+  void paintSyntax(bool force = false) {
+    if (retired || !edit || !document || formatting || (!syntax && !syntaxPainted)) return;
+    // Guard before querying/formatting: Rich Edit can synchronously send size,
+    // scroll and paint messages during TOM transactions and Unfreeze.
+    formatting = true;
+    auto visible = visibleSegments();
+    if (!force && syntaxPainted && visible.size() == syntaxViewport.size() &&
+        std::equal(visible.begin(), visible.end(), syntaxViewport.begin(),
+            [](CHARRANGE a, CHARRANGE b) { return a.cpMin == b.cpMin && a.cpMax == b.cpMax; })) {
+      // Cache the actual row slices, including when their total exceeds a cap.
+      // Equal outer endpoints alone do not describe a nonwrapping viewport.
+      formatting = false;
+      return;
+    }
+    auto next = syntax ? syntaxWindows(*syntax, visible) : std::vector<bms_syntax::PaintWindow>{};
+    LONG count = 0;
+    const bool frozen = SUCCEEDED(document->Freeze(&count));
+    SendMessageW(edit, EM_SETREADONLY, FALSE, 0);
+    // Reset all previous bounded row segments, including any overlapping
+    // section. Retired foreground runs coalesce back to the default; visiting
+    // more source never accumulates a document-wide syntax attribute table.
+    for (const auto &window : syntaxWindowsPainted)
+      colorRange({static_cast<LONG>(window.begin), static_cast<LONG>(window.end)},
+          rgb(appearance.foreground), true);
+    for (const auto &window : next) {
+      for (auto i = window.firstSpan; i < window.lastSpan; ++i) {
+        const auto &span = syntax->spans[i];
+        const auto begin = std::max(span.begin, window.begin), end = std::min(span.end, window.end);
+        const auto kind = static_cast<std::size_t>(span.kind);
+        if (begin < end && kind < appearance.syntax.size())
+          colorRange({static_cast<LONG>(begin), static_cast<LONG>(end)},
+              rgb(appearance.syntax[kind]), true);
+      }
+    }
+    syntaxWindowsPainted.swap(next);
+    syntaxViewport.swap(visible);
+    syntaxPainted = syntax != nullptr;
+    SendMessageW(edit, EM_SETREADONLY, TRUE, 0);
+    if (frozen) document->Unfreeze(&count);
+    // Foreground-only TOM ranges do not scroll or change layout/selection.
+    // Do not round-trip EM_GETSCROLLPOS here: its documented 16-bit coordinates
+    // can truncate a distant viewport in a large document or long channel line.
+    formatting = false;
+  }
+
   void paint(bool updateAppearance, bool focus) {
-    if (!edit || !document) return;
+    if (!edit || !document || formatting) return;
     auto nextPaintedRanges = ranges; // Allocate before changing read-only/freeze state.
+    formatting = true;
     POINT scroll{};
     SendMessageW(edit, EM_GETSCROLLPOS, 0, reinterpret_cast<LPARAM>(&scroll));
     LONG count = 0;
@@ -187,6 +330,9 @@ struct Control : std::enable_shared_from_this<Control> {
         range->Release();
       }
     }
+    formatting = false;
+    // SCF_ALL resets foreground too; a theme change must bypass window caching.
+    paintSyntax(updateAppearance);
   }
 
   void contextMenu(LPARAM position) {
@@ -232,6 +378,9 @@ struct Control : std::enable_shared_from_this<Control> {
       return DefSubclassProc(window, message, wparam, lparam);
     }
     if (!self->retired) {
+      // Paint also covers native TOM/accessibility navigation and selection
+      // auto-scroll that need not arrive as an explicit WM_VSCROLL message.
+      if (message == WM_PAINT) self->paintSyntax();
       if (message == WM_SETFOCUS) self->nativeFocus(true);
       else if (message == WM_KILLFOCUS) self->nativeFocus(false);
       else if (message == WM_KEYDOWN) {
@@ -251,7 +400,15 @@ struct Control : std::enable_shared_from_this<Control> {
         return 0;
       }
     }
-    return DefSubclassProc(window, message, wparam, lparam);
+    const auto result = DefSubclassProc(window, message, wparam, lparam);
+    switch (message) {
+    case WM_VSCROLL: case WM_HSCROLL: case WM_MOUSEWHEEL: case WM_MOUSEHWHEEL:
+    case WM_SIZE: case WM_KEYDOWN: case WM_LBUTTONUP: case WM_TIMER:
+    case EM_SETSCROLLPOS: case EM_SCROLL: case EM_LINESCROLL: case EM_SCROLLCARET:
+      self->paintSyntax();
+      break;
+    }
+    return result;
   }
 
   bool create(const NativeText &text) {
@@ -368,6 +525,14 @@ public:
   void setAppearance(Appearance appearance) override {
     platform::onMain([control = control_, appearance] {
       if (!control->retired) { control->appearance = appearance; control->paint(true, false); }
+    });
+  }
+  void setSyntax(std::shared_ptr<const bms_syntax::Document> syntax) override {
+    auto mapped = nativeText_.syntaxPositions(std::move(syntax));
+    platform::onMain([control = control_, syntax = std::move(mapped)] {
+      if (control->retired) return;
+      control->syntax = syntax;
+      control->paintSyntax(true);
     });
   }
   void highlight(const std::vector<text_range::Range> &ranges, bool focus) override {

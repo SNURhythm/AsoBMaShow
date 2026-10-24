@@ -13,6 +13,10 @@ full-page, read-only overlay using the chart loader's encoding detection.
 On iOS, Android, macOS and Windows, the text uses the operating system's native
 selection and copy controls. Manual text selection stays independent of practice
 highlights; copying never modifies the source file.
+Syntax colors distinguish directives, control flow, resource/channel identifiers,
+numbers, text, channel data and comments. The viewer scans decoded source once
+when opened and colors only bounded visible regions, reusing cached tokens while
+scrolling or changing themes. Chart parsing and library scanning are unchanged.
 Switching focus to another application and back preserves the open source viewer,
 its scroll position and native selection.
 **Highlight selection** marks data cells in the practice range and jumps directly
@@ -53,7 +57,9 @@ Use `practice_configuration_tests`, `practice_session_tests`,
 `chart_source_tests` and the document-reader/overlay cases in
 `text_input_box_tests`. Native Unicode ranges use `native_document_tests`;
 `native_document_apple_tests` and `native_document_windows_tests` exercise their
-desktop text controls when built on the corresponding platform.
+desktop text controls when built on the corresponding platform. `bms_syntax_tests`
+covers the standalone lexer and bounded lookup; the [syntax performance report](../testing/source-syntax-performance-2026-10-24.md)
+records large-text timing and retained native attribute bounds.
 
 ## Related pages
 

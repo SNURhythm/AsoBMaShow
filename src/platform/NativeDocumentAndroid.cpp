@@ -4,6 +4,7 @@
 #if TARGET_OS_ANDROID
 #include <SDL3/SDL_log.h>
 #include <SDL3/SDL_system.h>
+#include <algorithm>
 #include <jni.h>
 #include <limits>
 #include <mutex>
@@ -50,6 +51,7 @@ struct JniScope {
 class AndroidSurface final : public Surface {
   const jlong id_ = nextId.fetch_add(1);
   const std::string text_;
+  std::weak_ptr<const bms_syntax::Document> syntax_;
   jobject view_ = nullptr; // Global reference to a lifetime gate, not an Android View.
 
   template <class Function>
@@ -62,6 +64,20 @@ class AndroidSurface final : public Surface {
     if (!method || env->ExceptionCheck()) return false;
     function(env, method);
     return !env->ExceptionCheck();
+  }
+  bool applyAppearance(Appearance appearance) {
+    return invoke("setAppearance", "(IIIF[I)V", [&](JNIEnv *env, jmethodID method) {
+      std::array<jint, bms_syntax::kindCount> colors;
+      for (std::size_t i = 0; i < colors.size(); ++i)
+        colors[i] = static_cast<jint>(appearance.syntax[i]);
+      const auto palette = env->NewIntArray(static_cast<jsize>(colors.size()));
+      if (!palette || env->ExceptionCheck()) return;
+      env->SetIntArrayRegion(palette, 0, static_cast<jsize>(colors.size()), colors.data());
+      if (!env->ExceptionCheck())
+        env->CallVoidMethod(view_, method, static_cast<jint>(appearance.foreground),
+            static_cast<jint>(appearance.background), static_cast<jint>(appearance.highlight),
+            appearance.fontSize, palette);
+    });
   }
 public:
   explicit AndroidSurface(const std::string &text) : text_(text) {
@@ -99,7 +115,9 @@ public:
       const auto close = localType ? env->GetMethodID(localType, "close", "()V") : nullptr;
       if (close) env->CallVoidMethod(local, close);
     }
-    return view_ != nullptr && !env->ExceptionCheck();
+    // Keep the Activity creation hook unchanged; enqueue the complete palette
+    // after creation, before the caller can supply the cached syntax document.
+    return view_ != nullptr && !env->ExceptionCheck() && applyAppearance(appearance);
   }
   ~AndroidSurface() override {
     {
@@ -118,11 +136,37 @@ public:
     })) state_->requestDismiss();
   }
   void setAppearance(Appearance appearance) override {
-    if (!invoke("setAppearance", "(IIIF)V", [&](JNIEnv *env, jmethodID method) {
-      env->CallVoidMethod(view_, method, static_cast<jint>(appearance.foreground),
-          static_cast<jint>(appearance.background), static_cast<jint>(appearance.highlight),
-          appearance.fontSize);
+    if (!applyAppearance(appearance)) state_->requestDismiss();
+  }
+  void setSyntax(std::shared_ptr<const bms_syntax::Document> syntax) override {
+    if (syntax && syntax == syntax_.lock()) return;
+    const auto maxLength = static_cast<std::size_t>(std::numeric_limits<jsize>::max());
+    if (syntax && (syntax->length > maxLength || syntax->spans.size() > maxLength / 3))
+      syntax.reset(); // A document outside Java's array/text range stays plain.
+    if (!invoke("setSyntax", "([II)V", [&](JNIEnv *env, jmethodID method) {
+      const auto count = syntax ? syntax->spans.size() : 0;
+      const auto triples = env->NewIntArray(static_cast<jsize>(count * 3));
+      if (!triples || env->ExceptionCheck()) return;
+      // Transfer on the application worker without a second document-sized
+      // native vector or pinning the Java heap. Java retains only this flat array.
+      constexpr std::size_t batchSpans = 1024;
+      std::array<jint, batchSpans * 3> buffer;
+      for (std::size_t first = 0; first < count; first += batchSpans) {
+        const auto batch = std::min(batchSpans, count - first);
+        for (std::size_t i = 0; i < batch; ++i) {
+          const auto &span = syntax->spans[first + i];
+          buffer[i * 3] = static_cast<jint>(span.begin);
+          buffer[i * 3 + 1] = static_cast<jint>(span.end);
+          buffer[i * 3 + 2] = static_cast<jint>(span.kind);
+        }
+        env->SetIntArrayRegion(triples, static_cast<jsize>(first * 3),
+            static_cast<jsize>(batch * 3), buffer.data());
+        if (env->ExceptionCheck()) return;
+      }
+      env->CallVoidMethod(view_, method, triples, static_cast<jint>(syntax ? syntax->length : 0));
     })) state_->requestDismiss();
+    // Java owns the flat cache now; don't retain a second full native span table.
+    else syntax_ = syntax;
   }
   void highlight(const std::vector<text_range::Range> &ranges, bool focus) override {
     const auto converted = utf16Ranges(text_, ranges);
