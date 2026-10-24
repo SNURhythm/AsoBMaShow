@@ -34,6 +34,9 @@ struct MusicSelectSkinSessionPreparationContext {
   int audioBackend;
   int initialLegacyInputGeneration;
   std::stop_token stop;
+  std::unique_ptr<LuaSkinHttpTransport> httpTransport;
+  bool externalActionsEnabled = true;
+  std::function<bool(std::string_view)> openBrowser;
 };
 struct MusicSelectSkinSession {
   inline static std::atomic_uint64_t serial = 0;
@@ -42,9 +45,11 @@ struct MusicSelectSkinSession {
   GameplaySkinActivationRequest request;
   std::unique_ptr<LuaSkinRuntime> runtime;
   LuaCallbackId tick;
+  std::function<bool(std::string_view)> openBrowser;
   explicit MusicSelectSkinSession(GameplaySkinActivationRequest value,
-                                  const SkinStorageRoots &roots)
-      : request(std::move(value)) {
+                                  const SkinStorageRoots &roots,
+                                  std::function<bool(std::string_view)> browser)
+      : request(std::move(value)), openBrowser(std::move(browser)) {
     auto files = LuaSkinFileSystem::create({
         .revision = request.activation.revision.readView(),
         .entry = request.activation.entry,
@@ -76,7 +81,8 @@ struct MusicSelectSkinSession {
   }
   static std::unique_ptr<MusicSelectSkinSession> prepare(
       GameplaySkinActivationRequest request, MusicSelectSkinSessionPreparationContext context) {
-    return std::make_unique<MusicSelectSkinSession>(std::move(request), context.storageRoots);
+    return std::make_unique<MusicSelectSkinSession>(std::move(request), context.storageRoots,
+                                                   std::move(context.openBrowser));
   }
 };
 struct AudioLimits {
@@ -84,6 +90,14 @@ struct AudioLimits {
 };
 int createLuaSkinApplicationAudioBackend(int, std::function<float()>, AudioLimits,
                                         const std::shared_ptr<int> &) { return 0; }
+// This scene-retention fixture has no native networking service.
+std::unique_ptr<LuaSkinHttpTransport> createLuaSkinProductionHttpTransport(std::stop_token) {
+  return {};
+}
+}
+namespace platform_open {
+int browserCalls = 0;
+bool openExternalUrl(std::string_view, std::string &) { ++browserCalls; return true; }
 }
 namespace rendering { constexpr int render_width = 1280, render_height = 720; }
 namespace archive_file { constexpr int readFileBounded = 0; }
@@ -125,9 +139,15 @@ struct ApplicationContext {
   int resources = 0;
   int *skinResourcePreparationService = &resources;
   std::shared_ptr<int> skinLiveResourceCounters = std::make_shared<int>();
-  struct { int legacyInputGeneration(int, int) { return 0; } } inputDeviceRegistry;
+  struct {
+    bool gesture = true;
+    int legacyInputGeneration(int, int) { return 0; }
+    bool hasCurrentLegacyPressEdge() const { return gesture; }
+  } inputDeviceRegistry;
   struct { int audioRuntime() { return 0; } } jukebox;
   std::atomic_bool appInBackground = false;
+  std::atomic_bool replayVideoExportActive = false;
+  struct { bool requested = false; bool exportRequested() const { return requested; } } rendererAccess;
   std::atomic_bool storageMaintenanceActive = false;
   Lifecycle *gameplaySkinLifecycle = nullptr;
   SceneManager *sceneManager = nullptr;
@@ -213,6 +233,24 @@ end}
     MusicSelectScene scene(context, request());
     scene.init();
     scene.finishPreparation();
+    if (changed == 0) {
+      auto &browser = scene.skinSession_->openBrowser;
+      platform_open::browserCalls = 0;
+      expect(browser && browser("https://example.com/skin") && platform_open::browserCalls == 1,
+             "live scene browser callback reaches the native service boundary");
+      context.replayVideoExportActive = true;
+      expect(!browser("https://example.com/skin") && platform_open::browserCalls == 1,
+             "active replay export blocks scene browser dispatch");
+      context.replayVideoExportActive = false;
+      context.rendererAccess.requested = true;
+      expect(!browser("https://example.com/skin") && platform_open::browserCalls == 1,
+             "requested replay export blocks scene browser dispatch before activation");
+      context.rendererAccess.requested = false;
+      context.inputDeviceRegistry.gesture = false;
+      expect(!browser("https://example.com/skin") && platform_open::browserCalls == 1,
+             "async-loaded skin cannot reuse an expired input snapshot for browser dispatch");
+      context.inputDeviceRegistry.gesture = true;
+    }
     const auto epoch = scene.skinSession_->epoch;
     expect(scene.skinSession_->counter() == 1 && scene.skinSession_->counter() == 2,
            "Lua sentinel must carry custom runtime state before Settings");

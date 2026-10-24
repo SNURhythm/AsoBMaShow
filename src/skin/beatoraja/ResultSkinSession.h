@@ -49,6 +49,9 @@ struct ResultSkinSessionContext {
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
   rendering::SkinQuadBatchBackend *quadBackend = nullptr;
+  std::unique_ptr<LuaSkinHttpTransport> httpTransport;
+  bool externalActionsEnabled = true;
+  std::function<bool(std::string_view)> openBrowser;
 };
 
 struct ResultSkinSessionCreateResult {

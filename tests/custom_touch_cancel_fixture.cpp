@@ -205,6 +205,9 @@ private:
 };
 struct SettingsScene {
   std::unique_ptr<PreviewInput> previewInputHandler = std::make_unique<PreviewInput>();
+  // No preview renderer or lane-cover handle exists in this fixture, matching
+  // the production handler's early return before forwarding to lane input.
+  bool handlePreviewLaneCoverEvent(SDL_Event &, bool capturedOnly = false) { return false; }
   void forwardPreviewInputEvent(SDL_Event &);
 };
 enum class PresentationUiControlKind { Slider, LaneCover };

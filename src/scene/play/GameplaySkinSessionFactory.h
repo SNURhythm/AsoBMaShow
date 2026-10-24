@@ -127,6 +127,10 @@ struct GameplaySkinSessionServices {
   std::function<void(std::size_t, bool)> applyPracticeMenuItem;
   std::function<void(int)> applyPracticeVisibleItems;
   std::stop_token stop;
+  bool externalActionsEnabled = true;
+  std::function<bool(std::string_view)> openBrowser;
+  // Rechecked before Lua frames so an existing live session also denies export.
+  std::function<bool()> externalActionsAllowed;
 
 #if defined(ASOBMASHOW_GAMEPLAY_SKIN_SESSION_FACTORY_TESTING)
   std::function<skin::PlaySkinSessionCreateResult(skin::ValidatedSkinActivation,

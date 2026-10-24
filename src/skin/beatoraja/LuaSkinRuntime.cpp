@@ -1370,6 +1370,10 @@ LuaRuntimeCreateResult LuaSkinRuntime::create(LuaSkinRuntimeOptions options) {
        // this is independent of source-resource compatibility limits.
        .allowProcessGlobalOperations = false,
        .allowOsLibrary = !options.safetyPolicy.preservesPinnedLuaSandbox(),
+       .externalActionsEnabled = options.externalActionsEnabled &&
+           (options.purpose == LuaRuntimePurpose::Gameplay ||
+            options.purpose == LuaRuntimePurpose::MusicSelect),
+       .openBrowser = std::move(options.openBrowser),
        .coroutineContext = shared.get(),
        .coroutineCreated = installHook});
   if (!installed.modules) {
@@ -1503,6 +1507,13 @@ void LuaSkinRuntime::setFrameState(ISkinFrameState *state) noexcept {
   if (impl_ && impl_->hostModules) {
     impl_->hostModules->setFrameState(state);
   }
+}
+
+bool LuaSkinRuntime::setExternalActionsEnabled(bool enabled) noexcept {
+  if (!impl_ || !impl_->hostModules) return false;
+  return impl_->hostModules->setExternalActionsEnabled(enabled &&
+      (impl_->purpose == LuaRuntimePurpose::Gameplay ||
+       impl_->purpose == LuaRuntimePurpose::MusicSelect));
 }
 
 bool LuaSkinRuntime::setLegacyInputSnapshot(

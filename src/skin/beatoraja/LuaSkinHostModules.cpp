@@ -12,6 +12,7 @@
 
 #include "LuaSkinFileSystem.h"
 #include "LuaSkinHttpClient.h"
+#include "LuaSkinAsyncHttp.h"
 #include "Skin2DRenderer.h"
 #include "GameplaySkinBuiltinCatalog.h"
 
@@ -252,6 +253,10 @@ struct LuaSkinHostModulesImpl {
   bool allowOsLibrary = true;
   ISkinFrameState *frameState = nullptr;
   bool frameCallbackActive = false;
+  bool externalActionsEnabled = true;
+  std::function<bool(std::string_view)> openBrowser;
+  std::optional<std::chrono::steady_clock::time_point> lastNavigation;
+  std::unique_ptr<LuaSkinAsyncHttp> asyncHttp;
   void *coroutineContext = nullptr;
   LuaCoroutineCreatedCallback coroutineCreated = nullptr;
   LuaSkinEventExecutor eventExecutor;
@@ -1244,6 +1249,19 @@ int mainStateFileExists(lua_State *state) {
   return 1;
 }
 
+int mainStateFileDelete(lua_State *state) {
+  auto *impl = host(state);
+  if (!impl->externalActionsEnabled || !lua_isstring(state, 1)) {
+    lua_pushboolean(state, 0);
+    return 1;
+  }
+  std::size_t size = 0;
+  const char *path = lua_tolstring(state, 1, &size);
+  const auto result = impl->fileSystem->deleteData(std::string_view(path, size));
+  lua_pushboolean(state, !result.failure);
+  return 1;
+}
+
 int mainStateFileMkdir(lua_State *state) {
   auto *impl = host(state);
   const std::string path = luaToJString(state, 1);
@@ -1358,6 +1376,140 @@ int pushHttpFailure(lua_State *state, std::string_view message) {
   return 2;
 }
 
+int mainStateOpenUrl(lua_State *state) {
+  auto *impl = host(state);
+  bool opened = false;
+  if (impl->externalActionsEnabled && impl->openBrowser &&
+      impl->legacyInputHost->hasCurrentPressEdge() && lua_isstring(state, 1)) {
+    std::size_t size = 0;
+    const char *value = lua_tolstring(state, 1, &size);
+    try {
+      const std::string_view url(value, size);
+      const auto now = std::chrono::steady_clock::now();
+      if (!LuaSkinHttpClient::validateAsyncUrl(url) &&
+          (!impl->lastNavigation || now - *impl->lastNavigation >= std::chrono::seconds(1))) {
+        impl->lastNavigation = now;
+        opened = impl->openBrowser(url);
+      }
+    } catch (...) {}
+  }
+  lua_pushboolean(state, opened);
+  return 1;
+}
+
+// Keep native ownership outside lua_pcall: iOS LuaJIT may longjmp past C++
+// destructors when table/string allocation fails. Prepare the Lua closure before
+// acquiring a response, then release every native temporary before rethrowing.
+struct HttpLuaResult {
+  enum class Kind { Lines, Text, Async } kind = Kind::Lines;
+  LuaSkinHttpLinesResult lines;
+  LuaSkinAsyncHttpResult response;
+  std::string text;
+};
+
+void pushHttpLineTable(lua_State *state, const std::vector<std::string> &lines) {
+  lua_createtable(state, static_cast<int>(lines.size()), 0);
+  for (std::size_t index = 0; index < lines.size(); ++index) {
+    const auto &line = lines[index];
+    lua_pushlstring(state, line.data(), line.size());
+    lua_rawseti(state, -2, static_cast<int>(index + 1));
+  }
+}
+
+int marshalHttpResult(lua_State *state) {
+  const auto &result = *static_cast<HttpLuaResult *>(lua_touserdata(state, 1));
+  if (result.kind == HttpLuaResult::Kind::Async) {
+    lua_createtable(state, 0, 4);
+    lua_pushlstring(state, result.response.status.data(), result.response.status.size());
+    lua_setfield(state, -2, "status");
+    lua_pushinteger(state, result.response.statusCode);
+    lua_setfield(state, -2, "status_code");
+    lua_pushlstring(state, result.response.error.data(), result.response.error.size());
+    lua_setfield(state, -2, "error");
+    pushHttpLineTable(state, result.lines.lines);
+    lua_setfield(state, -2, "lines");
+    return 1;
+  }
+  if (result.lines.failure) return pushHttpFailure(state, *result.lines.failure);
+  if (result.kind == HttpLuaResult::Kind::Text)
+    lua_pushlstring(state, result.text.data(), result.text.size());
+  else pushHttpLineTable(state, result.lines.lines);
+  lua_pushboolean(state, 1);
+  return 2;
+}
+
+void prepareHttpResult(lua_State *state, lua_CFunction marshal) {
+  luaL_checkstack(state, LUA_MINSTACK, "HTTP result");
+  lua_pushcfunction(state, marshal);
+}
+
+int marshalHttpSubmission(lua_State *state) {
+  const auto &result = *static_cast<LuaSkinAsyncHttpSubmitResult *>(lua_touserdata(state, 1));
+  if (!result.id) return pushHttpFailure(state, result.failure
+      ? std::string_view(*result.failure) : std::string_view("HTTP request failed"));
+  lua_pushinteger(state, *result.id);
+  return 1;
+}
+
+int mainStateHttpGetAsync(lua_State *state) {
+  auto *impl = host(state);
+  if (!impl->externalActionsEnabled) return pushHttpFailure(state, "HTTP disabled");
+  if (!lua_isstring(state, 1)) return pushHttpFailure(state, "HTTP URL must be a string");
+  if ((!lua_isnoneornil(state, 2) && !lua_isnumber(state, 2)) ||
+      (!lua_isnoneornil(state, 3) && !lua_isnumber(state, 3)))
+    return pushHttpFailure(state, "HTTP timeout and byte limit must be numbers");
+  std::size_t size = 0;
+  const char *url = lua_tolstring(state, 1, &size);
+  const int timeout = lua_isnoneornil(state, 2) ? 1000 : luaJToInt(lua_tonumber(state, 2));
+  const auto maxBytes = lua_isnoneornil(state, 3)
+      ? std::optional<std::size_t>(LuaSkinHttpClient::defaultMaximumBytes)
+      : LuaSkinHttpClient::checkedLimit(lua_tonumber(state, 3));
+  if (!maxBytes) return pushHttpFailure(state, "Invalid HTTP response byte limit");
+  const int base = lua_gettop(state);
+  prepareHttpResult(state, marshalHttpSubmission);
+  int status = 0;
+  {
+    LuaSkinAsyncHttpSubmitResult result;
+    try {
+      if (!impl->asyncHttp) impl->asyncHttp = std::make_unique<LuaSkinAsyncHttp>(impl->httpTransport);
+      result = impl->asyncHttp->submit(std::string_view(url, size), timeout, *maxBytes);
+    } catch (...) { result.failure = "HTTP request allocation failed"; }
+    lua_pushlightuserdata(state, &result);
+    status = lua_pcall(state, 1, LUA_MULTRET, 0);
+  }
+  return status == 0 ? lua_gettop(state) - base : lua_error(state);
+}
+
+int mainStateHttpPoll(lua_State *state) {
+  auto *impl = host(state);
+  const int id = luaJToInt(luaL_checknumber(state, 1));
+  prepareHttpResult(state, marshalHttpResult);
+  int status = 0;
+  {
+    HttpLuaResult result;
+    result.kind = HttpLuaResult::Kind::Async;
+    result.response = !impl->externalActionsEnabled
+        ? LuaSkinAsyncHttpResult{.status = "failed", .error = "HTTP disabled"}
+        : impl->asyncHttp ? impl->asyncHttp->poll(id)
+        : LuaSkinAsyncHttpResult{.status = "failed", .error = "Unknown HTTP request"};
+    result.lines = LuaSkinHttpClient::readLines(result.response.body, LuaSkinHttpClient::maximumBytes);
+    if (result.lines.failure) {
+      result.response.status = "failed";
+      result.response.error = *result.lines.failure;
+    }
+    lua_pushlightuserdata(state, &result);
+    status = lua_pcall(state, 1, 1, 0);
+  }
+  return status == 0 ? 1 : lua_error(state);
+}
+
+int mainStateHttpCancel(lua_State *state) {
+  auto *impl = host(state);
+  const int id = luaJToInt(luaL_checknumber(state, 1));
+  lua_pushboolean(state, impl->externalActionsEnabled && impl->asyncHttp && impl->asyncHttp->cancel(id));
+  return 1;
+}
+
 LuaSkinHttpLinesResult mainStateHttpLines(lua_State *state,
                                          LuaSkinHostModulesImpl &impl) {
   if (impl.frameCallbackActive) {
@@ -1372,62 +1524,54 @@ LuaSkinHttpLinesResult mainStateHttpLines(lua_State *state,
     if (!value) luaL_argerror(state, 2, "number expected");
     timeout = luaJToInt(*value);
   }
+  const auto maxBytes = lua_isnoneornil(state, 3)
+      ? std::optional<std::size_t>(LuaSkinHttpClient::defaultMaximumBytes)
+      : LuaSkinHttpClient::checkedLimit(luaL_checknumber(state, 3));
+  if (!maxBytes) return {.failure = "Invalid HTTP response byte limit"};
   LuaSkinHttpClient client(impl.httpTransport);
   LuaSkinHttpResult fetched =
-      client.get(std::string_view(url, urlSize), timeout);
+      client.get(std::string_view(url, urlSize), timeout, *maxBytes);
   if (fetched.failure) {
     return {.failure = std::move(fetched.failure)};
   }
   if (!fetched.response) {
     return {.failure = "HTTP transport returned no response"};
   }
-  return LuaSkinHttpClient::readLines(fetched.response->body);
+  return LuaSkinHttpClient::readLines(fetched.response->body, *maxBytes);
+}
+
+int mainStateHttpFetch(lua_State *state, HttpLuaResult::Kind kind) {
+  auto *impl = host(state);
+  // Preserve absent optional arguments before placing the marshalling closure.
+  lua_settop(state, 3);
+  prepareHttpResult(state, marshalHttpResult);
+  int status = 0;
+  {
+    auto lines = mainStateHttpLines(state, *impl);
+    HttpLuaResult result{.kind = kind, .lines = std::move(lines)};
+    if (!result.lines.failure && kind == HttpLuaResult::Kind::Text) {
+      try {
+        std::size_t size = result.lines.lines.empty() ? 0 : result.lines.lines.size() - 1;
+        for (const auto &line : result.lines.lines) size += line.size();
+        result.text.reserve(size);
+        for (std::size_t index = 0; index < result.lines.lines.size(); ++index) {
+          if (index != 0) result.text.push_back('\n');
+          result.text += result.lines.lines[index];
+        }
+      } catch (...) { result.lines.failure = "HTTP response allocation failed"; }
+    }
+    lua_pushlightuserdata(state, &result);
+    status = lua_pcall(state, 1, 2, 0);
+  }
+  return status == 0 ? 2 : lua_error(state);
 }
 
 int mainStateHttpGetLines(lua_State *state) {
-  LuaSkinHostModulesImpl *impl = host(state);
-  LuaSkinHttpLinesResult result = mainStateHttpLines(state, *impl);
-  if (result.failure) {
-    return pushHttpFailure(state, *result.failure);
-  }
-  lua_createtable(state, static_cast<int>(result.lines.size()), 0);
-  int index = 1;
-  for (const std::string &line : result.lines) {
-    lua_pushlstring(state, line.data(), line.size());
-    lua_rawseti(state, -2, index++);
-  }
-  lua_pushboolean(state, 1);
-  return 2;
+  return mainStateHttpFetch(state, HttpLuaResult::Kind::Lines);
 }
 
 int mainStateHttpGet(lua_State *state) {
-  LuaSkinHostModulesImpl *impl = host(state);
-  LuaSkinHttpLinesResult result = mainStateHttpLines(state, *impl);
-  if (result.failure) {
-    return pushHttpFailure(state, *result.failure);
-  }
-  try {
-    std::size_t size = result.lines.empty() ? 0 : result.lines.size() - 1;
-    for (const std::string &line : result.lines) {
-      if (line.size() > std::numeric_limits<std::size_t>::max() - size) {
-        return pushHttpFailure(state, "HTTP response allocation failed");
-      }
-      size += line.size();
-    }
-    std::string text;
-    text.reserve(size);
-    for (std::size_t index = 0; index < result.lines.size(); ++index) {
-      if (index != 0) {
-        text.push_back('\n');
-      }
-      text += result.lines[index];
-    }
-    lua_pushlstring(state, text.data(), text.size());
-    lua_pushboolean(state, 1);
-    return 2;
-  } catch (...) {
-    return pushHttpFailure(state, "HTTP response allocation failed");
-  }
+  return mainStateHttpFetch(state, HttpLuaResult::Kind::Text);
 }
 
 void populateMainState(lua_State *state, LuaSkinHostModulesImpl *impl) {
@@ -1506,6 +1650,8 @@ void populateMainState(lua_State *state, LuaSkinHostModulesImpl *impl) {
   lua_setfield(state, -2, "set_volume_sys");
   installClosure(state, impl, mainStateKeyPressed);
   lua_setfield(state, -2, "key_pressed");
+  installClosure(state, impl, mainStateFileDelete);
+  lua_setfield(state, -2, "file_delete");
   installClosure(state, impl, mainStateFileExists);
   lua_setfield(state, -2, "file_exists");
   installClosure(state, impl, mainStateFileMkdir);
@@ -1526,6 +1672,14 @@ void populateMainState(lua_State *state, LuaSkinHostModulesImpl *impl) {
   lua_setfield(state, -2, "http_get");
   installClosure(state, impl, mainStateHttpGetLines);
   lua_setfield(state, -2, "http_get_lines");
+  installClosure(state, impl, mainStateHttpGetAsync);
+  lua_setfield(state, -2, "http_get_async");
+  installClosure(state, impl, mainStateHttpPoll);
+  lua_setfield(state, -2, "http_poll");
+  installClosure(state, impl, mainStateHttpCancel);
+  lua_setfield(state, -2, "http_cancel");
+  installClosure(state, impl, mainStateOpenUrl);
+  lua_setfield(state, -2, "open_url");
   installClosure(state, impl, mainStateAudioPlay);
   lua_setfield(state, -2, "audio_play");
   installClosure(state, impl, mainStateAudioLoop);
@@ -2366,6 +2520,7 @@ struct LegacyHttpConnection {
   std::string url;
   int timeoutMilliseconds = LuaSkinHttpClient::defaultTimeoutMilliseconds;
   bool connected = false;
+  std::size_t maximumBytes = LuaSkinHttpClient::defaultMaximumBytes;
   std::unique_ptr<LuaSkinHttpConnection> connection;
 
   std::optional<std::string>
@@ -2374,7 +2529,7 @@ struct LegacyHttpConnection {
       return std::nullopt;
     }
     LuaSkinHttpClient client(transport);
-    LuaSkinHttpOpenResult opened = client.open(url, timeoutMilliseconds);
+    LuaSkinHttpOpenResult opened = client.open(url, timeoutMilliseconds, maximumBytes);
     if (opened.failure) {
       return std::move(opened.failure);
     }
@@ -2398,6 +2553,7 @@ struct LegacyHttpConnection {
 };
 
 struct LegacyHttpReader {
+  bool closed = false;
   std::vector<std::string> lines;
   std::size_t position = 0;
 };
@@ -2528,6 +2684,21 @@ int legacySetConnectTimeout(lua_State *state) {
   return 1;
 }
 
+int legacySetResponseLimitBytes(lua_State *state) {
+  auto *impl = host(state, 1);
+  if (!legacyHttpReceiver(state, 2)) {
+    impl->reportLegacyDenial("java.net.URL.connection.member");
+    return raiseStoredError(state, impl);
+  }
+  const auto limit = LuaSkinHttpClient::checkedLimit(luaL_checknumber(state, 2));
+  if (!limit) return luaL_argerror(state, 2, "Invalid HTTP response byte limit");
+  auto &connection = legacyHttpConnection(state);
+  connection->maximumBytes = *limit;
+  if (connection->connection) connection->connection->setResponseLimitBytes(*limit);
+  lua_pushnil(state);
+  return 1;
+}
+
 int legacyConnect(lua_State *state) {
   LuaSkinHostModulesImpl *impl = host(state, 1);
   if (!legacyHttpReceiver(state, 1)) {
@@ -2575,6 +2746,7 @@ int legacyReadLine(lua_State *state) {
     return raiseStoredError(state, impl);
   }
   SharedLegacyHttpReader &reader = legacyHttpReader(state);
+  if (reader->closed) return luaL_error(state, "Stream closed");
   if (reader->position >= reader->lines.size()) {
     lua_pushnil(state);
     return 1;
@@ -2584,10 +2756,21 @@ int legacyReadLine(lua_State *state) {
   return 1;
 }
 
+int legacyReaderClose(lua_State *state) {
+  auto *impl = host(state, 1);
+  if (!legacyHttpReceiver(state, 1)) {
+    impl->reportLegacyDenial("java.io.BufferedReader.member");
+    return raiseStoredError(state, impl);
+  }
+  auto &reader = legacyHttpReader(state);
+  reader->closed = true;
+  std::vector<std::string>().swap(reader->lines);
+  lua_pushnil(state);
+  return 1;
+}
+
 void pushLegacyReaderObject(lua_State *state, LuaSkinHostModulesImpl *impl,
-                            LuaSkinHttpLinesResult result) {
-  auto reader = std::make_shared<LegacyHttpReader>();
-  reader->lines = std::move(result.lines);
+                            const SharedLegacyHttpReader &reader) {
 
   lua_createtable(state, 0, 1);
   const int tableIndex = lua_gettop(state);
@@ -2596,45 +2779,63 @@ void pushLegacyReaderObject(lua_State *state, LuaSkinHostModulesImpl *impl,
   lua_pushvalue(state, tableIndex);
   lua_pushcclosure(state, legacyReadLine, 3);
   lua_setfield(state, tableIndex, "readLine");
+  lua_pushlightuserdata(state, impl);
+  pushLegacyHttpShared(state, reader);
+  lua_pushvalue(state, tableIndex);
+  lua_pushcclosure(state, legacyReaderClose, 3);
+  lua_setfield(state, tableIndex, "close");
   installClosedMemberMetatable(state, impl, legacyReaderMemberDenied);
 }
 
+struct LegacyReaderExport {
+  LuaSkinHostModulesImpl *impl = nullptr;
+  SharedLegacyHttpReader reader;
+  std::optional<std::string> failure;
+  bool connectionFailure = false;
+};
+
+int marshalLegacyReader(lua_State *state) {
+  const auto &result = *static_cast<LegacyReaderExport *>(lua_touserdata(state, 1));
+  if (result.failure)
+    return raiseLegacyHttpFailure(state, result.connectionFailure
+        ? "Legacy Lua skin HTTP connection failed: " : "Legacy Lua skin HTTP read failed: ", *result.failure);
+  pushLegacyReaderObject(state, result.impl, result.reader);
+  return 1;
+}
+
 int legacyGetInputStream(lua_State *state) {
-  LuaSkinHostModulesImpl *impl = host(state, 1);
+  auto *impl = host(state, 1);
   if (!legacyHttpReceiver(state, 1)) {
     impl->reportLegacyDenial("java.net.URL.connection.member");
     return raiseStoredError(state, impl);
   }
-  SharedLegacyHttpConnection &connection = legacyHttpConnection(state);
-  if (const auto failure = connection->connect(impl->httpTransport)) {
-    return raiseLegacyHttpFailure(
-        state, "Legacy Lua skin HTTP connection failed: ", *failure);
+  prepareHttpResult(state, marshalLegacyReader);
+  int status = 0;
+  {
+    LegacyReaderExport result{.impl = impl};
+    auto &connection = legacyHttpConnection(state);
+    result.failure = connection->connect(impl->httpTransport);
+    result.connectionFailure = result.failure.has_value();
+    if (!result.failure) {
+      auto body = connection->connection->readBody();
+      connection->connection->disconnect();
+      result.failure = std::move(body.failure);
+      if (!result.failure && !body.body) result.failure = "HTTP transport returned no response body";
+      if (!result.failure) {
+        auto lines = LuaSkinHttpClient::readLines(*body.body, connection->maximumBytes);
+        result.failure = std::move(lines.failure);
+        if (!result.failure) {
+          try {
+            result.reader = std::make_shared<LegacyHttpReader>();
+            result.reader->lines = std::move(lines.lines);
+          } catch (...) { result.failure = "allocation failed"; }
+        }
+      }
+    }
+    lua_pushlightuserdata(state, &result);
+    status = lua_pcall(state, 1, 1, 0);
   }
-  LuaSkinHttpBodyResult body = connection->connection->readBody();
-  connection->connection->disconnect();
-  if (body.failure) {
-    return raiseLegacyHttpFailure(state,
-                                  "Legacy Lua skin HTTP read failed: ",
-                                  *body.failure);
-  }
-  if (!body.body) {
-    return raiseLegacyHttpFailure(
-        state, "Legacy Lua skin HTTP read failed: ",
-        "HTTP transport returned no response body");
-  }
-  LuaSkinHttpLinesResult result = LuaSkinHttpClient::readLines(*body.body);
-  if (result.failure) {
-    return raiseLegacyHttpFailure(state,
-                                  "Legacy Lua skin HTTP read failed: ",
-                                  *result.failure);
-  }
-  try {
-    pushLegacyReaderObject(state, impl, std::move(result));
-    return 1;
-  } catch (...) {
-    return luaL_error(state,
-                      "Legacy Lua skin HTTP read failed: allocation failed");
-  }
+  return status == 0 ? 1 : lua_error(state);
 }
 
 void pushLegacyConnectionObject(
@@ -2649,6 +2850,7 @@ void pushLegacyConnectionObject(
     lua_pushcclosure(state, function, 3);
     lua_setfield(state, tableIndex, name);
   };
+  member("setResponseLimitBytes", legacySetResponseLimitBytes);
   member("setRequestMethod", legacySetRequestMethod);
   member("setConnectTimeout", legacySetConnectTimeout);
   member("connect", legacyConnect);
@@ -2657,11 +2859,18 @@ void pushLegacyConnectionObject(
   installClosedMemberMetatable(state, impl, legacyConnectionMemberDenied);
 }
 
+int legacyNew(lua_State *state);
+
 int legacyNewInstance(lua_State *state) {
   LuaSkinHostModulesImpl *impl = host(state);
   std::size_t classSize = 0;
   const char *className = luaL_checklstring(state, 1, &classSize);
   const std::string_view requested(className, classSize);
+  if (requested == "java.io.File") {
+    lua_rawgeti(state, LUA_REGISTRYINDEX, impl->fileTokenReference);
+    lua_replace(state, 1);
+    return legacyNew(state);
+  }
   if (requested == "java.net.URL") {
     std::size_t urlSize = 0;
     const char *url = luaL_checklstring(state, 2, &urlSize);
@@ -2690,6 +2899,9 @@ int legacyNewInstance(lua_State *state) {
                     className);
 }
 
+void pushLegacyFileObject(lua_State *, LuaSkinHostModulesImpl *,
+                          const char *, std::size_t);
+
 enum class LegacyListStatus : std::uint8_t {
   Success,
   OrdinaryFailure,
@@ -2697,15 +2909,14 @@ enum class LegacyListStatus : std::uint8_t {
 
 LegacyListStatus pushLegacyList(lua_State *state, LuaSkinHostModulesImpl &impl,
                                 std::string_view path) {
-  const auto listed = impl.fileSystem->list(
-      path, {}, std::numeric_limits<std::size_t>::max());
+  const auto listed = impl.fileSystem->listFileFacades(path);
   if (listed.failure) {
     return LegacyListStatus::OrdinaryFailure;
   }
   lua_createtable(state, static_cast<int>(listed.entries.size()), 0);
   int index = 1;
   for (const auto &entry : listed.entries) {
-    lua_pushlstring(state, entry.data(), entry.size());
+    pushLegacyFileObject(state, &impl, entry.data(), entry.size());
     lua_rawseti(state, -2, index++);
   }
   return LegacyListStatus::Success;
@@ -2747,6 +2958,46 @@ int legacyMkdir(lua_State *state) {
   const bool created =
       performLegacyMkdir(*impl, std::string_view(path, pathSize));
   lua_pushboolean(state, created);
+  return 1;
+}
+
+int legacyFileType(lua_State *state, bool directory) {
+  auto *impl = host(state, 1);
+  if (lua_gettop(state) != 1 || !sameUpvalueTable(state, 1, 3)) {
+    impl->reportLegacyDenial("java.io.File.member");
+    return raiseStoredError(state, impl);
+  }
+  std::size_t size = 0;
+  const char *path = lua_tolstring(state, lua_upvalueindex(2), &size);
+  const auto result = impl->fileSystem->fileType(std::string_view(path, size));
+  if (result.failure) {
+    impl->storeFileError(*result.failure);
+    return raiseStoredError(state, impl);
+  }
+  lua_pushboolean(state, directory ? result.isDirectory : result.isFile);
+  return 1;
+}
+
+int legacyIsFile(lua_State *state) { return legacyFileType(state, false); }
+int legacyIsDirectory(lua_State *state) { return legacyFileType(state, true); }
+
+int legacyFilePath(lua_State *state) {
+  auto *impl = host(state, 1);
+  if (lua_gettop(state) != 1 || !sameUpvalueTable(state, 1, 3)) {
+    impl->reportLegacyDenial("java.io.File.member");
+    return raiseStoredError(state, impl);
+  }
+  lua_pushvalue(state, lua_upvalueindex(2));
+  return 1;
+}
+
+int legacyFileName(lua_State *state) {
+  legacyFilePath(state);
+  std::size_t size = 0;
+  const char *path = lua_tolstring(state, -1, &size);
+  const std::string_view name = std::string_view(path, size).substr(
+      std::string_view(path, size).find_last_of('/') + 1);
+  lua_pushlstring(state, name.data(), name.size());
   return 1;
 }
 
@@ -2839,11 +3090,84 @@ int legacyIsKeyPressed(lua_State *state) {
   return 1;
 }
 
+int legacyIsKeyJustPressed(lua_State *state) {
+  auto *impl = host(state);
+  if (!legacyInputReceiver(state, 2)) {
+    impl->reportLegacyDenial("com.badlogic.gdx.Gdx.input.isKeyJustPressed");
+    return raiseStoredError(state, impl);
+  }
+  const int value = luaJToInt(luaL_checknumber(state, 2));
+  lua_pushboolean(state, impl->legacyInputHost->isKeyJustPressed(value));
+  return 1;
+}
+
+int legacyIsButtonPressed(lua_State *state) {
+  auto *impl = host(state);
+  if (!legacyInputReceiver(state, 2)) {
+    impl->reportLegacyDenial("com.badlogic.gdx.Gdx.input.isButtonPressed");
+    return raiseStoredError(state, impl);
+  }
+  const int value = luaJToInt(luaL_checknumber(state, 2));
+  lua_pushboolean(state, impl->legacyInputHost->isButtonPressed(value));
+  return 1;
+}
+
+int legacyGetX(lua_State *state) {
+  auto *impl = host(state);
+  if (!legacyInputReceiver(state, 1)) {
+    impl->reportLegacyDenial("com.badlogic.gdx.Gdx.input.getX");
+    return raiseStoredError(state, impl);
+  }
+  lua_pushinteger(state, impl->legacyInputHost->getX());
+  return 1;
+}
+
+int legacyGetY(lua_State *state) {
+  auto *impl = host(state);
+  if (!legacyInputReceiver(state, 1)) {
+    impl->reportLegacyDenial("com.badlogic.gdx.Gdx.input.getY");
+    return raiseStoredError(state, impl);
+  }
+  lua_pushinteger(state, impl->legacyInputHost->getY());
+  return 1;
+}
+
+int legacyGetDeltaX(lua_State *state) {
+  auto *impl = host(state);
+  if (!legacyInputReceiver(state, 1)) {
+    impl->reportLegacyDenial("com.badlogic.gdx.Gdx.input.getDeltaX");
+    return raiseStoredError(state, impl);
+  }
+  lua_pushinteger(state, impl->legacyInputHost->getDeltaX());
+  return 1;
+}
+
+int legacyGetDeltaY(lua_State *state) {
+  auto *impl = host(state);
+  if (!legacyInputReceiver(state, 1)) {
+    impl->reportLegacyDenial("com.badlogic.gdx.Gdx.input.getDeltaY");
+    return raiseStoredError(state, impl);
+  }
+  lua_pushinteger(state, impl->legacyInputHost->getDeltaY());
+  return 1;
+}
+
+int legacyJustTouched(lua_State *state) {
+  auto *impl = host(state);
+  if (!legacyInputReceiver(state, 1)) {
+    impl->reportLegacyDenial("com.badlogic.gdx.Gdx.input.justTouched");
+    return raiseStoredError(state, impl);
+  }
+  lua_pushboolean(state, impl->legacyInputHost->justTouched());
+  return 1;
+}
+
 int legacyKeyLookup(lua_State *state) {
   std::size_t size = 0;
   const char *name = luaL_checklstring(state, 2, &size);
-  lua_pushinteger(
-      state, LuaSkinLegacyInputHost::keyCode(std::string_view(name, size)));
+  const auto key = LuaSkinLegacyInputHost::keyConstant(std::string_view(name, size));
+  if (key) lua_pushinteger(state, *key);
+  else lua_pushnil(state);
   return 1;
 }
 
@@ -2972,6 +3296,13 @@ void pushLegacyGdxClass(lua_State *state, LuaSkinHostModulesImpl *impl) {
   const int inputIndex = lua_gettop(state);
   installLegacyInputMethod(state, impl, inputIndex, "isKeyPressed",
                            legacyIsKeyPressed);
+  installLegacyInputMethod(state, impl, inputIndex, "isKeyJustPressed", legacyIsKeyJustPressed);
+  installLegacyInputMethod(state, impl, inputIndex, "isButtonPressed", legacyIsButtonPressed);
+  installLegacyInputMethod(state, impl, inputIndex, "getX", legacyGetX);
+  installLegacyInputMethod(state, impl, inputIndex, "getY", legacyGetY);
+  installLegacyInputMethod(state, impl, inputIndex, "getDeltaX", legacyGetDeltaX);
+  installLegacyInputMethod(state, impl, inputIndex, "getDeltaY", legacyGetDeltaY);
+  installLegacyInputMethod(state, impl, inputIndex, "justTouched", legacyJustTouched);
   installClosedMemberMetatable(state, impl, legacyGdxMember);
   lua_setfield(state, gdxIndex, "input");
   installClosedMemberMetatable(state, impl, legacyGdxMember);
@@ -2988,6 +3319,13 @@ void pushLegacyInputClass(lua_State *state, LuaSkinHostModulesImpl *impl) {
   lua_setfield(state, -2, "__metatable");
   lua_setmetatable(state, -2);
   lua_setfield(state, inputIndex, "Keys");
+  lua_createtable(state, 0, 5);
+  const std::array buttons{"LEFT", "RIGHT", "MIDDLE", "BACK", "FORWARD"};
+  for (std::size_t index = 0; index < buttons.size(); ++index) {
+    lua_pushinteger(state, static_cast<int>(index));
+    lua_setfield(state, -2, buttons[index]);
+  }
+  lua_setfield(state, inputIndex, "Buttons");
   installClosedMemberMetatable(state, impl, legacyInputMemberDenied);
 }
 
@@ -3002,22 +3340,26 @@ void pushLegacyControllersClass(lua_State *state,
 
 void pushLegacyFileObject(lua_State *state, LuaSkinHostModulesImpl *impl,
                           const char *path, std::size_t pathSize) {
-  lua_createtable(state, 0, 2);
+  lua_createtable(state, 0, 6);
   const int tableIndex = lua_gettop(state);
-
-  lua_pushlightuserdata(state, impl);
-  lua_pushlstring(state, path, pathSize);
-  lua_pushvalue(state, tableIndex);
-  lua_pushcclosure(state, legacyListFiles, 3);
-  lua_setfield(state, tableIndex, "listFiles");
-
-  lua_pushlightuserdata(state, impl);
-  lua_pushlstring(state, path, pathSize);
-  lua_pushvalue(state, tableIndex);
-  lua_pushcclosure(state, legacyMkdir, 3);
-  lua_setfield(state, tableIndex, "mkdir");
-
+  const auto member = [&](const char *name, lua_CFunction function) {
+    lua_pushlightuserdata(state, impl);
+    lua_pushlstring(state, path, pathSize);
+    lua_pushvalue(state, tableIndex);
+    lua_pushcclosure(state, function, 3);
+    lua_setfield(state, tableIndex, name);
+  };
+  member("listFiles", legacyListFiles);
+  member("mkdir", legacyMkdir);
+  member("isFile", legacyIsFile);
+  member("isDirectory", legacyIsDirectory);
+  member("getName", legacyFileName);
+  member("getPath", legacyFilePath);
   installClosedMemberMetatable(state, impl, legacyFileMemberDenied);
+  lua_getmetatable(state, tableIndex);
+  lua_getfield(state, tableIndex, "getPath");
+  lua_setfield(state, -2, "__tostring");
+  lua_pop(state, 1);
 }
 
 int legacyBindClass(lua_State *state) {
@@ -3068,8 +3410,8 @@ int legacyNew(lua_State *state) {
   }
   std::size_t pathSize = 0;
   const char *path = lua_tolstring(state, 2, &pathSize);
-  const auto resolved = impl->fileSystem->normalizeVirtualPath(
-      std::string_view(path, pathSize), true);
+  const auto resolved = impl->fileSystem->normalizeDirectPath(
+      std::string_view(path, pathSize));
   if (resolved.failure || !resolved.normalizedVirtualPath) {
     if (resolved.failure) {
       impl->storeFileError(*resolved.failure);
@@ -3530,6 +3872,8 @@ LuaSkinHostModules::create(lua_State *state,
   impl->maximumModuleSearchTemplates = options.maximumModuleSearchTemplates;
   impl->allowProcessGlobalOperations = options.allowProcessGlobalOperations;
   impl->allowOsLibrary = options.allowOsLibrary;
+  impl->externalActionsEnabled = options.externalActionsEnabled;
+  impl->openBrowser = std::move(options.openBrowser);
   impl->coroutineContext = options.coroutineContext;
   impl->coroutineCreated = options.coroutineCreated;
   try {
@@ -3622,6 +3966,10 @@ void LuaSkinHostModules::setFrameCallbackActive(bool active) noexcept {
   if (impl_) {
     impl_->frameCallbackActive = active;
   }
+}
+
+bool LuaSkinHostModules::setExternalActionsEnabled(bool enabled) noexcept {
+  return impl_ ? std::exchange(impl_->externalActionsEnabled, enabled) : false;
 }
 
 void LuaSkinHostModules::setEventExecutor(

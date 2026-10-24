@@ -1,11 +1,17 @@
 #include "skin/beatoraja/LuaSkinCurlHttpTransport.h"
 #include "skin/beatoraja/LuaSkinHttpClient.h"
+#if defined(ASOBMASHOW_TEST_FOUNDATION_HTTP_TRANSPORT)
+#include "skin/beatoraja/LuaSkinFoundationHttpTransportTest.h"
+#endif
 
 #include <atomic>
 #include <array>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <stop_token>
 #include <string>
 #include <string_view>
@@ -113,6 +119,12 @@ public:
     return "http://127.0.0.1:" + std::to_string(port_) + std::string(path);
   }
 
+  [[nodiscard]] std::string virtualHostUrl(std::string_view path) const {
+    return "http://example.test:" + std::to_string(port_) + std::string(path);
+  }
+  std::size_t requests() const noexcept { return requests_.load(); }
+  bool originalHostSeen() const noexcept { return originalHostSeen_.load(); }
+
   [[nodiscard]] std::size_t tailBytesSent() const noexcept {
     return tailBytesSent_.load();
   }
@@ -146,19 +158,33 @@ private:
   }
 
   void respond(Socket client, std::string_view path) {
+    if (path == "/first-stalls" && requests_.load() == 1) {
+      std::unique_lock lock(requestMutex_);
+      requestChanged_.wait_for(lock, 2s, [&] { return requests_.load() > 1; });
+      return;
+    }
+    if (path == "/error") {
+      (void)sendAll(client, "HTTP/1.1 503 Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+      return;
+    }
     if (path == "/redirect") {
       (void)sendAll(client,
                     "HTTP/1.1 302 Found\r\nLocation: /ok\r\n"
                     "Content-Length: 0\r\nConnection: close\r\n\r\n");
       return;
     }
-    if (path == "/overflow") {
-      const std::string body(65537, 'a');
+    if (path == "/overflow" || path == "/large") {
+      const std::string body(path == "/large" ? 1572864 : 1024 * 1024 + 1, 'a');
       const std::string header =
           "HTTP/1.1 200 OK\r\nContent-Length: " +
           std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n";
       (void)sendAll(client, header);
       (void)sendAll(client, body);
+      return;
+    }
+    if (path == "/unframed") {
+      (void)sendAll(client, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\n\r\n");
+      (void)sendAll(client, std::string(4096, '\n'));
       return;
     }
     if (path == "/tail") {
@@ -187,10 +213,12 @@ private:
       return;
     }
     if (path == "/stall") {
+      // NSURLSession may defer publishing a response until an initial body chunk.
+      // Leave the rest stalled so both adapters exercise a separate read phase.
       stalledRequests_.fetch_add(1);
       if (!sendAll(client,
-                   "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n"
-                   "Connection: close\r\n\r\n")) {
+                   "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: 4100\r\n"
+                   "Connection: close\r\n\r\n") || !sendAll(client, std::string(4096, 'x'))) {
         return;
       }
       std::this_thread::sleep_for(750ms);
@@ -246,6 +274,10 @@ private:
               firstSpace + 1, secondSpace - firstSpace - 1);
         }
       }
+      { std::lock_guard lock(requestMutex_); requests_.fetch_add(1); }
+      requestChanged_.notify_all();
+      if (request.find("Host: example.test:" + std::to_string(port_)) != std::string::npos)
+        originalHostSeen_.store(true);
       respond(client, path);
       closeSocket(client);
   }
@@ -254,6 +286,10 @@ private:
   std::uint16_t port_ = 0;
   std::jthread thread_;
   std::vector<std::jthread> workers_;
+  std::mutex requestMutex_;
+  std::condition_variable requestChanged_;
+  std::atomic_size_t requests_{0};
+  std::atomic_bool originalHostSeen_{false};
   std::atomic_size_t tailBytesSent_{0};
   std::atomic_size_t stalledRequests_{0};
 #if defined(_WIN32)
@@ -323,16 +359,16 @@ void testProductionTransportStagesRedirectsAndBoundsTail() {
 
   const auto overflow = client.get(server.url("/overflow"), 1000);
   expect(overflow.failure && *overflow.failure == "response is too large",
-         "production GET rejects the first UTF-16 character over the bound");
+         "production GET rejects the first raw byte over the default bound");
 
   const auto tail = client.get(server.url("/tail"), 1000);
   const auto tailLines = tail.response
                              ? LuaSkinHttpClient::readLines(tail.response->body)
                              : LuaSkinHttpLinesResult{};
-  expect(tail.response && !tailLines.failure && tailLines.lines.size() == 1024,
-         "production GET stops after the pinned line count");
+  expect(tail.failure && *tail.failure == "response is too large",
+         "production GET rejects oversized bodies even after many lines");
   std::this_thread::sleep_for(20ms);
-  expect(server.tailBytesSent() < 256 * 1024,
+  expect(server.tailBytesSent() <= 1024 * 1024,
          "the adapter closes before downloading an unbounded response tail");
 }
 
@@ -377,9 +413,173 @@ void testStalledBodyCanBeCancelledAfterHeaders() {
          "cancelled staged request still sends only one GET");
 }
 
+void testRequestOptions() {
+  LoopbackHttpServer server;
+  auto transport = createLuaSkinProductionHttpTransport();
+  std::stop_source one;
+  LuaSkinHttpLimits limits;
+  limits.requestStop = one.get_token();
+  auto cancelled = transport->open(server.url("/ok"), 1000, limits);
+  one.request_stop();
+  expect(cancelled.connection->connect().has_value(), "per-request cancellation stops just its connection");
+  LuaSkinHttpClient client(transport.get());
+  expect(client.get(server.url("/ok"), 1000).response.has_value(), "one cancelled request leaves sibling requests usable");
+  limits.requestStop = {};
+  limits.deadline = std::chrono::steady_clock::now() - 1ms;
+  auto expired = transport->open(server.url("/ok"), 1000, limits);
+  expect(expired.connection->connect().has_value(), "expired total deadline prevents connection");
+  limits.deadline = std::chrono::steady_clock::time_point::max();
+  limits.restrictedDestinations = true;
+  auto restricted = transport->open(server.url("/ok"), 1000, limits);
+  auto failure = restricted.connection->connect();
+  if (!failure) failure = restricted.connection->responseCode().failure;
+  expect(failure && failure->find("Non-public") != std::string::npos, "async production transport rejects loopback destinations");
+  expect(!client.get(server.url("/ok"), 1000, 12).failure, "body exactly at capacity accepted");
+  for (bool afterHeaders : {false, true}) {
+    auto larger = client.open(server.url("/large"), 1000);
+    if (afterHeaders) expect(larger.connection->responseCode().code == 200, "large response publishes headers before applying body limit");
+    larger.connection->setResponseLimitBytes(2097152);
+    const auto body = larger.connection->readBody();
+    expect(body.body && body.body->size() == 1572864 && !body.failure,
+           afterHeaders ? "larger body limit applies after responseCode" : "larger body limit applies before connect");
+  }
+  auto tiny = client.open(server.url("/ok"), 1000, 1);
+  expect(tiny.connection->responseCode().code == 200, "one-byte initial limit still permits headers");
+  tiny.connection->setResponseLimitBytes(12);
+  const auto expanded = tiny.connection->readBody();
+  expect(expanded.body && expanded.body->size() == 12,
+         "body delivery is deferred until the final response limit is selected");
+  auto smaller = client.open(server.url("/ok"), 1000);
+  expect(smaller.connection->responseCode().code == 200, "small response publishes headers");
+  smaller.connection->setResponseLimitBytes(11);
+  expect(smaller.connection->readBody().failure.has_value(), "smaller body limit applies after headers");
+
+  expect(client.get(server.url("/ok"), 1000, 11).failure.has_value(), "body one byte over capacity rejected");
+  const auto unframed = client.get(server.url("/unframed"), 1000, 4096);
+  expect(unframed.response && unframed.response->body.size() == 4096 &&
+         LuaSkinHttpClient::readLines(unframed.response->body).lines.size() == 4096,
+         "unframed bodies retain all newline bytes without line truncation");
+  expect(client.get(server.url("/unframed"), 1000, 4095).failure.has_value(),
+         "streamed byte cap applies without Content-Length");
+  limits.restrictedDestinations = false;
+  limits.deadline = std::chrono::steady_clock::now() + 100ms;
+  auto timed = transport->open(server.url("/stall"), 5000, limits);
+  auto timedStart = std::chrono::steady_clock::now();
+  auto timedBody = timed.connection->readBody();
+  expect(timedBody.failure && std::chrono::steady_clock::now() - timedStart < 400ms,
+         "total deadline bounds a stalled body independently of phase timeout");
+  limits.deadline = std::chrono::steady_clock::time_point::max();
+  std::stop_source requestStop;
+  limits.requestStop = requestStop.get_token();
+  auto stopped = transport->open(server.url("/stall"), 5000, limits);
+  expect(stopped.connection->responseCode().code == 200, "per-request cancellation obtains response headers");
+  requestStop.request_stop();
+  expect(stopped.connection->readBody().failure.has_value(), "per-request cancellation interrupts a staged body");
+
+  expect(!LuaSkinHttpClient::readLines("é\n", 3).failure && LuaSkinHttpClient::readLines("é\n", 2).failure,
+         "UTF-8 and newline bytes count before decoding");
+  expect(!LuaSkinHttpClient::checkedLimit(1.5) && !LuaSkinHttpClient::checkedLimit(0) &&
+         !LuaSkinHttpClient::checkedLimit(8388609) && LuaSkinHttpClient::checkedLimit(8388608), "capacity validates integral hard boundary");
+  expect(!LuaSkinHttpClient::checkedLimit(std::numeric_limits<double>::infinity()) &&
+         !LuaSkinHttpClient::checkedLimit(std::numeric_limits<double>::quiet_NaN()), "nonfinite capacity rejected");
+  expect(!LuaSkinHttpClient::validateAsyncRedirect("http://example.com", "https://example.com/path", 3),
+         "third redirect and HTTP-to-HTTPS upgrade allowed");
+  expect(LuaSkinHttpClient::validateAsyncRedirect("https://example.com", "http://example.com/path", 1).has_value(),
+         "HTTPS downgrade rejected");
+  expect(LuaSkinHttpClient::validateAsyncRedirect("https://example.com", "https://example.com/path", 4).has_value(),
+         "fourth redirect rejected");
+  expect(LuaSkinHttpClient::validateAsyncRedirect("https://example.com", "https://user:pass@example.com", 1).has_value(),
+         "redirect destination credentials revalidated");
+  for (const std::array<unsigned char, 4> address : {
+      std::array<unsigned char, 4>{0, 1, 2, 3}, {100, 64, 1, 1}, {172, 16, 1, 1},
+      {192, 0, 2, 1}, {198, 18, 0, 1}, {198, 51, 100, 1}, {203, 0, 113, 1}, {224, 0, 0, 1}})
+    expect(!LuaSkinHttpClient::isPublicAddress(address), "non-public IPv4 range denied");
+  const std::array<unsigned char, 4> publicV4{8, 8, 8, 8};
+  expect(LuaSkinHttpClient::isPublicAddress(publicV4), "public IPv4 accepted");
+  std::array<unsigned char, 16> ipv6{0x20, 0x01, 0x48, 0x60};
+  expect(LuaSkinHttpClient::isPublicAddress(ipv6), "global IPv6 accepted");
+  ipv6[2] = 0x0d; ipv6[3] = 0xb8;
+  expect(!LuaSkinHttpClient::isPublicAddress(ipv6), "documentation IPv6 denied");
+  ipv6 = {}; ipv6[0] = 0x20; ipv6[1] = 0x02;
+  expect(!LuaSkinHttpClient::isPublicAddress(ipv6), "transition IPv6 denied");
+  for (auto url : {"ftp://example.com", "http://x:0", "http://x:65536", "http://user@x", "http://x/%zz", "http://[not-ipv6]"})
+    expect(LuaSkinHttpClient::validateAsyncUrl(url).has_value(), "malformed async URLs rejected");
+}
+
+#if defined(ASOBMASHOW_TEST_FOUNDATION_HTTP_TRANSPORT)
+void testFoundationCandidateFallback() {
+  LoopbackHttpServer server;
+  expect(server.ready(), "candidate fallback loopback server starts");
+  if (!server.ready()) return;
+  LuaSkinHttpLimits limits;
+  limits.restrictedDestinations = true;
+  limits.deadline = std::chrono::steady_clock::now() + 2s;
+  std::vector<std::size_t> attempts;
+  auto connection = createLuaSkinFoundationCandidateTestConnection(server.virtualHostUrl("/ok"), limits,
+      {.candidates = {"::1", "127.0.0.1"}, .beforeAttempt = [&](auto index) { attempts.push_back(index); }});
+  const auto body = connection->readBody();
+  expect(body.body && *body.body == "alpha\r\nbeta\n" && attempts == std::vector<std::size_t>({0, 1}),
+         "refused first address falls back to second validated candidate");
+  expect(server.requests() == 1 && server.originalHostSeen(), "candidate fallback retains original Host header");
+
+  const auto base = std::chrono::steady_clock::now();
+  auto simulatedNow = base;
+  limits.deadline = base + 1s;
+  const auto before = server.requests();
+  attempts.clear();
+  auto expired = createLuaSkinFoundationCandidateTestConnection(server.virtualHostUrl("/ok"), limits,
+      {.candidates = {"::1", "127.0.0.1"},
+       .now = [&] { return std::max(simulatedNow, std::chrono::steady_clock::now()); },
+       .beforeAttempt = [&](auto index) {
+         attempts.push_back(index);
+         simulatedNow = index == 0 ? base + 900ms : base + 1001ms;
+       }});
+  const auto failure = expired->responseCode().failure;
+  expect(failure && failure->find("timed out") != std::string::npos && server.requests() == before &&
+         attempts == std::vector<std::size_t>({0, 1}),
+         "fallback cannot reset original total deadline before opening second candidate");
+
+  {
+    LoopbackHttpServer stalled;
+    attempts.clear();
+    limits.deadline = std::chrono::steady_clock::now() + 500ms;
+    auto fallback = createLuaSkinFoundationCandidateTestConnection(stalled.virtualHostUrl("/first-stalls"), limits,
+        {.candidates = {"127.0.0.1", "127.0.0.1"}, .beforeAttempt = [&](auto index) { attempts.push_back(index); }});
+    const auto response = fallback->readBody();
+    expect(response.body && *response.body == "alpha\r\nbeta\n" && stalled.requests() == 2 &&
+           attempts == std::vector<std::size_t>({0, 1}),
+           "black-holed first response leaves original deadline budget for another candidate");
+  }
+
+  for (bool bodyFailure : {false, true}) {
+    attempts.clear();
+    limits.deadline = std::chrono::steady_clock::now() + 2s;
+    limits.maximumBytes = bodyFailure ? 1 : 1024;
+    auto noRetry = createLuaSkinFoundationCandidateTestConnection(
+        server.virtualHostUrl(bodyFailure ? "/ok" : "/error"), limits,
+        {.candidates = {"127.0.0.1", "127.0.0.1"}, .beforeAttempt = [&](auto index) { attempts.push_back(index); }});
+    const auto code = noRetry->responseCode();
+    expect(code.code == (bodyFailure ? 200 : 503), "candidate publishes completed HTTP status");
+    if (bodyFailure) expect(noRetry->readBody().failure.has_value(), "body failure is reported");
+    else expect(noRetry->responseCode().code == 503, "HTTP failure remains the original response");
+    expect(attempts == std::vector<std::size_t>({0}), "HTTP status and body failures do not retry another address");
+  }
+}
+#endif
+
 } // namespace
 
 int main() {
+  std::string manyLines;
+  for (int i = 0; i < 1500; ++i) manyLines += "x\n";
+  const auto lines = LuaSkinHttpClient::readLines(manyLines);
+  expect(!lines.failure && lines.lines.size() == 1500, "byte-bounded lines have no line count cap");
+  expect(!LuaSkinHttpClient::readLines(std::string(65537, 'x')).failure, "default body accepts more than old character cap");
+  expect(LuaSkinHttpClient::readLines(std::string(1048577, '\n')).failure.has_value(), "newlines count against raw byte cap");
+  testRequestOptions();
+#if defined(ASOBMASHOW_TEST_FOUNDATION_HTTP_TRANSPORT)
+  testFoundationCandidateFallback();
+#endif
   testResponseCodeReturnsBeforeAStalledBody();
   testProductionTransportStagesRedirectsAndBoundsTail();
   testProductionTransportHonorsCancellation();

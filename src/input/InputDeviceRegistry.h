@@ -50,6 +50,10 @@ public:
   // Dispatches this SDL event before returning without polling async backends.
   void handleSdlEventAndDispatch(const SDL_Event &event);
   void pump();
+  // Publish pending input edges once after event acquisition, before scene update.
+  void advanceLegacyInputFrame(int logicalWidth, int logicalHeight) noexcept;
+  // Recheck at external dispatch: an asynchronously loaded skin may hold an older snapshot.
+  [[nodiscard]] bool hasCurrentLegacyPressEdge() const noexcept;
   // Recover device topology after application event queue pressure.
   void reconcileSdlDevices();
   // Cancel maintained held state without changing lifecycle or realtime ownership.
@@ -123,6 +127,22 @@ private:
   std::bitset<input::kLegacyInputMaximumGdxKeyCode + 1> pressedGdxKeys_;
   std::array<std::uint16_t, input::kLegacyInputMaximumGdxKeyCode + 1>
       pressedGdxKeyCounts_{};
+  struct LegacyFrameEdges {
+    std::bitset<input::kLegacyInputMaximumGdxKeyCode + 1> keys;
+    bool justTouched = false;
+    double mouseDeltaX = 0.0;
+    double mouseDeltaY = 0.0;
+    double touchDeltaX = 0.0;
+    double touchDeltaY = 0.0;
+  };
+  LegacyFrameEdges pendingLegacyEdges_;
+  LegacyFrameEdges currentLegacyEdges_;
+  std::bitset<5> pressedMouseButtons_;
+  struct LegacyTouch { std::uint64_t device; std::uint64_t finger; };
+  std::array<std::optional<LegacyTouch>, 20> legacyTouches_{};
+  std::optional<PointerPosition> legacyPointerPosition_;
+  int legacyLogicalWidth_ = 0;
+  int legacyLogicalHeight_ = 0;
   mutable std::uint64_t legacyInputSequence_ = 0;
   std::vector<std::shared_ptr<BackendSinkGate>> backendSinkGates_;
   std::unordered_map<std::string, input::InputDeviceSnapshot> devices_;

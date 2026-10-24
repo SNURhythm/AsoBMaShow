@@ -60,6 +60,7 @@
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include "../skin/beatoraja/BgfxSkinTextureDevice.h"
 #include "../skin/beatoraja/LuaSkinApplicationAudioBackend.h"
+#include "../skin/beatoraja/LuaSkinCurlHttpTransport.h"
 #include "play/PlayfieldChartVisualModel.h"
 #endif
 
@@ -4454,7 +4455,16 @@ bool MusicSelectScene::activateSkin(
            .maximumDecodedBytes = std::numeric_limits<std::size_t>::max()},
           context.skinLiveResourceCounters),
       .initialLegacyInputGeneration = initialGeneration,
-      .stop = skinPreparationStop_.get_token()};
+      .stop = skinPreparationStop_.get_token(),
+      .httpTransport = skin::createLuaSkinProductionHttpTransport(
+          skinPreparationStop_.get_token()),
+      .openBrowser = [this](std::string_view url) {
+        if (context.replayVideoExportActive.load(std::memory_order_acquire) ||
+            context.rendererAccess.exportRequested() ||
+            !context.inputDeviceRegistry.hasCurrentLegacyPressEdge()) return false;
+        std::string error;
+        return platform_open::openExternalUrl(url, error);
+      }};
   skinPreparation_ = std::async(
       std::launch::async,
       [request = std::move(request),

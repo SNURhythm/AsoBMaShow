@@ -44,6 +44,15 @@ struct LegacyInputGeneration {
   int drawableHeight = 0;
   bool anyKeyPressed = false;
   std::bitset<kLegacyInputMaximumGdxKeyCode + 1> pressedGdxKeys;
+  std::bitset<kLegacyInputMaximumGdxKeyCode + 1> justPressedGdxKeys;
+  // Gdx button order: left, right, middle, back, forward.
+  std::bitset<5> pressedMouseButtons;
+  // Top-left drawable pixels, matching the published graphics dimensions.
+  int pointerX = 0;
+  int pointerY = 0;
+  int deltaX = 0;
+  int deltaY = 0;
+  bool justTouched = false;
   std::array<LegacyControllerState, kLegacyInputMaximumControllers>
       controllers{};
   std::size_t controllerCount = 0;

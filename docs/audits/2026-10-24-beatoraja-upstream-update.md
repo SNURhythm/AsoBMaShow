@@ -15,8 +15,69 @@ Use the after-pull SHA as the starting point of the next upstream review.
 Historical skin oracle pins remain unchanged: those record behavior at their
 original commits, not a claim of compatibility with this new HEAD.
 
-This is a source comparison and adoption recommendation. No game behavior was
-changed, and neither game was built or runtime-tested for this report.
+The initial report was a source comparison. The subsequent implementation
+applies recommendations 1–6; see the status and verification section below.
+The recommendations retain the original comparison context.
+
+## Implementation status
+
+The compatibility update preserves string font-fallback paths, applies
+missing-chart ordering in both eager and compact selection, and supplies
+practice range/speed to authored distribution graphs. The graph cursor cache
+also receives elapsed time so it refreshes as playback and practice state change.
+
+The Lua update adds the File and input facades, direct-helper no-follow checks,
+regular-file deletion, HTTP raw-byte limits, asynchronous request ownership,
+and input-gated browser navigation. See the [Lua API additions](../features/lua-skin-runtime-api.md)
+for the current contract and preview/export restrictions.
+
+The narrower follow-ups remain separate work:
+
+- **Measured attempt duration:** upstream adds a new IR-worker field; no
+  current native service requirement calls for it. Existing
+  `play_duration_seconds` feeds provenance and historical statistics, so this
+  update does not silently change its meaning or migrate historical records.
+- **Configurable sorter cycling:** upstream marks this WIP. Missing-chart
+  ordering is applied; a new user-facing sorter preference needs a separate
+  product decision and settings/skin-event implementation.
+- **Native lifecycle diagnostics:** existing resource ownership, generated
+  texture counters, video budgets and audio callback telemetry cover the
+  corresponding native boundaries. This comparison did not demonstrate an
+  equivalent native leak requiring a speculative ownership rewrite.
+- **ASIO:** native callback-buffer choices are validated against cached device
+  limits, including supported divisors of the host buffer. This differs from
+  Java's blocking-write buffer. Keep the native negotiation and require a
+  Windows device reproduction before changing it.
+- **Malformed-data cases, gauge alpha, and archive reveal:** existing native
+  validation and ownership already cover the relevant behavior described below.
+  No parser, database-schema, or archive-payload processing change is needed.
+
+The review also identified an inherited upstream limitation: the async IPv4
+filter rejects all of `192.0/16` and `198.51/16`, including addresses outside
+the narrower special-purpose allocations. This pass preserves that conservative
+upstream policy; refining those ranges belongs in a separately validated
+address-policy change. It does not weaken destination restrictions.
+
+Integrated verification on macOS:
+
+- Built `main` plus `tests_skin_runtime`, `tests_input`, `tests_music_select`
+  and `tests_rendering` with `-j 6`.
+- Ran `ctest --test-dir cmake-build-debug -L
+  '^area_(skin_runtime|input|music_select|rendering)$' --output-on-failure
+  --no-tests=error -j 6`: **167/167 passed**, 24.89 seconds.
+- iOS build-setup checks: **54/54 passed**; the updated Xcode project passes
+  `plutil`. The final Foundation transport passes an arm64 iPhoneOS 15 syntax
+  compile with C++23 and ARC. A focused CMake generation probe confirms the
+  production `main` Foundation source receives `-fobjc-arc`.
+- Focused HTTP checks cover cancellation/disposal, queue and byte budgets,
+  post-connect limits, address fallback under the original deadline, and Lua
+  allocation-failure cleanup. Foundation unit/network tests additionally passed
+  five consecutive runs; async ownership passed ASan/UBSan.
+- Three independent review rounds identified and resolved HTTP allocation
+  cleanup, post-connect limits, invalid arguments, Windows include ordering,
+  Foundation address fallback, and the production CMake ARC setting.
+- Documentation links and `git diff --check` pass. No Windows compilation or
+  full iOS/Android app build was performed in this pass; no deployment occurred.
 
 ## Filtering the 0.8.9 release notes against our previous pin
 
@@ -287,9 +348,9 @@ documents the larger compatibility change in detail.
 
 The report's commit range, file counts and commit subjects were read from Git;
 recommendations above were checked against the cited local source paths.
-Documentation validation consists of a diff/whitespace review, local-link
-checks, and verifying beatoraja HEAD equals `origin/master`. No runtime bug
-reproduction or new compatibility implementation is claimed.
+The initial documentation validation included a diff/whitespace review, local-link
+checks, and verifying beatoraja HEAD equals `origin/master`. The subsequent
+compatibility implementation and its checks are recorded above.
 
 For subsequent implementation, use the relevant groups in
 [the testing guide](../testing/README.md): `skin_runtime`/`skin_assets` for Lua

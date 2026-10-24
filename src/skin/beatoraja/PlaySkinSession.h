@@ -91,6 +91,9 @@ struct PlaySkinSessionContext {
   std::optional<RuntimeSkinConfigurationSelection> pinnedRuntimeSelection;
   std::stop_token stop;
   player_settings::PresentationOrientation orientation = player_settings::PresentationOrientation::Landscape;
+  bool externalActionsEnabled = true;
+  std::function<bool(std::string_view)> openBrowser;
+  std::function<bool()> externalActionsAllowed;
 };
 
 class PlaySkinSession;
@@ -126,6 +129,7 @@ struct PlaySkinSessionFrameContext {
   std::function<void(std::size_t, bool)> applyPracticeMenuItem;
   std::function<void(int)> applyPracticeVisibleItems;
   ISkinGaugeRandomSource *gaugeRandomSource = nullptr;
+  std::function<bool()> externalActionsAllowed;
 };
 
 enum class PlaySkinFrameTransactionOutcome : std::uint8_t {

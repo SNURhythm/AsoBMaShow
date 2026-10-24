@@ -276,6 +276,8 @@ void testPinnedFilterFallbackAndSort() {
   auto *second = const_cast<MusicSelectBar *>(projection.find({"song:2"}));
   require(first && second, "filter fixture songs exist");
   if (!first || !second) return;
+  first->presentation.exists = true;
+  second->presentation.exists = true;
   first->chart.emplace();
   first->chart->meta.Title = "Zulu";
   first->chart->meta.KeyMode = 7;
@@ -480,8 +482,10 @@ void testSourceSortingKeepsDifficultyTableFolderOrder() {
           "HashBar still applies the selected song sorter");
 }
 
-void testPinnedUnavailableSongOrdering() {
-  for (const std::string sort : {"ARTIST", "BPM", "LENGTH", "LEVEL"}) {
+void testUnavailableSongOrdering() {
+  for (const std::string sort : {"TITLE", "ARTIST", "BPM", "LENGTH", "LEVEL",
+                                 "CLEAR", "SCORE", "MISSCOUNT", "DURATION",
+                                 "LASTUPDATE", "RIVALCOMPARE_CLEAR", "RIVALCOMPARE_SCORE"}) {
     for (bool reverse : {false, true}) {
       MusicSelectBar installed{.id = {"installed"}, .title = "Zulu",
                                .chart = ChartMetaRecord{},
@@ -511,12 +515,12 @@ void testPinnedUnavailableSongOrdering() {
       projection.bars.front().chart->unavailable = true;
       projection.bars.front().presentation.exists = false;
       MusicSelectBarManager unavailable(projection, {.sortId = sort});
-      require(unavailable.readView().rowAt(0).id == projection.root[0] &&
-                  unavailable.readView().rowAt(1).id == projection.root[1],
-              sort + " must treat two unavailable songs as equal and preserve authored order");
+      require(unavailable.readView().rowAt(0).id == missing.id &&
+                  unavailable.readView().rowAt(1).id == installed.id,
+              sort + " must order two unavailable songs by title");
       manager.configure({.sortId = "TITLE"});
-      require(manager.readView().rowAt(0).id == missing.id,
-              "TITLE must retain title ordering regardless of availability");
+      require(manager.readView().rowAt(0).id == installed.id,
+              "TITLE must also place missing charts last");
     }
   }
 }
@@ -1067,7 +1071,7 @@ int main(int argc, char **argv) {
                 !manager.select({"table:1:md5:other"}),
             "download identity fallback requires the same table context and exact MD5");
   }
-  testPinnedUnavailableSongOrdering();
+  testUnavailableSongOrdering();
   testPagedRowsStayLazyAcrossNavigationAndConfiguration();
   testPagedProviderLifetimeAndExplicitEnumeration();
   testProviderReplacementAndNestedBackNavigation();

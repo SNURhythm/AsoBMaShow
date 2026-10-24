@@ -1,6 +1,8 @@
 #include "LuaSkinHttpClient.h"
 
 #include <algorithm>
+#include <cmath>
+#include <charconv>
 #include <cstdint>
 #include <exception>
 #include <limits>
@@ -96,12 +98,10 @@ bool asciiEqualIgnoringCase(std::string_view left,
 
 struct DecodedLine {
   std::string text;
-  std::size_t utf16Characters = 0;
 };
 
 void appendReplacement(DecodedLine &decoded) {
   decoded.text.append("\xEF\xBF\xBD", 3);
-  ++decoded.utf16Characters;
 }
 
 DecodedLine decodeUtf8ReplacingMalformed(std::string_view input) {
@@ -155,7 +155,6 @@ DecodedLine decodeUtf8ReplacingMalformed(std::string_view input) {
     }
 
     decoded.text.append(input.substr(index, length));
-    decoded.utf16Characters += codepoint > 0xffff ? 2 : 1;
     index += length;
   }
   return decoded;
@@ -168,8 +167,11 @@ LuaSkinHttpClient::LuaSkinHttpClient(LuaSkinHttpTransport *transport) noexcept
 
 LuaSkinHttpOpenResult
 LuaSkinHttpClient::open(std::string_view url,
-                        int timeoutMilliseconds) const noexcept {
+                        int timeoutMilliseconds, std::size_t maxBytes) const noexcept {
   try {
+    if (maxBytes < 1 || maxBytes > maximumBytes) {
+      return {.failure = "HTTP max_bytes must be between 1 and 8388608"};
+    }
     if (const auto invalid = validateUri(url)) {
       return {.failure = *invalid};
     }
@@ -182,7 +184,7 @@ LuaSkinHttpClient::open(std::string_view url,
       return {.failure = "HTTP transport is unavailable"};
     }
     LuaSkinHttpOpenResult result = transport_->open(
-        url, clampTimeout(timeoutMilliseconds), responseLimits);
+        url, clampTimeout(timeoutMilliseconds), LuaSkinHttpLimits{.maximumBytes = maxBytes});
     if (!result.connection && !result.failure) {
       result.failure = "HTTP transport returned no connection";
     }
@@ -203,8 +205,8 @@ LuaSkinHttpClient::open(std::string_view url,
 
 LuaSkinHttpResult
 LuaSkinHttpClient::get(std::string_view url,
-                       int timeoutMilliseconds) const noexcept {
-  LuaSkinHttpOpenResult opened = open(url, timeoutMilliseconds);
+                       int timeoutMilliseconds, std::size_t maxBytes) const noexcept {
+  LuaSkinHttpOpenResult opened = open(url, timeoutMilliseconds, maxBytes);
   if (opened.failure) {
     return {.failure = std::move(opened.failure)};
   }
@@ -236,30 +238,29 @@ LuaSkinHttpClient::get(std::string_view url,
   if (!body.body) {
     return {.failure = "HTTP transport returned no response body"};
   }
+  if (body.body->size() > maxBytes) {
+    return {.failure = "response is too large"};
+  }
   return {.response = LuaSkinHttpResponse{.responseCode = *code.code,
                                           .body = std::move(*body.body)}};
 }
 
 LuaSkinHttpLinesResult
-LuaSkinHttpClient::readLines(std::string_view body) noexcept {
+LuaSkinHttpClient::readLines(std::string_view body, std::size_t maxBytes) noexcept {
   LuaSkinHttpLinesResult result;
   try {
-    result.lines.reserve(
-        std::min(responseLimits.maximumLines, body.size() / 2 + 1));
+    if (maxBytes < 1 || maxBytes > maximumBytes) {
+      return {.failure = "HTTP max_bytes must be between 1 and 8388608"};
+    }
+    if (body.size() > maxBytes) return {.failure = "response is too large"};
+    result.lines.reserve(std::min<std::size_t>(1024, body.size() / 2 + 1));
     std::size_t offset = 0;
-    std::size_t characters = 0;
-    while (offset < body.size() &&
-           result.lines.size() < responseLimits.maximumLines) {
+    while (offset < body.size()) {
       const std::size_t end = body.find_first_of("\r\n", offset);
       const std::size_t lineEnd =
           end == std::string_view::npos ? body.size() : end;
       DecodedLine line =
           decodeUtf8ReplacingMalformed(body.substr(offset, lineEnd - offset));
-      if (line.utf16Characters >
-          responseLimits.maximumCharacters - characters) {
-        return {.failure = "response is too large"};
-      }
-      characters += line.utf16Characters;
       result.lines.push_back(std::move(line.text));
       if (end == std::string_view::npos) {
         break;
@@ -277,6 +278,77 @@ LuaSkinHttpClient::readLines(std::string_view body) noexcept {
 
 int LuaSkinHttpClient::clampTimeout(int timeoutMilliseconds) noexcept {
   return std::clamp(timeoutMilliseconds, 1, maximumTimeoutMilliseconds);
+}
+
+std::optional<std::size_t> LuaSkinHttpClient::checkedLimit(double value) noexcept {
+  if (!std::isfinite(value) || value != std::floor(value) || value < 1 ||
+      value > maximumBytes) return std::nullopt;
+  return static_cast<std::size_t>(value);
+}
+
+namespace {
+std::string_view asyncHost(std::string_view url) {
+  auto authority = url.substr(url.find("://") + 3);
+  authority = authority.substr(0, authority.find_first_of("/?#"));
+  if (authority.starts_with('[')) return authority.substr(1, authority.find(']') - 1);
+  return authority.substr(0, authority.find(':'));
+}
+}
+
+std::optional<std::string> LuaSkinHttpClient::validateAsyncUrl(std::string_view url) {
+  if (url.empty() || url.size() > 2048) return "Invalid HTTP URL length";
+  if (auto failure = validateUri(url)) return failure;
+  auto scheme = urlScheme(url);
+  if ((!asciiEqualIgnoringCase(scheme, "http") && !asciiEqualIgnoringCase(scheme, "https")) ||
+      url.substr(scheme.size(), 3) != "://") return "Only absolute HTTP/HTTPS URLs are allowed";
+  auto authority = url.substr(scheme.size() + 3);
+  authority = authority.substr(0, authority.find_first_of("/?#"));
+  if (authority.empty() || authority.find('@') != authority.npos)
+    return "Only absolute HTTP/HTTPS URLs without credentials are allowed";
+  auto host = asyncHost(url);
+  if (host.empty()) return "Invalid HTTP host";
+  if (authority.front() == '[') {
+    if (host.find(':') == host.npos) return "Invalid HTTP host";
+    for (unsigned char c : host)
+      if (!asciiHex(c) && c != ':' && c != '.') return "Invalid HTTP host";
+  }
+  for (unsigned char c : host) {
+    if (!(asciiAlpha(c) || asciiDigit(c) || c == '-' || c == '.' ||
+          (authority.front() == '[' && c == ':'))) return "Invalid HTTP host";
+  }
+  const auto hostEnd = authority.front() == '[' ? authority.find(']') + 1 : host.size();
+  if (hostEnd < authority.size()) {
+    if (authority[hostEnd] != ':') return "Invalid HTTP port";
+    auto port = authority.substr(hostEnd + 1);
+    unsigned number = 0;
+    const auto parsed = std::from_chars(port.data(), port.data() + port.size(), number);
+    if (parsed.ec != std::errc{} || parsed.ptr != port.data() + port.size() ||
+        number < 1 || number > 65535) return "Invalid HTTP port";
+  }
+  return std::nullopt;
+}
+
+bool LuaSkinHttpClient::isPublicAddress(std::span<const unsigned char> bytes) noexcept {
+  if (bytes.size() != 4 && bytes.size() != 16) return false;
+  const auto a = bytes[0], b = bytes[1];
+  if (bytes.size() == 4) {
+    return a != 0 && a != 10 && a != 127 && a < 224 &&
+        !(a == 100 && b >= 64 && b <= 127) && !(a == 169 && b == 254) &&
+        !(a == 172 && b >= 16 && b <= 31) && !(a == 192 && (b == 0 || b == 168)) &&
+        !(a == 198 && (b == 18 || b == 19 || b == 51)) &&
+        !(a == 203 && b == 0 && bytes[2] == 113);
+  }
+  return (a & 0xe0) == 0x20 && !(a == 0x20 && b == 0x02) &&
+      !(a == 0x20 && b == 0x01 && (bytes[2] < 2 || (bytes[2] == 0x0d && bytes[3] == 0xb8)));
+}
+
+std::optional<std::string> LuaSkinHttpClient::validateAsyncRedirect(
+    std::string_view previous, std::string_view next, int redirectCount) {
+  if (redirectCount > 3) return "Invalid or excessive HTTP redirects";
+  if (auto invalid = validateAsyncUrl(next)) return invalid;
+  if (asciiEqualIgnoringCase(urlScheme(previous), "https") &&
+      !asciiEqualIgnoringCase(urlScheme(next), "https")) return "HTTPS downgrade denied";
+  return std::nullopt;
 }
 
 } // namespace skin

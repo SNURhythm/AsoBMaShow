@@ -11,6 +11,7 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -251,6 +252,8 @@ struct LuaSkinRuntimeOptions {
   std::shared_ptr<LuaSkinAudioBackend> audioBackend;
   std::stop_token stop;
   LuaSkinLegacyInputSnapshot legacyInputSnapshot;
+  bool externalActionsEnabled = true;
+  std::function<bool(std::string_view)> openBrowser;
 };
 
 class LuaSkinRuntime final {
@@ -281,6 +284,8 @@ public:
   [[nodiscard]] bool
   setLegacyInputSnapshot(LuaSkinLegacyInputSnapshot) noexcept;
   void setLegacyInputGeneration(LuaSkinLegacyInputGeneration) noexcept;
+  // Returns the previous capability; catalog/validation always remain disabled.
+  bool setExternalActionsEnabled(bool enabled) noexcept;
   void setEventExecutor(LuaSkinEventExecutor) noexcept;
   LuaOperationResult beginFrame(std::uint64_t visualStateSequence);
   LuaCallbackResult invoke(LuaCallbackId, std::span<const LuaScalar> arguments);

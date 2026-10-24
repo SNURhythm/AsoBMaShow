@@ -129,6 +129,7 @@ asobmashow_share_test_sources(dependencies
         src/skin/beatoraja/LuaSkinBindingDecoder.cpp
         src/skin/beatoraja/LuaSkinFileSystem.cpp
         src/skin/beatoraja/LuaSkinHostModules.cpp
+        src/skin/beatoraja/LuaSkinAsyncHttp.cpp
         src/skin/beatoraja/LuaSkinHttpClient.cpp
         src/skin/beatoraja/LuaSkinJavaPatternPcre2.cpp
         src/skin/beatoraja/LuaSkinLegacyInputHost.cpp

@@ -69,6 +69,7 @@
 #include "GameplaySkinSessionFactory.h"
 #include "../../skin/beatoraja/LuaSkinApplicationAudioBackend.h"
 #include "../../skin/beatoraja/LuaSkinCurlHttpTransport.h"
+#include "../../PlatformOpen.h"
 #endif
 #if TARGET_OS_IOS || TARGET_OS_SIMULATOR
 #include "../../iOSNatives.hpp"
@@ -289,7 +290,18 @@ gameplaySkinSessionServices(ApplicationContext &context) {
                 rendering::render_width, rendering::render_height);
           },
           .configurationWrites = context.skinConfigurationWriteQueue.get(),
-          .diagnosticHistory = context.skinDiagnosticHistory.get()};
+          .diagnosticHistory = context.skinDiagnosticHistory.get(),
+          .openBrowser = [&context](std::string_view url) {
+            if (context.replayVideoExportActive.load(std::memory_order_acquire) ||
+                context.rendererAccess.exportRequested() ||
+                !context.inputDeviceRegistry.hasCurrentLegacyPressEdge()) return false;
+            std::string error;
+            return platform_open::openExternalUrl(url, error);
+          },
+          .externalActionsAllowed = [&context] {
+            return !context.replayVideoExportActive.load(std::memory_order_acquire) &&
+                   !context.rendererAccess.exportRequested();
+          }};
 }
 
 std::string gameplaySkinFailureMessage(const skin::SkinDiagnostic &diagnostic) {

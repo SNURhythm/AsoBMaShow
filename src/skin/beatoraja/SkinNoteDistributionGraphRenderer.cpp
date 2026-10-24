@@ -193,6 +193,7 @@ SkinNoteDistributionGraphRenderResult renderDistribution(
        .layer = SkinGeneratedTextureLayer::Cursor,
        .geometry = request.geometry,
        .viewport = request.viewport,
+       .elapsedMillis = request.elapsedMillis,
        .maximumCommands = remaining(),
        .maximumPrimitiveVertices = request.maximumPrimitiveVertices,
        .sourceWidth = width,

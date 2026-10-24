@@ -196,8 +196,10 @@ void compareWithEager(MusicSelectSongIndex &index,
   }
 }
 
-void testPinnedAvailabilityOrdering() {
-  for (const std::string_view sort : {"ARTIST", "BPM", "LENGTH", "LEVEL"}) {
+void testAvailabilityOrdering() {
+  for (const std::string_view sort : {"TITLE", "ARTIST", "BPM", "LENGTH", "LEVEL",
+                                      "CLEAR", "SCORE", "MISSCOUNT", "DURATION",
+                                      "LASTUPDATE", "RIVALCOMPARE_CLEAR", "RIVALCOMPARE_SCORE"}) {
     for (bool reverse : {false, true}) {
       for (bool emptyPath : {false, true}) {
         auto installed = chart("installed", "Zulu");
@@ -225,14 +227,14 @@ void testPinnedAvailabilityOrdering() {
         index.configure("ALL", "ALL", sort);
         require(index.idAt(0).value == "folder:/songs:sha256:installed" &&
                     index.idAt(1).value == "folder:/songs:sha256:missing",
-                "pinned metadata sorts put installed before unavailable or pathless songs in either input order");
+                "all sorts put installed before unavailable or pathless songs in either input order");
         require(index.indexOf({"folder:/songs:sha256:installed"}) == 0 &&
                     index.indexOf({"folder:/songs:sha256:missing"}) == 1,
                 "availability reordering updates compact identity positions");
         for (const std::string_view otherSort : {"TITLE", "SCORE", "CLEAR"}) {
           index.configure("ALL", "ALL", otherSort);
-          require(index.idAt(0).value == "folder:/songs:sha256:missing",
-                  "TITLE and score sorts remain independent of availability");
+          require(index.idAt(0).value == "folder:/songs:sha256:installed",
+                  "TITLE and score sorts also put missing charts last");
         }
         installed.unavailable = true;
         MusicSelectSongIndex unavailable("folder:/songs");
@@ -246,11 +248,9 @@ void testPinnedAvailabilityOrdering() {
         unavailable.finish();
         unavailable.configure("ALL", "ALL", "TITLE");
         unavailable.configure("ALL", "ALL", sort);
-        require(unavailable.idAt(0).value == (reverse ? "folder:/songs:sha256:installed"
-                                                     : "folder:/songs:sha256:missing") &&
-                    unavailable.idAt(1).value == (reverse ? "folder:/songs:sha256:missing"
-                                                         : "folder:/songs:sha256:installed"),
-                "two unavailable songs compare equal and restore the authored reverse-unique order");
+        require(unavailable.idAt(0).value == "folder:/songs:sha256:missing" &&
+                    unavailable.idAt(1).value == "folder:/songs:sha256:installed",
+                "two unavailable songs use title order regardless of the selected sorter");
       }
     }
   }
@@ -468,7 +468,7 @@ void testHundredThousandCompactEntries() {
 }
 
 int main() {
-  testPinnedAvailabilityOrdering();
+  testAvailabilityOrdering();
   testRepresentativeAndIdentitySemantics();
   testDedupBeforeHidingAndFallback();
   testEveryFilterAndSortAgainstEager();

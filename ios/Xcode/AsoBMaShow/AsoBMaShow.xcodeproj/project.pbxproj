@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		D8B008902026102400000002 /* CFNetwork.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D8B008902026102400000001 /* CFNetwork.framework */; };
 		B70027142BF7A8DA000DB8EC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B70027132BF7A8DA000DB8EC /* Assets.xcassets */; };
 		B70027172BF7A8DA000DB8EC /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = B70027152BF7A8DA000DB8EC /* LaunchScreen.storyboard */; };
 		B71B9EDC2BFDA3A200D789A5 /* CoreAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = B71B9EDB2BFDA3A200D789A5 /* CoreAudio.framework */; };
@@ -613,6 +614,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		D8B008902026102400000001 /* CFNetwork.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CFNetwork.framework; path = System/Library/Frameworks/CFNetwork.framework; sourceTree = SDKROOT; };
 		2CD33E8E87F5C66C37827A03 /* libPods-AsoBMaShow.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-AsoBMaShow.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		8BB58BF3E3216A181DA42E9C /* Pods-AsoBMaShow.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-AsoBMaShow.release.xcconfig"; path = "Target Support Files/Pods-AsoBMaShow/Pods-AsoBMaShow.release.xcconfig"; sourceTree = "<group>"; };
 		B70027012BF7A8D8000DB8EC /* AsoBMaShow.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = AsoBMaShow.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -804,6 +806,7 @@
 				B77B0E1C2BF7BDC400945F27 /* SDL3_ttf.framework in Frameworks */,
 				B7FFC3A82BFAAFF3000C838E /* libbimg_encode.a in Frameworks */,
 				B77B0E202BF7C46D00945F27 /* Foundation.framework in Frameworks */,
+				D8B008902026102400000002 /* CFNetwork.framework in Frameworks */,
 				B77B0DFD2BF7BD3900945F27 /* SDL3.framework in Frameworks */,
 				B7EBA95E2F28D21300B6D064 /* libbimg.a in Frameworks */,
 				E6E33EB08676F3525400255A /* libPods-AsoBMaShow.a in Frameworks */,
@@ -933,6 +936,7 @@
 				B79B1BCB2BFAC19F00FAD60F /* Metal.framework */,
 				B77B0E222BF7C48700945F27 /* CoreFoundation.framework */,
 				B77B0E1E2BF7C46700945F27 /* Foundation.framework */,
+				D8B008902026102400000001 /* CFNetwork.framework */,
 				2CD33E8E87F5C66C37827A03 /* libPods-AsoBMaShow.a */,
 			);
 			name = Frameworks;

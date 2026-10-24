@@ -46,6 +46,8 @@ struct GameplaySkinDocumentRequest {
   LuaConfiguredGameplayDocumentLoad loadConfiguredLua;
   SkinSafetyPolicy safetyPolicy{};
   std::stop_token stop;
+  bool externalActionsEnabled = true;
+  std::function<bool(std::string_view)> openBrowser;
 };
 
 struct InspectedGameplaySkinDocument {

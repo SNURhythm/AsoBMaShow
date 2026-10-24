@@ -1304,8 +1304,7 @@ bool decodeRawFontFallback(lua_State *state, int index, std::size_t depth,
                            RawSkinFontFallback &output,
                            DecodeRequest &request) {
   if (lua_type(state, index) == LUA_TSTRING) {
-    std::string ignored;
-    return copyString(state, index, ignored,
+    return copyString(state, index, output.path,
                       LuaSkinTableDecoderPolicy::maxGameplayTextBytes, true,
                       request);
   }
