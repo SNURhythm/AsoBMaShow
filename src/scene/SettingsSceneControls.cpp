@@ -841,6 +841,7 @@ void SettingsScene::refreshSettingsText(bool syncInputs) {
   applyTabStyle(laneTabButton, laneTabText, SettingsTab::Lane);
   applyTabStyle(inputTabButton, inputTabText, SettingsTab::Input);
   applyTabStyle(generalTabButton, generalTabText, SettingsTab::General);
+  applyTabStyle(legalTabButton, legalTabText, SettingsTab::Legal);
   applyTabStyle(audioTabButton, audioTabText, SettingsTab::Audio);
   applyTabStyle(displayTabButton, displayTabText, SettingsTab::Display);
   applyTabStyle(difficultyTablesTabButton, difficultyTablesTabText,

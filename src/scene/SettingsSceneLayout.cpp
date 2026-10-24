@@ -13,6 +13,8 @@
 #include "../view/LaneCoverControlsView.h"
 #include "../view/OverlayPortal.h"
 #include "../view/ScrollView.h"
+#include "../view/LegalNoticeReader.h"
+#include "../ArchiveFile.h"
 #include "play/BMSRenderer.h"
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
 #include "GameplaySkinSettingsPresentation.h"
@@ -161,6 +163,7 @@ void SettingsScene::resetViewState() {
   laneTabButton = nullptr;
   inputTabButton = nullptr;
   generalTabButton = nullptr;
+  legalTabButton = nullptr;
   audioTabButton = nullptr;
   displayTabButton = nullptr;
   difficultyTablesTabButton = nullptr;
@@ -173,6 +176,7 @@ void SettingsScene::resetViewState() {
   laneTabText = nullptr;
   inputTabText = nullptr;
   generalTabText = nullptr;
+  legalTabText = nullptr;
   audioTabText = nullptr;
   displayTabText = nullptr;
   difficultyTablesTabText = nullptr;
@@ -1889,6 +1893,44 @@ View *SettingsScene::buildLaneTab(const LayoutMetrics &metrics) {
   return cardsColumn;
 }
 
+View *SettingsScene::buildLegalTab(const LayoutMetrics &metrics) {
+  auto *column = makeCardsColumn(metrics);
+  column->addView(makeHeading(i18n::message("settings.legal.title"), metrics.sectionTitleSize));
+  column->addView(makeWrappedText(i18n::message("settings.legal.description"),
+      metrics.bodyTextSize, app_theme::textSecondary()));
+  column->addView(makeWrappedText("AsoBMaShow — https://github.com/SNURhythm/AsoBMaShow",
+      metrics.smallTextSize, app_theme::textSecondary()));
+  auto *reader = new LegalNoticeReader();
+  column->setFlex(1)->setMinHeight(0);
+  reader->setWidthPercent(100)->setFlex(1)->setMinHeight(0);
+  const auto loadNotice = [reader](const std::string &file) {
+    std::vector<unsigned char> bytes;
+    std::string error;
+    if (archive_file::readFileBounded(std::filesystem::path("assets/legal") / file,
+                                     bytes, 1024 * 1024, &error)) {
+      reader->setNotice(std::string(bytes.begin(), bytes.end()));
+    } else {
+      reader->setNotice(i18n::tr("settings.legal.read_error"));
+      SDL_Log("Legal notice %s: %s", file.c_str(), error.c_str());
+    }
+  };
+  auto *selector = new DropdownView({.onOptionSelected =
+      [this, loadNotice](const std::string &file) {
+        selectedLegalNotice = file;
+        loadNotice(file);
+      }}, overlayPortal);
+  selector->setName("legalNoticeSelector");
+  selector->setWidthPercent(100)->setFlexShrink(0);
+  selector->refresh({.label = i18n::message("settings.legal.notice"),
+      .selectedId = selectedLegalNotice, .options = {
+#include "../legal/Notices.inc"
+      }});
+  column->addView(selector);
+  column->addView(reader);
+  loadNotice(selectedLegalNotice);
+  return column;
+}
+
 View *SettingsScene::buildGeneralTab(const LayoutMetrics &metrics) {
   auto *cardsColumn = makeCardsColumn(metrics);
 
@@ -2643,6 +2685,7 @@ void SettingsScene::initView() {
     case SettingsTab::DifficultyTables: return ui_icons::kChartLine;
     case SettingsTab::Ir: return ui_icons::kGlobe;
     case SettingsTab::General: return ui_icons::kSettings;
+    case SettingsTab::Legal: return ui_icons::kRecords;
     }
     return ui_icons::kSettings;
   };
@@ -2686,6 +2729,7 @@ void SettingsScene::initView() {
                     &difficultyTablesTabText);
   irTabButton = makeTabButton(SettingsTab::Ir, "IR", &irTabText);
   generalTabButton = makeTabButton(SettingsTab::General, i18n::message("settings.navigation.general.label"), &generalTabText);
+  legalTabButton = makeTabButton(SettingsTab::Legal, i18n::message("settings.legal.title"), &legalTabText);
   tabControls->addView(profileTabButton);
   tabControls->addView(inputTabButton);
   tabControls->addView(timingTabButton);
@@ -2699,6 +2743,7 @@ void SettingsScene::initView() {
   tabControls->addView(difficultyTablesTabButton);
   tabControls->addView(irTabButton);
   tabControls->addView(generalTabButton);
+  tabControls->addView(legalTabButton);
   auto *tabRail = new ScrollView();
   tabRailScrollView = tabRail;
   tabRail->setWidth(static_cast<float>(portrait ? metrics.contentWidth : tabColumnWidth));
@@ -2758,6 +2803,9 @@ void SettingsScene::initView() {
   case SettingsTab::Input:
     cardsColumn = buildInputTab(metrics);
     break;
+  case SettingsTab::Legal:
+    cardsColumn = buildLegalTab(metrics);
+    break;
   case SettingsTab::General:
     cardsColumn = buildGeneralTab(metrics);
     break;
@@ -2780,13 +2828,20 @@ void SettingsScene::initView() {
     cardsColumn = buildIrTab(metrics);
     break;
   }
-  if (cardsColumn != nullptr) {
-    refineSettingsSectionSpacing(cardsColumn, metrics);
-    scrollContent->addView(cardsColumn);
+  if (activeTab == SettingsTab::Legal) {
+    // The reader owns wheel/touch scrolling; do not nest it inside ScrollView.
+    delete scrollContent;
+    delete scrollView;
+    scrollView = nullptr;
+    content->addView(cardsColumn);
+  } else {
+    if (cardsColumn != nullptr) {
+      refineSettingsSectionSpacing(cardsColumn, metrics);
+      scrollContent->addView(cardsColumn);
+    }
+    scrollView->setContentView(scrollContent);
+    content->addView(scrollView);
   }
-
-  scrollView->setContentView(scrollContent);
-  content->addView(scrollView);
   rootLayout->addView(content);
   rootLayout->addView(overlayPortal);
 

@@ -6123,6 +6123,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/practice_panel_message_tests.py)
     set_tests_properties(practice_panel_message_tests PROPERTIES
         ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}")
+    add_test(NAME legal_notices_tests
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/legal_notices_tests.py)
     add_test(NAME localization_catalog_tests
         COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/localization_catalog_tests.py)
     add_test(NAME android_locale_tests

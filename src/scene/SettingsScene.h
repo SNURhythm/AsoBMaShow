@@ -148,6 +148,7 @@ private:
     Lane,
     Input,
     General,
+    Legal,
     Audio,
     Display,
     DifficultyTables,
@@ -244,6 +245,7 @@ private:
   Button *laneTabButton = nullptr;
   Button *inputTabButton = nullptr;
   Button *generalTabButton = nullptr;
+  Button *legalTabButton = nullptr;
   Button *audioTabButton = nullptr;
   Button *displayTabButton = nullptr;
   Button *difficultyTablesTabButton = nullptr;
@@ -256,6 +258,7 @@ private:
   TextView *laneTabText = nullptr;
   TextView *inputTabText = nullptr;
   TextView *generalTabText = nullptr;
+  TextView *legalTabText = nullptr;
   TextView *audioTabText = nullptr;
   TextView *displayTabText = nullptr;
   TextView *difficultyTablesTabText = nullptr;
@@ -535,6 +538,8 @@ private:
       const settings_scene::LayoutMetrics &metrics);
   void buildInputVirtualControllerEditorOverlay(
       const settings_scene::LayoutMetrics &metrics);
+  std::string selectedLegalNotice = "asobmashow.txt";
+  View *buildLegalTab(const settings_scene::LayoutMetrics &metrics);
   View *buildGeneralTab(const settings_scene::LayoutMetrics &metrics);
   View *buildAudioTab(const settings_scene::LayoutMetrics &metrics);
   View *buildDisplayTab(const settings_scene::LayoutMetrics &metrics);

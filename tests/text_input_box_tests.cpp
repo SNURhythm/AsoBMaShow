@@ -1,5 +1,6 @@
 #include "scene/play/GuidedAccessInstructionView.h"
 #include "scene/ChartReadmeModal.h"
+#include "view/LegalNoticeReader.h"
 #include "rendering/ResponsiveUi.h"
 #include "StorageTestSupport.h"
 #include "view/RecyclerView.h"
@@ -1113,6 +1114,40 @@ void testReadmeModalDisplaysAndCloses() {
   rendering::compactMenuCanvasActive = previousCompact;
 }
 
+void testLegalNoticeReaderReflowsAndResets() {
+  View root(0, 0, 400, 300);
+  auto *reader = new LegalNoticeReader();
+  reader->setWidthPercent(100)->setHeight(300);
+  root.addView(reader);
+  std::string notice;
+  for (int i = 0; i < 200; ++i) notice += "Copyright notice with enough words to wrap on a narrow phone screen.\n";
+  reader->setNotice(notice);
+  root.applyYogaLayout();
+  const auto wideCount = reader->size();
+  expect(wideCount >= 200, "long legal notices retain every line");
+  root.setWidth(200);
+  root.applyYogaLayout();
+  expect(reader->size() > wideCount, "legal notice reflows after orientation/width change");
+  SDL_Event wheel{};
+  wheel.type = SDL_EVENT_MOUSE_WHEEL;
+  wheel.wheel.mouse_x = 50;
+  wheel.wheel.mouse_y = 100;
+  wheel.wheel.y = -10;
+  root.handleEvents(wheel);
+  expect(reader->scrollOffset > 0, "wheel reaches the legal viewport through its page");
+  reader->scrollOffset = 0;
+  auto down = selectionPointer(true, SDL_EVENT_FINGER_DOWN, 50, 200);
+  root.handleEvents(down);
+  auto move = selectionPointer(true, SDL_EVENT_FINGER_MOTION, 50, 100);
+  root.handleEvents(move);
+  expect(reader->scrollOffset > 0, "touch drag scrolls legal text through its page");
+  auto up = selectionPointer(true, SDL_EVENT_FINGER_UP, 50, 100);
+  root.handleEvents(up);
+  reader->setNotice("Replacement notice");
+  expect(reader->scrollOffset == 0, "changing notice resets scroll");
+  expect(reader->size() < 10, "changing notice replaces old license lines");
+}
+
 int main() {
   bgfx::Init init;
   init.type = bgfx::RendererType::Noop;
@@ -1120,6 +1155,7 @@ int main() {
   init.resolution.height = 64;
   expect(bgfx::init(init), "headless bgfx initializes for text input tests");
 
+  testLegalNoticeReaderReflowsAndResets();
   testReadmeModalDisplaysAndCloses();
   testTextPresentationInvalidationAndDeadlines();
 

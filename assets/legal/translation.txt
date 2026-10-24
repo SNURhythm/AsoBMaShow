@@ -1,0 +1,14 @@
+Automatic translation
+
+Android translation is powered by Google Translate through ML Kit.
+https://developers.google.com/ml-kit/language/translation
+https://docs.cloud.google.com/translate/attribution
+
+THIS SERVICE MAY CONTAIN TRANSLATIONS POWERED BY GOOGLE. GOOGLE DISCLAIMS ALL
+WARRANTIES RELATED TO THE TRANSLATIONS, EXPRESS OR IMPLIED, INCLUDING ANY
+WARRANTIES OF ACCURACY, RELIABILITY, AND ANY IMPLIED WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+
+Apple platforms use the Apple Translation framework.
+
+Translations are automatic and may be inaccurate. Refer to the original text for author instructions, credits, licenses and usage terms. Translation does not change those terms.
