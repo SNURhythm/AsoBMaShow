@@ -69,6 +69,16 @@ visible until gameplay starts. This adds no time to the existing two-second
 startup delay. Interruption resets the cue to idle.
 Text stays upright in app coordinates; the edge marker changes axis with orientation.
 
+When investigating a missing cue, search device logs for `iOS hardware button cue`.
+The bridge reports its suppression reason, model, screen identity comparison,
+legacy and effective scene orientations, root view class, and measured viewport.
+It logs only when the reason or orientation changes. This distinguishes an
+unknown orientation from the strict full-screen check rejecting a window.
+The reported M5 11-inch failure on iPadOS 27.2 beta remains unconfirmed on hardware;
+both landscape orientations fail there, while the available 27.1 iPhone simulator
+passes the native geometry check with the M5 model mapping. `UIScreen.mainScreen`
+is deprecated since iOS 26, but deprecation alone does not establish the cause.
+
 Skipping is kept only for the current gameplay session, including in-game and
 result-screen retries, practice restarts, and course continuation. Returning to
 song selection and starting again creates a fresh reminder session. The choice

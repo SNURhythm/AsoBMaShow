@@ -6000,12 +6000,15 @@ ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() {
   UIWindow *window = FindActiveWindow();
   Orientation orientation = Orientation::Unknown;
   bool fillsBuiltInScreen = false;
+  UIInterfaceOrientation current = UIInterfaceOrientationUnknown;
+  CGRect viewport{};
+  CGRect screen{};
   if (window != nil && window.screen == UIScreen.mainScreen) {
     // Interface and device orientation reverse the landscape enum names.
     // Use UIKit's interface orientation so rotation lock and a tablet lying
     // flat remain correct. SDL also supports windows without a UIWindowScene;
     // messaging that nil scene yields Unknown and hides both reminder cues.
-    const UIInterfaceOrientation current = window.windowScene != nil
+    current = window.windowScene != nil
         ? window.windowScene.interfaceOrientation
         : window.rootViewController.interfaceOrientation;
     switch (current) {
@@ -6018,9 +6021,9 @@ ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() {
     }
     UIView *view = window.rootViewController.view;
     if (view != nil) {
-      const CGRect viewport = [view convertRect:view.bounds
+      viewport = [view convertRect:view.bounds
                              toCoordinateSpace:window.screen.coordinateSpace];
-      const CGRect screen = window.screen.bounds;
+      screen = window.screen.bounds;
       // Split View, Stage Manager, and external displays cannot place a cue
       // against the hardware by treating the app's edges as screen edges.
       fillsBuiltInScreen = screen.size.width > 0 && screen.size.height > 0 &&
@@ -6030,7 +6033,37 @@ ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() {
           std::abs(viewport.size.height - screen.size.height) < 1.0;
     }
   }
-  return locateButton(model, orientation, fillsBuiltInScreen);
+  const auto location = locateButton(model, orientation, fillsBuiltInScreen);
+  const char *reason = window == nil ? "no-window"
+      : window.screen != UIScreen.mainScreen ? "screen-mismatch"
+      : window.rootViewController.view == nil ? "no-root-view"
+      : orientation == Orientation::Unknown ? "unknown-orientation"
+      : !fillsBuiltInScreen ? "partial-viewport"
+      : model.portraitX < 0.0F ? "unmapped-hardware" : "visible";
+  // This query runs every reminder frame. Log only a changed suppression reason
+  // or orientation so a device report identifies the failed gate without spam.
+  static const char *lastReason = nullptr;
+  static UIInterfaceOrientation lastOrientation = UIInterfaceOrientationUnknown;
+  if (reason != lastReason || current != lastOrientation) {
+    lastReason = reason;
+    lastOrientation = current;
+    struct utsname systemInfo{};
+    uname(&systemInfo);
+    UIInterfaceOrientation geometryOrientation = UIInterfaceOrientationUnknown;
+    if (@available(iOS 16.0, *))
+      geometryOrientation = window.windowScene.effectiveGeometry.interfaceOrientation;
+    SDL_Log("iOS hardware button cue: %s; model=%s button=%d edge=%d "
+            "scene=%d sceneMain=%d orientation=%ld geometryOrientation=%ld root=%s "
+            "viewport=(%.2f,%.2f,%.2f,%.2f) screen=(%.2f,%.2f,%.2f,%.2f)",
+            reason, systemInfo.machine, static_cast<int>(model.button),
+            static_cast<int>(location.edge), window.windowScene != nil,
+            window.windowScene.screen == UIScreen.mainScreen,
+            static_cast<long>(current), static_cast<long>(geometryOrientation),
+            NSStringFromClass(window.rootViewController.view.class).UTF8String ?: "nil",
+            viewport.origin.x, viewport.origin.y, viewport.size.width, viewport.size.height,
+            screen.origin.x, screen.origin.y, screen.size.width, screen.size.height);
+  }
+  return location;
 }
 
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized() {

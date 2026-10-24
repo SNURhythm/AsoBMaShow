@@ -955,7 +955,18 @@ void testHardwareCueUsesRealViewHierarchy() {
     testButtonLocation = locateButton(modelForIdentifier("iPad16,3"), orientation, true);
     fixture.showGuidedAccessReminder();
     fixture.root.applyYogaLayout();
+    const auto *marker = fixture.guidedAccessButtonMarker;
+    expect(marker->getWidth() > 0 && marker->getHeight() > 0 &&
+           marker->getX() >= 0 && marker->getY() >= 0 &&
+           marker->getX() + marker->getWidth() <= rendering::window_width &&
+           marker->getY() + marker->getHeight() <= rendering::window_height,
+           "hardware marker has visible geometry within the screen");
     const auto *hint = fixture.guidedAccessButtonHint;
+    expect(hint->getWidth() > 0 && hint->getHeight() > 0 &&
+           hint->getX() >= 0 && hint->getY() >= 0 &&
+           hint->getX() + hint->getWidth() <= rendering::window_width &&
+           hint->getY() + hint->getHeight() <= rendering::window_height,
+           "hardware label has visible geometry within the screen");
     const auto *check = fixture.guidedAccessButtonCheck;
     const int textLeft = hint->getContentX() +
         (hint->getContentWidth() - hint->textureWidth()) / 2;
