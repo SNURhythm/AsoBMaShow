@@ -18,7 +18,7 @@ public:
     YGNodeStyleSetMaxWidthPercent(getNode(), 100);
   }
   void refreshWidth() {
-    setWidth(std::max(96.0f, std::ceil(preferredWidth_())));
+    setWidth(std::max(190.0f, std::ceil(preferredWidth_())));
   }
   void propagateLanguageChange() override {
     Button::propagateLanguageChange();

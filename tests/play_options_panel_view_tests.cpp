@@ -1024,7 +1024,7 @@ void testToggleWidthsFollowContentAcrossLayouts() {
       for (size_t index = 0; index < buttons.size(); ++index) {
         auto *button = buttons[index];
         compactWidths[index] = button->getWidth();
-        require(button->getWidth() >= 66 && button->getWidth() < 380,
+        require(button->getWidth() >= 190 && button->getWidth() < 380,
                 "named, current-value, and choice toggles stay compact in wide parents");
         require(button->getHeight() >= (compact ? 66 : 48), "compact toggle sizing preserves touch height");
       }

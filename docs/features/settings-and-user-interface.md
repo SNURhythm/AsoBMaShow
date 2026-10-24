@@ -125,7 +125,7 @@ values use a slider or editable numeric control rather than this rule.
   Captions and cycle icons share a contrasting foreground in both themes;
   disabled toggles use muted text.
 - Cycling toggles use compact content widths: label, state, icon, and padding,
-  capped at the available parent width. Align them to the start of their row;
+  with a 190-unit minimum when space permits, capped at the available parent width. Align them to the start of their row;
   do not grow them to fill unused space. Keep the normal touch-target height
   and refresh the width when the label or language changes. This applies to
   named toggles, current-value cycles, and two-state choice controls alike.
