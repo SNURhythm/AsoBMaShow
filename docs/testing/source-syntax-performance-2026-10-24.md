@@ -61,9 +61,34 @@ restores them, theme/resize changes work, practice backgrounds remain independen
 native copying preserves Unicode, and a wrapped range jumps directly into view.
 
 Android JNI and Java compilation plus Java/C++ paint-window equivalence checks
-passed locally. UIKit device and simulator compile checks passed. Mobile gesture
+passed locally. UIKit device and simulator compile checks passed; iOS gestures
 and rendering performance still need device runtime checks. Windows native tests
 require the Windows SDK/runtime unavailable on this machine; they are registered
 but were not compiled or run locally. Isolated Windows row-planning checks passed
 with sanitizers; native tests also cover mixed long/short rows and horizontal
 scrolling, but those assertions still need execution on Windows.
+
+## Android device validation
+
+A signed restricted-file release build was installed over the existing app on
+a Galaxy S20 FE (SM-G781N), Android 13, preserving its library. Startup selected
+the Vulkan renderer. The existing 81,382-byte, 3,246-line chart exercised the
+complete viewer/JNI path: syntax colors, wrapped data, touch scrolling,
+long-press selection and copy menu, practice highlighting with a direct jump,
+Close/reopen, and Back dismissing selection before closing the source. Sending
+the app to Home and bringing it back preserved the viewer, scroll and selection.
+No crash, ANR or native text error appeared in the app's runtime log.
+
+The device run caught an initial-position bug: Android's movement method moved
+the caret to EOF when focus arrived before layout, causing the source to open at
+the bottom. Explicitly placing the initial caret at zero after requesting focus
+fixes this without affecting later selection or practice navigation.
+
+The `native-document` instrumentation mode reproduced the bug before the fix
+(`Source opened at y=811481`) and passed afterwards. Its in-memory fixture has
+1,048,599 UTF-16 units and 29,538 cached spans. Open, initial layout and coloring
+took 909 ms in one device run; this includes native text layout and dispatch,
+not just syntax painting. It also verified Unicode clipboard contents, immediate
+distant practice focus, preserved selection/backgrounds, retired foreground
+colors, the 16,384-character/4,096-span limits, theme changes and resizing.
+The fixture adds no library files. See `android/README.md` for the command.

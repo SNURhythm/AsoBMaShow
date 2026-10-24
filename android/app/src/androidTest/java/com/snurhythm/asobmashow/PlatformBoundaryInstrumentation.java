@@ -57,6 +57,11 @@ public final class PlatformBoundaryInstrumentation extends Instrumentation {
         Bundle result = new Bundle();
         SSLSocketFactory originalFactory = HttpsURLConnection.getDefaultSSLSocketFactory();
         try {
+            if ("native-document".equals(arguments.getString("mode"))) {
+                result.putString("result", NativeDocumentInstrumentationChecks.run(this));
+                finish(Activity.RESULT_OK, result);
+                return;
+            }
             if ("import-copy-benchmark".equals(arguments.getString("mode"))) {
                 ImportCopyBenchmark.run(getTargetContext(), this, arguments);
                 result.putString("result", "PASS import copy benchmark; all copied bytes verified");

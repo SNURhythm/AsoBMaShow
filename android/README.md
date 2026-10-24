@@ -283,6 +283,16 @@ modified. The runner checks HTTP table/archive reads, HTTP-to-HTTPS upgrades,
 HTTPS-to-HTTP rejection, and that the rejected destination receives no request.
 Host-JVM lifecycle and copy regressions run through the existing Python tests.
 
+For the native chart source reader, run the matching instrumentation APK with
+`adb shell am instrument -w -e mode native-document
+com.snurhythm.asobmashow.test/com.snurhythm.asobmashow.PlatformBoundaryInstrumentation`.
+This opens a temporary overlay with roughly one million UTF-16 units and checks
+initial scroll/caret position, Unicode copying, distant practice focus, bounded
+syntax colors, theme/resize behavior and selection preservation. It writes the
+fixture's selected text to the clipboard, removes its overlay, and does not add
+files to the chart library. Inspect the `result=PASS` output; `am instrument` can
+exit successfully even when the reported test result is `FAIL`.
+
 The optional instrumentation mode `seed-saf` creates a small chart in
 `Download/AsoBMaShowTask5Saf`; use it only in an isolated test user. Launch the
 test-only `SafGrantActivity`, select that folder, then run mode `saf` with

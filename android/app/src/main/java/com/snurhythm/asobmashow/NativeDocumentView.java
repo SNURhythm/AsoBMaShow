@@ -125,6 +125,10 @@ final class NativeDocumentView {
             parent.getViewTreeObserver().addOnGlobalLayoutListener(layoutListener);
             layout();
             text.requestFocus();
+            // ArrowKeyMovementMethod moves the caret to EOF when focus arrives
+            // before the first layout. TextView then scrolls that caret into
+            // view. Start the read-only document at its beginning instead.
+            Selection.setSelection((Spannable) text.getText(), 0);
             if (Build.VERSION.SDK_INT >= 33) backCallback = BackApi33.register(activity, this::handleBack);
             // close() can run on the application worker while this UI task runs.
             if (closed.get()) remove();
