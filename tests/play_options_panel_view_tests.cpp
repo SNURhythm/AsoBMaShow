@@ -1,4 +1,5 @@
 #include "view/Button.h"
+#include "PlayOptionUtils.h"
 #include "scene/PracticePanelView.h"
 #include "view/ToggleButtonContent.h"
 #include "view/ClearLampColors.h"
@@ -703,6 +704,41 @@ void testPlayOptionsChoiceCallbacksLocksAndPopupClosure() {
   panel.applyYogaLayout();
   require(!panel.findViewByName("gauge-auto-shift-bounds")->getVisible(),
           "leaving bounded auto-shift hides lower-bound controls");
+}
+
+void testViewerCanReselectRandomizedPlayOptions() {
+  for (const bool viewer : {false, true}) {
+    PlayOptionsPanelState state;
+    int selections = 0;
+    PlayOptionsPanelView *owner = nullptr;
+    PlayOptionsPanelView panel(
+        {.onPlayOptionSelected = [&](const std::string &id) {
+           state.playOption = id;
+           ++selections;
+           owner->refresh(state);
+         },
+         .canReselectPlayOption = viewer
+             ? std::function<bool(const std::string &)>{[](const std::string &id) {
+                 return play_options::usesRandomizer(id);
+               }}
+             : std::function<bool(const std::string &)>{}},
+        {.width = 340.0f}, nullptr);
+    owner = &panel;
+    for (const auto option : play_options::kPlayOptions) {
+      state.playOption = option;
+      selections = 0;
+      panel.refresh(state);
+      panel.applyYogaLayout();
+      for (int attempt = 1; attempt <= 2; ++attempt) {
+        choosePanelOption(panel, "play-option-choice", state.playOption);
+        const int expected = viewer && play_options::usesRandomizer(state.playOption) ? attempt : 0;
+        require(selections == expected,
+                "only viewer random modes invoke a fresh selection callback when reselected");
+        require(panelChoice(panel, "play-option-choice").selectedId() == option,
+                "reselecting a random mode preserves the selected mode after refresh");
+      }
+    }
+  }
 }
 
 void testLaneOrderDraftTracksAuthoritativeSelectionAndProfile() {
@@ -1587,6 +1623,7 @@ int main() {
   testLanguageRefreshPreservesPlayOptionsEditingAndScroll();
   testPhoneOptionsReflowWithoutLosingSelection();
   testLaneCoverControlsAreAvailableInPlayOptions();
+  testViewerCanReselectRandomizedPlayOptions();
   testLaneOrderDraftTracksAuthoritativeSelectionAndProfile();
   testCustomLaneOrderRemainsVisibleInShuffleDropdown();
   testPlayOptionsChoiceCallbacksLocksAndPopupClosure();

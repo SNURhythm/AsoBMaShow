@@ -97,6 +97,8 @@ public:
     dropdown_->refresh(state_);
     update();
   }
+  // Opt in to repeat actions such as reshuffling the viewer's current mode.
+  void setReselectionPredicate(Select predicate) { canReselect_ = std::move(predicate); }
   const std::string &selectedId() const { return state_.selectedId; }
   void closeMenu() { auto state = state_; state.open = false; dropdown_->refresh(state); }
   void onLayout() override { update(); }
@@ -105,6 +107,7 @@ public:
 private:
   struct Item { Button *button; TextView *text; std::string id; };
   Select select_;
+  Select canReselect_;
   DropdownView::State state_;
   std::optional<DropdownView::State> pending_;
   std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);
@@ -196,7 +199,7 @@ private:
     if (!state_.enabled) return false;
     const auto option = std::ranges::find_if(state_.options, [&](const auto &item) { return item.id == id; });
     if (option == state_.options.end() || !option->available) return false;
-    if (state_.selectedId == id) return true;
+    if (state_.selectedId == id && (!canReselect_ || !canReselect_(id))) return true;
     const auto previous = state_.selectedId;
     state_.selectedId = id;
     const auto alive = alive_;

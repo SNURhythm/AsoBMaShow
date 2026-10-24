@@ -3759,6 +3759,9 @@ void ChartViewerScene::rebuildOptionsDrawer() {
        .onLaneOrderSubmitted = [this](const std::string &notation) {
          setViewerLaneAssign(notation);
        },
+       .canReselectPlayOption = [](const std::string &option) {
+         return play_options::usesRandomizer(option);
+       },
        .onLongNoteModeSelected = [this](const std::string &mode) {
          setViewerLongNoteMode(mode);
        },

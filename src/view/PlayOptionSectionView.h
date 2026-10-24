@@ -16,6 +16,7 @@ struct PlayOptionSectionCallbacks {
   std::function<void(const std::string &)> onOptionSelected;
   std::function<void(const std::string &)> onLaneOrderSubmitted;
   std::function<bool(const std::string &)> isOptionAllowed;
+  std::function<bool(const std::string &)> canReselectOption;
 };
 
 struct PlayOptionSectionLayout {

@@ -45,6 +45,7 @@ struct PlayOptionsPanelCallbacks {
   std::function<void(const std::string &)> onPlayOptionSelected;
   std::function<void(const std::string &)> onLaneOrderSubmitted;
   std::function<bool(const std::string &)> isPlayOptionAllowed;
+  std::function<bool(const std::string &)> canReselectPlayOption;
   std::function<void(const std::string &)> onLongNoteModeSelected;
   std::function<void(const std::string &)> onAssistOptionSelected;
   std::function<void(int)> onPlaybackRateSelected;

@@ -198,7 +198,8 @@ PlayOptionsPanelView::PlayOptionsPanelView(
            [this](const std::string &option) {
              return !callbacks.isPlayOptionAllowed ||
                     callbacks.isPlayOptionAllowed(option);
-           }},
+           },
+       .canReselectOption = callbacks.canReselectPlayOption},
       {.columns = layout.playOptionColumns,
        .rowHeight = rendering::compactMenuCanvasActive ? rendering::compactTouchTarget : 48.0f,
        .buttonFontSize = 15,

@@ -66,6 +66,7 @@ PlayOptionSectionView::PlayOptionSectionView(
     if (this->callbacks.onOptionSelected) this->callbacks.onOptionSelected(option);
     return true;
   }, overlayPortal, layout.buttonFontSize, layout.rowHeight);
+  optionChoice->setReselectionPredicate(this->callbacks.canReselectOption);
   optionChoice->setName("play-option-choice");
   addView(optionChoice);
 
