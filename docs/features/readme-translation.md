@@ -3,7 +3,7 @@
 The chart readme reader can copy the full displayed text, including lines outside
 the viewport. Translate defaults to the app language; choose another target with
 **Translate to**. Original and Translated select which text is displayed and copied.
-Changing file, encoding, source or target clears the translation. Nothing is written back
+Changing file, encoding, source, target or quality clears the translation. Nothing is written back
 to the chart folder or archive.
 
 Android translation is powered by [Google Translate](https://cloud.google.com/translate)
@@ -22,8 +22,11 @@ The translation engine controls the translated text's line breaks; the original
 text is always retained. Changing source cancels any pending translation and clears
 its result, just like changing the target.
 
-Apple uses Translation on iOS 18+ and macOS 15+. On iOS/macOS 26.4+, the app requests
-high-fidelity translation; Apple's framework falls back to its standard on-device
+Apple uses Translation on iOS 18+ and macOS 15+. On iOS/macOS 26.4+, **Standard (faster)** and
+**High fidelity** buttons select the translation strategy. Standard is the default
+and explicitly uses Apple’s low-latency model. The choice is retained while this
+reader instance is alive. Older Apple systems and Android hide these controls.
+High fidelity requests Apple Intelligence translation; Apple's framework falls back to its standard on-device
 model when high fidelity is unavailable. The system handles model download consent.
 Copy remains available on older Apple systems, Windows and Linux.
 

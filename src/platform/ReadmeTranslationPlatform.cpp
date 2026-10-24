@@ -7,6 +7,7 @@
 #include <jni.h>
 #elif defined(__APPLE__)
 extern "C" bool ReadmeAppleTranslationSupported();
+extern "C" bool ReadmeAppleTranslationQualitySupported();
 extern "C" void ReadmeAppleTranslate(std::uint64_t, const char *, const char *,
     void (*)(std::uint64_t, int, const char *));
 extern "C" void ReadmeAppleTranslationStop(std::uint64_t);
@@ -53,9 +54,17 @@ bool supported() {
   return false;
 #endif
 }
-void start(std::uint64_t id, const std::string &text, const std::string &target, const std::string &source) {
+bool qualitySelectionSupported() {
+#if defined(__APPLE__)
+  return ReadmeAppleTranslationQualitySupported();
+#else
+  return false;
+#endif
+}
+void start(std::uint64_t id, const std::string &text, const std::string &target,
+           const std::string &source, bool highFidelity) {
   const auto json = nlohmann::json{
-      {"text", text}, {"source", source},
+      {"text", text}, {"source", source}, {"highFidelity", highFidelity},
       {"translate", i18n::tr("readme.translation.translate")},
       {"preparing", i18n::tr("readme.translation.preparing")},
       {"cancel", i18n::tr("readme.translation.cancel")},

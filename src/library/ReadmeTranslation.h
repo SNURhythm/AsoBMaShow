@@ -26,7 +26,8 @@ private:
 // Thread-safe delivery. Unknown, cancelled and completed IDs are ignored.
 void deliver(std::uint64_t id, State state, std::string text);
 bool supported();
+bool qualitySelectionSupported();
 void start(std::uint64_t id, const std::string &text, const std::string &target,
-           const std::string &source = "auto");
+           const std::string &source = "auto", bool highFidelity = false);
 void stop(std::uint64_t id);
 }

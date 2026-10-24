@@ -36,11 +36,15 @@ private final class ReadmeTranslationHost: ObservableObject {
         self.callback = callback
         self.target = target
     }
+    @available(iOS 26.4, macOS 26.4, *)
+    private var preferredStrategy: TranslationSession.Strategy {
+        (labels["highFidelity"] as? Bool ?? false) ? .highFidelity : .lowLatency
+    }
     private func configure(source: String) {
         let language = Locale.Language(identifier: source)
         let destination = Locale.Language(identifier: target)
         if #available(iOS 26.4, macOS 26.4, *) {
-            configuration = .init(source: language, target: destination, preferredStrategy: .highFidelity)
+            configuration = .init(source: language, target: destination, preferredStrategy: preferredStrategy)
         } else {
             configuration = .init(source: language, target: destination)
         }
@@ -53,7 +57,7 @@ private final class ReadmeTranslationHost: ObservableObject {
         do {
             let availability: LanguageAvailability
             if #available(iOS 26.4, macOS 26.4, *) {
-                availability = LanguageAvailability(preferredStrategy: .highFidelity)
+                availability = LanguageAvailability(preferredStrategy: preferredStrategy)
             } else { availability = LanguageAvailability() }
             let languages = await availability.supportedLanguages
             try Task.checkCancellation()
@@ -157,6 +161,12 @@ private struct ReadmeTranslationProgress: View {
 @_cdecl("ReadmeAppleTranslationSupported")
 func readmeAppleTranslationSupported() -> Bool {
     if #available(iOS 18.0, macOS 15.0, *) { return true }
+    return false
+}
+
+@_cdecl("ReadmeAppleTranslationQualitySupported")
+func readmeAppleTranslationQualitySupported() -> Bool {
+    if #available(iOS 26.4, macOS 26.4, *) { return true }
     return false
 }
 

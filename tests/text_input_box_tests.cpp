@@ -2,6 +2,7 @@
 #include "scene/ChartReadmeModal.h"
 #include "view/LegalNoticeReader.h"
 #include "library/DocumentLinks.h"
+#include "library/ReadmeTranslation.h"
 #include "rendering/ResponsiveUi.h"
 #include "StorageTestSupport.h"
 #include "view/RecyclerView.h"
@@ -1098,6 +1099,24 @@ void testReadmeModalDisplaysAndCloses() {
   expect(copy && copy->isEnabled(), "loaded readme enables copying");
   expect(translate != nullptr, "readme exposes on-device translation action");
   expect(root.findViewByName("chartReadmeSource") != nullptr, "readme exposes manual source selection");
+  auto *standard = dynamic_cast<Button *>(root.findViewByName("chartReadmeStandard"));
+  auto *fidelity = dynamic_cast<Button *>(root.findViewByName("chartReadmeHighFidelity"));
+  expect(standard && fidelity, "readme owns both translation quality choices");
+  expect(standard->isSelected() && !fidelity->isSelected(), "translation defaults to faster standard quality");
+  const bool qualitySupported = readme_translation::qualitySelectionSupported();
+  expect(root.findViewByName("chartReadmeQuality")->getVisible() == qualitySupported,
+         "translation quality is shown only on supported platforms");
+  if (qualitySupported) {
+    for (auto *choice : {fidelity, standard}) {
+      const int x = choice->getX() + choice->getWidth() / 2;
+      const int y = choice->getY() + choice->getHeight() / 2;
+      auto down = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_DOWN, x, y);
+      auto up = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_UP, x, y);
+      modal->handleEvents(down); modal->handleEvents(up);
+      expect(choice->isSelected() && standard->isSelected() != fidelity->isSelected(),
+             "quality buttons switch the selected mode exclusively");
+    }
+  }
   auto *encoding = root.findViewByName("chartReadmeEncoding");
   expect(encoding && copy->getY() >= encoding->getY() + encoding->getHeight(),
          "reader actions do not overlap larger mobile dropdown targets");

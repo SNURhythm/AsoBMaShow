@@ -36,6 +36,9 @@ struct ChartReadmeModal::Impl {
   bool translating = false, showingTranslation = false;
   Button *copy = nullptr, *translate = nullptr, *original = nullptr, *translated = nullptr;
   View *modes = nullptr;
+  View *quality = nullptr;
+  Button *standard = nullptr, *highFidelity = nullptr;
+  bool preferHighFidelity = false;
   View *attribution = nullptr;
   DropdownView *targetSelector = nullptr, *sourceSelector = nullptr;
   DropdownView::State sourceSelection;
@@ -84,7 +87,9 @@ struct ChartReadmeModal::Impl {
     modes->setDisplay(translatedText.empty() ? YGDisplayNone : YGDisplayFlex);
     original->setSelected(!showingTranslation);
     translated->setSelected(showingTranslation);
-    for (auto *button : {original, translated}) {
+    standard->setSelected(!preferHighFidelity);
+    highFidelity->setSelected(preferHighFidelity);
+    for (auto *button : {original, translated, standard, highFidelity}) {
       modal_view::styleThemedActionButton(button, static_cast<TextView *>(button->getContentView()), true,
           button->isSelected() ? app_theme::primaryAction : app_theme::control,
           button->isSelected() ? app_theme::primaryActionHover : app_theme::controlHover,
@@ -222,6 +227,26 @@ ChartReadmeModal::ChartReadmeModal(View *parent) : impl_(std::make_unique<Impl>(
     result->setHeight(40)->setFlex(1)->setMinWidth(0);
     return result;
   };
+  v.quality = new View();
+  v.quality->setName("chartReadmeQuality");
+  v.quality->setFlexDirection(FlexDirection::Row)->setGap(8)->setHeight(40)->setFlexShrink(0);
+  const bool qualitySupported = readme_translation::qualitySelectionSupported();
+  v.quality->setVisible(qualitySupported);
+  v.quality->setDisplay(qualitySupported ? YGDisplayFlex : YGDisplayNone);
+  v.standard = button("readme.translation.standard", "chartReadmeStandard");
+  v.highFidelity = button("readme.translation.high_fidelity", "chartReadmeHighFidelity");
+  v.quality->addView(v.standard); v.quality->addView(v.highFidelity);
+  v.panel->addView(v.quality);
+  const auto selectQuality = [this](bool highFidelity) {
+    auto &v = *impl_;
+    if (v.preferHighFidelity == highFidelity) return;
+    v.cancelTranslation();
+    v.translatedText.clear();
+    v.preferHighFidelity = highFidelity;
+    v.showText(false);
+  };
+  v.standard->setOnClickListener([selectQuality] { selectQuality(false); });
+  v.highFidelity->setOnClickListener([selectQuality] { selectQuality(true); });
   auto *actions = new View();
   actions->setFlexDirection(FlexDirection::Row)->setGap(8)->setHeight(40)->setFlexShrink(0);
   v.panel->addView(actions);
@@ -245,7 +270,7 @@ ChartReadmeModal::ChartReadmeModal(View *parent) : impl_(std::make_unique<Impl>(
       v.showText(false);
       v.translating = true;
       v.status->setLocalizedText(i18n::message("readme.translation.preparing")); v.setStatusVisible(true);
-      readme_translation::start(v.translation.begin(), v.originalText, v.targetSelection.selectedId, v.sourceSelection.selectedId);
+      readme_translation::start(v.translation.begin(), v.originalText, v.targetSelection.selectedId, v.sourceSelection.selectedId, v.preferHighFidelity);
       ui::requestAnimationFrame();
     }
     v.refreshActions(); v.root->applyYogaLayout(); v.reflow(false);
@@ -304,7 +329,7 @@ std::unique_ptr<ChartReadmeModal> ChartReadmeModal::Create(View *parent) {
 }
 ChartReadmeModal::~ChartReadmeModal() {
   hide();
-  for (auto *button : {impl_->close, impl_->copy, impl_->translate, impl_->original, impl_->translated})
+  for (auto *button : {impl_->close, impl_->copy, impl_->translate, impl_->original, impl_->translated, impl_->standard, impl_->highFidelity})
     button->setOnClickListener(nullptr);
 }
 void ChartReadmeModal::show(const std::filesystem::path &chart, const std::string &title) {
