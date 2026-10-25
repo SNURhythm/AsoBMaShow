@@ -737,7 +737,13 @@ BMSRenderer::BMSRenderer(
   rebuildPlayAreaGeometry();
 
   titleText = std::make_unique<TextView>(app_theme::boldFont, 26);
-  titleText->setText(chart->Meta.Title);
+  std::string fullTitle = chart->Meta.Title;
+  if (!chart->Meta.SubTitle.empty()) {
+    if (!fullTitle.empty()) fullTitle += " ";
+    fullTitle += chart->Meta.SubTitle;
+  }
+  titleText->setText(fullTitle);
+  titleText->setMinimumFontSize(18);
   titleText->setAlign(TextView::LEFT);
   titleText->setVAlign(TextView::MIDDLE);
   titleText->setOverflow(TextView::TextOverflow::Marquee);

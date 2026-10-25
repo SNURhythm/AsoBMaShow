@@ -8,7 +8,48 @@ Scope: `SkinType.MUSIC_SELECT` (type 5) `.luaskin` support routed through the
 new `MusicSelectScene`, as designed in
 `docs/superpowers/specs/2026-09-01-beatoraja-lua-music-select-design.md`.
 
-Last updated: 2026-09-10.
+Last updated: 2026-10-25.
+
+## Random select (2026-10-25)
+
+Custom music-select skins receive Beatoraja's three default random entries at
+the beginning of the filtered list, in the same order:
+
+- `[RANDOM] RANDOM SELECT`: all playable charts, shown with at least two candidates.
+- `[RANDOM] NO PLAY RANDOM SELECT`: charts with no score or a play count of zero,
+  shown with at least one candidate.
+- `[RANDOM] FAILED RANDOM SELECT`: charts whose best clear lamp is Failed,
+  shown with at least one candidate. A failed EX-best play does not qualify a
+  chart that has a better clear from another attempt.
+
+Confirming a random row chooses uniformly from its eligible charts and uses the
+normal play, autoplay, or practice path. The selector stays on that random row
+after returning from play. Missing charts, folders, courses, and archive
+extraction actions are excluded. Existing random-select skin properties
+(including 1030) and bar artwork apply without skin changes. Ordinary title
+properties 10 and 12 remain blank on random rows, matching Beatoraja, so skins'
+random labels do not overlap a second copy of the entry title. The list bar
+retains its full category name.
+
+SQL-backed directories count score-filtered candidates using metadata and fetch
+only the chosen chart; indexed directories use compact metadata pools. Both use
+the current profile and selected long-note mode. Filters and sorting preserve
+ordinary song selection and rebuild eligibility without materializing rich
+metadata for a whole library. These are the three definitions shipped in
+Beatoraja's `random/default.json`; arbitrary user-authored filter files are not
+loaded.
+
+### Litone12 duplicate character placement
+
+Litone12's `Select/lua/sdchara.lua` includes random-select flag 1030 in both
+its song-position and folder-position character predicates. That draws two
+characters even with correct Beatoraja flags. The app preserves those flags;
+[the skin patch](patches/litone12-random-select-character.patch) removes 1030
+from the folder-position predicate for both stationary and jumping characters.
+Random rows retain the song-position character, and ordinary songs and folders
+keep their original placements. Apply it from the Litone12 package root with
+`git apply /path/to/litone12-random-select-character.patch`. Skin updates may
+require reapplying the patch. Random-course behavior is unchanged.
 
 ## Unzip All (2026-09-10)
 

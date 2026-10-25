@@ -17,6 +17,13 @@ the owning screen or component, control or state, and purpose. For example,
 Do not use sentence text, hashes, random values, or numbered placeholders as IDs.
 Keep IDs unchanged when editing English copy or moving implementation code.
 
+Enable the tracked pre-commit hook once per checkout with
+`git config core.hooksPath .githooks` (requires Python 3). When
+`src/i18n/Messages.inc` is staged, the hook sorts entries by ID in both the index
+and the working copy. Unstaged translation edits remain unstaged. Commits that
+do not stage the catalog leave it untouched. To sort the working copy manually,
+run `python3 scripts/sort_translation_keys.py`.
+
 Give independent controls separate contextual IDs even when their English text
 matches: `settings.audio.apply.label` and `settings.display.apply.label` can be
 translated independently. A control may reuse its ID when refreshing its text.

@@ -207,9 +207,41 @@ musicSelectIsSolidArchiveAction(const MusicSelectBar &bar) {
          !bar.chart->meta.BmsPath.empty();
 }
 
+[[nodiscard]] inline std::optional<ChartSelectorRandomFilter>
+musicSelectRandomFilter(const MusicSelectBar &bar) {
+  if (bar.kind != skin::MusicSelectBarKind::Executable) return std::nullopt;
+  if (bar.id.value == "action:random-select") return ChartSelectorRandomFilter::Any;
+  if (bar.id.value == "action:random-select-no-play") return ChartSelectorRandomFilter::NoPlay;
+  if (bar.id.value == "action:random-select-failed") return ChartSelectorRandomFilter::Failed;
+  return std::nullopt;
+}
+
+[[nodiscard]] inline bool
+musicSelectIsRandomSelectBar(const MusicSelectBar &bar) {
+  return musicSelectRandomFilter(bar).has_value();
+}
+
+[[nodiscard]] inline bool musicSelectIsRandomCandidate(
+    const MusicSelectBar &bar,
+    ChartSelectorRandomFilter filter = ChartSelectorRandomFilter::Any) {
+  return bar.kind == skin::MusicSelectBarKind::Song && bar.chart &&
+         !bar.chart->unavailable && !bar.chart->solidArchive &&
+         !bar.chart->meta.BmsPath.empty() &&
+         chartSelectorRandomFilterMatches(filter,
+             bar.score ? bar.score->playCount : 0, bar.presentation.lamp);
+}
+
 class MusicSelectRowProvider {
 public:
   virtual ~MusicSelectRowProvider() = default;
+  // Candidate lookup must use metadata/indexes, never enumerate paged rows.
+  [[nodiscard]] virtual std::size_t randomCandidateCount(
+      ChartSelectorRandomFilter = ChartSelectorRandomFilter::Any) const noexcept {
+    return 0;
+  }
+  [[nodiscard]] virtual const MusicSelectBar &randomCandidateAt(
+      std::size_t index,
+      ChartSelectorRandomFilter = ChartSelectorRandomFilter::Any) const { return at(index); }
   [[nodiscard]] virtual std::shared_ptr<MusicSelectRowProvider> clone() const = 0;
   [[nodiscard]] virtual std::size_t size() const noexcept = 0;
   [[nodiscard]] virtual const std::string &diagnostic() const noexcept {

@@ -399,6 +399,7 @@ int main() {
   activeFilters.scoreRankOrBelow = true;
   activeFilters.bpmMin = 120.0;
   activeFilters.bpmMax = 180.0;
+  activeFilters.keyMode = -7;
   activeFilters.difficultyMinLevel = "10";
   activeFilters.difficultyMaxLevel = "12";
   activeFilters.sort = {
@@ -411,6 +412,8 @@ int main() {
             "same-folder scope clears clear-mark filtering");
   ASSERT_EQ(false, sameFolderFilters.scoreRank.has_value(),
             "same-folder scope clears score filtering");
+  ASSERT_EQ(false, sameFolderFilters.keyMode.has_value(),
+            "same-folder scope clears key-mode filtering");
   ASSERT_EQ(false, sameFolderFilters.bpmMin.has_value(),
             "same-folder scope clears minimum BPM filtering");
   ASSERT_EQ(false, sameFolderFilters.bpmMax.has_value(),

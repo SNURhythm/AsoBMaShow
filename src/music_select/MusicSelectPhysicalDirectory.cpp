@@ -36,7 +36,7 @@ MusicSelectSqlSongs::ResolvedQuery resolveLegacyDurationQuery(
   const auto filters = index->configure(query.modeFilter, query.difficultyFilter,
                                          query.sortId, *stop);
   std::shared_ptr<const MusicSelectSongIndex> rows = std::move(index);
-  return {.count = rows->size(),
+  MusicSelectSqlSongs::ResolvedQuery result{.count = rows->size(),
           .resolvedFilters = filters,
           .loadPage = [session, rows, stop, context](std::size_t offset, std::size_t limit) {
             std::vector<std::filesystem::path> paths;
@@ -65,6 +65,15 @@ MusicSelectSqlSongs::ResolvedQuery resolveLegacyDurationQuery(
           .findIndex = [rows, context](std::string_view identity) {
             return rows->indexOf({context + ":" + std::string(identity)});
           }};
+  for (const auto filter : kChartSelectorRandomFilters) {
+    result.randomCounts[static_cast<std::size_t>(filter)] = rows->randomCandidateCount(filter);
+  }
+  result.loadRandomCandidate = [rows, loadPage = result.loadPage](
+      ChartSelectorRandomFilter filter, std::size_t index) -> std::optional<ChartMetaRecord> {
+    const auto records = loadPage(rows->randomCandidateRow(index, filter), 1);
+    return records.empty() ? std::nullopt : std::optional(records.front());
+  };
+  return result;
 }
 
 }
@@ -168,6 +177,11 @@ MusicSelectDirectoryLoader::Content loadMusicSelectPhysicalDirectory(
             },
             .findIndex = [session, query, primingStop](std::string_view identity) {
               return session->FindChartSelectorIndex(query, identity, *primingStop);
+            },
+            .randomCounts = session->CountChartSelectorRandomCandidates(query, *primingStop),
+            .loadRandomCandidate = [session, query, primingStop](
+                ChartSelectorRandomFilter filter, std::size_t index) {
+              return session->SelectChartSelectorRandomCandidate(query, filter, index, *primingStop);
             }};
       },
       [context = directory.id.value, input = std::move(input), primingStop](

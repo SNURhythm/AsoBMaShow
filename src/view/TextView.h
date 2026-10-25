@@ -28,6 +28,8 @@ public:
   void setAlign(TextAlign newAlign);
   void setVAlign(TextVAlign newVAlign);
   void setOverflow(TextOverflow newOverflow);
+  // Opt in to single-line shrinking before overflow; zero keeps the base size.
+  void setMinimumFontSize(int minimumSize);
   void setWrap(bool enabled);
   [[nodiscard]] bgfx::TextureHandle textureHandle() const { return texture; }
   [[nodiscard]] int textureWidth() const { return rect.w; }
@@ -99,6 +101,7 @@ protected:
   size_t nextFallbackFontPath = 0;
   std::unordered_map<Uint32, SelectedFont> fontSelectionCache;
   int fontSize = 0;
+  int minimumFontSize = 0;
   FontWeight fontWeight_ = FontWeight::Regular;
   int fontStyle_ = TTF_STYLE_NORMAL;
   int fontRasterSize = 0;

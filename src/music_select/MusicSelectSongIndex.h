@@ -17,6 +17,14 @@ public:
   configure(std::string_view mode, std::string_view difficulty,
              std::string_view sort, std::stop_token stop = {});
   [[nodiscard]] std::size_t size() const noexcept;
+  [[nodiscard]] std::size_t randomCandidateCount(
+      ChartSelectorRandomFilter filter = ChartSelectorRandomFilter::Any) const noexcept {
+    return randomRows_[static_cast<std::size_t>(filter)].size();
+  }
+  [[nodiscard]] std::size_t randomCandidateRow(
+      std::size_t index, ChartSelectorRandomFilter filter = ChartSelectorRandomFilter::Any) const {
+    return randomRows_[static_cast<std::size_t>(filter)].at(index);
+  }
   [[nodiscard]] const std::filesystem::path &pathAt(std::size_t) const;
   [[nodiscard]] const MusicSelectBarId &idAt(std::size_t) const;
   [[nodiscard]] const std::string &titleAt(std::size_t) const;
@@ -43,6 +51,8 @@ private:
     std::uint16_t difficulties = 0;
     bool hidden = false;
     bool exists = false;
+    bool randomCandidate = false;
+    int playCount = 0;
     bool hasScore = false;
     bool hasScoreRate = false;
     bool hasDuration = false;
@@ -62,6 +72,7 @@ private:
   std::vector<Entry> entries_;
   std::vector<std::string> hashes_;
   std::vector<std::size_t> rows_;
+  std::array<std::vector<std::size_t>, 3> randomRows_;
   std::vector<std::size_t> positions_;
   std::vector<std::size_t> identityOrder_;
   std::optional<Configuration> configuration_;

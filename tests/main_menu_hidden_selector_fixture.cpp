@@ -28,6 +28,7 @@ struct View {
  bool coversTabHeader(){return false;} void refreshLanguageIfNeeded(){} void update(float=0){} void handleDeferred(){}
  View* findViewByName(const char*){return nullptr;} int getHeight() const {return 0;}
  void updatePreviewGlow(float,float,std::function<int()>){}
+ void resize(int,int){}
 };
 struct ImageView { static inline int drops=0; static void dropAllCache(){++drops;} };
 struct Completion {std::filesystem::path chartPath;int targetIdentity=0,selectionGeneration=0;};
@@ -45,7 +46,7 @@ struct MainMenuScene {
  std::shared_ptr<Parsed> selectedChart;std::optional<ChartMetaRecord> selectedChartRecord;
  struct Player {float GetOutputLevel(){return 0;}int GetOutputSpectrum(){return 0;}}previewPlayer_;
  View *chartDetailsView_=nullptr,*irTab_=nullptr,*musicTab_=nullptr,*rootLayout=nullptr;
- View *archiveUnzipModal_=nullptr,*recordsModal_=nullptr,*parseLogModalRoot=nullptr,*musicModalRoot=nullptr,*tasksModalRoot=nullptr,*rankingsModal=nullptr;
+ View *archiveUnzipModal_=nullptr,*recordsModal_=nullptr,*parseLogModalRoot=nullptr,*musicModalRoot=nullptr,*tasksModalRoot=nullptr,*rankingsModal=nullptr,*readmeModal_=nullptr;
  std::atomic_bool tasksModalOpenRequested=false;
  struct PendingFindBmsSelectionHandoff {std::filesystem::path chartPath;int targetIdentity,selectionGeneration;};
  std::optional<PendingFindBmsSelectionHandoff> pendingFindBmsSelectionHandoff;

@@ -75,6 +75,8 @@ struct ChartMetaQuery {
   bool scoreRankOrBelow = false;
   std::optional<double> bpmMin;
   std::optional<double> bpmMax;
+  // Skin-category identity: -5/-7 are scratchless; 5/7 require scratch notes.
+  std::optional<int> keyMode;
   std::optional<std::string> difficultyMinLevel;
   std::optional<std::string> difficultyMaxLevel;
   std::optional<std::filesystem::path> exactFolder;
@@ -91,6 +93,8 @@ struct ChartMetaQuery {
 
   bool operator==(const ChartMetaQuery &) const = default;
 };
+
+enum class ChartSelectorRandomFilter : std::size_t { Any, NoPlay, Failed };
 
 struct ChartMetaRecord {
   bms_parser::ChartMeta meta;
@@ -126,7 +130,22 @@ struct ChartMetaRecord {
   std::string downloadUrl;
   std::string appendDownloadUrl;
   std::optional<std::vector<std::string>> originalMd5s;
+  std::optional<ChartSelectorRandomFilter> randomSelect;
 };
+
+inline constexpr std::array kChartSelectorRandomFilters{
+    ChartSelectorRandomFilter::Any, ChartSelectorRandomFilter::NoPlay,
+    ChartSelectorRandomFilter::Failed};
+
+[[nodiscard]] inline bool chartSelectorRandomFilterMatches(
+    ChartSelectorRandomFilter filter, int playCount, int lamp) noexcept {
+  switch (filter) {
+  case ChartSelectorRandomFilter::Any: return true;
+  case ChartSelectorRandomFilter::NoPlay: return playCount == 0;
+  case ChartSelectorRandomFilter::Failed: return lamp == 1;
+  }
+  return false;
+}
 
 struct ChartSelectorQueryResolution;
 
@@ -359,6 +378,17 @@ public:
                                            std::stop_token stop = {});
     std::vector<ChartMetaRecord> SelectChartSelectorPage(
         const ChartSelectorQuery &query, std::size_t offset, std::size_t limit,
+        std::stop_token stop = {});
+    std::array<std::size_t, 3> CountChartSelectorRandomCandidates(
+        const ChartSelectorQuery &, std::stop_token stop = {});
+    // One uniformly sampled row per category in the built-in selector's query.
+    // Any needs two candidates; the other categories need one. Unavailable
+    // categories are -1; pagination is ignored and no rich rows are loaded.
+    std::array<int, 3> RandomChartMetaIndices(
+        const ChartMetaQuery &, const ScoreBestCache &, const ScoreClearRankCache &,
+        std::stop_token stop = {});
+    std::optional<ChartMetaRecord> SelectChartSelectorRandomCandidate(
+        const ChartSelectorQuery &, ChartSelectorRandomFilter, std::size_t offset,
         std::stop_token stop = {});
     std::optional<std::size_t> FindChartSelectorIndex(
         const ChartSelectorQuery &query, std::string_view identity,

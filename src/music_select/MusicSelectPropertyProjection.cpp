@@ -465,8 +465,10 @@ void projectSelectedBar(Properties &out,
                        selected->kind == skin::MusicSelectBarKind::RandomCourse;
 
   if (!selected) return;
-  out.strings[10] = selected->title;
-  out.strings[12] = selected->title;
+  // ExecutableBar has no SongData in Beatoraja. Skins supply their own random
+  // label; publishing its bar title here draws ordinary and random text together.
+  out.strings[10] = out.booleans[1030] ? std::string{} : selected->title;
+  out.strings[12] = out.strings[10];
 
   if (archiveAction) {
     if (selected->chart) {

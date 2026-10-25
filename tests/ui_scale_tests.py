@@ -606,15 +606,28 @@ int main() {
                                        str(root / "cmake-build-debug/yoga/yoga/libyogacore.a"))])
             subprocess.run([str(binary)], check=True)
 
-    def test_empty_marquee_viewport_does_not_draw_unclipped_text(self):
+    def test_text_overflow_clips_and_shrinks_before_marquee(self):
         root = Path(__file__).resolve().parents[1]
         method = extract((root / "src/view/TextView.cpp").read_text(),
                          "void TextView::renderImpl(RenderContext &context)")
         # Exercise production geometry/overflow decisions before GPU submission.
-        method = method[:method.index("  const auto submitText")] + "  ++draws; if (!clip) ++unclippedDraws; }"
+        method = method[:method.index("  const auto submitText")] + "  lastDraw = drawRect; ++draws; if (!clip) ++unclippedDraws; }"
+        production = (root / "src/view/TextView.cpp").read_text()
+        method += "\n" + extract(production, "SDL_Rect TextView::resolvedTextRect() const")
+        method += "\n" + extract(production, "float TextView::marqueeOffset(int viewportWidth)")
         source = r"""
 #include <cmath>
 #include <optional>
+#include "view/TextAnimationTiming.h"
+using Uint64 = std::uint64_t;
+Uint64 ticks = 100;
+Uint64 SDL_GetTicks() { return ticks; }
+namespace ui {
+int frames = 0;
+Uint64 redraw = 0;
+void requestAnimationFrame() { ++frames; }
+void requestRedrawAt(Uint64 when) { redraw = when; }
+}
 struct SDL_Rect { int x,y,w,h; };
 struct RenderContext {};
 namespace bgfx { bool isValid(int value) { return value != 0; } }
@@ -624,14 +637,25 @@ struct TextView {
   int texture=1, width=0, height=30, draws=0, unclippedDraws=0;
   bool wrapEnabled=false;
   SDL_Rect rect{0,0,200,30};
-  SDL_Rect resolvedTextRect() { return rect; }
+  SDL_Rect lastDraw{};
+  enum TextAlign { LEFT, CENTER, RIGHT };
+  enum TextVAlign { TOP, MIDDLE, BOTTOM };
+  TextAlign align = LEFT;
+  TextVAlign valign = MIDDLE;
+  int fontSize = 26, minimumFontSize = 0;
+  Uint64 marqueeStartedAt = 0;
+  struct Bounds { float x, y, width, height; };
+  std::optional<Bounds> fit;
+  SDL_Rect resolvedTextRect() const;
   void createTexture() { texture=1; }
-  int getContentWidth() { return width; }
-  int getContentHeight() { return height; }
-  int getContentX() { return 0; }
+  int getContentWidth() const { return width; }
+  int getContentHeight() const { return height; }
+  int getContentX() const { return 0; }
+  int getContentY() const { return 0; }
+  int textLineHeight() const { return 30; }
   float getRotationDegrees() { return 0; }
-  std::optional<int> textFitBounds() { return std::nullopt; }
-  float marqueeOffset(int) { return 40; }
+  std::optional<Bounds> textFitBounds() const { return fit; }
+  float marqueeOffset(int);
   void renderImpl(RenderContext &);
 };
 PRODUCTION_METHOD
@@ -647,13 +671,37 @@ int main() {
     text.height=0; text.renderImpl(context);
     assert(text.draws==1 && "zero-height clipped labels must not draw across neighbouring rows");
   }
+  ui::redraw=0;
+  TextView title;
+  title.minimumFontSize=18; title.rect={0,0,260,26}; title.height=34;
+  title.width=300; title.renderImpl(context);
+  assert(title.lastDraw.w==260 && title.lastDraw.h==26 && title.lastDraw.y==4);
+  title.width=220; title.renderImpl(context);
+  assert(title.lastDraw.w==220 && title.lastDraw.h==22 && title.lastDraw.x==0);
+  assert(ui::redraw==0 && ui::frames==0);
+  title.width=180; title.renderImpl(context);
+  assert(title.lastDraw.w==180 && title.lastDraw.h==18 && ui::redraw==0);
+  title.width=132; title.renderImpl(context);
+  assert(title.lastDraw.w==180 && title.lastDraw.h==18 && title.lastDraw.x==0);
+  assert(ui::redraw==800);
+  ticks=1800; title.renderImpl(context); // 48-pixel travel + initial hold
+  assert(title.lastDraw.x==-48 && title.lastDraw.x+title.lastDraw.w==title.width);
+  title.width=300; title.renderImpl(context);
+  assert(title.lastDraw.w==260 && title.lastDraw.x==0);
+  title.minimumFontSize=0; title.width=132; title.renderImpl(context);
+  assert(title.lastDraw.w==260); // existing labels keep their original size
+  title.minimumFontSize=18; title.wrapEnabled=true; title.renderImpl(context);
+  assert(title.lastDraw.w==260); // wrapping keeps its measured layout
+  title.wrapEnabled=false; title.fit=TextView::Bounds{0,0,100,10}; title.renderImpl(context);
+  assert(title.lastDraw.w==100 && title.lastDraw.h==10); // explicit fit still wins
 }
 """.replace("PRODUCTION_METHOD", method)
         with tempfile.TemporaryDirectory(prefix="asobmashow-marquee-") as temp:
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"
             path.write_text(source)
-            FixtureCompiler.from_environment(shared_headers=True).build([path], binary, Path(temp), standard=23)
+            FixtureCompiler.from_environment(shared_headers=True).build(
+                [path], binary, Path(temp), standard=23, includes=[root / "src"])
             subprocess.run([str(binary)], check=True)
 
     def test_preview_actions_share_a_row_in_both_orientations(self):
@@ -757,7 +805,10 @@ int main() {
             renderer, "std::array<float, 4> BMSRenderer::gameplayHudTitleRect() const")
         methods += "\n" + extract(renderer, "float gameplayHudMetricsHeight(bool showPacemaker)")
         methods += "\n" + extract(renderer, "float gameplayHudMetricsY(bool showPacemaker)")
+        title = renderer[renderer.index("  std::string fullTitle = chart->Meta.Title;"):
+                         renderer.index("  titleText->setAlign(TextView::LEFT);")]
         source = r'''
+#include <string>
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -792,8 +843,27 @@ int main() {
   renderer.presentationOrientation=player_settings::PresentationOrientation::Landscape;
   const auto rect=renderer.gameplayHudTitleRect();
   assert(rect[0]==20+28 && rect[1]==30+28 && rect[2]==200-48-18);
+  const auto titleFor = [](std::string name, std::string subtitle) {
+    struct Chart { struct { std::string Title, SubTitle; } Meta; } value{{name,subtitle}};
+    const auto *chart=&value;
+    struct Label {
+      std::string text;
+      int minimum=0;
+      void setText(const std::string &value) { text=value; }
+      void setMinimumFontSize(int value) { minimum=value; }
+    } label;
+    auto *titleText=&label;
+    PRODUCTION_TITLE
+    assert(label.minimum==18);
+    return label.text;
+  };
+  assert(titleFor("Song", "[ANOTHER]")=="Song [ANOTHER]");
+  assert(titleFor("Song", "")=="Song");
+  assert(titleFor("", "Subtitle")=="Subtitle");
+  assert(titleFor("", "").empty());
+  assert(titleFor("곡명", "부제")=="곡명 부제");
 }
-'''.replace("PRODUCTION_METHODS", methods)
+'''.replace("PRODUCTION_METHODS", methods).replace("PRODUCTION_TITLE", title)
         with tempfile.TemporaryDirectory(prefix="asobmashow-title-hud-") as temp:
             path = Path(temp) / "test.cpp"
             binary = Path(temp) / "test"

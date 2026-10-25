@@ -2,14 +2,73 @@
 
 from collections import Counter
 import json
+import os
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 import unittest
 
 
 ROOT = Path(__file__).resolve().parents[1]
 KEY = re.compile(r"[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*){2,}")
 LITERAL = r'"(?:[^"\\]|\\.)*"'
+
+
+class TranslationKeyHookTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory(prefix="translation-hook-")
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.environment = {key: value for key, value in os.environ.items()
+                            if key not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")}
+        self.git("init", "--quiet")
+        self.git("config", "user.name", "Hook test")
+        self.git("config", "user.email", "hook-test@example.invalid")
+        self.git("config", "commit.gpgsign", "false")
+        self.git("config", "core.autocrlf", "false")
+        self.git("config", "core.hooksPath", str(ROOT / ".githooks"))
+        self.catalog = self.root / "src/i18n/Messages.inc"
+        self.catalog.parent.mkdir(parents=True)
+        self.header = b"// Keep the catalog header.\n"
+        self.a = b'{"test.alpha.label", "Alpha", "A", "A", "A", "A"},\n'
+        self.z = b'{"test.zulu.label", "Zulu", "Z", "Z", "Z", "Z"},\n'
+
+    def git(self, *args):
+        return subprocess.check_output(["git", *args], cwd=self.root,
+                                       env=self.environment, stderr=subprocess.STDOUT)
+
+    def test_commit_sorts_staged_catalog_and_working_copy(self):
+        self.catalog.write_bytes(self.header + self.z + self.a)
+        self.git("add", "src/i18n/Messages.inc")
+        self.git("commit", "--quiet", "-m", "Add catalog")
+        expected = self.header + self.a + self.z
+        self.assertEqual(self.git("show", "HEAD:src/i18n/Messages.inc"), expected)
+        self.assertEqual(self.catalog.read_bytes(), expected)
+        self.assertEqual(self.git("status", "--porcelain"), b"")
+
+    def test_partial_staging_keeps_unstaged_translation_edits_out_of_commit(self):
+        self.catalog.write_bytes(self.header + self.z + self.a)
+        self.git("add", "src/i18n/Messages.inc")
+        local_a = self.a.replace(b'"Alpha"', '"Unstaged 한국어"'.encode())
+        self.catalog.write_bytes(self.header + self.z + local_a)
+        self.git("commit", "--quiet", "-m", "Stage catalog only")
+        self.assertEqual(self.git("show", "HEAD:src/i18n/Messages.inc"),
+                         self.header + self.a + self.z)
+        self.assertEqual(self.catalog.read_bytes(), self.header + local_a + self.z)
+        self.assertEqual(self.git("diff", "--cached"), b"")
+        self.assertIn(b"Unstaged", self.git("diff"))
+
+    def test_unrelated_commit_does_not_touch_unstaged_catalog(self):
+        self.catalog.write_bytes(self.header + self.a + self.z)
+        self.git("add", ".")
+        self.git("commit", "--quiet", "-m", "Initial catalog")
+        unsorted = self.header + self.z + self.a
+        self.catalog.write_bytes(unsorted)
+        (self.root / "other.txt").write_text("Unrelated change\n")
+        self.git("add", "other.txt")
+        self.git("commit", "--quiet", "-m", "Other file")
+        self.assertEqual(self.catalog.read_bytes(), unsorted)
 
 
 class LocalizationCatalogTests(unittest.TestCase):

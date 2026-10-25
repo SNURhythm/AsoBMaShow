@@ -1526,6 +1526,118 @@ void testRetainedDropdownChangesDensity() {
   rendering::compactMenuCanvasActive = false;
 }
 
+void testChartKeyModeFilterChoices() {
+  View root(0, 0, 472, 900);
+  std::optional<int> selected;
+  bool open = false;
+  auto *panel = new ChartFilterPanelView({
+      .onKeyModeChanged = [&](std::optional<int> value) { selected = value; },
+      .onKeyModeDropdownChanged = [&](bool value) { open = value; },
+  });
+  root.addView(panel);
+  ChartFilterPanelView::State state;
+  panel->refresh(state, true);
+  root.applyYogaLayout();
+  auto *dropdown = dynamic_cast<DropdownView *>(panel->getContentView()->getChildren()[1]->getChildren()[0]);
+  require(dropdown != nullptr, "key-mode filter is a dropdown");
+  const std::vector<std::pair<std::string, std::string>> expected{
+      {"", "All"}, {"4", "4K"}, {"-5", "5K"}, {"5", "5K1S"},
+      {"6", "6K"}, {"-7", "7K"}, {"7", "7K1S"}, {"8", "8K"},
+      {"9", "9K"}, {"10", "5KDP"}, {"14", "7KDP"}, {"24", "24K"}, {"48", "48K"}};
+  require(dropdown->current.options.size() == expected.size(), "all skin key categories are offered");
+  for (std::size_t i = 0; i < expected.size(); ++i) {
+    require(dropdown->current.options[i].id == expected[i].first &&
+                dropdown->current.options[i].label.resolve() == expected[i].second,
+            "key-mode order and labels match skin settings");
+  }
+  click(*dropdown->triggerButton);
+  require(open, "key-mode trigger opens through its scene callback");
+  state.keyModeDropdownOpen = true;
+  panel->refresh(state, true);
+  click(*dropdown->optionButtons[5].button);
+  require(selected == -7, "scratchless 7K selection retains its distinct identity");
+  state.filters.keyMode = selected;
+  state.keyModeDropdownOpen = false;
+  panel->refresh(state, true);
+  require(dropdown->triggerText->getText() == "7K", "closed filter shows the selected category");
+  state.keyModeDropdownOpen = true;
+  panel->refresh(state, true);
+  click(*dropdown->optionButtons[0].button);
+  require(!selected.has_value(), "All resets key-mode filtering");
+}
+
+void testChartFiltersScrollInShortLandscape() {
+  rendering::compactMenuCanvasActive = true;
+  OverlayPortal portal(0, 0, 1398, 645);
+  View root(0, 0, 472, 363);
+  root.setFlexDirection(FlexDirection::Column)->setGap(12);
+  auto *search = new View();
+  search->setHeight(66);
+  root.addView(search);
+  auto *panel = new ChartFilterPanelView({}, &portal);
+  root.addView(panel);
+  auto *songs = new View();
+  songs->setFlex(1)->setMinHeight(0);
+  root.addView(songs);
+  ChartFilterPanelView::State state;
+  state.difficultyRangeEnabled = true;
+  state.difficultyLevels = {{.level = "1"}, {.level = "2"}};
+  panel->refresh(state, true);
+  for (const int height : {363, 900, 363}) {
+    root.setHeight(height);
+    root.applyYogaLayout();
+    if (panel->getHeight() > (height + 1) / 2 || songs->getHeight() < 66) {
+      std::cerr << "Filter layout: root=" << root.getHeight()
+                << " panel=" << panel->getHeight() << " songs=" << songs->getHeight()
+                << " search=" << search->getHeight() << '\n';
+    }
+    require(panel->getHeight() <= (height + 1) / 2 && songs->getHeight() >= 66,
+            "short landscape keeps a chart row below the bounded filter viewport");
+    require(songs->getY() + songs->getHeight() <= root.getY() + height,
+            "filters and list stay above the play dock");
+    panel->scrollToBottom();
+    auto *last = panel->getContentView()->getChildren().back();
+    require(last->getY() >= panel->getY() &&
+                last->getY() + last->getHeight() <= panel->getY() + panel->getHeight(),
+            "bottom filter controls remain reachable by scrolling");
+  }
+  state.keyModeDropdownOpen = true;
+  panel->setScrollOffset(0);
+  panel->refresh(state, true);
+  auto *dropdown = dynamic_cast<DropdownView *>(panel->getContentView()->getChildren()[1]->getChildren()[0]);
+  require(dropdown->menuOwnedByPortal && dropdown->menuScroll->getVisible(),
+          "filter popup uses the overlay portal to escape scroll clipping");
+  for (const bool touch : {false, true}) {
+    panel->refresh(state, true);
+    SDL_Event outside{};
+    if (touch) {
+      outside.type = SDL_EVENT_FINGER_DOWN;
+      outside.tfinger.fingerID = 1;
+      outside.tfinger.x = 1000.0f / rendering::window_width;
+      outside.tfinger.y = 700.0f / rendering::window_height;
+    } else {
+      outside.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+      outside.button.button = SDL_BUTTON_LEFT;
+      outside.button.x = 1000;
+      outside.button.y = 700;
+    }
+    root.handleEvents(outside);
+    require(!dropdown->menuScroll->getVisible(),
+            "mouse and touch outside the scroll viewport dismiss filter popups");
+  }
+  panel->refresh(state, true);
+  auto *bpm = findInput(*panel->getContentView());
+  require(bpm != nullptr, "scrolling filter content contains BPM input");
+  bpm->beginEditing();
+  require(bpm->getSelected(), "BPM input owns editing focus");
+  panel->refresh(state, false);
+  root.applyYogaLayout();
+  require(panel->getHeight() == 0, "closing the filter returns space to the chart list");
+  require(!dropdown->menuScroll->getVisible(), "closing filters also closes portal popups");
+  require(!bpm->getSelected(), "closing filters ends editing in separately owned scroll content");
+  rendering::compactMenuCanvasActive = false;
+}
+
 void testChartFilterRowsContainCompactDropdowns() {
   for (const bool initiallyCompact : {true, false}) {
     rendering::compactMenuCanvasActive = initiallyCompact;
@@ -1548,11 +1660,11 @@ void testChartFilterRowsContainCompactDropdowns() {
             root.setWidth(compact ? 320 : 472);
             root.applyYogaLayout();
             const int rowHeight = compact ? 66 : 42;
-            const auto &groups = panel->getChildren();
+            const auto &groups = panel->getContentView()->getChildren();
             const bool showDifficulty = difficultyEnabled && hasLevels;
-            for (const auto index : {1U, 3U, 6U}) {
-              if ((index == 1 && !clearMarkVisible) || (index == 6 && !showDifficulty)) continue;
-              View *row = index == 6 ? groups[index]->getChildren()[1] : groups[index];
+            for (const auto index : {1U, 3U, 5U, 8U}) {
+              if ((index == 3 && !clearMarkVisible) || (index == 8 && !showDifficulty)) continue;
+              View *row = index == 8 ? groups[index]->getChildren()[1] : groups[index];
               for (View *control : row->getChildren()) {
                 require(control->getY() >= row->getY() &&
                             control->getY() + control->getHeight() <= row->getY() + row->getHeight(),
@@ -1569,7 +1681,7 @@ void testChartFilterRowsContainCompactDropdowns() {
                 }
               }
             }
-            int bottom = panel->getY();
+            int bottom = panel->getContentView()->getY();
             for (View *group : groups) {
               if (!group->getVisible()) continue;
               require(group->getY() >= bottom, "chart filter sibling groups must not overlap");
@@ -1579,12 +1691,13 @@ void testChartFilterRowsContainCompactDropdowns() {
                         "chart filter difficulty section must contain its dropdown row");
               }
             }
-            require(bottom <= panel->getY() + panel->getHeight(),
+            require(bottom <= panel->getContentView()->getY() + panel->getContentView()->getHeight(),
                     "chart filter preferred height must contain all visible groups");
-            const int expectedHeight = (clearMarkVisible ? 276 : 186) +
+            const int expectedHeight = (clearMarkVisible ? 366 : 276) +
                 (showDifficulty ? 78 : 0) +
-                (compact ? (clearMarkVisible ? 48 : 24) + (showDifficulty ? 24 : 0) : 0);
-            require(panel->getHeight() == expectedHeight,
+                (compact ? (clearMarkVisible ? 72 : 48) + (showDifficulty ? 24 : 0) : 0);
+            require(panel->getContentView()->getHeight() == expectedHeight &&
+                        panel->getHeight() == std::min(expectedHeight, 450),
                     "chart filter preferred height preserves desktop geometry and grows for compact rows");
           }
           panel->refresh(state, false);
@@ -1632,6 +1745,8 @@ int main() {
   testDropdownDefersOptionViewsUntilOpen();
   testInputSelectorWidthsStayStableAcrossRefreshes();
   testRetainedDropdownChangesDensity();
+  testChartKeyModeFilterChoices();
+  testChartFiltersScrollInShortLandscape();
   testChartFilterRowsContainCompactDropdowns();
   testDropdownSelectionDefersTeardownUntilItsCallbackReturns();
   testStoragePolicyDirectSelection();

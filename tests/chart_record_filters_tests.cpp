@@ -35,6 +35,15 @@ int main() {
   ChartRecordFilters filters;
   ASSERT_FALSE(chart_record_filters::hasActiveCriteria(filters),
                "empty filters active");
+  filters.keyMode = -7;
+  ASSERT_TRUE(chart_record_filters::hasActiveCriteria(filters),
+              "key mode alone is an active filter");
+  ChartMetaQuery keyModeQuery;
+  chart_record_filters::applyToQuery(keyModeQuery, filters, false);
+  ASSERT_EQ(-7, keyModeQuery.keyMode.value_or(0), "scratchless key mode query");
+  filters = {};
+  chart_record_filters::applyToQuery(keyModeQuery, filters, false);
+  ASSERT_FALSE(keyModeQuery.keyMode.has_value(), "All clears the key mode query");
 
   ASSERT_TRUE(main_menu_library::difficultyRangeEnabledForFolder(
                   true, false, 1, ""),

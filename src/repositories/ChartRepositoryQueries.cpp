@@ -34,6 +34,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <random>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -610,6 +611,7 @@ bool chartMetaQueryNeedsScoreCache(const ChartMetaQuery &chartQuery) {
 bool chartMetaQueryNeedsChartJoinForDifficultyEntries(
     const ChartMetaQuery &chartQuery) {
   return !chartQuery.keyword.empty() || chartQuery.clearMarkFilter ||
+         chartQuery.keyMode.has_value() ||
          chartQuery.exactFolder.has_value() ||
          chartQuery.parentFolder.has_value() ||
          chartQuery.recursiveFolder.has_value() ||
@@ -621,6 +623,7 @@ bool chartMetaQueryNeedsChartJoinForDifficultyEntries(
 bool chartMetaQueryNeedsChartJoinForCourseEntries(
     const ChartMetaQuery &chartQuery) {
   return !chartQuery.keyword.empty() || chartQuery.clearMarkFilter ||
+         chartQuery.keyMode.has_value() ||
          chartQuery.exactFolder.has_value() ||
          chartQuery.parentFolder.has_value() ||
          chartQuery.recursiveFolder.has_value() ||
@@ -719,8 +722,19 @@ void bindExactFolderFilter(sqlite3_stmt *stmt, int &bindIndex,
   }
 }
 
-void appendBpmFilters(std::string &query, const std::string &chartAlias,
-                      const ChartMetaQuery &chartQuery) {
+void appendChartMetadataFilters(std::string &query, const std::string &chartAlias,
+                                 const ChartMetaQuery &chartQuery) {
+  if (chartQuery.keyMode.has_value()) {
+    query += " AND " + chartAlias + ".keys = @key_mode";
+    const int mode = *chartQuery.keyMode;
+    if (mode == 5 || mode == 7 || mode == -5 || mode == -7) {
+      // Match the library's labels without parsing chart payloads. Long scratches
+      // count as scratches even when there are no ordinary scratch notes.
+      query += mode < 0 ? " AND NOT (" : " AND (";
+      query += "COALESCE(" + chartAlias + ".total_scratch_notes,0) > 0 OR COALESCE(" +
+               chartAlias + ".total_backspin_notes,0) > 0)";
+    }
+  }
   if (!chartMetaQueryHasBpmFilter(chartQuery)) {
     return;
   }
@@ -806,6 +820,10 @@ void appendDifficultyEntryScoreRankFilter(std::string &query,
 
 void bindCommonChartFilterParameters(sqlite3_stmt *stmt, int &bindIndex,
                                      const ChartMetaQuery &chartQuery) {
+  if (chartQuery.keyMode.has_value()) {
+    const int mode = *chartQuery.keyMode;
+    sqlite3_bind_int(stmt, bindIndex++, mode == -5 || mode == -7 ? -mode : mode);
+  }
   if (chartQuery.bpmMin.has_value()) {
     sqlite3_bind_double(stmt, bindIndex++, *chartQuery.bpmMin);
   }
@@ -1141,7 +1159,7 @@ void appendChartMetaFilters(std::string &query,
     query += "))";
   }
 
-  appendBpmFilters(query, "cm", chartQuery);
+  appendChartMetadataFilters(query, "cm", chartQuery);
   appendChartScoreRankFilter(query, "cm", chartQuery);
   if (chartQuery.clearMarkFilter) {
     query += " AND ";
@@ -1201,7 +1219,7 @@ void appendDifficultyEntryFilters(std::string &query,
   }
   appendExactFolderFilter(query, "cm", chartQuery);
   appendDifficultyLevelRangeFilter(query, chartQuery);
-  appendBpmFilters(query, "cm", chartQuery);
+  appendChartMetadataFilters(query, "cm", chartQuery);
   appendDifficultyEntryScoreRankFilter(query, "dte", "cm", chartQuery);
   if (chartQuery.clearMarkFilter) {
     query += " AND ";
@@ -1250,7 +1268,7 @@ void appendDifficultyCourseEntryFilters(std::string &query,
     query += " LIKE @text";
   }
   appendExactFolderFilter(query, "cm", chartQuery);
-  appendBpmFilters(query, "cm", chartQuery);
+  appendChartMetadataFilters(query, "cm", chartQuery);
   appendDifficultyEntryScoreRankFilter(query, "dce", "cm", chartQuery);
   if (chartQuery.clearMarkFilter) {
     query += " AND ";
@@ -1849,6 +1867,55 @@ private:
   bool active_;
 };
 
+class SelectorRandomFunction {
+public:
+  SelectorRandomFunction(sqlite3 *database, const ChartSelectorQuery &query)
+      : database_(database), query_(query) {
+    if (sqlite3_create_function_v2(database_, "selector_random_flags", 4,
+        SQLITE_UTF8 | SQLITE_DETERMINISTIC, this, evaluate, nullptr, nullptr,
+        nullptr) != SQLITE_OK) {
+      throw std::runtime_error(sqlite3_errmsg(database_));
+    }
+  }
+  ~SelectorRandomFunction() {
+    sqlite3_create_function_v2(database_, "selector_random_flags", 4,
+        SQLITE_UTF8, nullptr, nullptr, nullptr, nullptr, nullptr);
+  }
+private:
+  static void evaluate(sqlite3_context *context, int, sqlite3_value **values) {
+    try {
+      const auto &query = static_cast<SelectorRandomFunction *>(
+          sqlite3_user_data(context))->query_;
+      const auto *text = reinterpret_cast<const char *>(sqlite3_value_text(values[0]));
+      const std::string hash = text ? std::string(text, sqlite3_value_bytes(values[0]))
+                                    : std::string{};
+      const int mode = scoreLongNoteModeForClearLamp(sqlite3_value_int(values[1]),
+          sqlite3_value_int(values[2]), sqlite3_value_int(values[3]),
+          query.selectedLongNoteMode);
+      const auto score = query.best ? query.best->bestForHash(hash, mode) : std::nullopt;
+      const int rank = query.clears ? query.clears->bestRankForHash(hash, mode)
+          : score ? score->clearType : kNoClearTypeRank;
+      int flags = 0;
+      for (const auto filter : kChartSelectorRandomFilters) {
+        if (chartSelectorRandomFilterMatches(filter, score ? score->playCount : 0,
+                                              beatorajaSongClearType(rank))) {
+          flags |= 1 << static_cast<int>(filter);
+        }
+      }
+      sqlite3_result_int(context, flags);
+    } catch (const std::exception &error) {
+      sqlite3_result_error(context, error.what(), -1);
+    } catch (...) {
+      sqlite3_result_error(context, "random selection score lookup failed", -1);
+    }
+  }
+  sqlite3 *database_;
+  const ChartSelectorQuery &query_;
+};
+
+const std::string kSelectorRandomFlags =
+    "selector_random_flags(cm.sha256,cm.ln_mode,cm.total_long_notes,cm.total_backspin_notes)";
+
 const std::string kSelectorScore =
     "selector_score(cm.sha256,cm.ln_mode,cm.total_long_notes,cm.total_backspin_notes)";
 
@@ -2006,6 +2073,130 @@ std::vector<ChartMetaRecord> ChartRepository::Session::SelectChartSelectorPage(
       readSelectorSnapshot(database, impl_->storage, query, stop));
   if (reverse) std::ranges::reverse(records);
   return records;
+}
+
+std::array<std::size_t, 3> ChartRepository::Session::CountChartSelectorRandomCandidates(
+    const ChartSelectorQuery &query, std::stop_token stop) {
+  auto *database = impl_->database();
+  ScopedReadCancellation cancellation(database, stop);
+  const auto snapshot = readSelectorSnapshot(database, impl_->storage, query, stop);
+  if (query.resolution) validateSelectorSnapshot(query.resolution->snapshot, snapshot);
+  SelectorRandomFunction random(database, query);
+  SelectorReadQuery groups(database, query,
+      "SELECT " + kSelectorRandomFlags + ", COUNT(*)" + selectorFrom(query) + " GROUP BY 1", stop);
+  std::array<std::size_t, 3> counts{};
+  while (groups.next()) {
+    const int flags = sqlite3_column_int(groups.get(), 0);
+    const auto count = static_cast<std::size_t>(sqlite3_column_int64(groups.get(), 1));
+    for (std::size_t index = 0; index < counts.size(); ++index) {
+      if (flags & (1 << index)) counts[index] += count;
+    }
+  }
+  validateSelectorSnapshot(snapshot,
+      readSelectorSnapshot(database, impl_->storage, query, stop));
+  return counts;
+}
+
+std::array<int, 3> ChartRepository::Session::RandomChartMetaIndices(
+    const ChartMetaQuery &query, const ScoreBestCache &best,
+    const ScoreClearRankCache &clears, std::stop_token stop) {
+  checkReadCancelled(stop);
+  std::array<int, 3> selected{-1, -1, -1};
+  if (query.solidArchivesOnly || chartMetaQueryHasCourseFilter(query)) return selected;
+  auto *database = impl_->database();
+  std::optional<ScoreRepository::PreparedScoreQueryDatabase> prepared;
+  if (chartMetaQueryNeedsScoreCache(query)) {
+    prepared.emplace(impl_->scoreRepository(), *this);
+    if (const auto &error = prepared->error()) throw std::runtime_error(*error);
+  }
+  ScopedReadCancellation cancellation(database, stop);
+  if (queryNeedsDifficultyTableSchema(query) &&
+      !chart_repository_detail::EnsureDifficultySchema(database)) {
+    throw std::runtime_error(sqlite3_errmsg(database));
+  }
+  // Keep the same row order and missing-entry positions as QueryChartMeta.
+  // Reservoir sampling retains only three indices and reads no chart payloads.
+  const bool table = chartMetaQueryUsesDifficultyEntries(query);
+  std::string sql = "SELECT COALESCE(cm.path, '') != '', ";
+  sql += table ? "COALESCE(NULLIF(dte.sha256, ''), cm.sha256, '')" : "cm.sha256";
+  sql += ", cm.ln_mode, cm.total_long_notes, cm.total_backspin_notes";
+  if (table) {
+    sql += " FROM difficulty_table_entries dte "
+           "JOIN difficulty_tables dt ON dt.id = dte.table_id "
+           "LEFT JOIN chart_meta cm ON cm.path = ";
+    sql += matchedChartPathSubquery("dte", true) + " ";
+    appendDifficultyEntryFilters(sql, query);
+    appendDifficultyEntryOrderBy(sql, query);
+  } else {
+    sql += " FROM chart_meta cm WHERE 1 = 1";
+    appendChartMetaFilters(sql, query);
+    appendChartMetaOrderBy(sql, query, "cm");
+  }
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(database, sql, statement) != SQLITE_OK) {
+    throw std::runtime_error(sqlite3_errmsg(database));
+  }
+  int bindIndex = 1;
+  if (table) bindDifficultyEntryFilterParameters(statement, bindIndex, query);
+  else bindChartMetaFilterParameters(statement, bindIndex, query);
+  static thread_local std::mt19937_64 random(std::random_device{}());
+  std::array<int, 3> counts{};
+  int index = 0;
+  while (stepReadRow(database, statement, stop)) {
+    if (sqlite3_column_int(statement, 0)) {
+      const auto hash = columnString(statement, 1);
+      const int mode = scoreLongNoteModeForClearLamp(sqlite3_column_int(statement, 2),
+          sqlite3_column_int(statement, 3), sqlite3_column_int(statement, 4),
+          query.selectedLongNoteMode);
+      const auto score = best.bestForHash(hash, mode);
+      const int lamp = beatorajaSongClearType(clears.bestRankForHash(hash, mode));
+      for (const auto filter : kChartSelectorRandomFilters) {
+        const auto category = static_cast<std::size_t>(filter);
+        if (chartSelectorRandomFilterMatches(filter, score ? score->playCount : 0, lamp) &&
+            std::uniform_int_distribution<int>(1, ++counts[category])(random) == 1) {
+          selected[category] = index;
+        }
+      }
+    }
+    ++index;
+  }
+  checkReadCancelled(stop);
+  const int status = sqlite3_errcode(database);
+  if (status != SQLITE_OK && status != SQLITE_DONE) {
+    throw std::runtime_error(sqlite3_errmsg(database));
+  }
+  if (counts[0] < 2) selected[0] = -1;
+  return selected;
+}
+
+std::optional<ChartMetaRecord> ChartRepository::Session::SelectChartSelectorRandomCandidate(
+    const ChartSelectorQuery &query, ChartSelectorRandomFilter filter,
+    std::size_t offset, std::stop_token stop) {
+  auto *database = impl_->database();
+  ScopedReadCancellation cancellation(database, stop);
+  const auto snapshot = readSelectorSnapshot(database, impl_->storage, query, stop);
+  if (query.resolution) validateSelectorSnapshot(query.resolution->snapshot, snapshot);
+  SelectorRandomFunction random(database, query);
+  auto candidateFrom = selectorFrom(query);
+  const std::string from = " FROM chart_meta cm";
+  candidateFrom.insert(from.size(), " INDEXED BY idx_chart_meta_path");
+  const auto candidate = "SELECT cm.path" + candidateFrom + " AND (" +
+      kSelectorRandomFlags + " & " + std::to_string(1 << static_cast<int>(filter)) +
+      ") != 0 ORDER BY cm.path LIMIT 1 OFFSET @selector_offset";
+  // Stream candidate identities in index order, then hydrate only the winner.
+  // Sorting rich rows before applying a random offset would scale with the pool.
+  std::string sql = "SELECT ";
+  sql += kChartMetaSelectColumns;
+  sql += ", '', 0, " + chartFavoriteColumnExpr("cm") + ", " +
+         songReviewFavoriteColumnExpr("cm") + ", '', '', NULL";
+  sql += " FROM chart_meta cm WHERE cm.path = (" + candidate + ")";
+  SelectorReadQuery selected(database, query, sql, stop);
+  selected.bind("@selector_offset", offset);
+  std::optional<ChartMetaRecord> record;
+  if (selected.next()) record = readChartMetaRecord(selected.get());
+  validateSelectorSnapshot(snapshot,
+      readSelectorSnapshot(database, impl_->storage, query, stop));
+  return record;
 }
 
 std::optional<std::size_t> ChartRepository::Session::FindChartSelectorIndex(

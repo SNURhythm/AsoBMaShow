@@ -14,6 +14,7 @@
 namespace main_menu_library {
 
 std::optional<ChartMetaRecord> unzipAllRecord(int archiveCount);
+std::vector<ChartMetaRecord> randomSelectRecords(const std::array<int, 3> &indices);
 std::optional<ChartMetaRecord> chartSelectionRecordForReload(
     const std::optional<ChartMetaRecord> &selection,
     const std::optional<ChartMetaRecord> &leadingRecord, bool preserveViewState);

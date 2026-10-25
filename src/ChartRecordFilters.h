@@ -18,6 +18,7 @@ struct ChartRecordFilters {
   bool scoreRankOrBelow = false;
   std::optional<double> bpmMin;
   std::optional<double> bpmMax;
+  std::optional<int> keyMode;
   std::optional<std::string> difficultyMinLevel;
   std::optional<std::string> difficultyMaxLevel;
   ChartRecordSortState sort;
@@ -63,6 +64,7 @@ nextSortState(ChartRecordSortState current,
 
 inline bool hasActiveCriteria(const ChartRecordFilters &filters) {
   return filters.clearMarkRank.has_value() || filters.scoreRank.has_value() ||
+         filters.keyMode.has_value() ||
          filters.bpmMin.has_value() || filters.bpmMax.has_value() ||
          filters.difficultyMinLevel.has_value() ||
          filters.difficultyMaxLevel.has_value() ||
@@ -203,6 +205,7 @@ inline void applyToQuery(ChartMetaQuery &query, ChartRecordFilters filters,
   }
   query.bpmMin = filters.bpmMin;
   query.bpmMax = filters.bpmMax;
+  query.keyMode = filters.keyMode;
   if (enableDifficultyRange) {
     query.difficultyMinLevel = filters.difficultyMinLevel;
     query.difficultyMaxLevel = filters.difficultyMaxLevel;

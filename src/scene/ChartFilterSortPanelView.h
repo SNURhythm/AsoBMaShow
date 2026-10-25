@@ -4,6 +4,7 @@
 #include "../i18n/Localization.h"
 #include "../repositories/ChartRepository.h"
 #include "../view/View.h"
+#include "../view/ScrollView.h"
 
 #include <array>
 #include <functional>
@@ -15,8 +16,9 @@ class Button;
 class DropdownView;
 class TextInputBox;
 class TextView;
+class OverlayPortal;
 
-class ChartFilterPanelView : public View {
+class ChartFilterPanelView : public ScrollView {
 public:
   struct State {
     ChartRecordFilters filters;
@@ -24,6 +26,7 @@ public:
     std::string bpmMaxText;
     bool clearMarkFilterVisible = true;
     std::optional<int> effectiveClearMarkRank;
+    bool keyModeDropdownOpen = false;
     bool clearMarkDropdownOpen = false;
     bool scoreRankDropdownOpen = false;
     bool difficultyRangeEnabled = false;
@@ -33,6 +36,8 @@ public:
   };
 
   struct Callbacks {
+    std::function<void(std::optional<int>)> onKeyModeChanged;
+    std::function<void(bool)> onKeyModeDropdownChanged;
     std::function<void(std::optional<int>)> onClearMarkChanged;
     std::function<void(std::optional<std::string>)> onScoreRankChanged;
     std::function<void(const std::string &)> onBpmMinChanged;
@@ -46,13 +51,17 @@ public:
     std::function<void(bool, bool)> onDifficultyDropdownChanged;
   };
 
-  explicit ChartFilterPanelView(Callbacks callbacks);
+  explicit ChartFilterPanelView(Callbacks callbacks, OverlayPortal *portal = nullptr);
 
   void refresh(const State &state, bool open);
 
 private:
   Callbacks callbacks;
+  OverlayPortal *overlayPortal = nullptr;
+  View *content = nullptr;
   State currentState;
+  View *keyModeRow = nullptr;
+  DropdownView *keyModeDropdown = nullptr;
   TextView *clearMarkLabel = nullptr;
   View *clearMarkRow = nullptr;
   View *scoreRankRow = nullptr;
@@ -79,6 +88,7 @@ private:
   float lastRowHeight = -1.0f;
 
   void onLayout() override;
+  bool handleEventsImpl(SDL_Event &event) override;
   void buildStaticContent();
   void refreshLayoutDensity();
   void refreshDropdowns(const State &state);

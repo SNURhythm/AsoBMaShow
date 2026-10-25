@@ -1,0 +1,20 @@
+--- a/Select/lua/sdchara.lua
++++ b/Select/lua/sdchara.lua
+@@ -58,7 +58,7 @@
+         filter = 1,
+         offset = 41,
+         draw = function()
+-          return main_state.option(1) or main_state.option(1030) or main_state.option(1031)
++          return main_state.option(1) or main_state.option(1031)
+         end,
+         dst = {
+           { x = x, y = y + 138, w = w, h = h }
+@@ -85,7 +85,7 @@
+         filter = 1,
+         offset = 41,
+         draw = function()
+-          return main_state.option(1) or main_state.option(1030) or main_state.option(1031)
++          return main_state.option(1) or main_state.option(1031)
+         end,
+         dst = {
+           { x = x,      y = y + 138,     w = w, h = h },

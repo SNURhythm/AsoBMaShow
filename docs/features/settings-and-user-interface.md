@@ -8,6 +8,26 @@ for input, audio/video, Internet Ranking, gameplay options, tables, and skins.
 Views are reusable layout/rendering components, not owners of application
 transactions.
 
+The built-in PLAY selector includes the same three random rows as custom skins:
+Random Select, No Play Random Select, and Failed Random Select. Confirming one
+starts a matching chart immediately and leaves the random row selected on return.
+Candidates come from the current folder and active search/filters, including
+favorites, difficulty tables and levels, and temporary same-folder views. Random
+Select appears with at least two candidates; No Play and Failed appear with at
+least one. Missing charts, solid archives, and courses are excluded. No Play uses
+the active profile's play count; Failed uses its best clear lamp in the selected
+long-note mode. A cleared chart with a failed score attempt is not a Failed candidate.
+
+The built-in selector's Key Mode dropdown uses the skin settings' categories:
+4K, 5K, 5K1S, 6K, 7K, 7K1S, 8K, 9K, 5KDP, 7KDP, 24K, and 48K, plus All.
+It filters the current folder and random candidates alongside the other criteria.
+The 5K/7K categories require no stored scratch or long-scratch notes; 5K1S/7K1S
+require either kind, matching chart-list labels. This leaves canonical chart
+key modes and gameplay scratchless policy unchanged. All removes the restriction,
+and Show Same Folder clears it along with the other filters.
+The filter panel scrolls within half the song column's height, preserving chart
+list space in short landscape windows. Dropdown menus use the overlay layer.
+
 ## Application appearance and responsive layout
 
 `src/view/AppTheme.h` shares the selector's typography and palette across
@@ -32,6 +52,10 @@ views, narrows panels, and hides secondary artwork/summary content. Essential
 actions retain 44-point touch heights. Wider windows restore ordinary panels;
 dialogs fit safe areas and scroll. Empty or hidden text viewports must not paint
 outside their clip.
+
+The built-in gameplay title includes the chart subtitle. It shrinks from 26 to
+18 logical units to fit the available width, then uses a clipped marquee if the
+combined title still overflows. Shorter titles retain their normal size.
 
 The compact landscape dock gives options and primary actions one shared height.
 Its backgrounds extend through the bottom safe area while content stays padded

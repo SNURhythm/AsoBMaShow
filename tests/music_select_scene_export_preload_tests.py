@@ -177,7 +177,35 @@ void runVolumeCases() {
   }
 }
 
+void runRandomSelectCase(bool autoplay, bool practice, const char *randomId) {
+  MusicSelectScene scene;
+  SceneManager manager;
+  scene.context.sceneManager = &manager;
+  manager.pause = [&] { scene.onPause(); };
+  scene.bars_.rows[0].id = {randomId};
+  scene.bars_.rows[0].chart.reset();
+  scene.launchSelected(autoplay, practice);
+  expect(manager.launches == 0 && scene.bars_.randomResolutions == 1,
+         "unavailable random candidate does not launch");
+  scene.bars_.randomSong = Bar{};
+  scene.preloadedChart_ = std::make_unique<bms_parser::Chart>();
+  scene.preloadedPath_ = scene.preloadedChart_->Meta.BmsPath;
+  scene.launchSelected(autoplay, practice);
+  expect(manager.launches == 1 && scene.bars_.randomResolutions == 2 &&
+         !scene.launchThread_.joinable(),
+         "random select resolves once and launches the chosen ready chart");
+  expect(scene.bars_.rows[0].id.value == randomId &&
+         !scene.bars_.rows[0].chart,
+         "random launch leaves the selector on its executable row");
+}
+
 int main() {
+  for (const auto id : {"action:random-select", "action:random-select-no-play",
+                        "action:random-select-failed"}) {
+    runRandomSelectCase(false, false, id);
+    runRandomSelectCase(true, false, id);
+    runRandomSelectCase(false, true, id);
+  }
   runVolumeCases();
   MusicSelectScene scene;
   SceneManager manager;
