@@ -1,3 +1,4 @@
+#include "BmsonAudioFixture.h"
 #include "ArchiveFile.h"
 #include "ArchiveRAII.h"
 #include <archive_entry.h>
@@ -715,6 +716,17 @@ void testCancelAndPause(const std::filesystem::path &root) {
 
 }
 
+void testBmsonStream(const std::filesystem::path &root) {
+  auto parsed = bmsonAudioFixture(root);
+  const auto reference = root / "reference.wav";
+  require(chart_audio::RenderChartAudioToWav(*parsed, reference).success, "bmson reference render");
+  const auto stream = music_stream::Source::Create(std::move(parsed), root / "streams");
+  const auto pcm = readAll(stream);
+  require(pcm == readWav(reference), "bmson streaming matches full sliced render");
+  for (const auto &[frame, expected] : std::vector<std::pair<int, int>>{{4410,1500},{13230,1000},{26460,-2000},{35280,-1000},{57330,-2000}})
+    require(pcm.size() > size_t(frame * 2) && std::abs(pcm[frame * 2] - expected) <= 2, "bmson streaming slice/layer waveform");
+}
+
 int main(int argc, char **argv) {
 #if !defined(_WIN32)
   if (argc > 2 && (std::string_view(argv[1]) == "--abandon-staging" ||
@@ -740,6 +752,7 @@ int main(int argc, char **argv) {
       testCompressedSourceDecoderLifetime(root);
       return 0;
     }
+    testBmsonStream(root / "bmson");
     testAbandonedLeaseCleanup(root);
     testAbandonedStagingCleanup(root, argv[0]);
     testVorbisDurationBounds(root);

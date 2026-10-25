@@ -189,7 +189,9 @@ public:
   // Loader has validated the archive batch; retain the same native/output PCM.
   bool loadPreparedSound(const path_t &path,
                          const audio::DecodedAssetCache::DecodedSound &sound,
-                         std::atomic<bool> &isCancelled);
+                         std::atomic<bool> &isCancelled, bool monophonic = false);
+  bool loadSoundGroup(const path_t &path, const std::vector<path_t> &layers,
+                       std::atomic<bool> &isCancelled);
   bool loadSound(const path_t &path, std::atomic<bool> &isCancelled);
   bool loadSoundFromMemory(const path_t &path,
                            const std::vector<unsigned char> &bytes,
@@ -335,7 +337,8 @@ private:
   bool loadDecodedSound(const path_t &path, audio::SharedPcmBuffer pcmData,
                         int channels, int sampleRate,
                         std::atomic<bool> &isCancelled,
-                        const audio::DecodedAssetCache::DecodedSound *prepared = nullptr);
+                        const audio::DecodedAssetCache::DecodedSound *prepared = nullptr,
+                         bool monophonic = false);
   void cleanupRetiredSkinSoundsLocked() noexcept;
   bool retireSkinSound(audio::SkinSoundHandle handle) noexcept;
   void initializeUserData();

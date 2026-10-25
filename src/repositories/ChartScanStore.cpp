@@ -162,7 +162,7 @@ const char *insertChartMetaSql() {
          "has_bga,"
          "source_priority,"
          "source_archive_size,"
-         "rank_type"
+         "rank_type,total_is_relative"
          ") VALUES("
          "@path,"
          "@md5,"
@@ -203,7 +203,7 @@ const char *insertChartMetaSql() {
          "@has_bga,"
          "@source_priority,"
          "@source_archive_size,"
-         "@rank_type"
+         "@rank_type,@total_is_relative"
          ") ON CONFLICT(path) DO UPDATE SET "
          "md5=excluded.md5,"
          "sha256=excluded.sha256,"
@@ -227,6 +227,7 @@ const char *insertChartMetaSql() {
          "length=excluded.length,"
          "rank=excluded.rank,"
          "rank_type=excluded.rank_type,"
+         "total_is_relative=excluded.total_is_relative,"
          "player=excluded.player,"
          "keys=excluded.keys,"
          "total_notes=excluded.total_notes,"
@@ -312,6 +313,7 @@ bool bindAndInsertChartMeta(
   sqlite3_bind_int64(statement, 39,
                      clampSqlInteger(sourcePreference.archiveSize));
   sqlite3_bind_int(statement, 40, static_cast<int>(chartMeta.RankType));
+  sqlite3_bind_int(statement, 41, chartMeta.TotalIsRelative ? 1 : 0);
   if (sqlite3_step(statement) != SQLITE_DONE) {
     logSdlSqlError("inserting a chart", database);
     return false;
@@ -570,14 +572,15 @@ ChartScanSnapshot loadScanSnapshot(sqlite3 *database,
       snapshot.solidArchives.push_back({.path = storedPathFromDatabase(sqliteColumnString(row, 0))});
     });
     visitScopedRows(database,
-        "SELECT path, archive_size, mtime_ns, solid, uncompressed_size, file_count, chart_count FROM archive_scan_cache",
+        "SELECT path, archive_size, mtime_ns, solid, uncompressed_size, file_count, chart_count, recognition_version FROM archive_scan_cache",
         roots, [&](sqlite3_stmt *row) {
       snapshot.archiveCache.push_back({
           .path = storedPathFromDatabase(sqliteColumnString(row, 0)),
           .archiveSize = sqlite3_column_int64(row, 1), .mtimeNs = sqlite3_column_int64(row, 2),
           .solid = sqlite3_column_int(row, 3) != 0,
           .uncompressedSize = static_cast<std::uint64_t>(std::max<sqlite3_int64>(0, sqlite3_column_int64(row, 4))),
-          .fileCount = std::max(0, sqlite3_column_int(row, 5)), .chartCount = sqlite3_column_int(row, 6)});
+          .fileCount = std::max(0, sqlite3_column_int(row, 5)), .chartCount = sqlite3_column_int(row, 6),
+          .recognitionVersion = sqlite3_column_int(row, 7)});
     });
   }
   // Completion markers and checkpoint belong to the shared resumable scan;
@@ -999,7 +1002,7 @@ bool ChartRepository::Session::ScanBatch::UpsertArchiveCache(
   const char *query =
       "INSERT INTO archive_scan_cache "
       "(path, archive_size, mtime_ns, solid, uncompressed_size, file_count, "
-      "chart_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, "
+      "chart_count, recognition_version, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, "
       "CURRENT_TIMESTAMP) "
       "ON CONFLICT(path) DO UPDATE SET "
       "archive_size = excluded.archive_size,"
@@ -1008,13 +1011,15 @@ bool ChartRepository::Session::ScanBatch::UpsertArchiveCache(
       "uncompressed_size = excluded.uncompressed_size,"
       "file_count = excluded.file_count,"
       "chart_count = excluded.chart_count,"
+      "recognition_version = excluded.recognition_version,"
       "updated_at = CURRENT_TIMESTAMP "
       "WHERE archive_scan_cache.archive_size != excluded.archive_size "
       "OR archive_scan_cache.mtime_ns != excluded.mtime_ns "
       "OR archive_scan_cache.solid != excluded.solid "
       "OR archive_scan_cache.uncompressed_size != excluded.uncompressed_size "
       "OR archive_scan_cache.file_count != excluded.file_count "
-      "OR archive_scan_cache.chart_count != excluded.chart_count";
+      "OR archive_scan_cache.chart_count != excluded.chart_count "
+      "OR archive_scan_cache.recognition_version != excluded.recognition_version";
   SqliteStatementHandle statement;
   if (!prepareSqliteStatementLogged(impl_->database(), query, statement,
                                     "preparing archive scan cache upsert",
@@ -1030,6 +1035,7 @@ bool ChartRepository::Session::ScanBatch::UpsertArchiveCache(
                      clampSqlInteger(update.uncompressedSize));
   sqlite3_bind_int(statement.get(), 6, std::max(0, update.fileCount));
   sqlite3_bind_int(statement.get(), 7, std::max(0, update.chartCount));
+  sqlite3_bind_int(statement.get(), 8, update.recognitionVersion);
   if (sqlite3_step(statement.get()) != SQLITE_DONE) {
     logSqlError("upserting archive scan cache", impl_->database());
     return false;

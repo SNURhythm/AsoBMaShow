@@ -64,6 +64,9 @@ readChartMeta(sqlite3_stmt *stmt, AbsolutePathFromColumn absolutePathFromColumn,
                             : bms_parser::JudgeRankType::BmsRank;
   }
 
+  if (sqlite3_column_count(stmt) > 38)
+    chartMeta.TotalIsRelative = sqlite3_column_int(stmt, 38) != 0;
+
   return chartMeta;
 }
 

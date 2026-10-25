@@ -135,6 +135,7 @@ constexpr const char *kDifficultyEntrySelectColumns =
     "COALESCE(cm.most_prevalent_bpm, 0),"
     "COALESCE(cm.has_bga, 0),"
     "COALESCE(cm.rank_type, 0),"
+    "COALESCE(cm.total_is_relative, 0),"
     "dt.symbol || dte.level,"
     "CASE WHEN cm.path IS NULL THEN 1 ELSE 0 END";
 
@@ -190,6 +191,7 @@ constexpr const char *kDifficultyCourseEntrySelectColumns =
     "COALESCE(cm.most_prevalent_bpm, 0),"
     "COALESCE(cm.has_bga, 0),"
     "COALESCE(cm.rank_type, 0),"
+    "COALESCE(cm.total_is_relative, 0),"
     "COALESCE(NULLIF(dt.symbol || NULLIF(NULLIF(dce.level, ''), '0'), "
     "dt.symbol), NULLIF(dt.symbol || NULLIF(dte.level, ''), dt.symbol), "
     "NULLIF(dt.symbol || NULLIF(dce.level, ''), dt.symbol), "
@@ -3225,7 +3227,7 @@ ChartMetaRecord readChartMetaRecord(sqlite3_stmt *stmt) {
   if (sqlite3_column_count(stmt) > idx) {
     record.hasBga = sqlite3_column_int(stmt, idx++) != 0;
   }
-  ++idx; // RankType is consumed by the shared ChartMeta reader.
+  idx += 2; // RankType and TotalIsRelative are consumed by the shared reader.
   if (sqlite3_column_count(stmt) > idx) {
     record.difficultyTableLabels = columnString(stmt, idx++);
   }

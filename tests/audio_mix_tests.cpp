@@ -79,6 +79,47 @@ void requireNear(float actual, float expected, std::string_view message) {
   require(std::fabs(actual - expected) < 0.0001f, message);
 }
 
+void testBmsonLayersShareMonophonicSliceVoices() {
+  const auto makeSlice = [](short value) {
+    auto sound = std::make_shared<SoundData>();
+    sound->channels = 1;
+    sound->sourceSampleRate = 44100;
+    sound->sourceData = {value, value, value, value};
+    sound->outputData = sound->sourceData;
+    sound->sourceFrameCount = sound->outputFrameCount = 4;
+    sound->monophonic = true;
+    return sound;
+  };
+  auto shared = makeSlice(1000), layer = makeSlice(500), restart = makeSlice(1000);
+  SoundData group;
+  group.layers = {shared, layer};
+  group.outputFrameCount = 4;
+  AudioCallbackState state;
+  require(audio::playback::AppendActiveSound(state, &group, audio::Bus::Keysound, 0), "layer group starts");
+  require(audio::playback::AppendActiveSound(state, shared.get(), audio::Bus::Keysound, 0), "other chord key starts");
+  require(state.playingSoundCount == 2, "shared component plays once across chord/layer group");
+  require(audio::playback::AppendActiveSound(state, restart.get(), audio::Bus::Keysound, 0), "distinct restart overlaps");
+  std::array<float, 2> pcm{};
+  audio::playback::MixActiveSounds(state, pcm, 1, 2, 1, 1, 100);
+  requireNear(pcm[0], 2500.0f / 32768 * 0.9f, "unique slices layer once");
+  audio::playback::RemoveSound(state, &group);
+  require(state.playingSoundCount == 2, "group stop only stops voices still owned by that group");
+  const std::array<SoundData *, 4> sounds{shared.get(), layer.get(), restart.get(), &group};
+  auto transition = audio::playback::PrepareOutputRateTransition(sounds, 44100, 48000);
+  require(transition.has_value(), "layer group permits output rate transition");
+  audio::playback::CommitOutputRateTransition(std::move(*transition), state);
+  audio::playback::ClearCallbackSounds(state);
+  shared->outputData = {1000, 2000, 3000, 4000};
+  shared->outputFrameCount = 4;
+  require(audio::playback::AppendActiveSound(state, shared.get(), audio::Bus::Keysound, 0), "start original slice");
+  require(audio::playback::AppendActiveSound(state, shared.get(), audio::Bus::Keysound, 2), "retrigger later in callback");
+  std::array<float, 4> retriggered{};
+  audio::playback::MixActiveSounds(state, retriggered, 4, 1, 1, 1, 100);
+  for (std::size_t frame = 0; frame < 4; ++frame)
+    requireNear(retriggered[frame], (frame % 2 + 1) * 1000.0f / 32768 * 0.9f,
+                "retrigger preserves old prefix and replaces its tail");
+}
+
 void testStoppedQueryInterpretationPreservesErrors() {
   const auto stopped =
       audio::playback::InterpretStoppedQueryResult(1, "unused");
@@ -1560,6 +1601,7 @@ int main() {
     testQ32ActiveCursorRejectsUnrepresentableStartFrame();
     testScheduledOffsetsUseInversePlaybackRate();
     testBusFlowAndMixing();
+    testBmsonLayersShareMonophonicSliceVoices();
     testScopedSystemSoundLoopsAtPerVoiceGainAndStopsSelectively();
     testOwnerStopCommandAcknowledgesWithoutInterruptingOtherVoices();
     testOwnerControlQueuePreservesCrossQueueSubmissionOrder();

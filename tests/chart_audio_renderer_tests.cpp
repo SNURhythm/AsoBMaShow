@@ -1,4 +1,5 @@
 #include "PlayOptionUtils.h"
+#include "BmsonAudioFixture.h"
 #include "RAII.h"
 #include "Uuid.h"
 #include "targets.h"
@@ -752,6 +753,19 @@ void testShortMusicPreparationAlwaysStreams(const std::filesystem::path &root) {
 #endif
 }
 
+void testBmsonAudio(const std::filesystem::path &root) {
+  auto chart = bmsonAudioFixture(root / "bmson");
+  const auto output = root / "bmson.wav";
+  expect(chart_audio::RenderChartAudioToWav(*chart, output).success, "bmson renders");
+  SF_INFO info{};
+  auto sound = asobmashow::audio::openSoundFileHandle(output, SFM_READ, info);
+  for (const auto &[frame, expected] : std::vector<std::pair<int, int>>{{4410,1500},{13230,1000},{26460,-2000},{35280,-1000},{57330,-2000}}) {
+    short sample[2]{};
+    expect(sound && sf_seek(sound.get(), frame, SEEK_SET) == frame && sf_readf_short(sound.get(), sample, 1) == 1 &&
+           std::abs(sample[0] - expected) <= 2 && sample[0] == sample[1], "bmson slice offset, boundary, restart and layers");
+  }
+}
+
 int main(int argc, char **argv) {
   const auto root = std::filesystem::temp_directory_path() /
                     ("chart-audio-tests-" + uuid::generateV4());
@@ -775,6 +789,7 @@ int main(int argc, char **argv) {
       benchmarkRendering(root);
       return failures == 0 ? 0 : 1;
     }
+    testBmsonAudio(root);
     testResampledWaveform(root);
     testDirectMixHeadroom(root);
     testFractionalPlaybackWaveform(root);

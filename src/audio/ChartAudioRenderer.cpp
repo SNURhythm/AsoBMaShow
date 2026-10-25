@@ -1,4 +1,5 @@
 #include "ChartAudioRenderer.h"
+#include "BmsonAudio.h"
 
 #include "../ArchiveFile.h"
 #include "../AtomicFile.h"
@@ -444,13 +445,17 @@ long long audioMicrosForFrames(std::size_t frames) {
 
 bool mixSoundAt(std::vector<float> &mix, const DecodedSound &sound,
                 long long timeMicros, audio::PlaybackRate playback,
-                RenderBudget &budget) {
+                RenderBudget &budget, long long sourceStartMicros = 0,
+                long long sourceDurationMicros = -1) {
   const long double start = std::floor(
       static_cast<long double>(std::max(0LL, timeMicros)) * kOutputSampleRate /
       1000000.0L);
   if (!budget.admitFrames(start)) return false;
   const std::size_t startFrame = static_cast<std::size_t>(start);
-  const std::size_t sourceFrames = static_cast<std::size_t>(sound.info.frames);
+  const auto range = audio::bmson::sourceRange(sourceStartMicros, sourceDurationMicros,
+      sound.info.samplerate, static_cast<std::size_t>(sound.info.frames));
+  const std::size_t sourceFrames = range.count;
+  if (sourceFrames == 0) return true;
   const audio::pcm_resampling::Ratio ratio(
       static_cast<std::int64_t>(sound.info.samplerate) * playback.percent,
       static_cast<std::int64_t>(kOutputSampleRate) * 100);
@@ -480,7 +485,7 @@ bool mixSoundAt(std::vector<float> &mix, const DecodedSound &sound,
     const auto end = std::min(begin + 4096, targetFrames);
     if (ratio.direct()) {
       for (auto frame = begin; frame < end; ++frame) {
-        const auto source = frame * channels;
+        const auto source = (range.start + frame) * channels;
         const auto output = (startFrame + frame) * kOutputChannels;
         mix[output] += sound.pcm[source] * (1.0f / 32768.0f);
         mix[output + 1] += sound.pcm[source + rightChannel] * (1.0f / 32768.0f);
@@ -488,8 +493,8 @@ bool mixSoundAt(std::vector<float> &mix, const DecodedSound &sound,
     } else {
       // Match AudioMix PCM16 rounding, then retain float overlap headroom.
       for (auto frame = begin; frame < end; ++frame) {
-        const auto left = cursor.left() * channels;
-        const auto right = cursor.right() * channels;
+        const auto left = (range.start + cursor.left()) * channels;
+        const auto right = (range.start + cursor.right()) * channels;
         const auto output = (startFrame + frame) * kOutputChannels;
         const short leftSample = cursor.interpolate(sound.pcm[left], sound.pcm[right]);
         const short rightSample = rightChannel == 0 ? leftSample : cursor.interpolate(
@@ -611,6 +616,38 @@ long long baseDurationMicros(const bms_parser::Chart &chart,
 }
 
 } // namespace
+
+std::vector<AudioEvent> ExpandAudioSlices(const bms_parser::Chart &chart,
+                                         const std::vector<AudioEvent> &events) {
+  if (chart.WavSlices.empty()) return events;
+  struct SliceEvent { AudioEvent event; int identity; };
+  std::vector<SliceEvent> expanded;
+  for (const auto &event : events) {
+    const auto found = chart.WavSlices.find(event.wav);
+    if (found == chart.WavSlices.end()) expanded.push_back({event, -1});
+    else for (const auto &slice : found->second)
+      expanded.push_back({{event.timeMicros, slice.SourceWav, slice.StartMicros, slice.DurationMicros}, slice.SliceId});
+  }
+  std::stable_sort(expanded.begin(), expanded.end(), [](const auto &a, const auto &b) {
+    return a.event.timeMicros < b.event.timeMicros;
+  });
+  std::vector<AudioEvent> result;
+  std::unordered_map<int, std::size_t> previous;
+  for (const auto &[event, identity] : expanded) {
+    if (identity >= 0) {
+      if (const auto found = previous.find(identity); found != previous.end()) {
+        auto &prior = result[found->second];
+        const auto duration = event.timeMicros - prior.timeMicros;
+        if (duration == 0) continue;
+        if (prior.sourceDurationMicros < 0 || prior.sourceDurationMicros > duration)
+          prior.sourceDurationMicros = duration;
+      }
+      previous[identity] = result.size();
+    }
+    result.push_back(event);
+  }
+  return result;
+}
 
 std::vector<AudioEvent>
 CollectBackgroundAudioEvents(const bms_parser::Chart &chart) {
@@ -741,7 +778,7 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
   if (!budget.admitFrames(initialFrames)) return failure();
   std::vector<float> mix;
   if (!ensureMixFrames(mix, static_cast<std::size_t>(initialFrames), budget)) return failure();
-  const auto audioEvents = resolveAudioEvents(chart, options);
+  const auto audioEvents = ExpandAudioSlices(chart, resolveAudioEvents(chart, options));
   if (!budget.checkpoint()) return failure();
   DecodedSoundCache decodedSounds;
   preloadArchivedDecodedSounds(chart, audioEvents, decodedSounds, isCancelled,
@@ -757,7 +794,8 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
     if (!mixSoundAt(mix, *sound,
                     outputTimeMicrosFromTimelineStart(event.timeMicros,
                         options.timelineStartMicros, options.playback),
-                    options.playback, budget)) return failure();
+                    options.playback, budget, event.sourceStartMicros,
+                    event.sourceDurationMicros)) return failure();
   }
   if (!budget.checkpoint()) return failure();
   if (options.clubMode) {

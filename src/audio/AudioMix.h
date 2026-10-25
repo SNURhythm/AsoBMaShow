@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -50,6 +51,9 @@ struct SoundData {
   int channels = 0;
   int sourceSampleRate = 0;
   bool playing = false;
+  bool monophonic = false;
+  // Immutable loader-owned elementary sounds. Callback expansion allocates nothing.
+  std::vector<std::shared_ptr<SoundData>> layers;
   // Callback-owned (or accessed with the backend stopped). Monotonic for this
   // owner's lifetime: false proves no scheduled entry can refer to this owner.
   bool hasBeenScheduled = false;
@@ -66,9 +70,11 @@ struct SoundData {
 
 struct PlayingSound {
   SoundData *soundData = nullptr;
+  SoundData *groupOwner = nullptr;
   audio::Bus bus = audio::Bus::Bgm;
   std::uint64_t sourceFrameQ32 = 0;
   std::uint32_t outputOffsetFrames = 0;
+  std::uint32_t outputEndOffsetFrames = std::numeric_limits<std::uint32_t>::max();
   float gain = 1.0F;
   bool loop = false;
 };

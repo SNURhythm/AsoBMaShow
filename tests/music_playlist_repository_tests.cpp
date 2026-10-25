@@ -136,6 +136,7 @@ createChartDatabase(const std::filesystem::path &databasePath) {
       "most_prevalent_bpm REAL NOT NULL DEFAULT 0,"
       "has_bga INTEGER NOT NULL DEFAULT 0,"
       "rank_type INTEGER NOT NULL DEFAULT 0,"
+      "total_is_relative INTEGER NOT NULL DEFAULT 0,"
       "source_priority INTEGER,"
       "source_archive_size INTEGER"
       ")");

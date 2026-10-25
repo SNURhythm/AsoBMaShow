@@ -1,4 +1,5 @@
 #include "ArchiveFile.h"
+#include "BmsonAudioFixture.h"
 #include "audio/AudioDeviceManager.h"
 #include "audio/Jukebox.h"
 #include "audio/DecodedAssetCache.h"
@@ -616,6 +617,57 @@ void testGameplaySharesPreparedPcm() {
               "retiring the last playback owner frees shared PCM");
     }
   }
+}
+
+void testBmsonGameplaySlicesAndVisualTransitions() {
+  const auto originalDirectory = std::filesystem::current_path();
+  const auto restoreDirectory = makeScopeExit([&] {
+    std::error_code ignored;
+    std::filesystem::current_path(originalDirectory, ignored);
+  });
+  std::filesystem::current_path(std::filesystem::path(__FILE__).parent_path().parent_path());
+  TemporaryArchivedVisualFixture fixture;
+  auto chart = bmsonAudioFixture(fixture.directory / "bmson");
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+  std::atomic_bool cancelled{false};
+  require(jukebox.loadChartPreservingDevice(*chart, false, cancelled).success,
+          "bmson gameplay resources load");
+  auto *first = chart->Measures.front()->TimeLines.front();
+  const auto layered = first->Notes[0]->Wav;
+  const auto chord = first->Notes[1]->Wav;
+  const auto handle = jukebox.resolveRealtimeKeySound(layered);
+  require(handle && handle->valid(), "layered bmson note exposes a live keysound");
+  require(jukebox.play(0).success, "bmson gameplay starts");
+  jukebox.playKeySound(layered);
+  jukebox.playKeySound(chord);
+  std::array<std::int16_t, 128> output{};
+  control->renderCallback(output.data(), 64, 2, control->renderUserData);
+  require(std::abs(output[0] - 1348) <= 2 && output[0] == output[1],
+          "gameplay mixes shared chord slice once alongside its independent layer");
+  require(jukebox.stopKeepDevice().success, "bmson gameplay stops");
+
+  const auto imagePath = fixture.directory / "black.bmp";
+  { std::ofstream image(imagePath, std::ios::binary); image << singlePixelPpm(0, 0, 0); }
+  for (const bool bmson : {true, false}) {
+    bms_parser::Chart visual;
+    populateVisualChart(visual, true, fixture.directory, "black.bmp");
+    if (bmson) visual.Meta.Values["bmson.version"] = "1.0.0";
+    jukebox.loadVisuals(visual, cancelled);
+    require(jukebox.prepareGameplayAudioFromPreview(visual, cancelled).success,
+            "visual-only preparation transfers chart-specific layer semantics to gameplay");
+    const auto frame = jukebox.prepareVisualFrameAt(bmson ? 9100 : 9101, 0, {});
+    require(frame.layer.has_value(), "visual-only preparation publishes the layer");
+    const std::array<BgaDrawTarget, 1> targets{{{
+        .role = GameplayBgaRole::Layer,
+        .destination = {{{0, 64}, {64, 64}, {64, 0}, {0, 0}}}}}};
+    const auto preflight = jukebox.preflight(frame, targets);
+    require(preflight.ready, preflight.failure ? preflight.failure->message :
+            "layer resources survive bmson to BMS visual-only transition");
+    jukebox.finalizePrepared(frame);
+  }
+  require(!handle->valid(), "switching charts retires the old bmson group owner");
 }
 
 void testPreviewGameplayPreparationRetainsVisuals() {
@@ -1342,6 +1394,7 @@ int main(int argc, char **argv) {
     }
     testArchivedHandoffRejectsSourceChangeDuringPreparation();
     testGameplaySharesPreparedPcm();
+    testBmsonGameplaySlicesAndVisualTransitions();
     testPreviewGameplayPreparationRetainsVisuals();
     testUnicodeChartAssetReferences();
     if (argc == 2 && std::string_view(argv[1]) == "--unicode-assets") {

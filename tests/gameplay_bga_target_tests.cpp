@@ -300,6 +300,9 @@ void testPinnedRoleAndMediaSelectExactBgaMaterials() {
       GameplayBgaRole::Base, GameplayBgaMediaKind::Image);
   const auto layerImage = SelectGameplayBgaMaterial(
       GameplayBgaRole::Layer, GameplayBgaMediaKind::Image);
+  const auto bmsonLayer = SelectGameplayBgaMaterial(
+      GameplayBgaRole::Layer, GameplayBgaMediaKind::Image, false);
+  require(!bmsonLayer.blackTransparent, "bmson image layers retain authored black pixels");
   const auto baseVideo = SelectGameplayBgaMaterial(
       GameplayBgaRole::Base, GameplayBgaMediaKind::Video);
   const auto layerVideo = SelectGameplayBgaMaterial(

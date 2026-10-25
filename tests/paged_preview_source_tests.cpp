@@ -1,3 +1,4 @@
+#include "BmsonAudioFixture.h"
 #include "audio/PagedPreviewSource.h"
 #include "audio/ChartPreviewHighlight.h"
 #include "audio/AudioDurationBound.h"
@@ -699,6 +700,7 @@ void testExpiredSoundDoesNotBlockHighlight(const std::filesystem::path &root) {
 
 void testUnknownDurationLookbackAndKnownLongTails(const std::filesystem::path &root) {
   // AIFF is decodable but intentionally outside the cheap metadata probe.
+  for (const bool sliced : {false, true})
   for (const bool placed : {false, true})
   for (const auto [format, onset, cached, overlap, repeated] : {
            std::tuple{SF_FORMAT_WAV, 0, false, true, false},
@@ -717,6 +719,12 @@ void testUnknownDurationLookbackAndKnownLongTails(const std::filesystem::path &r
     writeWav(root / "second.wav", 8000, std::vector<short>(64, 16384));
     auto parsed = chart(root, std::string(placed ? "#00011:01\n" : "#00001:01\n") + "#01012:02\n" +
         (repeated ? (placed ? "#00911:0001\n" : "#00901:0001\n") : ""));
+    if (sliced) {
+      // The remaining 21 seconds overlap this highlight when duration is
+      // known. An unknown bound is an onset lookback, not source PCM length:
+      // subtracting this source offset would incorrectly drop the age-14 case.
+      parsed->WavSlices = {{1, {{1, 1'000'000, -1, 0}}}, {2, {{2, 0, -1, 1}}}};
+    }
     for (auto *measure : parsed->Measures)
       for (auto *timeline : measure->TimeLines)
         if (timeline->Timing == 0) timeline->Timing = onset * 1'000'000LL;
@@ -1447,12 +1455,192 @@ void testPreparedRepeatedVoiceDoesNotRetainDecoder(const std::filesystem::path &
           "repeated voice preparation must finish with no live decoders");
 }
 }
+void testBmsonPreview(const std::filesystem::path &root) {
+  auto parsed = bmsonAudioFixture(root);
+  auto source = audio::PagedPreviewSource::Create(*parsed, {}, 0);
+  require(source->Begin(44100), "begin bmson preview");
+  waitPrepared(source);
+  const auto pcm = renderAll(source);
+  for (const auto &[frame, expected] : std::vector<std::pair<int, int>>{{4410,1500},{13230,1000},{26460,-2000},{35280,-1000},{57330,-2000}})
+    require(pcm.size() > size_t(frame * 2) && std::abs(pcm[frame * 2] * 32768 - expected * 0.9f) <= 2, "bmson preview slice/layer waveform");
+}
+
+void testBmsonDependencyReadyStartup(const std::filesystem::path &root) {
+  std::filesystem::create_directories(root);
+  auto parsed = chart(root, "#00011:01\n#00211:02\n");
+  parsed->ReferencedWavTable.clear();
+  parsed->WavTable.clear();
+  const auto count = parallel_worker_count(1024) + 2;
+  for (unsigned index = 0; index < count; ++index)
+    parsed->ReferencedWavTable.emplace(100 + index, "source-" + std::to_string(index) + ".wav");
+  // Put opening PCM last in the actual source-table traversal, behind enough
+  // gated later sources to occupy every decoder worker if priorities regress.
+  auto opening = parsed->ReferencedWavTable.begin();
+  for (auto it = parsed->ReferencedWavTable.begin(); it != parsed->ReferencedWavTable.end(); ++it)
+    opening = it;
+  int sliceId = 0;
+  for (const auto &[wav, name] : parsed->ReferencedWavTable) {
+    const bool first = wav == opening->first;
+    writeWav(root / name, 44100, std::vector<short>(first ? 100 : 10000, first ? 16384 : 1000));
+    parsed->WavSlices[first ? 1 : 2].push_back({wav, 0, -1, sliceId++});
+  }
+  auto source = audio::PagedPreviewSource::Create(*parsed, {}, 0);
+  preparationAllocationBytes = 10000 * sizeof(short);
+  preparationBlocked = false;
+  preparationGate = true;
+  const auto release = makeScopeExit([] { preparationGate = false; preparationAllocationBytes = 0; });
+  require(source->Begin(44100, true), "begin dependency-ready bmson preview");
+  const auto deadline = std::chrono::steady_clock::now() + 5s;
+  auto state = source->GetState();
+  while ((!preparationBlocked || !state.startupReady) && std::chrono::steady_clock::now() < deadline) {
+    source->WaitForChange(state.revision, 20ms);
+    state = source->GetState();
+  }
+  std::array<float, 128> block{};
+  const auto rendered = source->Render(block, 64);
+  const bool readyWhileBlocked = preparationBlocked && state.startupReady &&
+      !state.preparationComplete && !state.durationKnown;
+  preparationGate = false;
+  require(readyWhileBlocked, "opening slices must publish while later source decoders remain gated");
+  require(rendered.status == audio::PagedPreviewRenderStatus::Data &&
+              std::abs(block[0] - 16383.0f * (0.9f / 32768.0f)) < 0.000001f,
+          "dependency-ready slice must play before later source preparation");
+  waitPrepared(source);
+  require(source->GetState().positionFrames44100 == 64,
+          "finishing later bmson slices must not advance the callback clock");
+}
+
+void testBmsonExpiredSlicesDoNotBlockHighlight(const std::filesystem::path &root) {
+  std::filesystem::create_directories(root);
+  writeWav(root / "first.wav", 8000, std::vector<short>(16000, 8192));
+  writeWav(root / "second.wav", 8000, std::vector<short>(64, 16384));
+  for (const auto container : {"loose", "zip", "7z"}) {
+    auto parsed = chart(root, "#WAV03 continuation.wav\n#00011:01\n#00012:0002\n#00211:03\n");
+    parsed->ReferencedWavTable = {{10, "first.wav"}, {11, "second.wav"}};
+    parsed->WavTable = parsed->ReferencedWavTable;
+    parsed->WavSlices = {
+        // Both half-second slices have expired at the one-second highlight,
+        // although their two-second source would still overlap it.
+        {1, {{10, 1'500'000, -1, 0}, {10, 0, 500'000, 1}}},
+        {2, {{11, 0, -1, 2}}},
+        // The same source must still prepare its later bounded continuation.
+        {3, {{10, 500'000, 250'000, 3}}}};
+    if (std::string_view(container) != "loose") {
+      const auto archivePath = root / (std::string("expired-slices.") + container);
+      auto writer = makeArchiveWriteHandle();
+      require((std::string_view(container) == "zip" ? archive_write_set_format_zip(writer.get())
+                                                   : archive_write_set_format_7zip(writer.get())) == ARCHIVE_OK &&
+                  archive_write_open_filename(writer.get(), archivePath.string().c_str()) == ARCHIVE_OK,
+              "cannot create expired slice archive");
+      for (const auto name : {"first.wav", "second.wav"}) {
+        std::ifstream input(root / name, std::ios::binary);
+        const std::vector<char> bytes((std::istreambuf_iterator<char>(input)), {});
+        UniqueResource<archive_entry, archive_entry_free> entry(archive_entry_new());
+        archive_entry_set_pathname(entry.get(), name);
+        archive_entry_set_filetype(entry.get(), AE_IFREG);
+        archive_entry_set_perm(entry.get(), 0644);
+        archive_entry_set_size(entry.get(), bytes.size());
+        require(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK &&
+                    archive_write_data(writer.get(), bytes.data(), bytes.size()) == static_cast<la_ssize_t>(bytes.size()),
+                "cannot write expired slice archive entry");
+      }
+      require(archive_write_close(writer.get()) == ARCHIVE_OK, "cannot finish expired slice archive");
+      parsed->Meta.Folder = archivePath;
+    }
+    auto cache = std::make_shared<audio::DecodedAssetCache>(
+        audio::DecodedAssetCache::kUnlimitedRetainedBytes);
+    auto source = audio::PagedPreviewSource::Create(*parsed, cache, 44100);
+    // In ZIP, gate the full encoded entry allocation: header probing must
+    // publish the slice bounds without first reading that payload.
+    preparationAllocationBytes = std::string_view(container) == "zip"
+        ? std::filesystem::file_size(root / "first.wav") : 16000 * sizeof(short);
+    preparationBlocked = false;
+    preparationGate = true;
+    const auto release = makeScopeExit([] { preparationGate = false; preparationAllocationBytes = 0; });
+    require(source->Begin(8000), "begin expired slice highlight");
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    auto state = source->GetState();
+    while ((!preparationBlocked || !state.startupReady) && std::chrono::steady_clock::now() < deadline) {
+      source->WaitForChange(state.revision, 20ms);
+      state = source->GetState();
+    }
+    std::array<float, 2> output{};
+    const auto rendered = source->Render(output, 1);
+    preparationGate = false;
+    require(preparationBlocked && state.startupReady && !state.preparationComplete,
+            "expired slices must not wait for their source decode or ZIP payload read");
+    require(rendered.status == audio::PagedPreviewRenderStatus::Data &&
+                std::abs(output[0] - 16383.0f * (0.9f / 32768.0f)) < 0.000001f,
+            "highlight must play only the current slice while expired dependencies are gated");
+    waitPrepared(source);
+    const auto samples = renderAll(source);
+    // Render already consumed one frame; the continuation starts three seconds
+    // after the highlight and lasts exactly 2,000 native frames.
+    require(samples.size() > 26000 * 2 &&
+                std::abs(samples[23999 * 2] - 8191.0f * (0.9f / 32768.0f)) < 0.000001f &&
+                std::abs(samples[25998 * 2] - 8191.0f * (0.9f / 32768.0f)) < 0.000001f &&
+                samples[25999 * 2] == 0,
+            "deferring expired slices must preserve the later continuation's start and duration");
+    // At another output rate, cached native duration must exclude both past
+    // slices before either allocates its 22,050-frame resampled output.
+    auto reused = audio::PagedPreviewSource::Create(*parsed, cache, 44100);
+    preparationAllocationBytes = 22050 * sizeof(short);
+    preparationBlocked = false;
+    preparationGate = true;
+    require(reused->Begin(44100), "begin cached expired slice highlight");
+    const auto reuseDeadline = std::chrono::steady_clock::now() + 2s;
+    state = reused->GetState();
+    while (!preparationBlocked && !state.preparationComplete && std::chrono::steady_clock::now() < reuseDeadline) {
+      reused->WaitForChange(state.revision, 20ms);
+      state = reused->GetState();
+    }
+    preparationGate = false;
+    require(!preparationBlocked && state.preparationComplete,
+            "cached source bounds must skip resampling expired slices");
+    waitPrepared(reused);
+    require(cache->GetStatistics().decoderOpens == 2 && cache->GetStatistics().decodedFrames == 16064 &&
+                cache->GetStatistics().archiveReads == 0,
+            "slice duration probing and reuse must not add decodes or individual archive extraction");
+  }
+}
+
+void testBmsonChordSlicesAndBuses(const std::filesystem::path &root) {
+  std::filesystem::create_directories(root);
+  writeWav(root / "stem.wav", 44100, std::vector<short>(88200, 1000));
+  writeWav(root / "layer.wav", 44100, std::vector<short>(5512, 500));
+  writeWav(root / "bgm.wav", 44100, std::vector<short>(5512, 4000));
+  auto parsed = chart(root, "#WAV03 third.wav\n#WAV04 bgm.wav\n#WAV05 missing.wav\n#00011:0103\n#00012:0202\n#00013:05\n#00001:04\n");
+  parsed->ReferencedWavTable = {{10, "stem.wav"}, {11, "layer.wav"}, {12, "bgm.wav"}};
+  parsed->WavTable = parsed->ReferencedWavTable;
+  parsed->WavSlices = {
+      {1, {{10, 0, -1, 0}, {11, 0, -1, 1}}},
+      {2, {{10, 0, -1, 0}}}, // Chord shares the stem, but not its other key's layer.
+      {3, {{10, 0, -1, 2}}}, // A distinct restart with identical source/range.
+      {4, {{12, 0, -1, 3}}},
+      {5, {{99, 0, -1, 4}}}}; // Missing dependency must publish silence.
+  auto source = audio::PagedPreviewSource::Create(*parsed, {}, 0, {0.25f, 0.5f});
+  require(source->Begin(44100), "begin flattened chord preview");
+  waitPrepared(source);
+  const auto pcm = renderAll(source);
+  const auto sampleAt = [&](int frame) { return pcm.at(frame * 2) * (32768.0f / 0.9f); };
+  require(std::abs(sampleAt(100) - (999 * 0.5f + 499 * 0.5f + 3999 * 0.25f)) < 2,
+          "shared chord slice must mix once while layers keep their own bus gains");
+  require(std::abs(sampleAt(22050) - 999 * 0.5f) < 2,
+          "short layer and BGM must end independently of the shared chord stem");
+  require(std::abs(sampleAt(48510) - 999) < 2,
+          "same slice restarts once while a distinct SliceId with the same source layers independently");
+}
+
 int main() {
   bypassPreparationGate = true;
   const auto root = std::filesystem::temp_directory_path() /
       ("asobmashow-paged-source-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
   try {
     for (const char *name : {"highlight", "resampling", "missing", "progressive", "timing", "downsampling", "preflight", "archive", "overlap", "pressure", "pin-exit", "repeated-pin", "parallel", "trim", "silent", "mixed-trim", "dense-trim"}) std::filesystem::create_directories(root / name);
+    testBmsonPreview(root / "bmson");
+    testBmsonDependencyReadyStartup(root / "bmson-progressive");
+    testBmsonExpiredSlicesDoNotBlockHighlight(root / "bmson-expired");
+    testBmsonChordSlicesAndBuses(root / "bmson-chord");
     testCacheClearDuringDecode(root / "highlight");
     testUnusedDefinitionsAreNotPrepared(root / "highlight");
     testLeadingSilenceIsSkippedWithoutChangingLaterAudio(root / "trim");

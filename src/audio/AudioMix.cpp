@@ -471,6 +471,12 @@ PrepareOutputRateTransition(std::span<SoundData *const> sounds,
     if (soundData == nullptr) {
       continue;
     }
+    if (!soundData->layers.empty()) {
+      transition.candidates.push_back({.soundData = soundData,
+          .outputFrameCount = RemapFramePosition(soundData->outputFrameCount,
+                                                 previousSampleRate, targetSampleRate)});
+      continue;
+    }
     if (soundData->channels <= 0 || soundData->sourceSampleRate <= 0 ||
         soundData->sourceData.size() %
                 static_cast<size_t>(soundData->channels) !=
@@ -517,6 +523,12 @@ void CommitOutputRateTransition(OutputRateTransition transition,
     playingSound.outputOffsetFrames = static_cast<std::uint32_t>(std::min(
         remappedOutputOffset,
         static_cast<size_t>(std::numeric_limits<std::uint32_t>::max())));
+    if (playingSound.outputEndOffsetFrames != std::numeric_limits<std::uint32_t>::max()) {
+      playingSound.outputEndOffsetFrames = static_cast<std::uint32_t>(std::min<size_t>(
+          RemapFramePosition(playingSound.outputEndOffsetFrames, transition.previousSampleRate,
+                             transition.targetSampleRate),
+          std::numeric_limits<std::uint32_t>::max()));
+    }
   }
 
   for (size_t index = 0; index < state.scheduledSoundCount; ++index) {
@@ -558,6 +570,31 @@ void CommitOutputRateTransition(OutputRateTransition transition,
 bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
                        std::uint32_t outputOffsetFrames, size_t startFrame,
                        float gain, bool loop) {
+  if (soundData != nullptr && !soundData->layers.empty()) {
+    bool added = false;
+    for (const auto &layer : soundData->layers) {
+      if (AppendActiveSound(state, layer.get(), bus, outputOffsetFrames, startFrame, gain, loop)) {
+        state.playingSounds[state.playingSoundCount - 1].groupOwner = soundData;
+        added = true;
+      }
+    }
+    return added;
+  }
+  if (soundData != nullptr && soundData->monophonic) {
+    for (std::size_t i = 0; i < state.playingSoundCount;) {
+      auto &voice = state.playingSounds[i];
+      if (voice.soundData == soundData) {
+        if (voice.outputOffsetFrames >= outputOffsetFrames) {
+          removeActiveSoundAt(state, i);
+          continue;
+        }
+        // Scheduled retriggers can fall later in this same callback. Preserve
+        // the old voice's prefix, then switch to the new slice exactly on time.
+        voice.outputEndOffsetFrames = std::min(voice.outputEndOffsetFrames, outputOffsetFrames);
+      }
+      ++i;
+    }
+  }
   if (soundData == nullptr || startFrame >= outputPcmView(soundData).frameCount ||
       startFrame > kQ32MaximumWholeFrame ||
       state.playingSoundCount >= kMaxActiveSounds) {
@@ -581,6 +618,16 @@ bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
 static bool AppendRealtimeActiveSound(AudioCallbackState &state,
                                       SoundData *soundData, Bus bus,
                                       size_t startFrame) {
+  if (soundData != nullptr && !soundData->layers.empty()) {
+    bool added = false;
+    for (const auto &layer : soundData->layers) {
+      if (AppendRealtimeActiveSound(state, layer.get(), bus, startFrame)) {
+        state.playingSounds[state.playingSoundCount - 1].groupOwner = soundData;
+        added = true;
+      }
+    }
+    return added;
+  }
   if (soundData == nullptr || startFrame >= outputPcmView(soundData).frameCount ||
       startFrame > kQ32MaximumWholeFrame) {
     return false;
@@ -687,7 +734,8 @@ void ClearCallbackSounds(AudioCallbackState &state, bool preserveSystemSounds) {
 void RemoveSound(AudioCallbackState &state, SoundData *soundData) {
   std::size_t active = 0;
   while (active < state.playingSoundCount) {
-    if (state.playingSounds[active].soundData == soundData) {
+    if (state.playingSounds[active].soundData == soundData ||
+        state.playingSounds[active].groupOwner == soundData) {
       removeActiveSoundAt(state, active);
     } else {
       ++active;
@@ -949,8 +997,8 @@ bool ScheduledMixReady(const AudioCallbackState &state,
   for (size_t index = 0; index < state.playingSoundCount; ++index) {
     const auto &voice = state.playingSounds[index];
     if (!voiceMixReady(outputPcmView(voice.soundData), voice.sourceFrameQ32,
-                       voice.outputOffsetFrames, voice.loop, frameCount,
-                       increment)) return false;
+                       voice.outputOffsetFrames, voice.loop,
+                       std::min(frameCount, voice.outputEndOffsetFrames), increment)) return false;
   }
   // Activation appends before mixing retires finished active voices. Match that
   // capacity/drop behavior without mutating callback state or sound owners.
@@ -1053,6 +1101,7 @@ void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
 
     const std::uint32_t outputOffsetFrames =
         std::min(playingSound.outputOffsetFrames, frameCount);
+    const auto outputEndOffsetFrames = std::min(playingSound.outputEndOffsetFrames, frameCount);
     const int channels = source.channels;
     const float busGain = playingSound.bus == Bus::Bgm
                               ? bgmGain
@@ -1084,7 +1133,9 @@ void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
               : cachedSamples + (frame % PagedPcmSound::kPageFrames) * channels;
         }
       };
-      for (size_t frame = 0; frame < frameCount - outputOffsetFrames; ++frame) {
+      const auto audibleFrames = outputEndOffsetFrames > outputOffsetFrames
+                                     ? outputEndOffsetFrames - outputOffsetFrames : 0;
+      for (size_t frame = 0; frame < audibleFrames; ++frame) {
         if (playingSound.loop && positionQ32 >= loopLengthQ32) {
           positionQ32 %= loopLengthQ32;
         }
@@ -1155,6 +1206,9 @@ void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
 
     playingSound.sourceFrameQ32 = positionQ32;
     playingSound.outputOffsetFrames = 0;
+    if (playingSound.outputEndOffsetFrames <= frameCount) finished = true;
+    else if (playingSound.outputEndOffsetFrames != std::numeric_limits<std::uint32_t>::max())
+      playingSound.outputEndOffsetFrames -= frameCount;
     if (finished) {
       removeActiveSoundAt(state, soundIndex);
       continue;

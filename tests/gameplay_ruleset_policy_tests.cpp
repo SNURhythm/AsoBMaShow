@@ -249,6 +249,87 @@ void testBeatorajaRejectsZeroReplayTotal() {
           "Beatoraja cannot start a replay with rejected zero TOTAL proof");
 }
 
+void testRelativeZeroTotalStartsAndReplays() {
+  for (const auto ruleset : {GameplayRuleset::Beatoraja, GameplayRuleset::LR2}) {
+    auto meta = chartMeta(ruleset);
+    meta.MD5 = std::string(32, 'a');
+    meta.SHA256 = std::string(64, 'b');
+    meta.TotalIsRelative = true;
+    meta.Total = 0.0;
+    StartOptions options;
+    options.ruleset = ruleset;
+    const auto live = buildGameplayRulesetPolicyAtPlayStart(
+        options, meta, AppSettings::NotePriorityMode::Lowest);
+    require(live.built() && live.policy->canonical &&
+                live.policy->gauge.effectiveTotal == 0.0,
+            "modern bmson zero relative TOTAL starts with canonical zero recovery");
+    auto replay = std::make_shared<ReplayData>();
+    replay->chartMeta = meta;
+    replay->provenance = captureScoreProvenanceAtPlayStart(
+        options, meta, *live.policy);
+    require(replay->provenance.stages.front().authoredGaugeTotal == 0.0 &&
+                replay->provenance.stages.front().effectiveGaugeTotal == 0.0,
+            "relative zero TOTAL capture preserves authored and effective zero");
+
+    for (const int fingerprintSchema : {0, 4, 1, 2, 3}) {
+      replay->provenance.fingerprintSchemaVersion = fingerprintSchema;
+      StartOptions replayOptions{.replayData = replay};
+      applyReplayProvenanceToStartOptions(replayOptions, *replay);
+      const auto restored = buildGameplayRulesetPolicyAtPlayStart(
+          replayOptions, meta, AppSettings::NotePriorityMode::Lowest);
+      if (fingerprintSchema == 0 || fingerprintSchema == 4) {
+        require(replayOptions.replayRulesetOverride.has_value() &&
+                    restored.built() && restored.policy->canonical &&
+                    restored.policy->gauge == live.policy->gauge &&
+                    restored.policy->judge.rules() == live.policy->judge.rules(),
+                "complete relative zero TOTAL proof restores the live replay policy");
+      } else {
+        require(!replayOptions.replayRulesetOverride.has_value() &&
+                    restored.status ==
+                        gameplay::GameplayPolicyBuildStatus::InvalidReplaySnapshot,
+                "historical fingerprints cannot prove zero TOTAL even for bmson");
+      }
+    }
+  }
+}
+
+void testRelativeZeroTotalRequiresCompleteProof() {
+  auto meta = chartMeta(GameplayRuleset::Beatoraja);
+  meta.MD5 = std::string(32, 'a');
+  meta.SHA256 = std::string(64, 'b');
+  meta.TotalIsRelative = true;
+  meta.Total = 0.0;
+  auto snapshot = completeReplaySnapshot(meta);
+  snapshot.effectiveGaugeTotal = 0.0;
+  for (int missingProof = 0; missingProof < 7; ++missingProof) {
+    auto replay = std::make_shared<ReplayData>();
+    replay->chartMeta = meta;
+    replay->provenance.ruleset = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+    replay->provenance.stages = {snapshot};
+    auto &stage = replay->provenance.stages.front();
+    switch (missingProof) {
+    case 0: stage.authoredGaugeTotal.reset(); break;
+    case 1: stage.authoredGaugeTotal = 100.0; break;
+    case 2: stage.totalNotes = 0; break;
+    case 3: stage.effectiveJudgeWindows.pop_back(); break;
+    case 4: replay->chartMeta.TotalIsRelative = false; break;
+    case 5: replay->chartMeta.HasTotal = false; break;
+    case 6: replay->chartMeta.Total = 100.0; break;
+    }
+    const auto rejected = gameplay::buildGameplayRulesetPolicy(
+        replay->chartMeta, {.ruleset = GameplayRuleset::Beatoraja,
+                            .sourceRank = meta.Rank,
+                            .replaySnapshot = stage});
+    require(rejected.status ==
+                gameplay::GameplayPolicyBuildStatus::InvalidReplaySnapshot,
+            "zero replay TOTAL requires complete matching relative chart proof");
+    StartOptions replayOptions{.replayData = replay};
+    applyReplayProvenanceToStartOptions(replayOptions, *replay);
+    require(!replayOptions.replayRulesetOverride.has_value(),
+            "replay ingestion cannot invent missing relative zero TOTAL proof");
+  }
+}
+
 void testInvalidInputsDoNotFallBack() {
   const auto meta = chartMeta(GameplayRuleset::LR2);
   auto future = RulesetDescriptor::For(GameplayRuleset::LR2);
@@ -593,6 +674,8 @@ int main() {
   testExtendedRankPolicyCaptureAndReplay();
   testPolicyUsesChartKeyMode();
   testBeatorajaRejectsZeroReplayTotal();
+  testRelativeZeroTotalStartsAndReplays();
+  testRelativeZeroTotalRequiresCompleteProof();
   testLr2FractionalTotalStartsAndPersists();
   testNonpositiveTotalBuildsAndReplays();
   testLr2PolicyIsCoherent();

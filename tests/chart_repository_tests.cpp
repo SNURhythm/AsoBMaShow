@@ -652,7 +652,7 @@ void testSessionRoundTripAndReadinessCost() {
 
   Database inspection = openDatabase(path);
   assert(inspection);
-  assert(queryInt(inspection.get(), "PRAGMA user_version") == 14);
+  assert(queryInt(inspection.get(), "PRAGMA user_version") == 15);
   SqliteStatementHandle journalMode;
   assert(prepareSqliteStatement(inspection.get(), "PRAGMA journal_mode",
                                 journalMode) == SQLITE_OK);
@@ -863,7 +863,7 @@ void testRejectedFamiliesRemainUnchanged() {
     assert(execute(database.get(),
                    "CREATE TABLE sentinel(value TEXT);"
                    "INSERT INTO sentinel VALUES('unchanged');"
-                   "PRAGMA user_version=15"));
+                   "PRAGMA user_version=16"));
   }
   const auto futureBefore =
       repository_test::rawDatabaseFamilySnapshot(futurePath);
@@ -2115,7 +2115,7 @@ void testChartMigrationCompatibilityMatrix() {
     assert(migrated.EnsureReady());
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 14);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 15);
     assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
     assert(queryInt(database.get(),
                     "SELECT COUNT(*) FROM chart_favorites") == 1);
@@ -2284,8 +2284,39 @@ void testJudgeRankMigrationPreservesAddedDatesAcrossResumedScan() {
     assert(queryInt(database.get(),
                     "SELECT add_date FROM chart_meta WHERE title='New'") > 345678);
     assert(queryInt(database.get(), "SELECT adddate FROM folder") == 345678);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 14);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 15);
   }
+}
+
+void testBmsonMigrationPreservesLibrary() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "bmson-migration.db";
+  {
+    ChartRepository repository(path);
+    assert(repository.EnsureReady());
+    auto session = repository.OpenSession();
+    auto meta = chartMeta(temporary.path());
+    assert(session && session->InsertChartMeta(meta));
+  }
+  {
+    auto db = openDatabase(path);
+    assert(execute(db.get(),
+        "ALTER TABLE chart_meta DROP COLUMN total_is_relative;"
+        "ALTER TABLE archive_scan_cache DROP COLUMN recognition_version;"
+        "INSERT INTO archive_scan_cache(path,solid,chart_count) VALUES('same.zip',0,1);"
+        "UPDATE chart_meta SET add_date=123456;"
+        "PRAGMA user_version=14"));
+  }
+  ChartRepository repository(path);
+  assert(repository.EnsureReady());
+  auto db = openDatabase(path);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 15);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM chart_meta") == 1);
+  assert(queryInt(db.get(), "SELECT total_is_relative FROM chart_meta") == 0);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM archive_scan_cache") == 1);
+  assert(queryInt(db.get(), "SELECT chart_count FROM archive_scan_cache") == 1);
+  assert(queryInt(db.get(), "SELECT recognition_version FROM archive_scan_cache") == 0);
+  assert(queryInt(db.get(), "SELECT add_date FROM chart_meta") == 123456);
 }
 
 void testParserSemanticsMigrationIsResumable() {
@@ -2514,7 +2545,7 @@ void testChartMigrationReleaseFailureDoesNotReportSuccess() {
   {
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 14);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 15);
     assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
     assert(queryInt(database.get(),
                     "SELECT required FROM chart_meta_rebuild_state "
@@ -4570,6 +4601,7 @@ int main(int argc, char **argv) {
   testJudgeRankMigrationPreservesAddedDatesAcrossResumedScan();
   testSolidArchiveClassificationMigration();
   testParserSemanticsMigrationIsResumable();
+  testBmsonMigrationPreservesLibrary();
   testSolidArchiveDirectoryLoadsOnlyArchiveRecords();
   testUnicodeSolidArchiveNameSurvivesScanAndBrowsing();
   testChartMigrationReleaseFailureDoesNotReportSuccess();

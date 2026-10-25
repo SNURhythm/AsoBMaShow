@@ -980,9 +980,29 @@ std::shared_ptr<audio::DecodedAssetCache> AudioWrapper::decodedAssetCacheSnapsho
 
 bool AudioWrapper::loadPreparedSound(
     const path_t &path, const audio::DecodedAssetCache::DecodedSound &sound,
-    std::atomic<bool> &isCancelled) {
+    std::atomic<bool> &isCancelled, bool monophonic) {
   return loadDecodedSound(path, sound.pcm, sound.info.channels,
-                           sound.info.samplerate, isCancelled, &sound);
+                           sound.info.samplerate, isCancelled, &sound, monophonic);
+}
+
+bool AudioWrapper::loadSoundGroup(const path_t &path, const std::vector<path_t> &layers,
+                                   std::atomic<bool> &isCancelled) {
+  std::lock_guard lock(soundDataListMutex);
+  if (isCancelled) return false;
+  if (soundDataIndexMap.contains(path)) return true;
+  auto group = std::make_shared<SoundData>();
+  for (const auto &key : layers) {
+    const auto found = soundDataIndexMap.find(key);
+    if (found == soundDataIndexMap.end()) continue;
+    const auto &sound = soundDataList[found->second];
+    if (!sound->layers.empty()) return false;
+    group->layers.push_back(sound);
+    group->outputFrameCount = std::max(group->outputFrameCount, sound->outputFrameCount);
+  }
+  if (group->layers.empty()) return false;
+  soundDataIndexMap[path] = soundDataList.size();
+  soundDataList.push_back(std::move(group));
+  return true;
 }
 
 bool AudioWrapper::loadSound(const path_t &path,
@@ -1059,7 +1079,7 @@ bool AudioWrapper::loadDecodedSound(const path_t &path,
                                     audio::SharedPcmBuffer pcmData, int channels,
                                     int sampleRate,
                                     std::atomic<bool> &isCancelled,
-                                    const audio::DecodedAssetCache::DecodedSound *prepared) {
+                                    const audio::DecodedAssetCache::DecodedSound *prepared, bool monophonic) {
   if (isCancelled) {
     return false;
   }
@@ -1072,6 +1092,7 @@ bool AudioWrapper::loadDecodedSound(const path_t &path,
   auto soundData = std::make_shared<SoundData>();
 
   soundData->currentFrame = 0;
+  soundData->monophonic = monophonic;
   soundData->channels = channels;
   soundData->sourceSampleRate = sampleRate;
   soundData->playing = false;

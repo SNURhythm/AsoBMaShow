@@ -61,6 +61,9 @@ struct ScanParserTotals {
 };
 
 constexpr int kArchiveParseCheckpointInterval = 100;
+// Version 1 adds bmson discovery to unchanged archives. This tracks filename
+// recognition only; it must never trigger a metadata rebuild of known charts.
+constexpr int kArchiveChartRecognitionVersion = 1;
 constexpr std::size_t kIndividualParseBatchSize = 512;
 constexpr std::size_t kIndividualCommitInterval = 1000;
 constexpr std::size_t kArchiveParseMaxInFlightFiles = 12;
@@ -652,6 +655,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   std::unordered_map<path_t, ArchiveCacheDiff> pendingArchiveCacheDiffs;
   std::vector<std::filesystem::path> staleSolidArchives;
   std::vector<std::filesystem::path> reindexedArchives;
+  // Existing rows retained during an additive format-recognition upgrade.
+  std::unordered_map<path_t, int> recognitionUpgradeChartCounts;
   std::vector<std::filesystem::path> liveArchivePaths;
   std::unordered_set<path_t> knownChartPaths;
   std::unordered_map<path_t, int> knownArchiveChartCounts;
@@ -930,6 +935,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     std::int64_t mtimeNs = 0;
     const ArchiveScanCacheRecord *cache = nullptr;
     bool cacheAccepted = false;
+    bool recognitionUpgrade = false;
+    int retainedChartCount = 0;
     std::optional<ArchiveScanResult> scan;
     std::string chartParseError;
   };
@@ -1527,8 +1534,14 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
     const auto cacheIt = archiveCacheByPath.find(archiveKey);
     const ArchiveScanCacheRecord *cache =
         cacheIt != archiveCacheByPath.end() ? cacheIt->second : nullptr;
+    const bool recognitionUpgrade =
+        cache != nullptr && !cache->solid &&
+        cache->archiveSize == archiveSize && cache->mtimeNs == mtimeNs &&
+        cache->chartCount >= 0 &&
+        cache->recognitionVersion < kArchiveChartRecognitionVersion;
     if (cache != nullptr && cache->archiveSize == archiveSize &&
-        cache->mtimeNs == mtimeNs && cache->chartCount >= 0) {
+        cache->mtimeNs == mtimeNs && cache->chartCount >= 0 &&
+        !recognitionUpgrade) {
       int knownChartCount = knownArchiveChartCounts.contains(archiveKey)
                                 ? knownArchiveChartCounts.at(archiveKey)
                                 : 0;
@@ -1568,7 +1581,8 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
 
     const std::size_t sequence = reservePreparedEntity();
     if (entityScheduler.enqueue(
-            [&, sequence, archivePath, archiveSize, mtimeNs, cache] {
+            [&, sequence, archivePath, archiveSize, mtimeNs, cache,
+             recognitionUpgrade] {
               if (shouldStop()) {
                 return;
               }
@@ -1582,6 +1596,20 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
                         .scan = scanArchiveForChartsOrSolid(archivePath,
                                                             pauseCallback),
                     });
+                if (recognitionUpgrade && prepared->scan->readable &&
+                    !prepared->scan->solid) {
+                  prepared->recognitionUpgrade = true;
+                  const auto known = knownArchiveChartCounts.find(
+                      archiveScanKey(archivePath));
+                  if (known != knownArchiveChartCounts.end()) {
+                    prepared->retainedChartCount = known->second;
+                  }
+                  // Filter before prefetch: only missing chart payloads are
+                  // read/parsed. listEntries reuses the archive metadata index.
+                  std::erase_if(prepared->scan->chartPaths, [&](const auto &path) {
+                    return knownChartPaths.contains(fspath_to_path_t(path));
+                  });
+                }
                 prepareArchiveCharts(sequence, std::move(prepared));
               } catch (...) {
                 discoveryHealthy.store(false, std::memory_order_relaxed);
@@ -1871,13 +1899,18 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           "Deferred archive chart parse after pipeline error: " +
           fspath_to_utf8(prepared.path) + ": " + prepared.chartParseError);
     }
-    reindexedArchives.push_back(prepared.path);
+    if (prepared.recognitionUpgrade) {
+      recognitionUpgradeChartCounts[archiveKey] = prepared.retainedChartCount;
+    } else {
+      reindexedArchives.push_back(prepared.path);
+    }
     ArchiveCacheDiff cacheDiff{
         .path = prepared.path,
         .solid = archiveScan.solid,
         .uncompressedSize = archiveScan.uncompressedSize,
         .fileCount = archiveScan.fileCount,
-        .chartCount = static_cast<int>(archiveScan.chartPaths.size()),
+        .chartCount = prepared.retainedChartCount +
+                      static_cast<int>(archiveScan.chartPaths.size()),
     };
     if (archiveScan.solid) {
       archiveCacheDiffs.push_back(cacheDiff);
@@ -2130,6 +2163,11 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
   auto archiveIdentityCompleted =
       [&](const std::filesystem::path &archivePath) -> bool {
     const path_t archiveKey = archiveScanKey(archivePath);
+    // A completion marker from an older recognizer says nothing about the
+    // newly supported entries. Missing paths are reconciled even on resume.
+    if (recognitionUpgradeChartCounts.contains(archiveKey)) {
+      return false;
+    }
     if (const auto cached = completedArchiveCache.find(archiveKey);
         cached != completedArchiveCache.end()) {
       return cached->second;
@@ -2211,7 +2249,11 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
                 checkpointPathTextForDb(checkpoint.archivePath);
         std::int64_t archiveSize = 0;
         std::int64_t mtimeNs = 0;
-        if (archivePathsMatch && subIndex > 0 &&
+        // Additive discovery already filtered every durable chart, so the old
+        // checkpoint's subIndex no longer addresses this missing-path list.
+        if (!recognitionUpgradeChartCounts.contains(
+                archiveBatchOrder[resumeStart]) &&
+            archivePathsMatch && subIndex > 0 &&
             subIndex <= batch.innerPaths.size() &&
             archiveFileState(batch.archivePath, archiveSize, mtimeNs) &&
             archiveSize == checkpoint.archiveSize &&
@@ -2467,6 +2509,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         .uncompressedSize = diff.uncompressedSize,
         .fileCount = diff.fileCount,
         .chartCount = diff.chartCount,
+        .recognitionVersion = kArchiveChartRecognitionVersion,
     }));
   }
   scanPhaseEnd("loop-archive-cache-diffs", loopArchiveCacheDiffsStart);
@@ -2738,6 +2781,7 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
         .uncompressedSize = diff.uncompressedSize,
         .fileCount = diff.fileCount,
         .chartCount = parsedChartCount,
+        .recognitionVersion = kArchiveChartRecognitionVersion,
     }));
   };
 
@@ -3182,7 +3226,9 @@ ChartScanResult ChartLibraryScanner::ScanImpl(
           "Failed to clear uncheckpointed archive chart rows: " +
           archiveText);
     }
-    int storedChartCount = 0;
+    int storedChartCount = recognitionUpgradeChartCounts.contains(archiveKey)
+                               ? recognitionUpgradeChartCounts.at(archiveKey)
+                               : 0;
     if (innerStart > 0) {
       const auto count = scanBatch->CountChartsInArchive(batch.archivePath);
       if (recordStorageResult(count.has_value())) {

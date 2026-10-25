@@ -31,7 +31,7 @@
 
 namespace {
 using asobmshow::chart_sql::normalizedSqlHash;
-constexpr int kChartDatabaseSchemaVersion = 14;
+constexpr int kChartDatabaseSchemaVersion = 15;
 
 std::string columnString(sqlite3_stmt *stmt, int idx);
 
@@ -158,6 +158,7 @@ bool createChartMetaTableSchema(sqlite3 *db) {
       "length     INTEGER,"
       "rank      INTEGER,"
       "rank_type INTEGER NOT NULL DEFAULT 0,"
+      "total_is_relative INTEGER NOT NULL DEFAULT 0,"
       "player    INTEGER,"
       "keys     INTEGER,"
       "total_notes INTEGER,"
@@ -807,6 +808,18 @@ bool migrateChartDatabaseSchema(sqlite3 *db) {
       {14, "refresh malformed long-note counts", [](sqlite3 *db, bool &completed) {
          return invalidateChartMetadataForNormalScan(db, completed, true);
        }},
+      {15, "persist bmson gauge units", [](sqlite3 *db, bool &completed) {
+         bool hasColumn = false;
+         if (const auto error = querySqliteTableHasColumn(
+                 db, "chart_meta", "total_is_relative", hasColumn)) {
+           logSqlErrorText("checking chart gauge units", *error);
+           return false;
+         }
+         completed = hasColumn || execSql(db,
+             "ALTER TABLE chart_meta ADD COLUMN total_is_relative INTEGER NOT NULL DEFAULT 0",
+             "adding chart gauge units");
+         return completed;
+       }},
   };
   return runChartDatabaseMigrationPasses(
       db, kMigrationPasses,
@@ -867,6 +880,7 @@ bool createArchiveScanCacheTable(sqlite3 *db) {
       "uncompressed_size INTEGER NOT NULL DEFAULT 0,"
       "file_count INTEGER NOT NULL DEFAULT 0,"
       "chart_count INTEGER NOT NULL DEFAULT -1,"
+      "recognition_version INTEGER NOT NULL DEFAULT 0,"
       "updated_at TEXT DEFAULT CURRENT_TIMESTAMP"
       ")";
   if (!execSql(db, query, "creating archive scan cache table")) {
@@ -877,6 +891,16 @@ bool createArchiveScanCacheTable(sqlite3 *db) {
           "ALTER TABLE archive_scan_cache "
           "ADD COLUMN chart_count INTEGER NOT NULL DEFAULT -1",
           "migrating archive scan cache chart count")) {
+    return false;
+  }
+  // Older caches remain valid for their existing charts. The scanner uses
+  // version 0 to discover newly supported formats once, without a rebuild.
+  if (!ensureSqliteTableColumnLogged(
+          db, "archive_scan_cache", "recognition_version",
+          "ALTER TABLE archive_scan_cache "
+          "ADD COLUMN recognition_version INTEGER NOT NULL DEFAULT 0",
+          "checking archive chart recognition version",
+          "adding archive chart recognition version", logSqlErrorText)) {
     return false;
   }
 

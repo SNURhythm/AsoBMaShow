@@ -1,3 +1,4 @@
+#include "BmsonAudio.h"
 #include "ProgressiveMusicSource.h"
 
 #include "../ArchiveFile.h"
@@ -285,6 +286,7 @@ struct Event {
   int wav;
   std::size_t order;
   float gain = 1.0f;
+  long long sourceStartMicros = 0, sourceDurationMicros = -1;
 };
 struct Voice {
   std::shared_ptr<Asset> asset;
@@ -292,13 +294,16 @@ struct Voice {
   std::uint64_t end;
   std::size_t order;
   float gain;
+  audio::bmson::FrameRange range;
   audio::pcm_resampling::Ratio ratio;
   audio::pcm_resampling::Cursor cursor;
   Voice(std::shared_ptr<Asset> value, const Event &event, std::uint64_t frames)
       : asset(std::move(value)), start(event.frame), end(start + frames), order(event.order),
         gain(event.gain),
+        range(audio::bmson::sourceRange(event.sourceStartMicros, event.sourceDurationMicros,
+            asset->info.samplerate, static_cast<std::size_t>(asset->info.frames))),
         ratio(asset->info.samplerate, kSampleRate),
-        cursor(ratio, static_cast<std::size_t>(asset->info.frames)) {
+        cursor(ratio, range.count) {
     ++asset->activeVoices;
   }
   ~Voice() { --asset->activeVoices; }
@@ -592,8 +597,9 @@ struct Source::Impl {
     std::uint64_t totalFrames = std::max<std::uint64_t>(1,
         framesForTime(chart_playback_duration::ChartTimelineEndMicros(*chart), true));
     std::vector<Event> events;
-    for (const auto &event : chart_audio::CollectChartTimedAudioEvents(*chart)) {
-      events.push_back({framesForTime(event.timeMicros, false), event.wav, events.size()});
+    for (const auto &event : chart_audio::ExpandAudioSlices(*chart, chart_audio::CollectChartTimedAudioEvents(*chart))) {
+      events.push_back({framesForTime(event.timeMicros, false), event.wav, events.size(),
+                        1.0f, event.sourceStartMicros, event.sourceDurationMicros});
     }
     if (clubMode) {
       club_beat::PlanError error;
@@ -719,8 +725,11 @@ struct Source::Impl {
         auto asset = loadAsset(event.wav, stop,
             skipEnd > event.frame ? skipEnd - event.frame : 0);
         if (!asset) continue;
+        const auto range = audio::bmson::sourceRange(event.sourceStartMicros, event.sourceDurationMicros,
+            asset->info.samplerate, static_cast<std::size_t>(asset->info.frames));
+        if (range.count == 0) continue;
         const auto targetFrames = audio::pcm_resampling::Ratio(
-            asset->info.samplerate, kSampleRate).outputFrames(asset->info.frames, kMaximumFrames);
+            asset->info.samplerate, kSampleRate).outputFrames(range.count, kMaximumFrames);
         if (!targetFrames || *targetFrames >= kMaximumFrames - event.frame)
           throw std::runtime_error("Music stream sound tail exceeds WAV frame limit");
         totalFrames = std::max(totalFrames, event.frame + *targetFrames + 1);
@@ -758,13 +767,13 @@ struct Source::Impl {
         const auto to = std::min(end, voice->end);
         const std::size_t rightChannel = asset.info.channels == 1 ? 0 : 1;
         for (auto frame = from; frame < to; ++frame) {
-          const auto leftFrame = voice->cursor.left();
+          const auto leftFrame = voice->range.start + voice->cursor.left();
           short left, right;
           if (voice->ratio.direct()) {
             left = asset.sample(leftFrame, 0);
             right = rightChannel == 0 ? left : asset.sample(leftFrame, rightChannel);
           } else {
-            const auto rightFrame = voice->cursor.right();
+            const auto rightFrame = voice->range.start + voice->cursor.right();
             // Read the left pair before advancing the decoder window at a boundary.
             const auto left0 = asset.sample(leftFrame, 0);
             const auto right0 = rightChannel == 0 ? left0 : asset.sample(leftFrame, rightChannel);

@@ -36,6 +36,7 @@ Sources for the notices added with this page:
 - `openssl.txt`: installed vcpkg `share/openssl/copyright` (locked project dependencies).
 - `bzip2.txt`: installed vcpkg `share/bzip2/copyright` (locked project dependencies).
 - `miniaudio.txt`, `stb-image.txt`, `sol2.txt`: license blocks in the corresponding vendored headers under `include/`.
+- `picojson.txt`: BSD-2-Clause license block in the parser's vendored picojson v1.3.0.
 - `bms-parser.txt`: copyright/license header in `src/bms_parser.hpp` and root GPL text.
 - `translation.txt`: Google disclaimer already documented in `docs/features/readme-translation.md`, with provider links.
 

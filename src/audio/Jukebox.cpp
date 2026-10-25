@@ -1,3 +1,4 @@
+#include "BmsonAudio.h"
 #include "Jukebox.h"
 #include "ChartVisualAssetResolver.h"
 #include "ChartAudioFileLookup.h"
@@ -1323,7 +1324,7 @@ Jukebox::preflight(const PreparedGameplayBgaFrame &frame,
       }
       plan.surface = surface;
       plan.material =
-          SelectGameplayBgaMaterial(target.role, surface.mediaKind);
+          SelectGameplayBgaMaterial(target.role, surface.mediaKind, gameplayBgaBlackTransparent);
       plan.destination = stretched->destination;
       plan.uvs = stretched->uvs;
 
@@ -2862,7 +2863,43 @@ audio::playback::BackendOperationResult Jukebox::loadResolvedChartResources(
   if (isCancelled) {
     return {.success = true};
   }
-  return reconcileChartResources(chart, &sounds, visuals, isCancelled, preserveVisuals);
+  auto result = reconcileChartResources(chart, &sounds, visuals, isCancelled, preserveVisuals);
+  if (!result.success || isCancelled || chart.WavSlices.empty()) return result;
+  std::unordered_map<int, std::shared_ptr<const audio::DecodedAssetCache::DecodedSound>> sources;
+  for (const auto &[id, path] : wavTableAbs) sources[id] = audio.decodedSoundSnapshot(path);
+  std::unordered_map<int, path_t> preparedSlices;
+  for (const auto &[id, slices] : chart.WavSlices) {
+    if (isCancelled) break;
+    std::vector<path_t> layers;
+    for (const auto &slice : slices) {
+      auto prepared = preparedSlices.find(slice.SliceId);
+      if (prepared == preparedSlices.end()) {
+        const auto source = sources.find(slice.SourceWav);
+        const auto sound = audio::bmson::prepare(slice,
+            source == sources.end() ? nullptr : source->second, isCancelled);
+        if (!sound) continue;
+        const auto key = utf8_to_path_t("@bmson/" + chart.Meta.SHA256 + "/slice/" + std::to_string(slice.SliceId));
+        if (!audio.loadPreparedSound(key, *sound, isCancelled, true)) {
+          if (isCancelled) break;
+          return {.success = false, .diagnostic = "Could not prepare bmson keysound slice."};
+        }
+        prepared = preparedSlices.emplace(slice.SliceId, key).first;
+        wavTableAbs[slice.SliceId] = key;
+      }
+      layers.push_back(prepared->second);
+    }
+    if (layers.empty() || isCancelled) continue;
+    if (layers.size() == 1) wavTableAbs[id] = layers.front();
+    else {
+      const auto key = utf8_to_path_t("@bmson/" + chart.Meta.SHA256 + "/group/" + std::to_string(id));
+      if (!audio.loadSoundGroup(key, layers, isCancelled)) {
+        if (isCancelled) break;
+        return {.success = false, .diagnostic = "Could not prepare bmson keysound layers."};
+      }
+      wavTableAbs[id] = key;
+    }
+  }
+  return result;
 }
 
 audio::playback::BackendOperationResult
@@ -2870,6 +2907,7 @@ Jukebox::reconcileChartResources(
     bms_parser::Chart &chart, const std::vector<ResolvedSoundAsset> *sounds,
     const std::vector<ResolvedVisualAsset> &visuals,
     std::atomic_bool &isCancelled, bool preserveVisuals) {
+  gameplayBgaBlackTransparent = !chart.Meta.Values.contains("bmson.version");
   std::unordered_map<path_t, ArchiveChartAssetBatch> archiveBatches;
   std::vector<path_t> archiveBatchOrder;
   std::unordered_map<path_t, std::vector<int>> regularSoundIds;
@@ -3184,6 +3222,7 @@ bool Jukebox::prepareGameplayBgaLayerImageIds(
     const std::vector<ResolvedVisualAsset> &assets,
     std::atomic_bool &isCancelled) noexcept {
   gameplayBgaLayerImageIds.clear();
+  if (!gameplayBgaBlackTransparent) return true;
   try {
     std::unordered_set<int> resolvedImageIds;
     resolvedImageIds.reserve(assets.size());

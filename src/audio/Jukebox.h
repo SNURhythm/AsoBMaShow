@@ -449,6 +449,7 @@ private:
   std::vector<std::pair<long long, int>> bmpList;
   std::vector<std::pair<long long, int>> bmpLayerList;
   std::unordered_set<int> gameplayBgaLayerImageIds;
+  bool gameplayBgaBlackTransparent = true;
   BgaPoorSequenceSchedule poorBgaSequences;
   size_t bmpCursor = 0;
   size_t bmpLayerCursor = 0;

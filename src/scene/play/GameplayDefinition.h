@@ -50,6 +50,7 @@ struct GameplayChartMetadata {
   int keyMode = 7;
   bool hasGaugeTotal = false;
   double gaugeTotal = 0.0;
+  bool gaugeTotalIsRelative = false;
   std::int64_t finalNoteTimeMicros = 0;
   std::int64_t finalTimelineTimeMicros = 0;
 };

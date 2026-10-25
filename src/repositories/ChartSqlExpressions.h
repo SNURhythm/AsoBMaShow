@@ -46,8 +46,8 @@ inline constexpr const char *kChartMetaSelectColumns =
     "cm.has_random_sequence,"
     "cm.most_prevalent_bpm,"
     "cm.has_bga,"
-    "cm.rank_type";
-inline constexpr int kChartMetaColumnCount = 38;
+    "cm.rank_type,cm.total_is_relative";
+inline constexpr int kChartMetaColumnCount = 39;
 
 inline std::string chartFavoriteIndexedPathPredicate(const std::string &chartPath) {
   const std::string prefix(asobmshow::chart_sql::kStoredDocumentsBmsPrefix);

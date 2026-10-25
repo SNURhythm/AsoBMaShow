@@ -33,6 +33,7 @@ struct ArchiveScanCacheRecord {
   std::uint64_t uncompressedSize = 0;
   int fileCount = 0;
   int chartCount = -1;
+  int recognitionVersion = 0;
 };
 
 struct ArchiveScanCacheUpdate {
@@ -41,6 +42,7 @@ struct ArchiveScanCacheUpdate {
   std::uint64_t uncompressedSize = 0;
   int fileCount = 0;
   int chartCount = 0;
+  int recognitionVersion = 0;
 };
 
 struct ChartSourcePreferenceUpdate {

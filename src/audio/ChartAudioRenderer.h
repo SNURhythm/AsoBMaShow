@@ -64,6 +64,8 @@ sourceFramesPerOutputFrame(int sourceSampleRate,
 struct AudioEvent {
   long long timeMicros = 0;
   int wav = bms_parser::Parser::NoWav;
+  long long sourceStartMicros = 0;
+  long long sourceDurationMicros = -1;
 };
 
 enum class KeySoundMode {
@@ -102,6 +104,10 @@ struct RenderResult {
   long long durationMicros = 0;
   std::size_t eventCount = 0;
 };
+
+// Expand virtual bmson WAVs into source slices for streaming/offline mixing.
+std::vector<AudioEvent> ExpandAudioSlices(const bms_parser::Chart &chart,
+                                         const std::vector<AudioEvent> &events);
 
 std::vector<AudioEvent>
 CollectBackgroundAudioEvents(const bms_parser::Chart &chart);

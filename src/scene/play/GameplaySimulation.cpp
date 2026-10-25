@@ -74,6 +74,7 @@ GameplaySimulationConfig withCompiledGaugeRules(
   meta.KeyMode = metadata.keyMode;
   meta.HasTotal = metadata.hasGaugeTotal;
   meta.Total = metadata.gaugeTotal;
+  meta.TotalIsRelative = metadata.gaugeTotalIsRelative;
   config.gaugeRules = compileGameplayGaugeRules(
       config.judge.rules().ruleset, meta, config.attempt.gaugeProfile);
   return config;

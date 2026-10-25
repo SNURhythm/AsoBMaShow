@@ -104,6 +104,7 @@ GameplayDefinition buildGameplayDefinition(const bms_parser::Chart &chart,
       .keyMode = chart.Meta.KeyMode,
       .hasGaugeTotal = chart.Meta.HasTotal,
       .gaugeTotal = chart.Meta.Total,
+      .gaugeTotalIsRelative = chart.Meta.TotalIsRelative,
   };
   std::unordered_map<const bms_parser::Note *, NoteId> ids;
 

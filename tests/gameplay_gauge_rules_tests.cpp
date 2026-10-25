@@ -488,6 +488,18 @@ void testPracticeLr2CategoryUsesPinnedGradeGaugeTable() {
 } // namespace
 
 int main() {
+  {
+    bms_parser::ChartMeta meta;
+    meta.KeyMode = 7;
+    meta.TotalNotes = 100;
+    meta.HasTotal = true;
+    meta.TotalIsRelative = true;
+    meta.Total = 50;
+    require(close(resolveEffectiveGaugeTotal(GameplayRuleset::Beatoraja, meta), 130.0), "bmson relative Beatoraja gain");
+    require(close(resolveEffectiveGaugeTotal(GameplayRuleset::LR2, meta), 88.0), "bmson relative LR2 gain");
+    meta.Total = 0;
+    require(resolveEffectiveGaugeTotal(GameplayRuleset::Beatoraja, meta) == 0, "bmson zero TOTAL has no gain");
+  }
   testLr2ReferenceRecoveryAndCourseConstraints();
   testNamedLr2GaugesAndDirectGradeUseReferenceDamage();
   testLr2DamageUsesJavaFloatArithmetic();
