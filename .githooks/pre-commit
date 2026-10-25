@@ -1,0 +1,3 @@
+#!/bin/sh
+set -eu
+exec python3 "$(dirname "$0")/../scripts/sort_translation_keys.py" --staged
