@@ -24,6 +24,7 @@ def export_preload_fixture(source=None):
         "void MusicSelectScene::tryCompletePendingPreloadLaunch()",
         "void MusicSelectScene::update(float)",
         "void MusicSelectScene::onPause()",
+        "void MusicSelectScene::onApplicationBackgroundChanged(bool background)",
     ]
     methods = []
     for signature in signatures:

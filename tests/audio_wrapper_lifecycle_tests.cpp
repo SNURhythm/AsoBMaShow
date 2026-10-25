@@ -1,4 +1,5 @@
 #include "audio/AudioWrapper.h"
+#include "audio/MusicSelectPreviewFilePlayer.h"
 #include "audio/Jukebox.h"
 #include "audio/JukeboxLifecycle.h"
 #include "audio/JukeboxSoundResources.h"
@@ -2477,6 +2478,50 @@ void testRealtimeReservationDoesNotContendOnUnrelatedLifecycleWork() {
           "lock-free reservation still commits the matching keysound");
 }
 
+void testPreviewFileMetersAudibleOutputAndRetiresOldSelection() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  const path_t path = PATH("metered-preview.ogg");
+  std::vector<short> tone(4410);
+  for (std::size_t i = 0; i < tone.size(); ++i)
+    tone[i] = static_cast<short>(16384 * std::sin(2 * 3.141592653589793 * i / 100));
+  require(wrapper.loadGeneratedSound(path, tone, 1, 44100), "retain preview test tone");
+  MusicSelectPreviewFilePlayer player(&wrapper, {}, true);
+  std::atomic_bool cancelled = false;
+  std::array<short, 8192> output{};
+  const auto render = [&] {
+    control->renderCallback(output.data(), 4096, 2, control->renderUserData);
+  };
+  require(player.play(std::filesystem::path(path), true, cancelled, {}, 0.5F),
+          "preview file starts through the shared skin sound player");
+  require(player.outputLevel() == 0, "new file has no meter before its first rendered output");
+  render();
+  require(player.outputLevel() > 0.158F && player.outputLevel() < 0.161F,
+          "file meter includes half gain and mixer headroom without starting the chart clock");
+  const auto spectrum = player.outputSpectrum();
+  require(*std::max_element(spectrum.begin(), spectrum.end()) > 0.5F,
+          "preview file feeds the existing spectrum analyzer");
+  player.stopCurrent();
+  require(player.outputLevel() == 0 && player.outputSpectrum() == audio::Spectrum{},
+          "stop hides the old selection immediately, even before another callback");
+  require(player.play(std::filesystem::path(path), true, cancelled, {}, 0), "start muted file");
+  require(player.outputLevel() == 0 && player.outputSpectrum() == audio::Spectrum{},
+          "new playback cannot reuse a previous generation's meter");
+  render();
+  require(player.outputLevel() == 0 && player.outputSpectrum() == audio::Spectrum{},
+          "mute produces neither pulse nor stale spectrum");
+  player.stopCurrent();
+  require(player.play(std::filesystem::path(path), true, cancelled), "restart audible file");
+  render();
+  require(player.outputLevel() > 0.317F && player.outputLevel() < 0.320F, "full-gain file updates the meter");
+  wrapper.setApplicationSuspended(true);
+  render();
+  require(player.outputLevel() == 0 && player.outputSpectrum() == audio::Spectrum{},
+          "suspended callback publishes silence instead of a frozen pulse");
+}
+
 void testLuaSkinProductionAdapterPreservesUnrelatedAudioOwnership() {
   WrapperFixture fixture;
   const path_t skinPath = PATH("skin-adapter-sound.ogg");
@@ -3377,6 +3422,7 @@ int main() {
     testRealtimeKeysoundHandleCommitsWithoutLookupOrLifecycleWork();
     testRealtimeReservationExcludesLifecycleResetUntilCommit();
     testRealtimeReservationDoesNotContendOnUnrelatedLifecycleWork();
+    testPreviewFileMetersAudibleOutputAndRetiresOldSelection();
     testLuaSkinProductionAdapterPreservesUnrelatedAudioOwnership();
     testReplayLuaAudioBackendIsExplicitlyNoOutputAndCancellable();
     testLuaSkinRetirementWaitsForCallbackWhileChartClockContinues();

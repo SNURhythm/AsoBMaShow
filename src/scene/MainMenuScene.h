@@ -140,9 +140,8 @@ private:
   // scene-lifetime thread, debounced and latest-wins) so a selection change
   // never spawns or joins a per-selection thread on the UI thread.
   audio::PreviewStreamPlayer previewPlayer_;
+  std::unique_ptr<class MusicSelectPreviewFilePlayer> previewFilePlayer_;
   std::shared_ptr<audio::DecodedAssetCache> previewDecodedAssets_;
-  // Explicit chart position; future highlight selection supplies this value.
-  std::uint64_t previewStartFrame_ = 0;
   void updatePreviewVisuals();
   // Guarded by previewVisualsMutex; full gameplay owns visuals after stop.
   bool previewVisualsLoaded_ = false;

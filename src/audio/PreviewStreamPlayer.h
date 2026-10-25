@@ -27,8 +27,10 @@ public:
   PreviewStreamPlayer &operator=(const PreviewStreamPlayer &) = delete;
 
   // Opens the device, then waits for the source startup reserve before
-  // starting output. Async failures are logged and exposed through GetState.
-  bool Start(std::shared_ptr<PagedPreviewSource> source, std::string &error);
+  // starting output. Optional fade-in lasts 300 ms of consumed audio, excluding
+  // buffering. Async failures are logged and exposed through GetState.
+  bool Start(std::shared_ptr<PagedPreviewSource> source, std::string &error,
+             bool fadeIn = false);
   // Cancels/joins preparation and control, then quiesces output before returning.
   void Stop();
   // Device settings take effect on the next Start. Gain applies immediately.

@@ -6,6 +6,7 @@
 #include <cassert>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -33,7 +34,7 @@ struct ChartMetaRecord {
   bool unavailable = false, solidArchive = false;
   bool courseStart = false;
 };
-struct ModernChartResultRecord { struct { int score = 51; } result; };
+struct ModernChartResultRecord { struct { int score = 51, attemptId = 7; } result; };
 struct ModernCourseResultRecord { struct { std::vector<int> stages{1, 2}; } result; };
 namespace skin { enum class MusicSelectBarKind { Song, Grade }; }
 struct MusicSelectBar {
@@ -210,6 +211,7 @@ struct RecordsModal {
   void setIrUploadInProgress(bool) {}
   void reloadRecords(bool) {}
   void setStatus(const std::string &value) { status = value; }
+  void showIrFeedback(const std::string &value) { status = value; }
   bool autoKeySound() { return true; }
   bool renderTouchPoints() { return true; }
   bool renderReplayGhosts() { return false; }
@@ -230,6 +232,12 @@ struct Jukebox {
 };
 namespace replay_records {
 std::string diagnosticOr(const std::string &message, const std::string &fallback) { return message.empty() ? fallback : message; }
+bool uploadThrows = false;
+std::optional<std::string> irUploadUnavailable(const auto &) { return std::nullopt; }
+std::string uploadSavedResult(auto &, int) {
+  if (uploadThrows) throw std::runtime_error("upload failed");
+  return "queued";
+}
 }
 struct MusicSelectScene {
   SceneManager manager;
@@ -266,6 +274,9 @@ struct MusicSelectScene {
   bool beginRecordsOperation(bool);
   void startRecordsWork(ReplayRecordTask::Work, std::string);
   void finishRecordsLoading();
+  void uploadRecord(const ModernChartResultRecord &);
+  std::function<bool()> deferred;
+  void defer(std::function<bool()> work, int, bool) { deferred = std::move(work); }
   void finishRecordsFailure(const std::string &message) {
     finishRecordsLoading(); modal.status = message;
   }
@@ -279,7 +290,6 @@ struct MusicSelectScene {
     }
     assert(!recordsTask_.active() && "record preparation must terminate");
   }
-  bool recordsResumeAudioPending_ = false;
   int soundResumes = 0;
   struct Unzip { void cancelAndWait() {} };
   Unzip *archiveUnzipModal_ = nullptr;
@@ -292,7 +302,7 @@ struct MusicSelectScene {
   void onApplicationBackgroundChanged(bool);
   MusicSelectScene() {
     context.sceneManager = &manager;
-    manager.pause = [this] { sceneActive_ = false; recordsResumeAudioPending_ = false; };
+    manager.pause = [this] { sceneActive_ = false; };
   }
   void stopPreloadWorker() { ++preloadStops; preloadedChart_.reset(); preloadedPath_.clear(); }
   void launchCourseReplay(const MusicSelectBar &, int, const MusicSelectBarManagerReadView &);
@@ -343,7 +353,7 @@ void testReplayAudio(int path) {
     assert(scene.context.jukebox.loadThread != std::this_thread::get_id());
     if (outcome == 2) {
       assert(scene.manager.transitions == 0 && scene.modal.visible);
-      assert(scene.soundResumes == 1 && !scene.recordsResumeAudioPending_);
+      assert(scene.soundResumes == 1);
       assert(bms_parser::Chart::alive == 0 && "cancelled preparation releases the chart");
       continue;
     }
@@ -389,11 +399,15 @@ void testAutoPlayAudio() {
     if (outcome == 1) scene.preloadedChart_->Meta.BmsPath = "other.bms";
     scene.watchAutoPlay()(record);
     assert(scene.manager.transitions == 0 && scene.modal.loading);
-    scene.context.appInBackground = true;
-    scene.onApplicationBackgroundChanged(true);
-    scene.update(0);
-    scene.context.appInBackground = false;
-    scene.onApplicationBackgroundChanged(false);
+    // A failed foreground operation must restore audio without relying on an
+    // unrelated background/foreground notification to request recovery.
+    if (outcome != 2) {
+      scene.context.appInBackground = true;
+      scene.onApplicationBackgroundChanged(true);
+      scene.update(0);
+      scene.context.appInBackground = false;
+      scene.onApplicationBackgroundChanged(false);
+    }
     scene.drainRecords();
     assert(!scene.launching_ && !scene.modal.loading);
     if (outcome >= 2) {
@@ -423,6 +437,18 @@ void testAutoPlayAudio() {
   }
 }
 
+void testUploadAudio() {
+  for (bool fail : {false, true}) {
+    MusicSelectScene scene;
+    replay_records::uploadThrows = fail;
+    scene.uploadRecord({});
+    assert(scene.launching_ && scene.deferred);
+    scene.deferred();
+    assert(!scene.launching_ && scene.preloadStops == 1);
+    assert(scene.soundResumes == 1 && "IR upload completion restores selector audio");
+  }
+}
+
 int main(int argc, char **argv) {
   if (argc != 2) return 2;
   const std::string test = argv[1];
@@ -431,5 +457,6 @@ int main(int argc, char **argv) {
   else if (test == "2") testReplayAudio(2);
   else if (test == "3") testReplayAudio(3);
   else if (test == "4") testAutoPlayAudio();
+  else if (test == "5") testUploadAudio();
   else return 2;
 }

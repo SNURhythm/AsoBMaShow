@@ -51,6 +51,11 @@ class MainMenuPreviewLifecycleTests(unittest.TestCase):
         fixture = fixture.replace("SYNC_METHOD", "void updatePreviewVisuals() " +
                                   callback_body(source, signature))
 
+        construction = source.index("  previewFilePlayer_ = std::make_unique<MusicSelectPreviewFilePlayer>")
+        fixture = fixture.replace("FILE_PLAYER_CONSTRUCTION", source[construction:source.index(";", construction) + 1])
+        update = source[source.index("void MainMenuScene::update(float dt)"):]
+        fixture = fixture.replace("GLOW_METHOD", "void updateGlow(float dt) " +
+                                  callback_body(update, "if (chartDetailsView_)"))
         compiler = FixtureCompiler.from_environment(shared_headers=True)
         with tempfile.TemporaryDirectory() as directory:
             program = Path(directory) / "visuals.cpp"

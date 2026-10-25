@@ -11,6 +11,7 @@
 struct Preview {
   void reset() {}
   void silence() {}
+  void silenceAndWait() {}
   void resumeDefaultBgm() {}
 };
 
@@ -36,7 +37,6 @@ struct MusicSelectScene {
   };
   std::unique_ptr<RevealMenu> revealContextMenu_;
 
-  bool recordsResumeAudioPending_ = false;
   struct { void cancelAndWait() {} bool active() const { return false; } } recordsTask_;
   void finishRecordsLoading() {}
   struct UnzipModal { void cancelAndWait() {} void hide() {} };
@@ -56,6 +56,7 @@ struct MusicSelectScene {
   Worker *preloadWorker_ = nullptr;
   std::mutex preloadMutex_;
   std::unique_ptr<int> preloadedChart_;
+  std::shared_ptr<int> preloadedPreviewCache_;
   std::filesystem::path preloadedPath_;
   Preview previewController_;
   Preview *previewAudio_ = nullptr;

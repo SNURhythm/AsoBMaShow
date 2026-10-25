@@ -82,6 +82,44 @@ work without unconditionally releasing the selected chart. Cleanup and
 destruction join replay/export preparation before preview work, while callback
 dependencies remain alive.
 
+Chart previews default to a timing-based highlight with a 300 ms fade-in.
+The detector scores sustained placed-note and background-sound activity over
+12-second windows at measure boundaries, excluding the intro and late outro.
+Placed notes count even without keysounds; silent long-note tails do not add
+extra attacks. Placed notes and BGM events have equal activity weight. A bounded
+density-rise bonus favors entrances where both six-second halves remain busier
+than the preceding six seconds, with a soft preference for the chart's middle.
+The bonus contributes at most one sixth of the base score, so sustained activity
+remains dominant. Sparse bins keep analysis linear in chart data, without audio
+decoding or duration-sized allocations. Short or uninformative charts fall back
+to the beginning. This is an activity estimate, not chorus recognition. Beginning preserves the original
+start and leading-silence trimming. Preview File uses the shared library metadata
+to loop the authored `#PREVIEW` asset or a scanner-discovered `preview*` file;
+missing/unreadable files use the configured Highlight/Beginning fallback.
+The built-in selector drives BGA from absolute consumed chart frames for
+synthesized previews. Authored preview files have no chart-time alignment, so
+BGA is not advanced. Both synthesized and authored previews drive the built-in
+jacket pulse and spectrum from audible output, including playback gain and mute.
+Highlight preparation probes bounded WAV/FLAC metadata and Ogg head/tail data to
+skip expired past sounds before PCM decoding. Durations still unknown after the
+probe use a 60-second overlap lookback for Ogg and 15 seconds for other formats;
+known and cached longer tails remain. Ogg is identified from its header rather
+than its filename. PCM WAV bounds conservatively include bytes after the first
+data header, so trailing metadata does not require seeking through a deflated
+payload or turn a known long track into an unknown duration. These are lookback
+limits, not playback-duration limits.
+Later instances of the same sample remain scheduled. ZIP probes reuse the cached
+index and directory, reading at most 128 KiB per past asset and inflating at most
+a 64 KiB prefix. Stored ZIP entries support random head/tail reads; larger
+Ogg files inside deflated entries use the unknown-duration fallback because
+reaching their tail would require full inflation. Opening/overlapping ZIP sounds
+are extracted first; the remaining sounds still warm through the indexed batch
+pipeline. Other archives inspect already-extracted bytes. Deferred encoded data
+stays capped at 8 MiB. Expired native PCM still warms for gameplay, but needs no
+preview resampling unless the sample plays later.
+Custom selectors reuse preloaded native PCM, including
+sounds retained when changing difficulty, and drain previews before gameplay.
+
 Temporary media writes and cleanup share one mutation lock. Cleanup uses the
 current platform path normalizer to protect active top-level cache entries;
 usage measurement remains best-effort and does not block writes or cleanup.

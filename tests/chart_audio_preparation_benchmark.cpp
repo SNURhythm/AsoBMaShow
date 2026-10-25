@@ -4,6 +4,7 @@
 #include "audio/Jukebox.h"
 #include "audio/DecodedAssetCache.h"
 #include "audio/PagedPreviewSource.h"
+#include "audio/ChartPreviewHighlight.h"
 #include "utils/ParallelWork.h"
 #include "rendering/UniformCache.h"
 
@@ -171,6 +172,7 @@ int benchmarkChartAudio(int argc, char **argv) {
   const char *budgetText = std::getenv("ASOBMASHOW_BENCHMARK_CACHE_BYTES");
   const auto cacheBytes = budgetText ? std::stoull(budgetText) :
       audio::DecodedAssetCache::kUnlimitedRetainedBytes;
+  const bool highlight = std::getenv("ASOBMASHOW_BENCHMARK_HIGHLIGHT") != nullptr;
   using Clock = std::chrono::steady_clock;
   auto milliseconds = [](auto duration) {
     return std::chrono::duration<double, std::milli>(duration).count();
@@ -191,11 +193,16 @@ int benchmarkChartAudio(int argc, char **argv) {
     chart->Meta.BmsPath = path;
     chart->Meta.Folder = path.parent_path();
     const auto parseMs = milliseconds(Clock::now() - parseStart);
+    const auto scoreStart = Clock::now();
+    const auto origin = highlight ? static_cast<std::uint64_t>(
+        audio::FindChartPreviewHighlightMicros(*chart)) * 44100 / 1000000 : 0;
+    const auto scoreMs = milliseconds(Clock::now() - scoreStart);
     std::cout << "CHART_INPUT case=" << index - 4 << " rate=" << rate
               << " cache_budget_bytes=" << cacheBytes
               << " definitions=" << chart->WavTable.size()
               << " references=" << chart->ReferencedWavTable.size()
               << " workers=" << parallel_worker_count(chart->ReferencedWavTable.size())
+              << " highlight_frame=" << origin << " score_ms=" << scoreMs
               << " parse_ms=" << parseMs << '\n';
     std::optional<std::vector<int>> expectedLoaded;
     // Rotate mode order between rounds. Round -1 warms filesystem and code;
@@ -214,8 +221,8 @@ int benchmarkChartAudio(int argc, char **argv) {
         double startupMs = 0, previewMs = 0, cancelMs = 0;
         if (mode != 0) {
           const auto previewStart = Clock::now();
-          source = audio::PagedPreviewSource::Create(*chart, cache, 0);
-          require(source->Begin(rate), "benchmark preview Begin failed");
+          source = audio::PagedPreviewSource::Create(*chart, cache, origin);
+          require(source->Begin(rate, highlight), "benchmark preview Begin failed");
           bool observedStartup = false;
           for (;;) {
             const auto state = source->GetState();

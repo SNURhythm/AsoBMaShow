@@ -23,6 +23,8 @@ parser.add_argument('--charts-from', type=Path, required=True, help='One chart p
 parser.add_argument('--build-dir', type=Path, default=root / 'cmake-build-debug')
 parser.add_argument('--output', type=Path)
 parser.add_argument('--rounds', type=int, default=3)
+parser.add_argument('--highlight', action='store_true',
+                    help='Start at the scored highlight and trim leading silence, as the selector does')
 parser.add_argument('--cache-bytes', type=int, help='Probe a retention budget; default is unlimited')
 parser.add_argument('--sample-rates', type=int, nargs='+', default=[44100, 48000], choices=[44100, 48000])
 parser.add_argument('--sample-seconds', type=int, default=0,
@@ -106,7 +108,7 @@ manifest = {
     'revision': subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip(),
     'charts': charts, 'rounds': options.rounds, 'sample_rates': options.sample_rates,
     'sample_seconds': options.sample_seconds, 'dependency_build': str(build),
-    'cache_bytes': options.cache_bytes,
+    'cache_bytes': options.cache_bytes, 'highlight': options.highlight,
     'sources': {entry['file']: hashlib.sha256(Path(entry['file']).read_bytes()).hexdigest()
                 for entry in selected.values()},
     'compile_commands': [args for args, _ in jobs], 'link_command': args,
@@ -114,6 +116,9 @@ manifest = {
 (out / 'commands.json').write_text(json.dumps(manifest, indent=2) + '\n')
 environment = os.environ.copy()
 environment.pop('ASOBMASHOW_BENCHMARK_CACHE_BYTES', None)
+environment.pop('ASOBMASHOW_BENCHMARK_HIGHLIGHT', None)
+if options.highlight:
+    environment['ASOBMASHOW_BENCHMARK_HIGHLIGHT'] = '1'
 if options.cache_bytes is not None:
     environment['ASOBMASHOW_BENCHMARK_CACHE_BYTES'] = str(options.cache_bytes)
 for rate in options.sample_rates:

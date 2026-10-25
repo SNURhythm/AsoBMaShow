@@ -40,8 +40,8 @@ struct MusicSelectScene {
   };
   std::unique_ptr<RevealMenu> revealContextMenu_;
 
-  bool recordsResumeAudioPending_ = false;
   struct { void cancelAndWait() {} bool active() const { return false; } } recordsTask_;
+  struct { bool active = false; bool inProgress() const { return active; } } recordsExportJob_;
   void finishRecordsLoading() {}
   struct UnzipModal { void hide() {} void cancelAndWait() {} };
   UnzipModal *archiveUnzipModal_ = nullptr, *findBmsModal_ = nullptr, *readmeModal_ = nullptr;
@@ -74,7 +74,14 @@ struct MusicSelectScene {
   int preloadStops = 0;
   int selectionChanges = 0;
   int soundConfigurations = 0;
-  void configureSoundServices() { ++soundConfigurations; }
+  bool retainedGameplayRate = false;
+  void configureSoundServices() {
+    ++soundConfigurations;
+    if (retainedGameplayRate) {
+      skin.playing = false;
+      retainedGameplayRate = false;
+    }
+  }
   void stopPreloadWorker() { ++preloadStops; }
   void stopInputListening() {}
   void cancelDirectoryLoad() {}
@@ -107,6 +114,10 @@ int main() {
   scene.onApplicationBackgroundChanged(false);
   assert(scene.preview.resumes == 0);
   scene.context.appInBackground = false;
+  scene.recordsExportJob_.active = true;
+  scene.onApplicationBackgroundChanged(false);
+  assert(scene.preview.resumes == 0 && !scene.preview.playing);
+  scene.recordsExportJob_.active = false;
   scene.onApplicationBackgroundChanged(false);
   assert(scene.preview.playing && !scene.preview.suppressed);
   assert(scene.soundConfigurations == 1);
@@ -143,7 +154,11 @@ int main() {
   scene.failed_ = false;
   scene.launching_ = false;
   scene.onPause();
+  scene.retainedGameplayRate = true;
   scene.onResume();
   assert(scene.preview.playing && scene.preview.resumes == 3);
   assert(scene.soundConfigurations == 3);
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  assert(scene.skin.playing && "resume skin loops after normalizing gameplay rate");
+#endif
 }

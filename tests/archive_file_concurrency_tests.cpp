@@ -876,14 +876,16 @@ bool readZipFixture(const std::filesystem::path &archivePath, int operation,
 
 void writeZipWithEmptyDeflateBlocks(const std::filesystem::path &archivePath,
                                     const std::string &payload,
-                                    bool emptyPrefix) {
+                                    bool emptyPrefix,
+                                    std::size_t emptyBlockCount = 1024 * 1024) {
   constexpr std::string_view name = "payload.bin";
   const std::string emptyBlock("\0\0\0\xff\xff", 5);
   std::string emptyBlocks = emptyBlock;
-  emptyBlocks.reserve(emptyBlock.size() * 1024 * 1024);
-  for (std::size_t blocks = 1; blocks < 1024 * 1024; blocks *= 2) {
+  emptyBlocks.reserve(emptyBlock.size() * emptyBlockCount);
+  for (std::size_t blocks = 1; blocks < emptyBlockCount; blocks *= 2) {
     emptyBlocks += emptyBlocks;
   }
+  emptyBlocks.resize(emptyBlock.size() * emptyBlockCount);
   std::string compressed;
   compressed.reserve(emptyBlocks.size() + payload.size() +
                      5 * ((payload.size() + 65534) / 65535 + 1));
@@ -950,6 +952,27 @@ void writeZipWithEmptyDeflateBlocks(const std::filesystem::path &archivePath,
          << endRecord;
   output.close();
   assert(output);
+}
+
+void testZipProbeInputBudget() {
+  TempDirectory temporary;
+  const auto path = temporary.path() / "probe-input-budget.zip";
+  // Valid deflate with no output until just beyond the 128 KiB input budget.
+  // Its final partial input chunk must not corrupt cursor state on rejection.
+  writeZipWithEmptyDeflateBlocks(path, "x", true, 26215);
+  bool visited = false;
+  std::string error;
+  assert(archive_file::probeZipEntries(path, {"payload.bin"},
+      [&](const auto &, auto size, const auto &readAt) {
+        assert(size == 1);
+        std::array<unsigned char, 1> byte{};
+        for (unsigned retry = 0; retry < 3; ++retry) assert(!readAt(0, byte));
+        visited = true;
+      }, &error));
+  assert(visited);
+  std::vector<archive_file::FileData> files;
+  assert(archive_file::readArchiveEntries(path, {"payload.bin"}, files, &error));
+  assert(files.size() == 1 && files[0].bytes == std::vector<unsigned char>{'x'});
 }
 
 void testZipCancellationDuringEmptyDeflateBlocks(bool emptyPrefix,
@@ -4557,6 +4580,7 @@ int main(int argc, char **argv) {
   if (argc == 2 && std::string(argv[1]) == "--bounded-reader") {
     testSharedZipReadersReuseDirectory();
     testBoundedZipReaderReusesDirectory();
+    testZipProbeInputBudget();
     return 0;
   }
   if (argc == 2 && std::string(argv[1]) == "--mapped-zip") {
@@ -4712,6 +4736,7 @@ int main(int argc, char **argv) {
   for (const auto *mode : {"omission", "rename", "limit"}) testForgedManifestCannotCertifyFullUnzip(mode);
   testLiveManifestPromotionCoalescesAndCancelsWaiters();
   testBoundedZipReaderReusesDirectory();
+  testZipProbeInputBudget();
   testBoundedStreamingRejectsOversizedPayload();
   testConcurrentReaderRejectsOversizedPayload();
   testConcurrentStoredZipFitsExactBudget();

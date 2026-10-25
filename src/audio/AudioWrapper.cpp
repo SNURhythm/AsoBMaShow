@@ -640,6 +640,11 @@ void configurableBackendRender(void *output, std::uint32_t frameCount,
                                int outputChannels, void *userData) {
   mixAudio(output, static_cast<ma_uint32>(frameCount), outputChannels,
            static_cast<UserData *>(userData));
+  if (output && frameCount && outputChannels == 2 && userData) {
+    auto &data = *static_cast<UserData *>(userData);
+    data.outputMeter.push(static_cast<const short *>(output), frameCount,
+                          outputChannels, data.sampleRate->load(std::memory_order_relaxed));
+  }
 }
 
 void configurableBackendTiming(audio::RenderTiming timing, void *userData) {
@@ -919,6 +924,24 @@ bool AudioWrapper::setPlaybackRate(audio::PlaybackRate rate,
 audio::PlaybackRate AudioWrapper::playbackRate() const {
   return {.percent = playbackRatePercent.load(std::memory_order_acquire),
           .mode = audio::PlaybackMode::PitchShift};
+}
+
+std::shared_ptr<const audio::DecodedAssetCache::DecodedSound>
+AudioWrapper::decodedSoundSnapshot(const path_t &path) const {
+  std::lock_guard lock(soundDataListMutex);
+  const auto found = soundDataIndexMap.find(path);
+  if (found == soundDataIndexMap.end()) return {};
+  const auto &sound = soundDataList[found->second];
+  if (!sound || sound->retired.load(std::memory_order_acquire) ||
+      sound->channels <= 0 || sound->sourceSampleRate <= 0) return {};
+  auto snapshot = std::make_shared<audio::DecodedAssetCache::DecodedSound>();
+  snapshot->pcm = sound->sourceData;
+  snapshot->info.channels = sound->channels;
+  snapshot->info.samplerate = sound->sourceSampleRate;
+  snapshot->info.frames = sound->sourceFrameCount;
+  snapshot->RememberPreparedOutput(currentSampleRate.load(std::memory_order_acquire),
+                                   sound->outputData);
+  return snapshot;
 }
 
 void AudioWrapper::setDecodedAssetCache(

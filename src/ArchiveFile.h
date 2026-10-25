@@ -17,6 +17,7 @@
 #include <memory>
 #include <optional>
 #include <stop_token>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_set>
@@ -236,6 +237,21 @@ private:
   struct Impl;
   std::unique_ptr<Impl> impl;
 };
+
+// Metadata-only ZIP probes sharing one cached directory/index. The callback's
+// reader is valid only during that call. Stored entries allow bounded random
+// reads; deflated entries allow reads within a bounded inflated prefix. Budget
+// exhaustion/unsupported members return false from readAt, not full extraction.
+// Each member allows at most 128 KiB of payload I/O and 64 KiB of inflated
+// prefix. Discard probe results if the batch returns false (source change or
+// cancellation). Prefixes do not validate CRC; normal extraction must do that.
+using EntryProbeReadAt = std::function<bool(std::uint64_t, std::span<unsigned char>)>;
+using EntryProbeCallback = std::function<void(const std::filesystem::path &,
+                                            std::uint64_t, const EntryProbeReadAt &)>;
+bool probeZipEntries(const std::filesystem::path &archivePath,
+                     const std::vector<std::filesystem::path> &innerPaths,
+                     EntryProbeCallback probe, std::string *errorMessage = nullptr,
+                     PauseCallback pauseCallback = nullptr);
 
 enum class ConcurrentReadMemoryPolicy {
   Strict,

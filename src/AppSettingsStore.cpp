@@ -834,6 +834,8 @@ json settingsToJson(const AppSettings &settings) {
         {"renderGhosts", settings.replayPreferences.renderGhosts},
         {"autoKeySound", settings.replayPreferences.autoKeySound}}},
       {"archiveChartPreviewEnabled", settings.archiveChartPreviewEnabled},
+      {"chartPreviewMode", static_cast<int>(settings.chartPreviewMode)},
+      {"chartPreviewFallbackHighlight", settings.chartPreviewFallbackHighlight},
       {"findBmsSkipUnarchivingForNonSolidArchives",
        settings.findBmsSkipUnarchivingForNonSolidArchives},
       {"bgaEnabled", settings.bgaEnabled},
@@ -1139,6 +1141,9 @@ AppSettings settingsFromJson(const json &document,
                 settings.replayPreferences.autoKeySound, diagnostics);
     }
   }
+  readEnum(document, "chartPreviewMode", settings.chartPreviewMode, diagnostics);
+  readValue(document, "chartPreviewFallbackHighlight",
+            settings.chartPreviewFallbackHighlight, diagnostics);
   readValue(document, "archiveChartPreviewEnabled",
             settings.archiveChartPreviewEnabled, diagnostics);
   readValue(document, "findBmsSkipUnarchivingForNonSolidArchives",

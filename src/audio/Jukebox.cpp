@@ -2896,6 +2896,9 @@ Jukebox::reconcileChartResources(
       std::filesystem::path innerPath;
       const bool archived = archive_file::splitVirtualPath(asset.path, archivePath, innerPath);
       const audio::DecodedAssetCache::ArchiveBatch *cacheBatch = nullptr;
+      const auto fileCacheSource = reusable && decodedCache && !archived
+          ? decodedCache->CaptureSource(asset.path)
+          : std::optional<audio::DecodedAssetCache::SourceSnapshot>{};
       if (archived && decodedCache) {
         const auto archiveKey = fspath_to_path_t(archivePath.lexically_normal());
         auto [batch, inserted] = cacheBatches.try_emplace(archiveKey);
@@ -2933,7 +2936,12 @@ Jukebox::reconcileChartResources(
       }
       if (reusable) {
         retainedSounds[asset.id] = asset.key;
-        retainedPaths.insert(asset.key);
+        if (retainedPaths.insert(asset.key).second && decodedCache) {
+          const auto *source = cacheBatch ? cacheBatch :
+              fileCacheSource ? &*fileCacheSource : nullptr;
+          if (source) decodedCache->RememberLoadedSound(*source, asset.path,
+                                                       audio.decodedSoundSnapshot(asset.key));
+        }
       } else if (!archived || prepared ||
                  !addArchiveChartAssetTarget(
                      archiveBatches, archiveBatchOrder, asset.path, asset.id,

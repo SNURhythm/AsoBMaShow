@@ -9587,6 +9587,94 @@ bool BoundedArchiveReader::read(
 #endif
 }
 
+bool probeZipEntries(const std::filesystem::path &archivePath,
+                     const std::vector<std::filesystem::path> &innerPaths,
+                     EntryProbeCallback probe, std::string *errorMessage,
+                     PauseCallback pauseCallback) {
+#if ASOBMSHOW_ARCHIVEFILE_HAS_MINIZ
+  if (!hasZipArchiveExtension(archivePath) || !probe) return false;
+  const auto identity = archive_source_identity::KeyForPath(archivePath);
+  const auto index = cachedIndexForArchive(archivePath, errorMessage, pauseCallback);
+  if (identity.empty() || !index || index->backend != ArchiveIndexBackend::MinizZip) return false;
+  ZipReaderLease reader;
+  RandomAccessFile file;
+  if (!reader.open(archivePath, errorMessage) || !file.open(archivePath, errorMessage)) return false;
+  constexpr std::size_t budget = 128U * 1024U;
+  constexpr std::size_t prefixLimit = 64U * 1024U;
+  for (const auto &path : innerPaths) {
+    if (!pauseIfNeeded(pauseCallback, errorMessage)) return false;
+    const auto *entry = findIndexedEntry(*index, path);
+    if (!entry || entry->directory) continue;
+    ZipReadTarget target{.normalized = normalizeEntryName(genericPathUtf8(entry->path)),
+                         .entryPath = entry->path, .order = entry->order, .size = entry->size};
+    ZipDirectReadTarget direct;
+    std::string probeError;
+    const bool supported = prepareZipDirectReadTarget(&reader.archive(), file, target,
+        static_cast<std::uint64_t>(index->size), direct, &probeError, pauseCallback);
+    std::size_t bytesRead = 0, produced = 0, consumed = 0, buffered = 0;
+    std::uint64_t inputOffset = 0;
+    std::array<unsigned char, 4096> input{};
+    std::vector<unsigned char> prefix;
+    tinfl_decompressor inflater;
+    tinfl_init(&inflater);
+    tinfl_status status = TINFL_STATUS_NEEDS_MORE_INPUT;
+    bool valid = supported;
+    EntryProbeReadAt readAt = [&](std::uint64_t offset, std::span<unsigned char> output) {
+      if (!valid || !pauseIfNeeded(pauseCallback, errorMessage) ||
+          offset > direct.size || output.size() > direct.size - offset) return false;
+      if (output.empty()) return true;
+      if (direct.method == 0) {
+        if (direct.size != direct.compressedSize || output.size() > budget - bytesRead) return false;
+        bytesRead += output.size();
+        valid = file.readAt(direct.dataOffset + offset, output.data(), output.size(), nullptr);
+        return valid;
+      }
+      if (offset > prefixLimit || output.size() > prefixLimit - offset) return false;
+      const auto required = static_cast<std::size_t>(offset) + output.size();
+      if (prefix.empty()) prefix.resize(prefixLimit);
+      while (produced < required) {
+        if (!pauseIfNeeded(pauseCallback, errorMessage) || status <= TINFL_STATUS_DONE) return false;
+        if (consumed == buffered && inputOffset < direct.compressedSize) {
+          const auto nextBytes = static_cast<std::size_t>(
+              std::min<std::uint64_t>(input.size(), direct.compressedSize - inputOffset));
+          if (nextBytes > budget - bytesRead) return false;
+          buffered = nextBytes;
+          bytesRead += buffered;
+          if (!file.readAt(direct.dataOffset + inputOffset, input.data(), buffered, nullptr)) {
+            valid = false;
+            return false;
+          }
+          inputOffset += buffered;
+          consumed = 0;
+        }
+        auto inputSize = buffered - consumed;
+        auto outputSize = required - produced;
+        status = tinfl_decompress(&inflater, input.data() + consumed, &inputSize,
+            prefix.data(), prefix.data() + produced, &outputSize,
+            TINFL_FLAG_USING_NON_WRAPPING_OUTPUT_BUF |
+                (inputOffset < direct.compressedSize ? TINFL_FLAG_HAS_MORE_INPUT : 0));
+        consumed += inputSize;
+        produced += outputSize;
+        if (status < TINFL_STATUS_DONE || (inputSize == 0 && outputSize == 0)) {
+          valid = false;
+          return false;
+        }
+      }
+      std::copy_n(prefix.data() + static_cast<std::size_t>(offset), output.size(), output.data());
+      return true;
+    };
+    probe(entry->path, entry->size, readAt);
+  }
+  if (archive_source_identity::KeyForPath(archivePath) != identity) {
+    if (errorMessage) *errorMessage = "ZIP source changed during metadata probing.";
+    return false;
+  }
+  return pauseIfNeeded(pauseCallback, errorMessage);
+#else
+  return false;
+#endif
+}
+
 bool readArchiveEntriesConcurrently(
     const std::filesystem::path &archivePath,
     const std::vector<std::filesystem::path> &innerPaths,

@@ -190,6 +190,36 @@ void testStartupUsesActualBackendRateAndDoesNotMixBeforeCallback() {
   }
 }
 
+void testFadeInUsesConsumedFramesAndRestarts() {
+  for (const unsigned rate : {44100U, 48000U}) {
+    auto input = std::make_shared<SourceControl>();
+    input->first = 60 * 44100;
+    input->samples.assign(rate * 2, 0.5f);
+    input->publish(rate / 10);
+    auto backend = std::make_shared<BackendControl>();
+    backend->rate = rate;
+    audio::PreviewStreamPlayer player(std::make_unique<FakeFactory>(backend));
+    std::string error;
+    assert(player.Start(source(input), error, true));
+    waitFor([&] { return backend->started.load(); });
+    const auto first = backend->pump(rate / 10);
+    assert(first.front() == 0 && first.back() > 5000 && first.back() < 5500);
+    assert(all(backend->pump(rate / 10), 0)); // Pending must not consume fade time.
+    input->publishAll();
+    const auto rest = backend->pump(rate / 2); // Crosses internal scratch chunks.
+    assert(rest.front() > 5000 && rest.front() < 5500);
+    assert(rest.back() == 16383);
+    assert(std::is_sorted(rest.begin(), rest.end()));
+    player.Stop();
+    auto replacement = std::make_shared<SourceControl>();
+    replacement->samples.assign(rate * 2, 0.5f);
+    replacement->publishAll();
+    assert(player.Start(source(replacement), error, true));
+    waitFor([&] { return backend->started.load(); });
+    assert(backend->pump(1).front() == 0);
+  }
+}
+
 void testFloatGainPrecedesClippingAndOutputEnergy() {
   auto input = std::make_shared<SourceControl>();
   input->samples.assign(4096 * 2, 1.5f);
@@ -508,6 +538,7 @@ std::unique_ptr<IBackendFactory> CreatePlatformBackendFactory() {
 }
 int main() {
   testStartupUsesActualBackendRateAndDoesNotMixBeforeCallback();
+  testFadeInUsesConsumedFramesAndRestarts();
   testFloatGainPrecedesClippingAndOutputEnergy();
   testSpectrumFollowsAudibleOutputAndResets();
   testPendingFreezesSourceClockAndResumesDirectly();

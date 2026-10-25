@@ -329,16 +329,21 @@ struct FolderStatus {
   void cancel() {}
 };
 struct Preview {
-  struct Request { std::optional<std::filesystem::path> path; };
+  bool suppressed = false;
+  int plays = 0;
+  struct Request { std::optional<std::filesystem::path> path; std::filesystem::path chartPath; bool highlight = true; };
   void observeSelection(int, int) {}
   std::optional<Request> update(int, bool) { return std::nullopt; }
-  void switchTo(std::optional<std::filesystem::path>) {}
+  void switchTo(std::optional<std::filesystem::path>, std::filesystem::path = {}, bool = true) {
+    if (!suppressed) ++plays;
+  }
   void reset() {}
-  void silence() {}
-  void resumeDefaultBgm() {}
+  void silence() { suppressed = true; }
+  void silenceAndWait() { silence(); }
+  void resumeDefaultBgm() { suppressed = false; }
   void playDecide() {}
 };
-int previewSelection(const Bars &, bool) { return 0; }
+int previewSelection(const Bars &, const Settings &) { return 0; }
 struct MusicSelectScene {
   void updateRankingsModal() {}
 
@@ -352,7 +357,6 @@ struct MusicSelectScene {
   std::unique_ptr<RevealMenu> revealContextMenu_;
 
   void resetFailedLaunch(std::uint64_t generation);
-  bool recordsResumeAudioPending_ = false;
   Modal *archiveUnzipModal_ = nullptr, *findBmsModal_ = nullptr, *readmeModal_ = nullptr;
   bool selectorInputBlocked() const { return launching_; }
   void startArchiveUnzip(const ChartMetaRecord &) {}
@@ -370,7 +374,7 @@ struct MusicSelectScene {
   void refreshToolbarAvailability() {}
   void configureSoundServices() {}
   void startInputListening() {}
-  void onApplicationBackgroundChanged(bool) {}
+  void onApplicationBackgroundChanged(bool);
   std::mutex postedMutex_;
   std::vector<std::function<bool()>> posted_;
   void postDeferred(std::function<bool()> callback) {
@@ -432,6 +436,7 @@ struct MusicSelectScene {
   ChartPreloadWorker *preloadWorker_ = nullptr;
   std::mutex preloadMutex_;
   std::unique_ptr<bms_parser::Chart> preloadedChart_;
+  std::shared_ptr<int> preloadedPreviewCache_;
   std::string preloadedPath_;
   Modal *recordsModal_ = nullptr;
   replay::ReplayExportJob recordsExportJob_;
@@ -485,6 +490,8 @@ void runCase(bool autoplay, bool active, int outcome, bool withModal) {
              (active ? "/active/" : "/idle/") + std::to_string(outcome) +
              (withModal ? "/modal" : "/no-modal");
   MusicSelectScene scene;
+  Preview preview;
+  scene.previewAudio_ = &preview;
   Modal modal;
   if (withModal) scene.recordsModal_ = &modal;
   ChartPreloadWorker worker(std::chrono::milliseconds(0));
@@ -521,6 +528,8 @@ void runCase(bool autoplay, bool active, int outcome, bool withModal) {
   if (outcome == 2) scene.context.exportResult = {false, {}, "No Chart"};
   if (autoplay) scene.launchAutoPlayExport(record, {});
   else scene.launchChartReplayExport(record, {}, {});
+  preview.switchTo("during-export.ogg");
+  expect(preview.plays == 0, "export must suppress preview requests");
   if (outcome != 3) {
     while (!scene.context.exportEntered.load()) std::this_thread::yield();
   } else {
@@ -543,6 +552,8 @@ void runCase(bool autoplay, bool active, int outcome, bool withModal) {
     std::this_thread::yield();
   }
   expect(!scene.recordsExportJob_.inProgress(), "all outcomes must release the export lock");
+  preview.switchTo("next-song.ogg");
+  expect(preview.plays == 1, "finished export must admit subsequent previews");
   if (withModal) {
     expect(!modal.exporting && !modal.progressVisible && !modal.status.empty(),
            "all outcomes must restore records UI with a result");
@@ -550,8 +561,8 @@ void runCase(bool autoplay, bool active, int outcome, bool withModal) {
   play_options::PlayOptionReplayInfo playInfo;
   int lnMode = 0;
   auto cached = scene.takePreloadedChart(record, playInfo, lnMode);
-  expect(!cached,
-         "next same-selection play must not skip loading BGA after export");
+  expect(!cached || scene.context.visualsLoaded.load(),
+         "post-export cached chart must have freshly restored BGA");
   cached.reset();
   worker.stop();
   scene.stopPreloadWorker();

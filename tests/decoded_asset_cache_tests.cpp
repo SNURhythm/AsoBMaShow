@@ -253,6 +253,40 @@ void testArchiveBatchIdentityAndGameplayReuse(const std::filesystem::path &root)
           "removed archives fail batch validation");
 }
 
+void testSeededGameplayPcmKeepsIdentityAndRetentionBounds(const std::filesystem::path &root) {
+  const auto first = root / "seed-first.wav";
+  const auto second = root / "seed-second.wav";
+  writeWav(first, 1, 32);
+  writeWav(second, 1, 32);
+  std::atomic_bool cancelled{false};
+  audio::DecodedAssetCache loaded;
+  const auto firstPcm = loaded.Load(first, cancelled);
+  const auto secondPcm = loaded.Load(second, cancelled);
+  require(firstPcm && secondPcm, "seed fixtures decode");
+  const auto bytes = firstPcm->pcm.size() * sizeof(short);
+  audio::DecodedAssetCache preview(bytes);
+  const auto firstSource = preview.CaptureSource(first);
+  const auto secondSource = preview.CaptureSource(second);
+  require(firstSource && secondSource, "capture loaded sound identities");
+  preview.RememberLoadedSound(*firstSource, first, firstPcm);
+  const auto shared = preview.Load(first, cancelled);
+  require(shared && shared->pcm.storage() == firstPcm->pcm.storage() &&
+              preview.GetStatistics().decoderOpens == 0,
+          "seeded preview shares the exact PCM without a decode or copy");
+  preview.RememberLoadedSound(*secondSource, second, secondPcm);
+  require(!preview.Contains(first) && preview.Contains(second) &&
+              preview.GetStatistics().retainedBytes == bytes,
+          "seeded PCM obeys the cache retention budget");
+  // A caller's old snapshot must never label old PCM with a newer identity.
+  writeWav(first, 1, 33);
+  preview.RememberLoadedSound(*firstSource, first, firstPcm);
+  require(!preview.Contains(first), "source replacement invalidates a seeded snapshot");
+  const auto replaced = preview.Load(first, cancelled);
+  require(replaced && replaced->info.frames == 33 &&
+              preview.GetStatistics().decoderOpens == 1,
+          "changed sources are decoded afresh instead of serving seeded PCM");
+}
+
 void testRejectsExcessiveDecodeBeforeAllocation(const std::filesystem::path &root) {
   const auto flac = root / "oversized-header.flac";
   {
@@ -324,6 +358,7 @@ int main() {
     std::filesystem::create_directories(root);
     testChartAudioFileLookup(root);
     testRejectsExcessiveDecodeBeforeAllocation(root);
+    testSeededGameplayPcmKeepsIdentityAndRetentionBounds(root);
     testWholeLoadAndConcurrentReuse(root);
     testCancellationAndInvalidAssets(root);
     testEvictionAndIdentity(root);
