@@ -195,6 +195,21 @@ gameplay::RealtimeTouchLayout skinLayout() {
 }
 
 int main() {
+  for (const int mode : {24, 48}) {
+    RhythmInputHandler keyboard;
+    keyboard.keyMode = mode;
+    keyboard.scratchLaneCount = mode == 24 ? 2 : 4;
+    const int count = mode == 24 ? 26 : 52;
+    for (int lane = 0; lane < count; ++lane) {
+      keyboard.beginFingerLane(lane + 1, lane, {.5F, .5F, 0});
+      expect(keyboard.presses.size() == static_cast<std::size_t>(lane + 1) &&
+                 keyboard.presses.back() == lane && keyboard.flickStates.empty(),
+             "all keyboard keys and wheels press immediately without scratch gestures");
+      keyboard.releaseFingerLane(lane + 1);
+      expect(keyboard.releases.back() == lane, "keyboard holds release their own lanes");
+    }
+  }
+
   // SDL already removed the UI offset: (.25 * 1000 - 100) / 800.
   const Vector3 firstLane{.1875F, .5F, 0};
   const Vector3 secondLane{.4375F, .5F, 0};

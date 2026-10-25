@@ -32,7 +32,7 @@ inline constexpr std::array<ReplayKeyModeLayout, 10> kReplayKeyModeLayouts{{
     {10, 2, 5, 6, true, true, "L123456789AR"},
     {14, 2, 7, 8, true, true, "L123456789ABCDER"},
     {24, 1, 26, 26, false, false, ""},
-    {48, 2, 26, 26, false, false, ""},
+    {48, 2, 26, 26, false, true, ""},
 }};
 
 static_assert([] {

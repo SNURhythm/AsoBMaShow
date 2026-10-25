@@ -777,9 +777,10 @@ RhythmLaneInputController::releaseNote(bms_parser::Note *note,
   JudgeResult appliedJudge(None, 0);
   const bool chargeLongNote =
       effectiveLongNoteIsCharge(longNote, chart, longNoteModeOverride);
-  const bool scratchLongNote =
-      chart != nullptr && chartLaneIsScratch(chart->Meta, note->Lane);
-  if (chargeLongNote && scratchLongNote && !isBackSpin) {
+  const bool directionalScratchLongNote =
+      chart != nullptr && chart->Meta.KeyMode != 24 && chart->Meta.KeyMode != 48 &&
+      chartLaneIsScratch(chart->Meta, note->Lane);
+  if (chargeLongNote && directionalScratchLongNote && !isBackSpin) {
     if (judgeResult.judgement != None && judgeResult.judgement != Kpoor &&
         judgeResult.judgement != Poor) {
       return result;
@@ -812,7 +813,7 @@ RhythmLaneInputController::releaseNote(bms_parser::Note *note,
     acceptedChargeTailJudges[longNote] = appliedJudge.judgement;
   }
   if (judge.rules().ruleset == GameplayRuleset::LR2 && chargeLongNote &&
-      scratchLongNote && isBackSpin) {
+      directionalScratchLongNote && isBackSpin) {
     suppressedBackspinPressMicros[note->Lane] = releasedTime;
   }
   result.judge = appliedJudge;

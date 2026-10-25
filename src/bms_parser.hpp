@@ -273,14 +273,18 @@ public:
   std::optional<std::string> RandomPrng;
   std::vector<int> RandomValues;
 
-  [[nodiscard]] int GetKeyLaneCount() const { return KeyMode; }
+  [[nodiscard]] bool IsPopnFiveKey() const {
+    const auto hint = Values.find("bmson.mode_hint");
+    return KeyMode == 9 && hint != Values.end() && hint->second == "popn-5k";
+  }
+  [[nodiscard]] int GetKeyLaneCount() const { return IsPopnFiveKey() ? 5 : KeyMode; }
   [[nodiscard]] bool IsScratchlessKeyMode() const {
     return KeyMode == 4 || KeyMode == 6 || KeyMode == 8;
   }
   [[nodiscard]] int GetScratchLaneCount() const {
-    // Only legacy beat modes synthesize scratch lanes. Other positive key
-    // counts describe dense key lanes unless a format-specific map above says
-    // otherwise.
+    // Keyboard modes have two independently playable wheel lanes per player.
+    if (KeyMode == 24) return 2;
+    if (KeyMode == 48) return 4;
     if (KeyMode == 10 || KeyMode == 14) {
       return 2;
     }
@@ -290,10 +294,17 @@ public:
     return 0;
   }
   [[nodiscard]] int GetTotalLaneCount() const {
-    return KeyMode + GetScratchLaneCount();
+    return GetKeyLaneCount() + GetScratchLaneCount();
   }
 
   [[nodiscard]] std::vector<int> GetKeyLaneIndices() const {
+    if (IsPopnFiveKey()) return {0, 1, 2, 3, 4};
+    if (KeyMode == 24 || KeyMode == 48) {
+      std::vector<int> lanes;
+      for (int player = 0; player < (KeyMode == 48 ? 2 : 1); ++player)
+        for (int key = 0; key < 24; ++key) lanes.push_back(player * 26 + key);
+      return lanes;
+    }
     switch (KeyMode) {
     case 4:
       return {0, 1, 3, 4};
@@ -323,6 +334,8 @@ public:
   }
 
   [[nodiscard]] std::vector<int> GetScratchLaneIndices() const {
+    if (KeyMode == 24) return {24, 25};
+    if (KeyMode == 48) return {24, 25, 50, 51};
     const int scratchLaneCount = GetScratchLaneCount();
     if (scratchLaneCount == 0) {
       return {};
@@ -334,6 +347,11 @@ public:
   }
 
   [[nodiscard]] std::vector<int> GetTotalLaneIndices() const {
+    if (KeyMode == 24 || KeyMode == 48) {
+      std::vector<int> lanes;
+      for (int lane = 0; lane < GetTotalLaneCount(); ++lane) lanes.push_back(lane);
+      return lanes;
+    }
     std::vector<int> Result;
     std::vector<int> keyLaneIndices = GetKeyLaneIndices();
     std::vector<int> scratchLaneIndices = GetScratchLaneIndices();

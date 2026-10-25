@@ -17,6 +17,14 @@ int main() {
   check(colorRoleForKey(0, 7) == ColorRole::White, "7K edge is white");
   check(colorRoleForKey(1, 7) == ColorRole::Blue, "7K next key is blue");
   check(colorRoleForKey(3, 7) == ColorRole::Blue, "7K center is blue");
+  for (const std::size_t count : {24U, 48U}) {
+    for (std::size_t lane = 0; lane < count; ++lane) {
+      const auto pitch = lane % 12;
+      const bool black = pitch == 1 || pitch == 3 || pitch == 6 || pitch == 8 || pitch == 10;
+      check(colorRoleForKey(lane, count) == (black ? ColorRole::Blue : ColorRole::White),
+            "keyboard colors repeat the twelve-semitone piano pattern");
+    }
+  }
   check(colorRoleForScratch() == ColorRole::Red, "scratch is red");
   check(kLaneCoverDepth > gameplay_note_submission_order::kGhostDepth,
         "lane cover renders above ghosts and ordered notes");

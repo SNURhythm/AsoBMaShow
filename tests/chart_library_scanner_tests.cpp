@@ -1608,7 +1608,7 @@ void testBmsonLibraryAndArchiveLoading() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
   std::filesystem::create_directories(root);
-  const std::string modern = R"({"version":"1.0.0","info":{"title":"Modern bmson","init_bpm":120},"sound_channels":[{"name":"stem.wav","notes":[{"x":1,"y":240}]}]})";
+  const std::string modern = R"({"version":"1.0.0","info":{"title":"Modern bmson","init_bpm":120,"mode_hint":"popn-5k"},"sound_channels":[{"name":"stem.wav","notes":[{"x":5,"y":240}]}]})";
   const std::string legacy = R"({"info":{"title":"Legacy bmson","initBPM":120},"soundChannel":[{"name":"stem.wav","notes":[{"x":8,"y":240}]}]})";
   const auto regular = root / "chart.BMSON";
   std::ofstream(regular) << modern;
@@ -1622,6 +1622,7 @@ void testBmsonLibraryAndArchiveLoading() {
     const std::unique_ptr<bms_parser::Chart> chart(raw);
     assert(chart && chart->Meta.TotalNotes == 1 && !chart->WavSlices.empty());
     assert(chart->Meta.BmsPath == path && chart->Meta.Folder == path.parent_path());
+    assert(chart->Meta.GetTotalLaneCount() == (path == regular ? 5 : 8));
   }
   TestChartRepository repository(temporary.path() / "chart.db");
   assert(repository.EnsureReady());
@@ -1630,10 +1631,15 @@ void testBmsonLibraryAndArchiveLoading() {
   ChartLibraryScanner scanner;
   assert(scanner.ScanWithResult(*session, {root}).completed);
   const std::vector<std::filesystem::path> paths{regular, archived};
+  session.reset();
+  session = repository.OpenSession();
+  assert(session);
   const auto records = session->SelectChartMetaByPaths(paths);
   assert(records.records.size() == 2);
   for (const auto &record : records.records) {
-    assert(record.meta.KeyMode == 7 && record.meta.TotalNotes == 1);
+    const bool isPopn = record.meta.BmsPath == regular;
+    assert(record.meta.KeyMode == (isPopn ? 9 : 7) && record.meta.TotalNotes == 1);
+    assert(record.meta.GetTotalLaneCount() == (isPopn ? 5 : 8));
     assert(record.meta.PlayLength == 500000);
     assert(record.meta.Total == 100);
     assert(record.meta.TotalIsRelative == (record.meta.BmsPath == regular));
@@ -1645,7 +1651,7 @@ void testCachedArchiveDiscoversBmsonWithoutReplacingExistingCharts(
   TempDirectory temporary;
   const auto archivePath = writeZip(temporary.path() / "mixed.zip",
       {{"existing.bms", chartText("Existing BMS")},
-       {"new.BMSON", R"({"version":"1.0.0","info":{"title":"New bmson","init_bpm":120},"sound_channels":[{"name":"stem.wav","notes":[{"x":1,"y":240}]}]})"}});
+       {"new.BMSON", R"({"version":"1.0.0","info":{"title":"New bmson","init_bpm":120,"mode_hint":"keyboard-24k-double"},"sound_channels":[{"name":"stem.wav","notes":[{"x":52,"y":240}]}]})"}});
   const auto existingPath = archive_file::makeVirtualPath(archivePath, "existing.bms");
   const auto newPath = archive_file::makeVirtualPath(archivePath, "new.BMSON");
   const std::array existingPaths{existingPath};
@@ -1659,22 +1665,24 @@ void testCachedArchiveDiscoversBmsonWithoutReplacingExistingCharts(
   const auto original = session->SelectChartMetaByPaths(existingPaths);
   assert(original.records.size() == 1);
 
-  // Model the pre-bmson cache, including an old completed-archive marker.
+  // Cover both the pre-bmson cache and the first bmson decoder, which rejected
+  // keyboard modes. Preserve an old completed-archive marker as well.
+  const int cachedVersion = interruptAfterCheckpoint ? 0 : 1;
   // The archive/index identity stays unchanged; only the newly recognized
   // entry is absent from the database.
   sqlite3 *database = nullptr;
   assert(sqlite3_open(repository.DatabasePath().string().c_str(), &database) == SQLITE_OK);
-  assert(sqlite3_exec(database,
+  const std::string cachedState =
       "DELETE FROM chart_meta WHERE title='New bmson';"
       "UPDATE chart_meta SET title='Preserved metadata', add_date=123456;"
-      "UPDATE archive_scan_cache SET chart_count=1, recognition_version=0;"
+      "UPDATE archive_scan_cache SET chart_count=1, recognition_version=" + std::to_string(cachedVersion) + ";"
       "INSERT INTO chart_scan_completed_archive(archive_path,archive_size,mtime_ns) "
       "SELECT path,archive_size,mtime_ns FROM archive_scan_cache;"
       "CREATE TRIGGER preserve_existing_chart_delete BEFORE DELETE ON chart_meta "
       "WHEN OLD.title='Preserved metadata' BEGIN SELECT RAISE(ABORT,'existing chart deleted'); END;"
       "CREATE TRIGGER preserve_existing_chart_metadata BEFORE UPDATE OF title ON chart_meta "
-      "WHEN OLD.title='Preserved metadata' BEGIN SELECT RAISE(ABORT,'existing chart reparsed'); END;",
-      nullptr, nullptr, nullptr) == SQLITE_OK);
+      "WHEN OLD.title='Preserved metadata' BEGIN SELECT RAISE(ABORT,'existing chart reparsed'); END;";
+  assert(sqlite3_exec(database, cachedState.c_str(), nullptr, nullptr, nullptr) == SQLITE_OK);
   assert(sqlite3_close(database) == SQLITE_OK);
 
   int parseTotal = 0;
@@ -1704,10 +1712,13 @@ void testCachedArchiveDiscoversBmsonWithoutReplacingExistingCharts(
   assert(discovered.records.size() == 1);
   assert(discovered.records.front().meta.Title == "New bmson");
   assert(discovered.records.front().meta.TotalIsRelative);
+  assert(discovered.records.front().meta.KeyMode == 48);
+  assert(discovered.records.front().meta.IsDP);
+  assert(discovered.records.front().meta.TotalScratchNotes == 1);
   if (interruptAfterCheckpoint) {
     const auto interrupted = session->LoadScanSnapshot();
     assert(interrupted.checkpoint.has_value());
-    assert(interrupted.archiveCache.front().recognitionVersion == 0);
+    assert(interrupted.archiveCache.front().recognitionVersion == cachedVersion);
     // All newly found charts are already durable, but the recognition-version
     // write was interrupted. Resume must finalize the cache without reparsing.
     int resumedParses = 0;
@@ -1721,7 +1732,7 @@ void testCachedArchiveDiscoversBmsonWithoutReplacingExistingCharts(
   auto snapshot = session->LoadScanSnapshot();
   assert(snapshot.archiveCache.size() == 1);
   assert(snapshot.archiveCache.front().chartCount == 2);
-  assert(snapshot.archiveCache.front().recognitionVersion > 0);
+  assert(snapshot.archiveCache.front().recognitionVersion > cachedVersion);
 
   const auto indexScanCount = [&] {
     const auto lines = archive_file::debugLogLines();

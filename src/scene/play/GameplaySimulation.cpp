@@ -2032,7 +2032,11 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
 
   const JudgeResult tailJudge = config_.judge.judgeAt(
       judgeRoleFor(tail), tail.timingMicros, judgedTime);
-  if (tail.longNoteRule != LongNoteRule::Classic && tail.scratchLane &&
+  // Keyboard wheels share scratch timing windows, but each direction is its
+  // own held lane. Only beat turntables require a reversal to finish CN/HCN.
+  const int keyMode = definition_.metadata().keyMode;
+  const bool directionalScratch = tail.scratchLane && keyMode != 24 && keyMode != 48;
+  if (tail.longNoteRule != LongNoteRule::Classic && directionalScratch &&
       !isBackSpin && tailJudge.judgement != None &&
       tailJudge.judgement != Kpoor) {
     // A scratch lift inside the tail window is not a backspin. The charge
@@ -2052,7 +2056,7 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
   if (tail.longNoteRule == LongNoteRule::Classic) {
     applied = worseLongNoteJudge(normalizeReleaseJudge(noteStates_[tail.pairId].acceptedHeadJudge),
                                  normalizeReleaseJudge(tailJudge));
-  } else if (tail.scratchLane && !isBackSpin) {
+  } else if (directionalScratch && !isBackSpin) {
     applied = JudgeResult(Poor, chart_timing::subtract(judgedTime, tail.timingMicros));
   } else if (tailJudge.judgement == None || tailJudge.judgement == Kpoor) {
     applied = JudgeResult(Poor, tailJudge.Diff);
@@ -2063,7 +2067,7 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
       ? config_.judge.rules().scratchReleaseMarginMicros
       : config_.judge.rules().normalReleaseMarginMicros;
   const bool lr2DeferredRelease = config_.judge.rules().ruleset == GameplayRuleset::LR2 &&
-      !(isBackSpin && tail.scratchLane && tail.longNoteRule != LongNoteRule::Classic);
+      !(isBackSpin && directionalScratch && tail.longNoteRule != LongNoteRule::Classic);
   if ((releaseMargin > 0 || lr2DeferredRelease) && applied.Diff < 0 &&
       (applied.judgement == Bad || applied.judgement == Poor)) {
     const auto releaseTime = lr2DeferredRelease ? context.songTimeMicros : judgedTime;
@@ -2106,7 +2110,7 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
 
   tailState.acceptedHeadJudge = applied;
   if (config_.judge.rules().ruleset == GameplayRuleset::LR2 && isBackSpin &&
-      tail.scratchLane && tail.longNoteRule != LongNoteRule::Classic) {
+      directionalScratch && tail.longNoteRule != LongNoteRule::Classic) {
     laneState->suppressedBackspinPressMicros = judgedTime;
   }
   result.hasJudge = true;

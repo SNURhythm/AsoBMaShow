@@ -1450,6 +1450,48 @@ void testClassicReleaseCommitsOneJudgeAndNoSound() {
           "release commits lane and replay state together");
 }
 
+void testKeyboardWheelChargeTailsReleaseWithoutReversal() {
+  for (const int mode : {24, 48}) {
+    const std::vector<int> wheels = mode == 24 ? std::vector<int>{24, 25}
+                                              : std::vector<int>{24, 25, 50, 51};
+    for (int lane : wheels) for (int lnType : {2, 3}) {
+      const std::string input = "{\"version\":\"1.0.0\",\"info\":{\"init_bpm\":120,\"mode_hint\":\"" +
+          std::string(mode == 24 ? "keyboard-24k" : "keyboard-24k-double") +
+          "\",\"ln_type\":" + std::to_string(lnType) +
+          "},\"sound_channels\":[{\"name\":\"wheel.wav\",\"notes\":[{\"x\":" +
+          std::to_string(lane + 1) + ",\"y\":480,\"l\":240}]}]}";
+      for (const auto ruleset : {GameplayRuleset::LR2, GameplayRuleset::Beatoraja}) {
+        bms_parser::Parser parser;
+        std::atomic_bool cancelled{false};
+        bms_parser::Chart *raw = nullptr;
+        parser.Parse(std::vector<unsigned char>(input.begin(), input.end()), &raw,
+                     false, false, cancelled, "wheel.bmson");
+        std::unique_ptr<bms_parser::Chart> chart(raw);
+        require(chart && chart->Meta.TotalNotes == 2, "wheel charge chart parses both endpoints");
+        const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+        const auto judge = gameplay::CompiledGameplayJudge::from(
+            gameplay::compileGameplayJudgeRules(ruleset, 2, 100, 100,
+                CourseJudgementConstraint::None, gameplay::CandidateSelectionMode::LR2,
+                mode, 100));
+        gameplay::GameplaySimulation simulation(definition, {.judge = judge});
+        require(simulation.pressLane(lane, {.songTimeMicros = 1'000'000}).hasJudge,
+                "keyboard wheel head is playable");
+        const auto release = simulation.releaseLane(lane, {.songTimeMicros = 1'500'000});
+        require(release.hasJudge && release.judge.judgement == PGreat &&
+                    simulation.noteState(1).played && !simulation.noteState(1).holding,
+                "keyboard CN/HCN wheel tail completes on ordinary lane release");
+        std::unordered_map<int, bool> pressed;
+        RhythmLaneInputController controller(chart.get(), nullptr, pressed, judge);
+        require(controller.pressLane(lane, {.songTimeMicros = 1'000'000}).hasJudge,
+                "legacy keyboard wheel head is playable");
+        const auto legacyRelease = controller.releaseLane(lane, {.songTimeMicros = 1'500'000});
+        require(legacyRelease.hasJudge && legacyRelease.judge.judgement == PGreat,
+                "legacy keyboard CN/HCN wheel tail completes without reversal");
+      }
+    }
+  }
+}
+
 void testChargeScratchRequiresBackspinRelease() {
   bms_parser::Chart chart;
   chart.Meta.KeyMode = 7;
@@ -3276,7 +3318,8 @@ void testLr2SkippedInitialMineStillAllowsCompletion() {
 int main(int argc, char **argv) {
   if (argc > 1) {
     const std::string name = argv[1];
-    if (name == "initial-mine-completion") testLr2SkippedInitialMineStillAllowsCompletion();
+    if (name == "keyboard-wheel-release") testKeyboardWheelChargeTailsReleaseWithoutReversal();
+    else if (name == "initial-mine-completion") testLr2SkippedInitialMineStillAllowsCompletion();
     else if (name == "atomic-charge-miss") testReferenceChargeMissIsAtomicBeforeSurvivalFailure();
     else if (name == "early-cutoff") testReferenceEarlyCandidateCutoffIsExclusive();
     else if (name == "release-search") testReleaseSearchStopsAtPracticeEnd();
@@ -3342,6 +3385,7 @@ int main(int argc, char **argv) {
   testPressDoesNotClaimLongTail();
   testLongTailCannotMaskLaterPressCandidateForAnyPriorityMode();
   testClassicReleaseCommitsOneJudgeAndNoSound();
+  testKeyboardWheelChargeTailsReleaseWithoutReversal();
   testChargeScratchRequiresBackspinRelease();
   testParitySummaryDetectsPerturbedIdentityAndPayload();
   testEmptyValidLaneMatchesCurrentController();

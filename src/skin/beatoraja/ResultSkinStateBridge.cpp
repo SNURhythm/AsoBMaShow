@@ -163,9 +163,11 @@ SkinPropertyLookup<std::int64_t> resultLaneAssignment(
                                     : data.replayLaneShufflePattern2P;
   const int keyCount = data.replayKeyMode == 10 ? 5
                        : data.replayKeyMode == 14 ? 7
+                       : data.replayKeyMode == 48 ? 24
                                                   : data.replayKeyMode;
   if (keyCount <= 0 ||
-      (player == 1 && data.replayKeyMode != 10 && data.replayKeyMode != 14)) {
+      (player == 1 && data.replayKeyMode != 10 && data.replayKeyMode != 14 &&
+       data.replayKeyMode != 48)) {
     return supported<std::int64_t>(0);
   }
   if (!option || !hasBeatorajaLaneAssignment(*option) || !pattern) {
@@ -182,7 +184,7 @@ SkinPropertyLookup<std::int64_t> resultLaneAssignment(
   if (static_cast<std::size_t>(index) >= pattern->size()) {
     return supported<std::int64_t>(0);
   }
-  const int sideOffset = player == 1 ? keyCount : 0;
+  const int sideOffset = player == 1 ? (data.replayKeyMode == 48 ? 26 : keyCount) : 0;
   return supported<std::int64_t>((*pattern)[static_cast<std::size_t>(index)] +
                                  1 - sideOffset);
 }

@@ -10784,6 +10784,20 @@ void testResultBridgeProjectsReplayLaneAssignments() {
              firstScratch.supported && firstScratch.value == 8 &&
              secondKey.supported && secondKey.value == 3,
          "result lane-assignment indexes retain Beatoraja replay patterns");
+  std::vector<int> keyboardPattern;
+  for (int lane = 0; lane < 26; ++lane) keyboardPattern.push_back(lane + 26);
+  ResultSkinStateBridge keyboard({
+      .replayRandomOption2P = 8,
+      .replayKeyMode = 48,
+      .replayLaneShufflePattern2P = keyboardPattern,
+  }, 1, 0);
+  const auto keyboardKey = keyboard.integerProperty(
+      {460}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto keyboardWheel = keyboard.integerProperty(
+      {469}, SkinIntegerPropertyDomain::ImageIndex);
+  expect(keyboardKey.supported && keyboardKey.value == 1 &&
+             keyboardWheel.supported && keyboardWheel.value == 25,
+         "keyboard result lane assignments decode the 26-lane player-two offset");
 }
 
 void testResultBridgeExposesPlayerHistoryProperties() {

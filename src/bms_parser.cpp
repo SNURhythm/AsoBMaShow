@@ -120,6 +120,10 @@ struct Channel {
   int source;
   std::vector<SoundNote> notes;
 };
+struct AuxiliaryNote {
+  int source = -1;
+  float damage = 0;
+};
 struct PlayNote {
   Tick end = 0;
   int wav = -1, type = 0;
@@ -156,25 +160,42 @@ std::unique_ptr<Chart> decode(const std::vector<unsigned char> &bytes,
   meta.Bpm = number(field(info, legacy ? "initBPM" : "init_bpm"));
   if (!(meta.Bpm > 0)) return {};
   meta.MinBpm = meta.MaxBpm = meta.MostPrevalentBpm = meta.GuessedBeatBpm = meta.Bpm;
-  meta.Rank = static_cast<int>(std::clamp(number(field(info, legacy ? "judgeRank" : "judge_rank"), 100), 0.0, 1000000.0));
-  meta.RankType = JudgeRankType::DefExRank;
-  meta.Values["bmson.judge_rank"] = std::to_string(number(field(info, legacy ? "judgeRank" : "judge_rank"), 100));
+  const auto judgeRank = number(field(info, legacy ? "judgeRank" : "judge_rank"), 100);
+  // jbms-parser tolerates old editors that write BMS rank enums (0..4).
+  // A negative value leaves the normal BMS rank default intact.
+  if (judgeRank >= 0) {
+    meta.Rank = static_cast<int>(std::min(judgeRank, 1000000.0));
+    meta.RankType = judgeRank < 5 ? JudgeRankType::BmsRank : JudgeRankType::DefExRank;
+  }
+  meta.Values["bmson.judge_rank"] = std::to_string(judgeRank);
   meta.Total = number(field(info, "total"), 100);
   meta.HasTotal = true;
   meta.PlayLevel = number(field(info, "level"));
   meta.PlayLevelText = std::to_string(static_cast<int>(std::clamp(meta.PlayLevel, 0.0, double(INT32_MAX))));
   meta.KeyMode = 7;
-  std::string mode = legacy ? "beat-7k" : string(field(info, "mode_hint"), "beat-7k");
+  std::string mode = string(field(info, "mode_hint"), "beat-7k");
   if (mode == "beat-5k") meta.KeyMode = 5;
   else if (mode == "beat-10k") { meta.KeyMode = 10; meta.IsDP = true; }
   else if (mode == "beat-14k") { meta.KeyMode = 14; meta.IsDP = true; }
-  else if (mode == "popn-9k") meta.KeyMode = 9;
+  else if (mode == "popn-5k" || mode == "popn-9k") meta.KeyMode = 9;
+  else if (mode == "keyboard-24k") meta.KeyMode = 24;
+  else if (mode == "keyboard-24k-double") { meta.KeyMode = 48; meta.IsDP = true; }
   else if (mode != "beat-7k") return {}; // Never silently reinterpret another game layout.
+  meta.Values["bmson.mode_hint"] = mode;
   meta.Player = meta.IsDP ? 3 : 1;
   meta.LnMode = id(field(info, "ln_type"));
   if (meta.LnMode > 3) meta.LnMode = 0;
   const auto lanes = meta.GetTotalLaneIndices();
   const std::set<int> validLanes(lanes.begin(), lanes.end());
+  const auto scratchLanes = meta.GetScratchLaneIndices();
+  const std::set<int> scratchSet(scratchLanes.begin(), scratchLanes.end());
+  const int laneCapacity = std::max(16, *std::max_element(lanes.begin(), lanes.end()) + 1);
+  const auto laneFor = [&](const Value &x) {
+    if (!x.is<double>()) return -1;
+    const auto lane = number(x);
+    return lane >= 1 && lane <= laneCapacity && std::floor(lane) == lane &&
+        validLanes.count(static_cast<int>(lane) - 1) ? static_cast<int>(lane) - 1 : -1;
+  };
   if (!legacy) {
     meta.SubTitle = string(field(info, "subtitle"));
     const auto chartName = string(field(info, "chart_name"));
@@ -188,8 +209,8 @@ std::unique_ptr<Chart> decode(const std::vector<unsigned char> &bytes,
     meta.BackBmp = std::filesystem::u8path(resourcePath(field(info, "back_image")));
     meta.Preview = std::filesystem::u8path(resourcePath(field(info, "preview_music")));
   }
-  double resolution = legacy ? 240 : std::abs(number(field(info, "resolution"), 240));
-  if (resolution == 0) resolution = 240;
+  double resolution = legacy ? 240 : number(field(info, "resolution"), 240);
+  if (resolution <= 0) resolution = 240;
   if (resolution > UINT32_MAX || std::floor(resolution) != resolution) return {};
   const Tick measureTicks = static_cast<Tick>(resolution) * 4;
   std::map<Tick, Position> positions;
@@ -223,12 +244,7 @@ std::unique_ptr<Chart> decode(const std::vector<unsigned char> &bytes,
       SoundNote n;
       n.y = tick(field(value, "y"));
       n.length = tick(field(value, "l"));
-      const auto &x = field(value, "x");
-      if (x.is<double>()) {
-        const auto lane = number(x);
-        if (lane >= 1 && lane <= 16 && std::floor(lane) == lane &&
-            validLanes.count(static_cast<int>(lane) - 1)) n.lane = static_cast<int>(lane) - 1;
-      }
+      n.lane = laneFor(field(value, "x"));
       n.continuation = boolean(field(value, "c"));
       n.up = boolean(field(value, "up"));
       n.type = id(field(value, "t"));
@@ -239,6 +255,28 @@ std::unique_ptr<Chart> decode(const std::vector<unsigned char> &bytes,
     }
     std::stable_sort(channel.notes.begin(), channel.notes.end(), [](const auto &a, const auto &b) { return a.y < b.y; });
     channels.push_back(std::move(channel));
+  }
+  std::map<std::pair<Tick, int>, AuxiliaryNote> hidden, mines;
+  for (const auto *kind : {"key_channels", "mine_channels"}) {
+    const bool isMine = std::string(kind) == "mine_channels";
+    for (const auto &source : array(field(root, kind))) {
+      check();
+      if (chart->WavTable.size() >= INT32_MAX - 1) return {};
+      const int wav = static_cast<int>(chart->WavTable.size()) + 1;
+      chart->WavTable[wav] = resourcePath(field(source, "name"));
+      for (const auto &value : array(field(source, "notes"))) {
+        check();
+        const auto y = tick(field(value, "y"));
+        const auto lane = laneFor(field(value, "x"));
+        positions[y];
+        if (lane < 0) continue;
+        const double damage = isMine ? number(field(value, "damage")) : 0;
+        if (std::abs(damage) > std::numeric_limits<float>::max()) return {};
+        const AuxiliaryNote note{wav, static_cast<float>(damage)};
+        if (isMine) mines.emplace(std::make_pair(y, lane), note);
+        else hidden[{y, lane}] = note;
+      }
+    }
   }
   const auto &bga = field(root, "bga");
   if (!bga.is<json::null>()) {
@@ -302,7 +340,7 @@ std::unique_ptr<Chart> decode(const std::vector<unsigned char> &bytes,
   }
   meta.GuessedBeatBpm = meta.MostPrevalentBpm;
   if (scan) scan->HasBga = !chart->BmpTable.empty();
-  int nextWav = static_cast<int>(channels.size()) + 1;
+  int nextWav = static_cast<int>(chart->WavTable.size()) + 1;
   const auto sliceId = [&](int source, long long start, long long duration) {
     if (nextWav == INT32_MAX) throw std::runtime_error("Too many slices");
     const int wav = nextWav++;
@@ -383,13 +421,32 @@ std::unique_ptr<Chart> decode(const std::vector<unsigned char> &bytes,
       ++it;
     }
   }
+  // Mine channels are applied after every playable channel. Locate enclosing
+  // holds per lane without scanning the entire chart for each mine.
+  std::map<int, std::map<Tick, Tick>> holds;
+  for (const auto &[key, note] : playable)
+    if (note.end > key.first) holds[key.second][key.first] = note.end;
+  for (auto it = mines.begin(); it != mines.end();) {
+    const auto [y, lane] = it->first;
+    bool conflict = playable.count(it->first) != 0;
+    const auto laneHolds = holds.find(lane);
+    if (laneHolds != holds.end()) {
+      auto hold = laneHolds->second.upper_bound(y);
+      if (hold != laneHolds->second.begin()) {
+        --hold;
+        conflict = conflict || y <= hold->second;
+      }
+    }
+    if (conflict) it = mines.erase(it);
+    else ++it;
+  }
   const bool materialize = !metaOnly && !scan;
   std::map<Tick, TimeLine *> timelines;
   if (materialize) {
     if (ready) {
       auto measure = std::make_unique<Measure>();
       for (int beat = 0; beat < 4; ++beat) {
-        auto timeline = std::make_unique<TimeLine>(16, false);
+        auto timeline = std::make_unique<TimeLine>(laneCapacity, false);
         timeline->Timing = micros(beat * 60000000.0L / meta.Bpm);
         timeline->BeatPosition = beat / 4.0;
         timeline->Bpm = meta.Bpm;
@@ -413,7 +470,7 @@ std::unique_ptr<Chart> decode(const std::vector<unsigned char> &bytes,
         measure = owned.release();
         measureStart = y;
       }
-      auto timeline = std::make_unique<TimeLine>(16, false);
+      auto timeline = std::make_unique<TimeLine>(laneCapacity, false);
       timeline->Timing = pos.time;
       timeline->BeatPosition = double(y) / measureTicks + (ready ? 1 : 0);
       timeline->IsFirstInMeasure = pos.bar;
@@ -438,7 +495,7 @@ std::unique_ptr<Chart> decode(const std::vector<unsigned char> &bytes,
     const bool isLong = note.end > y;
     const auto type = LongNoteTypeFromLnMode(note.type == 0 ? meta.LnMode : note.type);
     const int count = isLong && (type == LongNoteType::ChargeNote || type == LongNoteType::HellChargeNote) ? 2 : 1;
-    const bool scratch = meta.KeyMode != 9 && (lane == 7 || lane == 15);
+    const bool scratch = scratchSet.count(lane) != 0;
     const int counted = (IsCountedNoteTime(positions.at(y).time) ? 1 : 0) +
         (count == 2 && IsCountedNoteTime(positions.at(note.end).time) ? 1 : 0);
     meta.TotalNotes += counted;
@@ -457,6 +514,23 @@ std::unique_ptr<Chart> decode(const std::vector<unsigned char> &bytes,
       timelines.at(y)->SetNote(lane, head.release());
       timelines.at(note.end)->SetNote(lane, tail.release());
     } else timelines.at(y)->SetNote(lane, new Note(note.wav));
+  }
+  for (const auto &[key, note] : hidden) {
+    check();
+    chart->ReferencedWavTable[note.source] = chart->WavTable.at(note.source);
+    if (materialize) timelines.at(key.first)->SetInvisibleNote(key.second, new Note(note.source));
+  }
+  for (const auto &[key, note] : mines) {
+    check();
+    const auto time = positions.at(key.first).time;
+    if (IsCountedNoteTime(time)) ++meta.TotalLandmineNotes;
+    meta.PlayLength = std::max(meta.PlayLength, time);
+    chart->ReferencedWavTable[note.source] = chart->WavTable.at(note.source);
+    if (materialize) {
+      auto mine = std::make_unique<LandmineNote>(note.damage);
+      mine->Wav = note.source;
+      timelines.at(key.first)->SetLandmineNote(key.second, mine.release());
+    }
   }
   // Keep only virtual sounds reachable from effective notes, not intermediate
   // layer combinations or discarded release sounds.
@@ -2071,10 +2145,10 @@ std::vector<int> ScratchLanesForPlayer(const ChartMeta &meta, int player) {
   if (!meta.IsDP || scratchLanes.size() <= 1) {
     return scratchLanes;
   }
-  if (player < 0 || player >= static_cast<int>(scratchLanes.size())) {
-    return {};
-  }
-  return {scratchLanes[static_cast<size_t>(player)]};
+  if (player < 0 || player >= 2) return {};
+  const auto perPlayer = scratchLanes.size() / 2;
+  return {scratchLanes.begin() + player * perPlayer,
+          scratchLanes.begin() + (player + 1) * perPlayer};
 }
 
 std::vector<int> MakeRandomLaneMap(const std::vector<int> &keys,
@@ -2138,9 +2212,9 @@ std::vector<int> BaseModifier::GetModifyLanes(const ChartMeta &meta,
   auto keyLanes = meta.GetKeyLaneIndices();
   std::vector<int> result;
   if (meta.IsDP) {
-    const int keysPerPlayer = meta.KeyMode / 2;
+    const int keysPerPlayer = meta.GetKeyLaneCount() / 2;
     const int player = Player < 0 ? 0 : Player;
-    if (player >= meta.GetScratchLaneCount()) {
+    if (player >= 2) {
       return {};
     }
     const int begin = keysPerPlayer * player;
@@ -2150,10 +2224,8 @@ std::vector<int> BaseModifier::GetModifyLanes(const ChartMeta &meta,
                     keyLanes.begin() + end);
     }
     if (includeScratch) {
-      auto scratchLanes = meta.GetScratchLaneIndices();
-      if (player < static_cast<int>(scratchLanes.size())) {
-        result.push_back(scratchLanes[static_cast<size_t>(player)]);
-      }
+      const auto scratchLanes = ScratchLanesForPlayer(meta, player);
+      result.insert(result.end(), scratchLanes.begin(), scratchLanes.end());
     }
     return result;
   }

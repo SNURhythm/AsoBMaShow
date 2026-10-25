@@ -107,9 +107,9 @@ void testEvenKeyModesUseSkinIndependentLaneRoles() {
 }
 
 void testLegacyAndSingleKeyboardCommandMappingsRemainUnchanged() {
-  for (const int mode : {5, 7, 10, 14, 24}) {
-    const int players = mode == 10 || mode == 14 ? 2 : 1;
-    const int keys = mode == 10 ? 5 : mode == 14 ? 7 : mode;
+  for (const int mode : {5, 7, 10, 14, 24, 48}) {
+    const int players = mode == 10 || mode == 14 || mode == 48 ? 2 : 1;
+    const int keys = mode == 10 ? 5 : mode == 14 ? 7 : mode == 48 ? 24 : mode;
     constexpr std::array keyboardDeltas{
         -1, 1, -1, 1, -1, -1, 1, -1, 1, -1, 1, -1,
         -1, 1, -1, 1, -1, -1, 1, -1, 1, -1, 1, -1};
@@ -122,7 +122,7 @@ void testLegacyAndSingleKeyboardCommandMappingsRemainUnchanged() {
           require(control.apply(key, true, 1'001) == std::vector<Action>{{
                       .kind = modifier.kind == ControlKind::Start
                                   ? ActionKind::AdjustHispeed : ActionKind::AdjustDuration,
-                      .delta = mode == 24 ? keyboardDeltas[position] : position % 2 == 0 ? -1 : 1}},
+                      .delta = (mode == 24 || mode == 48) ? keyboardDeltas[position] : position % 2 == 0 ? -1 : 1}},
                   "legacy beat and 24K single command key roles remain unchanged");
           require(control.apply(key, false, 1'002).empty(),
                   "legacy command key releases emit no adjustment");
@@ -141,24 +141,30 @@ void testLegacyAndSingleKeyboardCommandMappingsRemainUnchanged() {
   }
 }
 
-void testDenseDoublePlayReservedReplayLanesDoNotAdjustCommands() {
-  for (const auto modifier : {start(), select()}) {
-    gameplay::StartSelectControl control({.keyMode = 48});
-    (void)control.apply(modifier, true, 100'000);
-    // BRD's 26-wide player namespace includes channels beyond the 48 chart keys.
-    for (int reserved = 22; reserved <= 25; ++reserved) {
-      const Control key{.kind = ControlKind::Lane, .player = 2, .lane = reserved};
-      require(control.apply(key, true, 100'001).empty() &&
-                  control.tick(200'002).empty() &&
-                  control.apply(key, false, 200'003).empty(),
-              "48K reserved replay channels do not wrap into note or held commands");
-    }
-    for (const Control invalid : {
-             Control{.kind = ControlKind::Lane, .player = 1, .lane = -1},
-             Control{.kind = ControlKind::Lane, .player = 1, .lane = 26},
-             Control{.kind = ControlKind::Lane, .player = 3, .lane = 0}}) {
-      require(control.apply(invalid, true, 200'004).empty(),
-              "invalid 48K replay lanes produce no command adjustment");
+void testDoubleKeyboardWheelsRetainHeldCommands() {
+  for (const int player : {1, 2}) {
+    for (const int wheel : {24, 25}) {
+      for (const auto modifier : {start(), select()}) {
+        gameplay::StartSelectControl control({.keyMode = 48});
+        (void)control.apply(modifier, true, 100'000);
+        const Control key{.kind = ControlKind::Lane, .player = player, .lane = wheel};
+        require(control.apply(key, true, 100'001).empty(),
+                "keyboard wheels begin held commands without one-shot speed changes");
+        require(control.tick(150'002) == std::vector<Action>{{
+                    .kind = modifier.kind == ControlKind::Start
+                                ? ActionKind::AdjustLaneCover : ActionKind::AdjustDuration,
+                    .delta = wheel == 24 ? -1 : 1}},
+                "both keyboard players preserve independent wheel command directions");
+        (void)control.apply(key, false, 150'003);
+        require(control.tick(250'004).empty(), "lifting a wheel ends the held command");
+        for (const Control invalid : {
+                 Control{.kind = ControlKind::Lane, .player = 1, .lane = -1},
+                 Control{.kind = ControlKind::Lane, .player = 1, .lane = 26},
+                 Control{.kind = ControlKind::Lane, .player = 3, .lane = 0}}) {
+          require(control.apply(invalid, true, 250'005).empty(),
+                  "invalid 48K replay lanes produce no command adjustment");
+        }
+      }
     }
   }
 }
@@ -263,7 +269,7 @@ int main() {
   testStartAndSelectUseBeatorajaKeyBindings();
   testEvenKeyModesUseSkinIndependentLaneRoles();
   testLegacyAndSingleKeyboardCommandMappingsRemainUnchanged();
-  testDenseDoublePlayReservedReplayLanesDoNotAdjustCommands();
+  testDoubleKeyboardWheelsRetainHeldCommands();
   testStartDoublePressAndConjunctionMatchBeatorajaEdges();
   testStartAndSelectAtNoteEndExitImmediately();
   testHeldSpecialKeysRepeatLikeBeatorajaScratchBindings();

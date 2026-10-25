@@ -237,17 +237,11 @@ private:
   void applyLane(const replay::LogicalControl &control, bool pressed,
                  std::int64_t timestampMicros,
                  std::vector<StartSelectControlAction> &actions) {
-    int lane = control.lane;
-    if (configuration_.keyMode == 48) {
-      // BRD retains a 26-channel player stride; the chart has two dense
-      // 24-key halves. Decode that namespace before choosing a key's role.
-      const auto physicalLane =
-          replay::physicalChartLaneForLogicalControl(48, control);
-      if (!physicalLane || *physicalLane < 0 || *physicalLane >= 48) {
-        return;
-      }
-      lane = *physicalLane % 24;
+    if (configuration_.keyMode == 48 &&
+        !replay::physicalChartLaneForLogicalControl(48, control)) {
+      return;
     }
+    const int lane = control.lane;
     const int binding = laneBinding(lane);
     // Beatoraja's +/-2 bindings are held digital controls (the final two
     // Pop'n/keyboard inputs), not two-step one-shot changes. Route them

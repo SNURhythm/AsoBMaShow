@@ -126,11 +126,11 @@ void testGameplayScopesEnableBothPlayersOnlyForDp() {
 void testDenseDoublePlayActivatesSecondPlayerBindings() {
   InputProfile profile;
   profile.bindings.push_back({.id = "24k-double-p2-first", .scope = {2, 48},
-      .action = {input::LogicalActionKind::Lane, 24},
+      .action = {input::LogicalActionKind::Lane, 26},
       .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
                   .kind = input::ControlKind::Key, .index = SDL_SCANCODE_Q}});
   profile.bindings.push_back({.id = "24k-double-p2-last", .scope = {2, 48},
-      .action = {input::LogicalActionKind::Lane, 47},
+      .action = {input::LogicalActionKind::Lane, 51},
       .control = {.deviceId = "keyboard", .deviceClass = input::DeviceClass::Keyboard,
                   .kind = input::ControlKind::Key, .index = SDL_SCANCODE_P}});
   input_profile::addMissingGameplayCommandBindings(profile);
@@ -147,16 +147,16 @@ void testDenseDoublePlayActivatesSecondPlayerBindings() {
   pipeline.consumeDirectKeyboard(SDL_SCANCODE_Q, false);
   pipeline.consumeDirectKeyboard(SDL_SCANCODE_P, false);
   require(notes.calls == std::vector<ControlCall>{
-              {.kind = ControlCall::Kind::Press, .lane = 24},
-              {.kind = ControlCall::Kind::Press, .lane = 47},
-              {.kind = ControlCall::Kind::Release, .lane = 24},
-              {.kind = ControlCall::Kind::Release, .lane = 47}},
+              {.kind = ControlCall::Kind::Press, .lane = 26},
+              {.kind = ControlCall::Kind::Press, .lane = 51},
+              {.kind = ControlCall::Kind::Release, .lane = 26},
+              {.kind = ControlCall::Kind::Release, .lane = 51}},
           "24K Double player two bindings reach the dense chart lane boundaries");
   require(applied.size() == 4, "24K Double records each boundary key edge");
   for (std::size_t index = 0; index < applied.size(); ++index) {
     require(applied[index].hasReplayControl &&
                 replay::physicalChartLaneForLogicalControl(48, applied[index].control) ==
-                    std::optional<int>{index % 2 == 0 ? 24 : 47},
+                    std::optional<int>{index % 2 == 0 ? 26 : 51},
             "24K Double replay controls roundtrip the original physical channels");
   }
 }
@@ -169,7 +169,7 @@ void testDenseDoublePlayCommandKeysUsePhysicalPlayerHalves() {
     for (int position = 0; position < 24; ++position) {
       for (const auto modifier : {input::LogicalActionKind::Start,
                                   input::LogicalActionKind::Select}) {
-        const int physicalLane = (player - 1) * 24 + position;
+        const int physicalLane = (player - 1) * 26 + position;
         InputProfile profile;
         profile.bindings.push_back({.id = "modifier", .scope = {player, 48},
             .action = {modifier},

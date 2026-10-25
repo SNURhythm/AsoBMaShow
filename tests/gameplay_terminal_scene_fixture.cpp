@@ -1222,13 +1222,13 @@ void testAuthoredCourseStageLiveCarry() {
 void testCourseResultKeyMode() {
   CoursePlaySession session;
   session.entries.resize(3);
-  for (const int mode : {5, 7, 9, 10, 14}) {
+  for (const int mode : {5, 7, 9, 10, 14, 24, 48}) {
     for (auto &entry : session.entries) entry.meta.KeyMode = mode;
     for (const std::size_t index : {0U, 2U, 3U}) {
       session.currentIndex = index;
       const auto meta = courseResultMetaForSession(session);
       require(meta.KeyMode == mode, "course result retains the common chart keymode");
-      require(meta.IsDP == (mode == 10 || mode == 14),
+      require(meta.IsDP == (mode == 10 || mode == 14 || mode == 48),
               "course result retains common double-play mode");
     }
   }

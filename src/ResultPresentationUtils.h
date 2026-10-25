@@ -255,7 +255,7 @@ inline bms_parser::ChartMeta courseResultMeta(
                          std::all_of(keyModes.begin(), keyModes.end(),
                                      [&](int mode) { return mode == keyModes.front(); })
                      ? keyModes.front() : 0;
-  meta.IsDP = meta.KeyMode == 10 || meta.KeyMode == 14;
+  meta.IsDP = meta.KeyMode == 10 || meta.KeyMode == 14 || meta.KeyMode == 48;
   meta.Title = courseName.empty() ? i18n::tr("result.course.course_result.label") : courseName;
   meta.Artist = courseGroupName.empty() ? i18n::tr("result.course.course_mode.label") : courseGroupName;
   meta.TotalNotes = totalNotes;

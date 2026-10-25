@@ -162,7 +162,7 @@ const char *insertChartMetaSql() {
          "has_bga,"
          "source_priority,"
          "source_archive_size,"
-         "rank_type,total_is_relative"
+         "rank_type,total_is_relative,bmson_mode_hint"
          ") VALUES("
          "@path,"
          "@md5,"
@@ -203,7 +203,7 @@ const char *insertChartMetaSql() {
          "@has_bga,"
          "@source_priority,"
          "@source_archive_size,"
-         "@rank_type,@total_is_relative"
+         "@rank_type,@total_is_relative,@bmson_mode_hint"
          ") ON CONFLICT(path) DO UPDATE SET "
          "md5=excluded.md5,"
          "sha256=excluded.sha256,"
@@ -228,6 +228,7 @@ const char *insertChartMetaSql() {
          "rank=excluded.rank,"
          "rank_type=excluded.rank_type,"
          "total_is_relative=excluded.total_is_relative,"
+         "bmson_mode_hint=excluded.bmson_mode_hint,"
          "player=excluded.player,"
          "keys=excluded.keys,"
          "total_notes=excluded.total_notes,"
@@ -314,6 +315,8 @@ bool bindAndInsertChartMeta(
                      clampSqlInteger(sourcePreference.archiveSize));
   sqlite3_bind_int(statement, 40, static_cast<int>(chartMeta.RankType));
   sqlite3_bind_int(statement, 41, chartMeta.TotalIsRelative ? 1 : 0);
+  const auto modeHint = chartMeta.Values.find("bmson.mode_hint");
+  bindSqliteText(statement, 42, modeHint == chartMeta.Values.end() ? "" : modeHint->second);
   if (sqlite3_step(statement) != SQLITE_DONE) {
     logSdlSqlError("inserting a chart", database);
     return false;

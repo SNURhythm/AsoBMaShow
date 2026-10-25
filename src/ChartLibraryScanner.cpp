@@ -61,9 +61,10 @@ struct ScanParserTotals {
 };
 
 constexpr int kArchiveParseCheckpointInterval = 100;
-// Version 1 adds bmson discovery to unchanged archives. This tracks filename
-// recognition only; it must never trigger a metadata rebuild of known charts.
-constexpr int kArchiveChartRecognitionVersion = 1;
+// Version 1 discovers bmson; version 2 retries previously unsupported bmson
+// modes in unchanged archives. Only missing charts are read: known metadata
+// must never be rebuilt by a recognition upgrade.
+constexpr int kArchiveChartRecognitionVersion = 2;
 constexpr std::size_t kIndividualParseBatchSize = 512;
 constexpr std::size_t kIndividualCommitInterval = 1000;
 constexpr std::size_t kArchiveParseMaxInFlightFiles = 12;

@@ -1262,7 +1262,7 @@ void SettingsScene::appendBuiltInNoteControls(
   if (keyMode == -7 && context.settings.presentation().skin.follow7K1S) settingsKeyMode = 7;
   bms_parser::ChartMeta meta;
   meta.KeyMode = std::abs(keyMode);
-  meta.IsDP = keyMode == 10 || keyMode == 14;
+  meta.IsDP = keyMode == 10 || keyMode == 14 || keyMode == 48;
   const auto lanes = keyMode < 0 ? meta.GetKeyLaneIndices() : meta.GetTotalLaneIndices();
   const auto keys = meta.GetKeyLaneIndices();
   const auto scratches = keyMode < 0 ? std::vector<int>{} : meta.GetScratchLaneIndices();

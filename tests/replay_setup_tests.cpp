@@ -117,6 +117,12 @@ void testSupportedKeyModesAndDoublePlayOption() {
            "optional");
   }
 
+  auto keyboardDouble = validSetup();
+  keyboardDouble.chart.keyMode = 48;
+  expect(replay::validateReplaySetup(keyboardDouble,
+                                     replay::ReplaySetupSource::LocalCapture).valid(),
+         "keyboard-double FLIP can be captured and replayed");
+
   auto single = validSetup();
   single.chart.keyMode = 7;
   expect(replay::validateReplaySetup(single,

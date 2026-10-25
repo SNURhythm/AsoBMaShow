@@ -652,7 +652,7 @@ void testSessionRoundTripAndReadinessCost() {
 
   Database inspection = openDatabase(path);
   assert(inspection);
-  assert(queryInt(inspection.get(), "PRAGMA user_version") == 15);
+  assert(queryInt(inspection.get(), "PRAGMA user_version") == 16);
   SqliteStatementHandle journalMode;
   assert(prepareSqliteStatement(inspection.get(), "PRAGMA journal_mode",
                                 journalMode) == SQLITE_OK);
@@ -863,7 +863,7 @@ void testRejectedFamiliesRemainUnchanged() {
     assert(execute(database.get(),
                    "CREATE TABLE sentinel(value TEXT);"
                    "INSERT INTO sentinel VALUES('unchanged');"
-                   "PRAGMA user_version=16"));
+                   "PRAGMA user_version=17"));
   }
   const auto futureBefore =
       repository_test::rawDatabaseFamilySnapshot(futurePath);
@@ -2115,7 +2115,7 @@ void testChartMigrationCompatibilityMatrix() {
     assert(migrated.EnsureReady());
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 15);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 16);
     assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
     assert(queryInt(database.get(),
                     "SELECT COUNT(*) FROM chart_favorites") == 1);
@@ -2284,7 +2284,7 @@ void testJudgeRankMigrationPreservesAddedDatesAcrossResumedScan() {
     assert(queryInt(database.get(),
                     "SELECT add_date FROM chart_meta WHERE title='New'") > 345678);
     assert(queryInt(database.get(), "SELECT adddate FROM folder") == 345678);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 15);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 16);
   }
 }
 
@@ -2310,13 +2310,26 @@ void testBmsonMigrationPreservesLibrary() {
   ChartRepository repository(path);
   assert(repository.EnsureReady());
   auto db = openDatabase(path);
-  assert(queryInt(db.get(), "PRAGMA user_version") == 15);
+  assert(queryInt(db.get(), "PRAGMA user_version") == 16);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM chart_meta") == 1);
   assert(queryInt(db.get(), "SELECT total_is_relative FROM chart_meta") == 0);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM archive_scan_cache") == 1);
   assert(queryInt(db.get(), "SELECT chart_count FROM archive_scan_cache") == 1);
   assert(queryInt(db.get(), "SELECT recognition_version FROM archive_scan_cache") == 0);
   assert(queryInt(db.get(), "SELECT add_date FROM chart_meta") == 123456);
+  // The follow-up layout migration is additive as well: a library made by
+  // the first bmson build must preserve both chart rows and archive caches.
+  assert(execute(db.get(),
+      "ALTER TABLE chart_meta DROP COLUMN bmson_mode_hint;"
+      "PRAGMA user_version=15"));
+  db.reset();
+  ChartRepository reopened(path);
+  assert(reopened.EnsureReady());
+  db = openDatabase(path);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM chart_meta") == 1);
+  assert(queryInt(db.get(), "SELECT COUNT(*) FROM archive_scan_cache") == 1);
+  assert(queryInt(db.get(), "SELECT add_date FROM chart_meta") == 123456);
+  assert(queryInt(db.get(), "SELECT length(bmson_mode_hint) FROM chart_meta") == 0);
 }
 
 void testParserSemanticsMigrationIsResumable() {
@@ -2545,7 +2558,7 @@ void testChartMigrationReleaseFailureDoesNotReportSuccess() {
   {
     Database database = openDatabase(path);
     assert(database);
-    assert(queryInt(database.get(), "PRAGMA user_version") == 15);
+    assert(queryInt(database.get(), "PRAGMA user_version") == 16);
     assert(queryInt(database.get(), "SELECT COUNT(*) FROM chart_meta") == 0);
     assert(queryInt(database.get(),
                     "SELECT required FROM chart_meta_rebuild_state "

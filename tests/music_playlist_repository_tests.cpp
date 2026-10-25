@@ -137,6 +137,7 @@ createChartDatabase(const std::filesystem::path &databasePath) {
       "has_bga INTEGER NOT NULL DEFAULT 0,"
       "rank_type INTEGER NOT NULL DEFAULT 0,"
       "total_is_relative INTEGER NOT NULL DEFAULT 0,"
+      "bmson_mode_hint TEXT NOT NULL DEFAULT '',"
       "source_priority INTEGER,"
       "source_archive_size INTEGER"
       ")");

@@ -737,6 +737,22 @@ void testConsumerSetupAdapterOwnsEveryReplaySetupTranslation() {
              translated->provenance == provenance,
          "one adapter projects complete setup for every chart consumer");
 
+  auto keyboardSetup = replay.playback.setup;
+  keyboardSetup.chart.keyMode = 48;
+  keyboardSetup.player2.laneShufflePattern.emplace();
+  for (int lane = 0; lane < 26; ++lane) {
+    keyboardSetup.player2.laneShufflePattern->push_back(lane);
+  }
+  auto keyboardMeta = meta;
+  keyboardMeta.KeyMode = 48;
+  keyboardMeta.IsDP = true;
+  const auto keyboard = makeReplayDataFromSetup(
+      keyboardSetup, provenance, keyboardMeta, diagnostic);
+  expect(keyboard && keyboard->laneShufflePattern2P &&
+             keyboard->laneShufflePattern2P->front() == 26 &&
+             keyboard->laneShufflePattern2P->back() == 51,
+         "keyboard result replay patterns translate player two with its 26-lane stride");
+
   auto alreadyBoundSetup = replay.playback.setup;
   alreadyBoundSetup.chart.sha256 = std::string(64, 'f');
   expect(makeReplayDataFromSetup(alreadyBoundSetup, provenance, meta,

@@ -33,6 +33,7 @@ std::optional<ReplayData> makeReplayDataFromSetup(
     if (result.laneShufflePattern2P) {
       const int keysPerPlayer = setup.chart.keyMode == 10 ? 5
                                 : setup.chart.keyMode == 14 ? 7
+                                : setup.chart.keyMode == 48 ? 26
                                                              : 0;
       if (keysPerPlayer > 0) {
         for (int &lane : *result.laneShufflePattern2P) {

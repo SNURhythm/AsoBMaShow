@@ -31,7 +31,7 @@
 
 namespace {
 using asobmshow::chart_sql::normalizedSqlHash;
-constexpr int kChartDatabaseSchemaVersion = 15;
+constexpr int kChartDatabaseSchemaVersion = 16;
 
 std::string columnString(sqlite3_stmt *stmt, int idx);
 
@@ -159,6 +159,7 @@ bool createChartMetaTableSchema(sqlite3 *db) {
       "rank      INTEGER,"
       "rank_type INTEGER NOT NULL DEFAULT 0,"
       "total_is_relative INTEGER NOT NULL DEFAULT 0,"
+      "bmson_mode_hint TEXT NOT NULL DEFAULT '',"
       "player    INTEGER,"
       "keys     INTEGER,"
       "total_notes INTEGER,"
@@ -818,6 +819,18 @@ bool migrateChartDatabaseSchema(sqlite3 *db) {
          completed = hasColumn || execSql(db,
              "ALTER TABLE chart_meta ADD COLUMN total_is_relative INTEGER NOT NULL DEFAULT 0",
              "adding chart gauge units");
+         return completed;
+       }},
+      {16, "persist bmson layout hint", [](sqlite3 *db, bool &completed) {
+         bool hasColumn = false;
+         if (const auto error = querySqliteTableHasColumn(
+                 db, "chart_meta", "bmson_mode_hint", hasColumn)) {
+           logSqlErrorText("checking chart layout hint", *error);
+           return false;
+         }
+         completed = hasColumn || execSql(db,
+             "ALTER TABLE chart_meta ADD COLUMN bmson_mode_hint TEXT NOT NULL DEFAULT ''",
+             "adding chart layout hint");
          return completed;
        }},
   };

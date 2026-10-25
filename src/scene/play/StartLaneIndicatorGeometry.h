@@ -32,6 +32,11 @@ inline ColorRole colorRoleForKey(std::size_t position,
   if (keyCount == 0 || position >= keyCount) {
     return ColorRole::White;
   }
+  if (keyCount == 24 || keyCount == 48) {
+    const auto pitch = position % 12;
+    return pitch == 1 || pitch == 3 || pitch == 6 || pitch == 8 || pitch == 10
+               ? ColorRole::Blue : ColorRole::White;
+  }
   const std::size_t mirrored =
       std::min(position, keyCount - position - 1);
   return (mirrored & 1U) == 0 ? ColorRole::White : ColorRole::Blue;

@@ -98,7 +98,7 @@ void testKeyModes() {
   for (const int mode : settings_scene::kPreviewKeyModes) {
     const auto chart = settings_scene::makePreviewChart(mode);
     assert(gameplay::presentationKeyMode(*chart) == mode);
-    assert(chart->Meta.IsDP == (mode == 10 || mode == 14));
+    assert(chart->Meta.IsDP == (mode == 10 || mode == 14 || mode == 48));
     const auto expected = mode < 0 ? chart->Meta.GetKeyLaneIndices()
                                    : chart->Meta.GetTotalLaneIndices();
     std::set<int> seen;
@@ -133,17 +133,20 @@ void testDenseAppearanceModesHaveCompletePreviewCharts() {
     assert(std::ranges::find(settings_scene::kPreviewKeyModes, mode) !=
            settings_scene::kPreviewKeyModes.end());
     const auto chart = settings_scene::makePreviewChart(mode);
-    assert(chart->Meta.KeyMode == mode && !chart->Meta.IsDP);
-    assert(chart->Meta.TotalNotes == mode * 12);
+    const int wheels = mode == 24 ? 2 : mode == 48 ? 4 : 0;
+    const int lanes = mode + wheels;
+    assert(chart->Meta.KeyMode == mode && chart->Meta.IsDP == (mode == 48));
+    assert(chart->Meta.TotalNotes == lanes * 12);
     assert(chart->Meta.TotalLongNotes == mode * 10);
-    assert(chart->Meta.TotalLandmineNotes == mode * 2);
-    assert(chart->Meta.TotalScratchNotes == 0 && chart->Meta.TotalBackSpinNotes == 0);
+    assert(chart->Meta.TotalLandmineNotes == lanes * 2);
+    assert(chart->Meta.TotalScratchNotes == wheels * 2 &&
+           chart->Meta.TotalBackSpinNotes == wheels * 10);
     int lastLaneNotes = 0, lastLaneMines = 0;
     for (const auto *timeline : chart->Measures.front()->TimeLines) {
-      assert(timeline->Notes.size() >= static_cast<std::size_t>(mode));
-      assert(timeline->LandmineNotes.size() >= static_cast<std::size_t>(mode));
-      if (timeline->Notes[mode - 1]) ++lastLaneNotes;
-      if (timeline->LandmineNotes[mode - 1]) ++lastLaneMines;
+      assert(timeline->Notes.size() >= static_cast<std::size_t>(lanes));
+      assert(timeline->LandmineNotes.size() >= static_cast<std::size_t>(lanes));
+      if (timeline->Notes[lanes - 1]) ++lastLaneNotes;
+      if (timeline->LandmineNotes[lanes - 1]) ++lastLaneMines;
     }
     assert(lastLaneNotes == 14 && lastLaneMines == 2);
   }
@@ -201,6 +204,7 @@ void testCalibration() {
 
   for (int mode : kPreviewKeyModes) {
     const auto chart = makeCalibrationChart(mode);
+    assert(chart->Meta.IsDP == (mode == 10 || mode == 14 || mode == 48));
     const auto lanes = chart->Meta.GetKeyLaneIndices();
     int count = 0;
     long long previous = 0;
