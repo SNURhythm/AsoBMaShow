@@ -457,7 +457,20 @@ void testBoundedAudioDurationMetadata() {
   require(!audio::duration_bound::InspectAudio(44, reader), "truncated WAV cannot claim a proven duration");
   require(!audio::duration_bound::InspectAudio(payload + 100ULL, reader),
           "WAV trailing content beyond RIFF length must not produce an underestimated bound");
-  wav[32] = 3;
+  // A deflated ZIP can read the PCM header but cannot seek over a large
+  // payload to trailing LIST metadata. Include those bytes in a safe bound.
+  put32(4, payload + 36 + 34);
+  wav[22] = 2; wav[32] = 4;
+  put32(28, 176400);
+  bytesRead = 0;
+  const auto taggedBound = audio::duration_bound::InspectAudio(payload + 44ULL + 34, reader);
+  require(taggedBound && taggedBound->sampleRate == 44100 &&
+              taggedBound->frames == (payload + 34 + 3) / 4 &&
+              bytesRead <= 128,
+          "PCM WAV with unreadable trailing metadata needs a bounded duration, not the 15-second fallback");
+  put32(4, payload + 36);
+  wav[22] = 1; wav[32] = 3;
+  put32(28, 88200);
   require(!audio::duration_bound::InspectAudio(payload + 44ULL, reader),
           "inconsistent WAV block alignment must remain unknown");
   std::array<unsigned char, 42> flac{};
@@ -515,6 +528,16 @@ void testBoundedLargeVorbisDuration(const std::filesystem::path &root) {
 
 void testZipDurationProbes(const std::filesystem::path &root) {
   writeWav(root / "long-probe.wav", 8000, std::vector<short>(22 * 8000, 8192));
+  {
+    // Match Giselle's long WAV: an ordinary PCM data chunk followed by LIST.
+    const auto path = root / "long-probe.wav";
+    const auto riffSize = std::filesystem::file_size(path) + 12 - 8;
+    std::fstream file(path, std::ios::binary | std::ios::in | std::ios::out);
+    file.seekp(4);
+    for (unsigned i = 0; i < 4; ++i) file.put(static_cast<char>(riffSize >> (8 * i)));
+    file.seekp(0, std::ios::end);
+    file.write("LIST\x04\0\0\0INFO", 12);
+  }
   for (const auto *compression : {"store", "deflate"}) {
     const auto path = root / (std::string("duration-") + compression + ".zip");
     auto writer = makeArchiveWriteHandle();
@@ -541,7 +564,7 @@ void testZipDurationProbes(const std::filesystem::path &root) {
         [&](const auto &entry, auto size, const auto &readAt) {
           const auto bound = audio::duration_bound::InspectAudio(size, readAt);
           if (entry.extension() == ".wav") {
-            require(bound && bound->sampleRate == 8000 && bound->frames == 22 * 8000,
+            require(bound && bound->sampleRate == 8000 && bound->frames >= 22 * 8000 && bound->frames <= 22 * 8000 + 6,
                     "both ZIP methods must preserve a known long WAV tail without full inflation");
           } else if (std::string_view(compression) == "store") {
             require(bound && bound->frames >= 16 * 44100,
@@ -552,6 +575,15 @@ void testZipDurationProbes(const std::filesystem::path &root) {
           ++visited;
         }, &error), error.c_str());
     require(visited == 2, "ZIP duration probe must visit each requested entry");
+    auto parsed = chart(root, "#WAV01 long-probe.wav\n#00011:01\n");
+    parsed->Meta.Folder = path;
+    auto source = audio::PagedPreviewSource::Create(*parsed, {}, 20 * 44100);
+    require(source->Begin(8000, true), "cannot begin long tagged WAV highlight");
+    waitPrepared(source);
+    std::array<float, 2> output{};
+    require(source->Render(output, 1).frames == 1 &&
+                std::abs(output[0] - 8191.0f * 0.9f / 32768.0f) < 0.000001f,
+            "highlight must retain a long placed WAV with trailing metadata in either ZIP method");
     require(archive_file::probeZipEntries(path, {"long-probe.wav"},
         [&](const auto &, auto, const auto &readAt) {
           std::array<unsigned char, 4096> bytes{};
@@ -586,7 +618,7 @@ void testExpiredSoundDoesNotBlockHighlight(const std::filesystem::path &root) {
   for (const auto &[container, repeated] : {
            std::pair{std::string("loose"), false}, std::pair{std::string("zip"), false},
            std::pair{std::string("7z"), false}, std::pair{std::string("zip"), true}}) {
-    auto parsed = chart(root, std::string("#00001:01\n#01011:02\n") + (repeated ? "#01501:01\n" : ""));
+    auto parsed = chart(root, std::string("#00001:01\n#01011:02\n") + (repeated ? "#01511:01\n" : ""));
     if (container != "loose") {
       const auto archivePath = root / ("expired." + container);
       auto writer = makeArchiveWriteHandle();
@@ -667,6 +699,7 @@ void testExpiredSoundDoesNotBlockHighlight(const std::filesystem::path &root) {
 
 void testUnknownDurationLookbackAndKnownLongTails(const std::filesystem::path &root) {
   // AIFF is decodable but intentionally outside the cheap metadata probe.
+  for (const bool placed : {false, true})
   for (const auto [format, onset, cached, overlap, repeated] : {
            std::tuple{SF_FORMAT_WAV, 0, false, true, false},
            std::tuple{SF_FORMAT_AIFF, 5, false, false, false},
@@ -682,15 +715,16 @@ void testUnknownDurationLookbackAndKnownLongTails(const std::filesystem::path &r
               "cannot create lookback audio fixture");
     }
     writeWav(root / "second.wav", 8000, std::vector<short>(64, 16384));
-    auto parsed = chart(root, std::string("#00001:01\n#01011:02\n") + (repeated ? "#00901:0001\n" : ""));
+    auto parsed = chart(root, std::string(placed ? "#00011:01\n" : "#00001:01\n") + "#01012:02\n" +
+        (repeated ? (placed ? "#00911:0001\n" : "#00901:0001\n") : ""));
     for (auto *measure : parsed->Measures)
       for (auto *timeline : measure->TimeLines)
-        if (!timeline->BackgroundNotes.empty() && timeline->Timing == 0) timeline->Timing = onset * 1'000'000LL;
+        if (timeline->Timing == 0) timeline->Timing = onset * 1'000'000LL;
     auto cache = std::make_shared<audio::DecodedAssetCache>();
     std::atomic_bool cancelled = false;
     if (cached) require(bool(cache->Load(root / "first.wav", cancelled)), "cannot warm known duration");
     auto source = audio::PagedPreviewSource::Create(*parsed, cache, 20 * 44100);
-    require(source->Begin(8000), "cannot begin unknown-duration highlight");
+    require(source->Begin(8000, true), "cannot begin unknown-duration highlight");
     waitPrepared(source);
     std::array<float, 2> output{};
     require(source->Render(output, 1).status == audio::PagedPreviewRenderStatus::Data,
@@ -741,17 +775,21 @@ void testUnknownOggMinuteLookback(const std::filesystem::path &root) {
               "cannot write Ogg lookback ZIP entry");
     }
     require(archive_write_close(writer.get()) == ARCHIVE_OK, "cannot finish Ogg lookback ZIP");
+    for (const bool placed : {false, true})
     for (const auto [age, cached] : {std::pair{59, false}, std::pair{60, false}, std::pair{61, true}}) {
-      auto parsed = chart(root, "#00001:01\n#03011:02\n");
+      const bool repeatsLater = age == 60 && !cached;
+      auto parsed = chart(root, std::string(placed ? "#00011:01\n" : "#00001:01\n") + "#03012:02\n" +
+          (repeatsLater ? (placed ? "#03101:01\n" : "#03111:01\n") : ""));
       parsed->Meta.Folder = archive;
       for (auto *measure : parsed->Measures)
         for (auto *timeline : measure->TimeLines)
           if (timeline->Timing == 60 * 1'000'000LL) timeline->Timing = age * 1'000'000LL;
+          else if (timeline->Timing == 62 * 1'000'000LL) timeline->Timing = (age + 2) * 1'000'000LL;
       auto cache = std::make_shared<audio::DecodedAssetCache>();
       std::atomic_bool cancelled = false;
       if (cached) require(bool(cache->Load(archive / "first.wav", cancelled)), "cannot warm known Ogg duration");
       auto source = audio::PagedPreviewSource::Create(*parsed, cache, age * 44100);
-      require(source->Begin(8000), "cannot begin unknown Ogg preview");
+      require(source->Begin(8000, true), "cannot begin unknown Ogg preview");
       waitPrepared(source);
       const auto native = cache->Find(archive / "first.wav");
       const auto current = cache->Find(archive / "second.wav");
@@ -764,10 +802,22 @@ void testUnknownOggMinuteLookback(const std::filesystem::path &root) {
         const auto past = overlap ? native->pcm[age * 8000 + frame] : 0;
         const auto expected = (past + current->pcm[frame]) * (0.9f / 32768.0f);
         if (std::abs(output[frame * 2] - expected) >= 0.000001f)
-          std::cerr << "Ogg lookback: " << compression << " age=" << age << " cached=" << cached
+          std::cerr << "Ogg lookback: " << compression << " placed=" << placed << " age=" << age << " cached=" << cached
                     << " expected=" << expected << " actual=" << output[frame * 2] << '\n';
         require(std::abs(output[frame * 2] - expected) < 0.000001f,
                 "unknown Ogg needs a 60-second lookback; known longer Ogg must remain audible");
+      }
+      if (repeatsLater) {
+        std::array<float, 1024> discard{};
+        for (unsigned skipped = 8; skipped < 16000;) {
+          const auto count = std::min(512U, 16000 - skipped);
+          require(source->Render(discard, count).frames == count, "cannot reach repeated future Ogg");
+          skipped += count;
+        }
+        require(source->Render(output, 8).frames == 8, "cannot render repeated future Ogg");
+        for (std::size_t frame = 0; frame < 8; ++frame)
+          require(std::abs(output[frame * 2] - native->pcm[frame] * (0.9f / 32768.0f)) < 0.000001f,
+                  "an excluded past Ogg instance must not suppress its future use on the other bus");
       }
       require(cache->GetStatistics().decoderOpens == 2, "Ogg probing must not introduce another decoder pass");
     }

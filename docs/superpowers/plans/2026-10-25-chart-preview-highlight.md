@@ -159,3 +159,15 @@ ZIP probe budget. It may increase startup work when more old Ogg onsets now need
 full extraction and PCM decoding; nominal bitrate estimates are not used.
 
 The unsigned iOS device compile check also passed for this policy update.
+
+
+## Giselle WAV overlap correction
+
+- [x] Reproduce the missing backing track using the author's public WAV pack;
+  compare against playback from the beginning and check the Ogg pack separately.
+- [x] Derive a conservative PCM WAV bound without seeking past its data payload.
+- [x] Cover unreadable trailing metadata, stored/deflated ZIP overlap, placed
+  notes, BGM, and future reuse on either bus in the existing preview tests.
+- [x] Verify 20 seconds of real-chart output at 48 kHz against the beginning
+  reference, build desktop `main`, and run all 34 audio tests.
+- [x] Pass the unsigned iOS device build and independent read-only review.

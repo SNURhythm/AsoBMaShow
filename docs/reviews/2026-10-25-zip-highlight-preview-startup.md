@@ -96,3 +96,34 @@ The benchmark records source hashes, commands and measurements outside the
 checkout. Use its `--sample-seconds` option only for a separate profiling run;
 profiling distorts timing. Private chart paths and raw profiling artifacts are
 not committed.
+
+## Long PCM WAV overlap correction
+
+The author's public [Giselle download](https://manbow.nothing.sh/event/event.cgi?action=More_def&event=123&num=262)
+reproduced missing audio in the WAV pack at the 34.4537-second highlight; the
+Ogg pack did not. `mdf1.wav` is a 52.203-second PCM backing track, already
+32.891 seconds into playback at that point. Its LIST metadata follows the audio
+payload. The bounded deflate reader could not reach that trailing chunk, so the
+probe returned unknown and the 15-second fallback incorrectly excluded it.
+
+For supported PCM WAV headers, the probe now bounds duration by treating every
+byte from the first data payload to the RIFF/file end as possible PCM. Trailing
+metadata and additional data chunks can only make that bound conservative. The
+initial format controls the frame size and rate; libsndfile ignores subsequent
+format chunks. The existing RIFF/file-size and format checks remain. No payload
+or trailing metadata read is required, and ZIP probe budgets are unchanged.
+
+An optimized headless comparison rendered 20 seconds from the scored highlight
+at 48 kHz in 4,096-frame blocks, while decoding was still in progress. The
+reference played the same chart from its beginning to that timestamp. Before
+the fix, the WAV highlight retained only 56.2% of the reference energy. After
+the fix, both WAV and Ogg matched within floating-point mixing order error
+(maximum absolute difference below 0.0000003). This checks mixed source output,
+not an iPhone audio recording.
+
+Regression coverage includes a header-only 128 MiB WAV with an unreadable tail
+(at most 128 requested bytes), a tagged long WAV inside stored and deflated ZIPs,
+placed and BGM lookbacks, and future reuse of an excluded past sample across
+buses. Desktop `main` built and all 34 audio tests passed.
+The unsigned iOS device build passed, and independent review found no blocking
+correctness issues. No deployment or on-device verification was performed.

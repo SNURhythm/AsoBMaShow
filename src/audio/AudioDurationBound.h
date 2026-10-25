@@ -46,8 +46,6 @@ std::optional<Duration> InspectAudio(std::uint64_t size, ReadAt readAt, bool *is
     // Such trailing content cannot support a proven bound without validation.
     if (end < 12 || end != size) return {};
     unsigned alignment = 0, rate = 0;
-    std::uint64_t dataBytes = 0;
-    bool foundData = false;
     std::uint64_t offset = 12;
     for (unsigned chunks = 0; offset < end && chunks < 64; ++chunks) {
       std::array<unsigned char, 8> chunk{};
@@ -69,13 +67,18 @@ std::optional<Duration> InspectAudio(std::uint64_t size, ReadAt readAt, bool *is
                            : (bits != 32 && bits != 64)) ||
             alignment != channels * (bits / 8)) return {};
       } else if (std::memcmp(chunk.data(), "data", 4) == 0) {
-        foundData = true;
-        dataBytes += bytes;
+        if (!alignment || bytes % alignment != 0) return {};
+        // PCM uses the first fmt chunk. Treat every remaining byte as possible
+        // audio, including trailing metadata or additional data chunks. This
+        // slightly loose upper bound needs no seek past the payload, which a
+        // bounded deflated-ZIP reader cannot perform for long WAVs.
+        const auto remaining = end - offset;
+        return Duration{remaining / alignment + (remaining % alignment != 0),
+                        static_cast<int>(rate)};
       }
       offset += std::uint64_t(bytes) + (bytes & 1U);
     }
-    if (offset != end || !alignment || !foundData || dataBytes % alignment != 0) return {};
-    return Duration{dataBytes / alignment, static_cast<int>(rate)};
+    return {};
   }
   if (std::memcmp(header.data(), "OggS", 4) == 0) {
     std::array<unsigned char, 64U * 1024U> bytes;

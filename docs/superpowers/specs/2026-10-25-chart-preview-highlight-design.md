@@ -90,3 +90,8 @@ first audio on irrelevant PCM decoding, but gameplay warming still eventually
 decodes those assets. Bounded ZIP probes add some repeated header/prefix I/O,
 but never a second full extraction. Other archive formats may still require
 extracting encoded entries before their metadata is available.
+
+PCM WAV duration bounds must not depend on reading metadata after a large data
+chunk. Once the supported first format and data header are validated, count all
+remaining RIFF bytes conservatively as PCM frames. This preserves long tracks
+with trailing LIST chunks in deflated ZIPs while retaining fixed probe budgets.
