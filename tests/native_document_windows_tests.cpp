@@ -130,6 +130,31 @@ void checkLargeSyntax(HWND parent, bool longLine) {
   requireBoundedColors(document, length, rgb(appearance.foreground));
   CHARRANGE selected{1, 2};
   SendMessageW(edit, EM_EXSETSEL, 0, reinterpret_cast<LPARAM>(&selected));
+  const auto requireRepaintKeepsViewport = [&] {
+    // EM_POSFROMCHAR writes full-width POINTL coordinates; EM_GETSCROLLPOS
+    // cannot be used to verify preservation beyond its 16-bit range.
+    const auto origin = [&] {
+      POINTL point{};
+      SendMessageW(edit, EM_POSFROMCHAR, reinterpret_cast<WPARAM>(&point), 0);
+      return point;
+    };
+    const auto before = origin();
+    require(before.x < -65535 || before.y < -65535,
+        "repaint regression exercises a viewport beyond 16-bit coordinates");
+    const auto unchanged = [&] {
+      const auto after = origin();
+      require(after.x == before.x && after.y == before.y,
+          "highlight and appearance repaint preserve the full native viewport");
+    };
+    onWorker([&] { surface->highlight({}, true); }); // No matching practice cells.
+    unchanged();
+    onWorker([&] { surface->highlight({{0, 1}}, false); });
+    unchanged();
+    onWorker([&] { surface->setAppearance(appearance); });
+    unchanged();
+    onWorker([&] { surface->highlight({}, false); });
+    unchanged();
+  };
   if (longLine) {
     require(foreground(document, 0) == static_cast<LONG>(rgb(appearance.syntax[
         static_cast<std::size_t>(bms_syntax::Kind::Data)])), "long data token starts colored");
@@ -141,6 +166,7 @@ void checkLargeSyntax(HWND parent, bool longLine) {
     require(foreground(document, 0) == static_cast<LONG>(rgb(appearance.foreground)),
         "horizontal scroll clears retired data foreground");
     requireBoundedColors(document, length, rgb(appearance.foreground));
+    requireRepaintKeepsViewport();
   } else {
     unsigned transactions = 0;
     require(SetWindowSubclass(edit, countFormatting, 2, reinterpret_cast<DWORD_PTR>(&transactions)),
@@ -155,6 +181,7 @@ void checkLargeSyntax(HWND parent, bool longLine) {
       SendMessageW(edit, EM_LINESCROLL, 0, line - current);
       const auto visible = SendMessageW(edit, EM_GETFIRSTVISIBLELINE, 0, 0);
       require(visible == line, "native line scrolling reaches the requested viewport");
+      if (line == 11000) requireRepaintKeepsViewport();
       require(foreground(document, line * 3) == static_cast<LONG>(rgb(appearance.syntax[
           static_cast<std::size_t>(bms_syntax::Kind::Directive)])),
           "cached syntax positions stay correct near the end of a CRLF document");

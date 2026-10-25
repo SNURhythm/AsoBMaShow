@@ -306,8 +306,6 @@ struct Control : std::enable_shared_from_this<Control> {
     if (!edit || !document || formatting) return;
     auto nextPaintedRanges = ranges; // Allocate before changing read-only/freeze state.
     formatting = true;
-    POINT scroll{};
-    SendMessageW(edit, EM_GETSCROLLPOS, 0, reinterpret_cast<LPARAM>(&scroll));
     LONG count = 0;
     const bool frozen = SUCCEEDED(document->Freeze(&count));
     // TOM refuses formatting a read-only document. No message pump runs during
@@ -334,7 +332,9 @@ struct Control : std::enable_shared_from_this<Control> {
     SendMessageW(edit, EM_SETREADONLY, TRUE, 0);
     if (frozen) document->Unfreeze(&count);
     // TOM ranges never become the native selection (including its active end).
-    SendMessageW(edit, EM_SETSCROLLPOS, 0, reinterpret_cast<LPARAM>(&scroll));
+    // Leave scrolling to Rich Edit unless focus was requested for a match.
+    // EM_GETSCROLLPOS truncates coordinates to 16 bits, so restoring them here
+    // would move a distant viewport even when there is nothing to highlight.
     if (focus && !ranges.empty()) {
       ITextRange *range = nullptr;
       if (SUCCEEDED(document->Range(ranges.front().cpMin, ranges.front().cpMin, &range))) {
