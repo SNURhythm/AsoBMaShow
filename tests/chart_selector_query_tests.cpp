@@ -265,6 +265,83 @@ void scoreFilteredRandomQueries() {
       query, ChartSelectorRandomFilter::Failed, 0)->meta.SHA256 == hash(0));
 }
 
+void builtInKeyModeQueries() {
+  Fixture fixture;
+  fixture.seed(26);
+  fixture.execute("UPDATE chart_meta SET sha256=md5 || md5,subtitle='',sub_artist='',genre=''");
+  constexpr std::array modes{4, -5, 5, 6, -7, 7, 8, 9, 10, 14, 24, 48, 99};
+  for (std::size_t i = 0; i < modes.size(); ++i) {
+    for (int copy = 0; copy < 2; ++copy) {
+      const int mode = modes[i];
+      fixture.execute("UPDATE chart_meta SET keys=" + std::to_string(std::abs(mode)) +
+          ",total_scratch_notes=" + std::to_string((mode == 5 || mode == 7) && !copy) +
+          ",total_backspin_notes=" + std::to_string((mode == 5 || mode == 7) && copy) +
+          " WHERE md5=printf('%032x'," + std::to_string(2 * i + copy) + ")");
+    }
+  }
+  fixture.execute("UPDATE chart_meta SET total_scratch_notes=NULL,total_backspin_notes=NULL "
+                  "WHERE md5=printf('%032x',2)");
+  const auto check = [&](ChartMetaQuery query, int expected) {
+    std::vector<ChartMetaRecord> rows;
+    fixture.session->QueryChartMeta(query, rows);
+    if (static_cast<int>(rows.size()) != expected) {
+      std::cerr << "Key-mode query " << query.keyMode.value_or(0)
+                << " table " << query.tableId << " expected " << expected
+                << " rows, got " << rows.size() << '\n';
+    }
+    assert(static_cast<int>(rows.size()) == expected);
+    assert(fixture.session->CountChartMeta(query) == expected);
+    for (int i = 0; i < expected; ++i) {
+      const auto &meta = rows[i].meta;
+      if (query.keyMode) {
+        const bool scratch = meta.TotalScratchNotes > 0 || meta.TotalBackSpinNotes > 0;
+        const int category = (meta.KeyMode == 5 || meta.KeyMode == 7) && !scratch
+                                 ? -meta.KeyMode : meta.KeyMode;
+        assert(category == *query.keyMode);
+      }
+      if (!rows[i].unavailable) {
+        assert(fixture.session->FindChartMetaIndex(query, meta.BmsPath) == i);
+      }
+    }
+    const auto indices = fixture.session->RandomChartMetaIndices(query, {}, {});
+    assert((indices[0] >= 0) == (expected >= 2));
+    assert((indices[1] >= 0) == (expected >= 1));
+    assert(indices[2] == -1);
+    for (const int index : indices) assert(index < expected);
+    if (expected > 1) {
+      query.limit = 1; query.offset = 1;
+      std::vector<ChartMetaRecord> page;
+      fixture.session->QueryChartMeta(query, page);
+      assert(page.size() == 1 && page.front().meta.BmsPath == rows[1].meta.BmsPath);
+    }
+  };
+  check({}, 26); // All includes modes outside the named categories too.
+  for (const int mode : modes) check({.keyMode = mode}, 2);
+  check({.keyword = "artist0", .bpmMin = 120, .bpmMax = 122, .keyMode = 4,
+         .recursiveFolder = fixture.root / "songs"}, 1);
+  check({.keyMode = 4, .exactFolder = fixture.root / "songs"}, 1);
+  check({.keyMode = 4, .favoritesOnly = true}, 0);
+  fixture.execute("INSERT INTO difficulty_tables(id,name,symbol) VALUES(1,'Keys','K');"
+      "INSERT INTO difficulty_table_entries(table_id,level,sha256,title,sort_order) "
+      "SELECT 1,'1',sha256,title,MIN(rowid) FROM chart_meta GROUP BY sha256;"
+      "INSERT INTO difficulty_table_entries(table_id,level,sha256,title,sort_order) "
+      "VALUES(1,'1','missing','Unavailable',99)");
+  for (const int mode : modes) check({.tableId = 1, .keyMode = mode}, 2);
+  assert(fixture.session->CountChartMeta({.tableId = 1}) == 27);
+  fixture.execute("INSERT INTO difficulty_courses(id,table_id,name,course_key) "
+      "VALUES(1,1,'Course','keys');"
+      "INSERT INTO difficulty_course_entries(course_id,sha256,sort_order) "
+      "SELECT 1,sha256,rowid FROM chart_meta");
+  const ChartMetaQuery courseQuery{.courseId = 1, .keyMode = 5};
+  std::vector<ChartMetaRecord> stages;
+  fixture.session->QueryChartMeta(courseQuery, stages);
+  assert(stages.size() == 2 && fixture.session->CountChartMeta(courseQuery) == 2);
+  for (const auto &stage : stages) {
+    assert(stage.meta.KeyMode == 5);
+    assert(stage.meta.TotalScratchNotes > 0 || stage.meta.TotalBackSpinNotes > 0);
+  }
+}
+
 void builtInRandomQueries() {
   Fixture fixture;
   fixture.seed(8);
@@ -532,6 +609,31 @@ void boundedPagesAndQueryLifetime() {
   assert(randomIndices[0] >= 0 && randomIndices[0] < 5000);
   assert(randomIndices[1] >= 0 && randomIndices[1] < 5000 && randomIndices[2] == -1);
   assert(randomTrace.richRows == 0 && randomTrace.maximumColumns <= 5);
+  for (const bool scoped : {false, true}) {
+    for (const int mode : {0, 5, -5}) {
+      ChartMetaQuery filtered;
+      if (mode) filtered.keyMode = mode;
+      if (scoped) filtered.exactFolder = fixture.root / "songs/nested";
+      QueryTrace countTrace;
+      fixture.trace(&countTrace);
+      const auto start = std::chrono::steady_clock::now();
+      fixture.session->CountChartMeta(filtered);
+      const auto elapsed = std::chrono::duration<double, std::milli>(
+          std::chrono::steady_clock::now() - start).count();
+      fixture.trace(nullptr);
+      assert(countTrace.richRows == 0 && countTrace.maximumColumns == 1 && countTrace.sorts == 0);
+      std::cout << "Built-in key-mode count, 10000 charts, mode=" << mode
+                << " folder=" << scoped << ": " << elapsed << " ms, "
+                << countTrace.vmSteps << " VM steps\n";
+      if (scoped) {
+        for (const auto &sql : countTrace.statements) {
+          if (!sql.starts_with("SELECT COUNT(*)")) continue;
+          const auto plan = repository_test::explainPlan(fixture.sessionDatabase, sql);
+          assert(repository_test::planContains(plan, "idx_chart_meta_folder"));
+        }
+      }
+    }
+  }
   auto best = std::make_shared<ScoreBestCache>();
   query.best = best;
   auto noFunctionRemains = [&] {
@@ -799,6 +901,7 @@ int main(int argc, char **argv) {
     return 0;
   }
   scoreFilteredRandomQueries();
+  builtInKeyModeQueries();
   builtInRandomQueries();
   differentialQueries();
   durationOverflowCompatibility();

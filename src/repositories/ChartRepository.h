@@ -75,6 +75,8 @@ struct ChartMetaQuery {
   bool scoreRankOrBelow = false;
   std::optional<double> bpmMin;
   std::optional<double> bpmMax;
+  // Skin-category identity: -5/-7 are scratchless; 5/7 require scratch notes.
+  std::optional<int> keyMode;
   std::optional<std::string> difficultyMinLevel;
   std::optional<std::string> difficultyMaxLevel;
   std::optional<std::filesystem::path> exactFolder;

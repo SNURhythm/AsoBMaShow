@@ -18,6 +18,16 @@ least one. Missing charts, solid archives, and courses are excluded. No Play use
 the active profile's play count; Failed uses its best clear lamp in the selected
 long-note mode. A cleared chart with a failed score attempt is not a Failed candidate.
 
+The built-in selector's Key Mode dropdown uses the skin settings' categories:
+4K, 5K, 5K1S, 6K, 7K, 7K1S, 8K, 9K, 5KDP, 7KDP, 24K, and 48K, plus All.
+It filters the current folder and random candidates alongside the other criteria.
+The 5K/7K categories require no stored scratch or long-scratch notes; 5K1S/7K1S
+require either kind, matching chart-list labels. This leaves canonical chart
+key modes and gameplay scratchless policy unchanged. All removes the restriction,
+and Show Same Folder clears it along with the other filters.
+The filter panel scrolls within half the song column's height, preserving chart
+list space in short landscape windows. Dropdown menus use the overlay layer.
+
 ## Application appearance and responsive layout
 
 `src/view/AppTheme.h` shares the selector's typography and palette across

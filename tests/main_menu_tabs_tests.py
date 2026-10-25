@@ -244,6 +244,11 @@ struct MainMenuScene : Scene {
   ChartMetaQuery chartQueryForActiveFolder() const;
   bool chartDifficultyRangeEnabled() const { return false; }
   int clearRankForFolder(const std::string&) const { return kNoClearTypeRank; }
+  bool chartFilterPanelVisible=false, chartKeyModeDropdownOpen=false;
+  void setChartFilterPanelVisible(bool visible) {
+    chartFilterPanelVisible=visible;
+    if (!visible) chartKeyModeDropdownOpen=false;
+  }
   void updatePanelLayout() {} void refreshTabPresentation() {}
   // Production stops playback and clears the parsed chart, retaining metadata.
   void stopAndClearSelectedChart() {}
@@ -494,6 +499,19 @@ int main(int argc,char **argv) {
       event.key.mod=0;
       scene.handleEvents(event);
       assert(scene.activeTab_==static_cast<Tab>(key-SDLK_1));
+    }
+    for (int modifier : {SDL_KMOD_CTRL, SDL_KMOD_GUI}) {
+      for (int key=SDLK_1+1; key<=SDLK_4; ++key) {
+        scene.switchTabAndWait(Tab::Play);
+        scene.chartFilterPanelVisible=scene.chartKeyModeDropdownOpen=true;
+        scene.search.editingActive=true;
+        SDL_Event event{.type=SDL_EVENT_KEY_DOWN,.key={.mod=modifier,.key=key}};
+        scene.handleEvents(event);
+        scene.settleTab();
+        assert(scene.activeTab_==static_cast<Tab>(key-SDLK_1));
+        assert(!scene.chartFilterPanelVisible && !scene.chartKeyModeDropdownOpen);
+        assert(!scene.search.editingActive);
+      }
     }
   } else if(scenario=="utility-lifecycle") {
     for (auto tab : {Tab::Music, Tab::Ir}) {

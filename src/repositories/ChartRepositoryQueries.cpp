@@ -611,6 +611,7 @@ bool chartMetaQueryNeedsScoreCache(const ChartMetaQuery &chartQuery) {
 bool chartMetaQueryNeedsChartJoinForDifficultyEntries(
     const ChartMetaQuery &chartQuery) {
   return !chartQuery.keyword.empty() || chartQuery.clearMarkFilter ||
+         chartQuery.keyMode.has_value() ||
          chartQuery.exactFolder.has_value() ||
          chartQuery.parentFolder.has_value() ||
          chartQuery.recursiveFolder.has_value() ||
@@ -622,6 +623,7 @@ bool chartMetaQueryNeedsChartJoinForDifficultyEntries(
 bool chartMetaQueryNeedsChartJoinForCourseEntries(
     const ChartMetaQuery &chartQuery) {
   return !chartQuery.keyword.empty() || chartQuery.clearMarkFilter ||
+         chartQuery.keyMode.has_value() ||
          chartQuery.exactFolder.has_value() ||
          chartQuery.parentFolder.has_value() ||
          chartQuery.recursiveFolder.has_value() ||
@@ -720,8 +722,19 @@ void bindExactFolderFilter(sqlite3_stmt *stmt, int &bindIndex,
   }
 }
 
-void appendBpmFilters(std::string &query, const std::string &chartAlias,
-                      const ChartMetaQuery &chartQuery) {
+void appendChartMetadataFilters(std::string &query, const std::string &chartAlias,
+                                 const ChartMetaQuery &chartQuery) {
+  if (chartQuery.keyMode.has_value()) {
+    query += " AND " + chartAlias + ".keys = @key_mode";
+    const int mode = *chartQuery.keyMode;
+    if (mode == 5 || mode == 7 || mode == -5 || mode == -7) {
+      // Match the library's labels without parsing chart payloads. Long scratches
+      // count as scratches even when there are no ordinary scratch notes.
+      query += mode < 0 ? " AND NOT (" : " AND (";
+      query += "COALESCE(" + chartAlias + ".total_scratch_notes,0) > 0 OR COALESCE(" +
+               chartAlias + ".total_backspin_notes,0) > 0)";
+    }
+  }
   if (!chartMetaQueryHasBpmFilter(chartQuery)) {
     return;
   }
@@ -807,6 +820,10 @@ void appendDifficultyEntryScoreRankFilter(std::string &query,
 
 void bindCommonChartFilterParameters(sqlite3_stmt *stmt, int &bindIndex,
                                      const ChartMetaQuery &chartQuery) {
+  if (chartQuery.keyMode.has_value()) {
+    const int mode = *chartQuery.keyMode;
+    sqlite3_bind_int(stmt, bindIndex++, mode == -5 || mode == -7 ? -mode : mode);
+  }
   if (chartQuery.bpmMin.has_value()) {
     sqlite3_bind_double(stmt, bindIndex++, *chartQuery.bpmMin);
   }
@@ -1142,7 +1159,7 @@ void appendChartMetaFilters(std::string &query,
     query += "))";
   }
 
-  appendBpmFilters(query, "cm", chartQuery);
+  appendChartMetadataFilters(query, "cm", chartQuery);
   appendChartScoreRankFilter(query, "cm", chartQuery);
   if (chartQuery.clearMarkFilter) {
     query += " AND ";
@@ -1202,7 +1219,7 @@ void appendDifficultyEntryFilters(std::string &query,
   }
   appendExactFolderFilter(query, "cm", chartQuery);
   appendDifficultyLevelRangeFilter(query, chartQuery);
-  appendBpmFilters(query, "cm", chartQuery);
+  appendChartMetadataFilters(query, "cm", chartQuery);
   appendDifficultyEntryScoreRankFilter(query, "dte", "cm", chartQuery);
   if (chartQuery.clearMarkFilter) {
     query += " AND ";
@@ -1251,7 +1268,7 @@ void appendDifficultyCourseEntryFilters(std::string &query,
     query += " LIKE @text";
   }
   appendExactFolderFilter(query, "cm", chartQuery);
-  appendBpmFilters(query, "cm", chartQuery);
+  appendChartMetadataFilters(query, "cm", chartQuery);
   appendDifficultyEntryScoreRankFilter(query, "dce", "cm", chartQuery);
   if (chartQuery.clearMarkFilter) {
     query += " AND ";

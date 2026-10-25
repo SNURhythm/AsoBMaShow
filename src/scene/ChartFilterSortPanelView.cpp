@@ -2,6 +2,8 @@
 #include "ChartFilterSortPanelView.h"
 
 #include "../scene/play/RhythmState.h"
+#include "../GameplayKeyMode.h"
+#include "../settings/BuiltInNotes.h"
 #include "../view/Button.h"
 #include "../view/ClearLampColors.h"
 #include "../view/DropdownView.h"
@@ -180,15 +182,24 @@ std::optional<std::string> optionalStringFromId(const std::string &id) {
   return id;
 }
 
-std::string clearMarkId(const std::optional<int> &rank) {
+std::string optionalIntId(const std::optional<int> &rank) {
   return rank.has_value() ? std::to_string(*rank) : std::string();
 }
 
-std::optional<int> clearMarkRankFromId(const std::string &id) {
+std::optional<int> optionalIntFromId(const std::string &id) {
   if (id.empty()) {
     return std::nullopt;
   }
   return std::stoi(id);
+}
+
+std::vector<DropdownView::Option> keyModeOptions() {
+  std::vector<DropdownView::Option> options;
+  options.push_back({.id = "", .label = i18n::message("library.filter.key_mode.all.label")});
+  for (const int mode : built_in_notes::kModes) {
+    options.push_back({.id = std::to_string(mode), .label = gameplay::keyModeLabel(mode)});
+  }
+  return options;
 }
 
 std::vector<DropdownView::Option> clearMarkOptions() {
@@ -235,14 +246,21 @@ effectiveClearMarkRank(const ChartFilterPanelView::State &state) {
 
 } // namespace
 
-ChartFilterPanelView::ChartFilterPanelView(Callbacks callbacks)
-    : View(), callbacks(std::move(callbacks)) {
-  setFlexDirection(FlexDirection::Column);
-  setAlignItems(YGAlignStretch);
-  setGap(10);
+ChartFilterPanelView::ChartFilterPanelView(Callbacks callbacks, OverlayPortal *portal)
+    : ScrollView(), callbacks(std::move(callbacks)), overlayPortal(portal) {
+  // Reserve room for the search row and chart list even in short landscape
+  // windows. Controls retain their touch sizes inside the scrolling content.
+  YGNodeStyleSetMaxHeightPercent(getNode(), 50.0f);
+  setMinHeight(0);
+  setFlexShrink(1.0f);
   setVisible(false);
   setHeight(0);
+  content = new View();
+  content->setFlexDirection(FlexDirection::Column);
+  content->setAlignItems(YGAlignStretch);
+  content->setGap(10);
   buildStaticContent();
+  setContentView(content);
 }
 
 void ChartFilterPanelView::buildStaticContent() {
@@ -253,8 +271,22 @@ void ChartFilterPanelView::buildStaticContent() {
     dropdown->setHeight(filterRowHeight());
   };
 
+  content->addView(makePanelLabel(i18n::message("library.filter_sort.key_mode.label")));
+  keyModeRow = makePanelOptionRow();
+  keyModeDropdown = new DropdownView({
+      .onOpenChanged = [this](bool open) {
+        if (callbacks.onKeyModeDropdownChanged) callbacks.onKeyModeDropdownChanged(open);
+      },
+      .onOptionSelected = [this](const std::string &id) {
+        if (callbacks.onKeyModeChanged) callbacks.onKeyModeChanged(optionalIntFromId(id));
+      },
+  }, overlayPortal);
+  configureDropdown(keyModeDropdown);
+  keyModeRow->addView(keyModeDropdown);
+  content->addView(keyModeRow);
+
   clearMarkLabel = makePanelLabel(i18n::message("library.filter_sort.clear_mark.label"));
-  addView(clearMarkLabel);
+  content->addView(clearMarkLabel);
   clearMarkRow = makePanelOptionRow();
   clearMarkDropdown = new DropdownView({
       .onOpenChanged =
@@ -266,10 +298,10 @@ void ChartFilterPanelView::buildStaticContent() {
       .onOptionSelected =
           [this](const std::string &id) {
             if (callbacks.onClearMarkChanged) {
-              callbacks.onClearMarkChanged(clearMarkRankFromId(id));
+              callbacks.onClearMarkChanged(optionalIntFromId(id));
             }
           },
-  });
+  }, overlayPortal);
   configureDropdown(clearMarkDropdown);
   clearMarkRow->addView(clearMarkDropdown);
   clearMarkOrAboveButton = makeCheckboxButton(i18n::message("library.filter_sort.above.label"), &clearMarkOrAboveIcon,
@@ -296,9 +328,9 @@ void ChartFilterPanelView::buildStaticContent() {
     }
   });
   clearMarkRow->addView(clearMarkOrBelowButton);
-  addView(clearMarkRow);
+  content->addView(clearMarkRow);
 
-  addView(makePanelLabel(i18n::message("library.filter_sort.score_rank.label")));
+  content->addView(makePanelLabel(i18n::message("library.filter_sort.score_rank.label")));
   scoreRankRow = makePanelOptionRow();
   scoreRankDropdown = new DropdownView({
       .onOpenChanged =
@@ -313,7 +345,7 @@ void ChartFilterPanelView::buildStaticContent() {
               callbacks.onScoreRankChanged(optionalStringFromId(id));
             }
           },
-  });
+  }, overlayPortal);
   configureDropdown(scoreRankDropdown);
   scoreRankRow->addView(scoreRankDropdown);
   scoreRankOrAboveButton = makeCheckboxButton(i18n::message("library.filter_sort.above.label"), &scoreRankOrAboveIcon,
@@ -340,9 +372,9 @@ void ChartFilterPanelView::buildStaticContent() {
     }
   });
   scoreRankRow->addView(scoreRankOrBelowButton);
-  addView(scoreRankRow);
+  content->addView(scoreRankRow);
 
-  addView(makePanelLabel(i18n::message("library.filter_sort.bpm_range.label")));
+  content->addView(makePanelLabel(i18n::message("library.filter_sort.bpm_range.label")));
   auto *bpmRow = makePanelOptionRow(48);
   auto makeBpmLabel = [](const i18n::Text &label) {
     auto *text = new TextView(app_theme::font, 18);
@@ -396,7 +428,7 @@ void ChartFilterPanelView::buildStaticContent() {
   bpmRow->addView(bpmMinBox);
   bpmRow->addView(makeBpmLabel(i18n::message("library.filter.bpm.max.label")));
   bpmRow->addView(bpmMaxBox);
-  addView(bpmRow);
+  content->addView(bpmRow);
 
   difficultyContent = new View();
   difficultyContent->setFlexDirection(FlexDirection::Column);
@@ -419,7 +451,7 @@ void ChartFilterPanelView::buildStaticContent() {
               callbacks.onDifficultyMinChanged(optionalStringFromId(id));
             }
           },
-  });
+  }, overlayPortal);
   configureDropdown(difficultyMinDropdown);
   difficultyMaxDropdown = new DropdownView({
       .onOpenChanged =
@@ -434,23 +466,32 @@ void ChartFilterPanelView::buildStaticContent() {
               callbacks.onDifficultyMaxChanged(optionalStringFromId(id));
             }
           },
-  });
+  }, overlayPortal);
   configureDropdown(difficultyMaxDropdown);
   difficultyRow->addView(difficultyMinDropdown);
   difficultyRow->addView(difficultyMaxDropdown);
   difficultyContent->addView(difficultyRow);
-  addView(difficultyContent);
+  content->addView(difficultyContent);
 }
 
 void ChartFilterPanelView::refresh(const State &state, bool open) {
   currentState = state;
+  if (!open) {
+    bpmMinBox->endEditing();
+    bpmMaxBox->endEditing();
+    currentState.keyModeDropdownOpen = false;
+    currentState.clearMarkDropdownOpen = false;
+    currentState.scoreRankDropdownOpen = false;
+    currentState.difficultyMinDropdownOpen = false;
+    currentState.difficultyMaxDropdownOpen = false;
+  }
   if (bpmMinBox != nullptr && bpmMinBox->getText() != state.bpmMinText) {
     bpmMinBox->setEditingText(state.bpmMinText);
   }
   if (bpmMaxBox != nullptr && bpmMaxBox->getText() != state.bpmMaxText) {
     bpmMaxBox->setEditingText(state.bpmMaxText);
   }
-  refreshDropdowns(state);
+  refreshDropdowns(currentState);
   refreshRangeButtons(state);
   setVisible(open);
   setDisplay(open ? YGDisplayFlex : YGDisplayNone);
@@ -462,15 +503,26 @@ void ChartFilterPanelView::onLayout() {
   if (difficultyMaxDropdown != nullptr && lastRowHeight != filterRowHeight()) {
     refreshLayoutDensity();
   }
+  ScrollView::onLayout();
+}
+
+bool ChartFilterPanelView::handleEventsImpl(SDL_Event &event) {
+  // ScrollView does not forward outside presses to its content, but portal
+  // popups still need them to dismiss before another control handles the press.
+  for (auto *dropdown : {keyModeDropdown, clearMarkDropdown, scoreRankDropdown,
+                         difficultyMinDropdown, difficultyMaxDropdown}) {
+    dropdown->dismissOnOutsidePress(event);
+  }
+  return ScrollView::handleEventsImpl(event);
 }
 
 void ChartFilterPanelView::refreshLayoutDensity() {
   View::LayoutBatchScope batch;
   lastRowHeight = filterRowHeight();
-  for (auto *row : {clearMarkRow, scoreRankRow, difficultyRow}) {
+  for (auto *row : {keyModeRow, clearMarkRow, scoreRankRow, difficultyRow}) {
     row->setHeight(lastRowHeight);
   }
-  for (auto *dropdown : {clearMarkDropdown, scoreRankDropdown,
+  for (auto *dropdown : {keyModeDropdown, clearMarkDropdown, scoreRankDropdown,
                          difficultyMinDropdown, difficultyMaxDropdown}) {
     dropdown->setHeight(lastRowHeight);
     // Keep compact triggers shrinkable; the popup retains its preferred width.
@@ -484,13 +536,22 @@ void ChartFilterPanelView::refreshLayoutDensity() {
   const bool showDifficulty = currentState.difficultyRangeEnabled &&
                               !currentState.difficultyLevels.empty();
   difficultyContent->setHeight(showDifficulty ? 36.0f + lastRowHeight : 0.0f);
-  setHeight(getVisible() ? preferredHeight(currentState) : 0.0f);
+  const float height = getVisible() ? preferredHeight(currentState) : 0.0f;
+  content->setHeight(height);
+  setHeight(height);
+  refreshContentLayout();
 }
 
 void ChartFilterPanelView::refreshDropdowns(const State &state) {
+  keyModeDropdown->refresh({
+      .selectedId = optionalIntId(state.filters.keyMode),
+      .options = keyModeOptions(),
+      .open = state.keyModeDropdownOpen,
+  });
+  keyModeRow->setZIndex(state.keyModeDropdownOpen ? 100 : 0);
   if (clearMarkDropdown != nullptr) {
     clearMarkDropdown->refresh({
-        .selectedId = clearMarkId(state.filters.clearMarkRank),
+        .selectedId = optionalIntId(state.filters.clearMarkRank),
         .options = clearMarkOptions(),
         .open = state.clearMarkFilterVisible && state.clearMarkDropdownOpen,
         .enabled = state.clearMarkFilterVisible,
@@ -594,10 +655,10 @@ void ChartFilterPanelView::refreshRangeButtons(const State &state) {
 }
 
 float ChartFilterPanelView::preferredHeight(const State &state) const {
-  constexpr float kBaseHeight = 276.0f;
+  constexpr float kBaseHeight = 366.0f;
   constexpr float kClearMarkGroupHeight = 90.0f;
   const float rowGrowth = filterRowHeight() - 42.0f;
-  float height = kBaseHeight + 2.0f * rowGrowth;
+  float height = kBaseHeight + 3.0f * rowGrowth;
   if (!state.clearMarkFilterVisible) {
     height -= kClearMarkGroupHeight + rowGrowth;
   }

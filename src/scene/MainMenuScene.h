@@ -394,6 +394,7 @@ private:
   bool chartSortPanelVisible = false;
   std::string chartBpmMinText;
   std::string chartBpmMaxText;
+  bool chartKeyModeDropdownOpen = false;
   bool chartClearMarkDropdownOpen = false;
   bool chartScoreRankDropdownOpen = false;
   bool chartDifficultyMinDropdownOpen = false;
@@ -438,6 +439,8 @@ private:
   void setChartSortPanelVisible(bool visible);
   void refreshChartFilterPanel();
   void refreshChartFilterButtons();
+  void setChartKeyModeFilter(std::optional<int> mode);
+  void setChartKeyModeDropdownOpen(bool open);
   void setChartClearFilter(std::optional<int> rank);
   void setChartScoreRankFilter(std::optional<std::string> rank);
   void setChartBpmMinFilter(const std::string &text);

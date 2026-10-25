@@ -799,6 +799,7 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
       for (auto *child : root->getChildren()) self(child, self);
     };
     endEditing(rootLayout, endEditing);
+    setChartFilterPanelVisible(false);
   }
   if (selectorTabActive()) {
     auto &state = selectorStates_[selectorTab_ == Tab::Course ? 1 : 0];
@@ -1370,6 +1371,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   chartSortPanelVisible = false;
   chartBpmMinText.clear();
   chartBpmMaxText.clear();
+  chartKeyModeDropdownOpen = false;
   chartClearMarkDropdownOpen = false;
   chartScoreRankDropdownOpen = false;
   chartDifficultyMinDropdownOpen = false;
@@ -2053,6 +2055,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   left->addView(filterRow);
 
   chartFilterPanel = new ChartFilterPanelView({
+      .onKeyModeChanged = [this](std::optional<int> mode) { setChartKeyModeFilter(mode); },
+      .onKeyModeDropdownChanged = [this](bool open) { setChartKeyModeDropdownOpen(open); },
       .onClearMarkChanged =
           [this](std::optional<int> rank) { setChartClearFilter(rank); },
       .onScoreRankChanged = [this](std::optional<std::string> rank) {
@@ -2083,7 +2087,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
       .onDifficultyDropdownChanged = [this](bool minLevel, bool open) {
         setChartDifficultyDropdownOpen(minLevel, open);
       },
-  });
+  }, overlayPortal);
 
   chartSortPanel = new ChartSortPanelView({
       .onSortChanged = [this](ChartRecordSortCriterion criterion) {
@@ -3177,6 +3181,7 @@ void MainMenuScene::setChartFilterPanelVisible(bool visible) {
   if (visible) {
     chartSortPanelVisible = false;
   } else {
+    chartKeyModeDropdownOpen = false;
     chartClearMarkDropdownOpen = false;
     chartScoreRankDropdownOpen = false;
     chartDifficultyMinDropdownOpen = false;
@@ -3189,6 +3194,7 @@ void MainMenuScene::setChartSortPanelVisible(bool visible) {
   chartSortPanelVisible = visible;
   if (visible) {
     chartFilterPanelVisible = false;
+    chartKeyModeDropdownOpen = false;
     chartClearMarkDropdownOpen = false;
     chartScoreRankDropdownOpen = false;
     chartDifficultyMinDropdownOpen = false;
@@ -3221,6 +3227,7 @@ void MainMenuScene::refreshChartFilterPanel() {
     chartScoreRankDropdownOpen = false;
   }
   if (!chartFilterPanelVisible) {
+    chartKeyModeDropdownOpen = false;
     chartClearMarkDropdownOpen = false;
     chartScoreRankDropdownOpen = false;
     chartDifficultyMinDropdownOpen = false;
@@ -3257,6 +3264,7 @@ void MainMenuScene::refreshChartFilterPanel() {
         .clearMarkFilterVisible =
             sameFolderScope || !activeFolder.clearMarkFolder,
         .effectiveClearMarkRank = effectiveClearMarkRank,
+        .keyModeDropdownOpen = chartKeyModeDropdownOpen,
         .clearMarkDropdownOpen = chartClearMarkDropdownOpen,
         .scoreRankDropdownOpen = chartScoreRankDropdownOpen,
         .difficultyRangeEnabled = difficultyRangeEnabled,
@@ -3279,7 +3287,8 @@ void MainMenuScene::refreshChartFilterPanel() {
 
 void MainMenuScene::refreshChartFilterButtons() {
   const bool filterActive =
-      chartFilterPanelVisible || chartRecordFilters.clearMarkRank.has_value() ||
+      chartFilterPanelVisible || chartRecordFilters.keyMode.has_value() ||
+      chartRecordFilters.clearMarkRank.has_value() ||
       chartRecordFilters.scoreRank.has_value() ||
       chartRecordFilters.bpmMin.has_value() ||
       chartRecordFilters.bpmMax.has_value() ||
@@ -3291,6 +3300,24 @@ void MainMenuScene::refreshChartFilterButtons() {
       chartSortPanelVisible ||
       chartRecordFilters.sort.criterion != ChartRecordSortCriterion::Default;
   styleMenuButton(chartSortButton, chartSortButtonText, sortActive);
+}
+
+void MainMenuScene::setChartKeyModeFilter(std::optional<int> mode) {
+  chartRecordFilters.keyMode = mode;
+  chartKeyModeDropdownOpen = false;
+  reloadChartList();
+  refreshChartFilterPanel();
+}
+
+void MainMenuScene::setChartKeyModeDropdownOpen(bool open) {
+  chartKeyModeDropdownOpen = open;
+  if (open) {
+    chartClearMarkDropdownOpen = false;
+    chartScoreRankDropdownOpen = false;
+    chartDifficultyMinDropdownOpen = false;
+    chartDifficultyMaxDropdownOpen = false;
+  }
+  refreshChartFilterPanel();
 }
 
 void MainMenuScene::setChartClearFilter(std::optional<int> rank) {
@@ -3372,6 +3399,7 @@ void MainMenuScene::setChartClearMarkDropdownOpen(bool open) {
   }
   chartClearMarkDropdownOpen = open;
   if (open) {
+    chartKeyModeDropdownOpen = false;
     chartScoreRankDropdownOpen = false;
     chartDifficultyMinDropdownOpen = false;
     chartDifficultyMaxDropdownOpen = false;
@@ -3391,6 +3419,7 @@ void MainMenuScene::setChartScoreRankDropdownOpen(bool open) {
   }
   chartScoreRankDropdownOpen = open;
   if (open) {
+    chartKeyModeDropdownOpen = false;
     chartClearMarkDropdownOpen = false;
     chartDifficultyMinDropdownOpen = false;
     chartDifficultyMaxDropdownOpen = false;
@@ -3424,6 +3453,7 @@ void MainMenuScene::setChartScoreRankRange(bool orAbove, bool orBelow) {
 
 void MainMenuScene::setChartDifficultyDropdownOpen(bool minLevel, bool open) {
   if (open) {
+    chartKeyModeDropdownOpen = false;
     chartClearMarkDropdownOpen = false;
     chartScoreRankDropdownOpen = false;
   }
@@ -5135,6 +5165,7 @@ void MainMenuScene::showSelectedChartFolder() {
       main_menu_library::filtersForSameFolder(chartRecordFilters);
   chartBpmMinText.clear();
   chartBpmMaxText.clear();
+  chartKeyModeDropdownOpen = false;
   chartClearMarkDropdownOpen = false;
   chartScoreRankDropdownOpen = false;
   chartDifficultyMinDropdownOpen = false;
