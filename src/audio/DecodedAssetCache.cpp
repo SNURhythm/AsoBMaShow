@@ -308,6 +308,16 @@ bool DecodedAssetCache::Contains(const std::filesystem::path &path) const {
   return !identity.empty() && found != impl->entries.end() &&
       found->second->identity == identity && bool(found->second->sound);
 }
+std::shared_ptr<const DecodedAssetCache::DecodedSound> DecodedAssetCache::Find(
+    const std::filesystem::path &path) {
+  const auto resolved = resolvedPath(path);
+  const auto identity = sourceIdentity(resolved);
+  std::lock_guard lock(impl->mutex);
+  const auto found = impl->entries.find(resolved);
+  if (identity.empty() || found == impl->entries.end() || found->second->identity != identity)
+    return {};
+  return impl->cachedLocked(found->second);
+}
 void DecodedAssetCache::Clear() {
   std::lock_guard lock(impl->mutex);
   while (!impl->lru.empty()) impl->forget(*impl->lru.front());

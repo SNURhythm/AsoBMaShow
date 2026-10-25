@@ -100,6 +100,13 @@ The built-in selector drives BGA from absolute consumed chart frames for
 synthesized previews. Authored preview files have no chart-time alignment, so
 BGA is not advanced. Both synthesized and authored previews drive the built-in
 jacket pulse and spectrum from audible output, including playback gain and mute.
+Highlight preparation probes bounded WAV/FLAC metadata and Ogg head/tail data to
+skip expired past sounds before PCM decoding. Durations still unknown after the
+probe use a 15-second overlap lookback; known and cached longer tails remain.
+Later instances of the same sample remain scheduled. Archived probes inspect
+bytes from the existing indexed batch pipeline, with no separate extraction
+pass and at most 8 MiB of deferred encoded data. Expired native PCM still warms
+for gameplay, but needs no preview resampling unless the sample plays later.
 Custom selectors reuse preloaded native PCM, including
 sounds retained when changing difficulty, and drain previews before gameplay.
 

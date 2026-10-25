@@ -62,3 +62,42 @@ before their fixes. The parsed entrance fixture also exposed microsecond
 truncation at a second boundary; nearest-bin scoring now selects the intended
 measure. Desktop `main` and `paged_preview_source_tests` passed. Independent
 review found no blocking issues; perceptual quality still needs listening.
+
+## Bounded duration preparation follow-up
+
+- [x] Add a deterministic regression to `tests/paged_preview_source_tests.cpp`
+  that blocks an expired sound's PCM allocation and still expects highlight
+  startup/current audio before the gate is released. Verify failure first.
+- [x] Add `src/audio/AudioDurationBound.h`: bounded positioned reads of PCM WAV
+  chunk headers and FLAC STREAMINFO, plus shared Vorbis page checks and bounded
+  Ogg head/tail reads. Test payload-skipping byte counts, malformed metadata
+  and conservative boundaries.
+- [x] Add identity-checked `DecodedAssetCache::Find` and integrate probes into
+  `PagedPreviewSource.cpp`. Reuse cached PCM; prioritize opening events, publish
+  excluded past instances independently of their background PCM, preserve known
+  long overlaps and cap unknown lookback at 15 seconds. Archive probes reuse one
+  extraction pass with bounded deferred bytes.
+- [x] Cover loose/ZIP/7z preparation, the unknown 15-second boundary and known
+  long tails, cancellation/source identity, and one eventual decode per asset.
+- [x] Build `main` and affected audio tests at `-j 6`, run `area_audio`, obtain
+  focused review, document measured probe byte counts/timing and limitations,
+  then commit and push to this branch.
+
+Probe measurements: on this machine, 1,000 warm-filesystem open/probe/close runs
+on a 128 MiB sparse WAV had median 34.5 microseconds and p95 68.167 microseconds.
+Each requested 74 bytes. This excludes path resolution/cache identity checks and
+does not represent cold storage, Android providers, or archive extraction time.
+Large Ogg probes read at most 65,636 bytes, independent of total file length;
+FLAC reads 42 bytes. WAV chunk counts and Ogg candidate scans are bounded.
+
+Regression evidence: the expired-sound PCM gate failed before the optimization;
+a later-reused ZIP sample also failed until exclusion became per past instance.
+The gates now show startup before background decode and no resampling of cached
+expired-only sounds, while future instances and known longer tails stay audible.
+
+Final verification: desktop `main` and all 34 `area_audio` tests passed. Review
+caught cached expired resampling, trailing RIFF content and a probe/decode source
+identity gap; all were corrected. A repeated-unknown-sample regression then
+failed until the 15-second cutoff was applied independently to each old onset.
+The final targeted review found no actionable issues. Archive reads continue
+through the indexed batch pipeline; no separate probe extraction was added.

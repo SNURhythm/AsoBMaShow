@@ -1,5 +1,6 @@
 #include "audio/PagedPreviewSource.h"
 #include "audio/ChartPreviewHighlight.h"
+#include "audio/AudioDurationBound.h"
 #include "audio/AudioMix.h"
 #include "audio/DecodedAssetCache.h"
 #include "audio/SoundFileIO.h"
@@ -21,6 +22,7 @@
 #include <new>
 #include <stdexcept>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -30,6 +32,7 @@ thread_local std::atomic_bool *cancelResamplingOnAllocation = nullptr;
 thread_local audio::DecodedAssetCache *clearCacheOnPcmAllocation = nullptr;
 thread_local std::size_t clearCacheAllocationBytes = 0;
 std::atomic_bool preparationGate{false};
+std::atomic_size_t preparationAllocationBytes{0};
 std::atomic_bool preparationBlocked{false};
 std::atomic_uint blockedPreparations{0};
 std::atomic_bool rejectLargeAllocations{false};
@@ -52,7 +55,8 @@ void *operator new(std::size_t bytes) {
   }
   // Pause the real worker's first large hidden-keysound read. The short scheduled
   // sound fits below this threshold, so startup must publish before this gate.
-  if (!bypassPreparationGate && bytes >= 16384 && preparationGate.load()) {
+  if (!bypassPreparationGate && bytes >= 16384 && preparationGate.load() &&
+      (!preparationAllocationBytes.load() || bytes == preparationAllocationBytes.load())) {
     preparationBlocked.store(true);
     ++blockedPreparations;
     while (preparationGate.load()) std::this_thread::yield();
@@ -423,6 +427,213 @@ void testFractionalTiming(const std::filesystem::path &root) {
     }
   }
 }
+void testBoundedAudioDurationMetadata() {
+  // A 128 MiB sparse WAV is represented only by its 44-byte header. Reading any
+  // payload fails the reader, so this proves byte cost independently of timing.
+  constexpr std::uint32_t payload = 128U * 1024U * 1024U;
+  std::array<unsigned char, 44> wav{};
+  const auto put32 = [&](std::size_t offset, std::uint32_t value) {
+    for (unsigned i = 0; i < 4; ++i) wav[offset + i] = static_cast<unsigned char>(value >> (8 * i));
+  };
+  std::memcpy(wav.data(), "RIFF", 4);
+  put32(4, payload + 36);
+  std::memcpy(wav.data() + 8, "WAVEfmt ", 8);
+  put32(16, 16);
+  wav[20] = 1; wav[22] = 1;
+  put32(24, 44100); put32(28, 88200);
+  wav[32] = 2; wav[34] = 16;
+  std::memcpy(wav.data() + 36, "data", 4);
+  put32(40, payload);
+  std::size_t bytesRead = 0;
+  const auto reader = [&](std::uint64_t offset, std::span<unsigned char> output) {
+    bytesRead += output.size();
+    if (offset > wav.size() || output.size() > wav.size() - offset) return false;
+    std::copy_n(wav.data() + offset, output.size(), output.data());
+    return true;
+  };
+  const auto bound = audio::duration_bound::InspectAudio(payload + 44ULL, reader);
+  require(bound && bound->sampleRate == 44100 && bound->frames == payload / 2 && bytesRead <= 128,
+          "large PCM WAV duration must need at most 128 header bytes and no payload reads");
+  require(!audio::duration_bound::InspectAudio(44, reader), "truncated WAV cannot claim a proven duration");
+  require(!audio::duration_bound::InspectAudio(payload + 100ULL, reader),
+          "WAV trailing content beyond RIFF length must not produce an underestimated bound");
+  wav[32] = 3;
+  require(!audio::duration_bound::InspectAudio(payload + 44ULL, reader),
+          "inconsistent WAV block alignment must remain unknown");
+  std::array<unsigned char, 42> flac{};
+  std::memcpy(flac.data(), "fLaC", 4);
+  flac[4] = 0x80; flac[7] = 34;
+  const auto packed = (std::uint64_t{44100} << 44) | (std::uint64_t{15} << 36) | 88200;
+  for (unsigned i = 0; i < 8; ++i) flac[18 + i] = static_cast<unsigned char>(packed >> (56 - 8 * i));
+  const auto flacBound = audio::duration_bound::InspectAudio(std::span<const unsigned char>(flac));
+  require(flacBound && flacBound->frames == 88200 && flacBound->sampleRate == 44100,
+          "FLAC duration comes directly from STREAMINFO");
+  std::fill(flac.begin() + 22, flac.begin() + 26, 0);
+  require(!audio::duration_bound::InspectAudio(std::span<const unsigned char>(flac)),
+          "zero FLAC total samples means unknown, not silent");
+}
+
+void testBoundedLargeVorbisDuration(const std::filesystem::path &root) {
+  const auto path = root / "long-probe.ogg";
+  SF_INFO info{};
+  info.samplerate = 44100; info.channels = 1; info.format = SF_FORMAT_OGG | SF_FORMAT_VORBIS;
+  {
+    auto file = asobmashow::audio::openSoundFileHandle(path, SFM_WRITE, info);
+    require(bool(file), "cannot open long Ogg duration fixture");
+    std::array<short, 44100> pcm{};
+    std::uint32_t random = 1;
+    for (auto &sample : pcm) {
+      random = random * 1664525U + 1013904223U;
+      sample = static_cast<short>(random >> 16);
+    }
+    for (unsigned second = 0; second < 16; ++second)
+      require(sf_writef_short(file.get(), pcm.data(), pcm.size()) == static_cast<sf_count_t>(pcm.size()),
+              "cannot write long Ogg duration fixture");
+  }
+  std::ifstream input(path, std::ios::binary);
+  const std::vector<unsigned char> bytes((std::istreambuf_iterator<char>(input)), {});
+  require(bytes.size() > 65536, "large Ogg fixture must exercise bounded head/tail probing");
+  std::size_t bytesRead = 0;
+  auto duration = audio::duration_bound::InspectAudio(bytes.size(),
+      [&](std::uint64_t offset, std::span<unsigned char> output) {
+        bytesRead += output.size();
+        if (offset > bytes.size() || output.size() > bytes.size() - offset) return false;
+        std::copy_n(bytes.data() + offset, output.size(), output.data());
+        return true;
+      });
+  require(duration && duration->sampleRate == 44100 && duration->frames >= 16 * 44100 &&
+              duration->frames < 17 * 44100 && bytesRead <= 65636,
+          "large Ogg duration needs only a fixed head/tail read, without codebooks or intervening pages");
+  auto corrupt = bytes;
+  corrupt.back() ^= 1;
+  require(!audio::duration_bound::InspectAudio(std::span<const unsigned char>(corrupt)),
+          "invalid terminal Ogg checksum must remain unknown");
+  // The existing whole-file bound still rejects corruption in intermediate
+  // pages; its music-player contract must survive sharing the page validator.
+  require(audio::duration_bound::InspectVorbis(bytes).has_value(), "complete Ogg validation must still pass");
+}
+
+void testExpiredSoundDoesNotBlockHighlight(const std::filesystem::path &root) {
+  writeWav(root / "first.wav", 8000, std::vector<short>(16000, 8192));
+  writeWav(root / "second.wav", 8000, std::vector<short>(64, 16384));
+  for (const auto &[container, repeated] : {
+           std::pair{std::string("loose"), false}, std::pair{std::string("zip"), false},
+           std::pair{std::string("7z"), false}, std::pair{std::string("zip"), true}}) {
+    auto parsed = chart(root, std::string("#00001:01\n#01011:02\n") + (repeated ? "#01501:01\n" : ""));
+    if (container != "loose") {
+      const auto archivePath = root / ("expired." + container);
+      auto writer = makeArchiveWriteHandle();
+      require((container == "zip" ? archive_write_set_format_zip(writer.get())
+                                  : archive_write_set_format_7zip(writer.get())) == ARCHIVE_OK &&
+                  archive_write_open_filename(writer.get(), archivePath.string().c_str()) == ARCHIVE_OK,
+              "cannot create expired audio archive");
+      for (const char *name : {"first.wav", "second.wav"}) {
+        std::ifstream input(root / name, std::ios::binary);
+        const std::vector<char> bytes((std::istreambuf_iterator<char>(input)), {});
+        UniqueResource<archive_entry, archive_entry_free> entry(archive_entry_new());
+        archive_entry_set_pathname(entry.get(), name);
+        archive_entry_set_filetype(entry.get(), AE_IFREG);
+        archive_entry_set_perm(entry.get(), 0644);
+        archive_entry_set_size(entry.get(), bytes.size());
+        require(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK &&
+                    archive_write_data(writer.get(), bytes.data(), bytes.size()) == static_cast<la_ssize_t>(bytes.size()),
+                "cannot write expired audio archive entry");
+      }
+      require(archive_write_close(writer.get()) == ARCHIVE_OK, "cannot finish expired audio archive");
+      parsed->Meta.Folder = archivePath;
+    }
+    auto cache = std::make_shared<audio::DecodedAssetCache>(
+        audio::DecodedAssetCache::kUnlimitedRetainedBytes);
+    auto source = audio::PagedPreviewSource::Create(*parsed, cache, 20 * 44100);
+    preparationAllocationBytes = 16000 * sizeof(short);
+    preparationBlocked = false;
+    preparationGate = true;
+    const auto release = makeScopeExit([] { preparationGate = false; preparationAllocationBytes = 0; });
+    require(source->Begin(8000), "cannot begin bounded-duration highlight");
+    const auto deadline = std::chrono::steady_clock::now() + 2s;
+    auto state = source->GetState();
+    while ((!preparationBlocked || !state.startupReady) && std::chrono::steady_clock::now() < deadline) {
+      source->WaitForChange(state.revision, 20ms);
+      state = source->GetState();
+    }
+    preparationGate = false;
+    require(preparationBlocked && state.startupReady && !state.preparationComplete,
+            "expired audio must not block highlight startup on its full PCM decode");
+    std::array<float, 2> output{};
+    require(source->Render(output, 1).status == audio::PagedPreviewRenderStatus::Data &&
+                std::abs(output[0] - 16383.0f * 0.9f / 32768.0f) < 0.000001f,
+            "highlight begins with only the currently audible sound");
+    waitPrepared(source);
+    require(cache->GetStatistics().decodedFrames == 16064 && cache->GetStatistics().decoderOpens == 2 &&
+                cache->GetStatistics().archiveReads == 0,
+            "expired sounds still warm once for gameplay with no individual archive re-extraction");
+    if (repeated) {
+      const auto samples = renderAll(source);
+      require(samples.size() > 79999 * 2 &&
+                  std::abs(samples[79999 * 2] - 8191.0F * 0.9F / 32768.0F) < 0.000001F,
+              "excluding expired past instances must preserve the same asset's future onset");
+      continue;
+    }
+    // The same native cache at another device rate must also skip expired
+    // resampling, rather than blocking on a redundant 88,200-frame output.
+    auto reused = audio::PagedPreviewSource::Create(*parsed, cache, 20 * 44100);
+    preparationAllocationBytes = 88200 * sizeof(short);
+    preparationBlocked = false;
+    preparationGate = true;
+    require(reused->Begin(44100), "cannot begin cached highlight at a different rate");
+    const auto reuseDeadline = std::chrono::steady_clock::now() + 2s;
+    state = reused->GetState();
+    while (!preparationBlocked && !state.startupReady && std::chrono::steady_clock::now() < reuseDeadline) {
+      reused->WaitForChange(state.revision, 20ms);
+      state = reused->GetState();
+    }
+    preparationGate = false;
+    require(!preparationBlocked && state.startupReady,
+            "cached expired sounds must not delay startup by resampling discarded audio");
+    waitPrepared(reused);
+    require(cache->GetStatistics().decoderOpens == 2 && cache->GetStatistics().archiveReads == 0,
+            "cached highlight reuses native PCM without decoding or extracting again");
+  }
+}
+
+void testUnknownDurationLookbackAndKnownLongTails(const std::filesystem::path &root) {
+  // AIFF is decodable but intentionally outside the cheap metadata probe.
+  for (const auto [format, onset, cached, overlap, repeated] : {
+           std::tuple{SF_FORMAT_WAV, 0, false, true, false},
+           std::tuple{SF_FORMAT_AIFF, 5, false, false, false},
+           std::tuple{SF_FORMAT_AIFF, 6, false, true, false},
+           std::tuple{SF_FORMAT_AIFF, 0, true, true, false},
+           std::tuple{SF_FORMAT_AIFF, 0, false, true, true}}) {
+    SF_INFO info{};
+    info.samplerate = 8000; info.channels = 1; info.format = format | SF_FORMAT_PCM_16;
+    {
+      auto file = asobmashow::audio::openSoundFileHandle(root / "first.wav", SFM_WRITE, info);
+      const std::vector<short> pcm(8000 * 22, 8192);
+      require(file && sf_write_short(file.get(), pcm.data(), pcm.size()) == static_cast<sf_count_t>(pcm.size()),
+              "cannot create lookback audio fixture");
+    }
+    writeWav(root / "second.wav", 8000, std::vector<short>(64, 16384));
+    auto parsed = chart(root, std::string("#00001:01\n#01011:02\n") + (repeated ? "#00901:0001\n" : ""));
+    for (auto *measure : parsed->Measures)
+      for (auto *timeline : measure->TimeLines)
+        if (!timeline->BackgroundNotes.empty() && timeline->Timing == 0) timeline->Timing = onset * 1'000'000LL;
+    auto cache = std::make_shared<audio::DecodedAssetCache>();
+    std::atomic_bool cancelled = false;
+    if (cached) require(bool(cache->Load(root / "first.wav", cancelled)), "cannot warm known duration");
+    auto source = audio::PagedPreviewSource::Create(*parsed, cache, 20 * 44100);
+    require(source->Begin(8000), "cannot begin unknown-duration highlight");
+    waitPrepared(source);
+    std::array<float, 2> output{};
+    require(source->Render(output, 1).status == audio::PagedPreviewRenderStatus::Data,
+            "lookback preview must be playable");
+    const float expected = (overlap ? 24574.0F : 16383.0F) * 0.9F / 32768.0F;
+    require(std::abs(output[0] - expected) < 0.000001F,
+            "15-second cap applies only to unknown past sounds; known long tails remain audible");
+    require(cache->GetStatistics().decoderOpens == 2,
+            "probing or cached duration lookup must not add a PCM decoder pass");
+  }
+}
+
 void testProgressiveStartup(const std::filesystem::path &root) {
   writeWav(root / "first.wav", 44100, std::vector<short>(100, 16384));
   writeWav(root / "second.wav", 44100, std::vector<short>(44100 * 4, 8192));
@@ -1069,6 +1280,10 @@ int main() {
     testResampling(root / "resampling");
     testDownsamplingWarmsEveryNativePage(root / "downsampling");
     testMissingAndExpired(root / "missing");
+    testBoundedAudioDurationMetadata();
+    testBoundedLargeVorbisDuration(root / "progressive");
+    testExpiredSoundDoesNotBlockHighlight(root / "progressive");
+    testUnknownDurationLookbackAndKnownLongTails(root / "progressive");
     testProgressiveStartup(root / "progressive");
     testFullCallbackPreflightPreservesScheduledAndActiveVoices(root / "preflight");
     testFractionalTiming(root / "timing");

@@ -3,7 +3,10 @@
 #include "../ArchiveFile.h"
 #include "../ChartPlaybackDuration.h"
 #include "../path.h"
+#include "../RAII.h"
+#include "../targets.h"
 #include "../utils/ParallelWorkBatch.h"
+#include "AudioDurationBound.h"
 #include "AudioMix.h"
 #include "ArchiveAssetBatchLoader.h"
 #include "ChartAssetExtensions.h"
@@ -14,6 +17,7 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <cstdio>
 #include <cmath>
 #include <limits>
 #include <map>
@@ -22,6 +26,10 @@
 #include <stdexcept>
 #include <thread>
 #include <vector>
+#if TARGET_OS_ANDROID
+#include "../AndroidNatives.h"
+#include <unistd.h>
+#endif
 
 namespace audio {
 namespace {
@@ -54,12 +62,47 @@ std::uint64_t framesForMicros(long long micros, int rate, bool roundUp) {
   return scaleFrames(static_cast<std::uint64_t>(std::max(0LL, micros)),
                      rate, 1000000, roundUp);
 }
+std::optional<duration_bound::Duration> probeFileDuration(
+    const std::filesystem::path &path, const std::atomic_bool &cancelled) {
+  std::FILE *opened = nullptr;
+#if TARGET_OS_ANDROID
+  if (IsAndroidTreePath(path)) {
+    std::string error;
+    const auto descriptor = OpenAndroidTreeFileDescriptor(path, error);
+    if (!descriptor) return {};
+    opened = fdopen(*descriptor, "rb");
+    if (!opened) close(*descriptor);
+  } else
+#endif
+  {
+#ifdef _WIN32
+    opened = _wfopen(path.c_str(), L"rb");
+#else
+    opened = std::fopen(path.c_str(), "rb");
+#endif
+  }
+  UniqueResource<std::FILE, std::fclose> file(opened);
+  if (!file) return {};
+  std::setvbuf(file.get(), nullptr, _IONBF, 0);
+  if (std::fseek(file.get(), 0, SEEK_END) != 0) return {};
+  const auto size = std::ftell(file.get());
+  if (size < 0 || static_cast<std::uint64_t>(size) > DecodedAssetCache::kMaximumEncodedAssetBytes)
+    return {};
+  return duration_bound::InspectAudio(static_cast<std::uint64_t>(size),
+      [&](std::uint64_t offset, std::span<unsigned char> bytes) {
+        return !cancelled.load(std::memory_order_relaxed) &&
+            std::fseek(file.get(), static_cast<long>(offset), SEEK_SET) == 0 &&
+            std::fread(bytes.data(), 1, bytes.size(), file.get()) == bytes.size();
+      });
+}
 } // namespace
 
 struct PagedPreviewSource::Impl {
   struct Asset {
     std::filesystem::path path;
     std::unique_ptr<SoundData> sound;
+    std::optional<std::uint64_t> latestPastStart, firstFutureStart;
+    std::optional<DecodedAssetCache::SourceSnapshot> probedSource;
   };
   struct Event {
     long long timeMicros;
@@ -67,7 +110,12 @@ struct PagedPreviewSource::Impl {
     Bus bus;
     std::uint64_t outputStart = 0;
   };
+  struct DeferredAsset {
+    std::size_t index;
+    std::shared_ptr<const DecodedAssetCache::DecodedSound> native;
+  };
   std::vector<Asset> assets;
+  std::unique_ptr<std::atomic<std::uint64_t>[]> pastDurationFrames;
   std::vector<Event> events;
   std::shared_ptr<DecodedAssetCache> cache;
   PagedPreviewGains gains;
@@ -84,6 +132,7 @@ struct PagedPreviewSource::Impl {
   std::atomic<std::uint64_t> position44100{0};
   int outputRate = 0;
   std::uint64_t originOutput = 0;
+  std::uint64_t requestedOriginOutput = 0; // Immutable while loader and startup workers run.
   std::uint64_t renderedOutput = 0; // Callback-owned.
   std::uint64_t timelineFrames44100 = 0;
   std::uint64_t finalOutput = 0; // Worker-owned until durationKnown publication.
@@ -123,6 +172,45 @@ struct PagedPreviewSource::Impl {
     { std::lock_guard lock(mutex); ++state.revision; }
     changed.notify_all();
   }
+  bool excluded(std::size_t index) const {
+    return assets[index].latestPastStart &&
+        pastDurationFrames[index].load(std::memory_order_acquire) <=
+            requestedOriginOutput - *assets[index].latestPastStart;
+  }
+  bool excluded(const Event &event) const {
+    return event.outputStart < requestedOriginOutput &&
+        pastDurationFrames[event.asset].load(std::memory_order_acquire) <=
+            requestedOriginOutput - event.outputStart;
+  }
+  bool openingRequired(std::size_t index) const {
+    return assets[index].firstFutureStart &&
+        *assets[index].firstFutureStart < requestedOriginOutput + static_cast<std::uint64_t>(outputRate) * 2;
+  }
+  bool canDefer(std::size_t index) const {
+    const auto &asset = assets[index];
+    return requestedOriginOutput && (!asset.latestPastStart || excluded(index)) && !openingRequired(index);
+  }
+  std::uint64_t futurePriority(std::size_t index) const {
+    return assets[index].firstFutureStart.value_or(std::numeric_limits<std::uint64_t>::max());
+  }
+  void publishPastDuration(std::size_t index, std::optional<duration_bound::Duration> duration) {
+    if (!assets[index].latestPastStart) return;
+    // Unknown formats have the user-requested 15-second overlap lookback.
+    // Known long audio is never truncated to that fallback.
+    const auto frames = duration
+        ? scaleFramesBounded(duration->frames, outputRate, duration->sampleRate, true)
+        : static_cast<std::uint64_t>(outputRate) * 15;
+    // Retain the probe decision even when a recent instance requires decoding.
+    // Each old onset must independently obey the unknown-duration lookback.
+    pastDurationFrames[index].store(frames, std::memory_order_release);
+    publishState();
+  }
+  void publishCachedDuration(std::size_t index,
+      const std::shared_ptr<const DecodedAssetCache::DecodedSound> &native) {
+    if (native->info.channels > 0 && native->info.samplerate > 0)
+      publishPastDuration(index, duration_bound::Duration{
+          native->pcm.size() / native->info.channels, native->info.samplerate});
+  }
   void fail(std::string error) {
     { std::lock_guard lock(mutex);
       state.error = std::move(error);
@@ -134,7 +222,9 @@ struct PagedPreviewSource::Impl {
       const std::shared_ptr<const DecodedAssetCache::DecodedSound> &native) {
     checkpoint();
     auto &outputSound = *assets[index].sound->pagedOutput;
-    if (!native) {
+    if (!native || (excluded(index) && !assets[index].firstFutureStart)) {
+      // Native PCM remains warm for gameplay; expired preview voices need no
+      // output-rate conversion, even when the cache already contains them.
       outputSound.publishMetadata(0, 0);
     } else {
       // Resampling can expand a small native asset into gigabytes. Bound the
@@ -161,11 +251,15 @@ struct PagedPreviewSource::Impl {
   void publishAsset(std::size_t index, const std::vector<unsigned char> *bytes = nullptr,
                      const DecodedAssetCache::ArchiveBatch *batch = nullptr) {
     checkpoint();
+    if (const auto &source = assets[index].probedSource; source && !cache->ArchiveBatchUnchanged(*source))
+      throw std::runtime_error("Audio source changed after duration probing.");
     DecodedAssetCache::FailureKind failure{};
     std::string error;
     const auto native = bytes
         ? cache->LoadArchiveBytes(*batch, assets[index].path, *bytes, cancelled, {}, &error, &failure)
         : cache->Load(assets[index].path, cancelled, {}, &error, &failure);
+    if (const auto &source = assets[index].probedSource; source && !cache->ArchiveBatchUnchanged(*source))
+      throw std::runtime_error("Audio source changed after duration probing.");
     if (!native && failure != DecodedAssetCache::FailureKind::InvalidAsset) {
       checkpoint();
       throw std::runtime_error(error.empty() ? "Could not load preview audio." : error);
@@ -174,9 +268,23 @@ struct PagedPreviewSource::Impl {
   }
 
   void loadAll() {
-    // One whole-asset queue: audible events first, other gameplay references last.
+    // Opening audio first, then past overlap checks, then future/referenced PCM.
+    // Keep the original order for a preview starting at the beginning.
     std::vector<std::size_t> ordered;
     std::vector<bool> seen(assets.size());
+    if (requestedOriginOutput) {
+      const auto openingEnd = requestedOriginOutput + static_cast<std::uint64_t>(outputRate) * 2;
+      for (const auto &event : events)
+        if (event.outputStart >= requestedOriginOutput && event.outputStart < openingEnd && !seen[event.asset]) {
+          seen[event.asset] = true;
+          ordered.push_back(event.asset);
+        }
+      for (const auto &event : events)
+        if (event.outputStart < requestedOriginOutput && !seen[event.asset]) {
+          seen[event.asset] = true;
+          ordered.push_back(event.asset);
+        }
+    }
     for (const auto &event : events)
       if (!seen[event.asset]) { seen[event.asset] = true; ordered.push_back(event.asset); }
     for (std::size_t index = 0; index < assets.size(); ++index)
@@ -208,8 +316,43 @@ struct PagedPreviewSource::Impl {
         ++end;
       }
       if (!archived) {
+        std::vector<DeferredAsset> deferred;
+        std::mutex deferredMutex;
         ParallelWorkBatch workers(end - first);
-        workers.run(end - first, [&](std::size_t item) { publishAsset(ordered[first + item]); });
+        workers.run(end - first, [&](std::size_t item) {
+          const auto index = ordered[first + item];
+          std::shared_ptr<const DecodedAssetCache::DecodedSound> ready;
+          if (assets[index].latestPastStart) {
+            ready = cache->Find(assets[index].path);
+            if (ready) {
+              publishCachedDuration(index, ready);
+            } else {
+              auto &asset = assets[index];
+              asset.path = archive_file::findFileWithExtensions(asset.path, extensions).value_or(asset.path);
+              asset.probedSource = cache->CaptureSource(asset.path);
+              const auto duration = probeFileDuration(asset.path, cancelled);
+              checkpoint();
+              if (asset.probedSource && !cache->ArchiveBatchUnchanged(*asset.probedSource))
+                throw std::runtime_error("Audio source changed during duration probing.");
+              publishPastDuration(index, duration);
+            }
+          }
+          if (canDefer(index)) {
+            std::lock_guard lock(deferredMutex);
+            deferred.push_back({index, std::move(ready)});
+            return;
+          }
+          if (ready) publishDecoded(index, ready);
+          else publishAsset(index);
+        });
+        std::sort(deferred.begin(), deferred.end(), [&](const auto &a, const auto &b) {
+          return futurePriority(a.index) < futurePriority(b.index);
+        });
+        workers.run(deferred.size(), [&](std::size_t item) {
+          const auto &asset = deferred[item];
+          if (asset.native) publishDecoded(asset.index, asset.native);
+          else publishAsset(asset.index);
+        });
       } else {
         const auto batch = cache->BeginArchiveBatch(archive);
         if (!batch) throw std::runtime_error("Preview audio archive is unavailable.");
@@ -227,6 +370,7 @@ struct PagedPreviewSource::Impl {
         std::vector<std::filesystem::path> paths;
         std::map<std::filesystem::path, std::vector<std::size_t>> indices;
         std::map<std::filesystem::path, std::size_t> priorities;
+        std::vector<DeferredAsset> cachedDeferred;
         for (auto item = first; item < end; ++item) {
           checkpoint();
           const auto index = ordered[item];
@@ -234,15 +378,40 @@ struct PagedPreviewSource::Impl {
           inner = *resolved[item - first];
           assets[index].path = archive_file::makeVirtualPath(archive, inner);
           if (const auto ready = cache->FindArchiveAsset(*batch, assets[index].path)) {
-            publishDecoded(index, ready);
+            publishCachedDuration(index, ready);
+            if (canDefer(index)) cachedDeferred.push_back({index, ready});
+            else publishDecoded(index, ready);
             continue;
           }
           if (!indices.contains(inner)) { paths.push_back(inner); priorities.emplace(inner, item); }
           indices[inner].push_back(index);
         }
+        std::vector<archive_file::FileData> deferred;
+        std::mutex deferredMutex;
+        std::size_t deferredBytes = 0;
+        constexpr std::size_t maximumDeferredBytes = 8U * 1024U * 1024U;
         const bool loaded = ConsumeArchiveAssetBatch(archive, paths,
             parallel_worker_count(paths.size()), 64U * 1024U * 1024U,
             [&](archive_file::FileData &&file) {
+              checkpoint();
+              const auto &aliases = indices.at(file.path);
+              const bool hasPast = std::any_of(aliases.begin(), aliases.end(),
+                  [&](auto index) { return assets[index].latestPastStart.has_value(); });
+              const auto duration = hasPast ? duration_bound::InspectAudio(file.bytes)
+                                           : std::optional<duration_bound::Duration>{};
+              bool defer = true;
+              for (const auto index : aliases) {
+                publishPastDuration(index, duration);
+                defer = canDefer(index) && defer;
+              }
+              if (defer) {
+                std::lock_guard lock(deferredMutex);
+                if (deferred.size() < 2048 && file.bytes.size() <= maximumDeferredBytes - deferredBytes) {
+                  deferredBytes += file.bytes.size();
+                  deferred.push_back(std::move(file));
+                  return !cancelled.load(std::memory_order_relaxed);
+                }
+              }
               for (const auto index : indices.at(file.path)) publishAsset(index, &file.bytes, &*batch);
               return !cancelled.load(std::memory_order_relaxed);
             }, &error, cancelled,
@@ -269,6 +438,31 @@ struct PagedPreviewSource::Impl {
         }
         if (!cache->ArchiveBatchUnchanged(*batch))
           throw std::runtime_error("Preview audio archive changed during preparation.");
+        // Merge cached conversions and retained encoded entries by their next
+        // onset, leaving dead/hidden gameplay-only assets at the back.
+        struct Work { std::uint64_t priority; std::size_t item; bool cached; };
+        std::vector<Work> work;
+        for (std::size_t item = 0; item < deferred.size(); ++item) {
+          auto priority = std::numeric_limits<std::uint64_t>::max();
+          for (auto index : indices.at(deferred[item].path)) priority = std::min(priority, futurePriority(index));
+          work.push_back({priority, item, false});
+        }
+        for (std::size_t item = 0; item < cachedDeferred.size(); ++item)
+          work.push_back({futurePriority(cachedDeferred[item].index), item, true});
+        std::sort(work.begin(), work.end(), [](const auto &a, const auto &b) { return a.priority < b.priority; });
+        ParallelWorkBatch workers(work.size());
+        workers.run(work.size(), [&](std::size_t item) {
+          const auto &job = work[item];
+          if (job.cached) {
+            const auto &asset = cachedDeferred[job.item];
+            publishDecoded(asset.index, asset.native);
+          } else {
+            const auto &file = deferred[job.item];
+            for (const auto index : indices.at(file.path)) publishAsset(index, &file.bytes, &*batch);
+          }
+        });
+        if (!work.empty() && !cache->ArchiveBatchUnchanged(*batch))
+          throw std::runtime_error("Preview audio archive changed during preparation.");
       }
       first = end;
     }
@@ -280,6 +474,7 @@ struct PagedPreviewSource::Impl {
     playback::ClearCallbackSounds(*callback);
     for (std::size_t index = 0; index < events.size(); ++index) {
       const auto &event = events[index];
+      if (excluded(event)) continue;
       const auto *meta = assets[event.asset].sound->pagedOutput->metadata();
       const auto skipped = event.outputStart < originOutput ? originOutput - event.outputStart : 0;
       if (meta && skipped >= meta->frameCount) continue;
@@ -357,7 +552,7 @@ struct PagedPreviewSource::Impl {
       };
       auto publishDuration = [&] {
         for (const auto &event : events)
-          finalOutput = std::max(finalOutput, event.outputStart +
+          if (!excluded(event)) finalOutput = std::max(finalOutput, event.outputStart +
               assets[event.asset].sound->pagedOutput->metadata()->frameCount);
         durationOutput.store(finalOutput > originOutput ? finalOutput - originOutput : 0,
                               std::memory_order_relaxed);
@@ -372,6 +567,7 @@ struct PagedPreviewSource::Impl {
       };
       std::size_t reached = 0;
       auto windowStart = originOutput;
+      bool firstWindow = true;
       for (;;) {
         // With no active voice, only the next event can end leading silence.
         if (skipLeadingSilence && callback->playingSoundCount == 0)
@@ -382,13 +578,20 @@ struct PagedPreviewSource::Impl {
         while (due < events.size() && events[due].outputStart < windowEnd) ++due;
         waitUntil([&] {
           for (auto index = reached; index < due; ++index)
-            if (!assets[events[index].asset].sound->pagedOutput->metadata()) return false;
+            if (!excluded(events[index]) &&
+                !assets[events[index].asset].sound->pagedOutput->metadata()) return false;
           return true;
         });
         while (reached < due) {
           const auto &event = events[reached++];
-          finalOutput = std::max(finalOutput, event.outputStart +
+          if (!excluded(event)) finalOutput = std::max(finalOutput, event.outputStart +
               assets[event.asset].sound->pagedOutput->metadata()->frameCount);
+        }
+        if (firstWindow) {
+          // All past overlap decisions are now published. Rebuild before the
+          // first scan/callback so excluded sounds cannot block the mixer.
+          prepareSchedule();
+          firstWindow = false;
         }
         const auto audible = skipLeadingSilence
             ? firstAudibleFrame(windowStart, std::min(windowEnd, finalOutput))
@@ -416,7 +619,7 @@ struct PagedPreviewSource::Impl {
       if (!durationKnown.load(std::memory_order_relaxed)) {
         waitUntil([&] {
           for (const auto &event : events)
-            if (!assets[event.asset].sound->pagedOutput->metadata()) return false;
+            if (!excluded(event) && !assets[event.asset].sound->pagedOutput->metadata()) return false;
           return true;
         });
         publishDuration();
@@ -492,6 +695,7 @@ bool PagedPreviewSource::Begin(int actualOutputRate, bool skipLeadingSilence) {
     if (impl->originOutput > std::numeric_limits<std::uint64_t>::max() -
                               static_cast<std::uint64_t>(actualOutputRate) * 2)
       throw std::runtime_error("Preview origin is not representable.");
+    impl->requestedOriginOutput = impl->originOutput;
     impl->callback = std::make_unique<AudioCallbackState>();
     if (!playback::PrepareScheduledSoundCapacity(*impl->callback, impl->events.size()))
       throw std::runtime_error("Could not allocate preview schedule.");
@@ -499,9 +703,18 @@ bool PagedPreviewSource::Begin(int actualOutputRate, bool skipLeadingSilence) {
       asset.sound = std::make_unique<SoundData>();
       asset.sound->pagedOutput = std::make_shared<PagedPcmSound>();
     }
-    for (auto &event : impl->events)
+    impl->pastDurationFrames = std::make_unique<std::atomic<std::uint64_t>[]>(impl->assets.size());
+    for (std::size_t index = 0; index < impl->assets.size(); ++index)
+      impl->pastDurationFrames[index].store(std::numeric_limits<std::uint64_t>::max(), std::memory_order_relaxed);
+    for (auto &event : impl->events) {
       event.outputStart = nearestFrames(static_cast<std::uint64_t>(std::max(0LL, event.timeMicros)),
                                         actualOutputRate, 1000000);
+      auto &asset = impl->assets[event.asset];
+      if (event.outputStart < impl->requestedOriginOutput)
+        asset.latestPastStart = std::max(asset.latestPastStart.value_or(0), event.outputStart);
+      else
+        asset.firstFutureStart = std::min(asset.firstFutureStart.value_or(event.outputStart), event.outputStart);
+    }
     impl->worker = std::jthread([state = impl.get()] { state->run(); });
     return true;
   } catch (const std::exception &error) {

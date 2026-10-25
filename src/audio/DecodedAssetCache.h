@@ -70,6 +70,8 @@ public:
   std::shared_ptr<const DecodedSound> LoadBytes(const std::filesystem::path &path,
       const std::vector<unsigned char> &bytes, const std::atomic_bool &cancelled,
       std::stop_token stop = {}, std::string *error = nullptr, FailureKind *failure = nullptr);
+  // Identity-checked lookup only; never opens a decoder or reads asset payloads.
+  std::shared_ptr<const DecodedSound> Find(const std::filesystem::path &path);
   // Metadata identity of a regular file or an archive container.
   struct SourceSnapshot {
     std::filesystem::path path;

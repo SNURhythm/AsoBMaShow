@@ -51,3 +51,33 @@ Gameplay keeps its existing path. Custom selectors reuse their preloaded chart
 and native decoded PCM for synthesized preview playback; lifecycle boundaries
 cancel and drain the preview worker before handing audio to gameplay.
 No dependencies or parser changes are needed.
+
+## Bounded overlap preparation follow-up
+
+The user requested cheap audio-length probing before highlight playback and a
+15-second lookback cap for durations still unknown after probing. A known or
+cached longer sound must keep its true overlap. This cap applies only to unknown
+past sounds, not to the duration of preview playback or future scheduled sounds.
+
+Use bounded WAV/FLAC metadata reads and the existing conservative Vorbis probe
+for small complete Ogg files, with bounded identification/final-page reads for
+large Ogg files. Unsupported or malformed metadata stays unknown; do not ask a generic decoder to scan a file just to obtain a length.
+Loose-file probes may seek over payloads but have bounded bytes/chunk counts.
+For archives inspect only bytes already delivered by the existing batch reader.
+Do not add a separate extraction pass. Reuse cached PCM before probing.
+
+Store each asset's proven bound (or the requested 15 seconds for unknowns),
+then evaluate every old onset independently. A recent instance must not keep
+an older unknown-duration instance alive outside the lookback. Use the latest
+past onset only to decide whether all prior instances can be deferred. Future
+instances remain scheduled. Prioritize opening audio, then overlap checks,
+then later sounds in next-onset order. Defer
+expired native decoding behind preview-critical preparation while still warming
+all referenced PCM for gameplay. Retain deferred archive bytes only under a
+small fixed budget; decode immediately when that budget is full. Validate source
+identity across probing/deferred decode and preserve cancellation.
+
+Metadata probing has a small bounded cost; it is not free. It avoids delaying
+first audio on irrelevant PCM decoding, but gameplay warming still eventually
+decodes those assets. Compressed archives may still require extracting their
+encoded entries before their metadata is available.
