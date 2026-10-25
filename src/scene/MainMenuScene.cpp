@@ -1691,7 +1691,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   tabLoadingOverlay_->setVisible(false);
   overlayPortal->present(tabLoadingOverlay_);
   previewFilePlayer_ = std::make_unique<MusicSelectPreviewFilePlayer>(
-      &context.jukebox.audioRuntime(), std::filesystem::path{});
+      &context.jukebox.audioRuntime(), std::filesystem::path{}, true);
   previewWorker_ = std::make_unique<MainMenuPreviewController>(
       [this](const ChartMetaRecord &request, std::atomic_bool &cancelled) {
         const auto &meta = request.meta;
@@ -8344,9 +8344,12 @@ void MainMenuScene::update(float dt) {
       }
     }
     // FFT analysis runs after releasing the selection lock, outside playback.
-    const float level = currentPreview ? previewPlayer_.GetOutputLevel() : 0;
-    chartDetailsView_->updatePreviewGlow(level, dt, [this] {
-      return previewPlayer_.GetOutputSpectrum();
+    const float fileLevel = currentPreview && previewFilePlayer_
+        ? previewFilePlayer_->outputLevel() : 0;
+    const float level = currentPreview ? std::max(fileLevel, previewPlayer_.GetOutputLevel()) : 0;
+    chartDetailsView_->updatePreviewGlow(level, dt, [this, fileLevel] {
+      return fileLevel > 0 ? previewFilePlayer_->outputSpectrum()
+                           : previewPlayer_.GetOutputSpectrum();
     });
   }
   updatePreviewVisuals();

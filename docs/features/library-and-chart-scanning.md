@@ -98,7 +98,9 @@ to loop the authored `#PREVIEW` asset or a scanner-discovered `preview*` file;
 missing/unreadable files use the configured Highlight/Beginning fallback.
 The built-in selector drives BGA from absolute consumed chart frames for
 synthesized previews. Authored preview files have no chart-time alignment, so
-BGA is not advanced. Custom selectors reuse preloaded native PCM, including
+BGA is not advanced. Both synthesized and authored previews drive the built-in
+jacket pulse and spectrum from audible output, including playback gain and mute.
+Custom selectors reuse preloaded native PCM, including
 sounds retained when changing difficulty, and drain previews before gameplay.
 
 Temporary media writes and cleanup share one mutation lock. Cleanup uses the

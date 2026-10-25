@@ -14,8 +14,10 @@
 class MusicSelectPreviewFilePlayer {
 public:
   explicit MusicSelectPreviewFilePlayer(AudioWrapper *audio,
-                                       std::filesystem::path defaultPath)
-      : audio_(audio), defaultKey_(fspath_to_path_t(defaultPath)) {}
+                                       std::filesystem::path defaultPath,
+                                       bool analyzeOutput = false)
+      : audio_(audio), defaultKey_(fspath_to_path_t(defaultPath)),
+        analyzeOutput_(analyzeOutput) {}
 
   ~MusicSelectPreviewFilePlayer() {
     stopCurrent();
@@ -58,7 +60,9 @@ public:
       if (isDefault) defaultHandle_.reset();
       return false;
     }
+    if (analyzeOutput_) audio_->setOutputAnalysisEnabled(true);
     if (!audio_->playSkinSound(handle, gain, loop)) {
+      if (analyzeOutput_) audio_->setOutputAnalysisEnabled(false);
       (void)audio_->disposeSkinSound(handle);
       if (isDefault) defaultHandle_.reset();
       return false;
@@ -70,6 +74,7 @@ public:
     // into gameplay.
     if (cancellation.load(std::memory_order_acquire) ||
         stop.stop_requested()) {
+      if (analyzeOutput_) audio_->setOutputAnalysisEnabled(false);
       (void)audio_->stopSkinSound(handle);
       (void)audio_->disposeSkinSound(handle);
       if (isDefault) defaultHandle_.reset();
@@ -81,6 +86,7 @@ public:
   }
 
   void stopCurrent() {
+    if (audio_ && analyzeOutput_) audio_->setOutputAnalysisEnabled(false);
     if (!audio_ || !playingHandle_) return;
     (void)audio_->stopSkinSound(*playingHandle_);
     if (playingKey_ != defaultKey_) {
@@ -90,9 +96,17 @@ public:
     playingKey_ = {};
   }
 
+  [[nodiscard]] float outputLevel() const noexcept {
+    return audio_ && analyzeOutput_ ? audio_->outputLevel() : 0;
+  }
+  audio::Spectrum outputSpectrum() {
+    return audio_ && analyzeOutput_ ? audio_->outputSpectrum() : audio::Spectrum{};
+  }
+
 private:
   AudioWrapper *audio_;
   path_t defaultKey_;
+  bool analyzeOutput_;
   std::optional<audio::SkinSoundHandle> defaultHandle_;
   std::optional<audio::SkinSoundHandle> playingHandle_;
   path_t playingKey_{};

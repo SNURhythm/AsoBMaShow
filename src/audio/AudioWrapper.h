@@ -3,6 +3,7 @@
 #include "AudioMix.h"
 #include "DecodedAssetCache.h"
 #include "AudioDeviceManager.h"
+#include "AudioOutputMeter.h"
 #include "../settings/AudioVideoSettings.h"
 
 #include <miniaudio.h>
@@ -106,6 +107,7 @@ struct AudioPresentationSegment {
 constexpr size_t kAudioPresentationHistoryCapacity = 1024;
 
 struct UserData {
+  audio::AudioOutputMeter outputMeter;
   audio::RenderTiming pendingRenderTiming{};
   std::atomic_bool applicationSuspended{false};
   // Atomic tuples share the anchor's seqlock. Readers can inspect old native
@@ -259,6 +261,10 @@ public:
                std::string &errorMessage) override;
   void setVolumes(const audio::Volumes &volumes) override;
   void setVolumes(const player_settings::AudioSettings &settings);
+
+  void setOutputAnalysisEnabled(bool enabled) noexcept { userData.outputMeter.setEnabled(enabled); }
+  [[nodiscard]] float outputLevel() const noexcept { return userData.outputMeter.level(); }
+  audio::Spectrum outputSpectrum() { return userData.outputMeter.spectrum(); }
 
   // Called after confirmed stop, before owner release, under the lifecycle lock.
   // The callback must not reenter this wrapper or restart the shared backend.

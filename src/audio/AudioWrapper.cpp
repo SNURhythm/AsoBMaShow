@@ -640,6 +640,11 @@ void configurableBackendRender(void *output, std::uint32_t frameCount,
                                int outputChannels, void *userData) {
   mixAudio(output, static_cast<ma_uint32>(frameCount), outputChannels,
            static_cast<UserData *>(userData));
+  if (output && frameCount && outputChannels == 2 && userData) {
+    auto &data = *static_cast<UserData *>(userData);
+    data.outputMeter.push(static_cast<const short *>(output), frameCount,
+                          outputChannels, data.sampleRate->load(std::memory_order_relaxed));
+  }
 }
 
 void configurableBackendTiming(audio::RenderTiming timing, void *userData) {

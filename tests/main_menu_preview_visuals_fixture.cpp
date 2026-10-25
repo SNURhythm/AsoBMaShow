@@ -16,6 +16,7 @@
 #include "ui/PresentationSchedule.h"
 #include "RAII.h"
 #include "audio/ChartPreviewPolicy.h"
+#include "audio/AudioSpectrum.h"
 #include "music_select/MusicSelectPreview.h"
 
 // Run the production worker and clock adapter with device/parser boundaries
@@ -94,8 +95,12 @@ struct Player {
   void SetRequest(Request) {}
   void SetGain(float) {}
   State GetState() const { return state; }
+  float GetOutputLevel() const { return state.playing ? 0.4F : 0; }
+  audio::Spectrum GetOutputSpectrum() const { return {0.4F}; }
 };
 struct FilePlayer {
+  explicit FilePlayer(void *, std::filesystem::path, bool analyze = false) : analyze(analyze) {}
+  bool analyze;
   bool available = false, playing = false;
   float gain = 1;
   std::filesystem::path playedPath;
@@ -107,8 +112,12 @@ struct FilePlayer {
     return playing = available;
   }
   void stopCurrent() { playing = false; }
+  float outputLevel() const { return playing && analyze ? gain * 0.6F : 0; }
+  audio::Spectrum outputSpectrum() const { return {playing && analyze ? gain * 0.8F : 0}; }
 };
+using MusicSelectPreviewFilePlayer = FilePlayer;
 struct Visuals {
+  Visuals &audioRuntime() { return *this; }
   std::vector<std::string> events;
   bool loaded = true;
   std::function<void(std::atomic_bool &)> duringLoad;
@@ -149,6 +158,14 @@ struct ReadyFlag {
   void store(bool ready) { value.store(ready); if (ready && onReady) onReady(); }
   ReadyFlag &operator=(bool ready) { store(ready); return *this; }
 };
+struct Details {
+  float level = 0;
+  audio::Spectrum spectrum{};
+  void updatePreviewGlow(float value, float, std::function<audio::Spectrum()> read) {
+    level = value;
+    spectrum = value > 0 ? read() : audio::Spectrum{};
+  }
+};
 struct Scene {
   struct Context {
     Visuals jukebox;
@@ -164,8 +181,12 @@ struct Scene {
       } audioVideo;
     } settings;
   } context;
+  enum class Tab { Play, Settings };
+  Tab activeTab_ = Tab::Play;
+  std::optional<ChartMetaRecord> selectedChartRecord;
+  std::unique_ptr<Details> chartDetailsView_ = std::make_unique<Details>();
   Player previewPlayer_;
-  std::unique_ptr<FilePlayer> previewFilePlayer_ = std::make_unique<FilePlayer>();
+  std::unique_ptr<FilePlayer> previewFilePlayer_;
   std::shared_ptr<audio::DecodedAssetCache> previewDecodedAssets_;
   std::uint64_t previewStartFrame_ = 0;
   bool previewVisualsLoaded_ = false;
@@ -177,7 +198,7 @@ struct Scene {
   std::mutex selectedChartMutex;
   std::shared_ptr<bms_parser::Chart> selectedChart;
   ReadyFlag selectedChartMediaReady;
-  Scene() { previewPlayer_.events = &context.jukebox.events; }
+  Scene() { previewPlayer_.events = &context.jukebox.events; FILE_PLAYER_CONSTRUCTION }
   void setSelectedChart(std::shared_ptr<bms_parser::Chart> chart, bool ready) {
     selectedChart = std::move(chart); selectedChartMediaReady = ready;
   }
@@ -186,6 +207,7 @@ struct Scene {
     PREVIEW_PROCESS
   void stopPlayback() PREVIEW_STOP
   SYNC_METHOD
+  GLOW_METHOD
 };
 void require(bool value, const char *message) {
   if (!value) throw std::runtime_error(message);
@@ -214,6 +236,14 @@ int main() {
       modes.process({.meta = {.BmsPath = "chart.bms", .Preview = "preview.ogg"}}, cancelled);
       require(modes.previewFilePlayer_->playing && !modes.previewPlayer_.state.playing && modes.selectedChartMediaReady,
               "usable preview file loops and still prepares gameplay resources");
+      modes.selectedChartRecord = ChartMetaRecord{.meta = {.BmsPath = "chart.bms"}};
+      modes.updateGlow(0.016F);
+      require(modes.chartDetailsView_->level == 0.6F && modes.chartDetailsView_->spectrum[0] == 0.8F,
+              "authored preview output drives both jacket pulse and spectrum");
+      modes.selectedChartRecord->meta.BmsPath = "next.bms";
+      modes.updateGlow(0.016F);
+      require(modes.chartDetailsView_->level == 0, "old file audio cannot pulse the next selection");
+      modes.selectedChartRecord->meta.BmsPath = "chart.bms";
       for (const float master : {0.0F, 0.25F}) {
         modes.context.settings.audioVideo.audio.masterVolume = master;
         modes.process({.meta = {.BmsPath = "chart.bms", .Preview = "preview.ogg"}}, cancelled);
