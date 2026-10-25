@@ -8,7 +8,26 @@ Scope: `SkinType.MUSIC_SELECT` (type 5) `.luaskin` support routed through the
 new `MusicSelectScene`, as designed in
 `docs/superpowers/specs/2026-09-01-beatoraja-lua-music-select-design.md`.
 
-Last updated: 2026-09-10.
+Last updated: 2026-10-25.
+
+## Random select (2026-10-25)
+
+Custom music-select skins now receive a `[RANDOM] RANDOM SELECT` executable
+bar at the beginning of any filtered list with at least two playable charts.
+Confirming it chooses uniformly from that list and launches through the normal
+play, autoplay, or practice path. The selector stays on the random bar after
+returning from play. Missing charts, folders, courses, and archive extraction
+actions are excluded. Existing random-select skin properties (including 1030)
+and bar artwork apply without skin changes.
+
+SQL-backed directories use their filtered count and load only the chosen page;
+indexed directories use their compact metadata index. Random selection does not
+materialize a whole library. Filters and sorting preserve ordinary song
+selection and rebuild the eligible pool.
+
+This implements Beatoraja's standard random-select entry. Its optional
+`random/default.json` score-filtered categories (such as No Play and Failed)
+are not imported.
 
 ## Unzip All (2026-09-10)
 

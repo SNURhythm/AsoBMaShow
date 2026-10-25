@@ -66,10 +66,12 @@ musicSelectSelectedHash(const MusicSelectBar *bar, bool sha256);
 class MusicSelectBarManager final {
 public:
   explicit MusicSelectBarManager(MusicSelectProjection = {},
-                                 MusicSelectBarManagerConfig = {});
+                                 MusicSelectBarManagerConfig = {},
+                                 bool randomSelect = false);
 
   [[nodiscard]] bool open(const MusicSelectBarId &);
   [[nodiscard]] bool openSelected();
+  [[nodiscard]] std::optional<MusicSelectBar> resolveRandomSelection() const;
   [[nodiscard]] bool installChildren(const MusicSelectBarId &,
                                      std::vector<MusicSelectBar>);
   [[nodiscard]] bool installRowProvider(const MusicSelectBarId &,
@@ -121,4 +123,6 @@ private:
   int movementDirection_ = 0;
   std::int64_t movementEndMillis_ = 0;
   MusicSelectBarManagerConfig config_;
+  bool randomSelect_ = false;
+  std::vector<std::size_t> randomRows_;
 };

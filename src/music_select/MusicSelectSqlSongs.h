@@ -31,6 +31,9 @@ public:
   MusicSelectSqlSongs(MusicSelectSqlSongs &&) = delete;
   MusicSelectSqlSongs &operator=(MusicSelectSqlSongs &&) = delete;
   [[nodiscard]] std::size_t size() const noexcept override;
+  [[nodiscard]] std::size_t randomCandidateCount() const noexcept override {
+    return size();
+  }
   [[nodiscard]] std::shared_ptr<MusicSelectRowProvider> clone() const override;
   [[nodiscard]] const MusicSelectBar &at(std::size_t) const override;
   [[nodiscard]] std::optional<std::size_t>

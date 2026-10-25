@@ -9,10 +9,57 @@
 #include <cmath>
 #include <compare>
 #include <ranges>
+#include <random>
 #include <string_view>
 #include <utility>
 
 namespace {
+
+MusicSelectBar randomSelectBar() {
+  return {.id = {"action:random-select"},
+          .kind = skin::MusicSelectBarKind::Executable,
+          .title = "[RANDOM] RANDOM SELECT",
+          .presentation = {.kind = skin::MusicSelectBarKind::Executable,
+                           .title = "[RANDOM] RANDOM SELECT", .exists = true},
+          .selectable = true};
+}
+
+// A presentation-only prefix keeps the underlying provider's page offsets,
+// identity lookup, and retained snapshots intact.
+class RandomSelectRows final : public MusicSelectRowProvider {
+public:
+  explicit RandomSelectRows(std::shared_ptr<MusicSelectRowProvider> source)
+      : source_(std::move(source)) {}
+  std::shared_ptr<MusicSelectRowProvider> clone() const override {
+    return std::make_shared<RandomSelectRows>(source_->clone());
+  }
+  std::size_t size() const noexcept override { return source_->size() + 1; }
+  const MusicSelectBar &at(std::size_t index) const override {
+    return index == 0 ? random_ : source_->at(index - 1);
+  }
+  std::optional<std::size_t> indexOf(const MusicSelectBarId &id) const override {
+    if (id == random_.id) return 0;
+    const auto index = source_->indexOf(id);
+    return index ? std::optional(*index + 1) : std::nullopt;
+  }
+  std::pair<std::string, std::string> configure(
+      const std::string &mode, const std::string &difficulty,
+      const std::string &sort) override {
+    return source_->configure(mode, difficulty, sort);
+  }
+  const std::string &diagnostic() const noexcept override {
+    return source_->diagnostic();
+  }
+  std::size_t randomCandidateCount() const noexcept override {
+    return source_->randomCandidateCount();
+  }
+  const MusicSelectBar &randomCandidateAt(std::size_t index) const override {
+    return source_->randomCandidateAt(index);
+  }
+private:
+  std::shared_ptr<MusicSelectRowProvider> source_;
+  MusicSelectBar random_ = randomSelectBar();
+};
 
 constexpr std::array<std::string_view, 10> kModeFilters{
     "ALL", "7KEY", "14KEY", "9KEY", "5KEY",
@@ -254,8 +301,10 @@ MusicSelectTableContext musicSelectTableContextForLaunch(
 }
 
 MusicSelectBarManager::MusicSelectBarManager(MusicSelectProjection projection,
-                                             MusicSelectBarManagerConfig config)
-    : projection_(std::move(projection)), config_(std::move(config)) {
+                                             MusicSelectBarManagerConfig config,
+                                             bool randomSelect)
+    : projection_(std::move(projection)), config_(std::move(config)),
+      randomSelect_(randomSelect) {
   rebuildProjectionIndex();
   rebuildRows();
 }
@@ -273,6 +322,7 @@ const MusicSelectBar *MusicSelectBarManager::selected() const {
 void MusicSelectBarManager::rebuildRows(
     std::optional<MusicSelectBarId> preferred, std::size_t fallbackIndex) {
   ++rowsRevision_;
+  randomRows_.clear();
   rowProvider_.reset();
   rowIndex_.clear();
   rows_ = std::make_shared<std::vector<MusicSelectBar>>();
@@ -300,6 +350,9 @@ void MusicSelectBarManager::rebuildRows(
       config_.modeFilter = std::move(resolved.first);
       config_.difficultyFilter = std::move(resolved.second);
       state.configuration = config_;
+      if (randomSelect_ && rowProvider_->randomCandidateCount() >= 2) {
+        rowProvider_ = std::make_shared<RandomSelectRows>(rowProvider_);
+      }
       selectedIndex_ = rowCount() == 0 ? 0 : std::min(fallbackIndex, rowCount() - 1);
       if (preferred) {
         if (const auto index = rowProvider_->indexOf(*preferred);
@@ -366,6 +419,18 @@ void MusicSelectBarManager::rebuildRows(
       });
     }
   }
+  if (randomSelect_) {
+    for (std::size_t index = 0; index < rows_->size(); ++index) {
+      if (musicSelectIsRandomCandidate((*rows_)[index])) {
+        randomRows_.push_back(index + 1);
+      }
+    }
+    if (randomRows_.size() >= 2) {
+      rows_->insert(rows_->begin(), randomSelectBar());
+    } else {
+      randomRows_.clear();
+    }
+  }
   rowIndex_.clear();
   rowIndex_.reserve(rows_->size());
   for (std::size_t index = 0; index < rows_->size(); ++index) {
@@ -397,6 +462,22 @@ bool MusicSelectBarManager::open(const MusicSelectBarId &id) {
     return false;
   }
   return true;
+}
+
+std::optional<MusicSelectBar>
+MusicSelectBarManager::resolveRandomSelection() const {
+  const auto *bar = selected();
+  if (!bar || !musicSelectIsRandomSelectBar(*bar)) return std::nullopt;
+  const auto count = rowProvider_ ? rowProvider_->randomCandidateCount()
+                                  : randomRows_.size();
+  if (count < 2) return std::nullopt;
+  static thread_local std::mt19937 generator(std::random_device{}());
+  const auto index = std::uniform_int_distribution<std::size_t>(0, count - 1)(generator);
+  // Copy before any other page fetch can evict the provider's cached row.
+  auto song = rowProvider_ ? rowProvider_->randomCandidateAt(index)
+                           : (*rows_)[randomRows_[index]];
+  if (!musicSelectIsRandomCandidate(song)) return std::nullopt;
+  return song;
 }
 
 bool MusicSelectBarManager::openSelected() {

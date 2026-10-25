@@ -122,6 +122,8 @@ void MusicSelectSongIndex::add(const ChartMetaRecord &record,
       .difficulties = difficultyMask(record),
       .hidden = (record.songReviewFavorite & (4 | 8)) != 0,
       .exists = !record.unavailable && !meta.BmsPath.empty(),
+      .randomCandidate = !record.unavailable && !record.solidArchive &&
+                         !meta.BmsPath.empty(),
       .hasScore = score.has_value(),
       .hasScoreRate = scoreNotes != 0,
       .hasDuration = score && score->averageJudgeMicros.has_value()};
@@ -242,10 +244,16 @@ std::pair<std::string, std::string> MusicSelectSongIndex::configure(
     checkCancelled(stop);
     positions[rows[position]] = position;
   }
+  std::vector<std::size_t> randomRows;
+  for (std::size_t position = 0; position < rows.size(); ++position) {
+    checkCancelled(stop);
+    if (entries_[rows[position]].randomCandidate) randomRows.push_back(position);
+  }
   Configuration configuration{std::string(mode), std::string(difficulty),
                                 std::string(sort), resolved};
   checkCancelled(stop);
   rows_.swap(rows);
+  randomRows_.swap(randomRows);
   positions_.swap(positions);
   configuration_ = std::move(configuration);
   return resolved;

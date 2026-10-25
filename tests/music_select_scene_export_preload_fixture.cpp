@@ -234,6 +234,9 @@ using MusicSelectBar = Bar;
 bool musicSelectIsSolidArchiveDirectory(const Bar &) { return false; }
 bool musicSelectIsSolidArchiveAction(const Bar &) { return false; }
 bool musicSelectIsUnzipAllAction(const Bar &) { return false; }
+bool musicSelectIsRandomSelectBar(const Bar &bar) {
+  return bar.id.value == "action:random-select";
+}
 struct Bars {
   struct Rows {
     std::string error;
@@ -244,6 +247,12 @@ struct Bars {
   void setSelectedPosition(float) {}
   std::vector<Bar> rows{Bar{}};
   std::size_t selectedIndex = 0;
+  std::optional<Bar> randomSong;
+  int randomResolutions = 0;
+  std::optional<Bar> resolveRandomSelection() {
+    ++randomResolutions;
+    return randomSong;
+  }
   const Bars &readView() const { return *this; }
   std::size_t rowCount() const { return rows.size(); }
   const Bar &rowAt(std::size_t index) const { return rows.at(index); }

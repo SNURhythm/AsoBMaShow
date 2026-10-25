@@ -2345,7 +2345,19 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
       context.appInBackground.load(std::memory_order_acquire)) return;
   const auto snapshot = bars_.readView();
   if (snapshot.selectedIndex >= snapshot.rowCount()) return;
-  const auto &selected = snapshot.rowAt(snapshot.selectedIndex);
+  auto selected = snapshot.rowAt(snapshot.selectedIndex);
+  const bool randomSelect = musicSelectIsRandomSelectBar(selected);
+  if (randomSelect) {
+    const auto song = bars_.resolveRandomSelection();
+    if (!song) {
+      if (snapshot.rowProvider && !snapshot.rowProvider->diagnostic().empty() &&
+          !snapshot.directoryBars.empty()) {
+        requestDirectoryLoad(snapshot.directoryBars.back());
+      }
+      return;
+    }
+    selected = *song;
+  }
   if (snapshot.rowProvider && !snapshot.rowProvider->diagnostic().empty() &&
       !selected.chart && !snapshot.directoryBars.empty()) {
     requestDirectoryLoad(snapshot.directoryBars.back());
@@ -2437,7 +2449,7 @@ void MusicSelectScene::launchSelected(bool autoplay, bool practice) {
   // loading this exact chart: keep it running (don't re-do the parse + jukebox
   // load) and launch from its result when it lands. The decide overlay stays
   // up while the load completes.
-  if (!launching_ && preloadWorker_ != nullptr &&
+  if (!randomSelect && !launching_ && preloadWorker_ != nullptr &&
       preloadWorker_->isRequesting(fspath_to_utf8(record.meta.BmsPath))) {
     launching_ = true;
     pendingLaunch_ = PendingPreloadLaunch{record, autoplay, practice};

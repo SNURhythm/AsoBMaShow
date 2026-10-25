@@ -20,6 +20,13 @@ public:
   MusicSelectPagedSongs(MusicSelectPagedSongs &&) = delete;
   MusicSelectPagedSongs &operator=(MusicSelectPagedSongs &&) = delete;
   [[nodiscard]] std::size_t size() const noexcept override;
+  [[nodiscard]] std::size_t randomCandidateCount() const noexcept override {
+    return index_.randomCandidateCount();
+  }
+  [[nodiscard]] const MusicSelectBar &randomCandidateAt(
+      std::size_t index) const override {
+    return at(index_.randomCandidateRow(index));
+  }
   [[nodiscard]] std::shared_ptr<MusicSelectRowProvider> clone() const override;
   [[nodiscard]] const MusicSelectBar &at(std::size_t) const override;
   [[nodiscard]] std::optional<std::size_t>

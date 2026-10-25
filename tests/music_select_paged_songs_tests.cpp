@@ -40,6 +40,39 @@ ChartMetaRecord recordFor(const std::filesystem::path &path) {
   return recordAt(std::stoull(path.stem().string()));
 }
 
+void testRandomCandidatesUseFilteredIndexMetadata() {
+  MusicSelectSongIndex index("folder:/songs");
+  for (std::size_t number = 0; number < 5; ++number) {
+    auto record = recordAt(number);
+    if (number == 1) record.unavailable = true;
+    if (number == 2) record.solidArchive = true;
+    if (number == 3) record.meta.BmsPath.clear();
+    if (number == 4) record.meta.KeyMode = 14;
+    index.add(record, std::nullopt, -1);
+  }
+  index.finish();
+  int reads = 0;
+  MusicSelectPagedSongs songs(std::move(index),
+      [&](std::span<const std::filesystem::path> paths) {
+        ++reads;
+        ChartMetaPathBatchReadOutcome result{
+            .status = ChartMetaPathBatchReadStatus::Loaded};
+        for (const auto &path : paths) {
+          if (!path.empty()) result.records.push_back(recordFor(path));
+        }
+        return result;
+      }, [](const ChartMetaRecord &record) {
+        return MusicSelectRepositoryProjection::projectSong(record, "folder:/songs", {});
+      });
+  assert(songs.randomCandidateCount() == 2 && reads == 0);
+  assert(songs.randomCandidateAt(0).chart->meta.BmsPath == "/songs/0.bms");
+  assert(songs.randomCandidateAt(1).chart->meta.BmsPath == "/songs/4.bms");
+  const auto before = reads;
+  songs.configure("7KEY", "ALL", "TITLE");
+  assert(songs.randomCandidateCount() == 1 && reads == before);
+  assert(songs.randomCandidateAt(0).chart->meta.BmsPath == "/songs/0.bms");
+}
+
 void testRichReadsAndReplayWorkArePaged() {
   std::size_t readCalls = 0;
   std::size_t projected = 0;
@@ -259,6 +292,7 @@ int main(int argc, char **argv) {
     benchmark(argv[2], std::stoull(argv[3]));
     return 0;
   }
+  testRandomCandidatesUseFilteredIndexMetadata();
   testRichReadsAndReplayWorkArePaged();
   testMissingRecordsKeepTheirLogicalSlots();
   testStorageFailuresAreBoundedAndRetryable();

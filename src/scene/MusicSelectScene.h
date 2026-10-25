@@ -232,7 +232,7 @@ private:
   RecentScoreImprovements recentScoreImprovements_;
   bool recentScoreImprovementsLoaded_ = false;
   std::shared_ptr<const MusicSelectRepositoryMetadata> repositoryMetadata_;
-  MusicSelectBarManager bars_;
+  MusicSelectBarManager bars_{{}, {}, true};
   MusicSelectInputProcessor inputProcessor_{{}};
   replay::ReplayExportJob recordsExportJob_;
   MusicSelectPreviewController previewController_;

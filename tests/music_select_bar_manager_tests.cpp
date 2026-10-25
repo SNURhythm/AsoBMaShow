@@ -49,6 +49,58 @@ MusicSelectProjection fixture(std::uint64_t revision = 1) {
   return value;
 }
 
+void testRandomSelectUsesOnlyPlayableFilteredSongs() {
+  auto projection = fixture();
+  for (std::size_t i = 2; i < projection.bars.size(); ++i) {
+    auto &bar = projection.bars[i];
+    bar.chart.emplace();
+    bar.chart->meta.BmsPath = bar.id.value + ".bms";
+    bar.chart->meta.KeyMode = i == 3 ? 14 : 7;
+    bar.presentation.exists = true;
+  }
+  auto missing = projection.bars[2];
+  missing.id = {"song:missing"};
+  missing.chart->unavailable = true;
+  auto archive = projection.bars[2];
+  archive.id = {"action:archive"};
+  archive.kind = skin::MusicSelectBarKind::Executable;
+  archive.chart->solidArchive = true;
+  projection.bars[0].children.insert(projection.bars[0].children.end(),
+                                     {missing.id, archive.id, {"folder:b"}});
+  projection.bars.push_back(missing);
+  projection.bars.push_back(archive);
+  MusicSelectBarManager manager(projection, {}, true);
+  require(manager.readView().rowCount() == 2,
+          "folders alone do not produce a random selection row");
+  require(manager.open({"folder:a"}), "random fixture opens");
+  const auto view = manager.readView();
+  require(view.rowCount() == 6 &&
+              view.rowAt(0).kind == skin::MusicSelectBarKind::Executable &&
+              view.rowAt(0).selectable && !view.rowAt(0).chart,
+          "random select is prepended ahead of sorted songs and folders");
+  for (int i = 0; i < 32; ++i) {
+    const auto chosen = manager.resolveRandomSelection();
+    require(chosen && (chosen->id.value == "song:1" ||
+                       chosen->id.value == "song:2"),
+            "random activation only resolves installed song rows");
+  }
+  require(manager.readView().selectedIndex == 0,
+          "resolving random selection retains the random bar for replaying");
+  manager.configure({"7KEY", "ALL", "TITLE"});
+  require(manager.readView().rowCount() == 4 &&
+              !manager.resolveRandomSelection(),
+          "one playable filtered song suppresses random selection");
+  manager.configure({"ALL", "ALL", "TITLE"});
+  require(manager.select({"song:2"}) && !manager.resolveRandomSelection(),
+          "normal song activation does not randomize");
+  manager.configure({"ALL", "ALL", "LEVEL"});
+  require(manager.readView().rowAt(manager.readView().selectedIndex).id.value ==
+              "song:2", "sorting preserves selection with a prepended random row");
+  require(manager.close() && manager.open({"folder:b"}) &&
+              manager.readView().rowCount() == 1,
+          "single-song directories do not show random select");
+}
+
 void testWrapOpenCloseAndPositionSemantics() {
   MusicSelectBarManager manager(fixture());
   require(manager.snapshot().rows.size() == 2 &&
@@ -1071,6 +1123,7 @@ int main(int argc, char **argv) {
                 !manager.select({"table:1:md5:other"}),
             "download identity fallback requires the same table context and exact MD5");
   }
+  testRandomSelectUsesOnlyPlayableFilteredSongs();
   testUnavailableSongOrdering();
   testPagedRowsStayLazyAcrossNavigationAndConfiguration();
   testPagedProviderLifetimeAndExplicitEnumeration();
