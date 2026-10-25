@@ -29,10 +29,15 @@ inline long long FindChartPreviewHighlightMicros(const bms_parser::Chart &chart)
       if (timeline->Timing < previous || timeline->Timing < 0) return 0;
       previous = timeline->Timing;
       double activity = 0;
-      // Match scheduled audible onsets: invisible notes, mines and silent LN
-      // tails are not extra musical attacks. Background splits get less weight.
-      for (const auto *note : timeline->Notes)
-        if (note && note->Wav != bms_parser::Parser::NoWav) activity += 1;
+      // Placed notes carry musical density even without assigned keysounds.
+      // Invisible notes, mines and silent LN tails are not extra attacks.
+      // Audible background splits contribute with less weight.
+      for (auto *note : timeline->Notes) {
+        if (!note) continue;
+        if (note->Wav == bms_parser::Parser::NoWav && note->IsLongNote() &&
+            static_cast<const bms_parser::LongNote *>(note)->IsTail()) continue;
+        activity += 1;
+      }
       for (const auto *note : timeline->BackgroundNotes)
         if (note && note->Wav != bms_parser::Parser::NoWav) activity += 0.5;
       if (!activity) continue;

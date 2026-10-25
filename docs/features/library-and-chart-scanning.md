@@ -83,13 +83,16 @@ destruction join replay/export preparation before preview work, while callback
 dependencies remain alive.
 
 Chart previews default to a timing-based highlight with a 300 ms fade-in.
-The detector scores sustained note/background-sound activity over 12-second
-windows at measure boundaries, excluding the intro and late outro. Sparse bins
+The detector scores sustained placed-note and background-sound activity over
+12-second windows at measure boundaries, excluding the intro and late outro.
+Placed notes count even without keysounds; silent long-note tails do not add
+extra attacks. Sparse bins
 keep analysis linear in chart data, without audio decoding or duration-sized
 allocations. Short or uninformative charts fall back to the beginning. This is
 an activity estimate, not chorus recognition. Beginning preserves the original
-start and leading-silence trimming. Preview File loops the authored `#PREVIEW`
-asset; missing/unreadable files use the configured Highlight/Beginning fallback.
+start and leading-silence trimming. Preview File uses the shared library metadata
+to loop the authored `#PREVIEW` asset or a scanner-discovered `preview*` file;
+missing/unreadable files use the configured Highlight/Beginning fallback.
 The built-in selector drives BGA from absolute consumed chart frames for
 synthesized previews. Authored preview files have no chart-time alignment, so
 BGA is not advanced. Custom selectors reuse preloaded native PCM, including

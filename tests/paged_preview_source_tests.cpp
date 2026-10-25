@@ -196,11 +196,15 @@ void testHighlightAndReuse(const std::filesystem::path &root) {
 }
 void testHighlightSelection(const std::filesystem::path &root) {
   std::string body;
+  std::string unkeyedBody = "#00001:01\n";
   for (int measure = 0; measure < 60; ++measure) {
     char prefix[16];
     std::snprintf(prefix, sizeof(prefix), "#%03d11:", measure);
     body += std::string(prefix) +
         (measure >= 20 && measure < 28 ? "01010101010101010101010101010101" : "01") + "\n";
+    // 03 has no WAV definition: these are placed notes over a single BGM.
+    unkeyedBody += std::string(prefix) +
+        (measure >= 20 && measure < 28 ? "03030303030303030303030303030303" : "03") + "\n";
   }
   // An isolated pile of BGM triggers must not beat sustained musical activity.
   for (int i = 0; i < 200; ++i) body += "#01001:01\n";
@@ -210,6 +214,8 @@ void testHighlightSelection(const std::filesystem::path &root) {
   require(audio::FindChartPreviewHighlightMicros(*parsed) ==
               audio::FindChartPreviewHighlightMicros(*parsed),
           "highlight must be deterministic");
+  require(audio::FindChartPreviewHighlightMicros(*chart(root, unkeyedBody)) == 40'000'000,
+          "placed notes without keysounds must locate the active section over a single BGM");
   auto shortChart = chart(root, "#00011:01\n#00411:01010101\n");
   require(audio::FindChartPreviewHighlightMicros(*shortChart) == 0,
           "short charts preserve the beginning");
