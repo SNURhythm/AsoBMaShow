@@ -31,14 +31,31 @@ std::vector<ReplayKeysoundEvent> resolveReplayKeysounds(
   std::vector<ReplayKeysoundEvent> result;
   result.reserve(events.size());
   for (const auto &event : events) {
-    if (event.action != ReplayEventAction::Press ||
+    const bool mine = event.action == ReplayEventAction::Mine;
+    if ((!mine && event.action != ReplayEventAction::Press) ||
         !replayEventAllowedForPlayback(event, allowedRange,
                                       preparationRange)) {
       continue;
     }
 
     gameplay::NoteId soundNoteId = gameplay::kInvalidNoteId;
-    if (event.noteTimeMicros >= 0) {
+    if (mine && event.noteTimeMicros >= 0) {
+      // Mines are deliberately absent from the manual keysound/lane-note
+      // indexes. Resolve only an actual detonation, using the timed identities.
+      const auto notes = definition.chronologicalNotes();
+      auto found = std::ranges::lower_bound(
+          notes, event.noteTimeMicros, {}, [&](gameplay::NoteId id) {
+            return definition.note(id).timingMicros;
+          });
+      for (; found != notes.end(); ++found) {
+        const auto &note = definition.note(*found);
+        if (note.timingMicros != event.noteTimeMicros) break;
+        if (note.kind == gameplay::NoteKind::Landmine && note.lane == event.lane) {
+          soundNoteId = *found;
+          break;
+        }
+      }
+    } else if (!mine && event.noteTimeMicros >= 0) {
       const auto laneNotes = definition.laneNotes(event.lane);
       const auto found = std::ranges::lower_bound(
           laneNotes, event.noteTimeMicros, {}, [&](gameplay::NoteId id) {
@@ -48,7 +65,7 @@ std::vector<ReplayKeysoundEvent> resolveReplayKeysounds(
           definition.note(*found).timingMicros == event.noteTimeMicros) {
         soundNoteId = *found;
       }
-    } else {
+    } else if (!mine) {
       const auto laneKeysounds = definition.laneKeysoundNotes(event.lane);
       const auto selection = gameplay::selectManualKeysound(
           laneKeysounds, std::span<const gameplay::NoteId>{},

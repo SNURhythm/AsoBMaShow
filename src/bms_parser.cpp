@@ -68,6 +68,21 @@ int id(const Value &value) {
   if (n > INT32_MAX) throw std::runtime_error("Resource ID out of range");
   return static_cast<int>(n);
 }
+int signedInt(const Value &value) {
+  const auto n = number(value);
+  if (n < INT32_MIN || n > INT32_MAX || std::floor(n) != n)
+    throw std::runtime_error("Signed integer out of range");
+  return static_cast<int>(n);
+}
+long long frameTime(const Value &value) {
+  if (value.is<int64_t>()) return value.get<int64_t>();
+  const auto n = number(value);
+  // Integers outside int64 fall back to double in picojson. Exclude both
+  // rounded endpoints before conversion; exact limits take the path above.
+  if (n <= -9223372036854775808.0 || n >= 9223372036854775808.0 || std::floor(n) != n)
+    throw std::runtime_error("Frame time out of range");
+  return static_cast<long long>(n);
+}
 long long micros(long double value) {
   if (!std::isfinite(value) || value < 0 ||
       value >= static_cast<long double>(LLONG_MAX))
@@ -105,7 +120,8 @@ struct Position {
   double scroll = 1;
   bool scrollChange = false;
   bool bar = false;
-  int bga = -1, layer = -1, poor = -1;
+  int bga = -1, layer = -1;
+  std::optional<BgaEvent> bgaEvent;
   long long time = 0, stopMicros = 0;
   double effectiveBpm = 0, effectiveScroll = 1;
 };
@@ -284,14 +300,102 @@ std::unique_ptr<Chart> decode(const std::vector<unsigned char> &bytes,
       check();
       chart->BmpTable[id(field(header, legacy ? "ID" : "id"))] = resourcePath(field(header, "name"));
     }
+    const auto resolve = [&](int resource) {
+      return chart->BmpTable.count(resource) ? resource : BgaSequenceBlank;
+    };
+    std::map<int, std::shared_ptr<const BgaSequence>> sequences;
+    for (const auto &entry : array(field(bga, "bga_sequence"))) {
+      check();
+      if (entry.is<json::null>()) continue; // Java ignores null definitions.
+      const int sequenceId = id(field(entry, "id"));
+      const auto &frames = field(entry, "sequence");
+      if (!frames.is<json::array>()) throw std::runtime_error("Expected BGA sequence");
+      BgaSequence sequence;
+      for (const auto &frame : array(frames)) {
+        check();
+        const auto &image = field(frame, "id");
+        const bool isEnd = image.is<json::null>() || signedInt(image) == INT32_MIN;
+        // Unlike Java's raw runtime indexes, resolve authored header IDs just
+        // like direct events; arbitrary IDs must not select unrelated images.
+        sequence.push_back({frameTime(field(frame, "time")),
+                            isEnd ? BgaSequenceBlank : resolve(signedInt(image)), isEnd});
+      }
+      sequences[sequenceId] = std::make_shared<const BgaSequence>(std::move(sequence));
+    }
+    const auto sequenceFor = [&](int resource) {
+      const auto found = sequences.find(resource);
+      if (found != sequences.end()) return found->second;
+      return std::make_shared<const BgaSequence>(BgaSequence{
+          {0, resolve(resource), false}, {500, BgaSequenceBlank, true}});
+    };
     const char *fields[] = {legacy ? "bgaNotes" : "bga_events", legacy ? "layerNotes" : "layer_events", legacy ? "poorNotes" : "poor_events"};
     for (int layer = 0; layer < 3; ++layer) {
       for (const auto &event : array(field(bga, fields[layer]))) {
         check();
-        const int resource = id(field(event, legacy ? "ID" : "id"));
         auto &pos = positions[tick(field(event, "y"))];
-        (layer == 0 ? pos.bga : layer == 1 ? pos.layer : pos.poor) = resource;
-        if (chart->BmpTable.count(resource)) chart->ReferencedBmpTable[resource] = chart->BmpTable.at(resource);
+        if (layer == 0) {
+          const int resource = resolve(id(field(event, legacy ? "ID" : "id")));
+          if (resource != BgaSequenceBlank) pos.bga = resource;
+          continue;
+        }
+        BgaEvent decoded;
+        if (layer == 2) {
+          decoded.Condition = BgaEventCondition::Miss;
+          decoded.Interval = 1;
+          decoded.Sequences.push_back(sequenceFor(id(field(event, legacy ? "ID" : "id"))));
+        } else {
+          const auto condition = string(field(event, "condition"));
+          if (condition == "miss") decoded.Condition = BgaEventCondition::Miss;
+          else if (condition == "play") decoded.Condition = BgaEventCondition::Play;
+          decoded.Interval = signedInt(field(event, "interval"));
+          const auto &idSet = field(event, "id_set");
+          if (decoded.Condition != BgaEventCondition::Always || !idSet.is<json::null>())
+            pos.layer = -1;
+          if (idSet.is<json::null>()) {
+            const int resource = id(field(event, legacy ? "ID" : "id"));
+            decoded.Sequences.push_back(sequenceFor(resource));
+            if (sequences.count(resource)) pos.layer = -1;
+            // Standard bmson layers retain existing unconditional playback.
+            // Extended sequences/alternatives and PLAY/MISS remain metadata.
+            if (decoded.Condition == BgaEventCondition::Always && !sequences.count(resource) &&
+                resolve(resource) != BgaSequenceBlank) pos.layer = resource;
+          } else {
+            for (const auto &resource : array(idSet)) {
+              check();
+              decoded.Sequences.push_back(sequenceFor(id(resource)));
+            }
+          }
+        }
+        // Java replaces the event at a pulse. Processing poor_events last
+        // gives them precedence over layer_events at that same pulse.
+        pos.bgaEvent = std::move(decoded);
+      }
+    }
+    const auto reference = [&](int resource) {
+      const auto found = chart->BmpTable.find(resource);
+      if (found != chart->BmpTable.end()) chart->ReferencedBmpTable[resource] = found->second;
+    };
+    std::set<const BgaSequence *> referencedSequences;
+    // The legacy playback API owns a flat copy per MISS event. Bound that
+    // expansion to 4 MiB of frame IDs even when a tiny input reuses a long
+    // sequence many times. Timed metadata itself shares immutable storage.
+    constexpr std::size_t maxPoorFrames = 1024 * 1024;
+    std::size_t poorFrames = 0;
+    for (const auto &[y, pos] : positions) {
+      check();
+      reference(pos.bga);
+      reference(pos.layer);
+      if (!pos.bgaEvent) continue;
+      const auto &event = *pos.bgaEvent;
+      if (event.Condition == BgaEventCondition::Miss && !event.Sequences.empty()) {
+        const auto size = event.Sequences.front()->size();
+        if (size > maxPoorFrames - poorFrames) throw std::runtime_error("Too many MISS frames");
+        poorFrames += size;
+      }
+      for (const auto &sequence : event.Sequences) {
+        check();
+        if (referencedSequences.insert(sequence.get()).second)
+          for (const auto &frame : *sequence) { check(); reference(frame.BmpId); }
       }
     }
   }
@@ -458,7 +562,7 @@ std::unique_ptr<Chart> decode(const std::vector<unsigned char> &bytes,
     }
     Measure *measure = nullptr;
     Tick measureStart = 0;
-    for (const auto &[y, pos] : positions) {
+    for (auto &[y, pos] : positions) {
       if (y == end) break;
       check();
       if (!measure || (pos.bar && y != measureStart)) {
@@ -482,7 +586,20 @@ std::unique_ptr<Chart> decode(const std::vector<unsigned char> &bytes,
       timeline->ScrollChange = pos.scrollChange;
       timeline->BgaBase = pos.bga;
       timeline->BgaLayer = pos.layer;
-      if (pos.poor >= 0) timeline->BgaPoor = BgaPoorSequence{{pos.poor}};
+      if (pos.bgaEvent) {
+        if (pos.bgaEvent->Condition == BgaEventCondition::Miss) {
+          BgaPoorSequence poor;
+          if (!pos.bgaEvent->Sequences.empty()) {
+            poor.Frames.reserve(pos.bgaEvent->Sequences.front()->size());
+            for (const auto &frame : *pos.bgaEvent->Sequences.front()) {
+              check();
+              poor.Frames.push_back(frame.BmpId);
+            }
+          }
+          timeline->BgaPoor = std::move(poor);
+        }
+        timeline->BgaEvents.push_back(std::move(*pos.bgaEvent));
+      }
       timelines[y] = timeline.get();
       measure->TimeLines.push_back(timeline.release());
     }

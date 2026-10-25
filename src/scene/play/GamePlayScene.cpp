@@ -8392,6 +8392,11 @@ void GamePlayScene::detonateLandmine(bms_parser::LandmineNote *note,
   note->IsDead = true;
   note->PlayedTime = judgeTimeMicros;
 
+  if (note->Wav != bms_parser::Parser::NoWav && !options.autoKeySound &&
+      !isReplayPlayback()) {
+    context.jukebox.playKeySound(note->Wav);
+  }
+
   if (state != nullptr) {
     if (!realtimeGameplayAuthorityActive() && !isReplayPlayback()) {
       // A fresh worker cannot inherit already committed fallback mine state.

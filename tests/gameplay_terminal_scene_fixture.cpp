@@ -60,7 +60,12 @@ struct FixtureJukebox {
   void pauseClock() { paused = true; }
   void resume() { if (beforeResume) beforeResume(); paused = false; }
   bool isPaused() const { return paused; }
-  void playKeySound(int) { require(false, "Watch must not request live keysounds"); }
+  bool allowLiveKeysounds = false;
+  std::vector<int> keysounds;
+  void playKeySound(int wav) {
+    require(allowLiveKeysounds, "Watch must not request live keysounds");
+    keysounds.push_back(wav);
+  }
 };
 
 std::deque<IOSRawTouchEvent> reminderTouches;
@@ -2513,7 +2518,35 @@ void testBackgroundGameplayProgress() {
           "Watch consumes replay input while deferring its terminal action");
 }
 
+void testLegacyMineKeysoundOnlyOnDetonation() {
+  for (const bool pressed : {false, true}) {
+    for (const bool autoKeySound : {false, true}) {
+      GamePlayScene scene;
+      auto *timeline = new bms_parser::TimeLine(8, false);
+      timeline->Timing = 1'000'000;
+      auto *mine = new bms_parser::LandmineNote(4);
+      mine->Wav = 42;
+      timeline->SetLandmineNote(1, mine);
+      scene.chart->Measures.front()->TimeLines.insert(
+          scene.chart->Measures.front()->TimeLines.begin(), timeline);
+      scene.options.autoKeySound = autoKeySound;
+      scene.context.jukebox.allowLiveKeysounds = true;
+      scene.lanePressed[1] = pressed;
+      const auto gaugeBefore = scene.state->currentGauge;
+      scene.checkPassedTimelineFromProduction(1'000'001);
+      scene.checkPassedTimelineFromProduction(1'000'002);
+      require(scene.context.jukebox.keysounds ==
+                  (pressed && !autoKeySound ? std::vector<int>{42} : std::vector<int>{}),
+              "legacy mine emits one authored keysound only on detonation with manual keysounds enabled");
+      require(mine->IsDead && mine->IsPlayed == pressed &&
+                  scene.state->currentGauge == gaugeBefore - (pressed ? 4 : 0),
+              "legacy mine audio preserves damage and expiry");
+    }
+  }
+}
+
 int main(int argc, char **argv) {
+  testLegacyMineKeysoundOnlyOnDetonation();
   testLegacyLongNoteTimingSamples();
   testRealtimeTimingSamplesFollowInputEvents();
   for (const bool ios : {false, true}) {

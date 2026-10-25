@@ -2590,18 +2590,32 @@ void testLr2MultiBadPublishesEveryTransactionWithOneKeysound() {
 
 void testWorkerSettlesExactTimeMineInputBeforeAutomaticAdvance() {
   for (bool initiallyPressed : {false, true}) {
-    bms_parser::Chart chart;
-    chart.Meta.KeyMode = 7;
-    chart.Meta.TotalNotes = 1;
-    auto *measure = new bms_parser::Measure();
-    addTimeline(*measure, 1'000'000)->SetLandmineNote(1, new bms_parser::LandmineNote(4.0F));
-    addTimeline(*measure, 2'000'000)->SetNote(2, new bms_parser::Note(1));
-    chart.Measures.push_back(measure);
+    const std::string input = R"({"version":"1.0.0","info":{"init_bpm":120},
+      "sound_channels":[{"name":"normal.wav","notes":[{"x":3,"y":960}]}],
+      "mine_channels":[{"name":"mine.wav","notes":[{"x":2,"y":480,"damage":4}]}]})";
+    bms_parser::Parser parser;
+    bms_parser::Chart *raw = nullptr;
+    std::atomic_bool cancelled{false};
+    parser.Parse(std::vector<unsigned char>(input.begin(), input.end()), &raw,
+                 false, false, cancelled, "mine.bmson");
+    std::unique_ptr<bms_parser::Chart> chart(raw);
+    require(chart && chart->Meta.TotalLandmineNotes == 1,
+            "authored bmson mine parses");
+    const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+    require(chart->ReferencedWavTable.at(definition.note(0).wav) == "mine.wav" &&
+                definition.note(0).wav != definition.note(1).wav,
+            "mine retains its distinct authored sound through gameplay preparation");
+    gameplay::GameplaySimulation autoplay(definition,
+        {.judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
+         .attempt = {.autoPlay = true}});
+    (void)autoplay.advanceTo(1'000'001, 1'000'001);
+    require(autoplay.noteState(0).dead && !autoplay.noteState(0).played &&
+                autoplay.automaticResults().empty() && autoplay.snapshot().gauge == 20.0F,
+            "autoplay passes a mine without damage or a sound transaction");
     FakeClock clock;
     FakeAudio audio;
     clock.nowMicros.store(1'000'000);
-    gameplay::RealtimeGameplayWorker worker(gameplay::buildGameplayDefinition(chart, 0),
-                                             makeConfig(clock, audio));
+    gameplay::RealtimeGameplayWorker worker(definition, makeConfig(clock, audio));
     if (initiallyPressed) {
       require(worker.enqueueInput({.epoch = 7,
           .type = gameplay::RealtimeGameplayInputType::Press,
@@ -2629,10 +2643,19 @@ void testWorkerSettlesExactTimeMineInputBeforeAutomaticAdvance() {
     {
       const auto snapshot = worker.acquireLatestSnapshot();
       require(snapshot->noteStates[0].played == !initiallyPressed &&
-                  snapshot->attempt.gauge == (initiallyPressed ? 20.0F : 16.0F),
+                  snapshot->attempt.gauge == (initiallyPressed ? 20.0F : 16.0F) &&
+                  snapshot->attempt.stagePassedNotes == 0 && snapshot->attempt.score == 0,
               "worker mine damage uses the settled exact-time lane state");
     }
     worker.stop();
+    require(audio.commitCount.load() == (initiallyPressed ? 0 : 1) &&
+                (initiallyPressed || audio.lastCommitted.load() == 0),
+            "detonated bmson mine commits its authored keysound exactly once; released mine is silent");
+    const auto replay = worker.copyReplayEventsAfterStop();
+    require(std::ranges::count_if(replay, [](const auto &event) {
+              return event.action == gameplay::GameplayReplayAction::Mine;
+            }) == (initiallyPressed ? 0 : 1),
+            "mine audio preserves the single damage replay event");
   }
 }
 

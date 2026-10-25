@@ -93,6 +93,7 @@ public:
  */
 
 
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -105,6 +106,26 @@ inline constexpr int BgaSequenceBlank = -1;
 
 struct BgaPoorSequence {
   std::vector<int> Frames;
+};
+
+enum class BgaEventCondition { Always, Play, Miss };
+
+struct BgaSequenceFrame {
+  // Authored bmson milliseconds, independent of the timeline's microseconds.
+  long long TimeMillis = 0;
+  // BmpTable key, or BgaSequenceBlank for an unresolved image or END.
+  int BmpId = BgaSequenceBlank;
+  bool IsEnd = false;
+};
+
+using BgaSequence = std::vector<BgaSequenceFrame>;
+
+struct BgaEvent {
+  BgaEventCondition Condition = BgaEventCondition::Always;
+  int Interval = 0;
+  // Nonnull immutable sequences share storage across references. Preserve
+  // every id_set alternative and its authored frame order/timing.
+  std::vector<std::shared_ptr<const BgaSequence>> Sequences;
 };
 
 class TimeLine {
@@ -121,6 +142,8 @@ public:
   int BgaBase = -1;
   int BgaLayer = -1;
   std::optional<BgaPoorSequence> BgaPoor;
+  // Effective bmson event metadata; poor_events replace same-pulse layers.
+  std::vector<BgaEvent> BgaEvents;
 
   double StopLength = 0;
   std::optional<long long> ParsedStopDuration;
@@ -833,6 +856,12 @@ std::string md5(const std::string str);
  */
 #ifndef bms_parser_picojson_h
 #define bms_parser_picojson_h
+
+// Retain authored bmson frame timestamps exactly, including Java long limits.
+#ifndef PICOJSON_USE_INT64
+#define PICOJSON_USE_INT64
+#define BMS_PARSER_UNDEF_PICOJSON_INT64
+#endif
 
 #include <algorithm>
 #include <cstdio>
@@ -1811,6 +1840,11 @@ inline std::ostream& operator<<(std::ostream& os, const bms_parser_picojson::val
 }
 #ifdef _MSC_VER
     #pragma warning(pop)
+#endif
+
+#ifdef BMS_PARSER_UNDEF_PICOJSON_INT64
+#undef PICOJSON_USE_INT64
+#undef BMS_PARSER_UNDEF_PICOJSON_INT64
 #endif
 
 #endif

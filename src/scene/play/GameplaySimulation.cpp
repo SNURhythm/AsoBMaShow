@@ -625,6 +625,7 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
     applyGaugeDelta(-note.mineDamage);
     GameplayInputResult result;
     result.noteId = id;
+    result.soundNoteId = id;
     result.hasReplayEvent = true;
     result.replayEvent = {
         .action = GameplayReplayAction::Mine,

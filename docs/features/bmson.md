@@ -53,8 +53,26 @@ rank. Nonpositive modern resolution falls back to 240 pulses per quarter note.
 
 Compatibility was checked against the local jbms-parser checkout at
 `8108cd54a19275810e1f5d2c9586f008eb6db95e`, including lane assignments, hidden
-and mine channels, judge ranks, and resolution defaults. BGA sequence and
-conditional-layer extensions remain unsupported. Unknown extensions are ignored.
+and mine channels, judge ranks, resolution defaults, and BGA event decoding.
+Unknown extensions are ignored.
+
+`bga_sequence` defines reusable frame sequences. `layer_events` can refer to
+these sequences through `id` or `id_set`, with a `condition` (`always`, `play`,
+or `miss`) and an `interval`. The parser retains the conditions, intervals,
+all alternatives, frame timestamps, and end markers. Image references resolve
+through the authored BGA header IDs, including noncontiguous IDs.
+
+Sequence-backed `poor_events` and `condition: "miss"` layers use the existing
+miss-animation playback path. They appear only during a miss, suppress the
+base/layer while active, and survive seeking. As in the reference Beatoraja
+renderer, playback selects the first sequence and spreads its frames across
+the miss-display window; stored timestamps, intervals, and further alternatives
+do not alter that playback. Empty sequences deliberately display a blank miss.
+Explicit `play` triggers and extended `always` sequences are retained as data
+but do not animate, matching the reference renderer's lack of handling for
+those event types. Ordinary bmson layer events continue to render normally.
+This playback comparison uses Beatoraja
+`fc48f31d6e3523a85edad5093ad43bc2d57b4eec`.
 
 References:
 
