@@ -62,35 +62,82 @@ void testChartAudioFileLookup(const std::filesystem::path &root) {
   std::atomic_bool cancelled{false};
   audio::ChartAudioFileLookup lookup(cancelled);
   const std::vector<std::string_view> extensions{".wav", ".ogg"};
-  const auto check = [&](const std::filesystem::path &path) {
-    require(lookup.Find(path, extensions) == archive_file::findFileWithExtensions(path, extensions),
-            "directory lookup preserves extension resolution");
+  const auto check = [&](const std::filesystem::path &requested,
+                         const std::filesystem::path &expected = {}) {
+    const auto resolved = lookup.Find(folder / requested, extensions);
+    require(expected.empty() ? !resolved :
+                resolved && std::filesystem::equivalent(*resolved, folder / expected),
+            "audio lookup preserves extension priority and resolves actual filename casing");
   };
-  check(folder / "tone.wav");
-  check(folder / "priority.ogg");
-  check(folder / "absent.wav");
-  check(folder / "TONE.wav");
+  check("tone.wav", "tone.ogg");
+  check("priority.ogg", "priority.ogg");
+  check("absent.wav");
+  check("TONE.wav", "tone.ogg");
   // A directory change must invalidate negative results in this same batch.
   const auto oldTime = std::filesystem::last_write_time(folder);
   std::ofstream(folder / "new.wav") << "new";
   std::filesystem::last_write_time(folder, oldTime + std::chrono::seconds(1));
-  check(folder / "new.wav");
-  check(folder / "absent.wav"); // Rebuild the negative snapshot after refresh.
+  check("new.wav", "new.wav");
+  check("absent.wav");
   const auto restoredTime = std::filesystem::last_write_time(folder);
   std::ofstream(folder / "restored.wav") << "new with restored directory mtime";
   std::filesystem::last_write_time(folder, restoredTime);
-  check(folder / "restored.wav");
+  check("restored.wav", "restored.wav");
 #ifndef _WIN32
   std::filesystem::create_symlink(folder / "missing-target", folder / "dangling.wav");
   std::ofstream(folder / "dangling.ogg") << "ogg";
-  check(folder / "dangling.wav");
+  check("dangling.wav", "dangling.ogg");
 #endif
   std::ofstream(folder / std::filesystem::path(u8"音.ogg")) << "ogg";
-  check(folder / std::filesystem::path(u8"音.wav"));
-  check(folder / "tone.wav");
+  check(std::filesystem::path(u8"音.wav"), std::filesystem::path(u8"音.ogg"));
+  check("tone.wav", "tone.ogg");
   cancelled = true;
   require(!lookup.Find(folder / "tone.wav", extensions), "lookup observes cancellation");
 }
+void testCaseLookupCancellation(const std::filesystem::path &root) {
+  const auto folder = root / "cancel-case-lookup";
+  std::filesystem::create_directory(folder);
+  for (int i = 0; i < 256; ++i)
+    std::ofstream(folder / (std::string(80, 'x') + std::to_string(i) + ".WAV"));
+  std::atomic_bool cancelled{false};
+  audio::ChartAudioFileLookup lookup(cancelled);
+  const auto missing = folder / "missing.wav";
+  const std::vector<std::string_view> extensions{"wav", "ogg", "mp3"};
+  {
+    test_support::CancelAfterAllocations cancellation(cancelled, 100);
+    const auto result = lookup.Find(missing, extensions);
+    require(cancelled && !result, "directory enumeration observes cancellation");
+    require(cancellation.afterCancellation() < 100,
+            "cancelled lookup stops enumeration and extension retries promptly");
+  }
+  cancelled = false;
+  require(lookup.Find(folder / (std::string(80, 'x') + "255.wav"), extensions).has_value(),
+          "cancelled enumeration never publishes a partial negative index");
+}
+void testCaseFallbackSymlinkParentDecode(const std::filesystem::path &root) {
+#ifndef _WIN32
+  const auto folder = root / "case-link-decode";
+  std::filesystem::create_directories(folder / "Elsewhere" / "Child");
+  std::filesystem::create_directory_symlink(folder / "Elsewhere" / "Child", folder / "Link");
+  writeWav(folder / "Elsewhere" / "Tone.WAV", 1, 17);
+  writeWav(folder / "Tone.WAV", 2, 33);
+  std::atomic_bool cancelled{false};
+  audio::DecodedAssetCache cache;
+  const auto sound = cache.Load(folder / "link" / ".." / "tone.wav", cancelled);
+  require(sound && sound->info.channels == 1 && sound->info.frames == 17,
+          "decoded case fallback follows symlink before parent traversal");
+  const auto resolved = archive_file::findFileWithExtensions(folder / "link" / ".." / "tone.wav", {});
+  require(resolved.has_value(), "resolve linked source for handoff");
+  const auto source = cache.CaptureSource(*resolved);
+  require(source && std::filesystem::equivalent(source->path, folder / "Elsewhere" / "Tone.WAV"),
+          "source snapshot retains the same physical target");
+  audio::DecodedAssetCache handoff;
+  handoff.RememberLoadedSound(*source, *resolved, sound);
+  require(handoff.Load(*resolved, cancelled) == sound && handoff.GetStatistics().decoderOpens == 0,
+          "linked source handoff reuses its decoded audio");
+#endif
+}
+
 void testWholeLoadAndConcurrentReuse(const std::filesystem::path &root) {
   const auto path = root / "tone.wav";
   writeWav(path);
@@ -356,6 +403,8 @@ int main() {
   const auto root = std::filesystem::temp_directory_path() / ("decoded-asset-tests-" + uuid::generateV4());
   try {
     std::filesystem::create_directories(root);
+    testCaseFallbackSymlinkParentDecode(root);
+    testCaseLookupCancellation(root);
     testChartAudioFileLookup(root);
     testRejectsExcessiveDecodeBeforeAllocation(root);
     testSeededGameplayPcmKeepsIdentityAndRetentionBounds(root);

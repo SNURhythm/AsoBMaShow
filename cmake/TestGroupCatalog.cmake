@@ -272,6 +272,7 @@ asobmashow_label_tests(area_ir
 
 asobmashow_label_tests(area_library
     android_documents_activity_tests
+    android_resource_path_tests
     android_documents_mutability_tests
     android_documents_mutation_guard_tests
     android_documents_provider_tests
@@ -305,6 +306,7 @@ asobmashow_label_tests(area_archives
     archive_asset_batch_loader_tests
     archive_asset_pipeline_tests
     archive_bounded_reader_tests
+    chart_resource_path_tests
     archive_file_concurrency_tests
     archive_index_build_coordinator_tests
     archive_reference_reader_tests

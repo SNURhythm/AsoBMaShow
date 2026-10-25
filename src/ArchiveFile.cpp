@@ -7,6 +7,7 @@
 #include "ArchiveSourceIdentity.h"
 #include "archive/ArchiveSourceAccess.h"
 #include "FileExtensionResolver.h"
+#include "CaseInsensitivePathLookup.h"
 
 #include "BmsMetadataText.h"
 #include "archive/WindowsExtractionPathPolicy.h"
@@ -11438,17 +11439,33 @@ unzipArchiveFully(const std::filesystem::path &archivePath,
 std::optional<std::filesystem::path>
 findFileWithExtensions(const std::filesystem::path &basePath,
                        const std::vector<std::string_view> &extensions) {
+  return findFileWithExtensions(basePath, extensions, nullptr);
+}
+
+std::optional<std::filesystem::path>
+findFileWithExtensions(const std::filesystem::path &basePath,
+                       const std::vector<std::string_view> &extensions,
+                       const std::atomic_bool *cancelled) {
+  if (cancelled && cancelled->load(std::memory_order_relaxed)) return std::nullopt;
   std::filesystem::path archivePath;
   std::filesystem::path innerPath;
   const bool archived = splitVirtualPath(basePath, archivePath, innerPath);
+  static resource_path::CaseInsensitivePathLookup looseFiles;
   return file_extension_resolver::find(archived ? innerPath : basePath, extensions,
       [&](const std::filesystem::path &candidate) -> std::optional<std::filesystem::path> {
+        if (cancelled && cancelled->load(std::memory_order_relaxed)) return std::nullopt;
         if (archived) {
           if (const auto resolved = resolveInnerPath(archivePath, candidate)) {
             return makeVirtualPath(archivePath, *resolved);
           }
-        } else if (archive_file::exists(candidate)) {
-          return candidate;
+        } else {
+#if TARGET_OS_ANDROID
+          if (IsAndroidTreePath(candidate))
+            return archive_file::exists(candidate) ? std::optional{candidate} : std::nullopt;
+#endif
+          if (archive_source::isReference(candidate))
+            return archive_file::exists(candidate) ? std::optional{candidate} : std::nullopt;
+          return looseFiles.Find(candidate, cancelled);
         }
         return std::nullopt;
       });

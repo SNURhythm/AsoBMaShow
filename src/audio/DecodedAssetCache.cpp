@@ -12,6 +12,7 @@
 #include <unistd.h>
 #endif
 
+#include <algorithm>
 #include <chrono>
 #include <list>
 #include <map>
@@ -35,11 +36,25 @@ void checkpoint(const std::atomic_bool &value, std::stop_token stop) {
       DecodedAssetCache::FailureKind::Cancelled, "Audio preparation cancelled.");
 }
 
-std::filesystem::path resolvedPath(const std::filesystem::path &path) {
+std::filesystem::path normalizeResourcePath(const std::filesystem::path &path) {
+  // Lexical '..' removal changes the target when the preceding component is a
+  // symlink. Resolve only those uncommon native paths through the filesystem.
+  if (!archive_file::isVirtualPath(path) &&
+      std::find(path.begin(), path.end(), "..") != path.end()) {
+    std::error_code error;
+    const auto canonical = std::filesystem::canonical(path, error);
+    if (!error) return canonical;
+    return path;
+  }
+  return path.lexically_normal();
+}
+
+std::filesystem::path resolvedPath(const std::filesystem::path &path,
+                                   const std::atomic_bool *cancelled = nullptr) {
   static const std::vector<std::string_view> extensions(
       asobmshow::chart_assets::kAudioExtensions.begin(),
       asobmshow::chart_assets::kAudioExtensions.end());
-  auto resolved = archive_file::findFileWithExtensions(path, extensions).value_or(path);
+  auto resolved = archive_file::findFileWithExtensions(path, extensions, cancelled).value_or(path);
   if (!archive_file::isVirtualPath(resolved)) {
 #if TARGET_OS_ANDROID
     if (IsAndroidTreePath(resolved)) return resolved.lexically_normal();
@@ -48,7 +63,7 @@ std::filesystem::path resolvedPath(const std::filesystem::path &path) {
     auto absolute = std::filesystem::absolute(resolved, error);
     if (!error) resolved = std::move(absolute);
   }
-  return resolved.lexically_normal();
+  return normalizeResourcePath(resolved);
 }
 
 std::string fileIdentity(std::filesystem::path source) {
@@ -157,7 +172,8 @@ struct DecodedAssetCache::Impl {
       checkpoint(cancel, stop);
       if (encoded && encoded->size() > kMaximumEncodedAssetBytes)
         throw CacheFailure(FailureKind::InvalidAsset, "Encoded audio exceeds the byte limit.");
-      const auto resolved = batch ? path.lexically_normal() : resolvedPath(path);
+      const auto resolved = batch ? path.lexically_normal() : resolvedPath(path, &cancel);
+      checkpoint(cancel, stop);
       const auto identity = batch ? batchAssetIdentity(*batch, resolved) : sourceIdentity(resolved);
       if (identity.empty()) throw CacheFailure(FailureKind::InvalidAsset,
                                                "Audio source is unavailable.");
@@ -248,7 +264,7 @@ std::shared_ptr<const DecodedAssetCache::DecodedSound> DecodedAssetCache::LoadBy
 }
 std::optional<DecodedAssetCache::SourceSnapshot> DecodedAssetCache::CaptureSource(
     const std::filesystem::path &path) const {
-  auto normalized = path.lexically_normal();
+  auto normalized = normalizeResourcePath(path);
   auto identity = fileIdentity(normalized);
   if (identity.empty()) return std::nullopt;
   return ArchiveBatch{std::move(normalized), std::move(identity)};
@@ -261,7 +277,7 @@ void DecodedAssetCache::RememberLoadedSound(const SourceSnapshot &source,
     const std::filesystem::path &path, std::shared_ptr<const DecodedSound> sound) {
   if (!sound || source.identity.empty() ||
       sound->pcm.size() > impl->maximumBytes / sizeof(short)) return;
-  const bool regular = path.lexically_normal() == source.path;
+  const bool regular = normalizeResourcePath(path) == source.path;
   const auto resolved = regular ? resolvedPath(path) : path.lexically_normal();
   const auto identity = regular ? fspath_to_utf8(resolved) + '|' + source.identity
                                : batchAssetIdentity(source, resolved);

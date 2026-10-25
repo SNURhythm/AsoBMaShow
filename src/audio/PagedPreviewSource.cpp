@@ -696,7 +696,9 @@ std::shared_ptr<PagedPreviewSource> PagedPreviewSource::Create(
   std::map<std::filesystem::path, std::size_t> assetsByPath;
   std::map<int, std::size_t> assetsByWav;
   auto snapshotAsset = [&](const std::string &name) {
-    auto path = (chart.Meta.Folder / utf8_to_path_t(name)).lexically_normal();
+    auto path = chart.Meta.Folder / utf8_to_path_t(name);
+    // Native symlink/.. traversal must reach the resource resolver intact.
+    if (archive_file::isVirtualPath(path)) path = path.lexically_normal();
     auto [it, added] = assetsByPath.emplace(path, value->assets.size());
     if (added) value->assets.push_back({.path = std::move(path), .sound = {}});
     return it->second;

@@ -1330,6 +1330,52 @@ void testFileExtensionResolutionSharesPriorityAcrossStorage(bool archived) {
 
 }
 
+void testLooseResourceCaseFallback() {
+  TempDirectory temporary;
+  const auto root = temporary.path();
+  const auto folder = root / "Sounds";
+  std::filesystem::create_directory(folder);
+  std::ofstream(folder / "Kick.OGG") << "kick";
+  std::ofstream(folder / std::filesystem::path(u8"音A.PNG")) << "image";
+  const auto find = [&](const std::filesystem::path &path) {
+    return archive_file::findFileWithExtensions(root / path, {"wav", "ogg", "png"});
+  };
+  const auto resolved = find("sounds/kick.wav");
+  assert(resolved && std::filesystem::equivalent(*resolved, folder / "Kick.OGG"));
+  const auto image = find(std::filesystem::path(u8"sounds/音a.bmp"));
+  assert(image && std::filesystem::equivalent(*image, folder / std::filesystem::path(u8"音A.PNG")));
+  assert(!find("sounds/missing.wav"));
+  const auto oldTime = std::filesystem::last_write_time(folder);
+  std::ofstream(folder / "Missing.WAV") << "new";
+  std::filesystem::last_write_time(folder, oldTime); // ctime must invalidate too.
+  assert(find("sounds/missing.wav"));
+
+  // This branch runs on case-sensitive volumes (including Linux/Android).
+  if (!std::filesystem::exists(folder / "kick.ogg")) {
+    std::ofstream(folder / "KICK.OGG") << "other";
+    assert(find("Sounds/Kick.OGG") == folder / "Kick.OGG");
+    assert(find("Sounds/KICK.OGG") == folder / "KICK.OGG");
+    assert(!find("sounds/kick.ogg"));
+    std::filesystem::remove(folder / "KICK.OGG");
+    assert(find("sounds/kick.ogg") == folder / "Kick.OGG");
+  }
+#ifndef _WIN32
+  std::filesystem::create_directory(root / "Elsewhere");
+  std::filesystem::create_directory(root / "Elsewhere" / "Child");
+  std::ofstream(root / "Elsewhere" / "Tone.WAV") << "linked parent";
+  std::filesystem::create_directory_symlink(root / "Elsewhere" / "Child", root / "Link");
+  const auto linked = find("link/../tone.wav");
+  assert(linked && std::filesystem::equivalent(*linked, root / "Elsewhere" / "Tone.WAV"));
+#endif
+  std::vector<std::future<void>> requests;
+  for (int i = 0; i < 8; ++i) {
+    requests.push_back(std::async(std::launch::async, [&] {
+      for (int j = 0; j < 50; ++j) assert(find("sounds/kick.wav"));
+    }));
+  }
+  for (auto &request : requests) request.get();
+}
+
 void testZipBoundedReadRejectsCentralDirectoryUnderstatedSize() {
   TempDirectory temporary;
   const auto archivePath = temporary.path() / "lied-central-dir.zip";
@@ -4577,6 +4623,12 @@ int main(int argc, char **argv) {
     testIndexVisitorStreamsAndReleasesStorageOnlyIndexes();
     return 0;
   }
+  if (argc == 2 && std::string(argv[1]) == "--resource-paths") {
+    testLooseResourceCaseFallback();
+    testFileExtensionResolutionSharesPriorityAcrossStorage(false);
+    testFileExtensionResolutionSharesPriorityAcrossStorage(true);
+    return 0;
+  }
   if (argc == 2 && std::string(argv[1]) == "--bounded-reader") {
     testSharedZipReadersReuseDirectory();
     testBoundedZipReaderReusesDirectory();
@@ -4673,6 +4725,7 @@ int main(int argc, char **argv) {
   testZipBoundedReadAcceptsEmptyStoredEntry();
   testZipBoundedReadRejectsCorruptStoredPayloadWithUnchangedCrc();
   testBoundedReadFallsBackToAlternativeAudioExtension();
+  testLooseResourceCaseFallback();
   testFileExtensionResolutionSharesPriorityAcrossStorage(false);
   testFileExtensionResolutionSharesPriorityAcrossStorage(true);
   testZipBoundedReadRejectsCentralDirectoryUnderstatedSize();

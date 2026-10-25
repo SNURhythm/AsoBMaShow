@@ -353,12 +353,14 @@ decodeImageFile(const std::filesystem::path &path,
   constexpr bool bundledAsset = false;
 #endif
   if (!archive_file::isVirtualPath(path) && !bundledAsset) {
+    const auto resolved = archive_file::findFileWithExtensions(path, {});
+    if (!resolved) return std::nullopt;
 #if !TARGET_OS_WINDOWS
     std::error_code statusError;
-    const auto status = std::filesystem::status(path, statusError);
+    const auto status = std::filesystem::status(*resolved, statusError);
     if (!statusError && !std::filesystem::is_regular_file(status)) {
       const auto sourceAccessStarted = std::chrono::steady_clock::now();
-      const int descriptor = open(path.c_str(), O_RDONLY | O_NONBLOCK);
+      const int descriptor = open(resolved->c_str(), O_RDONLY | O_NONBLOCK);
       measured.sourceAccessMillis = elapsedMillis(
           sourceAccessStarted, std::chrono::steady_clock::now());
       if (descriptor < 0) return std::nullopt;
@@ -380,7 +382,7 @@ decodeImageFile(const std::filesystem::path &path,
     }
 #endif
     const auto sourceLoadStarted = std::chrono::steady_clock::now();
-    auto decoded = image_decode::decodeImageFile(path, options);
+    auto decoded = image_decode::decodeImageFile(*resolved, options);
     measured.sourceLoadDecodeMillis = elapsedMillis(
         sourceLoadStarted, std::chrono::steady_clock::now());
     if (timings != nullptr) *timings = measured;

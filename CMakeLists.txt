@@ -761,6 +761,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_test(NAME android_documents_mutability_tests
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/android_documents_mutability_tests.py -v)
+    add_test(NAME android_resource_path_tests
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/android_resource_path_tests.py -v)
     add_test(NAME android_documents_activity_tests
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/android_documents_activity_tests.py -v)
@@ -768,6 +771,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/tests/android_documents_mutation_guard_tests.py -v)
     set_tests_properties(android_documents_mutability_tests android_documents_activity_tests
+                         android_resource_path_tests
                          android_documents_mutation_guard_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
         LABELS platform_android
@@ -4289,6 +4293,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     if(WIN32)
         target_link_libraries(archive_file_concurrency_tests PRIVATE shell32 ole32)
     endif()
+    add_test(NAME chart_resource_path_tests COMMAND archive_file_concurrency_tests --resource-paths)
     add_test(NAME chart_readme_tests COMMAND archive_file_concurrency_tests --chart-readme)
     add_test(NAME archive_bounded_reader_tests COMMAND archive_file_concurrency_tests --bounded-reader)
     add_test(NAME archive_reference_reader_tests COMMAND archive_file_concurrency_tests --source-reference)

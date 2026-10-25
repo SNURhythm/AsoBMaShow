@@ -244,6 +244,7 @@ public class AsoBMaShowActivity extends SDLActivity {
     private PendingImportRequest activePendingImportRequest;
     private final ConcurrentHashMap<String, String> documentIdCache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> transientDocumentIdCache = new ConcurrentHashMap<>();
+    private final ResourceDirectoryCache resourceDirectoryCache = new ResourceDirectoryCache();
     private final Object nativeMusicLock = new Object();
     private final Object midiInputLock = new Object();
     private final Object gyroscopeTurntableLock = new Object();
@@ -830,51 +831,58 @@ public class AsoBMaShowActivity extends SDLActivity {
     }
 
     public String clearTransientTreeFileCache() {
-        transientDocumentIdCache.clear();
+        synchronized (resourceDirectoryCache) {
+            transientDocumentIdCache.clear();
+            resourceDirectoryCache.clear();
+        }
         return "OK";
     }
 
     public String listTreeTextFiles(String treeUriText, String relativeDir) {
-        try {
-            Uri treeUri = Uri.parse(treeUriText);
-            String directory = normalizeRelativePath(relativeDir);
-            String parentId = resolveDocumentId(treeUri, directory);
-            if (parentId == null) return ERROR_PREFIX + "Directory is unavailable.";
-            Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId);
-            String[] columns = {Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE};
-            org.json.JSONArray names = new org.json.JSONArray();
-            try (Cursor cursor = getContentResolver().query(children, columns, null, null, null)) {
-                requireChartFilesCursor(cursor);
-                while (cursor.moveToNext()) {
-                    String name = cursor.getString(1);
-                    if (Document.MIME_TYPE_DIR.equals(cursor.getString(2)) || name == null
-                            || !name.toLowerCase(Locale.ROOT).endsWith(".txt")) continue;
-                    if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) continue;
-                    String relative = directory.isEmpty() ? name : directory + "/" + name;
-                    transientDocumentIdCache.put(cacheKey(treeUri, relative), cursor.getString(0));
-                    names.put(name);
-                    // One overflow item lets the reader report its explicit file limit.
-                    if (names.length() > 1024) break;
+        synchronized (resourceDirectoryCache) {
+            try {
+                Uri treeUri = Uri.parse(treeUriText);
+                String directory = normalizeRelativePath(relativeDir);
+                String parentId = resolveDocumentId(treeUri, directory);
+                if (parentId == null) return ERROR_PREFIX + "Directory is unavailable.";
+                Uri children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentId);
+                String[] columns = {Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE};
+                org.json.JSONArray names = new org.json.JSONArray();
+                try (Cursor cursor = getContentResolver().query(children, columns, null, null, null)) {
+                    requireChartFilesCursor(cursor);
+                    while (cursor.moveToNext()) {
+                        String name = cursor.getString(1);
+                        if (Document.MIME_TYPE_DIR.equals(cursor.getString(2)) || name == null
+                                || !name.toLowerCase(Locale.ROOT).endsWith(".txt")) continue;
+                        if (name.indexOf('/') >= 0 || name.indexOf('\\') >= 0) continue;
+                        String relative = directory.isEmpty() ? name : directory + "/" + name;
+                        transientDocumentIdCache.put(cacheKey(treeUri, relative), cursor.getString(0));
+                        names.put(name);
+                        // One overflow item lets the reader report its explicit file limit.
+                        if (names.length() > 1024) break;
+                    }
                 }
+                return names.toString();
+            } catch (Exception e) {
+                return ERROR_PREFIX + e.getMessage();
             }
-            return names.toString();
-        } catch (Exception e) {
-            return ERROR_PREFIX + e.getMessage();
         }
     }
 
     public String cacheTreeDirectory(String treeUriText, String relativeDir) {
-        try {
-            Uri treeUri = Uri.parse(treeUriText);
-            String normalizedDir = normalizeRelativePath(relativeDir);
-            String parentDocumentId = resolveDocumentId(treeUri, normalizedDir);
-            if (parentDocumentId == null) {
-                return ERROR_PREFIX + "Directory not found: " + normalizedDir;
+        synchronized (resourceDirectoryCache) {
+            try {
+                Uri treeUri = Uri.parse(treeUriText);
+                String normalizedDir = normalizeRelativePath(relativeDir);
+                String parentDocumentId = resolveDocumentId(treeUri, normalizedDir);
+                if (parentDocumentId == null) {
+                    return ERROR_PREFIX + "Directory not found: " + normalizedDir;
+                }
+                return Integer.toString(cacheDirectChildren(treeUri, parentDocumentId,
+                        normalizedDir, transientDocumentIdCache));
+            } catch (Exception e) {
+                return ERROR_PREFIX + e.getMessage();
             }
-            return Integer.toString(cacheDirectChildren(treeUri, parentDocumentId,
-                    normalizedDir, transientDocumentIdCache));
-        } catch (Exception e) {
-            return ERROR_PREFIX + e.getMessage();
         }
     }
 
@@ -3085,93 +3093,94 @@ public class AsoBMaShowActivity extends SDLActivity {
     }
 
     private String resolveDocumentId(Uri treeUri, String relativePath) {
-        relativePath = normalizeRelativePath(relativePath);
-        if (relativePath == null || relativePath.isEmpty()) {
-            return DocumentsContract.getTreeDocumentId(treeUri);
-        }
-        String cached = transientDocumentIdCache.get(cacheKey(treeUri, relativePath));
-        if (cached != null) {
-            return cached;
-        }
-        cached = documentIdCache.get(cacheKey(treeUri, relativePath));
-        if (cached != null) {
-            return cached;
-        }
+        synchronized (resourceDirectoryCache) {
+            relativePath = normalizeRelativePath(relativePath);
+            if (relativePath == null || relativePath.isEmpty()) {
+                return DocumentsContract.getTreeDocumentId(treeUri);
+            }
+            String cached = transientDocumentIdCache.get(cacheKey(treeUri, relativePath));
+            if (cached != null) {
+                return cached;
+            }
+            cached = documentIdCache.get(cacheKey(treeUri, relativePath));
+            if (cached != null) {
+                return cached;
+            }
 
-        String currentDocumentId = DocumentsContract.getTreeDocumentId(treeUri);
-        StringBuilder currentPath = new StringBuilder();
-        String[] parts = relativePath.split("/");
-        for (String part : parts) {
-            if (part.isEmpty()) {
-                continue;
+            String currentDocumentId = DocumentsContract.getTreeDocumentId(treeUri);
+            StringBuilder currentPath = new StringBuilder();
+            String[] parts = relativePath.split("/");
+            for (String part : parts) {
+                if (part.isEmpty()) {
+                    continue;
+                }
+                String nextDocumentId = findChildDocumentId(treeUri, currentDocumentId, part);
+                if (nextDocumentId == null) {
+                    return null;
+                }
+                if (currentPath.length() > 0) {
+                    currentPath.append('/');
+                }
+                currentPath.append(part);
+                transientDocumentIdCache.put(cacheKey(treeUri, currentPath.toString()), nextDocumentId);
+                currentDocumentId = nextDocumentId;
             }
-            String nextDocumentId = findChildDocumentId(treeUri, currentDocumentId, part);
-            if (nextDocumentId == null) {
-                return null;
-            }
-            if (currentPath.length() > 0) {
-                currentPath.append('/');
-            }
-            currentPath.append(part);
-            transientDocumentIdCache.put(cacheKey(treeUri, currentPath.toString()), nextDocumentId);
-            currentDocumentId = nextDocumentId;
+            return currentDocumentId;
         }
-        return currentDocumentId;
     }
 
     private int cacheDirectChildren(Uri treeUri, String parentDocumentId,
                                     String relativeDir,
                                     ConcurrentHashMap<String, String> targetCache) {
-        Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
-                treeUri, parentDocumentId);
-        String[] columns = new String[] {
-                Document.COLUMN_DOCUMENT_ID,
-                Document.COLUMN_DISPLAY_NAME
-        };
-        int count = 0;
-        try (Cursor cursor = getContentResolver().query(
-                childrenUri, columns, null, null, null)) {
-            if (cursor == null) {
-                return 0;
+        synchronized (resourceDirectoryCache) {
+            Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocumentId);
+            String[] columns = {Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME};
+            ResourceDirectoryCache.Directory directory = new ResourceDirectoryCache.Directory(null);
+            int count = 0;
+            try (Cursor cursor = getContentResolver().query(childrenUri, columns, null, null, null)) {
+                if (cursor == null) return 0;
+                int idColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_DOCUMENT_ID);
+                int nameColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_DISPLAY_NAME);
+                while (cursor.moveToNext()) {
+                    String documentId = cursor.getString(idColumn);
+                    String name = cursor.getString(nameColumn);
+                    if (name == null || name.isEmpty()) continue;
+                    String relativePath = relativeDir.isEmpty() ? name : relativeDir + "/" + name;
+                    targetCache.put(cacheKey(treeUri, relativePath), documentId);
+                    directory.add(name, documentId);
+                    count++;
+                }
             }
+            resourceDirectoryCache.remember(childrenUri.toString(), directory);
+            return count;
+        }
+    }
+
+    private ResourceDirectoryCache.Directory readResourceDirectory(
+            Uri treeUri, String parentDocumentId, String requested) {
+        Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocumentId);
+        String[] columns = {Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME};
+        ResourceDirectoryCache.Directory directory = new ResourceDirectoryCache.Directory(requested);
+        try (Cursor cursor = getContentResolver().query(childrenUri, columns, null, null, null)) {
+            if (cursor == null) return null;
             int idColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_DOCUMENT_ID);
             int nameColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_DISPLAY_NAME);
-            while (cursor.moveToNext()) {
-                String documentId = cursor.getString(idColumn);
-                String name = cursor.getString(nameColumn);
-                if (name == null || name.isEmpty()) {
-                    continue;
-                }
-                String relativePath = relativeDir.isEmpty() ? name : relativeDir + "/" + name;
-                targetCache.put(cacheKey(treeUri, relativePath), documentId);
-                count++;
-            }
+            while (cursor.moveToNext()) directory.add(cursor.getString(nameColumn), cursor.getString(idColumn));
         }
-        return count;
+        return directory;
     }
 
     private String findChildDocumentId(Uri treeUri, String parentDocumentId, String childName) {
-        Uri childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
-                treeUri, parentDocumentId);
-        String[] columns = new String[] {
-                Document.COLUMN_DOCUMENT_ID,
-                Document.COLUMN_DISPLAY_NAME
-        };
-        try (Cursor cursor = getContentResolver().query(
-                childrenUri, columns, null, null, null)) {
-            if (cursor == null) {
-                return null;
+        synchronized (resourceDirectoryCache) {
+            String key = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocumentId).toString();
+            ResourceDirectoryCache.Directory directory = resourceDirectoryCache.get(key);
+            if (directory == null) {
+                directory = readResourceDirectory(treeUri, parentDocumentId, childName);
+                if (directory == null) return null;
+                resourceDirectoryCache.remember(key, directory);
             }
-            int idColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_DOCUMENT_ID);
-            int nameColumn = cursor.getColumnIndexOrThrow(Document.COLUMN_DISPLAY_NAME);
-            while (cursor.moveToNext()) {
-                String name = cursor.getString(nameColumn);
-                if (childName.equals(name)) {
-                    return cursor.getString(idColumn);
-                }
-            }
+            return directory.find(childName);
         }
-        return null;
     }
 
     private String normalizeRelativePath(String relativePath) {
