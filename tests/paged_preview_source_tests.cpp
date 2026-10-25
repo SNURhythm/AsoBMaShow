@@ -233,6 +233,45 @@ void testHighlightSelection(const std::filesystem::path &root) {
     bgmBody.replace(pos, 3, "01:");
   require(audio::FindChartPreviewHighlightMicros(*chart(root, bgmBody)) == 40'000'000,
           "background sound activity must support highlight detection");
+
+  struct Activity { int notes = 1, bgm = 0; };
+  const auto selectActivity = [&](const std::vector<Activity> &measures) {
+    std::string body;
+    for (std::size_t measure = 0; measure < measures.size(); ++measure) {
+      for (bool bgm : {false, true}) {
+        const int perSecond = bgm ? measures[measure].bgm : measures[measure].notes;
+        if (!perSecond) continue;
+        char prefix[16];
+        std::snprintf(prefix, sizeof(prefix), "#%03d%s:", int(measure), bgm ? "01" : "11");
+        body += prefix;
+        for (int i = 0; i < 2 * perSecond; ++i) body += "01";
+        body += '\n';
+      }
+    }
+    const auto parsed = chart(root, body);
+    const auto selected = audio::FindChartPreviewHighlightMicros(*parsed);
+    for (std::size_t i = 0; i < parsed->Measures.size(); ++i)
+      if (parsed->Measures[i]->Timing == selected) return i;
+    return parsed->Measures.size();
+  };
+  std::vector<Activity> activity(60);
+  for (int i = 20; i < 28; ++i) activity[i] = {.notes = 4};
+  for (int i = 40; i < 48; ++i) activity[i] = {.notes = 0, .bgm = 6};
+  require(selectActivity(activity) == 40,
+          "a stronger BGM section must beat placed notes with the same event weight");
+  for (auto &measure : activity) std::swap(measure.notes, measure.bgm);
+  require(selectActivity(activity) == 40,
+          "moving the same activity between notes and BGM must not move the highlight");
+
+  activity.assign(60, Activity{});
+  for (int i = 0; i < 27; ++i) activity[i].notes = 9;
+  for (int i = 32; i < 40; ++i) activity[i].notes = 8;
+  require(selectActivity(activity) == 32,
+          "a sustained entrance beats a denser plateau even just before an integral second");
+  for (int i = 0; i < 27; ++i) activity[i].notes = 3;
+  for (int i = 32; i < 40; ++i) activity[i].notes = i == 32 ? 32 : 1;
+  require(selectActivity(activity) == 9,
+          "an isolated two-second burst must not earn the sustained entrance bonus");
 }
 void testResampling(const std::filesystem::path &root) {
   std::vector<short> native(13001 * 2);

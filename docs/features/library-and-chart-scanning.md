@@ -86,10 +86,13 @@ Chart previews default to a timing-based highlight with a 300 ms fade-in.
 The detector scores sustained placed-note and background-sound activity over
 12-second windows at measure boundaries, excluding the intro and late outro.
 Placed notes count even without keysounds; silent long-note tails do not add
-extra attacks. Sparse bins
-keep analysis linear in chart data, without audio decoding or duration-sized
-allocations. Short or uninformative charts fall back to the beginning. This is
-an activity estimate, not chorus recognition. Beginning preserves the original
+extra attacks. Placed notes and BGM events have equal activity weight. A bounded
+density-rise bonus favors entrances where both six-second halves remain busier
+than the preceding six seconds, with a soft preference for the chart's middle.
+The bonus contributes at most one sixth of the base score, so sustained activity
+remains dominant. Sparse bins keep analysis linear in chart data, without audio
+decoding or duration-sized allocations. Short or uninformative charts fall back
+to the beginning. This is an activity estimate, not chorus recognition. Beginning preserves the original
 start and leading-silence trimming. Preview File uses the shared library metadata
 to loop the authored `#PREVIEW` asset or a scanner-discovered `preview*` file;
 missing/unreadable files use the configured Highlight/Beginning fallback.

@@ -31,7 +31,7 @@ inline long long FindChartPreviewHighlightMicros(const bms_parser::Chart &chart)
       double activity = 0;
       // Placed notes carry musical density even without assigned keysounds.
       // Invisible notes, mines and silent LN tails are not extra attacks.
-      // Audible background splits contribute with less weight.
+      // Placed and background events carry the same musical activity weight.
       for (auto *note : timeline->Notes) {
         if (!note) continue;
         if (note->Wav == bms_parser::Parser::NoWav && note->IsLongNote() &&
@@ -39,7 +39,7 @@ inline long long FindChartPreviewHighlightMicros(const bms_parser::Chart &chart)
         activity += 1;
       }
       for (const auto *note : timeline->BackgroundNotes)
-        if (note && note->Wav != bms_parser::Parser::NoWav) activity += 0.5;
+        if (note && note->Wav != bms_parser::Parser::NoWav) activity += 1;
       if (!activity) continue;
       if (first < 0) first = timeline->Timing;
       last = timeline->Timing;
@@ -58,20 +58,34 @@ inline long long FindChartPreviewHighlightMicros(const bms_parser::Chart &chart)
   const auto span = last - first;
   const auto earliest = first + span / 100 * 15;
   const auto latest = std::min(first + span / 100 * 80, last - window);
-  std::size_t begin = 0, middle = 0, end = 0;
+  std::size_t before = 0, begin = 0, middle = 0, end = 0;
   double bestScore = 0;
   long long best = 0;
   for (const auto start : boundaries) {
     if (start < earliest) continue;
     if (start > latest) break;
-    const auto binStart = start / second;
+    // Score the nearest second: parser timing can put a measure a microsecond
+    // before an integral second. Playback still starts at the exact measure.
+    const auto binStart = start / second + (start % second >= second / 2 ? 1 : 0);
+    while (before < bins.size() && bins[before].time < binStart - 6) ++before;
     while (begin < bins.size() && bins[begin].time < binStart) ++begin;
     while (middle < bins.size() && bins[middle].time < binStart + 6) ++middle;
     while (end < bins.size() && bins[end].time < binStart + 12) ++end;
     if (middle - begin < 2 || end - middle < 2) continue;
     const auto left = prefix[middle] - prefix[begin];
     const auto right = prefix[end] - prefix[middle];
-    const auto score = left + right + std::min(left, right);
+    const auto sustained = std::min(left, right);
+    double score = left + right + sustained;
+    if (start - first >= window / 2) {
+      const auto prior = prefix[begin] - prefix[before];
+      const auto rise = std::max(0.0, sustained - prior);
+      const auto position = static_cast<double>(start - first) / span;
+      const auto centerWeight = 2 * std::sqrt(position * (1 - position));
+      // Qwilight-inspired density rise, sustained across both forward halves.
+      // Bound the bonus to at most one sixth of the base activity score so a
+      // short spike cannot displace a substantially stronger passage.
+      score += 0.5 * rise * centerWeight;
+    }
     // Keep the earliest equivalent phrase, including floating-point ties.
     if (score > bestScore + 1e-9) {
       bestScore = score;

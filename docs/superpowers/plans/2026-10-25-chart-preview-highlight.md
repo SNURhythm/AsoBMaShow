@@ -43,3 +43,22 @@ multiple output rates, and old settings without the new key.
 Independent review found the retained-PCM and gameplay-rate ordering issues;
 regression tests reproduced them before the fixes. Authored files intentionally
 have no synthesized chart BGA timeline because their audio is independently cut.
+
+## Hybrid scoring follow-up
+
+- [x] Extend `testHighlightSelection` in `tests/paged_preview_source_tests.cpp`
+  with equal note/BGM weighting, a sustained entrance versus a slightly denser
+  plateau, and a short burst that must not beat a sustained section. Run
+  `paged_preview_source_tests` and confirm the first two regressions fail.
+- [x] Update `FindChartPreviewHighlightMicros` in
+  `src/audio/ChartPreviewHighlight.h` with equal activity weights and the
+  bounded rise bonus from the spec, reusing prefix sums and one extra cursor.
+  Preserve short/sparse, BGM-only and unkeyed-note coverage.
+- [x] Build `main` and `paged_preview_source_tests` together at `-j 6`, run the
+  focused CTest, update feature documentation, review the diff, commit and push.
+
+Verification: unequal BGM weighting and missing entrance preference each failed
+before their fixes. The parsed entrance fixture also exposed microsecond
+truncation at a second boundary; nearest-bin scoring now selects the intended
+measure. Desktop `main` and `paged_preview_source_tests` passed. Independent
+review found no blocking issues; perceptual quality still needs listening.
