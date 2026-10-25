@@ -5998,12 +5998,28 @@ ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() {
     return uname(&systemInfo) == 0 ? modelForIdentifier(systemInfo.machine) : Model{};
   }();
   UIWindow *window = FindActiveWindow();
+  UIWindowScene *scene = window.windowScene;
+  UIScreen *display = scene != nil ? scene.screen : window.screen;
+  // SDL's application display comes from its application scene. On iPadOS
+  // 27.2 that screen need not be the deprecated process-global mainScreen.
+  const bool applicationDisplay = scene != nil
+      ? [scene.session.role isEqualToString:UIWindowSceneSessionRoleApplication]
+      : display != nil && display == UIScreen.mainScreen;
   Orientation orientation = Orientation::Unknown;
-  bool fillsBuiltInScreen = false;
-  if (window != nil && window.screen == UIScreen.mainScreen) {
+  bool fillsScreen = false;
+  if (window != nil && display != nil) {
     // Interface and device orientation reverse the landscape enum names.
-    // Use the scene so rotation lock and a tablet lying flat remain correct.
-    switch (window.windowScene.interfaceOrientation) {
+    // Use UIKit's interface orientation so rotation lock and a tablet lying
+    // flat remain correct. SDL also supports windows without a UIWindowScene;
+    // messaging that nil scene yields Unknown and hides both reminder cues.
+    UIInterfaceOrientation current = scene != nil
+        ? scene.interfaceOrientation
+        : window.rootViewController.interfaceOrientation;
+    if (@available(iOS 16.0, *)) {
+      if (scene.effectiveGeometry != nil)
+        current = scene.effectiveGeometry.interfaceOrientation;
+    }
+    switch (current) {
       case UIInterfaceOrientationPortrait: orientation = Orientation::Portrait; break;
       case UIInterfaceOrientationPortraitUpsideDown:
         orientation = Orientation::PortraitUpsideDown; break;
@@ -6014,18 +6030,18 @@ ipad_hardware::ButtonLocation GetIOSHardwareButtonLocation() {
     UIView *view = window.rootViewController.view;
     if (view != nil) {
       const CGRect viewport = [view convertRect:view.bounds
-                             toCoordinateSpace:window.screen.coordinateSpace];
-      const CGRect screen = window.screen.bounds;
-      // Split View, Stage Manager, and external displays cannot place a cue
+                             toCoordinateSpace:display.coordinateSpace];
+      const CGRect screen = display.bounds;
+      // Split View and Stage Manager partial windows cannot place a cue
       // against the hardware by treating the app's edges as screen edges.
-      fillsBuiltInScreen = screen.size.width > 0 && screen.size.height > 0 &&
+      fillsScreen = screen.size.width > 0 && screen.size.height > 0 &&
           std::abs(viewport.origin.x - screen.origin.x) < 1.0 &&
           std::abs(viewport.origin.y - screen.origin.y) < 1.0 &&
           std::abs(viewport.size.width - screen.size.width) < 1.0 &&
           std::abs(viewport.size.height - screen.size.height) < 1.0;
     }
   }
-  return locateButton(model, orientation, fillsBuiltInScreen);
+  return locateButton(model, orientation, applicationDisplay && fillsScreen);
 }
 
 IOSNormalizedSafeAreaInsets GetIOSSafeAreaInsetsNormalized() {

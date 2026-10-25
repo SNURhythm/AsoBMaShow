@@ -18,6 +18,7 @@
 
 class Button;
 class ChartCanvasView;
+class ChartSourceOverlay;
 class ReplaySummaryListItemView;
 class ResultRecordListView;
 class ScrollView;
@@ -76,6 +77,7 @@ public:
   bool prepareForStorageMaintenance(std::string &error) override;
   void init() override;
   void onResume() override;
+  void onPause() override;
   EventHandleResult handleEvents(SDL_Event &event) override;
   void update(float dt) override;
   void renderScene() override;
@@ -102,6 +104,7 @@ private:
   std::unique_ptr<bms_parser::Chart> chart;
   std::vector<unsigned char> chartSourceBytes;
 
+  ChartSourceOverlay *sourceOverlay = nullptr;
   View *rootLayout = nullptr;
   ChartCanvasView *canvasView = nullptr;
   TextView *titleText = nullptr;
@@ -162,6 +165,7 @@ private:
   std::string viewerAssistOption = assist_options::kOff;
 
   void initView();
+  void showSource();
   void rebuildRandomDrawer();
   void showRandomDrawer();
   void hideRandomDrawer();

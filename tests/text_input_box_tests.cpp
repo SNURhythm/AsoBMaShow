@@ -1,5 +1,6 @@
 #include "scene/play/GuidedAccessInstructionView.h"
 #include "scene/ChartReadmeModal.h"
+#include "scene/ChartSourceOverlay.h"
 #include "view/LegalNoticeReader.h"
 #include "library/DocumentLinks.h"
 #include "library/ReadmeTranslation.h"
@@ -954,7 +955,18 @@ void testHardwareCueUsesRealViewHierarchy() {
     testButtonLocation = locateButton(modelForIdentifier("iPad16,3"), orientation, true);
     fixture.showGuidedAccessReminder();
     fixture.root.applyYogaLayout();
+    const auto *marker = fixture.guidedAccessButtonMarker;
+    expect(marker->getWidth() > 0 && marker->getHeight() > 0 &&
+           marker->getX() >= 0 && marker->getY() >= 0 &&
+           marker->getX() + marker->getWidth() <= rendering::window_width &&
+           marker->getY() + marker->getHeight() <= rendering::window_height,
+           "hardware marker has visible geometry within the screen");
     const auto *hint = fixture.guidedAccessButtonHint;
+    expect(hint->getWidth() > 0 && hint->getHeight() > 0 &&
+           hint->getX() >= 0 && hint->getY() >= 0 &&
+           hint->getX() + hint->getWidth() <= rendering::window_width &&
+           hint->getY() + hint->getHeight() <= rendering::window_height,
+           "hardware label has visible geometry within the screen");
     const auto *check = fixture.guidedAccessButtonCheck;
     const int textLeft = hint->getContentX() +
         (hint->getContentWidth() - hint->textureWidth()) / 2;
@@ -1233,6 +1245,207 @@ namespace platform_open {
 bool openExternalUrl(std::string_view, std::string &) { return true; }
 }
 
+void testNativeSourceSurfaceLifetime() {
+  struct Calls {
+    int creates = 0, destroys = 0, highlights = 0, scrolls = 0, frames = 0;
+    int syntaxUpdates = 0;
+    native_document::Frame frame;
+    std::shared_ptr<native_document::State> state;
+  };
+  struct Surface final : native_document::Surface {
+    std::shared_ptr<Calls> calls;
+    explicit Surface(std::shared_ptr<Calls> value) : calls(std::move(value)) { calls->state = state_; }
+    ~Surface() override { ++calls->destroys; }
+    void setFrame(native_document::Frame value) override { calls->frame = value; ++calls->frames; }
+    void setAppearance(native_document::Appearance) override {}
+    void setSyntax(std::shared_ptr<const bms_syntax::Document> syntax) override {
+      expect(syntax->length == 9 && syntax->spans.size() == 3,
+          "native source receives compact cached syntax spans");
+      ++calls->syntaxUpdates;
+    }
+    void highlight(const std::vector<text_range::Range> &ranges, bool focus) override {
+      expect(focus && ranges.size() == 1 && ranges[0].begin == 7,
+          "native practice highlight receives original UTF-8 source range");
+      ++calls->highlights;
+    }
+    void scroll(native_document::Scroll) override { ++calls->scrolls; }
+  };
+  const auto calls = std::make_shared<Calls>();
+  {
+    View root(0, 0, 400, 300);
+    auto *overlay = new ChartSourceOverlay([&](const std::string &text,
+        native_document::Frame frame, native_document::Appearance) {
+      expect(text == "#00011:01", "native surface receives the decoded source unchanged");
+      ++calls->creates;
+      calls->frame = frame;
+      return std::make_unique<Surface>(calls);
+    });
+    root.addView(overlay);
+    overlay->show("#00011:01", {{7, 9}}, "Source");
+    root.applyYogaLayout();
+    auto *fallback = root.findViewByName("chartSourceText");
+    expect(fallback && !fallback->getVisible(), "native surface replaces custom text rendering");
+    auto *highlight = root.findViewByName("chartSourceHighlight");
+    auto down = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_DOWN,
+        highlight->getX() + 10, highlight->getY() + 10);
+    auto up = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_UP,
+        highlight->getX() + 10, highlight->getY() + 10);
+    overlay->consumeEvent(down);
+    overlay->consumeEvent(up);
+    expect(calls->highlights == 1, "toolbar highlights and focuses the native document");
+    SDL_Event key{};
+    key.type = SDL_EVENT_KEY_DOWN;
+    key.key.key = SDLK_DOWN;
+    expect(overlay->consumeEvent(key) && calls->scrolls == 0,
+        "native text owns keyboard selection and scrolling without duplicate SDL navigation");
+    key.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+    key.gbutton.button = SDL_GAMEPAD_BUTTON_DPAD_DOWN;
+    expect(overlay->consumeEvent(key) && calls->scrolls == 1,
+        "gamepad navigation reaches the native document");
+    const int oldFrames = calls->frames;
+    root.setSize(500, 400);
+    root.applyYogaLayout();
+    expect(calls->frames > oldFrames, "native surface follows source layout changes");
+    root.propagateThemeChange();
+    expect(calls->syntaxUpdates == 1, "highlighting, resizing and theme updates reuse syntax tokens");
+    const auto oldState = calls->state;
+    const auto nativeEscapeTime = SDL_GetTicksNS();
+    oldState->requestDismiss();
+    overlay->updateNative();
+    expect(!overlay->getVisible() && calls->destroys == 1, "native Escape removes the surface");
+    key = {};
+    key.type = SDL_EVENT_KEY_DOWN;
+    key.key.key = SDLK_ESCAPE;
+    key.key.timestamp = nativeEscapeTime;
+    expect(overlay->consumeEvent(key), "delayed original native Escape cannot leave the chart viewer");
+    key.key.repeat = true;
+    expect(overlay->consumeEvent(key), "native dismissal swallows held Escape after focus returns");
+    key.key.repeat = false;
+    key.key.timestamp = std::numeric_limits<Uint64>::max();
+    expect(!overlay->consumeEvent(key), "a fresh Escape works even if native text consumed key-up");
+    overlay->show("#00011:01", {{7, 9}}, "Source");
+    oldState->requestDismiss();
+    overlay->updateNative();
+    expect(overlay->getVisible() && calls->creates == 2, "late dismissal cannot close a reopened document");
+    overlay->hide();
+    expect(calls->destroys == 2, "Close retires the native text surface");
+    overlay->show("#00011:01", {{7, 9}}, "Source");
+  }
+  expect(calls->destroys == 3, "scene destruction removes an open native surface");
+}
+
+void testChartSourceOverlayNavigation() {
+  View root(0, 0, 400, 300);
+  auto *overlay = new ChartSourceOverlay();
+  root.addView(overlay);
+  const std::string prefix(40, '\n');
+  overlay->show(prefix + "#00111:01020304\n" + std::string(40, '\n'),
+      {{prefix.size() + 7, prefix.size() + 11}}, "Chart source");
+  root.applyYogaLayout();
+  expect(overlay->getWidth() == 400 && overlay->getHeight() == 300,
+      "source overlay fills the viewer");
+  auto *reader = dynamic_cast<DocumentTextReader *>(root.findViewByName("chartSourceText"));
+  auto *highlight = dynamic_cast<Button *>(root.findViewByName("chartSourceHighlight"));
+  expect(reader && highlight, "source overlay exposes text and highlight action");
+  {
+    auto down = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_DOWN,
+        highlight->getX() + highlight->getWidth() / 2, highlight->getY() + highlight->getHeight() / 2);
+    auto up = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_UP,
+        highlight->getX() + highlight->getWidth() / 2, highlight->getY() + highlight->getHeight() / 2);
+    overlay->consumeEvent(down);
+    overlay->consumeEvent(up);
+  }
+  expect(reader->scrollOffset > 0, "selection action focuses the matching source data");
+  SDL_Event event{};
+  event.type = SDL_EVENT_KEY_DOWN;
+  const double highlightedOffset = reader->scrollOffset;
+  event.key.key = SDLK_DOWN;
+  expect(overlay->consumeEvent(event) && reader->scrollOffset == highlightedOffset + reader->itemHeight,
+      "Down scrolls one row after highlighting without resetting to the top");
+  event.key.key = SDLK_UP;
+  expect(overlay->consumeEvent(event) && reader->scrollOffset == highlightedOffset,
+      "Up scrolls one row from the current document position");
+  event.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+  event.gbutton.button = SDL_GAMEPAD_BUTTON_DPAD_DOWN;
+  expect(overlay->consumeEvent(event) && reader->scrollOffset == highlightedOffset + reader->itemHeight,
+      "gamepad Down scrolls one document row");
+  event.gbutton.button = SDL_GAMEPAD_BUTTON_DPAD_UP;
+  expect(overlay->consumeEvent(event) && reader->scrollOffset == highlightedOffset,
+      "gamepad Up scrolls one document row");
+  event.type = SDL_EVENT_KEY_DOWN;
+  event.key.key = SDLK_HOME;
+  expect(overlay->consumeEvent(event) && reader->scrollOffset == 0,
+      "source handles keyboard scrolling before chart shortcuts");
+  event.key.key = SDLK_DOWN;
+  expect(overlay->consumeEvent(event) && reader->scrollOffset == reader->itemHeight,
+      "Down advances from the top of an unselectable source document");
+  event.key.key = SDLK_ESCAPE;
+  expect(overlay->consumeEvent(event) && !overlay->getVisible(), "Escape closes only the source overlay");
+  event.key.repeat = true;
+  expect(overlay->consumeEvent(event), "held Escape cannot back out of the chart viewer");
+  event.type = SDL_EVENT_KEY_UP;
+  expect(overlay->consumeEvent(event), "source consumes its closing key release");
+  event.type = SDL_EVENT_KEY_DOWN;
+  event.key.key = SDLK_RIGHT;
+  expect(!overlay->consumeEvent(event), "closed source restores practice marker shortcuts");
+  overlay->show("#00011:01", {}, "Reopened");
+  root.applyYogaLayout();
+  {
+    auto down = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_DOWN,
+        highlight->getX() + highlight->getWidth() / 2, highlight->getY() + highlight->getHeight() / 2);
+    auto up = selectionPointer(false, SDL_EVENT_MOUSE_BUTTON_UP,
+        highlight->getX() + highlight->getWidth() / 2, highlight->getY() + highlight->getHeight() / 2);
+    overlay->consumeEvent(down);
+    overlay->consumeEvent(up);
+  }
+  expect(reader->scrollOffset == 0, "empty matches leave source readable");
+  event.type = SDL_EVENT_GAMEPAD_BUTTON_DOWN;
+  event.gbutton.button = SDL_GAMEPAD_BUTTON_EAST;
+  expect(overlay->consumeEvent(event) && !overlay->getVisible(), "gamepad back closes the overlay");
+  event.type = SDL_EVENT_GAMEPAD_BUTTON_UP;
+  expect(overlay->consumeEvent(event), "source consumes its closing gamepad release");
+}
+
+void testDocumentHighlightsWrapAndFocus() {
+  View root(0, 0, 300, 180);
+  auto *reader = new DocumentTextReader();
+  reader->setWidthPercent(100)->setHeight(180);
+  root.addView(reader);
+  const std::string prefix(40, '\n');
+  const std::string data(180, '1');
+  reader->setDocumentText(prefix + "#00011:" + data + "\nTail");
+  root.applyYogaLayout();
+  reader->setHighlights({{prefix.size() + 7, prefix.size() + 7 + data.size()}}, true);
+  expect(reader->scrollOffset > 0, "highlight focuses the first matched source row");
+  bool found = false;
+  for (int i = 0; i < reader->size(); ++i) {
+    if (auto *row = reader->getViewByIndex(i)) {
+      if (row->findViewByName("documentTextHighlight")) found = true;
+    }
+  }
+  expect(found, "visible source data has highlight geometry");
+  root.setWidth(180);
+  root.applyYogaLayout();
+  reader->setHighlights({{prefix.size() + 7, prefix.size() + 7 + data.size()}}, true);
+  int marked = 0;
+  for (int i = 0; i < reader->size(); ++i) {
+    if (auto *row = reader->getViewByIndex(i)) {
+      if (row->findViewByName("documentTextHighlight")) ++marked;
+    }
+  }
+  expect(marked > 1, "highlights span wrapped rows after resizing");
+  reader->setHighlights({}, true);
+  for (int i = 0; i < reader->size(); ++i) {
+    if (auto *row = reader->getViewByIndex(i))
+      expect(!row->findViewByName("documentTextHighlight"), "recycled rows clear old highlights");
+  }
+  reader->setHighlights({{prefix.size() + 7, prefix.size() + 9}}, true);
+  reader->setDocumentText("Other source");
+  expect(reader->scrollOffset == 0 &&
+      !reader->getViewByIndex(0)->findViewByName("documentTextHighlight"),
+      "new source clears old highlights and scroll");
+}
+
 void testDocumentLinksDoNotHijackScrolling() {
   const auto links = document_links::find("Text <https://example.com/a?q=1&x=2>. (https://example.org/wiki/A_(B)). javascript:evil www.example.net");
   expect(links.size() == 3 && links[0].url == "https://example.com/a?q=1&x=2" &&
@@ -1349,6 +1562,9 @@ int main() {
   init.resolution.height = 64;
   expect(bgfx::init(init), "headless bgfx initializes for text input tests");
 
+  testNativeSourceSurfaceLifetime();
+  testChartSourceOverlayNavigation();
+  testDocumentHighlightsWrapAndFocus();
   testDocumentLinksDoNotHijackScrolling();
   testLegalNoticeReaderReflowsAndResets();
   testReadmeModalDisplaysAndCloses();

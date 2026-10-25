@@ -46,6 +46,7 @@ else()
     set(PLATFORM_MACOS OFF)
 endif()
 if(APPLE)
+    set_source_files_properties(src/platform/NativeDocumentApple.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_source_files_properties(src/video/HardwareVideoFrameApple.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 endif()
 if (ANDROID)
@@ -5555,6 +5556,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_test(NAME readme_translation_tests COMMAND readme_translation_tests)
     add_executable(text_input_box_tests
         tests/text_input_box_tests.cpp
+        src/view/SelectableDocumentView.cpp
+        src/view/BmsSyntax.cpp
+        src/platform/NativeDocument.cpp
         src/scene/ChartReadmeModal.cpp
         src/library/ReadmeTranslation.cpp
         src/library/ChartReadme.cpp
@@ -5580,6 +5584,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/view/TextView.cpp
         src/view/View.cpp
     )
+    target_compile_definitions(text_input_box_tests PRIVATE ASOBMASHOW_NATIVE_DOCUMENT_TEST_STUB=1)
     target_include_directories(text_input_box_tests PRIVATE
         ${CMAKE_SOURCE_DIR}/src
         ${CMAKE_CURRENT_BINARY_DIR}
@@ -9086,6 +9091,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         lane_cover_number_geometry_tests
         lane_cover_controls_tests
         chart_viewer_note_geometry_tests
+        chart_source_tests
         chart_viewer_lifecycle_tests
         gameplay_scroll_geometry_tests
         gameplay_chart_entity_render_budget_tests

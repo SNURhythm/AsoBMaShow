@@ -48,14 +48,20 @@ The Mini 6, Air 11 M4 (drawing shared with M2/M3), Pro 11 M4, and Pro 11 generat
 | iPad Pro 13-inch (M4) | 0.940670 | [Drawing](https://developer.apple.com/download/files/accessories/dimensional-drawings/ipad-pro-13-inch-m4.pdf) |
 | iPad Pro 13-inch (M5) | 0.940670 | [Drawing](https://developer.apple.com/download/files/accessories/dimensional-drawings/ipad-pro-13-inch-m5.pdf) |
 
-Use the active window scene's **interface** orientation, not accelerometer/device
-orientation. UIKit's landscape names differ from UIDeviceOrientation: interface
+Use the active window scene's `effectiveGeometry.interfaceOrientation` on iOS 16+,
+with its legacy interface orientation on older systems, not accelerometer/device
+orientation. For SDL windows without a `UIWindowScene`, use the root view
+controller's interface orientation, matching the app's rotation-lock code.
+Reading a missing scene instead yields Unknown and suppresses both the marker
+and floating label, even for a known full-screen iPad. UIKit's landscape names differ from UIDeviceOrientation: interface
 LandscapeLeft places Home on the left; LandscapeRight places Home on the right.
 The normalized mappings from portrait `(x, y)` are `(1-y, x)` for LandscapeLeft,
 `(y, 1-x)` for LandscapeRight, and `(1-x, 1-y)` upside down.
 
-A location is shown only when the app fills the built-in screen. Unknown
-orientation, external displays, and partial windows use the existing centered
+A location is shown when the application scene's root view fills that scene's
+screen. Use `windowScene.screen` for both the coordinate conversion and screen
+bounds; equality with `UIScreen.mainScreen` is not a valid scene-display test.
+Dedicated external-display scene roles, unknown orientation, and partial windows use the existing centered
 instructions without a duplicate floating label. Back and Skip this session are
 large text buttons in the central controls, leaving all screen edges free.
 The cue is recalculated while the reminder is visible, and confirms alongside
@@ -65,6 +71,20 @@ Enabled text. The spring settles in place and the success cue remains fully
 visible until gameplay starts. This adds no time to the existing two-second
 startup delay. Interruption resets the cue to idle.
 Text stays upright in app coordinates; the edge marker changes axis with orientation.
+
+The M5 11-inch device log on iPadOS 27.2 beta confirmed `screen-mismatch` with
+`sceneMain=0` and a valid effective landscape orientation. The old main-screen
+identity guard exited before measuring the viewport, suppressing both cues.
+The bridge regression covers a full-screen application scene with a different
+screen from `UIScreen.mainScreen`, both landscape orientations, stale legacy
+screen/orientation values, missing screens and partial/external scenes.
+
+Application-role eligibility matches SDL's scene selection. It does not identify
+the physical display when an interactive application scene is moved to an
+external monitor: UIKit uses the same application role there. The cue follows
+that application's full-screen display. Scene-less legacy windows retain the
+main-screen guard. The fix was confirmed on the reported iPad; temporary cue
+diagnostics have been removed.
 
 Skipping is kept only for the current gameplay session, including in-game and
 result-screen retries, practice restarts, and course continuation. Returning to

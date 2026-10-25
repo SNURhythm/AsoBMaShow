@@ -2486,6 +2486,8 @@ public:
   static constexpr const char *RandomPrngId = "std::mt19937_64";
 
   Parser();
+  // Decode source with the same charset detection as Parse, preserving line endings.
+  [[nodiscard]] static std::string DecodeText(const std::vector<unsigned char> &bytes);
   static bool IsSupportedRandomPrng(const std::string &RandomPrng);
   bool SetRandomPrng(const std::string &RandomPrng);
   [[nodiscard]] const std::string &GetRandomPrng() const;

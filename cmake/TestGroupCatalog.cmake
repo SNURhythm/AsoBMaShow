@@ -123,6 +123,7 @@ asobmashow_label_tests(area_gameplay
     bounded_duration_graph_tests
     chart_viewer_lifecycle_tests
     chart_viewer_note_geometry_tests
+    chart_source_tests
     course_continuation_tests
     course_gameplay_session_builder_tests
     course_identity_tests
@@ -557,6 +558,10 @@ asobmashow_label_tests(area_ui
     scrollbar_fade_tests
     text_animation_timing_tests
     text_input_box_tests
+    native_document_tests
+    bms_syntax_tests
+    native_document_apple_tests
+    native_document_windows_tests
     legal_notices_tests
     ui_presentation_schedule_tests
     ui_scale_tests

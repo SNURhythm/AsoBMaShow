@@ -152,3 +152,14 @@ text and custom-skin atlas rasters for visual review and removes its temporary
 device files. These device checks complement the host
 `text_view_font_lifetime_tests` and `skin_resource_catalog_tests`; desktop font
 fixtures alone cannot detect an Android system font changing to COLRv1.
+
+## iOS native source reader
+
+With an already booted iOS Simulator, run `scripts/ios_native_document_test.sh`
+(or pass its simulator UDID). The runner compiles the production UIKit backend
+into a small, temporary test app, installs it, checks its result, then removes it.
+It does not build or replace AsoBMaShow. It uses Xcode's simulator SDK and needs no
+signing credentials. The test covers highlighting before the first usable layout,
+manual and animated scrolling, stable line positions across display frames,
+selection preservation, bounded syntax colors, resizing, and closing with queued
+viewport work. This is an explicit simulator check, outside the host CTest suite.
