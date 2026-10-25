@@ -19,6 +19,9 @@ public:
     std::pair<std::string, std::string> resolvedFilters = {"ALL", "ALL"};
     PageLoader loadPage;
     IndexLookup findIndex;
+    std::array<std::size_t, 3> randomCounts{};
+    std::function<std::optional<ChartMetaRecord>(ChartSelectorRandomFilter, std::size_t)>
+        loadRandomCandidate;
   };
 
   using QueryResolver =
@@ -31,9 +34,14 @@ public:
   MusicSelectSqlSongs(MusicSelectSqlSongs &&) = delete;
   MusicSelectSqlSongs &operator=(MusicSelectSqlSongs &&) = delete;
   [[nodiscard]] std::size_t size() const noexcept override;
-  [[nodiscard]] std::size_t randomCandidateCount() const noexcept override {
-    return size();
+  [[nodiscard]] std::size_t randomCandidateCount(
+      ChartSelectorRandomFilter filter = ChartSelectorRandomFilter::Any) const noexcept override {
+    return filter == ChartSelectorRandomFilter::Any ? size()
+        : query_.randomCounts[static_cast<std::size_t>(filter)];
   }
+  [[nodiscard]] const MusicSelectBar &randomCandidateAt(
+      std::size_t index,
+      ChartSelectorRandomFilter filter = ChartSelectorRandomFilter::Any) const override;
   [[nodiscard]] std::shared_ptr<MusicSelectRowProvider> clone() const override;
   [[nodiscard]] const MusicSelectBar &at(std::size_t) const override;
   [[nodiscard]] std::optional<std::size_t>
@@ -57,4 +65,5 @@ private:
   ResolvedQuery query_;
   BoundedPageCache<MusicSelectBar> pages_;
   mutable std::string diagnostic_;
+  mutable MusicSelectBar randomCandidate_;
 };

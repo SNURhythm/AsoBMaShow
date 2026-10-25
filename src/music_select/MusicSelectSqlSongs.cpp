@@ -44,6 +44,30 @@ const MusicSelectBar &MusicSelectSqlSongs::at(std::size_t index) const {
   return pages_.get(index);
 }
 
+const MusicSelectBar &MusicSelectSqlSongs::randomCandidateAt(
+    std::size_t index, ChartSelectorRandomFilter filter) const {
+  if (filter == ChartSelectorRandomFilter::Any) return at(index);
+  if (index >= randomCandidateCount(filter)) throw std::out_of_range("random candidate index");
+  randomCandidate_ = unavailableBar(index);
+  if (!diagnostic_.empty()) return randomCandidate_;
+  try {
+    const auto record = query_.loadRandomCandidate(filter, index);
+    if (!record) throw std::runtime_error("The library changed while choosing a chart.");
+    auto bar = project_(*record);
+    if (bar.id.value != context_ + ":" + chartIdentity(*record) ||
+        !musicSelectIsRandomCandidate(bar, filter)) {
+      throw std::runtime_error("The library changed while choosing a chart.");
+    }
+    randomCandidate_ = std::move(bar);
+  } catch (const std::exception &error) {
+    diagnostic_ = error.what();
+    if (diagnostic_.empty()) diagnostic_ = "Unable to choose a chart.";
+  } catch (...) {
+    diagnostic_ = "Unable to choose a chart.";
+  }
+  return randomCandidate_;
+}
+
 std::optional<std::size_t>
 MusicSelectSqlSongs::indexOf(const MusicSelectBarId &id) const {
   const auto prefix = context_ + ":";

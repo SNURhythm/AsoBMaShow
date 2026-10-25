@@ -3086,6 +3086,36 @@ void testPhysicalDirectoryPagesOwnWorkerSessionAndRichProjectionInputs() {
   assert(loaded.provider->at(1).presentation.lamp == 7);
 }
 
+void testPhysicalDirectoryScoreFilteredRandomSelection() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  const auto root = temporary.path() / "songs";
+  seedPhysicalDirectoryPages(repository, root, 20);
+  auto best = std::make_shared<ScoreBestCache>();
+  auto clears = std::make_shared<ScoreClearRankCache>();
+  best->scoreBySha256[physicalChartHash(1)].snapshots[2] = ScoreBestSnapshot{.playCount = 2};
+  best->scoreBySha256[physicalChartHash(2)].snapshots[2] = ScoreBestSnapshot{.playCount = 3};
+  clears->rankBySha256[physicalChartHash(1)].ranks[2] = kClearTypeFailedRank;
+  clears->rankBySha256[physicalChartHash(2)].ranks[2] = kClearTypeNormalClearRank;
+  const auto directory = physicalDirectory(root);
+  auto loaded = loadMusicSelectPhysicalDirectory(
+      repository, {}, directory, best, clears, temporary.path(), {}, 2);
+  assert(loaded.provider && loaded.provider->randomCandidateCount() == 20);
+  assert(loaded.provider->randomCandidateCount(ChartSelectorRandomFilter::NoPlay) == 18);
+  assert(loaded.provider->randomCandidateCount(ChartSelectorRandomFilter::Failed) == 1);
+  const auto failed = loaded.provider->randomCandidateAt(0, ChartSelectorRandomFilter::Failed);
+  assert(failed.chart->meta.SHA256 == physicalChartHash(1));
+  assert(failed.score->playCount == 2 && failed.presentation.lamp == 1);
+  const auto unplayed = loaded.provider->randomCandidateAt(17, ChartSelectorRandomFilter::NoPlay);
+  assert(unplayed.chart->meta.SHA256 == physicalChartHash(20) && !unplayed.score);
+  auto clone = loaded.provider->clone();
+  clone->configure("ALL", "ALL", "LEVEL");
+  assert(clone->randomCandidateCount(ChartSelectorRandomFilter::Failed) == 1);
+  assert(clone->randomCandidateAt(0, ChartSelectorRandomFilter::Failed).id == failed.id);
+  assert(loaded.provider->diagnostic().empty());
+}
+
 void testPhysicalDirectoryFirstPageDoesNotVisitWholeFolder() {
   TempDirectory temporary;
   std::atomic<int> connections{0};
@@ -4491,6 +4521,7 @@ int main(int argc, char **argv) {
     }
   }
   testCourseFallbackLookupUsesHashIndexes();
+  testPhysicalDirectoryScoreFilteredRandomSelection();
   testPhysicalDirectoryFirstPageDoesNotVisitWholeFolder();
   testSearchProviderBoundsAndSnapshotRecovery();
   testSearchDurationFallbackAndCancellationKeepKeywordRestriction();

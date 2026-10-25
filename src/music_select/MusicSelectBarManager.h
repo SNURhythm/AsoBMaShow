@@ -124,5 +124,5 @@ private:
   std::int64_t movementEndMillis_ = 0;
   MusicSelectBarManagerConfig config_;
   bool randomSelect_ = false;
-  std::vector<std::size_t> randomRows_;
+  std::array<std::vector<std::size_t>, 3> randomRows_;
 };

@@ -235,7 +235,9 @@ bool musicSelectIsSolidArchiveDirectory(const Bar &) { return false; }
 bool musicSelectIsSolidArchiveAction(const Bar &) { return false; }
 bool musicSelectIsUnzipAllAction(const Bar &) { return false; }
 bool musicSelectIsRandomSelectBar(const Bar &bar) {
-  return bar.id.value == "action:random-select";
+  return bar.id.value == "action:random-select" ||
+         bar.id.value == "action:random-select-no-play" ||
+         bar.id.value == "action:random-select-failed";
 }
 struct Bars {
   struct Rows {

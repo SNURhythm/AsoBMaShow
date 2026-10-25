@@ -138,6 +138,56 @@ void testRandomSelectKeepsSqlRowsLazyAndRetainsSelection() {
   assert(!musicSelectIsRandomSelectBar(manager.readView().rowAt(0)));
 }
 
+void testScoreFilteredRandomRowsStayLazyAndSurviveCloning() {
+  FakeReader reader;
+  int randomReads = 0;
+  auto resolver = [&](const MusicSelectBarManagerConfig &config) {
+    auto query = reader.resolver()(config);
+    query.randomCounts = {reader.count, 1, config.modeFilter == "7KEY" ? 0U : 1U};
+    query.loadRandomCandidate = [&](ChartSelectorRandomFilter filter, std::size_t index)
+        -> std::optional<ChartMetaRecord> {
+      ++randomReads;
+      assert(index == 0);
+      if (reader.failPage) throw std::runtime_error("random read failed");
+      return recordAt(filter == ChartSelectorRandomFilter::NoPlay ? 17 : 42);
+    };
+    return query;
+  };
+  auto projector = [&](const ChartMetaRecord &record) {
+    auto bar = reader.projector()(record);
+    if (record.meta.SHA256 == "42") {
+      bar.score = ScoreBestSnapshot{.playCount = 2};
+      bar.presentation.lamp = 1;
+    }
+    return bar;
+  };
+  MusicSelectProjection projection;
+  projection.root = {{"folder:/songs"}};
+  projection.bars.push_back({.id = projection.root.front(),
+                             .kind = skin::MusicSelectBarKind::Folder});
+  MusicSelectBarManager manager(std::move(projection), {}, true);
+  assert(manager.installRowProvider({"folder:/songs"},
+      std::make_shared<MusicSelectSqlSongs>("folder:/songs", resolver, projector)));
+  assert(manager.open({"folder:/songs"}));
+  const auto retained = manager.readView();
+  assert(retained.rowCount() == 100'003 && reader.reads == 0 && randomReads == 0);
+  assert(manager.select({"action:random-select-no-play"}));
+  assert(manager.resolveRandomSelection()->chart->meta.SHA256 == "17");
+  assert(randomReads == 1 && reader.reads == 0 && reader.projected == 1);
+  assert(manager.select({"action:random-select-failed"}));
+  assert(manager.resolveRandomSelection()->chart->meta.SHA256 == "42");
+  assert(randomReads == 2 && reader.reads == 0 && reader.projected == 2);
+  assert(manager.select({"folder:/songs:sha256:99999"}));
+  assert(manager.readView().selectedIndex == 100'002);
+  manager.configure({"7KEY", "ALL", "LEVEL"});
+  assert(manager.readView().selectedIndex == 2 && !manager.select({"action:random-select-failed"}));
+  assert(retained.rowCount() == 100'003 && retained.rowAt(2).id.value == "action:random-select-failed");
+  assert(manager.select({"action:random-select-no-play"}));
+  reader.failPage = true;
+  assert(!manager.resolveRandomSelection());
+  assert(manager.readView().rowProvider->diagnostic() == "random read failed");
+}
+
 void assertUnavailable(const MusicSelectBar &bar) {
   assert(bar.kind == skin::MusicSelectBarKind::Song);
   assert(!bar.chart && !bar.selectable && !bar.presentation.exists);
@@ -366,6 +416,7 @@ void testCountFailuresPropagateAndFailedReconfigurationPreservesRows() {
 
 int main() {
   testRandomSelectKeepsSqlRowsLazyAndRetainsSelection();
+  testScoreFilteredRandomRowsStayLazyAndSurviveCloning();
   testMiddlePageFailureDoesNotRetryAfterCacheEviction();
   testReplacingFailedProviderRetainsFrameAndMiddlePosition();
   testFirstAndWrappedPagesDoNotEnumerateTheLibrary();

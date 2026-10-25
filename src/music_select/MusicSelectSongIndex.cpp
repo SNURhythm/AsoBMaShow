@@ -124,6 +124,7 @@ void MusicSelectSongIndex::add(const ChartMetaRecord &record,
       .exists = !record.unavailable && !meta.BmsPath.empty(),
       .randomCandidate = !record.unavailable && !record.solidArchive &&
                          !meta.BmsPath.empty(),
+      .playCount = score ? score->playCount : 0,
       .hasScore = score.has_value(),
       .hasScoreRate = scoreNotes != 0,
       .hasDuration = score && score->averageJudgeMicros.has_value()};
@@ -244,10 +245,16 @@ std::pair<std::string, std::string> MusicSelectSongIndex::configure(
     checkCancelled(stop);
     positions[rows[position]] = position;
   }
-  std::vector<std::size_t> randomRows;
+  std::array<std::vector<std::size_t>, 3> randomRows;
   for (std::size_t position = 0; position < rows.size(); ++position) {
     checkCancelled(stop);
-    if (entries_[rows[position]].randomCandidate) randomRows.push_back(position);
+    const auto &entry = entries_[rows[position]];
+    if (!entry.randomCandidate) continue;
+    for (const auto filter : kChartSelectorRandomFilters) {
+      if (chartSelectorRandomFilterMatches(filter, entry.playCount, entry.lamp)) {
+        randomRows[static_cast<std::size_t>(filter)].push_back(position);
+      }
+    }
   }
   Configuration configuration{std::string(mode), std::string(difficulty),
                                 std::string(sort), resolved};

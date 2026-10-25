@@ -576,11 +576,15 @@ void testArchiveActionsDoNotActivateRandomSelectSkinLayers() {
 
   MusicSelectBarManagerSnapshot random;
   random.rows.push_back({.kind = skin::MusicSelectBarKind::Executable,
+                         .title = "[RANDOM] RANDOM SELECT",
                          .presentation = {.kind = skin::MusicSelectBarKind::Executable,
                                           .exists = true}});
   const auto values = projectMusicSelectProperties(AppSettings{}, random, {});
   require(values.booleans.at(1030) && values.booleans.at(5) && !values.booleans.at(1),
           "real random-select ExecutableBars keep their Beatoraja skin flags");
+  require(!values.booleans.at(2) && values.strings.at(10).empty() &&
+              values.strings.at(12).empty(),
+          "random rows suppress ordinary title text so the authored random label does not overlap");
 }
 
 void testProjectsDirectoryAndFinishedRanking() {

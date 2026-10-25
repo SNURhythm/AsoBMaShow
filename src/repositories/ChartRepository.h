@@ -128,6 +128,22 @@ struct ChartMetaRecord {
   std::optional<std::vector<std::string>> originalMd5s;
 };
 
+enum class ChartSelectorRandomFilter : std::size_t { Any, NoPlay, Failed };
+
+inline constexpr std::array kChartSelectorRandomFilters{
+    ChartSelectorRandomFilter::Any, ChartSelectorRandomFilter::NoPlay,
+    ChartSelectorRandomFilter::Failed};
+
+[[nodiscard]] inline bool chartSelectorRandomFilterMatches(
+    ChartSelectorRandomFilter filter, int playCount, int lamp) noexcept {
+  switch (filter) {
+  case ChartSelectorRandomFilter::Any: return true;
+  case ChartSelectorRandomFilter::NoPlay: return playCount == 0;
+  case ChartSelectorRandomFilter::Failed: return lamp == 1;
+  }
+  return false;
+}
+
 struct ChartSelectorQueryResolution;
 
 struct ChartFolderStatisticsRow {
@@ -359,6 +375,11 @@ public:
                                            std::stop_token stop = {});
     std::vector<ChartMetaRecord> SelectChartSelectorPage(
         const ChartSelectorQuery &query, std::size_t offset, std::size_t limit,
+        std::stop_token stop = {});
+    std::array<std::size_t, 3> CountChartSelectorRandomCandidates(
+        const ChartSelectorQuery &, std::stop_token stop = {});
+    std::optional<ChartMetaRecord> SelectChartSelectorRandomCandidate(
+        const ChartSelectorQuery &, ChartSelectorRandomFilter, std::size_t offset,
         std::stop_token stop = {});
     std::optional<std::size_t> FindChartSelectorIndex(
         const ChartSelectorQuery &query, std::string_view identity,

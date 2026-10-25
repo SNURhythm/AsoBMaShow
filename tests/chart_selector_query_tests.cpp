@@ -193,6 +193,74 @@ void compareWithIndex(Fixture &fixture, ChartSelectorQuery query) {
   assert(fixture.session->SelectChartSelectorPage(query, 0, 0).empty());
 }
 
+void scoreFilteredRandomQueries() {
+  Fixture fixture;
+  fixture.seed(8); // Four chart identities, each present at two paths.
+  fixture.execute("UPDATE chart_meta SET keys=7,total_notes=500,ln_mode=0,"
+                  "total_long_notes=0,total_backspin_notes=0");
+  const auto hash = [](int value) { return std::string(63, '0') + std::to_string(value); };
+  auto best = std::make_shared<ScoreBestCache>();
+  auto clears = std::make_shared<ScoreClearRankCache>();
+  best->scoreBySha256[hash(1)].snapshots[0] = ScoreBestSnapshot{.playCount = 2};
+  best->scoreBySha256[hash(2)].snapshots[0] = ScoreBestSnapshot{.playCount = 3};
+  best->scoreBySha256[hash(3)].snapshots[0] = ScoreBestSnapshot{
+      .playCount = 0, .clearType = kNoClearTypeRank};
+  clears->rankBySha256[hash(1)].ranks[0] = kClearTypeFailedRank;
+  clears->rankBySha256[hash(2)].ranks[0] = kClearTypeNormalClearRank;
+  auto query = fixture.query();
+  query.best = best;
+  query.clears = clears;
+  assert(fixture.session->ResolveChartSelectorQuery(query) == 4);
+  QueryTrace trace;
+  fixture.trace(&trace);
+  assert((fixture.session->CountChartSelectorRandomCandidates(query) ==
+          std::array<std::size_t, 3>{4, 2, 1}));
+  assert(trace.richRows == 0 && trace.maximumColumns <= 3);
+  trace = {};
+  const auto failed = fixture.session->SelectChartSelectorRandomCandidate(
+      query, ChartSelectorRandomFilter::Failed, 0);
+  assert(failed && failed->meta.SHA256 == hash(1));
+  assert(trace.richRows == 1 && trace.sorts == 0);
+  std::vector<std::string> unplayed;
+  for (std::size_t i = 0; i < 2; ++i) {
+    const auto record = fixture.session->SelectChartSelectorRandomCandidate(
+        query, ChartSelectorRandomFilter::NoPlay, i);
+    assert(record);
+    unplayed.push_back(record->meta.SHA256);
+  }
+  std::ranges::sort(unplayed);
+  assert((unplayed == std::vector<std::string>{hash(0), hash(3)}));
+  assert(!fixture.session->SelectChartSelectorRandomCandidate(
+      query, ChartSelectorRandomFilter::Failed, 1));
+  fixture.trace(nullptr);
+  std::stop_source stop;
+  stop.request_stop();
+  expectFailure([&] { fixture.session->CountChartSelectorRandomCandidates(query, stop.get_token()); });
+  expectFailure([&] { fixture.session->SelectChartSelectorRandomCandidate(
+      query, ChartSelectorRandomFilter::NoPlay, 0, stop.get_token()); });
+  fixture.execute("UPDATE chart_meta SET keys=14 WHERE sha256='" + hash(1) + "'");
+  expectFailure([&] { fixture.session->CountChartSelectorRandomCandidates(query); });
+  expectFailure([&] { fixture.session->SelectChartSelectorRandomCandidate(
+      query, ChartSelectorRandomFilter::Failed, 0); });
+  query.modeFilter = "7KEY";
+  assert(fixture.session->ResolveChartSelectorQuery(query) == 3);
+  assert((fixture.session->CountChartSelectorRandomCandidates(query) ==
+          std::array<std::size_t, 3>{3, 2, 0}));
+  // Undefined LN charts use the active LN mode, retaining legacy-LN fallback.
+  fixture.execute("UPDATE chart_meta SET total_long_notes=1");
+  best->scoreBySha256[hash(0)].snapshots[1] = ScoreBestSnapshot{.playCount = 1};
+  clears->rankBySha256[hash(0)].ranks[1] = kClearTypeFailedRank;
+  best->scoreBySha256[hash(1)].snapshots[1] = ScoreBestSnapshot{.playCount = 1};
+  clears->rankBySha256[hash(1)].ranks[1] = kClearTypeNormalClearRank;
+  query.modeFilter = "ALL";
+  query.selectedLongNoteMode = 1;
+  assert(fixture.session->ResolveChartSelectorQuery(query) == 4);
+  assert((fixture.session->CountChartSelectorRandomCandidates(query) ==
+          std::array<std::size_t, 3>{4, 1, 1}));
+  assert(fixture.session->SelectChartSelectorRandomCandidate(
+      query, ChartSelectorRandomFilter::Failed, 0)->meta.SHA256 == hash(0));
+}
+
 void differentialQueries() {
   Fixture fixture;
   fixture.seed(200);
@@ -639,6 +707,7 @@ int main(int argc, char **argv) {
     benchmarkMmap();
     return 0;
   }
+  scoreFilteredRandomQueries();
   differentialQueries();
   durationOverflowCompatibility();
   errorsAndCancellation();

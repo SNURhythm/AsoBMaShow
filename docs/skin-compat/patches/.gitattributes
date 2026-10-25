@@ -1,0 +1,2 @@
+# Preserve the upstream Lua file's CRLF context in this patch.
+litone12-random-select-character.patch -text whitespace=cr-at-eol
