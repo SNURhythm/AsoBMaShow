@@ -496,6 +496,9 @@ int main() {
               "source_archive_size INTEGER"
               ")");
   execOrAbort(db,
+              "CREATE TABLE chart_favorites (chart_path TEXT, "
+              "chart_sha256 TEXT, chart_md5 TEXT)");
+  execOrAbort(db,
               "CREATE TABLE difficulty_table_entries ("
               "table_id INTEGER NOT NULL,"
               "level TEXT NOT NULL,"
@@ -638,6 +641,58 @@ int main() {
                               main_menu_library::folderKeyForCourse(30),
                               long_note_mode::kLnValue),
             "same-ID nonempty mismatching key cannot override course folder");
+
+  // A folder lamp is the weakest available chart's best lamp, including
+  // Failed and No Play. Missing downloads must not lower a table's lamp.
+  execOrAbort(db,
+              "INSERT INTO chart_meta(path, md5, sha256) "
+              "VALUES('charts/failed.bms', 'md5-failed', 'sha-failed')");
+  execOrAbort(db,
+              "INSERT INTO difficulty_table_entries VALUES "
+              "(1, '12', 'sha-failed', 'md5-failed'),"
+              "(1, '12', 'sha-missing', 'md5-missing'),"
+              "(3, '1', 'sha-missing', 'md5-missing')");
+  scoreRanks.rankBySha256["sha-failed"].ranks[0] = kClearTypeFailedRank;
+  data = repository_test::loadFolderClearDataByLongNoteMode(
+      db, scoreRanks, localCourseRanks);
+  ASSERT_EQ(kClearTypeFailedRank, folderRankForLn(data, "all"),
+            "Failed is a visible folder lamp");
+  ASSERT_EQ(kClearTypeFailedRank, folderRankForLn(data, "level:1:12"),
+            "folder takes weakest available chart and ignores missing downloads");
+  ASSERT_EQ(1, folderClearCountForLn(data, "table:1", kNoClearTypeRank),
+            "No Play filters still count unavailable table rows");
+  ASSERT_EQ(kNoClearTypeRank, folderRankForLn(data, "table:3"),
+            "a table with no available charts has no lamp");
+
+  scoreRanks.rankBySha256["sha-failed"].ranks[0] = kClearTypeEasyClearRank;
+  execOrAbort(db,
+              "INSERT INTO chart_favorites VALUES "
+              "('old/path.bms', 'sha-failed', ''),"
+              "('', '', 'md5-local')");
+  data = repository_test::loadFolderClearDataByLongNoteMode(
+      db, scoreRanks, localCourseRanks);
+  ASSERT_EQ(kClearTypeEasyClearRank, folderRankForLn(data, "table:1"),
+            "mixed clears use the weakest clear lamp");
+  ASSERT_EQ(kClearTypeEasyClearRank, folderRankForLn(data, "favorites"),
+            "favorites lamp uses hash-matched local charts");
+
+  scoreRanks.rankBySha256.erase("sha-failed");
+  data = repository_test::loadFolderClearDataByLongNoteMode(
+      db, scoreRanks, localCourseRanks);
+  ASSERT_EQ(kNoClearTypeRank, folderRankForLn(data, "all"),
+            "an unplayed chart leaves the folder unlit");
+  ASSERT_EQ(kNoClearTypeRank, folderRankForLn(data, "favorites"),
+            "an unplayed favorite leaves Favorites unlit");
+  execOrAbort(db, "DELETE FROM chart_favorites WHERE chart_sha256 = 'sha-failed'");
+  data = repository_test::loadFolderClearDataByLongNoteMode(
+      db, scoreRanks, localCourseRanks);
+  ASSERT_EQ(kClearTypeHardClearRank, folderRankForLn(data, "favorites"),
+            "removing the weakest favorite updates its lamp");
+  execOrAbort(db, "DELETE FROM chart_favorites");
+  data = repository_test::loadFolderClearDataByLongNoteMode(
+      db, scoreRanks, localCourseRanks);
+  ASSERT_EQ(kNoClearTypeRank, folderRankForLn(data, "favorites"),
+            "empty Favorites has no lamp");
 
   sqlite3_close(db);
   return 0;

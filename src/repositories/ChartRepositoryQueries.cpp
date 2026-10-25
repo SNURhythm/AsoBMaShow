@@ -47,6 +47,7 @@
 #if !defined(ASOBMASHOW_FOLDER_QUERY_ONLY)
 namespace {
 using asobmshow::chart_sql::chartArtworkOrderBy;
+using asobmshow::chart_sql::chartFavoriteIndexedPredicate;
 using asobmshow::chart_sql::chartSourceOrderBy;
 using asobmshow::chart_sql::defaultChartMetaBeforeTargetPredicate;
 using asobmshow::chart_sql::kChartMetaColumnCount;
@@ -309,36 +310,6 @@ std::string chartFavoriteChartCandidateQuery() {
     query += branches[i];
   }
   return query;
-}
-
-std::string chartFavoriteIndexedPathPredicate(const std::string &chartPath) {
-  const std::string prefix(asobmshow::chart_sql::kStoredDocumentsBmsPrefix);
-  return chartPath +
-         " != '' AND (EXISTS (SELECT 1 FROM chart_favorites cf_path WHERE "
-         "cf_path.chart_path = " +
-         chartPath +
-         ") OR EXISTS (SELECT 1 FROM chart_favorites cf_path_prefixed WHERE "
-         "cf_path_prefixed.chart_path = '" +
-         prefix + "' || " + chartPath +
-         ") OR (" + chartPath + " LIKE '" + prefix +
-         "%' AND EXISTS (SELECT 1 FROM chart_favorites cf_path_legacy WHERE "
-         "cf_path_legacy.chart_path = substr(" +
-         chartPath + ", length('" + prefix + "') + 1))))";
-}
-
-std::string chartFavoriteIndexedPredicate(const char *chartAlias) {
-  const std::string alias(chartAlias);
-  const std::string path = alias + ".path";
-  const std::string sha256 = alias + ".sha256";
-  const std::string md5 = alias + ".md5";
-  return "((" + chartFavoriteIndexedPathPredicate(path) + ") OR (" + sha256 +
-         " != '' AND EXISTS (SELECT 1 FROM chart_favorites cf_sha WHERE "
-         "cf_sha.chart_sha256 = " +
-         sha256 +
-         ")) OR (" + md5 +
-         " != '' AND EXISTS (SELECT 1 FROM chart_favorites cf_md5 WHERE "
-         "cf_md5.chart_md5 = " +
-         md5 + ")))";
 }
 
 std::string chartFavoriteColumnExpr(const char *chartAlias) {
@@ -3509,7 +3480,7 @@ struct FolderClearAggregate {
 
   void addChart(int clearRank) {
     hasChart = true;
-    if (clearRank < kClearTypeAssistedEasyClearRank) {
+    if (clearRank == kNoClearTypeRank) {
       hasUnclearedChart = true;
       return;
     }
@@ -3594,7 +3565,8 @@ LoadFolderClearDataByLongNoteMode(
   };
 
   runQuery("SELECT cm.sha256, cm.ln_mode, "
-           "cm.total_long_notes, cm.total_backspin_notes "
+           "cm.total_long_notes, cm.total_backspin_notes, " +
+           asobmshow::chart_sql::chartFavoriteIndexedPredicate("cm") + " "
            "FROM chart_meta cm WHERE " +
                preferredChartPredicate("cm"),
            [&](sqlite3_stmt *row) {
@@ -3606,6 +3578,12 @@ LoadFolderClearDataByLongNoteMode(
                  data.clearMarkCounts, projectedChartRanks, "all",
                  columnText(row, 0), sqlite3_column_int(row, 1),
                  sqlite3_column_int(row, 2), sqlite3_column_int(row, 3));
+             if (sqlite3_column_int(row, 4)) {
+               addFolderChartForAllLongNoteModes(
+                   aggregates, projectedChartRanks, "favorites", columnText(row, 0),
+                   sqlite3_column_int(row, 1), sqlite3_column_int(row, 2),
+                   sqlite3_column_int(row, 3));
+             }
            });
 
   int currentTableId = 0;
@@ -3616,7 +3594,7 @@ LoadFolderClearDataByLongNoteMode(
       "SELECT dte.table_id, dte.level, "
       "COALESCE(NULLIF(dte.sha256, ''), cm.sha256, ''), "
       "COALESCE(cm.ln_mode, 0), COALESCE(cm.total_long_notes, 0), "
-      "COALESCE(cm.total_backspin_notes, 0) "
+      "COALESCE(cm.total_backspin_notes, 0), cm.path "
       "FROM difficulty_table_entries dte "
       "LEFT JOIN chart_meta cm ON cm.path = " +
           matchedChartPathSubquery("dte") + " "
@@ -3636,14 +3614,16 @@ LoadFolderClearDataByLongNoteMode(
               chart_library::folderKeyForLevel(tableId, currentLevel);
         }
 
-        addFolderChartForAllLongNoteModes(
-            aggregates, projectedChartRanks, currentTableKey,
-            columnText(row, 2), sqlite3_column_int(row, 3),
-            sqlite3_column_int(row, 4), sqlite3_column_int(row, 5));
-        addFolderChartForAllLongNoteModes(
-            aggregates, projectedChartRanks, currentLevelKey,
-            columnText(row, 2), sqlite3_column_int(row, 3),
-            sqlite3_column_int(row, 4), sqlite3_column_int(row, 5));
+        if (sqlite3_column_type(row, 6) != SQLITE_NULL) {
+          addFolderChartForAllLongNoteModes(
+              aggregates, projectedChartRanks, currentTableKey,
+              columnText(row, 2), sqlite3_column_int(row, 3),
+              sqlite3_column_int(row, 4), sqlite3_column_int(row, 5));
+          addFolderChartForAllLongNoteModes(
+              aggregates, projectedChartRanks, currentLevelKey,
+              columnText(row, 2), sqlite3_column_int(row, 3),
+              sqlite3_column_int(row, 4), sqlite3_column_int(row, 5));
+        }
         addClearMarkCountsForAllLongNoteModes(
             data.clearMarkCounts, projectedChartRanks, currentTableKey,
             columnText(row, 2), sqlite3_column_int(row, 3),
@@ -3715,7 +3695,7 @@ LoadFolderClearDataByLongNoteMode(
       const int clearRank =
           aggregateByMode[static_cast<std::size_t>(selectedLongNoteMode)]
               .clearRank();
-      if (clearRank >= kClearTypeAssistedEasyClearRank) {
+      if (clearRank >= kClearTypeFailedRank) {
         data.clearRanks[static_cast<std::size_t>(selectedLongNoteMode)][key] =
             clearRank;
       }

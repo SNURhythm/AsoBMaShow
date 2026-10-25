@@ -3111,6 +3111,7 @@ void MainMenuScene::refreshFavoriteFolderCount() {
     auto &folder = folders[static_cast<std::size_t>(i)];
     if (folder.key == "favorites") {
       folder.count = favoriteCount;
+      folder.clearRank = clearRankForFolder(folder.key);
       foundFavorites = true;
       if (activeFolder.key == folder.key) {
         activeFolder = folder;
@@ -4076,6 +4077,7 @@ bool MainMenuScene::toggleChartFavorite(const ChartMetaRecord &record,
     return false;
   }
 
+  reloadScoreClearRanks();
   refreshFavoriteFolderCount();
   if (activeFolder.type == LibraryFolderItem::Type::Favorites && !favorite) {
     reloadChartList(true);
