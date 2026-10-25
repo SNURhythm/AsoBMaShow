@@ -43,6 +43,10 @@ actions retain 44-point touch heights. Wider windows restore ordinary panels;
 dialogs fit safe areas and scroll. Empty or hidden text viewports must not paint
 outside their clip.
 
+The built-in gameplay title includes the chart subtitle. It shrinks from 26 to
+18 logical units to fit the available width, then uses a clipped marquee if the
+combined title still overflows. Shorter titles retain their normal size.
+
 The compact landscape dock gives options and primary actions one shared height.
 Its backgrounds extend through the bottom safe area while content stays padded
 above it. Rotation restores the ordinary layout. Settings uses a navigation

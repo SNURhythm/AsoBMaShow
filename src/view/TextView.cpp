@@ -508,7 +508,7 @@ void TextView::renderImpl(RenderContext &context) {
       getContentHeight() > 0;
   if (rotationDegrees == 0.0f && overflow == TextOverflow::Marquee &&
       !wrapEnabled && !textFitBounds().has_value() &&
-      rect.w > getContentWidth()) {
+      drawRect.w > getContentWidth()) {
     drawRect.x = getContentX() - static_cast<int>(
                                    std::round(marqueeOffset(getContentWidth())));
   }
@@ -564,6 +564,13 @@ SDL_Rect TextView::resolvedTextRect() const {
       drawRect.w = static_cast<int>(std::floor(drawRect.w * scale));
       drawRect.h = static_cast<int>(std::floor(drawRect.h * scale));
     }
+  } else if (!wrapEnabled && minimumFontSize > 0 && fontSize > 0 &&
+             width > 0 && drawRect.w > width) {
+    const float scale = std::max(
+        static_cast<float>(minimumFontSize) / fontSize,
+        static_cast<float>(width) / drawRect.w);
+    drawRect.w = static_cast<int>(std::round(drawRect.w * scale));
+    drawRect.h = static_cast<int>(std::round(drawRect.h * scale));
   }
 
   switch (align) {
@@ -1087,7 +1094,7 @@ SDL_Surface *TextView::renderFallbackTextSurface(int wrapWidth,
 }
 
 float TextView::marqueeOffset(int viewportWidth) {
-  const int overflowWidth = rect.w - viewportWidth;
+  const int overflowWidth = resolvedTextRect().w - viewportWidth;
   if (overflowWidth <= 0) {
     return 0.0f;
   }
@@ -1328,6 +1335,14 @@ void TextView::setOverflow(TextOverflow newOverflow) {
   marqueeStartedAt = SDL_GetTicks();
   YGNodeMarkDirty(getNode());
   applyYogaLayoutFromRoot();
+}
+
+void TextView::setMinimumFontSize(int minimumSize) {
+  minimumSize = std::clamp(minimumSize, 0, fontSize);
+  if (minimumFontSize == minimumSize) return;
+  minimumFontSize = minimumSize;
+  marqueeStartedAt = 0;
+  ui::invalidate();
 }
 
 void TextView::setWrap(bool enabled) {
