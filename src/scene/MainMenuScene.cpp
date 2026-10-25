@@ -4077,7 +4077,10 @@ bool MainMenuScene::toggleChartFavorite(const ChartMetaRecord &record,
     return false;
   }
 
-  reloadScoreClearRanks();
+  const auto favoriteRanks = chartSession->LoadFavoriteClearRanks(scoreClearRanks);
+  for (int mode : long_note_mode::kPlayableValues) {
+    folderClearData.clearRanks[mode]["favorites"] = favoriteRanks.ranks[mode];
+  }
   refreshFavoriteFolderCount();
   if (activeFolder.type == LibraryFolderItem::Type::Favorites && !favorite) {
     reloadChartList(true);

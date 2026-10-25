@@ -14,6 +14,9 @@
 
 namespace repository_test {
 
+ScoreRankByLongNoteMode loadFavoriteClearRanks(
+    sqlite3 *database, const ScoreClearRankCache &scoreRanks);
+
 chart_library::FolderClearDataByLongNoteMode
 loadFolderClearDataByLongNoteMode(
     sqlite3 *database, const ScoreClearRankCache &projectedChartRanks,
@@ -675,6 +678,40 @@ int main() {
             "mixed clears use the weakest clear lamp");
   ASSERT_EQ(kClearTypeEasyClearRank, folderRankForLn(data, "favorites"),
             "favorites lamp uses hash-matched local charts");
+  repository_test::StatementTrace favoriteTrace;
+  ScoreRankByLongNoteMode favoriteRanks;
+  {
+    repository_test::ScopedStatementTrace observation(db, favoriteTrace);
+    favoriteRanks = repository_test::loadFavoriteClearRanks(db, scoreRanks);
+  }
+  ASSERT_EQ(1, favoriteTrace.count,
+            "favorite refresh must not reload other folder aggregates");
+  for (int mode : long_note_mode::kPlayableValues) {
+    ASSERT_EQ(kClearTypeEasyClearRank, favoriteRanks.ranks[mode],
+              "favorite refresh reuses cached scores for every LN mode");
+  }
+
+  execOrAbort(db, "CREATE INDEX chart_meta_sha256 ON chart_meta(sha256)");
+  execOrAbort(db, "CREATE INDEX chart_meta_md5 ON chart_meta(md5)");
+  execOrAbort(db,
+              "WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL "
+              "SELECT n+1 FROM numbers WHERE n < 256) "
+              "INSERT INTO chart_meta(path, sha256, md5) "
+              "SELECT 'unrelated/'||n, 'unrelated-sha-'||n, 'unrelated-md5-'||n "
+              "FROM numbers");
+  int fullScanSteps = 0;
+  sqlite3_trace_v2(db, SQLITE_TRACE_PROFILE,
+      [](unsigned, void *context, void *statement, void *) {
+        *static_cast<int *>(context) += sqlite3_stmt_status(
+            static_cast<sqlite3_stmt *>(statement), SQLITE_STMTSTATUS_FULLSCAN_STEP, 0);
+        return 0;
+      }, &fullScanSteps);
+  favoriteRanks = repository_test::loadFavoriteClearRanks(db, scoreRanks);
+  sqlite3_trace_v2(db, 0, nullptr, nullptr);
+  ASSERT_EQ(kClearTypeEasyClearRank, favoriteRanks.ranks[long_note_mode::kLnValue],
+            "unplayed non-favorites do not lower the Favorites lamp");
+  ASSERT_EQ(true, fullScanSteps < 64,
+            "favorite refresh probes chart indexes without scanning unrelated charts");
 
   scoreRanks.rankBySha256.erase("sha-failed");
   data = repository_test::loadFolderClearDataByLongNoteMode(
@@ -693,6 +730,9 @@ int main() {
       db, scoreRanks, localCourseRanks);
   ASSERT_EQ(kNoClearTypeRank, folderRankForLn(data, "favorites"),
             "empty Favorites has no lamp");
+  favoriteRanks = repository_test::loadFavoriteClearRanks(db, scoreRanks);
+  ASSERT_EQ(kNoClearTypeRank, favoriteRanks.ranks[long_note_mode::kLnValue],
+            "favorite refresh clears the lamp after removing the last favorite");
 
   sqlite3_close(db);
   return 0;

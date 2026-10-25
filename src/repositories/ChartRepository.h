@@ -450,6 +450,8 @@ public:
     LoadFolderClearDataByLongNoteMode(
         const ScoreClearRankCache &projectedChartRanks,
         const ScoreClearRankCache &localCourseRanks);
+    ScoreRankByLongNoteMode
+    LoadFavoriteClearRanks(const ScoreClearRankCache &scoreRanks);
 
   private:
     friend class ChartRepository;

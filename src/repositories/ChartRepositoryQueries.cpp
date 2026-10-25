@@ -3544,6 +3544,49 @@ void addClearMarkCountsForAllLongNoteModes(
 }
 } // namespace
 
+ScoreRankByLongNoteMode LoadFavoriteClearRanks(
+    sqlite3 *db, const ScoreClearRankCache &scoreRanks) {
+  // Start from favorites and probe chart indexes, instead of scanning the
+  // entire library or reloading score history on a favorite toggle.
+  const std::string prefix(asobmshow::chart_sql::kStoredDocumentsBmsPrefix);
+  const std::array<std::string, 5> matches{
+      "cf.chart_sha256 != '' AND cm.sha256 = cf.chart_sha256",
+      "cf.chart_md5 != '' AND cm.md5 = cf.chart_md5",
+      "cf.chart_path != '' AND cm.path = cf.chart_path",
+      "cf.chart_path != '' AND cm.path = '" + prefix + "' || cf.chart_path",
+      "cf.chart_path LIKE '" + prefix + "%' AND cm.path = "
+          "substr(cf.chart_path, length('" + prefix + "') + 1)"};
+  std::string query = "SELECT cm.sha256, cm.ln_mode, cm.total_long_notes, "
+                      "cm.total_backspin_notes FROM chart_meta cm "
+                      "WHERE cm.path IN (";
+  for (std::size_t i = 0; i < matches.size(); ++i) {
+    if (i > 0) query += " UNION ALL ";
+    query += "SELECT cm.path FROM chart_favorites cf CROSS JOIN chart_meta cm "
+             "WHERE " + matches[i];
+  }
+  query += ") AND " + preferredChartPredicate("cm");
+  ScoreRankByLongNoteMode result;
+  SqliteStatementHandle stmt;
+  if (prepareSqliteStatement(db, query, stmt) != SQLITE_OK) {
+    SDL_Log("SQL error while loading favorite clear ranks: %s", sqlite3_errmsg(db));
+    return result;
+  }
+  std::unordered_map<std::string, FolderClearAggregateByLongNoteMode> aggregates;
+  while (sqlite3_step(stmt.get()) == SQLITE_ROW) {
+    addFolderChartForAllLongNoteModes(
+        aggregates, scoreRanks, "favorites", columnText(stmt.get(), 0),
+        sqlite3_column_int(stmt.get(), 1), sqlite3_column_int(stmt.get(), 2),
+        sqlite3_column_int(stmt.get(), 3));
+  }
+  const auto found = aggregates.find("favorites");
+  if (found != aggregates.end()) {
+    for (int mode : long_note_mode::kPlayableValues) {
+      result.ranks[mode] = found->second[mode].clearRank();
+    }
+  }
+  return result;
+}
+
 chart_library::FolderClearDataByLongNoteMode
 LoadFolderClearDataByLongNoteMode(
     sqlite3 *db, const ScoreClearRankCache &projectedChartRanks,
@@ -3726,6 +3769,11 @@ LoadFolderClearDataByLongNoteMode(
 #if defined(ASOBMASHOW_FOLDER_QUERY_ONLY)
 namespace repository_test {
 
+ScoreRankByLongNoteMode loadFavoriteClearRanks(
+    sqlite3 *database, const ScoreClearRankCache &scoreRanks) {
+  return chart_repository_detail::LoadFavoriteClearRanks(database, scoreRanks);
+}
+
 chart_library::FolderClearDataByLongNoteMode
 loadFolderClearDataByLongNoteMode(
     sqlite3 *database, const ScoreClearRankCache &projectedChartRanks,
@@ -3736,6 +3784,11 @@ loadFolderClearDataByLongNoteMode(
 
 } // namespace repository_test
 #else
+ScoreRankByLongNoteMode ChartRepository::Session::LoadFavoriteClearRanks(
+    const ScoreClearRankCache &scoreRanks) {
+  return chart_repository_detail::LoadFavoriteClearRanks(impl_->database(), scoreRanks);
+}
+
 chart_library::FolderClearDataByLongNoteMode
 ChartRepository::Session::LoadFolderClearDataByLongNoteMode(
     const ScoreClearRankCache &projectedChartRanks,
