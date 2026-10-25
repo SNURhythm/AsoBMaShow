@@ -12,6 +12,8 @@ thread_local bool observeSizes = false;
 thread_local std::size_t largestAllocation = 0;
 thread_local std::size_t allocationCount = 0;
 thread_local std::size_t allocationBytes = 0;
+thread_local std::atomic_bool *cancelTarget = nullptr;
+thread_local std::size_t cancelCountdown = 0, allocationsAfterCancellation = 0;
 }
 
 test_support::FailAllocationAfter::FailAllocationAfter(
@@ -50,7 +52,22 @@ std::size_t test_support::AllocationSizeObserver::totalBytes() const noexcept {
   return allocationBytes;
 }
 
+test_support::CancelAfterAllocations::CancelAfterAllocations(
+    std::atomic_bool &cancelled, std::size_t after) noexcept {
+  cancelTarget = &cancelled;
+  cancelCountdown = after;
+  allocationsAfterCancellation = 0;
+}
+test_support::CancelAfterAllocations::~CancelAfterAllocations() { cancelTarget = nullptr; }
+std::size_t test_support::CancelAfterAllocations::afterCancellation() const noexcept {
+  return allocationsAfterCancellation;
+}
+
 void *operator new(std::size_t size) {
+  if (cancelTarget) {
+    if (cancelCountdown == 0) { *cancelTarget = true; ++allocationsAfterCancellation; }
+    else --cancelCountdown;
+  }
   if (observeSizes) {
     if (size > largestAllocation) largestAllocation = size;
     ++allocationCount;

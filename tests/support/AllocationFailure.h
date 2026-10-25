@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <atomic>
 
 namespace test_support {
 
@@ -16,6 +17,14 @@ public:
 };
 
 using FailNextAllocation = FailAllocationAfter;
+
+// Trigger cancellation during real work, and measure whether it keeps allocating.
+class CancelAfterAllocations final {
+public:
+  CancelAfterAllocations(std::atomic_bool &cancelled, std::size_t after) noexcept;
+  ~CancelAfterAllocations();
+  std::size_t afterCancellation() const noexcept;
+};
 
 // Reject oversized ordinary allocations without putting the test process at risk.
 class AllocationSizeLimit final {

@@ -158,6 +158,16 @@ int main() {
   require(bgfx::init(init), "headless bgfx initializes for image fade state");
 
   {
+    const auto root = std::filesystem::temp_directory_path() /
+        ("asobmashow-case-artwork-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(root / "Artwork");
+    writeSinglePixelPpm(root / "Artwork" / "Jacket.PPM");
+    require(imageResourceAvailable(root / "artwork" / "jacket.ppm"),
+            "chart artwork availability resolves mismatched directory and filename casing");
+    std::filesystem::remove_all(root);
+  }
+
+  {
     ImageView image(0, 0, 64, 64);
     auto revision = ui::revisions();
     image.clearAmbientGlow();

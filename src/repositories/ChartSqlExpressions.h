@@ -49,6 +49,36 @@ inline constexpr const char *kChartMetaSelectColumns =
     "cm.rank_type";
 inline constexpr int kChartMetaColumnCount = 38;
 
+inline std::string chartFavoriteIndexedPathPredicate(const std::string &chartPath) {
+  const std::string prefix(asobmshow::chart_sql::kStoredDocumentsBmsPrefix);
+  return chartPath +
+         " != '' AND (EXISTS (SELECT 1 FROM chart_favorites cf_path WHERE "
+         "cf_path.chart_path = " +
+         chartPath +
+         ") OR EXISTS (SELECT 1 FROM chart_favorites cf_path_prefixed WHERE "
+         "cf_path_prefixed.chart_path = '" +
+         prefix + "' || " + chartPath +
+         ") OR (" + chartPath + " LIKE '" + prefix +
+         "%' AND EXISTS (SELECT 1 FROM chart_favorites cf_path_legacy WHERE "
+         "cf_path_legacy.chart_path = substr(" +
+         chartPath + ", length('" + prefix + "') + 1))))";
+}
+
+inline std::string chartFavoriteIndexedPredicate(const char *chartAlias) {
+  const std::string alias(chartAlias);
+  const std::string path = alias + ".path";
+  const std::string sha256 = alias + ".sha256";
+  const std::string md5 = alias + ".md5";
+  return "((" + chartFavoriteIndexedPathPredicate(path) + ") OR (" + sha256 +
+         " != '' AND EXISTS (SELECT 1 FROM chart_favorites cf_sha WHERE "
+         "cf_sha.chart_sha256 = " +
+         sha256 +
+         ")) OR (" + md5 +
+         " != '' AND EXISTS (SELECT 1 FROM chart_favorites cf_md5 WHERE "
+         "cf_md5.chart_md5 = " +
+         md5 + ")))";
+}
+
 inline std::string chartSourcePriorityExpr(std::string_view alias) {
   const std::string aliasText(alias);
   return "COALESCE(" + aliasText + ".source_priority, 3)";

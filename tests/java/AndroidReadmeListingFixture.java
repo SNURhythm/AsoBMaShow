@@ -4,6 +4,7 @@ import java.util.*;
 
 public final class AndroidReadmeListingFixture {
     private static final String ERROR_PREFIX = "__ERROR__:";
+    private final Object resourceDirectoryCache = new Object();
     private final Map<String, String> transientDocumentIdCache = new HashMap<>();
     private final Resolver resolver = new Resolver();
     private String parentId = "song-id";

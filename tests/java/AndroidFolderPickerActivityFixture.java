@@ -220,6 +220,8 @@ class PickerActivity extends FakeSdlActivity {
     final Object nativeMusicLock = new Object();
     boolean gyroscopeActivityResumed, documentHandoffDestroyed;
     Dummy gyroscopeTurntableManager;
+    boolean nativeDocumentDestroyed;
+    Dummy nativeDocumentView, readmeTranslator;
     DocumentHandoffOperation documentHandoffOperation;
     final Dummy DOCUMENT_HANDOFF_TOKENS = new Dummy();
     void runOnUiThread(Runnable action) { ui.add(action); }
@@ -264,6 +266,7 @@ class Dummy {
     void setActivityResumed(boolean resumed) {}
     void takePersistableUriPermission(Uri uri, int flags) { persisted = true; persistedFlags = flags; }
     void destroy() {}
+    void activityDestroyed() {}
     void cancel(Object value) {}
 }
 class DocumentHandoffOperation { Object operationToken; int requestCode; }

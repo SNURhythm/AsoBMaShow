@@ -314,6 +314,10 @@ std::optional<std::filesystem::path>
 findFileWithExtensions(const std::filesystem::path &basePath,
                        const std::vector<std::string_view> &extensions);
 std::optional<std::filesystem::path>
+findFileWithExtensions(const std::filesystem::path &basePath,
+                       const std::vector<std::string_view> &extensions,
+                       const std::atomic_bool *cancelled);
+std::optional<std::filesystem::path>
 unzipVirtualFolderForChart(const std::filesystem::path &chartPath,
                            const std::filesystem::path &destinationRoot,
                            std::string *errorMessage = nullptr,

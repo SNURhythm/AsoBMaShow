@@ -18,6 +18,13 @@ least one. Missing charts, solid archives, and courses are excluded. No Play use
 the active profile's play count; Failed uses its best clear lamp in the selected
 long-note mode. A cleared chart with a failed score attempt is not a Failed candidate.
 
+The built-in selector's All Songs, Favorites, difficulty-table and level folders
+show the weakest best clear lamp among their available charts in the selected
+long-note mode, following beatoraja's folder-lamp rule. Failed is red; any unplayed
+chart or an empty folder leaves the lamp unlit. Missing table downloads do not
+lower the lamp, but still appear in the No Play filter counts. Favorites lamps
+refresh when a chart is added or removed.
+
 The built-in selector's Key Mode dropdown uses the skin settings' categories:
 4K, 5K, 5K1S, 6K, 7K, 7K1S, 8K, 9K, 5KDP, 7KDP, 24K, and 48K, plus All.
 It filters the current folder and random candidates alongside the other criteria.
