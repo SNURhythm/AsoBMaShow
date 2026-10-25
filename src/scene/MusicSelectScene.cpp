@@ -291,9 +291,9 @@ previewSelection(const MusicSelectBarManagerReadView &snapshot,
       .id = selected.id.value,
       .folder = meta.BmsPath.parent_path(),
       .previewPath = settings.chartPreviewMode != audio::ChartPreviewMode::PreviewFile ||
-                             meta.Preview.empty() || suppressArchivePreview
+                             suppressArchivePreview
                          ? std::filesystem::path{}
-                         : meta.BmsPath.parent_path() / meta.Preview,
+                         : musicSelectPreviewFilePath(meta.BmsPath, meta.Preview),
       .chartPath = suppressArchivePreview || selected.chart->solidArchive || selected.chart->unavailable
                        ? std::filesystem::path{} : meta.BmsPath,
       .highlight = audio::ChartPreviewUsesHighlight(settings.chartPreviewMode,

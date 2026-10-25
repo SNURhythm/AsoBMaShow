@@ -16,10 +16,11 @@
 #include "ui/PresentationSchedule.h"
 #include "RAII.h"
 #include "audio/ChartPreviewPolicy.h"
+#include "music_select/MusicSelectPreview.h"
 
 // Run the production worker and clock adapter with device/parser boundaries
 // replaced, so no native audio device or renderer is needed for this wiring test.
-struct ChartMetaRecord { struct { std::filesystem::path BmsPath; } meta; };
+struct ChartMetaRecord { struct { std::filesystem::path BmsPath, Preview; } meta; };
 namespace bms_parser { struct Chart { struct { std::filesystem::path BmsPath, Preview; } Meta; }; }
 namespace audio {
 struct DecodedAssetCache {
@@ -97,9 +98,11 @@ struct Player {
 struct FilePlayer {
   bool available = false, playing = false;
   float gain = 1;
-  bool play(const std::filesystem::path &, bool loop, std::atomic_bool &,
+  std::filesystem::path playedPath;
+  bool play(const std::filesystem::path &path, bool loop, std::atomic_bool &,
             std::stop_token = {}, float volume = 1) {
     if (!loop) throw std::runtime_error("preview files must loop");
+    playedPath = path;
     gain = volume;
     return playing = available;
   }
@@ -203,23 +206,27 @@ int main() {
       modes.context.settings.chartPreviewMode = audio::ChartPreviewMode::PreviewFile;
       modes.context.settings.chartPreviewFallbackHighlight = false;
       play_options::previewPath = "preview.ogg";
-      modes.process({.meta = {.BmsPath = "chart.bms"}}, cancelled);
+      modes.process({.meta = {.BmsPath = "chart.bms", .Preview = "preview.ogg"}}, cancelled);
       require(modes.previewPlayer_.state.playing && modes.previewPlayer_.state.positionFrames == 0,
               "failed authored file uses the chosen Beginning fallback");
       modes.previewFilePlayer_->available = true;
       modes.context.jukebox.ratePercent = 150;
-      modes.process({.meta = {.BmsPath = "chart.bms"}}, cancelled);
+      modes.process({.meta = {.BmsPath = "chart.bms", .Preview = "preview.ogg"}}, cancelled);
       require(modes.previewFilePlayer_->playing && !modes.previewPlayer_.state.playing && modes.selectedChartMediaReady,
               "usable preview file loops and still prepares gameplay resources");
       for (const float master : {0.0F, 0.25F}) {
         modes.context.settings.audioVideo.audio.masterVolume = master;
-        modes.process({.meta = {.BmsPath = "chart.bms"}}, cancelled);
+        modes.process({.meta = {.BmsPath = "chart.bms", .Preview = "preview.ogg"}}, cancelled);
         require(modes.previewFilePlayer_->playing && modes.previewFilePlayer_->gain == master,
                 "authored preview must obey master volume, including mute");
       }
       modes.stopPlayback();
       require(!modes.previewFilePlayer_->playing, "handoff stops the authored preview");
       play_options::previewPath.clear();
+      modes.process({.meta = {.BmsPath = "song/chart.bms", .Preview = "preview.ogg"}}, cancelled);
+      require(modes.previewFilePlayer_->playing && !modes.previewPlayer_.state.playing &&
+                  modes.previewFilePlayer_->playedPath == "song/preview.ogg",
+              "Preview File uses the library's discovered file when the chart has no PREVIEW header");
     }
     audio::PagedPreviewSource::failConstruction = true;
     scene.process({.meta = {.BmsPath = "malformed.bms"}}, cancelled);

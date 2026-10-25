@@ -18,6 +18,7 @@
 #include "../audio/PagedPreviewSource.h"
 #include "../audio/ChartPreviewHighlight.h"
 #include "../audio/MusicSelectPreviewFilePlayer.h"
+#include "../music_select/MusicSelectPreview.h"
 #include "../tinyfiledialogs.h"
 #include <fstream>
 #include <algorithm>
@@ -1750,10 +1751,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
               return;
             }
           }
+          const auto previewPath = musicSelectPreviewFilePath(meta.BmsPath, meta.Preview);
           if (!willStart.load() &&
               this->context.settings.chartPreviewMode == audio::ChartPreviewMode::PreviewFile &&
-              !chart->Meta.Preview.empty() &&
-              previewFilePlayer_->play(chart->Meta.BmsPath.parent_path() / chart->Meta.Preview,
+              !previewPath.empty() &&
+              previewFilePlayer_->play(previewPath,
                                        true, cancelled, {},
                                        this->context.settings.audioVideo.audio.masterVolume)) {
             setSelectedChart(chart, false);

@@ -2376,7 +2376,7 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
   previewFallback->addView(makeWrappedText(
       i18n::message("settings.bms_library.preview_fallback.label"),
       metrics.bodyTextSize, app_theme::textSecondary()));
-  previewFallback->addView(makeEnumChoice(metrics, overlayPortal,
+  auto *previewFallbackChoice = makeEnumChoice(metrics, overlayPortal,
       context.settings.chartPreviewFallbackHighlight, {true, false},
       [](bool highlight) {
         return i18n::message(highlight ? "settings.bms_library.preview_highlight.label"
@@ -2384,9 +2384,16 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
       }, [this](bool highlight) {
         context.settings.chartPreviewFallbackHighlight = highlight;
         persistSettings();
-      }));
-  previewFallback->setDisplay(context.settings.chartPreviewMode == audio::ChartPreviewMode::PreviewFile
-                                  ? YGDisplayFlex : YGDisplayNone);
+      });
+  previewFallback->addView(previewFallbackChoice);
+  const auto updatePreviewFallback = [previewFallback, previewFallbackChoice](audio::ChartPreviewMode mode) {
+    const bool visible = mode == audio::ChartPreviewMode::PreviewFile;
+    if (!visible) previewFallbackChoice->closeMenu();
+    // Layout exclusion alone does not suppress View rendering or input.
+    previewFallback->setVisible(visible);
+    previewFallback->setDisplay(visible ? YGDisplayFlex : YGDisplayNone);
+  };
+  updatePreviewFallback(context.settings.chartPreviewMode);
   previewControls->addView(makeEnumChoice(metrics, overlayPortal,
       context.settings.chartPreviewMode,
       {audio::ChartPreviewMode::Highlight, audio::ChartPreviewMode::Beginning,
@@ -2400,10 +2407,9 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
         default:
           return i18n::message("settings.bms_library.preview_highlight.label");
         }
-      }, [this, previewFallback](audio::ChartPreviewMode mode) {
+      }, [this, updatePreviewFallback](audio::ChartPreviewMode mode) {
         context.settings.chartPreviewMode = mode;
-        previewFallback->setDisplay(mode == audio::ChartPreviewMode::PreviewFile
-                                    ? YGDisplayFlex : YGDisplayNone);
+        updatePreviewFallback(mode);
         persistSettings();
       }));
   previewControls->addView(previewFallback);

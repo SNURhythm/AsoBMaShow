@@ -9,6 +9,15 @@
 #include <stop_token>
 #include <string>
 
+// Use library metadata, which includes both explicit #PREVIEW and the
+// scanner's discovered preview* file. Do not rescan folders during selection.
+inline std::filesystem::path musicSelectPreviewFilePath(
+    const std::filesystem::path &chartPath,
+    const std::filesystem::path &previewFile) {
+  return previewFile.empty() ? std::filesystem::path{}
+                             : chartPath.parent_path() / previewFile;
+}
+
 struct MusicSelectPreviewSelection {
   std::string id;
   std::filesystem::path folder;
