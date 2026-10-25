@@ -118,6 +118,8 @@ struct MainMenuScene {
   void reselectCurrentChart();
   void openReplayRecordsForSelection();
   void startSelectedChart();
+  void clickPlayButton() PLAY_BUTTON_CALLBACK
+  void startSelectedCourse() {}
   void startRandomChart(const ChartMetaRecord &);
   void refreshSelectedChartDetails();
   void refreshPlayOptionButtons() {}
@@ -138,18 +140,26 @@ int main() {
     assert(scene.list.size()==5 && "three random rows precede the scoped charts");
     for (int i=0; i<3; ++i) assert(scene.list.get(i).randomSelect==i);
     assert(scene.list.get(3).meta.BmsPath=="first.bms");
+    for (int i=0; i<3; ++i) {
+      scene.list.selectedIndex=i;
+      scene.selectedChartRecord=scene.list.get(i);
+      scene.clickPlayButton();
+      assert(scene.playedPath==(i==2 ? "second.bms" : "first.bms"));
+      assert(scene.list.selectedIndex==i && scene.selectedChartRecord->randomSelect==i);
+    }
+    scene.playedPath.clear();
     scene.list.selectedIndex=1;
     scene.selectedChartRecord=scene.list.get(1);
     scene.context.chartRepository.revision=2;
     scene.chartSession->rows[0].meta.BmsPath="updated.bms";
-    scene.startSelectedChart();
+    scene.clickPlayButton();
     assert(scene.playedPath.empty() && "do not use stale library or score caches");
     scene.libraryRevision=2;
     scene.context.scoreRepository.revision=2;
-    scene.startSelectedChart();
+    scene.clickPlayButton();
     assert(scene.playedPath.empty());
     scene.scoreClearRanksRevision=2;
-    scene.startSelectedChart();
+    scene.clickPlayButton();
     assert(scene.playedPath=="updated.bms" && scene.previewPath.empty());
     assert(scene.list.selectedIndex==1 && scene.selectedChartRecord->randomSelect==1);
     scene.chartListCache.releasePages();
@@ -222,7 +232,7 @@ int main() {
     assert(scene.previewPath=="played.bms" && "resume restores the retained chart preview");
     scene.openReplayRecordsForSelection();
     assert(scene.records.path=="played.bms" && "Records targets the retained chart outside the filter");
-    scene.startSelectedChart();
+    scene.clickPlayButton();
     assert(scene.playedPath=="played.bms" && "Play targets the retained chart outside the filter");
   }
 }

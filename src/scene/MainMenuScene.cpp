@@ -2228,10 +2228,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
       startSelectedCourse();
       return;
     }
-    if (!selectedRecord.has_value() || selectedRecord->solidArchive ||
-        selectedRecord->unavailable || selectedRecord->meta.BmsPath.empty()) {
-      return;
-    }
     startSelectedChart();
   });
   replayButtonSlot = new View();
