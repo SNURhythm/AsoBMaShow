@@ -628,12 +628,14 @@ std::string musicPlaylistTextSnapshot(
 
 void MainMenuScene::ChartListPageCache::reset(
     ChartRepository::Session &chartSession, const ChartMetaQuery &chartQuery,
-    int count, std::optional<ChartMetaRecord> leading) {
+    int count, std::optional<ChartMetaRecord> leading,
+    std::vector<ChartMetaRecord> random) {
   ChartMetaQuery query = chartQuery;
   query.limit = 0;
   query.offset = 0;
   leadingRecord = std::move(leading);
-  totalCount = std::max(0, count) + (leadingRecord.has_value() ? 1 : 0);
+  randomRecords = std::move(random);
+  totalCount = std::max(0, count) + leadingCount();
   pageCache.reset(static_cast<std::size_t>(std::max(0, count)),
                   [&chartSession, query](std::size_t offset, std::size_t limit) {
                     ChartMetaQuery pageQuery = query;
@@ -653,6 +655,7 @@ void MainMenuScene::ChartListPageCache::releasePages() {
 void MainMenuScene::ChartListPageCache::clear() {
   totalCount = 0;
   leadingRecord.reset();
+  randomRecords.clear();
   pageCache.clear();
 }
 
@@ -660,6 +663,8 @@ const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(int index) const {
   if (index < 0 || index >= totalCount) {
     return pageCache.get(pageCache.size());
   }
+  if (index < static_cast<int>(randomRecords.size())) return randomRecords[index];
+  index -= static_cast<int>(randomRecords.size());
   if (leadingRecord.has_value()) {
     if (index == 0) {
       return *leadingRecord;
@@ -841,18 +846,20 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
     reloadChartList();
     if (state.selected) {
       int index = -1;
-      if (chartListCache.leadingRecord &&
+      if (state.selected->randomSelect) {
+        index = chartListCache.randomRecordIndex(*state.selected);
+      } else if (chartListCache.leadingRecord &&
           ((state.selected->courseStart && chartListCache.leadingRecord->courseStart) ||
            (state.selected->unzipAll && chartListCache.leadingRecord->unzipAll))) {
         index = 0;
       } else if (!state.selected->meta.BmsPath.empty()) {
         index = chartSession->FindChartMetaIndex(chartQueryForActiveFolder(), state.selected->meta.BmsPath);
-        if (index >= 0 && chartListCache.leadingRecord) ++index;
+        if (index >= 0) index += chartListCache.leadingCount();
       }
       if (index >= 0 && index < recyclerView->size()) {
         recyclerView->selectedIndex = index;
         recyclerView->onSelected(recyclerView->get(index), index);
-      } else if (!state.selected->courseStart && !state.selected->unzipAll) {
+      } else if (!state.selected->courseStart && !state.selected->unzipAll && !state.selected->randomSelect) {
         // A score filter may exclude the retained chart; details and actions
         // still belong to it until the user chooses another chart.
         selectedChartRecord = state.selected;
@@ -1378,6 +1385,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                a.difficultyTableLabels == b.difficultyTableLabels &&
                a.courseStart == b.courseStart &&
                a.unzipAll == b.unzipAll &&
+               a.randomSelect == b.randomSelect &&
                a.unavailable == b.unavailable &&
                a.solidArchive == b.solidArchive &&
                a.archiveSize == b.archiveSize &&
@@ -1459,7 +1467,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     refreshPlayOptionButtons();
     refreshLongNoteModeButtons();
     refreshAssistOptionButtons();
-    if (item.courseStart) {
+    if (item.courseStart || item.randomSelect) {
       setPlayableChartActionsVisible(true, false);
       refreshUnzipButtonForSelection(nullptr);
       setFindBmsButtonVisible(false);
@@ -3524,12 +3532,27 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
         folderMetadataCache.solidArchiveCount);
   }
   const int databaseCount = chartSession->CountChartMeta(query);
+  std::vector<ChartMetaRecord> randomRecords;
+  if (!leadingRecord) {
+    try {
+      randomRecords = main_menu_library::randomSelectRecords(
+          chartSession->RandomChartMetaIndices(query, scoreBestScores, scoreClearRanks));
+    } catch (const std::exception &error) {
+      SDL_Log("Random chart categories unavailable: %s", error.what());
+    }
+  }
   selectedChartRecord = main_menu_library::chartSelectionRecordForReload(
       selectedChartRecord, leadingRecord, preserveViewState);
-  const int count = databaseCount + (leadingRecord.has_value() ? 1 : 0);
-  const int leadingOffset = leadingRecord.has_value() ? 1 : 0;
   chartListCache.reset(*chartSession, query, databaseCount,
-                       std::move(leadingRecord));
+                       std::move(leadingRecord), std::move(randomRecords));
+  const int leadingOffset = chartListCache.leadingCount();
+  const int count = databaseCount + leadingOffset;
+  int randomSelectedIndex = -1;
+  if (selectedChartRecord && selectedChartRecord->randomSelect) {
+    randomSelectedIndex = chartListCache.randomRecordIndex(*selectedChartRecord);
+    if (randomSelectedIndex >= 0) selectedChartRecord = chartListCache.get(randomSelectedIndex);
+    else selectedChartRecord.reset();
+  }
   recyclerView->setItemProvider(
       count, [this](int index) -> const ChartMetaRecord & {
         return chartListCache.get(index);
@@ -3547,6 +3570,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     }
   }
   if (!preserveViewState) {
+    if (randomSelectedIndex >= 0) recyclerView->selectedIndex = randomSelectedIndex;
     return;
   }
 
@@ -3586,6 +3610,7 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   recyclerView->scrollOffset = restoredScrollOffset;
 
   const int restoredSelectedIndex =
+      randomSelectedIndex >= 0 ? randomSelectedIndex :
       selectedChartRecord && (selectedChartRecord->unzipAll || selectedChartRecord->courseStart) && leadingOffset > 0
           ? 0 : findPathNear(previousSelectedPath, previousSelectedIndex);
 
@@ -3670,6 +3695,7 @@ void MainMenuScene::refreshLongNoteModeClearRankViews() {
   }
   if (recyclerView != nullptr) {
     const bool chartListDependsOnScores =
+        selectorTab_ == Tab::Play ||
         activeFolder.type == LibraryFolderItem::Type::DifficultyClearMark ||
         chartRecordFilters.clearMarkRank.has_value() ||
         chartRecordFilters.scoreRank.has_value() ||
@@ -3858,8 +3884,8 @@ void MainMenuScene::selectChartByPathAfterReload(
   const path_t target = fspath_to_path_t(path);
   const ChartMetaQuery query = chartQueryForActiveFolder();
   int index = chartSession->FindChartMetaIndex(query, path);
-  if (index >= 0 && chartListCache.leadingRecord.has_value()) {
-    index += 1;
+  if (index >= 0) {
+    index += chartListCache.leadingCount();
   }
   if (index >= 0 && index < recyclerView->size()) {
     const ChartMetaRecord record = recyclerView->get(index);
@@ -4012,6 +4038,13 @@ void MainMenuScene::refreshSelectedChartActionState() {
   }
 
   refreshReplayAvailability(&*record);
+  if (record->randomSelect) {
+    setPlayableChartActionsVisible(true, false);
+    refreshUnzipButtonForSelection(nullptr);
+    setFindBmsButtonVisible(false);
+    refreshStartButtonForActiveFolder();
+    return;
+  }
   if (record->courseStart) {
     const bool currentCourseStart =
         activeFolder.type == LibraryFolderItem::Type::Course &&
@@ -4733,11 +4766,41 @@ void MainMenuScene::startSelectedChart() {
   if (!record.has_value()) {
     return;
   }
+  if (record->randomSelect) {
+    startRandomChart(*record);
+    return;
+  }
   if (record->solidArchive || record->unavailable ||
       record->meta.BmsPath.empty()) {
     return;
   }
   startChartDirect(*record);
+}
+
+void MainMenuScene::startRandomChart(const ChartMetaRecord &record) {
+  if (!chartSession || !record.randomSelect ||
+      context.chartRepository.GetLibraryRevision() != libraryRevision ||
+      context.scoreRepository.GetRevision() != scoreClearRanksRevision) return;
+  try {
+    auto query = chartQueryForActiveFolder();
+    const auto indices = chartSession->RandomChartMetaIndices(query, scoreBestScores, scoreClearRanks);
+    const int index = indices[static_cast<std::size_t>(*record.randomSelect)];
+    if (index < 0) return;
+    // Fetch from this query rather than a possibly older visible page. Keep the
+    // synthetic selection so returning from play retains the random entry.
+    query.offset = index;
+    query.limit = 1;
+    std::vector<ChartMetaRecord> chosen;
+    chartSession->QueryChartMeta(query, chosen);
+    if (context.chartRepository.GetLibraryRevision() != libraryRevision ||
+        context.scoreRepository.GetRevision() != scoreClearRanksRevision) return;
+    if (chosen.size() == 1 && !chosen.front().unavailable &&
+        !chosen.front().solidArchive && !chosen.front().meta.BmsPath.empty()) {
+      startChartDirect(chosen.front());
+    }
+  } catch (const std::exception &error) {
+    SDL_Log("Random chart selection failed: %s", error.what());
+  }
 }
 
 void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {

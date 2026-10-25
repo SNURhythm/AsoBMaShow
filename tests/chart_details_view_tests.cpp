@@ -694,6 +694,13 @@ int main() {
     view.setChart(&record, best, kClearTypeHardClearRank, "320");
     require(text(view, "chartDetailsBpm") == "—",
             "archive selections display placeholders instead of synthetic metadata");
+    record.solidArchive = false;
+    record.randomSelect = ChartSelectorRandomFilter::Any;
+    view.setChart(&record, best, kClearTypeHardClearRank, "320");
+    require(text(view, "chartDetailsBpm") == "—" &&
+                text(view, "chartDetailsDifficulty") == i18n::tr("menu.random_chart.all"),
+            "random actions show their role without stale chart facts or a missing badge");
+    record.randomSelect.reset();
 
     view.setChart(nullptr, std::nullopt, kNoClearTypeRank, "");
     view.applyYogaLayout();

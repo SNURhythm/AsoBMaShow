@@ -67,6 +67,7 @@ namespace bms_parser { struct ChartMeta {
 struct ChartMetaRecord {
   bms_parser::ChartMeta meta;
   bool courseStart=false, unzipAll=false, unavailable=false, solidArchive=false;
+  std::optional<int> randomSelect;
 };
 struct ChartRecordFilters {};
 namespace i18n { std::string tr(const char *key) { return key; } }
@@ -190,7 +191,11 @@ struct MainMenuScene : Scene {
   std::string searchText;
   struct { int longNoteMode=1; } profileSelections;
   ChartRecordFilters chartRecordFilters;
-  struct { std::optional<ChartMetaRecord> leadingRecord; } chartListCache;
+  struct {
+    std::optional<ChartMetaRecord> leadingRecord;
+    int leadingCount() const { return leadingRecord ? 1 : 0; }
+    int randomRecordIndex(const ChartMetaRecord &) const { return -1; }
+  } chartListCache;
   Context context;
   std::mutex findBmsSelectionHandoffMutex;
   using PendingFindBmsSelectionHandoff=Completion;
@@ -207,7 +212,7 @@ struct MainMenuScene : Scene {
   void requestLibraryReload(bool includeFolders);
   View root;
   TextInputBox search;
-  View *rootLayout=&root, *searchBox=&search, *revealContextMenu=nullptr;
+  View *rootLayout=&root, *searchBox=&search, *revealContextMenu=nullptr, *readmeModal_=nullptr;
   std::vector<View*> views;
   Preview *previewWorker_=nullptr;
   Recycler<ChartMetaRecord> songs;
@@ -673,9 +678,12 @@ int main(int argc,char **argv) {
             "void MainMenuScene::reselectCurrentChart()",
             "void MainMenuScene::openReplayRecordsForSelection()",
             "void MainMenuScene::startSelectedChart()",
+            "void MainMenuScene::startRandomChart(",
+            "void MainMenuScene::refreshLongNoteModeClearRankViews()",
             "void MainMenuScene::refreshSelectedChartDetails()"))
         fixture = (root / "tests/main_menu_chart_reload_fixture.cpp").read_text()
         fixture = fixture.replace("// SELECTION_HELPERS", helpers).replace(
+            "// RANDOM_RECORDS", extract(library, "std::vector<ChartMetaRecord> randomSelectRecords(")).replace(
             "// CACHE_TYPE", extract(header, "struct ChartListPageCache {") + ";").replace(
             "// PRODUCTION_METHODS", methods)
         with tempfile.TemporaryDirectory(prefix="asobmashow-menu-reorder-") as temp:

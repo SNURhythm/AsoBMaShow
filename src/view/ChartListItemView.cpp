@@ -241,12 +241,25 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
   unavailable = record.unavailable;
   solidArchive = record.solidArchive;
   favorite = record.favorite;
+  const bool random = record.randomSelect.has_value();
+  artworkPlaceholder->setText(ui_icons::textForCodepoint(random ? 0xf074 : ui_icons::kMusic));
+  detailsLayout->setVisible(!random);
+  detailsLayout->setDisplay(random ? YGDisplayNone : YGDisplayFlex);
+  scoreRankColumn->setVisible(!random);
+  scoreRankColumn->setDisplay(random ? YGDisplayNone : YGDisplayFlex);
   std::string title = meta.Title;
   if (!meta.SubTitle.empty()) {
     title += " " + meta.SubTitle;
   }
-  titleView->setText(title);
-  artistView->setText(meta.Artist);
+  if (random) {
+    constexpr std::array labels{"menu.random_chart.all", "menu.random_chart.no_play",
+                                "menu.random_chart.failed"};
+    titleView->setLocalizedText(i18n::message(labels[static_cast<std::size_t>(*record.randomSelect)]));
+    artistView->setLocalizedText(i18n::message("menu.random_chart.scope"));
+  } else {
+    titleView->setText(title);
+    artistView->setText(meta.Artist);
+  }
   scoreRank.clear();
   scoreRankView->setText("");
   bestScoreView->setText("");
@@ -273,17 +286,17 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
       keyModeView->measureTextWidth(keyModeView->getText())});
   refreshColumnWidths();
   const auto artwork = !meta.StageFile.empty() ? meta.StageFile : meta.Banner;
-  const bool hasArtwork = !record.courseStart && !unavailable && !solidArchive && !artwork.empty();
+  const bool hasArtwork = !random && !record.courseStart && !unavailable && !solidArchive && !artwork.empty();
   if (hasArtwork) jacketImage->setImageAsync(meta.Folder / artwork, prioritizeArtwork);
   else jacketImage->freeImage();
-  favoriteButton->setVisible(!record.courseStart && !unavailable &&
+  favoriteButton->setVisible(!random && !record.courseStart && !unavailable &&
                              !solidArchive &&
                              !meta.BmsPath.empty());
   refreshFavoriteButton();
 }
 
 void ChartListItemView::setClearRank(int clearRank) {
-  if (!solidArchive && hasClearLampColor(clearRank)) {
+  if (!currentRecord.randomSelect && !solidArchive && hasClearLampColor(clearRank)) {
     auto glow = clearLampColorForRank(clearRank);
     auto core = glow;
     core.r = static_cast<uint8_t>((3 * core.r + 255) / 4);

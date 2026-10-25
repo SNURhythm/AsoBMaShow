@@ -297,6 +297,16 @@ int main() {
     row.setMeta(record);
     require(jacket->imagePath().empty(),
             "course rows do not borrow a chart banner");
+    record.courseStart = false;
+    record.randomSelect = ChartSelectorRandomFilter::Any;
+    row.setMeta(record);
+    require(jacket->imagePath().empty() && !favorite->getVisible() &&
+                !rankBadge->getVisible(),
+            "random rows do not borrow chart artwork, scores, or favorite actions");
+    record.randomSelect.reset();
+    row.setMeta(record);
+    require(favorite->getVisible() && rankBadge->getVisible(),
+            "recycling a random row restores ordinary chart controls");
   }
 
   rendering::UniformCache::getInstance().destroyAll();

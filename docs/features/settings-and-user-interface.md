@@ -8,6 +8,16 @@ for input, audio/video, Internet Ranking, gameplay options, tables, and skins.
 Views are reusable layout/rendering components, not owners of application
 transactions.
 
+The built-in PLAY selector includes the same three random rows as custom skins:
+Random Select, No Play Random Select, and Failed Random Select. Confirming one
+starts a matching chart immediately and leaves the random row selected on return.
+Candidates come from the current folder and active search/filters, including
+favorites, difficulty tables and levels, and temporary same-folder views. Random
+Select appears with at least two candidates; No Play and Failed appear with at
+least one. Missing charts, solid archives, and courses are excluded. No Play uses
+the active profile's play count; Failed uses its best clear lamp in the selected
+long-note mode. A cleared chart with a failed score attempt is not a Failed candidate.
+
 ## Application appearance and responsive layout
 
 `src/view/AppTheme.h` shares the selector's typography and palette across

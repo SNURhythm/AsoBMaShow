@@ -130,8 +130,24 @@ std::optional<ChartMetaRecord> chartSelectionRecordForReload(
   return selection;
 }
 
+std::vector<ChartMetaRecord> randomSelectRecords(const std::array<int, 3> &indices) {
+  constexpr std::array labels{"menu.random_chart.all", "menu.random_chart.no_play",
+                              "menu.random_chart.failed"};
+  std::vector<ChartMetaRecord> records;
+  for (std::size_t category = 0; category < indices.size(); ++category) {
+    if (indices[category] < 0) continue;
+    ChartMetaRecord record;
+    record.randomSelect = kChartSelectorRandomFilters[category];
+    record.meta.Title = i18n::tr(labels[category]);
+    record.meta.Artist = i18n::tr("menu.random_chart.scope");
+    records.push_back(std::move(record));
+  }
+  return records;
+}
+
 bool sameChartSelection(const ChartMetaRecord &left,
                         const ChartMetaRecord &right) {
+  if (left.randomSelect || right.randomSelect) return left.randomSelect == right.randomSelect;
   const bool leftHasPath = !left.meta.BmsPath.empty();
   const bool rightHasPath = !right.meta.BmsPath.empty();
   if (leftHasPath || rightHasPath) {

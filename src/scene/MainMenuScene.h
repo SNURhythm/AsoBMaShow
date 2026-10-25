@@ -233,9 +233,20 @@ private:
     int totalCount = 0;
     BoundedPageCache<ChartMetaRecord> pageCache;
     std::optional<ChartMetaRecord> leadingRecord;
+    std::vector<ChartMetaRecord> randomRecords;
+    [[nodiscard]] int leadingCount() const {
+      return static_cast<int>(randomRecords.size()) + (leadingRecord ? 1 : 0);
+    }
+    [[nodiscard]] int randomRecordIndex(const ChartMetaRecord &record) const {
+      for (std::size_t i = 0; i < randomRecords.size(); ++i) {
+        if (record.randomSelect == randomRecords[i].randomSelect) return static_cast<int>(i);
+      }
+      return -1;
+    }
     void reset(ChartRepository::Session &chartSession,
                const ChartMetaQuery &chartQuery, int count,
-               std::optional<ChartMetaRecord> leading = std::nullopt);
+               std::optional<ChartMetaRecord> leading = std::nullopt,
+               std::vector<ChartMetaRecord> random = {});
     void releasePages();
     void clear();
     [[nodiscard]] const ChartMetaRecord &get(int index) const;
@@ -518,6 +529,7 @@ private:
                                const char *fallback);
   void changeToGameplayScene(bms_parser::Chart *chart, StartOptions options);
   void startSelectedChart();
+  void startRandomChart(const ChartMetaRecord &record);
   void startChartDirect(const ChartMetaRecord &record);
   const CourseValidationCache &courseValidationForActiveFolder();
   [[nodiscard]] std::optional<CurrentCourseSelection>

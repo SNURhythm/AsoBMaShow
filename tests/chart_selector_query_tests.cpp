@@ -31,15 +31,19 @@ struct QueryTrace {
   static int callback(unsigned mask, void *context, void *statement, void *) {
     auto &trace = *static_cast<QueryTrace *>(context);
     auto *prepared = static_cast<sqlite3_stmt *>(statement);
-    const std::string sql = sqlite3_sql(prepared);
+    // SQLite can trace internal schema statements with no original SQL text.
+    const char *sql = sqlite3_sql(prepared);
+    if (!sql) return 0;
     if (mask == SQLITE_TRACE_STMT) {
       char *expanded = sqlite3_expanded_sql(prepared);
-      trace.statements.emplace_back(expanded);
+      if (expanded) trace.statements.emplace_back(expanded);
       sqlite3_free(expanded);
       if (trace.cancel) trace.cancel->request_stop();
     }
     if (mask == SQLITE_TRACE_ROW) {
       ++trace.rows;
+      // Schema introspection (e.g. six-column table_info) is not chart hydration.
+      if (std::string_view(sql).starts_with("PRAGMA")) return 0;
       const int columns = sqlite3_column_count(prepared);
       trace.maximumColumns = std::max(trace.maximumColumns, columns);
       if (columns >= 29) ++trace.richRows;
@@ -261,6 +265,86 @@ void scoreFilteredRandomQueries() {
       query, ChartSelectorRandomFilter::Failed, 0)->meta.SHA256 == hash(0));
 }
 
+void builtInRandomQueries() {
+  Fixture fixture;
+  fixture.seed(8);
+  fixture.execute("UPDATE chart_meta SET ln_mode=0,total_long_notes=0,total_backspin_notes=0");
+  const auto hash = [](int value) { return std::string(63, '0') + std::to_string(value); };
+  ScoreBestCache best;
+  ScoreClearRankCache clears;
+  best.scoreBySha256[hash(1)].snapshots[0] = ScoreBestSnapshot{.playCount = 2};
+  best.scoreBySha256[hash(2)].snapshots[0] = ScoreBestSnapshot{.playCount = 3};
+  clears.rankBySha256[hash(1)].ranks[0] = kClearTypeFailedRank;
+  clears.rankBySha256[hash(2)].ranks[0] = kClearTypeNormalClearRank;
+  const auto check = [&](ChartMetaQuery query) {
+    std::vector<ChartMetaRecord> rows;
+    fixture.session->QueryChartMeta(query, rows);
+    std::array<int, 3> eligible{};
+    for (const auto &row : rows) {
+      if (row.unavailable || row.solidArchive || row.meta.BmsPath.empty()) continue;
+      const auto score = best.bestFor(row.meta, query.selectedLongNoteMode);
+      ++eligible[0];
+      eligible[1] += !score || !score->playCount;
+      eligible[2] += clears.bestRankFor(row.meta, query.selectedLongNoteMode) == kClearTypeFailedRank;
+    }
+    QueryTrace trace;
+    fixture.trace(&trace);
+    query.limit = 1; query.offset = 1000; // Random covers the filtered list, not a page.
+    const auto picked = fixture.session->RandomChartMetaIndices(query, best, clears);
+    fixture.trace(nullptr);
+    assert(trace.richRows == 0 && trace.maximumColumns <= 5);
+    for (int category = 0; category < 3; ++category) {
+      assert((picked[category] >= 0) == (eligible[category] >= (category == 0 ? 2 : 1)));
+      if (picked[category] < 0) continue;
+      assert(picked[category] < static_cast<int>(rows.size()));
+      const auto &row = rows[picked[category]];
+      assert(!row.unavailable && !row.solidArchive && !row.meta.BmsPath.empty());
+      const auto score = best.bestFor(row.meta, query.selectedLongNoteMode);
+      if (category == 1) assert(!score || !score->playCount);
+      if (category == 2) assert(clears.bestRankFor(row.meta, query.selectedLongNoteMode) == kClearTypeFailedRank);
+    }
+  };
+  check({});
+  check({.keyword = "artist2"});
+  check({.keyword = "no matches"});
+  check({.bpmMin = 121, .bpmMax = 122});
+  check({.exactFolder = fixture.root / "songs/nested"});
+  check({.recursiveFolder = fixture.root / "songs/nested"});
+  check({.sortCriterion = ChartRecordSortCriterion::Title,
+         .sortDirection = ChartRecordSortDirection::Descending});
+  check({.sortCriterion = ChartRecordSortCriterion::MaxBpm});
+  check({.clearMarkFilter = true, .clearMarkRank = kNoClearTypeRank});
+  check({.scoreRank = "F"});
+  check({.sortCriterion = ChartRecordSortCriterion::ClearMark});
+  check({.sortCriterion = ChartRecordSortCriterion::Rate});
+  assert(fixture.session->SetFavorite(fixture.session->SelectChartSelectorPage(
+      fixture.query(), 0, 1).front().meta, true));
+  check({.favoritesOnly = true});
+  fixture.execute("INSERT INTO difficulty_tables(id,name,symbol) VALUES(1,'Test','T');"
+      "INSERT INTO difficulty_table_entries(table_id,level,sha256,title,sort_order) VALUES"
+      "(1,'1',printf('%064x',1),'Failed',1),(1,'2',printf('%064x',2),'Clear',2),"
+      "(1,'1','missing','Unavailable',0)");
+  check({.tableId = 1});
+  check({.tableId = 1, .tableLevel = "1"});
+  check({.tableId = 1, .difficultyMinLevel = "2", .difficultyMaxLevel = "2"});
+  check({.tableId = 1, .sortCriterion = ChartRecordSortCriterion::Title});
+  check({.tableId = 1, .clearMarkFilter = true, .clearMarkRank = kNoClearTypeRank});
+  check({.tableId = 1, .scoreRank = "F"});
+  check({.tableId = 1, .sortCriterion = ChartRecordSortCriterion::Rate});
+  best.scoreBySha256[hash(9)].snapshots[0] = ScoreBestSnapshot{.playCount = 1};
+  clears.rankBySha256[hash(9)].ranks[0] = kClearTypeFailedRank;
+  fixture.execute("INSERT INTO difficulty_table_entries(table_id,level,sha256,md5,title,sort_order) "
+      "VALUES(1,'3',printf('%064x',9),printf('%032x',4),'MD5 fallback',4)");
+  check({.tableId = 1, .tableLevel = "3"});
+  assert((fixture.session->RandomChartMetaIndices(
+      {.solidArchivesOnly = true}, best, clears) == std::array<int, 3>{-1, -1, -1}));
+  assert((fixture.session->RandomChartMetaIndices(
+      {.coursesOnly = true}, best, clears) == std::array<int, 3>{-1, -1, -1}));
+  std::stop_source stop;
+  stop.request_stop();
+  expectFailure([&] { fixture.session->RandomChartMetaIndices({}, best, clears, stop.get_token()); });
+}
+
 void differentialQueries() {
   Fixture fixture;
   fixture.seed(200);
@@ -441,6 +525,13 @@ void boundedPagesAndQueryLifetime() {
     assert(repository_test::planContains(plan, "idx_chart_meta_selector_representative"));
     assert(!repository_test::planContains(plan, "USE TEMP B-TREE FOR ORDER BY"));
   }
+  QueryTrace randomTrace;
+  fixture.trace(&randomTrace);
+  const auto randomIndices = fixture.session->RandomChartMetaIndices({}, {}, {});
+  fixture.trace(nullptr);
+  assert(randomIndices[0] >= 0 && randomIndices[0] < 5000);
+  assert(randomIndices[1] >= 0 && randomIndices[1] < 5000 && randomIndices[2] == -1);
+  assert(randomTrace.richRows == 0 && randomTrace.maximumColumns <= 5);
   auto best = std::make_shared<ScoreBestCache>();
   query.best = best;
   auto noFunctionRemains = [&] {
@@ -708,6 +799,7 @@ int main(int argc, char **argv) {
     return 0;
   }
   scoreFilteredRandomQueries();
+  builtInRandomQueries();
   differentialQueries();
   durationOverflowCompatibility();
   errorsAndCancellation();

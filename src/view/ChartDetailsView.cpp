@@ -466,7 +466,7 @@ void ChartDetailsView::setCompact(bool compact) {
 void ChartDetailsView::setChart(const ChartMetaRecord *record,
                                const std::optional<ScoreBestSnapshot> &best,
                                int clearRank, const std::string &total) {
-  const bool chart = record && !record->courseStart && !record->solidArchive &&
+  const bool chart = record && !record->randomSelect && !record->courseStart && !record->solidArchive &&
                      !record->unavailable && !record->meta.BmsPath.empty();
   const std::string chartPath = chart ? record->meta.BmsPath : "";
   if (glowChartPath_ != chartPath) {
@@ -483,6 +483,12 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
       : i18n::message("menu.details.select_chart.label"));
   artist_->setText(record ? record->meta.Artist +
       (record->meta.SubArtist.empty() ? "" : " / " + record->meta.SubArtist) : "");
+  if (record && record->randomSelect) {
+    constexpr std::array labels{"menu.random_chart.all", "menu.random_chart.no_play",
+                                "menu.random_chart.failed"};
+    title_->setLocalizedText(i18n::message(labels[static_cast<std::size_t>(*record->randomSelect)]));
+    artist_->setLocalizedText(i18n::message("menu.random_chart.scope"));
+  }
   genre_->setText(record ? record->meta.Genre : "");
   if (!chart) {
     grade_->setText("—");
@@ -499,7 +505,8 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
     updateClearLamp(*clear_, kNoClearTypeRank);
     rate_->setThemedColor(main_menu_theme::secondary);
     if (record) {
-      difficulty_->setLocalizedText(i18n::message(record->courseStart
+      difficulty_->setLocalizedText(i18n::message(record->randomSelect
+          ? "menu.random_chart.all" : record->courseStart
           ? "library.chart.course.label" : record->solidArchive
           ? "library.chart.unzip_required.label" : "library.chart.missing.badge"));
     }

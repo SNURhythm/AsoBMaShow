@@ -2,6 +2,7 @@
 #include "repositories/ChartMetaPageCache.h"
 #include <cassert>
 #include <atomic>
+#include <array>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -12,16 +13,25 @@ struct ChartMetaRecord {
   struct { std::filesystem::path BmsPath; std::string Title, Artist; } meta;
   std::string difficultyTableLabels;
   bool unzipAll=false, courseStart=false, unavailable=false, solidArchive=false;
+  std::optional<int> randomSelect;
 };
 struct ChartMetaQuery { int limit=0, offset=0; };
+enum class ChartRecordSortCriterion { Default, ClearMark, Rate };
 namespace i18n { std::string tr(const char *key) { return key; } }
+void SDL_Log(const char *, ...) {}
 namespace main_menu_library {
 // SELECTION_HELPERS
 ChartMetaRecord unzipAllRecord(int) { return {.unzipAll=true}; }
+constexpr std::array kChartSelectorRandomFilters{0, 1, 2};
+// RANDOM_RECORDS
 }
 struct ChartRepository {
   struct Session {
     std::vector<ChartMetaRecord> rows;
+    std::array<int, 3> randomIndices{-1, -1, -1};
+    std::array<int, 3> RandomChartMetaIndices(const ChartMetaQuery &, const auto &, const auto &) {
+      return randomIndices;
+    }
     int CountChartMeta(const ChartMetaQuery &) const { return int(rows.size()); }
     void QueryChartMeta(const ChartMetaQuery &query, std::vector<ChartMetaRecord> &out) const {
       for (int i=query.offset; i<int(rows.size()) && i<query.offset+query.limit; ++i)
@@ -50,15 +60,18 @@ struct Recycler {
 namespace long_note_mode { int valueFromId(int mode) { return mode; } }
 std::string formatGaugeTotal(const auto &, int) { return ""; }
 struct MainMenuScene {
+  enum class Tab { Play, Course };
+  Tab selectorTab_=Tab::Play;
   // CACHE_TYPE
   ChartListPageCache chartListCache;
   Recycler list;
   Recycler *recyclerView=&list;
+  Recycler *folderRecyclerView=nullptr;
   std::optional<ChartRepository::Session> chartSession{std::in_place};
   std::optional<ChartMetaRecord> selectedChartRecord;
   std::optional<std::filesystem::path> temporaryChartFolder;
   struct LibraryFolderItem {
-    enum class Type { AllSongs, Course, SolidArchives };
+    enum class Type { AllSongs, Course, SolidArchives, DifficultyClearMark };
     Type type=Type::AllSongs;
     int courseId=0;
     std::string label, courseGroupName;
@@ -67,8 +80,16 @@ struct MainMenuScene {
   ChartMetaQuery chartQueryForActiveFolder() const { return {}; }
   std::atomic_bool willStart=false;
   std::optional<std::filesystem::path> pendingSelectChartPath;
-  struct { std::atomic_bool chartLibraryListReloadRequested=false,
-                           chartLibraryFoldersReloadRequested=false; } context;
+  struct {
+    std::atomic_bool chartLibraryListReloadRequested=false,
+                     chartLibraryFoldersReloadRequested=false;
+    struct Repository {
+      unsigned revision=1;
+      unsigned GetLibraryRevision() const { return revision; }
+      unsigned GetRevision() const { return revision; }
+    } chartRepository, scoreRepository;
+  } context;
+  unsigned libraryRevision=1, scoreClearRanksRevision=1;
   struct { bool inProgress() const { return false; } } replayExportJob_;
   bool archiveUnzipInProgress() const { return false; }
   std::filesystem::path playedPath, previewPath;
@@ -87,20 +108,61 @@ struct MainMenuScene {
   Details *chartDetailsView_=&details;
   struct { std::optional<int> bestFor(const auto &, int) { return {}; } } scoreBestScores;
   struct { int longNoteMode=1, ruleset=0; } profileSelections;
+  int scoreClearRanks=0;
+  struct {
+    std::optional<int> clearMarkRank, scoreRank;
+    struct { ChartRecordSortCriterion criterion=ChartRecordSortCriterion::Default; } sort;
+  } chartRecordFilters;
   int clearRankForChart(const ChartMetaRecord &) { return 0; }
   std::optional<ChartMetaRecord> selectedRecordSnapshot() const;
   void reselectCurrentChart();
   void openReplayRecordsForSelection();
   void startSelectedChart();
+  void startRandomChart(const ChartMetaRecord &);
   void refreshSelectedChartDetails();
   void refreshPlayOptionButtons() {}
   void refreshLongNoteModeButtons() {}
   void refreshAssistOptionButtons() {}
   void refreshSelectedChartActionState() {}
+  void reloadFolderItems(bool) {}
+  void refreshLongNoteModeClearRankViews();
   void reloadChartList(bool preserveViewState=false);
 };
 // PRODUCTION_METHODS
 int main() {
+  {
+    MainMenuScene scene;
+    scene.chartSession->rows = {{{"first.bms"}}, {{"second.bms"}}};
+    scene.chartSession->randomIndices = {0, 0, 1};
+    scene.reloadChartList();
+    assert(scene.list.size()==5 && "three random rows precede the scoped charts");
+    for (int i=0; i<3; ++i) assert(scene.list.get(i).randomSelect==i);
+    assert(scene.list.get(3).meta.BmsPath=="first.bms");
+    scene.list.selectedIndex=1;
+    scene.selectedChartRecord=scene.list.get(1);
+    scene.context.chartRepository.revision=2;
+    scene.chartSession->rows[0].meta.BmsPath="updated.bms";
+    scene.startSelectedChart();
+    assert(scene.playedPath.empty() && "do not use stale library or score caches");
+    scene.libraryRevision=2;
+    scene.context.scoreRepository.revision=2;
+    scene.startSelectedChart();
+    assert(scene.playedPath.empty());
+    scene.scoreClearRanksRevision=2;
+    scene.startSelectedChart();
+    assert(scene.playedPath=="updated.bms" && scene.previewPath.empty());
+    assert(scene.list.selectedIndex==1 && scene.selectedChartRecord->randomSelect==1);
+    scene.chartListCache.releasePages();
+    scene.reloadChartList(true);
+    assert(scene.list.selectedIndex==1 && scene.selectedChartRecord->randomSelect==1);
+    scene.chartSession->randomIndices={0, -1, 1};
+    scene.refreshLongNoteModeClearRankViews();
+    assert(!scene.selectedChartRecord && scene.list.selectedIndex==-1);
+    assert(scene.list.size()==4 && scene.list.get(1).randomSelect==2);
+    scene.chartSession->randomIndices={0, 0, 1};
+    scene.refreshLongNoteModeClearRankViews();
+    assert(scene.list.size()==5 && scene.list.get(1).randomSelect==1);
+  }
   for (bool releasePages : {true, false}) {
     for (bool selectionWasVisible : {false, true}) {
       MainMenuScene scene;
