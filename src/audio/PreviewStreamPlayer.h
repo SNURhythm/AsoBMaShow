@@ -33,9 +33,10 @@ public:
              bool fadeIn = false);
   // Cancels/joins preparation and control, then quiesces output before returning.
   void Stop();
-  // Device settings take effect on the next Start. Gain applies immediately.
+  // Device settings take effect on the next Start. Gain and mono apply immediately.
   void SetRequest(StreamRequest request);
   void SetGain(float gain);
+  void SetMonoAudio(bool enabled);
   [[nodiscard]] State GetState() const;
   // Normalized RMS of the most recent output block. Lock-free for UI animation.
   [[nodiscard]] float GetOutputLevel() const noexcept;

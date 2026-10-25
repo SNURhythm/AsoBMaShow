@@ -85,6 +85,10 @@ AudioDeviceManager::apply(const player_settings::AudioSettings &candidate) {
     runtime_.setVolumes(candidateVolumes);
     appliedVolumes_ = candidateVolumes;
   }
+  if (candidate.monoAudio != lastWorkingSettings_.monoAudio) {
+    runtime_.setMonoAudio(candidate.monoAudio);
+    lastWorkingSettings_.monoAudio = candidate.monoAudio;
+  }
   updateVolumeFields(lastWorkingSettings_, candidateVolumes);
   i18n::Text validationMessage;
   if (!validateRequest(request, runtime_.capabilities(), validationMessage)) {

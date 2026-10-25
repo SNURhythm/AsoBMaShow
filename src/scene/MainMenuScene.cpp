@@ -1805,6 +1805,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
             // Apply master before the source's overlap clipping, matching the
             // gameplay mixer's headroom when several loud keysounds overlap.
             previewPlayer_.SetGain(1.0f);
+            previewPlayer_.SetMonoAudio(audioSettings.monoAudio);
             std::string error;
             if (!previewPlayer_.Start(source, error, highlight)) {
               SDL_Log("Preview playback failed: %s", error.c_str());

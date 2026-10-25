@@ -130,6 +130,7 @@ struct UserData {
   std::atomic<int> *playbackRatePercent;
   std::atomic<float> *bgmGain;
   std::atomic<float> *keysoundGain;
+  std::atomic_bool *monoAudio;
   std::vector<float> *mixBuffer;
   Biquad *bassFilter;
   Biquad *trebleFilter;
@@ -260,6 +261,7 @@ public:
   bool restore(const audio::RuntimeState &previous,
                std::string &errorMessage) override;
   void setVolumes(const audio::Volumes &volumes) override;
+  void setMonoAudio(bool enabled) override;
   void setVolumes(const player_settings::AudioSettings &settings);
 
   void setOutputAnalysisEnabled(bool enabled) noexcept { userData.outputMeter.setEnabled(enabled); }
@@ -324,6 +326,7 @@ private:
   std::atomic<int> playbackRatePercent{100};
   std::atomic<float> bgmGain{1.0f};
   std::atomic<float> keysoundGain{1.0f};
+  std::atomic_bool monoAudio{false};
   audio::RuntimeState runtimeState_;
 
   UserData userData;

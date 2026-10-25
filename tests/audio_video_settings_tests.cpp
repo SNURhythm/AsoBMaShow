@@ -25,6 +25,7 @@ bool defaultsMatchLegacyBehavior() {
               "default requested sample rate");
   ASSERT_TRUE(value.audio.requestedBufferFrames == 0,
               "default requested buffer frames");
+  ASSERT_TRUE(!value.audio.monoAudio, "mono audio defaults off");
   ASSERT_TRUE(value.audio.masterVolume == 1.0f, "default master volume");
   ASSERT_TRUE(value.audio.bgmVolume == 1.0f, "default BGM volume");
   ASSERT_TRUE(value.audio.keysoundVolume == 1.0f, "default keysound volume");

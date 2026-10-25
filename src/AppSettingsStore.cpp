@@ -898,7 +898,8 @@ json settingsToJson(const AppSettings &settings) {
          settings.audioVideo.audio.requestedBufferFrames},
         {"masterVolume", settings.audioVideo.audio.masterVolume},
         {"bgmVolume", settings.audioVideo.audio.bgmVolume},
-        {"keysoundVolume", settings.audioVideo.audio.keysoundVolume}}},
+        {"keysoundVolume", settings.audioVideo.audio.keysoundVolume},
+        {"monoAudio", settings.audioVideo.audio.monoAudio}}},
       {"video",
        {{"mode", static_cast<int>(settings.audioVideo.video.mode)},
         {"displayIndex", settings.audioVideo.video.displayIndex},
@@ -1331,6 +1332,7 @@ AppSettings settingsFromJson(const json &document,
                 diagnostics);
       readValue(*audio, "bgmVolume", settings.audioVideo.audio.bgmVolume,
                 diagnostics);
+      readValue(*audio, "monoAudio", settings.audioVideo.audio.monoAudio, diagnostics);
       readValue(*audio, "keysoundVolume",
                 settings.audioVideo.audio.keysoundVolume, diagnostics);
     }

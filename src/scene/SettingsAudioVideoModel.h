@@ -90,6 +90,7 @@ public:
                             Callbacks callbacks);
 
   audio::ApplyResult applyVolumes(float master, float bgm, float keysound);
+  audio::ApplyResult applyMonoAudio(bool enabled);
   audio::ApplyResult
   applyStreamIntent(const player_settings::AudioSettings &candidate);
   bool playTestSound();

@@ -2065,6 +2065,40 @@ void testApplicationSuspensionKeepsNewVoicesSilentAndDrainsStops() {
           "a voice stopped in background does not return on foreground");
 }
 
+void testMonoAudioFoldsFinalOutputAndCanReturnToStereo() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<FactoryControl>();
+  AudioWrapper wrapper(&stopwatch,
+                       std::make_unique<FakeConfigurableFactory>(control));
+  const path_t sound = PATH("mono-output");
+  const std::array<short, 10> frames{
+      12000, 4000, 0, 16000, -12000, 4000, 16000, -16000, 16000, 16000};
+  std::vector<short> pcm;
+  for (int i = 0; i < 4; ++i) pcm.insert(pcm.end(), frames.begin(), frames.end());
+  require(wrapper.loadGeneratedSound(sound, std::move(pcm), 2, 44100) &&
+              wrapper.playSound(sound, audio::Bus::System),
+          "asymmetric stereo fixture plays through the production mixer");
+  const auto render = [&] {
+    std::array<std::int16_t, 10> output{};
+    control->renderCallback(output.data(), 5, 2, control->renderUserData);
+    return output;
+  };
+  const auto stereo = render();
+  require(stereo[0] > stereo[1] && stereo[2] == 0 && stereo[3] > 0,
+          "default output preserves stereo separation");
+  wrapper.setMonoAudio(true);
+  const auto mono = render();
+  for (size_t i = 0; i < mono.size(); i += 2) {
+    require(mono[i] == mono[i + 1], "mono sends identical samples to both ears");
+    require(std::abs(mono[i] - (stereo[i] + stereo[i + 1]) / 2) <= 1,
+            "mono averages both channels without doubling their level");
+  }
+  require(mono[2] > 0 && mono[6] == 0 && mono[8] == stereo[8],
+          "mono includes right-only audio, cancels opposite phase, and preserves centered audio");
+  wrapper.setMonoAudio(false);
+  require(render() == stereo, "disabling mono restores the original stereo samples live");
+}
+
 void testSettingsToneIsAudibleWithoutStartingGameplayClock() {
   Stopwatch stopwatch;
   auto control = std::make_shared<FactoryControl>();
@@ -3365,6 +3399,7 @@ void testOversizedCallbacksUseBoundedScratchAndPreserveScheduledOnsets() {
 
 int main() {
   try {
+    testMonoAudioFoldsFinalOutputAndCanReturnToStereo();
     testApplicationSuspensionSilencesEveryBusWithoutConsumingPcm();
     testApplicationSuspensionKeepsNewVoicesSilentAndDrainsStops();
     testBackgroundGameplayKeepsClockRunningAndPreservesExplicitPause();

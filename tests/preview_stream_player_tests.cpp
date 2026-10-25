@@ -255,6 +255,33 @@ void testFloatGainPrecedesClippingAndOutputEnergy() {
   }
 }
 
+void testMonoOutputAppliesLiveAndPersistsAcrossSessions() {
+  auto input = std::make_shared<SourceControl>();
+  input->samples.resize(8192 * 2);
+  for (std::size_t i = 0; i < input->samples.size(); i += 2) {
+    input->samples[i] = 1.5f;
+    input->samples[i + 1] = -0.5f;
+  }
+  input->publishAll();
+  auto backend = std::make_shared<BackendControl>();
+  audio::PreviewStreamPlayer player(std::make_unique<FakeFactory>(backend));
+  start(player, input, backend);
+  const auto stereo = backend->pump(128);
+  assert(stereo[0] == 32767 && stereo[1] == -16383);
+  player.SetMonoAudio(true);
+  assert(all(backend->pump(5000), 16383) && "mono folds before clipping, across scratch chunks");
+  assert(std::abs(player.GetOutputLevel() - 0.5f) < 0.001f);
+  player.SetMonoAudio(false);
+  assert(backend->pump(128) == stereo && "stereo separation returns without restarting");
+  player.SetMonoAudio(true);
+  player.Stop();
+  auto next = std::make_shared<SourceControl>();
+  next->samples.assign(input->samples.begin(), input->samples.begin() + 512);
+  next->publishAll();
+  start(player, next, backend);
+  assert(all(backend->pump(128), 16383) && "mono preference survives a new preview session");
+}
+
 void testSpectrumFollowsAudibleOutputAndResets() {
   constexpr std::size_t block = 4096;
   for (const auto rate : {44100U, 48000U}) {
@@ -537,6 +564,7 @@ std::unique_ptr<IBackendFactory> CreatePlatformBackendFactory() {
 }
 }
 int main() {
+  testMonoOutputAppliesLiveAndPersistsAcrossSessions();
   testStartupUsesActualBackendRateAndDoesNotMixBeforeCallback();
   testFadeInUsesConsumedFramesAndRestarts();
   testFloatGainPrecedesClippingAndOutputEnergy();

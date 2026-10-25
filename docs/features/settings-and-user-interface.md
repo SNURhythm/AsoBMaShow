@@ -96,7 +96,10 @@ Skins, Audio, Display, BMS Library, Difficulty Tables, IR, General.
   Background groups BGA playback, aspect, brightness, and blur. Skin package
   installation and diagnostics follow selection and appearance controls.
 - Audio starts with volumes and input sounds/count-in, followed by device,
-  sample rate/buffer settings, and test sound/status. Display retains orientation
+  sample rate/buffer settings, and test sound/status. Mono audio in Audio Output
+  defaults to Off; turning it On immediately averages the left and right channels
+  into both ears for gameplay, chart previews, and interface sounds.
+  The choice is saved with the profile. Display retains orientation
   and platform display controls.
 - BMS Library groups folders, chart preview mode, archive preview/extraction
   preferences, and cache cleanup. Chart Preview offers Highlight (default),
