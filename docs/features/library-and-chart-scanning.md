@@ -102,7 +102,9 @@ BGA is not advanced. Both synthesized and authored previews drive the built-in
 jacket pulse and spectrum from audible output, including playback gain and mute.
 Highlight preparation probes bounded WAV/FLAC metadata and Ogg head/tail data to
 skip expired past sounds before PCM decoding. Durations still unknown after the
-probe use a 15-second overlap lookback; known and cached longer tails remain.
+probe use a 60-second overlap lookback for Ogg and 15 seconds for other formats;
+known and cached longer tails remain. Ogg is identified from its header rather
+than its filename. These are lookback limits, not playback-duration limits.
 Later instances of the same sample remain scheduled. ZIP probes reuse the cached
 index and directory, reading at most 128 KiB per past asset and inflating at most
 a 64 KiB prefix. Stored ZIP entries support random head/tail reads; larger

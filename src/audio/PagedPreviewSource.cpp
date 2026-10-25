@@ -62,7 +62,11 @@ std::uint64_t framesForMicros(long long micros, int rate, bool roundUp) {
   return scaleFrames(static_cast<std::uint64_t>(std::max(0LL, micros)),
                      rate, 1000000, roundUp);
 }
-std::optional<duration_bound::Duration> probeFileDuration(
+struct DurationProbe {
+  std::optional<duration_bound::Duration> duration;
+  bool isOgg = false;
+};
+DurationProbe probeFileDuration(
     const std::filesystem::path &path, const std::atomic_bool &cancelled) {
   std::FILE *opened = nullptr;
 #if TARGET_OS_ANDROID
@@ -88,12 +92,14 @@ std::optional<duration_bound::Duration> probeFileDuration(
   const auto size = std::ftell(file.get());
   if (size < 0 || static_cast<std::uint64_t>(size) > DecodedAssetCache::kMaximumEncodedAssetBytes)
     return {};
-  return duration_bound::InspectAudio(static_cast<std::uint64_t>(size),
+  DurationProbe probe;
+  probe.duration = duration_bound::InspectAudio(static_cast<std::uint64_t>(size),
       [&](std::uint64_t offset, std::span<unsigned char> bytes) {
         return !cancelled.load(std::memory_order_relaxed) &&
             std::fseek(file.get(), static_cast<long>(offset), SEEK_SET) == 0 &&
             std::fread(bytes.data(), 1, bytes.size(), file.get()) == bytes.size();
-      });
+      }, &probe.isOgg);
+  return probe;
 }
 } // namespace
 
@@ -193,13 +199,14 @@ struct PagedPreviewSource::Impl {
   std::uint64_t futurePriority(std::size_t index) const {
     return assets[index].firstFutureStart.value_or(std::numeric_limits<std::uint64_t>::max());
   }
-  void publishPastDuration(std::size_t index, std::optional<duration_bound::Duration> duration) {
+  void publishPastDuration(std::size_t index, std::optional<duration_bound::Duration> duration,
+                           bool isOgg = false) {
     if (!assets[index].latestPastStart) return;
-    // Unknown formats have the user-requested 15-second overlap lookback.
-    // Known long audio is never truncated to that fallback.
+    // Unknown Ogg keeps a minute of past onsets; other unknown formats keep
+    // 15 seconds. Known long audio is never truncated to either fallback.
     const auto frames = duration
         ? scaleFramesBounded(duration->frames, outputRate, duration->sampleRate, true)
-        : static_cast<std::uint64_t>(outputRate) * 15;
+        : static_cast<std::uint64_t>(outputRate) * (isOgg ? 60 : 15);
     // Retain the probe decision even when a recent instance requires decoding.
     // Each old onset must independently obey the unknown-duration lookback.
     pastDurationFrames[index].store(frames, std::memory_order_release);
@@ -330,11 +337,11 @@ struct PagedPreviewSource::Impl {
               auto &asset = assets[index];
               asset.path = archive_file::findFileWithExtensions(asset.path, extensions).value_or(asset.path);
               asset.probedSource = cache->CaptureSource(asset.path);
-              const auto duration = probeFileDuration(asset.path, cancelled);
+              const auto probe = probeFileDuration(asset.path, cancelled);
               checkpoint();
               if (asset.probedSource && !cache->ArchiveBatchUnchanged(*asset.probedSource))
                 throw std::runtime_error("Audio source changed during duration probing.");
-              publishPastDuration(index, duration);
+              publishPastDuration(index, probe.duration, probe.isOgg);
             }
           }
           if (canDefer(index)) {
@@ -389,7 +396,7 @@ struct PagedPreviewSource::Impl {
         // ZIP can inspect duration headers without inflating expired payloads.
         // Reuse its cached directory once for the whole chart, then extract
         // opening/overlapping voices before the remaining gameplay warm-up.
-        std::map<std::filesystem::path, std::optional<duration_bound::Duration>> probed;
+        std::map<std::filesystem::path, DurationProbe> probed;
         bool zipProbed = false;
         if (requestedOriginOutput) {
           std::vector<std::filesystem::path> pastPaths;
@@ -399,14 +406,16 @@ struct PagedPreviewSource::Impl {
               pastPaths.push_back(path);
           zipProbed = archive_file::probeZipEntries(archive, pastPaths,
                   [&](const auto &path, auto size, const auto &readAt) {
-                    probed.emplace(path, duration_bound::InspectAudio(size, readAt));
+                    DurationProbe probe;
+                    probe.duration = duration_bound::InspectAudio(size, readAt, &probe.isOgg);
+                    probed.emplace(path, probe);
                   }, &error, [&] { return !cancelled.load(std::memory_order_relaxed); });
           checkpoint();
           if (!zipProbed) probed.clear();
           if (!cache->ArchiveBatchUnchanged(*batch))
             throw std::runtime_error("Preview audio archive changed during duration probing.");
-          for (const auto &[path, duration] : probed)
-            for (auto index : indices.at(path)) publishPastDuration(index, duration);
+          for (const auto &[path, probe] : probed)
+            for (auto index : indices.at(path)) publishPastDuration(index, probe.duration, probe.isOgg);
         }
         std::vector<archive_file::FileData> deferred;
         std::mutex deferredMutex;
@@ -420,11 +429,12 @@ struct PagedPreviewSource::Impl {
               const auto &aliases = indices.at(file.path);
               const bool hasPast = std::any_of(aliases.begin(), aliases.end(),
                   [&](auto index) { return assets[index].latestPastStart.has_value(); });
-              const auto duration = hasPast && !probed.contains(file.path) ? duration_bound::InspectAudio(file.bytes)
+              bool isOgg = false;
+              const auto duration = hasPast && !probed.contains(file.path) ? duration_bound::InspectAudio(file.bytes, &isOgg)
                                            : std::optional<duration_bound::Duration>{};
               bool defer = true;
               for (const auto index : aliases) {
-                if (!probed.contains(file.path)) publishPastDuration(index, duration);
+                if (!probed.contains(file.path)) publishPastDuration(index, duration, isOgg);
                 defer = canDefer(index) && defer;
               }
               if (defer) {

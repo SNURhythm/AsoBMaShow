@@ -55,8 +55,10 @@ No dependencies or parser changes are needed.
 ## Bounded overlap preparation follow-up
 
 The user requested cheap audio-length probing before highlight playback and a
-15-second lookback cap for durations still unknown after probing. A known or
-cached longer sound must keep its true overlap. This cap applies only to unknown
+15-second lookback cap for durations still unknown after probing, subsequently
+extended to 60 seconds for Ogg. Detect Ogg from the file header, since BMS assets
+may use misleading extensions. A known or cached longer sound must keep its true
+overlap. These caps apply only to unknown
 past sounds, not to the duration of preview playback or future scheduled sounds.
 
 Use bounded WAV/FLAC metadata reads and the existing conservative Vorbis probe
@@ -66,13 +68,13 @@ Loose-file probes may seek over payloads but have bounded bytes/chunk counts.
 Reuse cached PCM before probing. ZIP metadata probes reuse one cached index and
 central-directory lease for the chart. Bound payload I/O to 128 KiB per asset and
 deflate output to a 64 KiB prefix; stored entries support random tail reads.
-Large deflated Ogg entries therefore remain unknown under the 15-second fallback.
+Large deflated Ogg entries therefore remain unknown under the 60-second Ogg fallback.
 Validate source identity before publishing probe results, then extract required
 opening/overlap assets before the remaining assets. Full payload extraction
 still happens once per asset through the existing optimized batch readers and
 validates CRC. Other archive formats inspect already-extracted bytes.
 
-Store each asset's proven bound (or the requested 15 seconds for unknowns),
+Store each asset's proven bound (or 60 seconds for unknown Ogg, 15 for other unknowns),
 then evaluate every old onset independently. A recent instance must not keep
 an older unknown-duration instance alive outside the lookback. Use the latest
 past onset only to decide whether all prior instances can be deferred. Future

@@ -703,6 +703,77 @@ void testUnknownDurationLookbackAndKnownLongTails(const std::filesystem::path &r
   }
 }
 
+void testUnknownOggMinuteLookback(const std::filesystem::path &root) {
+  // Use a misleading .wav name, as chart extension fallback often loads Ogg.
+  SF_INFO info{};
+  info.samplerate = 8000; info.channels = 1; info.format = SF_FORMAT_OGG | SF_FORMAT_VORBIS;
+  {
+    auto file = asobmashow::audio::openSoundFileHandle(root / "first.wav", SFM_WRITE, info);
+    std::vector<short> pcm(62 * 8000);
+    std::uint32_t random = 1;
+    for (auto &sample : pcm) {
+      random = random * 1664525U + 1013904223U;
+      sample = static_cast<short>(int(random >> 18) - 8192);
+    }
+    require(file && sf_write_short(file.get(), pcm.data(), pcm.size()) == static_cast<sf_count_t>(pcm.size()),
+            "cannot create unknown Ogg fixture");
+  }
+  require(std::filesystem::file_size(root / "first.wav") > 65536,
+          "Ogg fixture must exceed the ZIP inflated-prefix budget");
+  writeWav(root / "second.wav", 8000, std::vector<short>(64, 16384));
+  for (const auto *compression : {"store", "deflate"}) {
+    const auto archive = root / (std::string("ogg-lookback-") + compression + ".zip");
+    auto writer = makeArchiveWriteHandle();
+    require(archive_write_set_format_zip(writer.get()) == ARCHIVE_OK &&
+                archive_write_set_format_option(writer.get(), "zip", "compression", compression) == ARCHIVE_OK &&
+                archive_write_open_filename(writer.get(), archive.string().c_str()) == ARCHIVE_OK,
+            "cannot create Ogg lookback ZIP");
+    for (const auto *name : {"first.wav", "second.wav"}) {
+      std::ifstream input(root / name, std::ios::binary);
+      const std::vector<char> bytes((std::istreambuf_iterator<char>(input)), {});
+      UniqueResource<archive_entry, archive_entry_free> entry(archive_entry_new());
+      archive_entry_set_pathname(entry.get(), name);
+      archive_entry_set_filetype(entry.get(), AE_IFREG);
+      archive_entry_set_perm(entry.get(), 0644);
+      archive_entry_set_size(entry.get(), bytes.size());
+      require(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK &&
+                  archive_write_data(writer.get(), bytes.data(), bytes.size()) == static_cast<la_ssize_t>(bytes.size()),
+              "cannot write Ogg lookback ZIP entry");
+    }
+    require(archive_write_close(writer.get()) == ARCHIVE_OK, "cannot finish Ogg lookback ZIP");
+    for (const auto [age, cached] : {std::pair{59, false}, std::pair{60, false}, std::pair{61, true}}) {
+      auto parsed = chart(root, "#00001:01\n#03011:02\n");
+      parsed->Meta.Folder = archive;
+      for (auto *measure : parsed->Measures)
+        for (auto *timeline : measure->TimeLines)
+          if (timeline->Timing == 60 * 1'000'000LL) timeline->Timing = age * 1'000'000LL;
+      auto cache = std::make_shared<audio::DecodedAssetCache>();
+      std::atomic_bool cancelled = false;
+      if (cached) require(bool(cache->Load(archive / "first.wav", cancelled)), "cannot warm known Ogg duration");
+      auto source = audio::PagedPreviewSource::Create(*parsed, cache, age * 44100);
+      require(source->Begin(8000), "cannot begin unknown Ogg preview");
+      waitPrepared(source);
+      const auto native = cache->Find(archive / "first.wav");
+      const auto current = cache->Find(archive / "second.wav");
+      require(native && current, "Ogg fallback must still warm both native assets");
+      std::array<float, 16> output{};
+      require(source->Render(output, 8).status == audio::PagedPreviewRenderStatus::Data,
+              "Ogg lookback preview must be playable");
+      const bool overlap = age < 60 || cached || std::string_view(compression) == "store";
+      for (std::size_t frame = 0; frame < 8; ++frame) {
+        const auto past = overlap ? native->pcm[age * 8000 + frame] : 0;
+        const auto expected = (past + current->pcm[frame]) * (0.9f / 32768.0f);
+        if (std::abs(output[frame * 2] - expected) >= 0.000001f)
+          std::cerr << "Ogg lookback: " << compression << " age=" << age << " cached=" << cached
+                    << " expected=" << expected << " actual=" << output[frame * 2] << '\n';
+        require(std::abs(output[frame * 2] - expected) < 0.000001f,
+                "unknown Ogg needs a 60-second lookback; known longer Ogg must remain audible");
+      }
+      require(cache->GetStatistics().decoderOpens == 2, "Ogg probing must not introduce another decoder pass");
+    }
+  }
+}
+
 void testProgressiveStartup(const std::filesystem::path &root) {
   writeWav(root / "first.wav", 44100, std::vector<short>(100, 16384));
   writeWav(root / "second.wav", 44100, std::vector<short>(44100 * 4, 8192));
@@ -1354,6 +1425,7 @@ int main() {
     testZipDurationProbes(root / "progressive");
     testExpiredSoundDoesNotBlockHighlight(root / "progressive");
     testUnknownDurationLookbackAndKnownLongTails(root / "progressive");
+    testUnknownOggMinuteLookback(root / "progressive");
     testProgressiveStartup(root / "progressive");
     testFullCallbackPreflightPreservesScheduledAndActiveVoices(root / "preflight");
     testFractionalTiming(root / "timing");

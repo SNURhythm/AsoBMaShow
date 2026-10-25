@@ -141,3 +141,21 @@ Final checks: desktop `main` and the audio/archive targets built; all 53 selecte
 CTest cases passed, followed by the three focused tests after tightening the
 input-budget cursor invariant. The unsigned iOS device build also passed. No
 upload or device timing claim is part of this change.
+
+
+## Unknown Ogg lookback follow-up
+
+- [x] Retain Ogg container detection even when its bounded duration probe fails;
+  use 60 seconds for unknown Ogg and preserve 15 seconds for other unknown formats.
+  Known/cached longer durations and future onsets keep their existing behavior.
+- [x] Add a real 62-second Ogg fixture named `.wav` inside stored/deflated ZIPs.
+  Confirm the 59-second deflated case fails under the old 15-second policy,
+  then verify the 59/60-second boundary and known/cached tails beyond one minute.
+- [x] Build desktop `main` and pass the focused preview tests. The existing AIFF
+  tests continue verifying the unchanged 15-second fallback for other formats.
+
+This extends the overlap lookback, not preview playback duration or the bounded
+ZIP probe budget. It may increase startup work when more old Ogg onsets now need
+full extraction and PCM decoding; nominal bitrate estimates are not used.
+
+The unsigned iOS device compile check also passed for this policy update.

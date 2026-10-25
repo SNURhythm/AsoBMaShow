@@ -14,10 +14,13 @@ struct Duration {
 // FLAC needs only STREAMINFO. Ogg reads at most 64 KiB plus its identification page.
 // readAt(offset, bytes) must fill the requested span or return false.
 template <typename ReadAt>
-std::optional<Duration> InspectAudio(std::uint64_t size, ReadAt readAt) {
+std::optional<Duration> InspectAudio(std::uint64_t size, ReadAt readAt, bool *isOgg = nullptr) {
+  if (isOgg) *isOgg = false;
   std::array<unsigned char, 42> header{};
   const auto headerSize = static_cast<std::size_t>(std::min<std::uint64_t>(size, header.size()));
   if (headerSize < 12 || !readAt(0, std::span(header).first(headerSize))) return {};
+  // Keep the container identity even when the bounded duration lookup fails.
+  if (isOgg) *isOgg = std::memcmp(header.data(), "OggS", 4) == 0;
   const auto u16 = [](const unsigned char *p) {
     return unsigned(p[0]) | unsigned(p[1]) << 8;
   };
@@ -91,11 +94,11 @@ std::optional<Duration> InspectAudio(std::uint64_t size, ReadAt readAt) {
   return {};
 }
 
-inline std::optional<Duration> InspectAudio(std::span<const unsigned char> bytes) {
+inline std::optional<Duration> InspectAudio(std::span<const unsigned char> bytes, bool *isOgg = nullptr) {
   return InspectAudio(bytes.size(), [&](std::uint64_t offset, std::span<unsigned char> output) {
     if (offset > bytes.size() || output.size() > bytes.size() - offset) return false;
     std::copy_n(bytes.data() + offset, output.size(), output.data());
     return true;
-  });
+  }, isOgg);
 }
 } // namespace audio::duration_bound

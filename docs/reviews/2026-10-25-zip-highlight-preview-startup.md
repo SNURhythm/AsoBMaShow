@@ -22,7 +22,9 @@ publishing the batch's duration decisions.
 
 WAV/FLAC duration headers and stored Ogg head/tail reads can exclude expired
 voices before extraction. Large deflated Ogg files remain unknown when their
-last page lies beyond the prefix limit, using the requested 15-second lookback.
+last page lies beyond the prefix limit. A subsequent user-requested adjustment
+sets their lookback to 60 seconds; other unknown formats retain 15 seconds.
+Container detection uses the header even when an Ogg asset is named `.wav`.
 The bound stays fixed for each past instance; future instances remain scheduled.
 
 The existing indexed extraction pipeline now handles opening/overlapping sounds
