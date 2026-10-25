@@ -513,6 +513,73 @@ void testBoundedLargeVorbisDuration(const std::filesystem::path &root) {
   require(audio::duration_bound::InspectVorbis(bytes).has_value(), "complete Ogg validation must still pass");
 }
 
+void testZipDurationProbes(const std::filesystem::path &root) {
+  writeWav(root / "long-probe.wav", 8000, std::vector<short>(22 * 8000, 8192));
+  for (const auto *compression : {"store", "deflate"}) {
+    const auto path = root / (std::string("duration-") + compression + ".zip");
+    auto writer = makeArchiveWriteHandle();
+    require(archive_write_set_format_zip(writer.get()) == ARCHIVE_OK &&
+                archive_write_set_format_option(writer.get(), "zip", "compression", compression) == ARCHIVE_OK &&
+                archive_write_open_filename(writer.get(), path.string().c_str()) == ARCHIVE_OK,
+            "cannot create duration probe ZIP");
+    for (const auto *name : {"long-probe.wav", "long-probe.ogg"}) {
+      std::ifstream input(root / name, std::ios::binary);
+      const std::vector<char> bytes((std::istreambuf_iterator<char>(input)), {});
+      UniqueResource<archive_entry, archive_entry_free> entry(archive_entry_new());
+      archive_entry_set_pathname(entry.get(), name);
+      archive_entry_set_filetype(entry.get(), AE_IFREG);
+      archive_entry_set_perm(entry.get(), 0644);
+      archive_entry_set_size(entry.get(), bytes.size());
+      require(archive_write_header(writer.get(), entry.get()) == ARCHIVE_OK &&
+                  archive_write_data(writer.get(), bytes.data(), bytes.size()) == static_cast<la_ssize_t>(bytes.size()),
+              "cannot write duration probe ZIP entry");
+    }
+    require(archive_write_close(writer.get()) == ARCHIVE_OK, "cannot finish duration probe ZIP");
+    std::size_t visited = 0;
+    std::string error;
+    require(archive_file::probeZipEntries(path, {"long-probe.wav", "long-probe.ogg"},
+        [&](const auto &entry, auto size, const auto &readAt) {
+          const auto bound = audio::duration_bound::InspectAudio(size, readAt);
+          if (entry.extension() == ".wav") {
+            require(bound && bound->sampleRate == 8000 && bound->frames == 22 * 8000,
+                    "both ZIP methods must preserve a known long WAV tail without full inflation");
+          } else if (std::string_view(compression) == "store") {
+            require(bound && bound->frames >= 16 * 44100,
+                    "stored ZIP Ogg must support bounded random tail reads");
+          } else {
+            require(!bound, "large deflated Ogg must remain unknown rather than inflate an unbounded tail");
+          }
+          ++visited;
+        }, &error), error.c_str());
+    require(visited == 2, "ZIP duration probe must visit each requested entry");
+    require(archive_file::probeZipEntries(path, {"long-probe.wav"},
+        [&](const auto &, auto, const auto &readAt) {
+          std::array<unsigned char, 4096> bytes{};
+          if (std::string_view(compression) == "deflate") {
+            require(!readAt(65536, std::span(bytes).first(1)), "inflated prefix must stay within 64 KiB");
+            require(readAt(0, bytes) && std::memcmp(bytes.data(), "RIFF", 4) == 0,
+                    "out-of-budget probe must not invalidate an earlier readable prefix");
+          } else {
+            for (unsigned i = 0; i < 32; ++i)
+              require(readAt(i * bytes.size(), bytes), "stored ZIP budget should allow 128 KiB");
+            require(!readAt(0, std::span(bytes).first(1)), "stored ZIP payload read budget must be enforced");
+          }
+        }, &error), error.c_str());
+    bool keepGoing = true;
+    require(!archive_file::probeZipEntries(path, {"long-probe.wav", "long-probe.ogg"},
+        [&](const auto &, auto, const auto &) { keepGoing = false; }, &error,
+        [&] { return keepGoing; }), "ZIP duration batch must observe cancellation");
+    const auto replacement = root / "duration-replacement.zip";
+    std::filesystem::copy_file(path, replacement, std::filesystem::copy_options::overwrite_existing);
+    require(!archive_file::probeZipEntries(path, {"long-probe.wav"},
+        [&](const auto &, auto, const auto &) {
+          std::filesystem::remove(path);
+          std::filesystem::rename(replacement, path);
+        }, &error),
+        "ZIP duration batch must reject source replacement before publishing its results");
+  }
+}
+
 void testExpiredSoundDoesNotBlockHighlight(const std::filesystem::path &root) {
   writeWav(root / "first.wav", 8000, std::vector<short>(16000, 8192));
   writeWav(root / "second.wav", 8000, std::vector<short>(64, 16384));
@@ -545,7 +612,9 @@ void testExpiredSoundDoesNotBlockHighlight(const std::filesystem::path &root) {
     auto cache = std::make_shared<audio::DecodedAssetCache>(
         audio::DecodedAssetCache::kUnlimitedRetainedBytes);
     auto source = audio::PagedPreviewSource::Create(*parsed, cache, 20 * 44100);
-    preparationAllocationBytes = 16000 * sizeof(short);
+    // ZIP startup must precede even the full encoded read of an expired entry.
+    preparationAllocationBytes = container == "zip"
+        ? std::filesystem::file_size(root / "first.wav") : 16000 * sizeof(short);
     preparationBlocked = false;
     preparationGate = true;
     const auto release = makeScopeExit([] { preparationGate = false; preparationAllocationBytes = 0; });
@@ -1282,6 +1351,7 @@ int main() {
     testMissingAndExpired(root / "missing");
     testBoundedAudioDurationMetadata();
     testBoundedLargeVorbisDuration(root / "progressive");
+    testZipDurationProbes(root / "progressive");
     testExpiredSoundDoesNotBlockHighlight(root / "progressive");
     testUnknownDurationLookbackAndKnownLongTails(root / "progressive");
     testProgressiveStartup(root / "progressive");

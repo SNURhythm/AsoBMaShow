@@ -63,8 +63,14 @@ Use bounded WAV/FLAC metadata reads and the existing conservative Vorbis probe
 for small complete Ogg files, with bounded identification/final-page reads for
 large Ogg files. Unsupported or malformed metadata stays unknown; do not ask a generic decoder to scan a file just to obtain a length.
 Loose-file probes may seek over payloads but have bounded bytes/chunk counts.
-For archives inspect only bytes already delivered by the existing batch reader.
-Do not add a separate extraction pass. Reuse cached PCM before probing.
+Reuse cached PCM before probing. ZIP metadata probes reuse one cached index and
+central-directory lease for the chart. Bound payload I/O to 128 KiB per asset and
+deflate output to a 64 KiB prefix; stored entries support random tail reads.
+Large deflated Ogg entries therefore remain unknown under the 15-second fallback.
+Validate source identity before publishing probe results, then extract required
+opening/overlap assets before the remaining assets. Full payload extraction
+still happens once per asset through the existing optimized batch readers and
+validates CRC. Other archive formats inspect already-extracted bytes.
 
 Store each asset's proven bound (or the requested 15 seconds for unknowns),
 then evaluate every old onset independently. A recent instance must not keep
@@ -79,5 +85,6 @@ identity across probing/deferred decode and preserve cancellation.
 
 Metadata probing has a small bounded cost; it is not free. It avoids delaying
 first audio on irrelevant PCM decoding, but gameplay warming still eventually
-decodes those assets. Compressed archives may still require extracting their
-encoded entries before their metadata is available.
+decodes those assets. Bounded ZIP probes add some repeated header/prefix I/O,
+but never a second full extraction. Other archive formats may still require
+extracting encoded entries before their metadata is available.

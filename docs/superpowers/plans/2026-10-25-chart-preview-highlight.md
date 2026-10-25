@@ -101,3 +101,43 @@ identity gap; all were corrected. A repeated-unknown-sample regression then
 failed until the 15-second cutoff was applied independently to each old onset.
 The final targeted review found no actionable issues. Archive reads continue
 through the indexed batch pipeline; no separate probe extraction was added.
+
+
+## ZIP first-selection startup follow-up
+
+The user reported about one second on iOS for the first selection of each chart
+inside a 20 GiB ZIP, with the library index already built. The exact archive was
+unavailable locally. A smaller real ZIP reproduced unnecessary work before
+startup: 360/370 sounds decoded, compared with 29–36 from loose files. Sampling
+showed ZIP inflation and CRC checks dominating; scoring took about 0.12 ms.
+
+- [x] Extend the opt-in benchmark with `--highlight` (actual scored origin and
+  leading-silence trimming), preserving the existing gameplay handoff checks.
+- [x] Strengthen the expired ZIP regression to gate full encoded allocation,
+  not only PCM allocation. Confirm failure before changing production code.
+- [x] Add bounded ZIP metadata reads using the cached index/directory, then split
+  existing batch extraction into opening/overlap and remaining assets. Preserve
+  full extraction CRC checks, native cache warming, cancellation and identity.
+- [x] Cover stored/deflate WAV, stored Ogg tails, deflate prefix limits, per-entry
+  I/O budgets, cancellation, source replacement and future sample reuse.
+- [x] Independently review the change; no actionable findings reported.
+
+The initial optimized desktop comparison (48 kHz, one warm-up and three measured
+rounds, warm filesystem/index but fresh decoded cache) reduced median ZIP startup
+from 106.0 ms to 21.4 ms; only 23 sounds had decoded at early cancellation. Full
+preparation rose from 109.6 ms to 116.8 ms due to the extra bounded probes and
+second batch setup. The 44 MB/599-entry chart has 370 sound references. These are
+headless preparation measurements, not iPhone or UI-to-audible latency claims.
+
+A sparse 128 GiB ZIP with 100,004 entries also completed highlight preparation
+and gameplay handoff. An instrumented run (warm-up plus one measured round,
+three modes) counted 18,239,580 source bytes and zero reads from the unselected
+128 GiB payload. Stored entries avoided mmap payload reads in that fixture.
+This checks bounded access to a large archive; it does not reproduce the user's
+20 GiB collection or cold iOS storage. See the focused review report for final
+verification and reproduction.
+
+Final checks: desktop `main` and the audio/archive targets built; all 53 selected
+CTest cases passed, followed by the three focused tests after tightening the
+input-budget cursor invariant. The unsigned iOS device build also passed. No
+upload or device timing claim is part of this change.

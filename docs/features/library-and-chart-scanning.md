@@ -103,10 +103,15 @@ jacket pulse and spectrum from audible output, including playback gain and mute.
 Highlight preparation probes bounded WAV/FLAC metadata and Ogg head/tail data to
 skip expired past sounds before PCM decoding. Durations still unknown after the
 probe use a 15-second overlap lookback; known and cached longer tails remain.
-Later instances of the same sample remain scheduled. Archived probes inspect
-bytes from the existing indexed batch pipeline, with no separate extraction
-pass and at most 8 MiB of deferred encoded data. Expired native PCM still warms
-for gameplay, but needs no preview resampling unless the sample plays later.
+Later instances of the same sample remain scheduled. ZIP probes reuse the cached
+index and directory, reading at most 128 KiB per past asset and inflating at most
+a 64 KiB prefix. Stored ZIP entries support random head/tail reads; larger
+Ogg files inside deflated entries use the unknown-duration fallback because
+reaching their tail would require full inflation. Opening/overlapping ZIP sounds
+are extracted first; the remaining sounds still warm through the indexed batch
+pipeline. Other archives inspect already-extracted bytes. Deferred encoded data
+stays capped at 8 MiB. Expired native PCM still warms for gameplay, but needs no
+preview resampling unless the sample plays later.
 Custom selectors reuse preloaded native PCM, including
 sounds retained when changing difficulty, and drain previews before gameplay.
 

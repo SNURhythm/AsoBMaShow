@@ -386,22 +386,45 @@ struct PagedPreviewSource::Impl {
           if (!indices.contains(inner)) { paths.push_back(inner); priorities.emplace(inner, item); }
           indices[inner].push_back(index);
         }
+        // ZIP can inspect duration headers without inflating expired payloads.
+        // Reuse its cached directory once for the whole chart, then extract
+        // opening/overlapping voices before the remaining gameplay warm-up.
+        std::map<std::filesystem::path, std::optional<duration_bound::Duration>> probed;
+        bool zipProbed = false;
+        if (requestedOriginOutput) {
+          std::vector<std::filesystem::path> pastPaths;
+          for (const auto &path : paths)
+            if (std::any_of(indices.at(path).begin(), indices.at(path).end(),
+                    [&](auto index) { return assets[index].latestPastStart.has_value(); }))
+              pastPaths.push_back(path);
+          zipProbed = archive_file::probeZipEntries(archive, pastPaths,
+                  [&](const auto &path, auto size, const auto &readAt) {
+                    probed.emplace(path, duration_bound::InspectAudio(size, readAt));
+                  }, &error, [&] { return !cancelled.load(std::memory_order_relaxed); });
+          checkpoint();
+          if (!zipProbed) probed.clear();
+          if (!cache->ArchiveBatchUnchanged(*batch))
+            throw std::runtime_error("Preview audio archive changed during duration probing.");
+          for (const auto &[path, duration] : probed)
+            for (auto index : indices.at(path)) publishPastDuration(index, duration);
+        }
         std::vector<archive_file::FileData> deferred;
         std::mutex deferredMutex;
         std::size_t deferredBytes = 0;
         constexpr std::size_t maximumDeferredBytes = 8U * 1024U * 1024U;
-        const bool loaded = ConsumeArchiveAssetBatch(archive, paths,
+        const auto readBatch = [&](const auto &batchPaths) {
+          return ConsumeArchiveAssetBatch(archive, batchPaths,
             parallel_worker_count(paths.size()), 64U * 1024U * 1024U,
             [&](archive_file::FileData &&file) {
               checkpoint();
               const auto &aliases = indices.at(file.path);
               const bool hasPast = std::any_of(aliases.begin(), aliases.end(),
                   [&](auto index) { return assets[index].latestPastStart.has_value(); });
-              const auto duration = hasPast ? duration_bound::InspectAudio(file.bytes)
+              const auto duration = hasPast && !probed.contains(file.path) ? duration_bound::InspectAudio(file.bytes)
                                            : std::optional<duration_bound::Duration>{};
               bool defer = true;
               for (const auto index : aliases) {
-                publishPastDuration(index, duration);
+                if (!probed.contains(file.path)) publishPastDuration(index, duration);
                 defer = canDefer(index) && defer;
               }
               if (defer) {
@@ -432,6 +455,14 @@ struct PagedPreviewSource::Impl {
                   std::move(keepGoing));
             },
             [&](const std::filesystem::path &path) { return priorities.at(path); });
+        };
+        std::vector<std::filesystem::path> openingPaths, remainingPaths;
+        for (const auto &path : paths) {
+          const bool required = !zipProbed || std::any_of(indices.at(path).begin(), indices.at(path).end(),
+              [&](auto index) { return !canDefer(index); });
+          (required ? openingPaths : remainingPaths).push_back(path);
+        }
+        const bool loaded = readBatch(openingPaths) && readBatch(remainingPaths);
         if (!loaded) {
           checkpoint();
           throw std::runtime_error(error.empty() ? "Could not read preview audio archive." : error);
