@@ -332,6 +332,22 @@ View *SettingsScene::buildAudioTab(const LayoutMetrics &metrics) {
   streamControls->setFlexDirection(FlexDirection::Column);
   streamControls->setGap(metrics.compact ? 14.0F : 18.0F);
 
+  const auto applyMonoAudio = [this](bool enabled) {
+    audioVideoSession->applyMonoAudio(enabled);
+    audioDraft.monoAudio = context.settings.audioVideo.audio.monoAudio;
+  };
+  streamControls->addView(makeGameplaySkinChoiceRow(
+      metrics, overlayPortal, i18n::message("settings.audio.mono.label"), true,
+      {{.label = i18n::message("settings.audio.mono.off.label"),
+        .selected = !context.settings.audioVideo.audio.monoAudio,
+        .action = [applyMonoAudio] { applyMonoAudio(false); }},
+       {.label = i18n::message("settings.audio.mono.on.label"),
+        .selected = context.settings.audioVideo.audio.monoAudio,
+        .action = [applyMonoAudio] { applyMonoAudio(true); }}}, true));
+  streamControls->addView(makeWrappedText(
+      i18n::message("settings.audio.mono.description"), metrics.smallTextSize,
+      app_theme::textSecondary()));
+
   auto closeOtherAudioDropdowns = [this](int openIndex, bool open) {
     audioDeviceDropdownOpen = open && openIndex == 0;
     audioSampleRateDropdownOpen = open && openIndex == 1;

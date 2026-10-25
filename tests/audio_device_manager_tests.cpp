@@ -93,6 +93,9 @@ public:
     return true;
   }
 
+  bool monoAudio = false;
+  void setMonoAudio(bool enabled) override { monoAudio = enabled; }
+
   void setVolumes(const audio::Volumes &newVolumes) override {
     record("set-volumes");
     volumes = newVolumes;
@@ -408,6 +411,7 @@ void testInitialWorkingStreamComesFromEffectiveRuntimeNotImportedIntent() {
   imported.requestedSampleRate = 48000;
   imported.requestedBufferFrames = 128;
   imported.masterVolume = 0.25F;
+  imported.monoAudio = true;
   audio::AudioDeviceManager manager(runtime, playback, imported);
 
   const auto &working = manager.lastWorkingSettings();
@@ -416,6 +420,10 @@ void testInitialWorkingStreamComesFromEffectiveRuntimeNotImportedIntent() {
           "last-working stream fields come from the effective fixed runtime");
   require(std::fabs(working.masterVolume - 1.0F) < 0.00001F,
           "last-working volumes begin at the runtime's initial app gain");
+  manager.apply(imported);
+  require(runtime.monoAudio && manager.lastWorkingSettings().monoAudio &&
+              playback.suspendCount == 0,
+          "startup applies saved mono even when imported stream settings are unavailable");
 }
 
 void testUnsupportedImportedStreamStillAppliesIndependentVolumes() {

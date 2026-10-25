@@ -499,6 +499,8 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
     return;
   }
 
+  const bool monoAudio = userData->monoAudio &&
+      userData->monoAudio->load(std::memory_order_acquire);
   const bool clockRunning = userData->stopwatch->isRunning();
   if (!clockRunning && state.playingSoundCount == 0) {
     fillSilence(pOutput, frameCount, outputChannels);
@@ -574,6 +576,14 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
 
     if (userData->compressor && userData->compressor->enabled) {
       userData->compressor->processStereo(mixBuffer, chunkFrames);
+    }
+
+    // Fold after effects so stereo reverb cannot reintroduce channel separation.
+    if (monoAudio) {
+      for (size_t i = 0; i < requiredSamples; i += 2) {
+        const float mono = (mixBuffer[i] + mixBuffer[i + 1]) * 0.5f;
+        mixBuffer[i] = mixBuffer[i + 1] = mono;
+      }
     }
 
     // Convert back to int16
@@ -668,6 +678,7 @@ void AudioWrapper::initializeUserData() {
   userData.playbackRatePercent = &playbackRatePercent;
   userData.bgmGain = &bgmGain;
   userData.keysoundGain = &keysoundGain;
+  userData.monoAudio = &monoAudio;
   userData.stopwatch = stopwatch;
   userData.mixBuffer = &mixBuffer;
   userData.bassFilter = &bassFilter;
@@ -2148,6 +2159,10 @@ void AudioWrapper::setCompressor(float threshold, float ratio) {
     compressor.setParams(threshold, ratio, 0.01f,
                          0.1f); // Default attack/release
   }
+}
+
+void AudioWrapper::setMonoAudio(bool enabled) {
+  monoAudio.store(enabled, std::memory_order_release);
 }
 
 void AudioWrapper::setVolumes(const audio::Volumes &volumes) {

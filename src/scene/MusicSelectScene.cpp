@@ -2092,6 +2092,7 @@ bool MusicSelectScene::playChartPreview(
           source = audio::PagedPreviewSource::Create(*preloadedChart_, preloadedPreviewCache_, frame,
               {.bgm = settings.masterVolume * settings.bgmVolume,
                .keysound = settings.masterVolume * settings.keysoundVolume});
+          chartPreviewPlayer_.SetMonoAudio(settings.monoAudio);
           chartPreviewPlayer_.SetRequest({.deviceId = settings.outputDeviceId,
               .sampleRate = settings.requestedSampleRate,
               .bufferFrames = settings.requestedBufferFrames});

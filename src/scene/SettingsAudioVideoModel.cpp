@@ -394,6 +394,15 @@ audio::ApplyResult SettingsAudioVideoSession::applyVolumes(float master,
   return result;
 }
 
+audio::ApplyResult SettingsAudioVideoSession::applyMonoAudio(bool enabled) {
+  auto candidate = audioManager_.lastWorkingSettings();
+  candidate.monoAudio = enabled;
+  const auto result = audioManager_.apply(candidate);
+  settings_.audioVideo.audio.monoAudio = enabled;
+  persist();
+  return result;
+}
+
 audio::ApplyResult SettingsAudioVideoSession::applyStreamIntent(
     const player_settings::AudioSettings &candidateIntent) {
   auto candidate = settings_.audioVideo.audio;

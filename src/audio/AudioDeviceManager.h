@@ -29,6 +29,7 @@ public:
   virtual bool restore(const RuntimeState &previous,
                        std::string &errorMessage) = 0;
   virtual void setVolumes(const Volumes &volumes) = 0;
+  virtual void setMonoAudio(bool enabled) = 0;
 };
 
 class IPlaybackSession {

@@ -243,6 +243,25 @@ AppSettings makeDistinctSettings() {
   return value;
 }
 
+void testMonoAudioRoundTrip() {
+  TempDirectory temp;
+  const auto path = temp.path() / "mono-audio.json";
+  writeFile(path, R"({"schemaVersion":8,"audio":{"monoAudio":true}})");
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.status == AppSettingsLoadStatus::Loaded, "mono audio settings load");
+  std::string error;
+  expect(AppSettingsStore::Save(path, loaded.settings, error), "mono audio settings save");
+  expect(AppSettingsStore::Load(path).settings.audioVideo.audio.monoAudio,
+         "mono audio remains enabled after saving and reloading");
+  writeFile(path, R"({"schemaVersion":8,"audio":{}})");
+  expect(!AppSettingsStore::Load(path).settings.audioVideo.audio.monoAudio,
+         "existing profiles without mono audio retain stereo output");
+  writeFile(path, R"({"schemaVersion":8,"audio":{"monoAudio":"invalid"}})");
+  const auto invalid = AppSettingsStore::Load(path);
+  expect(!invalid.settings.audioVideo.audio.monoAudio && !invalid.diagnostics.empty(),
+         "malformed mono audio is diagnosed and retains the stereo default");
+}
+
 void testLegacyFixtureLoadsEverySetting() {
   const auto result =
       AppSettingsStore::LoadLegacyCfg(fixture("legacy-full.cfg"));
@@ -2851,6 +2870,7 @@ void testKeybombModeResolution() {
 }
 
 int main() {
+  testMonoAudioRoundTrip();
   testKeybombSettingsPersist();
   testKeybombModeResolution();
   testScratchlessPolicyDefaultsPersist();

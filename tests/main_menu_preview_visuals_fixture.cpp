@@ -94,6 +94,8 @@ struct Player {
   void Stop() { state = {}; events->push_back("audio-stop"); }
   void SetRequest(Request) {}
   void SetGain(float) {}
+  bool monoAudio = false;
+  void SetMonoAudio(bool enabled) { monoAudio = enabled; }
   State GetState() const { return state; }
   float GetOutputLevel() const { return state.playing ? 0.4F : 0; }
   audio::Spectrum GetOutputSpectrum() const { return {0.4F}; }
@@ -174,6 +176,7 @@ struct Scene {
       bool chartPreviewFallbackHighlight = true;
       struct AudioVideo {
         struct Audio {
+          bool monoAudio = false;
           float masterVolume = 1, bgmVolume = 1, keysoundVolume = 1;
           std::string outputDeviceId;
           unsigned requestedSampleRate = 48000, requestedBufferFrames = 128;
@@ -218,13 +221,17 @@ int main() {
     std::atomic_bool cancelled = false;
     {
       Scene modes;
+      modes.context.settings.audioVideo.audio.monoAudio = true;
       modes.process({.meta = {.BmsPath = "chart.bms"}}, cancelled);
       require(modes.previewPlayer_.state.positionFrames == 40 * 44100 && modes.previewPlayer_.fadeIn,
               "default preview selects the highlight with fade-in");
+      require(modes.previewPlayer_.monoAudio, "chart preview receives the saved mono preference");
+      modes.context.settings.audioVideo.audio.monoAudio = false;
       modes.context.settings.chartPreviewMode = audio::ChartPreviewMode::Beginning;
       modes.process({.meta = {.BmsPath = "chart.bms"}}, cancelled);
       require(modes.previewPlayer_.state.positionFrames == 0 && !modes.previewPlayer_.fadeIn,
               "Beginning preserves original playback");
+      require(!modes.previewPlayer_.monoAudio, "next preview restores stereo after disabling mono");
       modes.context.settings.chartPreviewMode = audio::ChartPreviewMode::PreviewFile;
       modes.context.settings.chartPreviewFallbackHighlight = false;
       play_options::previewPath = "preview.ogg";

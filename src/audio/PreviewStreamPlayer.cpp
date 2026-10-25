@@ -38,6 +38,7 @@ struct PreviewSession {
   std::atomic<std::int64_t> lastOutputEndMicros{0};
   std::atomic<std::uint32_t> lastOutputBufferFrames{0};
   std::atomic<float> gain{1.0f};
+  std::atomic_bool monoAudio{false};
   std::mutex waitMutex;
   std::condition_variable wake;
   mutable std::mutex errorMutex;
@@ -96,6 +97,7 @@ struct PreviewSession {
     auto *pcm = static_cast<short *>(output);
     std::fill_n(pcm, static_cast<std::size_t>(frameCount) * channels, short{0});
     const auto gain = session.gain.load(std::memory_order_relaxed);
+    const bool monoAudio = session.monoAudio.load(std::memory_order_relaxed);
     double energy = 0.0;
     std::uint32_t offset = 0, lastDataEnd = 0;
     bool pending = false, ended = false;
@@ -125,8 +127,9 @@ struct PreviewSession {
         if (session.fadedFrames < session.fadeFrames) ++session.fadedFrames;
         const float left = session.scratch[frame * 2] * gain * fade;
         const float right = session.scratch[frame * 2 + 1] * gain * fade;
-        if (channels == 1) {
+        if (channels == 1 || monoAudio) {
           pcm[target] = Pcm((left + right) * 0.5f);
+          if (channels > 1) pcm[target + 1] = pcm[target];
         } else {
           pcm[target] = Pcm(left);
           pcm[target + 1] = Pcm(right);
@@ -263,6 +266,7 @@ struct PreviewStreamPlayer::Impl {
   std::unique_ptr<IBackendFactory> factory;
   StreamRequest request;
   float gain = 1.0f;
+  bool monoAudio = false;
   mutable std::mutex mutex;
   std::atomic<float> outputLevel{0.0f};
   PreviewSpectrumAnalyzer spectrum;
@@ -288,6 +292,7 @@ bool PreviewStreamPlayer::Start(std::shared_ptr<PagedPreviewSource> source,
   auto session = std::make_unique<PreviewSession>(impl->outputLevel, impl->spectrum);
   session->source = std::move(source);
   session->gain.store(impl->gain, std::memory_order_relaxed);
+  session->monoAudio.store(impl->monoAudio, std::memory_order_relaxed);
   session->backend = impl->factory->open(impl->request, PreviewSession::Render,
                                        session.get(), error);
   if (!session->backend) {
@@ -333,6 +338,12 @@ void PreviewStreamPlayer::SetGain(float gain) {
   std::lock_guard lock(impl->mutex);
   impl->gain = std::isfinite(gain) ? std::clamp(gain, 0.0f, 1.0f) : 1.0f;
   if (impl->session) impl->session->gain.store(impl->gain, std::memory_order_relaxed);
+}
+
+void PreviewStreamPlayer::SetMonoAudio(bool enabled) {
+  std::lock_guard lock(impl->mutex);
+  impl->monoAudio = enabled;
+  if (impl->session) impl->session->monoAudio.store(enabled, std::memory_order_relaxed);
 }
 
 float PreviewStreamPlayer::GetOutputLevel() const noexcept {

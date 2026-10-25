@@ -112,6 +112,7 @@ public:
   bool restoreSucceeds = true;
   int restartCalls = 0;
   audio::Volumes volumes;
+  bool monoAudio = false;
 
   audio::Capabilities capabilities() const override {
     return exposedCapabilities;
@@ -145,6 +146,8 @@ public:
     state = previous;
     return true;
   }
+
+  void setMonoAudio(bool enabled) override { monoAudio = enabled; }
 
   void setVolumes(const audio::Volumes &next) override { volumes = next; }
 };
@@ -436,6 +439,28 @@ void testDisplayModelUsesFriendlyLabelsAndShowsFixedFields() {
           "unsupported renderer explains why MSAA cannot be changed");
   require(fixed.frameCaps.enabled,
           "app-owned frame limiting remains available on fixed displays");
+}
+
+void testMonoAudioAppliesAndPersistsWithoutRestartingImportedStream() {
+  SessionFixture fixture;
+  fixture.audioRuntime.exposedCapabilities = fixedAudioCapabilities();
+  fixture.settings.audioVideo.audio.outputDeviceId = "desktop:imported";
+  fixture.settings.audioVideo.audio.requestedSampleRate = 96000;
+  fixture.session.applyMonoAudio(true);
+  require(fixture.audioRuntime.monoAudio && fixture.settings.audioVideo.audio.monoAudio &&
+              fixture.saves == 1,
+          "mono applies and saves immediately even with unavailable imported device intent");
+  fixture.session.applyVolumes(0.4F, 0.5F, 0.6F);
+  require(fixture.audioRuntime.monoAudio, "changing volume retains mono output");
+  fixture.session.applyMonoAudio(false);
+  require(!fixture.audioRuntime.monoAudio && !fixture.settings.audioVideo.audio.monoAudio &&
+              fixture.saves == 3,
+          "stereo can be restored and saved immediately");
+  require(fixture.audioRuntime.restartCalls == 0 && fixture.playback.suspendCalls == 0,
+          "mono changes do not restart or suspend playback");
+  require(fixture.settings.audioVideo.audio.outputDeviceId == "desktop:imported" &&
+              fixture.settings.audioVideo.audio.requestedSampleRate == 96000,
+          "mono changes preserve imported device intent");
 }
 
 void testVolumeChangesApplyAndPersistImmediatelyDespiteImportedStreamIntent() {
@@ -899,6 +924,7 @@ void testFailedDisplayApplyBlocksUntilRetryableRollbackFinishes() {
 } // namespace
 
 int main() {
+  testMonoAudioAppliesAndPersistsWithoutRestartingImportedStream();
   testKoreanDeviceChoicesPreserveDeviceNamesAndIds();
   testAudioModelPreservesUnavailableStableIdAndFriendlyLabels();
   testAudioModelKeepsUnknownLatencySeparateFromCallbackSize();
