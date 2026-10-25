@@ -40,8 +40,8 @@ struct MusicSelectScene {
   };
   std::unique_ptr<RevealMenu> revealContextMenu_;
 
-  bool recordsResumeAudioPending_ = false;
   struct { void cancelAndWait() {} bool active() const { return false; } } recordsTask_;
+  struct { bool active = false; bool inProgress() const { return active; } } recordsExportJob_;
   void finishRecordsLoading() {}
   struct UnzipModal { void hide() {} void cancelAndWait() {} };
   UnzipModal *archiveUnzipModal_ = nullptr, *findBmsModal_ = nullptr, *readmeModal_ = nullptr;
@@ -114,6 +114,10 @@ int main() {
   scene.onApplicationBackgroundChanged(false);
   assert(scene.preview.resumes == 0);
   scene.context.appInBackground = false;
+  scene.recordsExportJob_.active = true;
+  scene.onApplicationBackgroundChanged(false);
+  assert(scene.preview.resumes == 0 && !scene.preview.playing);
+  scene.recordsExportJob_.active = false;
   scene.onApplicationBackgroundChanged(false);
   assert(scene.preview.playing && !scene.preview.suppressed);
   assert(scene.soundConfigurations == 1);

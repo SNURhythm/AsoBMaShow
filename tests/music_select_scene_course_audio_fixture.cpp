@@ -213,7 +213,6 @@ struct MusicSelectScene {
   std::unique_ptr<RevealMenu> revealContextMenu_;
 
   void resetFailedLaunch(std::uint64_t generation);
-  bool recordsResumeAudioPending_ = false;
   struct FileActions { void close() {} };
   FileActions *recordFileActions_ = nullptr;
   struct { void cancelAndWait() {} bool active() const { return false; } } recordsTask_;

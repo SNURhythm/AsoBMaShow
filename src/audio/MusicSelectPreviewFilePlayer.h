@@ -26,7 +26,7 @@ public:
 
   bool play(const std::filesystem::path &path, bool loop,
             std::atomic_bool &cancellation,
-            std::stop_token stop = {}) {
+            std::stop_token stop = {}, float gain = 1.0F) {
     if (!audio_) return false;
     stopCurrent();
     const auto key = fspath_to_path_t(path);
@@ -58,7 +58,7 @@ public:
       if (isDefault) defaultHandle_.reset();
       return false;
     }
-    if (!audio_->playSkinSound(handle, 1.0F, loop)) {
+    if (!audio_->playSkinSound(handle, gain, loop)) {
       (void)audio_->disposeSkinSound(handle);
       if (isDefault) defaultHandle_.reset();
       return false;

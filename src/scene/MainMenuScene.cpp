@@ -1754,7 +1754,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
               this->context.settings.chartPreviewMode == audio::ChartPreviewMode::PreviewFile &&
               !chart->Meta.Preview.empty() &&
               previewFilePlayer_->play(chart->Meta.BmsPath.parent_path() / chart->Meta.Preview,
-                                       true, cancelled)) {
+                                       true, cancelled, {},
+                                       this->context.settings.audioVideo.audio.masterVolume)) {
             setSelectedChart(chart, false);
             const auto loaded = this->context.jukebox.loadChartPreservingDevice(*chart, true, cancelled);
             previewVisualsLoaded_ = true;

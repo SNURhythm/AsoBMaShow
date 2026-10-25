@@ -9,6 +9,7 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <stop_token>
 #include <string>
 #include <thread>
 #include <vector>
@@ -95,8 +96,11 @@ struct Player {
 };
 struct FilePlayer {
   bool available = false, playing = false;
-  bool play(const std::filesystem::path &, bool loop, std::atomic_bool &) {
+  float gain = 1;
+  bool play(const std::filesystem::path &, bool loop, std::atomic_bool &,
+            std::stop_token = {}, float volume = 1) {
     if (!loop) throw std::runtime_error("preview files must loop");
+    gain = volume;
     return playing = available;
   }
   void stopCurrent() { playing = false; }
@@ -207,6 +211,12 @@ int main() {
       modes.process({.meta = {.BmsPath = "chart.bms"}}, cancelled);
       require(modes.previewFilePlayer_->playing && !modes.previewPlayer_.state.playing && modes.selectedChartMediaReady,
               "usable preview file loops and still prepares gameplay resources");
+      for (const float master : {0.0F, 0.25F}) {
+        modes.context.settings.audioVideo.audio.masterVolume = master;
+        modes.process({.meta = {.BmsPath = "chart.bms"}}, cancelled);
+        require(modes.previewFilePlayer_->playing && modes.previewFilePlayer_->gain == master,
+                "authored preview must obey master volume, including mute");
+      }
       modes.stopPlayback();
       require(!modes.previewFilePlayer_->playing, "handoff stops the authored preview");
       play_options::previewPath.clear();

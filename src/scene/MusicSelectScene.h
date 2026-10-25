@@ -319,7 +319,6 @@ private:
   ReplayRecordTask recordsTask_;
   std::unique_ptr<RecordFileActions> recordFileActions_;
   std::string recordsDiagnostic_;
-  bool recordsResumeAudioPending_ = false;
   std::unordered_map<std::string, std::uint64_t> recordsIrRevisions_;
   std::uint64_t recordsIrAccountRevision_ = 0;
   std::uint64_t recordsIrReconciliationRevision_ = 0;

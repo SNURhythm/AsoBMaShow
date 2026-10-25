@@ -567,6 +567,7 @@ void MusicSelectScene::applyRecordsExportResult() {
           replay_records::diagnosticOr(result->message, i18n::tr("music_select.records.replay_export_failed.message")));
     }
   }
+  onApplicationBackgroundChanged(false);
 }
 
 void MusicSelectScene::recallRemoteResult(IrRemoteRecordId identity,
@@ -632,6 +633,7 @@ void MusicSelectScene::uploadRecord(const ModernChartResultRecord &modern) {
     } catch (...) {
       finishRecordsFailure(i18n::tr("music_select.records.ir_upload_failed_prepared.message"));
     }
+    onApplicationBackgroundChanged(false);
     return true;
   }, 1, true);
 }

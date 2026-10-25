@@ -130,6 +130,9 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
     def test_records_autoplay_audio_failure_cancel_and_retry(self):
         self.run_replay_audio_fixture([4])
 
+    def test_ir_upload_completion_restores_selector_audio(self):
+        self.run_replay_audio_fixture([5])
+
     def test_replay_audio_failure_cancel_and_success_preserve_launch_options(self):
         self.run_replay_audio_fixture(range(4))
 
@@ -144,6 +147,7 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
             "bool MusicSelectScene::beginRecordsOperation(",
             "void MusicSelectScene::startRecordsWork(",
             "void MusicSelectScene::finishRecordsLoading()",
+            "void MusicSelectScene::uploadRecord(",
             "void MusicSelectScene::onApplicationBackgroundChanged(bool background)",
         ]
         methods = []

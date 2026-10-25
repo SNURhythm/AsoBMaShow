@@ -37,7 +37,6 @@ struct MusicSelectScene {
   };
   std::unique_ptr<RevealMenu> revealContextMenu_;
 
-  bool recordsResumeAudioPending_ = false;
   struct { void cancelAndWait() {} bool active() const { return false; } } recordsTask_;
   void finishRecordsLoading() {}
   struct UnzipModal { void cancelAndWait() {} void hide() {} };

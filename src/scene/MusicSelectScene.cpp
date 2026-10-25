@@ -593,7 +593,6 @@ void MusicSelectScene::onPause() {
   if (readmeModal_) readmeModal_->hide();
   closeRankings();
   if (revealContextMenu_) revealContextMenu_->dismiss();
-  recordsResumeAudioPending_ = false;
   recordsTask_.cancelAndWait();
   finishRecordsLoading();
   if (findBmsModal_) findBmsModal_->cancelAndWait();
@@ -688,10 +687,7 @@ void MusicSelectScene::onApplicationBackgroundChanged(bool background) {
 #endif
     return;
   }
-  if (sceneActive_ && !failed_ && launching_ && recordsTask_.active()) {
-    recordsResumeAudioPending_ = true;
-  }
-  if (!sceneActive_ || failed_ || launching_ ||
+  if (!sceneActive_ || failed_ || launching_ || recordsExportJob_.inProgress() ||
       context.appInBackground.load(std::memory_order_acquire)) {
     return;
   }
@@ -3348,10 +3344,10 @@ void MusicSelectScene::update(float) {
     finishRecordsLoading();
     completion();
     if (!sceneActive_) return;
-    if (recordsResumeAudioPending_) {
-      recordsResumeAudioPending_ = false;
-      onApplicationBackgroundChanged(false);
-    }
+    // Records preparation drains and suppresses previews even when no scene
+    // transition follows. Restore them only after the completion has decided
+    // whether this selector still owns the foreground.
+    onApplicationBackgroundChanged(false);
   }
   tryCompletePendingPreloadLaunch();
   if (!sceneActive_) return;

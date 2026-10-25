@@ -183,8 +183,8 @@ struct MusicSelectScene {
   };
   std::unique_ptr<RevealMenu> revealContextMenu_;
 
-  bool recordsResumeAudioPending_ = false;
   struct { bool active() const { return false; } } recordsTask_;
+  struct { bool inProgress() const { return false; } } recordsExportJob_;
   struct Context {
     std::atomic_bool appInBackground = false;
     std::atomic_bool storageMaintenanceActive = false;
