@@ -26,6 +26,8 @@ struct PreviewSession {
   std::shared_ptr<PagedPreviewSource> source;
   std::unique_ptr<IBackend> backend;
   std::uint32_t outputRate = 0;
+  std::uint32_t fadeFrames = 0;
+  std::uint32_t fadedFrames = 0; // Callback-owned; pending silence does not advance it.
   // Allocated with the session before Begin or any backend callback.
   std::array<float, kOutputBatchFrames * 2> scratch{};
   std::atomic_bool active{true};
@@ -118,8 +120,11 @@ struct PreviewSession {
       const auto frames = std::min(count, rendered.frames);
       for (std::uint32_t frame = 0; frame < frames; ++frame) {
         const auto target = static_cast<std::size_t>(offset + frame) * channels;
-        const float left = session.scratch[frame * 2] * gain;
-        const float right = session.scratch[frame * 2 + 1] * gain;
+        const float fade = session.fadeFrames
+            ? static_cast<float>(session.fadedFrames) / session.fadeFrames : 1.0f;
+        if (session.fadedFrames < session.fadeFrames) ++session.fadedFrames;
+        const float left = session.scratch[frame * 2] * gain * fade;
+        const float right = session.scratch[frame * 2 + 1] * gain * fade;
         if (channels == 1) {
           pcm[target] = Pcm((left + right) * 0.5f);
         } else {
@@ -272,7 +277,7 @@ PreviewStreamPlayer::PreviewStreamPlayer(std::unique_ptr<IBackendFactory> factor
 PreviewStreamPlayer::~PreviewStreamPlayer() { Stop(); }
 
 bool PreviewStreamPlayer::Start(std::shared_ptr<PagedPreviewSource> source,
-                                std::string &error) {
+                                std::string &error, bool fadeIn) {
   Stop();
   error.clear();
   std::lock_guard lock(impl->mutex);
@@ -297,6 +302,7 @@ bool PreviewStreamPlayer::Start(std::shared_ptr<PagedPreviewSource> source,
     error = "Preview audio device returned an invalid sample rate";
     return false;
   }
+  session->fadeFrames = fadeIn ? session->outputRate * 3 / 10 : 0;
   if (!session->source->Begin(static_cast<int>(session->outputRate), true)) {
     error = session->source->GetState().error;
     if (error.empty()) error = "Could not prepare preview audio";

@@ -13,6 +13,8 @@ struct MusicSelectPreviewSelection {
   std::string id;
   std::filesystem::path folder;
   std::filesystem::path previewPath;
+  std::filesystem::path chartPath;
+  bool highlight = true;
   bool operator==(const MusicSelectPreviewSelection &) const = default;
 };
 
@@ -22,6 +24,8 @@ struct MusicSelectPreviewMoveResult {
 
 struct MusicSelectPreviewSwitch {
   std::optional<std::filesystem::path> path;
+  std::filesystem::path chartPath;
+  bool highlight = true;
 };
 
 class MusicSelectPreviewController {
@@ -63,9 +67,15 @@ public:
   // Stop whatever the preview worker is playing (idle/teardown).
   using StopRequest = std::function<void()>;
 
+  using ChartPlayRequest =
+      std::function<bool(const std::filesystem::path &path, bool highlight,
+                         const std::shared_ptr<std::atomic_bool> &cancellation,
+                         std::stop_token stop)>;
+
   struct AudioPort {
     PlayRequest play;
     StopRequest stop;
+    ChartPlayRequest playChart;
   };
 
   explicit MusicSelectPreviewAudioService(AudioPort port,
@@ -77,10 +87,11 @@ public:
   MusicSelectPreviewAudioService &
   operator=(const MusicSelectPreviewAudioService &) = delete;
 
-  // Replace whatever the preview worker is playing. `std::nullopt` means the
-  // looping default select BGM (Beatoraja's PreviewMusicProcessor fallback), so
-  // moving to a chart without `#PREVIEW` routes back to the SELECT sound.
-  void switchTo(std::optional<std::filesystem::path> path);
+  // Replace the preview. With chartPath, a missing/failed file uses synthesized
+  // chart playback. Without chartPath, nullopt or a failed file uses the
+  // looping default SELECT BGM.
+  void switchTo(std::optional<std::filesystem::path> path,
+                std::filesystem::path chartPath = {}, bool highlight = true);
 
   // Stop whatever the preview worker is playing and stay silent. Unlike
   // switchTo(nullopt), silence() does NOT start the default select BGM; the
@@ -90,6 +101,8 @@ public:
   // navigation request cannot re-cue the BGM after a launch or pause begins)
   // until resumeDefaultBgm() lifts it.
   void silence();
+  // Lifecycle boundary: cancel and wait until all preview output is stopped.
+  void silenceAndWait();
 
   // Resume the looping default select BGM after silence() (e.g. when the scene
   // is brought back to the foreground). The worker treats nullopt as "play the

@@ -340,7 +340,10 @@ struct LibraryFolderItem {
 int main() {
   LibraryFolderItem activeFolder;
   std::optional<int> temporaryChartFolder;
-  struct { std::optional<int> leadingRecord = 1; } chartListCache;
+  struct {
+    std::optional<int> leadingRecord = 1;
+    int leadingCount() const { return leadingRecord ? 1 : 0; }
+  } chartListCache;
   const auto visibleIndex = [&](int index) { OFFSET return index; };
   assert(visibleIndex(0) == 1);
   assert(visibleIndex(4) == 5);
@@ -591,7 +594,10 @@ int main() {
         signature = "[this](const ChartMetaRecord &request, std::atomic_bool &cancelled)"
         callback = signature + function_body(source, signature)
         fixture = (ROOT / "tests/music_select_scene_preload_fixture.cpp").read_text()
-        self.compile_and_run(fixture.replace("PRELOAD_CALLBACK", callback))
+        self.compile_and_run(fixture.replace("REPOSITORY_ROOT", ROOT.as_posix())
+                             .replace("PRELOAD_CALLBACK", callback)
+                             .replace("CHART_PREVIEW_BODY", function_body(
+                                 source, "bool MusicSelectScene::playChartPreview(")))
 
     def test_background_audio_resumes_only_for_active_foreground_selector(self):
         source = read_music_select_scene()

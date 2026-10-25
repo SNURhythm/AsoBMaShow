@@ -921,6 +921,24 @@ audio::PlaybackRate AudioWrapper::playbackRate() const {
           .mode = audio::PlaybackMode::PitchShift};
 }
 
+std::shared_ptr<const audio::DecodedAssetCache::DecodedSound>
+AudioWrapper::decodedSoundSnapshot(const path_t &path) const {
+  std::lock_guard lock(soundDataListMutex);
+  const auto found = soundDataIndexMap.find(path);
+  if (found == soundDataIndexMap.end()) return {};
+  const auto &sound = soundDataList[found->second];
+  if (!sound || sound->retired.load(std::memory_order_acquire) ||
+      sound->channels <= 0 || sound->sourceSampleRate <= 0) return {};
+  auto snapshot = std::make_shared<audio::DecodedAssetCache::DecodedSound>();
+  snapshot->pcm = sound->sourceData;
+  snapshot->info.channels = sound->channels;
+  snapshot->info.samplerate = sound->sourceSampleRate;
+  snapshot->info.frames = sound->sourceFrameCount;
+  snapshot->RememberPreparedOutput(currentSampleRate.load(std::memory_order_acquire),
+                                   sound->outputData);
+  return snapshot;
+}
+
 void AudioWrapper::setDecodedAssetCache(
     std::shared_ptr<audio::DecodedAssetCache> cache) {
   std::shared_ptr<audio::DecodedAssetCache> previous;

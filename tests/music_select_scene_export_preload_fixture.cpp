@@ -329,16 +329,17 @@ struct FolderStatus {
   void cancel() {}
 };
 struct Preview {
-  struct Request { std::optional<std::filesystem::path> path; };
+  struct Request { std::optional<std::filesystem::path> path; std::filesystem::path chartPath; bool highlight = true; };
   void observeSelection(int, int) {}
   std::optional<Request> update(int, bool) { return std::nullopt; }
-  void switchTo(std::optional<std::filesystem::path>) {}
+  void switchTo(std::optional<std::filesystem::path>, std::filesystem::path = {}, bool = true) {}
   void reset() {}
   void silence() {}
+  void silenceAndWait() {}
   void resumeDefaultBgm() {}
   void playDecide() {}
 };
-int previewSelection(const Bars &, bool) { return 0; }
+int previewSelection(const Bars &, const Settings &) { return 0; }
 struct MusicSelectScene {
   void updateRankingsModal() {}
 
@@ -432,6 +433,7 @@ struct MusicSelectScene {
   ChartPreloadWorker *preloadWorker_ = nullptr;
   std::mutex preloadMutex_;
   std::unique_ptr<bms_parser::Chart> preloadedChart_;
+  std::shared_ptr<int> preloadedPreviewCache_;
   std::string preloadedPath_;
   Modal *recordsModal_ = nullptr;
   replay::ReplayExportJob recordsExportJob_;

@@ -74,7 +74,14 @@ struct MusicSelectScene {
   int preloadStops = 0;
   int selectionChanges = 0;
   int soundConfigurations = 0;
-  void configureSoundServices() { ++soundConfigurations; }
+  bool retainedGameplayRate = false;
+  void configureSoundServices() {
+    ++soundConfigurations;
+    if (retainedGameplayRate) {
+      skin.playing = false;
+      retainedGameplayRate = false;
+    }
+  }
   void stopPreloadWorker() { ++preloadStops; }
   void stopInputListening() {}
   void cancelDirectoryLoad() {}
@@ -143,7 +150,11 @@ int main() {
   scene.failed_ = false;
   scene.launching_ = false;
   scene.onPause();
+  scene.retainedGameplayRate = true;
   scene.onResume();
   assert(scene.preview.playing && scene.preview.resumes == 3);
   assert(scene.soundConfigurations == 3);
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  assert(scene.skin.playing && "resume skin loops after normalizing gameplay rate");
+#endif
 }

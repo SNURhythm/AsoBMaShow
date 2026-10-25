@@ -580,6 +580,15 @@ void AppSettings::sanitize() {
       bgaBrightnessPercent, kMinBgaBrightnessPercent, kMaxBgaBrightnessPercent);
   bgaBlurStrength = sanitizeFloat(bgaBlurStrength, kDefaultBgaBlurStrength,
                                   kMinBgaBlurStrength, kMaxBgaBlurStrength);
+  switch (chartPreviewMode) {
+  case audio::ChartPreviewMode::Highlight:
+  case audio::ChartPreviewMode::Beginning:
+  case audio::ChartPreviewMode::PreviewFile:
+    break;
+  default:
+    chartPreviewMode = audio::ChartPreviewMode::Highlight;
+    break;
+  }
   switch (bgaDisplayMode) {
   case BgaDisplayMode::Fit:
   case BgaDisplayMode::Fill:

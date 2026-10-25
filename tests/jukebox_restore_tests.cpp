@@ -664,9 +664,14 @@ void testRegularChartReusesSoundsAndInvalidatesReplacement() {
           "regular sound loads");
   const auto original = jukebox.resolveRealtimeKeySound(1);
   require(original && original->valid(), "regular sound has a live handle");
+  auto previewCache = std::make_shared<audio::DecodedAssetCache>();
+  jukebox.setDecodedAssetCache(previewCache);
   require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success &&
               original->valid(),
           "unchanged regular sound retains decoded PCM");
+  require(bool(previewCache->Load(soundPath, cancelled)) &&
+              previewCache->GetStatistics().decoderOpens == 0,
+          "a fresh preview cache must reuse retained gameplay PCM without decoding");
   const auto size = std::filesystem::file_size(soundPath);
   const auto modified = std::filesystem::last_write_time(soundPath);
   writeSound(-1000);
@@ -720,8 +725,17 @@ void testArchivedChartReusesSharedSoundsAndInvalidatesReplacement(bool sevenZip)
   chart.Meta.BmsPath = chart.Meta.Folder / "hard.bms";
   chart.ReferencedWavTable = {{7, "shared.wav"}, {8, "shared.wav"},
                             {9, "added.wav"}};
+  auto previewCache = std::make_shared<audio::DecodedAssetCache>();
+  jukebox.setDecodedAssetCache(previewCache);
   require(jukebox.loadChartPreservingDevice(chart, true, cancelled).success,
           "sibling archived chart loads");
+  const auto beforePreview = previewCache->GetStatistics();
+  require(bool(previewCache->Load(chart.Meta.Folder / "shared.wav", cancelled)) &&
+              previewCache->GetStatistics().decoderOpens == beforePreview.decoderOpens &&
+              previewCache->GetStatistics().archiveReads == beforePreview.archiveReads,
+          "sibling preview must reuse retained PCM without reopening archive payloads");
+  require(!previewCache->Contains(chart.Meta.Folder / "removed.wav"),
+          "preview cache retention is limited to the current chart's sounds");
   require(shared->valid(), "sibling chart retains the original decoded sound");
   require(!removed->valid(), "sibling chart retires unreferenced sounds");
   const auto remapped = jukebox.resolveRealtimeKeySound(7);
@@ -1318,6 +1332,14 @@ int main(int argc, char **argv) {
   require(bgfx::init(init), "headless bgfx initializes for image resources");
 
   try {
+    if (argc == 2 && std::string_view(argv[1]) == "--preview-cache") {
+      testRegularChartReusesSoundsAndInvalidatesReplacement();
+      for (const bool sevenZip : {false, true})
+        testArchivedChartReusesSharedSoundsAndInvalidatesReplacement(sevenZip);
+      rendering::UniformCache::getInstance().destroyAll();
+      bgfx::shutdown();
+      return 0;
+    }
     testArchivedHandoffRejectsSourceChangeDuringPreparation();
     testGameplaySharesPreparedPcm();
     testPreviewGameplayPreparationRetainsVisuals();

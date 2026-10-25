@@ -11,6 +11,7 @@
 struct Preview {
   void reset() {}
   void silence() {}
+  void silenceAndWait() {}
   void resumeDefaultBgm() {}
 };
 
@@ -56,6 +57,7 @@ struct MusicSelectScene {
   Worker *preloadWorker_ = nullptr;
   std::mutex preloadMutex_;
   std::unique_ptr<int> preloadedChart_;
+  std::shared_ptr<int> preloadedPreviewCache_;
   std::filesystem::path preloadedPath_;
   Preview previewController_;
   Preview *previewAudio_ = nullptr;

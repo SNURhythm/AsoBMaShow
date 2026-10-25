@@ -1,3 +1,8 @@
+#include "../RAII.h"
+#include "../audio/ChartPreviewHighlight.h"
+#include "../audio/PagedPreviewSource.h"
+#include "../audio/DecodedAssetCache.h"
+#include "../audio/MusicSelectPreviewFilePlayer.h"
 #include "../platform/SDLMainThread.h"
 #include "../platform/SDLApplicationRuntime.h"
 #include "../i18n/Localization.h"
@@ -149,110 +154,22 @@ std::filesystem::path musicSelectSoundSetRoot(const std::string &configured) {
   return std::filesystem::path(std::string(first, last));
 }
 
-// Previews the chart and the looping select BGM through the same AudioWrapper
-// skin-sound path as the system-SE player. The default handle stays loaded so
-// returning to the select BGM is instant; preview sounds are disposed as soon
-// as they stop so the session keeps only the default decoded
-// (PreviewMusicProcessor.java:97-101, symmetric fade approximated).
-class MusicSelectPreviewBgmPlayer {
-public:
-  explicit MusicSelectPreviewBgmPlayer(AudioWrapper *audio,
-                                       std::filesystem::path defaultPath)
-      : audio_(audio), defaultKey_(fspath_to_path_t(defaultPath)) {}
-
-  ~MusicSelectPreviewBgmPlayer() {
-    stopCurrent();
-    if (audio_ && defaultHandle_) {
-      audio_->disposeSkinSound(*defaultHandle_);
-    }
-  }
-
-  bool play(const std::filesystem::path &path, bool loop,
-            const std::shared_ptr<std::atomic_bool> &cancellation,
-            std::stop_token stop) {
-    if (!audio_) return false;
-    stopCurrent();
-    const auto key = fspath_to_path_t(path);
-    const bool isDefault = (key == defaultKey_);
-    audio::SkinSoundHandle handle;
-    if (isDefault && defaultHandle_) {
-      handle = *defaultHandle_;
-    } else {
-      const auto loaded = audio_->loadSkinSound(
-          key, *cancellation, std::numeric_limits<std::size_t>::max(),
-          std::numeric_limits<std::size_t>::max(), stop);
-      if (!loaded.handle) {
-        // A superseded request is cancelled mid-load and expected to fail; only
-        // warn on a genuine load failure (e.g. the bundled default BGM missing)
-        // so navigation back-and-forth never spams the log.
-        if (!cancellation->load(std::memory_order_acquire) &&
-            !stop.stop_requested()) {
-          SDL_Log("Music-select skin sound failed to load: %s",
-                  fspath_to_utf8(path).c_str());
-        }
-        return false;
-      }
-      handle = *loaded.handle;
-      if (isDefault) defaultHandle_ = handle;
-    }
-    if (cancellation->load(std::memory_order_acquire) ||
-        stop.stop_requested()) {
-      (void)audio_->disposeSkinSound(handle);
-      if (isDefault) defaultHandle_.reset();
-      return false;
-    }
-    if (!audio_->playSkinSound(handle, 1.0F, loop)) {
-      (void)audio_->disposeSkinSound(handle);
-      if (isDefault) defaultHandle_.reset();
-      return false;
-    }
-    // The play command was just enqueued on the mixer. If the scene was paused
-    // or a launch started while we were loading (cancellation set), the enqueued
-    // command could otherwise survive the backend stop and resume when gameplay
-    // restarts the audio. Stop it immediately so the select BGM never bleeds
-    // into gameplay.
-    if (cancellation->load(std::memory_order_acquire) ||
-        stop.stop_requested()) {
-      (void)audio_->stopSkinSound(handle);
-      (void)audio_->disposeSkinSound(handle);
-      if (isDefault) defaultHandle_.reset();
-      return false;
-    }
-    playingHandle_ = handle;
-    playingKey_ = key;
-    return true;
-  }
-
-  void stopCurrent() {
-    if (!audio_ || !playingHandle_) return;
-    (void)audio_->stopSkinSound(*playingHandle_);
-    if (playingKey_ != defaultKey_) {
-      (void)audio_->disposeSkinSound(*playingHandle_);
-    }
-    playingHandle_.reset();
-    playingKey_ = {};
-  }
-
-private:
-  AudioWrapper *audio_;
-  path_t defaultKey_;
-  std::optional<audio::SkinSoundHandle> defaultHandle_;
-  std::optional<audio::SkinSoundHandle> playingHandle_;
-  path_t playingKey_{};
-};
-
 MusicSelectPreviewAudioService::AudioPort
 musicSelectPreviewAudioPort(AudioWrapper &audio,
-                            const std::filesystem::path &defaultPath) {
+                            const std::filesystem::path &defaultPath,
+                            MusicSelectPreviewAudioService::ChartPlayRequest playChart,
+                            MusicSelectPreviewAudioService::StopRequest stopChart) {
   auto player =
-      std::make_shared<MusicSelectPreviewBgmPlayer>(&audio, defaultPath);
+      std::make_shared<MusicSelectPreviewFilePlayer>(&audio, defaultPath);
   return {.play =
-              [player](const std::filesystem::path &path, bool loop,
+              [player, stopChart](const std::filesystem::path &path, bool loop,
                        const std::shared_ptr<std::atomic_bool> &cancellation,
                        std::stop_token stop) {
-                return player->play(path, loop, cancellation, std::move(stop));
+                stopChart();
+                return player->play(path, loop, *cancellation, std::move(stop));
               },
-          .stop = [player]() { player->stopCurrent(); }};
+          .stop = [player, stopChart]() { player->stopCurrent(); stopChart(); },
+          .playChart = std::move(playChart)};
 }
 
 std::int64_t unixMillis() {
@@ -355,7 +272,7 @@ MusicSelectClockFields localClockFields(std::time_t value) {
 
 std::optional<MusicSelectPreviewSelection>
 previewSelection(const MusicSelectBarManagerReadView &snapshot,
-                 bool archivePreviewEnabled) {
+                 const AppSettings &settings) {
   if (snapshot.selectedIndex >= snapshot.rowCount()) return std::nullopt;
   const auto &selected = snapshot.rowAt(snapshot.selectedIndex);
   if (selected.kind != skin::MusicSelectBarKind::Song || !selected.chart) {
@@ -369,13 +286,18 @@ previewSelection(const MusicSelectBarManagerReadView &snapshot,
   }
 #endif
   const bool suppressArchivePreview =
-      archiveVirtualPath && !archivePreviewEnabled;
+      archiveVirtualPath && !settings.archiveChartPreviewEnabled;
   return MusicSelectPreviewSelection{
       .id = selected.id.value,
       .folder = meta.BmsPath.parent_path(),
-      .previewPath = meta.Preview.empty() || suppressArchivePreview
+      .previewPath = settings.chartPreviewMode != audio::ChartPreviewMode::PreviewFile ||
+                             meta.Preview.empty() || suppressArchivePreview
                          ? std::filesystem::path{}
                          : meta.BmsPath.parent_path() / meta.Preview,
+      .chartPath = suppressArchivePreview || selected.chart->solidArchive || selected.chart->unavailable
+                       ? std::filesystem::path{} : meta.BmsPath,
+      .highlight = audio::ChartPreviewUsesHighlight(settings.chartPreviewMode,
+                                                    settings.chartPreviewFallbackHighlight),
   };
 }
 
@@ -440,6 +362,20 @@ MusicSelectScene::~MusicSelectScene() {
 
 void MusicSelectScene::configureSoundServices() {
   if (context.storageMaintenanceActive) return;
+  // Do this before either creating or resuming the preview service. Parsing
+  // can outlast its preview delay; later chart staging must not reset the
+  // device underneath an authored file that has already started.
+  if (!context.jukebox.playbackRate().neutral()) {
+    if (previewAudio_) previewAudio_->silenceAndWait();
+    const auto stopped = context.jukebox.stop();
+    std::string error;
+    if (!stopped.success || !context.jukebox.setPlaybackRate({}, error)) {
+      SDL_Log("Could not reset selector audio for preview: %s", error.c_str());
+      previewAudio_.reset();
+      systemSound_.reset();
+      return;
+    }
+  }
   if (previewAudio_ && systemSound_ &&
       soundSetPath_ == context.settings.skinSelectSoundSetPath &&
       soundSetBookmark_ == context.settings.skinSelectSoundSetBookmark) {
@@ -500,7 +436,10 @@ void MusicSelectScene::configureSoundServices() {
           selectSoundRoots, skin::MusicSelectSystemSound::Select)
           .value_or(std::filesystem::path{kSkinSoundAssetRoot} / "select.wav");
   previewAudio_ = std::make_unique<MusicSelectPreviewAudioService>(
-      musicSelectPreviewAudioPort(context.jukebox.audioRuntime(), selectBgm),
+      musicSelectPreviewAudioPort(context.jukebox.audioRuntime(), selectBgm,
+          [this](const auto &path, bool highlight, const auto &cancelled, std::stop_token stop) {
+            return playChartPreview(path, highlight, cancelled, stop);
+          }, [this] { chartPreviewPlayer_.Stop(); }),
       selectBgm);
   if (context.appInBackground.load(std::memory_order_acquire)) {
     onApplicationBackgroundChanged(true);
@@ -605,6 +544,10 @@ void MusicSelectScene::init() {
         // the same AudioWrapper keep playing through the preload. No explicit
         // jukebox.stop() here: loadChartPreservingDevice tears down any prior
         // jukebox session itself (and only stops the device when it must).
+        auto previewCache = std::make_shared<audio::DecodedAssetCache>(
+            audio::DecodedAssetCache::kUnlimitedRetainedBytes);
+        context.jukebox.setDecodedAssetCache(previewCache);
+        ScopeExit releasePreviewCache([this] { context.jukebox.setDecodedAssetCache(nullptr); });
         const auto loaded =
             context.jukebox.loadChartPreservingDevice(*chart, true, cancelled);
         if (!loaded.success || cancelled.load(std::memory_order_relaxed) ||
@@ -617,6 +560,7 @@ void MusicSelectScene::init() {
             fspath_to_path_t(request.meta.BmsPath)) {
           return;  // selection moved on
         }
+        preloadedPreviewCache_ = std::move(previewCache);
         preloadedChart_ = std::move(chart);
       });
   addView(modalLayer_);
@@ -701,13 +645,15 @@ void MusicSelectScene::onResume() {
     presentationSkinRefreshPending = false;
     if (!reactivateSkinAfterSettings()) return;
   }
-  if (!background && !failed_ && !context.storageMaintenanceActive && skinSession_) skinSession_->resumeAudio();
 #endif
   syncToolbar();
   reloadLibrary();
   if (!failed_) {
     // Resume the looping select BGM after pause silenced it.
     if (!background) configureSoundServices();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    if (!background && !context.storageMaintenanceActive && skinSession_) skinSession_->resumeAudio();
+#endif
     if (!background && previewAudio_) previewAudio_->resumeDefaultBgm();
     selectedBarMoved();
     startInputListening();
@@ -937,7 +883,7 @@ void MusicSelectScene::selectedBarMoved() {
   songBarChangeMicros_ = elapsedMicros();
 
   const auto previewMove = previewController_.selectedBarMoved(
-      previewSelection(snapshot, context.settings.archiveChartPreviewEnabled),
+      previewSelection(snapshot, context.settings),
       songBarChangeMicros_);
   if (previewMove.stopAudio && previewAudio_) {
     // Leaving a song folder returns to the looping select BGM: pinned
@@ -2132,6 +2078,45 @@ void MusicSelectScene::closeDirectory() {
   }
 }
 
+bool MusicSelectScene::playChartPreview(
+    const std::filesystem::path &path, bool highlight,
+    const std::shared_ptr<std::atomic_bool> &cancelled, std::stop_token stop) {
+  // Runs on the preview service worker. Reuse the selector's completed preload
+  // and its native PCM, rather than parsing/decoding a second copy of the chart.
+  try {
+    while (!cancelled->load(std::memory_order_acquire) && !stop.stop_requested()) {
+      std::shared_ptr<audio::PagedPreviewSource> source;
+      {
+        std::lock_guard lock(preloadMutex_);
+        if (preloadedChart_ && preloadedChart_->Meta.BmsPath == path) {
+          const auto micros = highlight ? audio::FindChartPreviewHighlightMicros(*preloadedChart_) : 0;
+          const auto frame = static_cast<std::uint64_t>(micros / 1'000'000) * audio::kPreviewSampleRate +
+              static_cast<std::uint64_t>(micros % 1'000'000) * audio::kPreviewSampleRate / 1'000'000;
+          const auto &settings = context.settings.audioVideo.audio;
+          source = audio::PagedPreviewSource::Create(*preloadedChart_, preloadedPreviewCache_, frame,
+              {.bgm = settings.masterVolume * settings.bgmVolume,
+               .keysound = settings.masterVolume * settings.keysoundVolume});
+          chartPreviewPlayer_.SetRequest({.deviceId = settings.outputDeviceId,
+              .sampleRate = settings.requestedSampleRate,
+              .bufferFrames = settings.requestedBufferFrames});
+        }
+      }
+      if (source) {
+        if (cancelled->load(std::memory_order_acquire) || stop.stop_requested()) return false;
+        std::string error;
+        const bool started = chartPreviewPlayer_.Start(source, error, highlight);
+        if (!started) SDL_Log("Chart preview failed: %s", error.c_str());
+        return started;
+      }
+      if (!preloadWorker_ || !preloadWorker_->isRequesting(fspath_to_utf8(path))) return false;
+      std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+  } catch (const std::exception &error) {
+    SDL_Log("Chart preview failed: %s", error.what());
+  }
+  return false;
+}
+
 void MusicSelectScene::startPreloadForSelection() {
   if (context.storageMaintenanceActive) return;
   if (!sceneActive_ || context.appInBackground.load(std::memory_order_acquire) ||
@@ -2160,6 +2145,7 @@ void MusicSelectScene::startPreloadForSelection() {
     // immediately so reuse can never pair a previously-loaded chart with the
     // current selection.
     preloadedChart_.reset();
+    preloadedPreviewCache_.reset();
     preloadedPath_ = record.meta.BmsPath;
   }
   if (preloadWorker_ != nullptr) {
@@ -2168,11 +2154,13 @@ void MusicSelectScene::startPreloadForSelection() {
 }
 
 void MusicSelectScene::stopPreloadWorker() {
+  if (previewAudio_) previewAudio_->silenceAndWait();
   if (preloadWorker_ != nullptr) {
     preloadWorker_->stop();
   }
   std::lock_guard<std::mutex> lock(preloadMutex_);
   preloadedChart_.reset();
+  preloadedPreviewCache_.reset();
   preloadedPath_.clear();
 }
 
@@ -3479,14 +3467,14 @@ void MusicSelectScene::update(float) {
     requestFolderStatus(bars_.readView());
   }
   previewController_.observeSelection(
-      previewSelection(bars_.readView(),
-                       context.settings.archiveChartPreviewEnabled),
+      previewSelection(bars_.readView(), context.settings),
       songBarChangeMicros_);
   if (auto preview = previewController_.update(
           elapsedMicros(), launching_ ||
               (archiveUnzipModal_ && archiveUnzipModal_->isVisible()));
       preview && previewAudio_) {
-    previewAudio_->switchTo(std::move(preview->path));
+    previewAudio_->switchTo(std::move(preview->path), std::move(preview->chartPath),
+                            preview->highlight);
   }
   updateRanking();
   refreshToolbarAvailability();
@@ -4530,6 +4518,7 @@ void MusicSelectScene::cleanupScene() {
   {
     std::lock_guard<std::mutex> lock(preloadMutex_);
     preloadedChart_.reset();
+    preloadedPreviewCache_.reset();
     preloadedPath_.clear();
   }
   if (preloadWorker_ != nullptr) {

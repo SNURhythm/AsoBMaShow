@@ -70,13 +70,20 @@ public:
   std::shared_ptr<const DecodedSound> LoadBytes(const std::filesystem::path &path,
       const std::vector<unsigned char> &bytes, const std::atomic_bool &cancelled,
       std::stop_token stop = {}, std::string *error = nullptr, FailureKind *failure = nullptr);
-  // A batch validates its source once before resolution/extraction and again
-  // before completion. Only pass fully resolved paths from that same archive.
-  // This avoids filesystem/extension checks inside every decode callback.
-  struct ArchiveBatch {
+  // Metadata identity of a regular file or an archive container.
+  struct SourceSnapshot {
     std::filesystem::path path;
     std::string identity;
   };
+  using ArchiveBatch = SourceSnapshot;
+  std::optional<SourceSnapshot> CaptureSource(const std::filesystem::path &path) const;
+  // Seed a fresh preview cache with immutable PCM already owned by gameplay.
+  // Capture source before validating the retained sound against that source.
+  // Archive paths must be resolved entries of source.path; no payload is read.
+  void RememberLoadedSound(const SourceSnapshot &source, const std::filesystem::path &path,
+                           std::shared_ptr<const DecodedSound> sound);
+  // Validate once before archive resolution/extraction and again at completion;
+  // entry operations accept fully resolved paths from that same archive.
   std::optional<ArchiveBatch> BeginArchiveBatch(const std::filesystem::path &path) const;
   bool ArchiveBatchUnchanged(const ArchiveBatch &batch) const;
   std::shared_ptr<const DecodedSound> FindArchiveAsset(const ArchiveBatch &batch,

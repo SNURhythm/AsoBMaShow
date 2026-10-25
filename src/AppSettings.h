@@ -3,6 +3,7 @@
 #include "JudgementIndicatorRange.h"
 #include "LaneCover.h"
 #include "audio/PlaybackRate.h"
+#include "audio/ChartPreviewPolicy.h"
 #include "ir/IrProfileSettings.h"
 #include "settings/AudioVideoSettings.h"
 #include "settings/ReplayPreferences.h"
@@ -235,6 +236,8 @@ public:
   int constantFadeInMilliseconds = 100;
   bool touchVisualizationEnabled = true;
   bool archiveChartPreviewEnabled = true;
+  audio::ChartPreviewMode chartPreviewMode = audio::ChartPreviewMode::Highlight;
+  bool chartPreviewFallbackHighlight = true;
   bool findBmsSkipUnarchivingForNonSolidArchives = false;
   storage_management::StoragePreferences storagePreferences;
   bool bgaEnabled = true;

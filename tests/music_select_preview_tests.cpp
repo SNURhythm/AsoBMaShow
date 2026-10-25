@@ -24,6 +24,7 @@ void expect(bool condition, std::string_view message) {
 
 class RecordingPreviewPort {
 public:
+  struct ChartCall { std::filesystem::path path; bool highlight; };
   struct PlayCall {
     std::filesystem::path path;
     bool loop = false;
@@ -50,6 +51,12 @@ public:
           std::lock_guard lock(mutex_);
           ++stopped_;
           condition_.notify_all();
+        },
+        [this](const std::filesystem::path &path, bool highlight, const auto &, std::stop_token) {
+          std::lock_guard lock(mutex_);
+          chartCalls_.push_back({path, highlight});
+          condition_.notify_all();
+          return true;
         }};
   }
 
@@ -58,6 +65,16 @@ public:
     std::unique_lock lock(mutex_);
     return condition_.wait_for(lock, std::chrono::milliseconds(timeoutMillis),
                                [&] { return calls_.size() >= count; });
+  }
+
+  bool waitForChartCount(std::size_t count) {
+    std::unique_lock lock(mutex_);
+    return condition_.wait_for(lock, std::chrono::seconds(2),
+                               [&] { return chartCalls_.size() >= count; });
+  }
+  std::vector<ChartCall> chartCalls() {
+    std::lock_guard lock(mutex_);
+    return chartCalls_;
   }
 
   bool waitForStopCount(int count, std::int64_t timeoutMillis = 2000) {
@@ -81,6 +98,7 @@ private:
   std::mutex mutex_;
   std::condition_variable condition_;
   std::vector<PlayCall> calls_;
+  std::vector<ChartCall> chartCalls_;
   int stopped_ = 0;
 };
 
@@ -197,6 +215,47 @@ void testArchiveGatedSelectionDefersToDefaultAudio() {
   expect(switched && !switched->path,
          "an archive-gated chart (archiveChartPreviewEnabled off) previews "
          "the default select BGM only");
+}
+
+void testChartModesAndMissingFileFallback() {
+  MusicSelectPreviewController controller;
+  auto selected = song("one", "/songs/a", "/songs/a/preview.ogg");
+  selected.chartPath = "/songs/a/chart.bms";
+  selected.highlight = false;
+  (void)controller.selectedBarMoved(selected, 0);
+  const auto request = controller.update(400'001, false);
+  expect(request && request->chartPath == selected.chartPath && !request->highlight,
+         "controller carries the selected chart fallback and start policy");
+
+  RecordingPreviewPort port([](const auto &path, bool, const auto &, std::stop_token) {
+    return path != "/songs/a/preview.ogg";
+  });
+  MusicSelectPreviewAudioService service(port.port(), "/assets/select.wav");
+  expect(port.waitForPlayCount(1), "fallback test starts the idle BGM");
+  service.switchTo(request->path, request->chartPath, request->highlight);
+  expect(port.waitForChartCount(1), "failed preview file falls back to chart playback");
+  service.silenceAndWait();
+  expect(port.takeCalls().size() == 2 && !port.chartCalls().front().highlight,
+         "missing file uses Beginning fallback without restoring idle BGM");
+  const auto stopped = port.stopped();
+  service.switchTo(std::nullopt, selected.chartPath, true);
+  expect(port.chartCalls().size() == 1 && port.stopped() == stopped,
+         "lifecycle silence suppresses subsequent chart requests");
+  service.resumeDefaultBgm();
+  service.switchTo(std::nullopt, selected.chartPath, true);
+  expect(port.waitForChartCount(2), "Highlight without a preview file starts chart playback");
+  service.silenceAndWait();
+  expect(port.chartCalls().back().highlight, "Highlight is passed to chart playback");
+}
+
+void testUsablePreviewFileWinsOverFallback() {
+  RecordingPreviewPort port;
+  MusicSelectPreviewAudioService service(port.port(), "/assets/select.wav");
+  expect(port.waitForPlayCount(1), "authored test starts idle BGM");
+  service.switchTo("/songs/a/preview.ogg", "/songs/a/chart.bms", true);
+  expect(port.waitForPlayCount(2), "authored preview file starts");
+  service.silenceAndWait();
+  expect(port.chartCalls().empty(), "usable authored preview must not start chart fallback");
 }
 
 void testNoPreviewFallsBackToDefaultSelectBgm() {
@@ -530,6 +589,8 @@ int main(int argc, char **argv) {
   testFloatWriterObservesThePostWriteSelection();
   testEmptyPreviewWithinFolderRoutesBackToDefaultAudio();
   testArchiveGatedSelectionDefersToDefaultAudio();
+  testChartModesAndMissingFileFallback();
+  testUsablePreviewFileWinsOverFallback();
   testNoPreviewFallsBackToDefaultSelectBgm();
   testEmptySelectionSwitchRoutesBackToDefault();
   testSilenceStopsWithoutStartingDefaultBgm();

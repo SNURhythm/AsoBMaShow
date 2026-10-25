@@ -1,4 +1,5 @@
 #include "audio/PagedPreviewSource.h"
+#include "audio/ChartPreviewHighlight.h"
 #include "audio/AudioMix.h"
 #include "audio/DecodedAssetCache.h"
 #include "audio/SoundFileIO.h"
@@ -192,6 +193,40 @@ void testHighlightAndReuse(const std::filesystem::path &root) {
           "second preview must consume the native cache");
   next->Cancel();
   require(next->GetState().cancelled, "Cancel must be terminal");
+}
+void testHighlightSelection(const std::filesystem::path &root) {
+  std::string body;
+  for (int measure = 0; measure < 60; ++measure) {
+    char prefix[16];
+    std::snprintf(prefix, sizeof(prefix), "#%03d11:", measure);
+    body += std::string(prefix) +
+        (measure >= 20 && measure < 28 ? "01010101010101010101010101010101" : "01") + "\n";
+  }
+  // An isolated pile of BGM triggers must not beat sustained musical activity.
+  for (int i = 0; i < 200; ++i) body += "#01001:01\n";
+  auto parsed = chart(root, body);
+  require(audio::FindChartPreviewHighlightMicros(*parsed) == 40'000'000,
+          "highlight must begin on the sustained active section's measure boundary");
+  require(audio::FindChartPreviewHighlightMicros(*parsed) ==
+              audio::FindChartPreviewHighlightMicros(*parsed),
+          "highlight must be deterministic");
+  auto shortChart = chart(root, "#00011:01\n#00411:01010101\n");
+  require(audio::FindChartPreviewHighlightMicros(*shortChart) == 0,
+          "short charts preserve the beginning");
+  auto sparse = chart(root, "#00001:01\n#05901:01\n");
+  require(audio::FindChartPreviewHighlightMicros(*sparse) == 0,
+          "long BGM without useful onset structure falls back to beginning");
+  sparse->Measures.back()->TimeLines.back()->Timing = 8'000'000'000'000'000LL;
+  require(audio::FindChartPreviewHighlightMicros(*sparse) == 0,
+          "sparse long charts must not allocate in proportion to duration");
+  require(audio::FindChartPreviewHighlightMicros(bms_parser::Chart{}) == 0,
+          "empty charts preserve the beginning");
+  // Background-only charts still expose musical structure.
+  std::string bgmBody = body;
+  for (std::size_t pos = 0; (pos = bgmBody.find("11:", pos)) != std::string::npos; pos += 3)
+    bgmBody.replace(pos, 3, "01:");
+  require(audio::FindChartPreviewHighlightMicros(*chart(root, bgmBody)) == 40'000'000,
+          "background sound activity must support highlight detection");
 }
 void testResampling(const std::filesystem::path &root) {
   std::vector<short> native(13001 * 2);
@@ -985,6 +1020,7 @@ int main() {
     testHighlightAndReuse(root / "highlight");
     testResamplingRejectsOversizedOutputBeforeAllocation(root / "resampling");
     testCancellationInterruptsResampling();
+    testHighlightSelection(root / "highlight");
     testResampling(root / "resampling");
     testDownsamplingWarmsEveryNativePage(root / "downsampling");
     testMissingAndExpired(root / "missing");

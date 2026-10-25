@@ -23,6 +23,8 @@
 #include "../music_select/MusicSelectInputProcessor.h"
 #include "../music_select/MusicSelectExternalActions.h"
 #include "../music_select/MusicSelectPreview.h"
+#include "../audio/PreviewStreamPlayer.h"
+#include "../audio/DecodedAssetCache.h"
 #include "../music_select/MusicSelectRanking.h"
 #include "../music_select/MusicSelectRepositoryProjection.h"
 #include "../music_select/MusicSelectSearchHistory.h"
@@ -236,6 +238,10 @@ private:
   MusicSelectInputProcessor inputProcessor_{{}};
   replay::ReplayExportJob recordsExportJob_;
   MusicSelectPreviewController previewController_;
+  audio::PreviewStreamPlayer chartPreviewPlayer_;
+  bool playChartPreview(const std::filesystem::path &path, bool highlight,
+                        const std::shared_ptr<std::atomic_bool> &cancelled,
+                        std::stop_token stop);
   std::unique_ptr<MusicSelectPreviewAudioService> previewAudio_;
   std::unique_ptr<skin::SkinSystemSoundService> systemSound_;
   std::string soundSetPath_;
@@ -255,6 +261,7 @@ private:
   ChartPreloadWorker *preloadWorker_ = nullptr;
   mutable std::mutex preloadMutex_;
   std::unique_ptr<bms_parser::Chart> preloadedChart_;
+  std::shared_ptr<audio::DecodedAssetCache> preloadedPreviewCache_;
   std::filesystem::path preloadedPath_;
   // When Start is pressed while the preload worker is still loading the same
   // chart, keep the worker running and launch from its result instead of

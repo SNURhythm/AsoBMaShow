@@ -2369,6 +2369,49 @@ View *SettingsScene::buildBmsLibraryTab(const LayoutMetrics &metrics) {
   cardsColumn->addView(makeCard(
       metrics, i18n::message("settings.bms_library.chart_folders.label"), i18n::message("settings.bms_library.manage_library_folders.message"),
       folderList, metrics.modeCardHeight, metrics.cardsWidth));
+  auto *previewControls = new View();
+  previewControls->setFlexDirection(FlexDirection::Column)->setGap(12);
+  auto *previewFallback = new View();
+  previewFallback->setFlexDirection(FlexDirection::Column)->setGap(8);
+  previewFallback->addView(makeWrappedText(
+      i18n::message("settings.bms_library.preview_fallback.label"),
+      metrics.bodyTextSize, app_theme::textSecondary()));
+  previewFallback->addView(makeEnumChoice(metrics, overlayPortal,
+      context.settings.chartPreviewFallbackHighlight, {true, false},
+      [](bool highlight) {
+        return i18n::message(highlight ? "settings.bms_library.preview_highlight.label"
+                                       : "settings.bms_library.preview_beginning.label");
+      }, [this](bool highlight) {
+        context.settings.chartPreviewFallbackHighlight = highlight;
+        persistSettings();
+      }));
+  previewFallback->setDisplay(context.settings.chartPreviewMode == audio::ChartPreviewMode::PreviewFile
+                                  ? YGDisplayFlex : YGDisplayNone);
+  previewControls->addView(makeEnumChoice(metrics, overlayPortal,
+      context.settings.chartPreviewMode,
+      {audio::ChartPreviewMode::Highlight, audio::ChartPreviewMode::Beginning,
+       audio::ChartPreviewMode::PreviewFile},
+      [](audio::ChartPreviewMode mode) {
+        switch (mode) {
+        case audio::ChartPreviewMode::PreviewFile:
+          return i18n::message("settings.bms_library.preview_file.label");
+        case audio::ChartPreviewMode::Beginning:
+          return i18n::message("settings.bms_library.preview_beginning.label");
+        default:
+          return i18n::message("settings.bms_library.preview_highlight.label");
+        }
+      }, [this, previewFallback](audio::ChartPreviewMode mode) {
+        context.settings.chartPreviewMode = mode;
+        previewFallback->setDisplay(mode == audio::ChartPreviewMode::PreviewFile
+                                    ? YGDisplayFlex : YGDisplayNone);
+        persistSettings();
+      }));
+  previewControls->addView(previewFallback);
+  cardsColumn->addView(makeCard(
+      metrics, i18n::message("settings.bms_library.preview_start.label"),
+      i18n::message("settings.bms_library.preview_start.message"),
+      previewControls, metrics.modeCardHeight, metrics.cardsWidth));
+
   auto *archivePreviewControls = new View();
   archivePreviewControls->setFlexDirection(FlexDirection::Column);
   archivePreviewControls->setGap(metrics.compact ? 12.0f : 16.0f);

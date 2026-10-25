@@ -44,7 +44,9 @@ MusicSelectPreviewController::update(std::int64_t nowMicros, bool launching) {
   return MusicSelectPreviewSwitch{
       .path = active_->previewPath.empty()
                   ? std::nullopt
-                  : std::optional(active_->previewPath)};
+                  : std::optional(active_->previewPath),
+      .chartPath = active_->chartPath,
+      .highlight = active_->highlight};
 }
 
 void MusicSelectPreviewController::reset() {

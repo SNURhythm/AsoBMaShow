@@ -31,6 +31,7 @@ struct Resource {
   virtual ~Resource() { e.event(name); }
   void close() { e.event(name + ":close"); }
   void stop() { e.event(name + ":stop"); }
+  void silenceAndWait() { e.event(name + ":silenced"); }
   void cancel() { e.event(name + ":cancel"); }
   void reset() { e.event(name + ":reset"); }
 };
@@ -119,6 +120,7 @@ public:
   ChartPreloadWorker *preloadWorker_ = nullptr;
   std::mutex preloadMutex_;
   std::unique_ptr<Chart> preloadedChart_;
+  std::shared_ptr<int> preloadedPreviewCache_;
   std::string preloadedPath_;
   std::optional<int> directoryRequest_, restoreSelection_;
   std::vector<int> restoreDirectories_, restoreDirectoryBars_;

@@ -246,12 +246,40 @@ std::shared_ptr<const DecodedAssetCache::DecodedSound> DecodedAssetCache::LoadBy
     FailureKind *failure) {
   return impl->load(path, &bytes, cancel, stop, error, failure);
 }
-std::optional<DecodedAssetCache::ArchiveBatch> DecodedAssetCache::BeginArchiveBatch(
+std::optional<DecodedAssetCache::SourceSnapshot> DecodedAssetCache::CaptureSource(
     const std::filesystem::path &path) const {
   auto normalized = path.lexically_normal();
   auto identity = fileIdentity(normalized);
   if (identity.empty()) return std::nullopt;
   return ArchiveBatch{std::move(normalized), std::move(identity)};
+}
+std::optional<DecodedAssetCache::ArchiveBatch> DecodedAssetCache::BeginArchiveBatch(
+    const std::filesystem::path &path) const {
+  return CaptureSource(path);
+}
+void DecodedAssetCache::RememberLoadedSound(const SourceSnapshot &source,
+    const std::filesystem::path &path, std::shared_ptr<const DecodedSound> sound) {
+  if (!sound || source.identity.empty() ||
+      sound->pcm.size() > impl->maximumBytes / sizeof(short)) return;
+  const bool regular = path.lexically_normal() == source.path;
+  const auto resolved = regular ? resolvedPath(path) : path.lexically_normal();
+  const auto identity = regular ? fspath_to_utf8(resolved) + '|' + source.identity
+                               : batchAssetIdentity(source, resolved);
+  if (identity.empty()) return;
+  const auto bytes = sound->pcm.size() * sizeof(short);
+  std::lock_guard lock(impl->mutex);
+  auto &entry = impl->entries[resolved];
+  if (entry && entry->identity == identity && entry->sound) return;
+  if (entry) impl->forget(*entry);
+  entry = std::make_shared<Impl::Entry>();
+  entry->identity = identity;
+  while (impl->statistics.retainedBytes > impl->maximumBytes - bytes && !impl->lru.empty())
+    impl->forget(*impl->lru.front());
+  impl->lru.push_back(entry);
+  entry->sound = std::move(sound);
+  entry->lru = std::prev(impl->lru.end());
+  entry->retained = true;
+  impl->statistics.retainedBytes += bytes;
 }
 bool DecodedAssetCache::ArchiveBatchUnchanged(const ArchiveBatch &batch) const {
   return !batch.identity.empty() && fileIdentity(batch.path) == batch.identity;

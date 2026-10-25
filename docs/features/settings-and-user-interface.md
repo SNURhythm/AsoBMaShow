@@ -98,8 +98,10 @@ Skins, Audio, Display, BMS Library, Difficulty Tables, IR, General.
 - Audio starts with volumes and input sounds/count-in, followed by device,
   sample rate/buffer settings, and test sound/status. Display retains orientation
   and platform display controls.
-- BMS Library groups folders, archive preview/extraction preferences, and cache
-  cleanup. Difficulty Tables puts installation in its own first card, before
+- BMS Library groups folders, chart preview mode, archive preview/extraction
+  preferences, and cache cleanup. Chart Preview offers Highlight (default),
+  Beginning, and Preview File in both selectors. Preview File reveals a
+  “When no preview file” Highlight/Beginning fallback choice. Difficulty Tables puts installation in its own first card, before
   installed-table updates/removal. IR groups connection and submission tools.
 - General contains language and application theme.
 

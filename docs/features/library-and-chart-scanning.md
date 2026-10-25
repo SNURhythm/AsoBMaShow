@@ -82,6 +82,19 @@ work without unconditionally releasing the selected chart. Cleanup and
 destruction join replay/export preparation before preview work, while callback
 dependencies remain alive.
 
+Chart previews default to a timing-based highlight with a 300 ms fade-in.
+The detector scores sustained note/background-sound activity over 12-second
+windows at measure boundaries, excluding the intro and late outro. Sparse bins
+keep analysis linear in chart data, without audio decoding or duration-sized
+allocations. Short or uninformative charts fall back to the beginning. This is
+an activity estimate, not chorus recognition. Beginning preserves the original
+start and leading-silence trimming. Preview File loops the authored `#PREVIEW`
+asset; missing/unreadable files use the configured Highlight/Beginning fallback.
+The built-in selector drives BGA from absolute consumed chart frames for
+synthesized previews. Authored preview files have no chart-time alignment, so
+BGA is not advanced. Custom selectors reuse preloaded native PCM, including
+sounds retained when changing difficulty, and drain previews before gameplay.
+
 Temporary media writes and cleanup share one mutation lock. Cleanup uses the
 current platform path normalizer to protect active top-level cache entries;
 usage measurement remains best-effort and does not block writes or cleanup.

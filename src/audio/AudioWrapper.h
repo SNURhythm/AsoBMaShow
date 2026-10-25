@@ -180,6 +180,9 @@ public:
   void setDecodedAssetCache(std::shared_ptr<audio::DecodedAssetCache> cache);
   [[nodiscard]] bool hasCachedDecodedAsset(const path_t &path) const;
   [[nodiscard]] std::shared_ptr<audio::DecodedAssetCache> decodedAssetCacheSnapshot() const;
+  // Loader-only snapshot; shares immutable native and converted PCM without copying.
+  [[nodiscard]] std::shared_ptr<const audio::DecodedAssetCache::DecodedSound>
+  decodedSoundSnapshot(const path_t &path) const;
   // Loader has validated the archive batch; retain the same native/output PCM.
   bool loadPreparedSound(const path_t &path,
                          const audio::DecodedAssetCache::DecodedSound &sound,

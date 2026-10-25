@@ -14,11 +14,12 @@
 #include <vector>
 #include "ui/PresentationSchedule.h"
 #include "RAII.h"
+#include "audio/ChartPreviewPolicy.h"
 
 // Run the production worker and clock adapter with device/parser boundaries
 // replaced, so no native audio device or renderer is needed for this wiring test.
 struct ChartMetaRecord { struct { std::filesystem::path BmsPath; } meta; };
-namespace bms_parser { struct Chart {}; }
+namespace bms_parser { struct Chart { struct { std::filesystem::path BmsPath, Preview; } Meta; }; }
 namespace audio {
 struct DecodedAssetCache {
   static constexpr std::size_t kUnlimitedRetainedBytes = std::numeric_limits<std::size_t>::max();
@@ -29,6 +30,7 @@ struct DecodedAssetCache {
 };
 }
 namespace audio {
+inline long long FindChartPreviewHighlightMicros(const bms_parser::Chart &) { return 40'000'000; }
 inline constexpr std::uint64_t kPreviewSampleRate = 44100;
 struct PagedPreviewSource {
   static inline bool failConstruction = false;
@@ -58,8 +60,14 @@ struct PagedPreviewSource {
 };
 }
 namespace play_options {
-std::unique_ptr<bms_parser::Chart> parseChart(std::filesystem::path,
-    std::atomic_bool &, const char *) { return std::make_unique<bms_parser::Chart>(); }
+inline std::filesystem::path previewPath;
+std::unique_ptr<bms_parser::Chart> parseChart(std::filesystem::path path,
+    std::atomic_bool &, const char *) {
+  auto chart = std::make_unique<bms_parser::Chart>();
+  chart->Meta.BmsPath = path;
+  chart->Meta.Preview = previewPath;
+  return chart;
+}
 }
 namespace archive_file { void appendDebugLogLine(std::string) {} }
 std::string fspath_to_utf8(const std::filesystem::path &path) { return path.string(); }
@@ -73,7 +81,9 @@ struct Player {
   struct Request { std::string deviceId; unsigned sampleRate, bufferFrames; };
   std::vector<std::string> *events = nullptr;
   bool fail = false;
-  bool Start(std::shared_ptr<audio::PagedPreviewSource> source, std::string &) {
+  bool fadeIn = false;
+  bool Start(std::shared_ptr<audio::PagedPreviewSource> source, std::string &, bool fade) {
+    fadeIn = fade;
     events->push_back("audio-start");
     state = {.playing = !fail, .positionFrames = source->first};
     return !fail;
@@ -82,6 +92,14 @@ struct Player {
   void SetRequest(Request) {}
   void SetGain(float) {}
   State GetState() const { return state; }
+};
+struct FilePlayer {
+  bool available = false, playing = false;
+  bool play(const std::filesystem::path &, bool loop, std::atomic_bool &) {
+    if (!loop) throw std::runtime_error("preview files must loop");
+    return playing = available;
+  }
+  void stopCurrent() { playing = false; }
 };
 struct Visuals {
   std::vector<std::string> events;
@@ -93,6 +111,13 @@ struct Visuals {
   std::function<void(std::atomic_bool &)> duringPreparation;
   void setDecodedAssetCache(std::shared_ptr<audio::DecodedAssetCache> value) { cache = std::move(value); }
   struct Result { bool success; std::string diagnostic; };
+  int ratePercent = 100;
+  bool setPlaybackRate(int, std::string &) { ratePercent = 100; return true; }
+  Result loadChartPreservingDevice(bms_parser::Chart &, bool, std::atomic_bool &) {
+    if (ratePercent != 100) throw std::runtime_error("chart load stops a file started at a non-neutral rate");
+    loaded = true;
+    return {true};
+  }
   Result prepareGameplayAudioFromPreview(bms_parser::Chart &, std::atomic_bool &cancelled) {
     if (!cache || !loaded) throw std::runtime_error("preparation must reuse preview audio and visuals");
     events.push_back("gameplay-prepare");
@@ -121,6 +146,8 @@ struct Scene {
   struct Context {
     Visuals jukebox;
     struct Settings {
+      audio::ChartPreviewMode chartPreviewMode = audio::ChartPreviewMode::Highlight;
+      bool chartPreviewFallbackHighlight = true;
       struct AudioVideo {
         struct Audio {
           float masterVolume = 1, bgmVolume = 1, keysoundVolume = 1;
@@ -131,6 +158,7 @@ struct Scene {
     } settings;
   } context;
   Player previewPlayer_;
+  std::unique_ptr<FilePlayer> previewFilePlayer_ = std::make_unique<FilePlayer>();
   std::shared_ptr<audio::DecodedAssetCache> previewDecodedAssets_;
   std::uint64_t previewStartFrame_ = 0;
   bool previewVisualsLoaded_ = false;
@@ -159,6 +187,30 @@ int main() {
   try {
     Scene scene;
     std::atomic_bool cancelled = false;
+    {
+      Scene modes;
+      modes.process({.meta = {.BmsPath = "chart.bms"}}, cancelled);
+      require(modes.previewPlayer_.state.positionFrames == 40 * 44100 && modes.previewPlayer_.fadeIn,
+              "default preview selects the highlight with fade-in");
+      modes.context.settings.chartPreviewMode = audio::ChartPreviewMode::Beginning;
+      modes.process({.meta = {.BmsPath = "chart.bms"}}, cancelled);
+      require(modes.previewPlayer_.state.positionFrames == 0 && !modes.previewPlayer_.fadeIn,
+              "Beginning preserves original playback");
+      modes.context.settings.chartPreviewMode = audio::ChartPreviewMode::PreviewFile;
+      modes.context.settings.chartPreviewFallbackHighlight = false;
+      play_options::previewPath = "preview.ogg";
+      modes.process({.meta = {.BmsPath = "chart.bms"}}, cancelled);
+      require(modes.previewPlayer_.state.playing && modes.previewPlayer_.state.positionFrames == 0,
+              "failed authored file uses the chosen Beginning fallback");
+      modes.previewFilePlayer_->available = true;
+      modes.context.jukebox.ratePercent = 150;
+      modes.process({.meta = {.BmsPath = "chart.bms"}}, cancelled);
+      require(modes.previewFilePlayer_->playing && !modes.previewPlayer_.state.playing && modes.selectedChartMediaReady,
+              "usable preview file loops and still prepares gameplay resources");
+      modes.stopPlayback();
+      require(!modes.previewFilePlayer_->playing, "handoff stops the authored preview");
+      play_options::previewPath.clear();
+    }
     audio::PagedPreviewSource::failConstruction = true;
     scene.process({.meta = {.BmsPath = "malformed.bms"}}, cancelled);
     require(!scene.selectedChart && !scene.previewDecodedAssets_ &&

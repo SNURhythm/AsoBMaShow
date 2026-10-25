@@ -16,6 +16,8 @@
 #include "../LongNoteModeUtils.h"
 #include "../audio/MusicPlaylist.h"
 #include "../audio/PagedPreviewSource.h"
+#include "../audio/ChartPreviewHighlight.h"
+#include "../audio/MusicSelectPreviewFilePlayer.h"
 #include "../tinyfiledialogs.h"
 #include <fstream>
 #include <algorithm>
@@ -1687,6 +1689,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   tabLoadingOverlay_->addView(tabLoadingText);
   tabLoadingOverlay_->setVisible(false);
   overlayPortal->present(tabLoadingOverlay_);
+  previewFilePlayer_ = std::make_unique<MusicSelectPreviewFilePlayer>(
+      &context.jukebox.audioRuntime(), std::filesystem::path{});
   previewWorker_ = std::make_unique<MainMenuPreviewController>(
       [this](const ChartMetaRecord &request, std::atomic_bool &cancelled) {
         const auto &meta = request.meta;
@@ -1704,6 +1708,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
           }
           this->context.jukebox.stop();
           previewPlayer_.Stop();
+          if (previewFilePlayer_) previewFilePlayer_->stopCurrent();
           this->context.jukebox.unloadVisuals();
           previewVisualsLoaded_ = false;
           previewDecodedAssets_.reset();
@@ -1736,11 +1741,46 @@ void MainMenuScene::initView(ApplicationContext &context) {
           if (isCancelled()) {
             return;
           }
+          if (this->context.settings.chartPreviewMode == audio::ChartPreviewMode::PreviewFile) {
+            // Returning from rate-adjusted gameplay must not let chart staging
+            // stop a preview file that has just started on the shared device.
+            std::string error;
+            if (!this->context.jukebox.setPlaybackRate({}, error)) {
+              SDL_Log("Preview rate reset failed: %s", error.c_str());
+              return;
+            }
+          }
+          if (!willStart.load() &&
+              this->context.settings.chartPreviewMode == audio::ChartPreviewMode::PreviewFile &&
+              !chart->Meta.Preview.empty() &&
+              previewFilePlayer_->play(chart->Meta.BmsPath.parent_path() / chart->Meta.Preview,
+                                       true, cancelled)) {
+            setSelectedChart(chart, false);
+            const auto loaded = this->context.jukebox.loadChartPreservingDevice(*chart, true, cancelled);
+            previewVisualsLoaded_ = true;
+            if (isCancelled()) {
+              previewFilePlayer_->stopCurrent();
+              this->context.jukebox.unloadVisuals();
+              previewVisualsLoaded_ = false;
+              if (!willStart.load()) clearSelectedChart();
+            } else if (loaded.success) {
+              selectedChartMediaReady.store(true);
+            }
+            return;
+          }
+          if (isCancelled()) return;
           previewDecodedAssets_ = std::make_shared<audio::DecodedAssetCache>(
               audio::DecodedAssetCache::kUnlimitedRetainedBytes);
           const auto &audioSettings = this->context.settings.audioVideo.audio;
+          const bool highlight = audio::ChartPreviewUsesHighlight(
+              this->context.settings.chartPreviewMode,
+              this->context.settings.chartPreviewFallbackHighlight);
+          const auto startMicros = highlight ? audio::FindChartPreviewHighlightMicros(*chart) : 0;
+          const auto startFrame = static_cast<std::uint64_t>(startMicros / 1'000'000) *
+              audio::kPreviewSampleRate + static_cast<std::uint64_t>(startMicros % 1'000'000) *
+              audio::kPreviewSampleRate / 1'000'000;
           auto source = audio::PagedPreviewSource::Create(
-              *chart, previewDecodedAssets_, previewStartFrame_,
+              *chart, previewDecodedAssets_, startFrame,
               {.bgm = audioSettings.masterVolume * audioSettings.bgmVolume,
                .keysound = audioSettings.masterVolume * audioSettings.keysoundVolume});
           if (isCancelled()) {
@@ -1763,7 +1803,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
             // gameplay mixer's headroom when several loud keysounds overlap.
             previewPlayer_.SetGain(1.0f);
             std::string error;
-            if (!previewPlayer_.Start(source, error)) {
+            if (!previewPlayer_.Start(source, error, highlight)) {
               SDL_Log("Preview playback failed: %s", error.c_str());
             } else {
               // Start progressively, then finish gameplay preparation while
@@ -1810,6 +1850,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
           if (!visualLock.owns_lock()) visualLock.lock();
           if (isCancelled()) {
             previewPlayer_.Stop();
+            if (previewFilePlayer_) previewFilePlayer_->stopCurrent();
             this->context.jukebox.unloadVisuals();
             previewVisualsLoaded_ = false;
             selectedChartMediaReady.store(false);
@@ -1824,6 +1865,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
           std::lock_guard lock(previewJukeboxLoadMutex);
           std::lock_guard visualLock(previewVisualsMutex);
           previewPlayer_.Stop();
+          if (previewFilePlayer_) previewFilePlayer_->stopCurrent();
           this->context.jukebox.unloadVisuals();
           previewVisualsLoaded_ = false;
           previewDecodedAssets_.reset();
@@ -1834,6 +1876,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
         std::lock_guard lock(previewJukeboxLoadMutex);
         std::lock_guard visualLock(previewVisualsMutex);
         previewPlayer_.Stop();
+        if (previewFilePlayer_) previewFilePlayer_->stopCurrent();
         // stop() is also called onPause after gameplay has loaded its chart.
         // Play takes ownership of a completed preparation. Other stops retire
         // preview visuals and invalidate readiness for a later full load.
@@ -7569,6 +7612,7 @@ void MainMenuScene::stopAndClearSelectedChart() {
   std::lock_guard lock(previewJukeboxLoadMutex);
   std::lock_guard visualLock(previewVisualsMutex);
   previewPlayer_.Stop();
+  if (previewFilePlayer_) previewFilePlayer_->stopCurrent();
   if (previewVisualsLoaded_) {
     context.jukebox.unloadVisuals();
     previewVisualsLoaded_ = false;

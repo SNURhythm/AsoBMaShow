@@ -79,6 +79,37 @@ private:
   std::filesystem::path path_;
 };
 
+void testChartPreviewSettings() {
+  using audio::ChartPreviewMode;
+  TempDirectory temp;
+  const auto path = temp.path() / "preview.json";
+  writeFile(path, R"({"schemaVersion":8})");
+  auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.settings.chartPreviewMode == ChartPreviewMode::Highlight &&
+             loaded.settings.chartPreviewFallbackHighlight,
+         "new and existing profiles default to highlight preview and fallback");
+  for (const auto mode : {ChartPreviewMode::Highlight, ChartPreviewMode::Beginning,
+                          ChartPreviewMode::PreviewFile}) {
+    for (const bool highlight : {false, true}) {
+      loaded.settings.chartPreviewMode = mode;
+      loaded.settings.chartPreviewFallbackHighlight = highlight;
+      std::string error;
+      expect(AppSettingsStore::Save(path, loaded.settings, error), "preview settings save");
+      loaded = AppSettingsStore::Load(path);
+      expect(loaded.settings.chartPreviewMode == mode &&
+                 loaded.settings.chartPreviewFallbackHighlight == highlight,
+             "preview mode and hidden fallback survive restart independently");
+      expect(audio::ChartPreviewUsesHighlight(mode, highlight) ==
+                 (mode == ChartPreviewMode::Highlight ||
+                  (mode == ChartPreviewMode::PreviewFile && highlight)),
+             "only preview-file mode uses the hidden fallback");
+    }
+  }
+  writeFile(path, R"({"schemaVersion":8,"chartPreviewMode":99})");
+  expect(AppSettingsStore::Load(path).settings.chartPreviewMode == ChartPreviewMode::Highlight,
+         "invalid preview modes fall back to highlight");
+}
+
 void testAntiAliasingPersistenceAndMigration() {
   TempDirectory temp;
   const auto path = temp.path() / "anti-aliasing.json";
@@ -2860,6 +2891,7 @@ int main() {
   testHostileSkinJsonIsBoundedDuringDecode();
   testSkinEntryCollisionKeysDeduplicateDeterministically();
   testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues();
+  testChartPreviewSettings();
   testAntiAliasingPersistenceAndMigration();
   testPrepMetronomeDurationPersistence();
   testIpadGestureReminderRoundTrip();
