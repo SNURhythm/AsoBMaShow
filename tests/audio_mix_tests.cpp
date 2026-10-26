@@ -1586,8 +1586,70 @@ void testPcmBuffersShareOwnershipAcrossRateTransitions() {
           "returning to native rate must reuse native PCM without a copy");
 }
 
+void testRetriggerTransfersGainControlWithoutStoppingPolyphony() {
+  for (bool layered : {false, true}) for (int delivery : {0, 1, 2}) {
+    AudioCallbackState state;
+    auto first = std::make_shared<SoundData>();
+    auto second = std::make_shared<SoundData>();
+    for (const auto &sound : {first, second}) {
+      sound->channels = 1;
+      sound->outputData = std::vector<short>(32, sound == first ? 1000 : 500);
+      sound->outputFrameCount = 32;
+    }
+    SoundData group;
+    group.layers = {first, second};
+    group.outputFrameCount = 32;
+    auto *sound = layered ? &group : first.get();
+    const auto play = [&](size_t start = 0) {
+      const AudioCommand command{.type = AudioCommandType::PlayNow,
+          .soundData = sound, .bus = audio::Bus::Keysound, .startFrame = start,
+          .voiceId = 42};
+      if (delivery == 0) {
+        require(audio::playback::EnqueueCommand(state, command), "ordinary polyphonic trigger queues");
+        audio::playback::DrainCommands(state);
+      } else if (delivery == 1) {
+        const auto slot = audio::playback::TryReserveRealtimeCommand(state);
+        require(slot && audio::playback::CommitRealtimeCommand(state, *slot, command),
+                "realtime polyphonic trigger queues");
+        audio::playback::DrainRealtimeCommands(state);
+      } else {
+        require(audio::playback::InsertScheduledSound(state,
+            {.soundData = sound, .bus = audio::Bus::Keysound, .startFrame = start,
+             .voiceId = 42}), "scheduled polyphonic trigger queues");
+        audio::playback::ActivateScheduledSounds(state, 0, 44100, 1, 100);
+        std::array<float, 1> prefix{};
+        audio::playback::MixActiveSounds(state, prefix, 1, 1, 1, 1, 100);
+      }
+    };
+    const auto gain = [&](float value) {
+      require(audio::playback::EnqueueCommand(state,
+          {.type = AudioCommandType::SetVoiceGain, .bus = audio::Bus::Keysound,
+           .gain = value, .voiceId = 42}), "polyphonic voice gain queues");
+      audio::playback::DrainCommands(state);
+    };
+    const auto sample = [&] {
+      std::array<float, 1> output{};
+      audio::playback::MixActiveSounds(state, output, 1, 1, 1, 1, 100);
+      return output[0] * 32768;
+    };
+    const float oneVoice = layered ? 1350 : 900;
+    play();
+    play();
+    requireNear(sample(), 2 * oneVoice, "ordinary BMS retriggers remain polyphonic");
+    gain(0);
+    requireNear(sample(), oneVoice,
+                "muting the current trigger preserves the earlier overlapping BMS voice");
+    gain(1);
+    requireNear(sample(), 2 * oneVoice, "rehold restores every layer of only the current trigger");
+    play(32);
+    gain(0);
+    requireNear(sample(), oneVoice, "a rejected trigger does not detach the current gain owner");
+  }
+}
+
 int main() {
   try {
+    testRetriggerTransfersGainControlWithoutStoppingPolyphony();
     testChunkedScheduleRoundsAgainstTheOriginalCallbackOrigin();
     testScheduleActivationLeavesFutureEventsInPlace();
     testPartiallyConsumedScheduleSupportsWrapInsertionRemovalAndGrowth();

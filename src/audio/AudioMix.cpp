@@ -567,13 +567,15 @@ void CommitOutputRateTransition(OutputRateTransition transition,
   }
 }
 
-bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
+static bool appendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
                        std::uint32_t outputOffsetFrames, size_t startFrame,
-                       float gain, bool loop, std::uint64_t voiceId, std::uint32_t startFractionQ32) {
+                       float gain, bool loop, std::uint64_t voiceId, std::uint32_t startFractionQ32,
+                       bool &transferControl) {
   if (soundData != nullptr && !soundData->layers.empty()) {
     bool added = false;
     for (const auto &layer : soundData->layers) {
-      if (AppendActiveSound(state, layer.get(), bus, outputOffsetFrames, startFrame, gain, loop, voiceId, startFractionQ32)) {
+      if (appendActiveSound(state, layer.get(), bus, outputOffsetFrames, startFrame, gain, loop,
+                            voiceId, startFractionQ32, transferControl)) {
         state.playingSounds[state.playingSoundCount - 1].groupOwner = soundData;
         added = true;
       }
@@ -600,6 +602,16 @@ bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
       state.playingSoundCount >= kMaxActiveSounds) {
     return false;
   }
+  if (transferControl && voiceId != 0 && bus == Bus::Keysound) {
+    // Live input identifies a note, which may have several overlapping BMS
+    // triggers. Only its latest successful trigger owns later LN gain changes;
+    // keep earlier polyphonic voices audible, with their existing gains.
+    for (size_t i = 0; i < state.playingSoundCount; ++i) {
+      auto &voice = state.playingSounds[i];
+      if (voice.voiceId == voiceId && voice.bus == Bus::Keysound) voice.voiceId = 0;
+    }
+    transferControl = false;
+  }
   soundData->playing = true;
   state.playingSounds[state.playingSoundCount++] = {
       .soundData = soundData,
@@ -616,14 +628,23 @@ bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
   return true;
 }
 
-static bool AppendRealtimeActiveSound(AudioCallbackState &state,
+bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
+                       std::uint32_t outputOffsetFrames, size_t startFrame,
+                       float gain, bool loop, std::uint64_t voiceId, std::uint32_t startFractionQ32) {
+  bool transferControl = true;
+  return appendActiveSound(state, soundData, bus, outputOffsetFrames, startFrame, gain, loop,
+                           voiceId, startFractionQ32, transferControl);
+}
+
+static bool appendRealtimeActiveSound(AudioCallbackState &state,
                                       SoundData *soundData, Bus bus,
                                       size_t startFrame, std::uint64_t voiceId,
-                                      std::uint32_t startFractionQ32) {
+                                      std::uint32_t startFractionQ32, bool &transferControl) {
   if (soundData != nullptr && !soundData->layers.empty()) {
     bool added = false;
     for (const auto &layer : soundData->layers) {
-      if (AppendRealtimeActiveSound(state, layer.get(), bus, startFrame, voiceId, startFractionQ32)) {
+      if (appendRealtimeActiveSound(state, layer.get(), bus, startFrame, voiceId,
+                                    startFractionQ32, transferControl)) {
         state.playingSounds[state.playingSoundCount - 1].groupOwner = soundData;
         added = true;
       }
@@ -650,7 +671,16 @@ static bool AppendRealtimeActiveSound(AudioCallbackState &state,
     }
     removeActiveSoundAt(state, preemptIndex);
   }
-  return AppendActiveSound(state, soundData, bus, 0, startFrame, 1.0F, false, voiceId, startFractionQ32);
+  return appendActiveSound(state, soundData, bus, 0, startFrame, 1.0F, false,
+                           voiceId, startFractionQ32, transferControl);
+}
+
+static bool AppendRealtimeActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
+                                      size_t startFrame, std::uint64_t voiceId,
+                                      std::uint32_t startFractionQ32) {
+  bool transferControl = true;
+  return appendRealtimeActiveSound(state, soundData, bus, startFrame, voiceId,
+                                   startFractionQ32, transferControl);
 }
 
 // A realtime gain command touches only currently owned voices, never a sound
