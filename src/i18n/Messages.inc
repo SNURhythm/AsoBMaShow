@@ -2308,7 +2308,6 @@
 {"streak.ui.activity_frozen", "Freeze used", "프리즈 사용", "フリーズ使用", "已用冻结道具", "已用凍結道具"},
 {"streak.ui.activity_goal", "Goal reached", "목표 달성", "目標達成", "目标达成", "目標達成"},
 {"streak.ui.activity_no_play", "No play", "미플레이", "未プレイ", "未游玩", "未遊玩"},
-{"streak.ui.activity_not_started", "Before routine", "루틴 시작 전", "開始前", "计划开始前", "計畫開始前"},
 {"streak.ui.activity_played", "Played", "플레이", "プレイ済み", "已游玩", "已遊玩"},
 {"streak.ui.activity_title", "Last 7 days", "최근 7일", "最近7日間", "最近 7 天", "最近 7 天"},
 {"streak.ui.add", "Add assignment", "과제 추가", "課題を追加", "添加任务", "新增任務"},

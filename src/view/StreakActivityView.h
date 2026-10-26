@@ -15,9 +15,7 @@ public:
     auto *days = new View();
     days->setFlexDirection(FlexDirection::Row)->setGap(6)->setFlexShrink(0);
     addView(days);
-    bool beforeStart = false;
     for (const auto &day : streak::recentActivity(state, today)) {
-      beforeStart |= day.kind == streak::ActivityKind::NotStarted;
       auto *cell = new View();
       cell->setName("streakActivity:" + streak::dateLabel(day.day));
       cell->setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch)
@@ -36,12 +34,10 @@ public:
     legend->setFlexDirection(FlexDirection::Row)->setFlexWrap(YGWrapWrap)->setGap(12)->setFlexShrink(0);
     addView(legend);
     for (auto kind : {streak::ActivityKind::GoalReached, streak::ActivityKind::Played,
-                      streak::ActivityKind::Frozen, streak::ActivityKind::NoPlay,
-                      streak::ActivityKind::NotStarted}) {
-      if (kind == streak::ActivityKind::NotStarted && !beforeStart) continue;
+                      streak::ActivityKind::Frozen, streak::ActivityKind::NoPlay}) {
       auto *item = new View();
       item->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(6);
-      icon(item, kind, 14)->setWidth(18)->setHeight(24);
+      icon(item, kind, 20)->setWidth(30)->setHeight(34);
       text(item, i18n::tr(description(kind)), 16);
       legend->addView(item);
     }
@@ -53,7 +49,7 @@ private:
       case streak::ActivityKind::Played: return "streak.ui.activity_played";
       case streak::ActivityKind::Frozen: return "streak.ui.activity_frozen";
       case streak::ActivityKind::NoPlay: return "streak.ui.activity_no_play";
-      case streak::ActivityKind::NotStarted: return "streak.ui.activity_not_started";
+      case streak::ActivityKind::NotStarted: break;
     }
     return "streak.ui.activity_no_play";
   }
