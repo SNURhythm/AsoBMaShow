@@ -1,6 +1,6 @@
-# Streak (MVP)
+# Combo (MVP)
 
-Open the **Streak** tab beside PLAY, COURSE, MUSIC and IR, then create a routine.
+Open the **Combo** tab beside PLAY, COURSE, MUSIC and IR, then create a routine.
 Custom selectors expose the same dashboard through the toolbar’s flame button. Set daily,
 weekly and monthly point goals and add assignments. Select levels from any
 installed difficulty tables; an assignment matches the union of those levels.
@@ -137,7 +137,7 @@ native dashboard and editor.
 ## Quick manual test
 
 Use a temporary player profile so the test routine does not affect normal progress.
-Open **Streak**, set the daily goal to **1**, and add an assignment with
+Open **Combo**, set the daily goal to **1**, and add an assignment with
 broad difficulty-table levels, **Any previous lamp**, **FAILED or above**,
 **Any score**, **1 chart** and **1 point**. For a quick milestone check,
 set weekly/monthly goals to **3/5** while creating the routine; bonus points
