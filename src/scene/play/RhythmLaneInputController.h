@@ -35,6 +35,8 @@ public:
   struct Result {
     bms_parser::Note *note = nullptr;
     bms_parser::Note *keySoundNote = nullptr;
+    bms_parser::Note *gainNote = nullptr;
+    float keysoundGain = 1.0F;
     bool hasJudge = false;
     JudgeResult judge = JudgeResult(None, 0);
     bool hasReplayEvent = false;
@@ -65,6 +67,9 @@ public:
   ResultBatch releaseLane(int lane, const InputContext &context,
                           bool isBackSpin = false);
   Result releaseLaneForPreparation(int lane, const InputContext &context);
+  std::span<const Result> advancePendingReleases(long long songTimeMicros);
+  std::span<const Result> advanceHellChargeVoices(long long songTimeMicros);
+  Result onMissedNote(bms_parser::Note *note, long long songTimeMicros);
   void resetLaneStates();
   [[nodiscard]] bool chargeTailJudgedSuccessfully(
       const bms_parser::LongNote *tail) const;
@@ -84,6 +89,7 @@ private:
   long long latePoorTiming = 0;
   std::unordered_map<int, std::vector<bms_parser::Note *>>
       keysoundNotesByLane;
+  std::unordered_map<int, std::vector<bms_parser::Note *>> hellChargeHeadsByLane;
   std::vector<Result> inputTransactions;
   std::vector<bms_parser::Note *> judgeCandidateNotes;
   std::vector<gameplay::JudgeCandidateDescriptor> judgeCandidates;
@@ -93,6 +99,22 @@ private:
       acceptedChargeTailJudges;
   std::unordered_map<int, long long> suppressedBackspinPressMicros;
 
+  struct PendingRelease {
+    bms_parser::LongNote *tail = nullptr;
+    long long deadline = 0;
+    long long releasedTime = 0;
+    JudgeResult judge = JudgeResult(None, 0);
+  };
+  std::unordered_map<int, PendingRelease> pendingReleases;
+  struct HeadVoiceState { bool muted = false; bool missed = false; };
+  std::unordered_map<bms_parser::LongNote *, HeadVoiceState> headVoices;
+  std::vector<Result> pendingTransactions;
+  bms_parser::LongNote *passingHellChargeHead(int lane, long long time) const;
+  void trackHeadVoice(bms_parser::Note *note);
+  void setHeadVoiceGain(Result &result, bms_parser::LongNote *head, bool muted);
+  void updateHellChargeVoice(Result &result, int lane, long long time, bool pressed);
+  Result resolveRelease(bms_parser::LongNote *tail, const JudgeResult &applied,
+                         long long releasedTime, long long songTime, bool mute);
   void indexKeysoundNotes();
   [[nodiscard]] bms_parser::Note *
   selectFallbackKeysound(int mainLane, int compensateLane,

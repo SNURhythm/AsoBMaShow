@@ -77,6 +77,7 @@ struct PlayingSound {
   std::uint32_t outputEndOffsetFrames = std::numeric_limits<std::uint32_t>::max();
   float gain = 1.0F;
   bool loop = false;
+  std::uint64_t voiceId = 0;
 };
 
 struct ScheduledSound {
@@ -85,13 +86,17 @@ struct ScheduledSound {
   long long startMicros = 0;
   std::uint64_t sequence = 0;
   size_t startFrame = 0;
+  std::uint32_t startFractionQ32 = 0;
   float gain = 1.0F;
   bool loop = false;
+  std::uint64_t voiceId = 0;
+  bool setVoiceGain = false;
 };
 
 enum class AudioCommandType : std::uint8_t {
   PlayNow,
   Schedule,
+  SetVoiceGain,
   StopOwner,
   StopAll
 };
@@ -109,8 +114,10 @@ struct AudioCommand {
   long long startMicros = 0;
   std::uint64_t sequence = 0;
   size_t startFrame = 0;
+  std::uint32_t startFractionQ32 = 0;
   float gain = 1.0F;
   bool loop = false;
+  std::uint64_t voiceId = 0;
   std::atomic_bool *acknowledgement = nullptr;
   std::uint64_t submissionSequence = 0;
   AudioCommandAdmission admission = AudioCommandAdmission::Ordinary;
@@ -169,6 +176,14 @@ struct AudioCallbackState {
   ScheduledSoundBuffer scheduledSounds;
   size_t scheduledSoundCapacity = kInitialScheduledSoundCapacity;
   size_t scheduledSoundCount = 0;
+  // Activate records one callback/chunk origin; Mix consumes the existing ring
+  // at sample boundaries, reusing slots only after their audible prefix is mixed.
+  bool scheduledMixPending = false;
+  std::int64_t scheduledMixOriginFrame = 0;
+  int scheduledMixSampleRate = 0;
+  int scheduledMixRatePercent = 100;
+  std::uint32_t scheduledMixFrames = 0;
+  std::uint32_t scheduledMixBufferOffset = 0;
   std::unique_ptr<AudioCommand[]> commandQueue;
   std::atomic<std::uint32_t> commandReadCursor{0};
   std::atomic<std::uint32_t> commandWriteCursor{0};
@@ -256,7 +271,8 @@ void CommitOutputRateTransition(OutputRateTransition transition,
 
 bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
                        std::uint32_t outputOffsetFrames, size_t startFrame = 0,
-                       float gain = 1.0F, bool loop = false);
+                       float gain = 1.0F, bool loop = false,
+                       std::uint64_t voiceId = 0, std::uint32_t startFractionQ32 = 0);
 bool InsertScheduledSound(AudioCallbackState &state,
                           const ScheduledSound &scheduledSound);
 // Only call while the backend is confirmed stopped and callback state is owned
@@ -287,17 +303,21 @@ void DrainCommands(AudioCallbackState &state,
 // Read-only preflight for activation followed by mixing AllBuses. A false result
 // requires the caller to leave schedule, voices and chart time unchanged. Uses
 // no ownership operations, allocations, locks, decoding or file access.
-// Chunked callers can conservatively include every due sound, including voices
-// a single activation would drop but later chunks can admit after retirement.
+// Admission follows sample boundaries, including monophonic replacement and
+// retirement. Chunked callers may additionally preflight even dropped sources.
 bool ScheduledMixReady(const AudioCallbackState &state,
                         long long bufferStartMicros, int sampleRate,
                         std::uint32_t frameCount, int playbackRatePercent,
                         std::uint32_t bufferOffsetFrames = 0,
-                        bool includeAllDueSounds = false) noexcept;
+                        bool includeAllDueSounds = false,
+                        std::optional<std::int64_t> bufferStartFrame = std::nullopt) noexcept;
+// Apply starts at offset zero and retain the common rounding origin. Later
+// events are consumed by the following MixActiveSounds at their sample offset.
 void ActivateScheduledSounds(AudioCallbackState &state,
                              long long bufferStartMicros, int sampleRate,
                              std::uint32_t frameCount, int playbackRatePercent,
-                             std::uint32_t bufferOffsetFrames = 0);
+                             std::uint32_t bufferOffsetFrames = 0,
+                             std::optional<std::int64_t> bufferStartFrame = std::nullopt);
 void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
                      std::uint32_t frameCount, int outputChannels,
                      float bgmGain, float keysoundGain,

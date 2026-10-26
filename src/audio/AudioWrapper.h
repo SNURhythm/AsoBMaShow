@@ -142,6 +142,11 @@ class AudioWrapper;
 
 namespace audio {
 
+struct VoiceRestorePosition {
+  long long triggerMicros;
+  long long originMicros;
+};
+
 struct SkinSoundHandle {
   std::uint64_t value = 0;
   [[nodiscard]] explicit operator bool() const noexcept { return value != 0; }
@@ -203,7 +208,9 @@ public:
   bool playSound(const path_t &path, audio::Bus bus,
                  long long startOffsetMicros = 0);
   bool playSound(const path_t &path, audio::Bus bus,
-                 long long startOffsetMicros, float gain);
+                 long long startOffsetMicros, float gain, std::uint64_t voiceId = 0,
+                 std::optional<audio::VoiceRestorePosition> restore = std::nullopt);
+  bool setKeysoundVoiceGain(std::uint64_t voiceId, float gain);
   [[nodiscard]] audio::SkinSoundLoadResult
   loadSkinSound(const path_t &path, std::atomic<bool> &isCancelled,
                 std::size_t maximumEncodedBytes,
@@ -219,17 +226,22 @@ public:
   audio::playback::BackendOperationResult disposeSkinSound(const path_t &path);
   bool scheduleSound(const path_t &path, audio::Bus bus, long long startMicros);
   bool stageScheduledSound(const path_t &path, audio::Bus bus,
-                           long long startMicros);
+                           long long startMicros, std::uint64_t voiceId = 0,
+                           bool setVoiceGain = false, float gain = 1.0F);
   [[nodiscard]] std::optional<audio::RealtimeSoundHandle>
   resolveRealtimeSound(const path_t &path) const;
   [[nodiscard]] std::optional<RealtimeAudioCommandReservation>
   tryReserveRealtimeSoundCommand() const noexcept;
   bool commitRealtimeKeysound(RealtimeAudioCommandReservation reservation,
                               const audio::RealtimeSoundHandle &handle,
-                              size_t startFrame = 0) noexcept;
+                              size_t startFrame = 0,
+                              std::uint64_t voiceId = 0) noexcept;
+  bool commitRealtimeVoiceGain(RealtimeAudioCommandReservation reservation,
+                               std::uint64_t voiceId, float gain) noexcept;
   void cancelRealtimeSoundCommand(
       RealtimeAudioCommandReservation reservation) noexcept;
   std::optional<long long> getSoundDurationMicros(const path_t &path) const;
+  bool canRestoreSound(const path_t &path, audio::VoiceRestorePosition position) const;
   long long getTimeMicros() const;
   [[nodiscard]] std::optional<long long>
   songTimeMicrosAtSteadyMicros(long long steadyMicros) const noexcept;

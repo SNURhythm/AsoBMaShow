@@ -751,8 +751,8 @@ bool RealtimeGameplayWorker::processGameplayInput(
       const auto batch =
           scratchKey ? simulation_.releaseScratchKey(input.lane, clockwise, context)
                      : simulation_.releaseLane(input.lane, context, input.backSpin);
-      for (const auto &transaction : batch.transactions) {
-        recordTransaction(transaction);
+      if (!commitAutomaticTransactions(batch.transactions)) {
+        return false;
       }
       if (!sharedUpdate && !commitAutomaticTransactions(
               simulation_.finishInputUpdate(context).transactions)) {
@@ -796,6 +796,16 @@ bool RealtimeGameplayWorker::processGameplayInput(
         scratchKey ? simulation_.pressScratchKey(input.lane, clockwise, context)
                    : simulation_.pressLane(input.lane, compensateLane, context);
     for (const auto &transaction : batch.transactions) {
+      // An opposite scratch-key Press can resolve a CN/HCN tail instead of
+      // selecting a head. Its release audio is independent of the press preview.
+      if (transaction.hasReplayEvent &&
+          transaction.replayEvent.action == GameplayReplayAction::Release) {
+        if (!commitAutomaticTransactions(std::span(&transaction, 1))) {
+          return false;
+        }
+        continue;
+      }
+      if (!commitVoiceControl(transaction)) return false;
       if (transaction.soundNoteId == preview) {
         ++previewMatchCount;
       } else if (transaction.soundNoteId != kInvalidNoteId) {
@@ -872,12 +882,38 @@ void RealtimeGameplayWorker::recordAcceptedReplayInput(
   }
 }
 
+bool RealtimeGameplayWorker::commitVoiceControl(const GameplayInputResult &transaction) {
+  const auto id = transaction.gainNoteId;
+  if (!config_.inputTriggeredKeysounds || id == kInvalidNoteId ||
+      definition_.keysoundSource(id).wav == bms_parser::Parser::NoWav) return true;
+  RealtimeGameplayAudioReservation reservation;
+  if (config_.audio.reserve == nullptr ||
+      !config_.audio.reserve(config_.audio.context, id, reservation)) {
+    latchFault(RealtimeGameplayFault::AudioCapacityUnavailable);
+    return false;
+  }
+  if (config_.audio.setGain == nullptr) {
+    if (reservation.requiresCommit && config_.audio.cancel != nullptr)
+      config_.audio.cancel(config_.audio.context, reservation, id);
+    latchFault(RealtimeGameplayFault::AudioCommitFailed);
+    return false;
+  }
+  if (!config_.audio.setGain(config_.audio.context, reservation, id, transaction.keysoundGain)) {
+    latchFault(RealtimeGameplayFault::AudioCommitFailed);
+    return false;
+  }
+  return true;
+}
+
 bool RealtimeGameplayWorker::commitAutomaticTransactions(
     std::span<const GameplayInputResult> transactions) {
   for (const auto &transaction : transactions) {
+    if (!commitVoiceControl(transaction)) return false;
     const bool requiresSound =
         config_.inputTriggeredKeysounds &&
-        transaction.soundNoteId != kInvalidNoteId;
+        transaction.soundNoteId != kInvalidNoteId &&
+        definition_.keysoundSource(transaction.soundNoteId).wav !=
+            bms_parser::Parser::NoWav;
     RealtimeGameplayAudioReservation reservation;
     if (requiresSound &&
         (config_.audio.reserve == nullptr ||

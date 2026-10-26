@@ -420,14 +420,7 @@ resolveGameplayBgaTargetQuad(const BgaDrawTarget &target, int sourceWidth,
 
 bool scheduledAudioEventLess(const ScheduledAudioEvent &left,
                              const ScheduledAudioEvent &right) {
-  if (left.timeMicros != right.timeMicros) {
-    return left.timeMicros < right.timeMicros;
-  }
-  if (left.wav != right.wav) {
-    return left.wav < right.wav;
-  }
-  return static_cast<std::uint8_t>(left.bus) <
-         static_cast<std::uint8_t>(right.bus);
+  return left.timeMicros < right.timeMicros;
 }
 
 std::vector<short> generatedPcm(const club_beat::StereoSound &sound) {
@@ -3563,7 +3556,6 @@ void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
         notes.push_back(makeScheduledAudioEvent(
             timeline->Timing, bgNote->Wav, JukeboxAudioSource::BackgroundNote));
       }
-      std::sort(notes.begin(), notes.end(), scheduledAudioEventLess);
       for (auto &note : notes) {
         if (isCancelled)
           return;
@@ -3597,24 +3589,29 @@ void Jukebox::schedule(bms_parser::Chart &chart, bool scheduleNotes,
       }
     }
   }
-  std::sort(audioList.begin(), audioList.end(), scheduledAudioEventLess);
+  std::stable_sort(audioList.begin(), audioList.end(), scheduledAudioEventLess);
 }
 
 void Jukebox::appendScheduledAudioEvents(
     std::span<const ScheduledAudioEvent> events) {
   audioList.insert(audioList.end(), events.begin(), events.end());
-  std::sort(audioList.begin(), audioList.end(), scheduledAudioEventLess);
+  std::stable_sort(audioList.begin(), audioList.end(), scheduledAudioEventLess);
 }
 
-void Jukebox::playKeySound(int wav) {
+void Jukebox::playKeySound(int wav, std::uint64_t voiceId) {
   auto lifecycleState = makeLifecycleState();
-  jukebox_lifecycle::PlayKeySoundIfPublished(lifecycleState, [this, wav] {
+  jukebox_lifecycle::PlayKeySoundIfPublished(lifecycleState, [this, wav, voiceId] {
     if (const auto it = wavTableAbs.find(wav); it != wavTableAbs.end()) {
       audio.playSound(
           it->second.c_str(),
-          audioBusForJukeboxSource(JukeboxAudioSource::DirectKeysound));
+          audioBusForJukeboxSource(JukeboxAudioSource::DirectKeysound),
+          0, 1.0F, voiceId);
     }
   });
+}
+
+void Jukebox::setKeysoundVoiceGain(std::uint64_t voiceId, float gain) {
+  (void)audio.setKeysoundVoiceGain(voiceId, gain);
 }
 
 std::optional<audio::RealtimeSoundHandle>
@@ -3631,7 +3628,8 @@ bool Jukebox::scheduleAudioFromCursor(size_t cursor) {
     const auto &target = audioList[cursor];
     if (const auto it = wavTableAbs.find(target.wav); it != wavTableAbs.end()) {
       if (!audio.stageScheduledSound(it->second, target.bus,
-                                     target.timeMicros)) {
+                                     target.timeMicros, target.voiceId,
+                                     target.setVoiceGain, target.gain)) {
         return false;
       }
     }
@@ -3643,10 +3641,13 @@ bool Jukebox::scheduleAudioFromCursor(size_t cursor) {
 void Jukebox::playOverlappingAudioAt(long long micro) {
   struct OverlappingAudio {
     path_t path;
-    long long offsetMicros = 0;
+    long long triggerMicros = 0;
     audio::Bus bus = audio::Bus::Bgm;
+    std::uint64_t voiceId = 0;
+    float gain = 1.0F;
   };
   std::vector<OverlappingAudio> overlapping;
+  std::unordered_map<std::uint64_t, float> gains;
   const auto seekIt = std::lower_bound(
       audioList.begin(), audioList.end(), micro,
       [](const ScheduledAudioEvent &entry, long long targetMicros) {
@@ -3655,25 +3656,26 @@ void Jukebox::playOverlappingAudioAt(long long micro) {
   for (auto it = std::make_reverse_iterator(seekIt); it != audioList.rend();
        ++it) {
     const auto &target = *it;
+    if (target.setVoiceGain) {
+      gains.try_emplace(target.voiceId, target.gain);
+      continue;
+    }
     const auto wavIt = wavTableAbs.find(target.wav);
     if (wavIt == wavTableAbs.end()) {
       continue;
     }
-    const auto duration = audio.getSoundDurationMicros(wavIt->second);
-    if (!duration.has_value()) {
-      continue;
-    }
-    const auto request = makeOverlappingAudioRequest(target, micro, *duration);
-    if (!request.has_value()) {
-      continue;
-    }
+    if (!audio.canRestoreSound(wavIt->second, {target.timeMicros, micro})) continue;
     overlapping.push_back({.path = wavIt->second,
-                           .offsetMicros = request->offsetMicros,
-                           .bus = request->bus});
+                           .triggerMicros = target.timeMicros,
+                           .bus = target.bus,
+                           .voiceId = target.voiceId,
+                           .gain = gains.contains(target.voiceId) ? gains[target.voiceId] : target.gain});
+    gains.erase(target.voiceId);
   }
 
   for (auto it = overlapping.rbegin(); it != overlapping.rend(); ++it) {
-    audio.playSound(it->path, it->bus, it->offsetMicros);
+    audio.playSound(it->path, it->bus, 0, it->gain, it->voiceId,
+                    audio::VoiceRestorePosition{it->triggerMicros, micro});
   }
 }
 

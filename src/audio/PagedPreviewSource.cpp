@@ -11,7 +11,6 @@
 #include "AudioMix.h"
 #include "ArchiveAssetBatchLoader.h"
 #include "ChartAssetExtensions.h"
-#include "ChartAudioRenderer.h"
 #include "DecodedAssetCache.h"
 
 #include <algorithm>
@@ -24,7 +23,6 @@
 #include <map>
 #include <mutex>
 #include <optional>
-#include <set>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -746,7 +744,7 @@ std::shared_ptr<PagedPreviewSource> PagedPreviewSource::Create(
   std::map<std::filesystem::path, std::size_t> assetsByPath;
   std::map<int, std::vector<std::size_t>> assetsByWav;
   std::map<int, std::size_t> assetsBySlice;
-  std::set<std::pair<long long, std::size_t>> sliceEvents;
+  std::map<std::pair<long long, std::size_t>, std::size_t> sliceEvents;
   auto snapshotAsset = [&](const std::string &name) {
     auto path = chart.Meta.Folder / utf8_to_path_t(name);
     // Native symlink/.. traversal must reach the resource resolver intact.
@@ -761,12 +759,26 @@ std::shared_ptr<PagedPreviewSource> PagedPreviewSource::Create(
     const auto index = snapshotAsset(name);
     if (!chart.WavSlices.empty()) value->sliceSourceAssets[wav] = index;
   }
-  const auto background = chart_audio::CollectBackgroundAudioEvents(chart);
-  auto bgm = background.begin();
-  for (const auto &event : chart_audio::CollectChartTimedAudioEvents(chart)) {
-    const bool isBackground = bgm != background.end() &&
-        bgm->timeMicros == event.timeMicros && bgm->wav == event.wav;
-    if (isBackground) ++bgm;
+  struct ChartEvent { long long timeMicros; int wav; Bus bus; };
+  std::vector<ChartEvent> chartEvents;
+  // Retain the source bus explicitly: a playable note and BGM can have the
+  // same WAV/time, so matching against a separate BGM list is ambiguous.
+  for (const auto *measure : chart.Measures) {
+    if (!measure) continue;
+    for (const auto *timeline : measure->TimeLines) {
+      if (!timeline) continue;
+      for (const auto *note : timeline->Notes)
+        if (note && note->Wav != bms_parser::Parser::NoWav)
+          chartEvents.push_back({timeline->Timing, note->Wav, Bus::Keysound});
+      for (const auto *note : timeline->BackgroundNotes)
+        if (note && note->Wav != bms_parser::Parser::NoWav)
+          chartEvents.push_back({timeline->Timing, note->Wav, Bus::Bgm});
+    }
+  }
+  std::stable_sort(chartEvents.begin(), chartEvents.end(), [](const auto &a, const auto &b) {
+    return a.timeMicros < b.timeMicros;
+  });
+  for (const auto &event : chartEvents) {
     auto asset = assetsByWav.find(event.wav);
     if (asset == assetsByWav.end()) {
       const auto recipe = chart.WavSlices.find(event.wav);
@@ -800,9 +812,17 @@ std::shared_ptr<PagedPreviewSource> PagedPreviewSource::Create(
       asset = assetsByWav.emplace(event.wav, std::move(indices)).first;
     }
     for (const auto index : asset->second) {
-      if (value->sliceRecipes.contains(index) && !sliceEvents.emplace(event.timeMicros, index).second)
-        continue;
-      value->events.push_back({event.timeMicros, index, isBackground ? Bus::Bgm : Bus::Keysound});
+      if (value->sliceRecipes.contains(index)) {
+        const auto [previous, added] = sliceEvents.emplace(
+            std::make_pair(event.timeMicros, index), value->events.size());
+        if (!added) {
+          // A simultaneous monophonic retrigger replaces the voice's bus.
+          // Keep one scheduled slice, but retain the last trigger's ownership.
+          value->events[previous->second].bus = event.bus;
+          continue;
+        }
+      }
+      value->events.push_back({event.timeMicros, index, event.bus});
     }
   }
   return std::shared_ptr<PagedPreviewSource>(new PagedPreviewSource(std::move(value)));

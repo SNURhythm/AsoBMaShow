@@ -1317,7 +1317,18 @@ struct GamePlayScene::RealtimeGameplaySession {
       return true;
     }
     return session.audio->commitRealtimeKeysound(
-        {.cursor = static_cast<std::uint32_t>(reservation.value)}, *handle);
+        {.cursor = static_cast<std::uint32_t>(reservation.value)}, *handle,
+        0, static_cast<std::uint64_t>(noteId) + 1);
+  }
+
+  static bool setAudioGain(void *context,
+                           gameplay::RealtimeGameplayAudioReservation reservation,
+                           gameplay::NoteId noteId, float gain) {
+    auto &session = *static_cast<RealtimeGameplaySession *>(context);
+    if (!reservation.requiresCommit) return true;
+    return session.audio->commitRealtimeVoiceGain(
+        {.cursor = static_cast<std::uint32_t>(reservation.value)},
+        static_cast<std::uint64_t>(noteId) + 1, gain);
   }
 
   static void
@@ -1979,9 +1990,7 @@ bool GamePlayScene::enterPracticeMenu() {
        .judgeRank = practice::sourcePracticeJudgeRank(
            chart->Meta.KeyMode, chart->Meta.Rank,
            rulesetPolicyBuild.policy->judge.rules().effectiveJudgeRankPercent),
-       .chartTotal = playfieldChartVisualModel.staticMetadata.songInformation
-                         .value_or(PlayfieldSongInformation{})
-                         .total,
+       .chartTotal = rulesetPolicyBuild.policy->gauge.effectiveTotal,
        .keyMode = playfieldChartVisualModel.keyCount,
        .random1P = gameplayRandomOptionIndex(options.playOption),
        .random2P = gameplayRandomOptionIndex(options.playOption2),
@@ -2028,7 +2037,8 @@ bool GamePlayScene::enterPracticeMenu() {
                           options.gaugeProfile, options.gaugeAutoShiftLowerBound);
     state->isPlaying = false;
     playfieldChartVisualModel =
-        buildPlayfieldChartVisualModel(*chart, options.longNoteMode);
+        buildPlayfieldChartVisualModel(*chart, options.longNoteMode,
+                                     rulesetPolicyBuild.policy->gauge.effectiveTotal);
     initializePlayfieldVisualNoteSources();
     if (playfieldVisualStateStore != nullptr) {
       playfieldVisualStateStore->resetModel(playfieldChartVisualModel);
@@ -2104,7 +2114,8 @@ bool GamePlayScene::preparePracticeAttemptFromMenu(
     builtInPresentation->updateJudgeTimingWindows(judge.timingWindows);
   }
   playfieldChartVisualModel =
-      buildPlayfieldChartVisualModel(*chart, options.longNoteMode);
+      buildPlayfieldChartVisualModel(*chart, options.longNoteMode,
+                                     rulesetPolicyBuild.policy->gauge.effectiveTotal);
   initializePlayfieldVisualNoteSources();
   if (playfieldVisualStateStore != nullptr) {
     playfieldVisualStateStore->resetModel(playfieldChartVisualModel);
@@ -2353,7 +2364,8 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
       .audio = {.context = session.get(),
                 .reserve = &RealtimeGameplaySession::reserveAudio,
                 .commit = &RealtimeGameplaySession::commitAudio,
-                .cancel = &RealtimeGameplaySession::cancelAudio},
+                .cancel = &RealtimeGameplaySession::cancelAudio,
+                .setGain = &RealtimeGameplaySession::setAudioGain},
       .inputMaintenance = {.context = session.get(),
                             .run = &RealtimeGameplaySession::maintainTouchInput},
       .inputTriggeredKeysounds = !options.autoKeySound,
@@ -3225,6 +3237,9 @@ void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
           .gaugeType = source.gaugeType,
           .combo = source.combo,
           .score = source.score,
+          .releaseByBackspin = source.releaseByBackspin,
+          .releaseByHolding = source.releaseByHolding,
+          .audioLanePressed = source.audioLanePressed,
       };
       const bool representable = source.noteId == gameplay::kInvalidNoteId ||
           (source.noteId < session.notes.size() &&
@@ -3383,7 +3398,8 @@ void GamePlayScene::init() {
     playfieldHispeedState->setHispeed(1.0F);
   }
   playfieldChartVisualModel =
-      buildPlayfieldChartVisualModel(*chart, options.longNoteMode);
+      buildPlayfieldChartVisualModel(*chart, options.longNoteMode,
+                                     rulesetPolicyBuild.policy->gauge.effectiveTotal);
   activePersistedScore = context.scoreRepository.LoadChartScoreHistory(
       chart->Meta, options.longNoteMode);
   activeRivalScore.reset();
@@ -4030,7 +4046,8 @@ bool GamePlayScene::reset() {
     const auto replayKeysounds =
         buildReplayKeysoundSchedule(definition, options.replayData->events,
                                     getAudioOffsetMicros(), allowedRange,
-                                    preparationRange);
+                                    preparationRange, options.ruleset,
+                                    options.replayData->audioUpdates);
     context.jukebox.appendScheduledAudioEvents(replayKeysounds);
   }
   playfieldFrameSerial = 0;
@@ -6441,10 +6458,7 @@ void GamePlayScene::capturePlayfieldVisualState(
                  .judgeRank = practice::sourcePracticeJudgeRank(
                      chart->Meta.KeyMode, chart->Meta.Rank,
                      rulesetPolicyBuild.policy->judge.rules().effectiveJudgeRankPercent),
-                 .chartTotal = playfieldChartVisualModel.staticMetadata
-                                   .songInformation
-                                       .value_or(PlayfieldSongInformation{})
-                                       .total,
+                 .chartTotal = rulesetPolicyBuild.policy->gauge.effectiveTotal,
                  .keyMode = playfieldChartVisualModel.keyCount,
                  .random1P = gameplayRandomOptionIndex(playOptions.option),
                  .random2P = gameplayRandomOptionIndex(playOptions.option2),
@@ -7685,7 +7699,8 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
     if (result.keySoundNote != nullptr &&
         result.keySoundNote->Wav != bms_parser::Parser::NoWav &&
         !options.autoKeySound && !isReplayPlayback()) {
-      context.jukebox.playKeySound(result.keySoundNote->Wav);
+      context.jukebox.playKeySound(result.keySoundNote->Wav,
+          reinterpret_cast<std::uintptr_t>(result.keySoundNote));
     }
     if (result.hasReplayEvent) {
       const auto &event = result.replayEvent;
@@ -7694,6 +7709,7 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
     }
     return result.note;
   }
+  processLegacyPendingReleases(gameplayTimeMicros);
   const bool lr2 = rulesetPolicyBuild.policy->judge.rules().ruleset ==
                    GameplayRuleset::LR2;
   if (lr2) {
@@ -7712,9 +7728,13 @@ bms_parser::Note *GamePlayScene::pressLane(int mainLane, int compensateLane,
   if (result.keySoundNote != nullptr &&
       result.keySoundNote->Wav != bms_parser::Parser::NoWav &&
       !options.autoKeySound && !isReplayPlayback()) {
-    context.jukebox.playKeySound(result.keySoundNote->Wav);
+    context.jukebox.playKeySound(result.keySoundNote->Wav,
+          reinterpret_cast<std::uintptr_t>(result.keySoundNote));
   }
   for (const auto &transaction : result.transactions) {
+    if (transaction.gainNote != nullptr && !options.autoKeySound && !isReplayPlayback())
+      context.jukebox.setKeysoundVoiceGain(
+          reinterpret_cast<std::uintptr_t>(transaction.gainNote), transaction.keysoundGain);
     if (transaction.hasJudge) {
       const long long eventSongTimeMicros =
           transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros
@@ -7782,6 +7802,7 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
     }
     return result.note;
   }
+  processLegacyPendingReleases(gameplayTimeMicros);
   const bool lr2 = rulesetPolicyBuild.policy->judge.rules().ruleset ==
                    GameplayRuleset::LR2;
   if (lr2) {
@@ -7798,6 +7819,15 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
       laneInputController->releaseLane(lane, inputContext, isBackSpin);
   updateLaneStateText();
   for (const auto &transaction : result.transactions) {
+    if (transaction.gainNote != nullptr && !options.autoKeySound && !isReplayPlayback())
+      context.jukebox.setKeysoundVoiceGain(
+          reinterpret_cast<std::uintptr_t>(transaction.gainNote), transaction.keysoundGain);
+    if (transaction.keySoundNote != nullptr &&
+        transaction.keySoundNote->Wav != bms_parser::Parser::NoWav &&
+        !options.autoKeySound && !isReplayPlayback()) {
+      context.jukebox.playKeySound(transaction.keySoundNote->Wav,
+          reinterpret_cast<std::uintptr_t>(transaction.keySoundNote));
+    }
     if (transaction.hasJudge) {
       const long long eventSongTimeMicros =
           transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros
@@ -7810,13 +7840,32 @@ bms_parser::Note *GamePlayScene::releaseLane(int lane, double inputDelay,
       const auto &event = transaction.replayEvent;
       appendReplayEvent(event.action, event.lane, event.note,
                         event.songTimeMicros, event.judgeTimeMicros,
-                        event.judge, !lr2);
+                        event.judge, !lr2, isBackSpin);
     }
   }
   if (lr2) (void)finishIfGaugeFailed();
   return result.note;
 }
+void GamePlayScene::processLegacyPendingReleases(long long time) {
+  if (laneInputController == nullptr || isReplayPlayback()) return;
+  for (const auto &transaction : laneInputController->advancePendingReleases(time)) {
+    if (!options.autoKeySound) {
+      if (transaction.gainNote != nullptr)
+        context.jukebox.setKeysoundVoiceGain(
+            reinterpret_cast<std::uintptr_t>(transaction.gainNote), transaction.keysoundGain);
+      if (transaction.keySoundNote != nullptr && transaction.keySoundNote->Wav != bms_parser::Parser::NoWav)
+        context.jukebox.playKeySound(transaction.keySoundNote->Wav,
+            reinterpret_cast<std::uintptr_t>(transaction.keySoundNote));
+    }
+    onJudge(transaction.judge, judgeEventClock(time), false, transaction.note);
+    const auto &event = transaction.replayEvent;
+    appendReplayEvent(event.action, event.lane, event.note,
+                      event.songTimeMicros, event.judgeTimeMicros, event.judge);
+  }
+}
+
 void GamePlayScene::checkPassedTimeline(long long time) {
+  processLegacyPendingReleases(time);
   const auto &measures = chart->Measures;
   if (state == nullptr || backgroundGaugeFailurePending) {
     return;
@@ -7836,12 +7885,17 @@ void GamePlayScene::checkPassedTimeline(long long time) {
         tail->Timeline == nullptr || tail->Timeline->Timing > judgedTime ||
         !effectiveLongNoteIsClassic(tail, chart, options.longNoteMode)) continue;
     tail->Release(judgedTime);
+    if (tail->Wav != bms_parser::Parser::NoWav && !options.autoKeySound &&
+        !replayPlayback) {
+      context.jukebox.playKeySound(tail->Wav,
+          reinterpret_cast<std::uintptr_t>(tail));
+    }
     const auto judgeResult = judgeClassicLongNoteRelease(
         rulesetPolicyBuild.policy->judge, chart->Meta, options.longNoteMode,
         tail, judgedTime);
     onJudge(judgeResult, eventClock, false, tail);
     appendReplayEvent(ReplayEventAction::Release, tail->Lane, tail,
-                      time, judgedTime, judgeResult);
+                      time, judgedTime, judgeResult, true, false, true);
   }
   for (size_t i = state->passedMeasureCount; i < measures.size(); i++) {
     const bool isFirstMeasure = i == state->passedMeasureCount;
@@ -7889,6 +7943,12 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                   JudgeResult(Poor, judgedTime - timeline->Timing);
               if (!longNote->IsTail()) {
                 markLongNoteMissed(longNote, judgedTime);
+                if (laneInputController != nullptr && !options.autoKeySound) {
+                  const auto audio = laneInputController->onMissedNote(longNote, judgedTime);
+                  if (audio.gainNote != nullptr)
+                    context.jukebox.setKeysoundVoiceGain(
+                        reinterpret_cast<std::uintptr_t>(audio.gainNote), audio.keysoundGain);
+                }
                 onJudge(poorResult, eventClock, false, note);
                 appendReplayEvent(ReplayEventAction::Miss, note->Lane, note,
                                   time, judgedTime, poorResult);
@@ -7967,6 +8027,11 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                 continue;
               }
               longNote->Release(judgedTime);
+              if (longNote->Wav != bms_parser::Parser::NoWav &&
+                  !options.autoKeySound && !replayPlayback) {
+                context.jukebox.playKeySound(longNote->Wav,
+          reinterpret_cast<std::uintptr_t>(longNote));
+              }
               const auto judgeResult =
                   chargeLongNote
                       ? normalizeLongNoteReleaseJudge(
@@ -7979,7 +8044,7 @@ void GamePlayScene::checkPassedTimeline(long long time) {
                             options.longNoteMode, longNote, judgedTime);
               onJudge(judgeResult, eventClock, false, note);
               appendReplayEvent(ReplayEventAction::Release, note->Lane, note,
-                                time, judgedTime, judgeResult);
+                                time, judgedTime, judgeResult, true, false, !chargeLongNote);
               if (options.autoPlay) {
                 presentationEventFanout->onLaneReleased(note->Lane,
                                                          visualEventMicros);
@@ -8270,6 +8335,12 @@ void GamePlayScene::updateHellChargeGauge(long long gameplayTimeMicros) {
   }
   lastHellChargeGaugeUpdateMicros = gameplayTimeMicros;
 
+  if (laneInputController != nullptr && !options.autoKeySound && !options.autoPlay) {
+    for (const auto &audio : laneInputController->advanceHellChargeVoices(gameplayTimeMicros))
+      context.jukebox.setKeysoundVoiceGain(
+          reinterpret_cast<std::uintptr_t>(audio.gainNote), audio.keysoundGain);
+  }
+
   const auto applyGaugeTick = [&](Judgement judgement) {
     state->applyGaugeJudgementRate(judgement, 0.5f);
     updateGaugeStatusText();
@@ -8394,7 +8465,8 @@ void GamePlayScene::detonateLandmine(bms_parser::LandmineNote *note,
 
   if (note->Wav != bms_parser::Parser::NoWav && !options.autoKeySound &&
       !isReplayPlayback()) {
-    context.jukebox.playKeySound(note->Wav);
+    context.jukebox.playKeySound(note->Wav,
+          reinterpret_cast<std::uintptr_t>(note));
   }
 
   if (state != nullptr) {
@@ -8483,7 +8555,8 @@ void GamePlayScene::appendReplayEvent(ReplayEventAction action, int lane,
                                       long long songTimeMicros,
                                       long long judgeTimeMicros,
                                       const JudgeResult &judgeResult,
-                                      bool checkGaugeFailure) {
+                                      bool checkGaugeFailure, bool releaseByBackspin,
+                                      bool releaseByHolding) {
   const auto capturePolicy = resultCapturePolicy();
   if (backgroundGaugeFailurePending || state == nullptr || state->isEnding) {
     return;
@@ -8504,6 +8577,9 @@ void GamePlayScene::appendReplayEvent(ReplayEventAction action, int lane,
     event.judgeTimeMicros = judgeTimeMicros;
     event.judgement = judgeResult.judgement;
     event.diffMicros = judgeResult.Diff;
+    event.releaseByBackspin = releaseByBackspin;
+    event.releaseByHolding = releaseByHolding;
+    if (lane >= 0) event.audioLanePressed = laneIsPressed(lanePressed, lane) || releaseByBackspin;
     event.gauge = state->currentGauge;
     event.gaugeType = state->gaugeType;
     event.combo = state->combo;
@@ -8804,7 +8880,8 @@ JudgeResult GamePlayScene::pressNote(bms_parser::Note *note,
   }
   if (note->Wav != bms_parser::Parser::NoWav && !options.autoKeySound &&
       !isReplayPlayback()) {
-    context.jukebox.playKeySound(note->Wav);
+    context.jukebox.playKeySound(note->Wav,
+          reinterpret_cast<std::uintptr_t>(note));
   }
   const long long eventSongTimeMicros =
       songTimeMicros >= 0 ? songTimeMicros : pressedTime;

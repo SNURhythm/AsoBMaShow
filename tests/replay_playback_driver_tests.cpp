@@ -4,10 +4,13 @@
 #include "replay/ReplaySetupAdapter.h"
 
 #include "ReplayData.h"
+#include "audio/AudioMix.h"
 #include "ReplayGhostUtils.h"
 #include "ScoreProvenance.h"
 #include "bms_parser.hpp"
+#include "BmsonReleaseFixture.h"
 #include "scene/play/GameplaySimulation.h"
+#include "scene/play/ReplayKeysoundSchedule.h"
 #include "scene/play/GameplayRulesetPolicy.h"
 #include "scene/play/Pacemaker.h"
 
@@ -434,6 +437,399 @@ void testConcreteMaterializerBuildsConsumerTrackDespiteResultDisagreement() {
          "a detached graph alone does not reject a track without detached result events");
 }
 
+void testRawScratchCompletionAudioOrdering() {
+  for (const int type : {1, 2, 3}) {
+    auto chart = bmsonReleaseWithSentinelFixture(type);
+    auto saved = savedResult();
+    ScoreProvenanceBuildInput input;
+    input.chartMeta = chart->Meta;
+    input.ruleset = RulesetDescriptor::For(GameplayRuleset::LR2);
+    input.longNoteMode = type;
+    input.sourceJudgeRank = chart->Meta.Rank;
+    input.effectiveJudgeContexts = gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2).contexts;
+    input.candidateSelection = gameplay::CandidateSelectionMode::Combo;
+    input.totalNotes = chart->Meta.TotalNotes;
+    input.authoredGaugeTotal = input.effectiveGaugeTotal = 200;
+    input.inputDevices = {InputDeviceCategory::Keyboard};
+    saved.score.provenance = makeScoreProvenance(input);
+    saved.score.chartPath = chart->Meta.BmsPath.string();
+    auto replay = document();
+    replay.timeBounds = {.completionSongTimeMicros = 6'000'000};
+    replay.playback.setup.ruleset = input.ruleset;
+    replay.playback.setup.longNoteMode = type;
+    replay.playback.setup.candidateSelection = input.candidateSelection;
+    replay.playback.touchSamples.clear();
+    const auto definition = gameplay::buildGameplayDefinition(*chart, type);
+    const auto edge = [](long long time, bool clockwise, bool pressed) {
+      return InputTransition{.songTimeMicros = time,
+          .control = {.kind = clockwise ? LogicalControlKind::ScratchClockwise
+                                        : LogicalControlKind::ScratchCounterClockwise, .player = 1},
+          .pressed = pressed};
+    };
+    for (const auto time : {1'999'999LL, 2'000'000LL, 2'000'001LL, 2'000'002LL})
+      for (bool clockwise : {false, true}) for (int handoff : {0, 1, 2}) {
+        replay.playback.input = {edge(1'000'000, clockwise, true)};
+        if (handoff == 1) replay.playback.input.push_back(edge(time, clockwise, false));
+        replay.playback.input.push_back(edge(time, !clockwise, true));
+        if (handoff == 2) replay.playback.input.push_back(edge(time, clockwise, false));
+        const auto loaded = ReplayPlaybackMaterializer::materializeForConsumers(replay, saved, *chart);
+        expect(loaded.playable(), "scratch release boundary raw replay materializes");
+        if (!loaded.replayData) continue;
+        const auto sounds = resolveReplayKeysounds(definition, loaded.replayData->events,
+                                                   std::nullopt, std::nullopt, GameplayRuleset::LR2);
+        const int heads = std::ranges::count(sounds, definition.note(0).wav, &ReplayKeysoundEvent::wav);
+        const int tails = std::ranges::count(sounds, definition.note(1).wav, &ReplayKeysoundEvent::wav);
+        // Physical CW is judged before CCW, regardless of capture order.
+        const bool releasedBeforePress = handoff != 0 && clockwise;
+        expect(heads == (type == 1 && (time > 2'000'001 || releasedBeforePress) ? 2 : 1) && tails == 1,
+               "materialized hold suppresses only pre-resolution presses and preserves authored tail once");
+      }
+    replay.playback.input = {edge(1'000'000, false, true),
+        {.songTimeMicros = 2'300'001,
+         .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 0}, .pressed = true},
+        edge(2'400'000, false, false), edge(2'500'000, true, true)};
+    const auto loaded = ReplayPlaybackMaterializer::materializeForConsumers(replay, saved, *chart);
+    expect(loaded.playable(), "post-resolution raw replay stays active through its sentinel");
+    if (!loaded.replayData) continue;
+    const auto &events = loaded.replayData->events;
+    expect(std::ranges::any_of(events, [&](const auto &event) {
+      return event.noteTimeMicros == 2'000'000 &&
+          (type == 1 ? event.action == ReplayEventAction::Release && event.releaseByHolding
+                     : event.action == ReplayEventAction::Miss);
+    }), "raw track explicitly resolves the held classic tail or missed charge tail");
+    const auto sounds = resolveReplayKeysounds(definition, events, std::nullopt);
+    expect(std::ranges::any_of(sounds, [](const auto &sound) {
+      return !sound.setVoiceGain && sound.songTimeMicros == 2'500'000;
+    }), "legitimate empty press after Release/Miss remains audible");
+  }
+}
+
+void testRawLateClassicReplayAudio() {
+  for (bool scratch : {false, true}) for (bool handoff : {false, true}) {
+    if (handoff && !scratch) continue;
+    auto chart = bmsonLateClassicFixture(scratch);
+    auto saved = savedResult();
+    ScoreProvenanceBuildInput input;
+    input.chartMeta = chart->Meta;
+    input.ruleset = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+    input.longNoteMode = 1;
+    input.sourceJudgeRank = 2;
+    input.effectiveJudgeContexts = gameplay::compileGameplayJudgeRules(GameplayRuleset::Beatoraja, 2).contexts;
+    input.candidateSelection = gameplay::CandidateSelectionMode::Combo;
+    input.totalNotes = chart->Meta.TotalNotes;
+    input.authoredGaugeTotal = input.effectiveGaugeTotal = 200;
+    input.inputDevices = {InputDeviceCategory::Keyboard};
+    saved.score.provenance = makeScoreProvenance(input);
+    saved.score.chartPath = chart->Meta.BmsPath.string();
+    auto replay = document();
+    replay.timeBounds = {.completionSongTimeMicros = 2'800'000};
+    replay.playback.setup.ruleset = input.ruleset;
+    replay.playback.setup.longNoteMode = 1;
+    replay.playback.setup.candidateSelection = input.candidateSelection;
+    replay.playback.touchSamples.clear();
+    replay.playback.input.clear();
+    for (const auto [time, pressed] : std::array{
+             std::pair{1'064'000LL, true}, std::pair{1'456'000LL, false}, std::pair{2'287'000LL, true}})
+      replay.playback.input.push_back({.songTimeMicros = time,
+          .control = {.kind = scratch ? LogicalControlKind::ScratchClockwise : LogicalControlKind::Lane,
+                      .player = 1, .lane = scratch ? -1 : 0}, .pressed = pressed});
+    if (handoff) {
+      replay.playback.input.resize(2);
+      replay.playback.input.push_back({.songTimeMicros = 1'456'000,
+          .control = {.kind = LogicalControlKind::ScratchCounterClockwise, .player = 1}, .pressed = true});
+      replay.playback.input.push_back({.songTimeMicros = 2'687'000,
+          .control = {.kind = LogicalControlKind::ScratchCounterClockwise, .player = 1}, .pressed = false});
+      replay.playback.input.push_back({.songTimeMicros = 2'687'000,
+          .control = {.kind = LogicalControlKind::ScratchClockwise, .player = 1}, .pressed = true});
+    }
+    const auto loaded = ReplayPlaybackMaterializer::materializeForConsumers(replay, saved, *chart);
+    expect(loaded.playable() && loaded.replayData, "late classic raw fixture materializes");
+    if (!loaded.replayData) continue;
+    expect(std::ranges::none_of(loaded.replayData->events, [](const auto &event) {
+      return event.noteTimeMicros == 1'050'000;
+    }), "late classic audio fix preserves the absence of a scored tail resolution");
+    SoundData sound;
+    sound.channels = 1; sound.monophonic = true; sound.outputFrameCount = 3000;
+    std::vector<short> source(3000, 3000);
+    std::fill_n(source.begin(), 1000, 1000);
+    sound.outputData = std::move(source);
+    AudioCallbackState state;
+    const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+    for (const auto &event : buildReplayKeysoundSchedule(definition, loaded.replayData->events,
+             0, std::nullopt, std::nullopt, GameplayRuleset::Beatoraja, loaded.replayData->audioUpdates))
+      expect(audio::playback::InsertScheduledSound(state,
+          {.soundData = &sound, .bus = event.bus, .startMicros = event.timeMicros,
+           .gain = event.gain, .voiceId = event.voiceId, .setVoiceGain = event.setVoiceGain}), "late classic raw audio schedules");
+    std::vector<float> pcm(2800);
+    audio::playback::ActivateScheduledSounds(state, 0, 1000, pcm.size(), 100);
+    audio::playback::MixActiveSounds(state, pcm, pcm.size(), 1, 1, 1, 100);
+    expect(std::abs(pcm[handoff ? 2700 : 2300] * 32768 - 900) < 1,
+           "raw late classic replay preserves the live fallback retrigger PCM");
+  }
+}
+
+void testRawAdjacentHcnAudio() {
+  for (const auto ruleset : {GameplayRuleset::LR2, GameplayRuleset::Beatoraja})
+    for (bool scratch : {false, true}) for (bool nextHcn : {false, true})
+      for (const long long pressTime : {1'900'000LL, 1'990'000LL})
+        for (bool preHeadRetrigger : {false, true}) {
+        auto chart = bmsonAdjacentHcnFixture(nextHcn, scratch);
+        auto saved = savedResult();
+        ScoreProvenanceBuildInput input;
+        input.chartMeta = chart->Meta;
+        input.ruleset = RulesetDescriptor::For(ruleset);
+        input.longNoteMode = 3;
+        input.sourceJudgeRank = chart->Meta.Rank;
+        input.effectiveJudgeContexts = gameplay::compileGameplayJudgeRules(ruleset, 2).contexts;
+        input.candidateSelection = gameplay::CandidateSelectionMode::Combo;
+        input.totalNotes = chart->Meta.TotalNotes;
+        input.authoredGaugeTotal = input.effectiveGaugeTotal = 200;
+        input.inputDevices = {InputDeviceCategory::Keyboard};
+        saved.score.provenance = makeScoreProvenance(input);
+        saved.score.chartPath = chart->Meta.BmsPath.string();
+        auto replay = document();
+        replay.timeBounds = {.completionSongTimeMicros = 2'000'000};
+        replay.playback.setup.ruleset = input.ruleset;
+        replay.playback.setup.longNoteMode = 3;
+        replay.playback.setup.candidateSelection = input.candidateSelection;
+        replay.playback.touchSamples.clear();
+        replay.playback.input.clear();
+        const long long releaseTime = pressTime == 1'900'000 ? 1'950'000 : 1'995'000;
+        for (const auto [time, pressed] : std::array{
+                 std::pair{1'000'000LL, true}, std::pair{1'200'000LL, false},
+                 std::pair{pressTime, true}, std::pair{releaseTime, false}})
+          replay.playback.input.push_back({.songTimeMicros = time,
+              .control = {.kind = scratch ? LogicalControlKind::ScratchClockwise : LogicalControlKind::Lane,
+                          .player = 1, .lane = scratch ? -1 : 0}, .pressed = pressed});
+        if (preHeadRetrigger) {
+          const auto control = replay.playback.input.front().control;
+          replay.playback.input[0].songTimeMicros = 900'000;
+          replay.playback.input[1].songTimeMicros = 920'000;
+          replay.playback.input.insert(replay.playback.input.begin() + 2, {
+              InputTransition{.songTimeMicros = 950'000, .control = control, .pressed = true},
+              InputTransition{.songTimeMicros = 980'000, .control = control, .pressed = false},
+              InputTransition{.songTimeMicros = 1'010'000,
+                              .control = {.kind = LogicalControlKind::Start, .player = 1}, .pressed = true},
+              InputTransition{.songTimeMicros = 1'100'000,
+                              .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 1},
+                              .pressed = true}});
+        }
+        if (preHeadRetrigger)
+          replay.playback.input.insert(replay.playback.input.begin(),
+              {.songTimeMicros = -100'000,
+               .control = {.kind = LogicalControlKind::Select, .player = 1}, .pressed = true});
+        const auto loaded = ReplayPlaybackMaterializer::materializeForConsumers(replay, saved, *chart);
+        expect(loaded.playable() && loaded.replayData, "raw adjacent HCN fixture materializes");
+        if (!loaded.replayData) continue;
+        expect(std::ranges::any_of(loaded.replayData->events, [&](const auto &event) {
+          return event.action == ReplayEventAction::Press && event.songTimeMicros == pressTime &&
+                 event.noteTimeMicros == 2'100'000;
+        }), "re-press remains a judgement of the upcoming note");
+        const auto definition = gameplay::buildGameplayDefinition(*chart, 3);
+        std::array<SoundData, 3> sounds;
+        for (std::size_t i = 0; i < sounds.size(); ++i) {
+          sounds[i].channels = 1;
+          sounds[i].monophonic = true;
+          sounds[i].outputData = std::vector<short>(4000, i == 0 ? 1000 : i == 1 ? 200 : 50);
+          sounds[i].outputFrameCount = 4000;
+        }
+        AudioCallbackState state;
+        std::uint64_t sequence = 0;
+        for (const auto &event : buildReplayKeysoundSchedule(definition, loaded.replayData->events,
+                 0, std::nullopt, std::nullopt, ruleset, loaded.replayData->audioUpdates)) {
+          const int index = event.wav == definition.keysoundSource(0).wav ? 0
+              : event.wav == definition.keysoundSource(2).wav ? 1 : 2;
+          expect(audio::playback::InsertScheduledSound(state,
+              {.soundData = &sounds[index], .bus = event.bus, .startMicros = event.timeMicros,
+               .sequence = sequence++, .gain = event.gain, .voiceId = event.voiceId,
+               .setVoiceGain = event.setVoiceGain}), "raw adjacent HCN audio schedules");
+        }
+        std::vector<float> pcm(2000);
+        audio::playback::ActivateScheduledSounds(state, 0, 1000, 2000, 100);
+        audio::playback::MixActiveSounds(state, pcm, 2000, 1, 1, 1, 100);
+        if (preHeadRetrigger) {
+          expect(std::ranges::any_of(loaded.replayData->audioUpdates, [](const auto &update) {
+            return update.songTimeMicros == -100'000 && update.beforeEventIndex == 0;
+          }), "canonical audio retains the driver's negative preparation-time boundary");
+          expect(std::ranges::none_of(loaded.replayData->events, [](const auto &event) {
+            return event.songTimeMicros == 1'010'000;
+          }), "ignored raw command boundary does not invent a scoring event");
+          expect(std::abs(pcm[1050] * 32768) < 1 && std::abs(pcm[1150] * 32768) < 1,
+                 "raw replay retains silent input boundaries and later cross-lane HCN updates");
+        }
+        const int pressedPcm = 1080;
+        const bool acceptedNextHead = nextHcn &&
+            (ruleset == GameplayRuleset::LR2 || pressTime == 1'990'000);
+        const int releasedPcm = acceptedNextHead ? 45 : 180;
+        expect(std::abs(pcm[pressTime / 1000 + 1] * 32768 - pressedPcm) < 1 &&
+                   std::abs(pcm[releaseTime / 1000 + 1] * 32768 - releasedPcm) < 1,
+               "raw replay PCM matches live ruleset restoration and subsequent release of adjacent notes");
+      }
+}
+
+void testRawScratchHcnReconstructsAggregateHeldAudio() {
+  for (bool failedHeldLift : {false, true}) {
+  auto chart = failedHeldLift ? bmsonScratchHcnAuxiliaryFixture() : bmsonReleaseFixture(3, 8, false, 960);
+  auto saved = savedResult();
+  ScoreProvenanceBuildInput input;
+  input.chartMeta = chart->Meta;
+  input.ruleset = RulesetDescriptor::For(GameplayRuleset::LR2);
+  input.longNoteMode = 3;
+  input.sourceJudgeRank = chart->Meta.Rank;
+  input.effectiveJudgeContexts = gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2).contexts;
+  input.candidateSelection = gameplay::CandidateSelectionMode::Combo;
+  input.totalNotes = chart->Meta.TotalNotes;
+  input.authoredGaugeTotal = input.effectiveGaugeTotal = 200;
+  input.inputDevices = {InputDeviceCategory::Keyboard};
+  saved.score.provenance = makeScoreProvenance(input);
+  saved.score.chartPath = chart->Meta.BmsPath.string();
+  auto replay = document();
+  replay.playback.setup.chart.keyMode = chart->Meta.KeyMode;
+  replay.timeBounds = {.completionSongTimeMicros = 4'000'000};
+  replay.playback.setup.ruleset = input.ruleset;
+  replay.playback.setup.longNoteMode = 3;
+  replay.playback.setup.candidateSelection = input.candidateSelection;
+  replay.playback.touchSamples.clear();
+  replay.playback.input = {
+      {.songTimeMicros = 1'000'000,
+       .control = {.kind = LogicalControlKind::ScratchClockwise, .player = 1}, .pressed = true},
+      {.songTimeMicros = 1'300'000,
+       .control = {.kind = LogicalControlKind::ScratchCounterClockwise, .player = 1}, .pressed = true},
+      {.songTimeMicros = 1'400'000,
+       .control = {.kind = LogicalControlKind::ScratchClockwise, .player = 1}, .pressed = false},
+      {.songTimeMicros = 1'500'000,
+       .control = {.kind = LogicalControlKind::ScratchCounterClockwise, .player = 1}, .pressed = false}};
+  if (failedHeldLift) {
+    replay.playback.input.clear();
+    for (const auto [time, clockwise, pressed] : std::array{
+             std::tuple{500'000LL, false, true}, std::tuple{1'000'000LL, true, true},
+             std::tuple{1'300'000LL, true, false}, std::tuple{1'400'000LL, true, true},
+             std::tuple{1'500'000LL, true, false}, std::tuple{1'600'000LL, false, false}})
+      replay.playback.input.push_back({.songTimeMicros = time,
+          .control = {.kind = clockwise ? LogicalControlKind::ScratchClockwise : LogicalControlKind::ScratchCounterClockwise,
+                      .player = 1}, .pressed = pressed});
+  }
+  const auto loaded = ReplayPlaybackMaterializer::materializeForConsumers(replay, saved, *chart);
+  expect(loaded.playable() && loaded.replayData, "raw overlapping scratch input materializes");
+  if (!loaded.replayData) return;
+  if (!failedHeldLift) {
+  const auto partial = std::ranges::find_if(loaded.replayData->events, [](const auto &event) {
+    return event.action == ReplayEventAction::Release && event.songTimeMicros == 1'400'000;
+  });
+  const auto final = std::ranges::find_if(loaded.replayData->events, [](const auto &event) {
+    return event.action == ReplayEventAction::Release && event.songTimeMicros == 1'500'000;
+  });
+  expect(partial != loaded.replayData->events.end() && partial->audioLanePressed == true &&
+             final != loaded.replayData->events.end() && final->audioLanePressed == false,
+         "materialization regenerates physical aggregate state from both scratch controls");
+  }
+  const auto definition = gameplay::buildGameplayDefinition(*chart, 3);
+  const auto audio = resolveReplayKeysounds(definition, loaded.replayData->events, std::nullopt,
+      std::nullopt, GameplayRuleset::LR2, loaded.replayData->audioUpdates);
+  if (failedHeldLift) {
+    const auto &events = loaded.replayData->events;
+    const auto release = std::ranges::find_if(events, [](const auto &event) {
+      return event.action == ReplayEventAction::Release && event.songTimeMicros == 1'300'000 &&
+             event.judgement == Poor && event.audioLanePressed == true;
+    });
+    expect(release != events.end() && std::any_of(std::next(release), events.end(), [](const auto &event) {
+      return event.action == ReplayEventAction::Miss && event.songTimeMicros == 1'300'000;
+    }), "canonical auxiliary misses follow the failed held release at the same timestamp");
+    expect(release != events.end() && std::ranges::any_of(loaded.replayData->audioUpdates, [&](const auto &update) {
+      return update.lane == 7 && update.gain == 0 && update.songTimeMicros == 1'300'000 &&
+             update.beforeEventIndex == static_cast<std::size_t>(release - events.begin());
+    }), "canonical failed-release gain retains its exact event position before subsequent misses");
+    SoundData sound;
+    sound.channels = 1; sound.monophonic = true; sound.outputFrameCount = 4000;
+    sound.outputData = std::vector<short>(4000, 1000);
+    AudioCallbackState state;
+    std::uint64_t sequence = 0;
+    for (const auto &event : audio)
+      expect(audio::playback::InsertScheduledSound(state,
+          {.soundData = &sound, .bus = audio::Bus::Keysound, .startMicros = event.songTimeMicros,
+           .sequence = sequence++, .gain = event.gain, .voiceId = event.voiceId,
+           .setVoiceGain = event.setVoiceGain}), "canonical same-time scratch audio schedules");
+    std::vector<float> pcm(1700);
+    audio::playback::ActivateScheduledSounds(state, 0, 1000, pcm.size(), 100);
+    audio::playback::MixActiveSounds(state, pcm, pcm.size(), 1, 1, 1, 100);
+    expect(pcm[1350] == 0 && std::abs(pcm[1450] * 32768 - 900) < 1 && pcm[1650] == 0,
+           "canonical same-time auxiliary events match worker mute/recovery PCM");
+    continue;
+  }
+  expect(audio.size() == 2 && !audio[0].setVoiceGain && audio[0].songTimeMicros == 1'000'000 &&
+             audio[1].setVoiceGain && audio[1].gain == 0 && audio[1].songTimeMicros == 1'500'000 &&
+             audio[0].voiceId == audio[1].voiceId,
+         "raw scratch reconstruction mutes the original voice only when both directions are lifted");
+  }
+}
+
+void testRawMissedHcnPreviewReconstructsAudio() {
+  auto chart = oneNoteChart();
+  chart.Meta.LnMode = 3;
+  chart.Meta.TotalNotes = 2;
+  chart.Meta.TotalLongNotes = 1;
+  auto *headTimeline = chart.Measures.front()->TimeLines.front();
+  delete headTimeline->Notes[0];
+  auto *head = new bms_parser::LongNote(1, bms_parser::LongNoteType::HellChargeNote);
+  auto *tail = new bms_parser::LongNote(bms_parser::Parser::NoWav, bms_parser::LongNoteType::HellChargeNote);
+  head->Tail = tail; tail->Head = head;
+  headTimeline->Timing = 1'000'000;
+  headTimeline->SetNote(0, head);
+  auto *tailTimeline = new bms_parser::TimeLine(8, false);
+  tailTimeline->Timing = 3'000'000;
+  tailTimeline->SetNote(0, tail);
+  chart.Measures.front()->TimeLines.push_back(tailTimeline);
+  auto saved = savedResult();
+  ScoreProvenanceBuildInput input;
+  input.chartMeta = chart.Meta;
+  input.ruleset = RulesetDescriptor::For(GameplayRuleset::LR2);
+  input.longNoteMode = 3;
+  input.sourceJudgeRank = chart.Meta.Rank;
+  input.effectiveJudgeContexts = gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2).contexts;
+  input.candidateSelection = gameplay::CandidateSelectionMode::Combo;
+  input.totalNotes = 2;
+  input.authoredGaugeTotal = input.effectiveGaugeTotal = 200;
+  input.inputDevices = {InputDeviceCategory::Keyboard};
+  saved.score.provenance = makeScoreProvenance(input);
+  saved.score.chartPath = chart.Meta.BmsPath.string();
+  auto replay = document();
+  replay.timeBounds = {.completionSongTimeMicros = 4'000'000};
+  replay.playback.setup.ruleset = input.ruleset;
+  replay.playback.setup.longNoteMode = 3;
+  replay.playback.setup.candidateSelection = input.candidateSelection;
+  replay.playback.touchSamples.clear();
+  replay.playback.input.clear();
+  for (const auto &[time, pressed] : std::array<std::pair<long long, bool>, 4>{{
+           {500'000, true}, {600'000, false}, {1'600'000, true}, {1'700'000, false}}})
+    replay.playback.input.push_back({.songTimeMicros = time,
+        .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 0}, .pressed = pressed});
+  for (bool interveningUpdate : {false, true}) {
+    auto capture = replay;
+    if (interveningUpdate) capture.playback.input.insert(capture.playback.input.begin() + 2,
+        {.songTimeMicros = 1'300'000,
+         .control = {.kind = LogicalControlKind::Lane, .player = 1, .lane = 1}, .pressed = true});
+    const auto loaded = ReplayPlaybackMaterializer::materializeForConsumers(capture, saved, chart);
+    expect(loaded.playable() && loaded.replayData, "raw missed-preview track materializes");
+    if (!loaded.replayData) continue;
+    expect(std::ranges::count(loaded.replayData->events, ReplayEventAction::Miss, &ReplayEvent::action) == 2,
+           "raw input reconstructs the HCN head/tail misses without altered judgement facts");
+    const auto definition = gameplay::buildGameplayDefinition(chart, 3);
+    const auto audio = resolveReplayKeysounds(definition, loaded.replayData->events, std::nullopt);
+    // LR2 reconstructs updates at raw input boundaries. Without the intervening
+    // input, its Miss resolves while already reheld at 1.6s; audio must follow
+    // that resolved state, without inventing a different judgement cadence.
+    expect(audio.size() == (interveningUpdate ? 4 : 2) &&
+               !audio[0].setVoiceGain && audio[0].songTimeMicros == 500'000 &&
+               audio.back().setVoiceGain && audio.back().gain == 0 &&
+               audio.back().songTimeMicros == 1'700'000 &&
+               audio[0].voiceId == audio.back().voiceId &&
+               (!interveningUpdate || (audio[1].setVoiceGain && audio[1].gain == 0 &&
+                   audio[1].songTimeMicros == 1'300'000 && audio[2].setVoiceGain &&
+                   audio[2].gain == 1 && audio[2].songTimeMicros == 1'600'000)),
+           "raw materialization reconstructs preview/miss/rehold audio with one original voice");
+  }
+}
+
 void testHeldClassicReplayMatchesLiveJudgementAndBestGhost() {
   for (const auto ruleset : {GameplayRuleset::LR2, GameplayRuleset::Beatoraja}) {
     for (const std::int64_t releaseTime : {600'000LL, 750'000LL, 750'001LL, 750'002LL, 950'000LL, -1LL}) {
@@ -512,6 +908,26 @@ void testHeldClassicReplayMatchesLiveJudgementAndBestGhost() {
                  loaded.replayData->finalScore == saved->score.score,
              "saved classic LN replay agrees with live score for early, exact, late, and absent lifts");
       if (!loaded.replayData) continue;
+      if (releaseTime < 0) {
+        // Only raw input is stored. A BAD head held past the tail must recover
+        // its completion cause instead of looking like a failed physical lift.
+        auto badHeadReplay = replay;
+        badHeadReplay.playback.input.front().songTimeMicros = 350'000;
+        const auto badHead = ReplayPlaybackMaterializer::materializeForConsumers(
+            badHeadReplay, *saved, chart);
+        expect(badHead.playable() && badHead.replayData,
+               "BAD-head raw replay still materializes despite different saved score");
+        if (badHead.replayData) {
+          const auto completion = std::ranges::find_if(badHead.replayData->events,
+              [](const auto &event) {
+                return event.action == ReplayEventAction::Release &&
+                       event.noteTimeMicros == 750'000;
+              });
+          expect(completion != badHead.replayData->events.end() &&
+                     completion->judgement == Bad && completion->releaseByHolding,
+                 "raw-input materialization regenerates held BAD completion for audio consumers");
+        }
+      }
       const auto ghosts = replay_ghost::buildReplayGhostEvents(*loaded.replayData,
           std::vector<const bms_parser::TimeLine *>{headTimeline, tailTimeline},
           std::unordered_map<int, size_t>{{0, 0}},
@@ -1300,6 +1716,10 @@ void testAbortedRawReplayReconstructsFailureWithoutTrustingSummary() {
           expect(accepted.replayData && accepted.replayData->abortedAtSongTimeMicros ==
                                           raw.timeBounds.completionSongTimeMicros,
                  "COR02: agreed consumer track retains the terminal abort boundary");
+          expect(accepted.replayData && std::ranges::all_of(accepted.replayData->audioUpdates, [&](const auto &update) {
+            return update.beforeEventIndex <= accepted.replayData->events.size() &&
+                   update.songTimeMicros <= raw.timeBounds.completionSongTimeMicros;
+          }), "runtime audio phases stop at accepted events before abort-only score finalization");
           raw.timeBounds.aborted = false;
           const auto forgedFlag = ReplayPlaybackMaterializer::materializeForConsumers(
               raw, *outcome.judgedResult, chart, 128);
@@ -1363,7 +1783,12 @@ void testEmptyAbortDriverUsesConfiguredPreRoll() {
 }
 
 int main() {
+  testRawLateClassicReplayAudio();
+  testRawAdjacentHcnAudio();
+  testRawScratchCompletionAudioOrdering();
+  testRawScratchHcnReconstructsAggregateHeldAudio();
   testClassicReplayCompletionPreservesOtherLaneMineInput();
+  testRawMissedHcnPreviewReconstructsAudio();
   testHeldClassicReplayMatchesLiveJudgementAndBestGhost();
   testConcreteMaterializerSettlesExactTimeMineInput();
   testEmptyAbortDriverUsesConfiguredPreRoll();

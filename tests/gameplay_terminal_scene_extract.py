@@ -76,9 +76,11 @@ def main():
         "JudgeResult GamePlayScene::releaseNote(",
         "void GamePlayScene::expireGimmickNote(",
         "void GamePlayScene::detonateLandmine(",
+        "void GamePlayScene::processLegacyPendingReleases(",
     ]
     fixture = (args.root / "tests/gameplay_terminal_scene_fixture.cpp").read_text()
     helpers = [
+        "bool laneIsPressed(",
         "bool hasReachedFirstPlayableNote(",
         "replay::ReplayTouchAction modernTouchAction(",
         "bool longNoteTailJudgedBeforeTiming(",
@@ -99,7 +101,6 @@ def main():
         if signature == "void GamePlayScene::onApplicationBackgroundChanged(" else extract(source, signature)
         for signature in signatures)
     methods += "\n" + extract(source, "int GamePlayScene::presentationKeyMode() const")
-    methods += "\n" + extract(source, "bool laneIsPressed(")
     methods += "\n" + extract(source, "void GamePlayScene::resetHellChargeGaugeTracking(")
     methods += "\n" + extract(source, "void GamePlayScene::updateHellChargeGauge(").replace(
         "GamePlayScene::updateHellChargeGauge(", "GamePlayScene::updateHellChargeGaugeForTest(", 1)

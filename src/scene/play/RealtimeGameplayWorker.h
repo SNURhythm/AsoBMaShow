@@ -73,6 +73,7 @@ struct RealtimeGameplayAudioSink {
       nullptr;
   bool (*commit)(void *, RealtimeGameplayAudioReservation, NoteId) = nullptr;
   void (*cancel)(void *, RealtimeGameplayAudioReservation, NoteId) = nullptr;
+  bool (*setGain)(void *, RealtimeGameplayAudioReservation, NoteId, float) = nullptr;
 };
 
 enum class RealtimeGameplayFault : std::uint8_t {
@@ -309,6 +310,7 @@ private:
   void recordAcceptedReplayInput(const RealtimeGameplayInput &,
                                  std::int64_t songTimeMicros) noexcept;
   bool advanceAutomatic();
+  bool commitVoiceControl(const GameplayInputResult &transaction);
   bool commitAutomaticTransactions(
       std::span<const GameplayInputResult> transactions);
   void recordTransaction(const GameplayInputResult &result) noexcept;

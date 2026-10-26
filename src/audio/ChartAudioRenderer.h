@@ -66,6 +66,14 @@ struct AudioEvent {
   int wav = bms_parser::Parser::NoWav;
   long long sourceStartMicros = 0;
   long long sourceDurationMicros = -1;
+  std::uint64_t voiceId = 0;
+  bool setVoiceGain = false;
+  float gain = 1.0F;
+  // Audible interval of this trigger. Its time and source range stay intact
+  // so gain changes seek the original resampling cursor, including on export
+  // from inside an interval. These bounds are raw chart times, like timeMicros.
+  std::optional<long long> mixStartMicros;
+  std::optional<long long> mixEndMicros;
 };
 
 enum class KeySoundMode {

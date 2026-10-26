@@ -199,8 +199,8 @@ std::unique_ptr<Chart> decode(const std::vector<unsigned char> &bytes,
   else if (mode != "beat-7k") return {}; // Never silently reinterpret another game layout.
   meta.Values["bmson.mode_hint"] = mode;
   meta.Player = meta.IsDP ? 3 : 1;
-  meta.LnMode = id(field(info, "ln_type"));
-  if (meta.LnMode > 3) meta.LnMode = 0;
+  meta.LnMode = signedInt(field(info, "ln_type"));
+  if (meta.LnMode < 0 || meta.LnMode > 3) meta.LnMode = 0;
   const auto lanes = meta.GetTotalLaneIndices();
   const std::set<int> validLanes(lanes.begin(), lanes.end());
   const auto scratchLanes = meta.GetScratchLaneIndices();
@@ -235,14 +235,14 @@ std::unique_ptr<Chart> decode(const std::vector<unsigned char> &bytes,
   for (const auto &event : array(field(root, legacy ? "bpmNotes" : "bpm_events"))) {
     check();
     const auto bpm = number(field(event, legacy ? "v" : "bpm"));
-    if (!(bpm > 0)) return {};
-    positions[tick(field(event, "y"))].bpm = bpm;
+    const auto y = tick(field(event, "y"));
+    if (bpm > 0) positions[y].bpm = bpm;
   }
   for (const auto &event : array(field(root, legacy ? "stopNotes" : "stop_events"))) {
     check();
     const auto duration = number(field(event, legacy ? "v" : "duration"));
-    if (duration < 0) return {};
-    positions[tick(field(event, "y"))].stop += duration;
+    const auto y = tick(field(event, "y"));
+    if (duration >= 0) positions[y].stop += duration;
   }
   for (const auto &event : array(field(root, "scroll_events"))) {
     auto &pos = positions[tick(field(event, "y"))];
@@ -263,8 +263,8 @@ std::unique_ptr<Chart> decode(const std::vector<unsigned char> &bytes,
       n.lane = laneFor(field(value, "x"));
       n.continuation = boolean(field(value, "c"));
       n.up = boolean(field(value, "up"));
-      n.type = id(field(value, "t"));
-      if (n.type > 3) n.type = 0;
+      n.type = signedInt(field(value, "t"));
+      if (n.type < 0 || n.type > 3) n.type = 0;
       positions[n.y];
       if (n.length > 0 && n.lane >= 0) positions[n.y + n.length];
       channel.notes.push_back(n);
@@ -444,30 +444,38 @@ std::unique_ptr<Chart> decode(const std::vector<unsigned char> &bytes,
   }
   meta.GuessedBeatBpm = meta.MostPrevalentBpm;
   if (scan) scan->HasBga = !chart->BmpTable.empty();
+  const bool materialize = !metaOnly && !scan;
   int nextWav = static_cast<int>(chart->WavTable.size()) + 1;
   const auto sliceId = [&](int source, long long start, long long duration) {
     if (nextWav == INT32_MAX) throw std::runtime_error("Too many slices");
     const int wav = nextWav++;
-    chart->WavSlices[wav] = {{source, start, duration, wav}};
-    chart->ReferencedWavTable[source] = chart->WavTable.at(source);
+    if (materialize) {
+      chart->WavSlices[wav] = {{source, start, duration, wav}};
+    }
     return wav;
   };
   const auto layerWav = [&](int &target, int wav) {
     if (target < 0) { target = wav; return; }
-    if (nextWav == INT32_MAX) throw std::runtime_error("Too many layers");
-    auto combined = chart->WavSlices.at(target);
-    const auto &other = chart->WavSlices.at(wav);
-    for (const auto &slice : other) {
-      if (std::none_of(combined.begin(), combined.end(), [&](const auto &existing) {
-            return existing.SliceId == slice.SliceId;
-          })) combined.push_back(slice);
-    }
-    target = nextWav++;
-    chart->WavSlices[target] = std::move(combined);
+    if (!materialize) return;
+    auto &layers = chart->WavSlices.at(target);
+    // Incoming IDs are single slices, visited monotonically in channel/pulse
+    // order. Repeated assignments of one chord slice cannot add another layer.
+    if (layers.back().SliceId == wav) return;
+    const auto slice = chart->WavSlices.at(wav).front();
+    if (layers.size() == 1) {
+      // Base slices may be shared by other chord keys. Detach only once; the
+      // composite then belongs to this playable note and grows in place.
+      if (nextWav == INT32_MAX) throw std::runtime_error("Too many layers");
+      const auto firstSlice = layers.front();
+      target = nextWav++;
+      chart->WavSlices[target] = {firstSlice, slice};
+    } else layers.push_back(slice);
   };
   std::map<std::pair<Tick, int>, PlayNote> playable;
   std::map<std::pair<Tick, int>, int> releases;
   std::multimap<Tick, int> background;
+  std::map<int, std::map<Tick, Tick>> holds;
+  std::map<int, std::set<Tick>> occupied;
   for (const auto &channel : channels) {
     long long offset = 0;
     for (std::size_t i = 0; i < channel.notes.size();) {
@@ -492,44 +500,54 @@ std::unique_ptr<Chart> decode(const std::vector<unsigned char> &bytes,
           [](const auto &note) { return note.lane >= 0; });
       bool backgroundAdded = false;
       for (auto j = i; j < next; ++j) {
+        check();
         const auto &n = channel.notes[j];
         if (n.lane < 0) {
           if (!hasPlayable && !backgroundAdded) { background.emplace(n.y, wav); backgroundAdded = true; }
           continue;
         }
         const auto key = std::make_pair(n.y, n.lane);
+        auto &laneHolds = holds[n.lane];
+        auto preceding = laneHolds.lower_bound(n.y);
+        const bool hasPreceding = preceding != laneHolds.begin();
+        if (hasPreceding) --preceding;
         if (n.up) {
-          auto [release, added] = releases.emplace(key, -1);
-          layerWav(release->second, wav);
-        } else {
-          auto [entry, added] = playable.emplace(key, PlayNote{n.y + n.length, -1, n.type});
-          if (!added && entry->second.end != n.y + n.length) { background.emplace(n.y, wav); continue; }
-          layerWav(entry->second.wav, wav);
+          // Java overwrites an already admitted tail. Its pending HashMap
+          // selects one earlier release; first-authored is deterministic here.
+          if (hasPreceding && preceding->second == n.y) releases[key] = wav;
+          else releases.emplace(key, wav);
+          continue;
         }
+        if (hasPreceding && n.y <= preceding->second) {
+          background.emplace(n.y, wav);
+          continue;
+        }
+        auto entry = playable.find(key);
+        if (entry != playable.end()) {
+          // Same-kind notes at one head layer; incompatible heads are ignored
+          // by Java, unlike a note lying inside an admitted hold.
+          if (entry->second.end == n.y + n.length) layerWav(entry->second.wav, wav);
+          continue;
+        }
+        auto &laneOccupied = occupied[n.lane];
+        if (n.length > 0) {
+          const auto interior = laneOccupied.upper_bound(n.y);
+          if (interior != laneOccupied.end() && *interior <= n.y + n.length) {
+            background.emplace(n.y, wav);
+            continue;
+          }
+          laneHolds[n.y] = n.y + n.length;
+          laneOccupied.insert(n.y + n.length);
+        }
+        laneOccupied.insert(n.y);
+        playable.emplace(key, PlayNote{n.y + n.length, wav, n.type});
       }
       if (duration >= 0) offset += duration;
       i = next;
     }
   }
-  // Resolve lane conflicts independently of sound-channel order. Interior notes
-  // remain audible as BGM; layered notes share one judgement and one synthetic WAV.
-  std::map<int, Tick> occupiedUntil;
-  for (auto it = playable.begin(); it != playable.end();) {
-    const auto [y, lane] = it->first;
-    auto occupied = occupiedUntil.find(lane);
-    if (occupied != occupiedUntil.end() && y <= occupied->second) {
-      background.emplace(y, it->second.wav);
-      it = playable.erase(it);
-    } else {
-      if (it->second.end > y) occupiedUntil[lane] = it->second.end;
-      ++it;
-    }
-  }
-  // Mine channels are applied after every playable channel. Locate enclosing
-  // holds per lane without scanning the entire chart for each mine.
-  std::map<int, std::map<Tick, Tick>> holds;
-  for (const auto &[key, note] : playable)
-    if (note.end > key.first) holds[key.second][key.first] = note.end;
+  // Channel-order admission above also supplies an ordered hold index for
+  // mines, avoiding a whole-chart scan for each auxiliary note.
   for (auto it = mines.begin(); it != mines.end();) {
     const auto [y, lane] = it->first;
     bool conflict = playable.count(it->first) != 0;
@@ -544,7 +562,6 @@ std::unique_ptr<Chart> decode(const std::vector<unsigned char> &bytes,
     if (conflict) it = mines.erase(it);
     else ++it;
   }
-  const bool materialize = !metaOnly && !scan;
   std::map<Tick, TimeLine *> timelines;
   if (materialize) {
     if (ready) {
@@ -649,20 +666,29 @@ std::unique_ptr<Chart> decode(const std::vector<unsigned char> &bytes,
       timelines.at(key.first)->SetLandmineNote(key.second, mine.release());
     }
   }
-  // Keep only virtual sounds reachable from effective notes, not intermediate
-  // layer combinations or discarded release sounds.
+  // Keep only virtual sounds reachable from effective notes, including shared
+  // chord slices but excluding discarded release sounds. Collect source
+  // references only from surviving recipes, alongside effective hidden/mines.
   std::set<int> usedSounds;
-  for (const auto &[key, note] : playable) {
+  if (materialize) for (const auto &[key, note] : playable) {
+    check();
     usedSounds.insert(note.wav);
     if (note.end > key.first) {
       const auto release = releases.find({note.end, key.second});
       if (release != releases.end()) usedSounds.insert(release->second);
     }
   }
-  for (const auto &[y, wav] : background) usedSounds.insert(wav);
+  if (materialize) for (const auto &[y, wav] : background) { check(); usedSounds.insert(wav); }
   for (auto it = chart->WavSlices.begin(); it != chart->WavSlices.end();) {
+    check();
     if (!usedSounds.count(it->first)) it = chart->WavSlices.erase(it);
-    else ++it;
+    else {
+      for (const auto &slice : it->second) {
+        check();
+        chart->ReferencedWavTable[slice.SourceWav] = chart->WavTable.at(slice.SourceWav);
+      }
+      ++it;
+    }
   }
   // Preserve authored units: the player chooses its default gain for 1.0.
   meta.TotalIsRelative = !legacy;

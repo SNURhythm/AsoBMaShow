@@ -47,12 +47,13 @@ bool validLaneShufflePattern(const ReplayPlayerOption &option,
   }
   const auto &pattern = *option.laneShufflePattern;
   const auto layout = replayKeyModeLayout(keyMode);
-  if (!layout ||
-      pattern.size() != static_cast<std::size_t>(layout->stockShuffleWidth)) {
-    return false;
-  }
+  if (!layout) return false;
+  // Both pop'n layouts use mode identity 9. The optional display pattern
+  // retains its actual width; parsed chart metadata still owns active lanes.
   const std::size_t expected =
-      static_cast<std::size_t>(layout->stockShuffleWidth);
+      keyMode == 9 && pattern.size() == 5
+          ? 5 : static_cast<std::size_t>(layout->stockShuffleWidth);
+  if (pattern.size() != expected) return false;
   std::vector<bool> seen(expected, false);
   for (const int lane : pattern) {
     if (lane < 0 || static_cast<std::size_t>(lane) >= expected ||

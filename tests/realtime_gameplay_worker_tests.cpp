@@ -5,6 +5,9 @@
 #include "scene/play/RealtimeSdlTouchInput.h"
 
 #include "bms_parser.hpp"
+#include "BmsonReleaseFixture.h"
+#include "audio/AudioMix.h"
+#include "scene/play/ReplayKeysoundSchedule.h"
 #include "input/LogicalGameplayInputAdapter.h"
 #include "scene/play/RealtimeGameplayInputBridge.h"
 #include "scene/play/GameplayJudgeRules.h"
@@ -187,7 +190,15 @@ struct FakeAudio {
   std::atomic_bool allowCommit{true};
   std::atomic<int> reserveCount{0};
   std::atomic<int> commitCount{0};
+  std::atomic<int> gainCount{0};
   std::atomic<gameplay::NoteId> lastCommitted{gameplay::kInvalidNoteId};
+
+  static bool setGain(void *context, gameplay::RealtimeGameplayAudioReservation reservation,
+                      gameplay::NoteId noteId, float) {
+    auto &self = *static_cast<FakeAudio *>(context);
+    self.gainCount.fetch_add(1);
+    return self.allowCommit.load() && reservation.value == noteId;
+  }
 
   static bool reserve(void *context, gameplay::NoteId noteId,
                       gameplay::RealtimeGameplayAudioReservation &result) {
@@ -224,7 +235,8 @@ gameplay::RealtimeGameplayWorkerConfig makeConfig(FakeClock &clock,
                 .currentSongTime = &FakeClock::now},
       .audio = {.context = &audio,
                 .reserve = &FakeAudio::reserve,
-                .commit = &FakeAudio::commit},
+                .commit = &FakeAudio::commit,
+                .setGain = &FakeAudio::setGain},
       .inputTriggeredKeysounds = true,
   };
 }
@@ -2659,9 +2671,936 @@ void testWorkerSettlesExactTimeMineInputBeforeAutomaticAdvance() {
   }
 }
 
+struct WorkerVoiceAudio {
+  AudioCallbackState state;
+  SoundData head;
+  std::atomic<int> controls{0};
+  std::atomic<int> starts{0};
+  WorkerVoiceAudio() {
+    head.channels = 1;
+    std::vector<short> pcm(3000, 1000);
+    std::fill(pcm.begin() + 1000, pcm.end(), 3000);
+    head.outputData = std::move(pcm);
+    head.outputFrameCount = 3000;
+    head.monophonic = true;
+  }
+  static bool reserve(void *context, gameplay::NoteId,
+                      gameplay::RealtimeGameplayAudioReservation &out) {
+    auto &self = *static_cast<WorkerVoiceAudio *>(context);
+    const auto reservation = audio::playback::TryReserveRealtimeCommand(self.state);
+    if (!reservation) return false;
+    out.value = reservation->cursor;
+    return true;
+  }
+  static bool commit(void *context, gameplay::RealtimeGameplayAudioReservation reservation,
+                     gameplay::NoteId id) {
+    auto &self = *static_cast<WorkerVoiceAudio *>(context);
+    const bool ok = audio::playback::CommitRealtimeCommand(self.state,
+        {.cursor = static_cast<std::uint32_t>(reservation.value)},
+        {.type = AudioCommandType::PlayNow, .soundData = &self.head,
+         .bus = audio::Bus::Keysound, .voiceId = static_cast<std::uint64_t>(id) + 1});
+    if (ok) self.starts.fetch_add(1);
+    return ok;
+  }
+  static bool setGain(void *context, gameplay::RealtimeGameplayAudioReservation reservation,
+                      gameplay::NoteId id, float gain) {
+    auto &self = *static_cast<WorkerVoiceAudio *>(context);
+    const bool ok = audio::playback::CommitRealtimeCommand(self.state,
+        {.cursor = static_cast<std::uint32_t>(reservation.value)},
+        {.type = AudioCommandType::SetVoiceGain, .bus = audio::Bus::Keysound,
+         .gain = gain, .voiceId = static_cast<std::uint64_t>(id) + 1});
+    if (ok) self.controls.fetch_add(1);
+    return ok;
+  }
+  void mix(int frames, int expected) {
+    audio::playback::DrainRealtimeCommands(state);
+    std::vector<float> output(frames);
+    audio::playback::MixActiveSounds(state, output, frames, 1, 1, 1, 100);
+    require(std::abs(output.front() - expected * 0.9F / 32768) < 0.00001F &&
+                std::abs(output.back() - expected * 0.9F / 32768) < 0.00001F,
+            "worker mute/restore changes rendered PCM at resolution and preserves HCN playhead");
+  }
+};
+
+void testWorkerLateClassicReplayAudio() {
+  for (bool scratch : {false, true}) for (bool handoff : {false, true}) {
+    if (handoff && !scratch) continue;
+    auto chart = bmsonLateClassicFixture(scratch);
+    const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+    FakeClock clock;
+    FakeAudio unused;
+    WorkerVoiceAudio audio;
+    auto config = makeConfig(clock, unused);
+    config.simulation.judge = gameplay::CompiledGameplayJudge::from(
+        gameplay::compileGameplayJudgeRules(GameplayRuleset::Beatoraja, 2));
+    config.audio = {.context = &audio, .reserve = &WorkerVoiceAudio::reserve,
+                    .commit = &WorkerVoiceAudio::commit, .setGain = &WorkerVoiceAudio::setGain};
+    gameplay::RealtimeGameplayWorker worker(definition, config);
+    const auto edge = [&](long long time, bool pressed) {
+      const bool reversing = handoff && time != 1'064'000;
+      const bool clockwise = !handoff || time != 2'687'000;
+      require(worker.enqueueInput({.epoch = 7,
+          .type = pressed ? gameplay::RealtimeGameplayInputType::Press : gameplay::RealtimeGameplayInputType::Release,
+          .lane = scratch ? 7 : 0, .backSpin = reversing, .steadyTimestampMicros = time, .hasReplayControl = true,
+          .replayControl = {.kind = scratch ? (clockwise ? replay::LogicalControlKind::ScratchClockwise : replay::LogicalControlKind::ScratchCounterClockwise) : replay::LogicalControlKind::Lane,
+                            .player = 1, .lane = scratch ? -1 : 0}}), "late classic input queues");
+      if (reversing)
+        require(worker.enqueueInput({.epoch = 7, .type = gameplay::RealtimeGameplayInputType::Press,
+            .lane = 7, .steadyTimestampMicros = time, .hasReplayControl = true,
+            .replayControl = {.kind = clockwise ? replay::LogicalControlKind::ScratchCounterClockwise : replay::LogicalControlKind::ScratchClockwise,
+                              .player = 1}}), "late classic scratch handoff queues its next owner");
+      clock.nowMicros.store(time);
+      require(time == 1'064'000 ? worker.start() : worker.resume(), "late classic worker runs");
+      require(waitUntil([&] {
+        const auto snapshot = worker.acquireLatestSnapshot();
+        for (std::size_t i = 0; snapshot && i < snapshot->transactionCount; ++i)
+          if (snapshot->transactions[i].result.hasReplayEvent &&
+              snapshot->transactions[i].result.replayEvent.songTimeMicros == time) return true;
+        return false;
+      }), "late classic input settles");
+      require(worker.suspend(), "freeze late classic audio");
+    };
+    edge(1'064'000, true);
+    audio.mix(392, 1000);
+    edge(1'456'000, false);
+    audio::playback::DrainRealtimeCommands(audio.state);
+    std::vector<float> elapsed(handoff ? 1231 : 831);
+    audio::playback::MixActiveSounds(audio.state, elapsed, elapsed.size(), 1, 1, 1, 100);
+    edge(handoff ? 2'687'000 : 2'287'000, !handoff);
+    audio.mix(20, 1000);
+    worker.stop();
+    require(worker.fault() == gameplay::RealtimeGameplayFault::None && audio.starts == (handoff ? 3 : 2),
+            "late classic empty press retriggers the fallback voice in the worker");
+    std::vector<ReplayEvent> events;
+    for (const auto &event : worker.copyReplayEventsAfterStop())
+      events.push_back({.action = static_cast<ReplayEventAction>(event.action), .lane = event.lane,
+          .noteTimeMicros = event.noteTimeMicros, .songTimeMicros = event.songTimeMicros,
+          .judgement = event.judgement, .releaseByBackspin = event.releaseByBackspin,
+          .releaseByHolding = event.releaseByHolding, .audioLanePressed = event.audioLanePressed});
+    require(std::ranges::any_of(events, [](const auto &event) {
+      return event.action == ReplayEventAction::Release && event.songTimeMicros == 1'456'000 && event.noteTimeMicros < 0;
+    }), "late classic expiry leaves an empty physical release without a tail judgement");
+    AudioCallbackState replayState;
+    for (const auto &event : buildReplayKeysoundSchedule(definition, events, 0, std::nullopt,
+             std::nullopt, GameplayRuleset::Beatoraja))
+      require(audio::playback::InsertScheduledSound(replayState,
+          {.soundData = &audio.head, .bus = event.bus, .startMicros = event.timeMicros,
+           .gain = event.gain, .voiceId = event.voiceId, .setVoiceGain = event.setVoiceGain}), "late classic replay schedules");
+    std::vector<float> pcm(2800);
+    audio::playback::ActivateScheduledSounds(replayState, 0, 1000, pcm.size(), 100);
+    audio::playback::MixActiveSounds(replayState, pcm, pcm.size(), 1, 1, 1, 100);
+    require(std::abs(pcm[handoff ? 2700 : 2300] * 32768 - 900) < 1,
+            "captured late classic replay matches the worker fallback retrigger PCM");
+  }
+}
+
+void testWorkerClassicScratchCompletionAudio() {
+  for (bool tailSound : {false, true})
+    for (const auto time : {1'999'999LL, 2'000'000LL, 2'000'001LL, 2'000'002LL})
+      for (bool clockwise : {false, true}) for (bool handoff : {false, true}) {
+        auto chart = bmsonReleaseWithSentinelFixture(1, tailSound);
+        const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+        struct VoiceAudio {
+          AudioCallbackState state;
+          std::array<SoundData, 2> sounds;
+          std::atomic<int> starts{0};
+        } audio;
+        for (int i = 0; i < 2; ++i) {
+          auto &sound = audio.sounds[i];
+          sound.channels = 1;
+          sound.monophonic = true;
+          std::vector<short> pcm(i == 0 ? 3000 : 100, i == 0 ? 3000 : -500);
+          if (i == 0) std::fill_n(pcm.begin(), 1000, 1000);
+          sound.outputFrameCount = pcm.size();
+          sound.outputData = std::move(pcm);
+        }
+        FakeClock clock;
+        FakeAudio unused;
+        auto config = makeConfig(clock, unused);
+        config.simulation.judge = gameplay::CompiledGameplayJudge::from(
+            gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2));
+        config.audio = {.context = &audio,
+            .reserve = [](void *context, gameplay::NoteId, gameplay::RealtimeGameplayAudioReservation &out) {
+              auto &value = *static_cast<VoiceAudio *>(context);
+              const auto reservation = audio::playback::TryReserveRealtimeCommand(value.state);
+              if (!reservation) return false;
+              out.value = reservation->cursor;
+              return true;
+            },
+            .commit = [](void *context, gameplay::RealtimeGameplayAudioReservation reservation, gameplay::NoteId id) {
+              auto &value = *static_cast<VoiceAudio *>(context);
+              const bool result = audio::playback::CommitRealtimeCommand(value.state,
+                  {.cursor = static_cast<std::uint32_t>(reservation.value)},
+                  {.type = AudioCommandType::PlayNow, .soundData = &value.sounds.at(id),
+                   .bus = audio::Bus::Keysound, .voiceId = static_cast<std::uint64_t>(id) + 1});
+              if (result) ++value.starts;
+              return result;
+            }};
+        gameplay::RealtimeGameplayWorker worker(definition, config);
+        require(worker.start(), "classic boundary worker starts");
+        const auto enqueue = [&](long long at, bool cw, bool pressed) {
+          require(worker.enqueueInput({.epoch = 7,
+              .type = pressed ? gameplay::RealtimeGameplayInputType::Press : gameplay::RealtimeGameplayInputType::Release,
+              .lane = 7, .steadyTimestampMicros = at, .hasReplayControl = true,
+              .replayControl = {.kind = cw ? replay::LogicalControlKind::ScratchClockwise
+                                           : replay::LogicalControlKind::ScratchCounterClockwise, .player = 1}}),
+              "classic scratch boundary input queues");
+        };
+        const auto settle = [&](long long at) {
+          require(waitUntil([&] {
+            const auto snapshot = worker.acquireLatestSnapshot();
+            for (std::size_t i = 0; i < snapshot->transactionCount; ++i)
+              if (snapshot->transactions[i].result.hasReplayEvent &&
+                  snapshot->transactions[i].result.replayEvent.songTimeMicros == at) return true;
+            return false;
+          }), "classic boundary transaction settles");
+        };
+        require(worker.suspend(), "freeze before first input");
+        enqueue(1'000'000, clockwise, true);
+        clock.nowMicros.store(1'000'000);
+        require(worker.resume(), "resume first input");
+        settle(1'000'000);
+        audio::playback::DrainRealtimeCommands(audio.state);
+        std::vector<float> prefix(1000);
+        audio::playback::MixActiveSounds(audio.state, prefix, 1000, 1, 1, 1, 100);
+        if (time > 2'000'001) {
+          clock.nowMicros.store(2'000'001);
+          settle(2'000'001);
+        }
+        require(worker.suspend(), "freeze before same-time handoff batch");
+        if (handoff) enqueue(time, clockwise, false);
+        enqueue(time, !clockwise, true);
+        clock.nowMicros.store(time);
+        require(worker.resume(), "resume boundary input");
+        settle(time);
+        clock.nowMicros.store(std::max(time, 2'000'001LL));
+        require(waitUntil([&] { return worker.acquireLatestSnapshot()->noteStates[1].played; }),
+                "classic tail completes while held or by explicit release");
+        worker.stop();
+        const bool retrigger = time > 2'000'001 || (handoff && clockwise);
+        require(worker.fault() == gameplay::RealtimeGameplayFault::None &&
+                    audio.starts.load() == 1 + retrigger + tailSound,
+                "actual worker suppresses only presses before tail resolution");
+        audio::playback::DrainRealtimeCommands(audio.state);
+        std::array<float, 50> live{};
+        audio::playback::MixActiveSounds(audio.state, live, 50, 1, 1, 1, 100);
+        const float expected = ((retrigger ? 1000 : 3000) - (tailSound ? 500 : 0)) * 0.9F;
+        require(std::abs(live.back() * 32768 - expected) < 1,
+                "worker PCM preserves head position and authored tail layering");
+        std::vector<ReplayEvent> events;
+        for (const auto &event : worker.copyReplayEventsAfterStop())
+          events.push_back({.action = static_cast<ReplayEventAction>(event.action), .lane = event.lane,
+              .noteTimeMicros = event.noteTimeMicros, .songTimeMicros = event.songTimeMicros,
+              .judgeTimeMicros = event.judgeTimeMicros, .judgement = event.judgement,
+              .diffMicros = event.diffMicros, .releaseByBackspin = event.releaseByBackspin,
+              .releaseByHolding = event.releaseByHolding, .audioLanePressed = event.audioLanePressed});
+        AudioCallbackState replayState;
+        std::uint64_t sequence = 0;
+        for (const auto &event : buildReplayKeysoundSchedule(definition, events, 0, std::nullopt))
+          require(audio::playback::InsertScheduledSound(replayState,
+              {.soundData = &audio.sounds[event.wav == definition.note(0).wav ? 0 : 1],
+               .bus = event.bus, .startMicros = event.timeMicros, .sequence = sequence++,
+               .gain = event.gain, .voiceId = event.voiceId, .setVoiceGain = event.setVoiceGain}),
+              "captured classic boundary replay schedules");
+        std::vector<float> replayPcm(1050);
+        audio::playback::ActivateScheduledSounds(replayState, 1'000'000, 1000, 1050, 100);
+        audio::playback::MixActiveSounds(replayState, replayPcm, 1050, 1, 1, 1, 100);
+        require(std::abs(replayPcm.back() * 32768 - expected) < 1,
+                "captured replay PCM matches actual worker through classic scratch boundary");
+      }
+}
+
+void testWorkerAdjacentHcnReplayAudio() {
+  for (const auto ruleset : {GameplayRuleset::LR2, GameplayRuleset::Beatoraja})
+    for (bool scratch : {false, true}) for (bool nextHcn : {false, true})
+      for (const long long pressTime : {1'900'000LL, 1'990'000LL})
+        for (bool preHeadRetrigger : {false, true}) {
+        auto chart = bmsonAdjacentHcnFixture(nextHcn, scratch);
+        const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+        struct VoiceAudio {
+          std::atomic<int> clockSamples{0};
+          FakeClock clock;
+          AudioCallbackState state;
+          std::array<SoundData, 5> sounds;
+        } audio;
+        for (std::size_t i = 0; i < audio.sounds.size(); ++i) {
+          auto &sound = audio.sounds[i];
+          sound.channels = 1;
+          sound.monophonic = true;
+          sound.outputData = std::vector<short>(4000, i == 0 ? 1000 : i == 3 ? 50 : 200);
+          sound.outputFrameCount = 4000;
+        }
+        auto &clock = audio.clock;
+        FakeAudio unused;
+        auto config = makeConfig(clock, unused);
+        config.clock = {.context = &audio,
+            .mapSteadyToSong = [](void *context, std::int64_t time) {
+              return FakeClock::map(&static_cast<VoiceAudio *>(context)->clock, time);
+            },
+            .currentSongTime = [](void *context) {
+              auto &value = *static_cast<VoiceAudio *>(context);
+              value.clockSamples.fetch_add(1);
+              return FakeClock::now(&value.clock);
+            }};
+        config.simulation.judge = gameplay::CompiledGameplayJudge::from(
+            gameplay::compileGameplayJudgeRules(ruleset, 2));
+        config.audio = {.context = &audio,
+            .reserve = [](void *context, gameplay::NoteId, gameplay::RealtimeGameplayAudioReservation &out) {
+              const auto reservation = audio::playback::TryReserveRealtimeCommand(
+                  static_cast<VoiceAudio *>(context)->state);
+              if (!reservation) return false;
+              out.value = reservation->cursor;
+              return true;
+            },
+            .commit = [](void *context, gameplay::RealtimeGameplayAudioReservation reservation, gameplay::NoteId id) {
+              auto &value = *static_cast<VoiceAudio *>(context);
+              return audio::playback::CommitRealtimeCommand(value.state,
+                  {.cursor = static_cast<std::uint32_t>(reservation.value)},
+                  {.type = AudioCommandType::PlayNow, .soundData = &value.sounds.at(id),
+                   .bus = audio::Bus::Keysound, .voiceId = static_cast<std::uint64_t>(id) + 1});
+            },
+            .setGain = [](void *context, gameplay::RealtimeGameplayAudioReservation reservation,
+                          gameplay::NoteId id, float gain) {
+              return audio::playback::CommitRealtimeCommand(static_cast<VoiceAudio *>(context)->state,
+                  {.cursor = static_cast<std::uint32_t>(reservation.value)},
+                  {.type = AudioCommandType::SetVoiceGain, .bus = audio::Bus::Keysound,
+                   .gain = gain, .voiceId = static_cast<std::uint64_t>(id) + 1});
+            }};
+        gameplay::RealtimeGameplayWorker worker(definition, config);
+        const auto enqueue = [&](long long time, bool pressed) {
+          require(worker.enqueueInput({.epoch = 7,
+              .type = pressed ? gameplay::RealtimeGameplayInputType::Press : gameplay::RealtimeGameplayInputType::Release,
+              .lane = scratch ? 7 : 0, .steadyTimestampMicros = time, .hasReplayControl = true,
+              .replayControl = {.kind = scratch ? replay::LogicalControlKind::ScratchClockwise
+                                               : replay::LogicalControlKind::Lane,
+                                .player = 1, .lane = scratch ? -1 : 0}}), "adjacent HCN input queues");
+        };
+        const auto settle = [&](long long time) {
+          require(waitUntil([&] {
+            const auto snapshot = worker.acquireLatestSnapshot();
+            for (std::size_t i = 0; snapshot && i < snapshot->transactionCount; ++i)
+              if (snapshot->transactions[i].result.hasReplayEvent &&
+                  snapshot->transactions[i].result.replayEvent.songTimeMicros == time) return true;
+            return false;
+          }), "adjacent HCN transaction settles");
+          require(worker.suspend(), "freeze adjacent HCN audio for sampling");
+        };
+        const auto mix = [&](int frames) {
+          audio::playback::DrainRealtimeCommands(audio.state);
+          std::vector<float> pcm(frames);
+          audio::playback::MixActiveSounds(audio.state, pcm, frames, 1, 1, 1, 100);
+          return pcm.front() * 32768;
+        };
+        const auto headTime = preHeadRetrigger ? 900'000 : 1'000'000;
+        const auto liftTime = preHeadRetrigger ? 920'000 : 1'200'000;
+        enqueue(headTime, true);
+        clock.nowMicros.store(headTime);
+        require(worker.start(), "adjacent HCN worker starts");
+        settle(headTime);
+        require(std::abs(mix((liftTime - headTime) / 1000) - 900) < 1, "first HCN starts its own voice");
+        enqueue(liftTime, false);
+        clock.nowMicros.store(liftTime);
+        require(worker.resume(), "resume failed HCN lift");
+        settle(liftTime);
+        if (preHeadRetrigger) {
+          require(std::abs(mix(30)) < 1, "failed early lift mutes before authored head");
+          enqueue(950'000, true);
+          clock.nowMicros.store(950'000);
+          require(worker.resume(), "resume pre-head retrigger");
+          settle(950'000);
+          require(std::abs(mix(30) - 900) < 1, "pre-head KPOOR retriggers its own slice");
+          enqueue(980'000, false);
+          clock.nowMicros.store(980'000);
+          require(worker.resume(), "resume pre-head empty lift");
+          settle(980'000);
+          require(std::abs(mix(30) - 900) < 1, "empty lift before the authored interval leaves preview audible");
+          const auto beforeCrossing = audio.clockSamples.load();
+          clock.nowMicros.store(1'010'000);
+          require(worker.resume(), "advance across authored HCN head without an input");
+          require(waitUntil([&] { return audio.clockSamples.load() >= beforeCrossing + 2; }),
+                  "normal update crosses the authored HCN head");
+          require(worker.suspend(), "freeze after authored crossing");
+          require(std::abs(mix(90)) < 1, "normal update mutes the unheld retrigger on entering its HCN interval");
+          require(worker.enqueueInput({.epoch = 7, .type = gameplay::RealtimeGameplayInputType::Press,
+              .lane = 1, .steadyTimestampMicros = 1'100'000, .hasReplayControl = true,
+              .replayControl = {.kind = replay::LogicalControlKind::Lane, .player = 1, .lane = 1}}),
+              "other-lane input supplies a reconstructed update boundary");
+          clock.nowMicros.store(1'100'000);
+          require(worker.resume(), "resume other-lane boundary");
+          settle(1'100'000);
+          require(std::abs(mix((pressTime - 1'100'000) / 1000)) < 1,
+                  "other-lane boundary retains the first HCN mute");
+        } else {
+          require(std::abs(mix((pressTime - liftTime) / 1000)) < 1, "failed HCN lift mutes its voice");
+        }
+        enqueue(pressTime, true);
+        clock.nowMicros.store(pressTime);
+        require(worker.resume(), "resume adjacent early press");
+        settle(pressTime);
+        const auto releaseTime = pressTime == 1'900'000 ? 1'950'000 : 1'995'000;
+        const auto livePressed = mix(2);
+        const auto beforeHeartbeat = audio.clockSamples.load();
+        clock.nowMicros.store(pressTime + 2000);
+        require(worker.resume(), "resume normal heartbeat inside old HCN");
+        require(waitUntil([&] { return audio.clockSamples.load() >= beforeHeartbeat + 2; }),
+                "worker completes a normal advance before the next clock sample");
+        require(worker.suspend(), "freeze after normal heartbeat");
+        const auto afterHeartbeat = mix((releaseTime - pressTime) / 1000 - 2);
+        require(std::abs(afterHeartbeat - 1080) < 1,
+                "normal heartbeat retains restored HCN and separately owned upcoming voice");
+        require(std::abs(livePressed - 1080) < 1,
+                "judged upcoming note preserves live ruleset HCN gain and its own keysound");
+        enqueue(releaseTime, false);
+        clock.nowMicros.store(releaseTime);
+        require(worker.resume(), "resume adjacent lift");
+        settle(releaseTime);
+        const auto liveReleased = mix(2);
+        worker.stop();
+        require(worker.fault() == gameplay::RealtimeGameplayFault::None, "adjacent HCN worker has no fault");
+        const auto raw = worker.copyAcceptedReplayInputAfterStop();
+        require(raw && raw->size() == (preHeadRetrigger ? 7 : 4) &&
+                    raw->at(raw->size() - 2).songTimeMicros == pressTime &&
+                    raw->back().songTimeMicros == releaseTime, "worker retains all physical replay edges");
+        std::vector<ReplayEvent> events;
+        for (const auto &event : worker.copyReplayEventsAfterStop())
+          events.push_back({.action = static_cast<ReplayEventAction>(event.action), .lane = event.lane,
+              .noteTimeMicros = event.noteTimeMicros, .songTimeMicros = event.songTimeMicros,
+              .judgement = event.judgement, .releaseByBackspin = event.releaseByBackspin,
+              .releaseByHolding = event.releaseByHolding, .audioLanePressed = event.audioLanePressed});
+        AudioCallbackState replayState;
+        std::uint64_t sequence = 0;
+        for (const auto &event : buildReplayKeysoundSchedule(
+                 definition, events, 0, std::nullopt, std::nullopt, ruleset)) {
+          const int index = event.wav == definition.keysoundSource(0).wav ? 0
+              : event.wav == definition.keysoundSource(2).wav ? 2 : 3;
+          require(audio::playback::InsertScheduledSound(replayState,
+              {.soundData = &audio.sounds[index], .bus = event.bus, .startMicros = event.timeMicros,
+               .sequence = sequence++, .gain = event.gain, .voiceId = event.voiceId,
+               .setVoiceGain = event.setVoiceGain}), "adjacent HCN captured replay schedules");
+        }
+        std::vector<float> replayPcm(2000);
+        audio::playback::ActivateScheduledSounds(replayState, 0, 1000, 2000, 100);
+        audio::playback::MixActiveSounds(replayState, replayPcm, 2000, 1, 1, 1, 100);
+        if (preHeadRetrigger)
+          require(std::abs(replayPcm[1150] * 32768) < 1,
+                  "captured replay applies authored HCN gain at the first reconstructed other-lane boundary");
+        require(std::abs(replayPcm[pressTime / 1000 + 1] * 32768 - livePressed) < 1 &&
+                    std::abs(replayPcm[releaseTime / 1000 + 1] * 32768 - liveReleased) < 1,
+                "captured replay preserves prior HCN gain, next keysound, and later resolved release PCM");
+      }
+}
+
+void testWorkerBackspinCompanionAudio() {
+  for (const auto ruleset : {GameplayRuleset::LR2, GameplayRuleset::Beatoraja})
+    for (const int type : {2, 3, 1})
+      for (const auto time : {1'999'999LL, 2'000'000LL, 2'000'001LL}) {
+        auto chart = bmsonReleaseWithSentinelFixture(type);
+        const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+        struct VoiceAudio {
+          AudioCallbackState state;
+          std::array<SoundData, 2> sounds;
+        } audio;
+        for (int i = 0; i < 2; ++i) {
+          auto &sound = audio.sounds[i];
+          sound.channels = 1;
+          sound.monophonic = true;
+          std::vector<short> pcm(i == 0 ? 3000 : 100, i == 0 ? 3000 : -500);
+          if (i == 0) std::fill_n(pcm.begin(), 500, 1000);
+          sound.outputFrameCount = pcm.size();
+          sound.outputData = std::move(pcm);
+        }
+        FakeClock clock;
+        FakeAudio unused;
+        auto config = makeConfig(clock, unused);
+        config.simulation.judge = gameplay::CompiledGameplayJudge::from(
+            gameplay::compileGameplayJudgeRules(ruleset, 2));
+        config.audio = {.context = &audio,
+            .reserve = [](void *context, gameplay::NoteId, gameplay::RealtimeGameplayAudioReservation &out) {
+              const auto reservation = audio::playback::TryReserveRealtimeCommand(
+                  static_cast<VoiceAudio *>(context)->state);
+              if (!reservation) return false;
+              out.value = reservation->cursor;
+              return true;
+            },
+            .commit = [](void *context, gameplay::RealtimeGameplayAudioReservation reservation, gameplay::NoteId id) {
+              auto &value = *static_cast<VoiceAudio *>(context);
+              return audio::playback::CommitRealtimeCommand(value.state,
+                  {.cursor = static_cast<std::uint32_t>(reservation.value)},
+                  {.type = AudioCommandType::PlayNow, .soundData = &value.sounds.at(id),
+                   .bus = audio::Bus::Keysound, .voiceId = static_cast<std::uint64_t>(id) + 1});
+            }};
+        gameplay::RealtimeGameplayWorker worker(definition, config);
+        const auto enqueue = [&](long long at, bool pressed, bool backspin = false) {
+          require(worker.enqueueInput({.epoch = 7,
+              .type = pressed ? gameplay::RealtimeGameplayInputType::Press : gameplay::RealtimeGameplayInputType::Release,
+              .lane = 7, .backSpin = backspin, .steadyTimestampMicros = at}),
+              "legacy scratch companion input queues");
+        };
+        const auto settle = [&](long long at) {
+          require(waitUntil([&] {
+            const auto snapshot = worker.acquireLatestSnapshot();
+            return snapshot->latestTransaction.hasReplayEvent &&
+                snapshot->latestTransaction.replayEvent.songTimeMicros == at;
+          }), "legacy scratch companion transaction settles");
+        };
+        enqueue(1'000'000, true);
+        clock.nowMicros.store(1'000'000);
+        require(worker.start(), "companion worker starts");
+        settle(1'000'000);
+        audio::playback::DrainRealtimeCommands(audio.state);
+        std::array<float, 1000> prefix{};
+        audio::playback::MixActiveSounds(audio.state, prefix, 1000, 1, 1, 1, 100);
+        require(worker.suspend(), "freeze before backspin pair");
+        enqueue(time, false, true);
+        enqueue(time, true);
+        clock.nowMicros.store(time);
+        require(worker.resume(), "resume backspin pair");
+        settle(time);
+        require(worker.suspend(), "freeze after companion press");
+        audio::playback::DrainRealtimeCommands(audio.state);
+        std::array<float, 50> live{};
+        audio::playback::MixActiveSounds(audio.state, live, 50, 1, 1, 1, 100);
+        const bool suppressed = type != 1 &&
+            (ruleset == GameplayRuleset::LR2 || (type == 3 && time < 2'000'000));
+        const float expected = (suppressed ? 2500 : 500) * 0.9F;
+        require(std::abs(live.back() * 32768 - expected) < 1,
+                "live ruleset suppresses only its companion/body presses and layers the authored tail");
+        enqueue(2'400'000, false);
+        enqueue(2'500'000, true);
+        clock.nowMicros.store(2'500'000);
+        require(worker.resume(), "resume later legitimate press");
+        settle(2'500'000);
+        worker.stop();
+        require(worker.fault() == gameplay::RealtimeGameplayFault::None, "companion worker has no fault");
+        std::vector<ReplayEvent> events;
+        for (const auto &event : worker.copyReplayEventsAfterStop())
+          events.push_back({.action = static_cast<ReplayEventAction>(event.action), .lane = event.lane,
+              .noteTimeMicros = event.noteTimeMicros, .songTimeMicros = event.songTimeMicros,
+              .judgement = event.judgement, .releaseByBackspin = event.releaseByBackspin,
+              .releaseByHolding = event.releaseByHolding, .audioLanePressed = event.audioLanePressed});
+        AudioCallbackState replayState;
+        std::uint64_t sequence = 0;
+        for (const auto &event : buildReplayKeysoundSchedule(
+                 definition, events, 0, std::nullopt, std::nullopt, ruleset))
+          require(audio::playback::InsertScheduledSound(replayState,
+              {.soundData = &audio.sounds[event.wav == definition.note(0).wav ? 0 : 1],
+               .bus = event.bus, .startMicros = event.timeMicros, .sequence = sequence++,
+               .gain = event.gain, .voiceId = event.voiceId, .setVoiceGain = event.setVoiceGain}),
+              "worker companion replay schedules");
+        std::vector<float> replayPcm(1600);
+        audio::playback::ActivateScheduledSounds(replayState, 1'000'000, 1000, 1600, 100);
+        audio::playback::MixActiveSounds(replayState, replayPcm, 1600, 1, 1, 1, 100);
+        require(std::abs(replayPcm[1050] * 32768 - expected) < 1,
+                "captured companion replay PCM matches live head phase and authored tail");
+        require(std::abs(replayPcm[1550] * 32768 - 900) < 1,
+                "companion suppression preserves the later legitimate head trigger");
+      }
+}
+
+void testWorkerScratchHcnRetainsAudioUntilFinalLift() {
+  for (bool failedHeldLift : {false, true}) {
+  auto chart = failedHeldLift ? bmsonScratchHcnAuxiliaryFixture() : bmsonReleaseFixture(3, 8, false, 960);
+  const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+  FakeClock clock;
+  FakeAudio unused;
+  WorkerVoiceAudio audio;
+  auto config = makeConfig(clock, unused);
+  // Input transactions are sampled before an independent heartbeat can restore
+  // a failed lift while the opposite key remains physically held.
+  config.clock.currentSongTime = nullptr;
+  config.simulation.judge = gameplay::CompiledGameplayJudge::from(
+      gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2));
+  config.audio = {.context = &audio, .reserve = &WorkerVoiceAudio::reserve,
+                  .commit = &WorkerVoiceAudio::commit, .setGain = &WorkerVoiceAudio::setGain};
+  gameplay::RealtimeGameplayWorker worker(definition, config);
+  require(worker.start(), "aggregate scratch audio worker starts");
+  const auto edge = [&](bool pressed, bool clockwise, long long time) {
+    clock.nowMicros.store(time);
+    require(worker.enqueueInput({.epoch = 7,
+        .type = pressed ? gameplay::RealtimeGameplayInputType::Press
+                        : gameplay::RealtimeGameplayInputType::Release,
+        .lane = 7, .steadyTimestampMicros = time, .hasReplayControl = true,
+        .replayControl = {.kind = clockwise ? replay::LogicalControlKind::ScratchClockwise
+                                           : replay::LogicalControlKind::ScratchCounterClockwise,
+                          .player = 1}}), "aggregate scratch edge queues");
+    require(waitUntil([&] {
+      const auto snapshot = worker.acquireLatestSnapshot();
+      if (!snapshot) return false;
+      for (std::size_t i = 0; i < snapshot->transactionCount; ++i) {
+        const auto &event = snapshot->transactions[i].result;
+        if (event.hasReplayEvent && event.replayEvent.songTimeMicros == time) return true;
+      }
+      return false;
+    }), "aggregate scratch edge settles");
+  };
+  if (failedHeldLift) {
+    edge(true, false, 500'000);
+    audio.mix(500, 1000);
+    edge(true, true, 1'000'000);
+    audio.mix(300, 1000);
+    edge(false, true, 1'300'000);
+    audio.mix(100, 0);
+    edge(true, true, 1'400'000);
+    audio.mix(100, 1000);
+    edge(false, true, 1'500'000);
+    audio.mix(100, 1000);
+    edge(false, false, 1'600'000);
+    audio.mix(100, 0);
+  } else {
+    edge(true, true, 1'000'000);
+    audio.mix(300, 1000);
+    edge(true, false, 1'300'000);
+    audio.mix(100, 1000);
+    edge(false, true, 1'400'000);
+    audio.mix(100, 1000);
+    edge(false, false, 1'500'000);
+    audio.mix(100, 0);
+  }
+  worker.stop();
+  require(worker.fault() == gameplay::RealtimeGameplayFault::None &&
+              audio.starts.load() == (failedHeldLift ? 2 : 1) &&
+              audio.controls.load() == (failedHeldLift ? 3 : 1),
+          "scratch held failure preserves transaction mute before recovery on a later update");
+  std::vector<ReplayEvent> replay;
+  for (const auto &event : worker.copyReplayEventsAfterStop())
+    replay.push_back({.action = static_cast<ReplayEventAction>(event.action),
+        .lane = event.lane, .noteTimeMicros = event.noteTimeMicros,
+        .songTimeMicros = event.songTimeMicros, .judgeTimeMicros = event.judgeTimeMicros,
+        .judgement = event.judgement, .diffMicros = event.diffMicros,
+        .releaseByBackspin = event.releaseByBackspin,
+        .releaseByHolding = event.releaseByHolding,
+          .audioLanePressed = event.audioLanePressed});
+  if (failedHeldLift) {
+    const auto release = std::ranges::find_if(replay, [](const auto &event) {
+      return event.action == ReplayEventAction::Release && event.songTimeMicros == 1'300'000 &&
+             event.judgement == Poor && event.audioLanePressed == true;
+    });
+    require(release != replay.end() && std::any_of(std::next(release), replay.end(), [](const auto &event) {
+      return event.action == ReplayEventAction::Miss && event.songTimeMicros == 1'300'000;
+    }), "actual worker emits auxiliary misses after the failed held lift at the same timestamp");
+  }
+  AudioCallbackState playback;
+  for (const auto &event : buildReplayKeysoundSchedule(definition, replay, 0, std::nullopt))
+    require(audio::playback::InsertScheduledSound(playback,
+        {.soundData = &audio.head, .bus = event.bus, .startMicros = event.timeMicros,
+         .gain = event.gain, .voiceId = event.voiceId, .setVoiceGain = event.setVoiceGain}),
+        "aggregate scratch replay schedules");
+  std::vector<float> rendered(1700);
+  audio::playback::ActivateScheduledSounds(playback, 0, 1000, rendered.size(), 100);
+  audio::playback::MixActiveSounds(playback, rendered, rendered.size(), 1, 1, 1, 100);
+  require(std::abs(rendered[1450] - 1000 * 0.9F / 32768) < 0.00001F &&
+              rendered[failedHeldLift ? 1650 : 1550] == 0 &&
+              (!failedHeldLift || rendered[1350] == 0),
+          "captured same-time auxiliary events preserve failed-release PCM until a later input update");
+  }
+}
+
+void testLiveReplayLongNoteAudioAfterMissAndHeldCompletion() {
+  bool matched = true;
+  for (const bool missedHead : {true, false}) {
+    auto chart = bmsonReleaseFixture(missedHead ? 3 : 1, 1, false, 960);
+    const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+    gameplay::GameplaySimulation simulation(definition, {
+        .judge = gameplay::CompiledGameplayJudge::from(
+            gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2))});
+    WorkerVoiceAudio audio;
+    std::vector<float> live(3100);
+    std::size_t cursor = 0;
+    const auto mixUntil = [&](std::size_t frame) {
+      audio::playback::MixActiveSounds(audio.state,
+          std::span(live).subspan(cursor, frame - cursor), frame - cursor, 1, 1, 1, 100);
+      cursor = frame;
+    };
+    const auto apply = [&](std::span<const gameplay::GameplayInputResult> transactions) {
+      for (const auto &event : transactions) {
+        if (event.gainNoteId != gameplay::kInvalidNoteId) {
+          require(audio::playback::EnqueueCommand(audio.state,
+              {.type = AudioCommandType::SetVoiceGain, .gain = event.keysoundGain,
+               .voiceId = static_cast<std::uint64_t>(event.gainNoteId) + 1}),
+              "live completion voice control queues");
+          audio::playback::DrainCommands(audio.state);
+        }
+        if (event.soundNoteId != gameplay::kInvalidNoteId &&
+            definition.keysoundSource(event.soundNoteId).wav != bms_parser::Parser::NoWav)
+          require(audio::playback::AppendActiveSound(audio.state, &audio.head,
+              audio::Bus::Keysound, 0, 0, 1, false,
+              static_cast<std::uint64_t>(event.soundNoteId) + 1), "live head starts");
+      }
+    };
+    if (missedHead) {
+      mixUntil(1600);
+      apply(simulation.advanceTo(1'600'000, 1'600'000).transactions);
+      apply(simulation.pressLane(0, 0, {.songTimeMicros = 1'600'000}).transactions);
+    } else {
+      mixUntil(850);
+      const auto head = simulation.pressLane(0, 0, {.songTimeMicros = 850'000});
+      require(head.judge.judgement == Bad, "early classic head is accepted BAD");
+      apply(head.transactions);
+      mixUntil(3000);
+      apply(simulation.advanceTo(3'000'001, 3'000'001).transactions);
+    }
+    mixUntil(3100);
+    const float expected = missedHead ? 0 : 3000 * 0.9F / 32768;
+    require(std::abs(live.back() - expected) < 0.00001F,
+            "live missed HCN is silent; held classic BAD keeps its head sounding");
+    std::vector<ReplayEvent> replay;
+    for (const auto &event : simulation.replayEvents())
+      replay.push_back({.action = static_cast<ReplayEventAction>(event.action),
+          .lane = event.lane, .noteTimeMicros = event.noteTimeMicros,
+          .songTimeMicros = event.songTimeMicros, .judgeTimeMicros = event.judgeTimeMicros,
+          .judgement = event.judgement, .diffMicros = event.diffMicros,
+          .releaseByBackspin = event.releaseByBackspin,
+          .releaseByHolding = event.releaseByHolding,
+          .audioLanePressed = event.audioLanePressed});
+    AudioCallbackState playback;
+    std::uint64_t sequence = 0;
+    for (const auto &event : buildReplayKeysoundSchedule(definition, replay, 0, std::nullopt))
+      require(audio::playback::InsertScheduledSound(playback,
+          {.soundData = &audio.head, .bus = event.bus, .startMicros = event.timeMicros,
+           .sequence = sequence++, .gain = event.gain, .voiceId = event.voiceId,
+           .setVoiceGain = event.setVoiceGain}), "live-captured replay audio schedules");
+    std::vector<float> rendered(live.size());
+    audio::playback::ActivateScheduledSounds(playback, 0, 1000, rendered.size(), 100);
+    audio::playback::MixActiveSounds(playback, rendered, rendered.size(), 1, 1, 1, 100);
+    if (!std::equal(live.begin(), live.end(), rendered.begin(),
+                   [](float a, float b) { return std::abs(a - b) < 0.00001F; })) {
+      std::cerr << (missedHead ? "missed HCN empty press adds replay audio\n"
+                              : "held classic BAD completion truncates replay head audio\n");
+      matched = false;
+    }
+  }
+  require(matched, "captured replay PCM must match actual live long-note output");
+}
+
+void testWorkerMissedHcnControlsPreviewVoice() {
+  for (bool preview : {false, true}) {
+    auto chart = bmsonReleaseFixture(3, 1, false, 960);
+    const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+    FakeClock clock;
+    FakeAudio unused;
+    WorkerVoiceAudio audio;
+    auto config = makeConfig(clock, unused);
+    config.simulation.judge = gameplay::CompiledGameplayJudge::from(
+        gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2));
+    config.audio = {.context = &audio, .reserve = &WorkerVoiceAudio::reserve,
+                    .commit = &WorkerVoiceAudio::commit, .setGain = &WorkerVoiceAudio::setGain};
+    gameplay::RealtimeGameplayWorker worker(definition, config);
+    require(worker.start(), "missed preview worker starts");
+    const auto edge = [&](bool pressed, long long time) {
+      clock.nowMicros.store(time);
+      require(worker.enqueueInput({.epoch = 7,
+          .type = pressed ? gameplay::RealtimeGameplayInputType::Press
+                          : gameplay::RealtimeGameplayInputType::Release,
+          .lane = 0, .steadyTimestampMicros = time}), "preview edge queues");
+      require(waitUntil([&] {
+        const auto snapshot = worker.acquireLatestSnapshot();
+        return snapshot && snapshot->latestTransaction.hasReplayEvent &&
+               snapshot->latestTransaction.replayEvent.songTimeMicros >= time;
+      }), "preview edge settles");
+    };
+    if (preview) {
+      edge(true, 500'000);
+      audio.mix(100, 1000);
+      edge(false, 600'000);
+      audio.mix(700, 1000);
+    }
+    clock.nowMicros.store(1'300'000);
+    require(waitUntil([&] {
+      const auto snapshot = worker.acquireLatestSnapshot();
+      return snapshot && snapshot->noteStates[0].dead;
+    }), "unaccepted HCN head resolves as missed");
+    audio.mix(300, 0);
+    edge(true, 1'600'000);
+    audio.mix(100, preview ? 3000 : 0);
+    edge(false, 1'700'000);
+    audio.mix(100, 0);
+    worker.stop();
+    require(worker.fault() == gameplay::RealtimeGameplayFault::None &&
+                audio.starts.load() == (preview ? 1 : 0) &&
+                audio.controls.load() == (preview ? 3 : 0),
+            "missed HCN controls only a previewed head and never restarts it");
+    std::vector<ReplayEvent> replay;
+    for (const auto &event : worker.copyReplayEventsAfterStop())
+      replay.push_back({.action = static_cast<ReplayEventAction>(event.action),
+          .lane = event.lane, .noteTimeMicros = event.noteTimeMicros,
+          .songTimeMicros = event.songTimeMicros, .judgeTimeMicros = event.judgeTimeMicros,
+          .judgement = event.judgement, .diffMicros = event.diffMicros});
+    AudioCallbackState playback;
+    for (const auto &event : buildReplayKeysoundSchedule(definition, replay, 0, std::nullopt))
+      require(audio::playback::InsertScheduledSound(playback,
+          {.soundData = &audio.head, .bus = event.bus, .startMicros = event.timeMicros,
+           .gain = event.gain, .voiceId = event.voiceId, .setVoiceGain = event.setVoiceGain}), "missed preview replay schedules");
+    std::vector<float> rendered(1800);
+    audio::playback::ActivateScheduledSounds(playback, 0, 1000, rendered.size(), 100);
+    audio::playback::MixActiveSounds(playback, rendered, rendered.size(), 1, 1, 1, 100);
+    for (const auto &[frame, sample] : std::array<std::pair<int, int>, 4>{{
+             {1200, 1000}, {1400, 0}, {1650, 3000}, {1750, 0}}})
+      require(std::abs(rendered[frame] - (preview ? sample : 0) * 0.9F / 32768) < 0.00001F,
+              "captured missed-HCN replay follows live preview mute/rehold PCM");
+  }
+}
+
+void testWorkerLongHeadVoiceControl() {
+  for (int type : {1, 2, 3}) for (bool inputAudio : {false, true}) {
+    auto chart = bmsonReleaseFixture(type, 1, false, 960);
+    const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+    FakeClock clock;
+    FakeAudio unused;
+    WorkerVoiceAudio audio;
+    auto config = makeConfig(clock, unused);
+    auto rules = gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2);
+    rules.normalReleaseMarginMicros = 100'000;
+    config.simulation.judge = gameplay::CompiledGameplayJudge::from(rules);
+    config.inputTriggeredKeysounds = inputAudio;
+    config.audio = {.context = &audio, .reserve = &WorkerVoiceAudio::reserve,
+                    .commit = &WorkerVoiceAudio::commit, .setGain = &WorkerVoiceAudio::setGain};
+    gameplay::RealtimeGameplayWorker worker(definition, config);
+    require(worker.start(), "voice worker starts");
+    const auto edge = [&](bool pressed, long long time) {
+      clock.nowMicros.store(time);
+      require(worker.enqueueInput({.epoch = 7,
+          .type = pressed ? gameplay::RealtimeGameplayInputType::Press
+                          : gameplay::RealtimeGameplayInputType::Release,
+          .lane = 0, .steadyTimestampMicros = time}), "voice edge queues");
+      require(waitUntil([&] {
+        const auto snapshot = worker.acquireLatestSnapshot();
+        return snapshot && snapshot->latestTransaction.hasReplayEvent &&
+               snapshot->latestTransaction.replayEvent.songTimeMicros >= time;
+      }), "voice input settles");
+    };
+    edge(true, 1'000'000);
+    audio.mix(500, inputAudio ? 1000 : 0);
+    edge(false, 1'500'000);
+    require(audio.controls.load() == 0, "deferred raw release does not mute early");
+    audio.mix(100, inputAudio ? 1000 : 0);
+    clock.nowMicros.store(1'600'000);
+    require(waitUntil([&] {
+      const auto snapshot = worker.acquireLatestSnapshot();
+      return snapshot && snapshot->noteStates[1].played;
+    }), "deferred release resolves");
+    audio.mix(600, 0);
+    edge(true, 2'200'000);
+    audio.mix(400, !inputAudio ? 0 : type == 3 ? 3000 : 1000);
+    edge(false, 2'600'000);
+    audio.mix(100, !inputAudio || type == 3 ? 0 : 1000);
+    require(worker.enqueueInput({.epoch = 7,
+        .type = gameplay::RealtimeGameplayInputType::Release,
+        .lane = 0, .steadyTimestampMicros = 2'700'000}), "repeated release queues");
+    worker.stop();
+    require(worker.fault() == gameplay::RealtimeGameplayFault::None &&
+                audio.controls.load() == (inputAudio ? (type == 3 ? 3 : 1) : 0) &&
+                audio.starts.load() == (inputAudio ? (type == 3 ? 1 : 2) : 0),
+            "voice controls are deduplicated and auto keysounds never receive input audio controls");
+    if (inputAudio) {
+      std::vector<ReplayEvent> replay;
+      for (const auto &event : worker.copyReplayEventsAfterStop()) {
+        if (event.action != gameplay::GameplayReplayAction::Press &&
+            event.action != gameplay::GameplayReplayAction::Release) continue;
+        replay.push_back({.action = event.action == gameplay::GameplayReplayAction::Press
+                                       ? ReplayEventAction::Press : ReplayEventAction::Release,
+                         .lane = event.lane, .noteTimeMicros = event.noteTimeMicros,
+                         .songTimeMicros = event.songTimeMicros, .judgeTimeMicros = event.judgeTimeMicros,
+                         .judgement = event.judgement, .diffMicros = event.diffMicros,
+                         .releaseByBackspin = event.releaseByBackspin,
+                         .releaseByHolding = event.releaseByHolding,
+          .audioLanePressed = event.audioLanePressed});
+      }
+      AudioCallbackState playback;
+      std::uint64_t sequence = 0;
+      for (const auto &event : buildReplayKeysoundSchedule(definition, replay, 0, std::nullopt))
+        require(audio::playback::InsertScheduledSound(playback,
+            {.soundData = &audio.head, .bus = event.bus, .startMicros = event.timeMicros,
+             .sequence = sequence++, .gain = event.gain, .voiceId = event.voiceId,
+             .setVoiceGain = event.setVoiceGain}), "captured replay audio schedules");
+      std::vector<float> samples(2800);
+      audio::playback::ActivateScheduledSounds(playback, 0, 1000, 2800, 100);
+      audio::playback::MixActiveSounds(playback, samples, 2800, 1, 1, 1, 100);
+      for (const auto &[frame, expected] : std::vector<std::pair<int, int>>{
+               {1550, 1000}, {1650, 0}, {2250, type == 3 ? 3000 : 1000},
+               {2650, type == 3 ? 0 : 1000}})
+        require(std::abs(samples[frame] - expected * 0.9F / 32768) < 0.00001F,
+                "captured replay scheduled PCM matches live head mute and HCN continuation");
+    }
+  }
+}
+
+void testWorkerBmsonReleaseAudio() {
+  for (int type : {1, 2, 3}) for (int completion : {0, 1, 2}) {
+    const bool automatic = completion != 0;
+    const bool autoplay = completion == 2;
+    if (completion == 1 && type != 1) continue;
+    for (bool inputAudio : {false, true}) for (bool tailSound : {false, true}) {
+      auto chart = bmsonReleaseFixture(type, 1, tailSound);
+      const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+      FakeClock clock;
+      FakeAudio audio;
+      auto config = makeConfig(clock, audio);
+      config.inputTriggeredKeysounds = inputAudio;
+      config.simulation.attempt.autoPlay = autoplay;
+      gameplay::RealtimeGameplayWorker worker(definition, config);
+      if (!autoplay) require(worker.enqueueInput({.epoch = 7, .type = gameplay::RealtimeGameplayInputType::Press,
+                  .lane = 0, .steadyTimestampMicros = 1'000'000}), "bmson head enqueues");
+      if (!automatic) require(worker.enqueueInput({.epoch = 7,
+                  .type = gameplay::RealtimeGameplayInputType::Release,
+                  .lane = 0, .steadyTimestampMicros = 2'000'000}), "bmson tail enqueues");
+      clock.nowMicros.store(2'000'001);
+      require(worker.start(), "release audio worker starts");
+      require(waitUntil([&] {
+        const auto snapshot = worker.acquireLatestSnapshot();
+        return snapshot && snapshot->noteStates[1].played;
+      }), "worker resolves bmson tail without a frame pump");
+      worker.stop();
+      require(worker.fault() == gameplay::RealtimeGameplayFault::None &&
+                  audio.commitCount.load() == (inputAudio ? (tailSound ? 2 : 1) : 0) &&
+                  audio.reserveCount.load() == audio.commitCount.load() &&
+                  (!inputAudio || audio.lastCommitted.load() == (tailSound ? 1 : 0)),
+              "manual/classic automatic release commits tail once, respects auto keysounds and skips NoWav");
+      const auto replay = worker.copyReplayEventsAfterStop();
+      require(std::ranges::count_if(replay, [](const auto &event) {
+                return event.action == gameplay::GameplayReplayAction::Release &&
+                       event.noteTimeMicros == 2'000'000 && event.judgement != None;
+              }) == 1, "worker captures one tail-identified resolved release");
+    }
+  }
+  auto chart = bmsonReleaseFixture(2, 8);
+  const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+  FakeClock clock;
+  FakeAudio audio;
+  auto config = makeConfig(clock, audio);
+  config.simulation.judge = gameplay::CompiledGameplayJudge::from(
+      gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2));
+  gameplay::RealtimeGameplayWorker worker(definition, config);
+  for (bool head : {true, false}) {
+    require(worker.enqueueInput({.epoch = 7, .type = gameplay::RealtimeGameplayInputType::Press,
+                .lane = 7, .steadyTimestampMicros = head ? 1'000'000 : 2'000'000,
+                .hasReplayControl = true,
+                .replayControl = {.kind = head ? replay::LogicalControlKind::ScratchClockwise
+                                               : replay::LogicalControlKind::ScratchCounterClockwise,
+                                  .player = 1}}), "scratch head/reversal enqueues");
+  }
+  require(worker.start(), "backspin audio worker starts");
+  require(waitUntil([&] {
+    const auto snapshot = worker.acquireLatestSnapshot();
+    return snapshot && snapshot->noteStates[1].played;
+  }), "opposite scratch key resolves the charge tail");
+  worker.stop();
+  require(worker.fault() == gameplay::RealtimeGameplayFault::None &&
+              audio.commitCount.load() == 2 && audio.lastCommitted.load() == 1,
+          "scratch reversal arriving as Press commits only its tail keysound");
+}
+
 } // namespace
 
 int main() {
+  testWorkerAdjacentHcnReplayAudio();
+  testWorkerBackspinCompanionAudio();
+  testWorkerLateClassicReplayAudio();
+  testWorkerClassicScratchCompletionAudio();
+  testWorkerScratchHcnRetainsAudioUntilFinalLift();
+  testWorkerMissedHcnControlsPreviewVoice();
+  testLiveReplayLongNoteAudioAfterMissAndHeldCompletion();
+  testWorkerLongHeadVoiceControl();
+  testWorkerBmsonReleaseAudio();
   testWakeTimeoutPreservesConcurrentSignal();
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
   // Run the source-age check before synthetic timestamps in other fixtures.

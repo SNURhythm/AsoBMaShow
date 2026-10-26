@@ -276,6 +276,7 @@ private:
   gameplay::GameplayPolicyBuildOutcome rulesetPolicyBuild;
   Judge judge;
   ScoreProvenance attemptProvenance;
+  void processLegacyPendingReleases(long long time);
   void checkPassedTimeline(long long time);
   void detonateLandmine(bms_parser::LandmineNote *note,
                         long long songTimeMicros, long long judgeTimeMicros);
@@ -289,7 +290,9 @@ private:
                          const bms_parser::Note *note, long long songTimeMicros,
                          long long judgeTimeMicros,
                          const JudgeResult &judgeResult,
-                         bool checkGaugeFailure = true);
+                         bool checkGaugeFailure = true,
+                         bool releaseByBackspin = false,
+                         bool releaseByHolding = false);
   void recordPreparationLaneEvent(ReplayEventAction action, int lane,
                                   long long songTimeMicros);
   void appendReplayLaneCoverEvent(float noteStartPositionPercent,

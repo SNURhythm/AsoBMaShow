@@ -79,6 +79,82 @@ void requireNear(float actual, float expected, std::string_view message) {
   require(std::fabs(actual - expected) < 0.0001f, message);
 }
 
+void testRealtimeMonophonicRetriggerReusesVoiceAtCapacity() {
+  AudioCallbackState state;
+  SoundData other, shared;
+  for (auto *sound : {&other, &shared}) {
+    sound->channels = 1;
+    sound->outputData = {1000, 1000};
+    sound->outputFrameCount = 2;
+  }
+  shared.monophonic = true;
+  for (std::size_t index = 0; index < kMaxActiveSounds - 1; ++index)
+    require(audio::playback::AppendActiveSound(state, &other, audio::Bus::Keysound, 0),
+            "unrelated voices fill capacity");
+  require(audio::playback::AppendActiveSound(state, &shared, audio::Bus::Keysound, 0),
+          "shared slice occupies the last slot");
+  const auto reservation = audio::playback::TryReserveRealtimeCommand(state);
+  require(reservation && audio::playback::CommitRealtimeCommand(state, *reservation,
+      {.type = AudioCommandType::PlayNow, .soundData = &shared, .bus = audio::Bus::Keysound}),
+      "monophonic retrigger queues at capacity");
+  audio::playback::DrainRealtimeCommands(state);
+  std::array<float, 1> output{};
+  audio::playback::MixActiveSounds(state, output, 1, 1, 1, 1, 100);
+  require(state.playingSoundCount == kMaxActiveSounds,
+          "retrigger reuses its own voice without stealing an unrelated keysound");
+  requireNear(output[0], kMaxActiveSounds * 1000.0F * 0.9F / 32768,
+              "all original keysounds remain audible after the shared slice retriggers");
+}
+
+void testNoteVoiceGainPreservesLayersAndSharedRetrigger() {
+  auto shared = std::make_shared<SoundData>();
+  shared->channels = 1;
+  shared->outputData = {1000, 2000, 3000, 4000, 5000, 6000, 7000, 8000};
+  shared->outputFrameCount = 8;
+  shared->monophonic = true;
+  auto layer = std::make_shared<SoundData>();
+  layer->channels = 1;
+  layer->outputData = {100, 200, 300, 400, 500, 600, 700, 800};
+  layer->outputFrameCount = 8;
+  layer->monophonic = true;
+  SoundData group;
+  group.layers = {shared, layer};
+  group.outputFrameCount = 8;
+  AudioCallbackState state;
+  require(audio::playback::AppendActiveSound(state, &group, audio::Bus::Keysound,
+                                            0, 0, 1.0F, false, 11), "head layers start");
+  SoundData silent;
+  silent.channels = 1;
+  silent.outputData = std::vector<short>(8, 0);
+  silent.outputFrameCount = 8;
+  for (std::size_t i = 2; i < kMaxActiveSounds; ++i)
+    require(audio::playback::AppendActiveSound(state, &silent, audio::Bus::Bgm, 0),
+            "fill every active slot before scheduled gain controls");
+  // Four changes in one callback cover exact boundaries and repeated controls.
+  for (const auto &[time, gain] : std::vector<std::pair<long long, float>>{
+           {1000, 0}, {1500, 0}, {3000, 1}, {4000, 0}})
+    require(audio::playback::InsertScheduledSound(state,
+        {.soundData = &group, .bus = audio::Bus::Keysound, .startMicros = time,
+         .gain = gain, .voiceId = 11, .setVoiceGain = true}), "gain event schedules");
+  audio::playback::ActivateScheduledSounds(state, 0, 1000, 5, 100);
+  std::array<float, 5> samples{};
+  audio::playback::MixActiveSounds(state, samples, 5, 1, 1, 1, 100);
+  for (int frame = 0; frame < 5; ++frame)
+    requireNear(samples[frame], (frame == 0 ? 1100 : frame == 3 ? 4400 : 0) * 0.9F / 32768,
+                "mute/resume applies to every layer at the exact frame and retains playhead");
+  require(state.playingSoundCount == kMaxActiveSounds,
+          "gain changes work at capacity without adding, dropping or stealing voices");
+  require(audio::playback::AppendActiveSound(state, shared.get(), audio::Bus::Keysound,
+                                            0, 0, 1.0F, false, 22), "another note retriggers shared slice");
+  require(audio::playback::EnqueueCommand(state,
+      {.type = AudioCommandType::SetVoiceGain, .gain = 1, .voiceId = 11}), "old head restores");
+  audio::playback::DrainCommands(state);
+  std::array<float, 1> after{};
+  audio::playback::MixActiveSounds(state, after, 1, 1, 1, 1, 100);
+  requireNear(after[0], 1600 * 0.9F / 32768,
+              "head restore advances remaining layer but does not restart or control another note's shared voice");
+}
+
 void testBmsonLayersShareMonophonicSliceVoices() {
   const auto makeSlice = [](short value) {
     auto sound = std::make_shared<SoundData>();
@@ -663,6 +739,77 @@ std::vector<float> mixMonoRampAtRate(int playbackRatePercent,
   return output;
 }
 
+void testFractionalVoiceTransportAndRateRemap() {
+  const auto makeSound = [](int scale) {
+    auto sound = std::make_shared<SoundData>();
+    sound->channels = 1;
+    sound->sourceSampleRate = 44100;
+    std::vector<short> pcm(32);
+    for (std::size_t i = 0; i < pcm.size(); ++i) pcm[i] = i * scale;
+    sound->sourceData = std::move(pcm);
+    sound->outputData = sound->sourceData;
+    sound->sourceFrameCount = sound->outputFrameCount = 32;
+    return sound;
+  };
+  const auto first = makeSound(300), second = makeSound(600);
+  SoundData group;
+  group.layers = {first, second};
+  constexpr std::uint32_t fraction = 3U << 30;
+  for (bool layered : {false, true}) for (int path = 0; path < 5; ++path) {
+    AudioCallbackState state;
+    auto *sound = layered ? &group : first.get();
+    const AudioCommand command{
+        .type = path == 2 || path == 4 ? AudioCommandType::Schedule : AudioCommandType::PlayNow,
+        .soundData = sound, .bus = audio::Bus::Keysound, .startFrame = 3,
+        .startFractionQ32 = fraction, .voiceId = 17};
+    if (path == 0) require(audio::playback::AppendActiveSound(state, sound, audio::Bus::Keysound,
+        0, 3, 1, false, 17, fraction), "direct fractional voice starts");
+    else if (path < 3) {
+      require(audio::playback::EnqueueCommand(state, command), "fractional command queues");
+      audio::playback::DrainCommands(state);
+    } else {
+      const auto slot = audio::playback::TryReserveRealtimeCommand(state);
+      require(slot && audio::playback::CommitRealtimeCommand(state, *slot, command),
+              "fractional realtime command queues");
+      audio::playback::DrainRealtimeCommands(state);
+    }
+    require(audio::playback::ScheduledMixReady(state, 0, 44100, 4, 125),
+            "fractional transport is ready");
+    audio::playback::ActivateScheduledSounds(state, 0, 44100, 4, 125);
+    std::array<float, 4> mixed{};
+    audio::playback::MixActiveSounds(state, mixed, 4, 1, 1, 1, 125);
+    for (int frame = 0; frame < 4; ++frame)
+      requireNear(mixed[frame], (3.75F + frame * 1.25F) * (layered ? 900 : 300) / 32768 * 0.9F,
+                  "every command path and composite layer retains the fractional cursor");
+    for (std::size_t voice = 0; voice < state.playingSoundCount; ++voice)
+      require(state.playingSounds[voice].sourceFrameQ32 == (8ULL << 32) + fraction,
+              "fractional transport advances without phase loss");
+  }
+  AudioCallbackState state;
+  require(audio::playback::AppendActiveSound(state, first.get(), audio::Bus::Keysound,
+      0, 3, 1, false, 17, fraction), "fractional rate-change voice starts");
+  require(audio::playback::InsertScheduledSound(state, {.soundData = first.get(),
+      .startFrame = 3, .startFractionQ32 = fraction}), "fractional rate-change schedule queues");
+  const AudioCommand command{.type = AudioCommandType::PlayNow, .soundData = first.get(),
+      .startFrame = 3, .startFractionQ32 = fraction};
+  require(audio::playback::EnqueueCommand(state, command), "fractional rate-change command queues");
+  const auto slot = audio::playback::TryReserveRealtimeCommand(state);
+  require(slot && audio::playback::CommitRealtimeCommand(state, *slot, command),
+          "fractional rate-change realtime command queues");
+  const std::array sounds{first.get()};
+  auto transition = audio::playback::PrepareOutputRateTransition(sounds, 44100, 48000);
+  require(transition.has_value(), "fractional rate transition prepares");
+  audio::playback::CommitOutputRateTransition(std::move(*transition), state);
+  const auto expected = (((3ULL << 32) + fraction) * 48000 + 22050) / 44100;
+  const auto position = [](const auto &event) {
+    return (static_cast<std::uint64_t>(event.startFrame) << 32) | event.startFractionQ32;
+  };
+  require(state.playingSounds[0].sourceFrameQ32 == expected &&
+          position(state.scheduledSounds[0]) == expected && position(state.commandQueue[0]) == expected &&
+          position(state.realtimeCommandQueue[0]) == expected,
+          "device-rate transition remaps active and pending fractional positions identically");
+}
+
 void testPitchShiftMixerUsesQ32Interpolation() {
   const auto fast = mixMonoRampAtRate(200, 4);
   requireNear(fast[0], 0.0f, "200 percent starts at source frame zero");
@@ -710,9 +857,11 @@ void testScheduledOffsetsUseInversePlaybackRate() {
               slowState, {.soundData = &sound, .startMicros = 500}),
           "slow scheduled sound enters the callback state");
   audio::playback::ActivateScheduledSounds(slowState, 0, 1000, 4, 50);
-  require(slowState.playingSoundCount == 1 &&
-              slowState.playingSounds[0].outputOffsetFrames == 1,
-          "500 chart microseconds take one output frame at 50 percent");
+  std::array<float, 4> slow{};
+  audio::playback::MixActiveSounds(slowState, slow, 4, 1, 1, 1, 50);
+  for (size_t i = 0; i < slow.size(); ++i)
+    requireNear(slow[i], std::array<float, 4>{0, 100, 150, 200}[i] * 0.9F / 32768,
+                "500 chart microseconds take one output frame at 50 percent");
 
   sound.playing = false;
   AudioCallbackState fastState;
@@ -720,9 +869,11 @@ void testScheduledOffsetsUseInversePlaybackRate() {
               fastState, {.soundData = &sound, .startMicros = 2000}),
           "fast scheduled sound enters the callback state");
   audio::playback::ActivateScheduledSounds(fastState, 0, 1000, 4, 200);
-  require(fastState.playingSoundCount == 1 &&
-              fastState.playingSounds[0].outputOffsetFrames == 1,
-          "two chart milliseconds take one output frame at 200 percent");
+  std::array<float, 4> fast{};
+  audio::playback::MixActiveSounds(fastState, fast, 4, 1, 1, 1, 200);
+  for (size_t i = 0; i < fast.size(); ++i)
+    requireNear(fast[i], std::array<float, 4>{0, 100, 300, 0}[i] * 0.9F / 32768,
+                "two chart milliseconds take one output frame at 200 percent");
 
   sound.playing = false;
   AudioCallbackState boundedState;
@@ -1326,6 +1477,8 @@ void testPartiallyConsumedScheduleSupportsWrapInsertionRemovalAndGrowth() {
             "wrapped schedule fixture fills prepared capacity");
   }
   audio::playback::ActivateScheduledSounds(state, 0, 1000, 2, 100);
+  std::array<float, 2> consumed{};
+  audio::playback::MixActiveSounds(state, consumed, 2, 1, 1, 1, 100);
   require(audio::playback::InsertScheduledSound(
               state, {.soundData = &sound, .startMicros = 5000, .sequence = 5}) &&
               audio::playback::InsertScheduledSound(
@@ -1380,7 +1533,9 @@ void testPartialScheduleClearRetirementAndRestart() {
                   state, {.soundData = &sound, .startMicros = 3000}),
           "partial clear fixture stages retired, System and chart events");
   audio::playback::ActivateScheduledSounds(state, 0, 1000, 2, 100);
-  require(state.playingSoundCount == 1 && state.scheduledSoundCount == 2 &&
+  std::array<float, 2> consumed{};
+  audio::playback::MixActiveSounds(state, consumed, 2, 1, 1, 1, 100);
+  require(state.playingSoundCount == 0 && state.scheduledSoundCount == 2 &&
               state.scheduledNonSystemSounds.load() == 1,
           "retired due sounds leave scheduling ownership without becoming active");
   audio::playback::ClearCallbackSounds(state, true);
@@ -1597,10 +1752,13 @@ int main() {
     testPostStartQueryFailureCannotPublishRunningState();
     testStopFailureCannotClearCallbackState();
     testConfirmedStopClearsCallbackStateAfterDrain();
+    testFractionalVoiceTransportAndRateRemap();
     testPitchShiftMixerUsesQ32Interpolation();
     testQ32ActiveCursorRejectsUnrepresentableStartFrame();
     testScheduledOffsetsUseInversePlaybackRate();
     testBusFlowAndMixing();
+    testRealtimeMonophonicRetriggerReusesVoiceAtCapacity();
+    testNoteVoiceGainPreservesLayersAndSharedRetrigger();
     testBmsonLayersShareMonophonicSliceVoices();
     testScopedSystemSoundLoopsAtPerVoiceGainAndStopsSelectively();
     testOwnerStopCommandAcknowledgesWithoutInterruptingOtherVoices();

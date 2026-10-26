@@ -30,6 +30,11 @@ Keyboard lanes preserve the reference's 26-lane namespace per player. Wheel
 lanes are independently playable and bindable; player two starts at lane 26.
 Pop'n 5-key shares the reference's pop'n mode identity while using five active
 lanes. Unsupported mode hints and versions are rejected.
+Stock Beatoraja replays retain five-entry pop'n shuffle metadata. Double-play
+shuffle rows convert between Beatoraja's global second-player indices and the
+app's player-local representation; older Aso exports with local rows still load.
+Stock keyboard RANDOM/R-RANDOM rows with Beatoraja's known final-wheel display
+error are repaired on import; canonical shuffle metadata remains strict.
 
 Sound channels are sliced at their chart-time positions, including tempo changes
 and stops. Continuations advance through the source recording; restarts begin
@@ -50,6 +55,27 @@ suppressed. Legacy `total` is absolute; 1.0 `total` scales the selected ruleset'
 default gauge gain, including zero gain. Judge ranks 0–4 use the BMS rank table,
 negative ranks retain normal rank, and other ranks use whole-percent extended
 rank. Nonpositive modern resolution falls back to 240 pulses per quarter note.
+Practice menus show effective absolute TOTAL; selecting a shorter range scales
+that original total once, preserving gain per note and explicit zero gain.
+Gameplay and result skins expose effective TOTAL while stored chart metadata
+retains the authored percentage. Keyboard-double appearance settings include
+all 52 physical lanes, with distinct labels for the four wheels.
+Authored long-note release sounds play when the release resolves, including
+live play, replays, and offline replay audio. Failed hold releases mute the
+ongoing head sound when the failure resolves. HCN release/rehold changes its
+volume without restarting playback, including previewed heads that were missed.
+Replay seeking restores that voice state and the original source position.
+Modern raw-input replays preserve the distinction between a scratch reversal,
+a lift, and completion while holding a classic LN. They also regenerate the
+aggregate held state of both scratch directions: releasing one key keeps HCN
+audio playing while the other remains held. Older judgement-only replays cannot
+recover that physical state or release cause and use their recorded lane edges
+and the lift behavior when resolving failed-release head audio.
+Raw-input replay reconstruction also retains audio updates from inputs that
+produce no judgement event, preserving HCN volume changes and their order among
+events at the same timestamp. These updates are runtime data; the stored replay
+format is unchanged. Judgement-only replays use their recorded event boundaries
+and cannot reconstruct intervening live updates.
 
 Compatibility was checked against the local jbms-parser checkout at
 `8108cd54a19275810e1f5d2c9586f008eb6db95e`, including lane assignments, hidden

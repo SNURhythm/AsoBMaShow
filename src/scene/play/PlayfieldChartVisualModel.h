@@ -14,6 +14,7 @@
 
 namespace bms_parser {
 class Chart;
+class ChartMeta;
 }
 
 using ChartVisualId = std::uint32_t;
@@ -24,6 +25,10 @@ inline constexpr std::uint32_t kNoRetainedTimelineOrdinal =
 // Unicode decimal-digit and overflow behavior. Result and gameplay skins must
 // share this conversion so their level selectors agree.
 [[nodiscard]] std::optional<int> beatorajaParseInt(std::string_view value);
+
+// Resolve bmson percentages for presentation without mutating cached metadata.
+[[nodiscard]] double
+beatorajaPresentationTotal(const bms_parser::ChartMeta &metadata);
 
 enum class ChartVisualNoteKind : std::uint8_t {
   Normal,
@@ -201,7 +206,8 @@ struct PlayfieldChartVisualModel {
 
 [[nodiscard]] PlayfieldChartVisualModel
 buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
-                               int longNoteModeOverride);
+                               int longNoteModeOverride,
+                               std::optional<double> effectiveGaugeTotal = std::nullopt);
 
 // LaneRenderer#getCurrentSpeed(), expressed against the immutable chart DTO.
 [[nodiscard]] double

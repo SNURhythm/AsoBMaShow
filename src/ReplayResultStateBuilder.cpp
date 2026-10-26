@@ -322,7 +322,8 @@ SkinGameplayGraphState BuildSkinGameplayGraphState(
     return graph;
   }
   const PlayfieldChartVisualModel model =
-      buildPlayfieldChartVisualModel(chart, chart.Meta.LnMode);
+      buildPlayfieldChartVisualModel(chart, chart.Meta.LnMode,
+                                    state.gaugeRules().effectiveTotal);
   auto chartGraph =
       std::make_shared<SkinGameplayChartGraphState>(model.skinGameplayGraph);
   const auto lookup = buildReplayNoteLookup(chart);
@@ -363,7 +364,8 @@ SkinGameplayGraphState BuildSkinGameplayGraphState(
 SkinGameplayGraphState BuildSkinGameplayChartGraphState(
     bms_parser::Chart &chart, const RhythmState &state) {
   const PlayfieldChartVisualModel model =
-      buildPlayfieldChartVisualModel(chart, chart.Meta.LnMode);
+      buildPlayfieldChartVisualModel(chart, chart.Meta.LnMode,
+                                    state.gaugeRules().effectiveTotal);
   auto chartGraph =
       std::make_shared<SkinGameplayChartGraphState>(model.skinGameplayGraph);
   auto dynamic = std::make_shared<SkinGameplayDynamicGraphState>();

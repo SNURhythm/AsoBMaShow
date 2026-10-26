@@ -1631,6 +1631,27 @@ void testBmsonChordSlicesAndBuses(const std::filesystem::path &root) {
           "same slice restarts once while a distinct SliceId with the same source layers independently");
 }
 
+void testBmsonSharedBackgroundSliceBus(const std::filesystem::path &root) {
+  for (const auto [layered, chordKeys] : {std::pair{false, 1}, std::pair{true, 1},
+                                         std::pair{false, 16}, std::pair{true, 16}}) {
+    auto parsed = bmsonSharedBusFixture(root / std::to_string(chordKeys) /
+        (layered ? "layered" : "same-wav"), layered, chordKeys);
+    for (const auto gains : {audio::PagedPreviewGains{0.0f, 1.0f},
+                             audio::PagedPreviewGains{1.0f, 0.0f}}) {
+      auto source = audio::PagedPreviewSource::Create(*parsed, {}, 0, gains);
+      require(source->Begin(44100), "begin shared BGM/key slice preview");
+      waitPrepared(source);
+      const auto pcm = renderAll(source);
+      const float expected = 9999 * gains.bgm + (layered ? 999 * gains.keysound : 0);
+      require(std::abs(pcm.at(26460 * 2) * (32768.0f / 0.9f) - expected) < 2,
+              layered ? "shared composite slice must use its final BGM trigger's bus"
+                      : "same-WAV note and BGM must retain the final BGM trigger's bus");
+      require(pcm.at(17640 * 2) == 0 && pcm.at(66150 * 2) == 0,
+              "shared slice deduplication must preserve its onset and end");
+    }
+  }
+}
+
 int main() {
   bypassPreparationGate = true;
   const auto root = std::filesystem::temp_directory_path() /
@@ -1641,6 +1662,7 @@ int main() {
     testBmsonDependencyReadyStartup(root / "bmson-progressive");
     testBmsonExpiredSlicesDoNotBlockHighlight(root / "bmson-expired");
     testBmsonChordSlicesAndBuses(root / "bmson-chord");
+    testBmsonSharedBackgroundSliceBus(root / "bmson-shared-bus");
     testCacheClearDuringDecode(root / "highlight");
     testUnusedDefinitionsAreNotPrepared(root / "highlight");
     testLeadingSilenceIsSkippedWithoutChangingLaterAudio(root / "trim");

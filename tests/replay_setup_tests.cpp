@@ -173,6 +173,38 @@ void testExactLaneShufflePatterns() {
          "out-of-range lane pattern entry is rejected");
 }
 
+void testPopnFiveKeyShuffleAndCanonicalDoublePlayPatterns() {
+  auto setup = validSetup();
+  setup.chart.keyMode = 9;
+  setup.doublePlayOption = replay::DoublePlayOption::Normal;
+  setup.player1.laneShufflePattern = {0, 4, 2, 3, 1};
+  for (const auto source : {replay::ReplaySetupSource::LocalCapture,
+                            replay::ReplaySetupSource::AsoExtension,
+                            replay::ReplaySetupSource::StockBeatoraja}) {
+    expect(replay::validateReplaySetup(setup, source).valid(),
+           "pop'n 5K retains a five-lane permutation under the shared 9K identity");
+    for (const auto &pattern : std::vector<std::vector<int>>{
+             {}, {0, 1, 2, 3}, {0, 1, 2, 3, 4, 5},
+             {0, 4, 2, 3, 3}, {0, 5, 2, 3, 1}, {-1, 4, 2, 3, 1}}) {
+      auto invalid = setup;
+      invalid.player1.laneShufflePattern = pattern;
+      expect(replay::validateReplaySetup(invalid, source).issue ==
+                 replay::ReplaySetupIssue::LaneShufflePattern,
+             "pop'n shuffle metadata must remain an exact five- or nine-lane permutation");
+    }
+  }
+  for (const auto [mode, width] : {std::pair{10, 6}, {14, 8}, {48, 26}}) {
+    setup = validSetup();
+    setup.chart.keyMode = mode;
+    setup.player2.laneShufflePattern.emplace();
+    for (int lane = 0; lane < width; ++lane)
+      setup.player2.laneShufflePattern->push_back(lane + width);
+    expect(replay::validateReplaySetup(setup, replay::ReplaySetupSource::AsoExtension)
+                   .issue == replay::ReplaySetupIssue::LaneShufflePattern,
+           "canonical extensions require player-local DP patterns; only stock import normalizes globals");
+  }
+}
+
 void testUndefinedLongNoteContract() {
   auto noLongNotes = validSetup();
   noLongNotes.longNoteMode = 0;
@@ -348,6 +380,7 @@ int main() {
   testUnknownSetupSourceFailsClosed();
   testSupportedKeyModesAndDoublePlayOption();
   testExactLaneShufflePatterns();
+  testPopnFiveKeyShuffleAndCanonicalDoublePlayPatterns();
   testUndefinedLongNoteContract();
   testAttemptSetupPercentagesMatchExistingCaptureContract();
   testKnownOlderRulesRetainPlayableInput();

@@ -1250,7 +1250,7 @@ void testAutoplayChargeAndHellChargeReleaseAtTiming() {
                 gameplay::LaneVisualAction::Press &&
             advanced.transactions[tailIndex].noteId == ids.tail &&
             advanced.transactions[tailIndex].soundNoteId ==
-                gameplay::kInvalidNoteId &&
+                ids.tail &&
             advanced.transactions[tailIndex].judge.judgement == PGreat &&
             advanced.transactions[tailIndex].laneVisual.action ==
                 gameplay::LaneVisualAction::Release,

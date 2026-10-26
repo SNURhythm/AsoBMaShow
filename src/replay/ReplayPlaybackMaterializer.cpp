@@ -244,6 +244,28 @@ ReplayPlaybackMaterializer::materializeForConsumers(
   const GaugeStateSnapshot initialGaugeState =
       simulation.scoreState().gaugeSnapshot();
 
+  std::vector<ReplayAudioUpdate> audioUpdates;
+  const auto retainAudioUpdate = [&](std::int64_t time,
+      std::span<const gameplay::GameplayInputResult> transactions) {
+    const auto eventCount = std::ranges::count_if(transactions,
+        [](const auto &transaction) { return transaction.hasReplayEvent; });
+    if (static_cast<std::size_t>(eventCount) > simulation.replayEvents().size()) return;
+    // Results retain the audio-before-event order within advance/begin/finish;
+    // the phase's final replay count alone would put controls after releases.
+    auto eventIndex = simulation.replayEvents().size() - static_cast<std::size_t>(eventCount);
+    for (const auto &transaction : transactions) {
+      if (transaction.gainNoteId != gameplay::kInvalidNoteId) {
+        const auto &head = definition.note(transaction.gainNoteId);
+        audioUpdates.push_back({.beforeEventIndex = eventIndex,
+            .songTimeMicros = transaction.hasReplayEvent ? transaction.replayEvent.songTimeMicros : time,
+            .lane = head.lane, .headTimeMicros = head.timingMicros,
+            .gain = transaction.keysoundGain});
+      }
+      if (transaction.hasReplayEvent) ++eventIndex;
+    }
+    audioUpdates.push_back({.beforeEventIndex = eventIndex, .songTimeMicros = time});
+  };
+
   std::int64_t currentSongTime = kReplayLimits.minimumSongTimeMicros;
   struct GameplayEdge {
     int lane;
@@ -301,8 +323,8 @@ ReplayPlaybackMaterializer::materializeForConsumers(
       if (state.holding && !state.played) {
         const gameplay::GameplayInputContext context{
             .songTimeMicros = deadline, .laneBeamTimeMicros = deadline};
-        simulation.beginInputUpdate(physicalStates, context);
-        simulation.finishInputUpdate(context);
+        retainAudioUpdate(deadline, simulation.beginInputUpdate(physicalStates, context).transactions);
+        retainAudioUpdate(deadline, simulation.finishInputUpdate(context).transactions);
         lastSimulatedTime = deadline;
       }
     }
@@ -352,13 +374,19 @@ ReplayPlaybackMaterializer::materializeForConsumers(
       }
     }
     if (*selectedRuleset == GameplayRuleset::Beatoraja) {
-      simulation.advanceTo(currentSongTime, currentSongTime);
+      retainAudioUpdate(currentSongTime,
+          simulation.advanceTo(currentSongTime, currentSongTime).transactions);
       for (const auto &edge : edges) {
         const gameplay::GameplayInputContext context{
             .songTimeMicros = currentSongTime, .laneBeamTimeMicros = currentSongTime,
             .inputDelayMicros = edge.delayMicros};
-        if (edge.pressed) simulation.applyPressAt(edge.lane, edge.lane, context);
-        else simulation.applyReleaseAt(edge.lane, context, edge.backSpin);
+        const gameplay::GameplayLaneInputState physical{edge.lane, edge.pressed || edge.backSpin};
+        retainAudioUpdate(chart_timing::subtract(currentSongTime, edge.delayMicros),
+            simulation.beginInputUpdate(std::span(&physical, 1), context).transactions);
+        if (edge.pressed) simulation.pressLane(edge.lane, edge.lane, context);
+        else simulation.releaseLane(edge.lane, context, edge.backSpin);
+        retainAudioUpdate(chart_timing::subtract(currentSongTime, edge.delayMicros),
+            simulation.finishInputUpdate(context).transactions);
       }
       lastSimulatedTime = currentSongTime;
       return !simulation.replayOverflowed() && !simulation.automaticResultOverflowed() &&
@@ -382,7 +410,8 @@ ReplayPlaybackMaterializer::materializeForConsumers(
     const gameplay::GameplayInputContext context{
         .songTimeMicros = currentSongTime, .laneBeamTimeMicros = currentSongTime};
     completeClassicReleasesBefore(currentSongTime, physicalStates);
-    simulation.beginInputUpdate(physicalStates, context);
+    retainAudioUpdate(currentSongTime,
+        simulation.beginInputUpdate(physicalStates, context).transactions);
     for (const auto &edge : edges) {
       auto edgeContext = context;
       edgeContext.inputDelayMicros = edge.delayMicros;
@@ -396,7 +425,7 @@ ReplayPlaybackMaterializer::materializeForConsumers(
         simulation.releaseLane(edge.lane, edgeContext, edge.backSpin);
       }
     }
-    simulation.finishInputUpdate(context);
+    retainAudioUpdate(currentSongTime, simulation.finishInputUpdate(context).transactions);
     lastSimulatedTime = currentSongTime;
     return !simulation.replayOverflowed() && !simulation.automaticResultOverflowed() &&
            !simulation.scoreState().gaugeHistoryOverflowed();
@@ -406,7 +435,8 @@ ReplayPlaybackMaterializer::materializeForConsumers(
       -> std::optional<result_persistence::ModernChartResult> {
     completeClassicReleasesBefore(currentSongTime, {});
     if (!lastSimulatedTime || *lastSimulatedTime != currentSongTime) {
-      simulation.advanceTo(currentSongTime, currentSongTime);
+      retainAudioUpdate(currentSongTime,
+          simulation.advanceTo(currentSongTime, currentSongTime).transactions);
     }
     acceptedReplayEventCount = simulation.replayEvents().size();
     if (document.timeBounds.aborted.value_or(false)) {
@@ -523,8 +553,12 @@ ReplayPlaybackMaterializer::materializeForConsumers(
                              .gauge = event.gauge,
                              .gaugeType = event.gaugeType,
                              .combo = event.combo,
-                             .score = event.score});
+                             .score = event.score,
+                             .releaseByBackspin = event.releaseByBackspin,
+                             .releaseByHolding = event.releaseByHolding,
+                             .audioLanePressed = event.audioLanePressed});
   }
+  replay.audioUpdates = std::move(audioUpdates);
   replay.touchSamples.reserve(document.playback.touchSamples.size());
   for (const auto &sample : document.playback.touchSamples) {
     replay.touchSamples.push_back({.action = legacyTouchAction(sample.action),

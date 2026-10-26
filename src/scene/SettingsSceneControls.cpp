@@ -1298,9 +1298,11 @@ void SettingsScene::appendBuiltInNoteControls(
                                metrics.bodyTextSize, app_theme::textPrimary()));
   body->addView(makeWrappedText(i18n::message("settings.notes.help"),
                                metrics.smallTextSize, app_theme::textSecondary()));
-  const auto laneLabel = [&scratches, &keys](int candidate) -> std::string {
+  const auto laneLabel = [&scratches, &keys, keyMode](int candidate) -> std::string {
     const auto scratchIt = std::find(scratches.begin(), scratches.end(), candidate);
     const auto keyIt = std::find(keys.begin(), keys.end(), candidate);
+    if (scratchIt != scratches.end() && (keyMode == 24 || keyMode == 48))
+      return "W" + std::to_string(scratchIt - scratches.begin() + 1);
     if (scratchIt != scratches.end())
       return scratches.size() == 1 ? "S" : scratchIt == scratches.begin() ? "LS" : "RS";
     return std::to_string(keyIt - keys.begin() + 1);

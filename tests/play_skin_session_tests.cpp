@@ -10487,6 +10487,20 @@ void testResultBridgeRetainsPreparedChartResultProperties() {
              noDocument.supported && !noDocument.value && hasDocument.supported &&
              hasDocument.value,
          "result bridge retains Beatoraja's prepared chart properties");
+
+  meta.KeyMode = 7;
+  meta.TotalNotes = 1;
+  meta.Total = 100.0;
+  meta.TotalIsRelative = true;
+  expect(bridge.integerProperty({368}, {}).value == 260 &&
+             bridge.floatProperty({368}, {}).value == 260.0,
+         "result TOTAL fallback resolves bmson percentages from metadata");
+  meta.Total = 0.0;
+  expect(bridge.floatProperty({368}, {}).value == 0.0,
+         "result TOTAL fallback preserves explicit bmson zero");
+  graph->totalGauge = 160.16;
+  expect(bridge.floatProperty({368}, {}).value == 160.16,
+         "prepared ruleset TOTAL takes priority over metadata fallback");
 }
 
 void testResultBridgeProjectsIrRankingRows() {

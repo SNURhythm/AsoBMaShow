@@ -1,9 +1,14 @@
 #include "PlayOptionUtils.h"
 #include "BmsonAudioFixture.h"
+#include "BmsonMultichannelFixture.h"
+#include "BmsonPhaseFixture.h"
+#include "BmsonReleaseFixture.h"
 #include "RAII.h"
 #include "Uuid.h"
 #include "targets.h"
 #include "audio/ChartAudioRenderer.h"
+#include "audio/AudioMix.h"
+#include "audio/decoder.h"
 #include "audio/MusicPreparation.h"
 #include "audio/ProgressiveMusicSource.h"
 #include "Utils.h"
@@ -174,10 +179,13 @@ void testResampledWaveform(const std::filesystem::path &root) {
       std::vector<short> samples(10);
       expect(sound && sf_readf_short(sound.get(), samples.data(), 5) == 5,
              "fractional-rate waveform can be read");
+      // Sample-rate conversion rounds PCM16 first; playback interpolation
+      // retains float fractions until the final WAV quantization, like AudioMix.
+      const short half = percent == 50 ? 0 : 1;
       expect(samples == (channels == 1
-                             ? std::vector<short>{-1, -1, -1, -1, 0, 0, 0, 0, 0, 0}
-                             : std::vector<short>{-1, 1, -1, 1, 0, 0, 0, 0, 0, 0}),
-             "offline resampling rounds signed half samples away from zero");
+                             ? std::vector<short>{-1, -1, short(-half), short(-half), 0, 0, 0, 0, 0, 0}
+                             : std::vector<short>{-1, 1, short(-half), half, 0, 0, 0, 0, 0, 0}),
+             "offline conversion and playback retain the mixer's separate quantization stages");
     }
   }
 }
@@ -187,11 +195,12 @@ void testFractionalPlaybackWaveform(const std::filesystem::path &root) {
   replaceKeysound(*chart, 48000, 1, {-101, 201, -301, 401, -501});
   const auto output = chart->Meta.Folder / "result.wav";
   for (const int percent : {105, 195}) {
-    // Decoded PCM is {-100, 200, -300, 400, -500}. The exact source
-    // positions advance by 8/7 at 105%, or by 104/49 at 195%.
+    // Decoded PCM is {-100, 200, -300, 400, -500}. Normalizing the
+    // source to 44.1 kHz gives {-100, 156, -176, 161, -500}; the
+    // mixer's Q32 playback cursor then advances by 1.05 or 1.95.
     const std::vector<short> expected = percent == 105
-        ? std::vector<short>{-100, 129, -100, 14, -500}
-        : std::vector<short>{-100, -214, -500};
+        ? std::vector<short>{-100, 139, -142, 62, -500}
+        : std::vector<short>{-100, -159, -434};
     chart_audio::RenderOptions options;
     options.playback.percent = percent;
     options.maxMixedFrames = expected.size();
@@ -298,11 +307,11 @@ void testRateAndTailSemantics(const std::filesystem::path &root) {
          "ordinary sound-tail growth is allowed");
   SF_INFO info{};
   auto sound = asobmashow::audio::openSoundFileHandle(output, SFM_READ, info);
-  expect(sound && info.frames == 88597,
+  expect(sound && info.frames == 88598,
          "successful growth retains the entire decoded tail and interpolation frame");
   if (sound) {
     short samples[2]{};
-    expect(sf_seek(sound.get(), 88595, SEEK_SET) == 88595 &&
+    expect(sf_seek(sound.get(), 88596, SEEK_SET) == 88596 &&
                sf_readf_short(sound.get(), samples, 1) == 1 && samples[0] > 11000,
            "the actual final keysound frame is not truncated");
   }
@@ -766,6 +775,680 @@ void testBmsonAudio(const std::filesystem::path &root) {
   }
 }
 
+void testBmsonReleaseAudioRendering(const std::filesystem::path &root) {
+  auto chart = bmsonReleaseFixture();
+  chart->Meta.Folder = root / "bmson-release";
+  std::filesystem::create_directories(chart->Meta.Folder);
+  replaceKeysound(*chart, 44100, 1, std::vector<short>(4410, 1000), "head.wav");
+  replaceKeysound(*chart, 44100, 1, std::vector<short>(4410, -2000), "tail.wav");
+  ReplayData replay{.provenance = {}};
+  replay.chartMeta = chart->Meta;
+  replay.events = {
+      {.action = ReplayEventAction::Press, .lane = 0,
+       .noteTimeMicros = 1'000'000, .songTimeMicros = 1'100'000, .judgement = PGreat},
+      {.action = ReplayEventAction::Release, .lane = 0,
+       .noteTimeMicros = 2'000'000, .songTimeMicros = 1'300'000, .judgement = None},
+      {.action = ReplayEventAction::Release, .lane = 0,
+       .noteTimeMicros = 2'000'000, .songTimeMicros = 1'700'000, .judgement = Poor}};
+  for (bool replayTiming : {false, true}) {
+    const auto output = chart->Meta.Folder / (replayTiming ? "replay.wav" : "auto.wav");
+    const auto rendered = chart_audio::RenderChartAudioToWav(*chart, output, {
+        .keySoundMode = replayTiming ? chart_audio::KeySoundMode::ReplayTiming
+                                    : chart_audio::KeySoundMode::ChartTiming,
+        .replay = &replay, .keySoundOffsetMicros = 100'000});
+    expect(rendered.success && rendered.eventCount == (replayTiming ? 3 : 2),
+           "chart/autokey and replay each emit head and tail, with replay failed-release mute");
+    SF_INFO info{};
+    auto sound = asobmashow::audio::openSoundFileHandle(output, SFM_READ, info);
+    for (const auto &[frame, expected] : std::vector<std::pair<int, int>>{
+             {44541, 1000}, {53361, 0}, {71001, replayTiming ? -2000 : 0},
+             {88641, replayTiming ? 0 : -2000}}) {
+      short sample[2]{};
+      expect(sound && sf_seek(sound.get(), frame, SEEK_SET) == frame &&
+                 sf_readf_short(sound.get(), sample, 1) == 1 &&
+                 std::abs(sample[0] - expected) <= 2 && sample[0] == sample[1],
+             "decoded release audio uses actual resolution time, skips None and never doubles chart-timed tail");
+    }
+  }
+}
+
+void testHeldClassicBoundaryRendering(const std::filesystem::path &root) {
+  auto chart = bmsonReleaseWithSentinelFixture();
+  chart->Meta.Folder = root / "classic-boundary";
+  std::filesystem::create_directories(chart->Meta.Folder);
+  std::vector<short> pcm(3 * 44100, 3000);
+  std::fill(pcm.begin(), pcm.begin() + 44100, 1000);
+  replaceKeysound(*chart, 44100, 1, pcm, "head.wav");
+  replaceKeysound(*chart, 44100, 1, std::vector<short>(4410, -500), "tail.wav");
+  ReplayData replay{.provenance = {}};
+  replay.chartMeta = chart->Meta;
+  replay.events = {
+      {.action = ReplayEventAction::Press, .lane = 7,
+       .noteTimeMicros = 1'000'000, .songTimeMicros = 1'000'000, .judgement = PGreat},
+      {.action = ReplayEventAction::Press, .lane = 7, .songTimeMicros = 2'000'000},
+      {.action = ReplayEventAction::Release, .lane = 7,
+       .noteTimeMicros = 2'000'000, .songTimeMicros = 2'000'001,
+       .judgement = PGreat, .releaseByHolding = true},
+      {.action = ReplayEventAction::Release, .lane = 7, .songTimeMicros = 2'400'000},
+      {.action = ReplayEventAction::Press, .lane = 7, .songTimeMicros = 2'500'000}};
+  for (long long origin : {0LL, 2'050'000LL}) {
+    const auto path = chart->Meta.Folder / (std::to_string(origin) + ".wav");
+    expect(chart_audio::RenderChartAudioToWav(*chart, path, {
+        .keySoundMode = chart_audio::KeySoundMode::ReplayTiming, .replay = &replay,
+        .timelineStartMicros = origin}).success, "held classic boundary replay exports");
+    SF_INFO info{};
+    auto sound = asobmashow::audio::openSoundFileHandle(path, SFM_READ, info);
+    for (const auto &[time, expected] : std::array<std::pair<long long, int>, 3>{{
+             {2'050'000, 2500}, {2'200'000, 3000}, {2'550'000, 1000}}}) {
+      const auto frame = (time - origin) * 44100 / 1000000;
+      short sample[2]{};
+      expect(sound && sf_seek(sound.get(), frame, SEEK_SET) == frame &&
+                 sf_readf_short(sound.get(), sample, 1) == 1 && std::abs(sample[0] - expected) <= 2,
+             "WAV preserves held head phase, layers authored release, and permits post-resolution retrigger");
+    }
+  }
+}
+
+void testAdjacentHcnRendering(const std::filesystem::path &root) {
+  for (bool nextHcn : {false, true})
+    for (const auto ruleset : {GameplayRuleset::LR2, GameplayRuleset::Beatoraja})
+      for (bool rawBoundary : {false, true}) {
+      auto chart = bmsonAdjacentHcnFixture(nextHcn);
+      chart->Meta.Folder = root / (nextHcn ? "adjacent-hcn" : "adjacent-tap");
+      std::filesystem::create_directories(chart->Meta.Folder);
+      replaceKeysound(*chart, 44100, 1, std::vector<short>(3 * 44100, 1000), "head.wav");
+      replaceKeysound(*chart, 44100, 1, std::vector<short>(3 * 44100, 200), "next.wav");
+      if (nextHcn) replaceKeysound(*chart, 44100, 1, std::vector<short>(4410, 50), "tail.wav");
+      ReplayData replay{.provenance = {}};
+      replay.chartMeta = chart->Meta;
+      replay.playbackRuleset = RulesetDescriptor::For(ruleset);
+      replay.events = {
+          {.action = ReplayEventAction::Press, .lane = 0, .noteTimeMicros = 1'000'000,
+           .songTimeMicros = 1'000'000, .judgement = PGreat, .audioLanePressed = true},
+          {.action = ReplayEventAction::Release, .lane = 0, .noteTimeMicros = 2'000'000,
+           .songTimeMicros = 1'200'000, .judgement = Poor, .audioLanePressed = false},
+          {.action = ReplayEventAction::Press, .lane = 0, .noteTimeMicros = 2'100'000,
+           .songTimeMicros = 1'990'000, .judgement = Bad, .audioLanePressed = true},
+          {.action = ReplayEventAction::Release, .lane = 0,
+           .noteTimeMicros = nextHcn ? 2'600'000 : -1,
+           .songTimeMicros = 1'995'000, .judgement = nextHcn ? Poor : None,
+           .audioLanePressed = false}};
+      if (rawBoundary) {
+        replay.events[0].songTimeMicros = 900'000;
+        replay.events[1].songTimeMicros = 920'000;
+        replay.events.insert(replay.events.begin() + 2, {
+            ReplayEvent{.action = ReplayEventAction::Press, .lane = 0, .noteTimeMicros = 1'000'000,
+                        .songTimeMicros = 950'000, .judgement = Kpoor, .audioLanePressed = true},
+            ReplayEvent{.action = ReplayEventAction::Release, .lane = 0,
+                        .songTimeMicros = 980'000, .audioLanePressed = false}});
+        replay.audioUpdates = {{.beforeEventIndex = 4, .songTimeMicros = 1'010'000,
+                                .lane = 0, .headTimeMicros = 1'000'000, .gain = 0}};
+      }
+      const long long offset = rawBoundary ? 100'000 : 0;
+      for (long long gameplayOrigin : {0LL, 1'050'000LL, 1'992'000LL}) {
+        const auto origin = gameplayOrigin == 0 ? 0 : gameplayOrigin - offset;
+        const auto path = chart->Meta.Folder / (std::to_string(origin) + ".wav");
+        expect(chart_audio::RenderChartAudioToWav(*chart, path, {
+            .keySoundMode = chart_audio::KeySoundMode::ReplayTiming, .replay = &replay,
+            .keySoundOffsetMicros = offset, .timelineStartMicros = origin}).success, "adjacent HCN replay exports");
+        SF_INFO info{};
+        auto sound = asobmashow::audio::openSoundFileHandle(path, SFM_READ, info);
+        for (const auto [time, expected] : std::array<std::pair<long long, int>, 4>{{
+                 {1'100'000, rawBoundary ? 0 : 1000}, {1'500'000, 0},
+                 {1'992'000, 1200},
+                 {1'997'000, nextHcn ? 50 : 200}}}) {
+          if (time - offset < origin) continue;
+          const auto frame = (time - offset - origin) * 44100 / 1000000;
+          short sample[2]{};
+          expect(sound && sf_seek(sound.get(), frame, SEEK_SET) == frame &&
+                     sf_readf_short(sound.get(), sample, 1) == 1 &&
+                     std::abs(sample[0] - expected) <= 2 && sample[0] == sample[1],
+                 "WAV origins retain live ruleset HCN gain, upcoming sound, and independent tail release");
+        }
+      }
+    }
+}
+
+void testBackspinCompanionRendering(const std::filesystem::path &root) {
+  auto chart = bmsonReleaseWithSentinelFixture(2);
+  chart->Meta.Folder = root / "backspin-companion";
+  std::filesystem::create_directories(chart->Meta.Folder);
+  std::vector<short> pcm(3 * 44100, 3000);
+  std::fill_n(pcm.begin(), 22050, 1000);
+  replaceKeysound(*chart, 44100, 1, pcm, "head.wav");
+  replaceKeysound(*chart, 44100, 1, std::vector<short>(4410, -500), "tail.wav");
+  for (const auto ruleset : {GameplayRuleset::LR2, GameplayRuleset::Beatoraja}) {
+    ReplayData replay{.provenance = {}};
+    replay.chartMeta = chart->Meta;
+    // Runtime playback identity must win over stale stored provenance.
+    replay.provenance.ruleset = RulesetDescriptor::For(
+        ruleset == GameplayRuleset::LR2 ? GameplayRuleset::Beatoraja : GameplayRuleset::LR2);
+    replay.playbackRuleset = RulesetDescriptor::For(ruleset);
+    replay.events = {
+        {.action = ReplayEventAction::Press, .lane = 7,
+         .noteTimeMicros = 1'000'000, .songTimeMicros = 1'000'000, .judgement = PGreat},
+        {.action = ReplayEventAction::Release, .lane = 7,
+         .noteTimeMicros = 2'000'000, .songTimeMicros = 2'000'000,
+         .judgement = PGreat, .releaseByBackspin = true},
+        {.action = ReplayEventAction::Press, .lane = 7, .songTimeMicros = 2'000'000},
+        {.action = ReplayEventAction::Release, .lane = 7, .songTimeMicros = 2'400'000},
+        {.action = ReplayEventAction::Press, .lane = 7, .songTimeMicros = 2'500'000}};
+    for (const auto origin : {0LL, 2'025'000LL}) {
+      const auto path = chart->Meta.Folder / (std::to_string(static_cast<int>(ruleset)) + "-" + std::to_string(origin) + ".wav");
+      expect(chart_audio::RenderChartAudioToWav(*chart, path, {
+          .keySoundMode = chart_audio::KeySoundMode::ReplayTiming, .replay = &replay,
+          .timelineStartMicros = origin}).success, "backspin companion replay exports");
+      SF_INFO info{};
+      auto sound = asobmashow::audio::openSoundFileHandle(path, SFM_READ, info);
+      for (const auto &[time, expected] : std::array<std::pair<long long, int>, 2>{{
+               {2'050'000, ruleset == GameplayRuleset::LR2 ? 2500 : 500}, {2'550'000, 1000}}}) {
+        const auto frame = (time - origin) * 44100 / 1000000;
+        short sample[2]{};
+        expect(sound && sf_seek(sound.get(), frame, SEEK_SET) == frame &&
+                   sf_readf_short(sound.get(), sample, 1) == 1 && std::abs(sample[0] - expected) <= 2,
+               "WAV honors playback ruleset for companion suppression and preserves tail/later presses across seek");
+      }
+    }
+  }
+}
+
+void testScratchHcnAggregateHeldRendering(const std::filesystem::path &root) {
+  auto chart = bmsonReleaseFixture(3, 8, false, 960);
+  chart->Meta.Folder = root / "scratch-hcn-held";
+  std::filesystem::create_directories(chart->Meta.Folder);
+  replaceKeysound(*chart, 44100, 1, std::vector<short>(3 * 44100, 1000), "head.wav");
+  ReplayData replay{.provenance = {}};
+  replay.chartMeta = chart->Meta;
+  replay.events = {
+      {.action = ReplayEventAction::Press, .lane = 7,
+       .noteTimeMicros = 1'000'000, .songTimeMicros = 1'000'000, .judgement = PGreat,
+       .audioLanePressed = true},
+      {.action = ReplayEventAction::Release, .lane = 7,
+       .noteTimeMicros = 3'000'000, .songTimeMicros = 1'300'000, .judgement = Poor,
+       .releaseByBackspin = true, .audioLanePressed = true},
+      {.action = ReplayEventAction::Release, .lane = 7,
+       .songTimeMicros = 1'400'000, .audioLanePressed = true},
+      {.action = ReplayEventAction::Release, .lane = 7,
+       .songTimeMicros = 1'500'000, .audioLanePressed = false}};
+  for (long long origin : {0LL, 1'400'000LL}) {
+    const auto path = chart->Meta.Folder / (std::to_string(origin) + ".wav");
+    expect(chart_audio::RenderChartAudioToWav(*chart, path, {
+        .keySoundMode = chart_audio::KeySoundMode::ReplayTiming, .replay = &replay,
+        .timelineStartMicros = origin}).success, "aggregate scratch replay exports");
+    SF_INFO info{};
+    auto sound = asobmashow::audio::openSoundFileHandle(path, SFM_READ, info);
+    for (const auto &[time, expected] : std::array<std::pair<long long, int>, 2>{{
+             {1'450'000, 1000}, {1'550'000, 0}}}) {
+      const auto frame = (time - origin) * 44100 / 1000000;
+      short sample[2]{};
+      expect(sound && sf_seek(sound.get(), frame, SEEK_SET) == frame &&
+                 sf_readf_short(sound.get(), sample, 1) == 1 && std::abs(sample[0] - expected) <= 2,
+             "WAV retains scratch HCN audio until both keys lift, including a seek after the first lift");
+    }
+  }
+}
+
+void testMissedHcnPreviewRendering(const std::filesystem::path &root) {
+  auto chart = bmsonReleaseFixture(3, 1, false, 960);
+  chart->Meta.Folder = root / "missed-hcn-preview";
+  std::filesystem::create_directories(chart->Meta.Folder);
+  std::vector<short> pcm(3 * 44100, 1000);
+  std::fill(pcm.begin() + 44100, pcm.end(), 3000);
+  replaceKeysound(*chart, 44100, 1, pcm, "head.wav");
+  ReplayData replay{.provenance = {}};
+  replay.chartMeta = chart->Meta;
+  replay.events = {
+      {.action = ReplayEventAction::Press, .lane = 0,
+       .noteTimeMicros = 1'000'000, .songTimeMicros = 500'000, .judgement = Kpoor},
+      {.action = ReplayEventAction::Release, .lane = 0,
+       .songTimeMicros = 600'000, .judgement = None},
+      {.action = ReplayEventAction::Miss, .lane = 0,
+       .noteTimeMicros = 1'000'000, .songTimeMicros = 1'300'000, .judgement = Poor},
+      {.action = ReplayEventAction::Miss, .lane = 0,
+       .noteTimeMicros = 3'000'000, .songTimeMicros = 1'300'000, .judgement = Poor},
+      {.action = ReplayEventAction::Press, .lane = 0,
+       .songTimeMicros = 1'600'000, .judgement = None},
+      {.action = ReplayEventAction::Release, .lane = 0,
+       .songTimeMicros = 1'700'000, .judgement = None}};
+  // A nonzero timeline origin covers seeking into both muted and restored
+  // portions while retaining the original source cursor in exported audio.
+  for (long long origin : {0LL, 1'400'000LL, 1'650'000LL}) {
+    const auto path = chart->Meta.Folder / (std::to_string(origin) + ".wav");
+    expect(chart_audio::RenderChartAudioToWav(*chart, path, {
+        .keySoundMode = chart_audio::KeySoundMode::ReplayTiming, .replay = &replay,
+        .timelineStartMicros = origin}).success, "missed HCN preview exports from requested origin");
+    SF_INFO info{};
+    auto sound = asobmashow::audio::openSoundFileHandle(path, SFM_READ, info);
+    for (const auto &[time, expected] : std::array<std::pair<long long, int>, 4>{{
+             {1'200'000, 1000}, {1'400'000, 0}, {1'650'000, 3000}, {1'750'000, 0}}}) {
+      if (time < origin) continue;
+      const auto frame = (time - origin) * 44100 / 1000000;
+      short sample[2]{};
+      expect(sound && sf_seek(sound.get(), frame, SEEK_SET) == frame &&
+                 sf_readf_short(sound.get(), sample, 1) == 1 && std::abs(sample[0] - expected) <= 2,
+             "missed preview WAV mutes and resumes the original source even after seeking");
+    }
+  }
+}
+
+void testLongHeadVoiceMuteAndResume(const std::filesystem::path &root) {
+  for (int type : {1, 2, 3}) {
+    auto chart = bmsonReleaseFixture(type, 1, false, 960);
+    chart->Meta.Folder = root / ("head-control-" + std::to_string(type));
+    std::filesystem::create_directories(chart->Meta.Folder);
+    std::vector<short> pcm(3 * 44100, 1000);
+    std::fill(pcm.begin() + 44100, pcm.end(), 3000);
+    replaceKeysound(*chart, 44100, 1, pcm, "head.wav");
+    ReplayData replay{.provenance = {}};
+    replay.chartMeta = chart->Meta;
+    replay.events = {
+        {.action = ReplayEventAction::Press, .lane = 0,
+         .noteTimeMicros = 1'000'000, .songTimeMicros = 1'000'000, .judgement = PGreat},
+        {.action = ReplayEventAction::Release, .lane = 0,
+         .songTimeMicros = 1'500'000, .judgement = None},
+        {.action = ReplayEventAction::Release, .lane = 0,
+         .noteTimeMicros = 3'000'000, .songTimeMicros = 1'600'000,
+         .judgement = Bad, .diffMicros = -1'500'000},
+        {.action = ReplayEventAction::Press, .lane = 0,
+         .songTimeMicros = 2'200'000, .judgement = None},
+        {.action = ReplayEventAction::Release, .lane = 0,
+         .songTimeMicros = 2'600'000, .judgement = None}};
+    const auto output = chart->Meta.Folder / "replay.wav";
+    expect(chart_audio::RenderChartAudioToWav(*chart, output, {
+        .keySoundMode = chart_audio::KeySoundMode::ReplayTiming,
+        .replay = &replay}).success, "LN voice control replay renders");
+    SF_INFO info{};
+    auto sound = asobmashow::audio::openSoundFileHandle(output, SFM_READ, info);
+    for (const auto &[micros, expected] : std::vector<std::pair<int, int>>{
+             {1'550'000, 1000}, {1'650'000, 0},
+             {2'250'000, type == 3 ? 3000 : 1000},
+             {2'650'000, type == 3 ? 0 : 1000}}) {
+      short sample[2]{};
+      const auto frame = static_cast<sf_count_t>(micros * 44100LL / 1000000);
+      expect(sound && sf_seek(sound.get(), frame, SEEK_SET) == frame &&
+                 sf_readf_short(sound.get(), sample, 1) == 1 &&
+                 std::abs(sample[0] - expected) <= 2,
+             "failed release mutes at resolution; HCN rehold restores the ongoing playhead without retrigger");
+    }
+    if (type == 1) {
+      replay.events = {
+          {.action = ReplayEventAction::Press, .lane = 0,
+           .noteTimeMicros = 1'000'000, .songTimeMicros = 850'000, .judgement = Bad},
+          {.action = ReplayEventAction::Release, .lane = 0,
+           .noteTimeMicros = 3'000'000, .songTimeMicros = 3'000'001,
+           .judgement = Bad, .diffMicros = -150'000, .releaseByHolding = true}};
+      const auto held = chart->Meta.Folder / "held-bad.wav";
+      expect(chart_audio::RenderChartAudioToWav(*chart, held, {
+          .keySoundMode = chart_audio::KeySoundMode::ReplayTiming, .replay = &replay}).success,
+          "held classic BAD replay renders");
+      SF_INFO heldInfo{};
+      auto completed = asobmashow::audio::openSoundFileHandle(held, SFM_READ, heldInfo);
+      short sample[2]{};
+      expect(completed && sf_seek(completed.get(), 3'100'000LL * 44100 / 1000000, SEEK_SET) >= 0 &&
+                 sf_readf_short(completed.get(), sample, 1) == 1 && std::abs(sample[0] - 3000) <= 2,
+             "WAV retains the head beyond an automatically completed BAD classic tail");
+    }
+    if (type == 2) {
+      replay.events.resize(3);
+      replay.events.push_back({.action = ReplayEventAction::Press, .lane = 0,
+          .noteTimeMicros = 1'000'000, .songTimeMicros = 1'600'000, .judgement = Kpoor});
+      const auto retrigger = chart->Meta.Folder / "retrigger.wav";
+      expect(chart_audio::RenderChartAudioToWav(*chart, retrigger, {
+          .keySoundMode = chart_audio::KeySoundMode::ReplayTiming, .replay = &replay}).success,
+          "same-time retrigger renders");
+      SF_INFO retriggerInfo{};
+      auto restarted = asobmashow::audio::openSoundFileHandle(retrigger, SFM_READ, retriggerInfo);
+      short sample[2]{};
+      const auto frame = 1'650'000LL * 44100 / 1000000;
+      expect(restarted && sf_seek(restarted.get(), frame, SEEK_SET) == frame &&
+                 sf_readf_short(restarted.get(), sample, 1) == 1 && std::abs(sample[0] - 1000) <= 2,
+             "old head mute must not capture a new trigger of the same note at the same timestamp");
+    }
+  }
+}
+
+// A gain transition must change only amplitude, never the continuous source
+// position. Constant samples cannot detect a restarted fractional cursor.
+void testGainSegmentFractionalPhase(const std::filesystem::path &root) {
+  constexpr std::array<long long, 6> controls{
+      1'200'000, 1'500'090, 1'700'110, 1'800'130, 2'600'000, 2'700'000};
+  struct Case { int sourceRate, speed; long long origin; };
+  for (const auto [sourceRate, speed, origin] : std::array<Case, 6>{{
+           {44100, 125, 0}, {48000, 100, 0}, {44100, 150, -250'000},
+           {48000, 195, 1'150'000}, {44100, 50, 1'650'000},
+           {44100, 200, 1'830'000}}}) {
+    auto chart = bmsonReleaseFixture(3, 1, false, 960);
+    const int sourcePrefix = speed == 195 ? sourceRate : 0;
+    if (sourcePrefix != 0) {
+      const std::string json = R"({"version":"1.0.0","info":{"init_bpm":120,"ln_type":3},
+        "sound_channels":[{"name":"head.wav","notes":[{"x":0,"y":0},
+        {"x":1,"y":480,"l":960,"c":true}]}]})";
+      bms_parser::Parser parser;
+      bms_parser::Chart *raw = nullptr;
+      std::atomic_bool cancelled{false};
+      parser.Parse(std::vector<unsigned char>(json.begin(), json.end()), &raw, false, false,
+                   cancelled, "continued-gain.bmson");
+      if (!raw) throw std::runtime_error("Continued gain fixture did not parse");
+      chart.reset(raw);
+    }
+    chart->Meta.Folder = root / ("gain-phase-" + std::to_string(sourceRate) +
+                                "-" + std::to_string(speed));
+    std::filesystem::create_directories(chart->Meta.Folder);
+    // The sound ends before the final controls; these must not extend its tail.
+    std::vector<short> pcm(sourcePrefix + sourceRate * 135 / 100);
+    for (std::size_t frame = 0; frame < pcm.size(); ++frame)
+      pcm[frame] = static_cast<short>(12000 * std::sin(frame * 0.7));
+    replaceKeysound(*chart, sourceRate, 1, pcm, "head.wav");
+    ReplayData replay{.provenance = {}};
+    replay.chartMeta = chart->Meta;
+    replay.events = {{.action = ReplayEventAction::Press, .lane = 0,
+                     .noteTimeMicros = 1'000'000, .songTimeMicros = 1'000'000,
+                     .judgement = PGreat}};
+    const auto readRender = [&](const char *name) {
+      const auto path = chart->Meta.Folder / name;
+      expect(chart_audio::RenderChartAudioToWav(*chart, path, {
+          .keySoundMode = chart_audio::KeySoundMode::ReplayTiming, .replay = &replay,
+          .playback = {.percent = speed}, .timelineStartMicros = origin}).success,
+          "fractional HCN gain fixture exports decoded WAV");
+      SF_INFO info{};
+      auto file = asobmashow::audio::openSoundFileHandle(path, SFM_READ, info);
+      if (!file) throw std::runtime_error("Could not read gain phase WAV");
+      std::vector<short> samples(info.frames * info.channels);
+      expect(sf_readf_short(file.get(), samples.data(), info.frames) == info.frames,
+             "complete gain phase output is readable");
+      return samples;
+    };
+    const auto continuous = readRender("continuous.wav");
+    for (std::size_t i = 0; i < controls.size(); ++i)
+      replay.events.push_back({.action = i % 2 ? ReplayEventAction::Press : ReplayEventAction::Release,
+          .lane = 0, .noteTimeMicros = i == 0 ? 3'000'000 : -1,
+          .songTimeMicros = controls[i], .judgement = i == 0 ? Poor : None});
+    const auto controlled = readRender("controlled.wav");
+    expect(controlled.size() == continuous.size(), "gain intervals preserve the bounded source tail");
+    std::size_t nextControl = 0;
+    bool audible = true;
+    int maxError = 0;
+    for (std::size_t frame = 0; frame < std::min(continuous.size(), controlled.size()) / 2; ++frame) {
+      while (nextControl < controls.size() &&
+             BmsonPhaseFixture::frameAt(controls[nextControl], speed) -
+                 BmsonPhaseFixture::frameAt(origin, speed) <= static_cast<long long>(frame)) {
+        audible = nextControl % 2 != 0;
+        ++nextControl;
+      }
+      const int expected = audible ? continuous[frame * 2] : 0;
+      maxError = std::max(maxError, std::abs(expected - controlled[frame * 2]));
+    }
+    if (maxError > 2) std::cerr << "gain phase source=" << sourceRate << " speed=" << speed
+                               << " origin=" << origin << " max PCM error=" << maxError << '\n';
+    expect(maxError <= 2, "gain intervals preserve continuous decoded source phase through origin clipping");
+
+    if (sourceRate == 44100 && speed == 125) {
+      chart_audio::RenderOptions budgetOptions{
+          .keySoundMode = chart_audio::KeySoundMode::ReplayTiming, .replay = &replay,
+          .playback = {.percent = speed}, .maxMixedFrames = 47628};
+      const auto budgetPath = chart->Meta.Folder / "budget.wav";
+      expect(guardedRender(*chart, budgetPath, budgetOptions).success,
+             "gain intervals share the voice's exact output-frame work budget");
+      --budgetOptions.maxMixedFrames;
+      expect(!guardedRender(*chart, budgetPath, budgetOptions).success,
+             "gain intervals still reject a one-frame-short work budget");
+      // Independent production mixer oracle: one voice, six gain commands,
+      // a shared callback rounding origin and deliberately small mix chunks.
+      SoundData sound;
+      sound.channels = 1;
+      sound.monophonic = true;
+      SF_INFO info{};
+      std::atomic_bool cancelled{false};
+      std::vector<short> decoded;
+      expect(decodeAudioToPCM(fspath_to_path_t(chart->Meta.Folder / "head.wav"),
+                             decoded, info, cancelled), "phase mixer source decodes");
+      sound.outputFrameCount = decoded.size();
+      sound.outputData = std::move(decoded);
+      AudioCallbackState state;
+      audio::playback::InsertScheduledSound(state, {.soundData = &sound, .bus = audio::Bus::Keysound,
+          .startMicros = 1'000'000, .voiceId = 1});
+      for (std::size_t i = 0; i < controls.size(); ++i)
+        audio::playback::InsertScheduledSound(state, {.soundData = &sound, .bus = audio::Bus::Keysound,
+            .startMicros = controls[i], .sequence = i + 1, .gain = i % 2 ? 1.0F : 0.0F,
+            .voiceId = 1, .setVoiceGain = true});
+      std::vector<float> mixed(controlled.size() / 2);
+      for (std::uint32_t offset = 0; offset < mixed.size(); offset += 257) {
+        const auto count = static_cast<std::uint32_t>(std::min<std::size_t>(257, mixed.size() - offset));
+        audio::playback::ActivateScheduledSounds(state, 0, 44100, count, speed, offset);
+        audio::playback::MixActiveSounds(state, std::span(mixed).subspan(offset, count),
+                                         count, 1, 1, 1, speed);
+      }
+      int mixerError = 0;
+      for (std::size_t frame = 0; frame < mixed.size(); ++frame)
+        mixerError = std::max(mixerError, std::abs(
+            static_cast<int>(std::lrint(mixed[frame] / 0.9F * 32767)) - controlled[frame * 2]));
+      expect(mixerError <= 2, "decoded WAV gain boundaries and fractional playhead match production AudioMix");
+    }
+  }
+}
+
+void testGainSegmentLayerOwnership(const std::filesystem::path &root) {
+  const std::string json = R"({"version":"1.0.0","info":{"init_bpm":120,"ln_type":3},
+    "sound_channels":[{"name":"shared.wav","notes":[{"x":1,"y":480,"l":960},{"x":2,"y":480}]},
+    {"name":"layer.wav","notes":[{"x":1,"y":480,"l":960}]}]})";
+  bms_parser::Parser parser;
+  bms_parser::Chart *raw = nullptr;
+  std::atomic_bool cancelled{false};
+  parser.Parse(std::vector<unsigned char>(json.begin(), json.end()), &raw, false, false,
+               cancelled, "layer-phase.bmson");
+  std::unique_ptr<bms_parser::Chart> chart(raw);
+  if (!chart) throw std::runtime_error("Layer phase bmson did not parse");
+  chart->Meta.Folder = root / "layer-phase";
+  std::filesystem::create_directories(chart->Meta.Folder);
+  const auto makeSound = [&](const char *name, int frames, int amplitude) {
+    std::vector<short> pcm(frames);
+    for (std::size_t frame = 0; frame < pcm.size(); ++frame)
+      pcm[frame] = static_cast<short>(amplitude * std::sin(frame * 0.7));
+    replaceKeysound(*chart, 44100, 1, pcm, name);
+    auto sound = std::make_shared<SoundData>();
+    sound->channels = 1;
+    sound->monophonic = true;
+    SF_INFO info{};
+    std::vector<short> decoded;
+    if (!decodeAudioToPCM(fspath_to_path_t(chart->Meta.Folder / name), decoded, info, cancelled))
+      throw std::runtime_error("Layer phase source did not decode");
+    sound->outputFrameCount = decoded.size();
+    sound->outputData = std::move(decoded);
+    return sound;
+  };
+  const auto shared = makeSound("shared.wav", 46305, 6000);
+  const auto layer = makeSound("layer.wav", 37485, 3000);
+  SoundData group;
+  group.layers = {shared, layer};
+  ReplayData replay{.provenance = {}};
+  replay.chartMeta = chart->Meta;
+  replay.events = {
+      {.action = ReplayEventAction::Press, .lane = 0, .noteTimeMicros = 1'000'000,
+       .songTimeMicros = 1'000'000, .judgement = PGreat},
+      {.action = ReplayEventAction::Release, .lane = 0, .noteTimeMicros = 3'000'000,
+       .songTimeMicros = 1'200'000, .judgement = Poor},
+      {.action = ReplayEventAction::Press, .lane = 0, .songTimeMicros = 1'500'090},
+      {.action = ReplayEventAction::Press, .lane = 1, .songTimeMicros = 1'600'120},
+      {.action = ReplayEventAction::Release, .lane = 0, .songTimeMicros = 1'700'110},
+      {.action = ReplayEventAction::Press, .lane = 0, .songTimeMicros = 1'800'130}};
+  const auto path = chart->Meta.Folder / "render.wav";
+  expect(chart_audio::RenderChartAudioToWav(*chart, path, {
+      .keySoundMode = chart_audio::KeySoundMode::ReplayTiming, .replay = &replay,
+      .playback = {.percent = 125}}).success, "layered gain phase replay exports");
+  SF_INFO info{};
+  auto file = asobmashow::audio::openSoundFileHandle(path, SFM_READ, info);
+  if (!file) throw std::runtime_error("Layer phase WAV missing");
+  std::vector<short> samples(info.frames * 2);
+  sf_readf_short(file.get(), samples.data(), info.frames);
+  AudioCallbackState state;
+  audio::playback::InsertScheduledSound(state, {.soundData = &group, .bus = audio::Bus::Keysound,
+      .startMicros = 1'000'000, .voiceId = 1});
+  audio::playback::InsertScheduledSound(state, {.soundData = shared.get(), .bus = audio::Bus::Keysound,
+      .startMicros = 1'600'120, .sequence = 3, .voiceId = 2});
+  constexpr std::array<long long, 4> controls{1'200'000, 1'500'090, 1'700'110, 1'800'130};
+  for (std::size_t i = 0; i < controls.size(); ++i)
+    audio::playback::InsertScheduledSound(state, {.soundData = &group, .bus = audio::Bus::Keysound,
+        .startMicros = controls[i], .sequence = i < 2 ? i + 1 : i + 2,
+        .gain = i % 2 ? 1.0F : 0.0F, .voiceId = 1, .setVoiceGain = true});
+  std::vector<float> mixed(info.frames);
+  audio::playback::ActivateScheduledSounds(state, 0, 44100, mixed.size(), 125);
+  audio::playback::MixActiveSounds(state, mixed, mixed.size(), 1, 1, 1, 125);
+  int maxError = 0;
+  for (std::size_t frame = 0; frame < mixed.size(); ++frame)
+    maxError = std::max(maxError, std::abs(
+        static_cast<int>(std::lrint(mixed[frame] / 0.9F * 32767)) - samples[frame * 2]));
+  expect(maxError <= 3, "WAV layers keep fractional phase, finite tails, and gain ownership after shared-slice retrigger");
+}
+
+void testFiniteSliceEndControl(const std::filesystem::path &root) {
+  for (const int speed : {125, 195}) {
+    BmsonPhaseFixture fixture(root / ("finite-end-control-" + std::to_string(speed)),
+                              44100, 1'000'020, 0, true, false, false, 0, true);
+    const auto definition = gameplay::buildGameplayDefinition(*fixture.chart, 0);
+    const auto duration = fixture.chart->WavSlices.at(fixture.schedule.front().wav).front().DurationMicros;
+    expect(duration > 0, "finite end control uses an authored bounded slice");
+    const auto time = 1'000'020 + duration;
+    const auto frame = BmsonPhaseFixture::frameAt(time, speed);
+    fixture.replay.events.resize(1);
+    fixture.schedule = buildReplayKeysoundSchedule(definition, fixture.replay.events, 0, std::nullopt);
+    const auto baseline = fixture.continuous(speed, frame + 2);
+    expect(std::abs(baseline[frame]) > 0.01F,
+           "nominal finite slice end still has an audible production mixer frame");
+    fixture.replay.events.push_back({.action = ReplayEventAction::Release, .lane = 0,
+        .noteTimeMicros = 3'000'000, .songTimeMicros = time, .judgement = Poor});
+    fixture.schedule = buildReplayKeysoundSchedule(definition, fixture.replay.events, 0, std::nullopt);
+    const auto controlled = fixture.continuous(speed, frame + 2);
+    expect(controlled[frame] == 0 && controlled[frame - 1] == baseline[frame - 1],
+           "production gain command mutes exactly the last active output frame");
+    const auto path = fixture.chart->Meta.Folder / "controlled.wav";
+    expect(chart_audio::RenderChartAudioToWav(*fixture.chart, path, {
+        .keySoundMode = chart_audio::KeySoundMode::ReplayTiming, .replay = &fixture.replay,
+        .playback = {.percent = speed}}).success, "finite end control exports");
+    SF_INFO info{};
+    auto file = asobmashow::audio::openSoundFileHandle(path, SFM_READ, info);
+    std::array<short, 4> pcm{};
+    expect(file && sf_seek(file.get(), frame - 1, SEEK_SET) == frame - 1 &&
+           sf_readf_short(file.get(), pcm.data(), 2) == 2,
+           "finite end control output is readable");
+    expect(pcm[2] == 0 && pcm[3] == 0 && std::abs(pcm[0]) > 100,
+           "finite slice controls use output clipping instead of raw-duration rejection");
+    std::cout << "finite slice end gain: rate=" << speed << " duration=" << duration
+              << " frame=" << frame << " unmutedPCM=" << std::lrint(baseline[frame] / 0.9F * 32767)
+              << " controlledPCM=" << pcm[2] << '\n';
+  }
+}
+
+void testFrameGridPhase(const std::filesystem::path &root) {
+  struct Case { int sourceRate, speed; long long trigger, retrigger, origin; bool layers; bool continued = false; bool bounded = false; };
+  const std::array cases{
+      Case{44100, 125, 1'000'020, 0, 0, false},
+      Case{48000, 125, 1'000'000, 0, 0, false},
+      Case{44100, 125, 1'000'000, 1'600'043, 0, false},
+      Case{44100, 125, 1'000'000, 1'600'058, 0, false},
+      Case{44100, 125, 1'000'000, 0, -20, false},
+      Case{44100, 125, 1'000'000, 0, 999'980, false},
+      Case{44100, 125, 1'000'020, 0, 1'500'020, false},
+      Case{48000, 125, 1'000'020, 1'600'043, 1'500'020, true},
+      Case{48000, 195, 1'000'020, 1'600'058, -20, true, true},
+      Case{32000, 150, 1'000'020, 1'600'058, 1'500'020, true, true, true},
+      Case{44100, 50, 1'002'500, 0, 999'980, false},
+      Case{44100, 100, 1'005'000, 0, -20, false},
+      Case{44100, 200, 1'010'000, 0, 1'500'020, false}};
+  int index = 0;
+  for (const auto &c : cases) {
+    BmsonPhaseFixture fixture(root / ("frame-grid-" + std::to_string(index++)),
+                              c.sourceRate, c.trigger, c.retrigger, c.layers, c.layers, c.continued, 0, c.bounded);
+    const auto path = fixture.chart->Meta.Folder / "output.wav";
+    expect(chart_audio::RenderChartAudioToWav(*fixture.chart, path, {
+        .keySoundMode = chart_audio::KeySoundMode::ReplayTiming, .replay = &fixture.replay,
+        .playback = {.percent = c.speed}, .timelineStartMicros = c.origin}).success,
+        "frame grid fixture exports");
+    SF_INFO info{};
+    auto file = asobmashow::audio::openSoundFileHandle(path, SFM_READ, info);
+    if (!file) throw std::runtime_error("frame grid WAV missing");
+    std::vector<short> wav(info.frames * 2);
+    sf_readf_short(file.get(), wav.data(), info.frames);
+    const auto origin = BmsonPhaseFixture::frameAt(c.origin, c.speed);
+    const auto continuous = fixture.continuous(c.speed, std::max(0LL, origin) + info.frames);
+    int maximum = 0;
+    for (long long frame = 0; frame < info.frames; ++frame) {
+      const auto source = frame + origin;
+      const int expected = source < 0 ? 0 : std::lrint(continuous[source] / 0.9F * 32767);
+      maximum = std::max(maximum, std::abs(expected - wav[frame * 2]));
+    }
+    if (maximum > 2) std::cerr << "frame grid source=" << c.sourceRate << " rate=" << c.speed
+        << " trigger=" << c.trigger << " retrigger=" << c.retrigger << " origin=" << c.origin
+        << " maxPCM=" << maximum << '\n';
+    expect(maximum <= 2, "WAV starts, cutoffs, gain intervals and origins preserve continuous mixer phase");
+  }
+}
+
+void testBmsonMultichannelRendering(const std::filesystem::path &root) {
+  struct Case { int channels, sourceRate, speed, isolatedChannel; long long origin; bool layers; };
+  const std::array cases{
+      Case{1, 44100, 100, -1, 0, false},
+      Case{2, 48000, 125, -1, -20, false},
+      Case{3, 44100, 100, 2, 0, false},
+      Case{4, 44100, 100, 3, 0, false},
+      Case{3, 48000, 125, 2, 230'100, true},
+      Case{4, 48000, 195, 3, 160'030, true},
+      Case{5, 32000, 155, -1, 230'100, true},
+      Case{6, 48000, 65, -1, -20, true},
+      Case{6, 44100, 125, -1, 280'044, true}};
+  int index = 0;
+  int maximumError = 0;
+  std::size_t comparedSamples = 0;
+  for (const auto &c : cases) {
+    BmsonMultichannelFixture fixture(root / ("multichannel-" + std::to_string(index++)),
+                                      c.channels, c.sourceRate, c.isolatedChannel, c.layers);
+    const auto path = fixture.chart->Meta.Folder / "output.wav";
+    chart_audio::RenderOptions options{
+        .keySoundMode = chart_audio::KeySoundMode::ReplayTiming, .replay = &fixture.replay,
+        .playback = {.percent = c.speed}, .timelineStartMicros = c.origin};
+    expect(guardedRender(*fixture.chart, path, options).success, "multichannel bmson exports");
+    SF_INFO info{};
+    auto file = asobmashow::audio::openSoundFileHandle(path, SFM_READ, info);
+    if (!file) throw std::runtime_error("multichannel export missing");
+    std::vector<short> wav(info.frames * 2);
+    if (sf_readf_short(file.get(), wav.data(), info.frames) != info.frames)
+      throw std::runtime_error("multichannel export truncated");
+    const auto origin = BmsonPhaseFixture::frameAt(c.origin, c.speed);
+    const auto mixed = fixture.continuous(fixture.replaySchedule(), c.speed,
+                                          std::max(0LL, origin) + info.frames);
+    int maximum = 0;
+    bool audible = false;
+    for (long long frame = 0; frame < info.frames; ++frame)
+      for (int channel = 0; channel < 2; ++channel) {
+        const auto source = frame + origin;
+        const int expected = source < 0 ? 0 :
+            BmsonMultichannelFixture::pcm16(mixed[source * 2 + channel]);
+        audible = audible || expected != 0;
+        maximum = std::max(maximum, std::abs(expected - wav[frame * 2 + channel]));
+      }
+    if (maximum > 1) std::cerr << "multichannel export channels=" << c.channels
+        << " source=" << c.sourceRate << " rate=" << c.speed << " origin=" << c.origin
+        << " maxPCM=" << maximum << '\n';
+    expect(audible && maximum <= 1,
+           "export folds every channel after normalization and playback interpolation like AudioMix");
+    maximumError = std::max(maximumError, maximum);
+    comparedSamples += wav.size();
+    if (c.channels == 3 && c.speed == 100) {
+      // The single continuation slice spans [100000, 550000) at 44100 Hz.
+      // Channel-pair processing must neither copy PCM nor charge this voice's
+      // output-frame work budget once per pair.
+      fixture.replay.events.resize(1);
+      options.maxMixedFrames = 19845;
+      expect(guardedRender(*fixture.chart, path, options).success,
+             "multichannel continuation uses the exact voice-frame budget");
+      --options.maxMixedFrames;
+      expect(!guardedRender(*fixture.chart, path, options).success,
+             "multichannel rendering rejects a one-frame-short work budget");
+    }
+  }
+  std::cout << "multichannel export: cases=" << cases.size() << " samples=" << comparedSamples
+            << " maxPCM=" << maximumError << '\n';
+}
+
 int main(int argc, char **argv) {
   const auto root = std::filesystem::temp_directory_path() /
                     ("chart-audio-tests-" + uuid::generateV4());
@@ -781,6 +1464,10 @@ int main(int argc, char **argv) {
   });
 #endif
   try {
+    if (argc == 2 && std::string_view(argv[1]) == "--multichannel") {
+      testBmsonMultichannelRendering(root);
+      return failures == 0 ? 0 : 1;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--unicode-keysound-test") {
       testUnicodeKeysoundReference(root);
       return failures == 0 ? 0 : 1;
@@ -789,6 +1476,19 @@ int main(int argc, char **argv) {
       benchmarkRendering(root);
       return failures == 0 ? 0 : 1;
     }
+    testBmsonMultichannelRendering(root);
+    testFiniteSliceEndControl(root);
+    testFrameGridPhase(root);
+    if (argc == 2 && std::string_view(argv[1]) == "--phase") return failures == 0 ? 0 : 1;
+    testGainSegmentFractionalPhase(root);
+    testGainSegmentLayerOwnership(root);
+    testAdjacentHcnRendering(root);
+    testBackspinCompanionRendering(root);
+    testHeldClassicBoundaryRendering(root);
+    testScratchHcnAggregateHeldRendering(root);
+    testMissedHcnPreviewRendering(root);
+    testLongHeadVoiceMuteAndResume(root);
+    testBmsonReleaseAudioRendering(root);
     testBmsonAudio(root);
     testResampledWaveform(root);
     testDirectMixHeadroom(root);

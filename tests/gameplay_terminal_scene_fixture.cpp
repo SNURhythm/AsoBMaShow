@@ -14,6 +14,7 @@
 #include "scene/play/JudgementTimingSample.h"
 #include "scene/play/PlayfieldVisualState.h"
 #include "scene/play/GameplayNoteJudgeRole.h"
+#include "scene/play/RhythmLaneInputController.h"
 #include "scene/play/StartSelectControl.h"
 #include "replay/ReplayInputRecorder.h"
 #include "practice/PracticeResultFlow.h"
@@ -62,9 +63,14 @@ struct FixtureJukebox {
   bool isPaused() const { return paused; }
   bool allowLiveKeysounds = false;
   std::vector<int> keysounds;
-  void playKeySound(int wav) {
+  void playKeySound(int wav, std::uint64_t = 0) {
     require(allowLiveKeysounds, "Watch must not request live keysounds");
     keysounds.push_back(wav);
+  }
+  std::vector<std::pair<std::uint64_t, float>> voiceGains;
+  void setKeysoundVoiceGain(std::uint64_t id, float gain) {
+    require(allowLiveKeysounds, "Watch must not request live voice controls");
+    voiceGains.emplace_back(id, gain);
   }
 };
 
@@ -206,9 +212,7 @@ struct ReminderSceneManager {
 };
 
 constexpr long long kHellChargeGaugeTickMicros = 200'000;
-struct FixtureHcnController {
-  bool chargeTailJudgedSuccessfully(const bms_parser::LongNote *) const { return false; }
-};
+
 
 struct Scene {
   void onInputQueueOverflow() {}
@@ -479,7 +483,7 @@ public:
   std::unordered_map<bms_parser::LongNote *, long long> hellChargeGaugeBalanceMicros;
   long long initialHellChargeGaugeUpdateMicros = 0;
   long long lastHellChargeGaugeUpdateMicros = 0;
-  FixtureHcnController *laneInputController = nullptr;
+  RhythmLaneInputController *laneInputController = nullptr;
   bool finishIfGaugeFailed();
   void updateSkinGameplayGraph(long long) {}
   bool useProductionJudging = false;
@@ -490,6 +494,7 @@ public:
   void recordSkinGameplayGraphJudge(const bms_parser::Note *, const JudgeResult &, long long) {}
   void refreshRuntimePresentationConfiguration() {}
   void checkPassedTimelineFromProduction(long long);
+  void processLegacyPendingReleases(long long);
   void detonateLandmine(bms_parser::LandmineNote *, long long, long long);
   std::function<void()> onTimelineAdvance;
   int backgroundTimelineTicks = 0;
@@ -541,7 +546,8 @@ public:
   void appendReplayEvent(ReplayEventAction action, int lane,
                          const bms_parser::Note *note, long long songTime,
                          long long judgeTime, const JudgeResult &judge,
-                         bool checkGaugeFailure = true);
+                         bool checkGaugeFailure = true, bool releaseByBackspin = false,
+                         bool releaseByHolding = false);
   void reset() {
     if (useProductionResetBoundary) resetAttemptBoundaryForTest();
     ++resets;
@@ -2518,6 +2524,45 @@ void testBackgroundGameplayProgress() {
           "Watch consumes replay input while deferring its terminal action");
 }
 
+void testLegacyMissedHcnPreview() {
+  for (bool preview : {false, true}) {
+    GamePlayScene scene;
+    auto &timelines = scene.chart->Measures.front()->TimeLines;
+    auto *head = new bms_parser::LongNote(1, bms_parser::LongNoteType::HellChargeNote);
+    auto *tail = new bms_parser::LongNote(bms_parser::Parser::NoWav, bms_parser::LongNoteType::HellChargeNote);
+    head->Tail = tail; tail->Head = head;
+    delete timelines[0]->Notes[0]; delete timelines[1]->Notes[0];
+    timelines[0]->Timing = 1'000'000;
+    timelines[0]->SetNote(0, head); timelines[1]->SetNote(0, tail);
+    scene.chart->Meta.TotalLongNotes = 1;
+    scene.rulesetPolicyBuild = gameplay::buildGameplayRulesetPolicy(scene.chart->Meta,
+        {.ruleset = GameplayRuleset::LR2});
+    RhythmLaneInputController controller(scene.chart, nullptr, scene.lanePressed,
+        scene.rulesetPolicyBuild.policy->judge);
+    scene.laneInputController = &controller;
+    scene.context.jukebox.allowLiveKeysounds = true;
+    if (preview) {
+      const auto start = scene.laneInputController->pressLane(0, {.songTimeMicros = 500'000});
+      require(start.keySoundNote == head, "legacy early input previews HCN head");
+      scene.context.jukebox.playKeySound(head->Wav, reinterpret_cast<std::uintptr_t>(head));
+      scene.laneInputController->releaseLane(0, {.songTimeMicros = 600'000});
+    }
+    scene.checkPassedTimelineFromProduction(1'300'000);
+    require(scene.context.jukebox.voiceGains.size() == (preview ? 1 : 0) &&
+                (!preview || scene.context.jukebox.voiceGains.back().second == 0),
+            "legacy missed head mutes its earlier preview only");
+    const auto rehold = scene.laneInputController->pressLane(0, {.songTimeMicros = 1'600'000});
+    const auto release = scene.laneInputController->releaseLane(0, {.songTimeMicros = 1'700'000});
+    require(rehold.keySoundNote == nullptr && release.keySoundNote == nullptr &&
+                rehold.gainNote == (preview ? head : nullptr) &&
+                release.gainNote == (preview ? head : nullptr) &&
+                (!preview || (rehold.keysoundGain == 1 && release.keysoundGain == 0)),
+            "legacy resolved-miss HCN rehold/lift controls preview without new audio");
+    require(scene.state->judgeCount[Poor] == 2,
+            "missed HCN audio does not change its two miss judgements");
+  }
+}
+
 void testLegacyMineKeysoundOnlyOnDetonation() {
   for (const bool pressed : {false, true}) {
     for (const bool autoKeySound : {false, true}) {
@@ -2546,6 +2591,7 @@ void testLegacyMineKeysoundOnlyOnDetonation() {
 }
 
 int main(int argc, char **argv) {
+  testLegacyMissedHcnPreview();
   testLegacyMineKeysoundOnlyOnDetonation();
   testLegacyLongNoteTimingSamples();
   testRealtimeTimingSamplesFollowInputEvents();

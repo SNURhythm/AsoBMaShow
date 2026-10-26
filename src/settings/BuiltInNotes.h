@@ -19,7 +19,7 @@ enum class Type {
 };
 enum class Palette { Gray, Blue, Scratch };
 inline constexpr std::array<int, 12> kModes{4, -5, 5, 6, -7, 7, 8, 9, 10, 14, 24, 48};
-inline constexpr int kMaxLanes = 48;
+inline constexpr int kMaxLanes = 52;
 inline constexpr std::array<const char *, 12> kTypeNames{
     "normal", "long_head", "long_tail", "long_body_off", "long_body_on",
     "hcn_head", "hcn_tail", "hcn_body_off", "hcn_body_on", "hcn_damage",

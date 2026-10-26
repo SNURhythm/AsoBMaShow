@@ -1441,7 +1441,8 @@ SkinPropertyLookup<std::int64_t> ResultSkinStateBridge::integerProperty(
       if (data_.gameplayGraph.chart && data_.gameplayGraph.chart->totalGauge) {
         return javaDoubleToInt(*data_.gameplayGraph.chart->totalGauge);
       }
-      return data_.meta ? std::optional<int>(javaDoubleToInt(data_.meta->Total))
+      return data_.meta ? std::optional<int>(javaDoubleToInt(
+                             beatorajaPresentationTotal(*data_.meta)))
                         : std::optional<int>(std::numeric_limits<int>::min());
     case 370: {
       return currentClearImageIndex();
@@ -1682,7 +1683,7 @@ SkinPropertyLookup<double> ResultSkinStateBridge::floatProperty(
       return supported(*data_.gameplayGraph.chart->totalGauge);
     }
     return data_.meta != nullptr
-               ? supported(data_.meta->Total)
+               ? supported(beatorajaPresentationTotal(*data_.meta))
                : supported(static_cast<double>(std::numeric_limits<float>::min()));
   }
   if (*id == 374) {

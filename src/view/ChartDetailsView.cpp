@@ -525,7 +525,7 @@ void ChartDetailsView::setChart(const ChartMetaRecord *record,
   tempo_->setText("BPM " + bpmRange(meta) + "   |   " + duration(meta.PlayLength));
   notes_->setText(meta.TotalNotes >= 0 ? std::to_string(meta.TotalNotes) : "—");
   total_->setText(total.empty() ? "—" : total);
-  totalLabel_->setLocalizedText(i18n::message(meta.HasTotal && meta.Total > 0
+  totalLabel_->setLocalizedText(i18n::message(meta.HasTotal && (meta.TotalIsRelative || meta.Total > 0)
       ? "menu.details.total.label" : "menu.details.total_auto.label"));
   noteTypes_->setText(std::to_string(meta.TotalLongNotes + meta.TotalBackSpinNotes) +
       " / " + std::to_string(meta.TotalScratchNotes + meta.TotalBackSpinNotes));

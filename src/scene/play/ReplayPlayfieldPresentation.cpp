@@ -170,7 +170,13 @@ ReplayPlayfieldPresentationCreateResult ReplayPlayfieldPresentation::create(
   // The exporter supplies the chart after applying its replay-compatible long
   // note mode, so the chart metadata is the one immutable model authority.
   auto model = std::make_unique<PlayfieldChartVisualModel>(
-      buildPlayfieldChartVisualModel(creation.chart, creation.chart.Meta.LnMode));
+      buildPlayfieldChartVisualModel(
+          creation.chart, creation.chart.Meta.LnMode,
+          creation.skinInput.initialState != nullptr &&
+                  creation.skinInput.initialState->authority.gaugeRules.compiled
+              ? std::optional<double>(creation.skinInput.initialState->authority
+                                          .gaugeRules.effectiveTotal)
+              : std::nullopt));
   auto state = std::make_unique<PlayfieldVisualStateStore>(*model);
   const auto graphJudgeWindows =
       replaySkinJudgeWindows(creation.timingWindows);
