@@ -1945,7 +1945,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   tabs->setFlexDirection(FlexDirection::Row)->setHeight(kMenuHeaderHeight)->setGap(4);
   const std::array<const char *, 5> tabLabels{"PLAY", "COURSE", "MUSIC", "IR", "STREAK"};
   const std::array<const char *, 5> tabMessages{
-      "menu.tabs.play", "menu.tabs.course", "menu.tabs.music", "menu.tabs.ir", "streak.ui.title"};
+      "menu.tabs.play", "menu.tabs.course", "menu.tabs.music", "menu.tabs.ir", "menu.tabs.streak"};
   const std::array<uint32_t, 5> tabIcons{ui_icons::kPlay, ui_icons::kFlagCheckered,
                                          ui_icons::kMusic, ui_icons::kGlobe, ui_icons::kFire};
   for (size_t index = 0; index < tabLabels.size(); ++index) {
