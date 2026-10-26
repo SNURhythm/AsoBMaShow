@@ -2332,7 +2332,6 @@
 {"streak.ui.choose_level", "Choose a level to add", "추가할 레벨 선택", "追加するレベルを選択", "选择要添加的等级", "選擇要新增的等級"},
 {"streak.ui.complete", "Today is complete", "오늘의 목표 달성", "今日の目標達成", "今日目标已完成", "今日目標已完成"},
 {"streak.ui.complete_help", "You reached your goal and advanced your combo. Any more practice is optional.", "목표를 달성해 콤보가 하루 늘었습니다. 더 연습할지는 자유롭게 정하세요.", "目標を達成してコンボが1日増えました。この後の練習は自由です。", "你已达成目标，连击天数增加了。接下来是否继续练习，由你决定。", "你已達成目標，連擊天數增加了。接下來是否繼續練習，由你決定。"},
-{"streak.ui.condition_lamp", "Lamp: {value}", "램프: {value}", "ランプ：{value}", "灯：{value}", "燈：{value}"},
 {"streak.ui.condition_score", "Score: {value}", "스코어: {value}", "スコア：{value}", "分数：{value}", "分數：{value}"},
 {"streak.ui.count", "Distinct charts per round", "라운드당 서로 다른 채보 수", "ラウンドごとの異なる譜面数", "每轮不同谱面数量", "每輪不同譜面數量"},
 {"streak.ui.create", "Create my routine", "내 루틴 만들기", "ルーティンを作成", "创建我的计划", "建立我的計畫"},

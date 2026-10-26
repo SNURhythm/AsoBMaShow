@@ -214,7 +214,7 @@ void assignmentConditions(View *parent, const streak::Assignment &a, int size = 
   };
   const auto previousLamp = a.eligibleLamp == -2 ? i18n::tr("streak.ui.any_lamp") :
       a.eligibleOrBelow ? comparison("streak.ui.at_most", lampText(a.eligibleLamp)) : lampText(a.eligibleLamp);
-  row(a.eligibleLamp == -2 ? previousLamp : comparison("streak.ui.condition_lamp", previousLamp),
+  row(previousLamp,
       a.targetLamp < 0 ? i18n::tr("streak.ui.any_lamp") :
           comparison("streak.ui.at_least", lampText(a.targetLamp)), a.eligibleLamp, a.targetLamp);
   auto previousScore = a.eligibleScoreRank == -2 ? i18n::tr("streak.ui.any_score") :
