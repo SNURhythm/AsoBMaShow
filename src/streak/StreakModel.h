@@ -37,6 +37,12 @@ struct Config {
   int monthlyGoal = 2000;
   std::vector<Assignment> assignments;
 };
+struct ChartAchievement {
+  std::string eligibleSince;
+  int lamp = -1;
+  int score = 0;
+  int maxScore = 0;
+};
 struct Progress {
   Assignment requirement;
   int completedRounds = 0;
@@ -44,6 +50,7 @@ struct Progress {
   std::int64_t earnedPoints = 0;
   int charts = 0;
   std::set<std::string> usedCharts;
+  std::map<std::string, ChartAchievement> chartProgress;
 };
 struct Day {
   Config config;
@@ -53,7 +60,7 @@ struct Day {
   std::vector<Progress> assignments;
 };
 struct State {
-  int version = 2;
+  int version = 3;
   std::map<DayId, Config> configurations;
   std::map<DayId, Day> days;
   std::int64_t savings = 0;
@@ -72,6 +79,7 @@ struct Play {
   int score = 0;
   int maxScore = 0;
   bool manual = true;
+  std::string createdAt; // Canonical UTC timestamp for delayed saved results.
 };
 struct Summary {
   DayId day = 0;

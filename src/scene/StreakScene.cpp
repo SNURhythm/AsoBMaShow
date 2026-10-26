@@ -196,6 +196,7 @@ void StreakScene::dashboard(View *body) {
       action(body, i18n::tr(showOptional_ ? "streak.ui.hide_optional" : "streak.ui.show_optional"),
           [this] { later([this] { showOptional_ = !showOptional_; }); });
   } else label(body, i18n::tr("streak.ui.assignments"), 27);
+  if (!complete || showOptional_) label(body, i18n::tr("streak.ui.eligibility_help"), 18);
   if (!complete && day.assignments.empty()) label(body, i18n::tr("streak.ui.no_assignments"));
   for (const auto &p : day.assignments) {
     if (complete && (!showOptional_ || !bonusAvailable)) break;
@@ -297,6 +298,7 @@ void StreakScene::editor(View *body) {
     assignment_.eligibleOrBelow = id.ends_with("below");
     assignment_.eligibleLamp = integer(assignment_.eligibleOrBelow ? id.substr(0, id.size() - 5) : id);
   });
+  label(body, i18n::tr("streak.ui.eligibility_help"), 18);
   std::vector<DropdownView::Option> lamps{{"-1", "Any lamp"}};
   for (int rank : {0, 100, 150, 200, 300, 400, 500, 600})
     lamps.push_back({std::to_string(rank), streak::lampLabel(rank) + " or above"});

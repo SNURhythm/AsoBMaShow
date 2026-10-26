@@ -167,7 +167,8 @@ std::string scoreLabel(const Assignment &a) {
   text << std::fixed << std::setprecision(2) << (100.0 * a.scoreNumerator / a.scoreDenominator) << "% EX or above";
   return text.str();
 }
-bool matches(const Assignment &a, const Play &p) {
+namespace {
+bool eligible(const Assignment &a, const Play &p) {
   const bool levelMatches = std::any_of(a.levels.begin(), a.levels.end(), [&](const Level &level) {
     return std::any_of(p.levels.begin(), p.levels.end(), [&](const Level &candidate) {
       return level.source == candidate.source && level.level == candidate.level;
@@ -175,10 +176,17 @@ bool matches(const Assignment &a, const Play &p) {
   });
   if (!levelMatches || !p.manual || p.chart.empty()) return false;
   if (a.eligibleLamp != -2 && (a.eligibleOrBelow ? p.previousLamp > a.eligibleLamp : p.previousLamp != a.eligibleLamp)) return false;
-  if (a.targetLamp >= 0 && p.lamp < a.targetLamp) return false;
-  return a.scoreNumerator == 0 || (p.maxScore > 0 &&
-      static_cast<std::int64_t>(p.score) * a.scoreDenominator >=
-      static_cast<std::int64_t>(p.maxScore) * a.scoreNumerator);
+  return true;
+}
+bool meetsTargets(const Assignment &a, int lamp, int score, int maxScore) {
+  if (a.targetLamp >= 0 && lamp < a.targetLamp) return false;
+  return a.scoreNumerator == 0 || (maxScore > 0 &&
+      static_cast<std::int64_t>(score) * a.scoreDenominator >=
+      static_cast<std::int64_t>(maxScore) * a.scoreNumerator);
+}
+} // namespace
+bool matches(const Assignment &a, const Play &p) {
+  return eligible(a, p) && meetsTargets(a, p.lamp, p.score, p.maxScore);
 }
 void advance(State &s, DayId day) {
   if (s.configurations.empty()) return;
@@ -251,7 +259,30 @@ std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice) {
   for (auto *item : ordered) {
     if (bonus && remainingBonus == 0) break;
     auto &progress = *item;
-    if (!matches(progress.requirement, p) || progress.usedCharts.contains(p.chart)) continue;
+    if (progress.usedCharts.contains(p.chart)) continue;
+    auto chart = progress.chartProgress.find(p.chart);
+    if (chart == progress.chartProgress.end()) {
+      if (!eligible(progress.requirement, p)) continue;
+      chart = progress.chartProgress.emplace(p.chart, ChartAchievement{}).first;
+      chart->second.eligibleSince = p.createdAt;
+    }
+    // Entry existence preserves the full eligibility decision for today.
+    // Retain actual achievements so raised targets still compare real values.
+    auto &achievement = chart->second;
+    if (!p.createdAt.empty() && !achievement.eligibleSince.empty() &&
+        p.createdAt < achievement.eligibleSince) {
+      if (!eligible(progress.requirement, p)) continue;
+      achievement.eligibleSince = p.createdAt;
+    }
+    achievement.lamp = std::max(achievement.lamp, p.lamp);
+    if (p.maxScore > 0 && p.score >= 0 &&
+        (achievement.maxScore == 0 ||
+         static_cast<std::int64_t>(p.score) * achievement.maxScore >
+             static_cast<std::int64_t>(achievement.score) * p.maxScore)) {
+      achievement.score = std::min(p.score, p.maxScore);
+      achievement.maxScore = p.maxScore;
+    }
+    if (!meetsTargets(progress.requirement, achievement.lamp, achievement.score, achievement.maxScore)) continue;
     progress.usedCharts.insert(p.chart);
     if (++progress.charts < progress.requirement.chartCount) continue;
     ++progress.completedRounds;

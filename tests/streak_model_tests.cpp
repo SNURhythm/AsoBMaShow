@@ -259,5 +259,72 @@ int main() {
   CHECK(unfinished.days.at(33000).assignments[1].requirement.chartCount == 1);
   CHECK(record(unfinished, play(33000, "extra"), 0) == 2);
 
+  // Eligibility survives lamp promotion and table membership changes today.
+  State sticky;
+  auto promote = config(100, 10);
+  promote.assignments[0].eligibleLamp = 200;
+  promote.assignments[0].targetLamp = 400;
+  configure(sticky, promote, 34000);
+  auto retry = play(34000, "promote"); retry.previousLamp = 200; retry.lamp = 300;
+  CHECK(record(sticky, retry, 0) == 0);
+  retry.previousLamp = 300; retry.lamp = 400; retry.levels.clear();
+  CHECK(record(sticky, retry, 0) == 10);
+  CHECK(record(sticky, retry, 0) == 0);
+  retry.day = 34001;
+  CHECK(record(sticky, retry, 0) == 0);
+
+  // Ineligible charts can qualify later, but earlier target achievements do
+  // not count retroactively before full eligibility has been established.
+  State newlyEligible;
+  promote.assignments[0].scoreNumerator = 9;
+  promote.assignments[0].scoreDenominator = 10;
+  configure(newlyEligible, promote, 35000);
+  retry = play(35000, "new"); retry.previousLamp = 0; retry.lamp = 200; retry.score = 200;
+  CHECK(record(newlyEligible, retry, 0) == 0);
+  retry.previousLamp = 200; retry.lamp = 400; retry.score = 100;
+  CHECK(record(newlyEligible, retry, 0) == 0);
+  retry.previousLamp = 400; retry.lamp = 0; retry.score = 180;
+  CHECK(record(newlyEligible, retry, 0) == 10);
+  CHECK(record(newlyEligible, retry, 0) == 0);
+
+  State tableEntry;
+  configure(tableEntry, config(100, 10), 36000);
+  retry = play(36000, "table-change"); retry.levels.clear();
+  CHECK(record(tableEntry, retry, 0) == 0);
+  retry.levels = {{"table", "0", ""}}; retry.lamp = 0;
+  CHECK(record(tableEntry, retry, 0) == 0);
+  retry.levels.clear(); retry.lamp = 300;
+  CHECK(record(tableEntry, retry, 0) == 10);
+
+  // Actual achievements must meet an escalated target, not just the old one.
+  State raised;
+  auto targets = config(1, 1);
+  targets.assignments[0].scoreNumerator = 18;
+  targets.assignments[0].scoreDenominator = 27;
+  configure(raised, targets, 37000);
+  retry = play(37000, "partial"); retry.lamp = 200; retry.score = 140;
+  CHECK(record(raised, retry, 0) == 0);
+  CHECK(record(raised, play(37000, "goal"), 0) == 1);
+  CHECK(raised.days.at(37000).assignments[0].requirement.scoreNumerator == 21);
+  retry.lamp = 300; retry.score = 120;
+  CHECK(record(raised, retry, 0) == 0);
+  retry.lamp = 0; retry.score = 80; retry.maxScore = 100;
+  CHECK(record(raised, retry, 0) == 1);
+  CHECK(record(raised, retry, 0) == 0);
+  retry.day = 37001;
+  CHECK(record(raised, retry, 0) == 0);
+
+  // A delayed earlier ineligible result cannot borrow later eligibility.
+  State delayed;
+  configure(delayed, promote, 38000);
+  retry = play(38000, "delayed"); retry.previousLamp = 200;
+  retry.lamp = 400; retry.score = 100; retry.createdAt = "2026-10-26 12:00:00.000";
+  CHECK(record(delayed, retry, 0) == 0);
+  retry.previousLamp = 0; retry.lamp = 200; retry.score = 200;
+  retry.createdAt = "2026-10-26 11:00:00.000";
+  CHECK(record(delayed, retry, 0) == 0);
+  retry.previousLamp = 200; // An earlier eligible attempt can contribute.
+  CHECK(record(delayed, retry, 0) == 10);
+
   std::cout << "streak model tests passed\n";
 }

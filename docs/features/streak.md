@@ -4,8 +4,14 @@ Open **Streak** in the built-in PLAY selector, then create a routine. Set daily,
 weekly and monthly point goals and add assignments. Select levels from any
 installed difficulty tables; an assignment matches the union of those levels.
 
-An assignment filters the chart's previous best lamp, then requires the new
-attempt to meet its target lamp and score together. Either target may be left
+An assignment checks selected table levels and the chart's previous best lamp.
+Once a chart satisfies all eligibility conditions, it stays eligible for that
+assignment for the rest of the day, even if its lamp or table membership changes.
+An initially ineligible chart can qualify on a later attempt. From that point,
+its best lamp and best EX rate accumulate across attempts: the lamp and score
+targets can be achieved on different plays. Earlier ineligible attempts do not
+contribute retroactively. Daily eligibility and achievements survive app restarts
+and reset the next day. Either target may be left
 unrestricted, but at least one must be set. Score targets cover E, D, C, B, A,
 AA, AAA, MAX -, MAX, and custom EX rates to 0.01 percentage-point precision.
 Previous-lamp filters support exact lamps and “or below,” including NO PLAY.
@@ -117,6 +123,13 @@ should unlock those milestones during the same session.
    dashboard shows the effective date for tomorrow. Multiple saves replace the
    pending routine.
 
+To check daily eligibility and combined targets, use a fresh test profile with
+an assignment for an EASY-cleared chart, target HARD and a score threshold you
+can reach. First finish NORMAL with the target score; it should not count yet.
+Then finish HARD with a lower score. It should count once, using the earlier
+score, despite the previous lamp now being NORMAL. Restart between attempts to
+check persistence. The next day, the previous-lamp filter applies afresh.
+
 At the default ten-point daily bonus maximum, the first freeze needs two fully
 completed bonus days. Check prices of 20, 25, 30 and the eventual 50-point ceiling.
 For midnight rollover, missing-day protection, price resets and delayed saves,
@@ -137,6 +150,8 @@ thresholds, distinct-chart repeat rounds, streak/freeze/calendar handling,
 damaged state rejection, legacy identities, multi-table deduplication and
 transaction rollback. Economy regressions cover next-day edits before play,
 simultaneous goal-reaching rounds, daily bonus limits, escalating prices across
-restarts, price resets, late attendance and version 1 migration. Native visual
+restarts, price resets, late attendance and version 1/2 migration. Daily progress
+regressions cover eligibility changes, separate target achievements, raised
+targets, delayed saves and restart/rollback behavior. Native visual
 verification requires a desktop session that exposes the game window to
 automation.

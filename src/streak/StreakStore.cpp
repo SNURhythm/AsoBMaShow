@@ -1,6 +1,8 @@
 #include "StreakStore.h"
 #include "../../yoga/lib/nlohmann/json.hpp"
 #include "../repositories/SqliteRAII.h"
+#include <algorithm>
+#include <array>
 #include <stdexcept>
 
 namespace streak {
@@ -8,7 +10,8 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Level, source, level, label)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Assignment, id, name, levels, eligibleLamp,
     eligibleOrBelow, targetLamp, scoreNumerator, scoreDenominator, customRate, chartCount, points)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Config, dailyGoal, weeklyGoal, monthlyGoal, assignments)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Progress, requirement, completedRounds, bonusRounds, earnedPoints, charts, usedCharts)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ChartAchievement, eligibleSince, lamp, score, maxScore)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Progress, requirement, completedRounds, bonusRounds, earnedPoints, charts, usedCharts, chartProgress)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Day, config, played, frozen, points, assignments)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(State, version, configurations, days, savings, freezes,
     freezePurchases, currentStreak, bestStreak, milestones)
@@ -33,7 +36,7 @@ State load(sqlite3 *db) {
   require(result == SQLITE_ROW, db);
   auto json = nlohmann::json::parse(sqliteColumnString(query, 0));
   const auto version = json.at("version").get<int>();
-  if (version != 1 && version != 2)
+  if (version != 1 && version != 2 && version != 3)
     throw std::runtime_error("This streak data needs a different app version.");
   if (version == 1) {
     // Preserve all previously earned totals and savings. The old format did
@@ -45,6 +48,18 @@ State load(sqlite3 *db) {
         progress["bonusRounds"] = 0;
         progress["earnedPoints"] = static_cast<std::int64_t>(progress.at("completedRounds").get<int>()) *
             progress.at("requirement").at("points").get<int>();
+      }
+    }
+  }
+  if (version < 3) {
+    json["version"] = 3;
+    for (auto &entry : json.at("days")) {
+      for (auto &progress : entry.at(1).at("assignments")) {
+        // Old state only remembers charts already counted. Do not invent
+        // eligibility or achievements for earlier unsuccessful attempts.
+        progress["chartProgress"] = nlohmann::json::object();
+        for (const auto &chart : progress.at("usedCharts"))
+          progress["chartProgress"][chart.get<std::string>()] = ChartAchievement{};
       }
     }
   }
@@ -76,6 +91,16 @@ State load(sqlite3 *db) {
           static_cast<std::uint64_t>(progress.charts) + progress.completedRounds > progress.usedCharts.size() ||
           progress.usedCharts.contains("") || (!day.played && !progress.usedCharts.empty()))
         throw std::runtime_error("Invalid assignment progress.");
+      constexpr std::array validLamps{-1, 0, 100, 150, 200, 300, 400, 500, 600};
+      for (const auto &[chart, achievement] : progress.chartProgress) {
+        if (chart.empty() || !day.played ||
+            std::find(validLamps.begin(), validLamps.end(), achievement.lamp) == validLamps.end() ||
+            achievement.score < 0 || achievement.maxScore < 0 || achievement.score > achievement.maxScore)
+          throw std::runtime_error("Invalid daily chart achievements.");
+      }
+      if (!std::all_of(progress.usedCharts.begin(), progress.usedCharts.end(),
+                      [&](const auto &chart) { return progress.chartProgress.contains(chart); }))
+        throw std::runtime_error("Counted chart is missing its daily eligibility.");
       earned += progress.earnedPoints;
     }
     if (earned != day.points || (!day.played && day.points != 0))
@@ -97,10 +122,11 @@ void recordSavedPlay(sqlite3 *db, const std::filesystem::path &chartPath,
   auto state = load(db);
   if (state.configurations.empty()) return;
   SqliteStatementHandle time;
-  require(prepareSqliteStatement(db, "SELECT CAST(strftime('%s', ?) AS INTEGER)", time) == SQLITE_OK, db);
+  require(prepareSqliteStatement(db, "SELECT CAST(strftime('%s', ?1) AS INTEGER), strftime('%Y-%m-%d %H:%M:%f', ?1)", time) == SQLITE_OK, db);
   require(bindSqliteText(time, 1, createdAt), db);
   require(sqlite3_step(time) == SQLITE_ROW && sqlite3_column_type(time, 0) != SQLITE_NULL, db);
   play.day = localDay(sqlite3_column_int64(time, 0));
+  play.createdAt = sqliteColumnString(time, 1);
   if (play.day < state.configurations.begin()->first) return;
 
   // Read only indexed metadata for this chart, never chart/archive payloads.

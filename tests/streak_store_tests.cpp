@@ -44,7 +44,7 @@ int main() {
   CHECK(buyFreeze(earned, today()));
   save(db, earned);
   auto reopened = load(db);
-  CHECK(reopened.version == 2 && freezePrice(reopened) == 25 && reopened.savings == 80);
+  CHECK(reopened.version == 3 && freezePrice(reopened) == 25 && reopened.savings == 80);
   CHECK(reopened.days.begin()->second.assignments[0].bonusRounds == 2);
   CHECK(reopened.days.begin()->second.assignments[0].earnedPoints == 12);
   advance(reopened, today() + 3); // Consumes freeze, then breaks.
@@ -76,6 +76,21 @@ int main() {
   CHECK(sqlite3_step(query) == SQLITE_ROW);
   auto legacy = nlohmann::json::parse(reinterpret_cast<const char *>(sqlite3_column_text(query, 0)));
   sqlite3_finalize(query);
+  const auto replaceBody = [&](const nlohmann::json &value) {
+    const auto body = value.dump();
+    sqlite3_stmt *update = nullptr;
+    CHECK(sqlite3_prepare_v2(db, "UPDATE streak_state SET body=?", -1, &update, nullptr) == SQLITE_OK);
+    CHECK(sqlite3_bind_text(update, 1, body.c_str(), -1, SQLITE_TRANSIENT) == SQLITE_OK);
+    CHECK(sqlite3_step(update) == SQLITE_DONE);
+    sqlite3_finalize(update);
+  };
+  legacy["version"] = 2;
+  for (auto &entry : legacy["days"])
+    for (auto &progress : entry[1]["assignments"]) progress.erase("chartProgress");
+  replaceBody(legacy);
+  const auto versionTwo = load(db);
+  CHECK(versionTwo.version == 3 && versionTwo.savings == earned.savings);
+  CHECK(versionTwo.days.begin()->second.assignments[0].chartProgress.size() == 3);
   legacy["version"] = 1;
   legacy.erase("freezePurchases");
   for (auto &entry : legacy["days"]) {
@@ -87,13 +102,9 @@ int main() {
     }
     day["points"] = total;
   }
-  const auto body = legacy.dump();
-  CHECK(sqlite3_prepare_v2(db, "UPDATE streak_state SET body=?", -1, &query, nullptr) == SQLITE_OK);
-  CHECK(sqlite3_bind_text(query, 1, body.c_str(), -1, SQLITE_TRANSIENT) == SQLITE_OK);
-  CHECK(sqlite3_step(query) == SQLITE_DONE);
-  sqlite3_finalize(query);
+  replaceBody(legacy);
   auto migrated = load(db);
-  CHECK(migrated.version == 2 && migrated.savings == 80 && migrated.freezes == 1);
+  CHECK(migrated.version == 3 && migrated.savings == 80 && migrated.freezes == 1);
   CHECK(migrated.configurations.size() == 2 && migrated.milestones.contains("streak:7"));
   CHECK(migrated.days.begin()->second.points == 60);
   CHECK(migrated.days.begin()->second.assignments[0].earnedPoints == 60);
@@ -104,6 +115,7 @@ int main() {
   // Version 2 days can already exceed the new shared budget. Preserve them
   // across loading and reject further rewards without rewriting their history.
   State oldBudget;
+  oldBudget.version = 2;
   auto oldConfig = config;
   for (const auto &id : {"two", "three"}) {
     auto assignment = config.assignments[0]; assignment.id = id;
@@ -131,6 +143,7 @@ int main() {
   // The entire shared budget is now valid on a single assignment, including
   // after upgrading a partially completed bonus round with an older quota.
   State oneAssignment;
+  oneAssignment.version = 2;
   configure(oneAssignment, config, today());
   attempt.day = today(); attempt.chart = "goal";
   CHECK(record(oneAssignment, attempt, 0) == 10);
@@ -151,6 +164,42 @@ int main() {
   CHECK(oneAssignment.days.begin()->second.assignments[0].requirement.chartCount == 1);
   attempt.chart = "eleventh";
   CHECK(record(oneAssignment, attempt, 0) == 0 && oneAssignment.savings == 10);
+
+  // Eligibility and separate achievements survive reopening and rollback.
+  State partial;
+  auto promotion = config;
+  promotion.dailyGoal = 100;
+  promotion.assignments[0].eligibleLamp = 200;
+  promotion.assignments[0].targetLamp = 400;
+  promotion.assignments[0].scoreNumerator = 9;
+  promotion.assignments[0].scoreDenominator = 10;
+  configure(partial, promotion, today());
+  attempt = {.day=today(), .chart="promotion", .levels={{"https://table","0",""}},
+             .previousLamp=200, .lamp=300, .score=190, .maxScore=200,
+             .createdAt="2026-10-26 12:00:00.000"};
+  CHECK(record(partial, attempt, 0) == 0);
+  save(db, partial);
+  partial = load(db);
+  CHECK(partial.days.begin()->second.assignments[0].chartProgress.at("promotion").score == 190);
+  CHECK(partial.days.begin()->second.assignments[0].chartProgress.at("promotion").eligibleSince == attempt.createdAt);
+  attempt.previousLamp = 300; attempt.lamp = 400; attempt.score = 100; attempt.levels.clear();
+  CHECK(sqlite3_exec(db, "BEGIN", nullptr, nullptr, nullptr) == SQLITE_OK);
+  CHECK(record(partial, attempt, 0) == 20);
+  save(db, partial);
+  CHECK(sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr) == SQLITE_OK);
+  partial = load(db);
+  CHECK(partial.days.begin()->second.points == 0);
+  CHECK(partial.days.begin()->second.assignments[0].chartProgress.at("promotion").lamp == 300);
+  CHECK(record(partial, attempt, 0) == 20);
+  save(db, partial);
+  partial = load(db);
+  CHECK(record(partial, attempt, 0) == 0);
+  bad = partial; bad.days.begin()->second.assignments[0].chartProgress.clear();
+  CHECK(rejects(bad));
+  bad = partial; bad.days.begin()->second.assignments[0].chartProgress.at("promotion").score = 201;
+  CHECK(rejects(bad));
+  bad = partial; bad.days.begin()->second.assignments[0].chartProgress.at("promotion").lamp = 250;
+  CHECK(rejects(bad));
 
   // Unsupported or damaged state must be reported, never silently replaced.
   CHECK(sqlite3_exec(db, "UPDATE streak_state SET body = '{\"version\":99}'", nullptr, nullptr, nullptr) == SQLITE_OK);

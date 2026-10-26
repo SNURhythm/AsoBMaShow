@@ -372,6 +372,38 @@ void testStreakProjectionIsAtomicAndUsesEffectiveLamp() {
     assert(progress[0].completedRounds == 1);
     assert(progress[1].completedRounds == (test.expected == -1 ? 1 : 0));
   }
+
+  // Separate saved attempts retain eligibility and combine score/lamp targets.
+  streak::save(db, {});
+  assert(sqlite3_exec(db, "DELETE FROM scores; DELETE FROM score_sha256_clear_rank_cache",
+                      nullptr, nullptr, nullptr) == SQLITE_OK);
+  const auto promotionTime = static_cast<std::int64_t>(std::time(nullptr)) * 1000;
+  const auto savePromotion = [&](int sequence, int lamp, int exScore) {
+    pending.attemptId = "123e4567-e89b-42d3-a456-42661417402" + std::to_string(sequence);
+    pending.createdAt = scoreHistoryTime(promotionTime + sequence);
+    pending.score.longNoteMode = 2;
+    pending.score.clearType = lamp;
+    pending.score.comboBreak = 1;
+    pending.score.score = exScore;
+    assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  };
+  savePromotion(0, 200, 100);
+  streak::State promotion;
+  streak::Config promotionConfig;
+  promotionConfig.assignments = {{.id="promote", .name="EASY to HARD", .levels={{"https://table","0",""}},
+                                 .eligibleLamp=200, .targetLamp=400, .scoreNumerator=9,
+                                 .scoreDenominator=10, .points=20}};
+  streak::configure(promotion, promotionConfig, streak::localDay(promotionTime / 1000));
+  streak::save(db, promotion);
+  savePromotion(1, 300, 190);
+  assert(streak::load(db).days.rbegin()->second.points == 0);
+  savePromotion(2, 400, 100);
+  const auto promoted = streak::load(db);
+  assert(promoted.days.rbegin()->second.points == 20);
+  const auto &achievement = promoted.days.rbegin()->second.assignments[0].chartProgress.at(pending.score.chartSha256);
+  assert(achievement.lamp == 400 && achievement.score == 190);
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::AlreadyPresent);
+  assert(streak::load(db).days.rbegin()->second.points == 20);
   sqlite3_close(db);
 }
 

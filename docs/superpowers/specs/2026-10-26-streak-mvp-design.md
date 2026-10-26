@@ -4,7 +4,11 @@ Build a profile-local, non-commercial practice routine. Players choose a daily
 point goal and repeatable assignments combining levels from multiple difficulty
 tables, previous lamps (any/exact/or below), target lamp and/or score, distinct
 chart count, and point reward. Rank targets include E through MAX, including
-MAX -, plus a custom EX rate. A saved attempt must meet both enabled targets.
+MAX -, plus a custom EX rate. Full eligibility becomes sticky per chart,
+assignment and day once satisfied; initially ineligible charts can qualify later.
+Best lamp and best EX rate accumulate from eligible attempts, so enabled targets
+may be achieved on different plays. Daily eligibility and achievements persist
+across restarts and reset tomorrow.
 
 Meeting the daily point goal advances the streak once. Any manually played
 single chart protects it without advancement, including failed or ineligible
