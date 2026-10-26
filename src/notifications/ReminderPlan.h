@@ -27,8 +27,9 @@ inline std::vector<Entry> makePlan(const streak::State &state, const Preferences
   // freezes. Forecast from the last retained day, just as advance() does,
   // rather than spending the remaining inventory again from today's date.
   const auto &[frontier, last] = *state.days.rbegin();
+  // Late results can refund freezes beyond the two-freeze purchase limit.
   const auto lossDay = frontier + ((last.played || last.frozen) ? 1 : 0) +
-      std::clamp(state.freezes, 0, 2) + 1;
+      std::max(state.freezes, 0) + 1;
   if (prefs.daily) {
     const auto end = forecastLoss ? std::min(lossDay, today + 53) : today + 56;
     for (auto date = today; date < end; ++date) {

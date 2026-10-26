@@ -32,6 +32,33 @@ int main() {
   CHECK(plan.size() == 3 && plan.front().day == 20006);
   state.currentStreak = 0;
   CHECK(makePlan(state, prefs, 20000, 0).empty());
+  // A late result can refund a freeze after the player has replenished the
+  // inventory. Two limits purchases, not the balance used by advance().
+  streak::State refunded;
+  streak::Config routine;
+  routine.dailyGoal = 1;
+  routine.assignments = {{.id="practice", .name="Practice", .levels={{"table", "0", "sl0"}}, .points=1}};
+  const streak::DayId start = 20000;
+  streak::configure(refunded, routine, start);
+  streak::record(refunded, {.day=start, .chart="first", .levels={{"table", "0", "sl0"}}, .lamp=300}, 0);
+  refunded.savings = 100;
+  CHECK(streak::buyFreeze(refunded, start) && streak::buyFreeze(refunded, start));
+  streak::advance(refunded, start + 2);
+  CHECK(refunded.days.at(start + 1).frozen && refunded.freezes == 1);
+  CHECK(streak::buyFreeze(refunded, start + 2));
+  streak::record(refunded, {.day=start + 1, .chart="delayed", .levels={{"table", "0", "sl0"}}, .lamp=300}, 0);
+  CHECK(refunded.freezes == 3 && refunded.currentStreak == 2);
+  prefs.daily = true;
+  const auto refundedPlan = makePlan(refunded, prefs, start + 2, 0);
+  int refundedLoss = start + 2;
+  while (refunded.currentStreak > 0) streak::advance(refunded, ++refundedLoss);
+  const auto dailyCount = std::count_if(refundedPlan.begin(), refundedPlan.end(),
+      [](const auto &entry) { return entry.kind == Kind::Daily; });
+  CHECK(dailyCount == refundedLoss - (start + 2));
+  CHECK(refundedPlan.size() == dailyCount + 3);
+  CHECK(refundedPlan[dailyCount].day == refundedLoss + 2);
+  CHECK(refundedPlan[dailyCount + 1].day == refundedLoss + 7);
+  CHECK(refundedPlan[dailyCount + 2].day == refundedLoss + 14);
   // Compare forecasting against the real model across a year boundary. A
   // partial play protects the day but does not increment the combo.
   prefs.daily = false;
@@ -68,10 +95,12 @@ int main() {
   CHECK(backInMonday.back().day == actualLoss + 14);
   prefs.daily = true;
   rollback.currentStreak = 1;
+  rollback.freezes = 100;
   rollback.days[monday + 100] = {.played = true, .points = 20};
   const auto farRollback = makePlan(rollback, prefs, monday, 0);
-  CHECK(farRollback.size() <= 56);
+  CHECK(farRollback.size() == 56);
   CHECK(farRollback.back().kind == Kind::Comeback);
+  CHECK(farRollback.back().day == monday + 216);
   prefs.hour = 24;
   CHECK(!prefs.valid());
 }
