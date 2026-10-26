@@ -833,8 +833,17 @@ void testAssignmentFoldersShowOnlyContributingCharts() {
   require(!musicSelectAssignmentNeedsAdjustment(day, progress, sources, input),
           "restored chart availability removes the immediate-edit exception");
   day.points = day.config.dailyGoal;
+  progress.requirement.chartCount = 1; progress.charts = 0;
   require(!musicSelectAssignmentNeedsAdjustment(day, progress, sources, input),
-          "bonus rounds need only one chart regardless of configured quota");
+          "ordinary bonus rounds use the active one-chart quota");
+  progress.requirement.chartCount = progress.bonusChartCount = 2;
+  sources[1].record.solidArchive = true;
+  require(musicSelectAssignmentNeedsAdjustment(day, progress, sources, input),
+          "reset challenge needs two distinct playable charts");
+  progress.charts = 1;
+  require(!musicSelectAssignmentNeedsAdjustment(day, progress, sources, input),
+          "one partial reset chart reduces the remaining quota to one");
+  sources[1].record.solidArchive = false;
   auto noCharts = std::vector<MusicSelectAssignmentChart>{};
   require(musicSelectAssignmentNeedsAdjustment(day, progress, noCharts, input),
           "empty bonus pool permits adjustment while bonus remains");

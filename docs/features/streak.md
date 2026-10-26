@@ -53,16 +53,30 @@ completions use stable assignment-ID order.
 
 Each chart counts once per assignment per local calendar day, even if present
 in several tables or played in a different LN mode. A play can contribute to
-several assignments. After the daily goal, **every assignment uses exactly one
+several assignments. After the daily goal, each assignment initially uses **one
 new qualifying chart per bonus round**, regardless of its normal chart quota.
 Unfinished pre-goal rounds switch to this rule too; their partial counts do not
 grant automatic bonus points, and already-counted charts remain used for today.
 
-Completed rounds at or after the goal may randomly raise the next score rank
-(custom rate +2 percentage points) or lamp, but only when the finishing play
-already meets the proposed target. Otherwise the target stays unchanged. Bonus
-chart counts never increase. Tomorrow restores all configured chart counts and
-targets and resets the shared bonus budget. **Edit for tomorrow** is the normal
+Entering bonus mode raises **one randomly selected condition once per assignment**:
+the next score rank (custom rate +2 percentage points), the next lamp, or the
+next difficulty-table levels in imported table order. Randomness chooses the
+condition, not whether promotion happens; the goal play need not already meet
+the harder target. Only conditions with an available higher step participate;
+if every condition is at its ceiling, targets stay unchanged and no difficulty
+reset is offered. Later bonus rounds
+never raise difficulty again. These changes never affect pre-goal rounds or the
+saved routine.
+
+**Too hard for me!** opens a small confirmation modal showing the original
+levels and targets, retained even if Adjust today has changed the live challenge. Confirming restores today's original assignment difficulty
+and requires **two new qualifying charts for every remaining bonus round** of
+that assignment. Partial round progress resets, earned points and used charts
+remain intact, and difficulty stays at that restored setting. Cancel/Escape
+changes nothing. The confirmation is rechecked against the current profile and
+day, and a repeated confirmation cannot erase newly earned partial progress.
+Tomorrow restores all configured chart counts and targets, removes the two-chart
+override, and resets the shared bonus budget. **Edit for tomorrow** is the normal
 editing flow. Only when fewer distinct eligible, playable charts remain than
 needed to finish the current round does **Adjust today** appear on that
 assignment. Difficult targets alone do not enable immediate editing. Levels,
@@ -127,7 +141,9 @@ an already observed historical gap.
 Version 1 state migrates without changing historical points, balances or progress;
 new bonus and purchase counters start at zero. Version 2 persists those counters.
 Existing days above the shared bonus budget keep their earnings but cannot earn
-additional bonus points. Older partial bonus rounds switch to the one-chart rule
+additional bonus points. Version 5 stores the one-time promotion and per-assignment bonus quota. Existing
+completed days keep their current difficulty without another increase. Older
+partial bonus rounds switch to the one-chart rule
 on the next saved play, without credit for their partial counts.
 
 Eligibility follows existing normalized chart identity matching (SHA-256, MD5,
@@ -159,7 +175,10 @@ should unlock those milestones during the same session.
    rounds. Each uses one chart and pays one bonus point, up to ten total.
    Replaying a previously counted chart should add nothing. Score/lamp targets
    must not jump above the result that finished the previous round, and chart
-   count must stay fixed at one for all bonus rounds.
+   count stays at one unless “Too hard for me!” is confirmed. Difficulty must
+   increase only once, including across app restarts. Confirming the reset restores
+   original targets and requires two distinct new charts in each following round.
+   Cancel must change nothing. The next day restores the routine quota and targets.
 4. Reach the bonus limit. The dashboard should mark bonuses complete without
    showing another unfinished round. Further play must not increase savings.
 5. To check overlapping assignments, repeat in another test profile with three

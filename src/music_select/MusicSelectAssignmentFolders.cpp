@@ -73,7 +73,7 @@ bool musicSelectAssignmentNeedsAdjustment(
     MusicSelectRepositoryProjectionInput input) {
   const bool bonus = day.points >= day.config.dailyGoal;
   if (bonus && streak::bonusPoints(day) >= streak::bonusLimit(day)) return false;
-  const int remaining = bonus ? 1 : std::max(1, progress.requirement.chartCount - progress.charts);
+  const int remaining = std::max(1, progress.requirement.chartCount - progress.charts);
   std::set<std::string> available;
   for (const auto &source : charts) {
     if (!contributes(progress, source, input)) continue;

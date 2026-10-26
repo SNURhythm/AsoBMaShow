@@ -275,11 +275,11 @@ void testStreakProjectionIsAtomicAndUsesEffectiveLamp() {
   sqlite3 *db = nullptr;
   assert(sqlite3_open(chartPath.string().c_str(), &db) == SQLITE_OK);
   assert(sqlite3_exec(db,
-      "CREATE TABLE difficulty_tables(id INTEGER,source_url TEXT);"
-      "CREATE TABLE difficulty_table_entries(table_id INTEGER,level TEXT,md5 TEXT,sha256 TEXT);"
-      "INSERT INTO difficulty_tables VALUES(1,'https://table'),(2,'https://other');"
-      "INSERT INTO difficulty_table_entries VALUES(1,'0','99999999999999999999999999999999',''),"
-      "(2,'1','99999999999999999999999999999999','');", nullptr, nullptr, nullptr) == SQLITE_OK);
+      "CREATE TABLE difficulty_tables(id INTEGER,source_url TEXT,symbol TEXT);"
+      "CREATE TABLE difficulty_table_entries(table_id INTEGER,level TEXT,md5 TEXT,sha256 TEXT,sort_order INTEGER);"
+      "INSERT INTO difficulty_tables VALUES(1,'https://table','sl'),(2,'https://other','st');"
+      "INSERT INTO difficulty_table_entries VALUES(1,'0','99999999999999999999999999999999','',0),"
+      "(2,'1','99999999999999999999999999999999','',0);", nullptr, nullptr, nullptr) == SQLITE_OK);
   sqlite3_close(db);
   assert(sqlite3_open(path.string().c_str(), &db) == SQLITE_OK);
   streak::State state;

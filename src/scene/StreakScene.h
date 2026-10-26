@@ -32,6 +32,10 @@ private:
   void later(std::function<void()> action);
   void back();
   void dashboard(View *);
+  void resetChallengeModal();
+  std::string pendingResetAssignment_;
+  streak::DayId pendingResetDay_ = 0;
+  View *resetOverlay_ = nullptr;
   void routine(View *);
   void editor(View *);
   void editAssignment(int index);

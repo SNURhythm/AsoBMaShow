@@ -101,15 +101,23 @@ int main() {
 
     def test_adjustment_rechecks_day_inside_transaction(self):
         root = Path(__file__).resolve().parents[1]
-        method = extract((root / "src/repositories/ScoreRepositoryStreak.cpp").read_text(),
-                         "bool ScoreRepository::AdjustStreakAssignment(")
-        fixture = (root / "tests/streak_adjust_transaction_fixture.cpp").read_text().replace("PRODUCTION_METHOD", method)
-        with tempfile.TemporaryDirectory(prefix="asobmashow-streak-midnight-") as directory:
-            source = Path(directory) / "midnight.cpp"
-            binary = Path(directory) / "midnight"
-            source.write_text(fixture)
-            FixtureCompiler.from_environment(shared_headers=True).build([source], binary, source.parent)
-            subprocess.run([str(binary)], check=True, timeout=5)
+        repository = (root / "src/repositories/ScoreRepositoryStreak.cpp").read_text()
+        for name, parameter, operation in (
+                ("AdjustStreakAssignment", "const streak::Assignment &", "adjustAssignment"),
+                ("ResetStreakExtraChallenge", "const std::string &", "resetExtraChallenge")):
+            method = extract(repository, "bool ScoreRepository::" + name + "(")
+            fixture = (root / "tests/streak_adjust_transaction_fixture.cpp").read_text()
+            fixture = fixture.replace("AdjustStreakAssignment", name).replace("adjustAssignment", operation)
+            fixture = fixture.replace("const streak::Assignment &", parameter)
+            if operation == "resetExtraChallenge":
+                fixture = fixture.replace("const Assignment &", "const std::string &")
+            fixture = fixture.replace("PRODUCTION_METHOD", method)
+            with tempfile.TemporaryDirectory(prefix="asobmashow-streak-midnight-") as directory:
+                source = Path(directory) / "midnight.cpp"
+                binary = Path(directory) / "midnight"
+                source.write_text(fixture)
+                FixtureCompiler.from_environment(shared_headers=True).build([source], binary, source.parent)
+                subprocess.run([str(binary)], check=True, timeout=5)
 
     def test_actions_complete_once_and_allow_the_next_action(self):
         root = Path(__file__).resolve().parents[1]

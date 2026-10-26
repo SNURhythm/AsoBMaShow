@@ -4,14 +4,15 @@
 #include <algorithm>
 #include <array>
 #include <stdexcept>
+#include <limits>
 
 namespace streak {
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Level, source, level, label)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Assignment, id, name, levels, eligibleLamp,
     eligibleOrBelow, eligibleScoreRank, eligibleScoreOrBelow, targetLamp, scoreNumerator, scoreDenominator, customRate, chartCount, points)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Config, dailyGoal, weeklyGoal, monthlyGoal, assignments)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ChartAchievement, eligibleSince, lamp, score, maxScore)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Progress, requirement, completedRounds, bonusRounds, earnedPoints, charts, usedCharts, chartProgress)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ChartAchievement, eligibleSince, lamp, score, maxScore, levels)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Progress, requirement, originalRequirement, completedRounds, bonusRounds, bonusDifficultyApplied, bonusChartCount, earnedPoints, charts, usedCharts, chartProgress)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Day, config, played, frozen, points, assignments)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(State, version, configurations, days, savings, freezes,
     freezePurchases, currentStreak, bestStreak, milestones)
@@ -36,7 +37,7 @@ State load(sqlite3 *db) {
   require(result == SQLITE_ROW, db);
   auto json = nlohmann::json::parse(sqliteColumnString(query, 0));
   const auto version = json.at("version").get<int>();
-  if (version != 1 && version != 2 && version != 3 && version != 4)
+  if (version != 1 && version != 2 && version != 3 && version != 4 && version != 5)
     throw std::runtime_error("This streak data needs a different app version.");
   if (version == 1) {
     // Preserve all previously earned totals and savings. The old format did
@@ -76,6 +77,33 @@ State load(sqlite3 *db) {
       for (auto &progress : entry.at(1).at("assignments")) migrateAssignment(progress.at("requirement"));
     }
   }
+  if (version < 5) {
+    json["version"] = 5;
+    for (auto &entry : json.at("days")) {
+      auto &day = entry.at(1);
+      const bool bonus = day.at("points").get<std::int64_t>() >= day.at("config").at("dailyGoal").get<int>();
+      const nlohmann::json *originalConfig = &day.at("config");
+      int originalDate = std::numeric_limits<int>::min();
+      for (const auto &configuration : json.at("configurations")) {
+        const int date = configuration.at(0).get<int>();
+        if (date <= entry.at(0).get<int>() && date > originalDate) {
+          originalConfig = &configuration.at(1); originalDate = date;
+        }
+      }
+      for (auto &progress : day.at("assignments")) {
+        auto original = std::find_if(originalConfig->at("assignments").begin(), originalConfig->at("assignments").end(),
+            [&](const auto &a) { return a.at("id") == progress.at("requirement").at("id"); });
+        progress["originalRequirement"] = original != originalConfig->at("assignments").end()
+            ? *original : progress.at("requirement");
+        for (auto &achievement : progress.at("chartProgress"))
+          achievement["levels"] = nlohmann::json::array(); // Unknown until resolved from chart metadata.
+        // Preserve existing difficulty and earnings, but never raise it again.
+        progress["bonusDifficultyApplied"] = bonus;
+        progress["bonusChartCount"] = 1;
+        if (bonus) { progress["requirement"]["chartCount"] = 1; progress["charts"] = 0; }
+      }
+    }
+  }
   auto state = json.get<State>();
   if (state.savings < 0 || state.freezes < 0 || state.bestStreak < 0 || state.freezePurchases < 0)
     throw std::runtime_error("Invalid streak balances.");
@@ -93,8 +121,13 @@ State load(sqlite3 *db) {
       Config active = day.config;
       active.assignments = {progress.requirement};
       if (auto error = validate(active); !error.empty()) throw std::runtime_error(error);
-      if (progress.requirement.id != base.id || progress.requirement.points != base.points ||
+      active.assignments = {progress.originalRequirement};
+      if (auto error = validate(active); !error.empty()) throw std::runtime_error(error);
+      if (progress.originalRequirement.id != base.id || progress.originalRequirement.points != base.points ||
+          progress.requirement.id != base.id || progress.requirement.points != base.points ||
           progress.completedRounds < 0 || progress.bonusRounds < 0 ||
+          (progress.bonusChartCount != 1 && progress.bonusChartCount != 2) ||
+          (progress.bonusChartCount == 2 && !progress.bonusDifficultyApplied) ||
           progress.bonusRounds > sharedDailyBonusLimit || progress.bonusRounds > progress.completedRounds ||
           progress.earnedPoints < progress.bonusRounds ||
           progress.earnedPoints > static_cast<std::int64_t>(progress.completedRounds - progress.bonusRounds) *
@@ -158,6 +191,57 @@ void recordSavedPlay(sqlite3 *db, const std::filesystem::path &chartPath,
   while ((result = sqlite3_step(query)) == SQLITE_ROW)
     play.levels.push_back({sqliteColumnString(query, 0), sqliteColumnString(query, 1), {}});
   require(result == SQLITE_DONE, charts.get());
+  advance(state, play.day);
+  auto &day = state.days.at(play.day);
+  std::int64_t possiblePoints = day.points;
+  for (const auto &assignment : day.assignments) possiblePoints += assignment.requirement.points;
+  if (day.points < day.config.dailyGoal && possiblePoints >= day.config.dailyGoal) {
+    // Promotion uses the same level order as the table browser. Read only table
+    // metadata, once per selected source; never scan or open chart payloads.
+    std::map<std::string, std::vector<Level>> tables;
+    for (const auto &assignment : day.assignments)
+      for (const auto &level : assignment.requirement.levels) tables.try_emplace(level.source);
+    for (auto &[source, levels] : tables) {
+      SqliteStatementHandle ordered;
+      require(prepareSqliteStatement(charts.get(),
+          "SELECT e.level, t.symbol FROM difficulty_table_entries e "
+          "JOIN difficulty_tables t ON t.id=e.table_id WHERE t.source_url=? "
+          "GROUP BY e.level ORDER BY MIN(e.sort_order), e.level", ordered) == SQLITE_OK, charts.get());
+      require(bindSqliteText(ordered, 1, source), charts.get());
+      while ((result = sqlite3_step(ordered)) == SQLITE_ROW) {
+        auto level = sqliteColumnString(ordered, 0);
+        levels.push_back({source, level, sqliteColumnString(ordered, 1) + level});
+      }
+      require(result == SQLITE_DONE, charts.get());
+      for (std::size_t i = 1; i < levels.size(); ++i)
+        play.nextLevels.push_back({levels[i-1], levels[i]});
+    }
+    if (!play.nextLevels.empty()) {
+      std::map<std::string, std::vector<Level>> memberships;
+      for (auto &assignment : day.assignments) {
+        for (auto &[chart, achievement] : assignment.chartProgress) {
+          if (!achievement.levels.empty() || assignment.usedCharts.contains(chart)) continue;
+          auto [found, inserted] = memberships.try_emplace(chart);
+          if (inserted) {
+            if (chart == play.chart) found->second = play.levels;
+            else {
+              SqliteStatementHandle membership;
+              require(prepareSqliteStatement(charts.get(),
+                  "SELECT DISTINCT t.source_url,e.level FROM difficulty_table_entries e "
+                  "JOIN difficulty_tables t ON t.id=e.table_id "
+                  "WHERE (e.sha256=?1 AND e.sha256<>'') OR (e.md5<>'' AND e.md5 IN "
+                  "(SELECT md5 FROM chart_meta WHERE sha256=?1))", membership) == SQLITE_OK, charts.get());
+              require(bindSqliteText(membership, 1, chart), charts.get());
+              while ((result = sqlite3_step(membership)) == SQLITE_ROW)
+                found->second.push_back({sqliteColumnString(membership, 0), sqliteColumnString(membership, 1), {}});
+              require(result == SQLITE_DONE, charts.get());
+            }
+          }
+          achievement.levels = found->second;
+        }
+      }
+    }
+  }
   record(state, play, randomChoice, progress);
   save(db, state);
 }

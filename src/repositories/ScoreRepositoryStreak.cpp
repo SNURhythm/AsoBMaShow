@@ -62,6 +62,24 @@ bool ScoreRepository::AdjustStreakAssignment(const streak::Assignment &assignmen
     return transaction.commit(error);
   } catch (const std::exception &failure) { error = failure.what(); return false; }
 }
+bool ScoreRepository::ResetStreakExtraChallenge(const std::string &assignmentId,
+                                            streak::DayId expectedDay, std::string &error) {
+  profile_database_activity::WriteGuard guard;
+  std::lock_guard lock(impl_->sessionMutex);
+  error.clear();
+  if (!EnsureSessionDatabaseLocked()) { error = "Score storage is unavailable."; return false; }
+  SqliteTransactionHandle transaction(impl_->sessionDatabase, "BEGIN IMMEDIATE", error);
+  if (!transaction.active()) return false;
+  try {
+    auto state = streak::load(impl_->sessionDatabase);
+    const auto currentDay = streak::today();
+    if (currentDay != expectedDay)
+      throw std::runtime_error("The day changed. Return to today's dashboard and try again.");
+    streak::resetExtraChallenge(state, assignmentId, currentDay);
+    streak::save(impl_->sessionDatabase, state);
+    return transaction.commit(error);
+  } catch (const std::exception &failure) { error = failure.what(); return false; }
+}
 bool ScoreRepository::BuyStreakFreeze(std::string &error) {
   profile_database_activity::WriteGuard guard;
   std::lock_guard lock(impl_->sessionMutex);

@@ -23,7 +23,7 @@ std::string monthKey(DayId day) { return dateLabel(day).substr(0, 7); }
 Day newDay(const Config &config) {
   Day day;
   day.config = config;
-  for (const auto &a : config.assignments) day.assignments.push_back({.requirement = a});
+  for (const auto &a : config.assignments) day.assignments.push_back({.requirement = a, .originalRequirement = a});
   return day;
 }
 const Config &configurationFor(const State &s, DayId day) {
@@ -63,9 +63,19 @@ void recompute(State &s, int returnedFreezes = 0, DayId returnedAfter = 0) {
   }
   s.currentStreak = current;
 }
+void retainMatchingAchievements(Progress &progress) {
+  std::erase_if(progress.chartProgress, [&](const auto &entry) {
+    if (progress.usedCharts.contains(entry.first)) return false;
+    return std::none_of(entry.second.levels.begin(), entry.second.levels.end(), [&](const Level &level) {
+      return std::any_of(progress.requirement.levels.begin(), progress.requirement.levels.end(), [&](const Level &selected) {
+        return level.source == selected.source && level.level == selected.level;
+      });
+    });
+  });
+}
 void harder(Assignment &a, const Play &p, std::uint32_t choice) {
   std::vector<Assignment> options;
-  if (a.scoreNumerator > 0 && a.scoreNumerator < a.scoreDenominator && p.maxScore > 0) {
+  if (a.scoreNumerator > 0 && a.scoreNumerator < a.scoreDenominator) {
     auto next = a;
     if (a.customRate) {
       next.scoreNumerator = std::min(a.scoreDenominator,
@@ -80,15 +90,28 @@ void harder(Assignment &a, const Play &p, std::uint32_t choice) {
         }
       }
     }
-    if (static_cast<std::int64_t>(p.score) * next.scoreDenominator >=
-        static_cast<std::int64_t>(p.maxScore) * next.scoreNumerator)
-      options.push_back(std::move(next));
+    options.push_back(std::move(next));
   }
   if (a.targetLamp >= 0 && a.targetLamp < 600) {
     auto next = a;
     next.targetLamp = *std::upper_bound(lamps.begin(), lamps.end(), a.targetLamp);
-    if (p.lamp >= next.targetLamp) options.push_back(std::move(next));
+    options.push_back(std::move(next));
   }
+  auto next = a;
+  bool movedLevel = false;
+  next.levels.clear();
+  for (const auto &level : a.levels) {
+    const auto step = std::find_if(p.nextLevels.begin(), p.nextLevels.end(), [&](const LevelStep &step) {
+      return step.from.source == level.source && step.from.level == level.level &&
+             step.to.source == level.source && step.to.level != level.level;
+    });
+    const auto &replacement = step == p.nextLevels.end() ? level : step->to;
+    movedLevel |= step != p.nextLevels.end();
+    if (std::none_of(next.levels.begin(), next.levels.end(), [&](const Level &existing) {
+          return existing.source == replacement.source && existing.level == replacement.level;
+        })) next.levels.push_back(replacement);
+  }
+  if (movedLevel) options.push_back(std::move(next));
   if (!options.empty()) a = std::move(options[choice % options.size()]);
 }
 } // namespace
@@ -261,9 +284,34 @@ void adjustAssignment(State &s, const Assignment &replacement, DayId dayId) {
   if (const auto error = validate(config); !error.empty()) throw std::invalid_argument(error);
   day.config = std::move(config);
   found->requirement = replacement;
-  if (day.points >= day.config.dailyGoal) found->requirement.chartCount = 1;
+  if (day.points >= day.config.dailyGoal) found->requirement.chartCount = found->bonusChartCount;
   // Keep the daily chart ledger, including partial achievements. Editing never
   // awards points; even a reduced quota needs another distinct qualifying play.
+}
+bool canResetExtraChallenge(const Progress &progress) {
+  const auto &a = progress.requirement;
+  const auto &b = progress.originalRequirement;
+  return progress.bonusChartCount == 1 && progress.bonusDifficultyApplied &&
+      (a.targetLamp != b.targetLamp ||
+       static_cast<std::int64_t>(a.scoreNumerator) * b.scoreDenominator !=
+           static_cast<std::int64_t>(b.scoreNumerator) * a.scoreDenominator || a.levels != b.levels);
+}
+void resetExtraChallenge(State &s, const std::string &assignmentId, DayId dayId) {
+  if (s.days.empty() || s.days.rbegin()->first != dayId)
+    throw std::invalid_argument("Only today's extra challenges can be reset.");
+  auto &day = s.days.at(dayId);
+  if (day.points < day.config.dailyGoal || bonusPoints(day) >= bonusLimit(day))
+    throw std::invalid_argument("No extra challenge is available today.");
+  auto found = std::find_if(day.assignments.begin(), day.assignments.end(),
+      [&](const Progress &p) { return p.requirement.id == assignmentId; });
+  if (found == day.assignments.end()) throw std::invalid_argument("Assignment no longer exists.");
+  if (found->bonusChartCount == 2) return; // Repeated confirmation must not discard partial progress.
+  if (!canResetExtraChallenge(*found)) throw std::invalid_argument("This challenge is already at its original difficulty.");
+  found->requirement = found->originalRequirement;
+  found->bonusDifficultyApplied = true;
+  found->bonusChartCount = found->requirement.chartCount = 2;
+  found->charts = 0;
+  retainMatchingAchievements(*found);
 }
 int bonusLimit(const Day &day) {
   return day.assignments.empty() ? 0 : sharedDailyBonusLimit;
@@ -289,18 +337,9 @@ std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice, PlayPro
     receipt->day = p.day;
     for (const auto &progress : day.assignments)
       receipt->assignments.push_back({.id=progress.requirement.id,
-          .beforeCharts=bonus ? 0 : progress.charts,
-          .beforeQuota=bonus ? 1 : progress.requirement.chartCount,
+          .beforeCharts=progress.charts,
+          .beforeQuota=progress.requirement.chartCount,
           .beforeRound=progress.completedRounds + 1});
-  }
-  if (bonus) {
-    // Existing saved bonus rounds may still have the older multi-chart quota.
-    // Their partial progress grants no automatic reward; the next new chart
-    // completes one bonus round under the current rule.
-    for (auto &progress : day.assignments) {
-      progress.requirement.chartCount = 1;
-      progress.charts = 0;
-    }
   }
   int remainingBonus = std::max(0, bonusLimit(day) - bonusPoints(day));
   std::vector<Progress *> ordered;
@@ -318,6 +357,7 @@ std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice, PlayPro
       if (!eligible(progress.requirement, p)) continue;
       chart = progress.chartProgress.emplace(p.chart, ChartAchievement{}).first;
       chart->second.eligibleSince = p.createdAt;
+      chart->second.levels = p.levels;
     }
     // Entry existence preserves the full eligibility decision for today.
     // Retain actual achievements so raised targets still compare real values.
@@ -353,12 +393,19 @@ std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice, PlayPro
     if (bonus) { ++progress->bonusRounds; ++s.savings; }
   }
   // Every assignment sees the same final daily total, independent of list order.
-  if (day.points >= day.config.dailyGoal) {
+  if (!bonus && day.points >= day.config.dailyGoal) {
     for (auto &progress : day.assignments) {
-      progress.requirement.chartCount = 1;
+      progress.requirement.chartCount = progress.bonusChartCount;
       progress.charts = 0;
+      if (!progress.bonusDifficultyApplied) {
+        const auto previousLevels = progress.requirement.levels;
+        harder(progress.requirement, p, randomChoice++);
+        progress.bonusDifficultyApplied = true;
+        // Sticky eligibility remains valid within a challenge, not across a new
+        // level range. Already counted charts stay unavailable for the whole day.
+        if (progress.requirement.levels != previousLevels) retainMatchingAchievements(progress);
+      }
     }
-    for (auto *progress : completed) harder(progress->requirement, p, randomChoice++);
   }
   recompute(s, returnedFreezes, p.day);
   if (receipt) {

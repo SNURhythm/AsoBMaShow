@@ -93,6 +93,7 @@ public:
   std::optional<streak::State> LoadStreak(std::string &error);
   std::optional<streak::PlayProgress> TakeStreakProgress(std::string_view attemptId = {});
   bool AdjustStreakAssignment(const streak::Assignment &, streak::DayId expectedDay, std::string &error);
+  bool ResetStreakExtraChallenge(const std::string &assignmentId, streak::DayId expectedDay, std::string &error);
   bool ConfigureStreak(const streak::Config &, streak::DayId &effectiveDay, std::string &error);
   bool BuyStreakFreeze(std::string &error);
   void Shutdown();

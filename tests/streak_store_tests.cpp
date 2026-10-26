@@ -2,6 +2,7 @@
 #include "sqlite3.h"
 #include "../yoga/lib/nlohmann/json.hpp"
 #include <cstdlib>
+#include <chrono>
 #include <filesystem>
 #include <iostream>
 #include <stdexcept>
@@ -51,7 +52,7 @@ int main() {
   CHECK(buyFreeze(earned, today()));
   save(db, earned);
   auto reopened = load(db);
-  CHECK(reopened.version == 4 && freezePrice(reopened) == 25 && reopened.savings == 80);
+  CHECK(reopened.version == 5 && freezePrice(reopened) == 25 && reopened.savings == 80);
   CHECK(reopened.days.begin()->second.assignments[0].bonusRounds == 2);
   CHECK(reopened.days.begin()->second.assignments[0].earnedPoints == 12);
   advance(reopened, today() + 3); // Consumes freeze, then breaks.
@@ -104,7 +105,7 @@ int main() {
   }
   replaceBody(versionThree);
   auto scoreMigration = load(db);
-  CHECK(scoreMigration.version == 4 && scoreMigration.savings == earned.savings);
+  CHECK(scoreMigration.version == 5 && scoreMigration.savings == earned.savings);
   CHECK(scoreMigration.days.begin()->second.assignments[0].requirement.eligibleScoreRank == -2);
   scoreMigration.days.begin()->second.assignments[0].requirement.eligibleScoreRank = 21;
   scoreMigration.days.begin()->second.assignments[0].requirement.eligibleScoreOrBelow = true;
@@ -116,7 +117,7 @@ int main() {
     for (auto &progress : entry[1]["assignments"]) progress.erase("chartProgress");
   replaceBody(legacy);
   const auto versionTwo = load(db);
-  CHECK(versionTwo.version == 4 && versionTwo.savings == earned.savings);
+  CHECK(versionTwo.version == 5 && versionTwo.savings == earned.savings);
   CHECK(versionTwo.days.begin()->second.assignments[0].chartProgress.size() == 3);
   legacy["version"] = 1;
   legacy.erase("freezePurchases");
@@ -131,7 +132,7 @@ int main() {
   }
   replaceBody(legacy);
   auto migrated = load(db);
-  CHECK(migrated.version == 4 && migrated.savings == 80 && migrated.freezes == 1);
+  CHECK(migrated.version == 5 && migrated.savings == 80 && migrated.freezes == 1);
   CHECK(migrated.configurations.size() == 2 && migrated.milestones.contains("streak:7"));
   CHECK(migrated.days.begin()->second.points == 60);
   CHECK(migrated.days.begin()->second.assignments[0].earnedPoints == 60);
@@ -247,6 +248,103 @@ int main() {
   CHECK(record(adjusted, attempt, 0) == config.assignments[0].points);
   save(db, adjusted);
   CHECK(load(db).days.at(today()).points == config.assignments[0].points);
+
+  // Imported order (not lexical level names) supplies the one table promotion.
+  const auto chartPath = std::filesystem::temp_directory_path() / ("streak-levels-" +
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".sqlite3");
+  sqlite3 *chartDb = nullptr;
+  CHECK(sqlite3_open(chartPath.string().c_str(), &chartDb) == SQLITE_OK);
+  CHECK(sqlite3_exec(chartDb,
+      "CREATE TABLE difficulty_tables(id INTEGER,source_url TEXT,symbol TEXT);"
+      "CREATE TABLE chart_meta(sha256 TEXT,md5 TEXT);"
+      "CREATE TABLE difficulty_table_entries(table_id INTEGER,level TEXT,sha256 TEXT,md5 TEXT,sort_order INTEGER);"
+      "INSERT INTO difficulty_tables VALUES(1,'https://table','sl');"
+      "INSERT INTO difficulty_table_entries VALUES"
+      "(1,'intro','goal','',0),(1,'Z','extra','',1),(1,'A','top','',2),"
+      "(1,'intro','easy1','',0),(1,'intro','easy2','',0);",
+      nullptr, nullptr, nullptr) == SQLITE_OK);
+  sqlite3_close(chartDb);
+  State imported;
+  auto orderedConfig = config;
+  orderedConfig.dailyGoal = 1;
+  orderedConfig.assignments[0].levels[0].level = "intro";
+  orderedConfig.assignments[0].targetLamp = 600;
+  orderedConfig.assignments[0].scoreNumerator = orderedConfig.assignments[0].scoreDenominator = 27;
+  const auto importedDay = localDay(1700000000);
+  configure(imported, orderedConfig, importedDay);
+  save(db, imported);
+  auto savedPlay = Play{.chart="goal", .lamp=600, .score=27, .maxScore=27};
+  recordSavedPlay(db, chartPath, savedPlay, "", "2023-11-14 22:13:20", 0);
+  imported = load(db);
+  CHECK(imported.days.at(importedDay).assignments[0].requirement.levels[0].level == "Z");
+  CHECK(imported.days.at(importedDay).assignments[0].requirement.levels[0].label == "slZ");
+  savedPlay.chart = "extra";
+  recordSavedPlay(db, chartPath, savedPlay, "", "2023-11-14 22:14:20", 0);
+  imported = load(db);
+  CHECK(imported.days.at(importedDay).points == 2);
+  CHECK(imported.days.at(importedDay).assignments[0].requirement.levels[0].level == "Z");
+  resetExtraChallenge(imported, "one", importedDay);
+  save(db, imported);
+  savedPlay.chart = "easy1";
+  recordSavedPlay(db, chartPath, savedPlay, "", "2023-11-14 22:15:20", 0);
+  imported = load(db);
+  CHECK(imported.days.at(importedDay).assignments[0].charts == 1 && imported.days.at(importedDay).points == 2);
+  resetExtraChallenge(imported, "one", importedDay); // Duplicate confirmation is harmless.
+  CHECK(imported.days.at(importedDay).assignments[0].charts == 1);
+  savedPlay.chart = "easy2";
+  recordSavedPlay(db, chartPath, savedPlay, "", "2023-11-14 22:16:20", 0);
+  imported = load(db);
+  CHECK(imported.days.at(importedDay).points == 3);
+  CHECK(imported.days.at(importedDay).assignments[0].requirement.chartCount == 2);
+  CHECK(imported.days.at(importedDay).assignments[0].requirement.levels[0].level == "intro");
+  advance(imported, importedDay + 1);
+  CHECK(imported.days.at(importedDay + 1).assignments[0].requirement.chartCount == 1);
+  CHECK(!imported.days.at(importedDay + 1).assignments[0].bonusDifficultyApplied);
+  // A legacy range must not be mistaken for each partial chart's membership.
+  CHECK(sqlite3_open(chartPath.string().c_str(), &chartDb) == SQLITE_OK);
+  CHECK(sqlite3_exec(chartDb,
+      "INSERT INTO difficulty_table_entries VALUES"
+      "(1,'intro','','partial-zero-md5',0),(1,'Z','partial-one','',1);"
+      "INSERT INTO chart_meta VALUES('partial-zero','partial-zero-md5');",
+      nullptr, nullptr, nullptr) == SQLITE_OK);
+  sqlite3_close(chartDb);
+  State legacyRange;
+  auto rangeConfig = orderedConfig;
+  rangeConfig.assignments[0].levels = {{"https://table","intro",""},{"https://table","Z",""}};
+  rangeConfig.assignments[0].targetLamp = 400;
+  rangeConfig.assignments[0].scoreNumerator = 0;
+  rangeConfig.assignments[0].eligibleLamp = -1;
+  configure(legacyRange, rangeConfig, importedDay);
+  Play partialPlay{.day=importedDay, .chart="partial-zero", .levels={{"https://table","intro",""}}, .lamp=300};
+  CHECK(record(legacyRange, partialPlay, 0) == 0);
+  partialPlay.chart = "partial-one"; partialPlay.levels[0].level = "Z";
+  CHECK(record(legacyRange, partialPlay, 0) == 0);
+  save(db, legacyRange);
+  CHECK(sqlite3_prepare_v2(db, "SELECT body FROM streak_state", -1, &query, nullptr) == SQLITE_OK);
+  CHECK(sqlite3_step(query) == SQLITE_ROW);
+  auto versionFour = nlohmann::json::parse(reinterpret_cast<const char *>(sqlite3_column_text(query, 0)));
+  sqlite3_finalize(query);
+  versionFour["version"] = 4;
+  for (auto &entry : versionFour["days"]) for (auto &p : entry.at(1)["assignments"]) {
+    p.erase("originalRequirement"); p.erase("bonusDifficultyApplied"); p.erase("bonusChartCount");
+    for (auto &achievement : p["chartProgress"]) achievement.erase("levels");
+  }
+  replaceBody(versionFour);
+  CHECK(load(db).days.at(importedDay).assignments[0].chartProgress.at("partial-zero").levels.empty());
+  savedPlay = {.chart="goal", .lamp=400};
+  recordSavedPlay(db, chartPath, savedPlay, "", "2023-11-14 22:13:20", 1);
+  legacyRange = load(db);
+  const auto &migratedRange = legacyRange.days.at(importedDay).assignments[0];
+  CHECK(!migratedRange.chartProgress.contains("partial-zero"));
+  CHECK(migratedRange.chartProgress.contains("partial-one"));
+  CHECK(migratedRange.requirement.levels[0].level == "Z");
+  savedPlay.chart = "partial-zero"; savedPlay.previousLamp = 300;
+  recordSavedPlay(db, chartPath, savedPlay, "partial-zero-md5", "2023-11-14 22:14:20", 1);
+  CHECK(load(db).days.at(importedDay).points == 1);
+  savedPlay.chart = "partial-one";
+  recordSavedPlay(db, chartPath, savedPlay, "", "2023-11-14 22:15:20", 1);
+  CHECK(load(db).days.at(importedDay).points == 2);
+  std::filesystem::remove(chartPath);
 
   // Unsupported or damaged state must be reported, never silently replaced.
   CHECK(sqlite3_exec(db, "UPDATE streak_state SET body = '{\"version\":99}'", nullptr, nullptr, nullptr) == SQLITE_OK);

@@ -9,6 +9,7 @@
 #include "../view/ActionButtonContent.h"
 #include "../view/AppTheme.h"
 #include "../view/Button.h"
+#include "../view/BlockingOverlayView.h"
 #include "../view/ClearLampColors.h"
 #include "../view/DropdownView.h"
 #include "../view/OverlayPortal.h"
@@ -32,6 +33,20 @@ View *card(View *parent) {
       ->setFlexShrink(0)->setCornerRadius(24)->setThemedBackgroundColor(app_theme::panel);
   parent->addView(view);
   return view;
+}
+void sizeResetChallengeModal(View *overlay) {
+  auto *panel = overlay->findViewByName("streakResetPanel");
+  if (!panel) return;
+  const auto &children = panel->getChildren();
+  auto *scroll = dynamic_cast<ScrollView *>(children[1]);
+  auto *details = scroll ? scroll->getContentView() : nullptr;
+  if (!details) return;
+  float contentHeight = 0;
+  for (auto *child : details->getChildren()) contentHeight += child->getHeight();
+  if (!details->getChildren().empty()) contentHeight += 12 * (details->getChildren().size() - 1);
+  const float desired = contentHeight + children.front()->getHeight() +
+      children.back()->getHeight() + 60; // Card padding and two gaps.
+  panel->setHeight(std::min(620.0F, desired));
 }
 std::string numberText(const char *key, std::int64_t value) {
   return i18n::format(key, {{"count", std::to_string(value)}});
@@ -172,6 +187,7 @@ void StreakScene::setTabTopInset(float topInset) {
   layout();
 }
 void StreakScene::onPause() {
+  pendingResetAssignment_.clear();
   roundCue_ = {};
   goalIgnitionSoundPending_ = false;
   const auto endEditing = [](View *view, const auto &self) -> void {
@@ -189,6 +205,7 @@ void StreakScene::onResume() {
 void StreakScene::init() { reload(); build(); }
 void StreakScene::reload() {
   fieldErrors_.clear();
+  pendingResetAssignment_.clear();
   if (profileId_ != context.profileManager.activeProfile().id || checkedDay_ != streak::today()) {
     showOptional_ = false;
     streakProgress_.reset();
@@ -242,6 +259,7 @@ void StreakScene::build() {
   if (page_ != Page::Dashboard) { roundCue_ = {}; goalIgnitionSoundPending_ = false; }
   for (auto *view : views) delete view;
   views.clear();
+  resetOverlay_ = nullptr;
   root_ = new View(0, 0, rendering::window_width, rendering::window_height);
   root_->setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch)
       ->setPadding(Edge::All, 18)->setGap(12)->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
@@ -273,6 +291,7 @@ void StreakScene::build() {
   else editor(body);
   if (!message_.empty()) label(body, message_, 19);
   addView(portal_);
+  resetChallengeModal();
   layout();
   if (auto *invalid = root_->findViewByName("streakInvalidField"))
     scroll_->setScrollOffset(std::max(0, invalid->getY() - scroll_->getY() - 48));
@@ -352,6 +371,12 @@ void StreakScene::dashboard(View *body) {
     }
     assignmentCard->addView(new AssignmentProgressView(p,
         change, streakProgressStartedAt_));
+    if (complete && bonusAvailable && streak::canResetExtraChallenge(p))
+      action(assignmentCard, i18n::tr("streak.ui.too_hard"), [this, id = p.requirement.id] {
+        later([this, id] { pendingResetAssignment_ = id; pendingResetDay_ = checkedDay_; });
+      }, app_theme::ActionCategory::Neutral, ui_icons::kRotate);
+    if (complete && p.bonusChartCount == 2)
+      label(assignmentCard, i18n::tr("streak.ui.two_chart_rounds"), 18);
     if (unavailable.contains(p.requirement.id))
       action(assignmentCard, i18n::tr("streak.ui.adjust_today"), [this, requirement = p.requirement] {
         later([this, requirement] {
@@ -401,6 +426,59 @@ void StreakScene::dashboard(View *body) {
     badge->setThemedColor(earned ? app_theme::panel : app_theme::textMuted);
   }
 
+}
+void StreakScene::resetChallengeModal() {
+  if (pendingResetAssignment_.empty() || page_ != Page::Dashboard) return;
+  const auto day = state_.days.find(pendingResetDay_);
+  if (day == state_.days.end()) { pendingResetAssignment_.clear(); return; }
+  const auto progress = std::find_if(day->second.assignments.begin(), day->second.assignments.end(),
+      [this](const auto &p) { return p.requirement.id == pendingResetAssignment_; });
+  if (progress == day->second.assignments.end()) { pendingResetAssignment_.clear(); return; }
+  const auto *original = &progress->originalRequirement;
+  resetOverlay_ = new BlockingOverlayView();
+  resetOverlay_->setName("streakResetChallengeModal");
+  resetOverlay_->setPositionType(YGPositionTypeAbsolute);
+  resetOverlay_->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0)->setZIndex(1000);
+  resetOverlay_->setFlexDirection(FlexDirection::Column)->setJustifyContent(YGJustifyCenter)
+      ->setAlignItems(YGAlignCenter)->setPadding(Edge::All, 24)->setThemedBackgroundColor(app_theme::scrim);
+  auto *panel = card(resetOverlay_);
+  panel->setName("streakResetPanel");
+  panel->setWidthPercent(100)->setFlexShrink(1);
+  YGNodeStyleSetHeightPercent(panel->getNode(), 100);
+  YGNodeStyleSetMaxWidth(panel->getNode(), 640);
+  YGNodeStyleSetMaxHeight(panel->getNode(), 620);
+  label(panel, i18n::tr("streak.ui.reset_challenge_title"), 28);
+  auto *scroll = new ScrollView();
+  scroll->setFlex(1)->setMinHeight(0);
+  auto *details = new View();
+  details->setName("streakResetDetails");
+  details->setFlexDirection(FlexDirection::Column)->setGap(12);
+  label(details, original->name, 23);
+  label(details, i18n::tr("streak.ui.reset_challenge_help"), 20);
+  label(details, levelsText(*original), 18);
+  lampLabel(details, requirements(*original), original->targetLamp, 18);
+  scroll->setContentView(details);
+  panel->addView(scroll);
+  auto *buttons = new View();
+  buttons->setFlexDirection(FlexDirection::Row)->setGap(12)->setFlexShrink(0);
+  action(buttons, i18n::tr("streak.ui.cancel"), [this] {
+    later([this] { pendingResetAssignment_.clear(); });
+  }, app_theme::ActionCategory::Neutral)->setFlex(1)->setName("streakResetCancel");
+  action(buttons, i18n::tr("streak.ui.reset_challenge_confirm"), [this] {
+    later([this] {
+      const auto id = pendingResetAssignment_;
+      pendingResetAssignment_.clear();
+      if (profileId_ != context.profileManager.activeProfile().id) { reload(); return; }
+      std::string error;
+      if (context.scoreRepository.ResetStreakExtraChallenge(id, pendingResetDay_, error)) {
+        streakProgress_.reset(); roundCue_ = {}; goalIgnitionSoundPending_ = false;
+        reload();
+        message_ = i18n::tr("streak.ui.reset_challenge_done");
+      } else message_ = error;
+    });
+  }, app_theme::ActionCategory::Confirmation)->setFlex(1)->setName("streakResetConfirm");
+  panel->addView(buttons);
+  root_->addView(resetOverlay_);
 }
 void StreakScene::routine(View *body) {
   body = card(body);
@@ -589,7 +667,12 @@ void StreakScene::layout() {
       ->setPadding(Edge::Right, 18 + safe.right * rendering::window_width);
 #endif
   if (embeddedTab_) root_->setPadding(Edge::Top, 18 + tabTopInset_);
+  if (resetOverlay_) {
+    resetOverlay_->setSize(rendering::window_width, rendering::window_height);
+    resetOverlay_->setPadding(Edge::Top, 24 + (embeddedTab_ ? tabTopInset_ : 0));
+  }
   root_->applyYogaLayout();
+  if (resetOverlay_) { sizeResetChallengeModal(resetOverlay_); root_->applyYogaLayout(); }
   scroll_->refreshContentLayout();
 }
 void StreakScene::back() {
@@ -617,9 +700,13 @@ void StreakScene::update(float dt) {
 void StreakScene::onPresentationOrientationChanged() { layout(); }
 void StreakScene::onLanguageChanged() { build(); }
 EventHandleResult StreakScene::handleEvents(SDL_Event &event) {
+  if (!pendingResetAssignment_.empty() && event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
+    later([this] { pendingResetAssignment_.clear(); });
+    return {};
+  }
   for (auto it = views.rbegin(); it != views.rend(); ++it)
     if (!(*it)->handleEvents(event)) return {};
   if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) back();
   return {};
 }
-void StreakScene::cleanupScene() { root_ = nullptr; scroll_ = nullptr; portal_ = nullptr; }
+void StreakScene::cleanupScene() { root_ = nullptr; scroll_ = nullptr; portal_ = nullptr; resetOverlay_ = nullptr; }

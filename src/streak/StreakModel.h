@@ -44,11 +44,15 @@ struct ChartAchievement {
   int lamp = -1;
   int score = 0;
   int maxScore = 0;
+  std::vector<Level> levels; // Membership when eligibility was first established.
 };
 struct Progress {
   Assignment requirement;
+  Assignment originalRequirement; // Immutable for this day, including Adjust today.
   int completedRounds = 0;
   int bonusRounds = 0;
+  bool bonusDifficultyApplied = false;
+  int bonusChartCount = 1;
   std::int64_t earnedPoints = 0;
   int charts = 0;
   std::set<std::string> usedCharts;
@@ -62,7 +66,7 @@ struct Day {
   std::vector<Progress> assignments;
 };
 struct State {
-  int version = 4;
+  int version = 5;
   std::map<DayId, Config> configurations;
   std::map<DayId, Day> days;
   std::int64_t savings = 0;
@@ -85,6 +89,7 @@ struct PlayProgress {
   std::vector<AssignmentProgressChange> assignments;
   bool reachedDailyGoal = false;
 };
+struct LevelStep { Level from, to; };
 struct Play {
   DayId day = 0;
   std::string chart;
@@ -97,6 +102,7 @@ struct Play {
   int maxScore = 0;
   bool manual = true;
   std::string createdAt; // Canonical UTC timestamp for delayed saved results.
+  std::vector<LevelStep> nextLevels; // Imported table order; only needed when entering bonus mode.
 };
 struct Summary {
   DayId day = 0;
@@ -117,6 +123,9 @@ void advance(State &state, DayId day);
 DayId configure(State &state, const Config &config, DayId day);
 // Adjust today only; preserve rewards, counted charts and partial progress.
 void adjustAssignment(State &, const Assignment &, DayId);
+[[nodiscard]] bool canResetExtraChallenge(const Progress &);
+// Restore today's base targets and require two new charts per remaining bonus round.
+void resetExtraChallenge(State &, const std::string &assignmentId, DayId);
 [[nodiscard]] int bonusPoints(const Day &day);
 [[nodiscard]] int bonusLimit(const Day &day);
 std::int64_t record(State &state, const Play &play, std::uint32_t randomChoice, PlayProgress *progress = nullptr);

@@ -18,7 +18,7 @@ Config config(int goal = 100, int reward = 60, int count = 1) {
 }
 Play play(DayId day, std::string chart) {
   return {.day = day, .chart = std::move(chart), .levels = {{"table", "0", ""}},
-          .lamp = 300, .score = 180, .maxScore = 200};
+          .lamp = 600, .score = 180, .maxScore = 200};
 }
 int main() {
   auto scoreFilter = config().assignments.front();
@@ -54,6 +54,7 @@ int main() {
   State scoreSticky;
   configure(scoreSticky, stickyConfig, 40000);
   auto stickyPlay = play(40000, "score-sticky");
+  stickyPlay.lamp = 300;
   stickyPlay.previousScore = 21; stickyPlay.previousMaxScore = 27;
   CHECK(record(scoreSticky, stickyPlay, 0) == 0);
   stickyPlay.previousScore = 24; stickyPlay.lamp = 400;
@@ -256,7 +257,7 @@ int main() {
   CHECK(record(ranks, p, 1) == 0);
   p.score = 89;
   CHECK(record(ranks, p, 1) == 1);
-  CHECK(ranks.days.at(22000).assignments[0].requirement.scoreNumerator == 24);
+  CHECK(ranks.days.at(22000).assignments[0].requirement.scoreNumerator == 26);
   p.chart = "cleared-before"; p.previousLamp = 300; p.score = 100;
   CHECK(record(ranks, p, 1) == 0);
   State automatic;
@@ -352,10 +353,10 @@ int main() {
   advance(shared, 28001);
   CHECK(bonusPoints(shared.days.at(28001)) == 0);
 
-  // Extra rounds always use one chart; unmet lamp targets never escalate.
+  // Bonus mode raises a condition once even if the goal play did not meet it.
   for (const auto &progress : shared.days.at(28000).assignments) {
     CHECK(progress.requirement.chartCount == 1);
-    CHECK(progress.requirement.targetLamp == 300);
+    CHECK(progress.requirement.targetLamp == 400);
   }
   State capable;
   auto target = config(1, 1);
@@ -365,20 +366,100 @@ int main() {
   auto strong = play(29000, "strong"); strong.score = 194; strong.lamp = 400;
   record(capable, strong, 0);
   CHECK(capable.days.at(29000).assignments[0].requirement.scoreNumerator == 26);
-  // A custom target may advance only when the actual result meets its next +2%.
+  // A custom target advances by 2% without a performance-based promotion gate.
   State custom;
   target.assignments[0].customRate = true;
   target.assignments[0].scoreNumerator = 9000;
   target.assignments[0].scoreDenominator = 10000;
   configure(custom, target, 29100);
   auto justEnough = play(29100, "custom"); justEnough.score = 181;
-  record(custom, justEnough, 1);
-  CHECK(custom.days.at(29100).assignments[0].requirement.scoreNumerator == 9000);
+  record(custom, justEnough, 0);
+  CHECK(custom.days.at(29100).assignments[0].requirement.scoreNumerator == 9200);
   State lamp;
   configure(lamp, config(1, 1), 29200);
   strong.day = 29200;
   record(lamp, strong, 1);
   CHECK(lamp.days.at(29200).assignments[0].requirement.targetLamp == 400);
+
+  // One random condition is raised when every assignment enters bonus mode.
+  for (unsigned choice = 0; choice < 3; ++choice) {
+    State once;
+    auto base = config(1, 1, 3);
+    base.assignments[0].scoreNumerator = 18;
+    base.assignments[0].scoreDenominator = 27;
+    configure(once, base, 42000);
+    auto goalPlay = play(42000, "g0");
+    goalPlay.lamp = 300; goalPlay.score = 18; goalPlay.maxScore = 27;
+    goalPlay.nextLevels = {{{"table", "0", "sl0"}, {"table", "1", "sl1"}}};
+    for (int i = 0; i < 3; ++i) { goalPlay.chart = "g" + std::to_string(i); record(once, goalPlay, choice); }
+    auto &p = once.days.at(42000).assignments[0];
+    CHECK(p.bonusDifficultyApplied && p.requirement.chartCount == 1);
+    CHECK(p.requirement.scoreNumerator == (choice == 0 ? 21 : 18));
+    CHECK(p.requirement.targetLamp == (choice == 1 ? 400 : 300));
+    CHECK(p.requirement.levels[0].level == (choice == 2 ? "1" : "0"));
+    auto bonusPlay = goalPlay;
+    bonusPlay.lamp = 600; bonusPlay.score = 27;
+    bonusPlay.levels = p.requirement.levels;
+    for (int i = 0; i < 2; ++i) {
+      bonusPlay.chart = "b" + std::to_string(i);
+      CHECK(record(once, bonusPlay, choice + 1) == 1);
+    }
+    CHECK(p.requirement.scoreNumerator == (choice == 0 ? 21 : 18));
+    CHECK(p.requirement.targetLamp == (choice == 1 ? 400 : 300));
+    CHECK(p.requirement.levels[0].level == (choice == 2 ? "1" : "0"));
+    const auto earned = once.days.at(42000).points;
+    resetExtraChallenge(once, "a", 42000);
+    CHECK(p.requirement.targetLamp == 300 && p.requirement.scoreNumerator == 18);
+    CHECK(p.requirement.levels[0].level == "0" && p.requirement.chartCount == 2);
+    CHECK(p.bonusChartCount == 2 && p.charts == 0 && once.days.at(42000).points == earned);
+    auto easyPlay = goalPlay;
+    easyPlay.chart = "easy0";
+    PlayProgress partialReceipt;
+    CHECK(record(once, easyPlay, 0, &partialReceipt) == 0 && p.charts == 1);
+    CHECK(partialReceipt.assignments[0].afterQuota == 2 && partialReceipt.assignments[0].afterCharts == 1);
+    CHECK(record(once, easyPlay, 0) == 0 && p.charts == 1); // Distinct charts only.
+    easyPlay.chart = "easy1";
+    CHECK(record(once, easyPlay, 0) == 1 && p.charts == 0);
+    CHECK(p.requirement.scoreNumerator == 18 && p.requirement.targetLamp == 300);
+    CHECK(p.requirement.chartCount == 2 && p.requirement.levels[0].level == "0");
+    advance(once, 42001);
+    const auto &tomorrow = once.days.at(42001).assignments[0];
+    CHECK(!tomorrow.bonusDifficultyApplied && tomorrow.bonusChartCount == 1);
+    CHECK(tomorrow.requirement.chartCount == 3 && tomorrow.requirement.targetLamp == 300);
+    CHECK(tomorrow.requirement.scoreNumerator == 18 && tomorrow.requirement.levels[0].level == "0");
+  }
+
+  // Today's availability edits cannot replace the immutable reset target.
+  State editedBonus;
+  configure(editedBonus, config(1, 1), 43000);
+  record(editedBonus, play(43000, "goal"), 0);
+  auto edited = editedBonus.days.at(43000).assignments[0].requirement;
+  edited.levels = {{"other", "7", "Other 7"}};
+  adjustAssignment(editedBonus, edited, 43000);
+  resetExtraChallenge(editedBonus, "a", 43000);
+  const auto &restored = editedBonus.days.at(43000).assignments[0];
+  CHECK(restored.requirement.targetLamp == 300 && restored.requirement.levels[0].level == "0");
+  CHECK(restored.requirement.chartCount == 2 && !canResetExtraChallenge(restored));
+
+  // A chart in an overlapping table level keeps its NO PLAY eligibility.
+  State overlap;
+  auto range = config(1, 1);
+  range.assignments[0].levels.push_back({"table", "1", "sl1"});
+  range.assignments[0].eligibleLamp = -1;
+  range.assignments[0].targetLamp = 400;
+  configure(overlap, range, 44000);
+  auto retained = play(44000, "retained"); retained.levels = {{"table", "1", "sl1"}}; retained.lamp = 300;
+  CHECK(record(overlap, retained, 0) == 0);
+  auto removed = retained; removed.chart = "removed"; removed.levels[0].level = "0";
+  CHECK(record(overlap, removed, 0) == 0);
+  auto promoteRange = play(44000, "goal"); promoteRange.lamp = 400;
+  promoteRange.nextLevels = {{{"table","0","sl0"},{"table","1","sl1"}},
+                            {{"table","1","sl1"},{"table","2","sl2"}}};
+  CHECK(record(overlap, promoteRange, 1) == 1);
+  CHECK(overlap.days.at(44000).assignments[0].chartProgress.contains("retained"));
+  CHECK(!overlap.days.at(44000).assignments[0].chartProgress.contains("removed"));
+  retained.previousLamp = 300; retained.lamp = 400;
+  CHECK(record(overlap, retained, 0) == 1);
 
   State ceiling;
   configure(ceiling, config(1, 1), 30000);
