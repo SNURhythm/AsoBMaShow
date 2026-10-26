@@ -161,7 +161,8 @@ int integer(const std::string &value) {
   return number;
 }
 std::string levelsText(const streak::Assignment &a) {
-  struct Group { std::string source, table, levels; };
+  struct Entry { std::string name, prefix; std::optional<std::int64_t> number; };
+  struct Group { std::string source, table; std::vector<Entry> levels; };
   std::vector<Group> groups;
   const std::string separator = " · ";
   for (const auto &level : a.levels) {
@@ -169,17 +170,43 @@ std::string levelsText(const streak::Assignment &a) {
     const auto table = split == std::string::npos ? std::string{} : level.label.substr(0, split);
     const auto name = split == std::string::npos
         ? (level.label.empty() ? level.level : level.label) : level.label.substr(split + separator.size());
+    Entry entry{.name=name};
+    std::int64_t number = 0;
+    const auto [end, error] = std::from_chars(level.level.data(), level.level.data() + level.level.size(), number);
+    if (error == std::errc{} && end == level.level.data() + level.level.size() && name.ends_with(level.level)) {
+      entry.number = number;
+      entry.prefix = name.substr(0, name.size() - level.level.size());
+    }
     auto group = std::find_if(groups.begin(), groups.end(), [&](const auto &g) {
       return g.source == level.source && g.table == table;
     });
-    if (group == groups.end()) groups.push_back({level.source, table, name});
-    else group->levels += ", " + name;
+    if (group == groups.end()) groups.push_back({level.source, table, {std::move(entry)}});
+    else group->levels.push_back(std::move(entry));
   }
   std::string text;
-  for (const auto &group : groups) {
+  for (auto &group : groups) {
     if (!text.empty()) text += " / ";
     if (!group.table.empty()) text += group.table + separator;
-    text += group.levels;
+    std::stable_sort(group.levels.begin(), group.levels.end(), [](const auto &left, const auto &right) {
+      if (left.number.has_value() != right.number.has_value()) return left.number.has_value();
+      if (!left.number) return false;
+      if (left.prefix != right.prefix) return left.prefix < right.prefix;
+      return *left.number < *right.number;
+    });
+    for (std::size_t first = 0; first < group.levels.size();) {
+      std::size_t last = first;
+      while (last + 1 < group.levels.size()) {
+        const auto &current = group.levels[last];
+        const auto &next = group.levels[last + 1];
+        if (!current.number || !next.number || current.prefix != next.prefix ||
+            *current.number >= *next.number || *current.number + 1 != *next.number) break;
+        ++last;
+      }
+      if (first > 0) text += ", ";
+      text += group.levels[first].name;
+      if (last > first) text += "~" + group.levels[last].name;
+      first = last + 1;
+    }
   }
   return text;
 }

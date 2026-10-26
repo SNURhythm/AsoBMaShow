@@ -46,6 +46,8 @@ class StreakSceneTests(unittest.TestCase):
         fixture = r'''#include "streak/StreakModel.h"
 #include <algorithm>
 #include <cassert>
+#include <charconv>
+#include <optional>
 HELPER
 int main() {
   streak::Assignment a;
@@ -53,12 +55,19 @@ int main() {
   a.levels = {{"satellite", "0", "Satellite · sl0"}, {"stella", "0", "Stella · st0"},
               {"satellite", "1", "Satellite · sl1"}, {"satellite", "2", "Satellite · sl2"},
               {"stella", "1", "Stella · st1"}};
-  assert(levelsText(a) == "Satellite · sl0, sl1, sl2 / Stella · st0, st1");
+  assert(levelsText(a) == "Satellite · sl0~sl2 / Stella · st0~st1");
   a.levels = {{"first", "0", "Shared · x0"}, {"second", "1", "Shared · x1"}};
   assert(levelsText(a) == "Shared · x0 / Shared · x1");
   a.levels = {{"legacy", "2", ""}, {"legacy", "3", "Custom label"},
               {"table", "1", "Name · with dot · lv1"}, {"table", "2", "Name · with dot · lv2"}};
-  assert(levelsText(a) == "2, Custom label / Name · with dot · lv1, lv2");
+  assert(levelsText(a) == "2, Custom label / Name · with dot · lv1~lv2");
+  a.levels = {{"satellite", "3", "Satellite · sl3"}, {"satellite", "1", "Satellite · sl1"},
+              {"satellite", "0", "Satellite · sl0"}, {"satellite", "2", "Satellite · sl2"},
+              {"satellite", "5", "Satellite · sl5"}, {"satellite", "EX", "Satellite · slEX"}};
+  assert(levelsText(a) == "Satellite · sl0~sl3, sl5, slEX");
+  a.levels = {{"table", "0", "Table · sl0"}, {"table", "1", "Table · st1"},
+              {"table", "2", "Table · sl2"}, {"table", "3", "Table · Special"}};
+  assert(levelsText(a) == "Table · sl0, sl2, st1, Special");
 }
 '''.replace("HELPER", helper)
         with tempfile.TemporaryDirectory(prefix="asobmashow-streak-levels-") as directory:
