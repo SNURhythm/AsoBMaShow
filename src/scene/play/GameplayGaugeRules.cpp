@@ -147,6 +147,12 @@ float lr2GaugeDamageMultiplier(double total, int totalNotes) noexcept {
 
 double resolveEffectiveGaugeTotal(
     GameplayRuleset ruleset, const bms_parser::ChartMeta &meta) noexcept {
+  if (meta.TotalIsRelative) {
+    const double base = ruleset == GameplayRuleset::LR2
+        ? lr2DefaultTotal(meta.TotalNotes)
+        : beatorajaDefaultGaugeTotal(meta.KeyMode, meta.TotalNotes);
+    return base * std::abs(meta.Total) / 100.0;
+  }
   if (ruleset == GameplayRuleset::LR2) {
     if (meta.HasTotal && meta.Total > 0.0) {
       return meta.Total;

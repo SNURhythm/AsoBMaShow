@@ -597,7 +597,7 @@ BMSRenderer::BMSRenderer(
   longHoldEffectsByOrder.resize(laneOrder.size());
   whiteKeyLaneIndices.reserve(laneOrder.size());
   blueKeyLaneIndices.reserve(laneOrder.size());
-  scratchLaneIndices.reserve(2);
+  scratchLaneIndices.reserve(scratchLaneCount);
   startLaneIndicatorColorRoles.reserve(laneOrder.size());
   std::vector<int> keyLanes;
   keyLanes.reserve(laneOrder.size());
@@ -4314,8 +4314,9 @@ gameplay::RealtimeTouchLayout BMSRenderer::touchLayout() const {
   layout.keyMode = chart->Meta.KeyMode;
   layout.lanes = displayedLaneOrder;
   layout.scratch.reserve(displayedLaneOrder.size());
+  const auto mode = replay::replayKeyModeLayout(chart->Meta.KeyMode);
   for (const int lane : displayedLaneOrder) {
-    layout.scratch.push_back(chartLaneIsScratch(chart->Meta, lane));
+    layout.scratch.push_back(mode && mode->hasDirectionalScratch && isScratch(lane));
   }
   return layout;
 }
@@ -5266,9 +5267,13 @@ void BMSRenderer::drawLaneCover() {
 }
 
 inline bool BMSRenderer::isLeftScratch(int lane) const {
+  if (chart->Meta.KeyMode == 24 || chart->Meta.KeyMode == 48)
+    return lane == 24 || lane == 25;
   return scratchLaneCount > 0 && lane == 7;
 }
 inline bool BMSRenderer::isRightScratch(int lane) const {
+  if (chart->Meta.KeyMode == 24 || chart->Meta.KeyMode == 48)
+    return chart->Meta.KeyMode == 48 && (lane == 50 || lane == 51);
   return scratchLaneCount > 1 && lane == 15;
 }
 inline bool BMSRenderer::isScratch(int lane) const {

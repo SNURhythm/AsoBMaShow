@@ -256,7 +256,9 @@ struct SyntheticChartFixture {
   SyntheticChartFixture() {
     chart->Meta.SHA256 = std::string(64, '7');
     chart->Meta.Title = "Synthetic Built-in 7K";
-    chart->Meta.SubTitle = "Pre-refactor Characterization";
+    // Keep the fixed golden heading independent of title/subtitle marquee
+    // behavior (covered by ui_scale_tests).
+    chart->Meta.SubTitle = "";
     chart->Meta.Artist = "AsoBMaShow";
     chart->Meta.Genre = "REDISTRIBUTABLE TEST";
     chart->Meta.Bpm = 120.0;
@@ -2706,6 +2708,40 @@ void verifyScratchlessChartEligibility() {
   }
 }
 
+void verifyKeyboardLanePresentation(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  for (const int mode : {24, 48}) {
+    bms_parser::Chart chart;
+    chart.Meta.KeyMode = mode;
+    chart.Meta.IsDP = mode == 48;
+    chart.Meta.Bpm = 120;
+    const int count = mode == 24 ? 26 : 52;
+    auto *measure = new bms_parser::Measure();
+    auto *timeline = new bms_parser::TimeLine(count, false);
+    timeline->Bpm = 120;
+    for (int lane = 0; lane < count; ++lane) {
+      timeline->SetNote(lane, new bms_parser::Note(bms_parser::Parser::NoWav));
+    }
+    measure->TimeLines.push_back(timeline);
+    chart.Measures.push_back(measure);
+    Judge judge(chart.Meta.Rank);
+    BMSRenderer renderer(&chart, judge.timingWindows, 500, false);
+    auto config = presentationConfig(0);
+    config.hideEmptyScratchLane = true;
+    config.scratchLaneOnRight = true;
+    renderer.configure(config);
+    const auto layout = renderer.touchLayout();
+    expect(layout.laneCount == count && layout.lanes.size() == count,
+           "keyboard rendering exposes every key and wheel lane");
+    for (std::size_t lane = 0; lane < layout.lanes.size(); ++lane) {
+      expect(layout.lanes[lane] == lane,
+             "keyboard visual order retains the dense per-player wheel positions");
+    }
+    expect(std::ranges::none_of(layout.scratch, [](bool scratch) { return scratch; }),
+           "keyboard wheel regions remain ordinary tap and hold targets");
+  }
+}
+
 void verifyEmptyScratchLanePresentation(const RenderTarget &target) {
   configureGeometryAndViews(target.framebuffer);
   for (int mode : {5, 7}) {
@@ -4669,6 +4705,7 @@ int main() {
       verifyColorPickerPopupPixels(target);
       verifyScratchGradientAndPlainMines(target);
       verifyScratchlessChartEligibility();
+      verifyKeyboardLanePresentation(target);
       verifyEmptyScratchLanePresentation(target);
       verifyScratchLanePosition(target);
       verifyPreviewInputLanePosition(target);

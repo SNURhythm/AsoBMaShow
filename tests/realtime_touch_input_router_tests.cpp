@@ -642,6 +642,62 @@ void testChartLaneMappingCoversEveryReplayKeyMode() {
   }
 }
 
+void testKeyboardWheelsKeepLaneReplayControls() {
+  for (const int mode : {24, 48}) {
+    const int laneCount = mode == 24 ? 26 : 52;
+    for (int lane = 0; lane < laneCount; ++lane) {
+      const bool wheel = lane % 26 >= 24;
+      const auto control = replay::logicalControlForChartLane(mode, lane, wheel);
+      require(control == replay::LogicalControl{
+                             .kind = replay::LogicalControlKind::Lane,
+                             .player = lane / 26 + 1,
+                             .lane = lane % 26},
+              "keyboard wheels retain ordinary lane controls, including player two");
+      require(replay::physicalChartLaneForLogicalControl(mode, *control) == lane,
+              "every keyboard replay lane maps back to its physical chart lane");
+    }
+    auto layout = makeLayout();
+    layout.keyMode = mode;
+    layout.laneRegions.clear();
+    layout.lanes.clear();
+    layout.scratch.clear();
+    layout.laneCount = laneCount;
+    layout.bottomLeft = {0, 1};
+    layout.bottomRight = {1, 1};
+    layout.topLeft = {0, 0};
+    layout.topRight = {1, 0};
+    layout.touchConfig.tapToScratch = false;
+    for (int lane = 0; lane < laneCount; ++lane) {
+      layout.lanes.push_back(lane);
+      layout.scratch.push_back(lane % 26 >= 24);
+    }
+    InputCapture capture;
+    gameplay::RealtimeTouchInputRouter router(
+        42, layout, {.context = &capture, .emit = &InputCapture::emit});
+    for (int lane = 0; lane < laneCount; ++lane) {
+      const float x = (lane + 0.5F) / laneCount;
+      require(router.consume({.fingerId = lane + 1,
+                              .phase = gameplay::RealtimeTouchPhase::Down,
+                              .normalizedX = x, .normalizedY = 0.5F,
+                              .steadyTimestampMicros = 1000 + lane * 2}),
+              "every keyboard lane accepts touch down");
+      require(capture.events.size() == static_cast<std::size_t>(lane * 2 + 1) &&
+                  capture.events.back().lane == lane &&
+                  capture.events.back().hasReplayControl &&
+                  capture.events.back().replayControl.kind == replay::LogicalControlKind::Lane,
+              "wheel touch presses immediately without turntable gestures");
+      require(router.consume({.fingerId = lane + 1,
+                              .phase = gameplay::RealtimeTouchPhase::Up,
+                              .normalizedX = x, .normalizedY = 0.5F,
+                              .steadyTimestampMicros = 1001 + lane * 2}),
+              "every keyboard lane releases on touch up");
+      require(capture.events.back().lane == lane &&
+                  capture.events.back().type == gameplay::RealtimeGameplayInputType::Release,
+              "wheel lift releases its own lane");
+    }
+  }
+}
+
 void testDirectTouchEmitsTimestampedLaneEdges() {
   InputCapture capture;
   gameplay::RealtimeTouchInputRouter router(
@@ -2788,6 +2844,7 @@ int main() {
   testPresentationDispatchUsesTheRawSnapshotUiPoint();
   testStableTouchLayoutRevisionParticipatesInSwitchDetection();
   testThirdNativeOverlayIsHitTestedAndExcludedFromGameplay();
+  testKeyboardWheelsKeepLaneReplayControls();
   testChartLaneMappingCoversEveryReplayKeyMode();
   testDirectTouchEmitsTimestampedLaneEdges();
   testScratchlessTouchPreservesBmsChannelReplayMapping();

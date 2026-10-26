@@ -38,7 +38,7 @@ void testOneKeyModeLayoutTable() {
       Case{10, 2, 5, 6, true, true, "L123456789AR"},
       Case{14, 2, 7, 8, true, true, "L123456789ABCDER"},
       Case{24, 1, 26, 26, false, false, ""},
-      Case{48, 2, 26, 26, false, false, ""},
+      Case{48, 2, 26, 26, false, true, ""},
   };
   for (const auto &test : cases) {
     const auto layout = replay::replayKeyModeLayout(test.keyMode);

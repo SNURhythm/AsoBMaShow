@@ -3,7 +3,9 @@
 #include "practice/PracticeConfiguration.h"
 #include "practice/PracticeSession.h"
 #include "scene/ChartListenStart.h"
+#include "scene/play/GameplayGaugeRules.h"
 
+#include <cmath>
 #include <iostream>
 #include <ranges>
 #include <string>
@@ -367,6 +369,43 @@ void testSkinMenuAttemptPlanMovesOutOfRangeNotesToBackground() {
              chart.Meta.TotalNotes == 1 && chart.Meta.Total == 100.0,
          "source practice modifier keeps only the selected range visible and "
          "scales NORMAL TOTAL by its remaining note count");
+}
+
+void testBmsonPracticeRetainsGaugeGainPerNote() {
+  for (const auto ruleset : {GameplayRuleset::Beatoraja, GameplayRuleset::LR2}) {
+    for (const int keyMode : {7, 9, 24}) {
+      for (const double editedTotal : {-1.0, 0.0, 400.0}) {
+        for (const auto gauge : {GaugeType::Normal, GaugeType::Hard}) {
+          bms_parser::Chart chart;
+          chart.Meta.KeyMode = keyMode;
+          chart.Meta.TotalNotes = 100;
+          chart.Meta.HasTotal = true;
+          chart.Meta.TotalIsRelative = true;
+          chart.Meta.Total = 100.0;
+          auto *measure = new bms_parser::Measure();
+          for (int i = 0; i < 100; ++i) {
+            auto *timeline = new bms_parser::TimeLine(1, false);
+            timeline->Timing = i * 10'000;
+            timeline->SetNote(0, new bms_parser::Note(1));
+            measure->TimeLines.push_back(timeline);
+          }
+          chart.Measures.push_back(measure);
+          const double menuTotal = editedTotal < 0.0
+              ? resolveEffectiveGaugeTotal(ruleset, chart.Meta) : editedTotal;
+          practice::applySkinMenuPracticeModifier(
+              chart, {.startMicros = 0, .endMicros = 500'000,
+                      .gaugeType = gauge, .total = menuTotal});
+          const double expected = menuTotal *
+              (gauge == GaugeType::Normal ? 0.5 : 1.0);
+          expect(chart.Meta.TotalNotes == 50 &&
+                     std::abs(resolveEffectiveGaugeTotal(ruleset, chart.Meta) -
+                              expected) < 1e-9,
+                 "bmson practice scales the original effective TOTAL once, "
+                 "including edited and zero totals in every gauge family");
+        }
+      }
+    }
+  }
 }
 
 void testSkinMenuAttemptPlanMovesBothCrossingLongNoteEndpoints() {
@@ -814,6 +853,7 @@ int main() {
   testSkinMenuVisibleCountRetainsAndClampsTheSourceViewport();
   testSkinMenuPropertyProducesPinnedAttemptPlan();
   testSkinMenuAttemptPlanMovesOutOfRangeNotesToBackground();
+  testBmsonPracticeRetainsGaugeGainPerNote();
   testSkinMenuAttemptPlanMovesBothCrossingLongNoteEndpoints();
   testSkinMenuPracticeModifierPreservesLandmineOnlyTotal();
   testSkinMenuPracticeModifierRemovesOutOfRangeLandmines();

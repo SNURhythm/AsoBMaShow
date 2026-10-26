@@ -1,4 +1,6 @@
 #include "ChartAudioRenderer.h"
+#include "AudioFrameTiming.h"
+#include "BmsonAudio.h"
 
 #include "../ArchiveFile.h"
 #include "../AtomicFile.h"
@@ -443,23 +445,38 @@ long long audioMicrosForFrames(std::size_t frames) {
 }
 
 bool mixSoundAt(std::vector<float> &mix, const DecodedSound &sound,
-                long long timeMicros, audio::PlaybackRate playback,
-                RenderBudget &budget) {
-  const long double start = std::floor(
-      static_cast<long double>(std::max(0LL, timeMicros)) * kOutputSampleRate /
-      1000000.0L);
-  if (!budget.admitFrames(start)) return false;
-  const std::size_t startFrame = static_cast<std::size_t>(start);
-  const std::size_t sourceFrames = static_cast<std::size_t>(sound.info.frames);
-  const audio::pcm_resampling::Ratio ratio(
-      static_cast<std::int64_t>(sound.info.samplerate) * playback.percent,
-      static_cast<std::int64_t>(kOutputSampleRate) * 100);
-  const auto projectedFrames = ratio.outputFrames(sourceFrames, budget.maxFrames);
-  if (!projectedFrames) {
+                long double triggerFrame, audio::PlaybackRate playback,
+                RenderBudget &budget, long long sourceStartMicros = 0,
+                long long sourceDurationMicros = -1, float gain = 1.0F,
+                std::optional<long double> mixStartFrame = std::nullopt,
+                std::optional<long double> mixEndFrame = std::nullopt) {
+  if (!budget.admitFrames(std::max(0.0L, triggerFrame))) return false;
+  const auto range = audio::bmson::sourceRange(sourceStartMicros, sourceDurationMicros,
+      sound.info.samplerate, static_cast<std::size_t>(sound.info.frames));
+  const std::size_t sourceFrames = range.count;
+  if (sourceFrames == 0) return true;
+  // Gameplay first slices native PCM, then normalizes that slice to the
+  // device rate, then advances its Q32 playback cursor. Combining those two
+  // resamplers changes both interpolated samples and the finite sound end.
+  const audio::pcm_resampling::Ratio normalization(sound.info.samplerate, kOutputSampleRate);
+  const auto preparedFrames = normalization.outputFrames(sourceFrames,
+      std::numeric_limits<std::uint32_t>::max());
+  if (!preparedFrames) {
     budget.error = "Chart audio sound-tail frame limit exceeded";
     return false;
   }
-  const std::size_t targetFrames = *projectedFrames;
+  const auto projectedFrames = audio::frame_timing::outputFrames(*preparedFrames, playback.percent);
+  // Clip only output frames. Reconstructing a source slice at a gain boundary
+  // rounds away the original fractional phase and changes every later sample.
+  // The same cursor origin applies when the export begins inside this voice.
+  const auto start = std::max({0.0L, triggerFrame, mixStartFrame.value_or(triggerFrame)});
+  const auto end = std::min(triggerFrame + projectedFrames,
+                            mixEndFrame.value_or(triggerFrame + projectedFrames));
+  if (end <= start) return true;
+  if (!budget.admitFrames(start)) return false;
+  const auto startFrame = static_cast<std::size_t>(start);
+  const auto skippedFrames = static_cast<std::size_t>(start - triggerFrame);
+  const auto targetFrames = static_cast<std::size_t>(end - start);
   if (targetFrames >= budget.maxFrames - startFrame) {
     budget.error = "Chart audio sound-tail frame limit exceeded";
     return false;
@@ -471,37 +488,65 @@ bool mixSoundAt(std::vector<float> &mix, const DecodedSound &sound,
   budget.remainingMixedFrames -= targetFrames;
   if (!ensureMixFrames(mix, startFrame + targetFrames + 1, budget)) return false;
   const auto channels = static_cast<std::size_t>(sound.info.channels);
-  const std::size_t rightChannel = channels == 1 ? 0 : 1;
-  audio::pcm_resampling::Cursor cursor(ratio, sourceFrames);
-  // Chunking retains cancellation latency while allowing the direct PCM loop
-  // to vectorize without a checkpoint or phase branch on every frame.
-  for (std::size_t begin = 0; begin < targetFrames; begin += 4096) {
-    if (!budget.checkpoint()) return false;
-    const auto end = std::min(begin + 4096, targetFrames);
-    if (ratio.direct()) {
-      for (auto frame = begin; frame < end; ++frame) {
-        const auto source = frame * channels;
-        const auto output = (startFrame + frame) * kOutputChannels;
-        mix[output] += sound.pcm[source] * (1.0f / 32768.0f);
-        mix[output + 1] += sound.pcm[source + rightChannel] * (1.0f / 32768.0f);
+  // Fold channel pairs only after both resampling stages, matching the live
+  // mixer's channel % 2 accumulation without clipping a summed int16 frame.
+  // Reuse four stereo frames of scratch regardless of source length/channels.
+  for (std::size_t firstChannel = 0; firstChannel < channels; firstChannel += 2) {
+    const bool hasRight = channels == 1 || firstChannel + 1 < channels;
+    const auto rightChannel = channels == 1 ? 0 : firstChannel + 1;
+    audio::pcm_resampling::Cursor nativeCursor(normalization, sourceFrames);
+    // Lazily normalize only the samples touched by this output interval. This
+    // retains bounded scratch/work and never rereads a clipped prefix, nor
+    // allocates another whole PCM copy for a gain segment or composite layer.
+    struct PreparedFrame {
+      std::size_t index = std::numeric_limits<std::size_t>::max();
+      std::array<short, 2> samples{};
+    };
+    std::array<PreparedFrame, 4> preparedCache;
+    const auto normalized = [&](std::size_t frame) {
+      auto &cached = preparedCache[frame % preparedCache.size()];
+      if (cached.index != frame) {
+        cached.index = frame;
+        nativeCursor.seek(frame);
+        const auto left = (range.start + nativeCursor.left()) * channels;
+        const auto right = (range.start + nativeCursor.right()) * channels;
+        cached.samples = {nativeCursor.interpolate(sound.pcm[left + firstChannel], sound.pcm[right + firstChannel]),
+            hasRight ? nativeCursor.interpolate(sound.pcm[left + rightChannel], sound.pcm[right + rightChannel])
+                     : short{0}};
       }
-    } else {
-      // Match AudioMix PCM16 rounding, then retain float overlap headroom.
-      for (auto frame = begin; frame < end; ++frame) {
-        const auto left = cursor.left() * channels;
-        const auto right = cursor.right() * channels;
-        const auto output = (startFrame + frame) * kOutputChannels;
-        const short leftSample = cursor.interpolate(sound.pcm[left], sound.pcm[right]);
-        const short rightSample = rightChannel == 0 ? leftSample : cursor.interpolate(
-            sound.pcm[left + rightChannel], sound.pcm[right + rightChannel]);
-        mix[output] += leftSample * (1.0f / 32768.0f);
-        mix[output + 1] += rightSample * (1.0f / 32768.0f);
-        cursor.advance();
+      return cached.samples;
+    };
+    auto position = audio::frame_timing::positionAfter(skippedFrames, playback.percent);
+    const auto increment = audio::frame_timing::increment(playback.percent);
+    for (std::size_t begin = 0; begin < targetFrames; begin += 4096) {
+      if (!budget.checkpoint()) return false;
+      const auto end = std::min(begin + 4096, targetFrames);
+      if (normalization.direct() && playback.percent == 100) {
+        for (auto frame = begin; frame < end; ++frame) {
+          const auto source = (range.start + skippedFrames + frame) * channels;
+          const auto output = (startFrame + frame) * kOutputChannels;
+          mix[output] += sound.pcm[source + firstChannel] * (gain / 32768.0f);
+          if (hasRight) mix[output + 1] += sound.pcm[source + rightChannel] * (gain / 32768.0f);
+        }
+      } else {
+        for (auto frame = begin; frame < end; ++frame) {
+          const auto leftFrame = static_cast<std::size_t>(position >> 32);
+          const auto left = normalized(leftFrame);
+          const auto right = normalized(std::min(leftFrame + 1, *preparedFrames - 1));
+          const float fraction = static_cast<float>(static_cast<std::uint32_t>(position)) /
+                                 static_cast<float>(audio::frame_timing::one);
+          const auto output = (startFrame + frame) * kOutputChannels;
+          for (int channel = 0; channel < (hasRight ? kOutputChannels : 1); ++channel) {
+            const float sample = left[channel] + (right[channel] - left[channel]) * fraction;
+            mix[output + channel] += sample * (gain / 32768.0f);
+          }
+          position += increment;
+        }
       }
-    }
-    if (end >= 4096 && !budget.reportedMixProgress) {
-      budget.reportedMixProgress = true;
-      logMessage(budget.options, "Chart audio mix started: 4096 frames");
+      if (end >= 4096 && !budget.reportedMixProgress) {
+        budget.reportedMixProgress = true;
+        logMessage(budget.options, "Chart audio mix started: 4096 frames");
+      }
     }
   }
   return budget.checkpoint();
@@ -591,26 +636,80 @@ resolveAudioEvents(const bms_parser::Chart &chart,
   return events;
 }
 
-long long baseDurationMicros(const bms_parser::Chart &chart,
-                             const RenderOptions &options) {
-  if (options.playbackEventDeadlineMicros.has_value()) {
-    return outputTimeMicrosFromTimelineStart(
-        *options.playbackEventDeadlineMicros, options.timelineStartMicros,
-        options.playback);
-  }
-  if (options.keySoundMode == KeySoundMode::ReplayTiming &&
-      options.replay != nullptr) {
-    return outputTimeMicrosFromTimelineStart(
-        chart_playback_duration::ReplayTimelineEndMicros(chart,
-                                                         *options.replay),
-        options.timelineStartMicros, options.playback);
-  }
-  return outputTimeMicrosFromTimelineStart(
-      chart_playback_duration::ChartTimelineEndMicros(chart),
-      options.timelineStartMicros, options.playback);
+long long baseTimelineEndMicros(const bms_parser::Chart &chart,
+                                const RenderOptions &options) {
+  if (options.playbackEventDeadlineMicros.has_value())
+    return *options.playbackEventDeadlineMicros;
+  if (options.keySoundMode == KeySoundMode::ReplayTiming && options.replay != nullptr)
+    return chart_playback_duration::ReplayTimelineEndMicros(chart, *options.replay);
+  return chart_playback_duration::ChartTimelineEndMicros(chart);
 }
 
 } // namespace
+
+std::vector<AudioEvent> ExpandAudioSlices(const bms_parser::Chart &chart,
+                                         const std::vector<AudioEvent> &events) {
+  struct SliceEvent { AudioEvent event; int identity; };
+  std::vector<SliceEvent> expanded;
+  for (const auto &event : events) {
+    const auto found = chart.WavSlices.find(event.wav);
+    if (event.setVoiceGain || found == chart.WavSlices.end()) expanded.push_back({event, -1});
+    else for (const auto &slice : found->second) {
+      auto layer = event;
+      layer.wav = slice.SourceWav;
+      layer.sourceStartMicros = slice.StartMicros;
+      layer.sourceDurationMicros = slice.DurationMicros;
+      expanded.push_back({layer, slice.SliceId});
+    }
+  }
+  std::stable_sort(expanded.begin(), expanded.end(), [](const auto &a, const auto &b) {
+    return a.event.timeMicros < b.event.timeMicros;
+  });
+  std::vector<AudioEvent> result;
+  std::unordered_map<int, std::size_t> previous;
+  std::unordered_map<std::uint64_t, std::vector<AudioEvent>> controls;
+  for (const auto &[event, identity] : expanded) {
+    if (event.setVoiceGain) {
+      controls[event.voiceId].push_back(event);
+      continue;
+    }
+    if (identity >= 0) {
+      if (const auto found = previous.find(identity); found != previous.end()) {
+        auto &prior = result[found->second];
+        const auto duration = event.timeMicros - prior.timeMicros;
+        if (duration == 0) {
+          // One monophonic slice at a chord boundary belongs to the last
+          // trigger, just as the live mixer does. Later controls of an older
+          // head must not capture the replacement voice.
+          prior = event;
+          continue;
+        }
+        prior.mixEndMicros = event.timeMicros;
+      }
+      previous[identity] = result.size();
+    }
+    result.push_back(event);
+  }
+  std::vector<AudioEvent> segments;
+  for (auto event : result) {
+    if (const auto found = controls.find(event.voiceId); found != controls.end()) {
+      for (const auto &control : found->second) {
+        if (control.timeMicros < event.timeMicros) continue;
+        if (event.mixEndMicros && control.timeMicros >= *event.mixEndMicros) break;
+        if (event.gain == control.gain) continue;
+        if (control.timeMicros > event.mixStartMicros.value_or(event.timeMicros)) {
+          auto prefix = event;
+          prefix.mixEndMicros = control.timeMicros;
+          segments.push_back(prefix);
+        }
+        event.mixStartMicros = control.timeMicros;
+        event.gain = control.gain;
+      }
+    }
+    segments.push_back(event);
+  }
+  return segments;
+}
 
 std::vector<AudioEvent>
 CollectBackgroundAudioEvents(const bms_parser::Chart &chart) {
@@ -633,11 +732,8 @@ CollectBackgroundAudioEvents(const bms_parser::Chart &chart) {
     }
   }
 
-  std::sort(events.begin(), events.end(), [](const auto &a, const auto &b) {
-    if (a.timeMicros != b.timeMicros) {
-      return a.timeMicros < b.timeMicros;
-    }
-    return a.wav < b.wav;
+  std::stable_sort(events.begin(), events.end(), [](const auto &a, const auto &b) {
+    return a.timeMicros < b.timeMicros;
   });
   return events;
 }
@@ -669,11 +765,8 @@ CollectChartTimedAudioEvents(const bms_parser::Chart &chart) {
     }
   }
 
-  std::sort(events.begin(), events.end(), [](const auto &a, const auto &b) {
-    if (a.timeMicros != b.timeMicros) {
-      return a.timeMicros < b.timeMicros;
-    }
-    return a.wav < b.wav;
+  std::stable_sort(events.begin(), events.end(), [](const auto &a, const auto &b) {
+    return a.timeMicros < b.timeMicros;
   });
   return events;
 }
@@ -686,18 +779,20 @@ CollectReplayTimedAudioEvents(const bms_parser::Chart &chart,
 
   const auto definition = gameplay::buildGameplayDefinition(
       chart, replay.chartMeta.LnMode);
+  const auto ruleset = gameplayRulesetFromId(
+      replay.playbackRuleset.value_or(replay.provenance.ruleset).id)
+                           .value_or(GameplayRuleset::Beatoraja);
   for (const auto &keysound :
-       resolveReplayKeysounds(definition, replay.events, std::nullopt)) {
+       resolveReplayKeysounds(definition, replay.events, std::nullopt,
+                             std::nullopt, ruleset, replay.audioUpdates)) {
     events.push_back({replayEventRawTimeMicros(keysound.songTimeMicros,
                                               keySoundOffsetMicros),
-                      keysound.wav});
+                      keysound.wav, 0, -1, keysound.voiceId,
+                      keysound.setVoiceGain, keysound.gain});
   }
 
-  std::sort(events.begin(), events.end(), [](const auto &a, const auto &b) {
-    if (a.timeMicros != b.timeMicros) {
-      return a.timeMicros < b.timeMicros;
-    }
-    return a.wav < b.wav;
+  std::stable_sort(events.begin(), events.end(), [](const auto &a, const auto &b) {
+    return a.timeMicros < b.timeMicros;
   });
   return events;
 }
@@ -735,18 +830,25 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
     return {.outputPath = path, .message = budget.error};
   };
   if (!budget.checkpoint()) return failure();
-  const long long baseDuration = baseDurationMicros(chart, options);
-  const long double initialFrames = std::max(1.0L, std::ceil(
-      static_cast<long double>(baseDuration) * kOutputSampleRate / 1000000.0L));
+  const auto frameAt = [&](long long time) -> long double {
+    return audio::frame_timing::difference(
+        audio::frame_timing::at(time, kOutputSampleRate, options.playback.percent),
+        audio::frame_timing::at(options.timelineStartMicros, kOutputSampleRate, options.playback.percent));
+  };
+  const long double initialFrames = std::max(1.0L, frameAt(baseTimelineEndMicros(chart, options)));
   if (!budget.admitFrames(initialFrames)) return failure();
+  const auto baseDuration = audioMicrosForFrames(static_cast<std::size_t>(initialFrames));
   std::vector<float> mix;
   if (!ensureMixFrames(mix, static_cast<std::size_t>(initialFrames), budget)) return failure();
-  const auto audioEvents = resolveAudioEvents(chart, options);
+  const auto audioEvents = ExpandAudioSlices(chart, resolveAudioEvents(chart, options));
   if (!budget.checkpoint()) return failure();
   DecodedSoundCache decodedSounds;
   preloadArchivedDecodedSounds(chart, audioEvents, decodedSounds, isCancelled,
                                options);
 
+  const auto boundaryFrame = [&](std::optional<long long> time) -> std::optional<long double> {
+    return time ? std::optional(frameAt(*time)) : std::nullopt;
+  };
   for (const auto &event : audioEvents) {
     if (!budget.checkpoint()) return failure();
     DecodedSound *sound =
@@ -755,9 +857,11 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
       continue;
     }
     if (!mixSoundAt(mix, *sound,
-                    outputTimeMicrosFromTimelineStart(event.timeMicros,
-                        options.timelineStartMicros, options.playback),
-                    options.playback, budget)) return failure();
+                    frameAt(event.timeMicros),
+                    options.playback, budget, event.sourceStartMicros,
+                    event.sourceDurationMicros, event.gain,
+                    boundaryFrame(event.mixStartMicros),
+                    boundaryFrame(event.mixEndMicros))) return failure();
   }
   if (!budget.checkpoint()) return failure();
   if (options.clubMode) {
@@ -791,8 +895,7 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
       return failure();
     }
     for (const auto &event : clubPlan) {
-      const auto time = outputTimeMicrosFromTimelineStart(event.timeMicros,
-          options.timelineStartMicros, options.playback);
+      const auto time = frameAt(event.timeMicros);
       if (!mixSoundAt(mix, kick, time, options.playback, budget)) return failure();
       if (event.clap) {
         if (!mixSoundAt(mix, clap, time, options.playback, budget)) return failure();
@@ -812,8 +915,7 @@ RenderResult RenderChartAudioToWav(const bms_parser::Chart &chart,
         kOutputSampleRate, kOutputChannels);
     for (const auto &click : options.prepMetronomePlan->clicks) {
       if (!mixSoundAt(mix, click.accent ? accent : regular,
-                      outputTimeMicrosFromTimelineStart(click.timeMicros,
-                          options.timelineStartMicros, options.playback),
+                      frameAt(click.timeMicros),
                       options.playback, budget)) return failure();
     }
   }

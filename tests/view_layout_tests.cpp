@@ -1159,9 +1159,9 @@ void testScratchlessInputModesUseIndependentKeyBindings() {
 }
 
 void testDenseDoublePlaySettingsSplitChartLanesByPlayer() {
-  for (const int player : {1, 2}) {
+  for (const auto scope : {input::InputScope{1, 24}, input::InputScope{1, 48}, input::InputScope{2, 48}}) {
     const auto actions = settings_scene::inputActionsForScope(
-        {player, 48}, std::span<const input::InputBinding>{});
+        scope, std::span<const input::InputBinding>{});
     std::vector<int> lanes;
     for (const auto &row : actions) {
       if (row.action.kind == input::LogicalActionKind::Lane) {
@@ -1169,9 +1169,9 @@ void testDenseDoublePlaySettingsSplitChartLanesByPlayer() {
         lanes.push_back(row.action.lane);
       }
     }
-    assert(lanes.size() == 24);
-    for (int position = 0; position < 24; ++position) {
-      assert(lanes[position] == (player == 1 ? position : position + 24));
+    assert(lanes.size() == 26);
+    for (int position = 0; position < 26; ++position) {
+      assert(lanes[position] == (scope.player == 1 ? position : position + 26));
     }
   }
 }

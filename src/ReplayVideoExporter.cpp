@@ -3171,8 +3171,6 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           gameplayDurationMicros, stoppedOnGaugeFailure,
           preparedGameplay.presentation.get());
 
-  const PlayfieldChartVisualModel exportChartVisualModel =
-      buildPlayfieldChartVisualModel(chart, 0);
   const auto replayPersistedScore = replayExportPersistedScore(context, chart.Meta);
   const auto replayPlayerScoreHistory = replayExportPlayerScoreHistory(context);
 
@@ -3184,6 +3182,9 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
       resolveGaugeProfile(GaugeProfile::Standard, chart.Meta.KeyMode);
   const RhythmState initialGaugeState =
       replay_result::BuildInitialGaugeState(chart, replay, gaugeProfile);
+  const PlayfieldChartVisualModel exportChartVisualModel =
+      buildPlayfieldChartVisualModel(chart, 0,
+                                    initialGaugeState.gaugeRules().effectiveTotal);
   const std::optional<long long> failureMicros =
       stoppedOnGaugeFailure
           ? replay_result::FindGaugeFailureMicros(
@@ -4245,7 +4246,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     const auto chartMetadataAuthority =
         replayExportChartMetadataAuthority(context, chart.Meta);
     const PlayfieldChartVisualModel stageChartVisualModel =
-        buildPlayfieldChartVisualModel(chart, 0);
+        buildPlayfieldChartVisualModel(
+            chart, 0, stage.resultState.gaugeRules().effectiveTotal);
 
     if (!stage.gameplayPresentation.has_value()) {
       stage.gameplayPresentation.emplace();

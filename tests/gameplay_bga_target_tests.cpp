@@ -300,6 +300,9 @@ void testPinnedRoleAndMediaSelectExactBgaMaterials() {
       GameplayBgaRole::Base, GameplayBgaMediaKind::Image);
   const auto layerImage = SelectGameplayBgaMaterial(
       GameplayBgaRole::Layer, GameplayBgaMediaKind::Image);
+  const auto bmsonLayer = SelectGameplayBgaMaterial(
+      GameplayBgaRole::Layer, GameplayBgaMediaKind::Image, false);
+  require(!bmsonLayer.blackTransparent, "bmson image layers retain authored black pixels");
   const auto baseVideo = SelectGameplayBgaMaterial(
       GameplayBgaRole::Base, GameplayBgaMediaKind::Video);
   const auto layerVideo = SelectGameplayBgaMaterial(
@@ -877,6 +880,81 @@ void appendBgaPoorTimeline(bms_parser::Chart &chart, long long timingMicros,
   auto *timeline = appendBgaTimeline(chart, timingMicros, -1, -1);
   timeline->BgaPoor =
       bms_parser::BgaPoorSequence{.Frames = std::move(frames)};
+}
+
+void testBmsonConditionalMissSequencesReachRenderedFrames() {
+  const std::string source = R"({"version":"1.0.0","info":{"init_bpm":120},
+    "bga":{"bga_header":[{"id":5,"name":"fixture.png"},
+      {"id":42,"name":"fixture.png"},{"id":77,"name":"fixture.png"},
+      {"id":88,"name":"fixture.png"}],
+      "bga_sequence":[{"id":100,"sequence":[{"time":0,"id":42},
+        {"time":90,"id":88},{"time":500}]},{"id":200,"sequence":[]}],
+      "bga_events":[{"y":0,"id":5},{"y":960,"id":999}],
+      "layer_events":[{"y":240,"id":42,"condition":"miss"},
+        {"y":960,"id":77,"condition":"play"},{"y":1200,"id":77}],
+      "poor_events":[{"y":480,"id":100},{"y":720,"id":200}]}})";
+  bms_parser::Parser parser;
+  std::atomic_bool cancelled{false};
+  bms_parser::Chart *raw = nullptr;
+  parser.Parse(std::vector<unsigned char>(source.begin(), source.end()), &raw,
+               false, false, cancelled, "conditional.bmson");
+  const std::unique_ptr<bms_parser::Chart> chart(raw);
+  require(chart != nullptr, "bmson conditional BGA fixture parses");
+  const auto schedule = BuildBgaPoorSequenceSchedule(*chart);
+  require(schedule.size() == 3 && schedule[0].startMicros == 500'000 &&
+              schedule[1].startMicros == 1'000'000 &&
+              schedule[2].startMicros == 1'500'000,
+          "conditional miss layers and poor sequences share the chart-time schedule");
+  require(schedule[1].frames == std::vector<int>({42, 88, -1}) &&
+              schedule[2].frames.empty(),
+          "sequence resources, terminal blanks and empty sequences survive scheduling");
+  const GameplayBgaMissState miss{.active = true, .startedBgaMicros = 1'000'000};
+  const auto first = SelectGameplayBgaMissComposition(
+      std::span<const int>(schedule[1].frames), miss, 1'000'000);
+  const auto second = SelectGameplayBgaMissComposition(
+      std::span<const int>(schedule[1].frames), miss, 1'250'000);
+  require(first.resourceId == 42 && second.resourceId == 88,
+          "bmson miss sequences follow the reference's uniform miss-window frame selection");
+
+  const auto originalDirectory = std::filesystem::current_path();
+  const auto restoreDirectory = makeScopeExit([&originalDirectory] {
+    std::error_code ignored;
+    std::filesystem::current_path(originalDirectory, ignored);
+  });
+  const auto sourceDirectory = std::filesystem::path(__FILE__).parent_path().parent_path();
+  std::filesystem::current_path(sourceDirectory);
+  chart->Meta.Folder = sourceDirectory / "tests/fixtures/beatoraja_skin/resources";
+  Stopwatch stopwatch;
+  auto control = std::make_shared<JukeboxBackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<JukeboxTestBackendFactory>(control));
+  jukebox.loadVisuals(*chart, cancelled);
+  const auto idle = jukebox.prepareVisualFrameAt(901, 500'000, {});
+  require(idle.base && !idle.layer && !idle.miss,
+          "a miss-conditional layer is not visible during ordinary play");
+  jukebox.finalizePrepared(idle);
+  const auto triggered = jukebox.prepareVisualFrameAt(902, 1'250'000, miss);
+  require(triggered.composition == GameplayBgaComposition::MissOnly &&
+              triggered.miss && !triggered.base && !triggered.layer,
+          "sequence-only image resources are loaded and render as a miss surface");
+  jukebox.finalizePrepared(triggered);
+  const auto empty = jukebox.prepareVisualFrameAt(903, 1'500'000,
+      {.active = true, .startedBgaMicros = 1'500'000});
+  require(empty.composition == GameplayBgaComposition::MissOnly &&
+              !empty.miss && !empty.base && !empty.layer,
+          "an authored empty miss sequence suppresses base and layer without fallback");
+  jukebox.finalizePrepared(empty);
+  const auto playEvent = jukebox.prepareVisualFrameAt(904, 2'000'000, {});
+  require(playEvent.base && !playEvent.layer,
+          "unimplemented play triggers and undefined base IDs do not replace the current image");
+  jukebox.finalizePrepared(playEvent);
+  const auto ordinary = jukebox.prepareVisualFrameAt(905, 2'500'000, {});
+  require(ordinary.base && ordinary.layer,
+          "standard unconditional bmson layers retain their existing rendering");
+  jukebox.finalizePrepared(ordinary);
+  const auto seekBack = jukebox.prepareVisualFrameAt(906, 1'250'000, miss);
+  require(seekBack.miss && !seekBack.base && !seekBack.layer,
+          "seeking backward restores the earlier bmson miss sequence");
+  jukebox.finalizePrepared(seekBack);
 }
 
 std::uint16_t settledBgfxTextureCount() {
@@ -1595,6 +1673,7 @@ int main(int argc, char **argv) {
   testLaterBgaValidationFailureLeavesTransientCapacityUntouched();
   testDuplicateTargetsConsumeDistinctPreparedEntriesExactlyOnce();
   testAuthoredProjectionParticipatesInPreparedTargetIdentity();
+  testBmsonConditionalMissSequencesReachRenderedFrames();
   testOnlyScheduledLayerImageIdsReceiveCompanionTextures();
   testCancelledLayerScanDoesNotLeakRoleIntoReusedBaseId();
   testPreparedImageLeaseSurvivesMediaResetUntilFullscreenFallback();

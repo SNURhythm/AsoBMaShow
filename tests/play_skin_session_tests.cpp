@@ -10487,6 +10487,20 @@ void testResultBridgeRetainsPreparedChartResultProperties() {
              noDocument.supported && !noDocument.value && hasDocument.supported &&
              hasDocument.value,
          "result bridge retains Beatoraja's prepared chart properties");
+
+  meta.KeyMode = 7;
+  meta.TotalNotes = 1;
+  meta.Total = 100.0;
+  meta.TotalIsRelative = true;
+  expect(bridge.integerProperty({368}, {}).value == 260 &&
+             bridge.floatProperty({368}, {}).value == 260.0,
+         "result TOTAL fallback resolves bmson percentages from metadata");
+  meta.Total = 0.0;
+  expect(bridge.floatProperty({368}, {}).value == 0.0,
+         "result TOTAL fallback preserves explicit bmson zero");
+  graph->totalGauge = 160.16;
+  expect(bridge.floatProperty({368}, {}).value == 160.16,
+         "prepared ruleset TOTAL takes priority over metadata fallback");
 }
 
 void testResultBridgeProjectsIrRankingRows() {
@@ -10784,6 +10798,20 @@ void testResultBridgeProjectsReplayLaneAssignments() {
              firstScratch.supported && firstScratch.value == 8 &&
              secondKey.supported && secondKey.value == 3,
          "result lane-assignment indexes retain Beatoraja replay patterns");
+  std::vector<int> keyboardPattern;
+  for (int lane = 0; lane < 26; ++lane) keyboardPattern.push_back(lane + 26);
+  ResultSkinStateBridge keyboard({
+      .replayRandomOption2P = 8,
+      .replayKeyMode = 48,
+      .replayLaneShufflePattern2P = keyboardPattern,
+  }, 1, 0);
+  const auto keyboardKey = keyboard.integerProperty(
+      {460}, SkinIntegerPropertyDomain::ImageIndex);
+  const auto keyboardWheel = keyboard.integerProperty(
+      {469}, SkinIntegerPropertyDomain::ImageIndex);
+  expect(keyboardKey.supported && keyboardKey.value == 1 &&
+             keyboardWheel.supported && keyboardWheel.value == 25,
+         "keyboard result lane assignments decode the 26-lane player-two offset");
 }
 
 void testResultBridgeExposesPlayerHistoryProperties() {

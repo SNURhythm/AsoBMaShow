@@ -46,7 +46,8 @@ logicalControlForChartLane(
   const int playerOffset = keyMode == 48 ? 26 : 8;
   const int player = layout->players == 2 && chartLane >= playerOffset ? 2 : 1;
   const int playerLane = player == 2 ? chartLane - playerOffset : chartLane;
-  if (scratch) {
+  // Keyboard wheels retain their scratch judging role but replay as lane keys.
+  if (scratch && keyMode != 24 && keyMode != 48) {
     const int expectedScratch = player == 2 ? 15 : 7;
     if (!layout->hasDirectionalScratch || chartLane != expectedScratch ||
         !isDirectionalScratchControl(scratchKind)) {

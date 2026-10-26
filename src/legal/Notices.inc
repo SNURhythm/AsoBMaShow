@@ -30,6 +30,7 @@
 {"openssl.txt", "openssl"},
 {"opus.txt", "opus"},
 {"pcre2.txt", "PCRE2"},
+{"picojson.txt", "picojson"},
 {"plutosvg.txt", "PlutoSVG"},
 {"plutovg.txt", "PlutoVG"},
 {"portaudio.txt", "portaudio"},

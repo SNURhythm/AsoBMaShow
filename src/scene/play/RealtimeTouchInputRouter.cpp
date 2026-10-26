@@ -519,6 +519,13 @@ RealtimeTouchInputRouter::laneIndexAt(float x, float y,
 
 bool RealtimeTouchInputRouter::normalizeLayout(
     RealtimeTouchLayout &layout) noexcept {
+  if (layout.keyMode == 24 || layout.keyMode == 48) {
+    // A keyboard wheel is a tap/hold lane even when its chart role is scratch.
+    for (auto &region : layout.laneRegions) {
+      if (region.lane >= 0) region.scratch = false;
+    }
+    std::fill(layout.scratch.begin(), layout.scratch.end(), false);
+  }
   if (!layout.laneRegions.empty()) {
     layout.laneCount = layout.laneRegions.size();
     return false;

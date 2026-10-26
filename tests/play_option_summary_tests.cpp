@@ -127,7 +127,49 @@ void testPreviewBranchesAndResourcesSurviveLaneModifiers() {
   }
 }
 
+void testKeyboardReplayLanePatternsIncludeBothWheels() {
+  for (const int mode : {24, 48}) {
+    bms_parser::ChartMeta meta;
+    meta.KeyMode = mode;
+    meta.IsDP = mode == 48;
+    for (int player = 0; player < (meta.IsDP ? 2 : 1); ++player) {
+      for (const std::string option : {"RANDOM", "R-RANDOM", "RANDOM-EX"}) {
+        const auto pattern = resultReplayLanePattern(meta, option, 123, player);
+        assert(pattern && pattern->size() == 26);
+        auto sorted = *pattern;
+        std::ranges::sort(sorted);
+        for (int lane = 0; lane < 26; ++lane) {
+          assert(sorted[lane] == lane + player * 26);
+        }
+        const auto order = play_options::laneOrderForPlayOption(meta, option, 123, player);
+        assert(order && order->size() == (mode == 24 ? 26 : 52));
+        for (int lane = 0; lane < 26; ++lane) {
+          assert((*pattern)[lane] == (*order)[lane + player * 26]);
+        }
+        if (option != "RANDOM-EX") {
+          assert((*pattern)[24] == 24 + player * 26);
+          assert((*pattern)[25] == 25 + player * 26);
+        }
+      }
+    }
+  }
+}
+
+void testPopnFiveReplayPatternUsesSeedFallback() {
+  bms_parser::ChartMeta meta;
+  meta.KeyMode = 9;
+  meta.Values["bmson.mode_hint"] = "popn-5k";
+  for (const std::string option : {"RANDOM", "R-RANDOM", "RANDOM-EX"}) {
+    assert(!resultReplayLanePattern(meta, option, 123, 0));
+    const auto order = play_options::laneOrderForPlayOption(meta, option, 123, 0);
+    assert(order && order->size() == 5);
+    assert(order == play_options::laneOrderForPlayOption(meta, option, 123, 0));
+  }
+}
+
 int main() {
+  testKeyboardReplayLanePatternsIncludeBothWheels();
+  testPopnFiveReplayPatternUsesSeedFallback();
   testPreviewBranchesAndResourcesSurviveLaneModifiers();
   testDemotedNotesFollowModifiedActiveLane();
   for (int keyMode : {7, 14}) {

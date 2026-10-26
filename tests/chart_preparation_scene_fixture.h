@@ -38,7 +38,8 @@ bool prepareRetryChart(const bms_parser::ChartMeta &, const StartOptions &,
                        std::atomic_bool &);
 
 struct PreparationVisualModel {};
-PreparationVisualModel buildPreparationVisualModel(const bms_parser::Chart &, int) { return {}; }
+PreparationVisualModel buildPreparationVisualModel(
+    const bms_parser::Chart &, int, std::optional<double> = std::nullopt) { return {}; }
 struct PreparationVisualStore {
   void resetModel(const PreparationVisualModel &) {}
 };

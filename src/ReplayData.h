@@ -42,6 +42,16 @@ struct ReplayEvent {
   GaugeType gaugeType = GaugeType::Normal;
   int combo = 0;
   int score = 0;
+  // Runtime fact regenerated from canonical raw input; legacy judgement-only
+  // replays have no physical edge identity and keep the lift fallback.
+  bool releaseByBackspin = false;
+  // A held classic LN inherits its head judgement without a failed lift.
+  // Also regenerated from raw input; judgement-only records use lift fallback.
+  bool releaseByHolding = false;
+  // Aggregate physical lane state for audio, regenerated from raw input.
+  // A scratch-key Release can leave the opposite direction held. Historical
+  // judgement-only records lack this fact and retain their edge fallback.
+  std::optional<bool> audioLanePressed;
 };
 
 namespace replay_note {
@@ -87,6 +97,17 @@ struct ReplayLaneCoverEvent {
   std::optional<lane_cover::State> coverState;
 };
 
+// Runtime-only audio phase reconstructed from canonical raw input. Gain
+// transactions retain their event position, including within equal timestamps.
+// lane == -1 marks an update with no gain change; none of these are score events.
+struct ReplayAudioUpdate {
+  std::size_t beforeEventIndex = 0;
+  long long songTimeMicros = 0;
+  int lane = -1;
+  long long headTimeMicros = -1;
+  float gain = 1.0F;
+};
+
 struct ReplayData {
   int id = 0;
   bool autoPlay = false;
@@ -128,6 +149,7 @@ struct ReplayData {
   // Runtime result fact from canonical judging; durable BP is stored separately.
   std::optional<int> resultPassedNotes;
   std::vector<ReplayEvent> events;
+  std::vector<ReplayAudioUpdate> audioUpdates;
   std::vector<ReplayTouchSample> touchSamples;
   std::vector<ReplayLaneCoverEvent> laneCoverEvents;
   ScoreProvenance provenance = ScoreProvenance::Legacy();

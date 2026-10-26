@@ -292,6 +292,54 @@ bool testSongInformationDensityMatchesPinnedConstructor() {
   return true;
 }
 
+bool testBmsonSongInformationResolvesRelativeTotal() {
+  bms_parser::Chart chart;
+  chart.Meta.KeyMode = 7;
+  chart.Meta.TotalNotes = 1;
+  chart.Meta.HasTotal = true;
+  chart.Meta.TotalIsRelative = true;
+  for (const double percentage : {0.0, 50.0, 100.0}) {
+    chart.Meta.Total = percentage;
+    const auto model = buildPlayfieldChartVisualModel(chart, 1);
+    const double expected = 260.0 * percentage / 100.0;
+    if (!model.staticMetadata.songInformation ||
+        model.staticMetadata.songInformation->total != expected ||
+        model.skinGameplayGraph.totalGauge != expected ||
+        chart.Meta.Total != percentage || !chart.Meta.TotalIsRelative) {
+      std::cerr << "bmson skin TOTAL must resolve without changing metadata\n";
+      return false;
+    }
+  }
+  const auto lr2Model = buildPlayfieldChartVisualModel(chart, 1, 160.16);
+  if (lr2Model.staticMetadata.songInformation->total != 160.16 ||
+      lr2Model.skinGameplayGraph.totalGauge != 160.16 ||
+      chart.Meta.Total != 100.0) {
+    std::cerr << "prepared ruleset TOTAL must reach all skin projections\n";
+    return false;
+  }
+  chart.Meta.TotalNotes = 20;
+  auto *measure = new bms_parser::Measure();
+  chart.Measures.push_back(measure);
+  for (int i = 0; i < 20; ++i) {
+    auto *timeline = new bms_parser::TimeLine(8, false);
+    timeline->Timing = i < 11 ? i * 50'000LL : (i - 1) * 1'000'000LL;
+    timeline->Bpm = 120.0;
+    timeline->SetNote(0, new bms_parser::Note(1));
+    measure->TimeLines.push_back(timeline);
+  }
+  for (const double total : {0.0, 100.0, 260.0}) {
+    // The prepared ruleset total must drive both the value and density border.
+    const auto model = buildPlayfieldChartVisualModel(chart, 1, total);
+    const double expectedEndDensity = total > 100.0 ? 1.0 : 2.2;
+    if (std::abs(model.staticMetadata.songInformation->endDensity -
+                 expectedEndDensity) > 0.000001) {
+      std::cerr << "end density must use the prepared absolute TOTAL safely\n";
+      return false;
+    }
+  }
+  return true;
+}
+
 bool testSongInformationUsesSparseDistantTimelineBuckets() {
   graph_test::AllocationGuard guard;
   bms_parser::Chart chart;
@@ -506,6 +554,9 @@ int main() {
     return EXIT_FAILURE;
   }
   if (!testSongInformationDensityMatchesPinnedConstructor()) {
+    return EXIT_FAILURE;
+  }
+  if (!testBmsonSongInformationResolvesRelativeTotal()) {
     return EXIT_FAILURE;
   }
   if (!testSongInformationUsesSparseDistantTimelineBuckets()) {

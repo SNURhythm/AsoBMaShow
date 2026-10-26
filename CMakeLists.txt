@@ -2979,6 +2979,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/replay/BeatorajaReplayCodec.cpp
         src/replay/ReplayPlayback.cpp
         src/replay/ReplaySetup.cpp
+        src/replay/ReplaySetupAdapter.cpp
         src/scene/play/GameplayGaugeRules.cpp
         src/scene/play/GameplayJudgeRules.cpp
         src/scene/play/Judge.cpp
@@ -2991,6 +2992,13 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ASOBMASHOW_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
     )
     target_compile_features(beatoraja_replay_codec_tests PRIVATE cxx_std_23)
+    if(TARGET SDL3::SDL3)
+        target_link_libraries(beatoraja_replay_codec_tests PRIVATE SDL3::SDL3)
+    elseif(TARGET SDL3::SDL3-static)
+        target_link_libraries(beatoraja_replay_codec_tests PRIVATE SDL3::SDL3-static)
+    elseif(TARGET SDL3)
+        target_link_libraries(beatoraja_replay_codec_tests PRIVATE SDL3)
+    endif()
 
     add_executable(replay_file_lifecycle_tests
         tests/replay_file_lifecycle_tests.cpp
@@ -4069,6 +4077,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(replay_playback_driver_tests
         tests/replay_playback_driver_tests.cpp
+        src/audio/AudioMix.cpp
         src/FileChecksum.cpp
         src/ModernResult.cpp
         src/ResultPersistenceModel.cpp
@@ -4091,6 +4100,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/scene/play/GameplayNoteJudgeRole.cpp
         src/scene/play/GameplayRulesetPolicy.cpp
         src/scene/play/GameplaySimulation.cpp
+        src/scene/play/ReplayKeysoundSchedule.cpp
         src/scene/play/SkinGameplayGraphState.cpp
         src/scene/play/Judge.cpp
     )
@@ -4846,8 +4856,9 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     get_target_property(PROGRESSIVE_MUSIC_TEST_SOURCES chart_audio_renderer_tests SOURCES)
     list(REMOVE_ITEM PROGRESSIVE_MUSIC_TEST_SOURCES tests/chart_audio_renderer_tests.cpp)
+    target_sources(chart_audio_renderer_tests PRIVATE src/audio/AudioMix.cpp)
     add_executable(progressive_music_source_tests
-        tests/progressive_music_source_tests.cpp ${PROGRESSIVE_MUSIC_TEST_SOURCES})
+        tests/progressive_music_source_tests.cpp src/audio/AudioMix.cpp ${PROGRESSIVE_MUSIC_TEST_SOURCES})
     target_include_directories(progressive_music_source_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(progressive_music_source_tests PRIVATE cxx_std_23)
     target_link_libraries(progressive_music_source_tests PRIVATE ${COMMON_LIBS})
@@ -4985,6 +4996,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(jukebox_restore_tests
         tests/jukebox_restore_tests.cpp
+        src/scene/play/GameplayDefinition.cpp
+        src/scene/play/ReplayKeysoundSchedule.cpp
         tests/support/AllocationFailure.cpp
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
@@ -7318,6 +7331,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     add_executable(gameplay_terminal_scene_tests
         ${CMAKE_CURRENT_BINARY_DIR}/gameplay_terminal_scene_fixture.cpp
+        src/scene/play/RhythmLaneInputController.cpp
         src/audio/GameplayBgaMissStateTracker.cpp
         src/scene/play/PlayfieldChartVisualModel.cpp
         src/scene/play/PlayfieldVisualState.cpp
@@ -7480,6 +7494,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(gameplay_simulation_tests
         tests/gameplay_simulation_tests.cpp
+        src/audio/AudioMix.cpp
         src/bms_parser.cpp
         src/scene/play/CompiledGameplayJudge.cpp
         src/scene/play/GameplayJudgeRules.cpp
@@ -7602,6 +7617,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(application_event_queue_tests PRIVATE cxx_std_23)
 
     add_executable(realtime_gameplay_worker_tests
+        src/scene/play/ReplayKeysoundSchedule.cpp
+        src/audio/AudioMix.cpp
         src/input/NativeRawTouchInput.cpp
         ${android_realtime_touch_methods}
         src/input/SDLTouchInputSource.cpp

@@ -1,4 +1,8 @@
 #include "ArchiveFile.h"
+#include "BmsonAudioFixture.h"
+#include "BmsonPhaseFixture.h"
+#include "BmsonReleaseFixture.h"
+#include "scene/play/ReplayKeysoundSchedule.h"
 #include "audio/AudioDeviceManager.h"
 #include "audio/Jukebox.h"
 #include "audio/DecodedAssetCache.h"
@@ -618,6 +622,83 @@ void testGameplaySharesPreparedPcm() {
   }
 }
 
+void testBmsonSharedBackgroundSliceBus() {
+  TemporaryArchivedVisualFixture fixture;
+  for (const auto [layered, chordKeys] : {std::pair{false, 1}, std::pair{true, 1},
+                                         std::pair{false, 16}, std::pair{true, 16}}) {
+    auto chart = bmsonSharedBusFixture(fixture.directory / std::to_string(chordKeys) /
+        (layered ? "layered" : "same-wav"), layered, chordKeys);
+    Stopwatch stopwatch;
+    auto control = std::make_shared<BackendControl>();
+    Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+    std::atomic_bool cancelled{false};
+    require(jukebox.loadChartPreservingDevice(*chart, true, cancelled).success,
+            "shared BGM/key slice gameplay resources load");
+    for (const auto volumes : {audio::Volumes{1.0f, 0.0f, 1.0f},
+                               audio::Volumes{1.0f, 1.0f, 0.0f}}) {
+      jukebox.audioRuntime().setVolumes(volumes);
+      require(jukebox.play(0).success, "shared BGM/key slice gameplay starts");
+      std::vector<std::int16_t> output(44100 * 2);
+      control->renderCallback(output.data(), 44100, 2, control->renderUserData);
+      const float expected = (9999 * volumes.bgm + (layered ? 999 * volumes.keysound : 0)) * 0.9f;
+      require(std::abs(output[26460 * 2] - expected) < 2,
+              "Jukebox and preview must use BGM gain for the shared slice and key gain for its layer");
+      require(jukebox.stopKeepDevice().success, "shared BGM/key slice gameplay stops");
+    }
+  }
+}
+
+void testBmsonGameplaySlicesAndVisualTransitions() {
+  const auto originalDirectory = std::filesystem::current_path();
+  const auto restoreDirectory = makeScopeExit([&] {
+    std::error_code ignored;
+    std::filesystem::current_path(originalDirectory, ignored);
+  });
+  std::filesystem::current_path(std::filesystem::path(__FILE__).parent_path().parent_path());
+  TemporaryArchivedVisualFixture fixture;
+  auto chart = bmsonAudioFixture(fixture.directory / "bmson");
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+  std::atomic_bool cancelled{false};
+  require(jukebox.loadChartPreservingDevice(*chart, false, cancelled).success,
+          "bmson gameplay resources load");
+  auto *first = chart->Measures.front()->TimeLines.front();
+  const auto layered = first->Notes[0]->Wav;
+  const auto chord = first->Notes[1]->Wav;
+  const auto handle = jukebox.resolveRealtimeKeySound(layered);
+  require(handle && handle->valid(), "layered bmson note exposes a live keysound");
+  require(jukebox.play(0).success, "bmson gameplay starts");
+  jukebox.playKeySound(layered);
+  jukebox.playKeySound(chord);
+  std::array<std::int16_t, 128> output{};
+  control->renderCallback(output.data(), 64, 2, control->renderUserData);
+  require(std::abs(output[0] - 1348) <= 2 && output[0] == output[1],
+          "gameplay mixes shared chord slice once alongside its independent layer");
+  require(jukebox.stopKeepDevice().success, "bmson gameplay stops");
+
+  const auto imagePath = fixture.directory / "black.bmp";
+  { std::ofstream image(imagePath, std::ios::binary); image << singlePixelPpm(0, 0, 0); }
+  for (const bool bmson : {true, false}) {
+    bms_parser::Chart visual;
+    populateVisualChart(visual, true, fixture.directory, "black.bmp");
+    if (bmson) visual.Meta.Values["bmson.version"] = "1.0.0";
+    jukebox.loadVisuals(visual, cancelled);
+    require(jukebox.prepareGameplayAudioFromPreview(visual, cancelled).success,
+            "visual-only preparation transfers chart-specific layer semantics to gameplay");
+    const auto frame = jukebox.prepareVisualFrameAt(bmson ? 9100 : 9101, 0, {});
+    require(frame.layer.has_value(), "visual-only preparation publishes the layer");
+    const std::array<BgaDrawTarget, 1> targets{{{
+        .role = GameplayBgaRole::Layer,
+        .destination = {{{0, 64}, {64, 64}, {64, 0}, {0, 0}}}}}};
+    const auto preflight = jukebox.preflight(frame, targets);
+    require(preflight.ready, preflight.failure ? preflight.failure->message :
+            "layer resources survive bmson to BMS visual-only transition");
+    jukebox.finalizePrepared(frame);
+  }
+  require(!handle->valid(), "switching charts retires the old bmson group owner");
+}
+
 void testPreviewGameplayPreparationRetainsVisuals() {
   TemporaryArchivedVisualFixture fixture;
   const auto imagePath = fixture.directory / "preview.bmp";
@@ -1046,6 +1127,232 @@ void testNativePauseKeepsPcmAndScheduleOnTheGeneratedTimeline(
           "an explicit paused seek replaces the old frozen position");
 }
 
+void testSeekPreservesContinuousPhase() {
+  TemporaryArchivedVisualFixture directory;
+  struct Case { int sourceRate, speed; long long trigger; bool layers, continued; int frameLimit = 0; bool bounded = false; };
+  const std::array cases{
+      Case{44100, 125, 1'000'000, false, false},
+      Case{44100, 195, 1'000'020, false, false, 14},
+      Case{44100, 125, 1'000'020, true, false},
+      Case{48000, 195, 1'000'020, true, true, 0, true},
+      Case{32000, 150, 1'000'020, true, true},
+      Case{44100, 50, 1'002'500, false, true},
+      Case{44100, 100, 1'005'000, false, false},
+      Case{48000, 200, 1'010'000, true, true}};
+  int index = 0;
+  for (const auto &c : cases) {
+    BmsonPhaseFixture fixture(directory.directory / std::to_string(index++), c.sourceRate,
+                              c.trigger, c.frameLimit ? 0 : 1'600'058, c.layers, c.layers, c.continued, c.frameLimit, c.bounded);
+    const auto continuous = fixture.continuous(c.speed, BmsonPhaseFixture::frameAt(3'200'000, c.speed));
+    Stopwatch stopwatch;
+    auto control = std::make_shared<BackendControl>();
+    Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+    std::atomic_bool cancelled{false};
+    require(jukebox.loadChartPreservingDevice(*fixture.chart, false, cancelled).success,
+            "phase seek loads parsed bmson resources");
+    require(jukebox.stop().success, "phase seek drains before rate selection");
+    std::string error;
+    require(jukebox.setPlaybackRate({.percent = c.speed}, error), "phase seek selects rate");
+    jukebox.schedule(*fixture.chart, false, cancelled);
+    jukebox.appendScheduledAudioEvents(fixture.schedule);
+    require(jukebox.play(0).success, "phase seek starts production playback");
+    const auto compare = [&](long long origin, std::size_t frames) {
+      int maximum = 0;
+      std::array<short, 257 * 2> output{};
+      for (std::size_t offset = 0; offset < frames; offset += 257) {
+        const auto count = std::min<std::size_t>(257, frames - offset);
+        control->renderCallback(output.data(), count, 2, control->renderUserData);
+        for (std::size_t i = 0; i < count; ++i) {
+          const auto frame = origin + static_cast<long long>(offset + i);
+          const int expected = frame < 0 || frame >= continuous.size() ? 0 :
+              static_cast<int>(continuous[frame] * 32767);
+          maximum = std::max(maximum, std::abs(expected - output[i * 2]));
+        }
+      }
+      return maximum;
+    };
+    require(compare(0, continuous.size()) <= 1,
+            "actual Jukebox callbacks preserve uninterrupted production mixer phase");
+    std::vector<long long> origins{-20, 999'980, 1'500'020, 1'600'043, 1'600'058,
+                                  1'700'100, 1'800'130, 2'350'020};
+    const auto last = std::find_if(continuous.rbegin(), continuous.rend(),
+                                    [](float value) { return std::abs(value) > 0.0001F; });
+    if (last != continuous.rend()) {
+      const auto lastFrame = continuous.size() - 1 - std::distance(continuous.rbegin(), last);
+      origins.push_back(std::llround(static_cast<long double>(lastFrame) * 1'000'000 * c.speed /
+                                     (44100 * 100)));
+    }
+    for (const auto originTime : origins) {
+      require(jukebox.seek(originTime).success, "phase seek restores production voices");
+      const auto origin = BmsonPhaseFixture::frameAt(originTime, c.speed);
+      const auto frames = originTime < 0 ? BmsonPhaseFixture::frameAt(1'100'000, c.speed) : 512;
+      const auto maximum = compare(origin, frames);
+      if (maximum > 1) std::cerr << "actual Jukebox source=" << c.sourceRate << " rate=" << c.speed
+          << " trigger=" << c.trigger << " origin=" << originTime << " maxPCM=" << maximum << '\n';
+      require(maximum <= 1, "actual Jukebox seek preserves uninterrupted mixer phase");
+    }
+  }
+}
+
+void testLayeredSeekAfterOutputRateChanges() {
+  TemporaryArchivedVisualFixture directory;
+  struct Case { int sourceRate, sourceFrames, frames44100, frames48000; };
+  // Rounding the old group length instead of using the newly prepared layers
+  // undercounts the first case and overcounts the second at 48 kHz.
+  for (const auto c : {Case{44100, 44101, 44101, 48002},
+                       Case{48000, 48006, 44106, 48006}}) {
+    BmsonPhaseFixture fixture(directory.directory / std::to_string(c.sourceRate),
+        c.sourceRate, 1'000'000, 0, true, true, false, c.sourceFrames);
+    for (const int speed : {100, 125, 195}) {
+      Stopwatch stopwatch;
+      auto control = std::make_shared<BackendControl>();
+      Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+      std::atomic_bool cancelled{false};
+      require(jukebox.loadChartPreservingDevice(*fixture.chart, false, cancelled).success,
+              "layered rate-change fixture loads at 44.1 kHz");
+      for (const unsigned rate : {48000U, 44100U, 48000U, 44100U}) {
+        require(jukebox.stop().success, "layered rate change drains playback");
+        std::string error;
+        require(jukebox.audioRuntime().restart(
+            {.deviceId = rate == 44100 ? "default" : "usb", .sampleRate = rate,
+             .bufferFrames = rate == 44100 ? 128U : 64U}, error),
+            "layered fixture changes output device rate");
+        require(jukebox.stop().success &&
+                    jukebox.setPlaybackRate({.percent = speed}, error),
+                "layered fixture selects pitch-shift speed");
+        jukebox.schedule(*fixture.chart, false, cancelled);
+        jukebox.appendScheduledAudioEvents(fixture.schedule);
+        require(jukebox.play(0).success, "layered rate-change playback starts");
+        const auto frameAt = [&](long long time) {
+          return std::llround(static_cast<long double>(time) * rate * 100 /
+                              (1'000'000LL * speed));
+        };
+        const auto preparedFrames = rate == 44100 ? c.frames44100 : c.frames48000;
+        const auto lastFrame = frameAt(1'000'000) +
+            (preparedFrames * 100 + speed - 1) / speed - 1;
+        std::vector<short> continuous((lastFrame + 1024) * 2);
+        std::optional<std::size_t> groupFrames;
+        for (std::size_t offset = 0; offset < continuous.size() / 2; offset += 257) {
+          const auto count = std::min<std::size_t>(257, continuous.size() / 2 - offset);
+          control->renderCallback(continuous.data() + offset * 2, count, 2,
+                                   control->renderUserData);
+          const auto &state = *static_cast<UserData *>(control->renderUserData)->callbackState;
+          if (!groupFrames && state.playingSoundCount && state.playingSounds[0].groupOwner)
+            groupFrames = state.playingSounds[0].groupOwner->outputFrameCount;
+        }
+        require(continuous[lastFrame * 2] != 0 && continuous[(lastFrame + 1) * 2] == 0,
+                "uninterrupted layered playback reaches its last prepared sample");
+        std::vector<long long> origins{1'300'000, 1'550'000, 1'750'000, 1'850'000};
+        for (const auto frame : {lastFrame - 1, lastFrame, lastFrame + 1})
+          origins.push_back(std::llround(static_cast<long double>(frame) * 1'000'000 * speed /
+                                        (rate * 100LL)));
+        for (const auto origin : origins) {
+          require(jukebox.seek(origin).success, "layered rate-change seek restores voices");
+          std::array<short, 32 * 2> output{};
+          control->renderCallback(output.data(), 32, 2, control->renderUserData);
+          const auto first = frameAt(origin) * 2;
+          require(std::equal(output.begin(), output.end(), continuous.begin() + first),
+                  "layered seek after rate switches preserves gains, phase and the final audible frame");
+        }
+        require(groupFrames == preparedFrames,
+                "group duration follows prepared layers without rounding drift or a phantom tail");
+      }
+    }
+  }
+}
+
+void testSeekRestoresAdjacentHcnVoices() {
+  TemporaryArchivedVisualFixture fixture;
+  for (bool nextHcn : {false, true}) for (bool rawBoundary : {false, true}) {
+    auto chart = bmsonAdjacentHcnFixture(nextHcn);
+    chart->Meta.Folder = fixture.directory;
+    for (const auto [name, sample] : {std::pair{"head.wav", 1000}, {"next.wav", 200}, {"tail.wav", 50}}) {
+      std::ofstream stream(fixture.directory / name, std::ios::binary);
+      stream << shortWave(3 * 44100, sample);
+    }
+    Stopwatch stopwatch;
+    auto control = std::make_shared<BackendControl>();
+    Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+    std::atomic_bool cancelled{false};
+    require(jukebox.loadChartPreservingDevice(*chart, false, cancelled).success,
+            "adjacent HCN seek loads parsed slice resources");
+    const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+    std::vector<ReplayEvent> events{
+        ReplayEvent{.action = ReplayEventAction::Press, .lane = 0, .noteTimeMicros = 1'000'000,
+                    .songTimeMicros = 1'000'000, .judgement = PGreat, .audioLanePressed = true},
+        ReplayEvent{.action = ReplayEventAction::Release, .lane = 0, .noteTimeMicros = 2'000'000,
+                    .songTimeMicros = 1'200'000, .judgement = Poor, .audioLanePressed = false},
+        ReplayEvent{.action = ReplayEventAction::Press, .lane = 0, .noteTimeMicros = 2'100'000,
+                    .songTimeMicros = 1'990'000, .judgement = Bad, .audioLanePressed = true},
+        ReplayEvent{.action = ReplayEventAction::Release, .lane = 0,
+                    .noteTimeMicros = nextHcn ? 2'600'000 : -1, .songTimeMicros = 1'995'000,
+                    .judgement = nextHcn ? Poor : None, .audioLanePressed = false}};
+    std::vector<ReplayAudioUpdate> audioUpdates;
+    if (rawBoundary) {
+      events[0].songTimeMicros = 900'000;
+      events[1].songTimeMicros = 920'000;
+      events.insert(events.begin() + 2, {
+          ReplayEvent{.action = ReplayEventAction::Press, .lane = 0, .noteTimeMicros = 1'000'000,
+                      .songTimeMicros = 950'000, .judgement = Kpoor, .audioLanePressed = true},
+          ReplayEvent{.action = ReplayEventAction::Release, .lane = 0,
+                      .songTimeMicros = 980'000, .audioLanePressed = false}});
+      audioUpdates = {{.beforeEventIndex = 4, .songTimeMicros = 1'010'000,
+                                .lane = 0, .headTimeMicros = 1'000'000, .gain = 0}};
+      require(jukebox.stop().success, "drain before selecting the raw boundary playback rate");
+      std::string error;
+      require(jukebox.setPlaybackRate({.percent = 125}, error), "raw boundary seek uses altered playback rate");
+    }
+    jukebox.schedule(*chart, false, cancelled);
+    jukebox.appendScheduledAudioEvents(buildReplayKeysoundSchedule(
+        definition, events, 0, std::nullopt, std::nullopt, GameplayRuleset::LR2, audioUpdates));
+    require(jukebox.play(1'500'000).success, "start inside muted first HCN");
+    for (const auto [time, expected] : std::array<std::pair<long long, int>, 3>{{
+             {rawBoundary ? 1'050'000 : 1'500'000, 0}, {1'992'000, 1080}, {1'997'000, nextHcn ? 45 : 180}}}) {
+      require(jukebox.seek(time).success, "seek across adjacent judged press and lift");
+      std::array<short, 128> output{};
+      control->renderCallback(output.data(), 64, 2, control->renderUserData);
+      require(std::abs(output[0] - expected) <= 2 && output[0] == output[1],
+              "seek restores both independently owned voices and later resolved release gain");
+    }
+    require(jukebox.stop().success, "adjacent HCN seek stops");
+  }
+}
+
+void testSeekRestoresPreviewVoiceGainAndCursor() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<BackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<TestFactory>(control));
+  std::vector<short> pcm(3 * 44100, 1000);
+  std::fill(pcm.begin() + 44100, pcm.end(), 3000);
+  require(jukebox.loadGeneratedKeySound(8, PATH("missed-hcn-preview"),
+      std::move(pcm), 1, 44100), "load long preview head");
+  bms_parser::Chart chart;
+  std::atomic_bool cancelled{false};
+  jukebox.schedule(chart, false, cancelled);
+  const std::array events{
+      ScheduledAudioEvent{.timeMicros = 500'000, .wav = 8, .bus = audio::Bus::Keysound, .voiceId = 11},
+      ScheduledAudioEvent{.timeMicros = 1'300'000, .wav = 8, .bus = audio::Bus::Keysound,
+                          .voiceId = 11, .setVoiceGain = true, .gain = 0},
+      ScheduledAudioEvent{.timeMicros = 1'600'000, .wav = 8, .bus = audio::Bus::Keysound,
+                          .voiceId = 11, .setVoiceGain = true, .gain = 1},
+      ScheduledAudioEvent{.timeMicros = 1'700'000, .wav = 8, .bus = audio::Bus::Keysound,
+                          .voiceId = 11, .setVoiceGain = true, .gain = 0}};
+  jukebox.appendScheduledAudioEvents(events);
+  require(jukebox.play(1'400'000).success, "start inside muted preview");
+  for (const auto &[time, expected] : std::array<std::pair<long long, int>, 3>{{
+           {1'400'000, 0}, {1'650'000, 2700}, {1'750'000, 0}}}) {
+    require(jukebox.seek(time).success, "seek across missed-preview voice controls");
+    std::array<short, 128> output{};
+    control->renderCallback(output.data(), 64, 2, control->renderUserData);
+    require(std::abs(output[0] - expected) <= 2 && output[0] == output[1],
+            "live seek restores mute/restore gain and original source position");
+    const auto &state = *static_cast<UserData *>(control->renderUserData)->callbackState;
+    require(state.playingSoundCount == 1 && state.playingSounds[0].voiceId == 11,
+            "seek retains exactly one owned preview voice including while muted");
+  }
+  require(jukebox.stop().success, "seek fixture stops");
+}
+
 void testGeneratedKeysoundUsesChartSchedulingMode() {
   Stopwatch stopwatch;
   auto control = std::make_shared<BackendControl>();
@@ -1340,8 +1647,17 @@ int main(int argc, char **argv) {
       bgfx::shutdown();
       return 0;
     }
+    testSeekPreservesContinuousPhase();
+    testLayeredSeekAfterOutputRateChanges();
+    if (argc == 2 && std::string_view(argv[1]) == "--phase") {
+      rendering::UniformCache::getInstance().destroyAll();
+      bgfx::shutdown();
+      return 0;
+    }
     testArchivedHandoffRejectsSourceChangeDuringPreparation();
     testGameplaySharesPreparedPcm();
+    testBmsonGameplaySlicesAndVisualTransitions();
+    testBmsonSharedBackgroundSliceBus();
     testPreviewGameplayPreparationRetainsVisuals();
     testUnicodeChartAssetReferences();
     if (argc == 2 && std::string_view(argv[1]) == "--unicode-assets") {
@@ -1373,6 +1689,8 @@ int main(int argc, char **argv) {
         testNativePauseKeepsPcmAndScheduleOnTheGeneratedTimeline(queuedOutput, bus);
       }
     }
+    testSeekRestoresAdjacentHcnVoices();
+    testSeekRestoresPreviewVoiceGainAndCursor();
     testGeneratedKeysoundUsesChartSchedulingMode();
     testRateScaledSnapshotRestoresBgaTimeline();
     testNegativeCountInKeepsBgaAtPreChartState();

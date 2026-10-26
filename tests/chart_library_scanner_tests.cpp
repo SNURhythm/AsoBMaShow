@@ -1604,6 +1604,157 @@ void assertPmsMapping(const bms_parser::Chart &chart, bool pms) {
   assert(heads == 1 && tails == 1);
 }
 
+void testBmsonLibraryAndArchiveLoading() {
+  TempDirectory temporary;
+  const auto root = temporary.path() / "library";
+  std::filesystem::create_directories(root);
+  const std::string modern = R"({"version":"1.0.0","info":{"title":"Modern bmson","init_bpm":120,"mode_hint":"popn-5k"},"sound_channels":[{"name":"stem.wav","notes":[{"x":5,"y":240}]}]})";
+  const std::string legacy = R"({"info":{"title":"Legacy bmson","initBPM":120},"soundChannel":[{"name":"stem.wav","notes":[{"x":8,"y":240}]}]})";
+  const auto regular = root / "chart.BMSON";
+  std::ofstream(regular) << modern;
+  const auto archive = writeZip(root / "charts.zip", {{"nested/chart.bmson", legacy}});
+  const auto archived = archive_file::makeVirtualPath(archive, "nested/chart.bmson");
+  std::atomic_bool cancelled{false};
+  for (const auto &path : {regular, archived}) {
+    bms_parser::Parser parser;
+    bms_parser::Chart *raw = nullptr;
+    archive_file::parseChart(parser, path, &raw, false, false, cancelled);
+    const std::unique_ptr<bms_parser::Chart> chart(raw);
+    assert(chart && chart->Meta.TotalNotes == 1 && !chart->WavSlices.empty());
+    assert(chart->Meta.BmsPath == path && chart->Meta.Folder == path.parent_path());
+    assert(chart->Meta.GetTotalLaneCount() == (path == regular ? 5 : 8));
+  }
+  TestChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session && session->InsertEntry(root));
+  ChartLibraryScanner scanner;
+  assert(scanner.ScanWithResult(*session, {root}).completed);
+  const std::vector<std::filesystem::path> paths{regular, archived};
+  session.reset();
+  session = repository.OpenSession();
+  assert(session);
+  const auto records = session->SelectChartMetaByPaths(paths);
+  assert(records.records.size() == 2);
+  for (const auto &record : records.records) {
+    const bool isPopn = record.meta.BmsPath == regular;
+    assert(record.meta.KeyMode == (isPopn ? 9 : 7) && record.meta.TotalNotes == 1);
+    assert(record.meta.GetTotalLaneCount() == (isPopn ? 5 : 8));
+    assert(record.meta.PlayLength == 500000);
+    assert(record.meta.Total == 100);
+    assert(record.meta.TotalIsRelative == (record.meta.BmsPath == regular));
+  }
+}
+
+void testCachedArchiveDiscoversBmsonWithoutReplacingExistingCharts(
+    bool interruptAfterCheckpoint) {
+  TempDirectory temporary;
+  const auto archivePath = writeZip(temporary.path() / "mixed.zip",
+      {{"existing.bms", chartText("Existing BMS")},
+       {"new.BMSON", R"({"version":"1.0.0","info":{"title":"New bmson","init_bpm":120,"mode_hint":"keyboard-24k-double"},"sound_channels":[{"name":"stem.wav","notes":[{"x":52,"y":240}]}]})"}});
+  const auto existingPath = archive_file::makeVirtualPath(archivePath, "existing.bms");
+  const auto newPath = archive_file::makeVirtualPath(archivePath, "new.BMSON");
+  const std::array existingPaths{existingPath};
+  const std::array newPaths{newPath};
+  TestChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto session = repository.OpenSession();
+  assert(session && session->InsertEntry(archivePath));
+  ChartLibraryScanner scanner;
+  assert(scanner.ScanWithResult(*session, {archivePath}).completed);
+  const auto original = session->SelectChartMetaByPaths(existingPaths);
+  assert(original.records.size() == 1);
+
+  // Cover both the pre-bmson cache and the first bmson decoder, which rejected
+  // keyboard modes. Preserve an old completed-archive marker as well.
+  const int cachedVersion = interruptAfterCheckpoint ? 0 : 1;
+  // The archive/index identity stays unchanged; only the newly recognized
+  // entry is absent from the database.
+  sqlite3 *database = nullptr;
+  assert(sqlite3_open(repository.DatabasePath().string().c_str(), &database) == SQLITE_OK);
+  const std::string cachedState =
+      "DELETE FROM chart_meta WHERE title='New bmson';"
+      "UPDATE chart_meta SET title='Preserved metadata', add_date=123456;"
+      "UPDATE archive_scan_cache SET chart_count=1, recognition_version=" + std::to_string(cachedVersion) + ";"
+      "INSERT INTO chart_scan_completed_archive(archive_path,archive_size,mtime_ns) "
+      "SELECT path,archive_size,mtime_ns FROM archive_scan_cache;"
+      "CREATE TRIGGER preserve_existing_chart_delete BEFORE DELETE ON chart_meta "
+      "WHEN OLD.title='Preserved metadata' BEGIN SELECT RAISE(ABORT,'existing chart deleted'); END;"
+      "CREATE TRIGGER preserve_existing_chart_metadata BEFORE UPDATE OF title ON chart_meta "
+      "WHEN OLD.title='Preserved metadata' BEGIN SELECT RAISE(ABORT,'existing chart reparsed'); END;";
+  assert(sqlite3_exec(database, cachedState.c_str(), nullptr, nullptr, nullptr) == SQLITE_OK);
+  assert(sqlite3_close(database) == SQLITE_OK);
+
+  int parseTotal = 0;
+  std::stop_source stop;
+  const auto stopToken = stop.get_token();
+  const auto refreshed = scanner.ScanWithResult(*session, {archivePath}, &stopToken,
+      [&](const ChartScanProgress &progress) {
+        if (progress.stage == ChartScanProgressStage::ParsingCharts) {
+          parseTotal = progress.total;
+        }
+      }, nullptr,
+      [&]() -> std::uint64_t {
+        return interruptAfterCheckpoint && parseTotal > 0 ? 1 : 0;
+      },
+      [&](std::uint64_t request) {
+        if (interruptAfterCheckpoint && request == 1) stop.request_stop();
+      });
+  assert(refreshed.completed == !interruptAfterCheckpoint);
+  assert(refreshed.committed);
+  assert(parseTotal == 1);
+  const auto preserved = session->SelectChartMetaByPaths(existingPaths);
+  assert(preserved.records.size() == 1);
+  assert(preserved.records.front().meta.Title == "Preserved metadata");
+  assert(preserved.records.front().meta.SHA256 == original.records.front().meta.SHA256);
+  assert(preserved.records.front().addDateSeconds == 123456);
+  const auto discovered = session->SelectChartMetaByPaths(newPaths);
+  assert(discovered.records.size() == 1);
+  assert(discovered.records.front().meta.Title == "New bmson");
+  assert(discovered.records.front().meta.TotalIsRelative);
+  assert(discovered.records.front().meta.KeyMode == 48);
+  assert(discovered.records.front().meta.IsDP);
+  assert(discovered.records.front().meta.TotalScratchNotes == 1);
+  if (interruptAfterCheckpoint) {
+    const auto interrupted = session->LoadScanSnapshot();
+    assert(interrupted.checkpoint.has_value());
+    assert(interrupted.archiveCache.front().recognitionVersion == cachedVersion);
+    // All newly found charts are already durable, but the recognition-version
+    // write was interrupted. Resume must finalize the cache without reparsing.
+    int resumedParses = 0;
+    const auto resumed = scanner.ScanWithResult(*session, {archivePath}, nullptr,
+        [&](const ChartScanProgress &progress) {
+          if (progress.stage == ChartScanProgressStage::ParsingCharts) ++resumedParses;
+        });
+    assert(resumed.completed && resumed.committed && resumedParses == 0);
+    assert(!session->LoadScanSnapshot().checkpoint.has_value());
+  }
+  auto snapshot = session->LoadScanSnapshot();
+  assert(snapshot.archiveCache.size() == 1);
+  assert(snapshot.archiveCache.front().chartCount == 2);
+  assert(snapshot.archiveCache.front().recognitionVersion > cachedVersion);
+
+  const auto indexScanCount = [&] {
+    const auto lines = archive_file::debugLogLines();
+    return std::count_if(lines.begin(), lines.end(), [&](const auto &line) {
+      return line.find("Scanning archive for BMS charts: " + archivePath.string()) != std::string::npos;
+    });
+  };
+  const auto scansBefore = indexScanCount();
+  // Reopen the session so the cheap path depends on the persisted version.
+  session.reset();
+  session = repository.OpenSession();
+  assert(session);
+  int parsedAgain = 0;
+  const auto next = scanner.ScanWithResult(*session, {archivePath}, nullptr,
+      [&](const ChartScanProgress &progress) {
+        if (progress.stage == ChartScanProgressStage::ParsingCharts) ++parsedAgain;
+      });
+  assert(next.completed);
+  assert(parsedAgain == 0 && indexScanCount() == scansBefore);
+  assert(session->CountAllChartMeta() == 2);
+}
+
 void testPmsFormatSurvivesBufferedChartLoading() {
   TempDirectory temporary;
   const auto root = temporary.path() / "library";
@@ -3448,6 +3599,9 @@ int main(int argc, char **argv) {
     return 0;
   }
   if (argc == 2 && std::string(argv[1]) == "--archive-reference") { testReferencedArchiveSurvivesUnavailableRefresh(); return 0; }
+  testBmsonLibraryAndArchiveLoading();
+  testCachedArchiveDiscoversBmsonWithoutReplacingExistingCharts(false);
+  testCachedArchiveDiscoversBmsonWithoutReplacingExistingCharts(true);
   testPmsFormatSurvivesBufferedChartLoading();
   testHistoricalPmsMetadataRebuildsUnchangedSources();
   testUntrustedIncompleteMarkersDoNotHideCharts();

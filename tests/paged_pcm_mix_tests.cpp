@@ -147,6 +147,29 @@ void testScheduledOffsetsAndExactContiguousEquivalence() {
   }
 }
 
+void testScheduledFractionalCursorReadiness() {
+  SoundData sound;
+  sound.pagedOutput = std::make_shared<audio::PagedPcmSound>();
+  require(sound.pagedOutput->publishMetadata(1, 8192), "fractional readiness metadata");
+  std::vector<short> page(4096, 1000);
+  require(sound.pagedOutput->publishPage(0, page), "fractional readiness first page");
+  AudioCallbackState state;
+  require(audio::playback::InsertScheduledSound(state, {.soundData = &sound,
+      .startFrame = 4094, .startFractionQ32 = 3U << 30}), "fractional readiness schedule");
+  require(!audio::playback::ScheduledMixReady(state, 0, 44100, 2, 50),
+          "scheduled fraction requires the actual next interpolation page");
+  page.assign(4096, 3000);
+  require(sound.pagedOutput->publishPage(1, page), "fractional readiness second page");
+  require(audio::playback::ScheduledMixReady(state, 0, 44100, 2, 50),
+          "scheduled fraction is ready once both endpoints are published");
+  std::array<float, 2> mixed{};
+  audio::playback::ActivateScheduledSounds(state, 0, 44100, 2, 50);
+  audio::playback::MixActiveSounds(state, mixed, 2, 1, 1, 1, 50);
+  require(std::abs(mixed[0] - 1000.0F / 32768 * 0.9F) < 0.00001F &&
+          std::abs(mixed[1] - 1500.0F / 32768 * 0.9F) < 0.00001F,
+          "published scheduled fraction mixes the checked endpoints");
+}
+
 void testFutureScheduleAndLoopReadiness() {
   SoundData sound;
   sound.pagedOutput = std::make_shared<audio::PagedPcmSound>();
@@ -280,8 +303,8 @@ void testChunkedPreflightChecksDueVoicesBeyondSingleMixCapacity() {
   const bool singleReady = audio::playback::ScheduledMixReady(state, 0, 1000, 16, 100);
   const bool chunkedReady = audio::playback::ScheduledMixReady(state, 0, 1000, 16, 100, 0, true);
   countAllocations = false;
-  require(singleReady && !chunkedReady && allocationCount == 0,
-          "chunked preflight must check later voices admitted after early voices retire");
+  require(!singleReady && !chunkedReady && allocationCount == 0,
+          "both preflights check later voices admitted after early voices retire");
   require(state.scheduledSoundCount == kMaxActiveSounds + 1 && state.playingSoundCount == 0 &&
               !shortSound.playing && !later.playing, "chunked readiness must leave state untouched");
   const std::array<short, 4> samples{8192, 8192, 8192, 8192};
@@ -301,6 +324,113 @@ void testChunkedPreflightChecksDueVoicesBeyondSingleMixCapacity() {
   audio::playback::MixActiveSounds(state, block, 8, 2, 1, 1, 100);
   require(block[0] > 0 && state.scheduledSoundCount == 0,
           "later chunk must actually admit the voice checked by full-span preflight");
+}
+
+void testCapacityReplacementRequiresPublishedPages() {
+  SoundData shared, silent;
+  shared.monophonic = true;
+  shared.pagedOutput = std::make_shared<audio::PagedPcmSound>();
+  require(shared.pagedOutput->publishMetadata(1, 4100), "publish replacement metadata");
+  require(shared.pagedOutput->publishPage(0, std::vector<short>(4096, 1000)), "publish prefix page");
+  silent.channels = 1;
+  silent.outputFrameCount = 16;
+  silent.outputData = std::vector<short>(16, 0);
+  AudioCallbackState state;
+  for (size_t i = 0; i < kMaxActiveSounds - 1; ++i)
+    require(audio::playback::AppendActiveSound(state, &silent, audio::Bus::Bgm, 0), "fill readiness voices");
+  require(audio::playback::AppendActiveSound(state, &shared, audio::Bus::Keysound, 0), "start ready prefix");
+  require(audio::playback::InsertScheduledSound(state, {.soundData = &shared,
+      .bus = audio::Bus::Keysound, .startMicros = 2000, .startFrame = 4095}), "schedule unpublished replacement boundary");
+  require(!audio::playback::ScheduledMixReady(state, 0, 1000, 4, 100),
+          "full capacity cannot hide the replacement's missing interpolation page");
+  require(state.scheduledSoundCount == 1 && state.playingSounds[511].sourceFrameQ32 == 0,
+          "underflow preserves original voices and pending replacement");
+  require(shared.pagedOutput->publishPage(1, std::array<short, 4>{2000, 3000, 4000, 5000}), "publish replacement tail");
+  require(audio::playback::ScheduledMixReady(state, 0, 1000, 4, 100), "replacement becomes ready");
+}
+
+void testScheduledMonophonicReplacementAtCapacity() {
+  struct RateCase { int rate; std::array<int, 8> samples; int next; };
+  const std::array cases{
+      RateCase{50, {1100, 1650, 1200, 1500, 1100, 0, 1100, 0}, 2200},
+      RateCase{100, {1100, 2200, 1300, 2000, 1100, 0, 1100, 0}, 3300},
+      RateCase{137, {1100, 2607, 1374, 2370, 1100, 0, 1100, 0}, 4114},
+      RateCase{200, {1100, 3300, 1500, 3000, 1100, 0, 1100, 0}, 5500}};
+  for (bool paged : {false, true}) for (const auto &test : cases)
+      for (bool chunked : {false, true}) {
+    auto shared = std::make_shared<SoundData>();
+    auto layer = std::make_shared<SoundData>();
+    const auto prepare = [&](SoundData &sound, short step) {
+      std::vector<short> pcm(16);
+      for (int i = 0; i < 16; ++i) pcm[i] = (i + 1) * step;
+      sound.monophonic = true;
+      if (paged) {
+        sound.pagedOutput = std::make_shared<audio::PagedPcmSound>();
+        require(sound.pagedOutput->publishFull(1, std::move(pcm)), "publish slice PCM");
+      } else {
+        sound.channels = 1;
+        sound.outputFrameCount = pcm.size();
+        sound.outputData = std::move(pcm);
+      }
+    };
+    prepare(*shared, 1000);
+    prepare(*layer, 100);
+    SoundData group, unrelated;
+    group.layers = {shared, layer};
+    group.outputFrameCount = 16;
+    unrelated.channels = 1;
+    unrelated.outputFrameCount = 64;
+    unrelated.outputData = std::vector<short>(64, 1);
+    AudioCallbackState state;
+    for (size_t i = 0; i < kMaxActiveSounds - 2; ++i)
+      require(audio::playback::AppendActiveSound(state, &unrelated, audio::Bus::Bgm, 0), "fill unrelated voices");
+    require(audio::playback::AppendActiveSound(state, &group, audio::Bus::Keysound,
+        0, 0, 1, false, 11), "layered head occupies remaining two slots");
+    std::uint64_t sequence = 0;
+    const auto start = [&](int frame, SoundData *sound, std::uint64_t id) {
+      require(audio::playback::InsertScheduledSound(state, {.soundData = sound,
+          .bus = audio::Bus::Keysound, .startMicros = frame * 1000 * test.rate / 100,
+          .sequence = sequence++, .voiceId = id}), "schedule replacement");
+    };
+    const auto gain = [&](int frame, std::uint64_t id, float value) {
+      require(audio::playback::InsertScheduledSound(state, {.soundData = &group,
+          .bus = audio::Bus::Keysound, .startMicros = frame * 1000 * test.rate / 100,
+          .sequence = sequence++, .gain = value, .voiceId = id, .setVoiceGain = true}), "schedule control");
+    };
+    start(2, shared.get(), 22);
+    gain(3, 11, 0);
+    start(4, &group, 33);
+    gain(4, 22, 0);
+    gain(5, 33, 0);
+    start(6, &group, 44);
+    gain(6, 44, 0);
+    start(6, &group, 55);
+    gain(6, 44, 1);
+    gain(7, 55, 0);
+    gain(8, 55, 1);
+    std::array<float, 8> samples{};
+    allocationCount = 0;
+    countAllocations = true;
+    const bool ready = audio::playback::ScheduledMixReady(state, 0, 1000, 8, test.rate);
+    const std::uint32_t first = chunked ? 3 : 8;
+    audio::playback::ActivateScheduledSounds(state, 0, 1000, first, test.rate);
+    audio::playback::MixActiveSounds(state, samples, first, 1, 1, 1, test.rate);
+    if (chunked) {
+      audio::playback::ActivateScheduledSounds(state, 0, 1000, 5, test.rate, 3);
+      audio::playback::MixActiveSounds(state, std::span(samples).subspan(3), 5, 1, 1, 1, test.rate);
+    }
+    countAllocations = false;
+    require(ready && allocationCount == 0, "capacity replacement and gain controls allocate nothing");
+    for (size_t frame = 0; frame < samples.size(); ++frame)
+      require(std::abs(samples[frame] - (test.samples[frame] + 510) * 0.9F / 32768) < 0.00001F,
+              "scheduled replacements preserve prefixes, layers, unrelated voices and per-trigger controls at capacity");
+    require(state.playingSoundCount == kMaxActiveSounds, "replacement retains all 512 simultaneous voices");
+    audio::playback::ActivateScheduledSounds(state, 0, 1000, 1, test.rate, 8);
+    std::array<float, 1> next{};
+    audio::playback::MixActiveSounds(state, next, 1, 1, 1, 1, test.rate);
+    require(std::abs(next[0] - (test.next + 510) * 0.9F / 32768) < 0.00001F,
+            "next callback restores final trigger at its uninterrupted source cursor");
+  }
 }
 
 void testProducerPublicationMakesImmutablePcmVisible() {
@@ -347,9 +477,12 @@ void operator delete[](void *memory) noexcept { std::free(memory); }
 
 int main() {
   try {
+    testCapacityReplacementRequiresPublishedPages();
+    testScheduledMonophonicReplacementAtCapacity();
     testPendingInvalidAndPublicationValidation();
     testInterpolationEndpointAndResume();
     testScheduledOffsetsAndExactContiguousEquivalence();
+    testScheduledFractionalCursorReadiness();
     testFutureScheduleAndLoopReadiness();
     testDifferentPagedVoicesAndRepeatedLoopWraps();
     testSparsePagesOnlyRequireActualInterpolationEndpoints();

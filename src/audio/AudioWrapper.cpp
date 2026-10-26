@@ -1,5 +1,6 @@
 #define MINIAUDIO_IMPLEMENTATION
 #include "AudioWrapper.h"
+#include "AudioFrameTiming.h"
 #include <stdexcept>
 #include <SDL3/SDL.h>
 #include "decoder.h"
@@ -443,13 +444,16 @@ AudioClockAnchor readAudioClockAnchor(
 }
 
 long long beginAudioClockBuffer(UserData *userData, ma_uint32 frameCount,
-                                int sampleRate, int playbackRatePercent) {
+                                int sampleRate, int playbackRatePercent,
+                                std::int64_t &outputStartFrame) {
   const auto timelineGeneration = userData->audioClockTimelineGeneration.load(
       std::memory_order_acquire);
   const int64_t startFrame = userData->audioClockFrameCursor->fetch_add(
       frameCount, std::memory_order_acq_rel);
   const long long baseMicros =
       userData->audioClockBaseMicros->load(std::memory_order_acquire);
+  outputStartFrame = audio::frame_timing::difference(
+      audio::frame_timing::at(baseMicros, sampleRate, playbackRatePercent), -startFrame);
   const long long bufferStartMicros =
       addMicrosClamped(baseMicros, framesToChartMicros(startFrame, sampleRate,
                                                        playbackRatePercent));
@@ -517,13 +521,14 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
           : 100;
 
   long long bufferStartMicros = 0;
+  std::int64_t bufferStartFrame = 0;
   const audio::playback::MixScope mixScope =
       clockRunning ? audio::playback::MixScope::AllBuses
                    : audio::playback::MixScope::SystemOnly;
   if (clockRunning) {
     userData->pendingRenderTiming = timing;
     bufferStartMicros = beginAudioClockBuffer(
-        userData, frameCount, sampleRate, playbackRatePercent);
+        userData, frameCount, sampleRate, playbackRatePercent, bufferStartFrame);
     userData->pendingRenderTiming = {};
   }
 
@@ -538,9 +543,9 @@ void mixAudio(void *pOutput, ma_uint32 frameCount, int outputChannels,
     const ma_uint32 chunkFrames = std::min(scratchFrames, frameCount - offset);
     if (clockRunning) {
       audio::playback::ActivateScheduledSounds(state, bufferStartMicros,
-          sampleRate, chunkFrames, playbackRatePercent, offset);
+          sampleRate, chunkFrames, playbackRatePercent, offset, bufferStartFrame);
     }
-    if (state.playingSoundCount == 0) {
+    if (state.playingSoundCount == 0 && !state.scheduledMixPending) {
       fillSilence(static_cast<ma_int16 *>(pOutput) +
                       static_cast<size_t>(offset) * outputChannels,
                   chunkFrames, outputChannels);
@@ -980,9 +985,29 @@ std::shared_ptr<audio::DecodedAssetCache> AudioWrapper::decodedAssetCacheSnapsho
 
 bool AudioWrapper::loadPreparedSound(
     const path_t &path, const audio::DecodedAssetCache::DecodedSound &sound,
-    std::atomic<bool> &isCancelled) {
+    std::atomic<bool> &isCancelled, bool monophonic) {
   return loadDecodedSound(path, sound.pcm, sound.info.channels,
-                           sound.info.samplerate, isCancelled, &sound);
+                           sound.info.samplerate, isCancelled, &sound, monophonic);
+}
+
+bool AudioWrapper::loadSoundGroup(const path_t &path, const std::vector<path_t> &layers,
+                                   std::atomic<bool> &isCancelled) {
+  std::lock_guard lock(soundDataListMutex);
+  if (isCancelled) return false;
+  if (soundDataIndexMap.contains(path)) return true;
+  auto group = std::make_shared<SoundData>();
+  for (const auto &key : layers) {
+    const auto found = soundDataIndexMap.find(key);
+    if (found == soundDataIndexMap.end()) continue;
+    const auto &sound = soundDataList[found->second];
+    if (!sound->layers.empty()) return false;
+    group->layers.push_back(sound);
+    group->outputFrameCount = std::max(group->outputFrameCount, sound->outputFrameCount);
+  }
+  if (group->layers.empty()) return false;
+  soundDataIndexMap[path] = soundDataList.size();
+  soundDataList.push_back(std::move(group));
+  return true;
 }
 
 bool AudioWrapper::loadSound(const path_t &path,
@@ -1059,7 +1084,7 @@ bool AudioWrapper::loadDecodedSound(const path_t &path,
                                     audio::SharedPcmBuffer pcmData, int channels,
                                     int sampleRate,
                                     std::atomic<bool> &isCancelled,
-                                    const audio::DecodedAssetCache::DecodedSound *prepared) {
+                                    const audio::DecodedAssetCache::DecodedSound *prepared, bool monophonic) {
   if (isCancelled) {
     return false;
   }
@@ -1072,6 +1097,7 @@ bool AudioWrapper::loadDecodedSound(const path_t &path,
   auto soundData = std::make_shared<SoundData>();
 
   soundData->currentFrame = 0;
+  soundData->monophonic = monophonic;
   soundData->channels = channels;
   soundData->sourceSampleRate = sampleRate;
   soundData->playing = false;
@@ -1154,7 +1180,8 @@ bool AudioWrapper::playSound(const path_t &path, audio::Bus bus,
 }
 
 bool AudioWrapper::playSound(const path_t &path, audio::Bus bus,
-                             long long startOffsetMicros, float gain) {
+                             long long startOffsetMicros, float gain, std::uint64_t voiceId,
+                             std::optional<audio::VoiceRestorePosition> restore) {
   std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
   std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
 
@@ -1171,13 +1198,20 @@ bool AudioWrapper::playSound(const path_t &path, audio::Bus bus,
                  path_t_to_utf8(path).c_str(), started.diagnostic.c_str());
     return false;
   }
-  const long long clampedOffsetMicros = std::max(0LL, startOffsetMicros);
-  const size_t startFrame = static_cast<size_t>(
-      std::min<long long>(static_cast<long long>(soundData->outputFrameCount),
-                          clampedOffsetMicros *
-                              static_cast<long long>(currentSampleRate.load(
-                                  std::memory_order_acquire)) /
-                              1000000LL));
+  const int sampleRate = currentSampleRate.load(std::memory_order_acquire);
+  const int speed = playbackRatePercent.load(std::memory_order_acquire);
+  std::uint64_t position = 0;
+  if (restore) {
+    position = audio::frame_timing::restoredPosition(
+        restore->triggerMicros, restore->originMicros, sampleRate, speed);
+  } else {
+    const auto frames = std::min<std::uint64_t>(soundData->outputFrameCount,
+        static_cast<std::uint64_t>(std::max(0LL, startOffsetMicros)) / 1000000 * sampleRate +
+        static_cast<std::uint64_t>(std::max(0LL, startOffsetMicros)) % 1000000 * sampleRate / 1000000);
+    position = audio::frame_timing::positionAfter(frames, 100);
+  }
+  const auto startFrame = static_cast<std::size_t>(position >> 32);
+  const auto startFractionQ32 = static_cast<std::uint32_t>(position);
   if (startFrame >= soundData->outputFrameCount) {
     return false;
   }
@@ -1189,13 +1223,22 @@ bool AudioWrapper::playSound(const path_t &path, audio::Bus bus,
                                           .soundData = soundData.get(),
                                           .bus = bus,
                                           .startFrame = startFrame,
-                                          .gain = gain})) {
+                                          .startFractionQ32 = startFractionQ32,
+                                          .gain = gain,
+                                          .voiceId = voiceId})) {
       SDL_Log("Audio command queue full; dropping %s",
               path_t_to_utf8(path).c_str());
       return false;
     }
   }
   return true;
+}
+
+bool AudioWrapper::setKeysoundVoiceGain(std::uint64_t voiceId, float gain) {
+  std::lock_guard<std::mutex> commandLock(audioCommandMutex);
+  return audio::playback::EnqueueCommand(callbackState,
+      {.type = AudioCommandType::SetVoiceGain, .bus = audio::Bus::Keysound,
+       .gain = gain, .voiceId = voiceId});
 }
 
 void AudioWrapper::cleanupRetiredSkinSoundsLocked() noexcept {
@@ -1606,6 +1649,19 @@ AudioWrapper::getSoundDurationMicros(const path_t &path) const {
       static_cast<double>(sampleRate));
 }
 
+bool AudioWrapper::canRestoreSound(const path_t &path, audio::VoiceRestorePosition restore) const {
+  std::lock_guard<std::mutex> lock(soundDataListMutex);
+  const auto found = soundDataIndexMap.find(path);
+  if (found == soundDataIndexMap.end()) return false;
+  const auto &sound = soundDataList[found->second];
+  if (!sound) return false;
+  const auto position = audio::frame_timing::restoredPosition(
+      restore.triggerMicros, restore.originMicros,
+      currentSampleRate.load(std::memory_order_acquire),
+      playbackRatePercent.load(std::memory_order_acquire));
+  return (position >> 32) < sound->outputFrameCount;
+}
+
 bool AudioWrapper::scheduleSound(const path_t &path, audio::Bus bus,
                                  long long startMicros) {
   std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
@@ -1679,7 +1735,8 @@ AudioWrapper::tryReserveRealtimeSoundCommand() const noexcept {
 
 bool AudioWrapper::commitRealtimeKeysound(
     RealtimeAudioCommandReservation reservation,
-    const audio::RealtimeSoundHandle &handle, size_t startFrame) noexcept {
+    const audio::RealtimeSoundHandle &handle, size_t startFrame,
+    std::uint64_t voiceId) noexcept {
   const bool committed =
       backendState.load(std::memory_order_acquire) ==
           audio::playback::BackendRunState::Running &&
@@ -1689,7 +1746,20 @@ bool AudioWrapper::commitRealtimeKeysound(
           {.type = AudioCommandType::PlayNow,
            .soundData = handle.soundData_.get(),
            .bus = audio::Bus::Keysound,
-           .startFrame = startFrame});
+           .startFrame = startFrame,
+           .voiceId = voiceId});
+  releaseRealtimeSoundReservation();
+  return committed;
+}
+
+bool AudioWrapper::commitRealtimeVoiceGain(
+    RealtimeAudioCommandReservation reservation, std::uint64_t voiceId,
+    float gain) noexcept {
+  const bool committed = backendState.load(std::memory_order_acquire) ==
+      audio::playback::BackendRunState::Running &&
+      audio::playback::CommitRealtimeCommand(callbackState, reservation,
+          {.type = AudioCommandType::SetVoiceGain, .bus = audio::Bus::Keysound,
+           .gain = gain, .voiceId = voiceId});
   releaseRealtimeSoundReservation();
   return committed;
 }
@@ -1722,7 +1792,8 @@ void AudioWrapper::releaseRealtimeSoundReservation() const noexcept {
 }
 
 bool AudioWrapper::stageScheduledSound(const path_t &path, audio::Bus bus,
-                                       long long startMicros) {
+                                       long long startMicros, std::uint64_t voiceId,
+                                       bool setVoiceGain, float gain) {
   std::lock_guard<std::mutex> lifecycleLock(deviceLifecycleMutex);
   std::lock_guard<std::mutex> soundDataLock(soundDataListMutex);
 
@@ -1767,7 +1838,10 @@ bool AudioWrapper::stageScheduledSound(const path_t &path, audio::Bus bus,
             callbackState, {.soundData = soundData.get(),
                             .bus = bus,
                             .startMicros = startMicros,
-                            .sequence = sequence})) {
+                            .sequence = sequence,
+                            .gain = gain,
+                            .voiceId = voiceId,
+                            .setVoiceGain = setVoiceGain})) {
       SDL_Log("Audio scheduling capacity exhausted; dropping scheduled %s",
               path_t_to_utf8(path).c_str());
       return false;

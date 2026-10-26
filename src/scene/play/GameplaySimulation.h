@@ -162,6 +162,10 @@ struct GameplayReplayEvent {
   int combo = 0;
   int score = 0;
 
+  bool releaseByBackspin = false;
+  bool releaseByHolding = false;
+  std::optional<bool> audioLanePressed;
+
   bool operator==(const GameplayReplayEvent &) const = default;
 };
 
@@ -178,6 +182,8 @@ struct LaneVisualEvent {
 struct GameplayInputResult {
   NoteId noteId = kInvalidNoteId;
   NoteId soundNoteId = kInvalidNoteId;
+  NoteId gainNoteId = kInvalidNoteId;
+  float keysoundGain = 1.0F;
   bool hasJudge = false;
   JudgeResult judge = JudgeResult(None, 0);
   bool hasReplayEvent = false;
@@ -288,13 +294,23 @@ private:
     std::int64_t pendingReleaseDeadline = 0;
     JudgeResult pendingReleaseJudge = JudgeResult(None, 0);
     NoteId passingHellChargeHeadId = kInvalidNoteId;
+    std::vector<NoteId> hellChargeHeads;
     std::int64_t hellChargeBalanceMicros = 0;
     std::size_t missCursor = 0;
     std::optional<std::int64_t> suppressedBackspinPressMicros;
     std::array<bool, 2> scratchKeysPressed{};
+    bool scratchKeysKnown = false;
     int scratchProcessingKey = -1;
   };
 
+  [[nodiscard]] NoteId passingHellChargeHead(int lane, std::int64_t time) const;
+  void trackHeadVoice(NoteId id);
+  void setHeadVoiceGain(GameplayInputResult &result, NoteId headId, bool muted);
+  void updateHellChargeVoice(GameplayInputResult &result, int lane,
+                             std::int64_t time, bool pressed);
+  [[nodiscard]] bool lanePressedForAudio(int lane, bool fallback) const noexcept;
+  std::vector<bool> mutedHeadVoices_;
+  std::vector<bool> triggeredHeadVoices_;
   [[nodiscard]] LaneRuntimeState *findLane(int lane) noexcept;
   [[nodiscard]] const LaneRuntimeState *findLane(int lane) const noexcept;
   [[nodiscard]] std::int64_t

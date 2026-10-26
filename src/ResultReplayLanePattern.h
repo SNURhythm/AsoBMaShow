@@ -16,6 +16,11 @@ inline std::optional<std::vector<int>> resultReplayLanePattern(
                        *optionIndex != 8)) {
     return std::nullopt;
   }
+  const auto layout = replay::replayKeyModeLayout(meta.KeyMode);
+  if (!layout || player < 0 || player >= layout->players) return std::nullopt;
+  // Pop'n 5K shares the 9K replay identity. Keep seed reproduction instead
+  // of exporting a five-entry pattern into the nine-entry stock namespace.
+  if (meta.IsPopnFiveKey()) return std::nullopt;
   const auto laneOrder = play_options::laneOrderForPlayOption(
       meta, option, seed, player);
   if (!laneOrder) return std::nullopt;
@@ -25,46 +30,35 @@ inline std::optional<std::vector<int>> resultReplayLanePattern(
   for (std::size_t index = 0; index < destinations.size(); ++index) {
     sourceByDestination.emplace(destinations[index], (*laneOrder)[index]);
   }
-  const int keyCount = meta.KeyMode == 10 ? 5
-                       : meta.KeyMode == 14 ? 7
-                                            : meta.KeyMode;
   const auto keys = meta.GetKeyLaneIndices();
   const auto scratches = meta.GetScratchLaneIndices();
-  const std::size_t keyOffset = player == 0 ? 0 : static_cast<std::size_t>(keyCount);
-  if (keyCount <= 0 ||
-      keyOffset + static_cast<std::size_t>(keyCount) > keys.size()) {
-    return std::nullopt;
-  }
-  const int playerOffset = player == 1 ? keyCount : 0;
+  const std::size_t keyCount = keys.size() / layout->players;
+  const std::size_t scratchCount = scratches.size() / layout->players;
+  if (keyCount == 0 || keys.size() % layout->players != 0 ||
+      scratches.size() % layout->players != 0) return std::nullopt;
+  const std::size_t keyOffset = player * keyCount;
+  const std::size_t scratchOffset = player * scratchCount;
+  // Result skins use global source ordinals: beat modes retain their legacy
+  // key-count offset, while keyboard decks each occupy all 26 note lanes.
+  const int playerOffset = player == 0 ? 0
+      : meta.KeyMode == 48 ? 26 : static_cast<int>(keyCount);
   std::vector<int> sourceLanes;
-  sourceLanes.reserve(static_cast<std::size_t>(keyCount +
-      (static_cast<std::size_t>(player) < scratches.size() ? 1 : 0)));
-  for (int key = 0; key < keyCount; ++key) {
-    sourceLanes.push_back(keys[keyOffset + static_cast<std::size_t>(key)]);
+  sourceLanes.reserve(keyCount + scratchCount);
+  for (std::size_t key = 0; key < keyCount; ++key) {
+    sourceLanes.push_back(keys[keyOffset + key]);
   }
-  if (static_cast<std::size_t>(player) < scratches.size()) {
-    sourceLanes.push_back(scratches[static_cast<std::size_t>(player)]);
+  for (std::size_t scratch = 0; scratch < scratchCount; ++scratch) {
+    sourceLanes.push_back(scratches[scratchOffset + scratch]);
   }
   std::vector<int> pattern;
   pattern.reserve(sourceLanes.size());
-  const auto appendSourceOrdinal = [&](int sourceLane) {
-    const auto source = std::ranges::find(sourceLanes, sourceLane);
-    if (source == sourceLanes.end()) return false;
+  for (const int destination : sourceLanes) {
+    const auto found = sourceByDestination.find(destination);
+    if (found == sourceByDestination.end()) return std::nullopt;
+    const auto source = std::ranges::find(sourceLanes, found->second);
+    if (source == sourceLanes.end()) return std::nullopt;
     pattern.push_back(static_cast<int>(source - sourceLanes.begin()) +
                       playerOffset);
-    return true;
-  };
-  for (int key = 0; key < keyCount; ++key) {
-    const auto found = sourceByDestination.find(
-        keys[keyOffset + static_cast<std::size_t>(key)]);
-    if (found == sourceByDestination.end()) return std::nullopt;
-    if (!appendSourceOrdinal(found->second)) return std::nullopt;
-  }
-  if (static_cast<std::size_t>(player) < scratches.size()) {
-    const auto scratch = sourceByDestination.find(
-        scratches[static_cast<std::size_t>(player)]);
-    if (scratch == sourceByDestination.end()) return std::nullopt;
-    if (!appendSourceOrdinal(scratch->second)) return std::nullopt;
   }
   return pattern;
 }

@@ -1,3 +1,4 @@
+#include "BmsonAudio.h"
 #include "PagedPreviewSource.h"
 
 #include "../ArchiveFile.h"
@@ -10,7 +11,6 @@
 #include "AudioMix.h"
 #include "ArchiveAssetBatchLoader.h"
 #include "ChartAssetExtensions.h"
-#include "ChartAudioRenderer.h"
 #include "DecodedAssetCache.h"
 
 #include <algorithm>
@@ -121,6 +121,9 @@ struct PagedPreviewSource::Impl {
     std::shared_ptr<const DecodedAssetCache::DecodedSound> native;
   };
   std::vector<Asset> assets;
+  std::map<std::size_t, std::vector<bms_parser::WavSlice>> sliceRecipes;
+  std::map<int, std::size_t> sliceSourceAssets;
+  std::map<std::size_t, std::vector<std::size_t>> sourceSlices;
   std::unique_ptr<std::atomic<std::uint64_t>[]> pastDurationFrames;
   std::vector<Event> events;
   std::shared_ptr<DecodedAssetCache> cache;
@@ -192,15 +195,46 @@ struct PagedPreviewSource::Impl {
     return assets[index].firstFutureStart &&
         *assets[index].firstFutureStart < requestedOriginOutput + static_cast<std::uint64_t>(outputRate) * 2;
   }
+  bool hasPastDependency(std::size_t index) const {
+    if (assets[index].latestPastStart) return true;
+    if (const auto found = sourceSlices.find(index); found != sourceSlices.end())
+      return std::any_of(found->second.begin(), found->second.end(),
+                         [&](auto slice) { return hasPastDependency(slice); });
+    return false;
+  }
   bool canDefer(std::size_t index) const {
+    if (const auto found = sourceSlices.find(index); found != sourceSlices.end())
+      return std::all_of(found->second.begin(), found->second.end(),
+                         [&](auto slice) { return canDefer(slice); });
     const auto &asset = assets[index];
     return requestedOriginOutput && (!asset.latestPastStart || excluded(index)) && !openingRequired(index);
   }
   std::uint64_t futurePriority(std::size_t index) const {
+    if (const auto found = sourceSlices.find(index); found != sourceSlices.end()) {
+      auto priority = std::numeric_limits<std::uint64_t>::max();
+      for (const auto slice : found->second) priority = std::min(priority, futurePriority(slice));
+      return priority;
+    }
     return assets[index].firstFutureStart.value_or(std::numeric_limits<std::uint64_t>::max());
   }
   void publishPastDuration(std::size_t index, std::optional<duration_bound::Duration> duration,
                            bool isOgg = false) {
+    if (const auto found = sourceSlices.find(index); found != sourceSlices.end()) {
+      for (const auto slice : found->second) {
+        auto sliceDuration = duration;
+        if (duration) {
+          const auto &recipe = sliceRecipes.at(slice).front();
+          // Match native slicing before rounding up to output frames. A source
+          // bound remains an upper bound after clipping its start and duration.
+          const auto range = bmson::sourceRange(recipe.StartMicros, recipe.DurationMicros,
+                                                duration->sampleRate, duration->frames);
+          sliceDuration->frames = range.count;
+        }
+        // Unknown duration is an onset lookback, not a source length that can
+        // safely be shortened by the slice's offset into that source.
+        publishPastDuration(slice, sliceDuration, isOgg);
+      }
+    }
     if (!assets[index].latestPastStart) return;
     // Unknown Ogg keeps a minute of past onsets; other unknown formats keep
     // 15 seconds. Known long audio is never truncated to either fallback.
@@ -229,7 +263,16 @@ struct PagedPreviewSource::Impl {
       const std::shared_ptr<const DecodedAssetCache::DecodedSound> &native) {
     checkpoint();
     auto &outputSound = *assets[index].sound->pagedOutput;
-    if (!native || (excluded(index) && !assets[index].firstFutureStart)) {
+    if (const auto found = sourceSlices.find(index); found != sourceSlices.end()) {
+      // Flattened slices each have exactly one dependency. Only this source's
+      // loader publishes them, so independent sources need no shared PCM lock.
+      for (const auto slice : found->second) {
+        checkpoint();
+        const auto sliced = bmson::prepare(sliceRecipes.at(slice).front(), native, cancelled);
+        publishDecoded(slice, sliced);
+      }
+      outputSound.publishMetadata(0, 0);
+    } else if (!native || (excluded(index) && !assets[index].firstFutureStart)) {
       // Native PCM remains warm for gameplay; expired preview voices need no
       // output-rate conversion, even when the cache already contains them.
       outputSound.publishMetadata(0, 0);
@@ -279,23 +322,28 @@ struct PagedPreviewSource::Impl {
     // Keep the original order for a preview starting at the beginning.
     std::vector<std::size_t> ordered;
     std::vector<bool> seen(assets.size());
+    const auto enqueue = [&](std::size_t index) {
+      if (const auto recipe = sliceRecipes.find(index); recipe != sliceRecipes.end()) {
+        const auto source = sliceSourceAssets.find(recipe->second.front().SourceWav);
+        if (source == sliceSourceAssets.end()) return;
+        index = source->second;
+      }
+      if (!seen[index]) { seen[index] = true; ordered.push_back(index); }
+    };
+    // Queue dependencies at their first needed slice, not in WAV-table order.
+    // Missing dependencies must still publish an empty slice to unblock startup.
+    for (const auto &[index, recipe] : sliceRecipes)
+      if (!sliceSourceAssets.contains(recipe.front().SourceWav)) publishDecoded(index, {});
     if (requestedOriginOutput) {
       const auto openingEnd = requestedOriginOutput + static_cast<std::uint64_t>(outputRate) * 2;
       for (const auto &event : events)
-        if (event.outputStart >= requestedOriginOutput && event.outputStart < openingEnd && !seen[event.asset]) {
-          seen[event.asset] = true;
-          ordered.push_back(event.asset);
-        }
+        if (event.outputStart >= requestedOriginOutput && event.outputStart < openingEnd)
+          enqueue(event.asset);
       for (const auto &event : events)
-        if (event.outputStart < requestedOriginOutput && !seen[event.asset]) {
-          seen[event.asset] = true;
-          ordered.push_back(event.asset);
-        }
+        if (event.outputStart < requestedOriginOutput) enqueue(event.asset);
     }
-    for (const auto &event : events)
-      if (!seen[event.asset]) { seen[event.asset] = true; ordered.push_back(event.asset); }
-    for (std::size_t index = 0; index < assets.size(); ++index)
-      if (!seen[index]) ordered.push_back(index);
+    for (const auto &event : events) enqueue(event.asset);
+    for (std::size_t index = 0; index < assets.size(); ++index) enqueue(index);
     static const std::vector<std::string_view> extensions(
         asobmshow::chart_assets::kAudioExtensions.begin(),
         asobmshow::chart_assets::kAudioExtensions.end());
@@ -329,7 +377,7 @@ struct PagedPreviewSource::Impl {
         workers.run(end - first, [&](std::size_t item) {
           const auto index = ordered[first + item];
           std::shared_ptr<const DecodedAssetCache::DecodedSound> ready;
-          if (assets[index].latestPastStart) {
+          if (hasPastDependency(index)) {
             ready = cache->Find(assets[index].path);
             if (ready) {
               publishCachedDuration(index, ready);
@@ -402,7 +450,7 @@ struct PagedPreviewSource::Impl {
           std::vector<std::filesystem::path> pastPaths;
           for (const auto &path : paths)
             if (std::any_of(indices.at(path).begin(), indices.at(path).end(),
-                    [&](auto index) { return assets[index].latestPastStart.has_value(); }))
+                    [&](auto index) { return hasPastDependency(index); }))
               pastPaths.push_back(path);
           zipProbed = archive_file::probeZipEntries(archive, pastPaths,
                   [&](const auto &path, auto size, const auto &readAt) {
@@ -428,7 +476,7 @@ struct PagedPreviewSource::Impl {
               checkpoint();
               const auto &aliases = indices.at(file.path);
               const bool hasPast = std::any_of(aliases.begin(), aliases.end(),
-                  [&](auto index) { return assets[index].latestPastStart.has_value(); });
+                  [&](auto index) { return hasPastDependency(index); });
               bool isOgg = false;
               const auto duration = hasPast && !probed.contains(file.path) ? duration_bound::InspectAudio(file.bytes, &isOgg)
                                            : std::optional<duration_bound::Duration>{};
@@ -694,7 +742,9 @@ std::shared_ptr<PagedPreviewSource> PagedPreviewSource::Create(
       chart_playback_duration::ChartTimelineEndMicros(chart), kPreviewSampleRate, true);
   value->state.durationFrames44100 = value->timelineFrames44100;
   std::map<std::filesystem::path, std::size_t> assetsByPath;
-  std::map<int, std::size_t> assetsByWav;
+  std::map<int, std::vector<std::size_t>> assetsByWav;
+  std::map<int, std::size_t> assetsBySlice;
+  std::map<std::pair<long long, std::size_t>, std::size_t> sliceEvents;
   auto snapshotAsset = [&](const std::string &name) {
     auto path = chart.Meta.Folder / utf8_to_path_t(name);
     // Native symlink/.. traversal must reach the resource resolver intact.
@@ -706,22 +756,74 @@ std::shared_ptr<PagedPreviewSource> PagedPreviewSource::Create(
   // Definitions alone do not require decoding. Preserve non-audible gameplay
   // references (including hidden notes), as well as every scheduled event.
   for (const auto &[wav, name] : chart.ReferencedWavTable) {
-    (void)wav;
-    snapshotAsset(name);
+    const auto index = snapshotAsset(name);
+    if (!chart.WavSlices.empty()) value->sliceSourceAssets[wav] = index;
   }
-  const auto background = chart_audio::CollectBackgroundAudioEvents(chart);
-  auto bgm = background.begin();
-  for (const auto &event : chart_audio::CollectChartTimedAudioEvents(chart)) {
-    const bool isBackground = bgm != background.end() &&
-        bgm->timeMicros == event.timeMicros && bgm->wav == event.wav;
-    if (isBackground) ++bgm;
+  struct ChartEvent { long long timeMicros; int wav; Bus bus; };
+  std::vector<ChartEvent> chartEvents;
+  // Retain the source bus explicitly: a playable note and BGM can have the
+  // same WAV/time, so matching against a separate BGM list is ambiguous.
+  for (const auto *measure : chart.Measures) {
+    if (!measure) continue;
+    for (const auto *timeline : measure->TimeLines) {
+      if (!timeline) continue;
+      for (const auto *note : timeline->Notes)
+        if (note && note->Wav != bms_parser::Parser::NoWav)
+          chartEvents.push_back({timeline->Timing, note->Wav, Bus::Keysound});
+      for (const auto *note : timeline->BackgroundNotes)
+        if (note && note->Wav != bms_parser::Parser::NoWav)
+          chartEvents.push_back({timeline->Timing, note->Wav, Bus::Bgm});
+    }
+  }
+  std::stable_sort(chartEvents.begin(), chartEvents.end(), [](const auto &a, const auto &b) {
+    return a.timeMicros < b.timeMicros;
+  });
+  for (const auto &event : chartEvents) {
     auto asset = assetsByWav.find(event.wav);
     if (asset == assetsByWav.end()) {
-      const auto defined = chart.WavTable.find(event.wav);
-      if (defined == chart.WavTable.end()) continue;
-      asset = assetsByWav.emplace(event.wav, snapshotAsset(defined->second)).first;
+      const auto recipe = chart.WavSlices.find(event.wav);
+      std::vector<std::size_t> indices;
+      if (recipe != chart.WavSlices.end()) {
+        for (const auto &slice : recipe->second) {
+          const auto known = assetsBySlice.find(slice.SliceId);
+          if (slice.SliceId >= 0 && known != assetsBySlice.end()) {
+            indices.push_back(known->second);
+            continue;
+          }
+          const auto source = value->sliceSourceAssets.find(slice.SourceWav);
+          if (source == value->sliceSourceAssets.end()) {
+            if (const auto defined = chart.WavTable.find(slice.SourceWav); defined != chart.WavTable.end())
+              value->sliceSourceAssets.emplace(slice.SourceWav, snapshotAsset(defined->second));
+          }
+          const auto index = value->assets.size();
+          value->assets.push_back({.path = {}, .sound = {}});
+          value->sliceRecipes[index] = {slice};
+          if (slice.SliceId >= 0) assetsBySlice.emplace(slice.SliceId, index);
+          if (const auto dependency = value->sliceSourceAssets.find(slice.SourceWav);
+              dependency != value->sliceSourceAssets.end())
+            value->sourceSlices[dependency->second].push_back(index);
+          indices.push_back(index);
+        }
+      } else {
+        const auto defined = chart.WavTable.find(event.wav);
+        if (defined == chart.WavTable.end()) continue;
+        indices.push_back(snapshotAsset(defined->second));
+      }
+      asset = assetsByWav.emplace(event.wav, std::move(indices)).first;
     }
-    value->events.push_back({event.timeMicros, asset->second, isBackground ? Bus::Bgm : Bus::Keysound});
+    for (const auto index : asset->second) {
+      if (value->sliceRecipes.contains(index)) {
+        const auto [previous, added] = sliceEvents.emplace(
+            std::make_pair(event.timeMicros, index), value->events.size());
+        if (!added) {
+          // A simultaneous monophonic retrigger replaces the voice's bus.
+          // Keep one scheduled slice, but retain the last trigger's ownership.
+          value->events[previous->second].bus = event.bus;
+          continue;
+        }
+      }
+      value->events.push_back({event.timeMicros, index, event.bus});
+    }
   }
   return std::shared_ptr<PagedPreviewSource>(new PagedPreviewSource(std::move(value)));
 }
@@ -742,8 +844,10 @@ bool PagedPreviewSource::Begin(int actualOutputRate, bool skipLeadingSilence) {
     impl->callback = std::make_unique<AudioCallbackState>();
     if (!playback::PrepareScheduledSoundCapacity(*impl->callback, impl->events.size()))
       throw std::runtime_error("Could not allocate preview schedule.");
-    for (auto &asset : impl->assets) {
+    for (std::size_t index = 0; index < impl->assets.size(); ++index) {
+      auto &asset = impl->assets[index];
       asset.sound = std::make_unique<SoundData>();
+      asset.sound->monophonic = impl->sliceRecipes.contains(index);
       asset.sound->pagedOutput = std::make_shared<PagedPcmSound>();
     }
     impl->pastDurationFrames = std::make_unique<std::atomic<std::uint64_t>[]>(impl->assets.size());

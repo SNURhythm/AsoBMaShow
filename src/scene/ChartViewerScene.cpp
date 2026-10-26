@@ -2,6 +2,7 @@
 #include "../ChartTiming.h"
 #include "../i18n/Localization.h"
 #include "ChartViewerScene.h"
+#include "play/StartLaneIndicatorGeometry.h"
 #include "ChartViewerNoteGeometry.h"
 #include "ChartListenStart.h"
 #include "ChartSourceDocument.h"
@@ -300,12 +301,8 @@ storedPlayOption(const std::optional<std::string> &option) {
 }
 
 bool usesBlueSymmetricKeyColor(size_t keyPosition, size_t keyLaneCount) {
-  if (keyLaneCount == 0 || keyPosition >= keyLaneCount) {
-    return false;
-  }
-  const size_t mirroredPosition =
-      std::min(keyPosition, keyLaneCount - keyPosition - 1);
-  return (mirroredPosition & 1U) != 0;
+  return start_lane_indicator::colorRoleForKey(keyPosition, keyLaneCount) ==
+         start_lane_indicator::ColorRole::Blue;
 }
 
 bool isLaneOrderSummaryOption(const std::optional<std::string> &option) {

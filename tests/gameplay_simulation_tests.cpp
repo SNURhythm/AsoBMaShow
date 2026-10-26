@@ -14,6 +14,8 @@
 #include "scene/play/RhythmLaneInputController.h"
 
 #include "bms_parser.hpp"
+#include "BmsonReleaseFixture.h"
+#include "audio/AudioMix.h"
 
 #include <algorithm>
 #include <array>
@@ -1418,7 +1420,7 @@ void testReferenceInputPrecedesAutomaticMisses() {
           "reference processes the press before the other lane's overdue POOR");
 }
 
-void testClassicReleaseCommitsOneJudgeAndNoSound() {
+void testClassicReleaseCommitsOneJudgeAndTailSound() {
   bms_parser::Chart chart;
   auto *measure = new bms_parser::Measure();
   addLongNote(*measure, 1'000'000, 1'500'000, 1,
@@ -1437,8 +1439,8 @@ void testClassicReleaseCommitsOneJudgeAndNoSound() {
 
   require(release.noteId == definition.note(press.noteId).pairId,
           "release resolves the held long-note tail");
-  require(release.soundNoteId == gameplay::kInvalidNoteId,
-          "release does not create an input-triggered keysound");
+  require(release.soundNoteId == release.noteId,
+          "release creates an input-triggered tail keysound");
   require(release.hasJudge && release.judge.judgement == PGreat,
           "classic release commits its combined judgement");
   require(!simulation.noteState(press.noteId).holding &&
@@ -1448,6 +1450,311 @@ void testClassicReleaseCommitsOneJudgeAndNoSound() {
               release.replayEvent.action ==
                   gameplay::GameplayReplayAction::Release,
           "release commits lane and replay state together");
+}
+
+void testLegacyAdjacentHcnAudio() {
+  for (const auto ruleset : {GameplayRuleset::LR2, GameplayRuleset::Beatoraja})
+    for (bool scratch : {false, true}) for (bool nextHcn : {false, true})
+    for (bool preHeadRetrigger : {false, true}) {
+      auto chart = bmsonAdjacentHcnFixture(nextHcn, scratch);
+      std::unordered_map<int, bool> lanes;
+      RhythmLaneInputController controller(chart.get(), nullptr, lanes,
+          gameplay::CompiledGameplayJudge::from(gameplay::compileGameplayJudgeRules(ruleset, 2)));
+      AudioCallbackState state;
+      std::array<SoundData, 3> sounds;
+      for (std::size_t i = 0; i < sounds.size(); ++i) {
+        sounds[i].channels = 1;
+        sounds[i].monophonic = true;
+        sounds[i].outputData = std::vector<short>(4000, i == 0 ? 1000 : i == 1 ? 200 : 50);
+        sounds[i].outputFrameCount = 4000;
+      }
+      const auto apply = [&](std::span<const RhythmLaneInputController::Result> transactions) {
+        for (const auto &transaction : transactions) {
+          if (const auto *note = transaction.keySoundNote; note && note->Wav != bms_parser::Parser::NoWav) {
+            const auto time = note->Timeline->Timing;
+            const int index = time == 1'000'000 ? 0 : time == 2'100'000 ? 1 : 2;
+            require(audio::playback::EnqueueCommand(state,
+                {.type = AudioCommandType::PlayNow, .soundData = &sounds[index], .bus = audio::Bus::Keysound,
+                 .voiceId = reinterpret_cast<std::uintptr_t>(note)}), "legacy adjacent sound queues");
+          }
+          if (transaction.gainNote)
+            require(audio::playback::EnqueueCommand(state,
+                {.type = AudioCommandType::SetVoiceGain, .bus = audio::Bus::Keysound,
+                 .gain = transaction.keysoundGain, .voiceId = reinterpret_cast<std::uintptr_t>(transaction.gainNote)}),
+                "legacy adjacent gain queues");
+        }
+      };
+      const auto mix = [&](int frames) {
+        audio::playback::DrainCommands(state);
+        std::vector<float> pcm(frames);
+        audio::playback::MixActiveSounds(state, pcm, frames, 1, 1, 1, 100);
+        return pcm.front() * 32768;
+      };
+      const int lane = scratch ? 7 : 0;
+      if (preHeadRetrigger) {
+        apply(controller.pressLane(lane, {.songTimeMicros = 900'000}).transactions);
+        require(std::abs(mix(20) - 900) < 1, "legacy early head starts");
+        apply(controller.releaseLane(lane, {.songTimeMicros = 920'000}).transactions);
+        apply(controller.advancePendingReleases(920'000));
+        require(std::abs(mix(30)) < 1, "legacy early failed release mutes");
+        apply(controller.pressLane(lane, {.songTimeMicros = 950'000}).transactions);
+        require(std::abs(mix(30) - 900) < 1, "legacy pre-head retrigger starts");
+        apply(controller.releaseLane(lane, {.songTimeMicros = 980'000}).transactions);
+        require(std::abs(mix(30) - 900) < 1, "legacy empty lift before authored head preserves preview");
+        apply(controller.advanceHellChargeVoices(1'010'000));
+        require(std::abs(mix(90)) < 1, "legacy heartbeat mutes failed retrigger on entering authored HCN");
+        continue;
+      }
+      apply(controller.pressLane(lane, {.songTimeMicros = 1'000'000}).transactions);
+      require(std::abs(mix(200) - 900) < 1, "legacy first HCN starts");
+      apply(controller.releaseLane(lane, {.songTimeMicros = 1'200'000}).transactions);
+      apply(controller.advancePendingReleases(1'200'000));
+      require(std::abs(mix(790)) < 1, "legacy failed HCN lift mutes");
+      apply(controller.pressLane(lane, {.songTimeMicros = 1'990'000}).transactions);
+      require(std::abs(mix(5) - 1080) < 1,
+              "legacy judged next note restores prior HCN and starts its independent voice");
+      apply(controller.releaseLane(lane, {.songTimeMicros = 1'995'000}).transactions);
+      apply(controller.advancePendingReleases(1'995'000));
+      require(std::abs(mix(2) - (nextHcn ? 45 : 180)) < 1,
+              "legacy lift preserves both HCN mute commands and the next authored tail");
+    }
+}
+
+void testLegacyLongHeadVoiceControls() {
+  for (int type : {1, 2, 3}) for (bool recover : {false, true}) {
+    auto chart = bmsonReleaseFixture(type, 1, false, 960);
+    auto rules = gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2);
+    rules.normalReleaseMarginMicros = 100'000;
+    std::unordered_map<int, bool> lanes;
+    RhythmLaneInputController controller(chart.get(), nullptr, lanes,
+        gameplay::CompiledGameplayJudge::from(rules));
+    const auto head = controller.pressLane(0, {.songTimeMicros = 1'000'000}).keySoundNote;
+    const auto pending = controller.releaseLane(0, {.songTimeMicros = 1'500'000});
+    require(!pending.hasJudge && pending.gainNote == nullptr && pending.keySoundNote == nullptr,
+            "legacy deferred release leaves head audible and tail silent");
+    if (recover) {
+      const auto rehold = controller.pressLane(0, {.songTimeMicros = 1'550'000});
+      require(rehold.keySoundNote == nullptr && rehold.gainNote == nullptr,
+              "legacy release-margin recovery neither retriggers nor controls the voice");
+    }
+    const auto resolved = controller.advancePendingReleases(1'600'000);
+    require(resolved.size() == (recover ? 0 : 1) &&
+                (recover || (resolved[0].gainNote == head && resolved[0].keysoundGain == 0 &&
+                             resolved[0].keySoundNote != nullptr &&
+                             resolved[0].replayEvent.songTimeMicros == 1'600'000)),
+            "legacy failed release mutes head only at resolution and preserves tail playback");
+    require(controller.advancePendingReleases(1'700'000).empty(), "legacy resolution is not repeated");
+    if (!recover && type == 3) {
+      const auto rehold = controller.pressLane(0, {.songTimeMicros = 2'200'000});
+      require(rehold.keySoundNote == nullptr && rehold.gainNote == head && rehold.keysoundGain == 1,
+              "legacy failed HCN rehold restores original voice without a new sound");
+      const auto release = controller.releaseLane(0, {.songTimeMicros = 2'600'000});
+      require(release.keySoundNote == nullptr && release.gainNote == head && release.keysoundGain == 0,
+              "legacy failed HCN release mutes the original voice again");
+      require(controller.releaseLane(0, {.songTimeMicros = 2'700'000}).gainNote == nullptr,
+              "legacy duplicate release emits no extra control");
+    }
+  }
+}
+
+void testScratchHcnAudioUsesAggregateHeldState() {
+  for (const bool batched : {false, true}) for (const bool triggered : {false, true}) {
+    auto chart = bmsonReleaseFixture(3, 8, false, 960);
+    const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+    const auto judge = gameplay::CompiledGameplayJudge::from(
+        gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2));
+    gameplay::GameplaySimulation simulation(definition, {.judge = judge});
+    std::vector<std::pair<gameplay::NoteId, float>> gains;
+    const auto collectGains = [&](std::span<const gameplay::GameplayInputResult> transactions) {
+      for (const auto &event : transactions)
+        if (event.gainNoteId != gameplay::kInvalidNoteId)
+          gains.emplace_back(event.gainNoteId, event.keysoundGain);
+    };
+    const auto edge = [&](bool pressed, bool clockwise, long long time, bool held) {
+      gains.clear();
+      const gameplay::GameplayInputContext context{.songTimeMicros = time};
+      const gameplay::GameplayLaneInputState physical{7, held};
+      if (batched) collectGains(simulation.beginInputUpdate(std::span(&physical, 1), context).transactions);
+      const auto batch = pressed ? simulation.pressScratchKey(7, clockwise, context)
+                                 : simulation.releaseScratchKey(7, clockwise, context);
+      const gameplay::GameplayInputResult result = batch;
+      collectGains(batch.transactions);
+      if (batched) collectGains(simulation.finishInputUpdate(context).transactions);
+      return result;
+    };
+    if (!triggered) {
+      const auto missed = simulation.advanceTo(1'300'000, 1'300'000);
+      require(std::ranges::none_of(missed.transactions, [](const auto &event) {
+                return event.gainNoteId != gameplay::kInvalidNoteId;
+              }), "an untriggered missed scratch HCN has no voice to control");
+    }
+    const auto head = edge(true, true, triggered ? 1'000'000 : 1'350'000, true);
+    const auto reverse = edge(true, false, triggered ? 1'300'000 : 1'375'000, true);
+    require(triggered ? head.judge.judgement == PGreat && reverse.judge.judgement == Poor
+                      : head.soundNoteId == gameplay::kInvalidNoteId && !reverse.hasJudge,
+            "scratch audio preserves accepted-head/failed-reversal and missed-head judgements");
+    const auto partial = edge(false, true, 1'400'000, true);
+    require(simulation.lanePressed(7) && gains.empty(),
+            "releasing one scratch direction keeps HCN audio while the other is held");
+    const auto released = edge(false, false, 1'500'000, false);
+    require(!simulation.lanePressed(7) &&
+                (triggered ? gains == std::vector<std::pair<gameplay::NoteId, float>>{{head.noteId, 0}}
+                           : gains.empty()),
+            "only the final scratch lift mutes an existing HCN voice");
+    require(partial.replayEvent.audioLanePressed == true &&
+                released.replayEvent.audioLanePressed == false,
+            "runtime replay retains aggregate scratch state instead of inferring it from Release");
+  }
+  // Legacy adapters coalesce physical keys: releasing the inactive direction
+  // emits no lane edge, and a handoff to the remaining key emits a backspin.
+  auto chart = bmsonReleaseFixture(3, 8, false, 960);
+  std::unordered_map<int, bool> lanes;
+  RhythmLaneInputController controller(chart.get(), nullptr, lanes,
+      gameplay::CompiledGameplayJudge::from(
+          gameplay::compileGameplayJudgeRules(GameplayRuleset::LR2, 2)));
+  const auto head = controller.pressLane(7, {.songTimeMicros = 1'000'000}).keySoundNote;
+  const auto reverse = controller.releaseLane(7, {.songTimeMicros = 1'300'000}, true);
+  require(reverse.judge.judgement == Poor && reverse.gainNote == nullptr,
+          "legacy failed scratch reversal leaves the held HCN head audible");
+  controller.pressLane(7, {.songTimeMicros = 1'300'000});
+  const auto handoff = controller.releaseLane(7, {.songTimeMicros = 1'400'000}, true);
+  const auto continuation = controller.pressLane(7, {.songTimeMicros = 1'400'000});
+  require(handoff.gainNote == nullptr && continuation.gainNote == nullptr &&
+              handoff.keySoundNote == nullptr && continuation.keySoundNote == nullptr,
+          "legacy aggregate scratch handoff neither mutes nor restarts the head");
+  const auto released = controller.releaseLane(7, {.songTimeMicros = 1'500'000});
+  require(released.gainNote == head && released.keysoundGain == 0,
+          "legacy final aggregate lift mutes the existing HCN head");
+}
+
+void testLateFailedReleaseHeadVoiceControls() {
+  for (const int type : {2, 3}) {
+    auto chart = bmsonReleaseFixture(type, 1, false, 960);
+    const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+    const auto judge = gameplay::CompiledGameplayJudge::from(
+        gameplay::compileGameplayJudgeRules(GameplayRuleset::Beatoraja, 2));
+    gameplay::GameplaySimulation simulation(definition, {.judge = judge});
+    const auto head = simulation.pressLane(0, {.songTimeMicros = 1'000'000}).noteId;
+    simulation.advanceTo(3'180'000, 3'180'000);
+    const auto release = simulation.releaseLane(0, {.songTimeMicros = 3'180'000});
+    require(release.hasJudge && release.judge.judgement == Bad &&
+                release.judge.Diff == 180'000 && release.gainNoteId == head &&
+                release.keysoundGain == 0.0F,
+            "late BAD CN/HCN release mutes the head in canonical simulation");
+
+    std::unordered_map<int, bool> lanes;
+    RhythmLaneInputController controller(chart.get(), nullptr, lanes, judge);
+    const auto legacyHead = controller.pressLane(0, {.songTimeMicros = 1'000'000}).keySoundNote;
+    const auto legacyRelease = controller.releaseLane(0, {.songTimeMicros = 3'180'000});
+    require(legacyRelease.hasJudge && legacyRelease.judge.judgement == Bad &&
+                legacyRelease.gainNote == legacyHead && legacyRelease.keysoundGain == 0.0F,
+            "legacy late BAD CN/HCN release mutes the same head");
+  }
+}
+
+void testBmsonAuthoredReleaseSound() {
+  for (int type : {1, 2, 3}) for (long long time : {2'000'000LL, 1'500'000LL}) {
+    auto chart = bmsonReleaseFixture(type);
+    const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+    require(definition.note(0).wav != definition.note(1).wav &&
+                chart->WavTable.at(chart->WavSlices.at(definition.note(1).wav)[0].SourceWav) == "tail.wav",
+            "parsed bmson retains distinct head and authored release sound");
+    const auto judge = gameplay::CompiledGameplayJudge::from(Judge(1));
+    gameplay::GameplaySimulation simulation(definition, {.judge = judge});
+    simulation.pressLane(0, {.songTimeMicros = 1'000'000});
+    const auto release = simulation.releaseLane(0, {.songTimeMicros = time});
+    require(release.hasJudge && release.soundNoteId == 1 &&
+                release.replayEvent.noteTimeMicros == 2'000'000 &&
+                release.replayEvent.noteId == 1,
+            "resolved classic/CN/HCN release sounds its tail even for early BAD/POOR; replay identifies tail");
+    require(simulation.releaseLane(0, {.songTimeMicros = time + 1}).soundNoteId ==
+                gameplay::kInvalidNoteId,
+            "repeated release cannot duplicate the tail sound");
+    std::unordered_map<int, bool> lanes;
+    RhythmLaneInputController controller(chart.get(), nullptr, lanes, judge);
+    controller.pressLane(0, {.songTimeMicros = 1'000'000});
+    const auto legacy = controller.releaseLane(0, {.songTimeMicros = time});
+    require(legacy.hasJudge && legacy.keySoundNote != nullptr &&
+                legacy.keySoundNote->Wav == definition.note(1).wav &&
+                legacy.replayEvent.note == legacy.keySoundNote,
+            "legacy resolved release carries the authored tail sound and identity");
+  }
+  auto chart = bmsonReleaseFixture(1);
+  const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+  auto rules = gameplay::compileGameplayJudgeRules(GameplayRuleset::Beatoraja, 3);
+  rules.normalReleaseMarginMicros = 200'000;
+  for (bool recover : {false, true}) {
+    gameplay::GameplaySimulation simulation(definition, {
+        .judge = gameplay::CompiledGameplayJudge::from(rules)});
+    simulation.pressLane(0, {.songTimeMicros = 1'000'000});
+    const auto pending = simulation.releaseLane(0, {.songTimeMicros = 1'500'000});
+    require(!pending.hasJudge && pending.soundNoteId == gameplay::kInvalidNoteId &&
+                pending.replayEvent.judgement == None,
+            "deferred release does not play before its deadline");
+    if (recover) simulation.pressLane(0, {.songTimeMicros = 1'600'000});
+    const auto deadline = simulation.advanceTo(1'700'000, 1'700'000);
+    require(deadline.transactions.size() == (recover ? 0 : 1) &&
+                (recover || deadline.transactions[0].soundNoteId == 1),
+            "deferred failure sounds once at resolution; recovery cancels it");
+    const auto completion = simulation.advanceTo(2'000'001, 2'000'001);
+    require(std::ranges::count_if(completion.transactions, [](const auto &event) {
+              return event.soundNoteId == 1;
+            }) == (recover ? 1 : 0),
+            "held classic completion sounds once without repeating an earlier failure");
+  }
+  auto scratch = bmsonReleaseFixture(2, 8);
+  const auto scratchDefinition = gameplay::buildGameplayDefinition(*scratch, 0);
+  gameplay::GameplaySimulation simulation(scratchDefinition, {
+      .judge = gameplay::CompiledGameplayJudge::from(Judge(1))});
+  simulation.pressLane(7, {.songTimeMicros = 1'000'000});
+  const auto rejected = simulation.releaseLane(7, {.songTimeMicros = 2'000'000});
+  require(!rejected.hasJudge && rejected.soundNoteId == gameplay::kInvalidNoteId,
+          "rejected scratch lift does not prematurely play the tail");
+  const auto backspin = simulation.releaseLane(7, {.songTimeMicros = 2'000'000}, true);
+  require(backspin.hasJudge && backspin.soundNoteId == 1,
+          "accepted backspin plays the authored tail");
+}
+
+void testKeyboardWheelChargeTailsReleaseWithoutReversal() {
+  for (const int mode : {24, 48}) {
+    const std::vector<int> wheels = mode == 24 ? std::vector<int>{24, 25}
+                                              : std::vector<int>{24, 25, 50, 51};
+    for (int lane : wheels) for (int lnType : {2, 3}) {
+      const std::string input = "{\"version\":\"1.0.0\",\"info\":{\"init_bpm\":120,\"mode_hint\":\"" +
+          std::string(mode == 24 ? "keyboard-24k" : "keyboard-24k-double") +
+          "\",\"ln_type\":" + std::to_string(lnType) +
+          "},\"sound_channels\":[{\"name\":\"wheel.wav\",\"notes\":[{\"x\":" +
+          std::to_string(lane + 1) + ",\"y\":480,\"l\":240}]}]}";
+      for (const auto ruleset : {GameplayRuleset::LR2, GameplayRuleset::Beatoraja}) {
+        bms_parser::Parser parser;
+        std::atomic_bool cancelled{false};
+        bms_parser::Chart *raw = nullptr;
+        parser.Parse(std::vector<unsigned char>(input.begin(), input.end()), &raw,
+                     false, false, cancelled, "wheel.bmson");
+        std::unique_ptr<bms_parser::Chart> chart(raw);
+        require(chart && chart->Meta.TotalNotes == 2, "wheel charge chart parses both endpoints");
+        const auto definition = gameplay::buildGameplayDefinition(*chart, 0);
+        const auto judge = gameplay::CompiledGameplayJudge::from(
+            gameplay::compileGameplayJudgeRules(ruleset, 2, 100, 100,
+                CourseJudgementConstraint::None, gameplay::CandidateSelectionMode::LR2,
+                mode, 100));
+        gameplay::GameplaySimulation simulation(definition, {.judge = judge});
+        require(simulation.pressLane(lane, {.songTimeMicros = 1'000'000}).hasJudge,
+                "keyboard wheel head is playable");
+        const auto release = simulation.releaseLane(lane, {.songTimeMicros = 1'500'000});
+        require(release.hasJudge && release.judge.judgement == PGreat &&
+                    simulation.noteState(1).played && !simulation.noteState(1).holding,
+                "keyboard CN/HCN wheel tail completes on ordinary lane release");
+        std::unordered_map<int, bool> pressed;
+        RhythmLaneInputController controller(chart.get(), nullptr, pressed, judge);
+        require(controller.pressLane(lane, {.songTimeMicros = 1'000'000}).hasJudge,
+                "legacy keyboard wheel head is playable");
+        const auto legacyRelease = controller.releaseLane(lane, {.songTimeMicros = 1'500'000});
+        require(legacyRelease.hasJudge && legacyRelease.judge.judgement == PGreat,
+                "legacy keyboard CN/HCN wheel tail completes without reversal");
+      }
+    }
+  }
 }
 
 void testChargeScratchRequiresBackspinRelease() {
@@ -3276,7 +3583,9 @@ void testLr2SkippedInitialMineStillAllowsCompletion() {
 int main(int argc, char **argv) {
   if (argc > 1) {
     const std::string name = argv[1];
-    if (name == "initial-mine-completion") testLr2SkippedInitialMineStillAllowsCompletion();
+    if (name == "scratch-hcn-audio") testScratchHcnAudioUsesAggregateHeldState();
+    else if (name == "keyboard-wheel-release") testKeyboardWheelChargeTailsReleaseWithoutReversal();
+    else if (name == "initial-mine-completion") testLr2SkippedInitialMineStillAllowsCompletion();
     else if (name == "atomic-charge-miss") testReferenceChargeMissIsAtomicBeforeSurvivalFailure();
     else if (name == "early-cutoff") testReferenceEarlyCandidateCutoffIsExclusive();
     else if (name == "release-search") testReleaseSearchStopsAtPracticeEnd();
@@ -3299,6 +3608,7 @@ int main(int argc, char **argv) {
     else return 2;
     return 0;
   }
+  testLegacyAdjacentHcnAudio();
   testLr2SkippedInitialMineStillAllowsCompletion();
   testDefinitionUsesDemotedNormalNote();
   testSelectedModeFinalizesMalformedHold();
@@ -3341,7 +3651,12 @@ int main(int argc, char **argv) {
   testClassicLongHeadDefersJudgeButStillCommitsSoundAndHolding();
   testPressDoesNotClaimLongTail();
   testLongTailCannotMaskLaterPressCandidateForAnyPriorityMode();
-  testClassicReleaseCommitsOneJudgeAndNoSound();
+  testLegacyLongHeadVoiceControls();
+  testScratchHcnAudioUsesAggregateHeldState();
+  testLateFailedReleaseHeadVoiceControls();
+  testBmsonAuthoredReleaseSound();
+  testClassicReleaseCommitsOneJudgeAndTailSound();
+  testKeyboardWheelChargeTailsReleaseWithoutReversal();
   testChargeScratchRequiresBackspinRelease();
   testParitySummaryDetectsPerturbedIdentityAndPayload();
   testEmptyValidLaneMatchesCurrentController();

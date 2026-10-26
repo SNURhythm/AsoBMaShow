@@ -644,6 +644,15 @@ void testBeatorajaZeroTotalCannotBeSerialized() {
   std::string error;
   assert(!serializeValidatedScoreProvenance(provenance, error).has_value());
   assert(!error.empty());
+  input.chartMeta.TotalIsRelative = true;
+  input.chartMeta.HasTotal = true;
+  input.chartMeta.Total = 0.0;
+  input.authoredGaugeTotal = 0.0;
+  const auto explicitZero = makeScoreProvenance(input);
+  error.clear();
+  const auto encoded = serializeValidatedScoreProvenance(explicitZero, error);
+  assert(encoded && error.empty());
+  assert(deserializeScoreProvenance(*encoded, error));
 }
 
 void testSchemaThreeBeatorajaReplayMigratesFromChartMetadata() {

@@ -93,6 +93,7 @@ public:
  */
 
 
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -105,6 +106,26 @@ inline constexpr int BgaSequenceBlank = -1;
 
 struct BgaPoorSequence {
   std::vector<int> Frames;
+};
+
+enum class BgaEventCondition { Always, Play, Miss };
+
+struct BgaSequenceFrame {
+  // Authored bmson milliseconds, independent of the timeline's microseconds.
+  long long TimeMillis = 0;
+  // BmpTable key, or BgaSequenceBlank for an unresolved image or END.
+  int BmpId = BgaSequenceBlank;
+  bool IsEnd = false;
+};
+
+using BgaSequence = std::vector<BgaSequenceFrame>;
+
+struct BgaEvent {
+  BgaEventCondition Condition = BgaEventCondition::Always;
+  int Interval = 0;
+  // Nonnull immutable sequences share storage across references. Preserve
+  // every id_set alternative and its authored frame order/timing.
+  std::vector<std::shared_ptr<const BgaSequence>> Sequences;
 };
 
 class TimeLine {
@@ -121,6 +142,8 @@ public:
   int BgaBase = -1;
   int BgaLayer = -1;
   std::optional<BgaPoorSequence> BgaPoor;
+  // Effective bmson event metadata; poor_events replace same-pulse layers.
+  std::vector<BgaEvent> BgaEvents;
 
   double StopLength = 0;
   std::optional<long long> ParsedStopDuration;
@@ -237,6 +260,7 @@ public:
   JudgeRankType RankType = JudgeRankType::BmsRank;
   double Total = 100;
   bool HasTotal = false;
+  bool TotalIsRelative = false; // bmson 1.0: percentage of the player default.
   int VolWav = 0;
   // Java BMSModel custom %/@ values: case-sensitive keys, untrimmed values.
   std::unordered_map<std::string, std::string> Values;
@@ -272,14 +296,18 @@ public:
   std::optional<std::string> RandomPrng;
   std::vector<int> RandomValues;
 
-  [[nodiscard]] int GetKeyLaneCount() const { return KeyMode; }
+  [[nodiscard]] bool IsPopnFiveKey() const {
+    const auto hint = Values.find("bmson.mode_hint");
+    return KeyMode == 9 && hint != Values.end() && hint->second == "popn-5k";
+  }
+  [[nodiscard]] int GetKeyLaneCount() const { return IsPopnFiveKey() ? 5 : KeyMode; }
   [[nodiscard]] bool IsScratchlessKeyMode() const {
     return KeyMode == 4 || KeyMode == 6 || KeyMode == 8;
   }
   [[nodiscard]] int GetScratchLaneCount() const {
-    // Only legacy beat modes synthesize scratch lanes. Other positive key
-    // counts describe dense key lanes unless a format-specific map above says
-    // otherwise.
+    // Keyboard modes have two independently playable wheel lanes per player.
+    if (KeyMode == 24) return 2;
+    if (KeyMode == 48) return 4;
     if (KeyMode == 10 || KeyMode == 14) {
       return 2;
     }
@@ -289,10 +317,17 @@ public:
     return 0;
   }
   [[nodiscard]] int GetTotalLaneCount() const {
-    return KeyMode + GetScratchLaneCount();
+    return GetKeyLaneCount() + GetScratchLaneCount();
   }
 
   [[nodiscard]] std::vector<int> GetKeyLaneIndices() const {
+    if (IsPopnFiveKey()) return {0, 1, 2, 3, 4};
+    if (KeyMode == 24 || KeyMode == 48) {
+      std::vector<int> lanes;
+      for (int player = 0; player < (KeyMode == 48 ? 2 : 1); ++player)
+        for (int key = 0; key < 24; ++key) lanes.push_back(player * 26 + key);
+      return lanes;
+    }
     switch (KeyMode) {
     case 4:
       return {0, 1, 3, 4};
@@ -322,6 +357,8 @@ public:
   }
 
   [[nodiscard]] std::vector<int> GetScratchLaneIndices() const {
+    if (KeyMode == 24) return {24, 25};
+    if (KeyMode == 48) return {24, 25, 50, 51};
     const int scratchLaneCount = GetScratchLaneCount();
     if (scratchLaneCount == 0) {
       return {};
@@ -333,6 +370,11 @@ public:
   }
 
   [[nodiscard]] std::vector<int> GetTotalLaneIndices() const {
+    if (KeyMode == 24 || KeyMode == 48) {
+      std::vector<int> lanes;
+      for (int lane = 0; lane < GetTotalLaneCount(); ++lane) lanes.push_back(lane);
+      return lanes;
+    }
     std::vector<int> Result;
     std::vector<int> keyLaneIndices = GetKeyLaneIndices();
     std::vector<int> scratchLaneIndices = GetScratchLaneIndices();
@@ -348,6 +390,15 @@ public:
   }
 };
 
+// A synthetic WAV can mix several slices. SourceWav indexes WavTable;
+// DurationMicros == -1 means the remaining source, otherwise an exclusive end.
+struct WavSlice {
+  int SourceWav = 0;
+  long long StartMicros = 0;
+  long long DurationMicros = -1;
+  int SliceId = -1; // One channel/pulse slice; chord assignments share a voice.
+};
+
 class Chart {
 public:
   Chart();
@@ -361,6 +412,7 @@ public:
   // Own LN partners displaced from timeline slots by later source rows.
   std::vector<std::unique_ptr<Note>> DetachedNotes;
   std::unordered_map<int, std::string> WavTable;
+  std::unordered_map<int, std::vector<WavSlice>> WavSlices;
   std::unordered_map<int, std::string> ReferencedWavTable;
   std::unordered_map<int, std::string> BmpTable;
   std::unordered_map<int, std::string> ReferencedBmpTable;
@@ -369,6 +421,1433 @@ private:
   void Swap(Chart &other) noexcept;
 };
 } // namespace bms_parser
+
+/*
+ * Copyright (C) 2024 VioletXF, khoeun03
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
+#include <atomic>
+#include <filesystem>
+#include <map>
+#include <memory>
+#include <cstdint>
+#include <optional>
+#include <string>
+#include <vector>
+
+/**
+ *
+ */
+namespace bms_parser {
+// Full-parse metadata/features without retaining the note/timeline graph.
+// Feature flags describe declared BGA resources and effective timeline values.
+struct ChartScanResult {
+  ChartMeta Meta;
+  bool HasBga = false;
+  bool HasBpmStop = false;
+  bool HasScrollChange = false;
+};
+
+// Optional wall-time breakdown for one scan. Parallel callers should sum
+// these as worker time, not compare the sum directly with elapsed scan time.
+struct ScanTimings {
+  std::uint64_t ReadNanoseconds = 0;
+  std::uint64_t HashNanoseconds = 0;
+  std::uint64_t DecodeNanoseconds = 0;
+  std::uint64_t ParseNanoseconds = 0;
+};
+
+// Reusable storage only: random state and chart results remain in Parser.
+// Confine each workspace to one worker; no output borrows its storage.
+class ScanWorkspace {
+public:
+  ScanWorkspace();
+  ~ScanWorkspace();
+  ScanWorkspace(const ScanWorkspace &) = delete;
+  ScanWorkspace &operator=(const ScanWorkspace &) = delete;
+private:
+  struct Storage;
+  std::unique_ptr<Storage> storage;
+  friend class Parser;
+};
+
+class Parser {
+public:
+  static constexpr const char *RandomPrngId = "std::mt19937_64";
+
+  Parser();
+  // Decode source with the same charset detection as Parse, preserving line endings.
+  [[nodiscard]] static std::string DecodeText(const std::vector<unsigned char> &bytes);
+  static bool IsSupportedRandomPrng(const std::string &RandomPrng);
+  bool SetRandomPrng(const std::string &RandomPrng);
+  [[nodiscard]] const std::string &GetRandomPrng() const;
+  void SetRandomSeed(unsigned int RandomSeed);
+  [[nodiscard]] unsigned int GetRandomSeed() const;
+  void SetRandomValues(const std::vector<int> &RandomValues);
+  [[nodiscard]] const std::vector<int> &GetRandomValues() const;
+
+  void Parse(const std::filesystem::path &path, Chart **Chart,
+             bool addReadyMeasure, bool metaOnly, std::atomic_bool &bCancelled);
+  ~Parser();
+  void Parse(const std::vector<unsigned char> &bytes, Chart **chart,
+             bool addReadyMeasure, bool metaOnly, std::atomic_bool &bCancelled);
+  // A source name selects format/channel mapping (.bmson/.pms, case insensitive).
+  // It is not read from disk and does not assign BmsPath or Folder.
+  void Parse(const std::vector<unsigned char> &bytes, Chart **chart,
+             bool addReadyMeasure, bool metaOnly, std::atomic_bool &bCancelled,
+             const std::filesystem::path &sourcePath);
+  [[nodiscard]] std::optional<ChartScanResult>
+  Scan(const std::vector<unsigned char> &bytes, std::atomic_bool &bCancelled);
+  [[nodiscard]] std::optional<ChartScanResult>
+  Scan(const std::vector<unsigned char> &bytes, std::atomic_bool &bCancelled,
+       const std::filesystem::path &sourcePath);
+  [[nodiscard]] std::optional<ChartScanResult>
+  Scan(const std::filesystem::path &path, std::atomic_bool &bCancelled);
+  [[nodiscard]] std::optional<ChartScanResult>
+  Scan(const std::vector<unsigned char> &bytes, std::atomic_bool &bCancelled,
+       const std::filesystem::path &sourcePath, ScanWorkspace &workspace,
+       ScanTimings *timings = nullptr);
+  [[nodiscard]] std::optional<ChartScanResult>
+  Scan(const std::filesystem::path &path, std::atomic_bool &bCancelled,
+       ScanWorkspace &workspace, ScanTimings *timings = nullptr);
+  static int NoWav;
+  static int MetronomeWav;
+
+private:
+  void ParseInternal(const std::vector<unsigned char> &bytes, Chart **chart,
+                     bool addReadyMeasure, bool metaOnly,
+                     std::atomic_bool &bCancelled, ChartScanResult *scan,
+                     bool pms = false, ScanWorkspace *workspace = nullptr,
+                     ScanTimings *timings = nullptr);
+  std::optional<ChartScanResult>
+  ScanInternal(const std::vector<unsigned char> &bytes,
+               std::atomic_bool &bCancelled,
+               const std::filesystem::path &sourcePath,
+               ScanWorkspace *workspace, ScanTimings *timings);
+  // bpmTable
+  std::unordered_map<int, double> BpmTable;
+  std::unordered_map<int, double> StopLengthTable;
+  std::unordered_map<int, double> ScrollTable;
+  std::unordered_map<int, double> SpeedTable;
+
+  bool UseBase62 = false;
+  int Lnobj = -1;
+  unsigned int Seed;
+  std::string RandomPrng = RandomPrngId;
+  std::vector<int> RandomValues;
+  static inline int ParseHex(std::string_view Str);
+  inline int ParseInt(std::string_view Str, bool forceBase36 = false) const;
+  void ParseHeader(Chart *Chart, std::string_view cmd, std::string_view Xx,
+                   const std::string &Value, bool shiftJis = false);
+  static inline bool MatchHeader(const std::string_view &str,
+                                 const std::string_view &headerUpper);
+  static inline unsigned long long Gcd(unsigned long long A,
+                                       unsigned long long B);
+  inline bool CheckResourceIdRange(int Id) const;
+  inline int ToWaveId(Chart *Chart, std::string_view Wav, bool metaOnly);
+  inline void RegisterReferencedWaveId(Chart *Chart, int WavId) const;
+  inline void RegisterReferencedBmpId(Chart *Chart, int BmpId,
+                                      bool metaOnly) const;
+#ifdef _WIN32
+  static std::wstring utf8_to_path_t(const std::string &input);
+#else
+  static std::string utf8_to_path_t(const std::string &input);
+#endif
+};
+} // namespace bms_parser
+
+
+
+namespace bms_parser::bmson {
+bool IsSource(const std::vector<unsigned char> &bytes,
+              const std::filesystem::path &sourcePath);
+std::unique_ptr<Chart> Parse(const std::vector<unsigned char> &bytes,
+                             bool addReadyMeasure, bool metaOnly,
+                             std::atomic_bool &cancelled,
+                             ChartScanResult *scan = nullptr);
+}
+
+/*
+ * Copyright (C) 2024 VioletXF, khoeun03
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ */
+
+
+/**
+ *
+ */
+namespace bms_parser {
+enum class LongNoteType {
+  Undefined = 0,
+  LongNote = 1,
+  ChargeNote = 2,
+  HellChargeNote = 3,
+};
+
+LongNoteType LongNoteTypeFromLnMode(int LnMode);
+LongNoteType ResolveLongNoteType(LongNoteType Type, int LnMode);
+
+class LongNote : public Note {
+public:
+  ~LongNote() override;
+  LongNote *Tail;
+  LongNote *Head = nullptr;
+  bool IsHolding = false;
+  LongNoteType Type = LongNoteType::Undefined;
+  [[nodiscard]] bool IsTail() const;
+  long long ReleaseTime{};
+
+  explicit LongNote(int Wav,
+                    LongNoteType Type = LongNoteType::Undefined);
+
+  [[nodiscard]] LongNoteType GetType() const;
+  void SetType(LongNoteType Type);
+
+  void Press(long long Time) override;
+
+  void Release(long long Time);
+
+  void MissPress(long long Time);
+
+  void Reset() override;
+
+  bool IsLongNote() override { return true; }
+};
+} // namespace bms_parser
+
+#include <string>
+#include <vector>
+
+// http://www.zedwood.com/article/cpp-sha256-function
+namespace bms_parser {
+class SHA256 {
+  /*
+   * Updated to C++, zedwood.com 2012
+   * Based on Olivier Gay's version
+   * See Modified BSD License below:
+   *
+   * FIPS 180-2 SHA-224/256/384/512 implementation
+   * Issue date:  04/30/2005
+   * http://www.ouah.org/ogay/sha2/
+   *
+   * Copyright (C) 2005, 2007 Olivier Gay <olivier.gay@a3.epfl.ch>
+   * All rights reserved.
+   *
+   * Redistribution and use in source and binary forms, with or without
+   * modification, are permitted provided that the following conditions
+   * are met:
+   * 1. Redistributions of source code must retain the above copyright
+   *    notice, this list of conditions and the following disclaimer.
+   * 2. Redistributions in binary form must reproduce the above copyright
+   *    notice, this list of conditions and the following disclaimer in the
+   *    documentation and/or other materials provided with the distribution.
+   * 3. Neither the name of the project nor the names of its contributors
+   *    may be used to endorse or promote products derived from this software
+   *    without specific prior written permission.
+   *
+   * THIS SOFTWARE IS PROVIDED BY THE PROJECT AND CONTRIBUTORS ``AS IS'' AND
+   * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+   * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+   * ARE DISCLAIMED.  IN NO EVENT SHALL THE PROJECT OR CONTRIBUTORS BE LIABLE
+   * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+   * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+   * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+   * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+   * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+   * SUCH DAMAGE.
+   */
+protected:
+  using uint8 = unsigned char;
+  using uint32 = unsigned int;
+
+  const static uint32 sha256_k[];
+  static constexpr unsigned int SHA224_256_BLOCK_SIZE = (512 / 8);
+
+public:
+  void init();
+  void update(const unsigned char *message, unsigned int len);
+  void final(unsigned char *digest);
+  static constexpr unsigned int DIGEST_SIZE = (256 / 8);
+
+protected:
+  void transform(const unsigned char *message, unsigned int block_nb);
+  unsigned int m_tot_len;
+  unsigned int m_len;
+  unsigned char m_block[2 * SHA224_256_BLOCK_SIZE];
+  uint32 m_h[8];
+};
+
+std::string sha256(const std::vector<unsigned char> &bytes);
+
+#define SHA2_SHFR(x, n) (x >> n)
+#define SHA2_ROTR(x, n) ((x >> n) | (x << ((sizeof(x) << 3) - n)))
+#define SHA2_CH(x, y, z) ((x & y) ^ (~x & z))
+#define SHA2_MAJ(x, y, z) ((x & y) ^ (x & z) ^ (y & z))
+#define SHA256_F1(x) (SHA2_ROTR(x, 2) ^ SHA2_ROTR(x, 13) ^ SHA2_ROTR(x, 22))
+#define SHA256_F2(x) (SHA2_ROTR(x, 6) ^ SHA2_ROTR(x, 11) ^ SHA2_ROTR(x, 25))
+#define SHA256_F3(x) (SHA2_ROTR(x, 7) ^ SHA2_ROTR(x, 18) ^ SHA2_SHFR(x, 3))
+#define SHA256_F4(x) (SHA2_ROTR(x, 17) ^ SHA2_ROTR(x, 19) ^ SHA2_SHFR(x, 10))
+#define SHA2_UNPACK32(x, str)                                                  \
+  {                                                                            \
+    *((str) + 3) = (uint8)((x));                                               \
+    *((str) + 2) = (uint8)((x) >> 8);                                          \
+    *((str) + 1) = (uint8)((x) >> 16);                                         \
+    *((str) + 0) = (uint8)((x) >> 24);                                         \
+  }
+#define SHA2_PACK32(str, x)                                                    \
+  {                                                                            \
+    *(x) = ((uint32) * ((str) + 3)) | ((uint32) * ((str) + 2) << 8) |          \
+           ((uint32) * ((str) + 1) << 16) | ((uint32) * ((str) + 0) << 24);    \
+  }
+} // namespace bms_parser
+
+/* MD5
+ converted to C++ class by Frank Thilo (thilo@unix-ag.org)
+ for bzflag (http://www.bzflag.org)
+
+   based on:
+
+   md5.h and md5.c
+   reference implementation of RFC 1321
+
+   Copyright (C) 1991-2, RSA Data Security, Inc. Created 1991. All
+rights reserved.
+
+License to copy and use this software is granted provided that it
+is identified as the "RSA Data Security, Inc. MD5 Message-Digest
+Algorithm" in all material mentioning or referencing this software
+or this function.
+
+License is also granted to make and use derivative works provided
+that such works are identified as "derived from the RSA Data
+Security, Inc. MD5 Message-Digest Algorithm" in all material
+mentioning or referencing the derived work.
+
+RSA Data Security, Inc. makes no representations concerning either
+the merchantability of this software or the suitability of this
+software for any particular purpose. It is provided "as is"
+without express or implied warranty of any kind.
+
+These notices must be retained in any copies of any part of this
+documentation and/or software.
+
+*/
+
+#ifndef BZF_MD5_H
+#define BZF_MD5_H
+
+#include <cstring>
+#include <iostream>
+
+// a small class for calculating MD5 hashes of strings or byte arrays
+// it is not meant to be fast or secure
+//
+// usage: 1) feed it blocks of uchars with update()
+//      2) finalize()
+//      3) get hexdigest() string
+//      or
+//      MD5(std::string).hexdigest()
+//
+// assumes that char is 8 bit and int is 32 bit
+
+namespace bms_parser {
+class MD5 {
+public:
+  typedef unsigned int size_type; // must be 32bit
+
+  MD5();
+  MD5(const std::string &text);
+  void update(const unsigned char *buf, size_type length);
+  void update(const char *buf, size_type length);
+  MD5 &finalize();
+  std::string hexdigest() const;
+  friend std::ostream &operator<<(std::ostream &, MD5 md5);
+
+private:
+  void init();
+  typedef unsigned char uint1; //  8bit
+  typedef unsigned int uint4;  // 32bit
+  enum { blocksize = 64 };     // VC6 won't eat a const static int here
+
+  void transform(const uint1 block[blocksize]);
+  static void decode(uint4 output[], const uint1 input[], size_type len);
+  static void encode(uint1 output[], const uint4 input[], size_type len);
+
+  bool finalized;
+  uint1 buffer[blocksize]; // bytes that didn't fit in last 64 byte chunk
+  uint4 count[2];          // 64bit counter for number of bits (lo, hi)
+  uint4 state[4];          // digest so far
+  uint1 digest[16];        // the result
+
+  // low level logic operations
+  static inline uint4 F(uint4 x, uint4 y, uint4 z);
+  static inline uint4 G(uint4 x, uint4 y, uint4 z);
+  static inline uint4 H(uint4 x, uint4 y, uint4 z);
+  static inline uint4 I(uint4 x, uint4 y, uint4 z);
+  static inline uint4 rotate_left(uint4 x, int n);
+  static inline void FF(uint4 &a, uint4 b, uint4 c, uint4 d, uint4 x, uint4 s,
+                        uint4 ac);
+  static inline void GG(uint4 &a, uint4 b, uint4 c, uint4 d, uint4 x, uint4 s,
+                        uint4 ac);
+  static inline void HH(uint4 &a, uint4 b, uint4 c, uint4 d, uint4 x, uint4 s,
+                        uint4 ac);
+  static inline void II(uint4 &a, uint4 b, uint4 c, uint4 d, uint4 x, uint4 s,
+                        uint4 ac);
+};
+
+std::string md5(const std::string str);
+} // namespace bms_parser
+#endif
+
+// picojson v1.3.0; namespace renamed to avoid collisions in amalgamated clients.
+/*
+ * Copyright 2009-2010 Cybozu Labs, Inc.
+ * Copyright 2011-2014 Kazuho Oku
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
+ */
+#ifndef bms_parser_picojson_h
+#define bms_parser_picojson_h
+
+// Retain authored bmson frame timestamps exactly, including Java long limits.
+#ifndef PICOJSON_USE_INT64
+#define PICOJSON_USE_INT64
+#define BMS_PARSER_UNDEF_PICOJSON_INT64
+#endif
+
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <iterator>
+#include <limits>
+#include <map>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+// for isnan/isinf
+#if __cplusplus>=201103L
+# include <cmath>
+#else
+extern "C" {
+# ifdef _MSC_VER
+#  include <float.h>
+# elif defined(__INTEL_COMPILER)
+#  include <mathimf.h>
+# else
+#  include <math.h>
+# endif
+}
+#endif
+
+// experimental support for int64_t (see README.mkdn for detail)
+#ifdef PICOJSON_USE_INT64
+# define __STDC_FORMAT_MACROS
+# include <errno.h>
+# include <inttypes.h>
+#endif
+
+// to disable the use of localeconv(3), set PICOJSON_USE_LOCALE to 0
+#ifndef PICOJSON_USE_LOCALE
+# define PICOJSON_USE_LOCALE 1
+#endif
+#if PICOJSON_USE_LOCALE
+extern "C" {
+# include <locale.h>
+}
+#endif
+
+#ifndef PICOJSON_ASSERT
+# define PICOJSON_ASSERT(e) do { if (! (e)) throw std::runtime_error(#e); } while (0)
+#endif
+
+#ifdef _MSC_VER
+    #define SNPRINTF _snprintf_s
+    #pragma warning(push)
+    #pragma warning(disable : 4244) // conversion from int to char
+    #pragma warning(disable : 4127) // conditional expression is constant
+    #pragma warning(disable : 4702) // unreachable code
+#else
+    #define SNPRINTF snprintf
+#endif
+
+namespace bms_parser_picojson {
+
+  enum {
+    null_type,
+    boolean_type,
+    number_type,
+    string_type,
+    array_type,
+    object_type
+#ifdef PICOJSON_USE_INT64
+    , int64_type
+#endif
+  };
+
+  enum {
+    INDENT_WIDTH = 2
+  };
+
+  struct null {};
+
+  class value {
+  public:
+    typedef std::vector<value> array;
+    typedef std::map<std::string, value> object;
+    union _storage {
+      bool boolean_;
+      double number_;
+#ifdef PICOJSON_USE_INT64
+      int64_t int64_;
+#endif
+      std::string* string_;
+      array* array_;
+      object* object_;
+    };
+  protected:
+    int type_;
+    _storage u_;
+  public:
+    value();
+    value(int type, bool);
+    explicit value(bool b);
+#ifdef PICOJSON_USE_INT64
+    explicit value(int64_t i);
+#endif
+    explicit value(double n);
+    explicit value(const std::string& s);
+    explicit value(const array& a);
+    explicit value(const object& o);
+    explicit value(const char* s);
+    value(const char* s, size_t len);
+    ~value();
+    value(const value& x);
+    value& operator=(const value& x);
+    void swap(value& x);
+    template <typename T> bool is() const;
+    template <typename T> const T& get() const;
+    template <typename T> T& get();
+    bool evaluate_as_boolean() const;
+    const value& get(size_t idx) const;
+    const value& get(const std::string& key) const;
+    value& get(size_t idx);
+    value& get(const std::string& key);
+
+    bool contains(size_t idx) const;
+    bool contains(const std::string& key) const;
+    std::string to_str() const;
+    template <typename Iter> void serialize(Iter os, bool prettify = false) const;
+    std::string serialize(bool prettify = false) const;
+  private:
+    template <typename T> value(const T*); // intentionally defined to block implicit conversion of pointer to bool
+    template <typename Iter> static void _indent(Iter os, int indent);
+    template <typename Iter> void _serialize(Iter os, int indent) const;
+    std::string _serialize(int indent) const;
+  };
+
+  typedef value::array array;
+  typedef value::object object;
+
+  inline value::value() : type_(null_type) {}
+
+  inline value::value(int type, bool) : type_(type) {
+    switch (type) {
+#define INIT(p, v) case p##type: u_.p = v; break
+      INIT(boolean_, false);
+      INIT(number_, 0.0);
+#ifdef PICOJSON_USE_INT64
+      INIT(int64_, 0);
+#endif
+      INIT(string_, new std::string());
+      INIT(array_, new array());
+      INIT(object_, new object());
+#undef INIT
+    default: break;
+    }
+  }
+
+  inline value::value(bool b) : type_(boolean_type) {
+    u_.boolean_ = b;
+  }
+
+#ifdef PICOJSON_USE_INT64
+  inline value::value(int64_t i) : type_(int64_type) {
+    u_.int64_ = i;
+  }
+#endif
+
+  inline value::value(double n) : type_(number_type) {
+    if (
+#ifdef _MSC_VER
+        ! _finite(n)
+#elif __cplusplus>=201103L || !(defined(isnan) && defined(isinf))
+		std::isnan(n) || std::isinf(n)
+#else
+        isnan(n) || isinf(n)
+#endif
+        ) {
+      throw std::overflow_error("");
+    }
+    u_.number_ = n;
+  }
+
+  inline value::value(const std::string& s) : type_(string_type) {
+    u_.string_ = new std::string(s);
+  }
+
+  inline value::value(const array& a) : type_(array_type) {
+    u_.array_ = new array(a);
+  }
+
+  inline value::value(const object& o) : type_(object_type) {
+    u_.object_ = new object(o);
+  }
+
+  inline value::value(const char* s) : type_(string_type) {
+    u_.string_ = new std::string(s);
+  }
+
+  inline value::value(const char* s, size_t len) : type_(string_type) {
+    u_.string_ = new std::string(s, len);
+  }
+
+  inline value::~value() {
+    switch (type_) {
+#define DEINIT(p) case p##type: delete u_.p; break
+      DEINIT(string_);
+      DEINIT(array_);
+      DEINIT(object_);
+#undef DEINIT
+    default: break;
+    }
+  }
+
+  inline value::value(const value& x) : type_(x.type_) {
+    switch (type_) {
+#define INIT(p, v) case p##type: u_.p = v; break
+      INIT(string_, new std::string(*x.u_.string_));
+      INIT(array_, new array(*x.u_.array_));
+      INIT(object_, new object(*x.u_.object_));
+#undef INIT
+    default:
+      u_ = x.u_;
+      break;
+    }
+  }
+
+  inline value& value::operator=(const value& x) {
+    if (this != &x) {
+      value t(x);
+      swap(t);
+    }
+    return *this;
+  }
+
+  inline void value::swap(value& x) {
+    std::swap(type_, x.type_);
+    std::swap(u_, x.u_);
+  }
+
+#define IS(ctype, jtype)			     \
+  template <> inline bool value::is<ctype>() const { \
+    return type_ == jtype##_type;		     \
+  }
+  IS(null, null)
+  IS(bool, boolean)
+#ifdef PICOJSON_USE_INT64
+  IS(int64_t, int64)
+#endif
+  IS(std::string, string)
+  IS(array, array)
+  IS(object, object)
+#undef IS
+  template <> inline bool value::is<double>() const {
+    return type_ == number_type
+#ifdef PICOJSON_USE_INT64
+      || type_ == int64_type
+#endif
+      ;
+  }
+
+#define GET(ctype, var)						\
+  template <> inline const ctype& value::get<ctype>() const {	\
+    PICOJSON_ASSERT("type mismatch! call is<type>() before get<type>()" \
+	   && is<ctype>());				        \
+    return var;							\
+  }								\
+  template <> inline ctype& value::get<ctype>() {		\
+    PICOJSON_ASSERT("type mismatch! call is<type>() before get<type>()"	\
+	   && is<ctype>());					\
+    return var;							\
+  }
+  GET(bool, u_.boolean_)
+  GET(std::string, *u_.string_)
+  GET(array, *u_.array_)
+  GET(object, *u_.object_)
+#ifdef PICOJSON_USE_INT64
+  GET(double, (type_ == int64_type && (const_cast<value*>(this)->type_ = number_type, const_cast<value*>(this)->u_.number_ = u_.int64_), u_.number_))
+  GET(int64_t, u_.int64_)
+#else
+  GET(double, u_.number_)
+#endif
+#undef GET
+
+  inline bool value::evaluate_as_boolean() const {
+    switch (type_) {
+    case null_type:
+      return false;
+    case boolean_type:
+      return u_.boolean_;
+    case number_type:
+      return u_.number_ != 0;
+    case string_type:
+      return ! u_.string_->empty();
+    default:
+      return true;
+    }
+  }
+
+  inline const value& value::get(size_t idx) const {
+    static value s_null;
+    PICOJSON_ASSERT(is<array>());
+    return idx < u_.array_->size() ? (*u_.array_)[idx] : s_null;
+  }
+
+  inline value& value::get(size_t idx) {
+    static value s_null;
+    PICOJSON_ASSERT(is<array>());
+    return idx < u_.array_->size() ? (*u_.array_)[idx] : s_null;
+  }
+
+  inline const value& value::get(const std::string& key) const {
+    static value s_null;
+    PICOJSON_ASSERT(is<object>());
+    object::const_iterator i = u_.object_->find(key);
+    return i != u_.object_->end() ? i->second : s_null;
+  }
+
+  inline value& value::get(const std::string& key) {
+    static value s_null;
+    PICOJSON_ASSERT(is<object>());
+    object::iterator i = u_.object_->find(key);
+    return i != u_.object_->end() ? i->second : s_null;
+  }
+
+  inline bool value::contains(size_t idx) const {
+    PICOJSON_ASSERT(is<array>());
+    return idx < u_.array_->size();
+  }
+
+  inline bool value::contains(const std::string& key) const {
+    PICOJSON_ASSERT(is<object>());
+    object::const_iterator i = u_.object_->find(key);
+    return i != u_.object_->end();
+  }
+
+  inline std::string value::to_str() const {
+    switch (type_) {
+    case null_type:      return "null";
+    case boolean_type:   return u_.boolean_ ? "true" : "false";
+#ifdef PICOJSON_USE_INT64
+    case int64_type: {
+      char buf[sizeof("-9223372036854775808")];
+      SNPRINTF(buf, sizeof(buf), "%" PRId64, u_.int64_);
+      return buf;
+    }
+#endif
+    case number_type:    {
+      char buf[256];
+      double tmp;
+      SNPRINTF(buf, sizeof(buf), fabs(u_.number_) < (1ULL << 53) && modf(u_.number_, &tmp) == 0 ? "%.f" : "%.17g", u_.number_);
+#if PICOJSON_USE_LOCALE
+      char *decimal_point = localeconv()->decimal_point;
+      if (strcmp(decimal_point, ".") != 0) {
+        size_t decimal_point_len = strlen(decimal_point);
+        for (char *p = buf; *p != '\0'; ++p) {
+          if (strncmp(p, decimal_point, decimal_point_len) == 0) {
+            return std::string(buf, p) + "." + (p + decimal_point_len);
+          }
+        }
+      }
+#endif
+      return buf;
+    }
+    case string_type:    return *u_.string_;
+    case array_type:     return "array";
+    case object_type:    return "object";
+    default:             PICOJSON_ASSERT(0);
+#ifdef _MSC_VER
+      __assume(0);
+#endif
+    }
+    return std::string();
+  }
+
+  template <typename Iter> void copy(const std::string& s, Iter oi) {
+    std::copy(s.begin(), s.end(), oi);
+  }
+
+  template <typename Iter> void serialize_str(const std::string& s, Iter oi) {
+    *oi++ = '"';
+    for (std::string::const_iterator i = s.begin(); i != s.end(); ++i) {
+      switch (*i) {
+#define MAP(val, sym) case val: copy(sym, oi); break
+	MAP('"', "\\\"");
+	MAP('\\', "\\\\");
+	MAP('/', "\\/");
+	MAP('\b', "\\b");
+	MAP('\f', "\\f");
+	MAP('\n', "\\n");
+	MAP('\r', "\\r");
+	MAP('\t', "\\t");
+#undef MAP
+      default:
+	if (static_cast<unsigned char>(*i) < 0x20 || *i == 0x7f) {
+	  char buf[7];
+	  SNPRINTF(buf, sizeof(buf), "\\u%04x", *i & 0xff);
+	  copy(buf, buf + 6, oi);
+	  } else {
+	  *oi++ = *i;
+	}
+	break;
+      }
+    }
+    *oi++ = '"';
+  }
+
+  template <typename Iter> void value::serialize(Iter oi, bool prettify) const {
+    return _serialize(oi, prettify ? 0 : -1);
+  }
+
+  inline std::string value::serialize(bool prettify) const {
+    return _serialize(prettify ? 0 : -1);
+  }
+
+  template <typename Iter> void value::_indent(Iter oi, int indent) {
+    *oi++ = '\n';
+    for (int i = 0; i < indent * INDENT_WIDTH; ++i) {
+      *oi++ = ' ';
+    }
+  }
+
+  template <typename Iter> void value::_serialize(Iter oi, int indent) const {
+    switch (type_) {
+    case string_type:
+      serialize_str(*u_.string_, oi);
+      break;
+    case array_type: {
+      *oi++ = '[';
+      if (indent != -1) {
+        ++indent;
+      }
+      for (array::const_iterator i = u_.array_->begin();
+           i != u_.array_->end();
+           ++i) {
+	if (i != u_.array_->begin()) {
+	  *oi++ = ',';
+	}
+        if (indent != -1) {
+          _indent(oi, indent);
+        }
+	i->_serialize(oi, indent);
+      }
+      if (indent != -1) {
+        --indent;
+        if (! u_.array_->empty()) {
+          _indent(oi, indent);
+        }
+      }
+      *oi++ = ']';
+      break;
+    }
+    case object_type: {
+      *oi++ = '{';
+      if (indent != -1) {
+        ++indent;
+      }
+      for (object::const_iterator i = u_.object_->begin();
+	   i != u_.object_->end();
+	   ++i) {
+	if (i != u_.object_->begin()) {
+	  *oi++ = ',';
+	}
+        if (indent != -1) {
+          _indent(oi, indent);
+        }
+	serialize_str(i->first, oi);
+	*oi++ = ':';
+        if (indent != -1) {
+          *oi++ = ' ';
+        }
+        i->second._serialize(oi, indent);
+      }
+      if (indent != -1) {
+        --indent;
+        if (! u_.object_->empty()) {
+          _indent(oi, indent);
+        }
+      }
+      *oi++ = '}';
+      break;
+    }
+    default:
+      copy(to_str(), oi);
+      break;
+    }
+    if (indent == 0) {
+      *oi++ = '\n';
+    }
+  }
+
+  inline std::string value::_serialize(int indent) const {
+    std::string s;
+    _serialize(std::back_inserter(s), indent);
+    return s;
+  }
+
+  template <typename Iter> class input {
+  protected:
+    Iter cur_, end_;
+    int last_ch_;
+    bool ungot_;
+    int line_;
+  public:
+    input(const Iter& first, const Iter& last) : cur_(first), end_(last), last_ch_(-1), ungot_(false), line_(1) {}
+    int getc() {
+      if (ungot_) {
+	ungot_ = false;
+	return last_ch_;
+      }
+      if (cur_ == end_) {
+	last_ch_ = -1;
+	return -1;
+      }
+      if (last_ch_ == '\n') {
+	line_++;
+      }
+      last_ch_ = *cur_ & 0xff;
+      ++cur_;
+      return last_ch_;
+    }
+    void ungetc() {
+      if (last_ch_ != -1) {
+	PICOJSON_ASSERT(! ungot_);
+	ungot_ = true;
+      }
+    }
+    Iter cur() const { return cur_; }
+    int line() const { return line_; }
+    void skip_ws() {
+      while (1) {
+	int ch = getc();
+	if (! (ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r')) {
+	  ungetc();
+	  break;
+	}
+      }
+    }
+    bool expect(int expect) {
+      skip_ws();
+      if (getc() != expect) {
+	ungetc();
+	return false;
+      }
+      return true;
+    }
+    bool match(const std::string& pattern) {
+      for (std::string::const_iterator pi(pattern.begin());
+	   pi != pattern.end();
+	   ++pi) {
+	if (getc() != *pi) {
+	  ungetc();
+	  return false;
+	}
+      }
+      return true;
+    }
+  };
+
+  template<typename Iter> inline int _parse_quadhex(input<Iter> &in) {
+    int uni_ch = 0, hex;
+    for (int i = 0; i < 4; i++) {
+      if ((hex = in.getc()) == -1) {
+	return -1;
+      }
+      if ('0' <= hex && hex <= '9') {
+	hex -= '0';
+      } else if ('A' <= hex && hex <= 'F') {
+	hex -= 'A' - 0xa;
+      } else if ('a' <= hex && hex <= 'f') {
+	hex -= 'a' - 0xa;
+      } else {
+	in.ungetc();
+	return -1;
+      }
+      uni_ch = uni_ch * 16 + hex;
+    }
+    return uni_ch;
+  }
+
+  template<typename String, typename Iter> inline bool _parse_codepoint(String& out, input<Iter>& in) {
+    int uni_ch;
+    if ((uni_ch = _parse_quadhex(in)) == -1) {
+      return false;
+    }
+    if (0xd800 <= uni_ch && uni_ch <= 0xdfff) {
+      if (0xdc00 <= uni_ch) {
+	// a second 16-bit of a surrogate pair appeared
+	return false;
+      }
+      // first 16-bit of surrogate pair, get the next one
+      if (in.getc() != '\\' || in.getc() != 'u') {
+	in.ungetc();
+	return false;
+      }
+      int second = _parse_quadhex(in);
+      if (! (0xdc00 <= second && second <= 0xdfff)) {
+	return false;
+      }
+      uni_ch = ((uni_ch - 0xd800) << 10) | ((second - 0xdc00) & 0x3ff);
+      uni_ch += 0x10000;
+    }
+    if (uni_ch < 0x80) {
+      out.push_back(uni_ch);
+    } else {
+      if (uni_ch < 0x800) {
+	out.push_back(0xc0 | (uni_ch >> 6));
+      } else {
+	if (uni_ch < 0x10000) {
+	  out.push_back(0xe0 | (uni_ch >> 12));
+	} else {
+	  out.push_back(0xf0 | (uni_ch >> 18));
+	  out.push_back(0x80 | ((uni_ch >> 12) & 0x3f));
+	}
+	out.push_back(0x80 | ((uni_ch >> 6) & 0x3f));
+      }
+      out.push_back(0x80 | (uni_ch & 0x3f));
+    }
+    return true;
+  }
+
+  template<typename String, typename Iter> inline bool _parse_string(String& out, input<Iter>& in) {
+    while (1) {
+      int ch = in.getc();
+      if (ch < ' ') {
+	in.ungetc();
+	return false;
+      } else if (ch == '"') {
+	return true;
+      } else if (ch == '\\') {
+	if ((ch = in.getc()) == -1) {
+	  return false;
+	}
+	switch (ch) {
+#define MAP(sym, val) case sym: out.push_back(val); break
+	  MAP('"', '\"');
+	  MAP('\\', '\\');
+	  MAP('/', '/');
+	  MAP('b', '\b');
+	  MAP('f', '\f');
+	  MAP('n', '\n');
+	  MAP('r', '\r');
+	  MAP('t', '\t');
+#undef MAP
+	case 'u':
+	  if (! _parse_codepoint(out, in)) {
+	    return false;
+	  }
+	  break;
+	default:
+	  return false;
+	}
+      } else {
+	out.push_back(ch);
+      }
+    }
+    return false;
+  }
+
+  template <typename Context, typename Iter> inline bool _parse_array(Context& ctx, input<Iter>& in) {
+    if (! ctx.parse_array_start()) {
+      return false;
+    }
+    size_t idx = 0;
+    if (in.expect(']')) {
+      return ctx.parse_array_stop(idx);
+    }
+    do {
+      if (! ctx.parse_array_item(in, idx)) {
+	return false;
+      }
+      idx++;
+    } while (in.expect(','));
+    return in.expect(']') && ctx.parse_array_stop(idx);
+  }
+
+  template <typename Context, typename Iter> inline bool _parse_object(Context& ctx, input<Iter>& in) {
+    if (! ctx.parse_object_start()) {
+      return false;
+    }
+    if (in.expect('}')) {
+      return true;
+    }
+    do {
+      std::string key;
+      if (! in.expect('"')
+	  || ! _parse_string(key, in)
+	  || ! in.expect(':')) {
+	return false;
+      }
+      if (! ctx.parse_object_item(in, key)) {
+	return false;
+      }
+    } while (in.expect(','));
+    return in.expect('}');
+  }
+
+  template <typename Iter> inline std::string _parse_number(input<Iter>& in) {
+    std::string num_str;
+    while (1) {
+      int ch = in.getc();
+      if (('0' <= ch && ch <= '9') || ch == '+' || ch == '-'
+          || ch == 'e' || ch == 'E') {
+        num_str.push_back(ch);
+      } else if (ch == '.') {
+#if PICOJSON_USE_LOCALE
+        num_str += localeconv()->decimal_point;
+#else
+        num_str.push_back('.');
+#endif
+      } else {
+	in.ungetc();
+	break;
+      }
+    }
+    return num_str;
+  }
+
+  template <typename Context, typename Iter> inline bool _parse(Context& ctx, input<Iter>& in) {
+    in.skip_ws();
+    int ch = in.getc();
+    switch (ch) {
+#define IS(ch, text, op) case ch: \
+      if (in.match(text) && op) { \
+	return true; \
+      } else { \
+	return false; \
+      }
+      IS('n', "ull", ctx.set_null());
+      IS('f', "alse", ctx.set_bool(false));
+      IS('t', "rue", ctx.set_bool(true));
+#undef IS
+    case '"':
+      return ctx.parse_string(in);
+    case '[':
+      return _parse_array(ctx, in);
+    case '{':
+      return _parse_object(ctx, in);
+    default:
+      if (('0' <= ch && ch <= '9') || ch == '-') {
+        double f;
+        char *endp;
+	in.ungetc();
+        std::string num_str = _parse_number(in);
+        if (num_str.empty()) {
+          return false;
+        }
+#ifdef PICOJSON_USE_INT64
+        {
+          errno = 0;
+          intmax_t ival = strtoimax(num_str.c_str(), &endp, 10);
+          if (errno == 0
+              && std::numeric_limits<int64_t>::min() <= ival
+              && ival <= std::numeric_limits<int64_t>::max()
+              && endp == num_str.c_str() + num_str.size()) {
+            ctx.set_int64(ival);
+            return true;
+          }
+        }
+#endif
+        f = strtod(num_str.c_str(), &endp);
+        if (endp == num_str.c_str() + num_str.size()) {
+          ctx.set_number(f);
+          return true;
+        }
+        return false;
+      }
+      break;
+    }
+    in.ungetc();
+    return false;
+  }
+
+  class deny_parse_context {
+  public:
+    bool set_null() { return false; }
+    bool set_bool(bool) { return false; }
+#ifdef PICOJSON_USE_INT64
+    bool set_int64(int64_t) { return false; }
+#endif
+    bool set_number(double) { return false; }
+    template <typename Iter> bool parse_string(input<Iter>&) { return false; }
+    bool parse_array_start() { return false; }
+    template <typename Iter> bool parse_array_item(input<Iter>&, size_t) {
+      return false;
+    }
+    bool parse_array_stop(size_t) { return false; }
+    bool parse_object_start() { return false; }
+    template <typename Iter> bool parse_object_item(input<Iter>&, const std::string&) {
+      return false;
+    }
+  };
+
+  class default_parse_context {
+  protected:
+    value* out_;
+  public:
+    default_parse_context(value* out) : out_(out) {}
+    bool set_null() {
+      *out_ = value();
+      return true;
+    }
+    bool set_bool(bool b) {
+      *out_ = value(b);
+      return true;
+    }
+#ifdef PICOJSON_USE_INT64
+    bool set_int64(int64_t i) {
+      *out_ = value(i);
+      return true;
+    }
+#endif
+    bool set_number(double f) {
+      *out_ = value(f);
+      return true;
+    }
+    template<typename Iter> bool parse_string(input<Iter>& in) {
+      *out_ = value(string_type, false);
+      return _parse_string(out_->get<std::string>(), in);
+    }
+    bool parse_array_start() {
+      *out_ = value(array_type, false);
+      return true;
+    }
+    template <typename Iter> bool parse_array_item(input<Iter>& in, size_t) {
+      array& a = out_->get<array>();
+      a.push_back(value());
+      default_parse_context ctx(&a.back());
+      return _parse(ctx, in);
+    }
+    bool parse_array_stop(size_t) { return true; }
+    bool parse_object_start() {
+      *out_ = value(object_type, false);
+      return true;
+    }
+    template <typename Iter> bool parse_object_item(input<Iter>& in, const std::string& key) {
+      object& o = out_->get<object>();
+      default_parse_context ctx(&o[key]);
+      return _parse(ctx, in);
+    }
+  private:
+    default_parse_context(const default_parse_context&);
+    default_parse_context& operator=(const default_parse_context&);
+  };
+
+  class null_parse_context {
+  public:
+    struct dummy_str {
+      void push_back(int) {}
+    };
+  public:
+    null_parse_context() {}
+    bool set_null() { return true; }
+    bool set_bool(bool) { return true; }
+#ifdef PICOJSON_USE_INT64
+    bool set_int64(int64_t) { return true; }
+#endif
+    bool set_number(double) { return true; }
+    template <typename Iter> bool parse_string(input<Iter>& in) {
+      dummy_str s;
+      return _parse_string(s, in);
+    }
+    bool parse_array_start() { return true; }
+    template <typename Iter> bool parse_array_item(input<Iter>& in, size_t) {
+      return _parse(*this, in);
+    }
+    bool parse_array_stop(size_t) { return true; }
+    bool parse_object_start() { return true; }
+    template <typename Iter> bool parse_object_item(input<Iter>& in, const std::string&) {
+      return _parse(*this, in);
+    }
+  private:
+    null_parse_context(const null_parse_context&);
+    null_parse_context& operator=(const null_parse_context&);
+  };
+
+  // obsolete, use the version below
+  template <typename Iter> inline std::string parse(value& out, Iter& pos, const Iter& last) {
+    std::string err;
+    pos = parse(out, pos, last, &err);
+    return err;
+  }
+
+  template <typename Context, typename Iter> inline Iter _parse(Context& ctx, const Iter& first, const Iter& last, std::string* err) {
+    input<Iter> in(first, last);
+    if (! _parse(ctx, in) && err != NULL) {
+      char buf[64];
+      SNPRINTF(buf, sizeof(buf), "syntax error at line %d near: ", in.line());
+      *err = buf;
+      while (1) {
+	int ch = in.getc();
+	if (ch == -1 || ch == '\n') {
+	  break;
+	} else if (ch >= ' ') {
+	  err->push_back(ch);
+	}
+      }
+    }
+    return in.cur();
+  }
+
+  template <typename Iter> inline Iter parse(value& out, const Iter& first, const Iter& last, std::string* err) {
+    default_parse_context ctx(&out);
+    return _parse(ctx, first, last, err);
+  }
+
+  inline std::string parse(value& out, const std::string& s) {
+    std::string err;
+    parse(out, s.begin(), s.end(), &err);
+    return err;
+  }
+
+  inline std::string parse(value& out, std::istream& is) {
+    std::string err;
+    parse(out, std::istreambuf_iterator<char>(is.rdbuf()),
+	  std::istreambuf_iterator<char>(), &err);
+    return err;
+  }
+
+  template <typename T> struct last_error_t {
+    static std::string s;
+  };
+  template <typename T> std::string last_error_t<T>::s;
+
+  inline void set_last_error(const std::string& s) {
+    last_error_t<bool>::s = s;
+  }
+
+  inline const std::string& get_last_error() {
+    return last_error_t<bool>::s;
+  }
+
+  inline bool operator==(const value& x, const value& y) {
+    if (x.is<null>())
+      return y.is<null>();
+#define PICOJSON_CMP(type)					\
+    if (x.is<type>())						\
+      return y.is<type>() && x.get<type>() == y.get<type>()
+    PICOJSON_CMP(bool);
+    PICOJSON_CMP(double);
+    PICOJSON_CMP(std::string);
+    PICOJSON_CMP(array);
+    PICOJSON_CMP(object);
+#undef PICOJSON_CMP
+    PICOJSON_ASSERT(0);
+#ifdef _MSC_VER
+    __assume(0);
+#endif
+    return false;
+  }
+
+  inline bool operator!=(const value& x, const value& y) {
+    return ! (x == y);
+  }
+}
+
+namespace std {
+  template<> inline void swap(bms_parser_picojson::value& x, bms_parser_picojson::value& y)
+    {
+      x.swap(y);
+    }
+}
+
+inline std::istream& operator>>(std::istream& is, bms_parser_picojson::value& x)
+{
+  bms_parser_picojson::set_last_error(std::string());
+  std::string err = bms_parser_picojson::parse(x, is);
+  if (! err.empty()) {
+    bms_parser_picojson::set_last_error(err);
+    is.setstate(std::ios::failbit);
+  }
+  return is;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const bms_parser_picojson::value& x)
+{
+  x.serialize(std::ostream_iterator<char>(os));
+  return os;
+}
+#ifdef _MSC_VER
+    #pragma warning(pop)
+#endif
+
+#ifdef BMS_PARSER_UNDEF_PICOJSON_INT64
+#undef PICOJSON_USE_INT64
+#undef BMS_PARSER_UNDEF_PICOJSON_INT64
+#endif
+
+#endif
 
 
 #include <string>
@@ -2162,65 +3641,6 @@ inline size_t asciiPrefixLength(const unsigned char *input, size_t size) {
  */
 
 
-/**
- *
- */
-namespace bms_parser {
-enum class LongNoteType {
-  Undefined = 0,
-  LongNote = 1,
-  ChargeNote = 2,
-  HellChargeNote = 3,
-};
-
-LongNoteType LongNoteTypeFromLnMode(int LnMode);
-LongNoteType ResolveLongNoteType(LongNoteType Type, int LnMode);
-
-class LongNote : public Note {
-public:
-  ~LongNote() override;
-  LongNote *Tail;
-  LongNote *Head = nullptr;
-  bool IsHolding = false;
-  LongNoteType Type = LongNoteType::Undefined;
-  [[nodiscard]] bool IsTail() const;
-  long long ReleaseTime{};
-
-  explicit LongNote(int Wav,
-                    LongNoteType Type = LongNoteType::Undefined);
-
-  [[nodiscard]] LongNoteType GetType() const;
-  void SetType(LongNoteType Type);
-
-  void Press(long long Time) override;
-
-  void Release(long long Time);
-
-  void MissPress(long long Time);
-
-  void Reset() override;
-
-  bool IsLongNote() override { return true; }
-};
-} // namespace bms_parser
-
-/*
- * Copyright (C) 2024 VioletXF, khoeun03
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- */
-
-
 #include <memory>
 #include <string>
 #include <string_view>
@@ -2415,155 +3835,6 @@ public:
   [[nodiscard]] const char *Name() const override;
 };
 
-} // namespace bms_parser
-
-/*
- * Copyright (C) 2024 VioletXF, khoeun03
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
- */
-
-#ifdef _WIN32
-#include <windows.h>
-#endif
-#include <atomic>
-#include <filesystem>
-#include <map>
-#include <memory>
-#include <cstdint>
-#include <optional>
-#include <string>
-#include <vector>
-
-/**
- *
- */
-namespace bms_parser {
-// Full-parse metadata/features without retaining the note/timeline graph.
-// Feature flags describe declared BGA resources and effective timeline values.
-struct ChartScanResult {
-  ChartMeta Meta;
-  bool HasBga = false;
-  bool HasBpmStop = false;
-  bool HasScrollChange = false;
-};
-
-// Optional wall-time breakdown for one scan. Parallel callers should sum
-// these as worker time, not compare the sum directly with elapsed scan time.
-struct ScanTimings {
-  std::uint64_t ReadNanoseconds = 0;
-  std::uint64_t HashNanoseconds = 0;
-  std::uint64_t DecodeNanoseconds = 0;
-  std::uint64_t ParseNanoseconds = 0;
-};
-
-// Reusable storage only: random state and chart results remain in Parser.
-// Confine each workspace to one worker; no output borrows its storage.
-class ScanWorkspace {
-public:
-  ScanWorkspace();
-  ~ScanWorkspace();
-  ScanWorkspace(const ScanWorkspace &) = delete;
-  ScanWorkspace &operator=(const ScanWorkspace &) = delete;
-private:
-  struct Storage;
-  std::unique_ptr<Storage> storage;
-  friend class Parser;
-};
-
-class Parser {
-public:
-  static constexpr const char *RandomPrngId = "std::mt19937_64";
-
-  Parser();
-  // Decode source with the same charset detection as Parse, preserving line endings.
-  [[nodiscard]] static std::string DecodeText(const std::vector<unsigned char> &bytes);
-  static bool IsSupportedRandomPrng(const std::string &RandomPrng);
-  bool SetRandomPrng(const std::string &RandomPrng);
-  [[nodiscard]] const std::string &GetRandomPrng() const;
-  void SetRandomSeed(unsigned int RandomSeed);
-  [[nodiscard]] unsigned int GetRandomSeed() const;
-  void SetRandomValues(const std::vector<int> &RandomValues);
-  [[nodiscard]] const std::vector<int> &GetRandomValues() const;
-
-  void Parse(const std::filesystem::path &path, Chart **Chart,
-             bool addReadyMeasure, bool metaOnly, std::atomic_bool &bCancelled);
-  ~Parser();
-  void Parse(const std::vector<unsigned char> &bytes, Chart **chart,
-             bool addReadyMeasure, bool metaOnly, std::atomic_bool &bCancelled);
-  // A source name selects channel mapping only (.pms, case insensitive).
-  // It is not read from disk and does not assign BmsPath or Folder.
-  void Parse(const std::vector<unsigned char> &bytes, Chart **chart,
-             bool addReadyMeasure, bool metaOnly, std::atomic_bool &bCancelled,
-             const std::filesystem::path &sourcePath);
-  [[nodiscard]] std::optional<ChartScanResult>
-  Scan(const std::vector<unsigned char> &bytes, std::atomic_bool &bCancelled);
-  [[nodiscard]] std::optional<ChartScanResult>
-  Scan(const std::vector<unsigned char> &bytes, std::atomic_bool &bCancelled,
-       const std::filesystem::path &sourcePath);
-  [[nodiscard]] std::optional<ChartScanResult>
-  Scan(const std::filesystem::path &path, std::atomic_bool &bCancelled);
-  [[nodiscard]] std::optional<ChartScanResult>
-  Scan(const std::vector<unsigned char> &bytes, std::atomic_bool &bCancelled,
-       const std::filesystem::path &sourcePath, ScanWorkspace &workspace,
-       ScanTimings *timings = nullptr);
-  [[nodiscard]] std::optional<ChartScanResult>
-  Scan(const std::filesystem::path &path, std::atomic_bool &bCancelled,
-       ScanWorkspace &workspace, ScanTimings *timings = nullptr);
-  static int NoWav;
-  static int MetronomeWav;
-
-private:
-  void ParseInternal(const std::vector<unsigned char> &bytes, Chart **chart,
-                     bool addReadyMeasure, bool metaOnly,
-                     std::atomic_bool &bCancelled, ChartScanResult *scan,
-                     bool pms = false, ScanWorkspace *workspace = nullptr,
-                     ScanTimings *timings = nullptr);
-  std::optional<ChartScanResult>
-  ScanInternal(const std::vector<unsigned char> &bytes,
-               std::atomic_bool &bCancelled,
-               const std::filesystem::path &sourcePath,
-               ScanWorkspace *workspace, ScanTimings *timings);
-  // bpmTable
-  std::unordered_map<int, double> BpmTable;
-  std::unordered_map<int, double> StopLengthTable;
-  std::unordered_map<int, double> ScrollTable;
-  std::unordered_map<int, double> SpeedTable;
-
-  bool UseBase62 = false;
-  int Lnobj = -1;
-  unsigned int Seed;
-  std::string RandomPrng = RandomPrngId;
-  std::vector<int> RandomValues;
-  static inline int ParseHex(std::string_view Str);
-  inline int ParseInt(std::string_view Str, bool forceBase36 = false) const;
-  void ParseHeader(Chart *Chart, std::string_view cmd, std::string_view Xx,
-                   const std::string &Value, bool shiftJis = false);
-  static inline bool MatchHeader(const std::string_view &str,
-                                 const std::string_view &headerUpper);
-  static inline unsigned long long Gcd(unsigned long long A,
-                                       unsigned long long B);
-  inline bool CheckResourceIdRange(int Id) const;
-  inline int ToWaveId(Chart *Chart, std::string_view Wav, bool metaOnly);
-  inline void RegisterReferencedWaveId(Chart *Chart, int WavId) const;
-  inline void RegisterReferencedBmpId(Chart *Chart, int BmpId,
-                                      bool metaOnly) const;
-#ifdef _WIN32
-  static std::wstring utf8_to_path_t(const std::string &input);
-#else
-  static std::string utf8_to_path_t(const std::string &input);
-#endif
-};
 } // namespace bms_parser
 
 // https://stackoverflow.com/questions/33165171/c-shiftjis-to-utf8-conversion
@@ -5264,188 +6535,3 @@ private:
 };
 
 } // namespace bms_parser::detail
-
-#include <string>
-#include <vector>
-
-// http://www.zedwood.com/article/cpp-sha256-function
-namespace bms_parser {
-class SHA256 {
-  /*
-   * Updated to C++, zedwood.com 2012
-   * Based on Olivier Gay's version
-   * See Modified BSD License below:
-   *
-   * FIPS 180-2 SHA-224/256/384/512 implementation
-   * Issue date:  04/30/2005
-   * http://www.ouah.org/ogay/sha2/
-   *
-   * Copyright (C) 2005, 2007 Olivier Gay <olivier.gay@a3.epfl.ch>
-   * All rights reserved.
-   *
-   * Redistribution and use in source and binary forms, with or without
-   * modification, are permitted provided that the following conditions
-   * are met:
-   * 1. Redistributions of source code must retain the above copyright
-   *    notice, this list of conditions and the following disclaimer.
-   * 2. Redistributions in binary form must reproduce the above copyright
-   *    notice, this list of conditions and the following disclaimer in the
-   *    documentation and/or other materials provided with the distribution.
-   * 3. Neither the name of the project nor the names of its contributors
-   *    may be used to endorse or promote products derived from this software
-   *    without specific prior written permission.
-   *
-   * THIS SOFTWARE IS PROVIDED BY THE PROJECT AND CONTRIBUTORS ``AS IS'' AND
-   * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
-   * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
-   * ARE DISCLAIMED.  IN NO EVENT SHALL THE PROJECT OR CONTRIBUTORS BE LIABLE
-   * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
-   * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
-   * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
-   * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
-   * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
-   * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
-   * SUCH DAMAGE.
-   */
-protected:
-  using uint8 = unsigned char;
-  using uint32 = unsigned int;
-
-  const static uint32 sha256_k[];
-  static constexpr unsigned int SHA224_256_BLOCK_SIZE = (512 / 8);
-
-public:
-  void init();
-  void update(const unsigned char *message, unsigned int len);
-  void final(unsigned char *digest);
-  static constexpr unsigned int DIGEST_SIZE = (256 / 8);
-
-protected:
-  void transform(const unsigned char *message, unsigned int block_nb);
-  unsigned int m_tot_len;
-  unsigned int m_len;
-  unsigned char m_block[2 * SHA224_256_BLOCK_SIZE];
-  uint32 m_h[8];
-};
-
-std::string sha256(const std::vector<unsigned char> &bytes);
-
-#define SHA2_SHFR(x, n) (x >> n)
-#define SHA2_ROTR(x, n) ((x >> n) | (x << ((sizeof(x) << 3) - n)))
-#define SHA2_CH(x, y, z) ((x & y) ^ (~x & z))
-#define SHA2_MAJ(x, y, z) ((x & y) ^ (x & z) ^ (y & z))
-#define SHA256_F1(x) (SHA2_ROTR(x, 2) ^ SHA2_ROTR(x, 13) ^ SHA2_ROTR(x, 22))
-#define SHA256_F2(x) (SHA2_ROTR(x, 6) ^ SHA2_ROTR(x, 11) ^ SHA2_ROTR(x, 25))
-#define SHA256_F3(x) (SHA2_ROTR(x, 7) ^ SHA2_ROTR(x, 18) ^ SHA2_SHFR(x, 3))
-#define SHA256_F4(x) (SHA2_ROTR(x, 17) ^ SHA2_ROTR(x, 19) ^ SHA2_SHFR(x, 10))
-#define SHA2_UNPACK32(x, str)                                                  \
-  {                                                                            \
-    *((str) + 3) = (uint8)((x));                                               \
-    *((str) + 2) = (uint8)((x) >> 8);                                          \
-    *((str) + 1) = (uint8)((x) >> 16);                                         \
-    *((str) + 0) = (uint8)((x) >> 24);                                         \
-  }
-#define SHA2_PACK32(str, x)                                                    \
-  {                                                                            \
-    *(x) = ((uint32) * ((str) + 3)) | ((uint32) * ((str) + 2) << 8) |          \
-           ((uint32) * ((str) + 1) << 16) | ((uint32) * ((str) + 0) << 24);    \
-  }
-} // namespace bms_parser
-
-/* MD5
- converted to C++ class by Frank Thilo (thilo@unix-ag.org)
- for bzflag (http://www.bzflag.org)
-
-   based on:
-
-   md5.h and md5.c
-   reference implementation of RFC 1321
-
-   Copyright (C) 1991-2, RSA Data Security, Inc. Created 1991. All
-rights reserved.
-
-License to copy and use this software is granted provided that it
-is identified as the "RSA Data Security, Inc. MD5 Message-Digest
-Algorithm" in all material mentioning or referencing this software
-or this function.
-
-License is also granted to make and use derivative works provided
-that such works are identified as "derived from the RSA Data
-Security, Inc. MD5 Message-Digest Algorithm" in all material
-mentioning or referencing the derived work.
-
-RSA Data Security, Inc. makes no representations concerning either
-the merchantability of this software or the suitability of this
-software for any particular purpose. It is provided "as is"
-without express or implied warranty of any kind.
-
-These notices must be retained in any copies of any part of this
-documentation and/or software.
-
-*/
-
-#ifndef BZF_MD5_H
-#define BZF_MD5_H
-
-#include <cstring>
-#include <iostream>
-
-// a small class for calculating MD5 hashes of strings or byte arrays
-// it is not meant to be fast or secure
-//
-// usage: 1) feed it blocks of uchars with update()
-//      2) finalize()
-//      3) get hexdigest() string
-//      or
-//      MD5(std::string).hexdigest()
-//
-// assumes that char is 8 bit and int is 32 bit
-
-namespace bms_parser {
-class MD5 {
-public:
-  typedef unsigned int size_type; // must be 32bit
-
-  MD5();
-  MD5(const std::string &text);
-  void update(const unsigned char *buf, size_type length);
-  void update(const char *buf, size_type length);
-  MD5 &finalize();
-  std::string hexdigest() const;
-  friend std::ostream &operator<<(std::ostream &, MD5 md5);
-
-private:
-  void init();
-  typedef unsigned char uint1; //  8bit
-  typedef unsigned int uint4;  // 32bit
-  enum { blocksize = 64 };     // VC6 won't eat a const static int here
-
-  void transform(const uint1 block[blocksize]);
-  static void decode(uint4 output[], const uint1 input[], size_type len);
-  static void encode(uint1 output[], const uint4 input[], size_type len);
-
-  bool finalized;
-  uint1 buffer[blocksize]; // bytes that didn't fit in last 64 byte chunk
-  uint4 count[2];          // 64bit counter for number of bits (lo, hi)
-  uint4 state[4];          // digest so far
-  uint1 digest[16];        // the result
-
-  // low level logic operations
-  static inline uint4 F(uint4 x, uint4 y, uint4 z);
-  static inline uint4 G(uint4 x, uint4 y, uint4 z);
-  static inline uint4 H(uint4 x, uint4 y, uint4 z);
-  static inline uint4 I(uint4 x, uint4 y, uint4 z);
-  static inline uint4 rotate_left(uint4 x, int n);
-  static inline void FF(uint4 &a, uint4 b, uint4 c, uint4 d, uint4 x, uint4 s,
-                        uint4 ac);
-  static inline void GG(uint4 &a, uint4 b, uint4 c, uint4 d, uint4 x, uint4 s,
-                        uint4 ac);
-  static inline void HH(uint4 &a, uint4 b, uint4 c, uint4 d, uint4 x, uint4 s,
-                        uint4 ac);
-  static inline void II(uint4 &a, uint4 b, uint4 c, uint4 d, uint4 x, uint4 s,
-                        uint4 ac);
-};
-
-std::string md5(const std::string str);
-} // namespace bms_parser
-#endif

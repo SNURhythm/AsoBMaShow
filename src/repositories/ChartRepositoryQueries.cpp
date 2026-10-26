@@ -135,6 +135,8 @@ constexpr const char *kDifficultyEntrySelectColumns =
     "COALESCE(cm.most_prevalent_bpm, 0),"
     "COALESCE(cm.has_bga, 0),"
     "COALESCE(cm.rank_type, 0),"
+    "COALESCE(cm.total_is_relative, 0),"
+    "COALESCE(cm.bmson_mode_hint, ''),"
     "dt.symbol || dte.level,"
     "CASE WHEN cm.path IS NULL THEN 1 ELSE 0 END";
 
@@ -190,6 +192,8 @@ constexpr const char *kDifficultyCourseEntrySelectColumns =
     "COALESCE(cm.most_prevalent_bpm, 0),"
     "COALESCE(cm.has_bga, 0),"
     "COALESCE(cm.rank_type, 0),"
+    "COALESCE(cm.total_is_relative, 0),"
+    "COALESCE(cm.bmson_mode_hint, ''),"
     "COALESCE(NULLIF(dt.symbol || NULLIF(NULLIF(dce.level, ''), '0'), "
     "dt.symbol), NULLIF(dt.symbol || NULLIF(dte.level, ''), dt.symbol), "
     "NULLIF(dt.symbol || NULLIF(dce.level, ''), dt.symbol), "
@@ -2292,7 +2296,7 @@ void ChartRepository::Session::VisitChartMetaSelection(
   if (!recursiveFolder.empty() || keyword.empty()) filter.recursiveFolder = recursiveFolder;
   std::string query =
       "SELECT cm.path, cm.md5, cm.sha256, cm.title, cm.artist, "
-      "cm.difficulty, cm.level, cm.keys, cm.total_notes, "
+      "cm.difficulty, cm.level, cm.keys, cm.bmson_mode_hint, cm.total_notes, "
       "cm.total_scratch_notes, cm.total_backspin_notes, cm.total_long_notes, "
       "cm.ln_mode, cm.min_bpm, cm.max_bpm, cm.length, "
       "cm.has_scroll_change, cm.has_bpm_stop, ";
@@ -2327,6 +2331,10 @@ void ChartRepository::Session::VisitChartMetaSelection(
     record.meta.Difficulty = sqlite3_column_int(statement, column++);
     record.meta.PlayLevel = sqlite3_column_double(statement, column++);
     record.meta.KeyMode = sqlite3_column_int(statement, column++);
+    record.meta.IsDP = record.meta.KeyMode == 10 || record.meta.KeyMode == 14 ||
+                       record.meta.KeyMode == 48;
+    const auto modeHint = columnString(statement, column++);
+    if (!modeHint.empty()) record.meta.Values["bmson.mode_hint"] = modeHint;
     record.meta.TotalNotes = sqlite3_column_int(statement, column++);
     record.meta.TotalScratchNotes = sqlite3_column_int(statement, column++);
     record.meta.TotalBackSpinNotes = sqlite3_column_int(statement, column++);
@@ -3225,7 +3233,7 @@ ChartMetaRecord readChartMetaRecord(sqlite3_stmt *stmt) {
   if (sqlite3_column_count(stmt) > idx) {
     record.hasBga = sqlite3_column_int(stmt, idx++) != 0;
   }
-  ++idx; // RankType is consumed by the shared ChartMeta reader.
+  idx += 3; // RankType, TotalIsRelative and mode hint are consumed by the shared reader.
   if (sqlite3_column_count(stmt) > idx) {
     record.difficultyTableLabels = columnString(stmt, idx++);
   }

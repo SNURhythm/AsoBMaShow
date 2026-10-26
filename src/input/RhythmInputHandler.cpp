@@ -566,6 +566,7 @@ int RhythmInputHandler::clampLane(int lane) const {
   return laneOrder[clampedLane];
 }
 bool RhythmInputHandler::isScratchLane(int lane) const {
+  if (keyMode == 24 || keyMode == 48) return false;
   return (scratchLaneCount > 0 && lane == 7) ||
          (scratchLaneCount > 1 && lane == 15);
 }
@@ -666,7 +667,8 @@ bms_parser::Note *RhythmInputHandler::applyTouchLane(
   if (logicalInputPipeline == nullptr) {
     return nullptr;
   }
-  const int player = (keyMode == 10 || keyMode == 14) && lane >= 8 ? 2 : 1;
+  const int player = keyMode == 48 ? (lane >= 26 ? 2 : 1)
+                     : (keyMode == 10 || keyMode == 14) && lane >= 8 ? 2 : 1;
   return logicalInputPipeline->consumePhysicalTouchLane(
       {.player = player, .keyMode = keyMode}, lane, pressed,
       scratchDirection, touchEventTimestampMicros(), backSpin);

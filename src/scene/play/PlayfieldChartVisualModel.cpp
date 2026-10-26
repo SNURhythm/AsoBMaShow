@@ -2,6 +2,7 @@
 #include "../../ChartPlayability.h"
 #include "PlayfieldChartVisualModel.h"
 #include "GameplayScrollGeometry.h"
+#include "GameplayScoreState.h"
 
 #include "../../ChartPlaybackDuration.h"
 #include "../../bms_parser.hpp"
@@ -397,7 +398,8 @@ int javaDoubleToIntForSongInformation(double value) {
 
 PlayfieldSongInformation
 beatorajaSongInformation(const bms_parser::Chart &chart,
-                         int longNoteModeOverride) {
+                         int longNoteModeOverride,
+                         std::optional<double> effectiveGaugeTotal) {
   // This follows SongInformation(BMSModel) at the pinned Beatoraja revision.
   // Keep the source's fixed seven buckets even though gameplay skins only
   // consume its aggregate density values.
@@ -432,9 +434,10 @@ beatorajaSongInformation(const bms_parser::Chart &chart,
     ++noteCountDeltas[start];
     --noteCountDeltas[end + 1U];
   };
+  const double total = effectiveGaugeTotal.value_or(beatorajaPresentationTotal(chart.Meta));
   const double borderValue =
       static_cast<double>(chart.Meta.TotalNotes) *
-      (1.0 - 100.0 / chart.Meta.Total);
+      (1.0 - 100.0 / total);
   int border = javaDoubleToIntForSongInformation(borderValue);
   std::uint64_t borderPosition = 0;
   for (const auto *measure : chart.Measures) {
@@ -478,8 +481,7 @@ beatorajaSongInformation(const bms_parser::Chart &chart,
         } else if (longNote == nullptr) {
           addNoteRange(second, second);
         }
-        --border;
-        if (border == 0) {
+        if (border > 0 && --border == 0) {
           borderPosition = second;
         }
       }
@@ -567,11 +569,18 @@ beatorajaSongInformation(const bms_parser::Chart &chart,
                                  static_cast<double>(notes) /
                                      static_cast<double>(window));
   }
-  result.total = chart.Meta.Total;
+  result.total = total;
   return result;
 }
 
 } // namespace
+
+double beatorajaPresentationTotal(const bms_parser::ChartMeta &metadata) {
+  return metadata.TotalIsRelative
+      ? beatorajaDefaultGaugeTotal(metadata.KeyMode, metadata.TotalNotes) *
+            std::abs(metadata.Total) / 100.0
+      : metadata.Total;
+}
 
 std::optional<int> beatorajaParseInt(std::string_view value) {
   return javaParseInt(value);
@@ -601,7 +610,8 @@ std::vector<std::string> PlayfieldChartVisualModel::runtimeStrings() const {
 
 PlayfieldChartVisualModel
 buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
-                               int longNoteModeOverride) {
+                               int longNoteModeOverride,
+                               std::optional<double> effectiveGaugeTotal) {
   PlayfieldChartVisualModel result;
   result.chartMd5 = chart.Meta.MD5;
   result.chartSha256 = chart.Meta.SHA256;
@@ -676,7 +686,8 @@ buildPlayfieldChartVisualModel(const bms_parser::Chart &chart,
           chartResourcePath(chart.Meta, chart.Meta.StageFile),
       .backBmpResourcePath = chartResourcePath(chart.Meta, chart.Meta.BackBmp),
       .bannerResourcePath = chartResourcePath(chart.Meta, chart.Meta.Banner),
-      .songInformation = beatorajaSongInformation(chart, longNoteModeOverride),
+      .songInformation = beatorajaSongInformation(
+          chart, longNoteModeOverride, effectiveGaugeTotal),
   };
   result.laneOrder = chart.Meta.GetTotalLaneIndices();
 

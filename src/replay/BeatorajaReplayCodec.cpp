@@ -510,13 +510,35 @@ Json encodeSetup(const ReplaySetup &setup) {
   };
 }
 
+bool decodeLaneShuffleRow(const Json &row,
+                          std::optional<std::vector<int>> &output) {
+  if (row.is_null()) {
+    output.reset();
+    return true;
+  }
+  // JSON get<int>() narrows floats and oversized integers. Check the wire
+  // values before conversion so a malformed row cannot become a permutation.
+  if (!row.is_array() || !std::ranges::all_of(row, [](const Json &lane) {
+        return lane.is_number_integer() && lane >= 0 &&
+               lane <= std::numeric_limits<int>::max();
+      })) {
+    return false;
+  }
+  output = row.get<std::vector<int>>();
+  return true;
+}
+
 bool decodePlayerOption(const Json &source, ReplayPlayerOption &output,
                         std::string &diagnostic) {
-  return source.is_object() &&
-         readRequired(source, "option", output.option, diagnostic) &&
-         readOptional(source, "seed", output.seed, diagnostic) &&
-         readOptional(source, "laneShufflePattern", output.laneShufflePattern,
-                      diagnostic);
+  if (!source.is_object() ||
+      !readRequired(source, "option", output.option, diagnostic) ||
+      !readOptional(source, "seed", output.seed, diagnostic)) {
+    return false;
+  }
+  const auto pattern = source.find("laneShufflePattern");
+  return (pattern != source.end() &&
+          decodeLaneShuffleRow(*pattern, output.laneShufflePattern)) ||
+         fail(diagnostic, "Replay lane-shuffle pattern has the wrong type");
 }
 
 bool decodeSetup(const Json &source, ReplaySetup &output,
@@ -780,27 +802,45 @@ bool decodeLaneShufflePatterns(const Json &stage, int keyMode,
   if (!found->is_array() || found->size() != expectedRows) {
     return fail(diagnostic, "Replay stock lane-shuffle row count is invalid");
   }
-  const auto decodeRow = [&](const Json &row,
-                             std::optional<std::vector<int>> &output) {
-    if (row.is_null()) {
-      output.reset();
-      return true;
-    }
-    if (!row.is_array()) {
-      return false;
-    }
-    try {
-      output = row.get<std::vector<int>>();
-      return true;
-    } catch (const Json::exception &) {
-      return false;
-    }
-  };
-  if (!decodeRow((*found)[0], setup.player1.laneShufflePattern) ||
+  if (!decodeLaneShuffleRow((*found)[0], setup.player1.laneShufflePattern) ||
       (expectedRows == 2 &&
-       !decodeRow((*found)[1], setup.player2.laneShufflePattern))) {
+       !decodeLaneShuffleRow((*found)[1], setup.player2.laneShufflePattern))) {
     return fail(diagnostic,
                 "Replay stock lane-shuffle pattern has the wrong type");
+  }
+  if (keyMode == 24 || keyMode == 48) {
+    // Beatoraja 83574048 getRandomPattern assumes one scratch per player:
+    // keyboard RANDOM/R-RANDOM display rows end in [24,24] or [50,25].
+    // Repair only that producer shape; option/seed still reproduce the chart.
+    const auto repairWheelDisplayRow = [](ReplayPlayerOption &option, int player) {
+      if ((option.option != "RANDOM" && option.option != "R-RANDOM") ||
+          !option.laneShufflePattern || option.laneShufflePattern->size() != 26) {
+        return;
+      }
+      auto &row = *option.laneShufflePattern;
+      const int offset = player * 26;
+      if (row[24] != offset + 24 || row[25] != 24 + player) return;
+      bool seen[24]{};
+      for (int index = 0; index < 24; ++index) {
+        const int key = row[index] - offset;
+        if (key < 0 || key >= 24 || seen[key]) return;
+        seen[key] = true;
+      }
+      row[25] = offset + 25;
+    };
+    repairWheelDisplayRow(setup.player1, 0);
+    if (expectedRows == 2) repairWheelDisplayRow(setup.player2, 1);
+  }
+  // Beatoraja stores global source ordinals. Older Aso stock projections
+  // wrote canonical player-local rows, so accept either complete namespace.
+  // Mixed rows and non-permutations still fail canonical setup validation.
+  auto &second = setup.player2.laneShufflePattern;
+  const int stride = layout->stockShuffleWidth;
+  if (expectedRows == 2 && second &&
+      std::ranges::all_of(*second, [stride](int lane) {
+        return lane >= stride && lane < stride * 2;
+      })) {
+    for (int &lane : *second) lane -= stride;
   }
   return true;
 }
@@ -919,7 +959,11 @@ Json encodeStockLanePatterns(const ReplaySetup &setup) {
   output.push_back(optionalJson(setup.player1.laneShufflePattern));
   const auto layout = replayKeyModeLayout(setup.chart.keyMode);
   if (layout && layout->players == 2) {
-    output.push_back(optionalJson(setup.player2.laneShufflePattern));
+    auto second = setup.player2.laneShufflePattern;
+    if (second) {
+      for (int &lane : *second) lane += layout->stockShuffleWidth;
+    }
+    output.push_back(optionalJson(second));
   }
   return output;
 }

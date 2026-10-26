@@ -53,6 +53,8 @@ readChartMeta(sqlite3_stmt *stmt, AbsolutePathFromColumn absolutePathFromColumn,
   chartMeta.Rank = sqlite3_column_int(stmt, idx++);
   chartMeta.Player = sqlite3_column_int(stmt, idx++);
   chartMeta.KeyMode = sqlite3_column_int(stmt, idx++);
+  chartMeta.IsDP = chartMeta.KeyMode == 10 ||
+                   chartMeta.KeyMode == 14 || chartMeta.KeyMode == 48;
   chartMeta.TotalNotes = sqlite3_column_int(stmt, idx++);
   chartMeta.TotalLongNotes = sqlite3_column_int(stmt, idx++);
   chartMeta.TotalScratchNotes = sqlite3_column_int(stmt, idx++);
@@ -62,6 +64,14 @@ readChartMeta(sqlite3_stmt *stmt, AbsolutePathFromColumn absolutePathFromColumn,
     chartMeta.RankType = sqlite3_column_int(stmt, 37) == 1
                             ? bms_parser::JudgeRankType::DefExRank
                             : bms_parser::JudgeRankType::BmsRank;
+  }
+
+  if (sqlite3_column_count(stmt) > 38)
+    chartMeta.TotalIsRelative = sqlite3_column_int(stmt, 38) != 0;
+
+  if (sqlite3_column_count(stmt) > 39) {
+    const auto modeHint = chartMetaColumnString(stmt, 39);
+    if (!modeHint.empty()) chartMeta.Values["bmson.mode_hint"] = modeHint;
   }
 
   return chartMeta;

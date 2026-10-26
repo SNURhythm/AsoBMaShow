@@ -72,6 +72,20 @@ int main() {
       assert(scene.commits == 1 && scene.syncs == 1 && scene.lastLayoutWidth == -1);
     }
   }
+  SettingsScene keyboardDouble;
+  keyboardDouble.builtInNoteLanes[48] = {48, 49, 50, 51};
+  keyboardDouble.appendBuiltInNoteControls(nullptr, {}, 48);
+  assert(keyboardDouble.offeredLanes.size() == 52);
+  assert(keyboardDouble.editableTargets.size() == 4);
+  keyboardDouble.applyEdit(EditKind::Color, 0x123456);
+  auto &styles = keyboardDouble.context.settings.presentation().builtInNotes;
+  styles[48][52][Type::Normal] = {0xABCDEF, 100};
+  sanitize(styles);
+  for (const int lane : {48, 49, 50, 51}) {
+    assert(styles.at(48).contains(lane));
+    assert(styles.at(48).at(lane).at(Type::Normal).color == 0x123456);
+  }
+  assert(!styles.at(48).contains(52));
 }
 '''.replace("PRODUCTION_PREPARATION", preparation)
         with tempfile.TemporaryDirectory(prefix="settings-note-editing-") as directory:

@@ -159,7 +159,8 @@ struct GameplayBgaMaterial {
 
 [[nodiscard]] constexpr GameplayBgaMaterial
 SelectGameplayBgaMaterial(GameplayBgaRole role,
-                          GameplayBgaMediaKind mediaKind) noexcept {
+                          GameplayBgaMediaKind mediaKind,
+                          bool blackTransparentLayers = true) noexcept {
   if (role == GameplayBgaRole::Miss) {
     return {};
   }
@@ -168,7 +169,7 @@ SelectGameplayBgaMaterial(GameplayBgaRole role,
             .linearSampling = true,
             .blackTransparent = false};
   }
-  if (role == GameplayBgaRole::Layer) {
+  if (role == GameplayBgaRole::Layer && blackTransparentLayers) {
     return {.referenceRendererType = GameplayBgaReferenceRendererType::Layer,
             .linearSampling = false,
             .blackTransparent = true};

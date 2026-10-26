@@ -1,4 +1,5 @@
 #include "AudioMix.h"
+#include "AudioFrameTiming.h"
 #include "PcmResampler.h"
 #include "../perf/LatencyTelemetry.h"
 #include "../settings/AudioVideoSettings.h"
@@ -6,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <unordered_map>
 #include <utility>
 
 AudioCallbackState::AudioCallbackState()
@@ -30,33 +32,19 @@ float ClampVolume(float value) {
 }
 
 std::uint32_t outputOffsetForStartMicros(long long startMicros,
-                                         long long bufferStartMicros,
+                                         std::int64_t bufferStartFrame,
                                          int sampleRate,
                                          std::uint32_t frameCount,
                                          int playbackRatePercent, bool &isDue) {
+  const auto startFrame = frame_timing::at(startMicros, sampleRate, playbackRatePercent);
   isDue = true;
-  if (startMicros <= bufferStartMicros) {
-    return 0;
-  }
-
-  const int ratePercent = playbackRatePercent > 0 ? playbackRatePercent : 100;
-#if defined(__SIZEOF_INT128__)
-  const __int128 deltaMicros = static_cast<__int128>(startMicros) -
-                               static_cast<__int128>(bufferStartMicros);
-  const __int128 denominator = static_cast<__int128>(1000000) * ratePercent;
-  const __int128 roundedFrame =
-      (deltaMicros * sampleRate * 100 + denominator / 2) / denominator;
-#else
-  const long double deltaMicros = static_cast<long double>(startMicros) -
-                                  static_cast<long double>(bufferStartMicros);
-  const long double roundedFrame = std::floor(
-      deltaMicros * sampleRate * 100.0L / (1000000.0L * ratePercent) + 0.5L);
-#endif
-  if (roundedFrame >= frameCount) {
+  if (startFrame <= bufferStartFrame) return 0;
+  const auto offset = static_cast<std::uint64_t>(startFrame) - static_cast<std::uint64_t>(bufferStartFrame);
+  if (offset >= frameCount) {
     isDue = false;
     return 0;
   }
-  return static_cast<std::uint32_t>(roundedFrame);
+  return static_cast<std::uint32_t>(offset);
 }
 
 constexpr std::uint64_t kQ32One = std::uint64_t{1} << 32;
@@ -94,8 +82,7 @@ std::uint64_t remapQ32(std::uint64_t position, int previousSampleRate,
 }
 
 std::uint64_t rateIncrementQ32(int playbackRatePercent) {
-  const int ratePercent = playbackRatePercent > 0 ? playbackRatePercent : 100;
-  return (static_cast<std::uint64_t>(ratePercent) * kQ32One + 50ULL) / 100ULL;
+  return frame_timing::increment(playbackRatePercent);
 }
 
 bool scheduledSoundLess(const ScheduledSound &lhs, const ScheduledSound &rhs) {
@@ -467,8 +454,14 @@ PrepareOutputRateTransition(std::span<SoundData *const> sounds,
       .targetSampleRate = targetSampleRate,
   };
   transition.candidates.reserve(sounds.size());
+  std::unordered_map<SoundData *, size_t> preparedFrameCounts;
+  preparedFrameCounts.reserve(sounds.size());
   for (SoundData *soundData : sounds) {
     if (soundData == nullptr) {
+      continue;
+    }
+    if (!soundData->layers.empty()) {
+      transition.candidates.push_back({.soundData = soundData});
       continue;
     }
     if (soundData->channels <= 0 || soundData->sourceSampleRate <= 0 ||
@@ -490,6 +483,17 @@ PrepareOutputRateTransition(std::span<SoundData *const> sounds,
     transition.candidates.push_back({.soundData = soundData,
                                      .outputData = std::move(outputData),
                                      .outputFrameCount = outputFrameCount});
+    preparedFrameCounts.emplace(soundData, outputFrameCount);
+  }
+  // Groups contain elementary sounds. Derive their bounds after every layer
+  // is prepared, independently of owner order. Scaling an already rounded
+  // length can both discard the last audible frame and invent a silent tail.
+  for (auto &candidate : transition.candidates) {
+    for (const auto &layer : candidate.soundData->layers) {
+      const auto prepared = preparedFrameCounts.find(layer.get());
+      if (prepared == preparedFrameCounts.end()) return std::nullopt;
+      candidate.outputFrameCount = std::max(candidate.outputFrameCount, prepared->second);
+    }
   }
   return transition;
 }
@@ -517,15 +521,21 @@ void CommitOutputRateTransition(OutputRateTransition transition,
     playingSound.outputOffsetFrames = static_cast<std::uint32_t>(std::min(
         remappedOutputOffset,
         static_cast<size_t>(std::numeric_limits<std::uint32_t>::max())));
+    if (playingSound.outputEndOffsetFrames != std::numeric_limits<std::uint32_t>::max()) {
+      playingSound.outputEndOffsetFrames = static_cast<std::uint32_t>(std::min<size_t>(
+          RemapFramePosition(playingSound.outputEndOffsetFrames, transition.previousSampleRate,
+                             transition.targetSampleRate),
+          std::numeric_limits<std::uint32_t>::max()));
+    }
   }
 
   for (size_t index = 0; index < state.scheduledSoundCount; ++index) {
     auto &scheduledSound = state.scheduledSounds[index];
-    scheduledSound.startFrame =
-        clampFrameToSound(RemapFramePosition(scheduledSound.startFrame,
-                                             transition.previousSampleRate,
-                                             transition.targetSampleRate),
-                          scheduledSound.soundData);
+    const auto position = remapQ32(frameToQ32(scheduledSound.startFrame) | scheduledSound.startFractionQ32,
+                                    transition.previousSampleRate, transition.targetSampleRate);
+    scheduledSound.startFrame = clampFrameToSound(position >> 32, scheduledSound.soundData);
+    scheduledSound.startFractionQ32 = scheduledSound.startFrame == (position >> 32)
+        ? static_cast<std::uint32_t>(position) : 0;
   }
 
   const std::uint32_t readCursor =
@@ -534,10 +544,11 @@ void CommitOutputRateTransition(OutputRateTransition transition,
       state.commandWriteCursor.load(std::memory_order_acquire);
   for (std::uint32_t cursor = readCursor; cursor != writeCursor; ++cursor) {
     auto &command = state.commandQueue[cursor % kCombinedAudioCommandQueueSize];
-    command.startFrame = clampFrameToSound(
-        RemapFramePosition(command.startFrame, transition.previousSampleRate,
-                           transition.targetSampleRate),
-        command.soundData);
+    const auto position = remapQ32(frameToQ32(command.startFrame) | command.startFractionQ32,
+                                    transition.previousSampleRate, transition.targetSampleRate);
+    command.startFrame = clampFrameToSound(position >> 32, command.soundData);
+    command.startFractionQ32 = command.startFrame == (position >> 32)
+        ? static_cast<std::uint32_t>(position) : 0;
   }
 
   const std::uint32_t realtimeReadCursor =
@@ -548,29 +559,68 @@ void CommitOutputRateTransition(OutputRateTransition transition,
        cursor != realtimeWriteCursor; ++cursor) {
     auto &command = state.realtimeCommandQueue[
         cursor % kRealtimeAudioCommandQueueSize];
-    command.startFrame = clampFrameToSound(
-        RemapFramePosition(command.startFrame, transition.previousSampleRate,
-                           transition.targetSampleRate),
-        command.soundData);
+    const auto position = remapQ32(frameToQ32(command.startFrame) | command.startFractionQ32,
+                                    transition.previousSampleRate, transition.targetSampleRate);
+    command.startFrame = clampFrameToSound(position >> 32, command.soundData);
+    command.startFractionQ32 = command.startFrame == (position >> 32)
+        ? static_cast<std::uint32_t>(position) : 0;
   }
 }
 
-bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
+static bool appendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
                        std::uint32_t outputOffsetFrames, size_t startFrame,
-                       float gain, bool loop) {
+                       float gain, bool loop, std::uint64_t voiceId, std::uint32_t startFractionQ32,
+                       bool &transferControl) {
+  if (soundData != nullptr && !soundData->layers.empty()) {
+    bool added = false;
+    for (const auto &layer : soundData->layers) {
+      if (appendActiveSound(state, layer.get(), bus, outputOffsetFrames, startFrame, gain, loop,
+                            voiceId, startFractionQ32, transferControl)) {
+        state.playingSounds[state.playingSoundCount - 1].groupOwner = soundData;
+        added = true;
+      }
+    }
+    return added;
+  }
+  if (soundData != nullptr && soundData->monophonic) {
+    for (std::size_t i = 0; i < state.playingSoundCount;) {
+      auto &voice = state.playingSounds[i];
+      if (voice.soundData == soundData) {
+        if (voice.outputOffsetFrames >= outputOffsetFrames) {
+          removeActiveSoundAt(state, i);
+          continue;
+        }
+        // Scheduled retriggers can fall later in this same callback. Preserve
+        // the old voice's prefix, then switch to the new slice exactly on time.
+        voice.outputEndOffsetFrames = std::min(voice.outputEndOffsetFrames, outputOffsetFrames);
+      }
+      ++i;
+    }
+  }
   if (soundData == nullptr || startFrame >= outputPcmView(soundData).frameCount ||
       startFrame > kQ32MaximumWholeFrame ||
       state.playingSoundCount >= kMaxActiveSounds) {
     return false;
   }
+  if (transferControl && voiceId != 0 && bus == Bus::Keysound) {
+    // Live input identifies a note, which may have several overlapping BMS
+    // triggers. Only its latest successful trigger owns later LN gain changes;
+    // keep earlier polyphonic voices audible, with their existing gains.
+    for (size_t i = 0; i < state.playingSoundCount; ++i) {
+      auto &voice = state.playingSounds[i];
+      if (voice.voiceId == voiceId && voice.bus == Bus::Keysound) voice.voiceId = 0;
+    }
+    transferControl = false;
+  }
   soundData->playing = true;
   state.playingSounds[state.playingSoundCount++] = {
       .soundData = soundData,
       .bus = bus,
-      .sourceFrameQ32 = frameToQ32(startFrame),
+      .sourceFrameQ32 = frameToQ32(startFrame) | startFractionQ32,
       .outputOffsetFrames = outputOffsetFrames,
       .gain = gain,
       .loop = loop,
+      .voiceId = voiceId,
   };
   if (bus != Bus::System) {
     state.activeNonSystemVoices.fetch_add(1, std::memory_order_release);
@@ -578,14 +628,39 @@ bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
   return true;
 }
 
-static bool AppendRealtimeActiveSound(AudioCallbackState &state,
+bool AppendActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
+                       std::uint32_t outputOffsetFrames, size_t startFrame,
+                       float gain, bool loop, std::uint64_t voiceId, std::uint32_t startFractionQ32) {
+  bool transferControl = true;
+  return appendActiveSound(state, soundData, bus, outputOffsetFrames, startFrame, gain, loop,
+                           voiceId, startFractionQ32, transferControl);
+}
+
+static bool appendRealtimeActiveSound(AudioCallbackState &state,
                                       SoundData *soundData, Bus bus,
-                                      size_t startFrame) {
+                                      size_t startFrame, std::uint64_t voiceId,
+                                      std::uint32_t startFractionQ32, bool &transferControl) {
+  if (soundData != nullptr && !soundData->layers.empty()) {
+    bool added = false;
+    for (const auto &layer : soundData->layers) {
+      if (appendRealtimeActiveSound(state, layer.get(), bus, startFrame, voiceId,
+                                    startFractionQ32, transferControl)) {
+        state.playingSounds[state.playingSoundCount - 1].groupOwner = soundData;
+        added = true;
+      }
+    }
+    return added;
+  }
   if (soundData == nullptr || startFrame >= outputPcmView(soundData).frameCount ||
       startFrame > kQ32MaximumWholeFrame) {
     return false;
   }
-  if (state.playingSoundCount >= kMaxActiveSounds) {
+  if (state.playingSoundCount >= kMaxActiveSounds &&
+      !(soundData->monophonic && std::any_of(
+          state.playingSounds.get(), state.playingSounds.get() + state.playingSoundCount,
+          [soundData](const PlayingSound &voice) { return voice.soundData == soundData; }))) {
+    // A realtime slice retrigger replaces its existing voice at offset zero.
+    // Only steal another keysound when the append actually needs a new slot.
     std::size_t preemptIndex = 0;
     while (preemptIndex < state.playingSoundCount &&
            state.playingSounds[preemptIndex].bus != Bus::Keysound) {
@@ -596,7 +671,26 @@ static bool AppendRealtimeActiveSound(AudioCallbackState &state,
     }
     removeActiveSoundAt(state, preemptIndex);
   }
-  return AppendActiveSound(state, soundData, bus, 0, startFrame);
+  return appendActiveSound(state, soundData, bus, 0, startFrame, 1.0F, false,
+                           voiceId, startFractionQ32, transferControl);
+}
+
+static bool AppendRealtimeActiveSound(AudioCallbackState &state, SoundData *soundData, Bus bus,
+                                      size_t startFrame, std::uint64_t voiceId,
+                                      std::uint32_t startFractionQ32) {
+  bool transferControl = true;
+  return appendRealtimeActiveSound(state, soundData, bus, startFrame, voiceId,
+                                   startFractionQ32, transferControl);
+}
+
+// A realtime gain command touches only currently owned voices, never a sound
+// resource or its next trigger. Layers retain their initiating note's identity.
+static void SetVoiceGain(AudioCallbackState &state, std::uint64_t voiceId, float gain) {
+  if (voiceId == 0) return;
+  for (std::size_t i = 0; i < state.playingSoundCount; ++i) {
+    auto &voice = state.playingSounds[i];
+    if (voice.voiceId == voiceId && voice.bus == Bus::Keysound) voice.gain = gain;
+  }
 }
 
 bool PrepareScheduledSoundCapacity(AudioCallbackState &state,
@@ -661,6 +755,7 @@ bool InsertScheduledSound(AudioCallbackState &state,
 }
 
 void ClearCallbackSounds(AudioCallbackState &state, bool preserveSystemSounds) {
+  state.scheduledMixPending = false;
   for (size_t index = 0; index < state.playingSoundCount;) {
     if (preserveSystemSounds && state.playingSounds[index].bus == Bus::System) {
       ++index;
@@ -687,7 +782,8 @@ void ClearCallbackSounds(AudioCallbackState &state, bool preserveSystemSounds) {
 void RemoveSound(AudioCallbackState &state, SoundData *soundData) {
   std::size_t active = 0;
   while (active < state.playingSoundCount) {
-    if (state.playingSounds[active].soundData == soundData) {
+    if (state.playingSounds[active].soundData == soundData ||
+        state.playingSounds[active].groupOwner == soundData) {
       removeActiveSoundAt(state, active);
     } else {
       ++active;
@@ -847,7 +943,7 @@ void DrainRealtimeCommands(AudioCallbackState &state, bool rendering) noexcept {
     switch (command.type) {
     case AudioCommandType::PlayNow:
       AppendRealtimeActiveSound(state, command.soundData, command.bus,
-                                command.startFrame);
+                                command.startFrame, command.voiceId, command.startFractionQ32);
       break;
     case AudioCommandType::Schedule:
       InsertScheduledSound(state, {.soundData = command.soundData,
@@ -855,8 +951,13 @@ void DrainRealtimeCommands(AudioCallbackState &state, bool rendering) noexcept {
                                    .startMicros = command.startMicros,
                                    .sequence = command.sequence,
                                    .startFrame = command.startFrame,
+                                   .startFractionQ32 = command.startFractionQ32,
                                    .gain = command.gain,
-                                   .loop = command.loop});
+                                   .loop = command.loop,
+                                   .voiceId = command.voiceId});
+      break;
+    case AudioCommandType::SetVoiceGain:
+      SetVoiceGain(state, command.voiceId, command.gain);
       break;
     case AudioCommandType::StopOwner:
       RemoveSound(state, command.soundData);
@@ -883,7 +984,7 @@ static void ApplyCommand(AudioCallbackState &state,
   switch (command.type) {
   case AudioCommandType::PlayNow:
     AppendActiveSound(state, command.soundData, command.bus, 0,
-                      command.startFrame, command.gain, command.loop);
+                      command.startFrame, command.gain, command.loop, command.voiceId, command.startFractionQ32);
     break;
   case AudioCommandType::Schedule:
     InsertScheduledSound(state, {.soundData = command.soundData,
@@ -891,8 +992,13 @@ static void ApplyCommand(AudioCallbackState &state,
                                  .startMicros = command.startMicros,
                                  .sequence = command.sequence,
                                  .startFrame = command.startFrame,
+                                   .startFractionQ32 = command.startFractionQ32,
                                  .gain = command.gain,
-                                 .loop = command.loop});
+                                 .loop = command.loop,
+                                   .voiceId = command.voiceId});
+    break;
+  case AudioCommandType::SetVoiceGain:
+    SetVoiceGain(state, command.voiceId, command.gain);
     break;
   case AudioCommandType::StopOwner:
     RemoveSound(state, command.soundData);
@@ -941,84 +1047,146 @@ void DrainCommands(AudioCallbackState &state,
 bool ScheduledMixReady(const AudioCallbackState &state,
                         long long bufferStartMicros, int sampleRate,
                         std::uint32_t frameCount, int playbackRatePercent,
-                        std::uint32_t bufferOffsetFrames, bool includeAllDueSounds) noexcept {
+                        std::uint32_t bufferOffsetFrames, bool includeAllDueSounds,
+                        std::optional<std::int64_t> bufferStartFrame) noexcept {
   if (frameCount > std::numeric_limits<std::uint32_t>::max() - bufferOffsetFrames) {
     return false;
   }
+  // Only plain cursors are copied: no PCM ownership, allocation or publication.
+  // Simulate the same boundaries as MixActiveSounds, so a replacement at full
+  // capacity and a new start after retirement still require their paged PCM.
+  std::array<PlayingSound, kMaxActiveSounds> voices;
+  size_t count = state.playingSoundCount;
+  std::copy_n(state.playingSounds.get(), count, voices.begin());
   const auto increment = rateIncrementQ32(playbackRatePercent);
-  for (size_t index = 0; index < state.playingSoundCount; ++index) {
-    const auto &voice = state.playingSounds[index];
-    if (!voiceMixReady(outputPcmView(voice.soundData), voice.sourceFrameQ32,
-                       voice.outputOffsetFrames, voice.loop, frameCount,
-                       increment)) return false;
-  }
-  // Activation appends before mixing retires finished active voices. Match that
-  // capacity/drop behavior without mutating callback state or sound owners.
-  size_t activeCount = state.playingSoundCount;
-  for (size_t index = 0; index < state.scheduledSoundCount; ++index) {
-    const auto &scheduled = state.scheduledSounds[index];
-    bool due = false;
-    const auto absoluteOffset = outputOffsetForStartMicros(
-        scheduled.startMicros, bufferStartMicros, sampleRate,
-        frameCount + bufferOffsetFrames, playbackRatePercent, due);
-    if (!due) break;
-    if (scheduled.soundData == nullptr || (!includeAllDueSounds && activeCount >= kMaxActiveSounds) ||
-        scheduled.startFrame > kQ32MaximumWholeFrame) continue;
-    const auto source = outputPcmView(scheduled.soundData);
+  const auto advance = [&](std::uint32_t frames) {
+    for (size_t i = 0; i < count;) {
+      auto &voice = voices[i];
+      const auto source = outputPcmView(voice.soundData);
+      const auto end = std::min(frames, voice.outputEndOffsetFrames);
+      if (!voiceMixReady(source, voice.sourceFrameQ32, voice.outputOffsetFrames,
+                         voice.loop, end, increment)) return false;
+      const auto start = std::min(frames, voice.outputOffsetFrames);
+      const auto played = end > start ? end - start : 0;
+      bool finished = source.channels <= 0 || source.frameCount == 0 ||
+          (voice.sourceFrameQ32 >> 32) >= source.frameCount ||
+          voice.outputEndOffsetFrames <= frames;
+      if (!finished && played > 0) {
+        const auto length = frameToQ32(source.frameCount);
+        auto remaining = static_cast<std::uint64_t>(played);
+        while (remaining > 0) {
+          const auto position = voice.sourceFrameQ32;
+          const auto safe = (std::numeric_limits<std::uint64_t>::max() - position) / increment;
+          if (safe == 0) { finished = true; break; }
+          const auto untilEnd = (length - 1 - position) / increment + 1;
+          const auto run = std::min({remaining, safe, untilEnd});
+          voice.sourceFrameQ32 += run * increment;
+          remaining -= run;
+          if (voice.sourceFrameQ32 >= length) {
+            if (!voice.loop) { finished = true; break; }
+            voice.sourceFrameQ32 %= length;
+          }
+        }
+      }
+      if (finished) { voices[i] = voices[--count]; continue; }
+      voice.outputOffsetFrames -= start;
+      if (voice.outputEndOffsetFrames != std::numeric_limits<std::uint32_t>::max())
+        voice.outputEndOffsetFrames -= frames;
+      ++i;
+    }
+    return true;
+  };
+  const auto admit = [&](auto &&self, const ScheduledSound &event,
+                          SoundData *sound, std::uint32_t remaining) -> bool {
+    if (sound == nullptr) return true;
+    if (!sound->layers.empty()) {
+      for (const auto &layer : sound->layers)
+        if (!self(self, event, layer.get(), remaining)) return false;
+      return true;
+    }
+    if (sound->monophonic) {
+      for (size_t i = 0; i < count;)
+        if (voices[i].soundData == sound) voices[i] = voices[--count];
+        else ++i;
+    }
+    if (count >= kMaxActiveSounds && !includeAllDueSounds) return true;
+    if (event.startFrame > kQ32MaximumWholeFrame) return true;
+    const auto source = outputPcmView(sound);
     if (source.pending) return false;
-    if (scheduled.startFrame >= source.frameCount) continue;
-    ++activeCount;
-    const auto offset = absoluteOffset > bufferOffsetFrames
-                            ? absoluteOffset - bufferOffsetFrames : 0;
-    if (!voiceMixReady(source, frameToQ32(scheduled.startFrame), offset,
-                       scheduled.loop, frameCount, increment)) return false;
+    if (event.startFrame >= source.frameCount) return true;
+    if (count >= kMaxActiveSounds)
+      return voiceMixReady(source, (frameToQ32(event.startFrame) | event.startFractionQ32), 0,
+                           event.loop, remaining, increment);
+    voices[count++] = {.soundData = sound, .sourceFrameQ32 = (frameToQ32(event.startFrame) | event.startFractionQ32),
+                       .loop = event.loop};
+    return true;
+  };
+  std::uint32_t cursor = 0;
+  for (size_t index = 0; index < state.scheduledSoundCount; ++index) {
+    const auto &event = state.scheduledSounds[index];
+    bool due = false;
+    const auto absolute = outputOffsetForStartMicros(event.startMicros,
+        bufferStartFrame.value_or(frame_timing::at(bufferStartMicros, sampleRate, playbackRatePercent)),
+        sampleRate, frameCount + bufferOffsetFrames,
+        playbackRatePercent, due);
+    if (!due) break;
+    const auto offset = absolute > bufferOffsetFrames ? absolute - bufferOffsetFrames : 0;
+    if (offset > cursor && !advance(offset - cursor)) return false;
+    cursor = offset;
+    if (!event.setVoiceGain && !admit(admit, event, event.soundData, frameCount - cursor))
+      return false;
   }
-  return true;
+  return advance(frameCount - cursor);
+}
+
+static std::uint32_t ScheduledOffset(const AudioCallbackState &state, bool &due) {
+  if (state.scheduledSoundCount == 0) { due = false; return 0; }
+  const auto absolute = outputOffsetForStartMicros(state.scheduledSounds[0].startMicros,
+      state.scheduledMixOriginFrame, state.scheduledMixSampleRate,
+      state.scheduledMixFrames + state.scheduledMixBufferOffset,
+      state.scheduledMixRatePercent, due);
+  return absolute > state.scheduledMixBufferOffset
+      ? absolute - state.scheduledMixBufferOffset : 0;
+}
+
+static void ApplyNextScheduledSound(AudioCallbackState &state) {
+  const auto event = state.scheduledSounds[0];
+  if (event.setVoiceGain) SetVoiceGain(state, event.voiceId, event.gain);
+  else AppendActiveSound(state, event.soundData, event.bus, 0, event.startFrame,
+                         event.gain, event.loop, event.voiceId, event.startFractionQ32);
+  state.scheduledSounds.consume(1);
+  --state.scheduledSoundCount;
+  if (event.bus != Bus::System)
+    state.scheduledNonSystemSounds.fetch_sub(1, std::memory_order_release);
 }
 
 void ActivateScheduledSounds(AudioCallbackState &state,
                              long long bufferStartMicros, int sampleRate,
                              std::uint32_t frameCount,
                              int playbackRatePercent,
-                             std::uint32_t bufferOffsetFrames) {
-  if (frameCount > std::numeric_limits<std::uint32_t>::max() - bufferOffsetFrames) {
-    return;
+                             std::uint32_t bufferOffsetFrames,
+                             std::optional<std::int64_t> bufferStartFrame) {
+  state.scheduledMixPending = false;
+  if (frameCount > std::numeric_limits<std::uint32_t>::max() - bufferOffsetFrames) return;
+  state.scheduledMixOriginFrame = bufferStartFrame.value_or(
+      frame_timing::at(bufferStartMicros, sampleRate, playbackRatePercent));
+  state.scheduledMixSampleRate = sampleRate;
+  state.scheduledMixRatePercent = playbackRatePercent;
+  state.scheduledMixFrames = frameCount;
+  state.scheduledMixBufferOffset = bufferOffsetFrames;
+  state.scheduledMixPending = true;
+  // Starts at this boundary are immediately active. Later starts remain in the
+  // bounded ring until mixing has finished their predecessors' exact prefix.
+  for (;;) {
+    bool due = false;
+    const auto offset = ScheduledOffset(state, due);
+    if (!due) { state.scheduledMixPending = false; break; }
+    if (offset != 0) break;
+    ApplyNextScheduledSound(state);
   }
-  size_t scheduledSoundsToRemove = 0;
-  for (; scheduledSoundsToRemove < state.scheduledSoundCount;
-       ++scheduledSoundsToRemove) {
-    const ScheduledSound &scheduledSound =
-        state.scheduledSounds[scheduledSoundsToRemove];
-    bool isDue = false;
-    // Keep one rounding origin for the whole callback, even when scratch
-    // storage requires mixing it in multiple chunks.
-    const std::uint32_t absoluteOffsetFrames = outputOffsetForStartMicros(
-        scheduledSound.startMicros, bufferStartMicros, sampleRate,
-        frameCount + bufferOffsetFrames, playbackRatePercent, isDue);
-    if (!isDue) {
-      break;
-    }
-    if (scheduledSound.bus != Bus::System) {
-      // The due scheduled entry is consumed below regardless of whether the
-      // active append succeeds (a dropped note still leaves the schedule).
-      state.scheduledNonSystemSounds.fetch_sub(1, std::memory_order_release);
-    }
-    const std::uint32_t outputOffsetFrames =
-        absoluteOffsetFrames > bufferOffsetFrames
-            ? absoluteOffsetFrames - bufferOffsetFrames : 0;
-    AppendActiveSound(state, scheduledSound.soundData, scheduledSound.bus,
-                      outputOffsetFrames, scheduledSound.startFrame,
-                      scheduledSound.gain, scheduledSound.loop);
-  }
-
-  if (scheduledSoundsToRemove == 0) {
-    return;
-  }
-  state.scheduledSounds.consume(scheduledSoundsToRemove);
-  state.scheduledSoundCount -= scheduledSoundsToRemove;
 }
 
-void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
+static void MixActiveSpan(AudioCallbackState &state, std::span<float> mixBuffer,
                      std::uint32_t frameCount, int outputChannels,
                      float bgmGain, float keysoundGain,
                      int playbackRatePercent, MixScope scope) {
@@ -1053,6 +1221,7 @@ void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
 
     const std::uint32_t outputOffsetFrames =
         std::min(playingSound.outputOffsetFrames, frameCount);
+    const auto outputEndOffsetFrames = std::min(playingSound.outputEndOffsetFrames, frameCount);
     const int channels = source.channels;
     const float busGain = playingSound.bus == Bus::Bgm
                               ? bgmGain
@@ -1084,7 +1253,9 @@ void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
               : cachedSamples + (frame % PagedPcmSound::kPageFrames) * channels;
         }
       };
-      for (size_t frame = 0; frame < frameCount - outputOffsetFrames; ++frame) {
+      const auto audibleFrames = outputEndOffsetFrames > outputOffsetFrames
+                                     ? outputEndOffsetFrames - outputOffsetFrames : 0;
+      for (size_t frame = 0; frame < audibleFrames; ++frame) {
         if (playingSound.loop && positionQ32 >= loopLengthQ32) {
           positionQ32 %= loopLengthQ32;
         }
@@ -1149,17 +1320,44 @@ void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
       return true;
     };
     const bool mixed = source.paged != nullptr
-                           ? mixFrames.template operator()<true>()
-                           : mixFrames.template operator()<false>();
+        ? mixFrames.template operator()<true>()
+        : mixFrames.template operator()<false>();
     if (!mixed) return;
 
     playingSound.sourceFrameQ32 = positionQ32;
-    playingSound.outputOffsetFrames = 0;
+    playingSound.outputOffsetFrames -= outputOffsetFrames;
+    if (playingSound.outputEndOffsetFrames <= frameCount) finished = true;
+    else if (playingSound.outputEndOffsetFrames != std::numeric_limits<std::uint32_t>::max())
+      playingSound.outputEndOffsetFrames -= frameCount;
     if (finished) {
       removeActiveSoundAt(state, soundIndex);
       continue;
     }
     ++soundIndex;
+  }
+}
+
+void MixActiveSounds(AudioCallbackState &state, std::span<float> mixBuffer,
+                     std::uint32_t frameCount, int outputChannels,
+                     float bgmGain, float keysoundGain,
+                     int playbackRatePercent, MixScope scope) {
+  if (outputChannels <= 0 || mixBuffer.size() < static_cast<size_t>(frameCount) * outputChannels)
+    return;
+  const bool scheduled = state.scheduledMixPending && scope == MixScope::AllBuses;
+  state.scheduledMixPending = false;
+  std::uint32_t cursor = 0;
+  while (cursor < frameCount) {
+    bool due = false;
+    const auto offset = scheduled ? ScheduledOffset(state, due) : frameCount;
+    const auto boundary = due ? std::min(offset, frameCount) : frameCount;
+    if (boundary > cursor) {
+      MixActiveSpan(state, mixBuffer.subspan(static_cast<size_t>(cursor) * outputChannels),
+                    boundary - cursor, outputChannels, bgmGain, keysoundGain,
+                    playbackRatePercent, scope);
+      cursor = boundary;
+    }
+    if (!due || offset >= frameCount) break;
+    ApplyNextScheduledSound(state);
   }
 }
 

@@ -314,6 +314,10 @@ replayJudgeOverrideForChart(const ScoreProvenance &provenance,
     return std::nullopt;
   }
   ScoreStageProvenance result = *matching;
+  // Check the recorded proof before filling any omitted historical fields.
+  const bool provenRelativeZeroTotal =
+      chartMeta.TotalIsRelative && chartMeta.HasTotal && chartMeta.Total == 0.0 &&
+      result.authoredGaugeTotal == 0.0 && result.totalNotes > 0;
   const bool missingLegacyGaugeProof =
       result.totalNotes == 0 && result.effectiveGaugeTotal == 0.0;
   if (missingLegacyGaugeProof &&
@@ -331,7 +335,8 @@ replayJudgeOverrideForChart(const ScoreProvenance &provenance,
       !std::isfinite(result.effectiveGaugeTotal) ||
       result.effectiveGaugeTotal < 0.0 ||
       (result.effectiveGaugeTotal == 0.0 &&
-       provenance.ruleset != RulesetDescriptor::For(GameplayRuleset::LR2)) ||
+       provenance.ruleset != RulesetDescriptor::For(GameplayRuleset::LR2) &&
+       !provenRelativeZeroTotal) ||
       // Old schemas could omit TOTAL; zero alone is not a complete proof.
       (result.effectiveGaugeTotal == 0.0 &&
        provenance.fingerprintSchemaVersion > 0 &&

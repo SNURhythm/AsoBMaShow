@@ -74,6 +74,7 @@ GameplaySimulationConfig withCompiledGaugeRules(
   meta.KeyMode = metadata.keyMode;
   meta.HasTotal = metadata.hasGaugeTotal;
   meta.Total = metadata.gaugeTotal;
+  meta.TotalIsRelative = metadata.gaugeTotalIsRelative;
   config.gaugeRules = compileGameplayGaugeRules(
       config.judge.rules().ruleset, meta, config.attempt.gaugeProfile);
   return config;
@@ -128,6 +129,8 @@ GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
                    .keyMode = definition.metadata().keyMode}),
       noteStates_(definition.noteCount()),
       hellChargeBalanceMicros_(definition.noteCount()) {
+  mutedHeadVoices_.resize(definition.noteCount());
+  triggeredHeadVoices_.resize(definition.noteCount());
   replayEvents_.reserve(config_.attempt.replayCapacity);
   automaticResults_.reserve(config_.attempt.automaticResultCapacity);
   inputTransactions_.reserve(definition_.noteCount() + 1);
@@ -187,6 +190,9 @@ GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
   updateInputStates_.reserve(definition.lanes().size());
   for (const auto &lane : definition.lanes()) {
     laneStates_.push_back({.lane = lane.lane});
+  }
+  for (const auto id : definition.hellChargeHeads()) {
+    if (auto *lane = findLane(definition.note(id).lane)) lane->hellChargeHeads.push_back(id);
   }
   if (config_.allowedNoteRange.has_value() &&
       config_.allowedNoteRange->startMicros > 0) {
@@ -346,6 +352,10 @@ bool GameplaySimulation::recordReplay(GameplayReplayEvent &event) {
   event.gaugeType = scoreState_.gaugeType;
   event.combo = scoreState_.combo;
   event.score = scoreState_.getScore();
+  if (event.lane >= 0) {
+    event.audioLanePressed = lanePressedForAudio(
+        event.lane, lanePressed(event.lane) || event.releaseByBackspin);
+  }
   if (replayEvents_.size() >= config_.attempt.replayCapacity) {
     replayOverflowed_ = true;
     transactionReplayCapacityExceeded_ = true;
@@ -522,8 +532,74 @@ GameplayInputResult GameplaySimulation::commitMiss(NoteId id,
       .judgement = result.hasJudge ? result.judge.judgement : None,
       .diffMicros = result.judge.Diff,
   };
+  if (note.kind == NoteKind::LongHead && note.longNoteRule == LongNoteRule::HellCharge)
+    updateHellChargeVoice(result, note.lane, songTimeMicros, lanePressedAtUpdate(note.lane));
   recordReplay(result.replayEvent);
   return result;
+}
+
+NoteId GameplaySimulation::passingHellChargeHead(int lane, std::int64_t time) const {
+  const auto *state = findLane(lane);
+  if (state == nullptr) return kInvalidNoteId;
+  const auto &notes = state->hellChargeHeads;
+  auto end = std::ranges::upper_bound(notes, time, {}, [&](NoteId id) {
+    return definition_.note(id).timingMicros;
+  });
+  while (end != notes.begin()) {
+    const auto id = *--end;
+    const auto &head = definition_.note(id);
+    if (head.kind != NoteKind::LongHead || head.longNoteRule != LongNoteRule::HellCharge)
+      continue;
+    return head.pairId != kInvalidNoteId && noteAllowed(id) &&
+                   time < definition_.note(head.pairId).timingMicros
+               ? id : kInvalidNoteId;
+  }
+  return kInvalidNoteId;
+}
+
+void GameplaySimulation::trackHeadVoice(NoteId id) {
+  if (id == kInvalidNoteId || id >= definition_.noteCount() ||
+      definition_.note(id).kind != NoteKind::LongHead ||
+      definition_.keysoundSource(id).wav == bms_parser::Parser::NoWav) return;
+  triggeredHeadVoices_[id] = true;
+  mutedHeadVoices_[id] = false;
+}
+
+void GameplaySimulation::setHeadVoiceGain(GameplayInputResult &result,
+                                          NoteId headId, bool muted) {
+  if (headId == kInvalidNoteId || !triggeredHeadVoices_[headId] ||
+      mutedHeadVoices_[headId] == muted) return;
+  mutedHeadVoices_[headId] = muted;
+  result.gainNoteId = headId;
+  result.keysoundGain = muted ? 0.0F : 1.0F;
+}
+
+void GameplaySimulation::updateHellChargeVoice(GameplayInputResult &result,
+                                               int lane, std::int64_t time,
+                                               bool pressed) {
+  const auto id = passingHellChargeHead(lane, time);
+  if (id == kInvalidNoteId || !noteStates_[id].played) return;
+  const auto &tail = noteStates_[definition_.note(id).pairId];
+  const bool missedHead = noteStates_[id].dead &&
+      noteStates_[id].acceptedHeadJudge.judgement == None;
+  if (missedHead || (tail.played && (tail.acceptedHeadJudge.judgement == Bad ||
+                      tail.acceptedHeadJudge.judgement == Poor)) || tail.dead)
+    setHeadVoiceGain(result, id, !pressed && !config_.attempt.autoPlay);
+}
+
+bool GameplaySimulation::lanePressedForAudio(int lane, bool fallback) const noexcept {
+  // Use the same physical snapshot as the HCN passing phase. Scratch wrappers
+  // temporarily change lane.pressed for judgement selection; those transient
+  // values must not mute a voice when the other physical key remains down.
+  if (lr2UpdateOpen_) {
+    const auto found = std::ranges::find(updateInputStates_, lane,
+                                         &GameplayLaneInputState::lane);
+    if (found != updateInputStates_.end()) return found->pressed;
+  }
+  const auto *state = findLane(lane);
+  return state != nullptr && state->scratchKeysKnown
+             ? state->scratchKeysPressed[0] || state->scratchKeysPressed[1]
+             : fallback;
 }
 
 GameplayInputResult GameplaySimulation::commitAutomaticRelease(
@@ -550,6 +626,11 @@ GameplayInputResult GameplaySimulation::commitAutomaticRelease(
 
   GameplayInputResult result;
   result.noteId = tailId;
+  // JudgeManager plays the processing tail when a release resolves, including
+  // deferred BAD/POOR and held classic completion, but not a missed tail.
+  result.soundNoteId = tailId;
+  if (releaseJudge && (applied.judgement == Bad || applied.judgement == Poor))
+    setHeadVoiceGain(result, tail.pairId, true);
   tailState.acceptedHeadJudge = applied;
   result.hasJudge = true;
   result.judge = applied;
@@ -564,6 +645,7 @@ GameplayInputResult GameplaySimulation::commitAutomaticRelease(
       .judgeTimeMicros = releaseTime,
       .judgement = applied.judgement,
       .diffMicros = applied.Diff,
+      .releaseByHolding = !releaseJudge && tail.longNoteRule == LongNoteRule::Classic,
   };
   recordReplay(result.replayEvent);
   if (config_.attempt.autoPlay) {
@@ -624,6 +706,7 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
     applyGaugeDelta(-note.mineDamage);
     GameplayInputResult result;
     result.noteId = id;
+    result.soundNoteId = id;
     result.hasReplayEvent = true;
     result.replayEvent = {
         .action = GameplayReplayAction::Mine,
@@ -676,6 +759,7 @@ void GameplaySimulation::processAtTiming(NoteId id, std::int64_t songTimeMicros,
   GameplayInputResult press;
   press.noteId = id;
   press.soundNoteId = id;
+  trackHeadVoice(id);
   press.hasJudge = note.kind == NoteKind::Normal ||
                    note.longNoteRule != LongNoteRule::Classic;
   press.judge = JudgeResult(PGreat, 0);
@@ -982,6 +1066,9 @@ void GameplaySimulation::beginLr2Update(std::int64_t songTimeMicros,
          noteStates_[head.pairId].acceptedHeadJudge.judgement == Good);
     const bool gaining = lanePressedAtUpdate(lane.lane) || completed ||
                          config_.attempt.autoPlay;
+    GameplayInputResult voiceControl;
+    updateHellChargeVoice(voiceControl, lane.lane, songTimeMicros, gaining);
+    if (voiceControl.gainNoteId != kInvalidNoteId) recordAutomaticResult(voiceControl);
     lane.hellChargeBalanceMicros = gaining
         ? chart_timing::add(lane.hellChargeBalanceMicros, delta)
         : chart_timing::subtract(lane.hellChargeBalanceMicros, delta);
@@ -1060,7 +1147,17 @@ GameplayAdvanceResult GameplaySimulation::beginInputUpdate(
     std::span<const GameplayLaneInputState> states, const GameplayInputContext &context) {
   const auto time = inputTime(context);
   if (config_.judge.rules().ruleset != GameplayRuleset::LR2) {
-    return advanceTo(time, context.laneBeamTimeMicros);
+    advanceTo(time, context.laneBeamTimeMicros);
+    if (!terminal() && time >= lastAdvancedMicros_) {
+      // Sample physical HCN audio before selecting this edge's note. A next
+      // head can be judged early while the previous authored HCN still passes.
+      for (const auto &state : states) {
+        GameplayInputResult voiceControl;
+        updateHellChargeVoice(voiceControl, state.lane, time, state.pressed);
+        if (voiceControl.gainNoteId != kInvalidNoteId) recordAutomaticResult(voiceControl);
+      }
+    }
+    return {automaticResults_, lastAdvancedMicros_};
   }
   if (terminal() || (hasAdvanced_ && time < lastAdvancedMicros_)) {
     return emptyAdvanceResult();
@@ -1288,6 +1385,14 @@ GameplaySimulation::advanceTo(std::int64_t songTimeMicros,
   integrateHellChargeInterval(segmentStartMicros, songTimeMicros);
   if (terminal()) {
     return {automaticResults_, lastAdvancedMicros_};
+  }
+
+  // HCN volume follows the sampled authored interval even when this update
+  // contains no input on its lane (for example, a pre-head failed retrigger).
+  for (const auto &lane : laneStates_) {
+    GameplayInputResult voiceControl;
+    updateHellChargeVoice(voiceControl, lane.lane, songTimeMicros, lane.pressed);
+    if (voiceControl.gainNoteId != kInvalidNoteId) recordAutomaticResult(voiceControl);
   }
 
   lastAdvancedMicros_ = songTimeMicros;
@@ -1627,6 +1732,7 @@ GameplayInputResult GameplaySimulation::pressLaneForPreparation(
   const std::int64_t eventTime = inputTime(context);
   result.soundNoteId =
       selectFallbackPressSoundNote(mainLane, compensateLane, eventTime);
+  trackHeadVoice(result.soundNoteId);
   if (mainState != nullptr) {
     mainState->pressed = true;
   }
@@ -1706,8 +1812,9 @@ NoteId GameplaySimulation::previewPressSoundNote(
       selectPressCandidate(mainLane, compensateLane, judgedTime);
   return judgeCandidate != kInvalidNoteId
              ? judgeCandidate
-             : selectFallbackPressSoundNote(mainLane, compensateLane,
-                                            judgedTime);
+             : passingHellChargeHead(mainLane, judgedTime) != kInvalidNoteId
+                   ? kInvalidNoteId
+                   : selectFallbackPressSoundNote(mainLane, compensateLane, judgedTime);
 }
 
 GameplayInputBatch GameplaySimulation::pressScratchKey(
@@ -1720,6 +1827,7 @@ GameplayInputBatch GameplaySimulation::pressScratchKey(
   auto *state = findLane(lane);
   if (state == nullptr || terminal()) return {};
   const int key = clockwise ? 0 : 1;
+  state->scratchKeysKnown = true;
   state->scratchKeysPressed[key] = true;
   const NoteId held = selectReleaseCandidate(lane, inputTime(context));
   if (held != kInvalidNoteId && state->scratchProcessingKey >= 0 &&
@@ -1763,6 +1871,7 @@ GameplayInputBatch GameplaySimulation::releaseScratchKey(
   auto *state = findLane(lane);
   if (state == nullptr || terminal()) return {};
   const int key = clockwise ? 0 : 1;
+  state->scratchKeysKnown = true;
   state->scratchKeysPressed[key] = false;
   const NoteId held = selectReleaseCandidate(lane, inputTime(context));
   if (held != kInvalidNoteId && state->scratchProcessingKey >= 0 &&
@@ -1824,6 +1933,7 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
     }
   }
   if (mainState != nullptr && selectReleaseCandidate(mainLane, judgedTime) != kInvalidNoteId) {
+    updateHellChargeVoice(result, mainLane, judgedTime, lanePressedForAudio(mainLane, true));
     mainState->pressed = true;
     mainState->pendingReleaseTailId = kInvalidNoteId;
     result.hasReplayEvent = true;
@@ -1840,8 +1950,11 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
   const NoteId selected =
       selectPressCandidate(mainLane, compensateLane, judgedTime);
   if (selected == kInvalidNoteId) {
-    result.soundNoteId = selectFallbackPressSoundNote(
-        mainLane, compensateLane, judgedTime);
+    if (passingHellChargeHead(mainLane, judgedTime) == kInvalidNoteId)
+      result.soundNoteId = selectFallbackPressSoundNote(
+          mainLane, compensateLane, judgedTime);
+    trackHeadVoice(result.soundNoteId);
+    updateHellChargeVoice(result, mainLane, judgedTime, lanePressedForAudio(mainLane, true));
     if (mainState != nullptr) {
       mainState->pressed = true;
     }
@@ -1918,6 +2031,8 @@ GameplaySimulation::pressLane(int mainLane, int compensateLane,
   }
   result.noteId = selected;
   result.soundNoteId = selected;
+  trackHeadVoice(selected);
+  updateHellChargeVoice(result, mainLane, judgedTime, lanePressedForAudio(mainLane, true));
   result.judge = judge;
   if (auto *laneState = findLane(note.lane)) {
     laneState->pressed = true;
@@ -1991,6 +2106,7 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
   }
   laneState->pressed = false;
   const std::int64_t judgedTime = inputTime(context);
+  updateHellChargeVoice(result, lane, judgedTime, lanePressedForAudio(lane, isBackSpin));
   result.hasLaneVisual = true;
   result.laneVisual = {LaneVisualAction::Release, lane,
                        judgedTime, context.laneBeamTimeMicros,
@@ -2004,6 +2120,7 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
         .lane = lane,
         .songTimeMicros = judgedTime,
         .judgeTimeMicros = judgedTime,
+        .releaseByBackspin = isBackSpin,
     };
     recordReplay(result.replayEvent);
     finishTransaction(judgedTime);
@@ -2022,6 +2139,7 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
         .lane = lane,
         .songTimeMicros = judgedTime,
         .judgeTimeMicros = judgedTime,
+        .releaseByBackspin = isBackSpin,
     };
     recordReplay(result.replayEvent);
     finishTransaction(judgedTime);
@@ -2029,9 +2147,20 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
     return inputBatch(result);
   }
 
+  if (result.gainNoteId != kInvalidNoteId && result.gainNoteId != tail.pairId) {
+    // This lift also affects an older authored HCN. Keep its control separate
+    // from the selected tail's possible head mute or deferred resolution.
+    inputTransactions_.push_back({.gainNoteId = result.gainNoteId,
+                                  .keysoundGain = result.keysoundGain});
+    result.gainNoteId = kInvalidNoteId;
+  }
   const JudgeResult tailJudge = config_.judge.judgeAt(
       judgeRoleFor(tail), tail.timingMicros, judgedTime);
-  if (tail.longNoteRule != LongNoteRule::Classic && tail.scratchLane &&
+  // Keyboard wheels share scratch timing windows, but each direction is its
+  // own held lane. Only beat turntables require a reversal to finish CN/HCN.
+  const int keyMode = definition_.metadata().keyMode;
+  const bool directionalScratch = tail.scratchLane && keyMode != 24 && keyMode != 48;
+  if (tail.longNoteRule != LongNoteRule::Classic && directionalScratch &&
       !isBackSpin && tailJudge.judgement != None &&
       tailJudge.judgement != Kpoor) {
     // A scratch lift inside the tail window is not a backspin. The charge
@@ -2051,7 +2180,7 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
   if (tail.longNoteRule == LongNoteRule::Classic) {
     applied = worseLongNoteJudge(normalizeReleaseJudge(noteStates_[tail.pairId].acceptedHeadJudge),
                                  normalizeReleaseJudge(tailJudge));
-  } else if (tail.scratchLane && !isBackSpin) {
+  } else if (directionalScratch && !isBackSpin) {
     applied = JudgeResult(Poor, chart_timing::subtract(judgedTime, tail.timingMicros));
   } else if (tailJudge.judgement == None || tailJudge.judgement == Kpoor) {
     applied = JudgeResult(Poor, tailJudge.Diff);
@@ -2062,7 +2191,7 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
       ? config_.judge.rules().scratchReleaseMarginMicros
       : config_.judge.rules().normalReleaseMarginMicros;
   const bool lr2DeferredRelease = config_.judge.rules().ruleset == GameplayRuleset::LR2 &&
-      !(isBackSpin && tail.scratchLane && tail.longNoteRule != LongNoteRule::Classic);
+      !(isBackSpin && directionalScratch && tail.longNoteRule != LongNoteRule::Classic);
   if ((releaseMargin > 0 || lr2DeferredRelease) && applied.Diff < 0 &&
       (applied.judgement == Bad || applied.judgement == Poor)) {
     const auto releaseTime = lr2DeferredRelease ? context.songTimeMicros : judgedTime;
@@ -2104,8 +2233,13 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
   headState.holding = false;
 
   tailState.acceptedHeadJudge = applied;
+  result.soundNoteId = selected;
+  trackHeadVoice(selected);
+  if ((applied.judgement == Bad || applied.judgement == Poor) &&
+      !(isBackSpin && directionalScratch && tail.longNoteRule != LongNoteRule::Classic))
+    setHeadVoiceGain(result, tail.pairId, true);
   if (config_.judge.rules().ruleset == GameplayRuleset::LR2 && isBackSpin &&
-      tail.scratchLane && tail.longNoteRule != LongNoteRule::Classic) {
+      directionalScratch && tail.longNoteRule != LongNoteRule::Classic) {
     laneState->suppressedBackspinPressMicros = judgedTime;
   }
   result.hasJudge = true;
@@ -2121,6 +2255,7 @@ GameplaySimulation::releaseLane(int lane, const GameplayInputContext &context,
       .judgeTimeMicros = judgedTime,
       .judgement = applied.judgement,
       .diffMicros = applied.Diff,
+      .releaseByBackspin = isBackSpin,
   };
   recordReplay(result.replayEvent);
   finishTransaction(judgedTime);

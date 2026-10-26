@@ -1,3 +1,5 @@
+#include "BmsonAudioFixture.h"
+#include "BmsonMultichannelFixture.h"
 #include "ArchiveFile.h"
 #include "ArchiveRAII.h"
 #include <archive_entry.h>
@@ -5,12 +7,15 @@
 #include "RAII.h"
 #include "Uuid.h"
 #include "audio/ChartAudioRenderer.h"
+#include "audio/AudioMix.h"
+#include "audio/decoder.h"
 #include "audio/ProgressiveMusicSource.h"
 #include "audio/SoundFileIO.h"
 #include "audio/VorbisDurationBound.h"
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -587,6 +592,33 @@ void testSpacedArchivedSoundsUseStagingWindows(const std::filesystem::path &root
   require(chart_audio::RenderChartAudioToWav(*chart, referencePath).success,
           "spaced archive reference render failed");
   const auto reference = readWav(referencePath);
+  // The 125 ms spacing includes half-frame ties. Keep the production mixer
+  // as an independent placement oracle rather than letting two exporters
+  // agree on the same rounding error.
+  AudioCallbackState mixer;
+  std::vector<std::unique_ptr<SoundData>> sounds;
+  std::atomic_bool decodeCancelled{false};
+  for (const auto &event : chart_audio::CollectChartTimedAudioEvents(*chart)) {
+    auto sound = std::make_unique<SoundData>();
+    SF_INFO info{};
+    std::vector<short> decoded;
+    require(decodeAudioToPCM(fspath_to_path_t(dir / chart->WavTable.at(event.wav)),
+                            decoded, info, decodeCancelled), "spaced mixer source decodes");
+    sound->channels = info.channels;
+    sound->outputFrameCount = info.frames;
+    sound->outputData = std::move(decoded);
+    require(audio::playback::InsertScheduledSound(mixer, {.soundData = sound.get(),
+        .startMicros = event.timeMicros, .sequence = sounds.size()}), "spaced mixer sound schedules");
+    sounds.push_back(std::move(sound));
+  }
+  std::vector<float> mixed(reference.size() / 2);
+  audio::playback::ActivateScheduledSounds(mixer, 0, 44100, mixed.size(), 100);
+  audio::playback::MixActiveSounds(mixer, mixed, mixed.size(), 1, 1, 1, 100);
+  int maximum = 0;
+  for (std::size_t frame = 0; frame < mixed.size(); ++frame)
+    maximum = std::max(maximum, std::abs(static_cast<int>(std::lrint(mixed[frame] / 0.9F * 32767)) - reference[frame * 2]));
+  require(maximum <= 1, "spaced archived reference retains production mixer placement and phase");
+
   paths.push_back(dir / "chart.bms");
   const auto archivePath = root / "spaced-sounds.7z";
   auto writer = makeArchiveWriteHandle();
@@ -715,6 +747,53 @@ void testCancelAndPause(const std::filesystem::path &root) {
 
 }
 
+void testBmsonStream(const std::filesystem::path &root) {
+  auto parsed = bmsonAudioFixture(root);
+  const auto reference = root / "reference.wav";
+  require(chart_audio::RenderChartAudioToWav(*parsed, reference).success, "bmson reference render");
+  const auto stream = music_stream::Source::Create(std::move(parsed), root / "streams");
+  const auto pcm = readAll(stream);
+  require(pcm == readWav(reference), "bmson streaming matches full sliced render");
+  for (const auto &[frame, expected] : std::vector<std::pair<int, int>>{{4410,1500},{13230,1000},{26460,-2000},{35280,-1000},{57330,-2000}})
+    require(pcm.size() > size_t(frame * 2) && std::abs(pcm[frame * 2] - expected) <= 2, "bmson streaming slice/layer waveform");
+}
+
+void testBmsonMultichannelStream(const std::filesystem::path &root) {
+  struct Case { int channels, sourceRate, isolatedChannel; std::uint64_t origin; bool layers; };
+  const std::array cases{
+      Case{1, 44100, -1, 0, false}, Case{2, 48000, -1, 10147, false},
+      Case{3, 44100, 2, 0, false}, Case{4, 44100, 3, 0, false},
+      Case{3, 48000, 2, 10147, true}, Case{4, 48000, 3, 10147, true},
+      Case{5, 32000, -1, 0, true}, Case{6, 48000, -1, 10147, true}};
+  int index = 0;
+  int maximumError = 0;
+  std::size_t comparedSamples = 0;
+  for (const auto &c : cases) {
+    const auto folder = root / ("multichannel-" + std::to_string(index++));
+    BmsonMultichannelFixture fixture(folder, c.channels, c.sourceRate, c.isolatedChannel, c.layers);
+    const auto schedule = fixture.chartSchedule();
+    const auto stream = music_stream::Source::Create(std::move(fixture.chart), folder / "streams");
+    if (c.origin) stream->RequestSeek(c.origin);
+    const auto pcm = readAll(stream, c.origin);
+    const auto mixed = fixture.continuous(schedule, 100, c.origin + pcm.size() / 2);
+    int maximum = 0;
+    bool audible = false;
+    for (std::size_t sample = 0; sample < pcm.size(); ++sample) {
+      const int expected = BmsonMultichannelFixture::pcm16(mixed[c.origin * 2 + sample]);
+      audible = audible || expected != 0;
+      maximum = std::max(maximum, std::abs(expected - pcm[sample]));
+    }
+    if (maximum > 1) std::cerr << "multichannel stream channels=" << c.channels
+        << " source=" << c.sourceRate << " origin=" << c.origin << " maxPCM=" << maximum << '\n';
+    require(audible && maximum <= 1,
+             "stream folds all channels after native normalization, including continuation seeks");
+    maximumError = std::max(maximumError, maximum);
+    comparedSamples += pcm.size();
+  }
+  std::cout << "multichannel stream: cases=" << cases.size() << " samples=" << comparedSamples
+            << " maxPCM=" << maximumError << '\n';
+}
+
 int main(int argc, char **argv) {
 #if !defined(_WIN32)
   if (argc > 2 && (std::string_view(argv[1]) == "--abandon-staging" ||
@@ -736,10 +815,20 @@ int main(int argc, char **argv) {
   std::filesystem::create_directories(root);
   ScopeExit cleanup([&] { std::filesystem::remove_all(root); });
   try {
+    if (argc > 1 && std::string_view(argv[1]) == "--multichannel") {
+      testBmsonMultichannelStream(root);
+      return 0;
+    }
     if (argc > 1 && std::string_view(argv[1]) == "--decoder-limit") {
       testCompressedSourceDecoderLifetime(root);
       return 0;
     }
+    if (argc > 1 && std::string_view(argv[1]) == "--spaced-archive") {
+      testSpacedArchivedSoundsUseStagingWindows(root);
+      return 0;
+    }
+    testBmsonMultichannelStream(root);
+    testBmsonStream(root / "bmson");
     testAbandonedLeaseCleanup(root);
     testAbandonedStagingCleanup(root, argv[0]);
     testVorbisDurationBounds(root);

@@ -646,14 +646,16 @@ void validateStageProof(const ScoreStageProvenance &stage,
     throw std::runtime_error(
         "Score provenance authored gauge TOTAL is not finite.");
   }
-  // Historical LR2 versions floored fractional TOTAL, which could yield zero.
+  // LR2 can floor TOTAL to zero; bmson can explicitly author zero gain.
+  // Replay loading also checks the authored units against the source chart.
   if (!std::isfinite(stage.effectiveGaugeTotal) ||
       stage.effectiveGaugeTotal < 0.0 ||
       (stage.effectiveGaugeTotal == 0.0 &&
-       ruleset.id != "lr2")) {
+       ruleset.id != "lr2" &&
+       !(stage.authoredGaugeTotal == 0.0 && stage.totalNotes > 0))) {
     throw std::runtime_error(
         "Score provenance effective gauge TOTAL must be finite and positive, "
-        "except LR2 permits zero.");
+        "except LR2 or explicit authored zero.");
   }
   (void)candidateSelectionName(stage.candidateSelection);
   validateStageWindows(stage, true);

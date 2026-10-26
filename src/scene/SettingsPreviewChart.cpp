@@ -51,7 +51,7 @@ std::unique_ptr<bms_parser::Chart> makePreviewChart(int keyMode) {
   chart->Meta.MinBpm = kPreviewBpm;
   chart->Meta.MaxBpm = kPreviewBpm;
   chart->Meta.KeyMode = std::abs(keyMode);
-  chart->Meta.IsDP = keyMode == 10 || keyMode == 14;
+  chart->Meta.IsDP = keyMode == 10 || keyMode == 14 || keyMode == 48;
   chart->Meta.Rank = 3;
   chart->Meta.PlayLength = 0;
   chart->Meta.TotalLength = kPreviewLoopMicros;
@@ -137,7 +137,7 @@ std::unique_ptr<bms_parser::Chart> makeCalibrationChart(int keyMode, Calibration
   chart->Meta.Artist = "AsoBMaShow";
   chart->Meta.Bpm = chart->Meta.MinBpm = chart->Meta.MaxBpm = options.bpm;
   chart->Meta.KeyMode = std::abs(keyMode);
-  chart->Meta.IsDP = keyMode == 10 || keyMode == 14;
+  chart->Meta.IsDP = keyMode == 10 || keyMode == 14 || keyMode == 48;
   chart->Meta.Rank = 3;
   chart->Meta.TotalLength = timing.loopMicros;
   const auto keys = chart->Meta.GetKeyLaneIndices();

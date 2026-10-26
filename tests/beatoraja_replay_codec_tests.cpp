@@ -1,7 +1,9 @@
 #include "replay/Base64Url.h"
 #include "replay/BeatorajaReplayCodec.h"
 #include "replay/GzipCodec.h"
+#include "replay/ReplaySetupAdapter.h"
 
+#include "PlayOptionUtils.h"
 #include "bms_parser.hpp"
 #include "nlohmann/json.hpp"
 
@@ -160,6 +162,254 @@ replay::ReplayChartDocument chartDocument() {
 replay::ReplayDecodeContext context(const replay::ReplayChartDocument &chart) {
   return {.stageKeyModes = {chart.playback.setup.chart.keyMode},
           .stageTimeBounds = {chart.timeBounds}};
+}
+
+void testPopnFiveKeyStockShuffleSurvivesChartApplication() {
+  const std::string bmson = R"({"version":"1.0.0","info":{"mode_hint":"popn-5k","init_bpm":120},"sound_channels":[
+    {"name":"1.wav","notes":[{"x":1,"y":240}]},
+    {"name":"2.wav","notes":[{"x":2,"y":240}]},
+    {"name":"3.wav","notes":[{"x":3,"y":240}]},
+    {"name":"4.wav","notes":[{"x":4,"y":240}]},
+    {"name":"5.wav","notes":[{"x":5,"y":240}]}]})";
+  bms_parser::Parser parser;
+  bms_parser::Chart *raw = nullptr;
+  std::atomic_bool cancelled{false};
+  parser.Parse(std::vector<unsigned char>(bmson.begin(), bmson.end()), &raw,
+               false, false, cancelled, "popn-five.bmson");
+  std::unique_ptr<bms_parser::Chart> chart(raw);
+  expect(chart && chart->Meta.IsPopnFiveKey(), "pop'n replay fixture parses with five active lanes");
+  if (!chart) return;
+
+  auto source = chartDocument();
+  source.playback.setup.chart = {.md5 = chart->Meta.MD5,
+                                  .sha256 = chart->Meta.SHA256, .keyMode = 9};
+  source.playback.setup.player1 = {.option = "RANDOM", .seed = 0};
+  source.playback.setup.player2 = {};
+  source.playback.input.resize(2);
+  replay::BeatorajaReplayCodec codec;
+  std::string diagnostic;
+  const auto encoded = codec.encodeChart(source, 0, diagnostic);
+  expect(encoded.has_value(), "pop'n seed-only source encodes");
+  if (!encoded) return;
+  auto stock = outerJson(*encoded);
+  stock.erase("asobmashow");
+  // LaneRandomShuffleModifier, seed 0, at Beatoraja 83574048ba48.
+  const std::vector<int> pattern{0, 4, 2, 3, 1};
+  stock["laneShufflePattern"] = Json::array({pattern});
+  auto decoded = codec.decode(encodeJson(stock), context(source));
+  expect(decoded.chart && decoded.chart->playback.setup.player1.laneShufflePattern == pattern,
+         "stock pop'n 5K imports its five-entry shuffle under mode identity 9");
+  if (!decoded.chart) return;
+  const auto translated = replay::makeReplayDataFromSetup(
+      decoded.chart->playback.setup, ScoreProvenance::Legacy(), chart->Meta, diagnostic);
+  expect(translated && translated->chartMeta.IsPopnFiveKey() &&
+             translated->laneShufflePattern1P == pattern,
+         "setup adapter retains the parsed five-lane layout and imported pattern");
+  if (!translated) return;
+  bms_parser::TimeLine *notes = nullptr;
+  for (auto *measure : chart->Measures)
+    for (auto *timeline : measure->TimeLines)
+      if (timeline->Notes[0]) notes = timeline;
+  expect(notes != nullptr, "pop'n fixture has its playable chord");
+  if (!notes) return;
+  std::vector<int> originalSounds;
+  for (int lane = 0; lane < 5; ++lane) originalSounds.push_back(notes->Notes[lane]->Wav);
+  expect(play_options::applyReplayPlayOptions(*chart, *translated),
+         "imported pop'n setup applies through the production replay modifier path");
+  expect(chart->Meta.GetTotalLaneIndices() == std::vector<int>({0, 1, 2, 3, 4}) &&
+             chart->Meta.TotalNotes == 5 &&
+             std::all_of(notes->Notes.begin() + 5, notes->Notes.end(),
+                         [](const auto *note) { return note == nullptr; }),
+         "replay randomization does not expand pop'n 5K into nine lanes");
+  for (int lane = 0; lane < 5; ++lane)
+    expect(notes->Notes[lane] && notes->Notes[lane]->Lane == lane &&
+               notes->Notes[lane]->Wav == originalSounds[pattern[lane]],
+           "pop'n RANDOM seed reproduces the Java five-lane source assignment");
+
+  decoded.chart->playback.setup.chart.md5 = chart->Meta.MD5;
+  const auto retained = codec.encodeChart(*decoded.chart, 0, diagnostic);
+  expect(retained.has_value(), "imported pop'n pattern can be retained in canonical BRD");
+  if (retained) {
+    expect(codec.decode(*retained, context(source)).chart == decoded.chart,
+           "canonical extension round-trip preserves five-entry metadata");
+    auto fallback = outerJson(*retained);
+    expect(fallback["laneShufflePattern"] == Json::array({pattern}),
+           "stock export keeps the five-lane pop'n namespace");
+    fallback.erase("asobmashow");
+    expect(codec.decode(encodeJson(fallback), context(source)).chart.has_value(),
+           "exported pop'n metadata also survives stock-only fallback");
+  }
+}
+
+void testStockDoublePlayPatternsUseGlobalRowsAndCanonicalLocalRows() {
+  // Independent Java LaneRandomShuffleModifier(player=1, scratch=true), seed 0,
+  // from SNURhythm/beatoraja 83574048ba48. Beat DP strides include scratch.
+  struct Case { int mode; std::vector<int> global; std::vector<int> local; };
+  const Case cases[]{
+      {10, {6, 10, 7, 11, 9, 8}, {0, 4, 1, 5, 3, 2}},
+      {14, {13, 10, 9, 12, 14, 15, 11, 8}, {5, 2, 1, 4, 6, 7, 3, 0}},
+      {48, {44, 50, 39, 40, 46, 42, 37, 31, 48, 26, 33, 29, 38, 30, 51, 28,
+            36, 45, 49, 27, 34, 43, 32, 47, 35, 41},
+           {18, 24, 13, 14, 20, 16, 11, 5, 22, 0, 7, 3, 12, 4, 25, 2,
+            10, 19, 23, 1, 8, 17, 6, 21, 9, 15}}};
+  replay::BeatorajaReplayCodec codec;
+  for (const auto &test : cases) {
+    auto source = chartDocument();
+    source.playback.setup.chart.keyMode = test.mode;
+    source.playback.setup.player1 = {};
+    source.playback.setup.player2 = {.option = "RANDOM-EX", .seed = 0,
+                                    .laneShufflePattern = test.local};
+    source.playback.input.resize(2);
+    std::string diagnostic;
+    const auto encoded = codec.encodeChart(source, 0, diagnostic);
+    expect(encoded.has_value(), "canonical DP pattern encodes");
+    if (!encoded) continue;
+    auto stock = outerJson(*encoded);
+    expect(stock["laneShufflePattern"] == Json::array({nullptr, test.global}),
+           "stock export offsets player two by the complete reference lane width");
+    expect(codec.decode(*encoded, context(source)).chart == source,
+           "global stock metadata leaves canonical local extension metadata unchanged");
+    auto historical = stock;
+    historical["laneShufflePattern"] = Json::array({nullptr, test.local});
+    expect(codec.decode(encodeJson(historical), context(source)).chart == source,
+           "existing Aso documents retain local extension rows when their stock projection is also local");
+    stock.erase("asobmashow");
+    for (const auto &row : {test.global, test.local}) {
+      stock["laneShufflePattern"] = Json::array({nullptr, row});
+      auto decoded = codec.decode(encodeJson(stock), context(source));
+      expect(decoded.chart && decoded.chart->playback.setup.player2.laneShufflePattern == test.local,
+             "stock global and historical Aso local DP patterns import to the same canonical row");
+      if (!decoded.chart) continue;
+      auto meta = bms_parser::ChartMeta{};
+      meta.KeyMode = test.mode;
+      meta.IsDP = true;
+      auto translated = replay::makeReplayDataFromSetup(
+          decoded.chart->playback.setup, ScoreProvenance::Legacy(), meta, diagnostic);
+      const int resultOffset = test.mode == 10 ? 5 : test.mode == 14 ? 7 : 26;
+      expect(translated && translated->laneShufflePattern2P &&
+                 translated->laneShufflePattern2P->front() == test.local.front() + resultOffset,
+             "consumer adapter adds its existing result namespace offset exactly once");
+      decoded.chart->playback.setup.chart.md5 = source.playback.setup.chart.md5;
+      const auto reencoded = codec.encodeChart(*decoded.chart, 0, diagnostic);
+      expect(reencoded && outerJson(*reencoded)["laneShufflePattern"] ==
+                              Json::array({nullptr, test.global}),
+             "re-export of either imported namespace restores the stock global row once");
+    }
+    for (int mutation = 0; mutation < 6; ++mutation) {
+      Json row = test.global;
+      if (mutation == 0) row[0] = row[1];
+      if (mutation == 1) row[0] = test.local[0];
+      if (mutation == 2) row[0] = -1;
+      if (mutation == 3) row[0] = test.global[0] + 0.5;
+      if (mutation == 4) row[0] = std::uint64_t{1} << 32 | test.global[0];
+      if (mutation == 5) row.erase(row.begin());
+      stock["laneShufflePattern"] = Json::array({nullptr, row});
+      expect(!codec.decode(encodeJson(stock), context(source)).chart,
+             "stock DP import rejects duplicate, mixed, negative, fractional, overflow and short rows");
+    }
+    for (const Json lane : {Json(test.local[0] + 0.5),
+                            Json((std::uint64_t{1} << 32) | test.local[0])}) {
+      auto malformed = outerJson(*encoded);
+      malformed["asobmashow"]["setup"]["player2"]["laneShufflePattern"][0] = lane;
+      expect(!codec.decode(encodeJson(malformed), context(source)).chart,
+             "canonical pattern entries cannot truncate fractional or overflowing JSON numbers");
+    }
+  }
+}
+
+void testStockKeyboardProducerWheelDisplayRows() {
+  // Unchanged PatternModifier.create/getRandomPattern at Beatoraja 83574048,
+  // seed 0. Non-EX keyboard display rows overwrite the final wheel with
+  // scratchKey[player]: 24 for 1P, but 25 (not 51) for global 2P.
+  const std::vector<int> randomKeys{
+      0, 10, 21, 3, 18, 17, 23, 5, 13, 22, 2, 16,
+      9, 11, 12, 14, 20, 1, 19, 4, 7, 6, 8, 15};
+  const std::vector<int> rotateKeys{
+      10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
+      22, 23, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+  replay::BeatorajaReplayCodec codec;
+  for (const int mode : {24, 48}) {
+    for (int player = 0; player < (mode == 48 ? 2 : 1); ++player) {
+      for (const int option : {2, 3}) {
+        auto source = chartDocument();
+        source.playback.setup.chart.keyMode = mode;
+        source.playback.setup.player1 = {};
+        source.playback.setup.player2 = {};
+        auto &selected = player == 0 ? source.playback.setup.player1
+                                     : source.playback.setup.player2;
+        selected = {.option = option == 2 ? "RANDOM" : "R-RANDOM", .seed = 0};
+        auto local = option == 2 ? randomKeys : rotateKeys;
+        local.insert(local.end(), {24, 25});
+        selected.laneShufflePattern = local;
+        source.playback.input.resize(2);
+        std::string diagnostic;
+        const auto encoded = codec.encodeChart(source, 0, diagnostic);
+        expect(encoded.has_value(), "canonical keyboard source encodes");
+        if (!encoded) continue;
+        auto stock = outerJson(*encoded);
+        stock.erase("asobmashow");
+        const auto global = stock["laneShufflePattern"][player];
+        auto producer = global;
+        producer[25] = player == 0 ? 24 : 25;
+        stock["laneShufflePattern"][player] = producer;
+        const auto decoded = codec.decode(encodeJson(stock), context(source));
+        expect(decoded.chart.has_value(), "stock keyboard producer display row imports");
+        if (decoded.chart) {
+          const auto &actual = player == 0 ? decoded.chart->playback.setup.player1
+                                           : decoded.chart->playback.setup.player2;
+          expect(actual == selected,
+                 "producer repair restores canonical wheels and preserves option/seed");
+          auto retained = *decoded.chart;
+          retained.playback.setup.chart.md5 = source.playback.setup.chart.md5;
+          const auto reencoded = codec.encodeChart(retained, 0, diagnostic);
+          expect(reencoded && outerJson(*reencoded)["laneShufflePattern"][player] == global,
+                 "repaired display metadata re-exports with correct global wheels");
+        }
+        for (const Json row : {global, Json(local)}) {
+          auto valid = stock;
+          valid["laneShufflePattern"][player] = row;
+          const auto imported = codec.decode(encodeJson(valid), context(source));
+          expect(imported.chart &&
+                     (player == 0 ? imported.chart->playback.setup.player1
+                                  : imported.chart->playback.setup.player2) == selected,
+                 "correct global and historical local keyboard rows stay unchanged");
+        }
+        for (int mutation = 0; mutation < 10; ++mutation) {
+          auto malformed = stock;
+          auto &row = malformed["laneShufflePattern"][player];
+          if (mutation == 0) row[0] = row[1];
+          if (mutation == 1) row[0] = player == 0 ? 26 : 0;
+          if (mutation == 2) row[24] = 23 + player * 26;
+          if (mutation == 3) row[25] = player == 0 ? 23 : 24;
+          if (mutation == 4) row.erase(row.begin());
+          if (mutation == 5) row.push_back(25 + player * 26);
+          if (mutation == 6) row[0] = -1;
+          if (mutation == 7) row[0] = 0.5;
+          if (mutation == 8) row[0] = (std::uint64_t{1} << 32);
+          if (mutation == 9) {
+            row = local;
+            row[25] = 24;
+            if (player == 0) row[24] = row[25] = 25;
+          }
+          expect(!codec.decode(encodeJson(malformed), context(source)).chart,
+                 "adjacent malformed keyboard rows are not producer repairs");
+        }
+        for (const int otherOption : {0, 1, 8, 9}) {
+          auto wrongOption = stock;
+          wrongOption[player == 0 ? "randomoption" : "randomoption2"] = otherOption;
+          expect(!codec.decode(encodeJson(wrongOption), context(source)).chart,
+                 "producer exception excludes NORMAL, MIRROR and EX options");
+        }
+        auto canonical = outerJson(*encoded);
+        auto invalidLocal = local;
+        invalidLocal[25] = 24;
+        canonical["asobmashow"]["setup"][player == 0 ? "player1" : "player2"]
+                 ["laneShufflePattern"] = invalidLocal;
+        expect(!codec.decode(encodeJson(canonical), context(source)).chart,
+               "canonical extension still rejects duplicate keyboard wheels");
+      }
+    }
+  }
 }
 
 void testIndependentStockFixtures() {
@@ -853,6 +1103,9 @@ void testNegativeAbortCodecBounds() {
 }
 
 int main() {
+  testPopnFiveKeyStockShuffleSurvivesChartApplication();
+  testStockDoublePlayPatternsUseGlobalRowsAndCanonicalLocalRows();
+  testStockKeyboardProducerWheelDisplayRows();
   testNegativeAbortCodecBounds();
   testAbortedCompletionSurvivesCodecRoundTrip();
   testIndependentStockFixtures();

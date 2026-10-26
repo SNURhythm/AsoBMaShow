@@ -247,6 +247,9 @@ void applySkinMenuPracticeModifier(bms_parser::Chart &chart,
                                    const SkinMenuAttemptPlan &attempt) {
   const int totalNotesBeforeModifier = chart.Meta.TotalNotes;
   chart.Meta.HasTotal = true;
+  // The menu edits effective absolute TOTAL, resolved before trimming notes.
+  // Retain bmson's explicit zero marker; absolute BMS zero means unspecified.
+  chart.Meta.TotalIsRelative = chart.Meta.TotalIsRelative && attempt.total == 0.0;
   chart.Meta.Total = attempt.total;
   const auto moveToBackground = [](bms_parser::Note *note) {
     if (note == nullptr || note->Timeline == nullptr || note->Lane < 0 ||

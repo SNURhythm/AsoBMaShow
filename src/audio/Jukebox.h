@@ -96,6 +96,9 @@ struct ScheduledAudioEvent {
   long long timeMicros = 0;
   int wav = bms_parser::Parser::NoWav;
   audio::Bus bus = audio::Bus::Bgm;
+  std::uint64_t voiceId = 0;
+  bool setVoiceGain = false;
+  float gain = 1.0F;
 };
 
 enum class JukeboxAudioSource : std::uint8_t {
@@ -138,7 +141,7 @@ inline std::optional<OverlappingAudioRequest>
 makeOverlappingAudioRequest(const ScheduledAudioEvent &event,
                             long long seekMicros,
                             long long durationMicros) noexcept {
-  if (seekMicros < event.timeMicros || durationMicros <= 0) {
+  if (event.setVoiceGain || seekMicros < event.timeMicros || durationMicros <= 0) {
     return std::nullopt;
   }
   const long long offsetMicros = seekMicros - event.timeMicros;
@@ -234,7 +237,8 @@ public:
   // Register generated PCM while playback is stopped, for direct or chart-timed keysounds.
   bool loadGeneratedKeySound(int wav, const path_t &path, std::vector<short> pcm,
                              int channels, int sampleRate);
-  void playKeySound(int wav);
+  void playKeySound(int wav, std::uint64_t voiceId = 0);
+  void setKeysoundVoiceGain(std::uint64_t voiceId, float gain);
   [[nodiscard]] std::optional<audio::RealtimeSoundHandle>
   resolveRealtimeKeySound(int wav) const;
   audio::playback::BackendOperationResult play(long long startMicros = 0);
@@ -449,6 +453,7 @@ private:
   std::vector<std::pair<long long, int>> bmpList;
   std::vector<std::pair<long long, int>> bmpLayerList;
   std::unordered_set<int> gameplayBgaLayerImageIds;
+  bool gameplayBgaBlackTransparent = true;
   BgaPoorSequenceSchedule poorBgaSequences;
   size_t bmpCursor = 0;
   size_t bmpLayerCursor = 0;
