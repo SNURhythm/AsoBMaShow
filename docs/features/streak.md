@@ -4,6 +4,11 @@ Open the **Combo** tab beside PLAY, COURSE, MUSIC and IR, then create a routine.
 Custom selectors expose the same dashboard through the toolbar’s flame button. Set daily,
 weekly and monthly point goals and add assignments. Select levels from any
 installed difficulty tables; an assignment matches the union of those levels.
+Choose **From level** and **To level**, then **Add levels** to include both
+endpoints and every entry between them in table order. Moving an endpoint past
+the other moves the other endpoint with it. Equal endpoints add a single level;
+existing selections are kept and duplicates are skipped. Switch tables to add
+another range.
 
 Creating or saving a routine requires at least one assignment; an empty list
 shows an inline error beside Add assignment. Previously saved empty routines

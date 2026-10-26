@@ -129,6 +129,27 @@ int main() {
   record(moving, play(41000, "third"), 0, &receipt);
   CHECK(receipt.assignments.empty());
   auto form = config().assignments.front();
+  const std::vector<Level> tableLevels{{"table", "2", "sl2"}, {"table", "10", "sl10"},
+                                       {"table", "EX", "slEX"}, {"table", "?", "sl?"}};
+  Assignment rangeAssignment;
+  rangeAssignment.levels = {{"other", "10", "Other 10"}, tableLevels[1]};
+  CHECK(!addLevelRange(rangeAssignment, tableLevels, 2, 0) && rangeAssignment.levels.size() == 2);
+  CHECK(addLevelRange(rangeAssignment, tableLevels, 0, 2));
+  CHECK((rangeAssignment.levels == std::vector<Level>{{"other", "10", "Other 10"},
+        tableLevels[1], tableLevels[0], tableLevels[2]}));
+  CHECK(addLevelRange(rangeAssignment, tableLevels, 3, 3));
+  CHECK(rangeAssignment.levels.back() == tableLevels[3] && rangeAssignment.levels.size() == 5);
+  const auto selected = rangeAssignment.levels;
+  CHECK(addLevelRange(rangeAssignment, tableLevels, 0, 3) && rangeAssignment.levels == selected);
+  CHECK(!addLevelRange(rangeAssignment, tableLevels, -1, 2) && rangeAssignment.levels == selected);
+  CHECK(!addLevelRange(rangeAssignment, tableLevels, 0, 4) && rangeAssignment.levels == selected);
+  CHECK(!addLevelRange(rangeAssignment, {}, 0, 0) && rangeAssignment.levels == selected);
+  Assignment full;
+  for (int i = 0; i < 199; ++i) full.levels.push_back({"other", std::to_string(i), ""});
+  const auto beforeRange = full.levels;
+  CHECK(!addLevelRange(full, tableLevels, 0, 1) && full.levels == beforeRange);
+  CHECK(addLevelRange(full, tableLevels, 0, 0) && full.levels.size() == 200);
+  CHECK(addLevelRange(full, tableLevels, 0, 0) && full.levels.size() == 200);
   auto errors = readAssignmentForm(form, "", "1.5", "0", "invalid hidden value");
   CHECK(errors.contains("name") && errors.contains("count") && errors.contains("points"));
   CHECK(!errors.contains("rate"));

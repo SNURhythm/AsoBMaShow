@@ -180,12 +180,13 @@ int main() {
                 FixtureCompiler.from_environment(shared_headers=True).build([source], binary, source.parent)
                 subprocess.run([str(binary)], check=True, timeout=5)
 
-    def test_rebuild_keeps_scroll_and_animation_phase(self):
+    def test_rebuild_keeps_scroll_animation_and_ordered_level_range(self):
         root = Path(__file__).resolve().parents[1]
         scene = (root / "src/scene/StreakScene.cpp").read_text()
         fixture = (root / "tests/streak_rebuild_fixture.cpp").read_text()
         fixture = fixture.replace("BUILD", extract(scene, "void StreakScene::build("))
         fixture = fixture.replace("METER", extract(scene, "void meter("))
+        fixture = fixture.replace("RANGE_PICKER", extract(scene, "void StreakScene::levelRangePicker("))
         with tempfile.TemporaryDirectory(prefix="asobmashow-streak-rebuild-") as directory:
             source = Path(directory) / "rebuild.cpp"
             binary = Path(directory) / "rebuild"

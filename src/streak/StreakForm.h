@@ -1,6 +1,7 @@
 #pragma once
 
 #include "StreakModel.h"
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <map>
@@ -9,6 +10,25 @@
 
 namespace streak {
 using FieldErrors = std::map<std::string, std::string>;
+
+inline bool addLevelRange(Assignment &assignment, const std::vector<Level> &levels,
+                          int first, int last) {
+  if (first < 0 || last < first || static_cast<std::size_t>(first) >= levels.size() ||
+      static_cast<std::size_t>(last) >= levels.size()) return false;
+  auto selected = assignment.levels;
+  for (int i = first; i <= last; ++i) {
+    const auto &level = levels[i];
+    const bool duplicate = std::any_of(selected.begin(), selected.end(), [&](const auto &existing) {
+      return existing.source == level.source && existing.level == level.level;
+    });
+    if (!duplicate) {
+      if (selected.size() >= 200) return false;
+      selected.push_back(level);
+    }
+  }
+  assignment.levels = std::move(selected);
+  return true;
+}
 
 inline int formInteger(const std::string &text, int maximum, const char *field,
                        const char *rangeError, FieldErrors &errors) {

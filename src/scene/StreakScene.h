@@ -47,6 +47,7 @@ private:
   reminders::Permission reminderPermission_ = reminders::Permission::Unknown;
   void routine(View *);
   void editor(View *);
+  void levelRangePicker(View *, const std::vector<streak::Level> &);
   void editAssignment(int index);
   void acceptAssignment();
   void saveRoutine();
@@ -72,6 +73,7 @@ private:
   Page renderedPage_ = Page::Dashboard;
   std::array<float, 5> scrollOffsets_{};
   int editingIndex_ = -1, tableId_ = 0;
+  std::optional<std::string> rangeStartLevel_, rangeEndLevel_;
   bool loadFailed_ = false;
   bool showOptional_ = false;
   bool adjustingToday_ = false;
