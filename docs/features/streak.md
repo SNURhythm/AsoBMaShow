@@ -17,6 +17,16 @@ AA, AAA, MAX -, MAX, and custom EX rates to 0.01 percentage-point precision.
 Previous-lamp filters support exact lamps and “or below,” including NO PLAY.
 The target lamp is a minimum; NO PLAY is an eligibility state, not a result.
 
+The PLAY selector's **Assignments** folder shows all playable charts that can
+still contribute today, deduplicated across assignments. Expand it to browse a
+subfolder for each assignment. Charts already counted for an assignment are
+hidden there; they remain available for other assignments that can still use
+them. Sticky-eligible charts stay visible even after their lamp or table
+membership changes. Lamp/score targets are goals to work toward, not filters on
+this list. Once the shared daily bonus budget is spent, the folders are empty.
+Both the built-in browser and skin-driven selector support these folders, with
+normal search/filter/navigation behavior and refresh after play or day rollover.
+
 Before the daily goal, completed rounds award their configured points, capped
 at the points still needed for the goal. The play that reaches the goal awards
 no extra savings, even if it completes several assignments. Later rounds award
@@ -66,7 +76,7 @@ and the best streak survive resets. Daily progress and streak acknowledgment
 appear in built-in results. Completed days lead with “Today is complete” and a
 “Done for today” action. Optional challenges start collapsed, and bonus points
 appear separately from the finished daily goal. Rich animated celebrations,
-sound, share cards, eligible-chart navigation, and custom-skin integration are deferred to the UI/UX pass.
+sound, share cards, and custom-skin dashboard integration are deferred to the UI/UX pass.
 
 ## Storage and recovery
 
@@ -122,6 +132,13 @@ should unlock those milestones during the same session.
 6. Edit the routine before or after playing. Today stays unchanged, and the
    dashboard shows the effective date for tomorrow. Multiple saves replace the
    pending routine.
+
+To check assignment navigation, expand **Assignments** in PLAY. The root shows
+the union of eligible charts; each named subfolder shows its own candidates.
+Complete a chart for one assignment and return: it should disappear from that
+subfolder, remaining in another only if it can still contribute there. Search,
+filters and random selection must stay within the current assignment folder.
+The same folders are available in a skin-driven selector.
 
 To check daily eligibility and combined targets, use a fresh test profile with
 an assignment for an EASY-cleared chart, target HARD and a score threshold you

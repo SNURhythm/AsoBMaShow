@@ -92,6 +92,7 @@ struct Summary {
 [[nodiscard]] std::string dateLabel(DayId day);
 [[nodiscard]] std::string lampLabel(int lamp);
 [[nodiscard]] std::string scoreLabel(const Assignment &assignment);
+[[nodiscard]] bool eligible(const Assignment &assignment, const Play &play);
 [[nodiscard]] bool matches(const Assignment &assignment, const Play &play);
 void advance(State &state, DayId day);
 DayId configure(State &state, const Config &config, DayId day);

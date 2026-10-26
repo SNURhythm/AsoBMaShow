@@ -344,6 +344,8 @@ struct Preview {
   void playDecide() {}
 };
 int previewSelection(const Bars &, const Settings &) { return 0; }
+namespace streak { inline int day=0; int today() { return day; } }
+
 struct MusicSelectScene {
   void updateRankingsModal() {}
 
@@ -449,6 +451,7 @@ struct MusicSelectScene {
   bool beginRecordsExport(const std::string &);
   std::uint64_t libraryRevision_ = 0;
   std::uint64_t scoreRevision_ = 0;
+  int assignmentDayId_ = streak::today();
   std::uint64_t irRankingEvidenceRevision_ = 0;
   std::optional<int> rankingRequest_;
   std::int64_t rankingLoadAtMicros_ = -1;
@@ -456,6 +459,7 @@ struct MusicSelectScene {
   void reloadLibrary() {
     libraryRevision_ = context.chartRepository.GetLibraryRevision();
     scoreRevision_ = context.scoreRepository.GetRevision();
+    assignmentDayId_ = streak::today();
     if (hashDirectoryOpen) {
       restoreDirectories_ = {MusicSelectBarId{"hash"}};
       restoreSelection_ = MusicSelectBarId{"song"};

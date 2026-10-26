@@ -44,8 +44,8 @@ use their original play date, and can return an unnecessarily consumed freeze.
 Streak milestones: 7, 14, 30, 50, 100, 365. Weekly/monthly goal achievements are
 retained. MVP provides a usable native dashboard/editor and a short result
 acknowledgment. Completed days emphasize completion and collapse optional
-challenges. Rich animation, sound, share cards, browsing eligible charts
-from an assignment, and custom-skin dashboard integration are follow-up polish.
+challenges. Rich animation, sound, share cards, and custom-skin dashboard
+integration are follow-up polish.
 
 ## Approaches
 
@@ -68,3 +68,8 @@ Modified manual attempts can earn assignments using their effective assist-cappe
 lamp. The round crossing the daily goal immediately escalates its next round.
 Recovered unnecessary freezes may exceed purchase capacity temporarily; they are
 first reassigned to subsequent unprotected absences. These are MVP choices.
+
+Both selectors include an Assignments root containing the union of today's
+contributing charts and per-assignment subfolders. Counted charts disappear
+from each assignment independently; sticky eligibility remains valid. The
+native browser retains paginated search/filter/sort/random selection.

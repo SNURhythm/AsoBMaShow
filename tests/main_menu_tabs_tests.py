@@ -51,6 +51,7 @@ class MainMenuTabsTests(unittest.TestCase):
 #include <thread>
 #include <memory>
 #include <mutex>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -72,6 +73,7 @@ struct ChartMetaRecord {
 struct ChartRecordFilters {};
 namespace i18n { std::string tr(const char *key) { return key; } }
 namespace long_note_mode { int valueFromId(int mode) { return mode; } }
+namespace streak { int today() { return 1; } }
 namespace chart_record_filters {
 void applyToQuery(ChartMetaQuery&, const ChartRecordFilters&, bool) {}
 }
@@ -188,6 +190,8 @@ struct MainMenuScene : Scene {
   bool musicPlaying=false;
   std::optional<std::filesystem::path> temporaryChartFolder;
   LibraryFolderItem activeFolder;
+  int assignmentDayId=1;
+  std::map<std::string, std::vector<std::string>> assignmentChartHashes;
   std::string searchText;
   struct { int longNoteMode=1; } profileSelections;
   ChartRecordFilters chartRecordFilters;
@@ -692,6 +696,7 @@ int main(int argc,char **argv) {
             "void MainMenuScene::ChartListPageCache::clear()",
             "const ChartMetaRecord &MainMenuScene::ChartListPageCache::get(",
             "void MainMenuScene::reloadChartList(",
+            "void MainMenuScene::selectFolder(",
             "std::optional<ChartMetaRecord> MainMenuScene::selectedRecordSnapshot() const",
             "void MainMenuScene::reselectCurrentChart()",
             "void MainMenuScene::openReplayRecordsForSelection()",

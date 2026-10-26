@@ -1,4 +1,5 @@
 #include "music_select/MusicSelectRepositoryProjection.h"
+#include "music_select/MusicSelectAssignmentFolders.h"
 
 #include "music_select_runtime_ledger_assertions.h"
 
@@ -765,9 +766,66 @@ void testSingleSongProjectionDoesNotAggregateOrVisitOtherRows() {
           "page projection constructs exactly one fully functional SongBar");
 }
 
+void testAssignmentFoldersShowOnlyContributingCharts() {
+  streak::Day day;
+  streak::Assignment a{.id="one", .name="First", .levels={{"table", "0", ""}},
+                       .eligibleLamp=200, .targetLamp=400};
+  day.assignments.push_back({.requirement=a});
+  a.id = "two"; a.name = "Second";
+  day.assignments.push_back({.requirement=a});
+  auto root = musicSelectAssignmentsRoot("Assignments");
+  require(musicSelectIsAssignmentDirectory(root) && !root.childrenLoaded,
+          "assignment root is a lazy virtual directory");
+  std::vector<MusicSelectAssignmentChart> sources{
+      {chart("/a", "a", "Alpha", "", "/"), {{"table", "0", ""}}},
+      {chart("/b", "b", "Beta", "", "/"), {{"table", "0", ""}}},
+      {chart("/c", "c", "Sticky", "", "/"), {}},
+      {chart("/d", "d", "Wrong level", "", "/"), {{"other", "0", ""}}},
+      {chart("/e", "e", "Missing", "", "/"), {{"table", "0", ""}}}};
+  sources.back().record.unavailable = true;
+  sources.push_back(sources.front()); // Overlapping tables must not duplicate songs.
+  day.assignments[0].usedCharts.insert("a");
+  day.assignments[0].chartProgress["c"] = {};
+  MusicSelectRepositoryProjectionInput input{
+      .clearFor=[](const bms_parser::ChartMeta &meta, int mode) {
+        return meta.SHA256 == "c" ? 400 : mode == 2 ? 200 : 300;
+      }, .selectedLongNoteMode=2};
+  auto rows = musicSelectAssignmentChildren(day, root, sources, input);
+  require(rows.size() == 5, "root contains two assignment folders and three unique eligible songs");
+  if (rows.size() < 2) return;
+  const auto first = rows[0], second = rows[1];
+  require(first.title == "First" && second.title == "Second" && first.id != second.id,
+          "assignment folders preserve names and independent stable identities");
+  auto children = musicSelectAssignmentChildren(day, first, sources, input);
+  require(children.size() == 2 && children[0].chart->meta.SHA256 == "b" &&
+              children[1].chart->meta.SHA256 == "c",
+          "counted chart is hidden while sticky eligibility survives removed level and improved lamp");
+  children = musicSelectAssignmentChildren(day, second, sources, input);
+  require(children.size() == 2, "a chart counted for one assignment can contribute to another");
+  input.selectedLongNoteMode = 3;
+  children = musicSelectAssignmentChildren(day, root, sources, input);
+  require(children.size() == 3, "LN-mode eligibility changes without removing sticky charts");
+  day.points = day.config.dailyGoal;
+  day.assignments[0].bonusRounds = streak::sharedDailyBonusLimit;
+  require(musicSelectAssignmentChildren(day, root, sources, input).size() == 2,
+          "exhausted shared bonus budget keeps folders but no contributing charts");
+  require(musicSelectAssignmentChildren(day, first, sources, input).empty(),
+          "exhausted assignment folder is empty");
+  day.points = 0; day.assignments[0].bonusRounds = 0;
+  for (auto &progress : day.assignments) {
+    progress.usedCharts.clear(); progress.chartProgress.clear();
+  }
+  require(musicSelectAssignmentChildren(day, root, sources, input).size() == 2,
+          "new-day state no longer preserves yesterday's sticky eligibility");
+  input.selectedLongNoteMode = 2;
+  require(musicSelectAssignmentChildren(day, first, sources, input).size() == 2,
+          "newly matching eligibility makes previously excluded charts available");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
+  testAssignmentFoldersShowOnlyContributingCharts();
   testLazyPhysicalProjectionDoesNotVisitDescendantSongs();
   testSingleSongProjectionDoesNotAggregateOrVisitOtherRows();
   testSongAndFolderLampsUseBestClearWithoutRewritingBestExAttempt();

@@ -57,6 +57,7 @@ struct Player {
   bool Start(std::shared_ptr<audio::PagedPreviewSource> source, std::string &, bool fade) {
     playing = std::move(source); faded = fade; ++starts; return true;
   }
+  void SetMonoAudio(bool) {}
   void SetRequest(Request value) { request = std::move(value); }
 };
 struct Jukebox {
@@ -72,6 +73,7 @@ struct Scene {
     struct Settings {
       struct AudioVideo {
         struct Audio {
+          bool monoAudio = false;
           float masterVolume = 0.5f, bgmVolume = 0.4f, keysoundVolume = 0.6f;
           std::string outputDeviceId = "chosen";
           unsigned requestedSampleRate = 48000, requestedBufferFrames = 256;

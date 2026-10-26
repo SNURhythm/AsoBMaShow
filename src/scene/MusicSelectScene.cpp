@@ -744,8 +744,22 @@ void MusicSelectScene::reloadLibrary(bool preserveDirectory) {
       MusicSelectRepositoryProjection::loadMetadata(
           *chartSession_,
           long_note_mode::valueFromId(context.settings.selectedLnMode)));
-  bars_.refresh(MusicSelectRepositoryProjection{}.projectRoot(
-      *repositoryMetadata_, searchHistory_.entries(), libraryRevision_));
+  auto projection = MusicSelectRepositoryProjection{}.projectRoot(
+      *repositoryMetadata_, searchHistory_.entries(), libraryRevision_);
+  assignmentDayId_ = streak::today();
+  assignmentDay_ = {};
+  assignmentCharts_.reset();
+  std::string streakError;
+  if (const auto state = context.scoreRepository.LoadStreak(streakError)) {
+    const auto day = state->days.find(assignmentDayId_);
+    if (day != state->days.end()) assignmentDay_ = day->second;
+    auto assignments = musicSelectAssignmentsRoot(i18n::tr("streak.ui.assignment_folder"));
+    projection.root.push_back(assignments.id);
+    projection.bars.push_back(std::move(assignments));
+  } else {
+    SDL_Log("Unable to load assignment folders: %s", streakError.c_str());
+  }
+  bars_.refresh(std::move(projection));
   bars_.configure({.modeFilter = context.settings.skinModeFilterName,
                    .difficultyFilter =
                        context.settings.skinDifficultyFilterName,
@@ -1827,6 +1841,14 @@ bool MusicSelectScene::loadDirectoryChildren(
     break;
   }
   case skin::MusicSelectBarKind::Container: {
+    if (musicSelectIsAssignmentDirectory(directory)) {
+      if (!assignmentCharts_)
+        assignmentCharts_ = loadMusicSelectAssignmentCharts(
+            *chartSession_, *repositoryMetadata_, assignmentDay_, selectedLongNoteMode);
+      children = musicSelectAssignmentChildren(
+          assignmentDay_, directory, *assignmentCharts_, inputFor({}));
+      break;
+    }
     const bool lamp = directory.id.value == "container:lamp-update";
     for (int day = 0; day < 30; ++day) {
       const std::string title =
@@ -3318,7 +3340,8 @@ void MusicSelectScene::refreshRepositoryRevisions() {
     rankingCache_.clear();
   }
   if (context.chartRepository.GetLibraryRevision() != libraryRevision_ ||
-      context.scoreRepository.GetRevision() != scoreRevision_) {
+      context.scoreRepository.GetRevision() != scoreRevision_ ||
+      streak::today() != assignmentDayId_) {
     reloadLibrary();
     selectedBarMoved();
   } else if (rankingChanged && rankingRequest_) {

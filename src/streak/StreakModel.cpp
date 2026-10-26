@@ -167,7 +167,6 @@ std::string scoreLabel(const Assignment &a) {
   text << std::fixed << std::setprecision(2) << (100.0 * a.scoreNumerator / a.scoreDenominator) << "% EX or above";
   return text.str();
 }
-namespace {
 bool eligible(const Assignment &a, const Play &p) {
   const bool levelMatches = std::any_of(a.levels.begin(), a.levels.end(), [&](const Level &level) {
     return std::any_of(p.levels.begin(), p.levels.end(), [&](const Level &candidate) {
@@ -178,6 +177,7 @@ bool eligible(const Assignment &a, const Play &p) {
   if (a.eligibleLamp != -2 && (a.eligibleOrBelow ? p.previousLamp > a.eligibleLamp : p.previousLamp != a.eligibleLamp)) return false;
   return true;
 }
+namespace {
 bool meetsTargets(const Assignment &a, int lamp, int score, int maxScore) {
   if (a.targetLamp >= 0 && lamp < a.targetLamp) return false;
   return a.scoreNumerator == 0 || (maxScore > 0 &&

@@ -1608,6 +1608,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
         add_executable(music_select_repository_projection_tests
             tests/music_select_repository_projection_tests.cpp
+            src/music_select/MusicSelectAssignmentFolders.cpp
+            src/streak/StreakModel.cpp
             src/music_select/MusicSelectRepositoryProjection.cpp
             src/path.cpp
         )

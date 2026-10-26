@@ -2305,6 +2305,7 @@
 {"storage.ui.verifying", "Verifying…", "검증 중…", "検証中…", "正在验证…", "正在驗證…"},
 {"storage.ui.video", "Video", "영상", "動画", "视频", "影片"},
 {"streak.ui.add", "Add assignment", "과제 추가", "課題を追加", "添加任务", "新增任務"},
+{"streak.ui.assignment_folder", "Assignments", "과제", "課題", "任务", "任務"},
 {"streak.ui.assignments", "Today’s assignments", "오늘의 과제", "今日の課題", "今日任务", "今日任務"},
 {"streak.ui.back", "Back", "뒤로", "戻る", "返回", "返回"},
 {"streak.ui.bonus_complete", "All of today’s bonus points earned. Enjoy free play or take a break.", "오늘의 보너스를 모두 받았습니다. 자유롭게 플레이하거나 쉬어도 좋아요.", "今日のボーナスはすべて獲得しました。自由に遊んでも、休憩しても大丈夫です。", "今日奖励积分已全部获得。可以自由游玩，也可以休息一下。", "今日獎勵積分已全部獲得。可以自由遊玩，也可以休息一下。"},

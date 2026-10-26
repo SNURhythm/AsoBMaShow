@@ -1581,6 +1581,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
       case LibraryFolderItem::Type::AllSongs:
         label = i18n::tr("library.folders.all_songs.label");
         break;
+      case LibraryFolderItem::Type::Assignments:
+        if (item.depth == 0) label = i18n::tr("streak.ui.assignment_folder");
+        break;
       case LibraryFolderItem::Type::Favorites:
         label = i18n::tr("library.folders.favorites.label");
         break;
@@ -2798,6 +2801,17 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
         chartSession->SelectDifficultyCourseTables();
     folderMetadataCache.valid = true;
   }
+  assignmentDayId = streak::today();
+  assignmentDay = {};
+  assignmentCharts.reset();
+  assignmentChartHashes.clear();
+  std::string streakError;
+  if (const auto state = context.scoreRepository.LoadStreak(streakError)) {
+    const auto day = state->days.find(assignmentDayId);
+    if (day != state->days.end()) assignmentDay = day->second;
+  } else {
+    SDL_Log("Unable to load assignment folders: %s", streakError.c_str());
+  }
   std::vector<LibraryFolderItem> folders;
 
   const int allSongCount = folderMetadataCache.allSongCount;
@@ -2840,6 +2854,24 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
   folders.push_back(allSongsItem);
   if (allSongsItem.expanded) {
     appendClearMarkFilters(allSongsItem, 1);
+  }
+
+  folders.push_back({
+      .key = "container:assignments",
+      .label = i18n::tr("streak.ui.assignment_folder"),
+      .type = LibraryFolderItem::Type::Assignments,
+      .expandable = !assignmentDay.assignments.empty(),
+      .expanded = isExpanded("container:assignments"),
+  });
+  if (isExpanded("container:assignments")) {
+    for (const auto &progress : assignmentDay.assignments) {
+      folders.push_back({
+          .key = "container:assignment:" + progress.requirement.id,
+          .label = progress.requirement.name,
+          .type = LibraryFolderItem::Type::Assignments,
+          .depth = 1,
+      });
+    }
   }
 
   folders.push_back({
@@ -3173,6 +3205,12 @@ ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const {
   query.selectedLongNoteMode = selectedLongNoteMode;
 
   switch (activeFolder.type) {
+  case LibraryFolderItem::Type::Assignments: {
+    const auto hashes = assignmentChartHashes.find(activeFolder.key);
+    query.allowedSha256 = hashes == assignmentChartHashes.end()
+        ? std::vector<std::string>{} : hashes->second;
+    break;
+  }
   case LibraryFolderItem::Type::SolidArchives:
     query.solidArchivesOnly = true;
     break;
@@ -3550,10 +3588,34 @@ void MainMenuScene::reloadChartListForFolderSelection() {
   prioritizeVisibleArtworkBindings = false;
 }
 
+void MainMenuScene::prepareAssignmentChartQuery() {
+  if (!temporaryChartFolder && activeFolder.type == LibraryFolderItem::Type::Assignments &&
+      !assignmentChartHashes.contains(activeFolder.key)) {
+    const int mode = long_note_mode::valueFromId(profileSelections.longNoteMode);
+    if (!assignmentCharts) {
+      MusicSelectRepositoryMetadata metadata;
+      for (const auto &table : folderMetadataCache.tables)
+        metadata.tables.push_back({.info=table});
+      assignmentCharts = loadMusicSelectAssignmentCharts(*chartSession, metadata, assignmentDay, mode);
+    }
+    auto directory = musicSelectAssignmentsRoot({});
+    directory.id.value = activeFolder.key;
+    auto rows = musicSelectAssignmentChildren(assignmentDay, directory, *assignmentCharts,
+        {.clearFor=[this](const bms_parser::ChartMeta &meta, int mode) {
+           return scoreClearRanks.bestRankFor(meta, mode);
+         }, .selectedLongNoteMode=mode});
+    auto &hashes = assignmentChartHashes[activeFolder.key];
+    for (const auto &row : rows)
+      if (row.chart) hashes.push_back(row.chart->meta.SHA256);
+  }
+}
+
 void MainMenuScene::reloadChartList(bool preserveViewState) {
   if (recyclerView == nullptr || !chartSession.has_value()) {
     return;
   }
+
+  prepareAssignmentChartQuery();
 
   const float previousScrollOffset =
       preserveViewState ? recyclerView->scrollOffset : 0.0f;
@@ -3919,6 +3981,7 @@ void MainMenuScene::applyPendingUiUpdates() {
   // Keep invalidations and selection handoffs together until the selector
   // returns. Applying a hidden handoff would lose it on tab restoration.
   if (!selectorTabActive()) return;
+  if (assignmentDayId != streak::today()) requestLibraryReload(true);
   const bool shouldReloadFolders =
       context.chartLibraryFoldersReloadRequested.exchange(false);
   const bool shouldReloadCharts =
@@ -4074,6 +4137,7 @@ void MainMenuScene::selectFolder(LibraryFolderItem item) {
     reloadFolderItems(true);
   }
   if (item.expandable && chartQueryUnchanged && !clearedSameFolderScope) {
+    prepareAssignmentChartQuery();
     return;
   }
   reloadChartListForFolderSelection();

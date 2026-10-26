@@ -39,6 +39,7 @@
 #include "../audio/DecodedAssetCache.h"
 #include "../video/VideoPlayer.h"
 #include "MainMenuLibrary.h"
+#include "../music_select/MusicSelectAssignmentFolders.h"
 #include "MainMenuPlayOptionsModal.h"
 #include "MainMenuProfileSelections.h"
 #include "ReplayRecordsModal.h"
@@ -171,6 +172,7 @@ private:
   struct LibraryFolderItem {
     enum class Type {
       AllSongs,
+      Assignments,
       Favorites,
       SolidArchives,
       DifficultyTable,
@@ -386,6 +388,10 @@ private:
   CourseValidationCache courseValidationCache;
   std::unordered_set<std::string> expandedLibraryFolders;
   std::string searchText;
+  streak::Day assignmentDay;
+  streak::DayId assignmentDayId = 0;
+  std::optional<std::vector<MusicSelectAssignmentChart>> assignmentCharts;
+  std::map<std::string, std::vector<std::string>> assignmentChartHashes;
   std::optional<std::filesystem::path> temporaryChartFolder;
   std::optional<ChartMetaRecord> selectedChartRecord;
   ChartRecordFilters chartRecordFilters;
@@ -452,6 +458,7 @@ private:
   void setChartScoreRankRange(bool orAbove, bool orBelow);
   void setChartDifficultyDropdownOpen(bool minLevel, bool open);
   void setChartSortCriterion(ChartRecordSortCriterion criterion);
+  void prepareAssignmentChartQuery();
   void reloadChartList(bool preserveViewState = false);
   void reloadChartListForFolderSelection();
   std::optional<std::string> reloadScoreClearRanks();
