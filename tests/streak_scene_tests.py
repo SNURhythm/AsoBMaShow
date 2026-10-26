@@ -49,27 +49,73 @@ class StreakSceneTests(unittest.TestCase):
 #include <charconv>
 #include <optional>
 HELPER
+int tableReads = 0, levelReads = 0;
+struct TestSession {
+  struct Table { int id; std::string sourceUrl; };
+  struct Level { std::string level; };
+  std::vector<Table> SelectDifficultyTables() { ++tableReads; return {{17,"new-generation"}}; }
+  std::vector<Level> SelectDifficultyLevels(int id) {
+    assert(id == 17); ++levelReads; return {{"10"},{"11"},{"11+"},{"12"},{"EX"}};
+  }
+};
+struct TestRepository {
+  bool available = true;
+  TestSession session;
+  TestSession *OpenSession() { return available ? &session : nullptr; }
+};
+struct StreakScene {
+  struct { TestRepository chartRepository; } context;
+  std::optional<std::map<std::string,int>> levelTableIds_;
+  std::map<std::string,std::map<std::string,int>> levelOrder_;
+  std::string assignmentLevelsText(const streak::Assignment &);
+};
+SCENE_LEVELS
 int main() {
+  const std::map<std::string, std::map<std::string, int>> order{
+      {"satellite", {{"0",0},{"1",1},{"2",2},{"3",3},{"4",4},{"5",5},{"6",6},{"EX",7}}},
+      {"stella", {{"0",0},{"1",1}}}, {"table", {{"0",0},{"1",1},{"2",2},{"3",3}}},
+      {"first", {{"0",0}}}, {"second", {{"1",0}}},
+      {"new-generation", {{"10",0},{"11",1},{"11+",2},{"12",3},{"EX",4}}}};
   streak::Assignment a;
-  assert(levelsText(a).empty());
+  assert(levelsText(a, order).empty());
   a.levels = {{"satellite", "0", "Satellite · sl0"}, {"stella", "0", "Stella · st0"},
               {"satellite", "1", "Satellite · sl1"}, {"satellite", "2", "Satellite · sl2"},
               {"stella", "1", "Stella · st1"}};
-  assert(levelsText(a) == "Satellite · sl0~sl2 / Stella · st0~st1");
+  assert(levelsText(a, order) == "Satellite · sl0~sl2 / Stella · st0~st1");
   a.levels = {{"first", "0", "Shared · x0"}, {"second", "1", "Shared · x1"}};
-  assert(levelsText(a) == "Shared · x0 / Shared · x1");
+  assert(levelsText(a, order) == "Shared · x0 / Shared · x1");
   a.levels = {{"legacy", "2", ""}, {"legacy", "3", "Custom label"},
               {"table", "1", "Name · with dot · lv1"}, {"table", "2", "Name · with dot · lv2"}};
-  assert(levelsText(a) == "2, Custom label / Name · with dot · lv1~lv2");
+  assert(levelsText(a, order) == "2, Custom label / Name · with dot · lv1~lv2");
   a.levels = {{"satellite", "3", "Satellite · sl3"}, {"satellite", "1", "Satellite · sl1"},
               {"satellite", "0", "Satellite · sl0"}, {"satellite", "2", "Satellite · sl2"},
               {"satellite", "5", "Satellite · sl5"}, {"satellite", "EX", "Satellite · slEX"}};
-  assert(levelsText(a) == "Satellite · sl0~sl3, sl5, slEX");
+  assert(levelsText(a, order) == "Satellite · sl0~sl3, sl5, slEX");
   a.levels = {{"table", "0", "Table · sl0"}, {"table", "1", "Table · st1"},
               {"table", "2", "Table · sl2"}, {"table", "3", "Table · Special"}};
-  assert(levelsText(a) == "Table · sl0, sl2, st1, Special");
+  assert(levelsText(a, order) == "Table · sl0~Special");
+  a.levels = {{"new-generation", "11+", "New Generation · 11+"},
+              {"new-generation", "11", "New Generation · 11"}};
+  assert(levelsText(a, order) == "New Generation · 11~11+");
+  StreakScene scene;
+  assert(scene.assignmentLevelsText(a) == "New Generation · 11~11+");
+  assert(scene.assignmentLevelsText(a) == "New Generation · 11~11+");
+  assert(tableReads == 1 && levelReads == 1);
+  a.levels = {{"new-generation", "11", "New Generation · 11"},
+              {"new-generation", "12", "New Generation · 12"}};
+  assert(levelsText(a, order) == "New Generation · 11, 12");
+  a.levels.push_back({"new-generation", "11+", "New Generation · 11+"});
+  assert(levelsText(a, order) == "New Generation · 11~12");
+  a.levels.push_back({"new-generation", "EX", "New Generation · EX"});
+  assert(levelsText(a, order) == "New Generation · 11~EX");
+  assert(levelsText(a, {}) == "New Generation · 11, 12, 11+, EX"); // No inferred adjacency without metadata.
+  scene.context.chartRepository.available = false;
+  scene.levelOrder_.clear();
+  assert(scene.assignmentLevelsText(a) == "New Generation · 11, 12, 11+, EX");
 }
 '''.replace("HELPER", helper)
+        fixture = fixture.replace("SCENE_LEVELS", extract(
+            (root / "src/scene/StreakScene.cpp").read_text(), "std::string StreakScene::assignmentLevelsText("))
         with tempfile.TemporaryDirectory(prefix="asobmashow-streak-levels-") as directory:
             source = Path(directory) / "levels.cpp"
             binary = Path(directory) / "levels"

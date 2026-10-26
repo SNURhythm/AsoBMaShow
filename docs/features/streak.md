@@ -9,8 +9,10 @@ endpoints and every entry between them in table order. Moving an endpoint past
 the other moves the other endpoint with it. Equal endpoints add a single level;
 existing selections are kept and duplicates are skipped. Switch tables to add
 another range.
-Summaries condense consecutive numeric levels, for example
-**Satellite · sl0~sl3, sl5**. Gaps and named levels remain separate.
+Summaries condense consecutive entries in imported table order, for example
+**Satellite · sl0~sl3, sl5** or **New Generation · 11~11+**. Unselected entries
+break ranges, including named levels such as `11+`. Without table metadata,
+levels are listed individually.
 
 Creating or saving a routine requires at least one assignment; an empty list
 shows an inline error beside Add assignment. Previously saved empty routines

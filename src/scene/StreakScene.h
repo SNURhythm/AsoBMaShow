@@ -48,6 +48,9 @@ private:
   void routine(View *);
   void editor(View *);
   void levelRangePicker(View *, const std::vector<streak::Level> &);
+  std::string assignmentLevelsText(const streak::Assignment &);
+  std::optional<std::map<std::string, int>> levelTableIds_;
+  std::map<std::string, std::map<std::string, int>> levelOrder_;
   void editAssignment(int index);
   void acceptAssignment();
   void saveRoutine();

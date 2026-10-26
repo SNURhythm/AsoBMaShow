@@ -160,8 +160,9 @@ int integer(const std::string &value) {
     throw std::invalid_argument(i18n::tr("streak.ui.whole_numbers"));
   return number;
 }
-std::string levelsText(const streak::Assignment &a) {
-  struct Entry { std::string name, prefix; std::optional<std::int64_t> number; };
+std::string levelsText(const streak::Assignment &a,
+                      const std::map<std::string, std::map<std::string, int>> &order) {
+  struct Entry { std::string name; std::optional<int> position; };
   struct Group { std::string source, table; std::vector<Entry> levels; };
   std::vector<Group> groups;
   const std::string separator = " · ";
@@ -171,11 +172,9 @@ std::string levelsText(const streak::Assignment &a) {
     const auto name = split == std::string::npos
         ? (level.label.empty() ? level.level : level.label) : level.label.substr(split + separator.size());
     Entry entry{.name=name};
-    std::int64_t number = 0;
-    const auto [end, error] = std::from_chars(level.level.data(), level.level.data() + level.level.size(), number);
-    if (error == std::errc{} && end == level.level.data() + level.level.size() && name.ends_with(level.level)) {
-      entry.number = number;
-      entry.prefix = name.substr(0, name.size() - level.level.size());
+    if (const auto source = order.find(level.source); source != order.end()) {
+      if (const auto position = source->second.find(level.level); position != source->second.end())
+        entry.position = position->second;
     }
     auto group = std::find_if(groups.begin(), groups.end(), [&](const auto &g) {
       return g.source == level.source && g.table == table;
@@ -188,18 +187,15 @@ std::string levelsText(const streak::Assignment &a) {
     if (!text.empty()) text += " / ";
     if (!group.table.empty()) text += group.table + separator;
     std::stable_sort(group.levels.begin(), group.levels.end(), [](const auto &left, const auto &right) {
-      if (left.number.has_value() != right.number.has_value()) return left.number.has_value();
-      if (!left.number) return false;
-      if (left.prefix != right.prefix) return left.prefix < right.prefix;
-      return *left.number < *right.number;
+      if (left.position.has_value() != right.position.has_value()) return left.position.has_value();
+      return left.position && *left.position < *right.position;
     });
     for (std::size_t first = 0; first < group.levels.size();) {
       std::size_t last = first;
       while (last + 1 < group.levels.size()) {
         const auto &current = group.levels[last];
         const auto &next = group.levels[last + 1];
-        if (!current.number || !next.number || current.prefix != next.prefix ||
-            *current.number >= *next.number || *current.number + 1 != *next.number) break;
+        if (!current.position || !next.position || *current.position + 1 != *next.position) break;
         ++last;
       }
       if (first > 0) text += ", ";
@@ -343,6 +339,8 @@ void StreakScene::later(std::function<void()> action) {
   defer([this, action = std::move(action)] { action(); build(); return true; }, 0, true);
 }
 void StreakScene::build() {
+  levelTableIds_.reset();
+  levelOrder_.clear();
   if (scroll_) scrollOffsets_[static_cast<std::size_t>(renderedPage_)] = scroll_->getScrollOffset();
   if (page_ != Page::Dashboard) { roundCue_ = {}; goalIgnitionSoundPending_ = false; }
   for (auto *view : views) delete view;
@@ -460,7 +458,7 @@ void StreakScene::dashboard(View *body) {
     label(assignmentCard, p.requirement.name + "  ·  " + i18n::plural("streak.ui.reward", reward).resolve(), 24);
     if (complete)
       label(assignmentCard, std::string(i18n::tr("streak.ui.bonus_today")) + " " + std::to_string(p.bonusRounds), 18);
-    label(assignmentCard, levelsText(p.requirement), 18);
+    label(assignmentCard, assignmentLevelsText(p.requirement), 18);
     assignmentConditions(assignmentCard, p.requirement);
     assignmentCard->addView(new AssignmentProgressView(p,
         change, streakProgressStartedAt_));
@@ -563,7 +561,7 @@ void StreakScene::resetChallengeModal() {
   details->setFlexDirection(FlexDirection::Column)->setGap(12);
   label(details, original->name, 23);
   label(details, i18n::tr("streak.ui.reset_challenge_help"), 20);
-  label(details, levelsText(*original), 18);
+  label(details, assignmentLevelsText(*original), 18);
   assignmentConditions(details, *original);
   scroll->setContentView(details);
   panel->addView(scroll);
@@ -600,7 +598,7 @@ void StreakScene::routine(View *body) {
   body->addView(assignments);
   for (std::size_t i = 0; i < draft_.assignments.size(); ++i) {
     const auto &a = draft_.assignments[i];
-    label(assignments, a.name + "  ·  " + levelsText(a), 22);
+    label(assignments, a.name + "  ·  " + assignmentLevelsText(a), 22);
     label(assignments, i18n::plural("streak.ui.chart_count", a.chartCount).resolve() + " · " + i18n::plural("streak.ui.reward", a.points).resolve(), 18);
     assignmentConditions(assignments, a);
     auto *row = new View();
@@ -715,6 +713,29 @@ void StreakScene::editor(View *body) {
   field(body, i18n::tr("streak.ui.count"), count_, &fieldErrors_["count"]);
   if (!adjustingToday_) field(body, i18n::tr("streak.ui.points"), points_, &fieldErrors_["points"]);
   action(body, i18n::tr("streak.ui.keep"), [this] { later([this] { acceptAssignment(); }); }, app_theme::ActionCategory::Primary, ui_icons::kCheck);
+}
+std::string StreakScene::assignmentLevelsText(const streak::Assignment &assignment) {
+  std::set<std::string> missing;
+  for (const auto &level : assignment.levels)
+    if (!levelOrder_.contains(level.source)) missing.insert(level.source);
+  if (!missing.empty()) {
+    if (auto session = context.chartRepository.OpenSession()) {
+      if (!levelTableIds_) {
+        levelTableIds_.emplace();
+        for (const auto &table : session->SelectDifficultyTables())
+          levelTableIds_->emplace(table.sourceUrl, table.id);
+      }
+      for (const auto &source : missing) {
+        auto &order = levelOrder_[source];
+        const auto table = levelTableIds_->find(source);
+        if (table == levelTableIds_->end()) continue;
+        int position = 0;
+        for (const auto &level : session->SelectDifficultyLevels(table->second))
+          order.emplace(level.level, position++);
+      }
+    }
+  }
+  return levelsText(assignment, levelOrder_);
 }
 void StreakScene::levelRangePicker(View *body, const std::vector<streak::Level> &levels) {
   int first = -1, last = -1;

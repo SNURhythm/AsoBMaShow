@@ -75,6 +75,8 @@ struct StreakScene {
   View *root_=nullptr,*resetOverlay_=nullptr;
   ScrollView *scroll_=nullptr;
   OverlayPortal *portal_=nullptr;
+  std::optional<std::map<std::string,int>> levelTableIds_;
+  std::map<std::string,std::map<std::string,int>> levelOrder_;
   streak::Assignment assignment_;
   streak::FieldErrors fieldErrors_;
   std::optional<std::string> rangeStartLevel_,rangeEndLevel_;
