@@ -8,6 +8,35 @@ from support.fixture_compiler import FixtureCompiler
 
 
 class StreakSceneTests(unittest.TestCase):
+    def test_level_summary_groups_tables_in_selection_order(self):
+        root = Path(__file__).resolve().parents[1]
+        helper = extract((root / "src/scene/StreakScene.cpp").read_text(), "std::string levelsText(")
+        fixture = r'''#include "streak/StreakModel.h"
+#include <algorithm>
+#include <cassert>
+HELPER
+int main() {
+  streak::Assignment a;
+  assert(levelsText(a).empty());
+  a.levels = {{"satellite", "0", "Satellite · sl0"}, {"stella", "0", "Stella · st0"},
+              {"satellite", "1", "Satellite · sl1"}, {"satellite", "2", "Satellite · sl2"},
+              {"stella", "1", "Stella · st1"}};
+  assert(levelsText(a) == "Satellite · sl0, sl1, sl2 / Stella · st0, st1");
+  a.levels = {{"first", "0", "Shared · x0"}, {"second", "1", "Shared · x1"}};
+  assert(levelsText(a) == "Shared · x0 / Shared · x1");
+  a.levels = {{"legacy", "2", ""}, {"legacy", "3", "Custom label"},
+              {"table", "1", "Name · with dot · lv1"}, {"table", "2", "Name · with dot · lv2"}};
+  assert(levelsText(a) == "2, Custom label / Name · with dot · lv1, lv2");
+}
+'''.replace("HELPER", helper)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-streak-levels-") as directory:
+            source = Path(directory) / "levels.cpp"
+            binary = Path(directory) / "levels"
+            source.write_text(fixture)
+            FixtureCompiler.from_environment(shared_headers=True).build(
+                [source], binary, source.parent, includes=(root / "src",))
+            subprocess.run([str(binary)], check=True, timeout=5)
+
     def test_form_error_decoration_and_custom_rate_visibility(self):
         root = Path(__file__).resolve().parents[1]
         source = (root / "src/scene/StreakScene.cpp").read_text()

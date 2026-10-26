@@ -160,10 +160,25 @@ int integer(const std::string &value) {
   return number;
 }
 std::string levelsText(const streak::Assignment &a) {
-  std::string text;
+  struct Group { std::string source, table, levels; };
+  std::vector<Group> groups;
+  const std::string separator = " · ";
   for (const auto &level : a.levels) {
-    if (!text.empty()) text += ", ";
-    text += level.label.empty() ? level.level : level.label;
+    const auto split = level.label.rfind(separator);
+    const auto table = split == std::string::npos ? std::string{} : level.label.substr(0, split);
+    const auto name = split == std::string::npos
+        ? (level.label.empty() ? level.level : level.label) : level.label.substr(split + separator.size());
+    auto group = std::find_if(groups.begin(), groups.end(), [&](const auto &g) {
+      return g.source == level.source && g.table == table;
+    });
+    if (group == groups.end()) groups.push_back({level.source, table, name});
+    else group->levels += ", " + name;
+  }
+  std::string text;
+  for (const auto &group : groups) {
+    if (!text.empty()) text += " / ";
+    if (!group.table.empty()) text += group.table + separator;
+    text += group.levels;
   }
   return text;
 }
