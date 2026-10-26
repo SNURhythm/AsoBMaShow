@@ -1,5 +1,6 @@
 #include "../rendering/ResponsiveUi.h"
 #include "../view/ProgressMotionView.h"
+#include "../view/StreakFlameView.h"
 #include "../view/AssignmentProgressView.h"
 #include "../view/ActionButtonStyle.h"
 #include "../i18n/Localization.h"
@@ -4700,7 +4701,7 @@ void ResultScene::buildStreakProgress(bool animate) {
   auto *body = new View();
   body->setFlexDirection(FlexDirection::Column)->setGap(12 * unit)->setPadding(Edge::Bottom, 8 * unit);
   streakScroll_->setContentView(body);
-  body->addView((new RhythmSparkView(complete, !animate))->setHeight(108 * unit));
+  body->addView((new StreakFlameView(day.played, complete))->setHeight(108 * unit));
   text(body, i18n::tr(complete ? "streak.ui.complete" : "streak.ui.saved_progress"), 28);
   text(body, i18n::format("streak.ui.streak_count", {{"count", std::to_string(streakSnapshot_->currentStreak)}}), 36);
   text(body, std::to_string(std::min<std::int64_t>(day.points, day.config.dailyGoal)) + " / " +

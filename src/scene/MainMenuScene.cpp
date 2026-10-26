@@ -729,7 +729,7 @@ EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
   if (!shellModalOpen &&
       (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) &&
       (event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0 &&
-      event.key.key >= SDLK_1 && event.key.key <= SDLK_4) {
+      event.key.key >= SDLK_1 && event.key.key <= SDLK_5) {
     if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat)
       selectTab(static_cast<Tab>(event.key.key - SDLK_1));
     return {};
@@ -751,6 +751,7 @@ bool MainMenuScene::selectorTabActive() const {
 Scene *MainMenuScene::activeUtilityTab() const {
   if (activeTab_ == Tab::Music) return musicTab_.get();
   if (activeTab_ == Tab::Ir) return irTab_.get();
+  if (activeTab_ == Tab::Streak) return streakTab_.get();
   return nullptr;
 }
 
@@ -796,6 +797,8 @@ void MainMenuScene::cancelPendingTabSwitch() {
 }
 
 void MainMenuScene::completeTabSwitch(Tab tab) {
+  // Routine edits change assignment membership without changing chart/score revisions.
+  if (activeTab_ == Tab::Streak) requestLibraryReload(true);
   const bool resumeCurrentSelector = !selectorTabActive() && tab == selectorTab_;
   if (selectorTabActive()) {
     const auto endEditing = [](View *root, const auto &self) -> void {
@@ -834,6 +837,12 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
     irTab_->prepareForUse();
     irTab_->configureTab(inset, returnToPlay, this);
     irTab_->init();
+    initializedUtilityTab = true;
+  } else if (tab == Tab::Streak && !streakTab_) {
+    streakTab_ = std::make_unique<StreakScene>(context);
+    streakTab_->prepareForUse();
+    streakTab_->configureTab(inset, returnToPlay);
+    streakTab_->init();
     initializedUtilityTab = true;
   }
   if (selectorTabActive() && !resumeCurrentSelector) {
@@ -913,7 +922,7 @@ void MainMenuScene::refreshTabPresentation() {
   const bool showDock = selector && rendering::window_width >= rendering::window_height;
   dock->setDisplay(showDock ? YGDisplayFlex : YGDisplayNone);
   dock->setVisible(showDock);
-  const std::array<const char *, 4> labels{"PLAY", "COURSE", "MUSIC", "IR"};
+  const std::array<const char *, 5> labels{"PLAY", "COURSE", "MUSIC", "IR", "STREAK"};
   for (size_t index = 0; index < labels.size(); ++index) {
     auto *button = static_cast<Button *>(rootLayout->findViewByName(std::string("mainMenuTab:") + labels[index]));
     tab_button::style(button, index == static_cast<size_t>(activeTab_));
@@ -922,6 +931,7 @@ void MainMenuScene::refreshTabPresentation() {
       kMenuHeaderHeight * (rendering::window_width < 1000 ? 2 : 1);
   if (musicTab_) musicTab_->setTabTopInset(inset);
   if (irTab_) irTab_->setTabTopInset(inset);
+  if (streakTab_) streakTab_->setTabTopInset(inset);
 }
 
 MainMenuScene::MainMenuScene(ApplicationContext &context, bool showTutorial)
@@ -1123,6 +1133,7 @@ void MainMenuScene::onLanguageChanged() {
   Scene::onLanguageChanged();
   if (musicTab_) musicTab_->refreshLanguageIfNeeded();
   if (irTab_) irTab_->refreshLanguageIfNeeded();
+  if (streakTab_) streakTab_->refreshLanguageIfNeeded();
   // Rebind presentation only: reinitializing the scene would cancel workers,
   // discard selection, and replace the user's filter and lane-order input.
   if (folderRecyclerView != nullptr) folderRecyclerView->rebindVisibleItems();
@@ -1161,7 +1172,7 @@ void MainMenuScene::applyThemeChange() {
   }
 
   appliedUiThemeMode = activeMode;
-  for (Scene *scene : std::array<Scene *, 2>{musicTab_.get(), irTab_.get()})
+  for (Scene *scene : std::array<Scene *, 3>{musicTab_.get(), irTab_.get(), streakTab_.get()})
     if (scene) for (auto *view : scene->views) view->propagateThemeChange();
   for (auto *view : views) {
     if (view != nullptr) {
@@ -1608,6 +1619,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                           item.clearMarkFolder, item.expandable,
                           item.expanded,
                           item.type == LibraryFolderItem::Type::AllSongs && !item.sectionHeader ? ui_icons::kMusic :
+                          item.type == LibraryFolderItem::Type::Assignments && item.depth == 0 ? ui_icons::kFire :
                           item.type == LibraryFolderItem::Type::Favorites ? 0xf005 : 0,
                           item.sectionHeader);
     }
@@ -1931,11 +1943,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   auto *tabs = new View();
   tabs->setName("mainMenuTabs");
   tabs->setFlexDirection(FlexDirection::Row)->setHeight(kMenuHeaderHeight)->setGap(4);
-  const std::array<const char *, 4> tabLabels{"PLAY", "COURSE", "MUSIC", "IR"};
-  const std::array<const char *, 4> tabMessages{
-      "menu.tabs.play", "menu.tabs.course", "menu.tabs.music", "menu.tabs.ir"};
-  const std::array<uint32_t, 4> tabIcons{ui_icons::kPlay, ui_icons::kFlagCheckered,
-                                         ui_icons::kMusic, ui_icons::kGlobe};
+  const std::array<const char *, 5> tabLabels{"PLAY", "COURSE", "MUSIC", "IR", "STREAK"};
+  const std::array<const char *, 5> tabMessages{
+      "menu.tabs.play", "menu.tabs.course", "menu.tabs.music", "menu.tabs.ir", "streak.ui.title"};
+  const std::array<uint32_t, 5> tabIcons{ui_icons::kPlay, ui_icons::kFlagCheckered,
+                                         ui_icons::kMusic, ui_icons::kGlobe, ui_icons::kFire};
   for (size_t index = 0; index < tabLabels.size(); ++index) {
     TextView *text = nullptr;
     auto *button = makeSelectorButton(i18n::message(tabMessages[index]), 22, &text, tabIcons[index]);
@@ -2435,17 +2447,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
             SceneReturnTarget::Retained(this)),
         true);
   });
-  auto *streakButton = makeSelectorButton(i18n::message("streak.ui.title"), 20);
-  streakButton->setName("mainMenuStreak");
-  streakButton->setWidthPercent(100)->setHeight(56);
-  streakButton->setOnClickListener([this, &context] {
-    if (willStart.load() || replayExportJob_.inProgress()) return;
-    if (previewWorker_) previewWorker_->stop();
-    stopAndClearSelectedChart();
-    context.sceneManager->changeScene(
-        std::make_unique<StreakScene>(context, SceneReturnTarget::Retained(this)), true);
-  });
-  rightContent->addView(streakButton);
   rightScroll->setContentView(rightContent);
   right->addView(rightScroll);
   // Primary actions stay reachable while chart details and tools scroll.
@@ -2672,7 +2673,6 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
   primaryActionSlot_->moveTo(*primary);
   chartDetailsView_->setScoreContainer(portrait ? detailsControlsContent_ : nullptr);
   readyPlayOptionsButton->moveTo(*target);
-  if (auto *streak = rootLayout->findViewByName("mainMenuStreak")) streak->moveTo(*target);
   settings->moveTo(*rootLayout->findViewByName("mainMenuToolbar"));
   primary->moveTo(portrait ? *controls : *details);
   controls->setDisplay(portrait ? YGDisplayFlex : YGDisplayNone);
@@ -2728,7 +2728,7 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
   header->setFlexDirection(narrowHeader ? FlexDirection::Column : FlexDirection::Row);
   header->setHeight(kMenuHeaderHeight * (narrowHeader ? 2 : 1));
   tabs->setDisplay(YGDisplayFlex);
-  tabs->setWidth(narrowHeader ? YGUndefined : 460);
+  tabs->setWidth(narrowHeader ? YGUndefined : 576);
   if (narrowHeader) tabs->setWidthPercent(100);
   for (auto *tab : tabs->getChildren()) {
     tab->setFlex(narrowHeader ? 1 : 0)->setMinWidth(0)->setWidth(narrowHeader ? YGUndefined : 112);
@@ -8443,6 +8443,11 @@ void MainMenuScene::update(float dt) {
     irTab_->update(dt);
     irTab_->handleDeferred();
   }
+  if (activeTab_ == Tab::Streak && streakTab_) {
+    streakTab_->refreshLanguageIfNeeded();
+    streakTab_->update(dt);
+    streakTab_->handleDeferred();
+  }
   if (activeTab_ == Tab::Music && musicTab_) {
     musicTab_->refreshLanguageIfNeeded();
     musicTab_->update(dt);
@@ -8598,8 +8603,10 @@ void MainMenuScene::cleanupScene() {
   cancelPendingTabSwitch();
   if (musicTab_) musicTab_->cleanup();
   if (irTab_) irTab_->cleanup();
+  if (streakTab_) streakTab_->cleanup();
   musicTab_.reset();
   irTab_.reset();
+  streakTab_.reset();
   activeTab_ = selectorTab_ = Tab::Play;
   selectorStates_ = {};
   tutorial_ = nullptr;

@@ -165,6 +165,7 @@ private:
   void refreshToolbarAvailability();
   void openPlayOptions();
   void openIrUploads();
+  void openStreak();
   void openSettings();
   void syncToolbar();
   void persistToolbar(MusicSelectToolbarState);

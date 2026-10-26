@@ -99,7 +99,7 @@ struct Insets { int top=0; };
 Insets getSafeAreaInsetsUi() { return {}; }
 using EventHandleResult = int;
 constexpr int SDL_EVENT_KEY_DOWN=1, SDL_EVENT_KEY_UP=2;
-constexpr int SDL_KMOD_CTRL=1, SDL_KMOD_GUI=2, SDLK_1=49, SDLK_4=52;
+constexpr int SDL_KMOD_CTRL=1, SDL_KMOD_GUI=2, SDLK_1=49, SDLK_5=53;
 struct SDL_Event { int type=0; struct { int mod=0,key=0,repeat=0; } key; };
 struct View {
   virtual ~View()=default;
@@ -149,6 +149,7 @@ struct Context {
 struct ImageView { static void dropAllCache() {} };
 struct MusicPlayerScene: Scene { explicit MusicPlayerScene(Context&) {} };
 struct IrUploadsScene: Scene { explicit IrUploadsScene(Context&) {} };
+struct StreakScene: Scene { explicit StreakScene(Context&) {} };
 struct Preview { std::function<void()> stopping; void cancel() {} void stop() { if(stopping) stopping(); } };
 template<class T> struct Recycler {
   std::vector<T> items;
@@ -174,7 +175,7 @@ struct Session {
   }
 };
 struct MainMenuScene : Scene {
-  enum class Tab { Play, Course, Music, Ir };
+  TAB_TYPE;
   enum class AutoSelectionPreview { Suppress, Load };
   FOLDER_TYPE;
   TAB_STATE;
@@ -182,6 +183,7 @@ struct MainMenuScene : Scene {
   std::array<SelectorTabState,2> selectorStates_;
   std::unique_ptr<MusicPlayerScene> musicTab_;
   std::unique_ptr<IrUploadsScene> irTab_;
+  std::unique_ptr<StreakScene> streakTab_;
   std::atomic_bool willStart=false;
   bool restoringTabSelection_=false;
   std::optional<ChartMetaRecord> selectedChartRecord;
@@ -374,7 +376,7 @@ int main(int argc,char **argv) {
       assert(resume.folderReloads==foldersBefore+1 && resume.chartReloads==chartsBefore+1);
     }
   } else if(scenario=="hidden-completion-restore" || scenario=="hidden-completion-reject") {
-    for(auto utility : {Tab::Music, Tab::Ir}) {
+    for(auto utility : {Tab::Music, Tab::Ir, Tab::Streak}) {
       for(bool pathless : {false,true}) {
         MainMenuScene handoff;
         Tasks tasks; handoff.context.chartLibraryTasks=&tasks;
@@ -454,7 +456,7 @@ int main(int argc,char **argv) {
     assert(result==std::future_status::ready && "tab selection must not join slow preview/audio work on the UI thread");
     assert(scene.pendingTab_ && scene.activeTab_==origin && !scene.musicTab_ && !scene.irTab_);
     assert(overlay.visible && !scene.applyPendingTabSwitch());
-    SDL_Event event{.type=SDL_EVENT_KEY_DOWN,.key={.mod=SDL_KMOD_GUI,.key=SDLK_4}};
+    SDL_Event event{.type=SDL_EVENT_KEY_DOWN,.key={.mod=SDL_KMOD_GUI,.key=SDLK_5}};
     scene.handleEvents(event);
     scene.selectTab(Tab::Course);
     assert(*scene.pendingTab_==destination && scene.activeTab_==origin);
@@ -482,7 +484,7 @@ int main(int argc,char **argv) {
     scene.reloadFolderItems();scene.reloadChartList();
     scene.songs.selectedIndex=2;
     scene.songs.onSelected(scene.songs.get(2),2);
-    for(auto destination : {Tab::Course,Tab::Music,Tab::Ir}) {
+    for(auto destination : {Tab::Course,Tab::Music,Tab::Ir,Tab::Streak}) {
       scene.switchTabAndWait(destination);
       scene.musicPlaying=destination==Tab::Music;
       const int requests=scene.previewRequests;
@@ -492,7 +494,7 @@ int main(int argc,char **argv) {
       assert(!scene.musicPlaying);
     }
   } else if(scenario=="shell-shortcuts") {
-    for (int key=SDLK_1;key<=SDLK_4;++key) {
+    for (int key=SDLK_1;key<=SDLK_5;++key) {
       scene.switchTabAndWait(Tab::Music);
       const int before=scene.musicTab_->digitEvents;
       SDL_Event event{.type=SDL_EVENT_KEY_DOWN,.key={.mod=SDL_KMOD_GUI,.key=key}};
@@ -505,7 +507,7 @@ int main(int argc,char **argv) {
       assert(scene.activeTab_==static_cast<Tab>(key-SDLK_1));
     }
     for (int modifier : {SDL_KMOD_CTRL, SDL_KMOD_GUI}) {
-      for (int key=SDLK_1+1; key<=SDLK_4; ++key) {
+      for (int key=SDLK_1+1; key<=SDLK_5; ++key) {
         scene.switchTabAndWait(Tab::Play);
         scene.chartFilterPanelVisible=scene.chartKeyModeDropdownOpen=true;
         scene.search.editingActive=true;
@@ -518,11 +520,18 @@ int main(int argc,char **argv) {
       }
     }
   } else if(scenario=="utility-lifecycle") {
-    for (auto tab : {Tab::Music, Tab::Ir}) {
+    for (auto tab : {Tab::Music, Tab::Ir, Tab::Streak}) {
       scene.switchTabAndWait(tab);
       auto *utility=scene.activeUtilityTab();
       assert(utility->initializations==1 && utility->resumes==0);
+      const int before = scene.folderReloads;
       scene.switchTabAndWait(Tab::Play);
+      if (tab == Tab::Streak) {
+        assert(scene.context.chartLibraryFoldersReloadRequested);
+        assert(scene.context.chartLibraryListReloadRequested);
+        scene.applyPendingUiUpdates();
+        assert(scene.folderReloads == before+1);
+      }
       scene.switchTabAndWait(tab);
       assert(utility->initializations==1 && utility->resumes==1);
     }
@@ -673,6 +682,7 @@ int main(int argc,char **argv) {
                   .replace("GENERATION_HELPERS", extract(library, "bool sameChartSelection(") + "\n" + extract(library, "std::uint64_t chartSelectionGenerationAfter("))
                   .replace("HANDOFF_HELPER", extract(library, "bool findBmsSelectionHandoffAllowed("))
                   .replace("FOLDER_TYPE", extract(header, "struct LibraryFolderItem"))
+                  .replace("TAB_TYPE", extract(header, "enum class Tab"))
                   .replace("TAB_STATE", extract(header, "struct SelectorTabState"))
                   .replace("PROJECTION", projection).replace("METHODS", methods))
         cls.temp = tempfile.TemporaryDirectory(prefix="asobmashow-menu-tabs-")

@@ -7,6 +7,7 @@
 #include "../platform/SDLApplicationRuntime.h"
 #include "../i18n/Localization.h"
 #include "MusicSelectScene.h"
+#include "StreakScene.h"
 #include "../music_select/MusicSelectPhysicalDirectory.h"
 #include "MusicSelectDirectoryRestore.h"
 #include "MusicSelectRecords.h"
@@ -3884,6 +3885,7 @@ bool MusicSelectScene::toolbarControlAvailable(MusicSelectToolbarControl control
   case MusicSelectToolbarControl::PlayOptions:
     return modalLayer_ != nullptr;
   case MusicSelectToolbarControl::MusicPlayer:
+  case MusicSelectToolbarControl::Streak:
   case MusicSelectToolbarControl::IrUploads:
   case MusicSelectToolbarControl::Settings:
     return context.sceneManager != nullptr;
@@ -3898,7 +3900,7 @@ void MusicSelectScene::refreshToolbarAvailability() {
   for (const auto control : {Control::ChartMenu, Control::MoreMenu,
        Control::ChartViewer, Control::ChartRecords, Control::Rankings, Control::RevealChart,
        Control::MusicPlayer, Control::Tasks, Control::PlayOptions,
-       Control::IrUploads, Control::Settings}) {
+       Control::IrUploads, Control::Streak, Control::Settings}) {
     toolbar_->setControlEnabled(control, toolbarControlAvailable(control));
   }
 }
@@ -4281,6 +4283,13 @@ void MusicSelectScene::openPlayOptions() {
   playOptionsModal_->show();
 }
 
+void MusicSelectScene::openStreak() {
+  if (!toolbarControlAvailable(MusicSelectToolbarControl::Streak)) return;
+  context.sceneManager->changeScene(std::make_unique<StreakScene>(
+      context, SceneReturnTarget::Retained(
+          this, [this] { reactivateSkinOnResume_ = true; })), true);
+}
+
 void MusicSelectScene::openIrUploads() {
   context.sceneManager->changeScene(std::make_unique<IrUploadsScene>(
       context,
@@ -4325,6 +4334,7 @@ void MusicSelectScene::syncToolbar() {
        .openTasks = [this] { openTasks(); },
        .openPlayOptions = [this] { openPlayOptions(); },
        .openIrUploads = [this] { openIrUploads(); },
+       .openStreak = [this] { openStreak(); },
        .openSettings = [this] { openSettings(); },
        .persist = [this](MusicSelectToolbarState updated) {
          persistToolbar(updated);

@@ -9,7 +9,11 @@ class ScrollView;
 class OverlayPortal;
 class StreakScene final : public Scene {
 public:
-  StreakScene(ApplicationContext &, SceneReturnTarget);
+  StreakScene(ApplicationContext &, SceneReturnTarget = {});
+  void configureTab(float topInset, std::function<void()> onClose);
+  void setTabTopInset(float topInset);
+  void onPause() override;
+  void onResume() override;
   void init() override;
   void update(float) override;
   bool usesResponsiveMenuCanvas() const override { return true; }
@@ -34,6 +38,9 @@ private:
   void acceptAssignment();
   void saveRoutine();
   SceneReturnTarget returnTarget_;
+  bool embeddedTab_ = false;
+  float tabTopInset_ = 0;
+  std::function<void()> tabClose_;
   std::string profileId_, message_;
   streak::State state_;
   std::optional<streak::PlayProgress> streakProgress_;

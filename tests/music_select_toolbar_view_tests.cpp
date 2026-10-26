@@ -52,6 +52,7 @@ MusicSelectToolbarCallbacks callbacks(std::vector<std::string> &actions,
       .openTasks = [&] { actions.emplace_back("tasks"); },
       .openPlayOptions = [&] { actions.emplace_back("play-options"); },
       .openIrUploads = [&] { actions.emplace_back("ir"); },
+      .openStreak = [&] { actions.emplace_back("streak"); },
       .openSettings = [&] { actions.emplace_back("settings"); },
       .persist = [&](MusicSelectToolbarState state) { saved.push_back(state); },
   };
@@ -63,7 +64,7 @@ void testExpandedShowsLabeledMenuEntrypoints() {
   auto toolbar = MusicSelectToolbarView::Create(
       {}, callbacks(actions, saved), 800, 300);
   toolbar->applyYogaLayout();
-  expect(toolbar->controls().size() == 6,
+  expect(toolbar->controls().size() == 7,
          "expanded toolbar includes a direct rankings action");
   int labels = 0;
   for (const auto &control : toolbar->controls()) {
@@ -76,9 +77,18 @@ void testExpandedShowsLabeledMenuEntrypoints() {
     } else {
       expect(control.icon &&
                  control.icon->primaryFontPath() == ui_icons::kFontAwesomeSolidPath,
-             "drag and collapse retain recognizable icons");
+             "icon controls use the shared symbol font");
     }
   }
+  const auto &flame = toolbar->controls()[4];
+  expect(flame.control == MusicSelectToolbarControl::Streak && flame.codepoint == ui_icons::kFire,
+         "streak has a direct flame button");
+  toolbar->activateControl(MusicSelectToolbarControl::Streak);
+  expect(actions.back() == "streak", "the flame opens streaks");
+  actions.pop_back();
+  toolbar->setControlEnabled(MusicSelectToolbarControl::Streak, false);
+  toolbar->activateControl(MusicSelectToolbarControl::Streak);
+  expect(actions.back() == "more-menu", "disabled flame cannot navigate");
   expect(labels == 4 && actions == std::vector<std::string>{
              "chart-menu", "play-options", "rankings", "more-menu"},
          "labeled controls expose chart menu, play options, rankings, and more menu in order");
@@ -201,7 +211,7 @@ void testActionsModesAndDragPersist() {
          "toolbar exposes chart and application actions");
 
   toolbar->activateControl(MusicSelectToolbarControl::Collapse);
-  expect(toolbar->controls().size() == 6,
+  expect(toolbar->controls().size() == 7,
          "collapse keeps event targets alive until deferred callbacks run");
   View::dispatchDeferredEventCallbacks();
   expect(toolbar->state().mode == MusicSelectToolbarMode::Collapsed &&
@@ -212,7 +222,7 @@ void testActionsModesAndDragPersist() {
   toolbar->activateControl(MusicSelectToolbarControl::Expand);
   View::dispatchDeferredEventCallbacks();
   expect(toolbar->state().mode == MusicSelectToolbarMode::Expanded &&
-             toolbar->controls().size() == 6,
+             toolbar->controls().size() == 7,
          "expand persists and rebuilds the toolbar");
 
   toolbar->applyYogaLayout();
@@ -260,7 +270,7 @@ void testPersistedSettingsStateAppliesToAnExistingToolbar() {
                        .x = 80.0F,
                        .y = 60.0F,
                        .hasPosition = true});
-  expect(toolbar->getVisible() && toolbar->controls().size() == 6 &&
+  expect(toolbar->getVisible() && toolbar->controls().size() == 7 &&
              toolbar->getX() == 80 && toolbar->getY() == 60 && saved.empty(),
          "returning from Settings rebuilds and places the retained toolbar "
          "from persisted state");

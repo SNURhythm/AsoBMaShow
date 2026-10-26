@@ -41,14 +41,14 @@ struct Context {
  struct Player {bool ProcessNativeControlEvents(std::string&){return false;}bool ConsumeNativeControlStatus(std::string&){return false;}} musicPlayer;
 };
 struct MainMenuScene {
- enum class Tab {Play,Course,Music,Ir}; Tab activeTab_=Tab::Music;
+ enum class Tab {Play,Course,Music,Ir,Streak}; Tab activeTab_=Tab::Music;
  enum class AutoSelectionPreview {Suppress,Load};
  Context context;std::mutex selectedChartMutex,findBmsSelectionHandoffMutex;
  std::shared_ptr<Parsed> selectedChart;std::optional<ChartMetaRecord> selectedChartRecord;
  struct Player {float GetOutputLevel(){return 0;}int GetOutputSpectrum(){return 0;}}previewPlayer_;
  struct FilePlayer {float outputLevel(){return 0;}int outputSpectrum(){return 0;}};
  std::unique_ptr<FilePlayer> previewFilePlayer_;
- View *chartDetailsView_=nullptr,*irTab_=nullptr,*musicTab_=nullptr,*rootLayout=nullptr;
+ View *chartDetailsView_=nullptr,*irTab_=nullptr,*musicTab_=nullptr,*streakTab_=nullptr,*rootLayout=nullptr;
  View *archiveUnzipModal_=nullptr,*recordsModal_=nullptr,*parseLogModalRoot=nullptr,*musicModalRoot=nullptr,*tasksModalRoot=nullptr,*rankingsModal=nullptr,*readmeModal_=nullptr;
  std::atomic_bool tasksModalOpenRequested=false;
  struct PendingFindBmsSelectionHandoff {std::filesystem::path chartPath;int targetIdentity,selectionGeneration;};

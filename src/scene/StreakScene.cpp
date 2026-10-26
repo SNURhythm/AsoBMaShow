@@ -16,6 +16,7 @@
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #include "../view/ProgressMotionView.h"
+#include "../view/StreakFlameView.h"
 #include "../view/AssignmentProgressView.h"
 #include <algorithm>
 #include <charconv>
@@ -161,6 +162,29 @@ std::string requirements(const streak::Assignment &a) {
 
 StreakScene::StreakScene(ApplicationContext &context, SceneReturnTarget target)
     : Scene(context), returnTarget_(std::move(target)) {}
+void StreakScene::configureTab(float topInset, std::function<void()> onClose) {
+  embeddedTab_ = true;
+  tabClose_ = std::move(onClose);
+  setTabTopInset(topInset);
+}
+void StreakScene::setTabTopInset(float topInset) {
+  tabTopInset_ = std::max(0.0F, topInset);
+  layout();
+}
+void StreakScene::onPause() {
+  roundCue_ = {};
+  const auto endEditing = [](View *view, const auto &self) -> void {
+    if (auto *input = dynamic_cast<TextInputBox *>(view)) input->endEditing();
+    for (auto *child : view->getChildren()) self(child, self);
+  };
+  for (auto *view : views) { view->cancelPointerInput(); endEditing(view, endEditing); }
+}
+void StreakScene::onResume() {
+  if (profileId_ != context.profileManager.activeProfile().id || checkedDay_ != streak::today())
+    page_ = Page::Dashboard;
+  if (page_ == Page::Dashboard) reload();
+  build();
+}
 void StreakScene::init() { reload(); build(); }
 void StreakScene::reload() {
   fieldErrors_.clear();
@@ -253,7 +277,7 @@ void StreakScene::build() {
 void StreakScene::dashboard(View *body) {
   if (state_.days.empty()) {
     body = card(body);
-    body->addView(new RhythmSparkView());
+    body->addView(new StreakFlameView());
     label(body, i18n::tr("streak.ui.welcome"), 26);
     label(body, i18n::tr("streak.ui.rules"));
     action(body, i18n::tr("streak.ui.create"), [this] { later([this] { page_ = Page::Routine; }); }, app_theme::ActionCategory::Primary, ui_icons::kPlus);
@@ -267,7 +291,7 @@ void StreakScene::dashboard(View *body) {
   const bool bonusAvailable = bonus < bonusLimit;
   auto *summary = card(body);
   summary->setName(complete ? "streakDayComplete" : "streakDailyHero");
-  summary->addView(new RhythmSparkView(complete));
+  summary->addView(new StreakFlameView(day.played, complete));
   label(summary, i18n::tr(complete ? "streak.ui.complete" : "streak.ui.keep_going"), 30);
   label(summary, numberText("streak.ui.streak_count", state_.currentStreak), 44);
   label(summary, numberText("streak.ui.best_count", state_.bestStreak), 18)->setThemedColor(app_theme::textSecondary);
@@ -554,12 +578,14 @@ void StreakScene::layout() {
       ->setPadding(Edge::Left, 18 + safe.left * rendering::window_width)
       ->setPadding(Edge::Right, 18 + safe.right * rendering::window_width);
 #endif
+  if (embeddedTab_) root_->setPadding(Edge::Top, 18 + tabTopInset_);
   root_->applyYogaLayout();
   scroll_->refreshContentLayout();
 }
 void StreakScene::back() {
   if (page_ == Page::Assignment) { later([this] { page_ = adjustingToday_ ? Page::Dashboard : Page::Routine; adjustingToday_ = false; fieldErrors_.clear(); message_.clear(); }); return; }
   if (page_ == Page::Routine) { later([this] { page_ = Page::Dashboard; message_.clear(); reload(); }); return; }
+  if (embeddedTab_) { later([this] { if (tabClose_) tabClose_(); }); return; }
   defer([this] { (void)returnToScene(*context.sceneManager, returnTarget_); return false; }, 0, true);
 }
 void StreakScene::update(float dt) {

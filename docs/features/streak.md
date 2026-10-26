@@ -1,6 +1,7 @@
 # Streak (MVP)
 
-Open **Streak** in the built-in PLAY selector, then create a routine. Set daily,
+Open the **Streak** tab beside PLAY, COURSE, MUSIC and IR, then create a routine.
+Custom selectors expose the same dashboard through the toolbar’s flame button. Set daily,
 weekly and monthly point goals and add assignments. Select levels from any
 installed difficulty tables; an assignment matches the union of those levels.
 
@@ -85,7 +86,9 @@ earned daily/weekly/monthly totals. No real-money transactions exist.
 
 Milestones at 7, 14, 30, 50, 100 and 365 goal days, completed weekly/monthly goals,
 and the best streak survive resets. The native dashboard uses animated meters,
-a rhythm-spark character, progress cards and milestone badges. Daily progress
+a flame, progress cards and milestone badges. The flame is gray and still before
+the first play, small and animated after playing, and larger and more energetic
+once the daily goal is reached. Daily progress
 opens automatically in a dismissible slide-over after a fresh manual chart's
 successful save, including successful save retries and custom result skins.
 It shows saved daily totals rather than claiming a per-attempt point increase.
@@ -94,7 +97,8 @@ custom-skin auto-exit pauses until dismissal. Resizing never reopens it. Complet
 “Done for today” action. Optional challenges start collapsed, and bonus points
 appear separately from the finished daily goal. Short Earshot-generated progress, completion and freeze-purchase cues use the
 system audio bus and master volume; they do not repeat on redraws or failed
-purchases. Animation is finite and requests frames only while active. Share
+purchases. Progress and round animations are finite. The flame animates while a played
+day is visible; an unplayed day stays still. Share
 cards remain deferred.
 
 ## Storage and recovery
@@ -128,7 +132,7 @@ native dashboard and editor.
 ## Quick manual test
 
 Use a temporary player profile so the test routine does not affect normal progress.
-Open **PLAY → Streak**, set the daily goal to **1**, and add an assignment with
+Open **Streak**, set the daily goal to **1**, and add an assignment with
 broad difficulty-table levels, **Any previous lamp**, **FAILED or above**,
 **Any score**, **1 chart** and **1 point**. For a quick milestone check,
 set weekly/monthly goals to **3/5** while creating the routine; bonus points
@@ -152,7 +156,7 @@ should unlock those milestones during the same session.
    dashboard shows the effective date for tomorrow. Multiple saves replace the
    pending routine.
 
-To check assignment navigation, expand **Assignments** in PLAY. The root shows
+To check assignment navigation, select the flame-marked **Assignments** heading in PLAY. The root shows
 the union of eligible charts; each named subfolder shows its own candidates.
 Complete a chart for one assignment and return: it should disappear from that
 subfolder, remaining in another only if it can still contribute there. Search,

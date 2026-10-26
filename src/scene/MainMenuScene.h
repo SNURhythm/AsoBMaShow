@@ -68,6 +68,7 @@ class DecideLoadingOverlay;
 class MainMenuPreviewController;
 class MusicPlayerScene;
 class IrUploadsScene;
+class StreakScene;
 class PlayOptionsPanelView;
 class NewcomerTutorialView;
 class ScrollView;
@@ -104,11 +105,12 @@ public:
   void cleanupScene() override;
 
 private:
-  enum class Tab { Play, Course, Music, Ir };
+  enum class Tab { Play, Course, Music, Ir, Streak };
   Tab activeTab_ = Tab::Play;
   Tab selectorTab_ = Tab::Play;
   std::unique_ptr<MusicPlayerScene> musicTab_;
   std::unique_ptr<IrUploadsScene> irTab_;
+  std::unique_ptr<StreakScene> streakTab_;
   bool restoringTabSelection_ = false;
   std::optional<Tab> pendingTab_;
   std::future<void> tabPreviewStop_;
