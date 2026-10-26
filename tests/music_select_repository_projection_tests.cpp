@@ -802,6 +802,21 @@ void testAssignmentFoldersShowOnlyContributingCharts() {
           "counted chart is hidden while sticky eligibility survives removed level and improved lamp");
   children = musicSelectAssignmentChildren(day, second, sources, input);
   require(children.size() == 2, "a chart counted for one assignment can contribute to another");
+  day.assignments[0].requirement.eligibleScoreRank = 18;
+  input.scoreFor = [](const bms_parser::ChartMeta &meta, int mode) -> std::optional<ScoreBestSnapshot> {
+    return ScoreBestSnapshot{.score=meta.SHA256 == "b" && mode == 2 ? 21 : 18, .maxScore=27};
+  };
+  children = musicSelectAssignmentChildren(day, first, sources, input);
+  require(children.size() == 1 && children[0].chart->meta.SHA256 == "c",
+          "previous-score filter excludes higher grades but retains sticky eligibility");
+  day.assignments[0].requirement.chartCount = 2;
+  require(musicSelectAssignmentNeedsAdjustment(day, day.assignments[0], sources, input),
+          "score eligibility shortages enable today's adjustment");
+  day.assignments[0].requirement.eligibleScoreRank = 21;
+  day.assignments[0].requirement.eligibleScoreOrBelow = true;
+  require(musicSelectAssignmentChildren(day, first, sources, input).size() == 2,
+          "previous-score or-below includes qualifying best records");
+  day.assignments[0].requirement.eligibleScoreRank = -2;
   auto &progress = day.assignments[0];
   progress.requirement.chartCount = 3;
   progress.charts = 1;

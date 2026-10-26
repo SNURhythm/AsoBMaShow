@@ -24,6 +24,8 @@ struct Assignment {
   std::vector<Level> levels;
   int eligibleLamp = -2; // -2 any, -1 no play, otherwise the stored clear rank.
   bool eligibleOrBelow = false;
+  int eligibleScoreRank = -2; // -2 any, -1 no score, otherwise rank threshold / 27 (0 is F).
+  bool eligibleScoreOrBelow = false;
   int targetLamp = 300; // -1 disables the lamp target.
   int scoreNumerator = 0; // 0 disables the score target.
   int scoreDenominator = 10000;
@@ -60,7 +62,7 @@ struct Day {
   std::vector<Progress> assignments;
 };
 struct State {
-  int version = 3;
+  int version = 4;
   std::map<DayId, Config> configurations;
   std::map<DayId, Day> days;
   std::int64_t savings = 0;
@@ -70,11 +72,25 @@ struct State {
   int bestStreak = 0;
   std::set<std::string> milestones;
 };
+struct AssignmentProgressChange {
+  std::string id;
+  int beforeCharts = 0, beforeQuota = 1, beforeRound = 1;
+  int afterCharts = 0, afterQuota = 1, afterRound = 1;
+  [[nodiscard]] bool completedRound() const { return afterRound > beforeRound; }
+};
+// A bounded, transient receipt for one committed play. Never part of saved state.
+struct PlayProgress {
+  DayId day = 0;
+  std::string attemptId;
+  std::vector<AssignmentProgressChange> assignments;
+};
 struct Play {
   DayId day = 0;
   std::string chart;
   std::vector<Level> levels;
   int previousLamp = -1;
+  int previousScore = 0;
+  int previousMaxScore = 0;
   int lamp = 0;
   int score = 0;
   int maxScore = 0;
@@ -91,6 +107,8 @@ struct Summary {
 [[nodiscard]] DayId today();
 [[nodiscard]] std::string dateLabel(DayId day);
 [[nodiscard]] std::string lampLabel(int lamp);
+[[nodiscard]] int scoreRank(int score, int maxScore);
+[[nodiscard]] std::string scoreRankLabel(int rank);
 [[nodiscard]] std::string scoreValueLabel(const Assignment &assignment);
 [[nodiscard]] bool eligible(const Assignment &assignment, const Play &play);
 [[nodiscard]] bool matches(const Assignment &assignment, const Play &play);
@@ -100,7 +118,7 @@ DayId configure(State &state, const Config &config, DayId day);
 void adjustAssignment(State &, const Assignment &, DayId);
 [[nodiscard]] int bonusPoints(const Day &day);
 [[nodiscard]] int bonusLimit(const Day &day);
-std::int64_t record(State &state, const Play &play, std::uint32_t randomChoice);
+std::int64_t record(State &state, const Play &play, std::uint32_t randomChoice, PlayProgress *progress = nullptr);
 [[nodiscard]] std::int64_t freezePrice(const State &state);
 bool buyFreeze(State &state, DayId day);
 [[nodiscard]] Summary summary(const State &state);

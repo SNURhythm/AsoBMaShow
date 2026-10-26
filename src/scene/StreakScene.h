@@ -4,6 +4,7 @@
 #include "../streak/StreakModel.h"
 #include "../streak/StreakForm.h"
 #include "../streak/StreakSounds.h"
+#include "../streak/StreakRoundMotion.h"
 class ScrollView;
 class OverlayPortal;
 class StreakScene final : public Scene {
@@ -35,6 +36,9 @@ private:
   SceneReturnTarget returnTarget_;
   std::string profileId_, message_;
   streak::State state_;
+  std::optional<streak::PlayProgress> streakProgress_;
+  std::uint64_t streakProgressStartedAt_ = 0;
+  streak::RoundPromotionCue roundCue_;
   streak::Config draft_;
   streak::Assignment assignment_;
   streak::FieldErrors fieldErrors_;

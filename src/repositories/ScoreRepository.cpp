@@ -145,6 +145,7 @@ bool ScoreRepository::BindDatabasePath(std::filesystem::path databasePath,
 
   sqlite3 *previous = impl_->sessionDatabase;
   impl_->databasePath = std::move(databasePath);
+  impl_->streakProgress.reset();
   impl_->sessionDatabase = candidate.release();
   closeSqliteDatabase(previous);
   score_repository_detail::IncrementRevision();
@@ -161,6 +162,7 @@ bool ScoreRepository::HasActiveWrites() {
 }
 
 void ScoreRepository::CloseSessionDatabaseLocked() {
+  impl_->streakProgress.reset();
   closeSqliteDatabase(impl_->sessionDatabase);
   impl_->sessionDatabase = nullptr;
 }

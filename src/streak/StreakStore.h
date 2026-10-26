@@ -9,5 +9,5 @@ State load(sqlite3 *database);
 void save(sqlite3 *database, const State &state);
 void recordSavedPlay(sqlite3 *database, const std::filesystem::path &chartDatabase,
                      Play play, const std::string &md5,
-                     const std::string &createdAt, std::uint32_t randomChoice);
+                     const std::string &createdAt, std::uint32_t randomChoice, PlayProgress *progress = nullptr);
 }

@@ -44,6 +44,7 @@ struct View {
 };
 struct Attempt {
   struct {
+    std::string attemptId = "test";
     struct { struct { bool autoPlay = false; } provenance; } score;
     std::int64_t playedAtUnixMillis = std::time(nullptr) * 1000;
   } result;
@@ -76,6 +77,7 @@ struct ResultScene {
     struct {
       int loads=0;
       streak::State state;
+      std::optional<streak::PlayProgress> TakeStreakProgress(std::string_view) { return {}; }
       std::optional<streak::State> LoadStreak(std::string &) { ++loads; return state; }
     } scoreRepository;
   } context;
@@ -85,6 +87,7 @@ struct ResultScene {
   bool isCourseFinalResult() const { return false; }
   streak::ResultPresentation streakPresentation_;
   std::optional<streak::State> streakSnapshot_;
+  std::optional<streak::PlayProgress> streakProgress_;
   View viewport, panel, overlay;
   View *viewportLayout=&viewport, *streakPanel_=nullptr, *streakOverlay_=nullptr;
   std::optional<int> resultSkinMouseCapture = 1;

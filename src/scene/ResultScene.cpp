@@ -1,5 +1,6 @@
 #include "../rendering/ResponsiveUi.h"
 #include "../view/ProgressMotionView.h"
+#include "../view/AssignmentProgressView.h"
 #include "../view/ActionButtonStyle.h"
 #include "../i18n/Localization.h"
 #include "ResultScene.h"
@@ -4646,6 +4647,7 @@ void ResultScene::prepareStreakProgress() {
   streakSnapshot_ = std::move(snapshot);
   const auto day = streakSnapshot_->days.find(streak::today());
   if (day == streakSnapshot_->days.end() || day->second.assignments.empty()) return;
+  streakProgress_ = context.scoreRepository.TakeStreakProgress(result.attemptId);
   if (streakPresentation_.arm({.saved=true, .manual=true, .currentDay=true, .activeRoutine=true}, SDL_GetTicks())) {
     if (viewportLayout) viewportLayout->cancelPointerInput();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -4705,16 +4707,15 @@ void ResultScene::buildStreakProgress(bool animate) {
        std::to_string(day.config.dailyGoal), 30);
   body->addView((new ProgressMotionView(float(day.points) / day.config.dailyGoal, complete, !animate))->setHeight(18 * unit));
   text(body, i18n::tr(complete ? "streak.ui.complete_help" : "streak.ui.protected"), 18);
-  if (!complete) {
-    for (const auto &progress : day.assignments) {
-      auto *row = new View();
-      row->setFlexDirection(FlexDirection::Column)->setGap(8 * unit)->setPadding(Edge::All, 14 * unit)
-          ->setCornerRadius(18 * unit)->setFlexShrink(0)->setThemedBackgroundColor(app_theme::panelSubtle);
-      body->addView(row);
-      text(row, progress.requirement.name, 21);
-      text(row, std::to_string(progress.charts) + " / " + std::to_string(progress.requirement.chartCount), 24);
-      row->addView((new ProgressMotionView(float(progress.charts) / progress.requirement.chartCount, false, !animate))->setHeight(18 * unit));
-    }
+  for (const auto &progress : day.assignments) {
+    const auto change = streak::progressChange(streakProgress_, progress);
+    if (complete && !change) continue;
+    auto *row = new View();
+    row->setFlexDirection(FlexDirection::Column)->setGap(8 * unit)->setPadding(Edge::All, 14 * unit)
+        ->setCornerRadius(18 * unit)->setFlexShrink(0)->setThemedBackgroundColor(app_theme::panelSubtle);
+    body->addView(row);
+    text(row, progress.requirement.name, 21);
+    row->addView(new AssignmentProgressView(progress, change, streakProgressStartedAt_, unit));
   }
   auto *dismiss = new Button();
   dismiss->setHeight(54 * unit)->setFlexShrink(0);
@@ -4730,6 +4731,8 @@ void ResultScene::buildStreakProgress(bool animate) {
 
 void ResultScene::updateStreakProgress() {
   if (streakPresentation_.open(SDL_GetTicks())) {
+    streakProgressStartedAt_ = SDL_GetTicks();
+    if (streakProgress_) streakRoundCue_.start(*streakProgress_, streakProgressStartedAt_);
     buildStreakProgress(true);
     if (streakSnapshot_ && streakPresentation_.visible()) {
       const auto &day = streakSnapshot_->days.at(streak::today());
@@ -4738,6 +4741,8 @@ void ResultScene::updateStreakProgress() {
     }
   }
   if (!streakPresentation_.visible() || !streakOverlay_ || !streakPanel_) return;
+  if (streakRoundCue_.consume(SDL_GetTicks()))
+    streakSounds_.play(context.jukebox.audioRuntime(), streak::Sound::RoundAdvance);
   const auto safe = rendering::uiSafeAreaInsets();
   const auto metrics = streak::resultOverlayMetrics(rendering::window_width, rendering::window_height,
       rendering::displayPixelScale, rendering::ui_scale_x, safe.top, safe.right, safe.bottom, safe.left);

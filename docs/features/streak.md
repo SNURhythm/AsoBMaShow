@@ -4,9 +4,10 @@ Open **Streak** in the built-in PLAY selector, then create a routine. Set daily,
 weekly and monthly point goals and add assignments. Select levels from any
 installed difficulty tables; an assignment matches the union of those levels.
 
-An assignment checks selected table levels and the chart's previous best lamp.
+An assignment checks selected table levels, previous best lamp and previous best
+score rank. All selected eligibility conditions must match.
 Once a chart satisfies all eligibility conditions, it stays eligible for that
-assignment for the rest of the day, even if its lamp or table membership changes.
+assignment for the rest of the day, even if its lamp, score or table membership changes.
 An initially ineligible chart can qualify on a later attempt. From that point,
 its best lamp and best EX rate accumulate across attempts: the lamp and score
 targets can be achieved on different plays. Earlier ineligible attempts do not
@@ -14,14 +15,19 @@ contribute retroactively. Daily eligibility and achievements survive app restart
 and reset the next day. Either target may be left
 unrestricted, but at least one must be set. Score targets cover E, D, C, B, A,
 AA, AAA, MAX -, MAX, and custom EX rates to 0.01 percentage-point precision.
-Previous-lamp filters support exact lamps and “or below,” including NO PLAY.
+Previous-lamp and previous-score filters support exact values and “or below,”
+including NO PLAY. Score ranks include F through MAX; “or below” also includes
+charts without a previous score. Best scores use the same LN-mode selection as
+the selector and exclude the current attempt and later-dated results during
+recovery. Existing routines migrate with no previous-score restriction.
+Lamp options and summaries use the shared colored vertical lamp indicators.
 The target lamp is a minimum; NO PLAY is an eligibility state, not a result.
 
 The PLAY selector's **Assignments** folder shows all playable charts that can
 still contribute today, deduplicated across assignments. Expand it to browse a
 subfolder for each assignment. Charts already counted for an assignment are
 hidden there; they remain available for other assignments that can still use
-them. Sticky-eligible charts stay visible even after their lamp or table
+them. Sticky-eligible charts stay visible even after their lamp, score or table
 membership changes. Lamp/score targets are goals to work toward, not filters on
 this list. Once the shared daily bonus budget is spent, the folders are empty.
 Both the built-in browser and skin-driven selector support these folders, with
@@ -199,3 +205,10 @@ automation.
   the regular routine. A stale editor crossing midnight must refuse the save.
 - Listen for the short progress/completion cue and successful freeze-purchase
   cue. Master mute silences them; redraws and rotation do not replay them.
+
+Assignment meters animate from the previous saved count. A completed round fills
+to its original quota, holds a “Round complete” state, then reveals the next
+round with a separate promotion cue. The result drawer includes these rows even
+when the play reaches the daily goal. Animation receipts are bounded, transient,
+created only after a successful score transaction, and claimed once by the
+result drawer or dashboard. Rebuilds retain the animation clock.

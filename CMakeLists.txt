@@ -3343,6 +3343,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrRemoteScoreModels.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryIrImport.cpp
+        src/repositories/ScoreRepositoryStreak.cpp
         src/repositories/ScoreRepositoryQueries.cpp
         src/streak/StreakModel.cpp
         src/streak/StreakStore.cpp

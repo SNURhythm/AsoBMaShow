@@ -9,12 +9,14 @@
 #include "../view/ActionButtonContent.h"
 #include "../view/AppTheme.h"
 #include "../view/Button.h"
+#include "../view/ClearLampColors.h"
 #include "../view/DropdownView.h"
 #include "../view/OverlayPortal.h"
 #include "../view/ScrollView.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
 #include "../view/ProgressMotionView.h"
+#include "../view/AssignmentProgressView.h"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -44,6 +46,18 @@ TextView *label(View *parent, const std::string &value, int size = 21) {
   text->setThemedColor(app_theme::textPrimary);
   parent->addView(text);
   return text;
+}
+void lampLabel(View *parent, const std::string &text, int rank, int size = 19) {
+  auto *row = new View();
+  row->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(8)->setFlexShrink(0);
+  if (hasClearLampColor(rank)) {
+    auto *bar = new View();
+    bar->setWidth(4)->setHeight(22)->setCornerRadius(2)->setFlexShrink(0);
+    bar->setBackgroundColor(clearLampColorForRank(rank));
+    row->addView(bar);
+  }
+  label(row, text, size)->setFlex(1)->setMinWidth(0);
+  parent->addView(row);
 }
 Button *action(View *parent, const std::string &value, std::function<void()> click,
                app_theme::ActionCategory category = app_theme::ActionCategory::Neutral,
@@ -150,14 +164,23 @@ StreakScene::StreakScene(ApplicationContext &context, SceneReturnTarget target)
 void StreakScene::init() { reload(); build(); }
 void StreakScene::reload() {
   fieldErrors_.clear();
-  if (profileId_ != context.profileManager.activeProfile().id || checkedDay_ != streak::today())
+  if (profileId_ != context.profileManager.activeProfile().id || checkedDay_ != streak::today()) {
     showOptional_ = false;
+    streakProgress_.reset();
+    streakProgressStartedAt_ = 0;
+    roundCue_ = {};
+  }
   profileId_ = context.profileManager.activeProfile().id;
   std::string error;
   auto loaded = context.scoreRepository.LoadStreak(error);
   loadFailed_ = !loaded;
   if (!loaded) { message_ = error; return; }
   state_ = std::move(*loaded);
+  if (auto progress = context.scoreRepository.TakeStreakProgress()) {
+    streakProgress_ = std::move(progress);
+    streakProgressStartedAt_ = 0;
+    roundCue_ = {};
+  }
   draft_ = state_.configurations.empty() ? streak::Config{} : state_.configurations.rbegin()->second;
   daily_ = std::to_string(draft_.dailyGoal);
   weekly_ = std::to_string(draft_.weeklyGoal);
@@ -173,10 +196,13 @@ std::set<std::string> StreakScene::unavailableAssignments(const streak::Day &day
   const int mode = long_note_mode::valueFromId(context.settings.selectedLnMode);
   const auto charts = loadMusicSelectAssignmentCharts(*session, metadata, day, mode);
   const auto ranks = context.scoreRepository.LoadBestClearRanks();
+  const auto scores = context.scoreRepository.LoadBestScores();
   std::set<std::string> unavailable;
   for (const auto &progress : day.assignments)
     if (musicSelectAssignmentNeedsAdjustment(day, progress, charts,
-        {.clearFor=[&ranks](const bms_parser::ChartMeta &meta, int mode) {
+        {.scoreFor=[&scores](const bms_parser::ChartMeta &meta, int mode) {
+           return scores.bestFor(meta, mode);
+         }, .clearFor=[&ranks](const bms_parser::ChartMeta &meta, int mode) {
            return ranks.bestRankFor(meta, mode);
          }, .selectedLongNoteMode=mode}))
       unavailable.insert(progress.requirement.id);
@@ -186,6 +212,7 @@ void StreakScene::later(std::function<void()> action) {
   defer([this, action = std::move(action)] { action(); build(); return true; }, 0, true);
 }
 void StreakScene::build() {
+  if (page_ != Page::Dashboard) roundCue_ = {};
   for (auto *view : views) delete view;
   views.clear();
   root_ = new View(0, 0, rendering::window_width, rendering::window_height);
@@ -257,34 +284,44 @@ void StreakScene::dashboard(View *body) {
     label(body, i18n::tr(bonusAvailable ? "streak.ui.optional_help" : "streak.ui.bonus_complete"), 18);
     if (bonusAvailable)
       action(body, i18n::tr(showOptional_ ? "streak.ui.hide_optional" : "streak.ui.show_optional"),
-          [this] { later([this] { showOptional_ = !showOptional_; }); },
+          [this] { later([this] {
+            showOptional_ = !showOptional_;
+            if (!showOptional_) { streakProgress_.reset(); roundCue_ = {}; }
+          }); },
           app_theme::ActionCategory::Neutral, showOptional_ ? ui_icons::kHide : ui_icons::kPlus);
   } else label(body, i18n::tr("streak.ui.assignments"), 27);
   if (!complete && day.assignments.empty()) label(body, i18n::tr("streak.ui.no_assignments"));
   std::set<std::string> unavailable;
   try {
-    if (!complete || (showOptional_ && bonusAvailable))
+    if (!complete || (showOptional_ && bonusAvailable) || streakProgress_)
       unavailable = unavailableAssignments(day);
   }
   catch (const std::exception &error) { label(body, error.what(), 18); }
+  if (streakProgress_ && streakProgressStartedAt_ == 0) {
+    streakProgressStartedAt_ = SDL_GetTicks();
+    roundCue_.start(*streakProgress_, streakProgressStartedAt_);
+  }
   for (const auto &p : day.assignments) {
-    if (complete && (!showOptional_ || !bonusAvailable)) break;
+    const auto change = streak::progressChange(streakProgress_, p);
+    if (!streak::dashboardAssignmentVisible(complete, showOptional_, bonusAvailable, change)) continue;
     auto *assignmentCard = card(body);
     const auto reward = complete ? 1 :
         std::min<std::int64_t>(p.requirement.points, day.config.dailyGoal - day.points);
     label(assignmentCard, p.requirement.name + "  ·  " + numberText("streak.ui.reward", reward), 24);
     if (complete)
       label(assignmentCard, std::string(i18n::tr("streak.ui.bonus_today")) + " " + std::to_string(p.bonusRounds), 18);
-    label(assignmentCard, i18n::format("streak.ui.round_progress", {
-                {"count", std::to_string(complete ? 0 : p.charts)},
-                {"total", std::to_string(complete ? 1 : p.requirement.chartCount)},
-                {"round", std::to_string(p.completedRounds + 1)}}), 22);
     label(assignmentCard, levelsText(p.requirement), 18);
-    label(assignmentCard, requirements(p.requirement), 19);
-    label(assignmentCard, comparison("streak.ui.previous_lamp", p.requirement.eligibleOrBelow
+    lampLabel(assignmentCard, requirements(p.requirement), p.requirement.targetLamp);
+    lampLabel(assignmentCard, comparison("streak.ui.previous_lamp", p.requirement.eligibleOrBelow
                 ? comparison("streak.ui.at_most", lampText(p.requirement.eligibleLamp))
-                : lampText(p.requirement.eligibleLamp)), 18);
-    meter(assignmentCard, complete ? 0 : p.charts, complete ? 1 : p.requirement.chartCount);
+                : lampText(p.requirement.eligibleLamp)), p.requirement.eligibleLamp, 18);
+    if (p.requirement.eligibleScoreRank != -2) {
+      auto rank = streak::scoreRankLabel(p.requirement.eligibleScoreRank);
+      if (p.requirement.eligibleScoreOrBelow) rank = comparison("streak.ui.at_most", rank);
+      label(assignmentCard, comparison("streak.ui.previous_score", rank), 18);
+    }
+    assignmentCard->addView(new AssignmentProgressView(p,
+        change, streakProgressStartedAt_));
     if (unavailable.contains(p.requirement.id))
       action(assignmentCard, i18n::tr("streak.ui.adjust_today"), [this, requirement = p.requirement] {
         later([this, requirement] {
@@ -345,7 +382,7 @@ void StreakScene::routine(View *body) {
   for (std::size_t i = 0; i < draft_.assignments.size(); ++i) {
     const auto &a = draft_.assignments[i];
     label(body, a.name + "  ·  " + levelsText(a), 22);
-    label(body, numberText("streak.ui.chart_count", a.chartCount) + " · " + requirements(a) + " · " + numberText("streak.ui.reward", a.points), 18);
+    lampLabel(body, numberText("streak.ui.chart_count", a.chartCount) + " · " + requirements(a) + " · " + numberText("streak.ui.reward", a.points), a.targetLamp, 18);
     auto *row = new View();
     row->setFlexDirection(FlexDirection::Row)->setGap(10)->setFlexShrink(0);
     action(row, i18n::tr("streak.ui.edit_assignment"), [this, i] { later([this, i] { editAssignment(static_cast<int>(i)); }); }, app_theme::ActionCategory::Neutral, ui_icons::kPen)->setFlex(1);
@@ -408,16 +445,31 @@ void StreakScene::editor(View *body) {
   }
   std::vector<DropdownView::Option> eligible{{"-2", i18n::tr("streak.ui.any_previous_lamp")}};
   for (int rank : {-1, 0, 100, 150, 200, 300, 400, 500, 600}) {
-    eligible.push_back({std::to_string(rank), lampText(rank)});
-    if (rank >= 0) eligible.push_back({std::to_string(rank) + "below", comparison("streak.ui.at_most", lampText(rank))});
+    const auto color = hasClearLampColor(rank) ? std::optional(clearLampColorForRank(rank)) : std::nullopt;
+    eligible.push_back({.id=std::to_string(rank), .label=lampText(rank), .leadingColor=color});
+    if (rank >= 0) eligible.push_back({.id=std::to_string(rank) + "below",
+        .label=comparison("streak.ui.at_most", lampText(rank)), .leadingColor=color});
   }
   select(body, portal_, i18n::tr("streak.ui.eligible"), std::move(eligible), std::to_string(assignment_.eligibleLamp) + (assignment_.eligibleOrBelow ? "below" : ""), [this](const std::string &id) {
     assignment_.eligibleOrBelow = id.ends_with("below");
     assignment_.eligibleLamp = integer(assignment_.eligibleOrBelow ? id.substr(0, id.size() - 5) : id);
   });
+  std::vector<DropdownView::Option> previousScores{{"-2", i18n::tr("streak.ui.any_previous_score")}};
+  for (int rank : {-1, 0, 6, 9, 12, 15, 18, 21, 24, 26, 27}) {
+    previousScores.push_back({std::to_string(rank), streak::scoreRankLabel(rank)});
+    if (rank >= 0) previousScores.push_back({std::to_string(rank) + "below",
+        comparison("streak.ui.at_most", streak::scoreRankLabel(rank))});
+  }
+  select(body, portal_, i18n::tr("streak.ui.eligible_score"), std::move(previousScores),
+      std::to_string(assignment_.eligibleScoreRank) + (assignment_.eligibleScoreOrBelow ? "below" : ""),
+      [this](const std::string &id) {
+        assignment_.eligibleScoreOrBelow = id.ends_with("below");
+        assignment_.eligibleScoreRank = integer(assignment_.eligibleScoreOrBelow ? id.substr(0, id.size() - 5) : id);
+      });
   std::vector<DropdownView::Option> lamps{{"-1", i18n::tr("streak.ui.any_lamp")}};
   for (int rank : {0, 100, 150, 200, 300, 400, 500, 600})
-    lamps.push_back({std::to_string(rank), comparison("streak.ui.at_least", lampText(rank))});
+    lamps.push_back({.id=std::to_string(rank), .label=comparison("streak.ui.at_least", lampText(rank)),
+                     .leadingColor=clearLampColorForRank(rank)});
   select(body, portal_, i18n::tr("streak.ui.lamp"), std::move(lamps), std::to_string(assignment_.targetLamp), [this](const std::string &id) { assignment_.targetLamp = integer(id);
     later([this] { fieldErrors_.erase("lamp"); fieldErrors_.erase("score"); });
   }, fieldErrors_["lamp"]);
@@ -511,6 +563,8 @@ void StreakScene::back() {
   defer([this] { (void)returnToScene(*context.sceneManager, returnTarget_); return false; }, 0, true);
 }
 void StreakScene::update(float dt) {
+  if (page_ == Page::Dashboard && roundCue_.consume(SDL_GetTicks()))
+    streakSounds_.play(context.jukebox.audioRuntime(), streak::Sound::RoundAdvance);
   elapsed_ += dt;
   if (profileId_ != context.profileManager.activeProfile().id) {
     page_ = Page::Dashboard; message_.clear(); reload(); build();

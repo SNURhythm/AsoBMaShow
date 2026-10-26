@@ -44,7 +44,7 @@ int main() {
   CHECK(buyFreeze(earned, today()));
   save(db, earned);
   auto reopened = load(db);
-  CHECK(reopened.version == 3 && freezePrice(reopened) == 25 && reopened.savings == 80);
+  CHECK(reopened.version == 4 && freezePrice(reopened) == 25 && reopened.savings == 80);
   CHECK(reopened.days.begin()->second.assignments[0].bonusRounds == 2);
   CHECK(reopened.days.begin()->second.assignments[0].earnedPoints == 12);
   advance(reopened, today() + 3); // Consumes freeze, then breaks.
@@ -84,12 +84,32 @@ int main() {
     CHECK(sqlite3_step(update) == SQLITE_DONE);
     sqlite3_finalize(update);
   };
+  auto versionThree = legacy;
+  versionThree["version"] = 3;
+  const auto removeScoreFilter = [](auto &assignment) {
+    assignment.erase("eligibleScoreRank"); assignment.erase("eligibleScoreOrBelow");
+  };
+  for (auto &entry : versionThree["configurations"])
+    for (auto &assignment : entry[1]["assignments"]) removeScoreFilter(assignment);
+  for (auto &entry : versionThree["days"]) {
+    for (auto &assignment : entry[1]["config"]["assignments"]) removeScoreFilter(assignment);
+    for (auto &progress : entry[1]["assignments"]) removeScoreFilter(progress["requirement"]);
+  }
+  replaceBody(versionThree);
+  auto scoreMigration = load(db);
+  CHECK(scoreMigration.version == 4 && scoreMigration.savings == earned.savings);
+  CHECK(scoreMigration.days.begin()->second.assignments[0].requirement.eligibleScoreRank == -2);
+  scoreMigration.days.begin()->second.assignments[0].requirement.eligibleScoreRank = 21;
+  scoreMigration.days.begin()->second.assignments[0].requirement.eligibleScoreOrBelow = true;
+  save(db, scoreMigration);
+  CHECK(load(db).days.begin()->second.assignments[0].requirement.eligibleScoreRank == 21);
+  CHECK(load(db).days.begin()->second.assignments[0].requirement.eligibleScoreOrBelow);
   legacy["version"] = 2;
   for (auto &entry : legacy["days"])
     for (auto &progress : entry[1]["assignments"]) progress.erase("chartProgress");
   replaceBody(legacy);
   const auto versionTwo = load(db);
-  CHECK(versionTwo.version == 3 && versionTwo.savings == earned.savings);
+  CHECK(versionTwo.version == 4 && versionTwo.savings == earned.savings);
   CHECK(versionTwo.days.begin()->second.assignments[0].chartProgress.size() == 3);
   legacy["version"] = 1;
   legacy.erase("freezePurchases");
@@ -104,7 +124,7 @@ int main() {
   }
   replaceBody(legacy);
   auto migrated = load(db);
-  CHECK(migrated.version == 3 && migrated.savings == 80 && migrated.freezes == 1);
+  CHECK(migrated.version == 4 && migrated.savings == 80 && migrated.freezes == 1);
   CHECK(migrated.configurations.size() == 2 && migrated.milestones.contains("streak:7"));
   CHECK(migrated.days.begin()->second.points == 60);
   CHECK(migrated.days.begin()->second.assignments[0].earnedPoints == 60);

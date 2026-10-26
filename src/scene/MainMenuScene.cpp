@@ -3601,7 +3601,9 @@ void MainMenuScene::prepareAssignmentChartQuery() {
     auto directory = musicSelectAssignmentsRoot({});
     directory.id.value = activeFolder.key;
     auto rows = musicSelectAssignmentChildren(assignmentDay, directory, *assignmentCharts,
-        {.clearFor=[this](const bms_parser::ChartMeta &meta, int mode) {
+        {.scoreFor=[this](const bms_parser::ChartMeta &meta, int mode) {
+           return scoreBestScores.bestFor(meta, mode);
+         }, .clearFor=[this](const bms_parser::ChartMeta &meta, int mode) {
            return scoreClearRanks.bestRankFor(meta, mode);
          }, .selectedLongNoteMode=mode});
     auto &hashes = assignmentChartHashes[activeFolder.key];

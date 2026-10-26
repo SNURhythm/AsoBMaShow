@@ -20,6 +20,15 @@ std::optional<streak::State> ScoreRepository::LoadStreak(std::string &error) {
     return state;
   } catch (const std::exception &failure) { error = failure.what(); return {}; }
 }
+std::optional<streak::PlayProgress> ScoreRepository::TakeStreakProgress(std::string_view attemptId) {
+  std::lock_guard lock(impl_->sessionMutex);
+  if (!impl_->streakProgress) return {};
+  if (impl_->streakProgress->day != streak::today()) { impl_->streakProgress.reset(); return {}; }
+  if (!attemptId.empty() && impl_->streakProgress->attemptId != attemptId) return {};
+  auto result = std::move(impl_->streakProgress);
+  impl_->streakProgress.reset();
+  return result;
+}
 bool ScoreRepository::ConfigureStreak(const streak::Config &config,
                                      streak::DayId &effectiveDay, std::string &error) {
   profile_database_activity::WriteGuard guard;

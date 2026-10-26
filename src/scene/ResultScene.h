@@ -4,6 +4,7 @@
 #include "../streak/StreakModel.h"
 #include "../streak/StreakSounds.h"
 #include "../streak/StreakResultPresentation.h"
+#include "../streak/StreakRoundMotion.h"
 #include "../CanonicalDigest.h"
 #include "../ReplayData.h"
 #include "../ResultPersistenceCoordinator.h"
@@ -402,6 +403,9 @@ private:
   bool streakOwnsInput() const;
   streak::ResultPresentation streakPresentation_;
   std::optional<streak::State> streakSnapshot_;
+  std::optional<streak::PlayProgress> streakProgress_;
+  std::uint64_t streakProgressStartedAt_ = 0;
+  streak::RoundPromotionCue streakRoundCue_;
   View *streakOverlay_ = nullptr;
   View *streakPanel_ = nullptr;
   ScrollView *streakScroll_ = nullptr;

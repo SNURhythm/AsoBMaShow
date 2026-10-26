@@ -12,6 +12,10 @@ public:
     fill_.start(0, std::clamp(fraction, 0.0F, 1.0F), SDL_GetTicks(), 850, 80,
                 ui::motion::Ease::Smooth, reduced);
   }
+  void showFraction(float fraction, bool celebrate = false) {
+    fill_ = ui::motion::Track(std::clamp(fraction, 0.0F, 1.0F));
+    celebrate_ = celebrate;
+  }
 protected:
   void renderImpl(RenderContext &context) override {
     const auto now = SDL_GetTicks();

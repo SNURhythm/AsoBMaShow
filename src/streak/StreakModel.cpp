@@ -109,6 +109,9 @@ std::string validate(const Config &config) {
       if (level.source.empty()) return "A selected difficulty table has no source URL.";
     if (a.chartCount < 1 || a.chartCount > 10000 || a.points < 1 || a.points > 1000000)
       return "Use 1–10,000 charts and 1–1,000,000 points per round.";
+    if (a.eligibleScoreRank != -2 && a.eligibleScoreRank != -1 && a.eligibleScoreRank != 0 &&
+        std::find(rankNumerators.begin(), rankNumerators.end(), a.eligibleScoreRank) == rankNumerators.end())
+      return "Choose a supported previous score rank.";
     if ((a.eligibleLamp != -2 && std::find(lamps.begin(), lamps.end(), a.eligibleLamp) == lamps.end()) ||
         std::find(lamps.begin(), lamps.end(), a.targetLamp) == lamps.end())
       return "Choose a supported clear lamp.";
@@ -156,6 +159,21 @@ std::string lampLabel(int lamp) {
   default: return "Unknown";
   }
 }
+int scoreRank(int score, int maxScore) {
+  if (maxScore <= 0) return -1;
+  int rank = 0;
+  for (int threshold : rankNumerators)
+    if (static_cast<std::int64_t>(score) * 27 >= static_cast<std::int64_t>(maxScore) * threshold)
+      rank = threshold;
+  return rank;
+}
+std::string scoreRankLabel(int rank) {
+  if (rank == -1) return "NO PLAY";
+  if (rank == 0) return "F";
+  for (std::size_t i = 0; i < rankNumerators.size(); ++i)
+    if (rank == rankNumerators[i]) return rankLabels[i];
+  return "Unknown";
+}
 std::string scoreValueLabel(const Assignment &a) {
   if (a.scoreNumerator == 0) return {};
   if (!a.customRate) {
@@ -175,6 +193,10 @@ bool eligible(const Assignment &a, const Play &p) {
   });
   if (!levelMatches || !p.manual || p.chart.empty()) return false;
   if (a.eligibleLamp != -2 && (a.eligibleOrBelow ? p.previousLamp > a.eligibleLamp : p.previousLamp != a.eligibleLamp)) return false;
+  if (a.eligibleScoreRank != -2) {
+    const int rank = scoreRank(p.previousScore, p.previousMaxScore);
+    if (a.eligibleScoreOrBelow ? rank > a.eligibleScoreRank : rank != a.eligibleScoreRank) return false;
+  }
   return true;
 }
 namespace {
@@ -249,7 +271,8 @@ int bonusPoints(const Day &day) {
   for (const auto &progress : day.assignments) points += progress.bonusRounds;
   return points;
 }
-std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice) {
+std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice, PlayProgress *receipt) {
+  if (receipt) *receipt = {};
   if (!p.manual || p.chart.empty() || s.configurations.empty() || p.day < s.configurations.begin()->first) return 0;
   advance(s, p.day);
   auto found = s.days.find(p.day);
@@ -260,6 +283,14 @@ std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice) {
   if (day.frozen) { ++s.freezes; day.frozen = false; }
   const auto before = day.points;
   const bool bonus = before >= day.config.dailyGoal;
+  if (receipt) {
+    receipt->day = p.day;
+    for (const auto &progress : day.assignments)
+      receipt->assignments.push_back({.id=progress.requirement.id,
+          .beforeCharts=bonus ? 0 : progress.charts,
+          .beforeQuota=bonus ? 1 : progress.requirement.chartCount,
+          .beforeRound=progress.completedRounds + 1});
+  }
   if (bonus) {
     // Existing saved bonus rounds may still have the older multi-chart quota.
     // Their partial progress grants no automatic reward; the next new chart
@@ -328,6 +359,18 @@ std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice) {
     for (auto *progress : completed) harder(progress->requirement, p, randomChoice++);
   }
   recompute(s, returnedFreezes, p.day);
+  if (receipt) {
+    for (std::size_t i = 0; i < day.assignments.size(); ++i) {
+      auto &change = receipt->assignments[i];
+      const auto &progress = day.assignments[i];
+      change.afterCharts = progress.charts;
+      change.afterQuota = progress.requirement.chartCount;
+      change.afterRound = progress.completedRounds + 1;
+    }
+    std::erase_if(receipt->assignments, [](const auto &change) {
+      return !change.completedRound() && change.afterCharts <= change.beforeCharts;
+    });
+  }
   return day.points - before;
 }
 std::int64_t freezePrice(const State &s) {

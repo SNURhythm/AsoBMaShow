@@ -2,55 +2,55 @@
   "earshot_commit": "591fa3e028032e6dce56620a20e932e35667e8d8",
   "sounds": {
     "progress": {
-      "id": "ui_pop/step",
+      "id": "ui_pop/soft",
       "seed": 1,
       "sr": 48000,
       "onset_s": 0.0025,
-      "peak_s": 0.0445,
-      "end_s": 0.163,
-      "dur_s": 0.1871,
-      "peak_db": -9.0,
-      "lufs_m_max": -23.94,
+      "peak_s": 0.0415,
+      "end_s": 0.157,
+      "dur_s": 0.1805,
+      "peak_db": -15.0,
+      "lufs_m_max": -29.37,
       "edits": {},
       "checks": {
         "ok": true,
         "warnings": [],
         "notes": [],
-        "summary": "ui_pop/step: clean",
+        "summary": "ui_pop/soft: clean",
         "measures": {
           "clicks": 0,
           "edge_db": -240.0,
           "clip_runs": 0,
           "overs": 0,
-          "dc_db": -120.1,
-          "ring_z": 4.6,
+          "dc_db": -130.2,
+          "ring_z": 4.1,
           "trunc_db": null,
           "silence_ms": 0.0,
           "bump_db": 0.0,
-          "attack_ms": 20.75,
+          "attack_ms": 6.5,
           "t40_ms": 110.0,
-          "crest_db": 8.3,
+          "crest_db": 8.2,
           "res_db": 19.5,
-          "res_hz": 1446,
-          "peak_dbfs": -9.0,
-          "live_ms": 127.5
+          "res_hz": 1115,
+          "peak_dbfs": -15.0,
+          "live_ms": 126.25
         },
         "glide": {
-          "tonal_share": 0.43,
+          "tonal_share": 0.36,
           "rise_st": 0.0,
           "from_s": null,
           "to_s": null
         },
         "layers": {
           "attacks": [
-            0.043
+            0.033
           ],
           "count": 1,
           "pre_swell_ms": 0.0
         },
         "context": {
           "category": "ui_pop",
-          "sound": "ui_pop/step"
+          "sound": "ui_pop/soft"
         }
       }
     },
@@ -157,6 +157,59 @@
         "context": {
           "category": "mallet",
           "sound": "mallet/celesta"
+        }
+      }
+    },
+    "round-advance": {
+      "id": "mallet/flourish",
+      "seed": 1,
+      "sr": 48000,
+      "onset_s": 0.0,
+      "peak_s": 0.0505,
+      "end_s": 0.428,
+      "dur_s": 0.5043,
+      "peak_db": -11.0,
+      "lufs_m_max": -22.79,
+      "edits": {},
+      "checks": {
+        "ok": true,
+        "warnings": [],
+        "notes": [],
+        "summary": "mallet/flourish: clean",
+        "measures": {
+          "clicks": 0,
+          "edge_db": -240.0,
+          "clip_runs": 0,
+          "overs": 0,
+          "dc_db": -125.2,
+          "ring_z": 3.4,
+          "trunc_db": null,
+          "silence_ms": 0.0,
+          "bump_db": 0.0,
+          "attack_ms": 1.0,
+          "t40_ms": 310.0,
+          "crest_db": 7.8,
+          "res_db": 30.9,
+          "res_hz": 2770,
+          "peak_dbfs": -11.0,
+          "live_ms": 313.5
+        },
+        "glide": {
+          "tonal_share": 1.0,
+          "rise_st": 0.1,
+          "from_s": 0.091,
+          "to_s": 0.106
+        },
+        "layers": {
+          "attacks": [
+            0.058
+          ],
+          "count": 1,
+          "pre_swell_ms": 0.0
+        },
+        "context": {
+          "category": "mallet",
+          "sound": "mallet/flourish"
         }
       }
     }

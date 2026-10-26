@@ -8,7 +8,7 @@
 namespace streak {
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Level, source, level, label)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Assignment, id, name, levels, eligibleLamp,
-    eligibleOrBelow, targetLamp, scoreNumerator, scoreDenominator, customRate, chartCount, points)
+    eligibleOrBelow, eligibleScoreRank, eligibleScoreOrBelow, targetLamp, scoreNumerator, scoreDenominator, customRate, chartCount, points)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Config, dailyGoal, weeklyGoal, monthlyGoal, assignments)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(ChartAchievement, eligibleSince, lamp, score, maxScore)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Progress, requirement, completedRounds, bonusRounds, earnedPoints, charts, usedCharts, chartProgress)
@@ -36,7 +36,7 @@ State load(sqlite3 *db) {
   require(result == SQLITE_ROW, db);
   auto json = nlohmann::json::parse(sqliteColumnString(query, 0));
   const auto version = json.at("version").get<int>();
-  if (version != 1 && version != 2 && version != 3)
+  if (version != 1 && version != 2 && version != 3 && version != 4)
     throw std::runtime_error("This streak data needs a different app version.");
   if (version == 1) {
     // Preserve all previously earned totals and savings. The old format did
@@ -61,6 +61,19 @@ State load(sqlite3 *db) {
         for (const auto &chart : progress.at("usedCharts"))
           progress["chartProgress"][chart.get<std::string>()] = ChartAchievement{};
       }
+    }
+  }
+  if (version < 4) {
+    json["version"] = 4;
+    const auto migrateAssignment = [](auto &assignment) {
+      assignment["eligibleScoreRank"] = -2;
+      assignment["eligibleScoreOrBelow"] = false;
+    };
+    for (auto &entry : json.at("configurations"))
+      for (auto &assignment : entry.at(1).at("assignments")) migrateAssignment(assignment);
+    for (auto &entry : json.at("days")) {
+      for (auto &assignment : entry.at(1).at("config").at("assignments")) migrateAssignment(assignment);
+      for (auto &progress : entry.at(1).at("assignments")) migrateAssignment(progress.at("requirement"));
     }
   }
   auto state = json.get<State>();
@@ -116,7 +129,7 @@ void save(sqlite3 *db, const State &state) {
 }
 void recordSavedPlay(sqlite3 *db, const std::filesystem::path &chartPath,
                      Play play, const std::string &md5,
-                     const std::string &createdAt, std::uint32_t randomChoice) {
+                     const std::string &createdAt, std::uint32_t randomChoice, PlayProgress *progress) {
   if (!play.manual) return;
   auto state = load(db);
   if (state.configurations.empty()) return;
@@ -145,7 +158,7 @@ void recordSavedPlay(sqlite3 *db, const std::filesystem::path &chartPath,
   while ((result = sqlite3_step(query)) == SQLITE_ROW)
     play.levels.push_back({sqliteColumnString(query, 0), sqliteColumnString(query, 1), {}});
   require(result == SQLITE_DONE, charts.get());
-  record(state, play, randomChoice);
+  record(state, play, randomChoice, progress);
   save(db, state);
 }
 } // namespace streak

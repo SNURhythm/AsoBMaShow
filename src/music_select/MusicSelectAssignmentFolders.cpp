@@ -20,10 +20,13 @@ bool contributes(const streak::Progress &progress, const MusicSelectAssignmentCh
   if (record.unavailable || record.solidArchive || record.meta.BmsPath.empty() ||
       record.meta.SHA256.empty() || progress.usedCharts.contains(record.meta.SHA256)) return false;
   if (progress.chartProgress.contains(record.meta.SHA256)) return true;
+  const auto score = progress.requirement.eligibleScoreRank != -2 && input.scoreFor
+      ? input.scoreFor(record.meta, input.selectedLongNoteMode) : std::nullopt;
   return streak::eligible(progress.requirement,
       {.chart=record.meta.SHA256, .levels=source.levels,
        .previousLamp=input.clearFor
-           ? input.clearFor(record.meta, input.selectedLongNoteMode) : -1});
+           ? input.clearFor(record.meta, input.selectedLongNoteMode) : -1,
+       .previousScore=score ? score->score : 0, .previousMaxScore=score ? score->maxScore : 0});
 }
 
 }

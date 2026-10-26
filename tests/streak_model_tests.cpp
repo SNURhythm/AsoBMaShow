@@ -1,5 +1,6 @@
 #include "streak/StreakModel.h"
 #include "streak/StreakForm.h"
+#include "streak/StreakRoundMotion.h"
 #include "streak/StreakResultPresentation.h"
 #include <cstdlib>
 #include <iostream>
@@ -19,6 +20,80 @@ Play play(DayId day, std::string chart) {
           .lamp = 300, .score = 180, .maxScore = 200};
 }
 int main() {
+  auto scoreFilter = config().assignments.front();
+  auto priorScore = play(40000, "previous-score");
+  scoreFilter.eligibleScoreRank = 21;
+  priorScore.previousScore = 21; priorScore.previousMaxScore = 27;
+  CHECK(eligible(scoreFilter, priorScore));
+  priorScore.previousScore = 24;
+  CHECK(!eligible(scoreFilter, priorScore));
+  scoreFilter.eligibleScoreOrBelow = true;
+  CHECK(!eligible(scoreFilter, priorScore));
+  priorScore.previousScore = 20;
+  CHECK(eligible(scoreFilter, priorScore));
+  priorScore.previousMaxScore = 0;
+  CHECK(eligible(scoreFilter, priorScore));
+  scoreFilter.eligibleScoreRank = -1; scoreFilter.eligibleScoreOrBelow = false;
+  CHECK(eligible(scoreFilter, priorScore));
+  priorScore.previousMaxScore = 27; priorScore.previousScore = 0;
+  CHECK(!eligible(scoreFilter, priorScore));
+  scoreFilter.eligibleScoreRank = 0;
+  CHECK(eligible(scoreFilter, priorScore));
+  for (int rank : {6, 9, 12, 15, 18, 21, 24, 26, 27}) {
+    CHECK(scoreRank(rank, 27) == rank);
+    CHECK(scoreRank(rank - 1, 27) < rank);
+  }
+
+  scoreFilter.eligibleLamp = 200;
+  priorScore.previousLamp = 300;
+  CHECK(!eligible(scoreFilter, priorScore)); // Both eligibility conditions must match.
+  auto stickyConfig = config();
+  stickyConfig.assignments[0].eligibleScoreRank = 21;
+  stickyConfig.assignments[0].targetLamp = 400;
+  State scoreSticky;
+  configure(scoreSticky, stickyConfig, 40000);
+  auto stickyPlay = play(40000, "score-sticky");
+  stickyPlay.previousScore = 21; stickyPlay.previousMaxScore = 27;
+  CHECK(record(scoreSticky, stickyPlay, 0) == 0);
+  stickyPlay.previousScore = 24; stickyPlay.lamp = 400;
+  CHECK(record(scoreSticky, stickyPlay, 0) == 60);
+  State moving;
+  configure(moving, config(60, 60, 3), 41000);
+  PlayProgress receipt;
+  record(moving, play(41000, "first"), 0, &receipt);
+  CHECK(receipt.assignments.size() == 1 && receipt.assignments[0].beforeCharts == 0 &&
+        receipt.assignments[0].afterCharts == 1 && !receipt.assignments[0].completedRound());
+  record(moving, play(41000, "second"), 0);
+  record(moving, play(41000, "third"), 0, &receipt);
+  CHECK(receipt.assignments.size() == 1 && receipt.assignments[0].beforeCharts == 2 &&
+        receipt.assignments[0].beforeQuota == 3 && receipt.assignments[0].afterQuota == 1 &&
+        receipt.assignments[0].completedRound());
+  RoundMotion round(receipt.assignments[0], 100);
+  CHECK(std::abs(round.frame(100).fraction - 2.0F/3) < .001F);
+  CHECK(round.frame(950).fraction == 1 && round.frame(950).completed && round.frame(950).round == 1);
+  CHECK(round.frame(1649).completed && round.frame(1649).quota == 3);
+  CHECK(round.frame(1650).round == 2 && round.frame(1650).fraction == 0 && round.frame(1650).promotion == 0);
+  CHECK(!round.frame(2100).active && round.frame(2100).quota == 1 && round.frame(2100).promotion == 1);
+  RoundMotion rebuilt(receipt.assignments[0], 100);
+  CHECK(rebuilt.frame(1800).promotion == round.frame(1800).promotion);
+  RoundMotion reduced(receipt.assignments[0], 100, true);
+  CHECK(!reduced.frame(100).active && reduced.frame(100).round == 2);
+  RoundPromotionCue cue;
+  cue.start(receipt, 100);
+  CHECK(!cue.consume(1649) && cue.consume(1650) && !cue.consume(1651));
+  cue.start(receipt, 100);
+  CHECK(!cue.consume(10000));
+  // The receipt stays visible when this play reaches the goal or exhausts the bonus.
+  CHECK(dashboardAssignmentVisible(true, false, true, receipt.assignments[0]));
+  CHECK(dashboardAssignmentVisible(true, false, false, receipt.assignments[0]));
+  CHECK(!dashboardAssignmentVisible(true, false, true, {}));
+  CHECK(!dashboardAssignmentVisible(true, true, false, {}));
+  CHECK(dashboardAssignmentVisible(true, true, true, {}));
+  cue.start(receipt, 100);
+  cue = {}; // Hiding the presentation cancels its cue, including after reopening.
+  CHECK(!cue.consume(1650) && !cue.consume(1800));
+  record(moving, play(41000, "third"), 0, &receipt);
+  CHECK(receipt.assignments.empty());
   auto form = config().assignments.front();
   auto errors = readAssignmentForm(form, "", "1.5", "0", "invalid hidden value");
   CHECK(errors.contains("name") && errors.contains("count") && errors.contains("points"));

@@ -304,6 +304,10 @@ void testStreakProjectionIsAtomicAndUsesEffectiveLamp() {
   state = streak::load(db);
   assert(state.days.rbegin()->second.points == 10); // Effective Full Combo, counted once across two tables.
   assert(state.currentStreak == 1 && state.savings == 0);
+  assert(!scores.TakeStreakProgress("different-attempt"));
+  const auto animation = scores.TakeStreakProgress(pending.attemptId);
+  assert(animation && animation->assignments.size() == 1 && animation->assignments[0].completedRound());
+  assert(!scores.TakeStreakProgress(pending.attemptId));
   assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::AlreadyPresent);
   assert(streak::load(db).savings == 0);
   // A failed streak write must roll back the score so recovery can retry both.
@@ -311,6 +315,7 @@ void testStreakProjectionIsAtomicAndUsesEffectiveLamp() {
   pending.attemptId = "123e4567-e89b-42d3-a456-426614174001";
   assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::StorageFailure);
   assert(queryInt(path, "SELECT COUNT(*) FROM scores") == 1);
+  assert(!scores.TakeStreakProgress(pending.attemptId));
   assert(sqlite3_exec(db, "DROP TRIGGER reject_streak", nullptr, nullptr, nullptr) == SQLITE_OK);
   assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
   assert(streak::load(db).savings == 0);
@@ -372,6 +377,78 @@ void testStreakProjectionIsAtomicAndUsesEffectiveLamp() {
     assert(progress[0].completedRounds == 1);
     assert(progress[1].completedRounds == (test.expected == -1 ? 1 : 0));
   }
+
+  struct ScoreCase { int mode, previousMode, score, futureScore, expectedRank; };
+  for (const auto test : std::vector<ScoreCase>{
+           {2, 2, 21, 24, 21}, {2, 1, 21, -1, -1}, {1, 0, 18, -1, 18},
+           {3, 3, 24, 27, 24}, {0, 1, 21, -1, -1}, {2, 2, 0, -1, 0}}) {
+    streak::save(db, {});
+    assert(sqlite3_exec(db, "DELETE FROM scores; DELETE FROM score_sha256_clear_rank_cache; "
+                           "DELETE FROM score_sha256_best_score_cache", nullptr, nullptr, nullptr) == SQLITE_OK);
+    const auto now = static_cast<std::int64_t>(std::time(nullptr)) * 1000;
+    int attempt = 0;
+    const auto write = [&](int mode, int exScore, int offset) {
+      pending.attemptId = "123e4567-e89b-42d3-a456-42661417403" + std::to_string(attempt++);
+      pending.createdAt = scoreHistoryTime(now + offset);
+      pending.score.longNoteMode = mode;
+      pending.score.clearType = 300; pending.score.comboBreak = 1;
+      pending.score.score = exScore; pending.score.maxScore = 27;
+      assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+    };
+    write(test.previousMode, test.score, 0);
+    const auto best = scores.LoadBestScores().bestForHash(pending.score.chartSha256, test.mode);
+    assert(streak::scoreRank(best ? best->score : 0, best ? best->maxScore : 0) == test.expectedRank);
+    if (test.futureScore >= 0) write(test.mode, test.futureScore, 1000);
+    streak::State scenario;
+    streak::Config eligibility;
+    eligibility.assignments = {
+        {.id="exact-score", .name="Previous score", .levels={{"https://table","0",""}},
+         .eligibleScoreRank=test.expectedRank, .targetLamp=0, .points=1},
+        {.id="no-score", .name="No score", .levels={{"https://table","0",""}},
+         .eligibleScoreRank=-1, .targetLamp=0, .points=1}};
+    streak::configure(scenario, eligibility, streak::localDay(now / 1000));
+    streak::save(db, scenario);
+    write(test.mode, 27, 0); // Same timestamp; exclude this attempt and later-dated records.
+    const auto progress = streak::load(db).days.rbegin()->second.assignments;
+    assert(progress[0].completedRounds == 1);
+    assert(progress[1].completedRounds == (test.expectedRank == -1 ? 1 : 0));
+  }
+  int importScenario = 0;
+  for (const auto test : std::vector<ScoreCase>{
+           {2, -1, 0, -1, 21}, {3, -1, 0, -1, 21},
+           {1, 1, 110, -1, 21}, {2, 2, 180, -1, 24}}) {
+    streak::save(db, {});
+    assert(sqlite3_exec(db, "DELETE FROM scores; DELETE FROM score_sha256_clear_rank_cache; "
+                           "DELETE FROM score_sha256_best_score_cache", nullptr, nullptr, nullptr) == SQLITE_OK);
+    const auto now = static_cast<std::int64_t>(std::time(nullptr)) * 1000;
+    pending.score.maxScore = 200; pending.score.comboBreak = 1; pending.score.clearType = 300;
+    pending.createdAt = scoreHistoryTime(now);
+    pending.attemptId = "123e4567-e89b-42d3-a456-426614174040";
+    if (test.previousMode >= 0) {
+      pending.score.longNoteMode = test.previousMode; pending.score.score = test.score;
+      assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+    }
+    auto imported = remoteScore("streak-wildcard", '9', 160, 300);
+    assert(scores.ReplaceImportedIrScores(kProvider, kOrigin, 100 + importScenario++, std::span(&imported, 1)).status ==
+           ImportedIrScoreProjectionStatus::Applied);
+    const auto best = scores.LoadBestScores().bestForHash(pending.score.chartSha256, test.mode);
+    assert(best && streak::scoreRank(best->score, best->maxScore) == test.expectedRank);
+    streak::State scenario;
+    streak::Config eligibility;
+    eligibility.assignments = {
+        {.id="import-score", .name="Imported best", .levels={{"https://table","0",""}},
+         .eligibleScoreRank=test.expectedRank, .targetLamp=0, .points=1},
+        {.id="import-no-score", .name="No score", .levels={{"https://table","0",""}},
+         .eligibleScoreRank=-1, .targetLamp=0, .points=1}};
+    streak::configure(scenario, eligibility, streak::localDay(now / 1000));
+    streak::save(db, scenario);
+    pending.attemptId = "123e4567-e89b-42d3-a456-426614174041";
+    pending.score.longNoteMode = test.mode; pending.score.score = 200;
+    assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+    const auto progress = streak::load(db).days.rbegin()->second.assignments;
+    assert(progress[0].completedRounds == 1 && progress[1].completedRounds == 0);
+  }
+  pending.score.maxScore = 200;
 
   // Separate saved attempts retain eligibility and combine score/lamp targets.
   streak::save(db, {});
