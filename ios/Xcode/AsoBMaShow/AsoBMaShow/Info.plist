@@ -8,6 +8,8 @@
 	<string>$(CONFIGURATION)</string>
 	<key>AsoBMaShowSourceClean</key>
 	<string>$(ASOBMASHOW_SOURCE_CLEAN)</string>
+	<key>LSSupportsGameMode</key>
+	<true/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
