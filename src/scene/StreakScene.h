@@ -1,5 +1,6 @@
 #pragma once
 #include "Scene.h"
+#include <array>
 #include "SceneReturnTarget.h"
 #include "../streak/StreakModel.h"
 #include "../streak/StreakForm.h"
@@ -51,11 +52,16 @@ private:
   std::uint64_t streakProgressStartedAt_ = 0;
   streak::RoundPromotionCue roundCue_;
   bool goalIgnitionSoundPending_ = false;
+  std::optional<std::uint64_t> goalIgnitionStartedAt_;
+  std::array<ui::motion::Track, 3> meterTracks_;
+  std::array<float, 3> meterTargets_{-1, -1, -1};
   streak::Config draft_;
   streak::Assignment assignment_;
   streak::FieldErrors fieldErrors_;
   std::string daily_, weekly_, monthly_, name_, count_, points_, rate_;
   enum class Page { Dashboard, Routine, Assignment } page_ = Page::Dashboard;
+  Page renderedPage_ = Page::Dashboard;
+  std::array<float, 3> scrollOffsets_{};
   int editingIndex_ = -1, tableId_ = 0;
   bool loadFailed_ = false;
   bool showOptional_ = false;

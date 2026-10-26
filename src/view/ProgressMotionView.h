@@ -12,6 +12,11 @@ public:
     fill_.start(0, std::clamp(fraction, 0.0F, 1.0F), SDL_GetTicks(), 850, 80,
                 ui::motion::Ease::Smooth, reduced);
   }
+  // Copy an owner-held track so rebuilding the view keeps its current phase.
+  explicit ProgressMotionView(ui::motion::Track fill, bool celebrate = false)
+      : fill_(std::move(fill)), celebrate_(celebrate) {
+    setHeight(18)->setFlexShrink(0);
+  }
   void showFraction(float fraction, bool celebrate = false) {
     fill_ = ui::motion::Track(std::clamp(fraction, 0.0F, 1.0F));
     celebrate_ = celebrate;

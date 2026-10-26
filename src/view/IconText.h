@@ -42,6 +42,7 @@ inline constexpr uint32_t kGlobe = 0xf0ac;
 inline constexpr uint32_t kRuleset = 0xf0e3;
 inline constexpr uint32_t kHeart = 0xf004;
 inline constexpr uint32_t kRotate = 0xf2f1;
+inline constexpr uint32_t kArrowRight = 0xf061;
 inline constexpr uint32_t kArrowDown = 0xf063;
 inline constexpr uint32_t kShuffle = 0xf074;
 inline constexpr uint32_t kGripLines = 0xf7a4;

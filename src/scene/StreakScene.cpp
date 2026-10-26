@@ -51,8 +51,15 @@ void sizeResetChallengeModal(View *overlay) {
 std::string numberText(const char *key, std::int64_t value) {
   return i18n::format(key, {{"count", std::to_string(value)}});
 }
-void meter(View *parent, std::int64_t value, std::int64_t goal, bool complete = false) {
-  parent->addView(new ProgressMotionView(goal > 0 ? float(value) / goal : 0, complete));
+void meter(View *parent, std::int64_t value, std::int64_t goal,
+           ui::motion::Track &track, float &previousTarget, bool complete = false) {
+  const float target = std::clamp(goal > 0 ? float(value) / goal : 0, 0.0F, 1.0F);
+  if (previousTarget < 0)
+    track.start(0, target, SDL_GetTicks(), 850, 80, ui::motion::Ease::Smooth);
+  else if (previousTarget != target)
+    track.retarget(target, SDL_GetTicks(), 850);
+  previousTarget = target;
+  parent->addView(new ProgressMotionView(track, complete));
 }
 TextView *label(View *parent, const std::string &value, int size = 21) {
   auto *text = new TextView(app_theme::font, size);
@@ -167,10 +174,39 @@ std::string lampText(int rank) {
 std::string comparison(const char *key, const std::string &value) {
   return i18n::format(key, {{"value", value}});
 }
-std::string requirements(const streak::Assignment &a) {
-  return (a.targetLamp < 0 ? i18n::tr("streak.ui.any_lamp") :
-          comparison("streak.ui.at_least", lampText(a.targetLamp))) +
-         "  ·  " + (a.scoreNumerator == 0 ? i18n::tr("streak.ui.any_score") :
+void assignmentConditions(View *parent, const streak::Assignment &a, int size = 18) {
+  const auto row = [parent, size](const std::string &previous, const std::string &target,
+                                 int previousLamp = -2, int targetLamp = -2) {
+    auto *line = new View();
+    line->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(10)->setFlexShrink(0);
+    auto *left = new View();
+    left->setFlex(1)->setFlexBasis(0)->setMinWidth(0);
+    lampLabel(left, previous, previousLamp, size);
+    line->addView(left);
+    auto *arrow = new TextView(ui_icons::kFontAwesomeSolidPath, size);
+    arrow->setText(ui_icons::textForCodepoint(ui_icons::kArrowRight));
+    arrow->setAlign(TextView::CENTER);
+    arrow->setVAlign(TextView::MIDDLE);
+    arrow->setThemedColor(app_theme::textSecondary);
+    arrow->setWidth(24)->setHeight(size + 12)->setFlexShrink(0);
+    line->addView(arrow);
+    auto *right = new View();
+    right->setFlex(1)->setFlexBasis(0)->setMinWidth(0);
+    lampLabel(right, target, targetLamp, size);
+    line->addView(right);
+    parent->addView(line);
+  };
+  const auto previousLamp = a.eligibleOrBelow
+      ? comparison("streak.ui.at_most", lampText(a.eligibleLamp)) : lampText(a.eligibleLamp);
+  row(a.eligibleLamp == -2 ? previousLamp : comparison("streak.ui.previous_lamp", previousLamp),
+      a.targetLamp < 0 ? i18n::tr("streak.ui.any_lamp") :
+          comparison("streak.ui.at_least", lampText(a.targetLamp)), a.eligibleLamp, a.targetLamp);
+  auto previousScore = a.eligibleScoreRank == -2 ? i18n::tr("streak.ui.any_previous_score") :
+      streak::scoreRankLabel(a.eligibleScoreRank);
+  if (a.eligibleScoreRank != -2 && a.eligibleScoreOrBelow)
+    previousScore = comparison("streak.ui.at_most", previousScore);
+  row(a.eligibleScoreRank == -2 ? previousScore : comparison("streak.ui.previous_score", previousScore),
+      a.scoreNumerator == 0 ? i18n::tr("streak.ui.any_score") :
           comparison("streak.ui.at_least", streak::scoreValueLabel(a)));
 }
 } // namespace
@@ -208,6 +244,10 @@ void StreakScene::reload() {
   pendingResetAssignment_.clear();
   if (profileId_ != context.profileManager.activeProfile().id || checkedDay_ != streak::today()) {
     showOptional_ = false;
+    scrollOffsets_.fill(0);
+    meterTargets_.fill(-1);
+    goalIgnitionStartedAt_.reset();
+    if (scroll_) scroll_->setScrollOffset(0);
     streakProgress_.reset();
     streakProgressStartedAt_ = 0;
     roundCue_ = {};
@@ -256,6 +296,7 @@ void StreakScene::later(std::function<void()> action) {
   defer([this, action = std::move(action)] { action(); build(); return true; }, 0, true);
 }
 void StreakScene::build() {
+  if (scroll_) scrollOffsets_[static_cast<std::size_t>(renderedPage_)] = scroll_->getScrollOffset();
   if (page_ != Page::Dashboard) { roundCue_ = {}; goalIgnitionSoundPending_ = false; }
   for (auto *view : views) delete view;
   views.clear();
@@ -270,7 +311,8 @@ void StreakScene::build() {
   auto *header = new View();
   header->setFlexDirection(FlexDirection::Row)->setGap(12)->setAlignItems(YGAlignCenter)->setFlexShrink(0);
   label(header, i18n::tr("streak.ui.title"), 32)->setFlex(1);
-  action(header, i18n::tr("streak.ui.back"), [this] { back(); }, app_theme::ActionCategory::Neutral, ui_icons::kCollapse)->setWidth(140);
+  if (!embeddedTab_ || page_ != Page::Dashboard)
+    action(header, i18n::tr("streak.ui.back"), [this] { back(); }, app_theme::ActionCategory::Neutral, ui_icons::kCollapse)->setWidth(140);
   root_->addView(header);
   scroll_ = new ScrollView();
   scroll_->setFlex(1)->setMinHeight(0);
@@ -293,8 +335,10 @@ void StreakScene::build() {
   addView(portal_);
   resetChallengeModal();
   layout();
-  if (auto *invalid = root_->findViewByName("streakInvalidField"))
-    scroll_->setScrollOffset(std::max(0, invalid->getY() - scroll_->getY() - 48));
+  renderedPage_ = page_;
+  scroll_->setScrollOffset(scrollOffsets_[static_cast<std::size_t>(page_)]);
+  if (auto *invalid = body->findViewByName("streakInvalidField"))
+    scroll_->setScrollOffset(std::max(0.0F, scroll_->getScrollOffset() + invalid->getY() - scroll_->getY() - 48));
 }
 void StreakScene::dashboard(View *body) {
   if (state_.days.empty()) {
@@ -314,19 +358,18 @@ void StreakScene::dashboard(View *body) {
   if (streakProgress_ && streakProgressStartedAt_ == 0) {
     streakProgressStartedAt_ = SDL_GetTicks();
     goalIgnitionSoundPending_ = streakProgress_->reachedDailyGoal;
+    if (streakProgress_->reachedDailyGoal) goalIgnitionStartedAt_ = streakProgressStartedAt_;
     roundCue_.start(*streakProgress_, streakProgressStartedAt_);
   }
   auto *summary = card(body);
   summary->setName(complete ? "streakDayComplete" : "streakDailyHero");
-  summary->addView(new StreakFlameView(day.played, complete, false,
-      streakProgress_ && streakProgress_->reachedDailyGoal
-          ? std::optional<std::uint64_t>(streakProgressStartedAt_) : std::nullopt));
+  summary->addView(new StreakFlameView(day.played, complete, false, goalIgnitionStartedAt_));
   label(summary, i18n::tr(complete ? "streak.ui.complete" : "streak.ui.keep_going"), 30);
   label(summary, numberText("streak.ui.streak_count", state_.currentStreak), 44);
   label(summary, i18n::plural("streak.ui.best_count", state_.bestStreak).resolve(), 18)->setThemedColor(app_theme::textSecondary);
   label(summary, std::to_string(std::min<std::int64_t>(day.points, day.config.dailyGoal)) +
       " / " + std::to_string(day.config.dailyGoal), 34);
-  meter(summary, day.points, day.config.dailyGoal, complete);
+  meter(summary, day.points, day.config.dailyGoal, meterTracks_[0], meterTargets_[0], complete);
   label(summary, i18n::tr(complete ? "streak.ui.complete_help" :
               day.played ? "streak.ui.protected" : "streak.ui.pending"), 20);
   if (complete)
@@ -360,15 +403,7 @@ void StreakScene::dashboard(View *body) {
     if (complete)
       label(assignmentCard, std::string(i18n::tr("streak.ui.bonus_today")) + " " + std::to_string(p.bonusRounds), 18);
     label(assignmentCard, levelsText(p.requirement), 18);
-    lampLabel(assignmentCard, requirements(p.requirement), p.requirement.targetLamp);
-    lampLabel(assignmentCard, comparison("streak.ui.previous_lamp", p.requirement.eligibleOrBelow
-                ? comparison("streak.ui.at_most", lampText(p.requirement.eligibleLamp))
-                : lampText(p.requirement.eligibleLamp)), p.requirement.eligibleLamp, 18);
-    if (p.requirement.eligibleScoreRank != -2) {
-      auto rank = streak::scoreRankLabel(p.requirement.eligibleScoreRank);
-      if (p.requirement.eligibleScoreOrBelow) rank = comparison("streak.ui.at_most", rank);
-      label(assignmentCard, comparison("streak.ui.previous_score", rank), 18);
-    }
+    assignmentConditions(assignmentCard, p.requirement);
     assignmentCard->addView(new AssignmentProgressView(p,
         change, streakProgressStartedAt_));
     if (complete && bonusAvailable && streak::canResetExtraChallenge(p))
@@ -393,10 +428,10 @@ void StreakScene::dashboard(View *body) {
   auto *periods = card(body);
   label(periods, i18n::tr("streak.ui.week_progress"), 20);
   label(periods, std::to_string(totals.weeklyPoints) + " / " + std::to_string(day.config.weeklyGoal), 26);
-  meter(periods, totals.weeklyPoints, day.config.weeklyGoal);
+  meter(periods, totals.weeklyPoints, day.config.weeklyGoal, meterTracks_[1], meterTargets_[1]);
   label(periods, i18n::tr("streak.ui.month_progress"), 20);
   label(periods, std::to_string(totals.monthlyPoints) + " / " + std::to_string(day.config.monthlyGoal), 26);
-  meter(periods, totals.monthlyPoints, day.config.monthlyGoal);
+  meter(periods, totals.monthlyPoints, day.config.monthlyGoal, meterTracks_[2], meterTargets_[2]);
   auto *wallet = card(body);
   label(wallet, i18n::plural("streak.ui.savings_count", state_.savings).resolve(), 26);
   label(wallet, numberText("streak.ui.freezes_count", state_.freezes), 21)->setThemedColor(app_theme::cyan);
@@ -456,7 +491,7 @@ void StreakScene::resetChallengeModal() {
   label(details, original->name, 23);
   label(details, i18n::tr("streak.ui.reset_challenge_help"), 20);
   label(details, levelsText(*original), 18);
-  lampLabel(details, requirements(*original), original->targetLamp, 18);
+  assignmentConditions(details, *original);
   scroll->setContentView(details);
   panel->addView(scroll);
   auto *buttons = new View();
@@ -493,7 +528,8 @@ void StreakScene::routine(View *body) {
   for (std::size_t i = 0; i < draft_.assignments.size(); ++i) {
     const auto &a = draft_.assignments[i];
     label(assignments, a.name + "  ·  " + levelsText(a), 22);
-    lampLabel(assignments, i18n::plural("streak.ui.chart_count", a.chartCount).resolve() + " · " + requirements(a) + " · " + i18n::plural("streak.ui.reward", a.points).resolve(), a.targetLamp, 18);
+    label(assignments, i18n::plural("streak.ui.chart_count", a.chartCount).resolve() + " · " + i18n::plural("streak.ui.reward", a.points).resolve(), 18);
+    assignmentConditions(assignments, a);
     auto *row = new View();
     row->setFlexDirection(FlexDirection::Row)->setGap(10)->setFlexShrink(0);
     action(row, i18n::tr("streak.ui.edit_assignment"), [this, i] { later([this, i] { editAssignment(static_cast<int>(i)); }); }, app_theme::ActionCategory::Neutral, ui_icons::kPen)->setFlex(1);
@@ -505,6 +541,7 @@ void StreakScene::routine(View *body) {
   action(body, i18n::tr("streak.ui.save"), [this] { later([this] { saveRoutine(); }); }, app_theme::ActionCategory::Primary, ui_icons::kSave);
 }
 void StreakScene::editAssignment(int index) {
+  scrollOffsets_[static_cast<std::size_t>(Page::Assignment)] = 0;
   adjustingToday_ = false;
   fieldErrors_.clear();
   editingIndex_ = index;

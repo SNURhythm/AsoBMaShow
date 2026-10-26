@@ -119,6 +119,20 @@ int main() {
                 FixtureCompiler.from_environment(shared_headers=True).build([source], binary, source.parent)
                 subprocess.run([str(binary)], check=True, timeout=5)
 
+    def test_rebuild_keeps_scroll_and_animation_phase(self):
+        root = Path(__file__).resolve().parents[1]
+        scene = (root / "src/scene/StreakScene.cpp").read_text()
+        fixture = (root / "tests/streak_rebuild_fixture.cpp").read_text()
+        fixture = fixture.replace("BUILD", extract(scene, "void StreakScene::build("))
+        fixture = fixture.replace("METER", extract(scene, "void meter("))
+        with tempfile.TemporaryDirectory(prefix="asobmashow-streak-rebuild-") as directory:
+            source = Path(directory) / "rebuild.cpp"
+            binary = Path(directory) / "rebuild"
+            source.write_text(fixture)
+            FixtureCompiler.from_environment(shared_headers=True).build(
+                [source], binary, source.parent, includes=(root / "src",))
+            subprocess.run([str(binary)], check=True, timeout=5)
+
     def test_actions_complete_once_and_allow_the_next_action(self):
         root = Path(__file__).resolve().parents[1]
         scene = (root / "src/scene/Scene.h").read_text()
