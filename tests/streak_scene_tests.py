@@ -8,6 +8,53 @@ from support.fixture_compiler import FixtureCompiler
 
 
 class StreakSceneTests(unittest.TestCase):
+    def test_result_drawer_retry_capture_and_dismissal(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "src/scene/ResultScene.cpp").read_text()
+        methods = "\n".join(extract(source, signature) for signature in (
+            "void ResultScene::prepareStreakProgress()",
+            "bool ResultScene::streakOwnsInput() const",
+            "void ResultScene::dismissStreakProgress(",
+            "bool ResultScene::handleStreakProgressEvent("))
+        capture = extract(source, ".captureLegacyInputGeneration = [this]")
+        capture = capture[capture.index("[this]"):]
+        browser = extract(source, ".openBrowser = [this]")
+        browser = browser[browser.index("[this]"):]
+        fixture = (root / "tests/streak_result_input_fixture.cpp").read_text().replace("PRODUCTION_METHODS", methods)
+        fixture = fixture.replace("CAPTURE_INPUT", capture).replace("OPEN_BROWSER", browser)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-streak-result-") as directory:
+            source = Path(directory) / "result.cpp"
+            binary = Path(directory) / "result"
+            source.write_text(fixture)
+            FixtureCompiler.from_environment(shared_headers=True).build(
+                [source, root / "src/streak/StreakModel.cpp"], binary, source.parent,
+                includes=(root / "src",))
+            subprocess.run([str(binary)], check=True, timeout=5)
+
+    def test_sounds_coexist_with_loaded_skin_audio(self):
+        root = Path(__file__).resolve().parents[1]
+        sounds = (root / "src/streak/StreakSounds.h").read_text()
+        sounds = sounds[sounds.index("namespace streak {"):]
+        fixture = (root / "tests/streak_sound_fixture.cpp").read_text().replace("SOUNDS", sounds)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-streak-sounds-") as directory:
+            source = Path(directory) / "sounds.cpp"
+            binary = Path(directory) / "sounds"
+            source.write_text(fixture)
+            FixtureCompiler.from_environment(shared_headers=True).build([source], binary, source.parent)
+            subprocess.run([str(binary)], check=True, timeout=5)
+
+    def test_adjustment_rechecks_day_inside_transaction(self):
+        root = Path(__file__).resolve().parents[1]
+        method = extract((root / "src/repositories/ScoreRepositoryStreak.cpp").read_text(),
+                         "bool ScoreRepository::AdjustStreakAssignment(")
+        fixture = (root / "tests/streak_adjust_transaction_fixture.cpp").read_text().replace("PRODUCTION_METHOD", method)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-streak-midnight-") as directory:
+            source = Path(directory) / "midnight.cpp"
+            binary = Path(directory) / "midnight"
+            source.write_text(fixture)
+            FixtureCompiler.from_environment(shared_headers=True).build([source], binary, source.parent)
+            subprocess.run([str(binary)], check=True, timeout=5)
+
     def test_actions_complete_once_and_allow_the_next_action(self):
         root = Path(__file__).resolve().parents[1]
         scene = (root / "src/scene/Scene.h").read_text()

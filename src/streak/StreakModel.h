@@ -96,6 +96,8 @@ struct Summary {
 [[nodiscard]] bool matches(const Assignment &assignment, const Play &play);
 void advance(State &state, DayId day);
 DayId configure(State &state, const Config &config, DayId day);
+// Adjust today only; preserve rewards, counted charts and partial progress.
+void adjustAssignment(State &, const Assignment &, DayId);
 [[nodiscard]] int bonusPoints(const Day &day);
 [[nodiscard]] int bonusLimit(const Day &day);
 std::int64_t record(State &state, const Play &play, std::uint32_t randomChoice);

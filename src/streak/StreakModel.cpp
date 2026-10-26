@@ -221,6 +221,26 @@ DayId configure(State &s, const Config &config, DayId day) {
   recompute(s);
   return effective;
 }
+void adjustAssignment(State &s, const Assignment &replacement, DayId dayId) {
+  advance(s, dayId);
+  if (s.days.empty() || s.days.rbegin()->first != dayId)
+    throw std::invalid_argument("Only today's assignments can be adjusted.");
+  auto &day = s.days.at(dayId);
+  auto found = std::find_if(day.assignments.begin(), day.assignments.end(),
+      [&](const Progress &p) { return p.requirement.id == replacement.id; });
+  if (found == day.assignments.end()) throw std::invalid_argument("Assignment no longer exists.");
+  if (replacement.points != found->requirement.points)
+    throw std::invalid_argument("Today's reward stays unchanged.");
+  auto config = day.config;
+  const auto index = static_cast<std::size_t>(found - day.assignments.begin());
+  config.assignments[index] = replacement;
+  if (const auto error = validate(config); !error.empty()) throw std::invalid_argument(error);
+  day.config = std::move(config);
+  found->requirement = replacement;
+  if (day.points >= day.config.dailyGoal) found->requirement.chartCount = 1;
+  // Keep the daily chart ledger, including partial achievements. Editing never
+  // awards points; even a reduced quota needs another distinct qualifying play.
+}
 int bonusLimit(const Day &day) {
   return day.assignments.empty() ? 0 : sharedDailyBonusLimit;
 }

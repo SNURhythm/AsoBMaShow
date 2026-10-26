@@ -2,6 +2,7 @@
 #include "SceneManager.h"
 #include "../Uuid.h"
 #include "../rendering/common.h"
+#include "../rendering/ResponsiveUi.h"
 #include "../view/ActionButtonStyle.h"
 #include "../view/AppTheme.h"
 #include "../view/Button.h"
@@ -10,6 +11,7 @@
 #include "../view/ScrollView.h"
 #include "../view/TextInputBox.h"
 #include "../view/TextView.h"
+#include "../view/ProgressMotionView.h"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -18,6 +20,19 @@
 #endif
 
 namespace {
+View *card(View *parent) {
+  auto *view = new View();
+  view->setFlexDirection(FlexDirection::Column)->setGap(10)->setPadding(Edge::All, 20)
+      ->setFlexShrink(0)->setCornerRadius(24)->setThemedBackgroundColor(app_theme::panel);
+  parent->addView(view);
+  return view;
+}
+std::string numberText(const char *key, std::int64_t value) {
+  return i18n::format(key, {{"count", std::to_string(value)}});
+}
+void meter(View *parent, std::int64_t value, std::int64_t goal, bool complete = false) {
+  parent->addView(new ProgressMotionView(goal > 0 ? float(value) / goal : 0, complete));
+}
 TextView *label(View *parent, const std::string &value, int size = 21) {
   auto *text = new TextView(app_theme::font, size);
   text->setText(value);
@@ -30,13 +45,14 @@ TextView *label(View *parent, const std::string &value, int size = 21) {
 Button *action(View *parent, const std::string &value, std::function<void()> click,
                app_theme::ActionCategory category = app_theme::ActionCategory::Neutral) {
   auto *button = new Button();
-  button->setHeight(52)->setMinWidth(0)->setFlexShrink(0);
+  button->setHeight(rendering::compactMenuCanvasActive ? 66 : 52)->setMinWidth(0)->setFlexShrink(0);
   auto *text = new TextView(app_theme::font, 21);
   text->setText(value);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
   button->setContentView(text);
   action_button::applyStyle(button, text, category);
+  button->setCornerRadius(16);
   button->setOnClickListener(std::move(click));
   parent->addView(button);
   return button;
@@ -44,7 +60,7 @@ Button *action(View *parent, const std::string &value, std::function<void()> cli
 void field(View *parent, const std::string &caption, std::string &value) {
   label(parent, caption, 18);
   auto *input = new TextInputBox(app_theme::font, 22);
-  input->setHeight(52)->setFlexShrink(0)->setPadding(Edge::All, 10);
+  input->setHeight(rendering::compactMenuCanvasActive ? 66 : 52)->setFlexShrink(0)->setPadding(Edge::All, 10)->setCornerRadius(14);
   input->setThemedBackgroundColor(app_theme::insetSurface);
   input->setThemedColor(app_theme::textPrimary);
   input->setEditingText(value);
@@ -66,7 +82,7 @@ void select(View *parent, OverlayPortal *portal, const std::string &caption,
     change(id);
   }}, portal);
   *ptr = dropdown;
-  dropdown->setHeight(52)->setFlexShrink(0);
+  dropdown->setHeight(rendering::compactMenuCanvasActive ? 66 : 52)->setFlexShrink(0);
   dropdown->setTriggerWidth(300);
   dropdown->refresh(*state);
   parent->addView(dropdown);
@@ -133,8 +149,13 @@ void StreakScene::build() {
   root_->addView(scroll_);
   auto *body = new View();
   body->setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch)
-      ->setGap(10)->setPadding(Edge::Bottom, 24);
-  scroll_->setContentView(body);
+      ->setGap(16)->setPadding(Edge::Bottom, 24);
+  auto *content = new View();
+  content->setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignCenter);
+  body->setWidthPercent(100);
+  YGNodeStyleSetMaxWidth(body->getNode(), 960);
+  content->addView(body);
+  scroll_->setContentView(content);
   if (!message_.empty()) label(body, message_, 19);
   if (loadFailed_) {
     action(body, i18n::tr("streak.ui.retry"), [this] { later([this] { reload(); }); });
@@ -146,6 +167,8 @@ void StreakScene::build() {
 }
 void StreakScene::dashboard(View *body) {
   if (state_.days.empty()) {
+    body = card(body);
+    body->addView(new RhythmSparkView());
     label(body, i18n::tr("streak.ui.welcome"), 26);
     label(body, i18n::tr("streak.ui.rules"));
     action(body, i18n::tr("streak.ui.create"), [this] { later([this] { page_ = Page::Routine; }); }, app_theme::ActionCategory::Primary);
@@ -157,37 +180,19 @@ void StreakScene::dashboard(View *body) {
   const int bonus = streak::bonusPoints(day);
   const int bonusLimit = streak::bonusLimit(day);
   const bool bonusAvailable = bonus < bonusLimit;
-  auto *summary = body;
-  if (complete) {
-    summary = new View();
-    summary->setFlexDirection(FlexDirection::Column)->setGap(10)->setPadding(Edge::All, 20)
-        ->setFlexShrink(0)->setThemedBackgroundColor(app_theme::panelStrong);
-    summary->setName("streakDayComplete");
-    label(summary, i18n::tr("streak.ui.complete"), 32)->setThemedColor(app_theme::lime);
-    body->addView(summary);
-  }
-  label(summary, std::to_string(state_.currentStreak) + " day streak", 38);
-  label(summary, "Best: " + std::to_string(state_.bestStreak) + "  ·  " + streak::dateLabel(totals.day), 18);
+  auto *summary = card(body);
+  summary->setName(complete ? "streakDayComplete" : "streakDailyHero");
+  summary->addView(new RhythmSparkView(complete));
+  label(summary, i18n::tr(complete ? "streak.ui.complete" : "streak.ui.keep_going"), 30);
+  label(summary, numberText("streak.ui.streak_count", state_.currentStreak), 44);
+  label(summary, numberText("streak.ui.best_count", state_.bestStreak), 18)->setThemedColor(app_theme::textSecondary);
   label(summary, std::to_string(std::min<std::int64_t>(day.points, day.config.dailyGoal)) +
-      " / " + std::to_string(day.config.dailyGoal) + " points today", 28);
-  label(summary, complete ? i18n::tr("streak.ui.complete_help") :
-              day.played ? i18n::tr("streak.ui.protected") : i18n::tr("streak.ui.pending"), 20);
+      " / " + std::to_string(day.config.dailyGoal), 34);
+  meter(summary, day.points, day.config.dailyGoal, complete);
+  label(summary, i18n::tr(complete ? "streak.ui.complete_help" :
+              day.played ? "streak.ui.protected" : "streak.ui.pending"), 20);
   if (complete)
     action(summary, i18n::tr("streak.ui.done"), [this] { back(); }, app_theme::ActionCategory::Confirmation);
-  label(body, "This week: " + std::to_string(totals.weeklyPoints) + " / " + std::to_string(day.config.weeklyGoal) +
-              "   ·   This month: " + std::to_string(totals.monthlyPoints) + " / " + std::to_string(day.config.monthlyGoal), 20);
-  label(body, "Savings: " + std::to_string(state_.savings) + " points   ·   Freezes: " + std::to_string(state_.freezes) + " / 2", 23);
-  action(body, "Buy a freeze · " + std::to_string(streak::freezePrice(state_)) + " points", [this] {
-    later([this] {
-      std::string error;
-      message_ = context.scoreRepository.BuyStreakFreeze(error) ? i18n::tr("streak.ui.freeze_bought") : error;
-      reload();
-    });
-  });
-  label(body, i18n::tr("streak.ui.freeze_price_help"), 18);
-  action(body, i18n::tr("streak.ui.edit"), [this] { later([this] { message_.clear(); page_ = Page::Routine; }); });
-  if (state_.configurations.rbegin()->first > totals.day)
-    label(body, "Routine changes scheduled for " + streak::dateLabel(state_.configurations.rbegin()->first), 19);
   if (complete) {
     label(body, std::string(i18n::tr("streak.ui.shared_bonus")) + " " + std::to_string(bonus) +
                 " / " + std::to_string(bonusLimit), 20);
@@ -200,38 +205,72 @@ void StreakScene::dashboard(View *body) {
   if (!complete && day.assignments.empty()) label(body, i18n::tr("streak.ui.no_assignments"));
   for (const auto &p : day.assignments) {
     if (complete && (!showOptional_ || !bonusAvailable)) break;
-    auto *card = new View();
-    card->setFlexDirection(FlexDirection::Column)->setGap(6)->setPadding(Edge::All, 14)
-        ->setFlexShrink(0)->setThemedBackgroundColor(app_theme::insetSurface);
+    auto *assignmentCard = card(body);
     const auto reward = complete ? 1 :
         std::min<std::int64_t>(p.requirement.points, day.config.dailyGoal - day.points);
-    label(card, p.requirement.name + "  ·  +" + std::to_string(reward) + " points", 24);
+    label(assignmentCard, p.requirement.name + "  ·  +" + std::to_string(reward) + " points", 24);
     if (complete)
-      label(card, std::string(i18n::tr("streak.ui.bonus_today")) + " " + std::to_string(p.bonusRounds), 18);
-    label(card, std::to_string(complete ? 0 : p.charts) + " / " +
+      label(assignmentCard, std::string(i18n::tr("streak.ui.bonus_today")) + " " + std::to_string(p.bonusRounds), 18);
+    label(assignmentCard, std::to_string(complete ? 0 : p.charts) + " / " +
                 std::to_string(complete ? 1 : p.requirement.chartCount) +
                 " distinct charts  ·  Round " + std::to_string(p.completedRounds + 1), 22);
-    label(card, levelsText(p.requirement), 18);
-    label(card, requirements(p.requirement), 19);
-    label(card, "Previous lamp: " + streak::lampLabel(p.requirement.eligibleLamp) +
+    label(assignmentCard, levelsText(p.requirement), 18);
+    label(assignmentCard, requirements(p.requirement), 19);
+    label(assignmentCard, "Previous lamp: " + streak::lampLabel(p.requirement.eligibleLamp) +
                 (p.requirement.eligibleOrBelow ? " or below" : ""), 18);
-    body->addView(card);
+    meter(assignmentCard, complete ? 0 : p.charts, complete ? 1 : p.requirement.chartCount);
+    action(assignmentCard, i18n::tr("streak.ui.adjust_today"), [this, requirement = p.requirement] {
+      later([this, requirement] {
+        editAssignment(-1);
+        adjustingToday_ = true;
+        assignment_ = requirement;
+        name_ = requirement.name;
+        count_ = std::to_string(requirement.chartCount);
+        points_ = std::to_string(requirement.points);
+        rate_ = std::to_string(100.0 * requirement.scoreNumerator / requirement.scoreDenominator);
+      });
+    });
   }
+  auto *periods = card(body);
+  label(periods, i18n::tr("streak.ui.week_progress"), 20);
+  label(periods, std::to_string(totals.weeklyPoints) + " / " + std::to_string(day.config.weeklyGoal), 26);
+  meter(periods, totals.weeklyPoints, day.config.weeklyGoal);
+  label(periods, i18n::tr("streak.ui.month_progress"), 20);
+  label(periods, std::to_string(totals.monthlyPoints) + " / " + std::to_string(day.config.monthlyGoal), 26);
+  meter(periods, totals.monthlyPoints, day.config.monthlyGoal);
+  auto *wallet = card(body);
+  label(wallet, numberText("streak.ui.savings_count", state_.savings), 26);
+  label(wallet, numberText("streak.ui.freezes_count", state_.freezes), 21)->setThemedColor(app_theme::cyan);
+  action(wallet, numberText("streak.ui.buy_freeze", streak::freezePrice(state_)), [this] {
+    later([this] {
+      std::string error;
+      const bool bought = context.scoreRepository.BuyStreakFreeze(error);
+      message_ = bought ? i18n::tr("streak.ui.freeze_bought") : error;
+      if (bought) streakSounds_.play(context.jukebox.audioRuntime(), streak::Sound::Freeze);
+      reload();
+    });
+  }, app_theme::ActionCategory::Information);
+  label(wallet, i18n::tr("streak.ui.freeze_price_help"), 18);
+  action(body, i18n::tr("streak.ui.edit"), [this] { later([this] { message_.clear(); page_ = Page::Routine; }); });
+  if (state_.configurations.rbegin()->first > totals.day)
+    label(body, "Routine changes scheduled for " + streak::dateLabel(state_.configurations.rbegin()->first), 19);
   label(body, i18n::tr("streak.ui.milestones"), 27);
-  std::string badges;
+  auto *badges = card(body);
+  auto *badgeRow = new View();
+  badgeRow->setFlexDirection(FlexDirection::Row)->setFlexWrap(YGWrapWrap)->setGap(10);
+  badges->addView(badgeRow);
   for (int n : {7, 14, 30, 50, 100, 365}) {
-    if (!badges.empty()) badges += "  ·  ";
-    badges += std::to_string(n) + "d" + (state_.milestones.contains("streak:" + std::to_string(n)) ? " [earned]" : "");
+    const bool earned = state_.milestones.contains("streak:" + std::to_string(n));
+    auto *badge = label(badgeRow, std::to_string(n), 24);
+    badge->setWidth(76)->setHeight(64)->setPadding(Edge::All, 12)->setCornerRadius(18);
+    badge->setAlign(TextView::CENTER);
+    badge->setThemedBackgroundColor(earned ? app_theme::lime : app_theme::insetSurface);
+    badge->setThemedColor(earned ? app_theme::panel : app_theme::textMuted);
   }
-  label(body, badges);
-  int weeks = 0, months = 0;
-  for (const auto &id : state_.milestones) {
-    weeks += id.starts_with("week:"); months += id.starts_with("month:");
-  }
-  label(body, "Weekly goals earned: " + std::to_string(weeks) + "  ·  Monthly goals earned: " + std::to_string(months), 19);
-  label(body, i18n::tr("streak.ui.rules"), 18);
+
 }
 void StreakScene::routine(View *body) {
+  body = card(body);
   label(body, i18n::tr("streak.ui.routine"), 28);
   label(body, i18n::tr("streak.ui.edit_help"), 18);
   field(body, i18n::tr("streak.ui.daily"), daily_);
@@ -251,6 +290,7 @@ void StreakScene::routine(View *body) {
   action(body, i18n::tr("streak.ui.save"), [this] { later([this] { saveRoutine(); }); }, app_theme::ActionCategory::Primary);
 }
 void StreakScene::editAssignment(int index) {
+  adjustingToday_ = false;
   editingIndex_ = index;
   assignment_ = index < 0 ? streak::Assignment{} : draft_.assignments[index];
   if (index < 0) { assignment_.id = uuid::generateV4(); assignment_.name = "Daily practice"; }
@@ -262,6 +302,8 @@ void StreakScene::editAssignment(int index) {
   message_.clear();
 }
 void StreakScene::editor(View *body) {
+  body = card(body);
+  if (adjustingToday_) label(body, i18n::tr("streak.ui.adjust_help"), 18);
   field(body, i18n::tr("streak.ui.name"), name_);
   auto session = context.chartRepository.OpenSession();
   const auto tables = session ? session->SelectDifficultyTables() : std::vector<DifficultyTableInfo>{};
@@ -310,7 +352,7 @@ void StreakScene::editor(View *body) {
   });
   field(body, i18n::tr("streak.ui.custom_rate"), rate_);
   field(body, i18n::tr("streak.ui.count"), count_);
-  field(body, i18n::tr("streak.ui.points"), points_);
+  if (!adjustingToday_) field(body, i18n::tr("streak.ui.points"), points_);
   label(body, i18n::tr("streak.ui.repeat_help"), 18);
   action(body, i18n::tr("streak.ui.keep"), [this] { later([this] { acceptAssignment(); }); }, app_theme::ActionCategory::Primary);
 }
@@ -331,6 +373,18 @@ void StreakScene::acceptAssignment() {
     auto check = draft_;
     check.assignments = {assignment_};
     if (auto error = streak::validate(check); !error.empty()) throw std::invalid_argument(error);
+    if (adjustingToday_) {
+      if (checkedDay_ != streak::today())
+        throw std::runtime_error("The day changed. Return to today's dashboard and try again.");
+      std::string error;
+      if (!context.scoreRepository.AdjustStreakAssignment(assignment_, checkedDay_, error))
+        throw std::runtime_error(error);
+      adjustingToday_ = false;
+      page_ = Page::Dashboard;
+      reload();
+      message_ = i18n::tr("streak.ui.adjusted");
+      return;
+    }
     if (editingIndex_ < 0) draft_.assignments.push_back(assignment_);
     else draft_.assignments.at(editingIndex_) = assignment_;
     page_ = Page::Routine;
@@ -365,7 +419,7 @@ void StreakScene::layout() {
   scroll_->refreshContentLayout();
 }
 void StreakScene::back() {
-  if (page_ == Page::Assignment) { later([this] { page_ = Page::Routine; message_.clear(); }); return; }
+  if (page_ == Page::Assignment) { later([this] { page_ = adjustingToday_ ? Page::Dashboard : Page::Routine; adjustingToday_ = false; message_.clear(); }); return; }
   if (page_ == Page::Routine) { later([this] { page_ = Page::Dashboard; message_.clear(); reload(); }); return; }
   defer([this] { (void)returnToScene(*context.sceneManager, returnTarget_); return false; }, 0, true);
 }

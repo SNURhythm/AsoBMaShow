@@ -87,7 +87,6 @@ State load(sqlite3 *db) {
           progress.earnedPoints > static_cast<std::int64_t>(progress.completedRounds - progress.bonusRounds) *
               progress.requirement.points + progress.bonusRounds ||
           progress.charts < 0 ||
-          progress.charts >= progress.requirement.chartCount ||
           static_cast<std::uint64_t>(progress.charts) + progress.completedRounds > progress.usedCharts.size() ||
           progress.usedCharts.contains("") || (!day.played && !progress.usedCharts.empty()))
         throw std::runtime_error("Invalid assignment progress.");

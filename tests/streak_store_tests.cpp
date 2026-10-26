@@ -201,6 +201,26 @@ int main() {
   bad = partial; bad.days.begin()->second.assignments[0].chartProgress.at("promotion").lamp = 250;
   CHECK(rejects(bad));
 
+  // Immediate edits retain partial progress even when the new quota is lower.
+  State adjusted;
+  auto moreCharts = config;
+  moreCharts.dailyGoal = 100;
+  moreCharts.assignments[0].chartCount = 3;
+  configure(adjusted, moreCharts, today());
+  attempt = {.day=today(), .chart="kept", .levels={{"https://table","0",""}}, .lamp=300};
+  record(adjusted, attempt, 0);
+  auto replacement = moreCharts.assignments[0];
+  replacement.chartCount = 1;
+  adjustAssignment(adjusted, replacement, today());
+  save(db, adjusted);
+  adjusted = load(db);
+  CHECK(adjusted.days.at(today()).assignments[0].charts == 1);
+  CHECK(record(adjusted, attempt, 0) == 0);
+  attempt.chart = "new";
+  CHECK(record(adjusted, attempt, 0) == config.assignments[0].points);
+  save(db, adjusted);
+  CHECK(load(db).days.at(today()).points == config.assignments[0].points);
+
   // Unsupported or damaged state must be reported, never silently replaced.
   CHECK(sqlite3_exec(db, "UPDATE streak_state SET body = '{\"version\":99}'", nullptr, nullptr, nullptr) == SQLITE_OK);
   bool rejected = false;

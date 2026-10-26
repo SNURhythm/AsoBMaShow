@@ -1,5 +1,7 @@
 #include <cassert>
 #include "ui/PresentationSchedule.h"
+#include "streak/StreakResultPresentation.h"
+std::uint64_t SDL_GetTicks() { return 100; }
 
 enum class PresentationMode { BuiltIn, Skin };
 struct Presentation {
@@ -58,6 +60,7 @@ struct MainMenuScene : Scene {
   bool needsContinuousPresentation() const override;
 };
 struct ResultScene : Scene {
+  streak::ResultPresentation streakPresentation_;
   void *resultSkinSession = nullptr;
   bool needsContinuousPresentation() const override;
 };

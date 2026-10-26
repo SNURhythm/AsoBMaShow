@@ -1,4 +1,5 @@
 #include "streak/StreakModel.h"
+#include "streak/StreakResultPresentation.h"
 #include <cstdlib>
 #include <iostream>
 #include <stdexcept>
@@ -17,6 +18,37 @@ Play play(DayId day, std::string chart) {
           .lamp = 300, .score = 180, .maxScore = 200};
 }
 int main() {
+  // Result skins retain design coordinates; the overlay must retain point sizes.
+  const auto phone = resultOverlayMetrics(1080, 2337, 3, 1170.0F/1080, 0, 0, 0, 0);
+  CHECK(std::abs(phone.width / phone.unit - 366) < 1);
+  CHECK(std::abs(phone.unit - 1080.0F/390) < .01F);
+  const auto desktop = resultOverlayMetrics(1920, 1080, 2, 2560.0F/1920, 0, 0, 0, 0);
+  CHECK(std::abs(desktop.width / desktop.unit - 440) < 1);
+  ResultPresentation drawer;
+  ResultEligibility eligibility{.saved=false, .manual=true, .currentDay=true, .activeRoutine=true};
+  CHECK(!drawer.arm(eligibility, 0));
+  eligibility.saved = true;
+  CHECK(drawer.arm(eligibility, 100));
+  CHECK(drawer.active() && !drawer.open(549) && drawer.open(550));
+  CHECK(!drawer.open(551) && drawer.visible());
+  CHECK(drawer.fraction(970) == 1 && !drawer.animating(970));
+  drawer.dismiss();
+  CHECK(!drawer.active() && !drawer.arm(eligibility, 1000));
+  for (int excluded = 0; excluded < 6; ++excluded) {
+    auto e = eligibility;
+    if (excluded == 0) e.manual = false;
+    if (excluded == 1) e.practice = true;
+    if (excluded == 2) e.replay = true;
+    if (excluded == 3) e.course = true;
+    if (excluded == 4) e.currentDay = false;
+    if (excluded == 5) e.activeRoutine = false;
+    CHECK(!showsResultProgress(e));
+  }
+  ResultPresentation earlyDismiss;
+  CHECK(earlyDismiss.arm(eligibility, 0));
+  earlyDismiss.dismiss();
+  CHECK(!earlyDismiss.open(9999));
+
   State s;
   configure(s, config(100, 60, 2), 20000);
   CHECK(record(s, play(20000, "one"), 0) == 0);
@@ -325,6 +357,30 @@ int main() {
   CHECK(record(delayed, retry, 0) == 0);
   retry.previousLamp = 200; // An earlier eligible attempt can contribute.
   CHECK(record(delayed, retry, 0) == 10);
+
+  // A stuck assignment can be adjusted today without resetting its ledger.
+  State adjusted;
+  configure(adjusted, config(100, 30, 3), 39000);
+  record(adjusted, play(39000, "counted"), 0);
+  auto replacement = adjusted.days.at(39000).assignments[0].requirement;
+  replacement.levels = {{"table", "1", "sl1"}};
+  replacement.chartCount = 1;
+  adjustAssignment(adjusted, replacement, 39000);
+  CHECK(adjusted.days.at(39000).points == 0);
+  CHECK(adjusted.days.at(39000).assignments[0].charts == 1);
+  CHECK(record(adjusted, play(39000, "counted"), 0) == 0);
+  auto fresh = play(39000, "new"); fresh.levels[0].level = "1";
+  CHECK(record(adjusted, fresh, 0) == 30);
+  adjustAssignment(adjusted, replacement, 39000);
+  CHECK(record(adjusted, fresh, 0) == 0);
+  CHECK(adjusted.days.at(39000).points == 30);
+  replacement.points = 100;
+  bool rejectedReward = false;
+  try { adjustAssignment(adjusted, replacement, 39000); }
+  catch (const std::invalid_argument &) { rejectedReward = true; }
+  CHECK(rejectedReward);
+  advance(adjusted, 39001);
+  CHECK(adjusted.days.at(39001).assignments[0].requirement.chartCount == 3);
 
   std::cout << "streak model tests passed\n";
 }

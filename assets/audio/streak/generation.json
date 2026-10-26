@@ -1,0 +1,164 @@
+{
+  "earshot_commit": "591fa3e028032e6dce56620a20e932e35667e8d8",
+  "sounds": {
+    "progress": {
+      "id": "ui_pop/step",
+      "seed": 1,
+      "sr": 48000,
+      "onset_s": 0.0025,
+      "peak_s": 0.0445,
+      "end_s": 0.163,
+      "dur_s": 0.1871,
+      "peak_db": -9.0,
+      "lufs_m_max": -23.94,
+      "edits": {},
+      "checks": {
+        "ok": true,
+        "warnings": [],
+        "notes": [],
+        "summary": "ui_pop/step: clean",
+        "measures": {
+          "clicks": 0,
+          "edge_db": -240.0,
+          "clip_runs": 0,
+          "overs": 0,
+          "dc_db": -120.1,
+          "ring_z": 4.6,
+          "trunc_db": null,
+          "silence_ms": 0.0,
+          "bump_db": 0.0,
+          "attack_ms": 20.75,
+          "t40_ms": 110.0,
+          "crest_db": 8.3,
+          "res_db": 19.5,
+          "res_hz": 1446,
+          "peak_dbfs": -9.0,
+          "live_ms": 127.5
+        },
+        "glide": {
+          "tonal_share": 0.43,
+          "rise_st": 0.0,
+          "from_s": null,
+          "to_s": null
+        },
+        "layers": {
+          "attacks": [
+            0.043
+          ],
+          "count": 1,
+          "pre_swell_ms": 0.0
+        },
+        "context": {
+          "category": "ui_pop",
+          "sound": "ui_pop/step"
+        }
+      }
+    },
+    "complete": {
+      "id": "mallet/up4",
+      "seed": 1,
+      "sr": 48000,
+      "onset_s": 0.0,
+      "peak_s": 0.3355,
+      "end_s": 0.716,
+      "dur_s": 0.7486,
+      "peak_db": -9.0,
+      "lufs_m_max": -15.39,
+      "edits": {},
+      "checks": {
+        "ok": true,
+        "warnings": [],
+        "notes": [],
+        "summary": "mallet/up4: clean",
+        "measures": {
+          "clicks": 0,
+          "edge_db": -240.0,
+          "clip_runs": 0,
+          "overs": 0,
+          "dc_db": -142.8,
+          "ring_z": 4.1,
+          "trunc_db": null,
+          "silence_ms": 0.0,
+          "bump_db": 0.0,
+          "attack_ms": 114.25,
+          "t40_ms": 350.0,
+          "crest_db": 5.9,
+          "res_db": 51.1,
+          "res_hz": 3644,
+          "peak_dbfs": -9.0,
+          "live_ms": 673.75
+        },
+        "glide": {
+          "tonal_share": 1.0,
+          "rise_st": 0.0,
+          "from_s": 0.336,
+          "to_s": 0.346
+        },
+        "layers": {
+          "attacks": [
+            0.343
+          ],
+          "count": 1,
+          "pre_swell_ms": 0.0
+        },
+        "context": {
+          "category": "mallet",
+          "sound": "mallet/up4"
+        }
+      }
+    },
+    "freeze": {
+      "id": "mallet/celesta",
+      "seed": 1,
+      "sr": 48000,
+      "onset_s": 0.0005,
+      "peak_s": 0.0235,
+      "end_s": 0.344,
+      "dur_s": 0.414,
+      "peak_db": -9.0,
+      "lufs_m_max": -21.05,
+      "edits": {},
+      "checks": {
+        "ok": true,
+        "warnings": [],
+        "notes": [],
+        "summary": "mallet/celesta: clean",
+        "measures": {
+          "clicks": 0,
+          "edge_db": -240.0,
+          "clip_runs": 0,
+          "overs": 0,
+          "dc_db": -148.9,
+          "ring_z": 4.7,
+          "trunc_db": null,
+          "silence_ms": 0.0,
+          "bump_db": 0.0,
+          "attack_ms": 11.75,
+          "t40_ms": 220.0,
+          "crest_db": 4.9,
+          "res_db": 82.7,
+          "res_hz": 5382,
+          "peak_dbfs": -9.0,
+          "live_ms": 236.5
+        },
+        "glide": {
+          "tonal_share": 1.0,
+          "rise_st": 0.0,
+          "from_s": null,
+          "to_s": null
+        },
+        "layers": {
+          "attacks": [
+            0.033
+          ],
+          "count": 1,
+          "pre_swell_ms": 0.0
+        },
+        "context": {
+          "category": "mallet",
+          "sound": "mallet/celesta"
+        }
+      }
+    }
+  }
+}

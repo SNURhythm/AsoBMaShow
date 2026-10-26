@@ -2,6 +2,7 @@
 #include "Scene.h"
 #include "SceneReturnTarget.h"
 #include "../streak/StreakModel.h"
+#include "../streak/StreakSounds.h"
 class ScrollView;
 class OverlayPortal;
 class StreakScene final : public Scene {
@@ -15,6 +16,7 @@ public:
   void onLanguageChanged() override;
   EventHandleResult handleEvents(SDL_Event &) override;
 private:
+  streak::Sounds streakSounds_;
   void renderScene() override {}
   void cleanupScene() override;
   void reload();
@@ -38,6 +40,7 @@ private:
   int editingIndex_ = -1, tableId_ = 0;
   bool loadFailed_ = false;
   bool showOptional_ = false;
+  bool adjustingToday_ = false;
   View *root_ = nullptr;
   ScrollView *scroll_ = nullptr;
   OverlayPortal *portal_ = nullptr;

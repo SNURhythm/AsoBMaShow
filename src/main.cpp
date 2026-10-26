@@ -336,6 +336,7 @@ void rendering::updateUIScale(int renderW, int renderH) {
   render_height = renderH;
   window_width = renderW < renderH ? design_height : design_width;
   const float displayScale = s_window ? platform::sdlMain<SDL_GetWindowDisplayScale>(s_window) : 1.0f;
+  displayPixelScale = displayScale > 0 ? displayScale : 1.0F;
   compactMenuCanvasActive = usesCompactMenuCanvas(renderW, renderH, displayScale,
                                                 responsiveMenuSceneActive);
   const int logicalWidth = displayScale > 0 ? static_cast<int>(std::lround(renderW / displayScale)) : renderW;

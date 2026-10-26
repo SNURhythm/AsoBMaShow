@@ -1,4 +1,5 @@
 #include "ui/PresentationSchedule.h"
+#include "ui/Motion.h"
 
 #include <cassert>
 #include <cstdint>
@@ -129,6 +130,22 @@ void maintenanceDoesNotBecomeAContinuousAnimation() {
 } // namespace
 
 int main() {
+  ui::motion::Track track;
+  track.start(0, 10, 100, 400, 50, ui::motion::Ease::Linear);
+  assert(track.value(149) == 0 && track.active(149));
+  assert(track.value(350) == 5);
+  track.retarget(15, 350, 100);
+  assert(track.value(350) == 5 && track.value(450) == 15);
+  assert(!track.active(450));
+  track.start(0, 1, 500, 500);
+  track.cancel(600);
+  const auto stopped = track.value(600);
+  assert(stopped > 0 && stopped < 1 && track.value(10000) == stopped);
+  track.start(0, 1, 500, 500, 100, ui::motion::Ease::Pop, true);
+  assert(track.value(500) == 1 && !track.active(500));
+  track.start(0, 1, 500, 500);
+  assert(track.value(1000000) == 1 && !track.active(1000000));
+  track.settle();
   staticFramesSkipDrawingAndWakeOnChanges();
   animationAndHoldRequestsRetainTheirCadence();
   changesDuringDrawingAreNotAcknowledgedEarly();

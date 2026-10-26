@@ -1,6 +1,9 @@
 #pragma once
 
 #include "ResultPhotoExportPresentation.h"
+#include "../streak/StreakModel.h"
+#include "../streak/StreakSounds.h"
+#include "../streak/StreakResultPresentation.h"
 #include "../CanonicalDigest.h"
 #include "../ReplayData.h"
 #include "../ResultPersistenceCoordinator.h"
@@ -313,6 +316,7 @@ public:
   void cleanupScene() override;
 
 private:
+  streak::Sounds streakSounds_;
   bool startSelectedResultSkin();
   void loadDifficultyLabel();
   void loadPreviousBest();
@@ -390,6 +394,22 @@ private:
   ScrollView *resultScroll = nullptr;
   std::array<int, 6> resultLayoutSignature{};
   void resizeResultLayout();
+  void prepareStreakProgress();
+  void buildStreakProgress(bool animate);
+  void updateStreakProgress();
+  void dismissStreakProgress(bool swallowRelease = false);
+  bool handleStreakProgressEvent(SDL_Event &);
+  bool streakOwnsInput() const;
+  streak::ResultPresentation streakPresentation_;
+  std::optional<streak::State> streakSnapshot_;
+  View *streakOverlay_ = nullptr;
+  View *streakPanel_ = nullptr;
+  ScrollView *streakScroll_ = nullptr;
+  std::array<int, 4> streakLayoutSignature_{};
+  float streakOverlayUnit_ = 0;
+  bool streakDismissGesture_ = false;
+  std::optional<std::uint64_t> streakInputBlockedThroughFrame_;
+  long long streakSkinResumeMillis_ = 0;
   View *graphPlaceHolder = nullptr;
   View *resultTouchControlsOverlay = nullptr;
   View *resultTouchControlsPanel = nullptr;

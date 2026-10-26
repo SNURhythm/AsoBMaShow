@@ -6,6 +6,8 @@
 namespace rendering {
 // Built-in menus adapt to available density-independent space on every platform.
 // Gameplay and skin scenes retain their original design coordinates.
+// Actual drawable pixels per density-independent point, including Android density.
+inline float displayPixelScale = 1.0F;
 inline bool responsiveMenuSceneActive = false;
 inline bool compactMenuCanvasActive = false;
 

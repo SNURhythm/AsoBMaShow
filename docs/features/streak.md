@@ -46,8 +46,12 @@ Completed rounds at or after the goal may randomly raise the next score rank
 (custom rate +2 percentage points) or lamp, but only when the finishing play
 already meets the proposed target. Otherwise the target stays unchanged. Bonus
 chart counts never increase. Tomorrow restores all configured chart counts and
-targets and resets the shared bonus budget. An exhausted chart pool may require
-another assignment.
+targets and resets the shared bonus budget. If the chart pool runs out or a target is out of reach, use **Adjust today** on
+that assignment. Levels, eligibility, targets and quota change immediately for
+today. Rewards, used charts, partial achievements and points are retained;
+editing itself awards nothing. A lowered quota still needs another distinct
+qualifying chart. The regular routine and pending changes stay unchanged.
+Today's points per round and daily goal cannot be raised through this action.
 
 ## Daily outcomes
 
@@ -72,11 +76,18 @@ playing does not reset the price. Spending never reduces
 earned daily/weekly/monthly totals. No real-money transactions exist.
 
 Milestones at 7, 14, 30, 50, 100 and 365 goal days, completed weekly/monthly goals,
-and the best streak survive resets. Daily progress and streak acknowledgment
-appear in built-in results. Completed days lead with “Today is complete” and a
+and the best streak survive resets. The native dashboard uses animated meters,
+a rhythm-spark character, progress cards and milestone badges. Daily progress
+opens automatically in a dismissible slide-over after a fresh manual chart's
+successful save, including successful save retries and custom result skins.
+It shows saved daily totals rather than claiming a per-attempt point increase.
+Escape or tapping outside dismisses it without activating result controls;
+custom-skin auto-exit pauses until dismissal. Resizing never reopens it. Completed days lead with “Today is complete” and a
 “Done for today” action. Optional challenges start collapsed, and bonus points
-appear separately from the finished daily goal. Rich animated celebrations,
-sound, share cards, and custom-skin dashboard integration are deferred to the UI/UX pass.
+appear separately from the finished daily goal. Short Earshot-generated progress, completion and freeze-purchase cues use the
+system audio bus and master volume; they do not repeat on redraws or failed
+purchases. Animation is finite and requests frames only while active. Share
+cards remain deferred.
 
 ## Storage and recovery
 
@@ -172,3 +183,17 @@ regressions cover eligibility changes, separate target achievements, raised
 targets, delayed saves and restart/rollback behavior. Native visual
 verification requires a desktop session that exposes the game window to
 automation.
+
+### Motion and immediate-adjustment checks
+
+- Complete a manual chart with a configured routine: saved progress opens once
+  over built-in or custom result skins. Dismiss with the button, Escape or an
+  outside tap; the gesture must not activate the result behind it.
+- Rotate while open or after dismissing. The drawer fits the new viewport and
+  dismissal stays remembered. Autoplay, replay, practice and history browsing
+  do not open it. A successful score-save retry may open it once.
+- Use **Adjust today** when a pool or target is exhausted. Verify points and
+  counted charts remain, the new requirement applies now, and tomorrow retains
+  the regular routine. A stale editor crossing midnight must refuse the save.
+- Listen for the short progress/completion cue and successful freeze-purchase
+  cue. Master mute silences them; redraws and rotation do not replay them.
