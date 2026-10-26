@@ -88,12 +88,14 @@ public:
                     ResetFlagsReader readResetFlags,
                     RendererTransactionFactory beginRendererTransaction,
                     bool allowMobileVsync = false,
-                    bool allowAntiAliasing = true);
+                    bool allowAntiAliasing = true,
+                    bool allowTripleBuffering = false);
   SDLDisplayBackend(std::shared_ptr<ISDLDisplayAdapter>,
                     bool fixedMobileDisplay, ResetFlagsReader readResetFlags,
                     RendererTransactionFactory beginRendererTransaction,
                     bool allowMobileVsync = false,
-                    bool allowAntiAliasing = true);
+                    bool allowAntiAliasing = true,
+                    bool allowTripleBuffering = false);
 
   Capabilities capabilities() const override;
   void observeRuntimeState() const override;
@@ -129,6 +131,7 @@ private:
   bool fixedMobileDisplay = false;
   bool allowMobileVsync = false;
   bool allowAntiAliasing = true;
+  bool allowTripleBuffering = false;
   int appliedMsaaSamples = -1;
   std::uint32_t defaultMsaaFlags = 0;
   ResetFlagsReader readResetFlags;

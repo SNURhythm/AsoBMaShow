@@ -6578,6 +6578,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(gameplay_bga_target_tests
         tests/gameplay_bga_target_tests.cpp
+        src/rendering/BlurPass.cpp
         src/settings/AudioVideoSettings.cpp
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp

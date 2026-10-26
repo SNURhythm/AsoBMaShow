@@ -524,6 +524,7 @@ void SettingsScene::cleanupScene() {
   displayIndexDropdown = nullptr;
   displayResolutionDropdown = nullptr;
   displayVsyncDropdown = nullptr;
+  displayTripleBufferingControl = nullptr;
   displayFrameCapDropdown = nullptr;
   displayAntiAliasingDropdown = nullptr;
   masterVolumeInput = nullptr;

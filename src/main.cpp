@@ -4,6 +4,12 @@
 #include "settings/PresentationOrientationState.h"
 #include "perf/LatencyTelemetry.h"
 #include "targets.h"
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
+#include "skin/beatoraja/SkinProcessResidentMemory.h"
+#if TARGET_OS_IPHONE || TARGET_OS_OSX
+#include "perf/MetalPresentationTelemetry.h"
+#endif
+#endif
 #include "platform/SDLMainThread.h"
 #include "RAII.h"
 #include "AppDatabaseInitializer.h"
@@ -754,10 +760,8 @@ int main(int argv, char **args) {
   bgfx_init.resolution.width = rendering::render_width;
   bgfx_init.resolution.height = rendering::render_height;
   bgfx_init.resolution.reset = s_bgfxResetFlags;
-#if !TARGET_OS_IPHONE
-  // Bound GPU work queued ahead of visible input feedback on Android as well.
+  // Bound GPU work queued ahead of visible input feedback on mobile as well.
   bgfx_init.resolution.maxFrameLatency = 2;
-#endif
   bgfx_init.platformData = pd;
   rendering::applyBgfxTransientBufferLimits(bgfx_init.limits);
 #if TARGET_OS_IPHONE
@@ -843,6 +847,12 @@ static void reportResultRecoveryWarning(
 
 static void
 runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
+#if ASOBMASHOW_ENABLE_PERF_TELEMETRY && (TARGET_OS_IPHONE || TARGET_OS_OSX)
+  asobmashowMetalSetPresentationObserver(perf::latency::recordMetalPresentation);
+  const auto stopPresentationTelemetry = makeScopeExit([] {
+    asobmashowMetalSetPresentationObserver(nullptr);
+  });
+#endif
   player_settings::PresentationOrientationState presentationOrientation;
   presentationOrientation.updateViewport(rendering::render_width, rendering::render_height);
   bool orientationLocked = false;
@@ -1023,7 +1033,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
               context.framePacer.reset(std::chrono::steady_clock::now());
               return true;
             });
-      }, TARGET_PLATFORM == Android, allowAntiAliasing);
+      }, TARGET_PLATFORM == Android, allowAntiAliasing,
+      bgfx::getRendererType() == bgfx::RendererType::Metal);
   // Apply renderer preferences without changing native geometry at startup.
   auto startupVideo = context.displayBackend->capture().settings;
 #if TARGET_OS_ANDROID
@@ -1031,6 +1042,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #endif
   if (allowAntiAliasing)
     startupVideo.msaaSamples = context.settings.audioVideo.video.msaaSamples;
+  if (context.displayBackend->capabilities().canChangeTripleBuffering)
+    startupVideo.tripleBuffering = context.settings.audioVideo.video.tripleBuffering;
   std::string startupRendererError;
   if (!context.displayBackend->apply(startupVideo, startupRendererError)) {
     SDL_Log("Could not apply renderer preferences: %s",
@@ -1836,8 +1849,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
             bgfx::touch(rendering::bga_view);
             bgfx::touch(rendering::bga_layer_view);
             bgfx::touch(s_blurPass->finalView());
-            bgfx::touch(s_blurPass->blurViewH());
-            bgfx::touch(s_blurPass->blurViewV());
             const bool ignoreBgaPostOptions =
                 context.ignoreBgaPostOptions.load(std::memory_order_acquire);
             if (submitPreparedFullscreen) {
@@ -1928,11 +1939,26 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
             static_cast<unsigned long long>(coalescedResizeInWindow));
         const auto audioState = context.jukebox.audioRuntime().runtimeState();
         SDL_Log("Audio native callback %u frames at %u Hz | output timestamp %s | "
-                "underflow reporting %s (%llu) | physical display presentation unknown",
+                "underflow reporting %s (%llu)",
                 audioState.effectiveBufferFrames, audioState.effectiveCallbackSampleRate,
                 audioState.outputTimestampKnown ? "available" : "unknown",
                 audioState.outputUnderflowKnown ? "available" : "unknown",
                 static_cast<unsigned long long>(audioState.outputUnderflowCount));
+        // These are renderer allocations and process resident bytes, not the
+        // Metal HUD's footprint or the system's remaining memory budget.
+        if (const auto resident = skin::currentProcessResidentBytes()) {
+          SDL_Log("Process resident bytes %llu", static_cast<unsigned long long>(*resident));
+        }
+        {
+          std::unique_lock lock(context.bgfxRenderMutex, std::try_to_lock);
+          if (lock.owns_lock()) {
+            const auto *stats = bgfx::getStats();
+            SDL_Log("Renderer resources | textures %u | texture bytes %lld | render target bytes %lld | "
+                    "transient vertex/index bytes %u/%u",
+                    unsigned(stats->numTextures), static_cast<long long>(stats->textureMemoryUsed),
+                    static_cast<long long>(stats->rtMemoryUsed), stats->transientVbUsed, stats->transientIbUsed);
+          }
+        }
         for (unsigned stage = 0; stage < static_cast<unsigned>(perf::latency::Stage::Count); ++stage) {
           const auto summary = perf::latency::snapshot(static_cast<perf::latency::Stage>(stage));
           if (summary.count == 0) continue;
@@ -1984,8 +2010,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 
     if (renderedFrame || skippedIdleFrame) {
       // Keep update/input cadence unchanged when idle UI drawing is skipped.
-      const auto presentedAt = std::chrono::steady_clock::now();
-      context.framePacer.framePresented(presentedAt);
+      // CPU submission/service completion, not the drawable's on-screen time.
+      const auto submissionFinishedAt = std::chrono::steady_clock::now();
+      context.framePacer.framePresented(submissionFinishedAt);
 #if TARGET_OS_IPHONE
       // Menus and gameplay follow the display, including 120 Hz ProMotion.
       // This worker wait does not block UIKit's event/input pump.
@@ -1995,7 +2022,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           context.framePacer.currentFrameCap(),
           context.replayVideoExportActive.load(std::memory_order_acquire) ||
               context.rendererAccess.exportRequested()));
-      iosPresentationPacer.framePresented(presentedAt);
+      iosPresentationPacer.framePresented(submissionFinishedAt);
 #else
       const auto idleViewport = skippedIdleFrame
           ? platform::getWindowSnapshot(s_window) : std::nullopt;
@@ -2003,7 +2030,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           idleViewport ? idleViewport->refreshRate : 0.0F,
           context.framePacer.currentFrameCap(), skippedIdleFrame,
           (context.bgfxResetFlags.load(std::memory_order_acquire) & BGFX_RESET_VSYNC) != 0));
-      idlePresentationPacer.framePresented(presentedAt);
+      idlePresentationPacer.framePresented(submissionFinishedAt);
 #endif
       const auto waitStartedAt = std::chrono::steady_clock::now();
       auto waitDuration = context.framePacer.remaining(waitStartedAt);

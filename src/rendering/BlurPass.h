@@ -30,10 +30,14 @@ public:
   bgfx::ViewId blurViewV() const { return blur_view_v_; }
   bgfx::ViewId finalView() const { return final_view_; }
   bgfx::TextureHandle sceneTexture() const { return tex_scene_color_; }
-  bgfx::TextureHandle outputTexture() const { return tex_blur_b_; }
+  bgfx::TextureHandle outputTexture() const {
+    return blur_strength_ == 0.0f ? tex_scene_color_ : tex_blur_b_;
+  }
 
 private:
   void createFrameBuffers();
+  void createBlurFrameBuffers();
+  void destroyBlurFrameBuffers();
   void destroyFrameBuffers();
   void blurHorizontal();
   void blurVertical();

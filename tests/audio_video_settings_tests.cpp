@@ -35,6 +35,7 @@ bool defaultsMatchLegacyBehavior() {
   ASSERT_TRUE(value.video.width == 1280, "default width");
   ASSERT_TRUE(value.video.height == 720, "default height");
   ASSERT_TRUE(!value.video.vsync, "default VSync");
+  ASSERT_TRUE(!value.video.tripleBuffering, "triple buffering defaults off");
   ASSERT_TRUE(value.video.frameCap == 0, "default frame cap");
 
   return true;

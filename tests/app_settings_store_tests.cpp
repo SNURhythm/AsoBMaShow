@@ -133,6 +133,24 @@ void testAntiAliasingPersistenceAndMigration() {
          "existing settings preserve platform anti-aliasing defaults");
 }
 
+void testTripleBufferingPersistence() {
+  TempDirectory temp;
+  const auto path = temp.path() / "triple-buffering.json";
+  writeFile(path, R"({"schemaVersion":8,"video":{}})");
+  auto loaded = AppSettingsStore::Load(path);
+  expect(!loaded.settings.audioVideo.video.tripleBuffering,
+         "legacy settings default triple buffering off");
+  for (const bool enabled : {true, false}) {
+    loaded.settings.audioVideo.video.tripleBuffering = enabled;
+    std::string error;
+    expect(AppSettingsStore::Save(path, loaded.settings, error),
+           "triple buffering settings save");
+    loaded = AppSettingsStore::Load(path);
+    expect(loaded.settings.audioVideo.video.tripleBuffering == enabled,
+           "triple buffering survives restart");
+  }
+}
+
 void testPrepMetronomeDurationPersistence() {
   TempDirectory temp;
   const auto path = temp.path() / "prep-duration.json";
@@ -2913,6 +2931,7 @@ int main() {
   testDecodeBoundsDerivedUniqueIdentitiesBeforeAllocatingValues();
   testChartPreviewSettings();
   testAntiAliasingPersistenceAndMigration();
+  testTripleBufferingPersistence();
   testPrepMetronomeDurationPersistence();
   testIpadGestureReminderRoundTrip();
   testScreenOrientationRoundTripAndDefaults();

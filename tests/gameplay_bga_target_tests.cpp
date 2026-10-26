@@ -6,6 +6,7 @@
 #include "audio/Jukebox.h"
 #include "scene/SettingsPreviewBga.h"
 #include "RAII.h"
+#include "rendering/BlurPass.h"
 #include "rendering/ShaderManager.h"
 #include "rendering/UniformCache.h"
 #include "skin/beatoraja/SkinDestinationEvaluator.cpp"
@@ -1478,6 +1479,103 @@ void testNativeVideoPlaybackSelectsSurfaceRendering() {
           "failed native surface import resumes software playback at the current clock");
 }
 
+void testFullscreenBlurBypassOnMetal() {
+  constexpr int width = 32, height = 16;
+  const int oldWidth = rendering::window_width, oldHeight = rendering::window_height;
+  rendering::window_width = width;
+  rendering::window_height = height;
+  const auto restore = makeScopeExit([&] {
+    rendering::window_width = oldWidth;
+    rendering::window_height = oldHeight;
+  });
+  const auto output = bgfx::createTexture2D(width, height, false, 1,
+      bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
+  const auto readback = bgfx::createTexture2D(width, height, false, 1,
+      bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
+  const auto framebuffer = bgfx::createFrameBuffer(1, &output, false);
+  // Distinct halves expose stale blurred output; partial alpha must not dim
+  // the final fullscreen composite, which has always been opaque.
+  std::array<std::uint8_t, width * height * 4> source{};
+  for (int y = 0; y < height; ++y) {
+    for (int x = 0; x < width; ++x) {
+      const auto offset = (y * width + x) * 4;
+      source[offset] = x < width / 2 ? 192 : 0;
+      source[offset + 1] = x < width / 2 ? 0 : 192;
+      source[offset + 2] = y < height / 2 ? 0 : 96;
+      source[offset + 3] = 64;
+    }
+  }
+  const auto input = bgfx::createTexture2D(width, height, false, 1,
+      bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_POINT,
+      bgfx::copy(source.data(), source.size()));
+  require(bgfx::isValid(output) && bgfx::isValid(readback) &&
+              bgfx::isValid(framebuffer) && bgfx::isValid(input),
+          "blur probe creates Metal resources");
+  const auto inputProgram = rendering::ShaderManager::getInstance().getProgram(
+      "blur/vs_blur.bin", "fs_text.bin");
+  const auto sampler = rendering::UniformCache::getInstance().getSampler("s_texColor");
+  const auto baseTextures = settledBgfxTextureCount();
+  {
+    rendering::BlurPass blur(2, 0.6F);
+    blur.setBlurStrength(0);
+    blur.init(width, height);
+    blur.setCompositeEnabled(false);
+    blur.setInputViews({rendering::bga_view});
+    float ortho[16];
+    bx::mtxOrtho(ortho, 0.0F, float(width), float(height), 0.0F, 0.0F,
+                 100.0F, 0.0F, bgfx::getCaps()->homogeneousDepth);
+    bgfx::setViewFrameBuffer(rendering::final_view, framebuffer);
+    bgfx::setViewRect(rendering::final_view, 0, 0, width, height);
+    bgfx::setViewTransform(rendering::final_view, nullptr, ortho);
+    bgfx::setViewClear(rendering::final_view, BGFX_CLEAR_COLOR, 0x0000ffffU);
+    const std::array strengths{0.0F, 1.0F, 0.0F, -1.0F};
+    for (std::size_t frame = 0; frame < strengths.size(); ++frame) {
+      blur.setBlurStrength(strengths[frame]);
+      if (frame == 2) blur.resize(width * 2, height * 2);
+      bgfx::setViewRect(rendering::bga_view, 0, 0, blur.sceneWidth(), blur.sceneHeight());
+      rendering::screenSpaceQuad();
+      bgfx::setTexture(0, sampler, input);
+      bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
+      bgfx::submit(rendering::bga_view, inputProgram);
+      blur.execute();
+      rendering::renderFullscreenTextureTint(blur.outputTexture(), rendering::final_view, 0.5F);
+      bgfx::blit(rendering::readback_view, readback, 0, 0, output);
+      auto current = bgfx::frame();
+      std::array<std::uint8_t, width * height * 4> pixels{};
+      const auto ready = bgfx::readTexture(readback, pixels.data());
+      current = bgfx::frame(); // Retire the submitted frame before reading its stats.
+      const auto draws = bgfx::getStats()->numDraw;
+      require(draws == (frame == 1 ? 4U : 2U),
+              "zero/negative blur submits only the input and final composite draws");
+      for (unsigned guard = 0; current < ready && guard < 16; ++guard) current = bgfx::frame();
+      require(current >= ready, "blur probe completes readback");
+      for (const auto point : {std::array{4, 3}, std::array{27, 12}}) {
+        const auto offset = (point[1] * width + point[0]) * 4;
+        if (frame != 1) {
+          for (int channel = 0; channel < 3; ++channel) {
+            require(std::abs(int(pixels[offset + channel]) - source[offset + channel] / 2) <= 2,
+                    "blur bypass preserves orientation and half brightness");
+          }
+        }
+        require(pixels[offset + 3] == 255, "fullscreen blur output remains opaque");
+      }
+      const auto edge = (3 * width + 15) * 4;
+      require(frame == 1 ? pixels[edge + 1] > 10 : pixels[edge + 1] <= 26,
+              "positive blur softens the boundary and disabling it removes stale blur");
+      require(settledBgfxTextureCount() == baseTextures + (frame == 1 ? 3 : 1),
+              "disabled blur retains only its scene texture, including after resize");
+    }
+    bgfx::setViewFrameBuffer(rendering::bga_view, BGFX_INVALID_HANDLE);
+  }
+  require(settledBgfxTextureCount() == baseTextures, "blur destruction releases all targets");
+  bgfx::setViewFrameBuffer(rendering::final_view, BGFX_INVALID_HANDLE);
+  bgfx::destroy(framebuffer);
+  bgfx::destroy(output);
+  bgfx::destroy(readback);
+  bgfx::destroy(input);
+  bgfx::frame();
+}
+
 void testEmbeddedImageResetsSkinSamplingOnMetal() {
   const auto fixtureDirectory = std::filesystem::temp_directory_path() /
       ("asobmashow-bga-sampling-" + std::to_string(SDL_GetPerformanceCounter()));
@@ -1652,6 +1750,7 @@ int main(int argc, char **argv) {
   rendering::PosColorVertex::init();
   rendering::PosTexVertex::init();
   if (metalSampling) {
+    testFullscreenBlurBypassOnMetal();
     testNativeVideoPlaybackSelectsSurfaceRendering();
     testEmbeddedImageResetsSkinSamplingOnMetal();
   } else {

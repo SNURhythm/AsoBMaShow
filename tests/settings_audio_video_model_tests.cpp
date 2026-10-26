@@ -73,6 +73,7 @@ display::Capabilities desktopDisplayCapabilities() {
       .canChangeVsync = true,
       .canSetFrameCap = true,
       .canChangeAntiAliasing = true,
+      .canChangeTripleBuffering = true,
       .displays = {{.index = 0,
                     .name = "Laptop Display",
                     .resolutions = {{1280, 720, 60},
@@ -407,6 +408,7 @@ void testDisplayModelUsesFriendlyLabelsAndShowsFixedFields() {
   intent.height = 900;
   intent.frameCap = 75;
   intent.msaaSamples = 4;
+  intent.tripleBuffering = true;
 
   const auto desktop =
       BuildDisplayControlModel(intent, desktopDisplayCapabilities());
@@ -420,6 +422,9 @@ void testDisplayModelUsesFriendlyLabelsAndShowsFixedFields() {
   require(findOption(desktop.frameCaps, "75") != nullptr,
           "valid custom frame caps remain selectable");
 
+  require(desktop.tripleBuffering.enabled && desktop.tripleBuffering.selectedValue == "on" &&
+              desktop.tripleBuffering.options.size() == 2,
+          "triple buffering exposes an off/on control");
   require(desktop.antiAliasing.enabled && desktop.antiAliasing.selectedValue == "4" &&
               findOption(desktop.antiAliasing, "-1") && findOption(desktop.antiAliasing, "0") &&
               findOption(desktop.antiAliasing, "2") && findOption(desktop.antiAliasing, "4") &&
@@ -435,6 +440,8 @@ void testDisplayModelUsesFriendlyLabelsAndShowsFixedFields() {
               !fixed.resolutions.explanation.empty() &&
               !fixed.vsync.explanation.empty(),
           "fixed display controls explain why they cannot be changed");
+  require(!fixed.tripleBuffering.enabled && !fixed.tripleBuffering.explanation.empty(),
+          "triple buffering is unavailable on other renderers");
   require(!fixed.antiAliasing.enabled && !fixed.antiAliasing.explanation.empty(),
           "unsupported renderer explains why MSAA cannot be changed");
   require(fixed.frameCaps.enabled,
@@ -639,6 +646,47 @@ void testUnavailableAntiAliasingPreservesImportedIntent() {
               settings.audioVideo.video.msaaSamples == 8 &&
               backend.capture().settings.msaaSamples == -1,
           "unavailable MSAA keeps imported intent while unrelated settings apply");
+}
+
+void testTripleBufferingPreviewConfirmationAndTimeout() {
+  SessionFixture fixture;
+  auto candidate = fixture.settings.audioVideo.video;
+  candidate.tripleBuffering = true;
+  const auto now = Clock::time_point{};
+  require(fixture.session.beginDisplayPreview(candidate, now).status ==
+              display::ApplyStatus::PreviewPending && fixture.saves == 0,
+          "triple buffering changes preview before saving");
+  fixture.session.tick(now + std::chrono::seconds(16));
+  require(fixture.displayBackend.state.settings.tripleBuffering == false &&
+              fixture.settings.audioVideo.video.tripleBuffering == false && fixture.saves == 0,
+          "timed out triple buffering restores the renderer without saving");
+  fixture.session.beginDisplayPreview(candidate, now);
+  require(fixture.session.keepDisplayPreview().status == display::ApplyStatus::Applied &&
+              fixture.settings.audioVideo.video.tripleBuffering == true && fixture.saves == 1,
+          "confirmed triple buffering persists the chosen buffer count");
+}
+
+void testUnavailableTripleBufferingPreservesImportedIntent() {
+  AppSettings settings;
+  settings.audioVideo.video.tripleBuffering = true;
+  FakeAudioRuntime runtime;
+  FakePlayback playback;
+  audio::AudioDeviceManager audioManager(runtime, playback, settings.audioVideo.audio);
+  FakeDisplayBackend backend;
+  backend.exposedCapabilities.canChangeTripleBuffering = false;
+  FakeFrameCapRuntime cap;
+  display::DisplaySettingsManager manager(backend, cap, settings.audioVideo.video);
+  int saves = 0;
+  SettingsAudioVideoSession session(settings, audioManager, manager,
+                                    {.persist = [&] { ++saves; }});
+  auto candidate = settings.audioVideo.video;
+  candidate.tripleBuffering = true;
+  candidate.frameCap = 120;
+  require(session.beginDisplayPreview(candidate, Clock::time_point{}).status ==
+              display::ApplyStatus::Applied && saves == 1 &&
+              settings.audioVideo.video.tripleBuffering == true &&
+              backend.capture().settings.tripleBuffering == false,
+          "unavailable triple buffering keeps imported intent while unrelated settings apply");
 }
 
 void testSafeFrameCapOnlyChangePersistsWithoutOverlay() {
@@ -936,6 +984,8 @@ int main() {
   testSettingsTestSoundSynthesizesCMajorNotes();
   testDisplayPreviewPersistsOnlyWhenKept();
   testAntiAliasingPreviewConfirmationAndTimeout();
+  testTripleBufferingPreviewConfirmationAndTimeout();
+  testUnavailableTripleBufferingPreservesImportedIntent();
   testUnavailableAntiAliasingPreservesImportedIntent();
   testSafeFrameCapOnlyChangePersistsWithoutOverlay();
   testFixedDisplayFrameCapPreservesImportedDisabledIntent();

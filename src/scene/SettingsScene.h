@@ -292,6 +292,7 @@ private:
   DropdownView *displayIndexDropdown = nullptr;
   DropdownView *displayResolutionDropdown = nullptr;
   ChoiceControlView *displayVsyncDropdown = nullptr;
+  ChoiceControlView *displayTripleBufferingControl = nullptr;
   DropdownView *displayFrameCapDropdown = nullptr;
   DropdownView *displayAntiAliasingDropdown = nullptr;
   TextInputBox *masterVolumeInput = nullptr;

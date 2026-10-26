@@ -76,6 +76,13 @@ with the current score; practice keeps Start outside scrolling content.
 Navigation follows this order: Profiles, Input, Timing, Lane, HUD, Background,
 Skins, Audio, Display, BMS Library, Difficulty Tables, IR, General.
 
+Display includes a **Triple buffering** Off/On control on Metal renderers. Off
+is the default and uses two drawable buffers; On allows three. The extra buffer
+may smooth frame delivery at the cost of latency and memory. Apply starts the
+usual display preview: Keep saves the choice, while Revert or the timeout
+restores the previous buffer count. Other renderers show the control as
+unavailable and preserve imported preferences.
+
 - Profiles shows the active profile first, other profiles next, then creation
   and import/export tools.
 - Input separates profile-wide note priority, touch indicators, and iPad

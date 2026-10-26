@@ -30,6 +30,7 @@ function(asobmashow_ios_bgfx_metal_compatibility)
     asobmashow_patch_bgfx_metal_readback(content)
     asobmashow_patch_bgfx_metal_video_surfaces(content)
     asobmashow_patch_ios_bgfx_main_thread_layer(content)
+    asobmashow_patch_bgfx_metal_presentation(content)
 
     # Compile a generated copy, leaving the pinned upstream submodule intact.
     # COPYONLY preserves the output timestamp when its contents are unchanged.
@@ -41,6 +42,7 @@ function(asobmashow_ios_bgfx_metal_compatibility)
     list(APPEND sources "${patched}")
     set_property(TARGET bgfx PROPERTY SOURCES "${sources}")
     target_include_directories(bgfx PRIVATE "${BGFX_DIR}/src")
+    target_include_directories(bgfx PRIVATE "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../src")
 endfunction()
 
 cmake_language(DEFER CALL asobmashow_ios_bgfx_metal_compatibility)
