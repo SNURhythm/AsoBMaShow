@@ -45,7 +45,7 @@ bool ScoreRepository::BuyStreakFreeze(std::string &error) {
   try {
     auto state = streak::load(impl_->sessionDatabase);
     if (!streak::buyFreeze(state, streak::today())) {
-      error = "Not enough surplus points, or two freezes are already stored.";
+      error = "Not enough bonus points, or two freezes are already stored.";
       return false;
     }
     streak::save(impl_->sessionDatabase, state);

@@ -159,13 +159,14 @@ void StreakScene::dashboard(View *body) {
   label(body, "This week: " + std::to_string(totals.weeklyPoints) + " / " + std::to_string(day.config.weeklyGoal) +
               "   ·   This month: " + std::to_string(totals.monthlyPoints) + " / " + std::to_string(day.config.monthlyGoal), 20);
   label(body, "Savings: " + std::to_string(state_.savings) + " points   ·   Freezes: " + std::to_string(state_.freezes) + " / 2", 23);
-  action(body, "Buy a freeze · " + std::to_string(day.config.dailyGoal) + " points", [this] {
+  action(body, "Buy a freeze · " + std::to_string(streak::freezePrice(state_)) + " points", [this] {
     later([this] {
       std::string error;
       message_ = context.scoreRepository.BuyStreakFreeze(error) ? i18n::tr("streak.ui.freeze_bought") : error;
       reload();
     });
   });
+  label(body, i18n::tr("streak.ui.freeze_price_help"), 18);
   action(body, i18n::tr("streak.ui.edit"), [this] { later([this] { message_.clear(); page_ = Page::Routine; }); });
   if (state_.configurations.rbegin()->first > totals.day)
     label(body, "Routine changes scheduled for " + streak::dateLabel(state_.configurations.rbegin()->first), 19);
@@ -175,7 +176,13 @@ void StreakScene::dashboard(View *body) {
     auto *card = new View();
     card->setFlexDirection(FlexDirection::Column)->setGap(6)->setPadding(Edge::All, 14)
         ->setFlexShrink(0)->setThemedBackgroundColor(app_theme::insetSurface);
-    label(card, p.requirement.name + "  ·  +" + std::to_string(p.requirement.points) + " points", 24);
+    const bool bonus = day.points >= day.config.dailyGoal;
+    const auto reward = bonus ? (p.bonusRounds < streak::dailyBonusLimit ? 1 : 0) :
+        std::min<std::int64_t>(p.requirement.points, day.config.dailyGoal - day.points);
+    label(card, p.requirement.name + "  ·  +" + std::to_string(reward) + " points", 24);
+    if (bonus)
+      label(card, std::string(i18n::tr("streak.ui.bonus_today")) + " " + std::to_string(p.bonusRounds) +
+                  " / " + std::to_string(streak::dailyBonusLimit), 18);
     label(card, std::to_string(p.charts) + " / " + std::to_string(p.requirement.chartCount) +
                 " distinct charts  ·  Round " + std::to_string(p.completedRounds + 1), 22);
     label(card, levelsText(p.requirement), 18);

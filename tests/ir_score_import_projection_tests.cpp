@@ -302,10 +302,10 @@ void testStreakProjectionIsAtomicAndUsesEffectiveLamp() {
   pending.score.provenance = ScoreProvenance::Legacy();
   assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
   state = streak::load(db);
-  assert(state.days.rbegin()->second.points == 20); // Effective Full Combo, counted once across two tables.
-  assert(state.currentStreak == 1 && state.savings == 10);
+  assert(state.days.rbegin()->second.points == 10); // Effective Full Combo, counted once across two tables.
+  assert(state.currentStreak == 1 && state.savings == 0);
   assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::AlreadyPresent);
-  assert(streak::load(db).savings == 10);
+  assert(streak::load(db).savings == 0);
   // A failed streak write must roll back the score so recovery can retry both.
   assert(sqlite3_exec(db, "CREATE TRIGGER reject_streak BEFORE UPDATE ON streak_state BEGIN SELECT RAISE(ABORT,'test storage failure'); END", nullptr, nullptr, nullptr) == SQLITE_OK);
   pending.attemptId = "123e4567-e89b-42d3-a456-426614174001";
@@ -313,7 +313,7 @@ void testStreakProjectionIsAtomicAndUsesEffectiveLamp() {
   assert(queryInt(path, "SELECT COUNT(*) FROM scores") == 1);
   assert(sqlite3_exec(db, "DROP TRIGGER reject_streak", nullptr, nullptr, nullptr) == SQLITE_OK);
   assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
-  assert(streak::load(db).savings == 10);
+  assert(streak::load(db).savings == 0);
   // Historical MD5-only records still exclude a chart from NO PLAY tasks.
   auto legacyState = streak::load(db);
   legacyState.days.clear(); legacyState.configurations.clear();

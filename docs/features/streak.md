@@ -11,14 +11,18 @@ AA, AAA, MAX -, MAX, and custom EX rates to 0.01 percentage-point precision.
 Previous-lamp filters support exact lamps and “or below,” including NO PLAY.
 The target lamp is a minimum; NO PLAY is an eligibility state, not a result.
 
-Every completed round awards its configured points and starts another round.
+Before the daily goal, completed rounds award their configured points, capped
+at the points still needed for the goal. The play that reaches the goal awards
+no extra savings, even if it completes several assignments. Later rounds award
+**1 bonus point each**, with a hardcoded **5 bonus points per assignment per day**.
+An assignment stops progressing when it reaches that cap.
 Each chart counts once per assignment per local calendar day, even if present
 in several tables or played in a different LN mode. A play can contribute to
 several assignments. After the daily point goal is reached, a completed round
 randomly raises one enabled requirement for its next round: chart count +1,
 the next score rank (custom rate +2 percentage points), or the next lamp.
-The goal-crossing round also qualifies. Rewards do not change; tomorrow restores
-the original requirements. Score/lamp increases stop at MAX/Full Combo and
+The goal-crossing round also raises its next requirement. Tomorrow restores
+the original requirements and resets the bonus limit. Score/lamp increases stop at MAX/Full Combo and
 chart counts at 10,000. An exhausted chart pool may require another assignment.
 
 ## Daily outcomes
@@ -32,11 +36,13 @@ chart counts at 10,000. An exhausted chart pool may require another assignment.
 
 Streak length counts achieved goal days separated by protected days, rather
 than consecutive calendar dates. Dates use local midnight; weeks start Monday.
-Once play starts, routine edits apply tomorrow. Before the first play they apply
-today. Already-earned points are never recalculated when editing a routine.
+The first routine starts today. All subsequent routine edits apply tomorrow,
+even before the first play; another save replaces the pending changes. Already-earned points are never recalculated when editing a routine.
 
-Only points above the daily goal become savings. Buy a freeze for the price of
-one current daily goal, with room to purchase up to two. Spending never reduces
+Only post-goal bonus points become savings. Freeze prices start at **20 points**
+and rise by **10 per purchase** (20, 30, 40, …), with room to purchase up to two.
+A streak reset returns the price to 20; using a freeze or protecting a day by
+playing does not reset the price. Spending never reduces
 earned daily/weekly/monthly totals. No real-money transactions exist.
 
 Milestones at 7, 14, 30, 50, 100 and 365 goal days, completed weekly/monthly goals,
@@ -51,7 +57,11 @@ profile backup/export. Versioned state is updated in the same transaction as a
 new projected result. Retrying a save or recalling a result cannot award twice.
 A late save uses its original play date. An unnecessarily used freeze is returned
 and moved to a later missed day when needed; otherwise it returns to inventory.
-Refunds may temporarily exceed the two-freeze purchase capacity.
+Refunds may temporarily exceed the two-freeze purchase capacity. Prices reset
+when a newly closed day breaks the current streak, never when a late save moves
+an already observed historical gap.
+Version 1 state migrates without changing historical points, balances or progress;
+new bonus and purchase counters start at zero. Version 2 persists those counters.
 
 Eligibility follows existing normalized chart identity matching (SHA-256, MD5,
 and legacy paths), with records ordered before the current attempt. Imported IR
@@ -72,5 +82,7 @@ Build `main`, `tests_results`, `tests_ui`, `tests_profiles`, and
 test. New coverage includes actual Scene deferred-callback execution, score
 thresholds, distinct-chart repeat rounds, streak/freeze/calendar handling,
 damaged state rejection, legacy identities, multi-table deduplication and
-transaction rollback. Native visual verification requires a desktop session
+transaction rollback. Economy regressions cover next-day edits before play,
+simultaneous goal-reaching rounds, daily bonus limits, escalating prices across
+restarts, price resets, late attendance and version 1 migration. Native visual verification requires a desktop session
 that exposes the game window to automation.

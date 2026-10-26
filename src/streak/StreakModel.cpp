@@ -6,6 +6,7 @@
 #include <cmath>
 #include <ctime>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 
@@ -194,16 +195,19 @@ void advance(State &s, DayId day) {
       }
     }
     s.days.emplace(id, newDay(configurationFor(s, id)));
-    // Rolling into a new day finalizes yesterday, including an unprotected gap.
+    // Only closing a new day can break the current streak and reset prices.
+    // Late saves may move an old gap during recompute, but cannot break a new
+    // streak or undo purchases made after the original break.
+    const int before = s.currentStreak;
     recompute(s);
+    if (before > 0 && s.currentStreak == 0) s.freezePurchases = 0;
   }
 }
 DayId configure(State &s, const Config &config, DayId day) {
   if (const auto error = validate(config); !error.empty()) throw std::invalid_argument(error);
   advance(s, day);
   if (!s.days.empty()) day = std::max(day, s.days.rbegin()->first);
-  const auto current = s.days.find(day);
-  const DayId effective = day + (current != s.days.end() && current->second.played ? 1 : 0);
+  const DayId effective = day + (s.configurations.empty() ? 0 : 1);
   s.configurations[effective] = config;
   if (effective == day) s.days[day] = newDay(config);
   recompute(s);
@@ -219,31 +223,46 @@ std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice) {
   const int returnedFreezes = day.frozen ? 1 : 0;
   if (day.frozen) { ++s.freezes; day.frozen = false; }
   const auto before = day.points;
+  const bool bonus = before >= day.config.dailyGoal;
   std::vector<Progress *> completed;
   for (auto &progress : day.assignments) {
-    if (!matches(progress.requirement, p) || progress.usedCharts.contains(p.chart)) continue;
+    if ((bonus && progress.bonusRounds >= dailyBonusLimit) ||
+        !matches(progress.requirement, p) || progress.usedCharts.contains(p.chart)) continue;
     progress.usedCharts.insert(p.chart);
     if (++progress.charts < progress.requirement.chartCount) continue;
-    day.points += progress.requirement.points;
     ++progress.completedRounds;
     progress.charts = 0;
     completed.push_back(&progress);
   }
+  // A play that reaches the goal earns no bonus, including simultaneous
+  // completions. Allocate its remaining goal budget in stable identity order.
+  std::sort(completed.begin(), completed.end(), [](const auto *a, const auto *b) {
+    return a->requirement.id < b->requirement.id;
+  });
+  for (auto *progress : completed) {
+    const auto reward = bonus ? 1 : std::min<std::int64_t>(
+        progress->requirement.points, day.config.dailyGoal - day.points);
+    progress->earnedPoints += reward;
+    day.points += reward;
+    if (bonus) { ++progress->bonusRounds; ++s.savings; }
+  }
   // Every assignment sees the same final daily total, independent of list order.
   if (day.points >= day.config.dailyGoal)
     for (auto *progress : completed) harder(progress->requirement, randomChoice++);
-  s.savings += std::max<std::int64_t>(0, day.points - day.config.dailyGoal) -
-               std::max<std::int64_t>(0, before - day.config.dailyGoal);
   recompute(s, returnedFreezes, p.day);
   return day.points - before;
 }
+std::int64_t freezePrice(const State &s) {
+  return baseFreezePrice + static_cast<std::int64_t>(freezePriceStep) * s.freezePurchases;
+}
 bool buyFreeze(State &s, DayId day) {
   advance(s, day);
-  if (s.days.empty() || s.freezes >= 2) return false;
-  const int price = s.days.rbegin()->second.config.dailyGoal;
+  if (s.days.empty() || s.freezes >= 2 || s.freezePurchases == std::numeric_limits<int>::max()) return false;
+  const auto price = freezePrice(s);
   if (s.savings < price) return false;
   s.savings -= price;
   ++s.freezes;
+  ++s.freezePurchases;
   return true;
 }
 Summary summary(const State &s) {

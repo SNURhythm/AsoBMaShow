@@ -8,10 +8,10 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Level, source, level, label)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Assignment, id, name, levels, eligibleLamp,
     eligibleOrBelow, targetLamp, scoreNumerator, scoreDenominator, customRate, chartCount, points)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Config, dailyGoal, weeklyGoal, monthlyGoal, assignments)
-NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Progress, requirement, completedRounds, charts, usedCharts)
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Progress, requirement, completedRounds, bonusRounds, earnedPoints, charts, usedCharts)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Day, config, played, frozen, points, assignments)
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(State, version, configurations, days, savings, freezes,
-    currentStreak, bestStreak, milestones)
+    freezePurchases, currentStreak, bestStreak, milestones)
 namespace {
 void require(bool condition, sqlite3 *db) {
   if (!condition) throw std::runtime_error("Streak storage: " + sqliteDatabaseError(db));
@@ -31,11 +31,25 @@ State load(sqlite3 *db) {
   const int result = sqlite3_step(query);
   if (result == SQLITE_DONE) return {};
   require(result == SQLITE_ROW, db);
-  const auto json = nlohmann::json::parse(sqliteColumnString(query, 0));
-  if (json.at("version").get<int>() != 1)
+  auto json = nlohmann::json::parse(sqliteColumnString(query, 0));
+  const auto version = json.at("version").get<int>();
+  if (version != 1 && version != 2)
     throw std::runtime_error("This streak data needs a different app version.");
+  if (version == 1) {
+    // Preserve all previously earned totals and savings. The old format did
+    // not track bonus rounds or purchases, so their new counters start at zero.
+    json["version"] = 2;
+    json["freezePurchases"] = 0;
+    for (auto &entry : json.at("days")) {
+      for (auto &progress : entry.at(1).at("assignments")) {
+        progress["bonusRounds"] = 0;
+        progress["earnedPoints"] = static_cast<std::int64_t>(progress.at("completedRounds").get<int>()) *
+            progress.at("requirement").at("points").get<int>();
+      }
+    }
+  }
   auto state = json.get<State>();
-  if (state.savings < 0 || state.freezes < 0 || state.bestStreak < 0)
+  if (state.savings < 0 || state.freezes < 0 || state.bestStreak < 0 || state.freezePurchases < 0)
     throw std::runtime_error("Invalid streak balances.");
   for (const auto &[id, config] : state.configurations)
     if (auto error = validate(config); !error.empty()) throw std::runtime_error(error);
@@ -52,12 +66,17 @@ State load(sqlite3 *db) {
       active.assignments = {progress.requirement};
       if (auto error = validate(active); !error.empty()) throw std::runtime_error(error);
       if (progress.requirement.id != base.id || progress.requirement.points != base.points ||
-          progress.completedRounds < 0 || progress.charts < 0 ||
+          progress.completedRounds < 0 || progress.bonusRounds < 0 ||
+          progress.bonusRounds > dailyBonusLimit || progress.bonusRounds > progress.completedRounds ||
+          progress.earnedPoints < progress.bonusRounds ||
+          progress.earnedPoints > static_cast<std::int64_t>(progress.completedRounds - progress.bonusRounds) *
+              progress.requirement.points + progress.bonusRounds ||
+          progress.charts < 0 ||
           progress.charts >= progress.requirement.chartCount ||
           static_cast<std::uint64_t>(progress.charts) + progress.completedRounds > progress.usedCharts.size() ||
           progress.usedCharts.contains("") || (!day.played && !progress.usedCharts.empty()))
         throw std::runtime_error("Invalid assignment progress.");
-      earned += static_cast<std::int64_t>(progress.completedRounds) * progress.requirement.points;
+      earned += progress.earnedPoints;
     }
     if (earned != day.points || (!day.played && day.points != 0))
       throw std::runtime_error("Daily points do not match completed assignments.");

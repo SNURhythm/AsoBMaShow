@@ -7,6 +7,9 @@
 #include <vector>
 
 namespace streak {
+inline constexpr int dailyBonusLimit = 5;
+inline constexpr int baseFreezePrice = 20;
+inline constexpr int freezePriceStep = 10;
 using DayId = int; // Local civil days since 1970-01-01; never elapsed 24h periods.
 struct Level {
   std::string source;
@@ -36,6 +39,8 @@ struct Config {
 struct Progress {
   Assignment requirement;
   int completedRounds = 0;
+  int bonusRounds = 0;
+  std::int64_t earnedPoints = 0;
   int charts = 0;
   std::set<std::string> usedCharts;
 };
@@ -47,11 +52,12 @@ struct Day {
   std::vector<Progress> assignments;
 };
 struct State {
-  int version = 1;
+  int version = 2;
   std::map<DayId, Config> configurations;
   std::map<DayId, Day> days;
   std::int64_t savings = 0;
   int freezes = 0;
+  int freezePurchases = 0;
   int currentStreak = 0;
   int bestStreak = 0;
   std::set<std::string> milestones;
@@ -81,6 +87,7 @@ struct Summary {
 void advance(State &state, DayId day);
 DayId configure(State &state, const Config &config, DayId day);
 std::int64_t record(State &state, const Play &play, std::uint32_t randomChoice);
+[[nodiscard]] std::int64_t freezePrice(const State &state);
 bool buyFreeze(State &state, DayId day);
 [[nodiscard]] Summary summary(const State &state);
 } // namespace streak
