@@ -3355,6 +3355,14 @@ void MusicSelectScene::refreshRepositoryRevisions() {
 }
 
 void MusicSelectScene::update(float) {
+  if (!context.pendingComboNotificationProfile.empty() &&
+      toolbarControlAvailable(MusicSelectToolbarControl::Streak)) {
+    const auto profile = std::exchange(context.pendingComboNotificationProfile, {});
+    if (profile == context.profileManager.activeProfile().id) {
+      defer([this] { openStreak(); return false; }, 0, true);
+      return;
+    }
+  }
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (presentationSkinRefreshPending &&
       (!context.gameplaySkinLifecycle || context.gameplaySkinLifecycle->presentationReady())) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include "notifications/ReminderPreferences.h"
 
 enum class MusicSelectToolbarMode { Expanded, Collapsed, Hidden };
 
@@ -16,6 +17,7 @@ struct MusicSelectToolbarState {
 struct ApplicationUiState {
   static constexpr int kSchemaVersion = 1;
   MusicSelectToolbarState musicSelectToolbar;
+  reminders::Preferences reminders;
   std::string language = "system";
   bool newcomerTutorialCompleted = false;
   int onlineDifficultyTablesRevision = 0;

@@ -276,3 +276,36 @@ uninterrupted. Rebuilds retain the animation clock.
 Combo counts use singular/plural English forms (1 chart, 2 charts; 1 point,
 2 points), while Korean, Japanese, and Chinese retain their natural count
 phrasing. Localized `i18n::plural` text reselects its form after language changes.
+
+## Local reminders (iOS and Android)
+
+**Combo → Reminders** offers separate opt-in daily and comeback notifications,
+with one local-time picker. Preferences are device-wide, apply to the active
+profile, and are not part of a profile export. Enabling a reminder is the only
+Combo action that requests OS notification permission. Blocked permission is
+shown with a link to system settings.
+
+Daily reminders omit a completed goal and past reminder times. When comeback
+reminders are enabled, they replace daily reminders after projected combo loss:
+2, 7, and 14 local calendar days later, then stop. Projection includes owned
+freezes, partial-play protection, and retained history after clock rollback.
+Returning cancels the old series; a new positive combo can begin a new series.
+Taps queue navigation to Combo until a music selector is ready, without switching
+profiles or interrupting gameplay.
+
+There is no server or remote push service. Plans contain at most 56 requests;
+daily reminders cover up to eight weeks and refresh on app use. Android restores
+future alarms after reboot, app update, or clock/time-zone changes and drops
+expired reminders. The OS may delay or suppress delivery. Only Combo-owned
+notifications are cancelled; music playback notifications are independent.
+
+The optional iOS adapter smoke test runs against an already booted simulator:
+
+```sh
+python3 tests/ios_local_notifications_smoke.py --simulator <UDID>
+```
+
+It uses a temporary UIKit host and the production adapter to check startup,
+replacement while an add is in flight, and foreground cancellation against the
+real notification center. It removes its test app afterward. Permission-dialog
+interaction and delivered-notification cold taps still require a manual check.

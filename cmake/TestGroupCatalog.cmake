@@ -176,6 +176,7 @@ asobmashow_label_tests(area_practice
 )
 
 asobmashow_label_tests(area_results
+    reminder_plan_tests
     streak_model_tests
     streak_store_tests
     chart_record_actions_tests

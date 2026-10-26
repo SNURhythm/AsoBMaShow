@@ -11,3 +11,8 @@ add_test(NAME streak_store_tests COMMAND streak_store_tests)
 
 add_test(NAME streak_scene_tests COMMAND ${Python3_EXECUTABLE}
     ${CMAKE_SOURCE_DIR}/tests/streak_scene_tests.py -v)
+
+add_executable(reminder_plan_tests tests/reminder_plan_tests.cpp src/streak/StreakModel.cpp)
+target_include_directories(reminder_plan_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(reminder_plan_tests PRIVATE cxx_std_23)
+add_test(NAME reminder_plan_tests COMMAND reminder_plan_tests)

@@ -342,6 +342,17 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
     }
 
+    public String comboNotifications(String operation, String argument) {
+        if (operation.equals("permission")) return ComboNotifications.permission(this);
+        if (operation.equals("tap")) return ComboNotifications.takeTap();
+        runOnUiThread(() -> {
+            if (operation.equals("replace")) ComboNotifications.replace(this, argument);
+            else if (operation.equals("request")) ComboNotifications.request(this);
+            else if (operation.equals("settings")) ComboNotifications.settings(this);
+        });
+        return "";
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -365,6 +376,7 @@ public class AsoBMaShowActivity extends SDLActivity {
                 @Override public void surfaceDestroyed(SurfaceHolder holder) {}
             });
         }
+        ComboNotifications.acceptTap(getIntent());
         handleArchiveImportIntent(getIntent());
     }
 
@@ -407,6 +419,7 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     @Override
     protected void onResume() {
+        ComboNotifications.returned(this, getIntent());
         super.onResume();
         synchronized (gyroscopeTurntableLock) {
             gyroscopeActivityResumed = true;
@@ -421,6 +434,7 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     @Override
     protected void onPause() {
+        ComboNotifications.paused();
         stopDocumentsLibraryRefresh();
         folderPickerRequests.onPause();
         synchronized (gyroscopeTurntableLock) {
@@ -437,6 +451,7 @@ public class AsoBMaShowActivity extends SDLActivity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        ComboNotifications.acceptTap(intent);
         handleArchiveImportIntent(intent);
     }
 

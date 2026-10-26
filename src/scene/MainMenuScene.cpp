@@ -8443,6 +8443,13 @@ bool MainMenuScene::needsContinuousPresentation() const {
 
 void MainMenuScene::update(float dt) {
   if (!applyPendingTabSwitch()) return;
+  if (!context.pendingComboNotificationProfile.empty()) {
+    const auto profile = std::exchange(context.pendingComboNotificationProfile, {});
+    if (profile == context.profileManager.activeProfile().id) {
+      selectTab(Tab::Streak);
+      return;
+    }
+  }
   if (chartDetailsView_) {
     bool currentPreview = false;
     {

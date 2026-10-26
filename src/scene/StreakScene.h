@@ -3,6 +3,8 @@
 #include <array>
 #include "SceneReturnTarget.h"
 #include "../streak/StreakModel.h"
+#include "../notifications/LocalNotifications.h"
+#include "../notifications/ReminderPreferences.h"
 #include "../streak/StreakForm.h"
 #include "../streak/StreakSounds.h"
 #include "../streak/StreakRoundMotion.h"
@@ -39,6 +41,9 @@ private:
   std::string pendingResetAssignment_;
   streak::DayId pendingResetDay_ = 0;
   View *resetOverlay_ = nullptr;
+  void reminderSettings(View *);
+  void saveReminders(reminders::Preferences);
+  reminders::Permission reminderPermission_ = reminders::Permission::Unknown;
   void routine(View *);
   void editor(View *);
   void editAssignment(int index);
@@ -62,9 +67,9 @@ private:
   streak::Assignment assignment_;
   streak::FieldErrors fieldErrors_;
   std::string daily_, weekly_, monthly_, name_, count_, points_, rate_;
-  enum class Page { Dashboard, Routine, Assignment } page_ = Page::Dashboard;
+  enum class Page { Dashboard, Routine, Assignment, Reminders } page_ = Page::Dashboard;
   Page renderedPage_ = Page::Dashboard;
-  std::array<float, 3> scrollOffsets_{};
+  std::array<float, 4> scrollOffsets_{};
   int editingIndex_ = -1, tableId_ = 0;
   bool loadFailed_ = false;
   bool showOptional_ = false;

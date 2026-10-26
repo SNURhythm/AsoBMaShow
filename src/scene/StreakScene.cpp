@@ -350,6 +350,7 @@ void StreakScene::build() {
     action(body, i18n::tr("streak.ui.retry"), [this] { later([this] { reload(); }); }, app_theme::ActionCategory::Neutral, ui_icons::kRotate);
   } else if (page_ == Page::Dashboard) dashboard(body);
   else if (page_ == Page::Routine) routine(body);
+  else if (page_ == Page::Reminders) reminderSettings(body);
   else editor(body);
   if (!message_.empty()) label(body, message_, 19);
   addView(portal_);
@@ -361,6 +362,10 @@ void StreakScene::build() {
     scroll_->setScrollOffset(std::max(0.0F, scroll_->getScrollOffset() + invalid->getY() - scroll_->getY() - 48));
 }
 void StreakScene::dashboard(View *body) {
+  if constexpr (reminders::supported)
+    action(body, i18n::tr("streak.reminders.settings"), [this] {
+      later([this] { reminders::refreshPermission(); page_ = Page::Reminders; });
+    }, app_theme::ActionCategory::Neutral, ui_icons::kClock);
   if (state_.days.empty()) {
     body = card(body);
     body->addView(new StreakFlameView());
@@ -752,13 +757,82 @@ void StreakScene::layout() {
   if (resetOverlay_) { sizeResetChallengeModal(resetOverlay_); root_->applyYogaLayout(); }
   scroll_->refreshContentLayout();
 }
+void StreakScene::saveReminders(reminders::Preferences next) {
+  reminders::Preferences previous;
+  {
+    const std::lock_guard lock(context.applicationUiStateMutex);
+    previous = context.applicationUiState.reminders;
+    context.applicationUiState.reminders = next;
+  }
+  std::string error;
+  if (!context.saveApplicationUiState(&error)) {
+    const std::lock_guard lock(context.applicationUiStateMutex);
+    context.applicationUiState.reminders = previous;
+    message_ = i18n::tr("streak.reminders.save_failed");
+    SDL_Log("Cannot save reminder preferences: %s", error.c_str());
+    return;
+  }
+  message_.clear();
+  if ((!previous.daily && next.daily) || (!previous.comeback && next.comeback)) {
+    if (reminders::permission() == reminders::Permission::NotDetermined ||
+        reminders::permission() == reminders::Permission::Unknown)
+      reminders::requestPermission();
+  }
+}
+void StreakScene::reminderSettings(View *body) {
+  auto *panel = card(body);
+  label(panel, i18n::tr("streak.reminders.settings"), 28);
+  label(panel, i18n::tr("streak.reminders.help"), 19);
+  reminders::Preferences prefs;
+  {
+    const std::lock_guard lock(context.applicationUiStateMutex);
+    prefs = context.applicationUiState.reminders;
+  }
+  for (const bool daily : {true, false}) {
+    const bool enabled = daily ? prefs.daily : prefs.comeback;
+    action(panel, std::string(i18n::tr(daily ? "streak.reminders.daily" : "streak.reminders.comeback")) + ": " +
+        i18n::tr(enabled ? "streak.reminders.on" : "streak.reminders.off"), [this, prefs, daily] {
+      later([this, prefs, daily]() mutable {
+        if (daily) prefs.daily = !prefs.daily; else prefs.comeback = !prefs.comeback;
+        saveReminders(prefs);
+      });
+    });
+  }
+  label(panel, i18n::tr("streak.reminders.cadence"), 19);
+  for (const bool hour : {true, false}) {
+    std::vector<DropdownView::Option> options;
+    for (int i = 0; i < (hour ? 24 : 60); ++i)
+      options.push_back({std::to_string(i), (i < 10 ? "0" : "") + std::to_string(i)});
+    select(panel, portal_, i18n::tr(hour ? "streak.reminders.hour" : "streak.reminders.minute"),
+        std::move(options), std::to_string(hour ? prefs.hour : prefs.minute),
+        [this, prefs, hour](const std::string &value) {
+      later([this, prefs, hour, value]() mutable {
+        if (hour) prefs.hour = std::stoi(value); else prefs.minute = std::stoi(value);
+        saveReminders(prefs);
+      });
+    });
+  }
+  reminderPermission_ = reminders::permission();
+  if (reminderPermission_ == reminders::Permission::Denied) {
+    label(panel, i18n::tr("streak.reminders.blocked"), 19);
+    action(panel, i18n::tr("streak.reminders.open_settings"), [] { reminders::openSettings(); });
+  } else if ((prefs.daily || prefs.comeback) &&
+             reminderPermission_ == reminders::Permission::NotDetermined) {
+    action(panel, i18n::tr("streak.reminders.allow"), [] { reminders::requestPermission(); });
+  }
+  if (state_.days.empty()) label(panel, i18n::tr("streak.reminders.need_routine"), 19);
+}
+
 void StreakScene::back() {
   if (page_ == Page::Assignment) { later([this] { page_ = adjustingToday_ ? Page::Dashboard : Page::Routine; adjustingToday_ = false; fieldErrors_.clear(); message_.clear(); }); return; }
-  if (page_ == Page::Routine) { later([this] { page_ = Page::Dashboard; message_.clear(); reload(); }); return; }
+  if (page_ == Page::Routine || page_ == Page::Reminders) { later([this] { page_ = Page::Dashboard; message_.clear(); reload(); }); return; }
   if (embeddedTab_) { later([this] { if (tabClose_) tabClose_(); }); return; }
   defer([this] { (void)returnToScene(*context.sceneManager, returnTarget_); return false; }, 0, true);
 }
 void StreakScene::update(float dt) {
+  if (context.pendingComboNotificationProfile == profileId_)
+    context.pendingComboNotificationProfile.clear();
+  if (page_ == Page::Reminders && reminderPermission_ != reminders::permission()) build();
   if (page_ == Page::Dashboard && goalIgnitionSoundPending_) {
     goalIgnitionSoundPending_ = false;
     if (SDL_GetTicks() - streakProgressStartedAt_ < 750)
