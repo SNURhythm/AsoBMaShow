@@ -802,6 +802,28 @@ void testAssignmentFoldersShowOnlyContributingCharts() {
           "counted chart is hidden while sticky eligibility survives removed level and improved lamp");
   children = musicSelectAssignmentChildren(day, second, sources, input);
   require(children.size() == 2, "a chart counted for one assignment can contribute to another");
+  auto &progress = day.assignments[0];
+  progress.requirement.chartCount = 3;
+  progress.charts = 1;
+  require(!musicSelectAssignmentNeedsAdjustment(day, progress, sources, input),
+          "exactly enough remaining charts keeps normal next-day editing");
+  progress.requirement.chartCount = 4;
+  require(musicSelectAssignmentNeedsAdjustment(day, progress, sources, input),
+          "shortage ignores duplicate, used, missing and wrong-level charts but counts sticky charts");
+  progress.requirement.chartCount = 3;
+  sources[1].record.solidArchive = true;
+  require(musicSelectAssignmentNeedsAdjustment(day, progress, sources, input),
+          "unplayable archive charts cannot make today's quota achievable");
+  sources[1].record.solidArchive = false;
+  require(!musicSelectAssignmentNeedsAdjustment(day, progress, sources, input),
+          "restored chart availability removes the immediate-edit exception");
+  day.points = day.config.dailyGoal;
+  require(!musicSelectAssignmentNeedsAdjustment(day, progress, sources, input),
+          "bonus rounds need only one chart regardless of configured quota");
+  auto noCharts = std::vector<MusicSelectAssignmentChart>{};
+  require(musicSelectAssignmentNeedsAdjustment(day, progress, noCharts, input),
+          "empty bonus pool permits adjustment while bonus remains");
+  day.points = 0;
   input.selectedLongNoteMode = 3;
   children = musicSelectAssignmentChildren(day, root, sources, input);
   require(children.size() == 3, "LN-mode eligibility changes without removing sticky charts");
@@ -809,6 +831,8 @@ void testAssignmentFoldersShowOnlyContributingCharts() {
   day.assignments[0].bonusRounds = streak::sharedDailyBonusLimit;
   require(musicSelectAssignmentChildren(day, root, sources, input).size() == 2,
           "exhausted shared bonus budget keeps folders but no contributing charts");
+  require(!musicSelectAssignmentNeedsAdjustment(day, progress, noCharts, input),
+          "exhausted bonus budget does not enable adjustment");
   require(musicSelectAssignmentChildren(day, first, sources, input).empty(),
           "exhausted assignment folder is empty");
   day.points = 0; day.assignments[0].bonusRounds = 0;

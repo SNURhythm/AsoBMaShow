@@ -1,6 +1,8 @@
 #include "StreakScene.h"
 #include "SceneManager.h"
 #include "../Uuid.h"
+#include "../LongNoteModeUtils.h"
+#include "../music_select/MusicSelectAssignmentFolders.h"
 #include "../rendering/common.h"
 #include "../rendering/ResponsiveUi.h"
 #include "../view/ActionButtonStyle.h"
@@ -126,6 +128,24 @@ void StreakScene::reload() {
   monthly_ = std::to_string(draft_.monthlyGoal);
   checkedDay_ = streak::today();
 }
+std::set<std::string> StreakScene::unavailableAssignments(const streak::Day &day) {
+  auto session = context.chartRepository.OpenSession();
+  if (!session) throw std::runtime_error("Chart storage is unavailable.");
+  MusicSelectRepositoryMetadata metadata;
+  for (const auto &table : session->SelectDifficultyTables())
+    metadata.tables.push_back({.info=table});
+  const int mode = long_note_mode::valueFromId(context.settings.selectedLnMode);
+  const auto charts = loadMusicSelectAssignmentCharts(*session, metadata, day, mode);
+  const auto ranks = context.scoreRepository.LoadBestClearRanks();
+  std::set<std::string> unavailable;
+  for (const auto &progress : day.assignments)
+    if (musicSelectAssignmentNeedsAdjustment(day, progress, charts,
+        {.clearFor=[&ranks](const bms_parser::ChartMeta &meta, int mode) {
+           return ranks.bestRankFor(meta, mode);
+         }, .selectedLongNoteMode=mode}))
+      unavailable.insert(progress.requirement.id);
+  return unavailable;
+}
 void StreakScene::later(std::function<void()> action) {
   defer([this, action = std::move(action)] { action(); build(); return true; }, 0, true);
 }
@@ -203,6 +223,12 @@ void StreakScene::dashboard(View *body) {
   } else label(body, i18n::tr("streak.ui.assignments"), 27);
   if (!complete || showOptional_) label(body, i18n::tr("streak.ui.eligibility_help"), 18);
   if (!complete && day.assignments.empty()) label(body, i18n::tr("streak.ui.no_assignments"));
+  std::set<std::string> unavailable;
+  try {
+    if (!complete || (showOptional_ && bonusAvailable))
+      unavailable = unavailableAssignments(day);
+  }
+  catch (const std::exception &error) { label(body, error.what(), 18); }
   for (const auto &p : day.assignments) {
     if (complete && (!showOptional_ || !bonusAvailable)) break;
     auto *assignmentCard = card(body);
@@ -219,17 +245,18 @@ void StreakScene::dashboard(View *body) {
     label(assignmentCard, "Previous lamp: " + streak::lampLabel(p.requirement.eligibleLamp) +
                 (p.requirement.eligibleOrBelow ? " or below" : ""), 18);
     meter(assignmentCard, complete ? 0 : p.charts, complete ? 1 : p.requirement.chartCount);
-    action(assignmentCard, i18n::tr("streak.ui.adjust_today"), [this, requirement = p.requirement] {
-      later([this, requirement] {
-        editAssignment(-1);
-        adjustingToday_ = true;
-        assignment_ = requirement;
-        name_ = requirement.name;
-        count_ = std::to_string(requirement.chartCount);
-        points_ = std::to_string(requirement.points);
-        rate_ = std::to_string(100.0 * requirement.scoreNumerator / requirement.scoreDenominator);
+    if (unavailable.contains(p.requirement.id))
+      action(assignmentCard, i18n::tr("streak.ui.adjust_today"), [this, requirement = p.requirement] {
+        later([this, requirement] {
+          editAssignment(-1);
+          adjustingToday_ = true;
+          assignment_ = requirement;
+          name_ = requirement.name;
+          count_ = std::to_string(requirement.chartCount);
+          points_ = std::to_string(requirement.points);
+          rate_ = std::to_string(100.0 * requirement.scoreNumerator / requirement.scoreDenominator);
+        });
       });
-    });
   }
   auto *periods = card(body);
   label(periods, i18n::tr("streak.ui.week_progress"), 20);
@@ -377,6 +404,12 @@ void StreakScene::acceptAssignment() {
       if (checkedDay_ != streak::today())
         throw std::runtime_error("The day changed. Return to today's dashboard and try again.");
       std::string error;
+      const auto current = context.scoreRepository.LoadStreak(error);
+      if (!current) throw std::runtime_error(error);
+      const auto day = current->days.find(checkedDay_);
+      if (day == current->days.end() ||
+          !unavailableAssignments(day->second).contains(assignment_.id))
+        throw std::runtime_error(i18n::tr("streak.ui.adjust_unavailable"));
       if (!context.scoreRepository.AdjustStreakAssignment(assignment_, checkedDay_, error))
         throw std::runtime_error(error);
       adjustingToday_ = false;

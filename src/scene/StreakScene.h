@@ -20,6 +20,7 @@ private:
   void renderScene() override {}
   void cleanupScene() override;
   void reload();
+  std::set<std::string> unavailableAssignments(const streak::Day &);
   void build();
   void layout();
   void later(std::function<void()> action);

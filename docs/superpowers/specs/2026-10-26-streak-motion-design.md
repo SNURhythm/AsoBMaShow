@@ -62,8 +62,8 @@ progress unless a genuine before/after receipt is available.
 
 Economy, daily reset, bonus limits and migration remain unchanged. Ordinary
 routine edits still apply tomorrow. The user additionally requested immediate
-changes when an assignment is unachievable (for example, too few eligible
-charts). Add an explicit "Adjust today" action: today's levels, eligibility,
+changes only when too few distinct eligible, playable charts remain to finish
+the current round. Add an explicit "Adjust today" action: today's levels, eligibility,
 targets and quota may change; rewards, used charts, partial progress and earned
 points are retained. Changes apply only today and never award points by
 editing. A reduced quota needs another distinct qualifying chart. Preserve
@@ -79,3 +79,7 @@ Exercise the affected results/UI groups and compile the desktop app. Inspect
 actual layouts or a faithful rendered preview for narrow/wide screens, themes,
 complete/incomplete/empty states, and drawer dismissal. Use existing component
 patterns and localized text. No deployments or new worktrees.
+
+Recheck chart availability on save. Bonus rounds need only one eligible chart.
+Normal editing is labeled "Edit for tomorrow"; target difficulty alone does not
+enable immediate adjustments.

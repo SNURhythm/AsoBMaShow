@@ -1,5 +1,6 @@
 #include "MusicSelectAssignmentFolders.h"
 
+#include <algorithm>
 #include <set>
 
 namespace {
@@ -13,6 +14,18 @@ MusicSelectBar folder(std::string id, std::string title) {
                          .title=std::move(title), .exists=true},
           .selectable=true, .sortable=true, .childrenLoaded=false};
 }
+bool contributes(const streak::Progress &progress, const MusicSelectAssignmentChart &source,
+                 const MusicSelectRepositoryProjectionInput &input) {
+  const auto &record = source.record;
+  if (record.unavailable || record.solidArchive || record.meta.BmsPath.empty() ||
+      record.meta.SHA256.empty() || progress.usedCharts.contains(record.meta.SHA256)) return false;
+  if (progress.chartProgress.contains(record.meta.SHA256)) return true;
+  return streak::eligible(progress.requirement,
+      {.chart=record.meta.SHA256, .levels=source.levels,
+       .previousLamp=input.clearFor
+           ? input.clearFor(record.meta, input.selectedLongNoteMode) : -1});
+}
+
 }
 
 bool musicSelectIsAssignmentDirectory(const MusicSelectBar &bar) {
@@ -40,20 +53,29 @@ std::vector<MusicSelectBar> musicSelectAssignmentChildren(
   std::set<std::string> included;
   for (const auto &source : charts) {
     const auto &record = source.record;
-    if (record.unavailable || record.solidArchive || record.meta.BmsPath.empty() ||
-        record.meta.SHA256.empty()) continue;
-    streak::Play play{.chart=record.meta.SHA256, .levels=source.levels,
-                     .previousLamp=input.clearFor
-                         ? input.clearFor(record.meta, input.selectedLongNoteMode) : -1};
     for (const auto *progress : assignments) {
-      if (progress->usedCharts.contains(play.chart)) continue;
-      if (!progress->chartProgress.contains(play.chart) &&
-          !streak::eligible(progress->requirement, play)) continue;
-      if (included.insert(play.chart).second)
+      if (!contributes(*progress, source, input)) continue;
+      if (included.insert(record.meta.SHA256).second)
         result.push_back(MusicSelectRepositoryProjection::projectSong(
             record, directory.id.value, input));
       break;
     }
   }
   return result;
+}
+
+bool musicSelectAssignmentNeedsAdjustment(
+    const streak::Day &day, const streak::Progress &progress,
+    std::span<const MusicSelectAssignmentChart> charts,
+    MusicSelectRepositoryProjectionInput input) {
+  const bool bonus = day.points >= day.config.dailyGoal;
+  if (bonus && streak::bonusPoints(day) >= streak::bonusLimit(day)) return false;
+  const int remaining = bonus ? 1 : std::max(1, progress.requirement.chartCount - progress.charts);
+  std::set<std::string> available;
+  for (const auto &source : charts) {
+    if (!contributes(progress, source, input)) continue;
+    available.insert(source.record.meta.SHA256);
+    if (available.size() >= static_cast<std::size_t>(remaining)) return false;
+  }
+  return true;
 }

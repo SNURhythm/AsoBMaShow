@@ -16,3 +16,8 @@ struct MusicSelectAssignmentChart {
 [[nodiscard]] std::vector<MusicSelectAssignmentChart> loadMusicSelectAssignmentCharts(
     ChartRepository::Session &, const MusicSelectRepositoryMetadata &,
     const streak::Day &, int selectedLongNoteMode);
+
+// Only a shortage of distinct, playable candidates permits changing today's round.
+[[nodiscard]] bool musicSelectAssignmentNeedsAdjustment(
+    const streak::Day &, const streak::Progress &,
+    std::span<const MusicSelectAssignmentChart>, MusicSelectRepositoryProjectionInput);

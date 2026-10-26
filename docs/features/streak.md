@@ -46,9 +46,11 @@ Completed rounds at or after the goal may randomly raise the next score rank
 (custom rate +2 percentage points) or lamp, but only when the finishing play
 already meets the proposed target. Otherwise the target stays unchanged. Bonus
 chart counts never increase. Tomorrow restores all configured chart counts and
-targets and resets the shared bonus budget. If the chart pool runs out or a target is out of reach, use **Adjust today** on
-that assignment. Levels, eligibility, targets and quota change immediately for
-today. Rewards, used charts, partial achievements and points are retained;
+targets and resets the shared bonus budget. **Edit for tomorrow** is the normal
+editing flow. Only when fewer distinct eligible, playable charts remain than
+needed to finish the current round does **Adjust today** appear on that
+assignment. Difficult targets alone do not enable immediate editing. Levels,
+eligibility, targets and quota change immediately for today. Rewards, used charts, partial achievements and points are retained;
 editing itself awards nothing. A lowered quota still needs another distinct
 qualifying chart. The regular routine and pending changes stay unchanged.
 Today's points per round and daily goal cannot be raised through this action.
@@ -192,8 +194,8 @@ automation.
 - Rotate while open or after dismissing. The drawer fits the new viewport and
   dismissal stays remembered. Autoplay, replay, practice and history browsing
   do not open it. A successful score-save retry may open it once.
-- Use **Adjust today** when a pool or target is exhausted. Verify points and
-  counted charts remain, the new requirement applies now, and tomorrow retains
+- Verify **Adjust today** appears only when the remaining eligible chart pool
+  is too small. Verify points and counted charts remain, the new requirement applies now, and tomorrow retains
   the regular routine. A stale editor crossing midnight must refuse the save.
 - Listen for the short progress/completion cue and successful freeze-purchase
   cue. Master mute silences them; redraws and rotation do not replay them.
