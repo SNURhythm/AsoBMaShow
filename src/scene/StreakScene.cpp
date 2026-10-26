@@ -196,16 +196,16 @@ void assignmentConditions(View *parent, const streak::Assignment &a, int size = 
     line->addView(right);
     parent->addView(line);
   };
-  const auto previousLamp = a.eligibleOrBelow
-      ? comparison("streak.ui.at_most", lampText(a.eligibleLamp)) : lampText(a.eligibleLamp);
-  row(a.eligibleLamp == -2 ? previousLamp : comparison("streak.ui.previous_lamp", previousLamp),
+  const auto previousLamp = a.eligibleLamp == -2 ? i18n::tr("streak.ui.any_lamp") :
+      a.eligibleOrBelow ? comparison("streak.ui.at_most", lampText(a.eligibleLamp)) : lampText(a.eligibleLamp);
+  row(a.eligibleLamp == -2 ? previousLamp : comparison("streak.ui.condition_lamp", previousLamp),
       a.targetLamp < 0 ? i18n::tr("streak.ui.any_lamp") :
           comparison("streak.ui.at_least", lampText(a.targetLamp)), a.eligibleLamp, a.targetLamp);
-  auto previousScore = a.eligibleScoreRank == -2 ? i18n::tr("streak.ui.any_previous_score") :
+  auto previousScore = a.eligibleScoreRank == -2 ? i18n::tr("streak.ui.any_score") :
       streak::scoreRankLabel(a.eligibleScoreRank);
   if (a.eligibleScoreRank != -2 && a.eligibleScoreOrBelow)
     previousScore = comparison("streak.ui.at_most", previousScore);
-  row(a.eligibleScoreRank == -2 ? previousScore : comparison("streak.ui.previous_score", previousScore),
+  row(a.eligibleScoreRank == -2 ? previousScore : comparison("streak.ui.condition_score", previousScore),
       a.scoreNumerator == 0 ? i18n::tr("streak.ui.any_score") :
           comparison("streak.ui.at_least", streak::scoreValueLabel(a)));
 }
