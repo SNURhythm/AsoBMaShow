@@ -16,17 +16,18 @@ not consecutive calendar dates.
 Assignments repeat automatically. Each chart counts only once per assignment
 per local calendar day, even across rounds or overlapping table entries. One
 play may advance multiple assignments. After the daily goal is reached, finishing
-an assignment randomly increases one enabled requirement for its next round:
-chart count +1, the next score rank (custom rate +2 percentage points), or the next
-lamp. Requirements never weaken or exceed MAX/Full Combo. Before the goal,
-rewards are capped at the remaining goal points. The goal-reaching play gives no
-extra points, including simultaneous completions. Later rounds award 1 bonus
-point, capped at 5 per assignment daily. Next day restores the configured
-requirements and bonus budget. Eligibility uses the record
+an assignment may increase its next score rank (custom rate +2 percentage points)
+or lamp, only when the finishing play already meets the next target. Every
+post-goal round uses exactly one new qualifying chart, regardless of the normal
+quota. Before the goal, rewards are capped at remaining goal points. The
+goal-reaching play gives no extra points, including simultaneous completions.
+Later rounds award 1 bonus point, with a shared limit of 10 daily and no
+per-assignment cap. Next day restores configured requirements and bonus budget.
+Eligibility uses the record
 before the qualifying attempt, not its newly saved lamp.
 
 Post-goal bonus points enter a savings balance. A freeze starts at 20 points,
-with the price rising by 10 on each purchase. A streak break resets the price
+with the price rising by 5 on each purchase up to 50. A streak break resets the price
 to 20; using freezes and attendance protection do not. At most two may be
 purchased into inventory. Spending does not reduce
 daily, weekly or monthly earned points. MVP defaults: daily 100, weekly 500,
@@ -38,7 +39,8 @@ use their original play date, and can return an unnecessarily consumed freeze.
 
 Streak milestones: 7, 14, 30, 50, 100, 365. Weekly/monthly goal achievements are
 retained. MVP provides a usable native dashboard/editor and a short result
-acknowledgment. Rich animation, sound, share cards, browsing eligible charts
+acknowledgment. Completed days emphasize completion and collapse optional
+challenges. Rich animation, sound, share cards, browsing eligible charts
 from an assignment, and custom-skin dashboard integration are follow-up polish.
 
 ## Approaches

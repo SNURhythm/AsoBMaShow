@@ -38,15 +38,15 @@ int main() {
   configure(earned, config, today());
   Play attempt{.day = today(), .chart = "goal", .levels = {{"https://table", "0", ""}}, .lamp = 600};
   CHECK(record(earned, attempt, 0) == 10);
-  attempt.chart = "bonus-one"; record(earned, attempt, 0);
+  attempt.chart = "bonus-one"; CHECK(record(earned, attempt, 0) == 1);
   attempt.chart = "bonus-two"; CHECK(record(earned, attempt, 0) == 1);
   earned.savings = 100;
   CHECK(buyFreeze(earned, today()));
   save(db, earned);
   auto reopened = load(db);
-  CHECK(reopened.version == 2 && freezePrice(reopened) == 30 && reopened.savings == 80);
-  CHECK(reopened.days.begin()->second.assignments[0].bonusRounds == 1);
-  CHECK(reopened.days.begin()->second.assignments[0].earnedPoints == 11);
+  CHECK(reopened.version == 2 && freezePrice(reopened) == 25 && reopened.savings == 80);
+  CHECK(reopened.days.begin()->second.assignments[0].bonusRounds == 2);
+  CHECK(reopened.days.begin()->second.assignments[0].earnedPoints == 12);
   advance(reopened, today() + 3); // Consumes freeze, then breaks.
   CHECK(freezePrice(reopened) == 20);
   CHECK(buyFreeze(reopened, today() + 3));
@@ -54,7 +54,7 @@ int main() {
   reopened = load(db);
   attempt.day = today() + 3; attempt.chart = "restart";
   record(reopened, attempt, 0);
-  CHECK(freezePrice(reopened) == 30); // Old break cannot reset again after reload.
+  CHECK(freezePrice(reopened) == 25); // Old break cannot reset again after reload.
 
   auto rejects = [&](State bad) {
     save(db, bad);
@@ -95,12 +95,63 @@ int main() {
   auto migrated = load(db);
   CHECK(migrated.version == 2 && migrated.savings == 80 && migrated.freezes == 1);
   CHECK(migrated.configurations.size() == 2 && migrated.milestones.contains("streak:7"));
-  CHECK(migrated.days.begin()->second.points == 40);
-  CHECK(migrated.days.begin()->second.assignments[0].earnedPoints == 40);
+  CHECK(migrated.days.begin()->second.points == 60);
+  CHECK(migrated.days.begin()->second.assignments[0].earnedPoints == 60);
   CHECK(migrated.days.begin()->second.assignments[0].usedCharts.size() == 3);
   CHECK(freezePrice(migrated) == 20);
   save(db, migrated);
-  CHECK(load(db).days.begin()->second.points == 40);
+  CHECK(load(db).days.begin()->second.points == 60);
+  // Version 2 days can already exceed the new shared budget. Preserve them
+  // across loading and reject further rewards without rewriting their history.
+  State oldBudget;
+  auto oldConfig = config;
+  for (const auto &id : {"two", "three"}) {
+    auto assignment = config.assignments[0]; assignment.id = id;
+    oldConfig.assignments.push_back(assignment);
+  }
+  configure(oldBudget, oldConfig, today());
+  auto &oldDay = oldBudget.days.begin()->second;
+  oldDay.played = true;
+  oldDay.points = 25;
+  oldBudget.savings = 15;
+  for (std::size_t i = 0; i < oldDay.assignments.size(); ++i) {
+    auto &progress = oldDay.assignments[i];
+    progress.completedRounds = 6;
+    progress.bonusRounds = 5;
+    progress.earnedPoints = i == 0 ? 15 : 5;
+    for (int n = 0; n < 30; ++n) progress.usedCharts.insert("old" + std::to_string(n));
+  }
+  save(db, oldBudget);
+  auto preserved = load(db);
+  attempt.day = today(); attempt.chart = "new-after-upgrade";
+  CHECK(record(preserved, attempt, 0) == 0);
+  CHECK(preserved.savings == 15 && preserved.days.begin()->second.points == 25);
+  CHECK(bonusPoints(preserved.days.begin()->second) == 15);
+
+  // The entire shared budget is now valid on a single assignment, including
+  // after upgrading a partially completed bonus round with an older quota.
+  State oneAssignment;
+  configure(oneAssignment, config, today());
+  attempt.day = today(); attempt.chart = "goal";
+  CHECK(record(oneAssignment, attempt, 0) == 10);
+  auto &oldRound = oneAssignment.days.begin()->second.assignments[0];
+  oldRound.requirement.chartCount = 4;
+  oldRound.charts = 2;
+  oldRound.usedCharts.insert("partial-one");
+  oldRound.usedCharts.insert("partial-two");
+  save(db, oneAssignment);
+  oneAssignment = load(db);
+  for (int n = 0; n < 10; ++n) {
+    attempt.chart = "single-bonus" + std::to_string(n);
+    CHECK(record(oneAssignment, attempt, 0) == 1);
+  }
+  save(db, oneAssignment);
+  oneAssignment = load(db);
+  CHECK(oneAssignment.days.begin()->second.assignments[0].bonusRounds == 10);
+  CHECK(oneAssignment.days.begin()->second.assignments[0].requirement.chartCount == 1);
+  attempt.chart = "eleventh";
+  CHECK(record(oneAssignment, attempt, 0) == 0 && oneAssignment.savings == 10);
+
   // Unsupported or damaged state must be reported, never silently replaced.
   CHECK(sqlite3_exec(db, "UPDATE streak_state SET body = '{\"version\":99}'", nullptr, nullptr, nullptr) == SQLITE_OK);
   bool rejected = false;

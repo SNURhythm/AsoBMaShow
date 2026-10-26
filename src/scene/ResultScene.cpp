@@ -4217,11 +4217,17 @@ void ResultScene::buildResultView() {
         progress->setWrap(true);
         progress->setThemedColor(app_theme::textPrimary);
         progress->setMinHeight(52)->setPadding(Edge::All, 12);
-        progress->setText(std::string(i18n::tr("streak.ui.title")) + " · " +
-            std::to_string(streak->currentStreak) + " days · " + std::to_string(day.points) +
-            " / " + std::to_string(day.config.dailyGoal) + " points\n" +
-            (day.points >= day.config.dailyGoal ? i18n::tr("streak.ui.reached") :
-             day.played ? i18n::tr("streak.ui.protected") : i18n::tr("streak.ui.pending")));
+        if (day.points >= day.config.dailyGoal) {
+          progress->setThemedColor(app_theme::lime);
+          progress->setThemedBackgroundColor(app_theme::panelStrong);
+          progress->setText(std::string(i18n::tr("streak.ui.complete")) + " · " +
+              std::to_string(streak->currentStreak) + " days\n" + i18n::tr("streak.ui.complete_help"));
+        } else {
+          progress->setText(std::string(i18n::tr("streak.ui.title")) + " · " +
+              std::to_string(streak->currentStreak) + " days · " + std::to_string(day.points) +
+              " / " + std::to_string(day.config.dailyGoal) + " points\n" +
+              (day.played ? i18n::tr("streak.ui.protected") : i18n::tr("streak.ui.pending")));
+        }
         rootLayout->addView(progress);
       }
     }

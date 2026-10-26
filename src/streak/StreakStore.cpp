@@ -67,7 +67,7 @@ State load(sqlite3 *db) {
       if (auto error = validate(active); !error.empty()) throw std::runtime_error(error);
       if (progress.requirement.id != base.id || progress.requirement.points != base.points ||
           progress.completedRounds < 0 || progress.bonusRounds < 0 ||
-          progress.bonusRounds > dailyBonusLimit || progress.bonusRounds > progress.completedRounds ||
+          progress.bonusRounds > sharedDailyBonusLimit || progress.bonusRounds > progress.completedRounds ||
           progress.earnedPoints < progress.bonusRounds ||
           progress.earnedPoints > static_cast<std::int64_t>(progress.completedRounds - progress.bonusRounds) *
               progress.requirement.points + progress.bonusRounds ||

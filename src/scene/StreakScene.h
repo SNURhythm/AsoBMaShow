@@ -37,6 +37,7 @@ private:
   enum class Page { Dashboard, Routine, Assignment } page_ = Page::Dashboard;
   int editingIndex_ = -1, tableId_ = 0;
   bool loadFailed_ = false;
+  bool showOptional_ = false;
   View *root_ = nullptr;
   ScrollView *scroll_ = nullptr;
   OverlayPortal *portal_ = nullptr;

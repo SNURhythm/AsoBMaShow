@@ -63,33 +63,33 @@ void recompute(State &s, int returnedFreezes = 0, DayId returnedAfter = 0) {
   }
   s.currentStreak = current;
 }
-void harder(Assignment &a, std::uint32_t choice) {
-  std::vector<int> options;
-  if (a.chartCount < 10000) options.push_back(0);
-  if (a.scoreNumerator > 0 && a.scoreNumerator < a.scoreDenominator) options.push_back(1);
-  if (a.targetLamp >= 0 && a.targetLamp < 600) options.push_back(2);
-  if (options.empty()) return;
-  switch (options[choice % options.size()]) {
-  case 0: ++a.chartCount; break;
-  case 1:
+void harder(Assignment &a, const Play &p, std::uint32_t choice) {
+  std::vector<Assignment> options;
+  if (a.scoreNumerator > 0 && a.scoreNumerator < a.scoreDenominator && p.maxScore > 0) {
+    auto next = a;
     if (a.customRate) {
-      a.scoreNumerator = std::min(a.scoreDenominator,
+      next.scoreNumerator = std::min(a.scoreDenominator,
           a.scoreNumerator + std::max(1, a.scoreDenominator / 50));
     } else {
       for (int n : rankNumerators) {
         if (static_cast<std::int64_t>(n) * a.scoreDenominator >
             static_cast<std::int64_t>(a.scoreNumerator) * 27) {
-          a.scoreNumerator = n;
-          a.scoreDenominator = 27;
+          next.scoreNumerator = n;
+          next.scoreDenominator = 27;
           break;
         }
       }
     }
-    break;
-  case 2:
-    a.targetLamp = *std::upper_bound(lamps.begin(), lamps.end(), a.targetLamp);
-    break;
+    if (static_cast<std::int64_t>(p.score) * next.scoreDenominator >=
+        static_cast<std::int64_t>(p.maxScore) * next.scoreNumerator)
+      options.push_back(std::move(next));
   }
+  if (a.targetLamp >= 0 && a.targetLamp < 600) {
+    auto next = a;
+    next.targetLamp = *std::upper_bound(lamps.begin(), lamps.end(), a.targetLamp);
+    if (p.lamp >= next.targetLamp) options.push_back(std::move(next));
+  }
+  if (!options.empty()) a = std::move(options[choice % options.size()]);
 }
 } // namespace
 
@@ -213,6 +213,14 @@ DayId configure(State &s, const Config &config, DayId day) {
   recompute(s);
   return effective;
 }
+int bonusLimit(const Day &day) {
+  return day.assignments.empty() ? 0 : sharedDailyBonusLimit;
+}
+int bonusPoints(const Day &day) {
+  int points = 0;
+  for (const auto &progress : day.assignments) points += progress.bonusRounds;
+  return points;
+}
 std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice) {
   if (!p.manual || p.chart.empty() || s.configurations.empty() || p.day < s.configurations.begin()->first) return 0;
   advance(s, p.day);
@@ -224,21 +232,35 @@ std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice) {
   if (day.frozen) { ++s.freezes; day.frozen = false; }
   const auto before = day.points;
   const bool bonus = before >= day.config.dailyGoal;
+  if (bonus) {
+    // Existing saved bonus rounds may still have the older multi-chart quota.
+    // Their partial progress grants no automatic reward; the next new chart
+    // completes one bonus round under the current rule.
+    for (auto &progress : day.assignments) {
+      progress.requirement.chartCount = 1;
+      progress.charts = 0;
+    }
+  }
+  int remainingBonus = std::max(0, bonusLimit(day) - bonusPoints(day));
+  std::vector<Progress *> ordered;
+  for (auto &progress : day.assignments) ordered.push_back(&progress);
+  std::sort(ordered.begin(), ordered.end(), [](const auto *a, const auto *b) {
+    return a->requirement.id < b->requirement.id;
+  });
   std::vector<Progress *> completed;
-  for (auto &progress : day.assignments) {
-    if ((bonus && progress.bonusRounds >= dailyBonusLimit) ||
-        !matches(progress.requirement, p) || progress.usedCharts.contains(p.chart)) continue;
+  for (auto *item : ordered) {
+    if (bonus && remainingBonus == 0) break;
+    auto &progress = *item;
+    if (!matches(progress.requirement, p) || progress.usedCharts.contains(p.chart)) continue;
     progress.usedCharts.insert(p.chart);
     if (++progress.charts < progress.requirement.chartCount) continue;
     ++progress.completedRounds;
     progress.charts = 0;
     completed.push_back(&progress);
+    if (bonus) --remainingBonus;
   }
   // A play that reaches the goal earns no bonus, including simultaneous
   // completions. Allocate its remaining goal budget in stable identity order.
-  std::sort(completed.begin(), completed.end(), [](const auto *a, const auto *b) {
-    return a->requirement.id < b->requirement.id;
-  });
   for (auto *progress : completed) {
     const auto reward = bonus ? 1 : std::min<std::int64_t>(
         progress->requirement.points, day.config.dailyGoal - day.points);
@@ -247,13 +269,19 @@ std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice) {
     if (bonus) { ++progress->bonusRounds; ++s.savings; }
   }
   // Every assignment sees the same final daily total, independent of list order.
-  if (day.points >= day.config.dailyGoal)
-    for (auto *progress : completed) harder(progress->requirement, randomChoice++);
+  if (day.points >= day.config.dailyGoal) {
+    for (auto &progress : day.assignments) {
+      progress.requirement.chartCount = 1;
+      progress.charts = 0;
+    }
+    for (auto *progress : completed) harder(progress->requirement, p, randomChoice++);
+  }
   recompute(s, returnedFreezes, p.day);
   return day.points - before;
 }
 std::int64_t freezePrice(const State &s) {
-  return baseFreezePrice + static_cast<std::int64_t>(freezePriceStep) * s.freezePurchases;
+  return std::min<std::int64_t>(maxFreezePrice,
+      baseFreezePrice + static_cast<std::int64_t>(freezePriceStep) * s.freezePurchases);
 }
 bool buyFreeze(State &s, DayId day) {
   advance(s, day);

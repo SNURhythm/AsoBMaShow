@@ -27,8 +27,8 @@ int main() {
   record(s, play(20000, "three"), 0);
   CHECK(record(s, play(20000, "four"), 0) == 40);
   CHECK(s.currentStreak == 1 && s.savings == 0);
-  CHECK(s.days.at(20000).assignments[0].requirement.chartCount == 3);
-  CHECK(record(s, play(20000, "five"), 0) == 0);
+  CHECK(s.days.at(20000).assignments[0].requirement.chartCount == 1);
+  CHECK(record(s, play(20000, "five"), 0) == 1);
   CHECK(s.currentStreak == 1);
   advance(s, 20001);
   CHECK(s.days.at(20001).assignments[0].requirement.chartCount == 2);
@@ -46,7 +46,7 @@ int main() {
   configure(bank, config(100, 300), 21000);
   record(bank, play(21000, "a"), 0);
   CHECK(bank.savings == 0 && bank.currentStreak == 1);
-  bank.savings = 50; // Isolate inventory and calendar behavior from earning.
+  bank.savings = 45; // Isolate inventory and calendar behavior from earning.
   CHECK(buyFreeze(bank, 21000) && buyFreeze(bank, 21000));
   CHECK(!buyFreeze(bank, 21000));
   CHECK(bank.savings == 0 && bank.days.at(21000).points == 100);
@@ -89,7 +89,7 @@ int main() {
   CHECK(record(ranks, p, 1) == 0);
   p.score = 89;
   CHECK(record(ranks, p, 1) == 1);
-  CHECK(ranks.days.at(22000).assignments[0].requirement.scoreNumerator == 26);
+  CHECK(ranks.days.at(22000).assignments[0].requirement.scoreNumerator == 24);
   p.chart = "cleared-before"; p.previousLamp = 300; p.score = 100;
   CHECK(record(ranks, p, 1) == 0);
   State automatic;
@@ -132,7 +132,7 @@ int main() {
   }
   CHECK(bonus.savings == 10 && bonus.days.at(25000).points == 110);
   for (const auto &progress : bonus.days.at(25000).assignments)
-    CHECK(progress.bonusRounds == 5 && progress.charts == 0);
+    CHECK(progress.charts == 0);
   advance(bonus, 25001);
   CHECK(bonus.days.at(25001).assignments[0].bonusRounds == 0);
   CHECK(record(bonus, play(25001, "goal"), 0) == 100 && bonus.savings == 10);
@@ -142,16 +142,16 @@ int main() {
   record(prices, play(26000, "start"), 0);
   prices.savings = 1000;
   CHECK(freezePrice(prices) == 20 && buyFreeze(prices, 26000));
-  CHECK(freezePrice(prices) == 30 && buyFreeze(prices, 26000));
-  CHECK(freezePrice(prices) == 40 && !buyFreeze(prices, 26000));
-  CHECK(prices.savings == 950 && freezePrice(prices) == 40);
+  CHECK(freezePrice(prices) == 25 && buyFreeze(prices, 26000));
+  CHECK(freezePrice(prices) == 30 && !buyFreeze(prices, 26000));
+  CHECK(prices.savings == 955 && freezePrice(prices) == 30);
   advance(prices, 26003); // Both freezes used; no break yet.
-  CHECK(prices.currentStreak == 1 && prices.freezes == 0 && freezePrice(prices) == 40);
+  CHECK(prices.currentStreak == 1 && prices.freezes == 0 && freezePrice(prices) == 30);
   advance(prices, 26004);
   CHECK(prices.currentStreak == 0 && freezePrice(prices) == 20);
-  CHECK(buyFreeze(prices, 26004) && freezePrice(prices) == 30);
+  CHECK(buyFreeze(prices, 26004) && freezePrice(prices) == 25);
   record(prices, play(26004, "restart"), 0); // Replaying old gaps must not reset price again.
-  CHECK(freezePrice(prices) == 30);
+  CHECK(freezePrice(prices) == 25);
   advance(prices, 26007); // Another streak, another actual break.
   CHECK(prices.currentStreak == 0 && freezePrice(prices) == 20);
   prices.savings = 19;
@@ -163,10 +163,101 @@ int main() {
   record(historical, play(27000, "start"), 0);
   advance(historical, 27003);
   historical.savings = 100;
-  CHECK(buyFreeze(historical, 27003) && freezePrice(historical) == 30);
+  CHECK(buyFreeze(historical, 27003) && freezePrice(historical) == 25);
   auto lateAttendance = play(27001, "late-attendance"); lateAttendance.levels.clear();
   record(historical, lateAttendance, 0);
-  CHECK(historical.currentStreak == 0 && freezePrice(historical) == 30);
+  CHECK(historical.currentStreak == 0 && freezePrice(historical) == 25);
+
+  // A shared budget bounds income even with many overlapping assignments.
+  State shared;
+  auto many = config(1, 1);
+  for (const auto &id : {"b", "c"}) {
+    auto a = many.assignments[0]; a.id = id; many.assignments.push_back(a);
+  }
+  configure(shared, many, 28000);
+  CHECK(record(shared, play(28000, "goal"), 0) == 1);
+  for (int n = 0; n < 8; ++n) record(shared, play(28000, "bonus" + std::to_string(n)), 0);
+  CHECK(bonusPoints(shared.days.at(28000)) == 10 && shared.savings == 10);
+  CHECK(shared.days.at(28000).points == 11);
+  const auto used = shared.days.at(28000).assignments[0].usedCharts.size();
+  CHECK(record(shared, play(28000, "after-cap"), 0) == 0);
+  CHECK(shared.days.at(28000).assignments[0].usedCharts.size() == used);
+  advance(shared, 28001);
+  CHECK(bonusPoints(shared.days.at(28001)) == 0);
+
+  // Extra rounds always use one chart; unmet lamp targets never escalate.
+  for (const auto &progress : shared.days.at(28000).assignments) {
+    CHECK(progress.requirement.chartCount == 1);
+    CHECK(progress.requirement.targetLamp == 300);
+  }
+  State capable;
+  auto target = config(1, 1);
+  target.assignments[0].scoreNumerator = 24;
+  target.assignments[0].scoreDenominator = 27;
+  configure(capable, target, 29000);
+  auto strong = play(29000, "strong"); strong.score = 194; strong.lamp = 400;
+  record(capable, strong, 0);
+  CHECK(capable.days.at(29000).assignments[0].requirement.scoreNumerator == 26);
+  // A custom target may advance only when the actual result meets its next +2%.
+  State custom;
+  target.assignments[0].customRate = true;
+  target.assignments[0].scoreNumerator = 9000;
+  target.assignments[0].scoreDenominator = 10000;
+  configure(custom, target, 29100);
+  auto justEnough = play(29100, "custom"); justEnough.score = 181;
+  record(custom, justEnough, 1);
+  CHECK(custom.days.at(29100).assignments[0].requirement.scoreNumerator == 9000);
+  State lamp;
+  configure(lamp, config(1, 1), 29200);
+  strong.day = 29200;
+  record(lamp, strong, 1);
+  CHECK(lamp.days.at(29200).assignments[0].requirement.targetLamp == 400);
+
+  State ceiling;
+  configure(ceiling, config(1, 1), 30000);
+  ceiling.savings = 1000;
+  for (int n = 0; n < 10; ++n) {
+    CHECK(freezePrice(ceiling) == (n < 6 ? 20 + n * 5 : 50));
+    CHECK(buyFreeze(ceiling, 30000));
+    ceiling.freezes = 0; // Isolate successive purchases from inventory capacity.
+  }
+  CHECK(freezePrice(ceiling) == 50);
+
+  // One assignment can earn the whole shared budget without a separate cap.
+  State single;
+  configure(single, config(1, 1), 31000);
+  record(single, play(31000, "goal"), 0);
+  for (int n = 0; n < 10; ++n) record(single, play(31000, "bonus" + std::to_string(n)), 0);
+  CHECK(bonusPoints(single.days.at(31000)) == 10);
+  CHECK(bonusLimit(single.days.at(31000)) == 10);
+  CHECK(bonusPoints(single.days.at(31000)) >= bonusLimit(single.days.at(31000)));
+  CHECK(bonusLimit(shared.days.at(28000)) == 10);
+  CHECK(bonusLimit(Day{}) == 0);
+
+  // Normal quotas still apply before the goal; every extra round uses one chart.
+  State fixed;
+  configure(fixed, config(5, 5, 3), 32000);
+  CHECK(record(fixed, play(32000, "one"), 0) == 0);
+  CHECK(record(fixed, play(32000, "two"), 0) == 0);
+  CHECK(record(fixed, play(32000, "three"), 0) == 5);
+  CHECK(fixed.savings == 0);
+  CHECK(record(fixed, play(32000, "one"), 0) == 0);
+  CHECK(record(fixed, play(32000, "four"), 0) == 1);
+  CHECK(fixed.days.at(32000).assignments[0].requirement.chartCount == 1);
+  advance(fixed, 32001);
+  CHECK(fixed.days.at(32001).assignments[0].requirement.chartCount == 3);
+  CHECK(record(fixed, play(32001, "one"), 0) == 0);
+
+  // An unfinished assignment also switches to single-chart bonus rounds.
+  State unfinished;
+  auto mixed = config(1, 1);
+  auto longer = mixed.assignments[0]; longer.id = "long"; longer.chartCount = 4;
+  mixed.assignments.push_back(longer);
+  configure(unfinished, mixed, 33000);
+  CHECK(record(unfinished, play(33000, "goal"), 0) == 1);
+  CHECK(unfinished.days.at(33000).assignments[1].charts == 0);
+  CHECK(unfinished.days.at(33000).assignments[1].requirement.chartCount == 1);
+  CHECK(record(unfinished, play(33000, "extra"), 0) == 2);
 
   std::cout << "streak model tests passed\n";
 }

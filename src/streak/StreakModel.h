@@ -7,9 +7,10 @@
 #include <vector>
 
 namespace streak {
-inline constexpr int dailyBonusLimit = 5;
+inline constexpr int sharedDailyBonusLimit = 10;
 inline constexpr int baseFreezePrice = 20;
-inline constexpr int freezePriceStep = 10;
+inline constexpr int freezePriceStep = 5;
+inline constexpr int maxFreezePrice = 50;
 using DayId = int; // Local civil days since 1970-01-01; never elapsed 24h periods.
 struct Level {
   std::string source;
@@ -86,6 +87,8 @@ struct Summary {
 [[nodiscard]] bool matches(const Assignment &assignment, const Play &play);
 void advance(State &state, DayId day);
 DayId configure(State &state, const Config &config, DayId day);
+[[nodiscard]] int bonusPoints(const Day &day);
+[[nodiscard]] int bonusLimit(const Day &day);
 std::int64_t record(State &state, const Play &play, std::uint32_t randomChoice);
 [[nodiscard]] std::int64_t freezePrice(const State &state);
 bool buyFreeze(State &state, DayId day);
