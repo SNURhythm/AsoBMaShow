@@ -2,6 +2,7 @@
 #include "TextView.h"
 #include "AppTheme.h"
 #include "IconText.h"
+#include "StreakFlameView.h"
 #include "../i18n/Localization.h"
 #include "../streak/StreakDashboardPresentation.h"
 
@@ -65,18 +66,21 @@ private:
     parent->addView(view);
     return view;
   }
-  static TextView *icon(View *parent, streak::ActivityKind kind, int size) {
+  static View *icon(View *parent, streak::ActivityKind kind, int size) {
+    if (kind == streak::ActivityKind::Played || kind == streak::ActivityKind::GoalReached ||
+        kind == streak::ActivityKind::NoPlay) {
+      // Reuse the hero's flame states, held still for the compact history strip.
+      auto *view = new StreakFlameView(kind != streak::ActivityKind::NoPlay,
+          kind == streak::ActivityKind::GoalReached, true);
+      parent->addView(view);
+      return view;
+    }
     const bool notStarted = kind == streak::ActivityKind::NotStarted;
     auto *view = new TextView(notStarted ? app_theme::font : ui_icons::kFontAwesomeSolidPath, size);
-    const auto glyph = kind == streak::ActivityKind::GoalReached ? ui_icons::kCheck :
-        kind == streak::ActivityKind::Played ? ui_icons::kPlay :
-        kind == streak::ActivityKind::Frozen ? ui_icons::kSnowflake : ui_icons::kSquare;
-    view->setText(notStarted ? "—" : ui_icons::textForCodepoint(glyph));
+    view->setText(notStarted ? "—" : ui_icons::textForCodepoint(ui_icons::kSnowflake));
     view->setAlign(TextView::CENTER);
     view->setVAlign(TextView::MIDDLE);
-    view->setThemedColor(kind == streak::ActivityKind::GoalReached ? app_theme::lime :
-        kind == streak::ActivityKind::Played ? app_theme::amber :
-        kind == streak::ActivityKind::Frozen ? app_theme::cyan : app_theme::textMuted);
+    view->setThemedColor(notStarted ? app_theme::textMuted : app_theme::cyan);
     parent->addView(view);
     return view;
   }

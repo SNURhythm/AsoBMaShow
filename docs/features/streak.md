@@ -138,7 +138,9 @@ the same animation frame; the daily summary also shows points left to the goal.
 
 The **Last 7 days** strip uses local calendar dates. It distinguishes goal reached,
 played without reaching the goal, freeze used, no play, and dates before the
-routine started; today is outlined. The milestone section previews the next
+routine started; today is outlined. It reuses the hero’s gray, small orange and
+big completed flame for no-play, played and goal days, held still in the strip;
+freeze days use a snowflake. The milestone section previews the next
 unearned combo badge and the remaining goal days. Playing or freezing a day
 protects the combo but does not advance that countdown. Earned badges survive
 resets; after the final badge, the preview confirms all combo milestones earned.
