@@ -42,7 +42,8 @@ private:
   streak::DayId pendingResetDay_ = 0;
   View *resetOverlay_ = nullptr;
   void reminderSettings(View *);
-  void saveReminders(reminders::Preferences);
+  void reminderPrompt(View *);
+  bool saveReminders(reminders::Preferences);
   reminders::Permission reminderPermission_ = reminders::Permission::Unknown;
   void routine(View *);
   void editor(View *);
@@ -67,9 +68,9 @@ private:
   streak::Assignment assignment_;
   streak::FieldErrors fieldErrors_;
   std::string daily_, weekly_, monthly_, name_, count_, points_, rate_;
-  enum class Page { Dashboard, Routine, Assignment, Reminders } page_ = Page::Dashboard;
+  enum class Page { Dashboard, Routine, Assignment, Reminders, ReminderPrompt } page_ = Page::Dashboard;
   Page renderedPage_ = Page::Dashboard;
-  std::array<float, 4> scrollOffsets_{};
+  std::array<float, 5> scrollOffsets_{};
   int editingIndex_ = -1, tableId_ = 0;
   bool loadFailed_ = false;
   bool showOptional_ = false;

@@ -8,6 +8,23 @@ from support.fixture_compiler import FixtureCompiler
 
 
 class StreakSceneTests(unittest.TestCase):
+    def test_first_routine_offers_reminders_only_after_success(self):
+        root = Path(__file__).resolve().parents[1]
+        scene = (root / "src/scene/StreakScene.cpp").read_text()
+        methods = "\n".join(extract(scene, signature) for signature in (
+            "void StreakScene::saveRoutine(", "bool StreakScene::saveReminders(",
+            "void StreakScene::reminderPrompt("))
+        fixture = (root / "tests/streak_reminder_prompt_fixture.cpp").read_text()
+        fixture = fixture.replace("PRODUCTION_METHODS", methods)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-reminder-prompt-") as directory:
+            source = Path(directory) / "prompt.cpp"
+            binary = Path(directory) / "prompt"
+            source.write_text(fixture)
+            FixtureCompiler.from_environment(shared_headers=True).build(
+                [source, root / "src/streak/StreakModel.cpp"], binary, source.parent,
+                includes=(root / "src",))
+            subprocess.run([str(binary)], check=True, timeout=5)
+
     def test_assignment_shortcuts_open_requested_folder_and_clear_filters(self):
         root = Path(__file__).resolve().parents[1]
         main = extract((root / "src/scene/MainMenuScene.cpp").read_text(),

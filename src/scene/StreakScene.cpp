@@ -351,6 +351,7 @@ void StreakScene::build() {
   } else if (page_ == Page::Dashboard) dashboard(body);
   else if (page_ == Page::Routine) routine(body);
   else if (page_ == Page::Reminders) reminderSettings(body);
+  else if (page_ == Page::ReminderPrompt) reminderPrompt(body);
   else editor(body);
   if (!message_.empty()) label(body, message_, 19);
   addView(portal_);
@@ -729,12 +730,21 @@ void StreakScene::saveRoutine() {
   if (!fieldErrors_.empty()) return;
   draft_ = std::move(candidate);
   try {
+    const bool firstRoutine = state_.configurations.empty();
     streak::DayId effective = 0;
     std::string error;
     if (!context.scoreRepository.ConfigureStreak(draft_, effective, error)) throw std::runtime_error(error);
     message_ = comparison("streak.ui.saved", streak::dateLabel(effective));
     page_ = Page::Dashboard;
     reload();
+    if constexpr (reminders::supported) {
+      const std::lock_guard lock(context.applicationUiStateMutex);
+      const auto &prefs = context.applicationUiState.reminders;
+      if (firstRoutine && !(prefs.daily && prefs.comeback)) {
+        page_ = Page::ReminderPrompt;
+        message_.clear();
+      }
+    }
   } catch (const std::exception &error) { message_ = error.what(); }
 }
 void StreakScene::layout() {
@@ -757,7 +767,7 @@ void StreakScene::layout() {
   if (resetOverlay_) { sizeResetChallengeModal(resetOverlay_); root_->applyYogaLayout(); }
   scroll_->refreshContentLayout();
 }
-void StreakScene::saveReminders(reminders::Preferences next) {
+bool StreakScene::saveReminders(reminders::Preferences next) {
   reminders::Preferences previous;
   {
     const std::lock_guard lock(context.applicationUiStateMutex);
@@ -770,7 +780,7 @@ void StreakScene::saveReminders(reminders::Preferences next) {
     context.applicationUiState.reminders = previous;
     message_ = i18n::tr("streak.reminders.save_failed");
     SDL_Log("Cannot save reminder preferences: %s", error.c_str());
-    return;
+    return false;
   }
   message_.clear();
   if ((!previous.daily && next.daily) || (!previous.comeback && next.comeback)) {
@@ -778,6 +788,30 @@ void StreakScene::saveReminders(reminders::Preferences next) {
         reminders::permission() == reminders::Permission::Unknown)
       reminders::requestPermission();
   }
+  return true;
+}
+void StreakScene::reminderPrompt(View *body) {
+  auto *panel = card(body);
+  label(panel, i18n::tr("streak.reminders.prompt_title"), 28);
+  label(panel, i18n::tr("streak.reminders.prompt_body"), 20);
+  action(panel, i18n::tr("streak.reminders.prompt_enable"), [this] {
+    later([this] {
+      reminders::Preferences prefs;
+      {
+        const std::lock_guard lock(context.applicationUiStateMutex);
+        prefs = context.applicationUiState.reminders;
+      }
+      prefs.daily = true;
+      prefs.comeback = true;
+      if (saveReminders(prefs)) {
+        page_ = Page::Dashboard;
+        if (reminders::permission() == reminders::Permission::Denied) reminders::openSettings();
+      }
+    });
+  }, app_theme::ActionCategory::Primary);
+  action(panel, i18n::tr("streak.reminders.prompt_skip"), [this] {
+    later([this] { page_ = Page::Dashboard; message_.clear(); });
+  }, app_theme::ActionCategory::Neutral);
 }
 void StreakScene::reminderSettings(View *body) {
   auto *panel = card(body);
@@ -825,7 +859,7 @@ void StreakScene::reminderSettings(View *body) {
 
 void StreakScene::back() {
   if (page_ == Page::Assignment) { later([this] { page_ = adjustingToday_ ? Page::Dashboard : Page::Routine; adjustingToday_ = false; fieldErrors_.clear(); message_.clear(); }); return; }
-  if (page_ == Page::Routine || page_ == Page::Reminders) { later([this] { page_ = Page::Dashboard; message_.clear(); reload(); }); return; }
+  if (page_ == Page::Routine || page_ == Page::Reminders || page_ == Page::ReminderPrompt) { later([this] { page_ = Page::Dashboard; message_.clear(); reload(); }); return; }
   if (embeddedTab_) { later([this] { if (tabClose_) tabClose_(); }); return; }
   defer([this] { (void)returnToScene(*context.sceneManager, returnTarget_); return false; }, 0, true);
 }

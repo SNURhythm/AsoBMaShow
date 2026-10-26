@@ -279,6 +279,10 @@ phrasing. Localized `i18n::plural` text reselects its form after language change
 
 ## Local reminders (iOS and Android)
 
+After the first routine is saved, a short prompt offers to enable both daily and
+comeback notifications with one button. “Not now” skips it; routine edits do not
+show it again. The prompt is omitted when both reminders are already enabled.
+
 **Combo → Reminders** offers separate opt-in daily and comeback notifications,
 with one local-time picker. Preferences are device-wide, apply to the active
 profile, and are not part of a profile export. Enabling a reminder is the only

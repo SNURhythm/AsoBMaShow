@@ -50,8 +50,8 @@ struct ProgressMotionView : View {
 };
 METER
 struct StreakScene {
-  enum class Page { Dashboard, Routine, Assignment, Reminders } page_=Page::Dashboard,renderedPage_=Page::Dashboard;
-  std::array<float,4> scrollOffsets_{};
+  enum class Page { Dashboard, Routine, Assignment, Reminders, ReminderPrompt } page_=Page::Dashboard,renderedPage_=Page::Dashboard;
+  std::array<float,5> scrollOffsets_{};
   bool embeddedTab_=true,goalIgnitionSoundPending_=false,loadFailed_=false;
   int roundCue_=0;
   float maximum=1000;
@@ -63,7 +63,7 @@ struct StreakScene {
   ~StreakScene() { for(auto *view:views)delete view; }
   void addView(View *view) { views.push_back(view); }
   void back() {} void reload() {} void later(std::function<void()>) {}
-  void dashboard(View *) {} void routine(View *) {} void editor(View *) {} void reminderSettings(View *) {}
+  void dashboard(View *) {} void routine(View *) {} void editor(View *) {} void reminderSettings(View *) {} void reminderPrompt(View *) {}
   void resetChallengeModal() {}
   void layout() { scroll_->maximum=maximum; }
   void build();
