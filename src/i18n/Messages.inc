@@ -2398,7 +2398,6 @@
 {"streak.ui.streak_count", "{count}-day combo", "{count}일 콤보", "{count}日コンボ", "{count} 天连击", "{count} 天連擊"},
 {"streak.ui.table", "Difficulty table", "난이도표", "難易度表", "难度表", "難度表"},
 {"streak.ui.target_required", "Choose a target lamp or score.", "목표 램프나 스코어를 선택하세요.", "目標ランプかスコアを選んでください。", "请选择目标灯或分数。", "請選擇目標燈或分數。"},
-{"streak.ui.title", "Combo", "콤보", "コンボ", "连击", "連擊"},
 {"streak.ui.too_hard", "Too hard for me!", "너무 어려워요!", "難しすぎる！", "太难了！", "太難了！"},
 {"streak.ui.two_chart_rounds", "2 charts per bonus round · resets tomorrow", "보너스 라운드당 채보 2개 · 내일 초기화", "ボーナス1ラウンドにつき2譜面 · 翌日リセット", "每轮奖励挑战2张谱面 · 明天重置", "每輪獎勵挑戰2張譜面 · 明天重置"},
 {"streak.ui.unsaved", "Assignment updated. Save the routine to apply your changes.", "과제를 수정했습니다. 적용하려면 루틴을 저장하세요.", "課題を更新しました。適用するにはルーティンを保存してください。", "任务已更新，保存计划后生效。", "任務已更新，儲存計畫後生效。"},

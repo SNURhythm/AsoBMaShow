@@ -324,12 +324,12 @@ void StreakScene::build() {
   portal_ = new OverlayPortal(0, 0, rendering::window_width, rendering::window_height);
   portal_->setPositionType(YGPositionTypeAbsolute);
   portal_->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0)->setZIndex(900);
-  auto *header = new View();
-  header->setFlexDirection(FlexDirection::Row)->setGap(12)->setAlignItems(YGAlignCenter)->setFlexShrink(0);
-  label(header, i18n::tr("streak.ui.title"), 32)->setFlex(1);
-  if (!embeddedTab_ || page_ != Page::Dashboard)
+  if (!embeddedTab_ || page_ != Page::Dashboard) {
+    auto *header = new View();
+    header->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setFlexShrink(0);
     action(header, i18n::tr("streak.ui.back"), [this] { back(); }, app_theme::ActionCategory::Neutral, ui_icons::kCollapse)->setWidth(140);
-  root_->addView(header);
+    root_->addView(header);
+  }
   scroll_ = new ScrollView();
   scroll_->setFlex(1)->setMinHeight(0);
   root_->addView(scroll_);
