@@ -3342,6 +3342,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryIrImport.cpp
         src/repositories/ScoreRepositoryQueries.cpp
+        src/streak/StreakModel.cpp
+        src/streak/StreakStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
@@ -3820,6 +3822,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
+        src/streak/StreakModel.cpp
+        src/streak/StreakStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
@@ -3897,6 +3901,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
+        src/streak/StreakModel.cpp
+        src/streak/StreakStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
@@ -4209,6 +4215,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryIrImport.cpp
         src/repositories/ScoreRepositoryQueries.cpp
+        src/streak/StreakModel.cpp
+        src/streak/StreakStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
         src/ModernResult.cpp
@@ -4375,6 +4383,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ChartStorageIdentity.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
+        src/streak/StreakModel.cpp
+        src/streak/StreakStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
         src/ModernResult.cpp
@@ -4465,6 +4475,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ChartStorageIdentity.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
+        src/streak/StreakModel.cpp
+        src/streak/StreakStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
         src/ModernResult.cpp
@@ -4632,6 +4644,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ModernResult.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
+        src/streak/StreakModel.cpp
+        src/streak/StreakStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
@@ -4716,6 +4730,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ChartStorageIdentity.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
+        src/streak/StreakModel.cpp
+        src/streak/StreakStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
         src/ModernResult.cpp
@@ -6266,6 +6282,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/practice/PracticePresetStore.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
+        src/streak/StreakModel.cpp
+        src/streak/StreakStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
@@ -7362,6 +7380,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
+        src/streak/StreakModel.cpp
+        src/streak/StreakStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
@@ -7988,6 +8008,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputProfileStore.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
+        src/streak/StreakModel.cpp
+        src/streak/StreakStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
@@ -8072,6 +8094,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ChartStorageIdentity.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
+        src/streak/StreakModel.cpp
+        src/streak/StreakStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
@@ -8148,6 +8172,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputProfileStore.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
+        src/streak/StreakModel.cpp
+        src/streak/StreakStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
@@ -9996,6 +10022,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_test(NAME hardware_video_frame_threaded_tests COMMAND hardware_video_frame_tests --threaded)
     endif()
 
+    include("${CMAKE_SOURCE_DIR}/cmake/StreakTests.cmake")
     include("${CMAKE_SOURCE_DIR}/cmake/TestGroupCatalog.cmake")
 endif()
 

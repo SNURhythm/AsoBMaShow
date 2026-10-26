@@ -70,6 +70,7 @@
 #include "RemoteResultRecallController.h"
 #include "ResultScene.h"
 #include "SettingsScene.h"
+#include "StreakScene.h"
 #include "MusicSelectScene.h"
 #include "MusicSelectSkinErrorScene.h"
 #include "../music_select/MusicSelectLaunchPolicy.h"
@@ -2431,6 +2432,17 @@ void MainMenuScene::initView(ApplicationContext &context) {
             SceneReturnTarget::Retained(this)),
         true);
   });
+  auto *streakButton = makeSelectorButton(i18n::message("streak.ui.title"), 20);
+  streakButton->setName("mainMenuStreak");
+  streakButton->setWidthPercent(100)->setHeight(56);
+  streakButton->setOnClickListener([this, &context] {
+    if (willStart.load() || replayExportJob_.inProgress()) return;
+    if (previewWorker_) previewWorker_->stop();
+    stopAndClearSelectedChart();
+    context.sceneManager->changeScene(
+        std::make_unique<StreakScene>(context, SceneReturnTarget::Retained(this)), true);
+  });
+  rightContent->addView(streakButton);
   rightScroll->setContentView(rightContent);
   right->addView(rightScroll);
   // Primary actions stay reachable while chart details and tools scroll.
@@ -2657,6 +2669,7 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
   primaryActionSlot_->moveTo(*primary);
   chartDetailsView_->setScoreContainer(portrait ? detailsControlsContent_ : nullptr);
   readyPlayOptionsButton->moveTo(*target);
+  if (auto *streak = rootLayout->findViewByName("mainMenuStreak")) streak->moveTo(*target);
   settings->moveTo(*rootLayout->findViewByName("mainMenuToolbar"));
   primary->moveTo(portrait ? *controls : *details);
   controls->setDisplay(portrait ? YGDisplayFlex : YGDisplayNone);

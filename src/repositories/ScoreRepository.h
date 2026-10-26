@@ -6,6 +6,7 @@
 #include "../ir/IrRemoteScoreModels.h"
 #include "ChartRepository.h"
 #include "ScoreRepositoryModels.h"
+#include "../streak/StreakModel.h"
 
 #include <array>
 #include <cstdint>
@@ -89,6 +90,9 @@ public:
   [[nodiscard]] static bool HasActiveReads();
   [[nodiscard]] static bool HasActiveWrites();
   bool EnsureSchema();
+  std::optional<streak::State> LoadStreak(std::string &error);
+  bool ConfigureStreak(const streak::Config &, streak::DayId &effectiveDay, std::string &error);
+  bool BuyStreakFreeze(std::string &error);
   void Shutdown();
   bool SaveScore(const bms_parser::ChartMeta &chartMeta,
                  const RhythmState &state,

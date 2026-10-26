@@ -176,6 +176,8 @@ asobmashow_label_tests(area_practice
 )
 
 asobmashow_label_tests(area_results
+    streak_model_tests
+    streak_store_tests
     chart_record_actions_tests
     chart_record_filters_tests
     course_record_actions_tests
@@ -542,6 +544,7 @@ asobmashow_label_tests(area_rendering
 )
 
 asobmashow_label_tests(area_ui
+    streak_scene_tests
     android_locale_tests
     button_disabled_metal_tests
     button_enabled_tests

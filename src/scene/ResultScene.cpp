@@ -4206,6 +4206,25 @@ void ResultScene::buildResultView() {
     if (applicationOverlays.showsPersistenceRecovery) {
       addResultPersistenceStatus();
     }
+    if (!selectedResultSkin && local->persistenceOptions.chartAttempt &&
+        local->persistenceOptions.chartOutcome && local->persistenceOptions.chartOutcome->saved()) {
+      std::string streakError;
+      const auto streak = context.scoreRepository.LoadStreak(streakError);
+      if (streak && !streak->days.empty()) {
+        const auto &day = streak->days.rbegin()->second;
+        auto *progress = new TextView(app_theme::font, 24);
+        progress->setName("streakResultProgress");
+        progress->setWrap(true);
+        progress->setThemedColor(app_theme::textPrimary);
+        progress->setMinHeight(52)->setPadding(Edge::All, 12);
+        progress->setText(std::string(i18n::tr("streak.ui.title")) + " · " +
+            std::to_string(streak->currentStreak) + " days · " + std::to_string(day.points) +
+            " / " + std::to_string(day.config.dailyGoal) + " points\n" +
+            (day.points >= day.config.dailyGoal ? i18n::tr("streak.ui.reached") :
+             day.played ? i18n::tr("streak.ui.protected") : i18n::tr("streak.ui.pending")));
+        rootLayout->addView(progress);
+      }
+    }
     addIrResultStatus();
     if (isCourseStageResult() || isCourseFinalResult()) {
       if (!selectedResultSkin) {

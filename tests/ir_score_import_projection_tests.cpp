@@ -2,6 +2,9 @@
 #include "repositories/ReplayRepository.h"
 #include "repositories/ScoreRepository.h"
 #include "sqlite3.h"
+#include "streak/StreakStore.h"
+#include "ScoreHistoryTime.h"
+#include <ctime>
 
 #include <cassert>
 #include <filesystem>
@@ -262,9 +265,72 @@ void testLocalProjectedScoreKeepsLocalSourceAndFullComboInference() {
          kClearTypeFullComboRank);
 }
 
+void testStreakProjectionIsAtomicAndUsesEffectiveLamp() {
+  const auto root = testRoot("streak");
+  const auto path = root / "score.db";
+  const auto chartPath = root / "chart.db";
+  ScoreRepository scores(path);
+  scores.SetChartDatabasePath(chartPath);
+  assert(scores.EnsureSchema());
+  sqlite3 *db = nullptr;
+  assert(sqlite3_open(chartPath.string().c_str(), &db) == SQLITE_OK);
+  assert(sqlite3_exec(db,
+      "CREATE TABLE difficulty_tables(id INTEGER,source_url TEXT);"
+      "CREATE TABLE difficulty_table_entries(table_id INTEGER,level TEXT,md5 TEXT,sha256 TEXT);"
+      "INSERT INTO difficulty_tables VALUES(1,'https://table'),(2,'https://other');"
+      "INSERT INTO difficulty_table_entries VALUES(1,'0','99999999999999999999999999999999',''),"
+      "(2,'1','99999999999999999999999999999999','');", nullptr, nullptr, nullptr) == SQLITE_OK);
+  sqlite3_close(db);
+  assert(sqlite3_open(path.string().c_str(), &db) == SQLITE_OK);
+  streak::State state;
+  streak::Config config;
+  config.dailyGoal = 10;
+  config.assignments = {{.id="a", .name="First FC", .levels={{"https://table","0","sl0"}, {"https://other","1","st1"}},
+                         .eligibleLamp=-1, .targetLamp=600, .points=20}};
+  streak::configure(state, config, streak::today());
+  streak::save(db, state);
+  result_persistence::PendingChartScoreWrite pending;
+  pending.attemptId = "123e4567-e89b-42d3-a456-426614174000";
+  pending.replayId = 1;
+  pending.createdAt = scoreHistoryTime(static_cast<std::int64_t>(std::time(nullptr)) * 1000);
+  pending.score.chartSha256 = std::string(64, '9');
+  pending.score.chartMd5 = std::string(32, '9');
+  pending.score.score = 180;
+  pending.score.maxScore = 200;
+  pending.score.comboBreak = 0;
+  pending.score.clearType = kClearTypeNormalClearRank;
+  pending.score.provenance = ScoreProvenance::Legacy();
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  state = streak::load(db);
+  assert(state.days.rbegin()->second.points == 20); // Effective Full Combo, counted once across two tables.
+  assert(state.currentStreak == 1 && state.savings == 10);
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::AlreadyPresent);
+  assert(streak::load(db).savings == 10);
+  // A failed streak write must roll back the score so recovery can retry both.
+  assert(sqlite3_exec(db, "CREATE TRIGGER reject_streak BEFORE UPDATE ON streak_state BEGIN SELECT RAISE(ABORT,'test storage failure'); END", nullptr, nullptr, nullptr) == SQLITE_OK);
+  pending.attemptId = "123e4567-e89b-42d3-a456-426614174001";
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::StorageFailure);
+  assert(queryInt(path, "SELECT COUNT(*) FROM scores") == 1);
+  assert(sqlite3_exec(db, "DROP TRIGGER reject_streak", nullptr, nullptr, nullptr) == SQLITE_OK);
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  assert(streak::load(db).savings == 10);
+  // Historical MD5-only records still exclude a chart from NO PLAY tasks.
+  auto legacyState = streak::load(db);
+  legacyState.days.clear(); legacyState.configurations.clear();
+  legacyState.savings = 0; legacyState.currentStreak = 0;
+  streak::configure(legacyState, config, streak::today());
+  streak::save(db, legacyState);
+  assert(sqlite3_exec(db, "UPDATE scores SET chart_sha256=''", nullptr, nullptr, nullptr) == SQLITE_OK);
+  pending.attemptId = "123e4567-e89b-42d3-a456-426614174002";
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  assert(streak::load(db).days.rbegin()->second.points == 0);
+  sqlite3_close(db);
+}
+
 } // namespace
 
 int main() {
+  testStreakProjectionIsAtomicAndUsesEffectiveLamp();
   testImportedSnapshotUsesNormalScoreSummaries();
   testRemoteLampIsAuthoritative();
   testReplacementIsScopedIdempotentAndDeletesStaleRows();

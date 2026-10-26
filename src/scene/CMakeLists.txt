@@ -70,3 +70,5 @@ target_sources(main PRIVATE StorageManagementScene.cpp SettingsSceneStorage.cpp)
 target_sources(main PRIVATE SettingsSceneCalibration.cpp)
 
 target_sources(main PRIVATE ChartReadmeModal.cpp)
+
+target_sources(main PRIVATE StreakScene.cpp)

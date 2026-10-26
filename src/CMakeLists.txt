@@ -87,3 +87,5 @@ endif ()
 
 target_sources(main PRIVATE library/GroupedChartListModel.cpp)
 target_sources(main PRIVATE library/StorageArchiveList.cpp)
+target_sources(main PRIVATE repositories/ScoreRepositoryStreak.cpp
+    streak/StreakModel.cpp streak/StreakStore.cpp)

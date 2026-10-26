@@ -1,4 +1,6 @@
 #include "ScoreRepository.h"
+#include "../streak/StreakStore.h"
+#include <random>
 #include "ScoreRepositoryInternal.h"
 
 #include "../BmsMetadataText.h"
@@ -1052,12 +1054,51 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
   }
   sqlite3 *db = impl_->sessionDatabase;
 
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE", transactionError);
+  if (!transaction.active())
+    return {.status = ProjectionStatus::StorageFailure, .diagnostic = transactionError};
+
   const score_repository_detail::ScoreWriteOutcome inserted =
       score_repository_detail::InsertScoreWriteOnConnection(
           db, pending.score, pending.attemptId, pending.createdAt,
           *provenanceJson,
           {.averageJudgeMicros = pending.averageJudgeMicros});
   if (inserted.status == score_repository_detail::ScoreWriteStatus::Inserted) {
+    try {
+      const auto &score = pending.score;
+      // Bound eligibility to history before this attempt, including timestamp
+      // ordering when a pending result is recovered after a later play.
+      const std::string previousQuery =
+          "SELECT COUNT(*), MAX(" + score_cache_queries::detail::fullComboClearRankExpr("s", {}, true) +
+          "), (SELECT " + score_cache_queries::detail::fullComboClearRankExpr("n", {}, true) +
+          " FROM scores n WHERE n.attempt_id=?) FROM scores s WHERE " +
+          scoreChartMatchPredicate() + " AND (s.ln_mode=? OR s.ln_mode=-1 OR s.ln_mode=0) "
+          "AND (s.created_at,s.id)<(SELECT created_at,id FROM scores WHERE attempt_id=?) "
+          "AND " + score_cache_queries::detail::scoreParticipatesInBestExpr("s");
+      SqliteStatementHandle previous;
+      if (prepareSqliteStatement(db, previousQuery, previous) != SQLITE_OK ||
+          !bindSqliteText(previous, 1, pending.attemptId))
+        throw std::runtime_error("Could not read the previous chart lamp for streak progress.");
+      int previousIndex = bindScoreChartMatch(previous, 2,
+          {.chartPath = score.chartPath, .sha256 = normalizedHash(score.chartSha256),
+           .md5 = normalizedHash(score.chartMd5)});
+      if (sqlite3_bind_int(previous, previousIndex++, score.longNoteMode) != SQLITE_OK ||
+          !bindSqliteText(previous, previousIndex, pending.attemptId) || sqlite3_step(previous) != SQLITE_ROW)
+        throw std::runtime_error("Could not read the previous chart lamp for streak progress.");
+      const int previousLamp = sqlite3_column_int(previous, 0) == 0
+                                   ? -1 : sqlite3_column_int(previous, 1);
+      static thread_local std::mt19937 random(std::random_device{}());
+      streak::recordSavedPlay(db, impl_->chartDatabasePath,
+          {.chart = score.chartSha256, .previousLamp = previousLamp,
+           .lamp = sqlite3_column_int(previous, 2), .score = score.score, .maxScore = score.maxScore,
+           .manual = !score.provenance.autoPlay && !score.provenance.practice},
+          score.chartMd5, pending.createdAt, random());
+    } catch (const std::exception &error) {
+      return {.status = ProjectionStatus::StorageFailure, .diagnostic = error.what()};
+    }
+    if (!transaction.commit(transactionError))
+      return {.status = ProjectionStatus::StorageFailure, .diagnostic = transactionError};
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);
     return {.status = ProjectionStatus::Inserted};
   }

@@ -105,6 +105,8 @@ asobmashow_share_test_sources(dependencies
         src/repositories/ScoreRepositoryChartSession.cpp
         src/repositories/ScoreRepositoryIrImport.cpp
         src/repositories/ScoreRepositoryQueries.cpp
+        src/streak/StreakModel.cpp
+        src/streak/StreakStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/scene/play/CompiledGameplayJudge.cpp
         src/scene/play/GameplayCandidateRules.cpp

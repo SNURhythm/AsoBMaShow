@@ -1,0 +1,54 @@
+#include "ScoreRepositoryInternal.h"
+#include "SqliteRAII.h"
+#include "../streak/StreakStore.h"
+#include <stdexcept>
+
+std::optional<streak::State> ScoreRepository::LoadStreak(std::string &error) {
+  profile_database_activity::WriteGuard guard;
+  std::lock_guard lock(impl_->sessionMutex);
+  error.clear();
+  if (!EnsureSessionDatabaseLocked()) { error = "Score storage is unavailable."; return {}; }
+  SqliteTransactionHandle transaction(impl_->sessionDatabase, "BEGIN IMMEDIATE", error);
+  if (!transaction.active()) return {};
+  try {
+    auto state = streak::load(impl_->sessionDatabase);
+    const auto last = state.days.empty() ? 0 : state.days.rbegin()->first;
+    streak::advance(state, streak::today());
+    if (!state.days.empty() && last != state.days.rbegin()->first)
+      streak::save(impl_->sessionDatabase, state);
+    if (!transaction.commit(error)) return {};
+    return state;
+  } catch (const std::exception &failure) { error = failure.what(); return {}; }
+}
+bool ScoreRepository::ConfigureStreak(const streak::Config &config,
+                                     streak::DayId &effectiveDay, std::string &error) {
+  profile_database_activity::WriteGuard guard;
+  std::lock_guard lock(impl_->sessionMutex);
+  error.clear();
+  if (!EnsureSessionDatabaseLocked()) { error = "Score storage is unavailable."; return false; }
+  SqliteTransactionHandle transaction(impl_->sessionDatabase, "BEGIN IMMEDIATE", error);
+  if (!transaction.active()) return false;
+  try {
+    auto state = streak::load(impl_->sessionDatabase);
+    effectiveDay = streak::configure(state, config, streak::today());
+    streak::save(impl_->sessionDatabase, state);
+    return transaction.commit(error);
+  } catch (const std::exception &failure) { error = failure.what(); return false; }
+}
+bool ScoreRepository::BuyStreakFreeze(std::string &error) {
+  profile_database_activity::WriteGuard guard;
+  std::lock_guard lock(impl_->sessionMutex);
+  error.clear();
+  if (!EnsureSessionDatabaseLocked()) { error = "Score storage is unavailable."; return false; }
+  SqliteTransactionHandle transaction(impl_->sessionDatabase, "BEGIN IMMEDIATE", error);
+  if (!transaction.active()) return false;
+  try {
+    auto state = streak::load(impl_->sessionDatabase);
+    if (!streak::buyFreeze(state, streak::today())) {
+      error = "Not enough surplus points, or two freezes are already stored.";
+      return false;
+    }
+    streak::save(impl_->sessionDatabase, state);
+    return transaction.commit(error);
+  } catch (const std::exception &failure) { error = failure.what(); return false; }
+}
