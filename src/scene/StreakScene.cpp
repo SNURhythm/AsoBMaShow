@@ -180,7 +180,8 @@ void assignmentConditions(View *parent, const streak::Assignment &a, int size = 
     auto *line = new View();
     line->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(10)->setFlexShrink(0);
     auto *left = new View();
-    left->setFlex(1)->setFlexBasis(0)->setMinWidth(0);
+    // Definite widths prevent intrinsic text measurements from shifting the arrow column.
+    left->setFlex(1)->setFlexBasis(0)->setWidth(0)->setMinWidth(0);
     lampLabel(left, previous, previousLamp, size);
     line->addView(left);
     auto *arrow = new TextView(ui_icons::kFontAwesomeSolidPath, size);
@@ -191,7 +192,7 @@ void assignmentConditions(View *parent, const streak::Assignment &a, int size = 
     arrow->setWidth(24)->setHeight(size + 12)->setFlexShrink(0);
     line->addView(arrow);
     auto *right = new View();
-    right->setFlex(1)->setFlexBasis(0)->setMinWidth(0);
+    right->setFlex(1)->setFlexBasis(0)->setWidth(0)->setMinWidth(0);
     lampLabel(right, target, targetLamp, size);
     line->addView(right);
     parent->addView(line);
