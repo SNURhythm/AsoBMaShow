@@ -22,6 +22,7 @@ std::uint64_t revision() { return languageRevision.load(); }
 namespace detail {
 struct Message {
   std::string key;
+  std::optional<std::int64_t> count;
   std::vector<std::pair<std::string, Text>> arguments;
 };
 
@@ -75,16 +76,29 @@ Text message(const char *key,
   return result;
 }
 
+Text plural(const char *key, std::int64_t count) {
+  auto owned = std::make_shared<detail::Message>();
+  owned->key = key;
+  owned->count = count;
+  owned->arguments.emplace_back("count", std::to_string(count));
+  Text result;
+  result.message_ = std::move(owned);
+  return result;
+}
+
 bool operator==(const Text &left, const Text &right) {
   if (left.message_ == right.message_) return left.literal_ == right.literal_;
   if (!left.message_ || !right.message_) return false;
   return left.message_->key == right.message_->key &&
+         left.message_->count == right.message_->count &&
          left.message_->arguments == right.message_->arguments;
 }
 
 std::string Text::resolve() const {
   if (!message_) return literal_;
-  const std::string_view pattern(tr(message_->key.c_str()));
+  const auto key = message_->key +
+      (message_->count == 1 && language() == Language::English ? ".one" : "");
+  const std::string_view pattern(tr(key.c_str()));
   std::string result;
   for (std::size_t position = 0; position < pattern.size();) {
     if (pattern[position] == '{') {

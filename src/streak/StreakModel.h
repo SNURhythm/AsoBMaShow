@@ -83,6 +83,7 @@ struct PlayProgress {
   DayId day = 0;
   std::string attemptId;
   std::vector<AssignmentProgressChange> assignments;
+  bool reachedDailyGoal = false;
 };
 struct Play {
   DayId day = 0;

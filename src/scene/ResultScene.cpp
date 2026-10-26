@@ -4702,7 +4702,9 @@ void ResultScene::buildStreakProgress(bool animate) {
   auto *body = new View();
   body->setFlexDirection(FlexDirection::Column)->setGap(12 * unit)->setPadding(Edge::Bottom, 8 * unit);
   streakScroll_->setContentView(body);
-  body->addView((new StreakFlameView(day.played, complete))->setHeight(108 * unit));
+  body->addView((new StreakFlameView(day.played, complete, false,
+      streakProgress_ && streakProgress_->reachedDailyGoal
+          ? std::optional<std::uint64_t>(streakProgressStartedAt_) : std::nullopt))->setHeight(108 * unit));
   text(body, i18n::tr(complete ? "streak.ui.complete" : "streak.ui.saved_progress"), 28);
   text(body, i18n::format("streak.ui.streak_count", {{"count", std::to_string(streakSnapshot_->currentStreak)}}), 36);
   text(body, std::to_string(std::min<std::int64_t>(day.points, day.config.dailyGoal)) + " / " +
@@ -4737,8 +4739,7 @@ void ResultScene::updateStreakProgress() {
     if (streakProgress_) streakRoundCue_.start(*streakProgress_, streakProgressStartedAt_);
     buildStreakProgress(true);
     if (streakSnapshot_ && streakPresentation_.visible()) {
-      const auto &day = streakSnapshot_->days.at(streak::today());
-      streakSounds_.play(context.jukebox.audioRuntime(), day.points >= day.config.dailyGoal
+      streakSounds_.play(context.jukebox.audioRuntime(), streakProgress_ && streakProgress_->reachedDailyGoal
           ? streak::Sound::Complete : streak::Sound::Progress);
     }
   }

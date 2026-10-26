@@ -46,6 +46,7 @@ private:
   std::optional<streak::PlayProgress> streakProgress_;
   std::uint64_t streakProgressStartedAt_ = 0;
   streak::RoundPromotionCue roundCue_;
+  bool goalIgnitionSoundPending_ = false;
   streak::Config draft_;
   streak::Assignment assignment_;
   streak::FieldErrors fieldErrors_;

@@ -5,6 +5,10 @@ Custom selectors expose the same dashboard through the toolbar’s flame button.
 weekly and monthly point goals and add assignments. Select levels from any
 installed difficulty tables; an assignment matches the union of those levels.
 
+Creating or saving a routine requires at least one assignment; an empty list
+shows an inline error beside Add assignment. Previously saved empty routines
+remain readable so they can be repaired.
+
 New routines default to **20 daily / 150 weekly / 650 monthly** points, with
 **10 points per round**. Two default rounds meet the daily goal. Daily goals
 alone total 140 per week and 560–620 per month, so the longer goals require
@@ -102,7 +106,11 @@ custom-skin auto-exit pauses until dismissal. Resizing never reopens it. Complet
 “Done for today” action. Optional challenges start collapsed, and bonus points
 appear separately from the finished daily goal. Short Earshot-generated progress, completion and freeze-purchase cues use the
 system audio bus and master volume; they do not repeat on redraws or failed
-purchases. Progress and round animations are finite. The flame animates while a played
+purchases. Reaching the daily goal adds a 900 ms ignition: the flame compresses,
+flares with a warm glow and embers, then settles. Its short fire-whoosh cue
+plays once; later bonus runs do not reignite it. Earshot semantic queries and
+artifact checks guide the four bundled sounds (see `assets/audio/streak/README.md`).
+Progress and round animations are finite. The flame animates while a played
 day is visible; an unplayed day stays still. Share
 cards remain deferred.
 
@@ -223,3 +231,7 @@ created only after a successful score transaction, and claimed once by the
 result drawer or dashboard. The result drawer opens only when the saved run
 advances at least one assignment; unrelated runs leave the result screen
 uninterrupted. Rebuilds retain the animation clock.
+
+Combo counts use singular/plural English forms (1 chart, 2 charts; 1 point,
+2 points), while Korean, Japanese, and Chinese retain their natural count
+phrasing. Localized `i18n::plural` text reselects its form after language changes.

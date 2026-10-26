@@ -56,6 +56,7 @@ inline FieldErrors readAssignmentForm(Assignment &assignment, const std::string 
 inline FieldErrors readRoutineForm(Config &config, const std::string &daily,
                                   const std::string &weekly, const std::string &monthly) {
   FieldErrors errors;
+  if (config.assignments.empty()) errors["assignments"] = "streak.ui.assignment_required";
   config.dailyGoal = formInteger(daily, 1000000, "daily", "streak.ui.invalid_daily", errors);
   config.weeklyGoal = formInteger(weekly, 100000000, "weekly", "streak.ui.invalid_period", errors);
   config.monthlyGoal = formInteger(monthly, 100000000, "monthly", "streak.ui.invalid_period", errors);

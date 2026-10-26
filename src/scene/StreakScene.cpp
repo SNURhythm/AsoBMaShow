@@ -173,6 +173,7 @@ void StreakScene::setTabTopInset(float topInset) {
 }
 void StreakScene::onPause() {
   roundCue_ = {};
+  goalIgnitionSoundPending_ = false;
   const auto endEditing = [](View *view, const auto &self) -> void {
     if (auto *input = dynamic_cast<TextInputBox *>(view)) input->endEditing();
     for (auto *child : view->getChildren()) self(child, self);
@@ -193,6 +194,7 @@ void StreakScene::reload() {
     streakProgress_.reset();
     streakProgressStartedAt_ = 0;
     roundCue_ = {};
+    goalIgnitionSoundPending_ = false;
   }
   profileId_ = context.profileManager.activeProfile().id;
   std::string error;
@@ -204,6 +206,7 @@ void StreakScene::reload() {
     streakProgress_ = std::move(progress);
     streakProgressStartedAt_ = 0;
     roundCue_ = {};
+    goalIgnitionSoundPending_ = false;
   }
   draft_ = state_.configurations.empty() ? streak::Config{} : state_.configurations.rbegin()->second;
   daily_ = std::to_string(draft_.dailyGoal);
@@ -236,7 +239,7 @@ void StreakScene::later(std::function<void()> action) {
   defer([this, action = std::move(action)] { action(); build(); return true; }, 0, true);
 }
 void StreakScene::build() {
-  if (page_ != Page::Dashboard) roundCue_ = {};
+  if (page_ != Page::Dashboard) { roundCue_ = {}; goalIgnitionSoundPending_ = false; }
   for (auto *view : views) delete view;
   views.clear();
   root_ = new View(0, 0, rendering::window_width, rendering::window_height);
@@ -289,12 +292,19 @@ void StreakScene::dashboard(View *body) {
   const int bonus = streak::bonusPoints(day);
   const int bonusLimit = streak::bonusLimit(day);
   const bool bonusAvailable = bonus < bonusLimit;
+  if (streakProgress_ && streakProgressStartedAt_ == 0) {
+    streakProgressStartedAt_ = SDL_GetTicks();
+    goalIgnitionSoundPending_ = streakProgress_->reachedDailyGoal;
+    roundCue_.start(*streakProgress_, streakProgressStartedAt_);
+  }
   auto *summary = card(body);
   summary->setName(complete ? "streakDayComplete" : "streakDailyHero");
-  summary->addView(new StreakFlameView(day.played, complete));
+  summary->addView(new StreakFlameView(day.played, complete, false,
+      streakProgress_ && streakProgress_->reachedDailyGoal
+          ? std::optional<std::uint64_t>(streakProgressStartedAt_) : std::nullopt));
   label(summary, i18n::tr(complete ? "streak.ui.complete" : "streak.ui.keep_going"), 30);
   label(summary, numberText("streak.ui.streak_count", state_.currentStreak), 44);
-  label(summary, numberText("streak.ui.best_count", state_.bestStreak), 18)->setThemedColor(app_theme::textSecondary);
+  label(summary, i18n::plural("streak.ui.best_count", state_.bestStreak).resolve(), 18)->setThemedColor(app_theme::textSecondary);
   label(summary, std::to_string(std::min<std::int64_t>(day.points, day.config.dailyGoal)) +
       " / " + std::to_string(day.config.dailyGoal), 34);
   meter(summary, day.points, day.config.dailyGoal, complete);
@@ -310,7 +320,7 @@ void StreakScene::dashboard(View *body) {
       action(body, i18n::tr(showOptional_ ? "streak.ui.hide_optional" : "streak.ui.show_optional"),
           [this] { later([this] {
             showOptional_ = !showOptional_;
-            if (!showOptional_) { streakProgress_.reset(); roundCue_ = {}; }
+            if (!showOptional_) { streakProgress_.reset(); roundCue_ = {}; goalIgnitionSoundPending_ = false; }
           }); },
           app_theme::ActionCategory::Neutral, showOptional_ ? ui_icons::kHide : ui_icons::kPlus);
   } else label(body, i18n::tr("streak.ui.assignments"), 27);
@@ -321,17 +331,13 @@ void StreakScene::dashboard(View *body) {
       unavailable = unavailableAssignments(day);
   }
   catch (const std::exception &error) { label(body, error.what(), 18); }
-  if (streakProgress_ && streakProgressStartedAt_ == 0) {
-    streakProgressStartedAt_ = SDL_GetTicks();
-    roundCue_.start(*streakProgress_, streakProgressStartedAt_);
-  }
   for (const auto &p : day.assignments) {
     const auto change = streak::progressChange(streakProgress_, p);
     if (!streak::dashboardAssignmentVisible(complete, showOptional_, bonusAvailable, change)) continue;
     auto *assignmentCard = card(body);
     const auto reward = complete ? 1 :
         std::min<std::int64_t>(p.requirement.points, day.config.dailyGoal - day.points);
-    label(assignmentCard, p.requirement.name + "  ·  " + numberText("streak.ui.reward", reward), 24);
+    label(assignmentCard, p.requirement.name + "  ·  " + i18n::plural("streak.ui.reward", reward).resolve(), 24);
     if (complete)
       label(assignmentCard, std::string(i18n::tr("streak.ui.bonus_today")) + " " + std::to_string(p.bonusRounds), 18);
     label(assignmentCard, levelsText(p.requirement), 18);
@@ -367,9 +373,9 @@ void StreakScene::dashboard(View *body) {
   label(periods, std::to_string(totals.monthlyPoints) + " / " + std::to_string(day.config.monthlyGoal), 26);
   meter(periods, totals.monthlyPoints, day.config.monthlyGoal);
   auto *wallet = card(body);
-  label(wallet, numberText("streak.ui.savings_count", state_.savings), 26);
+  label(wallet, i18n::plural("streak.ui.savings_count", state_.savings).resolve(), 26);
   label(wallet, numberText("streak.ui.freezes_count", state_.freezes), 21)->setThemedColor(app_theme::cyan);
-  action(wallet, numberText("streak.ui.buy_freeze", streak::freezePrice(state_)), [this] {
+  action(wallet, i18n::plural("streak.ui.buy_freeze", streak::freezePrice(state_)).resolve(), [this] {
     later([this] {
       std::string error;
       const bool bought = context.scoreRepository.BuyStreakFreeze(error);
@@ -403,17 +409,21 @@ void StreakScene::routine(View *body) {
   field(body, i18n::tr("streak.ui.daily"), daily_, &fieldErrors_["daily"]);
   field(body, i18n::tr("streak.ui.weekly"), weekly_, &fieldErrors_["weekly"]);
   field(body, i18n::tr("streak.ui.monthly"), monthly_, &fieldErrors_["monthly"]);
+  auto *assignments = new View();
+  assignments->setFlexDirection(FlexDirection::Column)->setGap(12)->setFlexShrink(0);
+  body->addView(assignments);
   for (std::size_t i = 0; i < draft_.assignments.size(); ++i) {
     const auto &a = draft_.assignments[i];
-    label(body, a.name + "  ·  " + levelsText(a), 22);
-    lampLabel(body, numberText("streak.ui.chart_count", a.chartCount) + " · " + requirements(a) + " · " + numberText("streak.ui.reward", a.points), a.targetLamp, 18);
+    label(assignments, a.name + "  ·  " + levelsText(a), 22);
+    lampLabel(assignments, i18n::plural("streak.ui.chart_count", a.chartCount).resolve() + " · " + requirements(a) + " · " + i18n::plural("streak.ui.reward", a.points).resolve(), a.targetLamp, 18);
     auto *row = new View();
     row->setFlexDirection(FlexDirection::Row)->setGap(10)->setFlexShrink(0);
     action(row, i18n::tr("streak.ui.edit_assignment"), [this, i] { later([this, i] { editAssignment(static_cast<int>(i)); }); }, app_theme::ActionCategory::Neutral, ui_icons::kPen)->setFlex(1);
     action(row, i18n::tr("streak.ui.remove"), [this, i] { later([this, i] { draft_.assignments.erase(draft_.assignments.begin() + i); }); }, app_theme::ActionCategory::Destructive, ui_icons::kTrash)->setFlex(1);
-    body->addView(row);
+    assignments->addView(row);
   }
-  action(body, i18n::tr("streak.ui.add"), [this] { later([this] { editAssignment(-1); }); }, app_theme::ActionCategory::Neutral, ui_icons::kPlus)->setEnabled(draft_.assignments.size() < 100);
+  action(assignments, i18n::tr("streak.ui.add"), [this] { later([this] { editAssignment(-1); }); }, app_theme::ActionCategory::Neutral, ui_icons::kPlus)->setEnabled(draft_.assignments.size() < 100);
+  fieldError(body, assignments, fieldErrors_["assignments"]);
   action(body, i18n::tr("streak.ui.save"), [this] { later([this] { saveRoutine(); }); }, app_theme::ActionCategory::Primary, ui_icons::kSave);
 }
 void StreakScene::editAssignment(int index) {
@@ -589,6 +599,11 @@ void StreakScene::back() {
   defer([this] { (void)returnToScene(*context.sceneManager, returnTarget_); return false; }, 0, true);
 }
 void StreakScene::update(float dt) {
+  if (page_ == Page::Dashboard && goalIgnitionSoundPending_) {
+    goalIgnitionSoundPending_ = false;
+    if (SDL_GetTicks() - streakProgressStartedAt_ < 750)
+      streakSounds_.play(context.jukebox.audioRuntime(), streak::Sound::Complete);
+  }
   if (page_ == Page::Dashboard && roundCue_.consume(SDL_GetTicks()))
     streakSounds_.play(context.jukebox.audioRuntime(), streak::Sound::RoundAdvance);
   elapsed_ += dt;

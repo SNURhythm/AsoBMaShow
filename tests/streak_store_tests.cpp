@@ -27,6 +27,13 @@ int main() {
   sqlite3 *other = nullptr;
   CHECK(sqlite3_open(":memory:", &other) == SQLITE_OK);
   CHECK(load(other).days.empty());
+  // Previously saved empty routines remain readable so they can be repaired.
+  State legacyEmpty = state;
+  legacyEmpty.configurations.begin()->second.assignments.clear();
+  legacyEmpty.days.begin()->second.config.assignments.clear();
+  legacyEmpty.days.begin()->second.assignments.clear();
+  save(other, legacyEmpty);
+  CHECK(load(other).days.at(today()).assignments.empty());
   sqlite3_close(other);
   auto damaged = load(db);
   damaged.days.begin()->second.assignments[0].requirement.points = -40;

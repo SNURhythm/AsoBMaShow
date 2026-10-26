@@ -80,6 +80,7 @@ public:
 private:
   std::string literal_;
   std::shared_ptr<const detail::Message> message_;
+  friend Text plural(const char *key, std::int64_t count);
   friend Text message(const char *key,
       std::initializer_list<std::pair<std::string_view, Text>> values);
 };
@@ -87,6 +88,11 @@ private:
 // Named arguments are owned, and can themselves be localized messages.
 Text message(const char *key,
     std::initializer_list<std::pair<std::string_view, Text>> values = {});
+
+// Integer counts resolve with the current language, including after a language
+// change. English uses key.one for 1; other counts and the other supported
+// languages use key. The {count} argument is supplied automatically.
+Text plural(const char *key, std::int64_t count);
 
 // Stable, semantic IDs identify application-owned messages. English copy is
 // catalog data, never a lookup key. Unknown IDs are returned visibly to expose

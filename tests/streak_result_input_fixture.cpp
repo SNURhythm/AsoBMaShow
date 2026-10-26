@@ -1,4 +1,5 @@
 #include "streak/StreakModel.h"
+#include "streak/StreakRoundMotion.h"
 #include "streak/StreakResultPresentation.h"
 #include <cassert>
 #include <atomic>
@@ -9,6 +10,9 @@
 #include <optional>
 #include <unordered_map>
 #include <utility>
+#include <array>
+#include <vector>
+#include <cmath>
 #define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS 1
 static std::uint64_t ticks = 1000;
 std::uint64_t SDL_GetTicks() { return ticks; }
@@ -28,10 +32,26 @@ namespace platform_open { bool openExternalUrl(std::string_view, std::string &) 
 namespace rendering {
 constexpr int render_width=1000, render_height=1000;
 constexpr float widthScale = 1, heightScale = 1;
+constexpr int window_width=1000, window_height=1000;
+constexpr float displayPixelScale=1, ui_scale_x=1;
+struct Insets { float top=0,right=0,bottom=0,left=0; };
+Insets uiSafeAreaInsets() { return {}; }
 void screenToUi(float x, float y, float &ox, float &oy) { ox=x; oy=y; }
 void normalizedToUi(float x, float y, float &ox, float &oy) { ox=x*1000; oy=y*1000; }
 }
+enum class Edge { Left, Top };
+namespace streak {
+enum class Sound { Progress, Complete, RoundAdvance };
+struct Sounds {
+  std::vector<Sound> played;
+  void play(int, Sound sound) { played.push_back(sound); }
+};
+}
 struct View {
+  void setSize(float, float) {}
+  void setPosition(Edge, float) {}
+  void applyYogaLayout() {}
+  void refreshContentLayout() {}
   int cancelled = 0, events = 0;
   bool visible = true;
   std::function<void()> release;
@@ -62,6 +82,7 @@ struct Local {
 };
 struct ResultScene {
   struct {
+    struct { int audioRuntime() { return 0; } } jukebox;
     std::uint64_t currentFrame = 11;
     std::atomic_bool replayVideoExportActive{false};
     struct { bool exportRequested() const { return false; } } rendererAccess;
@@ -91,6 +112,14 @@ struct ResultScene {
   bool isCourseStageResult() const { return false; }
   bool isCourseFinalResult() const { return false; }
   streak::ResultPresentation streakPresentation_;
+  streak::RoundPromotionCue streakRoundCue_;
+  streak::Sounds streakSounds_;
+  std::uint64_t streakProgressStartedAt_=0;
+  float streakOverlayUnit_=0;
+  std::array<int,4> streakLayoutSignature_{};
+  View *streakScroll_=&viewport;
+  void buildStreakProgress(bool) { streakPanel_=&panel; streakOverlay_=&overlay; }
+  void updateStreakProgress();
   std::optional<streak::State> streakSnapshot_;
   std::optional<streak::PlayProgress> streakProgress_;
   View viewport, panel, overlay;
@@ -110,6 +139,26 @@ struct ResultScene {
 };
 PRODUCTION_METHODS
 int main() {
+  // Only the receipt which crosses the goal ignites, including on a completed day.
+  for (bool reached : {false, true}) {
+    ResultScene cue;
+    cue.streakSnapshot_ = streak::State{};
+    cue.streakProgress_ = streak::PlayProgress{.reachedDailyGoal=reached};
+    cue.streakPresentation_.arm({.saved=true, .manual=true, .currentDay=true, .activeRoutine=true}, ticks);
+    ticks += 500;
+    cue.updateStreakProgress();
+    assert(cue.streakSounds_.played.size() == 1);
+    assert(cue.streakSounds_.played[0] == (reached ? streak::Sound::Complete : streak::Sound::Progress));
+    const auto ignitionStart = cue.streakProgressStartedAt_;
+    ticks += 100;
+    cue.streakOverlayUnit_ = 123; // Resize rebuild must keep the same animation clock.
+    cue.updateStreakProgress();
+    assert(cue.streakProgressStartedAt_ == ignitionStart && cue.streakSounds_.played.size() == 1);
+    cue.dismissStreakProgress();
+    ticks += 3000;
+    cue.updateStreakProgress();
+    assert(cue.streakSounds_.played.size() == 1);
+  }
   ResultScene scene;
   streak::Day day;
   day.assignments.push_back({});

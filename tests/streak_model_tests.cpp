@@ -1,6 +1,7 @@
 #include "streak/StreakModel.h"
 #include "streak/StreakForm.h"
 #include "streak/StreakRoundMotion.h"
+#include "streak/StreakIgnitionMotion.h"
 #include "streak/StreakResultPresentation.h"
 #include <cstdlib>
 #include <iostream>
@@ -68,6 +69,17 @@ int main() {
   CHECK(receipt.assignments.size() == 1 && receipt.assignments[0].beforeCharts == 2 &&
         receipt.assignments[0].beforeQuota == 3 && receipt.assignments[0].afterQuota == 1 &&
         receipt.assignments[0].completedRound());
+  CHECK(receipt.reachedDailyGoal);
+  PlayProgress bonusReceipt;
+  record(moving, play(41000, "bonus-after-goal"), 0, &bonusReceipt);
+  CHECK(!bonusReceipt.reachedDailyGoal && !bonusReceipt.assignments.empty());
+  CHECK(ignitionFrame(100, 100).scale == .68F);
+  CHECK(ignitionFrame(100, 190).scale < .5F);
+  CHECK(ignitionFrame(100, 400).scale > 1 && ignitionFrame(100, 400).glow == 1);
+  CHECK(ignitionFrame(100, 500).active && ignitionFrame(100, 500).burst > 0);
+  CHECK(!ignitionFrame(100, 1000).active && ignitionFrame(100, 1000).scale == 1);
+  CHECK(!ignitionFrame(100, 10000).active && !ignitionFrame({}, 400).active);
+  CHECK(!ignitionFrame(100, 400, true).active && ignitionFrame(100, 400, true).glow == 0);
   RoundMotion round(receipt.assignments[0], 100);
   CHECK(std::abs(round.frame(100).fraction - 2.0F/3) < .001F);
   CHECK(round.frame(950).fraction == 1 && round.frame(950).completed && round.frame(950).round == 1);
@@ -119,6 +131,20 @@ int main() {
   errors = readRoutineForm(routineForm, "0", "100000001", "oops");
   CHECK(errors.size() == 3 && errors.contains("daily") && errors.contains("weekly") && errors.contains("monthly"));
   CHECK(readRoutineForm(routineForm, "1000000", "100000000", "100000000").empty());
+  Config emptyRoutine;
+  CHECK(readRoutineForm(emptyRoutine, "20", "150", "650").contains("assignments"));
+  State emptyState;
+  bool rejectedEmpty = false;
+  try { configure(emptyState, emptyRoutine, 41000); }
+  catch (const std::invalid_argument &) { rejectedEmpty = true; }
+  CHECK(rejectedEmpty && emptyState.configurations.empty() && emptyState.days.empty());
+  auto retainedRoutine = moving.configurations;
+  auto retainedDays = moving.days.size();
+  rejectedEmpty = false;
+  try { configure(moving, emptyRoutine, 41010); }
+  catch (const std::invalid_argument &) { rejectedEmpty = true; }
+  CHECK(rejectedEmpty && moving.days.size() == retainedDays &&
+        moving.configurations.size() == retainedRoutine.size());
   State wallet;
   wallet.savings = freezePrice(wallet) - 1;
   CHECK(!canBuyFreeze(wallet));

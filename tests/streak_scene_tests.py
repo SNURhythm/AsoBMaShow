@@ -68,6 +68,7 @@ int main() {
         source = (root / "src/scene/ResultScene.cpp").read_text()
         methods = "\n".join(extract(source, signature) for signature in (
             "void ResultScene::prepareStreakProgress()",
+            "void ResultScene::updateStreakProgress()",
             "bool ResultScene::streakOwnsInput() const",
             "void ResultScene::dismissStreakProgress(",
             "bool ResultScene::handleStreakProgressEvent("))

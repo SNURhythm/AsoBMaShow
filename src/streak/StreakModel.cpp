@@ -234,6 +234,8 @@ void advance(State &s, DayId day) {
   }
 }
 DayId configure(State &s, const Config &config, DayId day) {
+  // Earlier builds saved empty routines; keep those readable, but never save a new one.
+  if (config.assignments.empty()) throw std::invalid_argument("Add at least one assignment.");
   if (const auto error = validate(config); !error.empty()) throw std::invalid_argument(error);
   advance(s, day);
   if (!s.days.empty()) day = std::max(day, s.days.rbegin()->first);
@@ -360,6 +362,7 @@ std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice, PlayPro
   }
   recompute(s, returnedFreezes, p.day);
   if (receipt) {
+    receipt->reachedDailyGoal = !bonus && day.points >= day.config.dailyGoal;
     for (std::size_t i = 0; i < day.assignments.size(); ++i) {
       auto &change = receipt->assignments[i];
       const auto &progress = day.assignments[i];

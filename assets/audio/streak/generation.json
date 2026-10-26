@@ -1,217 +1,723 @@
 {
   "earshot_commit": "591fa3e028032e6dce56620a20e932e35667e8d8",
+  "sample_rate": 48000,
+  "format": "PCM_16",
   "sounds": {
     "progress": {
-      "id": "ui_pop/soft",
-      "seed": 1,
-      "sr": 48000,
-      "onset_s": 0.0025,
-      "peak_s": 0.0415,
-      "end_s": 0.157,
-      "dur_s": 0.1805,
-      "peak_db": -15.0,
-      "lufs_m_max": -29.37,
-      "edits": {},
-      "checks": {
+      "layers": [
+        {
+          "id": "swish/stick",
+          "peak_db": -12,
+          "params": {
+            "rise": 0.045,
+            "hold": 0.005,
+            "fall": 0.1,
+            "rt60": 0.14,
+            "room_wet": 0.06,
+            "tone_db": -50,
+            "eq_hi_db": -6,
+            "width": 0.25
+          },
+          "at": 0,
+          "seed": 1
+        }
+      ],
+      "peak_db": -14,
+      "measure": {
+        "onset_s": 0.0215,
+        "peak_s": 0.0565,
+        "end_s": 0.201,
+        "dur_s": 0.2669,
+        "peak_db": -14.0,
+        "lufs_m_max": -33.24
+      },
+      "check": {
         "ok": true,
         "warnings": [],
         "notes": [],
-        "summary": "ui_pop/soft: clean",
+        "summary": "progress: clean",
         "measures": {
           "clicks": 0,
           "edge_db": -240.0,
           "clip_runs": 0,
           "overs": 0,
-          "dc_db": -130.2,
-          "ring_z": 4.1,
+          "dc_db": -82.2,
+          "ring_z": 5.0,
           "trunc_db": null,
           "silence_ms": 0.0,
           "bump_db": 0.0,
-          "attack_ms": 6.5,
-          "t40_ms": 110.0,
-          "crest_db": 8.2,
-          "res_db": 19.5,
-          "res_hz": 1115,
-          "peak_dbfs": -15.0,
-          "live_ms": 126.25
+          "attack_ms": 2.0,
+          "t40_ms": 130.0,
+          "crest_db": 12.5,
+          "res_db": 5.4,
+          "res_hz": 1037,
+          "peak_dbfs": -14.0,
+          "live_ms": 133.0
         },
         "glide": {
-          "tonal_share": 0.36,
+          "tonal_share": 0.72,
           "rise_st": 0.0,
           "from_s": null,
           "to_s": null
         },
         "layers": {
           "attacks": [
-            0.033
+            0.062
           ],
           "count": 1,
-          "pre_swell_ms": 0.0
+          "pre_swell_ms": 30.0
         },
         "context": {
-          "category": "ui_pop",
-          "sound": "ui_pop/soft"
+          "sound": "progress"
         }
-      }
-    },
-    "complete": {
-      "id": "mallet/up4",
-      "seed": 1,
-      "sr": 48000,
-      "onset_s": 0.0,
-      "peak_s": 0.3355,
-      "end_s": 0.716,
-      "dur_s": 0.7486,
-      "peak_db": -9.0,
-      "lufs_m_max": -15.39,
-      "edits": {},
-      "checks": {
-        "ok": true,
-        "warnings": [],
-        "notes": [],
-        "summary": "mallet/up4: clean",
-        "measures": {
-          "clicks": 0,
-          "edge_db": -240.0,
-          "clip_runs": 0,
-          "overs": 0,
-          "dc_db": -142.8,
-          "ring_z": 4.1,
-          "trunc_db": null,
-          "silence_ms": 0.0,
-          "bump_db": 0.0,
-          "attack_ms": 114.25,
-          "t40_ms": 350.0,
-          "crest_db": 5.9,
-          "res_db": 51.1,
-          "res_hz": 3644,
-          "peak_dbfs": -9.0,
-          "live_ms": 673.75
-        },
-        "glide": {
-          "tonal_share": 1.0,
-          "rise_st": 0.0,
-          "from_s": 0.336,
-          "to_s": 0.346
-        },
-        "layers": {
-          "attacks": [
-            0.343
-          ],
-          "count": 1,
-          "pre_swell_ms": 0.0
-        },
-        "context": {
-          "category": "mallet",
-          "sound": "mallet/up4"
+      },
+      "layer_metadata": [
+        {
+          "id": "swish/stick",
+          "seed": 1,
+          "sr": 48000,
+          "onset_s": 0.0215,
+          "peak_s": 0.0565,
+          "end_s": 0.201,
+          "dur_s": 0.2669,
+          "peak_db": -12.0,
+          "lufs_m_max": -31.24,
+          "edits": {},
+          "checks": {
+            "ok": true,
+            "warnings": [],
+            "notes": [],
+            "summary": "swish/stick: clean",
+            "measures": {
+              "clicks": 0,
+              "edge_db": -240.0,
+              "clip_runs": 0,
+              "overs": 0,
+              "dc_db": -115.5,
+              "ring_z": 5.1,
+              "trunc_db": null,
+              "silence_ms": 0.0,
+              "bump_db": 0.0,
+              "attack_ms": 2.0,
+              "t40_ms": 130.0,
+              "crest_db": 12.5,
+              "res_db": 5.4,
+              "res_hz": 1037,
+              "peak_dbfs": -12.0,
+              "live_ms": 133.25
+            },
+            "glide": {
+              "tonal_share": 0.72,
+              "rise_st": 0.0,
+              "from_s": null,
+              "to_s": null
+            },
+            "layers": {
+              "attacks": [
+                0.062
+              ],
+              "count": 1,
+              "pre_swell_ms": 30.0
+            },
+            "context": {
+              "category": "swish",
+              "sound": "swish/stick"
+            }
+          }
         }
-      }
-    },
-    "freeze": {
-      "id": "mallet/celesta",
-      "seed": 1,
-      "sr": 48000,
-      "onset_s": 0.0005,
-      "peak_s": 0.0235,
-      "end_s": 0.344,
-      "dur_s": 0.414,
-      "peak_db": -9.0,
-      "lufs_m_max": -21.05,
-      "edits": {},
-      "checks": {
-        "ok": true,
-        "warnings": [],
-        "notes": [],
-        "summary": "mallet/celesta: clean",
-        "measures": {
-          "clicks": 0,
-          "edge_db": -240.0,
-          "clip_runs": 0,
-          "overs": 0,
-          "dc_db": -148.9,
-          "ring_z": 4.7,
-          "trunc_db": null,
-          "silence_ms": 0.0,
-          "bump_db": 0.0,
-          "attack_ms": 11.75,
-          "t40_ms": 220.0,
-          "crest_db": 4.9,
-          "res_db": 82.7,
-          "res_hz": 5382,
-          "peak_dbfs": -9.0,
-          "live_ms": 236.5
+      ],
+      "candidate": "progress_swish",
+      "semantic_queries": [
+        {
+          "query": "a short soft airy swoosh with a gentle pop",
+          "selected": {
+            "name": "progress_swish.wav",
+            "z": 3.11,
+            "cosine": 0.313,
+            "vocab_percentile": 99.1,
+            "verdict": "strong",
+            "near_silent": false,
+            "sounds_most_like": "a fast whoosh (z +4.0)"
+          },
+          "previous": {
+            "name": "progress.wav",
+            "z": 3.09,
+            "cosine": 0.283,
+            "vocab_percentile": 99.4,
+            "verdict": "strong",
+            "near_silent": false,
+            "sounds_most_like": "an error buzz (z +3.2)"
+          }
         },
-        "glide": {
-          "tonal_share": 1.0,
-          "rise_st": 0.0,
-          "from_s": null,
-          "to_s": null
-        },
-        "layers": {
-          "attacks": [
-            0.033
-          ],
-          "count": 1,
-          "pre_swell_ms": 0.0
-        },
-        "context": {
-          "category": "mallet",
-          "sound": "mallet/celesta"
+        {
+          "query": "a quick smooth soft air whoosh",
+          "selected": {
+            "name": "progress_swish.wav",
+            "z": 3.56,
+            "cosine": 0.339,
+            "vocab_percentile": 99.7,
+            "verdict": "strong",
+            "near_silent": false,
+            "sounds_most_like": "a fast whoosh (z +4.0)"
+          },
+          "previous": {
+            "name": "progress.wav",
+            "z": 2.36,
+            "cosine": 0.192,
+            "vocab_percentile": 98.1,
+            "verdict": "weak",
+            "near_silent": false,
+            "sounds_most_like": "an error buzz (z +3.2)"
+          }
         }
-      }
+      ]
     },
     "round-advance": {
-      "id": "mallet/flourish",
-      "seed": 1,
-      "sr": 48000,
-      "onset_s": 0.0,
-      "peak_s": 0.0505,
-      "end_s": 0.428,
-      "dur_s": 0.5043,
-      "peak_db": -11.0,
-      "lufs_m_max": -22.79,
-      "edits": {},
-      "checks": {
+      "layers": [
+        {
+          "id": "mallet/up4",
+          "peak_db": -12,
+          "params": {
+            "f0": 1046.5,
+            "notes": 3,
+            "step": 0.105,
+            "span": 2,
+            "scale": "major",
+            "pattern": "up",
+            "gate": 0.09,
+            "last_gate": 1.6,
+            "gate_tau": 0.035,
+            "hard": 0.32,
+            "onset": 0.006,
+            "lp": 6500,
+            "room": 0.07,
+            "rt": 0.2,
+            "spread": 0.25,
+            "accent": 1.0,
+            "body": -18.0
+          },
+          "at": 0,
+          "seed": 1
+        }
+      ],
+      "peak_db": -17,
+      "measure": {
+        "onset_s": 0.0005,
+        "peak_s": 0.2175,
+        "end_s": 0.528,
+        "dur_s": 0.5792,
+        "peak_db": -17.0,
+        "lufs_m_max": -22.97
+      },
+      "check": {
         "ok": true,
         "warnings": [],
         "notes": [],
-        "summary": "mallet/flourish: clean",
+        "summary": "round-advance: clean",
         "measures": {
           "clicks": 0,
           "edge_db": -240.0,
           "clip_runs": 0,
           "overs": 0,
-          "dc_db": -125.2,
-          "ring_z": 3.4,
+          "dc_db": -77.0,
+          "ring_z": 4.4,
           "trunc_db": null,
           "silence_ms": 0.0,
           "bump_db": 0.0,
-          "attack_ms": 1.0,
-          "t40_ms": 310.0,
-          "crest_db": 7.8,
-          "res_db": 30.9,
-          "res_hz": 2770,
-          "peak_dbfs": -11.0,
-          "live_ms": 313.5
+          "attack_ms": 111.0,
+          "t40_ms": 260.0,
+          "crest_db": 4.0,
+          "res_db": 49.9,
+          "res_hz": 4334,
+          "peak_dbfs": -17.0,
+          "live_ms": 482.5
         },
         "glide": {
           "tonal_share": 1.0,
           "rise_st": 0.1,
-          "from_s": 0.091,
-          "to_s": 0.106
+          "from_s": 0.041,
+          "to_s": 0.051
         },
         "layers": {
           "attacks": [
-            0.058
+            0.228
           ],
           "count": 1,
           "pre_swell_ms": 0.0
         },
         "context": {
           "category": "mallet",
-          "sound": "mallet/flourish"
+          "sound": "round-advance"
         }
-      }
+      },
+      "layer_metadata": [
+        {
+          "id": "mallet/up4",
+          "seed": 1,
+          "sr": 48000,
+          "onset_s": 0.0005,
+          "peak_s": 0.2175,
+          "end_s": 0.528,
+          "dur_s": 0.5792,
+          "peak_db": -12.0,
+          "lufs_m_max": -17.97,
+          "edits": {},
+          "checks": {
+            "ok": true,
+            "warnings": [],
+            "notes": [],
+            "summary": "mallet/up4: clean",
+            "measures": {
+              "clicks": 0,
+              "edge_db": -240.0,
+              "clip_runs": 0,
+              "overs": 0,
+              "dc_db": -129.8,
+              "ring_z": 4.5,
+              "trunc_db": null,
+              "silence_ms": 0.0,
+              "bump_db": 0.0,
+              "attack_ms": 111.0,
+              "t40_ms": 260.0,
+              "crest_db": 4.0,
+              "res_db": 49.9,
+              "res_hz": 4334,
+              "peak_dbfs": -12.0,
+              "live_ms": 482.5
+            },
+            "glide": {
+              "tonal_share": 1.0,
+              "rise_st": 0.1,
+              "from_s": 0.041,
+              "to_s": 0.051
+            },
+            "layers": {
+              "attacks": [
+                0.228
+              ],
+              "count": 1,
+              "pre_swell_ms": 0.0
+            },
+            "context": {
+              "category": "mallet",
+              "sound": "mallet/up4"
+            }
+          }
+        }
+      ],
+      "candidate": "round_three_c",
+      "semantic_queries": [
+        {
+          "query": "a short ascending two note electronic chime",
+          "selected": {
+            "name": "round_three_c.wav",
+            "z": 4.44,
+            "cosine": 0.398,
+            "vocab_percentile": 100.0,
+            "verdict": "strong",
+            "near_silent": false,
+            "sounds_most_like": "a success chime (z +4.3)"
+          },
+          "previous": {
+            "name": "round-advance.wav",
+            "z": 3.84,
+            "cosine": 0.37,
+            "vocab_percentile": 100.0,
+            "verdict": "strong",
+            "near_silent": false,
+            "sounds_most_like": "a success chime (z +3.7)"
+          }
+        },
+        {
+          "query": "a bright playful rising chime sound",
+          "selected": {
+            "name": "round_three_c.wav",
+            "z": 2.85,
+            "cosine": 0.292,
+            "vocab_percentile": 98.8,
+            "verdict": "plausible",
+            "near_silent": false,
+            "sounds_most_like": "a success chime (z +4.3)"
+          },
+          "previous": {
+            "name": "round-advance.wav",
+            "z": 2.5,
+            "cosine": 0.268,
+            "vocab_percentile": 98.1,
+            "verdict": "plausible",
+            "near_silent": false,
+            "sounds_most_like": "a success chime (z +3.7)"
+          }
+        }
+      ]
+    },
+    "complete": {
+      "layers": [
+        {
+          "id": "swipe/glide",
+          "peak_db": -11,
+          "params": {
+            "rise": 0.09,
+            "hold": 0.035,
+            "fall": 0.18,
+            "room_wet": 0.06,
+            "rt60": 0.22,
+            "low_db": -8,
+            "low_f": 135,
+            "low_lag": 0.02,
+            "low_smooth": 0.04,
+            "eq_lo_db": -6,
+            "sub_db": -60,
+            "f_peak": 380,
+            "hiss_lo": 1200,
+            "hiss_hp": 2500,
+            "hiss_db": -20,
+            "grain_db": -16,
+            "grain_rate": 700,
+            "grain_f": 3500,
+            "tone_db": -60,
+            "width": 0.3,
+            "eq_hi_db": -6
+          },
+          "at": 0,
+          "seed": 1
+        }
+      ],
+      "peak_db": -11,
+      "measure": {
+        "onset_s": 0.0295,
+        "peak_s": 0.1465,
+        "end_s": 0.464,
+        "dur_s": 0.6055,
+        "peak_db": -11.0,
+        "lufs_m_max": -24.88
+      },
+      "check": {
+        "ok": true,
+        "warnings": [],
+        "notes": [],
+        "summary": "complete: clean",
+        "measures": {
+          "clicks": 0,
+          "edge_db": -240.0,
+          "clip_runs": 0,
+          "overs": 0,
+          "dc_db": -84.1,
+          "ring_z": 4.1,
+          "trunc_db": null,
+          "silence_ms": 0.0,
+          "bump_db": 3.3,
+          "attack_ms": 9.25,
+          "t40_ms": 260.0,
+          "crest_db": 8.3,
+          "res_db": 4.3,
+          "res_hz": 4271,
+          "peak_dbfs": -11.0,
+          "live_ms": 315.75
+        },
+        "glide": {
+          "tonal_share": 0.53,
+          "rise_st": 0.0,
+          "from_s": null,
+          "to_s": null
+        },
+        "layers": {
+          "attacks": [
+            0.138
+          ],
+          "count": 1,
+          "pre_swell_ms": 50.0
+        },
+        "context": {
+          "category": "swipe",
+          "sound": "complete"
+        }
+      },
+      "layer_metadata": [
+        {
+          "id": "swipe/glide",
+          "seed": 1,
+          "sr": 48000,
+          "onset_s": 0.0295,
+          "peak_s": 0.1465,
+          "end_s": 0.464,
+          "dur_s": 0.6055,
+          "peak_db": -11.0,
+          "lufs_m_max": -24.88,
+          "edits": {},
+          "checks": {
+            "ok": true,
+            "warnings": [],
+            "notes": [],
+            "summary": "swipe/glide: clean",
+            "measures": {
+              "clicks": 0,
+              "edge_db": -240.0,
+              "clip_runs": 0,
+              "overs": 0,
+              "dc_db": -134.2,
+              "ring_z": 4.0,
+              "trunc_db": null,
+              "silence_ms": 0.0,
+              "bump_db": 3.3,
+              "attack_ms": 9.25,
+              "t40_ms": 260.0,
+              "crest_db": 8.3,
+              "res_db": 4.3,
+              "res_hz": 4271,
+              "peak_dbfs": -11.0,
+              "live_ms": 316.25
+            },
+            "glide": {
+              "tonal_share": 0.53,
+              "rise_st": 0.0,
+              "from_s": null,
+              "to_s": null
+            },
+            "layers": {
+              "attacks": [
+                0.138
+              ],
+              "count": 1,
+              "pre_swell_ms": 50.0
+            },
+            "context": {
+              "category": "swipe",
+              "sound": "swipe/glide"
+            }
+          }
+        }
+      ],
+      "candidate": "ignition_crackle",
+      "semantic_queries": [
+        {
+          "query": "a small flame igniting with a soft puff",
+          "selected": {
+            "name": "ignition_crackle.wav",
+            "z": 2.9,
+            "cosine": 0.246,
+            "vocab_percentile": 99.4,
+            "verdict": "plausible",
+            "near_silent": false,
+            "sounds_most_like": "a fast whoosh (z +3.8)"
+          },
+          "previous": {
+            "name": "complete.wav",
+            "z": -1.23,
+            "cosine": -0.163,
+            "vocab_percentile": 5.6,
+            "verdict": "no match",
+            "near_silent": false,
+            "sounds_most_like": "a success chime (z +4.4)"
+          }
+        },
+        {
+          "query": "a short soft fire whoosh with gentle crackling",
+          "selected": {
+            "name": "ignition_crackle.wav",
+            "z": 3.68,
+            "cosine": 0.354,
+            "vocab_percentile": 99.7,
+            "verdict": "strong",
+            "near_silent": false,
+            "sounds_most_like": "a fast whoosh (z +3.8)"
+          },
+          "previous": {
+            "name": "complete.wav",
+            "z": -1.08,
+            "cosine": -0.124,
+            "vocab_percentile": 9.3,
+            "verdict": "no match",
+            "near_silent": false,
+            "sounds_most_like": "a success chime (z +4.4)"
+          }
+        }
+      ]
+    },
+    "freeze": {
+      "layers": [
+        {
+          "id": "pro_shimmer/m1",
+          "peak_db": -13,
+          "params": {
+            "length": 0.75,
+            "swell": 0.075,
+            "hold": 0.015,
+            "fade": 0.45,
+            "rt60": 0.22,
+            "verb": 0.16,
+            "tone_db": -50,
+            "g_hi": 6500.0,
+            "g_lo": 1400.0,
+            "tilt": 1.0,
+            "rate": 50.0,
+            "g_tau": 0.005,
+            "octave": 0.1,
+            "deess": 5.0
+          },
+          "at": 0,
+          "seed": 1
+        }
+      ],
+      "peak_db": -13,
+      "measure": {
+        "onset_s": 0.0655,
+        "peak_s": 0.1025,
+        "end_s": 0.609,
+        "dur_s": 0.75,
+        "peak_db": -13.0,
+        "lufs_m_max": -28.19
+      },
+      "check": {
+        "ok": true,
+        "warnings": [],
+        "notes": [
+          {
+            "code": "tail",
+            "msg": "the tail rises again by 12 dB (a second event, a roll or a double member)"
+          }
+        ],
+        "summary": "freeze: clean (the tail rises again by 12 dB (a second event, a roll or a double member))",
+        "measures": {
+          "clicks": 0,
+          "edge_db": -82.1,
+          "clip_runs": 0,
+          "overs": 0,
+          "dc_db": -82.1,
+          "ring_z": 13.8,
+          "trunc_db": null,
+          "silence_ms": 0.0,
+          "bump_db": 11.5,
+          "attack_ms": 11.75,
+          "t40_ms": 290.0,
+          "crest_db": 11.3,
+          "res_db": 13.1,
+          "res_hz": 3917,
+          "peak_dbfs": -13.0,
+          "live_ms": 267.25
+        },
+        "glide": {
+          "tonal_share": 0.6,
+          "rise_st": 2.0,
+          "from_s": 0.061,
+          "to_s": 0.086
+        },
+        "layers": {
+          "attacks": [
+            0.107
+          ],
+          "count": 1,
+          "pre_swell_ms": 15.0
+        },
+        "context": {
+          "sound": "freeze"
+        }
+      },
+      "layer_metadata": [
+        {
+          "id": "pro_shimmer/m1",
+          "seed": 1,
+          "sr": 48000,
+          "onset_s": 0.0655,
+          "peak_s": 0.1025,
+          "end_s": 0.609,
+          "dur_s": 0.75,
+          "peak_db": -13.0,
+          "lufs_m_max": -28.19,
+          "edits": {},
+          "checks": {
+            "ok": true,
+            "warnings": [],
+            "notes": [
+              {
+                "code": "tail",
+                "msg": "the tail rises again by 12 dB (a second event, a roll or a double member)"
+              }
+            ],
+            "summary": "pro_shimmer/m1: clean (the tail rises again by 12 dB (a second event, a roll or a double member))",
+            "measures": {
+              "clicks": 0,
+              "edge_db": -115.3,
+              "clip_runs": 0,
+              "overs": 0,
+              "dc_db": -237.6,
+              "ring_z": 13.6,
+              "trunc_db": null,
+              "silence_ms": 0.0,
+              "bump_db": 11.5,
+              "attack_ms": 11.75,
+              "t40_ms": 290.0,
+              "crest_db": 11.3,
+              "res_db": 13.1,
+              "res_hz": 3917,
+              "peak_dbfs": -13.0,
+              "live_ms": 267.0
+            },
+            "glide": {
+              "tonal_share": 0.6,
+              "rise_st": 2.0,
+              "from_s": 0.061,
+              "to_s": 0.086
+            },
+            "layers": {
+              "attacks": [
+                0.107
+              ],
+              "count": 1,
+              "pre_swell_ms": 15.0
+            },
+            "context": {
+              "category": "pro_shimmer",
+              "sound": "pro_shimmer/m1"
+            }
+          }
+        }
+      ],
+      "candidate": "freeze_sparkle",
+      "semantic_queries": [
+        {
+          "query": "a delicate crystalline glass chime with a sparkling tail",
+          "selected": {
+            "name": "freeze_sparkle.wav",
+            "z": 2.65,
+            "cosine": 0.257,
+            "vocab_percentile": 98.4,
+            "verdict": "plausible",
+            "near_silent": false,
+            "sounds_most_like": "bubbles underwater (z +3.2)"
+          },
+          "previous": {
+            "name": "freeze.wav",
+            "z": 1.94,
+            "cosine": 0.201,
+            "vocab_percentile": 95.0,
+            "verdict": "no match",
+            "near_silent": false,
+            "sounds_most_like": "a triangle hit (z +3.2)"
+          }
+        },
+        {
+          "query": "a short clear icy bell chime",
+          "selected": {
+            "name": "freeze_sparkle.wav",
+            "z": 2.57,
+            "cosine": 0.228,
+            "vocab_percentile": 98.1,
+            "verdict": "plausible",
+            "near_silent": false,
+            "sounds_most_like": "bubbles underwater (z +3.2)"
+          },
+          "previous": {
+            "name": "freeze.wav",
+            "z": 2.85,
+            "cosine": 0.272,
+            "vocab_percentile": 98.8,
+            "verdict": "plausible",
+            "near_silent": false,
+            "sounds_most_like": "a triangle hit (z +3.2)"
+          }
+        }
+      ]
     }
   }
 }

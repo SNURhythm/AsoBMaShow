@@ -33,6 +33,18 @@ std::map<std::string_view, int> placeholders(std::string_view text) {
 int main() {
   using namespace i18n;
   setLanguage(Language::English);
+  const auto oneChart = plural("streak.ui.chart_count", 1);
+  assert(oneChart.resolve() == "1 chart");
+  assert(plural("streak.ui.chart_count", 0).resolve() == "0 charts");
+  assert(plural("streak.ui.chart_count", 2).resolve() == "2 charts");
+  assert(plural("streak.ui.reward", 1).resolve() == "+1 point");
+  assert(plural("streak.ui.reward", 2).resolve() == "+2 points");
+  assert(plural("streak.ui.best_count", 1).resolve() == "Personal best · 1 day");
+  assert(plural("streak.ui.savings_count", 1).resolve() == "1 bonus point saved");
+  assert(plural("streak.ui.buy_freeze", 1).resolve() == "Get a freeze · 1 point");
+  assert(oneChart == plural("streak.ui.chart_count", 1));
+  assert(oneChart != plural("streak.ui.chart_count", 2));
+  assert(oneChart != message("streak.ui.chart_count", {{"count", "1"}}));
   const auto originalRevision = revision();
   setLanguage(Language::English);
   assert(revision() == originalRevision);
@@ -50,6 +62,7 @@ int main() {
       {{"name", message("settings.navigation.settings.label")}});
   setLanguage(Language::Korean);
   assert(revision() > originalRevision);
+  assert(oneChart.resolve() == "채보 1개");
   assert(gameplayRetry.resolve() == "재도전");
   assert(irRetry.resolve() == "다시 시도");
   assert(rawRetry.resolve() == "Retry");
@@ -57,6 +70,7 @@ int main() {
   assert(nestedMessage.resolve() == "설정: 켜짐");
   setLanguage(Language::Japanese);
   assert(ownedMessage.resolve() == "7秒後に元の設定に戻ります");
+  assert(oneChart.resolve() == "1譜面");
   assert(nestedMessage.resolve() == "設定: オン");
   assert(message("settings.navigation.settings.label") ==
          message("settings.navigation.settings.label"));
@@ -123,6 +137,7 @@ int main() {
       assert(placeholders(entry.english) == placeholders(translated));
       assert(tr(std::string(entry.key)) == translated);
     }
+    assert(oneChart.resolve() == (chinese == Language::SimplifiedChinese ? "1 张谱面" : "1 張譜面"));
     assert(ownedMessage.resolve().find('7') != std::string::npos);
     assert(nestedMessage.resolve().find(tr("settings.navigation.settings.label")) != std::string::npos);
     assert(rawRetry.resolve() == "Retry");
