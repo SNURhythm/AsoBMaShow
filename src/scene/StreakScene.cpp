@@ -6,6 +6,7 @@
 #include "../rendering/common.h"
 #include "../rendering/ResponsiveUi.h"
 #include "../view/ActionButtonStyle.h"
+#include "../view/ActionButtonContent.h"
 #include "../view/AppTheme.h"
 #include "../view/Button.h"
 #include "../view/DropdownView.h"
@@ -45,15 +46,21 @@ TextView *label(View *parent, const std::string &value, int size = 21) {
   return text;
 }
 Button *action(View *parent, const std::string &value, std::function<void()> click,
-               app_theme::ActionCategory category = app_theme::ActionCategory::Neutral) {
+               app_theme::ActionCategory category = app_theme::ActionCategory::Neutral,
+               uint32_t glyph = 0) {
   auto *button = new Button();
   button->setHeight(rendering::compactMenuCanvasActive ? 66 : 52)->setMinWidth(0)->setFlexShrink(0);
   auto *text = new TextView(app_theme::font, 21);
   text->setText(value);
   text->setAlign(TextView::CENTER);
   text->setVAlign(TextView::MIDDLE);
-  button->setContentView(text);
+  if (glyph) {
+    auto *content = action_button::makeInlineContent(text, glyph);
+    content->setPadding(Edge::Left, 14)->setPadding(Edge::Right, 14);
+    button->setContentView(content);
+  } else button->setContentView(text);
   action_button::applyStyle(button, text, category);
+  if (glyph) action_button::setIconColor(button, [category] { return app_theme::actionPalette(category).label; });
   button->setCornerRadius(16);
   button->setOnClickListener(std::move(click));
   parent->addView(button);
@@ -162,7 +169,7 @@ void StreakScene::build() {
   auto *header = new View();
   header->setFlexDirection(FlexDirection::Row)->setGap(12)->setAlignItems(YGAlignCenter)->setFlexShrink(0);
   label(header, i18n::tr("streak.ui.title"), 32)->setFlex(1);
-  action(header, i18n::tr("streak.ui.back"), [this] { back(); })->setWidth(110);
+  action(header, i18n::tr("streak.ui.back"), [this] { back(); }, app_theme::ActionCategory::Neutral, ui_icons::kCollapse)->setWidth(140);
   root_->addView(header);
   scroll_ = new ScrollView();
   scroll_->setFlex(1)->setMinHeight(0);
@@ -178,7 +185,7 @@ void StreakScene::build() {
   scroll_->setContentView(content);
   if (!message_.empty()) label(body, message_, 19);
   if (loadFailed_) {
-    action(body, i18n::tr("streak.ui.retry"), [this] { later([this] { reload(); }); });
+    action(body, i18n::tr("streak.ui.retry"), [this] { later([this] { reload(); }); }, app_theme::ActionCategory::Neutral, ui_icons::kRotate);
   } else if (page_ == Page::Dashboard) dashboard(body);
   else if (page_ == Page::Routine) routine(body);
   else editor(body);
@@ -191,7 +198,7 @@ void StreakScene::dashboard(View *body) {
     body->addView(new RhythmSparkView());
     label(body, i18n::tr("streak.ui.welcome"), 26);
     label(body, i18n::tr("streak.ui.rules"));
-    action(body, i18n::tr("streak.ui.create"), [this] { later([this] { page_ = Page::Routine; }); }, app_theme::ActionCategory::Primary);
+    action(body, i18n::tr("streak.ui.create"), [this] { later([this] { page_ = Page::Routine; }); }, app_theme::ActionCategory::Primary, ui_icons::kPlus);
     return;
   }
   const auto &day = state_.days.rbegin()->second;
@@ -212,14 +219,15 @@ void StreakScene::dashboard(View *body) {
   label(summary, i18n::tr(complete ? "streak.ui.complete_help" :
               day.played ? "streak.ui.protected" : "streak.ui.pending"), 20);
   if (complete)
-    action(summary, i18n::tr("streak.ui.done"), [this] { back(); }, app_theme::ActionCategory::Confirmation);
+    action(summary, i18n::tr("streak.ui.done"), [this] { back(); }, app_theme::ActionCategory::Confirmation, ui_icons::kCheck);
   if (complete) {
     label(body, std::string(i18n::tr("streak.ui.shared_bonus")) + " " + std::to_string(bonus) +
                 " / " + std::to_string(bonusLimit), 20);
     label(body, i18n::tr(bonusAvailable ? "streak.ui.optional_help" : "streak.ui.bonus_complete"), 18);
     if (bonusAvailable)
       action(body, i18n::tr(showOptional_ ? "streak.ui.hide_optional" : "streak.ui.show_optional"),
-          [this] { later([this] { showOptional_ = !showOptional_; }); });
+          [this] { later([this] { showOptional_ = !showOptional_; }); },
+          app_theme::ActionCategory::Neutral, showOptional_ ? ui_icons::kHide : ui_icons::kPlus);
   } else label(body, i18n::tr("streak.ui.assignments"), 27);
   if (!complete || showOptional_) label(body, i18n::tr("streak.ui.eligibility_help"), 18);
   if (!complete && day.assignments.empty()) label(body, i18n::tr("streak.ui.no_assignments"));
@@ -256,7 +264,7 @@ void StreakScene::dashboard(View *body) {
           points_ = std::to_string(requirement.points);
           rate_ = std::to_string(100.0 * requirement.scoreNumerator / requirement.scoreDenominator);
         });
-      });
+      }, app_theme::ActionCategory::Neutral, ui_icons::kPlayOptions);
   }
   auto *periods = card(body);
   label(periods, i18n::tr("streak.ui.week_progress"), 20);
@@ -276,9 +284,9 @@ void StreakScene::dashboard(View *body) {
       if (bought) streakSounds_.play(context.jukebox.audioRuntime(), streak::Sound::Freeze);
       reload();
     });
-  }, app_theme::ActionCategory::Information);
+  }, app_theme::ActionCategory::Information, ui_icons::kSnowflake);
   label(wallet, i18n::tr("streak.ui.freeze_price_help"), 18);
-  action(body, i18n::tr("streak.ui.edit"), [this] { later([this] { message_.clear(); page_ = Page::Routine; }); });
+  action(body, i18n::tr("streak.ui.edit"), [this] { later([this] { message_.clear(); page_ = Page::Routine; }); }, app_theme::ActionCategory::Neutral, ui_icons::kClock);
   if (state_.configurations.rbegin()->first > totals.day)
     label(body, "Routine changes scheduled for " + streak::dateLabel(state_.configurations.rbegin()->first), 19);
   label(body, i18n::tr("streak.ui.milestones"), 27);
@@ -309,12 +317,12 @@ void StreakScene::routine(View *body) {
     label(body, std::to_string(a.chartCount) + " charts · " + requirements(a) + " · +" + std::to_string(a.points) + " points", 18);
     auto *row = new View();
     row->setFlexDirection(FlexDirection::Row)->setGap(10)->setFlexShrink(0);
-    action(row, i18n::tr("streak.ui.edit_assignment"), [this, i] { later([this, i] { editAssignment(static_cast<int>(i)); }); })->setFlex(1);
-    action(row, i18n::tr("streak.ui.remove"), [this, i] { later([this, i] { draft_.assignments.erase(draft_.assignments.begin() + i); }); })->setFlex(1);
+    action(row, i18n::tr("streak.ui.edit_assignment"), [this, i] { later([this, i] { editAssignment(static_cast<int>(i)); }); }, app_theme::ActionCategory::Neutral, ui_icons::kPen)->setFlex(1);
+    action(row, i18n::tr("streak.ui.remove"), [this, i] { later([this, i] { draft_.assignments.erase(draft_.assignments.begin() + i); }); }, app_theme::ActionCategory::Destructive, ui_icons::kTrash)->setFlex(1);
     body->addView(row);
   }
-  action(body, i18n::tr("streak.ui.add"), [this] { later([this] { editAssignment(-1); }); });
-  action(body, i18n::tr("streak.ui.save"), [this] { later([this] { saveRoutine(); }); }, app_theme::ActionCategory::Primary);
+  action(body, i18n::tr("streak.ui.add"), [this] { later([this] { editAssignment(-1); }); }, app_theme::ActionCategory::Neutral, ui_icons::kPlus);
+  action(body, i18n::tr("streak.ui.save"), [this] { later([this] { saveRoutine(); }); }, app_theme::ActionCategory::Primary, ui_icons::kSave);
 }
 void StreakScene::editAssignment(int index) {
   adjustingToday_ = false;
@@ -356,8 +364,15 @@ void StreakScene::editor(View *body) {
       });
     });
   } else label(body, i18n::tr("streak.ui.no_tables"));
-  for (std::size_t i = 0; i < assignment_.levels.size(); ++i)
-    action(body, assignment_.levels[i].label + "  ×", [this, i] { later([this, i] { assignment_.levels.erase(assignment_.levels.begin() + i); }); });
+  for (std::size_t i = 0; i < assignment_.levels.size(); ++i) {
+    auto *row = new View();
+    row->setFlexDirection(FlexDirection::Row)->setGap(12)->setAlignItems(YGAlignCenter)->setFlexShrink(0);
+    label(row, assignment_.levels[i].label, 20)->setFlex(1)->setMinWidth(0);
+    action(row, i18n::tr("streak.ui.remove_level"), [this, i] {
+      later([this, i] { assignment_.levels.erase(assignment_.levels.begin() + i); });
+    }, app_theme::ActionCategory::Destructive, ui_icons::kTrash)->setWidth(140);
+    body->addView(row);
+  }
   std::vector<DropdownView::Option> eligible{{"-2", "Any previous lamp"}};
   for (int rank : {-1, 0, 100, 150, 200, 300, 400, 500, 600}) {
     eligible.push_back({std::to_string(rank), streak::lampLabel(rank)});
@@ -381,7 +396,7 @@ void StreakScene::editor(View *body) {
   field(body, i18n::tr("streak.ui.count"), count_);
   if (!adjustingToday_) field(body, i18n::tr("streak.ui.points"), points_);
   label(body, i18n::tr("streak.ui.repeat_help"), 18);
-  action(body, i18n::tr("streak.ui.keep"), [this] { later([this] { acceptAssignment(); }); }, app_theme::ActionCategory::Primary);
+  action(body, i18n::tr("streak.ui.keep"), [this] { later([this] { acceptAssignment(); }); }, app_theme::ActionCategory::Primary, ui_icons::kCheck);
 }
 void StreakScene::acceptAssignment() {
   try {

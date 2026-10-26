@@ -8,6 +8,12 @@ namespace ui_icons {
 inline constexpr const char *kFontAwesomeSolidPath =
     "assets/fonts/fa-solid-900.ttf";
 inline constexpr uint32_t kXmark = 0xf00d;
+inline constexpr uint32_t kTrash = 0xf1f8;
+inline constexpr uint32_t kPlus = 0xf067;
+inline constexpr uint32_t kCheck = 0xf00c;
+inline constexpr uint32_t kSave = 0xf0c7;
+inline constexpr uint32_t kPen = 0xf304;
+inline constexpr uint32_t kSnowflake = 0xf2dc;
 inline constexpr uint32_t kSquare = 0xf0c8;
 inline constexpr uint32_t kSquareCheck = 0xf14a;
 inline constexpr uint32_t kDrag = 0xf58e;
