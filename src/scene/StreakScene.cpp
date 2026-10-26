@@ -229,7 +229,6 @@ void StreakScene::dashboard(View *body) {
           [this] { later([this] { showOptional_ = !showOptional_; }); },
           app_theme::ActionCategory::Neutral, showOptional_ ? ui_icons::kHide : ui_icons::kPlus);
   } else label(body, i18n::tr("streak.ui.assignments"), 27);
-  if (!complete || showOptional_) label(body, i18n::tr("streak.ui.eligibility_help"), 18);
   if (!complete && day.assignments.empty()) label(body, i18n::tr("streak.ui.no_assignments"));
   std::set<std::string> unavailable;
   try {
@@ -285,7 +284,6 @@ void StreakScene::dashboard(View *body) {
       reload();
     });
   }, app_theme::ActionCategory::Information, ui_icons::kSnowflake);
-  label(wallet, i18n::tr("streak.ui.freeze_price_help"), 18);
   action(body, i18n::tr("streak.ui.edit"), [this] { later([this] { message_.clear(); page_ = Page::Routine; }); }, app_theme::ActionCategory::Neutral, ui_icons::kClock);
   if (state_.configurations.rbegin()->first > totals.day)
     label(body, "Routine changes scheduled for " + streak::dateLabel(state_.configurations.rbegin()->first), 19);
@@ -382,7 +380,6 @@ void StreakScene::editor(View *body) {
     assignment_.eligibleOrBelow = id.ends_with("below");
     assignment_.eligibleLamp = integer(assignment_.eligibleOrBelow ? id.substr(0, id.size() - 5) : id);
   });
-  label(body, i18n::tr("streak.ui.eligibility_help"), 18);
   std::vector<DropdownView::Option> lamps{{"-1", "Any lamp"}};
   for (int rank : {0, 100, 150, 200, 300, 400, 500, 600})
     lamps.push_back({std::to_string(rank), streak::lampLabel(rank) + " or above"});
@@ -395,7 +392,6 @@ void StreakScene::editor(View *body) {
   field(body, i18n::tr("streak.ui.custom_rate"), rate_);
   field(body, i18n::tr("streak.ui.count"), count_);
   if (!adjustingToday_) field(body, i18n::tr("streak.ui.points"), points_);
-  label(body, i18n::tr("streak.ui.repeat_help"), 18);
   action(body, i18n::tr("streak.ui.keep"), [this] { later([this] { acceptAssignment(); }); }, app_theme::ActionCategory::Primary, ui_icons::kCheck);
 }
 void StreakScene::acceptAssignment() {
