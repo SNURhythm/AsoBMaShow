@@ -2,6 +2,7 @@
 #include "Scene.h"
 #include "SceneReturnTarget.h"
 #include "../streak/StreakModel.h"
+#include "../streak/StreakForm.h"
 #include "../streak/StreakSounds.h"
 class ScrollView;
 class OverlayPortal;
@@ -36,6 +37,7 @@ private:
   streak::State state_;
   streak::Config draft_;
   streak::Assignment assignment_;
+  streak::FieldErrors fieldErrors_;
   std::string daily_, weekly_, monthly_, name_, count_, points_, rate_;
   enum class Page { Dashboard, Routine, Assignment } page_ = Page::Dashboard;
   int editingIndex_ = -1, tableId_ = 0;

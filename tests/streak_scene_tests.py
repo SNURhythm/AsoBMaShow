@@ -8,6 +8,61 @@ from support.fixture_compiler import FixtureCompiler
 
 
 class StreakSceneTests(unittest.TestCase):
+    def test_form_error_decoration_and_custom_rate_visibility(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "src/scene/StreakScene.cpp").read_text()
+        error = extract(source, "TextView *fieldError(")
+        visibility = extract(source, "const auto showCustomRate =") + ";"
+        fixture = r'''#include <cassert>
+#include <string>
+#include <vector>
+enum { YGDisplayNone, YGDisplayFlex };
+namespace app_theme { int coral() { return 1; } }
+namespace i18n { std::string tr(const std::string &key) { return key; } }
+struct View {
+  std::string name;
+  int border = 0, color = 0, display = YGDisplayFlex;
+  bool visible = true;
+  std::vector<View *> children;
+  void setName(const std::string &n) { name = n; }
+  View *setBorderWidth(int width) { border = width; return this; }
+  View *setThemedBorderColor(int (*provider)()) { color = provider(); return this; }
+  void setDisplay(int next) { display = next; }
+  void setVisible(bool next) { visible = next; }
+};
+struct TextView : View {
+  std::string text;
+  void setThemedColor(int (*provider)()) { color = provider(); }
+};
+TextView *label(View *parent, const std::string &text, int) {
+  auto *view = new TextView(); view->text = text; parent->children.push_back(view); return view;
+}
+ERROR_HELPER
+int main() {
+  View parent, control;
+  parent.children.push_back(&control);
+  assert(fieldError(&parent, &control, "") == nullptr && control.border == 0);
+  auto *error = fieldError(&parent, &control, "invalid input");
+  assert(control.border == 2 && control.color == 1);
+  assert(parent.children.back() == error && error->color == 1 && error->text == "invalid input");
+  View rateGroup; auto *customRate = &rateGroup;
+  VISIBILITY
+  showCustomRate(false);
+  assert(!rateGroup.visible && rateGroup.display == YGDisplayNone);
+  showCustomRate(true);
+  assert(rateGroup.visible && rateGroup.display == YGDisplayFlex);
+  showCustomRate(false);
+  assert(!rateGroup.visible && rateGroup.display == YGDisplayNone);
+  delete error;
+}
+'''.replace("ERROR_HELPER", error).replace("VISIBILITY", visibility)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-streak-fields-") as directory:
+            source = Path(directory) / "fields.cpp"
+            binary = Path(directory) / "fields"
+            source.write_text(fixture)
+            FixtureCompiler.from_environment(shared_headers=True).build([source], binary, source.parent)
+            subprocess.run([str(binary)], check=True, timeout=5)
+
     def test_result_drawer_retry_capture_and_dismissal(self):
         root = Path(__file__).resolve().parents[1]
         source = (root / "src/scene/ResultScene.cpp").read_text()

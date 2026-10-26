@@ -66,19 +66,37 @@ Button *action(View *parent, const std::string &value, std::function<void()> cli
   parent->addView(button);
   return button;
 }
-void field(View *parent, const std::string &caption, std::string &value) {
+TextView *fieldError(View *parent, View *control, const std::string &error) {
+  if (error.empty()) return nullptr;
+  control->setName("streakInvalidField");
+  control->setBorderWidth(2)->setThemedBorderColor(app_theme::coral);
+  auto *message = label(parent, i18n::tr(error), 17);
+  message->setThemedColor(app_theme::coral);
+  return message;
+}
+void field(View *parent, const std::string &caption, std::string &value,
+           std::string *error = nullptr) {
   label(parent, caption, 18);
   auto *input = new TextInputBox(app_theme::font, 22);
   input->setHeight(rendering::compactMenuCanvasActive ? 66 : 52)->setFlexShrink(0)->setPadding(Edge::All, 10)->setCornerRadius(14);
   input->setThemedBackgroundColor(app_theme::insetSurface);
   input->setThemedColor(app_theme::textPrimary);
   input->setEditingText(value);
-  input->onTextChanged([&value](const std::string &next) { value = next; });
   parent->addView(input);
+  auto *explanation = fieldError(parent, input, error ? *error : std::string{});
+  input->onTextChanged([&value, error, input, explanation](const std::string &next) {
+    value = next;
+    if (error) error->clear();
+    if (explanation) {
+      input->setBorderWidth(0)->setName("");
+      explanation->setDisplay(YGDisplayNone);
+      explanation->setVisible(false);
+    }
+  });
 }
 void select(View *parent, OverlayPortal *portal, const std::string &caption,
             std::vector<DropdownView::Option> options, std::string selected,
-            std::function<void(const std::string &)> change) {
+            std::function<void(const std::string &)> change, const std::string &error = {}) {
   label(parent, caption, 18);
   auto state = std::make_shared<DropdownView::State>();
   state->selectedId = std::move(selected);
@@ -95,12 +113,13 @@ void select(View *parent, OverlayPortal *portal, const std::string &caption,
   dropdown->setTriggerWidth(300);
   dropdown->refresh(*state);
   parent->addView(dropdown);
+  fieldError(parent, dropdown, error);
 }
 int integer(const std::string &value) {
   int number = 0;
   auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), number);
   if (error != std::errc{} || end != value.data() + value.size())
-    throw std::invalid_argument("Enter whole numbers for goals, chart counts and points.");
+    throw std::invalid_argument(i18n::tr("streak.ui.whole_numbers"));
   return number;
 }
 std::string levelsText(const streak::Assignment &a) {
@@ -111,9 +130,18 @@ std::string levelsText(const streak::Assignment &a) {
   }
   return text;
 }
+std::string lampText(int rank) {
+  if (rank == -2) return i18n::tr("streak.ui.any_previous_lamp");
+  return streak::lampLabel(rank);
+}
+std::string comparison(const char *key, const std::string &value) {
+  return i18n::format(key, {{"value", value}});
+}
 std::string requirements(const streak::Assignment &a) {
-  return (a.targetLamp < 0 ? "Any lamp" : streak::lampLabel(a.targetLamp) + " or above") +
-         "  ·  " + streak::scoreLabel(a);
+  return (a.targetLamp < 0 ? i18n::tr("streak.ui.any_lamp") :
+          comparison("streak.ui.at_least", lampText(a.targetLamp))) +
+         "  ·  " + (a.scoreNumerator == 0 ? i18n::tr("streak.ui.any_score") :
+          comparison("streak.ui.at_least", streak::scoreValueLabel(a)));
 }
 } // namespace
 
@@ -121,6 +149,7 @@ StreakScene::StreakScene(ApplicationContext &context, SceneReturnTarget target)
     : Scene(context), returnTarget_(std::move(target)) {}
 void StreakScene::init() { reload(); build(); }
 void StreakScene::reload() {
+  fieldErrors_.clear();
   if (profileId_ != context.profileManager.activeProfile().id || checkedDay_ != streak::today())
     showOptional_ = false;
   profileId_ = context.profileManager.activeProfile().id;
@@ -183,14 +212,16 @@ void StreakScene::build() {
   YGNodeStyleSetMaxWidth(body->getNode(), 960);
   content->addView(body);
   scroll_->setContentView(content);
-  if (!message_.empty()) label(body, message_, 19);
   if (loadFailed_) {
     action(body, i18n::tr("streak.ui.retry"), [this] { later([this] { reload(); }); }, app_theme::ActionCategory::Neutral, ui_icons::kRotate);
   } else if (page_ == Page::Dashboard) dashboard(body);
   else if (page_ == Page::Routine) routine(body);
   else editor(body);
+  if (!message_.empty()) label(body, message_, 19);
   addView(portal_);
   layout();
+  if (auto *invalid = root_->findViewByName("streakInvalidField"))
+    scroll_->setScrollOffset(std::max(0, invalid->getY() - scroll_->getY() - 48));
 }
 void StreakScene::dashboard(View *body) {
   if (state_.days.empty()) {
@@ -241,16 +272,18 @@ void StreakScene::dashboard(View *body) {
     auto *assignmentCard = card(body);
     const auto reward = complete ? 1 :
         std::min<std::int64_t>(p.requirement.points, day.config.dailyGoal - day.points);
-    label(assignmentCard, p.requirement.name + "  ·  +" + std::to_string(reward) + " points", 24);
+    label(assignmentCard, p.requirement.name + "  ·  " + numberText("streak.ui.reward", reward), 24);
     if (complete)
       label(assignmentCard, std::string(i18n::tr("streak.ui.bonus_today")) + " " + std::to_string(p.bonusRounds), 18);
-    label(assignmentCard, std::to_string(complete ? 0 : p.charts) + " / " +
-                std::to_string(complete ? 1 : p.requirement.chartCount) +
-                " distinct charts  ·  Round " + std::to_string(p.completedRounds + 1), 22);
+    label(assignmentCard, i18n::format("streak.ui.round_progress", {
+                {"count", std::to_string(complete ? 0 : p.charts)},
+                {"total", std::to_string(complete ? 1 : p.requirement.chartCount)},
+                {"round", std::to_string(p.completedRounds + 1)}}), 22);
     label(assignmentCard, levelsText(p.requirement), 18);
     label(assignmentCard, requirements(p.requirement), 19);
-    label(assignmentCard, "Previous lamp: " + streak::lampLabel(p.requirement.eligibleLamp) +
-                (p.requirement.eligibleOrBelow ? " or below" : ""), 18);
+    label(assignmentCard, comparison("streak.ui.previous_lamp", p.requirement.eligibleOrBelow
+                ? comparison("streak.ui.at_most", lampText(p.requirement.eligibleLamp))
+                : lampText(p.requirement.eligibleLamp)), 18);
     meter(assignmentCard, complete ? 0 : p.charts, complete ? 1 : p.requirement.chartCount);
     if (unavailable.contains(p.requirement.id))
       action(assignmentCard, i18n::tr("streak.ui.adjust_today"), [this, requirement = p.requirement] {
@@ -283,10 +316,10 @@ void StreakScene::dashboard(View *body) {
       if (bought) streakSounds_.play(context.jukebox.audioRuntime(), streak::Sound::Freeze);
       reload();
     });
-  }, app_theme::ActionCategory::Information, ui_icons::kSnowflake);
-  action(body, i18n::tr("streak.ui.edit"), [this] { later([this] { message_.clear(); page_ = Page::Routine; }); }, app_theme::ActionCategory::Neutral, ui_icons::kClock);
+  }, app_theme::ActionCategory::Information, ui_icons::kSnowflake)->setEnabled(streak::canBuyFreeze(state_));
+  action(body, i18n::tr("streak.ui.edit"), [this] { later([this] { message_.clear(); fieldErrors_.clear(); page_ = Page::Routine; }); }, app_theme::ActionCategory::Neutral, ui_icons::kClock);
   if (state_.configurations.rbegin()->first > totals.day)
-    label(body, "Routine changes scheduled for " + streak::dateLabel(state_.configurations.rbegin()->first), 19);
+    label(body, comparison("streak.ui.scheduled", streak::dateLabel(state_.configurations.rbegin()->first)), 19);
   label(body, i18n::tr("streak.ui.milestones"), 27);
   auto *badges = card(body);
   auto *badgeRow = new View();
@@ -306,27 +339,28 @@ void StreakScene::routine(View *body) {
   body = card(body);
   label(body, i18n::tr("streak.ui.routine"), 28);
   label(body, i18n::tr("streak.ui.edit_help"), 18);
-  field(body, i18n::tr("streak.ui.daily"), daily_);
-  field(body, i18n::tr("streak.ui.weekly"), weekly_);
-  field(body, i18n::tr("streak.ui.monthly"), monthly_);
+  field(body, i18n::tr("streak.ui.daily"), daily_, &fieldErrors_["daily"]);
+  field(body, i18n::tr("streak.ui.weekly"), weekly_, &fieldErrors_["weekly"]);
+  field(body, i18n::tr("streak.ui.monthly"), monthly_, &fieldErrors_["monthly"]);
   for (std::size_t i = 0; i < draft_.assignments.size(); ++i) {
     const auto &a = draft_.assignments[i];
     label(body, a.name + "  ·  " + levelsText(a), 22);
-    label(body, std::to_string(a.chartCount) + " charts · " + requirements(a) + " · +" + std::to_string(a.points) + " points", 18);
+    label(body, numberText("streak.ui.chart_count", a.chartCount) + " · " + requirements(a) + " · " + numberText("streak.ui.reward", a.points), 18);
     auto *row = new View();
     row->setFlexDirection(FlexDirection::Row)->setGap(10)->setFlexShrink(0);
     action(row, i18n::tr("streak.ui.edit_assignment"), [this, i] { later([this, i] { editAssignment(static_cast<int>(i)); }); }, app_theme::ActionCategory::Neutral, ui_icons::kPen)->setFlex(1);
     action(row, i18n::tr("streak.ui.remove"), [this, i] { later([this, i] { draft_.assignments.erase(draft_.assignments.begin() + i); }); }, app_theme::ActionCategory::Destructive, ui_icons::kTrash)->setFlex(1);
     body->addView(row);
   }
-  action(body, i18n::tr("streak.ui.add"), [this] { later([this] { editAssignment(-1); }); }, app_theme::ActionCategory::Neutral, ui_icons::kPlus);
+  action(body, i18n::tr("streak.ui.add"), [this] { later([this] { editAssignment(-1); }); }, app_theme::ActionCategory::Neutral, ui_icons::kPlus)->setEnabled(draft_.assignments.size() < 100);
   action(body, i18n::tr("streak.ui.save"), [this] { later([this] { saveRoutine(); }); }, app_theme::ActionCategory::Primary, ui_icons::kSave);
 }
 void StreakScene::editAssignment(int index) {
   adjustingToday_ = false;
+  fieldErrors_.clear();
   editingIndex_ = index;
   assignment_ = index < 0 ? streak::Assignment{} : draft_.assignments[index];
-  if (index < 0) { assignment_.id = uuid::generateV4(); assignment_.name = "Daily practice"; }
+  if (index < 0) { assignment_.id = uuid::generateV4(); assignment_.name = i18n::tr("streak.ui.default_assignment"); }
   name_ = assignment_.name;
   count_ = std::to_string(assignment_.chartCount);
   points_ = std::to_string(assignment_.points);
@@ -337,7 +371,7 @@ void StreakScene::editAssignment(int index) {
 void StreakScene::editor(View *body) {
   body = card(body);
   if (adjustingToday_) label(body, i18n::tr("streak.ui.adjust_help"), 18);
-  field(body, i18n::tr("streak.ui.name"), name_);
+  field(body, i18n::tr("streak.ui.name"), name_, &fieldErrors_["name"]);
   auto session = context.chartRepository.OpenSession();
   const auto tables = session ? session->SelectDifficultyTables() : std::vector<DifficultyTableInfo>{};
   if (std::none_of(tables.begin(), tables.end(), [this](const auto &t) { return t.id == tableId_; }))
@@ -346,7 +380,7 @@ void StreakScene::editor(View *body) {
   for (const auto &table : tables) tableOptions.push_back({std::to_string(table.id), table.name});
   select(body, portal_, i18n::tr("streak.ui.table"), std::move(tableOptions), std::to_string(tableId_), [this](const std::string &id) {
     later([this, id] { tableId_ = integer(id); });
-  });
+  }, tables.empty() ? fieldErrors_["levels"] : std::string{});
   auto table = std::find_if(tables.begin(), tables.end(), [this](const auto &t) { return t.id == tableId_; });
   if (table != tables.end()) {
     auto levels = session->SelectDifficultyLevels(tableId_);
@@ -358,9 +392,10 @@ void StreakScene::editor(View *body) {
       later([this, id, levels, source] {
         const auto &level = levels.at(integer(id));
         const auto duplicate = std::any_of(assignment_.levels.begin(), assignment_.levels.end(), [&](const auto &l) { return l.source == source && l.level == level.level; });
+        fieldErrors_.erase("levels");
         if (!duplicate) assignment_.levels.push_back({source, level.level, level.tableName + " · " + level.tableSymbol + level.level});
       });
-    });
+    }, fieldErrors_["levels"]);
   } else label(body, i18n::tr("streak.ui.no_tables"));
   for (std::size_t i = 0; i < assignment_.levels.size(); ++i) {
     auto *row = new View();
@@ -371,49 +406,55 @@ void StreakScene::editor(View *body) {
     }, app_theme::ActionCategory::Destructive, ui_icons::kTrash)->setWidth(140);
     body->addView(row);
   }
-  std::vector<DropdownView::Option> eligible{{"-2", "Any previous lamp"}};
+  std::vector<DropdownView::Option> eligible{{"-2", i18n::tr("streak.ui.any_previous_lamp")}};
   for (int rank : {-1, 0, 100, 150, 200, 300, 400, 500, 600}) {
-    eligible.push_back({std::to_string(rank), streak::lampLabel(rank)});
-    if (rank >= 0) eligible.push_back({std::to_string(rank) + "below", streak::lampLabel(rank) + " or below"});
+    eligible.push_back({std::to_string(rank), lampText(rank)});
+    if (rank >= 0) eligible.push_back({std::to_string(rank) + "below", comparison("streak.ui.at_most", lampText(rank))});
   }
   select(body, portal_, i18n::tr("streak.ui.eligible"), std::move(eligible), std::to_string(assignment_.eligibleLamp) + (assignment_.eligibleOrBelow ? "below" : ""), [this](const std::string &id) {
     assignment_.eligibleOrBelow = id.ends_with("below");
     assignment_.eligibleLamp = integer(assignment_.eligibleOrBelow ? id.substr(0, id.size() - 5) : id);
   });
-  std::vector<DropdownView::Option> lamps{{"-1", "Any lamp"}};
+  std::vector<DropdownView::Option> lamps{{"-1", i18n::tr("streak.ui.any_lamp")}};
   for (int rank : {0, 100, 150, 200, 300, 400, 500, 600})
-    lamps.push_back({std::to_string(rank), streak::lampLabel(rank) + " or above"});
-  select(body, portal_, i18n::tr("streak.ui.lamp"), std::move(lamps), std::to_string(assignment_.targetLamp), [this](const std::string &id) { assignment_.targetLamp = integer(id); });
-  std::vector<DropdownView::Option> scores{{"0", "Any score"}, {"6", "E"}, {"9", "D"}, {"12", "C"}, {"15", "B"}, {"18", "A"}, {"21", "AA"}, {"24", "AAA"}, {"26", "MAX -"}, {"27", "MAX"}, {"custom", "Custom EX rate"}};
-  select(body, portal_, i18n::tr("streak.ui.score"), std::move(scores), assignment_.customRate ? "custom" : std::to_string(assignment_.scoreNumerator), [this](const std::string &id) {
+    lamps.push_back({std::to_string(rank), comparison("streak.ui.at_least", lampText(rank))});
+  select(body, portal_, i18n::tr("streak.ui.lamp"), std::move(lamps), std::to_string(assignment_.targetLamp), [this](const std::string &id) { assignment_.targetLamp = integer(id);
+    later([this] { fieldErrors_.erase("lamp"); fieldErrors_.erase("score"); });
+  }, fieldErrors_["lamp"]);
+  std::vector<DropdownView::Option> scores{{"0", i18n::tr("streak.ui.any_score")}, {"6", "E"}, {"9", "D"}, {"12", "C"}, {"15", "B"}, {"18", "A"}, {"21", "AA"}, {"24", "AAA"}, {"26", "MAX -"}, {"27", "MAX"}, {"custom", i18n::tr("streak.ui.custom_option")}};
+  auto *customRate = new View();
+  customRate->setFlexDirection(FlexDirection::Column)->setGap(10)->setFlexShrink(0);
+  field(customRate, i18n::tr("streak.ui.custom_rate"), rate_, &fieldErrors_["rate"]);
+  const auto showCustomRate = [customRate](bool visible) {
+    customRate->setDisplay(visible ? YGDisplayFlex : YGDisplayNone);
+    customRate->setVisible(visible);
+  };
+  showCustomRate(assignment_.customRate);
+  select(body, portal_, i18n::tr("streak.ui.score"), std::move(scores), assignment_.customRate ? "custom" : std::to_string(assignment_.scoreNumerator), [this, showCustomRate](const std::string &id) {
     assignment_.customRate = id == "custom";
+    showCustomRate(assignment_.customRate);
+    layout();
+    later([this] { fieldErrors_.erase("lamp"); fieldErrors_.erase("score"); fieldErrors_.erase("rate"); });
     if (!assignment_.customRate) { assignment_.scoreNumerator = integer(id); assignment_.scoreDenominator = 27; }
-  });
-  field(body, i18n::tr("streak.ui.custom_rate"), rate_);
-  field(body, i18n::tr("streak.ui.count"), count_);
-  if (!adjustingToday_) field(body, i18n::tr("streak.ui.points"), points_);
+  }, fieldErrors_["score"]);
+  body->addView(customRate);
+  field(body, i18n::tr("streak.ui.count"), count_, &fieldErrors_["count"]);
+  if (!adjustingToday_) field(body, i18n::tr("streak.ui.points"), points_, &fieldErrors_["points"]);
   action(body, i18n::tr("streak.ui.keep"), [this] { later([this] { acceptAssignment(); }); }, app_theme::ActionCategory::Primary, ui_icons::kCheck);
 }
 void StreakScene::acceptAssignment() {
+  message_.clear();
+  auto candidate = assignment_;
+  fieldErrors_ = streak::readAssignmentForm(candidate, name_, count_, points_, rate_);
+  if (!fieldErrors_.empty()) return;
+  assignment_ = std::move(candidate);
   try {
-    assignment_.name = name_;
-    assignment_.chartCount = integer(count_);
-    assignment_.points = integer(points_);
-    if (assignment_.customRate) {
-      std::size_t end = 0;
-      const double rate = std::stod(rate_, &end);
-      if (end != rate_.size() || !std::isfinite(rate) || rate <= 0 || rate > 100)
-        throw std::invalid_argument("Enter an EX rate above 0 and at most 100%.");
-      assignment_.scoreNumerator = static_cast<int>(std::lround(rate * 100));
-      assignment_.scoreDenominator = 10000;
-      if (assignment_.scoreNumerator == 0) throw std::invalid_argument("Minimum EX rate is 0.01%.");
-    }
     auto check = draft_;
     check.assignments = {assignment_};
     if (auto error = streak::validate(check); !error.empty()) throw std::invalid_argument(error);
     if (adjustingToday_) {
       if (checkedDay_ != streak::today())
-        throw std::runtime_error("The day changed. Return to today's dashboard and try again.");
+        throw std::runtime_error(i18n::tr("streak.ui.day_changed"));
       std::string error;
       const auto current = context.scoreRepository.LoadStreak(error);
       if (!current) throw std::runtime_error(error);
@@ -436,14 +477,16 @@ void StreakScene::acceptAssignment() {
   } catch (const std::exception &error) { message_ = error.what(); }
 }
 void StreakScene::saveRoutine() {
+  message_.clear();
+  auto candidate = draft_;
+  fieldErrors_ = streak::readRoutineForm(candidate, daily_, weekly_, monthly_);
+  if (!fieldErrors_.empty()) return;
+  draft_ = std::move(candidate);
   try {
-    draft_.dailyGoal = integer(daily_);
-    draft_.weeklyGoal = integer(weekly_);
-    draft_.monthlyGoal = integer(monthly_);
     streak::DayId effective = 0;
     std::string error;
     if (!context.scoreRepository.ConfigureStreak(draft_, effective, error)) throw std::runtime_error(error);
-    message_ = "Routine saved. Effective " + streak::dateLabel(effective) + ".";
+    message_ = comparison("streak.ui.saved", streak::dateLabel(effective));
     page_ = Page::Dashboard;
     reload();
   } catch (const std::exception &error) { message_ = error.what(); }
@@ -463,7 +506,7 @@ void StreakScene::layout() {
   scroll_->refreshContentLayout();
 }
 void StreakScene::back() {
-  if (page_ == Page::Assignment) { later([this] { page_ = adjustingToday_ ? Page::Dashboard : Page::Routine; adjustingToday_ = false; message_.clear(); }); return; }
+  if (page_ == Page::Assignment) { later([this] { page_ = adjustingToday_ ? Page::Dashboard : Page::Routine; adjustingToday_ = false; fieldErrors_.clear(); message_.clear(); }); return; }
   if (page_ == Page::Routine) { later([this] { page_ = Page::Dashboard; message_.clear(); reload(); }); return; }
   defer([this] { (void)returnToScene(*context.sceneManager, returnTarget_); return false; }, 0, true);
 }

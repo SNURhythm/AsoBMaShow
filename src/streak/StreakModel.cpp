@@ -156,15 +156,15 @@ std::string lampLabel(int lamp) {
   default: return "Unknown";
   }
 }
-std::string scoreLabel(const Assignment &a) {
-  if (a.scoreNumerator == 0) return "Any score";
+std::string scoreValueLabel(const Assignment &a) {
+  if (a.scoreNumerator == 0) return {};
   if (!a.customRate) {
     for (std::size_t i = 0; i < rankNumerators.size(); ++i)
       if (a.scoreNumerator * 27 == rankNumerators[i] * a.scoreDenominator)
-        return std::string(rankLabels[i]) + " or above";
+        return std::string(rankLabels[i]);
   }
   std::ostringstream text;
-  text << std::fixed << std::setprecision(2) << (100.0 * a.scoreNumerator / a.scoreDenominator) << "% EX or above";
+  text << std::fixed << std::setprecision(2) << (100.0 * a.scoreNumerator / a.scoreDenominator) << "% EX";
   return text.str();
 }
 bool eligible(const Assignment &a, const Play &p) {

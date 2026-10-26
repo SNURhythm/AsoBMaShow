@@ -1,4 +1,5 @@
 #include "streak/StreakModel.h"
+#include "streak/StreakForm.h"
 #include "streak/StreakResultPresentation.h"
 #include <cstdlib>
 #include <iostream>
@@ -18,6 +19,39 @@ Play play(DayId day, std::string chart) {
           .lamp = 300, .score = 180, .maxScore = 200};
 }
 int main() {
+  auto form = config().assignments.front();
+  auto errors = readAssignmentForm(form, "", "1.5", "0", "invalid hidden value");
+  CHECK(errors.contains("name") && errors.contains("count") && errors.contains("points"));
+  CHECK(!errors.contains("rate"));
+  CHECK(readAssignmentForm(form, "Practice", "1", "60", "invalid hidden value").empty());
+  form.levels.clear();
+  form.targetLamp = -1;
+  form.scoreNumerator = 0;
+  errors = readAssignmentForm(form, "Practice", "1", "60", "80");
+  CHECK(errors.contains("levels") && errors.contains("lamp") && errors.contains("score"));
+  form.levels = {{"table", "0", ""}};
+  form.customRate = true;
+  for (const auto *invalid : {"", "nan", "inf", "80oops", "0.001", "100.01"})
+    CHECK(readAssignmentForm(form, "Practice", "1", "60", invalid).contains("rate"));
+  CHECK(readAssignmentForm(form, "Practice", "1", "60", "0.01").empty());
+  CHECK(form.scoreNumerator == 1 && form.scoreDenominator == 10000);
+  CHECK(readAssignmentForm(form, "Practice", "1", "60", "100").empty());
+  CHECK(scoreValueLabel(form) == "100.00% EX");
+  form.customRate = false;
+  form.scoreNumerator = 21; form.scoreDenominator = 27;
+  CHECK(scoreValueLabel(form) == "AA");
+  auto routineForm = config();
+  errors = readRoutineForm(routineForm, "0", "100000001", "oops");
+  CHECK(errors.size() == 3 && errors.contains("daily") && errors.contains("weekly") && errors.contains("monthly"));
+  CHECK(readRoutineForm(routineForm, "1000000", "100000000", "100000000").empty());
+  State wallet;
+  wallet.savings = freezePrice(wallet) - 1;
+  CHECK(!canBuyFreeze(wallet));
+  ++wallet.savings;
+  CHECK(canBuyFreeze(wallet));
+  wallet.freezes = 2;
+  CHECK(!canBuyFreeze(wallet));
+
   // Result skins retain design coordinates; the overlay must retain point sizes.
   const auto phone = resultOverlayMetrics(1080, 2337, 3, 1170.0F/1080, 0, 0, 0, 0);
   CHECK(std::abs(phone.width / phone.unit - 366) < 1);
