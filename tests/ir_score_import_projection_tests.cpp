@@ -324,6 +324,54 @@ void testStreakProjectionIsAtomicAndUsesEffectiveLamp() {
   pending.attemptId = "123e4567-e89b-42d3-a456-426614174002";
   assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
   assert(streak::load(db).days.rbegin()->second.points == 0);
+
+  struct LampCase {
+    int mode, classic, specific, unknown, futureMode, futureLamp, expected;
+  };
+  // -1 means no stored record. Mode-specific FAILED must override a better
+  // classic/unknown lamp; future records must not change a recovered play.
+  for (const auto test : std::vector<LampCase>{
+           {2, 400, -1, -1, -1, -1, 400},
+           {3, 400, -1, -1, -1, -1, 400},
+           {2, 400, -1, 600, -1, -1, 400},
+           {2, 400, 0, 600, -1, -1, 0},
+           {3, 400, 200, 600, -1, -1, 200},
+           {2, -1, -1, 300, -1, -1, 300},
+           {0, 400, -1, -1, -1, -1, -1},
+           {2, 400, -1, -1, 2, 0, 400},
+           {2, -1, -1, -1, 1, 400, -1}}) {
+    streak::save(db, {});
+    assert(sqlite3_exec(db, "DELETE FROM scores; DELETE FROM score_sha256_clear_rank_cache",
+                        nullptr, nullptr, nullptr) == SQLITE_OK);
+    const auto now = static_cast<std::int64_t>(std::time(nullptr)) * 1000;
+    int attempt = 0;
+    const auto write = [&](int mode, int lamp, int offset) {
+      pending.attemptId = "123e4567-e89b-42d3-a456-42661417401" + std::to_string(attempt++);
+      pending.createdAt = scoreHistoryTime(now + offset);
+      pending.score.longNoteMode = mode;
+      pending.score.clearType = lamp;
+      pending.score.comboBreak = 1;
+      assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+    };
+    if (test.classic >= 0) write(1, test.classic, 0);
+    if (test.specific >= 0) write(test.mode, test.specific, 0);
+    if (test.unknown >= 0) write(0, test.unknown, 0);
+    assert(scores.LoadBestClearRanks().bestRankForHash(pending.score.chartSha256, test.mode) == test.expected);
+    if (test.futureMode >= 0) write(test.futureMode, test.futureLamp, 1000);
+    streak::State scenario;
+    streak::Config eligibility;
+    eligibility.assignments = {
+        {.id="exact", .name="Existing lamp", .levels={{"https://table","0","sl0"}},
+         .eligibleLamp=test.expected, .targetLamp=0, .points=1},
+        {.id="unplayed", .name="No play", .levels={{"https://table","0","sl0"}},
+         .eligibleLamp=-1, .targetLamp=0, .points=1}};
+    streak::configure(scenario, eligibility, streak::localDay(now / 1000));
+    streak::save(db, scenario);
+    write(test.mode, 300, 0);
+    const auto progress = streak::load(db).days.rbegin()->second.assignments;
+    assert(progress[0].completedRounds == 1);
+    assert(progress[1].completedRounds == (test.expected == -1 ? 1 : 0));
+  }
   sqlite3_close(db);
 }
 

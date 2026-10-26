@@ -1070,28 +1070,45 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
       // Bound eligibility to history before this attempt, including timestamp
       // ordering when a pending result is recovered after a later play.
       const std::string previousQuery =
-          "SELECT COUNT(*), MAX(" + score_cache_queries::detail::fullComboClearRankExpr("s", {}, true) +
-          "), (SELECT " + score_cache_queries::detail::fullComboClearRankExpr("n", {}, true) +
-          " FROM scores n WHERE n.attempt_id=?) FROM scores s WHERE " +
-          scoreChartMatchPredicate() + " AND (s.ln_mode=? OR s.ln_mode=-1 OR s.ln_mode=0) "
-          "AND (s.created_at,s.id)<(SELECT created_at,id FROM scores WHERE attempt_id=?) "
-          "AND " + score_cache_queries::detail::scoreParticipatesInBestExpr("s");
+          "SELECT s.ln_mode, MAX(" + score_cache_queries::detail::fullComboClearRankExpr("s", {}, true) +
+          "), 0 FROM scores s WHERE " + scoreChartMatchPredicate() +
+          " AND (s.created_at,s.id)<(SELECT created_at,id FROM scores WHERE attempt_id=?) "
+          "AND " + score_cache_queries::detail::scoreParticipatesInBestExpr("s") +
+          " GROUP BY s.ln_mode UNION ALL SELECT n.ln_mode, " +
+          score_cache_queries::detail::fullComboClearRankExpr("n", {}, true) +
+          ", 1 FROM scores n WHERE n.attempt_id=?";
       SqliteStatementHandle previous;
-      if (prepareSqliteStatement(db, previousQuery, previous) != SQLITE_OK ||
-          !bindSqliteText(previous, 1, pending.attemptId))
+      if (prepareSqliteStatement(db, previousQuery, previous) != SQLITE_OK)
         throw std::runtime_error("Could not read the previous chart lamp for streak progress.");
-      int previousIndex = bindScoreChartMatch(previous, 2,
+      int previousIndex = bindScoreChartMatch(previous, 1,
           {.chartPath = score.chartPath, .sha256 = normalizedHash(score.chartSha256),
            .md5 = normalizedHash(score.chartMd5)});
-      if (sqlite3_bind_int(previous, previousIndex++, score.longNoteMode) != SQLITE_OK ||
-          !bindSqliteText(previous, previousIndex, pending.attemptId) || sqlite3_step(previous) != SQLITE_ROW)
+      if (!bindSqliteText(previous, previousIndex++, pending.attemptId) ||
+          !bindSqliteText(previous, previousIndex, pending.attemptId))
         throw std::runtime_error("Could not read the previous chart lamp for streak progress.");
-      const int previousLamp = sqlite3_column_int(previous, 0) == 0
-                                   ? -1 : sqlite3_column_int(previous, 1);
+      ScoreRankByLongNoteMode previousRanks;
+      int effectiveLamp = -1;
+      bool foundCurrent = false;
+      int result;
+      while ((result = sqlite3_step(previous)) == SQLITE_ROW) {
+        if (sqlite3_column_int(previous, 2) != 0) {
+          effectiveLamp = sqlite3_column_int(previous, 1);
+          foundCurrent = true;
+        } else {
+          const int mode = long_note_mode::normalizeValue(sqlite3_column_int(previous, 0));
+          auto &rank = previousRanks.ranks[static_cast<std::size_t>(mode)];
+          rank = std::max(rank, sqlite3_column_int(previous, 1));
+        }
+      }
+      if (result != SQLITE_DONE || !foundCurrent)
+        throw std::runtime_error("Could not read the previous chart lamp for streak progress.");
+      // Match the selector: an explicit mode record wins even when its lamp
+      // is worse; absent CN/HCN records fall back to classic LN, then unknown.
+      const int previousLamp = previousRanks.bestRankForMode(score.longNoteMode);
       static thread_local std::mt19937 random(std::random_device{}());
       streak::recordSavedPlay(db, impl_->chartDatabasePath,
           {.chart = score.chartSha256, .previousLamp = previousLamp,
-           .lamp = sqlite3_column_int(previous, 2), .score = score.score, .maxScore = score.maxScore,
+           .lamp = effectiveLamp, .score = score.score, .maxScore = score.maxScore,
            .manual = !score.provenance.autoPlay && !score.provenance.practice},
           score.chartMd5, pending.createdAt, random());
     } catch (const std::exception &error) {
