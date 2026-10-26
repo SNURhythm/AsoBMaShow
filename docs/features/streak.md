@@ -5,6 +5,11 @@ Custom selectors expose the same dashboard through the toolbar’s flame button.
 weekly and monthly point goals and add assignments. Select levels from any
 installed difficulty tables; an assignment matches the union of those levels.
 
+New routines default to **20 daily / 150 weekly / 650 monthly** points, with
+**10 points per round**. Two default rounds meet the daily goal. Daily goals
+alone total 140 per week and 560–620 per month, so the longer goals require
+some optional bonus play. Saved routines retain their chosen goals.
+
 An assignment checks selected table levels, previous best lamp and previous best
 score rank. All selected eligibility conditions must match.
 Once a chart satisfies all eligibility conditions, it stays eligible for that

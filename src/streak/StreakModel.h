@@ -34,9 +34,9 @@ struct Assignment {
   int points = 10;
 };
 struct Config {
-  int dailyGoal = 100;
-  int weeklyGoal = 500;
-  int monthlyGoal = 2000;
+  int dailyGoal = 20;
+  int weeklyGoal = 150;
+  int monthlyGoal = 650;
   std::vector<Assignment> assignments;
 };
 struct ChartAchievement {
