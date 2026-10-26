@@ -1,5 +1,6 @@
 #include "streak/StreakModel.h"
 #include "streak/StreakForm.h"
+#include "streak/StreakDashboardPresentation.h"
 #include "streak/StreakRoundMotion.h"
 #include "streak/StreakIgnitionMotion.h"
 #include "streak/StreakResultPresentation.h"
@@ -21,6 +22,26 @@ Play play(DayId day, std::string chart) {
           .lamp = 600, .score = 180, .maxScore = 200};
 }
 int main() {
+  State activity;
+  const auto end = localDay(1735689600); // The seven slots must cross a year boundary.
+  activity.configurations[end - 4] = config();
+  activity.days[end - 4] = {.config=config(), .played=true};
+  activity.days[end - 3] = {.config=config(), .played=true, .points=100};
+  activity.days[end - 2] = {.config=config(), .frozen=true};
+  activity.days[end] = {.config=config()};
+  const auto week = recentActivity(activity, end);
+  CHECK(week.size() == 7 && week.front().day == end - 6 && week.back().day == end);
+  CHECK(week[0].kind == ActivityKind::NotStarted && week[1].kind == ActivityKind::NotStarted);
+  CHECK(week[2].kind == ActivityKind::Played && week[3].kind == ActivityKind::GoalReached);
+  CHECK(week[4].kind == ActivityKind::Frozen && week[5].kind == ActivityKind::NoPlay);
+  CHECK(week[6].kind == ActivityKind::NoPlay);
+  CHECK(nextMilestone(activity)->target == 7 && nextMilestone(activity)->remaining == 7);
+  activity.currentStreak = 5;
+  CHECK(nextMilestone(activity)->remaining == 2);
+  activity.milestones.insert("streak:7"); activity.currentStreak = 0;
+  CHECK(nextMilestone(activity)->target == 14 && nextMilestone(activity)->remaining == 14);
+  for (int target : comboMilestones) activity.milestones.insert("streak:" + std::to_string(target));
+  CHECK(!nextMilestone(activity));
   auto scoreFilter = config().assignments.front();
   auto priorScore = play(40000, "previous-score");
   scoreFilter.eligibleScoreRank = 21;

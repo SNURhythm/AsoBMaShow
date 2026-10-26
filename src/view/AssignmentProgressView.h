@@ -28,6 +28,7 @@ public:
     addView(round_);
     count_ = new TextView(app_theme::font, static_cast<int>(std::lround(20*unit)));
     count_->setMinHeight(30*unit)->setFlexShrink(0);
+    count_->setWrap(true);
     count_->setThemedColor(app_theme::textSecondary);
     addView(count_);
     meter_ = new ProgressMotionView(0, false, true);
@@ -45,7 +46,9 @@ private:
     const auto title = i18n::format(frame.completed ? "streak.ui.round_complete" : "streak.ui.round_number",
         {{"count", std::to_string(frame.round)}});
     if (title != title_) { title_=title; round_->setText(title); }
-    const auto count = std::to_string(frame.charts) + " / " + std::to_string(frame.quota);
+    auto count = std::to_string(frame.charts) + " / " + std::to_string(frame.quota);
+    if (!frame.completed)
+      count += " · " + i18n::plural("streak.ui.remaining_charts", std::max(0, frame.quota - frame.charts)).resolve();
     if (count != countText_) { countText_=count; count_->setText(count); }
     if (frame.completed != completed_) {
       completed_=frame.completed;

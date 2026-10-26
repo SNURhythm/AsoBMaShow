@@ -118,6 +118,7 @@ private:
   bool selectorTabActive() const;
   Scene *activeUtilityTab() const;
   void selectTab(Tab tab);
+  void openStreakAssignment(const std::string &id);
   void completeTabSwitch(Tab tab);
   bool applyPendingTabSwitch();
   void cancelPendingTabSwitch();

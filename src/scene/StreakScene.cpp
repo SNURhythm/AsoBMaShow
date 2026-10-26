@@ -18,6 +18,7 @@
 #include "../view/TextView.h"
 #include "../view/ProgressMotionView.h"
 #include "../view/StreakFlameView.h"
+#include "../view/StreakActivityView.h"
 #include "../view/AssignmentProgressView.h"
 #include <algorithm>
 #include <charconv>
@@ -227,11 +228,14 @@ void assignmentConditions(View *parent, const streak::Assignment &a, int size = 
 }
 } // namespace
 
-StreakScene::StreakScene(ApplicationContext &context, SceneReturnTarget target)
-    : Scene(context), returnTarget_(std::move(target)) {}
-void StreakScene::configureTab(float topInset, std::function<void()> onClose) {
+StreakScene::StreakScene(ApplicationContext &context, SceneReturnTarget target,
+                         std::function<void(const std::string &)> openAssignment)
+    : Scene(context), returnTarget_(std::move(target)), openAssignment_(std::move(openAssignment)) {}
+void StreakScene::configureTab(float topInset, std::function<void()> onClose,
+                               std::function<void(const std::string &)> openAssignment) {
   embeddedTab_ = true;
   tabClose_ = std::move(onClose);
+  openAssignment_ = std::move(openAssignment);
   setTabTopInset(topInset);
 }
 void StreakScene::setTabTopInset(float topInset) {
@@ -383,13 +387,18 @@ void StreakScene::dashboard(View *body) {
   label(summary, i18n::tr(complete ? "streak.ui.complete" : "streak.ui.keep_going"), 30);
   label(summary, numberText("streak.ui.streak_count", state_.currentStreak), 44);
   label(summary, i18n::plural("streak.ui.best_count", state_.bestStreak).resolve(), 18)->setThemedColor(app_theme::textSecondary);
-  label(summary, std::to_string(std::min<std::int64_t>(day.points, day.config.dailyGoal)) +
-      " / " + std::to_string(day.config.dailyGoal), 34);
+  if (complete)
+    label(summary, i18n::plural("streak.ui.points_earned_today", day.points).resolve(), 26);
+  else {
+    label(summary, std::to_string(day.points) + " / " + std::to_string(day.config.dailyGoal), 34);
+    label(summary, i18n::plural("streak.ui.remaining_points", day.config.dailyGoal - day.points).resolve(), 20);
+  }
   meter(summary, day.points, day.config.dailyGoal, meterTracks_[0], meterTargets_[0], complete);
   label(summary, i18n::tr(complete ? "streak.ui.complete_help" :
               day.played ? "streak.ui.protected" : "streak.ui.pending"), 20);
   if (complete)
     action(summary, i18n::tr("streak.ui.done"), [this] { back(); }, app_theme::ActionCategory::Confirmation, ui_icons::kCheck);
+  card(body)->addView(new StreakActivityView(state_, checkedDay_));
   if (complete) {
     label(body, std::string(i18n::tr("streak.ui.shared_bonus")) + " " + std::to_string(bonus) +
                 " / " + std::to_string(bonusLimit), 20);
@@ -422,6 +431,17 @@ void StreakScene::dashboard(View *body) {
     assignmentConditions(assignmentCard, p.requirement);
     assignmentCard->addView(new AssignmentProgressView(p,
         change, streakProgressStartedAt_));
+    if (openAssignment_ && (!complete || bonusAvailable))
+      action(assignmentCard, i18n::tr("streak.ui.play_assignment"), [this, id = p.requirement.id] {
+        // Consume embedded-tab actions; standalone navigation may destroy this scene.
+        defer([open = openAssignment_, id, embedded = embeddedTab_] {
+          const bool keepAlive = embedded;
+          const auto navigate = open;
+          const auto assignment = id;
+          navigate(assignment);
+          return keepAlive;
+        }, 0, true);
+      }, app_theme::ActionCategory::Primary, ui_icons::kPlay);
     if (complete && bonusAvailable && streak::canResetExtraChallenge(p))
       action(assignmentCard, i18n::tr("streak.ui.too_hard"), [this, id = p.requirement.id] {
         later([this, id] { pendingResetAssignment_ = id; pendingResetDay_ = checkedDay_; });
@@ -465,10 +485,14 @@ void StreakScene::dashboard(View *body) {
     label(body, comparison("streak.ui.scheduled", streak::dateLabel(state_.configurations.rbegin()->first)), 19);
   label(body, i18n::tr("streak.ui.milestones"), 27);
   auto *badges = card(body);
+  if (const auto next = streak::nextMilestone(state_)) {
+    label(badges, i18n::format(next->remaining == 1 ? "streak.ui.milestone_next.one" : "streak.ui.milestone_next",
+        {{"count", std::to_string(next->remaining)}, {"target", std::to_string(next->target)}}), 21);
+  } else label(badges, i18n::tr("streak.ui.milestones_all"), 21);
   auto *badgeRow = new View();
   badgeRow->setFlexDirection(FlexDirection::Row)->setFlexWrap(YGWrapWrap)->setGap(10);
   badges->addView(badgeRow);
-  for (int n : {7, 14, 30, 50, 100, 365}) {
+  for (int n : streak::comboMilestones) {
     const bool earned = state_.milestones.contains("streak:" + std::to_string(n));
     auto *badge = label(badgeRow, std::to_string(n), 24);
     badge->setWidth(76)->setHeight(64)->setPadding(Edge::All, 12)->setCornerRadius(18);

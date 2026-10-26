@@ -4707,8 +4707,12 @@ void ResultScene::buildStreakProgress(bool animate) {
           ? std::optional<std::uint64_t>(streakProgressStartedAt_) : std::nullopt))->setHeight(108 * unit));
   text(body, i18n::tr(complete ? "streak.ui.complete" : "streak.ui.saved_progress"), 28);
   text(body, i18n::format("streak.ui.streak_count", {{"count", std::to_string(streakSnapshot_->currentStreak)}}), 36);
-  text(body, std::to_string(std::min<std::int64_t>(day.points, day.config.dailyGoal)) + " / " +
-       std::to_string(day.config.dailyGoal), 30);
+  if (complete)
+    text(body, i18n::plural("streak.ui.points_earned_today", day.points).resolve(), 26);
+  else {
+    text(body, std::to_string(day.points) + " / " + std::to_string(day.config.dailyGoal), 30);
+    text(body, i18n::plural("streak.ui.remaining_points", day.config.dailyGoal - day.points).resolve(), 18);
+  }
   body->addView((new ProgressMotionView(float(day.points) / day.config.dailyGoal, complete, !animate))->setHeight(18 * unit));
   text(body, i18n::tr(complete ? "streak.ui.complete_help" : "streak.ui.protected"), 18);
   for (const auto &progress : day.assignments) {
@@ -4724,7 +4728,7 @@ void ResultScene::buildStreakProgress(bool animate) {
   auto *dismiss = new Button();
   dismiss->setHeight(54 * unit)->setFlexShrink(0);
   auto *caption = new TextView(app_theme::font, static_cast<int>(std::lround(22 * unit)));
-  caption->setText(i18n::tr("streak.ui.dismiss"));
+  caption->setText(i18n::tr(complete ? "streak.ui.done" : "streak.ui.dismiss"));
   caption->setAlign(TextView::CENTER); caption->setVAlign(TextView::MIDDLE);
   dismiss->setContentView(caption);
   action_button::applyStyle(dismiss, caption, app_theme::ActionCategory::Confirmation);

@@ -129,6 +129,7 @@ struct Scene {
   void onPause() {} void onResume() { ++resumes; } void refreshLanguageIfNeeded() {}
   void prepareForUse() {} void init() { ++initializations; }
   template<class... Args> void configureTab(Args...) {}
+  template<class F> void defer(F, int, bool) {}
 };
 struct Completion {
   std::filesystem::path chartPath;
@@ -175,6 +176,7 @@ struct Session {
   }
 };
 struct MainMenuScene : Scene {
+  void openStreakAssignment(const std::string &) {}
   TAB_TYPE;
   enum class AutoSelectionPreview { Suppress, Load };
   FOLDER_TYPE;

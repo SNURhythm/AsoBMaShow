@@ -8,6 +8,21 @@ from support.fixture_compiler import FixtureCompiler
 
 
 class StreakSceneTests(unittest.TestCase):
+    def test_assignment_shortcuts_open_requested_folder_and_clear_filters(self):
+        root = Path(__file__).resolve().parents[1]
+        main = extract((root / "src/scene/MainMenuScene.cpp").read_text(),
+                       "void MainMenuScene::openStreakAssignment(")
+        custom = extract((root / "src/scene/MusicSelectScene.cpp").read_text(),
+                         "void MusicSelectScene::openStreakAssignment(")
+        fixture = (root / "tests/streak_navigation_fixture.cpp").read_text()
+        fixture = fixture.replace("MAIN_NAVIGATION", main).replace("CUSTOM_NAVIGATION", custom)
+        with tempfile.TemporaryDirectory(prefix="asobmashow-streak-navigation-") as directory:
+            source = Path(directory) / "navigation.cpp"
+            binary = Path(directory) / "navigation"
+            source.write_text(fixture)
+            FixtureCompiler.from_environment(shared_headers=True).build([source], binary, source.parent)
+            subprocess.run([str(binary)], check=True, timeout=5)
+
     def test_level_summary_groups_tables_in_selection_order(self):
         root = Path(__file__).resolve().parents[1]
         helper = extract((root / "src/scene/StreakScene.cpp").read_text(), "std::string levelsText(")
@@ -169,12 +184,14 @@ int main() {
         methods = "\n".join(extract(scene, signature) for signature in (
             "void defer(", "void handleDeferred()"))
         later = extract(streak, "void StreakScene::later(")
+        navigation = extract(streak, "[open = openAssignment_")
         fixture = r'''
 #include <cassert>
 #include <cstdint>
 #include <functional>
 #include <map>
 #include <mutex>
+#include <string>
 #include <vector>
 using Uint64 = std::uint64_t;
 Uint64 SDL_GetTicks() { return 100; }
@@ -187,6 +204,9 @@ class StreakScene {
   std::vector<std::function<bool()>> postedDeferred_;
   bool isDead = false;
   int builds = 0;
+  bool embeddedTab_ = true;
+  std::function<void(const std::string &)> openAssignment_;
+  void queueNavigation() { const std::string id="assignment"; defer(NAVIGATION, 0, true); }
   void build() { ++builds; }
   void later(std::function<void()>);
   METHODS
@@ -207,8 +227,22 @@ int main() {
  scene.handleDeferred();
  assert(first == 1 && second == 1 && scene.builds == 2);
  assert(scene.deferred.empty());
+ int opened = 0;
+ scene.openAssignment_ = [&](const std::string &id) { assert(id=="assignment"); ++opened; };
+ scene.queueNavigation();
+ ++scene.context.currentFrame;
+ scene.handleDeferred();
+ scene.handleDeferred(); // Re-entering the embedded tab must not repeat navigation.
+ assert(opened == 1 && scene.deferred.empty());
+ auto *standalone = new StreakScene;
+ standalone->embeddedTab_ = false;
+ standalone->openAssignment_ = [&](const std::string &) { ++opened; delete standalone; standalone=nullptr; };
+ standalone->queueNavigation();
+ ++standalone->context.currentFrame;
+ standalone->handleDeferred();
+ assert(standalone == nullptr && opened == 2);
 }
-'''.replace("METHODS", methods).replace("LATER", later)
+'''.replace("METHODS", methods).replace("LATER", later).replace("NAVIGATION", navigation)
         with tempfile.TemporaryDirectory(prefix="asobmashow-streak-ui-") as directory:
             source = Path(directory) / "streak.cpp"
             binary = Path(directory) / "streak"

@@ -647,8 +647,10 @@ void MusicSelectScene::onResume() {
   }
 #endif
   syncToolbar();
-  reloadLibrary();
+  const auto assignment = std::exchange(pendingStreakAssignment_, {});
+  reloadLibrary(assignment.empty());
   if (!failed_) {
+    if (!assignment.empty()) openStreakAssignment(assignment);
     // Resume the looping select BGM after pause silenced it.
     if (!background) configureSoundServices();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -4283,11 +4285,28 @@ void MusicSelectScene::openPlayOptions() {
   playOptionsModal_->show();
 }
 
+void MusicSelectScene::openStreakAssignment(const std::string &id) {
+  bars_.configure({.modeFilter="ALL", .difficultyFilter="ALL", .sortId=context.settings.skinSortId});
+  const auto root = musicSelectAssignmentsRoot(i18n::tr("streak.ui.assignment_folder"));
+  if (bars_.select(root.id) && openDirectory(root)) {
+    const auto children = bars_.childrenOf(root.id);
+    const auto found = std::find_if(children.begin(), children.end(), [&](const auto &bar) {
+      return bar.id.value == "container:assignment:" + id;
+    });
+    if (found != children.end() && bars_.select(found->id)) (void)openDirectory(*found);
+  }
+  syncResolvedFilters();
+}
+
 void MusicSelectScene::openStreak() {
   if (!toolbarControlAvailable(MusicSelectToolbarControl::Streak)) return;
   context.sceneManager->changeScene(std::make_unique<StreakScene>(
       context, SceneReturnTarget::Retained(
-          this, [this] { reactivateSkinOnResume_ = true; })), true);
+          this, [this] { reactivateSkinOnResume_ = true; }),
+      [this](const std::string &id) {
+        pendingStreakAssignment_ = id;
+        (void)returnToScene(*context.sceneManager, SceneReturnTarget::Retained(this));
+      }), true);
 }
 
 void MusicSelectScene::openIrUploads() {

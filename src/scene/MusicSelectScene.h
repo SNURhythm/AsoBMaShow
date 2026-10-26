@@ -92,6 +92,8 @@ protected:
 private:
   void configureSoundServices();
   void reloadLibrary(bool preserveDirectory = true);
+  void openStreakAssignment(const std::string &id);
+  std::string pendingStreakAssignment_;
   void syncResolvedFilters();
   [[nodiscard]] std::int64_t elapsedMicros() const;
   void selectedBarMoved();

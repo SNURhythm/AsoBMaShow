@@ -841,7 +841,9 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
   } else if (tab == Tab::Streak && !streakTab_) {
     streakTab_ = std::make_unique<StreakScene>(context);
     streakTab_->prepareForUse();
-    streakTab_->configureTab(inset, returnToPlay);
+    streakTab_->configureTab(inset, returnToPlay, [this](const std::string &id) {
+      defer([this, id] { openStreakAssignment(id); return true; }, 0, true);
+    });
     streakTab_->init();
     initializedUtilityTab = true;
   }
@@ -903,6 +905,30 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
   updatePanelLayout();
   refreshTabPresentation();
   rootLayout->applyYogaLayout();
+}
+
+void MainMenuScene::openStreakAssignment(const std::string &id) {
+  selectTab(Tab::Play);
+  temporaryChartFolder.reset();
+  searchText.clear();
+  searchBox->setEditingText("");
+  if (auto *hint = rootLayout->findViewByName("mainMenuSearchHint")) hint->setVisible(true);
+  chartRecordFilters = {};
+  chartBpmMinText.clear();
+  chartBpmMaxText.clear();
+  chartDifficultyRangeTableId.reset();
+  chartKeyModeDropdownOpen = chartClearMarkDropdownOpen = chartScoreRankDropdownOpen = false;
+  chartDifficultyMinDropdownOpen = chartDifficultyMaxDropdownOpen = false;
+  expandedLibraryFolders.insert("container:assignments");
+  activeFolder = {.key="container:assignment:" + id, .type=LibraryFolderItem::Type::Assignments};
+  // Reload both membership and the sidebar before querying the requested assignment.
+  reloadFolderItems();
+  if (activeFolder.type != LibraryFolderItem::Type::Assignments) {
+    activeFolder = {.key="container:assignments", .label=i18n::tr("streak.ui.assignment_folder"),
+                    .type=LibraryFolderItem::Type::Assignments};
+    reloadFolderItems();
+  }
+  reloadChartListForFolderSelection();
 }
 
 void MainMenuScene::refreshTabPresentation() {

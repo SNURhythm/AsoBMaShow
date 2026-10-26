@@ -116,8 +116,10 @@ opens automatically in a dismissible slide-over after a fresh manual chart's
 successful save, including successful save retries and custom result skins.
 It shows saved daily totals rather than claiming a per-attempt point increase.
 Escape or tapping outside dismisses it without activating result controls;
-custom-skin auto-exit pauses until dismissal. Resizing never reopens it. Completed days lead with “Today is complete” and a
-“Done for today” action. Optional challenges start collapsed, and bonus points
+custom-skin auto-exit pauses until dismissal. Resizing never reopens it. Completed days lead with “Today is complete”, the current combo, today’s earned
+points, and a primary “Done for today” action on both the dashboard and result
+progress pop-up. The result action dismisses the pop-up so the saved result remains
+available to inspect. Optional challenges start collapsed, and bonus points
 appear separately from the finished daily goal. Short Earshot-generated progress, completion and freeze-purchase cues use the
 system audio bus and master volume; they do not repeat on redraws or failed
 purchases. Reaching the daily goal adds a 900 ms ignition: the flame compresses,
@@ -127,6 +129,19 @@ artifact checks guide the four bundled sounds (see `assets/audio/streak/README.m
 Progress and round animations are finite. The flame animates while a played
 day is visible; an unplayed day stays still. Share
 cards remain deferred.
+
+Each assignment has **Play eligible charts**, which opens its filtered chart list
+in the current native or skin-driven selector. The shortcut clears unrelated
+search and chart filters, keeps the selected long-note mode, and does not start
+a chart automatically. Remaining charts appear beside the round count and track
+the same animation frame; the daily summary also shows points left to the goal.
+
+The **Last 7 days** strip uses local calendar dates. It distinguishes goal reached,
+played without reaching the goal, freeze used, no play, and dates before the
+routine started; today is outlined. The milestone section previews the next
+unearned combo badge and the remaining goal days. Playing or freezing a day
+protects the combo but does not advance that countdown. Earned badges survive
+resets; after the final badge, the preview confirms all combo milestones earned.
 
 ## Storage and recovery
 
@@ -188,7 +203,12 @@ should unlock those milestones during the same session.
    dashboard shows the effective date for tomorrow. Multiple saves replace the
    pending routine.
 
-To check assignment navigation, select the flame-marked **Assignments** heading in PLAY. The root shows
+To check assignment navigation, first enter an unrelated search/filter, then
+choose **Play eligible charts** on a Combo assignment. Confirm PLAY opens that
+assignment with the search/filter cleared. Return to Combo: it must stay open
+without replaying the shortcut. Repeat from a skin-driven selector.
+
+Also select the flame-marked **Assignments** heading in PLAY. The root shows
 the union of eligible charts; each named subfolder shows its own candidates.
 Complete a chart for one assignment and return: it should disappear from that
 subfolder, remaining in another only if it can still contribute there. Search,

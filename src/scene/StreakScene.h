@@ -10,8 +10,10 @@ class ScrollView;
 class OverlayPortal;
 class StreakScene final : public Scene {
 public:
-  StreakScene(ApplicationContext &, SceneReturnTarget = {});
-  void configureTab(float topInset, std::function<void()> onClose);
+  StreakScene(ApplicationContext &, SceneReturnTarget = {},
+              std::function<void(const std::string &)> openAssignment = {});
+  void configureTab(float topInset, std::function<void()> onClose,
+                    std::function<void(const std::string &)> openAssignment = {});
   void setTabTopInset(float topInset);
   void onPause() override;
   void onResume() override;
@@ -46,6 +48,7 @@ private:
   bool embeddedTab_ = false;
   float tabTopInset_ = 0;
   std::function<void()> tabClose_;
+  std::function<void(const std::string &)> openAssignment_;
   std::string profileId_, message_;
   streak::State state_;
   std::optional<streak::PlayProgress> streakProgress_;
