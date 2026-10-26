@@ -215,4 +215,6 @@ to its original quota, holds a “Round complete” state, then reveals the next
 round with a separate promotion cue. The result drawer includes these rows even
 when the play reaches the daily goal. Animation receipts are bounded, transient,
 created only after a successful score transaction, and claimed once by the
-result drawer or dashboard. Rebuilds retain the animation clock.
+result drawer or dashboard. The result drawer opens only when the saved run
+advances at least one assignment; unrelated runs leave the result screen
+uninterrupted. Rebuilds retain the animation clock.

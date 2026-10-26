@@ -8,6 +8,7 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <utility>
 #define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS 1
 static std::uint64_t ticks = 1000;
 std::uint64_t SDL_GetTicks() { return ticks; }
@@ -77,7 +78,11 @@ struct ResultScene {
     struct {
       int loads=0;
       streak::State state;
-      std::optional<streak::PlayProgress> TakeStreakProgress(std::string_view) { return {}; }
+      std::optional<streak::PlayProgress> progress;
+      std::optional<streak::PlayProgress> TakeStreakProgress(std::string_view attempt) {
+        if (!progress || progress->attemptId != attempt) return {};
+        return std::exchange(progress, {});
+      }
       std::optional<streak::State> LoadStreak(std::string &) { ++loads; return state; }
     } scoreRepository;
   } context;
@@ -109,6 +114,10 @@ int main() {
   streak::Day day;
   day.assignments.push_back({});
   scene.context.scoreRepository.state.days.emplace(streak::today(), day);
+  scene.context.scoreRepository.progress = streak::PlayProgress{
+      .day=streak::today(), .attemptId="test",
+      .assignments={{.id="a", .beforeCharts=0, .beforeQuota=3, .beforeRound=1,
+                     .afterCharts=1, .afterQuota=3, .afterRound=1}}};
   scene.prepareStreakProgress();
   assert(scene.context.scoreRepository.loads == 0 && !scene.streakPresentation_.active());
   scene.local.persistenceOptions.chartOutcome->saved_ = true; // Explicit persistence retry.
@@ -135,6 +144,21 @@ int main() {
   assert(!scene.handleStreakProgressEvent(released));
   scene.prepareStreakProgress(); // Rebuild/retry does not repeat the presentation.
   assert(!scene.streakPresentation_.active() && scene.context.scoreRepository.loads == 1);
+
+  // An active routine alone must not interrupt a run that qualified for no assignment.
+  for (int scenario = 0; scenario < 3; ++scenario) {
+    ResultScene unqualified;
+    unqualified.context.scoreRepository.state.days.emplace(streak::today(), day);
+    unqualified.local.persistenceOptions.chartOutcome->saved_ = true;
+    if (scenario != 0) unqualified.context.scoreRepository.progress = streak::PlayProgress{
+        .day=streak::today(), .attemptId=scenario == 1 ? "test" : "another-run"};
+    unqualified.prepareStreakProgress();
+    assert(!unqualified.streakPresentation_.active());
+    assert(unqualified.viewport.cancelled == 0 && unqualified.resultSkinMouseCapture);
+    assert(unqualified.inputCallback()().anyKeyPressed);
+    unqualified.prepareStreakProgress();
+    assert(unqualified.context.scoreRepository.loads == 1);
+  }
 
   ResultScene button;
   assert(button.streakPresentation_.arm({.saved=true, .manual=true, .currentDay=true, .activeRoutine=true}, ticks));

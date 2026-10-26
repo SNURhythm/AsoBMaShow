@@ -4649,6 +4649,7 @@ void ResultScene::prepareStreakProgress() {
   const auto day = streakSnapshot_->days.find(streak::today());
   if (day == streakSnapshot_->days.end() || day->second.assignments.empty()) return;
   streakProgress_ = context.scoreRepository.TakeStreakProgress(result.attemptId);
+  if (!streakProgress_ || streakProgress_->assignments.empty()) return;
   if (streakPresentation_.arm({.saved=true, .manual=true, .currentDay=true, .activeRoutine=true}, SDL_GetTicks())) {
     if (viewportLayout) viewportLayout->cancelPointerInput();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
