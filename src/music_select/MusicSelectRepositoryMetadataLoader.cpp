@@ -1,4 +1,7 @@
 #include "MusicSelectRepositoryProjection.h"
+#include "MusicSelectAssignmentFolders.h"
+#include <map>
+#include <set>
 
 #include "../path.h"
 
@@ -163,4 +166,64 @@ MusicSelectRepositoryProjection::loadTableMetadata(
     }
   }
   return source;
+}
+
+std::vector<MusicSelectAssignmentChart> loadMusicSelectAssignmentCharts(
+    ChartRepository::Session &session, const MusicSelectRepositoryMetadata &metadata,
+    const streak::Day &day, int selectedLongNoteMode) {
+  if (day.points >= day.config.dailyGoal &&
+      streak::bonusPoints(day) >= streak::bonusLimit(day)) return {};
+  std::map<std::string, MusicSelectAssignmentChart> candidates;
+  std::set<std::pair<std::string, std::string>> levels;
+  std::set<std::string> sticky;
+  for (const auto &progress : day.assignments) {
+    for (const auto &level : progress.requirement.levels)
+      levels.emplace(level.source, level.level);
+    for (const auto &[hash, achievement] : progress.chartProgress)
+      if (!progress.usedCharts.contains(hash)) sticky.insert(hash);
+  }
+  // Query each selected level once, using indexed metadata only.
+  for (const auto &[source, level] : levels) {
+    const auto table = std::ranges::find_if(metadata.tables, [&](const auto &table) {
+      return table.info.sourceUrl == source;
+    });
+    if (table == metadata.tables.end()) continue;
+    std::vector<ChartMetaRecord> records;
+    ChartMetaQuery query;
+    query.tableId = table->info.id;
+    query.tableLevel = level;
+    query.exactTableLevel = true;
+    query.selectedLongNoteMode = selectedLongNoteMode;
+    session.QueryChartMeta(query, records);
+    for (auto &record : records) {
+      if (record.unavailable || record.meta.SHA256.empty()) continue;
+      const auto hash = record.meta.SHA256;
+      auto [entry, inserted] = candidates.try_emplace(hash);
+      if (inserted) entry->second.record = std::move(record);
+      entry->second.levels.push_back({source, level, {}});
+    }
+  }
+  // Sticky charts may no longer belong to an installed table/level.
+  std::vector<std::filesystem::path> paths;
+  for (const auto &hash : sticky) {
+    if (candidates.contains(hash)) continue;
+    for (const auto &meta : session.SelectChartMetaByHash(hash, {}))
+      paths.push_back(meta.BmsPath);
+  }
+  constexpr std::size_t batchSize = 1'024;
+  for (std::size_t offset = 0; offset < paths.size(); offset += batchSize) {
+    auto batch = session.SelectChartMetaByPaths(std::span(paths).subspan(
+        offset, std::min(batchSize, paths.size() - offset)));
+    if (batch.status != ChartMetaPathBatchReadStatus::Loaded)
+      throw std::runtime_error(batch.diagnostic);
+    for (auto &record : batch.records) {
+      const auto hash = record.meta.SHA256;
+      if (!record.unavailable && !hash.empty())
+        candidates.try_emplace(hash, MusicSelectAssignmentChart{std::move(record), {}});
+    }
+  }
+  std::vector<MusicSelectAssignmentChart> result;
+  result.reserve(candidates.size());
+  for (auto &[hash, source] : candidates) result.push_back(std::move(source));
+  return result;
 }

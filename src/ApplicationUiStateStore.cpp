@@ -81,6 +81,23 @@ ApplicationUiStateStore::Load(const std::filesystem::path &path) {
     return result;
   }
 
+  const auto reminders = loaded.document.find("reminders");
+  if (reminders != loaded.document.end()) {
+    if (reminders->is_object() && reminders->contains("daily") &&
+        (*reminders)["daily"].is_boolean() && reminders->contains("comeback") &&
+        (*reminders)["comeback"].is_boolean() && reminders->contains("hour") &&
+        (*reminders)["hour"].is_number_integer() && (*reminders)["hour"] >= 0 &&
+        (*reminders)["hour"] < 24 && reminders->contains("minute") &&
+        (*reminders)["minute"].is_number_integer() && (*reminders)["minute"] >= 0 &&
+        (*reminders)["minute"] < 60) {
+      result.state.reminders = {(*reminders)["daily"].get<bool>(),
+          (*reminders)["comeback"].get<bool>(), (*reminders)["hour"].get<int>(),
+          (*reminders)["minute"].get<int>()};
+    } else {
+      result.diagnostics.emplace_back("Invalid reminders; notifications disabled");
+    }
+  }
+
   const auto language = loaded.document.find("language");
   if (language != loaded.document.end()) {
     if (language->is_string() &&
@@ -158,12 +175,18 @@ bool ApplicationUiStateStore::SaveAtomic(const std::filesystem::path &path,
     diagnostic = "application state was written by a newer version";
     return false;
   }
+  if (!state.reminders.valid()) {
+    diagnostic = "Invalid reminder time";
+    return false;
+  }
   const auto &toolbar = state.musicSelectToolbar;
   const json document = {
       {"schemaVersion", ApplicationUiState::kSchemaVersion},
       {"language", i18n::isLanguagePreference(state.language)
                        ? state.language : "system"},
       {"newcomerTutorialCompleted", state.newcomerTutorialCompleted},
+      {"reminders", {{"daily", state.reminders.daily}, {"comeback", state.reminders.comeback},
+                     {"hour", state.reminders.hour}, {"minute", state.reminders.minute}}},
       {"onlineDifficultyTablesRevision", state.onlineDifficultyTablesRevision},
       {"bundledDifficultyTablesRevision", state.bundledDifficultyTablesRevision},
       {"musicSelectToolbar",

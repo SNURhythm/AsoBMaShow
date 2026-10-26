@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <unordered_set>
 constexpr int kNoClearTypeRank=-1;
 using path_t = std::filesystem::path;
 path_t fspath_to_path_t(const std::filesystem::path &path) { return path; }
@@ -15,7 +16,7 @@ struct ChartMetaRecord {
   bool unzipAll=false, courseStart=false, unavailable=false, solidArchive=false;
   std::optional<int> randomSelect;
 };
-struct ChartMetaQuery { int limit=0, offset=0; };
+struct ChartMetaQuery { int limit=0, offset=0; bool scopeAllowed=true; };
 enum class ChartRecordSortCriterion { Default, ClearMark, Rate };
 namespace i18n { std::string tr(const char *key) { return key; } }
 void SDL_Log(const char *, ...) {}
@@ -29,8 +30,8 @@ struct ChartRepository {
   struct Session {
     std::vector<ChartMetaRecord> rows;
     std::array<int, 3> randomIndices{-1, -1, -1};
-    std::array<int, 3> RandomChartMetaIndices(const ChartMetaQuery &, const auto &, const auto &) {
-      return randomIndices;
+    std::array<int, 3> RandomChartMetaIndices(const ChartMetaQuery &query, const auto &, const auto &) {
+      return query.scopeAllowed ? randomIndices : std::array<int,3>{-1,-1,-1};
     }
     int CountChartMeta(const ChartMetaQuery &) const { return int(rows.size()); }
     void QueryChartMeta(const ChartMetaQuery &query, std::vector<ChartMetaRecord> &out) const {
@@ -71,13 +72,20 @@ struct MainMenuScene {
   std::optional<ChartMetaRecord> selectedChartRecord;
   std::optional<std::filesystem::path> temporaryChartFolder;
   struct LibraryFolderItem {
-    enum class Type { AllSongs, Course, SolidArchives, DifficultyClearMark };
+    enum class Type { AllSongs, Course, CoursesRoot, SolidArchives, DifficultyClearMark };
     Type type=Type::AllSongs;
     int courseId=0;
-    std::string label, courseGroupName;
+    std::string label, courseGroupName, key;
+    bool expandable=false;
   } activeFolder;
   struct { int solidArchiveCount=0; } folderMetadataCache;
-  ChartMetaQuery chartQueryForActiveFolder() const { return {}; }
+  bool assignmentAllowlistReady=true;
+  std::unordered_set<std::string> expandedLibraryFolders;
+  ChartMetaQuery chartQueryForActiveFolder() const { return {.scopeAllowed=assignmentAllowlistReady}; }
+  bool clearSameFolderScope() { return false; }
+  void refreshChartFilterPanel() {}
+  void selectFolder(LibraryFolderItem);
+  void reloadChartListForFolderSelection() { reloadChartList(); }
   std::atomic_bool willStart=false;
   std::optional<std::filesystem::path> pendingSelectChartPath;
   struct {
@@ -126,12 +134,25 @@ struct MainMenuScene {
   void refreshLongNoteModeButtons() {}
   void refreshAssistOptionButtons() {}
   void refreshSelectedChartActionState() {}
-  void reloadFolderItems(bool) {}
+  void reloadFolderItems(bool) { assignmentAllowlistReady=false; }
   void refreshLongNoteModeClearRankViews();
+  void prepareAssignmentChartQuery() { assignmentAllowlistReady=true; }
   void reloadChartList(bool preserveViewState=false);
 };
 // PRODUCTION_METHODS
 int main() {
+  {
+    MainMenuScene scene;
+    scene.chartSession->rows = {{{"eligible.bms"}}};
+    scene.chartSession->randomIndices = {0, -1, -1};
+    scene.activeFolder.key = "container:assignments";
+    scene.activeFolder.expandable = true;
+    scene.reloadChartList();
+    scene.selectFolder(scene.activeFolder); // Expansion-only reload must retain a usable query.
+    scene.startRandomChart(scene.list.get(0));
+    assert(scene.playedPath == "eligible.bms");
+  }
+
   {
     MainMenuScene scene;
     scene.chartSession->rows = {{{"first.bms"}}, {{"second.bms"}}};

@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A52700012FE0000100C0B001 /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = A52700022FE0000100C0B001 /* UserNotifications.framework */; };
 		D8B008902026102400000002 /* CFNetwork.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D8B008902026102400000001 /* CFNetwork.framework */; };
 		B70027142BF7A8DA000DB8EC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = B70027132BF7A8DA000DB8EC /* Assets.xcassets */; };
 		B70027172BF7A8DA000DB8EC /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = B70027152BF7A8DA000DB8EC /* LaunchScreen.storyboard */; };
@@ -614,6 +615,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		A52700022FE0000100C0B001 /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
 		D8B008902026102400000001 /* CFNetwork.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CFNetwork.framework; path = System/Library/Frameworks/CFNetwork.framework; sourceTree = SDKROOT; };
 		2CD33E8E87F5C66C37827A03 /* libPods-AsoBMaShow.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-AsoBMaShow.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		8BB58BF3E3216A181DA42E9C /* Pods-AsoBMaShow.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-AsoBMaShow.release.xcconfig"; path = "Target Support Files/Pods-AsoBMaShow/Pods-AsoBMaShow.release.xcconfig"; sourceTree = "<group>"; };
@@ -800,6 +802,7 @@
 				B71B9EDC2BFDA3A200D789A5 /* CoreAudio.framework in Frameworks */,
 				B79B1BD22BFAC23200FAD60F /* QuartzCore.framework in Frameworks */,
 				B79B1BD02BFAC20100FAD60F /* UIKit.framework in Frameworks */,
+				A52700012FE0000100C0B001 /* UserNotifications.framework in Frameworks */,
 				B79B1BCE2BFAC1E700FAD60F /* MetalKit.framework in Frameworks */,
 				B79B1BCC2BFAC19F00FAD60F /* Metal.framework in Frameworks */,
 				B7FFC39F2BFAAFA7000C838E /* CoreFoundation.framework in Frameworks */,
@@ -934,6 +937,7 @@
 				B71B9EDB2BFDA3A200D789A5 /* CoreAudio.framework */,
 				B79B1BD12BFAC23200FAD60F /* QuartzCore.framework */,
 				B79B1BCF2BFAC20100FAD60F /* UIKit.framework */,
+				A52700022FE0000100C0B001 /* UserNotifications.framework */,
 				B79B1BCD2BFAC1E700FAD60F /* MetalKit.framework */,
 				B79B1BCB2BFAC19F00FAD60F /* Metal.framework */,
 				B77B0E222BF7C48700945F27 /* CoreFoundation.framework */,

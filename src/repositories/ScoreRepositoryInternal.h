@@ -14,6 +14,7 @@ struct ScoreRepository::Impl {
   std::filesystem::path databasePath;
   std::filesystem::path chartDatabasePath;
   sqlite3 *sessionDatabase = nullptr;
+  std::optional<streak::PlayProgress> streakProgress;
 };
 
 struct ScoreRepository::PreparedScoreQueryDatabase::State {

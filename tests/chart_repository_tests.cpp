@@ -9,6 +9,7 @@
 #include "RepositorySqliteTestSupport.h"
 #include "support/AllocationFailure.h"
 #include "music_select/MusicSelectRepositoryProjection.h"
+#include "music_select/MusicSelectAssignmentFolders.h"
 #include "music_select/MusicSelectPropertyProjection.h"
 #include "music_select/MusicSelectPhysicalDirectory.h"
 #include "music_select/MusicSelectPagedSongs.h"
@@ -4494,7 +4495,62 @@ void testScratchlessMembershipWhileAnotherConnectionWrites() {
   assert(execute(writer.get(), "ROLLBACK"));
 }
 
+void testAssignmentCandidateQueries() {
+  TempDirectory temporary;
+  ChartRepository repository(temporary.path() / "chart.db");
+  assert(repository.EnsureReady());
+  auto database = openDatabase(repository.DatabasePath());
+  assert(execute(database.get(),
+      "INSERT INTO chart_meta(path,folder,sha256,title,keys,md5) VALUES"
+      "('library/a.bms','library','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','Alpha',14,''),"
+      "('library/b.bms','library','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','Beta',14,''),"
+      "('library/c.bms','library','cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc','Sticky',14,''),"
+      "('library/d.bms','library','dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd','Unrelated',14,'');"
+      "INSERT INTO difficulty_tables(id,name,symbol,source_url) VALUES(1,'Table','T','table');"
+      "INSERT INTO difficulty_table_entries(table_id,level,sha256,md5,title,sort_order) VALUES"
+      "(1,'0','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','','Alpha',0),(1,'0','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','','Beta',1),(1,'1','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','','Alpha',0),(1,'','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','','Beta',0);"));
+  assert(execute(database.get(), "UPDATE chart_meta SET subtitle='', artist='', sub_artist='', genre=''"));
+  auto session = repository.OpenSession();
+  assert(session);
+  streak::Day day;
+  day.assignments.push_back({.requirement={.id="one", .levels={{"table","0",""},{"table","1",""}}}});
+  day.assignments[0].chartProgress["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"] = {};
+  const auto metadata = MusicSelectRepositoryProjection::loadMetadata(*session, 1);
+  const auto candidates = loadMusicSelectAssignmentCharts(*session, metadata, day, 1);
+  assert(candidates.size() == 3); // Selected levels plus sticky, never unrelated library rows.
+  assert(candidates[0].record.meta.SHA256 == "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" && candidates[0].levels.size() == 2);
+  assert(candidates[2].record.meta.SHA256 == "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc" && candidates[2].levels.empty());
+  auto unnamed = day;
+  unnamed.assignments[0].requirement.levels = {{"table", "", ""}};
+  unnamed.assignments[0].chartProgress.clear();
+  const auto unnamedCharts = loadMusicSelectAssignmentCharts(*session, metadata, unnamed, 1);
+  assert(unnamedCharts.size() == 1 && unnamedCharts[0].record.meta.SHA256 == std::string(64, 'b'));
+  ChartMetaQuery query;
+  query.allowedSha256 = std::vector<std::string>{"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"};
+  std::vector<ChartMetaRecord> rows;
+  session->QueryChartMeta(query, rows);
+  assert(rows.size() == 2 && session->CountChartMeta(query) == 2);
+  assert(session->FindChartMetaIndex(query, "library/d.bms") == -1);
+  const auto random = session->RandomChartMetaIndices(query, {}, {});
+  assert(random[0] >= 0 && random[0] < 2 && random[1] >= 0 && random[1] < 2);
+  query.keyword = "Sticky";
+  rows.clear(); session->QueryChartMeta(query, rows);
+  assert(rows.size() == 1 && rows[0].meta.SHA256 == "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
+  query.keyword.clear(); query.limit = 1; query.offset = 1;
+  rows.clear(); session->QueryChartMeta(query, rows);
+  assert(rows.size() == 1);
+  query.limit = 0; query.offset = 0;
+  query.allowedSha256 = std::vector<std::string>{};
+  rows.clear(); session->QueryChartMeta(query, rows);
+  assert(rows.empty() && session->CountChartMeta(query) == 0);
+  const auto emptyRandom = session->RandomChartMetaIndices(query, {}, {});
+  assert((emptyRandom == std::array<int, 3>{-1, -1, -1}));
+}
+
 int main(int argc, char **argv) {
+  if (argc == 2 && std::string_view(argv[1]) == "--assignment-folder-test") {
+    testAssignmentCandidateQueries(); return 0;
+  }
   if (argc == 2 && std::string_view(argv[1]) == "--scoped-scan-test") {
     testScopedScanReadsOnlyRequestedPaths(); return 0;
   }
@@ -4564,6 +4620,7 @@ int main(int argc, char **argv) {
       return 1;
     }
   }
+  testAssignmentCandidateQueries();
   testCourseFallbackLookupUsesHashIndexes();
   testPhysicalDirectoryScoreFilteredRandomSelection();
   testPhysicalDirectoryFirstPageDoesNotVisitWholeFolder();

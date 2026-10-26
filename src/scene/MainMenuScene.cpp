@@ -70,6 +70,7 @@
 #include "RemoteResultRecallController.h"
 #include "ResultScene.h"
 #include "SettingsScene.h"
+#include "StreakScene.h"
 #include "MusicSelectScene.h"
 #include "MusicSelectSkinErrorScene.h"
 #include "../music_select/MusicSelectLaunchPolicy.h"
@@ -728,7 +729,7 @@ EventHandleResult MainMenuScene::handleEvents(SDL_Event &event) {
   if (!shellModalOpen &&
       (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) &&
       (event.key.mod & (SDL_KMOD_CTRL | SDL_KMOD_GUI)) != 0 &&
-      event.key.key >= SDLK_1 && event.key.key <= SDLK_4) {
+      event.key.key >= SDLK_1 && event.key.key <= SDLK_5) {
     if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat)
       selectTab(static_cast<Tab>(event.key.key - SDLK_1));
     return {};
@@ -750,6 +751,7 @@ bool MainMenuScene::selectorTabActive() const {
 Scene *MainMenuScene::activeUtilityTab() const {
   if (activeTab_ == Tab::Music) return musicTab_.get();
   if (activeTab_ == Tab::Ir) return irTab_.get();
+  if (activeTab_ == Tab::Streak) return streakTab_.get();
   return nullptr;
 }
 
@@ -795,6 +797,8 @@ void MainMenuScene::cancelPendingTabSwitch() {
 }
 
 void MainMenuScene::completeTabSwitch(Tab tab) {
+  // Routine edits change assignment membership without changing chart/score revisions.
+  if (activeTab_ == Tab::Streak) requestLibraryReload(true);
   const bool resumeCurrentSelector = !selectorTabActive() && tab == selectorTab_;
   if (selectorTabActive()) {
     const auto endEditing = [](View *root, const auto &self) -> void {
@@ -833,6 +837,14 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
     irTab_->prepareForUse();
     irTab_->configureTab(inset, returnToPlay, this);
     irTab_->init();
+    initializedUtilityTab = true;
+  } else if (tab == Tab::Streak && !streakTab_) {
+    streakTab_ = std::make_unique<StreakScene>(context);
+    streakTab_->prepareForUse();
+    streakTab_->configureTab(inset, returnToPlay, [this](const std::string &id) {
+      defer([this, id] { openStreakAssignment(id); return true; }, 0, true);
+    });
+    streakTab_->init();
     initializedUtilityTab = true;
   }
   if (selectorTabActive() && !resumeCurrentSelector) {
@@ -895,6 +907,30 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
   rootLayout->applyYogaLayout();
 }
 
+void MainMenuScene::openStreakAssignment(const std::string &id) {
+  selectTab(Tab::Play);
+  temporaryChartFolder.reset();
+  searchText.clear();
+  searchBox->setEditingText("");
+  if (auto *hint = rootLayout->findViewByName("mainMenuSearchHint")) hint->setVisible(true);
+  chartRecordFilters = {};
+  chartBpmMinText.clear();
+  chartBpmMaxText.clear();
+  chartDifficultyRangeTableId.reset();
+  chartKeyModeDropdownOpen = chartClearMarkDropdownOpen = chartScoreRankDropdownOpen = false;
+  chartDifficultyMinDropdownOpen = chartDifficultyMaxDropdownOpen = false;
+  expandedLibraryFolders.insert("container:assignments");
+  activeFolder = {.key="container:assignment:" + id, .type=LibraryFolderItem::Type::Assignments};
+  // Reload both membership and the sidebar before querying the requested assignment.
+  reloadFolderItems();
+  if (activeFolder.type != LibraryFolderItem::Type::Assignments) {
+    activeFolder = {.key="container:assignments", .label=i18n::tr("streak.ui.assignment_folder"),
+                    .type=LibraryFolderItem::Type::Assignments};
+    reloadFolderItems();
+  }
+  reloadChartListForFolderSelection();
+}
+
 void MainMenuScene::refreshTabPresentation() {
   if (!rootLayout) return;
   const bool selector = selectorTabActive();
@@ -912,7 +948,7 @@ void MainMenuScene::refreshTabPresentation() {
   const bool showDock = selector && rendering::window_width >= rendering::window_height;
   dock->setDisplay(showDock ? YGDisplayFlex : YGDisplayNone);
   dock->setVisible(showDock);
-  const std::array<const char *, 4> labels{"PLAY", "COURSE", "MUSIC", "IR"};
+  const std::array<const char *, 5> labels{"PLAY", "COURSE", "MUSIC", "IR", "STREAK"};
   for (size_t index = 0; index < labels.size(); ++index) {
     auto *button = static_cast<Button *>(rootLayout->findViewByName(std::string("mainMenuTab:") + labels[index]));
     tab_button::style(button, index == static_cast<size_t>(activeTab_));
@@ -921,6 +957,7 @@ void MainMenuScene::refreshTabPresentation() {
       kMenuHeaderHeight * (rendering::window_width < 1000 ? 2 : 1);
   if (musicTab_) musicTab_->setTabTopInset(inset);
   if (irTab_) irTab_->setTabTopInset(inset);
+  if (streakTab_) streakTab_->setTabTopInset(inset);
 }
 
 MainMenuScene::MainMenuScene(ApplicationContext &context, bool showTutorial)
@@ -1122,6 +1159,7 @@ void MainMenuScene::onLanguageChanged() {
   Scene::onLanguageChanged();
   if (musicTab_) musicTab_->refreshLanguageIfNeeded();
   if (irTab_) irTab_->refreshLanguageIfNeeded();
+  if (streakTab_) streakTab_->refreshLanguageIfNeeded();
   // Rebind presentation only: reinitializing the scene would cancel workers,
   // discard selection, and replace the user's filter and lane-order input.
   if (folderRecyclerView != nullptr) folderRecyclerView->rebindVisibleItems();
@@ -1160,7 +1198,7 @@ void MainMenuScene::applyThemeChange() {
   }
 
   appliedUiThemeMode = activeMode;
-  for (Scene *scene : std::array<Scene *, 2>{musicTab_.get(), irTab_.get()})
+  for (Scene *scene : std::array<Scene *, 3>{musicTab_.get(), irTab_.get(), streakTab_.get()})
     if (scene) for (auto *view : scene->views) view->propagateThemeChange();
   for (auto *view : views) {
     if (view != nullptr) {
@@ -1580,6 +1618,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
       case LibraryFolderItem::Type::AllSongs:
         label = i18n::tr("library.folders.all_songs.label");
         break;
+      case LibraryFolderItem::Type::Assignments:
+        if (item.depth == 0) label = i18n::tr("streak.ui.assignment_folder");
+        break;
       case LibraryFolderItem::Type::Favorites:
         label = i18n::tr("library.folders.favorites.label");
         break;
@@ -1604,6 +1645,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                           item.clearMarkFolder, item.expandable,
                           item.expanded,
                           item.type == LibraryFolderItem::Type::AllSongs && !item.sectionHeader ? ui_icons::kMusic :
+                          item.type == LibraryFolderItem::Type::Assignments && item.depth == 0 ? ui_icons::kFire :
                           item.type == LibraryFolderItem::Type::Favorites ? 0xf005 : 0,
                           item.sectionHeader);
     }
@@ -1927,11 +1969,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   auto *tabs = new View();
   tabs->setName("mainMenuTabs");
   tabs->setFlexDirection(FlexDirection::Row)->setHeight(kMenuHeaderHeight)->setGap(4);
-  const std::array<const char *, 4> tabLabels{"PLAY", "COURSE", "MUSIC", "IR"};
-  const std::array<const char *, 4> tabMessages{
-      "menu.tabs.play", "menu.tabs.course", "menu.tabs.music", "menu.tabs.ir"};
-  const std::array<uint32_t, 4> tabIcons{ui_icons::kPlay, ui_icons::kFlagCheckered,
-                                         ui_icons::kMusic, ui_icons::kGlobe};
+  const std::array<const char *, 5> tabLabels{"PLAY", "COURSE", "MUSIC", "IR", "STREAK"};
+  const std::array<const char *, 5> tabMessages{
+      "menu.tabs.play", "menu.tabs.course", "menu.tabs.music", "menu.tabs.ir", "menu.tabs.streak"};
+  const std::array<uint32_t, 5> tabIcons{ui_icons::kPlay, ui_icons::kFlagCheckered,
+                                         ui_icons::kMusic, ui_icons::kGlobe, ui_icons::kFire};
   for (size_t index = 0; index < tabLabels.size(); ++index) {
     TextView *text = nullptr;
     auto *button = makeSelectorButton(i18n::message(tabMessages[index]), 22, &text, tabIcons[index]);
@@ -2712,7 +2754,7 @@ void MainMenuScene::updateMenuPresentation(bool portrait) {
   header->setFlexDirection(narrowHeader ? FlexDirection::Column : FlexDirection::Row);
   header->setHeight(kMenuHeaderHeight * (narrowHeader ? 2 : 1));
   tabs->setDisplay(YGDisplayFlex);
-  tabs->setWidth(narrowHeader ? YGUndefined : 460);
+  tabs->setWidth(narrowHeader ? YGUndefined : 576);
   if (narrowHeader) tabs->setWidthPercent(100);
   for (auto *tab : tabs->getChildren()) {
     tab->setFlex(narrowHeader ? 1 : 0)->setMinWidth(0)->setWidth(narrowHeader ? YGUndefined : 112);
@@ -2785,6 +2827,17 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
         chartSession->SelectDifficultyCourseTables();
     folderMetadataCache.valid = true;
   }
+  assignmentDayId = streak::today();
+  assignmentDay = {};
+  assignmentCharts.reset();
+  assignmentChartHashes.clear();
+  std::string streakError;
+  if (const auto state = context.scoreRepository.LoadStreak(streakError)) {
+    const auto day = state->days.find(assignmentDayId);
+    if (day != state->days.end()) assignmentDay = day->second;
+  } else {
+    SDL_Log("Unable to load assignment folders: %s", streakError.c_str());
+  }
   std::vector<LibraryFolderItem> folders;
 
   const int allSongCount = folderMetadataCache.allSongCount;
@@ -2827,6 +2880,24 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
   folders.push_back(allSongsItem);
   if (allSongsItem.expanded) {
     appendClearMarkFilters(allSongsItem, 1);
+  }
+
+  folders.push_back({
+      .key = "container:assignments",
+      .label = i18n::tr("streak.ui.assignment_folder"),
+      .type = LibraryFolderItem::Type::Assignments,
+      .expandable = !assignmentDay.assignments.empty(),
+      .expanded = isExpanded("container:assignments"),
+  });
+  if (isExpanded("container:assignments")) {
+    for (const auto &progress : assignmentDay.assignments) {
+      folders.push_back({
+          .key = "container:assignment:" + progress.requirement.id,
+          .label = progress.requirement.name,
+          .type = LibraryFolderItem::Type::Assignments,
+          .depth = 1,
+      });
+    }
   }
 
   folders.push_back({
@@ -3160,6 +3231,12 @@ ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const {
   query.selectedLongNoteMode = selectedLongNoteMode;
 
   switch (activeFolder.type) {
+  case LibraryFolderItem::Type::Assignments: {
+    const auto hashes = assignmentChartHashes.find(activeFolder.key);
+    query.allowedSha256 = hashes == assignmentChartHashes.end()
+        ? std::vector<std::string>{} : hashes->second;
+    break;
+  }
   case LibraryFolderItem::Type::SolidArchives:
     query.solidArchivesOnly = true;
     break;
@@ -3537,10 +3614,36 @@ void MainMenuScene::reloadChartListForFolderSelection() {
   prioritizeVisibleArtworkBindings = false;
 }
 
+void MainMenuScene::prepareAssignmentChartQuery() {
+  if (!temporaryChartFolder && activeFolder.type == LibraryFolderItem::Type::Assignments &&
+      !assignmentChartHashes.contains(activeFolder.key)) {
+    const int mode = long_note_mode::valueFromId(profileSelections.longNoteMode);
+    if (!assignmentCharts) {
+      MusicSelectRepositoryMetadata metadata;
+      for (const auto &table : folderMetadataCache.tables)
+        metadata.tables.push_back({.info=table});
+      assignmentCharts = loadMusicSelectAssignmentCharts(*chartSession, metadata, assignmentDay, mode);
+    }
+    auto directory = musicSelectAssignmentsRoot({});
+    directory.id.value = activeFolder.key;
+    auto rows = musicSelectAssignmentChildren(assignmentDay, directory, *assignmentCharts,
+        {.scoreFor=[this](const bms_parser::ChartMeta &meta, int mode) {
+           return scoreBestScores.bestFor(meta, mode);
+         }, .clearFor=[this](const bms_parser::ChartMeta &meta, int mode) {
+           return scoreClearRanks.bestRankFor(meta, mode);
+         }, .selectedLongNoteMode=mode});
+    auto &hashes = assignmentChartHashes[activeFolder.key];
+    for (const auto &row : rows)
+      if (row.chart) hashes.push_back(row.chart->meta.SHA256);
+  }
+}
+
 void MainMenuScene::reloadChartList(bool preserveViewState) {
   if (recyclerView == nullptr || !chartSession.has_value()) {
     return;
   }
+
+  prepareAssignmentChartQuery();
 
   const float previousScrollOffset =
       preserveViewState ? recyclerView->scrollOffset : 0.0f;
@@ -3906,6 +4009,7 @@ void MainMenuScene::applyPendingUiUpdates() {
   // Keep invalidations and selection handoffs together until the selector
   // returns. Applying a hidden handoff would lose it on tab restoration.
   if (!selectorTabActive()) return;
+  if (assignmentDayId != streak::today()) requestLibraryReload(true);
   const bool shouldReloadFolders =
       context.chartLibraryFoldersReloadRequested.exchange(false);
   const bool shouldReloadCharts =
@@ -4061,6 +4165,7 @@ void MainMenuScene::selectFolder(LibraryFolderItem item) {
     reloadFolderItems(true);
   }
   if (item.expandable && chartQueryUnchanged && !clearedSameFolderScope) {
+    prepareAssignmentChartQuery();
     return;
   }
   reloadChartListForFolderSelection();
@@ -8338,6 +8443,13 @@ bool MainMenuScene::needsContinuousPresentation() const {
 
 void MainMenuScene::update(float dt) {
   if (!applyPendingTabSwitch()) return;
+  if (!context.pendingComboNotificationProfile.empty()) {
+    const auto profile = std::exchange(context.pendingComboNotificationProfile, {});
+    if (profile == context.profileManager.activeProfile().id) {
+      selectTab(Tab::Streak);
+      return;
+    }
+  }
   if (chartDetailsView_) {
     bool currentPreview = false;
     {
@@ -8363,6 +8475,11 @@ void MainMenuScene::update(float dt) {
     irTab_->refreshLanguageIfNeeded();
     irTab_->update(dt);
     irTab_->handleDeferred();
+  }
+  if (activeTab_ == Tab::Streak && streakTab_) {
+    streakTab_->refreshLanguageIfNeeded();
+    streakTab_->update(dt);
+    streakTab_->handleDeferred();
   }
   if (activeTab_ == Tab::Music && musicTab_) {
     musicTab_->refreshLanguageIfNeeded();
@@ -8519,8 +8636,10 @@ void MainMenuScene::cleanupScene() {
   cancelPendingTabSwitch();
   if (musicTab_) musicTab_->cleanup();
   if (irTab_) irTab_->cleanup();
+  if (streakTab_) streakTab_->cleanup();
   musicTab_.reset();
   irTab_.reset();
+  streakTab_.reset();
   activeTab_ = selectorTab_ = Tab::Play;
   selectorStates_ = {};
   tutorial_ = nullptr;

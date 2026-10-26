@@ -19,6 +19,7 @@ struct Safe { int top=0,left=0,bottom=0,right=0; };
 Safe getSafeAreaInsetsUi(){return {};}
 constexpr int kRootPadding=0,kMenuHeaderHeight=80;
 namespace i18n { using Text=std::string; }
+namespace streak { inline int day=1; int today(){return day;} }
 struct ChartMetaRecord { struct {std::filesystem::path BmsPath;} meta; };
 struct Parsed {struct {std::filesystem::path BmsPath;} Meta;};
 namespace main_menu_library {bool findBmsSelectionHandoffAllowed(int,int,int,const ChartMetaRecord&){return true;}}
@@ -40,12 +41,14 @@ struct Context {
  struct Player {bool ProcessNativeControlEvents(std::string&){return false;}bool ConsumeNativeControlStatus(std::string&){return false;}} musicPlayer;
 };
 struct MainMenuScene {
- enum class Tab {Play,Course,Music,Ir}; Tab activeTab_=Tab::Music;
+ enum class Tab {Play,Course,Music,Ir,Streak}; Tab activeTab_=Tab::Music;
  enum class AutoSelectionPreview {Suppress,Load};
  Context context;std::mutex selectedChartMutex,findBmsSelectionHandoffMutex;
  std::shared_ptr<Parsed> selectedChart;std::optional<ChartMetaRecord> selectedChartRecord;
  struct Player {float GetOutputLevel(){return 0;}int GetOutputSpectrum(){return 0;}}previewPlayer_;
- View *chartDetailsView_=nullptr,*irTab_=nullptr,*musicTab_=nullptr,*rootLayout=nullptr;
+ struct FilePlayer {float outputLevel(){return 0;}int outputSpectrum(){return 0;}};
+ std::unique_ptr<FilePlayer> previewFilePlayer_;
+ View *chartDetailsView_=nullptr,*irTab_=nullptr,*musicTab_=nullptr,*streakTab_=nullptr,*rootLayout=nullptr;
  View *archiveUnzipModal_=nullptr,*recordsModal_=nullptr,*parseLogModalRoot=nullptr,*musicModalRoot=nullptr,*tasksModalRoot=nullptr,*rankingsModal=nullptr,*readmeModal_=nullptr;
  std::atomic_bool tasksModalOpenRequested=false;
  struct PendingFindBmsSelectionHandoff {std::filesystem::path chartPath;int targetIdentity,selectionGeneration;};
@@ -53,6 +56,8 @@ struct MainMenuScene {
  std::optional<std::filesystem::path> pendingSelectChartPath;
  int chartSelectionGeneration=0,scoreReads=0,folderReloads=0,chartReloads=0,cacheViewRefreshes=0,taskShows=0,handoffs=0;
  std::uint64_t libraryRevision=1,scoreClearRanksRevision=1;
+ int assignmentDayId=streak::today();
+ void requestLibraryReload(bool folders){context.chartLibraryFoldersReloadRequested=folders;context.chartLibraryListReloadRequested=true;}
  int scoreClearRanks=0,scoreBestScores=0,folderClearData=0;
  std::string musicStatusMessage;
  void update(float);void applyPendingUiUpdates();void refreshScoreClearRanksIfNeeded();
@@ -62,7 +67,7 @@ struct MainMenuScene {
  void showTasksModal(){++taskShows;}
  void selectChartByPathAfterReload(const std::filesystem::path&,AutoSelectionPreview){++handoffs;}
  std::optional<std::string> reloadScoreClearRanks(){++scoreReads;scoreClearRanksRevision=context.scoreRepository.GetRevision();return {};}
- void reloadFolderItems(bool){++folderReloads;}void reloadChartList(bool){++chartReloads;}
+ void reloadFolderItems(bool){++folderReloads;assignmentDayId=streak::today();}void reloadChartList(bool){++chartReloads;}
  void refreshLongNoteModeClearRankViews(){++cacheViewRefreshes;}
  std::optional<std::string> refreshScoreClearRankViews(){reloadScoreClearRanks();refreshLongNoteModeClearRankViews();return {};}
  float portraitDetailsHeight(float){return 0;}
@@ -73,6 +78,11 @@ struct MainMenuScene {
 };
 SCENE_METHODS
 int main(){
+ MainMenuScene midnight;midnight.activeTab_=MainMenuScene::Tab::Play;
+ ++streak::day;midnight.update(0);
+ assert(midnight.folderReloads==1&&midnight.chartReloads==1);
+ midnight.update(0);assert(midnight.folderReloads==1&&midnight.chartReloads==1);
+
  for(auto tab:{MainMenuScene::Tab::Music,MainMenuScene::Tab::Ir}){
   MainMenuScene scene;scene.activeTab_=tab;ImageView::drops=0;
   for(int frame=0;frame<600;++frame){

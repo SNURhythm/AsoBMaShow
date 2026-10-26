@@ -1,4 +1,5 @@
 target_sources(main PRIVATE
+    MusicSelectAssignmentFolders.cpp
     MusicSelectLaunchPolicy.cpp
     MusicSelectRepositoryMetadataLoader.cpp
     MusicSelectRepositoryProjection.cpp

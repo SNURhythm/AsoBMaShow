@@ -158,6 +158,8 @@ struct ResultScene final : Scene {
   Observations &observations;
   bool course;
   bool persistenceBlocked = false;
+  streak::ResultPresentation streakPresentation_;
+  long long streakSkinResumeMillis_ = 0;
   LocalResult local;
   std::unique_ptr<FakeResultSkin> resultSkinSession;
   std::optional<UiLogicalPoint> resultSkinPointerUiPosition;
@@ -311,6 +313,21 @@ void testCourseReplayOwnsTransition() {
 }
 
 int main() {
+  {
+    Fixture fixture;
+    fixture.result->streakPresentation_.arm(
+        {.saved=true, .manual=true, .currentDay=true, .activeRoutine=true}, SDL_GetTicks());
+    fixture.renderAt(100000);
+    require(!fixture.result->resultSkinFadeoutStartedMillis, "pending progress suppresses skin auto exit");
+    fixture.result->streakPresentation_.open(SDL_GetTicks());
+    fixture.renderAt(101000);
+    require(!fixture.result->resultSkinFadeoutStartedMillis, "open progress suppresses skin auto exit");
+    fixture.result->streakPresentation_.dismiss();
+    fixture.result->streakSkinResumeMillis_ = 101000;
+    fixture.renderAt(101001);
+    require(!fixture.result->resultSkinFadeoutStartedMillis, "dismissal gets a fresh result viewing interval");
+  }
+
   testTimeout(false);
   testTimeout(true);
   testBlockedFadeout(false);

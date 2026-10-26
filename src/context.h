@@ -194,6 +194,7 @@ public:
   std::filesystem::path applicationDataRoot;
   ApplicationUiStateLoadResult applicationUiStateLoadResult;
   ApplicationUiState applicationUiState;
+  std::string pendingComboNotificationProfile; // Application thread; consumed when a selector is ready.
   std::mutex applicationUiStateMutex;
   ir::PendingIrCredentialCleanup pendingIrCredentialCleanup;
   PlayerProfileManager profileManager;

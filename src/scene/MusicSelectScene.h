@@ -27,6 +27,7 @@
 #include "../audio/DecodedAssetCache.h"
 #include "../music_select/MusicSelectRanking.h"
 #include "../music_select/MusicSelectRepositoryProjection.h"
+#include "../music_select/MusicSelectAssignmentFolders.h"
 #include "../music_select/MusicSelectSearchHistory.h"
 #include "../ir/IrRankingModels.h"
 #include "../ir/IrExternalUrlService.h"
@@ -91,6 +92,8 @@ protected:
 private:
   void configureSoundServices();
   void reloadLibrary(bool preserveDirectory = true);
+  void openStreakAssignment(const std::string &id);
+  std::string pendingStreakAssignment_;
   void syncResolvedFilters();
   [[nodiscard]] std::int64_t elapsedMicros() const;
   void selectedBarMoved();
@@ -164,6 +167,7 @@ private:
   void refreshToolbarAvailability();
   void openPlayOptions();
   void openIrUploads();
+  void openStreak();
   void openSettings();
   void syncToolbar();
   void persistToolbar(MusicSelectToolbarState);
@@ -234,6 +238,9 @@ private:
   RecentScoreImprovements recentScoreImprovements_;
   bool recentScoreImprovementsLoaded_ = false;
   std::shared_ptr<const MusicSelectRepositoryMetadata> repositoryMetadata_;
+  streak::Day assignmentDay_;
+  streak::DayId assignmentDayId_ = 0;
+  std::optional<std::vector<MusicSelectAssignmentChart>> assignmentCharts_;
   MusicSelectBarManager bars_{{}, {}, true};
   MusicSelectInputProcessor inputProcessor_{{}};
   replay::ReplayExportJob recordsExportJob_;

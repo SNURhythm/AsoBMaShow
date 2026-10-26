@@ -1,3 +1,8 @@
+#include "../rendering/ResponsiveUi.h"
+#include "../view/ProgressMotionView.h"
+#include "../view/StreakFlameView.h"
+#include "../view/AssignmentProgressView.h"
+#include "../view/ActionButtonStyle.h"
 #include "../i18n/Localization.h"
 #include "ResultScene.h"
 #include "../ir/IrSkinProvider.h"
@@ -754,13 +759,21 @@ bool ResultScene::startSelectedResultSkin() {
            }, {}, context.skinLiveResourceCounters),
        .liveResourceCounters = context.skinLiveResourceCounters,
        .captureLegacyInputGeneration = [this] {
-         return context.inputDeviceRegistry.legacyInputGeneration(
+         auto generation = context.inputDeviceRegistry.legacyInputGeneration(
              rendering::render_width, rendering::render_height);
+         if (streakOwnsInput()) {
+           const auto sequence = generation.sequence;
+           generation = {};
+           generation.sequence = sequence;
+           generation.drawableWidth = rendering::render_width;
+           generation.drawableHeight = rendering::render_height;
+         }
+         return generation;
        },
        .safetyPolicy = skin::SkinSafetyPolicy(acquisition.request->safetyLevel),
        .httpTransport = skin::createLuaSkinProductionHttpTransport(),
        .openBrowser = [this](std::string_view url) {
-         if (context.replayVideoExportActive.load(std::memory_order_acquire) ||
+         if (streakOwnsInput() || context.replayVideoExportActive.load(std::memory_order_acquire) ||
              context.rendererAccess.exportRequested() ||
              !context.inputDeviceRegistry.hasCurrentLegacyPressEdge()) return false;
          std::string error;
@@ -1918,6 +1931,7 @@ void ResultScene::retryResultPersistence() {
         refreshResultSummary();
         updateResultPersistencePresentation();
         updateIrResultPresentation(true);
+        prepareStreakProgress();
         return true;
       },
       0, true);
@@ -4290,11 +4304,12 @@ void ResultScene::buildResultView() {
   }
 
   rootLayout->applyYogaLayout();
-
-
+  prepareStreakProgress();
+  if (streakPresentation_.visible()) buildStreakProgress(false);
 }
 
 bool ResultScene::needsContinuousPresentation() const {
+  if (streakPresentation_.animating(SDL_GetTicks())) return true;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   return resultSkinSession != nullptr;
 #else
@@ -4316,6 +4331,7 @@ void ResultScene::update(float dt) {
   }
   (void)dt;
   resizeResultLayout();
+  updateStreakProgress();
   auto *local = localSource();
   if (local != nullptr) {
     updatePracticeSectionAction();
@@ -4472,6 +4488,7 @@ void ResultScene::consumeResultSkinBuiltinEvents() {
 }
 
 EventHandleResult ResultScene::handleEvents(SDL_Event &event) {
+  if (handleStreakProgressEvent(event)) return {};
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   std::optional<UiLogicalPoint> observedPointer;
   UiLogicalPoint point;
@@ -4565,11 +4582,11 @@ void ResultScene::renderScene() {
         local != nullptr && isCourseStageResult() &&
         local->courseOptions.session != nullptr &&
         local->courseOptions.session->courseReplayPlayback;
-    if (persistenceDecisionRequired() ||
+    if (streakPresentation_.active() || persistenceDecisionRequired() ||
         (courseDetailsModalRoot != nullptr && courseDetailsModalRoot->getVisible())) {
       resultSkinFadeoutStartedMillis.reset();
     } else if (!courseReplayRestOwnsTransition &&
-               elapsedMillis > resultSkinSession->sceneMillis()) {
+               elapsedMillis > streakSkinResumeMillis_ + resultSkinSession->sceneMillis()) {
       if (!resultSkinFadeoutStartedMillis) {
         resultSkinFadeoutStartedMillis = elapsedMillis;
       } else if (elapsedMillis - *resultSkinFadeoutStartedMillis >
@@ -4613,6 +4630,191 @@ void ResultScene::renderScene() {
     rankingOverlayPortal->setSize(rendering::window_width,
                                   rendering::window_height);
   }
+}
+
+void ResultScene::prepareStreakProgress() {
+  if (!streakPresentation_.unseen() || streakSnapshot_) return;
+  const auto *local = localSource();
+  if (!local || local->autoPlayResult || local->replayResult || local->practiceOptions.enabled ||
+      isCourseStageResult() || isCourseFinalResult() || local->courseOptions.savedResultBrowsing) return;
+  const auto &persistence = local->persistenceOptions;
+  if (!persistence.chartAttempt || !persistence.chartOutcome || !persistence.chartOutcome->saved()) return;
+  const auto &result = persistence.chartAttempt->result;
+  if (result.score.provenance.autoPlay || result.playedAtUnixMillis <= 0 ||
+      streak::localDay(result.playedAtUnixMillis / 1000) != streak::today()) return;
+  std::string error;
+  auto snapshot = context.scoreRepository.LoadStreak(error);
+  if (!snapshot) return;
+  streakSnapshot_ = std::move(snapshot);
+  const auto day = streakSnapshot_->days.find(streak::today());
+  if (day == streakSnapshot_->days.end() || day->second.assignments.empty()) return;
+  streakProgress_ = context.scoreRepository.TakeStreakProgress(result.attemptId);
+  if (!streakProgress_ || streakProgress_->assignments.empty()) return;
+  if (streakPresentation_.arm({.saved=true, .manual=true, .currentDay=true, .activeRoutine=true}, SDL_GetTicks())) {
+    if (viewportLayout) viewportLayout->cancelPointerInput();
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    resultSkinMouseCapture.reset();
+    resultSkinTouchCaptures.clear();
+    resultSkinFadeoutStartedMillis.reset();
+#endif
+    ui::invalidate();
+  }
+}
+
+void ResultScene::buildStreakProgress(bool animate) {
+  if (!viewportLayout || !streakSnapshot_ || !streakPresentation_.visible()) return;
+  const auto found = streakSnapshot_->days.find(streak::today());
+  if (found == streakSnapshot_->days.end()) { dismissStreakProgress(); return; }
+  const auto &day = found->second;
+  const bool complete = day.points >= day.config.dailyGoal;
+  const float unit = streak::resultOverlayMetrics(1, 1, rendering::displayPixelScale,
+      rendering::ui_scale_x, 0, 0, 0, 0).unit;
+  streakOverlayUnit_ = unit;
+  streakLayoutSignature_ = {};
+  auto text = [unit](View *parent, const std::string &value, int size) {
+    auto *label = new TextView(app_theme::font, static_cast<int>(std::lround(size * unit)));
+    label->setText(value);
+    label->setWrap(true);
+    label->setMinHeight((size + 12) * unit)->setFlexShrink(0);
+    label->setThemedColor(app_theme::textPrimary);
+    parent->addView(label);
+    return label;
+  };
+  if (streakOverlay_) {
+    streakOverlay_->cancelPointerInput();
+    streakOverlay_->clearChildren();
+  } else {
+    streakOverlay_ = new BlockingOverlayView();
+    streakOverlay_->setName("streakResultProgress");
+    streakOverlay_->setPositionType(YGPositionTypeAbsolute);
+    streakOverlay_->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0)->setZIndex(2400);
+    streakOverlay_->setBackgroundColor(Color(0, 0, 0, 100));
+    viewportLayout->addView(streakOverlay_);
+  }
+  streakPanel_ = new View();
+  streakPanel_->setPositionType(YGPositionTypeAbsolute);
+  streakPanel_->setFlexDirection(FlexDirection::Column)->setGap(14 * unit)->setPadding(Edge::All, 24 * unit)
+      ->setCornerRadius(28 * unit)->setThemedBackgroundColor(app_theme::panel);
+  streakOverlay_->addView(streakPanel_);
+  streakScroll_ = new ScrollView();
+  streakScroll_->setFlex(1)->setMinHeight(0);
+  streakPanel_->addView(streakScroll_);
+  auto *body = new View();
+  body->setFlexDirection(FlexDirection::Column)->setGap(12 * unit)->setPadding(Edge::Bottom, 8 * unit);
+  streakScroll_->setContentView(body);
+  body->addView((new StreakFlameView(day.played, complete, false,
+      streakProgress_ && streakProgress_->reachedDailyGoal
+          ? std::optional<std::uint64_t>(streakProgressStartedAt_) : std::nullopt))->setHeight(108 * unit));
+  text(body, i18n::tr(complete ? "streak.ui.complete" : "streak.ui.saved_progress"), 28);
+  text(body, i18n::format("streak.ui.streak_count", {{"count", std::to_string(streakSnapshot_->currentStreak)}}), 36);
+  if (complete)
+    text(body, i18n::plural("streak.ui.points_earned_today", day.points).resolve(), 26);
+  else {
+    text(body, std::to_string(day.points) + " / " + std::to_string(day.config.dailyGoal), 30);
+    text(body, i18n::plural("streak.ui.remaining_points", day.config.dailyGoal - day.points).resolve(), 18);
+  }
+  body->addView((new ProgressMotionView(float(day.points) / day.config.dailyGoal, complete, !animate))->setHeight(18 * unit));
+  text(body, i18n::tr(complete ? "streak.ui.complete_help" : "streak.ui.protected"), 18);
+  for (const auto &progress : day.assignments) {
+    const auto change = streak::progressChange(streakProgress_, progress);
+    if (complete && !change) continue;
+    auto *row = new View();
+    row->setFlexDirection(FlexDirection::Column)->setGap(8 * unit)->setPadding(Edge::All, 14 * unit)
+        ->setCornerRadius(18 * unit)->setFlexShrink(0)->setThemedBackgroundColor(app_theme::panelSubtle);
+    body->addView(row);
+    text(row, progress.requirement.name, 21);
+    row->addView(new AssignmentProgressView(progress, change, streakProgressStartedAt_, unit));
+  }
+  auto *dismiss = new Button();
+  dismiss->setHeight(54 * unit)->setFlexShrink(0);
+  auto *caption = new TextView(app_theme::font, static_cast<int>(std::lround(22 * unit)));
+  caption->setText(i18n::tr(complete ? "streak.ui.done" : "streak.ui.dismiss"));
+  caption->setAlign(TextView::CENTER); caption->setVAlign(TextView::MIDDLE);
+  dismiss->setContentView(caption);
+  action_button::applyStyle(dismiss, caption, app_theme::ActionCategory::Confirmation);
+  dismiss->setCornerRadius(16 * unit);
+  dismiss->setOnClickListener([this] { dismissStreakProgress(); });
+  streakPanel_->addView(dismiss);
+}
+
+void ResultScene::updateStreakProgress() {
+  if (streakPresentation_.open(SDL_GetTicks())) {
+    streakProgressStartedAt_ = SDL_GetTicks();
+    if (streakProgress_) streakRoundCue_.start(*streakProgress_, streakProgressStartedAt_);
+    buildStreakProgress(true);
+    if (streakSnapshot_ && streakPresentation_.visible()) {
+      streakSounds_.play(context.jukebox.audioRuntime(), streakProgress_ && streakProgress_->reachedDailyGoal
+          ? streak::Sound::Complete : streak::Sound::Progress);
+    }
+  }
+  if (!streakPresentation_.visible() || !streakOverlay_ || !streakPanel_) return;
+  if (streakRoundCue_.consume(SDL_GetTicks()))
+    streakSounds_.play(context.jukebox.audioRuntime(), streak::Sound::RoundAdvance);
+  const auto safe = rendering::uiSafeAreaInsets();
+  const auto metrics = streak::resultOverlayMetrics(rendering::window_width, rendering::window_height,
+      rendering::displayPixelScale, rendering::ui_scale_x, safe.top, safe.right, safe.bottom, safe.left);
+  if (std::abs(streakOverlayUnit_ - metrics.unit) > .001F) buildStreakProgress(false);
+  const float fraction = streakPresentation_.fraction(SDL_GetTicks());
+  const int left = static_cast<int>(metrics.left +
+      (rendering::window_width - metrics.left) * (1 - fraction));
+  const std::array<int, 4> signature{left, static_cast<int>(metrics.top),
+      static_cast<int>(metrics.width), static_cast<int>(metrics.height)};
+  if (signature == streakLayoutSignature_) return;
+  streakLayoutSignature_ = signature;
+  streakOverlay_->setSize(rendering::window_width, rendering::window_height);
+  streakPanel_->setSize(signature[2], signature[3]);
+  streakPanel_->setPosition(Edge::Left, left);
+  streakPanel_->setPosition(Edge::Top, metrics.top);
+  viewportLayout->applyYogaLayout();
+  streakScroll_->refreshContentLayout();
+}
+
+void ResultScene::dismissStreakProgress(bool swallowRelease) {
+  streakPresentation_.dismiss();
+  streakInputBlockedThroughFrame_ = context.currentFrame;
+  streakDismissGesture_ = swallowRelease;
+  if (streakOverlay_) { streakOverlay_->cancelPointerInput(); streakOverlay_->setVisible(false); }
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+  streakSkinResumeMillis_ = std::max(0LL, (nowMicros() - resultSkinStartedMicros) / 1000LL);
+  resultSkinFadeoutStartedMillis.reset();
+#endif
+  ui::invalidate();
+}
+
+bool ResultScene::streakOwnsInput() const {
+  return streakPresentation_.active() || streakDismissGesture_ ||
+      (streakInputBlockedThroughFrame_ && context.currentFrame <= *streakInputBlockedThroughFrame_);
+}
+
+bool ResultScene::handleStreakProgressEvent(SDL_Event &event) {
+  if (streakDismissGesture_) {
+    if (event.type == SDL_EVENT_MOUSE_BUTTON_UP || event.type == SDL_EVENT_FINGER_UP ||
+        event.type == SDL_EVENT_FINGER_CANCELED || event.type == SDL_EVENT_KEY_UP)
+      streakDismissGesture_ = false;
+    return true;
+  }
+  if (!streakPresentation_.active()) return false;
+  if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) {
+    dismissStreakProgress(true);
+    return true;
+  }
+  UiLogicalPoint point;
+  bool pointerDown = false;
+  if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN && event.button.which != SDL_TOUCH_MOUSEID) {
+    rendering::screenToUi(event.button.x * rendering::widthScale, event.button.y * rendering::heightScale, point.x, point.y);
+    pointerDown = true;
+  } else if (event.type == SDL_EVENT_FINGER_DOWN && event.tfinger.touchID != SDL_MOUSE_TOUCHID) {
+    rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, point.x, point.y);
+    pointerDown = true;
+  }
+  if (pointerDown && (!streakPanel_ || point.x < streakPanel_->getX() ||
+      point.x > streakPanel_->getX() + streakPanel_->getWidth() || point.y < streakPanel_->getY() ||
+      point.y > streakPanel_->getY() + streakPanel_->getHeight())) {
+    dismissStreakProgress(true);
+  } else if (streakOverlay_) {
+    streakOverlay_->handleEvents(event);
+  }
+  return true;
 }
 
 void ResultScene::resizeResultLayout() {
@@ -4666,6 +4868,11 @@ void ResultScene::cleanupScene() {
   resultSkinPendingRankingPosition.reset();
   resultSkinRankingRefreshPending = false;
   resultSkinSubmissionTimers = {};
+  streakOverlay_ = nullptr;
+  streakPanel_ = nullptr;
+  streakScroll_ = nullptr;
+  streakLayoutSignature_ = {};
+  streakOverlayUnit_ = 0;
   rootLayout = nullptr;
   viewportLayout = nullptr;
   resultScroll = nullptr;

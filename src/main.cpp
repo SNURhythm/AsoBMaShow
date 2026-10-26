@@ -22,6 +22,9 @@
 #include <algorithm>
 
 #include <SDL3/SDL.h>
+#if TARGET_OS_IPHONE
+#define SDL_MAIN_HANDLED
+#endif
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_video.h>
 #if __APPLE__
@@ -53,6 +56,7 @@
 #include "rendering/BlurPass.h"
 #include "rendering/UniformCache.h"
 #include "context.h"
+#include "notifications/ReminderCoordinator.h"
 #include "audio/AudioWrapper.h"
 #include "video/SDLDisplayBackend.h"
 #include "video/IdlePresentationPacing.h"
@@ -336,6 +340,7 @@ void rendering::updateUIScale(int renderW, int renderH) {
   render_height = renderH;
   window_width = renderW < renderH ? design_height : design_width;
   const float displayScale = s_window ? platform::sdlMain<SDL_GetWindowDisplayScale>(s_window) : 1.0f;
+  displayPixelScale = displayScale > 0 ? displayScale : 1.0F;
   compactMenuCanvasActive = usesCompactMenuCanvas(renderW, renderH, displayScale,
                                                 responsiveMenuSceneActive);
   const int logicalWidth = displayScale > 0 ? static_cast<int>(std::lround(renderW / displayScale)) : renderW;
@@ -513,7 +518,11 @@ static int runApplication(const bgfx::Init &bgfxInit) {
   return EXIT_FAILURE;
 }
 
+#if TARGET_OS_IPHONE
+int AsoBMaShowMain(int argv, char **args) {
+#else
 int main(int argv, char **args) {
+#endif
   // Set working directory to executable's directory
   std::filesystem::path exePath;
 #ifdef _WIN32
@@ -1060,6 +1069,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   auto isAppForegroundEvent = [](const SDL_Event &event) {
     return input::isForegroundLifecycleEvent(event);
   };
+  reminders::Coordinator reminderCoordinator;
   auto setAppBackground = [&](bool background) {
     context.uiBatchRenderer.invalidateFrame();
     if (background && context.displaySettingsManager) {
@@ -1075,6 +1085,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (previous == background) {
       return;
     }
+    reminderCoordinator.update(context, true);
 #if TARGET_OS_ANDROID
     // The miniaudio device is independent of SDL's paused audio devices.
     const bool gameplayContinues = sceneManager.currentScene != nullptr &&
@@ -1101,6 +1112,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   bool androidResumeResizePending = false;
 #endif
   while (!context.quitFlag) {
+    if (!context.appInBackground.load(std::memory_order_acquire))
+      reminderCoordinator.update(context);
     storage_management::PollStorageTask(context);
     bool ranApplicationWork = false;
 #if TARGET_OS_IPHONE

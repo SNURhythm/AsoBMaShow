@@ -1,4 +1,5 @@
 #include "music_select/MusicSelectRepositoryProjection.h"
+#include "music_select/MusicSelectAssignmentFolders.h"
 
 #include "music_select_runtime_ledger_assertions.h"
 
@@ -765,9 +766,114 @@ void testSingleSongProjectionDoesNotAggregateOrVisitOtherRows() {
           "page projection constructs exactly one fully functional SongBar");
 }
 
+void testAssignmentFoldersShowOnlyContributingCharts() {
+  streak::Day day;
+  streak::Assignment a{.id="one", .name="First", .levels={{"table", "0", ""}},
+                       .eligibleLamp=200, .targetLamp=400};
+  day.assignments.push_back({.requirement=a});
+  a.id = "two"; a.name = "Second";
+  day.assignments.push_back({.requirement=a});
+  auto root = musicSelectAssignmentsRoot("Assignments");
+  require(musicSelectIsAssignmentDirectory(root) && !root.childrenLoaded,
+          "assignment root is a lazy virtual directory");
+  std::vector<MusicSelectAssignmentChart> sources{
+      {chart("/a", "a", "Alpha", "", "/"), {{"table", "0", ""}}},
+      {chart("/b", "b", "Beta", "", "/"), {{"table", "0", ""}}},
+      {chart("/c", "c", "Sticky", "", "/"), {}},
+      {chart("/d", "d", "Wrong level", "", "/"), {{"other", "0", ""}}},
+      {chart("/e", "e", "Missing", "", "/"), {{"table", "0", ""}}}};
+  sources.back().record.unavailable = true;
+  sources.push_back(sources.front()); // Overlapping tables must not duplicate songs.
+  day.assignments[0].usedCharts.insert("a");
+  day.assignments[0].chartProgress["c"] = {};
+  MusicSelectRepositoryProjectionInput input{
+      .clearFor=[](const bms_parser::ChartMeta &meta, int mode) {
+        return meta.SHA256 == "c" ? 400 : mode == 2 ? 200 : 300;
+      }, .selectedLongNoteMode=2};
+  auto rows = musicSelectAssignmentChildren(day, root, sources, input);
+  require(rows.size() == 5, "root contains two assignment folders and three unique eligible songs");
+  if (rows.size() < 2) return;
+  const auto first = rows[0], second = rows[1];
+  require(first.title == "First" && second.title == "Second" && first.id != second.id,
+          "assignment folders preserve names and independent stable identities");
+  auto children = musicSelectAssignmentChildren(day, first, sources, input);
+  require(children.size() == 2 && children[0].chart->meta.SHA256 == "b" &&
+              children[1].chart->meta.SHA256 == "c",
+          "counted chart is hidden while sticky eligibility survives removed level and improved lamp");
+  children = musicSelectAssignmentChildren(day, second, sources, input);
+  require(children.size() == 2, "a chart counted for one assignment can contribute to another");
+  day.assignments[0].requirement.eligibleScoreRank = 18;
+  input.scoreFor = [](const bms_parser::ChartMeta &meta, int mode) -> std::optional<ScoreBestSnapshot> {
+    return ScoreBestSnapshot{.score=meta.SHA256 == "b" && mode == 2 ? 21 : 18, .maxScore=27};
+  };
+  children = musicSelectAssignmentChildren(day, first, sources, input);
+  require(children.size() == 1 && children[0].chart->meta.SHA256 == "c",
+          "previous-score filter excludes higher grades but retains sticky eligibility");
+  day.assignments[0].requirement.chartCount = 2;
+  require(musicSelectAssignmentNeedsAdjustment(day, day.assignments[0], sources, input),
+          "score eligibility shortages enable today's adjustment");
+  day.assignments[0].requirement.eligibleScoreRank = 21;
+  day.assignments[0].requirement.eligibleScoreOrBelow = true;
+  require(musicSelectAssignmentChildren(day, first, sources, input).size() == 2,
+          "previous-score or-below includes qualifying best records");
+  day.assignments[0].requirement.eligibleScoreRank = -2;
+  auto &progress = day.assignments[0];
+  progress.requirement.chartCount = 3;
+  progress.charts = 1;
+  require(!musicSelectAssignmentNeedsAdjustment(day, progress, sources, input),
+          "exactly enough remaining charts keeps normal next-day editing");
+  progress.requirement.chartCount = 4;
+  require(musicSelectAssignmentNeedsAdjustment(day, progress, sources, input),
+          "shortage ignores duplicate, used, missing and wrong-level charts but counts sticky charts");
+  progress.requirement.chartCount = 3;
+  sources[1].record.solidArchive = true;
+  require(musicSelectAssignmentNeedsAdjustment(day, progress, sources, input),
+          "unplayable archive charts cannot make today's quota achievable");
+  sources[1].record.solidArchive = false;
+  require(!musicSelectAssignmentNeedsAdjustment(day, progress, sources, input),
+          "restored chart availability removes the immediate-edit exception");
+  day.points = day.config.dailyGoal;
+  progress.requirement.chartCount = 1; progress.charts = 0;
+  require(!musicSelectAssignmentNeedsAdjustment(day, progress, sources, input),
+          "ordinary bonus rounds use the active one-chart quota");
+  progress.requirement.chartCount = progress.bonusChartCount = 2;
+  sources[1].record.solidArchive = true;
+  require(musicSelectAssignmentNeedsAdjustment(day, progress, sources, input),
+          "reset challenge needs two distinct playable charts");
+  progress.charts = 1;
+  require(!musicSelectAssignmentNeedsAdjustment(day, progress, sources, input),
+          "one partial reset chart reduces the remaining quota to one");
+  sources[1].record.solidArchive = false;
+  auto noCharts = std::vector<MusicSelectAssignmentChart>{};
+  require(musicSelectAssignmentNeedsAdjustment(day, progress, noCharts, input),
+          "empty bonus pool permits adjustment while bonus remains");
+  day.points = 0;
+  input.selectedLongNoteMode = 3;
+  children = musicSelectAssignmentChildren(day, root, sources, input);
+  require(children.size() == 3, "LN-mode eligibility changes without removing sticky charts");
+  day.points = day.config.dailyGoal;
+  day.assignments[0].bonusRounds = streak::sharedDailyBonusLimit;
+  require(musicSelectAssignmentChildren(day, root, sources, input).size() == 2,
+          "exhausted shared bonus budget keeps folders but no contributing charts");
+  require(!musicSelectAssignmentNeedsAdjustment(day, progress, noCharts, input),
+          "exhausted bonus budget does not enable adjustment");
+  require(musicSelectAssignmentChildren(day, first, sources, input).empty(),
+          "exhausted assignment folder is empty");
+  day.points = 0; day.assignments[0].bonusRounds = 0;
+  for (auto &progress : day.assignments) {
+    progress.usedCharts.clear(); progress.chartProgress.clear();
+  }
+  require(musicSelectAssignmentChildren(day, root, sources, input).size() == 2,
+          "new-day state no longer preserves yesterday's sticky eligibility");
+  input.selectedLongNoteMode = 2;
+  require(musicSelectAssignmentChildren(day, first, sources, input).size() == 2,
+          "newly matching eligibility makes previously excluded charts available");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
+  testAssignmentFoldersShowOnlyContributingCharts();
   testLazyPhysicalProjectionDoesNotVisitDescendantSongs();
   testSingleSongProjectionDoesNotAggregateOrVisitOtherRows();
   testSongAndFolderLampsUseBestClearWithoutRewritingBestExAttempt();

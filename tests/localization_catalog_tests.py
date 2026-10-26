@@ -110,9 +110,13 @@ class LocalizationCatalogTests(unittest.TestCase):
                 value = literal[1:-1]
                 if value in self.catalog:
                     referenced.add(value)
-            for match in re.finditer(r"(?:i18n::(?:tr|format|message)|nativeArchiveImportText)\(\s*(" + LITERAL + ")", source):
+            for match in re.finditer(r"(?:i18n::(?:tr|format|message|plural)|nativeArchiveImportText)\(\s*(" + LITERAL + ")", source):
                 key = json.loads(match[1])
                 self.assertTrue(key in self.catalog, f"{path}: unknown message ID {key!r}")
+            for match in re.finditer(r"i18n::plural\(\s*(" + LITERAL + ")", source):
+                key = json.loads(match[1]) + ".one"
+                self.assertIn(key, self.catalog, f"{path}: missing singular form {key!r}")
+                referenced.add(key)
         self.assertEqual(set(self.catalog) - referenced, set())
 
 if __name__ == "__main__":

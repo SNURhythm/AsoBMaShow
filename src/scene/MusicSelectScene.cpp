@@ -7,6 +7,7 @@
 #include "../platform/SDLApplicationRuntime.h"
 #include "../i18n/Localization.h"
 #include "MusicSelectScene.h"
+#include "StreakScene.h"
 #include "../music_select/MusicSelectPhysicalDirectory.h"
 #include "MusicSelectDirectoryRestore.h"
 #include "MusicSelectRecords.h"
@@ -646,8 +647,10 @@ void MusicSelectScene::onResume() {
   }
 #endif
   syncToolbar();
-  reloadLibrary();
+  const auto assignment = std::exchange(pendingStreakAssignment_, {});
+  reloadLibrary(assignment.empty());
   if (!failed_) {
+    if (!assignment.empty()) openStreakAssignment(assignment);
     // Resume the looping select BGM after pause silenced it.
     if (!background) configureSoundServices();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -744,8 +747,22 @@ void MusicSelectScene::reloadLibrary(bool preserveDirectory) {
       MusicSelectRepositoryProjection::loadMetadata(
           *chartSession_,
           long_note_mode::valueFromId(context.settings.selectedLnMode)));
-  bars_.refresh(MusicSelectRepositoryProjection{}.projectRoot(
-      *repositoryMetadata_, searchHistory_.entries(), libraryRevision_));
+  auto projection = MusicSelectRepositoryProjection{}.projectRoot(
+      *repositoryMetadata_, searchHistory_.entries(), libraryRevision_);
+  assignmentDayId_ = streak::today();
+  assignmentDay_ = {};
+  assignmentCharts_.reset();
+  std::string streakError;
+  if (const auto state = context.scoreRepository.LoadStreak(streakError)) {
+    const auto day = state->days.find(assignmentDayId_);
+    if (day != state->days.end()) assignmentDay_ = day->second;
+    auto assignments = musicSelectAssignmentsRoot(i18n::tr("streak.ui.assignment_folder"));
+    projection.root.push_back(assignments.id);
+    projection.bars.push_back(std::move(assignments));
+  } else {
+    SDL_Log("Unable to load assignment folders: %s", streakError.c_str());
+  }
+  bars_.refresh(std::move(projection));
   bars_.configure({.modeFilter = context.settings.skinModeFilterName,
                    .difficultyFilter =
                        context.settings.skinDifficultyFilterName,
@@ -1827,6 +1844,14 @@ bool MusicSelectScene::loadDirectoryChildren(
     break;
   }
   case skin::MusicSelectBarKind::Container: {
+    if (musicSelectIsAssignmentDirectory(directory)) {
+      if (!assignmentCharts_)
+        assignmentCharts_ = loadMusicSelectAssignmentCharts(
+            *chartSession_, *repositoryMetadata_, assignmentDay_, selectedLongNoteMode);
+      children = musicSelectAssignmentChildren(
+          assignmentDay_, directory, *assignmentCharts_, inputFor({}));
+      break;
+    }
     const bool lamp = directory.id.value == "container:lamp-update";
     for (int day = 0; day < 30; ++day) {
       const std::string title =
@@ -3318,7 +3343,8 @@ void MusicSelectScene::refreshRepositoryRevisions() {
     rankingCache_.clear();
   }
   if (context.chartRepository.GetLibraryRevision() != libraryRevision_ ||
-      context.scoreRepository.GetRevision() != scoreRevision_) {
+      context.scoreRepository.GetRevision() != scoreRevision_ ||
+      streak::today() != assignmentDayId_) {
     reloadLibrary();
     selectedBarMoved();
   } else if (rankingChanged && rankingRequest_) {
@@ -3329,6 +3355,14 @@ void MusicSelectScene::refreshRepositoryRevisions() {
 }
 
 void MusicSelectScene::update(float) {
+  if (!context.pendingComboNotificationProfile.empty() &&
+      toolbarControlAvailable(MusicSelectToolbarControl::Streak)) {
+    const auto profile = std::exchange(context.pendingComboNotificationProfile, {});
+    if (profile == context.profileManager.activeProfile().id) {
+      defer([this] { openStreak(); return false; }, 0, true);
+      return;
+    }
+  }
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   if (presentationSkinRefreshPending &&
       (!context.gameplaySkinLifecycle || context.gameplaySkinLifecycle->presentationReady())) {
@@ -3861,6 +3895,7 @@ bool MusicSelectScene::toolbarControlAvailable(MusicSelectToolbarControl control
   case MusicSelectToolbarControl::PlayOptions:
     return modalLayer_ != nullptr;
   case MusicSelectToolbarControl::MusicPlayer:
+  case MusicSelectToolbarControl::Streak:
   case MusicSelectToolbarControl::IrUploads:
   case MusicSelectToolbarControl::Settings:
     return context.sceneManager != nullptr;
@@ -3875,7 +3910,7 @@ void MusicSelectScene::refreshToolbarAvailability() {
   for (const auto control : {Control::ChartMenu, Control::MoreMenu,
        Control::ChartViewer, Control::ChartRecords, Control::Rankings, Control::RevealChart,
        Control::MusicPlayer, Control::Tasks, Control::PlayOptions,
-       Control::IrUploads, Control::Settings}) {
+       Control::IrUploads, Control::Streak, Control::Settings}) {
     toolbar_->setControlEnabled(control, toolbarControlAvailable(control));
   }
 }
@@ -4258,6 +4293,30 @@ void MusicSelectScene::openPlayOptions() {
   playOptionsModal_->show();
 }
 
+void MusicSelectScene::openStreakAssignment(const std::string &id) {
+  bars_.configure({.modeFilter="ALL", .difficultyFilter="ALL", .sortId=context.settings.skinSortId});
+  const auto root = musicSelectAssignmentsRoot(i18n::tr("streak.ui.assignment_folder"));
+  if (bars_.select(root.id) && openDirectory(root)) {
+    const auto children = bars_.childrenOf(root.id);
+    const auto found = std::find_if(children.begin(), children.end(), [&](const auto &bar) {
+      return bar.id.value == "container:assignment:" + id;
+    });
+    if (found != children.end() && bars_.select(found->id)) (void)openDirectory(*found);
+  }
+  syncResolvedFilters();
+}
+
+void MusicSelectScene::openStreak() {
+  if (!toolbarControlAvailable(MusicSelectToolbarControl::Streak)) return;
+  context.sceneManager->changeScene(std::make_unique<StreakScene>(
+      context, SceneReturnTarget::Retained(
+          this, [this] { reactivateSkinOnResume_ = true; }),
+      [this](const std::string &id) {
+        pendingStreakAssignment_ = id;
+        (void)returnToScene(*context.sceneManager, SceneReturnTarget::Retained(this));
+      }), true);
+}
+
 void MusicSelectScene::openIrUploads() {
   context.sceneManager->changeScene(std::make_unique<IrUploadsScene>(
       context,
@@ -4302,6 +4361,7 @@ void MusicSelectScene::syncToolbar() {
        .openTasks = [this] { openTasks(); },
        .openPlayOptions = [this] { openPlayOptions(); },
        .openIrUploads = [this] { openIrUploads(); },
+       .openStreak = [this] { openStreak(); },
        .openSettings = [this] { openSettings(); },
        .persist = [this](MusicSelectToolbarState updated) {
          persistToolbar(updated);

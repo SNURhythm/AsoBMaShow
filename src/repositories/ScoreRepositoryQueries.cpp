@@ -1,4 +1,6 @@
 #include "ScoreRepository.h"
+#include "../streak/StreakStore.h"
+#include <random>
 #include "ScoreRepositoryInternal.h"
 
 #include "../BmsMetadataText.h"
@@ -1052,12 +1054,86 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
   }
   sqlite3 *db = impl_->sessionDatabase;
 
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE", transactionError);
+  if (!transaction.active())
+    return {.status = ProjectionStatus::StorageFailure, .diagnostic = transactionError};
+
   const score_repository_detail::ScoreWriteOutcome inserted =
       score_repository_detail::InsertScoreWriteOnConnection(
           db, pending.score, pending.attemptId, pending.createdAt,
           *provenanceJson,
           {.averageJudgeMicros = pending.averageJudgeMicros});
   if (inserted.status == score_repository_detail::ScoreWriteStatus::Inserted) {
+    streak::PlayProgress streakProgress;
+    try {
+      const auto &score = pending.score;
+      // Bound eligibility to history before this attempt, including timestamp
+      // ordering when a pending result is recovered after a later play.
+      const auto previousClear = score_cache_queries::detail::fullComboClearRankExpr("s", {}, true);
+      const std::string previousMode = "modes.ln_mode";
+      const auto previousOrder = score_cache_queries::detail::bestScoreOrderKey("s", previousClear, "id");
+      const std::string previousQuery =
+          "WITH history AS (SELECT " + previousMode + " AS ln_mode, " + previousClear +
+          " AS lamp, s.score, s.max_score, ROW_NUMBER() OVER (PARTITION BY " + previousMode +
+          " ORDER BY " + score_cache_queries::detail::bestScoreOrderBySql(previousOrder) +
+          ") AS best FROM scores s JOIN " + score_cache_queries::detail::playableLongNoteModesSql() +
+          " modes ON s.ln_mode=-1 OR s.ln_mode=modes.ln_mode WHERE " + scoreChartMatchPredicate() +
+          " AND (s.created_at,s.id)<(SELECT created_at,id FROM scores WHERE attempt_id=?) "
+          "AND " + score_cache_queries::detail::scoreParticipatesInBestExpr("s") +
+          ") SELECT ln_mode, MAX(lamp), 0, MAX(CASE WHEN best=1 THEN score END), "
+          "MAX(CASE WHEN best=1 THEN max_score END) FROM history GROUP BY ln_mode "
+          "UNION ALL SELECT n.ln_mode, " +
+          score_cache_queries::detail::fullComboClearRankExpr("n", {}, true) +
+          ", 1, 0, 0 FROM scores n WHERE n.attempt_id=?";
+      SqliteStatementHandle previous;
+      if (prepareSqliteStatement(db, previousQuery, previous) != SQLITE_OK)
+        throw std::runtime_error("Could not read the previous chart record for streak progress.");
+      int previousIndex = bindScoreChartMatch(previous, 1,
+          {.chartPath = score.chartPath, .sha256 = normalizedHash(score.chartSha256),
+           .md5 = normalizedHash(score.chartMd5)});
+      if (!bindSqliteText(previous, previousIndex++, pending.attemptId) ||
+          !bindSqliteText(previous, previousIndex, pending.attemptId))
+        throw std::runtime_error("Could not read the previous chart record for streak progress.");
+      ScoreRankByLongNoteMode previousRanks;
+      ScoreBestByLongNoteMode previousScores;
+      int effectiveLamp = -1;
+      bool foundCurrent = false;
+      int result;
+      while ((result = sqlite3_step(previous)) == SQLITE_ROW) {
+        if (sqlite3_column_int(previous, 2) != 0) {
+          effectiveLamp = sqlite3_column_int(previous, 1);
+          foundCurrent = true;
+        } else {
+          const int mode = long_note_mode::normalizeValue(sqlite3_column_int(previous, 0));
+          auto &rank = previousRanks.ranks[static_cast<std::size_t>(mode)];
+          rank = std::max(rank, sqlite3_column_int(previous, 1));
+          previousScores.snapshots[static_cast<std::size_t>(mode)] = ScoreBestSnapshot{
+              .score=sqlite3_column_int(previous, 3), .maxScore=sqlite3_column_int(previous, 4)};
+        }
+      }
+      if (result != SQLITE_DONE || !foundCurrent)
+        throw std::runtime_error("Could not read the previous chart record for streak progress.");
+      // Match the selector: an explicit mode record wins even when its lamp
+      // is worse; absent CN/HCN records fall back to classic LN, then unknown.
+      const int previousLamp = previousRanks.bestRankForMode(score.longNoteMode);
+      const auto previousScore = previousScores.bestForMode(score.longNoteMode);
+      static thread_local std::mt19937 random(std::random_device{}());
+      streak::recordSavedPlay(db, impl_->chartDatabasePath,
+          {.chart = score.chartSha256, .previousLamp = previousLamp,
+           .previousScore = previousScore ? previousScore->score : 0,
+           .previousMaxScore = previousScore ? previousScore->maxScore : 0,
+           .lamp = effectiveLamp, .score = score.score, .maxScore = score.maxScore,
+           .manual = !score.provenance.autoPlay && !score.provenance.practice},
+          score.chartMd5, pending.createdAt, random(), &streakProgress);
+      streakProgress.attemptId = pending.attemptId;
+    } catch (const std::exception &error) {
+      return {.status = ProjectionStatus::StorageFailure, .diagnostic = error.what()};
+    }
+    if (!transaction.commit(transactionError))
+      return {.status = ProjectionStatus::StorageFailure, .diagnostic = transactionError};
+    impl_->streakProgress.reset();
+    if (!streakProgress.assignments.empty()) impl_->streakProgress = std::move(streakProgress);
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);
     return {.status = ProjectionStatus::Inserted};
   }

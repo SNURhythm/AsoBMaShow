@@ -59,6 +59,7 @@ void testEveryModeAndAuthoredPositionRoundTrips() {
                           MusicSelectToolbarMode::Collapsed,
                           MusicSelectToolbarMode::Hidden}) {
     ApplicationUiState expected;
+    expected.reminders = {.daily = true, .comeback = true, .hour = 7, .minute = 35};
     expected.musicSelectToolbar = {
         .mode = mode, .x = -37.25F, .y = 812.5F, .hasPosition = true};
     std::string diagnostic;
@@ -222,9 +223,41 @@ void testTutorialCompletionSurvivesRestart() {
   expect(!loaded.state.newcomerTutorialCompleted && loaded.state.language == "ko",
          "invalid completion does not hide the tutorial or reset language");
 }
+void testReminderPreferencesFailClosed() {
+  TempDirectory temp;
+  const auto path = applicationUiStatePath(temp.path());
+  ApplicationUiState state;
+  state.language = "ko";
+  state.reminders = {.daily = true, .comeback = true, .hour = 23, .minute = 59};
+  std::string error;
+  expect(ApplicationUiStateStore::SaveAtomic(path, state, error), "save opted-in reminders");
+  nlohmann::json document;
+  { std::ifstream input(path); input >> document; }
+  const auto valid = document["reminders"];
+  for (const auto bad : {nlohmann::json("on"), nlohmann::json{{"daily", true}},
+                        nlohmann::json{{"daily", true}, {"comeback", true}, {"hour", 24}, {"minute", 0}},
+                        nlohmann::json{{"daily", true}, {"comeback", true}, {"hour", 20}, {"minute", -1}},
+                        nlohmann::json{{"daily", "false"}, {"comeback", true}, {"hour", 20}, {"minute", 0}}}) {
+    document["reminders"] = bad;
+    { std::ofstream output(path); output << document; }
+    const auto loaded = ApplicationUiStateStore::Load(path);
+    expect(loaded.state.reminders == reminders::Preferences{} && loaded.state.language == "ko",
+           "invalid reminder preferences disable notifications without losing other state");
+  }
+  document.erase("reminders");
+  { std::ofstream output(path); output << document; }
+  expect(ApplicationUiStateStore::Load(path).state.reminders == reminders::Preferences{},
+         "upgrades never opt users into notifications");
+  document["reminders"] = valid;
+  { std::ofstream output(path); output << document; }
+  state.reminders.minute = 60;
+  expect(!ApplicationUiStateStore::SaveAtomic(path, state, error), "invalid time cannot overwrite preferences");
+  expect(ApplicationUiStateStore::Load(path).state.reminders.minute == 59, "previous saved time is retained");
+}
 } // namespace
 
 int main() {
+  testReminderPreferencesFailClosed();
   testMissingUsesDeclaredDefault();
   testEveryModeAndAuthoredPositionRoundTrips();
   testPathIsDeviceScoped();

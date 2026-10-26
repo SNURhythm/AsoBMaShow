@@ -61,6 +61,7 @@ struct ChartMetaQuery {
   std::string keyword;
   int tableId = 0;
   std::string tableLevel;
+  bool exactTableLevel = false; // Also filter when the level name is empty.
   bool coursesOnly = false;
   bool solidArchivesOnly = false;
   int courseId = 0;
@@ -88,6 +89,8 @@ struct ChartMetaQuery {
       ChartRecordSortDirection::Descending;
   int selectedLongNoteMode = 1;
   bool favoritesOnly = false;
+  // An engaged empty list matches no charts; absent means unrestricted.
+  std::optional<std::vector<std::string>> allowedSha256;
   int limit = 0;
   int offset = 0;
 

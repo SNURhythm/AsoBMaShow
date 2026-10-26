@@ -39,6 +39,7 @@
 #include "../audio/DecodedAssetCache.h"
 #include "../video/VideoPlayer.h"
 #include "MainMenuLibrary.h"
+#include "../music_select/MusicSelectAssignmentFolders.h"
 #include "MainMenuPlayOptionsModal.h"
 #include "MainMenuProfileSelections.h"
 #include "ReplayRecordsModal.h"
@@ -67,6 +68,7 @@ class DecideLoadingOverlay;
 class MainMenuPreviewController;
 class MusicPlayerScene;
 class IrUploadsScene;
+class StreakScene;
 class PlayOptionsPanelView;
 class NewcomerTutorialView;
 class ScrollView;
@@ -103,11 +105,12 @@ public:
   void cleanupScene() override;
 
 private:
-  enum class Tab { Play, Course, Music, Ir };
+  enum class Tab { Play, Course, Music, Ir, Streak };
   Tab activeTab_ = Tab::Play;
   Tab selectorTab_ = Tab::Play;
   std::unique_ptr<MusicPlayerScene> musicTab_;
   std::unique_ptr<IrUploadsScene> irTab_;
+  std::unique_ptr<StreakScene> streakTab_;
   bool restoringTabSelection_ = false;
   std::optional<Tab> pendingTab_;
   std::future<void> tabPreviewStop_;
@@ -115,6 +118,7 @@ private:
   bool selectorTabActive() const;
   Scene *activeUtilityTab() const;
   void selectTab(Tab tab);
+  void openStreakAssignment(const std::string &id);
   void completeTabSwitch(Tab tab);
   bool applyPendingTabSwitch();
   void cancelPendingTabSwitch();
@@ -171,6 +175,7 @@ private:
   struct LibraryFolderItem {
     enum class Type {
       AllSongs,
+      Assignments,
       Favorites,
       SolidArchives,
       DifficultyTable,
@@ -386,6 +391,10 @@ private:
   CourseValidationCache courseValidationCache;
   std::unordered_set<std::string> expandedLibraryFolders;
   std::string searchText;
+  streak::Day assignmentDay;
+  streak::DayId assignmentDayId = 0;
+  std::optional<std::vector<MusicSelectAssignmentChart>> assignmentCharts;
+  std::map<std::string, std::vector<std::string>> assignmentChartHashes;
   std::optional<std::filesystem::path> temporaryChartFolder;
   std::optional<ChartMetaRecord> selectedChartRecord;
   ChartRecordFilters chartRecordFilters;
@@ -452,6 +461,7 @@ private:
   void setChartScoreRankRange(bool orAbove, bool orBelow);
   void setChartDifficultyDropdownOpen(bool minLevel, bool open);
   void setChartSortCriterion(ChartRecordSortCriterion criterion);
+  void prepareAssignmentChartQuery();
   void reloadChartList(bool preserveViewState = false);
   void reloadChartListForFolderSelection();
   std::optional<std::string> reloadScoreClearRanks();

@@ -2,6 +2,9 @@
 #include "repositories/ReplayRepository.h"
 #include "repositories/ScoreRepository.h"
 #include "sqlite3.h"
+#include "streak/StreakStore.h"
+#include "ScoreHistoryTime.h"
+#include <ctime>
 
 #include <cassert>
 #include <filesystem>
@@ -262,9 +265,229 @@ void testLocalProjectedScoreKeepsLocalSourceAndFullComboInference() {
          kClearTypeFullComboRank);
 }
 
+void testStreakProjectionIsAtomicAndUsesEffectiveLamp() {
+  const auto root = testRoot("streak");
+  const auto path = root / "score.db";
+  const auto chartPath = root / "chart.db";
+  ScoreRepository scores(path);
+  scores.SetChartDatabasePath(chartPath);
+  assert(scores.EnsureSchema());
+  sqlite3 *db = nullptr;
+  assert(sqlite3_open(chartPath.string().c_str(), &db) == SQLITE_OK);
+  assert(sqlite3_exec(db,
+      "CREATE TABLE difficulty_tables(id INTEGER,source_url TEXT,symbol TEXT);"
+      "CREATE TABLE difficulty_table_entries(table_id INTEGER,level TEXT,md5 TEXT,sha256 TEXT,sort_order INTEGER);"
+      "INSERT INTO difficulty_tables VALUES(1,'https://table','sl'),(2,'https://other','st');"
+      "INSERT INTO difficulty_table_entries VALUES(1,'0','99999999999999999999999999999999','',0),"
+      "(2,'1','99999999999999999999999999999999','',0);", nullptr, nullptr, nullptr) == SQLITE_OK);
+  sqlite3_close(db);
+  assert(sqlite3_open(path.string().c_str(), &db) == SQLITE_OK);
+  streak::State state;
+  streak::Config config;
+  config.dailyGoal = 10;
+  config.assignments = {{.id="a", .name="First FC", .levels={{"https://table","0","sl0"}, {"https://other","1","st1"}},
+                         .eligibleLamp=-1, .targetLamp=600, .points=20}};
+  streak::configure(state, config, streak::today());
+  streak::save(db, state);
+  result_persistence::PendingChartScoreWrite pending;
+  pending.attemptId = "123e4567-e89b-42d3-a456-426614174000";
+  pending.replayId = 1;
+  pending.createdAt = scoreHistoryTime(static_cast<std::int64_t>(std::time(nullptr)) * 1000);
+  pending.score.chartSha256 = std::string(64, '9');
+  pending.score.chartMd5 = std::string(32, '9');
+  pending.score.score = 180;
+  pending.score.maxScore = 200;
+  pending.score.comboBreak = 0;
+  pending.score.clearType = kClearTypeNormalClearRank;
+  pending.score.provenance = ScoreProvenance::Legacy();
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  state = streak::load(db);
+  assert(state.days.rbegin()->second.points == 10); // Effective Full Combo, counted once across two tables.
+  assert(state.currentStreak == 1 && state.savings == 0);
+  assert(!scores.TakeStreakProgress("different-attempt"));
+  const auto animation = scores.TakeStreakProgress(pending.attemptId);
+  assert(animation && animation->assignments.size() == 1 && animation->assignments[0].completedRound());
+  assert(!scores.TakeStreakProgress(pending.attemptId));
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::AlreadyPresent);
+  assert(streak::load(db).savings == 0);
+  // A failed streak write must roll back the score so recovery can retry both.
+  assert(sqlite3_exec(db, "CREATE TRIGGER reject_streak BEFORE UPDATE ON streak_state BEGIN SELECT RAISE(ABORT,'test storage failure'); END", nullptr, nullptr, nullptr) == SQLITE_OK);
+  pending.attemptId = "123e4567-e89b-42d3-a456-426614174001";
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::StorageFailure);
+  assert(queryInt(path, "SELECT COUNT(*) FROM scores") == 1);
+  assert(!scores.TakeStreakProgress(pending.attemptId));
+  assert(sqlite3_exec(db, "DROP TRIGGER reject_streak", nullptr, nullptr, nullptr) == SQLITE_OK);
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  assert(streak::load(db).savings == 0);
+  // Historical MD5-only records still exclude a chart from NO PLAY tasks.
+  auto legacyState = streak::load(db);
+  legacyState.days.clear(); legacyState.configurations.clear();
+  legacyState.savings = 0; legacyState.currentStreak = 0;
+  streak::configure(legacyState, config, streak::today());
+  streak::save(db, legacyState);
+  assert(sqlite3_exec(db, "UPDATE scores SET chart_sha256=''", nullptr, nullptr, nullptr) == SQLITE_OK);
+  pending.attemptId = "123e4567-e89b-42d3-a456-426614174002";
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  assert(streak::load(db).days.rbegin()->second.points == 0);
+
+  struct LampCase {
+    int mode, classic, specific, unknown, futureMode, futureLamp, expected;
+  };
+  // -1 means no stored record. Mode-specific FAILED must override a better
+  // classic/unknown lamp; future records must not change a recovered play.
+  for (const auto test : std::vector<LampCase>{
+           {2, 400, -1, -1, -1, -1, 400},
+           {3, 400, -1, -1, -1, -1, 400},
+           {2, 400, -1, 600, -1, -1, 400},
+           {2, 400, 0, 600, -1, -1, 0},
+           {3, 400, 200, 600, -1, -1, 200},
+           {2, -1, -1, 300, -1, -1, 300},
+           {0, 400, -1, -1, -1, -1, -1},
+           {2, 400, -1, -1, 2, 0, 400},
+           {2, -1, -1, -1, 1, 400, -1}}) {
+    streak::save(db, {});
+    assert(sqlite3_exec(db, "DELETE FROM scores; DELETE FROM score_sha256_clear_rank_cache",
+                        nullptr, nullptr, nullptr) == SQLITE_OK);
+    const auto now = static_cast<std::int64_t>(std::time(nullptr)) * 1000;
+    int attempt = 0;
+    const auto write = [&](int mode, int lamp, int offset) {
+      pending.attemptId = "123e4567-e89b-42d3-a456-42661417401" + std::to_string(attempt++);
+      pending.createdAt = scoreHistoryTime(now + offset);
+      pending.score.longNoteMode = mode;
+      pending.score.clearType = lamp;
+      pending.score.comboBreak = 1;
+      assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+    };
+    if (test.classic >= 0) write(1, test.classic, 0);
+    if (test.specific >= 0) write(test.mode, test.specific, 0);
+    if (test.unknown >= 0) write(0, test.unknown, 0);
+    assert(scores.LoadBestClearRanks().bestRankForHash(pending.score.chartSha256, test.mode) == test.expected);
+    if (test.futureMode >= 0) write(test.futureMode, test.futureLamp, 1000);
+    streak::State scenario;
+    streak::Config eligibility;
+    eligibility.assignments = {
+        {.id="exact", .name="Existing lamp", .levels={{"https://table","0","sl0"}},
+         .eligibleLamp=test.expected, .targetLamp=0, .points=1},
+        {.id="unplayed", .name="No play", .levels={{"https://table","0","sl0"}},
+         .eligibleLamp=-1, .targetLamp=0, .points=1}};
+    streak::configure(scenario, eligibility, streak::localDay(now / 1000));
+    streak::save(db, scenario);
+    write(test.mode, 300, 0);
+    const auto progress = streak::load(db).days.rbegin()->second.assignments;
+    assert(progress[0].completedRounds == 1);
+    assert(progress[1].completedRounds == (test.expected == -1 ? 1 : 0));
+  }
+
+  struct ScoreCase { int mode, previousMode, score, futureScore, expectedRank; };
+  for (const auto test : std::vector<ScoreCase>{
+           {2, 2, 21, 24, 21}, {2, 1, 21, -1, -1}, {1, 0, 18, -1, 18},
+           {3, 3, 24, 27, 24}, {0, 1, 21, -1, -1}, {2, 2, 0, -1, 0}}) {
+    streak::save(db, {});
+    assert(sqlite3_exec(db, "DELETE FROM scores; DELETE FROM score_sha256_clear_rank_cache; "
+                           "DELETE FROM score_sha256_best_score_cache", nullptr, nullptr, nullptr) == SQLITE_OK);
+    const auto now = static_cast<std::int64_t>(std::time(nullptr)) * 1000;
+    int attempt = 0;
+    const auto write = [&](int mode, int exScore, int offset) {
+      pending.attemptId = "123e4567-e89b-42d3-a456-42661417403" + std::to_string(attempt++);
+      pending.createdAt = scoreHistoryTime(now + offset);
+      pending.score.longNoteMode = mode;
+      pending.score.clearType = 300; pending.score.comboBreak = 1;
+      pending.score.score = exScore; pending.score.maxScore = 27;
+      assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+    };
+    write(test.previousMode, test.score, 0);
+    const auto best = scores.LoadBestScores().bestForHash(pending.score.chartSha256, test.mode);
+    assert(streak::scoreRank(best ? best->score : 0, best ? best->maxScore : 0) == test.expectedRank);
+    if (test.futureScore >= 0) write(test.mode, test.futureScore, 1000);
+    streak::State scenario;
+    streak::Config eligibility;
+    eligibility.assignments = {
+        {.id="exact-score", .name="Previous score", .levels={{"https://table","0",""}},
+         .eligibleScoreRank=test.expectedRank, .targetLamp=0, .points=1},
+        {.id="no-score", .name="No score", .levels={{"https://table","0",""}},
+         .eligibleScoreRank=-1, .targetLamp=0, .points=1}};
+    streak::configure(scenario, eligibility, streak::localDay(now / 1000));
+    streak::save(db, scenario);
+    write(test.mode, 27, 0); // Same timestamp; exclude this attempt and later-dated records.
+    const auto progress = streak::load(db).days.rbegin()->second.assignments;
+    assert(progress[0].completedRounds == 1);
+    assert(progress[1].completedRounds == (test.expectedRank == -1 ? 1 : 0));
+  }
+  int importScenario = 0;
+  for (const auto test : std::vector<ScoreCase>{
+           {2, -1, 0, -1, 21}, {3, -1, 0, -1, 21},
+           {1, 1, 110, -1, 21}, {2, 2, 180, -1, 24}}) {
+    streak::save(db, {});
+    assert(sqlite3_exec(db, "DELETE FROM scores; DELETE FROM score_sha256_clear_rank_cache; "
+                           "DELETE FROM score_sha256_best_score_cache", nullptr, nullptr, nullptr) == SQLITE_OK);
+    const auto now = static_cast<std::int64_t>(std::time(nullptr)) * 1000;
+    pending.score.maxScore = 200; pending.score.comboBreak = 1; pending.score.clearType = 300;
+    pending.createdAt = scoreHistoryTime(now);
+    pending.attemptId = "123e4567-e89b-42d3-a456-426614174040";
+    if (test.previousMode >= 0) {
+      pending.score.longNoteMode = test.previousMode; pending.score.score = test.score;
+      assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+    }
+    auto imported = remoteScore("streak-wildcard", '9', 160, 300);
+    assert(scores.ReplaceImportedIrScores(kProvider, kOrigin, 100 + importScenario++, std::span(&imported, 1)).status ==
+           ImportedIrScoreProjectionStatus::Applied);
+    const auto best = scores.LoadBestScores().bestForHash(pending.score.chartSha256, test.mode);
+    assert(best && streak::scoreRank(best->score, best->maxScore) == test.expectedRank);
+    streak::State scenario;
+    streak::Config eligibility;
+    eligibility.assignments = {
+        {.id="import-score", .name="Imported best", .levels={{"https://table","0",""}},
+         .eligibleScoreRank=test.expectedRank, .targetLamp=0, .points=1},
+        {.id="import-no-score", .name="No score", .levels={{"https://table","0",""}},
+         .eligibleScoreRank=-1, .targetLamp=0, .points=1}};
+    streak::configure(scenario, eligibility, streak::localDay(now / 1000));
+    streak::save(db, scenario);
+    pending.attemptId = "123e4567-e89b-42d3-a456-426614174041";
+    pending.score.longNoteMode = test.mode; pending.score.score = 200;
+    assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+    const auto progress = streak::load(db).days.rbegin()->second.assignments;
+    assert(progress[0].completedRounds == 1 && progress[1].completedRounds == 0);
+  }
+  pending.score.maxScore = 200;
+
+  // Separate saved attempts retain eligibility and combine score/lamp targets.
+  streak::save(db, {});
+  assert(sqlite3_exec(db, "DELETE FROM scores; DELETE FROM score_sha256_clear_rank_cache",
+                      nullptr, nullptr, nullptr) == SQLITE_OK);
+  const auto promotionTime = static_cast<std::int64_t>(std::time(nullptr)) * 1000;
+  const auto savePromotion = [&](int sequence, int lamp, int exScore) {
+    pending.attemptId = "123e4567-e89b-42d3-a456-42661417402" + std::to_string(sequence);
+    pending.createdAt = scoreHistoryTime(promotionTime + sequence);
+    pending.score.longNoteMode = 2;
+    pending.score.clearType = lamp;
+    pending.score.comboBreak = 1;
+    pending.score.score = exScore;
+    assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  };
+  savePromotion(0, 200, 100);
+  streak::State promotion;
+  streak::Config promotionConfig;
+  promotionConfig.assignments = {{.id="promote", .name="EASY to HARD", .levels={{"https://table","0",""}},
+                                 .eligibleLamp=200, .targetLamp=400, .scoreNumerator=9,
+                                 .scoreDenominator=10, .points=20}};
+  streak::configure(promotion, promotionConfig, streak::localDay(promotionTime / 1000));
+  streak::save(db, promotion);
+  savePromotion(1, 300, 190);
+  assert(streak::load(db).days.rbegin()->second.points == 0);
+  savePromotion(2, 400, 100);
+  const auto promoted = streak::load(db);
+  assert(promoted.days.rbegin()->second.points == 20);
+  const auto &achievement = promoted.days.rbegin()->second.assignments[0].chartProgress.at(pending.score.chartSha256);
+  assert(achievement.lamp == 400 && achievement.score == 190);
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::AlreadyPresent);
+  assert(streak::load(db).days.rbegin()->second.points == 20);
+  sqlite3_close(db);
+}
+
 } // namespace
 
 int main() {
+  testStreakProjectionIsAtomicAndUsesEffectiveLamp();
   testImportedSnapshotUsesNormalScoreSummaries();
   testRemoteLampIsAuthoritative();
   testReplacementIsScopedIdempotentAndDeletesStaleRows();
