@@ -9494,17 +9494,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_link_libraries(ui_batch_renderer_tests PRIVATE
         ${COMMON_LIBS} bgfx yogacore
     )
-    add_executable(metal_presentation_gate_tests
-        tests/metal_presentation_gate_tests.cpp
-        cmake/BgfxMetalPresentationGate.cpp)
-    target_include_directories(metal_presentation_gate_tests PRIVATE ${CMAKE_SOURCE_DIR}/cmake)
-    target_compile_features(metal_presentation_gate_tests PRIVATE cxx_std_17)
-    target_link_libraries(metal_presentation_gate_tests PRIVATE Threads::Threads)
-    asobmashow_register_test(metal_presentation_gate_tests)
     if(APPLE)
-        add_test(NAME ios_metal_presentation_callback_tests
-            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/ios_build_setup_tests.py
-                IOSBuildSetupTests.test_metal_presentation_callback_lifetime)
         add_executable(bgfx_metal_readback_tests tests/bgfx_metal_readback_tests.mm)
         target_compile_features(bgfx_metal_readback_tests PRIVATE cxx_std_17)
         target_link_libraries(bgfx_metal_readback_tests PRIVATE bgfx "-framework Metal" "-framework Foundation")

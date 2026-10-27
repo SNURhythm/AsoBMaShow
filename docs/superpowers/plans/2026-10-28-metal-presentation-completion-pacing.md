@@ -1,5 +1,11 @@
 # Presentation-completion pacing experiment
 
+**Rejected after device testing.** Candidate `486da733` lowered reported HUD
+Present Delay to about 14.5 ms, but frame rate fell from 120 to 60 FPS. The
+presentation callback and wait were removed, restoring the `469a7f9c` runtime
+configuration: three drawables, Apple GPU limit one and the prior timer pacing.
+The sections below retain the experiment's design and local verification record.
+
 The user approved this controlled test after the lookback trace showed long
 GPU-end-to-display delay and no observed improvement from GPU limits 3, 2 or 1.
 Baseline: `2f02fd77`, whose runtime is the one-frame candidate `469a7f9c`.
@@ -73,5 +79,23 @@ is registered before the application reaches the wait.
   a callback exercises the 50 ms clamp and token consumption. The gate test
   passed again after this test-only addition.
 
-No build was uploaded or installed. Device Present Delay and 120 FPS cadence
-remain unmeasured for this candidate; the A/B decision above is still required.
+No build was uploaded or installed by the agent during local verification.
+
+## Device outcome
+
+The user subsequently reported approximately 14.5 ms Present Delay and 60 FPS
+on the iPad. This fails the requirement to preserve 120 FPS, so the experiment
+was reverted rather than retained for its small delay reduction. Delay at the
+reduced frame rate does not demonstrate an improvement at the target cadence.
+
+The result is consistent with the completion wait preventing useful overlap
+between consecutive frames. It does not establish precisely when the callback
+arrived or which display deadline was missed; those events were not measured.
+Waiting for visible presentation before beginning the next frame is unsuitable
+for this device's 120 FPS path as implemented.
+
+The rollback passed desktop and unsigned iOS builds, three focused Metal
+build-setup checks, and 86 of 87 rendering/video/iOS checks on the first run.
+The unchanged download-recovery fixture failed its retained-offset assertion
+and passed an isolated rerun; its archive-content assertions passed in both.
+Production code and test registration match the pre-experiment baseline exactly.

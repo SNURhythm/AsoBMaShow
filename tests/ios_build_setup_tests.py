@@ -638,10 +638,9 @@ int main() { return 0; }
             self.assertIn("nativeTexture->bufferBytesPerRow()", patched)
             self.assertIn("m_cmd.kick(false, true)", patched)
             self.assertIn("m_metalLayer->setMaximumDrawableCount(3);", patched)
-            for telemetry in ("asoMetalPresentationObserver", "CACurrentMediaTime", "CAMetalDisplayLink"):
+            for telemetry in ("asoMetalPresentationObserver", "addPresentedHandler", "CACurrentMediaTime"):
                 self.assertFalse(telemetry in patched,
                                  f"Metal presentation telemetry remains: {telemetry}")
-            self.assertIn("addPresentedHandler", patched)
             self.assertIn("m_drawable = occluded ? NULL : m_metalLayer->nextDrawable();", patched)
             self.assertIn("presentCommandBuffer->presentDrawable( (MTL::Drawable*)frameBuffer.m_swapChain->m_drawable);", patched)
             self.assertFalse("asoMetalDrawableProvider" in patched,
@@ -657,38 +656,6 @@ int main() { return 0; }
             self.assertNotEqual(0, result.returncode,
                                 "an upstream gate change must require review")
             self.assertIn("reflection gate changed", result.stderr)
-
-    @unittest.skipUnless(shutil.which("xcrun"), "requires Apple Objective-C++ SDK")
-    def test_metal_presentation_callback_lifetime(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            patched_path = root / "renderer.mm"
-            script = root / "patch.cmake"
-            script.write_text(
-                f'include("{ROOT / "cmake/BgfxMetalPresentation.cmake"}")\n'
-                f'file(READ "{ROOT / "bgfx/bgfx/src/renderer_mtl.cpp"}" content)\n'
-                'asobmashow_patch_bgfx_metal_presentation(content)\n'
-                f'file(WRITE "{patched_path}" "${{content}}")\n')
-            result = subprocess.run(["cmake", "-P", str(script)], capture_output=True, text=True)
-            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-            patched = patched_path.read_text()
-            present = "presentCommandBuffer->presentDrawable( (MTL::Drawable*)frameBuffer.m_swapChain->m_drawable);"
-            end = patched.index(present) + len(present)
-            start = patched.rfind("#if BX_PLATFORM_IOS", 0, end)
-            (root / "metal_presentation_hook.inc").write_text(patched[start:end])
-            for ios in (1, 0):
-                with self.subTest(ios=ios):
-                    executable = root / f"callback-{ios}"
-                    result = subprocess.run([
-                        "xcrun", "clang++", "-std=c++17", "-fno-objc-arc", "-fblocks",
-                        f"-DBX_PLATFORM_IOS={ios}", "-I", str(root), "-I", str(ROOT / "cmake"),
-                        str(ROOT / "tests/metal_presentation_callback_tests.mm"),
-                        str(ROOT / "cmake/BgfxMetalPresentationGate.cpp"),
-                        "-framework", "Foundation", "-o", str(executable),
-                    ], capture_output=True, text=True)
-                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-                    result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=10)
-                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     def test_metal_layer_patch_rejects_changed_anchors_and_leaves_gpu_work_outside_main(self):
         original = (ROOT / "bgfx/bgfx/src/renderer_mtl.cpp").read_text()
