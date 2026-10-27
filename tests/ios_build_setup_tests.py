@@ -643,10 +643,12 @@ int main() { return 0; }
             for telemetry in ("asoMetalPresentationObserver", "CACurrentMediaTime"):
                 self.assertFalse(telemetry in patched,
                                  f"Metal presentation telemetry remains: {telemetry}")
-            self.assertIn("m_drawable = occluded ? NULL : m_metalLayer->nextDrawable();", patched)
+            self.assertIn("const bool managedDrawable = asobmashowMetalAcquireDrawable", patched)
+            self.assertIn("!managedDrawable && !occluded", patched)
+            self.assertIn("static_cast<CA::MetalDrawable*>(providedDrawable) : m_metalLayer->nextDrawable()", patched)
+            self.assertIn("if (asobmashowMetalShouldPresent(", patched)
             self.assertIn("presentCommandBuffer->presentDrawable( (MTL::Drawable*)frameBuffer.m_swapChain->m_drawable);", patched)
-            self.assertFalse("asoMetalDrawableProvider" in patched,
-                             "ordinary Metal presentation must not retain the display-link provider")
+            self.assertIn("BgfxMetalDrawableProvider.cpp", patched)
             self.assertEqual(original, renderer.read_text(), "submodule must remain untouched")
             modified = compiled.stat().st_mtime_ns
             result = subprocess.run(command, capture_output=True, text=True)

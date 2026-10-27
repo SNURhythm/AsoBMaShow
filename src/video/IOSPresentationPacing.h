@@ -23,12 +23,14 @@ inline std::uint32_t iosPresentationPacingCap(float displayRefreshRate,
 inline std::chrono::steady_clock::duration iosFramePacingWait(
     FramePacer &explicitPacer, FramePacer &presentationPacer,
     std::chrono::steady_clock::time_point frameStartedAt,
-    std::chrono::steady_clock::time_point submissionFinishedAt) {
+    std::chrono::steady_clock::time_point submissionFinishedAt,
+    bool displayLinkClocked = false) {
   // Drawable acquisition can already block for a refresh. Count that wait
   // and rendering against this frame's budget, rather than starting another
   // interval when submission returns. Idle frames still wait the remainder.
   explicitPacer.framePresented(frameStartedAt);
   presentationPacer.framePresented(frameStartedAt);
+  if (displayLinkClocked) return std::chrono::steady_clock::duration::zero();
   return std::max(explicitPacer.remaining(submissionFinishedAt),
                   presentationPacer.remaining(submissionFinishedAt));
 }

@@ -69,6 +69,7 @@
 #include "iOSNatives.hpp"
 #include "../cmake/BgfxMetalPresentationGate.h"
 #include "video/IOSPresentationPacing.h"
+#include "video/MetalDisplayLink.h"
 #include "input/IOSTouchInput.h"
 #include "input/NativeRawTouchInput.h"
 #include <SDL3/SDL_uikit_rawtouch.h>
@@ -1053,10 +1054,12 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       context.replayVideoExportActive.load(std::memory_order_acquire);
 #if TARGET_OS_IPHONE
   FramePacer iosPresentationPacer;
+  video::MetalDisplayLink iosDisplayLink;
   platform::IOSPreparedFrame iosPreparedFrame;
   std::uint64_t lastUiPresentationGeneration = 0;
   bool iosViewportRestorePending = false;
   const auto submitIOSFrame = [&context](bool discard) {
+    if (discard) video::MetalDisplayLink::pauseCurrent();
     const auto keepRunning = [](void* opaque) {
       const auto& context = *static_cast<ApplicationContext*>(opaque);
       return IOSApplicationActive() &&
@@ -1095,7 +1098,10 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     const bool previous =
         context.appInBackground.exchange(background, std::memory_order_acq_rel);
 #if TARGET_OS_IPHONE
-    if (background) asobmashow::metalPresentation::cancel();
+    if (background) {
+      iosDisplayLink.pause();
+      asobmashow::metalPresentation::cancel();
+    }
 #endif
     if (background) storage_management::RequestCancelStorageTask(context);
     if (previous == background) {
@@ -1136,7 +1142,10 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     if (!IOSApplicationActive() || context.appInBackground.load(std::memory_order_acquire) ||
         context.replayVideoExportActive.load(std::memory_order_acquire) ||
         context.rendererAccess.exportRequested())
+    {
+      iosDisplayLink.pause();
       asobmashow::metalPresentation::cancel();
+    }
     // Only acknowledge lifecycle events already forwarded before this owner's
     // event drain. A later UIKit pulse must wait for the next restored frame.
     const auto iosInputGeneration = GetIOSCompletedPumpLifecycleGeneration();
@@ -1183,6 +1192,31 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         context.chartLibraryFolderActions) {
       context.chartLibraryFolderActions->poll();
     }
+
+#if TARGET_OS_IPHONE
+    const auto displayLinkState = GetIOSPresentationState();
+    const auto displayLinkViewport = GetIOSWindowSnapshot(s_window);
+    bool iosDisplayLinkFrame = false;
+    if (!iosPreparedFrame.pending() && displayLinkState.active &&
+        !context.replayVideoExportActive.load(std::memory_order_acquire) &&
+        !context.rendererAccess.exportRequested()) {
+      iosDisplayLinkFrame = iosDisplayLink.beginFrame(
+          s_iosMetalLayer, displayLinkViewport ? displayLinkViewport->refreshRate : 0.0F,
+          context.framePacer.currentFrameCap(), displayLinkState.generation,
+          [&, generation = displayLinkState.generation] {
+            const auto state = GetIOSPresentationState();
+            return state.active && state.generation == generation &&
+                !context.appInBackground.load(std::memory_order_acquire) &&
+                !context.quitFlag.load(std::memory_order_acquire) &&
+                !context.replayVideoExportActive.load(std::memory_order_acquire) &&
+                !context.rendererAccess.exportRequested();
+          });
+    } else {
+      iosDisplayLink.pause();
+    }
+    // Includes idle frames, interruption, export, quit and every early continue.
+    const auto releaseDisplayLinkFrame = makeScopeExit([&] { iosDisplayLink.endFrame(); });
+#endif
 
     auto currentFrameTime = std::chrono::steady_clock::now();
     context.applicationUptimeMillis.store(
@@ -1708,6 +1742,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     const auto sceneUpdateStarted = perf::latency::nowMicros();
 #endif
     sceneManager.update(deltaTime);
+#if TARGET_OS_IPHONE
+    // An event/update may have performed a synchronous photo export and paused
+    // the link. This iteration then uses the ordinary drawable/timer fallback.
+    iosDisplayLinkFrame = iosDisplayLinkFrame && iosDisplayLink.hasFrame();
+#endif
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
     perf::latency::record(perf::latency::Stage::SceneUpdate,
                           perf::latency::nowMicros() - sceneUpdateStarted);
@@ -1748,6 +1787,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #if TARGET_OS_IPHONE
         if (!iosPreparedFrame.finish(GetIOSPresentationState(), submitIOSFrame))
           continue;
+        if (iosDisplayLinkFrame && !iosDisplayLink.didSchedulePresent()) {
+          context.uiBatchRenderer.invalidateFrame();
+          uiPresentationSchedule.invalidate();
+          continue;
+        }
 #else
         bgfx::frame();
 #endif
@@ -1885,6 +1929,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #if TARGET_OS_IPHONE
           if (!iosPreparedFrame.finish(GetIOSPresentationState(), submitIOSFrame)) {
             context.uiBatchRenderer.invalidateFrame();
+            continue;
+          }
+          if (iosDisplayLinkFrame && !iosDisplayLink.didSchedulePresent()) {
+            context.uiBatchRenderer.invalidateFrame();
+            uiPresentationSchedule.invalidate();
             continue;
           }
           lastUiPresentationGeneration = uiPresentationState.generation;
@@ -2034,7 +2083,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       const auto waitStartedAt = std::chrono::steady_clock::now();
 #if TARGET_OS_IPHONE
       const auto waitDuration = video::iosFramePacingWait(
-          context.framePacer, iosPresentationPacer, currentFrameTime, waitStartedAt);
+          context.framePacer, iosPresentationPacer, currentFrameTime, waitStartedAt,
+          iosDisplayLinkFrame);
 #else
       const auto waitDuration = std::max(
           context.framePacer.remaining(waitStartedAt),
@@ -2080,6 +2130,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     context.currentFrame++;
     //
   }
+#if TARGET_OS_IPHONE
+  iosDisplayLink.pause();
+#endif
   sceneManager.cleanup();
   context.setGameplayOrientationLocked = {};
   context.setResponsiveMenuCanvas = {};

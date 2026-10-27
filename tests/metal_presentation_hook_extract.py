@@ -32,9 +32,10 @@ def extract(output):
         assert generated[end:] == original[original.index(tail, original.index('MTL::Texture* SwapChainMtl::currentDrawableTexture()')):]
         present = 'presentCommandBuffer->presentDrawable( (MTL::Drawable*)frameBuffer.m_swapChain->m_drawable);'
         assert present in generated
+        assert 'if (asobmashowMetalShouldPresent(' in generated
         for anchor in ('#include "renderer_mtl.h"', 'm_drawable = occluded ? NULL : m_metalLayer->nextDrawable();',
                        'void SwapChainMtl::init(void* _nwh)', 'SwapChainMtl::~SwapChainMtl()',
-                       'm_metalLayer->setMaximumDrawableCount(bx::clamp<uint32_t>('):
+                       'm_metalLayer->setMaximumDrawableCount(bx::clamp<uint32_t>(', present):
             source.write_text(original.replace(anchor, 'changed upstream anchor', 1))
             result = subprocess.run(command, capture_output=True, text=True)
             assert result.returncode != 0 and 'changed' in result.stderr, anchor

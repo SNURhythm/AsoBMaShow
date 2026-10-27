@@ -1,4 +1,5 @@
 #include "BgfxMetalPresentationGate.h"
+#include "BgfxMetalDrawableProvider.cpp"
 #include <Block.h>
 #include <cstdint>
 #include <cstdlib>
@@ -23,6 +24,7 @@ struct Drawable
     void present() { ++presentations; if (handler) handler(this); }
 };
 }
+namespace CA { using MetalDrawable = MTL::Drawable; }
 struct FakeMetalLayer
 {
     MTL::Drawable* next = nullptr;
@@ -45,6 +47,15 @@ struct SwapChain
     }
 };
 static bool yes(void*) { return true; }
+static void* managedLayer = nullptr;
+static void* provided = nullptr;
+static bool acquire(void* layer, void** drawable) {
+    if (layer != managedLayer) return false;
+    *drawable = provided;
+    return true;
+}
+static bool present(void*, void*) { return false; }
+static const video::MetalDrawableProvider provider{acquire, present};
 int main()
 {
     FakeMetalLayer layer;
@@ -83,6 +94,30 @@ int main()
     unscoped.acquireDrawable();
     require(!third.handler, "unscoped acquisition was paced");
     cancel();
+    asobmashowMetalSetDrawableProvider(&provider);
+    managedLayer = &layer;
+    const auto acquired = layer.acquisitions;
+    {
+        int predicates = 0;
+        Scope submission([](void* p) { ++*static_cast<int*>(p); return true; }, &predicates);
+        unscoped.acquireDrawable();
+        require(!unscoped.m_drawable && layer.acquisitions == acquired,
+                "managed nil/idle must never call native nextDrawable");
+        require(predicates == 0, "managed nil entered fallback gate");
+        provided = &third;
+        unscoped.acquireDrawable();
+        require(unscoped.m_drawable == &third && layer.acquisitions == acquired && !third.handler,
+                "managed borrowed drawable must bypass gate and native acquisition");
+        require(!asobmashowMetalShouldPresent(&layer, &third), "provider rejected presentation");
+    }
+    FakeMetalLayer otherLayer;
+    SwapChain other{nullptr, &otherLayer};
+    other.acquireDrawable();
+    require(otherLayer.acquisitions == 1, "other layers must remain unmanaged");
+    asobmashowMetalSetDrawableProvider(nullptr);
+    unscoped.acquireDrawable();
+    require(layer.acquisitions == acquired + 1, "detached provider did not restore acquisition");
+    require(asobmashowMetalShouldPresent(&layer, &third), "detached presentation remains ordinary");
 #if BX_PLATFORM_IOS
     {
         int predicateCalls = 0;
