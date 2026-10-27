@@ -753,9 +753,13 @@ int main(int argv, char **args) {
   bgfx_init.resolution.width = rendering::render_width;
   bgfx_init.resolution.height = rendering::render_height;
   bgfx_init.resolution.reset = s_bgfxResetFlags;
-  // Bound GPU work queued ahead of visible input feedback. Metal keeps its
-  // drawable pool at three independently to preserve display throughput.
+#if TARGET_OS_IPHONE || TARGET_OS_OSX
+  // Test a single GPU frame while keeping the Metal drawable pool at three.
+  bgfx_init.resolution.maxFrameLatency = 1;
+#else
+  // Bound GPU work queued ahead of visible input feedback on other renderers.
   bgfx_init.resolution.maxFrameLatency = 2;
+#endif
   bgfx_init.platformData = pd;
   rendering::applyBgfxTransientBufferLimits(bgfx_init.limits);
 #if TARGET_OS_IPHONE
