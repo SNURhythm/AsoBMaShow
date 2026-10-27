@@ -1,10 +1,11 @@
 # Shader-compatible bgfx presentation candidate
 
-This change prepares an upstream bgfx candidate for the reported iPad Metal
-presentation delay. It does not establish a latency improvement. The current
-timer pacing, iOS flip-after-render flag, three-drawable pool and Apple GPU frame
-limit of three remain unchanged. No display link or diagnostic callbacks are
-added.
+The first candidate (`88cd6afd`) updated bgfx for the reported iPad Metal
+presentation delay while preserving timer pacing, the iOS flip-after-render flag,
+three drawables and an Apple GPU frame limit of three. The user reported no
+improvement. The follow-up below changes only the Apple GPU frame limit to two;
+its effect on device latency and cadence remains unmeasured. No display link or
+diagnostic callbacks are added.
 
 ## Revisions
 
@@ -19,7 +20,7 @@ The application baseline is `cff3f2ffdcca7b7dbadc0c04aada7a82e3bec959`.
 
 The candidate is the August 22 snapshot. It includes these upstream changes:
 
-- [#3715](https://github.com/bkaradzic/bgfx/commit/526b886105dd8cca22d8a94e7c49f21e9a1e5af6): the Metal GPU semaphore honors `maxFrameLatency`. The baseline always admitted three GPU frames. The app still requests three; changing it to two is a separate experiment.
+- [#3715](https://github.com/bkaradzic/bgfx/commit/526b886105dd8cca22d8a94e7c49f21e9a1e5af6): the Metal GPU semaphore honors `maxFrameLatency`. The baseline always admitted three GPU frames. The first candidate requested three; the follow-up requests two as a separate experiment.
 - [#3714](https://github.com/bkaradzic/bgfx/commit/0158b15c2398f56aec1d99fa480eaf78745cd978): rendering commits at the end of submission and presentation uses a separate command buffer.
 - [#3748](https://github.com/bkaradzic/bgfx/commit/ac4da6369a9b710c95b25dd4f2aff983af51bd4b): empty frames avoid unnecessary drawable acquisition.
 
@@ -55,7 +56,7 @@ The existing shader sources and binary payloads are unchanged.
   linear, independent-channel filtering, including alpha, and the same default
   filters. Bit-identical output across the two resizer versions is not claimed.
 
-## Validation
+## Initial candidate validation
 
 - The full desktop build passes, and all 537 CTest checks pass at `-j 6`
   (60.84 seconds on the final run).
@@ -80,19 +81,34 @@ updated separately; production behavior and extracted methods remain unchanged.
 Stale local Swift incremental objects/dependencies were backed up and regenerated
 for the translation test; its subsequent build correctly performed no work.
 
+## GPU-limit follow-up
+
+The user reported that the first candidate did not improve the observed delay.
+No new timing values or cadence measurements accompanied that report.
+
+The follow-up sets `bgfx_init.resolution.maxFrameLatency` to two on Apple
+platforms. Other renderers already used two. Both generated Metal layer patches
+still explicitly set `maximumDrawableCount` to three. The bgfx revision, timer
+pacing, reset flags, shaders and other rendering settings remain unchanged.
+
+Follow-up verification: desktop `main` and the unsigned iOS device build pass.
+The Metal readback check and both native-video lifetime tests pass; the latter
+exercise GPU limits 1, 2 and 3. Generated desktop and iOS Metal sources retain
+explicit three-drawable assignments. Nothing was uploaded or installed.
+
 ## Device comparison still required
 
-Compare the baseline and candidate on the affected iPad with identical chart,
-blur/BGA settings, frame cap, orientation and warmup. Verify actual 120 Hz cadence
+Compare `88cd6afd` (GPU limit three) with this follow-up (GPU limit two) on the
+affected iPad with identical chart, blur/BGA settings, frame cap, orientation and
+warmup. Verify actual 120 Hz cadence
 alongside HUD Present Delay. The separate presentation command buffer can move
 the HUD's measurement boundary, so a smaller HUD number alone does not prove
 fresher displayed state.
 
-If the candidate is correct and useful, separately compare GPU limits three and
-two while keeping three drawables. GPU completion and display presentation are
+Both builds keep three drawables. GPU completion and display presentation are
 different events. The earlier 60 Hz result with two drawables does not establish
 what a two-frame GPU limit will do with a three-drawable pool. No performance
-result or preferred new queue limit is claimed by this commit.
+benefit is claimed for this follow-up before device measurement.
 
 See the [investigation plan](../superpowers/plans/2026-10-27-metal-presentation-upstream-investigation.md)
 for the controlled comparisons and the [earlier observations](2026-10-27-metal-hud-followup.md).
