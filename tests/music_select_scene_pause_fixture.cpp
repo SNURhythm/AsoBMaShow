@@ -6,6 +6,8 @@
 #include <thread>
 #include <chrono>
 #include <optional>
+#include <string>
+#include <utility>
 #include "REPOSITORY_ROOT/src/music_select/MusicSelectFolderStatusLoader.h"
 
 struct Preview {
@@ -28,6 +30,10 @@ struct Worker {
 };
 
 struct MusicSelectScene {
+  // This lifecycle case has no pending streak assignment.
+  std::string pendingStreakAssignment_;
+  void openStreakAssignment(const std::string &) { assert(false); }
+
   void closeRankings() {}
 
   struct RevealMenu {
@@ -70,7 +76,7 @@ struct MusicSelectScene {
   void hideDecideOverlay() {}
   void onApplicationBackgroundChanged(bool) {}
   void syncToolbar() {}
-  void reloadLibrary() { ++reloads; }
+  void reloadLibrary(bool restoreSelection) { assert(restoreSelection); ++reloads; }
   void configureSoundServices() {}
   void startInputListening() {}
   void selectedBarMoved() {

@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 void SDL_Log(const char *, ...) {}
@@ -239,9 +240,19 @@ std::string uploadSavedResult(auto &, int) {
   return "queued";
 }
 }
+enum class MusicSelectToolbarControl { Streak };
 struct MusicSelectScene {
+  // Replay cases have no pending streak notification.
+  bool toolbarControlAvailable(MusicSelectToolbarControl) const { assert(false); return false; }
+  void openStreak() { assert(false); }
+
   SceneManager manager;
   struct {
+    std::string pendingComboNotificationProfile;
+    struct {
+      struct Profile { std::string id; } profile;
+      const Profile &activeProfile() const { return profile; }
+    } profileManager;
     struct {
       int selectedLnMode = 1, selectedPlaybackRatePercent = 100, selectedPlaybackMode = 0;
       bool inputKeysoundEnabled = true, gameplayClubModeEnabled = false;

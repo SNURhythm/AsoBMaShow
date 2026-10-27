@@ -191,6 +191,7 @@ public final class AndroidFolderPickerActivityFixture {
 
 class FakeSdlActivity {
     Thread nativeWorker;
+    Intent getIntent() { return new Intent("fixture"); }
     protected void onResume() {}
     protected void onPause() {}
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {}
@@ -205,6 +206,12 @@ class FakeSdlActivity {
             throw new AssertionError("SDL join blocked by native folder/permission waiter");
         }
     }
+}
+
+// Notifications are a separate boundary from the folder-picker lifecycle.
+class ComboNotifications {
+    static void returned(FakeSdlActivity activity, Intent intent) {}
+    static void paused() {}
 }
 
 class PickerActivity extends FakeSdlActivity {

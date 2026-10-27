@@ -157,6 +157,11 @@ struct Repository {
   std::uint64_t GetLibraryRevision() const { return revision; }
 };
 struct Context {
+  std::string pendingComboNotificationProfile;
+  struct {
+    struct Profile { std::string id; } profile;
+    const Profile &activeProfile() const { return profile; }
+  } profileManager;
   std::atomic<std::uint64_t> irRankingEvidenceRevision{0};
   struct {
     std::atomic_int stops = 0, loads = 0;
@@ -346,7 +351,15 @@ struct Preview {
 int previewSelection(const Bars &, const Settings &) { return 0; }
 namespace streak { inline int day=0; int today() { return day; } }
 
+enum class MusicSelectToolbarControl { Streak };
 struct MusicSelectScene {
+  // Export/preload cases have no pending streak assignment or notification.
+  std::string pendingStreakAssignment_;
+  void openStreakAssignment(const std::string &) { assert(false); }
+  bool toolbarControlAvailable(MusicSelectToolbarControl) const { assert(false); return false; }
+  void openStreak() { assert(false); }
+  void defer(std::function<bool()>, int, bool) { assert(false); }
+
   void updateRankingsModal() {}
 
   void closeRankings() {}
@@ -456,7 +469,8 @@ struct MusicSelectScene {
   std::optional<int> rankingRequest_;
   std::int64_t rankingLoadAtMicros_ = -1;
   std::map<int, int> rankingCache_;
-  void reloadLibrary() {
+  void reloadLibrary(bool restoreSelection = true) {
+    assert(restoreSelection);
     libraryRevision_ = context.chartRepository.GetLibraryRevision();
     scoreRevision_ = context.scoreRepository.GetRevision();
     assignmentDayId_ = streak::today();
