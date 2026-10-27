@@ -54,6 +54,7 @@
 #include "rendering/PostProcessPipeline.h"
 #include "rendering/BlurPass.h"
 #include "rendering/FullscreenBgaCache.h"
+#include "rendering/FrameSubmission.h"
 #include "rendering/UniformCache.h"
 #include "context.h"
 #include "notifications/ReminderCoordinator.h"
@@ -920,17 +921,17 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   // frame
   bgfx::setViewClear(rendering::clear_view, BGFX_CLEAR_COLOR | BGFX_CLEAR_DEPTH,
                      0x00000000);
-  bgfx::setViewClear(rendering::ui_view, BGFX_CLEAR_DEPTH, 0x00000000);
+  bgfx::setViewClear(rendering::ui_view, BGFX_CLEAR_NONE, 0x00000000);
   bgfx::setViewClear(rendering::bga_view, BGFX_CLEAR_COLOR, 0x00000000);
   bgfx::setViewClear(rendering::bga_layer_view, BGFX_CLEAR_NONE, 0x00000000);
 
-  bgfx::setViewClear(rendering::main_view, BGFX_CLEAR_DEPTH, 0x00000000, 1.0f,
+  bgfx::setViewClear(rendering::main_view, BGFX_CLEAR_NONE, 0x00000000, 1.0f,
                      0);
   bgfx::setViewClear(s_blurPass->blurViewH(), BGFX_CLEAR_COLOR, 0x00000000,
                      1.0f, 0);
   bgfx::setViewClear(s_blurPass->blurViewV(), BGFX_CLEAR_COLOR, 0x00000000,
                      1.0f, 0);
-  bgfx::setViewClear(s_blurPass->finalView(), BGFX_CLEAR_COLOR, 0x00000000,
+  bgfx::setViewClear(s_blurPass->finalView(), BGFX_CLEAR_NONE, 0x00000000,
                      1.0f, 0);
 
   context.restoreGameplayRenderViews = [&context]() {
@@ -1873,6 +1874,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           // Capture before drawing: render-time mutations and worker completions
           // must survive this acknowledgment and get their own settling frame.
           const auto beforeDrawing = ui::revisions();
+          const rendering::FrameSubmission frameSubmission;
           ui::FrameDemand frameDemand;
 #if TARGET_OS_IPHONE
           iosPreparedFrame.begin(uiPresentationState);
@@ -1905,6 +1907,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
               !bgaCompositeState.prepared.has_value() && hasActiveVisuals;
           const bool compositeFullscreenBga =
               submitPreparedFullscreen || submitLegacyFullscreen;
+          bool fullscreenComplete = !compositeFullscreenBga;
           std::optional<rendering::FullscreenBgaOutputKey> bgaOutputKey;
           bool bgaOutputSubmitted = false;
           if (compositeFullscreenBga) {
@@ -1919,8 +1922,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
                 context.jukebox.trySubmitFullscreenDirect(
                     *bgaCompositeState.prepared, s_blurPass->finalView(),
                     blurStrength, brightness);
+            fullscreenComplete = directFullscreen;
             if (!directFullscreen) {
-              bgfx::setViewClear(s_blurPass->finalView(), BGFX_CLEAR_COLOR, 0x00000000);
+              bgfx::setViewClear(s_blurPass->finalView(), BGFX_CLEAR_NONE, 0x00000000);
               if (s_blurPass->prepareOutput()) {
                 if (submitPreparedFullscreen) {
                   bgaOutputKey = rendering::fullscreenBgaOutputKey(
@@ -1951,11 +1955,15 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
                 }
                 const bool finalComplete = blurComplete && s_blurPass->drawOutput(brightness);
                 bgaOutputSubmitted = compositionComplete && finalComplete;
+                fullscreenComplete = finalComplete && (compositionComplete || submitLegacyFullscreen);
               } else if (submitPreparedFullscreen) {
                 context.jukebox.finalizePrepared(*bgaCompositeState.prepared);
               }
             }
           }
+          const bool drawsAccepted = frameSubmission.accepted();
+          const bool frameComplete = fullscreenComplete && drawsAccepted &&
+              context.uiBatchRenderer.frameComplete();
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
           const auto submitStarted = perf::latency::nowMicros();
 #endif
@@ -1975,13 +1983,12 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #else
           bgfx::frame();
 #endif
-          s_fullscreenBgaCache.complete(bgaOutputKey, bgaOutputSubmitted,
-              bgfx::getStats()->numDrawCallsPeak, bgfx::getCaps()->limits.maxDrawCalls);
+          s_fullscreenBgaCache.complete(bgaOutputKey, bgaOutputSubmitted, drawsAccepted);
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
           perf::latency::record(perf::latency::Stage::FrameSubmit,
                                 perf::latency::nowMicros() - submitStarted);
 #endif
-          uiPresentationSchedule.didPresent(beforeDrawing, frameDemand, uiNow);
+          uiPresentationSchedule.didPresent(beforeDrawing, frameDemand, uiNow, frameComplete);
           renderedFrame = true;
         }
       }

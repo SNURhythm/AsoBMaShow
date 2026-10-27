@@ -1,4 +1,5 @@
 #include "TexBatchRenderer.h"
+#include "FrameSubmission.h"
 #include "ShaderManager.h"
 #include "UniformCache.h"
 #include "bx/bx.h"
@@ -92,6 +93,7 @@ void TexBatchRenderer::flush() {
   ++flushCount;
   if (!bgfx::isValid(currentTexture)) {
     // Should not happen if addRect logic is correct, but safe to clear
+    rejectFrameSubmission();
     vertices.clear();
     indices.clear();
     return;
@@ -106,6 +108,7 @@ void TexBatchRenderer::flush() {
   if (bgfx::getAvailTransientVertexBuffer(
           numVertices, PosTexCoord0Vertex::ms_decl) < numVertices ||
       bgfx::getAvailTransientIndexBuffer(numIndices) < numIndices) {
+    rejectFrameSubmission();
     ++transientBufferMissCount;
     if (transientBufferMissCount <= 3 ||
         (transientBufferMissCount % 300) == 0) {
@@ -122,6 +125,15 @@ void TexBatchRenderer::flush() {
   bgfx::allocTransientVertexBuffer(&tvb, numVertices,
                                    PosTexCoord0Vertex::ms_decl);
   bgfx::allocTransientIndexBuffer(&tib, numIndices);
+
+  if (tvb.data == nullptr || tib.data == nullptr ||
+      tvb.size < numVertices * sizeof(PosTexCoord0Vertex) ||
+      tib.size < numIndices * sizeof(uint16_t)) {
+    rejectFrameSubmission();
+    vertices.clear();
+    indices.clear();
+    return;
+  }
 
   bx::memCopy(tvb.data, vertices.data(),
               numVertices * sizeof(PosTexCoord0Vertex));

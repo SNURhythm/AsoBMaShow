@@ -388,6 +388,7 @@ UiBatchRenderer::~UiBatchRenderer() { shutdown(); }
 
 void UiBatchRenderer::beginFrame() noexcept {
   discard();
+  frameComplete_ = true;
   if (backend_) backend_->beginFrame();
 }
 
@@ -501,6 +502,7 @@ bool UiBatchRenderer::flushCurrent() noexcept {
       .state = *state_};
   const bool submitted = backend_->submit(submission);
   if (!submitted) {
+    frameComplete_ = false;
     ui::invalidate();
     static std::uint32_t failures = 0;
     ++failures;

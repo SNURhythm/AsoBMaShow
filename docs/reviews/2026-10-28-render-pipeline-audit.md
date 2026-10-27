@@ -1,6 +1,6 @@
 # Render pipeline audit — 2026-10-28
 
-Audited `74e7bb69727f54248e4fb7554194efa1682b292f` on `fix/metal-hud-rendering-overhead`. This is an investigation report; the findings below are not implemented.
+Audited `74e7bb69727f54248e4fb7554194efa1682b292f` on `fix/metal-hud-rendering-overhead`. The findings describe that baseline. All four are now addressed; implementation and verification results follow the original investigation below.
 
 ## Findings
 
@@ -91,4 +91,29 @@ The CPU submits scene/UI before the fullscreen BGA tail, but `RenderPlan` orders
 
 Reviewed live frame scheduling, view ordering/state, transient and draw-item capacity, UI batching, BGA composition/cache/blur, iOS presentation gates, and export/readback boundaries. Diagnostic programs linked the current production test objects and actual bgfx backend. The allocation probe used Noop; UI, blur and clear probes used headless Metal on this Apple M1 Pro Mac. No private chart archive was scanned.
 
-All diagnostic runs completed successfully with the expected assertions/observations. The blur comparison and clear experiment were temporary probe variants. This report is the only repository change; an app rebuild/full test suite was not needed for it. Physical-device behavior, actual menu capacity pressure, and end-to-end frame/input latency were not measured.
+All initial diagnostic runs completed successfully with the expected assertions/observations. The initial blur comparison and clear experiment were temporary probe variants; that investigation changed only this report. Physical-device behavior, actual menu capacity pressure, and end-to-end frame/input latency were not measured.
+
+## Implemented fixes and results
+
+Common quad writers now preflight both transient pools and validate returned pointers and byte ranges before writing. All five export fullscreen paths share checked preparation, composition, blur and final output; a failure releases its prepared lease and cannot reach readback/encoding. Both single-chart and course export gates also reject incomplete UI uploads, bgfx draw drops and legacy batch allocation failures, returning their reserved encoder/readback storage.
+
+The live frame owner now acknowledges UI revisions only after the required submissions succeed. A small wrapper around the pinned bgfx translation unit exposes the current encoder's drop state before `frame()`, without modifying the submodule or waiting for the GPU. Additional encoders are conservatively unsupported. Scoped application failure accounting retains `SimpleBatchRenderer`/`TexBatchRenderer` allocation failures across batch resets and later successes. UI uploads retain their own per-frame failure latch. Fresh accepted frames recover normally: idle UI rendering can stop, and fullscreen BGA caching can resume even while the lifetime draw-demand peak remains high. These signals establish CPU submission acceptance, not GPU completion or successful display.
+
+The scene and both blur intermediate textures explicitly clamp U/V addressing. Ordinary output retains the initial color/depth clear and removes the later final-color and gameplay/UI-depth clears. The direct BGA path retains its opaque letterbox clear, and offscreen composition/blur clears remain intact.
+
+The final isolated Metal comparison uses the same M1 Pro, RGBA8/D32F target, four output views, 120 warm-up frames and 300 GPU samples as the audit probe:
+
+| Output size | Repeated clears, two runs | Initial clear only, two runs | Paired reduction |
+| --- | ---: | ---: | ---: |
+| 1280×720 | 51.75 / 43.00 µs | 44.46 / 37.25 µs | 7.29 / 5.75 µs |
+| 2560×1440 | 93.38 / 93.38 µs | 77.25 / 75.83 µs | 16.13 / 17.54 µs |
+
+Full RGBA readbacks remain identical. This is a small measured reduction in component GPU work, not evidence of an app FPS or phone latency improvement. The other three fixes address correctness; they are not presented as speedups.
+
+Verification:
+
+- Guarded allocation regressions reproduce the original short-write boundary and now pass for vertex/index exhaustion, short returned ranges, null storage and success. Legacy batch regressions reproduce the missed failure and verify rejection, safe writes and subsequent recovery.
+- Both actual export submission lambdas are exercised for render, UI, draw-drop and legacy allocation failures, resource release and successful recovery. Fullscreen stage failures also verify exactly-once prepared-lease release.
+- Native Noop coverage checks exact draw capacity, saturation, subsequent recovery despite a high historical peak, additional encoders and initialization/shutdown. Real Metal coverage checks UI saturation/retry/recovery, independent horizontal/vertical blur edge colors, and BGA output/cache/lease behavior.
+- Desktop `main` and unsigned iOS device builds pass. All 77 rendering/video checks plus three additional distinct UI/export checks pass: **80 distinct tests**. The focused extra run has six tests, three overlapping the rendering/video group. No Android build or physical-device run was performed.
+- Independent integration review found a legacy batch failure-propagation gap; the regression was reproduced and fixed. Follow-up review reports no findings. No deployment was performed.

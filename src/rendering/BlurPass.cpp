@@ -91,26 +91,19 @@ bool BlurPass::executeComplete() {
        (bgfx::getAvailTransientVertexBuffer(quads * 4, PosTexCoord0Vertex::ms_decl) < quads * 4 ||
         bgfx::getAvailTransientIndexBuffer(quads * 6) < quads * 6))) return false;
   if (blur_strength_ != 0.0f) {
-    blurHorizontal();
-    blurVertical();
+    if (!blurHorizontal() || !blurVertical()) return false;
   }
-  if (composite_enabled_) {
-    drawFinal();
-  }
-  return true;
+  return !composite_enabled_ || drawFinal();
 }
 
 bool BlurPass::drawOutput(float brightness) {
   if (!initialized_ || !std::isfinite(brightness) ||
       rendering::window_width <= 0 || rendering::window_height <= 0 ||
       !bgfx::isValid(outputTexture()) || !bgfx::isValid(prog_output_) ||
-      !bgfx::isValid(u_tex_color_) || !bgfx::isValid(u_tint_color_) ||
-      bgfx::getAvailTransientVertexBuffer(4, PosTexCoord0Vertex::ms_decl) < 4 ||
-      bgfx::getAvailTransientIndexBuffer(6) < 6) return false;
+      !bgfx::isValid(u_tex_color_) || !bgfx::isValid(u_tint_color_)) return false;
   bgfx::TransientVertexBuffer vertices{};
   bgfx::TransientIndexBuffer indices{};
-  bgfx::allocTransientVertexBuffer(&vertices, 4, PosTexCoord0Vertex::ms_decl);
-  bgfx::allocTransientIndexBuffer(&indices, 6);
+  if (!allocateTransientQuad(vertices, indices, PosTexCoord0Vertex::ms_decl)) return false;
   auto *quad = reinterpret_cast<PosTexCoord0Vertex *>(vertices.data);
   const float width = float(rendering::window_width), height = float(rendering::window_height);
   quad[0] = {0, height, 0, 0, 1};
@@ -191,7 +184,8 @@ void BlurPass::setTintAlpha(float alpha) { tint_alpha_ = alpha; }
 void BlurPass::createFrameBuffers() {
   bgfx::TextureHandle sceneTexture =
       bgfx::createTexture2D(scene_width_, scene_height_, false, 1,
-                            bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
+                            bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT |
+                            BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
   if (!bgfx::isValid(sceneTexture)) {
     return;
   }
@@ -224,7 +218,8 @@ void BlurPass::createBlurFrameBuffers() {
 
   bgfx::TextureHandle blurATexture =
       bgfx::createTexture2D(scene_width_, scene_height_, false, 1,
-                            bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
+                            bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT |
+                            BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
   if (!bgfx::isValid(blurATexture)) {
     return;
   }
@@ -237,7 +232,8 @@ void BlurPass::createBlurFrameBuffers() {
 
   bgfx::TextureHandle blurBTexture =
       bgfx::createTexture2D(scene_width_, scene_height_, false, 1,
-                            bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
+                            bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT |
+                            BGFX_SAMPLER_U_CLAMP | BGFX_SAMPLER_V_CLAMP);
   if (!bgfx::isValid(blurBTexture)) {
     destroyTarget(blurATexture, blurAFrameBuffer);
     return;
@@ -288,12 +284,12 @@ void BlurPass::destroyBlurFrameBuffers() {
   tex_blur_b_ = BGFX_INVALID_HANDLE;
 }
 
-void BlurPass::blurHorizontal() {
+bool BlurPass::blurHorizontal() {
   bgfx::setViewFrameBuffer(blur_view_h_, fb_blur_a_);
   bgfx::setViewRect(blur_view_h_, 0, 0, scene_width_, scene_height_);
 
+  if (!rendering::screenSpaceQuad()) return false;
   bgfx::setTexture(0, u_tex_color_, tex_scene_color_);
-  rendering::screenSpaceQuad();
 
   float texelSize[4];
   texelSize[0] = 1.0f / float(scene_width_);
@@ -306,14 +302,15 @@ void BlurPass::blurHorizontal() {
 
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
   bgfx::submit(blur_view_h_, prog_blur_h_);
+  return true;
 }
 
-void BlurPass::blurVertical() {
+bool BlurPass::blurVertical() {
   bgfx::setViewFrameBuffer(blur_view_v_, fb_blur_b_);
   bgfx::setViewRect(blur_view_v_, 0, 0, scene_width_, scene_height_);
 
+  if (!rendering::screenSpaceQuad()) return false;
   bgfx::setTexture(0, u_tex_color_, tex_blur_a_);
-  rendering::screenSpaceQuad();
 
   float texelSize[4];
   texelSize[0] = 1.0f / float(scene_width_);
@@ -326,18 +323,20 @@ void BlurPass::blurVertical() {
 
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
   bgfx::submit(blur_view_v_, prog_blur_v_);
+  return true;
 }
 
-void BlurPass::drawFinal() {
+bool BlurPass::drawFinal() {
   bgfx::setViewFrameBuffer(final_view_, BGFX_INVALID_HANDLE);
   bgfx::setViewRect(final_view_, rendering::ui_offset_x, rendering::ui_offset_y,
                     rendering::ui_view_width, rendering::ui_view_height);
 
+  if (!rendering::screenSpaceQuad()) return false;
   bgfx::setTexture(0, u_tex_color_, outputTexture());
   float tintColor[4] = {1.0f, 1.0f, 1.0f, tint_alpha_};
   bgfx::setUniform(u_tint_color_, tintColor);
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
-  rendering::screenSpaceQuad();
   bgfx::submit(final_view_, prog_rect_);
+  return true;
 }
 } // namespace rendering

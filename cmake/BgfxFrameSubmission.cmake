@@ -1,0 +1,22 @@
+include_guard(GLOBAL)
+
+function(asobmashow_enable_bgfx_frame_submission)
+    if(BGFX_AMALGAMATED)
+        message(FATAL_ERROR "Frame submission inspection requires non-amalgamated bgfx")
+    endif()
+    set(original "${BGFX_DIR}/src/bgfx.cpp")
+    set(wrapper "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/BgfxFrameSubmission.cpp")
+    get_target_property(sources bgfx SOURCES)
+    if(wrapper IN_LIST sources)
+        return()
+    endif()
+    if(NOT original IN_LIST sources)
+        message(FATAL_ERROR "bgfx source layout changed; review frame submission inspection")
+    endif()
+    list(REMOVE_ITEM sources "${original}")
+    list(APPEND sources "${wrapper}")
+    set_property(TARGET bgfx PROPERTY SOURCES "${sources}")
+    # Only the wrapper needs this path. Avoid changing all bgfx compile commands.
+    set_property(SOURCE "${wrapper}" TARGET_DIRECTORY bgfx APPEND PROPERTY
+        INCLUDE_DIRECTORIES "${BGFX_DIR}/src")
+endfunction()

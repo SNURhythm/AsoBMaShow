@@ -1,5 +1,6 @@
 #include "rendering/ShaderManager.h"
 #include "rendering/UiBatchRenderer.h"
+#include "rendering/FrameSubmission.h"
 #include "rendering/UniformCache.h"
 #include "view/ArtworkGlowProfile.h"
 #include "support/AllocationFailure.h"
@@ -458,6 +459,63 @@ bool testRetainedArtworkGlowMatchesCpuPixels() {
 
 } // namespace
 
+
+bool testSaturatedFrameRetriesAndRecovers() {
+  rendering::PosColorVertex::init();
+  rendering::PosTexCoord0Vertex::init();
+  const auto output = bgfx::createTexture2D(128, 128, false, 1,
+      bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
+  const auto framebuffer = bgfx::createFrameBuffer(1, &output, false);
+  const auto readback = bgfx::createTexture2D(128, 128, false, 1,
+      bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
+  float ortho[16];
+  bx::mtxOrtho(ortho, 0, 128, 128, 0, 0, 100, 0, bgfx::getCaps()->homogeneousDepth);
+  bgfx::setViewFrameBuffer(rendering::ui_view, framebuffer);
+  bgfx::setViewRect(rendering::ui_view, 0, 0, 128, 128);
+  bgfx::setViewTransform(rendering::ui_view, nullptr, ortho);
+  bgfx::setViewMode(rendering::ui_view, bgfx::ViewMode::Sequential);
+  bgfx::setViewClear(rendering::ui_view, BGFX_CLEAR_COLOR, 0x000000ff);
+  const auto program = rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
+  const std::array<rendering::PosColorVertex, 4> vertices = {{{0,0,0,0xff0000ff},
+      {128,0,0,0xff0000ff},{128,128,0,0xff0000ff},{0,128,0,0xff0000ff}}};
+  const std::array<std::uint16_t, 6> indices = {0,1,2,0,2,3};
+  rendering::UiBatchRenderer renderer;
+  ui::PresentationSchedule schedule;
+  bool passed = true;
+  for (const bool saturated : {false, true, false}) {
+    const auto before = ui::revisions();
+    renderer.beginFrame(); renderer.begin();
+    const auto capacity = bgfx::getCaps()->limits.maxDrawCalls;
+    if (saturated) for (std::uint32_t i = 0; i < capacity; ++i) bgfx::touch(rendering::ui_view);
+    const bool appended = renderer.appendColor(vertices, indices,
+        {.program = program, .state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A});
+    const bool flushed = renderer.flush(); renderer.end();
+    const bool accepted = rendering::frameDrawsAccepted() && renderer.frameComplete();
+    bgfx::frame();
+    const auto peak = bgfx::getStats()->numDrawCallsPeak;
+    schedule.didPresent(before, {}, 100, accepted);
+    const bool retry = schedule.shouldRender(108);
+    bgfx::blit(rendering::readback_view, readback, 0, 0, output);
+    std::vector<std::uint8_t> pixels(128 * 128 * 4);
+    const auto ready = bgfx::readTexture(readback, pixels.data());
+    while (bgfx::frame() < ready) {}
+    const int red = pixels[(64 * 128 + 64) * 4];
+    std::cout << "saturated=" << saturated << " append=" << appended
+              << " flush=" << flushed << " retry_next_frame=" << retry
+              << " red=" << red << " requested_peak=" << peak
+              << " capacity=" << capacity << '\n';
+    if (!appended || !flushed || retry != saturated || accepted == saturated ||
+        red != (saturated ? 0 : 255)) {
+      std::cerr << "FAIL: dropped UI frame retries and successful recovery returns to idle\n";
+      passed = false;
+    }
+  }
+  renderer.shutdown();
+  bgfx::setViewFrameBuffer(rendering::ui_view, BGFX_INVALID_HANDLE);
+  bgfx::destroy(framebuffer); bgfx::destroy(output); bgfx::destroy(readback);
+  return passed;
+}
+
 int main() {
   bgfx::Init init;
   init.type = bgfx::RendererType::Metal;
@@ -471,12 +529,13 @@ int main() {
   const bool cachesPassed = testResourceCacheHitsDoNotAllocate();
   const bool batchesPassed = testMixedUiBatchesSurviveGrowthAndSceneChanges();
   const bool glowPassed = testRetainedArtworkGlowMatchesCpuPixels();
+  const bool recoveryPassed = testSaturatedFrameRetriesAndRecovers();
   rendering::ShaderManager::getInstance().release();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::frame();
   bgfx::frame();
   bgfx::shutdown();
-  if (!cachesPassed || !batchesPassed || !glowPassed) return 1;
+  if (!cachesPassed || !batchesPassed || !glowPassed || !recoveryPassed) return 1;
   std::cout << "UI batch real-Metal tests passed\n";
   return 0;
 }

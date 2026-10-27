@@ -5,11 +5,13 @@
 # https://github.com/bkaradzic/bgfx/issues/3392#issuecomment-2582292135
 include("${CMAKE_CURRENT_LIST_DIR}/BgfxMetalReadback.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/IOSBgfxMainThreadLayer.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/BgfxFrameSubmission.cmake")
 
 function(asobmashow_ios_bgfx_metal_compatibility)
     if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
         return()
     endif()
+    asobmashow_enable_bgfx_frame_submission()
     if(BGFX_AMALGAMATED)
         message(FATAL_ERROR "iOS Metal compatibility requires non-amalgamated bgfx")
     endif()

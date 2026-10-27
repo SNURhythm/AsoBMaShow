@@ -37,18 +37,12 @@ public:
     return key && completed_ && *key == *completed_;
   }
   void invalidate() noexcept { completed_.reset(); }
-  // Call after bgfx::frame/IOSPreparedFrame accepted the complete output, with
-  // Stats::numDrawCallsPeak read AFTER that call and Caps::limits.maxDrawCalls.
-  // Unlike the delayed render-thread numDraw, this CPU-side lifetime peak is
-  // updated by frame()'s encoderApiWait from submitted + dropped render items.
-  // Once it exceeds capacity we cannot prove later frames accepted every draw:
-  // conservatively recompose until bgfx reinitialization resets the peak.
-  // A failed draw, interrupted frame or partial overwrite evicts the old key.
+  // Capture current-frame draw acceptance before frame(), then publish only
+  // after the presentation attempt succeeds. A later accepted frame can recover
+  // even when bgfx's lifetime draw-demand peak records an earlier overload.
   void complete(const std::optional<FullscreenBgaOutputKey> &key,
-                bool outputSubmitted, std::uint32_t requestedDrawPeak,
-                std::uint32_t drawCapacity) noexcept {
-    completed_ = outputSubmitted && drawCapacity != 0 && requestedDrawPeak <= drawCapacity
-        ? key : std::nullopt;
+                bool outputSubmitted, bool drawsAccepted) noexcept {
+    completed_ = outputSubmitted && drawsAccepted ? key : std::nullopt;
   }
 
 private:

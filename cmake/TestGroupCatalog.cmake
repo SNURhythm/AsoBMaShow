@@ -223,6 +223,7 @@ asobmashow_label_tests(area_replay
     replay_codec_primitive_tests
     replay_codec_store_contract_tests
     replay_export_cancellation_boundary
+    replay_export_frame_completion_tests
     replay_export_job_tests
     replay_file_action_service_tests
     replay_file_association_coordinator_tests
@@ -528,6 +529,8 @@ asobmashow_label_tests(area_rendering
     play_skin_viewport_tests
     presentation_orientation_state_tests
     replay_video_ui_batch_contract
+    rendering_transient_boundary_tests
+    replay_export_frame_completion_tests
     skin_cover_normalization_tests
     skin_destination_evaluator_tests
     skin_draw_command_tests

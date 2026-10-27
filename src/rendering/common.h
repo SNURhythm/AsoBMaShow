@@ -186,21 +186,37 @@ inline void setScissorUI(double x, double y, double width, double height) {
 
 bgfx::TextureHandle sdlSurfaceToBgfxTexture(SDL_Surface *surface);
 
-void createRect(bgfx::TransientVertexBuffer &tvb,
+// False means no complete geometry was produced; frame owners must also check
+// bgfx submission acceptance before acknowledging presentation or encoding.
+bool createRect(bgfx::TransientVertexBuffer &tvb,
                 bgfx::TransientIndexBuffer &tib, int x, int y, int width,
                 int height, uint32_t color);
 
-void renderTextureRegion(bgfx::TextureHandle texture, bgfx::ViewId viewId,
+bool renderTextureRegion(bgfx::TextureHandle texture, bgfx::ViewId viewId,
                          float x, float y, float width, float height);
-void renderTextureRegionTint(bgfx::TextureHandle texture, bgfx::ViewId viewId,
+bool renderTextureRegionTint(bgfx::TextureHandle texture, bgfx::ViewId viewId,
                              float x, float y, float width, float height,
                              float brightness);
-void renderTextureRegionScissor(bgfx::TextureHandle texture,
+bool renderTextureRegionScissor(bgfx::TextureHandle texture,
                                 bgfx::ViewId viewId, int x, int y, int width,
                                 int height);
-void renderFullscreenTexture(bgfx::TextureHandle texture, bgfx::ViewId viewId);
-void renderFullscreenTextureTint(bgfx::TextureHandle texture,
+bool renderFullscreenTexture(bgfx::TextureHandle texture, bgfx::ViewId viewId);
+bool renderFullscreenTextureTint(bgfx::TextureHandle texture,
                                  bgfx::ViewId viewId, float brightness);
+
+// All quad writers must validate both pools before consuming either, then
+// validate the returned byte ranges before touching memory.
+inline bool allocateTransientQuad(bgfx::TransientVertexBuffer &vertices,
+                                  bgfx::TransientIndexBuffer &indices,
+                                  const bgfx::VertexLayout &layout) {
+  if (bgfx::getAvailTransientVertexBuffer(4, layout) < 4 ||
+      bgfx::getAvailTransientIndexBuffer(6) < 6) return false;
+  bgfx::allocTransientVertexBuffer(&vertices, 4, layout);
+  bgfx::allocTransientIndexBuffer(&indices, 6);
+  return vertices.data != nullptr && indices.data != nullptr &&
+      vertices.size >= 4U * layout.getStride() &&
+      indices.size >= 6U * sizeof(uint16_t);
+}
 
 static PosTexCoord0Vertex s_quadVertices[] = {
     {-1.0f, 1.0f, 0.0f, 0.0f, 0.0f},
@@ -209,7 +225,7 @@ static PosTexCoord0Vertex s_quadVertices[] = {
     {1.0f, -1.0f, 0.0f, 1.0f, 1.0f},
 };
 static const uint16_t s_quadIndices[] = {0, 1, 2, 1, 3, 2};
-inline void screenSpaceQuad() {
+inline bool screenSpaceQuad() {
   bgfx::TransientVertexBuffer tvb{};
   bgfx::TransientIndexBuffer tib{};
 
@@ -217,8 +233,7 @@ inline void screenSpaceQuad() {
   //  currentFrame / 30.0f);
 
   bgfx::VertexLayout &layout = rendering::PosTexCoord0Vertex::ms_decl;
-  bgfx::allocTransientVertexBuffer(&tvb, 4, layout);
-  bgfx::allocTransientIndexBuffer(&tib, 6);
+  if (!allocateTransientQuad(tvb, tib, layout)) return false;
   auto *vertex = (rendering::PosTexCoord0Vertex *)tvb.data;
 
   // Define quad vertices
@@ -254,5 +269,6 @@ inline void screenSpaceQuad() {
   indices[5] = 2;
   bgfx::setVertexBuffer(0, &tvb);
   bgfx::setIndexBuffer(&tib);
+  return true;
 }
 } // namespace rendering

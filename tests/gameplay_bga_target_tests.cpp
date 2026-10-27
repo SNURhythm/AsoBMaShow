@@ -8,6 +8,7 @@
 #include "RAII.h"
 #include "rendering/BlurPass.h"
 #include "rendering/FullscreenBgaCache.h"
+#include "rendering/FrameSubmission.h"
 #include "rendering/ShaderManager.h"
 #include "rendering/UniformCache.h"
 #include "skin/beatoraja/SkinDestinationEvaluator.cpp"
@@ -1189,9 +1190,9 @@ void testFullscreenBgaIdentityCompletionAndLeases() {
   const auto key = keyFor(first);
   rendering::FullscreenBgaCache cache;
   require(key && !cache.canReuse(key), "unproduced output cannot be reused");
-  cache.complete(key, false, 6, 16);
+  cache.complete(key, false, true);
   require(!cache.canReuse(key), "incomplete output does not populate the cache");
-  cache.complete(key, true, 6, 16);
+  cache.complete(key, true, true);
   jukebox.finalizePrepared(first);
   const auto repeated = jukebox.prepareImageFrame(image);
   require(repeated.sequence != first.sequence &&
@@ -1253,20 +1254,20 @@ void testFullscreenBgaIdentityCompletionAndLeases() {
   jukebox.finalizePrepared(sought);
   cache.invalidate();
   require(!cache.canReuse(key), "cancelled/export frames cannot retain a completed key");
-  cache.complete(key, true, 6, 16);
-  cache.complete(key, false, 6, 16);
+  cache.complete(key, true, true);
+  cache.complete(key, false, true);
   require(!cache.canReuse(key), "a partial overwrite evicts previously complete output");
-  cache.complete(key, true, 6, 16);
-  cache.complete(std::nullopt, true, 6, 16);
+  cache.complete(key, true, true);
+  cache.complete(std::nullopt, true, true);
   require(!cache.canReuse(key), "legacy unknown output never becomes a reusable entry");
-  cache.complete(key, true, 16, 16);
+  cache.complete(key, true, true);
   require(cache.canReuse(key), "exact render-item capacity accepts every requested draw");
-  cache.complete(key, true, 17, 16);
+  cache.complete(key, true, false);
   require(!cache.canReuse(key), "dropped render items evict otherwise complete output");
-  cache.complete(key, true, 17, 16);
-  require(!cache.canReuse(key), "an unchanged excessive lifetime peak remains untrustworthy");
-  cache.complete(key, true, 0, 0);
-  require(!cache.canReuse(key), "unknown render-item capacity cannot certify output");
+  cache.complete(key, true, false);
+  require(!cache.canReuse(key), "repeated dropped frames remain untrustworthy");
+  cache.complete(key, true, false);
+  require(!cache.canReuse(key), "unknown draw acceptance cannot certify output");
 }
 
 void testImageTextureOwnershipTransferIsSingleAndExceptionSafe() {
@@ -1874,16 +1875,17 @@ void testFullscreenBgaReuseOnMetal() {
             "recompute, reuse and failed submission all release their prepared leases");
     Result result;
     if (complete) bgfx::blit(rendering::readback_view, readback, 0, 0, output);
+    const bool drawsAccepted = rendering::frameDrawsAccepted();
     auto current = bgfx::frame(failureStage == 4 ? BGFX_FRAME_DISCARD : BGFX_FRAME_NONE);
     // Read immediately after frame(), before any extra readback/drain frames:
     // encoder demand is current here even though numDraw is still delayed.
     const auto drawPeak = bgfx::getStats()->numDrawCallsPeak;
     const auto drawCapacity = bgfx::getCaps()->limits.maxDrawCalls;
-    cache.complete(key, complete, drawPeak, drawCapacity);
+    cache.complete(key, complete, drawsAccepted);
     if (failureStage == 5)
       require(drawPeak > drawCapacity && !cache.canReuse(key),
               "same-frame CPU draw demand rejects the changed content before any reuse opportunity");
-    require(cache.canReuse(key) == (complete && key.has_value() && drawPeak <= drawCapacity),
+    require(cache.canReuse(key) == (complete && key.has_value() && drawsAccepted),
             "only complete output with accepted render items becomes reusable");
     const auto ready = complete ? bgfx::readTexture(readback, result.pixels.data()) : current;
     current = bgfx::frame();
@@ -2028,8 +2030,7 @@ void testFullscreenBgaReuseOnMetal() {
     require(present(frame, false).pixels == firstPixels,
             "backward seek recomposes the original decoded pixels");
   }
-  // Run saturation last: the real bgfx demand peak is a lifetime value, so
-  // subsequent frames deliberately retain the conservative recompute path.
+  // Recovery must restore reuse despite the excessive historical demand peak.
   image = makeImage(false);
   const auto beforeSaturation = present(jukebox.prepareImageFrame(image), false);
   require(present(jukebox.prepareImageFrame(image), true).pixels == beforeSaturation.pixels,
@@ -2040,8 +2041,8 @@ void testFullscreenBgaReuseOnMetal() {
           "actual render-item saturation drops B's composition and retains A pixels");
   const auto recoveredReplacement = present(jukebox.prepareImageFrame(image), false);
   require(recoveredReplacement.draws == 6 && recoveredReplacement.pixels != beforeSaturation.pixels &&
-              present(jukebox.prepareImageFrame(image), false).pixels == recoveredReplacement.pixels,
-          "the next successful B frame recomposes; an excessive lifetime peak never certifies reuse");
+              present(jukebox.prepareImageFrame(image), true).pixels == recoveredReplacement.pixels,
+          "the next successful B frame recomposes and subsequent frames reuse correct pixels");
   jukebox.unloadVisuals();
   for (const auto view : {rendering::bga_view, rendering::bga_layer_view,
                           blur.blurViewH(), blur.blurViewV(), blur.finalView(), rendering::main_view}) {
@@ -2183,6 +2184,93 @@ void testFullscreenBlurBypassOnMetal() {
   bgfx::destroy(output);
   bgfx::destroy(readback);
   bgfx::destroy(input);
+  bgfx::frame();
+}
+
+void testFullscreenBlurClampsScreenEdgesOnMetal() {
+  constexpr int width = 64, height = 64;
+  const int oldWidth = rendering::window_width, oldHeight = rendering::window_height;
+  rendering::window_width = width;
+  rendering::window_height = height;
+  const auto restore = makeScopeExit([&] {
+    rendering::window_width = oldWidth;
+    rendering::window_height = oldHeight;
+  });
+  const auto output = bgfx::createTexture2D(width, height, false, 1,
+      bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
+  const auto readback = bgfx::createTexture2D(width, height, false, 1,
+      bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
+  const auto framebuffer = bgfx::createFrameBuffer(1, &output, false);
+  require(bgfx::isValid(output) && bgfx::isValid(readback) && bgfx::isValid(framebuffer),
+          "blur edge probe creates Metal readback targets");
+  {
+    // Independent color channels expose horizontal and vertical wrapping in
+    // one readback. Each strip is wider than the eight-texel blur radius.
+    std::array<std::uint8_t, width * height * 4> source{};
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        const auto offset = (y * width + x) * 4;
+        source[offset] = x < 16 ? 255 : 0;
+        source[offset + 1] = y < 16 ? 255 : 0;
+        source[offset + 3] = 255;
+      }
+    }
+    ImageData data{.texture = bgfx::createTexture2D(width, height, false, 1,
+        bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_POINT,
+        bgfx::copy(source.data(), source.size())),
+        .width = width, .height = height, .channels = 4};
+    require(bgfx::isValid(data.texture), "blur edge probe creates its input image");
+    auto image = AdoptImageTextureToSharedOwner(data);
+    Stopwatch stopwatch;
+    auto control = std::make_shared<JukeboxBackendControl>();
+    Jukebox jukebox(&stopwatch, std::make_unique<JukeboxTestBackendFactory>(control));
+    jukebox.setBgaDisplayMode(AppSettings::BgaDisplayMode::Stretch);
+    rendering::BlurPass blur(1, 1.0F);
+    blur.init(width, height);
+    blur.setBlurStrength(2);
+    blur.setCompositeEnabled(false);
+    blur.setInputViews({rendering::bga_view, rendering::bga_layer_view});
+    rendering::applyViewOrder(blur.blurViewH(), blur.blurViewV(), blur.finalView());
+    float ortho[16];
+    bx::mtxOrtho(ortho, 0.0F, float(width), float(height), 0.0F, 0.0F,
+                 100.0F, 0.0F, bgfx::getCaps()->homogeneousDepth);
+    for (const auto view : {rendering::bga_view, rendering::bga_layer_view, blur.finalView()}) {
+      bgfx::setViewTransform(view, nullptr, ortho);
+      bgfx::setViewRect(view, 0, 0, width, height);
+      bgfx::setViewClear(view, view == rendering::bga_layer_view ? BGFX_CLEAR_NONE : BGFX_CLEAR_COLOR, 0);
+    }
+    bgfx::setViewFrameBuffer(blur.finalView(), framebuffer);
+    require(blur.prepareOutput(), "blur edge probe prepares all targets");
+    const auto frame = jukebox.prepareImageFrame(image);
+    bgfx::touch(rendering::bga_view);
+    bgfx::touch(rendering::bga_layer_view);
+    require(jukebox.submitFullscreenComplete(frame), "blur edge probe composes its image");
+    require(blur.executeComplete() && blur.drawOutput(1.0F), "blur edge probe submits both blur passes and output");
+    bgfx::blit(rendering::readback_view, readback, 0, 0, output);
+    std::array<std::uint8_t, width * height * 4> pixels{};
+    const auto ready = bgfx::readTexture(readback, pixels.data());
+    auto current = bgfx::frame();
+    for (unsigned guard = 0; current < ready && guard < 16; ++guard) current = bgfx::frame();
+    require(current >= ready, "blur edge probe completes readback");
+    // Screen edges retain their own colors, never the opposite edge's. At
+    // the interior strip boundaries, four taps contribute 0.41 * 255 = 105.
+    for (const auto sample : {std::array{0, 0, 255, 255}, std::array{63, 0, 0, 255},
+                              std::array{0, 63, 255, 0}, std::array{63, 63, 0, 0},
+                              std::array{32, 32, 0, 0}, std::array{16, 32, 105, 0},
+                              std::array{32, 16, 0, 105}}) {
+      const auto offset = (sample[1] * width + sample[0]) * 4;
+      require(std::abs(int(pixels[offset]) - sample[2]) <= 1,
+              "horizontal blur clamps screen edges and still softens the interior boundary");
+      require(std::abs(int(pixels[offset + 1]) - sample[3]) <= 1,
+              "vertical blur clamps screen edges and still softens the interior boundary");
+      require(pixels[offset + 2] == 0 && pixels[offset + 3] == 255,
+              "blur edge output preserves blue and opaque alpha");
+    }
+    for (const auto view : {rendering::bga_view, rendering::bga_layer_view, blur.finalView()})
+      bgfx::setViewFrameBuffer(view, BGFX_INVALID_HANDLE);
+  }
+  bgfx::setViewOrder(0);
+  bgfx::destroy(framebuffer); bgfx::destroy(output); bgfx::destroy(readback);
   bgfx::frame();
 }
 
@@ -2363,6 +2451,7 @@ int main(int argc, char **argv) {
     testDirectFullscreenBgaOnMetal();
     testFullscreenBgaReuseOnMetal();
     testFullscreenBlurBypassOnMetal();
+    testFullscreenBlurClampsScreenEdgesOnMetal();
     testNativeVideoPlaybackSelectsSurfaceRendering();
     testEmbeddedImageResetsSkinSamplingOnMetal();
   } else {

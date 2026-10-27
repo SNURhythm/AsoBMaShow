@@ -74,7 +74,8 @@ public:
   }
   void invalidate() noexcept { presented_ = false; }
   void didPresent(Revisions beforeDrawing, FrameDemand demand,
-                  std::uint64_t now) noexcept {
+                  std::uint64_t now, bool complete = true) noexcept {
+    if (!complete) { invalidate(); return; }
     presentedRevisions_ = beforeDrawing;
     demand_ = demand;
     presentedAt_ = now;

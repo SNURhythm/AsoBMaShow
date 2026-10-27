@@ -1,4 +1,5 @@
 #include "SimpleBatchRenderer.h"
+#include "FrameSubmission.h"
 #include "ShaderManager.h"
 #include "bx/bx.h"
 #include <algorithm>
@@ -202,6 +203,7 @@ void SimpleBatchRenderer::flush() {
   if (bgfx::getAvailTransientVertexBuffer(
           numVertices, PosColorVertex::ms_decl) < numVertices ||
       bgfx::getAvailTransientIndexBuffer(numIndices) < numIndices) {
+    rejectFrameSubmission();
     ++transientBufferMissCount;
     if (transientBufferMissCount <= 3 ||
         (transientBufferMissCount % 300) == 0) {
@@ -217,6 +219,15 @@ void SimpleBatchRenderer::flush() {
 
   bgfx::allocTransientVertexBuffer(&tvb, numVertices, PosColorVertex::ms_decl);
   bgfx::allocTransientIndexBuffer(&tib, numIndices);
+
+  if (tvb.data == nullptr || tib.data == nullptr ||
+      tvb.size < numVertices * sizeof(PosColorVertex) ||
+      tib.size < numIndices * sizeof(uint16_t)) {
+    rejectFrameSubmission();
+    vertices.clear();
+    indices.clear();
+    return;
+  }
 
   bx::memCopy(tvb.data, vertices.data(), numVertices * sizeof(PosColorVertex));
   bx::memCopy(tib.data, indices.data(), numIndices * sizeof(uint16_t));

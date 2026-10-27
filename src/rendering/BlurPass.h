@@ -46,9 +46,9 @@ private:
   void createBlurFrameBuffers();
   void destroyBlurFrameBuffers();
   void destroyFrameBuffers();
-  void blurHorizontal();
-  void blurVertical();
-  void drawFinal();
+  bool blurHorizontal();
+  bool blurVertical();
+  bool drawFinal();
 
   uint16_t downsample_ = 2;
   float tint_alpha_ = 0.6f;

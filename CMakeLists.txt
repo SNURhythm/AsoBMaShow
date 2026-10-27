@@ -674,6 +674,8 @@ install(DIRECTORY assets DESTINATION bin)
 
 # Subdirectories
 add_subdirectory(bgfx)
+include(cmake/BgfxFrameSubmission.cmake)
+asobmashow_enable_bgfx_frame_submission()
 include(cmake/BgfxVulkanFixes.cmake)
 asobmashow_fix_bgfx_vulkan()
 include(cmake/BgfxMetalReadback.cmake)
@@ -2705,6 +2707,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(replay_video_ui_batch_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    foreach(render_boundary_test IN ITEMS
+            rendering_transient_boundary_tests replay_export_frame_completion_tests)
+        add_test(NAME ${render_boundary_test}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/${render_boundary_test}.py)
+        set_tests_properties(${render_boundary_test} PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}")
+    endforeach()
     add_library(ir_submission_eligibility_test_support STATIC
         src/ir/tachi/TachiEligibility.cpp
         src/ir/IrOutboxModels.cpp
