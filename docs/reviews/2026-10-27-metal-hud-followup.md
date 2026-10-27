@@ -119,7 +119,25 @@ export test also passes. The 54 iOS build-setup checks pass, with the revised
 initialization-only drawable-pool check rerun after the simulator exposed the
 layer setter restriction. Desktop, unsigned iOS device and simulator builds pass.
 A worker-thread native CAMetalDisplayLink smoke submitted three successive
-frames. Physical device latency measurement remains deferred.
+frames. Simulator launch reached the Metal worker and display-link handoff,
+but screenshots were black on both display-link and timer paths while the host
+Mac was locked. The user deferred the unlocked visual/background-resume smoke
+check and requested pushing the source-level fixes. Physical device latency
+measurement remains deferred. Independent read-only review of
+`8302bbe6..42f0fcef` found no critical, important or minor source defects.
+
+Implementation decisions retained during review:
+- No new telemetry or submission limiter: measurement was excluded, so no
+  measured latency/queue-depth improvement is claimed.
+- Accepted late frames may present to preserve forward progress; they can miss
+  their intended refresh.
+- Very low/nondivisor caps use timer pacing; they do not gain display-link
+  scheduling.
+- One combined unsigned iOS build verified the bridge and view ordering after
+  implementation; this delayed platform feedback rather than duplicating builds.
+- Two existing Android test fixtures gained missing boundary stubs so the
+  affected group could compile. Production Android behavior is unchanged;
+  those stubs do not validate the unrelated reminder/notification features.
 
 ## Device comparison
 

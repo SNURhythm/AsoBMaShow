@@ -58,6 +58,6 @@ Interface: retain `applyViewOrder` and all view IDs; change only execution order
 
 ### Task 3: Integration verification and review
 
-- [ ] Run relevant rendering/platform groups, full iOS setup tests and unsigned iOS build. Smoke test an available simulator without collecting performance measurements.
-- [ ] Document final behavior, compatibility fallbacks and unavailable physical-device validation. Dispatch one fresh code review focused on the spec's ownership and interruption boundaries.
-- [ ] Resolve important review findings with focused regressions, update PR #161, and push completed work. Confirm clean task state and PR registration.
+- [x] Run relevant rendering/platform groups, full iOS setup tests and unsigned iOS build. Simulator launch checked; unlocked visual/background-resume smoke deferred by the user because the Mac is inaccessible.
+- [x] Document final behavior, compatibility fallbacks and unavailable physical-device validation. Dispatch one fresh code review focused on the spec's ownership and interruption boundaries.
+- [x] Resolve important review findings with focused regressions, update PR #161, and push completed work. Confirm clean task state and PR registration.
