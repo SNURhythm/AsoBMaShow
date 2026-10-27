@@ -124,4 +124,6 @@ ownership. Existing native NV12/software YUV fixtures verify tinted pixels.
 The image test first failed before direct submission existed; the video test
 failed without the new shaders, then passed with the compiled shaders.
 All 87 rendering/video/iOS platform checks pass, along with the desktop and
-unsigned iOS device builds. Final independent review is pending.
+unsigned iOS device builds. Independent review of the full branch through
+`63f77008` found no critical, important or minor issues. On-device performance
+benefit remains unmeasured.

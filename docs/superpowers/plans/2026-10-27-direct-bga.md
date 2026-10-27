@@ -39,4 +39,4 @@
 - [x] Build `tests_rendering tests_video tests_platform_ios main` with `cmake --build cmake-build-debug --target tests_rendering tests_video tests_platform_ios main -j 6`.
 - [x] Run `ctest --test-dir cmake-build-debug -L '^(area_rendering|area_video|platform_ios)$' --output-on-failure --no-tests=error -j 6`; expect all selected checks pass.
 - [x] Run `scripts/ios_firebase_deploy.sh --build-only --skip-init`; expect unsigned build success.
-- [ ] Document pause/resume source findings and device report without claiming a measured cause; update PR scope, commit, review and push.
+- [x] Document pause/resume source findings and device report without claiming a measured cause; update PR scope, commit, review and push.
