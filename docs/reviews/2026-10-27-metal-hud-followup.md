@@ -22,10 +22,10 @@ avoidable queued frame.
   discarded. Telemetry also logs process resident bytes, renderer texture and
   render-target bytes, and transient upload usage every five seconds.
 
-iOS 17+ now uses a worker-owned CAMetalDisplayLink with a requested one-frame
-rendering budget. The existing timer remains the compatibility fallback; its
-frame-budget correction is described below. UIKit event delivery and audio
-remain independent of the presentation wait.
+iOS currently uses the corrected timer pacing for the pacing-only A/B build
+described below. The iOS 17+ worker-owned CAMetalDisplayLink implementation is
+retained but disabled at the application call site. UIKit event delivery and
+audio remain independent of the presentation wait.
 The fixed count is applied in the generated Metal source without changing the
 upstream submodule. Ordinary resize and replay-export restoration retain it;
 no custom reset flag or configurable buffering state is needed. The iOS pool
@@ -108,6 +108,32 @@ Queue-depth/refresh-phase correlation and physical latency comparisons are
 deferred as requested. A pool of three drawables does not require three queued
 presentations, and a GPU-completion fence alone cannot detect a completed frame
 waiting for display. Any future submission limit should follow device evidence.
+
+## Pacing-only A/B follow-up
+
+The user reported visible output with HUD Present Delay increasing from about
+16 ms to 23 ms after enabling the display-link path. GPU time for that comparison
+is unknown, so neither extra GPU work nor an exact input-latency increase has
+been established.
+
+The next candidate disables only application display-link pacing through
+`useMetalDisplayLinkPacing = false` in `src/main.cpp`. No native display link is
+created, bgfx acquires its drawable normally, and the corrected timer accounts
+for all frame work before any remaining sleep. Three drawables, offscreen-first
+view order, zero-blur bypass and UI upload reuse remain unchanged.
+
+Source inspection found SDL already registers a CADisplayLink to request high
+refresh rates. Its animation callback is unset here, so it neither renders nor
+presents. bgfx still owns GPU completion synchronization and presentation; the
+new provider replaces drawable acquisition rather than duplicating it. SDL's
+refresh callback and bgfx's synchronization are unchanged for this comparison.
+
+Compare this candidate with `5804f12c` using the same chart/scene, skin, BGA,
+refresh rate, cap and thermal conditions. Record HUD Present Delay, FPS and GPU
+time. A return near 16 ms would implicate the display-link path without yet
+identifying its exact scheduling cause. No new telemetry is required.
+The timer candidate passes the four focused pacing/provider/export/BGA checks
+and an unsigned iOS device build. The on-device A/B result is still pending.
 
 ## Local verification
 

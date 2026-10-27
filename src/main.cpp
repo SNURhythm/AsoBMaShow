@@ -1066,6 +1066,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       context.replayVideoExportActive.load(std::memory_order_acquire);
 #if TARGET_OS_IPHONE
   FramePacer iosPresentationPacer;
+  // Pacing-only A/B: restore the timer after the reported 16 -> 23 ms
+  // present-delay increase. Keep the bridge available for isolated diagnosis.
+  constexpr bool useMetalDisplayLinkPacing = false;
   video::MetalDisplayLink iosDisplayLink;
   platform::IOSPreparedFrame iosPreparedFrame;
   std::uint64_t lastUiPresentationGeneration = 0;
@@ -1185,7 +1188,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     const auto displayLinkState = GetIOSPresentationState();
     const auto displayLinkViewport = GetIOSWindowSnapshot(s_window);
     bool iosDisplayLinkFrame = false;
-    if (!iosPreparedFrame.pending() && displayLinkState.active &&
+    if (useMetalDisplayLinkPacing && !iosPreparedFrame.pending() &&
+        displayLinkState.active &&
         !context.replayVideoExportActive.load(std::memory_order_acquire) &&
         !context.rendererAccess.exportRequested()) {
       iosDisplayLinkFrame = iosDisplayLink.beginFrame(
