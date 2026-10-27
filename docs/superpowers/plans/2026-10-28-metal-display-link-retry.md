@@ -93,15 +93,19 @@ Independent review passed specification and code-quality checks with no remainin
 actionable correctness findings. No deployment or installation was performed by
 the agent.
 
-## First device result and decision
+## Device results and decision
 
 After the `490ab0b7` candidate, the user reports approximately **15.1 ms Present
 Delay before pausing, with 120 FPS sustained**. This is about 0.8 ms below the
 previous 15.9 ms acquisition-gate report and does not reproduce the earlier
 presentation-wait experiment's drop to 60 FPS.
 
-Keep this display-link candidate. Treat the improvement as provisional: the
-previous report was on a warm iPad using a fast charger, and matching thermal and
-charging conditions have not been confirmed. Post-resume delay for this candidate
-has not yet been reported; the earlier approximately 12 ms post-resume result
-belongs to the acquisition-gate candidate and remains a separate comparison.
+The user subsequently confirms that pause/resume **does not bring this candidate
+toward the previous approximately 12 ms reading**. An exact post-resume value was
+not supplied. The earlier 12 ms result belongs to the acquisition-gate candidate.
+
+Retain this experimental candidate for comparison. The result is mixed: its
+reported delay before pausing is lower, but it does not reproduce the previous
+path's post-resume benefit. An overall latency advantage is not established.
+The previous report was on a warm iPad using a fast charger, and matching thermal
+and charging conditions have not been confirmed.
