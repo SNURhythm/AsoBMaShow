@@ -79,6 +79,9 @@ public:
   void update();
   void render(bgfx::ViewId viewId, float viewX, float viewY, float viewWidth,
               float viewHeight) const;
+  [[nodiscard]] bool renderComplete(bgfx::ViewId viewId, float viewX,
+      float viewY, float viewWidth, float viewHeight) const;
+  [[nodiscard]] std::uint64_t contentIdentity() const noexcept;
   [[nodiscard]] bool renderFullscreenTinted(
       bgfx::ViewId viewId, float viewX, float viewY, float viewWidth,
       float viewHeight, float brightness) const;
@@ -157,6 +160,7 @@ private:
   int videoFrameWidth;
   int videoFrameHeight;
   bool hasVideoFrame;
+  std::uint64_t presentedContentIdentity = 0; // Protected by videoFrameMutex.
   std::size_t reservedDecodedBytes = 0;
 
   bgfx::UniformHandle s_texY = BGFX_INVALID_HANDLE;

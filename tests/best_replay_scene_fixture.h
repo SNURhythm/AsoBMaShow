@@ -86,7 +86,7 @@ void testSceneUpdatesPersonalBestGhostWithoutChangingSelectedTarget() {
   schedule.didPresent(ui::revisions(), {}, 0);
   scene.applyPendingBestReplay();
   assert(!schedule.shouldRender(1) && "completion polling must let the playfield settle");
-  assert(scene.activeBestScoreTarget.scoreAfterNotes == std::vector<int>({0, 2, 3, 3}));
+  assert(scene.activeBestScoreTarget.scoreAfterNotes == pacemaker::ScoreProgression({0, 2, 3, 3}));
 }
 
 void testSceneIgnoresLoadedReplayWithoutChartOrBestSnapshot() {

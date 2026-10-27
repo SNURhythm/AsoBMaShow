@@ -4,6 +4,7 @@
 #include "ClubBeat.h"
 #include "AudioWrapper.h"
 #include "GameplayBgaFrame.h"
+#include "../rendering/ContentIdentity.h"
 #include "JukeboxSchedulerWake.h"
 #include <algorithm>
 #include <array>
@@ -40,6 +41,10 @@ struct ImageData {
   int height = 0;
   int channels = 0;
   bgfx::TextureHandle layerTexture = BGFX_INVALID_HANDLE;
+  // Issued on adoption. Adopted pixels/metadata are immutable until released;
+  // callers replacing them must adopt a new image. External mutable images
+  // leave this zero and use conservative fullscreen recomposition.
+  std::uint64_t contentIdentity = 0;
 };
 
 // Creates the pinned TYPE_LAYER representation without relying on a runtime
@@ -284,6 +289,11 @@ public:
   void finalizePrepared(
       const PreparedGameplayBgaFrame &frame) noexcept override;
   void submitFullscreen(const PreparedGameplayBgaFrame &frame) noexcept override;
+  [[nodiscard]] bool submitFullscreenComplete(
+      const PreparedGameplayBgaFrame &frame) noexcept;
+  // Reuse still validates and explicitly consumes this presentation's lease.
+  [[nodiscard]] bool consumeFullscreenReuse(
+      const PreparedGameplayBgaFrame &frame) noexcept;
   [[nodiscard]] bool trySubmitFullscreenDirect(
       const PreparedGameplayBgaFrame &frame, bgfx::ViewId viewId,
       float blurStrength, float brightness) noexcept;
@@ -438,8 +448,11 @@ private:
   [[nodiscard]] std::optional<PinnedGameplayBgaSurface>
   prepareGameplayBgaSurface(GameplayBgaRole role, int visualId,
                             std::unordered_set<int> &updatedVideoIds);
-  void submitFullscreenSurface(const PinnedGameplayBgaSurface &surface,
+  bool submitFullscreenSurface(const PinnedGameplayBgaSurface &surface,
                                bgfx::ViewId viewId) noexcept;
+  bool matchesFullscreenLease(const PreparedGameplayBgaFrame &frame,
+                             const PreparedBgaFrameLease &lease) const noexcept;
+  std::atomic<std::uint64_t> bgaContentEpoch{rendering::nextContentIdentity()};
   void invalidatePreparedBgaPlans() noexcept;
   struct BgaRect {
     float x = 0.0f;

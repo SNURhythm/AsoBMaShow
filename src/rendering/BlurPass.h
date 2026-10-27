@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "PostProcessPipeline.h"
+#include "ContentIdentity.h"
 
 namespace rendering {
 class BlurPass final : public PostProcessPass {
@@ -14,6 +15,12 @@ public:
   void init(uint16_t windowW, uint16_t windowH) override;
   void resize(uint16_t windowW, uint16_t windowH) override;
   void execute() override;
+  // Prepare targets before input composition; report all fallible work instead
+  // of letting callers cache a texture after a partial/omitted submission.
+  [[nodiscard]] bool prepareOutput();
+  [[nodiscard]] bool executeComplete();
+  [[nodiscard]] bool drawOutput(float brightness);
+  std::uint64_t targetGeneration() const { return target_generation_; }
   void shutdown() override;
 
   void setInputViews(const std::vector<bgfx::ViewId> &views);
@@ -56,10 +63,12 @@ private:
   bgfx::ViewId blur_view_v_ = 0;
   bgfx::ViewId final_view_ = 0;
   bool composite_enabled_ = true;
+  std::uint64_t target_generation_ = nextContentIdentity();
 
   bgfx::ProgramHandle prog_blur_h_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle prog_blur_v_ = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle prog_rect_ = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle prog_output_ = BGFX_INVALID_HANDLE;
 
   bgfx::UniformHandle u_tex_color_ = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle u_texel_size_ = BGFX_INVALID_HANDLE;

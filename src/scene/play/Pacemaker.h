@@ -10,6 +10,7 @@
 #include <array>
 #include <cmath>
 #include <cctype>
+#include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
@@ -30,6 +31,36 @@ inline constexpr std::array<const char *, 7> kSelectableTargets = {
     kTargetOff, kTargetBest, kTargetA, kTargetAA,
     kTargetAAA, kTargetMaxMinus, kTargetMax};
 
+// Built once when a replay target is resolved, then shared by authority and
+// presentation frames. Replacing this value never mutates retained frames.
+// Construction owns its vector; no mutable shared-storage handle is exposed.
+class ScoreProgression final {
+public:
+  ScoreProgression() = default;
+  explicit ScoreProgression(std::vector<int> scores)
+      : scores_(scores.empty() ? nullptr
+                              : std::make_shared<const std::vector<int>>(
+                                    std::move(scores))) {}
+
+  [[nodiscard]] std::size_t size() const noexcept {
+    return scores_ ? scores_->size() : 0;
+  }
+  [[nodiscard]] bool empty() const noexcept { return size() == 0; }
+  [[nodiscard]] const int *data() const noexcept {
+    return scores_ ? scores_->data() : nullptr;
+  }
+  [[nodiscard]] int operator[](std::size_t index) const noexcept {
+    return (*scores_)[index];
+  }
+  [[nodiscard]] bool operator==(const ScoreProgression &other) const {
+    return scores_ == other.scores_ ||
+           (scores_ && other.scores_ && *scores_ == *other.scores_);
+  }
+
+private:
+  std::shared_ptr<const std::vector<int>> scores_;
+};
+
 struct Target {
   bool enabled = false;
   std::string label;
@@ -37,7 +68,7 @@ struct Target {
   int maxScore = 0;
   int totalNotes = 0;
   bool usesReplayProgression = false;
-  std::vector<int> scoreAfterNotes;
+  ScoreProgression scoreAfterNotes;
 };
 
 struct Snapshot {
@@ -311,7 +342,7 @@ inline Target targetFromBestSnapshot(bms_parser::Chart &chart,
   std::vector<int> progression = buildReplayScoreProgression(chart, *replay);
   if (!progression.empty() && progression.back() == target.finalScore) {
     target.usesReplayProgression = true;
-    target.scoreAfterNotes = std::move(progression);
+    target.scoreAfterNotes = ScoreProgression(std::move(progression));
   }
   return target;
 }

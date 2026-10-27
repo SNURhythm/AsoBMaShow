@@ -35,7 +35,7 @@ inline pacemaker::Target targetFromRecord(bms_parser::Chart &chart,
   target.maxScore = *maximumScore;
   target.totalNotes = std::max(0, chart.Meta.TotalNotes);
   target.usesReplayProgression = true;
-  target.scoreAfterNotes = std::move(progression);
+  target.scoreAfterNotes = pacemaker::ScoreProgression(std::move(progression));
   return target;
 }
 

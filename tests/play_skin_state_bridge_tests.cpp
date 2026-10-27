@@ -815,7 +815,7 @@ void testCurrentReferenceRatesUseStageProgressAndBestGhost() {
                                      .finalScore = 4,
                                      .totalNotes = 3,
                                      .usesReplayProgression = true,
-                                     .scoreAfterNotes = {0, 2, 2, 4}};
+                                     .scoreAfterNotes = pacemaker::ScoreProgression({0, 2, 2, 4})};
   state.authority.pacemakerStatus = {.enabled = true, .targetScore = 2};
   const auto expectRate = [&](int id, float expected, const char *message) {
     const auto value = bridge.floatProperty({id}, SkinFloatPropertyDomain::Rate);
@@ -831,14 +831,17 @@ void testCurrentReferenceRatesUseStageProgressAndBestGhost() {
 
   state.clock.serial = 74;
   state.authority.bestScoreTarget.usesReplayProgression = true;
-  state.authority.bestScoreTarget.scoreAfterNotes = {0, 2, 3, 5};
+  state.authority.bestScoreTarget.scoreAfterNotes = pacemaker::ScoreProgression({0, 2, 3, 5});
   bridge.beginFrame(state, projectionAt(74));
+  // The skin frame must retain its replay after the producer replaces storage.
+  state.authority.bestScoreTarget.scoreAfterNotes = {};
   expectRate(112, 1.0F / 3.0F,
              "best ghost rate uses the ghost score at the stage passed-note count");
   bridge.discardFrame();
 
   state.clock.serial = 75;
-  state.authority.bestScoreTarget.scoreAfterNotes.pop_back();
+  state.authority.bestScoreTarget.scoreAfterNotes =
+      pacemaker::ScoreProgression({0, 2, 3});
   bridge.beginFrame(state, projectionAt(75));
   expectRate(112, 1.0F / 6.0F,
              "a best ghost with different note count falls back to linear progress");

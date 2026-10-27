@@ -53,6 +53,7 @@
 #include "rendering/common.h"
 #include "rendering/PostProcessPipeline.h"
 #include "rendering/BlurPass.h"
+#include "rendering/FullscreenBgaCache.h"
 #include "rendering/UniformCache.h"
 #include "context.h"
 #include "notifications/ReminderCoordinator.h"
@@ -138,6 +139,7 @@ static bool s_androidRenderSuspended = false;
 #endif
 static rendering::PostProcessPipeline s_postProcess;
 static rendering::BlurPass *s_blurPass = nullptr;
+static rendering::FullscreenBgaCache s_fullscreenBgaCache;
 static float s_renderScale = 1.0f;
 static uint32_t s_bgfxResetFlags = 0;
 #if TARGET_OS_IPHONE
@@ -1119,6 +1121,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         sceneManager.currentScene, background);
     context.setIrApplicationActive(!background);
     context.jukebox.setVisualsSuspended(background);
+    s_fullscreenBgaCache.invalidate();
     if (!background) {
       lastFrameTime = std::chrono::steady_clock::now();
       context.framePacer.reset(lastFrameTime);
@@ -1152,6 +1155,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     // A frame interrupted after submit() owns bgfx's queued draws until a
     // foreground discard. Retire it before callbacks, export, or resource work.
     if (iosPreparedFrame.pending()) {
+      s_fullscreenBgaCache.invalidate();
       std::unique_lock<std::mutex> bgfxLock(context.bgfxRenderMutex);
       iosPreparedFrame.retire(GetIOSPresentationState(), submitIOSFrame);
     }
@@ -1166,6 +1170,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     // Owner-bound export suppresses releases as well as presses. Retire any
     // pre-export capture before fresh input can reach the restored scene.
     if (ranApplicationWork) {
+      s_fullscreenBgaCache.invalidate();
       context.uiBatchRenderer.invalidateFrame();
       context.inputDeviceRegistry.clearSdlInputState();
       if (sceneManager.currentScene) sceneManager.currentScene->onInputQueueOverflow();
@@ -1227,6 +1232,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     const bool exportActiveForPacing =
         context.replayVideoExportActive.load(std::memory_order_acquire);
     if (exportActiveForPacing != pacingExportActive) {
+      s_fullscreenBgaCache.invalidate();
       pacingExportActive = exportActiveForPacing;
       context.uiBatchRenderer.invalidateFrame();
       context.framePacer.reset(currentFrameTime);
@@ -1751,7 +1757,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     perf::latency::record(perf::latency::Stage::SceneUpdate,
                           perf::latency::nowMicros() - sceneUpdateStarted);
 #endif
-    s_blurPass->setBlurStrength(context.settings.bgaBlurStrength);
     context.jukebox.setBgaDisplayMode(context.settings.bgaDisplayMode);
     //    bgfx::reset(rendering::window_width, rendering::window_height);
     // SDL_Log("Window size: %d x %d", rendering::window_width,
@@ -1763,6 +1768,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     const bool replayExportActive =
         context.replayVideoExportActive.load(std::memory_order_acquire);
     const bool replayExportRequested = context.rendererAccess.exportRequested();
+    if (replayExportActive || replayExportRequested) s_fullscreenBgaCache.invalidate();
     const bool replayExportUiFrameRequested =
         context.replayVideoExportUiFrameRequested.load(
             std::memory_order_acquire);
@@ -1847,13 +1853,16 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #endif
         const bool hasActiveVisuals = context.jukebox.hasActiveVisuals();
         if (lastUiScene != sceneManager.currentScene) {
+          s_fullscreenBgaCache.invalidate();
           uiPresentationSchedule.invalidate();
           lastUiScene = sceneManager.currentScene;
         }
 #if TARGET_OS_IPHONE
         const auto uiPresentationState = GetIOSPresentationState();
-        if (lastUiPresentationGeneration != uiPresentationState.generation)
+        if (lastUiPresentationGeneration != uiPresentationState.generation) {
+          s_fullscreenBgaCache.invalidate();
           uiPresentationSchedule.invalidate();
+        }
 #endif
         const auto uiNow = SDL_GetTicks();
         const bool continuousPresentation = sceneManager.currentScene &&
@@ -1896,6 +1905,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
               !bgaCompositeState.prepared.has_value() && hasActiveVisuals;
           const bool compositeFullscreenBga =
               submitPreparedFullscreen || submitLegacyFullscreen;
+          std::optional<rendering::FullscreenBgaOutputKey> bgaOutputKey;
+          bool bgaOutputSubmitted = false;
           if (compositeFullscreenBga) {
             const bool ignoreBgaPostOptions =
                 context.ignoreBgaPostOptions.load(std::memory_order_acquire);
@@ -1910,17 +1921,39 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
                     blurStrength, brightness);
             if (!directFullscreen) {
               bgfx::setViewClear(s_blurPass->finalView(), BGFX_CLEAR_COLOR, 0x00000000);
-              bgfx::touch(rendering::bga_view);
-              bgfx::touch(rendering::bga_layer_view);
-              bgfx::touch(s_blurPass->finalView());
-              if (submitPreparedFullscreen) {
-                context.jukebox.submitFullscreen(*bgaCompositeState.prepared);
-              } else {
-                context.jukebox.render();
+              if (s_blurPass->prepareOutput()) {
+                if (submitPreparedFullscreen) {
+                  bgaOutputKey = rendering::fullscreenBgaOutputKey(
+                      *bgaCompositeState.prepared, s_blurPass->targetGeneration(),
+                      {rendering::window_width, rendering::window_height,
+                       rendering::render_width, rendering::render_height,
+                       rendering::ui_offset_x, rendering::ui_offset_y,
+                       rendering::ui_view_width, rendering::ui_view_height},
+                      static_cast<int>(context.settings.bgaDisplayMode));
+                }
+                const bool reuse = submitPreparedFullscreen &&
+                    s_fullscreenBgaCache.canReuse(bgaOutputKey) &&
+                    context.jukebox.consumeFullscreenReuse(*bgaCompositeState.prepared);
+                bool compositionComplete = reuse;
+                bool blurComplete = reuse;
+                if (!reuse) {
+                  // Input clear/touch would overwrite retained scene pixels.
+                  s_fullscreenBgaCache.invalidate();
+                  bgfx::touch(rendering::bga_view);
+                  bgfx::touch(rendering::bga_layer_view);
+                  if (submitPreparedFullscreen) {
+                    compositionComplete = context.jukebox.submitFullscreenComplete(
+                        *bgaCompositeState.prepared);
+                  } else {
+                    context.jukebox.render();
+                  }
+                  blurComplete = s_blurPass->executeComplete();
+                }
+                const bool finalComplete = blurComplete && s_blurPass->drawOutput(brightness);
+                bgaOutputSubmitted = compositionComplete && finalComplete;
+              } else if (submitPreparedFullscreen) {
+                context.jukebox.finalizePrepared(*bgaCompositeState.prepared);
               }
-              s_postProcess.apply();
-              rendering::renderFullscreenTextureTint(
-                  s_blurPass->outputTexture(), s_blurPass->finalView(), brightness);
             }
           }
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
@@ -1928,10 +1961,12 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #endif
 #if TARGET_OS_IPHONE
           if (!iosPreparedFrame.finish(GetIOSPresentationState(), submitIOSFrame)) {
+            s_fullscreenBgaCache.invalidate();
             context.uiBatchRenderer.invalidateFrame();
             continue;
           }
           if (iosDisplayLinkFrame && !iosDisplayLink.didSchedulePresent()) {
+            s_fullscreenBgaCache.invalidate();
             context.uiBatchRenderer.invalidateFrame();
             uiPresentationSchedule.invalidate();
             continue;
@@ -1940,6 +1975,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #else
           bgfx::frame();
 #endif
+          s_fullscreenBgaCache.complete(bgaOutputKey, bgaOutputSubmitted,
+              bgfx::getStats()->numDrawCallsPeak, bgfx::getCaps()->limits.maxDrawCalls);
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
           perf::latency::record(perf::latency::Stage::FrameSubmit,
                                 perf::latency::nowMicros() - submitStarted);

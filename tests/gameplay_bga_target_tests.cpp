@@ -7,6 +7,7 @@
 #include "scene/SettingsPreviewBga.h"
 #include "RAII.h"
 #include "rendering/BlurPass.h"
+#include "rendering/FullscreenBgaCache.h"
 #include "rendering/ShaderManager.h"
 #include "rendering/UniformCache.h"
 #include "skin/beatoraja/SkinDestinationEvaluator.cpp"
@@ -144,12 +145,14 @@ bool sameSurface(const std::optional<PreparedGameplayBgaSurface> &left,
           (left->role == right->role && left->mediaKind == right->mediaKind &&
            left->surfaceToken == right->surfaceToken &&
            left->sourceWidth == right->sourceWidth &&
-           left->sourceHeight == right->sourceHeight));
+           left->sourceHeight == right->sourceHeight &&
+           left->contentIdentity == right->contentIdentity));
 }
 
 bool sameFrame(const PreparedGameplayBgaFrame &left,
                const PreparedGameplayBgaFrame &right) {
   return left.sequence == right.sequence && left.composition == right.composition &&
+         left.contentEpoch == right.contentEpoch &&
          sameSurface(left.base, right.base) && sameSurface(left.layer, right.layer) &&
          sameSurface(left.miss, right.miss);
 }
@@ -1151,6 +1154,13 @@ void testPreparedImageLeaseSurvivesMediaResetUntilFullscreenFallback() {
   require(jukebox.gameplayBgaSubmissionStats().pinnedFrames ==
               prepared.pinnedFrames,
           "replacement media does not invalidate the prior frame's pinned image");
+  const auto replacement = jukebox.prepareVisualFrameAt(703, 0, {});
+  require(replacement.base && frame.base->contentIdentity != 0 &&
+              replacement.base->surfaceToken == frame.base->surfaceToken &&
+              replacement.base->contentIdentity != frame.base->contentIdentity &&
+              replacement.contentEpoch != frame.contentEpoch,
+          "reloading the same authored image ID changes content and lifetime identity");
+  jukebox.finalizePrepared(replacement);
 
   jukebox.submitFullscreen(frame);
   require(jukebox.gameplayBgaSubmissionStats().pinnedFrames ==
@@ -1163,6 +1173,100 @@ bgfx::TextureHandle makeOwnershipTestTexture() {
   return bgfx::createTexture2D(1, 1, false, 1, bgfx::TextureFormat::RGBA8,
                                BGFX_TEXTURE_NONE,
                                bgfx::copy(&pixel, sizeof(pixel)));
+}
+
+void testFullscreenBgaIdentityCompletionAndLeases() {
+  Stopwatch stopwatch;
+  auto control = std::make_shared<JukeboxBackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<JukeboxTestBackendFactory>(control));
+  ImageData data{.texture = makeOwnershipTestTexture(), .width = 1, .height = 1};
+  auto image = AdoptImageTextureToSharedOwner(data);
+  const auto first = jukebox.prepareImageFrame(image);
+  const std::array<int, 8> viewport{32, 16, 32, 16, 0, 0, 32, 16};
+  const auto keyFor = [&](const PreparedGameplayBgaFrame &frame) {
+    return rendering::fullscreenBgaOutputKey(frame, 42, viewport, 0);
+  };
+  const auto key = keyFor(first);
+  rendering::FullscreenBgaCache cache;
+  require(key && !cache.canReuse(key), "unproduced output cannot be reused");
+  cache.complete(key, false, 6, 16);
+  require(!cache.canReuse(key), "incomplete output does not populate the cache");
+  cache.complete(key, true, 6, 16);
+  jukebox.finalizePrepared(first);
+  const auto repeated = jukebox.prepareImageFrame(image);
+  require(repeated.sequence != first.sequence &&
+              repeated.base->surfaceToken != first.base->surfaceToken &&
+              keyFor(repeated) == key && cache.canReuse(keyFor(repeated)),
+          "repeated image content reuses independently of presentation/lease sequence");
+  auto stale = repeated;
+  ++stale.base->contentIdentity;
+  require(!jukebox.consumeFullscreenReuse(stale) &&
+              jukebox.gameplayBgaSubmissionStats().pinnedFrames == 1,
+          "a mismatched content descriptor cannot consume the live lease");
+  require(jukebox.consumeFullscreenReuse(repeated) &&
+              !jukebox.consumeFullscreenReuse(repeated) &&
+              jukebox.gameplayBgaSubmissionStats().pinnedFrames == 0 &&
+              jukebox.gameplayBgaSubmissionStats().fullscreenSubmissions == 0,
+          "a reuse consumes exactly one lease without submitting composition");
+
+  auto changed = first;
+  changed.layer = changed.base;
+  changed.layer->role = GameplayBgaRole::Layer;
+  require(!cache.canReuse(keyFor(changed)), "adding a layer invalidates composition");
+  changed = first;
+  changed.composition = GameplayBgaComposition::MissOnly;
+  changed.miss = changed.base;
+  changed.miss->role = GameplayBgaRole::Miss;
+  changed.base.reset();
+  require(!cache.canReuse(keyFor(changed)), "miss-only composition has a distinct identity");
+  changed.miss.reset();
+  require(!cache.canReuse(keyFor(changed)), "blank miss suppresses the previous image");
+  changed.composition = GameplayBgaComposition::Blank;
+  require(!cache.canReuse(keyFor(changed)), "blank composition cannot reuse an old base");
+  changed = first;
+  changed.base->contentIdentity = 0;
+  require(!keyFor(changed), "unknown/mutable content keeps conservative recomposition");
+  auto viewportChange = viewport;
+  ++viewportChange[4];
+  require(!cache.canReuse(rendering::fullscreenBgaOutputKey(first, 42, viewportChange, 0)) &&
+              !cache.canReuse(rendering::fullscreenBgaOutputKey(first, 43, viewport, 0)) &&
+              !cache.canReuse(rendering::fullscreenBgaOutputKey(first, 42, viewport, 1)),
+          "viewport, target generation and display mode invalidate output");
+
+  ImageData replacementData{.texture = makeOwnershipTestTexture(), .width = 1, .height = 1};
+  auto replacementImage = AdoptImageTextureToSharedOwner(replacementData);
+  const auto replacement = jukebox.prepareImageFrame(replacementImage);
+  require(!cache.canReuse(keyFor(replacement)), "same-sized replacement pixels get a new identity");
+  jukebox.finalizePrepared(replacement);
+  const auto beforeSuspend = jukebox.prepareImageFrame(image);
+  jukebox.setVisualsSuspended(true);
+  jukebox.setVisualsSuspended(false);
+  require(!jukebox.consumeFullscreenReuse(beforeSuspend),
+          "lifecycle interruption rejects a previously prepared reuse lease");
+  jukebox.finalizePrepared(beforeSuspend);
+  const auto resumed = jukebox.prepareImageFrame(image);
+  require(!cache.canReuse(keyFor(resumed)), "resume invalidates even unchanged still pixels");
+  jukebox.finalizePrepared(resumed);
+  jukebox.seekVisualsToSongTime(0);
+  const auto sought = jukebox.prepareImageFrame(image);
+  require(keyFor(sought) != keyFor(resumed), "explicit seek invalidates unchanged still pixels");
+  jukebox.finalizePrepared(sought);
+  cache.invalidate();
+  require(!cache.canReuse(key), "cancelled/export frames cannot retain a completed key");
+  cache.complete(key, true, 6, 16);
+  cache.complete(key, false, 6, 16);
+  require(!cache.canReuse(key), "a partial overwrite evicts previously complete output");
+  cache.complete(key, true, 6, 16);
+  cache.complete(std::nullopt, true, 6, 16);
+  require(!cache.canReuse(key), "legacy unknown output never becomes a reusable entry");
+  cache.complete(key, true, 16, 16);
+  require(cache.canReuse(key), "exact render-item capacity accepts every requested draw");
+  cache.complete(key, true, 17, 16);
+  require(!cache.canReuse(key), "dropped render items evict otherwise complete output");
+  cache.complete(key, true, 17, 16);
+  require(!cache.canReuse(key), "an unchanged excessive lifetime peak remains untrustworthy");
+  cache.complete(key, true, 0, 0);
+  require(!cache.canReuse(key), "unknown render-item capacity cannot certify output");
 }
 
 void testImageTextureOwnershipTransferIsSingleAndExceptionSafe() {
@@ -1422,6 +1526,10 @@ void testNativeVideoPlaybackSelectsSurfaceRendering() {
       "vs_skin_yuvrgb.bin", "fs_skin_video_nv12.bin");
   require(submission->program.idx == nativeProgram.idx,
           "H264 playback samples native decoder surfaces instead of CPU-uploaded YUV planes");
+  const auto nativeIdentity = player.contentIdentity();
+  for (int repeat = 0; repeat < 8; ++repeat) player.update();
+  require(nativeIdentity != 0 && player.contentIdentity() == nativeIdentity,
+          "repeated native surface presentation keeps its completed content identity");
 
   const auto output = bgfx::createTexture2D(32, 24, false, 1, bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
   const auto readback = bgfx::createTexture2D(32, 24, false, 1, bgfx::TextureFormat::RGBA8,
@@ -1473,10 +1581,13 @@ void testNativeVideoPlaybackSelectsSurfaceRendering() {
     return false;
   };
   player.playFrom(160'000);
+  require(player.contentIdentity() != nativeIdentity,
+          "forward seek invalidates even the retained native surface before decoding");
   require(awaitPixels(false), "native playback replaces the visible surface after forward seek");
   player.playFrom(0);
   require(awaitPixels(true), "native playback reproduces its first frame after backward seek");
   player.stop();
+  require(player.contentIdentity() == 0, "stopped native content cannot be reused");
   require(!player.prepareEmbeddedSubmission(*quad, 0), "stopped native video no longer submits an image");
 
   // This matrix is valid video but deliberately outside the native shader's
@@ -1484,6 +1595,7 @@ void testNativeVideoPlaybackSelectsSurfaceRendering() {
   fixture.colorSpace = AVCOL_SPC_SMPTE240M;
   storage_test::makeVideo(path, fixture);
   require(player.loadVideo(path.string(), cancelled), "software fallback fixture loads");
+  require(player.contentIdentity() == 0, "reload cannot expose a previous decoded content identity");
   player.playFrom(0);
   submission.reset();
   const auto fallbackDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
@@ -1496,6 +1608,15 @@ void testNativeVideoPlaybackSelectsSurfaceRendering() {
       "vs_skin_yuvrgb.bin", "fs_skin_yuvrgb.bin");
   require(submission && submission->program.idx == softwareProgram.idx,
           "failed native surface import resumes software playback at the current clock");
+  const auto softwareIdentity = player.contentIdentity();
+  for (int repeat = 0; repeat < 8; ++repeat) player.update();
+  require(softwareIdentity != 0 && softwareIdentity != nativeIdentity &&
+              player.contentIdentity() == softwareIdentity,
+          "software fallback issues a fresh stable identity after a complete upload");
+  player.setDecodeSuspended(true);
+  player.setDecodeSuspended(false);
+  require(player.contentIdentity() != softwareIdentity,
+          "native/software lifecycle changes invalidate retained content identity");
   requireTintedPixels();
   bgfx::setViewFrameBuffer(0, BGFX_INVALID_HANDLE);
   bgfx::destroy(framebuffer); bgfx::destroy(output); bgfx::destroy(readback);
@@ -1640,6 +1761,296 @@ void testDirectFullscreenBgaOnMetal() {
   for (const auto view : {rendering::bga_view, rendering::final_view})
     bgfx::setViewFrameBuffer(view, BGFX_INVALID_HANDLE);
   bgfx::destroy(framebuffer); bgfx::destroy(output); bgfx::destroy(readback);
+}
+
+void testFullscreenBgaReuseOnMetal() {
+  constexpr int width = 32, height = 16;
+  const int oldWidth = rendering::window_width, oldHeight = rendering::window_height;
+  rendering::window_width = width;
+  rendering::window_height = height;
+  const auto restore = makeScopeExit([&] {
+    rendering::window_width = oldWidth;
+    rendering::window_height = oldHeight;
+  });
+  const auto output = bgfx::createTexture2D(width, height, false, 1,
+      bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
+  const auto readback = bgfx::createTexture2D(width, height, false, 1,
+      bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
+  const auto framebuffer = bgfx::createFrameBuffer(1, &output, false);
+  require(bgfx::isValid(output) && bgfx::isValid(readback) && bgfx::isValid(framebuffer),
+          "reuse probe creates real Metal readback targets");
+  Stopwatch stopwatch;
+  auto control = std::make_shared<JukeboxBackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<JukeboxTestBackendFactory>(control));
+  auto displayMode = AppSettings::BgaDisplayMode::Stretch;
+  jukebox.setBgaDisplayMode(displayMode);
+  rendering::BlurPass blur(2, 0.6F);
+  blur.init(width, height);
+  blur.setBlurStrength(2);
+  blur.setCompositeEnabled(false);
+  blur.setInputViews({rendering::bga_view, rendering::bga_layer_view});
+  rendering::applyViewOrder(blur.blurViewH(), blur.blurViewV(), blur.finalView());
+  float ortho[16];
+  bx::mtxOrtho(ortho, 0.0F, float(width), float(height), 0.0F, 0.0F,
+                100.0F, 0.0F, bgfx::getCaps()->homogeneousDepth);
+  for (auto view : {rendering::bga_view, rendering::bga_layer_view, blur.finalView()}) {
+    bgfx::setViewTransform(view, nullptr, ortho);
+    bgfx::setViewClear(view, view == rendering::bga_layer_view ? BGFX_CLEAR_NONE : BGFX_CLEAR_COLOR, 0);
+  }
+  bgfx::setViewFrameBuffer(blur.finalView(), framebuffer);
+  bgfx::setViewRect(blur.finalView(), 0, 0, width, height);
+  rendering::FullscreenBgaCache cache;
+  const auto exhaust = [] {
+    bgfx::TransientVertexBuffer buffer{};
+    // bgfx computes offset + requested * stride in uint32_t. UINT32_MAX
+    // wraps once composition has consumed vertices and fails to exhaust the
+    // pool. Bound the request by the actual configured byte capacity.
+    const auto requested = bgfx::getCaps()->limits.maxTransientVbSize /
+        rendering::PosTexCoord0Vertex::ms_decl.getStride();
+    const auto count = bgfx::getAvailTransientVertexBuffer(
+        requested, rendering::PosTexCoord0Vertex::ms_decl);
+    if (count) bgfx::allocTransientVertexBuffer(&buffer, count, rendering::PosTexCoord0Vertex::ms_decl);
+    require(bgfx::getAvailTransientVertexBuffer(4, rendering::PosTexCoord0Vertex::ms_decl) < 4,
+            "failure fixture exhausts capacity even after prior composition/blur allocations");
+  };
+  struct Result {
+    std::array<std::uint8_t, width * height * 4> pixels{};
+    std::uint32_t draws = 0;
+  };
+  // Stages 1/2/3 exhaust real transient capacity before composition/blur/final;
+  // stage 4 discards the entire queued frame after successful submissions;
+  // stage 5 fills render items with touches while leaving geometry available.
+  const auto present = [&](const PreparedGameplayBgaFrame &frame, bool expectReuse,
+                           float brightness = 0.5F, int failureStage = 0) {
+    require(blur.prepareOutput(), "reuse probe prepares complete targets");
+    bgfx::setViewRect(rendering::bga_view, 0, 0, blur.sceneWidth(), blur.sceneHeight());
+    bgfx::setViewRect(rendering::bga_layer_view, 0, 0, blur.sceneWidth(), blur.sceneHeight());
+    const auto key = rendering::fullscreenBgaOutputKey(frame, blur.targetGeneration(),
+        {width, height, width, height, 0, 0, width, height}, static_cast<int>(displayMode));
+    const bool reuse = cache.canReuse(key) && jukebox.consumeFullscreenReuse(frame);
+    require(reuse == expectReuse, "production identity chooses the expected reuse path");
+    bool compositionComplete = reuse, blurComplete = reuse;
+    if (!reuse) {
+      cache.invalidate();
+      if (failureStage == 5) {
+        const auto limit = bgfx::getCaps()->limits.maxDrawCalls;
+        require(limit > 0 && limit <= 65'535, "render-item saturation fixture stays bounded");
+        const auto vertices = bgfx::getAvailTransientVertexBuffer(16, rendering::PosTexCoord0Vertex::ms_decl);
+        const auto indices = bgfx::getAvailTransientIndexBuffer(24);
+        require(vertices == 16 && indices == 24, "all BGA geometry fits before render-item saturation");
+        bgfx::setViewFrameBuffer(rendering::main_view, framebuffer);
+        bgfx::setViewRect(rendering::main_view, 0, 0, width, height);
+        bgfx::setViewClear(rendering::main_view, BGFX_CLEAR_NONE);
+        for (std::uint32_t item = 0; item < limit; ++item) bgfx::touch(rendering::main_view);
+        require(bgfx::getAvailTransientVertexBuffer(16, rendering::PosTexCoord0Vertex::ms_decl) == vertices &&
+                    bgfx::getAvailTransientIndexBuffer(24) == indices,
+                "render-item exhaustion consumes no transient vertex or index capacity");
+      }
+      bgfx::touch(rendering::bga_view);
+      bgfx::touch(rendering::bga_layer_view);
+      if (failureStage == 1) exhaust();
+      compositionComplete = jukebox.submitFullscreenComplete(frame);
+      if (failureStage == 2) exhaust();
+      blurComplete = blur.executeComplete();
+    }
+    if (failureStage == 3) exhaust();
+    const bool finalComplete = blurComplete && blur.drawOutput(brightness);
+    const bool complete = compositionComplete && finalComplete && failureStage != 4;
+    const bool expectComplete = failureStage == 0 || failureStage == 5;
+    if (complete != expectComplete) {
+      std::cerr << "BGA reuse completion: sequence=" << frame.sequence
+                << " stage=" << failureStage << " reuse=" << reuse
+                << " composition=" << compositionComplete << " blur=" << blurComplete
+                << " final=" << finalComplete << " key=" << key.has_value()
+                << " baseIdentity=" << (frame.base ? frame.base->contentIdentity : 0)
+                << " targetGeneration=" << blur.targetGeneration()
+                << " vertexCapacity=" << bgfx::getAvailTransientVertexBuffer(
+                       1'000'000, rendering::PosTexCoord0Vertex::ms_decl)
+                << " indexCapacity=" << bgfx::getAvailTransientIndexBuffer(1'000'000)
+                << " leases=" << jukebox.gameplayBgaSubmissionStats().pinnedFrames << '\n';
+    }
+    require(complete == expectComplete, "complete output reports transient failures");
+    require(jukebox.gameplayBgaSubmissionStats().pinnedFrames == 0,
+            "recompute, reuse and failed submission all release their prepared leases");
+    Result result;
+    if (complete) bgfx::blit(rendering::readback_view, readback, 0, 0, output);
+    auto current = bgfx::frame(failureStage == 4 ? BGFX_FRAME_DISCARD : BGFX_FRAME_NONE);
+    // Read immediately after frame(), before any extra readback/drain frames:
+    // encoder demand is current here even though numDraw is still delayed.
+    const auto drawPeak = bgfx::getStats()->numDrawCallsPeak;
+    const auto drawCapacity = bgfx::getCaps()->limits.maxDrawCalls;
+    cache.complete(key, complete, drawPeak, drawCapacity);
+    if (failureStage == 5)
+      require(drawPeak > drawCapacity && !cache.canReuse(key),
+              "same-frame CPU draw demand rejects the changed content before any reuse opportunity");
+    require(cache.canReuse(key) == (complete && key.has_value() && drawPeak <= drawCapacity),
+            "only complete output with accepted render items becomes reusable");
+    const auto ready = complete ? bgfx::readTexture(readback, result.pixels.data()) : current;
+    current = bgfx::frame();
+    result.draws = bgfx::getStats()->numDraw;
+    for (unsigned guard = 0; current < ready && guard < 16; ++guard) current = bgfx::frame();
+    require(current >= ready, "reuse probe readback finishes within a bounded frame count");
+    if (complete) {
+      const unsigned surfaces = frame.base.has_value() + frame.layer.has_value() + frame.miss.has_value();
+      require(result.draws == (failureStage == 5 ? drawCapacity : reuse ? 1U : surfaces + 5U),
+              "reuse submits only the final quad; recompute includes inputs, clears and both blur passes");
+    }
+    return result;
+  };
+  const auto makeImage = [&](bool replacement) {
+    std::array<std::uint8_t, 16> pixels{192, 0, 0, 255, 0, 192, 0, 255,
+                                     0, 0, 192, 255, 192, 192, 0, 255};
+    if (replacement) std::swap(pixels[0], pixels[2]);
+    ImageData data{.texture = bgfx::createTexture2D(2, 2, false, 1,
+        bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_POINT, bgfx::copy(pixels.data(), pixels.size())),
+        .width = 2, .height = 2, .channels = 4};
+    return AdoptImageTextureToSharedOwner(data);
+  };
+  auto image = makeImage(false);
+  const auto original = present(jukebox.prepareImageFrame(image), false);
+  const auto reused = present(jukebox.prepareImageFrame(image), true);
+  require(original.pixels == reused.pixels &&
+              std::any_of(original.pixels.begin(), original.pixels.end(), [](auto c) { return c > 0 && c < 255; }),
+          "unchanged still image reuse matches every real Metal pixel and is nonblack");
+  const auto brighter = present(jukebox.prepareImageFrame(image), true, 1.0F);
+  cache.invalidate();
+  require(present(jukebox.prepareImageFrame(image), false, 1.0F).pixels == brighter.pixels &&
+              brighter.pixels != original.pixels,
+          "live brightness on reused output matches fresh composition");
+  const auto generation = blur.targetGeneration();
+  blur.setBlurStrength(2);
+  require(blur.targetGeneration() == generation, "unchanged strength preserves target identity");
+  image = makeImage(true);
+  require(present(jukebox.prepareImageFrame(image), false).pixels != original.pixels,
+          "replacement still pixels never reuse the old output");
+  for (int stage : {1, 2, 3, 4}) {
+    cache.invalidate();
+    present(jukebox.prepareImageFrame(image), false, 0.5F, stage);
+    const auto recovered = present(jukebox.prepareImageFrame(image), false);
+    require(present(jukebox.prepareImageFrame(image), true).pixels == recovered.pixels,
+            "each failed output stage recovers with full recomposition before reuse");
+  }
+  present(jukebox.prepareImageFrame(image), true, 0.5F, 3);
+  present(jukebox.prepareImageFrame(image), false);
+  blur.setBlurStrength(3);
+  present(jukebox.prepareImageFrame(image), false);
+  blur.resize(width, height); // Same dimensions, recreated handles/contents.
+  present(jukebox.prepareImageFrame(image), false);
+  blur.setDownsample(1);
+  present(jukebox.prepareImageFrame(image), false);
+  blur.resize(width * 2, height * 2);
+  present(jukebox.prepareImageFrame(image), false);
+  displayMode = AppSettings::BgaDisplayMode::Fit;
+  jukebox.setBgaDisplayMode(displayMode);
+  present(jukebox.prepareImageFrame(image), false);
+  blur.setInputViews({rendering::bga_view, rendering::bga_layer_view}); // Reset/export restore.
+  present(jukebox.prepareImageFrame(image), false);
+  blur.shutdown();
+  blur.init(width, height);
+  present(jukebox.prepareImageFrame(image), false);
+
+  std::atomic_bool cancelled{false};
+  bms_parser::Chart chart;
+  chart.Meta.Folder = std::filesystem::path(ASOBMASHOW_SOURCE_DIR) / "tests/fixtures/beatoraja_skin/charts";
+  chart.ReferencedBmpTable = {{1, "acceptance_bga_base.png"}, {2, "acceptance_bga_layer.png"},
+                             {3, "acceptance_bga_miss.png"}};
+  appendBgaTimeline(chart, 0, 1, 2);
+  appendBgaPoorTimeline(chart, 0, {3});
+  appendBgaPoorTimeline(chart, 100, {kGameplayBgaAuthoredBlank});
+  jukebox.loadVisuals(chart, cancelled);
+  std::uint64_t serial = 1;
+  auto prepare = [&](long long micros, GameplayBgaMissState miss = {}) {
+    return jukebox.prepareVisualFrameAt(serial++, micros, miss);
+  };
+  const auto layered = present(prepare(1), false);
+  require(present(prepare(2), true).pixels == layered.pixels,
+          "layered images reuse the complete composed pixels");
+  const GameplayBgaMissState miss{.active = true, .startedBgaMicros = 1};
+  const auto poor = present(prepare(3, miss), false);
+  require(poor.pixels != layered.pixels && present(prepare(4, miss), true).pixels == poor.pixels,
+          "miss-only output suppresses base/layer and then reuses unchanged poor content");
+  const auto blank = present(prepare(100, miss), false);
+  for (std::size_t offset = 0; offset < blank.pixels.size(); offset += 4)
+    require(blank.pixels[offset] == 0 && blank.pixels[offset + 1] == 0 &&
+                blank.pixels[offset + 2] == 0 && blank.pixels[offset + 3] == 255,
+            "blank miss clears the prior image to opaque black");
+  require(present(prepare(101, miss), true).pixels == blank.pixels,
+          "blank output can be reused without reviving the old image");
+  present(prepare(102), false);
+  jukebox.seekVisualsToSongTime(0);
+  present(prepare(0), false);
+  jukebox.setVisualsSuspended(true);
+  present(prepare(1), false);
+  jukebox.setVisualsSuspended(false);
+  present(prepare(2), false);
+
+  // Six bounded decoded frames per backend, paused logical time, no sleeps.
+  storage_test::TempDirectory directory;
+  for (bool native : {false, true}) {
+    storage_test::VideoFixture fixture;
+    fixture.width = native ? 320 : 32; fixture.height = native ? 240 : 16;
+    fixture.h264 = native;
+    fixture.lossless = !native; fixture.timestamps = {0, 1, 2, 3, 4, 5};
+    fixture.colorRange = AVCOL_RANGE_MPEG; fixture.colorSpace = AVCOL_SPC_BT709;
+    // BGA resolution accepts .mp4; FFmpeg sniffs the fixture's NUT container.
+    const auto path = directory.root / (native ? "native.mp4" : "software.mp4");
+    storage_test::makeVideo(path, fixture);
+    bms_parser::Chart videoChart;
+    videoChart.Meta.Folder = directory.root;
+    videoChart.ReferencedBmpTable.emplace(1, path.filename().string());
+    appendBgaTimeline(videoChart, 0, 1, -1);
+    jukebox.loadVisuals(videoChart, cancelled);
+    const auto awaitVideo = [&](long long micros, std::uint64_t previous = 0) {
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+      do {
+        auto frame = prepare(micros);
+        if (frame.base && frame.base->contentIdentity != 0 &&
+            frame.base->contentIdentity != previous) return frame;
+        jukebox.finalizePrepared(frame);
+        std::this_thread::yield();
+      } while (std::chrono::steady_clock::now() < deadline);
+      require(false, "bounded video decoder produces the requested content identity");
+      return PreparedGameplayBgaFrame{};
+    };
+    auto frame = awaitVideo(0);
+    const auto firstIdentity = frame.base->contentIdentity;
+    const auto firstPixels = present(frame, false).pixels;
+    require(present(prepare(0), true).pixels == firstPixels,
+            "repeated software/native decoded frame reuses identical pixels");
+    frame = awaitVideo(40'000, firstIdentity);
+    const auto newPixels = present(frame, false).pixels;
+    require(newPixels != firstPixels && present(prepare(40'000), true).pixels == newPixels,
+            "new software/native decoded content invalidates then reuses");
+    jukebox.seekVisualsToSongTime(0);
+    frame = awaitVideo(0);
+    require(frame.base->contentIdentity != firstIdentity,
+            "backward seek cannot collide with an earlier decoded frame identity");
+    require(present(frame, false).pixels == firstPixels,
+            "backward seek recomposes the original decoded pixels");
+  }
+  // Run saturation last: the real bgfx demand peak is a lifetime value, so
+  // subsequent frames deliberately retain the conservative recompute path.
+  image = makeImage(false);
+  const auto beforeSaturation = present(jukebox.prepareImageFrame(image), false);
+  require(present(jukebox.prepareImageFrame(image), true).pixels == beforeSaturation.pixels,
+          "output A is reusable before saturation");
+  image = makeImage(true);
+  const auto droppedReplacement = present(jukebox.prepareImageFrame(image), false, 0.5F, 5);
+  require(droppedReplacement.pixels == beforeSaturation.pixels,
+          "actual render-item saturation drops B's composition and retains A pixels");
+  const auto recoveredReplacement = present(jukebox.prepareImageFrame(image), false);
+  require(recoveredReplacement.draws == 6 && recoveredReplacement.pixels != beforeSaturation.pixels &&
+              present(jukebox.prepareImageFrame(image), false).pixels == recoveredReplacement.pixels,
+          "the next successful B frame recomposes; an excessive lifetime peak never certifies reuse");
+  jukebox.unloadVisuals();
+  for (const auto view : {rendering::bga_view, rendering::bga_layer_view,
+                          blur.blurViewH(), blur.blurViewV(), blur.finalView(), rendering::main_view}) {
+    bgfx::setViewFrameBuffer(view, BGFX_INVALID_HANDLE);
+    bgfx::setViewTransform(view, nullptr, nullptr);
+  }
+  bgfx::setViewOrder(0);
+  bgfx::destroy(framebuffer); bgfx::destroy(output); bgfx::destroy(readback);
+  bgfx::frame();
 }
 
 void testFullscreenBlurBypassOnMetal() {
@@ -1950,6 +2361,7 @@ int main(int argc, char **argv) {
   rendering::PosTexVertex::init();
   if (metalSampling) {
     testDirectFullscreenBgaOnMetal();
+    testFullscreenBgaReuseOnMetal();
     testFullscreenBlurBypassOnMetal();
     testNativeVideoPlaybackSelectsSurfaceRendering();
     testEmbeddedImageResetsSkinSamplingOnMetal();
@@ -1976,6 +2388,7 @@ int main(int argc, char **argv) {
   testOnlyScheduledLayerImageIdsReceiveCompanionTextures();
   testCancelledLayerScanDoesNotLeakRoleIntoReusedBaseId();
   testPreparedImageLeaseSurvivesMediaResetUntilFullscreenFallback();
+  testFullscreenBgaIdentityCompletionAndLeases();
   testImageTextureOwnershipTransferIsSingleAndExceptionSafe();
   testPreparedFrameRetainsExplicitSurfaceRoles();
   testNoneJudgeDoesNotTriggerMissState();

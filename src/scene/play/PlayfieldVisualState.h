@@ -261,7 +261,8 @@ struct PlayfieldAuthorityUpdate {
   PlayfieldPlayerScoreHistoryState playerScoreHistory;
   // ScoreDataProperty projects the persisted best ghost to the current passed
   // note count for NUMBER_DIFF_HIGHSCORE.  This target carries that optional
-  // progression independently of the player-selected pacemaker target.
+  // progression independently of the player-selected pacemaker target. Both
+  // targets share immutable progression storage with captured frames.
   pacemaker::Target bestScoreTarget;
   GaugeType gaugeType = GaugeType::Normal;
   GaugeAutoShiftMode gaugeAutoShift = GaugeAutoShiftMode::None;

@@ -3,6 +3,8 @@
 #include "ShaderManager.h"
 #include "UniformCache.h"
 #include "common.h"
+#include <algorithm>
+#include <cmath>
 
 namespace rendering {
 BlurPass::BlurPass(uint16_t downsampleFactor, float tintAlpha)
@@ -22,6 +24,8 @@ void BlurPass::init(uint16_t windowW, uint16_t windowH) {
                                                          "blur/fs_blurV.bin");
   prog_rect_ = ShaderManager::getInstance().getProgram("blur/vs_blur.bin",
                                                        "fs_rect_tint.bin");
+  prog_output_ = ShaderManager::getInstance().getProgram("vs_text.bin",
+                                                         "fs_rect_tint.bin");
 
   u_tex_color_ =
       rendering::UniformCache::getInstance().getSampler("s_texColor");
@@ -55,24 +59,75 @@ void BlurPass::resize(uint16_t windowW, uint16_t windowH) {
 }
 
 void BlurPass::execute() {
-  if (!initialized_)
-    return;
+  (void)executeComplete();
+}
+
+bool BlurPass::prepareOutput() {
+  if (!initialized_ || !std::isfinite(blur_strength_)) return false;
   if (!bgfx::isValid(fb_scene_) || !bgfx::isValid(tex_scene_color_)) {
-    return;
+    createFrameBuffers();
   }
+  if (!bgfx::isValid(fb_scene_) || !bgfx::isValid(tex_scene_color_) ||
+      !bgfx::isValid(u_tex_color_)) return false;
   if (blur_strength_ != 0.0f) {
     if (!bgfx::isValid(fb_blur_a_) || !bgfx::isValid(fb_blur_b_)) {
       createBlurFrameBuffers();
     }
     if (!bgfx::isValid(fb_blur_a_) || !bgfx::isValid(fb_blur_b_)) {
-      return;
+      return false;
     }
+    if (!bgfx::isValid(prog_blur_h_) || !bgfx::isValid(prog_blur_v_) ||
+        !bgfx::isValid(u_texel_size_) || !bgfx::isValid(u_blur_scale_)) return false;
+  }
+  return true;
+}
+
+bool BlurPass::executeComplete() {
+  if (!prepareOutput()) return false;
+  const std::uint32_t quads = (blur_strength_ != 0.0F ? 2U : 0U) +
+      (composite_enabled_ ? 1U : 0U);
+  if ((composite_enabled_ && (!bgfx::isValid(prog_rect_) || !bgfx::isValid(u_tint_color_))) ||
+      (quads != 0 &&
+       (bgfx::getAvailTransientVertexBuffer(quads * 4, PosTexCoord0Vertex::ms_decl) < quads * 4 ||
+        bgfx::getAvailTransientIndexBuffer(quads * 6) < quads * 6))) return false;
+  if (blur_strength_ != 0.0f) {
     blurHorizontal();
     blurVertical();
   }
   if (composite_enabled_) {
     drawFinal();
   }
+  return true;
+}
+
+bool BlurPass::drawOutput(float brightness) {
+  if (!initialized_ || !std::isfinite(brightness) ||
+      rendering::window_width <= 0 || rendering::window_height <= 0 ||
+      !bgfx::isValid(outputTexture()) || !bgfx::isValid(prog_output_) ||
+      !bgfx::isValid(u_tex_color_) || !bgfx::isValid(u_tint_color_) ||
+      bgfx::getAvailTransientVertexBuffer(4, PosTexCoord0Vertex::ms_decl) < 4 ||
+      bgfx::getAvailTransientIndexBuffer(6) < 6) return false;
+  bgfx::TransientVertexBuffer vertices{};
+  bgfx::TransientIndexBuffer indices{};
+  bgfx::allocTransientVertexBuffer(&vertices, 4, PosTexCoord0Vertex::ms_decl);
+  bgfx::allocTransientIndexBuffer(&indices, 6);
+  auto *quad = reinterpret_cast<PosTexCoord0Vertex *>(vertices.data);
+  const float width = float(rendering::window_width), height = float(rendering::window_height);
+  quad[0] = {0, height, 0, 0, 1};
+  quad[1] = {width, height, 0, 1, 1};
+  quad[2] = {0, 0, 0, 0, 0};
+  quad[3] = {width, 0, 0, 1, 0};
+  const std::uint16_t order[] = {0, 1, 2, 1, 3, 2};
+  std::copy_n(order, 6, reinterpret_cast<std::uint16_t *>(indices.data));
+  bgfx::setVertexBuffer(0, &vertices);
+  bgfx::setIndexBuffer(&indices);
+  bgfx::setTexture(0, u_tex_color_, outputTexture());
+  const float value = std::clamp(brightness, 0.0F, 1.0F);
+  const float tint[4] = {value, value, value, 1.0F};
+  bgfx::setUniform(u_tint_color_, tint);
+  bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A | BGFX_STATE_BLEND_ALPHA);
+  bgfx::submit(final_view_, prog_output_);
+  return true;
 }
 
 void BlurPass::shutdown() {
@@ -94,6 +149,8 @@ void BlurPass::shutdown() {
 }
 
 void BlurPass::setInputViews(const std::vector<bgfx::ViewId> &views) {
+  // Also called after reset/export to restore bindings at the same size.
+  target_generation_ = nextContentIdentity();
   input_views_ = views;
   if (!bgfx::isValid(fb_scene_))
     return;
@@ -104,6 +161,7 @@ void BlurPass::setInputViews(const std::vector<bgfx::ViewId> &views) {
 
 void BlurPass::setViewIds(bgfx::ViewId blurH, bgfx::ViewId blurV,
                           bgfx::ViewId finalView) {
+  target_generation_ = nextContentIdentity();
   blur_view_h_ = blurH;
   blur_view_v_ = blurV;
   final_view_ = finalView;
@@ -119,10 +177,10 @@ void BlurPass::setDownsample(uint16_t downsampleFactor) {
 }
 
 void BlurPass::setBlurStrength(float strength) {
+  strength = std::isfinite(strength) ? std::max(0.0F, strength) : 0.0F;
+  if (strength == blur_strength_) return;
+  target_generation_ = nextContentIdentity();
   blur_strength_ = strength;
-  if (blur_strength_ < 0.0f) {
-    blur_strength_ = 0.0f;
-  }
   if (blur_strength_ == 0.0f) {
     destroyBlurFrameBuffers();
   }
@@ -145,6 +203,7 @@ void BlurPass::createFrameBuffers() {
   }
   tex_scene_color_ = sceneTexture;
   fb_scene_ = sceneFrameBuffer;
+  target_generation_ = nextContentIdentity();
   for (const auto view : input_views_) {
     bgfx::setViewFrameBuffer(view, fb_scene_);
   }
@@ -195,12 +254,14 @@ void BlurPass::createBlurFrameBuffers() {
   fb_blur_a_ = blurAFrameBuffer;
   tex_blur_b_ = blurBTexture;
   fb_blur_b_ = blurBFrameBuffer;
+  target_generation_ = nextContentIdentity();
 
   bgfx::setViewRect(blur_view_h_, 0, 0, scene_width_, scene_height_);
   bgfx::setViewRect(blur_view_v_, 0, 0, scene_width_, scene_height_);
 }
 
 void BlurPass::destroyFrameBuffers() {
+  target_generation_ = nextContentIdentity();
   if (bgfx::isValid(fb_scene_))
     bgfx::destroy(fb_scene_);
   if (bgfx::isValid(tex_scene_color_))

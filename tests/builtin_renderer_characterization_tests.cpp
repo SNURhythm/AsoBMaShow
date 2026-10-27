@@ -1332,7 +1332,7 @@ void verifyPreparedFrameUsesSavedBestGhostForBuiltInBestPacemaker() {
       .maxScore = 4,
       .totalNotes = 2,
       .usesReplayProgression = true,
-      .scoreAfterNotes = {0, 2, 3},
+      .scoreAfterNotes = pacemaker::ScoreProgression({0, 2, 3}),
   };
 
   expect(fixture.renderer.prepareFrame(frame.state, frame.projection) ==
@@ -1388,7 +1388,7 @@ void verifyPreparedFrameKeepsPacemakerOffWithSavedBestGhost() {
       .maxScore = 4,
       .totalNotes = 2,
       .usesReplayProgression = true,
-      .scoreAfterNotes = {0, 2, 3},
+      .scoreAfterNotes = pacemaker::ScoreProgression({0, 2, 3}),
   };
 
   expect(fixture.renderer.prepareFrame(frame.state, frame.projection) ==
