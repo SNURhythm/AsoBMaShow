@@ -1442,6 +1442,27 @@ void testNativeVideoPlaybackSelectsSurfaceRendering() {
     while (bgfx::frame() < ready) {}
     return pixels;
   };
+  const auto requireTintedPixels = [&] {
+    // Hold the same decoded frame for both paths; this is a pixel comparison,
+    // not a comparison between two decoder timestamps.
+    player.render(0, 0, 0, 32, 24);
+    bgfx::blit(1, readback, 0, 0, output);
+    std::vector<std::uint8_t> original(32 * 24 * 4), tinted(original.size());
+    auto ready = bgfx::readTexture(readback, original.data());
+    while (bgfx::frame() < ready) {}
+    require(player.renderFullscreenTinted(0, 0, 0, 32, 24, 0.5F),
+            "decoded video supports direct fullscreen brightness");
+    bgfx::blit(1, readback, 0, 0, output);
+    ready = bgfx::readTexture(readback, tinted.data());
+    while (bgfx::frame() < ready) {}
+    for (std::size_t offset = 0; offset < original.size(); offset += 4) {
+      for (int channel = 0; channel < 3; ++channel)
+        require(std::abs(int(tinted[offset + channel]) * 2 - original[offset + channel]) <= 2,
+                "direct video clamps converted RGB before applying half brightness");
+      require(tinted[offset + 3] == 255, "direct video output is opaque");
+    }
+  };
+  requireTintedPixels();
   const auto firstFrame = renderPixels();
   const auto awaitPixels = [&](bool same) {
     const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
@@ -1457,8 +1478,6 @@ void testNativeVideoPlaybackSelectsSurfaceRendering() {
   require(awaitPixels(true), "native playback reproduces its first frame after backward seek");
   player.stop();
   require(!player.prepareEmbeddedSubmission(*quad, 0), "stopped native video no longer submits an image");
-  bgfx::setViewFrameBuffer(0, BGFX_INVALID_HANDLE);
-  bgfx::destroy(framebuffer); bgfx::destroy(output); bgfx::destroy(readback);
 
   // This matrix is valid video but deliberately outside the native shader's
   // supported set. Import must fail safely and reopen the ordinary decoder.
@@ -1477,6 +1496,150 @@ void testNativeVideoPlaybackSelectsSurfaceRendering() {
       "vs_skin_yuvrgb.bin", "fs_skin_yuvrgb.bin");
   require(submission && submission->program.idx == softwareProgram.idx,
           "failed native surface import resumes software playback at the current clock");
+  requireTintedPixels();
+  bgfx::setViewFrameBuffer(0, BGFX_INVALID_HANDLE);
+  bgfx::destroy(framebuffer); bgfx::destroy(output); bgfx::destroy(readback);
+}
+
+void testDirectFullscreenBgaOnMetal() {
+  constexpr int width = 32, height = 16;
+  const int oldWidth = rendering::window_width, oldHeight = rendering::window_height;
+  rendering::window_width = width;
+  rendering::window_height = height;
+  const auto restore = makeScopeExit([&] {
+    rendering::window_width = oldWidth;
+    rendering::window_height = oldHeight;
+  });
+  const auto output = bgfx::createTexture2D(width, height, false, 1,
+      bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
+  const auto readback = bgfx::createTexture2D(width, height, false, 1,
+      bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
+  const auto framebuffer = bgfx::createFrameBuffer(1, &output, false);
+  float ortho[16];
+  bx::mtxOrtho(ortho, 0.0F, float(width), float(height), 0.0F, 0.0F,
+                 100.0F, 0.0F, bgfx::getCaps()->homogeneousDepth);
+  for (const auto view : {rendering::bga_view, rendering::final_view}) {
+    bgfx::setViewFrameBuffer(view, framebuffer);
+    bgfx::setViewRect(view, 0, 0, width, height);
+    bgfx::setViewTransform(view, nullptr, ortho);
+    bgfx::setViewClear(view, BGFX_CLEAR_COLOR, 0x00ff0000);
+  }
+  const std::array<std::uint8_t, 16> source{
+      192, 0, 0, 255, 192, 0, 0, 255,
+      0, 0, 192, 255, 0, 0, 192, 255};
+  ImageData data{.texture = bgfx::createTexture2D(2, 2, false, 1,
+      bgfx::TextureFormat::RGBA8, BGFX_SAMPLER_POINT,
+      bgfx::copy(source.data(), source.size())), .width = 2, .height = 2, .channels = 3};
+  auto image = AdoptImageTextureToSharedOwner(data);
+  Stopwatch stopwatch;
+  auto control = std::make_shared<JukeboxBackendControl>();
+  Jukebox jukebox(&stopwatch, std::make_unique<JukeboxTestBackendFactory>(control));
+  jukebox.setBgaDisplayMode(AppSettings::BgaDisplayMode::Fit);
+  const auto lookups = jukebox.gameplayBgaProgramLookupCount();
+  const auto frame = jukebox.prepareImageFrame(image);
+  auto stale = frame;
+  ++stale.base->surfaceToken;
+  require(!jukebox.trySubmitFullscreenDirect(stale, rendering::final_view, 0.0F, 0.5F) &&
+              !jukebox.trySubmitFullscreenDirect(frame, rendering::final_view,
+                  std::numeric_limits<float>::quiet_NaN(), 0.5F) &&
+              !jukebox.trySubmitFullscreenDirect(frame, rendering::final_view, 0.0F,
+                  std::numeric_limits<float>::infinity()),
+          "stale frames and nonfinite post-process inputs retain fallback ownership");
+  require(!jukebox.trySubmitFullscreenDirect(frame, rendering::final_view, 1.0F, 0.5F),
+          "positive blur must retain the composited path");
+  auto layered = frame;
+  layered.layer = frame.base;
+  require(!jukebox.trySubmitFullscreenDirect(layered, rendering::final_view, 0.0F, 0.5F),
+          "a layered frame cannot bypass composition");
+  image->channels = 4;
+  require(!jukebox.trySubmitFullscreenDirect(frame, rendering::final_view, 0.0F, 0.5F),
+          "unknown or alpha-bearing images cannot bypass composition");
+  image->channels = 3;
+  require(jukebox.gameplayBgaSubmissionStats().pinnedFrames == 1 &&
+              jukebox.gameplayBgaSubmissionStats().fullscreenSubmissions == 0,
+          "rejected direct attempts leave the same-frame lease and submission untouched");
+  require(jukebox.trySubmitFullscreenDirect(frame, rendering::final_view, 0.0F, 0.5F),
+          "single opaque zero-blur BGA submits directly");
+  require(jukebox.gameplayBgaSubmissionStats().pinnedFrames == 0 &&
+              jukebox.gameplayBgaSubmissionStats().fullscreenSubmissions == 1 &&
+              jukebox.gameplayBgaProgramLookupCount() == lookups,
+          "direct submission releases its lease without a per-frame shader lookup");
+  require(!jukebox.trySubmitFullscreenDirect(frame, rendering::final_view, 0.0F, 1.0F),
+          "a consumed frame cannot submit again");
+  bgfx::blit(rendering::readback_view, readback, 0, 0, output);
+  auto current = bgfx::frame();
+  std::array<std::uint8_t, width * height * 4> pixels{};
+  const auto ready = bgfx::readTexture(readback, pixels.data());
+  current = bgfx::frame();
+  require(bgfx::getStats()->numDraw == 1,
+          "direct BGA uses exactly one draw without intermediate composition");
+  for (unsigned guard = 0; current < ready && guard < 16; ++guard) current = bgfx::frame();
+  require(current >= ready, "direct BGA readback completes");
+  const auto top = (3 * width + 16) * 4, bottom = (12 * width + 16) * 4;
+  require(std::abs(int(pixels[top]) - 96) <= 1 && pixels[top + 2] == 0 &&
+              pixels[bottom] == 0 && std::abs(int(pixels[bottom + 2]) - 96) <= 1,
+          "direct BGA preserves orientation and half brightness");
+  for (const int x : {2, 29}) {
+    const auto offset = (8 * width + x) * 4;
+    require(pixels[offset] == 0 && pixels[offset + 1] == 0 &&
+                pixels[offset + 2] == 0 && pixels[offset + 3] == 255,
+            "fit-mode letterbox bars are opaque black");
+  }
+  require(pixels[top + 3] == 255 && pixels[bottom + 3] == 255,
+          "direct BGA content remains opaque");
+  const auto readDirectPixels = [&](AppSettings::BgaDisplayMode mode, float brightness) {
+    jukebox.setBgaDisplayMode(mode);
+    const auto next = jukebox.prepareImageFrame(image);
+    require(jukebox.trySubmitFullscreenDirect(next, rendering::final_view, 0.0F, brightness),
+            "eligible frames remain direct across display-mode changes");
+    bgfx::blit(rendering::readback_view, readback, 0, 0, output);
+    const auto ready = bgfx::readTexture(readback, pixels.data());
+    auto current = bgfx::frame();
+    for (unsigned guard = 0; current < ready && guard < 16; ++guard) current = bgfx::frame();
+    require(current >= ready, "display-mode readback completes");
+  };
+  readDirectPixels(AppSettings::BgaDisplayMode::Fill, 2.0F);
+  require(pixels[(3 * width + 2) * 4] == 192 && pixels[(12 * width + 29) * 4 + 2] == 192,
+          "fill mode covers the viewport and brightness clamps at one");
+  readDirectPixels(AppSettings::BgaDisplayMode::NoExpand, 1.0F);
+  require(pixels[(7 * width + 15) * 4] == 192 && pixels[(8 * width + 16) * 4 + 2] == 192 &&
+              pixels[(3 * width + 16) * 4] == 0,
+          "no-expand preserves native image dimensions at the centered position");
+  bgfx::setViewRect(rendering::final_view, 4, 2, 24, 12);
+  readDirectPixels(AppSettings::BgaDisplayMode::Fit, 0.5F);
+  require(std::abs(int(pixels[(4 * width + 16) * 4]) - 96) <= 1 &&
+              pixels[(8 * width + 5) * 4] == 0 && pixels[(8 * width + 5) * 4 + 3] == 255,
+          "direct composition respects the caller's offset output viewport");
+  bgfx::setViewRect(rendering::final_view, 0, 0, width, height);
+  const auto delayed = jukebox.prepareImageFrame(image);
+  bgfx::TransientVertexBuffer exhausted{};
+  const auto available = bgfx::getAvailTransientVertexBuffer(
+      std::numeric_limits<std::uint32_t>::max(), rendering::PosTexCoord0Vertex::ms_decl);
+  bgfx::allocTransientVertexBuffer(&exhausted, available, rendering::PosTexCoord0Vertex::ms_decl);
+  require(!jukebox.trySubmitFullscreenDirect(delayed, rendering::final_view, 0.0F, 1.0F) &&
+              jukebox.gameplayBgaSubmissionStats().pinnedFrames == 1,
+          "transient exhaustion rejects direct submission without consuming the lease");
+  bgfx::frame();
+  require(jukebox.trySubmitFullscreenDirect(delayed, rendering::final_view, 0.0F, 0.0F),
+          "a rejected frame can submit after transient capacity returns");
+  bgfx::blit(rendering::readback_view, readback, 0, 0, output);
+  const auto blackReady = bgfx::readTexture(readback, pixels.data());
+  while (bgfx::frame() < blackReady) {}
+  require(pixels[top] == 0 && pixels[top + 1] == 0 && pixels[top + 2] == 0 &&
+              pixels[top + 3] == 255,
+          "zero brightness renders opaque black");
+  const auto beforeFallback = jukebox.gameplayBgaSubmissionStats().fullscreenSubmissions;
+  const auto fallback = jukebox.prepareImageFrame(image);
+  require(!jukebox.trySubmitFullscreenDirect(fallback, rendering::final_view, 2.0F, 1.0F),
+          "switching blur back on rejects the direct path");
+  jukebox.submitFullscreen(fallback);
+  require(jukebox.gameplayBgaSubmissionStats().pinnedFrames == 0 &&
+              jukebox.gameplayBgaSubmissionStats().fullscreenSubmissions == beforeFallback + 1,
+          "same-frame fullscreen fallback consumes the preserved lease once");
+  bgfx::frame();
+  for (const auto view : {rendering::bga_view, rendering::final_view})
+    bgfx::setViewFrameBuffer(view, BGFX_INVALID_HANDLE);
+  bgfx::destroy(framebuffer); bgfx::destroy(output); bgfx::destroy(readback);
 }
 
 void testFullscreenBlurBypassOnMetal() {
@@ -1786,6 +1949,7 @@ int main(int argc, char **argv) {
   rendering::PosColorVertex::init();
   rendering::PosTexVertex::init();
   if (metalSampling) {
+    testDirectFullscreenBgaOnMetal();
     testFullscreenBlurBypassOnMetal();
     testNativeVideoPlaybackSelectsSurfaceRendering();
     testEmbeddedImageResetsSkinSamplingOnMetal();

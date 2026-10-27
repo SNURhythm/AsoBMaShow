@@ -6,6 +6,7 @@
 #include "../rendering/ShaderManager.h"
 #include "../rendering/UniformCache.h"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <inttypes.h>
 #include <utility>
@@ -127,6 +128,17 @@ VideoPlayer::VideoPlayer(Stopwatch *stopwatch)
                             uniforms.getVec4("u_videoColor2")};
     } catch (...) {
       nativeFullscreenProgram = nativeEmbeddedProgram = BGFX_INVALID_HANDLE;
+    }
+  }
+  if (bgfx::getRendererType() == bgfx::RendererType::Metal) {
+    try {
+      tintedFullscreenProgram = rendering::ShaderManager::getInstance().getProgram(
+          "vs_yuvrgb.bin", "fs_yuvrgb_tint.bin");
+      tintedNativeFullscreenProgram = rendering::ShaderManager::getInstance().getProgram(
+          "vs_yuvrgb.bin", "fs_video_nv12_tint.bin");
+      fullscreenTint = uniforms.getVec4("u_tintColor");
+    } catch (...) {
+      tintedFullscreenProgram = tintedNativeFullscreenProgram = BGFX_INVALID_HANDLE;
     }
   }
 }
@@ -494,15 +506,34 @@ unsigned int VideoPlayer::getPrecisePosition() {
 
 void VideoPlayer::render(bgfx::ViewId viewId, float viewX, float viewY,
                          float viewWidth, float viewHeight) const {
+  (void)renderFullscreen(viewId, viewX, viewY, viewWidth, viewHeight, std::nullopt);
+}
+
+bool VideoPlayer::renderFullscreenTinted(
+    bgfx::ViewId viewId, float viewX, float viewY, float viewWidth,
+    float viewHeight, float brightness) const {
+  if (!std::isfinite(brightness)) return false;
+  return renderFullscreen(viewId, viewX, viewY, viewWidth, viewHeight,
+                          std::clamp(brightness, 0.0F, 1.0F));
+}
+
+bool VideoPlayer::renderFullscreen(
+    bgfx::ViewId viewId, float viewX, float viewY, float viewWidth,
+    float viewHeight, std::optional<float> brightness) const {
   std::lock_guard<std::mutex> frameLock(videoFrameMutex);
   if (!hasVideoFrame)
-    return;
+    return false;
   if (!isPlaying) {
-    return;
+    return false;
   }
-  const auto program = presentingHardwareFrame ? nativeFullscreenProgram : fullscreenProgram;
-  if (!bgfx::isValid(program)) {
-    return;
+  const auto program = brightness
+      ? (presentingHardwareFrame ? tintedNativeFullscreenProgram : tintedFullscreenProgram)
+      : (presentingHardwareFrame ? nativeFullscreenProgram : fullscreenProgram);
+  if (!bgfx::isValid(program) || (brightness &&
+      (!bgfx::isValid(fullscreenTint) || viewWidth <= 0.0F || viewHeight <= 0.0F ||
+       bgfx::getAvailTransientVertexBuffer(4, rendering::PosTexCoord0Vertex::ms_decl) < 4 ||
+       bgfx::getAvailTransientIndexBuffer(6) < 6))) {
+    return false;
   }
 
   // Submit a quad with the video texture
@@ -565,7 +596,12 @@ void VideoPlayer::render(bgfx::ViewId viewId, float viewX, float viewY,
     bgfx::setTexture(2, s_texV, videoTextureV);
   }
 
+  if (brightness) {
+    const float tint[4] = {*brightness, *brightness, *brightness, 1.0F};
+    bgfx::setUniform(fullscreenTint, tint);
+  }
   bgfx::submit(viewId, program);
+  return true;
 }
 
 void VideoPlayer::renderEmbedded(

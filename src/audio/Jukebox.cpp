@@ -1067,6 +1067,11 @@ Jukebox::Jukebox(Stopwatch *stopwatch,
       prepareGameplayBgaProgram("vs_text.bin", "fs_text.bin");
   bgaFullscreenLayerProgram =
       prepareGameplayBgaProgram("vs_text.bin", "fs_bgalayer.bin");
+  if (bgfx::getRendererType() == bgfx::RendererType::Metal) {
+    bgaFullscreenDirectProgram =
+        prepareGameplayBgaProgram("vs_text.bin", "fs_rect_tint.bin");
+    bgaFullscreenTint = rendering::UniformCache::getInstance().getVec4("u_tintColor");
+  }
 }
 
 bgfx::ProgramHandle
@@ -1589,6 +1594,56 @@ void Jukebox::finalizePrepared(
   if (preparedBgaFrameLeases.erase(frame.sequence) != 0) {
     pinnedGameplayBgaFrames.fetch_sub(1, std::memory_order_relaxed);
   }
+}
+
+bool Jukebox::trySubmitFullscreenDirect(
+    const PreparedGameplayBgaFrame &frame, bgfx::ViewId viewId,
+    float blurStrength, float brightness) noexcept {
+  if (bgfx::getRendererType() != bgfx::RendererType::Metal ||
+      !std::isfinite(blurStrength) || blurStrength > 0.0F ||
+      !std::isfinite(brightness) || frame.layer ||
+      rendering::window_width <= 0 || rendering::window_height <= 0) {
+    return false;
+  }
+  const auto *descriptor = frame.composition == GameplayBgaComposition::MissOnly
+      ? (frame.miss && !frame.base ? &*frame.miss : nullptr)
+      : (frame.composition == GameplayBgaComposition::BaseThenLayer &&
+         frame.base && !frame.miss ? &*frame.base : nullptr);
+  if (descriptor == nullptr) return false;
+
+  std::optional<PinnedGameplayBgaSurface> surface;
+  {
+    std::lock_guard<std::mutex> lock(preparedBgaFrameMutex);
+    const auto lease = preparedBgaFrameLeases.find(frame.sequence);
+    if (lease == preparedBgaFrameLeases.end() || lease->second.layer) return false;
+    surface = frame.composition == GameplayBgaComposition::MissOnly
+        ? lease->second.miss : lease->second.base;
+  }
+  if (!surface || surface->descriptor.surfaceToken != descriptor->surfaceToken ||
+      surface->descriptor.mediaKind != descriptor->mediaKind ||
+      surface->descriptor.sourceWidth != descriptor->sourceWidth ||
+      surface->descriptor.sourceHeight != descriptor->sourceHeight) return false;
+
+  const float tint = std::clamp(brightness, 0.0F, 1.0F);
+  bool submitted = false;
+  if (surface->descriptor.mediaKind == GameplayBgaMediaKind::Video) {
+    if (!surface->video) return false;
+    const auto rect = calculateBgaRect(descriptor->sourceWidth, descriptor->sourceHeight);
+    submitted = surface->video->renderFullscreenTinted(
+        viewId, rect.x, rect.y, rect.width, rect.height, tint);
+  } else {
+    // Decode channel metadata proves opacity without a scan in the frame loop.
+    // Alpha-bearing or externally supplied unknown images keep composition.
+    if (!surface->image ||
+        (surface->image->channels != 1 && surface->image->channels != 3)) return false;
+    submitted = renderImage(*surface->image, viewId, tint);
+  }
+  if (!submitted) return false;
+  // The old fullscreen composite made even letterbox pixels opaque.
+  bgfx::setViewClear(viewId, BGFX_CLEAR_COLOR, 0x000000ff);
+  fullscreenGameplayBgaSubmissions.fetch_add(1, std::memory_order_relaxed);
+  finalizePrepared(frame);
+  return true;
 }
 
 void Jukebox::submitFullscreen(const PreparedGameplayBgaFrame &frame) noexcept {
@@ -4110,10 +4165,17 @@ void Jukebox::runVisualScheduler() {
 #endif
 }
 
-void Jukebox::renderImage(ImageData &image, int viewId) {
+bool Jukebox::renderImage(ImageData &image, int viewId,
+                           std::optional<float> directBrightness) {
 
-  if (!bgfx::isValid(image.texture)) {
-    return;
+  const auto program = directBrightness ? bgaFullscreenDirectProgram
+      : (viewId == rendering::bga_view ? bgaFullscreenImageProgram
+                                      : bgaFullscreenLayerProgram);
+  if (!bgfx::isValid(image.texture) || !bgfx::isValid(program) ||
+      (directBrightness && (!bgfx::isValid(bgaFullscreenTint) ||
+       bgfx::getAvailTransientVertexBuffer(4, rendering::PosTexCoord0Vertex::ms_decl) < 4 ||
+       bgfx::getAvailTransientIndexBuffer(6) < 6))) {
+    return false;
   }
   bgfx::TransientVertexBuffer tvb{};
   bgfx::TransientIndexBuffer tib{};
@@ -4155,12 +4217,12 @@ void Jukebox::renderImage(ImageData &image, int viewId) {
   bgfx::setTexture(0, s_texColor, image.texture);
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                  BGFX_STATE_BLEND_ALPHA);
-  const auto program = viewId == rendering::bga_view
-                           ? bgaFullscreenImageProgram
-                           : bgaFullscreenLayerProgram;
-  if (bgfx::isValid(program)) {
-    bgfx::submit(viewId, program);
+  if (directBrightness) {
+    const float tint[4] = {*directBrightness, *directBrightness, *directBrightness, 1.0F};
+    bgfx::setUniform(bgaFullscreenTint, tint);
   }
+  bgfx::submit(viewId, program);
+  return true;
 }
 
 long long Jukebox::getTimeMicros() {

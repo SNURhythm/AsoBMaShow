@@ -1836,25 +1836,31 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           const bool compositeFullscreenBga =
               submitPreparedFullscreen || submitLegacyFullscreen;
           if (compositeFullscreenBga) {
-            bgfx::touch(rendering::bga_view);
-            bgfx::touch(rendering::bga_layer_view);
-            bgfx::touch(s_blurPass->finalView());
             const bool ignoreBgaPostOptions =
                 context.ignoreBgaPostOptions.load(std::memory_order_acquire);
-            if (submitPreparedFullscreen) {
-              context.jukebox.submitFullscreen(*bgaCompositeState.prepared);
-            } else {
-              context.jukebox.render();
+            const float blurStrength =
+                ignoreBgaPostOptions ? 0.0f : context.settings.bgaBlurStrength;
+            const float brightness = ignoreBgaPostOptions ? 1.0f
+                : static_cast<float>(context.settings.bgaBrightnessPercent) / 100.0f;
+            s_blurPass->setBlurStrength(blurStrength);
+            const bool directFullscreen = submitPreparedFullscreen &&
+                context.jukebox.trySubmitFullscreenDirect(
+                    *bgaCompositeState.prepared, s_blurPass->finalView(),
+                    blurStrength, brightness);
+            if (!directFullscreen) {
+              bgfx::setViewClear(s_blurPass->finalView(), BGFX_CLEAR_COLOR, 0x00000000);
+              bgfx::touch(rendering::bga_view);
+              bgfx::touch(rendering::bga_layer_view);
+              bgfx::touch(s_blurPass->finalView());
+              if (submitPreparedFullscreen) {
+                context.jukebox.submitFullscreen(*bgaCompositeState.prepared);
+              } else {
+                context.jukebox.render();
+              }
+              s_postProcess.apply();
+              rendering::renderFullscreenTextureTint(
+                  s_blurPass->outputTexture(), s_blurPass->finalView(), brightness);
             }
-            s_blurPass->setBlurStrength(
-                ignoreBgaPostOptions ? 0.0f : context.settings.bgaBlurStrength);
-            s_postProcess.apply();
-            rendering::renderFullscreenTextureTint(
-                s_blurPass->outputTexture(), s_blurPass->finalView(),
-                ignoreBgaPostOptions
-                    ? 1.0f
-                    : static_cast<float>(context.settings.bgaBrightnessPercent) /
-                          100.0f);
           }
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
           const auto submitStarted = perf::latency::nowMicros();

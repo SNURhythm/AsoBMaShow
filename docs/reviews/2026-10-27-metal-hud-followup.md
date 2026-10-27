@@ -36,6 +36,41 @@ telemetry remains unchanged. The generated Metal patch only fixes the drawable
 pool; it no longer wraps acquisition or presentation, even with telemetry off.
 No submission limiter or new measurement is added.
 
+## Direct zero-blur BGA path
+
+Eligible prepared fullscreen BGA frames on Metal now draw directly into the
+final view: zero/negative effective blur and one opaque base or miss surface,
+with no layer. Images use conservative decode metadata (1 or 3 channels);
+alpha-bearing/unknown images keep the old path. Videos use cached tinted
+software-YUV or native-NV12 shaders, clamping conversion before brightness.
+Missing resources, stale frames or unavailable transient capacity decline the
+fast path without consuming the media lease. Same-frame fallback stays available.
+
+The direct draw preserves display-mode geometry and viewport mapping, applies
+brightness once, and clears letterbox bars to opaque black. It avoids the
+intermediate write/read and final texture-composition draw. Removing the
+half-resolution intermediate can make unblurred detail sharper. Its target
+remains allocated for fallback/blur changes; no memory saving is claimed here.
+Blurred/layered content, replay export and other renderers retain their existing
+paths. No timer, display-link or telemetry change accompanies this optimization.
+
+## Pause/resume observation
+
+After the telemetry removal, the user reported about 16.15 ms Present Delay.
+They then observed lower delay after pausing/resuming while blur was enabled:
+initially around 10 ms, later about 13.7 ms persisting instead of returning to
+16 ms. They explicitly withdrew the earlier suspected connection to input;
+input is not an established trigger.
+
+Source inspection finds no drawable-pool or frame-pacer reset in the ordinary
+pause/resume handlers. Pause suspends the realtime gameplay worker and playback
+clock. Built-in paused scenes without active video may also stop submitting
+frames through PresentationSchedule; skin scenes and active video can keep
+presenting. Resume restarts those workers/clocks. A change in queue occupancy or
+refresh phase is plausible, but neither is proven by this report. No pause or
+pacing behavior is changed. The zero-blur fast path does not address this blurred
+scene observation.
+
 ## Device comparisons
 
 The user reported the following HUD Present Delay values:
@@ -50,7 +85,7 @@ The last comparison did not show an observable change from timer accounting.
 At the user's request, the latest candidate restores the corrected timer and
 removes the branch-added telemetry. Blur bypass, upload reuse, view order and
 three drawables remain unchanged. Compare this candidate with `620a1046` to
-hold timer accounting constant. Its physical result is pending.
+hold timer accounting constant. The user subsequently reported about 16.15 ms after telemetry removal.
 
 The small residual difference from the pre-branch baseline has not been traced
 to a cause. Scene/device conditions were not independently verified, and the
@@ -60,7 +95,7 @@ conditions; local behavioral tests do not establish an on-device improvement.
 
 ## Verification
 
-Current candidate: all 72 rendering/iOS platform checks, the desktop build and
+Telemetry-removal candidate: all 72 rendering/iOS platform checks, the desktop build and
 unsigned iOS device build pass. The generated-Metal regression failed with the telemetry observer
 present, then passed after removing observer checks, presentation callbacks and
 clock reads. The pre-existing telemetry tests and frame-start timer regressions
@@ -79,3 +114,14 @@ tests and both builds. Earlier display-link verification included 74 group
 checks, native callback/provider smoke coverage and simulator compilation; those
 bridge-specific checks were removed with that experiment. Historical plans and
 specs are retained as implementation records, not current behavior.
+
+## Direct-path verification
+
+Focused native Metal and BGA tests pass, including one-draw output, brightness,
+opaque bars, Fit/Fill/NoExpand, viewport offsets, blur/layer/alpha rejection,
+stale/nonfinite inputs, transient-capacity recovery, and same-frame lease
+ownership. Existing native NV12/software YUV fixtures verify tinted pixels.
+The image test first failed before direct submission existed; the video test
+failed without the new shaders, then passed with the compiled shaders.
+All 87 rendering/video/iOS platform checks pass, along with the desktop and
+unsigned iOS device builds. Final independent review is pending.

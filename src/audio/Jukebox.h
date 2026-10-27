@@ -284,6 +284,9 @@ public:
   void finalizePrepared(
       const PreparedGameplayBgaFrame &frame) noexcept override;
   void submitFullscreen(const PreparedGameplayBgaFrame &frame) noexcept override;
+  [[nodiscard]] bool trySubmitFullscreenDirect(
+      const PreparedGameplayBgaFrame &frame, bgfx::ViewId viewId,
+      float blurStrength, float brightness) noexcept;
   [[nodiscard]] GameplayBgaSubmissionStats
   gameplayBgaSubmissionStats() const noexcept;
   [[nodiscard]] const BgaPoorSequenceSchedule &
@@ -325,6 +328,8 @@ private:
   bgfx::ProgramHandle bgaEmbeddedImageProgram = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle bgaFullscreenImageProgram = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle bgaFullscreenLayerProgram = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle bgaFullscreenDirectProgram = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle bgaFullscreenTint = BGFX_INVALID_HANDLE;
   std::uint64_t bgaProgramLookupCount = 0;
   // seek lock
   std::mutex seekLock;
@@ -417,7 +422,8 @@ private:
   void catchUpVisualsAtTimelineMicrosLocked(long long bgaTimelineMicros);
   void restoreVisualsAtTimelineMicrosLocked(long long bgaTimelineMicros);
   void advanceVisualsAtTimelineMicros(long long bgaTimelineMicros);
-  void renderImage(ImageData &image, int viewId);
+  bool renderImage(ImageData &image, int viewId,
+                   std::optional<float> directBrightness = std::nullopt);
   struct PinnedGameplayBgaSurface {
     PreparedGameplayBgaSurface descriptor;
     std::shared_ptr<VideoPlayer> video;
