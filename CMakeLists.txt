@@ -85,6 +85,8 @@ endif()
 add_definitions(-DSOL_LUAJIT=1 -DNOMINMAX)
 set(BX_CONFIG_DEBUG OFF CACHE BOOL "" FORCE)
 set(BGFX_CONFIG_DEBUG OFF CACHE BOOL "" FORCE)
+# Keep video decoding on the application's existing media path.
+set(BGFX_CONFIG_VIDEO OFF CACHE BOOL "" FORCE)
 set(BGFX_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(BGFX_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 # Include directories

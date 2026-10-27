@@ -49,7 +49,6 @@
 #include <string>
 #include <bgfx/bgfx.h>
 #include <bgfx/embedded_shader.h>
-#include <bgfx/platform.h>
 #include <bx/platform.h>
 #include "rendering/common.h"
 #include "rendering/PostProcessPipeline.h"

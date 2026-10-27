@@ -14,7 +14,7 @@ function(asobmashow_ios_bgfx_metal_compatibility)
         message(FATAL_ERROR "iOS Metal compatibility requires non-amalgamated bgfx")
     endif()
 
-    set(original "${BGFX_DIR}/src/renderer_mtl.mm")
+    set(original "${BGFX_DIR}/src/renderer_mtl.cpp")
     get_target_property(sources bgfx SOURCES)
     if(NOT original IN_LIST sources)
         message(FATAL_ERROR "bgfx Metal source layout changed; review iOS 16 compatibility")
@@ -41,6 +41,8 @@ function(asobmashow_ios_bgfx_metal_compatibility)
     list(REMOVE_ITEM sources "${original}")
     list(APPEND sources "${patched}")
     set_property(TARGET bgfx PROPERTY SOURCES "${sources}")
+    # The generated .mm needs the same language level as upstream metal-cpp.
+    set_target_properties(bgfx PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON)
     target_include_directories(bgfx PRIVATE "${BGFX_DIR}/src")
 endfunction()
 

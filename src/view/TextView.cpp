@@ -8,7 +8,6 @@
 #endif
 #include "../RAII.h"
 #include <bgfx/bgfx.h>
-#include <bgfx/platform.h>
 #include <array>
 #include <cstring>
 #include <cmath>

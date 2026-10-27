@@ -51,6 +51,7 @@ prepare_bgfx_project() {
     -B "${build_dir}" \
     -GXcode \
     -DCMAKE_SYSTEM_NAME=iOS \
+    -DBGFX_CONFIG_VIDEO=OFF \
     -DCMAKE_OSX_SYSROOT=iphoneos \
     -DCMAKE_PROJECT_bgfx_INCLUDE="${ROOT_DIR}/cmake/IOSBgfxMetalCompatibility.cmake" \
     -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0
