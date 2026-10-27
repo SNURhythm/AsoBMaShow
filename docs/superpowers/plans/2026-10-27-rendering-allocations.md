@@ -51,7 +51,7 @@
 
 ### Task 4: Integration and delivery
 
-**Files:** docs/reviews/2026-10-27-rendering-allocations.md, PR161 description.
-- [ ] Build affected tests_rendering tests_ui tests_gameplay and main together at -j6; run label union in parallel. Expect all pass.
-- [ ] Run scripts/ios_firebase_deploy.sh --build-only --skip-init; expect unsigned build success.
+**Files:** docs/reviews/2026-10-27-rendering-allocations.md, PR161 description; tests/main_menu_hidden_selector_fixture.cpp (repair of stale fixture exposed by verification).
+- [x] Build affected tests_rendering tests_ui tests_gameplay and main together at -j6; run label union in parallel. Expect all pass.
+- [x] Run scripts/ios_firebase_deploy.sh --build-only --skip-init; expect unsigned build success.
 - [ ] Record allocation measurements and limitations, obtain one fresh review, fix significant findings if any, push current branch and update linked PR161.

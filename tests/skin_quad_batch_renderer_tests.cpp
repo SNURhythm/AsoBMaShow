@@ -380,6 +380,10 @@ void testPreparedScratchReusesStorageWithoutReusingFrameState() {
                           .vertices = {{{.x = 0, .y = 0}, {.x = 8, .y = 0},
                                         {.x = 8, .y = 12}, {.x = 0, .y = 12}}}});
   std::vector<skin::SkinDrawCommand> commands(64, command(1, glyphs));
+  prepared.atlases.emplace(22, prepared.atlases.at(21));
+  for (std::size_t index = 32; index < commands.size(); ++index) {
+    std::get<skin::SkinGlyphRunCommand>(commands[index].payload).atlas = 22;
+  }
   const std::array segments{std::span<const skin::SkinDrawCommand>(commands).first(32),
                             std::span<const skin::SkinDrawCommand>(commands).subspan(32)};
   rendering::SkinQuadSubmissionPlan previous;
@@ -387,6 +391,7 @@ void testPreparedScratchReusesStorageWithoutReusingFrameState() {
   expect(renderer.prepare(segments, previous), "scratch fixture warms preflight");
   for (int frame = 0; frame < 3; ++frame) {
     prepared.atlases.at(21).texture.idx = static_cast<std::uint16_t>(211 + frame);
+    prepared.atlases.at(22).texture.idx = static_cast<std::uint16_t>(311 + frame);
     renderer.begin(context, prepared);
     rendering::SkinQuadSubmissionPlan plan;
     std::size_t count = 0, bytes = 0;
@@ -416,7 +421,8 @@ void testPreparedScratchReusesStorageWithoutReusingFrameState() {
     renderer.flush();
     expect(moved.fullyConsumed() && moved.segmentCount() == 2 &&
                backend.batches.size() == before + 2 &&
-               backend.batches.back().texture.idx == 211 + frame &&
+               backend.batches[before].texture.idx == 211 + frame &&
+               backend.batches.back().texture.idx == 311 + frame &&
                backend.batches.back().vertices.size() == 1024,
            "reused scratch resolves current glyph pages and emits both segments");
     previous = std::move(moved);

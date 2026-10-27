@@ -12,6 +12,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 #define ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS 0
 namespace rendering { int window_width=1920,window_height=1080; bool compactMenuCanvasActive=false; }
@@ -35,6 +36,8 @@ struct ImageView { static inline int drops=0; static void dropAllCache(){++drops
 struct Completion {std::filesystem::path chartPath;int targetIdentity=0,selectionGeneration=0;};
 struct Tasks {std::vector<Completion> completions; std::vector<Completion> takeDownloadedIndexCompletions(){auto r=std::move(completions);completions.clear();return r;}};
 struct Context {
+ std::string pendingComboNotificationProfile;
+ struct ProfileManager {struct Profile {std::string id="active";} profile;const Profile& activeProfile() const{return profile;}} profileManager;
  std::atomic_bool chartLibraryFoldersReloadRequested=false,chartLibraryListReloadRequested=false;
  struct Repository {std::uint64_t revision=1;std::uint64_t GetRevision(){return revision;}std::uint64_t GetLibraryRevision(){return revision;}} scoreRepository,chartRepository;
  Tasks *chartLibraryTasks=nullptr;
@@ -61,6 +64,7 @@ struct MainMenuScene {
  int scoreClearRanks=0,scoreBestScores=0,folderClearData=0;
  std::string musicStatusMessage;
  void update(float);void applyPendingUiUpdates();void refreshScoreClearRanksIfNeeded();
+ void selectTab(Tab tab){activeTab_=tab;}
  bool applyPendingTabSwitch(){return true;}bool selectorTabActive(){return activeTab_==Tab::Play||activeTab_==Tab::Course;}
  bool archiveUnzipInProgress(){return false;}
  std::optional<ChartMetaRecord> selectedRecordSnapshot(){return selectedChartRecord;}
