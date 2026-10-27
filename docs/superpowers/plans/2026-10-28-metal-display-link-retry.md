@@ -109,3 +109,28 @@ reported delay before pausing is lower, but it does not reproduce the previous
 path's post-resume benefit. An overall latency advantage is not established.
 The previous report was on a warm iPad using a fast charger, and matching thermal
 and charging conditions have not been confirmed.
+
+## Restore GPU queue headroom
+
+After these measurements, the user raised restoring the GPU frame limit for
+lower-end devices because limiting it to one had not improved the reported delay.
+Restore the original Apple GPU limit of **three**. In the current bgfx Metal
+backend, this limit controls a GPU-completion semaphore at the start of command
+encoding. At limit one, encoding can wait for the previous GPU frame, reducing
+overlap when GPU work or completion notification is slower.
+
+CAMetalDisplayLink retains preferred frame latency one, the layer retains three
+drawables, and the timer fallback retains its two presentation slots. These
+presentation controls are separate from the GPU-completion limit. More queue
+headroom can help throughput under load, but can also permit more work ahead of
+display; lower-end performance and latency effects remain to be measured.
+
+The 15.1 ms result above was measured with GPU limit one and must not be attributed
+to this restored-three configuration. Existing native-video fixtures cover GPU
+limits one, two, and three. The desktop and unsigned iOS device builds passed.
+All four focused native checks passed: Metal readback, drawable-provider
+ownership, and native-video lifetime in single-threaded and multithreaded modes.
+
+Apple's [triple-buffering guidance](https://developer.apple.com/library/archive/documentation/3DDrawing/Conceptual/MTLBestPracticesGuide/TripleBuffering.html)
+describes the underlying overlap/queue-depth tradeoff; it does not establish a
+performance gain for this application.

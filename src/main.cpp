@@ -756,8 +756,8 @@ int main(int argv, char **args) {
   bgfx_init.resolution.height = rendering::render_height;
   bgfx_init.resolution.reset = s_bgfxResetFlags;
 #if TARGET_OS_IPHONE || TARGET_OS_OSX
-  // Test a single GPU frame while keeping the Metal drawable pool at three.
-  bgfx_init.resolution.maxFrameLatency = 1;
+  // Preserve CPU/GPU overlap; display pacing bounds presentation separately.
+  bgfx_init.resolution.maxFrameLatency = 3;
 #else
   // Bound GPU work queued ahead of visible input feedback on other renderers.
   bgfx_init.resolution.maxFrameLatency = 2;
