@@ -1520,14 +1520,22 @@ void testFullscreenBlurBypassOnMetal() {
     blur.setBlurStrength(0);
     blur.init(width, height);
     blur.setCompositeEnabled(false);
-    blur.setInputViews({rendering::bga_view});
+    blur.setInputViews({rendering::bga_view, rendering::bga_layer_view});
+    rendering::applyViewOrder(blur.blurViewH(), blur.blurViewV(), rendering::final_view);
+    bgfx::setDebug(BGFX_DEBUG_PROFILER);
+    for (const auto view : {rendering::clear_view, rendering::main_view, rendering::ui_view}) {
+      bgfx::setViewFrameBuffer(view, framebuffer);
+      bgfx::setViewRect(view, 0, 0, width, height);
+      bgfx::setViewClear(view, view == rendering::clear_view ? BGFX_CLEAR_COLOR : BGFX_CLEAR_NONE,
+                         0x0000ffffU);
+    }
     float ortho[16];
     bx::mtxOrtho(ortho, 0.0F, float(width), float(height), 0.0F, 0.0F,
                  100.0F, 0.0F, bgfx::getCaps()->homogeneousDepth);
     bgfx::setViewFrameBuffer(rendering::final_view, framebuffer);
     bgfx::setViewRect(rendering::final_view, 0, 0, width, height);
     bgfx::setViewTransform(rendering::final_view, nullptr, ortho);
-    bgfx::setViewClear(rendering::final_view, BGFX_CLEAR_COLOR, 0x0000ffffU);
+    bgfx::setViewClear(rendering::final_view, BGFX_CLEAR_NONE);
     const std::array strengths{0.0F, 1.0F, 0.0F, -1.0F};
     for (std::size_t frame = 0; frame < strengths.size(); ++frame) {
       blur.setBlurStrength(strengths[frame]);
@@ -1537,6 +1545,10 @@ void testFullscreenBlurBypassOnMetal() {
       bgfx::setTexture(0, sampler, input);
       bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A);
       bgfx::submit(rendering::bga_view, inputProgram);
+      bgfx::touch(rendering::bga_layer_view);
+      bgfx::touch(rendering::clear_view);
+      bgfx::touch(rendering::main_view);
+      bgfx::touch(rendering::ui_view);
       blur.execute();
       rendering::renderFullscreenTextureTint(blur.outputTexture(), rendering::final_view, 0.5F);
       bgfx::blit(rendering::readback_view, readback, 0, 0, output);
@@ -1544,9 +1556,29 @@ void testFullscreenBlurBypassOnMetal() {
       std::array<std::uint8_t, width * height * 4> pixels{};
       const auto ready = bgfx::readTexture(readback, pixels.data());
       current = bgfx::frame(); // Retire the submitted frame before reading its stats.
-      const auto draws = bgfx::getStats()->numDraw;
-      require(draws == (frame == 1 ? 4U : 2U),
-              "zero/negative blur submits only the input and final composite draws");
+      const auto *stats = bgfx::getStats();
+      const auto viewPosition = [&](bgfx::ViewId view) {
+        for (unsigned i = 0; i < stats->numViews; ++i)
+          if (stats->viewStats[i].view == view) return i;
+        require(false, "every active composition view executes");
+        return 0U;
+      };
+      require(viewPosition(rendering::bga_view) < viewPosition(rendering::bga_layer_view) &&
+                  viewPosition(rendering::bga_layer_view) < viewPosition(rendering::clear_view),
+              "offscreen BGA must execute before acquiring the output drawable");
+      if (frame == 1)
+        require(viewPosition(rendering::bga_layer_view) < viewPosition(blur.blurViewH()) &&
+                    viewPosition(blur.blurViewH()) < viewPosition(blur.blurViewV()) &&
+                    viewPosition(blur.blurViewV()) < viewPosition(rendering::clear_view),
+                "both blur passes must finish before the output clear");
+      require(viewPosition(rendering::clear_view) < viewPosition(rendering::final_view) &&
+                  viewPosition(rendering::final_view) < viewPosition(rendering::main_view) &&
+                  viewPosition(rendering::main_view) < viewPosition(rendering::ui_view),
+              "output clear must preserve final, gameplay and UI composition order");
+      const auto draws = stats->numDraw;
+      // bgfx counts the four touch() submissions as well as real draws.
+      require(draws == (frame == 1 ? 8U : 6U),
+              "zero/negative blur omits exactly the two blur submissions");
       for (unsigned guard = 0; current < ready && guard < 16; ++guard) current = bgfx::frame();
       require(current >= ready, "blur probe completes readback");
       for (const auto point : {std::array{4, 3}, std::array{27, 12}}) {
@@ -1565,7 +1597,11 @@ void testFullscreenBlurBypassOnMetal() {
       require(settledBgfxTextureCount() == baseTextures + (frame == 1 ? 3 : 1),
               "disabled blur retains only its scene texture, including after resize");
     }
-    bgfx::setViewFrameBuffer(rendering::bga_view, BGFX_INVALID_HANDLE);
+    for (const auto view : {rendering::bga_view, rendering::bga_layer_view,
+                            rendering::clear_view, rendering::main_view, rendering::ui_view})
+      bgfx::setViewFrameBuffer(view, BGFX_INVALID_HANDLE);
+    bgfx::setViewOrder(0);
+    bgfx::setDebug(BGFX_DEBUG_NONE);
   }
   require(settledBgfxTextureCount() == baseTextures, "blur destruction releases all targets");
   bgfx::setViewFrameBuffer(rendering::final_view, BGFX_INVALID_HANDLE);

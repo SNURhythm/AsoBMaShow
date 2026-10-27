@@ -49,6 +49,7 @@ if(APPLE)
     set_source_files_properties(src/platform/NativeDocumentApple.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_source_files_properties(src/notifications/LocalNotificationsIOS.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_source_files_properties(src/video/HardwareVideoFrameApple.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set_source_files_properties(src/video/MetalDisplayLink.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 endif()
 if (ANDROID)
     set(PLATFORM_ANDROID ON)
@@ -6579,6 +6580,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     add_executable(gameplay_bga_target_tests
         tests/gameplay_bga_target_tests.cpp
         src/rendering/BlurPass.cpp
+        src/rendering/RenderPlan.cpp
         src/settings/AudioVideoSettings.cpp
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
@@ -8284,6 +8286,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(display_settings_manager_tests PRIVATE cxx_std_23)
 
+    add_executable(ios_metal_export_pacing_tests
+        tests/ios_metal_export_pacing_tests.cpp
+        src/video/RendererAccessCoordinator.cpp)
+    target_include_directories(ios_metal_export_pacing_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(ios_metal_export_pacing_tests PRIVATE cxx_std_23)
+    target_compile_definitions(ios_metal_export_pacing_tests PRIVATE TARGET_OS_IPHONE=1)
+    target_link_libraries(ios_metal_export_pacing_tests PRIVATE Threads::Threads)
+
     add_executable(frame_pacer_tests
         tests/frame_pacer_tests.cpp
         src/video/FramePacer.cpp
@@ -9519,6 +9529,16 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             RESOURCE_LOCK metal_device
         )
+        add_executable(metal_drawable_provider_tests
+            src/video/MetalDisplayLink.mm
+            tests/metal_drawable_provider_tests.mm)
+        target_include_directories(metal_drawable_provider_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_compile_features(metal_drawable_provider_tests PRIVATE cxx_std_23)
+        target_link_libraries(metal_drawable_provider_tests PRIVATE bgfx
+            "-framework Cocoa" "-framework QuartzCore" "-framework Metal")
+        asobmashow_register_test(metal_drawable_provider_tests)
+        set_tests_properties(metal_drawable_provider_tests PROPERTIES RESOURCE_LOCK metal_device)
+
         add_executable(ui_batch_metal_tests
             tests/ui_batch_metal_tests.cpp
             src/rendering/Color.cpp
@@ -9918,6 +9938,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(settings_audio_video_model_tests foundation_av_settings_ui)
     asobmashow_register_test(display_settings_manager_tests foundation_av_display)
     asobmashow_register_test(frame_pacer_tests foundation_av_frame_pacer)
+    asobmashow_register_test(ios_metal_export_pacing_tests)
     asobmashow_register_test(display_orientation_sync_tests foundation_av_display_orientation_sync)
     asobmashow_register_test(ios_display_orientation_sync_tests foundation_av_ios_display_orientation_sync)
     asobmashow_register_test(android_render_suspend_tests foundation_av_android_render_suspend)

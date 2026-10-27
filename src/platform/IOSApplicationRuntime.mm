@@ -6,6 +6,7 @@
 #include "../iOSNatives.hpp"
 #include "../input/IOSTouchInput.h"
 #include "../input/InputLifecycle.h"
+#include "../video/MetalDisplayLink.h"
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
@@ -237,6 +238,9 @@ bool PollIOSApplicationWork() {
   // One job per safe scene-loop boundary. Destruction invalidates pending jobs.
   auto work = std::move(state->work.front());
   state->work.pop_front();
+  // Export and other owner work can run nested run loops. Do not let them
+  // receive scene-loop drawables or compete with export's renderer ownership.
+  video::MetalDisplayLink::pauseCurrent();
   work();
   return true;
 }

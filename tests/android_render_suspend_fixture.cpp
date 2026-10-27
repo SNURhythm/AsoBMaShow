@@ -115,6 +115,7 @@ int main() {
   TestScene scene;
   struct { TestScene *currentScene; } sceneManager{&scene};
   auto lastFrameTime = std::chrono::steady_clock::now();
+  struct { void update(Context &, bool) {} } reminderCoordinator;
   PRODUCTION_LIFECYCLE;
   setAppBackground(true);
   assert(context.jukebox.suspended && context.jukebox.visualsSuspended);

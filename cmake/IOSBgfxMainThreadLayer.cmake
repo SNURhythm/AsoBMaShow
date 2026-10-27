@@ -37,10 +37,12 @@ static void asobmashowConfigureMetalLayer(void (^operation)(void))
             message(FATAL_ERROR "bgfx Metal layer ${part} changed; review main-thread layer patch")
         endif()
         set(configuration "${${part}}")
-        if(part STREQUAL "resize")
+        if(part STREQUAL "initialization")
             string(APPEND configuration [=[
 
             // Keep three drawables available to preserve ProMotion throughput.
+            // CAMetalDisplayLink forbids this setter after attachment, even
+            // when assigning the same value during an ordinary resize.
             m_metalLayer.maximumDrawableCount = 3;
 ]=])
         endif()

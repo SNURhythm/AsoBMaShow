@@ -22,12 +22,15 @@ avoidable queued frame.
   discarded. Telemetry also logs process resident bytes, renderer texture and
   render-target bytes, and transient upload usage every five seconds.
 
-The display-refresh policy and worker-thread timer remain in use. A follow-up
-fix changes the iOS timer's frame-budget accounting as described below; it does
-not switch to display-link-driven rendering.
+iOS 17+ now uses a worker-owned CAMetalDisplayLink with a requested one-frame
+rendering budget. The existing timer remains the compatibility fallback; its
+frame-budget correction is described below. UIKit event delivery and audio
+remain independent of the presentation wait.
 The fixed count is applied in the generated Metal source without changing the
 upstream submodule. Ordinary resize and replay-export restoration retain it;
-no custom reset flag or configurable buffering state is needed.
+no custom reset flag or configurable buffering state is needed. The iOS pool
+is set at layer initialization, because CAMetalDisplayLink forbids assigning
+maximumDrawableCount after attachment, even to the same value.
 
 ## Two-buffer pacing follow-up
 
@@ -54,61 +57,69 @@ comparison and the matching observation in [this discussion](https://stackoverfl
 support retaining three drawables for throughput. Two-drawable mode and its
 setting have therefore been removed; the frame-budget correction remains.
 
-## Further present-delay investigation
+## Display-link and acquisition follow-up
 
-These are candidates for a separate measured experiment, not changes implemented
-in this PR. Three drawables remain available throughout.
+The user approved the two implementation candidates and deferred measurement.
+Three drawables remain available throughout; no submission limiter or new
+telemetry is added.
 
-1. **Drive the render worker with CAMetalDisplayLink.** On iOS 17+, request
-   `preferredFrameLatency = 1.0` and a sustainable frame-rate range, then render
-   into the drawable supplied by the callback. Apple defines this as a requested
-   render budget in frames, separately from the drawable pool size; actual system
-   latency can be greater. Use `targetTimestamp` as the presentation-request
-   deadline and `targetPresentationTimestamp` for display-time prediction.
-   bgfx must consume the supplied drawable instead of independently calling
-   `nextDrawable`. Keep UIKit event delivery and audio independent, handle
-   pause/resize/export, and retain a fallback for iOS 15–16. Do not add the
-   existing software frame sleep after a display-link callback. This is the
-   strongest scheduling experiment, but neither 120 FPS nor a particular latency
-   reduction is guaranteed. See Apple's [frame latency](https://developer.apple.com/documentation/quartzcore/cametaldisplaylink/preferredframelatency),
-   [deadline](https://developer.apple.com/documentation/quartzcore/cametaldisplaylink/update/targettimestamp),
-   and [delegate contract](https://developer.apple.com/documentation/quartzcore/cametaldisplaylinkdelegate/metaldisplaylink(_:needsupdate:)).
+On iOS 17+, `MetalDisplayLink` waits on the existing application/render worker's
+run loop before the scene loop drains input and updates. The callback retains
+one supplied drawable. bgfx borrows that drawable instead of calling
+`nextDrawable` again, and schedules its normal untimed presentation before
+committing. The requested `preferredFrameLatency` is 1.0; this is a rendering
+budget, not a guaranteed physical latency. See Apple's [frame latency](https://developer.apple.com/documentation/quartzcore/cametaldisplaylink/preferredframelatency)
+and [delegate contract](https://developer.apple.com/documentation/quartzcore/cametaldisplaylinkdelegate/metaldisplaylink(_:needsupdate:)).
 
-2. **Acquire the drawable later.** `RenderPlan::applyViewOrder` currently puts
-   the backbuffer clear before BGA and blur passes. In the Metal backend that
-   clear can acquire the drawable before offscreen encoding. Move offscreen
-   views ahead of the clear while preserving clear-before-final/UI ordering,
-   then verify gameplay, idle/loading screens and export. Apple's
-   [drawable guidance](https://developer.apple.com/library/archive/documentation/3DDrawing/Conceptual/MTLBestPracticesGuide/Drawables.html)
-   recommends late acquisition and prompt release. This can reduce drawable
-   ownership time and acquisition stalls; it does not by itself prove a reduction
-   in the HUD's present-delay metric.
+Unlimited and caps at/above display refresh request the display rate. Exact
+divisors at 30 Hz or above can request a lower rate; very low/nondivisor caps
+retain timer pacing. iOS 15–16 and a missing native callback also use the timer.
+Callback waits check lifecycle/quit in short slices, time out after at most
+three requested refresh intervals (at least 50 ms), and back off for one second
+after a missing callback. A successful display-link wake suppresses the old
+post-submit timer sleep, including idle service iterations.
 
-3. **Measure queueing and refresh phase before limiting frames in flight.**
-   The current timer controls frequency without synchronizing to the display's
-   presentation deadline. Correlate frame start, input snapshot, drawable wait,
-   command submission, GPU completion and actual presentation for each frame.
-   A three-drawable pool does not require three queued presentations. bgfx's
-   Metal command-queue semaphore uses `BGFX_CONFIG_MAX_FRAME_LATENCY`, separately
-   from `resolution.maxFrameLatency`; changing the latter is not a CPU queue
-   limiter. A GPU-completion fence alone also cannot detect a completed frame
-   waiting for display. Only test a separate submission limit if measurements
-   show excess queued work, and check throughput and tail latency together.
+The bridge rejects stale callbacks, inactive/lifecycle-invalid leases and
+mismatched drawable geometry/format. It checks validity again before scheduling
+presentation. Rejected managed frames cannot acquire a replacement drawable;
+the scene remains dirty for a fresh frame. Scope cleanup releases unused or
+submitted leases on every loop exit. The link pauses before queued owner work,
+including export, and at every export reservation (covering inline photo export).
+Pausing invalidates the native link: a merely paused CAMetalDisplayLink still
+forbids nextDrawable. The next supported scene iteration recreates it.
+It is invalidated before renderer shutdown. Frames accepted
+on time may still present after an encoding overrun, preserving forward progress
+under load. Gameplay/audio clocks are unchanged.
+
+`RenderPlan::applyViewOrder` now encodes BGA base/layer and both blur passes
+before the output clear. Clear still precedes final composition, gameplay and
+UI; readback remains last. This delays drawable acquisition on the fallback
+path, following Apple's [drawable guidance](https://developer.apple.com/library/archive/documentation/3DDrawing/Conceptual/MTLBestPracticesGuide/Drawables.html).
+Display-link frames receive their drawable from the callback, so this ordering
+does not defer the OS's delivery of that drawable.
 
 The earlier [display-link experiment](2026-10-10-ios-presentation-pacing.md)
-regressed input delivery with rendering on UIKit main. It does not evaluate a
-CAMetalDisplayLink callback on the later worker-thread architecture. Normal bgfx
-presentation already registers `presentDrawable` before committing, promptly
-releases its references and uses a per-frame autorelease pool. Adding a GPU
-completion wait is therefore not an identified missing optimization. Timed
-presentation is not a shortcut either: Apple's CAMetalDisplayLink delegate
-contract explicitly disallows presentation methods targeting a specific time.
+regressed input delivery while rendering on UIKit main. The new implementation
+keeps rendering on the later worker-thread architecture. Existing presentation
+telemetry is unchanged except that simulator builds omit the unsupported
+`MTLDrawable` presented-timestamp callback.
 
-For the first experiment, compare the existing timer against worker-driven
-CAMetalDisplayLink with a requested one-frame budget on the same M5 iPad at
-120 Hz. Require sustained throughput, fewer missed presentation deadlines and
-improved input-to-visible feedback, not just a smaller present-delay number
-from submitting an otherwise identical frame later.
+Queue-depth/refresh-phase correlation and physical latency comparisons are
+deferred as requested. A pool of three drawables does not require three queued
+presentations, and a GPU-completion fence alone cannot detect a completed frame
+waiting for display. Any future submission limit should follow device evidence.
+
+## Local verification
+
+Rendering/iOS platform groups pass all 74 checks, including native Metal
+provider handoff, timer/export reacquisition after display-link invalidation,
+frame-cap/lease policy, and inline result-export ownership. The BGA test checks
+actual view execution order and zero/positive blur pixels; the partial image
+export test also passes. The 54 iOS build-setup checks pass, with the revised
+initialization-only drawable-pool check rerun after the simulator exposed the
+layer setter restriction. Desktop, unsigned iOS device and simulator builds pass.
+A worker-thread native CAMetalDisplayLink smoke submitted three successive
+frames. Physical device latency measurement remains deferred.
 
 ## Device comparison
 

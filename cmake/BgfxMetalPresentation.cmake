@@ -1,5 +1,5 @@
-# Observe the actual drawable timestamp without changing the presentation
-# policy. No callback, clock read, or block allocation when telemetry is off.
+# Keep drawable ownership and optional presentation observation at the native
+# boundary. Telemetry adds no callback, clock read or block when disabled.
 function(asobmashow_patch_bgfx_metal_presentation content_variable)
     set(source "${${content_variable}}")
     # Use the same three-drawable pool on macOS as on iOS. Two drawables
@@ -17,13 +17,17 @@ function(asobmashow_patch_bgfx_metal_presentation content_variable)
     set(anchor "#define UNIFORM_BUFFER_SIZE (8*1024*1024)")
     set(helper [=[
 #include "video/MetalPresentationObserver.h"
+#include "video/MetalDrawableProvider.h"
 #include <atomic>
 #import <QuartzCore/QuartzCore.h>
 
 namespace {
 std::atomic<video::MetalPresentationObserver> asoMetalPresentationObserver{nullptr};
+std::atomic<const video::MetalDrawableProvider *> asoMetalDrawableProvider{nullptr};
 void asoObserveMetalPresentation(id<MTLDrawable> drawable)
 {
+#if !TARGET_OS_SIMULATOR
+    // The simulator's MTLDrawable protocol omits presentation timestamps.
     const auto observer = asoMetalPresentationObserver.load(std::memory_order_acquire);
     if (observer == nullptr) return;
     if (@available(macOS 10.15, iOS 10.3, *))
@@ -33,7 +37,14 @@ void asoObserveMetalPresentation(id<MTLDrawable> drawable)
             observer(video::MetalPresentationEvent::Presented, requested, presented.presentedTime);
         }];
     }
+#else
+    (void)drawable;
+#endif
 }
+}
+extern "C" void asobmashowMetalSetDrawableProvider(const video::MetalDrawableProvider *provider)
+{
+    asoMetalDrawableProvider.store(provider, std::memory_order_release);
 }
 extern "C" void asobmashowMetalSetPresentationObserver(video::MetalPresentationObserver observer)
 {
@@ -42,14 +53,23 @@ extern "C" void asobmashowMetalSetPresentationObserver(video::MetalPresentationO
 ]=])
     set(present "m_commandBuffer.presentDrawable(frameBuffer.m_swapChain->m_drawable);")
     set(present_fixed [=[
-                            if (ii == 0) asoObserveMetalPresentation(frameBuffer.m_swapChain->m_drawable);
-                            m_commandBuffer.presentDrawable(frameBuffer.m_swapChain->m_drawable);
+                            const auto provider = asoMetalDrawableProvider.load(std::memory_order_acquire);
+                            if (provider == nullptr || provider->shouldPresent(
+                                    frameBuffer.m_swapChain->m_metalLayer,
+                                    frameBuffer.m_swapChain->m_drawable))
+                            {
+                                if (ii == 0) asoObserveMetalPresentation(frameBuffer.m_swapChain->m_drawable);
+                                m_commandBuffer.presentDrawable(frameBuffer.m_swapChain->m_drawable);
+                            }
 ]=])
     set(acquire "m_drawable = m_metalLayer.nextDrawable;")
     set(acquire_fixed [=[
             const auto observer = asoMetalPresentationObserver.load(std::memory_order_acquire);
             const double started = observer != nullptr ? CACurrentMediaTime() : 0.0;
-            m_drawable = m_metalLayer.nextDrawable;
+            const auto provider = asoMetalDrawableProvider.load(std::memory_order_acquire);
+            void *suppliedDrawable = nullptr;
+            const bool managed = provider != nullptr && provider->acquire(m_metalLayer, &suppliedDrawable);
+            m_drawable = managed ? (id<CAMetalDrawable>)suppliedDrawable : m_metalLayer.nextDrawable;
             if (observer != nullptr)
                 observer(video::MetalPresentationEvent::DrawableWait, started, CACurrentMediaTime());
 ]=])
