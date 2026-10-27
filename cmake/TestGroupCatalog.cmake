@@ -488,6 +488,8 @@ asobmashow_label_tests(area_skin_runtime
 )
 
 asobmashow_label_tests(area_rendering
+    ios_metal_presentation_callback_tests
+    metal_presentation_gate_tests
     android_display_refresh_rate_tests
     android_window_presentation_tests
     artwork_glow_tests

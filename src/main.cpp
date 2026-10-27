@@ -68,6 +68,7 @@
 #if TARGET_OS_IPHONE
 #include "iOSNatives.hpp"
 #include "video/IOSPresentationPacing.h"
+#include "../cmake/BgfxMetalPresentationGate.h"
 #include "input/IOSTouchInput.h"
 #include "input/NativeRawTouchInput.h"
 #include <SDL3/SDL_uikit_rawtouch.h>
@@ -1559,6 +1560,12 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       setAppBackground(false);
     }
     if (!IOSApplicationActive()) setAppBackground(true);
+    if (!IOSApplicationActive() || context.appInBackground.load(std::memory_order_acquire) ||
+        context.quitFlag.load(std::memory_order_acquire) ||
+        context.replayVideoExportActive.load(std::memory_order_acquire) ||
+        context.rendererAccess.exportRequested()) {
+      asobmashow::metalPresentation::cancel();
+    }
 #else
     const bool pressureRecovery = platform::takeApplicationOverflow();
     if (pressureRecovery) {
@@ -1996,6 +2003,21 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       context.framePacer.framePresented(submissionFinishedAt);
 #endif
 #if TARGET_OS_IPHONE
+      // The renderer lock has been released. Wait only on the application
+      // worker; UIKit, realtime input and audio remain independent.
+      const auto keepWaitingForPresentation = [](void* opaque) {
+        const auto& app = *static_cast<ApplicationContext*>(opaque);
+        return IOSApplicationActive() &&
+            !app.appInBackground.load(std::memory_order_acquire) &&
+            !app.quitFlag.load(std::memory_order_acquire) &&
+            !app.replayVideoExportActive.load(std::memory_order_acquire) &&
+            !app.rendererAccess.exportRequested();
+      };
+      if (renderedFrame && keepWaitingForPresentation(&context)) {
+        asobmashow::metalPresentation::wait(keepWaitingForPresentation, &context);
+      } else {
+        asobmashow::metalPresentation::cancel();
+      }
       // Menus and gameplay follow the display, including 120 Hz ProMotion.
       // This worker wait does not block UIKit's event/input pump.
       const auto iosViewport = GetIOSWindowSnapshot(s_window);
