@@ -4,12 +4,6 @@
 #include "settings/PresentationOrientationState.h"
 #include "perf/LatencyTelemetry.h"
 #include "targets.h"
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-#include "skin/beatoraja/SkinProcessResidentMemory.h"
-#if TARGET_OS_IPHONE || TARGET_OS_OSX
-#include "perf/MetalPresentationTelemetry.h"
-#endif
-#endif
 #include "platform/SDLMainThread.h"
 #include "RAII.h"
 #include "AppDatabaseInitializer.h"
@@ -852,12 +846,6 @@ static void reportResultRecoveryWarning(
 
 static void
 runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY && (TARGET_OS_IPHONE || TARGET_OS_OSX)
-  asobmashowMetalSetPresentationObserver(perf::latency::recordMetalPresentation);
-  const auto stopPresentationTelemetry = makeScopeExit([] {
-    asobmashowMetalSetPresentationObserver(nullptr);
-  });
-#endif
   player_settings::PresentationOrientationState presentationOrientation;
   presentationOrientation.updateViewport(rendering::render_width, rendering::render_height);
   bool orientationLocked = false;
@@ -1941,26 +1929,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
             static_cast<unsigned long long>(coalescedResizeInWindow));
         const auto audioState = context.jukebox.audioRuntime().runtimeState();
         SDL_Log("Audio native callback %u frames at %u Hz | output timestamp %s | "
-                "underflow reporting %s (%llu)",
+                "underflow reporting %s (%llu) | physical display presentation unknown",
                 audioState.effectiveBufferFrames, audioState.effectiveCallbackSampleRate,
                 audioState.outputTimestampKnown ? "available" : "unknown",
                 audioState.outputUnderflowKnown ? "available" : "unknown",
                 static_cast<unsigned long long>(audioState.outputUnderflowCount));
-        // These are renderer allocations and process resident bytes, not the
-        // Metal HUD's footprint or the system's remaining memory budget.
-        if (const auto resident = skin::currentProcessResidentBytes()) {
-          SDL_Log("Process resident bytes %llu", static_cast<unsigned long long>(*resident));
-        }
-        {
-          std::unique_lock lock(context.bgfxRenderMutex, std::try_to_lock);
-          if (lock.owns_lock()) {
-            const auto *stats = bgfx::getStats();
-            SDL_Log("Renderer resources | textures %u | texture bytes %lld | render target bytes %lld | "
-                    "transient vertex/index bytes %u/%u",
-                    unsigned(stats->numTextures), static_cast<long long>(stats->textureMemoryUsed),
-                    static_cast<long long>(stats->rtMemoryUsed), stats->transientVbUsed, stats->transientIbUsed);
-          }
-        }
         for (unsigned stage = 0; stage < static_cast<unsigned>(perf::latency::Stage::Count); ++stage) {
           const auto summary = perf::latency::snapshot(static_cast<perf::latency::Stage>(stage));
           if (summary.count == 0) continue;
@@ -2012,10 +1985,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 
     if (renderedFrame || skippedIdleFrame) {
       // Keep update/input cadence unchanged when idle UI drawing is skipped.
-      // A/B: restore the pre-branch timer reference after CPU submission.
-      // This timestamp is not the drawable's on-screen time.
+#if !TARGET_OS_IPHONE
+      // CPU submission/service completion, not the drawable's on-screen time.
       const auto submissionFinishedAt = std::chrono::steady_clock::now();
       context.framePacer.framePresented(submissionFinishedAt);
+#endif
 #if TARGET_OS_IPHONE
       // Menus and gameplay follow the display, including 120 Hz ProMotion.
       // This worker wait does not block UIKit's event/input pump.
@@ -2025,7 +1999,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           context.framePacer.currentFrameCap(),
           context.replayVideoExportActive.load(std::memory_order_acquire) ||
               context.rendererAccess.exportRequested()));
-      iosPresentationPacer.framePresented(submissionFinishedAt);
 #else
       const auto idleViewport = skippedIdleFrame
           ? platform::getWindowSnapshot(s_window) : std::nullopt;
@@ -2037,9 +2010,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #endif
       const auto waitStartedAt = std::chrono::steady_clock::now();
 #if TARGET_OS_IPHONE
-      const auto waitDuration = std::max(
-          context.framePacer.remaining(waitStartedAt),
-          iosPresentationPacer.remaining(waitStartedAt));
+      const auto waitDuration = video::iosFramePacingWait(
+          context.framePacer, iosPresentationPacer, currentFrameTime, waitStartedAt);
 #else
       const auto waitDuration = std::max(
           context.framePacer.remaining(waitStartedAt),

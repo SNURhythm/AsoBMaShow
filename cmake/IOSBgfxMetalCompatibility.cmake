@@ -42,7 +42,6 @@ function(asobmashow_ios_bgfx_metal_compatibility)
     list(APPEND sources "${patched}")
     set_property(TARGET bgfx PROPERTY SOURCES "${sources}")
     target_include_directories(bgfx PRIVATE "${BGFX_DIR}/src")
-    target_include_directories(bgfx PRIVATE "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../src")
 endfunction()
 
 cmake_language(DEFER CALL asobmashow_ios_bgfx_metal_compatibility)

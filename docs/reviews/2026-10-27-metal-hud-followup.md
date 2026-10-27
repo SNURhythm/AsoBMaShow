@@ -1,165 +1,81 @@
 # Metal HUD follow-up
 
-The captured M5 iPad frame sustained 120 FPS with 3.32 ms GPU work and a
-16.36 ms present delay. That single frame does not establish a leak or an
-avoidable queued frame.
+The initial captured M5 iPad frame sustained 120 FPS with 3.32 ms GPU work and
+16.36 ms Present Delay. A single frame does not establish a leak or an avoidable
+queued frame. Later user comparisons are recorded separately below.
 
-## Changes
+## Current changes
 
-- Zero fullscreen blur now samples the scene target directly, preserving the
-  final brightness/opacity composition. It skips two draws and releases two
+- Zero fullscreen blur samples the scene target directly, preserving final
+  brightness/opacity composition. It skips two draws and releases two
   intermediate RGBA8 targets. Positive blur still uses both passes.
-- Apple UI batches use the existing bounded upload cache for unchanged small
-  vertex/index streams. Dynamic geometry, changed opacity and buffer growth
-  still upload; large streams do not retain a second full CPU copy.
-- Metal always uses three CAMetalLayer drawables. The experimental buffering
-  setting is removed; old saved values are ignored and omitted on the next
-  save. iOS configures the UIKit-owned layer on main, while drawable acquisition
-  remains on the worker.
-- Telemetry builds observe `nextDrawable` wait and the interval from the
-  presentation request to the drawable's `presentedTime`. Callback arrival
-  time is not used as the display time. Invalid/unavailable timestamps are
-  discarded. Telemetry also logs process resident bytes, renderer texture and
-  render-target bytes, and transient upload usage every five seconds.
+- Apple UI batches reuse the existing bounded upload cache for unchanged small
+  vertex/index streams. Changed geometry/opacity and buffer growth still upload;
+  large streams do not retain a second full CPU copy.
+- Metal uses three CAMetalLayer drawables. The experimental buffering setting
+  and custom reset flag are removed. iOS configures the UIKit-owned layer once
+  on main; drawable acquisition remains on the worker.
+- Offscreen BGA/blur views execute before the screen clear, acquiring the drawable
+  later. Clear still precedes composition, gameplay and UI; readback stays last.
+- Corrected iOS timer accounting is restored: frame work, including drawable
+  acquisition and submission, consumes the frame budget before any remaining
+  sleep. Explicit caps, idle pacing and export bypass remain covered by tests.
+  Desktop and Android scheduling are unchanged.
 
-iOS currently uses the pre-branch timer accounting for the next A/B comparison. The CAMetalDisplayLink experiment has
-been removed completely, including its drawable provider and lifecycle/export
-hooks. bgfx calls `nextDrawable` and `presentDrawable` directly, with the existing
-optional presentation observer retained. UIKit event delivery and audio remain
-independent of the presentation wait.
-The fixed count is applied in the generated Metal source without changing the
-upstream submodule. The iOS pool is set once at layer initialization; ordinary
-resize and replay-export restoration retain it. No custom reset flag or
-configurable buffering state is needed.
+CAMetalDisplayLink is completely removed, including its drawable provider,
+worker-loop cleanup, export/lifecycle hooks and dedicated tests/build targets.
+bgfx directly calls `nextDrawable` and `presentDrawable`. SDL's existing
+refresh-rate CADisplayLink and bgfx GPU synchronization are unchanged. SDL's
+animation callback is unset in this application, so that callback neither
+renders nor presents.
 
-## Earlier two-buffer pacing follow-up
+All telemetry added by this branch is now removed: drawable-wait clocks,
+presentation-timestamp callbacks, observer checks/registration, the two extra
+latency stages, and process-memory/renderer-resource logging. The pre-existing
+telemetry remains unchanged. The generated Metal patch only fixes the drawable
+pool; it no longer wraps acquisition or presentation, even with telemetry off.
+No submission limiter or new measurement is added.
 
-A device report found 60 FPS with Triple buffering Off and Frame cap Unlimited.
-Unlimited still uses the automatic iOS presentation limiter at the display's
-refresh rate. The loop previously advanced that limiter after synchronous
-`bgfx::frame()` returned. A drawable wait that already consumed a refresh could
-therefore be followed by another software wait, even with inexpensive GPU work.
+## Device comparisons
 
-The intermediate correction budgeted from the frame's start and slept only the remainder
-after event handling, update, drawable acquisition and submission. This also
-applied to explicit iOS caps; a lower selected cap still added the required wait.
-Idle frames retain their timer, export keeps its existing bypass, and desktop
-and Android scheduling are unchanged. There is no explicit 60 FPS application cap in this path; drawable
-availability can still limit system presentation throughput.
+The user reported the following HUD Present Delay values:
 
-A deterministic regression failed under the old accounting and passes with the
-fix: 120 frames each spending one 120 Hz interval in submission consume 120
-refresh intervals, instead of 240. Tests also cover fast frames, a budget
-overrun, a lower explicit cap and export. This establishes the pacing defect;
-it does not establish that it is the only cause of the reported on-device drop.
-The M5 iPad was unavailable for local physical measurement. The user's Off/On
-comparison and the matching observation in [this discussion](https://stackoverflow.com/questions/51138426/ios-metal-double-buffering-at-120-fps)
-support retaining three drawables for throughput. Two-drawable mode and its
-setting were therefore removed. The frame-budget correction was retained until
-the timer-accounting A/B described below.
+1. Before the branch: about 16.00 ms.
+2. CAMetalDisplayLink enabled (`5804f12c`): about 23 ms.
+3. Only display-link activation disabled (`e6329d76`): 16.66 ms.
+4. Display-link integration completely removed (`620a1046`): about 16.5 ms.
+5. Pre-branch timer accounting restored (`49e55e65`): still about 16.5 ms.
 
-## Display-link experiment and removal
+The last comparison did not show an observable change from timer accounting.
+At the user's request, the latest candidate restores the corrected timer and
+removes the branch-added telemetry. Blur bypass, upload reuse, view order and
+three drawables remain unchanged. Compare this candidate with `620a1046` to
+hold timer accounting constant. Its physical result is pending.
 
-The worker-owned CAMetalDisplayLink experiment supplied one drawable to bgfx
-and suppressed the post-submit timer wait. The user reported about 23 ms HUD
-Present Delay with that path enabled (`5804f12c`). Disabling only its application
-call site (`e6329d76`) reduced the delay to 16.66 ms; the user clarified that the
-pre-branch baseline was about 16.00 ms. Thus the first A/B recovered most of the
-increase but left a reported difference of about 0.66 ms.
+The small residual difference from the pre-branch baseline has not been traced
+to a cause. Scene/device conditions were not independently verified, and the
+reported values do not establish a GPU-time or input-latency change. Compare
+FPS and Present Delay under the same chart, skin, BGA, cap, refresh and thermal
+conditions; local behavioral tests do not establish an on-device improvement.
 
-The removal candidate (`620a1046`) removed the integration entirely: native bridge and frame
-policy, provider callbacks in bgfx, worker-loop setup/cleanup, export/lifecycle
-hooks, and the dedicated tests/build targets. At that step, the corrected timer
-accounting, offscreen-first view order, zero-blur bypass, Apple UI upload reuse,
-fixed three-drawable pool and optional telemetry were unchanged. The simulator
-presentation-timestamp availability guard is retained.
+## Verification
 
-Source inspection found SDL already registers a CADisplayLink to request high
-refresh rates. Its animation callback is unset here, so it neither renders nor
-presents. SDL's refresh callback and bgfx's existing GPU synchronization remain
-unchanged. Offscreen BGA/blur views still execute before the backbuffer clear
-to acquire drawables later.
+Current candidate: all 72 rendering/iOS platform checks, the desktop build and
+unsigned iOS device build pass. The generated-Metal regression failed with the telemetry observer
+present, then passed after removing observer checks, presentation callbacks and
+clock reads. The pre-existing telemetry tests and frame-start timer regressions
+are retained.
 
-The user reported about 16.5 ms after complete removal, leaving about 0.5 ms
-above the pre-branch baseline. The small change from 16.66 ms does not distinguish
-a hook-related improvement from ordinary variation. The exact scheduling cause,
-GPU-time change and input-latency effect of the reported differences have not
-been established; scene and device conditions were not independently verified.
-No new telemetry or submission limiter is added.
+The frame-start regression covers 120 frames each blocked for one 120 Hz
+interval in submission: the corrected timer consumes 120 refresh intervals,
+whereas submission-end accounting consumes 240. Fast frames, budget overruns,
+lower explicit caps and export are also covered. This explains the accounting
+correction, but does not identify the cause of the reported HUD difference.
 
-## Timer-accounting A/B
-
-The latest candidate restores the pre-branch timer reference: both the explicit
-frame-cap pacer and automatic iOS presentation pacer advance using the CPU
-submission-completion timestamp, then the worker sleeps for the remaining
-scheduled wait. FPS-cap selection and the sleep mechanism are unchanged. The
-frame-start accounting helper and its dedicated regressions are removed; the
-pre-existing frame-pacer/cap/idle/export tests remain.
-
-This intentionally restores the old possibility of a software wait after a
-blocking drawable acquisition. Compare both FPS and HUD Present Delay against
-`620a1046` under the same scene, cap and display conditions. CAMetalDisplayLink
-remains fully removed; render ordering, blur bypass, UI upload reuse, three
-drawables and telemetry are unchanged. The physical result is pending.
-
-Verification: the existing frame-pacer tests pass, along with the desktop and
-unsigned iOS device builds. No other rendering or platform behavior was changed.
-
-## Earlier removal verification
-
-All 72 rendering/iOS platform checks pass, along with the desktop build and
-unsigned iOS device build. All 54 iOS build-setup checks also pass.
-The generated-Metal regression first failed because acquisition still used the
-provider, then passed after restoring direct `nextDrawable` acquisition and
-removing the provider. Display-link-specific tests were removed with the code;
-at that point, timer-accounting and real Metal BGA/view-order coverage remained.
-
-## Earlier verification (before removal)
-
-Rendering/iOS platform groups pass all 74 checks, including native Metal
-provider handoff, timer/export reacquisition after display-link invalidation,
-frame-cap/lease policy, and inline result-export ownership. The BGA test checks
-actual view execution order and zero/positive blur pixels; the partial image
-export test also passes. The 54 iOS build-setup checks pass, with the revised
-initialization-only drawable-pool check rerun after the simulator exposed the
-layer setter restriction. Desktop, unsigned iOS device and simulator builds pass.
-A worker-thread native CAMetalDisplayLink smoke submitted three successive
-frames. Simulator launch reached the Metal worker and display-link handoff,
-but screenshots were black on both display-link and timer paths while the host
-Mac was locked. The user deferred the unlocked visual/background-resume smoke
-check and requested pushing the source-level fixes. Physical device latency
-measurement remains deferred. Independent read-only review of
-`8302bbe6..42f0fcef` found no critical, important or minor source defects.
-
-Decisions recorded during the earlier display-link review:
-- No new telemetry or submission limiter: measurement was excluded, so no
-  measured latency/queue-depth improvement is claimed.
-- Accepted late frames may present to preserve forward progress; they can miss
-  their intended refresh.
-- Very low/nondivisor caps use timer pacing; they do not gain display-link
-  scheduling.
-- One combined unsigned iOS build verified the bridge and view ordering after
-  implementation; this delayed platform feedback rather than duplicating builds.
-- Two existing Android test fixtures gained missing boundary stubs so the
-  affected group could compile. Production Android behavior is unchanged;
-  those stubs do not validate the unrelated reminder/notification features.
-
-## Device comparison
-
-Build with `ASOBMASHOW_ENABLE_PERF_TELEMETRY=1` (the CMake option is available on
-desktop; the same preprocessor definition enables the iOS path). Compare builds
-using the same chart, skin, BGA, refresh rate, frame cap and thermal state, with
-the drawable pool fixed at three. Check present-request-to-display,
-drawable-wait, frame submission and frame-time tails together. These cumulative stage histograms are not an
-end-to-end input latency measurement and their percentiles must not be added.
-
-For memory, record the same settled screen before and after repeated song
-changes, including both static and video BGAs. Resident memory and bgfx resource
-counters describe different quantities from Metal HUD footprint; do not add
-them or treat a one-frame peak as a leak. Inspect blit transfers in a GPU
-capture if copies remain expensive; transient geometry and software-decoded
-video still legitimately need uploads.
-
-No physical M5 iPad comparison was available during implementation. The local
-GPU regressions establish output/resource behavior, not a measured on-device
-latency or total-memory improvement.
+Before telemetry removal, the complete display-link removal passed all 72
+rendering/iOS platform checks, all 54 iOS build-setup checks, and desktop and
+unsigned iOS builds. The timer-accounting A/B also passed the existing frame-pacer
+tests and both builds. Earlier display-link verification included 74 group
+checks, native callback/provider smoke coverage and simulator compilation; those
+bridge-specific checks were removed with that experiment. Historical plans and
+specs are retained as implementation records, not current behavior.
