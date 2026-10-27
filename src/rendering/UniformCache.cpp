@@ -8,27 +8,29 @@ UniformCache &UniformCache::getInstance() {
   return instance;
 }
 
-bgfx::UniformHandle UniformCache::getSampler(const std::string &name) {
+bgfx::UniformHandle UniformCache::getSampler(std::string_view name) {
   auto it = samplers_.find(name);
   if (it != samplers_.end()) {
     return it->second;
   }
+  std::string ownedName(name);
   BgfxHandleGuard<bgfx::UniformHandle> handle(
-      bgfx::createUniform(name.c_str(), bgfx::UniformType::Sampler));
-  samplers_.emplace(name, handle.get());
+      bgfx::createUniform(ownedName.c_str(), bgfx::UniformType::Sampler));
+  samplers_.emplace(std::move(ownedName), handle.get());
   const bgfx::UniformHandle result = handle.get();
   handle.release();
   return result;
 }
 
-bgfx::UniformHandle UniformCache::getVec4(const std::string &name) {
+bgfx::UniformHandle UniformCache::getVec4(std::string_view name) {
   auto it = vec4s_.find(name);
   if (it != vec4s_.end()) {
     return it->second;
   }
+  std::string ownedName(name);
   BgfxHandleGuard<bgfx::UniformHandle> handle(
-      bgfx::createUniform(name.c_str(), bgfx::UniformType::Vec4));
-  vec4s_.emplace(name, handle.get());
+      bgfx::createUniform(ownedName.c_str(), bgfx::UniformType::Vec4));
+  vec4s_.emplace(std::move(ownedName), handle.get());
   const bgfx::UniformHandle result = handle.get();
   handle.release();
   return result;

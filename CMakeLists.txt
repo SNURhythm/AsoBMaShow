@@ -9522,6 +9522,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
         add_executable(ui_batch_metal_tests
             tests/ui_batch_metal_tests.cpp
+            tests/support/AllocationFailure.cpp
             src/rendering/Color.cpp
             src/rendering/UiBatchRenderer.cpp
             src/rendering/UniformCache.cpp
@@ -9538,6 +9539,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         # emulator or Android build; keep the host's Metal backend and SDK.
         add_executable(ui_batch_android_upload_metal_tests
             tests/ui_batch_metal_tests.cpp
+            tests/support/AllocationFailure.cpp
             src/rendering/Color.cpp
             src/rendering/UiBatchRenderer.cpp
             src/rendering/UniformCache.cpp

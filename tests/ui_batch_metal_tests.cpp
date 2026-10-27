@@ -2,6 +2,7 @@
 #include "rendering/UiBatchRenderer.h"
 #include "rendering/UniformCache.h"
 #include "view/ArtworkGlowProfile.h"
+#include "support/AllocationFailure.h"
 
 #include <bx/math.h>
 
@@ -31,6 +32,65 @@ int ui_view_height = 128;
 } // namespace rendering
 
 namespace {
+
+bool testResourceCacheHitsDoNotAllocate() {
+  auto &programs = rendering::ShaderManager::getInstance();
+  auto &uniforms = rendering::UniformCache::getInstance();
+  std::string vertexName = "vs_text.bin#suffix";
+  std::string fragmentName = "fs_text.bin#suffix";
+  const auto text = programs.getProgram(std::string_view(vertexName).substr(0, 11),
+                                        std::string_view(fragmentName).substr(0, 11));
+  vertexName.assign(vertexName.size(), 'x');
+  fragmentName.assign(fragmentName.size(), 'x');
+  const auto color = programs.getProgram(SHADER_SIMPLE);
+  constexpr auto samplerName = "s_allocationProbeWithALongOwnedName";
+  constexpr auto vectorName = "u_allocationProbeWithALongOwnedName";
+  std::string borrowedSampler = std::string(samplerName) + "#suffix";
+  std::string borrowedVector = std::string(vectorName) + "#suffix";
+  const auto sampler = uniforms.getSampler(
+      std::string_view(borrowedSampler).substr(0, std::string_view(samplerName).size()));
+  const auto vector = uniforms.getVec4(
+      std::string_view(borrowedVector).substr(0, std::string_view(vectorName).size()));
+  borrowedSampler.assign(borrowedSampler.size(), 'x');
+  borrowedVector.assign(borrowedVector.size(), 'x');
+  bool passed = bgfx::isValid(text) && bgfx::isValid(color) &&
+                bgfx::isValid(sampler) && bgfx::isValid(vector);
+  std::size_t count = 0, bytes = 0;
+  {
+    test_support::AllocationSizeObserver allocations;
+    for (int lookup = 0; lookup < 256; ++lookup) {
+      passed &= programs.getProgram(SHADER_TEXT).idx == text.idx;
+      passed &= programs.getProgram(SHADER_SIMPLE).idx == color.idx;
+      passed &= uniforms.getSampler(samplerName).idx == sampler.idx;
+      passed &= uniforms.getVec4(vectorName).idx == vector.idx;
+    }
+    count = allocations.count();
+    bytes = allocations.totalBytes();
+  }
+  std::cout << "1024 warm resource lookups: " << count << " allocations, "
+            << bytes << " bytes\n";
+  if (count != 0 || !passed) {
+    std::cerr << "FAIL: cached shader/uniform lookups preserve handles without allocating\n";
+    passed = false;
+  }
+  bool rejectedAmbiguousPair = false;
+  try {
+    // The old underscore-concatenated key aliases vs_text.bin/fs_text.bin.
+    (void)programs.getProgram("vs", "text.bin_fs_text.bin");
+  } catch (const std::runtime_error &) {
+    rejectedAmbiguousPair = true;
+  }
+  if (!rejectedAmbiguousPair) {
+    std::cerr << "FAIL: different shader pairs cannot alias one cached program\n";
+    passed = false;
+  }
+  programs.release();
+  uniforms.destroyAll();
+  passed &= bgfx::isValid(programs.getProgram(SHADER_TEXT));
+  passed &= bgfx::isValid(uniforms.getSampler(samplerName));
+  passed &= bgfx::isValid(uniforms.getVec4(vectorName));
+  return passed;
+}
 
 bool testMixedUiBatchesSurviveGrowthAndSceneChanges() {
   const auto output = bgfx::createTexture2D(
@@ -408,6 +468,7 @@ int main() {
     std::cerr << "FAIL: headless Metal initialization failed\n";
     return 1;
   }
+  const bool cachesPassed = testResourceCacheHitsDoNotAllocate();
   const bool batchesPassed = testMixedUiBatchesSurviveGrowthAndSceneChanges();
   const bool glowPassed = testRetainedArtworkGlowMatchesCpuPixels();
   rendering::ShaderManager::getInstance().release();
@@ -415,7 +476,7 @@ int main() {
   bgfx::frame();
   bgfx::frame();
   bgfx::shutdown();
-  if (!batchesPassed || !glowPassed) return 1;
+  if (!cachesPassed || !batchesPassed || !glowPassed) return 1;
   std::cout << "UI batch real-Metal tests passed\n";
   return 0;
 }
