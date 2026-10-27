@@ -1,5 +1,9 @@
 # Metal display-link pacing and drawable acquisition
 
+> Historical experiment: the CAMetalDisplayLink integration was subsequently
+> removed at the user's request after the reported presentation-delay regression.
+> See [the follow-up](../../reviews/2026-10-27-metal-hud-followup.md).
+
 The user approved implementing the candidates in the Metal HUD investigation,
 then excluded measurement work. Implement worker-driven CAMetalDisplayLink and
 later fallback drawable acquisition; leave telemetry unchanged and do not add a

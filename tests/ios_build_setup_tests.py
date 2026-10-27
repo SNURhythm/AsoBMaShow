@@ -637,8 +637,10 @@ int main() { return 0; }
             self.assertIn("m_metalLayer.maximumDrawableCount = 3;", patched)
             self.assertIn("presented.presentedTime", patched)
             self.assertIn("MetalPresentationEvent::DrawableWait", patched)
-            self.assertIn("provider->acquire(m_metalLayer, &suppliedDrawable)", patched)
-            self.assertIn("provider->shouldPresent(", patched)
+            self.assertIn("m_drawable = m_metalLayer.nextDrawable;", patched)
+            self.assertIn("m_commandBuffer.presentDrawable(frameBuffer.m_swapChain->m_drawable);", patched)
+            self.assertFalse("asoMetalDrawableProvider" in patched,
+                             "ordinary Metal presentation must not retain the display-link provider")
             self.assertEqual(original, renderer.read_text(), "submodule must remain untouched")
             modified = compiled.stat().st_mtime_ns
             result = subprocess.run(command, capture_output=True, text=True)
@@ -678,7 +680,7 @@ int main() { return 0; }
             self.assertIn("m_metalLayer.pixelFormat", blocks[1])
             self.assertIn("m_metalLayer.maximumDrawableCount = 3;", blocks[0])
             self.assertNotIn("maximumDrawableCount", blocks[1],
-                             "CAMetalDisplayLink forbids changing the pool after attachment")
+                             "the fixed drawable pool is configured once at initialization")
             for block in blocks:
                 self.assertNotIn("nextDrawable", block)
                 self.assertNotIn("waitUntilCompleted", block)

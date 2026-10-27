@@ -1,5 +1,9 @@
 # Metal Display-Link Implementation Plan
 
+> Historical experiment: the CAMetalDisplayLink integration was subsequently
+> removed at the user's request after the reported presentation-delay regression.
+> See [the follow-up](../../reviews/2026-10-27-metal-hud-followup.md).
+
 > **For agentic workers:** Use superpowers:executing-plans to implement this plan task-by-task.
 
 **Goal:** Add worker-driven iOS display-link pacing and defer fallback drawable acquisition without new measurement work.

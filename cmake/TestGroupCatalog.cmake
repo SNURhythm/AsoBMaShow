@@ -516,9 +516,7 @@ asobmashow_label_tests(area_rendering
     image_fade_tests
     image_file_decoder_tests
     image_view_fade_tests
-    ios_metal_export_pacing_tests
     latency_telemetry_tests
-    metal_drawable_provider_tests
     numeric_glyph_atlas_tests
     numeric_glyph_model_validator_tests
     play_skin_touch_geometry_tests

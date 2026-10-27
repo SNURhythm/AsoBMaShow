@@ -41,8 +41,6 @@ static void asobmashowConfigureMetalLayer(void (^operation)(void))
             string(APPEND configuration [=[
 
             // Keep three drawables available to preserve ProMotion throughput.
-            // CAMetalDisplayLink forbids this setter after attachment, even
-            // when assigning the same value during an ordinary resize.
             m_metalLayer.maximumDrawableCount = 3;
 ]=])
         endif()

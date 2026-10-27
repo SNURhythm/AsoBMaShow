@@ -75,7 +75,6 @@
 #if TARGET_OS_IPHONE
 #include "iOSNatives.hpp"
 #include "video/IOSPresentationPacing.h"
-#include "video/MetalDisplayLink.h"
 #include "input/IOSTouchInput.h"
 #include "input/NativeRawTouchInput.h"
 #include <SDL3/SDL_uikit_rawtouch.h>
@@ -1066,10 +1065,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       context.replayVideoExportActive.load(std::memory_order_acquire);
 #if TARGET_OS_IPHONE
   FramePacer iosPresentationPacer;
-  // Pacing-only A/B: restore the timer after the reported 16 -> 23 ms
-  // present-delay increase. Keep the bridge available for isolated diagnosis.
-  constexpr bool useMetalDisplayLinkPacing = false;
-  video::MetalDisplayLink iosDisplayLink;
   platform::IOSPreparedFrame iosPreparedFrame;
   std::uint64_t lastUiPresentationGeneration = 0;
   bool iosViewportRestorePending = false;
@@ -1183,31 +1178,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         context.chartLibraryFolderActions) {
       context.chartLibraryFolderActions->poll();
     }
-
-#if TARGET_OS_IPHONE
-    const auto displayLinkState = GetIOSPresentationState();
-    const auto displayLinkViewport = GetIOSWindowSnapshot(s_window);
-    bool iosDisplayLinkFrame = false;
-    if (useMetalDisplayLinkPacing && !iosPreparedFrame.pending() &&
-        displayLinkState.active &&
-        !context.replayVideoExportActive.load(std::memory_order_acquire) &&
-        !context.rendererAccess.exportRequested()) {
-      iosDisplayLinkFrame = iosDisplayLink.beginFrame(
-          s_iosMetalLayer, displayLinkViewport ? displayLinkViewport->refreshRate : 0.0F,
-          context.framePacer.currentFrameCap(), displayLinkState.generation,
-          [&, generation = displayLinkState.generation] {
-            const auto state = GetIOSPresentationState();
-            return state.active && state.generation == generation &&
-                !context.quitFlag.load(std::memory_order_acquire) &&
-                !context.replayVideoExportActive.load(std::memory_order_acquire) &&
-                !context.rendererAccess.exportRequested();
-          });
-    } else {
-      iosDisplayLink.pause();
-    }
-    // Includes idle frames, interruption, export, quit and every early continue.
-    const auto releaseDisplayLinkFrame = makeScopeExit([&] { iosDisplayLink.endFrame(); });
-#endif
 
     auto currentFrameTime = std::chrono::steady_clock::now();
     context.applicationUptimeMillis.store(
@@ -1733,11 +1703,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     const auto sceneUpdateStarted = perf::latency::nowMicros();
 #endif
     sceneManager.update(deltaTime);
-#if TARGET_OS_IPHONE
-    // An event/update may have performed a synchronous photo export and paused
-    // the link. This iteration then uses the ordinary drawable/timer fallback.
-    iosDisplayLinkFrame = iosDisplayLinkFrame && iosDisplayLink.hasFrame();
-#endif
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
     perf::latency::record(perf::latency::Stage::SceneUpdate,
                           perf::latency::nowMicros() - sceneUpdateStarted);
@@ -1911,11 +1876,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
             context.uiBatchRenderer.invalidateFrame();
             continue;
           }
-          if (iosDisplayLinkFrame && !iosDisplayLink.didSchedulePresent()) {
-            context.uiBatchRenderer.invalidateFrame();
-            uiPresentationSchedule.invalidate();
-            continue;
-          }
           lastUiPresentationGeneration = uiPresentationState.generation;
 #else
           bgfx::frame();
@@ -2078,8 +2038,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       const auto waitStartedAt = std::chrono::steady_clock::now();
 #if TARGET_OS_IPHONE
       const auto waitDuration = video::iosFramePacingWait(
-          context.framePacer, iosPresentationPacer, currentFrameTime, waitStartedAt,
-          iosDisplayLinkFrame);
+          context.framePacer, iosPresentationPacer, currentFrameTime, waitStartedAt);
 #else
       const auto waitDuration = std::max(
           context.framePacer.remaining(waitStartedAt),

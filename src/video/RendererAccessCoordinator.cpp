@@ -1,8 +1,4 @@
 #include "RendererAccessCoordinator.h"
-#include "../targets.h"
-#if TARGET_OS_IPHONE
-#include "MetalDisplayLink.h"
-#endif
 
 #include <utility>
 
@@ -95,11 +91,6 @@ RendererAccessCoordinator::acquireExport() {
   // renderer observes this handoff and yields its next frame, preventing an
   // export worker from being starved behind consecutive display frames.
   requestedExports.fetch_add(1, std::memory_order_acq_rel);
-#if TARGET_OS_IPHONE
-  // Synchronous photo exports can begin inside a scene's event handler, after
-  // its display-link wake. Release that lease before export takes the renderer.
-  video::MetalDisplayLink::pauseCurrent();
-#endif
   return ExportReservation(rendererMutex, exportActive, requestedExports,
                            activeExports);
 }
