@@ -67,4 +67,18 @@ Compare with `63eb0290` using the same chart, settings, warmup and HUD mode. Acc
 - Independent review found no actionable issues. Production code was unchanged after review and broad verification.
 - The generated-hook fixture checks failed acquisition recovery, callback execution after scope/swapchain destruction, discarded and unscoped submissions, secondary windows, occlusion, and the disabled non-iOS path. It also rejects changed upstream patch anchors and verifies source immutability.
 
-No deployment or installation was performed. The 50 ms fallback bounds added gate waiting; it does not bound native drawable acquisition or guarantee display latency. Device performance remains unmeasured for this candidate.
+No deployment or installation was performed by the agent. The 50 ms fallback bounds added gate waiting; it does not bound native drawable acquisition or guarantee display latency.
+
+## Device result and decision
+
+The user reported approximately 15.9 ms Present Delay at 120 Hz on candidate
+`3f018f0a`. They described the iPad as slightly heated while using a fast charger
+and considered the change effective. Retain this candidate based on that feedback;
+no further pacing adjustment or rollback is made.
+
+The reported 120 Hz operation is encouraging after the earlier experiment's
+60 FPS regression. The delay is close to the previous approximately 16 ms result,
+and temperature/charging conditions were not matched. This observation does not
+yet isolate a latency improvement from run-to-run variation or thermal effects.
+A comparison with `63eb0290` under the same cool-device, charging, chart, settings
+and HUD conditions remains the way to quantify any gain.
