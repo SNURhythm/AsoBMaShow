@@ -35,10 +35,10 @@
 
 **Files:** src/rendering/SkinQuadBatchRenderer.{h,cpp}, tests/skin_quad_batch_renderer_tests.cpp, CMakeLists.txt.
 **Interfaces:** prepare/submitPrepared/discardPrepared signatures unchanged; plans become generation-checked tokens, storage belongs to renderer.
-- [ ] Extend existing fixture with warm multi-segment glyph preflight allocation checks and changing resource/command/failure/stale-token behavior.
-- [ ] Build/run skin_quad_batch_renderer_tests; expect warm allocation failure.
-- [ ] Flatten resolved commands/glyph handles and retain scratch vectors across begin; keep whole-frame preflight and token checks.
-- [ ] Run existing and new tests; expect no warm preflight allocations and unchanged submission behavior. Commit.
+- [x] Extend existing fixture with warm multi-segment glyph preflight allocation checks and changing resource/command/failure/stale-token behavior.
+- [x] Build/run skin_quad_batch_renderer_tests; expect warm allocation failure.
+- [x] Flatten resolved commands/glyph handles and retain scratch vectors across begin; keep whole-frame preflight and token checks.
+- [x] Run existing and new tests; expect no warm preflight allocations and unchanged submission behavior. Commit.
 
 ### Task 3: Built-in timeline lookup
 

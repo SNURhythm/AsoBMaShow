@@ -415,6 +415,11 @@ void SkinQuadBatchRenderer::begin(RenderContext &context,
 void SkinQuadBatchRenderer::begin(
     RenderContext &context, const skin::SkinPreparedResourceView &resources) {
   clearBatch();
+  segments_.clear();
+  resolved_.clear();
+  glyphTextures_.clear();
+  samplers_.clear();
+  distanceFields_.clear();
   if (++generation_ == 0) {
     ++generation_;
   }
@@ -437,13 +442,12 @@ void SkinQuadBatchRenderer::begin(
 
 bool SkinQuadBatchRenderer::preflightSegment(
     std::span<const skin::SkinDrawCommand> commands,
-    std::vector<SkinQuadSubmissionPlan::ResolvedCommand> &resolved,
+    std::span<ResolvedCommand> resolved,
+    std::vector<bgfx::TextureHandle> &glyphTextures,
     std::vector<skin::SkinFilterMode> &samplers,
     std::vector<skin::SkinRenderState::DistanceField> &distanceFields,
     std::size_t &vertexCount,
     std::size_t &indexCount, std::size_t &skinAllocationCount) const {
-  resolved.clear();
-  resolved.resize(commands.size());
   vertexCount = 0;
   indexCount = 0;
   skinAllocationCount = 0;
@@ -546,15 +550,14 @@ bool SkinQuadBatchRenderer::preflightSegment(
         return page.available ? page.texture
                               : bgfx::TextureHandle{bgfx::kInvalidHandle};
       };
-      prepared.glyphTextures.reserve(glyphs->glyphs.size() +
-                                     glyphs->fallbackColorOverlays.size());
+      prepared.glyphOffset = glyphTextures.size();
       for (const auto &glyph : glyphs->glyphs) {
         const auto texture = glyphTexture(glyph.codepoint);
         if (!bgfx::isValid(texture) ||
             !std::ranges::all_of(glyph.vertices, validVertex)) {
           return false;
         }
-        prepared.glyphTextures.push_back(texture);
+        glyphTextures.push_back(texture);
       }
       for (const auto &glyph : glyphs->fallbackColorOverlays) {
         const auto metric = atlas->glyphs.find(glyph.codepoint);
@@ -564,7 +567,7 @@ bool SkinQuadBatchRenderer::preflightSegment(
             !std::ranges::all_of(glyph.vertices, validVertex)) {
           return false;
         }
-        prepared.glyphTextures.push_back(texture);
+        glyphTextures.push_back(texture);
       }
       const std::size_t glyphCount =
           glyphs->glyphs.size() + glyphs->fallbackColorOverlays.size();
@@ -707,7 +710,7 @@ bool SkinQuadBatchRenderer::preflightSegment(
            ++glyphIndex) {
         auto glyphKey = key;
         glyphKey.texture =
-            resolved[commandIndex].glyphTextures[glyphIndex];
+            glyphTextures[resolved[commandIndex].glyphOffset + glyphIndex];
         appendQuad(glyphKey);
       }
       const BatchKey overlayKey{
@@ -719,9 +722,8 @@ bool SkinQuadBatchRenderer::preflightSegment(
       for (std::size_t glyphIndex = 0;
            glyphIndex < glyphs->fallbackColorOverlays.size(); ++glyphIndex) {
         auto glyphKey = overlayKey;
-        glyphKey.texture = resolved[commandIndex]
-                               .glyphTextures[glyphs->glyphs.size() +
-                                              glyphIndex];
+        glyphKey.texture = glyphTextures[resolved[commandIndex].glyphOffset +
+                                        glyphs->glyphs.size() + glyphIndex];
         appendQuad(glyphKey);
       }
       continue;
@@ -753,22 +755,31 @@ bool SkinQuadBatchRenderer::prepare(
   }
   submittedSpan_ = true;
   plan = SkinQuadSubmissionPlan{};
-  std::vector<skin::SkinFilterMode> samplers;
-  std::vector<skin::SkinRenderState::DistanceField> distanceFields;
   std::size_t totalVertexCount = 0;
   std::size_t totalIndexCount = 0;
   std::size_t skinAllocationCount = 0;
   std::size_t maximumSegmentVertices = 0;
   std::size_t maximumSegmentIndices = 0;
   try {
-    plan.segments_.reserve(segments.size());
+    std::size_t commandCount = 0;
     for (const auto commands : segments) {
-      SkinQuadSubmissionPlan::Segment segment{.commands = commands};
+      if (commands.size() > std::numeric_limits<std::size_t>::max() - commandCount) {
+        ready_ = false;
+        clearBatch();
+        return false;
+      }
+      commandCount += commands.size();
+    }
+    segments_.reserve(segments.size());
+    resolved_.resize(commandCount);
+    std::size_t resolvedOffset = 0;
+    for (const auto commands : segments) {
       std::size_t vertexCount = 0;
       std::size_t indexCount = 0;
       std::size_t segmentSkinAllocationCount = 0;
-      if (!preflightSegment(commands, segment.resolved, samplers,
-                            distanceFields, vertexCount, indexCount,
+      if (!preflightSegment(commands,
+                            std::span(resolved_).subspan(resolvedOffset, commands.size()),
+                            glyphTextures_, samplers_, distanceFields_, vertexCount, indexCount,
                             segmentSkinAllocationCount) ||
           vertexCount >
               std::numeric_limits<std::size_t>::max() - totalVertexCount ||
@@ -786,7 +797,8 @@ bool SkinQuadBatchRenderer::prepare(
       maximumSegmentVertices =
           std::max(maximumSegmentVertices, vertexCount);
       maximumSegmentIndices = std::max(maximumSegmentIndices, indexCount);
-      plan.segments_.push_back(std::move(segment));
+      segments_.push_back({.commands = commands, .resolvedOffset = resolvedOffset});
+      resolvedOffset += commands.size();
     }
     // No CPU allocation is allowed after this preparation point: state
     // changes can flush immediately around BGA slots, so all working buffers
@@ -802,8 +814,8 @@ bool SkinQuadBatchRenderer::prepare(
             : std::span<const bgfx::VertexLayout *const>{skinLayouts};
     if ((!segments.empty() || !bgaRequirements.empty()) &&
         (!backend_->preflightVertexLayouts(requiredLayouts) ||
-         !backend_->preflightSamplers(samplers) ||
-         !backend_->preflightDistanceFields(distanceFields) ||
+         !backend_->preflightSamplers(samplers_) ||
+         !backend_->preflightDistanceFields(distanceFields_) ||
          !backend_->reserve(totalVertexCount, totalIndexCount,
                             skinAllocationCount,
                             bgaRequirements))) {
@@ -822,6 +834,7 @@ bool SkinQuadBatchRenderer::prepare(
 
   plan.owner_ = this;
   plan.generation_ = generation_;
+  plan.segmentCount_ = segments_.size();
   plan.ready_ = true;
   return true;
 }
@@ -830,14 +843,14 @@ void SkinQuadBatchRenderer::submitPrepared(SkinQuadSubmissionPlan &plan,
                                             std::size_t segmentIndex) noexcept {
   if (!ready_ || !plan.ready_ || plan.owner_ != this ||
       plan.generation_ != generation_ || segmentIndex != plan.nextSegment_ ||
-      segmentIndex >= plan.segments_.size()) {
+      segmentIndex >= plan.segmentCount_) {
     discardPrepared(plan);
     return;
   }
 
-  const auto &segment = plan.segments_[segmentIndex];
+  const auto &segment = segments_[segmentIndex];
   const auto commands = segment.commands;
-  const auto &resolved = segment.resolved;
+  const auto resolved = std::span(resolved_).subspan(segment.resolvedOffset, commands.size());
 
   for (std::size_t commandIndex = 0; commandIndex < commands.size();
        ++commandIndex) {
@@ -880,7 +893,7 @@ void SkinQuadBatchRenderer::submitPrepared(SkinQuadSubmissionPlan &plan,
            ++glyphIndex) {
         auto glyphKey = key;
         glyphKey.texture =
-            resolved[commandIndex].glyphTextures[glyphIndex];
+            glyphTextures_[resolved[commandIndex].glyphOffset + glyphIndex];
         appendQuad(glyphs->glyphs[glyphIndex].vertices, glyphKey);
       }
       const BatchKey overlayKey{
@@ -892,9 +905,8 @@ void SkinQuadBatchRenderer::submitPrepared(SkinQuadSubmissionPlan &plan,
       for (std::size_t glyphIndex = 0;
            glyphIndex < glyphs->fallbackColorOverlays.size(); ++glyphIndex) {
         auto glyphKey = overlayKey;
-        glyphKey.texture = resolved[commandIndex]
-                               .glyphTextures[glyphs->glyphs.size() +
-                                              glyphIndex];
+        glyphKey.texture = glyphTextures_[resolved[commandIndex].glyphOffset +
+                                         glyphs->glyphs.size() + glyphIndex];
         appendQuad(glyphs->fallbackColorOverlays[glyphIndex].vertices,
                    glyphKey);
       }

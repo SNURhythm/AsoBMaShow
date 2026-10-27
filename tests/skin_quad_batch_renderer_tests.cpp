@@ -4,6 +4,7 @@
 #include "rendering/common.h"
 #include "skin/beatoraja/Skin2DRenderer.h"
 #include "view/View.h"
+#include "support/AllocationFailure.h"
 
 // This target deliberately compiles the narrow production adapter directly
 // and links the frame-only movie catalog unit. That exercises the actual
@@ -363,6 +364,121 @@ FakeResources resources() {
       .lineHeight = 12};
   result.atlases.emplace(atlas.id, std::move(atlas));
   return result;
+}
+
+void testPreparedScratchReusesStorageWithoutReusingFrameState() {
+  auto prepared = resources();
+  FakeBackend backend;
+  rendering::SkinQuadBatchRenderer renderer(backend);
+  FakeBackend otherBackend;
+  rendering::SkinQuadBatchRenderer otherRenderer(otherBackend);
+  RenderContext context;
+  skin::SkinGlyphRunCommand glyphs;
+  glyphs.atlas = 21;
+  glyphs.state.filter = skin::SkinFilterMode::Linear;
+  glyphs.glyphs.resize(8, {.codepoint = U'A',
+                          .vertices = {{{.x = 0, .y = 0}, {.x = 8, .y = 0},
+                                        {.x = 8, .y = 12}, {.x = 0, .y = 12}}}});
+  std::vector<skin::SkinDrawCommand> commands(64, command(1, glyphs));
+  const std::array segments{std::span<const skin::SkinDrawCommand>(commands).first(32),
+                            std::span<const skin::SkinDrawCommand>(commands).subspan(32)};
+  rendering::SkinQuadSubmissionPlan previous;
+  renderer.begin(context, prepared);
+  expect(renderer.prepare(segments, previous), "scratch fixture warms preflight");
+  for (int frame = 0; frame < 3; ++frame) {
+    prepared.atlases.at(21).texture.idx = static_cast<std::uint16_t>(211 + frame);
+    renderer.begin(context, prepared);
+    rendering::SkinQuadSubmissionPlan plan;
+    std::size_t count = 0, bytes = 0;
+    bool ready = false;
+    {
+      test_support::AllocationSizeObserver allocations;
+      ready = renderer.prepare(segments, plan);
+      count = allocations.count();
+      bytes = allocations.totalBytes();
+    }
+    if (frame == 0) {
+      std::cout << "64 glyph commands / 2 segments warm preflight: " << count
+                << " allocations, " << bytes << " bytes\n";
+    }
+    expect(ready && count == 0, "warm skin preflight does not allocate");
+    const auto before = backend.batches.size();
+    renderer.submitPrepared(previous, 0);
+    expect(backend.batches.size() == before, "stale plan cannot read reused scratch");
+    rendering::SkinQuadSubmissionPlan moved(std::move(plan));
+    renderer.submitPrepared(plan, 0);
+    expect(backend.batches.size() == before, "moved-from plan cannot submit");
+    otherRenderer.submitPrepared(moved, 0);
+    expect(otherBackend.batches.empty(), "wrong renderer cannot submit the plan");
+    renderer.submitPrepared(moved, 0);
+    renderer.flush();
+    renderer.submitPrepared(moved, 1);
+    renderer.flush();
+    expect(moved.fullyConsumed() && moved.segmentCount() == 2 &&
+               backend.batches.size() == before + 2 &&
+               backend.batches.back().texture.idx == 211 + frame &&
+               backend.batches.back().vertices.size() == 1024,
+           "reused scratch resolves current glyph pages and emits both segments");
+    previous = std::move(moved);
+  }
+
+  const std::array imageCommands{command(2, quad(11, skin::SkinBlendMode::Normal,
+                                                 skin::SkinFilterMode::Nearest))};
+  const std::array imageSegments{std::span<const skin::SkinDrawCommand>(imageCommands)};
+  context.scissor = {.x = 1000, .y = 1000, .width = 0, .height = 0};
+  renderer.begin(context, prepared);
+  rendering::SkinQuadSubmissionPlan plan;
+  expect(renderer.prepare(imageSegments, plan), "empty scissor prepares suppressed image");
+  const auto before = backend.batches.size();
+  renderer.submitPrepared(plan, 0);
+  renderer.flush();
+  expect(backend.batches.size() == before, "empty scissor suppresses reused command slot");
+  context.scissor = {.x = 0, .y = 0, .width = -1, .height = -1};
+  prepared.images.at(11).texture.idx = 301;
+  renderer.begin(context, prepared);
+  backend.reserveResult = false;
+  expect(!renderer.prepare(imageSegments, plan), "failed preflight remains uncommitted");
+  renderer.submitPrepared(plan, 0);
+  expect(backend.batches.size() == before, "failed plan emits no old frame data");
+  backend.reserveResult = true;
+  renderer.begin(context, prepared);
+  expect(renderer.prepare(imageSegments, plan), "preflight recovers on next frame");
+  renderer.submitPrepared(plan, 0);
+  renderer.flush();
+  expect(backend.batches.size() == before + 1 &&
+             backend.batches.back().texture.idx == 301 &&
+             !backend.batches.back().scissor &&
+             backend.batches.back().filter == skin::SkinFilterMode::Nearest &&
+             backend.batches.back().vertices.size() == 4,
+         "command type, texture, suppression, scissor and filter reset between frames");
+
+  const std::array emptySegments{std::span<const skin::SkinDrawCommand>{}};
+  renderer.begin(context, prepared);
+  expect(renderer.prepare(emptySegments, plan), "empty frame can reuse populated scratch");
+  const auto afterImage = backend.batches.size();
+  renderer.submitPrepared(plan, 0);
+  renderer.flush();
+  expect(plan.fullyConsumed() && backend.batches.size() == afterImage,
+         "empty frame cannot emit old commands");
+
+  otherRenderer.begin(context, prepared);
+  bool rejectedAllocation = false;
+  {
+    test_support::FailNextAllocation failure;
+    rejectedAllocation = !otherRenderer.prepare(segments, plan);
+  }
+  otherRenderer.submitPrepared(plan, 0);
+  otherRenderer.flush();
+  expect(rejectedAllocation && otherBackend.batches.empty(),
+         "scratch growth failure is zero-draw atomic");
+  otherRenderer.begin(context, prepared);
+  expect(otherRenderer.prepare(segments, plan), "scratch growth recovers next frame");
+  otherRenderer.submitPrepared(plan, 0);
+  otherRenderer.flush();
+  otherRenderer.submitPrepared(plan, 1);
+  otherRenderer.flush();
+  expect(plan.fullyConsumed() && otherBackend.batches.size() == 2,
+         "recovered scratch emits the whole frame");
 }
 
 void testWholeBufferPreflightUsesExactCatalogIds() {
@@ -1218,6 +1334,7 @@ void testGeneratedTextureCommandsMaterializeBeforeAtomicSubmission() {
 } // namespace
 
 int main() {
+  testPreparedScratchReusesStorageWithoutReusingFrameState();
   testWholeBufferPreflightUsesExactCatalogIds();
   testDistanceFieldGlyphSubmissionSelectsProgramAndUniforms();
   testGlyphSubmissionSplitsAdjacentBitmapPages();

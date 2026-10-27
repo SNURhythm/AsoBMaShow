@@ -1123,6 +1123,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         if(NOT IOS)
             add_executable(skin_quad_batch_renderer_tests
                 tests/skin_quad_batch_renderer_tests.cpp
+                tests/support/AllocationFailure.cpp
                 src/rendering/SkinQuadBatchRenderer.cpp
                 src/rendering/UniformCache.cpp
                 src/skin/beatoraja/SkinMovieCatalogFrame.cpp

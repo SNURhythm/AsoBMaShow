@@ -12,6 +12,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 struct RenderContext;
@@ -181,43 +182,42 @@ public:
 [[nodiscard]] std::uint32_t
 skinSamplerFlags(skin::SkinFilterMode filter) noexcept;
 
-// A value-owned preflight result for non-BGA command spans. Command payloads
-// remain borrowed from the immutable SkinCommandBuffer for the duration of
-// one Skin2DRenderer::submit call; every resource lookup, allocation, sampler
-// check, and backend reservation is completed before this plan becomes ready.
+// A move-only token for renderer-owned preflight scratch. Command payloads
+// remain borrowed from the immutable SkinCommandBuffer for one submit call;
+// begin() invalidates older tokens before reusing storage. All fallible work
+// completes before this plan becomes ready.
 class SkinQuadSubmissionPlan final {
 public:
   SkinQuadSubmissionPlan() = default;
-  SkinQuadSubmissionPlan(SkinQuadSubmissionPlan &&) noexcept = default;
+  SkinQuadSubmissionPlan(SkinQuadSubmissionPlan &&other) noexcept {
+    *this = std::move(other);
+  }
   SkinQuadSubmissionPlan &
-  operator=(SkinQuadSubmissionPlan &&) noexcept = default;
+  operator=(SkinQuadSubmissionPlan &&other) noexcept {
+    if (this != &other) {
+      owner_ = std::exchange(other.owner_, nullptr);
+      generation_ = other.generation_;
+      nextSegment_ = other.nextSegment_;
+      segmentCount_ = std::exchange(other.segmentCount_, 0);
+      ready_ = std::exchange(other.ready_, false);
+    }
+    return *this;
+  }
   SkinQuadSubmissionPlan(const SkinQuadSubmissionPlan &) = delete;
   SkinQuadSubmissionPlan &operator=(const SkinQuadSubmissionPlan &) = delete;
 
   [[nodiscard]] std::size_t segmentCount() const noexcept {
-    return segments_.size();
+    return segmentCount_;
   }
   [[nodiscard]] bool fullyConsumed() const noexcept {
-    return ready_ && nextSegment_ == segments_.size();
+    return ready_ && nextSegment_ == segmentCount_;
   }
 
 private:
-  struct ResolvedCommand {
-    bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
-    std::vector<bgfx::TextureHandle> glyphTextures;
-    std::optional<skin::UiLogicalRect> scissor;
-    bool suppressed = false;
-  };
-
-  struct Segment {
-    std::span<const skin::SkinDrawCommand> commands;
-    std::vector<ResolvedCommand> resolved;
-  };
-
   const SkinQuadBatchRenderer *owner_ = nullptr;
   std::uint64_t generation_ = 0;
   std::size_t nextSegment_ = 0;
-  std::vector<Segment> segments_;
+  std::size_t segmentCount_ = 0;
   bool ready_ = false;
 
   friend class SkinQuadBatchRenderer;
@@ -254,6 +254,17 @@ public:
   void flush();
 
 private:
+  struct ResolvedCommand {
+    bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
+    std::size_t glyphOffset = 0;
+    std::optional<skin::UiLogicalRect> scissor;
+    bool suppressed = false;
+  };
+  struct Segment {
+    std::span<const skin::SkinDrawCommand> commands;
+    std::size_t resolvedOffset = 0;
+  };
+
   struct BatchKey {
     bgfx::TextureHandle texture = BGFX_INVALID_HANDLE;
     SkinBatchTopology topology = SkinBatchTopology::Triangles;
@@ -266,7 +277,8 @@ private:
 
   [[nodiscard]] bool preflightSegment(
       std::span<const skin::SkinDrawCommand> commands,
-      std::vector<SkinQuadSubmissionPlan::ResolvedCommand> &resolved,
+      std::span<ResolvedCommand> resolved,
+      std::vector<bgfx::TextureHandle> &glyphTextures,
       std::vector<skin::SkinFilterMode> &samplers,
       std::vector<skin::SkinRenderState::DistanceField> &distanceFields,
       std::size_t &vertexCount,
@@ -284,6 +296,11 @@ private:
   std::optional<BatchKey> batchKey_;
   std::vector<SkinQuadGpuVertex> vertices_;
   std::vector<std::uint16_t> indices_;
+  std::vector<Segment> segments_;
+  std::vector<ResolvedCommand> resolved_;
+  std::vector<bgfx::TextureHandle> glyphTextures_;
+  std::vector<skin::SkinFilterMode> samplers_;
+  std::vector<skin::SkinRenderState::DistanceField> distanceFields_;
   bool ready_ = false;
   bool submittedSpan_ = false;
   std::uint64_t generation_ = 0;
