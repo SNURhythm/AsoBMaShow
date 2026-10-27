@@ -1,6 +1,8 @@
 # Metal HUD findings implementation plan
 
 > Completed using superpowers:executing-plans in the existing checkout.
+> The frame-start timer accounting was subsequently reverted for a user-requested
+> A/B comparison; see [the follow-up](../../reviews/2026-10-27-metal-hud-followup.md).
 
 **Goal:** Address the rendering overhead, missing iOS drawable limit, and measurement gaps identified from the M5 Metal HUD.
 

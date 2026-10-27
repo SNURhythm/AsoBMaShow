@@ -22,7 +22,7 @@ avoidable queued frame.
   discarded. Telemetry also logs process resident bytes, renderer texture and
   render-target bytes, and transient upload usage every five seconds.
 
-iOS uses the corrected timer pacing. The CAMetalDisplayLink experiment has
+iOS currently uses the pre-branch timer accounting for the next A/B comparison. The CAMetalDisplayLink experiment has
 been removed completely, including its drawable provider and lifecycle/export
 hooks. bgfx calls `nextDrawable` and `presentDrawable` directly, with the existing
 optional presentation observer retained. UIKit event delivery and audio remain
@@ -32,7 +32,7 @@ upstream submodule. The iOS pool is set once at layer initialization; ordinary
 resize and replay-export restoration retain it. No custom reset flag or
 configurable buffering state is needed.
 
-## Two-buffer pacing follow-up
+## Earlier two-buffer pacing follow-up
 
 A device report found 60 FPS with Triple buffering Off and Frame cap Unlimited.
 Unlimited still uses the automatic iOS presentation limiter at the display's
@@ -40,9 +40,9 @@ refresh rate. The loop previously advanced that limiter after synchronous
 `bgfx::frame()` returned. A drawable wait that already consumed a refresh could
 therefore be followed by another software wait, even with inexpensive GPU work.
 
-The iOS loop now budgets from the frame's start and sleeps only the remainder
+The intermediate correction budgeted from the frame's start and slept only the remainder
 after event handling, update, drawable acquisition and submission. This also
-applies to explicit iOS caps; a lower selected cap still adds the required wait.
+applied to explicit iOS caps; a lower selected cap still added the required wait.
 Idle frames retain their timer, export keeps its existing bypass, and desktop
 and Android scheduling are unchanged. There is no explicit 60 FPS application cap in this path; drawable
 availability can still limit system presentation throughput.
@@ -55,7 +55,8 @@ it does not establish that it is the only cause of the reported on-device drop.
 The M5 iPad was unavailable for local physical measurement. The user's Off/On
 comparison and the matching observation in [this discussion](https://stackoverflow.com/questions/51138426/ios-metal-double-buffering-at-120-fps)
 support retaining three drawables for throughput. Two-drawable mode and its
-setting have therefore been removed; the frame-budget correction remains.
+setting were therefore removed. The frame-budget correction was retained until
+the timer-accounting A/B described below.
 
 ## Display-link experiment and removal
 
@@ -66,11 +67,11 @@ call site (`e6329d76`) reduced the delay to 16.66 ms; the user clarified that th
 pre-branch baseline was about 16.00 ms. Thus the first A/B recovered most of the
 increase but left a reported difference of about 0.66 ms.
 
-The latest candidate removes the integration entirely: native bridge and frame
+The removal candidate (`620a1046`) removed the integration entirely: native bridge and frame
 policy, provider callbacks in bgfx, worker-loop setup/cleanup, export/lifecycle
-hooks, and the dedicated tests/build targets. The corrected timer accounting,
-offscreen-first view order, zero-blur bypass, Apple UI upload reuse, fixed
-three-drawable pool and optional telemetry remain unchanged. The simulator
+hooks, and the dedicated tests/build targets. At that step, the corrected timer
+accounting, offscreen-first view order, zero-blur bypass, Apple UI upload reuse,
+fixed three-drawable pool and optional telemetry were unchanged. The simulator
 presentation-timestamp availability guard is retained.
 
 Source inspection found SDL already registers a CADisplayLink to request high
@@ -79,19 +80,39 @@ presents. SDL's refresh callback and bgfx's existing GPU synchronization remain
 unchanged. Offscreen BGA/blur views still execute before the backbuffer clear
 to acquire drawables later.
 
-The physical result of complete removal is pending. The exact scheduling cause,
+The user reported about 16.5 ms after complete removal, leaving about 0.5 ms
+above the pre-branch baseline. The small change from 16.66 ms does not distinguish
+a hook-related improvement from ordinary variation. The exact scheduling cause,
 GPU-time change and input-latency effect of the reported differences have not
 been established; scene and device conditions were not independently verified.
 No new telemetry or submission limiter is added.
 
-## Removal verification
+## Timer-accounting A/B
+
+The latest candidate restores the pre-branch timer reference: both the explicit
+frame-cap pacer and automatic iOS presentation pacer advance using the CPU
+submission-completion timestamp, then the worker sleeps for the remaining
+scheduled wait. FPS-cap selection and the sleep mechanism are unchanged. The
+frame-start accounting helper and its dedicated regressions are removed; the
+pre-existing frame-pacer/cap/idle/export tests remain.
+
+This intentionally restores the old possibility of a software wait after a
+blocking drawable acquisition. Compare both FPS and HUD Present Delay against
+`620a1046` under the same scene, cap and display conditions. CAMetalDisplayLink
+remains fully removed; render ordering, blur bypass, UI upload reuse, three
+drawables and telemetry are unchanged. The physical result is pending.
+
+Verification: the existing frame-pacer tests pass, along with the desktop and
+unsigned iOS device builds. No other rendering or platform behavior was changed.
+
+## Earlier removal verification
 
 All 72 rendering/iOS platform checks pass, along with the desktop build and
 unsigned iOS device build. All 54 iOS build-setup checks also pass.
 The generated-Metal regression first failed because acquisition still used the
 provider, then passed after restoring direct `nextDrawable` acquisition and
 removing the provider. Display-link-specific tests were removed with the code;
-existing timer-accounting and real Metal BGA/view-order coverage remain.
+at that point, timer-accounting and real Metal BGA/view-order coverage remained.
 
 ## Earlier verification (before removal)
 

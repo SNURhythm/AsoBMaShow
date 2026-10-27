@@ -2012,11 +2012,10 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 
     if (renderedFrame || skippedIdleFrame) {
       // Keep update/input cadence unchanged when idle UI drawing is skipped.
-#if !TARGET_OS_IPHONE
-      // CPU submission/service completion, not the drawable's on-screen time.
+      // A/B: restore the pre-branch timer reference after CPU submission.
+      // This timestamp is not the drawable's on-screen time.
       const auto submissionFinishedAt = std::chrono::steady_clock::now();
       context.framePacer.framePresented(submissionFinishedAt);
-#endif
 #if TARGET_OS_IPHONE
       // Menus and gameplay follow the display, including 120 Hz ProMotion.
       // This worker wait does not block UIKit's event/input pump.
@@ -2026,6 +2025,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           context.framePacer.currentFrameCap(),
           context.replayVideoExportActive.load(std::memory_order_acquire) ||
               context.rendererAccess.exportRequested()));
+      iosPresentationPacer.framePresented(submissionFinishedAt);
 #else
       const auto idleViewport = skippedIdleFrame
           ? platform::getWindowSnapshot(s_window) : std::nullopt;
@@ -2037,8 +2037,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #endif
       const auto waitStartedAt = std::chrono::steady_clock::now();
 #if TARGET_OS_IPHONE
-      const auto waitDuration = video::iosFramePacingWait(
-          context.framePacer, iosPresentationPacer, currentFrameTime, waitStartedAt);
+      const auto waitDuration = std::max(
+          context.framePacer.remaining(waitStartedAt),
+          iosPresentationPacer.remaining(waitStartedAt));
 #else
       const auto waitDuration = std::max(
           context.framePacer.remaining(waitStartedAt),
