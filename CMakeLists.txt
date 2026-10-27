@@ -867,6 +867,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
         add_executable(builtin_renderer_characterization_tests
             tests/builtin_renderer_characterization_tests.cpp
+            tests/support/AllocationFailure.cpp
             src/AppSettings.cpp
             src/FileChecksum.cpp
             src/ir/IrProfileSettings.cpp

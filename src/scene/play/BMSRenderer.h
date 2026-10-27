@@ -185,6 +185,7 @@ public:
 private:
   struct PreparedPresentationFrame;
   std::unique_ptr<PreparedPresentationFrame> preparedPresentationFrame;
+  std::vector<std::uint32_t> traversedTimelineOrdinalScratch;
   std::uint64_t lastPreparedPresentationFrameSerial = 0;
   std::optional<PresentationFailure> presentationFailure;
   std::unique_ptr<TextView> titleText;

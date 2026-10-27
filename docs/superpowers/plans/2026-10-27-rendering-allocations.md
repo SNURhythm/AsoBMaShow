@@ -44,10 +44,10 @@
 
 **Files:** src/scene/play/BMSRenderer.{h,cpp}, tests/builtin_renderer_characterization_tests.cpp, CMakeLists.txt.
 **Interfaces:** public rendering interfaces unchanged.
-- [ ] Extend characterization fixture to measure render-only allocations across small/large traversed timeline lists and unordered input.
-- [ ] Build/run builtin_renderer_characterization_tests; expect allocation scaling regression before fix.
-- [ ] Use sorted input directly, sorting into reusable scratch only for unordered input; preserve sentinel rejection.
-- [ ] Run characterization coverage; expect equivalent output and no allocation growth from warmed membership lookup. Commit.
+- [x] Extend characterization fixture to measure render-only allocations across small/large traversed timeline lists and unordered input.
+- [x] Build/run builtin_renderer_characterization_tests; expect allocation scaling regression before fix.
+- [x] Use sorted input directly, sorting into reusable scratch only for unordered input; preserve sentinel rejection.
+- [x] Run characterization coverage; expect equivalent output and no allocation growth from warmed membership lookup. Commit.
 
 ### Task 4: Integration and delivery
 

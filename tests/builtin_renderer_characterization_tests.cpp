@@ -29,6 +29,7 @@
 #include "scene/play/PlayfieldChartVisualModel.h"
 #include "scene/play/PlayfieldProjection.h"
 #include "scene/play/PlayfieldVisualState.h"
+#include "support/AllocationFailure.h"
 
 #include <bgfx/bgfx.h>
 #include <bx/math.h>
@@ -962,6 +963,57 @@ public:
     return {.state = state, .projection = std::move(projection)};
   }
 };
+
+void verifyTimelineMembershipDoesNotAllocatePerRow(const RenderTarget &target) {
+  PresentationStateFixture fixture;
+  fixture.renderer.setCharacterizationRecorder(nullptr);
+  auto frame = fixture.input(1);
+  const auto small = frame.projection.builtInPlan.traversedTimelineOrdinals;
+  auto large = small;
+  for (std::uint32_t ordinal = 10000; ordinal < 10256; ++ordinal) {
+    large.push_back(ordinal);
+  }
+  large.push_back(kNoRetainedTimelineOrdinal);
+  std::ranges::sort(large);
+  auto unordered = large;
+  std::ranges::reverse(unordered);
+  if (!small.empty()) unordered.push_back(small.front());
+  RenderContext context;
+  std::uint64_t serial = 100;
+  const auto render = [&](const std::vector<std::uint32_t> &ordinals) {
+    frame.state.clock.serial = ++serial;
+    frame.projection.frameSerial = serial;
+    frame.projection.builtInPlan.traversedTimelineOrdinals = ordinals;
+    expect(fixture.renderer.prepareFrame(frame.state, frame.projection) ==
+               PresentationFrameOutcome::Ready,
+           "timeline allocation fixture prepares outside the measured render");
+    configureGeometryAndViews(target.framebuffer);
+    bgfx::touch(rendering::clear_view);
+    std::size_t count = 0;
+    PresentationFrameResult result;
+    {
+      test_support::AllocationSizeObserver allocations;
+      result = fixture.renderer.render(context);
+      count = allocations.count();
+    }
+    expect(result.outcome == PresentationFrameOutcome::Ready,
+           "timeline allocation fixture renders its prepared frame");
+    return std::pair{count, readPixels(target)};
+  };
+  (void)render(small);
+  const auto [smallCount, expectedPixels] = render(small);
+  (void)render(large);
+  const auto [largeCount, largePixels] = render(large);
+  (void)render(unordered);
+  const auto [unorderedCount, unorderedPixels] = render(unordered);
+  std::cout << "Built-in render allocations, " << small.size() << " / "
+            << large.size() << " / unordered rows: " << smallCount << " / "
+            << largeCount << " / " << unorderedCount << '\n';
+  expect(largeCount <= smallCount && unorderedCount <= smallCount,
+         "warm timeline membership adds no per-row render allocations");
+  expect(expectedPixels == largePixels && expectedPixels == unorderedPixels,
+         "duplicate, unordered, absent and sentinel ordinals preserve built-in pixels");
+}
 
 void verifyJudgementIndicatorContinuousAverage(const RenderTarget &target) {
   Judge judge(3);
@@ -4692,6 +4744,7 @@ int main() {
       verifyPreparedFrameUsesSavedBestGhostForBuiltInBestPacemaker();
       verifyPreparedFrameKeepsLinearBestPacemakerWithoutSavedGhost();
       verifyPreparedFrameKeepsPacemakerOffWithSavedBestGhost();
+      verifyTimelineMembershipDoesNotAllocatePerRow(target);
       const auto legacyRightScratch = renderScenario(
           target, kAfterCoverPercent, true, ScenarioRenderPath::Legacy,
           kRenderMicros, 41, true, false, true);

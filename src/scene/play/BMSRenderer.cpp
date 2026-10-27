@@ -44,6 +44,7 @@
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -3048,13 +3049,22 @@ void BMSRenderer::renderFrame(
                  : projectedLane;
     };
     const auto &builtInPlan = projection->builtInPlan;
-    std::unordered_set<std::uint32_t> traversedTimelineOrdinals(
-        builtInPlan.traversedTimelineOrdinals.begin(),
-        builtInPlan.traversedTimelineOrdinals.end());
+    std::span<const std::uint32_t> traversedTimelineOrdinals =
+        builtInPlan.traversedTimelineOrdinals;
+    // Projection normally visits retained rows in ordinal order. Borrow that
+    // list directly; tolerate externally supplied unordered plans without
+    // rebuilding a node-allocated hash set on every frame.
+    if (!std::ranges::is_sorted(traversedTimelineOrdinals)) {
+      traversedTimelineOrdinalScratch.assign(traversedTimelineOrdinals.begin(),
+                                             traversedTimelineOrdinals.end());
+      std::ranges::sort(traversedTimelineOrdinalScratch);
+      traversedTimelineOrdinals = traversedTimelineOrdinalScratch;
+    }
     const auto timelineWasTraversed =
-        [&traversedTimelineOrdinals](std::uint32_t retainedOrdinal) {
+        [traversedTimelineOrdinals](std::uint32_t retainedOrdinal) {
           return retainedOrdinal != kNoRetainedTimelineOrdinal &&
-                 traversedTimelineOrdinals.contains(retainedOrdinal);
+                 std::ranges::binary_search(traversedTimelineOrdinals,
+                                             retainedOrdinal);
         };
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
     const auto recordProjectedSubmission =
