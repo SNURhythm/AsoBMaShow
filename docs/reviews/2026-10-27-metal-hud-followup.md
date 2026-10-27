@@ -116,7 +116,7 @@ The user reported visible output with HUD Present Delay increasing from about
 is unknown, so neither extra GPU work nor an exact input-latency increase has
 been established.
 
-The next candidate disables only application display-link pacing through
+The timer candidate (`e6329d76`) disables only application display-link pacing through
 `useMetalDisplayLinkPacing = false` in `src/main.cpp`. No native display link is
 created, bgfx acquires its drawable normally, and the corrected timer accounts
 for all frame work before any remaining sleep. Three drawables, offscreen-first
@@ -128,12 +128,14 @@ presents. bgfx still owns GPU completion synchronization and presentation; the
 new provider replaces drawable acquisition rather than duplicating it. SDL's
 refresh callback and bgfx's synchronization are unchanged for this comparison.
 
-Compare this candidate with `5804f12c` using the same chart/scene, skin, BGA,
-refresh rate, cap and thermal conditions. Record HUD Present Delay, FPS and GPU
-time. A return near 16 ms would implicate the display-link path without yet
-identifying its exact scheduling cause. No new telemetry is required.
+After testing the timer candidate, the user reported HUD Present Delay back
+around 16 ms, compared with about 23 ms on the display-link path (`5804f12c`).
+This strongly implicates that path in the reported increase, so application
+display-link pacing remains disabled. The exact scheduling cause, GPU-time
+change and input-latency effect have not been established; other scene and
+device conditions were not independently verified. No new telemetry is required.
 The timer candidate passes the four focused pacing/provider/export/BGA checks
-and an unsigned iOS device build. The on-device A/B result is still pending.
+and an unsigned iOS device build.
 
 ## Local verification
 
