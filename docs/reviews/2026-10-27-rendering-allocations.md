@@ -55,7 +55,10 @@ group run passed 121 of 122 checks; the remaining `main_menu_tabs_tests` failed
 to compile an outdated hidden-selector fixture. The missing notification/profile
 boundary members were already used by unchanged production code. Updating only
 the fixture made its focused rerun pass (3.21s), completing all 122 selected
-checks. Independent review of the full branch through `2a60d261` found no
-critical, important or minor issues. Device frame-time benefit remains unmeasured. The prior blur-on
+checks. Independent review of the allocation changes and earlier rendering
+implementation found no critical, important or minor issues. Before push, the
+commits were rebased over the shader-compilation bot commit `415825f9`; only
+generated DX11/SPIR-V artifacts differed from the tested/reviewed tree, with
+no source, test or Metal shader changes. Device frame-time benefit remains unmeasured. The prior blur-on
 pause/resume Present Delay observation has no established connection to these
 CPU allocation reductions.
