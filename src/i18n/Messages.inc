@@ -1414,8 +1414,6 @@
 {"settings.display.revert.label", "Revert", "되돌리기", "元に戻す", "还原", "還原"},
 {"settings.display.reverting_in_15_seconds.label", "Reverting in 15 seconds", "15초 후 이전 설정으로 돌아갑니다", "15秒後に以前の設定に戻ります", "将在 15 秒后还原", "將在 15 秒後還原"},
 {"settings.display.still_initializing.message", "Still initializing.", "초기화 중입니다.", "初期化中です。", "仍在初始化。", "仍在初始化。"},
-{"settings.display.triple_buffering.description", "Allows an extra display buffer. May smooth frame delivery but can increase latency and memory use. Off by default.", "화면 버퍼를 하나 더 사용합니다. 프레임 표시가 부드러워질 수 있지만 지연과 메모리 사용량이 늘어날 수 있습니다. 기본값은 꺼짐입니다.", "表示バッファを1つ追加します。フレーム表示が滑らかになる場合がありますが、遅延とメモリ使用量が増えることがあります。標準ではオフです。", "增加一个显示缓冲区。可能使画面更流畅，但会增加延迟和内存使用。默认关闭。", "增加一個顯示緩衝區。可能使畫面更流暢，但會增加延遲和記憶體使用量。預設關閉。"},
-{"settings.display.triple_buffering.label", "Triple buffering", "트리플 버퍼링", "トリプルバッファリング", "三重缓冲", "三重緩衝"},
 {"settings.display.try_again_shortly.message", "Try again shortly.", "잠시 후 다시 시도하세요.", "しばらくしてから再試行してください。", "请稍后重试。", "請稍後重試。"},
 {"settings.display.vertical_sync.label", "Vertical sync", "수직 동기화", "垂直同期", "垂直同步", "垂直同步"},
 {"settings.display.window_mode.label", "Window mode", "창 모드", "ウィンドウモード", "窗口模式", "視窗模式"},

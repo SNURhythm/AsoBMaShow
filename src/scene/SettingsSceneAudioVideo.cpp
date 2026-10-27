@@ -569,11 +569,6 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
     refreshAudioVideoControls();
     return true;
   }, overlayPortal, metrics.smallTextSize, metrics.actionButtonHeight, true);
-  displayTripleBufferingControl = new ChoiceControlView([this](const std::string &id) {
-    displayDraft.tripleBuffering = id == "on";
-    refreshAudioVideoControls();
-    return true;
-  }, overlayPortal, metrics.smallTextSize, metrics.actionButtonHeight, true);
   displayFrameCapDropdown =
       new DropdownView({
                            .onOpenChanged =
@@ -613,8 +608,6 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
   refreshDropdown(displayFrameCapDropdown, model.frameCaps,
                   displayFrameCapDropdownOpen, i18n::message("settings.display.frame_cap.label"), dropdownWidth);
 
-  refreshDropdown(displayTripleBufferingControl, model.tripleBuffering, false,
-                  i18n::message("settings.display.triple_buffering.label"), dropdownWidth);
   refreshDropdown(displayAntiAliasingDropdown, model.antiAliasing,
                   displayAntiAliasingDropdownOpen,
                   i18n::message("settings.display.anti_aliasing.label"), dropdownWidth);
@@ -635,10 +628,6 @@ View *SettingsScene::buildDisplayTab(const LayoutMetrics &metrics) {
   controls->addView(makeChoiceField(
       metrics, i18n::message("settings.display.anti_aliasing.label"),
       displayAntiAliasingDropdown, model.antiAliasing.explanation));
-
-  controls->addView(makeChoiceField(
-      metrics, i18n::message("settings.display.triple_buffering.label"),
-      displayTripleBufferingControl, model.tripleBuffering.explanation));
 
   auto *applyButton = makeAccentButton(
       metrics.actionButtonWidth, metrics.actionButtonHeight,
@@ -807,8 +796,6 @@ void SettingsScene::refreshAudioVideoControls(bool syncInputs) {
                     displayResolutionDropdownOpen, i18n::message("settings.audio.resolution.label"), dropdownWidth);
     refreshDropdown(displayVsyncDropdown, displayModel.vsync,
                     displayVsyncDropdownOpen, "VSync", dropdownWidth);
-    refreshDropdown(displayTripleBufferingControl, displayModel.tripleBuffering, false,
-                    i18n::message("settings.display.triple_buffering.label"), dropdownWidth);
     refreshDropdown(displayAntiAliasingDropdown, displayModel.antiAliasing,
                     displayAntiAliasingDropdownOpen,
                     i18n::message("settings.display.anti_aliasing.label"), dropdownWidth);

@@ -603,9 +603,6 @@ int main() { return 0; }
             renderer = source / "bgfx/src/renderer_mtl.mm"
             renderer.parent.mkdir(parents=True)
             renderer.write_text(original, encoding="utf-8")
-            defines = source / "bgfx/include/bgfx/defines.h"
-            defines.parent.mkdir(parents=True)
-            shutil.copyfile(ROOT / "bgfx/bgfx/include/bgfx/defines.h", defines)
             (source / "CMakeLists.txt").write_text(
                 "cmake_minimum_required(VERSION 3.22)\n"
                 "project(bgfx LANGUAGES CXX)\n"
@@ -637,7 +634,7 @@ int main() { return 0; }
             self.assertIn("unifiedMemory = false;", patched)
             self.assertIn("nativeTexture.bufferBytesPerRow", patched)
             self.assertIn("m_cmd.kick(false, true)", patched)
-            self.assertIn("video::metalDrawableCount(resetFlags)", patched)
+            self.assertIn("m_metalLayer.maximumDrawableCount = 3;", patched)
             self.assertIn("presented.presentedTime", patched)
             self.assertIn("MetalPresentationEvent::DrawableWait", patched)
             self.assertEqual(original, renderer.read_text(), "submodule must remain untouched")
@@ -678,7 +675,7 @@ int main() { return 0; }
             self.assertIn("m_metalLayer.drawableSize", blocks[1])
             self.assertIn("m_metalLayer.pixelFormat", blocks[1])
             self.assertIn("m_metalLayer.maximumDrawableCount", blocks[1])
-            self.assertIn("video::metalDrawableCount(resetFlags)", blocks[1])
+            self.assertIn("m_metalLayer.maximumDrawableCount = 3;", blocks[1])
             for block in blocks:
                 self.assertNotIn("nextDrawable", block)
                 self.assertNotIn("waitUntilCompleted", block)

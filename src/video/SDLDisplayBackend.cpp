@@ -1,6 +1,5 @@
 #include "../platform/IOSApplicationRuntime.h"
 #include "SDLDisplayBackend.h"
-#include "MetalDrawableCount.h"
 
 #include <SDL3/SDL.h>
 #include <bgfx/bgfx.h>
@@ -253,25 +252,21 @@ SDLDisplayBackend::SDLDisplayBackend(
     SDL_Window *window, bool fixedMobileDisplayValue,
     ResetFlagsReader readResetFlagsValue,
     RendererTransactionFactory beginRendererTransactionValue,
-    bool allowMobileVsyncValue, bool allowAntiAliasingValue,
-    bool allowTripleBufferingValue)
+    bool allowMobileVsyncValue, bool allowAntiAliasingValue)
     : SDLDisplayBackend(std::make_shared<RealSDLDisplayAdapter>(window),
                         fixedMobileDisplayValue, std::move(readResetFlagsValue),
                         std::move(beginRendererTransactionValue),
-                        allowMobileVsyncValue, allowAntiAliasingValue,
-                        allowTripleBufferingValue) {}
+                        allowMobileVsyncValue, allowAntiAliasingValue) {}
 
 SDLDisplayBackend::SDLDisplayBackend(
     std::shared_ptr<ISDLDisplayAdapter> adapterValue,
     bool fixedMobileDisplayValue, ResetFlagsReader readResetFlagsValue,
     RendererTransactionFactory beginRendererTransactionValue,
-    bool allowMobileVsyncValue, bool allowAntiAliasingValue,
-    bool allowTripleBufferingValue)
+    bool allowMobileVsyncValue, bool allowAntiAliasingValue)
     : adapter(std::move(adapterValue)),
       fixedMobileDisplay(fixedMobileDisplayValue),
       allowMobileVsync(allowMobileVsyncValue),
       allowAntiAliasing(allowAntiAliasingValue),
-      allowTripleBuffering(allowTripleBufferingValue),
       readResetFlags(std::move(readResetFlagsValue)),
       beginRendererTransaction(std::move(beginRendererTransactionValue)) {
   defaultMsaaFlags = currentResetFlags() & BGFX_RESET_MSAA_MASK;
@@ -324,7 +319,6 @@ Capabilities SDLDisplayBackend::capabilities() const {
           (!fixedMobileDisplay || allowMobileVsync) && rendererTransactionsAvailable,
       .canSetFrameCap = true,
       .canChangeAntiAliasing = allowAntiAliasing && rendererTransactionsAvailable,
-      .canChangeTripleBuffering = allowTripleBuffering && rendererTransactionsAvailable,
   };
   if (!adapter) {
     return result;
@@ -378,8 +372,6 @@ RuntimeState SDLDisplayBackend::capture() const {
   RuntimeState result;
   result.bgfxResetFlags = currentResetFlags();
   result.settings.msaaSamples = appliedMsaaSamples;
-  result.settings.tripleBuffering =
-      (result.bgfxResetFlags & video::kMetalTripleBufferingResetFlag) != 0;
   result.settings.vsync = (result.bgfxResetFlags & BGFX_RESET_VSYNC) != 0;
   if (!adapter) {
     return result;
@@ -603,11 +595,6 @@ bool SDLDisplayBackend::apply(const player_settings::VideoSettings &settings,
     return false;
   }
   const RuntimeState previous = capture();
-  if (!allowTripleBuffering &&
-      settings.tripleBuffering != previous.settings.tripleBuffering) {
-    errorMessage = "Triple buffering is unavailable.";
-    return false;
-  }
   if (!player_settings::isValidMsaaSamples(settings.msaaSamples) ||
       (!allowAntiAliasing && settings.msaaSamples != appliedMsaaSamples)) {
     errorMessage = "Anti-aliasing setting is unavailable.";
@@ -625,9 +612,6 @@ bool SDLDisplayBackend::apply(const player_settings::VideoSettings &settings,
       !fixedMobileDisplay && !sameDisplayFields(settings, current);
   std::uint32_t resetFlags =
       resetFlagsForVsync(previous.bgfxResetFlags, settings.vsync);
-  resetFlags = settings.tripleBuffering
-      ? resetFlags | video::kMetalTripleBufferingResetFlag
-      : resetFlags & ~video::kMetalTripleBufferingResetFlag;
   if (settings.msaaSamples != appliedMsaaSamples) {
     std::uint32_t msaaFlags = defaultMsaaFlags;
     switch (settings.msaaSamples) {

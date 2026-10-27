@@ -760,8 +760,13 @@ int main(int argv, char **args) {
   bgfx_init.resolution.width = rendering::render_width;
   bgfx_init.resolution.height = rendering::render_height;
   bgfx_init.resolution.reset = s_bgfxResetFlags;
-  // Bound GPU work queued ahead of visible input feedback on mobile as well.
+#if TARGET_OS_IPHONE || TARGET_OS_OSX
+  // Keep the Metal drawable pool at three to preserve display throughput.
+  bgfx_init.resolution.maxFrameLatency = 3;
+#else
+  // Bound GPU work queued ahead of visible input feedback on other renderers.
   bgfx_init.resolution.maxFrameLatency = 2;
+#endif
   bgfx_init.platformData = pd;
   rendering::applyBgfxTransientBufferLimits(bgfx_init.limits);
 #if TARGET_OS_IPHONE
@@ -1033,8 +1038,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
               context.framePacer.reset(std::chrono::steady_clock::now());
               return true;
             });
-      }, TARGET_PLATFORM == Android, allowAntiAliasing,
-      bgfx::getRendererType() == bgfx::RendererType::Metal);
+      }, TARGET_PLATFORM == Android, allowAntiAliasing);
   // Apply renderer preferences without changing native geometry at startup.
   auto startupVideo = context.displayBackend->capture().settings;
 #if TARGET_OS_ANDROID
@@ -1042,8 +1046,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #endif
   if (allowAntiAliasing)
     startupVideo.msaaSamples = context.settings.audioVideo.video.msaaSamples;
-  if (context.displayBackend->capabilities().canChangeTripleBuffering)
-    startupVideo.tripleBuffering = context.settings.audioVideo.video.tripleBuffering;
   std::string startupRendererError;
   if (!context.displayBackend->apply(startupVideo, startupRendererError)) {
     SDL_Log("Could not apply renderer preferences: %s",

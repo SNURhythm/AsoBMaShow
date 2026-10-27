@@ -1,4 +1,3 @@
-#include "../src/video/MetalDrawableCount.h"
 #include "video/FramePacer.h"
 #include "video/RendererAccessCoordinator.h"
 #include "video/SDLDisplayBackend.h"
@@ -260,8 +259,7 @@ private:
 display::SDLDisplayBackend
 makeBackend(const std::shared_ptr<FakeSDLAdapter> &adapter,
             RendererSpy &renderer, std::uint32_t &activeFlags,
-            bool fixedMobile = false, bool mobileVsync = false,
-            bool tripleBuffering = false) {
+            bool fixedMobile = false, bool mobileVsync = false) {
   return display::SDLDisplayBackend(
       adapter, fixedMobile, [&activeFlags]() { return activeFlags; },
       [&renderer, &activeFlags](std::uint32_t flags, std::string &errorMessage)
@@ -289,7 +287,7 @@ makeBackend(const std::shared_ptr<FakeSDLAdapter> &adapter,
           std::uint32_t &activeFlags;
         };
         return std::make_unique<UpdatingTransaction>(renderer, activeFlags);
-      }, mobileVsync, true, tripleBuffering);
+      }, mobileVsync);
 }
 
 display::SDLDisplayBackend
@@ -579,37 +577,6 @@ void testAntiAliasingApplyAndRollback() {
   require(adapter->fullscreenCalls == 0 && adapter->sizeCalls == 0 &&
               adapter->positionCalls == 0 && adapter->displayModeCalls == 0,
           "MSAA does not mutate native mobile geometry");
-}
-
-void testTripleBufferingApplyAndRollback() {
-  auto adapter = std::make_shared<FakeSDLAdapter>();
-  RendererSpy renderer;
-  std::uint32_t activeFlags = 0x90; // Preserve VSync and MSAA.
-  auto backend = makeBackend(adapter, renderer, activeFlags, true, false, true);
-  const auto original = backend.capture();
-  require(!original.settings.tripleBuffering && video::metalDrawableCount(activeFlags) == 2,
-          "Metal defaults to two drawables");
-  auto candidate = original.settings;
-  candidate.tripleBuffering = true;
-  std::string error;
-  renderer.failNextSynchronize = true;
-  require(!backend.apply(candidate, error) && activeFlags == 0x90 &&
-              !backend.capture().settings.tripleBuffering,
-          "failed triple buffering transaction preserves the previous setting");
-  require(backend.apply(candidate, error) && backend.capture().settings.tripleBuffering &&
-              video::metalDrawableCount(activeFlags) == 3 &&
-              (activeFlags & ~video::kMetalTripleBufferingResetFlag) == 0x90,
-          "triple buffering selects three drawables and preserves other renderer flags");
-  require(backend.restore(original, error) == display::RestoreStatus::Restored &&
-              activeFlags == 0x90 && video::metalDrawableCount(activeFlags) == 2,
-          "rollback restores two drawables");
-  require(adapter->fullscreenCalls == 0 && adapter->sizeCalls == 0 &&
-              adapter->positionCalls == 0 && adapter->displayModeCalls == 0,
-          "triple buffering does not mutate native mobile geometry");
-  auto unsupported = makeBackend(adapter, renderer, activeFlags);
-  require(!unsupported.capabilities().canChangeTripleBuffering &&
-              !unsupported.apply(candidate, error) && activeFlags == 0x90,
-          "other renderers reject triple buffering without mutation");
 }
 
 void testAndroidVsyncWithoutWindowMutation() {
@@ -1087,7 +1054,6 @@ int main() {
   testCapabilitiesUseTheSDLAdapterAndDeduplicateModes();
   testFixedMobileDisplayOnlyAdvertisesFrameCap();
   testAntiAliasingApplyAndRollback();
-  testTripleBufferingApplyAndRollback();
   testAndroidVsyncWithoutWindowMutation();
   testRendererReservationExcludesExportBeforeFirstSDLMutation();
   testExportUiFrameUnlockStillExcludesDisplayTransactions();

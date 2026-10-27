@@ -57,7 +57,6 @@ struct DisplayControlModel {
   ChoiceControlModel vsync;
   ChoiceControlModel frameCaps;
   ChoiceControlModel antiAliasing;
-  ChoiceControlModel tripleBuffering;
   bool operator==(const DisplayControlModel &) const = default;
 };
 

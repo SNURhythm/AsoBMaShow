@@ -2,31 +2,21 @@
 # policy. No callback, clock read, or block allocation when telemetry is off.
 function(asobmashow_patch_bgfx_metal_presentation content_variable)
     set(source "${${content_variable}}")
-    # Keep the app-owned bit outside every flag in the pinned bgfx API.
-    file(READ "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../bgfx/bgfx/include/bgfx/defines.h" defines)
-    string(REGEX MATCHALL "#define BGFX_RESET_[^\n]+UINT32_C\\(0x[0-9a-fA-F]+\\)" reset_definitions "${defines}")
-    if(NOT reset_definitions)
-        message(FATAL_ERROR "bgfx reset definitions changed; review Metal flag collision check")
-    endif()
-    foreach(definition IN LISTS reset_definitions)
-        string(REGEX MATCH "0x[0-9a-fA-F]+" value "${definition}")
-        math(EXPR collision "${value} & 0x40000000")
-        if(collision)
-            message(FATAL_ERROR "bgfx reset flag collision; review Metal triple buffering")
-        endif()
-    endforeach()
-    set(drawable_count [=[maxFrameLatency != 0 ? maxFrameLatency : BGFX_CONFIG_MAX_FRAME_LATENCY
+    # Use the same three-drawable pool on macOS as on iOS. Two drawables
+    # can throttle presentation even when the GPU finishes within a refresh.
+    set(drawable_count [=[m_metalLayer.maximumDrawableCount = bx::clamp<uint32_t>(
+				  maxFrameLatency != 0 ? maxFrameLatency : BGFX_CONFIG_MAX_FRAME_LATENCY
 				, 2
-				, 3]=])
+				, 3
+				);]=])
     string(FIND "${source}" "${drawable_count}" count_offset)
     if(count_offset EQUAL -1)
-        message(FATAL_ERROR "bgfx drawable count changed; review triple buffering")
+        message(FATAL_ERROR "bgfx drawable count changed; review fixed Metal drawable pool")
     endif()
-    string(REPLACE "${drawable_count}" "video::metalDrawableCount(resetFlags), 2, 3" source "${source}")
+    string(REPLACE "${drawable_count}" "m_metalLayer.maximumDrawableCount = 3;" source "${source}")
     set(anchor "#define UNIFORM_BUFFER_SIZE (8*1024*1024)")
     set(helper [=[
 #include "video/MetalPresentationObserver.h"
-#include "video/MetalDrawableCount.h"
 #include <atomic>
 #import <QuartzCore/QuartzCore.h>
 

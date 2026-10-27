@@ -42,13 +42,16 @@ Interface: Existing `UiBatchUploadCache::uploadIfChanged` with 4096-byte bounded
 - [x] Enable the same cache on iOS/macOS; reuse actual GPU growth/opacity/content-change tests.
 - [x] Build/run `ui_batch_metal_tests`, `ui_batch_android_upload_metal_tests`, `ui_batch_upload_cache_tests` (expect pass).
 
-### Task 3: Configurable Metal drawable limit
+### Task 3: Fixed Metal drawable pool
 
-Files: video settings/store, display backend/manager, settings model/scene/localization, generated Metal patches, and their existing tests.
-Interface: Persist `tripleBuffering=false` by default. Metal uses two drawables with Off and three with On. A cycling Off/On control uses the existing display preview/confirmation/timeout rollback. Unsupported renderers preserve saved intent without applying it.
-- [x] Verify default/persistence, preview confirmation/timeout, unsupported intent preservation, renderer failure and rollback.
-- [x] Carry the setting through an app-owned reset flag, guarded against collisions with pinned bgfx definitions, so resize/export restoration remain consistent.
-- [x] Keep iOS layer changes on main and verify the generated patch plus unsigned iOS compilation. No device latency reduction claim without measurement.
+Files: `src/main.cpp`, generated Metal patches, and existing iOS setup tests.
+Interface: Always configure three CAMetalLayer drawables on iOS/macOS. Remove
+the experimental display setting, persisted field, capabilities, custom reset
+flag, UI/localization and setting-specific tests. Ignore old saved values.
+- [x] Remove configurable buffering from settings, display transactions and UI.
+- [x] Set the native drawable count to three across resize/reset paths.
+- [x] Keep iOS layer mutations on main and update generated-source regression checks.
+- [x] Retain the separate iOS frame-budget correction and telemetry.
 
 ### Task 4: Actual presentation and memory evidence
 
@@ -58,6 +61,4 @@ Interface: Optional observer receives drawable acquisition duration and presenta
 - [x] Keep the software pacer and distinguish CPU submission from physical presentation. The follow-up budgets iOS pacing from frame start so drawable waits do not add another software interval.
 - [x] Run focused rendering/platform tests, desktop main build and iOS compile verification. Review the entire unstaged diff and document measurement limits.
 
-Verification status: desktop and unsigned iOS builds pass; telemetry-enabled main compiles on both platforms; affected native tests pass 12/12 and full iOS setup suite passes 54/54. The user-requested repair of the stale platform-exclusion test expectation is included. Native Metal smoke observed the actual drawable property changing 2 → 3 → 2. Final independent review found no issues. Prepared for pull request after verification and independent review.
-
-Follow-up: corrected iOS frame-budget accounting after a report of 60 FPS with two drawables and Unlimited. The deterministic double-wait regression failed before the fix and passes after it; four focused pacing/display tests and desktop/unsigned iOS builds pass. Device throughput still requires retesting.
+Verification status: the final fixed-three policy passed desktop and unsigned iOS builds, seven focused native tests and all 54 iOS setup tests. A native Metal smoke check retained three drawables across resize, VSync and MSAA resets. Legacy-settings persistence was verified once, then its obsolete fixture was removed as requested. Physical iPad throughput remains a device measurement; further scheduling candidates are documented in the review report.

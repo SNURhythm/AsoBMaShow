@@ -10,7 +10,6 @@ function(asobmashow_patch_ios_bgfx_main_thread_layer content_variable)
     set(helper [=[
 #import <Foundation/Foundation.h>
 #import <dispatch/dispatch.h>
-#include "video/MetalDrawableCount.h"
 
 static void asobmashowConfigureMetalLayer(void (^operation)(void))
 {
@@ -41,9 +40,8 @@ static void asobmashowConfigureMetalLayer(void (^operation)(void))
         if(part STREQUAL "resize")
             string(APPEND configuration [=[
 
-            // Upstream applies maxFrameLatency only on macOS. Keep the iOS
-            // drawable pool bounded too, on the same main-thread resize path.
-            m_metalLayer.maximumDrawableCount = video::metalDrawableCount(resetFlags);
+            // Keep three drawables available to preserve ProMotion throughput.
+            m_metalLayer.maximumDrawableCount = 3;
 ]=])
         endif()
         string(REPLACE "${${part}}"

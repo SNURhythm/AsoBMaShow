@@ -35,7 +35,6 @@ struct VideoSettings {
   std::uint32_t frameCap = 0;
   // -1 preserves the platform policy; 0 disables multisampling.
   int msaaSamples = -1;
-  bool tripleBuffering = false;
   bool operator==(const VideoSettings &) const = default;
 };
 

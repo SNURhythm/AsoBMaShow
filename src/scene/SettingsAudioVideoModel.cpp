@@ -300,13 +300,6 @@ BuildDisplayControlModel(const player_settings::VideoSettings &intent,
     model.vsync.explanation = i18n::message("settings.audio_video.managed_by_system.message");
   }
 
-  model.tripleBuffering.selectedValue = intent.tripleBuffering ? "on" : "off";
-  model.tripleBuffering.options = model.vsync.options;
-  model.tripleBuffering.enabled = capabilities.canChangeTripleBuffering;
-  model.tripleBuffering.explanation = i18n::message(
-      model.tripleBuffering.enabled ? "settings.display.triple_buffering.description"
-                                   : "settings.audio_video.unavailable_on_platform.message");
-
   model.antiAliasing.selectedValue = std::to_string(intent.msaaSamples);
   model.antiAliasing.options = {
       {.persistedValue = "-1", .label = i18n::message("settings.display.anti_aliasing_default.label")},
@@ -466,11 +459,6 @@ display::ApplyResult SettingsAudioVideoSession::beginDisplayPreview(
     persistedCandidate.msaaSamples = candidate.msaaSamples;
   } else {
     runtimeCandidate.msaaSamples = working.msaaSamples;
-  }
-  if (capabilities.canChangeTripleBuffering) {
-    persistedCandidate.tripleBuffering = candidate.tripleBuffering;
-  } else {
-    runtimeCandidate.tripleBuffering = working.tripleBuffering;
   }
   if (capabilities.canSetFrameCap) {
     persistedCandidate.frameCap = candidate.frameCap;
