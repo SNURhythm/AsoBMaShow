@@ -4,10 +4,11 @@ The first candidate (`88cd6afd`) updated bgfx for the reported iPad Metal
 presentation delay while preserving timer pacing, the iOS flip-after-render flag,
 three drawables and an Apple GPU frame limit of three. The user reported no
 improvement. The two-frame follow-up (`ffc62305`) still showed about 16 ms
-Present Delay at 120 FPS, according to the user. At their request, the current
-candidate changes only the Apple GPU frame limit to one; its effect on device
-latency and cadence remains unmeasured. No display link or diagnostic callbacks
-are added.
+Present Delay at 120 FPS, according to the user. At their request, the next
+candidate changed only the Apple GPU frame limit to one. The user also
+reported no improvement from that run and confirmed Direct presentation in the
+HUD. Their subsequent [Apple lookback trace](2026-10-28-metal-lookback-analysis.md)
+provides timing evidence without adding application instrumentation.
 
 ## Revisions
 
@@ -112,19 +113,24 @@ The Metal readback and both native-video lifetime tests pass again, including
 their existing limit-one cases. Generated Metal sources still configure three
 drawables. Nothing was uploaded or installed.
 
-## Device comparison still required
+The user subsequently reported no improvement from `469a7f9c` and confirmed
+Direct presentation in the HUD. No new exact timing or FPS readings accompanied
+the one-frame result. The supplied lookback capture is analyzed in the report
+linked above. The unfinished diagnostic recorder was set aside; no new hooks
+remain in the application.
 
-Compare `ffc62305` (GPU limit two) with this candidate (GPU limit one) on the
-affected iPad with identical chart, blur/BGA settings, frame cap, orientation and
-warmup. Verify actual 120 Hz cadence alongside HUD Present Delay. The separate
-presentation command buffer can move
-the HUD's measurement boundary, so a smaller HUD number alone does not prove
-fresher displayed state.
+## Interpretation of device comparisons
+
+The two-frame candidate is `ffc62305`; the one-frame candidate is `469a7f9c`.
+Keep chart, blur/BGA settings, frame cap, orientation and warmup identical in
+subsequent comparisons. Verify actual cadence alongside HUD Present Delay.
+The separate presentation command buffer can move the HUD's measurement boundary,
+so a smaller HUD number alone does not prove fresher displayed state.
 
 Both builds keep three drawables. GPU completion and display presentation are
 different events. The earlier 60 Hz result with two drawables does not establish
-what a one-frame GPU limit will do with a three-drawable pool. No performance
-benefit is claimed for this follow-up before device measurement.
+that a one-frame GPU limit has the same throughput effect with three drawables.
+None of the GPU-limit candidates showed a user-observed delay improvement.
 
 See the [investigation plan](../superpowers/plans/2026-10-27-metal-presentation-upstream-investigation.md)
 for the controlled comparisons and the [earlier observations](2026-10-27-metal-hud-followup.md).
