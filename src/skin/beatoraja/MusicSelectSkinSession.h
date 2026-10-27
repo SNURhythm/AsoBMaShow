@@ -3,6 +3,7 @@
 #include "GameplaySkinDocumentLoader.h"
 #include "LuaSkinAudioHost.h"
 #include "MusicSelectSkinStateBridge.h"
+#include "MusicSelectTextPreparation.h"
 #include "Skin2DRenderer.h"
 #include "SkinMovieCatalog.h"
 #include "SkinResourceCatalog.h"
@@ -200,6 +201,9 @@ public:
   [[nodiscard]] int inputDelayMillis() const noexcept;
 
 #if defined(ASOBMASHOW_PLAY_SKIN_SESSION_TESTING)
+  std::size_t textResidencyValidationCountForTesting() const {
+    return textResidencyCache_.validationCount();
+  }
   void waitForBuiltinImagePatchForTesting() {
     if (pendingBuiltinImagePatch_.valid()) pendingBuiltinImagePatch_.wait();
   }
@@ -283,6 +287,7 @@ private:
   std::map<int, std::filesystem::path> pendingBuiltinImagePaths_;
   std::stop_source builtinImagePatchStop_;
   std::future<MusicSelectBuiltinImagePatch> pendingBuiltinImagePatch_;
+  MusicSelectTextResidencyCache textResidencyCache_;
   std::set<SkinObjectId> pendingTextAtlasObjects_;
   std::set<SkinObjectId> unavailableTextAtlasObjects_;
   std::stop_source textAtlasPatchStop_;

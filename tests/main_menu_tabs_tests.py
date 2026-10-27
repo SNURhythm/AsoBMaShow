@@ -719,6 +719,9 @@ int main(int argc,char **argv) {
         fixture = (root / "tests/main_menu_chart_reload_fixture.cpp").read_text()
         play_click = extract(production, "startButton->setOnClickListener([this]()")
         fixture = fixture.replace("PLAY_BUTTON_CALLBACK", play_click[play_click.index("{"):])
+        fixture = fixture.replace("// AVAILABILITY_CACHE", extract(
+            (root / "src/scene/MainMenuLibrary.h").read_text(),
+            "struct RandomAvailabilityCache {") + ";")
         fixture = fixture.replace("// SELECTION_HELPERS", helpers).replace(
             "// RANDOM_RECORDS", extract(library, "std::vector<ChartMetaRecord> randomSelectRecords(")).replace(
             "// CACHE_TYPE", extract(header, "struct ChartListPageCache {") + ";").replace(

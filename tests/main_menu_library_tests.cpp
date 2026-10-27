@@ -132,6 +132,28 @@ int scoreLongNoteModeForClearLamp(int chartLongNoteMode, int totalLongNotes,
 }
 
 int main() {
+  main_menu_library::RandomAvailabilityCache availability;
+  ChartMetaQuery membership{.keyword = "scope", .selectedLongNoteMode = 1};
+  availability.store(membership, 10, 20, {true, true, false});
+  auto sorted = membership;
+  sorted.sortCriterion = ChartRecordSortCriterion::Rate;
+  sorted.sortDirection = ChartRecordSortDirection::Ascending;
+  sorted.limit = 1;
+  sorted.offset = 100;
+  ASSERT_EQ(true, availability.matches(sorted, 10, 20), "sort and page preserve availability");
+  ASSERT_EQ(false, availability.matches(sorted, 11, 20), "library edits invalidate availability");
+  ASSERT_EQ(false, availability.matches(sorted, 10, 21), "score edits invalidate availability");
+  sorted.selectedLongNoteMode = 2;
+  ASSERT_EQ(false, availability.matches(sorted, 10, 20), "LN mode invalidates availability");
+  sorted = membership;
+  sorted.allowedSha256 = std::vector<std::string>{};
+  ASSERT_EQ(false, availability.matches(sorted, 10, 20), "empty allowlist changes membership");
+  sorted = membership;
+  sorted.favoritesOnly = true;
+  ASSERT_EQ(false, availability.matches(sorted, 10, 20), "favorites scope changes membership");
+  availability = {};
+  ASSERT_EQ(false, availability.matches(membership, 10, 20), "cache replacement invalidates availability");
+
   const auto unzipAll = main_menu_library::unzipAllRecord(2);
   ASSERT_EQ(true, unzipAll.has_value(), "solid archives have an unzip-all action");
   ASSERT_EQ(true, unzipAll->unzipAll, "unzip-all is a distinct pseudo record");

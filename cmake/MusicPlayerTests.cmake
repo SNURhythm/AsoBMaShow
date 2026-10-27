@@ -7,7 +7,8 @@ add_custom_command(
             --root ${CMAKE_SOURCE_DIR} --output ${music_player_video_lifecycle_source}
     DEPENDS tests/music_player_video_lifecycle_extract.py tests/gameplay_terminal_scene_extract.py
             tests/music_player_video_lifecycle_fixture.cpp
-            src/scene/MusicPlayerScene.cpp src/scene/Scene.h
+            src/scene/MusicPlayerScene.cpp src/scene/MainMenuScene.cpp
+            src/view/SnappedSlider.cpp src/view/View.h src/scene/Scene.h
     VERBATIM
 )
 add_executable(music_player_video_lifecycle_tests ${music_player_video_lifecycle_source})

@@ -130,12 +130,12 @@ std::optional<ChartMetaRecord> chartSelectionRecordForReload(
   return selection;
 }
 
-std::vector<ChartMetaRecord> randomSelectRecords(const std::array<int, 3> &indices) {
+std::vector<ChartMetaRecord> randomSelectRecords(const std::array<bool, 3> &availability) {
   constexpr std::array labels{"menu.random_chart.all", "menu.random_chart.no_play",
                               "menu.random_chart.failed"};
   std::vector<ChartMetaRecord> records;
-  for (std::size_t category = 0; category < indices.size(); ++category) {
-    if (indices[category] < 0) continue;
+  for (std::size_t category = 0; category < availability.size(); ++category) {
+    if (!availability[category]) continue;
     ChartMetaRecord record;
     record.randomSelect = kChartSelectorRandomFilters[category];
     record.meta.Title = i18n::tr(labels[category]);

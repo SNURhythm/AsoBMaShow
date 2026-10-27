@@ -16,11 +16,20 @@ struct ChartMetaRecord {
   bool unzipAll=false, courseStart=false, unavailable=false, solidArchive=false;
   std::optional<int> randomSelect;
 };
-struct ChartMetaQuery { int limit=0, offset=0; bool scopeAllowed=true; };
 enum class ChartRecordSortCriterion { Default, ClearMark, Rate };
+enum class ChartRecordSortDirection { Ascending, Descending };
+struct ChartMetaQuery {
+  int limit=0, offset=0;
+  bool scopeAllowed=true;
+  ChartRecordSortCriterion sortCriterion=ChartRecordSortCriterion::Default;
+  ChartRecordSortDirection sortDirection=ChartRecordSortDirection::Descending;
+  int selectedLongNoteMode=1;
+  bool operator==(const ChartMetaQuery &) const = default;
+};
 namespace i18n { std::string tr(const char *key) { return key; } }
 void SDL_Log(const char *, ...) {}
 namespace main_menu_library {
+// AVAILABILITY_CACHE
 // SELECTION_HELPERS
 ChartMetaRecord unzipAllRecord(int) { return {.unzipAll=true}; }
 constexpr std::array kChartSelectorRandomFilters{0, 1, 2};
@@ -30,15 +39,26 @@ struct ChartRepository {
   struct Session {
     std::vector<ChartMetaRecord> rows;
     std::array<int, 3> randomIndices{-1, -1, -1};
+    int availabilityCalls=0;
+    std::array<bool, 3> RandomChartMetaAvailability(const ChartMetaQuery &query, const auto &, const auto &) {
+      ++availabilityCalls;
+      return {query.scopeAllowed && randomIndices[0]>=0,
+              query.scopeAllowed && randomIndices[1]>=0,
+              query.scopeAllowed && randomIndices[2]>=0};
+    }
     std::array<int, 3> RandomChartMetaIndices(const ChartMetaQuery &query, const auto &, const auto &) {
       return query.scopeAllowed ? randomIndices : std::array<int,3>{-1,-1,-1};
     }
-    int CountChartMeta(const ChartMetaQuery &) const { return int(rows.size()); }
+    int CountChartMeta(const ChartMetaQuery &query) const {
+      return query.scopeAllowed ? int(rows.size()) : 0;
+    }
     void QueryChartMeta(const ChartMetaQuery &query, std::vector<ChartMetaRecord> &out) const {
+      if (!query.scopeAllowed) return;
       for (int i=query.offset; i<int(rows.size()) && i<query.offset+query.limit; ++i)
         out.push_back(rows[i]);
     }
-    int FindChartMetaIndex(const ChartMetaQuery &, const std::filesystem::path &path) const {
+    int FindChartMetaIndex(const ChartMetaQuery &query, const std::filesystem::path &path) const {
+      if (!query.scopeAllowed) return -1;
       for (int i=0; i<int(rows.size()); ++i)
         if (rows[i].meta.BmsPath==path) return i;
       return -1;
@@ -65,6 +85,7 @@ struct MainMenuScene {
   Tab selectorTab_=Tab::Play;
   // CACHE_TYPE
   ChartListPageCache chartListCache;
+  main_menu_library::RandomAvailabilityCache randomAvailabilityCache;
   Recycler list;
   Recycler *recyclerView=&list;
   Recycler *folderRecyclerView=nullptr;
@@ -81,7 +102,12 @@ struct MainMenuScene {
   struct { int solidArchiveCount=0; } folderMetadataCache;
   bool assignmentAllowlistReady=true;
   std::unordered_set<std::string> expandedLibraryFolders;
-  ChartMetaQuery chartQueryForActiveFolder() const { return {.scopeAllowed=assignmentAllowlistReady}; }
+  ChartMetaQuery activeQuery;
+  ChartMetaQuery chartQueryForActiveFolder() const {
+    auto query=activeQuery;
+    query.scopeAllowed=query.scopeAllowed && assignmentAllowlistReady;
+    return query;
+  }
   bool clearSameFolderScope() { return false; }
   void refreshChartFilterPanel() {}
   void selectFolder(LibraryFolderItem);
@@ -159,6 +185,20 @@ int main() {
     scene.chartSession->randomIndices = {0, 0, 1};
     scene.reloadChartList();
     assert(scene.list.size()==5 && "three random rows precede the scoped charts");
+    assert(scene.chartSession->availabilityCalls==1);
+    scene.activeQuery.sortCriterion=ChartRecordSortCriterion::Rate;
+    scene.reloadChartList();
+    assert(scene.chartSession->availabilityCalls==1 && "sort-only reload reuses availability");
+    scene.assignmentAllowlistReady=false;
+    scene.reloadChartList();
+    assert(scene.assignmentAllowlistReady && "reload prepares the assignment query before use");
+    assert(scene.list.size()==5 && scene.chartSession->availabilityCalls==1);
+    scene.activeQuery.scopeAllowed=false; // A prepared, empty assignment allowlist changes membership.
+    scene.reloadChartList();
+    assert(scene.list.size()==0 && scene.chartSession->availabilityCalls==2);
+    scene.activeQuery.scopeAllowed=true;
+    scene.reloadChartList();
+    assert(scene.list.size()==5 && scene.chartSession->availabilityCalls==3);
     for (int i=0; i<3; ++i) assert(scene.list.get(i).randomSelect==i);
     assert(scene.list.get(3).meta.BmsPath=="first.bms");
     for (int i=0; i<3; ++i) {
@@ -187,10 +227,12 @@ int main() {
     scene.reloadChartList(true);
     assert(scene.list.selectedIndex==1 && scene.selectedChartRecord->randomSelect==1);
     scene.chartSession->randomIndices={0, -1, 1};
+    ++scene.activeQuery.selectedLongNoteMode;
     scene.refreshLongNoteModeClearRankViews();
     assert(!scene.selectedChartRecord && scene.list.selectedIndex==-1);
     assert(scene.list.size()==4 && scene.list.get(1).randomSelect==2);
     scene.chartSession->randomIndices={0, 0, 1};
+    ++scene.scoreClearRanksRevision;
     scene.refreshLongNoteModeClearRankViews();
     assert(scene.list.size()==5 && scene.list.get(1).randomSelect==1);
   }

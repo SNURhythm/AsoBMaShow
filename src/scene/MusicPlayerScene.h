@@ -46,6 +46,7 @@ public:
                     Scene *settingsReturnOwner);
   void setTabTopInset(float topInset);
   bool prepareForStorageMaintenance(std::string &error) override;
+  void onApplicationBackgroundChanged(bool background) override;
   void onPause() override;
   void onResume() override;
   void onLanguageChanged() override;
@@ -204,6 +205,8 @@ private:
   void togglePlayback();
   void cycleRepeatMode();
   void setPlaybackRate(int percent);
+  void persistPlaybackRate(bool updateStatusView = true);
+  std::string pendingPlaybackRateProfileId;
   void setPlaybackMode(const std::string &id);
   void refreshPlaybackRateControl();
   void toggleClubMode();

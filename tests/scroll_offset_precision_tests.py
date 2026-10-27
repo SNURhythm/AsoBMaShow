@@ -35,7 +35,7 @@ struct Subject {
   int getScrollContentHeight() const { return 200; }
   void updateContentPosition() {}
   void revealScrollbar() {}
-  void updateVisibleItems() {}
+  void updateVisibleItems(bool = false) {}
   METHODS
 };
 int main() {

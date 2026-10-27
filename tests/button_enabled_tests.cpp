@@ -544,6 +544,70 @@ static void testSliderDistinguishesScrollDragAndTap() {
   REQUIRE(changes == beforeCancel);
 }
 
+static void testSliderCompletesChangedInteractionsOnce() {
+  for (bool touch : {false, true}) {
+    for (int ending = 0; ending < 6; ++ending) {
+      int changes = 0, completions = 0, finalValue = 0;
+      SnappedSlider slider([&](int value) { ++changes; finalValue = value; },
+                           [&]() { ++completions; });
+      slider.setSize(300, 44);
+      slider.refresh({.minimum = 50, .maximum = 200, .step = 5, .value = 100});
+      const auto send = [&](SDL_EventType mouse, SDL_EventType finger, int x) {
+        auto event = touch ? fingerEvent(finger, x, 20)
+                           : mouse == SDL_EVENT_MOUSE_MOTION ? mouseMotion(1, x, 20)
+                                                            : mouseEvent(mouse, x, 20);
+        slider.handleEvents(event);
+      };
+      send(SDL_EVENT_MOUSE_BUTTON_DOWN, SDL_EVENT_FINGER_DOWN, 100);
+      send(SDL_EVENT_MOUSE_MOTION, SDL_EVENT_FINGER_MOTION, 180);
+      send(SDL_EVENT_MOUSE_MOTION, SDL_EVENT_FINGER_MOTION, 240);
+      REQUIRE(changes >= 2 && completions == 0);
+      REQUIRE(finalValue == slider.value() && finalValue % 5 == 0);
+      if (ending == 0) {
+        send(SDL_EVENT_MOUSE_BUTTON_UP, SDL_EVENT_FINGER_UP, 270);
+        REQUIRE(finalValue == slider.value());
+      } else if (ending == 1) {
+        slider.cancelPointerInput();
+      } else if (ending == 2) {
+        SDL_Event lost{};
+        lost.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+        slider.handleEvents(lost);
+      } else if (ending == 3) {
+        auto covered = touch ? fingerEvent(SDL_EVENT_FINGER_CANCELED, 270, 20)
+                             : mouseEvent(SDL_EVENT_MOUSE_BUTTON_UP, 270, 20);
+        slider.notifyPointerEventConsumed(covered);
+      } else if (ending == 4) {
+        slider.refresh({.minimum = 50, .maximum = 200, .step = 5,
+                        .value = finalValue, .enabled = false});
+      } else {
+        SDL_Event leave{};
+        leave.type = SDL_EVENT_WINDOW_MOUSE_LEAVE;
+        slider.handleEvents(leave);
+      }
+      REQUIRE(completions == 1);
+      const int endedChanges = changes;
+      slider.cancelPointerInput();
+      send(SDL_EVENT_MOUSE_BUTTON_UP, SDL_EVENT_FINGER_UP, 280);
+      REQUIRE(completions == 1 && changes == endedChanges);
+    }
+    int changes = 0, completions = 0;
+    SnappedSlider slider([&](int) { ++changes; }, [&]() { ++completions; });
+    slider.setSize(300, 44);
+    slider.refresh({.minimum = 50, .maximum = 200, .step = 5, .value = 100});
+    auto down = touch ? fingerEvent(SDL_EVENT_FINGER_DOWN, 240, 20)
+                      : mouseEvent(SDL_EVENT_MOUSE_BUTTON_DOWN, 240, 20);
+    auto up = touch ? fingerEvent(SDL_EVENT_FINGER_UP, 240, 20)
+                    : mouseEvent(SDL_EVENT_MOUSE_BUTTON_UP, 240, 20);
+    slider.handleEvents(down);
+    REQUIRE(completions == 0);
+    slider.handleEvents(up);
+    REQUIRE(changes == 1 && completions == 1);
+    slider.handleEvents(down);
+    slider.handleEvents(up);
+    REQUIRE(changes == 1 && completions == 1);
+  }
+}
+
 static void testDisabledSiblingEndsCoveredScrollGestures() {
   for (bool touch : {false, true}) {
     View root(0, 0, 300, 300);
@@ -925,6 +989,7 @@ int main(int argc, char **argv) {
   const bool metalOnly = argc == 2 && std::string(argv[1]) == "--metal-only";
   if (!renderOnly && !metalOnly) {
     testSliderDistinguishesScrollDragAndTap();
+    testSliderCompletesChangedInteractionsOnce();
     testProgrammaticWidgetChangesWakePresentationOnce();
     testThemedButtonChangesWakePresentationAndThenSettle();
     testNavigationMayDestroyDispatchingViews();

@@ -62,6 +62,8 @@ struct MainMenuScene {
  int assignmentDayId=streak::today();
  void requestLibraryReload(bool folders){context.chartLibraryFoldersReloadRequested=folders;context.chartLibraryListReloadRequested=true;}
  int scoreClearRanks=0,scoreBestScores=0,folderClearData=0;
+ // Reset-only stand-in; cache matching is covered by the chart-reload fixture.
+ int randomAvailabilityCache=0;
  std::string musicStatusMessage;
  void update(float);void applyPendingUiUpdates();void refreshScoreClearRanksIfNeeded();
  void selectTab(Tab tab){activeTab_=tab;}

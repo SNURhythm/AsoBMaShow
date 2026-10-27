@@ -1,4 +1,7 @@
 #include "skin/beatoraja/MusicSelectBarRenderer.h"
+#include "skin/beatoraja/MusicSelectTextPreparation.h"
+
+#include <tuple>
 
 #include "music_select_runtime_ledger_assertions.h"
 
@@ -354,6 +357,82 @@ void testPagedRenderingFetchesOnlyVisibleRows() {
           "pointer selection returns an absolute provider index with bounded access");
 }
 
+void testTitleGatheringMatchesDrawPlans() {
+  using Title = std::tuple<SkinObjectId, std::size_t, std::string>;
+  const auto compare = [](const auto &songList, const auto &frame) {
+    std::vector<Title> expected;
+    for (const auto &command : MusicSelectBarRenderer{}.plan(songList, frame).commands) {
+      if (command.family == MusicSelectBarDrawFamily::Title)
+        expected.emplace_back(command.object, command.barIndex, command.text);
+    }
+    std::vector<Title> actual;
+    visitMusicSelectTitles(songList, frame,
+        [&](SkinObjectId object, std::size_t index, std::string_view title) {
+          actual.emplace_back(object, index, title);
+        });
+    require(actual == expected, "title-only preparation matches renderer title order and selection");
+  };
+  auto songList = completeSongList();
+  auto frame = completeFrame();
+  for (const auto kind : {MusicSelectBarKind::Song, MusicSelectBarKind::Folder,
+                         MusicSelectBarKind::Table, MusicSelectBarKind::Hash,
+                         MusicSelectBarKind::Executable, MusicSelectBarKind::Grade,
+                         MusicSelectBarKind::RandomCourse, MusicSelectBarKind::Command,
+                         MusicSelectBarKind::Container, MusicSelectBarKind::SearchWord,
+                         MusicSelectBarKind::SameFolder}) {
+    for (int variant = 0; variant < 4; ++variant) {
+      frame.bars = {{.kind = kind, .title = "title", .exists = (variant % 2 == 0)}};
+      frame.wallClockSeconds = variant < 2 ? 86'400 : 86'401;
+      for (int missing = -1; missing < 11; ++missing) {
+        auto changed = songList;
+        if (missing >= 0) changed.text[missing].object = 0;
+        compare(changed, frame);
+      }
+    }
+  }
+  frame = completeFrame();
+  songList.listOn[1].destination.frames.clear();
+  songList.listOff[2].object = 0;
+  songList.listOff[3].destination.frames.push_back(
+      {.timeMillis = 100, .x = 90, .y = 20, .width = 200, .height = 30});
+  songList.listOff[3].destination.loop = 0;
+  songList.text[3].destination.frames.clear();
+  frame.elapsedMillis = 1234;
+  frame.movementDirection = 100;
+  frame.movementEndMillis = frame.wallClockMillis + 50;
+  const auto emptyTitleDestinationPlan = MusicSelectBarRenderer{}.plan(songList, frame);
+  require(std::ranges::any_of(emptyTitleDestinationPlan.commands, [&](const auto &command) {
+            return command.family == MusicSelectBarDrawFamily::Title &&
+                   command.object == songList.text[3].object;
+          }),
+          "empty title destination case exercises commands for the selected text slot");
+  compare(songList, frame);
+  songList.center = 1'000'000;
+  compare(songList, frame);
+  frame.bars.clear();
+  compare(songList, frame);
+}
+
+void testTitleGatheringReadsEachAuthoredRowOnce() {
+  auto songList = completeSongList();
+  songList.listOn.resize(3);
+  songList.listOff.resize(3);
+  auto provider = std::make_shared<RenderRowProvider>();
+  MusicSelectSongListFrame frame;
+  frame.rowProvider = provider;
+  std::size_t titles = 0;
+  for (int iteration = 0; iteration < 100; ++iteration) {
+    visitMusicSelectTitles(songList, frame,
+        [&](SkinObjectId, std::size_t index, std::string_view title) {
+          ++titles;
+          require(title == "Paged " + std::to_string(index),
+                  "collector consumes provider title before its next access");
+        });
+  }
+  require(titles == 300 && provider->atCalls == 300,
+          "100k-row title gathering reads exactly three authored rows per frame");
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -366,6 +445,8 @@ int main(int argc, char **argv) {
   testIndexedLargeListMaterializesOnlyAuthoredSlots();
   testIndexedTinyAndEmptyLists();
   testPagedRenderingFetchesOnlyVisibleRows();
+  testTitleGatheringMatchesDrawPlans();
+  testTitleGatheringReadsEachAuthoredRowOnce();
   return music_select_runtime_ledger_assertions::finish(
       argc, argv, "music_select_bar_renderer_tests", failures,
       "music-select bar renderer test(s) failed",

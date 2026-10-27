@@ -129,6 +129,7 @@ GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
                    .keyMode = definition.metadata().keyMode}),
       noteStates_(definition.noteCount()),
       hellChargeBalanceMicros_(definition.noteCount()) {
+  eligibleHellChargeHeads_.reserve(definition.hellChargeHeads().size());
   mutedHeadVoices_.resize(definition.noteCount());
   triggeredHeadVoices_.resize(definition.noteCount());
   replayEvents_.reserve(config_.attempt.replayCapacity);
@@ -899,18 +900,39 @@ void GameplaySimulation::integrateHellChargeInterval(
     return;
   }
 
-  const auto heads = definition_.hellChargeHeads();
-  for (const NoteId headId : heads) {
+  // Automatic deadlines split intervals at authored head/tail times. Admit
+  // each head once, retaining unjudged heads so a later press or miss can
+  // activate them. Expire only on the next positive interval: callers expose
+  // the final balance at the exact tail timestamp.
+  const auto authoredHeads = definition_.hellChargeHeads();
+  while (hellChargeAdmissionCursor_ < authoredHeads.size() &&
+         definition_.note(authoredHeads[hellChargeAdmissionCursor_]).timingMicros <=
+             fromMicros) {
+    const NoteId headId = authoredHeads[hellChargeAdmissionCursor_++];
+    ++lastAdvanceStats_.hellChargeHeadsExamined;
+    const auto &head = definition_.note(headId);
+    if (noteAllowed(headId) && head.pairId != kInvalidNoteId &&
+        head.pairId < noteStates_.size() &&
+        definition_.note(head.pairId).timingMicros > fromMicros) {
+      eligibleHellChargeHeads_.push_back(headId);
+    }
+  }
+  std::erase_if(eligibleHellChargeHeads_, [&](NoteId headId) {
+    ++lastAdvanceStats_.hellChargeHeadsExamined;
     if (!hellChargeActiveAt(headId, fromMicros)) {
       hellChargeBalanceMicros_[headId] = 0;
     }
-  }
+    return definition_.note(definition_.note(headId).pairId).timingMicros <=
+           fromMicros;
+  });
+  const auto &heads = eligibleHellChargeHeads_;
 
   std::int64_t currentMicros = fromMicros;
   while (currentMicros < toMicros) {
     std::int64_t nextCrossingMicros =
         std::numeric_limits<std::int64_t>::max();
     for (const NoteId headId : heads) {
+      ++lastAdvanceStats_.hellChargeHeadsExamined;
       if (!hellChargeActiveAt(headId, currentMicros)) {
         continue;
       }
@@ -937,6 +959,7 @@ void GameplaySimulation::integrateHellChargeInterval(
         std::min(toMicros, nextCrossingMicros);
     const std::int64_t activeDelta = chart_timing::subtract(intervalEnd, currentMicros);
     for (const NoteId headId : heads) {
+      ++lastAdvanceStats_.hellChargeHeadsExamined;
       if (!hellChargeActiveAt(headId, currentMicros)) {
         continue;
       }
@@ -958,6 +981,7 @@ void GameplaySimulation::integrateHellChargeInterval(
       NoteId nextHeadId = kInvalidNoteId;
       Judgement nextJudgement = None;
       for (const NoteId headId : heads) {
+        ++lastAdvanceStats_.hellChargeHeadsExamined;
         const std::int64_t balance = hellChargeBalanceMicros_[headId];
         const Judgement judgement =
             balance > kHellChargeGaugeTickMicros

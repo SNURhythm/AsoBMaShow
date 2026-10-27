@@ -96,6 +96,8 @@ struct MainMenuScene : Scene {
   std::vector<int> replayIrObservedRevisions;
   std::vector<std::function<bool()>> deferred;
   int scoreClearRanks = 0, scoreBestScores = 0, folderClearData = 0;
+  // Reset-only stand-in; cache matching is covered by the chart-reload fixture.
+  int randomAvailabilityCache = 0;
   int scoreClearRanksRevision = 0, refreshed = 0;
   bool presentationSkinRefreshPending = false;
   void defer(std::function<bool()> callback, int delay, bool waitFrame) {

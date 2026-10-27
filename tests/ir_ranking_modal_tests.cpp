@@ -793,6 +793,187 @@ void testRecyclerBindingSeesAppliedRowWidth() {
   REQUIRE(recycler.getViewByIndex(0)->getWidth() == 800);
 }
 
+struct CountedRecyclerItem {
+  int id;
+  int *copies;
+  CountedRecyclerItem(int id, int &copies) : id(id), copies(&copies) {}
+  CountedRecyclerItem(const CountedRecyclerItem &other)
+      : id(other.id), copies(other.copies) { ++*copies; }
+  CountedRecyclerItem &operator=(const CountedRecyclerItem &other) {
+    id = other.id;
+    copies = other.copies;
+    ++*copies;
+    return *this;
+  }
+  CountedRecyclerItem(CountedRecyclerItem &&) = default;
+  CountedRecyclerItem &operator=(CountedRecyclerItem &&) = default;
+};
+
+struct RecyclerLayoutProbe : View {
+  int layouts = 0;
+  void onLayout() override { ++layouts; }
+};
+
+void testRecyclerRetainedMotionWorkAndInvalidation() {
+  int copies = 0;
+  int bindings = 0;
+  std::vector<CountedRecyclerItem> items;
+  for (int i = 0; i < 8; ++i) items.emplace_back(i, copies);
+  RecyclerView<CountedRecyclerItem> recycler(
+      [](const auto &a, const auto &b) { return a.id == b.id; });
+  recycler.setWidth(320)->setHeight(128)->applyYogaLayout();
+  recycler.itemHeight = 64;
+  recycler.topMargin = recycler.bottomMargin = 0;
+  std::vector<RecyclerLayoutProbe *> nodes;
+  recycler.onCreateView = [&](const auto &) -> View * {
+    // A responsive row with a nested title/detail stack and a sibling icon.
+    auto *row = new RecyclerLayoutProbe();
+    auto *stack = new RecyclerLayoutProbe();
+    auto *title = new RecyclerLayoutProbe();
+    auto *detail = new RecyclerLayoutProbe();
+    auto *icon = new RecyclerLayoutProbe();
+    for (auto *node : {row, stack, title, detail, icon}) nodes.push_back(node);
+    row->setFlexDirection(FlexDirection::Row);
+    stack->setWidthPercent(75)->setHeight(64);
+    title->setWidthPercent(100)->setHeight(24);
+    detail->setWidthPercent(100)->setHeight(20);
+    icon->setWidth(24)->setHeight(24);
+    stack->addView(title);
+    stack->addView(detail);
+    row->addView(stack);
+    row->addView(icon);
+    return row;
+  };
+  recycler.onBind = [&](View *row, const auto &, int, bool) {
+    ++bindings;
+    REQUIRE(row->getWidth() == recycler.getVisibleItemWidth());
+    REQUIRE(row->getHeight() == recycler.itemHeight);
+  };
+  recycler.setItemProvider(8, [&](int i) -> const auto & { return items[i]; });
+  const auto reset = [&] {
+    copies = bindings = 0;
+    for (auto *node : nodes) node->layouts = 0;
+  };
+  const auto layouts = [&] {
+    int count = 0;
+    for (auto *node : nodes) count += node->layouts;
+    return count;
+  };
+  const auto scroll = [&](float pixels) {
+    SDL_Event wheel{};
+    wheel.type = SDL_EVENT_MOUSE_WHEEL;
+    wheel.wheel.y = -pixels / 15.0F;
+    wheel.wheel.mouse_x = 10;
+    wheel.wheel.mouse_y = 10;
+    recycler.handleEvents(wheel);
+  };
+  auto *retained = recycler.getViewByIndex(1);
+  auto *detail = nodes[8];
+  const int detailOffset = detail->getY() - retained->getY();
+  reset();
+  for (int frame = 0; frame < 16; ++frame) scroll(0.25F);
+  REQUIRE(copies == 0);
+  REQUIRE(bindings == 0);
+  REQUIRE(layouts() == 0);
+  std::cout << "Recycler retained motion (16 frames, 3 five-node rows): "
+            << copies << " copies, " << bindings << " binds, "
+            << layouts() << " layout callbacks\n";
+  REQUIRE(recycler.getViewByIndex(1) == retained);
+  REQUIRE(std::abs(recycler.scrollOffset - 4.0) < 0.001);
+  REQUIRE(retained->getY() == static_cast<int>(64 - recycler.scrollOffset));
+  REQUIRE(detail->getY() == retained->getY() + detailOffset);
+  REQUIRE(!YGNodeIsDirty(retained->getNode()));
+  REQUIRE(YGNodeLayoutGetTop(retained->getNode()) == retained->getY());
+  retained->applyYogaLayout();
+  REQUIRE(detail->getY() == retained->getY() + detailOffset);
+
+  reset();
+  scroll(60.25F); // Cross one boundary; only the entering row needs binding/layout.
+  REQUIRE(recycler.getViewByIndex(0) == nullptr);
+  REQUIRE(recycler.getViewByIndex(1) == retained);
+  REQUIRE(bindings == 1);
+  REQUIRE(copies == 3);
+  REQUIRE(layouts() > 0);
+  for (int i = 5; i < 15; ++i) REQUIRE(nodes[i]->layouts == 0);
+  REQUIRE(retained->getY() == static_cast<int>(64 - recycler.scrollOffset));
+  REQUIRE(detail->getY() == retained->getY() + detailOffset);
+
+  // Selection must follow the translated rows at fractional scroll offsets.
+  SDL_Event click{};
+  click.type = SDL_EVENT_MOUSE_BUTTON_DOWN;
+  click.button.button = SDL_BUTTON_LEFT;
+  click.button.x = 10;
+  click.button.y = 65;
+  recycler.handleEvents(click);
+  REQUIRE(recycler.selectedIndex == 2);
+
+  reset();
+  recycler.setWidth(400);
+  REQUIRE(bindings == 0);
+  REQUIRE(copies > 0);
+  REQUIRE(layouts() > 0);
+  REQUIRE(retained->getWidth() == 400);
+  REQUIRE(detail->getWidth() == 300);
+  recycler.reserveScrollbarGutter = true;
+  recycler.rebindVisibleItems();
+  REQUIRE(bindings == 3);
+  REQUIRE(retained->getWidth() == 386);
+
+  // Raw Yoga changes and batched setter invalidation must still publish.
+  reset();
+  YGNodeStyleSetHeight(detail->getNode(), 28);
+  scroll(0.25F);
+  REQUIRE(detail->getHeight() == 28);
+  REQUIRE(layouts() > 0);
+  REQUIRE(copies == 0);
+  REQUIRE(bindings == 0);
+  reset();
+  {
+    View::LayoutBatchScope batch;
+    detail->setHeight(30);
+    scroll(0.25F);
+  }
+  REQUIRE(detail->getHeight() == 30);
+  REQUIRE(layouts() > 0);
+  REQUIRE(!YGNodeIsDirty(retained->getNode()));
+
+  // A clean external calculation can rearrange children without publishing
+  // their absolute/event coordinates, even while the row keeps its size.
+  reset();
+  auto *title = nodes[7];
+  YGNodeStyleSetHeight(title->getNode(), 40);
+  YGNodeCalculateLayout(retained->getNode(), YGUndefined, YGUndefined,
+                        YGDirectionLTR);
+  REQUIRE(!YGNodeIsDirty(retained->getNode()));
+  REQUIRE(detail->getY() == retained->getY() + 24);
+  scroll(1.0F);
+  REQUIRE(recycler.getViewByIndex(1) == retained);
+  REQUIRE(retained->getHeight() == 64);
+  REQUIRE(detail->getY() == retained->getY() + 40);
+  REQUIRE(title->layouts > 0 && detail->layouts > 0);
+  REQUIRE(copies == 0 && bindings == 0);
+  const int publishedDetailY = detail->getY();
+  retained->applyYogaLayout();
+  REQUIRE(detail->getY() == publishedDetailY);
+  reset();
+  scroll(1.0F);
+  REQUIRE(detail->getY() == retained->getY() + 40);
+  REQUIRE(layouts() == 0);
+
+  // A provider replacement at the same range cannot reuse stale bindings.
+  reset();
+  recycler.updateItemProvider(8, [&](int i) -> const auto & { return items[i]; });
+  REQUIRE(bindings == 3);
+  REQUIRE(copies == 3);
+  REQUIRE(layouts() > 0);
+
+  // Growing beyond the whole list removes the reserved scrollbar gutter.
+  recycler.setHeight(600);
+  REQUIRE(recycler.scrollOffset == 0);
+  REQUIRE(recycler.getViewByIndex(7) != nullptr);
+  REQUIRE(recycler.getViewByIndex(1)->getWidth() == 400);
+}
+
 void testRecyclerIgnoresMouseSynthesizedTouchSelection() {
   RecyclerView<int> recycler(
       [](const int left, const int right) { return left == right; });
@@ -992,6 +1173,7 @@ int main() {
   testTwentyThousandEntriesCreateOnlyVisibleRows();
   testVirtualizedPaginationThresholdAndScrollRetention();
   testRecyclerBindingSeesAppliedRowWidth();
+  testRecyclerRetainedMotionWorkAndInvalidation();
   testRecyclerIgnoresMouseSynthesizedTouchSelection();
   testRecyclerUsesPreciseWheelDeltaAndNaturalDirection();
   testRecyclerTargetsPointerEventPosition();

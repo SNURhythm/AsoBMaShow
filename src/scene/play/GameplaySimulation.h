@@ -203,6 +203,9 @@ struct GameplayAdvanceResult {
 
 struct GameplaySearchStats {
   std::size_t notesExamined = 0;
+  // Non-LR2 integration admissions and eligible-head visits, excluding the
+  // constant-time cursor boundary check.
+  std::size_t hellChargeHeadsExamined = 0;
 };
 
 struct GameplayLaneInputState {
@@ -373,6 +376,8 @@ private:
   std::vector<NoteRuntimeState> noteStates_;
   NoteStateChanges noteChanges_;
   std::vector<std::int64_t> hellChargeBalanceMicros_;
+  std::size_t hellChargeAdmissionCursor_ = 0;
+  std::vector<NoteId> eligibleHellChargeHeads_;
   std::vector<LaneRuntimeState> laneStates_;
   std::vector<GameplayReplayEvent> replayEvents_;
   std::vector<GameplayInputResult> automaticResults_;

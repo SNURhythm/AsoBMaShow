@@ -430,6 +430,7 @@ private:
 } // namespace
 
 MusicPlayerScene::~MusicPlayerScene() {
+  persistPlaybackRate();
   // Unused or already-exited players must not reset another owner's BGA state.
   if (videoFullscreenActive || videoVisualsLoaded || videoRestoresVisualsEnabled) {
     cleanup();
@@ -453,8 +454,18 @@ void MusicPlayerScene::setTabTopInset(float topInset) {
 }
 
 bool MusicPlayerScene::prepareForStorageMaintenance(std::string &) {
+  onInputQueueOverflow();
   exitVideoFullscreen();
   return true;
+}
+
+void MusicPlayerScene::onApplicationBackgroundChanged(bool background) {
+  if (!background) return;
+  // This notification can arrive while an iOS frame is pending and ordinary
+  // focus/cancel events are drained. Persist without touching text resources
+  // before cancellation invokes the slider's (now no-op) completion callback.
+  persistPlaybackRate(false);
+  if (playbackRateSlider != nullptr) playbackRateSlider->cancelPointerInput();
 }
 
 void MusicPlayerScene::onPause() {
@@ -469,6 +480,7 @@ void MusicPlayerScene::onPause() {
 }
 
 void MusicPlayerScene::onResume() {
+  if (playbackRateSlider != nullptr) playbackRateSlider->cancelPointerInput();
   const auto &profileId = context.profileManager.activeProfile().id;
   const bool sameProfile = displayedProfileId == profileId;
   // Privacy changes and profile activation already publish native metadata.
@@ -717,6 +729,7 @@ void MusicPlayerScene::update(float) {
 void MusicPlayerScene::renderScene() { updateVideoFullscreen(); }
 
 void MusicPlayerScene::cleanupScene() {
+  persistPlaybackRate();
   if (videoVisualsLoaded || videoFullscreenActive) {
     context.jukebox.unloadVisuals();
   }
@@ -1843,7 +1856,8 @@ void MusicPlayerScene::buildPlayerPage(View *page) {
   rateLabel->setVAlign(TextView::MIDDLE);
   rateLabel->setThemedColor(app_theme::textSecondary);
   playbackRateSlider =
-      new SnappedSlider([this](int percent) { setPlaybackRate(percent); });
+      new SnappedSlider([this](int percent) { setPlaybackRate(percent); },
+                        [this]() { persistPlaybackRate(); });
   playbackRateSlider->setFlex(1.0F)->setMinWidth(100);
   playbackRateValueText = new TextView(kFontPath, 16);
   playbackRateValueText->setWidth(48);
@@ -3000,6 +3014,7 @@ MusicPlayerScene::uniquePlaylistName(std::string desiredName) const {
 }
 
 void MusicPlayerScene::switchTab(MusicPlayerTab tab) {
+  if (playbackRateSlider != nullptr) playbackRateSlider->cancelPointerInput();
   activeTab = tab;
   if (activeTab != MusicPlayerTab::Player) {
     seekMouseDown = false;
@@ -3987,12 +4002,22 @@ void MusicPlayerScene::setPlaybackRate(int percent) {
 
   context.settings.musicPlayerPlaybackRatePercent = percent;
   context.settings.sanitize();
-  if (!context.saveSettings()) {
-    setStatus(i18n::tr("music_player.playback_rate_changed_but_failed_save.message"));
-  } else {
-    setStatus("");
-  }
+  pendingPlaybackRateProfileId = context.profileManager.activeProfile().id;
+  setStatus("");
   refreshPlaybackRateControl();
+}
+
+void MusicPlayerScene::persistPlaybackRate(bool updateStatusView) {
+  if (pendingPlaybackRateProfileId.empty()) return;
+  const auto profileId = std::exchange(pendingPlaybackRateProfileId, {});
+  // Profile activation saves outgoing settings before replacing context.settings.
+  // A late release must never save those values into the newly active profile.
+  if (profileId != context.profileManager.activeProfile().id) return;
+  if (!context.saveSettings()) {
+    const auto message = i18n::tr("music_player.playback_rate_changed_but_failed_save.message");
+    if (updateStatusView) setStatus(message);
+    else statusMessage = message; // refreshUi publishes it after frame retirement.
+  }
 }
 
 void MusicPlayerScene::setPlaybackMode(const std::string &id) {
@@ -4317,6 +4342,7 @@ bool MusicPlayerScene::handleProgressSeekEvents(SDL_Event &event,
 }
 
 void MusicPlayerScene::watchVideo() {
+  if (playbackRateSlider != nullptr) playbackRateSlider->cancelPointerInput();
   if (context.storageMaintenanceActive) return;
   if (videoFullscreenActive) {
     showVideoControls();
@@ -4728,6 +4754,7 @@ void MusicPlayerScene::stopPlayback() {
 }
 
 void MusicPlayerScene::goBack() {
+  if (playbackRateSlider != nullptr) playbackRateSlider->cancelPointerInput();
   if (videoFullscreenActive) {
     exitVideoFullscreen();
     return;
@@ -4743,6 +4770,7 @@ void MusicPlayerScene::goBack() {
 
 void MusicPlayerScene::onInputQueueOverflow() {
   Scene::onInputQueueOverflow();
+  persistPlaybackRate();
   seekMouseDown = false;
   activeSeekTouchId = -1;
   videoSeekMouseDown = false;

@@ -340,6 +340,20 @@ void builtInKeyModeQueries() {
     assert(stage.meta.KeyMode == 5);
     assert(stage.meta.TotalScratchNotes > 0 || stage.meta.TotalBackSpinNotes > 0);
   }
+  for (const auto sort : {ChartRecordSortCriterion::Title, ChartRecordSortCriterion::Rate}) {
+    ChartMetaQuery sortedCourse = courseQuery;
+    sortedCourse.sortCriterion = sort;
+    stages.clear();
+    fixture.session->QueryChartMeta(sortedCourse, stages);
+    QueryTrace trace;
+    fixture.trace(&trace);
+    for (std::size_t i = 0; i < stages.size(); ++i) {
+      assert(fixture.session->FindChartMetaIndex(sortedCourse, stages[i].meta.BmsPath) ==
+             static_cast<int>(i));
+    }
+    fixture.trace(nullptr);
+    assert(trace.richRows == 0);
+  }
 }
 
 void builtInRandomQueries() {
@@ -370,6 +384,34 @@ void builtInRandomQueries() {
     const auto picked = fixture.session->RandomChartMetaIndices(query, best, clears);
     fixture.trace(nullptr);
     assert(trace.richRows == 0 && trace.maximumColumns <= 5);
+    trace = {};
+    fixture.trace(&trace);
+    const auto available = fixture.session->RandomChartMetaAvailability(query, best, clears);
+    fixture.trace(nullptr);
+    assert(trace.richRows == 0 && trace.maximumColumns <= 5);
+    if (!query.tableId) assert(trace.sorts == 0);
+    for (int category = 0; category < 3; ++category) {
+      assert(available[category] == (eligible[category] >= (category == 0 ? 2 : 1)));
+    }
+    // Compare against actual visible rows, including missing table positions and
+    // repeated identities. FindChartMetaIndex returns the first matching path.
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+      if (rows[i].meta.BmsPath.empty()) continue;
+      std::size_t first = 0;
+      while (rows[first].meta.BmsPath != rows[i].meta.BmsPath) ++first;
+      trace = {};
+      fixture.trace(&trace);
+      assert(fixture.session->FindChartMetaIndex(query, rows[i].meta.BmsPath) ==
+             static_cast<int>(first));
+      fixture.trace(nullptr);
+      assert(trace.richRows == 0);
+    }
+    trace = {};
+    fixture.trace(&trace);
+    assert(fixture.session->FindChartMetaIndex(query, fixture.root / "absent.bms") == -1);
+    fixture.trace(nullptr);
+    assert(trace.richRows == 0);
+
     for (int category = 0; category < 3; ++category) {
       assert((picked[category] >= 0) == (eligible[category] >= (category == 0 ? 2 : 1)));
       if (picked[category] < 0) continue;
@@ -390,6 +432,31 @@ void builtInRandomQueries() {
   check({.sortCriterion = ChartRecordSortCriterion::Title,
          .sortDirection = ChartRecordSortDirection::Descending});
   check({.sortCriterion = ChartRecordSortCriterion::MaxBpm});
+  for (const auto sort : {ChartRecordSortCriterion::Title, ChartRecordSortCriterion::MinBpm,
+                         ChartRecordSortCriterion::MainBpm, ChartRecordSortCriterion::Difficulty,
+                         ChartRecordSortCriterion::ClearMark, ChartRecordSortCriterion::Rate}) {
+    for (const auto direction : {ChartRecordSortDirection::Ascending,
+                                 ChartRecordSortDirection::Descending}) {
+      check({.sortCriterion = sort, .sortDirection = direction});
+    }
+  }
+  // Eight physical rows collapse to four preferred identities. Split them into
+  // two No Play and two Failed identities, so any first three unordered rows
+  // meet every threshold while leaving at least one candidate unread.
+  const auto candidateCount = fixture.session->CountChartMeta({});
+  assert(candidateCount == 4);
+  auto earlyExitClears = clears;
+  earlyExitClears.rankBySha256[hash(2)].ranks[0] = kClearTypeFailedRank;
+  QueryTrace availabilityTrace;
+  fixture.trace(&availabilityTrace);
+  const auto available = fixture.session->RandomChartMetaAvailability({}, best, earlyExitClears);
+  fixture.trace(nullptr);
+  assert((available == std::array<bool, 3>{true, true, true}));
+  assert(availabilityTrace.rows >= 2 && availabilityTrace.rows <= 3);
+  assert(availabilityTrace.rows < static_cast<std::size_t>(candidateCount));
+  assert(availabilityTrace.richRows == 0 && availabilityTrace.maximumColumns <= 5);
+  assert(availabilityTrace.sorts == 0);
+
   check({.clearMarkFilter = true, .clearMarkRank = kNoClearTypeRank});
   check({.scoreRank = "F"});
   check({.sortCriterion = ChartRecordSortCriterion::ClearMark});
@@ -408,6 +475,17 @@ void builtInRandomQueries() {
   check({.tableId = 1, .clearMarkFilter = true, .clearMarkRank = kNoClearTypeRank});
   check({.tableId = 1, .scoreRank = "F"});
   check({.tableId = 1, .sortCriterion = ChartRecordSortCriterion::Rate});
+  check({.tableId = 1, .sortCriterion = ChartRecordSortCriterion::Difficulty});
+  fixture.execute("INSERT INTO difficulty_table_entries(table_id,level,sha256,title,sort_order) "
+      "VALUES(1,'4',printf('%064x',1),'Repeated chart',4)");
+  check({.tableId = 1, .sortCriterion = ChartRecordSortCriterion::Title,
+         .sortDirection = ChartRecordSortDirection::Ascending});
+  fixture.execute("UPDATE chart_meta SET ln_mode=0,total_long_notes=1");
+  check({.selectedLongNoteMode = 2});
+  check({.tableId = 1, .sortCriterion = ChartRecordSortCriterion::ClearMark,
+         .selectedLongNoteMode = 2});
+
+  fixture.execute("UPDATE chart_meta SET total_long_notes=0");
   best.scoreBySha256[hash(9)].snapshots[0] = ScoreBestSnapshot{.playCount = 1};
   clears.rankBySha256[hash(9)].ranks[0] = kClearTypeFailedRank;
   fixture.execute("INSERT INTO difficulty_table_entries(table_id,level,sha256,md5,title,sort_order) "
@@ -420,6 +498,12 @@ void builtInRandomQueries() {
   std::stop_source stop;
   stop.request_stop();
   expectFailure([&] { fixture.session->RandomChartMetaIndices({}, best, clears, stop.get_token()); });
+  expectFailure([&] { fixture.session->RandomChartMetaAvailability({}, best, clears, stop.get_token()); });
+  assert((fixture.session->RandomChartMetaAvailability(
+      {.solidArchivesOnly = true}, best, clears) == std::array<bool, 3>{}));
+  assert((fixture.session->RandomChartMetaAvailability(
+      {.coursesOnly = true}, best, clears) == std::array<bool, 3>{}));
+
 }
 
 void differentialQueries() {
