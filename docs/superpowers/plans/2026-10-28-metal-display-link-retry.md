@@ -90,5 +90,18 @@ fallback without depending on headless callback delivery. This verifies ownershi
 behavior, not live callback cadence or device latency.
 
 Independent review passed specification and code-quality checks with no remaining
-actionable correctness findings. Device results are pending; no deployment or
-installation was performed.
+actionable correctness findings. No deployment or installation was performed by
+the agent.
+
+## First device result and decision
+
+After the `490ab0b7` candidate, the user reports approximately **15.1 ms Present
+Delay before pausing, with 120 FPS sustained**. This is about 0.8 ms below the
+previous 15.9 ms acquisition-gate report and does not reproduce the earlier
+presentation-wait experiment's drop to 60 FPS.
+
+Keep this display-link candidate. Treat the improvement as provisional: the
+previous report was on a warm iPad using a fast charger, and matching thermal and
+charging conditions have not been confirmed. Post-resume delay for this candidate
+has not yet been reported; the earlier approximately 12 ms post-resume result
+belongs to the acquisition-gate candidate and remains a separate comparison.
