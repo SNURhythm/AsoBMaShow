@@ -55,6 +55,7 @@ group run passed 121 of 122 checks; the remaining `main_menu_tabs_tests` failed
 to compile an outdated hidden-selector fixture. The missing notification/profile
 boundary members were already used by unchanged production code. Updating only
 the fixture made its focused rerun pass (3.21s), completing all 122 selected
-checks. Independent review is pending. Device frame-time benefit remains unmeasured. The prior blur-on
+checks. Independent review of the full branch through `2a60d261` found no
+critical, important or minor issues. Device frame-time benefit remains unmeasured. The prior blur-on
 pause/resume Present Delay observation has no established connection to these
 CPU allocation reductions.
