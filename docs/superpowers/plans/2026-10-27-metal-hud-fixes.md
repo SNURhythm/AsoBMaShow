@@ -4,7 +4,7 @@
 
 **Goal:** Address the rendering overhead, missing iOS drawable limit, and measurement gaps identified from the M5 Metal HUD.
 
-**Architecture:** Keep bgfx changes in generated-source compatibility patches. Reuse bounded UI upload caching and the existing latency histograms. Preserve the tested software pacing policy while observing real drawable presentation separately.
+**Architecture:** Keep bgfx changes in generated-source compatibility patches. Reuse bounded UI upload caching and the existing latency histograms. Retain the software pacing mechanism and display-refresh policy, account for synchronous drawable waits in the frame budget, and observe real presentation separately.
 
 **Tech Stack:** C++23, Objective-C++/Metal, bgfx, CMake, native GPU readback tests, Python build setup tests.
 
@@ -55,7 +55,9 @@ Interface: Persist `tripleBuffering=false` by default. Metal uses two drawables 
 Files: new narrow Metal observer header and CMake patch, existing latency telemetry tests and `src/main.cpp`.
 Interface: Optional observer receives drawable acquisition duration and presentation request/actual times. Observations populate bounded histograms only when app telemetry is enabled. Periodic diagnostics report bgfx resource use and process resident memory without conflating those figures with Metal HUD footprint.
 - [x] Add tests for valid/invalid presentation timestamp deltas, then implement the optional backend observer and telemetry consumer.
-- [x] Keep the software pacer unchanged and rename its timestamp to reflect CPU submission rather than physical presentation.
+- [x] Keep the software pacer and distinguish CPU submission from physical presentation. The follow-up budgets iOS pacing from frame start so drawable waits do not add another software interval.
 - [x] Run focused rendering/platform tests, desktop main build and iOS compile verification. Review the entire unstaged diff and document measurement limits.
 
 Verification status: desktop and unsigned iOS builds pass; telemetry-enabled main compiles on both platforms; affected native tests pass 12/12 and full iOS setup suite passes 54/54. The user-requested repair of the stale platform-exclusion test expectation is included. Native Metal smoke observed the actual drawable property changing 2 → 3 → 2. Final independent review found no issues. Prepared for pull request after verification and independent review.
+
+Follow-up: corrected iOS frame-budget accounting after a report of 60 FPS with two drawables and Unlimited. The deterministic double-wait regression failed before the fix and passes after it; four focused pacing/display tests and desktop/unsigned iOS builds pass. Device throughput still requires retesting.

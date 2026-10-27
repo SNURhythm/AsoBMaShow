@@ -22,12 +22,35 @@ avoidable queued frame.
   discarded. Telemetry also logs process resident bytes, renderer texture and
   render-target bytes, and transient upload usage every five seconds.
 
-The software pacing policy remains unchanged. Previous display-link experiments
-had touch-latency regressions; compare on hardware before replacing that policy.
+The display-refresh policy and worker-thread timer remain in use. A follow-up
+fix changes the iOS timer's frame-budget accounting as described below; it does
+not switch to display-link-driven rendering.
 The drawable limit is carried in an app-owned bit in the pinned bgfx reset
 flags, with a configuration-time collision check. This keeps ordinary resize,
 display rollback and replay-export restoration consistent without modifying
 the upstream submodule.
+
+## Two-buffer pacing follow-up
+
+A device report found 60 FPS with Triple buffering Off and Frame cap Unlimited.
+Unlimited still uses the automatic iOS presentation limiter at the display's
+refresh rate. The loop previously advanced that limiter after synchronous
+`bgfx::frame()` returned. A drawable wait that already consumed a refresh could
+therefore be followed by another software wait, even with inexpensive GPU work.
+
+The iOS loop now budgets from the frame's start and sleeps only the remainder
+after event handling, update, drawable acquisition and submission. This also
+applies to explicit iOS caps; a lower selected cap still adds the required wait.
+Idle frames retain their timer, export keeps its existing bypass, and desktop
+and Android scheduling are unchanged. The ProMotion request and drawable count
+configuration do not impose a new 60 FPS cap.
+
+A deterministic regression failed under the old accounting and passes with the
+fix: 120 frames each spending one 120 Hz interval in submission consume 120
+refresh intervals, instead of 240. Tests also cover fast frames, a budget
+overrun, a lower explicit cap and export. This establishes the pacing defect;
+it does not establish that it is the only cause of the reported on-device drop.
+The M5 iPad was unavailable for a physical Off/On comparison.
 
 ## Device comparison
 
