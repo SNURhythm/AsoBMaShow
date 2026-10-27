@@ -67,6 +67,7 @@
 #include "TargetConditionals.h"
 #if TARGET_OS_IPHONE
 #include "iOSNatives.hpp"
+#include "../cmake/BgfxMetalPresentationGate.h"
 #include "video/IOSPresentationPacing.h"
 #include "input/IOSTouchInput.h"
 #include "input/NativeRawTouchInput.h"
@@ -1055,7 +1056,17 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   platform::IOSPreparedFrame iosPreparedFrame;
   std::uint64_t lastUiPresentationGeneration = 0;
   bool iosViewportRestorePending = false;
-  const auto submitIOSFrame = [](bool discard) {
+  const auto submitIOSFrame = [&context](bool discard) {
+    const auto keepRunning = [](void* opaque) {
+      const auto& context = *static_cast<ApplicationContext*>(opaque);
+      return IOSApplicationActive() &&
+          !context.appInBackground.load(std::memory_order_acquire) &&
+          !context.quitFlag.load(std::memory_order_acquire) &&
+          !context.replayVideoExportActive.load(std::memory_order_acquire) &&
+          !context.rendererAccess.exportRequested();
+    };
+    asobmashow::metalPresentation::Scope presentationScope(
+        discard ? nullptr : +keepRunning, &context);
     bgfx::frame(discard ? BGFX_FRAME_DISCARD : BGFX_FRAME_NONE);
   };
 #endif
@@ -1083,6 +1094,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     }
     const bool previous =
         context.appInBackground.exchange(background, std::memory_order_acq_rel);
+#if TARGET_OS_IPHONE
+    if (background) asobmashow::metalPresentation::cancel();
+#endif
     if (background) storage_management::RequestCancelStorageTask(context);
     if (previous == background) {
       return;
@@ -1119,6 +1133,10 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     storage_management::PollStorageTask(context);
     bool ranApplicationWork = false;
 #if TARGET_OS_IPHONE
+    if (!IOSApplicationActive() || context.appInBackground.load(std::memory_order_acquire) ||
+        context.replayVideoExportActive.load(std::memory_order_acquire) ||
+        context.rendererAccess.exportRequested())
+      asobmashow::metalPresentation::cancel();
     // Only acknowledge lifecycle events already forwarded before this owner's
     // event drain. A later UIKit pulse must wait for the next restored frame.
     const auto iosInputGeneration = GetIOSCompletedPumpLifecycleGeneration();

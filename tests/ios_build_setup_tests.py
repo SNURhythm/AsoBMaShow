@@ -638,7 +638,9 @@ int main() { return 0; }
             self.assertIn("nativeTexture->bufferBytesPerRow()", patched)
             self.assertIn("m_cmd.kick(false, true)", patched)
             self.assertIn("m_metalLayer->setMaximumDrawableCount(3);", patched)
-            for telemetry in ("asoMetalPresentationObserver", "addPresentedHandler", "CACurrentMediaTime"):
+            self.assertIn("asobmashow::metalPresentation::acquire()", patched)
+            self.assertIn("addPresentedHandler", patched)
+            for telemetry in ("asoMetalPresentationObserver", "CACurrentMediaTime"):
                 self.assertFalse(telemetry in patched,
                                  f"Metal presentation telemetry remains: {telemetry}")
             self.assertIn("m_drawable = occluded ? NULL : m_metalLayer->nextDrawable();", patched)
