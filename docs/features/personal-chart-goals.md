@@ -42,7 +42,13 @@ unknown historical evidence, practice/autoplay/assisted plays, altered playback,
 and course stages do not. A per-profile summary retains the best evidence for
 each chart/LN mode/lamp (five gauge rows plus one best combo count), updated
 atomically with score inserts. Existing Hazard proximity rows are ignored.
-Existing profiles start with empty gauge and combo summaries. Browsing uses these indexed
+Existing profiles start with empty gauge summaries. The version-15 migration
+backfills qualifying counts (1–5 breaks) once from eligible, completed local scores, independently
+of whether gauge evidence was recorded. It preserves better existing combo bests,
+keeps LN modes separate, and records completion in the same transaction so
+subsequent startups do not rescan history. Imported scores and unreadable or
+ineligible provenance are excluded; the existing explicit ruleset compatibility
+exception also applies. Browsing uses these indexed
 summaries and the existing best-lamp cache, without scanning play history or replay
 files. Grade-family gauges are course evidence and do not create chart goals.
 
@@ -53,13 +59,14 @@ stores its final calculated value. The evidence also retains how many notes
 were actually passed, so surviving an aborted portion is not mistaken for
 surviving the whole chart. Abort cleanup does not overwrite this evidence.
 
-Historical records have unknown gauge evidence and cannot supply these recommendations.
+Historical records have unknown gauge evidence and cannot supply gauge recommendations;
+their saved combo-break counts can supply Full Combo recommendations.
 Only numeric bests remain in the score database. In-flight chart saves temporarily
 keep typed numeric evidence in the replay database's pending-save tables, with
 integrity validation, so recovery can finish the score and summary transaction.
 Acknowledging that save deletes the temporary evidence. Completed chart and course
-result history does not store a gauge-evidence payload, and migration performs no
-history backfill.
+result history does not store a gauge-evidence payload, and migration does not
+backfill gauge evidence.
 
 ## Using goals
 

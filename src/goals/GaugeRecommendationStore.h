@@ -6,7 +6,7 @@
 
 namespace chart_goals {
 // Authoritative numeric bests: five gauges and one combo count per chart/LN scope. These
-// are updated with the score transaction, never rebuilt from result history.
+// are updated with the score transaction. V15 seeds combo counts once from scores.
 inline bool gaugeSummaryInstalled(sqlite3 *db) {
   SqliteStatementHandle query;
   if (prepareSqliteStatement(db, "SELECT chart_sha256,ln_mode,target,gauge_value,border,death_notes,total_notes,gap FROM goal_gauge_best LIMIT 0", query) != SQLITE_OK)

@@ -146,6 +146,23 @@ or a reason to spend extra time or tokens proving compliance.
 The [optimization report](docs/testing/cold-suite-optimization-2026-10-17.md)
 contains examples and timing context if needed.
 
+## Private Profile Test Fixture
+
+- A repaired real-device profile is available locally at
+  `/Users/xf/AsoBMaShow-test-fixtures/repaired-ipad-profile-2026-10-28/`.
+  Read its `README.md` and `manifest.json` for provenance, checksums, and counts.
+- It contains only consolidated `scores.db` (schema 15, 833 chart scores,
+  25 course scores) and `replays.db` (numeric schema 20, 326 chart results,
+  12 course results, 323 replay-file references). It predates combo-summary backfill.
+- Always copy the databases to a temporary directory before running tests or
+  migrations. Keep the baseline unchanged. This is private player data:
+  never commit or upload the databases or copies of their contents.
+- Settings, credentials, caches, and replay payload files are omitted. Use it
+  for schema, score, recommendation, and result-record tests; replay references
+  intentionally point to absent payloads, so it is not a playback fixture.
+- Keep automated CI tests self-contained with small synthetic fixtures; this
+  optional local fixture must not become a required dependency of the suite.
+
 ## Local Build Verification
 
 - Start with the relevant subsystem group in [docs/testing/README.md](docs/testing/README.md).

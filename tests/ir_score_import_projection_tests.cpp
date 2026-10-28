@@ -380,6 +380,73 @@ void testGaugeRecommendationSummaries() {
   ScoreRepository other(root / "other.db");
   assert(other.EnsureSchema());
   assert(queryInt(root / "other.db", "SELECT COUNT(*) FROM goal_gauge_best") == 0);
+  // Version 15 backfills completed local plays without requiring gauge payloads.
+  input.ruleset = RulesetDescriptor::For(GameplayRuleset::LR2);
+  input.candidateSelection = gameplay::CandidateSelectionMode::LR2;
+  input.gaugeProfile = GaugeProfile::Standard;
+  const auto historicalProvenance = makeScoreProvenance(input);
+  int historyAttempt = 20;
+  const auto historical = [&](char hash, int breaks, int passed, int mode = 0,
+                              const ScoreProvenance *provenance = nullptr) {
+    pending.attemptId = "123e4567-e89b-42d3-a456-4266141750" + std::to_string(historyAttempt++);
+    pending.score.chartSha256 = std::string(64, hash);
+    pending.score.longNoteMode = mode;
+    pending.score.comboBreak = breaks;
+    pending.score.pGreat = 75; pending.score.great = 0;
+    pending.score.good = passed - 75 - breaks;
+    pending.score.bad = breaks; pending.score.poor = 0; pending.score.kPoor = 7;
+    pending.score.provenance = provenance ? *provenance : historicalProvenance;
+    pending.gaugeEvidence = {};
+    save();
+  };
+  historical('f', 4, 100);
+  historical('f', 2, 100); // The minimum comes from any play, not just best EX.
+  historical('f', 3, 100, 2); // LN scopes remain independent.
+  historical('f', 4, 100, 3); // A better existing summary must survive.
+  historical('1', 1, 99); // Empty POORs cannot make an incomplete play look complete.
+  historical('2', 1, 100);
+  historical('3', 1, 100);
+  historical('4', 1, 100);
+  historical('5', 3, 100);
+  input.ruleset = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  input.candidateSelection = gameplay::CandidateSelectionMode::Lowest;
+  input.gaugeProfile = GaugeProfile::Standard9Keys;
+  const auto pmsProvenance = makeScoreProvenance(input);
+  historical('6', 1, 100, 0, &pmsProvenance); // PMS BAD did not consume the last note.
+  historical('7', 1, 101, 0, &pmsProvenance); // 100 consumed notes plus one PMS BAD.
+  scores.Shutdown();
+  assert(sqlite3_open(path.string().c_str(), &db) == SQLITE_OK);
+  const auto exec = [&](const char *sql) { assert(sqlite3_exec(db,sql,nullptr,nullptr,nullptr)==SQLITE_OK); };
+  exec("INSERT INTO goal_combo_best SELECT chart_sha256,ln_mode,1 FROM scores WHERE chart_sha256 LIKE 'f%' AND ln_mode=3;"
+       "UPDATE scores SET eligibility=1 WHERE chart_sha256 LIKE '2%';"
+       "UPDATE scores SET score_source=1 WHERE chart_sha256 LIKE '3%';"
+       "UPDATE scores SET provenance_json='invalid' WHERE chart_sha256 LIKE '4%';"
+       "UPDATE scores SET ruleset_version=4,provenance_json=json_set(provenance_json,'$.ruleset.version',4) WHERE chart_sha256 LIKE '5%';"
+       "DROP TABLE IF EXISTS score_v15_migration_state; PRAGMA user_version=14;"
+       "CREATE TRIGGER reject_combo_backfill BEFORE INSERT ON goal_combo_best BEGIN SELECT RAISE(ABORT,'test failure'); END");
+  sqlite3_close(db);
+  assert(!scores.EnsureSchema());
+  assert(queryInt(path, "PRAGMA user_version") == 14);
+  assert(queryInt(path, "SELECT COUNT(*) FROM sqlite_master WHERE name='score_v15_migration_state'") == 0);
+  assert(sqlite3_open(path.string().c_str(), &db) == SQLITE_OK);
+  exec("DROP TRIGGER reject_combo_backfill");
+  sqlite3_close(db);
+  assert(scores.EnsureSchema());
+  assert(queryInt(path, "SELECT combo_break FROM goal_combo_best WHERE chart_sha256 LIKE 'f%' AND ln_mode=0") == 2);
+  assert(queryInt(path, "SELECT combo_break FROM goal_combo_best WHERE chart_sha256 LIKE 'f%' AND ln_mode=2") == 3);
+  assert(queryInt(path, "SELECT combo_break FROM goal_combo_best WHERE chart_sha256 LIKE 'f%' AND ln_mode=3") == 1);
+  assert(queryInt(path, "SELECT combo_break FROM goal_combo_best WHERE chart_sha256 LIKE '5%'") == 3);
+  assert(queryInt(path, "SELECT combo_break FROM goal_combo_best WHERE chart_sha256 LIKE '7%'") == 1);
+  assert(queryInt(path, "SELECT COUNT(*) FROM goal_combo_best WHERE substr(chart_sha256,1,1) IN ('1','2','3','4','6')") == 0);
+  assert(queryInt(path, "SELECT COUNT(*) FROM scores") == 19);
+  assert(queryInt(path, "PRAGMA user_version") == 15);
+  // Reopening does not re-read history once the migration completed.
+  scores.Shutdown();
+  assert(sqlite3_open(path.string().c_str(), &db) == SQLITE_OK);
+  exec("CREATE TRIGGER no_repeat_backfill BEFORE INSERT ON goal_combo_best BEGIN SELECT RAISE(ABORT,'must not repeat'); END");
+  sqlite3_close(db);
+  assert(scores.EnsureSchema());
+
 }
 
 void testKomboProjectionIsAtomicAndUsesEffectiveLamp() {

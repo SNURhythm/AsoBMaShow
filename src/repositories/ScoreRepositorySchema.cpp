@@ -1898,6 +1898,73 @@ bool migrateScoreDatabaseToVersion14(sqlite3 *db) {
   return setDatabaseUserVersion(db, 14);
 }
 
+// The unpublished v15 goal migration also seeds combo bests from score history.
+// Its marker covers profiles that already opened an earlier v15 test build and
+// prevents rescanning history on later schema checks (including deferred v14).
+bool migrateScoreGoalsToVersion15(sqlite3 *db) {
+  if (!chart_goals::ensureGaugeSummary(db)) return false;
+  bool exists = false;
+  if (!sqliteTableExists(db, "score_v15_migration_state", exists,
+                         "checking goal migration state")) return false;
+  if (exists) {
+    SqliteStatementHandle state;
+    if (prepareSqliteStatement(db, "SELECT completed FROM score_v15_migration_state", state) != SQLITE_OK)
+      return false;
+    const int rc = sqlite3_step(state);
+    if (rc == SQLITE_ROW)
+      return sqlite3_column_type(state, 0) == SQLITE_INTEGER && sqlite3_column_int(state, 0) == 1 &&
+             sqlite3_step(state) == SQLITE_DONE;
+    if (rc != SQLITE_DONE) return false;
+  }
+  SqliteStatementHandle rows, insert;
+  if (prepareSqliteStatement(db,
+      "SELECT lower(trim(chart_sha256)),ln_mode,combo_break,max_score,pgreat,great,good,bad,poor,clear_type,provenance_json "
+      "FROM scores WHERE score_source=0 AND eligibility=0 AND combo_break BETWEEN 1 AND 5 "
+      "AND max_score BETWEEN 2 AND 2147483647 AND max_score%2=0 AND ln_mode BETWEEN 0 AND 3 "
+      "AND pgreat>=0 AND great>=0 AND good>=0 AND bad>=0 AND poor>=0 "
+      "AND length(trim(chart_sha256))=64 AND lower(trim(chart_sha256)) NOT GLOB '*[^0-9a-f]*' "
+      "AND (clear_type>=100 OR pgreat+great+good+bad+poor>=max_score/2) "
+      "AND NOT EXISTS(SELECT 1 FROM goal_combo_best b WHERE b.chart_sha256=lower(trim(scores.chart_sha256)) "
+      "AND b.ln_mode=scores.ln_mode AND b.combo_break<=scores.combo_break)", rows) != SQLITE_OK ||
+      prepareSqliteStatement(db,
+      "INSERT INTO goal_combo_best(chart_sha256,ln_mode,combo_break) VALUES(?,?,?) "
+      "ON CONFLICT(chart_sha256,ln_mode) DO UPDATE SET combo_break=min(goal_combo_best.combo_break,excluded.combo_break)", insert) != SQLITE_OK)
+    return false;
+  const auto previousLr2 = previousBestScoreCompatibleRuleset(RulesetDescriptor::For(GameplayRuleset::LR2));
+  const auto previousBeatoraja = previousBestScoreCompatibleRuleset(RulesetDescriptor::For(GameplayRuleset::Beatoraja));
+  int rc;
+  while ((rc = sqlite3_step(rows)) == SQLITE_ROW) {
+    std::string error;
+    const auto provenance = deserializeScoreProvenance(sqliteColumnString(rows, 10), error);
+    if (!provenance || provenance->eligibility != ScoreEligibility::Verified ||
+        (!isSupportedRulesetDescriptor(provenance->ruleset) &&
+         (!previousLr2 || provenance->ruleset != *previousLr2) &&
+         (!previousBeatoraja || provenance->ruleset != *previousBeatoraja)) ||
+        provenance->autoPlay || provenance->practice || provenance->clubMode ||
+        provenance->assistOption != assist_options::kOff || !provenance->playback.neutral() ||
+        provenance->startingGaugePercent || gaugeProfileIsCourse(provenance->gaugeProfile)) continue;
+    // A clear proves completion. Failed plays need all note judgements; empty
+    // POORs and PMS BADs do not consume notes and cannot fill an aborted tail.
+    const bool pms = provenance->ruleset.id == "beatoraja" &&
+                     provenance->gaugeProfile == GaugeProfile::Standard9Keys;
+    const auto judged = static_cast<double>(sqlite3_column_int64(rows, 4)) +
+        sqlite3_column_int64(rows, 5) + sqlite3_column_int64(rows, 6) +
+        (pms ? 0 : sqlite3_column_int64(rows, 7)) + sqlite3_column_int64(rows, 8);
+    if (sqlite3_column_int(rows, 9) < kClearTypeAssistedEasyClearRank &&
+        judged != sqlite3_column_int64(rows, 3) / 2) continue;
+    sqlite3_reset(insert);
+    if (!bindSqliteText(insert, 1, sqliteColumnString(rows, 0)) ||
+        sqlite3_bind_int(insert, 2, sqlite3_column_int(rows, 1)) != SQLITE_OK ||
+        sqlite3_bind_int(insert, 3, sqlite3_column_int(rows, 2)) != SQLITE_OK ||
+        sqlite3_step(insert) != SQLITE_DONE) return false;
+  }
+  if (rc != SQLITE_DONE) return false;
+  return execSql(db, "CREATE TABLE IF NOT EXISTS score_v15_migration_state("
+                    "completed INTEGER NOT NULL PRIMARY KEY CHECK(completed=1)) WITHOUT ROWID",
+                 "creating goal migration state") &&
+         execSql(db, "INSERT INTO score_v15_migration_state VALUES(1)", "recording goal migration completion");
+}
+
 std::string scoreMigrationHashHasValue(std::string_view columnName) {
   const std::string column(columnName);
   return "scores." + column + " IS NOT NULL AND trim(scores." + column +
@@ -2268,7 +2335,7 @@ bool createCurrentScoreSchema(sqlite3 *db) {
     logSqlErrorText("creating current score summaries", *error);
     return false;
   }
-  return chart_goals::ensureGaugeSummary(db) &&
+  return migrateScoreGoalsToVersion15(db) &&
          ensureScorePlayDurationInvariant(db, false) &&
          recordScoreDataRepairs(db) &&
          setDatabaseUserVersion(db, kScoreDatabaseSchemaVersion) &&
@@ -2425,7 +2492,7 @@ bool score_repository_detail::EnsureSchemaOnConnection(
     return false;
   }
   const auto migratedVersion = readSqliteUserVersion(db, versionError);
-  if (!migratedVersion || !chart_goals::ensureGaugeSummary(db) ||
+  if (!migratedVersion || !migrateScoreGoalsToVersion15(db) ||
       (*migratedVersion >= 14 && !setDatabaseUserVersion(db, kScoreDatabaseSchemaVersion))) return false;
   bool repairsComplete = false;
   if (!scoreDataRepairsComplete(db, repairsComplete) ||
