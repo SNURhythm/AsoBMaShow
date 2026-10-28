@@ -261,16 +261,20 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
   goalBubble->setTarget(-1, {}, {});
   goalBubble->showFor(false);
   const bool random = record.randomSelect.has_value();
-  artworkPlaceholder->setText(ui_icons::textForCodepoint(random ? 0xf074 : ui_icons::kMusic));
-  detailsLayout->setVisible(!random);
-  detailsLayout->setDisplay(random ? YGDisplayNone : YGDisplayFlex);
-  scoreRankColumn->setVisible(!random);
-  scoreRankColumn->setDisplay(random ? YGDisplayNone : YGDisplayFlex);
+  const bool action = record.addRecommendedGoals;
+  artworkPlaceholder->setText(ui_icons::textForCodepoint(action ? ui_icons::kPlus : random ? 0xf074 : ui_icons::kMusic));
+  detailsLayout->setVisible(!random && !action);
+  detailsLayout->setDisplay(random || action ? YGDisplayNone : YGDisplayFlex);
+  scoreRankColumn->setVisible(!random && !action);
+  scoreRankColumn->setDisplay(random || action ? YGDisplayNone : YGDisplayFlex);
   std::string title = meta.Title;
   if (!meta.SubTitle.empty()) {
     title += " " + meta.SubTitle;
   }
-  if (random) {
+  if (action) {
+    titleView->setLocalizedText(i18n::message("goals.ui.add_recommended"));
+    artistView->setText("");
+  } else if (random) {
     constexpr std::array labels{"menu.random_chart.all", "menu.random_chart.no_play",
                                 "menu.random_chart.failed"};
     titleView->setLocalizedText(i18n::message(labels[static_cast<std::size_t>(*record.randomSelect)]));

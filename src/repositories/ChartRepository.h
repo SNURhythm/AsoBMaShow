@@ -119,6 +119,7 @@ struct ChartMetaRecord {
   std::string difficultyTableLabels;
   bool courseStart = false;
   bool unzipAll = false;
+  bool addRecommendedGoals = false;
   bool unavailable = false;
   bool solidArchive = false;
   std::uint64_t archiveSize = 0;

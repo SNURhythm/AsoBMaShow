@@ -227,7 +227,7 @@ private:
   std::array<SelectorTabState, 2> selectorStates_;
 
   RecyclerView<ChartMetaRecord> *recyclerView = nullptr;
-  Button *addRecommendedGoalsButton_ = nullptr;
+  ChartMetaRecord recommendedGoalsRow_;
   RecyclerView<LibraryFolderItem> *folderRecyclerView = nullptr;
   struct LibraryFolderMetadataCache {
     bool valid = false;

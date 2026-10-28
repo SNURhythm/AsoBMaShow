@@ -49,6 +49,20 @@ MusicSelectProjection fixture(std::uint64_t revision = 1) {
   return value;
 }
 
+void testRecommendedGoalActionFollowsCharts() {
+  auto projection = fixture();
+  projection.bars[0].children.push_back({"action:add-recommended-goals"});
+  projection.bars.push_back({.id={"action:add-recommended-goals"},
+      .kind=skin::MusicSelectBarKind::Container, .title="Add recommended goals", .selectable=true});
+  for (const auto *sort : {"TITLE", "CLEAR", "SCORE"}) {
+    MusicSelectBarManager manager(projection, {.sortId=sort});
+    require(manager.open({"folder:a"}), "goal folder opens");
+    const auto rows = manager.readView();
+    require(rows.rowCount() == 3 && rows.rowAt(2).id.value == "action:add-recommended-goals",
+            "recommended goals action stays after charts under sorting");
+  }
+}
+
 void testRivalLampComparisonUsesStrength() {
   auto projection = fixture();
   for (std::size_t i = 2; i < 4; ++i) {
@@ -1157,6 +1171,7 @@ void testOpeningProviderBackedIdSurvivesSelectedRowCacheEviction() {
 }
 
 int main(int argc, char **argv) {
+  testRecommendedGoalActionFollowsCharts();
   testRivalLampComparisonUsesStrength();
   {
     auto table = fixture();

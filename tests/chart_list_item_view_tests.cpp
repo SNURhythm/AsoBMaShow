@@ -6,6 +6,8 @@
 #include "view/ImageView.h"
 #include "view/UiTheme.h"
 #include "view/MainMenuTheme.h"
+#include "view/IconText.h"
+#include "i18n/Localization.h"
 
 #include <bgfx/bgfx.h>
 
@@ -362,6 +364,15 @@ int main() {
     require(jacket->imagePath().empty() && !goal->getVisible() &&
                 !rankBadge->getVisible(),
             "random rows do not borrow chart artwork, scores, or goal actions");
+    ChartMetaRecord action;
+    action.addRecommendedGoals = true;
+    row.setMeta(action);
+    auto *placeholder = dynamic_cast<TextView *>(row.findViewByName("chartListArtworkPlaceholder"));
+    auto *actionTitle = dynamic_cast<TextView *>(title);
+    require(placeholder && actionTitle && placeholder->getText() == ui_icons::textForCodepoint(ui_icons::kPlus) &&
+                actionTitle->getText() == i18n::tr("goals.ui.add_recommended") &&
+                actionTitle->fontWeight() == TextView::FontWeight::Bold && !goal->getVisible() && !rankBadge->getVisible(),
+            "recommendations row reuses the chart title and artwork slot without chart controls");
     record.randomSelect.reset();
     row.setMeta(record);
     require(goal->getVisible() && rankBadge->getVisible(),

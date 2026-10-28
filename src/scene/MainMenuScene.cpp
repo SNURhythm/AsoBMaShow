@@ -1314,7 +1314,6 @@ void MainMenuScene::refreshTasksButton() {
 void MainMenuScene::initView(ApplicationContext &context) {
   tutorial_ = nullptr;
   addFolderButton_ = nullptr;
-  addRecommendedGoalsButton_ = nullptr;
   tutorialRightScroll_ = nullptr;
   detailsContent_ = nullptr;
   detailsControlsContent_ = nullptr;
@@ -1456,6 +1455,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                a.difficultyTableLabels == b.difficultyTableLabels &&
                a.courseStart == b.courseStart &&
                a.unzipAll == b.unzipAll &&
+               a.addRecommendedGoals == b.addRecommendedGoals &&
                a.randomSelect == b.randomSelect &&
                a.unavailable == b.unavailable &&
                a.solidArchive == b.solidArchive &&
@@ -1647,7 +1647,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   recyclerView->onSelected = [selectChart](const ChartMetaRecord &record, int idx) {
     selectChart(record, idx, false);
   };
-  recyclerView->onSelectedByPointer = [selectChart](const ChartMetaRecord &record, int idx) {
+  recyclerView->onSelectedByPointer = [this, selectChart](const ChartMetaRecord &record, int idx) {
+    if (record.addRecommendedGoals) {
+      defer([this] { openChartGoals({}, {}, true); return true; }, 0, true);
+      return;
+    }
     selectChart(record, idx, true);
   };
   recyclerView->onUnselected = [this](const ChartMetaRecord &item, int idx) {
@@ -2253,18 +2257,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   recyclerView->setBorderWidth(0);
   recyclerView->setCornerRadius(app_theme::controlRadius());
   left->addView(recyclerView);
-  TextView *recommendationText = nullptr;
-  addRecommendedGoalsButton_ = makeSelectorButton(i18n::message("goals.ui.add_recommended"), 21, &recommendationText, ui_icons::kPlus);
-  addRecommendedGoalsButton_->setName("addRecommendedGoals");
-  addRecommendedGoalsButton_->setHeight(56)->setFlexShrink(0);
-  styleMenuButton(addRecommendedGoalsButton_, recommendationText);
-  addRecommendedGoalsButton_->setOnClickListener([this] {
-    defer([this] { openChartGoals({}, {}, true); return true; }, 0, true);
-  });
-  const bool showRecommendations = !temporaryChartFolder && activeFolder.type == LibraryFolderItem::Type::Goals;
-  addRecommendedGoalsButton_->setVisible(showRecommendations);
-  addRecommendedGoalsButton_->setDisplay(showRecommendations ? YGDisplayFlex : YGDisplayNone);
-  left->addView(addRecommendedGoalsButton_);
   browser->addView(left);
 
   auto right = new View();
@@ -3735,11 +3727,6 @@ void MainMenuScene::prepareAssignmentChartQuery() {
 }
 
 void MainMenuScene::reloadChartList(bool preserveViewState) {
-  if (addRecommendedGoalsButton_) {
-    const bool show = !temporaryChartFolder && activeFolder.type == LibraryFolderItem::Type::Goals;
-    addRecommendedGoalsButton_->setVisible(show);
-    addRecommendedGoalsButton_->setDisplay(show ? YGDisplayFlex : YGDisplayNone);
-  }
   if (recyclerView == nullptr || !chartSession.has_value()) {
     return;
   }
@@ -3831,7 +3818,11 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   chartListCache.reset(*chartSession, query, databaseCount,
                        std::move(leadingRecord), std::move(randomRecords));
   const int leadingOffset = chartListCache.leadingCount();
-  const int count = databaseCount + leadingOffset;
+  const bool hasRecommendationsRow = !temporaryChartFolder && activeFolder.type == LibraryFolderItem::Type::Goals;
+  recommendedGoalsRow_ = {};
+  recommendedGoalsRow_.addRecommendedGoals = true;
+  const int chartCount = databaseCount + leadingOffset;
+  const int count = chartCount + (hasRecommendationsRow ? 1 : 0);
   int randomSelectedIndex = -1;
   if (selectedChartRecord && selectedChartRecord->randomSelect) {
     randomSelectedIndex = chartListCache.randomRecordIndex(*selectedChartRecord);
@@ -3839,7 +3830,8 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     else selectedChartRecord.reset();
   }
   recyclerView->setItemProvider(
-      count, [this](int index) -> const ChartMetaRecord & {
+      count, [this, chartCount](int index) -> const ChartMetaRecord & {
+        if (index == chartCount) return recommendedGoalsRow_;
         return chartListCache.get(index);
       });
   refreshPlayOptionButtons();
@@ -5059,6 +5051,10 @@ void MainMenuScene::startSelectedChart() {
 
   const auto record = selectedRecordSnapshot();
   if (!record.has_value()) {
+    return;
+  }
+  if (record->addRecommendedGoals) {
+    defer([this] { openChartGoals({}, {}, true); return true; }, 0, true);
     return;
   }
   if (record->randomSelect) {
@@ -8812,7 +8808,6 @@ void MainMenuScene::cleanupScene() {
   selectorStates_ = {};
   tutorial_ = nullptr;
   addFolderButton_ = nullptr;
-  addRecommendedGoalsButton_ = nullptr;
   tutorialRightScroll_ = nullptr;
   detailsContent_ = nullptr;
   detailsControlsContent_ = nullptr;

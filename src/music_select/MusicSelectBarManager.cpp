@@ -438,6 +438,9 @@ void MusicSelectBarManager::rebuildRows(
     if (sortable) {
       std::stable_sort((*rows_).begin(), (*rows_).end(), [this](const auto &left,
                                                           const auto &right) {
+        const bool leftAction = left.id.value == "action:add-recommended-goals";
+        const bool rightAction = right.id.value == "action:add-recommended-goals";
+        if (leftAction != rightAction) return !leftAction;
         return sourceCompare(left, right, config_.sortId) < 0;
       });
     }
