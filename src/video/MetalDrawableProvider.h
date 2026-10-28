@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 
 namespace video {
 // Optional borrowed-drawable source. Returning true from acquire means this
@@ -9,6 +10,7 @@ namespace video {
 struct MetalDrawableProvider {
   bool (*acquire)(void *layer, void **drawable);
   bool (*shouldPresent)(void *layer, void *drawable);
+  std::uint64_t (*timingToken)() = nullptr;
 };
 }
 

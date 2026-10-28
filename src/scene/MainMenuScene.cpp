@@ -11,6 +11,7 @@
 #include "RecordsDiagnostics.h"
 #include "MainMenuLibrary.h"
 #include "../ArchiveFile.h"
+#include "../video/MetalPresentationTiming.h"
 #include "../BmsChartFile.h"
 #include "../CourseConstraintUtils.h"
 #include "../LongNoteModeUtils.h"
@@ -6148,6 +6149,9 @@ void MainMenuScene::startParseLogExport() {
     parseLogExportStatusText->setLocalizedText(i18n::message("menu.preparing_performance_log.progress"));
   }
   std::string logText = archive_file::debugLogText();
+#if TARGET_OS_IPHONE
+  logText += video::presentationTiming::exportText();
+#endif
   const std::uint64_t exportLimit = std::max<std::uint64_t>(
       1, static_cast<std::uint64_t>(logText.size()));
   parseLogDocumentHandoff =

@@ -5,6 +5,8 @@
 #include <bgfx/bgfx.h>
 #include <cstdio>
 #include <cstdlib>
+#include <chrono>
+#include <thread>
 
 @interface AsoDrawableProbeLayer : CAMetalLayer
 @property(nonatomic) NSUInteger acquisitions;
@@ -23,6 +25,8 @@ void require(bool value, const char *message) {
 void *supplied = nullptr;
 unsigned providerCalls = 0, presentationCalls = 0;
 bool allowPresentation = true;
+std::uint64_t activeTimingToken = 0;
+std::uint64_t timingToken() { return activeTimingToken; }
 bool acquire(void *, void **drawable) {
   ++providerCalls;
   *drawable = supplied;
@@ -33,7 +37,7 @@ bool present(void *, void *drawable) {
   ++presentationCalls;
   return allowPresentation;
 }
-const video::MetalDrawableProvider provider{acquire, present};
+const video::MetalDrawableProvider provider{acquire, present, timingToken};
 }
 
 int main() {
@@ -62,16 +66,51 @@ int main() {
     supplied = (__bridge void *)drawable;
     const auto acquired = layer.acquisitions;
     allowPresentation = false;
+    using namespace video::presentationTiming;
+    activeTimingToken = capture().begin(CACurrentMediaTime(), 0, 0, 41);
+    const auto rejectedToken = activeTimingToken;
     bgfx::touch(0);
     bgfx::frame();
     require(providerCalls == 2 && presentationCalls == 1 &&
                 layer.acquisitions == acquired,
             "borrowed drawable is checked at presentation without reacquisition");
     allowPresentation = true;
+    activeTimingToken = capture().begin(CACurrentMediaTime(),
+        CACurrentMediaTime() + .008, CACurrentMediaTime() + .016, 42);
     bgfx::touch(0);
     bgfx::frame();
     require(providerCalls == 3 && presentationCalls == 2 && layer.acquisitions == acquired,
             "valid borrowed provider drawable uses ordinary command-buffer presentation");
+    const auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    bool timingComplete = false;
+    do {
+      const auto rows = capture().snapshot();
+      unsigned recorded = 0;
+      for (const auto &row : rows) {
+        if (row.token != rejectedToken && row.token != activeTimingToken) continue;
+        for (auto event : {Event::RenderSubmit, Event::GpuStart, Event::GpuEnd,
+                           Event::PresentRequest, Event::PresentScheduled})
+          recorded += row.times[static_cast<unsigned>(event)] > 0;
+        const auto start = row.times[static_cast<unsigned>(Event::GpuStart)];
+        const auto end = row.times[static_cast<unsigned>(Event::GpuEnd)];
+        require(!start || !end || end >= start, "native GPU times are ordered");
+      }
+      // Three render stages on both frames, two presentation stages only on
+      // the accepted frame. Snapshot contention is an explicit capture loss.
+      timingComplete = recorded + capture().droppedUpdates() == 8;
+      if (!timingComplete) std::this_thread::yield();
+    } while (!timingComplete && std::chrono::steady_clock::now() < timeout);
+    require(timingComplete,
+            "real Metal callbacks record the provider token or report contention loss");
+    for (const auto &row : capture().snapshot()) {
+      if (row.token == rejectedToken) {
+        require(row.times[static_cast<unsigned>(Event::PresentRequest)] == 0 &&
+                row.times[static_cast<unsigned>(Event::PresentScheduled)] == 0 &&
+                row.times[static_cast<unsigned>(Event::Displayed)] == 0,
+                "rejected drawable cannot manufacture presentation timestamps");
+      }
+    }
+    activeTimingToken = 0;
     supplied = nullptr;
     drawable = nil;
 

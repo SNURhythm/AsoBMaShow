@@ -14,7 +14,7 @@ function(asobmashow_patch_bgfx_metal_presentation content_variable)
     endif()
     string(REPLACE "${drawable_count}" "m_metalLayer->setMaximumDrawableCount(3);" source "${source}")
     set(include_anchor "#include \"renderer_mtl.h\"")
-    set(include_fixed "#include \"${CMAKE_CURRENT_FUNCTION_LIST_DIR}/BgfxMetalDrawableProvider.cpp\"\n#if BX_PLATFORM_IOS\n#include \"${CMAKE_CURRENT_FUNCTION_LIST_DIR}/BgfxMetalPresentationGate.cpp\"\n#endif\n${include_anchor}")
+    set(include_fixed "#include \"${CMAKE_CURRENT_FUNCTION_LIST_DIR}/BgfxMetalDrawableProvider.cpp\"\n#if BX_PLATFORM_IOS\n#include \"${CMAKE_CURRENT_FUNCTION_LIST_DIR}/BgfxMetalPresentationGate.cpp\"\n#endif\n${include_anchor}\n#include \"${CMAKE_CURRENT_FUNCTION_LIST_DIR}/BgfxMetalPresentationTiming.cpp\"")
     set(acquire_anchor "\t\t\tm_drawable = occluded ? NULL : m_metalLayer->nextDrawable();")
     set(acquire_fixed [=[
             void* providedDrawable = NULL;
@@ -58,9 +58,12 @@ function(asobmashow_patch_bgfx_metal_presentation content_variable)
     set(present_fixed [=[if (asobmashowMetalShouldPresent(frameBuffer.m_swapChain->m_metalLayer,
                             frameBuffer.m_swapChain->m_drawable))
                         {
+                            asobmashowMetalRecordPresentTiming(presentCommandBuffer);
                             presentCommandBuffer->presentDrawable( (MTL::Drawable*)frameBuffer.m_swapChain->m_drawable);
                         }]=])
-    foreach(hook include acquire init destroy present)
+    set(render_anchor "m_gpuTimer.addHandlers(m_commandBuffer, _render->m_frameNum);")
+    set(render_fixed "${render_anchor}\n            asobmashowMetalRecordRenderTiming(m_commandBuffer);")
+    foreach(hook include acquire init destroy present render)
         string(FIND "${source}" "${${hook}_anchor}" offset)
         if(offset EQUAL -1)
             message(FATAL_ERROR "bgfx Metal presentation ${hook} changed; review acquisition pacing")

@@ -603,11 +603,12 @@ int main() { return 0; }
             renderer = source / "bgfx/src/renderer_mtl.cpp"
             renderer.parent.mkdir(parents=True)
             renderer.write_text(original, encoding="utf-8")
+            shutil.copy2(ROOT / "bgfx/bgfx/src/bgfx.cpp", renderer.parent / "bgfx.cpp")
             (source / "CMakeLists.txt").write_text(
                 "cmake_minimum_required(VERSION 3.22)\n"
                 "project(bgfx LANGUAGES CXX)\n"
                 'set(BGFX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/bgfx")\n'
-                'add_library(bgfx STATIC "${BGFX_DIR}/src/renderer_mtl.cpp")\n'
+                'add_library(bgfx STATIC "${BGFX_DIR}/src/renderer_mtl.cpp" "${BGFX_DIR}/src/bgfx.cpp")\n'
                 'file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/compiled-sources.txt" '
                 'CONTENT "$<TARGET_PROPERTY:bgfx,SOURCES>")\n'
                 'file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/objcxx-standard.txt" '
@@ -621,9 +622,10 @@ int main() { return 0; }
             sources = (source / "build/compiled-sources.txt").read_text().split(";")
             self.assertNotIn(str(renderer), sources,
                              "iOS still compiles the upstream iOS 16 reflection path")
-            self.assertEqual(1, len(sources))
+            self.assertEqual(2, len(sources))
+            self.assertIn(str(root / "cmake/BgfxFrameSubmission.cpp"), sources)
             self.assertEqual("20;ON", (source / "build/objcxx-standard.txt").read_text())
-            compiled = Path(sources[0])
+            compiled = next(Path(path) for path in sources if path.endswith("renderer_mtl.mm"))
             expected = original.replace(
                 "m_usesMTLBindings, macOS 13.0, iOS 16.0,",
                 "m_usesMTLBindings, macOS 13.0, iOS 17.0,",
@@ -649,6 +651,9 @@ int main() { return 0; }
             self.assertIn("if (asobmashowMetalShouldPresent(", patched)
             self.assertIn("presentCommandBuffer->presentDrawable( (MTL::Drawable*)frameBuffer.m_swapChain->m_drawable);", patched)
             self.assertIn("BgfxMetalDrawableProvider.cpp", patched)
+            self.assertIn("BgfxMetalPresentationTiming.cpp", patched)
+            self.assertIn("asobmashowMetalRecordRenderTiming(m_commandBuffer)", patched)
+            self.assertIn("asobmashowMetalRecordPresentTiming(presentCommandBuffer)", patched)
             self.assertEqual(original, renderer.read_text(), "submodule must remain untouched")
             modified = compiled.stat().st_mtime_ns
             result = subprocess.run(command, capture_output=True, text=True)

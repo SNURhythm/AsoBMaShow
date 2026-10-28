@@ -1061,7 +1061,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   platform::IOSPreparedFrame iosPreparedFrame;
   std::uint64_t lastUiPresentationGeneration = 0;
   bool iosViewportRestorePending = false;
-  const auto submitIOSFrame = [&context](bool discard) {
+  const auto submitIOSFrame = [&context, &iosDisplayLink](bool discard) {
     if (discard) video::MetalDisplayLink::pauseCurrent();
     const auto keepRunning = [](void* opaque) {
       const auto& context = *static_cast<ApplicationContext*>(opaque);
@@ -1073,6 +1073,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     };
     asobmashow::metalPresentation::Scope presentationScope(
         discard ? nullptr : +keepRunning, &context);
+    iosDisplayLink.markPreparationEnd();
     bgfx::frame(discard ? BGFX_FRAME_DISCARD : BGFX_FRAME_NONE);
   };
 #endif
@@ -1222,6 +1223,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     }
     // Includes idle frames, interruption, export, quit and every early continue.
     const auto releaseDisplayLinkFrame = makeScopeExit([&] { iosDisplayLink.endFrame(); });
+    iosDisplayLink.markPreparationStart(
+        context.profileGameplayActive.load(std::memory_order_acquire));
 #endif
 
     auto currentFrameTime = std::chrono::steady_clock::now();

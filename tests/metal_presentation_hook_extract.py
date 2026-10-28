@@ -29,13 +29,14 @@ def extract(output):
         # Outside the hook, all native acquire ownership/presentation code is
         # byte-for-byte unchanged. Init/destruction only gain reset prefixes.
         tail = '\n\t\t\tif (m_drawable != NULL)'
-        assert generated[end:] == original[original.index(tail, original.index('MTL::Texture* SwapChainMtl::currentDrawableTexture()')):]
+        assert generated[end:].replace('\n            asobmashowMetalRecordRenderTiming(m_commandBuffer);', '') == original[original.index(tail, original.index('MTL::Texture* SwapChainMtl::currentDrawableTexture()')):]
         present = 'presentCommandBuffer->presentDrawable( (MTL::Drawable*)frameBuffer.m_swapChain->m_drawable);'
         assert present in generated
         assert 'if (asobmashowMetalShouldPresent(' in generated
         for anchor in ('#include "renderer_mtl.h"', 'm_drawable = occluded ? NULL : m_metalLayer->nextDrawable();',
                        'void SwapChainMtl::init(void* _nwh)', 'SwapChainMtl::~SwapChainMtl()',
-                       'm_metalLayer->setMaximumDrawableCount(bx::clamp<uint32_t>(', present):
+                       'm_metalLayer->setMaximumDrawableCount(bx::clamp<uint32_t>(', present,
+                       'm_gpuTimer.addHandlers(m_commandBuffer, _render->m_frameNum);'):
             source.write_text(original.replace(anchor, 'changed upstream anchor', 1))
             result = subprocess.run(command, capture_output=True, text=True)
             assert result.returncode != 0 and 'changed' in result.stderr, anchor

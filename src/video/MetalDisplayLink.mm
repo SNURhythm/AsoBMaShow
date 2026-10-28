@@ -1,6 +1,7 @@
 #include "MetalDisplayLink.h"
 #include "MetalDisplayLinkFrame.h"
 #include "MetalDrawableProvider.h"
+#include "MetalPresentationTiming.h"
 #include "../targets.h"
 #if TARGET_OS_IPHONE
 #include "../../cmake/BgfxMetalPresentationGate.h"
@@ -22,6 +23,7 @@ struct MetalDisplayLinkState {
   MetalDisplayLinkFrame frame;
   std::function<bool()> isCurrent;
   std::uint64_t generation = 0;
+  std::uint64_t timingToken = 0;
   float rate = 0;
   double retryAfter = 0;
   bool claimed = false, scheduled = false;
@@ -41,6 +43,16 @@ API_AVAILABLE(macos(14.0), ios(17.0))
   if (state->link == link && state->isCurrent && state->isCurrent() &&
       update.drawable != nil &&
       state->frame.receive(CACurrentMediaTime(), update.targetTimestamp)) {
+    state->timingToken = video::presentationTiming::capture().begin(
+        CACurrentMediaTime(), update.targetTimestamp,
+        update.targetPresentationTimestamp, state->generation);
+    const auto token = state->timingToken;
+    if (token) {
+      [update.drawable addPresentedHandler:^(id<MTLDrawable> drawable) {
+        video::presentationTiming::capture().record(token,
+            video::presentationTiming::Event::Displayed, drawable.presentedTime);
+      }];
+    }
     state->drawable = update.drawable;
     CFRunLoopStop(CFRunLoopGetCurrent());
   }
@@ -52,6 +64,9 @@ namespace {
 thread_local MetalDisplayLinkState *current = nullptr;
 
 void endFrame(MetalDisplayLinkState &state) {
+  presentationTiming::capture().record(state.timingToken,
+      presentationTiming::Event::FrameEnd, CACurrentMediaTime());
+  state.timingToken = 0;
   state.frame.finish();
   state.drawable = nil;
   state.isCurrent = {};
@@ -107,7 +122,8 @@ bool shouldPresent(void *layer, void *drawable) {
   state.scheduled = state.scheduled || allowed;
   return allowed;
 }
-const MetalDrawableProvider provider{acquireDrawable, shouldPresent};
+std::uint64_t timingToken() { return current ? current->timingToken : 0; }
+const MetalDrawableProvider provider{acquireDrawable, shouldPresent, timingToken};
 }
 
 MetalDisplayLink::MetalDisplayLink()
@@ -186,6 +202,14 @@ bool MetalDisplayLink::beginFrame(void *nativeLayer, float refreshRate,
 
 bool MetalDisplayLink::hasFrame() const { return state_->frame.managed(); }
 bool MetalDisplayLink::didSchedulePresent() const { return state_->scheduled; }
+void MetalDisplayLink::markPreparationStart(bool gameplay) {
+  presentationTiming::capture().record(state_->timingToken,
+      presentationTiming::Event::PreparationStart, CACurrentMediaTime(), gameplay);
+}
+void MetalDisplayLink::markPreparationEnd() {
+  presentationTiming::capture().record(state_->timingToken,
+      presentationTiming::Event::PreparationEnd, CACurrentMediaTime());
+}
 void MetalDisplayLink::endFrame() { video::endFrame(*state_); }
 // Merely setting paused leaves the layer owned by CAMetalDisplayLink, which
 // forbids nextDrawable. Detach before timer fallback or export takes ownership.
