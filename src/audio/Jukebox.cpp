@@ -1681,6 +1681,33 @@ bool Jukebox::consumeFullscreenReuse(const PreparedGameplayBgaFrame &frame) noex
   return true;
 }
 
+Jukebox::FullscreenVideoReadiness Jukebox::updateFullscreenVideoReadiness(
+    const PreparedGameplayBgaFrame &frame) {
+  std::lock_guard<std::mutex> lock(preparedBgaFrameMutex);
+  if (frame.contentEpoch != bgaContentEpoch.load(std::memory_order_acquire))
+    return FullscreenVideoReadiness::InvalidFrame;
+  const auto found = preparedBgaFrameLeases.find(frame.sequence);
+  if (found == preparedBgaFrameLeases.end()) {
+    return matchesFullscreenLease(frame, {}) ? FullscreenVideoReadiness::Ready
+                                            : FullscreenVideoReadiness::InvalidFrame;
+  }
+  const auto &lease = found->second;
+  if (!matchesFullscreenLease(frame, lease)) return FullscreenVideoReadiness::InvalidFrame;
+  auto readiness = FullscreenVideoReadiness::Ready;
+  for (const auto *surface : {&lease.base, &lease.layer, &lease.miss}) {
+    if (!*surface || (*surface)->descriptor.mediaKind != GameplayBgaMediaKind::Video)
+      continue;
+    const auto &video = (*surface)->video;
+    if (!video) return FullscreenVideoReadiness::InvalidFrame;
+    if (video->contentIdentity() == 0) {
+      video->update();
+      preparedGameplayBgaVideoUpdates.fetch_add(1, std::memory_order_relaxed);
+      if (video->contentIdentity() == 0) readiness = FullscreenVideoReadiness::Pending;
+    }
+  }
+  return readiness;
+}
+
 bool Jukebox::submitFullscreenComplete(const PreparedGameplayBgaFrame &frame) noexcept {
   fullscreenGameplayBgaSubmissions.fetch_add(1, std::memory_order_relaxed);
   std::optional<PreparedBgaFrameLease> lease;

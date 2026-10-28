@@ -16,6 +16,7 @@ fixture = r'''
 #include <stdexcept>
 #include <stop_token>
 #include <string>
+#include <thread>
 #include <vector>
 int readbacks = 0, blits = 0, acquired = 0, released = 0, begun = 0, advances = 0;
 bool drawsAccepted = true, uiComplete = true, allocationFailure = false;
@@ -90,11 +91,36 @@ for path in range(2):
 fixture += r'''
 struct PreparedGameplayBgaFrame {};
 int failureStage = 0, stage = 0, liveLeases = 0;
+bool videoPending = false, invalidFrame = false;
+int pendingPolls = 0, readinessPolls = 0, waitCalls = 0;
+std::chrono::steady_clock::time_point testTime{};
+std::stop_source *cancelDuringWait = nullptr;
+auto testNow() { return testTime; }
+void testSleepFor(std::chrono::milliseconds duration) {
+  require(stage == 0, "pending video must not emit fullscreen draws");
+  testTime += duration;
+  ++waitCalls;
+  if (cancelDuringWait) cancelDuringWait->request_stop();
+}
+void resetReadiness(int pending = 0) {
+  videoPending = pending != 0; invalidFrame = false;
+  pendingPolls = pending; readinessPolls = waitCalls = 0;
+  testTime = {}; cancelDuringWait = nullptr;
+  failureStage = stage = 0; liveLeases = 1;
+}
 struct Jukebox {
+  enum class FullscreenVideoReadiness { Ready, Pending, InvalidFrame };
+  FullscreenVideoReadiness updateFullscreenVideoReadiness(const PreparedGameplayBgaFrame &) {
+    ++readinessPolls;
+    if (invalidFrame) return FullscreenVideoReadiness::InvalidFrame;
+    if (pendingPolls-- > 0) return FullscreenVideoReadiness::Pending;
+    videoPending = false;
+    return FullscreenVideoReadiness::Ready;
+  }
   void finalizePrepared(const PreparedGameplayBgaFrame &) { --liveLeases; }
   bool submitFullscreenComplete(const PreparedGameplayBgaFrame &frame) {
     finalizePrepared(frame);
-    return ++stage != failureStage;
+    return !videoPending && ++stage != failureStage;
   }
 };
 namespace rendering {
@@ -110,14 +136,49 @@ struct BlurPass {
 '''
 helper_start = source.index('bool submitReplayFullscreenBga(')
 helper_end = source.index('\nbool waitForReplayExportForeground(', helper_start)
-fixture += source[helper_start:helper_end]
+fixture += source[helper_start:helper_end].replace(
+    'std::chrono::steady_clock::now()', 'testNow()').replace(
+    'std::this_thread::sleep_for', 'testSleepFor')
 fixture += r'''
+void testFullscreenInitialVideoFrame() {
+  resetReadiness(2);
+  Jukebox jukebox; rendering::BlurPass blur; std::string error;
+  require(submitReplayFullscreenBga(jukebox, blur, {}, 0.5f, {}, error),
+          "export must wait for an initially pending video instead of aborting composition");
+  require(liveLeases == 0 && readinessPolls == 3 && waitCalls == 2,
+          "ready video must retry without consuming or re-preparing its lease");
+}
+void testFullscreenVideoWaitFailures() {
+  for (int scenario = 0; scenario < 4; ++scenario) {
+    resetReadiness(10000);
+    std::stop_source stop;
+    if (scenario == 0) stop.request_stop();
+    if (scenario == 1) cancelDuringWait = &stop;
+    if (scenario == 3) invalidFrame = true;
+    Jukebox jukebox; rendering::BlurPass blur; std::string error;
+    require(!submitReplayFullscreenBga(jukebox, blur, {}, 0.5f, stop.get_token(), error),
+            "cancellation, timeout and invalid frames must abort export");
+    require(liveLeases == 0 && stage == 0, "wait failure must release once before rendering");
+    if (scenario < 2) {
+      require(error == "Replay export cancelled" && waitCalls == scenario,
+              "cancellation must stop before polling or after the first wait");
+    } else if (scenario == 2) {
+      require(error.find("timed out") != std::string::npos &&
+                  testTime.time_since_epoch() == std::chrono::seconds(5),
+              "missing video must have one bounded deadline");
+    } else {
+      require(waitCalls == 0 && error.find("no longer valid") != std::string::npos,
+              "invalid lease must fail immediately, without retrying submission");
+    }
+  }
+  resetReadiness();
+}
 void testFullscreenFailureStages() {
   for (failureStage = 0; failureStage <= 4; ++failureStage) {
     stage = 0; liveLeases = 1;
     Jukebox jukebox; rendering::BlurPass blur;
     std::string error;
-    const bool complete = submitReplayFullscreenBga(jukebox, blur, {}, 0.5f, error);
+    const bool complete = submitReplayFullscreenBga(jukebox, blur, {}, 0.5f, {}, error);
     require(complete == (failureStage == 0), "fullscreen failure was ignored");
     require(stage == (failureStage == 0 ? 4 : failureStage), "fullscreen work continued after failure");
     require(liveLeases == 0, "fullscreen failure leaked or double-released the prepared lease");
@@ -127,6 +188,8 @@ void testFullscreenFailureStages() {
 '''
 fixture += r'''
 int main() {
+  testFullscreenInitialVideoFrame();
+  testFullscreenVideoWaitFailures();
   testFullscreenFailureStages();
   testPath0(false); testPath1(false);
   drawsAccepted = false;

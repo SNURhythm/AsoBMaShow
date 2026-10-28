@@ -891,7 +891,30 @@ void configureReplayExportRenderViews(int width, int height,
 // it here because no submission will follow.
 bool submitReplayFullscreenBga(Jukebox &jukebox, rendering::BlurPass &blur,
                                const PreparedGameplayBgaFrame &frame,
-                               float brightness, std::string &errorMessage) {
+                               float brightness, std::stop_token stop,
+                               std::string &errorMessage) {
+  // Activation/seek can empty the decoder queue immediately before this frame.
+  // Retry only missing initial pixels, before emitting any fullscreen draws.
+  // The same lease and frozen export clock survive retries; gameplay never waits.
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  for (;;) {
+    if (stop.stop_requested()) {
+      jukebox.finalizePrepared(frame);
+      errorMessage = "Replay export cancelled";
+      return false;
+    }
+    const auto readiness = jukebox.updateFullscreenVideoReadiness(frame);
+    if (readiness == Jukebox::FullscreenVideoReadiness::Ready) break;
+    if (readiness == Jukebox::FullscreenVideoReadiness::InvalidFrame ||
+        std::chrono::steady_clock::now() >= deadline) {
+      jukebox.finalizePrepared(frame);
+      errorMessage = readiness == Jukebox::FullscreenVideoReadiness::InvalidFrame
+          ? "Replay fullscreen BGA prepared frame is no longer valid"
+          : "Replay fullscreen BGA timed out waiting for an initial video frame";
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
   if (!blur.prepareOutput()) {
     jukebox.finalizePrepared(frame);
     errorMessage = "Replay fullscreen BGA target preparation failed";
@@ -3699,7 +3722,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
             if (!submitReplayFullscreenBga(
                     context.jukebox, *bgaBlurPass, *presentationFrame.preparedBga,
                     static_cast<float>(settings.bgaBrightnessPercent) / 100.0f,
-                    errorMessage)) return false;
+                    options.stop, errorMessage)) return false;
           }
           return true;
         })) {
@@ -3745,7 +3768,7 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           if (!submitReplayFullscreenBga(
                   context.jukebox, *bgaBlurPass, bgaFrame,
                   static_cast<float>(settings.bgaBrightnessPercent) / 100.0f,
-                  errorMessage)) return false;
+                  options.stop, errorMessage)) return false;
           bgfx::touch(rendering::ui_view);
           if (resultPresentation.active()) {
             RenderContext::UiBatchScope uiBatchScope(renderContext);
@@ -4616,7 +4639,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                            *presentationFrame.preparedBga,
                                            static_cast<float>(
                                                settings.bgaBrightnessPercent) / 100.0f,
-                                           errorMessage)) return false;
+                                           options.stop, errorMessage)) return false;
                                  }
                                  return true;
                                })) {
@@ -4662,7 +4685,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                          context.jukebox, *bgaBlurPass, bgaFrame,
                                          static_cast<float>(
                                              settings.bgaBrightnessPercent) / 100.0f,
-                                         errorMessage)) return false;
+                                         options.stop, errorMessage)) return false;
                                  bgfx::touch(rendering::ui_view);
                                  if (stageResultPresentation.active()) {
                                    RenderContext::UiBatchScope uiBatchScope(renderContext);
@@ -4730,7 +4753,7 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                        context.jukebox, *bgaBlurPass, bgaFrame,
                                        static_cast<float>(
                                            settings.bgaBrightnessPercent) / 100.0f,
-                                       errorMessage)) return false;
+                                       options.stop, errorMessage)) return false;
                                bgfx::touch(rendering::ui_view);
                                if (courseResultPresentation.active()) {
                                  RenderContext::UiBatchScope uiBatchScope(renderContext);

@@ -289,6 +289,11 @@ public:
   void finalizePrepared(
       const PreparedGameplayBgaFrame &frame) noexcept override;
   void submitFullscreen(const PreparedGameplayBgaFrame &frame) noexcept override;
+  enum class FullscreenVideoReadiness { Ready, Pending, InvalidFrame };
+  // Export may retry missing initial video frames without advancing the chart
+  // or consuming this lease. Already prepared video content stays pinned.
+  [[nodiscard]] FullscreenVideoReadiness updateFullscreenVideoReadiness(
+      const PreparedGameplayBgaFrame &frame);
   [[nodiscard]] bool submitFullscreenComplete(
       const PreparedGameplayBgaFrame &frame) noexcept;
   // Reuse still validates and explicitly consumes this presentation's lease.

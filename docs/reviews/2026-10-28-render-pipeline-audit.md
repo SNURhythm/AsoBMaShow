@@ -117,3 +117,28 @@ Verification:
 - Native Noop coverage checks exact draw capacity, saturation, subsequent recovery despite a high historical peak, additional encoders and initialization/shutdown. Real Metal coverage checks UI saturation/retry/recovery, independent horizontal/vertical blur edge colors, and BGA output/cache/lease behavior.
 - Desktop `main` and unsigned iOS device builds pass. All 77 rendering/video checks plus three additional distinct UI/export checks pass: **80 distinct tests**. The focused extra run has six tests, three overlapping the rendering/video group. No Android build or physical-device run was performed.
 - Independent integration review found a legacy batch failure-propagation gap; the regression was reproduced and fixed. Follow-up review reports no findings. No deployment was performed.
+
+## PR review follow-up: initial video readiness during export
+
+The checked fullscreen tail exposed a decoder-startup race: activating a BGA
+video seeks and empties its decoded queue, while preparation polls it without
+blocking. A valid video surface can therefore have no initial pixels yet;
+that state must not immediately become a fatal composition failure.
+
+All five fullscreen export paths now poll readiness on the same prepared lease
+before submitting its composition. Only videos without initial content update;
+ready surfaces and the export clock remain unchanged. Cancellation, invalid
+leases and a five-second retry deadline stop the operation and release its lease
+exactly once. The deadline/cancellation checks run between decoder updates; they
+do not interrupt an update already executing. Actual target, allocation,
+composition and blur failures still abort before readback. Gameplay preparation
+remains nonblocking, and embedded-skin/retained-post-seek behavior is unchanged.
+
+The export-helper regression failed before the fix. Controlled-clock checks now
+cover pending success, pre-existing/during-wait cancellation, timeout, invalid
+leases and existing stage failures without real sleeps. Real Metal fixtures
+cover software and native videos at initial activation and a new clip mid-chart,
+matching decoded output while preserving lease ownership. All 16 video checks
+and the three focused BGA/export checks pass; desktop `main` builds. Independent
+static review reports no actionable findings. The unsigned iOS device build also
+passes. No deployment was performed.

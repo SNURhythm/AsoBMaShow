@@ -2000,8 +2000,35 @@ void testFullscreenBgaReuseOnMetal() {
     bms_parser::Chart videoChart;
     videoChart.Meta.Folder = directory.root;
     videoChart.ReferencedBmpTable.emplace(1, path.filename().string());
+    videoChart.ReferencedBmpTable.emplace(2, path.filename().string());
     appendBgaTimeline(videoChart, 0, 1, -1);
+    appendBgaTimeline(videoChart, 80'000, 2, -1);
     jukebox.loadVisuals(videoChart, cancelled);
+    const auto awaitInitialVideo = [&](long long micros) {
+      const auto frame = prepare(micros);
+      require(frame.base && frame.base->mediaKind == GameplayBgaMediaKind::Video,
+              "new video retains its lease even before initial decoding completes");
+      const auto before = jukebox.gameplayBgaSubmissionStats();
+      const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+      auto readiness = jukebox.updateFullscreenVideoReadiness(frame);
+      while (readiness == Jukebox::FullscreenVideoReadiness::Pending &&
+             std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+        readiness = jukebox.updateFullscreenVideoReadiness(frame);
+      }
+      require(readiness == Jukebox::FullscreenVideoReadiness::Ready,
+              "same prepared software/native video lease becomes ready for export");
+      const auto after = jukebox.gameplayBgaSubmissionStats();
+      require(after.preparedFrames == before.preparedFrames &&
+                  after.pinnedFrames == before.pinnedFrames,
+              "readiness retries neither re-prepare nor release the frame");
+      const auto pixels = present(frame, false).pixels;
+      require(jukebox.updateFullscreenVideoReadiness(frame) ==
+                  Jukebox::FullscreenVideoReadiness::InvalidFrame,
+              "consumed video lease cannot be revived by a readiness retry");
+      return pixels;
+    };
+    const auto initialPixels = awaitInitialVideo(0);
     const auto awaitVideo = [&](long long micros, std::uint64_t previous = 0) {
       const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
       do {
@@ -2017,12 +2044,16 @@ void testFullscreenBgaReuseOnMetal() {
     auto frame = awaitVideo(0);
     const auto firstIdentity = frame.base->contentIdentity;
     const auto firstPixels = present(frame, false).pixels;
+    require(firstPixels == initialPixels,
+            "waiting for initial software/native pixels matches ordinary decoded output");
     require(present(prepare(0), true).pixels == firstPixels,
             "repeated software/native decoded frame reuses identical pixels");
     frame = awaitVideo(40'000, firstIdentity);
     const auto newPixels = present(frame, false).pixels;
     require(newPixels != firstPixels && present(prepare(40'000), true).pixels == newPixels,
             "new software/native decoded content invalidates then reuses");
+    require(awaitInitialVideo(80'000) == firstPixels,
+            "a new clip activated mid-chart waits for its own first frame");
     jukebox.seekVisualsToSongTime(0);
     frame = awaitVideo(0);
     require(frame.base->contentIdentity != firstIdentity,
