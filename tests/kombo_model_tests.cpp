@@ -22,6 +22,46 @@ Play play(DayId day, std::string chart) {
           .lamp = 600, .score = 180, .maxScore = 200};
 }
 int main() {
+  {
+    auto assignment = config().assignments.front();
+    auto attempt = play(39000, "assist");
+    assignment.eligibleLamp = 100;
+    assignment.eligibleOrBelow = true;
+    attempt.previousLamp = 150;
+    CHECK(eligible(assignment, attempt));
+    assignment.eligibleLamp = 50;
+    attempt.previousLamp = 100;
+    CHECK(!eligible(assignment, attempt));
+    assignment.eligibleOrBelow = false;
+    attempt.previousLamp = 150;
+    CHECK(eligible(assignment, attempt));
+    CHECK(lampLabel(50) == "LIGHT ASSIST EASY" && lampLabel(150) == lampLabel(50));
+    assignment.eligibleLamp = -2;
+    assignment.targetLamp = 100;
+    attempt.lamp = 150;
+    CHECK(!matches(assignment, attempt));
+    assignment.targetLamp = 50;
+    attempt.lamp = 100;
+    CHECK(matches(assignment, attempt));
+    for (const auto [initial, harderLamp] : {std::pair{0, 50}, {50, 100}, {100, 200}}) {
+      State state;
+      auto settings = config(1, 1);
+      settings.assignments[0].targetLamp = initial;
+      configure(state, settings, 39000);
+      attempt.lamp = initial;
+      CHECK(record(state, attempt, 0) == 1);
+      CHECK(state.days.at(39000).assignments[0].requirement.targetLamp == harderLamp);
+    }
+    State retained;
+    auto settings = config();
+    settings.assignments[0].targetLamp = 200;
+    configure(retained, settings, 39000);
+    attempt.lamp = 100;
+    CHECK(record(retained, attempt, 0) == 0);
+    attempt.lamp = 150;
+    CHECK(record(retained, attempt, 0) == 0);
+    CHECK(retained.days.at(39000).assignments[0].chartProgress.at("assist").lamp == 100);
+  }
   State activity;
   const auto end = localDay(1735689600); // The seven slots must cross a year boundary.
   activity.configurations[end - 4] = config();

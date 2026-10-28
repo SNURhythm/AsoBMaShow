@@ -1,4 +1,5 @@
 #include "KomboStore.h"
+#include "../ClearLampOrder.h"
 #include "../../yoga/lib/nlohmann/json.hpp"
 #include "../repositories/SqliteRAII.h"
 #include <algorithm>
@@ -17,6 +18,25 @@ NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(Day, config, played, frozen, points, assignme
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE(State, version, configurations, days, savings, freezes,
     freezePurchases, currentKombo, bestKombo, milestones)
 namespace {
+void normalizeLamps(State &state) {
+  const auto assignment = [](Assignment &value) {
+    value.eligibleLamp = normalizeClearLamp(value.eligibleLamp);
+    value.targetLamp = normalizeClearLamp(value.targetLamp);
+  };
+  const auto config = [&](Config &value) {
+    for (auto &entry : value.assignments) assignment(entry);
+  };
+  for (auto &[id, value] : state.configurations) config(value);
+  for (auto &[id, day] : state.days) {
+    config(day.config);
+    for (auto &progress : day.assignments) {
+      assignment(progress.requirement);
+      assignment(progress.originalRequirement);
+      for (auto &[chart, achievement] : progress.chartProgress)
+        achievement.lamp = normalizeClearLamp(achievement.lamp);
+    }
+  }
+}
 void require(bool condition, sqlite3 *db) {
   if (!condition) throw std::runtime_error("Kombo storage: " + sqliteDatabaseError(db));
 }
@@ -105,6 +125,7 @@ State load(sqlite3 *db) {
     }
   }
   auto state = json.get<State>();
+  normalizeLamps(state);
   if (state.savings < 0 || state.freezes < 0 || state.bestKombo < 0 || state.freezePurchases < 0)
     throw std::runtime_error("Invalid kombo balances.");
   for (const auto &[id, config] : state.configurations)
@@ -136,7 +157,7 @@ State load(sqlite3 *db) {
           static_cast<std::uint64_t>(progress.charts) + progress.completedRounds > progress.usedCharts.size() ||
           progress.usedCharts.contains("") || (!day.played && !progress.usedCharts.empty()))
         throw std::runtime_error("Invalid assignment progress.");
-      constexpr std::array validLamps{-1, 0, 100, 150, 200, 300, 400, 500, 600};
+      constexpr std::array validLamps{-1, 0, 50, 100, 200, 300, 400, 500, 600};
       for (const auto &[chart, achievement] : progress.chartProgress) {
         if (chart.empty() || !day.played ||
             std::find(validLamps.begin(), validLamps.end(), achievement.lamp) == validLamps.end() ||
@@ -157,7 +178,9 @@ void save(sqlite3 *db, const State &state) {
   execute(db, "CREATE TABLE IF NOT EXISTS kombo_state (id INTEGER PRIMARY KEY CHECK(id=1), body TEXT NOT NULL)");
   SqliteStatementHandle query;
   require(prepareSqliteStatement(db, "INSERT INTO kombo_state(id,body) VALUES(1,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body", query) == SQLITE_OK, db);
-  require(bindSqliteText(query, 1, nlohmann::json(state).dump()), db);
+  auto canonical = state;
+  normalizeLamps(canonical);
+  require(bindSqliteText(query, 1, nlohmann::json(canonical).dump()), db);
   require(sqlite3_step(query) == SQLITE_DONE, db);
 }
 void recordSavedPlay(sqlite3 *db, const std::filesystem::path &chartPath,

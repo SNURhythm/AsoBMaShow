@@ -898,6 +898,13 @@ bool currentScoreSchemaIsValid(sqlite3 *db) {
   if (*version != kScoreDatabaseSchemaVersion) {
     return false;
   }
+  SqliteStatementHandle lampRevision;
+  if (prepareSqliteStatement(db,
+      "SELECT revision FROM score_summary_revisions WHERE name='clear_lamp_order'",
+      lampRevision) != SQLITE_OK || sqlite3_step(lampRevision) != SQLITE_ROW ||
+      sqlite3_column_int(lampRevision, 0) < 2) {
+    return false;
+  }
   ScoreVersion14Completion completion{};
   return inspectScoreVersion14Completion(db, completion) &&
          scoreAttemptIdentitySchemaIsExact(db) &&
@@ -1923,7 +1930,7 @@ bool migrateScoreGoalsToVersion15(sqlite3 *db) {
       "AND max_score BETWEEN 2 AND 2147483647 AND max_score%2=0 AND ln_mode BETWEEN 0 AND 3 "
       "AND pgreat>=0 AND great>=0 AND good>=0 AND bad>=0 AND poor>=0 "
       "AND length(trim(chart_sha256))=64 AND lower(trim(chart_sha256)) NOT GLOB '*[^0-9a-f]*' "
-      "AND (clear_type>=100 OR pgreat+great+good+bad+poor>=max_score/2) "
+      "AND (clear_type>0 OR pgreat+great+good+bad+poor>=max_score/2) "
       "AND NOT EXISTS(SELECT 1 FROM goal_combo_best b WHERE b.chart_sha256=lower(trim(scores.chart_sha256)) "
       "AND b.ln_mode=scores.ln_mode AND b.combo_break<=scores.combo_break)", rows) != SQLITE_OK ||
       prepareSqliteStatement(db,
@@ -1950,7 +1957,7 @@ bool migrateScoreGoalsToVersion15(sqlite3 *db) {
     const auto judged = static_cast<double>(sqlite3_column_int64(rows, 4)) +
         sqlite3_column_int64(rows, 5) + sqlite3_column_int64(rows, 6) +
         (pms ? 0 : sqlite3_column_int64(rows, 7)) + sqlite3_column_int64(rows, 8);
-    if (sqlite3_column_int(rows, 9) < kClearTypeAssistedEasyClearRank &&
+    if (normalizeClearLamp(sqlite3_column_int(rows, 9)) < kClearTypeLightAssistedEasyClearRank &&
         judged != sqlite3_column_int64(rows, 3) / 2) continue;
     sqlite3_reset(insert);
     if (!bindSqliteText(insert, 1, sqliteColumnString(rows, 0)) ||

@@ -45,6 +45,8 @@ isKnownGaugeAutoShift(GaugeAutoShiftMode value) noexcept {
 }
 
 [[nodiscard]] inline constexpr bool isKnownClearRank(int value) noexcept {
+  // Historical authenticated outcomes keep their original wire value.
+  value = normalizeClearLamp(value);
   constexpr std::array ranks{
       kClearTypeFailedRank,
       kClearTypeAssistedEasyClearRank,

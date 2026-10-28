@@ -131,7 +131,7 @@ int beatorajaClearTypeImageIndex(int rank) noexcept {
   // Result image properties expose ClearType.id, not AsoBMaShow's durable
   // clear-rank values. ClearType.getClearTypeByID falls back to NoPlay (0)
   // for an unrecognized value, so preserve that upstream fallback here.
-  switch (rank) {
+  switch (normalizeClearLamp(rank)) {
   case kClearTypeFailedRank: return 1;
   case kClearTypeAssistedEasyClearRank: return 2;
   case kClearTypeLightAssistedEasyClearRank: return 3;

@@ -925,6 +925,10 @@ void createVersion6StaleScoreSummaryFixture(const std::filesystem::path &path) {
   const auto summaryError =
       score_cache_queries::ensureScoreSummarySchema(db.get());
   assert(!summaryError.has_value());
+  // Schema setup now rebuilds summaries. Replace them with the stale v6
+  // contents this migration fixture deliberately exercises.
+  execOrAbort(db.get(), "DELETE FROM score_sha256_clear_rank_cache");
+  execOrAbort(db.get(), "DELETE FROM score_sha256_best_score_cache");
   execOrAbort(
       db.get(),
       "INSERT INTO score_sha256_clear_rank_cache(chart_sha256, ln_mode, rank) "

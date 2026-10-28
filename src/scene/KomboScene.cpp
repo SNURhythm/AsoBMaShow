@@ -675,7 +675,7 @@ void KomboScene::editor(View *body) {
     body->addView(row);
   }
   std::vector<DropdownView::Option> eligible{{"-2", i18n::tr("kombo.ui.any_previous_lamp")}};
-  for (int rank : {-1, 0, 100, 150, 200, 300, 400, 500, 600}) {
+  for (int rank : {-1, 0, 50, 100, 200, 300, 400, 500, 600}) {
     const auto color = hasClearLampColor(rank) ? std::optional(clearLampColorForRank(rank)) : std::nullopt;
     eligible.push_back({.id=std::to_string(rank), .label=lampText(rank), .leadingColor=color});
     if (rank >= 0) eligible.push_back({.id=std::to_string(rank) + "below",
@@ -698,7 +698,7 @@ void KomboScene::editor(View *body) {
         assignment_.eligibleScoreRank = integer(assignment_.eligibleScoreOrBelow ? id.substr(0, id.size() - 5) : id);
       });
   std::vector<DropdownView::Option> lamps{{"-1", i18n::tr("kombo.ui.any_lamp")}};
-  for (int rank : {0, 100, 150, 200, 300, 400, 500, 600})
+  for (int rank : {0, 50, 100, 200, 300, 400, 500, 600})
     lamps.push_back({.id=std::to_string(rank), .label=comparison("kombo.ui.at_least", lampText(rank)),
                      .leadingColor=clearLampColorForRank(rank)});
   select(body, portal_, i18n::tr("kombo.ui.lamp"), std::move(lamps), std::to_string(assignment_.targetLamp), [this](const std::string &id) { assignment_.targetLamp = integer(id);

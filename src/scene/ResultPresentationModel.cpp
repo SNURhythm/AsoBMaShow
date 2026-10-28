@@ -112,7 +112,7 @@ bool knownLampRank(int rank) {
       kClearTypeExHardClearRank,
       kClearTypeFullComboRank,
   };
-  return std::ranges::find(ranks, rank) != ranks.end();
+  return std::ranges::find(ranks, normalizeClearLamp(rank)) != ranks.end();
 }
 
 std::optional<std::string> playtypeForGame(std::string_view game) {

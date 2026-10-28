@@ -235,7 +235,7 @@ score_repository_detail::ScoreWriteOutcome insertScoreWriteOnConnectionImpl(
   bindInt(score.slow);
   bound = bound && sqlite3_bind_double(stmt.get(), bindIndex++,
                                        score.finalGauge) == SQLITE_OK;
-  bindInt(score.clearType);
+  bindInt(normalizeClearLamp(score.clearType));
   bound = bound && sqlite3_bind_int64(stmt.get(), bindIndex++,
                                        scorePlayDurationSeconds(score)) ==
                        SQLITE_OK;
@@ -568,22 +568,23 @@ void storeBestRank(ScoreRankMap &ranks, const std::string &key, int lnMode,
     it = ranks.emplace(key, ScoreRankByLongNoteMode{}).first;
   }
   const int mode = long_note_mode::normalizeValue(lnMode);
-  if (rank > it->second.ranks[static_cast<size_t>(mode)]) {
-    it->second.ranks[static_cast<size_t>(mode)] = rank;
+  if (clearLampOrder(rank) >
+      clearLampOrder(it->second.ranks[static_cast<size_t>(mode)])) {
+    it->second.ranks[static_cast<size_t>(mode)] = normalizeClearLamp(rank);
   }
 }
 
 void storeBestCourseRank(CourseScoreRankByLongNoteMode &ranks, int lnMode,
                          int rank) {
   if (lnMode == -1) {
-    ranks.wildcardRank = std::max(ranks.wildcardRank, rank);
+    ranks.wildcardRank = bestClearLamp(ranks.wildcardRank, rank);
     return;
   }
   if (lnMode < 0 || lnMode >= static_cast<int>(ranks.ranks.size())) {
     return;
   }
   auto &stored = ranks.ranks[static_cast<std::size_t>(lnMode)];
-  stored = std::max(stored, rank);
+  stored = bestClearLamp(stored, rank);
 }
 
 bool isBetterScoreSnapshot(const ScoreBestSnapshot &candidate,
@@ -608,8 +609,8 @@ void storeBestScore(ScoreBestMap &scores, const std::string &key, int lnMode,
 }
 
 std::string bestClearMarkRankExpr(std::string_view alias) {
-  return "MAX(" + score_cache_queries::detail::fullComboClearRankExpr(alias) +
-         ")";
+  return score_cache_queries::detail::bestClearRankExpr(
+      score_cache_queries::detail::fullComboClearRankExpr(alias));
 }
 
 std::string qualifiedScoreTable(std::string_view schema,
@@ -674,7 +675,7 @@ void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache,
       " s ON s.id = b.score_id LEFT JOIN (SELECT lower(trim(p.chart_sha256)) "
       "AS chart_sha256, modes.ln_mode, COUNT(*) AS play_count, "
       "SUM(CASE WHEN p.clear_type >= " +
-      std::to_string(kClearTypeAssistedEasyClearRank) +
+      std::to_string(kClearTypeLightAssistedEasyClearRank) +
       " THEN 1 ELSE 0 END) AS clear_count, "
       "CAST(strftime('%s', MAX(p.created_at)) AS INTEGER) AS last_played "
       "FROM " + qualifiedScoreTable(schema, "scores") + " p JOIN " +
@@ -709,7 +710,7 @@ void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache,
     snapshot.comboBreak = sqlite3_column_int(stmt.get(), 5);
     snapshot.finalGauge =
         static_cast<float>(sqlite3_column_double(stmt.get(), 6));
-    snapshot.clearType = sqlite3_column_int(stmt.get(), 7);
+    snapshot.clearType = normalizeClearLamp(sqlite3_column_int(stmt.get(), 7));
     snapshot.createdAt = sqliteColumnString(stmt.get(), 8);
     for (int index = 0; index < 5; ++index) {
       snapshot.judgementCounts[static_cast<std::size_t>(index)] =
@@ -798,7 +799,7 @@ int ScoreRankByLongNoteMode::bestRankForMode(int lnMode) const {
 
 int CourseScoreRankByLongNoteMode::bestRankForMode(int lnMode) const {
   const int mode = long_note_mode::normalizeValue(lnMode);
-  return std::max(ranks[static_cast<std::size_t>(mode)], wildcardRank);
+  return bestClearLamp(ranks[static_cast<std::size_t>(mode)], wildcardRank);
 }
 
 std::optional<ScoreBestSnapshot>
@@ -860,7 +861,7 @@ int ScoreClearRankCache::bestCourseRankFor(std::string_view courseKey,
   if (legacyCourseId > 0) {
     const auto idIt = rankByLegacyCourseId.find(legacyCourseId);
     if (idIt != rankByLegacyCourseId.end()) {
-      rank = std::max(rank, idIt->second.bestRankForMode(lnMode));
+      rank = bestClearLamp(rank, idIt->second.bestRankForMode(lnMode));
     }
   }
   return rank;
@@ -975,7 +976,7 @@ bool score_repository_detail::InsertCourseScoreOnConnection(
                          state.maxCombo >= courseTotalNotes;
   clearRank = clear_policy::fullComboRankForPlayback(clearRank, fullCombo,
                                                      provenance.playback);
-  sqlite3_bind_int(stmt.get(), bindIndex++, clearRank);
+  sqlite3_bind_int(stmt.get(), bindIndex++, normalizeClearLamp(clearRank));
   sqlite3_bind_int(stmt.get(), bindIndex++, provenance.ruleset.version);
   sqlite3_bind_int(stmt.get(), bindIndex++,
                    static_cast<int>(provenance.eligibility));
@@ -1090,7 +1091,8 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
           " modes ON s.ln_mode=-1 OR s.ln_mode=modes.ln_mode WHERE " + scoreChartMatchPredicate() +
           " AND (s.created_at,s.id)<(SELECT created_at,id FROM scores WHERE attempt_id=?) "
           "AND " + score_cache_queries::detail::scoreParticipatesInBestExpr("s") +
-          ") SELECT ln_mode, MAX(lamp), 0, MAX(CASE WHEN best=1 THEN score END), "
+          ") SELECT ln_mode, " + score_cache_queries::detail::bestClearRankExpr("lamp") +
+          ", 0, MAX(CASE WHEN best=1 THEN score END), "
           "MAX(CASE WHEN best=1 THEN max_score END) FROM history GROUP BY ln_mode "
           "UNION ALL SELECT n.ln_mode, " +
           score_cache_queries::detail::fullComboClearRankExpr("n", {}, true) +
@@ -1116,7 +1118,7 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
         } else {
           const int mode = long_note_mode::normalizeValue(sqlite3_column_int(previous, 0));
           auto &rank = previousRanks.ranks[static_cast<std::size_t>(mode)];
-          rank = std::max(rank, sqlite3_column_int(previous, 1));
+          rank = bestClearLamp(rank, sqlite3_column_int(previous, 1));
           previousScores.snapshots[static_cast<std::size_t>(mode)] = ScoreBestSnapshot{
               .score=sqlite3_column_int(previous, 3), .maxScore=sqlite3_column_int(previous, 4)};
         }
@@ -1284,7 +1286,7 @@ bool bindProjectedCourseScore(
   bound =
       sqlite3_bind_double(statement, index++, result.finalGauge) == SQLITE_OK &&
       bound;
-  integer(result.clearType);
+  integer(normalizeClearLamp(result.clearType));
   integer(result.provenance.ruleset.version);
   integer(static_cast<int>(result.provenance.eligibility));
   text(projection.provenanceJson);
@@ -1390,7 +1392,10 @@ result_persistence::ProjectionOutcome classifyProjectedCourseScoreCollision(
       sqlite3_column_type(statement.get(), 25) == SQLITE_FLOAT &&
       sqlite3_column_double(statement.get(), 25) ==
           static_cast<double>(result.finalGauge) &&
-      projectedCourseColumnMatchesInt(statement.get(), 26, result.clearType) &&
+      (projectedCourseColumnMatchesInt(statement.get(), 26,
+                                       normalizeClearLamp(result.clearType)) ||
+       (normalizeClearLamp(result.clearType) == kClearTypeLightAssistedEasyClearRank &&
+        projectedCourseColumnMatchesInt(statement.get(), 26, 150))) &&
       projectedCourseColumnMatchesInt(statement.get(), 27,
                                       result.provenance.ruleset.version) &&
       projectedCourseColumnMatchesInt(
@@ -1563,7 +1568,7 @@ ScoreRepository::LoadRecentScoreImprovements(std::int64_t nowUnixSeconds,
   const std::string query =
       "WITH attempts AS (SELECT s.id, lower(trim(s.chart_sha256)) AS hash, "
       "s.score, " +
-      clearRank +
+      clearLampOrderSql(clearRank) +
       " AS clear_rank, CAST(strftime('%s', s.created_at) AS INTEGER) AS "
       "played_at FROM scores s WHERE s.score_source=" +
       std::to_string(static_cast<int>(ScoreStorageSource::LocalGameplay)) +
@@ -1762,7 +1767,7 @@ score_repository_detail::LoadBestScoreOnConnection(
       snapshot.finalGauge =
           static_cast<float>(sqlite3_column_double(stmt.get(), 7));
     }
-    snapshot.clearType = sqlite3_column_int(stmt.get(), 8);
+    snapshot.clearType = normalizeClearLamp(sqlite3_column_int(stmt.get(), 8));
     snapshot.createdAt = sqliteColumnString(stmt.get(), 9);
     if (sqlite3_column_type(stmt.get(), 12) == SQLITE_TEXT) {
       snapshot.attemptId = sqliteColumnString(stmt.get(), 12);
@@ -1954,7 +1959,7 @@ score_repository_detail::LoadBestClearScoreOnConnection(
     query += "AND (attempt_id IS NULL OR attempt_id <> ?) ";
   }
   query += "ORDER BY CASE WHEN ln_mode = ? OR ln_mode = -1 THEN 0 ELSE 1 END, " +
-           effectiveClearRank + " DESC, s.score DESC, s.created_at DESC, "
+           clearLampOrderSql(effectiveClearRank) + " DESC, s.score DESC, s.created_at DESC, "
            "s.id DESC";
 
   SqliteStatementHandle stmt;
@@ -2003,7 +2008,7 @@ score_repository_detail::LoadBestClearScoreOnConnection(
     snapshot.finalGauge =
         static_cast<float>(sqlite3_column_double(stmt.get(), 7));
   }
-  snapshot.clearType = sqlite3_column_int(stmt.get(), 8);
+  snapshot.clearType = normalizeClearLamp(sqlite3_column_int(stmt.get(), 8));
   snapshot.createdAt = sqliteColumnString(stmt.get(), 9);
   if (sqlite3_column_type(stmt.get(), 11) == SQLITE_TEXT) {
     snapshot.attemptId = sqliteColumnString(stmt.get(), 11);
@@ -2091,7 +2096,7 @@ CourseSelectorOptionScores ScoreRepository::LoadCourseSelectorOptionScores(
     ScoreBestSnapshot row{
         .score = sqlite3_column_int(statement.get(), 0),
         .maxScore = sqlite3_column_int(statement.get(), 1),
-        .clearType = sqlite3_column_int(statement.get(), 3),
+        .clearType = normalizeClearLamp(sqlite3_column_int(statement.get(), 3)),
     };
     if (sqlite3_column_type(statement.get(), 2) == SQLITE_INTEGER) {
       row.badPoints = sqlite3_column_int(statement.get(), 2);
@@ -2103,7 +2108,7 @@ CourseSelectorOptionScores ScoreRepository::LoadCourseSelectorOptionScores(
     }
     aggregate->score = std::max(aggregate->score, row.score);
     aggregate->maxScore = std::max(aggregate->maxScore, row.maxScore);
-    aggregate->clearType = std::max(aggregate->clearType, row.clearType);
+    aggregate->clearType = bestClearLamp(aggregate->clearType, row.clearType);
     if (row.badPoints &&
         (!aggregate->badPoints || *row.badPoints < *aggregate->badPoints)) {
       aggregate->badPoints = row.badPoints;
@@ -2140,8 +2145,10 @@ score_repository_detail::LoadBestCourseScoreOnConnection(
         "COALESCE((SELECT id FROM course_scores WHERE attempt_id = ?), 0)) "
       : "AND (? = '' OR created_at < ?) ";
   query += preferClear
-      ? "ORDER BY clear_type DESC, score DESC, created_at DESC, id DESC LIMIT 1"
-      : "ORDER BY score DESC, clear_type DESC, created_at DESC, id DESC LIMIT 1";
+      ? "ORDER BY " + clearLampOrderSql("clear_type") +
+            " DESC, score DESC, created_at DESC, id DESC LIMIT 1"
+      : "ORDER BY score DESC, " + clearLampOrderSql("clear_type") +
+            " DESC, created_at DESC, id DESC LIMIT 1";
 
   SqliteStatementHandle stmt;
   if (!prepareSqliteStatementLogged(
@@ -2177,7 +2184,7 @@ score_repository_detail::LoadBestCourseScoreOnConnection(
   snapshot.slow = sqlite3_column_int(stmt.get(), 5);
   snapshot.finalGauge =
       static_cast<float>(sqlite3_column_double(stmt.get(), 6));
-  snapshot.clearType = sqlite3_column_int(stmt.get(), 7);
+  snapshot.clearType = normalizeClearLamp(sqlite3_column_int(stmt.get(), 7));
   snapshot.createdAt = sqliteColumnString(stmt.get(), 8);
   if (sqlite3_column_type(stmt.get(), 9) == SQLITE_TEXT) {
     snapshot.attemptId = sqliteColumnString(stmt.get(), 9);

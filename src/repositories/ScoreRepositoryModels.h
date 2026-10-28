@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../ClearLampOrder.h"
 #include "../bms_parser.hpp"
 #include "../scene/play/RhythmState.h"
 
@@ -111,8 +112,8 @@ struct RecentScoreImprovements {
   if (candidate.score != current->score) {
     return candidate.score > current->score;
   }
-  if (candidate.clearType != current->clearType) {
-    return candidate.clearType > current->clearType;
+  if (clearLampOrder(candidate.clearType) != clearLampOrder(current->clearType)) {
+    return clearLampOrder(candidate.clearType) > clearLampOrder(current->clearType);
   }
   const auto &candidateTime =
       candidate.bestOrderTime.has_value() ? candidate.bestOrderTime

@@ -223,6 +223,116 @@ void attachScoreDatabaseForTest(sqlite3 *db) {
   }
 }
 
+int testAssistedLampOrderingAndSummaryUpgrade() {
+  sqlite3 *db = nullptr;
+  ASSERT_EQ(SQLITE_OK, sqlite3_open(":memory:", &db), "open lamp fixture");
+  attachScoreDatabaseForTest(db);
+  // Exercise the source-aware trigger installed by current profiles.
+  execOrAbort(db, "ALTER TABLE score_db.scores ADD COLUMN score_source INTEGER NOT NULL DEFAULT 0");
+  ASSERT_FALSE(score_cache_queries::ensureScoreSummarySchema(db, "score_db").has_value(),
+               "source-aware summary schema initializes");
+  for (const bool assistFirst : {false, true}) {
+    const std::string hash = assistFirst ? "assist-first" : "light-first";
+    const auto insertLamp = [&](int lamp, const std::string &date) {
+      insertScore(db, hash, "", "", 0, 100, 200, 50, 1, lamp, date);
+    };
+    insertLamp(assistFirst ? kClearTypeAssistedEasyClearRank
+                           : kClearTypeLightAssistedEasyClearRank,
+               "2026-01-01 00:00:00");
+    insertLamp(assistFirst ? kClearTypeLightAssistedEasyClearRank
+                           : kClearTypeAssistedEasyClearRank,
+               "2026-01-02 00:00:00");
+    ASSERT_EQ(kClearTypeAssistedEasyClearRank,
+              queryInt(db, "SELECT rank FROM score_db.score_sha256_clear_rank_cache "
+                           "WHERE chart_sha256='" + hash + "'"),
+              "insert trigger keeps Assist Easy above Light Assist");
+    ASSERT_EQ(kClearTypeAssistedEasyClearRank,
+              queryInt(db, "SELECT clear_rank FROM score_db.score_sha256_best_score_cache "
+                           "WHERE chart_sha256='" + hash + "'"),
+              "equal EX scores prefer Assist Easy regardless of insertion order");
+  }
+  insertScore(db, "light-only", "", "", -1, 100, 200, 50, 1,
+              kClearTypeLightAssistedEasyClearRank, "2026-01-01 00:00:00");
+  insertScore(db, "score-first", "", "", 0, 100, 200, 50, 1,
+              kClearTypeAssistedEasyClearRank, "2026-01-01 00:00:00");
+  insertScore(db, "score-first", "", "", 0, 150, 200, 50, 1,
+              kClearTypeLightAssistedEasyClearRank, "2026-01-02 00:00:00");
+  insertScore(db, "legacy-zero-break", "", "", 0, 100, 200, 100, 0,
+              150, "2026-01-02 00:00:00");
+  ASSERT_EQ(50, queryInt(db, "SELECT rank FROM score_db.score_sha256_clear_rank_cache "
+                           "WHERE chart_sha256='legacy-zero-break'"),
+            "legacy Light Assist with zero breaks never promotes to full combo");
+  execOrAbort(db, "UPDATE score_db.scores SET clear_type=150 WHERE clear_type=50");
+  execOrAbort(db, "CREATE TABLE score_db.course_scores(id INTEGER PRIMARY KEY,clear_type INTEGER,"
+                  "attempt_id TEXT,result_fingerprint TEXT,provenance_json TEXT)");
+  execOrAbort(db, "INSERT INTO score_db.course_scores VALUES(7,150,'attempt-7','fingerprint-150','immutable-provenance')");
+  execOrAbort(db, "CREATE TABLE score_db.goal_gauge_best(chart_sha256 TEXT,ln_mode INTEGER,target INTEGER,"
+                  "gauge_value REAL,border REAL,death_notes INTEGER,total_notes INTEGER,gap REAL,"
+                  "PRIMARY KEY(chart_sha256,ln_mode,target)) WITHOUT ROWID");
+  execOrAbort(db, "INSERT INTO score_db.goal_gauge_best VALUES"
+                  "('legacy-better',0,50,20,60,-1,100,40),('legacy-better',0,150,50,60,-1,100,10),"
+                  "('current-better',0,50,50,60,-1,100,10),('current-better',0,150,20,60,-1,100,40),"
+                  "('tie',0,50,60,60,80,100,0),('tie',0,150,60,60,-1,100,0),"
+                  "('legacy-only',0,150,40,60,-1,100,20)");
+  const std::string rawRows = queryString(db,
+      "SELECT group_concat(id || ':' || provenance_json) "
+      "FROM (SELECT * FROM score_db.scores ORDER BY id)");
+  // Simulate populated summaries from the old numeric ordering, which an
+  // empty-cache repair would miss. Also cover upgrading a profile that already
+  // has the previous ordering-only repair marker.
+  execOrAbort(db, "UPDATE score_db.score_summary_revisions SET revision=1 WHERE name='clear_lamp_order'");
+  execOrAbort(db, "UPDATE score_db.score_sha256_clear_rank_cache SET rank=150");
+  execOrAbort(db, "UPDATE score_db.score_sha256_best_score_cache SET clear_rank=150");
+  int rebuilds = 0;
+  sqlite3_trace_v2(db, SQLITE_TRACE_STMT,
+      [](unsigned, void *count, void *statement, void *) {
+        const std::string_view sql = sqlite3_sql(static_cast<sqlite3_stmt *>(statement));
+        if (sql.starts_with("DELETE FROM") &&
+            sql.find("score_sha256_best_score_cache") != std::string_view::npos)
+          ++*static_cast<int *>(count);
+        return 0;
+      }, &rebuilds);
+  ASSERT_FALSE(score_cache_queries::ensureScoreSummarySchema(db, "score_db").has_value(),
+               "old populated summaries upgrade");
+  ASSERT_EQ(1, rebuilds, "lamp ordering upgrade rebuilds once");
+  ASSERT_EQ(2, queryInt(db, "SELECT count(*) FROM score_db.score_sha256_best_score_cache "
+                          "WHERE chart_sha256 IN ('assist-first','light-first') AND clear_rank=100"),
+            "rebuilt tied best scores use lamp strength");
+  ASSERT_EQ(3, queryInt(db, "SELECT count(*) FROM score_db.score_sha256_clear_rank_cache WHERE rank=100"),
+            "rebuilt clear summaries retain strongest stored ID");
+  ASSERT_EQ(4, queryInt(db, "SELECT count(*) FROM score_db.score_sha256_clear_rank_cache "
+                          "WHERE chart_sha256='light-only' AND rank=50"),
+            "wildcard Light Assist canonicalizes to 50 in every mode");
+  ASSERT_EQ(50, queryInt(db, "SELECT clear_rank FROM score_db.score_sha256_best_score_cache "
+                            "WHERE chart_sha256='score-first'"),
+            "higher EX score still takes priority over lamp strength");
+  ASSERT_EQ(rawRows, queryString(db,
+      "SELECT group_concat(id || ':' || provenance_json) "
+      "FROM (SELECT * FROM score_db.scores ORDER BY id)"),
+      "summary upgrade preserves row identities and immutable provenance");
+  ASSERT_EQ(0, queryInt(db, "SELECT count(*) FROM score_db.scores WHERE clear_type=150"),
+            "denormalized legacy chart lamp columns migrate to 50");
+  ASSERT_EQ(std::string("50:attempt-7:fingerprint-150:immutable-provenance"),
+            queryString(db, "SELECT clear_type || ':' || attempt_id || ':' || result_fingerprint || ':' || "
+                            "provenance_json FROM score_db.course_scores WHERE id=7"),
+            "course migration preserves attempt links fingerprints and provenance");
+  ASSERT_EQ(0, queryInt(db, "SELECT count(*) FROM score_db.goal_gauge_best WHERE target=150"),
+            "legacy gauge targets are removed");
+  ASSERT_EQ(4, queryInt(db, "SELECT count(*) FROM score_db.goal_gauge_best WHERE target=50"),
+            "gauge target migration merges collisions");
+  ASSERT_EQ(2, queryInt(db, "SELECT count(*) FROM score_db.goal_gauge_best "
+                          "WHERE chart_sha256 IN ('legacy-better','current-better') AND gap=10"),
+            "gauge target collisions keep better evidence from either ID");
+  ASSERT_EQ(-1, queryInt(db, "SELECT death_notes FROM score_db.goal_gauge_best WHERE chart_sha256='tie'"),
+            "gauge target ties prefer completed survival evidence");
+  ASSERT_FALSE(score_cache_queries::ensureScoreSummarySchema(db, "score_db").has_value(),
+               "subsequent schema ensure succeeds");
+  ASSERT_EQ(1, rebuilds, "completed ordering upgrade does not rescan history");
+  sqlite3_trace_v2(db, 0, nullptr, nullptr);
+  sqlite3_close(db);
+  return 0;
+}
+
 int testHistoricalOnlyAttachedCachesStayEmptyWithoutRebuilding() {
   const auto path = std::filesystem::temp_directory_path() /
                     "asobmashow_historical_attached_cache_test.sqlite";
@@ -285,6 +395,7 @@ int testHistoricalOnlyAttachedCachesStayEmptyWithoutRebuilding() {
 } // namespace
 
 int main() {
+  if (testAssistedLampOrderingAndSummaryUpgrade() != 0) return 1;
   if (testHistoricalOnlyAttachedCachesStayEmptyWithoutRebuilding() != 0) return 1;
   sqlite3 *db = nullptr;
   if (sqlite3_open(":memory:", &db) != SQLITE_OK) {

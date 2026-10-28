@@ -1,4 +1,5 @@
 #include "MusicSelectSongIndex.h"
+#include "MusicSelectLampOrder.h"
 #include "../BeatorajaClearType.h"
 
 #include "MusicSelectMode.h"
@@ -289,7 +290,7 @@ int MusicSelectSongIndex::compare(const Entry &left, const Entry &right,
     if (!left.hasScore && !right.hasScore) return 0;
     if (!left.hasScore) return 1;
     if (!right.hasScore) return -1;
-    if (sort == "CLEAR") return left.lamp - right.lamp;
+    if (sort == "CLEAR") return musicSelectLampOrder(left.lamp) - musicSelectLampOrder(right.lamp);
     if (sort == "MISSCOUNT") return left.badPoints - right.badPoints;
     return left.lastPlayed < right.lastPlayed ? -1 : left.lastPlayed > right.lastPlayed;
   }

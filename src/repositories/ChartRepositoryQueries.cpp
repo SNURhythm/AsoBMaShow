@@ -467,7 +467,7 @@ std::string chartClearMarkPredicate(const std::string &alias,
     comparison = " <= ";
   }
   return chartClearMarkRankExpr(alias, chartQuery.selectedLongNoteMode) +
-         comparison + "@clear_mark_rank";
+         comparison + clearLampOrderSql("@clear_mark_rank");
 }
 
 std::string difficultyEntryClearMarkRankExpr(
@@ -495,7 +495,7 @@ std::string difficultyEntryClearMarkPredicate(const std::string &entryAlias,
   }
   return difficultyEntryClearMarkRankExpr(entryAlias, chartAlias,
                                           chartQuery.selectedLongNoteMode) +
-         comparison + "@clear_mark_rank";
+         comparison + clearLampOrderSql("@clear_mark_rank");
 }
 
 std::string chartBestScoreExpr(const std::string &alias,
@@ -3618,7 +3618,7 @@ struct FolderClearAggregate {
       hasUnclearedChart = true;
       return;
     }
-    minimumClearRank = std::min(minimumClearRank, clearRank);
+    minimumClearRank = worstClearLamp(minimumClearRank, clearRank);
   }
 
   [[nodiscard]] int clearRank() const {
@@ -3888,7 +3888,7 @@ LoadFolderClearDataByLongNoteMode(
         for (int selectedLongNoteMode : long_note_mode::kPlayableValues) {
           const int clearRank = localCourseRanks.bestCourseRankFor(
               courseKey, courseId, selectedLongNoteMode);
-          if (clearRank >= kClearTypeAssistedEasyClearRank) {
+          if (clearRank >= kClearTypeLightAssistedEasyClearRank) {
             data.clearRanks[static_cast<std::size_t>(selectedLongNoteMode)]
                            [folderKey] = clearRank;
           }
@@ -3955,17 +3955,18 @@ std::map<int, int> ChartRepository::Session::GoalRecommendationCounts() {
   return counts;
 }
 std::vector<GoalRecommendation> ChartRepository::Session::GoalRecommendations(int target, int offset) {
+  target = normalizeClearLamp(target);
   ScoreRepository::PreparedScoreQueryDatabase prepared(impl_->scoreRepository(), *this);
   if (prepared.error()) throw std::runtime_error(*prepared.error());
   auto *db = impl_->database();
   SqliteStatementHandle query;
-  if (prepareSqliteStatement(db, (target>=100 ? chart_goals::gaugeRecommendationPageSql() : chart_goals::recommendationPageSql()), query) != SQLITE_OK ||
+  if (prepareSqliteStatement(db, (target>=kClearTypeLightAssistedEasyClearRank ? chart_goals::gaugeRecommendationPageSql() : chart_goals::recommendationPageSql()), query) != SQLITE_OK ||
       sqlite3_bind_int(query, 1, target) != SQLITE_OK || sqlite3_bind_int(query, 2, std::max(0, offset)) != SQLITE_OK)
     throw std::runtime_error(sqliteDatabaseError(db));
   std::vector<GoalRecommendation> rows;
   int rc;
   while ((rc = sqlite3_step(query)) == SQLITE_ROW) {
-    if (target>=100) {
+    if (target>=kClearTypeLightAssistedEasyClearRank) {
       rows.push_back({.sha256=sqliteColumnString(query, 0), .longNoteMode=sqlite3_column_int(query, 1),
           .target=sqlite3_column_int(query, 2), .remaining=target==600 ? sqlite3_column_int(query, 8) : 0,
           .gaugeValue=static_cast<float>(sqlite3_column_double(query, 3)),

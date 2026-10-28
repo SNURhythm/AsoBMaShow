@@ -1,4 +1,5 @@
 #include "ChartGoal.h"
+#include "../ClearLampOrder.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -76,7 +77,7 @@ std::optional<int> parseRate(std::string_view text) {
   return value > 0 && value <= 10000 ? std::optional<int>(value) : std::nullopt;
 }
 void validate(const Target &target) {
-  constexpr std::array lamps{-1, 100, 150, 200, 300, 400, 500, 600};
+  constexpr std::array lamps{-1, 50, 100, 200, 300, 400, 500, 600};
   if (std::find(lamps.begin(), lamps.end(), target.lamp) == lamps.end() ||
       target.scoreDenominator < 1 || target.scoreDenominator > 10000 ||
       target.scoreNumerator < 0 || target.scoreNumerator > target.scoreDenominator ||
@@ -97,7 +98,7 @@ Progress evaluate(const Target &target, std::optional<ScoreBestSnapshot> bestSco
                   std::optional<ScoreBestSnapshot> bestClear) {
   validate(target);
   Progress result{.bestScore = std::move(bestScore), .bestClear = std::move(bestClear)};
-  result.lampMet = target.lamp < 0 || (result.bestClear && result.bestClear->clearType >= target.lamp);
+  result.lampMet = target.lamp < 0 || (result.bestClear && clearLampOrder(result.bestClear->clearType) >= clearLampOrder(target.lamp));
   result.scoreMet = target.scoreNumerator == 0;
   if (target.scoreNumerator > 0 && result.bestScore && result.bestScore->maxScore > 0 &&
       result.bestScore->score >= 0 && result.bestScore->score <= result.bestScore->maxScore) {

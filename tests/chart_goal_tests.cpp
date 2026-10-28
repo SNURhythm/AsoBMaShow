@@ -138,6 +138,18 @@ int main() {
     }
     CHECK(sqlite3_step(query)==SQLITE_DONE);
     query.reset();
+    CHECK(sqlite3_exec(recommendations,
+        "DELETE FROM chart_meta; DELETE FROM score_db.goal_gauge_best; DELETE FROM score_db.goal_combo_best;"
+        "DELETE FROM score_db.score_sha256_clear_rank_cache;"
+        "INSERT INTO chart_meta VALUES('light','a',0,0,0),('assist','b',0,0,0);"
+        "INSERT INTO score_db.goal_gauge_best VALUES('light',0,100,75,80,0,100,5),('assist',0,50,75,80,0,100,5);"
+        "INSERT INTO score_db.score_sha256_clear_rank_cache VALUES('light',0,150),('assist',0,100);",
+        nullptr,nullptr,nullptr)==SQLITE_OK);
+    CHECK(prepareSqliteStatement(recommendations,gaugeRecommendationCandidatesSql()+
+        " SELECT chart_sha256,target FROM candidates",query)==SQLITE_OK);
+    CHECK(sqlite3_step(query)==SQLITE_ROW && sqliteColumnString(query,0)=="light" && sqlite3_column_int(query,1)==100);
+    CHECK(sqlite3_step(query)==SQLITE_DONE);
+    query.reset();
     sqlite3_close(recommendations);
   }
   GoalResultPresentation celebration;
@@ -173,6 +185,14 @@ int main() {
   CHECK(evaluate({.lamp=400, .scoreNumerator=24}, score, lamp).achieved);
   CHECK(!evaluate({.lamp=400, .scoreNumerator=24}, score, score).achieved);
   CHECK(evaluate({.lamp=400}, {}, lamp).achieved);
+  for (int light : {50, 150}) {
+    lamp.clearType = light;
+    CHECK(!evaluate({.lamp=100}, {}, lamp).achieved);
+    CHECK(evaluate({.lamp=50}, {}, lamp).achieved);
+  }
+  lamp.clearType = 100;
+  CHECK(evaluate({.lamp=50}, {}, lamp).achieved);
+  CHECK(evaluate({.lamp=100}, {}, lamp).achieved);
   CHECK(rejects([] { evaluate({}, {}, {}); }));
   CHECK(rejects([] { evaluate({.lamp=0}, {}, {}); }));
   CHECK(rejects([] { evaluate({.scoreNumerator=28}, {}, {}); }));
@@ -194,6 +214,21 @@ int main() {
   CHECK(load(db.get(), goal.chart.SHA256, 1)->setAtUnixMillis == 1730000000000);
   CHECK(load(db.get(), goal.chart.SHA256, 1)->achievedAtUnixMillis == 1730000001234);
   CHECK(rejects([&] { auto invalid = goal; invalid.achievedAtUnixMillis = 1; save(db.get(), invalid); }));
+  goal.target.lamp = 50;
+  save(db.get(), goal);
+  CHECK(load(db.get(), goal.chart.SHA256, 1)->target.lamp == 50);
+  CHECK(sqlite3_exec(db.get(), "UPDATE chart_goals SET body=replace(body, '\"lamp\":50', '\"lamp\":150')",
+      nullptr, nullptr, nullptr) == SQLITE_OK);
+  CHECK(load(db.get(), goal.chart.SHA256, 1)->target.lamp == 50);
+  CHECK(loadPage(db.get(), 0).goals.front().target.lamp == 50);
+  CHECK(loadForChart(db.get(), goal.chart.SHA256).front().target.lamp == 50);
+  goal = *load(db.get(), goal.chart.SHA256, 1);
+  save(db.get(), goal);
+  SqliteStatementHandle storedGoal;
+  CHECK(prepareSqliteStatement(db.get(), "SELECT json_extract(body,'$.lamp') FROM chart_goals", storedGoal) == SQLITE_OK);
+  CHECK(sqlite3_step(storedGoal) == SQLITE_ROW && sqlite3_column_int(storedGoal, 0) == 50);
+  storedGoal.reset();
+  CHECK(rejects([&] { auto invalid = goal; invalid.target.lamp = 150; save(db.get(), invalid); }));
   goal.chart.Title = "Updated"; save(db.get(), goal);
   CHECK(loadPage(db.get(), 0).goals.size() == 1);
   goal.longNoteMode = 2; save(db.get(), goal);

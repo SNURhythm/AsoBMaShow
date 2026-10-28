@@ -241,6 +241,20 @@ contains examples and timing context if needed.
   `/Users/xf/vcpkg`), then `cmake --preset=debug`; the worktree gets its own
   `cmake-build-debug`.
 
+## Clear Lamp IDs
+
+- Light Assist Easy is `50`; Assist Easy is `100`. Lamp ID `150` is permanently
+  reserved as a legacy alias for Light Assist Easy and must never be reused for
+  a new gauge or clear type. Define new lamp ranks through `clearLampRank<N>()`
+  so the reserved-ID compile-time guard applies.
+- Normalize legacy values with `normalizeClearLamp` at semantic boundaries.
+  Mutable score columns and caches migrate `150` to `50`; authenticated modern
+  result facts and IR snapshot payloads retain their original bytes for fingerprint
+  validation. Do not rewrite those payloads or their fingerprints just to change
+  a displayed/sorted lamp.
+- Beatoraja skin IDs are a separate external mapping: Assist is `2`, Light Assist
+  is `3`. Preserve those IDs and use logical ordering for comparisons.
+
 ## Settings Choice Controls
 
 - Follow [Choosing a settings control](docs/features/settings-and-user-interface.md#choosing-a-settings-control)

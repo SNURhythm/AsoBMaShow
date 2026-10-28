@@ -279,6 +279,18 @@ void testBestClearFallsBackToBottomGaugeWhenNoneQualifies() {
 } // namespace
 
 int main() {
+  static_assert(kClearTypeLightAssistedEasyClearRank == 50);
+  static_assert(kClearTypeAssistedEasyClearRank == 100);
+  static_assert(normalizeClearLamp(150) == kClearTypeLightAssistedEasyClearRank);
+  require(clear_policy::fullComboRankForPlayback(150, true, {}) == 50,
+          "legacy Light Assist remains assisted even with zero combo breaks");
+  GameplayScoreState recalled(beatorajaScoreConfig(10, 7, 100));
+  recalled.restoreClearTypeRankForResult(150);
+  require(recalled.getClearTypeRank() == 50, "legacy Light Assist recall uses canonical rank");
+  require(std::string(clearTypeRankToLabel(150)) == "LIGHT ASSIST EASY CLEAR",
+          "legacy lamp label remains Light Assist");
+  require(std::string(clearTypeRankToLabel(100)) == "ASSIST EASY CLEAR",
+          "Assist Easy remains stronger than canonical Light Assist");
   testCourseSurvivalToGrooveContinuesAfterGaugeDeath();
   testPinnedCountsAndComboByMode();
   testBestClearFallsBackToBottomGaugeWhenNoneQualifies();

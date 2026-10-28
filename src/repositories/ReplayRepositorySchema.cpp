@@ -387,7 +387,7 @@ constexpr const char *kIrRemoteScoresTableSql =
     "CHECK(length(chart_sha256)=64 AND chart_sha256=lower(chart_sha256) AND "
     "chart_sha256 NOT GLOB '*[^0-9a-f]*'),"
     "CHECK(note_count >= 0 AND score >= 0 AND score <= note_count * 2),"
-    "CHECK(lamp_rank IN (0,100,150,200,300,400,500,600)),"
+    "CHECK(lamp_rank IN (0,50,100,200,300,400,500,600)),"
     "CHECK(time_achieved_ms IS NULL OR time_achieved_ms > 0),"
     "CHECK(time_added_ms > 0),"
     "CHECK(pgreat IS NULL OR pgreat >= 0),"
@@ -1324,14 +1324,15 @@ bool inspectIrSubmissionReceiptsSchema(sqlite3 *db,
 }
 
 bool inspectIrRemoteScoresSchema(sqlite3 *db,
-                                 IrRemoteScoresSchemaState &state) {
+                                 IrRemoteScoresSchemaState &state,
+                                 std::string_view tableSql = kIrRemoteScoresTableSql) {
   NamedSchemaObjectInspection table;
   NamedSchemaObjectInspection sha256Index;
   NamedSchemaObjectInspection chartIdIndex;
   bool sha256ShapeExact = false;
   bool chartIdShapeExact = false;
   if (!inspectNamedSchemaObject(db, "ir_remote_scores", "table",
-                                "ir_remote_scores", kIrRemoteScoresTableSql,
+                                "ir_remote_scores", tableSql,
                                 table,
                                 "reading IR remote scores table schema") ||
       !inspectNamedSchemaObject(db, "idx_ir_remote_scores_chart_sha256",
@@ -1362,6 +1363,47 @@ bool inspectIrRemoteScoresSchema(sqlite3 *db,
     state = IrRemoteScoresSchemaState::Malformed;
   }
   return true;
+}
+
+// Only the mutable remote-score cache changes representation. Authenticated
+// modern result rows retain their original lamp bytes and fingerprints.
+bool migrateIrRemoteLampRanks(sqlite3 *db) {
+  IrRemoteScoresSchemaState state{};
+  if (!inspectIrRemoteScoresSchema(db, state)) return false;
+  if (state == IrRemoteScoresSchemaState::Absent ||
+      state == IrRemoteScoresSchemaState::Exact) return true;
+
+  std::string legacySql(kIrRemoteScoresTableSql);
+  const std::string canonical = "(0,50,100,200,300,400,500,600)";
+  legacySql.replace(legacySql.find(canonical), canonical.size(),
+                    "(0,100,150,200,300,400,500,600)");
+  if (!inspectIrRemoteScoresSchema(db, state, legacySql) ||
+      state != IrRemoteScoresSchemaState::Exact) return false;
+
+  // The complete source shape was verified above, including both indexes.
+  std::string columns, values;
+  SqliteStatementHandle info;
+  if (prepareSqliteStatement(db, "PRAGMA table_info(ir_remote_scores)", info) != SQLITE_OK)
+    return false;
+  int status;
+  while ((status = sqlite3_step(info.get())) == SQLITE_ROW) {
+    const std::string name = sqliteColumnString(info.get(), 1);
+    if (!columns.empty()) { columns += ","; values += ","; }
+    columns += name;
+    values += name == "lamp_rank" ? clearLampOrderSql(name) : name;
+  }
+  if (status != SQLITE_DONE || columns.empty()) return false;
+  info.reset();
+  if (!execSql(db, "ALTER TABLE ir_remote_scores RENAME TO legacy_lamp_remote_scores",
+               "staging legacy remote lamp cache") ||
+      !execSql(db, kIrRemoteScoresTableSql, "creating canonical remote lamp cache"))
+    return false;
+  const std::string copy = "INSERT INTO ir_remote_scores(" + columns + ") SELECT " +
+      values + " FROM legacy_lamp_remote_scores";
+  return execSql(db, copy.c_str(), "copying canonical remote lamp cache") &&
+      execSql(db, "DROP TABLE legacy_lamp_remote_scores", "dropping legacy remote lamp cache") &&
+      execSql(db, kIrRemoteScoresSha256IndexSql, "indexing canonical remote lamp cache") &&
+      execSql(db, kIrRemoteScoresChartIdIndexSql, "indexing canonical remote chart cache");
 }
 
 bool inspectModernChartSchemaV11(sqlite3 *database) {
@@ -1967,7 +2009,9 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
     return false;
   }
 
-  if (*version == 19 || *version == 18 || *version == 17 || *version == 16) {
+  if (!migrateIrRemoteLampRanks(db)) return false;
+
+  if (*version == 20 || *version == 19 || *version == 18 || *version == 17 || *version == 16) {
     ReplayResultOutboxSchemaState resultOutboxState{};
     IrOutboxSchemaState irOutboxState{};
     IrSubmissionReceiptsSchemaState receiptState{};

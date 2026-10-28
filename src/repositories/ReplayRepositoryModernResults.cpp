@@ -2054,9 +2054,8 @@ ModernChartStageOutcome ReplayRepository::StageModernChartResult(
   }
   std::optional<std::string> snapshotJson;
   if (snapshot.has_value()) {
-    auto expected = ir::captureIrSubmissionSnapshot(result, diagnostic);
-    snapshotJson = ir::serializeIrSubmissionSnapshot(*snapshot, diagnostic);
-    if (!expected || !snapshotJson || *expected != *snapshot) {
+    snapshotJson = ir::serializeIrSubmissionSnapshot(*snapshot, result, diagnostic);
+    if (!snapshotJson) {
       return {.status = ModernChartStageStatus::Invalid,
               .diagnostic = diagnostic.empty()
                                 ? "IR snapshot disagrees with modern result"

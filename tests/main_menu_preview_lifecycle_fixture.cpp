@@ -21,12 +21,15 @@ void appendDebugLogLine(const std::string &) {}
 std::string formatFindBmsBytes(std::uint64_t) { return {}; }
 
 struct View {
+  virtual ~View() = default;
   void onSelected() {}
   void freeImage() {}
   void setImageAsync(const std::filesystem::path &, bool) {}
   void setText(const std::string &) {}
   void setLocalizedText(const i18n::Text &) {}
 };
+
+struct ChartListItemView : View {};
 
 struct RecyclerView {
   std::function<void(const ChartMetaRecord &, int)> onSelected;
@@ -63,6 +66,7 @@ struct MainMenuScene {
   std::atomic_bool cleanupOnSelectionThread = false;
   std::thread::id selectionThread;
 
+  void updateSelectedGoalBubble(ChartListItemView *, const ChartMetaRecord &) {}
   void refreshRankingsButton() {}
   void refreshReplayAvailability(const ChartMetaRecord *) {}
   void refreshPlayOptionButtons() {}

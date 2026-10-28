@@ -10,6 +10,7 @@
 #include "../view/AppTheme.h"
 #include "../view/Button.h"
 #include "../view/ClearLampColors.h"
+#include "../ClearLampOrder.h"
 #include "../view/DropdownView.h"
 #include "../view/IconText.h"
 #include "../view/ImageView.h"
@@ -288,7 +289,7 @@ void ChartGoalsScene::recommendGoal(const ChartMetaRecord &record, int mode, int
   showGoal({.chart=record.meta, .longNoteMode=mode});
   if (loadFailed_) return;
   editing_ = true;
-  if (rank >= 100) draft_.target.lamp = rank;
+  if (rank >= 50) draft_.target.lamp = rank;
   else {
     draft_.target.scoreNumerator = rank;
     draft_.target.scoreDenominator = 27;
@@ -448,7 +449,7 @@ void ChartGoalsScene::build() {
       } else label(detail, i18n::tr("goals.ui.storage_error"));
       label(detail, i18n::tr("goals.ui.target_help"), 18);
       std::vector<DropdownView::Option> lamps{{"-1", i18n::tr("goals.ui.no_target")}};
-      for (int rank : {100, 150, 200, 300, 400, 500, 600}) lamps.push_back({.id=std::to_string(rank), .label=kombo::lampLabel(rank), .leadingColor=clearLampColorForRank(rank)});
+      for (int rank : {50, 100, 200, 300, 400, 500, 600}) lamps.push_back({.id=std::to_string(rank), .label=kombo::lampLabel(rank), .leadingColor=clearLampColorForRank(rank)});
       select(detail, portal_, i18n::tr("goals.ui.lamp"), std::move(lamps), std::to_string(draft_.target.lamp),
           [this](const std::string &id) { draft_.target.lamp = std::stoi(id); });
       std::vector<DropdownView::Option> scores{{"0", i18n::tr("goals.ui.no_target")}};
@@ -514,8 +515,14 @@ void ChartGoalsScene::build() {
       label(body, i18n::tr("goals.ui.near_help"), 18);
       label(body, i18n::tr("goals.ui.gauge_near_help"), 18);
     }
-    for (const auto &[rank, group] : recommendations_) {
-      action(body, i18n::format("goals.ui.near_rank", {{"rank", rank>=100 ? kombo::lampLabel(rank) : kombo::scoreRankLabel(rank)},
+    std::vector<int> recommendationRanks;
+    for (const auto &[rank, group] : recommendations_) recommendationRanks.push_back(rank);
+    std::sort(recommendationRanks.begin(), recommendationRanks.end(), [](int left, int right) {
+      return clearLampOrder(left) < clearLampOrder(right);
+    });
+    for (int rank : recommendationRanks) {
+      const auto &group = recommendations_.at(rank);
+      action(body, i18n::format("goals.ui.near_rank", {{"rank", rank>=50 ? kombo::lampLabel(rank) : kombo::scoreRankLabel(rank)},
           {"count", std::to_string(group.count)}}), [this, rank] { later([this, rank] {
         auto &group = recommendations_[rank];
         if (group.expanded) group.expanded = false;
@@ -525,7 +532,7 @@ void ChartGoalsScene::build() {
       for (const auto &[candidate, record] : group.rows) {
         auto *row = card(body);
         goalIdentity(row, record.meta, &record, 24);
-        if (rank>=100) {
+        if (rank>=50) {
           std::ostringstream value;
           value << std::fixed << std::setprecision(1);
           if (rank==600) {
@@ -540,7 +547,7 @@ void ChartGoalsScene::build() {
             label(row, i18n::format("goals.ui.gauge_death", {{"percent",value.str()}}), 18);
           }
         } else label(row, std::to_string(candidate.score) + " / " + std::to_string(candidate.maxScore) + " EX", 18);
-        const auto caption = rank>=100 ? i18n::format("goals.ui.recommend_lamp", {{"lamp",kombo::lampLabel(rank)}})
+        const auto caption = rank>=50 ? i18n::format("goals.ui.recommend_lamp", {{"lamp",kombo::lampLabel(rank)}})
             : i18n::format("goals.ui.recommend_ex", {{"ex",std::to_string(candidate.remaining)}, {"rank",kombo::scoreRankLabel(rank)}});
         action(row, caption, [this, record, mode=candidate.longNoteMode, rank] {
           later([this, record, mode, rank] { recommendGoal(record, mode, rank); });

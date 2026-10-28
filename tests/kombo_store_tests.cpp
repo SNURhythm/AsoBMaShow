@@ -20,6 +20,47 @@ int main() {
   save(db, state);
   CHECK(load(db).days.size() == 1);
   CHECK(load(db).days.begin()->second.config.assignments[0].levels[0].source == "https://table");
+  {
+    auto light = state;
+    const auto setLight = [](Assignment &assignment) {
+      assignment.eligibleLamp = 50;
+      assignment.targetLamp = 50;
+    };
+    setLight(light.configurations.begin()->second.assignments[0]);
+    auto &day = light.days.begin()->second;
+    setLight(day.config.assignments[0]);
+    setLight(day.assignments[0].requirement);
+    setLight(day.assignments[0].originalRequirement);
+    day.played = true;
+    day.assignments[0].chartProgress["legacy"].lamp = 50;
+    save(db, light);
+    CHECK(load(db).days.begin()->second.assignments[0].chartProgress.at("legacy").lamp == 50);
+    CHECK(sqlite3_exec(db,
+        "UPDATE kombo_state SET body=replace(replace(replace(body,"
+        "'\"eligibleLamp\":50','\"eligibleLamp\":150'),"
+        "'\"targetLamp\":50','\"targetLamp\":150'),"
+        "'\"lamp\":50','\"lamp\":150')", nullptr, nullptr, nullptr) == SQLITE_OK);
+    auto migrated = load(db);
+    const auto checkLight = [](const Assignment &assignment) {
+      CHECK(assignment.eligibleLamp == 50 && assignment.targetLamp == 50);
+    };
+    checkLight(migrated.configurations.begin()->second.assignments[0]);
+    const auto &loadedDay = migrated.days.begin()->second;
+    checkLight(loadedDay.config.assignments[0]);
+    checkLight(loadedDay.assignments[0].requirement);
+    checkLight(loadedDay.assignments[0].originalRequirement);
+    CHECK(loadedDay.assignments[0].chartProgress.at("legacy").lamp == 50);
+    save(db, migrated);
+    sqlite3_stmt *query = nullptr;
+    CHECK(sqlite3_prepare_v2(db, "SELECT body FROM kombo_state", -1, &query, nullptr) == SQLITE_OK);
+    CHECK(sqlite3_step(query) == SQLITE_ROW);
+    const std::string body(reinterpret_cast<const char *>(sqlite3_column_text(query, 0)));
+    CHECK(body.find("\"eligibleLamp\":150") == std::string::npos &&
+          body.find("\"targetLamp\":150") == std::string::npos &&
+          body.find("\"lamp\":150") == std::string::npos);
+    sqlite3_finalize(query);
+    save(db, state);
+  }
   CHECK(sqlite3_exec(db, "BEGIN", nullptr, nullptr, nullptr) == SQLITE_OK);
   state.savings = 123;
   save(db, state);

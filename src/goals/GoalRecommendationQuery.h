@@ -1,5 +1,6 @@
 #pragma once
 #include <string>
+#include "../ClearLampOrder.h"
 
 namespace chart_goals {
 // One pass over best records, never play history. The correlated library lookup
@@ -44,7 +45,7 @@ inline std::string gaugeRecommendationCandidatesSql() {
   ), candidates AS (
     SELECT g.* FROM lamp_bests g
     WHERE NOT EXISTS (SELECT 1 FROM score_db.score_sha256_clear_rank_cache b
-        WHERE b.chart_sha256=g.chart_sha256 AND b.ln_mode=g.ln_mode AND b.rank>=g.target)
+        WHERE b.chart_sha256=g.chart_sha256 AND b.ln_mode=g.ln_mode AND )sql" + clearLampOrderSql("b.rank") + ">=" + clearLampOrderSql("g.target") + R"sql()
       AND EXISTS (SELECT 1 FROM chart_meta c WHERE c.sha256=g.chart_sha256
         AND g.ln_mode=CASE WHEN COALESCE(c.total_long_notes,0)+COALESCE(c.total_backspin_notes,0)=0 THEN 0
           WHEN c.ln_mode BETWEEN 1 AND 3 THEN c.ln_mode ELSE g.ln_mode END

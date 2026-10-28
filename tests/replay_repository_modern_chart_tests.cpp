@@ -1,6 +1,8 @@
 #include "repositories/ReplayRepository.h"
 
 #include "ir/IrSubmissionSnapshot.h"
+#include "FileChecksum.h"
+#include "nlohmann/json.hpp"
 #include "repositories/SqliteRAII.h"
 
 #include <cassert>
@@ -152,6 +154,73 @@ attachment(const ModernReplayPathReservation &reservation, char hash = 'c') {
                        .compressedSize = 123,
                        .codecVersion =
                            replay::BeatorajaReplayCodec::kCodecVersion}};
+}
+
+void testLegacyLightAssistMigrationPreservesAuthenticatedResults() {
+  TemporaryDirectory temporary;
+  const auto path = temporary.path / "replay.db";
+  auto legacy = result(91);
+  legacy.score.clearType = 150;
+  legacy.resultFingerprint = result_persistence::modernResultFingerprint(legacy);
+  // Construct the pre-migration wire payload, not a newly captured 50 snapshot.
+  std::string snapshotDiagnostic;
+  auto wire = nlohmann::ordered_json::parse(*ir::serializeIrSubmissionSnapshot(snapshot(legacy), snapshotDiagnostic));
+  wire["submission"]["clearType"] = 150;
+  nlohmann::ordered_json signedPayload;
+  signedPayload["schemaVersion"] = wire["schemaVersion"];
+  signedPayload["submission"] = wire["submission"];
+  wire["fingerprint"] = file_checksum::sha256(signedPayload.dump());
+  const auto legacySnapshot = ir::deserializeIrSubmissionSnapshot(
+      wire.dump(), wire["fingerprint"].get<std::string>(), snapshotDiagnostic);
+  assert(legacySnapshot && legacySnapshot->submission.clearType == 150);
+  {
+    ReplayRepository repository(path);
+    assert(repository.EnsureSchema());
+    assert(repository.StageModernChartResult(legacy, legacySnapshot, {}, {}).status ==
+           ModernChartStageStatus::Staged);
+  }
+  {
+    auto db = openDatabase(path);
+    std::vector<std::string> definitions;
+    SqliteStatementHandle statement;
+    assert(prepareSqliteStatement(db.get(),
+        "SELECT sql FROM sqlite_master WHERE tbl_name='ir_remote_scores' AND sql IS NOT NULL "
+        "ORDER BY CASE type WHEN 'table' THEN 0 ELSE 1 END", statement) == SQLITE_OK);
+    while (sqlite3_step(statement.get()) == SQLITE_ROW)
+      definitions.push_back(sqliteColumnString(statement.get(), 0));
+    statement.reset();
+    assert(definitions.size() == 3);
+    const std::string canonical = "(0,50,100,200,300,400,500,600)";
+    const auto offset = definitions[0].find(canonical);
+    assert(offset != std::string::npos);
+    definitions[0].replace(offset, canonical.size(), "(0,100,150,200,300,400,500,600)");
+    exec(db.get(), "DROP TABLE ir_remote_scores");
+    for (const auto &definition : definitions) exec(db.get(), definition);
+    exec(db.get(), "INSERT INTO ir_remote_scores(provider_id,server_origin,remote_score_id,"
+        "remote_user_id,game,remote_chart_id,chart_md5,chart_sha256,title,artist,note_count,"
+        "score,lamp_rank,service,time_added_ms,sync_generation) VALUES("
+        "'tachi','https://boku.tachi.ac','legacy-light',42,'bms-7k','chart','" +
+        repeated('b', 32) + "','" + repeated('a', 64) +
+        "','Title','Artist',5,7,150,'Bokutachi',1700000000000,1)");
+    exec(db.get(), "PRAGMA user_version=20");
+  }
+  ReplayRepository upgraded(path);
+  assert(upgraded.EnsureSchema());
+  auto db = openDatabase(path);
+  assert(queryInt(db.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
+  assert(queryInt(db.get(), "SELECT lamp_rank FROM ir_remote_scores") == 50);
+  assert(queryInt(db.get(), "SELECT clear_type FROM modern_chart_results") == 150);
+  const auto loaded = upgraded.LoadModernChartResultByAttempt(legacy.attemptId);
+  assert(loaded.status == ModernChartResultReadStatus::Loaded && loaded.record);
+  assert(loaded.record->result.resultFingerprint == legacy.resultFingerprint);
+  std::string diagnostic;
+  assert(result_persistence::validateModernChartResult(loaded.record->result, diagnostic));
+  auto canonical = loaded.record->result;
+  canonical.score.clearType = 50;
+  canonical.resultFingerprint = result_persistence::modernResultFingerprint(canonical);
+  assert(result_persistence::compareModernChartResultFacts(loaded.record->result, canonical).agrees());
+  assert(result_persistence::describeChartScoreDifference(loaded.record->result.score, canonical.score).empty());
+  assert(upgraded.EnsureSchema());
 }
 
 void testPendingGaugeEvidenceRecoveryAndCleanup() {
@@ -941,6 +1010,7 @@ void testExactRetryAttachesOnlyMissingReplayAtomically() {
 } // namespace
 
 int main() {
+  testLegacyLightAssistMigrationPreservesAuthenticatedResults();
   testPendingGaugeEvidenceRecoveryAndCleanup();
   testCurrentSchemaAddsSelectorMetricsTable();
   testSchemaReservationAtomicStageAndExactRetry();

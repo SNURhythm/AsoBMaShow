@@ -1,4 +1,5 @@
 #include "KomboModel.h"
+#include "../ClearLampOrder.h"
 
 #include <algorithm>
 #include <array>
@@ -12,7 +13,7 @@
 
 namespace kombo {
 namespace {
-constexpr std::array lamps{-1, 0, 100, 150, 200, 300, 400, 500, 600};
+constexpr std::array lamps{-1, 0, 50, 100, 200, 300, 400, 500, 600};
 constexpr std::array rankNumerators{6, 9, 12, 15, 18, 21, 24, 26, 27};
 constexpr std::array rankLabels{"E", "D", "C", "B", "A", "AA", "AAA", "MAX -", "MAX"};
 using namespace std::chrono;
@@ -94,7 +95,8 @@ void harder(Assignment &a, const Play &p, std::uint32_t choice) {
   }
   if (a.targetLamp >= 0 && a.targetLamp < 600) {
     auto next = a;
-    next.targetLamp = *std::upper_bound(lamps.begin(), lamps.end(), a.targetLamp);
+    next.targetLamp = *std::upper_bound(lamps.begin(), lamps.end(), a.targetLamp,
+        [](int left, int right) { return clearLampOrder(left) < clearLampOrder(right); });
     options.push_back(std::move(next));
   }
   auto next = a;
@@ -168,12 +170,12 @@ std::string dateLabel(DayId day) {
   return text.str();
 }
 std::string lampLabel(int lamp) {
-  switch (lamp) {
+  switch (normalizeClearLamp(lamp)) {
   case -2: return "Any";
   case -1: return "NO PLAY";
   case 0: return "FAILED";
   case 100: return "ASSIST EASY";
-  case 150: return "LIGHT ASSIST EASY";
+  case 50: return "LIGHT ASSIST EASY";
   case 200: return "EASY";
   case 300: return "CLEAR";
   case 400: return "HARD";
@@ -215,7 +217,7 @@ bool eligible(const Assignment &a, const Play &p) {
     });
   });
   if (!levelMatches || !p.manual || p.chart.empty()) return false;
-  if (a.eligibleLamp != -2 && (a.eligibleOrBelow ? p.previousLamp > a.eligibleLamp : p.previousLamp != a.eligibleLamp)) return false;
+  if (a.eligibleLamp != -2 && (a.eligibleOrBelow ? clearLampOrder(p.previousLamp) > clearLampOrder(a.eligibleLamp) : normalizeClearLamp(p.previousLamp) != normalizeClearLamp(a.eligibleLamp))) return false;
   if (a.eligibleScoreRank != -2) {
     const int rank = scoreRank(p.previousScore, p.previousMaxScore);
     if (a.eligibleScoreOrBelow ? rank > a.eligibleScoreRank : rank != a.eligibleScoreRank) return false;
@@ -224,7 +226,7 @@ bool eligible(const Assignment &a, const Play &p) {
 }
 namespace {
 bool meetsTargets(const Assignment &a, int lamp, int score, int maxScore) {
-  if (a.targetLamp >= 0 && lamp < a.targetLamp) return false;
+  if (a.targetLamp >= 0 && clearLampOrder(lamp) < clearLampOrder(a.targetLamp)) return false;
   return a.scoreNumerator == 0 || (maxScore > 0 &&
       static_cast<std::int64_t>(score) * a.scoreDenominator >=
       static_cast<std::int64_t>(maxScore) * a.scoreNumerator);
@@ -367,7 +369,7 @@ std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice, PlayPro
       if (!eligible(progress.requirement, p)) continue;
       achievement.eligibleSince = p.createdAt;
     }
-    achievement.lamp = std::max(achievement.lamp, p.lamp);
+    achievement.lamp = bestClearLamp(achievement.lamp, p.lamp);
     if (p.maxScore > 0 && p.score >= 0 &&
         (achievement.maxScore == 0 ||
          static_cast<std::int64_t>(p.score) * achievement.maxScore >

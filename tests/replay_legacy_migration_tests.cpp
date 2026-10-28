@@ -1755,7 +1755,7 @@ int main(int argc, char **argv) {
   testVersion18BadPointsRemainUnknownAfterMigration();
   testMigrationErrorMessageOwnership();
   if (argc > 1 && std::strcmp(argv[1], "--error-ownership") == 0) return 0;
-  static_assert(ReplayRepository::kCurrentSchemaVersion == 20);
+  static_assert(ReplayRepository::kCurrentSchemaVersion == 21);
   testHeaderOnlyCutover();
   testSchema10LegacySummaryBoundaryIsHeaderOnly();
   testVersion10MigrationPreservesLegacyReceiptOwnership();

@@ -218,6 +218,29 @@ serializeIrSubmissionSnapshot(const IrSubmissionSnapshot &snapshot,
   }
 }
 
+std::optional<std::string>
+serializeIrSubmissionSnapshot(const IrSubmissionSnapshot &snapshot,
+                              const result_persistence::ModernChartResult &owner,
+                              std::string &diagnostic) noexcept {
+  try {
+    auto payload = serializeIrSubmissionSnapshot(snapshot, diagnostic);
+    if (!payload) return std::nullopt;
+    auto expected = makeIrSubmission(owner);
+    if (!expected.value) { diagnostic = expected.diagnostic; return std::nullopt; }
+    auto actual = snapshot.submission;
+    actual.clearType = normalizeClearLamp(actual.clearType);
+    expected.value->clearType = normalizeClearLamp(expected.value->clearType);
+    if (actual != *expected.value) {
+      diagnostic = "IR snapshot disagrees with modern result";
+      return std::nullopt;
+    }
+    return payload;
+  } catch (...) {
+    diagnostic = "IR snapshot owner validation failed";
+    return std::nullopt;
+  }
+}
+
 std::optional<IrSubmissionSnapshot>
 deserializeIrSubmissionSnapshot(std::string_view serialized,
                                 std::string_view expectedFingerprint,

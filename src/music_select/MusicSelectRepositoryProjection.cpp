@@ -1,4 +1,6 @@
 #include "MusicSelectRepositoryProjection.h"
+#include "MusicSelectLampOrder.h"
+#include "../ClearLampOrder.h"
 #include "../BeatorajaClearType.h"
 
 #include "MusicSelectMode.h"
@@ -131,12 +133,15 @@ void MusicSelectFolderStatusAccumulator::add(const bms_parser::ChartMeta &meta,
 }
 
 skin::MusicSelectBarFrame MusicSelectFolderStatusAccumulator::finish() {
-  const auto firstLamp = std::ranges::find_if(
-      frame_.folderLampCounts, [](int count) { return count > 0; });
-  frame_.lamp = firstLamp == frame_.folderLampCounts.end()
-                    ? 0
-                    : static_cast<int>(std::distance(
-                          frame_.folderLampCounts.begin(), firstLamp));
+  frame_.lamp = 0;
+  bool foundLamp = false;
+  for (std::size_t lamp = 0; lamp < frame_.folderLampCounts.size(); ++lamp) {
+    if (frame_.folderLampCounts[lamp] > 0 &&
+        (!foundLamp || musicSelectLampOrder(static_cast<int>(lamp)) < musicSelectLampOrder(frame_.lamp))) {
+      frame_.lamp = static_cast<int>(lamp);
+      foundLamp = true;
+    }
+  }
   checkCancelled();
   return std::move(frame_);
 }
@@ -724,7 +729,7 @@ MusicSelectProjection MusicSelectRepositoryProjection::project(
                   courseSource.stages.front().meta.IsDP);
           int rank = kNoClearTypeRank;
           for (const auto &score : scores) {
-            if (score) rank = std::max(rank, score->clearType);
+            if (score) rank = bestClearLamp(rank, score->clearType);
           }
           grade.presentation.lamp = beatorajaSongClearType(rank);
           grade.score = scores.front();

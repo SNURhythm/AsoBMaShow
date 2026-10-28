@@ -1109,6 +1109,44 @@ void testChartQueryBehaviorMatrix() {
   checkQuery(query, descending, 5, 0);
   query.sortDirection = ChartRecordSortDirection::Ascending;
   checkQuery(query, ascending, 5, 0);
+
+  // Exercise canonical and old lamp IDs through real library/table queries.
+  seedChartScore(scorePath, "alpha.bms", md5A, shaA, 1, 150, 100);
+  seedChartScore(scorePath, "beta.bms", md5B, shaB, 1, 100, 300);
+  for (const bool tableScope : {false, true}) {
+    query = {};
+    query.selectedLongNoteMode = 1;
+    query.tableId = tableScope ? tables.front().id : 0;
+    query.tableLevel = tableScope ? "1" : "";
+    query.clearMarkFilter = true;
+    query.clearMarkRank = 100;
+    query.clearMarkOrAbove = true;
+    query.sortCriterion = ChartRecordSortCriterion::ClearMark;
+    query.sortDirection = ChartRecordSortDirection::Ascending;
+    checkQuery(query, {"beta.bms", "delta.bms"}, 2, 0);
+    query.clearMarkRank = 50;
+    checkQuery(query, {"alpha.bms", "beta.bms", "delta.bms"}, 3, 0);
+    query.clearMarkOrAbove = false;
+    checkQuery(query, {"alpha.bms"}, 1, 0);
+    query.clearMarkRank = 150;
+    checkQuery(query, {"alpha.bms"}, 1, 0);
+    query.clearMarkRank = 100;
+    query.clearMarkOrBelow = true;
+    query.keyword = "Artist";
+    // Title/artist rows include no-play Epsilon; exclude it by its empty artist.
+    checkQuery(query, {"gamma.bms", "alpha.bms", "beta.bms"}, 3, 0);
+  }
+  {
+    auto db = openDatabase(scorePath);
+    assert(execute(db.get(), "INSERT INTO goal_gauge_best VALUES('" + std::string(shaC) +
+        "',1,50,59,60,0,100,1)"));
+  }
+  assert(session->GoalRecommendationCounts().at(50) == 1);
+  for (int target : {50, 150}) {
+    const auto recommendations = session->GoalRecommendations(target, 0);
+    assert(recommendations.size() == 1 && recommendations[0].sha256 == shaC &&
+           recommendations[0].target == 50);
+  }
 }
 
 void testDifficultyEntryDownloadUrlsFollowTheirSourceRows() {

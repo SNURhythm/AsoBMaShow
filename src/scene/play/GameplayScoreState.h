@@ -839,7 +839,7 @@ public:
   // reconstructed gauge snapshot. Keep that presentation fact separate from
   // the live gauge calculation used while playing.
   void restoreClearTypeRankForResult(int rank) {
-    recalledClearTypeRank_ = rank;
+    recalledClearTypeRank_ = normalizeClearLamp(rank);
   }
 
   void applyGaugeJudgement(Judgement judgement) {

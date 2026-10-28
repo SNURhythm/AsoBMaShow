@@ -271,7 +271,7 @@ bool decodeRemoteScoreRow(sqlite3_stmt *stmt, ir::IrRemoteScore &score,
                          : sqlite3_column_double(stmt, 10),
       .noteCount = static_cast<int>(noteCount),
       .score = static_cast<int>(exScore),
-      .lampRank = static_cast<int>(lampRank),
+      .lampRank = normalizeClearLamp(static_cast<int>(lampRank)),
       .timeAchievedUnixMillis = optionalInteger(stmt, 15),
       .timeAddedUnixMillis = sqlite3_column_int64(stmt, 16),
   };
@@ -453,7 +453,7 @@ bool bindRemoteScore(sqlite3_stmt *stmt,
          bindOptionalDouble(stmt, column++, score.levelNumber) &&
          sqlite3_bind_int(stmt, column++, score.noteCount) == SQLITE_OK &&
          sqlite3_bind_int(stmt, column++, score.score) == SQLITE_OK &&
-         sqlite3_bind_int(stmt, column++, score.lampRank) == SQLITE_OK &&
+         sqlite3_bind_int(stmt, column++, normalizeClearLamp(score.lampRank)) == SQLITE_OK &&
          bindSqliteText(stmt, column++, score.service) &&
          bindOptionalInteger(stmt, column++, score.timeAchievedUnixMillis) &&
          sqlite3_bind_int64(stmt, column++, score.timeAddedUnixMillis) ==

@@ -49,6 +49,23 @@ const MusicSelectBar *child(const MusicSelectProjection &projection,
   return projection.find(directory->children[index]);
 }
 
+void testFolderMinimumUsesLampStrength() {
+  for (int light : {50, 150}) {
+    MusicSelectFolderStatusAccumulator accumulator({}, {
+        .clearFor=[light](const bms_parser::ChartMeta &meta, int) {
+          return meta.Title == "Assist" ? 100 : light;
+        }}, {});
+    bms_parser::ChartMeta meta;
+    meta.Title = "Assist";
+    accumulator.add(meta, true);
+    meta.Title = "Light";
+    accumulator.add(meta, true);
+    const auto frame = accumulator.finish();
+    require(frame.lamp == 3 && frame.folderLampCounts[2] == 1 && frame.folderLampCounts[3] == 1,
+            "folder minimum is light assist and counts retain external lamp IDs");
+  }
+}
+
 void testProjectsFoldersSongsScoresAndSourceFlags() {
   std::vector<ChartMetaRecord> records{
       chart("/songs/a/a.bms", "aaa", "Alpha", "Another", "/songs/a"),
@@ -876,6 +893,7 @@ int main(int argc, char **argv) {
   testAssignmentFoldersShowOnlyContributingCharts();
   testLazyPhysicalProjectionDoesNotVisitDescendantSongs();
   testSingleSongProjectionDoesNotAggregateOrVisitOtherRows();
+  testFolderMinimumUsesLampStrength();
   testSongAndFolderLampsUseBestClearWithoutRewritingBestExAttempt();
   testClearProviderMissIsAuthoritativeAndClearDoesNotRequireBestEx();
   testFolderStatusCancellationDuringClearLookupPreservesPublishedCounts();
