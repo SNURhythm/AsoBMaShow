@@ -12,6 +12,7 @@ class ChartGoalsSceneTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         scene = (root / "src/scene/ChartGoalsScene.cpp").read_text()
         methods = "\n".join(extract(scene, signature) for signature in (
+            "std::string rateText(", "void ChartGoalsScene::init(", "void ChartGoalsScene::showGoal(",
             "bool ChartGoalsScene::checkProfile(", "void ChartGoalsScene::later(",
             "void ChartGoalsScene::saveGoal(", "void ChartGoalsScene::removeGoal("))
         fixture = (root / "tests/chart_goals_scene_fixture.cpp").read_text()

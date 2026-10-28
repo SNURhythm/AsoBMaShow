@@ -159,6 +159,7 @@ struct ResultScene final : Scene {
   bool course;
   bool persistenceBlocked = false;
   streak::ResultPresentation streakPresentation_;
+  GoalResultPresentation goalPresentation_;
   long long streakSkinResumeMillis_ = 0;
   LocalResult local;
   std::unique_ptr<FakeResultSkin> resultSkinSession;
@@ -313,6 +314,16 @@ void testCourseReplayOwnsTransition() {
 }
 
 int main() {
+  {
+    Fixture fixture;
+    fixture.result->goalPresentation_.arm(true);
+    fixture.renderAt(100000);
+    require(!fixture.result->resultSkinFadeoutStartedMillis, "pending goal celebration suppresses skin auto exit");
+    fixture.result->goalPresentation_.start(SDL_GetTicks(), false);
+    fixture.renderAt(101000);
+    require(!fixture.result->resultSkinFadeoutStartedMillis, "visible goal celebration suppresses skin auto exit");
+  }
+
   {
     Fixture fixture;
     fixture.result->streakPresentation_.arm(

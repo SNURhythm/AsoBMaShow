@@ -1,9 +1,46 @@
 #include "ChartGoal.h"
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <ctime>
 #include <stdexcept>
 
 namespace chart_goals {
+std::int64_t nowUnixMillis() {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count();
+}
+std::string localDateTime(std::int64_t unixMillis) {
+  if (unixMillis <= 0) return {};
+  const auto seconds = static_cast<std::time_t>(unixMillis / 1000);
+  std::tm local{};
+#ifdef _WIN32
+  if (localtime_s(&local, &seconds) != 0) return {};
+#else
+  if (localtime_r(&seconds, &local) == nullptr) return {};
+#endif
+  char text[32]{};
+  if (!std::strftime(text, sizeof(text), "%Y-%m-%d %H:%M", &local)) return {};
+  return text;
+}
+std::vector<std::string> Index::hashes() const {
+  std::vector<std::string> result;
+  result.reserve(modes.size());
+  for (const auto &[hash, mask] : modes) result.push_back(hash);
+  return result;
+}
+std::optional<int> Index::modeFor(std::string_view sha256, int preferredMode) const {
+  std::string hash;
+  try { hash = normalizedHash(sha256); }
+  catch (const std::invalid_argument &) { return {}; }
+  const auto found = modes.find(hash);
+  if (found == modes.end()) return {};
+  if (preferredMode >= 0 && preferredMode <= 3 && (found->second & (1u << preferredMode)))
+    return preferredMode;
+  for (int mode = 0; mode <= 3; ++mode)
+    if (found->second & (1u << mode)) return mode;
+  return {};
+}
 std::optional<int> parseRate(std::string_view text) {
   int whole = 0, fraction = 0, decimals = -1;
   bool digit = false;

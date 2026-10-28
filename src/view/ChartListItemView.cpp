@@ -22,7 +22,7 @@ constexpr int kDifficultyColumnWidth = 86;
 constexpr int kLevelPadding = 12;
 constexpr int kBestWidth = 86;
 constexpr int kCompactBestWidth = 76;
-constexpr int kFavoriteWidth = 40;
+constexpr int kGoalWidth = 40;
 constexpr const char *kUiFont = main_menu_theme::font;
 
 class ArtworkPlaceholder final : public TextView {
@@ -160,10 +160,10 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   scoreRankColumn->addView(bestScoreView);
   contentCard->addView(scoreRankColumn);
 
-  favoriteButton = new Button();
-  favoriteButton->setName("chartListFavorite");
-  favoriteButton->setWidth(kFavoriteWidth)->setHeight(56)->setFlexShrink(0);
-  favoriteButton->setThemedBackgroundColors(
+  goalButton = new Button();
+  goalButton->setName("chartListGoal");
+  goalButton->setWidth(kGoalWidth)->setHeight(56)->setFlexShrink(0);
+  goalButton->setThemedBackgroundColors(
       [] { return Color(0, 0, 0, 0); },
       [this] {
         auto color = selected ? main_menu_theme::onSelected() : main_menu_theme::ink();
@@ -175,32 +175,28 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
         color.a = 34;
         return color;
       });
-  favoriteButton->setStyledBorderWidth(0);
-  favoriteIconView = new TextView(ui_icons::kFontAwesomeSolidPath, 25);
-  favoriteIconView->setText(ui_icons::textForCodepoint(0xf005));
-  favoriteIconView->setAlign(TextView::CENTER);
-  favoriteIconView->setVAlign(TextView::MIDDLE);
-  auto *favoriteContent = new View();
-  favoriteContent->setAlignItems(YGAlignCenter)->setJustifyContent(YGJustifyCenter);
-  favoriteIconView->setWidth(36)->setHeight(40);
-  favoriteOutlineView = new TextView("assets/fonts/fa-regular-400.ttf", 25);
-  favoriteOutlineView->setText(ui_icons::textForCodepoint(0xf005));
-  favoriteOutlineView->setWidth(36)->setHeight(40);
-  favoriteOutlineView->setAlign(TextView::CENTER);
-  favoriteOutlineView->setVAlign(TextView::MIDDLE);
-  favoriteContent->addView(favoriteIconView);
-  favoriteContent->addView(favoriteOutlineView);
-  favoriteButton->setContentView(favoriteContent);
-  favoriteButton->setOnClickListener([this]() {
+  goalButton->setStyledBorderWidth(0);
+  goalIconView = new TextView(ui_icons::kFontAwesomeSolidPath, 25);
+  goalIconView->setText(ui_icons::textForCodepoint(0xf024));
+  goalIconView->setAlign(TextView::CENTER);
+  goalIconView->setVAlign(TextView::MIDDLE);
+  auto *goalContent = new View();
+  goalContent->setAlignItems(YGAlignCenter)->setJustifyContent(YGJustifyCenter);
+  goalIconView->setWidth(36)->setHeight(40);
+  goalOutlineView = new TextView("assets/fonts/fa-regular-400.ttf", 25);
+  goalOutlineView->setText(ui_icons::textForCodepoint(0xf024));
+  goalOutlineView->setWidth(36)->setHeight(40);
+  goalOutlineView->setAlign(TextView::CENTER);
+  goalOutlineView->setVAlign(TextView::MIDDLE);
+  goalContent->addView(goalIconView);
+  goalContent->addView(goalOutlineView);
+  goalButton->setContentView(goalContent);
+  goalButton->setOnClickListener([this]() {
     if (currentRecord.courseStart || solidArchive || unavailable ||
         currentRecord.meta.BmsPath.empty()) return;
-    const bool nextFavorite = !favorite;
-    const auto toggledPath = currentRecord.meta.BmsPath;
-    if (!favoriteToggleHandler || favoriteToggleHandler(currentRecord, nextFavorite)) {
-      if (currentRecord.meta.BmsPath == toggledPath) setFavoriteState(nextFavorite);
-    }
+    if (goalHandler) goalHandler(currentRecord);
   });
-  contentCard->addView(favoriteButton);
+  contentCard->addView(goalButton);
   onUnselected();
   applyYogaLayout();
 }
@@ -218,7 +214,7 @@ void ChartListItemView::onLayout() {
 
 void ChartListItemView::refreshColumnWidths() {
   const int availableWidth = std::max(0, getWidth() - 2 * kRowPadding -
-      4 * kColumnGap - kArtworkWidth - kFavoriteWidth -
+      4 * kColumnGap - kArtworkWidth - kGoalWidth -
       (compact_ ? kCompactBestWidth : kBestWidth));
   const int titleMinimum = std::min(kTitleMinimumWidth, availableWidth / 2);
   const int difficultyWidth = std::min(desiredDifficultyWidth_, availableWidth - titleMinimum);
@@ -240,7 +236,7 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
   const auto &meta = record.meta;
   unavailable = record.unavailable;
   solidArchive = record.solidArchive;
-  favorite = record.favorite;
+  goal = false;
   const bool random = record.randomSelect.has_value();
   artworkPlaceholder->setText(ui_icons::textForCodepoint(random ? 0xf074 : ui_icons::kMusic));
   detailsLayout->setVisible(!random);
@@ -289,10 +285,10 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
   const bool hasArtwork = !random && !record.courseStart && !unavailable && !solidArchive && !artwork.empty();
   if (hasArtwork) jacketImage->setImageAsync(meta.Folder / artwork, prioritizeArtwork);
   else jacketImage->freeImage();
-  favoriteButton->setVisible(!random && !record.courseStart && !unavailable &&
+  goalButton->setVisible(!random && !record.courseStart && !unavailable &&
                              !solidArchive &&
                              !meta.BmsPath.empty());
-  refreshFavoriteButton();
+  refreshGoalButton();
 }
 
 void ChartListItemView::setClearRank(int clearRank) {
@@ -332,26 +328,25 @@ void ChartListItemView::setBestScoreRank(int score, int maxScore) {
   refreshScoreRankColor();
 }
 
-void ChartListItemView::setFavoriteToggleHandler(
-    std::function<bool(const ChartMetaRecord &, bool)> handler) {
-  favoriteToggleHandler = std::move(handler);
+void ChartListItemView::setGoalHandler(std::function<void(const ChartMetaRecord &)> handler) {
+  goalHandler = std::move(handler);
 }
 
-void ChartListItemView::setFavoriteState(bool nextFavorite) {
-  favorite = nextFavorite;
-  currentRecord.favorite = nextFavorite;
-  refreshFavoriteButton();
+void ChartListItemView::setGoalState(bool nextGoal) {
+  goal = nextGoal;
+  refreshGoalButton();
 }
 
-void ChartListItemView::refreshFavoriteButton() {
-  if (!favoriteIconView) return;
-  favoriteButton->propagateThemeChange();
-  favoriteIconView->setVisible(favorite);
-  favoriteIconView->setDisplay(favorite ? YGDisplayFlex : YGDisplayNone);
-  favoriteOutlineView->setVisible(!favorite);
-  favoriteOutlineView->setDisplay(favorite ? YGDisplayNone : YGDisplayFlex);
-  favoriteOutlineView->setThemedColor(selected ? main_menu_theme::onSelected : main_menu_theme::secondary);
-  favoriteIconView->setThemedColor(favorite
+void ChartListItemView::refreshGoalButton() {
+  if (!goalIconView) return;
+  goalButton->setSelected(goal);
+  goalButton->propagateThemeChange();
+  goalIconView->setVisible(goal);
+  goalIconView->setDisplay(goal ? YGDisplayFlex : YGDisplayNone);
+  goalOutlineView->setVisible(!goal);
+  goalOutlineView->setDisplay(goal ? YGDisplayNone : YGDisplayFlex);
+  goalOutlineView->setThemedColor(selected ? main_menu_theme::onSelected : main_menu_theme::secondary);
+  goalIconView->setThemedColor(goal
       ? (selected ? main_menu_theme::selectedAccent : main_menu_theme::accent)
       : (selected ? main_menu_theme::selectedSecondary : main_menu_theme::muted));
 }
@@ -370,14 +365,14 @@ void ChartListItemView::onSelected() {
   selected = true;
   contentCard->setThemedBackgroundColor(main_menu_theme::selected);
   applyTextColors(true);
-  refreshFavoriteButton();
+  refreshGoalButton();
 }
 
 void ChartListItemView::onUnselected() {
   selected = false;
   contentCard->clearBackgroundColor();
   applyTextColors(false);
-  refreshFavoriteButton();
+  refreshGoalButton();
 }
 
 void ChartListItemView::applyTextColors(bool selected) {

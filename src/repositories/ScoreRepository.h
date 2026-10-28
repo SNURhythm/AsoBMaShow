@@ -98,6 +98,8 @@ public:
   bool ConfigureStreak(const streak::Config &, streak::DayId &effectiveDay, std::string &error);
   bool BuyStreakFreeze(std::string &error);
   std::optional<chart_goals::ProgressPage> LoadChartGoals(int offset, std::string &error);
+  std::optional<chart_goals::Index> LoadChartGoalIndex(std::string &error);
+  std::vector<chart_goals::Goal> TakeChartGoalAchievements(std::string_view attemptId);
   std::optional<chart_goals::GoalProgress> LoadChartGoal(
       const bms_parser::ChartMeta &, int selectedMode, std::string &error);
   bool SaveChartGoal(const chart_goals::Goal &, std::string &error);

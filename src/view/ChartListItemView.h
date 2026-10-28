@@ -18,8 +18,8 @@ public:
                bool prioritizeArtwork = false);
   void setClearRank(int clearRank);
   void setBestScoreRank(int score, int maxScore);
-  void setFavoriteToggleHandler(
-      std::function<bool(const ChartMetaRecord &, bool)> handler);
+  void setGoalHandler(std::function<void(const ChartMetaRecord &)> handler);
+  void setGoalState(bool goal);
   void onSelected() override;
   void onUnselected() override;
 
@@ -28,17 +28,16 @@ protected:
 
 private:
   void applyTextColors(bool selected);
-  void setFavoriteState(bool favorite);
-  void refreshFavoriteButton();
+  void refreshGoalButton();
   void refreshScoreRankColor();
   void refreshColumnWidths();
 
   ChartMetaRecord currentRecord;
   bool unavailable = false;
   bool solidArchive = false;
-  bool favorite = false;
+  bool goal = false;
   bool selected = false;
-  std::function<bool(const ChartMetaRecord &, bool)> favoriteToggleHandler;
+  std::function<void(const ChartMetaRecord &)> goalHandler;
   View *contentCard;
   bool compact_ = false;
   int desiredDifficultyWidth_ = 86;
@@ -61,7 +60,7 @@ private:
   TextView *scoreRankView;
   TextView *bestScoreView;
   std::string scoreRank;
-  Button *favoriteButton;
-  TextView *favoriteIconView;
-  TextView *favoriteOutlineView;
+  Button *goalButton;
+  TextView *goalIconView;
+  TextView *goalOutlineView;
 };

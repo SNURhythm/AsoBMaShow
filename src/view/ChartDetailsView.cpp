@@ -3,6 +3,7 @@
 #include "ChartDetailsView.h"
 
 #include "ClearLampColors.h"
+#include "Button.h"
 #include "ImageView.h"
 #include "IconText.h"
 #include "MainMenuTheme.h"
@@ -172,6 +173,36 @@ ChartDetailsView::ChartDetailsView(ImageView *artwork) {
   genre_->setOverflow(TextView::TextOverflow::Marquee);
   titleRow_ = new View();
   titleRow_->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(10);
+  favoriteButton_ = new Button();
+  favoriteButton_->setName("chartDetailsFavorite");
+  favoriteButton_->setWidth(40)->setHeight(48)->setFlexShrink(0);
+  favoriteButton_->setThemedBackgroundColors(
+      [] { return Color(0, 0, 0, 0); }, main_menu_theme::hover, main_menu_theme::pressed);
+  favoriteButton_->setStyledBorderWidth(0);
+  auto *favoriteContent = new View();
+  favoriteContent->setAlignItems(YGAlignCenter)->setJustifyContent(YGJustifyCenter);
+  favoriteIcon_ = new TextView(ui_icons::kFontAwesomeSolidPath, 25);
+  favoriteOutline_ = new TextView("assets/fonts/fa-regular-400.ttf", 25);
+  for (auto *icon : {favoriteIcon_, favoriteOutline_}) {
+    icon->setText(ui_icons::textForCodepoint(0xf005));
+    icon->setWidth(36)->setHeight(40);
+    icon->setAlign(TextView::CENTER); icon->setVAlign(TextView::MIDDLE);
+    favoriteContent->addView(icon);
+  }
+  favoriteIcon_->setThemedColor(main_menu_theme::accent);
+  favoriteOutline_->setThemedColor(main_menu_theme::secondary);
+  favoriteButton_->setContentView(favoriteContent);
+  favoriteButton_->setOnClickListener([this] {
+    if (!currentRecord_ || !favoriteToggleHandler_) return;
+    const auto record = *currentRecord_;
+    const bool next = !record.favorite;
+    if (favoriteToggleHandler_(record, next) && currentRecord_ &&
+        currentRecord_->meta.BmsPath == record.meta.BmsPath) {
+      currentRecord_->favorite = next;
+      refreshFavoriteButton();
+    }
+  });
+  titleRow_->addView(favoriteButton_);
   title_->setFlex(1)->setMinWidth(0);
   titleRow_->addView(title_);
   titles->addView(titleRow_);
@@ -463,11 +494,26 @@ void ChartDetailsView::setCompact(bool compact) {
   }
 }
 
+void ChartDetailsView::setFavoriteToggleHandler(
+    std::function<bool(const ChartMetaRecord &, bool)> handler) {
+  favoriteToggleHandler_ = std::move(handler);
+}
+
+void ChartDetailsView::refreshFavoriteButton() {
+  const bool favorite = currentRecord_ && currentRecord_->favorite;
+  favoriteButton_->setSelected(favorite);
+  visible(favoriteButton_, currentRecord_.has_value());
+  visible(favoriteIcon_, favorite);
+  visible(favoriteOutline_, !favorite);
+}
+
 void ChartDetailsView::setChart(const ChartMetaRecord *record,
                                const std::optional<ScoreBestSnapshot> &best,
                                int clearRank, const std::string &total) {
   const bool chart = record && !record->randomSelect && !record->courseStart && !record->solidArchive &&
                      !record->unavailable && !record->meta.BmsPath.empty();
+  currentRecord_ = chart ? std::optional(*record) : std::nullopt;
+  refreshFavoriteButton();
   const std::string chartPath = chart ? record->meta.BmsPath : "";
   if (glowChartPath_ != chartPath) {
     glowChartPath_ = chartPath;

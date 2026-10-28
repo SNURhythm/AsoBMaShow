@@ -208,6 +208,7 @@ struct MainMenuScene : Scene {
   int assignmentDayId=1;
   std::map<std::string, std::vector<std::string>> assignmentChartHashes;
   std::string searchText;
+  std::vector<std::string> chartGoalHashes;
   struct { int longNoteMode=1; } profileSelections;
   ChartRecordFilters chartRecordFilters;
   struct {
@@ -595,6 +596,12 @@ int main(int argc,char **argv) {
       scene.activeFolder=staleSelection
           ? MainMenuScene::LibraryFolderItem{.key="deleted-course",.type=T::Course,.courseId=99}
           : MainMenuScene::LibraryFolderItem{};
+      MainMenuScene goals;
+      goals.chartGoalHashes = {"goal-a", "goal-b"};
+      goals.activeFolder = {.key="goals", .type=T::Goals};
+      assert(goals.chartQueryForActiveFolder().allowedSha256 == std::vector<std::string>({"goal-a", "goal-b"}));
+      goals.chartGoalHashes.clear();
+      assert(goals.chartQueryForActiveFolder().allowedSha256->empty());
       scene.searchText="challenge";
       scene.project(emptyCourses);
       assert(emptyCourses.empty());

@@ -183,6 +183,7 @@ int main() {
         root = Path(__file__).resolve().parents[1]
         source = (root / "src/scene/ResultScene.cpp").read_text()
         methods = "\n".join(extract(source, signature) for signature in (
+            "void ResultScene::prepareGoalAchievement()",
             "void ResultScene::prepareStreakProgress()",
             "void ResultScene::updateStreakProgress()",
             "bool ResultScene::streakOwnsInput() const",

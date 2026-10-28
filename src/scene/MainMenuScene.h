@@ -119,8 +119,10 @@ private:
   Scene *activeUtilityTab() const;
   void selectTab(Tab tab);
   void openStreakAssignment(const std::string &id);
-  void openChartGoals(std::optional<ChartMetaRecord> initial = {});
-  void openChartGoalForSelection();
+  void openChartGoals(std::optional<ChartMetaRecord> initial = {}, std::optional<int> mode = {});
+  void openChartGoal(const ChartMetaRecord &record);
+  chart_goals::Index chartGoalIndex;
+  std::vector<std::string> chartGoalHashes;
   void resumeGoalNavigation();
   void applyGoalSelection(const ChartMetaRecord &, int mode);
   std::optional<std::pair<ChartMetaRecord, int>> pendingGoalSelection_;
@@ -183,6 +185,7 @@ private:
       AllSongs,
       Assignments,
       Favorites,
+      Goals,
       SolidArchives,
       DifficultyTable,
       DifficultyLevel,

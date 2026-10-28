@@ -1,4 +1,6 @@
 #include "streak/StreakModel.h"
+#include "goals/ChartGoal.h"
+#include "goals/GoalResultPresentation.h"
 #include "streak/StreakRoundMotion.h"
 #include "streak/StreakResultPresentation.h"
 #include <cassert>
@@ -83,6 +85,8 @@ struct Local {
 struct ResultScene {
   struct {
     struct { int audioRuntime() { return 0; } } jukebox;
+    struct { struct Profile { std::string id="one"; } profile;
+      const Profile &activeProfile() const { return profile; } } profileManager;
     std::uint64_t currentFrame = 11;
     std::atomic_bool replayVideoExportActive{false};
     struct { bool exportRequested() const { return false; } } rendererAccess;
@@ -98,6 +102,10 @@ struct ResultScene {
     } inputDeviceRegistry;
     struct {
       int loads=0;
+      std::vector<chart_goals::Goal> achievements;
+      std::vector<chart_goals::Goal> TakeChartGoalAchievements(std::string_view attempt) {
+        assert(attempt == "test"); return std::exchange(achievements, {});
+      }
       streak::State state;
       std::optional<streak::PlayProgress> progress;
       std::optional<streak::PlayProgress> TakeStreakProgress(std::string_view attempt) {
@@ -133,12 +141,32 @@ struct ResultScene {
   bool streakOwnsInput() const;
   auto inputCallback() { return CAPTURE_INPUT; }
   auto browserCallback() { return OPEN_BROWSER; }
+  void prepareGoalAchievement();
+  GoalResultPresentation goalPresentation_;
+  std::vector<chart_goals::Goal> goalAchievements_;
+  std::string goalProfileId_;
   void prepareStreakProgress();
   void dismissStreakProgress(bool swallowRelease=false);
   bool handleStreakProgressEvent(SDL_Event &);
 };
 PRODUCTION_METHODS
 int main() {
+  ResultScene goal;
+  goal.context.scoreRepository.achievements = {chart_goals::Goal{}};
+  goal.prepareGoalAchievement();
+  assert(!goal.goalPresentation_.active()); // A failed save may be retried.
+  goal.local.persistenceOptions.chartOutcome->saved_ = true;
+  goal.local.practiceOptions.enabled = true; goal.prepareGoalAchievement();
+  assert(!goal.goalPresentation_.active());
+  goal.local.practiceOptions.enabled = false; goal.local.replayResult = true;
+  goal.prepareGoalAchievement(); assert(!goal.goalPresentation_.active());
+  goal.local.replayResult = false; goal.local.autoPlayResult = true;
+  goal.prepareGoalAchievement(); assert(!goal.goalPresentation_.active());
+  goal.local.autoPlayResult = false; goal.prepareGoalAchievement();
+  assert(goal.goalPresentation_.active() && goal.goalAchievements_.size() == 1);
+  goal.goalPresentation_.dismiss(); goal.prepareGoalAchievement();
+  assert(!goal.goalPresentation_.active()); // Rebuilding does not replay it.
+
   // Only the receipt which crosses the goal ignites, including on a completed day.
   for (bool reached : {false, true}) {
     ResultScene cue;

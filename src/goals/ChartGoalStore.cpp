@@ -24,6 +24,10 @@ int integer(const nlohmann::json &body, const char *key, int minimum, int maximu
 void validateGoal(const Goal &goal) {
   validate(goal.target);
   (void)normalizedHash(goal.chart.SHA256);
+  if (goal.setAtUnixMillis < 0 || goal.achievedAtUnixMillis < 0 ||
+      goal.setAtUnixMillis > 253402300799999LL || goal.achievedAtUnixMillis > 253402300799999LL ||
+      (goal.achievedAtUnixMillis > 0 && goal.achievedAtUnixMillis < goal.setAtUnixMillis))
+    throw std::invalid_argument("Invalid goal dates.");
   if (goal.longNoteMode < 0 || goal.longNoteMode > 3 ||
       goal.chart.LnMode < 0 || goal.chart.LnMode > 3 ||
       goal.chart.TotalLongNotes < 0 || goal.chart.TotalBackSpinNotes < 0 ||
@@ -53,6 +57,15 @@ Goal decode(sqlite3_stmt *query) {
   goal.target.lamp = integer(body, "lamp", -1, 600);
   goal.target.scoreNumerator = integer(body, "numerator", 0, 10000);
   goal.target.scoreDenominator = integer(body, "denominator", 1, 10000);
+  for (const auto &[name, output] : std::array{
+           std::pair{"setAt", &goal.setAtUnixMillis},
+           std::pair{"achievedAt", &goal.achievedAtUnixMillis}}) {
+    if (!body.contains(name)) continue; // Version 1 rows predating date tracking.
+    const auto &value = body.at(name);
+    if (!value.is_number_integer() || value < 0 || value > 253402300799999LL)
+      throw std::runtime_error("Invalid goal date.");
+    *output = value.get<std::int64_t>();
+  }
   validateGoal(goal);
   if (goal.chart.SHA256 != normalizedHash(goal.chart.SHA256))
     throw std::runtime_error("Invalid stored goal identity.");
@@ -62,6 +75,34 @@ void bindIdentity(sqlite3 *db, sqlite3_stmt *query, const std::string &hash, int
   require(sqlite3_bind_text(query, 1, hash.c_str(), -1, SQLITE_TRANSIENT) == SQLITE_OK &&
           sqlite3_bind_int(query, 2, mode) == SQLITE_OK, db);
 }
+}
+Index loadIndex(sqlite3 *db) {
+  Index result;
+  if (!exists(db)) return result;
+  SqliteStatementHandle query;
+  require(prepareSqliteStatement(db, "SELECT sha256, ln_mode FROM chart_goals", query) == SQLITE_OK, db);
+  int rc;
+  while ((rc = sqlite3_step(query)) == SQLITE_ROW) {
+    const auto hash = sqliteColumnString(query, 0);
+    const int mode = sqlite3_column_int(query, 1);
+    if (mode < 0 || mode > 3 || normalizedHash(hash) != hash)
+      throw std::runtime_error("Invalid stored goal identity.");
+    result.modes[hash] |= 1u << mode;
+  }
+  require(rc == SQLITE_DONE, db);
+  return result;
+}
+std::vector<Goal> loadForChart(sqlite3 *db, std::string_view sha256) {
+  const auto hash = normalizedHash(sha256);
+  std::vector<Goal> result;
+  if (!exists(db)) return result;
+  SqliteStatementHandle query;
+  require(prepareSqliteStatement(db, "SELECT sha256, ln_mode, body FROM chart_goals WHERE sha256=? ORDER BY ln_mode LIMIT 4", query) == SQLITE_OK, db);
+  require(sqlite3_bind_text(query, 1, hash.c_str(), -1, SQLITE_TRANSIENT) == SQLITE_OK, db);
+  int rc;
+  while ((rc = sqlite3_step(query)) == SQLITE_ROW) result.push_back(decode(query));
+  require(rc == SQLITE_DONE, db);
+  return result;
 }
 Page loadPage(sqlite3 *db, int offset) {
   if (offset < 0) throw std::invalid_argument("Invalid goal page.");
@@ -103,7 +144,8 @@ void save(sqlite3 *db, const Goal &goal) {
       {"title", goal.chart.Title}, {"subtitle", goal.chart.SubTitle},
       {"lnMode", goal.chart.LnMode}, {"longNotes", goal.chart.TotalLongNotes},
       {"backSpins", goal.chart.TotalBackSpinNotes}, {"lamp", goal.target.lamp},
-      {"numerator", goal.target.scoreNumerator}, {"denominator", goal.target.scoreDenominator}}.dump();
+      {"numerator", goal.target.scoreNumerator}, {"denominator", goal.target.scoreDenominator},
+      {"setAt", goal.setAtUnixMillis}, {"achievedAt", goal.achievedAtUnixMillis}}.dump();
   if (body.size() > 65536) throw std::invalid_argument("Goal metadata is too large.");
   SqliteStatementHandle query;
   require(prepareSqliteStatement(db, "INSERT INTO chart_goals VALUES (?, ?, ?) ON CONFLICT(sha256, ln_mode) DO UPDATE SET body=excluded.body", query) == SQLITE_OK, db);

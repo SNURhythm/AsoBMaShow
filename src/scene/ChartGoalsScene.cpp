@@ -91,13 +91,14 @@ void select(View *parent, OverlayPortal *portal, const std::string &caption,
 }
 }
 ChartGoalsScene::ChartGoalsScene(ApplicationContext &context, SceneReturnTarget target,
-                               std::optional<ChartMetaRecord> initial, SelectChart onSelect)
+                               std::optional<ChartMetaRecord> initial, SelectChart onSelect,
+                               std::optional<int> initialMode)
     : Scene(context), returnTarget_(std::move(target)), onSelectChart_(std::move(onSelect)),
-      initial_(std::move(initial)), profileId_(context.profileManager.activeProfile().id) {}
+      initial_(std::move(initial)), initialMode_(initialMode), profileId_(context.profileManager.activeProfile().id) {}
 bool ChartGoalsScene::checkProfile() {
   if (profileId_ == context.profileManager.activeProfile().id) return true;
   profileId_ = context.profileManager.activeProfile().id;
-  initial_.reset(); resolved_.reset(); selected_.reset();
+  initial_.reset(); initialMode_.reset(); resolved_.reset(); selected_.reset();
   draft_ = {}; page_ = {}; offset_ = 0;
   editing_ = customScore_ = confirmRemove_ = loadFailed_ = false;
   message_.clear(); customRate_.clear();
@@ -114,8 +115,9 @@ void ChartGoalsScene::init() {
   checkProfile();
   if (initial_) {
     auto record = std::exchange(initial_, {});
-    showGoal({.chart=record->meta, .longNoteMode=scoreLongNoteModeForClearLamp(
-        record->meta, long_note_mode::valueFromId(context.settings.selectedLnMode))});
+    showGoal({.chart=record->meta, .longNoteMode=initialMode_.value_or(scoreLongNoteModeForClearLamp(
+        record->meta, long_note_mode::valueFromId(context.settings.selectedLnMode)))});
+    initialMode_.reset();
   } else reload();
   build();
 }
@@ -271,6 +273,14 @@ void ChartGoalsScene::build() {
       action(detail, i18n::tr("goals.ui.save"), [this] { later([this] { saveGoal(); }); }, app_theme::ActionCategory::Primary);
     } else {
       targets(detail, draft_.target);
+      const auto setDate = chart_goals::localDateTime(draft_.setAtUnixMillis);
+      label(detail, i18n::format("goals.ui.set_date", {{"date", setDate.empty()
+          ? i18n::tr("goals.ui.date_unknown") : setDate}}), 18)->setThemedColor(app_theme::textSecondary);
+      if (draft_.achievedAtUnixMillis > 0 || selected_->progress.achieved) {
+        const auto achievedDate = chart_goals::localDateTime(draft_.achievedAtUnixMillis);
+        label(detail, i18n::format("goals.ui.achieved_date", {{"date", achievedDate.empty()
+            ? i18n::tr("goals.ui.date_unknown") : achievedDate}}), 18)->setThemedColor(app_theme::textSecondary);
+      }
       const auto &progress = selected_->progress;
       label(detail, i18n::tr(progress.achieved ? "goals.ui.achieved" : "goals.ui.in_progress"), 25)
           ->setThemedColor(progress.achieved ? app_theme::lime : app_theme::textPrimary);

@@ -50,9 +50,13 @@ See [research and tradeoffs](../../research/rhythm-game-motivation-2026-10-28.md
 - Use the existing theme, scrollable responsive layout, dropdown controls for
   targets, shared lamp colors, and all five existing UI locales. Back/Escape
   return safely; deferred view rebuilding avoids deleting controls mid-callback.
-- The initial delivery does not add result popups or a new top-level tab.
-  Progress is inspected in the goal detail/list and refreshes after returning
-  from play or practice. Existing result screens and Combo completion cues remain.
+- Follow-up: a chart-row flag opens the configured goal (current LN mode first,
+  then another configured scope); the favorite star moves beside the detail title.
+  A Goals folder aggregates indexed charts with goals in both selectors.
+- Follow-up: retain and display set/first-achieved timestamps. Changed targets
+  start a new timeline; unchanged targets preserve dates. Goal completion during
+  a saved play produces one finite result banner, delayed until Combo closes.
+  It does not repeat for practice, replay, autoplay, or scene rebuilding.
 
 ## Storage and boundaries
 
@@ -79,7 +83,7 @@ inherit a goal. A chart without selectable LN behavior has one shared goal.
 3. Persistent goals: familiar, explicit, independently useful; selected.
 
 Table-wide targets, baseline/consistency analytics, rivalry, goal sharing,
-automatic chart recommendations, and result-screen goal overlays are deferred.
+and automatic chart recommendations are deferred.
 No deployment, worktree creation, or changes to Combo rewards.
 
 ## Verification

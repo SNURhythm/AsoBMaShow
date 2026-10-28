@@ -2,6 +2,8 @@
 
 #include "ResultPhotoExportPresentation.h"
 #include "../streak/StreakModel.h"
+#include "../goals/ChartGoal.h"
+#include "../goals/GoalResultPresentation.h"
 #include "../streak/StreakSounds.h"
 #include "../streak/StreakResultPresentation.h"
 #include "../streak/StreakRoundMotion.h"
@@ -395,6 +397,15 @@ private:
   ScrollView *resultScroll = nullptr;
   std::array<int, 6> resultLayoutSignature{};
   void resizeResultLayout();
+  void prepareGoalAchievement();
+  void buildGoalAchievement();
+  void updateGoalAchievement();
+  GoalResultPresentation goalPresentation_;
+  std::vector<chart_goals::Goal> goalAchievements_;
+  std::string goalProfileId_;
+  View *goalAchievementView_ = nullptr;
+  float goalAchievementUnit_ = 0;
+  std::array<int, 3> goalAchievementLayout_{};
   void prepareStreakProgress();
   void buildStreakProgress(bool animate);
   void updateStreakProgress();

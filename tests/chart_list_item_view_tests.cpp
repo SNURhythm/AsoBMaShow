@@ -1,5 +1,6 @@
 #include "rendering/UniformCache.h"
 #include "view/ChartListItemView.h"
+#include "view/Button.h"
 #include "view/LibraryFolderItemView.h"
 #include "view/ImageView.h"
 #include "view/UiTheme.h"
@@ -253,16 +254,29 @@ int main() {
     row.setMeta(record);
     row.applyYogaLayout();
     const int wideDifficultyWidth = difficulty->getWidth();
-    auto *favorite = row.findViewByName("chartListFavorite");
-    require(favorite && favorite->getVisible(), "playable rows retain their favorite action");
+    auto *goal = row.findViewByName("chartListGoal");
+    require(goal && goal->getVisible(), "playable rows retain their goal action");
+    std::string openedPath;
+    row.setGoalHandler([&](const ChartMetaRecord &clicked) { openedPath = clicked.meta.BmsPath; });
+    row.setGoalState(true);
+    require(dynamic_cast<Button *>(goal)->isSelected(), "configured goals highlight their flag");
+    SDL_Event click{};
+    click.button.button = SDL_BUTTON_LEFT;
+    click.button.x = goal->getX() + goal->getWidth() / 2;
+    click.button.y = goal->getY() + goal->getHeight() / 2;
+    click.type = SDL_EVENT_MOUSE_BUTTON_DOWN; row.handleEvents(click);
+    click.type = SDL_EVENT_MOUSE_BUTTON_UP; row.handleEvents(click);
+    require(openedPath == record.meta.BmsPath, "flag taps open the goal for that row's chart");
+    row.setMeta(record);
+    require(!dynamic_cast<Button *>(goal)->isSelected(), "recycled rows clear stale goal highlights");
     for (const int width : {620, 420, 780, 620}) {
       row.setWidth(width);
       row.applyYogaLayout();
       require(difficulty->getX() >= title->getX() + title->getWidth() && title->getWidth() >= 80 &&
                   rankBadge->getX() >= difficulty->getX() + difficulty->getWidth() &&
-                  favorite->getX() >= rankBadge->getX() + rankBadge->getWidth() &&
-                  favorite->getX() + favorite->getWidth() <= row.getX() + row.getWidth(),
-              "long multi-table labels preserve title space and keep score and favorite inside narrow rows");
+                  goal->getX() >= rankBadge->getX() + rankBadge->getWidth() &&
+                  goal->getX() + goal->getWidth() <= row.getX() + row.getWidth(),
+              "long multi-table labels preserve title space and keep score and goal inside narrow rows");
       require(difficulty->getWidth() < wideDifficultyWidth,
               "difficulty width adapts to resizing within the compact breakpoint");
       require(difficulty->getText() == record.difficultyTableLabels,
@@ -300,12 +314,12 @@ int main() {
     record.courseStart = false;
     record.randomSelect = ChartSelectorRandomFilter::Any;
     row.setMeta(record);
-    require(jacket->imagePath().empty() && !favorite->getVisible() &&
+    require(jacket->imagePath().empty() && !goal->getVisible() &&
                 !rankBadge->getVisible(),
-            "random rows do not borrow chart artwork, scores, or favorite actions");
+            "random rows do not borrow chart artwork, scores, or goal actions");
     record.randomSelect.reset();
     row.setMeta(record);
-    require(favorite->getVisible() && rankBadge->getVisible(),
+    require(goal->getVisible() && rankBadge->getVisible(),
             "recycling a random row restores ordinary chart controls");
   }
 

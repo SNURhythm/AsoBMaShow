@@ -1,6 +1,7 @@
 #include <cassert>
 #include "ui/PresentationSchedule.h"
 #include "streak/StreakResultPresentation.h"
+#include "goals/GoalResultPresentation.h"
 std::uint64_t SDL_GetTicks() { return 100; }
 
 enum class PresentationMode { BuiltIn, Skin };
@@ -61,6 +62,7 @@ struct MainMenuScene : Scene {
 };
 struct ResultScene : Scene {
   streak::ResultPresentation streakPresentation_;
+  GoalResultPresentation goalPresentation_;
   void *resultSkinSession = nullptr;
   bool needsContinuousPresentation() const override;
 };
@@ -165,6 +167,12 @@ int main() {
   assert(!eofSchedule.shouldRender(8, menu.needsContinuousPresentation()));
 
   ResultScene result;
+  assert(!result.needsContinuousPresentation());
+  assert(result.goalPresentation_.arm(true));
+  assert(!result.needsContinuousPresentation());
+  assert(result.goalPresentation_.start(100, false));
+  assert(result.needsContinuousPresentation());
+  assert(result.goalPresentation_.finish(100 + GoalResultPresentation::duration));
   assert(!result.needsContinuousPresentation());
   result.resultSkinSession = &skin;
   assert(result.needsContinuousPresentation() == bool(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS));

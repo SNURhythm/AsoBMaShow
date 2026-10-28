@@ -764,6 +764,13 @@ void MusicSelectScene::reloadLibrary(bool preserveDirectory) {
   } else {
     SDL_Log("Unable to load assignment folders: %s", streakError.c_str());
   }
+  MusicSelectBar goals{.id={"container:goals"}, .kind=skin::MusicSelectBarKind::Container,
+      .title=i18n::tr("goals.ui.folder"),
+      .presentation={.kind=skin::MusicSelectBarKind::Container,
+          .title=i18n::tr("goals.ui.folder"), .exists=true},
+      .selectable=true, .sortable=true, .childrenLoaded=false};
+  projection.root.push_back(goals.id);
+  projection.bars.push_back(std::move(goals));
   bars_.refresh(std::move(projection));
   bars_.configure({.modeFilter = context.settings.skinModeFilterName,
                    .difficultyFilter =
@@ -1850,6 +1857,20 @@ bool MusicSelectScene::loadDirectoryChildren(
     break;
   }
   case skin::MusicSelectBarKind::Container: {
+    if (directory.id.value == "container:goals") {
+      std::string error;
+      const auto goals = context.scoreRepository.LoadChartGoalIndex(error);
+      if (!goals) { SDL_Log("Unable to load goal folder: %s", error.c_str()); return false; }
+      ChartMetaQuery query;
+      query.allowedSha256 = goals->hashes();
+      query.selectedLongNoteMode = selectedLongNoteMode;
+      std::vector<ChartMetaRecord> records;
+      chartSession_->QueryChartMeta(query, records);
+      for (const auto &record : records)
+        children.push_back(MusicSelectRepositoryProjection::projectSong(
+            record, directory.id.value, inputFor({})));
+      break;
+    }
     if (musicSelectIsAssignmentDirectory(directory)) {
       if (!assignmentCharts_)
         assignmentCharts_ = loadMusicSelectAssignmentCharts(
@@ -3656,12 +3677,19 @@ void MusicSelectScene::openChartGoalForSelection() {
 void MusicSelectScene::openChartGoals(std::optional<ChartMetaRecord> initial) {
   if (context.storageMaintenanceActive || launching_ || failed_) return;
   if (initial && (initial->unavailable || initial->solidArchive || initial->meta.BmsPath.empty())) return;
+  std::optional<int> goalMode;
+  if (initial) {
+    std::string error;
+    if (auto index = context.scoreRepository.LoadChartGoalIndex(error))
+      goalMode = index->modeFor(initial->meta.SHA256, scoreLongNoteModeForClearLamp(
+          initial->meta, long_note_mode::valueFromId(context.settings.selectedLnMode)));
+  }
   const auto profile = context.profileManager.activeProfile().id;
   context.sceneManager->changeScene(std::make_unique<ChartGoalsScene>(context,
       SceneReturnTarget::Retained(this), std::move(initial),
       [this, profile](const ChartMetaRecord &record, int mode) {
         pendingGoalSelection_ = std::pair{record, mode}; pendingGoalProfile_ = profile;
-      }), true);
+      }, goalMode), true);
 }
 
 void MusicSelectScene::applyGoalSelection(const ChartMetaRecord &record, int mode) {

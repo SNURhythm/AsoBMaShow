@@ -106,6 +106,9 @@ asobmashow_share_test_sources(dependencies
         src/repositories/ScoreRepositoryChartSession.cpp
         src/repositories/ScoreRepositoryIrImport.cpp
         src/repositories/ScoreRepositoryQueries.cpp
+        src/repositories/ScoreRepositoryGoals.cpp
+        src/goals/ChartGoal.cpp
+        src/goals/ChartGoalStore.cpp
         src/streak/StreakModel.cpp
         src/streak/StreakStore.cpp
         src/repositories/ScoreRepositorySchema.cpp

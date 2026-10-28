@@ -74,3 +74,22 @@
 - Desktop UI checked: Combo entry without a routine, empty and populated lists,
   chart editor/dropdown, saved detail, and Open in PLAY selecting without launch.
   Mobile builds and physical-device interaction were not run for this change.
+
+## Follow-up: selector access, dates, and celebration
+
+- Replaced the native row favorite button with a goal flag, highlighted for saved
+  goals, and moved favorites beside the chart title. Added Goals folders to both
+  selectors and direct navigation to the configured goal scope.
+- Persist and display set/first-achieved dates. Preserve unknown legacy dates and
+  detect actual newly achieved goals before sending a one-shot result cue.
+- Added a finite result celebration that waits for Combo, survives view rebuilds,
+  and delays custom-result automatic exit until it finishes.
+- Desktop main and the affected test groups built successfully. All 131 selected
+  cases pass across the final group run and focused rerun: the group run passed
+  130, then the updated scene-activity fixture passed with Lua both off and on.
+  A separate production ResultScene syntax check with Lua disabled also passed.
+- Desktop smoke confirmed visible row flags, the Goals folder, and opening the
+  correct chart editor. Dropdown clicks were inconclusive during a concurrent
+  remote-desktop session; further manual checking was left to the user at their
+  request. No test goal was saved in that follow-up smoke.
+- Mobile builds and a live gameplay achievement celebration were not exercised.

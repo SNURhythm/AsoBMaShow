@@ -15,6 +15,8 @@ struct ScoreRepository::Impl {
   std::filesystem::path chartDatabasePath;
   sqlite3 *sessionDatabase = nullptr;
   std::optional<streak::PlayProgress> streakProgress;
+  std::string chartGoalAchievementAttempt;
+  std::vector<chart_goals::Goal> chartGoalAchievements;
 };
 
 struct ScoreRepository::PreparedScoreQueryDatabase::State {
@@ -58,6 +60,9 @@ bool EquivalentDatabasePaths(const std::filesystem::path &first,
                              const std::filesystem::path &second);
 bool CurrentSchemaIsValid(sqlite3 *database);
 void IncrementRevision();
+// Called inside score transactions. Goal-storage failure never discards a score.
+std::vector<chart_goals::Goal> RecordChartGoalAchievementsOnConnection(
+    sqlite3 *, std::string_view sha256, std::string_view createdAt = {}, std::string_view attemptId = {});
 ScoreWriteOutcome InsertScoreWriteOnConnection(
     sqlite3 *database, const result_persistence::ChartScoreWrite &score,
     std::optional<std::string_view> attemptId,

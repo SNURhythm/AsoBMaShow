@@ -6,8 +6,14 @@ unchanged and are not required to use goals.
 
 ## Using goals
 
-- In PLAY, select a chart and choose **Reveal → Personal goal** in the built-in
-  selector, or **Personal goal** from the custom selector’s chart-actions menu.
+- In PLAY, tap the small flag on a chart row in the built-in selector, or choose
+  **Personal goal** from the custom selector’s chart-actions menu. The row flag
+  is filled when that chart has a goal. It opens the existing goal for the
+  current LN mode, or another configured mode if none exists for the current
+  mode. An empty flag opens a new goal editor.
+- The favorite star is beside the chart title in the detail panel.
+- The **Goals** folder in either selector gathers indexed charts with goals
+  across LN modes, including achieved goals. Normal search and filters apply.
 - Choose a minimum successful lamp, a score rank (E through MAX), a custom EX
   rate to two decimal places, or both. If both are chosen, both must be met.
 - Open **Personal goals** from Combo to browse goals, including achieved ones,
@@ -16,6 +22,14 @@ unchanged and are not required to use goals.
   EX integers, rounded up to the next achievable point at a fractional threshold:
   AAA on a 2000-point chart needs 1778 EX. Without a valid score maximum, the gap
   remains unknown.
+- Goal details display **Set** and **First achieved** dates in local time.
+  Saving an unchanged target preserves its dates; changing the target starts a
+  new timeline. Goals created before date tracking show “Not recorded” for an
+  unknown set date. A target already met by existing records is achieved when
+  it is set; imported records are dated when their achievement is recognized.
+- A newly achieved goal shows a short flag-burst celebration on the result
+  screen after the score is saved. It waits for the Combo panel to close and
+  does not replay for later clears, view rebuilds, replay, practice, or autoplay.
 - **Open in PLAY** selects the chart and its LN mode in the originating selector.
   It does not start gameplay. **Practice chart** opens the existing chart viewer
   and practice tools, with a return path to the goal.
@@ -37,7 +51,9 @@ eligibility, so practice, replay, and autoplay cannot create ordinary bests by
 using this feature.
 
 Achievement is a projection of current records, not a permanent badge. Importing
-or deleting scores can change progress. Returning to goals refreshes it.
+or deleting scores can change progress. Returning to goals refreshes it. The
+first achievement date remains as history even if current records no longer
+meet the target.
 
 A removed/unavailable chart keeps its stored title, subtitle, targets, and
 record-based progress. Editing and removal remain available; play and practice
@@ -47,7 +63,7 @@ payload scan is needed for goal browsing or resolution.
 ## Implementation and verification
 
 Versioned rows in the profile score database's `chart_goals` table retain only
-identity, display and LN metadata, and targets. They use repository locking,
+identity, display and LN metadata, targets, and goal dates. They use repository locking,
 profile activity guards, transactional writes, and bounded page reads. Corrupt
 or future-version rows produce an error and cannot be silently overwritten.
 Switching profiles discards unsaved goal edits and queued navigation.

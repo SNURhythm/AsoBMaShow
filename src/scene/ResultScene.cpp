@@ -1,6 +1,8 @@
 #include "../rendering/ResponsiveUi.h"
 #include "../view/ProgressMotionView.h"
 #include "../view/StreakFlameView.h"
+#include "../view/GoalAchievementView.h"
+#include "../LongNoteModeUtils.h"
 #include "../view/AssignmentProgressView.h"
 #include "../view/ActionButtonStyle.h"
 #include "../i18n/Localization.h"
@@ -1932,6 +1934,7 @@ void ResultScene::retryResultPersistence() {
         updateResultPersistencePresentation();
         updateIrResultPresentation(true);
         prepareStreakProgress();
+        prepareGoalAchievement();
         return true;
       },
       0, true);
@@ -4305,11 +4308,13 @@ void ResultScene::buildResultView() {
 
   rootLayout->applyYogaLayout();
   prepareStreakProgress();
+  prepareGoalAchievement();
   if (streakPresentation_.visible()) buildStreakProgress(false);
+  if (goalPresentation_.visible()) buildGoalAchievement();
 }
 
 bool ResultScene::needsContinuousPresentation() const {
-  if (streakPresentation_.animating(SDL_GetTicks())) return true;
+  if (goalPresentation_.visible() || streakPresentation_.animating(SDL_GetTicks())) return true;
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   return resultSkinSession != nullptr;
 #else
@@ -4332,6 +4337,7 @@ void ResultScene::update(float dt) {
   (void)dt;
   resizeResultLayout();
   updateStreakProgress();
+  updateGoalAchievement();
   auto *local = localSource();
   if (local != nullptr) {
     updatePracticeSectionAction();
@@ -4582,7 +4588,7 @@ void ResultScene::renderScene() {
         local != nullptr && isCourseStageResult() &&
         local->courseOptions.session != nullptr &&
         local->courseOptions.session->courseReplayPlayback;
-    if (streakPresentation_.active() || persistenceDecisionRequired() ||
+    if (goalPresentation_.active() || streakPresentation_.active() || persistenceDecisionRequired() ||
         (courseDetailsModalRoot != nullptr && courseDetailsModalRoot->getVisible())) {
       resultSkinFadeoutStartedMillis.reset();
     } else if (!courseReplayRestOwnsTransition &&
@@ -4630,6 +4636,88 @@ void ResultScene::renderScene() {
     rankingOverlayPortal->setSize(rendering::window_width,
                                   rendering::window_height);
   }
+}
+
+void ResultScene::prepareGoalAchievement() {
+  if (!goalAchievements_.empty()) return;
+  const auto *local = localSource();
+  if (!local || local->autoPlayResult || local->replayResult || local->practiceOptions.enabled ||
+      isCourseStageResult() || isCourseFinalResult() || local->courseOptions.savedResultBrowsing) return;
+  const auto &persistence = local->persistenceOptions;
+  if (!persistence.chartAttempt || !persistence.chartOutcome || !persistence.chartOutcome->saved()) return;
+  goalAchievements_ = context.scoreRepository.TakeChartGoalAchievements(persistence.chartAttempt->result.attemptId);
+  if (goalPresentation_.arm(!goalAchievements_.empty())) {
+    goalProfileId_ = context.profileManager.activeProfile().id;
+    ui::invalidate();
+  }
+}
+
+void ResultScene::buildGoalAchievement() {
+  if (!viewportLayout || !goalPresentation_.visible() || goalAchievements_.empty()) return;
+  if (goalAchievementView_) goalAchievementView_->clearChildren();
+  else {
+    goalAchievementView_ = new View();
+    goalAchievementView_->setPositionType(YGPositionTypeAbsolute)->setZIndex(2300);
+    viewportLayout->addView(goalAchievementView_);
+  }
+  goalAchievementView_->setVisible(true);
+  goalAchievementLayout_ = {};
+  const auto &goal = goalAchievements_.front();
+  std::string target;
+  for (const auto &entry : goalAchievements_) {
+    if (!target.empty()) target += " / ";
+    if (entry.longNoteMode > 0) target += long_note_mode::idFromValue(entry.longNoteMode) + " · ";
+    if (entry.target.lamp >= 0) target += streak::lampLabel(entry.target.lamp);
+    if (entry.target.scoreNumerator > 0) {
+      if (entry.target.lamp >= 0) target += " · ";
+      if (entry.target.scoreDenominator == 27) target += streak::scoreRankLabel(entry.target.scoreNumerator);
+      else {
+        std::ostringstream rate;
+        rate << std::fixed << std::setprecision(2) << 100.0 * entry.target.scoreNumerator / entry.target.scoreDenominator << '%';
+        target += rate.str();
+      }
+    }
+  }
+  goalAchievementUnit_ = rendering::displayPixelScale > 0 && rendering::ui_scale_x > 0
+      ? rendering::displayPixelScale / rendering::ui_scale_x : 1;
+  goalAchievementView_->addView((new GoalAchievementView(goalPresentation_.startedAt(),
+      goal.chart.Title + (goal.chart.SubTitle.empty() ? "" : " " + goal.chart.SubTitle), target, goalAchievementUnit_))
+      ->setWidthPercent(100));
+}
+
+void ResultScene::updateGoalAchievement() {
+  if (!goalPresentation_.active()) return;
+  if (goalProfileId_ != context.profileManager.activeProfile().id) {
+    goalPresentation_.dismiss();
+    if (goalAchievementView_) goalAchievementView_->setVisible(false);
+    return;
+  }
+  const auto now = SDL_GetTicks();
+  if (goalPresentation_.start(now, streakPresentation_.active() || persistenceDecisionRequired())) {
+    buildGoalAchievement();
+    streakSounds_.play(context.jukebox.audioRuntime(), streak::Sound::Complete);
+  }
+  if (goalPresentation_.finish(now)) {
+    if (goalAchievementView_) goalAchievementView_->setVisible(false);
+#if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
+    streakSkinResumeMillis_ = std::max(0LL, (nowMicros() - resultSkinStartedMicros) / 1000LL);
+#endif
+    ui::invalidate();
+    return;
+  }
+  if (!goalPresentation_.visible() || !goalAchievementView_) return;
+  const auto safe = rendering::uiSafeAreaInsets();
+  const auto metrics = streak::resultOverlayMetrics(rendering::window_width, rendering::window_height,
+      rendering::displayPixelScale, rendering::ui_scale_x, safe.top, safe.right, safe.bottom, safe.left);
+  if (std::abs(goalAchievementUnit_ - metrics.unit) > .001F) buildGoalAchievement();
+  const std::array layout{static_cast<int>(metrics.width), static_cast<int>(safe.left +
+      (rendering::window_width - safe.left - safe.right - metrics.width) * .5F), static_cast<int>(metrics.top)};
+  if (goalAchievementLayout_ == layout) return;
+  goalAchievementLayout_ = layout;
+  goalAchievementView_->setWidth(layout[0]);
+  goalAchievementView_->setPosition(Edge::Left, layout[1]);
+  goalAchievementView_->setPosition(Edge::Top, layout[2]);
+  viewportLayout->applyYogaLayout();
 }
 
 void ResultScene::prepareStreakProgress() {
@@ -4868,6 +4956,8 @@ void ResultScene::cleanupScene() {
   resultSkinPendingRankingPosition.reset();
   resultSkinRankingRefreshPending = false;
   resultSkinSubmissionTimers = {};
+  goalAchievementView_ = nullptr;
+  goalAchievementUnit_ = 0;
   streakOverlay_ = nullptr;
   streakPanel_ = nullptr;
   streakScroll_ = nullptr;

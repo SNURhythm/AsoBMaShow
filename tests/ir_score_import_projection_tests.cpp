@@ -502,12 +502,18 @@ void testPersonalGoalsUseProfileAndIndependentBestRecords() {
   auto saved = scores.LoadChartGoal(goal.chart, 1, error);
   assert(saved && error.empty() && saved->goal.longNoteMode == 0);
   assert(!saved->progress.achieved);
+  assert(saved->goal.setAtUnixMillis > 0 && saved->goal.achievedAtUnixMillis == 0);
+  const auto setAt = saved->goal.setAtUnixMillis;
   const std::vector remote{remoteScore("goal-score", 'a', 190, 200),
                            remoteScore("goal-lamp", 'a', 160, 500)};
   assert(scores.ReplaceImportedIrScores(kProvider, kOrigin, 1, remote).status ==
          ImportedIrScoreProjectionStatus::Applied);
   saved = scores.LoadChartGoal(goal.chart, 3, error);
   assert(saved && saved->progress.achieved);
+  assert(saved->goal.setAtUnixMillis == setAt && saved->goal.achievedAtUnixMillis >= setAt);
+  const auto achievedAt = saved->goal.achievedAtUnixMillis;
+  assert(scores.SaveChartGoal(saved->goal, error));
+  assert(scores.LoadChartGoal(goal.chart, 3, error)->goal.achievedAtUnixMillis == achievedAt);
   assert(saved->progress.bestScore->score == 190);
   assert(saved->progress.bestClear->clearType == 500);
   assert(!scores.LoadBestClearScore(saved->goal.chart)); // Replay-facing query stays local.
@@ -515,16 +521,21 @@ void testPersonalGoalsUseProfileAndIndependentBestRecords() {
   assert(page && page->goals.size() == 1 && page->goals[0].progress.achieved);
   assert(scores.ClearImportedIrScores(kProvider).status == ImportedIrScoreProjectionStatus::Applied);
   assert(!scores.LoadChartGoal(goal.chart, 1, error)->progress.achieved);
+  assert(scores.LoadChartGoal(goal.chart, 1, error)->goal.achievedAtUnixMillis == achievedAt);
   goal.chart.SHA256 = std::string(64, 'b');
   goal.chart.TotalLongNotes = 1;
   goal.longNoteMode = 1; assert(scores.SaveChartGoal(goal, error));
   goal.longNoteMode = 2; assert(scores.SaveChartGoal(goal, error));
   assert(scores.LoadChartGoals(0, error)->goals.size() == 3);
+  auto index = scores.LoadChartGoalIndex(error);
+  assert(index && error.empty() && index->hashes().size() == 2);
+  assert(index->modeFor(goal.chart.SHA256, 2) == 2 && index->modeFor(goal.chart.SHA256, 3) == 1);
   assert(!scores.LoadChartGoal(goal.chart, 3, error) && error.empty());
   goal.chart.LnMode = 2; // Authored CN collapses selections to CN.
   assert(scores.LoadChartGoal(goal.chart, 3, error));
   assert(scores.BindDatabasePath(root / "other.db", error));
   assert(scores.LoadChartGoals(0, error)->goals.empty());
+  assert(scores.LoadChartGoalIndex(error)->modes.empty());
   assert(scores.SaveChartGoal(goal, error));
   assert(scores.LoadChartGoals(0, error)->goals.size() == 1);
   assert(scores.BindDatabasePath(path, error));
@@ -539,7 +550,75 @@ void testPersonalGoalsUseProfileAndIndependentBestRecords() {
   sqlite3_close(db);
 }
 
+void testGoalAchievementIsSavedOnceAndCelebrationIsProfileScoped() {
+  const auto root = testRoot("goal-achievement");
+  ScoreRepository scores(root / "score.db");
+  assert(scores.EnsureSchema());
+  std::string error;
+  chart_goals::Goal goal;
+  goal.chart.SHA256 = std::string(64, 'c');
+  goal.chart.MD5 = std::string(32, 'c');
+  goal.chart.Title = "AAA target";
+  goal.chart.TotalLongNotes = 1; goal.longNoteMode = 2;
+  goal.target = {.scoreNumerator=24};
+  assert(scores.SaveChartGoal(goal, error));
+  const auto setAt = scores.LoadChartGoal(goal.chart, 2, error)->goal.setAtUnixMillis;
+  result_persistence::PendingChartScoreWrite pending;
+  pending.attemptId = "123e4567-e89b-42d3-a456-426614174000";
+  pending.replayId = 1;
+  pending.createdAt = scoreHistoryTime(setAt + 5000);
+  pending.score.chartSha256 = goal.chart.SHA256;
+  pending.score.chartMd5 = goal.chart.MD5;
+  pending.score.longNoteMode = 2;
+  pending.score.score = 1777; pending.score.maxScore = 2000;
+  pending.score.comboBreak = 1; pending.score.clearType = 300;
+  pending.score.provenance = ScoreProvenance::Legacy();
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  assert(scores.TakeChartGoalAchievements(pending.attemptId).empty());
+  assert(scores.LoadChartGoal(goal.chart, 2, error)->goal.achievedAtUnixMillis == 0);
+  pending.attemptId.back() = '1'; pending.score.score = 1778;
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  const auto reached = scores.LoadChartGoal(goal.chart, 2, error);
+  assert(reached->progress.achieved && reached->goal.achievedAtUnixMillis >= setAt);
+  assert(reached->goal.achievedAtUnixMillis / 1000 == (setAt + 5000) / 1000);
+  assert(scores.TakeChartGoalAchievements("other-attempt").empty());
+  const auto celebration = scores.TakeChartGoalAchievements(pending.attemptId);
+  assert(celebration.size() == 1 && celebration.front().longNoteMode == 2);
+  assert(scores.TakeChartGoalAchievements(pending.attemptId).empty());
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::AlreadyPresent);
+  assert(scores.TakeChartGoalAchievements(pending.attemptId).empty());
+  pending.attemptId.back() = '2'; pending.score.score = 1900;
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  assert(scores.TakeChartGoalAchievements(pending.attemptId).empty());
+  assert(scores.LoadChartGoal(goal.chart, 2, error)->goal.achievedAtUnixMillis == reached->goal.achievedAtUnixMillis);
+  // Legacy achievements have no trustworthy dates; neither a no-op save nor
+  // a later play may invent a first-achievement date or a fresh celebration.
+  sqlite3 *db = nullptr;
+  assert(sqlite3_open((root / "score.db").string().c_str(), &db) == SQLITE_OK);
+  assert(sqlite3_exec(db, "UPDATE chart_goals SET body=json_remove(body,'$.setAt','$.achievedAt')", nullptr, nullptr, nullptr) == SQLITE_OK);
+  sqlite3_close(db);
+  assert(scores.SaveChartGoal(reached->goal, error));
+  const auto legacy = scores.LoadChartGoal(goal.chart, 2, error);
+  assert(legacy->progress.achieved && legacy->goal.setAtUnixMillis == 0 && legacy->goal.achievedAtUnixMillis == 0);
+  pending.attemptId.back() = '4'; pending.score.score = 1800;
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  assert(scores.TakeChartGoalAchievements(pending.attemptId).empty());
+  assert(scores.LoadChartGoal(goal.chart, 2, error)->goal.achievedAtUnixMillis == 0);
+  // A changed target starts a new goal timeline, while no-op edits preserve it.
+  goal.target = {.scoreNumerator=27};
+  assert(scores.SaveChartGoal(goal, error));
+  assert(scores.LoadChartGoal(goal.chart, 2, error)->goal.achievedAtUnixMillis == 0);
+  pending.attemptId.back() = '3'; pending.score.score = 2000;
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  assert(scores.BindDatabasePath(root / "other.db", error));
+  assert(scores.TakeChartGoalAchievements(pending.attemptId).empty());
+  assert(scores.BindDatabasePath(root / "score.db", error));
+  assert(scores.LoadChartGoal(goal.chart, 2, error)->goal.achievedAtUnixMillis > 0);
+  assert(scores.TakeChartGoalAchievements(pending.attemptId).empty());
+}
+
 int main() {
+  testGoalAchievementIsSavedOnceAndCelebrationIsProfileScoped();
   testPersonalGoalsUseProfileAndIndependentBestRecords();
   testStreakProjectionIsAtomicAndUsesEffectiveLamp();
   testImportedSnapshotUsesNormalScoreSummaries();

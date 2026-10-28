@@ -1,5 +1,6 @@
 #include "ScoreRepository.h"
 #include "ScoreRepositoryInternal.h"
+#include "../goals/ChartGoalStore.h"
 
 #include "../ProfileDatabaseActivity.h"
 #include "../ResultContracts.h"
@@ -10,6 +11,7 @@
 #include "ScoreCacheQueries.h"
 #include "SqliteRAII.h"
 
+#include <SDL3/SDL.h>
 #include <ctime>
 #include <iomanip>
 #include <limits>
@@ -244,6 +246,18 @@ ImportedIrScoreProjectionOutcome ScoreRepository::ReplaceImportedIrScores(
     return {.status = ImportedIrScoreProjectionStatus::StorageFailure,
             .diagnostic = "could not rebuild imported IR score summaries: " +
                           *error};
+  }
+  try {
+    const auto goals = chart_goals::loadIndex(database);
+    if (!goals.modes.empty()) {
+      std::unordered_set<std::string_view> updated;
+      for (const auto &remote : remoteScores) {
+        if (goals.modes.contains(remote.chartSha256) && updated.insert(remote.chartSha256).second)
+          score_repository_detail::RecordChartGoalAchievementsOnConnection(database, remote.chartSha256);
+      }
+    }
+  } catch (const std::exception &error) {
+    SDL_Log("Cannot refresh imported goal achievements: %s", error.what());
   }
   if (!transaction.commit(transactionError)) {
     return {.status = ImportedIrScoreProjectionStatus::StorageFailure,

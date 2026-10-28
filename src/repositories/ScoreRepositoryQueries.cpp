@@ -1012,6 +1012,7 @@ bool ScoreRepository::SaveScore(const bms_parser::ChartMeta &chartMeta,
           db, score, std::nullopt, std::nullopt, provenanceJson)
           .status == score_repository_detail::ScoreWriteStatus::Inserted;
   if (result) {
+    score_repository_detail::RecordChartGoalAchievementsOnConnection(db, score.chartSha256);
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);
   }
   return result;
@@ -1130,8 +1131,12 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
     } catch (const std::exception &error) {
       return {.status = ProjectionStatus::StorageFailure, .diagnostic = error.what()};
     }
+    auto goalAchievements = score_repository_detail::RecordChartGoalAchievementsOnConnection(
+        db, pending.score.chartSha256, pending.createdAt, pending.attemptId);
     if (!transaction.commit(transactionError))
       return {.status = ProjectionStatus::StorageFailure, .diagnostic = transactionError};
+    impl_->chartGoalAchievementAttempt = pending.attemptId;
+    impl_->chartGoalAchievements = std::move(goalAchievements);
     impl_->streakProgress.reset();
     if (!streakProgress.assignments.empty()) impl_->streakProgress = std::move(streakProgress);
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);

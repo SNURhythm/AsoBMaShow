@@ -1,5 +1,6 @@
 #include "goals/ChartGoal.h"
 #include "goals/ChartGoalStore.h"
+#include "goals/GoalResultPresentation.h"
 #include "repositories/SqliteRAII.h"
 #include <chrono>
 #include <cstdlib>
@@ -9,6 +10,15 @@
 using namespace chart_goals;
 template<class F> bool rejects(F f) { try { f(); return false; } catch (const std::exception &) { return true; } }
 int main() {
+  GoalResultPresentation celebration;
+  CHECK(!celebration.arm(false) && !celebration.active());
+  CHECK(celebration.arm(true) && celebration.active());
+  CHECK(!celebration.start(100, true) && !celebration.visible());
+  CHECK(celebration.start(200, false) && celebration.visible());
+  CHECK(!celebration.start(250, false) && !celebration.arm(true));
+  CHECK(!celebration.finish(4699));
+  CHECK(celebration.finish(4700) && !celebration.active());
+  CHECK(!celebration.arm(true)); // Rebuild/resume must not replay the celebration.
   CHECK(parseRate("99.99") == 9999);
   CHECK(parseRate("100") == 10000);
   CHECK(parseRate("0.01") == 1);
@@ -42,16 +52,29 @@ int main() {
   sqlite3 *raw = nullptr;
   CHECK(sqlite3_open(":memory:", &raw) == SQLITE_OK); db.reset(raw);
   CHECK(loadPage(db.get(), 0).goals.empty());
+  CHECK(loadIndex(db.get()).modes.empty());
   Goal goal;
   goal.chart.SHA256 = std::string(64, 'A'); goal.chart.MD5 = std::string(32, 'B');
+  goal.setAtUnixMillis = 1730000000000;
+  goal.achievedAtUnixMillis = 1730000001234;
   goal.chart.Title = "Goal chart"; goal.chart.SubTitle = "Another";
   goal.chart.TotalLongNotes = 1; goal.longNoteMode = 1; goal.target = aaa;
   save(db.get(), goal);
   CHECK(load(db.get(), std::string(64, 'a'), 1)->chart.Title == "Goal chart");
+  CHECK(load(db.get(), goal.chart.SHA256, 1)->setAtUnixMillis == 1730000000000);
+  CHECK(load(db.get(), goal.chart.SHA256, 1)->achievedAtUnixMillis == 1730000001234);
+  CHECK(rejects([&] { auto invalid = goal; invalid.achievedAtUnixMillis = 1; save(db.get(), invalid); }));
   goal.chart.Title = "Updated"; save(db.get(), goal);
   CHECK(loadPage(db.get(), 0).goals.size() == 1);
   goal.longNoteMode = 2; save(db.get(), goal);
   CHECK(loadPage(db.get(), 0).goals.size() == 2);
+  const auto index = loadIndex(db.get());
+  CHECK(index.hashes() == std::vector<std::string>{std::string(64, 'a')});
+  CHECK(index.modeFor(goal.chart.SHA256, 2) == 2);
+  CHECK(index.modeFor(goal.chart.SHA256, 3) == 1); // A highlighted flag always opens a saved goal.
+  auto other = goal.chart; other.SHA256 = std::string(64, 'b');
+  CHECK(!index.modeFor(other.SHA256, 1));
+  other.SHA256 = ""; CHECK(!index.modeFor(other.SHA256, 1));
   CHECK(rejects([&] { auto invalid = goal; invalid.chart.SHA256 = "bad"; save(db.get(), invalid); }));
   std::string error;
   { SqliteTransactionHandle tx(db.get(), "BEGIN", error);
@@ -65,6 +88,7 @@ int main() {
   CHECK(loadPage(db.get(), 20).goals.size() == 1 && !loadPage(db.get(), 20).hasMore);
   remove(db.get(), goal.chart.SHA256, 2);
   CHECK(!load(db.get(), goal.chart.SHA256, 2));
+  CHECK(!loadIndex(db.get()).modeFor(goal.chart.SHA256, 2));
   CHECK(!loadPage(db.get(), 0).hasMore);
   CHECK(sqlite3_exec(db.get(), "UPDATE chart_goals SET body='{}'", nullptr, nullptr, nullptr) == SQLITE_OK);
   CHECK(rejects([&] { loadPage(db.get(), 0); }));

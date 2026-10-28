@@ -1488,10 +1488,12 @@ void MainMenuScene::initView(ApplicationContext &context) {
     } else {
       chartListItemView->setBestScoreRank(0, 0);
     }
-    chartListItemView->setFavoriteToggleHandler(
-        [this](const ChartMetaRecord &record, bool favorite) {
-          return toggleChartFavorite(record, favorite);
-        });
+    chartListItemView->setGoalState(chartGoalIndex.modeFor(item.meta.SHA256,
+        scoreLongNoteModeForClearLamp(item.meta,
+            long_note_mode::valueFromId(profileSelections.longNoteMode))).has_value());
+    chartListItemView->setGoalHandler([this](const ChartMetaRecord &record) {
+      openChartGoal(record);
+    });
     if (isSelected) {
       chartListItemView->onSelected();
     } else {
@@ -1630,6 +1632,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
       case LibraryFolderItem::Type::Assignments:
         if (item.depth == 0) label = i18n::tr("streak.ui.assignment_folder");
         break;
+      case LibraryFolderItem::Type::Goals:
+        label = i18n::tr("goals.ui.folder");
+        break;
       case LibraryFolderItem::Type::Favorites:
         label = i18n::tr("library.folders.favorites.label");
         break;
@@ -1655,6 +1660,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                           item.expanded,
                           item.type == LibraryFolderItem::Type::AllSongs && !item.sectionHeader ? ui_icons::kMusic :
                           item.type == LibraryFolderItem::Type::Assignments && item.depth == 0 ? ui_icons::kFire :
+                          item.type == LibraryFolderItem::Type::Goals ? 0xf024 :
                           item.type == LibraryFolderItem::Type::Favorites ? 0xf005 : 0,
                           item.sectionHeader);
     }
@@ -2240,6 +2246,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rightContent->setGap(8);
 
   chartDetailsView_ = new ChartDetailsView(jacketView);
+  chartDetailsView_->setFavoriteToggleHandler([this](const ChartMetaRecord &record, bool favorite) {
+    return toggleChartFavorite(record, favorite);
+  });
   chartDetailsView_->setWidth(kDetailsContentWidth);
   rightContent->addView(chartDetailsView_);
 
@@ -2439,8 +2448,6 @@ void MainMenuScene::initView(ApplicationContext &context) {
   revealMenuCallbacks.onActionSelected = [this](const std::string &actionId) {
     if (actionId == "show-same-folder") {
       showSelectedChartFolder();
-    } else if (actionId == "personal-goal") {
-      openChartGoalForSelection();
     } else if (actionId == "readme") {
       openSelectedReadme();
     } else if (actionId == "reveal-file") {
@@ -2838,6 +2845,11 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
         chartSession->SelectDifficultyCourseTables();
     folderMetadataCache.valid = true;
   }
+  std::string goalError;
+  const auto goals = context.scoreRepository.LoadChartGoalIndex(goalError);
+  chartGoalIndex = goals.value_or(chart_goals::Index{});
+  chartGoalHashes = chartGoalIndex.hashes();
+  if (!goals) SDL_Log("Unable to load goal folders: %s", goalError.c_str());
   assignmentDayId = streak::today();
   assignmentDay = {};
   assignmentCharts.reset();
@@ -2917,6 +2929,15 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
       .type = LibraryFolderItem::Type::Favorites,
       .depth = 0,
       .count = favoriteCount,
+  });
+
+  ChartMetaQuery goalsQuery;
+  goalsQuery.allowedSha256 = chartGoalHashes;
+  folders.push_back({
+      .key = "goals",
+      .label = i18n::tr("goals.ui.folder"),
+      .type = LibraryFolderItem::Type::Goals,
+      .count = chartSession->CountChartMeta(goalsQuery),
   });
 
   const int solidArchiveCount = folderMetadataCache.solidArchiveCount;
@@ -3250,6 +3271,9 @@ ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const {
   }
   case LibraryFolderItem::Type::SolidArchives:
     query.solidArchivesOnly = true;
+    break;
+  case LibraryFolderItem::Type::Goals:
+    query.allowedSha256 = chartGoalHashes;
     break;
   case LibraryFolderItem::Type::Favorites:
     query.favoritesOnly = true;
@@ -4202,6 +4226,8 @@ bool MainMenuScene::toggleChartFavorite(const ChartMetaRecord &record,
     return false;
   }
 
+  if (selectedChartRecord && selectedChartRecord->meta.BmsPath == record.meta.BmsPath)
+    selectedChartRecord->favorite = favorite;
   const auto favoriteRanks = chartSession->LoadFavoriteClearRanks(scoreClearRanks);
   for (int mode : long_note_mode::kPlayableValues) {
     folderClearData.clearRanks[mode]["favorites"] = favoriteRanks.ranks[mode];
@@ -5251,17 +5277,18 @@ void MainMenuScene::resumeGoalNavigation() {
   }
 }
 
-void MainMenuScene::openChartGoalForSelection() {
-  const auto record = selectedRecordSnapshot();
-  if (!record) return;
+void MainMenuScene::openChartGoal(const ChartMetaRecord &record) {
+  const auto mode = chartGoalIndex.modeFor(record.meta.SHA256,
+      scoreLongNoteModeForClearLamp(record.meta,
+          long_note_mode::valueFromId(profileSelections.longNoteMode)));
   const auto profile = context.profileManager.activeProfile().id;
-  defer([this, record, profile] {
-    if (profile == context.profileManager.activeProfile().id) openChartGoals(record);
+  defer([this, record, mode, profile] {
+    if (profile == context.profileManager.activeProfile().id) openChartGoals(record, mode);
     return true;
   }, 0, true);
 }
 
-void MainMenuScene::openChartGoals(std::optional<ChartMetaRecord> initial) {
+void MainMenuScene::openChartGoals(std::optional<ChartMetaRecord> initial, std::optional<int> mode) {
   if (context.storageMaintenanceActive || willStart.load() || replayExportJob_.inProgress()) return;
   if (initial && (initial->unavailable || initial->solidArchive || initial->meta.BmsPath.empty())) return;
   const auto profile = context.profileManager.activeProfile().id;
@@ -5269,7 +5296,7 @@ void MainMenuScene::openChartGoals(std::optional<ChartMetaRecord> initial) {
       SceneReturnTarget::Retained(this), std::move(initial),
       [this, profile](const ChartMetaRecord &record, int mode) {
         pendingGoalSelection_ = std::pair{record, mode}; pendingGoalProfile_ = profile;
-      }), true);
+      }, mode), true);
 }
 
 void MainMenuScene::applyGoalSelection(const ChartMetaRecord &record, int mode) {
@@ -5368,8 +5395,7 @@ void MainMenuScene::toggleRevealContextMenu(View *anchor) {
         .label = i18n::message("menu.show_same_folder.label"),
         .enabled = canShowSameFolder},
        {.id = "reveal-file", .label = i18n::message("menu.reveal_file.label")},
-       {.id = "readme", .label = i18n::message("readme.reader.label")},
-       {.id = "personal-goal", .label = i18n::message("goals.ui.personal_goal")}},
+       {.id = "readme", .label = i18n::message("readme.reader.label")}},
       220);
 }
 
