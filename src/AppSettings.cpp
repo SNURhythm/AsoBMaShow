@@ -441,6 +441,9 @@ void AppSettings::PresentationSettings::sanitize(PresentationOrientation orienta
   judgementIndicatorWidthScale = sanitizeFloat(
       judgementIndicatorWidthScale, kDefaultJudgementIndicatorWidthScale,
       kMinJudgementIndicatorWidthScale, kMaxJudgementIndicatorWidthScale);
+  judgementIndicatorLineThicknessPercent = std::clamp(judgementIndicatorLineThicknessPercent, 25, 400);
+  judgementIndicatorEventHeightPercent = std::clamp(judgementIndicatorEventHeightPercent, 25, 400);
+  judgementIndicatorEventThicknessPercent = std::clamp(judgementIndicatorEventThicknessPercent, 25, 400);
   judgementIndicatorRangeMilliseconds =
       judgement_indicator::sanitizeStoredRangeMilliseconds(
           judgementIndicatorRangeMilliseconds);

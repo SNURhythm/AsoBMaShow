@@ -696,6 +696,9 @@ json presentationToJson(const AppSettings::PresentationSettings &settings) {
       {"judgementIndicatorEnabled", settings.judgementIndicatorEnabled},
       {"judgementIndicatorY", settings.judgementIndicatorY},
       {"judgementIndicatorWidthScale", settings.judgementIndicatorWidthScale},
+      {"judgementIndicatorLineThicknessPercent", settings.judgementIndicatorLineThicknessPercent},
+      {"judgementIndicatorEventHeightPercent", settings.judgementIndicatorEventHeightPercent},
+      {"judgementIndicatorEventThicknessPercent", settings.judgementIndicatorEventThicknessPercent},
       {"judgementIndicatorRangeMilliseconds",
        settings.judgementIndicatorRangeMilliseconds},
       {"keybombs", std::move(keybombs)},
@@ -966,6 +969,12 @@ void readPresentation(const json &document, AppSettings::PresentationSettings &s
             diagnostics);
   readValue(document, "judgementIndicatorWidthScale",
             settings.judgementIndicatorWidthScale, diagnostics);
+  readValue(document, "judgementIndicatorLineThicknessPercent",
+            settings.judgementIndicatorLineThicknessPercent, diagnostics);
+  readValue(document, "judgementIndicatorEventHeightPercent",
+            settings.judgementIndicatorEventHeightPercent, diagnostics);
+  readValue(document, "judgementIndicatorEventThicknessPercent",
+            settings.judgementIndicatorEventThicknessPercent, diagnostics);
   readValue(document, "judgementIndicatorRangeMilliseconds",
             settings.judgementIndicatorRangeMilliseconds, diagnostics);
   if (const auto found = document.find("keybombs"); found != document.end()) {

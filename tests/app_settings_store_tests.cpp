@@ -1402,6 +1402,49 @@ void testFindBmsArchivePreferenceDefaultsAndRoundTrips() {
          "saved JSON contains the Find BMS preference");
 }
 
+void testJudgementIndicatorDimensions() {
+  AppSettings settings;
+  auto &presentation = settings.presentation();
+  expect(presentation.judgementIndicatorLineThicknessPercent == 100,
+         "indicator dimension defaults preserve existing geometry");
+  presentation.judgementIndicatorLineThicknessPercent = 900;
+  expect(presentation.judgementIndicatorEventHeightPercent == 100,
+         "indicator dimension defaults preserve existing geometry");
+  presentation.judgementIndicatorEventHeightPercent = 900;
+  expect(presentation.judgementIndicatorEventThicknessPercent == 100,
+         "indicator dimension defaults preserve existing geometry");
+  presentation.judgementIndicatorEventThicknessPercent = 900;
+  settings.sanitize();
+  expect(presentation.judgementIndicatorLineThicknessPercent == 400,
+         "indicator dimension is bounded");
+  expect(presentation.judgementIndicatorEventHeightPercent == 400,
+         "indicator dimension is bounded");
+  expect(presentation.judgementIndicatorEventThicknessPercent == 400,
+         "indicator dimension is bounded");
+  TempDirectory temp;
+  const auto path = temp.path() / "indicator-dimensions.json";
+  settings.presentation(AppSettings::PresentationOrientation::Portrait).judgementIndicatorLineThicknessPercent = -1;
+  settings.presentation(AppSettings::PresentationOrientation::Portrait).judgementIndicatorEventHeightPercent = -1;
+  settings.presentation(AppSettings::PresentationOrientation::Portrait).judgementIndicatorEventThicknessPercent = -1;
+  settings.sanitize();
+  std::string error;
+  expect(AppSettingsStore::Save(path, settings, error), "save indicator dimensions");
+  const auto loaded = AppSettingsStore::Load(path);
+  expect(loaded.settings.presentation(AppSettings::PresentationOrientation::Portrait).judgementIndicatorLineThicknessPercent == 25,
+         "portrait dimension clamps independently and survives restart");
+  expect(loaded.settings.presentation(AppSettings::PresentationOrientation::Portrait).judgementIndicatorEventHeightPercent == 25,
+         "portrait dimension clamps independently and survives restart");
+  expect(loaded.settings.presentation(AppSettings::PresentationOrientation::Portrait).judgementIndicatorEventThicknessPercent == 25,
+         "portrait dimension clamps independently and survives restart");
+
+  expect(loaded.settings.presentation().judgementIndicatorLineThicknessPercent == 400,
+         "indicator dimension survives restart");
+  expect(loaded.settings.presentation().judgementIndicatorEventHeightPercent == 400,
+         "indicator dimension survives restart");
+  expect(loaded.settings.presentation().judgementIndicatorEventThicknessPercent == 400,
+         "indicator dimension survives restart");
+}
+
 void testJudgementIndicatorRangeDefaultsAndSanitization() {
   AppSettings defaults;
   defaults.sanitize();
@@ -2918,6 +2961,7 @@ int main() {
   testScreenOrientationRoundTripAndDefaults();
   testReplayPreferencesSurviveSettingsRoundTrip();
   testFindBmsArchivePreferenceDefaultsAndRoundTrips();
+  testJudgementIndicatorDimensions();
   testJudgementIndicatorRangeDefaultsAndSanitization();
   testLaneAngleAcceptsZeroAndPreservesItAcrossRestart();
   testBeatorajaStartSelectDurationRange();

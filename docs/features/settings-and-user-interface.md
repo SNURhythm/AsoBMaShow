@@ -262,3 +262,13 @@ language. See [Legal information](legal-information.md) for sources and maintena
 - [Profiles and data transfer](profiles-and-data-transfer.md)
 - [Input and controllers](input-and-controllers.md)
 - [Gameplay skins](gameplay-skins.md)
+
+
+### Judgement indicator dimensions
+
+The judgement indicator provides independent horizontal line thickness, timing
+event bar height, and timing event bar thickness controls. Each accepts 25–400%
+in 5% steps or by numeric entry; Reset restores 100%, the original dimensions.
+These presentation settings are saved independently for landscape and portrait
+and apply to the built-in and selected-skin HUDs, settings preview, and replay
+video. Timing event bars use their judgement color and retain the existing fade.

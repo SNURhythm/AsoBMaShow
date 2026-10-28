@@ -72,6 +72,9 @@ previewPresentationConfiguration(const AppSettings &settings,
       .judgementIndicatorY = settings.presentation().judgementIndicatorY,
       .judgementIndicatorWidthScale =
           settings.presentation().judgementIndicatorWidthScale,
+      .judgementIndicatorLineThicknessPercent = settings.presentation().judgementIndicatorLineThicknessPercent,
+      .judgementIndicatorEventHeightPercent = settings.presentation().judgementIndicatorEventHeightPercent,
+      .judgementIndicatorEventThicknessPercent = settings.presentation().judgementIndicatorEventThicknessPercent,
       .judgementIndicatorHudMode =
           settings.presentation().judgementIndicatorRenderMode ==
           AppSettings::JudgementIndicatorRenderMode::Hud2D,

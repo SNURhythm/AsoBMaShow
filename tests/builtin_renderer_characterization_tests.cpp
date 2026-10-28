@@ -1349,6 +1349,32 @@ void verifyJudgementIndicatorContinuousAverage(const RenderTarget &target) {
   indicator.clear();
   indicator.record(JudgeResult(Great, 60'000), 2'000'000);
   const auto fresh = render(2'000'000);
+  const auto eventPixelCount = [](const std::vector<std::uint8_t> &pixels) {
+    size_t count = 0;
+    for (size_t i = 0; i + 3 < pixels.size(); i += 4) {
+      if (pixels[i] == 200 && pixels[i + 1] == 255 && pixels[i + 2] == 200) {
+        ++count;
+      }
+    }
+    return count;
+  };
+  const auto normalCount = eventPixelCount(fresh);
+  expect(normalCount > 0, "timing events use the judgement color without whitening");
+  indicator.configure(true, 0.5F, 1.0F, true, 180, 100, 200, 100);
+  const auto tallCount = eventPixelCount(render(2'000'000));
+  // UI units scale by 2/3 here: allow two rasterized rows of rounding.
+  expect(std::abs(static_cast<long long>(tallCount) -
+                  static_cast<long long>(normalCount * 2)) <= 4,
+         "event height independently doubles the timing bar");
+  indicator.configure(true, 0.5F, 1.0F, true, 180, 100, 100, 300);
+  expect(eventPixelCount(render(2'000'000)) == normalCount * 3,
+         "event thickness independently triples the timing bar");
+  indicator.configure(true, 0.5F, 1.0F, true, 180, 200, 100, 100);
+  expect(render(2'000'000) != fresh &&
+             eventPixelCount(render(2'000'000)) == normalCount,
+         "horizontal line thickness changes without resizing timing events");
+  indicator.configure(true, 0.5F, 1.0F, true, 180);
+
   expect(withOldSample != fresh,
          "faded samples remain in the retained bucket average");
   indicator.record(JudgeResult(Great, -60'000), 3'000'000);

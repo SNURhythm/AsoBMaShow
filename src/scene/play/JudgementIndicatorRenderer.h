@@ -38,7 +38,9 @@ public:
           &timingWindows);
 
   void configure(bool enabled, float y, float widthScale, bool hudMode,
-                 int rangeMilliseconds);
+                 int rangeMilliseconds,
+                 int lineThicknessPercent = 100, int eventHeightPercent = 100,
+                 int eventThicknessPercent = 100);
   void updateTimingWindows(
       const std::map<Judgement, std::pair<long long, long long>> &windows);
   void record(const JudgeResult &judgeResult, long long displayTimeMicros);
@@ -104,4 +106,7 @@ private:
   std::atomic_bool hudMode{false};
   std::atomic<int> yPermille{500};
   std::atomic<int> widthPermille{1000};
+  std::atomic<int> lineThickness{100};
+  std::atomic<int> eventHeight{100};
+  std::atomic<int> eventThickness{100};
 };

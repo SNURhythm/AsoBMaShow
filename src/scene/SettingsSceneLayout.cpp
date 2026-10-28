@@ -1574,6 +1574,8 @@ View *SettingsScene::buildHudTab(const LayoutMetrics &metrics) {
   judgementIndicatorRangeControls->addView(resetIndicatorRange);
   judgementIndicatorControls->addView(judgementIndicatorRangeControls);
 
+  appendJudgementIndicatorDimensionSettings(judgementIndicatorControls, metrics);
+
   cardsColumn->addView(makeCard(
       metrics, i18n::message("settings.timing.judgement_indicator.label"),
       i18n::message("settings.timing.set_position_size_timing_range_render_mode.message"),
@@ -2993,6 +2995,38 @@ int sanitizeOffsetComponent(std::string_view text, int fallback) {
 
 } // namespace settings_scene
 
+void SettingsScene::appendJudgementIndicatorDimensionSettings(
+    View *body, const LayoutMetrics &metrics) {
+  const auto append = [this, body, &metrics](
+      const i18n::Text &label, int AppSettings::PresentationSettings::*member) {
+    body->addView(makeWrappedText(label, metrics.smallTextSize, app_theme::textSecondary()));
+    auto *input = makeNumericInput(metrics);
+    const auto read = [this, member] {
+      return std::to_string(context.settings.presentation().*member);
+    };
+    const auto apply = [this, member, input, read](const std::string &text) {
+      auto &value = context.settings.presentation().*member;
+      value = std::clamp(sanitizeOffsetComponent(text, value), 25, 400);
+      persistSettings();
+      input->setEditingText(read());
+    };
+    input->setEditingText(read());
+    input->onEditingFinished(apply);
+    auto *reset = makeResetButton(metrics);
+    reset->setOnClickListener([apply] { apply("100"); });
+    body->addView(makeSteppedValueRow(metrics, input, "5",
+        [apply, read](int direction) {
+          apply(std::to_string(sanitizeOffsetComponent(read(), 100) + direction * 5));
+        }, reset));
+  };
+  append(i18n::message("settings.timing.indicator_line_thickness.percent_label"),
+         &AppSettings::PresentationSettings::judgementIndicatorLineThicknessPercent);
+  append(i18n::message("settings.timing.indicator_event_height.percent_label"),
+         &AppSettings::PresentationSettings::judgementIndicatorEventHeightPercent);
+  append(i18n::message("settings.timing.indicator_event_thickness.percent_label"),
+         &AppSettings::PresentationSettings::judgementIndicatorEventThicknessPercent);
+}
+
 void SettingsScene::appendSelectedSkinHudSettings(
     View *body, const LayoutMetrics &metrics, bool includeBuiltInOnlySettings) {
   const auto appendHeading = [body, &metrics](const i18n::Text &label) {
@@ -3123,6 +3157,7 @@ void SettingsScene::appendSelectedSkinHudSettings(
                           sanitizeOffsetComponent(text, current), 50, 200));
                   persistSettings();
                 });
+  appendJudgementIndicatorDimensionSettings(body, metrics);
   appendNumeric(
       i18n::message("settings.skins.indicator_range_ms.label"),
       [this] { return std::to_string(context.settings.presentation().judgementIndicatorRangeMilliseconds); },

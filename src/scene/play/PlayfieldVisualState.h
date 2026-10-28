@@ -127,6 +127,9 @@ struct PlayfieldPresentationConfig {
   bool judgementIndicatorEnabled = true;
   float judgementIndicatorY = 0.0F;
   float judgementIndicatorWidthScale = 1.0F;
+  int judgementIndicatorLineThicknessPercent = 100;
+  int judgementIndicatorEventHeightPercent = 100;
+  int judgementIndicatorEventThicknessPercent = 100;
   bool judgementIndicatorHudMode = false;
   int judgementIndicatorRangeMilliseconds = 0;
   keybomb::Settings keybombs;

@@ -273,6 +273,9 @@ public:
     bool judgementIndicatorEnabled = true;
     float judgementIndicatorY = kDefaultJudgementIndicatorY;
     float judgementIndicatorWidthScale = kDefaultJudgementIndicatorWidthScale;
+    int judgementIndicatorLineThicknessPercent = 100;
+    int judgementIndicatorEventHeightPercent = 100;
+    int judgementIndicatorEventThicknessPercent = 100;
     int judgementIndicatorRangeMilliseconds =
         kDefaultJudgementIndicatorRangeMilliseconds;
     std::map<int, keybomb::Settings> keybombs;

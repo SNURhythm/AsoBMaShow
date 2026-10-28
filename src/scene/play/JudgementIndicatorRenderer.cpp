@@ -69,14 +69,6 @@ Color judgementColor(Judgement judgement, uint8_t alpha) {
   return Color(255, 255, 255, alpha);
 }
 
-Color timingMarkerColor(Judgement judgement, uint8_t alpha) {
-  Color color = judgementColor(judgement, alpha);
-  color.r = static_cast<uint8_t>((color.r + 255) / 2);
-  color.g = static_cast<uint8_t>((color.g + 255) / 2);
-  color.b = static_cast<uint8_t>((color.b + 255) / 2);
-  return color;
-}
-
 void addRect(rendering::SimpleBatchRenderer &batch, float width, float height,
              float x, float y, Color color) {
   batch.addRect(x, y, width, height, color.toABGR());
@@ -94,7 +86,10 @@ void JudgementIndicatorRenderer::updateTimingWindows(
 
 void JudgementIndicatorRenderer::configure(bool enabled, float y,
                                            float widthScale, bool hudMode,
-                                           int rangeMilliseconds) {
+                                           int rangeMilliseconds,
+                                           int lineThicknessPercent,
+                                           int eventHeightPercent,
+                                           int eventThicknessPercent) {
   const int nextYPermille =
       std::clamp(static_cast<int>(std::lround(std::clamp(y, 0.0f, 1.0f) *
                                               1000.0f)),
@@ -104,6 +99,9 @@ void JudgementIndicatorRenderer::configure(bool enabled, float y,
   const int nextWidthPermille =
       std::clamp(static_cast<int>(std::lround(clampedWidthScale * 1000.0f)),
                  500, 2000);
+  lineThickness.store(std::clamp(lineThicknessPercent, 25, 400), std::memory_order_relaxed);
+  eventHeight.store(std::clamp(eventHeightPercent, 25, 400), std::memory_order_relaxed);
+  eventThickness.store(std::clamp(eventThicknessPercent, 25, 400), std::memory_order_relaxed);
   yPermille.store(nextYPermille, std::memory_order_relaxed);
   widthPermille.store(nextWidthPermille, std::memory_order_relaxed);
   this->hudMode.store(hudMode, std::memory_order_relaxed);
@@ -246,7 +244,7 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
         offsetToX(sample.diffMicros, currentRangeMicros, indicatorLayout);
     addRect(batch, indicatorLayout.markerWidth, indicatorLayout.markerHeight,
             x - indicatorLayout.markerWidth * 0.5f, markerY,
-            timingMarkerColor(sample.judgement, alpha));
+            judgementColor(sample.judgement, alpha));
   }
 
   if (alphaByte(averageAlpha) > 0) {
@@ -310,6 +308,9 @@ JudgementIndicatorRenderer::layout(const Geometry &geometry,
           std::clamp(widthPermille.load(std::memory_order_relaxed), 500, 2000)) /
       1000.0f;
 
+  const float lineScale = lineThickness.load(std::memory_order_relaxed) / 100.0f;
+  const float heightScale = eventHeight.load(std::memory_order_relaxed) / 100.0f;
+  const float thicknessScale = eventThickness.load(std::memory_order_relaxed) / 100.0f;
   Layout indicatorLayout{};
   if (hudMode) {
     indicatorLayout.width =
@@ -319,13 +320,15 @@ JudgementIndicatorRenderer::layout(const Geometry &geometry,
     indicatorLayout.x =
         (static_cast<float>(rendering::window_width) - indicatorLayout.width) *
         0.5f;
-    indicatorLayout.barHeight = 7.0f;
-    indicatorLayout.markerHeight = 22.0f;
-    indicatorLayout.markerWidth = 3.0f;
+    indicatorLayout.barHeight = 7.0f * lineScale;
+    indicatorLayout.markerHeight = 22.0f * heightScale;
+    indicatorLayout.markerWidth = 3.0f * thicknessScale;
     indicatorLayout.centerY =
         static_cast<float>(rendering::window_height) * (1.0f - normalizedY);
-    const float verticalMargin = indicatorLayout.markerHeight * 0.5f +
-                                 indicatorLayout.markerWidth * 4.0f;
+    const float verticalMargin = std::min(
+        static_cast<float>(rendering::window_height) * 0.5f,
+        std::max(indicatorLayout.barHeight * 0.5f,
+                 indicatorLayout.markerHeight * 0.5f + indicatorLayout.markerWidth * 4.0f));
     indicatorLayout.centerY =
         std::clamp(indicatorLayout.centerY,
                    verticalMargin,
@@ -344,15 +347,16 @@ JudgementIndicatorRenderer::layout(const Geometry &geometry,
   indicatorLayout.centerY = geometry.judgeY + verticalDirection * laneHeight * normalizedY;
   const bool skinPixels = geometry.verticalDirection < 0.0f;
   indicatorLayout.barHeight =
-      std::max(skinPixels ? 3.0f : 0.04f, geometry.noteRenderHeight * 0.16f);
+      std::max(skinPixels ? 3.0f : 0.04f, geometry.noteRenderHeight * 0.16f) * lineScale;
   indicatorLayout.markerHeight =
-      std::max(skinPixels ? 12.0f : 0.22f, geometry.noteRenderHeight * 0.7f);
+      std::max(skinPixels ? 12.0f : 0.22f, geometry.noteRenderHeight * 0.7f) * heightScale;
   indicatorLayout.markerWidth =
-      std::max(skinPixels ? 2.0f : 0.02f, geometry.noteRenderWidth * 0.025f);
+      std::max(skinPixels ? 2.0f : 0.02f, geometry.noteRenderWidth * 0.025f) * thicknessScale;
   if (skinPixels) {
     const float windowHeight = static_cast<float>(rendering::window_height);
     const float verticalMargin = std::min(windowHeight * 0.5f,
-        indicatorLayout.markerHeight * 0.5f + indicatorLayout.markerWidth * 4.0f);
+        std::max(indicatorLayout.barHeight * 0.5f,
+                 indicatorLayout.markerHeight * 0.5f + indicatorLayout.markerWidth * 4.0f));
     indicatorLayout.centerY = std::clamp(
         indicatorLayout.centerY, verticalMargin, windowHeight - verticalMargin);
   }
