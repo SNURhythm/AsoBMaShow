@@ -5,6 +5,7 @@
 #include "kombo/KomboStore.h"
 #include "goals/ChartGoal.h"
 #include "ScoreHistoryTime.h"
+#include "Utils.h"
 #include <ctime>
 
 #include <cassert>
@@ -559,6 +560,41 @@ void testPersonalGoalsUseProfileAndIndependentBestRecords() {
   sqlite3_close(db);
 }
 
+void testGoalIgnoresReplacedChartAtSamePath() {
+  const auto root = testRoot("goal-replaced-chart");
+  ScoreRepository scores(root / "score.db");
+  assert(scores.EnsureSchema());
+  const auto chartPath = root / "same.bms";
+  result_persistence::PendingChartScoreWrite pending;
+  pending.attemptId = "123e4567-e89b-42d3-a456-426614174040";
+  pending.replayId = 1; pending.createdAt = "2026-07-19 12:00:00.000";
+  pending.score.chartPath = Utils::GetStoragePathUtf8RelativeToDocuments(chartPath, "BMS/");
+  pending.score.chartSha256 = std::string(64, 'a');
+  pending.score.chartMd5 = std::string(32, 'a');
+  pending.score.score = 200; pending.score.maxScore = 200;
+  pending.score.comboBreak = 1; pending.score.clearType = 300;
+  pending.score.provenance = ScoreProvenance::Legacy();
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  chart_goals::Goal goal;
+  goal.chart.BmsPath = chartPath;
+  goal.chart.SHA256 = std::string(64, 'b'); goal.chart.MD5 = std::string(32, 'b');
+  goal.target = {.scoreNumerator=24};
+  std::string error;
+  const auto preview = scores.PreviewChartGoal(goal, error);
+  assert(preview && error.empty() && !preview->progress.bestScore && !preview->progress.bestClear);
+  assert(scores.SaveChartGoal(goal, error));
+  auto stored = scores.LoadChartGoal(goal.chart, 1, error);
+  assert(stored && !stored->progress.achieved && stored->goal.achievedAtUnixMillis == 0);
+  pending.attemptId.back() = '1';
+  pending.score.chartSha256 = goal.chart.SHA256; pending.score.chartMd5 = goal.chart.MD5;
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  assert(scores.TakeChartGoalAchievements(pending.attemptId).size() == 1);
+  assert(scores.LoadChartGoal(goal.chart, 1, error)->goal.achievedAtUnixMillis > 0);
+  goal.chart.BmsPath = root / "moved.bms";
+  const auto moved = scores.PreviewChartGoal(goal, error);
+  assert(moved && moved->progress.bestScore && moved->progress.bestScore->score == 200);
+}
+
 void testGoalAchievementIsSavedOnceAndCelebrationIsProfileScoped() {
   const auto root = testRoot("goal-achievement");
   ScoreRepository scores(root / "score.db");
@@ -627,6 +663,7 @@ void testGoalAchievementIsSavedOnceAndCelebrationIsProfileScoped() {
 }
 
 int main() {
+  testGoalIgnoresReplacedChartAtSamePath();
   testGoalAchievementIsSavedOnceAndCelebrationIsProfileScoped();
   testPersonalGoalsUseProfileAndIndependentBestRecords();
   testKomboProjectionIsAtomicAndUsesEffectiveLamp();

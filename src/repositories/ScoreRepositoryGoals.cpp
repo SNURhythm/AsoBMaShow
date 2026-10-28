@@ -8,12 +8,19 @@ namespace {
 int goalMode(const bms_parser::ChartMeta &chart, int selected) {
   return scoreLongNoteModeForClearLamp(chart, long_note_mode::normalizeSelectedValue(selected));
 }
+bms_parser::ChartMeta goalScoreIdentity(const bms_parser::ChartMeta &chart) {
+  auto identity = chart;
+  // Stored goals contain hashes but not paths; use the same evidence before saving.
+  identity.BmsPath.clear();
+  return identity;
+}
 chart_goals::GoalProgress project(sqlite3 *db, chart_goals::Goal goal,
                                   const std::optional<std::string> &excludeAttempt = {}) {
+  const auto identity = goalScoreIdentity(goal.chart);
   auto bestScore = score_repository_detail::LoadBestScoreOnConnection(
-      db, goal.chart, {}, excludeAttempt, goal.longNoteMode);
+      db, identity, {}, excludeAttempt, goal.longNoteMode);
   auto bestClear = score_repository_detail::LoadBestClearScoreOnConnection(
-      db, goal.chart, {}, excludeAttempt, goal.longNoteMode, {}, true);
+      db, identity, {}, excludeAttempt, goal.longNoteMode, {}, true);
   auto progress = chart_goals::evaluate(goal.target, std::move(bestScore), std::move(bestClear));
   return {std::move(goal), std::move(progress)};
 }
@@ -90,10 +97,11 @@ std::optional<chart_goals::GoalProgress> ScoreRepository::PreviewChartGoal(
     normalized.longNoteMode = goalMode(goal.chart, goal.longNoteMode);
     // A new editor has no target yet; its current records are still useful.
     chart_goals::GoalProgress result{.goal=std::move(normalized)};
+    const auto identity = goalScoreIdentity(result.goal.chart);
     result.progress.bestScore = score_repository_detail::LoadBestScoreOnConnection(
-        impl_->sessionDatabase, result.goal.chart, {}, {}, result.goal.longNoteMode);
+        impl_->sessionDatabase, identity, {}, {}, result.goal.longNoteMode);
     result.progress.bestClear = score_repository_detail::LoadBestClearScoreOnConnection(
-        impl_->sessionDatabase, result.goal.chart, {}, {}, result.goal.longNoteMode, {}, true);
+        impl_->sessionDatabase, identity, {}, {}, result.goal.longNoteMode, {}, true);
     if (!tx.commit(error)) return {};
     return result;
   } catch (const std::exception &failure) { error = failure.what(); return {}; }
