@@ -199,6 +199,7 @@ struct MusicSelectScene {
     std::atomic_bool appInBackground = false;
     std::atomic_bool storageMaintenanceActive = false;
     FixtureRepository chartRepository;
+    struct Profiles { struct Profile { std::string id = "one"; } current; const Profile &activeProfile() const { return current; } } profileManager;
     struct Replay {
       std::filesystem::path GetResolvedProfileRoot() const { return "/profile"; }
     } replayRepository;
@@ -245,6 +246,10 @@ struct MusicSelectScene {
   std::string directoryStatusMessage_;
   std::vector<MusicSelectBar> launchedPlaylists;
 
+  std::function<bool()> deferredGoal;
+  bool openedRecommendations = false;
+  void defer(std::function<bool()> action, int, bool) { deferredGoal = std::move(action); }
+  void openChartGoals(std::optional<ChartMetaRecord>, bool recommendations) { openedRecommendations = recommendations; }
   void requestDirectoryLoad(const MusicSelectBar &, bool autoplay = false);
   void openSelected();
   void applyDirectoryLoads();
@@ -662,6 +667,13 @@ int main(int argc, char **argv) {
   else if (test == "testFailedPageRecovery") testFailedPageRecovery();
   else if (test == "testPersonalGoalDirectoryRestores") testPersonalGoalDirectoryRestores();
   else if (test == "testSearchOpensAsynchronouslyAndRestores") testSearchOpensAsynchronouslyAndRestores();
+  else if (test == "testRecommendedGoalAction") {
+    MusicSelectScene scene;
+    MusicSelectBar action{.id={"action:add-recommended-goals"}, .kind=skin::MusicSelectBarKind::Container};
+    expect(!scene.openDirectory(action) && bool(scene.deferredGoal), "recommendations action is deferred");
+    scene.deferredGoal();
+    expect(scene.openedRecommendations, "recommendations action opens the recommendations tab");
+  }
   else if (test == "testAutoplayCompletion") testAutoplayCompletion();
   else if (test == "testPointerTargetsClickedFolder") testPointerTargetsClickedFolder();
   else if (test == "testEmptyCategoryAutoplay") testEmptyCategoryAutoplay();

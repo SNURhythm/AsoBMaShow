@@ -1746,6 +1746,14 @@ void MusicSelectScene::applyDirectoryLoads() {
 }
 
 bool MusicSelectScene::openDirectory(const MusicSelectBar &directory) {
+  if (directory.id.value == "action:add-recommended-goals") {
+    const auto profile = context.profileManager.activeProfile().id;
+    defer([this, profile] {
+      if (profile == context.profileManager.activeProfile().id) openChartGoals({}, true);
+      return true;
+    }, 0, true);
+    return false;
+  }
   if (!skin::musicSelectIsDirectoryBarKind(directory.kind)) return false;
   if ((directory.kind == skin::MusicSelectBarKind::Folder ||
        directory.kind == skin::MusicSelectBarKind::SearchWord ||
@@ -1870,6 +1878,11 @@ bool MusicSelectScene::loadDirectoryChildren(
       for (const auto &record : records)
         children.push_back(MusicSelectRepositoryProjection::projectSong(
             record, directory.id.value, inputFor({})));
+      const auto title = i18n::tr("goals.ui.add_recommended");
+      children.push_back({.id={"action:add-recommended-goals"},
+          .kind=skin::MusicSelectBarKind::Container, .title=title,
+          .presentation={.kind=skin::MusicSelectBarKind::Container, .title=title, .exists=true},
+          .selectable=true, .childrenLoaded=true});
       break;
     }
     if (musicSelectIsAssignmentDirectory(directory)) {
@@ -3675,7 +3688,7 @@ void MusicSelectScene::openChartGoalForSelection() {
   }, 0, true);
 }
 
-void MusicSelectScene::openChartGoals(std::optional<ChartMetaRecord> initial) {
+void MusicSelectScene::openChartGoals(std::optional<ChartMetaRecord> initial, bool recommendations) {
   if (context.storageMaintenanceActive || launching_ || failed_) return;
   if (initial && (initial->unavailable || initial->solidArchive || initial->meta.BmsPath.empty())) return;
   std::optional<int> goalMode;
@@ -3690,7 +3703,7 @@ void MusicSelectScene::openChartGoals(std::optional<ChartMetaRecord> initial) {
       SceneReturnTarget::Retained(this), std::move(initial),
       [this, profile](const ChartMetaRecord &record, int mode) {
         pendingGoalSelection_ = std::pair{record, mode}; pendingGoalProfile_ = profile;
-      }, goalMode), true);
+      }, goalMode, recommendations), true);
 }
 
 void MusicSelectScene::applyGoalSelection(const ChartMetaRecord &record, int mode) {

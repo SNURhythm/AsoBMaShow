@@ -10,7 +10,7 @@ public:
   using SelectChart = std::function<void(const ChartMetaRecord &, int)>;
   ChartGoalsScene(ApplicationContext &, SceneReturnTarget,
                   std::optional<ChartMetaRecord> initial = {}, SelectChart = {},
-                  std::optional<int> initialMode = {});
+                  std::optional<int> initialMode = {}, bool initialRecommendations = false);
   void init() override;
   void onPause() override;
   void onResume() override;
@@ -55,6 +55,7 @@ private:
   SelectChart onSelectChart_;
   std::optional<ChartMetaRecord> initial_, resolved_;
   std::optional<int> initialMode_;
+  bool initialRecommendations_ = false;
   std::string profileId_, message_, customRate_;
   chart_goals::ProgressPage page_;
   std::optional<chart_goals::GoalProgress> selected_;

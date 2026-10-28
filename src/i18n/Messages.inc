@@ -118,6 +118,7 @@
 {"gameplay.unknown.label", "Unknown", "알 수 없음", "不明", "未知", "未知"},
 {"goals.ui.achieved", "Achieved", "달성", "達成", "已达成", "已達成"},
 {"goals.ui.achieved_date", "First achieved: {date}", "첫 달성: {date}", "初達成: {date}", "首次达成：{date}", "首次達成：{date}"},
+{"goals.ui.add_recommended", "Add recommended goals", "추천 목표 추가", "おすすめの目標を追加", "添加推荐目标", "新增推薦目標"},
 {"goals.ui.all_tables", "All tables", "모든 난이도표", "すべての難易度表", "所有难度表", "所有難度表"},
 {"goals.ui.already_achieved", "You’ve already met this goal. Choose a new target.", "이미 달성한 목표입니다. 새로운 목표를 선택하세요.", "この目標はすでに達成しています。新しい目標を選んでください。", "你已达成此目标，请选择新目标。", "你已達成此目標，請選擇新目標。"},
 {"goals.ui.best_lamp", "Best lamp: {value}", "최고 램프: {value}", "ベストランプ: {value}", "最佳灯：{value}", "最佳燈：{value}"},

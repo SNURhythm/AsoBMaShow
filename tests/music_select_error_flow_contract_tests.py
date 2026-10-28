@@ -288,6 +288,9 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
         fixture = (ROOT / "tests/music_select_scene_directory_metadata_fixture.cpp").read_text()
         self.compile_and_run(fixture.replace("SCENE_FOLDER_BRANCH", branch))
 
+    def test_recommended_goal_action_opens_recommendations(self):
+        self.run_directory_loading_fixture("testRecommendedGoalAction")
+
     def test_async_directory_autoplay_completes_without_reloading(self):
         self.run_directory_loading_fixture("testAutoplayCompletion")
 

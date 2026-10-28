@@ -1314,6 +1314,7 @@ void MainMenuScene::refreshTasksButton() {
 void MainMenuScene::initView(ApplicationContext &context) {
   tutorial_ = nullptr;
   addFolderButton_ = nullptr;
+  addRecommendedGoalsButton_ = nullptr;
   tutorialRightScroll_ = nullptr;
   detailsContent_ = nullptr;
   detailsControlsContent_ = nullptr;
@@ -2252,6 +2253,18 @@ void MainMenuScene::initView(ApplicationContext &context) {
   recyclerView->setBorderWidth(0);
   recyclerView->setCornerRadius(app_theme::controlRadius());
   left->addView(recyclerView);
+  TextView *recommendationText = nullptr;
+  addRecommendedGoalsButton_ = makeSelectorButton(i18n::message("goals.ui.add_recommended"), 21, &recommendationText, ui_icons::kPlus);
+  addRecommendedGoalsButton_->setName("addRecommendedGoals");
+  addRecommendedGoalsButton_->setHeight(56)->setFlexShrink(0);
+  styleMenuButton(addRecommendedGoalsButton_, recommendationText);
+  addRecommendedGoalsButton_->setOnClickListener([this] {
+    defer([this] { openChartGoals({}, {}, true); return true; }, 0, true);
+  });
+  const bool showRecommendations = !temporaryChartFolder && activeFolder.type == LibraryFolderItem::Type::Goals;
+  addRecommendedGoalsButton_->setVisible(showRecommendations);
+  addRecommendedGoalsButton_->setDisplay(showRecommendations ? YGDisplayFlex : YGDisplayNone);
+  left->addView(addRecommendedGoalsButton_);
   browser->addView(left);
 
   auto right = new View();
@@ -3722,6 +3735,11 @@ void MainMenuScene::prepareAssignmentChartQuery() {
 }
 
 void MainMenuScene::reloadChartList(bool preserveViewState) {
+  if (addRecommendedGoalsButton_) {
+    const bool show = !temporaryChartFolder && activeFolder.type == LibraryFolderItem::Type::Goals;
+    addRecommendedGoalsButton_->setVisible(show);
+    addRecommendedGoalsButton_->setDisplay(show ? YGDisplayFlex : YGDisplayNone);
+  }
   if (recyclerView == nullptr || !chartSession.has_value()) {
     return;
   }
@@ -5336,7 +5354,7 @@ void MainMenuScene::openChartGoal(const ChartMetaRecord &record) {
   }, 0, true);
 }
 
-void MainMenuScene::openChartGoals(std::optional<ChartMetaRecord> initial, std::optional<int> mode) {
+void MainMenuScene::openChartGoals(std::optional<ChartMetaRecord> initial, std::optional<int> mode, bool recommendations) {
   if (context.storageMaintenanceActive || willStart.load() || replayExportJob_.inProgress()) return;
   if (initial && (initial->unavailable || initial->solidArchive || initial->meta.BmsPath.empty())) return;
   const auto profile = context.profileManager.activeProfile().id;
@@ -5344,7 +5362,7 @@ void MainMenuScene::openChartGoals(std::optional<ChartMetaRecord> initial, std::
       SceneReturnTarget::Retained(this), std::move(initial),
       [this, profile](const ChartMetaRecord &record, int mode) {
         pendingGoalSelection_ = std::pair{record, mode}; pendingGoalProfile_ = profile;
-      }, mode), true);
+      }, mode, recommendations), true);
 }
 
 void MainMenuScene::applyGoalSelection(const ChartMetaRecord &record, int mode) {
@@ -8794,6 +8812,7 @@ void MainMenuScene::cleanupScene() {
   selectorStates_ = {};
   tutorial_ = nullptr;
   addFolderButton_ = nullptr;
+  addRecommendedGoalsButton_ = nullptr;
   tutorialRightScroll_ = nullptr;
   detailsContent_ = nullptr;
   detailsControlsContent_ = nullptr;

@@ -93,7 +93,7 @@ private:
   void configureSoundServices();
   void reloadLibrary(bool preserveDirectory = true);
   void openKomboAssignment(const std::string &id);
-  void openChartGoals(std::optional<ChartMetaRecord> initial = {});
+  void openChartGoals(std::optional<ChartMetaRecord> initial = {}, bool recommendations = false);
   void openChartGoalForSelection();
   void resumeGoalNavigation();
   void applyGoalSelection(const ChartMetaRecord &, int mode);

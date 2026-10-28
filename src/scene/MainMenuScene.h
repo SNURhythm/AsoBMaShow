@@ -119,7 +119,7 @@ private:
   Scene *activeUtilityTab() const;
   void selectTab(Tab tab);
   void openKomboAssignment(const std::string &id);
-  void openChartGoals(std::optional<ChartMetaRecord> initial = {}, std::optional<int> mode = {});
+  void openChartGoals(std::optional<ChartMetaRecord> initial = {}, std::optional<int> mode = {}, bool recommendations = false);
   void openChartGoal(const ChartMetaRecord &record);
   chart_goals::Index chartGoalIndex;
   std::vector<std::string> chartGoalHashes;
@@ -227,6 +227,7 @@ private:
   std::array<SelectorTabState, 2> selectorStates_;
 
   RecyclerView<ChartMetaRecord> *recyclerView = nullptr;
+  Button *addRecommendedGoalsButton_ = nullptr;
   RecyclerView<LibraryFolderItem> *folderRecyclerView = nullptr;
   struct LibraryFolderMetadataCache {
     bool valid = false;

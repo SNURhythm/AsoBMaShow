@@ -35,7 +35,13 @@ struct ChartGoalsScene {
     struct { std::string selectedLnMode = "HCN"; } settings; } context;
   std::string profileId_ = "one", message_, customRate_;
   bool editing_ = true, customScore_ = false, confirmRemove_ = false, loadFailed_ = false;
-  bool showAchieved_ = false;
+  bool initialRecommendations_ = false;
+  enum class OverviewTab { Ongoing, Recommendations, Achieved };
+  OverviewTab overviewTab_ = OverviewTab::Ongoing;
+  std::map<int, int> recommendations_;
+  std::optional<int> recommendationRank_;
+  int loadedRank = -1;
+  void loadRecommendations(int rank, int offset) { assert(offset == 0); loadedRank = rank; }
   int achievedOffset_ = 0;
   int offset_ = 20, builds = 0, reloads = 0;
   chart_goals::Goal draft_;
@@ -60,6 +66,17 @@ struct ChartGoalsScene {
 };
 PRODUCTION_METHODS
 int main() {
+  ChartGoalsScene recommended;
+  recommended.initialRecommendations_ = true;
+  recommended.recommendations_[24] = 1;
+  recommended.init();
+  assert(recommended.overviewTab_ == ChartGoalsScene::OverviewTab::Recommendations);
+  assert(recommended.loadedRank == 24 && !recommended.initialRecommendations_);
+  ChartGoalsScene noRecommendations;
+  noRecommendations.initialRecommendations_ = true;
+  noRecommendations.init();
+  assert(noRecommendations.overviewTab_ == ChartGoalsScene::OverviewTab::Recommendations);
+  assert(noRecommendations.loadedRank == -1);
   ChartGoalsScene existing;
   chart_goals::Goal saved;
   saved.chart.SHA256 = std::string(64, 'a'); saved.longNoteMode = 2;

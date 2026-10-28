@@ -229,9 +229,9 @@ void select(View *parent, OverlayPortal *portal, const std::string &caption,
 }
 ChartGoalsScene::ChartGoalsScene(ApplicationContext &context, SceneReturnTarget target,
                                std::optional<ChartMetaRecord> initial, SelectChart onSelect,
-                               std::optional<int> initialMode)
+                               std::optional<int> initialMode, bool initialRecommendations)
     : Scene(context), returnTarget_(std::move(target)), onSelectChart_(std::move(onSelect)),
-      initial_(std::move(initial)), initialMode_(initialMode), profileId_(context.profileManager.activeProfile().id) {}
+      initial_(std::move(initial)), initialMode_(initialMode), initialRecommendations_(initialRecommendations), profileId_(context.profileManager.activeProfile().id) {}
 bool ChartGoalsScene::checkProfile() {
   if (profileId_ == context.profileManager.activeProfile().id) return true;
   profileId_ = context.profileManager.activeProfile().id;
@@ -255,7 +255,17 @@ void ChartGoalsScene::init() {
     showGoal({.chart=record->meta, .longNoteMode=initialMode_.value_or(scoreLongNoteModeForClearLamp(
         record->meta, long_note_mode::valueFromId(context.settings.selectedLnMode)))});
     initialMode_.reset();
-  } else reload();
+  } else {
+    reload();
+    if (initialRecommendations_) {
+      overviewTab_ = OverviewTab::Recommendations;
+      if (!recommendations_.empty()) {
+        recommendationRank_ = recommendations_.begin()->first;
+        loadRecommendations(*recommendationRank_, 0);
+      }
+    }
+  }
+  initialRecommendations_ = false;
   build();
 }
 void ChartGoalsScene::reload() {
