@@ -68,6 +68,9 @@ int main() {
   assert(existing.draft_.target.lamp == 400 && existing.draft_.target.scoreNumerator == 24);
   existing.showGoal({.chart=saved.chart, .longNoteMode=3});
   assert(!existing.selected_ && existing.editing_); // No saved target opens a fresh editor.
+  assert(existing.draft_.longNoteMode == 3);
+  existing.showGoal({.chart=saved.chart, .longNoteMode=2});
+  assert(existing.selected_ && !existing.editing_ && existing.draft_.target.lamp == 400);
   ChartGoalsScene scene;
   scene.saveGoal();
   assert(scene.context.scoreRepository.saves == 0 && scene.editing_);

@@ -301,6 +301,21 @@ void ChartGoalsScene::build() {
       }
       action(detail, i18n::tr("goals.ui.save"), [this] { later([this] { saveGoal(); }); }, app_theme::ActionCategory::Primary);
     } else {
+      // Selectable long-note charts can have separate goals for each mode.
+      if (scoreLongNoteModeForClearLamp(draft_.chart, 1) == 1 &&
+          scoreLongNoteModeForClearLamp(draft_.chart, 2) == 2 &&
+          scoreLongNoteModeForClearLamp(draft_.chart, 3) == 3) {
+        auto *modes = new View();
+        modes->setFlexDirection(FlexDirection::Row)->setGap(8)->setFlexShrink(0);
+        for (int mode : long_note_mode::kPlayableValues) {
+          auto *button = action(modes, long_note_mode::idFromValue(mode), [this, mode] {
+            later([this, mode] { showGoal({.chart=draft_.chart, .longNoteMode=mode}); });
+          });
+          button->setFlex(1);
+          button->setSelected(mode == draft_.longNoteMode);
+        }
+        detail->addView(modes);
+      }
       targets(detail, draft_.target);
       const auto setDate = chart_goals::localDateTime(draft_.setAtUnixMillis);
       label(detail, i18n::format("goals.ui.set_date", {{"date", setDate.empty()
@@ -406,7 +421,11 @@ void ChartGoalsScene::onPause() {
   for (auto *view : views) { view->cancelPointerInput(); finish(view, finish); }
 }
 void ChartGoalsScene::onResume() { checkProfile(); reload(); build(); }
-void ChartGoalsScene::update(float) { if (!checkProfile()) { reload(); build(); } }
+void ChartGoalsScene::update(float) {
+  if (!checkProfile()) { reload(); build(); }
+  if (root_ && (root_->getWidth() != rendering::window_width ||
+                root_->getHeight() != rendering::window_height)) layout();
+}
 void ChartGoalsScene::onPresentationOrientationChanged() { layout(); }
 void ChartGoalsScene::onLanguageChanged() { build(); }
 EventHandleResult ChartGoalsScene::handleEvents(SDL_Event &event) {

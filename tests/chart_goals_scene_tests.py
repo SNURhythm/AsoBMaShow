@@ -42,6 +42,33 @@ class ChartGoalsSceneTests(unittest.TestCase):
                 [source], binary, source.parent, includes=(root / "src",))
             subprocess.run([str(binary)], check=True, timeout=5)
 
+    def test_same_orientation_resize_refreshes_layout(self):
+        root = Path(__file__).resolve().parents[1]
+        scene = (root / "src/scene/ChartGoalsScene.cpp").read_text()
+        method = extract(scene, "void ChartGoalsScene::update(")
+        fixture = r'''
+#include <cassert>
+namespace rendering { int window_width=1000, window_height=700; }
+struct View { int w=1000,h=700; int getWidth() {return w;} int getHeight() {return h;} };
+struct ChartGoalsScene {
+  View view, *root_=&view; int layouts=0;
+  bool checkProfile() {return true;} void reload() {} void build() {}
+  void layout() { ++layouts; view.w=rendering::window_width; view.h=rendering::window_height; }
+  void update(float);
+};
+METHOD
+int main() { ChartGoalsScene scene; scene.update(0); assert(scene.layouts==0);
+  rendering::window_width=800; scene.update(0); assert(scene.layouts==1);
+  scene.update(0); assert(scene.layouts==1);
+  rendering::window_height=600; scene.update(0); assert(scene.layouts==2); }
+'''.replace("METHOD", method)
+        with tempfile.TemporaryDirectory(prefix="goal-resize-") as directory:
+            path = Path(directory) / "resize.cpp"
+            binary = Path(directory) / "resize"
+            path.write_text(fixture)
+            FixtureCompiler.from_environment().build([path], binary, path.parent)
+            subprocess.run([str(binary)], check=True, timeout=5)
+
     def test_active_and_achieved_sections_page_independently(self):
         root = Path(__file__).resolve().parents[1]
         source = (root / "src/scene/ChartGoalsScene.cpp").read_text()
