@@ -864,7 +864,6 @@ struct MusicSelectScene {
   bool allowAction = true;
   bool toolbarControlAvailable(MusicSelectToolbarControl) const { return allowAction; }
   void openSelectedReadme() { assert(!selectorInputBlocked()); invoked.push_back("readme"); }
-  void openChartGoalForSelection() { assert(!selectorInputBlocked()); invoked.push_back("goal"); }
   void openChartViewer() { assert(!selectorInputBlocked()); invoked.push_back("viewer"); }
   void openChartRecords() { assert(!selectorInputBlocked()); invoked.push_back("records"); }
   void openMusicPlayer() { assert(!selectorInputBlocked()); invoked.push_back("music"); }
@@ -930,21 +929,18 @@ int main() {
   assert(!menu.isOpen());
   scene.bars_ = Bars{};
   scene.openToolbarMenu(MusicSelectToolbarControl::ChartMenu);
-  assert(menu.actions.size() == 6 && menu.actions[0].label.resolve() == "View chart");
+  assert(menu.actions.size() == 5 && menu.actions[0].label.resolve() == "View chart");
   scene.revealContextMenu_->select(0);
   assert(scene.invoked == std::vector<std::string>{"viewer"});
   scene.openToolbarMenu(MusicSelectToolbarControl::ChartMenu);
   scene.revealContextMenu_->select(1);
-  assert(scene.invoked.back() == "goal");
-  scene.openToolbarMenu(MusicSelectToolbarControl::ChartMenu);
-  scene.revealContextMenu_->select(2);
   assert(scene.invoked.back() == "records");
   scene.openToolbarMenu(MusicSelectToolbarControl::ChartMenu);
-  assert(!menu.actions[3].enabled && menu.actions[4].enabled);
-  scene.revealContextMenu_->select(5);
+  assert(!menu.actions[2].enabled && menu.actions[3].enabled);
+  scene.revealContextMenu_->select(4);
   assert(scene.invoked.back() == "readme" && !menu.isOpen());
   scene.openToolbarMenu(MusicSelectToolbarControl::ChartMenu);
-  scene.revealContextMenu_->select(4);
+  scene.revealContextMenu_->select(3);
   assert(platform_open::calls == 5 && !menu.isOpen());
   const std::vector<std::string> moreActions{"music", "tasks", "ir", "settings"};
   for (int index = 0; index < 4; ++index) {

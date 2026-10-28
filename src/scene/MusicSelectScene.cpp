@@ -3794,8 +3794,6 @@ void MusicSelectScene::ensureToolbarContextMenu() {
               if (toolbarControlAvailable(Control::RevealChart)) revealSelectedChartInFileManager();
             } else if (actionId == "chart-viewer") {
               if (toolbarControlAvailable(Control::ChartViewer)) openChartViewer();
-            } else if (actionId == "personal-goal") {
-              openChartGoalForSelection();
             } else if (actionId == "chart-records") {
               if (toolbarControlAvailable(Control::ChartRecords)) openChartRecords();
             } else if (actionId == "music-player") {
@@ -3826,8 +3824,6 @@ void MusicSelectScene::openToolbarMenu(MusicSelectToolbarControl control) {
     const auto *chart = selected && selected->chart ? &*selected->chart : nullptr;
     actions = {
         {.id = "chart-viewer", .label = i18n::message("music_select.toolbar.view_chart.label"),
-         .enabled = toolbarControlAvailable(Control::ChartViewer)},
-        {.id = "personal-goal", .label = i18n::message("goals.ui.personal_goal"),
          .enabled = toolbarControlAvailable(Control::ChartViewer)},
         {.id = "chart-records", .label = i18n::message("menu.records.label"),
          .enabled = toolbarControlAvailable(Control::ChartRecords)},
