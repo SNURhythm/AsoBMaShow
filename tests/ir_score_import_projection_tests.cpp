@@ -3,6 +3,7 @@
 #include "repositories/ScoreRepository.h"
 #include "sqlite3.h"
 #include "streak/StreakStore.h"
+#include "goals/ChartGoal.h"
 #include "ScoreHistoryTime.h"
 #include <ctime>
 
@@ -486,7 +487,60 @@ void testStreakProjectionIsAtomicAndUsesEffectiveLamp() {
 
 } // namespace
 
+void testPersonalGoalsUseProfileAndIndependentBestRecords() {
+  const auto root = testRoot("personal-goals");
+  const auto path = root / "score.db";
+  ScoreRepository scores(path);
+  assert(scores.EnsureSchema());
+  std::string error;
+  chart_goals::Goal goal;
+  goal.chart.SHA256 = std::string(64, 'A');
+  goal.chart.Title = "Personal target";
+  goal.longNoteMode = 3; // A chart without LN has one shared goal.
+  goal.target = {.lamp=500, .scoreNumerator=24};
+  assert(scores.SaveChartGoal(goal, error));
+  auto saved = scores.LoadChartGoal(goal.chart, 1, error);
+  assert(saved && error.empty() && saved->goal.longNoteMode == 0);
+  assert(!saved->progress.achieved);
+  const std::vector remote{remoteScore("goal-score", 'a', 190, 200),
+                           remoteScore("goal-lamp", 'a', 160, 500)};
+  assert(scores.ReplaceImportedIrScores(kProvider, kOrigin, 1, remote).status ==
+         ImportedIrScoreProjectionStatus::Applied);
+  saved = scores.LoadChartGoal(goal.chart, 3, error);
+  assert(saved && saved->progress.achieved);
+  assert(saved->progress.bestScore->score == 190);
+  assert(saved->progress.bestClear->clearType == 500);
+  assert(!scores.LoadBestClearScore(saved->goal.chart)); // Replay-facing query stays local.
+  auto page = scores.LoadChartGoals(0, error);
+  assert(page && page->goals.size() == 1 && page->goals[0].progress.achieved);
+  assert(scores.ClearImportedIrScores(kProvider).status == ImportedIrScoreProjectionStatus::Applied);
+  assert(!scores.LoadChartGoal(goal.chart, 1, error)->progress.achieved);
+  goal.chart.SHA256 = std::string(64, 'b');
+  goal.chart.TotalLongNotes = 1;
+  goal.longNoteMode = 1; assert(scores.SaveChartGoal(goal, error));
+  goal.longNoteMode = 2; assert(scores.SaveChartGoal(goal, error));
+  assert(scores.LoadChartGoals(0, error)->goals.size() == 3);
+  assert(!scores.LoadChartGoal(goal.chart, 3, error) && error.empty());
+  goal.chart.LnMode = 2; // Authored CN collapses selections to CN.
+  assert(scores.LoadChartGoal(goal.chart, 3, error));
+  assert(scores.BindDatabasePath(root / "other.db", error));
+  assert(scores.LoadChartGoals(0, error)->goals.empty());
+  assert(scores.SaveChartGoal(goal, error));
+  assert(scores.LoadChartGoals(0, error)->goals.size() == 1);
+  assert(scores.BindDatabasePath(path, error));
+  assert(scores.LoadChartGoals(0, error)->goals.size() == 3);
+  assert(scores.RemoveChartGoal(goal.chart, 3, error));
+  assert(scores.LoadChartGoals(0, error)->goals.size() == 2);
+  sqlite3 *db = nullptr;
+  assert(sqlite3_open(path.string().c_str(), &db) == SQLITE_OK);
+  assert(sqlite3_exec(db, "CREATE TRIGGER reject_goal BEFORE INSERT ON chart_goals BEGIN SELECT RAISE(ABORT,'test failure'); END", nullptr, nullptr, nullptr) == SQLITE_OK);
+  assert(!scores.SaveChartGoal(goal, error) && !error.empty());
+  assert(scores.LoadChartGoals(0, error)->goals.size() == 2);
+  sqlite3_close(db);
+}
+
 int main() {
+  testPersonalGoalsUseProfileAndIndependentBestRecords();
   testStreakProjectionIsAtomicAndUsesEffectiveLamp();
   testImportedSnapshotUsesNormalScoreSummaries();
   testRemoteLampIsAuthoritative();

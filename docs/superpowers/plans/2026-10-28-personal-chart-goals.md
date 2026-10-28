@@ -45,9 +45,9 @@
 
 **Interfaces:** `LoadChartGoals(int offset, string &error) -> optional<chart_goals::ProgressPage>`; `LoadChartGoal(const ChartMeta&, int selectedMode, string &error) -> optional<chart_goals::GoalProgress>` (missing has empty error); `SaveChartGoal(const chart_goals::Goal&, string &error) -> bool`; `RemoveChartGoal(const ChartMeta&, int selectedMode, string &error) -> bool`. GoalProgress carries goal and evaluated progress. All operations use the existing connection lock/activity guards; writes transactionally verify the existing row before replacing it. Reads use current best-score/clear on that connection.
 
-- [ ] Add real repository integration coverage for effective LN scoping, independent eligible bests, profile database changes, imported evidence and persistence failure. Use existing result fixtures/shared dependencies; observe failures before adding the bridge.
-- [ ] Implement the bridge and build registration. Preserve existing score schema version and unrelated data.
-- [ ] Run goal integration tests plus relevant existing best-record/import tests (expect pass). Commit the tested bridge.
+- [x] Add real repository integration coverage for effective LN scoping, independent eligible bests, profile database changes, imported evidence and persistence failure. Use existing result fixtures/shared dependencies; observe failures before adding the bridge.
+- [x] Implement the bridge and build registration. Preserve existing score schema version and unrelated data.
+- [x] Run goal integration tests plus relevant existing best-record/import tests (expect pass). Commit the tested bridge.
 
 ## Task 3: Shared goal UI and selector integration
 

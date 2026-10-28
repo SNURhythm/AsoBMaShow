@@ -92,7 +92,8 @@ std::optional<ScoreBestSnapshot> LoadBestClearScoreOnConnection(
     const std::optional<std::string> &beforeCreatedAt,
     const std::optional<std::string> &excludeAttemptId,
     int selectedLongNoteMode = 0,
-    const std::optional<std::string> &beforeAttemptId = std::nullopt);
+    const std::optional<std::string> &beforeAttemptId = std::nullopt,
+    bool includeImported = false);
 std::optional<ScoreBestSnapshot>
 LoadBestCourseScoreOnConnection(sqlite3 *database,
                                 const CoursePlaySession &session,

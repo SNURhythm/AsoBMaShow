@@ -1909,7 +1909,7 @@ score_repository_detail::LoadBestClearScoreOnConnection(
     const std::optional<std::string> &beforeCreatedAt,
     const std::optional<std::string> &excludeAttemptId,
     int selectedLongNoteMode,
-    const std::optional<std::string> &beforeAttemptId) {
+    const std::optional<std::string> &beforeAttemptId, bool includeImported) {
   const auto match = scoreChartMatchFor(chartMeta);
   const std::string cutoff = beforeCreatedAt.value_or("");
   const int longNoteMode =
@@ -1925,11 +1925,13 @@ score_repository_detail::LoadBestClearScoreOnConnection(
            ", created_at, score_source, attempt_id "
            "FROM scores s WHERE ";
   query += scoreChartMatchPredicate();
-  query += " AND " +
-           score_cache_queries::detail::scoreParticipatesInBestExpr("s") +
-           " AND s.score_source = " +
-           std::to_string(static_cast<int>(ScoreStorageSource::LocalGameplay)) +
-           " AND (ln_mode = ? OR ln_mode = -1 OR (? != 0 AND ln_mode = 0)) ";
+  query += " AND " + score_cache_queries::detail::scoreParticipatesInBestExpr("s");
+  // Replay/result consumers require a local attempt; personal goals also admit
+  // the imported lamp evidence already shown by the selector's clear cache.
+  if (!includeImported)
+    query += " AND s.score_source = " +
+        std::to_string(static_cast<int>(ScoreStorageSource::LocalGameplay));
+  query += " AND (ln_mode = ? OR ln_mode = -1 OR (? != 0 AND ln_mode = 0)) ";
   query += beforeAttemptId
       ? "AND (s.created_at, s.id) < ("
         "COALESCE((SELECT created_at FROM scores WHERE attempt_id = ?), ?), "

@@ -7,6 +7,7 @@
 #include "ChartRepository.h"
 #include "ScoreRepositoryModels.h"
 #include "../streak/StreakModel.h"
+#include "../goals/ChartGoal.h"
 
 #include <array>
 #include <cstdint>
@@ -96,6 +97,11 @@ public:
   bool ResetStreakExtraChallenge(const std::string &assignmentId, streak::DayId expectedDay, std::string &error);
   bool ConfigureStreak(const streak::Config &, streak::DayId &effectiveDay, std::string &error);
   bool BuyStreakFreeze(std::string &error);
+  std::optional<chart_goals::ProgressPage> LoadChartGoals(int offset, std::string &error);
+  std::optional<chart_goals::GoalProgress> LoadChartGoal(
+      const bms_parser::ChartMeta &, int selectedMode, std::string &error);
+  bool SaveChartGoal(const chart_goals::Goal &, std::string &error);
+  bool RemoveChartGoal(const bms_parser::ChartMeta &, int selectedMode, std::string &error);
   void Shutdown();
   bool SaveScore(const bms_parser::ChartMeta &chartMeta,
                  const RhythmState &state,
