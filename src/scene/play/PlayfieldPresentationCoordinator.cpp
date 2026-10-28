@@ -1,3 +1,4 @@
+#include "../../video/FrameCpuTiming.h"
 #include "PlayfieldPresentationCoordinator.h"
 
 #include <limits>
@@ -246,6 +247,8 @@ PresentationFrameOutcome PlayfieldPresentationCoordinator::prepareFrame(
             "skin.presentation.frame_not_submitted",
             "The gameplay skin did not submit a complete frame."));
     try {
+      const video::frameCpuTiming::Scope cpuSkinPrepare(
+          video::frameCpuTiming::Stage::SkinPrepare);
       pending.skinPrepare = skin_->prepareFrame(state, projection);
     } catch (...) {
       pending.skinPrepare = PresentationFrameOutcome::CriticalFailure;
@@ -257,6 +260,8 @@ PresentationFrameOutcome PlayfieldPresentationCoordinator::prepareFrame(
   // This is the sole video-update call for this captured frame. Both the
   // embedded skin and built-in presentation paths use this exact value.
   try {
+    const video::frameCpuTiming::Scope cpuBgaPrepare(
+        video::frameCpuTiming::Stage::BgaPrepare);
     pending.bga = bga_.prepareVisualFrameAt(
         state.clock.serial, state.clock.bgaTimeMicros, state.bgaMiss);
   } catch (...) {
@@ -345,6 +350,8 @@ PlayfieldPresentationCoordinator::render(RenderContext &context) {
   PresentationFrameResult skinResult;
   bool skinRenderThrew = false;
   try {
+    const video::frameCpuTiming::Scope cpuSkinSubmit(
+        video::frameCpuTiming::Stage::SkinSubmit);
     skinResult = skin_->render(context, *pending.bga, bga_);
   } catch (...) {
     skinRenderThrew = true;

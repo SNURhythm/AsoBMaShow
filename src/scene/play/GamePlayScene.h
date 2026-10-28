@@ -101,6 +101,7 @@ public:
   EventHandleResult handleEvents(SDL_Event &event) override;
 
 private:
+  void recordPresentationTimingPhase() const;
   struct RealtimeGameplaySession;
   struct CompletedModernReplayCapture {
     std::optional<std::vector<replay::InputTransition>> acceptedInput;

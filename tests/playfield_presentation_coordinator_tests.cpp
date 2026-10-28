@@ -1,3 +1,4 @@
+#include "video/FrameCpuTiming.h"
 #include "scene/play/PlayfieldPresentationCoordinator.h"
 
 #include <algorithm>
@@ -416,11 +417,18 @@ void testBuiltInDefaultWarmsAndReusesOneBgaFrame() {
   coordinator.configure({.visibleTimeDurationMilliseconds = 535});
   PlayfieldProjectionResult projection;
   auto state = frame(41);
+  namespace cpu = video::frameCpuTiming;
+  cpu::beginFrame(41, +[]() noexcept { return 1.0; });
   expect(coordinator.prepareFrame(state, projection) ==
              PresentationFrameOutcome::Ready,
          "built-in prepare is ready");
   RenderContext render;
   const auto result = coordinator.render(render);
+  const auto timings = cpu::endFrame(41);
+  expect(timings.stages[static_cast<unsigned>(cpu::Stage::BgaPrepare)].count == 1 &&
+             timings.stages[static_cast<unsigned>(cpu::Stage::SkinPrepare)].count == 0 &&
+             timings.stages[static_cast<unsigned>(cpu::Stage::SkinSubmit)].count == 0,
+         "timing follows the actual selected presentation and sole BGA preparation");
   expect(builtIn->prepareCalls == 1 && builtIn->renderCalls == 1,
          "built-in is prepared and rendered once");
   expect(builtIn->configureCalls == 1 && builtIn->preparedState == &state &&
@@ -456,11 +464,18 @@ void testSkinSuccessSubmitsNoBuiltInWork() {
   projection.builtInTraversal = BuiltInRendererTraversal{};
   projection.builtInPlan.nextStartRetainedOrdinal = 73;
   auto state = frame(42);
+  namespace cpu = video::frameCpuTiming;
+  cpu::beginFrame(42, +[]() noexcept { return 1.0; });
   expect(coordinator.prepareFrame(state, projection) ==
              PresentationFrameOutcome::Ready,
          "skin prepare is ready");
   RenderContext render;
   const auto result = coordinator.render(render);
+  const auto timings = cpu::endFrame(42);
+  expect(timings.stages[static_cast<unsigned>(cpu::Stage::BgaPrepare)].count == 1 &&
+             timings.stages[static_cast<unsigned>(cpu::Stage::SkinPrepare)].count == 1 &&
+             timings.stages[static_cast<unsigned>(cpu::Stage::SkinSubmit)].count == 1,
+         "timing follows the actual selected presentation and sole BGA preparation");
   expect(builtIn->prepareCalls == 0 && builtIn->renderCalls == 0 &&
              builtIn->cursorAdvanceCalls == 1 &&
              builtIn->nextRetainedTimelineOrdinal == 73,

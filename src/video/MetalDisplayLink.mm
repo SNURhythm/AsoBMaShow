@@ -43,6 +43,8 @@ API_AVAILABLE(macos(14.0), ios(17.0))
         CACurrentMediaTime(), update.targetTimestamp,
         update.targetPresentationTimestamp, state->generation);
     const auto token = state->timingToken;
+    video::frameCpuTiming::beginFrame(
+        token, +[]() noexcept { return CACurrentMediaTime(); });
     if (token) {
       [update.drawable addPresentedHandler:^(id<MTLDrawable> drawable) {
         video::presentationTiming::capture().record(token,
@@ -60,8 +62,8 @@ namespace {
 thread_local MetalDisplayLinkState *current = nullptr;
 
 void endFrame(MetalDisplayLinkState &state) {
-  presentationTiming::capture().record(state.timingToken,
-      presentationTiming::Event::FrameEnd, CACurrentMediaTime());
+  presentationTiming::capture().recordCpuFrame(state.timingToken,
+      frameCpuTiming::endFrame(state.timingToken), CACurrentMediaTime());
   state.timingToken = 0;
   state.frame.finish();
   state.drawable = nil;

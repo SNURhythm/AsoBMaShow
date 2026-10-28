@@ -9513,7 +9513,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_link_libraries(ui_batch_renderer_tests PRIVATE
         ${COMMON_LIBS} bgfx yogacore
     )
-    add_executable(metal_presentation_timing_tests tests/metal_presentation_timing_tests.cpp)
+    add_executable(metal_presentation_timing_tests
+        tests/metal_presentation_timing_tests.cpp tests/support/AllocationFailure.cpp)
     target_include_directories(metal_presentation_timing_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(metal_presentation_timing_tests PRIVATE cxx_std_17)
     target_link_libraries(metal_presentation_timing_tests PRIVATE Threads::Threads)

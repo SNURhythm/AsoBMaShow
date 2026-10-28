@@ -150,7 +150,20 @@ int main() {
       render();
       require(layer.acquisitions == attachedAcquisitions,
               "consumed lease remains managed nil on repeated acquisition");
+      const auto cpuToken = capture().begin(CACurrentMediaTime(), 0, 0, 7);
+      state.timingToken = cpuToken;
+      video::frameCpuTiming::beginFrame(cpuToken, +[]() noexcept { return CACurrentMediaTime(); });
+      { video::frameCpuTiming::Scope cpuSubmit(video::frameCpuTiming::Stage::FrameSubmit); }
       link.endFrame();
+      bool foundCpu = false;
+      for (const auto &row : capture().snapshot()) {
+        if (row.token != cpuToken) continue;
+        foundCpu = row.cpu.collected &&
+            row.cpu.stages[static_cast<unsigned>(video::frameCpuTiming::Stage::FrameSubmit)].count == 1 &&
+            row.times[static_cast<unsigned>(Event::FrameEnd)] > 0;
+      }
+      require(foundCpu && !video::frameCpuTiming::active(),
+              "native endFrame publishes and clears CPU timing under the lease token");
       render();
       require(layer.acquisitions == attachedAcquisitions && !link.didSchedulePresent(),
               "endFrame must preserve attached layer ownership");

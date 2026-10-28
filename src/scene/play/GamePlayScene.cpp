@@ -1,3 +1,4 @@
+#include "../../video/FrameCpuTiming.h"
 #include "../../platform/SDLMainThread.h"
 #include "../../ScratchlessGameplayPolicy.h"
 #include "RealtimeSdlTouchInput.h"
@@ -3163,6 +3164,8 @@ void GamePlayScene::syncRealtimeGameplaySnapshot() {
 }
 
 void GamePlayScene::stopRealtimeGameplayAuthority(bool transferReplay) {
+  const video::frameCpuTiming::Scope cpuRealtimeStop(
+      video::frameCpuTiming::Stage::RealtimeStop);
   if (!realtimeGameplayAuthorityActive()) {
     return;
   }
@@ -6316,6 +6319,8 @@ void GamePlayScene::capturePlayfieldVisualState(
     long long gameplayTimeMicros, long long visualTimeMicros,
     bool startLaneIndicatorsVisible, bool practiceCountInActive,
     bool selectedSkinActive) {
+  video::frameCpuTiming::Scope cpuCapture(
+      video::frameCpuTiming::Stage::Capture);
   if (playfieldVisualStateStore == nullptr || state == nullptr) {
     return;
   }
@@ -6542,6 +6547,9 @@ void GamePlayScene::capturePlayfieldVisualState(
                     ? std::optional<long long>{getNoteDisplayTimeMicros(visualTimeMicros)}
                     : std::nullopt)
           : playfieldVisualStateStore->capture(frameClock, false);
+  cpuCapture.finish();
+  const video::frameCpuTiming::Scope cpuProjection(
+      video::frameCpuTiming::Stage::Projection);
   if (selectedSkinActive) {
     auto traversal = builtInPresentation->projectionTraversal();
     traversal.hispeed = traversal.baseHispeed *
@@ -6612,6 +6620,9 @@ std::uint64_t GamePlayScene::selectedSkinResultTransitionDelayMillis(
 }
 
 void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
+  const video::frameCpuTiming::Scope cpuPersistence(
+      video::frameCpuTiming::Stage::ResultPersistence);
+  recordPresentationTimingPhase();
   if (resultTransitionScheduled) {
     return;
   }
@@ -6942,7 +6953,39 @@ bool GamePlayScene::needsContinuousPresentation() const {
          context.jukebox.hasActiveVideoVisuals();
 }
 
+void GamePlayScene::recordPresentationTimingPhase() const {
+  using namespace video::frameCpuTiming;
+  if (!active()) return;
+  GameplayPhase phase = GameplayPhase::Preparing;
+  if (state != nullptr && state->isEnding) {
+    phase = GameplayPhase::Ending;
+  } else if (state != nullptr && state->isPlaying &&
+             !playbackInitializationFailed && !guidedAccessReminderPending &&
+             !practiceMenuActive) {
+    const auto rawTime = context.jukebox.getTimeMicros();
+    if (context.jukebox.isPaused()) {
+      phase = GameplayPhase::Paused;
+    } else if (!preparationIndicatorActive(rawTime) &&
+               getGameplayTimeMicros(rawTime) >= getStartPositionMicros()) {
+      phase = chart != nullptr &&
+                      getGameplayTimeMicros(rawTime) > chart->Meta.PlayLength
+                  ? GameplayPhase::PostNotes : GameplayPhase::Active;
+    }
+  }
+  const auto mode = isReplayPlayback() ? GameplayMode::Replay
+      : (options.practiceMode || options.practiceSession != nullptr)
+          ? GameplayMode::Practice
+      : options.autoPlay ? GameplayMode::Autoplay : GameplayMode::Manual;
+  observeGameplay(phase, mode,
+      presentation != nullptr && presentation->activeMode() == PresentationMode::Skin);
+}
+
 void GamePlayScene::update(float dt) {
+  const video::frameCpuTiming::Scope cpuUpdate(
+      video::frameCpuTiming::Stage::GameplayUpdate);
+  recordPresentationTimingPhase();
+  const auto recordFinalPhase =
+      makeScopeExit([this] { recordPresentationTimingPhase(); });
   updateSkinIrTarget();
   if (guidedAccessReminderPending) {
     if (guidedAccessReminderExiting) return;
@@ -7153,6 +7196,7 @@ void GamePlayScene::update(float dt) {
 }
 
 void GamePlayScene::renderScene() {
+  recordPresentationTimingPhase();
   if (playbackInitializationFailed || guidedAccessReminderPending) {
     return;
   }

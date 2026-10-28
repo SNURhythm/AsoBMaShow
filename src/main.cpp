@@ -1,3 +1,4 @@
+#include "video/FrameCpuTiming.h"
 #include "rendering/ResponsiveUi.h"
 #include "rendering/PortraitPlayfieldFraming.h"
 #include "rendering/UiSafeArea.h"
@@ -1063,6 +1064,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   const auto submitIOSFrame = [&iosDisplayLink](bool discard) {
     if (discard) video::MetalDisplayLink::pauseCurrent();
     iosDisplayLink.markPreparationEnd();
+    const video::frameCpuTiming::Scope cpuFrameSubmit(
+        video::frameCpuTiming::Stage::FrameSubmit);
     bgfx::frame(discard ? BGFX_FRAME_DISCARD : BGFX_FRAME_NONE);
   };
 #endif
@@ -1738,7 +1741,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
     const auto sceneUpdateStarted = perf::latency::nowMicros();
 #endif
-    sceneManager.update(deltaTime);
+    {
+      const video::frameCpuTiming::Scope cpuSceneUpdate(
+          video::frameCpuTiming::Stage::SceneUpdate);
+      sceneManager.update(deltaTime);
+    }
 #if TARGET_OS_IPHONE
     // An event/update may have performed a synchronous photo export and paused
     // the link. This iteration then uses the ordinary drawable/timer fallback.
@@ -1777,7 +1784,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         bgfx::touch(rendering::clear_view);
         bgfx::touch(rendering::ui_view);
         context.uiBatchRenderer.beginFrame();
-        sceneManager.render();
+        {
+          const video::frameCpuTiming::Scope cpuSceneRender(
+              video::frameCpuTiming::Stage::SceneRender);
+          sceneManager.render();
+        }
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
         const auto submitStarted = perf::latency::nowMicros();
 #endif
@@ -1875,6 +1886,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           {
             ui::FrameDemandScope demandScope(frameDemand);
             context.uiBatchRenderer.beginFrame();
+            const video::frameCpuTiming::Scope cpuSceneRender(
+                video::frameCpuTiming::Stage::SceneRender);
             sceneManager.render();
           }
 #if ASOBMASHOW_ENABLE_PERF_TELEMETRY
@@ -1901,6 +1914,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           std::optional<rendering::FullscreenBgaOutputKey> bgaOutputKey;
           bool bgaOutputSubmitted = false;
           if (compositeFullscreenBga) {
+            const video::frameCpuTiming::Scope cpuFullscreenBga(
+                video::frameCpuTiming::Stage::FullscreenBga);
             const bool ignoreBgaPostOptions =
                 context.ignoreBgaPostOptions.load(std::memory_order_acquire);
             const float blurStrength =
@@ -2160,7 +2175,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     } else {
       SDL_Delay(1);
     }
-    sceneManager.handleDeferred();
+    {
+      const video::frameCpuTiming::Scope cpuDeferred(
+          video::frameCpuTiming::Stage::DeferredWork);
+      sceneManager.handleDeferred();
+    }
     context.currentFrame++;
     //
   }

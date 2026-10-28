@@ -163,3 +163,8 @@ signing credentials. The test covers highlighting before the first usable layout
 manual and animated scrolling, stable line positions across display frames,
 selection preservation, bounded syntax colors, resizing, and closing with queued
 viewport work. This is an explicit simulator check, outside the host CTest suite.
+
+## Gameplay frame profiling
+
+For the iOS performance-log v2 CPU stages, phase selection and capture procedure, see
+[frame-correlated gameplay timing](gameplay-frame-timing.md).
