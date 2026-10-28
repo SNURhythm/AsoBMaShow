@@ -2,6 +2,7 @@
 #include "ChartViewerScene.h"
 #include "SceneManager.h"
 #include "../LongNoteModeUtils.h"
+#include "../ScoreRankUtils.h"
 #include "../rendering/common.h"
 #include "../rendering/ResponsiveUi.h"
 #include "../view/ActionButtonStyle.h"
@@ -131,6 +132,15 @@ std::string rateText(const chart_goals::Target &target) {
   std::ostringstream text;
   text << std::fixed << std::setprecision(2) << (100.0 * target.scoreNumerator / target.scoreDenominator);
   return text.str();
+}
+std::string bestScoreText(const std::optional<ScoreBestSnapshot> &score) {
+  if (!score) return i18n::tr("goals.ui.no_record");
+  auto result = std::to_string(score->score) + " EX";
+  if (score->maxScore > 0) {
+    result += " / " + std::to_string(score->maxScore);
+    result += " · " + score_rank::displayLabelForScore(score->score, score->maxScore);
+  }
+  return result;
 }
 std::string scoreTarget(const chart_goals::Target &target) {
   if (target.scoreDenominator == 27) return kombo::scoreRankLabel(target.scoreNumerator);
@@ -339,12 +349,7 @@ void ChartGoalsScene::build() {
         lamp(detail, i18n::format("goals.ui.best_lamp", {{"value", kombo::lampLabel(
             progress.bestClear ? progress.bestClear->clearType : -1)}}),
             progress.bestClear ? progress.bestClear->clearType : -1);
-        std::string best = i18n::tr("goals.ui.no_record");
-        if (progress.bestScore) {
-          best = std::to_string(progress.bestScore->score) + " EX";
-          if (progress.bestScore->maxScore > 0) best += " / " + std::to_string(progress.bestScore->maxScore);
-        }
-        label(detail, i18n::format("goals.ui.best_score", {{"value", best}}));
+        label(detail, i18n::format("goals.ui.best_score", {{"value", bestScoreText(progress.bestScore)}}));
       } else label(detail, i18n::tr("goals.ui.storage_error"));
       label(detail, i18n::tr("goals.ui.target_help"), 18);
       std::vector<DropdownView::Option> lamps{{"-1", i18n::tr("goals.ui.no_target")}};
@@ -401,12 +406,7 @@ void ChartGoalsScene::build() {
       lamp(detail, i18n::format("goals.ui.best_lamp", {{"value", kombo::lampLabel(
           progress.bestClear ? progress.bestClear->clearType : -1)}}),
           progress.bestClear ? progress.bestClear->clearType : -1);
-      std::string best = i18n::tr("goals.ui.no_record");
-      if (progress.bestScore) {
-        best = std::to_string(progress.bestScore->score) + " EX";
-        if (progress.bestScore->maxScore > 0) best += " / " + std::to_string(progress.bestScore->maxScore);
-      }
-      label(detail, i18n::format("goals.ui.best_score", {{"value", best}}));
+      label(detail, i18n::format("goals.ui.best_score", {{"value", bestScoreText(progress.bestScore)}}));
       if (draft_.target.scoreNumerator > 0)
         label(detail, progress.remainingEx ? i18n::format("goals.ui.ex_remaining", {{"count", std::to_string(*progress.remainingEx)}})
                                           : i18n::tr("goals.ui.unknown_gap"));

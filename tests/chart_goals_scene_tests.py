@@ -42,6 +42,33 @@ class ChartGoalsSceneTests(unittest.TestCase):
                 [source], binary, source.parent, includes=(root / "src",))
             subprocess.run([str(binary)], check=True, timeout=5)
 
+    def test_best_score_displays_selector_rank(self):
+        root = Path(__file__).resolve().parents[1]
+        scene = (root / "src/scene/ChartGoalsScene.cpp").read_text()
+        method = extract(scene, "std::string bestScoreText(")
+        fixture = r'''
+#include "ScoreRankUtils.h"
+#include <cassert>
+#include <optional>
+#include <string>
+struct ScoreBestSnapshot { int score=0, maxScore=0; };
+namespace i18n { std::string tr(const char *) { return "No record"; } }
+METHOD
+int main() {
+  assert(bestScoreText({}) == "No record");
+  assert(bestScoreText(ScoreBestSnapshot{1777,2000}) == "1777 EX / 2000 · AA");
+  assert(bestScoreText(ScoreBestSnapshot{1778,2000}) == "1778 EX / 2000 · AAA");
+  assert(bestScoreText(ScoreBestSnapshot{2000,2000}) == "2000 EX / 2000 · MAX");
+  assert(bestScoreText(ScoreBestSnapshot{5,0}) == "5 EX");
+}
+'''.replace("METHOD", method)
+        with tempfile.TemporaryDirectory(prefix="goal-score-rank-") as directory:
+            path = Path(directory) / "rank.cpp"
+            binary = Path(directory) / "rank"
+            path.write_text(fixture)
+            FixtureCompiler.from_environment().build([path], binary, path.parent, includes=(root / "src",))
+            subprocess.run([str(binary)], check=True, timeout=5)
+
     def test_goal_artwork_path_prefers_jacket_and_falls_back_safely(self):
         root = Path(__file__).resolve().parents[1]
         scene = (root / "src/scene/ChartGoalsScene.cpp").read_text()
