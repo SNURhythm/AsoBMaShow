@@ -1,5 +1,10 @@
 # Device timing capture 23: steady frames are prepared early
 
+> The later-preparation recommendation below is withdrawn. The deliberate wait
+> was removed in `921a82d5`: a lower preparation-age metric did not establish
+> better input responsiveness, and capture 24 exposed extra deadline misses.
+> Keep the measurements as historical evidence, not a pacing recommendation.
+
 The current display-link capture supports the **early-preparation** explanation
 for steady gameplay. Displayed frames reach their assigned target essentially on
 time. Their median GPU work is 1.12 ms, followed by 14.14 ms waiting for display;

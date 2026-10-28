@@ -1,5 +1,10 @@
 # Metal Drawable Acquisition Pacing Implementation Plan
 
+> Current audit decision: keep CAMetalDisplayLink, remove the two-slot timer-
+> fallback presentation gate. The gate and its dedicated fixtures are deleted;
+> ordinary fallback uses bgfx drawable acquisition and frame-budget pacing.
+> The implementation/results below describe the historical experiment.
+
 > **For agentic workers:** Use superpowers:executing-plans for this cohesive experiment; preserve the user's previously selected lower-effort implementation delegation.
 
 **Goal:** Test lower presentation delay at 120 FPS by allowing two outstanding primary iOS drawables and waiting only when acquiring another.

@@ -2,10 +2,6 @@
 #include "MetalDisplayLinkFrame.h"
 #include "MetalDrawableProvider.h"
 #include "MetalPresentationTiming.h"
-#include "../targets.h"
-#if TARGET_OS_IPHONE
-#include "../../cmake/BgfxMetalPresentationGate.h"
-#endif
 
 #import <Foundation/Foundation.h>
 #import <QuartzCore/QuartzCore.h>
@@ -84,9 +80,6 @@ void invalidate(MetalDisplayLinkState &state) {
     [(CAMetalDisplayLink *)state.link invalidate];
     ((CAMetalDisplayLink *)state.link).delegate = nil;
   }
-#if TARGET_OS_IPHONE
-  if (state.link != nil) asobmashow::metalPresentation::cancel();
-#endif
   state.link = nil;
   state.delegate = nil;
   state.layer = nil;
@@ -160,9 +153,6 @@ bool MetalDisplayLink::beginFrame(void *nativeLayer, float refreshRate,
         state.delegate = delegate;
         auto *link = [[CAMetalDisplayLink alloc] initWithMetalLayer:layer];
         state.link = link;
-#if TARGET_OS_IPHONE
-        asobmashow::metalPresentation::cancel();
-#endif
         if (link == nil) {
           invalidate(state);
           state.retryAfter = CACurrentMediaTime() + 1.0;

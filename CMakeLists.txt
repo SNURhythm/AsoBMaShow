@@ -9513,44 +9513,12 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_link_libraries(ui_batch_renderer_tests PRIVATE
         ${COMMON_LIBS} bgfx yogacore
     )
-    add_executable(metal_presentation_gate_tests
-        tests/metal_presentation_gate_tests.cpp
-        cmake/BgfxMetalPresentationGate.cpp)
-    target_include_directories(metal_presentation_gate_tests PRIVATE ${CMAKE_SOURCE_DIR}/cmake)
-    target_compile_features(metal_presentation_gate_tests PRIVATE cxx_std_17)
-    target_link_libraries(metal_presentation_gate_tests PRIVATE Threads::Threads)
-    asobmashow_register_test(metal_presentation_gate_tests)
     add_executable(metal_presentation_timing_tests tests/metal_presentation_timing_tests.cpp)
     target_include_directories(metal_presentation_timing_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
     target_compile_features(metal_presentation_timing_tests PRIVATE cxx_std_17)
     target_link_libraries(metal_presentation_timing_tests PRIVATE Threads::Threads)
     asobmashow_register_test(metal_presentation_timing_tests)
     if(APPLE)
-        set(metal_presentation_hook "${CMAKE_CURRENT_BINARY_DIR}/metal_presentation_hook.inc")
-        add_custom_command(OUTPUT "${metal_presentation_hook}"
-            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/metal_presentation_hook_extract.py
-                --output "${metal_presentation_hook}"
-            DEPENDS tests/metal_presentation_hook_extract.py
-                cmake/BgfxMetalPresentation.cmake bgfx/bgfx/src/renderer_mtl.cpp
-            VERBATIM)
-        add_custom_target(metal_presentation_hook_fixture DEPENDS "${metal_presentation_hook}")
-        foreach(platform ios macos)
-            set(fixture metal_presentation_native_${platform}_tests)
-            add_executable(${fixture} tests/metal_presentation_native_tests.mm
-                cmake/BgfxMetalPresentationGate.cpp)
-            add_dependencies(${fixture} metal_presentation_hook_fixture)
-            target_include_directories(${fixture} PRIVATE ${CMAKE_SOURCE_DIR}/cmake ${CMAKE_CURRENT_BINARY_DIR})
-            target_compile_features(${fixture} PRIVATE cxx_std_17)
-            set_target_properties(${fixture} PROPERTIES OBJCXX_STANDARD 17 OBJCXX_STANDARD_REQUIRED ON)
-            target_compile_options(${fixture} PRIVATE -fblocks)
-            if(platform STREQUAL "ios")
-                target_compile_definitions(${fixture} PRIVATE BX_PLATFORM_IOS=1)
-            else()
-                target_compile_definitions(${fixture} PRIVATE BX_PLATFORM_IOS=0)
-            endif()
-            target_link_libraries(${fixture} PRIVATE "-framework Foundation" Threads::Threads)
-            asobmashow_register_test(${fixture})
-        endforeach()
         add_executable(metal_drawable_provider_tests tests/metal_drawable_provider_tests.mm)
         target_compile_options(metal_drawable_provider_tests PRIVATE -fobjc-arc)
         target_include_directories(metal_drawable_provider_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)

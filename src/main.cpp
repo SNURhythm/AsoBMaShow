@@ -69,7 +69,6 @@
 #include "TargetConditionals.h"
 #if TARGET_OS_IPHONE
 #include "iOSNatives.hpp"
-#include "../cmake/BgfxMetalPresentationGate.h"
 #include "video/IOSPresentationPacing.h"
 #include "video/MetalDisplayLink.h"
 #include "input/IOSTouchInput.h"
@@ -1061,18 +1060,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   platform::IOSPreparedFrame iosPreparedFrame;
   std::uint64_t lastUiPresentationGeneration = 0;
   bool iosViewportRestorePending = false;
-  const auto submitIOSFrame = [&context, &iosDisplayLink](bool discard) {
+  const auto submitIOSFrame = [&iosDisplayLink](bool discard) {
     if (discard) video::MetalDisplayLink::pauseCurrent();
-    const auto keepRunning = [](void* opaque) {
-      const auto& context = *static_cast<ApplicationContext*>(opaque);
-      return IOSApplicationActive() &&
-          !context.appInBackground.load(std::memory_order_acquire) &&
-          !context.quitFlag.load(std::memory_order_acquire) &&
-          !context.replayVideoExportActive.load(std::memory_order_acquire) &&
-          !context.rendererAccess.exportRequested();
-    };
-    asobmashow::metalPresentation::Scope presentationScope(
-        discard ? nullptr : +keepRunning, &context);
     iosDisplayLink.markPreparationEnd();
     bgfx::frame(discard ? BGFX_FRAME_DISCARD : BGFX_FRAME_NONE);
   };
@@ -1104,7 +1093,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #if TARGET_OS_IPHONE
     if (background) {
       iosDisplayLink.pause();
-      asobmashow::metalPresentation::cancel();
     }
 #endif
     if (background) storage_management::RequestCancelStorageTask(context);
@@ -1149,7 +1137,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         context.rendererAccess.exportRequested())
     {
       iosDisplayLink.pause();
-      asobmashow::metalPresentation::cancel();
     }
     // Only acknowledge lifecycle events already forwarded before this owner's
     // event drain. A later UIKit pulse must wait for the next restored frame.

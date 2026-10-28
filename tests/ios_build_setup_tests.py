@@ -640,13 +640,13 @@ int main() { return 0; }
             self.assertIn("nativeTexture->bufferBytesPerRow()", patched)
             self.assertIn("m_cmd.kick(false, true)", patched)
             self.assertIn("m_metalLayer->setMaximumDrawableCount(3);", patched)
-            self.assertIn("asobmashow::metalPresentation::acquire()", patched)
-            self.assertIn("addPresentedHandler", patched)
+            self.assertNotIn("metalPresentation::", patched)
+            self.assertNotIn("BgfxMetalPresentationGate", patched)
+            self.assertNotIn("addPresentedHandler", patched)
             for telemetry in ("asoMetalPresentationObserver", "CACurrentMediaTime"):
                 self.assertFalse(telemetry in patched,
                                  f"Metal presentation telemetry remains: {telemetry}")
             self.assertIn("const bool managedDrawable = asobmashowMetalAcquireDrawable", patched)
-            self.assertIn("!managedDrawable && !occluded", patched)
             self.assertIn("static_cast<CA::MetalDrawable*>(providedDrawable) : m_metalLayer->nextDrawable()", patched)
             self.assertIn("if (asobmashowMetalShouldPresent(", patched)
             self.assertIn("presentCommandBuffer->presentDrawable( (MTL::Drawable*)frameBuffer.m_swapChain->m_drawable);", patched)

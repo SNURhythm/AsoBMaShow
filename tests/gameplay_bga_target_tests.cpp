@@ -2138,14 +2138,15 @@ void testFullscreenBlurBypassOnMetal() {
         require(false, "every active composition view executes");
         return 0U;
       };
-      require(viewPosition(rendering::bga_view) < viewPosition(rendering::bga_layer_view) &&
-                  viewPosition(rendering::bga_layer_view) < viewPosition(rendering::clear_view),
-              "offscreen BGA must execute before acquiring the output drawable");
+      require(viewPosition(rendering::clear_view) < viewPosition(rendering::bga_view) &&
+                  viewPosition(rendering::bga_view) < viewPosition(rendering::bga_layer_view) &&
+                  viewPosition(rendering::bga_layer_view) < viewPosition(rendering::final_view),
+              "clear, BGA composition and final output retain their dependency order");
       if (frame == 1)
         require(viewPosition(rendering::bga_layer_view) < viewPosition(blur.blurViewH()) &&
                     viewPosition(blur.blurViewH()) < viewPosition(blur.blurViewV()) &&
-                    viewPosition(blur.blurViewV()) < viewPosition(rendering::clear_view),
-                "both blur passes must finish before the output clear");
+                    viewPosition(blur.blurViewV()) < viewPosition(rendering::final_view),
+                "both blur passes must finish before their final output is sampled");
       require(viewPosition(rendering::clear_view) < viewPosition(rendering::final_view) &&
                   viewPosition(rendering::final_view) < viewPosition(rendering::main_view) &&
                   viewPosition(rendering::main_view) < viewPosition(rendering::ui_view),

@@ -1,5 +1,10 @@
 # Capture 24: younger frames, less protection against CPU spikes
 
+> The later-preparation recommendation below is withdrawn. The deliberate wait
+> was removed in `921a82d5`: a lower preparation-age metric did not establish
+> better input responsiveness, and capture 24 exposed extra deadline misses.
+> Keep the measurements as historical evidence, not a pacing recommendation.
+
 **Decision after review with the user:** Remove deliberate pre-input waiting entirely. The 1 ms proposal below is superseded. A smaller frame-age metric is not sufficient evidence of better rhythm-game responsiveness. Keep immediate input/scene processing and the diagnostic capture.
 
 The later-preparation experiment is active and produces the intended median

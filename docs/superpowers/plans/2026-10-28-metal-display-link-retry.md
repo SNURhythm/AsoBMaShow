@@ -1,5 +1,10 @@
 # CAMetalDisplayLink retry on the updated Metal backend
 
+> Current audit decision: keep CAMetalDisplayLink, remove the two-slot timer-
+> fallback presentation gate. The gate and its dedicated fixtures are deleted;
+> ordinary fallback uses bgfx drawable acquisition and frame-budget pacing.
+> The implementation/results below describe the historical experiment.
+
 ## Objective
 
 Try CAMetalDisplayLink on the current bgfx backend while retaining the accepted
