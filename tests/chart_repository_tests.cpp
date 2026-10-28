@@ -1179,6 +1179,14 @@ void testChartQueryBehaviorMatrix() {
   }
   assert(session->GoalRecommendationCounts(tables.front().id).at(50) == 1);
   assert(session->GoalRecommendations(50, 0, tables.front().id, true).size() == 1);
+  {
+    auto db = openDatabase(scorePath);
+    assert(execute(db.get(), "CREATE TABLE IF NOT EXISTS chart_goals(sha256 TEXT,ln_mode INTEGER,body TEXT,PRIMARY KEY(sha256,ln_mode))"));
+    assert(execute(db.get(), "INSERT INTO chart_goals VALUES('" + std::string(shaC) +
+        "',1,'{\"lamp\":50,\"numerator\":0,\"denominator\":27}')"));
+  }
+  assert(!session->GoalRecommendationCounts(tables.front().id).contains(50));
+  assert(session->GoalRecommendations(50, 0, tables.front().id, true).empty());
 
 }
 

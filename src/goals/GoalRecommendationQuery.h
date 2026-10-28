@@ -5,8 +5,8 @@
 namespace chart_goals {
 // One pass over best records, never play history. The correlated library lookup
 // uses the SHA256 index, avoids duplicate chart installations, and checks LN scope.
-inline std::string recommendationCandidatesSql() {
-  return R"sql(WITH ranked AS MATERIALIZED (
+inline std::string recommendationCandidatesSql(bool hasGoals = false) {
+  return std::string(R"sql(WITH ranked AS MATERIALIZED (
     SELECT chart_sha256 AS sha256, ln_mode, score, max_score,
       CASE WHEN score*27 < max_score*6 THEN 6
            WHEN score*27 < max_score*9 THEN 9
@@ -26,7 +26,11 @@ inline std::string recommendationCandidatesSql() {
         AND r.ln_mode=CASE WHEN COALESCE(c.total_long_notes,0)+COALESCE(c.total_backspin_notes,0)=0 THEN 0
           WHEN c.ln_mode BETWEEN 1 AND 3 THEN c.ln_mode ELSE r.ln_mode END
         AND (COALESCE(c.total_long_notes,0)+COALESCE(c.total_backspin_notes,0)=0 OR r.ln_mode BETWEEN 1 AND 3))
-  ))sql";
+  )sql") + (hasGoals ? R"sql( AND NOT EXISTS (
+        SELECT 1 FROM score_db.chart_goals g WHERE g.sha256=r.sha256 AND g.ln_mode=r.ln_mode
+        AND CASE WHEN json_valid(g.body) THEN
+          json_extract(g.body,'$.numerator')*27 >= r.target*json_extract(g.body,'$.denominator')
+          AND json_extract(g.body,'$.numerator')>0 ELSE 0 END))sql" : "") + ")";
 }
 inline std::string tableOrder(std::string_view hash, int tableId) {
   const auto id = std::to_string(tableId);
@@ -39,15 +43,15 @@ inline std::string tableOrder(std::string_view hash, int tableId) {
 inline std::string tableFilter(std::string_view hash, int tableId) {
   return tableId == 0 ? "" : " AND " + tableOrder(hash, tableId) + " IS NOT NULL";
 }
-inline std::string recommendationPageSql(int tableId = 0, bool sortTable = false) {
-  return recommendationCandidatesSql() +
+inline std::string recommendationPageSql(int tableId = 0, bool sortTable = false, bool hasGoals = false) {
+  return recommendationCandidatesSql(hasGoals) +
       " SELECT sha256,ln_mode,target,score,max_score,remaining FROM ("
       "SELECT *,ROW_NUMBER() OVER(PARTITION BY sha256 ORDER BY remaining,1.0*remaining/max_score,ln_mode) AS mode_choice "
       "FROM candidates AS candidate WHERE target=?" + tableFilter("candidate.sha256", tableId) + ") AS ranked WHERE mode_choice=1"
       " ORDER BY " + (sortTable && tableId ? tableOrder("ranked.sha256", tableId) + ", " : "") +
       "remaining, 1.0*remaining/max_score, sha256 LIMIT 20 OFFSET ?";
 }
-inline std::string gaugeRecommendationCandidatesSql() {
+inline std::string gaugeRecommendationCandidatesSql(bool hasGoals = false) {
   return R"sql(WITH lamp_bests AS (
     SELECT g.*, NULL AS combo_break FROM score_db.goal_gauge_best g
     WHERE target<600 AND gap <= CASE WHEN target<=300 THEN 5 ELSE 0.1 END
@@ -62,10 +66,12 @@ inline std::string gaugeRecommendationCandidatesSql() {
         AND g.ln_mode=CASE WHEN COALESCE(c.total_long_notes,0)+COALESCE(c.total_backspin_notes,0)=0 THEN 0
           WHEN c.ln_mode BETWEEN 1 AND 3 THEN c.ln_mode ELSE g.ln_mode END
         AND (COALESCE(c.total_long_notes,0)+COALESCE(c.total_backspin_notes,0)=0 OR g.ln_mode BETWEEN 1 AND 3))
-  ))sql";
+  )sql" + (hasGoals ? R"sql( AND NOT EXISTS (
+        SELECT 1 FROM score_db.chart_goals goal WHERE goal.sha256=g.chart_sha256 AND goal.ln_mode=g.ln_mode
+        AND CASE WHEN json_valid(goal.body) THEN )sql" + clearLampOrderSql("json_extract(goal.body,'$.lamp')") + R"sql( >= )sql" + clearLampOrderSql("g.target") + R"sql( ELSE 0 END))sql" : "") + ")";
 }
-inline std::string gaugeRecommendationPageSql(int tableId = 0, bool sortTable = false) {
-  return gaugeRecommendationCandidatesSql() +
+inline std::string gaugeRecommendationPageSql(int tableId = 0, bool sortTable = false, bool hasGoals = false) {
+  return gaugeRecommendationCandidatesSql(hasGoals) +
       " SELECT chart_sha256,ln_mode,target,gauge_value,border,death_notes,total_notes,gap,combo_break FROM ("
       "SELECT *,ROW_NUMBER() OVER(PARTITION BY chart_sha256 ORDER BY gap,death_notes,ln_mode) AS mode_choice "
       "FROM candidates AS candidate WHERE target=?" + tableFilter("candidate.chart_sha256", tableId) + ") AS ranked WHERE mode_choice=1"

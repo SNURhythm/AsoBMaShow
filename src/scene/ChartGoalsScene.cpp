@@ -239,6 +239,7 @@ bool ChartGoalsScene::checkProfile() {
   draft_ = {}; page_ = {}; offset_ = achievedOffset_ = 0;
   editing_ = customScore_ = confirmRemove_ = loadFailed_ = false;
   message_.clear(); customRate_.clear();
+  scrollOffsets_.clear(); renderedScrollKey_.clear(); navigationOffset_ = 0; navigationScroll_ = nullptr;
   return false;
 }
 void ChartGoalsScene::later(std::function<void()> action) {
@@ -269,6 +270,8 @@ void ChartGoalsScene::init() {
   build();
 }
 void ChartGoalsScene::reload() {
+  std::map<int, int> previousOffsets;
+  for (const auto &[rank, group] : recommendations_) previousOffsets[rank] = group.offset;
   recommendations_.clear();
   try {
     auto session = context.chartRepository.OpenSession(&context.scoreRepository);
@@ -277,15 +280,23 @@ void ChartGoalsScene::reload() {
     if (recommendationTable_ && std::ranges::none_of(recommendationTables_, [this](const auto &table) {
           return table.id == recommendationTable_;
         })) recommendationTable_ = 0;
-    for (const auto &[rank, count] : session->GoalRecommendationCounts(recommendationTable_))
-      recommendations_[rank].count = count;
+    for (const auto &[rank, count] : session->GoalRecommendationCounts(recommendationTable_)) {
+      auto &group = recommendations_[rank];
+      group.count = count;
+      group.offset = std::clamp(previousOffsets[rank], 0,
+          (count - 1) / chart_goals::pageSize * chart_goals::pageSize);
+    }
   } catch (const std::exception &failure) {
     SDL_Log("Cannot load goal recommendations: %s", failure.what());
     message_ = i18n::tr("goals.ui.storage_error");
   }
   if (recommendationRank_ && !recommendations_.contains(*recommendationRank_))
     recommendationRank_ = recommendations_.empty() ? std::optional<int>{} : recommendations_.begin()->first;
-  if (recommendationRank_) loadRecommendations(*recommendationRank_, 0);
+  if (recommendationRank_) {
+    const auto &group = recommendations_.at(*recommendationRank_);
+    const int lastPage = (group.count - 1) / chart_goals::pageSize * chart_goals::pageSize;
+    loadRecommendations(*recommendationRank_, std::clamp(previousOffsets[*recommendationRank_], 0, lastPage));
+  }
   std::string error;
   page_ = {};
   loadFailed_ = false;
@@ -445,7 +456,21 @@ void ChartGoalsScene::navigate(bool practice) {
     return false;
   }, 0, true);
 }
+std::string ChartGoalsScene::scrollKey() const {
+  if (selected_ || editing_)
+    return std::string(editing_ ? "edit:" : "detail:") + draft_.chart.SHA256 + ":" + std::to_string(draft_.longNoteMode);
+  if (overviewTab_ == OverviewTab::Recommendations) {
+    const int rank = recommendationRank_.value_or(-1);
+    const auto found = recommendations_.find(rank);
+    const int page = found == recommendations_.end() ? 0 : found->second.offset;
+    return "recommend:" + std::to_string(rank) + ":" + std::to_string(page) + ":" +
+        std::to_string(recommendationTable_) + ":" + std::to_string(recommendationSortTable_);
+  }
+  return overviewTab_ == OverviewTab::Ongoing ? "ongoing:" + std::to_string(offset_)
+                                               : "achieved:" + std::to_string(achievedOffset_);
+}
 void ChartGoalsScene::build() {
+  if (scroll_ && !renderedScrollKey_.empty()) scrollOffsets_[renderedScrollKey_] = scroll_->getScrollOffset();
   if (navigationScroll_) navigationOffset_ = navigationScroll_->getScrollOffset();
   for (auto *view : views) delete view;
   views.clear();
@@ -481,7 +506,7 @@ void ChartGoalsScene::build() {
         auto *sub = action(navigation, i18n::format("goals.ui.near_rank", {
             {"rank", rank >= 50 ? kombo::lampLabel(rank) : kombo::scoreRankLabel(rank)},
             {"count", std::to_string(group.count)}}), [this, rank] { later([this, rank] {
-              recommendationRank_ = rank; loadRecommendations(rank, 0);
+              recommendationRank_ = rank; loadRecommendations(rank, recommendations_[rank].offset);
             }); }, recommendationRank_ == rank ? app_theme::ActionCategory::Primary : app_theme::ActionCategory::Neutral);
         sub->setMargin(Edge::Left, 16);
         if (rank >= kClearTypeLightAssistedEasyClearRank)
@@ -684,6 +709,9 @@ void ChartGoalsScene::build() {
   }
   if (!message_.empty()) label(body, message_, 19)->setThemedColor(app_theme::coral);
   addView(portal_); layout();
+  renderedScrollKey_ = scrollKey();
+  if (const auto found = scrollOffsets_.find(renderedScrollKey_); found != scrollOffsets_.end())
+    scroll_->setScrollOffset(found->second);
 }
 void ChartGoalsScene::layout() {
   if (!root_) return;

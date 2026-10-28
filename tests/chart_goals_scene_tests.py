@@ -26,6 +26,41 @@ class ChartGoalsSceneTests(unittest.TestCase):
                 includes=(root / "src",))
             subprocess.run([str(binary)], check=True, timeout=5)
 
+    def test_scroll_keys_separate_overview_pages_and_goal_states(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "src/scene/ChartGoalsScene.cpp").read_text()
+        method = extract(source, "std::string ChartGoalsScene::scrollKey(")
+        fixture = r'''
+#include <cassert>
+#include <map>
+#include <optional>
+#include <string>
+struct ChartGoalsScene {
+ enum class OverviewTab { Ongoing, Recommendations, Achieved };
+ OverviewTab overviewTab_ = OverviewTab::Ongoing;
+ struct { struct { std::string SHA256; } chart; int longNoteMode=0; } draft_;
+ std::optional<int> selected_, recommendationRank_;
+ bool editing_=false, recommendationSortTable_=false;
+ int recommendationTable_=0, offset_=0, achievedOffset_=0;
+ struct Group { int offset=0; }; std::map<int, Group> recommendations_;
+ std::string scrollKey() const;
+};
+METHOD
+int main() {
+ ChartGoalsScene s; auto ongoing=s.scrollKey(); s.offset_=20; assert(s.scrollKey()!=ongoing);
+ s.overviewTab_=ChartGoalsScene::OverviewTab::Recommendations; s.recommendationRank_=24;
+ s.recommendations_[24].offset=20; auto page=s.scrollKey(); s.recommendations_[24].offset=0; assert(page!=s.scrollKey());
+ s.selected_=1; s.draft_.chart.SHA256="chart"; auto detail=s.scrollKey(); s.editing_=true; assert(s.scrollKey()!=detail);
+ s.draft_.longNoteMode=2; assert(s.scrollKey()!=detail);
+}
+'''.replace("METHOD", method)
+        with tempfile.TemporaryDirectory(prefix="goals-scroll-key-") as directory:
+            path = Path(directory) / "key.cpp"
+            binary = Path(directory) / "key"
+            path.write_text(fixture)
+            FixtureCompiler.from_environment().build([path], binary, path.parent)
+            subprocess.run([str(binary)], check=True, timeout=5)
+
     def test_compact_target_labels_and_maximums(self):
         root = Path(__file__).resolve().parents[1]
         source = (root / "src/scene/ChartGoalsScene.cpp").read_text()

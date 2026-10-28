@@ -120,6 +120,28 @@ int main() {
     }
     CHECK(matchingChart==1);
     query.reset();
+    // Suppress only targets already covered in the same effective LN mode.
+    CHECK(sqlite3_exec(recommendations,
+        "CREATE TABLE score_db.chart_goals(sha256 TEXT,ln_mode INTEGER,body TEXT,PRIMARY KEY(sha256,ln_mode));"
+        "INSERT INTO score_db.chart_goals VALUES('closest',1,'{\"lamp\":400,\"numerator\":24,\"denominator\":27}');",
+        nullptr,nullptr,nullptr)==SQLITE_OK);
+    CHECK(prepareSqliteStatement(recommendations,recommendationPageSql(0,false,true),query)==SQLITE_OK);
+    CHECK(sqlite3_bind_int(query,1,24)==SQLITE_OK && sqlite3_bind_int(query,2,0)==SQLITE_OK);
+    int keptScoreMode = 0;
+    while (sqlite3_step(query)==SQLITE_ROW) if (sqliteColumnString(query,0)=="closest") {
+      ++keptScoreMode; CHECK(sqlite3_column_int(query,1)==3);
+    }
+    CHECK(keptScoreMode == 1);
+    query.reset();
+    CHECK(prepareSqliteStatement(recommendations,gaugeRecommendationPageSql(0,false,true),query)==SQLITE_OK);
+    CHECK(sqlite3_bind_int(query,1,400)==SQLITE_OK && sqlite3_bind_int(query,2,0)==SQLITE_OK);
+    int keptLampMode = 0;
+    while (sqlite3_step(query)==SQLITE_ROW) if (sqliteColumnString(query,0)=="closest") {
+      ++keptLampMode; CHECK(sqlite3_column_int(query,1)==3);
+    }
+    CHECK(keptLampMode == 1);
+    query.reset();
+    CHECK(sqlite3_exec(recommendations,"DELETE FROM score_db.chart_goals",nullptr,nullptr,nullptr)==SQLITE_OK);
     // Full combo proximity follows the fewest breaks, not where Hazard died.
     CHECK(sqlite3_exec(recommendations,
         "DELETE FROM chart_meta; DELETE FROM score_db.goal_gauge_best; DELETE FROM score_db.score_sha256_clear_rank_cache;"

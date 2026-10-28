@@ -42,6 +42,10 @@ struct ChartGoalsScene {
   std::optional<int> recommendationRank_;
   int loadedRank = -1;
   void loadRecommendations(int rank, int offset) { assert(offset == 0); loadedRank = rank; }
+  std::map<std::string, float> scrollOffsets_;
+  std::string renderedScrollKey_;
+  float navigationOffset_ = 0;
+  void *navigationScroll_ = nullptr;
   int achievedOffset_ = 0;
   int offset_ = 20, builds = 0, reloads = 0;
   chart_goals::Goal draft_;

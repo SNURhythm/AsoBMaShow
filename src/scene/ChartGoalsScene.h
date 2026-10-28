@@ -43,6 +43,9 @@ private:
   std::optional<int> recommendationRank_;
   ScrollView *navigationScroll_ = nullptr;
   float navigationOffset_ = 0;
+  std::map<std::string, float> scrollOffsets_;
+  std::string renderedScrollKey_;
+  std::string scrollKey() const;
   void showGoal(chart_goals::Goal);
   void saveGoal();
   void removeGoal();
