@@ -14,13 +14,24 @@ Summaries condense consecutive entries in imported table order, for example
 break ranges, including named levels such as `11+`. Without table metadata,
 levels are listed individually.
 
-Creating or saving a routine requires at least one assignment; an empty list
-shows an inline error beside Add assignment. Previously saved empty routines
-remain readable so they can be repaired.
+Every routine includes the permanent **Achieve goals** assignment, even without
+installed difficulty tables. Its default quota is **one newly achieved personal
+goal per round**, configurable during routine creation or **Edit for tomorrow**.
+It cannot be removed or adjusted today. Its button opens Personal goals; the
+existing Goals folder in PLAY contains the charts with unfinished goals. The
+Assignments folder continues to list table assignments only.
+
+Only first achievements from saved normal local plays count. Imported or already
+achieved goals, practice, autoplay and replay viewing do not award credit. Each
+chart/LN-mode goal counts separately; changing to a new harder target can earn
+fresh credit. A goal with both lamp and score targets counts once, when both are
+met. Score, first-achievement date and Kombo progress commit together, so recovery
+cannot lose or duplicate the reward.
 
 New routines default to **20 daily / 150 weekly / 650 monthly** points, with
-**10 points per round**. Two default rounds meet the daily goal. Daily goals
-alone total 140 per week and 560–620 per month, so the longer goals require
+**10 fixed points per regular round**. The reward is not editable. Two default
+rounds meet the daily goal. Historical earnings and savings remain unchanged.
+Daily goals alone total 140 per week and 560–620 per month, so the longer goals require
 some optional bonus play. Saved routines retain their chosen goals.
 
 An assignment checks selected table levels, previous best lamp and previous best
@@ -52,7 +63,7 @@ this list. Once the shared daily bonus budget is spent, the folders are empty.
 Both the built-in browser and skin-driven selector support these folders, with
 normal search/filter/navigation behavior and refresh after play or day rollover.
 
-Before the daily goal, completed rounds award their configured points, capped
+Before the daily goal, completed rounds award **10 points**, capped
 at the points still needed for the goal. The play that reaches the goal awards
 no extra savings, even if it completes several assignments. Later rounds award
 **1 bonus point each**, sharing a hardcoded **10-point daily budget** across all
@@ -67,7 +78,10 @@ new qualifying chart per bonus round**, regardless of its normal chart quota.
 Unfinished pre-goal rounds switch to this rule too; their partial counts do not
 grant automatic bonus points, and already-counted charts remain used for today.
 
-Entering bonus mode raises **one randomly selected condition once per assignment**:
+The Goals assignment also switches to **one newly achieved goal per bonus
+round**, worth 1 point. It has no difficulty escalation or difficulty-reset action.
+
+Entering bonus mode raises **one randomly selected condition once per table assignment**:
 the next score rank (custom rate +2 percentage points), the next lamp, or the
 next difficulty-table levels in imported table order. Randomness chooses the
 condition, not whether promotion happens; the goal play need not already meet

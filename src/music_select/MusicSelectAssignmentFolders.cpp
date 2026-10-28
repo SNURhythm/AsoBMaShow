@@ -47,6 +47,7 @@ std::vector<MusicSelectBar> musicSelectAssignmentChildren(
   std::vector<MusicSelectBar> result;
   std::vector<const kombo::Progress *> assignments;
   for (const auto &progress : day.assignments) {
+    if (kombo::isGoalsAssignment(progress.requirement)) continue;
     const auto id = std::string(assignmentPrefix) + progress.requirement.id;
     if (root) result.push_back(folder(id, progress.requirement.name));
     if (root || directory.id.value == id) assignments.push_back(&progress);
@@ -71,6 +72,7 @@ bool musicSelectAssignmentNeedsAdjustment(
     const kombo::Day &day, const kombo::Progress &progress,
     std::span<const MusicSelectAssignmentChart> charts,
     MusicSelectRepositoryProjectionInput input) {
+  if (kombo::isGoalsAssignment(progress.requirement)) return false;
   const bool bonus = day.points >= day.config.dailyGoal;
   if (bonus && kombo::bonusPoints(day) >= kombo::bonusLimit(day)) return false;
   const int remaining = std::max(1, progress.requirement.chartCount - progress.charts);

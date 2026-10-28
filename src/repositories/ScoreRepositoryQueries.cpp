@@ -1076,8 +1076,14 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
     if (!chart_goals::updateGaugeSummary(db, pending.score, pending.gaugeEvidence))
       return {.status = ProjectionStatus::StorageFailure, .diagnostic = "could not update gauge recommendations"};
     kombo::PlayProgress komboProgress;
+    std::vector<chart_goals::Goal> goalAchievements;
     try {
       const auto &score = pending.score;
+      goalAchievements = score_repository_detail::RecordChartGoalAchievementsOnConnection(
+          db, score.chartSha256, pending.createdAt, pending.attemptId, true);
+      std::vector<std::string> achievedGoals;
+      for (const auto &goal : goalAchievements)
+        achievedGoals.push_back(goal.chart.SHA256 + ":" + std::to_string(goal.longNoteMode) + ":" + pending.attemptId);
       // Bound eligibility to history before this attempt, including timestamp
       // ordering when a pending result is recovered after a later play.
       const auto previousClear = score_cache_queries::detail::fullComboClearRankExpr("s", {}, true);
@@ -1135,14 +1141,13 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
            .previousScore = previousScore ? previousScore->score : 0,
            .previousMaxScore = previousScore ? previousScore->maxScore : 0,
            .lamp = effectiveLamp, .score = score.score, .maxScore = score.maxScore,
-           .manual = !score.provenance.autoPlay && !score.provenance.practice},
+           .manual = !score.provenance.autoPlay && !score.provenance.practice,
+           .achievedGoals = std::move(achievedGoals)},
           score.chartMd5, pending.createdAt, random(), &komboProgress);
       komboProgress.attemptId = pending.attemptId;
     } catch (const std::exception &error) {
       return {.status = ProjectionStatus::StorageFailure, .diagnostic = error.what()};
     }
-    auto goalAchievements = score_repository_detail::RecordChartGoalAchievementsOnConnection(
-        db, pending.score.chartSha256, pending.createdAt, pending.attemptId);
     if (!transaction.commit(transactionError))
       return {.status = ProjectionStatus::StorageFailure, .diagnostic = transactionError};
     impl_->chartGoalAchievementAttempt = pending.attemptId;

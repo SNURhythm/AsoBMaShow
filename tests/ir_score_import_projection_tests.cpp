@@ -660,11 +660,11 @@ void testKomboProjectionIsAtomicAndUsesEffectiveLamp() {
   assert(kombo::load(db).days.rbegin()->second.points == 0);
   savePromotion(2, 400, 100);
   const auto promoted = kombo::load(db);
-  assert(promoted.days.rbegin()->second.points == 20);
+  assert(promoted.days.rbegin()->second.points == 10);
   const auto &achievement = promoted.days.rbegin()->second.assignments[0].chartProgress.at(pending.score.chartSha256);
   assert(achievement.lamp == 400 && achievement.score == 190);
   assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::AlreadyPresent);
-  assert(kombo::load(db).days.rbegin()->second.points == 20);
+  assert(kombo::load(db).days.rbegin()->second.points == 10);
   sqlite3_close(db);
 }
 
@@ -813,6 +813,10 @@ void testGoalAchievementIsSavedOnceAndCelebrationIsProfileScoped() {
   ScoreRepository scores(root / "score.db");
   assert(scores.EnsureSchema());
   std::string error;
+  kombo::Config routine;
+  routine.dailyGoal = 20;
+  kombo::DayId effectiveDay = 0;
+  assert(scores.ConfigureKombo(routine, effectiveDay, error));
   chart_goals::Goal goal;
   goal.chart.SHA256 = std::string(64, 'c');
   goal.chart.MD5 = std::string(32, 'c');
@@ -835,7 +839,19 @@ void testGoalAchievementIsSavedOnceAndCelebrationIsProfileScoped() {
   assert(scores.TakeChartGoalAchievements(pending.attemptId).empty());
   assert(scores.LoadChartGoal(goal.chart, 2, error)->goal.achievedAtUnixMillis == 0);
   pending.attemptId.back() = '1'; pending.score.score = 1778;
+  sqlite3 *blocked = nullptr;
+  assert(sqlite3_open((root / "score.db").string().c_str(), &blocked) == SQLITE_OK);
+  assert(sqlite3_exec(blocked, "CREATE TRIGGER reject_goal_credit BEFORE INSERT ON chart_goals BEGIN SELECT RAISE(ABORT,'goal failure'); END", nullptr, nullptr, nullptr) == SQLITE_OK);
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::StorageFailure);
+  assert(queryInt(root / "score.db", "SELECT COUNT(*) FROM scores") == 1);
+  assert(scores.LoadKombo(error)->days.at(effectiveDay).points == 0);
+  assert(sqlite3_exec(blocked, "DROP TRIGGER reject_goal_credit; CREATE TRIGGER reject_goal_kombo BEFORE UPDATE ON kombo_state BEGIN SELECT RAISE(ABORT,'kombo failure'); END", nullptr, nullptr, nullptr) == SQLITE_OK);
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::StorageFailure);
+  assert(scores.LoadChartGoal(goal.chart, 2, error)->goal.achievedAtUnixMillis == 0);
+  assert(sqlite3_exec(blocked, "DROP TRIGGER reject_goal_kombo", nullptr, nullptr, nullptr) == SQLITE_OK);
+  sqlite3_close(blocked);
   assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  assert(scores.LoadKombo(error)->days.at(effectiveDay).points == 10);
   const auto reached = scores.LoadChartGoal(goal.chart, 2, error);
   assert(reached->progress.achieved && reached->goal.achievedAtUnixMillis >= setAt);
   assert(reached->goal.achievedAtUnixMillis / 1000 == (setAt + 5000) / 1000);
@@ -845,6 +861,7 @@ void testGoalAchievementIsSavedOnceAndCelebrationIsProfileScoped() {
   assert(scores.TakeChartGoalAchievements(pending.attemptId).empty());
   assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::AlreadyPresent);
   assert(scores.TakeChartGoalAchievements(pending.attemptId).empty());
+  assert(scores.LoadKombo(error)->days.at(effectiveDay).points == 10);
   pending.attemptId.back() = '2'; pending.score.score = 1900;
   assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
   assert(scores.TakeChartGoalAchievements(pending.attemptId).empty());
@@ -868,6 +885,7 @@ void testGoalAchievementIsSavedOnceAndCelebrationIsProfileScoped() {
   assert(scores.LoadChartGoal(goal.chart, 2, error)->goal.achievedAtUnixMillis == 0);
   pending.attemptId.back() = '3'; pending.score.score = 2000;
   assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::Inserted);
+  assert(scores.LoadKombo(error)->days.at(effectiveDay).points == 20);
   assert(scores.BindDatabasePath(root / "other.db", error));
   assert(scores.TakeChartGoalAchievements(pending.attemptId).empty());
   assert(scores.BindDatabasePath(root / "score.db", error));

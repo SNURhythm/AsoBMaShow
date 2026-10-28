@@ -4810,7 +4810,8 @@ void ResultScene::buildKomboProgress(bool animate) {
     row->setFlexDirection(FlexDirection::Column)->setGap(8 * unit)->setPadding(Edge::All, 14 * unit)
         ->setCornerRadius(18 * unit)->setFlexShrink(0)->setThemedBackgroundColor(app_theme::panelSubtle);
     body->addView(row);
-    text(row, progress.requirement.name, 21);
+    text(row, kombo::isGoalsAssignment(progress.requirement)
+        ? i18n::tr("kombo.ui.goals_assignment") : progress.requirement.name, 21);
     row->addView(new AssignmentProgressView(progress, change, komboProgressStartedAt_, unit));
   }
   auto *dismiss = new Button();

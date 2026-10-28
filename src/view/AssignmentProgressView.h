@@ -21,6 +21,7 @@ public:
           .beforeQuota=progress.requirement.chartCount, .beforeRound=progress.completedRounds+1,
           .afterCharts=progress.charts, .afterQuota=progress.requirement.chartCount,
           .afterRound=progress.completedRounds+1}), startedAt, !change.has_value()) {
+    goals_ = kombo::isGoalsAssignment(progress.requirement);
     setFlexDirection(FlexDirection::Column)->setGap(8*unit)->setFlexShrink(0);
     round_ = new RoundLabel(static_cast<int>(std::lround(21*unit)));
     round_->setMinHeight(34*unit)->setFlexShrink(0);
@@ -47,8 +48,11 @@ private:
         {{"count", std::to_string(frame.round)}});
     if (title != title_) { title_=title; round_->setText(title); }
     auto count = std::to_string(frame.charts) + " / " + std::to_string(frame.quota);
-    if (!frame.completed)
-      count += " · " + i18n::plural("kombo.ui.remaining_charts", std::max(0, frame.quota - frame.charts)).resolve();
+    if (!frame.completed) {
+      const auto remaining = std::max(0, frame.quota - frame.charts);
+      count += " · " + (goals_ ? i18n::plural("kombo.ui.remaining_goals", remaining)
+          : i18n::plural("kombo.ui.remaining_charts", remaining)).resolve();
+    }
     if (count != countText_) { countText_=count; count_->setText(count); }
     if (frame.completed != completed_) {
       completed_=frame.completed;
@@ -65,4 +69,5 @@ private:
   ProgressMotionView *meter_ = nullptr;
   std::string title_, countText_;
   bool completed_ = false;
+  bool goals_ = false;
 };

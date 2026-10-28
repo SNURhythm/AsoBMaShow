@@ -93,7 +93,7 @@ int main() {
   CHECK(buyFreeze(earned, today()));
   save(db, earned);
   auto reopened = load(db);
-  CHECK(reopened.version == 5 && freezePrice(reopened) == 25 && reopened.savings == 80);
+  CHECK(reopened.version == 6 && freezePrice(reopened) == 25 && reopened.savings == 80);
   CHECK(reopened.days.begin()->second.assignments[0].bonusRounds == 2);
   CHECK(reopened.days.begin()->second.assignments[0].earnedPoints == 12);
   advance(reopened, today() + 3); // Consumes freeze, then breaks.
@@ -115,6 +115,37 @@ int main() {
   CHECK(rejects(bad));
   bad = earned; bad.freezePurchases = -1;
   CHECK(rejects(bad));
+
+  // Existing days retain earnings at both smaller and larger historical rewards.
+  for (int oldReward : {3, 60}) {
+    State old;
+    auto oldConfig = config;
+    oldConfig.dailyGoal = 100;
+    configure(old, oldConfig, today());
+    auto played = Play{.day=today(), .chart="old-earned", .levels={{"https://table","0",""}}, .lamp=300};
+    record(old, played, 0);
+    old.version = 5;
+    old.configurations.begin()->second.assignments.pop_back();
+    old.configurations.begin()->second.assignments[0].points = oldReward;
+    auto &day = old.days.at(today());
+    day.assignments.pop_back();
+    day.config.assignments.pop_back();
+    day.config.assignments[0].points = oldReward;
+    day.assignments[0].requirement.points = oldReward;
+    day.assignments[0].originalRequirement.points = oldReward;
+    day.points = day.assignments[0].earnedPoints = oldReward;
+    save(db, old);
+    auto upgraded = load(db);
+    CHECK(upgraded.days.at(today()).points == oldReward);
+    CHECK(upgraded.days.at(today()).assignments.size() == 2);
+    CHECK(isGoalsAssignment(upgraded.days.at(today()).assignments[1].requirement));
+    played.chart = "new-earned";
+    CHECK(record(upgraded, played, 0) == 10);
+    save(db, upgraded);
+    CHECK(load(db).days.at(today()).points == oldReward + 10);
+    advance(upgraded, today() + 1);
+    CHECK(upgraded.days.at(today() + 1).assignments[0].requirement.points == 10);
+  }
 
   // Reconstruct a v1 payload, including historical overflow and pending edits.
   configure(earned, config, today());
@@ -147,7 +178,7 @@ int main() {
   }
   replaceBody(versionThree);
   auto scoreMigration = load(db);
-  CHECK(scoreMigration.version == 5 && scoreMigration.savings == earned.savings);
+  CHECK(scoreMigration.version == 6 && scoreMigration.savings == earned.savings);
   CHECK(scoreMigration.days.begin()->second.assignments[0].requirement.eligibleScoreRank == -2);
   scoreMigration.days.begin()->second.assignments[0].requirement.eligibleScoreRank = 21;
   scoreMigration.days.begin()->second.assignments[0].requirement.eligibleScoreOrBelow = true;
@@ -159,9 +190,16 @@ int main() {
     for (auto &progress : entry[1]["assignments"]) progress.erase("chartProgress");
   replaceBody(legacy);
   const auto versionTwo = load(db);
-  CHECK(versionTwo.version == 5 && versionTwo.savings == earned.savings);
+  CHECK(versionTwo.version == 6 && versionTwo.savings == earned.savings);
   CHECK(versionTwo.days.begin()->second.assignments[0].chartProgress.size() == 3);
   legacy["version"] = 1;
+  // Historical rewards were editable; reconstruct the old 20-point snapshots.
+  for (auto &entry : legacy["configurations"])
+    entry[1]["assignments"][0]["points"] = 20;
+  for (auto &entry : legacy["days"]) {
+    entry[1]["config"]["assignments"][0]["points"] = 20;
+    entry[1]["assignments"][0]["requirement"]["points"] = 20;
+  }
   legacy.erase("freezePurchases");
   for (auto &entry : legacy["days"]) {
     auto &day = entry[1];
@@ -174,7 +212,7 @@ int main() {
   }
   replaceBody(legacy);
   auto migrated = load(db);
-  CHECK(migrated.version == 5 && migrated.savings == 80 && migrated.freezes == 1);
+  CHECK(migrated.version == 6 && migrated.savings == 80 && migrated.freezes == 1);
   CHECK(migrated.configurations.size() == 2 && migrated.milestones.contains("kombo:7"));
   CHECK(migrated.days.begin()->second.points == 60);
   CHECK(migrated.days.begin()->second.assignments[0].earnedPoints == 60);
@@ -198,6 +236,7 @@ int main() {
   oldBudget.savings = 15;
   for (std::size_t i = 0; i < oldDay.assignments.size(); ++i) {
     auto &progress = oldDay.assignments[i];
+    if (isGoalsAssignment(progress.requirement)) continue;
     progress.completedRounds = 6;
     progress.bonusRounds = 5;
     progress.earnedPoints = i == 0 ? 15 : 5;
@@ -254,13 +293,13 @@ int main() {
   CHECK(partial.days.begin()->second.assignments[0].chartProgress.at("promotion").eligibleSince == attempt.createdAt);
   attempt.previousLamp = 300; attempt.lamp = 400; attempt.score = 100; attempt.levels.clear();
   CHECK(sqlite3_exec(db, "BEGIN", nullptr, nullptr, nullptr) == SQLITE_OK);
-  CHECK(record(partial, attempt, 0) == 20);
+  CHECK(record(partial, attempt, 0) == 10);
   save(db, partial);
   CHECK(sqlite3_exec(db, "ROLLBACK", nullptr, nullptr, nullptr) == SQLITE_OK);
   partial = load(db);
   CHECK(partial.days.begin()->second.points == 0);
   CHECK(partial.days.begin()->second.assignments[0].chartProgress.at("promotion").lamp == 300);
-  CHECK(record(partial, attempt, 0) == 20);
+  CHECK(record(partial, attempt, 0) == 10);
   save(db, partial);
   partial = load(db);
   CHECK(record(partial, attempt, 0) == 0);
@@ -279,7 +318,7 @@ int main() {
   configure(adjusted, moreCharts, today());
   attempt = {.day=today(), .chart="kept", .levels={{"https://table","0",""}}, .lamp=300};
   record(adjusted, attempt, 0);
-  auto replacement = moreCharts.assignments[0];
+  auto replacement = adjusted.days.at(today()).assignments[0].requirement;
   replacement.chartCount = 1;
   adjustAssignment(adjusted, replacement, today());
   save(db, adjusted);
@@ -287,9 +326,9 @@ int main() {
   CHECK(adjusted.days.at(today()).assignments[0].charts == 1);
   CHECK(record(adjusted, attempt, 0) == 0);
   attempt.chart = "new";
-  CHECK(record(adjusted, attempt, 0) == config.assignments[0].points);
+  CHECK(record(adjusted, attempt, 0) == 10);
   save(db, adjusted);
-  CHECK(load(db).days.at(today()).points == config.assignments[0].points);
+  CHECK(load(db).days.at(today()).points == 10);
 
   // Imported order (not lexical level names) supplies the one table promotion.
   const auto chartPath = std::filesystem::temp_directory_path() / ("kombo-levels-" +

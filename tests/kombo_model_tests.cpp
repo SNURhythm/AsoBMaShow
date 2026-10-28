@@ -23,6 +23,13 @@ Play play(DayId day, std::string chart) {
 }
 int main() {
   {
+    State fixed;
+    configure(fixed, config(100, 60), 44000);
+    CHECK(record(fixed, play(44000, "fixed-reward"), 0) == 10);
+    CHECK(fixed.days.at(44000).assignments.size() == 2);
+  }
+
+  {
     auto assignment = config().assignments.front();
     auto attempt = play(39000, "assist");
     assignment.eligibleLamp = 100;
@@ -61,6 +68,53 @@ int main() {
     attempt.lamp = 150;
     CHECK(record(retained, attempt, 0) == 0);
     CHECK(retained.days.at(39000).assignments[0].chartProgress.at("assist").lamp == 100);
+  }
+  {
+    State goals;
+    Config routine;
+    prepareRoutine(routine);
+    CHECK(routine.assignments.size() == 1 && isGoalsAssignment(routine.assignments[0]));
+    CHECK(readAssignmentForm(routine.assignments[0], "Goals", "2", "").empty());
+    CHECK(readAssignmentForm(routine.assignments[0], "Goals", "0", "").contains("count"));
+    CHECK(readAssignmentForm(routine.assignments[0], "Goals", "2", "").empty());
+    routine.dailyGoal = 10;
+    configure(goals, routine, 44000);
+    auto attempt = play(44000, "same-chart");
+    attempt.levels.clear();
+    CHECK(record(goals, attempt, 0) == 0);
+    attempt.achievedGoals = {"chart:LN:first-target"};
+    CHECK(record(goals, attempt, 0) == 0);
+    CHECK(goals.days.at(44000).assignments[0].charts == 1);
+    CHECK(record(goals, attempt, 0) == 0); // A retried event never counts twice.
+    routine.assignments[0].chartCount = 3;
+    CHECK(configure(goals, routine, 44000) == 44001);
+    CHECK(goals.days.at(44000).assignments[0].requirement.chartCount == 2);
+    attempt.achievedGoals = {"chart:CN:first-target"};
+    attempt.manual = false;
+    CHECK(record(goals, attempt, 0) == 0);
+    attempt.manual = true;
+    PlayProgress receipt;
+    CHECK(record(goals, attempt, 0, &receipt) == 10);
+    CHECK(receipt.reachedDailyGoal && receipt.assignments[0].completedRound());
+    CHECK(goals.savings == 0);
+    attempt.achievedGoals = {"chart:LN:harder-target"};
+    CHECK(record(goals, attempt, 0) == 1);
+    for (int i = 0; i < 12; ++i) {
+      attempt.achievedGoals = {"extra:" + std::to_string(i)};
+      record(goals, attempt, 0);
+    }
+    CHECK(goals.days.at(44000).points == 20 && goals.savings == 10);
+    CHECK(!canResetExtraChallenge(goals.days.at(44000).assignments[0]));
+    bool rejected = false;
+    try { adjustAssignment(goals, routine.assignments[0], 44000); }
+    catch (const std::invalid_argument &) { rejected = true; }
+    CHECK(rejected);
+    advance(goals, 44001);
+    CHECK(goals.days.at(44001).assignments[0].requirement.chartCount == 3);
+    // Multiple first achievements from one result retain one shared goal budget.
+    attempt.day = 44001;
+    attempt.achievedGoals = {"a", "b", "c", "d", "e", "f"};
+    CHECK(record(goals, attempt, 0) == 10 && goals.savings == 10);
   }
   State activity;
   const auto end = localDay(1735689600); // The seven slots must cross a year boundary.
@@ -119,9 +173,9 @@ int main() {
   stickyPlay.previousScore = 21; stickyPlay.previousMaxScore = 27;
   CHECK(record(scoreSticky, stickyPlay, 0) == 0);
   stickyPlay.previousScore = 24; stickyPlay.lamp = 400;
-  CHECK(record(scoreSticky, stickyPlay, 0) == 60);
+  CHECK(record(scoreSticky, stickyPlay, 0) == 10);
   State moving;
-  configure(moving, config(60, 60, 3), 41000);
+  configure(moving, config(10, 60, 3), 41000);
   PlayProgress receipt;
   record(moving, play(41000, "first"), 0, &receipt);
   CHECK(receipt.assignments.size() == 1 && receipt.assignments[0].beforeCharts == 0 &&
@@ -190,22 +244,22 @@ int main() {
   CHECK(!addLevelRange(full, tableLevels, 0, 1) && full.levels == beforeRange);
   CHECK(addLevelRange(full, tableLevels, 0, 0) && full.levels.size() == 200);
   CHECK(addLevelRange(full, tableLevels, 0, 0) && full.levels.size() == 200);
-  auto errors = readAssignmentForm(form, "", "1.5", "0", "invalid hidden value");
-  CHECK(errors.contains("name") && errors.contains("count") && errors.contains("points"));
+  auto errors = readAssignmentForm(form, "", "1.5", "invalid hidden value");
+  CHECK(errors.contains("name") && errors.contains("count"));
   CHECK(!errors.contains("rate"));
-  CHECK(readAssignmentForm(form, "Practice", "1", "60", "invalid hidden value").empty());
+  CHECK(readAssignmentForm(form, "Practice", "1", "invalid hidden value").empty());
   form.levels.clear();
   form.targetLamp = -1;
   form.scoreNumerator = 0;
-  errors = readAssignmentForm(form, "Practice", "1", "60", "80");
+  errors = readAssignmentForm(form, "Practice", "1", "80");
   CHECK(errors.contains("levels") && errors.contains("lamp") && errors.contains("score"));
   form.levels = {{"table", "0", ""}};
   form.customRate = true;
   for (const auto *invalid : {"", "nan", "inf", "80oops", "0.001", "100.01"})
-    CHECK(readAssignmentForm(form, "Practice", "1", "60", invalid).contains("rate"));
-  CHECK(readAssignmentForm(form, "Practice", "1", "60", "0.01").empty());
+    CHECK(readAssignmentForm(form, "Practice", "1", invalid).contains("rate"));
+  CHECK(readAssignmentForm(form, "Practice", "1", "0.01").empty());
   CHECK(form.scoreNumerator == 1 && form.scoreDenominator == 10000);
-  CHECK(readAssignmentForm(form, "Practice", "1", "60", "100").empty());
+  CHECK(readAssignmentForm(form, "Practice", "1", "100").empty());
   CHECK(scoreValueLabel(form) == "100.00% EX");
   form.customRate = false;
   form.scoreNumerator = 21; form.scoreDenominator = 27;
@@ -215,19 +269,11 @@ int main() {
   CHECK(errors.size() == 3 && errors.contains("daily") && errors.contains("weekly") && errors.contains("monthly"));
   CHECK(readRoutineForm(routineForm, "1000000", "100000000", "100000000").empty());
   Config emptyRoutine;
-  CHECK(readRoutineForm(emptyRoutine, "20", "150", "650").contains("assignments"));
+  CHECK(readRoutineForm(emptyRoutine, "20", "150", "650").empty());
   State emptyState;
-  bool rejectedEmpty = false;
-  try { configure(emptyState, emptyRoutine, 41000); }
-  catch (const std::invalid_argument &) { rejectedEmpty = true; }
-  CHECK(rejectedEmpty && emptyState.configurations.empty() && emptyState.days.empty());
-  auto retainedRoutine = moving.configurations;
-  auto retainedDays = moving.days.size();
-  rejectedEmpty = false;
-  try { configure(moving, emptyRoutine, 41010); }
-  catch (const std::invalid_argument &) { rejectedEmpty = true; }
-  CHECK(rejectedEmpty && moving.days.size() == retainedDays &&
-        moving.configurations.size() == retainedRoutine.size());
+  configure(emptyState, emptyRoutine, 41000);
+  CHECK(emptyState.days.at(41000).assignments.size() == 1);
+  CHECK(isGoalsAssignment(emptyState.days.at(41000).assignments.front().requirement));
   State wallet;
   wallet.savings = freezePrice(wallet) - 1;
   CHECK(!canBuyFreeze(wallet));
@@ -268,14 +314,14 @@ int main() {
   CHECK(!earlyDismiss.open(9999));
 
   State s;
-  configure(s, config(100, 60, 2), 20000);
+  configure(s, config(15, 60, 2), 20000);
   CHECK(record(s, play(20000, "one"), 0) == 0);
   CHECK(record(s, play(20000, "one"), 0) == 0);
-  CHECK(record(s, play(20000, "two"), 0) == 60);
+  CHECK(record(s, play(20000, "two"), 0) == 10);
   CHECK(s.days.at(20000).assignments[0].completedRounds == 1);
   CHECK(record(s, play(20000, "one"), 0) == 0);
   record(s, play(20000, "three"), 0);
-  CHECK(record(s, play(20000, "four"), 0) == 40);
+  CHECK(record(s, play(20000, "four"), 0) == 5);
   CHECK(s.currentKombo == 1 && s.savings == 0);
   CHECK(s.days.at(20000).assignments[0].requirement.chartCount == 1);
   CHECK(record(s, play(20000, "five"), 0) == 1);
@@ -293,13 +339,13 @@ int main() {
   CHECK(s.currentKombo == 1);
 
   State bank;
-  configure(bank, config(100, 300), 21000);
+  configure(bank, config(10, 300), 21000);
   record(bank, play(21000, "a"), 0);
   CHECK(bank.savings == 0 && bank.currentKombo == 1);
   bank.savings = 45; // Isolate inventory and calendar behavior from earning.
   CHECK(buyFreeze(bank, 21000) && buyFreeze(bank, 21000));
   CHECK(!buyFreeze(bank, 21000));
-  CHECK(bank.savings == 0 && bank.days.at(21000).points == 100);
+  CHECK(bank.savings == 0 && bank.days.at(21000).points == 10);
   advance(bank, 21002);
   CHECK(bank.freezes == 1 && bank.days.at(21001).frozen);
   CHECK(bank.currentKombo == 1);
@@ -310,14 +356,14 @@ int main() {
   CHECK(effective == 21003);
   record(bank, play(21002, "b"), 0);
   CHECK(configure(bank, config(500, 100), 21002) == 21003);
-  CHECK(bank.days.at(21002).config.dailyGoal == 100);
+  CHECK(bank.days.at(21002).config.dailyGoal == 10);
   advance(bank, 21003);
   CHECK(bank.days.at(21003).config.dailyGoal == 500);
   advance(bank, 21000); // A clock rollback cannot reroll today's assignments.
   CHECK(bank.days.rbegin()->first == 21003);
 
   State recovered;
-  configure(recovered, config(100, 200), 21500);
+  configure(recovered, config(10, 200), 21500);
   record(recovered, play(21500, "start"), 0);
   recovered.savings = 20;
   CHECK(buyFreeze(recovered, 21500));
@@ -349,7 +395,7 @@ int main() {
   CHECK(!automatic.days.at(22000).played);
 
   State milestones;
-  configure(milestones, config(100, 100), 23000);
+  configure(milestones, config(10, 100), 23000);
   for (int d = 23000; d < 23007; ++d) record(milestones, play(d, "same-next-day"), 0);
   CHECK(milestones.currentKombo == 7 && milestones.milestones.contains("kombo:7"));
   advance(milestones, 23009);
@@ -363,32 +409,32 @@ int main() {
   CHECK(configure(edits, config(200, 90), 24000) == 24001);
   CHECK(edits.days.at(24000).config.dailyGoal == 100);
   CHECK(configure(edits, config(300, 120), 24000) == 24001);
-  CHECK(record(edits, play(24000, "today"), 0) == 60);
+  CHECK(record(edits, play(24000, "today"), 0) == 10);
   advance(edits, 24001);
   CHECK(edits.days.at(24001).config.dailyGoal == 300);
-  CHECK(edits.days.at(24001).assignments[0].requirement.points == 120);
+  CHECK(edits.days.at(24001).assignments[0].requirement.points == 10);
 
   // Overlapping completions on the goal-reaching play cannot mint savings.
   State bonus;
-  auto overlapping = config(100, 80);
+  auto overlapping = config(15, 80);
   auto second = overlapping.assignments[0]; second.id = "b";
   overlapping.assignments.push_back(second);
   configure(bonus, overlapping, 25000);
-  CHECK(record(bonus, play(25000, "goal"), 0) == 100);
+  CHECK(record(bonus, play(25000, "goal"), 0) == 15);
   CHECK(bonus.savings == 0);
   for (int n = 0; n < 100; ++n) {
     auto extra = play(25000, "extra" + std::to_string(n)); extra.lamp = 600;
     record(bonus, extra, 0);
   }
-  CHECK(bonus.savings == 10 && bonus.days.at(25000).points == 110);
+  CHECK(bonus.savings == 10 && bonus.days.at(25000).points == 25);
   for (const auto &progress : bonus.days.at(25000).assignments)
     CHECK(progress.charts == 0);
   advance(bonus, 25001);
   CHECK(bonus.days.at(25001).assignments[0].bonusRounds == 0);
-  CHECK(record(bonus, play(25001, "goal"), 0) == 100 && bonus.savings == 10);
+  CHECK(record(bonus, play(25001, "goal"), 0) == 15 && bonus.savings == 10);
 
   State prices;
-  configure(prices, config(100, 100), 26000);
+  configure(prices, config(10, 100), 26000);
   record(prices, play(26000, "start"), 0);
   prices.savings = 1000;
   CHECK(freezePrice(prices) == 20 && buyFreeze(prices, 26000));
@@ -409,7 +455,7 @@ int main() {
 
   // Late attendance can move the historical gap without breaking a new kombo.
   State historical;
-  configure(historical, config(100, 100), 27000);
+  configure(historical, config(10, 100), 27000);
   record(historical, play(27000, "start"), 0);
   advance(historical, 27003);
   historical.savings = 100;
@@ -438,7 +484,7 @@ int main() {
   // Bonus mode raises a condition once even if the goal play did not meet it.
   for (const auto &progress : shared.days.at(28000).assignments) {
     CHECK(progress.requirement.chartCount == 1);
-    CHECK(progress.requirement.targetLamp == 400);
+    CHECK(isGoalsAssignment(progress.requirement) || progress.requirement.targetLamp == 400);
   }
   State capable;
   auto target = config(1, 1);
@@ -668,10 +714,10 @@ int main() {
   CHECK(adjusted.days.at(39000).assignments[0].charts == 1);
   CHECK(record(adjusted, play(39000, "counted"), 0) == 0);
   auto fresh = play(39000, "new"); fresh.levels[0].level = "1";
-  CHECK(record(adjusted, fresh, 0) == 30);
+  CHECK(record(adjusted, fresh, 0) == 10);
   adjustAssignment(adjusted, replacement, 39000);
   CHECK(record(adjusted, fresh, 0) == 0);
-  CHECK(adjusted.days.at(39000).points == 30);
+  CHECK(adjusted.days.at(39000).points == 10);
   replacement.points = 100;
   bool rejectedReward = false;
   try { adjustAssignment(adjusted, replacement, 39000); }

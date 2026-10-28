@@ -41,15 +41,16 @@ inline int formInteger(const std::string &text, int maximum, const char *field,
 }
 
 inline FieldErrors readAssignmentForm(Assignment &assignment, const std::string &name,
-                                     const std::string &count, const std::string &points,
+                                     const std::string &count,
                                      const std::string &rate) {
   FieldErrors errors;
   assignment.name = name;
   if (name.empty() || name.find_first_not_of(" \t\r\n") == std::string::npos)
     errors["name"] = "kombo.ui.invalid_name";
   else if (name.size() > 200) errors["name"] = "kombo.ui.name_too_long";
-  assignment.chartCount = formInteger(count, 10000, "count", "kombo.ui.invalid_count", errors);
-  assignment.points = formInteger(points, 1000000, "points", "kombo.ui.invalid_points", errors);
+  assignment.chartCount = formInteger(count, 10000, "count",
+      isGoalsAssignment(assignment) ? "kombo.ui.invalid_goal_count" : "kombo.ui.invalid_count", errors);
+  if (isGoalsAssignment(assignment)) return errors;
   if (assignment.levels.empty() || assignment.levels.size() > 200)
     errors["levels"] = "kombo.ui.invalid_levels";
   else for (const auto &level : assignment.levels)
@@ -76,7 +77,7 @@ inline FieldErrors readAssignmentForm(Assignment &assignment, const std::string 
 inline FieldErrors readRoutineForm(Config &config, const std::string &daily,
                                   const std::string &weekly, const std::string &monthly) {
   FieldErrors errors;
-  if (config.assignments.empty()) errors["assignments"] = "kombo.ui.assignment_required";
+  prepareRoutine(config);
   config.dailyGoal = formInteger(daily, 1000000, "daily", "kombo.ui.invalid_daily", errors);
   config.weeklyGoal = formInteger(weekly, 100000000, "weekly", "kombo.ui.invalid_period", errors);
   config.monthlyGoal = formInteger(monthly, 100000000, "monthly", "kombo.ui.invalid_period", errors);

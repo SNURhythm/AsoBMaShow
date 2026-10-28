@@ -74,7 +74,7 @@ private:
   kombo::Config draft_;
   kombo::Assignment assignment_;
   kombo::FieldErrors fieldErrors_;
-  std::string daily_, weekly_, monthly_, name_, count_, points_, rate_;
+  std::string daily_, weekly_, monthly_, name_, count_, rate_;
   enum class Page { Dashboard, Routine, Assignment, Reminders, ReminderPrompt } page_ = Page::Dashboard;
   Page renderedPage_ = Page::Dashboard;
   std::array<float, 5> scrollOffsets_{};

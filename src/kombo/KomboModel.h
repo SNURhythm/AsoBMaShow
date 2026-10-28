@@ -7,6 +7,8 @@
 #include <vector>
 
 namespace kombo {
+inline constexpr int regularRoundPoints = 10;
+inline constexpr const char *goalsAssignmentId = "builtin:personal-goals";
 inline constexpr int sharedDailyBonusLimit = 10;
 inline constexpr int baseFreezePrice = 20;
 inline constexpr int freezePriceStep = 5;
@@ -31,7 +33,7 @@ struct Assignment {
   int scoreDenominator = 10000;
   bool customRate = false;
   int chartCount = 1;
-  int points = 10;
+  int points = regularRoundPoints; // Retained for historical snapshots; new rewards are fixed.
 };
 struct Config {
   int dailyGoal = 20;
@@ -66,7 +68,7 @@ struct Day {
   std::vector<Progress> assignments;
 };
 struct State {
-  int version = 5;
+  int version = 6;
   std::map<DayId, Config> configurations;
   std::map<DayId, Day> days;
   std::int64_t savings = 0;
@@ -103,6 +105,7 @@ struct Play {
   bool manual = true;
   std::string createdAt; // Canonical UTC timestamp for delayed saved results.
   std::vector<LevelStep> nextLevels; // Imported table order; only needed when entering bonus mode.
+  std::vector<std::string> achievedGoals; // First-achievement identities from this score transaction.
 };
 struct Summary {
   DayId day = 0;
@@ -110,6 +113,10 @@ struct Summary {
   std::int64_t monthlyPoints = 0;
 };
 [[nodiscard]] std::string validate(const Config &config);
+[[nodiscard]] bool isGoalsAssignment(const Assignment &assignment);
+[[nodiscard]] Assignment goalsAssignment();
+// Normalize an editable/future routine, retaining the configured Goals quota.
+void prepareRoutine(Config &config);
 [[nodiscard]] DayId localDay(std::int64_t unixSeconds);
 [[nodiscard]] DayId today();
 [[nodiscard]] std::string dateLabel(DayId day);

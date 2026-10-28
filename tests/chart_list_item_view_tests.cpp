@@ -367,6 +367,10 @@ int main() {
     ChartMetaRecord action;
     action.addRecommendedGoals = true;
     row.setMeta(action);
+    row.applyYogaLayout();
+    require(!artist->getVisible() && std::abs((title->getY() + title->getHeight() / 2.0F) -
+                (card->getY() + card->getHeight() / 2.0F)) <= 1,
+            "recommendations title is vertically centered without an empty artist row");
     auto *placeholder = dynamic_cast<TextView *>(row.findViewByName("chartListArtworkPlaceholder"));
     auto *actionTitle = dynamic_cast<TextView *>(title);
     require(placeholder && actionTitle && placeholder->getText() == ui_icons::textForCodepoint(ui_icons::kPlus) &&
@@ -375,7 +379,7 @@ int main() {
             "recommendations row reuses the chart title and artwork slot without chart controls");
     record.randomSelect.reset();
     row.setMeta(record);
-    require(goal->getVisible() && rankBadge->getVisible(),
+    require(goal->getVisible() && rankBadge->getVisible() && artist->getVisible(),
             "recycling a random row restores ordinary chart controls");
   }
 

@@ -790,6 +790,9 @@ void testAssignmentFoldersShowOnlyContributingCharts() {
   day.assignments.push_back({.requirement=a});
   a.id = "two"; a.name = "Second";
   day.assignments.push_back({.requirement=a});
+  day.assignments.push_back({.requirement=kombo::goalsAssignment()});
+  require(!musicSelectAssignmentNeedsAdjustment(day, day.assignments.back(), {}, {}),
+          "Goals quota cannot be adjusted today even without library charts");
   auto root = musicSelectAssignmentsRoot("Assignments");
   require(musicSelectIsAssignmentDirectory(root) && !root.childrenLoaded,
           "assignment root is a lazy virtual directory");

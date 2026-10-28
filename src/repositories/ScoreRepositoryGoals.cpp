@@ -26,12 +26,16 @@ chart_goals::GoalProgress project(sqlite3 *db, chart_goals::Goal goal,
 }
 }
 std::vector<chart_goals::Goal> score_repository_detail::RecordChartGoalAchievementsOnConnection(
-    sqlite3 *db, std::string_view sha256, std::string_view createdAt, std::string_view attemptId) {
+    sqlite3 *db, std::string_view sha256, std::string_view createdAt,
+    std::string_view attemptId, bool requireSuccess) {
   if (sha256.empty()) return {};
   std::string error;
   SqliteTransactionHandle tx(db, "SAVEPOINT goal_achievement", error,
       "RELEASE goal_achievement", "ROLLBACK TO goal_achievement; RELEASE goal_achievement");
-  if (!tx.active()) { SDL_Log("Cannot record goal achievement: %s", error.c_str()); return {}; }
+  if (!tx.active()) {
+    if (requireSuccess) throw std::runtime_error(error);
+    SDL_Log("Cannot record goal achievement: %s", error.c_str()); return {};
+  }
   try {
     auto goals = chart_goals::loadForChart(db, sha256);
     std::vector<chart_goals::Goal> achieved;
@@ -56,6 +60,7 @@ std::vector<chart_goals::Goal> score_repository_detail::RecordChartGoalAchieveme
     if (!tx.commit(error)) throw std::runtime_error(error);
     return achieved;
   } catch (const std::exception &failure) {
+    if (requireSuccess) throw;
     SDL_Log("Cannot record goal achievement: %s", failure.what());
     return {};
   }

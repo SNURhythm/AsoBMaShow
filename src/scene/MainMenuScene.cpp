@@ -2962,11 +2962,13 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
       .key = "container:assignments",
       .label = i18n::tr("kombo.ui.assignment_folder"),
       .type = LibraryFolderItem::Type::Assignments,
-      .expandable = !assignmentDay.assignments.empty(),
+      .expandable = std::any_of(assignmentDay.assignments.begin(), assignmentDay.assignments.end(),
+          [](const auto &p) { return !kombo::isGoalsAssignment(p.requirement); }),
       .expanded = isExpanded("container:assignments"),
   });
   if (isExpanded("container:assignments")) {
     for (const auto &progress : assignmentDay.assignments) {
+      if (kombo::isGoalsAssignment(progress.requirement)) continue;
       folders.push_back({
           .key = "container:assignment:" + progress.requirement.id,
           .label = progress.requirement.name,

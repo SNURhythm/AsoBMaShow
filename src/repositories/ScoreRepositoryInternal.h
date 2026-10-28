@@ -60,9 +60,10 @@ bool EquivalentDatabasePaths(const std::filesystem::path &first,
                              const std::filesystem::path &second);
 bool CurrentSchemaIsValid(sqlite3 *database);
 void IncrementRevision();
-// Called inside score transactions. Goal-storage failure never discards a score.
+// Durable projections require atomic goal credit; legacy/import writes remain best effort.
 std::vector<chart_goals::Goal> RecordChartGoalAchievementsOnConnection(
-    sqlite3 *, std::string_view sha256, std::string_view createdAt = {}, std::string_view attemptId = {});
+    sqlite3 *, std::string_view sha256, std::string_view createdAt = {},
+    std::string_view attemptId = {}, bool requireSuccess = false);
 ScoreWriteOutcome InsertScoreWriteOnConnection(
     sqlite3 *database, const result_persistence::ChartScoreWrite &score,
     std::optional<std::string_view> attemptId,

@@ -57,7 +57,7 @@ State load(sqlite3 *db) {
   require(result == SQLITE_ROW, db);
   auto json = nlohmann::json::parse(sqliteColumnString(query, 0));
   const auto version = json.at("version").get<int>();
-  if (version != 1 && version != 2 && version != 3 && version != 4 && version != 5)
+  if (version < 1 || version > 6)
     throw std::runtime_error("This kombo data needs a different app version.");
   if (version == 1) {
     // Preserve all previously earned totals and savings. The old format did
@@ -152,7 +152,7 @@ State load(sqlite3 *db) {
           progress.bonusRounds > sharedDailyBonusLimit || progress.bonusRounds > progress.completedRounds ||
           progress.earnedPoints < progress.bonusRounds ||
           progress.earnedPoints > static_cast<std::int64_t>(progress.completedRounds - progress.bonusRounds) *
-              progress.requirement.points + progress.bonusRounds ||
+              std::max(regularRoundPoints, progress.requirement.points) + progress.bonusRounds ||
           progress.charts < 0 ||
           static_cast<std::uint64_t>(progress.charts) + progress.completedRounds > progress.usedCharts.size() ||
           progress.usedCharts.contains("") || (!day.played && !progress.usedCharts.empty()))
@@ -171,6 +171,21 @@ State load(sqlite3 *db) {
     }
     if (earned != day.points || (!day.played && day.points != 0))
       throw std::runtime_error("Daily points do not match completed assignments.");
+  }
+  if (version < 6) {
+    // Validate old snapshots before upgrading. Their totals, partial rounds and
+    // reward metadata remain intact; only future rounds use the fixed reward.
+    state.version = 6;
+    for (auto &[id, config] : state.configurations) prepareRoutine(config);
+    if (!state.days.empty()) {
+      auto &day = state.days.rbegin()->second;
+      if (std::none_of(day.assignments.begin(), day.assignments.end(),
+                      [](const auto &p) { return isGoalsAssignment(p.requirement); })) {
+        auto assignment = goalsAssignment();
+        day.config.assignments.push_back(assignment);
+        day.assignments.push_back({.requirement=assignment, .originalRequirement=assignment});
+      }
+    }
   }
   return state;
 }
@@ -196,6 +211,14 @@ void recordSavedPlay(sqlite3 *db, const std::filesystem::path &chartPath,
   play.day = localDay(sqlite3_column_int64(time, 0));
   play.createdAt = sqliteColumnString(time, 1);
   if (play.day < state.configurations.begin()->first) return;
+  advance(state, play.day);
+  auto &day = state.days.at(play.day);
+  if (std::all_of(day.assignments.begin(), day.assignments.end(),
+                  [](const auto &p) { return isGoalsAssignment(p.requirement); })) {
+    record(state, play, randomChoice, progress);
+    save(db, state);
+    return;
+  }
 
   // Read only indexed metadata for this chart, never chart/archive payloads.
   const auto pathText = chartPath.u8string();
@@ -214,10 +237,10 @@ void recordSavedPlay(sqlite3 *db, const std::filesystem::path &chartPath,
   while ((result = sqlite3_step(query)) == SQLITE_ROW)
     play.levels.push_back({sqliteColumnString(query, 0), sqliteColumnString(query, 1), {}});
   require(result == SQLITE_DONE, charts.get());
-  advance(state, play.day);
-  auto &day = state.days.at(play.day);
   std::int64_t possiblePoints = day.points;
-  for (const auto &assignment : day.assignments) possiblePoints += assignment.requirement.points;
+  for (const auto &assignment : day.assignments)
+    possiblePoints += regularRoundPoints * (isGoalsAssignment(assignment.requirement)
+        ? static_cast<std::int64_t>(play.achievedGoals.size()) : 1);
   if (day.points < day.config.dailyGoal && possiblePoints >= day.config.dailyGoal) {
     // Promotion uses the same level order as the table browser. Read only table
     // metadata, once per selected source; never scan or open chart payloads.

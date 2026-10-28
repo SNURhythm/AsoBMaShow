@@ -271,6 +271,8 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
   if (!meta.SubTitle.empty()) {
     title += " " + meta.SubTitle;
   }
+  artistView->setVisible(!action);
+  artistView->setDisplay(action ? YGDisplayNone : YGDisplayFlex);
   if (action) {
     titleView->setLocalizedText(i18n::message("goals.ui.add_recommended"));
     artistView->setText("");

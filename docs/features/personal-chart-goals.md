@@ -1,8 +1,15 @@
 # Personal chart goals
 
 Personal goals keep a chosen chart lamp and/or score target across sessions.
-They have no deadline, automatic escalation, or points. Kombo routines continue
-unchanged and are not required to use goals.
+They have no deadline or automatic escalation, and a Kombo routine is not
+required to use them. With a routine active, newly achieved goals from normal
+local play count toward its permanent **Achieve goals** assignment. Set its
+goals-per-round quota when creating the routine or editing tomorrow's routine.
+Regular rounds grant 10 points up to the remaining daily target; extra rounds
+use one newly achieved goal for 1 point within Kombo's shared daily bonus limit.
+Previously achieved goals and imported records do not grant retroactive points.
+Separate LN-mode goals and newly set harder targets count as separate achievements;
+a goal containing both lamp and score targets counts once when both are met.
 
 ## Recommendations
 

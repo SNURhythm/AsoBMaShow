@@ -24,7 +24,8 @@ std::string monthKey(DayId day) { return dateLabel(day).substr(0, 7); }
 Day newDay(const Config &config) {
   Day day;
   day.config = config;
-  for (const auto &a : config.assignments) day.assignments.push_back({.requirement = a, .originalRequirement = a});
+  prepareRoutine(day.config);
+  for (const auto &a : day.config.assignments) day.assignments.push_back({.requirement = a, .originalRequirement = a});
   return day;
 }
 const Config &configurationFor(const State &s, DayId day) {
@@ -75,6 +76,7 @@ void retainMatchingAchievements(Progress &progress) {
   });
 }
 void harder(Assignment &a, const Play &p, std::uint32_t choice) {
+  if (isGoalsAssignment(a)) return;
   std::vector<Assignment> options;
   if (a.scoreNumerator > 0 && a.scoreNumerator < a.scoreDenominator) {
     auto next = a;
@@ -118,22 +120,38 @@ void harder(Assignment &a, const Play &p, std::uint32_t choice) {
 }
 } // namespace
 
+bool isGoalsAssignment(const Assignment &a) { return a.id == goalsAssignmentId; }
+Assignment goalsAssignment() {
+  return {.id=goalsAssignmentId, .name="Goals", .targetLamp=-1};
+}
+void prepareRoutine(Config &config) {
+  for (auto &a : config.assignments) a.points = regularRoundPoints;
+  if (std::none_of(config.assignments.begin(), config.assignments.end(), isGoalsAssignment))
+    config.assignments.push_back(goalsAssignment());
+}
 std::string validate(const Config &config) {
   if (config.dailyGoal < 1 || config.dailyGoal > 1000000 ||
       config.weeklyGoal < 1 || config.weeklyGoal > 100000000 ||
       config.monthlyGoal < 1 || config.monthlyGoal > 100000000)
     return "Goals must be positive (daily up to 1,000,000; weekly/monthly up to 100,000,000).";
-  if (config.assignments.size() > 100) return "Use at most 100 assignments.";
+  if (std::count_if(config.assignments.begin(), config.assignments.end(),
+          [](const auto &a) { return !isGoalsAssignment(a); }) > 100)
+    return "Use at most 100 table assignments.";
   std::set<std::string> ids;
   for (const auto &a : config.assignments) {
     if (a.id.empty() || !ids.insert(a.id).second || a.name.empty() || a.name.size() > 200)
       return "Each assignment needs a unique identity and a name (up to 200 bytes).";
+    if (a.chartCount < 1 || a.chartCount > 10000 || a.points < 1 || a.points > 1000000)
+      return "Use 1–10,000 completions per round and a valid historical reward.";
+    if (isGoalsAssignment(a)) {
+      if (!a.levels.empty() || a.targetLamp != -1 || a.scoreNumerator != 0)
+        return "The Goals assignment counts personal goal achievements only.";
+      continue;
+    }
     if (a.levels.empty() || a.levels.size() > 200)
       return "Choose at least one difficulty-table level (up to 200).";
     for (const auto &level : a.levels)
       if (level.source.empty()) return "A selected difficulty table has no source URL.";
-    if (a.chartCount < 1 || a.chartCount > 10000 || a.points < 1 || a.points > 1000000)
-      return "Use 1–10,000 charts and 1–1,000,000 points per round.";
     if (a.eligibleScoreRank != -2 && a.eligibleScoreRank != -1 && a.eligibleScoreRank != 0 &&
         std::find(rankNumerators.begin(), rankNumerators.end(), a.eligibleScoreRank) == rankNumerators.end())
       return "Choose a supported previous score rank.";
@@ -211,6 +229,7 @@ std::string scoreValueLabel(const Assignment &a) {
   return text.str();
 }
 bool eligible(const Assignment &a, const Play &p) {
+  if (isGoalsAssignment(a)) return false; // Credit comes only from committed goal events.
   const bool levelMatches = std::any_of(a.levels.begin(), a.levels.end(), [&](const Level &level) {
     return std::any_of(p.levels.begin(), p.levels.end(), [&](const Level &candidate) {
       return level.source == candidate.source && level.level == candidate.level;
@@ -259,18 +278,20 @@ void advance(State &s, DayId day) {
   }
 }
 DayId configure(State &s, const Config &config, DayId day) {
-  // Earlier builds saved empty routines; keep those readable, but never save a new one.
-  if (config.assignments.empty()) throw std::invalid_argument("Add at least one assignment.");
-  if (const auto error = validate(config); !error.empty()) throw std::invalid_argument(error);
+  auto routine = config;
+  prepareRoutine(routine);
+  if (const auto error = validate(routine); !error.empty()) throw std::invalid_argument(error);
   advance(s, day);
   if (!s.days.empty()) day = std::max(day, s.days.rbegin()->first);
   const DayId effective = day + (s.configurations.empty() ? 0 : 1);
-  s.configurations[effective] = config;
-  if (effective == day) s.days[day] = newDay(config);
+  s.configurations[effective] = routine;
+  if (effective == day) s.days[day] = newDay(routine);
   recompute(s);
   return effective;
 }
 void adjustAssignment(State &s, const Assignment &replacement, DayId dayId) {
+  if (isGoalsAssignment(replacement))
+    throw std::invalid_argument("Change the Goals quota in tomorrow's routine.");
   advance(s, dayId);
   if (s.days.empty() || s.days.rbegin()->first != dayId)
     throw std::invalid_argument("Only today's assignments can be adjusted.");
@@ -291,6 +312,7 @@ void adjustAssignment(State &s, const Assignment &replacement, DayId dayId) {
   // awards points; even a reduced quota needs another distinct qualifying play.
 }
 bool canResetExtraChallenge(const Progress &progress) {
+  if (isGoalsAssignment(progress.requirement)) return false;
   const auto &a = progress.requirement;
   const auto &b = progress.originalRequirement;
   return progress.bonusChartCount == 1 && progress.bonusDifficultyApplied &&
@@ -353,6 +375,19 @@ std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice, PlayPro
   for (auto *item : ordered) {
     if (bonus && remainingBonus == 0) break;
     auto &progress = *item;
+    if (isGoalsAssignment(progress.requirement)) {
+      for (const auto &goal : p.achievedGoals) {
+        if (bonus && remainingBonus == 0) break;
+        if (goal.empty() || !progress.usedCharts.insert(goal).second) continue;
+        progress.chartProgress.emplace(goal, ChartAchievement{});
+        if (++progress.charts < progress.requirement.chartCount) continue;
+        ++progress.completedRounds;
+        progress.charts = 0;
+        completed.push_back(&progress);
+        if (bonus) --remainingBonus;
+      }
+      continue;
+    }
     if (progress.usedCharts.contains(p.chart)) continue;
     auto chart = progress.chartProgress.find(p.chart);
     if (chart == progress.chartProgress.end()) {
@@ -389,7 +424,7 @@ std::int64_t record(State &s, const Play &p, std::uint32_t randomChoice, PlayPro
   // completions. Allocate its remaining goal budget in stable identity order.
   for (auto *progress : completed) {
     const auto reward = bonus ? 1 : std::min<std::int64_t>(
-        progress->requirement.points, day.config.dailyGoal - day.points);
+        regularRoundPoints, day.config.dailyGoal - day.points);
     progress->earnedPoints += reward;
     day.points += reward;
     if (bonus) { ++progress->bonusRounds; ++s.savings; }

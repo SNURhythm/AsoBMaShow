@@ -213,7 +213,14 @@ std::string lampText(int rank) {
 std::string comparison(const char *key, const std::string &value) {
   return i18n::format(key, {{"value", value}});
 }
+std::string assignmentName(const kombo::Assignment &a) {
+  return kombo::isGoalsAssignment(a) ? i18n::tr("kombo.ui.goals_assignment") : a.name;
+}
 void assignmentConditions(View *parent, const kombo::Assignment &a, int size = 18) {
+  if (kombo::isGoalsAssignment(a)) {
+    label(parent, i18n::tr("kombo.ui.goals_help"), size);
+    return;
+  }
   const auto row = [parent, size](const std::string &previous, const std::string &target,
                                  int previousLamp = -2, int targetLamp = -2) {
     auto *line = new View();
@@ -313,12 +320,15 @@ void KomboScene::reload() {
     goalIgnitionSoundPending_ = false;
   }
   draft_ = state_.configurations.empty() ? kombo::Config{} : state_.configurations.rbegin()->second;
+  kombo::prepareRoutine(draft_);
   daily_ = std::to_string(draft_.dailyGoal);
   weekly_ = std::to_string(draft_.weeklyGoal);
   monthly_ = std::to_string(draft_.monthlyGoal);
   checkedDay_ = kombo::today();
 }
 std::set<std::string> KomboScene::unavailableAssignments(const kombo::Day &day) {
+  if (std::all_of(day.assignments.begin(), day.assignments.end(),
+                 [](const auto &p) { return kombo::isGoalsAssignment(p.requirement); })) return {};
   auto session = context.chartRepository.OpenSession();
   if (!session) throw std::runtime_error("Chart storage is unavailable.");
   MusicSelectRepositoryMetadata metadata;
@@ -465,15 +475,25 @@ void KomboScene::dashboard(View *body) {
     if (!kombo::dashboardAssignmentVisible(complete, showOptional_, bonusAvailable, change)) continue;
     auto *assignmentCard = card(body);
     const auto reward = complete ? 1 :
-        std::min<std::int64_t>(p.requirement.points, day.config.dailyGoal - day.points);
-    label(assignmentCard, p.requirement.name + "  ·  " + i18n::plural("kombo.ui.reward", reward).resolve(), 24);
+        std::min<std::int64_t>(kombo::regularRoundPoints, day.config.dailyGoal - day.points);
+    label(assignmentCard, assignmentName(p.requirement) + "  ·  " + i18n::plural("kombo.ui.reward", reward).resolve(), 24);
     if (complete)
       label(assignmentCard, std::string(i18n::tr("kombo.ui.bonus_today")) + " " + std::to_string(p.bonusRounds), 18);
-    label(assignmentCard, assignmentLevelsText(p.requirement), 18);
+    if (!kombo::isGoalsAssignment(p.requirement))
+      label(assignmentCard, assignmentLevelsText(p.requirement), 18);
     assignmentConditions(assignmentCard, p.requirement);
     assignmentCard->addView(new AssignmentProgressView(p,
         change, komboProgressStartedAt_));
-    if (openAssignment_ && (!complete || bonusAvailable))
+    if (kombo::isGoalsAssignment(p.requirement) && openGoals_ && (!complete || bonusAvailable))
+      action(assignmentCard, i18n::tr("goals.ui.title"), [this] {
+        defer([open = openGoals_, embedded = embeddedTab_] {
+          const bool keepAlive = embedded;
+          const auto navigate = open;
+          navigate();
+          return keepAlive;
+        }, 0, true);
+      }, app_theme::ActionCategory::Primary, 0xf024);
+    if (!kombo::isGoalsAssignment(p.requirement) && openAssignment_ && (!complete || bonusAvailable))
       action(assignmentCard, i18n::tr("kombo.ui.play_assignment"), [this, id = p.requirement.id] {
         // Consume embedded-tab actions; standalone navigation may destroy this scene.
         defer([open = openAssignment_, id, embedded = embeddedTab_] {
@@ -498,7 +518,6 @@ void KomboScene::dashboard(View *body) {
           assignment_ = requirement;
           name_ = requirement.name;
           count_ = std::to_string(requirement.chartCount);
-          points_ = std::to_string(requirement.points);
           rate_ = std::to_string(100.0 * requirement.scoreNumerator / requirement.scoreDenominator);
         });
       }, app_theme::ActionCategory::Neutral, ui_icons::kPlayOptions);
@@ -609,16 +628,18 @@ void KomboScene::routine(View *body) {
   body->addView(assignments);
   for (std::size_t i = 0; i < draft_.assignments.size(); ++i) {
     const auto &a = draft_.assignments[i];
-    label(assignments, a.name + "  ·  " + assignmentLevelsText(a), 22);
-    label(assignments, i18n::plural("kombo.ui.chart_count", a.chartCount).resolve() + " · " + i18n::plural("kombo.ui.reward", a.points).resolve(), 18);
+    label(assignments, assignmentName(a) + (kombo::isGoalsAssignment(a) ? "" : "  ·  " + assignmentLevelsText(a)), 22);
+    const auto quota = kombo::isGoalsAssignment(a) ? i18n::plural("kombo.ui.goal_count", a.chartCount)
+        : i18n::plural("kombo.ui.chart_count", a.chartCount);
+    label(assignments, quota.resolve() + " · " + i18n::plural("kombo.ui.reward", kombo::regularRoundPoints).resolve(), 18);
     assignmentConditions(assignments, a);
     auto *row = new View();
     row->setFlexDirection(FlexDirection::Row)->setGap(10)->setFlexShrink(0);
     action(row, i18n::tr("kombo.ui.edit_assignment"), [this, i] { later([this, i] { editAssignment(static_cast<int>(i)); }); }, app_theme::ActionCategory::Neutral, ui_icons::kPen)->setFlex(1);
-    action(row, i18n::tr("kombo.ui.remove"), [this, i] { later([this, i] { draft_.assignments.erase(draft_.assignments.begin() + i); }); }, app_theme::ActionCategory::Destructive, ui_icons::kTrash)->setFlex(1);
+    if (!kombo::isGoalsAssignment(a)) action(row, i18n::tr("kombo.ui.remove"), [this, i] { later([this, i] { draft_.assignments.erase(draft_.assignments.begin() + i); }); }, app_theme::ActionCategory::Destructive, ui_icons::kTrash)->setFlex(1);
     assignments->addView(row);
   }
-  action(assignments, i18n::tr("kombo.ui.add"), [this] { later([this] { editAssignment(-1); }); }, app_theme::ActionCategory::Neutral, ui_icons::kPlus)->setEnabled(draft_.assignments.size() < 100);
+  action(assignments, i18n::tr("kombo.ui.add"), [this] { later([this] { editAssignment(-1); }); }, app_theme::ActionCategory::Neutral, ui_icons::kPlus)->setEnabled(draft_.assignments.size() < 101);
   fieldError(body, assignments, fieldErrors_["assignments"]);
   action(body, i18n::tr("kombo.ui.save"), [this] { later([this] { saveRoutine(); }); }, app_theme::ActionCategory::Primary, ui_icons::kSave);
 }
@@ -633,13 +654,20 @@ void KomboScene::editAssignment(int index) {
   if (index < 0) { assignment_.id = uuid::generateV4(); assignment_.name = i18n::tr("kombo.ui.default_assignment"); }
   name_ = assignment_.name;
   count_ = std::to_string(assignment_.chartCount);
-  points_ = std::to_string(assignment_.points);
   rate_ = std::to_string(100.0 * assignment_.scoreNumerator / assignment_.scoreDenominator);
   page_ = Page::Assignment;
   message_.clear();
 }
 void KomboScene::editor(View *body) {
   body = card(body);
+  if (kombo::isGoalsAssignment(assignment_)) {
+    label(body, i18n::tr("kombo.ui.goals_assignment"), 28);
+    label(body, i18n::tr("kombo.ui.goals_help"), 18);
+    field(body, i18n::tr("kombo.ui.goals_per_round"), count_, &fieldErrors_["count"]);
+    label(body, i18n::plural("kombo.ui.reward", kombo::regularRoundPoints).resolve(), 18);
+    action(body, i18n::tr("kombo.ui.keep"), [this] { later([this] { acceptAssignment(); }); }, app_theme::ActionCategory::Primary, ui_icons::kCheck);
+    return;
+  }
   if (adjustingToday_) label(body, i18n::tr("kombo.ui.adjust_help"), 18);
   field(body, i18n::tr("kombo.ui.name"), name_, &fieldErrors_["name"]);
   auto session = context.chartRepository.OpenSession();
@@ -722,7 +750,7 @@ void KomboScene::editor(View *body) {
   }, fieldErrors_["score"]);
   body->addView(customRate);
   field(body, i18n::tr("kombo.ui.count"), count_, &fieldErrors_["count"]);
-  if (!adjustingToday_) field(body, i18n::tr("kombo.ui.points"), points_, &fieldErrors_["points"]);
+  if (!adjustingToday_) label(body, i18n::plural("kombo.ui.reward", kombo::regularRoundPoints).resolve(), 18);
   action(body, i18n::tr("kombo.ui.keep"), [this] { later([this] { acceptAssignment(); }); }, app_theme::ActionCategory::Primary, ui_icons::kCheck);
 }
 std::string KomboScene::assignmentLevelsText(const kombo::Assignment &assignment) {
@@ -788,7 +816,7 @@ void KomboScene::levelRangePicker(View *body, const std::vector<kombo::Level> &l
 void KomboScene::acceptAssignment() {
   message_.clear();
   auto candidate = assignment_;
-  fieldErrors_ = kombo::readAssignmentForm(candidate, name_, count_, points_, rate_);
+  fieldErrors_ = kombo::readAssignmentForm(candidate, name_, count_, rate_);
   if (!fieldErrors_.empty()) return;
   assignment_ = std::move(candidate);
   try {
