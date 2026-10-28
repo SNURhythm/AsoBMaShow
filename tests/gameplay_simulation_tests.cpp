@@ -1145,6 +1145,9 @@ void testReferencePmsSingleMissAndReleaseMargin() {
               simulation.snapshot().judgeCounts[Poor] == 0 &&
               simulation.snapshot().stagePassedNotes == 1,
           "PMS nonvanishing BAD suppresses repeated BAD and automatic POOR counts");
+  require(simulation.scoreState().gaugeEvidence.recorded &&
+              simulation.scoreState().gaugeEvidence.passedNotes == 1,
+          "PMS suppressed miss advances gauge evidence without a second penalty");
   require(std::ranges::any_of(simulation.replayEvents(), [](const auto &event) {
             return event.action == gameplay::GameplayReplayAction::Miss &&
                    event.noteId == 0 && event.judgement == None;

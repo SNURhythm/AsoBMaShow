@@ -522,6 +522,7 @@ GameplayInputResult GameplaySimulation::commitMiss(NoteId id,
     // PMS consumes the missed identity, but an earlier nonvanishing BAD or
     // empty POOR has already applied its one miss penalty.
     ++scoreState_.stagePassedNotes;
+    scoreState_.updateGaugeEvidence();
   }
   result.hasReplayEvent = true;
   result.replayEvent = {
