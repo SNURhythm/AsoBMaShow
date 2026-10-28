@@ -204,7 +204,7 @@ void ChartGoalsScene::init() {
 void ChartGoalsScene::reload() {
   recommendations_.clear();
   try {
-    auto session = context.chartRepository.OpenSession();
+    auto session = context.chartRepository.OpenSession(&context.scoreRepository);
     if (!session) throw std::runtime_error("Chart storage is unavailable.");
     for (const auto &[rank, count] : session->GoalRecommendationCounts())
       recommendations_[rank].count = count;
@@ -237,7 +237,7 @@ void ChartGoalsScene::reload() {
 }
 void ChartGoalsScene::loadRecommendations(int rank, int offset) {
   try {
-    auto session = context.chartRepository.OpenSession();
+    auto session = context.chartRepository.OpenSession(&context.scoreRepository);
     if (!session) throw std::runtime_error("Chart storage is unavailable.");
     const auto candidates = session->GoalRecommendations(rank, offset);
     ChartMetaQuery query;

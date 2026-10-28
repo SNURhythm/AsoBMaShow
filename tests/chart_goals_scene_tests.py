@@ -26,6 +26,58 @@ class ChartGoalsSceneTests(unittest.TestCase):
                 includes=(root / "src",))
             subprocess.run([str(binary)], check=True, timeout=5)
 
+    def test_recommendations_use_active_profile_scores(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "src/scene/ChartGoalsScene.cpp").read_text()
+        method = extract(source, "void ChartGoalsScene::loadRecommendations(")
+        fixture = r'''
+#include <algorithm>
+#include <cassert>
+#include <map>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <vector>
+struct ScoreRepository {};
+struct ChartMetaRecord { struct { std::string SHA256; } meta; };
+struct GoalRecommendation { std::string sha256; };
+struct ChartMetaQuery { std::optional<std::vector<std::string>> allowedSha256; bool rawSongData=false; };
+struct Charts {
+  ScoreRepository *active=nullptr;
+  struct Session {
+    std::vector<GoalRecommendation> GoalRecommendations(int,int) { return {{"active-chart"}}; }
+    void QueryChartMeta(const ChartMetaQuery &, std::vector<ChartMetaRecord> &rows) { rows.push_back({{"active-chart"}}); }
+  };
+  std::optional<Session> OpenSession(ScoreRepository *scores=nullptr) {
+    if (scores!=active) throw std::runtime_error("wrong score database");
+    return Session{};
+  }
+};
+namespace i18n { std::string tr(const char *s) { return s; } }
+void SDL_Log(const char *, const char *) {}
+struct ChartGoalsScene {
+  struct { Charts chartRepository; ScoreRepository scoreRepository; } context;
+  struct Group { int offset=0; bool expanded=false; std::vector<std::pair<GoalRecommendation,ChartMetaRecord>> rows; };
+  std::map<int,Group> recommendations_;
+  std::string message_;
+  void loadRecommendations(int,int);
+};
+METHOD
+int main() {
+  ChartGoalsScene scene;
+  scene.context.chartRepository.active=&scene.context.scoreRepository;
+  scene.loadRecommendations(24,0);
+  assert(scene.message_.empty());
+  assert(scene.recommendations_[24].expanded && scene.recommendations_[24].rows.size()==1);
+}
+'''.replace("METHOD", method)
+        with tempfile.TemporaryDirectory(prefix="goals-profile-") as directory:
+            path = Path(directory) / "profile.cpp"
+            binary = Path(directory) / "profile"
+            path.write_text(fixture)
+            FixtureCompiler.from_environment().build([path], binary, path.parent)
+            subprocess.run([str(binary)], check=True, timeout=5)
+
     def test_navigation_is_deferred_and_practice_returns_once(self):
         root = Path(__file__).resolve().parents[1]
         scene = (root / "src/scene/ChartGoalsScene.cpp").read_text()
