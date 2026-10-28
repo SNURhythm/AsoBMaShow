@@ -1,6 +1,7 @@
 #include "SimpleBatchRenderer.h"
 #include "FrameSubmission.h"
 #include "ShaderManager.h"
+#include "UnitCircleSamples.h"
 #include "bx/bx.h"
 #include <algorithm>
 #include <cmath>
@@ -141,6 +142,31 @@ void SimpleBatchRenderer::addCircle(float cx, float cy, float radius,
   }
   addRoundedRect(cx - radius, cy - radius, radius * 2.0f, radius * 2.0f,
                  radius, color);
+}
+
+void SimpleBatchRenderer::addRadialGradientCircle(
+    float cx, float cy, float radius, uint32_t centerColor, uint32_t edgeColor) {
+  if (radius <= 0.0F || ((centerColor | edgeColor) >> 24) == 0) {
+    return;
+  }
+  constexpr int segments = 32;
+  constexpr int vertexCount = segments + 2;
+  constexpr int indexCount = segments * 3;
+  if (vertices.size() + vertexCount > kMaxBatchVertices ||
+      indices.size() + indexCount > kMaxBatchIndices) {
+    flush();
+  }
+  const auto base = static_cast<uint16_t>(vertices.size());
+  vertices.push_back({cx, cy, 0.0F, centerColor});
+  for (const auto sample : unitCircleSamples<segments>()) {
+    vertices.push_back({cx + sample.x * radius, cy + sample.y * radius,
+                        0.0F, edgeColor});
+  }
+  for (int i = 0; i < segments; ++i) {
+    indices.push_back(base);
+    indices.push_back(static_cast<uint16_t>(base + i + 1));
+    indices.push_back(static_cast<uint16_t>(base + i + 2));
+  }
 }
 
 void SimpleBatchRenderer::addRoundedRect(float x, float y, float width,

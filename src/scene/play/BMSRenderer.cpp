@@ -25,6 +25,7 @@
 #include "GameplayGeometry.h"
 #include "Judge.h"
 #include "KeybombEffect.h"
+#include "LaneBeamClip.h"
 #include "../../RAII.h"
 #include "bgfx/bgfx.h"
 #include "../../rendering/common.h"
@@ -3808,11 +3809,21 @@ void BMSRenderer::renderFrame(
       snapshot.keybomb = source.keybomb();
       laneStateSnapshot.emplace_back(laneOrder[i], snapshot);
     }
+    bool hasLaneBeams = false;
     for (const auto &entry : laneStateSnapshot) {
       if (renderLaneBeams && (!emptyScratchLaneHidden || entry.first != 7))
-        drawLaneBeam(entry.first, entry.second, nowMicros);
+        hasLaneBeams |= drawLaneBeam(entry.first, entry.second, nowMicros);
+    }
+    // The bounded lane quads fit in one batch. Scope the drawable-pixel clip
+    // to this flush, including explicit reset before any later effect draws.
+    if (hasLaneBeams) {
+      const auto clip = lane_beam::coverScissor(
+          rendering::game_camera, playAreaLeftX, playAreaWidth, judgeY,
+          upperBound, noteVisibleUpperBound, coverState);
+      if (clip) bgfx::setScissor(clip->x, clip->y, clip->width, clip->height);
     }
     simpleBatchRenderer.flush();
+    bgfx::setScissor();
     simpleBatchRenderer.setSubmitDepth(gameplay_note_submission_order::kKeybombDepth);
     const float keybombY = judgeY +
         built_in_judge_line::height(noteRenderWidth, builtInJudgeLine) * 0.5F;
@@ -5132,10 +5143,10 @@ void BMSRenderer::drawRect(float width, float height, float x, float y,
                            Color color) {
   simpleBatchRenderer.addRect(x, y, width, height, color.toABGR());
 }
-void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
+bool BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
                                const long long time) {
   if (laneState.lastStateTime == -1) {
-    return;
+    return false;
   }
   // alpha
   const bool scratchLane = isScratch(lane);
@@ -5158,7 +5169,7 @@ void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
                                  time - laneState.lastStateTime);
   }
   if (alpha <= 0.0) {
-    return;
+    return false;
   }
   if (alpha > 1.0) {
     alpha = 1.0;
@@ -5173,15 +5184,17 @@ void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
     color = laneState.lastPressedJudge.Diff > 0 ? Color(255, 0, 0, 255 * alpha)
                                                 : Color(0, 0, 255, 255 * alpha);
   }
+  if (color.a == 0) return false;
   const float beamScale = static_cast<float>(laneBeamLengthPercent) / 100.0f;
   const float beamHeight = std::max(0.0f, upperBound - judgeY) * beamScale;
   if (beamHeight <= 0.0f) {
-    return;
+    return false;
   }
   const auto fadedColor = Color(color.r, color.g, color.b, 0);
   simpleBatchRenderer.addRectVerticalGradient(
       laneToX(lane), judgeY, noteRenderWidth, beamHeight, color.toABGR(),
       fadedColor.toABGR());
+  return true;
 }
 
 void BMSRenderer::drawStartLaneIndicators() {

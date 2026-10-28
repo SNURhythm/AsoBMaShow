@@ -139,3 +139,45 @@ waste: visible feedback necessarily adds work.
 Only this report changed. Verification was call-chain and draw-state inspection
 plus the small production-template counting probe described above; no runtime
 instrumentation, application rebuild, deployment or new device timing claim.
+
+## Implemented effect follow-up
+
+The bounded effect optimizations are now implemented:
+
+- Burst/hold components and lane beams skip geometry when their final packed
+  alpha is zero. Visible components retain their original fade equations.
+- The two PGREAT glow fans share center/perimeter vertices, including the
+  separately evaluated seam endpoint. Default PGREAT uses 380 vertices instead
+  of 504, saving 1,984 transient vertex bytes per visible burst. Its 212
+  triangles and visible coverage are unchanged. Hold glows share vertices too.
+- Glow/ring samples and fixed burst-spark directions share immutable tables
+  with the original float expressions. Animated hold directions remain dynamic.
+- The appearance preview uses the same sampled, indexed fans through its
+  existing UI batching and coordinate conversion.
+- Active beams retain their original geometry and gradient, with a conservative
+  drawable-pixel scissor behind opaque covers. Four projected corners, a
+  one-pixel guard and explicit reset protect visible edges and later draws.
+  There is no projection work for absent beams or uncovered lanes. Invalid
+  projection/viewport bounds fall back to the original unclipped draw.
+
+Regressions reproduced the original invisible-tail submissions and PGREAT
+vertex-upload excess. Rendering checks compare indexed fans with the original
+triangle stream across batch rollover, and covered beams with uncut references
+under top/bottom/overlapping covers, pitched/flat cameras and viewport offsets.
+The checks also cover zero-alpha beam uploads and later draws outside the clip.
+
+Non-MSAA fan comparisons and the 41 exported gameplay/preview images are
+byte-identical. A new 4x-MSAA stress comparison exposed small differences with
+shared indices. Temporary buffer inspection confirmed all 67,200 expanded
+vertex records were byte-identical; repeated renders were deterministic, and
+matching batch boundaries did not remove the difference. The fan check allows
+one channel step for isolated MSAA fans and three for hundreds of overlapping
+glows. Beam comparisons remain exact with and without MSAA. Diagnostic buffer
+dumping was removed; no production instrumentation remains.
+
+All four focused suites pass: lane effects, built-in Metal characterization,
+button-enabled/preview behavior and UI batching. Desktop main and the unsigned
+iOS build pass. Independent read-only code review found no correctness issues.
+
+The numeric text atlas remains a separate follow-up. Device GPU-time savings
+have not been measured, and visible input feedback still adds rendering work.

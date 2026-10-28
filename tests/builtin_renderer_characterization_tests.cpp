@@ -17,6 +17,9 @@
 #include "settings/BuiltInScratchGradient.h"
 #include "view/DropdownView.h"
 #include "view/KeybombPreviewView.h"
+#include "scene/play/KeybombEffect.h"
+#include "scene/play/LaneBeamClip.h"
+#include "scene/play/GameplayNoteSubmissionOrder.h"
 #include "view/IconText.h"
 #include "scene/SettingsPreviewAutoPlay.h"
 #include "scene/SettingsPreviewPlayback.h"
@@ -395,11 +398,11 @@ struct RenderTarget {
   bgfx::FrameBufferHandle framebuffer = BGFX_INVALID_HANDLE;
 };
 
-RenderTarget createRenderTarget() {
+RenderTarget createRenderTarget(uint64_t flags = BGFX_TEXTURE_RT) {
   RenderTarget target;
   target.output = bgfx::createTexture2D(
       kDrawableWidth, kDrawableHeight, false, 1, bgfx::TextureFormat::BGRA8,
-      BGFX_TEXTURE_RT);
+      flags);
   target.readback = bgfx::createTexture2D(
       kDrawableWidth, kDrawableHeight, false, 1, bgfx::TextureFormat::BGRA8,
       BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
@@ -963,6 +966,179 @@ public:
     return {.state = state, .projection = std::move(projection)};
   }
 };
+
+void verifyRadialGradientPixels(const RenderTarget &target, bool multisampled = false) {
+  const auto render = [&](bool reference, int fanCount) {
+    configureGeometryAndViews(target.framebuffer);
+    bgfx::touch(rendering::clear_view);
+    rendering::SimpleBatchRenderer batch;
+    batch.setSubmitView(rendering::ui_view);
+    batch.begin();
+    // Include subpixel radii, translucent centers, overlap and enough fans to
+    // cross the batch index limit. Index reuse must not alter the gradient.
+    for (int i = 0; i < fanCount; ++i) {
+      const float x = 100 + (i % 10) * 95.0F;
+      const float y = 100 + (i % 4) * 120.0F;
+      const float radius = i % 3 == 0 ? 0.3F : i % 3 == 1 ? 17.5F : 54.0F;
+      const uint32_t center = 0x0800BFFF, edge = 0x0000BFFF;
+      if (!reference) {
+        batch.addRadialGradientCircle(x, y, radius, center, edge);
+      } else {
+        for (int j = 0; j < 32; ++j) {
+          const float a = 2 * std::numbers::pi_v<float> * j / 32;
+          const float b = 2 * std::numbers::pi_v<float> * (j + 1) / 32;
+          batch.addTriangleColors(x, y, x + std::cos(a) * radius,
+              y + std::sin(a) * radius, x + std::cos(b) * radius,
+              y + std::sin(b) * radius, center, edge, edge);
+        }
+      }
+    }
+    batch.end();
+    return readPixels(target);
+  };
+  for (const int count : {3, 700}) {
+    const auto indexed = render(false, count), reference = render(true, count);
+    int maximumDifference = 0;
+    for (std::size_t i = 0; i < indexed.size(); ++i) {
+      maximumDifference = std::max(maximumDifference,
+          std::abs(int(indexed[i]) - int(reference[i])));
+    }
+    // Metal MSAA can round indexed geometry differently despite byte-identical
+    // expanded triangle streams. Permit one channel step for isolated fans,
+    // and three for the hundreds of overlapping glows in the rollover case.
+    const int tolerance = multisampled ? (count == 3 ? 1 : 3) : 0;
+    expect(maximumDifference <= tolerance,
+           "indexed radial gradients preserve pixels within MSAA rounding bounds");
+  }
+}
+
+void verifyInvisibleBeamUpload(const RenderTarget &target) {
+  const auto uploaded = [&](long long releasedAgo) {
+    configureGeometryAndViews(target.framebuffer);
+    bgfx::touch(rendering::clear_view);
+    SyntheticChartFixture fixture;
+    Judge judge(fixture.chart->Meta.Rank);
+    BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 2500, false);
+    renderer.configure(presentationConfig(0));
+    renderer.onLanePressed(0, JudgeResult(None, 0), kRenderMicros - 200000);
+    renderer.onLaneReleased(0, kRenderMicros - releasedAgo);
+    const auto capacity = bgfx::getCaps()->limits.maxTransientVbSize /
+                          sizeof(rendering::PosColorVertex);
+    const auto before = bgfx::getAvailTransientVertexBuffer(
+        capacity, rendering::PosColorVertex::ms_decl);
+    rendering::UiBatchRenderer batch;
+    batch.beginFrame();
+    RenderContext context(batch);
+    {
+      RenderContext::UiBatchScope scope(context);
+      renderer.render(context, kRenderMicros, kRenderMicros);
+    }
+    const auto count = before - bgfx::getAvailTransientVertexBuffer(
+        capacity, rendering::PosColorVertex::ms_decl);
+    (void)readPixels(target);
+    return count;
+  };
+  // At 199 ms the float fade is positive but alpha truncates to byte zero;
+  // at 200 ms the lifetime guard removes the beam entirely.
+  expect(uploaded(199000) == uploaded(200000),
+         "packed-zero-alpha beams use no additional transient vertices");
+}
+
+void verifyCoveredBeamPixels(const RenderTarget &target) {
+  const std::array<lane_cover::State, 4> covers{{
+      {},
+      {.laneCoverPercent = 45, .laneCoverEnabled = true},
+      {.laneCoverPercent = 35, .laneCoverEnabled = true,
+       .liftEnabled = true, .liftRatio = 0.2F,
+       .hiddenEnabled = true, .hiddenRatio = 0.25F},
+      {.laneCoverPercent = 80, .laneCoverEnabled = true,
+       .hiddenEnabled = true, .hiddenRatio = 0.6F}}};
+  for (std::size_t scenario = 0; scenario < covers.size(); ++scenario) {
+    const auto render = [&](bool reference) {
+      configureGeometryAndViews(target.framebuffer);
+      bgfx::touch(rendering::clear_view);
+      SyntheticChartFixture fixture;
+      Judge judge(fixture.chart->Meta.Rank);
+      BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 2500, false);
+      Recorder recorder;
+      renderer.setCharacterizationRecorder(&recorder);
+      auto config = presentationConfig(0);
+      config.laneBeamsEnabled = !reference;
+      config.laneBeamLengthPercent = scenario == 1 ? 65 : 100;
+      renderer.configure(config);
+      // Nonzero viewport origin and both flat/pitched camera projections.
+      const float angle = scenario % 2 ? 13.4F : 0.0F;
+      rendering::game_camera.edit()
+          .setPosition({4, 2 - std::tan(bx::toRad(angle)) * 2.1F, -2.1F})
+          .setLookAt({4, 2, 0}).setFov(120)
+          .setViewRect(13, 17, kDrawableWidth - 26, kDrawableHeight - 34).commit();
+      rendering::game_camera.render(true);
+      renderer.applyLaneCoverState(covers[scenario], true);
+      for (int lane : fixture.chart->Meta.GetTotalLaneIndices())
+        renderer.onLanePressed(lane, JudgeResult(None, 0), kRenderMicros);
+      rendering::UiBatchRenderer uiBatch;
+      uiBatch.beginFrame();
+      RenderContext context(uiBatch);
+      {
+        RenderContext::UiBatchScope scope(context);
+        renderer.render(context, kRenderMicros, kRenderMicros);
+      }
+      const auto &frame = recorder.frames.back();
+      const auto clip = lane_beam::coverScissor(rendering::game_camera,
+          frame.playAreaLeftX, frame.playAreaWidth, frame.judgeY,
+          frame.upperBound, frame.noteVisibleUpperBound, covers[scenario]);
+      if (scenario == 0) {
+        expect(!clip, "uncovered beams do not introduce a scissor");
+      } else {
+        expect(clip && clip->height < rendering::game_camera.getViewHeight(),
+               "opaque covers restrict the beam's drawable-pixel region");
+      }
+      if (reference) {
+        // Original uncut beam quads, submitted at their original sorted depth.
+        rendering::SimpleBatchRenderer beams;
+        beams.setSubmitDepth(gameplay_note_submission_order::kLaneBeamDepth);
+        beams.begin();
+        const auto laneCount = fixture.chart->Meta.GetTotalLaneIndices().size();
+        for (std::size_t i = 0; i < laneCount; ++i) {
+          beams.addRectVerticalGradient(frame.playAreaLeftX + i * frame.noteRenderWidth,
+              frame.judgeY, frame.noteRenderWidth,
+              (frame.upperBound - frame.judgeY) * (config.laneBeamLengthPercent / 100.0F),
+              Color(255, 255, 255, 51).toABGR(), Color(255, 255, 255, 0).toABGR());
+        }
+        beams.end();
+      }
+      // A later draw outside the clipped lane window catches leaked scissors.
+      rendering::SimpleBatchRenderer marker;
+      marker.setSubmitView(rendering::ui_view);
+      marker.begin();
+      marker.addRect(20, 20, 15, 15, 0xFF66BBFF);
+      marker.end();
+      return readPixels(target);
+    };
+    expect(render(false) == render(true),
+           "covered beam clipping preserves the uncut gradient and later draws");
+  }
+}
+
+void verifyKeybombVertexReuse(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  bgfx::touch(rendering::clear_view);
+  rendering::SimpleBatchRenderer batch;
+  batch.begin();
+  const auto capacity = bgfx::getCaps()->limits.maxTransientVbSize /
+                        sizeof(rendering::PosColorVertex);
+  const auto available = [&] {
+    return bgfx::getAvailTransientVertexBuffer(capacity,
+                                               rendering::PosColorVertex::ms_decl);
+  };
+  const auto before = available();
+  keybomb::draw(batch, {PGreat, 0}, 80000, 4, 0, 2, {});
+  batch.end();
+  const auto uploaded = before - available();
+  expect(uploaded > 0 && uploaded <= 380,
+         "PGREAT shares glow vertices within its transient upload budget");
+  (void)readPixels(target);
+}
 
 void verifyRoundedRectangleSamples(const RenderTarget &target) {
   const auto render = [&](bool reference) {
@@ -4875,9 +5051,16 @@ int main() {
   rendering::PosTexVertex::init();
   rendering::PosTexCoord0Vertex::init();
   RenderTarget target = createRenderTarget();
+  RenderTarget msaaTarget = createRenderTarget(BGFX_TEXTURE_RT_MSAA_X4);
 
   if (failures == 0) {
     try {
+      verifyRadialGradientPixels(msaaTarget, true);
+      verifyCoveredBeamPixels(msaaTarget);
+      verifyRadialGradientPixels(target);
+      verifyInvisibleBeamUpload(target);
+      verifyCoveredBeamPixels(target);
+      verifyKeybombVertexReuse(target);
       verifyKeybombPreview(target);
       verifyKeybombRendering(target);
       verifyJudgementIndicatorContinuousAverage(target);
@@ -4997,6 +5180,7 @@ int main() {
     }
   }
 
+  destroyRenderTarget(msaaTarget);
   destroyRenderTarget(target);
   rendering::ShaderManager::getInstance().release();
   rendering::UniformCache::getInstance().destroyAll();

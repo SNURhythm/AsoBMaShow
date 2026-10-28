@@ -414,7 +414,7 @@ private:
   void updateJudgementCounterText();
   void synchronizeCapturedJudgementHud(const PlayfieldVisualState &);
   void publishJudgementCounterSnapshot(const JudgementCounterSnapshot &snapshot);
-  void drawLaneBeam(int lane, const LaneState &laneState, long long time);
+  bool drawLaneBeam(int lane, const LaneState &laneState, long long time);
   void drawStartLaneIndicators();
   void drawLaneCover();
   void layoutLaneCoverNumberTexts();

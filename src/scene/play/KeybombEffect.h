@@ -2,10 +2,24 @@
 
 #include "LaneEffects.h"
 #include "../../settings/KeybombSettings.h"
+#include "../../rendering/UnitCircleSamples.h"
 #include <cmath>
 #include <numbers>
 
 namespace keybomb {
+template <int Sparks>
+const std::array<rendering::UnitCircleSample, Sparks> &burstSparkDirections() {
+  static const auto samples = [] {
+    std::array<rendering::UnitCircleSample, Sparks> result{};
+    for (int i = 0; i < Sparks; ++i) {
+      const float angle = 2 * std::numbers::pi_v<float> * i / Sparks + 0.23F;
+      result[i] = {std::cos(angle), std::sin(angle)};
+    }
+    return result;
+  }();
+  return samples;
+}
+
 // Stateless, bounded geometry: only the renderer evaluates the animation.
 // The newest judgement replaces the previous burst on that lane, keeping dense
 // jacks bounded without queues or particle objects in the input path.
@@ -38,25 +52,22 @@ void draw(Batch &batch, LaneKeybombEvent event, long long now,
   // World-space triangle fans avoid the pixel-sized rounding threshold in UI
   // circles. A soft center-to-edge gradient uses fixed geometry at every size.
   const auto glow = [&](float r, std::uint32_t rgbColor, float alpha) {
-    constexpr int segments = 32;
-    for (int i = 0; i < segments; ++i) {
-      const float a = 2 * std::numbers::pi_v<float> * i / segments;
-      const float b = 2 * std::numbers::pi_v<float> * (i + 1) / segments;
-      batch.addTriangleColors(x, y, x + std::cos(a) * r, y + std::sin(a) * r,
-                              x + std::cos(b) * r, y + std::sin(b) * r,
-                              color(rgbColor, alpha), rgbColor, rgbColor);
-    }
+    const auto center = color(rgbColor, alpha);
+    if ((center >> 24) == 0) return;
+    batch.addRadialGradientCircle(x, y, r, center, rgbColor);
   };
   glow(radius * (hit ? 0.9F : 0.7F) * (1 - t * 0.45F), rgb, (hit ? 240 : 65) * fade);
   const auto ring = [&](float r, float alpha, bool broken) {
+    const auto ringColor = color(rgb, alpha * fade);
+    if ((ringColor >> 24) == 0) return;
     constexpr int segments = 40;
+    const auto &samples = rendering::unitCircleSamples<segments>();
     for (int i = 0; i < segments; ++i) {
       if (broken && i % 10 >= 6) continue;
-      const float a = 2 * std::numbers::pi_v<float> * i / segments;
-      const float b = 2 * std::numbers::pi_v<float> * (i + 1) / segments;
-      batch.addLine(x + std::cos(a) * r, y + std::sin(a) * r,
-                    x + std::cos(b) * r, y + std::sin(b) * r,
-                    radius * (hit ? 0.055F : 0.025F) * (1 - t * 0.6F), color(rgb, alpha * fade));
+      const auto a = samples[i], b = samples[i + 1];
+      batch.addLine(x + a.x * r, y + a.y * r,
+                    x + b.x * r, y + b.y * r,
+                    radius * (hit ? 0.055F : 0.025F) * (1 - t * 0.6F), ringColor);
     }
   };
   if (hit || event.judgement == Kpoor) ring(ringRadius, hit ? 230 : 75, !good);
@@ -64,13 +75,15 @@ void draw(Batch &batch, LaneKeybombEvent event, long long now,
   if (perfect || great) {
     const int sparks = perfect ? 8 : 6;
     for (int i = 0; i < sparks; ++i) {
-      const float a = 2 * std::numbers::pi_v<float> * i / sparks + 0.23F;
-      const float dx = std::cos(a), dy = std::sin(a);
+      const auto c = color(i % 2 ? rgb : 0x00FFFFFF, 230 * fade);
+      if ((c >> 24) == 0) continue;
+      const auto direction = perfect ? burstSparkDirections<8>()[i]
+                                     : burstSparkDirections<6>()[i];
+      const float dx = direction.x, dy = direction.y;
       const float r = radius * (0.28F + expansion * (i % 2 ? 0.80F : 1.15F));
       const float length = radius * (i % 2 ? 0.18F : 0.28F) * (1 - t);
       const float width = radius * 0.055F * (1 - t);
       const float cx = x + dx * r, cy = y + dy * r;
-      const auto c = color(i % 2 ? rgb : 0x00FFFFFF, 230 * fade);
       batch.addTriangle(cx + dx * length, cy + dy * length,
                         cx - dy * width, cy + dx * width,
                         cx + dy * width, cy - dx * width, c);
@@ -79,22 +92,24 @@ void draw(Batch &batch, LaneKeybombEvent event, long long now,
                         cx + dy * width, cy - dx * width, c);
     }
   } else if (!hit && event.judgement != Kpoor) {
-    for (int i = 0; i < 5; ++i) {
+    const auto fragmentColor = color(rgb, 150 * fade);
+    for (int i = 0; i < 5 && (fragmentColor >> 24) != 0; ++i) {
       const float dx = (i - 2) * radius * 0.35F * (0.3F + expansion);
       const float dy = radius * expansion * (i % 2 ? 0.5F : 0.9F);
       batch.addLine(x + dx, y + dy, x + dx * 1.2F,
                     y + dy + radius * 0.15F,
-                    radius * 0.045F, color(rgb, 150 * fade));
+                    radius * 0.045F, fragmentColor);
     }
   }
   if (hit) {
     const float core = radius * 0.23F * (1 - t);
     glow(core * 1.6F, 0x00FFFFFF, 255 * fade);
-    if (perfect) {
+    const auto crossColor = color(0x00FFFFFF, 200 * fade);
+    if (perfect && (crossColor >> 24) != 0) {
       batch.addLine(x - core * 2.5F, y, x + core * 2.5F, y,
-                    core * 0.35F, color(0x00FFFFFF, 200 * fade));
+                    core * 0.35F, crossColor);
       batch.addLine(x, y - core * 2.5F, x, y + core * 2.5F,
-                    core * 0.35F, color(0x00FFFFFF, 200 * fade));
+                    core * 0.35F, crossColor);
     }
   }
 }
@@ -116,15 +131,13 @@ void drawHold(Batch &batch, Judgement judgement, long long now,
     return rgb | (static_cast<std::uint32_t>(std::clamp(alpha * opacity, 0.0F, 255.0F)) << 24);
   };
   const float glowRadius = radius * (0.36F + pulse * 0.12F);
-  for (int i = 0; i < 32; ++i) {
-    const float a = 2 * std::numbers::pi_v<float> * i / 32;
-    const float b = 2 * std::numbers::pi_v<float> * (i + 1) / 32;
-    batch.addTriangleColors(x, y, x + std::cos(a) * glowRadius, y + std::sin(a) * glowRadius,
-                            x + std::cos(b) * glowRadius, y + std::sin(b) * glowRadius,
-                            color(140 * pulse), rgb, rgb);
-  }
+  const auto glowColor = color(140 * pulse);
+  if ((glowColor >> 24) != 0)
+    batch.addRadialGradientCircle(x, y, glowRadius, glowColor, rgb);
   for (int i = 0; i < 8; ++i) {
     const float age = std::fmod(phase * 4 + i / 8.0F, 1.0F);
+    const auto c = color(230 * std::sin(age * std::numbers::pi_v<float>));
+    if ((c >> 24) == 0) continue;
     const float a = 2 * std::numbers::pi_v<float> * i / 8 + angle;
     const float dx = std::cos(a), dy = std::sin(a);
     const float distance = radius * (0.15F + age * 1.15F);
@@ -132,7 +145,6 @@ void drawHold(Batch &batch, Judgement judgement, long long now,
     const float cy = y + dy * distance + radius * age * age * 0.5F;
     const float length = radius * (0.05F + (1 - age) * 0.10F);
     const float width = radius * 0.035F * (1 - age);
-    const auto c = color(230 * std::sin(age * std::numbers::pi_v<float>));
     batch.addTriangle(cx + dx * length, cy + dy * length,
                       cx - dy * width, cy + dx * width,
                       cx + dy * width, cy - dx * width, c);
