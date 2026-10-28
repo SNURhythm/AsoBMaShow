@@ -4234,6 +4234,45 @@ void verifyPreviewPacemakerDiff(const RenderTarget &target) {
   rendering::updateUIScale(kDrawableWidth, kDrawableHeight);
 }
 
+void verifyDeferredGameplayHudTextures(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  SyntheticChartFixture fixture;
+  Judge judge(fixture.chart->Meta.Rank);
+  BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 500, true);
+  const auto *combo = renderer.comboTextViewForTesting();
+  expect(!bgfx::isValid(combo->textureHandle()) && combo->textureWidth() > 0 &&
+             combo->textureHeight() > 0,
+         "HUD text retains metrics without uploading before drawing");
+  rendering::UiBatchRenderer batch;
+  const auto draw = [&] {
+    batch.beginFrame();
+    RenderContext context(batch);
+    {
+      RenderContext::UiBatchScope scope(context);
+      renderer.render(context, kRenderMicros, kRenderMicros);
+    }
+    bgfx::frame();
+  };
+  renderer.onJudge(JudgeResult(Great, -15'000), 123, 456,
+                   {.songTimeMicros = kRenderMicros,
+                    .visualTimeMicros = kRenderMicros,
+                    .bgaTimeMicros = kRenderMicros});
+  draw();
+  const auto *before = renderer.judgementFeedbackTextViewsForTesting()[0];
+  const auto text = before->getText();
+  expect(bgfx::isValid(before->textureHandle()) && !text.empty(),
+         "visible HUD text materializes when drawn");
+  renderer.setJudgementFeedbackStyle(75, true, 75, true);
+  const auto *replacement = renderer.judgementFeedbackTextViewsForTesting()[0];
+  expect(!bgfx::isValid(replacement->textureHandle()) &&
+             replacement->getText() == text && replacement->textureWidth() > 0 &&
+             replacement->textureHeight() > 0,
+         "style replacement preserves text and metrics while deferring upload");
+  draw();
+  expect(bgfx::isValid(replacement->textureHandle()),
+         "restyled HUD text materializes on its next draw");
+}
+
 void verifyIndividualJudgementLabelVisibility(const RenderTarget &target) {
   configureGeometryAndViews(target.framebuffer);
   SyntheticChartFixture fixture;
@@ -4741,6 +4780,7 @@ int main() {
       verifyPreparedFrameRetainsRecentJudgementIndicatorSamples();
       verifyTimingOnlySampleDoesNotBecomeAHudJudgement();
       verifyPreparedFrameKeepsTheLatestNonSampledJudgementForHudText();
+      verifyDeferredGameplayHudTextures(target);
       verifyPreparedFrameUsesSavedBestGhostForBuiltInBestPacemaker();
       verifyPreparedFrameKeepsLinearBestPacemakerWithoutSavedGhost();
       verifyPreparedFrameKeepsPacemakerOffWithSavedBestGhost();

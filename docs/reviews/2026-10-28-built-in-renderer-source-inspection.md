@@ -99,3 +99,20 @@ construction/replacement behavior and generated Metal acquisition branch;
 reviewed the diff. No application tests or new device capture were needed to
 establish these source findings. Recommended implementation order: deferred
 HUD materialization first, long-note scratch allocation second.
+
+## Implemented HUD follow-up
+
+Dynamic judgement, score/combo, pacemaker, gauge, lane-cover and counter TextViews
+now enable deferred texture materialization immediately after construction.
+Judgement font/style replacements preserve the policy. Metrics still update at
+mutation time; drawing creates the final texture. Static title, option and
+autoplay labels retain their existing behavior. No global TextView semantics,
+frame pacing or input handling changed. Long-note scratch is a separate,
+unimplemented candidate.
+
+The new production-renderer regression failed before the change for eager
+initial combo and replacement uploads, then passed with nonzero pre-draw metrics
+and successful next-draw materialization. Desktop main and the selected built-in
+Metal characterization, Metal text, and text-input suites pass. No device FPS
+or frame-time improvement is claimed from these correctness checks.
+The unsigned iOS build also passes via the repository's build-only helper.
