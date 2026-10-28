@@ -176,6 +176,7 @@ asobmashow_label_tests(area_practice
 )
 
 asobmashow_label_tests(area_results
+    chart_goal_tests
     reminder_plan_tests
     streak_model_tests
     streak_store_tests
@@ -340,6 +341,7 @@ asobmashow_label_tests(area_downloads
 )
 
 asobmashow_label_tests(area_profiles
+    chart_goal_tests
     durable_payload_contract_tests
     foundation_profile_archive_faults
     foundation_profile_archive_portable

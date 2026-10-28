@@ -10078,6 +10078,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     endif()
 
     include("${CMAKE_SOURCE_DIR}/cmake/StreakTests.cmake")
+    include("${CMAKE_SOURCE_DIR}/cmake/ChartGoalTests.cmake")
     include("${CMAKE_SOURCE_DIR}/cmake/TestGroupCatalog.cmake")
 endif()
 
