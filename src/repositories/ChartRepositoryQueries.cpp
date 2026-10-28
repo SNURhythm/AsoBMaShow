@@ -3967,7 +3967,8 @@ std::vector<GoalRecommendation> ChartRepository::Session::GoalRecommendations(in
   while ((rc = sqlite3_step(query)) == SQLITE_ROW) {
     if (target>=100) {
       rows.push_back({.sha256=sqliteColumnString(query, 0), .longNoteMode=sqlite3_column_int(query, 1),
-          .target=sqlite3_column_int(query, 2), .gaugeValue=static_cast<float>(sqlite3_column_double(query, 3)),
+          .target=sqlite3_column_int(query, 2), .remaining=target==600 ? sqlite3_column_int(query, 8) : 0,
+          .gaugeValue=static_cast<float>(sqlite3_column_double(query, 3)),
           .gaugeBorder=static_cast<float>(sqlite3_column_double(query, 4)), .deathNotes=sqlite3_column_int(query, 5),
           .totalNotes=sqlite3_column_int(query, 6)});
     } else rows.push_back({sqliteColumnString(query, 0), sqlite3_column_int(query, 1), sqlite3_column_int(query, 2),

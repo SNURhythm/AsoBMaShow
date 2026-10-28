@@ -528,7 +528,9 @@ void ChartGoalsScene::build() {
         if (rank>=100) {
           std::ostringstream value;
           value << std::fixed << std::setprecision(1);
-          if (rank<=300) {
+          if (rank==600) {
+            label(row, i18n::format("goals.ui.combo_breaks", {{"count",std::to_string(candidate.remaining)}}), 18);
+          } else if (rank<=300) {
             value << candidate.gaugeValue;
             std::ostringstream border; border << candidate.gaugeBorder;
             label(row, i18n::format("goals.ui.gauge_value", {{"value",value.str()}, {"border",border.str()}}), 18);

@@ -280,7 +280,7 @@ void testGaugeRecommendationSummaries() {
   pending.score.chartMd5 = std::string(32, 'a');
   pending.score.maxScore = 200;
   pending.score.score = 150;
-  pending.score.comboBreak = 1;
+  pending.score.comboBreak = 5;
   pending.score.clearType = kClearTypeFailedRank;
   ScoreProvenanceBuildInput input;
   input.chartMeta.SHA256 = pending.score.chartSha256;
@@ -310,20 +310,23 @@ void testGaugeRecommendationSummaries() {
   evidence.values = {55,75,74.9F,0,0,100,0,0,0};
   evidence.deathPassedNotes = {0,0,0,90,89,-1,0,0,0};
   save();
-  assert(queryInt(path, "SELECT COUNT(*) FROM goal_gauge_best") == 6);
-  assert(queryInt(path, "SELECT COUNT(*) FROM goal_gauge_best WHERE gap<=CASE WHEN target<=300 THEN 5 ELSE 0.1 END") == 4);
+  assert(queryInt(path, "SELECT COUNT(*) FROM goal_gauge_best") == 5);
+  assert(queryInt(path, "SELECT combo_break FROM goal_combo_best") == 5);
+  assert(queryInt(path, "SELECT COUNT(*) FROM goal_gauge_best WHERE gap<=CASE WHEN target<=300 THEN 5 ELSE 0.1 END") == 3);
   // Better evidence replaces only that gauge; worse attempts do not regress it.
-  pending.attemptId.back() = '1'; evidence.values[2] = 78; evidence.deathPassedNotes[3] = 95;
+  pending.attemptId.back() = '1'; pending.score.comboBreak = 1; evidence.values[2] = 78; evidence.deathPassedNotes[3] = 95;
   save();
-  pending.attemptId.back() = '2'; evidence.values[2] = 60; evidence.deathPassedNotes[3] = 80;
+  pending.attemptId.back() = '2'; pending.score.comboBreak = 2; evidence.values[2] = 60; evidence.deathPassedNotes[3] = 80;
   save();
   assert(queryInt(path, "SELECT gauge_value FROM goal_gauge_best WHERE target=300") == 78);
   assert(queryInt(path, "SELECT death_notes FROM goal_gauge_best WHERE target=400") == 95);
-  // A partial play cannot claim final groove values or whole-chart survival.
+  assert(queryInt(path, "SELECT combo_break FROM goal_combo_best") == 1);
+  // A partial play cannot claim final groove values, whole-chart survival, or near FC.
   pending.score.chartSha256 = std::string(64, 'b'); pending.attemptId.back() = '3';
-  evidence.passedNotes = 99; evidence.values[2] = 100; evidence.deathPassedNotes[4] = -1;
+  pending.score.comboBreak = 0; evidence.passedNotes = 99; evidence.values[2] = 100; evidence.deathPassedNotes[4] = -1;
   save();
   assert(queryInt(path, "SELECT COUNT(*) FROM goal_gauge_best WHERE chart_sha256 LIKE 'b%'") == 1);
+  assert(queryInt(path, "SELECT COUNT(*) FROM goal_combo_best WHERE chart_sha256 LIKE 'b%'") == 0);
   // Modified, unknown, and course evidence cannot suggest a normal chart lamp.
   pending.score.chartSha256 = std::string(64, 'c'); pending.attemptId.back() = '4';
   evidence.passedNotes = 100; pending.score.provenance.practice = true;
@@ -336,6 +339,7 @@ void testGaugeRecommendationSummaries() {
   const auto recorded = evidence; evidence = {};
   save();
   assert(queryInt(path, "SELECT COUNT(*) FROM goal_gauge_best WHERE chart_sha256 LIKE 'c%'") == 0);
+  assert(queryInt(path, "SELECT COUNT(*) FROM goal_combo_best WHERE chart_sha256 LIKE 'c%'") == 0);
   // PMS clear borders differ from standard BMS; use the recorded rules/profile.
   pending.attemptId.back() = '7'; pending.score.chartSha256 = std::string(64, 'd'); evidence = recorded;
   input.ruleset = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
@@ -348,14 +352,23 @@ void testGaugeRecommendationSummaries() {
   sqlite3 *blocked = nullptr;
   assert(sqlite3_open(path.string().c_str(), &blocked) == SQLITE_OK);
   assert(sqlite3_exec(blocked, "CREATE TRIGGER reject_gauge_summary BEFORE INSERT ON goal_gauge_best BEGIN SELECT RAISE(ABORT,'test failure'); END", nullptr,nullptr,nullptr)==SQLITE_OK);
-  pending.attemptId.back() = '8';
+  pending.attemptId.back() = '8'; pending.score.chartSha256 = std::string(64, 'e');
   assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::StorageFailure);
   assert(queryInt(path, "SELECT COUNT(*) FROM scores") == 8);
+  assert(queryInt(path, "SELECT COUNT(*) FROM goal_combo_best WHERE chart_sha256 LIKE 'e%'") == 0);
   assert(sqlite3_exec(blocked,"DROP TRIGGER reject_gauge_summary",nullptr,nullptr,nullptr)==SQLITE_OK);
   sqlite3_close(blocked);
-  // Pre-feature profiles start with empty summaries; existing scores stay intact.
+  // The preceding build's current-version profiles gain an empty combo summary.
   scores.Shutdown();
   sqlite3 *db = nullptr;
+  assert(sqlite3_open(path.string().c_str(), &db) == SQLITE_OK);
+  assert(sqlite3_exec(db, "DROP TABLE goal_combo_best", nullptr, nullptr, nullptr)==SQLITE_OK);
+  sqlite3_close(db);
+  assert(scores.EnsureSchema());
+  assert(queryInt(path, "SELECT COUNT(*) FROM goal_combo_best") == 0);
+  assert(queryInt(path, "SELECT COUNT(*) FROM scores") == 8);
+  // Pre-feature profiles start with empty summaries; existing scores stay intact.
+  scores.Shutdown();
   assert(sqlite3_open(path.string().c_str(), &db) == SQLITE_OK);
   assert(sqlite3_exec(db, "DROP TABLE goal_gauge_best; PRAGMA user_version=14;", nullptr, nullptr, nullptr)==SQLITE_OK);
   sqlite3_close(db);

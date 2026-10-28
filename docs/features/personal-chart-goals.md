@@ -23,11 +23,14 @@ cards show jacket artwork and a tinted difficulty-table label (or chart level
 when no table label is available).
 
 Lamp recommendation groups use the recorded evidence for Assisted Easy, Easy,
-Normal, Hard, EX Hard, and Full Combo (Hazard). Groove gauges qualify within
+Normal, Hard, and EX Hard. Groove gauges qualify within
 **5 gauge points** below their ruleset/profile's clear border; full-chart
 background clears also qualify. Survival gauges qualify when they first died in
 the **final 10% of notes**, or survived the complete chart in the background.
 Incomplete plays cannot supply final groove values or claim complete survival.
+Full Combo recommendations use the lowest **combo-break count**, independently
+of Hazard, and qualify with **1–5 combo breaks** in a completed eligible play.
+They are ordered by fewest breaks and show that count on the chart card.
 
 Each group hides lamps already earned and sorts by closeness: gauge points below
 the border for groove gauges, remaining chart proportion after death for survival
@@ -37,8 +40,9 @@ any score target. Background evidence is a recommendation, not an earned lamp.
 Only eligible, unmodified local chart plays with recorded evidence contribute;
 unknown historical evidence, practice/autoplay/assisted plays, altered playback,
 and course stages do not. A per-profile summary retains the best evidence for
-each chart/LN mode/lamp (at most six rows), updated atomically with score inserts.
-Existing profiles start with empty gauge summaries. Browsing uses these indexed
+each chart/LN mode/lamp (five gauge rows plus one best combo count), updated
+atomically with score inserts. Existing Hazard proximity rows are ignored.
+Existing profiles start with empty gauge and combo summaries. Browsing uses these indexed
 summaries and the existing best-lamp cache, without scanning play history or replay
 files. Grade-family gauges are course evidence and do not create chart goals.
 
