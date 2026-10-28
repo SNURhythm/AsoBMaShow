@@ -1,0 +1,518 @@
+{
+  "source_commit": "5091b83ac3853089051f8004f32ab5eb23745507",
+  "host": "Apple M1 Pro",
+  "cpu_compilation": "Existing production native-test objects, -O1; component probes, not an application or phone profile",
+  "method": {
+    "replay": "Five batches of 2000 frames after 120 warmups; exact scene descriptor loop mirrored over parser objects, production store/capture; zero changed notes and all notes future; previous captured noteSnapshot released before each frame. build/apply/total values are independently calculated batch medians in microseconds. Two clocks within each iteration included in total.",
+    "submission": "Actual gameplay Skin2DRenderer::submit, counting fake batch/BGA backends, warmed resource catalog; five batches of 2000 frames, 120 warmups, base/retained/base/retained; diagnostic local copy uses thread-local cleared vectors only. No production code edited. Checksums cover submitted counts/textures and BGA ordinals/lifecycle counts, not full pixel or fallback equivalence.",
+    "gpu": "Headless Metal, positive blur strength 2/downsample 2/brightness 0.5; patterned opaque 256x256 still; 120 warmups and 300 measured frames each; normal view profiling disabled; repeated blend on/off within recompute and cached controls. Whole-frame GPU times. Nonblack and byte-identical RGBA readbacks across runs/resolutions verified outside timings; all prepared leases released. Diagnostic output-state toggle only; frame capacity acceptance assumed in this bounded unsaturated probe."
+  },
+  "replay": [
+    {
+      "notes": 1000,
+      "hcn20pct": 0,
+      "build_us": 14.248,
+      "apply_us": 4.665,
+      "total_us": 19.29,
+      "min_us": 19.116,
+      "max_us": 19.758,
+      "allocations": 2,
+      "bytes": 24832
+    },
+    {
+      "notes": 5000,
+      "hcn20pct": 0,
+      "build_us": 70.572,
+      "apply_us": 23.259,
+      "total_us": 94.211,
+      "min_us": 91.354,
+      "max_us": 94.609,
+      "allocations": 2,
+      "bytes": 120832
+    },
+    {
+      "notes": 10000,
+      "hcn20pct": 0,
+      "build_us": 141.578,
+      "apply_us": 46.348,
+      "total_us": 188.338,
+      "min_us": 183.125,
+      "max_us": 189.778,
+      "allocations": 2,
+      "bytes": 240832
+    },
+    {
+      "notes": 50000,
+      "hcn20pct": 0,
+      "build_us": 715.926,
+      "apply_us": 238.855,
+      "total_us": 955.12,
+      "min_us": 944.28,
+      "max_us": 956.192,
+      "allocations": 2,
+      "bytes": 1200832
+    },
+    {
+      "notes": 1000,
+      "hcn20pct": 1,
+      "build_us": 16.268,
+      "apply_us": 4.707,
+      "total_us": 21.358,
+      "min_us": 21.126,
+      "max_us": 21.715,
+      "allocations": 2,
+      "bytes": 24832
+    },
+    {
+      "notes": 5000,
+      "hcn20pct": 1,
+      "build_us": 80.554,
+      "apply_us": 23.344,
+      "total_us": 104.36,
+      "min_us": 103.184,
+      "max_us": 105.648,
+      "allocations": 2,
+      "bytes": 120832
+    },
+    {
+      "notes": 10000,
+      "hcn20pct": 1,
+      "build_us": 161.502,
+      "apply_us": 46.539,
+      "total_us": 208.568,
+      "min_us": 205.828,
+      "max_us": 210.761,
+      "allocations": 2,
+      "bytes": 240832
+    },
+    {
+      "notes": 50000,
+      "hcn20pct": 1,
+      "build_us": 864.354,
+      "apply_us": 239.837,
+      "total_us": 1105.065,
+      "min_us": 1082.603,
+      "max_us": 1107.628,
+      "allocations": 2,
+      "bytes": 1200832
+    }
+  ],
+  "submission": [
+    {
+      "mode": "submission",
+      "quads": 64,
+      "markers": 0,
+      "min_us": 2.648,
+      "median_us": 2.751,
+      "max_us": 2.773,
+      "allocations": 4,
+      "bytes": 31760,
+      "checksum": 7509782
+    },
+    {
+      "mode": "submission",
+      "quads": 256,
+      "markers": 0,
+      "min_us": 10.729,
+      "median_us": 10.853,
+      "max_us": 11.014,
+      "allocations": 4,
+      "bytes": 126992,
+      "checksum": 26942102
+    },
+    {
+      "mode": "submission",
+      "quads": 1024,
+      "markers": 0,
+      "min_us": 44.139,
+      "median_us": 44.264,
+      "max_us": 44.552,
+      "allocations": 4,
+      "bytes": 507920,
+      "checksum": 104671382
+    },
+    {
+      "mode": "submission",
+      "quads": 64,
+      "markers": 2,
+      "min_us": 2.916,
+      "median_us": 2.964,
+      "max_us": 2.975,
+      "allocations": 4,
+      "bytes": 32752,
+      "checksum": 10839591
+    },
+    {
+      "mode": "submission",
+      "quads": 256,
+      "markers": 2,
+      "min_us": 10.755,
+      "median_us": 10.882,
+      "max_us": 10.95,
+      "allocations": 4,
+      "bytes": 127984,
+      "checksum": 34158375
+    },
+    {
+      "mode": "submission",
+      "quads": 1024,
+      "markers": 2,
+      "min_us": 44.449,
+      "median_us": 44.643,
+      "max_us": 45.351,
+      "allocations": 4,
+      "bytes": 508912,
+      "checksum": 127433511
+    },
+    {
+      "mode": "submission-retained",
+      "quads": 64,
+      "markers": 0,
+      "min_us": 3.873,
+      "median_us": 4.985,
+      "max_us": 5.039,
+      "allocations": 0,
+      "bytes": 0,
+      "checksum": 7509782
+    },
+    {
+      "mode": "submission-retained",
+      "quads": 256,
+      "markers": 0,
+      "min_us": 10.527,
+      "median_us": 10.635,
+      "max_us": 12.141,
+      "allocations": 0,
+      "bytes": 0,
+      "checksum": 26942102
+    },
+    {
+      "mode": "submission-retained",
+      "quads": 1024,
+      "markers": 0,
+      "min_us": 43.717,
+      "median_us": 44.348,
+      "max_us": 44.496,
+      "allocations": 0,
+      "bytes": 0,
+      "checksum": 104671382
+    },
+    {
+      "mode": "submission-retained",
+      "quads": 64,
+      "markers": 2,
+      "min_us": 2.778,
+      "median_us": 2.792,
+      "max_us": 2.804,
+      "allocations": 0,
+      "bytes": 0,
+      "checksum": 10839591
+    },
+    {
+      "mode": "submission-retained",
+      "quads": 256,
+      "markers": 2,
+      "min_us": 10.585,
+      "median_us": 10.648,
+      "max_us": 10.65,
+      "allocations": 0,
+      "bytes": 0,
+      "checksum": 34158375
+    },
+    {
+      "mode": "submission-retained",
+      "quads": 1024,
+      "markers": 2,
+      "min_us": 44.008,
+      "median_us": 44.11,
+      "max_us": 44.264,
+      "allocations": 0,
+      "bytes": 0,
+      "checksum": 127433511
+    },
+    {
+      "mode": "submission",
+      "quads": 64,
+      "markers": 0,
+      "min_us": 2.671,
+      "median_us": 2.707,
+      "max_us": 2.758,
+      "allocations": 4,
+      "bytes": 31760,
+      "checksum": 7509782
+    },
+    {
+      "mode": "submission",
+      "quads": 256,
+      "markers": 0,
+      "min_us": 10.816,
+      "median_us": 10.885,
+      "max_us": 11.072,
+      "allocations": 4,
+      "bytes": 126992,
+      "checksum": 26942102
+    },
+    {
+      "mode": "submission",
+      "quads": 1024,
+      "markers": 0,
+      "min_us": 43.967,
+      "median_us": 43.987,
+      "max_us": 44.164,
+      "allocations": 4,
+      "bytes": 507920,
+      "checksum": 104671382
+    },
+    {
+      "mode": "submission",
+      "quads": 64,
+      "markers": 2,
+      "min_us": 2.904,
+      "median_us": 2.913,
+      "max_us": 2.924,
+      "allocations": 4,
+      "bytes": 32752,
+      "checksum": 10839591
+    },
+    {
+      "mode": "submission",
+      "quads": 256,
+      "markers": 2,
+      "min_us": 10.707,
+      "median_us": 10.775,
+      "max_us": 10.825,
+      "allocations": 4,
+      "bytes": 127984,
+      "checksum": 34158375
+    },
+    {
+      "mode": "submission",
+      "quads": 1024,
+      "markers": 2,
+      "min_us": 44.092,
+      "median_us": 44.381,
+      "max_us": 44.461,
+      "allocations": 4,
+      "bytes": 508912,
+      "checksum": 127433511
+    },
+    {
+      "mode": "submission-retained",
+      "quads": 64,
+      "markers": 0,
+      "min_us": 2.59,
+      "median_us": 2.619,
+      "max_us": 2.682,
+      "allocations": 0,
+      "bytes": 0,
+      "checksum": 7509782
+    },
+    {
+      "mode": "submission-retained",
+      "quads": 256,
+      "markers": 0,
+      "min_us": 10.394,
+      "median_us": 10.521,
+      "max_us": 10.738,
+      "allocations": 0,
+      "bytes": 0,
+      "checksum": 26942102
+    },
+    {
+      "mode": "submission-retained",
+      "quads": 1024,
+      "markers": 0,
+      "min_us": 43.883,
+      "median_us": 44.139,
+      "max_us": 44.322,
+      "allocations": 0,
+      "bytes": 0,
+      "checksum": 104671382
+    },
+    {
+      "mode": "submission-retained",
+      "quads": 64,
+      "markers": 2,
+      "min_us": 2.888,
+      "median_us": 2.912,
+      "max_us": 2.919,
+      "allocations": 0,
+      "bytes": 0,
+      "checksum": 10839591
+    },
+    {
+      "mode": "submission-retained",
+      "quads": 256,
+      "markers": 2,
+      "min_us": 10.618,
+      "median_us": 10.705,
+      "max_us": 11.05,
+      "allocations": 0,
+      "bytes": 0,
+      "checksum": 34158375
+    },
+    {
+      "mode": "submission-retained",
+      "quads": 1024,
+      "markers": 2,
+      "min_us": 43.257,
+      "median_us": 44.076,
+      "max_us": 44.288,
+      "allocations": 0,
+      "bytes": 0,
+      "checksum": 127433511
+    }
+  ],
+  "gpu": [
+    {
+      "resolution": "1280x720",
+      "production_cache": 0,
+      "disable_blend": 0,
+      "submit_median_us": 13.666,
+      "draws": 6,
+      "gpu_samples": 300,
+      "gpu_median_us": 124.541
+    },
+    {
+      "resolution": "1280x720",
+      "production_cache": 0,
+      "disable_blend": 1,
+      "submit_median_us": 13.75,
+      "draws": 6,
+      "gpu_samples": 300,
+      "gpu_median_us": 119.541
+    },
+    {
+      "resolution": "1280x720",
+      "production_cache": 0,
+      "disable_blend": 0,
+      "submit_median_us": 13.709,
+      "draws": 6,
+      "gpu_samples": 300,
+      "gpu_median_us": 121.25
+    },
+    {
+      "resolution": "1280x720",
+      "production_cache": 0,
+      "disable_blend": 1,
+      "submit_median_us": 13.583,
+      "draws": 6,
+      "gpu_samples": 300,
+      "gpu_median_us": 121.541
+    },
+    {
+      "resolution": "1280x720",
+      "production_cache": 1,
+      "disable_blend": 0,
+      "submit_median_us": 4.875,
+      "draws": 1,
+      "gpu_samples": 300,
+      "gpu_median_us": 48.875
+    },
+    {
+      "resolution": "1280x720",
+      "production_cache": 1,
+      "disable_blend": 1,
+      "submit_median_us": 4.75,
+      "draws": 1,
+      "gpu_samples": 300,
+      "gpu_median_us": 48.416
+    },
+    {
+      "resolution": "1280x720",
+      "production_cache": 1,
+      "disable_blend": 0,
+      "submit_median_us": 4.834,
+      "draws": 1,
+      "gpu_samples": 300,
+      "gpu_median_us": 47.875
+    },
+    {
+      "resolution": "1280x720",
+      "production_cache": 1,
+      "disable_blend": 1,
+      "submit_median_us": 4.959,
+      "draws": 1,
+      "gpu_samples": 300,
+      "gpu_median_us": 48.5
+    },
+    {
+      "resolution": "2560x1440",
+      "production_cache": 0,
+      "disable_blend": 0,
+      "submit_median_us": 13.75,
+      "draws": 6,
+      "gpu_samples": 300,
+      "gpu_median_us": 291.376
+    },
+    {
+      "resolution": "2560x1440",
+      "production_cache": 0,
+      "disable_blend": 1,
+      "submit_median_us": 13.791,
+      "draws": 6,
+      "gpu_samples": 300,
+      "gpu_median_us": 289.875
+    },
+    {
+      "resolution": "2560x1440",
+      "production_cache": 0,
+      "disable_blend": 0,
+      "submit_median_us": 13.75,
+      "draws": 6,
+      "gpu_samples": 300,
+      "gpu_median_us": 293
+    },
+    {
+      "resolution": "2560x1440",
+      "production_cache": 0,
+      "disable_blend": 1,
+      "submit_median_us": 13.958,
+      "draws": 6,
+      "gpu_samples": 300,
+      "gpu_median_us": 291.166
+    },
+    {
+      "resolution": "2560x1440",
+      "production_cache": 1,
+      "disable_blend": 0,
+      "submit_median_us": 5.167,
+      "draws": 1,
+      "gpu_samples": 300,
+      "gpu_median_us": 99.75
+    },
+    {
+      "resolution": "2560x1440",
+      "production_cache": 1,
+      "disable_blend": 1,
+      "submit_median_us": 5.166,
+      "draws": 1,
+      "gpu_samples": 300,
+      "gpu_median_us": 100.25
+    },
+    {
+      "resolution": "2560x1440",
+      "production_cache": 1,
+      "disable_blend": 0,
+      "submit_median_us": 5.209,
+      "draws": 1,
+      "gpu_samples": 300,
+      "gpu_median_us": 102.584
+    },
+    {
+      "resolution": "2560x1440",
+      "production_cache": 1,
+      "disable_blend": 1,
+      "submit_median_us": 5.125,
+      "draws": 1,
+      "gpu_samples": 300,
+      "gpu_median_us": 99.209
+    }
+  ],
+  "limitations": [
+    "No physical-device profile or FPS/input-latency measurement.",
+    "Allocation counts/bytes are ordinary C++ allocation requests, not live heap growth or payload bytes copied.",
+    "Diagnostic retained submission scratch is not a production-ready lifecycle/reentrancy design.",
+    "Existing test-harness bgfx Metal reference-count warnings occur at shutdown; no rendering/readback failure occurred."
+  ]
+}
