@@ -1,6 +1,7 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "ChartRepository.h"
+#include "../goals/GoalRecommendationQuery.h"
 #include "../BeatorajaClearType.h"
 #include "ChartRepositoryInternal.h"
 #include "../BmsMetadataText.h"
@@ -3930,3 +3931,37 @@ ChartRepository::Session::LoadFolderClearDataByLongNoteMode(
       impl_->database(), projectedChartRanks, localCourseRanks);
 }
 #endif
+
+std::map<int, int> ChartRepository::Session::GoalRecommendationCounts() {
+  ScoreRepository::PreparedScoreQueryDatabase prepared(impl_->scoreRepository(), *this);
+  if (prepared.error()) throw std::runtime_error(*prepared.error());
+  auto *db = impl_->database();
+  SqliteStatementHandle query;
+  if (prepareSqliteStatement(db, chart_goals::recommendationCandidatesSql() +
+      " SELECT target, COUNT(*) FROM candidates GROUP BY target", query) != SQLITE_OK)
+    throw std::runtime_error(sqliteDatabaseError(db));
+  std::map<int, int> counts;
+  int rc;
+  while ((rc = sqlite3_step(query)) == SQLITE_ROW)
+    counts[sqlite3_column_int(query, 0)] = sqlite3_column_int(query, 1);
+  if (rc != SQLITE_DONE) throw std::runtime_error(sqliteDatabaseError(db));
+  return counts;
+}
+std::vector<GoalRecommendation> ChartRepository::Session::GoalRecommendations(int target, int offset) {
+  ScoreRepository::PreparedScoreQueryDatabase prepared(impl_->scoreRepository(), *this);
+  if (prepared.error()) throw std::runtime_error(*prepared.error());
+  auto *db = impl_->database();
+  SqliteStatementHandle query;
+  if (prepareSqliteStatement(db, chart_goals::recommendationCandidatesSql() +
+      " SELECT sha256,ln_mode,target,score,max_score,remaining FROM candidates WHERE target=?"
+      " ORDER BY 1.0*remaining/max_score, remaining, sha256, ln_mode LIMIT 20 OFFSET ?", query) != SQLITE_OK ||
+      sqlite3_bind_int(query, 1, target) != SQLITE_OK || sqlite3_bind_int(query, 2, std::max(0, offset)) != SQLITE_OK)
+    throw std::runtime_error(sqliteDatabaseError(db));
+  std::vector<GoalRecommendation> rows;
+  int rc;
+  while ((rc = sqlite3_step(query)) == SQLITE_ROW)
+    rows.push_back({sqliteColumnString(query, 0), sqlite3_column_int(query, 1), sqlite3_column_int(query, 2),
+                   sqlite3_column_int(query, 3), sqlite3_column_int(query, 4), sqlite3_column_int(query, 5)});
+  if (rc != SQLITE_DONE) throw std::runtime_error(sqliteDatabaseError(db));
+  return rows;
+}

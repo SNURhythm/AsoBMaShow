@@ -1,5 +1,6 @@
 #include "goals/ChartGoal.h"
 #include "goals/ChartGoalStore.h"
+#include "goals/GoalRecommendationQuery.h"
 #include "goals/GoalResultPresentation.h"
 #include "repositories/SqliteRAII.h"
 #include <chrono>
@@ -10,6 +11,59 @@
 using namespace chart_goals;
 template<class F> bool rejects(F f) { try { f(); return false; } catch (const std::exception &) { return true; } }
 int main() {
+  {
+    sqlite3 *recommendations = nullptr;
+    CHECK(sqlite3_open(":memory:", &recommendations) == SQLITE_OK);
+    CHECK(sqlite3_exec(recommendations,
+        "ATTACH ':memory:' AS score_db;"
+        "CREATE TABLE score_db.score_sha256_best_score_cache(chart_sha256 TEXT,ln_mode INTEGER,score INTEGER,max_score INTEGER);"
+        "CREATE TABLE chart_meta(sha256 TEXT,path TEXT,ln_mode INTEGER,total_long_notes INTEGER,total_backspin_notes INTEGER);"
+        "CREATE INDEX chart_hash ON chart_meta(sha256);"
+        "INSERT INTO chart_meta VALUES('near','a',0,0,0),('near','duplicate',0,0,0),('met','b',0,0,0),('far','c',0,0,0);"
+        "INSERT INTO score_db.score_sha256_best_score_cache VALUES('near',0,1738,2000),('met',0,1778,2000),('far',0,1737,2000),('missing',0,1777,2000);",
+        nullptr, nullptr, nullptr) == SQLITE_OK);
+    SqliteStatementHandle query;
+    CHECK(prepareSqliteStatement(recommendations, recommendationCandidatesSql() + " SELECT sha256, target FROM candidates", query) == SQLITE_OK);
+    CHECK(sqlite3_step(query) == SQLITE_ROW);
+    CHECK(sqliteColumnString(query, 0) == "near" && sqlite3_column_int(query, 1) == 24);
+    CHECK(sqlite3_step(query) == SQLITE_DONE);
+    query.reset();
+    CHECK(prepareSqliteStatement(recommendations, "EXPLAIN QUERY PLAN " + recommendationCandidatesSql() +
+        " SELECT sha256 FROM candidates", query) == SQLITE_OK);
+    bool indexedLibraryLookup = false;
+    while (sqlite3_step(query) == SQLITE_ROW) {
+      const auto plan = sqliteColumnString(query, 3);
+      if (plan.find("INDEX chart_hash") != std::string::npos) indexedLibraryLookup = true;
+    }
+    CHECK(indexedLibraryLookup);
+    query.reset();
+    CHECK(sqlite3_exec(recommendations,
+        "DELETE FROM score_db.score_sha256_best_score_cache; DELETE FROM chart_meta;",
+        nullptr, nullptr, nullptr) == SQLITE_OK);
+    for (int target : {6,9,12,15,18,21,24,26,27}) {
+      const auto setup = "INSERT INTO chart_meta VALUES('rank" + std::to_string(target) + "','chart',0,0,0);"
+          "INSERT INTO score_db.score_sha256_best_score_cache VALUES('rank" + std::to_string(target) +
+          "',0," + std::to_string(target*100-54) + ",2700);";
+      CHECK(sqlite3_exec(recommendations, setup.c_str(), nullptr, nullptr, nullptr) == SQLITE_OK);
+    }
+    CHECK(prepareSqliteStatement(recommendations, recommendationCandidatesSql() +
+        " SELECT COUNT(*), MIN(remaining), MAX(remaining) FROM candidates", query) == SQLITE_OK);
+    CHECK(sqlite3_step(query) == SQLITE_ROW && sqlite3_column_int(query,0) == 9);
+    CHECK(sqlite3_column_int(query,1) == 54 && sqlite3_column_int(query,2) == 54);
+    query.reset();
+    CHECK(sqlite3_exec(recommendations,
+        "DELETE FROM score_db.score_sha256_best_score_cache; DELETE FROM chart_meta;"
+        "INSERT INTO chart_meta VALUES('fixed','fixed',2,10,0),('selectable','selectable',0,10,0);"
+        "INSERT INTO score_db.score_sha256_best_score_cache VALUES"
+        "('fixed',1,1777,2000),('fixed',2,1777,2000),('fixed',3,1777,2000),"
+        "('selectable',0,1777,2000),('selectable',1,1777,2000),('selectable',3,1777,2000);",
+        nullptr, nullptr, nullptr) == SQLITE_OK);
+    CHECK(prepareSqliteStatement(recommendations, recommendationCandidatesSql() +
+        " SELECT COUNT(*) FROM candidates", query) == SQLITE_OK);
+    CHECK(sqlite3_step(query) == SQLITE_ROW && sqlite3_column_int(query,0) == 3);
+    query.reset();
+    sqlite3_close(recommendations);
+  }
   GoalResultPresentation celebration;
   CHECK(!celebration.arm(false) && !celebration.active());
   CHECK(celebration.arm(true) && celebration.active());

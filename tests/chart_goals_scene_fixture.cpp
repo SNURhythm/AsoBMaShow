@@ -13,6 +13,7 @@ void SDL_Log(const char *, const char *) {}
 struct Profile { std::string id = "one"; };
 struct Profiles { Profile profile; const Profile &activeProfile() { return profile; } };
 struct Record { bms_parser::ChartMeta meta; };
+using ChartMetaRecord = Record;
 int scoreLongNoteModeForClearLamp(const bms_parser::ChartMeta &, int mode) { return mode; }
 struct Scores {
   std::optional<chart_goals::GoalProgress> stored;
@@ -48,6 +49,7 @@ struct ChartGoalsScene {
   void reload() { ++reloads; }
   void init();
   void showGoal(chart_goals::Goal);
+  void recommendGoal(const ChartMetaRecord &, int, int);
   void resolveChart() {}
   bool checkProfile();
   void later(std::function<void()>);
@@ -71,6 +73,14 @@ int main() {
   assert(existing.draft_.longNoteMode == 3);
   existing.showGoal({.chart=saved.chart, .longNoteMode=2});
   assert(existing.selected_ && !existing.editing_ && existing.draft_.target.lamp == 400);
+  existing.recommendGoal(Record{saved.chart}, 2, 26);
+  assert(existing.editing_ && !existing.customScore_);
+  assert(existing.draft_.target.scoreNumerator == 26 && existing.draft_.target.scoreDenominator == 27);
+  assert(existing.draft_.target.lamp == 400 && existing.draft_.longNoteMode == 2);
+  assert(existing.context.scoreRepository.saves == 0); // Recommendation only opens the editor.
+  existing.recommendGoal(Record{saved.chart}, 3, 24);
+  assert(!existing.selected_ && existing.editing_ && existing.draft_.longNoteMode == 3);
+  assert(existing.draft_.target.scoreNumerator == 24);
   ChartGoalsScene scene;
   scene.saveGoal();
   assert(scene.context.scoreRepository.saves == 0 && scene.editing_);

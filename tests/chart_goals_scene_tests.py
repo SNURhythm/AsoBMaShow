@@ -14,7 +14,7 @@ class ChartGoalsSceneTests(unittest.TestCase):
         methods = "\n".join(extract(scene, signature) for signature in (
             "std::string rateText(", "void ChartGoalsScene::init(", "void ChartGoalsScene::showGoal(",
             "bool ChartGoalsScene::checkProfile(", "void ChartGoalsScene::later(",
-            "void ChartGoalsScene::saveGoal(", "void ChartGoalsScene::removeGoal("))
+            "void ChartGoalsScene::saveGoal(", "void ChartGoalsScene::removeGoal(", "void ChartGoalsScene::recommendGoal("))
         fixture = (root / "tests/chart_goals_scene_fixture.cpp").read_text()
         fixture = fixture.replace("PRODUCTION_METHODS", methods)
         with tempfile.TemporaryDirectory(prefix="asobmashow-goals-scene-") as directory:

@@ -4,6 +4,24 @@ Personal goals keep a chosen chart lamp and/or score target across sessions.
 They have no deadline, automatic escalation, or points. Kombo routines continue
 unchanged and are not required to use goals.
 
+## Recommendations
+
+The Personal goals screen offers expandable **Near E** through **Near MAX**
+groups for best scores within 2 percentage points below their next rank. Empty
+groups are hidden. Candidates are ordered by the percentage gap, with 20 per
+page. Tapping a recommendation opens the normal goal editor with that rank
+selected; saving remains explicit. Existing lamp targets are preserved.
+
+Candidates come from the profile's best-score summary, with indexed chart-hash
+lookups to verify library membership and LN scope. Historical plays are not
+scanned, duplicate installations do not duplicate candidates, and chart metadata
+is loaded only for the displayed page.
+
+Gauge recommendations are not included: final gauge and best lamp alone do not
+measure proximity consistently across gauge types. A future implementation would
+need explicit gauge-specific rules and a compact summary of eligible attempts,
+rather than reading replay gauge histories while opening this screen.
+
 ## Using goals
 
 - In PLAY, tap the small flag on a chart row in the built-in selector, the flag

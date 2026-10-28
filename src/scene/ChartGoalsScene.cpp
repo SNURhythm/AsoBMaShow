@@ -202,6 +202,16 @@ void ChartGoalsScene::init() {
   build();
 }
 void ChartGoalsScene::reload() {
+  recommendations_.clear();
+  try {
+    auto session = context.chartRepository.OpenSession();
+    if (!session) throw std::runtime_error("Chart storage is unavailable.");
+    for (const auto &[rank, count] : session->GoalRecommendationCounts())
+      recommendations_[rank].count = count;
+  } catch (const std::exception &failure) {
+    SDL_Log("Cannot load goal recommendations: %s", failure.what());
+    message_ = i18n::tr("goals.ui.storage_error");
+  }
   std::string error;
   page_ = {};
   loadFailed_ = false;
@@ -224,6 +234,39 @@ void ChartGoalsScene::reload() {
     if (selected_) draft_ = selected_->goal;
   }
   resolveChart();
+}
+void ChartGoalsScene::loadRecommendations(int rank, int offset) {
+  try {
+    auto session = context.chartRepository.OpenSession();
+    if (!session) throw std::runtime_error("Chart storage is unavailable.");
+    const auto candidates = session->GoalRecommendations(rank, offset);
+    ChartMetaQuery query;
+    query.allowedSha256 = std::vector<std::string>{};
+    for (const auto &entry : candidates) query.allowedSha256->push_back(entry.sha256);
+    query.rawSongData = true;
+    std::vector<ChartMetaRecord> records;
+    if (!candidates.empty()) session->QueryChartMeta(query, records);
+    auto &group = recommendations_[rank];
+    group.rows.clear(); group.offset = offset; group.expanded = true;
+    for (const auto &candidate : candidates) {
+      const auto found = std::ranges::find_if(records, [&](const auto &record) {
+        return record.meta.SHA256 == candidate.sha256;
+      });
+      if (found != records.end()) group.rows.emplace_back(candidate, *found);
+    }
+  } catch (const std::exception &failure) {
+    SDL_Log("Cannot load goal recommendation page: %s", failure.what());
+    message_ = i18n::tr("goals.ui.storage_error");
+  }
+}
+void ChartGoalsScene::recommendGoal(const ChartMetaRecord &record, int mode, int rank) {
+  showGoal({.chart=record.meta, .longNoteMode=mode});
+  if (loadFailed_) return;
+  editing_ = true;
+  draft_.target.scoreNumerator = rank;
+  draft_.target.scoreDenominator = 27;
+  customScore_ = false;
+  customRate_ = rateText(draft_.target);
 }
 void ChartGoalsScene::showGoal(chart_goals::Goal goal) {
   message_.clear(); confirmRemove_ = false;
@@ -429,6 +472,36 @@ void ChartGoalsScene::build() {
   } else {
     label(body, i18n::tr("goals.ui.intro"), 19);
     if (page_.goals.empty()) label(body, i18n::format("goals.ui.empty", {{"flag", "⚑"}}));
+    if (!recommendations_.empty()) {
+      label(body, i18n::tr("goals.ui.recommendations"), 24);
+      label(body, i18n::tr("goals.ui.near_help"), 18);
+    }
+    for (const auto &[rank, group] : recommendations_) {
+      action(body, i18n::format("goals.ui.near_rank", {{"rank", kombo::scoreRankLabel(rank)},
+          {"count", std::to_string(group.count)}}), [this, rank] { later([this, rank] {
+        auto &group = recommendations_[rank];
+        if (group.expanded) group.expanded = false;
+        else loadRecommendations(rank, group.offset);
+      }); }, app_theme::ActionCategory::Neutral, group.expanded ? ui_icons::kHide : ui_icons::kPlus);
+      if (!group.expanded) continue;
+      for (const auto &[candidate, record] : group.rows) {
+        auto *row = card(body);
+        label(row, record.meta.Title + (record.meta.SubTitle.empty() ? "" : " " + record.meta.SubTitle), 24);
+        label(row, scope({.chart=record.meta, .longNoteMode=candidate.longNoteMode}), 18);
+        label(row, std::to_string(candidate.score) + " / " + std::to_string(candidate.maxScore) + " EX", 18);
+        action(row, i18n::format("goals.ui.recommend_ex", {{"ex", std::to_string(candidate.remaining)},
+            {"rank", kombo::scoreRankLabel(rank)}}), [this, record, mode=candidate.longNoteMode, rank] {
+          later([this, record, mode, rank] { recommendGoal(record, mode, rank); });
+        });
+      }
+      if (group.offset > 0) action(body, i18n::tr("goals.ui.previous"), [this, rank, offset=group.offset] {
+        later([this, rank, offset] { loadRecommendations(rank, offset-chart_goals::pageSize); });
+      });
+      if (group.offset + chart_goals::pageSize < group.count)
+        action(body, i18n::tr("goals.ui.next"), [this, rank, offset=group.offset] {
+          later([this, rank, offset] { loadRecommendations(rank, offset+chart_goals::pageSize); });
+        });
+    }
     const auto renderGroup = [this, body](bool achieved, int &offset) {
       std::vector<const chart_goals::GoalProgress *> entries;
       for (const auto &entry : page_.goals)

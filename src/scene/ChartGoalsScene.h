@@ -26,6 +26,14 @@ private:
   bool checkProfile();
   void later(std::function<void()>);
   void reload();
+  void loadRecommendations(int rank, int offset);
+  void recommendGoal(const ChartMetaRecord &, int mode, int rank);
+  struct RecommendationGroup {
+    int count = 0, offset = 0;
+    bool expanded = false;
+    std::vector<std::pair<GoalRecommendation, ChartMetaRecord>> rows;
+  };
+  std::map<int, RecommendationGroup> recommendations_;
   void showGoal(chart_goals::Goal);
   void saveGoal();
   void removeGoal();
