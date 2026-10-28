@@ -137,7 +137,7 @@
 {"goals.ui.next", "Next page", "다음 페이지", "次のページ", "下一页", "下一頁"},
 {"goals.ui.no_record", "No record", "기록 없음", "記録なし", "暂无记录", "尚無紀錄"},
 {"goals.ui.no_target", "No target", "목표 없음", "指定なし", "不设目标", "不設目標"},
-{"goals.ui.open_play", "Open in PLAY", "PLAY에서 열기", "PLAYで開く", "在 PLAY 中打开", "在 PLAY 中開啟"},
+{"goals.ui.open_play", "PLAY", "PLAY", "PLAY", "PLAY", "PLAY"},
 {"goals.ui.personal_goal", "Personal goal", "개인 목표", "個人目標", "个人目标", "個人目標"},
 {"goals.ui.practice", "Practice chart", "채보 연습", "譜面を練習", "练习谱面", "練習譜面"},
 {"goals.ui.previous", "Previous page", "이전 페이지", "前のページ", "上一页", "上一頁"},

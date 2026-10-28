@@ -32,7 +32,7 @@ unchanged and are not required to use goals.
 - A newly achieved goal shows a short flag-burst celebration on the result
   screen after the score is saved. It waits for the Combo panel to close and
   does not replay for later clears, view rebuilds, replay, practice, or autoplay.
-- **Open in PLAY** selects the chart and its LN mode in the originating selector.
+- **PLAY** selects the chart and its LN mode in the originating selector.
   It does not start gameplay. **Practice chart** opens the existing chart viewer
   and practice tools, with a return path to the goal.
 - Edit or remove goals at any time. Removal asks for confirmation and preserves
