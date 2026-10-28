@@ -8,7 +8,6 @@
 
 #include "AppleInputTimestamp.h"
 #include "IOSTouchGestureRouter.h"
-#include "../perf/LatencyTelemetry.h"
 
 #import <UIKit/UIKit.h>
 #import <UIKit/UIGestureRecognizerSubclass.h>
@@ -86,12 +85,6 @@
     return;
   }
   const auto timestamp = mapping.toSteadyMicros(static_cast<std::uint64_t>(micros));
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-  const auto now = perf::latency::nowMicros();
-  if (now >= timestamp) {
-    perf::latency::record(perf::latency::Stage::InputDelivery, now - timestamp);
-  }
-#endif
   _samples.push_back({
       .pointerId = pointerId,
       .phase = phase,

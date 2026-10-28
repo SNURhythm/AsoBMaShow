@@ -162,6 +162,8 @@ int main() { return 0; }
                     "MsvcCliDiagnostics.cpp",
                     "input/LinuxRealtimeKeyboardBackend.cpp",
                     "input/MacRealtimeKeyboardBackend.mm",
+                    "platform/NativeDocumentAndroid.cpp",
+                    "platform/NativeDocumentWindows.cpp",
                     *cmake_files,
                 ]
             ),
@@ -592,22 +594,25 @@ int main() { return 0; }
         configure = script[
             script.index("prepare_bgfx_project() {") : script.index("install_gems() {")
         ]
-        upstream = ROOT / "bgfx/bgfx/src/renderer_mtl.mm"
+        upstream = ROOT / "bgfx/bgfx/src/renderer_mtl.cpp"
         original = upstream.read_text(encoding="utf-8")
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             shutil.copytree(ROOT / "cmake", root / "cmake")
             source = root / "bgfx"
-            renderer = source / "bgfx/src/renderer_mtl.mm"
+            renderer = source / "bgfx/src/renderer_mtl.cpp"
             renderer.parent.mkdir(parents=True)
             renderer.write_text(original, encoding="utf-8")
+            shutil.copy2(ROOT / "bgfx/bgfx/src/bgfx.cpp", renderer.parent / "bgfx.cpp")
             (source / "CMakeLists.txt").write_text(
                 "cmake_minimum_required(VERSION 3.22)\n"
                 "project(bgfx LANGUAGES CXX)\n"
                 'set(BGFX_DIR "${CMAKE_CURRENT_SOURCE_DIR}/bgfx")\n'
-                'add_library(bgfx STATIC "${BGFX_DIR}/src/renderer_mtl.mm")\n'
+                'add_library(bgfx STATIC "${BGFX_DIR}/src/renderer_mtl.cpp" "${BGFX_DIR}/src/bgfx.cpp")\n'
                 'file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/compiled-sources.txt" '
-                'CONTENT "$<TARGET_PROPERTY:bgfx,SOURCES>")\n',
+                'CONTENT "$<TARGET_PROPERTY:bgfx,SOURCES>")\n'
+                'file(GENERATE OUTPUT "${CMAKE_BINARY_DIR}/objcxx-standard.txt" '
+                'CONTENT "$<TARGET_PROPERTY:bgfx,OBJCXX_STANDARD>;$<TARGET_PROPERTY:bgfx,OBJCXX_STANDARD_REQUIRED>")\n',
                 encoding="utf-8",
             )
             command = ["bash", "-euc", configure + '\nROOT_DIR="$1"\nprepare_bgfx_project',
@@ -617,8 +622,10 @@ int main() { return 0; }
             sources = (source / "build/compiled-sources.txt").read_text().split(";")
             self.assertNotIn(str(renderer), sources,
                              "iOS still compiles the upstream iOS 16 reflection path")
-            self.assertEqual(1, len(sources))
-            compiled = Path(sources[0])
+            self.assertEqual(2, len(sources))
+            self.assertIn(str(root / "cmake/BgfxFrameSubmission.cpp"), sources)
+            self.assertEqual("20;ON", (source / "build/objcxx-standard.txt").read_text())
+            compiled = next(Path(path) for path in sources if path.endswith("renderer_mtl.mm"))
             expected = original.replace(
                 "m_usesMTLBindings, macOS 13.0, iOS 16.0,",
                 "m_usesMTLBindings, macOS 13.0, iOS 17.0,",
@@ -627,11 +634,23 @@ int main() { return 0; }
             patched = compiled.read_text()
             self.assertIn("m_usesMTLBindings, macOS 13.0, iOS 17.0,", patched)
             self.assertNotIn("m_usesMTLBindings, macOS 13.0, iOS 16.0,", patched)
-            self.assertIn("newTextureWithDescriptor:desc offset:0 bytesPerRow:pitch", patched)
+            self.assertIn("buffer->newTexture(desc, 0, pitch)", patched)
             self.assertIn("#if TARGET_OS_SIMULATOR\n", patched)
             self.assertIn("unifiedMemory = false;", patched)
-            self.assertIn("nativeTexture.bufferBytesPerRow", patched)
+            self.assertIn("nativeTexture->bufferBytesPerRow()", patched)
             self.assertIn("m_cmd.kick(false, true)", patched)
+            self.assertIn("m_metalLayer->setMaximumDrawableCount(3);", patched)
+            self.assertNotIn("metalPresentation::", patched)
+            self.assertNotIn("BgfxMetalPresentationGate", patched)
+            self.assertNotIn("addPresentedHandler", patched)
+            for telemetry in ("asoMetalPresentationObserver", "CACurrentMediaTime"):
+                self.assertFalse(telemetry in patched,
+                                 f"Metal presentation telemetry remains: {telemetry}")
+            self.assertIn("const bool managedDrawable = asobmashowMetalAcquireDrawable", patched)
+            self.assertIn("static_cast<CA::MetalDrawable*>(providedDrawable) : m_metalLayer->nextDrawable()", patched)
+            self.assertIn("if (asobmashowMetalShouldPresent(", patched)
+            self.assertIn("presentCommandBuffer->presentDrawable( (MTL::Drawable*)frameBuffer.m_swapChain->m_drawable);", patched)
+            self.assertIn("BgfxMetalDrawableProvider.cpp", patched)
             self.assertEqual(original, renderer.read_text(), "submodule must remain untouched")
             modified = compiled.stat().st_mtime_ns
             result = subprocess.run(command, capture_output=True, text=True)
@@ -645,7 +664,7 @@ int main() { return 0; }
             self.assertIn("reflection gate changed", result.stderr)
 
     def test_metal_layer_patch_rejects_changed_anchors_and_leaves_gpu_work_outside_main(self):
-        original = (ROOT / "bgfx/bgfx/src/renderer_mtl.mm").read_text()
+        original = (ROOT / "bgfx/bgfx/src/renderer_mtl.cpp").read_text()
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             source = root / "renderer.mm"
@@ -664,20 +683,58 @@ int main() { return 0; }
             # Examine the transformed configuration blocks, not the patch script.
             blocks = re.findall(r"asobmashowConfigureMetalLayer\(\^\{([\s\S]*?)\n\s*}\);", patched)
             self.assertEqual(len(blocks), 2)
-            self.assertIn("m_metalLayer.device", blocks[0])
-            self.assertIn("m_metalLayer.magnificationFilter", blocks[0])
-            self.assertIn("m_metalLayer.pixelFormat", blocks[0])
-            self.assertIn("m_metalLayer.drawableSize", blocks[1])
-            self.assertIn("m_metalLayer.pixelFormat", blocks[1])
+            self.assertIn("m_metalLayer->setDevice", blocks[0])
+            self.assertIn("m_metalLayer->setPixelFormat", blocks[0])
+            self.assertIn('sel_registerName("setMagnificationFilter:")', blocks[0])
+            self.assertIn("m_metalLayer->setDrawableSize", blocks[1])
+            self.assertIn("m_metalLayer->setPixelFormat", blocks[1])
+            self.assertIn("m_metalLayer->setMaximumDrawableCount(3);", blocks[0])
+            self.assertNotIn("setMaximumDrawableCount", blocks[1],
+                             "the fixed drawable pool is configured once at initialization")
             for block in blocks:
                 self.assertNotIn("nextDrawable", block)
                 self.assertNotIn("waitUntilCompleted", block)
-            self.assertIn("m_drawable = m_metalLayer.nextDrawable;", patched)
+            self.assertIn("m_drawable = occluded ? NULL : m_metalLayer->nextDrawable();", patched)
             self.assertEqual(source.read_text(), original)
-            source.write_text(original.replace("m_metalLayer.drawableSize = CGSizeMake(_width, _height);", "changed upstream resize;"))
+            source.write_text(original.replace("m_metalLayer->setDrawableSize(CGSizeMake(_width, _height) );", "changed upstream resize;"))
             result = subprocess.run(["cmake", "-P", str(script)], capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Metal layer resize changed", result.stderr)
+
+    def test_metal_owned_textures_require_retained_command_buffers(self):
+        original = (ROOT / "bgfx/bgfx/src/renderer_mtl.cpp").read_text()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "renderer.cpp"
+            output = root / "patched.mm"
+            script = root / "patch.cmake"
+            script.write_text(
+                f'include("{ROOT / "cmake/BgfxMetalVideoSurfaces.cmake"}")\n'
+                f'file(READ "{source}" content)\n'
+                'asobmashow_patch_bgfx_metal_video_surfaces(content)\n'
+                f'file(WRITE "{output}" "${{content}}")\n'
+            )
+            source.write_text(original)
+            result = subprocess.run(["cmake", "-P", str(script)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            patched = output.read_text()
+            self.assertEqual(patched.count("((MTL::Texture*)texture)->retain();"), 1)
+            self.assertIn("if (!asoMetalOwnedTextures.insert(texture).second) return false;", patched)
+            self.assertIn("if (asoTakeMetalTexture(texture)) ((MTL::Texture*)texture)->release();", patched)
+            self.assertIn("if (!asoTakeMetalTexture(_external))\n"
+                          "                    m_flags |= BGFX_SAMPLER_INTERNAL_SHARED;", patched)
+            # Preserve upstream destruction: the slot releases its handoff retain;
+            # encoded uses are held by the ordinary retaining command buffer.
+            start = original.index("\tvoid TextureMtl::destroy()")
+            end = original.index("\tvoid TextureMtl::update(", start)
+            self.assertIn(original[start:end], patched)
+            self.assertNotIn("MTL_RELEASE_DEFERRED", patched)
+            source.write_text(original.replace(
+                "m_activeCommandBuffer = m_commandQueue->commandBuffer();",
+                "m_activeCommandBuffer = m_commandQueue->commandBufferWithUnretainedReferences();"))
+            result = subprocess.run(["cmake", "-P", str(script)], capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("command-buffer ownership changed", result.stderr)
 
     def test_bgfx_configuration_recovers_after_xcode_is_replaced(self):
         script = IOS_INIT.read_text(encoding="utf-8")

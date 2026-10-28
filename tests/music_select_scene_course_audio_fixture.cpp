@@ -207,6 +207,10 @@ struct Preview {
 struct ExternalUrl { void close(int) {} };
 struct FolderStatusLoader { void cancel() {} };
 struct MusicSelectScene {
+  // These lifecycle cases have no pending streak assignment.
+  std::string pendingStreakAssignment_;
+  void openStreakAssignment(const std::string &) { assert(false); }
+
   void closeRankings() {}
 
   struct RevealMenu { void dismiss() {} };
@@ -257,7 +261,7 @@ struct MusicSelectScene {
   void startInputListening() { assertUi(); }
   void cancelDirectoryLoad() { assertUi(); }
   void syncToolbar() { assertUi(); }
-  void reloadLibrary() { assertUi(); }
+  void reloadLibrary(bool restoreSelection) { assertUi(); assert(restoreSelection); }
   void configureSoundServices() { assertUi(); }
   void selectedBarMoved() { assertUi(); }
   void onApplicationBackgroundChanged(bool) {}

@@ -104,6 +104,10 @@ void windowSize(void *, int *width, int *height) { *width = 2400; *height = 1080
 }
 int main() {
   Context context;
+  struct BgaCache {
+    unsigned invalidations = 0;
+    void invalidate() { ++invalidations; }
+  } s_fullscreenBgaCache;
   bool androidRenderSuspended = false, androidResumeResizePending = false;
   uint32_t s_bgfxResetFlags = 128, activeBgfxResetFlags = 128;
   bool nativeWindowReady = true;
@@ -115,11 +119,14 @@ int main() {
   TestScene scene;
   struct { TestScene *currentScene; } sceneManager{&scene};
   auto lastFrameTime = std::chrono::steady_clock::now();
+  struct { void update(Context &, bool) {} } reminderCoordinator;
   PRODUCTION_LIFECYCLE;
   setAppBackground(true);
   assert(context.jukebox.suspended && context.jukebox.visualsSuspended);
+  assert(s_fullscreenBgaCache.invalidations == 1);
   assert(context.storageCancelRequests == 1 && "backgrounding cancels active storage conversion");
   setAppBackground(false);
+  assert(s_fullscreenBgaCache.invalidations == 2);
   assert(context.storageCancelRequests == 1 && "foregrounding does not cancel storage conversion");
   scene.playing = true;
   setAppBackground(true);

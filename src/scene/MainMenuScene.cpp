@@ -1011,6 +1011,7 @@ void MainMenuScene::init() {
     scoreClearRanks = {};
     scoreBestScores = {};
     folderClearData = {};
+    randomAvailabilityCache = {};
     scoreClearRanksRevision = 0;
     observedIrReconciliationRevision = 0;
     observedIrAccountEvidenceRevision = 0;
@@ -1065,6 +1066,7 @@ void MainMenuScene::onPause() {
 }
 
 void MainMenuScene::onApplicationBackgroundChanged(bool background) {
+  if (musicTab_) musicTab_->onApplicationBackgroundChanged(background);
   if (background && previewWorker_) previewWorker_->stop();
   if (!background && selectorTabActive() && !willStart.load()) reselectCurrentChart();
   if (background && archiveUnzipModal_ != nullptr) {
@@ -1086,6 +1088,7 @@ void MainMenuScene::onResume() {
       scoreClearRanks = {};
       scoreBestScores = {};
       folderClearData = {};
+      randomAvailabilityCache = {};
       scoreClearRanksRevision = 0;
       refreshLongNoteModeClearRankViews();
     }
@@ -1095,6 +1098,7 @@ void MainMenuScene::onResume() {
     scoreClearRanks = {};
     scoreBestScores = {};
     folderClearData = {};
+    randomAvailabilityCache = {};
     scoreClearRanksRevision = 0;
     refreshLongNoteModeClearRankViews();
   }
@@ -3712,8 +3716,15 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   std::vector<ChartMetaRecord> randomRecords;
   if (!leadingRecord) {
     try {
+      const auto currentLibraryRevision = context.chartRepository.GetLibraryRevision();
+      if (!randomAvailabilityCache.matches(query, currentLibraryRevision,
+                                           scoreClearRanksRevision)) {
+        randomAvailabilityCache.store(query, currentLibraryRevision,
+            scoreClearRanksRevision, chartSession->RandomChartMetaAvailability(
+                query, scoreBestScores, scoreClearRanks));
+      }
       randomRecords = main_menu_library::randomSelectRecords(
-          chartSession->RandomChartMetaIndices(query, scoreBestScores, scoreClearRanks));
+          randomAvailabilityCache.availability);
     } catch (const std::exception &error) {
       SDL_Log("Random chart categories unavailable: %s", error.what());
     }
@@ -3829,6 +3840,7 @@ std::optional<std::string> MainMenuScene::reloadScoreClearRanks() {
             error->c_str());
     return error;
   }
+  randomAvailabilityCache = {};
   scoreClearRanks = context.scoreRepository.LoadBestClearRanks(
       *chartSession, score_cache_queries::kScoreDatabaseSchema);
   scoreBestScores = context.scoreRepository.LoadBestScores(
@@ -3897,6 +3909,7 @@ void MainMenuScene::refreshScoreClearRanksIfNeeded() {
     scoreClearRanks = {};
     scoreBestScores = {};
     folderClearData = {};
+    randomAvailabilityCache = {};
     scoreClearRanksRevision = 0;
     if (hadVisibleScoreState) {
       refreshLongNoteModeClearRankViews();

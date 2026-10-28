@@ -1,7 +1,6 @@
 #include "AudioMix.h"
 #include "AudioFrameTiming.h"
 #include "PcmResampler.h"
-#include "../perf/LatencyTelemetry.h"
 #include "../settings/AudioVideoSettings.h"
 
 #include <algorithm>
@@ -913,19 +912,13 @@ bool CommitRealtimeCommand(
   }
   state.realtimeCommandQueue[writeCursor % kRealtimeAudioCommandQueueSize] =
       command;
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-  state.realtimeCommandQueue[writeCursor % kRealtimeAudioCommandQueueSize]
-      .submittedSteadyMicros = perf::latency::nowMicros();
-#endif
   state.realtimeCommandWriteCursor.store(writeCursor + 1,
                                          std::memory_order_release);
   return true;
 }
 
 void DrainRealtimeCommands(AudioCallbackState &state, bool rendering) noexcept {
-#if !ASOBMASHOW_ENABLE_PERF_TELEMETRY
   (void)rendering;
-#endif
   std::uint32_t readCursor =
       state.realtimeCommandReadCursor.load(std::memory_order_relaxed);
   const std::uint32_t writeCursor =
@@ -933,13 +926,6 @@ void DrainRealtimeCommands(AudioCallbackState &state, bool rendering) noexcept {
   while (readCursor != writeCursor) {
     const AudioCommand &command = state.realtimeCommandQueue[
         readCursor % kRealtimeAudioCommandQueueSize];
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-    if (rendering && command.submittedSteadyMicros > 0) {
-      const auto age = perf::latency::nowMicros() - command.submittedSteadyMicros;
-      if (age >= 0) perf::latency::record(
-          perf::latency::Stage::SoundCommandToCallback, static_cast<std::uint64_t>(age));
-    }
-#endif
     switch (command.type) {
     case AudioCommandType::PlayNow:
       AppendRealtimeActiveSound(state, command.soundData, command.bus,

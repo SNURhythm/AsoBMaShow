@@ -7,3 +7,7 @@ target_sources(main PRIVATE
     VideoFrameLayout.cpp
     VideoPlayer.cpp
 )
+
+if(APPLE)
+    target_sources(main PRIVATE MetalDisplayLink.mm)
+endif()

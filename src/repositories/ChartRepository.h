@@ -384,6 +384,11 @@ public:
         std::stop_token stop = {});
     std::array<std::size_t, 3> CountChartSelectorRandomCandidates(
         const ChartSelectorQuery &, std::stop_token stop = {});
+    // The same category thresholds as random selection, without ordering or
+    // sampling. Stops once all categories are available; pagination is ignored.
+    std::array<bool, 3> RandomChartMetaAvailability(
+        const ChartMetaQuery &, const ScoreBestCache &, const ScoreClearRankCache &,
+        std::stop_token = {});
     // One uniformly sampled row per category in the built-in selector's query.
     // Any needs two candidates; the other categories need one. Unavailable
     // categories are -1; pagination is ignored and no rich rows are loaded.

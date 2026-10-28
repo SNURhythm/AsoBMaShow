@@ -499,7 +499,7 @@ int main() {
       .maxScore = 4,
       .totalNotes = 2,
       .usesReplayProgression = true,
-      .scoreAfterNotes = {0, 2, 3},
+      .scoreAfterNotes = pacemaker::ScoreProgression({0, 2, 3}),
   };
   const pacemaker::Snapshot selectedBestSnapshot{
       .enabled = true,
@@ -571,7 +571,7 @@ int main() {
       .maxScore = 4,
       .totalNotes = 2,
       .usesReplayProgression = true,
-      .scoreAfterNotes = {0, 1, 4},
+      .scoreAfterNotes = pacemaker::ScoreProgression({0, 1, 4}),
   };
   const pacemaker::Snapshot gbattleSnapshot{
       .enabled = true,

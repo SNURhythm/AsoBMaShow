@@ -74,8 +74,10 @@ void mouseToUi(int rawX, int rawY, float &x, float &y) {
 }
 } // namespace
 
-SnappedSlider::SnappedSlider(std::function<void(int)> onValueChanged)
-    : onValueChanged(std::move(onValueChanged)) {
+SnappedSlider::SnappedSlider(std::function<void(int)> onValueChanged,
+                             std::function<void()> onInteractionFinished)
+    : onValueChanged(std::move(onValueChanged)),
+      onInteractionFinished(std::move(onInteractionFinished)) {
   setHeight(44);
   setMinWidth(120);
 }
@@ -153,14 +155,12 @@ void SnappedSlider::onPointerEventConsumed(const SDL_Event &event) {
     hovered = false;
   } else if (event.type == SDL_EVENT_MOUSE_BUTTON_UP &&
              event.button.button == SDL_BUTTON_LEFT &&
-             event.button.which != SDL_TOUCH_MOUSEID) {
-    mouseDragging = false;
+             event.button.which != SDL_TOUCH_MOUSEID && mouseDragging) {
+    cancelInteraction();
   } else if ((event.type == SDL_EVENT_FINGER_UP || event.type == SDL_EVENT_FINGER_CANCELED) &&
              !sdl_pointer_event::isMouseSynthesizedTouch(event) &&
              event.tfinger.fingerID == activeTouchId) {
-    activeTouchId = -1;
-    touchDragging = false;
-    ui::invalidate();
+    cancelInteraction();
   }
 }
 
@@ -177,7 +177,7 @@ bool SnappedSlider::handleEventsImpl(SDL_Event &event) {
   switch (event.type) {
   case SDL_EVENT_MOUSE_BUTTON_DOWN:
     if (event.button.button != SDL_BUTTON_LEFT ||
-        event.button.which == SDL_TOUCH_MOUSEID) {
+        event.button.which == SDL_TOUCH_MOUSEID || activeTouchId != -1) {
       return true;
     }
     mouseToUi(event.button.x, event.button.y, x, y);
@@ -203,10 +203,10 @@ bool SnappedSlider::handleEventsImpl(SDL_Event &event) {
     }
     mouseToUi(event.button.x, event.button.y, x, y);
     updateFromX(x);
-    mouseDragging = false;
+    cancelInteraction();
     return false;
   case SDL_EVENT_FINGER_DOWN:
-    if (activeTouchId != -1) {
+    if (activeTouchId != -1 || mouseDragging) {
       return true;
     }
     rendering::normalizedToUi(event.tfinger.x, event.tfinger.y, x, y);
@@ -250,6 +250,7 @@ bool SnappedSlider::handleEventsImpl(SDL_Event &event) {
       touchDragging = false;
       ui::invalidate();
       if (commit) updateFromX(x);
+      cancelInteraction();
     }
     return false;
   case SDL_EVENT_WINDOW_MOUSE_LEAVE:
@@ -291,6 +292,7 @@ void SnappedSlider::updateFromX(float x) {
     return;
   }
   current.value = next;
+  interactionChanged = true;
   ui::invalidate();
   if (onValueChanged) {
     onValueChanged(next);
@@ -303,4 +305,7 @@ void SnappedSlider::cancelInteraction() {
   hovered = false;
   activeTouchId = -1;
   touchDragging = false;
+  if (std::exchange(interactionChanged, false) && onInteractionFinished) {
+    onInteractionFinished();
+  }
 }

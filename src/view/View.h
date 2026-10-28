@@ -660,6 +660,40 @@ public:
     updateChildrenAbsolute(dx, dy);
     onMove(newX, newY);
   }
+  // Standalone recycler rows can retain published descendant geometry when
+  // only their origin changes. Synchronize Yoga's cached root position too:
+  // leaving it dirty would hide subsequent content invalidation. Never consume
+  // pending layout work or skip externally calculated, unpublished geometry.
+  inline void setRootPositionRetainingLayout(int newX, int newY) {
+    if (parent != nullptr || YGNodeGetParent(node) != nullptr ||
+        YGNodeIsDirty(node) || dirtyRoots.count(this) != 0 ||
+        !hasPublishedLayoutTree() ||
+        YGNodeStyleGetPositionType(node) != YGPositionTypeAbsolute) {
+      setPositionNoLayout(newX, newY);
+      requestLayout();
+      return;
+    }
+    YGNodeStyleSetPosition(node, YGEdgeLeft, newX);
+    YGNodeStyleSetPosition(node, YGEdgeTop, newY);
+    YGNodeCalculateLayout(node, YGUndefined, YGUndefined, YGDirectionLTR);
+    // Use Yoga's position (including root margins), just as full publication
+    // does. Run callbacks afterward so their invalidations are preserved.
+    const int dx = static_cast<int>(YGNodeLayoutGetLeft(node)) - absoluteX;
+    const int dy = static_cast<int>(YGNodeLayoutGetTop(node)) - absoluteY;
+    absoluteX += dx;
+    absoluteY += dy;
+    publishedLayoutLeft = YGNodeLayoutGetLeft(node);
+    publishedLayoutTop = YGNodeLayoutGetTop(node);
+    if (dx != 0 || dy != 0) ui::invalidate();
+    updateChildrenAbsolute(dx, dy);
+    onMove(YGNodeLayoutGetLeft(node), YGNodeLayoutGetTop(node));
+    // Raw Yoga setters in movement callbacks do not enqueue View work, even
+    // when a callback calculates Yoga and leaves clean, unpublished geometry.
+    // Request publication through the existing queue/enclosing motion batch.
+    if (YGNodeIsDirty(node) || !hasPublishedLayoutTree()) {
+      requestLayout();
+    }
+  }
   [[nodiscard]] inline int getX() const { return absoluteX; }
   [[nodiscard]] inline int getY() const { return absoluteY; }
   [[nodiscard]] inline int getWidth() const {
@@ -893,6 +927,21 @@ private:
   }
   void applyYogaLayoutImmediate();
 
+  bool hasPublishedLayoutTree() const {
+    // Yoga can be clean after an external calculation while View still holds
+    // old geometry. Check every local rectangle, not just the row's size.
+    if (publishedLayoutLeft != YGNodeLayoutGetLeft(node) ||
+        publishedLayoutTop != YGNodeLayoutGetTop(node) ||
+        publishedLayoutWidth != YGNodeLayoutGetWidth(node) ||
+        publishedLayoutHeight != YGNodeLayoutGetHeight(node)) {
+      return false;
+    }
+    for (const auto *child : children) {
+      if (!child->hasPublishedLayoutTree()) return false;
+    }
+    return true;
+  }
+
   void updateChildrenAbsolute(int dx, int dy) {
     if (dx == 0 && dy == 0) {
       return;
@@ -937,6 +986,8 @@ private:
   ThemeColorProvider themedShadowColorProvider;
   int absoluteX = 0;
   int absoluteY = 0;
+  float publishedLayoutLeft = YGUndefined;
+  float publishedLayoutTop = YGUndefined;
   float publishedLayoutWidth = 0;
   float publishedLayoutHeight = 0;
   bool isVisible; // Visibility of the view

@@ -17,6 +17,9 @@
 #include "settings/BuiltInScratchGradient.h"
 #include "view/DropdownView.h"
 #include "view/KeybombPreviewView.h"
+#include "scene/play/KeybombEffect.h"
+#include "scene/play/LaneBeamClip.h"
+#include "scene/play/GameplayNoteSubmissionOrder.h"
 #include "view/IconText.h"
 #include "scene/SettingsPreviewAutoPlay.h"
 #include "scene/SettingsPreviewPlayback.h"
@@ -29,6 +32,7 @@
 #include "scene/play/PlayfieldChartVisualModel.h"
 #include "scene/play/PlayfieldProjection.h"
 #include "scene/play/PlayfieldVisualState.h"
+#include "support/AllocationFailure.h"
 
 #include <bgfx/bgfx.h>
 #include <bx/math.h>
@@ -394,11 +398,11 @@ struct RenderTarget {
   bgfx::FrameBufferHandle framebuffer = BGFX_INVALID_HANDLE;
 };
 
-RenderTarget createRenderTarget() {
+RenderTarget createRenderTarget(uint64_t flags = BGFX_TEXTURE_RT) {
   RenderTarget target;
   target.output = bgfx::createTexture2D(
       kDrawableWidth, kDrawableHeight, false, 1, bgfx::TextureFormat::BGRA8,
-      BGFX_TEXTURE_RT);
+      flags);
   target.readback = bgfx::createTexture2D(
       kDrawableWidth, kDrawableHeight, false, 1, bgfx::TextureFormat::BGRA8,
       BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
@@ -963,6 +967,363 @@ public:
   }
 };
 
+void verifyRadialGradientPixels(const RenderTarget &target, bool multisampled = false) {
+  const auto render = [&](bool reference, int fanCount) {
+    configureGeometryAndViews(target.framebuffer);
+    bgfx::touch(rendering::clear_view);
+    rendering::SimpleBatchRenderer batch;
+    batch.setSubmitView(rendering::ui_view);
+    batch.begin();
+    // Include subpixel radii, translucent centers, overlap and enough fans to
+    // cross the batch index limit. Index reuse must not alter the gradient.
+    for (int i = 0; i < fanCount; ++i) {
+      const float x = 100 + (i % 10) * 95.0F;
+      const float y = 100 + (i % 4) * 120.0F;
+      const float radius = i % 3 == 0 ? 0.3F : i % 3 == 1 ? 17.5F : 54.0F;
+      const uint32_t center = 0x0800BFFF, edge = 0x0000BFFF;
+      if (!reference) {
+        batch.addRadialGradientCircle(x, y, radius, center, edge);
+      } else {
+        for (int j = 0; j < 32; ++j) {
+          const float a = 2 * std::numbers::pi_v<float> * j / 32;
+          const float b = 2 * std::numbers::pi_v<float> * (j + 1) / 32;
+          batch.addTriangleColors(x, y, x + std::cos(a) * radius,
+              y + std::sin(a) * radius, x + std::cos(b) * radius,
+              y + std::sin(b) * radius, center, edge, edge);
+        }
+      }
+    }
+    batch.end();
+    return readPixels(target);
+  };
+  for (const int count : {3, 700}) {
+    const auto indexed = render(false, count), reference = render(true, count);
+    int maximumDifference = 0;
+    for (std::size_t i = 0; i < indexed.size(); ++i) {
+      maximumDifference = std::max(maximumDifference,
+          std::abs(int(indexed[i]) - int(reference[i])));
+    }
+    // Metal MSAA can round indexed geometry differently despite byte-identical
+    // expanded triangle streams. Permit one channel step for isolated fans,
+    // and three for the hundreds of overlapping glows in the rollover case.
+    const int tolerance = multisampled ? (count == 3 ? 1 : 3) : 0;
+    expect(maximumDifference <= tolerance,
+           "indexed radial gradients preserve pixels within MSAA rounding bounds");
+  }
+}
+
+void verifyInvisibleBeamUpload(const RenderTarget &target) {
+  const auto uploaded = [&](long long releasedAgo) {
+    configureGeometryAndViews(target.framebuffer);
+    bgfx::touch(rendering::clear_view);
+    SyntheticChartFixture fixture;
+    Judge judge(fixture.chart->Meta.Rank);
+    BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 2500, false);
+    renderer.configure(presentationConfig(0));
+    renderer.onLanePressed(0, JudgeResult(None, 0), kRenderMicros - 200000);
+    renderer.onLaneReleased(0, kRenderMicros - releasedAgo);
+    const auto capacity = bgfx::getCaps()->limits.maxTransientVbSize /
+                          sizeof(rendering::PosColorVertex);
+    const auto before = bgfx::getAvailTransientVertexBuffer(
+        capacity, rendering::PosColorVertex::ms_decl);
+    rendering::UiBatchRenderer batch;
+    batch.beginFrame();
+    RenderContext context(batch);
+    {
+      RenderContext::UiBatchScope scope(context);
+      renderer.render(context, kRenderMicros, kRenderMicros);
+    }
+    const auto count = before - bgfx::getAvailTransientVertexBuffer(
+        capacity, rendering::PosColorVertex::ms_decl);
+    (void)readPixels(target);
+    return count;
+  };
+  // At 199 ms the float fade is positive but alpha truncates to byte zero;
+  // at 200 ms the lifetime guard removes the beam entirely.
+  expect(uploaded(199000) == uploaded(200000),
+         "packed-zero-alpha beams use no additional transient vertices");
+}
+
+void verifyCoveredBeamPixels(const RenderTarget &target) {
+  const std::array<lane_cover::State, 4> covers{{
+      {},
+      {.laneCoverPercent = 45, .laneCoverEnabled = true},
+      {.laneCoverPercent = 35, .laneCoverEnabled = true,
+       .liftEnabled = true, .liftRatio = 0.2F,
+       .hiddenEnabled = true, .hiddenRatio = 0.25F},
+      {.laneCoverPercent = 80, .laneCoverEnabled = true,
+       .hiddenEnabled = true, .hiddenRatio = 0.6F}}};
+  for (std::size_t scenario = 0; scenario < covers.size(); ++scenario) {
+    const auto render = [&](bool reference) {
+      configureGeometryAndViews(target.framebuffer);
+      bgfx::touch(rendering::clear_view);
+      SyntheticChartFixture fixture;
+      Judge judge(fixture.chart->Meta.Rank);
+      BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 2500, false);
+      Recorder recorder;
+      renderer.setCharacterizationRecorder(&recorder);
+      auto config = presentationConfig(0);
+      config.laneBeamsEnabled = !reference;
+      config.laneBeamLengthPercent = scenario == 1 ? 65 : 100;
+      renderer.configure(config);
+      // Nonzero viewport origin and both flat/pitched camera projections.
+      const float angle = scenario % 2 ? 13.4F : 0.0F;
+      rendering::game_camera.edit()
+          .setPosition({4, 2 - std::tan(bx::toRad(angle)) * 2.1F, -2.1F})
+          .setLookAt({4, 2, 0}).setFov(120)
+          .setViewRect(13, 17, kDrawableWidth - 26, kDrawableHeight - 34).commit();
+      rendering::game_camera.render(true);
+      renderer.applyLaneCoverState(covers[scenario], true);
+      for (int lane : fixture.chart->Meta.GetTotalLaneIndices())
+        renderer.onLanePressed(lane, JudgeResult(None, 0), kRenderMicros);
+      rendering::UiBatchRenderer uiBatch;
+      uiBatch.beginFrame();
+      RenderContext context(uiBatch);
+      {
+        RenderContext::UiBatchScope scope(context);
+        renderer.render(context, kRenderMicros, kRenderMicros);
+      }
+      const auto &frame = recorder.frames.back();
+      const auto clip = lane_beam::coverScissor(rendering::game_camera,
+          frame.playAreaLeftX, frame.playAreaWidth, frame.judgeY,
+          frame.upperBound, frame.noteVisibleUpperBound, covers[scenario]);
+      if (scenario == 0) {
+        expect(!clip, "uncovered beams do not introduce a scissor");
+      } else {
+        expect(clip && clip->height < rendering::game_camera.getViewHeight(),
+               "opaque covers restrict the beam's drawable-pixel region");
+      }
+      if (reference) {
+        // Original uncut beam quads, submitted at their original sorted depth.
+        rendering::SimpleBatchRenderer beams;
+        beams.setSubmitDepth(gameplay_note_submission_order::kLaneBeamDepth);
+        beams.begin();
+        const auto laneCount = fixture.chart->Meta.GetTotalLaneIndices().size();
+        for (std::size_t i = 0; i < laneCount; ++i) {
+          beams.addRectVerticalGradient(frame.playAreaLeftX + i * frame.noteRenderWidth,
+              frame.judgeY, frame.noteRenderWidth,
+              (frame.upperBound - frame.judgeY) * (config.laneBeamLengthPercent / 100.0F),
+              Color(255, 255, 255, 51).toABGR(), Color(255, 255, 255, 0).toABGR());
+        }
+        beams.end();
+      }
+      // A later draw outside the clipped lane window catches leaked scissors.
+      rendering::SimpleBatchRenderer marker;
+      marker.setSubmitView(rendering::ui_view);
+      marker.begin();
+      marker.addRect(20, 20, 15, 15, 0xFF66BBFF);
+      marker.end();
+      return readPixels(target);
+    };
+    expect(render(false) == render(true),
+           "covered beam clipping preserves the uncut gradient and later draws");
+  }
+}
+
+void verifyKeybombVertexReuse(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  bgfx::touch(rendering::clear_view);
+  rendering::SimpleBatchRenderer batch;
+  batch.begin();
+  const auto capacity = bgfx::getCaps()->limits.maxTransientVbSize /
+                        sizeof(rendering::PosColorVertex);
+  const auto available = [&] {
+    return bgfx::getAvailTransientVertexBuffer(capacity,
+                                               rendering::PosColorVertex::ms_decl);
+  };
+  const auto before = available();
+  keybomb::draw(batch, {PGreat, 0}, 80000, 4, 0, 2, {});
+  batch.end();
+  const auto uploaded = before - available();
+  expect(uploaded > 0 && uploaded <= 380,
+         "PGREAT shares glow vertices within its transient upload budget");
+  (void)readPixels(target);
+}
+
+void verifyRoundedRectangleSamples(const RenderTarget &target) {
+  const auto render = [&](bool reference) {
+    configureGeometryAndViews(target.framebuffer);
+    bgfx::touch(rendering::clear_view);
+    rendering::SimpleBatchRenderer batch;
+    batch.setSubmitView(rendering::ui_view);
+    batch.begin();
+    constexpr std::array<float, 21> radii{
+        0, 0.5F, 1, 16, 17, 20, 21, 24, 25, 28, 29,
+        32, 33, 36, 37, 40, 41, 44, 45, 48, 60};
+    constexpr float pi = 3.14159265358979323846F;
+    constexpr float width = 112, height = 104;
+    const auto color = Color(51, 190, 255, 160).toABGR();
+    for (std::size_t shape = 0; shape < radii.size(); ++shape) {
+      const float x = 80 + static_cast<float>(shape % 7) * 145;
+      const float y = 80 + static_cast<float>(shape / 7) * 145;
+      const float radius = std::min(radii[shape], std::min(width, height) * 0.5F);
+      if (!reference) {
+        batch.addRoundedRect(x, y, width, height, radii[shape], color);
+      } else if (radius <= 0.5F) {
+        batch.addRect(x, y, width, height, color);
+      } else {
+        // Independent reference to the former per-call tessellation: all
+        // segment-count boundaries, clamping and corner endpoints are covered.
+        const int segments = std::clamp(static_cast<int>(std::ceil(radius / 4.0F)), 4, 12);
+        std::array<std::pair<float, float>, 52> ring;
+        std::size_t count = 0;
+        const auto corner = [&](float cx, float cy, float start) {
+          for (int i = 0; i <= segments; ++i) {
+            const float t = static_cast<float>(i) / static_cast<float>(segments);
+            const float angle = start + t * (pi * 0.5F);
+            ring[count++] = {cx + std::cos(angle) * radius,
+                             cy + std::sin(angle) * radius};
+          }
+        };
+        corner(x + width - radius, y + radius, -pi * 0.5F);
+        corner(x + width - radius, y + height - radius, 0);
+        corner(x + radius, y + height - radius, pi * 0.5F);
+        corner(x + radius, y + radius, pi);
+        for (std::size_t i = 0; i < count; ++i) {
+          const auto &a = ring[i];
+          const auto &b = ring[(i + 1) % count];
+          batch.addTriangle(x + width * 0.5F, y + height * 0.5F,
+                            a.first, a.second, b.first, b.second, color);
+        }
+      }
+    }
+    batch.end();
+    return readPixels(target);
+  };
+  expect(render(false) == render(true),
+         "cached rounded-rectangle samples match original tessellation pixels");
+}
+
+void verifyCapturedTouchesAvoidReconstruction() {
+  PresentationStateFixture fixture;
+  fixture.renderer.setCharacterizationRecorder(nullptr);
+  auto frame = fixture.input(1);
+  std::uint64_t serial = 1;
+  const auto prepare = [&] {
+    frame.state.clock.serial = ++serial;
+    frame.projection.frameSerial = serial;
+    return fixture.renderer.prepareFrame(frame.state, frame.projection);
+  };
+  const auto allocationsFor = [&](int count, bool visible) {
+    frame.state.configuration.touchVisualizationEnabled = visible;
+    frame.state.touches.clear();
+    for (int i = 0; i < count; ++i) {
+      frame.state.touches.push_back({.fingerId = i,
+                                    .action = ReplayTouchAction::Down,
+                                    .normalizedX = 0.25F,
+                                    .normalizedY = 0.75F,
+                                    .songTimeMicros = kRenderMicros});
+    }
+    expect(prepare() == PresentationFrameOutcome::Ready,
+           "touch allocation fixture prepares its warm frame");
+    std::size_t countAllocations = 0;
+    PresentationFrameOutcome outcome;
+    {
+      test_support::AllocationSizeObserver observer;
+      outcome = prepare();
+      countAllocations = observer.count();
+    }
+    expect(outcome == PresentationFrameOutcome::Ready,
+           "touch allocation fixture prepares its measured frame");
+    return countAllocations;
+  };
+  for (bool visible : {false, true}) {
+    const auto one = allocationsFor(1, visible);
+    const auto many = allocationsFor(32, visible);
+    expect(many <= one,
+           "captured touches add no per-touch reconstruction allocations");
+  }
+}
+
+void verifyCapturedTouchSnapshotRendering(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  PresentationStateFixture fixture;
+  fixture.renderer.setCharacterizationRecorder(nullptr);
+  auto frame = fixture.input(1);
+  frame.state.configuration.touchVisualizationEnabled = true;
+  const auto render = [&](ReplayTouchAction action, bool visible,
+                          long long eventMicros) {
+    ++frame.state.clock.serial;
+    frame.projection.frameSerial = frame.state.clock.serial;
+    frame.state.configuration.touchVisualizationEnabled = visible;
+    frame.state.touches = {{.fingerId = 42,
+                           .action = action,
+                           .normalizedX = 0.2F,
+                           .normalizedY = 0.7F,
+                           .songTimeMicros = eventMicros}};
+    configureGeometryAndViews(target.framebuffer);
+    bgfx::touch(rendering::clear_view);
+    RenderContext context;
+    fixture.renderer.render(context, frame.state, frame.projection);
+    return readPixels(target);
+  };
+  const auto time = frame.state.clock.replayTouchTimeMicros;
+  (void)render(ReplayTouchAction::Down, true, time);
+  const auto down = render(ReplayTouchAction::Down, true, time);
+  const auto move = render(ReplayTouchAction::Move, true, time);
+  const auto hidden = render(ReplayTouchAction::Move, false, time);
+  const auto shown = render(ReplayTouchAction::Move, true, time);
+  expect(down == move && move == shown && move != hidden,
+         "held Move snapshots stay visible across hide/show without a new Down");
+  const auto released = render(ReplayTouchAction::Up, true, time - 90'000);
+  const auto cancelled = render(ReplayTouchAction::Cancel, true, time - 90'000);
+  const auto expired = render(ReplayTouchAction::Up, true, time - 180'001);
+  expect(released == cancelled && released != hidden && released != down &&
+             expired == hidden,
+         "captured release/cancel markers preserve fading and expiration");
+}
+
+void verifyTimelineMembershipDoesNotAllocatePerRow(const RenderTarget &target) {
+  PresentationStateFixture fixture;
+  fixture.renderer.setCharacterizationRecorder(nullptr);
+  auto frame = fixture.input(1);
+  const auto small = frame.projection.builtInPlan.traversedTimelineOrdinals;
+  auto large = small;
+  for (std::uint32_t ordinal = 10000; ordinal < 10256; ++ordinal) {
+    large.push_back(ordinal);
+  }
+  large.push_back(kNoRetainedTimelineOrdinal);
+  std::ranges::sort(large);
+  auto unordered = large;
+  std::ranges::reverse(unordered);
+  if (!small.empty()) unordered.push_back(small.front());
+  RenderContext context;
+  std::uint64_t serial = 100;
+  const auto render = [&](const std::vector<std::uint32_t> &ordinals) {
+    frame.state.clock.serial = ++serial;
+    frame.projection.frameSerial = serial;
+    frame.projection.builtInPlan.traversedTimelineOrdinals = ordinals;
+    expect(fixture.renderer.prepareFrame(frame.state, frame.projection) ==
+               PresentationFrameOutcome::Ready,
+           "timeline allocation fixture prepares outside the measured render");
+    configureGeometryAndViews(target.framebuffer);
+    bgfx::touch(rendering::clear_view);
+    std::size_t count = 0;
+    PresentationFrameResult result;
+    {
+      test_support::AllocationSizeObserver allocations;
+      result = fixture.renderer.render(context);
+      count = allocations.count();
+    }
+    expect(result.outcome == PresentationFrameOutcome::Ready,
+           "timeline allocation fixture renders its prepared frame");
+    return std::pair{count, readPixels(target)};
+  };
+  (void)render(small);
+  const auto [smallCount, expectedPixels] = render(small);
+  (void)render(large);
+  const auto [largeCount, largePixels] = render(large);
+  (void)render(unordered);
+  const auto [unorderedCount, unorderedPixels] = render(unordered);
+  std::cout << "Built-in render allocations, " << small.size() << " / "
+            << large.size() << " / unordered rows: " << smallCount << " / "
+            << largeCount << " / " << unorderedCount << '\n';
+  expect(largeCount <= smallCount && unorderedCount <= smallCount,
+         "warm timeline membership adds no per-row render allocations");
+  expect(expectedPixels == largePixels && expectedPixels == unorderedPixels,
+         "duplicate, unordered, absent and sentinel ordinals preserve built-in pixels");
+}
+
 void verifyJudgementIndicatorContinuousAverage(const RenderTarget &target) {
   Judge judge(3);
   JudgementIndicatorRenderer indicator(judge.timingWindows);
@@ -1280,7 +1641,7 @@ void verifyPreparedFrameUsesSavedBestGhostForBuiltInBestPacemaker() {
       .maxScore = 4,
       .totalNotes = 2,
       .usesReplayProgression = true,
-      .scoreAfterNotes = {0, 2, 3},
+      .scoreAfterNotes = pacemaker::ScoreProgression({0, 2, 3}),
   };
 
   expect(fixture.renderer.prepareFrame(frame.state, frame.projection) ==
@@ -1336,7 +1697,7 @@ void verifyPreparedFrameKeepsPacemakerOffWithSavedBestGhost() {
       .maxScore = 4,
       .totalNotes = 2,
       .usesReplayProgression = true,
-      .scoreAfterNotes = {0, 2, 3},
+      .scoreAfterNotes = pacemaker::ScoreProgression({0, 2, 3}),
   };
 
   expect(fixture.renderer.prepareFrame(frame.state, frame.projection) ==
@@ -4182,6 +4543,75 @@ void verifyPreviewPacemakerDiff(const RenderTarget &target) {
   rendering::updateUIScale(kDrawableWidth, kDrawableHeight);
 }
 
+void verifyStableHudQueriesAvoidAllocations(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  SyntheticChartFixture fixture;
+  Judge judge(fixture.chart->Meta.Rank);
+  BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 500, true);
+  auto config = presentationConfig(0);
+  // Live gameplay supplies this override; the legacy fallback intentionally
+  // computes a chart BPM summary and is outside this allocation contract.
+  config.configuredHispeed = renderer.projectionTraversal().configuredHispeed;
+  renderer.configure(config);
+  const auto expectedGreen = renderer.effectiveVisibleTimeGreenNumber();
+  const std::vector<int> indicators{3, 1, 3, 2};
+  renderer.setStartLaneIndicators(indicators);
+  std::size_t allocations = 0;
+  int actualGreen = 0;
+  {
+    test_support::AllocationSizeObserver observer;
+    for (int frame = 0; frame < 4; ++frame) {
+      actualGreen = renderer.effectiveVisibleTimeGreenNumber();
+      renderer.setStartLaneIndicatorsVisible(frame % 2 == 0);
+      renderer.setStartLaneIndicators(indicators);
+    }
+    allocations = observer.count();
+  }
+  expect(actualGreen == expectedGreen,
+         "allocation-free scalar queries preserve the green number");
+  expect(allocations == 0,
+         "stable scalar HUD queries and indicator updates allocate nothing");
+}
+
+void verifyDeferredGameplayHudTextures(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  SyntheticChartFixture fixture;
+  Judge judge(fixture.chart->Meta.Rank);
+  BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 500, true);
+  const auto *combo = renderer.comboTextViewForTesting();
+  expect(!bgfx::isValid(combo->textureHandle()) && combo->textureWidth() > 0 &&
+             combo->textureHeight() > 0,
+         "HUD text retains metrics without uploading before drawing");
+  rendering::UiBatchRenderer batch;
+  const auto draw = [&] {
+    batch.beginFrame();
+    RenderContext context(batch);
+    {
+      RenderContext::UiBatchScope scope(context);
+      renderer.render(context, kRenderMicros, kRenderMicros);
+    }
+    bgfx::frame();
+  };
+  renderer.onJudge(JudgeResult(Great, -15'000), 123, 456,
+                   {.songTimeMicros = kRenderMicros,
+                    .visualTimeMicros = kRenderMicros,
+                    .bgaTimeMicros = kRenderMicros});
+  draw();
+  const auto *before = renderer.judgementFeedbackTextViewsForTesting()[2];
+  const auto text = before->getText();
+  expect(!bgfx::isValid(before->textureHandle()) && !text.empty(),
+         "visible HUD text reuses glyphs without a whole-string upload");
+  renderer.setJudgementFeedbackStyle(75, true, 75, true);
+  const auto *replacement = renderer.judgementFeedbackTextViewsForTesting()[2];
+  expect(!bgfx::isValid(replacement->textureHandle()) &&
+             replacement->getText() == text && replacement->textureWidth() > 0 &&
+             replacement->textureHeight() > 0,
+         "style replacement preserves text and metrics while deferring upload");
+  draw();
+  expect(!bgfx::isValid(replacement->textureHandle()),
+         "restyled HUD text retains glyph atlas rendering");
+}
+
 void verifyIndividualJudgementLabelVisibility(const RenderTarget &target) {
   configureGeometryAndViews(target.framebuffer);
   SyntheticChartFixture fixture;
@@ -4621,9 +5051,16 @@ int main() {
   rendering::PosTexVertex::init();
   rendering::PosTexCoord0Vertex::init();
   RenderTarget target = createRenderTarget();
+  RenderTarget msaaTarget = createRenderTarget(BGFX_TEXTURE_RT_MSAA_X4);
 
   if (failures == 0) {
     try {
+      verifyRadialGradientPixels(msaaTarget, true);
+      verifyCoveredBeamPixels(msaaTarget);
+      verifyRadialGradientPixels(target);
+      verifyInvisibleBeamUpload(target);
+      verifyCoveredBeamPixels(target);
+      verifyKeybombVertexReuse(target);
       verifyKeybombPreview(target);
       verifyKeybombRendering(target);
       verifyJudgementIndicatorContinuousAverage(target);
@@ -4689,9 +5126,15 @@ int main() {
       verifyPreparedFrameRetainsRecentJudgementIndicatorSamples();
       verifyTimingOnlySampleDoesNotBecomeAHudJudgement();
       verifyPreparedFrameKeepsTheLatestNonSampledJudgementForHudText();
+      verifyStableHudQueriesAvoidAllocations(target);
+      verifyRoundedRectangleSamples(target);
+      verifyCapturedTouchesAvoidReconstruction();
+      verifyCapturedTouchSnapshotRendering(target);
+      verifyDeferredGameplayHudTextures(target);
       verifyPreparedFrameUsesSavedBestGhostForBuiltInBestPacemaker();
       verifyPreparedFrameKeepsLinearBestPacemakerWithoutSavedGhost();
       verifyPreparedFrameKeepsPacemakerOffWithSavedBestGhost();
+      verifyTimelineMembershipDoesNotAllocatePerRow(target);
       const auto legacyRightScratch = renderScenario(
           target, kAfterCoverPercent, true, ScenarioRenderPath::Legacy,
           kRenderMicros, 41, true, false, true);
@@ -4737,6 +5180,7 @@ int main() {
     }
   }
 
+  destroyRenderTarget(msaaTarget);
   destroyRenderTarget(target);
   rendering::ShaderManager::getInstance().release();
   rendering::UniformCache::getInstance().destroyAll();

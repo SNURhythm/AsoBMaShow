@@ -1,3 +1,4 @@
+#if defined(ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE) && ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE
 #include "SkinAcceptanceRecorder.h"
 
 #include "../../FileChecksum.h"
@@ -1397,3 +1398,5 @@ void SkinAcceptanceRecorder::shutdown() noexcept {
 }
 
 } // namespace skin
+
+#endif // ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE

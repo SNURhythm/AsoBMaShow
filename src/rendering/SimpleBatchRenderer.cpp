@@ -1,5 +1,7 @@
 #include "SimpleBatchRenderer.h"
+#include "FrameSubmission.h"
 #include "ShaderManager.h"
+#include "UnitCircleSamples.h"
 #include "bx/bx.h"
 #include <algorithm>
 #include <cmath>
@@ -10,9 +12,43 @@ namespace {
 constexpr size_t kMaxBatchVertices = 65532;
 constexpr size_t kMaxBatchIndices = 65532;
 constexpr float kPi = 3.14159265358979323846f;
+constexpr int kMinCornerSegments = 4;
+constexpr int kMaxCornerSegments = 12;
+
+struct CornerSample {
+  float x;
+  float y;
+};
+using RoundedRectSamples =
+    std::array<std::array<std::array<CornerSample, kMaxCornerSegments + 1>, 4>,
+               kMaxCornerSegments - kMinCornerSegments + 1>;
+
+const RoundedRectSamples &roundedRectSamples() {
+  static const RoundedRectSamples samples = [] {
+    RoundedRectSamples result{};
+    constexpr std::array<float, 4> startAngles{
+        -kPi * 0.5f, 0.0f, kPi * 0.5f, kPi};
+    for (int segments = kMinCornerSegments; segments <= kMaxCornerSegments;
+         ++segments) {
+      auto &corners = result[segments - kMinCornerSegments];
+      for (std::size_t corner = 0; corner < corners.size(); ++corner) {
+        for (int i = 0; i <= segments; ++i) {
+          // Keep the original float expressions, including corner endpoints.
+          const float t = static_cast<float>(i) / static_cast<float>(segments);
+          const float angle = startAngles[corner] + t * (kPi * 0.5f);
+          corners[corner][i] = {std::cos(angle), std::sin(angle)};
+        }
+      }
+    }
+    return result;
+  }();
+  return samples;
+}
 } // namespace
 
 SimpleBatchRenderer::SimpleBatchRenderer() {
+  // Initialize once before drawing; later instances share immutable samples.
+  (void)roundedRectSamples();
   vertices.reserve(4096);
   indices.reserve(6144);
 }
@@ -108,6 +144,31 @@ void SimpleBatchRenderer::addCircle(float cx, float cy, float radius,
                  radius, color);
 }
 
+void SimpleBatchRenderer::addRadialGradientCircle(
+    float cx, float cy, float radius, uint32_t centerColor, uint32_t edgeColor) {
+  if (radius <= 0.0F || ((centerColor | edgeColor) >> 24) == 0) {
+    return;
+  }
+  constexpr int segments = 32;
+  constexpr int vertexCount = segments + 2;
+  constexpr int indexCount = segments * 3;
+  if (vertices.size() + vertexCount > kMaxBatchVertices ||
+      indices.size() + indexCount > kMaxBatchIndices) {
+    flush();
+  }
+  const auto base = static_cast<uint16_t>(vertices.size());
+  vertices.push_back({cx, cy, 0.0F, centerColor});
+  for (const auto sample : unitCircleSamples<segments>()) {
+    vertices.push_back({cx + sample.x * radius, cy + sample.y * radius,
+                        0.0F, edgeColor});
+  }
+  for (int i = 0; i < segments; ++i) {
+    indices.push_back(base);
+    indices.push_back(static_cast<uint16_t>(base + i + 1));
+    indices.push_back(static_cast<uint16_t>(base + i + 2));
+  }
+}
+
 void SimpleBatchRenderer::addRoundedRect(float x, float y, float width,
                                          float height, float radius,
                                          uint32_t color) {
@@ -122,7 +183,7 @@ void SimpleBatchRenderer::addRoundedRect(float x, float y, float width,
   }
 
   const int segments = std::clamp(static_cast<int>(std::ceil(radius / 4.0f)),
-                                  4, 12);
+                                  kMinCornerSegments, kMaxCornerSegments);
   const uint16_t ringVertexCount =
       static_cast<uint16_t>((segments + 1) * 4);
   const uint16_t totalVertexCount =
@@ -137,20 +198,20 @@ void SimpleBatchRenderer::addRoundedRect(float x, float y, float width,
   const uint16_t centerIndex = static_cast<uint16_t>(vertices.size());
   vertices.push_back({x + width * 0.5f, y + height * 0.5f, 0.0f, color});
 
-  const auto appendCorner = [&](float cx, float cy, float startAngle) {
+  const auto &corners = roundedRectSamples()[segments - kMinCornerSegments];
+  const auto appendCorner = [&](float cx, float cy, std::size_t corner) {
     for (int i = 0; i <= segments; ++i) {
-      const float t = static_cast<float>(i) / static_cast<float>(segments);
-      const float angle = startAngle + t * (kPi * 0.5f);
+      const auto sample = corners[corner][i];
       vertices.push_back(
-          {cx + std::cos(angle) * radius, cy + std::sin(angle) * radius,
+          {cx + sample.x * radius, cy + sample.y * radius,
            0.0f, color});
     }
   };
 
-  appendCorner(x + width - radius, y + radius, -kPi * 0.5f);
-  appendCorner(x + width - radius, y + height - radius, 0.0f);
-  appendCorner(x + radius, y + height - radius, kPi * 0.5f);
-  appendCorner(x + radius, y + radius, kPi);
+  appendCorner(x + width - radius, y + radius, 0);
+  appendCorner(x + width - radius, y + height - radius, 1);
+  appendCorner(x + radius, y + height - radius, 2);
+  appendCorner(x + radius, y + radius, 3);
 
   for (uint16_t i = 0; i < ringVertexCount; ++i) {
     const uint16_t current = static_cast<uint16_t>(centerIndex + 1 + i);
@@ -202,6 +263,7 @@ void SimpleBatchRenderer::flush() {
   if (bgfx::getAvailTransientVertexBuffer(
           numVertices, PosColorVertex::ms_decl) < numVertices ||
       bgfx::getAvailTransientIndexBuffer(numIndices) < numIndices) {
+    rejectFrameSubmission();
     ++transientBufferMissCount;
     if (transientBufferMissCount <= 3 ||
         (transientBufferMissCount % 300) == 0) {
@@ -217,6 +279,15 @@ void SimpleBatchRenderer::flush() {
 
   bgfx::allocTransientVertexBuffer(&tvb, numVertices, PosColorVertex::ms_decl);
   bgfx::allocTransientIndexBuffer(&tib, numIndices);
+
+  if (tvb.data == nullptr || tib.data == nullptr ||
+      tvb.size < numVertices * sizeof(PosColorVertex) ||
+      tib.size < numIndices * sizeof(uint16_t)) {
+    rejectFrameSubmission();
+    vertices.clear();
+    indices.clear();
+    return;
+  }
 
   bx::memCopy(tvb.data, vertices.data(), numVertices * sizeof(PosColorVertex));
   bx::memCopy(tib.data, indices.data(), numIndices * sizeof(uint16_t));

@@ -1,3 +1,4 @@
+#if defined(ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE) && ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE
 #include "SkinOverlayDigestProvider.h"
 
 #include "../../FileChecksum.h"
@@ -1022,3 +1023,5 @@ void SkinOverlayDigestProvider::
 #endif
 
 } // namespace skin
+
+#endif // ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE

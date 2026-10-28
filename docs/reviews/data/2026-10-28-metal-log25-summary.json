@@ -1,0 +1,208 @@
+{
+  "sha256": "81b20be2aaeff05bc2de8e3b647e77f7bd1572e8539f6d5a276a8239f367647e",
+  "first": 14571,
+  "last": 22762,
+  "span": 68.85090512500028,
+  "continuous": true,
+  "finite": true,
+  "generations": [
+    0
+  ],
+  "gameplay": {
+    "count": 7536,
+    "submitted": 7536,
+    "displayed": 7535,
+    "late_requests": [
+      {
+        "frame": 21865,
+        "gameplay": 1,
+        "missing": [
+          "displayed"
+        ],
+        "callback_to_prep": 0.005125,
+        "prep": 66.86775,
+        "bgfx_to_submit": 0.157958,
+        "submit_to_request": 0.011333,
+        "cpu_total": 67.037041,
+        "schedule": 0.125834,
+        "submit_to_gpu": 0.346875,
+        "gpu": 1.070417,
+        "request_margin": -58.783791,
+        "schedule_margin": -58.909625,
+        "callback_budget": 8.258375,
+        "target_after_deadline": 8.333416,
+        "request_to_end": 0.006167
+      }
+    ],
+    "late_displays": [],
+    "display_gaps_over_10ms": [
+      {
+        "before": 21864,
+        "after": 21866,
+        "ms": 75.00108299427666
+      }
+    ],
+    "metrics_ms": {
+      "cpu_total": {
+        "n": 7535,
+        "median": 0.7819169841241091,
+        "p95": 1.6186624852707598,
+        "p99": 2.0573972223792225,
+        "max": 2.4656660098116845,
+        "min": 0.2768340054899454
+      },
+      "gpu": {
+        "n": 7535,
+        "median": 1.1879579978995025,
+        "p95": 1.3072874920908362,
+        "p99": 1.3592597714159638,
+        "max": 1.9984999962616712,
+        "min": 0.9694999898783863
+      },
+      "prep_to_display": {
+        "n": 7535,
+        "median": 16.640457994071767,
+        "p95": 16.669249985716306,
+        "p99": 16.67473571083974,
+        "max": 16.678957996191457,
+        "min": 16.216249990975484
+      },
+      "gpu_to_display": {
+        "n": 7535,
+        "median": 14.362917019752786,
+        "p95": 14.687929305364376,
+        "p99": 14.866832281695679,
+        "max": 15.171416016528383,
+        "min": 12.502166006015614
+      }
+    }
+  },
+  "non_gameplay": {
+    "count": 656,
+    "submitted": 616,
+    "displayed": 611,
+    "late_requests": [
+      {
+        "frame": 22107,
+        "gameplay": 0,
+        "missing": [
+          "displayed"
+        ],
+        "callback_to_prep": 0.001875,
+        "prep": 5.199792,
+        "bgfx_to_submit": 42.479792,
+        "submit_to_request": 0.246333,
+        "cpu_total": 47.925917,
+        "schedule": 2.617583,
+        "submit_to_gpu": 0.348458,
+        "gpu": 5.530125,
+        "request_margin": -39.605792,
+        "schedule_margin": -42.223375,
+        "callback_budget": 8.322,
+        "target_after_deadline": 8.333417,
+        "request_to_end": 0.01275
+      },
+      {
+        "frame": 22532,
+        "gameplay": 0,
+        "missing": [],
+        "callback_to_prep": 0.004334,
+        "prep": 134.5025,
+        "bgfx_to_submit": 0.804875,
+        "submit_to_request": 2.429041,
+        "cpu_total": 137.736416,
+        "schedule": 0.020375,
+        "submit_to_gpu": 0.344333,
+        "gpu": 0.851875,
+        "gpu_to_display": 13.428292,
+        "prep_to_display": 149.931875,
+        "request_margin": -129.483791,
+        "schedule_margin": -129.504166,
+        "display_target": 133.345834,
+        "callback_budget": 8.256959,
+        "target_after_deadline": 8.333416,
+        "request_to_end": 0.012209
+      }
+    ],
+    "late_displays": [
+      {
+        "frame": 22532,
+        "gameplay": 0,
+        "missing": [],
+        "callback_to_prep": 0.004334,
+        "prep": 134.5025,
+        "bgfx_to_submit": 0.804875,
+        "submit_to_request": 2.429041,
+        "cpu_total": 137.736416,
+        "schedule": 0.020375,
+        "submit_to_gpu": 0.344333,
+        "gpu": 0.851875,
+        "gpu_to_display": 13.428292,
+        "prep_to_display": 149.931875,
+        "request_margin": -129.483791,
+        "schedule_margin": -129.504166,
+        "display_target": 133.345834,
+        "callback_budget": 8.256959,
+        "target_after_deadline": 8.333416,
+        "request_to_end": 0.012209
+      }
+    ],
+    "display_gaps_over_10ms": [
+      {
+        "before": 22531,
+        "after": 22532,
+        "ms": 141.66858399403282
+      },
+      {
+        "before": 22532,
+        "after": 22534,
+        "ms": 16.666790994349867
+      },
+      {
+        "before": 22534,
+        "after": 22575,
+        "ms": 341.67100000195205
+      }
+    ],
+    "metrics_ms": {
+      "cpu_total": {
+        "n": 611,
+        "median": 0.738792004995048,
+        "p95": 1.1551460047485307,
+        "p99": 1.339004805777222,
+        "max": 137.73641601437703,
+        "min": 0.14920797548256814
+      },
+      "gpu": {
+        "n": 611,
+        "median": 1.4102499990258366,
+        "p95": 3.3706249960232526,
+        "p99": 3.3965496957534924,
+        "max": 3.8413750007748604,
+        "min": 0.5280420009512454
+      },
+      "prep_to_display": {
+        "n": 611,
+        "median": 16.56616700347513,
+        "p95": 16.659916524076834,
+        "p99": 16.664487498928793,
+        "max": 149.93187499931082,
+        "min": 16.458333004266024
+      },
+      "gpu_to_display": {
+        "n": 611,
+        "median": 14.17374997981824,
+        "p95": 15.727124991826713,
+        "p99": 15.745475015137345,
+        "max": 15.759833011543378,
+        "min": 9.578958008205518
+      }
+    }
+  },
+  "postrequest_over_1ms": [
+    {
+      "frame": 22106,
+      "ms": 360.87900001439266
+    }
+  ]
+}

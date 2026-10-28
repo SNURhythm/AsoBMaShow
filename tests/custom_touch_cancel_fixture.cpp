@@ -229,6 +229,7 @@ struct ResultScene {
   View *courseDetailsModalRoot = nullptr, *viewportLayout = nullptr;
   int actions = 0;
   void consumeResultSkinBuiltinEvents() { ++actions; }
+  bool handleStreakProgressEvent(SDL_Event &) { return false; }
   bool queueResultSkinPointerEvent(SDL_Event &);
   EventHandleResult handleEvents(SDL_Event &);
 };

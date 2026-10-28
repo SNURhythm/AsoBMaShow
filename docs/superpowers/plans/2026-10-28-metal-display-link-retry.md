@@ -1,0 +1,141 @@
+# CAMetalDisplayLink retry on the updated Metal backend
+
+> Current audit decision: keep CAMetalDisplayLink, remove the two-slot timer-
+> fallback presentation gate. The gate and its dedicated fixtures are deleted;
+> ordinary fallback uses bgfx drawable acquisition and frame-budget pacing.
+> The implementation/results below describe the historical experiment.
+
+## Objective
+
+Try CAMetalDisplayLink on the current bgfx backend while retaining the accepted
+two-slot drawable acquisition path as fallback. The user explicitly requested
+this experiment after reporting about 15.9 ms Present Delay at 120 Hz on a warm,
+fast-charging iPad. They subsequently reported that pausing and resuming gameplay
+reduces the delay to about 12 ms until exiting and starting gameplay again.
+
+The earlier display-link experiment reported about 23 ms and was removed. This
+retry uses the updated backend and keeps its ordinary command-buffer presentation
+and drawable ownership. It does not establish a latency improvement before a
+device comparison.
+
+## Design constraints
+
+- Enable on iOS 17 and later, on the existing application/render worker run loop.
+  Set preferred frame latency to 1. Keep three layer drawables and GPU limit 1.
+- Accept the callback's drawable before input/scene update. bgfx consumes that
+  borrowed drawable with its normal retain/release ownership and ordinary
+  command-buffer `presentDrawable` scheduling.
+- Never call `nextDrawable` for a layer while a display link is attached. A
+  managed layer with an invalid, missing, or already consumed lease returns nil;
+  only a detached layer may fall back to ordinary acquisition.
+- Check lifecycle generation, layer geometry, export ownership, and quit state.
+  Detach before backgrounding, owner-thread work, inline export, prepared-frame
+  retirement, or timer fallback. Invalidation stays on the owning worker.
+- Bound missing-callback waits and back off before retrying. Reject stale
+  callbacks without creating an unbounded wait or retaining stale drawables.
+- A display-link frame bypasses the two-slot acquisition gate and post-submit
+  timer wait. All other frames retain current timer/gate behavior. Cancel old gate
+  reservations on transition; stale presentation callbacks remain harmless.
+- Keep supported caps: display refresh for unlimited/at-or-above refresh, and
+  exact refresh divisors of at least 30 Hz. Other caps use the timer path.
+- Leave gameplay/audio clock semantics, macOS app activation, and diagnostic
+  telemetry unchanged. No deployment is requested.
+
+## Work and verification
+
+1. Add a worker-owned native bridge, pure lease/rate policy, and a small drawable
+   provider contract; integrate with the current generated bgfx Metal source.
+2. Integrate main-loop pacing, lifecycle/export handoff, and prepared-frame
+   retirement. Extend behavioral tests for lease ownership, fallback transitions,
+   cap policy, and native provider acquisition/presentation behavior.
+3. Build `main`, rendering/video/iOS-platform test groups, and run those CTests.
+   Run the focused iOS build-setup checks and the unsigned iOS build helper.
+4. Independently review the complete experiment, update PR 161, commit and push.
+
+## Device comparison
+
+Use the same chart, settings, warm-up, and thermal/charging conditions as the
+accepted acquisition-gate candidate. Record Present Delay and FPS separately for
+fresh gameplay and after pause/resume. Require sustained 120 FPS as well as useful
+latency behavior. Compare against `7b4f9c01` (runtime `3f018f0a`). If the experiment
+regresses, remove this retry while preserving the accepted fallback candidate.
+
+Pause/resume resets playback clock state and can stop idle rendering, but does
+not directly reset the drawable pool or presentation gate. The observed reduction
+is evidence for investigating timing/queue state; its cause is not established.
+
+## References
+
+- [CAMetalDisplayLink](https://developer.apple.com/documentation/quartzcore/cametaldisplaylink)
+- [Preferred frame latency](https://developer.apple.com/documentation/quartzcore/cametaldisplaylink/preferredframelatency)
+- [Metal command-buffer presentation](https://developer.apple.com/documentation/metal/mtlcommandbuffer/present(_:))
+
+## Result
+
+Implemented the worker-owned bridge and native drawable provider on the current
+backend. The timer path retains the two-slot acquisition gate. Detachment covers
+owner work, inline export, background waits, discarded prepared frames, and
+shutdown. An attached layer remains managed even between frame leases.
+
+Verification:
+
+- Desktop `main` plus rendering, video, and iOS-platform test targets built.
+- All 92 selected CTests passed in 13.87 seconds, including native Metal
+  readback/video checks and the new provider and export handoff fixtures.
+- All three affected iOS build-setup checks passed.
+- `scripts/ios_firebase_deploy.sh --build-only` passed the unsigned iOS device
+  build, compiling the new bridge and generated Metal backend.
+- The initial CMake run caught a test registration placed before its helper
+  definition; moving it beside the existing frame-pacing registrations fixed it.
+
+The native ownership fixture attaches a real CAMetalDisplayLink to a real Metal
+layer and deliberately seeds its lease with a real drawable. It checks idle and
+consumed leases, normal presentation, lifecycle rejection, detachment, and timer
+fallback without depending on headless callback delivery. This verifies ownership
+behavior, not live callback cadence or device latency.
+
+Independent review passed specification and code-quality checks with no remaining
+actionable correctness findings. No deployment or installation was performed by
+the agent.
+
+## Device results and decision
+
+After the `490ab0b7` candidate, the user reports approximately **15.1 ms Present
+Delay before pausing, with 120 FPS sustained**. This is about 0.8 ms below the
+previous 15.9 ms acquisition-gate report and does not reproduce the earlier
+presentation-wait experiment's drop to 60 FPS.
+
+The user subsequently confirms that pause/resume **does not bring this candidate
+toward the previous approximately 12 ms reading**. An exact post-resume value was
+not supplied. The earlier 12 ms result belongs to the acquisition-gate candidate.
+
+Retain this experimental candidate for comparison. The result is mixed: its
+reported delay before pausing is lower, but it does not reproduce the previous
+path's post-resume benefit. An overall latency advantage is not established.
+The previous report was on a warm iPad using a fast charger, and matching thermal
+and charging conditions have not been confirmed.
+
+## Restore GPU queue headroom
+
+After these measurements, the user raised restoring the GPU frame limit for
+lower-end devices because limiting it to one had not improved the reported delay.
+Restore the original Apple GPU limit of **three**. In the current bgfx Metal
+backend, this limit controls a GPU-completion semaphore at the start of command
+encoding. At limit one, encoding can wait for the previous GPU frame, reducing
+overlap when GPU work or completion notification is slower.
+
+CAMetalDisplayLink retains preferred frame latency one, the layer retains three
+drawables, and the timer fallback retains its two presentation slots. These
+presentation controls are separate from the GPU-completion limit. More queue
+headroom can help throughput under load, but can also permit more work ahead of
+display; lower-end performance and latency effects remain to be measured.
+
+The 15.1 ms result above was measured with GPU limit one and must not be attributed
+to this restored-three configuration. Existing native-video fixtures cover GPU
+limits one, two, and three. The desktop and unsigned iOS device builds passed.
+All four focused native checks passed: Metal readback, drawable-provider
+ownership, and native-video lifetime in single-threaded and multithreaded modes.
+
+Apple's [triple-buffering guidance](https://developer.apple.com/library/archive/documentation/3DDrawing/Conceptual/MTLBestPracticesGuide/TripleBuffering.html)
+describes the underlying overlap/queue-depth tradeoff; it does not establish a
+performance gain for this application.

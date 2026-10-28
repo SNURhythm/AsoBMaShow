@@ -2,7 +2,7 @@
 #include "BgfxRAII.h"
 #include "../targets.h"
 
-#if TARGET_OS_ANDROID
+#if TARGET_OS_ANDROID || TARGET_OS_IPHONE || TARGET_OS_OSX
 #include "UiBatchUploadCache.h"
 #endif
 
@@ -142,7 +142,7 @@ public:
       }
       const auto vertexBuffer = color ? bufferSlot->colorVertexBuffer
                                       : bufferSlot->texturedVertexBuffer;
-#if TARGET_OS_ANDROID
+#if TARGET_OS_ANDROID || TARGET_OS_IPHONE || TARGET_OS_OSX
       // Each slot owns persistent GPU storage. Reuse exact small-batch content
       // across frames, while still submitting every draw with its current state.
       auto &vertexCache = color ? bufferSlot->colorUpload
@@ -196,11 +196,11 @@ public:
           }
           bufferSlot->opacityVertexBuffer = replacement;
           bufferSlot->opacityCapacity = newCapacity;
-#if TARGET_OS_ANDROID
+#if TARGET_OS_ANDROID || TARGET_OS_IPHONE || TARGET_OS_OSX
           bufferSlot->opacityUpload.invalidate();
 #endif
         }
-#if TARGET_OS_ANDROID
+#if TARGET_OS_ANDROID || TARGET_OS_IPHONE || TARGET_OS_OSX
         // Every opacity vertex is the same constant. Count and alpha completely
         // describe this stream without retaining another vertex-sized array.
         const std::array opacityKey{static_cast<float>(vertexCount),
@@ -287,7 +287,7 @@ private:
     std::size_t texturedCapacity = 0;
     std::size_t opacityCapacity = 0;
     std::size_t indexCapacity = 0;
-#if TARGET_OS_ANDROID
+#if TARGET_OS_ANDROID || TARGET_OS_IPHONE || TARGET_OS_OSX
     UiBatchUploadCache colorUpload;
     UiBatchUploadCache texturedUpload;
     UiBatchUploadCache indexUpload;
@@ -337,7 +337,7 @@ private:
       if (bgfx::isValid(vertexBuffer)) bgfx::destroy(vertexBuffer);
       vertexBuffer = replacement;
       capacity = newCapacity;
-#if TARGET_OS_ANDROID
+#if TARGET_OS_ANDROID || TARGET_OS_IPHONE || TARGET_OS_OSX
       (format == UiBatchVertexFormat::Color ? slot.colorUpload
                                             : slot.texturedUpload).invalidate();
 #endif
@@ -351,7 +351,7 @@ private:
       if (bgfx::isValid(slot.indexBuffer)) bgfx::destroy(slot.indexBuffer);
       slot.indexBuffer = replacement;
       slot.indexCapacity = newCapacity;
-#if TARGET_OS_ANDROID
+#if TARGET_OS_ANDROID || TARGET_OS_IPHONE || TARGET_OS_OSX
       slot.indexUpload.invalidate();
 #endif
     }
@@ -388,6 +388,7 @@ UiBatchRenderer::~UiBatchRenderer() { shutdown(); }
 
 void UiBatchRenderer::beginFrame() noexcept {
   discard();
+  frameComplete_ = true;
   if (backend_) backend_->beginFrame();
 }
 
@@ -501,6 +502,7 @@ bool UiBatchRenderer::flushCurrent() noexcept {
       .state = *state_};
   const bool submitted = backend_->submit(submission);
   if (!submitted) {
+    frameComplete_ = false;
     ui::invalidate();
     static std::uint32_t failures = 0;
     ++failures;

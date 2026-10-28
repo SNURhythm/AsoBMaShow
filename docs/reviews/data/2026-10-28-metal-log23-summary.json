@@ -1,0 +1,253 @@
+{
+  "source_name": "AsoBMaShow-performance-log 23.txt",
+  "source_sha256": "5007a4a61d44ec3d9ef7a21a87c07f1bf9897b7b43d297b8a120cc0dfcb3af4b",
+  "capture_header": "Metal presentation timing v1; clock=CAMediaTime_seconds; capacity=8192; dropped_updates=0; rows=7764",
+  "quantiles": "linear interpolation at (n-1)*p",
+  "capture_span_seconds": 66.658414,
+  "counts": {
+    "accepted_callbacks": 7764,
+    "gameplay_callbacks": 6939,
+    "gameplay_submitted": 6761,
+    "gameplay_displayed": 6754,
+    "gameplay_without_submit": 178,
+    "gameplay_submitted_without_display_time": 7,
+    "gameplay_late_cpu_requests": 1,
+    "gameplay_late_scheduled_observations": 1,
+    "displayed_gameplay_later_than_target_by_1ms": 0
+  },
+  "displayed_gameplay_metrics": {
+    "preparation_to_request_ms": {
+      "n": 6754,
+      "mean": 1.197723,
+      "median": 1.140313,
+      "p95": 1.840748,
+      "p99": 2.876502,
+      "minimum": 0.086541,
+      "maximum": 5.511
+    },
+    "preparation_to_scheduled_handler_ms": {
+      "n": 6754,
+      "mean": 1.325578,
+      "median": 1.269459,
+      "p95": 2.012719,
+      "p99": 2.962377,
+      "minimum": 0.123542,
+      "maximum": 5.6175
+    },
+    "gpu_duration_ms": {
+      "n": 6754,
+      "mean": 1.12469,
+      "median": 1.121625,
+      "p95": 1.2678,
+      "p99": 1.322059,
+      "minimum": 0.852,
+      "maximum": 1.907167
+    },
+    "preparation_to_gpu_end_ms": {
+      "n": 6754,
+      "mean": 2.555476,
+      "median": 2.481021,
+      "p95": 3.319538,
+      "p99": 4.334833,
+      "minimum": 1.297375,
+      "maximum": 6.86625
+    },
+    "gpu_end_to_display_ms": {
+      "n": 6754,
+      "mean": 14.048668,
+      "median": 14.139354,
+      "p95": 14.545617,
+      "p99": 14.819166,
+      "minimum": 8.84,
+      "maximum": 15.213583
+    },
+    "preparation_to_display_ms": {
+      "n": 6754,
+      "mean": 16.604144,
+      "median": 16.614521,
+      "p95": 16.655973,
+      "p99": 16.66527,
+      "minimum": 12.476292,
+      "maximum": 16.675542
+    },
+    "request_deadline_margin_ms": {
+      "n": 6754,
+      "mean": 7.067689,
+      "median": 7.140334,
+      "p95": 7.521752,
+      "p99": 7.85585,
+      "minimum": 2.108875,
+      "maximum": 8.084125
+    },
+    "scheduled_handler_deadline_margin_ms": {
+      "n": 6754,
+      "mean": 6.939834,
+      "median": 7.01275,
+      "p95": 7.428529,
+      "p99": 7.737886,
+      "minimum": 1.908125,
+      "maximum": 8.04625
+    },
+    "display_minus_target_ms": {
+      "n": 6754,
+      "mean": 0.005295,
+      "median": 0.008459,
+      "p95": 0.030348,
+      "p99": 0.03225,
+      "minimum": -0.187584,
+      "maximum": 0.032791
+    },
+    "callback_to_deadline_ms": {
+      "n": 6754,
+      "mean": 8.274502,
+      "median": 8.290584,
+      "p95": 8.308,
+      "p99": 8.313061,
+      "minimum": 7.901167,
+      "maximum": 8.320334
+    },
+    "callback_to_target_ms": {
+      "n": 6754,
+      "mean": 16.60794,
+      "median": 16.624041,
+      "p95": 16.641417,
+      "p99": 16.646478,
+      "minimum": 16.234583,
+      "maximum": 16.65375
+    },
+    "target_minus_deadline_ms": {
+      "n": 6754,
+      "mean": 8.333437,
+      "median": 8.333417,
+      "p95": 8.3335,
+      "p99": 8.3335,
+      "minimum": 8.333416,
+      "maximum": 8.3335
+    },
+    "request_to_scheduled_handler_ms": {
+      "n": 6754,
+      "mean": 0.127856,
+      "median": 0.12425,
+      "p95": 0.189252,
+      "p99": 0.226561,
+      "minimum": 0.016916,
+      "maximum": 1.725917
+    }
+  },
+  "consecutive_displayed_gameplay_intervals_ms": {
+    "n": 6750,
+    "mean": 8.333459,
+    "median": 8.333458,
+    "p95": 8.333541,
+    "p99": 8.333542,
+    "minimum": 8.33325,
+    "maximum": 8.333667
+  },
+  "gameplay_display_gaps_above_12ms": [
+    {
+      "previous_frame": 703,
+      "next_frame": 705,
+      "gap_ms": 125.001916
+    },
+    {
+      "previous_frame": 1359,
+      "next_frame": 1361,
+      "gap_ms": 16.667
+    },
+    {
+      "previous_frame": 7299,
+      "next_frame": 7479,
+      "gap_ms": 1500.02275
+    }
+  ],
+  "gameplay_submitted_without_display_time_frames": [
+    542,
+    543,
+    544,
+    704,
+    1360,
+    7419,
+    7472
+  ],
+  "cpu_late_request_frames": [
+    {
+      "frame": 95,
+      "gameplay": false,
+      "callback_seconds_from_capture_start": 0.782477,
+      "preparation_to_request_ms": 323.33825,
+      "request_lateness_ms": 315.08525,
+      "display_lateness_ms": 316.678208
+    },
+    {
+      "frame": 289,
+      "gameplay": false,
+      "callback_seconds_from_capture_start": 2.715807,
+      "preparation_to_request_ms": 14.918791,
+      "request_lateness_ms": 6.645541,
+      "display_lateness_ms": 8.352459
+    },
+    {
+      "frame": 358,
+      "gameplay": false,
+      "callback_seconds_from_capture_start": 3.299113,
+      "preparation_to_request_ms": 323.41625,
+      "request_lateness_ms": 315.110792,
+      "display_lateness_ms": 316.693833
+    },
+    {
+      "frame": 447,
+      "gameplay": false,
+      "callback_seconds_from_capture_start": 4.357453,
+      "preparation_to_request_ms": 12.592334,
+      "request_lateness_ms": 4.282042,
+      "display_lateness_ms": 8.361625
+    },
+    {
+      "frame": 704,
+      "gameplay": true,
+      "callback_seconds_from_capture_start": 7.574249,
+      "preparation_to_request_ms": 116.737583,
+      "request_lateness_ms": 108.492708,
+      "display_lateness_ms": null
+    }
+  ],
+  "fixed_delay_sensitivity": {
+    "scope": "displayed gameplay only; assumes unchanged workloads/scheduling; not a prediction of an adaptive wait",
+    "rows": [
+      {
+        "extra_delay_ms": 3,
+        "scheduled_observations_shifted_past_deadline": 3
+      },
+      {
+        "extra_delay_ms": 4,
+        "scheduled_observations_shifted_past_deadline": 6
+      },
+      {
+        "extra_delay_ms": 5,
+        "scheduled_observations_shifted_past_deadline": 35
+      },
+      {
+        "extra_delay_ms": 6,
+        "scheduled_observations_shifted_past_deadline": 243
+      }
+    ]
+  },
+  "example_frame": {
+    "frame": 2789,
+    "selection": "example near medians, not an aggregate timeline",
+    "milliseconds_from_preparation_start": {
+      "callback": -0.010209,
+      "deadline": 8.295625,
+      "target": 16.629125,
+      "preparation_start": 0.0,
+      "preparation_end": 0.857541,
+      "render_submit": 1.123166,
+      "gpu_start": 1.372208,
+      "gpu_end": 2.496,
+      "present_request": 1.141875,
+      "present_scheduled_handler": 1.262833,
+      "displayed": 16.624375,
+      "frame_end": 1.170708
+    }
+  }
+}

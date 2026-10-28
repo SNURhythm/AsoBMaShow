@@ -261,6 +261,8 @@ struct MainMenuScene {
   struct Cache { void releasePages() {} } chartListCache;
   std::vector<int> replayIrObservedRevisions;
   int scoreClearRanks = 0, scoreBestScores = 0, folderClearData = 0, scoreClearRanksRevision = 0;
+  // Reset-only stand-in; cache matching is covered by the chart-reload fixture.
+  int randomAvailabilityCache = 0;
   std::atomic_bool preparationEntered = false, releasePreparation = false;
   bool preparationFails = false, selectFails = false;
   std::unique_ptr<bms_parser::Chart> selectedChart;

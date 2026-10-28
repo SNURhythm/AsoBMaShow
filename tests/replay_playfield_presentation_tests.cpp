@@ -2770,6 +2770,10 @@ int main() {
   testAutoplayReplayReducerMatchesEffectiveScorableTotal();
   testReplayExportPreparesSavedLongNoteScoreMetadata();
   testReplayChartMetadataAuthorityUsesMatchedLibraryRecord();
+  rendering::ShaderManager::getInstance().release();
+  rendering::UniformCache::getInstance().destroyAll();
+  bgfx::frame();
+  bgfx::frame();
   bgfx::shutdown();
   SDL_Quit();
   if (failures != 0) {

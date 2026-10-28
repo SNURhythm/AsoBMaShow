@@ -697,11 +697,11 @@ private:
       return false;
     }
     revealScrollbar();
-    updateVisibleItems();
+    updateVisibleItems(true);
     return true;
   }
 
-  inline void updateVisibleItems() {
+  inline void updateVisibleItems(bool allowRetainedMotion = false) {
     const int layoutX = this->getContentX();
     const int layoutY = this->getContentY();
     const int layoutWidth = visibleItemWidth();
@@ -715,6 +715,32 @@ private:
       startIndex = 0;
       endIndex = itemCount() - 1;
       scrollOffset = 0;
+    }
+
+    // Only scrolling may bypass item comparison: data/provider updates can
+    // change identities without changing the visible range.
+    if (allowRetainedMotion && !visibleItemsLayoutDirty &&
+        !visibleItemsNeedRebind && !idxToView.empty() &&
+        idxToView.begin()->first == startIndex &&
+        idxToView.rbegin()->first == endIndex &&
+        visibleItemsLayoutWidth == layoutWidth &&
+        visibleItemsLayoutHeight == layoutHeight &&
+        visibleItemsLayoutItemHeight == itemHeight) {
+      LayoutBatchScope motionBatch;
+      for (const auto &[index, view] : idxToView) {
+        if (view->getWidth() != layoutWidth || view->getHeight() != itemHeight) {
+          view->setPositionNoLayout(layoutX,
+              layoutY + (index * itemHeight) - scrollOffset);
+          view->setWidth(layoutWidth)->setHeight(itemHeight)->applyYogaLayout();
+        } else {
+          view->setRootPositionRetainingLayout(layoutX,
+              layoutY + (index * itemHeight) - scrollOffset);
+        }
+      }
+      visibleItemsLayoutX = layoutX;
+      visibleItemsLayoutY = layoutY;
+      visibleItemsLayoutScrollOffset = scrollOffset;
+      return;
     }
 
     // Temporary container for newly visible items
@@ -749,10 +775,16 @@ private:
           shouldBind = true;
         }
 
-        view->setPositionNoLayout(layoutX,
-                                  layoutY + (i * itemHeight) - scrollOffset,
-                                  YGPositionType::YGPositionTypeAbsolute);
-        view->setWidth(layoutWidth)->setHeight(itemHeight)->applyYogaLayout();
+        if (!shouldBind && view->getWidth() == layoutWidth &&
+            view->getHeight() == itemHeight) {
+          view->setRootPositionRetainingLayout(layoutX,
+              layoutY + (i * itemHeight) - scrollOffset);
+        } else {
+          view->setPositionNoLayout(layoutX,
+                                    layoutY + (i * itemHeight) - scrollOffset,
+                                    YGPositionType::YGPositionTypeAbsolute);
+          view->setWidth(layoutWidth)->setHeight(itemHeight)->applyYogaLayout();
+        }
         if (shouldBind && onBind) {
           pendingBindings.emplace_back(view, i);
         }

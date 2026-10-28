@@ -76,6 +76,9 @@ with the current score; practice keeps Start outside scrolling content.
 Navigation follows this order: Profiles, Input, Timing, Lane, HUD, Background,
 Skins, Audio, Display, BMS Library, Difficulty Tables, IR, General.
 
+Metal uses a fixed pool of three drawable buffers to preserve display
+throughput. Buffer count is not a user setting.
+
 - Profiles shows the active profile first, other profiles next, then creation
   and import/export tools.
 - Input separates profile-wide note priority, touch indicators, and iPad

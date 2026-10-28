@@ -1,4 +1,5 @@
 #include "skin/beatoraja/BgfxSkinTextureDevice.h"
+#include "rendering/FrameSubmission.h"
 
 #include <bgfx/bgfx.h>
 
@@ -81,9 +82,47 @@ void testChildThreadDoesNotOwnDevice() {
           "a child thread does not own a render-thread texture device");
 }
 
+void testCurrentFrameDrawAcceptance() {
+  require(rendering::frameDrawsAccepted(), "an empty frame has no dropped draws");
+  const auto capacity = bgfx::getCaps()->limits.maxDrawCalls;
+  for (std::uint32_t draw = 0; draw < capacity; ++draw) bgfx::touch(0);
+  require(rendering::frameDrawsAccepted(),
+          "filling the draw capacity exactly is accepted before frame()");
+  bgfx::touch(0);
+  require(!rendering::frameDrawsAccepted(),
+          "one draw beyond capacity is rejected before frame()");
+  require(!rendering::frameDrawsAccepted(),
+          "inspection does not consume the current frame's failure");
+  bgfx::frame();
+  require(rendering::frameDrawsAccepted(),
+          "a fresh frame recovers from the previous frame's drops");
+  bgfx::touch(0);
+  require(rendering::frameDrawsAccepted(), "recovery draws are accepted");
+  bgfx::frame();
+  require(bgfx::getStats()->numDrawCallsPeak > capacity,
+          "the lifetime peak still records the overloaded frame");
+  require(rendering::frameDrawsAccepted(),
+          "a historical overload does not poison later frames");
+
+#if BGFX_CONFIG_MULTITHREADED
+  auto *extra = bgfx::begin(true);
+  require(extra != nullptr, "an extra encoder is available for the contract test");
+  require(!rendering::frameDrawsAccepted(),
+          "an active extra encoder is conservatively unsupported");
+  extra->touch(0);
+  bgfx::end(extra);
+  require(!rendering::frameDrawsAccepted(),
+          "a completed extra encoder remains unsupported for this frame");
+  bgfx::frame();
+  require(rendering::frameDrawsAccepted(),
+          "extra encoder accounting resets at the next frame");
+#endif
+}
+
 } // namespace
 
 int main() {
+  require(!rendering::frameDrawsAccepted(), "uninitialized bgfx cannot accept draws");
   bgfx::Init init;
   init.type = bgfx::RendererType::Noop;
   init.resolution.width = 64;
@@ -94,7 +133,9 @@ int main() {
   testValidRgbaUploadUsesOwnerThread();
   testMalformedAndOversizeImagesAreRejected();
   testChildThreadDoesNotOwnDevice();
+  testCurrentFrameDrawAcceptance();
 
   bgfx::shutdown();
+  require(!rendering::frameDrawsAccepted(), "shutdown bgfx cannot accept draws");
   return 0;
 }

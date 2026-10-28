@@ -1,5 +1,11 @@
 # Choosing focused tests
 
+The developer-only skin acceptance recorder and controller are excluded from
+normal app builds. Configure CMake with
+`-DASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE=ON` to compile them; Lua gameplay
+skins must also be enabled. Their dedicated test targets enable the flag
+independently. This infrastructure has no app UI entry point.
+
 Start with the behavior and subsystem you changed. Build and run its group;
 add adjacent groups when a change crosses their boundary. A focused passing run
 is normally enough for a localized change. The full suite is useful for broad

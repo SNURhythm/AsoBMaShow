@@ -26,6 +26,8 @@ public:
   void addTriangleColors(float x0, float y0, float x1, float y1, float x2, float y2,
                           uint32_t color0, uint32_t color1, uint32_t color2);
   void addCircle(float cx, float cy, float radius, uint32_t color);
+  void addRadialGradientCircle(float cx, float cy, float radius,
+                               uint32_t centerColor, uint32_t edgeColor);
   void addRectColors(float x, float y, float width, float height,
                      uint32_t topLeftColor, uint32_t topRightColor,
                      uint32_t bottomRightColor, uint32_t bottomLeftColor);

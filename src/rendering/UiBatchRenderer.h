@@ -81,6 +81,7 @@ public:
   UiBatchRenderer &operator=(const UiBatchRenderer &) = delete;
 
   void beginFrame() noexcept;
+  [[nodiscard]] bool frameComplete() const noexcept { return frameComplete_; }
   void invalidateFrame() noexcept { ui::invalidate(); }
   static void notifyTextureChanged() noexcept { ui::invalidate(); }
   void begin() noexcept;
@@ -113,6 +114,7 @@ private:
   std::vector<PosTexCoord0Vertex> texturedVertices_;
   std::vector<std::uint16_t> indices_;
   bool active_ = false;
+  bool frameComplete_ = true;
 };
 
 } // namespace rendering

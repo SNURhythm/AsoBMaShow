@@ -202,7 +202,9 @@ PresentationFrameOutcome PlayfieldPresentationCoordinator::prepareFrame(
                  !replayGhostEvents_.empty(),
       .events = replayGhostEvents_,
   };
-  pending.startLaneIndicatorLanes = state.authority.startLaneIndicators;
+  if (pending.hadSkin && state.authority.startLaneIndicatorsVisible) {
+    pending.startLaneIndicatorLanes = state.authority.startLaneIndicators;
+  }
   pending.startLaneIndicatorVisibleLaneHeightRatio = visibleLaneHeightRatio;
   pending.startLaneIndicatorsVisible =
       state.authority.startLaneIndicatorsVisible;

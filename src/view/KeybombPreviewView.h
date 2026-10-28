@@ -57,6 +57,23 @@ private:
     rendering::UiBatchState state;
     float originX, originY;
 
+    void addRadialGradientCircle(float x, float y, float radius,
+                                 std::uint32_t center, std::uint32_t edge) {
+      std::array<rendering::PosColorVertex, 34> vertices;
+      std::array<std::uint16_t, 96> indices;
+      vertices[0] = {originX + x, originY - y, 0, center};
+      const auto &samples = rendering::unitCircleSamples<32>();
+      for (int i = 0; i <= 32; ++i) {
+        vertices[i + 1] = {originX + (x + samples[i].x * radius),
+                           originY - (y + samples[i].y * radius), 0, edge};
+      }
+      for (int i = 0; i < 32; ++i) {
+        indices[i * 3] = 0;
+        indices[i * 3 + 1] = static_cast<std::uint16_t>(i + 1);
+        indices[i * 3 + 2] = static_cast<std::uint16_t>(i + 2);
+      }
+      context.appendUiColor(vertices, indices, state);
+    }
     void addTriangleColors(float x, float y, float a, float b, float d, float e,
                            std::uint32_t first, std::uint32_t second, std::uint32_t third) {
       const std::array vertices{

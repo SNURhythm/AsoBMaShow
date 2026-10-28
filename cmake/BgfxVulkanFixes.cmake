@@ -57,13 +57,11 @@ function(asobmashow_fix_bgfx_vulkan)
     set(host_buffer_usage "bci.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;")
     set(host_buffer_usage_fixed "bci.usage = _usage;")
     set(texture_readback [=[
-		void readTexture(TextureHandle _handle, void* _data, uint8_t _mip) override
+		void readTexture(TextureHandle _handle, void* _data, uint16_t _layer, uint8_t _mip) override
 		{
 			TextureVK& texture = m_textures[_handle.idx];
 
-			uint32_t height = bx::uint32_max(1, texture.m_height >> _mip);
-			uint32_t pitch  = texture.m_readback.pitch(_mip);
-			uint32_t size = height * pitch;
+			const uint32_t size = texture.m_readback.stagingSize(texture.m_aspectFlags, _mip);
 
 			DeviceMemoryAllocationVK stagingMemory;
 			VkBuffer stagingBuffer;

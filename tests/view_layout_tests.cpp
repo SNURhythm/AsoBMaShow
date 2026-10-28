@@ -208,6 +208,130 @@ public:
   }
 };
 
+void testRetainedRootMotionPreservesYogaAndPendingPublication() {
+  ThrowingLayoutView root;
+  auto *child = new ThrowingLayoutView();
+  root.setWidth(120)->setHeight(80);
+  root.setPosition(10, 20, YGPositionTypeAbsolute);
+  YGNodeStyleSetMargin(root.getNode(), YGEdgeLeft, 3);
+  root.addView(child);
+  child->setWidth(40)->setHeight(20);
+  root.applyYogaLayout();
+  const int childX = child->getX() - root.getX();
+  const int childY = child->getY() - root.getY();
+  root.layoutCalls = child->layoutCalls = 0;
+  root.setRootPositionRetainingLayout(30, -10);
+  assert(root.layoutCalls == 0 && child->layoutCalls == 0);
+  assert(root.getX() == YGNodeLayoutGetLeft(root.getNode()));
+  assert(root.getY() == YGNodeLayoutGetTop(root.getNode()));
+  assert(child->getX() == root.getX() + childX);
+  assert(child->getY() == root.getY() + childY);
+  assert(!YGNodeIsDirty(root.getNode()));
+  const int translatedX = child->getX();
+  const int translatedY = child->getY();
+  root.applyYogaLayout();
+  assert(child->getX() == translatedX && child->getY() == translatedY);
+
+  root.layoutCalls = child->layoutCalls = 0;
+  {
+    View::LayoutBatchScope batch;
+    // Explicit publication is meaningful even when Yoga itself is clean.
+    root.applyYogaLayout();
+    root.setRootPositionRetainingLayout(40, -20);
+    assert(root.layoutCalls == 0);
+  }
+  assert(root.layoutCalls == 1 && child->layoutCalls == 1);
+  assert(child->getX() == root.getX() + childX);
+  assert(child->getY() == root.getY() + childY);
+
+  struct ResizeOnMove : View {
+    View *content = nullptr;
+    void onMove(int, int) override {
+      if (content) content->setWidth(55);
+    }
+  } moving;
+  moving.setWidth(100)->setHeight(80);
+  moving.setPosition(0, 0, YGPositionTypeAbsolute);
+  moving.content = new View();
+  moving.addView(moving.content);
+  {
+    View::LayoutBatchScope batch;
+    moving.setRootPositionRetainingLayout(12, 15);
+  }
+  assert(moving.content->getWidth() == 55);
+  assert(!YGNodeIsDirty(moving.getNode()));
+  assert(moving.content->getX() == 12);
+}
+
+void testRetainedMotionPublishesRawYogaMovementCallbacks() {
+  struct RawResizeOnMove : View {
+    int layoutCalls = 0;
+    void onLayout() override { ++layoutCalls; }
+    View *target = nullptr;
+    View *calculateRoot = nullptr;
+    void onMove(int, int) override {
+      if (auto *view = std::exchange(target, nullptr)) {
+        YGNodeStyleSetHeight(view->getNode(), 30);
+        if (calculateRoot) {
+          YGNodeCalculateLayout(calculateRoot->getNode(), YGUndefined,
+                                YGUndefined, YGDirectionLTR);
+        }
+      }
+    }
+  } root;
+  root.setWidth(120)->setHeight(100);
+  root.setPosition(0, 0, YGPositionTypeAbsolute);
+  auto *first = new RawResizeOnMove();
+  auto *second = new ThrowingLayoutView();
+  first->setWidth(40)->setHeight(20);
+  second->setWidth(40)->setHeight(20);
+  root.addView(first);
+  root.addView(second);
+  // Both the root callback and a descendant callback must queue publication
+  // after a single motion, without requiring another scroll to repair it.
+  for (auto *callback : {&root, first}) {
+    for (const bool calculateInCallback : {false, true}) {
+      first->setHeight(20);
+      root.applyYogaLayout();
+      root.layoutCalls = first->layoutCalls = second->layoutCalls = 0;
+      callback->target = first;
+      callback->calculateRoot = calculateInCallback ? &root : nullptr;
+      {
+        View::LayoutBatchScope batch;
+        root.setRootPositionRetainingLayout(0, root.getY() + 5);
+        assert(YGNodeIsDirty(root.getNode()) == !calculateInCallback);
+        assert(first->getHeight() == (calculateInCallback ? 30 : 20));
+        // A raw calculation updates Yoga, but publication must wait for the
+        // batch even when Yoga is already clean.
+        if (calculateInCallback) {
+          assert(YGNodeLayoutGetTop(second->getNode()) == 30);
+        }
+        assert(second->getY() == root.getY() + 20);
+        assert(root.layoutCalls == 0 && first->layoutCalls == 0 &&
+               second->layoutCalls == 0);
+      }
+      assert(!YGNodeIsDirty(root.getNode()));
+      assert(first->getHeight() == 30);
+      assert(second->getY() == root.getY() + 30);
+      assert(root.layoutCalls == 1 && first->layoutCalls == 1 &&
+             second->layoutCalls == 1);
+
+      root.layoutCalls = first->layoutCalls = second->layoutCalls = 0;
+      {
+        View::LayoutBatchScope batch;
+        root.setRootPositionRetainingLayout(0, root.getY() + 5);
+      }
+      assert(root.layoutCalls == 0 && first->layoutCalls == 0);
+      assert(second->layoutCalls == 0);
+      assert(second->getY() == root.getY() + 30);
+      assert(!YGNodeIsDirty(root.getNode()));
+      const int publishedY = second->getY();
+      root.applyYogaLayout();
+      assert(second->getY() == publishedY);
+    }
+  }
+}
+
 void testLayoutRecoversAfterCallbackFailure() {
   View root(0, 0, 300, 100);
   auto *child = new ThrowingLayoutView();
@@ -1302,6 +1426,8 @@ int main() {
   testIdleDrawingLeavesServiceTicksAndDeadlinesAlive();
   testBatchedConstructorOwnership();
   testLayoutRecoversAfterCallbackFailure();
+  testRetainedRootMotionPreservesYogaAndPendingPublication();
+  testRetainedMotionPublishesRawYogaMovementCallbacks();
   testViewSkipsOffscreenPaintingButStillVisitsVisibleChildren();
   testViewSkipsZeroExtentPaintingWithoutVisibleOverflowBounds();
   testViewUsesVisibleOverflowBoundsForOwnPainting();

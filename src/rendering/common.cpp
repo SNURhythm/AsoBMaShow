@@ -9,7 +9,7 @@
 namespace rendering {
 float near_clip = 0.1f;
 float far_clip = 100.0f;
-void createRect(bgfx::TransientVertexBuffer &tvb,
+bool createRect(bgfx::TransientVertexBuffer &tvb,
                 bgfx::TransientIndexBuffer &tib, int x, int y, int width,
                 int height, uint32_t color) {
   PosColorVertex vertices[] = {
@@ -21,11 +21,11 @@ void createRect(bgfx::TransientVertexBuffer &tvb,
 
   const uint16_t indices[] = {0, 1, 2, 0, 2, 3};
 
-  bgfx::allocTransientVertexBuffer(&tvb, 4, PosColorVertex::ms_decl);
-  bgfx::allocTransientIndexBuffer(&tib, 6);
+  if (!allocateTransientQuad(tvb, tib, PosColorVertex::ms_decl)) return false;
 
   bx::memCopy(tvb.data, vertices, sizeof(vertices));
   bx::memCopy(tib.data, indices, sizeof(indices));
+  return true;
 }
 
 bgfx::TextureHandle sdlSurfaceToBgfxTexture(SDL_Surface *surface) {
@@ -64,28 +64,28 @@ bgfx::TextureHandle sdlSurfaceToBgfxTexture(SDL_Surface *surface) {
                                bgfx::TextureFormat::BGRA8, 0, mem);
 }
 
-void renderFullscreenTexture(bgfx::TextureHandle texture, bgfx::ViewId viewId) {
-  renderTextureRegion(texture, viewId, 0.0f, 0.0f,
+bool renderFullscreenTexture(bgfx::TextureHandle texture, bgfx::ViewId viewId) {
+  return renderTextureRegion(texture, viewId, 0.0f, 0.0f,
                       static_cast<float>(rendering::window_width),
                       static_cast<float>(rendering::window_height));
 }
 
-void renderFullscreenTextureTint(bgfx::TextureHandle texture,
+bool renderFullscreenTextureTint(bgfx::TextureHandle texture,
                                  bgfx::ViewId viewId, float brightness) {
-  renderTextureRegionTint(
+  return renderTextureRegionTint(
       texture, viewId, 0.0f, 0.0f, static_cast<float>(rendering::window_width),
       static_cast<float>(rendering::window_height), brightness);
 }
 
-void renderTextureRegion(bgfx::TextureHandle texture, bgfx::ViewId viewId,
+bool renderTextureRegion(bgfx::TextureHandle texture, bgfx::ViewId viewId,
                          float x, float y, float width, float height) {
   if (!bgfx::isValid(texture)) {
-    return;
+    return false;
   }
   auto s_texColor =
       rendering::UniformCache::getInstance().getSampler("s_texColor");
   if (width <= 0.0f || height <= 0.0f) {
-    return;
+    return false;
   }
   const float invW = 1.0f / static_cast<float>(rendering::window_width);
   const float invH = 1.0f / static_cast<float>(rendering::window_height);
@@ -98,8 +98,7 @@ void renderTextureRegion(bgfx::TextureHandle texture, bgfx::ViewId viewId,
   bgfx::TransientIndexBuffer tib{};
 
   bgfx::VertexLayout &layout = rendering::PosTexCoord0Vertex::ms_decl;
-  bgfx::allocTransientVertexBuffer(&tvb, 4, layout);
-  bgfx::allocTransientIndexBuffer(&tib, 6);
+  if (!allocateTransientQuad(tvb, tib, layout)) return false;
   auto *vertex = (rendering::PosTexCoord0Vertex *)tvb.data;
 
   vertex[0] = {x, y + height, 0.0f, u0, v1};
@@ -123,13 +122,14 @@ void renderTextureRegion(bgfx::TextureHandle texture, bgfx::ViewId viewId,
   static const bgfx::ProgramHandle kProgram =
       rendering::ShaderManager::getInstance().getProgram(SHADER_TEXT);
   bgfx::submit(viewId, kProgram);
+  return true;
 }
 
-void renderTextureRegionTint(bgfx::TextureHandle texture, bgfx::ViewId viewId,
+bool renderTextureRegionTint(bgfx::TextureHandle texture, bgfx::ViewId viewId,
                              float x, float y, float width, float height,
                              float brightness) {
   if (!bgfx::isValid(texture) || width <= 0.0f || height <= 0.0f) {
-    return;
+    return false;
   }
 
   auto s_texColor =
@@ -145,8 +145,7 @@ void renderTextureRegionTint(bgfx::TextureHandle texture, bgfx::ViewId viewId,
   bgfx::TransientIndexBuffer tib{};
 
   bgfx::VertexLayout &layout = rendering::PosTexCoord0Vertex::ms_decl;
-  bgfx::allocTransientVertexBuffer(&tvb, 4, layout);
-  bgfx::allocTransientIndexBuffer(&tib, 6);
+  if (!allocateTransientQuad(tvb, tib, layout)) return false;
   auto *vertex = (rendering::PosTexCoord0Vertex *)tvb.data;
 
   vertex[0] = {x, y + height, 0.0f, u0, v1};
@@ -177,16 +176,18 @@ void renderTextureRegionTint(bgfx::TextureHandle texture, bgfx::ViewId viewId,
       rendering::ShaderManager::getInstance().getProgram("vs_text.bin",
                                                          "fs_rect_tint.bin");
   bgfx::submit(viewId, kProgram);
+  return true;
 }
 
-void renderTextureRegionScissor(bgfx::TextureHandle texture,
+bool renderTextureRegionScissor(bgfx::TextureHandle texture,
                                 bgfx::ViewId viewId, int x, int y, int width,
                                 int height) {
   if (width <= 0 || height <= 0) {
-    return;
+    return false;
   }
   rendering::setScissorUI(x, y, width, height);
-  renderFullscreenTexture(texture, viewId);
+  const bool complete = renderFullscreenTexture(texture, viewId);
   bgfx::setScissor();
+  return complete;
 }
 } // namespace rendering

@@ -1681,6 +1681,68 @@ void testHellChargeStrictThresholdsAndSerialInputState() {
           "inactive Hell Charge balance resets on the next positive interval");
 }
 
+void testHellChargeEligibilityIgnoresFutureAndExpiredHeads() {
+  // A small fixture proves the work bound directly rather than timing a huge
+  // chart. Both simulations traverse the same expired, overlapping and future
+  // heads, with different catch-up boundaries.
+  bms_parser::Chart chart;
+  constexpr int inactivePairs = 24;
+  chart.Meta.TotalNotes = 4 * inactivePairs + 4;
+  auto *measure = new bms_parser::Measure();
+  for (int index = 0; index < inactivePairs; ++index) {
+    const auto offset = static_cast<std::int64_t>(index) * 10'000;
+    addLongNote(*measure, 100'000 + offset, 105'000 + offset, 3,
+                bms_parser::LongNoteType::HellChargeNote);
+    addLongNote(*measure, 20'000'000 + offset, 20'005'000 + offset, 3,
+                bms_parser::LongNoteType::HellChargeNote);
+  }
+  addLongNote(*measure, 1'000'000, 2'000'000, 1,
+              bms_parser::LongNoteType::HellChargeNote);
+  addLongNote(*measure, 1'050'000, 1'800'000, 2,
+              bms_parser::LongNoteType::HellChargeNote);
+  chart.Measures.push_back(measure);
+  const auto definition = gameplay::buildGameplayDefinition(chart, 0);
+  const auto config = gameplay::GameplaySimulationConfig{
+      .judge = gameplay::CompiledGameplayJudge::from(Judge(1)),
+      .attempt = {.autoPlay = true, .replayCapacity = 256,
+                  .automaticResultCapacity = 256}};
+  gameplay::GameplaySimulation oneShot(definition, config);
+  gameplay::GameplaySimulation chunked(definition, config);
+  chunked.advanceTo(50'000, 50'000);
+  require(chunked.lastAdvanceStats().hellChargeHeadsExamined == 0,
+          "future HCN heads require no integration visits");
+  chunked.advanceTo(600'000, 600'000);
+  chunked.advanceTo(601'000, 601'000);
+  require(chunked.lastAdvanceStats().hellChargeHeadsExamined == 0,
+          "expired and future HCN heads require no integration visits");
+  chunked.advanceTo(1'100'000, 1'100'000);
+  chunked.advanceTo(1'101'000, 1'101'000);
+  require(chunked.lastAdvanceStats().hellChargeHeadsExamined == 8,
+          "quiet integration visits only the two overlapping eligible heads");
+  const auto ids = longPairIds(definition, 1);
+  chunked.advanceTo(1'200'000, 1'200'000);
+  require(chunked.hellChargeBalances()[ids.head] == 200'000,
+          "eligible HCN preserves the strict positive threshold");
+  chunked.advanceTo(1'200'001, 1'200'001);
+  require(chunked.hellChargeBalances()[ids.head] == 1,
+          "eligible HCN crosses only after the strict threshold");
+  chunked.advanceTo(1'900'000, 1'900'000);
+  chunked.advanceTo(1'901'000, 1'901'000);
+  require(chunked.lastAdvanceStats().hellChargeHeadsExamined == 4,
+          "expiring one overlap leaves only the remaining eligible head");
+  chunked.advanceTo(2'000'000, 2'000'000);
+  require(chunked.hellChargeBalances()[ids.head] == 200'000,
+          "exact tail timing still exposes its final balance");
+  chunked.advanceTo(2'000'001, 2'000'001);
+  require(chunked.hellChargeBalances()[ids.head] == 0,
+          "first positive interval after the tail clears its balance");
+  chunked.advanceTo(2'001'000, 2'001'000);
+  require(chunked.lastAdvanceStats().hellChargeHeadsExamined == 0,
+          "expired heads are removed from subsequent integration work");
+  oneShot.advanceTo(2'001'000, 2'001'000);
+  requireSameCompleteOutcome(definition, oneShot, chunked);
+}
+
 void testSuccessfulEarlyHellChargeReleaseKeepsGaining() {
   bms_parser::Chart chart;
   chart.Meta.TotalNotes = 2;
@@ -1701,6 +1763,12 @@ void testSuccessfulEarlyHellChargeReleaseKeepsGaining() {
   simulation.advanceTo(1'999'999, 1'999'999);
   require(simulation.hellChargeBalances()[ids.head] == 199'999,
           "successful early HCN release keeps gaining through the tail interval");
+  simulation.advanceTo(2'000'000, 2'000'000);
+  require(simulation.hellChargeBalances()[ids.head] == 200'000,
+          "successful early release keeps the exact-tail balance visible");
+  simulation.advanceTo(2'000'001, 2'000'001);
+  require(simulation.hellChargeBalances()[ids.head] == 0,
+          "successful early release expires on the next positive interval");
 }
 
 void testMultipleHellChargeCrossingsUseTimeThenNoteIdOrder() {
@@ -2157,6 +2225,7 @@ int main() {
   testDefinitionCompilesChronologicalHellChargeHeads();
   testHellChargeStrictThresholdsAndSerialInputState();
   testSuccessfulEarlyHellChargeReleaseKeepsGaining();
+  testHellChargeEligibilityIgnoresFutureAndExpiredHeads();
   testMultipleHellChargeCrossingsUseTimeThenNoteIdOrder();
   testAttemptInitializesConfiguredAndCarriedState();
   testCapacityFaultsLatchIndependentlyWithoutGrowth();

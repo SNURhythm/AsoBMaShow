@@ -1,7 +1,9 @@
 #include "rendering/ShaderManager.h"
 #include "rendering/UiBatchRenderer.h"
+#include "rendering/FrameSubmission.h"
 #include "rendering/UniformCache.h"
 #include "view/ArtworkGlowProfile.h"
+#include "support/AllocationFailure.h"
 
 #include <bx/math.h>
 
@@ -31,6 +33,65 @@ int ui_view_height = 128;
 } // namespace rendering
 
 namespace {
+
+bool testResourceCacheHitsDoNotAllocate() {
+  auto &programs = rendering::ShaderManager::getInstance();
+  auto &uniforms = rendering::UniformCache::getInstance();
+  std::string vertexName = "vs_text.bin#suffix";
+  std::string fragmentName = "fs_text.bin#suffix";
+  const auto text = programs.getProgram(std::string_view(vertexName).substr(0, 11),
+                                        std::string_view(fragmentName).substr(0, 11));
+  vertexName.assign(vertexName.size(), 'x');
+  fragmentName.assign(fragmentName.size(), 'x');
+  const auto color = programs.getProgram(SHADER_SIMPLE);
+  constexpr auto samplerName = "s_allocationProbeWithALongOwnedName";
+  constexpr auto vectorName = "u_allocationProbeWithALongOwnedName";
+  std::string borrowedSampler = std::string(samplerName) + "#suffix";
+  std::string borrowedVector = std::string(vectorName) + "#suffix";
+  const auto sampler = uniforms.getSampler(
+      std::string_view(borrowedSampler).substr(0, std::string_view(samplerName).size()));
+  const auto vector = uniforms.getVec4(
+      std::string_view(borrowedVector).substr(0, std::string_view(vectorName).size()));
+  borrowedSampler.assign(borrowedSampler.size(), 'x');
+  borrowedVector.assign(borrowedVector.size(), 'x');
+  bool passed = bgfx::isValid(text) && bgfx::isValid(color) &&
+                bgfx::isValid(sampler) && bgfx::isValid(vector);
+  std::size_t count = 0, bytes = 0;
+  {
+    test_support::AllocationSizeObserver allocations;
+    for (int lookup = 0; lookup < 256; ++lookup) {
+      passed &= programs.getProgram(SHADER_TEXT).idx == text.idx;
+      passed &= programs.getProgram(SHADER_SIMPLE).idx == color.idx;
+      passed &= uniforms.getSampler(samplerName).idx == sampler.idx;
+      passed &= uniforms.getVec4(vectorName).idx == vector.idx;
+    }
+    count = allocations.count();
+    bytes = allocations.totalBytes();
+  }
+  std::cout << "1024 warm resource lookups: " << count << " allocations, "
+            << bytes << " bytes\n";
+  if (count != 0 || !passed) {
+    std::cerr << "FAIL: cached shader/uniform lookups preserve handles without allocating\n";
+    passed = false;
+  }
+  bool rejectedAmbiguousPair = false;
+  try {
+    // The old underscore-concatenated key aliases vs_text.bin/fs_text.bin.
+    (void)programs.getProgram("vs", "text.bin_fs_text.bin");
+  } catch (const std::runtime_error &) {
+    rejectedAmbiguousPair = true;
+  }
+  if (!rejectedAmbiguousPair) {
+    std::cerr << "FAIL: different shader pairs cannot alias one cached program\n";
+    passed = false;
+  }
+  programs.release();
+  uniforms.destroyAll();
+  passed &= bgfx::isValid(programs.getProgram(SHADER_TEXT));
+  passed &= bgfx::isValid(uniforms.getSampler(samplerName));
+  passed &= bgfx::isValid(uniforms.getVec4(vectorName));
+  return passed;
+}
 
 bool testMixedUiBatchesSurviveGrowthAndSceneChanges() {
   const auto output = bgfx::createTexture2D(
@@ -398,6 +459,63 @@ bool testRetainedArtworkGlowMatchesCpuPixels() {
 
 } // namespace
 
+
+bool testSaturatedFrameRetriesAndRecovers() {
+  rendering::PosColorVertex::init();
+  rendering::PosTexCoord0Vertex::init();
+  const auto output = bgfx::createTexture2D(128, 128, false, 1,
+      bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_RT);
+  const auto framebuffer = bgfx::createFrameBuffer(1, &output, false);
+  const auto readback = bgfx::createTexture2D(128, 128, false, 1,
+      bgfx::TextureFormat::RGBA8, BGFX_TEXTURE_BLIT_DST | BGFX_TEXTURE_READ_BACK);
+  float ortho[16];
+  bx::mtxOrtho(ortho, 0, 128, 128, 0, 0, 100, 0, bgfx::getCaps()->homogeneousDepth);
+  bgfx::setViewFrameBuffer(rendering::ui_view, framebuffer);
+  bgfx::setViewRect(rendering::ui_view, 0, 0, 128, 128);
+  bgfx::setViewTransform(rendering::ui_view, nullptr, ortho);
+  bgfx::setViewMode(rendering::ui_view, bgfx::ViewMode::Sequential);
+  bgfx::setViewClear(rendering::ui_view, BGFX_CLEAR_COLOR, 0x000000ff);
+  const auto program = rendering::ShaderManager::getInstance().getProgram(SHADER_SIMPLE);
+  const std::array<rendering::PosColorVertex, 4> vertices = {{{0,0,0,0xff0000ff},
+      {128,0,0,0xff0000ff},{128,128,0,0xff0000ff},{0,128,0,0xff0000ff}}};
+  const std::array<std::uint16_t, 6> indices = {0,1,2,0,2,3};
+  rendering::UiBatchRenderer renderer;
+  ui::PresentationSchedule schedule;
+  bool passed = true;
+  for (const bool saturated : {false, true, false}) {
+    const auto before = ui::revisions();
+    renderer.beginFrame(); renderer.begin();
+    const auto capacity = bgfx::getCaps()->limits.maxDrawCalls;
+    if (saturated) for (std::uint32_t i = 0; i < capacity; ++i) bgfx::touch(rendering::ui_view);
+    const bool appended = renderer.appendColor(vertices, indices,
+        {.program = program, .state = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A});
+    const bool flushed = renderer.flush(); renderer.end();
+    const bool accepted = rendering::frameDrawsAccepted() && renderer.frameComplete();
+    bgfx::frame();
+    const auto peak = bgfx::getStats()->numDrawCallsPeak;
+    schedule.didPresent(before, {}, 100, accepted);
+    const bool retry = schedule.shouldRender(108);
+    bgfx::blit(rendering::readback_view, readback, 0, 0, output);
+    std::vector<std::uint8_t> pixels(128 * 128 * 4);
+    const auto ready = bgfx::readTexture(readback, pixels.data());
+    while (bgfx::frame() < ready) {}
+    const int red = pixels[(64 * 128 + 64) * 4];
+    std::cout << "saturated=" << saturated << " append=" << appended
+              << " flush=" << flushed << " retry_next_frame=" << retry
+              << " red=" << red << " requested_peak=" << peak
+              << " capacity=" << capacity << '\n';
+    if (!appended || !flushed || retry != saturated || accepted == saturated ||
+        red != (saturated ? 0 : 255)) {
+      std::cerr << "FAIL: dropped UI frame retries and successful recovery returns to idle\n";
+      passed = false;
+    }
+  }
+  renderer.shutdown();
+  bgfx::setViewFrameBuffer(rendering::ui_view, BGFX_INVALID_HANDLE);
+  bgfx::destroy(framebuffer); bgfx::destroy(output); bgfx::destroy(readback);
+  return passed;
+}
+
 int main() {
   bgfx::Init init;
   init.type = bgfx::RendererType::Metal;
@@ -408,14 +526,16 @@ int main() {
     std::cerr << "FAIL: headless Metal initialization failed\n";
     return 1;
   }
+  const bool cachesPassed = testResourceCacheHitsDoNotAllocate();
   const bool batchesPassed = testMixedUiBatchesSurviveGrowthAndSceneChanges();
   const bool glowPassed = testRetainedArtworkGlowMatchesCpuPixels();
+  const bool recoveryPassed = testSaturatedFrameRetriesAndRecovers();
   rendering::ShaderManager::getInstance().release();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::frame();
   bgfx::frame();
   bgfx::shutdown();
-  if (!batchesPassed || !glowPassed) return 1;
+  if (!cachesPassed || !batchesPassed || !glowPassed || !recoveryPassed) return 1;
   std::cout << "UI batch real-Metal tests passed\n";
   return 0;
 }

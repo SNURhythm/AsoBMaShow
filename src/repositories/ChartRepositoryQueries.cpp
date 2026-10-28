@@ -2163,6 +2163,74 @@ std::array<int, 3> ChartRepository::Session::RandomChartMetaIndices(
   return selected;
 }
 
+std::array<bool, 3> ChartRepository::Session::RandomChartMetaAvailability(
+    const ChartMetaQuery &inputQuery, const ScoreBestCache &best,
+    const ScoreClearRankCache &clears, std::stop_token stop) {
+  checkReadCancelled(stop);
+  ChartMetaQuery query = inputQuery;
+  query.sortCriterion = ChartRecordSortCriterion::Default;
+  std::array<bool, 3> selected{};
+  if (query.solidArchivesOnly || chartMetaQueryHasCourseFilter(query)) return selected;
+  auto *database = impl_->database();
+  std::optional<ScoreRepository::PreparedScoreQueryDatabase> prepared;
+  if (chartMetaQueryNeedsScoreCache(query)) {
+    prepared.emplace(impl_->scoreRepository(), *this);
+    if (const auto &error = prepared->error()) throw std::runtime_error(*error);
+  }
+  ScopedReadCancellation cancellation(database, stop);
+  if (queryNeedsDifficultyTableSchema(query) &&
+      !chart_repository_detail::EnsureDifficultySchema(database)) {
+    throw std::runtime_error(sqlite3_errmsg(database));
+  }
+  // Existence is independent of order; stop once all thresholds are met.
+  const bool table = chartMetaQueryUsesDifficultyEntries(query);
+  std::string sql = "SELECT COALESCE(cm.path, '') != '', ";
+  sql += table ? "COALESCE(NULLIF(dte.sha256, ''), cm.sha256, '')" : "cm.sha256";
+  sql += ", cm.ln_mode, cm.total_long_notes, cm.total_backspin_notes";
+  if (table) {
+    sql += " FROM difficulty_table_entries dte "
+           "JOIN difficulty_tables dt ON dt.id = dte.table_id "
+           "LEFT JOIN chart_meta cm ON cm.path = ";
+    sql += matchedChartPathSubquery("dte", true) + " ";
+    appendDifficultyEntryFilters(sql, query);
+  } else {
+    sql += " FROM chart_meta cm WHERE 1 = 1";
+    appendChartMetaFilters(sql, query);
+  }
+  SqliteStatementHandle statement;
+  if (prepareSqliteStatement(database, sql, statement) != SQLITE_OK) {
+    throw std::runtime_error(sqlite3_errmsg(database));
+  }
+  int bindIndex = 1;
+  if (table) bindDifficultyEntryFilterParameters(statement, bindIndex, query);
+  else bindChartMetaFilterParameters(statement, bindIndex, query);
+  std::array<int, 3> counts{};
+  while (stepReadRow(database, statement, stop)) {
+    if (sqlite3_column_int(statement, 0)) {
+      const auto hash = columnString(statement, 1);
+      const int mode = scoreLongNoteModeForClearLamp(sqlite3_column_int(statement, 2),
+          sqlite3_column_int(statement, 3), sqlite3_column_int(statement, 4),
+          query.selectedLongNoteMode);
+      const auto score = best.bestForHash(hash, mode);
+      const int lamp = beatorajaSongClearType(clears.bestRankForHash(hash, mode));
+      for (const auto filter : kChartSelectorRandomFilters) {
+        const auto category = static_cast<std::size_t>(filter);
+        if (!selected[category] &&
+            chartSelectorRandomFilterMatches(filter, score ? score->playCount : 0, lamp)) {
+          selected[category] = ++counts[category] >= (category == 0 ? 2 : 1);
+        }
+      }
+    }
+    if (selected[0] && selected[1] && selected[2]) break;
+  }
+  checkReadCancelled(stop);
+  const int status = sqlite3_errcode(database);
+  if (status != SQLITE_OK && status != SQLITE_DONE && status != SQLITE_ROW) {
+    throw std::runtime_error(sqlite3_errmsg(database));
+  }
+  return selected;
+}
+
 std::optional<ChartMetaRecord> ChartRepository::Session::SelectChartSelectorRandomCandidate(
     const ChartSelectorQuery &query, ChartSelectorRandomFilter filter,
     std::size_t offset, std::stop_token stop) {
@@ -3012,16 +3080,54 @@ int findChartMetaIndex(sqlite3 *db,
   }
 
   if (chartQuery.sortCriterion != ChartRecordSortCriterion::Default) {
-    ChartMetaQuery scanQuery = chartQuery;
-    scanQuery.limit = 0;
-    scanQuery.offset = 0;
-    std::vector<ChartMetaRecord> records;
-    queryChartMeta(db, scanQuery, records);
-    for (size_t i = 0; i < records.size(); ++i) {
-      if (chart_storage_identity::StoredPathText(records[i].meta.BmsPath) ==
-          targetPath) {
-        return static_cast<int>(i);
+    // Use the list's exact filters and tie breakers, but transport only paths.
+    // Pagination never changes the index within the complete filtered list.
+    const bool table = chartMetaQueryUsesDifficultyEntries(chartQuery);
+    const bool course = chartMetaQueryUsesCourseEntries(chartQuery);
+    std::string query = "SELECT COALESCE(cm.path, '')";
+    if (chartQuery.solidArchivesOnly) {
+      query = "SELECT sa.path FROM solid_archives sa WHERE 1 = 1";
+      if (!chartQuery.keyword.empty()) {
+        query += " AND (sa.name LIKE @text OR sa.path LIKE @text)";
       }
+      query += " ORDER BY sa.name COLLATE NOCASE, sa.path";
+    } else if (table) {
+      query += " FROM difficulty_table_entries dte "
+               "JOIN difficulty_tables dt ON dt.id = dte.table_id "
+               "LEFT JOIN chart_meta cm ON cm.path = ";
+      query += matchedChartPathSubquery("dte", true) + " ";
+      appendDifficultyEntryFilters(query, chartQuery);
+      appendDifficultyEntryOrderBy(query, chartQuery);
+    } else if (course) {
+      query += " FROM difficulty_course_entries dce "
+               "JOIN difficulty_courses dc ON dc.id = dce.course_id "
+               "JOIN difficulty_tables dt ON dt.id = dc.table_id "
+               "LEFT JOIN difficulty_table_entries dte ON dte.id = ";
+      query += matchedDifficultyEntryIdSubquery();
+      query += " LEFT JOIN chart_meta cm ON cm.path = ";
+      query += matchedChartPathSubquery("dce", true) + " ";
+      appendDifficultyCourseEntryFilters(query, chartQuery);
+      appendDifficultyCourseEntryOrderBy(query, chartQuery);
+    } else {
+      query += " FROM chart_meta cm WHERE 1 = 1";
+      appendChartMetaFilters(query, chartQuery);
+      appendChartMetaOrderBy(query, chartQuery, "cm");
+    }
+    SqliteStatementHandle stmt;
+    if (!prepareSqliteStatementLogged(db, query, stmt, "finding chart index",
+                                      logSqlErrorText)) return -1;
+    int bindIndex = 1;
+    if (chartQuery.solidArchivesOnly) {
+      if (!chartQuery.keyword.empty()) bindSqliteText(stmt, bindIndex++, "%" + chartQuery.keyword + "%");
+    } else if (table) bindDifficultyEntryFilterParameters(stmt, bindIndex, chartQuery);
+    else if (course) bindDifficultyCourseEntryFilterParameters(stmt, bindIndex, chartQuery);
+    else bindChartMetaFilterParameters(stmt, bindIndex, chartQuery);
+    int index = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+      std::filesystem::path rowPath(readPath(stmt, 0));
+      if (!rowPath.empty()) chart_storage_identity::ToAbsolutePath(rowPath);
+      if (chart_storage_identity::StoredPathText(rowPath) == targetPath) return index;
+      ++index;
     }
     return -1;
   }

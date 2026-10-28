@@ -83,7 +83,6 @@ if(ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
         beatoraja/SkinCoverNormalization.cpp
         beatoraja/SkinObjectResolutionPrecedence.cpp
         beatoraja/SkinPerformanceTelemetry.cpp
-        beatoraja/SkinOverlayDigestProvider.cpp
         beatoraja/SkinProcessResidentMemory.cpp
         beatoraja/SkinModelValidator.cpp
         beatoraja/SkinMovieCatalog.cpp
@@ -98,4 +97,16 @@ endif()
 
 if(APPLE)
     target_sources(main PRIVATE package/SkinAliasDetectorApple.mm)
+endif()
+
+# The capture recorder is developer infrastructure and has no app UI.
+if(ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE)
+    if(NOT ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS)
+        message(FATAL_ERROR "Skin acceptance capture requires Lua gameplay skins")
+    endif()
+    target_sources(main PRIVATE
+        beatoraja/SkinAcceptanceRecorder.cpp
+        beatoraja/SkinOverlayDigestProvider.cpp
+        ../scene/GameplaySkinAcceptanceController.cpp
+    )
 endif()

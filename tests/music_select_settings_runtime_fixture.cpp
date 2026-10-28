@@ -130,6 +130,11 @@ struct Lifecycle {
   }
 };
 struct ApplicationContext {
+  std::string pendingComboNotificationProfile;
+  struct {
+    struct Profile { std::string id; } profile;
+    const Profile &activeProfile() const { return profile; }
+  } profileManager;
   struct Settings {
     skin::SkinProfileSettings skin;
     Settings &presentation() { return *this; }
@@ -154,6 +159,7 @@ struct ApplicationContext {
 };
 struct View { bool visible = false; void setVisible(bool value) { visible = value; } };
 struct Preview { void resumeDefaultBgm() {} };
+enum class MusicSelectToolbarControl { Streak };
 struct MusicSelectScene {
   ApplicationContext &context;
   skin::GameplaySkinActivationRequest activationRequest_;
@@ -161,6 +167,7 @@ struct MusicSelectScene {
   bool sceneActive_ = true, launching_ = false, failed_ = false;
   bool reactivateSkinOnResume_ = false;
   bool presentationSkinRefreshPending = false;
+  std::string pendingStreakAssignment_;
   std::unique_ptr<skin::MusicSelectSkinSession> skinSession_;
   std::future<std::unique_ptr<skin::MusicSelectSkinSession>> skinPreparation_;
   std::stop_source skinPreparationStop_;
@@ -181,7 +188,12 @@ struct MusicSelectScene {
   void hideDecideOverlay() {}
   void onApplicationBackgroundChanged(bool) {}
   void syncToolbar() {}
-  void reloadLibrary() {}
+  void reloadLibrary(bool) {}
+  // Settings round trips have no pending streak assignment or notification.
+  bool toolbarControlAvailable(MusicSelectToolbarControl) const { return true; }
+  void openStreakAssignment(const std::string &) { assert(false); }
+  void openStreak() { assert(false); }
+  void defer(std::function<bool()>, int, bool) { assert(false); }
   void configureSoundServices() {}
   void selectedBarMoved() {}
   void startInputListening() {}

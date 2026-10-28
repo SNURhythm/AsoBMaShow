@@ -19,6 +19,94 @@ void require(bool condition, const char *message) {
   }
 }
 
+void testPresentationMetadataCacheAndSnapshotLifetime() {
+  PlayfieldPresentationMetadataCache cache;
+  PlayfieldPlayOptionSelection options{.option = "RANDOM", .seed = 123};
+  std::array<std::string_view, 2> titles{
+      "First course title long enough to allocate",
+      "Second course title long enough to allocate"};
+  int formatCalls = 0;
+  const auto format = [&](const PlayfieldPlayOptionSelection &selection) {
+    ++formatCalls;
+    return selection.option.value_or("NORMAL") + " #" +
+           std::to_string(selection.seed.value_or(0)) + " / " +
+           selection.option2.value_or("NORMAL") + " #" +
+           std::to_string(selection.seed2.value_or(0));
+  };
+  const auto original = cache.get(options, titles, format);
+  std::size_t allocations = 0;
+  bool reused = true;
+  {
+    test_support::AllocationSizeObserver observer;
+    for (int frame = 0; frame < 4; ++frame) {
+      reused = reused && cache.get(options, titles, format) == original;
+      PlayfieldAuthorityUpdate authority;
+      authority.presentationMetadata = original;
+      const auto copied = authority;
+      reused = reused && copied.presentationMetadata == original;
+    }
+    allocations = observer.count();
+  }
+  require(reused && allocations == 0 && formatCalls == 1,
+          "unchanged metadata shares storage without formatting or allocations");
+  const auto originalLabel = original->playOptionLabel;
+  options.seed = 456;
+  auto changed = cache.get(options, titles, format);
+  require(changed != original && changed->playOptionLabel != originalLabel &&
+              original->playOptionLabel == originalLabel,
+          "seed changes replace metadata while preserving retained labels");
+  options.option = "MIRROR";
+  auto previous = changed;
+  changed = cache.get(options, titles, format);
+  require(changed != previous && changed->playOptionLabel == "MIRROR #456 / NORMAL #0",
+          "first-player option alone invalidates metadata");
+  options.option2 = "S-RANDOM";
+  previous = changed;
+  changed = cache.get(options, titles, format);
+  require(changed != previous && changed->playOptionLabel == "MIRROR #456 / S-RANDOM #0",
+          "second-player option alone invalidates metadata");
+  options.seed2 = 789;
+  previous = changed;
+  changed = cache.get(options, titles, format);
+  require(changed != previous && changed->playOptionLabel == "MIRROR #456 / S-RANDOM #789",
+          "second-player seed alone invalidates metadata");
+  titles[1] = "Replacement course stage";
+  const auto nextCourse = cache.get(options, titles, format);
+  require(nextCourse->courseStageTitles[1] == titles[1] &&
+              original->courseStageTitles[1] != titles[1],
+          "title changes replace metadata without mutating old course frames");
+  const auto singleChart = cache.get(options, {}, format);
+  require(singleChart->courseStageTitles.empty() &&
+              nextCourse->courseStageTitles.size() == 2,
+          "leaving a course clears current titles but retains old course data");
+
+  PlayfieldAuthorityUpdate shared;
+  shared.presentationMetadata = original;
+  PlayfieldAuthorityUpdate legacy;
+  legacy.playOptionLabel = original->playOptionLabel;
+  legacy.courseStageTitles = original->courseStageTitles;
+  require(shared == legacy, "authority equality compares effective metadata values");
+  PlayfieldChartVisualModel model;
+  PlayfieldVisualStateStore store(model);
+  store.applyAuthorityUpdate(shared);
+  const auto retained = store.capture({.serial = 1});
+  shared.presentationMetadata = singleChart;
+  require(!(shared == legacy), "new metadata content changes authority equality");
+  store.applyAuthorityUpdate(shared);
+  const auto nextFrame = store.capture({.serial = 2});
+  require(retained.authority.presentationMetadata == original &&
+              nextFrame.authority.presentationMetadata == singleChart &&
+              retained.authority.resolvedCourseStageTitles().size() == 2 &&
+              nextFrame.authority.resolvedCourseStageTitles().empty(),
+          "store captures retain immutable metadata across authority updates");
+  shared.presentationMetadata.reset();
+  shared.playOptionLabel = "Legacy preview";
+  shared.courseStageTitles = {"Legacy stage"};
+  require(shared.resolvedPlayOptionLabel() == "Legacy preview" &&
+              shared.resolvedCourseStageTitles() == std::vector<std::string>{"Legacy stage"},
+          "clearing shared metadata restores preview/export owning-field fallback");
+}
+
 bms_parser::TimeLine *addTimeline(bms_parser::Measure &measure,
                                   long long timingMicros, double beat,
                                   double bpm, double scroll = 1.0) {
@@ -1043,6 +1131,109 @@ void testTouchResetClearsLiveAndReplayState() {
           "model reset clears live and replay touch lifecycle state cleanly");
 }
 
+void testReplayProgressionsShareAcrossAuthorityCaptureWithoutAllocations() {
+  // Isolate target copying from unrelated per-frame lane/map allocations.
+  // Two bounded sizes catch both fixed and progression-sized allocation work.
+  for (const int notes : {32, 4096}) {
+    pacemaker::Target best{.enabled = true,
+                           .label = "BEST",
+                           .finalScore = notes * 2,
+                           .maxScore = notes * 2,
+                           .totalNotes = notes,
+                           .usesReplayProgression = true};
+    std::vector<int> scores(static_cast<std::size_t>(notes) + 1);
+    for (int index = 0; index <= notes; ++index) scores[index] = index * 2;
+    best.scoreAfterNotes = pacemaker::ScoreProgression(scores);
+    auto selected = best;
+    selected.scoreAfterNotes = pacemaker::ScoreProgression(std::move(scores));
+    require(best.scoreAfterNotes.data() != selected.scoreAfterNotes.data(),
+            "fixture has two independently allocated replay progressions");
+    PlayfieldVisualStateStore store;
+    store.applyAuthorityUpdate({.bestScoreTarget = best,
+                                .pacemakerTarget = selected});
+    auto retained = store.captureForPresentation({});
+    {
+      test_support::AllocationSizeObserver allocations;
+      for (int frame = 1; frame <= 16; ++frame) {
+        const PlayfieldAuthorityUpdate authority{
+            .bestScoreTarget = best, .pacemakerTarget = selected};
+        store.applyAuthorityUpdate(authority);
+        const auto captured = store.capture(
+            {.serial = static_cast<std::uint64_t>(frame)}, false);
+        const auto presented = store.captureForPresentation(captured.clock);
+        const auto copied = captured;
+        require(presented.authority.bestScoreTarget.scoreAfterNotes.data() ==
+                    best.scoreAfterNotes.data() &&
+                    presented.authority.pacemakerTarget.scoreAfterNotes.data() ==
+                    selected.scoreAfterNotes.data() &&
+                    copied.authority.bestScoreTarget.scoreAfterNotes.data() ==
+                    best.scoreAfterNotes.data() &&
+                    copied.authority.pacemakerTarget.scoreAfterNotes.data() ==
+                    selected.scoreAfterNotes.data(),
+                "aggregate, store, capture and frame copy share both payloads");
+        require(copied.authority == authority,
+                "authority equality retains all target values");
+      }
+      require(allocations.count() == 0 && allocations.totalBytes() == 0,
+              "warmed authority/capture target path performs zero allocations");
+    }
+
+    // Simulate the next course stage replacing both targets, then an attempt
+    // reset and producer destruction while the old frame remains retained.
+    store.applyAuthorityUpdate({.bestScoreTarget = {},
+                                .pacemakerTarget = pacemaker::targetFromGrade(
+                                    {.TotalNotes = 3}, "AAA"),
+                                .courseMode = true,
+                                .courseStageIndex = 1,
+                                .courseStageCount = 2});
+    const auto nextStage = store.capture({}, false);
+    require(nextStage.authority.bestScoreTarget.scoreAfterNotes.empty() &&
+                nextStage.authority.pacemakerTarget.label == "AAA",
+            "next course stage replaces replay targets with independent rank state");
+    store.resetModel({});
+    best = {};
+    selected = {};
+    require(!store.capture({}, false).authority.pacemakerTarget.enabled &&
+                pacemaker::targetScoreAtPlayedNotes(
+                    retained.authority.bestScoreTarget, notes / 2) == notes &&
+                pacemaker::targetScoreAtPlayedNotes(
+                    retained.authority.pacemakerTarget, notes) == notes * 2,
+            "old frame owns both replay payloads after replacement and reset");
+  }
+}
+
+void testReplayProgressionValueEqualityAndFallbacks() {
+  PlayfieldAuthorityUpdate left;
+  left.bestScoreTarget = {.enabled = true, .finalScore = 5, .totalNotes = 3,
+                         .usesReplayProgression = true,
+                         .scoreAfterNotes = pacemaker::ScoreProgression({0, 2, 3, 5})};
+  auto right = left;
+  right.bestScoreTarget.scoreAfterNotes = pacemaker::ScoreProgression({0, 2, 3, 5});
+  require(left == right, "separate equal progression payloads compare by content");
+  right.bestScoreTarget.scoreAfterNotes = pacemaker::ScoreProgression({0, 1, 3, 5});
+  require(!(left == right), "equal-sized different progression payloads differ");
+  right = left;
+  right.bestScoreTarget.finalScore = 6;
+  require(!(left == right), "shared progression identity does not hide scalar changes");
+  const auto &target = left.bestScoreTarget;
+  require(pacemaker::targetScoreAtPlayedNotes(target, -1) == 0 &&
+              pacemaker::targetScoreAtPlayedNotes(target, 1) == 2 &&
+              pacemaker::targetScoreAtPlayedNotes(target, 9) == 5,
+          "replay indexing clamps both endpoints and preserves interior score");
+  right = left;
+  right.bestScoreTarget.scoreAfterNotes = pacemaker::ScoreProgression({0, 2});
+  require(pacemaker::targetScoreAtPlayedNotes(right.bestScoreTarget, 1) == 1,
+          "invalid-size replay progression retains linear fallback");
+  right.bestScoreTarget.scoreAfterNotes = {};
+  require(pacemaker::targetScoreAtPlayedNotes(right.bestScoreTarget, 1) == 1 &&
+              pacemaker::ScoreProgression(std::vector<int>{}) ==
+                  pacemaker::ScoreProgression{},
+          "empty progression has one value and retains linear fallback");
+  right.bestScoreTarget.enabled = false;
+  require(pacemaker::targetScoreAtPlayedNotes(right.bestScoreTarget, 3) == 0,
+          "disabled targets remain off");
+}
+
 void testCustomizedPresentationConfigurationCopiesWithoutAllocations() {
   built_in_notes::ModeStyles styles;
   for (int lane = 0; lane < 48; ++lane)
@@ -1201,6 +1392,9 @@ void testLargeRealtimePresentationReusesStorageAfterFrameRelease() {
 } // namespace
 
 int main() {
+  testPresentationMetadataCacheAndSnapshotLifetime();
+  testReplayProgressionsShareAcrossAuthorityCaptureWithoutAllocations();
+  testReplayProgressionValueEqualityAndFallbacks();
   testCustomizedPresentationConfigurationCopiesWithoutAllocations();
   testNoteStyleSnapshotsReuseUnchangedSettingsAndPreserveCapturedFrames();
   testLateMovesCannotReviveReleasedTouchVisuals();

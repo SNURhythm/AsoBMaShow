@@ -15,10 +15,10 @@ add_compile_definitions(
     ASOBMASHOW_APPLICATION_VERSION="${ASOBMASHOW_APPLICATION_VERSION}")
 include(CTest)
 option(ASOBMASHOW_BUILD_TESTS "Build unit and integration tests" ON)
+option(ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE
+       "Build developer-only skin acceptance capture infrastructure" OFF)
 option(ASOBMASHOW_TEST_FULL_DEBUG_INFO
        "Keep full variable/type debug information in Clang/GCC test objects" OFF)
-option(ASOBMASHOW_ENABLE_PERF_TELEMETRY
-       "Log periodic frame, audio, and input performance telemetry" OFF)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
 # Set C++ standard
@@ -49,6 +49,7 @@ if(APPLE)
     set_source_files_properties(src/platform/NativeDocumentApple.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_source_files_properties(src/notifications/LocalNotificationsIOS.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
     set_source_files_properties(src/video/HardwareVideoFrameApple.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
+    set_source_files_properties(src/video/MetalDisplayLink.mm PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 endif()
 if (ANDROID)
     set(PLATFORM_ANDROID ON)
@@ -85,6 +86,8 @@ endif()
 add_definitions(-DSOL_LUAJIT=1 -DNOMINMAX)
 set(BX_CONFIG_DEBUG OFF CACHE BOOL "" FORCE)
 set(BGFX_CONFIG_DEBUG OFF CACHE BOOL "" FORCE)
+# Keep video decoding on the application's existing media path.
+set(BGFX_CONFIG_VIDEO OFF CACHE BOOL "" FORCE)
 set(BGFX_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(BGFX_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 # Include directories
@@ -432,8 +435,10 @@ if (ANDROID)
         _LIBCPP_ENABLE_EXPERIMENTAL
     )
 endif()
+if(ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE)
+    target_compile_definitions(main PRIVATE ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE=1)
+endif()
 target_compile_definitions(main PRIVATE
-    ASOBMASHOW_ENABLE_PERF_TELEMETRY=$<BOOL:${ASOBMASHOW_ENABLE_PERF_TELEMETRY}>
     ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=$<BOOL:${ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS}>
 )
 
@@ -671,6 +676,8 @@ install(DIRECTORY assets DESTINATION bin)
 
 # Subdirectories
 add_subdirectory(bgfx)
+include(cmake/BgfxFrameSubmission.cmake)
+asobmashow_enable_bgfx_frame_submission()
 include(cmake/BgfxVulkanFixes.cmake)
 asobmashow_fix_bgfx_vulkan()
 include(cmake/BgfxMetalReadback.cmake)
@@ -867,6 +874,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
         add_executable(builtin_renderer_characterization_tests
             tests/builtin_renderer_characterization_tests.cpp
+            tests/support/AllocationFailure.cpp
             src/AppSettings.cpp
             src/FileChecksum.cpp
             src/ir/IrProfileSettings.cpp
@@ -1123,6 +1131,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         if(NOT IOS)
             add_executable(skin_quad_batch_renderer_tests
                 tests/skin_quad_batch_renderer_tests.cpp
+                tests/support/AllocationFailure.cpp
                 src/rendering/SkinQuadBatchRenderer.cpp
                 src/rendering/UniformCache.cpp
                 src/skin/beatoraja/SkinMovieCatalogFrame.cpp
@@ -2700,6 +2709,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     set_tests_properties(replay_video_ui_batch_contract PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+    foreach(render_boundary_test IN ITEMS
+            rendering_transient_boundary_tests replay_export_frame_completion_tests)
+        add_test(NAME ${render_boundary_test}
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tests/${render_boundary_test}.py)
+        set_tests_properties(${render_boundary_test} PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            ENVIRONMENT "${ASOBMASHOW_TEST_CXX_ENVIRONMENT}")
+    endforeach()
     add_library(ir_submission_eligibility_test_support STATIC
         src/ir/tachi/TachiEligibility.cpp
         src/ir/IrOutboxModels.cpp
@@ -6249,6 +6266,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(scene_return_target_tests PRIVATE cxx_std_23)
 
+    add_executable(camera_inverse_cache_tests
+        tests/camera_inverse_cache_tests.cpp
+        src/rendering/Camera.cpp)
+    target_include_directories(camera_inverse_cache_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/bgfx/bgfx/include)
+    target_compile_features(camera_inverse_cache_tests PRIVATE cxx_std_23)
+    target_link_libraries(camera_inverse_cache_tests PRIVATE bx SDL3::SDL3)
+    add_test(NAME camera_inverse_cache_tests COMMAND camera_inverse_cache_tests)
+
     add_executable(portrait_playfield_framing_tests tests/portrait_playfield_framing_tests.cpp)
     target_compile_features(portrait_playfield_framing_tests PRIVATE cxx_std_23)
     add_test(NAME portrait_playfield_framing_tests COMMAND portrait_playfield_framing_tests)
@@ -6578,6 +6604,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(gameplay_bga_target_tests
         tests/gameplay_bga_target_tests.cpp
+        src/rendering/BlurPass.cpp
+        src/rendering/RenderPlan.cpp
         src/settings/AudioVideoSettings.cpp
         src/ArchiveFile.cpp
         src/archive/TemporaryCache.cpp
@@ -7254,6 +7282,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             cxx_std_23
         )
         target_compile_definitions(skin_acceptance_recorder_tests PRIVATE
+            ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE=1
             ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
             ASOBMASHOW_BUILD_COMMIT="1111111111111111111111111111111111111111"
             ASOBMASHOW_BUILD_CONFIGURATION="Release"
@@ -7279,6 +7308,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             cxx_std_23
         )
         target_compile_definitions(skin_overlay_digest_provider_tests PRIVATE
+            ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE=1
             ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
             ASOBMASHOW_SKIN_OVERLAY_DIGEST_PROVIDER_TESTING=1
             ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
@@ -7306,6 +7336,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             cxx_std_23
         )
         target_compile_definitions(gameplay_skin_acceptance_controller_tests PRIVATE
+            ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE=1
             ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
             ASOBMASHOW_BUILD_COMMIT="1111111111111111111111111111111111111111"
             ASOBMASHOW_BUILD_CONFIGURATION="Release"
@@ -7677,7 +7708,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(realtime_gameplay_worker_tests PRIVATE cxx_std_23)
     target_compile_definitions(realtime_gameplay_worker_tests PRIVATE
         BX_CONFIG_DEBUG=1
-        ASOBMASHOW_ENABLE_PERF_TELEMETRY=1
     )
     if(TARGET SDL3::SDL3)
         target_link_libraries(realtime_gameplay_worker_tests PRIVATE SDL3::SDL3)
@@ -7703,6 +7733,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(realtime_touch_input_router_tests
         tests/realtime_touch_input_router_tests.cpp
+        tests/support/AllocationFailure.cpp
         src/scene/play/RealtimeTouchInputRouter.cpp
         src/scene/play/VirtualControllerLayout.cpp
     )
@@ -8282,6 +8313,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${CMAKE_SOURCE_DIR}/src
     )
     target_compile_features(display_settings_manager_tests PRIVATE cxx_std_23)
+
+    add_executable(ios_metal_export_pacing_tests
+        tests/ios_metal_export_pacing_tests.cpp
+        src/video/RendererAccessCoordinator.cpp)
+    target_include_directories(ios_metal_export_pacing_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+    target_compile_features(ios_metal_export_pacing_tests PRIVATE cxx_std_23)
+    target_compile_definitions(ios_metal_export_pacing_tests PRIVATE TARGET_OS_IPHONE=1)
+    target_link_libraries(ios_metal_export_pacing_tests PRIVATE Threads::Threads)
 
     add_executable(frame_pacer_tests
         tests/frame_pacer_tests.cpp
@@ -9489,6 +9528,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         ${COMMON_LIBS} bgfx yogacore
     )
     if(APPLE)
+        add_executable(metal_drawable_provider_tests tests/metal_drawable_provider_tests.mm)
+        target_compile_options(metal_drawable_provider_tests PRIVATE -fobjc-arc)
+        target_include_directories(metal_drawable_provider_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
+        target_compile_features(metal_drawable_provider_tests PRIVATE cxx_std_23)
+        set_target_properties(metal_drawable_provider_tests PROPERTIES OBJCXX_STANDARD 23 OBJCXX_STANDARD_REQUIRED ON)
+        target_link_libraries(metal_drawable_provider_tests PRIVATE bgfx
+            "-framework Foundation" "-framework QuartzCore" "-framework Metal")
+        asobmashow_register_test(metal_drawable_provider_tests)
+        set_tests_properties(metal_drawable_provider_tests PROPERTIES RESOURCE_LOCK metal_device)
         add_executable(bgfx_metal_readback_tests tests/bgfx_metal_readback_tests.mm)
         target_compile_features(bgfx_metal_readback_tests PRIVATE cxx_std_17)
         target_link_libraries(bgfx_metal_readback_tests PRIVATE bgfx "-framework Metal" "-framework Foundation")
@@ -9520,6 +9568,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         )
         add_executable(ui_batch_metal_tests
             tests/ui_batch_metal_tests.cpp
+            tests/support/AllocationFailure.cpp
             src/rendering/Color.cpp
             src/rendering/UiBatchRenderer.cpp
             src/rendering/UniformCache.cpp
@@ -9536,6 +9585,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         # emulator or Android build; keep the host's Metal backend and SDK.
         add_executable(ui_batch_android_upload_metal_tests
             tests/ui_batch_metal_tests.cpp
+            tests/support/AllocationFailure.cpp
             src/rendering/Color.cpp
             src/rendering/UiBatchRenderer.cpp
             src/rendering/UniformCache.cpp
@@ -9917,6 +9967,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     asobmashow_register_test(settings_audio_video_model_tests foundation_av_settings_ui)
     asobmashow_register_test(display_settings_manager_tests foundation_av_display)
     asobmashow_register_test(frame_pacer_tests foundation_av_frame_pacer)
+    asobmashow_register_test(ios_metal_export_pacing_tests)
     asobmashow_register_test(display_orientation_sync_tests foundation_av_display_orientation_sync)
     asobmashow_register_test(ios_display_orientation_sync_tests foundation_av_ios_display_orientation_sync)
     asobmashow_register_test(android_render_suspend_tests foundation_av_android_render_suspend)

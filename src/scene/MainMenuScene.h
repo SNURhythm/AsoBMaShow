@@ -374,6 +374,7 @@ private:
   LibraryFolderMetadataCache folderMetadataCache;
   ScoreClearRankCache scoreClearRanks;
   ScoreBestCache scoreBestScores;
+  main_menu_library::RandomAvailabilityCache randomAvailabilityCache;
   std::uint64_t scoreClearRanksRevision = 0;
   std::uint64_t observedIrReconciliationRevision = 0;
   std::uint64_t observedIrAccountEvidenceRevision = 0;

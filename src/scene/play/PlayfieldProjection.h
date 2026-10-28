@@ -256,6 +256,8 @@ struct PlayfieldProjectionWorkStats {
   std::size_t timelineRowsExamined = 0;
   std::size_t noteDescriptorsExamined = 0;
   std::size_t longHeadsExamined = 0;
+  std::size_t pmsPoorCursorRowsExamined = 0;
+  std::size_t pmsPoorCursor = 0;
 };
 #endif
 

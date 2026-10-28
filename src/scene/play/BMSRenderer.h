@@ -185,6 +185,7 @@ public:
 private:
   struct PreparedPresentationFrame;
   std::unique_ptr<PreparedPresentationFrame> preparedPresentationFrame;
+  std::vector<std::uint32_t> traversedTimelineOrdinalScratch;
   std::uint64_t lastPreparedPresentationFrameSerial = 0;
   std::optional<PresentationFailure> presentationFailure;
   std::unique_ptr<TextView> titleText;
@@ -255,6 +256,7 @@ private:
   std::vector<size_t> blueKeyLaneIndices;
   std::vector<size_t> scratchLaneIndices;
   std::vector<int> startLaneIndicatorLanes;
+  std::vector<int> startLaneIndicatorSourceLanes;
   std::unordered_map<int, start_lane_indicator::ColorRole>
       startLaneIndicatorColorRoles;
 
@@ -287,6 +289,8 @@ private:
   };
   std::unordered_map<bms_parser::LongNote *, LongNoteLookahead>
       longNoteLookaheadScratch;
+  std::vector<decltype(longNoteLookaheadScratch)::node_type>
+      longNoteLookaheadFreeNodes;
   gameplay_chart_entity_render_budget::Budget chartEntityRenderBudget;
   BMSRendererState state;
   int scratchLaneCount = 0;
@@ -410,7 +414,7 @@ private:
   void updateJudgementCounterText();
   void synchronizeCapturedJudgementHud(const PlayfieldVisualState &);
   void publishJudgementCounterSnapshot(const JudgementCounterSnapshot &snapshot);
-  void drawLaneBeam(int lane, const LaneState &laneState, long long time);
+  bool drawLaneBeam(int lane, const LaneState &laneState, long long time);
   void drawStartLaneIndicators();
   void drawLaneCover();
   void layoutLaneCoverNumberTexts();
@@ -435,13 +439,15 @@ private:
   // preview/export callers.
   void renderFrame(RenderContext &context, long long micro,
                    long long replayTouchTimeMicros,
-                   const PlayfieldProjectionResult *projection);
+                   const PlayfieldProjectionResult *projection,
+                   const std::vector<PresentationTouchPoint> *capturedTouches);
   void drawReplayGhosts(float rxhs, long long currentTimeMicros,
                         double currentScrollPosition);
   void drawGhostNoteOutline(float y, const ReplayGhostEvent &event);
   void drawReplayMissMarkers(float rxhs, double currentScrollPosition);
   void drawMissMarkerX(float y, const ReplayMissMarker &marker);
-  void drawTouchPoints(long long replayTouchTimeMicros);
+  void drawTouchPoints(long long replayTouchTimeMicros,
+                      const std::vector<PresentationTouchPoint> *capturedTouches);
   void advanceReplayTouches(long long replayTouchTimeMicros);
   void applyTouchSample(
       std::unordered_map<long long, TouchPointVisual> &activeTouches,
@@ -482,6 +488,7 @@ private:
                                                          float renderY) const;
   std::optional<std::pair<float, float>> projectLanePointToUi(
       float worldX, float worldY) const;
+  float configuredHiSpeed() const;
   std::string laneCoverVisibleTimeLabel() const;
   float computeLaneX(int lane) const;
   void rebuildPlayAreaGeometry();
@@ -650,7 +657,7 @@ public:
   void setAutoPlayMarkVisible(bool visible);
   void setTouchVisualizationEnabled(bool enabled);
   void setReplayGhostRenderingEnabled(bool enabled);
-  void setStartLaneIndicators(std::vector<int> lanes);
+  void setStartLaneIndicators(const std::vector<int> &lanes);
   void setStartLaneIndicatorsVisible(bool visible);
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
   [[nodiscard]] bool lanePressedForTesting(int lane) const {

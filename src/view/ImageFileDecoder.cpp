@@ -5,7 +5,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
-#include "../../bgfx/bimg/3rdparty/stb/stb_image_resize.h"
+#include "../../bgfx/bimg/3rdparty/stb/stb_image_resize2.h"
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -339,8 +339,9 @@ resize(const DecodedImageData &decoded, const ImageDecodeOptions &options) {
     return std::nullopt;
   }
   auto rgba = std::make_shared<std::vector<unsigned char>>(bytes);
-  if (stbir_resize_uint8(decoded.rgba->data(), decoded.width, decoded.height, 0,
-                         rgba->data(), width, height, 0, 4) == 0 ||
+  // Keep the previous independent-channel filtering, including alpha.
+  if (stbir_resize_uint8_linear(decoded.rgba->data(), decoded.width, decoded.height, 0,
+                                rgba->data(), width, height, 0, STBIR_4CHANNEL) == nullptr ||
       stopped(options)) {
     return std::nullopt;
   }
@@ -677,8 +678,8 @@ decodeImageMemory(std::span<const std::byte> encoded,
   if (outputWidth != width || outputHeight != height) {
     auto rgba = std::make_shared<std::vector<unsigned char>>(
         static_cast<std::size_t>(outputWidth) * outputHeight * 4);
-    if (stbir_resize_uint8(decoded.get(), width, height, 0, rgba->data(),
-                           outputWidth, outputHeight, 0, 4) == 0 || stopped(options)) {
+    if (stbir_resize_uint8_linear(decoded.get(), width, height, 0, rgba->data(),
+                                  outputWidth, outputHeight, 0, STBIR_4CHANNEL) == nullptr || stopped(options)) {
       return std::nullopt;
     }
     return DecodedImageData{.width = outputWidth, .height = outputHeight, .rgba = std::move(rgba)};

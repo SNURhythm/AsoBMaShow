@@ -25,6 +25,7 @@
 #include "GameplayGeometry.h"
 #include "Judge.h"
 #include "KeybombEffect.h"
+#include "LaneBeamClip.h"
 #include "../../RAII.h"
 #include "bgfx/bgfx.h"
 #include "../../rendering/common.h"
@@ -44,6 +45,7 @@
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <span>
 #include <string>
 #include <utility>
 
@@ -634,6 +636,7 @@ BMSRenderer::BMSRenderer(
   }
   state.orphanLongNotes.reserve(laneOrder.size() * 2);
   longNoteLookaheadScratch.reserve(laneOrder.size() * 2);
+  longNoteLookaheadFreeNodes.reserve(laneOrder.size() * 2);
   // flatten timeline
   size_t timelineCount = 0;
   for (const auto &measure : chart->Measures) {
@@ -749,31 +752,37 @@ BMSRenderer::BMSRenderer(
   titleText->setOverflow(TextView::TextOverflow::Marquee);
   titleText->setColor(app_theme::sdl(app_theme::textPrimary()));
 
+  // Changing HUD values share glyph textures; unsupported text stays deferred.
   judgeText = std::make_unique<TextView>(kHudFontPath, 38);
+  judgeText->setGlyphAtlasEnabled(true);
   judgeText->setAlign(TextView::CENTER);
   judgeText->setVAlign(TextView::MIDDLE);
   judgeText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   judgeText->setOverflow(TextView::TextOverflow::Hidden);
   judgeText->setVisible(false);
   judgementComboText = std::make_unique<TextView>(kHudFontPath, 38);
+  judgementComboText->setGlyphAtlasEnabled(true);
   judgementComboText->setAlign(TextView::CENTER);
   judgementComboText->setVAlign(TextView::MIDDLE);
   judgementComboText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   judgementComboText->setOverflow(TextView::TextOverflow::Hidden);
   judgementComboText->setVisible(false);
   pacemakerDeltaText = std::make_unique<TextView>(kHudFontPath, 32);
+  pacemakerDeltaText->setGlyphAtlasEnabled(true);
   pacemakerDeltaText->setAlign(TextView::CENTER);
   pacemakerDeltaText->setVAlign(TextView::MIDDLE);
   pacemakerDeltaText->setColor(ui_theme::sdl(ui_theme::textMuted()));
   pacemakerDeltaText->setOverflow(TextView::TextOverflow::Hidden);
   pacemakerDeltaText->setVisible(false);
   judgementTimingDirectionText = std::make_unique<TextView>(kHudFontPath, 21);
+  judgementTimingDirectionText->setGlyphAtlasEnabled(true);
   judgementTimingDirectionText->setAlign(TextView::LEFT);
   judgementTimingDirectionText->setVAlign(TextView::MIDDLE);
   judgementTimingDirectionText->setColor(ui_theme::sdl(ui_theme::cyan()));
   judgementTimingDirectionText->setOverflow(TextView::TextOverflow::Hidden);
   judgementTimingDirectionText->setVisible(false);
   judgementTimingMsText = std::make_unique<TextView>(kHudFontPath, 21);
+  judgementTimingMsText->setGlyphAtlasEnabled(true);
   judgementTimingMsText->setAlign(TextView::RIGHT);
   judgementTimingMsText->setVAlign(TextView::MIDDLE);
   judgementTimingMsText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
@@ -782,17 +791,20 @@ BMSRenderer::BMSRenderer(
   refreshJudgementFeedbackTextStyle();
   layoutCenteredJudgementText();
   scoreText = std::make_unique<TextView>(app_theme::boldFont, 34);
+  scoreText->setGlyphAtlasEnabled(true);
   scoreText->setAlign(TextView::LEFT);
   scoreText->setVAlign(TextView::MIDDLE);
   scoreText->setText("SCORE 0");
   scoreText->setColor(app_theme::sdl(app_theme::textPrimary()));
   // This combo belongs to the score panel; judgementComboText stays in-lane.
   comboText = std::make_unique<TextView>(app_theme::font, 24);
+  comboText->setGlyphAtlasEnabled(true);
   comboText->setAlign(TextView::RIGHT);
   comboText->setVAlign(TextView::MIDDLE);
   comboText->setText("COMBO 0");
   comboText->setColor(ui_theme::sdl(ui_theme::lime()));
   pacemakerText = std::make_unique<TextView>(app_theme::font, 18);
+  pacemakerText->setGlyphAtlasEnabled(true);
   pacemakerText->setAlign(TextView::CENTER);
   pacemakerText->setVAlign(TextView::MIDDLE);
   pacemakerText->setOverflow(TextView::TextOverflow::Hidden);
@@ -800,15 +812,18 @@ BMSRenderer::BMSRenderer(
   pacemakerText->setColor(app_theme::sdl(app_theme::textMuted()));
   pacemakerText->setVisible(false);
   gaugeText = std::make_unique<TextView>(kHudFontPath, 18);
+  gaugeText->setGlyphAtlasEnabled(true);
   gaugeText->setAlign(TextView::CENTER);
   gaugeText->setVAlign(TextView::MIDDLE);
   gaugeTypeBadge = std::make_unique<View>();
   gaugeTypeText = std::make_unique<TextView>(kHudFontPath, 15);
+  gaugeTypeText->setDeferredTextureMaterialization(true);
   gaugeTypeText->setAlign(TextView::CENTER);
   gaugeTypeText->setVAlign(TextView::MIDDLE);
   gaugeTypeText->setOverflow(TextView::TextOverflow::Hidden);
   gaugeTypeText->setRotationDegrees(90.0f);
   gaugeAutoShiftText = std::make_unique<TextView>(kHudFontPath, 16);
+  gaugeAutoShiftText->setDeferredTextureMaterialization(true);
   gaugeAutoShiftText->setText("GAS");
   gaugeAutoShiftText->setAlign(TextView::CENTER);
   gaugeAutoShiftText->setVAlign(TextView::MIDDLE);
@@ -829,6 +844,7 @@ BMSRenderer::BMSRenderer(
   autoPlayMarkText = createAutoPlayMarkText();
   autoPlayMarkText->setVisible(false);
   laneCoverWhiteNumberText = std::make_unique<TextView>(kHudFontPath, 24);
+  laneCoverWhiteNumberText->setGlyphAtlasEnabled(true);
   laneCoverWhiteNumberText->setAlign(TextView::CENTER);
   laneCoverWhiteNumberText->setVAlign(TextView::MIDDLE);
   laneCoverWhiteNumberText->setOverflow(TextView::TextOverflow::Hidden);
@@ -836,6 +852,7 @@ BMSRenderer::BMSRenderer(
       ui_theme::sdl(Color(255, 255, 255, 255)));
   laneCoverWhiteNumberText->setVisible(false);
   laneCoverVisibleTimeText = std::make_unique<TextView>(kHudFontPath, 24);
+  laneCoverVisibleTimeText->setGlyphAtlasEnabled(true);
   laneCoverVisibleTimeText->setAlign(TextView::CENTER);
   laneCoverVisibleTimeText->setVAlign(TextView::MIDDLE);
   laneCoverVisibleTimeText->setOverflow(TextView::TextOverflow::Hidden);
@@ -845,6 +862,7 @@ BMSRenderer::BMSRenderer(
   for (size_t i = 0; i < kHudCounterItemCount; ++i) {
     auto &label = judgementCounterLabelTexts[i];
     label = std::make_unique<TextView>(app_theme::font, 14);
+    label->setDeferredTextureMaterialization(true);
     label->setText(kCounterLabels[i]);
     label->setAlign(TextView::CENTER);
     label->setVAlign(TextView::MIDDLE);
@@ -852,6 +870,7 @@ BMSRenderer::BMSRenderer(
 
     auto &value = judgementCounterValueTexts[i];
     value = std::make_unique<TextView>(app_theme::boldFont, 24);
+    value->setGlyphAtlasEnabled(true);
     value->setText("0");
     value->setAlign(TextView::CENTER);
     value->setVAlign(TextView::MIDDLE);
@@ -2164,17 +2183,21 @@ double BMSRenderer::visibleTimeReferenceBpm() const {
   return referenceBpm;
 }
 
+float BMSRenderer::configuredHiSpeed() const {
+  if (configuredHispeedOverride.has_value()) {
+    return *configuredHispeedOverride;
+  }
+  const float visibleTimeMs = std::max(
+      1.0F, static_cast<float>(visibleTimeDurationMilliseconds));
+  return 240000.0F / static_cast<float>(visibleTimeReferenceBpm()) /
+         visibleTimeMs * hispeedMultiplier * laneCoverHispeedFactor;
+}
+
 BuiltInRendererTraversal BMSRenderer::builtInProjectionTraversal() const {
   // This is intentionally the single source for the capture-time projection
   // geometry and render-time forward walk.  GamePlayScene can freeze it in
   // PlayfieldProjectionRequest without reimplementing green-number math.
-  const float visibleTimeMs = std::max(
-      1.0F, static_cast<float>(visibleTimeDurationMilliseconds));
-  const float configuredHispeed =
-      configuredHispeedOverride.has_value()
-          ? *configuredHispeedOverride
-          : 240000.0F / static_cast<float>(visibleTimeReferenceBpm()) /
-                visibleTimeMs * hispeedMultiplier * laneCoverHispeedFactor;
+  const float configuredHispeed = configuredHiSpeed();
   const float hispeed =
       configuredHispeed *
       static_cast<float>(gameplay_timing::playbackTravelScale(playbackRate));
@@ -2228,7 +2251,7 @@ int BMSRenderer::effectiveVisibleTimeGreenNumber() const {
           ? currentBpm
           : visibleTimeReferenceBpm();
   const auto duration = gameplay_visible_time::currentDurationMilliseconds(
-      bpm, builtInProjectionTraversal().configuredHispeed,
+      bpm, configuredHiSpeed(),
       noteStartPositionPercent, laneCoverEnabled, currentScrollRate,
       currentSpeedMultiplier);
   return duration ? gameplay_visible_time::durationToGreenNumber(*duration)
@@ -2237,20 +2260,19 @@ int BMSRenderer::effectiveVisibleTimeGreenNumber() const {
 }
 
 std::string BMSRenderer::laneCoverVisibleTimeLabel() const {
-  const int greenNumber = effectiveVisibleTimeGreenNumber();
   if (visibleTimeUseMilliseconds) {
     const double bpm = currentBpm > 0.0 && std::isfinite(currentBpm)
                            ? currentBpm
                            : visibleTimeReferenceBpm();
     const auto duration = gameplay_visible_time::currentDurationMilliseconds(
-        bpm, builtInProjectionTraversal().configuredHispeed,
+        bpm, configuredHiSpeed(),
         noteStartPositionPercent, laneCoverEnabled, currentScrollRate,
         currentSpeedMultiplier);
     const int milliseconds = duration.value_or(
         std::max(1, visibleTimeDurationMilliseconds));
     return std::to_string(milliseconds) + " ms";
   }
-  return std::to_string(greenNumber);
+  return std::to_string(effectiveVisibleTimeGreenNumber());
 }
 
 double BMSRenderer::scrollPositionAtTime(long long timeMicros) const {
@@ -2588,8 +2610,30 @@ void BMSRenderer::drawTouchSample(const TouchPointVisual &sample,
   }
 }
 
-void BMSRenderer::drawTouchPoints(long long replayTouchTimeMicros) {
+void BMSRenderer::drawTouchPoints(
+    long long replayTouchTimeMicros,
+    const std::vector<PresentationTouchPoint> *capturedTouches) {
   if (!touchVisualizationEnabled) {
+    return;
+  }
+
+  if (capturedTouches != nullptr) {
+    // Capture already resolves live/replay lifecycle and rewind. In particular,
+    // a held Move is a complete visible point, not an event needing a Down in
+    // a freshly rebuilt map. Keep fading releases beneath active markers.
+    for (bool releasedPass : {true, false}) {
+      for (const auto &touch : *capturedTouches) {
+        const bool released = touch.action == ReplayTouchAction::Up ||
+                              touch.action == ReplayTouchAction::Cancel;
+        if (released != releasedPass) continue;
+        drawTouchSample({.x = touch.normalizedX,
+                         .y = touch.normalizedY,
+                         .eventTimeMicros = touch.songTimeMicros,
+                         .releaseTimeMicros = released ? touch.songTimeMicros : 0,
+                         .released = released},
+                        replayTouchTimeMicros);
+      }
+    }
     return;
   }
 
@@ -2706,7 +2750,7 @@ PresentationFrameOutcome BMSRenderer::prepareFrame(
     setPacemakerStatus(pacemaker::snapshotForBuiltInPresentation(
         authority.pacemakerTarget, authority.pacemakerStatus,
         authority.bestScoreTarget));
-    setPlayOptionStatus(authority.playOptionLabel);
+    setPlayOptionStatus(authority.resolvedPlayOptionLabel());
     setAutoPlayMarkVisible(authority.autoPlayMarkVisible);
     setStartLaneIndicators(authority.startLaneIndicators);
     setStartLaneIndicatorsVisible(authority.startLaneIndicatorsVisible);
@@ -2741,12 +2785,6 @@ PresentationFrameOutcome BMSRenderer::prepareFrame(
       destination.lastStateTime.store(
           lastStateTime == kPlayfieldTimestampOff ? -1 : lastStateTime,
           std::memory_order_release);
-    }
-
-    clearLiveTouchPoints();
-    for (const auto &touch : capturedState.touches) {
-      setLiveTouchPoint(touch.fingerId, touch.action, touch.normalizedX,
-                        touch.normalizedY, touch.songTimeMicros);
     }
 
     // Beatoraja's retained position moves forward during its draw traversal
@@ -2806,7 +2844,8 @@ PresentationFrameResult BMSRenderer::render(RenderContext &context) {
               prepared->state->clock.replayTouchTimeMicros,
               prepared->projection->useParserBackedBuiltInTraversal
                   ? nullptr
-                  : &*prepared->projection);
+                  : &*prepared->projection,
+              &prepared->state->touches);
 
   presentationFailure.reset();
   return {.frameSerial = frameSerial,
@@ -2944,12 +2983,13 @@ void BMSRenderer::renderSelectedSkinHud(
 
 void BMSRenderer::render(RenderContext &context, long long micro,
                          long long replayTouchTimeMicros) {
-  renderFrame(context, micro, replayTouchTimeMicros, nullptr);
+  renderFrame(context, micro, replayTouchTimeMicros, nullptr, nullptr);
 }
 
 void BMSRenderer::renderFrame(
     RenderContext &context, long long micro, long long replayTouchTimeMicros,
-    const PlayfieldProjectionResult *projection) {
+    const PlayfieldProjectionResult *projection,
+    const std::vector<PresentationTouchPoint> *capturedTouches) {
   const long long chartTimeMicros =
       gameplay_scroll_geometry::chartRenderTimeMicros(micro);
   currentRenderMicros = micro;
@@ -3048,13 +3088,22 @@ void BMSRenderer::renderFrame(
                  : projectedLane;
     };
     const auto &builtInPlan = projection->builtInPlan;
-    std::unordered_set<std::uint32_t> traversedTimelineOrdinals(
-        builtInPlan.traversedTimelineOrdinals.begin(),
-        builtInPlan.traversedTimelineOrdinals.end());
+    std::span<const std::uint32_t> traversedTimelineOrdinals =
+        builtInPlan.traversedTimelineOrdinals;
+    // Projection normally visits retained rows in ordinal order. Borrow that
+    // list directly; tolerate externally supplied unordered plans without
+    // rebuilding a node-allocated hash set on every frame.
+    if (!std::ranges::is_sorted(traversedTimelineOrdinals)) {
+      traversedTimelineOrdinalScratch.assign(traversedTimelineOrdinals.begin(),
+                                             traversedTimelineOrdinals.end());
+      std::ranges::sort(traversedTimelineOrdinalScratch);
+      traversedTimelineOrdinals = traversedTimelineOrdinalScratch;
+    }
     const auto timelineWasTraversed =
-        [&traversedTimelineOrdinals](std::uint32_t retainedOrdinal) {
+        [traversedTimelineOrdinals](std::uint32_t retainedOrdinal) {
           return retainedOrdinal != kNoRetainedTimelineOrdinal &&
-                 traversedTimelineOrdinals.contains(retainedOrdinal);
+                 std::ranges::binary_search(traversedTimelineOrdinals,
+                                             retainedOrdinal);
         };
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
     const auto recordProjectedSubmission =
@@ -3425,11 +3474,34 @@ void BMSRenderer::renderFrame(
   gameplay_note_submission_order::Allocator submissionOrder;
   const auto pastLongNoteOrder = submissionOrder.captureLongNote();
   auto &longNoteLookahead = longNoteLookaheadScratch;
-  longNoteLookahead.clear();
+  // Recycle nodes as well as buckets. clear()/erase() would free every
+  // visible head each frame, despite the map's retained bucket capacity.
+  while (!longNoteLookahead.empty()) {
+    longNoteLookaheadFreeNodes.push_back(
+        longNoteLookahead.extract(longNoteLookahead.begin()));
+  }
+  const auto forgetLongNoteHead = [&](bms_parser::LongNote *head) {
+    auto node = longNoteLookahead.extract(head);
+    if (node) {
+      longNoteLookaheadFreeNodes.push_back(std::move(node));
+    }
+  };
   const auto rememberLongNoteHead =
       [&](bms_parser::LongNote *longNote, float headY,
           const auto &orderProvider) {
-        auto [it, inserted] = longNoteLookahead.try_emplace(longNote);
+        auto it = longNoteLookahead.find(longNote);
+        const bool inserted = it == longNoteLookahead.end();
+        if (inserted) {
+          if (longNoteLookaheadFreeNodes.empty()) {
+            it = longNoteLookahead.try_emplace(longNote).first;
+          } else {
+            auto node = std::move(longNoteLookaheadFreeNodes.back());
+            longNoteLookaheadFreeNodes.pop_back();
+            node.key() = longNote;
+            node.mapped() = {};
+            it = longNoteLookahead.insert(std::move(node)).position;
+          }
+        }
         it->second.headY = headY;
         if (!inserted) {
           return;
@@ -3596,7 +3668,7 @@ void BMSRenderer::renderFrame(
                            it->second.order,
                            it->second.renderBudgetReserved);
               // remove from lookahead
-              longNoteLookahead.erase(longNote->Head);
+              forgetLongNoteHead(longNote->Head);
             } else {
               const bool renderBudgetReserved =
                   chartEntityRenderBudget.tryConsume(
@@ -3632,7 +3704,7 @@ void BMSRenderer::renderFrame(
             // remove from orphan long note
             state.orphanLongNotes.erase(longNote->Head);
             // and from long note lookahead
-            longNoteLookahead.erase(longNote->Head);
+            forgetLongNoteHead(longNote->Head);
           } else {
             // add to orphan long note
             state.orphanLongNotes.insert(longNote);
@@ -3737,11 +3809,21 @@ void BMSRenderer::renderFrame(
       snapshot.keybomb = source.keybomb();
       laneStateSnapshot.emplace_back(laneOrder[i], snapshot);
     }
+    bool hasLaneBeams = false;
     for (const auto &entry : laneStateSnapshot) {
       if (renderLaneBeams && (!emptyScratchLaneHidden || entry.first != 7))
-        drawLaneBeam(entry.first, entry.second, nowMicros);
+        hasLaneBeams |= drawLaneBeam(entry.first, entry.second, nowMicros);
+    }
+    // The bounded lane quads fit in one batch. Scope the drawable-pixel clip
+    // to this flush, including explicit reset before any later effect draws.
+    if (hasLaneBeams) {
+      const auto clip = lane_beam::coverScissor(
+          rendering::game_camera, playAreaLeftX, playAreaWidth, judgeY,
+          upperBound, noteVisibleUpperBound, coverState);
+      if (clip) bgfx::setScissor(clip->x, clip->y, clip->width, clip->height);
     }
     simpleBatchRenderer.flush();
+    bgfx::setScissor();
     simpleBatchRenderer.setSubmitDepth(gameplay_note_submission_order::kKeybombDepth);
     const float keybombY = judgeY +
         built_in_judge_line::height(noteRenderWidth, builtInJudgeLine) * 0.5F;
@@ -3932,7 +4014,7 @@ void BMSRenderer::renderFrame(
     simpleBatchRenderer.setSubmitView(rendering::ui_view);
     simpleBatchRenderer.setSubmitDepth(1);
     simpleBatchRenderer.begin();
-    drawTouchPoints(replayTouchTimeMicros);
+    drawTouchPoints(replayTouchTimeMicros, capturedTouches);
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
     recordCharacterizationSubmission(
         bms_renderer_characterization::SubmissionKind::TouchPass,
@@ -4807,6 +4889,7 @@ void BMSRenderer::refreshJudgementFeedbackTextStyle() {
     const auto weight = bold ? TextView::FontWeight::Bold : TextView::FontWeight::Regular;
     if (view->pointSize() == size && view->fontWeight() == weight) return;
     auto replacement = std::make_unique<TextView>(kHudFontPath, size, weight);
+    replacement->setGlyphAtlasEnabled(true);
     replacement->setAlign(align);
     replacement->setVAlign(TextView::MIDDLE);
     replacement->setOverflow(TextView::TextOverflow::Hidden);
@@ -5021,10 +5104,16 @@ void BMSRenderer::setReplayGhostRenderingEnabled(bool enabled) {
   replayGhostRenderingEnabled = enabled;
 }
 
-void BMSRenderer::setStartLaneIndicators(std::vector<int> lanes) {
-  std::ranges::sort(lanes);
-  lanes.erase(std::unique(lanes.begin(), lanes.end()), lanes.end());
-  startLaneIndicatorLanes = std::move(lanes);
+void BMSRenderer::setStartLaneIndicators(const std::vector<int> &lanes) {
+  if (startLaneIndicatorSourceLanes == lanes) {
+    return;
+  }
+  auto normalized = lanes;
+  std::ranges::sort(normalized);
+  normalized.erase(std::unique(normalized.begin(), normalized.end()),
+                   normalized.end());
+  startLaneIndicatorSourceLanes = lanes;
+  startLaneIndicatorLanes = std::move(normalized);
 }
 
 void BMSRenderer::setStartLaneIndicatorsVisible(bool visible) {
@@ -5054,10 +5143,10 @@ void BMSRenderer::drawRect(float width, float height, float x, float y,
                            Color color) {
   simpleBatchRenderer.addRect(x, y, width, height, color.toABGR());
 }
-void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
+bool BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
                                const long long time) {
   if (laneState.lastStateTime == -1) {
-    return;
+    return false;
   }
   // alpha
   const bool scratchLane = isScratch(lane);
@@ -5080,7 +5169,7 @@ void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
                                  time - laneState.lastStateTime);
   }
   if (alpha <= 0.0) {
-    return;
+    return false;
   }
   if (alpha > 1.0) {
     alpha = 1.0;
@@ -5095,15 +5184,17 @@ void BMSRenderer::drawLaneBeam(int lane, const LaneState &laneState,
     color = laneState.lastPressedJudge.Diff > 0 ? Color(255, 0, 0, 255 * alpha)
                                                 : Color(0, 0, 255, 255 * alpha);
   }
+  if (color.a == 0) return false;
   const float beamScale = static_cast<float>(laneBeamLengthPercent) / 100.0f;
   const float beamHeight = std::max(0.0f, upperBound - judgeY) * beamScale;
   if (beamHeight <= 0.0f) {
-    return;
+    return false;
   }
   const auto fadedColor = Color(color.r, color.g, color.b, 0);
   simpleBatchRenderer.addRectVerticalGradient(
       laneToX(lane), judgeY, noteRenderWidth, beamHeight, color.toABGR(),
       fadedColor.toABGR());
+  return true;
 }
 
 void BMSRenderer::drawStartLaneIndicators() {

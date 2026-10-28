@@ -79,6 +79,12 @@ public:
   void update();
   void render(bgfx::ViewId viewId, float viewX, float viewY, float viewWidth,
               float viewHeight) const;
+  [[nodiscard]] bool renderComplete(bgfx::ViewId viewId, float viewX,
+      float viewY, float viewWidth, float viewHeight) const;
+  [[nodiscard]] std::uint64_t contentIdentity() const noexcept;
+  [[nodiscard]] bool renderFullscreenTinted(
+      bgfx::ViewId viewId, float viewX, float viewY, float viewWidth,
+      float viewHeight, float brightness) const;
   void renderEmbedded(
       bgfx::ViewId viewId, const video::EmbeddedYuvQuadLayout &quad,
       std::uint64_t state,
@@ -154,12 +160,19 @@ private:
   int videoFrameWidth;
   int videoFrameHeight;
   bool hasVideoFrame;
+  std::uint64_t presentedContentIdentity = 0; // Protected by videoFrameMutex.
   std::size_t reservedDecodedBytes = 0;
 
   bgfx::UniformHandle s_texY = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle s_texU = BGFX_INVALID_HANDLE;
   bgfx::UniformHandle s_texV = BGFX_INVALID_HANDLE;
+  bool renderFullscreen(bgfx::ViewId viewId, float viewX, float viewY,
+                        float viewWidth, float viewHeight,
+                        std::optional<float> brightness) const;
   bgfx::ProgramHandle fullscreenProgram = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle tintedFullscreenProgram = BGFX_INVALID_HANDLE;
+  bgfx::ProgramHandle tintedNativeFullscreenProgram = BGFX_INVALID_HANDLE;
+  bgfx::UniformHandle fullscreenTint = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle embeddedProgram = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle nativeFullscreenProgram = BGFX_INVALID_HANDLE;
   bgfx::ProgramHandle nativeEmbeddedProgram = BGFX_INVALID_HANDLE;

@@ -3286,8 +3286,9 @@ SkinPropertyLookup<std::string_view> PlaySkinStateBridge::stringProperty(
   }
   if (*id >= 150 && *id <= 159) {
     const std::size_t stage = static_cast<std::size_t>(*id - 150);
-    if (stage < state()->authority.courseStageTitles.size()) {
-      return {.value = state()->authority.courseStageTitles[stage],
+    const auto &titles = state()->authority.resolvedCourseStageTitles();
+    if (stage < titles.size()) {
+      return {.value = titles[stage],
               .supported = true};
     }
     static constexpr std::string_view empty;

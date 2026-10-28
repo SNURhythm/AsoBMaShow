@@ -191,16 +191,7 @@ bool RealtimeGameplayWorker::enqueueInput(
       fault() != RealtimeGameplayFault::None) {
     return false;
   }
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-  auto capturedInput = input;
-  capturedInput.ingressTimestampMicros = perf::latency::nowMicros();
-  capturedInput.touchSourceTimestampMicros =
-      input.source == RealtimeGameplayInputSource::Touch
-          ? input.steadyTimestampMicros : 0;
-  const auto &queuedInput = capturedInput;
-#else
   const auto &queuedInput = input;
-#endif
   if (!ingress_.tryPush(queuedInput)) {
     latchFault(RealtimeGameplayFault::IngressOverflow);
     return false;
@@ -384,7 +375,6 @@ void RealtimeGameplayWorker::processInputBatch(std::span<const QueuedInput> inpu
   sampledInputStates_.clear();
   for (std::size_t index = 0; index < inputs.size(); ++index) {
     const auto &queued = inputs[index];
-    observeInputLatency(queued.input);
     const auto &input = queued.input;
     OwnedInputDecision decision;
     const bool command = input.hasReplayControl &&
@@ -498,9 +488,6 @@ void RealtimeGameplayWorker::processInputBatch(std::span<const QueuedInput> inpu
     }
     for (const auto &work : gameplayInputWork_) {
       if (!accepted || fault() != RealtimeGameplayFault::None) break;
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-      processingStartedMicros_ = perf::latency::nowMicros();
-#endif
       const bool edgeAccepted = processGameplayInput(work.input, work.songTimeMicros, true);
       auto &admission = inputAdmissions_[work.owner];
       --admission.remaining;
@@ -519,29 +506,8 @@ void RealtimeGameplayWorker::processInputBatch(std::span<const QueuedInput> inpu
   }
 }
 
-void RealtimeGameplayWorker::observeInputLatency(
-    const RealtimeGameplayInput &input) noexcept {
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-  processingStartedMicros_ = perf::latency::nowMicros();
-  if (input.source == RealtimeGameplayInputSource::Touch &&
-      input.steadyTimestampMicros > 0 &&
-      processingStartedMicros_ >= input.steadyTimestampMicros) {
-    perf::latency::record(perf::latency::Stage::TouchToWorker,
-                         processingStartedMicros_ - input.steadyTimestampMicros);
-  }
-  if (input.ingressTimestampMicros > 0 &&
-      processingStartedMicros_ >= input.ingressTimestampMicros) {
-    perf::latency::record(perf::latency::Stage::IngressToWorker,
-                         processingStartedMicros_ - input.ingressTimestampMicros);
-  }
-#else
-  (void)input;
-#endif
-}
-
 void RealtimeGameplayWorker::processInput(
     const RealtimeGameplayInput &input) {
-  observeInputLatency(input);
   if (input.epoch != config_.epoch || config_.clock.mapSteadyToSong == nullptr) {
     return;
   }
@@ -838,20 +804,6 @@ bool RealtimeGameplayWorker::processGameplayInput(
   if (!config_.audio.commit(config_.audio.context, reservation, preview)) {
     latchFault(RealtimeGameplayFault::AudioCommitFailed);
   }
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-  else {
-    const auto committedMicros = perf::latency::nowMicros();
-    if (input.touchSourceTimestampMicros > 0 &&
-        committedMicros >= input.touchSourceTimestampMicros) {
-      perf::latency::record(perf::latency::Stage::TouchToSoundCommit,
-                           committedMicros - input.touchSourceTimestampMicros);
-    }
-    if (committedMicros >= processingStartedMicros_) {
-      perf::latency::record(perf::latency::Stage::WorkerToSoundCommit,
-                           committedMicros - processingStartedMicros_);
-    }
-  }
-#endif
   return true;
 }
 
@@ -1076,9 +1028,6 @@ void RealtimeGameplayWorker::publishSnapshot() {
     }
     snapshot.replayEventCount = simulation_.replayEvents().size();
     snapshot.terminalReason = simulation_.terminalReason();
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-    snapshot.publishedSteadyMicros = perf::latency::nowMicros();
-#endif
     latestSnapshot_.store(index, std::memory_order_release);
     snapshotPending_ = false;
     return;

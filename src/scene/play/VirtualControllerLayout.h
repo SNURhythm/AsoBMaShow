@@ -24,6 +24,7 @@ struct VirtualControllerCanvas {
   float height = 0.0F;
 
   [[nodiscard]] bool valid() const noexcept;
+  bool operator==(const VirtualControllerCanvas &) const = default;
 };
 
 struct VirtualControllerRect {
@@ -79,6 +80,22 @@ struct VirtualControllerLayout {
 [[nodiscard]] VirtualControllerLayout makeVirtualControllerLayout(
     const input::VirtualControllerConfig &config, int keyMode,
     VirtualControllerCanvas canvas);
+
+// Scene-owned: callers must consume the reference before requesting a layout
+// with different inputs. Pressed state/rotation do not affect this geometry.
+class VirtualControllerLayoutCache {
+public:
+  [[nodiscard]] const VirtualControllerLayout &get(
+      const input::VirtualControllerConfig &config, int keyMode,
+      VirtualControllerCanvas canvas);
+
+private:
+  input::VirtualControllerConfig config_;
+  int keyMode_ = 0;
+  VirtualControllerCanvas canvas_;
+  bool initialized_ = false;
+  VirtualControllerLayout layout_;
+};
 
 [[nodiscard]] std::vector<RealtimeTouchLaneRegion>
 makeVirtualControllerTouchRegions(const VirtualControllerLayout &layout,

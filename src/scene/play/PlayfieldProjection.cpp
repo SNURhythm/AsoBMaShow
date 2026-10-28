@@ -109,13 +109,25 @@ void advancePmsPoorCursor(
     const std::unordered_map<ChartVisualId, const ChartVisualTimeline *>
         &timelines,
     const PlayfieldVisualState &state, long long timeMicros,
-    bool showPastNormalNotes) {
+    bool showPastNormalNotes
+#if defined(ASOBMASHOW_PLAYFIELD_PROJECTION_TESTING)
+    , PlayfieldProjectionWorkStats &workStats
+#endif
+    ) {
   if (cursor >= orderedTimelines.size()) {
     return;
   }
   for (std::size_t index = cursor; index < orderedTimelines.size(); ++index) {
+#if defined(ASOBMASHOW_PLAYFIELD_PROJECTION_TESTING)
+    ++workStats.pmsPoorCursorRowsExamined;
+#endif
     const auto *timeline = orderedTimelines[index];
-    if (timeline->timeMicros >= timeMicros || cursor != index - 1U) {
+    if (timeline->timeMicros >= timeMicros) {
+      break;
+    }
+    // The cursor denotes the previous row, not the next candidate. Skip its
+    // own row (including index zero, where index - 1U used to wrap).
+    if (index == cursor) {
       continue;
     }
     bool retainCursor = false;
@@ -142,9 +154,11 @@ void advancePmsPoorCursor(
         }
       }
     }
-    if (!retainCursor) {
-      cursor = index;
+    if (retainCursor) {
+      // Later rows cannot advance past this barrier; revisit it next frame.
+      break;
     }
+    cursor = index;
   }
 }
 
@@ -1177,7 +1191,14 @@ PlayfieldProjection::project(const PlayfieldChartVisualModel &model,
   if (hasPmsPoorDestination) {
     advancePmsPoorCursor(pmsPoorCursor_, orderedTimelines, notesByTimeline,
                           notes, timelines, state, timeMicros,
-                          request.showPastNormalNotes);
+                          request.showPastNormalNotes
+#if defined(ASOBMASHOW_PLAYFIELD_PROJECTION_TESTING)
+                          , workStats
+#endif
+                          );
+#if defined(ASOBMASHOW_PLAYFIELD_PROJECTION_TESTING)
+    workStats.pmsPoorCursor = pmsPoorCursor_;
+#endif
     const auto descents = pmsPoorTimelineDescents(
         orderedTimelines, pmsPoorCursor_, timeMicros,
         std::max<std::int64_t>(0, request.latePoorTimingMicros),

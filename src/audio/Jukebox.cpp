@@ -986,6 +986,7 @@ AdoptImageTextureToSharedOwner(ImageData &image) {
   // control block: the constructor invokes the deleter if that allocation
   // throws, so ownership is singular on every edge.
   auto *transferred = new ImageData(image);
+  transferred->contentIdentity = rendering::nextContentIdentity();
   image.texture = BGFX_INVALID_HANDLE;
   image.layerTexture = BGFX_INVALID_HANDLE;
   return std::shared_ptr<ImageData>(transferred, [](ImageData *owned) {
@@ -1067,6 +1068,11 @@ Jukebox::Jukebox(Stopwatch *stopwatch,
       prepareGameplayBgaProgram("vs_text.bin", "fs_text.bin");
   bgaFullscreenLayerProgram =
       prepareGameplayBgaProgram("vs_text.bin", "fs_bgalayer.bin");
+  if (bgfx::getRendererType() == bgfx::RendererType::Metal) {
+    bgaFullscreenDirectProgram =
+        prepareGameplayBgaProgram("vs_text.bin", "fs_rect_tint.bin");
+    bgaFullscreenTint = rendering::UniformCache::getInstance().getVec4("u_tintColor");
+  }
 }
 
 bgfx::ProgramHandle
@@ -1168,7 +1174,8 @@ PreparedGameplayBgaFrame Jukebox::prepareVisualFrameAt(
   preparedBgaTargetCursor = 0;
   preparedBgaTargetsCommitted = false;
 
-  PreparedGameplayBgaFrame frame{.sequence = ++preparedBgaSequence};
+  PreparedGameplayBgaFrame frame{.sequence = ++preparedBgaSequence,
+      .contentEpoch = bgaContentEpoch.load(std::memory_order_acquire)};
   PreparedBgaFrameLease lease{.frameSequence = frame.sequence};
   preparedGameplayBgaFrames.fetch_add(1, std::memory_order_relaxed);
   if (!visualsEnabled.load(std::memory_order_relaxed) ||
@@ -1179,6 +1186,7 @@ PreparedGameplayBgaFrame Jukebox::prepareVisualFrameAt(
   }
 
   advanceVisualsAtTimelineMicros(bgaTimeMicros);
+  frame.contentEpoch = bgaContentEpoch.load(std::memory_order_acquire);
   std::optional<std::span<const int>> poorFrames;
   if (const auto poorIndex = SelectBgaPoorSequenceIndexAt(
           poorBgaSequences, bgaTimeMicros);
@@ -1231,7 +1239,8 @@ PreparedGameplayBgaFrame Jukebox::prepareVisualFrameAt(
 
 PreparedGameplayBgaFrame Jukebox::prepareImageFrame(std::shared_ptr<ImageData> image) {
   std::lock_guard<std::mutex> lock(preparedBgaFrameMutex);
-  PreparedGameplayBgaFrame frame{.sequence = ++preparedBgaSequence};
+  PreparedGameplayBgaFrame frame{.sequence = ++preparedBgaSequence,
+      .contentEpoch = bgaContentEpoch.load(std::memory_order_acquire)};
   preparedGameplayBgaFrames.fetch_add(1, std::memory_order_relaxed);
   if (!image || !bgfx::isValid(image->texture) || image->width <= 0 || image->height <= 0)
     return frame;
@@ -1241,7 +1250,8 @@ PreparedGameplayBgaFrame Jukebox::prepareImageFrame(std::shared_ptr<ImageData> i
       .mediaKind = GameplayBgaMediaKind::Image,
       .surfaceToken = frame.sequence,
       .sourceWidth = image->width,
-      .sourceHeight = image->height};
+      .sourceHeight = image->height,
+      .contentIdentity = image->contentIdentity};
   PreparedBgaFrameLease lease{.frameSequence = frame.sequence};
   lease.base = PinnedGameplayBgaSurface{.descriptor = *frame.base, .image = std::move(image)};
   preparedBgaFrameLeases.emplace(frame.sequence, std::move(lease));
@@ -1340,10 +1350,7 @@ Jukebox::preflight(const PreparedGameplayBgaFrame &frame,
         break;
       }
       if (pinned == nullptr || !pinned->has_value() ||
-          (*pinned)->descriptor.surfaceToken != surface.surfaceToken ||
-          (*pinned)->descriptor.mediaKind != surface.mediaKind ||
-          (*pinned)->descriptor.sourceWidth != surface.sourceWidth ||
-          (*pinned)->descriptor.sourceHeight != surface.sourceHeight) {
+          (*pinned)->descriptor != surface) {
         return failure("gameplay_bga.surface.stale",
                        "Prepared BGA surface lease does not match the frame.");
       }
@@ -1591,7 +1598,117 @@ void Jukebox::finalizePrepared(
   }
 }
 
+bool Jukebox::trySubmitFullscreenDirect(
+    const PreparedGameplayBgaFrame &frame, bgfx::ViewId viewId,
+    float blurStrength, float brightness) noexcept {
+  if (bgfx::getRendererType() != bgfx::RendererType::Metal ||
+      !std::isfinite(blurStrength) || blurStrength > 0.0F ||
+      !std::isfinite(brightness) || frame.layer ||
+      rendering::window_width <= 0 || rendering::window_height <= 0) {
+    return false;
+  }
+  const auto *descriptor = frame.composition == GameplayBgaComposition::MissOnly
+      ? (frame.miss && !frame.base ? &*frame.miss : nullptr)
+      : (frame.composition == GameplayBgaComposition::BaseThenLayer &&
+         frame.base && !frame.miss ? &*frame.base : nullptr);
+  if (descriptor == nullptr) return false;
+
+  std::optional<PinnedGameplayBgaSurface> surface;
+  {
+    std::lock_guard<std::mutex> lock(preparedBgaFrameMutex);
+    const auto lease = preparedBgaFrameLeases.find(frame.sequence);
+    if (lease == preparedBgaFrameLeases.end() || lease->second.layer) return false;
+    surface = frame.composition == GameplayBgaComposition::MissOnly
+        ? lease->second.miss : lease->second.base;
+  }
+  if (!surface || surface->descriptor != *descriptor) return false;
+
+  const float tint = std::clamp(brightness, 0.0F, 1.0F);
+  bool submitted = false;
+  if (surface->descriptor.mediaKind == GameplayBgaMediaKind::Video) {
+    if (!surface->video) return false;
+    const auto rect = calculateBgaRect(descriptor->sourceWidth, descriptor->sourceHeight);
+    submitted = surface->video->renderFullscreenTinted(
+        viewId, rect.x, rect.y, rect.width, rect.height, tint);
+  } else {
+    // Decode channel metadata proves opacity without a scan in the frame loop.
+    // Alpha-bearing or externally supplied unknown images keep composition.
+    if (!surface->image ||
+        (surface->image->channels != 1 && surface->image->channels != 3)) return false;
+    submitted = renderImage(*surface->image, viewId, tint);
+  }
+  if (!submitted) return false;
+  // The old fullscreen composite made even letterbox pixels opaque.
+  bgfx::setViewClear(viewId, BGFX_CLEAR_COLOR, 0x000000ff);
+  fullscreenGameplayBgaSubmissions.fetch_add(1, std::memory_order_relaxed);
+  finalizePrepared(frame);
+  return true;
+}
+
 void Jukebox::submitFullscreen(const PreparedGameplayBgaFrame &frame) noexcept {
+  (void)submitFullscreenComplete(frame);
+}
+
+bool Jukebox::matchesFullscreenLease(const PreparedGameplayBgaFrame &frame,
+                                    const PreparedBgaFrameLease &lease) const noexcept {
+  const auto matches = [](const auto &descriptor, const auto &surface) {
+    if (descriptor.has_value() != surface.has_value()) return false;
+    if (!descriptor) return true;
+    if (*descriptor != surface->descriptor) return false;
+    return descriptor->contentIdentity == 0 ||
+        (surface->video ? surface->video->contentIdentity() == descriptor->contentIdentity
+                        : surface->image && surface->image->contentIdentity == descriptor->contentIdentity);
+  };
+  if ((frame.composition == GameplayBgaComposition::Blank &&
+       (frame.base || frame.layer || frame.miss)) ||
+      (frame.composition == GameplayBgaComposition::MissOnly && (frame.base || frame.layer)) ||
+      (frame.composition == GameplayBgaComposition::BaseThenLayer && frame.miss)) return false;
+  return matches(frame.base, lease.base) && matches(frame.layer, lease.layer) &&
+      matches(frame.miss, lease.miss);
+}
+
+bool Jukebox::consumeFullscreenReuse(const PreparedGameplayBgaFrame &frame) noexcept {
+  {
+    std::lock_guard<std::mutex> lock(preparedBgaFrameMutex);
+    if (frame.contentEpoch != bgaContentEpoch.load(std::memory_order_acquire)) return false;
+    const auto found = preparedBgaFrameLeases.find(frame.sequence);
+    if (frame.base || frame.layer || frame.miss) {
+      if (found == preparedBgaFrameLeases.end() ||
+          !matchesFullscreenLease(frame, found->second)) return false;
+    }
+  }
+  finalizePrepared(frame);
+  return true;
+}
+
+Jukebox::FullscreenVideoReadiness Jukebox::updateFullscreenVideoReadiness(
+    const PreparedGameplayBgaFrame &frame) {
+  std::lock_guard<std::mutex> lock(preparedBgaFrameMutex);
+  if (frame.contentEpoch != bgaContentEpoch.load(std::memory_order_acquire))
+    return FullscreenVideoReadiness::InvalidFrame;
+  const auto found = preparedBgaFrameLeases.find(frame.sequence);
+  if (found == preparedBgaFrameLeases.end()) {
+    return matchesFullscreenLease(frame, {}) ? FullscreenVideoReadiness::Ready
+                                            : FullscreenVideoReadiness::InvalidFrame;
+  }
+  const auto &lease = found->second;
+  if (!matchesFullscreenLease(frame, lease)) return FullscreenVideoReadiness::InvalidFrame;
+  auto readiness = FullscreenVideoReadiness::Ready;
+  for (const auto *surface : {&lease.base, &lease.layer, &lease.miss}) {
+    if (!*surface || (*surface)->descriptor.mediaKind != GameplayBgaMediaKind::Video)
+      continue;
+    const auto &video = (*surface)->video;
+    if (!video) return FullscreenVideoReadiness::InvalidFrame;
+    if (video->contentIdentity() == 0) {
+      video->update();
+      preparedGameplayBgaVideoUpdates.fetch_add(1, std::memory_order_relaxed);
+      if (video->contentIdentity() == 0) readiness = FullscreenVideoReadiness::Pending;
+    }
+  }
+  return readiness;
+}
+
+bool Jukebox::submitFullscreenComplete(const PreparedGameplayBgaFrame &frame) noexcept {
   fullscreenGameplayBgaSubmissions.fetch_add(1, std::memory_order_relaxed);
   std::optional<PreparedBgaFrameLease> lease;
   {
@@ -1601,20 +1718,22 @@ void Jukebox::submitFullscreen(const PreparedGameplayBgaFrame &frame) noexcept {
       lease = found->second;
     }
   }
-  if (frame.composition == GameplayBgaComposition::MissOnly) {
+  bool complete = matchesFullscreenLease(frame, lease.value_or(PreparedBgaFrameLease{}));
+  if (complete && frame.composition == GameplayBgaComposition::MissOnly) {
     if (lease && lease->miss) {
-      submitFullscreenSurface(*lease->miss, rendering::bga_view);
+      complete = submitFullscreenSurface(*lease->miss, rendering::bga_view);
     }
-  } else if (frame.composition == GameplayBgaComposition::BaseThenLayer &&
+  } else if (complete && frame.composition == GameplayBgaComposition::BaseThenLayer &&
              lease) {
     if (lease->base) {
-      submitFullscreenSurface(*lease->base, rendering::bga_view);
+      complete = submitFullscreenSurface(*lease->base, rendering::bga_view);
     }
     if (lease->layer) {
-      submitFullscreenSurface(*lease->layer, rendering::bga_layer_view);
+      complete = submitFullscreenSurface(*lease->layer, rendering::bga_layer_view) && complete;
     }
   }
   finalizePrepared(frame);
+  return complete;
 }
 
 Jukebox::GameplayBgaSubmissionStats
@@ -1633,6 +1752,7 @@ Jukebox::gameplayBgaSubmissionStats() const noexcept {
 
 void Jukebox::invalidatePreparedBgaPlans() noexcept {
   std::lock_guard<std::mutex> lock(preparedBgaFrameMutex);
+  bgaContentEpoch.store(rendering::nextContentIdentity(), std::memory_order_release);
   preparedBgaFrameKey.reset();
   preparedBgaFrame.reset();
 }
@@ -1664,7 +1784,8 @@ Jukebox::prepareGameplayBgaSurface(
                          .surfaceToken =
                              static_cast<std::uint64_t>(visualId) + 1U,
                          .sourceWidth = width,
-                         .sourceHeight = height},
+                         .sourceHeight = height,
+                         .contentIdentity = video->second->contentIdentity()},
           .video = video->second};
     }
   }
@@ -1682,30 +1803,31 @@ Jukebox::prepareGameplayBgaSurface(
                        .surfaceToken =
                            static_cast<std::uint64_t>(visualId) + 1U,
                        .sourceWidth = image->second->width,
-                       .sourceHeight = image->second->height},
+                       .sourceHeight = image->second->height,
+                       .contentIdentity = image->second->contentIdentity},
         .image = image->second};
   }
 }
 
-void Jukebox::submitFullscreenSurface(
+bool Jukebox::submitFullscreenSurface(
     const PinnedGameplayBgaSurface &surface, bgfx::ViewId viewId) noexcept {
   try {
     if (surface.descriptor.mediaKind == GameplayBgaMediaKind::Video) {
       if (!surface.video) {
-        return;
+        return false;
       }
       const auto rect = calculateBgaRect(surface.descriptor.sourceWidth,
                                          surface.descriptor.sourceHeight);
-      surface.video->render(viewId, rect.x, rect.y, rect.width, rect.height);
-      return;
+      return surface.video->renderComplete(viewId, rect.x, rect.y, rect.width, rect.height);
     }
     if (surface.image) {
-      renderImage(*surface.image, viewId);
+      return renderImage(*surface.image, viewId);
     }
   } catch (...) {
     // Submission is intentionally fail-closed: media loss after preflight
     // produces no partial replacement or second decode attempt.
   }
+  return false;
 }
 
 bool Jukebox::hasActiveVisuals() const {
@@ -1838,7 +1960,8 @@ std::vector<std::filesystem::path> Jukebox::activeMaterializedVideoPaths()
 }
 
 void Jukebox::setVisualsEnabled(bool enabled) {
-  visualsEnabled.store(enabled, std::memory_order_relaxed);
+  if (visualsEnabled.exchange(enabled, std::memory_order_relaxed) != enabled)
+    invalidatePreparedBgaPlans();
   {
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
     for (auto &videoPlayer : videoPlayerTable) {
@@ -1871,6 +1994,7 @@ void Jukebox::setVisualsSuspended(bool suspended) {
   if (previous == suspended) {
     return;
   }
+  invalidatePreparedBgaPlans();
   {
     std::lock_guard<std::mutex> lock(videoPlayerTableMutex);
     for (auto &videoPlayer : videoPlayerTable) {
@@ -1905,6 +2029,7 @@ void Jukebox::handleMemoryPressure() {
 void Jukebox::setBgaOffsetMs(int offsetMs) {
   const int previous = bgaOffsetMs.exchange(offsetMs, std::memory_order_relaxed);
   if (previous != offsetMs) {
+    invalidatePreparedBgaPlans();
     wakeScheduler();
   }
 }
@@ -3834,6 +3959,7 @@ void Jukebox::catchUpVisualsAtTimelineMicrosLocked(long long bgaTimelineMicros) 
 
 void Jukebox::restoreVisualsAtTimelineMicrosLocked(
     long long bgaTimelineMicros) {
+  bgaContentEpoch.store(rendering::nextContentIdentity(), std::memory_order_release);
   currentBga.store(-1, std::memory_order_relaxed);
   currentBmpLayer.store(-1, std::memory_order_relaxed);
   bmpCursor = 0;
@@ -3853,6 +3979,7 @@ void Jukebox::advanceVisualsAtTimelineMicros(long long bgaTimelineMicros) {
   std::lock_guard<std::mutex> lock(seekLock);
   if (lastVisualTimelineMicros < 0 ||
       bgaTimelineMicros < lastVisualTimelineMicros) {
+    bgaContentEpoch.store(rendering::nextContentIdentity(), std::memory_order_release);
     currentBga.store(-1, std::memory_order_relaxed);
     currentBmpLayer.store(-1, std::memory_order_relaxed);
     bmpCursor = 0;
@@ -3869,6 +3996,7 @@ void Jukebox::advanceVisualsAtTimelineMicros(long long bgaTimelineMicros) {
 }
 
 void Jukebox::seekVisualsToSongTime(long long rawSongMicros) {
+  invalidatePreparedBgaPlans();
   if (!visualsEnabled.load(std::memory_order_relaxed) ||
       visualsSuspended.load(std::memory_order_acquire)) {
     return;
@@ -3994,8 +4122,6 @@ void Jukebox::runVisualScheduler() {
   }
   timeBeginPeriod(1);
 #endif
-  using Clock = std::chrono::steady_clock;
-  auto prevTimestamp = Clock::now();
   auto lifecycleState = makeLifecycleState();
   while (schedulerActive.load(std::memory_order_acquire)) {
     const auto wakeGeneration = schedulerWake.capture();
@@ -4011,7 +4137,6 @@ void Jukebox::runVisualScheduler() {
                    (isPlaying.load(std::memory_order_acquire) &&
                     stopwatch->isRunning());
           });
-      prevTimestamp = Clock::now();
       continue;
     }
 
@@ -4020,7 +4145,6 @@ void Jukebox::runVisualScheduler() {
       // Keep scheduling state consistent with seek/reset.
       std::lock_guard<std::mutex> lock(seekLock);
       if (!jukebox_lifecycle::CanAdvanceSchedulerLocked(lifecycleState)) {
-        prevTimestamp = Clock::now();
         continue;
       }
       const long long positionMicro = audio.getTimeMicros();
@@ -4071,20 +4195,6 @@ void Jukebox::runVisualScheduler() {
       }
     }
 
-    auto currentTimestamp = Clock::now();
-    size_t idx =
-        performanceAnalytics.loopDeltaIndex.load(std::memory_order_relaxed);
-    const auto deltaMicros =
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            currentTimestamp - prevTimestamp)
-            .count();
-    performanceAnalytics.loopDeltaTimes[idx].store(
-        static_cast<uint32_t>(deltaMicros), std::memory_order_relaxed);
-    size_t newIdx = (idx + 1) % Jukebox::PerformanceAnalytics::BUFFER_SIZE;
-    performanceAnalytics.loopDeltaIndex.store(newIdx,
-                                              std::memory_order_relaxed);
-    prevTimestamp = currentTimestamp;
-
     long long sleepMicros = kSchedulerMaxIdleSleepMicros;
     if (nextWakeMicros != std::numeric_limits<long long>::max()) {
       const long long currentSongMicros = audio.getTimeMicros();
@@ -4110,10 +4220,19 @@ void Jukebox::runVisualScheduler() {
 #endif
 }
 
-void Jukebox::renderImage(ImageData &image, int viewId) {
+bool Jukebox::renderImage(ImageData &image, int viewId,
+                           std::optional<float> directBrightness) {
 
-  if (!bgfx::isValid(image.texture)) {
-    return;
+  const auto program = directBrightness ? bgaFullscreenDirectProgram
+      : (viewId == rendering::bga_view ? bgaFullscreenImageProgram
+                                      : bgaFullscreenLayerProgram);
+  if (!bgfx::isValid(image.texture) || !bgfx::isValid(program) ||
+      !bgfx::isValid(s_texColor) || image.width <= 0 || image.height <= 0 ||
+      rendering::window_width <= 0 || rendering::window_height <= 0 ||
+      (directBrightness && !bgfx::isValid(bgaFullscreenTint)) ||
+      bgfx::getAvailTransientVertexBuffer(4, rendering::PosTexCoord0Vertex::ms_decl) < 4 ||
+      bgfx::getAvailTransientIndexBuffer(6) < 6) {
+    return false;
   }
   bgfx::TransientVertexBuffer tvb{};
   bgfx::TransientIndexBuffer tib{};
@@ -4155,12 +4274,12 @@ void Jukebox::renderImage(ImageData &image, int viewId) {
   bgfx::setTexture(0, s_texColor, image.texture);
   bgfx::setState(BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A |
                  BGFX_STATE_BLEND_ALPHA);
-  const auto program = viewId == rendering::bga_view
-                           ? bgaFullscreenImageProgram
-                           : bgaFullscreenLayerProgram;
-  if (bgfx::isValid(program)) {
-    bgfx::submit(viewId, program);
+  if (directBrightness) {
+    const float tint[4] = {*directBrightness, *directBrightness, *directBrightness, 1.0F};
+    bgfx::setUniform(bgaFullscreenTint, tint);
   }
+  bgfx::submit(viewId, program);
+  return true;
 }
 
 long long Jukebox::getTimeMicros() {
@@ -4251,6 +4370,7 @@ void Jukebox::leavePlaybackStopped() {
 }
 
 audio::playback::BackendOperationResult Jukebox::stopKeepDevice() {
+  invalidatePreparedBgaPlans();
   std::lock_guard<std::mutex> playGuard(playThreadLock);
   auto lifecycleState = makeLifecycleState();
   const auto stopped = jukebox_lifecycle::StopPlaybackKeepDevice(
@@ -4270,6 +4390,7 @@ audio::playback::BackendOperationResult Jukebox::stopKeepDevice() {
 }
 
 audio::playback::BackendOperationResult Jukebox::stop() {
+  invalidatePreparedBgaPlans();
   std::lock_guard<std::mutex> playGuard(playThreadLock);
   auto lifecycleState = makeLifecycleState();
   const auto stopped = jukebox_lifecycle::StopPlayback(
@@ -4288,6 +4409,7 @@ audio::playback::BackendOperationResult Jukebox::stop() {
 }
 
 audio::playback::BackendOperationResult Jukebox::seek(long long micro) {
+  invalidatePreparedBgaPlans();
   auto lifecycleState = makeLifecycleState();
   const long long bgaTimelineMicro = getBgaTimelineMicros(micro);
   const jukebox_lifecycle::CursorPosition target{
@@ -4336,26 +4458,4 @@ audio::playback::BackendOperationResult Jukebox::seek(long long micro) {
     SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "%s", transitioned.diagnostic.c_str());
   }
   return transitioned;
-}
-
-double Jukebox::getAvgDeltaTime() {
-  size_t currentWriteIndex =
-      performanceAnalytics.loopDeltaIndex.load(std::memory_order_acquire);
-  while (performanceAnalytics.cursor != currentWriteIndex) {
-    const auto loopRunTime = static_cast<double>(
-        performanceAnalytics.loopDeltaTimes[performanceAnalytics.cursor].load(
-            std::memory_order_relaxed));
-    performanceAnalytics.statsSum += loopRunTime;
-    performanceAnalytics.statsCount++;
-    if (performanceAnalytics.statsCount >= 100) {
-      performanceAnalytics.avgDeltaTime =
-          performanceAnalytics.statsSum / performanceAnalytics.statsCount;
-      performanceAnalytics.statsSum = 0;
-      performanceAnalytics.statsCount = 0;
-    }
-    performanceAnalytics.cursor =
-        (performanceAnalytics.cursor + 1) % PerformanceAnalytics::BUFFER_SIZE;
-  }
-
-  return performanceAnalytics.avgDeltaTime;
 }

@@ -15,7 +15,8 @@ public:
     bool operator==(const State &) const = default;
   };
 
-  explicit SnappedSlider(std::function<void(int)> onValueChanged = {});
+  explicit SnappedSlider(std::function<void(int)> onValueChanged = {},
+                         std::function<void()> onInteractionFinished = {});
 
   void refresh(const State &state);
   [[nodiscard]] int value() const { return current.value; }
@@ -29,6 +30,9 @@ protected:
 private:
   State current;
   std::function<void(int)> onValueChanged;
+  // Runs once after a changed interaction, including cancellation.
+  std::function<void()> onInteractionFinished;
+  bool interactionChanged = false;
   bool mouseDragging = false;
   bool hovered = false;
   SDL_FingerID activeTouchId = -1;

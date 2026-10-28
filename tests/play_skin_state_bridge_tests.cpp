@@ -815,7 +815,7 @@ void testCurrentReferenceRatesUseStageProgressAndBestGhost() {
                                      .finalScore = 4,
                                      .totalNotes = 3,
                                      .usesReplayProgression = true,
-                                     .scoreAfterNotes = {0, 2, 2, 4}};
+                                     .scoreAfterNotes = pacemaker::ScoreProgression({0, 2, 2, 4})};
   state.authority.pacemakerStatus = {.enabled = true, .targetScore = 2};
   const auto expectRate = [&](int id, float expected, const char *message) {
     const auto value = bridge.floatProperty({id}, SkinFloatPropertyDomain::Rate);
@@ -831,14 +831,17 @@ void testCurrentReferenceRatesUseStageProgressAndBestGhost() {
 
   state.clock.serial = 74;
   state.authority.bestScoreTarget.usesReplayProgression = true;
-  state.authority.bestScoreTarget.scoreAfterNotes = {0, 2, 3, 5};
+  state.authority.bestScoreTarget.scoreAfterNotes = pacemaker::ScoreProgression({0, 2, 3, 5});
   bridge.beginFrame(state, projectionAt(74));
+  // The skin frame must retain its replay after the producer replaces storage.
+  state.authority.bestScoreTarget.scoreAfterNotes = {};
   expectRate(112, 1.0F / 3.0F,
              "best ghost rate uses the ghost score at the stage passed-note count");
   bridge.discardFrame();
 
   state.clock.serial = 75;
-  state.authority.bestScoreTarget.scoreAfterNotes.pop_back();
+  state.authority.bestScoreTarget.scoreAfterNotes =
+      pacemaker::ScoreProgression({0, 2, 3});
   bridge.beginFrame(state, projectionAt(75));
   expectRate(112, 1.0F / 6.0F,
              "a best ghost with different note count falls back to linear progress");
@@ -1556,9 +1559,17 @@ void testRemainingDirectGameplayStatePropertyWiring() {
 
   state.clock.serial = 209;
   state.authority.courseStageIndex = 3;
+  state.authority.presentationMetadata =
+      std::make_shared<const PlayfieldPresentationMetadata>(
+          PlayfieldPresentationMetadata{
+              .courseStageTitles = {"shared-first", "shared-second"}});
   bridge.beginFrame(state, projectionAt(209));
   expect(bridge.booleanProperty({289}).value,
          "course final-stage selector follows the final captured stage");
+  expect(bridge.stringProperty({150}).value == "shared-first" &&
+             bridge.stringProperty({151}).value == "shared-second" &&
+             bridge.stringProperty({152}).value.empty(),
+         "course title properties resolve shared immutable gameplay metadata");
   for (const int id : {1002, 1003, 1004, 1005, 1006, 1007, 1010, 1011,
                        1012, 1013, 1014, 1015, 1016, 1017}) {
     const auto value = bridge.booleanProperty({id});
@@ -1569,6 +1580,7 @@ void testRemainingDirectGameplayStatePropertyWiring() {
   bridge.discardFrame();
 
   state.clock.serial = 210;
+  state.authority.presentationMetadata.reset();
   state.authority.courseStageIndex = 6;
   state.authority.courseStageCount = 10;
   bridge.beginFrame(state, projectionAt(210));

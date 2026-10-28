@@ -5,7 +5,9 @@
 #include "../rendering/common.h"
 #include "../rendering/ShaderManager.h"
 #include "../rendering/UniformCache.h"
+#include "../rendering/ContentIdentity.h"
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <inttypes.h>
 #include <utility>
@@ -129,6 +131,17 @@ VideoPlayer::VideoPlayer(Stopwatch *stopwatch)
       nativeFullscreenProgram = nativeEmbeddedProgram = BGFX_INVALID_HANDLE;
     }
   }
+  if (bgfx::getRendererType() == bgfx::RendererType::Metal) {
+    try {
+      tintedFullscreenProgram = rendering::ShaderManager::getInstance().getProgram(
+          "vs_yuvrgb.bin", "fs_yuvrgb_tint.bin");
+      tintedNativeFullscreenProgram = rendering::ShaderManager::getInstance().getProgram(
+          "vs_yuvrgb.bin", "fs_video_nv12_tint.bin");
+      fullscreenTint = uniforms.getVec4("u_tintColor");
+    } catch (...) {
+      tintedFullscreenProgram = tintedNativeFullscreenProgram = BGFX_INVALID_HANDLE;
+    }
+  }
 }
 
 VideoPlayer::~VideoPlayer() { unloadVideo(); }
@@ -176,11 +189,16 @@ void VideoPlayer::destroyVideoTextures() {
   videoFrameWidth = 0;
   videoFrameHeight = 0;
   hasVideoFrame = false;
+  presentedContentIdentity = 0;
 }
 
 void VideoPlayer::unloadVideo() {
   stopPredecoding();
-  hasVideoFrame = false;
+  {
+    std::lock_guard<std::mutex> frameLock(videoFrameMutex);
+    hasVideoFrame = false;
+    presentedContentIdentity = 0;
+  }
   {
     std::lock_guard<std::mutex> videoLock(videoMutex);
     if (swsContext) {
@@ -445,6 +463,9 @@ void VideoPlayer::update() {
         presentingHardwareFrame = true;
         lastFramePTS = frameTime;
         hasVideoFrame = true;
+        presentedContentIdentity = rendering::nextContentIdentity();
+      } else {
+        presentedContentIdentity = 0;
       }
     }
     recycleFrame(currentFrame);
@@ -461,7 +482,10 @@ void VideoPlayer::update() {
       videoFrameWidth, videoFrameHeight, currentFrame->linesize[0],
       currentFrame->linesize[1], currentFrame->linesize[2]);
   if (!layout || currentFrame->data[0] == nullptr ||
-      currentFrame->data[1] == nullptr || currentFrame->data[2] == nullptr) {
+      currentFrame->data[1] == nullptr || currentFrame->data[2] == nullptr ||
+      !bgfx::isValid(videoTextureY) || !bgfx::isValid(videoTextureU) ||
+      !bgfx::isValid(videoTextureV)) {
+    presentedContentIdentity = 0;
     SDL_Log("Rejected invalid decoded YUV420 frame layout");
     recycleFrame(currentFrame);
     return;
@@ -482,6 +506,7 @@ void VideoPlayer::update() {
   lastFramePTS = frameTime;
   hasVideoFrame = true;
   presentingHardwareFrame = false;
+  presentedContentIdentity = rendering::nextContentIdentity();
   video::destroyHardwareVideoTextures(hardwareTextures);
 
   // Recycle the displayed frame
@@ -494,15 +519,53 @@ unsigned int VideoPlayer::getPrecisePosition() {
 
 void VideoPlayer::render(bgfx::ViewId viewId, float viewX, float viewY,
                          float viewWidth, float viewHeight) const {
+  (void)renderFullscreen(viewId, viewX, viewY, viewWidth, viewHeight, std::nullopt);
+}
+
+bool VideoPlayer::renderComplete(bgfx::ViewId viewId, float viewX, float viewY,
+                                 float viewWidth, float viewHeight) const {
+  return renderFullscreen(viewId, viewX, viewY, viewWidth, viewHeight, std::nullopt);
+}
+
+std::uint64_t VideoPlayer::contentIdentity() const noexcept {
+  std::lock_guard<std::mutex> frameLock(videoFrameMutex);
+  return hasVideoFrame && isPlaying ? presentedContentIdentity : 0;
+}
+
+bool VideoPlayer::renderFullscreenTinted(
+    bgfx::ViewId viewId, float viewX, float viewY, float viewWidth,
+    float viewHeight, float brightness) const {
+  if (!std::isfinite(brightness)) return false;
+  return renderFullscreen(viewId, viewX, viewY, viewWidth, viewHeight,
+                          std::clamp(brightness, 0.0F, 1.0F));
+}
+
+bool VideoPlayer::renderFullscreen(
+    bgfx::ViewId viewId, float viewX, float viewY, float viewWidth,
+    float viewHeight, std::optional<float> brightness) const {
   std::lock_guard<std::mutex> frameLock(videoFrameMutex);
   if (!hasVideoFrame)
-    return;
+    return false;
   if (!isPlaying) {
-    return;
+    return false;
   }
-  const auto program = presentingHardwareFrame ? nativeFullscreenProgram : fullscreenProgram;
-  if (!bgfx::isValid(program)) {
-    return;
+  const auto program = brightness
+      ? (presentingHardwareFrame ? tintedNativeFullscreenProgram : tintedFullscreenProgram)
+      : (presentingHardwareFrame ? nativeFullscreenProgram : fullscreenProgram);
+  if (!bgfx::isValid(program) || (brightness && !bgfx::isValid(fullscreenTint)) ||
+      !std::isfinite(viewWidth) || !std::isfinite(viewHeight) ||
+      viewWidth <= 0.0F || viewHeight <= 0.0F ||
+      bgfx::getAvailTransientVertexBuffer(4, rendering::PosTexCoord0Vertex::ms_decl) < 4 ||
+      bgfx::getAvailTransientIndexBuffer(6) < 6 ||
+      !bgfx::isValid(s_texY) || !bgfx::isValid(s_texU) ||
+      (presentingHardwareFrame
+          ? (!bgfx::isValid(hardwareTextures.planes[0]) ||
+             !bgfx::isValid(hardwareTextures.planes[1]) ||
+             !std::all_of(videoColorUniforms.begin(), videoColorUniforms.end(),
+                          [](auto handle) { return bgfx::isValid(handle); }))
+          : (!bgfx::isValid(s_texV) || !bgfx::isValid(videoTextureY) ||
+             !bgfx::isValid(videoTextureU) || !bgfx::isValid(videoTextureV)))) {
+    return false;
   }
 
   // Submit a quad with the video texture
@@ -565,7 +628,12 @@ void VideoPlayer::render(bgfx::ViewId viewId, float viewX, float viewY,
     bgfx::setTexture(2, s_texV, videoTextureV);
   }
 
+  if (brightness) {
+    const float tint[4] = {*brightness, *brightness, *brightness, 1.0F};
+    bgfx::setUniform(fullscreenTint, tint);
+  }
   bgfx::submit(viewId, program);
+  return true;
 }
 
 void VideoPlayer::renderEmbedded(
@@ -704,8 +772,10 @@ void VideoPlayer::playFrom(int64_t micro) {
 void VideoPlayer::pause() { isPaused = true; }
 
 void VideoPlayer::stop() {
+  std::lock_guard<std::mutex> frameLock(videoFrameMutex);
   isPlaying = false;
   hasVideoFrame = false;
+  presentedContentIdentity = 0;
 }
 
 void VideoPlayer::setDecodeSuspended(bool suspended) {
@@ -713,6 +783,11 @@ void VideoPlayer::setDecodeSuspended(bool suspended) {
       decodeSuspended.exchange(suspended, std::memory_order_acq_rel);
   if (previous == suspended) {
     return;
+  }
+  {
+    std::lock_guard<std::mutex> frameLock(videoFrameMutex);
+    if (presentedContentIdentity != 0)
+      presentedContentIdentity = rendering::nextContentIdentity();
   }
   freeSpace.notify_all();
   eofCV.notify_all();
@@ -801,6 +876,13 @@ bool VideoPlayer::updateVideoTexture(int width, int height) {
 
 void VideoPlayer::seek(int64_t micro) {
   std::lock_guard<std::mutex> videoLock(videoMutex);
+  {
+    std::lock_guard<std::mutex> frameLock(videoFrameMutex);
+    // Retained pixels may remain visible until a replacement arrives, but no
+    // output from before the seek may be treated as this playback epoch.
+    if (presentedContentIdentity != 0)
+      presentedContentIdentity = rendering::nextContentIdentity();
+  }
   if (!formatContext || !codecContext || videoStreamIndex < 0)
     return;
 
@@ -1077,6 +1159,11 @@ bool VideoPlayer::restartSoftwareDecoder() {
   // Stop both producer and queue before replacing the context. Keep the last
   // presented surface alive while software decoding seeks to the same clock.
   stopPredecoding();
+  {
+    std::lock_guard<std::mutex> frameLock(videoFrameMutex);
+    if (presentedContentIdentity != 0)
+      presentedContentIdentity = rendering::nextContentIdentity();
+  }
   const auto position = std::max<int64_t>(0, stopwatch->elapsedMicros() - startTime);
   std::lock_guard<std::mutex> videoLock(videoMutex);
   if (!formatContext || videoStreamIndex < 0) return false;

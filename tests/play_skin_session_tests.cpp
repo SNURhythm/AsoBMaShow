@@ -3799,6 +3799,44 @@ void testMusicSelectTitlePreparationIsBoundedForLargeLists() {
          "10,000-row Lua list prepares only authored titles, not directory corpus");
 }
 
+void testMusicSelectSuccessfulResidencyCacheBoundsAndInvalidation() {
+  MusicSelectTextResidencyCache cache;
+  PreparedSkinTextAtlas first, second;
+  bool resident = true;
+  std::size_t checks = 0;
+  const auto contains = [&](const PreparedSkinTextAtlas *atlas, std::string_view text) {
+    return cache.contains(atlas, text, [&] { ++checks; return resident; });
+  };
+  expect(contains(&first, "AV") && contains(&first, "AV") && checks == 1,
+         "successful exact strings reuse residency within one atlas generation");
+  expect(contains(&second, "AV") && contains(&first, "VA") && checks == 3,
+         "different atlases and reordered strings require independent checks");
+  resident = false;
+  expect(!contains(&first, "missing") && !contains(&first, "missing") && checks == 5,
+         "missing content never becomes a cached success");
+  cache.invalidate();
+  expect(!contains(&first, "AV") && checks == 6,
+         "in-place atlas generation changes invalidate prior successes");
+  resident = true;
+  expect(contains(&first, "AV") && checks == 7,
+         "a failed check can succeed after glyphs or kerning arrive");
+  for (std::size_t index = 0; index < 2 * cache.maximumEntries; ++index) {
+    contains(&first, std::to_string(index));
+    expect(cache.entryCount() <= cache.maximumEntries &&
+               cache.byteCount() <= cache.maximumBytes,
+           "rapidly changing strings keep residency memory bounded");
+  }
+  for (int index = 0; index < 100; ++index) {
+    contains(&first, std::string(4000, 'x') + std::to_string(index));
+    expect(cache.byteCount() <= cache.maximumBytes,
+           "long resident strings respect the aggregate byte bound");
+  }
+  const std::string oversized(cache.maximumStringBytes + 1, 'x');
+  const auto before = checks;
+  expect(contains(&first, oversized) && contains(&first, oversized) && checks == before + 2,
+         "oversized strings remain correct without being retained");
+}
+
 void testMusicSelectPreparesNewRuntimeGlyphsWithoutCatalogRefresh() {
   ActivationFixture fixture({.skinType = 5, .resourceBearing = true});
   if (!fixture.ready()) return;
@@ -3946,7 +3984,13 @@ void testMusicSelectRuntimeGlyphPatchesPreserveKerning() {
   } while (std::chrono::steady_clock::now() < pairDeadline);
   expect(gap(backend) == expectedReversedGap,
          "new ordering of resident glyphs learns VA metrics without missing kerning");
+  render("AV");
+  render("VA");
+  const auto warmValidations = created.session->textResidencyValidationCountForTesting();
   for (int index = 0; index < 100; ++index) render(index % 2 == 0 ? "AV" : "VA");
+  expect(warmValidations > 0 &&
+             created.session->textResidencyValidationCountForTesting() == warmValidations,
+         "100 warm frames perform no UTF-8/glyph/kerning residency scans");
   expect(fixture.device()->createCalls == uploads + 1,
          "pair-only changes and repeated titles never rebuild the glyph texture");
 }
@@ -4016,12 +4060,20 @@ void testMusicSelectSharedAtlasKerningUpdatesIncludeOverscan() {
       expectedReversedGap = captionGap(backend);
       continue;
     }
+    const auto initialValidations = created.session->textResidencyValidationCountForTesting();
+    render();
+    expect(initialValidations == 2 &&
+               created.session->textResidencyValidationCountForTesting() == initialValidations,
+           "shared atlas caches exact title A and caption AV before replacement");
     const auto uploads = fixture.device()->createCalls;
     frame.songList.selectedIndex = 1;
     frame.properties.strings[10] = "VA";
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    std::size_t patchFrameValidations = 0;
     do {
+      const auto before = created.session->textResidencyValidationCountForTesting();
       render();
+      patchFrameValidations = created.session->textResidencyValidationCountForTesting() - before;
       if (captionGap(backend) == expectedReversedGap) break;
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
     } while (std::chrono::steady_clock::now() < deadline);
@@ -4029,7 +4081,17 @@ void testMusicSelectSharedAtlasKerningUpdatesIncludeOverscan() {
            newOverscanGlyph
                ? "VA metrics publish when non-target AB enters shared-atlas overscan"
                : "shared-atlas pair-only VA metrics publish with resident prewarm glyphs");
+    // The completed patch frame checks VA once and revalidates the already
+    // cached A on the other text object sharing this atlas. Pending frames
+    // only retry VA; removing session invalidation would leave this count at 1.
+    expect(patchFrameValidations == 2,
+           newOverscanGlyph
+               ? "full atlas replacement revalidates the cached shared-object title exactly once"
+               : "metrics-only replacement revalidates the cached shared-object title exactly once");
+    const auto warmValidations = created.session->textResidencyValidationCountForTesting();
     for (int index = 0; index < 100; ++index) render();
+    expect(created.session->textResidencyValidationCountForTesting() == warmValidations,
+           "shared title and caption become warm again after actual patch application");
     expect(fixture.device()->createCalls == uploads + (newOverscanGlyph ? 1 : 0),
            newOverscanGlyph
                ? "new shared overscan glyph uploads exactly one replacement atlas"
@@ -11391,6 +11453,19 @@ int main(int argc, char **argv) {
   // These tests verify session state and instruction limits, not host scheduling.
   // Real callback/frame deadlines remain covered by lua_skin_runtime_tests.
   LuaRuntimeTestHooks::setWallTime(std::chrono::steady_clock::time_point{});
+  if (argc == 2 && std::string_view(argv[1]) == "--music-select-text-preparation") {
+    testMusicSelectSuccessfulResidencyCacheBoundsAndInvalidation();
+    testMusicSelectRuntimeGlyphPatchesPreserveKerning();
+    testMusicSelectSharedAtlasKerningUpdatesIncludeOverscan();
+    testMusicSelectPreparesNewRuntimeGlyphsWithoutCatalogRefresh();
+    testMusicSelectTitlePreparationIsBoundedForLargeLists();
+    testMusicSelectScrollingDoesNotStarveGlyphPatches();
+    testMusicSelectSteadyRenderWorkDoesNotGrowWithDirectorySize();
+    testMusicSelectPrewarmsBoundedNearbyGlyphs();
+    testMusicSelectPreparesCallbackTextGlyphsIncrementally();
+    testMusicSelectStopsRetryingAnUnavailableCallbackFont();
+    return failures == 0 ? 0 : 1;
+  }
   if (argc == 2 && std::string_view(argv[1]) == "--music-select-artwork") {
     testMusicSelectContainsArtworkFailures();
     for (const int failure : {0, 1, 2, 3})
@@ -11464,6 +11539,7 @@ int main(int argc, char **argv) {
   testMusicSelectMainStateWritesVolumesAndReadsCurrentInput();
   testMusicSelectCompatibilityDoesNotAddHostResourcePolicies();
   testMusicSelectPublishesPointerCapturesAndTextFocus();
+  testMusicSelectSuccessfulResidencyCacheBoundsAndInvalidation();
   testMusicSelectPreparesNewRuntimeGlyphsWithoutCatalogRefresh();
   testMusicSelectTitlePreparationIsBoundedForLargeLists();
   testMusicSelectDuplicateSongListDestinationsRenderBothConditions();

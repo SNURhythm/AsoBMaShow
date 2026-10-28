@@ -2,7 +2,6 @@
 
 #include "GameplaySimulation.h"
 #include "../../replay/ReplayPlayback.h"
-#include "../../perf/LatencyTelemetry.h"
 
 #include <array>
 #include <atomic>
@@ -47,12 +46,6 @@ struct RealtimeGameplayInput {
   bool hasReplayControl = false;
   replay::LogicalControl replayControl;
   bool replayOnly = false;
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-  std::int64_t ingressTimestampMicros = 0;
-  // Lane ownership normalizes source to Independent; retain the original
-  // touch sample for paired input-to-sound timing after that transformation.
-  std::int64_t touchSourceTimestampMicros = 0;
-#endif
 };
 
 struct RealtimeGameplayAudioReservation {
@@ -109,9 +102,6 @@ struct RealtimeGameplayTransaction {
 
 struct RealtimeGameplaySnapshot {
   std::uint64_t generation = 0;
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-  std::int64_t publishedSteadyMicros = 0;
-#endif
   std::uint64_t transactionSequence = 0;
   // Complete compatibility state; publication and presentation use the journal
   // to update only changed identities while readers keep independent cursors.
@@ -300,7 +290,6 @@ private:
   void signal() noexcept;
   bool processQueuedInputs();
   void processInputBatch(std::span<const QueuedInput> inputs);
-  void observeInputLatency(const RealtimeGameplayInput &input) noexcept;
   void processInput(const RealtimeGameplayInput &input);
   [[nodiscard]] OwnedInputDecision
   coalesceOwnedInput(const RealtimeGameplayInput &input) noexcept;
@@ -336,9 +325,6 @@ private:
   mutable std::atomic<std::size_t> latestSnapshot_{0};
   std::uint64_t snapshotGeneration_ = 0;
   bool snapshotPending_ = false;
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-  std::int64_t processingStartedMicros_ = 0;
-#endif
   std::uint64_t transactionSequence_ = 0;
   GameplayInputResult latestTransaction_;
   std::vector<replay::InputTransition> acceptedReplayInput_;

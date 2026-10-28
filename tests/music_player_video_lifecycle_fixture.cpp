@@ -12,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+#include <utility>
 
 using Uint64 = unsigned long long;
 using SDL_FingerID = long long;
@@ -29,7 +30,18 @@ struct Jukebox {
     visualsEnabled = enabled;
   }
 };
+namespace audio {
+struct PlaybackRate { int percent = 100; int mode = 0; };
+}
 struct NativeMusic {
+  audio::PlaybackRate rate;
+  bool rejectRate = false;
+  audio::PlaybackRate PlaybackRate() const { return rate; }
+  bool SetPlaybackRate(audio::PlaybackRate next, std::string &error) {
+    if (rejectRate) { error = "rate rejected"; return false; }
+    rate = next;
+    return true;
+  }
   struct Playback { bool loaded = true; };
   Playback playback;
   std::uint64_t contentRevision = 0;
@@ -46,6 +58,10 @@ struct ProfileManager {
 struct ApplicationContext {
   std::atomic_bool storageMaintenanceActive = false;
   Evidence e;
+  struct Settings { int musicPlayerPlaybackRatePercent = 100; void sanitize() {} } settings;
+  int saves = 0, savedPercent = 0;
+  bool saveFails = false;
+  bool saveSettings() { ++saves; savedPercent = settings.musicPlayerPlaybackRatePercent; return !saveFails; }
   Jukebox jukebox{e};
   NativeMusic musicPlayer;
   ProfileManager profileManager;
@@ -62,11 +78,24 @@ struct View {
   void setVisible(bool) {}
   void setSize(int, int) {}
   void applyYogaLayout() {}
-  void cancelPointerInput() { e.events.push_back("cancel-input"); }
+  std::vector<View *> children;
+  POINTER_CANCEL_METHOD
+  virtual void onPointerInputCancelled() { e.events.push_back("cancel-input"); }
   void endEditing() {}
   void freeImage() { e.events.push_back("free-image"); }
   Evidence &e;
 };
+namespace ui { void invalidate() {} }
+struct SnappedSlider : View {
+  using View::View;
+  bool mouseDragging = false, hovered = false, touchDragging = false;
+  bool interactionChanged = false;
+  SDL_FingerID activeTouchId = -1;
+  std::function<void()> onInteractionFinished;
+  void cancelInteraction();
+  void onPointerInputCancelled() override;
+};
+SLIDER_METHODS
 struct Chart {
   explicit Chart(Evidence &e) : e(e) {}
   ~Chart() { e.events.push_back("chart"); }
@@ -75,6 +104,7 @@ struct Chart {
 class Scene {
 public:
   explicit Scene(ApplicationContext &context) : context(context) {}
+  virtual void onApplicationBackgroundChanged(bool) {}
   BASE_METHODS
   std::vector<View *> views;
   std::map<Uint64, std::pair<Uint64, std::vector<std::function<bool()>>>> deferred;
@@ -93,6 +123,7 @@ public:
   void watchVideo();
   void onPause();
   void onResume();
+  void onApplicationBackgroundChanged(bool background) override;
   std::string displayedProfileId = "first-profile", statusMessage;
   int pendingDeletePlaylistId = 0, pendingClearPlaylistId = 0,
       selectedLibraryPlaylistId = 0;
@@ -120,6 +151,9 @@ public:
   void updateLayoutInsets() { ++layoutUpdates; }
   void onInputQueueOverflow() override;
   void refreshPlaybackRateControl() {}
+  void setPlaybackRate(int percent);
+  void persistPlaybackRate(bool updateStatusView = true);
+  std::string pendingPlaybackRateProfileId;
   void cleanupScene() override;
   void exitVideoFullscreen();
   std::optional<MusicTrack> displayTrack() const { return fallback; }
@@ -127,7 +161,8 @@ public:
     if (failAfterVisualOverride) throw std::runtime_error("track key unavailable");
     return track.id;
   }
-  void setStatus(std::string) {}
+  int statusViewUpdates = 0;
+  void setStatus(std::string value) { ++statusViewUpdates; statusMessage = std::move(value); }
   void refreshActiveQueueList(bool) {}
   void playNowPlaying(std::vector<MusicTrack>, int, const char *, const i18n::Text &) {}
   void showVideoControls(Uint64 = 4000) {}
@@ -164,6 +199,63 @@ public:
   std::unique_ptr<Chart> videoChart;
 };
 PLAYER_METHODS
+class MainMenuScene {
+public:
+  MusicPlayerScene *musicTab_ = nullptr;
+  struct Worker { void stop() {} void cancelAndWait() {} };
+  Worker *previewWorker_ = nullptr, *archiveUnzipModal_ = nullptr;
+  std::atomic_bool willStart = false;
+  bool selectorTabActive() const { return false; }
+  void reselectCurrentChart() { assert(false); }
+  void onApplicationBackgroundChanged(bool background);
+};
+MENU_BACKGROUND_METHOD
+
+void testBackgroundRateCompletion(bool embedded, bool touch, bool saveFails,
+                                  bool changedProfile) {
+  ApplicationContext context;
+  MusicPlayerScene scene(context);
+  auto *slider = new SnappedSlider(context.e);
+  scene.views.push_back(slider);
+  scene.playbackRateSlider = slider;
+  slider->onInteractionFinished = [&] { scene.persistPlaybackRate(); };
+  slider->mouseDragging = !touch;
+  slider->activeTouchId = touch ? 7 : -1;
+  slider->touchDragging = touch;
+  slider->interactionChanged = true;
+  for (int rate : {110, 125, 140}) scene.setPlaybackRate(rate);
+  assert(context.saves == 0);
+  context.saveFails = saveFails;
+  if (changedProfile) {
+    context.profileManager.profile.id = "new-profile";
+    context.settings.musicPlayerPlaybackRatePercent = 100;
+  }
+  MainMenuScene menu;
+  menu.musicTab_ = &scene;
+  auto notify = [&](bool background) {
+    if (embedded) menu.onApplicationBackgroundChanged(background);
+    else static_cast<Scene &>(scene).onApplicationBackgroundChanged(background);
+  };
+  notify(false);
+  assert(context.saves == 0 && slider->interactionChanged);
+  // No release, focus event, pause or overflow: only the background boundary.
+  const int statusViewUpdates = scene.statusViewUpdates;
+  notify(true);
+  assert(scene.statusViewUpdates == statusViewUpdates);
+  assert(context.saves == (changedProfile ? 0 : 1));
+  if (!changedProfile) assert(context.savedPercent == 140);
+  assert(!slider->mouseDragging && slider->activeTouchId == -1);
+  assert(!slider->touchDragging && !slider->interactionChanged);
+  assert(scene.pendingPlaybackRateProfileId.empty());
+  assert(context.e.events.empty() && context.e.refreshes == 0);
+  if (saveFails && !changedProfile) {
+    assert(scene.statusMessage == i18n::tr("music_player.playback_rate_changed_but_failed_save.message"));
+  }
+  notify(true);
+  notify(false);
+  slider->cancelPointerInput(); // Late cancellation must not repeat the save.
+  assert(context.saves == (changedProfile ? 0 : 1));
+}
 
 void testDirectDestruction(bool previousVisuals, bool hasBga, bool cleanupFirst) {
   ApplicationContext context;
@@ -290,7 +382,56 @@ void testResumeRefreshesSameProfileLibraryAndClearsChangedProfileSelection() {
   assert(scene.pendingDeletePlaylistId == 0 && scene.pendingClearPlaylistId == 0);
   assert(scene.selectedLibraryPlaylistId == 0 && scene.displayedProfileId == "next-profile");
 }
+void testRatePersistence() {
+  ApplicationContext context;
+  {
+    MusicPlayerScene scene(context);
+    for (int rate : {105, 110, 125}) scene.setPlaybackRate(rate);
+    assert(context.saves == 0 && context.musicPlayer.rate.percent == 125);
+    assert(context.settings.musicPlayerPlaybackRatePercent == 125);
+    scene.persistPlaybackRate();
+    scene.persistPlaybackRate();
+    assert(context.saves == 1 && context.savedPercent == 125);
+    scene.setPlaybackRate(150);
+    context.musicPlayer.rejectRate = true;
+    scene.setPlaybackRate(155);
+    scene.persistPlaybackRate();
+    assert(context.saves == 2 && context.savedPercent == 150);
+    assert(scene.statusMessage == "rate rejected");
+    context.musicPlayer.rejectRate = false;
+    scene.setPlaybackRate(160);
+    context.saveFails = true;
+    scene.persistPlaybackRate();
+    assert(context.saves == 3 && !scene.statusMessage.empty());
+    context.saveFails = false;
+    scene.setPlaybackRate(165);
+    scene.onPause();
+    assert(context.saves == 4 && context.savedPercent == 165);
+    scene.setPlaybackRate(170);
+    // Successful profile switching saves outgoing settings before replacing them.
+    context.saveSettings();
+    context.profileManager.profile.id = "second-profile";
+    context.settings.musicPlayerPlaybackRatePercent = 100;
+    scene.persistPlaybackRate();
+    assert(context.saves == 5 && context.settings.musicPlayerPlaybackRatePercent == 100);
+    scene.setPlaybackRate(175);
+    scene.cleanup();
+    assert(context.saves == 6 && context.savedPercent == 175);
+  }
+  assert(context.saves == 6);
+  {
+    MusicPlayerScene scene(context);
+    scene.setPlaybackRate(180);
+  }
+  assert(context.saves == 7 && context.savedPercent == 180);
+}
 int main() {
+  for (bool embedded : {false, true})
+    for (bool touch : {false, true})
+      for (bool saveFails : {false, true})
+        for (bool changedProfile : {false, true})
+          testBackgroundRateCompletion(embedded, touch, saveFails, changedProfile);
+  testRatePersistence();
   {
     ApplicationContext context;
     context.storageMaintenanceActive = true;

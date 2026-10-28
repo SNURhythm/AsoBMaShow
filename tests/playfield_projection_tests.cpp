@@ -264,6 +264,137 @@ bool testPmsDst2DescentTraversesBeforeRetainedCursor() {
          closeTo(*note->pmsPoorYDisplacement, -75.0);
 }
 
+// Use the same small visible prefix with differently sized untouched suffixes.
+// Every row is retained by the ordinary traversal, as in production charts.
+PlayfieldChartVisualModel pmsCursorFixture(std::size_t count) {
+  PlayfieldChartVisualModel model;
+  model.laneOrder = {0};
+  for (std::size_t index = 0; index < count; ++index) {
+    const auto id = static_cast<ChartVisualId>(index + 1U);
+    model.timelines.push_back(
+        {.id = id,
+         .timeMicros = static_cast<long long>(index) * 100'000,
+         .beat = static_cast<double>(index),
+         .scrollPosition = static_cast<double>(index),
+         .bpm = 120.0,
+         .retainedForProjection = true,
+         .authoredOrdinal = static_cast<std::uint32_t>(index),
+         .retainedOrdinal = static_cast<std::uint32_t>(index)});
+    model.notes.push_back(
+        {.id = id, .timelineId = id, .lane = 0,
+         .authoredOrdinal = static_cast<std::uint32_t>(index)});
+  }
+  return model;
+}
+
+PlayfieldProjectionRequest pmsCursorRequest() {
+  return {.pmsPoorDestination = PmsPoorDestinationGeometry{
+              .laneOriginY = 0.0,
+              .laneHeight = 100.0,
+              .secondaryDestinationY = -100.0},
+          .buildBuiltInPlan = false,
+          .builtInTraversal = BuiltInRendererTraversal{
+              .lowerBound = -1.0F, .judgeY = 0.0F, .upperBound = 1.0F,
+              .rxhs = 1.0F, .hispeed = 1.0F}};
+}
+
+bool testPmsDst2CursorWorkStopsAtFutureAndRetainedRows() {
+  for (const std::size_t count : {32U, 4'096U}) {
+    auto model = pmsCursorFixture(count);
+    PlayfieldVisualState state;
+    auto request = pmsCursorRequest();
+    PlayfieldProjection projection;
+    for (int frame = 0; frame < 3; ++frame) {
+      state.clock.visualTimeMicros = -1;
+      (void)projection.project(model, state, request);
+      const auto future = projection.lastWorkStatsForTesting();
+      if (future.pmsPoorCursorRowsExamined != 1U ||
+          future.pmsPoorCursor != 0U || future.noteDescriptorsExamined > 6U) {
+        std::cerr << "future PMS cursor: rows=" << future.pmsPoorCursorRowsExamined
+                  << " cursor=" << future.pmsPoorCursor
+                  << " notes=" << future.noteDescriptorsExamined << '\n';
+        return false;
+      }
+    }
+    request.showPastNormalNotes = true;
+    for (int frame = 0; frame < 3; ++frame) {
+      state.clock.visualTimeMicros = 250'000;
+      (void)projection.project(model, state, request);
+      const auto retained = projection.lastWorkStatsForTesting();
+      // Row zero is skipped despite its unresolved note. Row one retains the
+      // cursor; neither the remaining past row nor the future suffix is read.
+      if (retained.pmsPoorCursorRowsExamined != 2U ||
+          retained.pmsPoorCursor != 0U) {
+        return false;
+      }
+    }
+    // A resolved long head still retains on its future tail. This must also
+    // stop before a large suffix when showpastnote is disabled.
+    model.notes[1].kind = ChartVisualNoteKind::LongHead;
+    model.notes[1].pairId = static_cast<ChartVisualId>(count);
+    model.notes.back().kind = ChartVisualNoteKind::LongTail;
+    model.notes.back().pairId = 2;
+    state.notes = {{.id = 2, .judged = true, .dead = true}};
+    request.showPastNormalNotes = false;
+    projection.reset();
+    for (int frame = 0; frame < 3; ++frame) {
+      (void)projection.project(model, state, request);
+      const auto retained = projection.lastWorkStatsForTesting();
+      if (retained.pmsPoorCursorRowsExamined != 2U ||
+          retained.pmsPoorCursor != 0U) return false;
+    }
+  }
+  return true;
+}
+
+bool testPmsDst2CursorBoundariesReleaseRewindAndReset() {
+  auto model = pmsCursorFixture(8);
+  model.timelines[2].timeMicros = 100'000; // Equal-time authored rows.
+  model.notes[2].kind = ChartVisualNoteKind::LongHead;
+  model.notes[2].pairId = 4;
+  model.notes[3].kind = ChartVisualNoteKind::LongTail;
+  model.notes[3].pairId = 3;
+  PlayfieldVisualState state;
+  state.notes = {{.id = 2}, {.id = 4, .judged = true}};
+  auto request = pmsCursorRequest();
+  request.showPastNormalNotes = true;
+  PlayfieldProjection projection;
+  const auto check = [&](long long time, std::size_t cursor, std::size_t rows) {
+    state.clock.visualTimeMicros = time;
+    (void)projection.project(model, state, request);
+    const auto work = projection.lastWorkStatsForTesting();
+    if (work.pmsPoorCursor != cursor ||
+        work.pmsPoorCursorRowsExamined != rows) {
+      std::cerr << "PMS cursor at " << time << ": cursor=" << work.pmsPoorCursor
+                << " (expected " << cursor << "), rows="
+                << work.pmsPoorCursorRowsExamined << " (expected " << rows
+                << ")\n";
+      return false;
+    }
+    return true;
+  };
+  // Equality is future. Once past, the first unresolved row is a barrier.
+  if (!check(100'000, 0, 2) || !check(100'001, 0, 2)) return false;
+  state.notes[0].judged = true;
+  // The normal releases but the equal-time long head retains until strictly
+  // after its tail, irrespective of the tail's judged state.
+  if (!check(100'001, 1, 3) || !check(300'000, 1, 2) ||
+      !check(300'001, 3, 4)) return false;
+  // Rewind alone preserves the prior-row cursor, as the source did. Reset
+  // (or replacement of the chart) starts traversal again at row zero.
+  if (!check(50'000, 3, 1)) return false;
+  projection.reset();
+  if (!check(50'000, 0, 2)) return false;
+  request.showPastNormalNotes = false;
+  if (!check(650'000, 6, 8) || !check(650'000, 6, 2) ||
+      !check(800'000, 7, 2) || !check(800'000, 7, 1)) return false;
+  const auto replacement = pmsCursorFixture(8);
+  state.clock.visualTimeMicros = 50'000;
+  (void)projection.project(replacement, state, request);
+  return projection.lastWorkStatsForTesting().pmsPoorCursor == 0U &&
+         projection.lastWorkStatsForTesting().pmsPoorCursorRowsExamined == 2U;
+}
+
 bool testPmsDst2DescentInheritsTheLastConstantFade() {
   // LaneRenderer resets the sprite to white before its primary note pass.
   // Its subsequent dst2 pass does not reset that color, so a past missed POOR
@@ -1019,6 +1150,11 @@ int main() {
   }
   if (!testPmsDst2DescentTraversesBeforeRetainedCursor()) {
     std::cerr << "PMS dst2 descent must traverse before the retained cursor\n";
+    return EXIT_FAILURE;
+  }
+  if (!testPmsDst2CursorWorkStopsAtFutureAndRetainedRows() ||
+      !testPmsDst2CursorBoundariesReleaseRewindAndReset()) {
+    std::cerr << "PMS dst2 cursor must preserve boundaries with bounded work\n";
     return EXIT_FAILURE;
   }
   if (!testPmsDst2DescentInheritsTheLastConstantFade()) {

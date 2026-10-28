@@ -4,6 +4,7 @@
 #include <bgfx/bgfx.h>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <SDL3/SDL.h>
 #include <unordered_map>
 #include <filesystem>
@@ -13,10 +14,35 @@ namespace rendering {
 // singleton
 class ShaderManager {
 private:
-  std::unordered_map<std::string, bgfx::ProgramHandle> programMap;
+  struct ProgramKeyView {
+    std::string_view vs;
+    std::string_view fs;
+    bool operator==(const ProgramKeyView &) const = default;
+  };
+  struct ProgramKey {
+    std::string vs;
+    std::string fs;
+    operator ProgramKeyView() const noexcept { return {vs, fs}; }
+  };
+  struct ProgramKeyHash {
+    using is_transparent = void;
+    std::size_t operator()(ProgramKeyView key) const noexcept {
+      const auto vertex = std::hash<std::string_view>{}(key.vs);
+      const auto fragment = std::hash<std::string_view>{}(key.fs);
+      return vertex ^ (fragment + 0x9e3779b9U + (vertex << 6U) + (vertex >> 2U));
+    }
+  };
+  struct ProgramKeyEqual {
+    using is_transparent = void;
+    bool operator()(ProgramKeyView left, ProgramKeyView right) const noexcept {
+      return left == right;
+    }
+  };
+  std::unordered_map<ProgramKey, bgfx::ProgramHandle, ProgramKeyHash,
+                     ProgramKeyEqual> programMap;
 
   ShaderManager() {} // Private constructor
-  bgfx::ShaderHandle loadShader(const std::string &FILENAME) {
+  bgfx::ShaderHandle loadShader(std::string_view FILENAME) {
     std::filesystem::path shaderPath;
     switch (bgfx::getRendererType()) {
     case bgfx::RendererType::Noop:
@@ -78,14 +104,9 @@ public:
   ShaderManager(const ShaderManager &) = delete;
   void operator=(const ShaderManager &) = delete;
 
-  bgfx::ProgramHandle getProgram(const std::string &vs, const std::string &fs) {
-    std::string name;
-    name.reserve(vs.size() + fs.size() + 1);
-    name.append(vs);
-    name.push_back('_');
-    name.append(fs);
-
-    if (const auto it = programMap.find(name); it != programMap.end()) {
+  bgfx::ProgramHandle getProgram(std::string_view vs, std::string_view fs) {
+    if (const auto it = programMap.find(ProgramKeyView{vs, fs});
+        it != programMap.end()) {
       return it->second;
     }
 
@@ -94,18 +115,19 @@ public:
     BgfxHandleGuard<bgfx::ProgramHandle> program(
         bgfx::createProgram(vsh.get(), fsh.get(), true));
     if (!bgfx::isValid(program.get())) {
-      throw std::runtime_error("Failed to create shader program: " + name);
+      throw std::runtime_error("Failed to create shader program: " +
+                               std::string(vs) + " / " + std::string(fs));
     }
 
     vsh.release();
     fsh.release();
     const bgfx::ProgramHandle result = program.get();
-    programMap.emplace(std::move(name), result);
+    programMap.emplace(ProgramKey{std::string(vs), std::string(fs)}, result);
     program.release();
     return result;
   }
 
-  void preloadProgram(const std::string &vs, const std::string &fs) {
+  void preloadProgram(std::string_view vs, std::string_view fs) {
     getProgram(vs, fs);
   }
 

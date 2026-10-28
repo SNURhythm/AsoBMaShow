@@ -68,6 +68,9 @@ Camera &Camera::setFarClip(float farClip) {
 
 Camera &Camera::updateViewTransform() {
   bx::mtxLookAt(viewMtx, eye, lookAt, up);
+  // Keep inverse writes at the same ownership boundary as matrix writes.
+  // Deprojection must remain a read-only operation for a frozen camera.
+  bx::mtxInverse(invViewMtx, viewMtx);
   viewMtxDirty = true;
   return *this;
 }
@@ -75,6 +78,7 @@ Camera &Camera::updateViewTransform() {
 Camera &Camera::updateProjTransform() {
   bx::mtxProj(projMtx, fov, aspectRatio, nearClip, farClip,
               bgfx::getCaps()->homogeneousDepth);
+  bx::mtxInverse(invProjMtx, projMtx);
   projMtxDirty = true;
   return *this;
 }
@@ -113,7 +117,7 @@ bx::Vec3 Camera::project(bx::Vec3 point) const {
           ndcPoint.z};
 }
 
-bx::Vec3 Camera::deproject(float x, float y, float distance) {
+bx::Vec3 Camera::deproject(float x, float y, float distance) const {
   // First, normalize screen coordinates to NDC (Normalized Device Coordinates)
   float ndcX = (2.0f * (x - this->x) / this->width) - 1.0f;
   float ndcY = 1.0f - (2.0f * (y - this->y) / this->height);
@@ -123,16 +127,12 @@ bx::Vec3 Camera::deproject(float x, float y, float distance) {
   bx::Vec3 pointInNDC(ndcX, ndcY, 1.0f);
 
   // Multiply by the inverse projection matrix to get the point in view space
-  float invProjMtx[16];
-  bx::mtxInverse(invProjMtx, projMtx);
   bx::Vec3 pointInView = bx::mul(pointInNDC, invProjMtx);
 
   // Scale by the distance along the view direction
   pointInView = bx::mul(pointInView, distance);
 
   // Multiply by the inverse view matrix to get the point in world space
-  float invViewMtx[16];
-  bx::mtxInverse(invViewMtx, viewMtx);
   bx::Vec3 pointInWorld = bx::mul(pointInView, invViewMtx);
 
   return pointInWorld;

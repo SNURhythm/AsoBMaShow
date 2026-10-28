@@ -3,7 +3,13 @@
 # Other callers of bgfx's borrowed external-texture API remain unchanged.
 function(asobmashow_patch_bgfx_metal_video_surfaces content_variable)
     set(source "${${content_variable}}")
-    set(anchor "#define UNIFORM_BUFFER_SIZE (8*1024*1024)")
+    # Our slot retain may be released by destroy()/overrideInternal while GPU
+    # work is pending. This revision's command buffers retain encoded resources.
+    string(FIND "${source}" "m_activeCommandBuffer = m_commandQueue->commandBuffer();" command_buffer)
+    if(command_buffer EQUAL -1)
+        message(FATAL_ERROR "bgfx Metal command-buffer ownership changed; review native texture lifetime")
+    endif()
+    set(anchor "#include <bx/pixelformat.h>")
     set(registry [=[
 #include <mutex>
 #include <unordered_set>
@@ -23,19 +29,21 @@ extern "C" bool asobmashowMetalRegisterOwnedTexture(uintptr_t texture)
     {
         std::lock_guard<std::mutex> lock(asoMetalTextureMutex);
         if (!asoMetalOwnedTextures.insert(texture).second) return false;
-        [(id<MTLTexture>)texture retain];
+        ((MTL::Texture*)texture)->retain();
         return true;
     }
     catch (...) { return false; }
 }
 extern "C" void asobmashowMetalCancelOwnedTexture(uintptr_t texture)
 {
-    if (asoTakeMetalTexture(texture)) [(id<MTLTexture>)texture release];
+    if (asoTakeMetalTexture(texture)) ((MTL::Texture*)texture)->release();
 }
 ]=])
-    set(external "\t\t\t\tm_ptr    = id<MTLTexture>(_external);\n\t\t\t\tm_flags |= BGFX_SAMPLER_INTERNAL_SHARED;")
+    set(external "\t\t\t\tm_ptr    = (MTL::Texture*)(void*)_external;\n\t\t\t\tm_flags |= BGFX_SAMPLER_INTERNAL_SHARED;")
     set(external_fixed [=[
-                m_ptr = id<MTLTexture>(_external);
+                m_ptr = (MTL::Texture*)(void*)_external;
+                // Transfer the registration retain to this slot. Regular Metal
+                // command buffers retain encoded resources through GPU completion.
                 if (!asoTakeMetalTexture(_external))
                     m_flags |= BGFX_SAMPLER_INTERNAL_SHARED;
 ]=])
@@ -45,7 +53,7 @@ extern "C" void asobmashowMetalCancelOwnedTexture(uintptr_t texture)
     // device is immutable in that interval; no render-thread state is mutated.
     extern "C" uintptr_t asobmashowMetalRetainDevice()
     {
-        return (uintptr_t)[(id<MTLDevice>)s_renderMtl->m_device retain];
+        return (uintptr_t)s_renderMtl->m_device->retain();
     }
 ]=])
     foreach(pattern IN ITEMS anchor external create)

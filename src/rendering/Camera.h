@@ -21,7 +21,7 @@ public:
   Camera &commit();
   void render(bool force = false);
   bx::Vec3 project(bx::Vec3 point) const;
-  bx::Vec3 deproject(float x, float y, float distance);
+  bx::Vec3 deproject(float x, float y, float distance) const;
   float getDistanceFromEye(bx::Vec3 point);
   [[nodiscard]] float getNearClip() const { return nearClip; }
   [[nodiscard]] float getFarClip() const { return farClip; }
@@ -39,6 +39,8 @@ private:
   bool rectDirty = true;
   float viewMtx[16];
   float projMtx[16];
+  float invViewMtx[16];
+  float invProjMtx[16];
   bx::Vec3 up = {0.0f, 1.0f, 0.0f};
   bx::Vec3 eye = {0.0f, 0.0f, 0.0f};
   bx::Vec3 lookAt = {0.0f, 0.0f, 0.0f};

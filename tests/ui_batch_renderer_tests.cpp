@@ -309,15 +309,19 @@ void testFailedBatchDoesNotBlockLaterSubmission() {
   renderer.appendColor(kFirstQuad, kQuadIndices, colorState());
   const auto beforeFailure = ui::revisions();
   expect(!renderer.flush(), "a rejected dynamic upload reports failure");
+  expect(!renderer.frameComplete(), "upload failure rejects the complete frame");
   expect(ui::revisions() != beforeFailure,
          "a failed upload requests another presentation attempt");
   renderer.appendColor(kSecondQuad, kQuadIndices, colorState());
   expect(renderer.flush(), "a later UI batch recovers after one failed upload");
+  expect(!renderer.frameComplete(), "later success cannot hide an earlier missing batch");
   renderer.end();
 
   expect(backend.submissions.size() == 1 &&
              backend.submissions.front().vertices.front().x == 20.0F,
          "a failed UI batch does not corrupt later painter-order geometry");
+  renderer.beginFrame();
+  expect(renderer.frameComplete(), "a new frame can recover after an upload failure");
 }
 
 void testRetainedGeometryPreservesOrderAndIdentity() {

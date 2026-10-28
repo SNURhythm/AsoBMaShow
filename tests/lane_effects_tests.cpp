@@ -20,6 +20,18 @@ struct Geometry {
     extent = std::max(extent, std::max(std::abs(x - 10), std::abs(y - 20)));
     maxAlpha = std::max(maxAlpha, color >> 24);
   }
+  void addRadialGradientCircle(float x, float y, float r,
+                               unsigned center, unsigned edge) {
+    // Expand at the recording boundary so existing extent/gradient assertions
+    // cover both the shared fan and the rest of each production effect.
+    for (int i = 0; i < 32; ++i) {
+      const float a = 2 * std::numbers::pi_v<float> * i / 32;
+      const float b = 2 * std::numbers::pi_v<float> * (i + 1) / 32;
+      addTriangleColors(x, y, x + std::cos(a) * r, y + std::sin(a) * r,
+                         x + std::cos(b) * r, y + std::sin(b) * r,
+                         center, edge, edge);
+    }
+  }
   void addCircle(float x, float y, float r, unsigned c) {
     ++count; point(x-r,y-r,c); point(x+r,y+r,c);
   }
@@ -62,6 +74,21 @@ void testGeometry() {
   }
 }
 
+void testInvisibleTailsSubmitNothing() {
+  for (const auto [judgement, age] : {
+           std::pair{PGreat, 379900LL}, std::pair{Bad, 190000LL},
+           std::pair{Kpoor, 190000LL}}) {
+    Geometry tail;
+    keybomb::draw(tail, {judgement, 0}, age, 10, 20, 2, {});
+    assert(tail.count == 0);
+  }
+  Geometry dimTail, visible;
+  keybomb::draw(dimTail, {PGreat, 0}, 348000, 10, 20, 2, {true, 100, 1});
+  keybomb::draw(visible, {PGreat, 0}, 300000, 10, 20, 2, {});
+  assert(dimTail.count == 0);
+  assert(visible.count > 0 && visible.maxAlpha > 0);
+}
+
 void testPoorHasNoKeybomb() {
   for (const auto style : {keybomb::Style{}, keybomb::Style{true, 300, 100, 0xFFFFFF}}) {
     Geometry burst, hold;
@@ -100,6 +127,7 @@ void testHoldGeometry() {
 }
 
 int main() {
+  testInvisibleTailsSubmitNothing();
   testPoorHasNoKeybomb();
   testDefaultHitsStayClearlyVisible();
   testGeometry();

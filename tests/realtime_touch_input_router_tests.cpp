@@ -3,6 +3,7 @@
 #include "scene/play/PlayfieldPresentation.h"
 #include "scene/play/PlayfieldProjection.h"
 #include "scene/play/VirtualControllerLayout.h"
+#include "support/AllocationFailure.h"
 
 #include <cmath>
 #include <cstdlib>
@@ -2766,6 +2767,56 @@ void testVirtualControllerLayoutRoutesKeysAndSystemControls() {
           "drag mode changes between Start and Select instead of conflating their shared lane sentinel");
 }
 
+void testVirtualControllerLayoutCache() {
+  gameplay::VirtualControllerLayoutCache cache;
+  input::VirtualControllerConfig config;
+  config.enabled = true;
+  gameplay::VirtualControllerCanvas canvas{0, 0, 1000, 600};
+  const auto &first = cache.get(config, 7, canvas);
+  require(first.valid(), "cached controller has usable geometry");
+  const auto *elements = first.elements.data();
+  std::size_t allocations = 0;
+  bool reused = true;
+  {
+    test_support::AllocationSizeObserver observer;
+    for (int frame = 0; frame < 4; ++frame) {
+      reused = reused && cache.get(config, 7, canvas).elements.data() == elements;
+    }
+    allocations = observer.count();
+  }
+  require(allocations == 0 && reused,
+          "unchanged controller layout reuses geometry without allocation");
+  const auto matchesFresh = [&](int mode) {
+    const auto fresh = gameplay::makeVirtualControllerLayout(config, mode, canvas);
+    const auto &cached = cache.get(config, mode, canvas);
+    require(fresh.valid() == cached.valid() &&
+                fresh.elements.size() == cached.elements.size(),
+            "cache invalidation preserves controller availability and elements");
+    for (std::size_t i = 0; i < fresh.elements.size(); ++i) {
+      const auto &a = fresh.elements[i];
+      const auto &b = cached.elements[i];
+      require(a.lane == b.lane && a.control == b.control &&
+                  a.shape == b.shape && a.spinScratch == b.spinScratch &&
+                  a.replayControl == b.replayControl &&
+                  a.bounds.x == b.bounds.x && a.bounds.y == b.bounds.y &&
+                  a.bounds.width == b.bounds.width && a.bounds.height == b.bounds.height,
+              "cached control geometry and routing match a fresh layout");
+    }
+  };
+  canvas = {20, 30, 600, 1000};
+  matchesFresh(7);
+  config.player = input::VirtualControllerPlayer::Player2;
+  config.scratchMode = input::VirtualControllerScratchMode::Spin;
+  config.centerX = 0.3F;
+  matchesFresh(14);
+  config.enabled = false;
+  matchesFresh(14);
+  config.enabled = true;
+  matchesFresh(5);
+  canvas.width = 0;
+  matchesFresh(5);
+}
+
 void testVirtualControllerAvailabilityMatchesTouchRouterPlatform() {
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR
   require(gameplay::virtualControllerTouchInputSupported(),
@@ -2890,6 +2941,7 @@ int main() {
   testScratchlessVirtualControllerOptionalPlatter();
   testEvenKeyVirtualScratchUsesCommandsAndPreservesKeyLanes();
   testVirtualControllerLayoutRoutesKeysAndSystemControls();
+  testVirtualControllerLayoutCache();
   testVirtualControllerAvailabilityMatchesTouchRouterPlatform();
   testVirtualControllerFlickOnePlayerUpwardIsCounterClockwise();
   return 0;

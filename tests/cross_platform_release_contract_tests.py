@@ -252,11 +252,7 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
             "target_sources(main PRIVATE "
             "$<TARGET_OBJECTS:asobmashow_build_identity>)",
             1,
-        )[1].split(
-            "target_compile_definitions(main PRIVATE\n"
-            "    ASOBMASHOW_ENABLE_PERF_TELEMETRY",
-            1,
-        )[0]
+        )[1].split("endif()", 1)[0]
         self.assertIn("_LIBCPP_ENABLE_EXPERIMENTAL", android_target)
 
     def test_java_pattern_backend_is_repo_owned_on_cmake_platforms_and_foundation_on_ios(self):
@@ -405,18 +401,6 @@ class CrossPlatformReleaseContractTests(unittest.TestCase):
             "function(asobmashow_register_test target_name)", 1
         )[1].split("endfunction()", 1)[0]
         self.assertIn("target_compile_options(${target_name} PRIVATE -UNDEBUG)", register_function)
-
-    def test_performance_telemetry_is_compile_time_opt_in(self):
-        self.assertIn("option(ASOBMASHOW_ENABLE_PERF_TELEMETRY", self.cmake)
-        self.assertIn("ASOBMASHOW_ENABLE_PERF_TELEMETRY=$<BOOL:", self.cmake)
-        self.assertIn(
-            "#ifndef ASOBMASHOW_ENABLE_PERF_TELEMETRY\n"
-            "#define ASOBMASHOW_ENABLE_PERF_TELEMETRY 0\n"
-            "#endif",
-            self.main,
-        )
-        self.assertIn("#if ASOBMASHOW_ENABLE_PERF_TELEMETRY", self.main)
-        self.assertNotIn("constexpr bool kEnablePerfTelemetry = true", self.main)
 
     def test_macos_shader_inputs_have_a_real_build_dependency(self):
         self.assertIn("add_custom_target(copy_macos_bundle_shaders", self.cmake)

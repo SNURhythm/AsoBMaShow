@@ -58,6 +58,7 @@ class SDLActivity {
     Object getIntent() { return null; }
     static Surface getNativeSurface() { return mSurface.getHolder().getSurface(); }
 }
+class ComboNotifications { static void acceptTap(Object intent) {} }
 class Bundle {}
 class Build { static class VERSION { static int SDK_INT; } }
 class Window {

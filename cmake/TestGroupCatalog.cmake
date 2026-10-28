@@ -223,6 +223,7 @@ asobmashow_label_tests(area_replay
     replay_codec_primitive_tests
     replay_codec_store_contract_tests
     replay_export_cancellation_boundary
+    replay_export_frame_completion_tests
     replay_export_job_tests
     replay_file_action_service_tests
     replay_file_association_coordinator_tests
@@ -488,6 +489,9 @@ asobmashow_label_tests(area_skin_runtime
 )
 
 asobmashow_label_tests(area_rendering
+    camera_inverse_cache_tests
+    ios_metal_export_pacing_tests
+    metal_drawable_provider_tests
     android_display_refresh_rate_tests
     android_window_presentation_tests
     artwork_glow_tests
@@ -516,13 +520,14 @@ asobmashow_label_tests(area_rendering
     image_fade_tests
     image_file_decoder_tests
     image_view_fade_tests
-    latency_telemetry_tests
     numeric_glyph_atlas_tests
     numeric_glyph_model_validator_tests
     play_skin_touch_geometry_tests
     play_skin_viewport_tests
     presentation_orientation_state_tests
     replay_video_ui_batch_contract
+    rendering_transient_boundary_tests
+    replay_export_frame_completion_tests
     skin_cover_normalization_tests
     skin_destination_evaluator_tests
     skin_draw_command_tests

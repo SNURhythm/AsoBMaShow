@@ -2,6 +2,7 @@
 #include "video/IdlePresentationPacing.h"
 #include "ui/PresentationSchedule.h"
 #include "video/IOSPresentationPacing.h"
+#include "video/MetalDisplayLinkFrame.h"
 
 #include <chrono>
 #include <limits>
@@ -17,6 +18,77 @@ void require(bool condition, std::string_view message) {
   if (!condition) {
     throw std::runtime_error(std::string(message));
   }
+}
+
+void testDisplayLinkWakeDoesNotAddTimerSleep() {
+  FramePacer explicitPacer, presentationPacer;
+  const auto now = Clock::time_point{};
+  explicitPacer.setCap(60);
+  require(video::iosFramePacingWait(explicitPacer, presentationPacer, now,
+                                   now + 1ms, true) == Clock::duration::zero(),
+          "display-link wake must not be followed by another frame-cap sleep");
+  const auto fallback = video::iosFramePacingWait(
+      explicitPacer, presentationPacer, now + 20ms, now + 21ms, false);
+  require(fallback > 12ms && fallback < 13ms,
+          "timer fallback retains the explicit cap after a display-link frame");
+}
+
+void testDisplayLinkRatePreservesCapSemantics() {
+  for (const auto cap : {0U, 120U, 144U, 240U})
+    require(video::metalDisplayLinkRate(120.0F, cap) == 120.0F,
+            "display-link requests full ProMotion rate within the selected cap");
+  require(video::metalDisplayLinkRate(120.0F, 60) == 60.0F &&
+              video::metalDisplayLinkRate(120.0F, 30) == 30.0F,
+          "display divisors can use lower display-link rates");
+  for (const auto cap : {1U, 5U, 15U, 75U, 90U})
+    require(video::metalDisplayLinkRate(120.0F, cap) == 0.0F,
+            "low and nondivisor caps keep their timer pacing");
+  for (const auto rate : {0.0F, -1.0F, 1001.0F,
+                          std::numeric_limits<float>::quiet_NaN()})
+    require(video::metalDisplayLinkRate(rate, 0) == 0.0F,
+            "unknown refresh cannot activate display-link pacing");
+  require(video::metalDisplayLinkRate(60.0F, 0) == 60.0F,
+          "60 Hz displays retain their native cadence");
+}
+
+void testDisplayLinkFrameRejectsStaleAndRepeatedDrawables() {
+  video::MetalDisplayLinkFrame frame;
+  require(!frame.managed(), "no managed frame before a callback wait");
+  frame.begin(4);
+  require(!frame.receive(10.0, 9.99) && !frame.ready(),
+          "late callback must not start a stale frame");
+  require(!frame.receive(10.0, std::numeric_limits<double>::quiet_NaN()),
+          "invalid callback deadline cannot start rendering");
+  require(frame.receive(10.0, 10.008), "fresh callback permits rendering");
+  require(!frame.receive(10.001, 10.009), "only one callback may own an iteration");
+  require(frame.claim(true, 4, true),
+          "accepted frame may complete even if rendering overruns its deadline");
+  require(!frame.claim(true, 4, true) && frame.managed(),
+          "second claim is rejected without enabling fallback acquisition");
+  frame.finish();
+  require(!frame.managed(), "unused or submitted frame releases managed ownership");
+  frame.begin(5);
+  require(frame.receive(11.0, 11.008) && frame.claim(true, 5, true),
+          "finishing the old frame permits a fresh lease");
+}
+
+void testDisplayLinkFrameRejectsInterruptionAndResize() {
+  for (int failure = 0; failure != 3; ++failure) {
+    video::MetalDisplayLinkFrame frame;
+    frame.begin(7);
+    require(frame.receive(10.0, 10.008), "frame begins before interruption");
+    require(!frame.claim(failure != 0, failure == 1 ? 8 : 7, failure != 2),
+            "inactive, new lifecycle generation or changed texture rejects the lease");
+    require(frame.managed() && !frame.claim(true, 7, true),
+            "rejected lease cannot be revived or trigger a second acquisition");
+    frame.finish();
+    require(!frame.managed(), "early exit releases rejected managed frame");
+  }
+  video::MetalDisplayLinkFrame idle;
+  idle.begin(1);
+  idle.receive(1.0, 1.008);
+  idle.finish();
+  require(!idle.claim(true, 1, true), "idle frame must not leak a drawable to later work");
 }
 
 void testUncappedPacingNeverWaits() {
@@ -162,6 +234,55 @@ void testIOSProMotionPresentationPreservesExplicitCapsAndExport() {
   require(menuPacer.remaining(now) == Clock::duration::zero(),
           "menu export never inherits the interactive presentation wait");
 }
+void testIOSDrawableWaitConsumesTheFrameBudget() {
+  FramePacer explicitPacer, presentationPacer;
+  presentationPacer.setCap(video::iosPresentationPacingCap(120.0F, 0, false));
+  const auto period = std::chrono::duration_cast<Clock::duration>(
+      std::chrono::duration<double>(1.0 / 120.0));
+  auto started = Clock::time_point{};
+  // A two-drawable swapchain can block submission until the next refresh.
+  // That already spends one frame's budget, even with trivial GPU work.
+  for (int frame = 0; frame < 120; ++frame) {
+    const auto finished = started + period;
+    const auto wait = video::iosFramePacingWait(
+        explicitPacer, presentationPacer, started, finished);
+    require(wait == Clock::duration::zero(),
+            "a refresh spent waiting for a drawable must not add another refresh of sleep");
+    started = finished + wait;
+  }
+  require(started == Clock::time_point{} + period * 120,
+          "120 display-limited frames consume 120 refreshes, not 240");
+}
+
+void testIOSFrameBudgetPreservesCapsAndIdleWaits() {
+  FramePacer explicitPacer, presentationPacer;
+  const auto started = Clock::time_point{};
+  presentationPacer.setCap(video::iosPresentationPacingCap(120.0F, 0, false));
+  auto wait = video::iosFramePacingWait(
+      explicitPacer, presentationPacer, started, started + 3ms);
+  require(wait > 5ms && wait < 6ms,
+          "fast and skipped-idle frames wait only the unused part of the 120 Hz budget");
+
+  const auto nextStart = started + 3ms + wait;
+  wait = video::iosFramePacingWait(
+      explicitPacer, presentationPacer, nextStart, nextStart + 9ms);
+  require(wait == Clock::duration::zero(),
+          "a frame over its budget continues without sleeping to another refresh");
+
+  explicitPacer.setCap(30);
+  presentationPacer.setCap(video::iosPresentationPacingCap(120.0F, 30, false));
+  wait = video::iosFramePacingWait(
+      explicitPacer, presentationPacer, started, started + 9ms);
+  require(wait > 24ms && wait < 25ms,
+          "an explicit lower cap still waits after a drawable stall");
+
+  explicitPacer.setCap(0);
+  presentationPacer.setCap(video::iosPresentationPacingCap(120.0F, 0, true));
+  require(video::iosFramePacingWait(explicitPacer, presentationPacer,
+                                   started, started + 1ms) == Clock::duration::zero(),
+          "uncapped export has no interactive presentation wait");
+}
+
 void testIdleGateRetainsWaitWithoutGpuVsync() {
   const auto now = Clock::time_point{};
   ui::PresentationSchedule schedule;
@@ -207,6 +328,12 @@ void testIdleGateRetainsWaitWithoutGpuVsync() {
 } // namespace
 
 int main() {
+  testDisplayLinkWakeDoesNotAddTimerSleep();
+  testDisplayLinkRatePreservesCapSemantics();
+  testDisplayLinkFrameRejectsStaleAndRepeatedDrawables();
+  testDisplayLinkFrameRejectsInterruptionAndResize();
+  testIOSDrawableWaitConsumesTheFrameBudget();
+  testIOSFrameBudgetPreservesCapsAndIdleWaits();
   testIdleGateRetainsWaitWithoutGpuVsync();
   testUncappedPacingNeverWaits();
   testExactDeadlineAndOverrun();

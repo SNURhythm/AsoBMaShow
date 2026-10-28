@@ -38,6 +38,7 @@ using VkBuffer = unsigned;
 using VkResult = unsigned;
 using VkBufferUsageFlags = unsigned;
 using VkMemoryPropertyFlags = unsigned;
+using VkImageAspectFlags = unsigned;
 constexpr unsigned VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT = 2;
 constexpr unsigned VK_MEMORY_PROPERTY_HOST_COHERENT_BIT = 4;
 constexpr unsigned VK_MEMORY_PROPERTY_HOST_CACHED_BIT = 8;
@@ -99,7 +100,7 @@ void vkUnmapMemory(unsigned, VkDeviceMemory) { assert(mapped); mapped = false; }
 void vkDestroy(VkBuffer) { assert(!mapped); }
 namespace bx {
 void memCopy(void* dst, const void* src, unsigned bytes) { std::memcpy(dst,src,bytes); }
-unsigned uint32_max(unsigned a, unsigned b) { return std::max(a,b); }
+unsigned max(unsigned a, unsigned b) { return std::max(a,b); }
 void gather(void* dst, const void* src, unsigned sourceStride, unsigned stride, unsigned rows) {
   assert(mapped);
   for (unsigned row = 0; row < rows; ++row)
@@ -107,18 +108,30 @@ void gather(void* dst, const void* src, unsigned sourceStride, unsigned stride, 
                 static_cast<const uint8_t*>(src) + row*sourceStride, stride);
 }
 }
+namespace bimg {
+namespace TextureFormat { enum Enum { RGBA8 }; }
+struct ImageBlockInfo { unsigned blockHeight, blockSize; };
+const ImageBlockInfo& getBlockInfo(TextureFormat::Enum) {
+  static const ImageBlockInfo rgba8{1,4};
+  return rgba8;
+}
+}
+bool isDepthStencilAspect(VkImageAspectFlags, unsigned) { return false; }
 struct TextureHandle { unsigned idx; };
 struct DeviceMemoryAllocationVK { VkDeviceMemory mem; unsigned offset; };
 struct ReadbackVK {
-  unsigned m_width = 8, m_height = 4, m_image = 1;
+  unsigned m_width = 8, m_height = 4, m_image = 1, m_format = bimg::TextureFormat::RGBA8;
   unsigned pitch(unsigned mip) const { return std::max(1u, m_width >> mip)*4; }
-  void copyImageToBuffer(unsigned, VkBuffer, unsigned, unsigned, unsigned mip) {
-    assert(!mapped);
+  unsigned stagingSize(VkImageAspectFlags, unsigned mip) const {
+    return pitch(mip)*std::max(1u, m_height >> mip);
+  }
+  void copyImageToBuffer(unsigned, VkBuffer, unsigned, unsigned, unsigned layer, unsigned mip) {
+    assert(!mapped && layer == 2);
     for (unsigned n = 0; n < pitch(mip)*std::max(1u, m_height >> mip); ++n)
       deviceBytes[kOffset+n] = static_cast<uint8_t>(n + mip + 1);
     completed = false;
   }
-  void readback(VkDeviceMemory, VkDeviceSize, void*, uint8_t) const;
+  void readback(VkDeviceMemory, VkDeviceSize, void*, VkImageAspectFlags, uint8_t) const;
 };
 struct TextureVK { unsigned m_height = 4, m_currentImageLayout = 0, m_aspectFlags = 1; ReadbackVK m_readback; };
 struct Renderer {
@@ -157,7 +170,7 @@ int main() {
       allocationRequests.clear();
       const unsigned size = std::max(1u,8u>>mip)*std::max(1u,4u>>mip)*4;
       std::vector<uint8_t> output(size+2, 0xEE);
-      renderer.readTexture({0}, output.data()+1, mip);
+      renderer.readTexture({0}, output.data()+1, 2, mip);
       assert(output.front()==0xEE && output.back()==0xEE);
       for (unsigned n=0;n<size;++n) assert(output[n+1] == uint8_t(n+mip+1));
 #if BX_PLATFORM_ANDROID

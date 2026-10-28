@@ -1,6 +1,5 @@
 #import <Metal/Metal.h>
 #include <bgfx/bgfx.h>
-#include <bgfx/platform.h>
 
 #include <chrono>
 #include <cstdio>
@@ -60,7 +59,7 @@ static bool checkReadback(uint16_t width, uint16_t height,
     bgfx::blit(0, target, mip, 0, 0, 0, source, mip, 0, 0, 0, w, h, 1);
     std::vector<uint8_t> actual(expected.size() + 32, 0xcd);
     auto start = std::chrono::steady_clock::now();
-    const uint32_t ready = bgfx::readTexture(target, actual.data() + 16, mip);
+    const uint32_t ready = bgfx::readTexture(target, actual.data() + 16, 0, mip);
     while (bgfx::frame() < ready) {}
     elapsed += std::chrono::duration<double, std::milli>(
         std::chrono::steady_clock::now() - start).count();

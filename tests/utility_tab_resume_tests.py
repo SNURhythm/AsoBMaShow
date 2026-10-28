@@ -125,6 +125,8 @@ struct Context {
   Submission *irSubmissionService=&submission;
 };
 struct MusicPlayerScene {
+  struct Slider { void cancelPointerInput() {} };
+  Slider *playbackRateSlider = nullptr;
   Context context;
   std::string displayedProfileId="one",statusMessage;
   int pendingDeletePlaylistId=0,pendingClearPlaylistId=0,selectedLibraryPlaylistId=0;

@@ -4,7 +4,6 @@
 #include "DesktopRealtimeKeyboardBackend.h"
 #include "NativeKeyboardInputState.h"
 #include "AppleInputTimestamp.h"
-#include "../perf/LatencyTelemetry.h"
 
 #include <ApplicationServices/ApplicationServices.h>
 #include <Carbon/Carbon.h>
@@ -159,12 +158,6 @@ private:
         ? self.timestampSession_.toSteadyMicros(nativeTimestamp / 1000)
         : input::apple::steadyNowMicros();
     if (timestamp < self.claimTimestampMicros_) return event;
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-    const auto receipt = perf::latency::nowMicros();
-    if (nativeTimestamp != 0 && receipt >= timestamp) {
-      perf::latency::record(perf::latency::Stage::InputDelivery, receipt - timestamp);
-    }
-#endif
     // The OS routes this per-process tap only to our application, including
     // events delivered before SDL has pumped a focus-gained notification.
     self.keys_.setFocused(true, timestamp);

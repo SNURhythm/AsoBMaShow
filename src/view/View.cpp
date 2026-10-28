@@ -874,6 +874,15 @@ void View::applyYogaLayoutImmediate() {
     parent = YGNodeGetParent(parent);
   }
 
+  // Capture the rectangle being published before callbacks can calculate a
+  // different one through the exposed Yoga node.
+  const auto previousPublishedWidth = publishedLayoutWidth;
+  const auto previousPublishedHeight = publishedLayoutHeight;
+  publishedLayoutLeft = YGNodeLayoutGetLeft(node);
+  publishedLayoutTop = YGNodeLayoutGetTop(node);
+  publishedLayoutWidth = YGNodeLayoutGetWidth(node);
+  publishedLayoutHeight = YGNodeLayoutGetHeight(node);
+
   // Recursively update children positions
   for (auto child : children) {
     child->applyYogaLayoutImmediate();
@@ -890,11 +899,9 @@ void View::applyYogaLayoutImmediate() {
   // callers may have explicitly calculated the exposed node. Compare against
   // the geometry last published by View as well as the current dirty flag.
   if (prevX != absoluteX || prevY != absoluteY ||
-      publishedLayoutWidth != newWidth || publishedLayoutHeight != newHeight) {
+      previousPublishedWidth != newWidth || previousPublishedHeight != newHeight) {
     ui::invalidate();
   }
-  publishedLayoutWidth = newWidth;
-  publishedLayoutHeight = newHeight;
   if (prevWidth != newWidth || prevHeight != newHeight) {
     onResize(newWidth, newHeight);
   }

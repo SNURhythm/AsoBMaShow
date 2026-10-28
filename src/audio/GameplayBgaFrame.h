@@ -202,6 +202,9 @@ struct PreparedGameplayBgaSurface {
   std::uint64_t surfaceToken = 0;
   int sourceWidth = 0;
   int sourceHeight = 0;
+  std::uint64_t contentIdentity = 0;
+
+  bool operator==(const PreparedGameplayBgaSurface &) const = default;
 };
 
 struct PreparedGameplayBgaFrame {
@@ -210,6 +213,8 @@ struct PreparedGameplayBgaFrame {
   std::optional<PreparedGameplayBgaSurface> base;
   std::optional<PreparedGameplayBgaSurface> layer;
   std::optional<PreparedGameplayBgaSurface> miss;
+  // A Jukebox lifetime/seek/resource epoch, independent of frame sequence.
+  std::uint64_t contentEpoch = 0;
 };
 
 enum class GameplayBgaCompositeMode : std::uint8_t {

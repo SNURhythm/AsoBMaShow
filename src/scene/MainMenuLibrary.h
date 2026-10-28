@@ -14,7 +14,35 @@
 namespace main_menu_library {
 
 std::optional<ChartMetaRecord> unzipAllRecord(int archiveCount);
-std::vector<ChartMetaRecord> randomSelectRecords(const std::array<int, 3> &indices);
+std::vector<ChartMetaRecord> randomSelectRecords(const std::array<bool, 3> &availability);
+// A single-entry cache bounds retained scope data. Score caches can be replaced
+// within a revision (e.g. profile reload), so callers also reset on replacement.
+struct RandomAvailabilityCache {
+  std::optional<ChartMetaQuery> query;
+  std::uint64_t libraryRevision = 0;
+  std::uint64_t scoreRevision = 0;
+  std::array<bool, 3> availability{};
+
+  static ChartMetaQuery membershipQuery(ChartMetaQuery value) {
+    value.sortCriterion = ChartRecordSortCriterion::Default;
+    value.sortDirection = ChartRecordSortDirection::Descending;
+    value.limit = value.offset = 0;
+    return value;
+  }
+  bool matches(const ChartMetaQuery &value, std::uint64_t library,
+               std::uint64_t score) const {
+    return query && *query == membershipQuery(value) &&
+           libraryRevision == library && scoreRevision == score;
+  }
+  void store(const ChartMetaQuery &value, std::uint64_t library,
+             std::uint64_t score, std::array<bool, 3> result) {
+    query = membershipQuery(value);
+    libraryRevision = library;
+    scoreRevision = score;
+    availability = result;
+  }
+};
+
 std::optional<ChartMetaRecord> chartSelectionRecordForReload(
     const std::optional<ChartMetaRecord> &selection,
     const std::optional<ChartMetaRecord> &leadingRecord, bool preserveViewState);

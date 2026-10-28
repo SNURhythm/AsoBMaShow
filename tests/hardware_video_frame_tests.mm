@@ -1,6 +1,6 @@
 #import <CoreVideo/CoreVideo.h>
 #include "video/HardwareVideoFrame.h"
-#include <bgfx/platform.h>
+#include <bgfx/bgfx.h>
 #include <cstdio>
 #include <fstream>
 #include <vector>
@@ -132,14 +132,15 @@ static bool checkPixels() {
   return passed;
 }
 
-int main(int argc, char **) {
+static bool checkFrameLatency(uint8_t frameLatency, bool threaded) {
   @autoreleasepool {
-    if (argc == 1) bgfx::renderFrame();
+    if (!threaded) bgfx::renderFrame();
     bgfx::Init init;
     init.type = bgfx::RendererType::Metal;
     init.fallback = false;
     init.resolution.width = init.resolution.height = 0;
-    if (!bgfx::init(init)) return 1;
+    init.resolution.maxFrameLatency = frameLatency;
+    if (!bgfx::init(init)) return false;
     const NSDictionary *attributes = @{
         (id)kCVPixelBufferMetalCompatibilityKey: @YES,
         (id)kCVPixelBufferIOSurfacePropertiesKey: @{}};
@@ -165,6 +166,18 @@ int main(int argc, char **) {
     bgfx::frame();
     bgfx::frame();
     bgfx::shutdown();
-    return passed ? 0 : 1;
+    return passed;
   }
+}
+
+int main(int argc, char **) {
+  // The newer Metal queue honors this limit. Exercise texture retirement and
+  // shutdown at each supported limit in both single-threaded and threaded runs.
+  for (const uint8_t frameLatency : {1, 2, 3}) {
+    if (!checkFrameLatency(frameLatency, argc > 1)) {
+      std::fprintf(stderr, "FAIL: native video with GPU frame limit %u\n", frameLatency);
+      return 1;
+    }
+  }
+  return 0;
 }

@@ -4,6 +4,8 @@
 #include <initializer_list>
 #include <optional>
 #include <thread>
+#include <string>
+#include <utility>
 
 struct Preview {
   bool suppressed = false;
@@ -31,6 +33,10 @@ struct ExternalUrlService {
 };
 
 struct MusicSelectScene {
+  // These lifecycle cases have no pending streak assignment.
+  std::string pendingStreakAssignment_;
+  void openStreakAssignment(const std::string &) { assert(false); }
+
   void closeRankings() {}
 
   struct RevealMenu {
@@ -89,7 +95,7 @@ struct MusicSelectScene {
   void startInputListening() {}
   void hideDecideOverlay() {}
   void syncToolbar() {}
-  void reloadLibrary() {}
+  void reloadLibrary(bool restoreSelection) { assert(restoreSelection); }
   void selectedBarMoved() { ++selectionChanges; }
   bool reactivateSkinAfterSettings() { return true; }
   void buildSkinLoadingView() {}

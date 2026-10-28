@@ -84,20 +84,18 @@ RuntimeStringsByObject musicSelectRuntimeAtlasStrings(
     const auto *songList =
         std::get_if<SkinSongListObject>(&definition.payload);
     if (songList == nullptr) continue;
-    const auto plan = MusicSelectBarRenderer{}.plan(*songList, frame.songList);
     std::map<SkinObjectId, std::set<std::size_t>> nearbyTitles;
-    for (const auto &command : plan.commands) {
-      if (command.family == MusicSelectBarDrawFamily::Title) {
-        appendRuntimeString(result, command.object, command.text);
-        if (titleOverscan == 0) continue;
-        const auto count = static_cast<std::int64_t>(frame.songList.size());
-        for (int offset = -titleOverscan; offset <= titleOverscan; ++offset) {
-          const auto index = static_cast<std::int64_t>(command.barIndex) + offset;
-          nearbyTitles[command.object].insert(
-              static_cast<std::size_t>((index % count + count) % count));
-        }
-      }
-    }
+    visitMusicSelectTitles(*songList, frame.songList,
+        [&](SkinObjectId object, std::size_t barIndex, std::string_view title) {
+          appendRuntimeString(result, object, title);
+          if (titleOverscan == 0) return;
+          const auto count = static_cast<std::int64_t>(frame.songList.size());
+          for (int offset = -titleOverscan; offset <= titleOverscan; ++offset) {
+            const auto index = static_cast<std::int64_t>(barIndex) + offset;
+            nearbyTitles[object].insert(
+                static_cast<std::size_t>((index % count + count) % count));
+          }
+        });
     for (const auto &[object, indexes] : nearbyTitles) {
       for (const auto index : indexes) {
         appendRuntimeString(result, object, frame.songList.at(index).title);
@@ -1036,7 +1034,9 @@ bool MusicSelectSkinSession::updateRuntimeTextAtlases(
                                       : nullptr;
       if (atlas == nullptr ||
           std::ranges::any_of(values, [&](const std::string &value) {
-            return !atlasContainsText(*atlas, value);
+            return !textResidencyCache_.contains(atlas, value, [&] {
+              return atlasContainsText(*atlas, value);
+            });
           })) {
         result.insert(object);
       }
@@ -1059,6 +1059,10 @@ bool MusicSelectSkinSession::updateRuntimeTextAtlases(
           std::make_move_iterator(patch.diagnostics.end()));
       bool applied = !patch.atlases.empty();
       std::set<SkinObjectId> updatedObjects;
+      // Atlas IDs and addresses survive replacement, including kerning-only
+      // patches. Clearing all successes advances this session's residency
+      // generation and also covers objects sharing an updated atlas.
+      if (!patch.atlases.empty()) textResidencyCache_.invalidate();
       for (auto &update : patch.atlases) {
         const bool replaced = resources_->replaceTextAtlas(
             std::move(update.atlas), update.objects, update.metricsOnly);

@@ -30,6 +30,7 @@
 #include "path.h"
 #include "rendering/BlurPass.h"
 #include "rendering/Color.h"
+#include "rendering/FrameSubmission.h"
 #include "rendering/RenderPlan.h"
 #include "rendering/SimpleBatchRenderer.h"
 #include "rendering/common.h"
@@ -883,6 +884,55 @@ void configureReplayExportRenderViews(int width, int height,
 
   rendering::applyViewOrder(rendering::blur_view_h, rendering::blur_view_v,
                             rendering::final_view);
+}
+
+// Every export path uses the same fail-closed fullscreen tail. Submission
+// consumes the prepared lease even on failure; preparation failure must release
+// it here because no submission will follow.
+bool submitReplayFullscreenBga(Jukebox &jukebox, rendering::BlurPass &blur,
+                               const PreparedGameplayBgaFrame &frame,
+                               float brightness, std::stop_token stop,
+                               std::string &errorMessage) {
+  // Activation/seek can empty the decoder queue immediately before this frame.
+  // Retry only missing initial pixels, before emitting any fullscreen draws.
+  // The same lease and frozen export clock survive retries; gameplay never waits.
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  for (;;) {
+    if (stop.stop_requested()) {
+      jukebox.finalizePrepared(frame);
+      errorMessage = "Replay export cancelled";
+      return false;
+    }
+    const auto readiness = jukebox.updateFullscreenVideoReadiness(frame);
+    if (readiness == Jukebox::FullscreenVideoReadiness::Ready) break;
+    if (readiness == Jukebox::FullscreenVideoReadiness::InvalidFrame ||
+        std::chrono::steady_clock::now() >= deadline) {
+      jukebox.finalizePrepared(frame);
+      errorMessage = readiness == Jukebox::FullscreenVideoReadiness::InvalidFrame
+          ? "Replay fullscreen BGA prepared frame is no longer valid"
+          : "Replay fullscreen BGA timed out waiting for an initial video frame";
+      return false;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+  if (!blur.prepareOutput()) {
+    jukebox.finalizePrepared(frame);
+    errorMessage = "Replay fullscreen BGA target preparation failed";
+    return false;
+  }
+  if (!jukebox.submitFullscreenComplete(frame)) {
+    errorMessage = "Replay fullscreen BGA composition failed";
+    return false;
+  }
+  if (!blur.executeComplete()) {
+    errorMessage = "Replay fullscreen BGA blur failed";
+    return false;
+  }
+  if (!blur.drawOutput(brightness)) {
+    errorMessage = "Replay fullscreen BGA output failed";
+    return false;
+  }
+  return true;
 }
 
 bool waitForReplayExportForeground(std::stop_token stop) {
@@ -2826,6 +2876,15 @@ public:
     return static_cast<int>(index);
   }
 
+  // Only for a reservation that has not been handed to readTexture/submitFrame.
+  void releaseFrameBuffer(size_t index) {
+    {
+      std::lock_guard<std::mutex> lock(mutex);
+      freeBuffers.push_back(index);
+    }
+    condition.notify_one();
+  }
+
   uint8_t *frameData(size_t index) { return frameBuffers[index].data(); }
 
   bool submitFrame(size_t bufferIndex, size_t frameIndex,
@@ -3480,8 +3539,18 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
     freeReadbackTextures.pop_front();
 
     const auto renderStart = std::chrono::steady_clock::now();
+    const rendering::FrameSubmission frameSubmission;
     context.uiBatchRenderer.beginFrame();
-    renderFrame();
+    const bool rendered = renderFrame();
+    if (!rendered || !context.uiBatchRenderer.frameComplete() ||
+        !frameSubmission.accepted()) {
+      if (rendered) errorMessage = "Replay frame submission was incomplete";
+      // Retire partial offscreen commands, but never copy or encode this frame.
+      currentFrame = bgfx::frame();
+      encoder.releaseFrameBuffer(static_cast<size_t>(frameBufferIndex));
+      freeReadbackTextures.push_back(readbackTextureIndex);
+      return false;
+    }
     bgfx::blit(rendering::readback_view, readbackTextures[readbackTextureIndex],
                0, 0, outputTexture);
     drawMicros += elapsedMicros(renderStart);
@@ -3622,7 +3691,6 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
         frameAuthority, fps, exportStartUptimeMillis, videoTimeMicros);
     preparedGameplay.presentation->applyAuthorityUpdate(frameAuthority);
 
-    bool presentationFailed = false;
     if (!renderAndQueueFrame(frameIndex, videoTimeMicros, [&]() {
           RenderContext::UiBatchScope uiBatchScope(renderContext);
           bgfx::touch(rendering::clear_view);
@@ -3646,24 +3714,18 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
                                : "Replay gameplay presentation failed "
                                  "without a diagnostic "
                                  "[presentation.frame_failure_missing]";
-            presentationFailed = true;
-            return;
+            return false;
           }
           if (presentationFrame.bgaCompositeMode ==
                   GameplayBgaCompositeMode::FullscreenBuiltIn &&
               presentationFrame.preparedBga) {
-            context.jukebox.submitFullscreen(*presentationFrame.preparedBga);
-            bgaBlurPass->execute();
-            rendering::renderFullscreenTextureTint(
-                bgaBlurPass->outputTexture(), rendering::final_view,
-                static_cast<float>(settings.bgaBrightnessPercent) / 100.0f);
+            if (!submitReplayFullscreenBga(
+                    context.jukebox, *bgaBlurPass, *presentationFrame.preparedBga,
+                    static_cast<float>(settings.bgaBrightnessPercent) / 100.0f,
+                    options.stop, errorMessage)) return false;
           }
+          return true;
         })) {
-      bgfxCleanup.runNow();
-      return {
-          .success = false, .outputPath = outputPath, .message = errorMessage};
-    }
-    if (presentationFailed) {
       bgfxCleanup.runNow();
       return {
           .success = false, .outputPath = outputPath, .message = errorMessage};
@@ -3703,11 +3765,10 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
           bgfx::touch(rendering::bga_layer_view);
           const auto bgaFrame = context.jukebox.prepareVisualFrameAt(
               ++presentationSerial, bgaTimeMicros, bgaMissTracker.snapshot());
-          context.jukebox.submitFullscreen(bgaFrame);
-          bgaBlurPass->execute();
-          rendering::renderFullscreenTextureTint(
-              bgaBlurPass->outputTexture(), rendering::final_view,
-              static_cast<float>(settings.bgaBrightnessPercent) / 100.0f);
+          if (!submitReplayFullscreenBga(
+                  context.jukebox, *bgaBlurPass, bgaFrame,
+                  static_cast<float>(settings.bgaBrightnessPercent) / 100.0f,
+                  options.stop, errorMessage)) return false;
           bgfx::touch(rendering::ui_view);
           if (resultPresentation.active()) {
             RenderContext::UiBatchScope uiBatchScope(renderContext);
@@ -3721,7 +3782,8 @@ renderReplayVideoToMp4(ApplicationContext &context, bms_parser::Chart &chart,
             drawReplayResultGaugeGraph(resultGraphBatch, replayResultState,
                                        resultGraphPlaceholder);
           }
-        }) || !resultRendered) {
+          return resultRendered;
+        })) {
       bgfxCleanup.runNow();
       return {
           .success = false, .outputPath = outputPath, .message = errorMessage};
@@ -4203,8 +4265,18 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
     freeReadbackTextures.pop_front();
 
     const auto renderStart = std::chrono::steady_clock::now();
+    const rendering::FrameSubmission frameSubmission;
     context.uiBatchRenderer.beginFrame();
-    renderFrame();
+    const bool rendered = renderFrame();
+    if (!rendered || !context.uiBatchRenderer.frameComplete() ||
+        !frameSubmission.accepted()) {
+      if (rendered) errorMessage = "Replay frame submission was incomplete";
+      // Retire partial offscreen commands, but never copy or encode this frame.
+      currentFrame = bgfx::frame();
+      encoder.releaseFrameBuffer(static_cast<size_t>(frameBufferIndex));
+      freeReadbackTextures.push_back(readbackTextureIndex);
+      return false;
+    }
     bgfx::blit(rendering::readback_view, readbackTextures[readbackTextureIndex],
                0, 0, outputTexture);
     drawMicros += elapsedMicros(renderStart);
@@ -4527,7 +4599,6 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
           globalVideoTimeMicros);
       presentation.applyAuthorityUpdate(frameAuthority);
 
-      bool presentationFailed = false;
       if (!renderAndQueueFrame(globalFrameIndex, globalVideoTimeMicros,
                                [&]() {
                                  RenderContext::UiBatchScope uiBatchScope(
@@ -4558,29 +4629,20 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                                       : "Replay gameplay presentation failed "
                                                         "without a diagnostic "
                                                         "[presentation.frame_failure_missing]";
-                                   presentationFailed = true;
-                                   return;
+                                   return false;
                                  }
                                  if (presentationFrame.bgaCompositeMode ==
                                          GameplayBgaCompositeMode::FullscreenBuiltIn &&
                                      presentationFrame.preparedBga) {
-                                   context.jukebox.submitFullscreen(
-                                       *presentationFrame.preparedBga);
-                                   bgaBlurPass->execute();
-                                   rendering::renderFullscreenTextureTint(
-                                       bgaBlurPass->outputTexture(),
-                                       rendering::final_view,
-                                       static_cast<float>(
-                                           settings.bgaBrightnessPercent) /
-                                           100.0f);
+                                   if (!submitReplayFullscreenBga(
+                                           context.jukebox, *bgaBlurPass,
+                                           *presentationFrame.preparedBga,
+                                           static_cast<float>(
+                                               settings.bgaBrightnessPercent) / 100.0f,
+                                           options.stop, errorMessage)) return false;
                                  }
+                                 return true;
                                })) {
-        bgfxCleanup.runNow();
-        return {.success = false,
-                .outputPath = outputPath,
-                .message = errorMessage};
-      }
-      if (presentationFailed) {
         bgfxCleanup.runNow();
         return {.success = false,
                 .outputPath = outputPath,
@@ -4619,14 +4681,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                      context.jukebox.prepareVisualFrameAt(
                                          bgaFrameSerial++, stageBgaTimeMicros,
                                          bgaMissTracker.snapshot());
-                                 context.jukebox.submitFullscreen(bgaFrame);
-                                 bgaBlurPass->execute();
-                                 rendering::renderFullscreenTextureTint(
-                                     bgaBlurPass->outputTexture(),
-                                     rendering::final_view,
-                                     static_cast<float>(
-                                         settings.bgaBrightnessPercent) /
-                                         100.0f);
+                                 if (!submitReplayFullscreenBga(
+                                         context.jukebox, *bgaBlurPass, bgaFrame,
+                                         static_cast<float>(
+                                             settings.bgaBrightnessPercent) / 100.0f,
+                                         options.stop, errorMessage)) return false;
                                  bgfx::touch(rendering::ui_view);
                                  if (stageResultPresentation.active()) {
                                    RenderContext::UiBatchScope uiBatchScope(renderContext);
@@ -4643,7 +4702,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                        stage.resultState,
                                        stageResultGraphPlaceholder);
                                  }
-                               }) || !resultRendered) {
+                                 return resultRendered;
+                               })) {
         bgfxCleanup.runNow();
         return {.success = false,
                 .outputPath = outputPath,
@@ -4689,14 +4749,11 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                    context.jukebox.prepareVisualFrameAt(
                                        bgaFrameSerial++, stageBgaTimeMicros,
                                        bgaMissTracker.snapshot());
-                               context.jukebox.submitFullscreen(bgaFrame);
-                               bgaBlurPass->execute();
-                               rendering::renderFullscreenTextureTint(
-                                   bgaBlurPass->outputTexture(),
-                                   rendering::final_view,
-                                   static_cast<float>(
-                                       settings.bgaBrightnessPercent) /
-                                       100.0f);
+                               if (!submitReplayFullscreenBga(
+                                       context.jukebox, *bgaBlurPass, bgaFrame,
+                                       static_cast<float>(
+                                           settings.bgaBrightnessPercent) / 100.0f,
+                                       options.stop, errorMessage)) return false;
                                bgfx::touch(rendering::ui_view);
                                if (courseResultPresentation.active()) {
                                  RenderContext::UiBatchScope uiBatchScope(renderContext);
@@ -4712,7 +4769,8 @@ ReplayVideoExportResult renderCourseReplayVideoToMp4(
                                      courseResultGraphBatch, courseState,
                                      courseResultGraphPlaceholder);
                                }
-                             }) || !resultRendered) {
+                               return resultRendered;
+                             })) {
       bgfxCleanup.runNow();
       return {.success = false,
               .outputPath = outputPath,
