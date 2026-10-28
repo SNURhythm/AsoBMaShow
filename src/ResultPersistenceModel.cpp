@@ -1,4 +1,5 @@
 #include "ResultPersistenceModel.h"
+#include "GaugeEvidenceJson.h"
 
 #include "BmsMetadataText.h"
 #include "CanonicalDigest.h"
@@ -319,6 +320,10 @@ void appendScore(CanonicalEncoder &encoder, const ChartScoreWrite &score) {
   encoder.float32(score.finalGauge);
   encoder.integer(static_cast<std::int32_t>(score.clearType));
   appendProvenance(encoder, score.provenance);
+  if (score.gaugeEvidence.recorded) {
+    encoder.string("all-gauge-evidence-v1");
+    encoder.string(serializeGaugeEvidence(score.gaugeEvidence));
+  }
 }
 
 struct NormalizedChartIdentity {

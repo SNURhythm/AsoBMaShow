@@ -1,4 +1,5 @@
 #include "ReplayRepository.h"
+#include "../GaugeEvidenceJson.h"
 #include "ReplayRepositoryInternal.h"
 #include "ReplayRepositoryIrRows.h"
 
@@ -27,7 +28,7 @@ constexpr const char *kModernChartColumns =
     "chart_artist,long_note_mode,score,max_score,max_combo,combo_break,"
     "p_great,great,good,bad,poor,k_poor,fast,slow,final_gauge,clear_type,"
     "key_mode,adopted_gauge_type,gauge_history_json,judgement_timing_json,"
-    "provenance_json,result_fingerprint,played_at_unix_ms,created_at,bad_points";
+    "provenance_json,result_fingerprint,played_at_unix_ms,created_at,bad_points,gauge_evidence";
 
 bool validOptionalBadPoints(sqlite3_stmt *statement, int column) {
   return sqlite3_column_type(statement, column) == SQLITE_NULL ||
@@ -356,7 +357,7 @@ ReservedReplayAttachmentWriteStatus writeReservedReplayAttachment(
 
 std::optional<result_persistence::ModernChartResult>
 decodeModernChartResult(sqlite3_stmt *statement, std::string &diagnostic) {
-  const int textColumns[] = {1, 2, 3, 4, 5, 6, 24, 26, 27, 29};
+  const int textColumns[] = {1, 2, 3, 4, 5, 6, 24, 26, 27, 29, 31};
   const int integerColumns[] = {0,  7,  8,  9,  10, 11, 12, 13, 14,
                                 15, 16, 17, 18, 19, 21, 22, 23, 28};
   if (std::ranges::any_of(textColumns,
@@ -378,6 +379,8 @@ decodeModernChartResult(sqlite3_stmt *statement, std::string &diagnostic) {
     return std::nullopt;
   }
 
+  auto evidence = deserializeGaugeEvidence(sqliteColumnString(statement, 31));
+  if (!evidence) { diagnostic = "invalid chart gauge evidence"; return std::nullopt; }
   const std::string gaugeJson = sqliteColumnString(statement, 24);
   auto gaugeHistory = deserializeGaugeHistory(gaugeJson);
   if (!gaugeHistory) {
@@ -427,7 +430,8 @@ decodeModernChartResult(sqlite3_stmt *statement, std::string &diagnostic) {
                     static_cast<float>(sqlite3_column_double(statement, 20)),
                 .clearType = sqlite3_column_int(statement, 21),
                 .provenance = std::move(*provenance),
-                .badPoints = readBadPoints(statement, 30)},
+                .badPoints = readBadPoints(statement, 30),
+                .gaugeEvidence = *evidence},
       .keyMode = sqlite3_column_int(statement, 22),
       .adoptedGaugeType =
           static_cast<GaugeType>(sqlite3_column_int(statement, 23)),
@@ -1035,8 +1039,8 @@ bool insertResult(sqlite3 *database,
       "max_combo,combo_break,p_great,great,good,bad,poor,k_poor,fast,slow,"
       "final_gauge,clear_type,key_mode,adopted_gauge_type,gauge_history_json,"
       "judgement_timing_json,provenance_json,result_fingerprint,"
-      "played_at_unix_ms,bad_points) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
-      "?,?,?,?,?,?,?)";
+      "played_at_unix_ms,bad_points,gauge_evidence) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
+      "?,?,?,?,?,?,?,?)";
   if (prepareSqliteStatement(database, query, statement) != SQLITE_OK) {
     return false;
   }
@@ -1077,8 +1081,9 @@ bool insertResult(sqlite3 *database,
           bindText(statement.get(), index++, result.resultFingerprint) &&
           sqlite3_bind_int64(statement.get(), index++,
                              result.playedAtUnixMillis) == SQLITE_OK &&
-          bindBadPoints(statement.get(), index++, score.badPoints);
-  if (!bound || index != 30 || sqlite3_step(statement.get()) != SQLITE_DONE ||
+          bindBadPoints(statement.get(), index++, score.badPoints) &&
+          bindText(statement.get(), index++, serializeGaugeEvidence(score.gaugeEvidence));
+  if (!bound || index != 31 || sqlite3_step(statement.get()) != SQLITE_DONE ||
       sqlite3_changes(database) != 1) {
     return false;
   }
@@ -1178,7 +1183,7 @@ constexpr const char *kModernCourseColumns =
 
 std::optional<result_persistence::ModernCourseStageResult>
 decodeModernCourseStage(sqlite3_stmt *statement, std::string &diagnostic) {
-  const int textColumns[] = {1, 2, 3, 4, 5, 23, 25};
+  const int textColumns[] = {1, 2, 3, 4, 5, 23, 25, 27};
   const int integerColumns[] = {0,  6,  7,  8,  9,  10, 11, 12, 13,
                                 14, 15, 16, 17, 18, 20, 21, 22};
   if (std::ranges::any_of(textColumns,
@@ -1199,6 +1204,8 @@ decodeModernCourseStage(sqlite3_stmt *statement, std::string &diagnostic) {
     diagnostic = "modern course stage row has invalid types";
     return std::nullopt;
   }
+  auto evidence = deserializeGaugeEvidence(sqliteColumnString(statement, 27));
+  if (!evidence) { diagnostic = "invalid course gauge evidence"; return std::nullopt; }
   auto gaugeHistory =
       deserializeGaugeHistory(sqliteColumnString(statement, 23));
   if (!gaugeHistory) {
@@ -1245,7 +1252,8 @@ decodeModernCourseStage(sqlite3_stmt *statement, std::string &diagnostic) {
                     static_cast<float>(sqlite3_column_double(statement, 19)),
                 .clearType = sqlite3_column_int(statement, 20),
                 .provenance = std::move(*provenance),
-                .badPoints = readBadPoints(statement, 26)},
+                .badPoints = readBadPoints(statement, 26),
+                .gaugeEvidence = *evidence},
       .keyMode = sqlite3_column_int(statement, 21),
       .adoptedGaugeType =
           static_cast<GaugeType>(sqlite3_column_int(statement, 22)),
@@ -1391,7 +1399,7 @@ ReadCourseResultOutcome readCourseResult(sqlite3 *database,
           "chart_artist,long_note_mode,score,max_score,max_combo,combo_break,"
           "p_great,great,good,bad,poor,k_poor,fast,slow,final_gauge,clear_type,"
           "key_mode,adopted_gauge_type,gauge_history_json,"
-          "judgement_timing_json,provenance_json,bad_points FROM modern_course_stages "
+          "judgement_timing_json,provenance_json,bad_points,gauge_evidence FROM modern_course_stages "
           "WHERE modern_course_result_id=? ORDER BY stage_index",
           statement) != SQLITE_OK ||
       sqlite3_bind_int(statement.get(), 1, result.resultId) != SQLITE_OK) {
@@ -1551,8 +1559,8 @@ bool insertModernCourseChildren(
       "long_note_mode,score,max_score,max_combo,combo_break,p_great,great,"
       "good,bad,poor,k_poor,fast,slow,final_gauge,clear_type,key_mode,"
       "adopted_gauge_type,gauge_history_json,judgement_timing_json,"
-      "provenance_json,bad_points) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
-      "?,?,?,?,?)";
+      "provenance_json,bad_points,gauge_evidence) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,"
+      "?,?,?,?,?,?)";
   if (prepareSqliteStatement(database, stageQuery, stage) != SQLITE_OK) {
     return false;
   }
@@ -1604,8 +1612,9 @@ bool insertModernCourseChildren(
       bound = bound && bindText(stage.get(), index++, *timingJson);
     }
     bound = bound && bindText(stage.get(), index++, *provenanceJson) &&
-            bindBadPoints(stage.get(), index++, value.score.badPoints);
-    if (!bound || index != 29 || sqlite3_step(stage.get()) != SQLITE_DONE ||
+            bindBadPoints(stage.get(), index++, value.score.badPoints) &&
+            bindText(stage.get(), index++, serializeGaugeEvidence(value.score.gaugeEvidence));
+    if (!bound || index != 30 || sqlite3_step(stage.get()) != SQLITE_DONE ||
         sqlite3_changes(database) != 1) {
       return false;
     }

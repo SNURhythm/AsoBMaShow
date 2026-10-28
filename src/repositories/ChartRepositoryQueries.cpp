@@ -3952,9 +3952,7 @@ std::vector<GoalRecommendation> ChartRepository::Session::GoalRecommendations(in
   if (prepared.error()) throw std::runtime_error(*prepared.error());
   auto *db = impl_->database();
   SqliteStatementHandle query;
-  if (prepareSqliteStatement(db, chart_goals::recommendationCandidatesSql() +
-      " SELECT sha256,ln_mode,target,score,max_score,remaining FROM candidates WHERE target=?"
-      " ORDER BY 1.0*remaining/max_score, remaining, sha256, ln_mode LIMIT 20 OFFSET ?", query) != SQLITE_OK ||
+  if (prepareSqliteStatement(db, chart_goals::recommendationPageSql(), query) != SQLITE_OK ||
       sqlite3_bind_int(query, 1, target) != SQLITE_OK || sqlite3_bind_int(query, 2, std::max(0, offset)) != SQLITE_OK)
     throw std::runtime_error(sqliteDatabaseError(db));
   std::vector<GoalRecommendation> rows;

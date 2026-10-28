@@ -154,6 +154,41 @@ attachment(const ModernReplayPathReservation &reservation, char hash = 'c') {
                            replay::BeatorajaReplayCodec::kCodecVersion}};
 }
 
+void testGaugeEvidenceRoundTripAndMigration() {
+  TemporaryDirectory temporary;
+  const auto path = temporary.path / "replay.db";
+  ReplayRepository repository(path);
+  assert(repository.EnsureSchema());
+  auto old = result(91);
+  assert(repository.StageModernChartResult(old, std::nullopt, std::nullopt, {}).receipt);
+  {
+    auto db = openDatabase(path);
+    exec(db.get(), "ALTER TABLE modern_chart_results DROP COLUMN gauge_evidence;"
+                  "ALTER TABLE modern_course_stages DROP COLUMN gauge_evidence; PRAGMA user_version=19;");
+  }
+  assert(repository.EnsureSchema());
+  auto loaded = repository.LoadModernChartResultByAttempt(old.attemptId);
+  assert(loaded.record && loaded.record->result.score.gaugeEvidence == GaugeEvidence{});
+  assert(loaded.record->result.resultFingerprint == old.resultFingerprint);
+  auto measured = result(92);
+  auto &evidence = measured.score.gaugeEvidence;
+  evidence.recorded = true; evidence.passedNotes = 5;
+  evidence.survivalMask = 0x1f8;
+  for (int i = 3; i < 9; ++i) evidence.deathPassedNotes[i] = -1;
+  evidence.deathPassedNotes[5] = 3;
+  evidence.values = {91, 85, 82.5, 15, 4, 0, 28, 12, 3};
+  measured.resultFingerprint = result_persistence::modernResultFingerprint(measured);
+  assert(repository.StageModernChartResult(measured, std::nullopt, std::nullopt, {}).receipt);
+  loaded = repository.LoadModernChartResultByAttempt(measured.attemptId);
+  assert(loaded.record && loaded.record->result.score.gaugeEvidence == evidence);
+  assert(repository.StageModernChartResult(measured, std::nullopt, std::nullopt, {}).status ==
+         ModernChartStageStatus::AlreadyStaged);
+  measured.score.gaugeEvidence.deathPassedNotes[5] = 4;
+  measured.resultFingerprint = result_persistence::modernResultFingerprint(measured);
+  assert(repository.StageModernChartResult(measured, std::nullopt, std::nullopt, {}).status ==
+         ModernChartStageStatus::IntegrityConflict);
+}
+
 void testCurrentSchemaAddsSelectorMetricsTable() {
   TemporaryDirectory temporary;
   const auto databasePath = temporary.path / "replay.db";
@@ -897,6 +932,7 @@ void testExactRetryAttachesOnlyMissingReplayAtomically() {
 } // namespace
 
 int main() {
+  testGaugeEvidenceRoundTripAndMigration();
   testCurrentSchemaAddsSelectorMetricsTable();
   testSchemaReservationAtomicStageAndExactRetry();
   testRollbackAndReplayOptionality();

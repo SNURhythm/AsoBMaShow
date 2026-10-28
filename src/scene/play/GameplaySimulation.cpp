@@ -152,6 +152,7 @@ GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
     auto carriedGauge = *config_.attempt.carriedGauge;
     carriedGauge.gaugeProfile = scoreState_.gaugeProfile;
     scoreState_.restoreGaugeState(carriedGauge);
+    scoreState_.resetGaugeEvidence();
   }
   scoreState_.combo = config_.attempt.carriedCombo;
   scoreState_.maxCombo = config_.attempt.carriedMaxCombo;
@@ -1227,12 +1228,15 @@ GameplayAdvanceResult GameplaySimulation::finalizeAbortedAttempt(
       terminalReason_ != GameplayTerminalReason::SurvivalGaugeFailed) {
     return emptyAdvanceResult();
   }
+  const auto evidence = scoreState_.gaugeEvidence;
   terminalReason_ = GameplayTerminalReason::None;
   automaticResults_.clear();
-  return finalizePendingNotes(
+  auto result = finalizePendingNotes(
       {.startMicros = std::numeric_limits<std::int64_t>::min(),
        .endMicros = std::numeric_limits<std::int64_t>::max()},
       finalizationTimeMicros, true);
+  scoreState_.gaugeEvidence = evidence;
+  return result;
 }
 
 GameplayAdvanceResult GameplaySimulation::finalizePendingNotes(

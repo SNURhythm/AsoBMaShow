@@ -1,4 +1,5 @@
 #include "ScoreRepository.h"
+#include "../GaugeEvidenceJson.h"
 #include "../kombo/KomboStore.h"
 #include <random>
 #include "ScoreRepositoryInternal.h"
@@ -177,6 +178,9 @@ score_repository_detail::ScoreWriteOutcome insertScoreWriteOnConnectionImpl(
     std::abort();
   }
 
+  if (!score.gaugeEvidence.valid(score.maxScore / 2))
+    return {.diagnostic = "invalid score gauge evidence"};
+
   std::string query =
       "INSERT INTO scores ("
       "chart_path, chart_md5, chart_sha256, ln_mode, chart_title, "
@@ -185,12 +189,12 @@ score_repository_detail::ScoreWriteOutcome insertScoreWriteOnConnectionImpl(
       "play_duration_seconds, bad_points, average_judge_micros, "
       "ruleset_version, eligibility, provenance_json, attempt_id, "
       "score_source, source_provider_id, source_server_origin, "
-      "source_remote_score_id, source_sync_generation";
+      "source_remote_score_id, source_sync_generation, gauge_evidence";
   if (createdAt.has_value()) {
     query += ", created_at";
   }
   query += ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-           "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?";
+           "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?";
   if (createdAt.has_value()) {
     query += ", ?";
   }
@@ -280,10 +284,11 @@ score_repository_detail::ScoreWriteOutcome insertScoreWriteOnConnectionImpl(
   } else {
     bound = bound && sqlite3_bind_null(stmt.get(), bindIndex++) == SQLITE_OK;
   }
+  bindText(serializeGaugeEvidence(score.gaugeEvidence));
   if (createdAt.has_value()) {
     bindText(*createdAt);
   }
-  const int expectedBindIndex = createdAt.has_value() ? 34 : 33;
+  const int expectedBindIndex = createdAt.has_value() ? 35 : 34;
   if (!bound || bindIndex != expectedBindIndex) {
     logSqlError("binding score insert", db);
     return {.diagnostic = "could not bind the score insert"};
@@ -348,7 +353,7 @@ result_persistence::ProjectionOutcome classifyProjectedScoreCollision(
           "combo_break, pgreat, great, good, bad, poor, kpoor, fast, slow, "
           "final_gauge, clear_type, play_duration_seconds, ruleset_version, "
           "eligibility, "
-          "provenance_json, created_at, average_judge_micros, bad_points FROM scores "
+          "provenance_json, created_at, average_judge_micros, bad_points, gauge_evidence FROM scores "
           "WHERE attempt_id = ?",
           stmt, "preparing projected score collision lookup",
           logSqlErrorText) ||
@@ -418,6 +423,10 @@ result_persistence::ProjectionOutcome classifyProjectedScoreCollision(
             .diagnostic = "stored projected score BP differs from the attempted payload"};
   }
   stored.badPoints = pending.score.badPoints;
+  const auto evidence = deserializeGaugeEvidence(sqliteColumnString(stmt.get(), 28));
+  if (!evidence) return {.status = ProjectionStatus::IntegrityConflict,
+                         .diagnostic = "stored projected gauge evidence is invalid"};
+  stored.gaugeEvidence = *evidence;
 
   const double storedGauge = sqlite3_column_double(stmt.get(), 19);
   if (!std::isfinite(storedGauge) ||

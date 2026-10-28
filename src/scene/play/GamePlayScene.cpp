@@ -4103,6 +4103,7 @@ bool GamePlayScene::reset() {
   if (isCoursePlayback()) {
     state->combo = options.courseSession->courseCarriedCombo();
     state->maxCombo = options.courseSession->courseMaximumCombo();
+    state->resetGaugeEvidence();
     courseStageInitialGauge = state->gaugeSnapshot();
   } else {
     courseStageInitialGauge.reset();
@@ -4974,6 +4975,7 @@ void GamePlayScene::abortPlayFromStartSelectControl() {
       isReplayPlayback() && options.replayData->abortedAtSongTimeMicros.has_value()
           ? *options.replayData->abortedAtSongTimeMicros
           : getGameplayTimeMicros(context.jukebox.getTimeMicros());
+  const auto gaugeEvidenceBeforeAbort = state->gaugeEvidence;
   if (chart != nullptr) {
     const NoteTimeRange remainingRange{
         std::numeric_limits<long long>::min(),
@@ -4990,6 +4992,7 @@ void GamePlayScene::abortPlayFromStartSelectControl() {
     }
   }
   state->failUnfinishedAttempt();
+  state->gaugeEvidence = gaugeEvidenceBeforeAbort;
   recordedReplay.abortedAtSongTimeMicros = finalizationTimeMicros;
   state->isEnding = true;
   finishReplayRecording();

@@ -887,6 +887,17 @@ bool inspectScoreVersion14Completion(sqlite3 *db,
   return true;
 }
 
+bool scoreGaugeEvidenceSchemaIsExact(sqlite3 *db) {
+  SqliteStatementHandle columns;
+  if (prepareSqliteStatement(db, "PRAGMA table_info(scores)", columns) != SQLITE_OK) return false;
+  while (sqlite3_step(columns) == SQLITE_ROW) {
+    if (sqliteColumnString(columns, 1) == "gauge_evidence")
+      return sqliteColumnString(columns, 2) == "TEXT" && sqlite3_column_int(columns, 3) == 1 &&
+             sqliteColumnString(columns, 4) == "'{}'";
+  }
+  return false;
+}
+
 bool currentScoreSchemaIsValid(sqlite3 *db) {
   std::string versionError;
   const auto version = readSqliteUserVersion(db, versionError);
@@ -902,7 +913,7 @@ bool currentScoreSchemaIsValid(sqlite3 *db) {
          scoreAttemptIdentitySchemaIsExact(db) &&
          scoreImportedIrSchemaIsExact(db) &&
          courseScoreProjectionSchemaIsExact(db) &&
-         courseBadPointsSchemaIsExact(db);
+         courseBadPointsSchemaIsExact(db) && scoreGaugeEvidenceSchemaIsExact(db);
 }
 
 bool migrateScoreDatabaseToVersion9(sqlite3 *db) {
@@ -1390,6 +1401,7 @@ std::string createScoreTableSql(std::string_view tableName,
          "poor INTEGER NOT NULL,"
          "kpoor INTEGER NOT NULL,"
          "bad_points INTEGER,"
+         "gauge_evidence TEXT NOT NULL DEFAULT '{}',"
          "average_judge_micros INTEGER,"
          "fast INTEGER NOT NULL,"
          "slow INTEGER NOT NULL,"
@@ -1894,6 +1906,18 @@ bool migrateScoreDatabaseToVersion14(sqlite3 *db) {
            completion == ScoreVersion14Completion::Complete;
   }
   return setDatabaseUserVersion(db, 14);
+}
+
+bool migrateScoreGaugeEvidence(sqlite3 *db) {
+  std::string error;
+  const auto version = readSqliteUserVersion(db, error);
+  if (!version) return false;
+  if (*version >= 15) return scoreGaugeEvidenceSchemaIsExact(db);
+  if (!ensureSqliteTableColumnLogged(db, "scores", "gauge_evidence",
+      "ALTER TABLE scores ADD COLUMN gauge_evidence TEXT NOT NULL DEFAULT '{}'",
+      "reading score gauge schema", "adding score gauge evidence", logSqlErrorText) || !scoreGaugeEvidenceSchemaIsExact(db)) return false;
+  // Do not skip a pending chart-metadata-dependent duration migration.
+  return *version < 14 || setDatabaseUserVersion(db, kScoreDatabaseSchemaVersion);
 }
 
 std::string scoreMigrationHashHasValue(std::string_view columnName) {
@@ -2418,7 +2442,8 @@ bool score_repository_detail::EnsureSchemaOnConnection(
       !migrateScoreDatabaseToVersion11(db) ||
       !migrateScoreDatabaseToVersion12(db, chartDatabasePath) ||
       !migrateScoreDatabaseToVersion13(db, chartDatabasePath) ||
-      !migrateScoreDatabaseToVersion14(db)) {
+      !migrateScoreDatabaseToVersion14(db) ||
+      !migrateScoreGaugeEvidence(db)) {
     return false;
   }
   bool repairsComplete = false;

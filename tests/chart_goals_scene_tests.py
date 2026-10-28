@@ -212,7 +212,9 @@ void targets(View *, int) {}
 struct ChartMetaRecord {};
 struct Context {};
 std::map<std::string, ChartMetaRecord> loadGoalArtwork(Context &, const std::vector<const chart_goals::GoalProgress *> &, int) { return {}; }
-void goalArtwork(View *, const ChartMetaRecord *) {}
+void goalIdentity(View *, const decltype(chart_goals::Goal::chart) &meta, const ChartMetaRecord *, int) {
+  titles.push_back(meta.Title + (meta.SubTitle.empty() ? "" : " " + meta.SubTitle));
+}
 void action(View *, const std::string &s, std::function<void()>,
     app_theme::ActionCategory = app_theme::ActionCategory::Neutral, int = 0) { actions.push_back(s); }
 struct Scene {

@@ -643,7 +643,7 @@ void testFreshScoreInitializationSkipsHistoricalRewrites(
   assert(queryInt(db.get(), "PRAGMA user_version") == 0);
   SqliteInitializationTrace trace(db.get());
   assert(score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
-  assert(queryInt(db.get(), "PRAGMA user_version") == 14);
+  assert(queryInt(db.get(), "PRAGMA user_version") == ScoreRepository::kCurrentSchemaVersion);
   assert(score_repository_detail::CurrentSchemaIsValid(db.get()));
   assert(!trace.contains("ALTER TABLE"));
   assert(!trace.contains("DROP TABLE"));
@@ -3398,7 +3398,7 @@ void testVersion14CourseBadPointsMigration(const std::filesystem::path &root) {
   assert(queryInt(db.get(), "PRAGMA user_version") == 13);
   assert(!columnExists(db.get(), "course_scores", "bad_points"));
   assert(score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
-  assert(queryInt(db.get(), "PRAGMA user_version") == 14);
+  assert(queryInt(db.get(), "PRAGMA user_version") == ScoreRepository::kCurrentSchemaVersion);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores "
                            "WHERE bad_points IS NULL") == 1);
   assert(courseOutcome(db.get()) == outcome);

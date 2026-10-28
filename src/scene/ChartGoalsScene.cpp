@@ -98,6 +98,33 @@ void goalArtwork(View *parent, const ChartMetaRecord *record) {
   if (const auto path = goalArtworkPath(record)) image->setImageAsync(fspath_to_path_t(*path));
   parent->addView(frame);
 }
+std::string goalDifficultyText(const bms_parser::ChartMeta &meta, const ChartMetaRecord *record) {
+  if (record && !record->difficultyTableLabels.empty()) return record->difficultyTableLabels;
+  const auto level = record ? record->meta.PlayLevel : meta.PlayLevel;
+  if (level <= 0) return "Lv. —";
+  std::ostringstream text;
+  text << "Lv. " << level;
+  return text.str();
+}
+void goalIdentity(View *parent, const bms_parser::ChartMeta &meta,
+                  const ChartMetaRecord *record, int titleSize) {
+  auto *identity = new View();
+  identity->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(12)->setFlexShrink(0);
+  goalArtwork(identity, record);
+  auto *text = new View();
+  text->setFlexDirection(FlexDirection::Column)->setGap(6)->setFlex(1)->setMinWidth(0);
+  label(text, meta.Title + (meta.SubTitle.empty() ? "" : " " + meta.SubTitle), titleSize);
+  auto *difficulty = label(text, goalDifficultyText(meta, record), 18);
+  difficulty->setName("goalDifficulty");
+  YGNodeStyleSetMaxWidthPercent(difficulty->getNode(), 100);
+  difficulty->setAlignSelf(YGAlignFlexStart)
+      ->setPadding(Edge::Left, 10)->setPadding(Edge::Right, 10)
+      ->setPadding(Edge::Top, 4)->setPadding(Edge::Bottom, 4)->setCornerRadius(8);
+  difficulty->setThemedColor(app_theme::cyan);
+  difficulty->setThemedBackgroundColor([] { return app_theme::withAlpha(app_theme::cyan(), 24); });
+  identity->addView(text);
+  parent->addView(identity);
+}
 std::map<std::string, ChartMetaRecord> loadGoalArtwork(
     ApplicationContext &context, const std::vector<const chart_goals::GoalProgress *> &entries, int offset) {
   std::map<std::string, ChartMetaRecord> result;
@@ -108,7 +135,6 @@ std::map<std::string, ChartMetaRecord> loadGoalArtwork(
   if (query.allowedSha256->empty()) return result;
   auto session = context.chartRepository.OpenSession();
   if (!session) return result;
-  query.rawSongData = true;
   std::vector<ChartMetaRecord> records;
   session->QueryChartMeta(query, records);
   for (auto &record : records) {
@@ -243,7 +269,6 @@ void ChartGoalsScene::loadRecommendations(int rank, int offset) {
     ChartMetaQuery query;
     query.allowedSha256 = std::vector<std::string>{};
     for (const auto &entry : candidates) query.allowedSha256->push_back(entry.sha256);
-    query.rawSongData = true;
     std::vector<ChartMetaRecord> records;
     if (!candidates.empty()) session->QueryChartMeta(query, records);
     auto &group = recommendations_[rank];
@@ -287,7 +312,7 @@ void ChartGoalsScene::resolveChart() {
   if (!session) return;
   ChartMetaQuery query;
   query.allowedSha256 = std::vector{chart_goals::normalizedHash(draft_.chart.SHA256)};
-  query.rawSongData = true; query.limit = 1;
+  query.limit = 1;
   std::vector<ChartMetaRecord> records;
   session->QueryChartMeta(query, records);
   if (!records.empty() && !records.front().unavailable && !records.front().solidArchive &&
@@ -378,11 +403,7 @@ void ChartGoalsScene::build() {
     action(body, i18n::tr("kombo.ui.retry"), [this] { later([this] { message_.clear(); reload(); }); });
   } else if (selected_ || editing_) {
     auto *detail = card(body);
-    auto *identity = new View();
-    identity->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(12)->setFlexShrink(0);
-    goalArtwork(identity, resolved_ ? &*resolved_ : nullptr);
-    label(identity, draft_.chart.Title + (draft_.chart.SubTitle.empty() ? "" : " " + draft_.chart.SubTitle), 28)->setFlex(1)->setMinWidth(0);
-    detail->addView(identity);
+    goalIdentity(detail, draft_.chart, resolved_ ? &*resolved_ : nullptr, 28);
     label(detail, scope(draft_), 18)->setThemedColor(app_theme::textSecondary);
     if (editing_) {
       std::string error;
@@ -486,7 +507,7 @@ void ChartGoalsScene::build() {
       if (!group.expanded) continue;
       for (const auto &[candidate, record] : group.rows) {
         auto *row = card(body);
-        label(row, record.meta.Title + (record.meta.SubTitle.empty() ? "" : " " + record.meta.SubTitle), 24);
+        goalIdentity(row, record.meta, &record, 24);
         label(row, scope({.chart=record.meta, .longNoteMode=candidate.longNoteMode}), 18);
         label(row, std::to_string(candidate.score) + " / " + std::to_string(candidate.maxScore) + " EX", 18);
         action(row, i18n::format("goals.ui.recommend_ex", {{"ex", std::to_string(candidate.remaining)},
@@ -512,12 +533,8 @@ void ChartGoalsScene::build() {
       for (int i = offset; i < std::min(count, offset + chart_goals::pageSize); ++i) {
         const auto &entry = *entries[i];
         auto *row = card(body);
-        auto *identity = new View();
-        identity->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(12)->setFlexShrink(0);
         const auto found = artwork.find(chart_goals::normalizedHash(entry.goal.chart.SHA256));
-        goalArtwork(identity, found == artwork.end() ? nullptr : &found->second);
-        label(identity, entry.goal.chart.Title + (entry.goal.chart.SubTitle.empty() ? "" : " " + entry.goal.chart.SubTitle), 24)->setFlex(1)->setMinWidth(0);
-        row->addView(identity);
+        goalIdentity(row, entry.goal.chart, found == artwork.end() ? nullptr : &found->second, 24);
         label(row, scope(entry.goal), 18)->setThemedColor(app_theme::textSecondary);
         targets(row, entry.goal.target);
         action(row, i18n::tr(achieved ? "goals.ui.achieved" : "goals.ui.in_progress"),

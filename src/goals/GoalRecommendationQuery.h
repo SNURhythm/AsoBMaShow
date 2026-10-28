@@ -27,4 +27,9 @@ inline std::string recommendationCandidatesSql() {
         AND (COALESCE(c.total_long_notes,0)+COALESCE(c.total_backspin_notes,0)=0 OR r.ln_mode BETWEEN 1 AND 3))
   ))sql";
 }
+inline std::string recommendationPageSql() {
+  return recommendationCandidatesSql() +
+      " SELECT sha256,ln_mode,target,score,max_score,remaining FROM candidates WHERE target=?"
+      " ORDER BY remaining, 1.0*remaining/max_score, sha256, ln_mode LIMIT 20 OFFSET ?";
+}
 }

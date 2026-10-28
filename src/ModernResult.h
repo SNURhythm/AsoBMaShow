@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ResultContracts.h"
+#include "scene/play/GaugeEvidence.h"
 #include "ScoreProvenance.h"
 
 #include <array>
@@ -37,6 +38,7 @@ struct ChartScoreWrite {
   ScoreProvenance provenance = ScoreProvenance::Legacy();
   // Absent for historical results whose passed-note count was not retained.
   std::optional<int> badPoints;
+  GaugeEvidence gaugeEvidence;
 
   bool operator==(const ChartScoreWrite &) const = default;
 };
@@ -92,6 +94,7 @@ describeChartScoreDifference(const ChartScoreWrite &expected,
   scalar("clearType", expected.clearType, actual.clearType);
   opaque("provenance", expected.provenance, actual.provenance);
   opaque("badPoints", expected.badPoints, actual.badPoints);
+  opaque("gaugeEvidence", expected.gaugeEvidence, actual.gaugeEvidence);
 
   if (differences.empty()) {
     return {};

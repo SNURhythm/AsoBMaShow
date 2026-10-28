@@ -1568,8 +1568,12 @@ void testLongNoteAbortAccounting() {
       }
     }
     scene.context.jukebox.time = held ? 1'100'000 : 500'000;
+    const auto sceneEvidence = scene.state->gaugeEvidence;
+    const auto simulationEvidence = simulation.scoreState().gaugeEvidence;
     scene.abortPlayFromStartSelectControl();
     simulation.finalizeAbortedAttempt(scene.context.jukebox.time);
+    require(scene.state->gaugeEvidence == sceneEvidence && simulation.scoreState().gaugeEvidence == simulationEvidence,
+            "abort's synthetic misses do not invent background gauge deaths or overwrite groove evidence");
     require(scene.state->judgeCount[Poor] == (held ? 4 : 6) &&
                 scene.state->judgeCount[PGreat] == (held ? 2 : 0) &&
                 simulation.scoreState().judgeCount.at(Poor) == (held ? 4 : 6) &&

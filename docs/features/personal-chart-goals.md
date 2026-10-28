@@ -8,19 +8,34 @@ unchanged and are not required to use goals.
 
 The Personal goals screen offers expandable **Near E** through **Near MAX**
 groups for best scores within 2 percentage points below their next rank. Empty
-groups are hidden. Candidates are ordered by the percentage gap, with 20 per
+groups are hidden. Candidates are ordered by EX points remaining, nearest first, with 20 per
 page. Tapping a recommendation opens the normal goal editor with that rank
 selected; saving remains explicit. Existing lamp targets are preserved.
 
 Candidates come from the profile's best-score summary, with indexed chart-hash
 lookups to verify library membership and LN scope. Historical plays are not
 scanned, duplicate installations do not duplicate candidates, and chart metadata
-is loaded only for the displayed page.
+is loaded only for the displayed page. Recommended, active, achieved, and detail
+cards show jacket artwork and a tinted difficulty-table label (or chart level
+when no table label is available).
 
 Gauge recommendations are not included: final gauge and best lamp alone do not
 measure proximity consistently across gauge types. A future implementation would
 need explicit gauge-specific rules and a compact summary of eligible attempts,
 rather than reading replay gauge histories while opening this screen.
+
+New plays now retain compact evidence for every gauge, including when Gauge Auto
+Shift is off. Each survival gauge stores the passed-note count at its first
+death, or **-1** if it never died during the played portion. Each groove gauge
+stores its final calculated value. The evidence also retains how many notes
+were actually passed, so surviving an aborted portion is not mistaken for
+surviving the whole chart. Abort cleanup does not overwrite this evidence.
+
+Migrated records expose **0** death counts and values with evidence marked as
+unknown; they are not treated as observed failures or successful survival.
+Evidence is saved with durable chart/course-stage results and projected into
+profile scores, and is included in new-result integrity checks. No replay-history
+backfill is performed during migration.
 
 ## Using goals
 

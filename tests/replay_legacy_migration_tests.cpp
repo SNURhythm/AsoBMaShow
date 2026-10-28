@@ -195,6 +195,10 @@ void createVersion2Fixture(const std::filesystem::path &path) {
 void restoreClosedKeyModeChecks(sqlite3 *database) {
   for (const auto *table : {"modern_chart_results", "modern_course_stages"}) {
     if (queryInt(database, "SELECT COUNT(*) FROM pragma_table_info('" +
+                              std::string(table) + "') WHERE name='gauge_evidence'") != 0) {
+      exec(database, "ALTER TABLE " + std::string(table) + " DROP COLUMN gauge_evidence");
+    }
+    if (queryInt(database, "SELECT COUNT(*) FROM pragma_table_info('" +
                               std::string(table) + "') WHERE name='bad_points'") != 0) {
       exec(database, "ALTER TABLE " + std::string(table) +
                          " DROP COLUMN bad_points");
@@ -418,7 +422,7 @@ void testHeaderOnlyCutover() {
          SQLITE_OK);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
   assert(guard.readAttempts == 0);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 19);
+  assert(queryInt(database.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
 
   assert(queryInt(database.get(),
                   "SELECT COUNT(*) FROM legacy_chart_result_summaries") == 2);
@@ -466,7 +470,7 @@ void testSchema10LegacySummaryBoundaryIsHeaderOnly() {
          SQLITE_OK);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
   assert(guard.readAttempts == 0);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 19);
+  assert(queryInt(database.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
   assert(queryInt(database.get(),
                   "SELECT final_score FROM legacy_chart_result_summaries "
                   "WHERE legacy_replay_id=11") == 1111);
@@ -486,7 +490,7 @@ void testVersion10MigrationPreservesLegacyReceiptOwnership() {
   createVersion10ReceiptFixture(path);
   auto database = openDatabase(path);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
-  assert(queryInt(database.get(), "PRAGMA user_version") == 19);
+  assert(queryInt(database.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
   assert(queryInt(database.get(),
                   "SELECT replay_id FROM ir_submission_receipts WHERE id=77") ==
          11);
@@ -509,7 +513,7 @@ void testFreshReplayInitializationSkipsHistoricalRewrites() {
   assert(queryInt(database.get(), "SELECT COUNT(*) FROM sqlite_master") == 0);
   SqliteInitializationTrace trace(database.get());
   assert(replay_repository_test::RunSchemaMigration(database.get()));
-  assert(queryInt(database.get(), "PRAGMA user_version") == 19);
+  assert(queryInt(database.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
   assert(!trace.contains("CREATE TABLE IF NOT EXISTS replays ("));
   assert(!trace.contains("ALTER TABLE"));
   assert(!trace.contains("DROP TABLE"));
@@ -523,7 +527,7 @@ void testFreshSchemaHasNoRawReplayTables() {
   assert(repository.EnsureSchema());
   repository.Shutdown();
   auto database = openDatabase(path);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 19);
+  assert(queryInt(database.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
   assert(tableExists(database.get(), "legacy_chart_result_summaries"));
   assert(tableExists(database.get(), "legacy_course_result_summaries"));
   assert(!tableExists(database.get(), "replays"));
@@ -538,7 +542,7 @@ void testDurableReceiptsAndOutboxWorkSurvive() {
   auto database = openDatabase(path);
   assert(replay_repository_test::RunSchemaMigration(database.get()));
 
-  assert(queryInt(database.get(), "PRAGMA user_version") == 19);
+  assert(queryInt(database.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
   assert(queryInt(database.get(),
                   "SELECT COUNT(*) FROM legacy_chart_result_summaries") == 2);
   assert(queryInt(database.get(),
@@ -588,7 +592,7 @@ void testMalformedProvenanceDoesNotBlockHeaderMigration() {
            std::string(malformedProvenance) + "' WHERE id=21");
 
   assert(replay_repository_test::RunSchemaMigration(database.get()));
-  assert(queryInt(database.get(), "PRAGMA user_version") == 19);
+  assert(queryInt(database.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
   assert(queryText(database.get(),
                    "SELECT chart_title FROM legacy_chart_result_summaries "
                    "WHERE legacy_replay_id=12") == "Ready");
@@ -798,7 +802,7 @@ void testVersion15OwnershipMigrationPreservesPathOnlyReservations() {
          !reservations.reservations.front().ownedFile);
   repository.Shutdown();
   auto database = openDatabase(path);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 19);
+  assert(queryInt(database.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
   assert(queryText(database.get(), "PRAGMA integrity_check") == "ok");
 }
 
@@ -858,7 +862,7 @@ void testVersion17KeyModeMigrationPreservesRowsAndOpensPositiveCounts() {
            "NULL,'{}')");
 
   assert(replay_repository_test::RunSchemaMigration(database.get()));
-  assert(queryInt(database.get(), "PRAGMA user_version") == 19);
+  assert(queryInt(database.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
   assert(queryInt(database.get(),
                   "SELECT COUNT(*) FROM modern_chart_results WHERE "
                   "attempt_id='existing-chart'") == 1);
@@ -898,7 +902,7 @@ void testVersion17OpenKeyModeRetryImageAdvancesMarker() {
   exec(database.get(), "PRAGMA user_version=17");
 
   assert(replay_repository_test::RunSchemaMigration(database.get()));
-  assert(queryInt(database.get(), "PRAGMA user_version") == 19);
+  assert(queryInt(database.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
   assert(queryInt(database.get(),
                   "SELECT COUNT(*) FROM modern_chart_results WHERE "
                   "attempt_id='installed-four-key-chart' AND key_mode=4") ==
@@ -943,7 +947,7 @@ void testSessionSchemaValidationDoesNotCacheConcurrentMarker() {
   assert(probe.attempted);
   assert(!probe.committed);
   auto database = openDatabase(path);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 19);
+  assert(queryInt(database.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
 }
 
 enum class KeyModeMigrationPhase : std::uint8_t {
@@ -1159,7 +1163,7 @@ void testVersion14CourseScoreOutboxMigrationRollsBackAtomically() {
     assert(!tableExists(database.get(),
                         "modern_pending_course_score_writes"));
     assert(replay_repository_test::RunSchemaMigration(database.get()));
-    assert(queryInt(database.get(), "PRAGMA user_version") == 19);
+    assert(queryInt(database.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
     assert(tableExists(database.get(),
                        "modern_pending_course_score_writes"));
   }
@@ -1322,7 +1326,7 @@ void testRollbackFaultMatrixPreservesOriginalDatabase() {
     removeMigrationProbe(database.get());
   }
   auto database = openDatabase(successPath);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 19);
+  assert(queryInt(database.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
   assert(!tableExists(database.get(), "replays"));
 }
 
@@ -1396,7 +1400,7 @@ void testVersion16CompactionMarkerReclaimsAlreadyDroppedPages() {
 
   const auto after = databaseFamilySize(path);
   auto database = openDatabase(path);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 19);
+  assert(queryInt(database.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
   assert(queryInt(database.get(), "PRAGMA freelist_count") == 0);
   assert(after < before / 2U);
   assert(queryText(database.get(), "PRAGMA integrity_check") == "ok");
@@ -1440,7 +1444,7 @@ void testPathMigrationRetainsWriteOwnershipAcrossInstall() {
     ReplayRepository repository(path);
     assert(repository.EnsureSchema());
     auto released = openDatabase(path);
-    assert(queryInt(released.get(), "PRAGMA user_version") == 19);
+    assert(queryInt(released.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
     repository.Shutdown();
   }
   replay_repository_test::SetPathMigrationAfterSnapshotHook(nullptr, nullptr);
@@ -1452,7 +1456,7 @@ void testPathMigrationRetainsWriteOwnershipAcrossInstall() {
   assert(queryText(database.get(),
                    "SELECT chart_title FROM legacy_chart_result_summaries "
                    "WHERE legacy_replay_id=11") == "Inactive");
-  assert(queryInt(database.get(), "PRAGMA user_version") == 19);
+  assert(queryInt(database.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
 }
 
 void testPathMigrationFaultsPreserveOriginalDatabase() {
@@ -1667,6 +1671,8 @@ void testVersion18BadPointsRemainUnknownAfterMigration() {
       "WHERE name='bad_points' AND [notnull]=0") == 1);
   exec(database.get(), "ALTER TABLE modern_chart_results DROP COLUMN bad_points");
   exec(database.get(), "ALTER TABLE modern_course_stages DROP COLUMN bad_points");
+  exec(database.get(), "ALTER TABLE modern_chart_results DROP COLUMN gauge_evidence");
+  exec(database.get(), "ALTER TABLE modern_course_stages DROP COLUMN gauge_evidence");
   exec(database.get(), "PRAGMA user_version=18");
   insertModernChartResult(database.get(), "historic-bp-unknown", 7, 'e');
   const auto fingerprint = queryText(database.get(),
@@ -1693,7 +1699,7 @@ void testVersion18BadPointsRemainUnknownAfterMigration() {
   assert(queryText(database.get(),
       "SELECT result_fingerprint FROM modern_chart_results "
       "WHERE attempt_id='historic-bp-unknown'") == fingerprint);
-  assert(queryInt(database.get(), "PRAGMA user_version") == 19);
+  assert(queryInt(database.get(), "PRAGMA user_version") == ReplayRepository::kCurrentSchemaVersion);
   assert(queryInt(database.get(),
       "SELECT COUNT(*) FROM pragma_table_info('modern_chart_results') "
       "WHERE name='bad_points' AND dflt_value IS NULL") == 1);
@@ -1755,7 +1761,7 @@ int main(int argc, char **argv) {
   testVersion18BadPointsRemainUnknownAfterMigration();
   testMigrationErrorMessageOwnership();
   if (argc > 1 && std::strcmp(argv[1], "--error-ownership") == 0) return 0;
-  static_assert(ReplayRepository::kCurrentSchemaVersion == 19);
+  static_assert(ReplayRepository::kCurrentSchemaVersion == 20);
   testHeaderOnlyCutover();
   testSchema10LegacySummaryBoundaryIsHeaderOnly();
   testVersion10MigrationPreservesLegacyReceiptOwnership();

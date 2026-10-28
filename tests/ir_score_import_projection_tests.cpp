@@ -258,13 +258,35 @@ void testLocalProjectedScoreKeepsLocalSourceAndFullComboInference() {
   pending.score.comboBreak = 0;
   pending.score.clearType = kClearTypeNormalClearRank;
   pending.score.provenance = ScoreProvenance::Legacy();
+  pending.score.gaugeEvidence.recorded = true;
+  pending.score.gaugeEvidence.passedNotes = 100;
+  pending.score.gaugeEvidence.survivalMask = 1u << gaugeTypeIndex(GaugeType::Hard);
+  pending.score.gaugeEvidence.deathPassedNotes[gaugeTypeIndex(GaugeType::Hard)] = 87;
+  pending.score.gaugeEvidence.values[gaugeTypeIndex(GaugeType::Normal)] = 78;
   assert(scores.SaveProjectedScore(pending).status ==
          result_persistence::ProjectionStatus::Inserted);
 
   assert(queryInt(path, "SELECT score_source FROM scores LIMIT 1") == 0);
+  assert(queryInt(path, "SELECT json_extract(gauge_evidence,'$.deathNotes[3]') FROM scores") == 87);
+  assert(queryInt(path, "SELECT json_extract(gauge_evidence,'$.values[2]') FROM scores") == 78);
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::AlreadyPresent);
+  pending.score.gaugeEvidence.deathPassedNotes[3] = 88;
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::IntegrityConflict);
   const auto ranks = scores.LoadBestClearRanks();
   assert(ranks.bestRankForHash(std::string(64, '9'), 0) ==
          kClearTypeFullComboRank);
+  // Simulate the previous score schema: old rows acquire zero/unknown evidence.
+  scores.Shutdown();
+  sqlite3 *legacy = nullptr;
+  assert(sqlite3_open(path.string().c_str(), &legacy) == SQLITE_OK);
+  assert(sqlite3_exec(legacy, "ALTER TABLE scores DROP COLUMN gauge_evidence; PRAGMA user_version=14;",
+                      nullptr, nullptr, nullptr) == SQLITE_OK);
+  sqlite3_close(legacy);
+  ScoreRepository migrated(path);
+  assert(migrated.EnsureSchema());
+  assert(queryInt(path, "SELECT COUNT(*) FROM scores WHERE gauge_evidence='{}'") == 1);
+  assert(queryInt(path, "PRAGMA user_version") == ScoreRepository::kCurrentSchemaVersion);
+
 }
 
 void testKomboProjectionIsAtomicAndUsesEffectiveLamp() {

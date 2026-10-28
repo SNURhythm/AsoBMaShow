@@ -62,6 +62,19 @@ int main() {
         " SELECT COUNT(*) FROM candidates", query) == SQLITE_OK);
     CHECK(sqlite3_step(query) == SQLITE_ROW && sqlite3_column_int(query,0) == 3);
     query.reset();
+    CHECK(sqlite3_exec(recommendations,
+        "DELETE FROM score_db.score_sha256_best_score_cache; DELETE FROM chart_meta;"
+        "INSERT INTO chart_meta VALUES('closest','a',0,0,0),('smaller-percent','b',0,0,0),('farther','c',0,0,0);"
+        "INSERT INTO score_db.score_sha256_best_score_cache VALUES"
+        "('closest',0,1777,2000),('smaller-percent',0,8887,10000),('farther',0,1775,2000);",
+        nullptr, nullptr, nullptr) == SQLITE_OK);
+    CHECK(prepareSqliteStatement(recommendations, recommendationPageSql(), query) == SQLITE_OK);
+    CHECK(sqlite3_bind_int(query, 1, 24) == SQLITE_OK && sqlite3_bind_int(query, 2, 0) == SQLITE_OK);
+    for (const auto *hash : {"closest", "smaller-percent", "farther"}) {
+      CHECK(sqlite3_step(query) == SQLITE_ROW && sqliteColumnString(query, 0) == hash);
+    }
+    CHECK(sqlite3_step(query) == SQLITE_DONE);
+    query.reset();
     sqlite3_close(recommendations);
   }
   GoalResultPresentation celebration;

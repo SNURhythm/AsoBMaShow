@@ -181,6 +181,7 @@ RhythmState resultStateFrom(
   state.comboBreak = score.comboBreak;
   // Old results retain their originally displayed BP; fresh captures restore
   // the passed-note count, including PMS nonvanishing BAD judgments.
+  state.gaugeEvidence = score.gaugeEvidence;
   state.stagePassedNotes = score.badPoints
       ? static_cast<int>(static_cast<std::int64_t>(score.bad) + score.poor +
                          score.kPoor + score.maxScore / 2 - *score.badPoints)
