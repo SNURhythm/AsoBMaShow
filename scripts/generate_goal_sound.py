@@ -46,7 +46,7 @@ def render(brightness=1.0):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, default=Path(__file__).resolve().parents[1] /
-                        'assets/audio/streak/goal-achieved.wav')
+                        'assets/audio/kombo/goal-achieved.wav')
     parser.add_argument('--brightness', type=float, default=1.0)
     args = parser.parse_args()
     args.output.parent.mkdir(parents=True, exist_ok=True)

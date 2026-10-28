@@ -19,16 +19,16 @@ public:
     nextPoll_ = ticks + 1000;
     refreshPermission();
     const auto tap = takeTapProfile();
-    if (!tap.empty()) context.pendingComboNotificationProfile = tap;
+    if (!tap.empty()) context.pendingKomboNotificationProfile = tap;
     if (!context.profileReady()) {
       if (!key_.empty() || force) replacePlan("[]");
       key_.clear(); cachedState_.reset();
       return;
     }
     const auto profile = context.profileManager.activeProfile().id;
-    if (!context.pendingComboNotificationProfile.empty() &&
-        context.pendingComboNotificationProfile != profile)
-      context.pendingComboNotificationProfile.clear();
+    if (!context.pendingKomboNotificationProfile.empty() &&
+        context.pendingKomboNotificationProfile != profile)
+      context.pendingKomboNotificationProfile.clear();
     Preferences prefs;
     std::string language;
     {
@@ -37,11 +37,11 @@ public:
       language = context.applicationUiState.language;
     }
     const auto now = std::time(nullptr);
-    const auto today = streak::localDay(now);
+    const auto today = kombo::localDay(now);
     auto revision = context.scoreRepository.GetRevision();
     if (force || profile != cachedProfile_ || today != cachedDay_ || revision != cachedRevision_ || !cachedState_) {
       std::string error;
-      cachedState_ = context.scoreRepository.LoadStreak(error);
+      cachedState_ = context.scoreRepository.LoadKombo(error);
       cachedProfile_ = profile; cachedDay_ = today;
       cachedRevision_ = context.scoreRepository.GetRevision();
       revision = cachedRevision_;
@@ -67,8 +67,8 @@ public:
         const bool comeback = entry.kind == Kind::Comeback;
         requests.push_back({{"year", int(date.year())}, {"month", unsigned(date.month())},
             {"day", unsigned(date.day())}, {"hour", prefs.hour}, {"minute", prefs.minute},
-            {"profile", profile}, {"title", i18n::tr("streak.reminders.title")},
-            {"body", i18n::tr(comeback ? "streak.reminders.comeback_body" : "streak.reminders.daily_body")}});
+            {"profile", profile}, {"title", i18n::tr("kombo.reminders.title")},
+            {"body", i18n::tr(comeback ? "kombo.reminders.comeback_body" : "kombo.reminders.daily_body")}});
       }
     }
     // JNI NewStringUTF accepts modified UTF-8; ASCII JSON safely carries even
@@ -77,8 +77,8 @@ public:
   }
 private:
   std::uint64_t nextPoll_ = 0, cachedRevision_ = 0;
-  streak::DayId cachedDay_ = 0;
+  kombo::DayId cachedDay_ = 0;
   std::string key_, cachedProfile_;
-  std::optional<streak::State> cachedState_;
+  std::optional<kombo::State> cachedState_;
 };
 }

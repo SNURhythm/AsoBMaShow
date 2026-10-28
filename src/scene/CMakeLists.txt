@@ -72,4 +72,4 @@ target_sources(main PRIVATE SettingsSceneCalibration.cpp)
 
 target_sources(main PRIVATE ChartReadmeModal.cpp)
 
-target_sources(main PRIVATE StreakScene.cpp)
+target_sources(main PRIVATE KomboScene.cpp)

@@ -92,7 +92,7 @@ protected:
 private:
   void configureSoundServices();
   void reloadLibrary(bool preserveDirectory = true);
-  void openStreakAssignment(const std::string &id);
+  void openKomboAssignment(const std::string &id);
   void openChartGoals(std::optional<ChartMetaRecord> initial = {});
   void openChartGoalForSelection();
   void resumeGoalNavigation();
@@ -101,7 +101,7 @@ private:
   std::optional<std::pair<ChartMetaRecord, int>> pendingGoalSelection_;
   std::string pendingGoalProfile_;
   std::string pendingGoalsOverviewProfile_;
-  std::string pendingStreakAssignment_;
+  std::string pendingKomboAssignment_;
   void syncResolvedFilters();
   [[nodiscard]] std::int64_t elapsedMicros() const;
   void selectedBarMoved();
@@ -175,7 +175,7 @@ private:
   void refreshToolbarAvailability();
   void openPlayOptions();
   void openIrUploads();
-  void openStreak();
+  void openKombo();
   void openSettings();
   void syncToolbar();
   void persistToolbar(MusicSelectToolbarState);
@@ -246,8 +246,8 @@ private:
   RecentScoreImprovements recentScoreImprovements_;
   bool recentScoreImprovementsLoaded_ = false;
   std::shared_ptr<const MusicSelectRepositoryMetadata> repositoryMetadata_;
-  streak::Day assignmentDay_;
-  streak::DayId assignmentDayId_ = 0;
+  kombo::Day assignmentDay_;
+  kombo::DayId assignmentDayId_ = 0;
   std::optional<std::vector<MusicSelectAssignmentChart>> assignmentCharts_;
   MusicSelectBarManager bars_{{}, {}, true};
   MusicSelectInputProcessor inputProcessor_{{}};

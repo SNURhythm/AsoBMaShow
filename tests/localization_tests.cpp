@@ -33,18 +33,18 @@ std::map<std::string_view, int> placeholders(std::string_view text) {
 int main() {
   using namespace i18n;
   setLanguage(Language::English);
-  const auto oneChart = plural("streak.ui.chart_count", 1);
+  const auto oneChart = plural("kombo.ui.chart_count", 1);
   assert(oneChart.resolve() == "1 chart");
-  assert(plural("streak.ui.chart_count", 0).resolve() == "0 charts");
-  assert(plural("streak.ui.chart_count", 2).resolve() == "2 charts");
-  assert(plural("streak.ui.reward", 1).resolve() == "+1 point");
-  assert(plural("streak.ui.reward", 2).resolve() == "+2 points");
-  assert(plural("streak.ui.best_count", 1).resolve() == "Personal best · 1 day");
-  assert(plural("streak.ui.savings_count", 1).resolve() == "1 bonus point saved");
-  assert(plural("streak.ui.buy_freeze", 1).resolve() == "Get a freeze · 1 point");
-  assert(oneChart == plural("streak.ui.chart_count", 1));
-  assert(oneChart != plural("streak.ui.chart_count", 2));
-  assert(oneChart != message("streak.ui.chart_count", {{"count", "1"}}));
+  assert(plural("kombo.ui.chart_count", 0).resolve() == "0 charts");
+  assert(plural("kombo.ui.chart_count", 2).resolve() == "2 charts");
+  assert(plural("kombo.ui.reward", 1).resolve() == "+1 point");
+  assert(plural("kombo.ui.reward", 2).resolve() == "+2 points");
+  assert(plural("kombo.ui.best_count", 1).resolve() == "Personal best · 1 day");
+  assert(plural("kombo.ui.savings_count", 1).resolve() == "1 bonus point saved");
+  assert(plural("kombo.ui.buy_freeze", 1).resolve() == "Get a freeze · 1 point");
+  assert(oneChart == plural("kombo.ui.chart_count", 1));
+  assert(oneChart != plural("kombo.ui.chart_count", 2));
+  assert(oneChart != message("kombo.ui.chart_count", {{"count", "1"}}));
   const auto originalRevision = revision();
   setLanguage(Language::English);
   assert(revision() == originalRevision);
@@ -96,7 +96,15 @@ int main() {
   assert(resolveLanguage("system", {}) == Language::English);
   assert(resolveLanguage("en", {"ko"}) == Language::English);
   assert(resolveLanguage("ko", {"en"}) == Language::Korean);
+  for (const auto lang : {Language::English, Language::Korean, Language::Japanese,
+                          Language::SimplifiedChinese, Language::TraditionalChinese}) {
+    setLanguage(lang);
+    assert(std::string(tr("menu.tabs.kombo")) == "Kombo");
+  }
+  setLanguage(Language::English);
+  assert(std::string(tr("records.max_combo.label")) == "Max Combo");
   setLanguage(Language::Korean);
+  assert(std::string(tr("records.max_combo.label")) == "최대 콤보");
   std::string_view previous;
   for (const auto &entry : catalog) {
     assert(previous.empty() || previous < entry.key);

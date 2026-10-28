@@ -6,7 +6,7 @@
 #include "../ir/IrRemoteScoreModels.h"
 #include "ChartRepository.h"
 #include "ScoreRepositoryModels.h"
-#include "../streak/StreakModel.h"
+#include "../kombo/KomboModel.h"
 #include "../goals/ChartGoal.h"
 
 #include <array>
@@ -91,12 +91,12 @@ public:
   [[nodiscard]] static bool HasActiveReads();
   [[nodiscard]] static bool HasActiveWrites();
   bool EnsureSchema();
-  std::optional<streak::State> LoadStreak(std::string &error);
-  std::optional<streak::PlayProgress> TakeStreakProgress(std::string_view attemptId = {});
-  bool AdjustStreakAssignment(const streak::Assignment &, streak::DayId expectedDay, std::string &error);
-  bool ResetStreakExtraChallenge(const std::string &assignmentId, streak::DayId expectedDay, std::string &error);
-  bool ConfigureStreak(const streak::Config &, streak::DayId &effectiveDay, std::string &error);
-  bool BuyStreakFreeze(std::string &error);
+  std::optional<kombo::State> LoadKombo(std::string &error);
+  std::optional<kombo::PlayProgress> TakeKomboProgress(std::string_view attemptId = {});
+  bool AdjustKomboAssignment(const kombo::Assignment &, kombo::DayId expectedDay, std::string &error);
+  bool ResetKomboExtraChallenge(const std::string &assignmentId, kombo::DayId expectedDay, std::string &error);
+  bool ConfigureKombo(const kombo::Config &, kombo::DayId &effectiveDay, std::string &error);
+  bool BuyKomboFreeze(std::string &error);
   std::optional<chart_goals::GoalProgress> PreviewChartGoal(
       const chart_goals::Goal &goal, std::string &error);
   std::optional<chart_goals::ProgressPage> LoadChartGoals(int offset, std::string &error);

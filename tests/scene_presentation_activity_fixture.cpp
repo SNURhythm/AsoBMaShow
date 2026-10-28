@@ -1,6 +1,6 @@
 #include <cassert>
 #include "ui/PresentationSchedule.h"
-#include "streak/StreakResultPresentation.h"
+#include "kombo/KomboResultPresentation.h"
 #include "goals/GoalResultPresentation.h"
 std::uint64_t SDL_GetTicks() { return 100; }
 
@@ -61,7 +61,7 @@ struct MainMenuScene : Scene {
   bool needsContinuousPresentation() const override;
 };
 struct ResultScene : Scene {
-  streak::ResultPresentation streakPresentation_;
+  kombo::ResultPresentation komboPresentation_;
   GoalResultPresentation goalPresentation_;
   void *resultSkinSession = nullptr;
   bool needsContinuousPresentation() const override;

@@ -1,5 +1,5 @@
 #include "ScoreRepository.h"
-#include "../streak/StreakStore.h"
+#include "../kombo/KomboStore.h"
 #include <random>
 #include "ScoreRepositoryInternal.h"
 
@@ -1066,7 +1066,7 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
           *provenanceJson,
           {.averageJudgeMicros = pending.averageJudgeMicros});
   if (inserted.status == score_repository_detail::ScoreWriteStatus::Inserted) {
-    streak::PlayProgress streakProgress;
+    kombo::PlayProgress komboProgress;
     try {
       const auto &score = pending.score;
       // Bound eligibility to history before this attempt, including timestamp
@@ -1089,13 +1089,13 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
           ", 1, 0, 0 FROM scores n WHERE n.attempt_id=?";
       SqliteStatementHandle previous;
       if (prepareSqliteStatement(db, previousQuery, previous) != SQLITE_OK)
-        throw std::runtime_error("Could not read the previous chart record for streak progress.");
+        throw std::runtime_error("Could not read the previous chart record for kombo progress.");
       int previousIndex = bindScoreChartMatch(previous, 1,
           {.chartPath = score.chartPath, .sha256 = normalizedHash(score.chartSha256),
            .md5 = normalizedHash(score.chartMd5)});
       if (!bindSqliteText(previous, previousIndex++, pending.attemptId) ||
           !bindSqliteText(previous, previousIndex, pending.attemptId))
-        throw std::runtime_error("Could not read the previous chart record for streak progress.");
+        throw std::runtime_error("Could not read the previous chart record for kombo progress.");
       ScoreRankByLongNoteMode previousRanks;
       ScoreBestByLongNoteMode previousScores;
       int effectiveLamp = -1;
@@ -1114,20 +1114,20 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
         }
       }
       if (result != SQLITE_DONE || !foundCurrent)
-        throw std::runtime_error("Could not read the previous chart record for streak progress.");
+        throw std::runtime_error("Could not read the previous chart record for kombo progress.");
       // Match the selector: an explicit mode record wins even when its lamp
       // is worse; absent CN/HCN records fall back to classic LN, then unknown.
       const int previousLamp = previousRanks.bestRankForMode(score.longNoteMode);
       const auto previousScore = previousScores.bestForMode(score.longNoteMode);
       static thread_local std::mt19937 random(std::random_device{}());
-      streak::recordSavedPlay(db, impl_->chartDatabasePath,
+      kombo::recordSavedPlay(db, impl_->chartDatabasePath,
           {.chart = score.chartSha256, .previousLamp = previousLamp,
            .previousScore = previousScore ? previousScore->score : 0,
            .previousMaxScore = previousScore ? previousScore->maxScore : 0,
            .lamp = effectiveLamp, .score = score.score, .maxScore = score.maxScore,
            .manual = !score.provenance.autoPlay && !score.provenance.practice},
-          score.chartMd5, pending.createdAt, random(), &streakProgress);
-      streakProgress.attemptId = pending.attemptId;
+          score.chartMd5, pending.createdAt, random(), &komboProgress);
+      komboProgress.attemptId = pending.attemptId;
     } catch (const std::exception &error) {
       return {.status = ProjectionStatus::StorageFailure, .diagnostic = error.what()};
     }
@@ -1137,8 +1137,8 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
       return {.status = ProjectionStatus::StorageFailure, .diagnostic = transactionError};
     impl_->chartGoalAchievementAttempt = pending.attemptId;
     impl_->chartGoalAchievements = std::move(goalAchievements);
-    impl_->streakProgress.reset();
-    if (!streakProgress.assignments.empty()) impl_->streakProgress = std::move(streakProgress);
+    impl_->komboProgress.reset();
+    if (!komboProgress.assignments.empty()) impl_->komboProgress = std::move(komboProgress);
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);
     return {.status = ProjectionStatus::Inserted};
   }

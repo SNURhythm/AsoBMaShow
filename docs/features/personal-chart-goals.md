@@ -1,7 +1,7 @@
 # Personal chart goals
 
 Personal goals keep a chosen chart lamp and/or score target across sessions.
-They have no deadline, automatic escalation, or points. Combo routines continue
+They have no deadline, automatic escalation, or points. Kombo routines continue
 unchanged and are not required to use goals.
 
 ## Using goals
@@ -18,8 +18,8 @@ unchanged and are not required to use goals.
   across LN modes with at least one unfinished goal. Normal search and filters apply.
 - Choose a minimum successful lamp, a score rank (E through MAX), a custom EX
   rate to two decimal places, or both. If both are chosen, both must be met.
-- Open **Personal goals** from Combo to browse goals, including achieved ones,
-  in pages of 20. This entry is available before creating a Combo routine.
+- Open **Personal goals** from Kombo to browse goals, including achieved ones,
+  in pages of 20. This entry is available before creating a Kombo routine.
 - Goal details show independent best lamp and best score. Score gaps use exact
   EX integers, rounded up to the next achievable point at a fractional threshold:
   AAA on a 2000-point chart needs 1778 EX. Without a valid score maximum, the gap
@@ -30,7 +30,7 @@ unchanged and are not required to use goals.
   unknown set date. A target already met by existing records is achieved when
   it is set; imported records are dated when their achievement is recognized.
 - A newly achieved goal shows a short flag-burst celebration on the result
-  screen after the score is saved. It waits for the Combo panel to close and
+  screen after the score is saved. It waits for the Kombo panel to close and
   does not replay for later clears, view rebuilds, replay, practice, or autoplay.
 - **PLAY** selects the chart and its LN mode in the originating selector.
   It does not start gameplay. **Practice chart** opens the existing chart viewer
@@ -82,7 +82,7 @@ Flags are green when the goal they open is achieved. Achieved-only charts are
 excluded from the Goals folder. A
 chart remains in that folder while any LN-mode goal is unfinished. In Personal
 goals, unfinished goals appear first; achieved goals are collapsed at the bottom
-behind the same plus/hide control used by Combo optional challenges. Each group
+behind the same plus/hide control used by Kombo optional challenges. Each group
 pages independently. Titles and subtitles share one heading.
 
 Goal lists, details, and the editor show the chart jacket (or banner), with a

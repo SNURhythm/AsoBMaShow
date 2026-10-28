@@ -52,7 +52,7 @@ MusicSelectToolbarCallbacks callbacks(std::vector<std::string> &actions,
       .openTasks = [&] { actions.emplace_back("tasks"); },
       .openPlayOptions = [&] { actions.emplace_back("play-options"); },
       .openIrUploads = [&] { actions.emplace_back("ir"); },
-      .openStreak = [&] { actions.emplace_back("streak"); },
+      .openKombo = [&] { actions.emplace_back("kombo"); },
       .openSettings = [&] { actions.emplace_back("settings"); },
       .persist = [&](MusicSelectToolbarState state) { saved.push_back(state); },
   };
@@ -81,13 +81,13 @@ void testExpandedShowsLabeledMenuEntrypoints() {
     }
   }
   const auto &flame = toolbar->controls()[4];
-  expect(flame.control == MusicSelectToolbarControl::Streak && flame.codepoint == ui_icons::kFire,
-         "streak has a direct flame button");
-  toolbar->activateControl(MusicSelectToolbarControl::Streak);
-  expect(actions.back() == "streak", "the flame opens streaks");
+  expect(flame.control == MusicSelectToolbarControl::Kombo && flame.codepoint == ui_icons::kFire,
+         "kombo has a direct flame button");
+  toolbar->activateControl(MusicSelectToolbarControl::Kombo);
+  expect(actions.back() == "kombo", "the flame opens kombos");
   actions.pop_back();
-  toolbar->setControlEnabled(MusicSelectToolbarControl::Streak, false);
-  toolbar->activateControl(MusicSelectToolbarControl::Streak);
+  toolbar->setControlEnabled(MusicSelectToolbarControl::Kombo, false);
+  toolbar->activateControl(MusicSelectToolbarControl::Kombo);
   expect(actions.back() == "more-menu", "disabled flame cannot navigate");
   expect(labels == 4 && actions == std::vector<std::string>{
              "chart-menu", "play-options", "rankings", "more-menu"},

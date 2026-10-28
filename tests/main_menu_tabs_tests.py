@@ -74,7 +74,7 @@ struct ChartMetaRecord {
 struct ChartRecordFilters {};
 namespace i18n { std::string tr(const char *key) { return key; } }
 namespace long_note_mode { int valueFromId(int mode) { return mode; } }
-namespace streak { int today() { return 1; } }
+namespace kombo { int today() { return 1; } }
 namespace chart_record_filters {
 void applyToQuery(ChartMetaQuery&, const ChartRecordFilters&, bool) {}
 }
@@ -152,7 +152,7 @@ struct Context {
 struct ImageView { static void dropAllCache() {} };
 struct MusicPlayerScene: Scene { explicit MusicPlayerScene(Context&) {} };
 struct IrUploadsScene: Scene { explicit IrUploadsScene(Context&) {} };
-struct StreakScene: Scene { explicit StreakScene(Context&) {} };
+struct KomboScene: Scene { explicit KomboScene(Context&) {} };
 struct Preview { std::function<void()> stopping; void cancel() {} void stop() { if(stopping) stopping(); } };
 template<class T> struct Recycler {
   std::vector<T> items;
@@ -178,7 +178,7 @@ struct Session {
   }
 };
 struct MainMenuScene : Scene {
-  void openStreakAssignment(const std::string &) {}
+  void openKomboAssignment(const std::string &) {}
   void openChartGoals() {}
   void resumeGoalNavigation();
   std::optional<std::pair<ChartMetaRecord,int>> pendingGoalSelection_;
@@ -196,7 +196,7 @@ struct MainMenuScene : Scene {
   std::array<SelectorTabState,2> selectorStates_;
   std::unique_ptr<MusicPlayerScene> musicTab_;
   std::unique_ptr<IrUploadsScene> irTab_;
-  std::unique_ptr<StreakScene> streakTab_;
+  std::unique_ptr<KomboScene> komboTab_;
   std::atomic_bool willStart=false;
   bool restoringTabSelection_=false;
   std::optional<ChartMetaRecord> selectedChartRecord;
@@ -407,7 +407,7 @@ int main(int argc,char **argv) {
       assert(resume.folderReloads==foldersBefore+1 && resume.chartReloads==chartsBefore+1);
     }
   } else if(scenario=="hidden-completion-restore" || scenario=="hidden-completion-reject") {
-    for(auto utility : {Tab::Music, Tab::Ir, Tab::Streak}) {
+    for(auto utility : {Tab::Music, Tab::Ir, Tab::Kombo}) {
       for(bool pathless : {false,true}) {
         MainMenuScene handoff;
         Tasks tasks; handoff.context.chartLibraryTasks=&tasks;
@@ -515,7 +515,7 @@ int main(int argc,char **argv) {
     scene.reloadFolderItems();scene.reloadChartList();
     scene.songs.selectedIndex=2;
     scene.songs.onSelected(scene.songs.get(2),2);
-    for(auto destination : {Tab::Course,Tab::Music,Tab::Ir,Tab::Streak}) {
+    for(auto destination : {Tab::Course,Tab::Music,Tab::Ir,Tab::Kombo}) {
       scene.switchTabAndWait(destination);
       scene.musicPlaying=destination==Tab::Music;
       const int requests=scene.previewRequests;
@@ -551,13 +551,13 @@ int main(int argc,char **argv) {
       }
     }
   } else if(scenario=="utility-lifecycle") {
-    for (auto tab : {Tab::Music, Tab::Ir, Tab::Streak}) {
+    for (auto tab : {Tab::Music, Tab::Ir, Tab::Kombo}) {
       scene.switchTabAndWait(tab);
       auto *utility=scene.activeUtilityTab();
       assert(utility->initializations==1 && utility->resumes==0);
       const int before = scene.folderReloads;
       scene.switchTabAndWait(Tab::Play);
-      if (tab == Tab::Streak) {
+      if (tab == Tab::Kombo) {
         assert(scene.context.chartLibraryFoldersReloadRequested);
         assert(scene.context.chartLibraryListReloadRequested);
         scene.applyPendingUiUpdates();

@@ -109,8 +109,8 @@ asobmashow_share_test_sources(dependencies
         src/repositories/ScoreRepositoryGoals.cpp
         src/goals/ChartGoal.cpp
         src/goals/ChartGoalStore.cpp
-        src/streak/StreakModel.cpp
-        src/streak/StreakStore.cpp
+        src/kombo/KomboModel.cpp
+        src/kombo/KomboStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/scene/play/CompiledGameplayJudge.cpp
         src/scene/play/GameplayCandidateRules.cpp

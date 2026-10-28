@@ -7,7 +7,7 @@
 #include "../platform/SDLApplicationRuntime.h"
 #include "../i18n/Localization.h"
 #include "MusicSelectScene.h"
-#include "StreakScene.h"
+#include "KomboScene.h"
 #include "ChartGoalsScene.h"
 #include "../music_select/MusicSelectPhysicalDirectory.h"
 #include "MusicSelectDirectoryRestore.h"
@@ -648,10 +648,10 @@ void MusicSelectScene::onResume() {
   }
 #endif
   syncToolbar();
-  const auto assignment = std::exchange(pendingStreakAssignment_, {});
+  const auto assignment = std::exchange(pendingKomboAssignment_, {});
   reloadLibrary(assignment.empty());
   if (!failed_) {
-    if (!assignment.empty()) openStreakAssignment(assignment);
+    if (!assignment.empty()) openKomboAssignment(assignment);
     resumeGoalNavigation();
     // Resume the looping select BGM after pause silenced it.
     if (!background) configureSoundServices();
@@ -751,18 +751,18 @@ void MusicSelectScene::reloadLibrary(bool preserveDirectory) {
           long_note_mode::valueFromId(context.settings.selectedLnMode)));
   auto projection = MusicSelectRepositoryProjection{}.projectRoot(
       *repositoryMetadata_, searchHistory_.entries(), libraryRevision_);
-  assignmentDayId_ = streak::today();
+  assignmentDayId_ = kombo::today();
   assignmentDay_ = {};
   assignmentCharts_.reset();
-  std::string streakError;
-  if (const auto state = context.scoreRepository.LoadStreak(streakError)) {
+  std::string komboError;
+  if (const auto state = context.scoreRepository.LoadKombo(komboError)) {
     const auto day = state->days.find(assignmentDayId_);
     if (day != state->days.end()) assignmentDay_ = day->second;
-    auto assignments = musicSelectAssignmentsRoot(i18n::tr("streak.ui.assignment_folder"));
+    auto assignments = musicSelectAssignmentsRoot(i18n::tr("kombo.ui.assignment_folder"));
     projection.root.push_back(assignments.id);
     projection.bars.push_back(std::move(assignments));
   } else {
-    SDL_Log("Unable to load assignment folders: %s", streakError.c_str());
+    SDL_Log("Unable to load assignment folders: %s", komboError.c_str());
   }
   MusicSelectBar goals{.id={"container:goals"}, .kind=skin::MusicSelectBarKind::Container,
       .title=i18n::tr("goals.ui.folder"),
@@ -3371,7 +3371,7 @@ void MusicSelectScene::refreshRepositoryRevisions() {
   }
   if (context.chartRepository.GetLibraryRevision() != libraryRevision_ ||
       context.scoreRepository.GetRevision() != scoreRevision_ ||
-      streak::today() != assignmentDayId_) {
+      kombo::today() != assignmentDayId_) {
     reloadLibrary();
     selectedBarMoved();
   } else if (rankingChanged && rankingRequest_) {
@@ -3382,11 +3382,11 @@ void MusicSelectScene::refreshRepositoryRevisions() {
 }
 
 void MusicSelectScene::update(float) {
-  if (!context.pendingComboNotificationProfile.empty() &&
-      toolbarControlAvailable(MusicSelectToolbarControl::Streak)) {
-    const auto profile = std::exchange(context.pendingComboNotificationProfile, {});
+  if (!context.pendingKomboNotificationProfile.empty() &&
+      toolbarControlAvailable(MusicSelectToolbarControl::Kombo)) {
+    const auto profile = std::exchange(context.pendingKomboNotificationProfile, {});
     if (profile == context.profileManager.activeProfile().id) {
-      defer([this] { openStreak(); return false; }, 0, true);
+      defer([this] { openKombo(); return false; }, 0, true);
       return;
     }
   }
@@ -4014,7 +4014,7 @@ bool MusicSelectScene::toolbarControlAvailable(MusicSelectToolbarControl control
   case MusicSelectToolbarControl::PlayOptions:
     return modalLayer_ != nullptr;
   case MusicSelectToolbarControl::MusicPlayer:
-  case MusicSelectToolbarControl::Streak:
+  case MusicSelectToolbarControl::Kombo:
   case MusicSelectToolbarControl::IrUploads:
   case MusicSelectToolbarControl::Settings:
     return context.sceneManager != nullptr;
@@ -4029,7 +4029,7 @@ void MusicSelectScene::refreshToolbarAvailability() {
   for (const auto control : {Control::ChartMenu, Control::MoreMenu,
        Control::ChartViewer, Control::ChartRecords, Control::Rankings, Control::RevealChart,
        Control::MusicPlayer, Control::Tasks, Control::PlayOptions,
-       Control::IrUploads, Control::Streak, Control::Settings}) {
+       Control::IrUploads, Control::Kombo, Control::Settings}) {
     toolbar_->setControlEnabled(control, toolbarControlAvailable(control));
   }
 }
@@ -4412,9 +4412,9 @@ void MusicSelectScene::openPlayOptions() {
   playOptionsModal_->show();
 }
 
-void MusicSelectScene::openStreakAssignment(const std::string &id) {
+void MusicSelectScene::openKomboAssignment(const std::string &id) {
   bars_.configure({.modeFilter="ALL", .difficultyFilter="ALL", .sortId=context.settings.skinSortId});
-  const auto root = musicSelectAssignmentsRoot(i18n::tr("streak.ui.assignment_folder"));
+  const auto root = musicSelectAssignmentsRoot(i18n::tr("kombo.ui.assignment_folder"));
   if (bars_.select(root.id) && openDirectory(root)) {
     const auto children = bars_.childrenOf(root.id);
     const auto found = std::find_if(children.begin(), children.end(), [&](const auto &bar) {
@@ -4425,13 +4425,13 @@ void MusicSelectScene::openStreakAssignment(const std::string &id) {
   syncResolvedFilters();
 }
 
-void MusicSelectScene::openStreak() {
-  if (!toolbarControlAvailable(MusicSelectToolbarControl::Streak)) return;
-  context.sceneManager->changeScene(std::make_unique<StreakScene>(
+void MusicSelectScene::openKombo() {
+  if (!toolbarControlAvailable(MusicSelectToolbarControl::Kombo)) return;
+  context.sceneManager->changeScene(std::make_unique<KomboScene>(
       context, SceneReturnTarget::Retained(
           this, [this] { reactivateSkinOnResume_ = true; }),
       [this](const std::string &id) {
-        pendingStreakAssignment_ = id;
+        pendingKomboAssignment_ = id;
         (void)returnToScene(*context.sceneManager, SceneReturnTarget::Retained(this));
       }, [this] {
         pendingGoalsOverviewProfile_ = context.profileManager.activeProfile().id;
@@ -4483,7 +4483,7 @@ void MusicSelectScene::syncToolbar() {
        .openTasks = [this] { openTasks(); },
        .openPlayOptions = [this] { openPlayOptions(); },
        .openIrUploads = [this] { openIrUploads(); },
-       .openStreak = [this] { openStreak(); },
+       .openKombo = [this] { openKombo(); },
        .openSettings = [this] { openSettings(); },
        .persist = [this](MusicSelectToolbarState updated) {
          persistToolbar(updated);

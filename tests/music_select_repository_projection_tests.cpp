@@ -767,8 +767,8 @@ void testSingleSongProjectionDoesNotAggregateOrVisitOtherRows() {
 }
 
 void testAssignmentFoldersShowOnlyContributingCharts() {
-  streak::Day day;
-  streak::Assignment a{.id="one", .name="First", .levels={{"table", "0", ""}},
+  kombo::Day day;
+  kombo::Assignment a{.id="one", .name="First", .levels={{"table", "0", ""}},
                        .eligibleLamp=200, .targetLamp=400};
   day.assignments.push_back({.requirement=a});
   a.id = "two"; a.name = "Second";
@@ -852,7 +852,7 @@ void testAssignmentFoldersShowOnlyContributingCharts() {
   children = musicSelectAssignmentChildren(day, root, sources, input);
   require(children.size() == 3, "LN-mode eligibility changes without removing sticky charts");
   day.points = day.config.dailyGoal;
-  day.assignments[0].bonusRounds = streak::sharedDailyBonusLimit;
+  day.assignments[0].bonusRounds = kombo::sharedDailyBonusLimit;
   require(musicSelectAssignmentChildren(day, root, sources, input).size() == 2,
           "exhausted shared bonus budget keeps folders but no contributing charts");
   require(!musicSelectAssignmentNeedsAdjustment(day, progress, noCharts, input),

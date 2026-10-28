@@ -24,7 +24,7 @@ enum class MusicSelectToolbarControl {
   Tasks,
   PlayOptions,
   IrUploads,
-  Streak,
+  Kombo,
   Settings,
   Collapse,
   Expand,
@@ -41,7 +41,7 @@ struct MusicSelectToolbarCallbacks {
   std::function<void()> openTasks;
   std::function<void()> openPlayOptions;
   std::function<void()> openIrUploads;
-  std::function<void()> openStreak;
+  std::function<void()> openKombo;
   std::function<void()> openSettings;
   std::function<void(MusicSelectToolbarState)> persist;
 };

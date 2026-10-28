@@ -2,10 +2,10 @@
 <data-extraction-rules>
     <cloud-backup>
         <exclude domain="file" path="profiles" />
-        <exclude domain="sharedpref" path="combo_notifications.xml" />
+        <exclude domain="sharedpref" path="kombo_notifications.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="file" path="profiles" />
-        <exclude domain="sharedpref" path="combo_notifications.xml" />
+        <exclude domain="sharedpref" path="kombo_notifications.xml" />
     </device-transfer>
 </data-extraction-rules>

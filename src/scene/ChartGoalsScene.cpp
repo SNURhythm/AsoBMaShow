@@ -133,7 +133,7 @@ std::string rateText(const chart_goals::Target &target) {
   return text.str();
 }
 std::string scoreTarget(const chart_goals::Target &target) {
-  if (target.scoreDenominator == 27) return streak::scoreRankLabel(target.scoreNumerator);
+  if (target.scoreDenominator == 27) return kombo::scoreRankLabel(target.scoreNumerator);
   return rateText(target) + "% EX";
 }
 std::string scope(const chart_goals::Goal &goal) {
@@ -141,7 +141,7 @@ std::string scope(const chart_goals::Goal &goal) {
 }
 void targets(View *parent, const chart_goals::Target &target) {
   if (target.lamp >= 0)
-    lamp(parent, i18n::format("goals.ui.lamp_target", {{"value", streak::lampLabel(target.lamp)}}), target.lamp);
+    lamp(parent, i18n::format("goals.ui.lamp_target", {{"value", kombo::lampLabel(target.lamp)}}), target.lamp);
   if (target.scoreNumerator > 0)
     label(parent, i18n::format("goals.ui.score_target", {{"value", scoreTarget(target)}}));
 }
@@ -247,11 +247,11 @@ void ChartGoalsScene::saveGoal() {
   auto candidate = draft_;
   if (customScore_) {
     const auto rate = chart_goals::parseRate(customRate_);
-    if (!rate) { message_ = i18n::tr("streak.ui.invalid_rate"); return; }
+    if (!rate) { message_ = i18n::tr("kombo.ui.invalid_rate"); return; }
     candidate.target.scoreNumerator = *rate; candidate.target.scoreDenominator = 10000;
   }
   try { chart_goals::validate(candidate.target); }
-  catch (const std::exception &) { message_ = i18n::tr("streak.ui.target_required"); return; }
+  catch (const std::exception &) { message_ = i18n::tr("kombo.ui.target_required"); return; }
   std::string error;
   if (!context.scoreRepository.SaveChartGoal(candidate, error)) {
     SDL_Log("Cannot save personal goal: %s", error.c_str());
@@ -307,7 +307,7 @@ void ChartGoalsScene::build() {
   root_->setFlexDirection(FlexDirection::Column)->setGap(12)->setPadding(Edge::All, 18)
       ->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
   addView(root_);
-  action(root_, i18n::tr("streak.ui.back"), [this] { back(); })->setWidth(140);
+  action(root_, i18n::tr("kombo.ui.back"), [this] { back(); })->setWidth(140);
   scroll_ = new ScrollView(); scroll_->setFlex(1)->setMinHeight(0); root_->addView(scroll_);
   auto *outer = new View(); outer->setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignCenter);
   auto *body = new View();
@@ -317,7 +317,7 @@ void ChartGoalsScene::build() {
   portal_->setPositionType(YGPositionTypeAbsolute)->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0)->setZIndex(900);
   label(body, i18n::tr("goals.ui.title"), 30);
   if (loadFailed_) {
-    action(body, i18n::tr("streak.ui.retry"), [this] { later([this] { message_.clear(); reload(); }); });
+    action(body, i18n::tr("kombo.ui.retry"), [this] { later([this] { message_.clear(); reload(); }); });
   } else if (selected_ || editing_) {
     auto *detail = card(body);
     auto *identity = new View();
@@ -331,7 +331,7 @@ void ChartGoalsScene::build() {
       const auto current = context.scoreRepository.PreviewChartGoal(draft_, error);
       if (current) {
         const auto &progress = current->progress;
-        lamp(detail, i18n::format("goals.ui.best_lamp", {{"value", streak::lampLabel(
+        lamp(detail, i18n::format("goals.ui.best_lamp", {{"value", kombo::lampLabel(
             progress.bestClear ? progress.bestClear->clearType : -1)}}),
             progress.bestClear ? progress.bestClear->clearType : -1);
         std::string best = i18n::tr("goals.ui.no_record");
@@ -343,12 +343,12 @@ void ChartGoalsScene::build() {
       } else label(detail, i18n::tr("goals.ui.storage_error"));
       label(detail, i18n::tr("goals.ui.target_help"), 18);
       std::vector<DropdownView::Option> lamps{{"-1", i18n::tr("goals.ui.no_target")}};
-      for (int rank : {100, 150, 200, 300, 400, 500, 600}) lamps.push_back({.id=std::to_string(rank), .label=streak::lampLabel(rank), .leadingColor=clearLampColorForRank(rank)});
+      for (int rank : {100, 150, 200, 300, 400, 500, 600}) lamps.push_back({.id=std::to_string(rank), .label=kombo::lampLabel(rank), .leadingColor=clearLampColorForRank(rank)});
       select(detail, portal_, i18n::tr("goals.ui.lamp"), std::move(lamps), std::to_string(draft_.target.lamp),
           [this](const std::string &id) { draft_.target.lamp = std::stoi(id); });
       std::vector<DropdownView::Option> scores{{"0", i18n::tr("goals.ui.no_target")}};
-      for (int rank : {6, 9, 12, 15, 18, 21, 24, 26, 27}) scores.push_back({std::to_string(rank), streak::scoreRankLabel(rank)});
-      scores.push_back({"custom", i18n::tr("streak.ui.custom_option")});
+      for (int rank : {6, 9, 12, 15, 18, 21, 24, 26, 27}) scores.push_back({std::to_string(rank), kombo::scoreRankLabel(rank)});
+      scores.push_back({"custom", i18n::tr("kombo.ui.custom_option")});
       select(detail, portal_, i18n::tr("goals.ui.score"), std::move(scores),
           customScore_ ? "custom" : std::to_string(draft_.target.scoreNumerator), [this](const std::string &id) {
             later([this, id] {
@@ -357,7 +357,7 @@ void ChartGoalsScene::build() {
             });
           });
       if (customScore_) {
-        label(detail, i18n::tr("streak.ui.custom_rate"), 18);
+        label(detail, i18n::tr("kombo.ui.custom_rate"), 18);
         auto *input = new TextInputBox(app_theme::font, 22);
         input->setHeight(60)->setPadding(Edge::All, 10)->setCornerRadius(14)->setFlexShrink(0);
         input->setThemedColor(app_theme::textPrimary); input->setThemedBackgroundColor(app_theme::insetSurface);
@@ -393,7 +393,7 @@ void ChartGoalsScene::build() {
       const auto &progress = selected_->progress;
       label(detail, i18n::tr(progress.achieved ? "goals.ui.achieved" : "goals.ui.in_progress"), 25)
           ->setThemedColor(progress.achieved ? app_theme::lime : app_theme::textPrimary);
-      lamp(detail, i18n::format("goals.ui.best_lamp", {{"value", streak::lampLabel(
+      lamp(detail, i18n::format("goals.ui.best_lamp", {{"value", kombo::lampLabel(
           progress.bestClear ? progress.bestClear->clearType : -1)}}),
           progress.bestClear ? progress.bestClear->clearType : -1);
       std::string best = i18n::tr("goals.ui.no_record");

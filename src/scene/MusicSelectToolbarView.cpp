@@ -19,7 +19,7 @@ constexpr float kDefaultPosition = 24.0F;
 
 std::uint32_t codepointFor(MusicSelectToolbarControl control) {
   switch (control) {
-  case MusicSelectToolbarControl::Streak:
+  case MusicSelectToolbarControl::Kombo:
     return ui_icons::kFire;
   case MusicSelectToolbarControl::Drag:
     return ui_icons::kDrag;
@@ -107,7 +107,7 @@ void MusicSelectToolbarView::rebuild() {
                 MusicSelectToolbarControl::ChartMenu,
                 MusicSelectToolbarControl::PlayOptions,
                 MusicSelectToolbarControl::Rankings,
-                MusicSelectToolbarControl::Streak,
+                MusicSelectToolbarControl::Kombo,
                 MusicSelectToolbarControl::MoreMenu,
                 MusicSelectToolbarControl::Collapse};
 
@@ -262,8 +262,8 @@ void MusicSelectToolbarView::activateControl(
       callbacks_.openIrUploads();
     }
     break;
-  case MusicSelectToolbarControl::Streak:
-    if (callbacks_.openStreak) callbacks_.openStreak();
+  case MusicSelectToolbarControl::Kombo:
+    if (callbacks_.openKombo) callbacks_.openKombo();
     break;
   case MusicSelectToolbarControl::Settings:
     if (callbacks_.openSettings) {
@@ -292,7 +292,7 @@ bool MusicSelectToolbarView::isControlEnabled(MusicSelectToolbarControl control)
   case MusicSelectToolbarControl::Tasks: return bool(callbacks_.openTasks);
   case MusicSelectToolbarControl::PlayOptions: return bool(callbacks_.openPlayOptions);
   case MusicSelectToolbarControl::IrUploads: return bool(callbacks_.openIrUploads);
-  case MusicSelectToolbarControl::Streak: return bool(callbacks_.openStreak);
+  case MusicSelectToolbarControl::Kombo: return bool(callbacks_.openKombo);
   case MusicSelectToolbarControl::Settings: return bool(callbacks_.openSettings);
   default: return true;
   }

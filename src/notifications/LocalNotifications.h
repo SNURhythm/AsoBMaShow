@@ -8,7 +8,7 @@ enum class Permission { Unknown, NotDetermined, Denied, Granted, Unsupported };
 #if defined(__ANDROID__) || TARGET_OS_IPHONE
 inline constexpr bool supported = true;
 // These calls are safe on the application owner thread; adapters serialize OS
-// operations. JSON contains at most 56 dated requests, all owned by Combo.
+// operations. JSON contains at most 56 dated requests, all owned by Kombo.
 void refreshPermission();
 Permission permission();
 void requestPermission();

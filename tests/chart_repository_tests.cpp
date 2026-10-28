@@ -4512,7 +4512,7 @@ void testAssignmentCandidateQueries() {
   assert(execute(database.get(), "UPDATE chart_meta SET subtitle='', artist='', sub_artist='', genre=''"));
   auto session = repository.OpenSession();
   assert(session);
-  streak::Day day;
+  kombo::Day day;
   day.assignments.push_back({.requirement={.id="one", .levels={{"table","0",""},{"table","1",""}}}});
   day.assignments[0].chartProgress["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"] = {};
   const auto metadata = MusicSelectRepositoryProjection::loadMetadata(*session, 1);

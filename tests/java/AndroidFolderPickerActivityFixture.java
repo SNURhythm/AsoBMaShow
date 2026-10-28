@@ -209,7 +209,7 @@ class FakeSdlActivity {
 }
 
 // Notifications are a separate boundary from the folder-picker lifecycle.
-class ComboNotifications {
+class KomboNotifications {
     static void returned(FakeSdlActivity activity, Intent intent) {}
     static void paused() {}
 }

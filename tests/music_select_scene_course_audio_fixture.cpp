@@ -207,9 +207,9 @@ struct Preview {
 struct ExternalUrl { void close(int) {} };
 struct FolderStatusLoader { void cancel() {} };
 struct MusicSelectScene {
-  // These lifecycle cases have no pending streak assignment.
-  std::string pendingStreakAssignment_;
-  void openStreakAssignment(const std::string &) { assert(false); }
+  // These lifecycle cases have no pending kombo assignment.
+  std::string pendingKomboAssignment_;
+  void openKomboAssignment(const std::string &) { assert(false); }
 
   void closeRankings() {}
 
