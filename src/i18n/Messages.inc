@@ -130,7 +130,7 @@
 {"goals.ui.folder", "Goals", "목표", "目標", "目标", "目標"},
 {"goals.ui.hide_achieved", "Hide achieved goals", "달성한 목표 숨기기", "達成した目標を隠す", "隐藏已达成目标", "隱藏已達成目標"},
 {"goals.ui.in_progress", "In progress", "진행 중", "挑戦中", "进行中", "進行中"},
-{"goals.ui.intro", "Keep a chart target across sessions. Goals have no deadline and do not change Combo points.", "세션이 바뀌어도 채보 목표를 이어가세요. 기한은 없으며 Combo 포인트에는 영향을 주지 않습니다.", "セッションをまたいで譜面目標に取り組めます。期限はなく、Comboポイントには影響しません。", "跨游玩时段保留谱面目标。目标没有期限，也不影响 Combo 点数。", "跨遊玩時段保留譜面目標。目標沒有期限，也不影響 Combo 點數。"},
+{"goals.ui.intro", "Set chart goals with no deadline. They don’t affect Combo points.", "기한 없이 채보 목표를 설정하세요. Combo 포인트에는 영향을 주지 않습니다.", "期限のない譜面目標を設定できます。Comboポイントには影響しません。", "设置没有期限的谱面目标，不影响 Combo 点数。", "設定沒有期限的譜面目標，不影響 Combo 點數。"},
 {"goals.ui.lamp", "Minimum lamp", "최소 달성 램프", "目標ランプ以上", "最低目标灯", "最低目標燈"},
 {"goals.ui.lamp_target", "Lamp target: {value} or better", "목표 램프: {value} 이상", "目標ランプ: {value} 以上", "目标灯：{value} 或以上", "目標燈：{value} 或以上"},
 {"goals.ui.missing", "This chart is unavailable in the library. Its goal and records are kept.", "라이브러리에서 이 채보를 사용할 수 없습니다. 목표와 기록은 유지됩니다.", "ライブラリでこの譜面を利用できません。目標と記録は保持されます。", "曲库中无法使用此谱面。目标和记录仍会保留。", "曲庫中無法使用此譜面。目標和紀錄仍會保留。"},
