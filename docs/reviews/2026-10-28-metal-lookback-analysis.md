@@ -116,4 +116,100 @@ experiment increased the reported HUD delay.
 
 The unfinished custom recorder was set aside after the supplied capture became
 available. No diagnostic hooks, pacing changes, installation or upload accompany
-this analysis. The application remains at the one-frame experiment `469a7f9c`.
+this initial analysis. At that time the application remained at the one-frame
+experiment `469a7f9c`; the follow-up below examines the later candidate.
+
+## Presentation-delay follow-up at `c71bcd76`
+
+Re-examining the original capture adds a useful signal: recorded **On Display
+Lateness** is concentrated around one 120 Hz refresh interval while the display
+maintains 120 FPS. Using the same steady-rate selection and count-weighted means:
+
+| PID | Intervals | Displayed frames | Lateness samples | Mean recorded lateness | Skipped frames |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 5808 | 34 | 4,077 | 2,772 | 8.3425 ms | 0 |
+| 5826 | 16 | 1,918 | 1,306 | 8.3431 ms | 0 |
+| 5846 | 69 | 8,277 | 5,497 | 8.3381 ms | 0 |
+
+The previously selected continuous 30-second segment has 3,251 lateness samples
+averaging 8.3374 ms alongside 3,599 displayed frames. All selected intervals
+attribute exactly two command buffers per displayed frame. The derived CSV now
+includes lateness count, total, mean, bounds, command-buffer count and skipped
+frames so these aggregates can be reproduced without the private trace.
+
+This is evidence of a refresh-sized presentation-timing penalty relative to the
+system's deadline, not proof of an application deadline miss. The trace does not
+explain how that deadline was estimated or which frames contribute lateness
+samples; dividing their count by displayed frames is not a validated miss-rate
+measurement. It cannot distinguish a late CPU request, command scheduling, or
+system presentation policy. These sessions also predate the current
+CAMetalDisplayLink retry and are not measurements of `c71bcd76`.
+
+### What the current source rules out
+
+- iOS calls `bgfx::renderFrame()` before initialization, enabling synchronous
+  submission on the application worker, and sets `BGFX_RESET_FLIP_AFTER_RENDER`.
+  `Context::swap()` renders the freshly submitted frame synchronously and flips
+  it in that call. There is no extra bgfx API/render-thread frame to remove here.
+- Accepted display-link frames bypass the timer wait in
+  `video::iosFramePacingWait`. The two-slot acquisition gate is cancelled for a
+  managed display-link drawable. Neither adds a second pacing wait in that path.
+- The Apple GPU limit remains three. Its semaphore is released on GPU command
+  completion, not display; changing it does not directly bound the post-GPU wait.
+- Metal commits rendering at the end of `submit()`, then `flip()` commits a
+  separate presentation command buffer. This is an extra scheduling boundary,
+  not evidence of a fixed extra refresh. Apple's own
+  [display-link sample](https://developer.apple.com/documentation/metal/achieving-smooth-frame-rates-with-a-metal-display-link)
+  uses command-buffer presentation; the API name alone is not a bug.
+
+### The timing contract stops at callback receipt
+
+`src/video/MetalDisplayLink.mm:43` passes `update.targetTimestamp` into
+`MetalDisplayLinkFrame::receive`. It checks that the deadline has not already
+passed, then discards it. `targetPresentationTimestamp` is not consumed.
+Afterward, the application polls input, updates the scene, constructs draws and
+submits bgfx work. The provider's `shouldPresent` checks ownership, geometry and
+lifecycle, but not elapsed time or deadline margin. Its `scheduled` flag means
+the provider allowed the request; it is not a GPU-scheduling or display event.
+
+Apple defines [`targetTimestamp`](https://developer.apple.com/documentation/quartzcore/cametaldisplaylink/update/targettimestamp)
+as the deadline for the drawable presentation call; GPU work may continue later.
+[`MTLCommandBuffer.present`](https://developer.apple.com/documentation/metal/mtlcommandbuffer/present(_:))
+defers the drawable's presentation call until the command buffer is scheduled.
+Callback receipt, the CPU convenience-method call, command scheduling, GPU
+completion and display are different boundaries. Checking only the first does
+not establish whether the final request meets the intended slot.
+
+The actionable architectural gap is that the loop receives display timing but
+does not carry it through frame preparation and presentation. This is not yet
+a demonstrated cause of the current device's delay.
+
+### Next controlled experiment
+
+Compare callback receipt, both display-link timestamps, input/scene sampling,
+the presentation API request, presentation-buffer scheduled handler, GPU end,
+and the drawable's `presentedTime` for the same frame. Use actual `presentedTime`,
+not its callback's delivery time. Keep preferred latency one, three drawables,
+GPU limit three, chart, charging and thermal conditions fixed.
+
+- If preparation or scheduling crosses the submission deadline, reduce or move
+  work there. Compare presenting on the final render command buffer against the
+  separate buffer only if that boundary is implicated.
+- If requests are on time and display matches the intended target, but rendering
+  finishes much earlier, evaluate later input/scene preparation with a measured
+  CPU/GPU budget and safety margin. Waiting only after sampling input can lower
+  the HUD number without improving displayed-state age.
+- If requests meet the deadline but display occurs after the target, investigate
+  presentation/system scheduling rather than adding more GPU waits.
+
+Do not restore the rejected wait-for-visible-presentation experiment, which
+reduced device throughput to 60 FPS. Do not substitute `presentAtTime` on a
+display-link drawable: Apple's
+[`needsUpdate` contract](https://developer.apple.com/documentation/quartzcore/cametaldisplaylinkdelegate/metaldisplaylink(_:needsupdate:))
+prohibits timed presentation alternatives in this mode.
+
+A temporary native Mac probe attempted a one-buffer/two-buffer comparison with
+real display-link callbacks. It produced only a few callbacks and no usable
+`presentedTime` samples. It establishes no performance or buffer-count conclusion.
+No production pacing changes, diagnostic hooks, installation or deployment
+accompany this source/trace review.
