@@ -278,6 +278,8 @@ struct DifficultyCourseInfo {
 struct GoalRecommendation {
   std::string sha256;
   int longNoteMode = 0, target = 0, score = 0, maxScore = 0, remaining = 0;
+  float gaugeValue = 0, gaugeBorder = 0;
+  int deathNotes = 0, totalNotes = 0;
 };
 
 class ChartRepository {

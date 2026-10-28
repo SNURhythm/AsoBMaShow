@@ -13,7 +13,9 @@ class GoalTargetBubble;
 class ChartListItemView : public View {
 public:
   ChartListItemView(int x, int y, int width, int height,
-                    const ChartMetaRecord &record);
+                    const ChartMetaRecord &record, bool goalBubbleInOverlay = false);
+  ~ChartListItemView() override;
+  void renderGoalBubble(RenderContext &context);
 
   void setMeta(const ChartMetaRecord &record,
                bool prioritizeArtwork = false);
@@ -68,4 +70,5 @@ private:
   TextView *goalIconView;
   TextView *goalOutlineView;
   GoalTargetBubble *goalBubble = nullptr;
+  bool goalBubbleInOverlay_ = false;
 };

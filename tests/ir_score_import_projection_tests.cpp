@@ -258,35 +258,115 @@ void testLocalProjectedScoreKeepsLocalSourceAndFullComboInference() {
   pending.score.comboBreak = 0;
   pending.score.clearType = kClearTypeNormalClearRank;
   pending.score.provenance = ScoreProvenance::Legacy();
-  pending.score.gaugeEvidence.recorded = true;
-  pending.score.gaugeEvidence.passedNotes = 100;
-  pending.score.gaugeEvidence.survivalMask = 1u << gaugeTypeIndex(GaugeType::Hard);
-  pending.score.gaugeEvidence.deathPassedNotes[gaugeTypeIndex(GaugeType::Hard)] = 87;
-  pending.score.gaugeEvidence.values[gaugeTypeIndex(GaugeType::Normal)] = 78;
   assert(scores.SaveProjectedScore(pending).status ==
          result_persistence::ProjectionStatus::Inserted);
 
   assert(queryInt(path, "SELECT score_source FROM scores LIMIT 1") == 0);
-  assert(queryInt(path, "SELECT json_extract(gauge_evidence,'$.deathNotes[3]') FROM scores") == 87);
-  assert(queryInt(path, "SELECT json_extract(gauge_evidence,'$.values[2]') FROM scores") == 78);
-  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::AlreadyPresent);
-  pending.score.gaugeEvidence.deathPassedNotes[3] = 88;
-  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::IntegrityConflict);
   const auto ranks = scores.LoadBestClearRanks();
   assert(ranks.bestRankForHash(std::string(64, '9'), 0) ==
          kClearTypeFullComboRank);
-  // Simulate the previous score schema: old rows acquire zero/unknown evidence.
-  scores.Shutdown();
-  sqlite3 *legacy = nullptr;
-  assert(sqlite3_open(path.string().c_str(), &legacy) == SQLITE_OK);
-  assert(sqlite3_exec(legacy, "ALTER TABLE scores DROP COLUMN gauge_evidence; PRAGMA user_version=14;",
-                      nullptr, nullptr, nullptr) == SQLITE_OK);
-  sqlite3_close(legacy);
-  ScoreRepository migrated(path);
-  assert(migrated.EnsureSchema());
-  assert(queryInt(path, "SELECT COUNT(*) FROM scores WHERE gauge_evidence='{}'") == 1);
-  assert(queryInt(path, "PRAGMA user_version") == ScoreRepository::kCurrentSchemaVersion);
+}
 
+void testGaugeRecommendationSummaries() {
+  const auto root = testRoot("gauge-goals");
+  const auto path = root / "score.db";
+  ScoreRepository scores(path);
+  assert(scores.EnsureSchema());
+  result_persistence::PendingChartScoreWrite pending;
+  pending.attemptId = "123e4567-e89b-42d3-a456-426614175000";
+  pending.replayId = 1;
+  pending.createdAt = "2026-10-28 12:00:00.000";
+  pending.score.chartSha256 = std::string(64, 'a');
+  pending.score.chartMd5 = std::string(32, 'a');
+  pending.score.maxScore = 200;
+  pending.score.score = 150;
+  pending.score.comboBreak = 1;
+  pending.score.clearType = kClearTypeFailedRank;
+  ScoreProvenanceBuildInput input;
+  input.chartMeta.SHA256 = pending.score.chartSha256;
+  input.chartMeta.MD5 = pending.score.chartMd5;
+  input.chartMeta.TotalNotes = input.totalNotes = 100;
+  input.judgeRankSource = JudgeRankSource::Chart;
+  input.sourceJudgeRank = 2;
+  input.ruleset = RulesetDescriptor::For(GameplayRuleset::LR2);
+  input.candidateSelection = gameplay::CandidateSelectionMode::LR2;
+  for (auto &context : input.effectiveJudgeContexts) {
+    int i = 0;
+    for (auto judgement : {PGreat,Great,Good,Bad,Kpoor})
+      context.windows[i++] = {.judgement=judgement, .earlyMicros=-10000, .lateMicros=10000};
+  }
+  input.effectiveGaugeTotal = 300;
+  pending.score.provenance = makeScoreProvenance(input);
+  const auto save = [&] {
+    const auto outcome = scores.SaveProjectedScore(pending);
+    if (outcome.status != result_persistence::ProjectionStatus::Inserted)
+      std::cerr << outcome.diagnostic << '\n';
+    assert(outcome.status == result_persistence::ProjectionStatus::Inserted);
+  };
+  auto &evidence = pending.gaugeEvidence;
+  evidence.recorded = true;
+  evidence.passedNotes = 100;
+  evidence.survivalMask = 0x1f8;
+  evidence.values = {55,75,74.9F,0,0,100,0,0,0};
+  evidence.deathPassedNotes = {0,0,0,90,89,-1,0,0,0};
+  save();
+  assert(queryInt(path, "SELECT COUNT(*) FROM goal_gauge_best") == 6);
+  assert(queryInt(path, "SELECT COUNT(*) FROM goal_gauge_best WHERE gap<=CASE WHEN target<=300 THEN 5 ELSE 0.1 END") == 4);
+  // Better evidence replaces only that gauge; worse attempts do not regress it.
+  pending.attemptId.back() = '1'; evidence.values[2] = 78; evidence.deathPassedNotes[3] = 95;
+  save();
+  pending.attemptId.back() = '2'; evidence.values[2] = 60; evidence.deathPassedNotes[3] = 80;
+  save();
+  assert(queryInt(path, "SELECT gauge_value FROM goal_gauge_best WHERE target=300") == 78);
+  assert(queryInt(path, "SELECT death_notes FROM goal_gauge_best WHERE target=400") == 95);
+  // A partial play cannot claim final groove values or whole-chart survival.
+  pending.score.chartSha256 = std::string(64, 'b'); pending.attemptId.back() = '3';
+  evidence.passedNotes = 99; evidence.values[2] = 100; evidence.deathPassedNotes[4] = -1;
+  save();
+  assert(queryInt(path, "SELECT COUNT(*) FROM goal_gauge_best WHERE chart_sha256 LIKE 'b%'") == 1);
+  // Modified, unknown, and course evidence cannot suggest a normal chart lamp.
+  pending.score.chartSha256 = std::string(64, 'c'); pending.attemptId.back() = '4';
+  evidence.passedNotes = 100; pending.score.provenance.practice = true;
+  pending.score.provenance.eligibility = ScoreEligibility::Modified;
+  save();
+  pending.attemptId.back() = '5'; pending.score.provenance = makeScoreProvenance(input);
+  pending.score.provenance.gaugeProfile = GaugeProfile::Course7Keys;
+  save();
+  pending.attemptId.back() = '6'; pending.score.provenance = makeScoreProvenance(input);
+  const auto recorded = evidence; evidence = {};
+  save();
+  assert(queryInt(path, "SELECT COUNT(*) FROM goal_gauge_best WHERE chart_sha256 LIKE 'c%'") == 0);
+  // PMS clear borders differ from standard BMS; use the recorded rules/profile.
+  pending.attemptId.back() = '7'; pending.score.chartSha256 = std::string(64, 'd'); evidence = recorded;
+  input.ruleset = RulesetDescriptor::For(GameplayRuleset::Beatoraja);
+  input.candidateSelection = gameplay::CandidateSelectionMode::Lowest;
+  input.gaugeProfile = GaugeProfile::Standard9Keys;
+  pending.score.provenance = makeScoreProvenance(input);
+  save();
+  assert(queryInt(path, "SELECT border FROM goal_gauge_best WHERE chart_sha256 LIKE 'd%' AND target=300") == 85);
+  // A summary failure rolls the score insert back with it.
+  sqlite3 *blocked = nullptr;
+  assert(sqlite3_open(path.string().c_str(), &blocked) == SQLITE_OK);
+  assert(sqlite3_exec(blocked, "CREATE TRIGGER reject_gauge_summary BEFORE INSERT ON goal_gauge_best BEGIN SELECT RAISE(ABORT,'test failure'); END", nullptr,nullptr,nullptr)==SQLITE_OK);
+  pending.attemptId.back() = '8';
+  assert(scores.SaveProjectedScore(pending).status == result_persistence::ProjectionStatus::StorageFailure);
+  assert(queryInt(path, "SELECT COUNT(*) FROM scores") == 8);
+  assert(sqlite3_exec(blocked,"DROP TRIGGER reject_gauge_summary",nullptr,nullptr,nullptr)==SQLITE_OK);
+  sqlite3_close(blocked);
+  // Pre-feature profiles start with empty summaries; existing scores stay intact.
+  scores.Shutdown();
+  sqlite3 *db = nullptr;
+  assert(sqlite3_open(path.string().c_str(), &db) == SQLITE_OK);
+  assert(sqlite3_exec(db, "DROP TABLE goal_gauge_best; PRAGMA user_version=14;", nullptr, nullptr, nullptr)==SQLITE_OK);
+  sqlite3_close(db);
+  assert(scores.EnsureSchema());
+  assert(queryInt(path, "SELECT COUNT(*) FROM goal_gauge_best") == 0);
+  assert(queryInt(path, "SELECT COUNT(*) FROM pragma_table_info('scores') WHERE name='gauge_evidence'") == 0);
+  assert(queryInt(path, "SELECT COUNT(*) FROM scores") == 8);
+  assert(queryInt(path, "PRAGMA user_version") == ScoreRepository::kCurrentSchemaVersion);
+  ScoreRepository other(root / "other.db");
+  assert(other.EnsureSchema());
+  assert(queryInt(root / "other.db", "SELECT COUNT(*) FROM goal_gauge_best") == 0);
 }
 
 void testKomboProjectionIsAtomicAndUsesEffectiveLamp() {
@@ -716,6 +796,7 @@ void testGoalAchievementIsSavedOnceAndCelebrationIsProfileScoped() {
 }
 
 int main() {
+  testGaugeRecommendationSummaries();
   testCannotSetAlreadyAchievedGoal();
   testGoalIgnoresReplacedChartAtSamePath();
   testGoalAchievementIsSavedOnceAndCelebrationIsProfileScoped();

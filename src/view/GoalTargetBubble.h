@@ -11,22 +11,15 @@
 struct GoalBubblePlacement { int x, y, width, height; };
 inline GoalBubblePlacement placeGoalBubble(int anchorX, int anchorY, int anchorWidth, int anchorHeight,
                                           int viewportWidth, int viewportHeight,
-                                          rendering::UiSafeAreaInsets safe,
-                                          bool outsideContainer = false,
-                                          int containerY = 0, int containerHeight = 0) {
+                                          rendering::UiSafeAreaInsets safe) {
   const int left = std::clamp(safe.left + 4, 0, std::max(0, viewportWidth));
   const int right = std::clamp(viewportWidth - safe.right - 4, left, std::max(left, viewportWidth));
   const int top = std::clamp(safe.top + 4, 0, std::max(0, viewportHeight));
   const int bottom = std::clamp(viewportHeight - safe.bottom - 4, top, std::max(top, viewportHeight));
   const int width = std::min(150, right - left), height = std::min(48, bottom - top);
-  const int before = anchorX - width - 4;
-  const int after = anchorX + anchorWidth + 4;
-  const int preferred = before >= left ? before : after;
-  const int above = containerY - height - 4;
-  const int below = containerY + containerHeight + 4;
-  const int x = outsideContainer ? anchorX + (anchorWidth - width) / 2 : preferred;
-  const int y = outsideContainer ? (above >= top ? above : below)
-                                 : anchorY + (anchorHeight - height) / 2;
+  const int x = anchorX + (anchorWidth - width) / 2;
+  const int above = anchorY - height - 4;
+  const int y = above >= top ? above : anchorY + anchorHeight + 4;
   return {.x = std::clamp(x, left, right - width),
           .y = std::clamp(y, top, bottom - height),
           .width = width, .height = height};
@@ -44,39 +37,42 @@ public:
     setZIndex(100);
     auto *lampRow = new View();
     lampRow->setName("chartGoalBubbleLampRow");
-    lampRow->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(6);
+    lampRow->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setJustifyContent(YGJustifyCenter)->setGap(6);
     lampRow->setHeight(19)->setFlexShrink(0);
     lampBar_ = new View(); lampBar_->setName("chartGoalBubbleLampBar");
     lampBar_->setWidth(4)->setHeight(17)->setFlexShrink(0)->setCornerRadius(2);
     lampRow->addView(lampBar_);
     lamp_ = new TextView(main_menu_theme::font, 15);
-    lamp_->setName("chartGoalBubbleLamp"); lamp_->setHeight(19)->setFlex(1)->setMinWidth(0);
+    lamp_->setName("chartGoalBubbleLamp"); lamp_->setHeight(19)->setFlexShrink(1)->setMinWidth(0);
+    lamp_->setAlign(TextView::CENTER); lamp_->setVAlign(TextView::MIDDLE);
     lamp_->setMinimumFontSize(10); lamp_->setOverflow(TextView::TextOverflow::Hidden);
     lamp_->setThemedColor(app_theme::textPrimary); lampRow->addView(lamp_);
     addView(lampRow); lampRow_ = lampRow;
     score_ = new TextView(main_menu_theme::font, 15);
     score_->setName("chartGoalBubbleScore"); score_->setHeight(19)->setFlexShrink(0);
-    score_->setAlign(TextView::CENTER); score_->setThemedColor(app_theme::textPrimary);
+    score_->setAlign(TextView::CENTER); score_->setVAlign(TextView::MIDDLE);
+    score_->setThemedColor(app_theme::textPrimary);
     addView(score_); setVisible(false);
   }
   void setTarget(int rank, const std::string &lamp, const std::string &score) {
     hasTarget_ = !lamp.empty() || !score.empty();
     lamp_->setText(lamp); score_->setText(score);
+    lamp_->setWidth(std::min(126, lamp_->measureTextWidth(lamp) + 2));
     lampRow_->setVisible(!lamp.empty()); lampRow_->setDisplay(lamp.empty() ? YGDisplayNone : YGDisplayFlex);
     score_->setVisible(!score.empty()); score_->setDisplay(score.empty() ? YGDisplayNone : YGDisplayFlex);
     const bool colored = !lamp.empty() && hasClearLampColor(rank);
     lampBar_->setVisible(colored); lampBar_->setDisplay(colored ? YGDisplayFlex : YGDisplayNone);
     if (colored) lampBar_->setBackgroundColor(clearLampColorForRank(rank));
   }
-  // Place beside the flag and clamp to the usable screen, including safe areas.
+  // Center above the flag; use below only when the safe top edge leaves no room.
   void placeFor(const View &anchor, const View &container, int viewportWidth, int viewportHeight,
-                bool outsideContainer = false) {
+                bool rootCoordinates = false) {
     const auto placement = placeGoalBubble(anchor.getX(), anchor.getY(), anchor.getWidth(), anchor.getHeight(),
-                                           viewportWidth, viewportHeight, rendering::uiSafeAreaInsets(),
-                                           outsideContainer, container.getY(), container.getHeight());
+                                           viewportWidth, viewportHeight, rendering::uiSafeAreaInsets());
     if (placement.width != placedWidth_) { placedWidth_ = placement.width; setWidth(placement.width); }
     if (placement.height != placedHeight_) { placedHeight_ = placement.height; setHeight(placement.height); }
-    setPositionNoLayout(placement.x - container.getX(), placement.y - container.getY());
+    setPositionNoLayout(placement.x - (rootCoordinates ? 0 : container.getX()),
+                        placement.y - (rootCoordinates ? 0 : container.getY()));
   }
   void showFor(bool visible) {
     const bool next = visible && hasTarget_;

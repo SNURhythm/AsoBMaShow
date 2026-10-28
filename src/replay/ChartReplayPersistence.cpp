@@ -89,10 +89,10 @@ ChartReplayPersistence::ChartReplayPersistence(
       .stage =
           [&repository](const auto &result, const auto &snapshot,
                         const auto &replayFile, auto averageJudgeMicros,
-                        auto drafts) {
+                        auto drafts, const GaugeEvidence &gaugeEvidence) {
             return repository.StageModernChartResult(result, snapshot,
                                                      replayFile, drafts,
-                                                     averageJudgeMicros);
+                                                     averageJudgeMicros, gaugeEvidence);
           },
       .loadPending =
           [&repository](std::string_view attemptId) {
@@ -135,6 +135,10 @@ ChartReplayPersistence::persist(const ChartReplayPersistenceAttempt &attempt,
     return {.state = ChartReplayPersistenceState::InvalidAttempt,
             .diagnostic = diagnostic.empty() ? "modern result is invalid"
                                              : std::move(diagnostic)};
+  }
+  if (!attempt.gaugeEvidence.valid(attempt.result.score.maxScore / 2)) {
+    return {.state = ChartReplayPersistenceState::InvalidAttempt,
+            .diagnostic = "pending gauge evidence is invalid"};
   }
   if (attempt.irSnapshot.has_value()) {
     const auto expected =
@@ -225,7 +229,7 @@ ChartReplayPersistence::persist(const ChartReplayPersistenceAttempt &attempt,
 
   const auto staged = dependencies_.stage(
       attempt.result, attempt.irSnapshot, attachment,
-      attempt.averageJudgeMicros, irDrafts);
+      attempt.averageJudgeMicros, irDrafts, attempt.gaugeEvidence);
   switch (staged.status) {
   case ModernChartStageStatus::Invalid:
     if (fileAssociation) {

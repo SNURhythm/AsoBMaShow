@@ -195,10 +195,6 @@ void createVersion2Fixture(const std::filesystem::path &path) {
 void restoreClosedKeyModeChecks(sqlite3 *database) {
   for (const auto *table : {"modern_chart_results", "modern_course_stages"}) {
     if (queryInt(database, "SELECT COUNT(*) FROM pragma_table_info('" +
-                              std::string(table) + "') WHERE name='gauge_evidence'") != 0) {
-      exec(database, "ALTER TABLE " + std::string(table) + " DROP COLUMN gauge_evidence");
-    }
-    if (queryInt(database, "SELECT COUNT(*) FROM pragma_table_info('" +
                               std::string(table) + "') WHERE name='bad_points'") != 0) {
       exec(database, "ALTER TABLE " + std::string(table) +
                          " DROP COLUMN bad_points");
@@ -1671,8 +1667,6 @@ void testVersion18BadPointsRemainUnknownAfterMigration() {
       "WHERE name='bad_points' AND [notnull]=0") == 1);
   exec(database.get(), "ALTER TABLE modern_chart_results DROP COLUMN bad_points");
   exec(database.get(), "ALTER TABLE modern_course_stages DROP COLUMN bad_points");
-  exec(database.get(), "ALTER TABLE modern_chart_results DROP COLUMN gauge_evidence");
-  exec(database.get(), "ALTER TABLE modern_course_stages DROP COLUMN gauge_evidence");
   exec(database.get(), "PRAGMA user_version=18");
   insertModernChartResult(database.get(), "historic-bp-unknown", 7, 'e');
   const auto fingerprint = queryText(database.get(),

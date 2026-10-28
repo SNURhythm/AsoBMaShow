@@ -1,5 +1,4 @@
 #include "ModernResult.h"
-#include "GaugeEvidenceJson.h"
 
 #include "BmsMetadataText.h"
 #include "CourseIdentity.h"
@@ -185,10 +184,6 @@ bool validateResultFacts(const ChartScoreWrite &score, int keyMode,
     diagnostic = "chart result key mode or adopted gauge is invalid";
     return false;
   }
-  if (!score.gaugeEvidence.valid(score.maxScore / 2)) {
-    diagnostic = "chart result gauge evidence is invalid";
-    return false;
-  }
   if (!validateScore(score, diagnostic)) {
     return false;
   }
@@ -251,10 +246,6 @@ void appendScore(CanonicalEncoder &encoder, const ChartScoreWrite &score) {
   encoder.float32(score.finalGauge);
   encoder.integer(static_cast<std::int32_t>(score.clearType));
   encoder.string(serializeScoreProvenance(score.provenance));
-  if (score.gaugeEvidence.recorded) {
-    encoder.string("all-gauge-evidence-v1");
-    encoder.string(serializeGaugeEvidence(score.gaugeEvidence));
-  }
   if (score.badPoints) {
     // A negative marker cannot collide with the following positive key mode.
     encoder.integer(static_cast<std::int32_t>(-1));
@@ -293,9 +284,7 @@ bool sameScoreOutcome(const ChartScoreWrite &left,
          left.slow == right.slow &&
          sameFloatBits(left.finalGauge, right.finalGauge) &&
          left.clearType == right.clearType &&
-         left.badPoints == right.badPoints &&
-         (!left.gaugeEvidence.recorded || !right.gaugeEvidence.recorded ||
-          left.gaugeEvidence == right.gaugeEvidence);
+         left.badPoints == right.badPoints;
 }
 
 } // namespace
@@ -371,7 +360,6 @@ ChartScoreWrite captureChartScoreWrite(const bms_parser::ChartMeta &meta,
       .provenance = provenance,
       .badPoints = badPoints >= 0 && badPoints <= std::numeric_limits<int>::max()
                        ? static_cast<int>(badPoints) : -1,
-      .gaugeEvidence = state.gaugeEvidence,
   };
 }
 

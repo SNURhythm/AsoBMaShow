@@ -1,4 +1,5 @@
 #include "ReplayRepository.h"
+#include "PendingGaugeEvidence.h"
 #include "ReplayRepositoryInternal.h"
 #include "ReplayRepositoryLegacyMigration.h"
 #ifdef ASOBMASHOW_ENABLE_REPLAY_MIGRATION_TEST_ACCESS
@@ -481,37 +482,6 @@ constexpr const char *kModernChartResultsTableSqlV18 =
     "result_fingerprint=lower(result_fingerprint) AND "
     "result_fingerprint NOT GLOB '*[^0-9a-f]*'))";
 
-constexpr const char *kModernChartResultsTableSqlV19 =
-    "CREATE TABLE modern_chart_results("
-    "id INTEGER PRIMARY KEY AUTOINCREMENT,attempt_id TEXT NOT NULL UNIQUE,"
-    "chart_path TEXT NOT NULL,chart_md5 TEXT NOT NULL,"
-    "chart_sha256 TEXT NOT NULL,chart_title TEXT NOT NULL,"
-    "chart_artist TEXT NOT NULL,long_note_mode INTEGER NOT NULL,"
-    "score INTEGER NOT NULL,max_score INTEGER NOT NULL,"
-    "max_combo INTEGER NOT NULL,combo_break INTEGER NOT NULL,"
-    "p_great INTEGER NOT NULL,great INTEGER NOT NULL,good INTEGER NOT NULL,"
-    "bad INTEGER NOT NULL,poor INTEGER NOT NULL,k_poor INTEGER NOT NULL,"
-    "fast INTEGER NOT NULL,slow INTEGER NOT NULL,final_gauge REAL NOT NULL,"
-    "clear_type INTEGER NOT NULL,key_mode INTEGER NOT NULL,"
-    "adopted_gauge_type INTEGER NOT NULL,gauge_history_json TEXT NOT NULL,"
-    "judgement_timing_json TEXT,provenance_json TEXT NOT NULL,"
-    "result_fingerprint TEXT NOT NULL,played_at_unix_ms INTEGER NOT NULL,"
-    "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
-    "bad_points INTEGER CHECK(bad_points>=0),"
-    "CHECK(length(chart_sha256)=64 AND chart_sha256=lower(chart_sha256) AND "
-    "chart_sha256 NOT GLOB '*[^0-9a-f]*'),"
-    "CHECK(chart_md5='' OR (length(chart_md5)=32 AND "
-    "chart_md5=lower(chart_md5) AND chart_md5 NOT GLOB '*[^0-9a-f]*')),"
-    "CHECK(long_note_mode BETWEEN 0 AND 3),CHECK(key_mode>0),"
-    "CHECK(adopted_gauge_type BETWEEN 0 AND 5),"
-    "CHECK(score>=0 AND max_score>0 AND score<=max_score),"
-    "CHECK(max_combo>=0 AND combo_break>=0 AND p_great>=0 AND great>=0 AND "
-    "good>=0 AND bad>=0 AND poor>=0 AND k_poor>=0 AND fast>=0 AND slow>=0),"
-    "CHECK(final_gauge>=0),CHECK(played_at_unix_ms>0),"
-    "CHECK(length(result_fingerprint)=64 AND "
-    "result_fingerprint=lower(result_fingerprint) AND "
-    "result_fingerprint NOT GLOB '*[^0-9a-f]*'))";
-
 constexpr const char *kModernChartResultsTableSql =
     "CREATE TABLE modern_chart_results("
     "id INTEGER PRIMARY KEY AUTOINCREMENT,attempt_id TEXT NOT NULL UNIQUE,"
@@ -529,7 +499,6 @@ constexpr const char *kModernChartResultsTableSql =
     "result_fingerprint TEXT NOT NULL,played_at_unix_ms INTEGER NOT NULL,"
     "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,"
     "bad_points INTEGER CHECK(bad_points>=0),"
-    "gauge_evidence TEXT NOT NULL DEFAULT '{}',"
     "CHECK(length(chart_sha256)=64 AND chart_sha256=lower(chart_sha256) AND "
     "chart_sha256 NOT GLOB '*[^0-9a-f]*'),"
     "CHECK(chart_md5='' OR (length(chart_md5)=32 AND "
@@ -647,36 +616,6 @@ constexpr const char *kModernCourseStagesTableSqlV18 =
     "FOREIGN KEY(modern_course_result_id) REFERENCES modern_course_results(id) "
     "ON DELETE CASCADE)";
 
-constexpr const char *kModernCourseStagesTableSqlV19 =
-    "CREATE TABLE modern_course_stages("
-    "modern_course_result_id INTEGER NOT NULL,stage_index INTEGER NOT NULL,"
-    "chart_path TEXT NOT NULL,chart_md5 TEXT NOT NULL,"
-    "chart_sha256 TEXT NOT NULL,chart_title TEXT NOT NULL,"
-    "chart_artist TEXT NOT NULL,long_note_mode INTEGER NOT NULL,"
-    "score INTEGER NOT NULL,max_score INTEGER NOT NULL,"
-    "max_combo INTEGER NOT NULL,combo_break INTEGER NOT NULL,"
-    "p_great INTEGER NOT NULL,great INTEGER NOT NULL,good INTEGER NOT NULL,"
-    "bad INTEGER NOT NULL,poor INTEGER NOT NULL,k_poor INTEGER NOT NULL,"
-    "fast INTEGER NOT NULL,slow INTEGER NOT NULL,final_gauge REAL NOT NULL,"
-    "clear_type INTEGER NOT NULL,key_mode INTEGER NOT NULL,"
-    "adopted_gauge_type INTEGER NOT NULL,gauge_history_json TEXT NOT NULL,"
-    "judgement_timing_json TEXT,provenance_json TEXT NOT NULL,"
-    "bad_points INTEGER CHECK(bad_points>=0),"
-    "PRIMARY KEY(modern_course_result_id,stage_index),"
-    "CHECK(stage_index>=0 AND stage_index<256),"
-    "CHECK(length(chart_sha256)=64 AND chart_sha256=lower(chart_sha256) AND "
-    "chart_sha256 NOT GLOB '*[^0-9a-f]*'),"
-    "CHECK(chart_md5='' OR (length(chart_md5)=32 AND "
-    "chart_md5=lower(chart_md5) AND chart_md5 NOT GLOB '*[^0-9a-f]*')),"
-    "CHECK(long_note_mode BETWEEN 0 AND 3),CHECK(key_mode>0),"
-    "CHECK(adopted_gauge_type BETWEEN 0 AND 5),"
-    "CHECK(score>=0 AND max_score>0 AND score<=max_score),"
-    "CHECK(max_combo>=0 AND combo_break>=0 AND p_great>=0 AND great>=0 AND "
-    "good>=0 AND bad>=0 AND poor>=0 AND k_poor>=0 AND fast>=0 AND slow>=0),"
-    "CHECK(final_gauge>=0),"
-    "FOREIGN KEY(modern_course_result_id) REFERENCES modern_course_results(id) "
-    "ON DELETE CASCADE)";
-
 constexpr const char *kModernCourseStagesTableSql =
     "CREATE TABLE modern_course_stages("
     "modern_course_result_id INTEGER NOT NULL,stage_index INTEGER NOT NULL,"
@@ -692,7 +631,6 @@ constexpr const char *kModernCourseStagesTableSql =
     "adopted_gauge_type INTEGER NOT NULL,gauge_history_json TEXT NOT NULL,"
     "judgement_timing_json TEXT,provenance_json TEXT NOT NULL,"
     "bad_points INTEGER CHECK(bad_points>=0),"
-    "gauge_evidence TEXT NOT NULL DEFAULT '{}',"
     "PRIMARY KEY(modern_course_result_id,stage_index),"
     "CHECK(stage_index>=0 AND stage_index<256),"
     "CHECK(length(chart_sha256)=64 AND chart_sha256=lower(chart_sha256) AND "
@@ -1470,6 +1408,22 @@ bool inspectModernChartSchemaV11(sqlite3 *database) {
   return true;
 }
 
+bool inspectPendingGaugeEvidence(sqlite3 *database) {
+  NamedSchemaObjectInspection inspection;
+  return inspectNamedSchemaObject(database, "modern_pending_chart_gauge_evidence", "table",
+      "modern_pending_chart_gauge_evidence", pending_gauge_evidence::kTableSql, inspection,
+      "reading pending gauge schema") && inspection.present && inspection.exact;
+}
+
+bool ensurePendingGaugeEvidence(sqlite3 *database) {
+  NamedSchemaObjectInspection inspection;
+  if (!inspectNamedSchemaObject(database, "modern_pending_chart_gauge_evidence", "table",
+      "modern_pending_chart_gauge_evidence", pending_gauge_evidence::kTableSql, inspection,
+      "reading pending gauge schema")) return false;
+  return inspection.present ? inspection.exact :
+      execSql(database, pending_gauge_evidence::kTableSql, "creating pending gauge schema");
+}
+
 bool inspectModernCourseSchemaWithReplayTable(
     sqlite3 *database, const char *chartResultsTableSql,
     const char *courseStagesTableSql, const char *replayTableSql,
@@ -1571,14 +1525,6 @@ bool inspectModernCourseSchemaV18(sqlite3 *database) {
          inspectPendingModernCourseScoreSchema(database);
 }
 
-bool inspectModernCourseSchemaV19(sqlite3 *database) {
-  return inspectModernCourseSchemaWithReplayTable(
-             database, kModernChartResultsTableSqlV19, kModernCourseStagesTableSqlV19,
-             kModernReplayFilesTableSql,
-             kModernReplayFileReservationsTableSql) &&
-         inspectPendingModernCourseScoreSchema(database);
-}
-
 bool inspectModernCourseSchema(sqlite3 *database) {
   return inspectModernCourseSchemaWithReplayTable(
              database, kModernChartResultsTableSql, kModernCourseStagesTableSql,
@@ -1598,7 +1544,6 @@ bool createModernChartSchema(sqlite3 *database) {
       inspectModernCourseSchemaV15(database) ||
       inspectModernCourseSchemaV17(database) ||
       inspectModernCourseSchemaV18(database) ||
-      inspectModernCourseSchemaV19(database) ||
       inspectModernCourseSchema(database)) {
     return true;
   }
@@ -1632,7 +1577,6 @@ bool migrateModernCourseSchema(sqlite3 *database) {
       inspectModernCourseSchemaV15(database) ||
       inspectModernCourseSchemaV17(database) ||
       inspectModernCourseSchemaV18(database) ||
-      inspectModernCourseSchemaV19(database) ||
       inspectModernCourseSchema(database)) {
     return true;
   }
@@ -1680,7 +1624,6 @@ bool migrateModernReplayDeletionSchema(sqlite3 *database) {
   if (inspectModernCourseSchemaV14(database) ||
       inspectModernCourseSchemaV17(database) ||
       inspectModernCourseSchemaV18(database) ||
-      inspectModernCourseSchemaV19(database) ||
       inspectModernCourseSchema(database)) {
     return true;
   }
@@ -1723,7 +1666,6 @@ bool migrateModernCourseScoreOutbox(sqlite3 *database) {
   if (inspectModernCourseSchemaV15(database) ||
       inspectModernCourseSchemaV17(database) ||
       inspectModernCourseSchemaV18(database) ||
-      inspectModernCourseSchemaV19(database) ||
       inspectModernCourseSchema(database)) {
     return true;
   }
@@ -1750,7 +1692,6 @@ bool migrateModernCourseScoreOutbox(sqlite3 *database) {
 bool migrateModernReplayOwnershipSchema(sqlite3 *database) {
   if (inspectModernCourseSchemaV17(database) ||
       inspectModernCourseSchemaV18(database) ||
-      inspectModernCourseSchemaV19(database) ||
       inspectModernCourseSchema(database)) {
     return true;
   }
@@ -1856,7 +1797,6 @@ bool replaySchemaIntegrityHolds(sqlite3 *database) {
 
 bool migrateOpenKeyModeSchema(sqlite3 *database) {
   if (inspectModernCourseSchemaV18(database) ||
-      inspectModernCourseSchemaV19(database) ||
       inspectModernCourseSchema(database)) {
     return true;
   }
@@ -1905,7 +1845,7 @@ bool migrateOpenKeyModeSchema(sqlite3 *database) {
 }
 
 bool migrateBadPointsSchema(sqlite3 *database) {
-  if (inspectModernCourseSchemaV19(database) || inspectModernCourseSchema(database)) {
+  if (inspectModernCourseSchema(database)) {
     return true;
   }
   if (!inspectModernCourseSchemaV18(database)) {
@@ -1922,16 +1862,6 @@ bool migrateBadPointsSchema(sqlite3 *database) {
                  "ALTER TABLE modern_course_stages ADD COLUMN "
                  "bad_points INTEGER CHECK(bad_points>=0)",
                  "adding course stage bad points") &&
-         inspectModernCourseSchemaV19(database);
-}
-
-bool migrateGaugeEvidenceSchema(sqlite3 *database) {
-  if (inspectModernCourseSchema(database)) return true;
-  if (!inspectModernCourseSchemaV19(database)) return false;
-  return execSql(database, "ALTER TABLE modern_chart_results ADD COLUMN gauge_evidence TEXT NOT NULL DEFAULT '{}'",
-                 "adding chart gauge evidence") &&
-         execSql(database, "ALTER TABLE modern_course_stages ADD COLUMN gauge_evidence TEXT NOT NULL DEFAULT '{}'",
-                 "adding course stage gauge evidence") &&
          inspectModernCourseSchema(database);
 }
 
@@ -2008,6 +1938,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
         receiptState != IrSubmissionReceiptsSchemaState::SummaryOwnedExact ||
         remoteScoresState != IrRemoteScoresSchemaState::Exact ||
         !inspectModernCourseSchema(db) ||
+        !inspectPendingGaugeEvidence(db) ||
         !replay_repository_legacy::inspectCurrentSchema(db)) {
       SDL_Log("Refusing current replay database with a partial or unexpected "
               "outbox, receipt, or remote score schema");
@@ -2043,7 +1974,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
     IrRemoteScoresSchemaState remoteScoresState{};
     const bool modernCourseSchemaExact =
         inspectModernCourseSchemaV17(db) || inspectModernCourseSchemaV18(db) ||
-        inspectModernCourseSchemaV19(db) || inspectModernCourseSchema(db);
+        inspectModernCourseSchema(db);
     if (!inspectReplayResultOutboxSchema(db, resultOutboxState) ||
         !inspectIrOutboxSchema(db, irOutboxState) ||
         !inspectIrSubmissionReceiptsSchema(db, receiptState) ||
@@ -2056,7 +1987,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
         !replay_repository_legacy::inspectCurrentSchema(db) ||
         !migrateOpenKeyModeSchema(db) ||
         !migrateBadPointsSchema(db) ||
-        !migrateGaugeEvidenceSchema(db) ||
+        !ensurePendingGaugeEvidence(db) ||
         !setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion)) {
       SDL_Log("Refusing version %d replay database with a partial or "
               "unexpected current schema", *version);
@@ -2108,7 +2039,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
         !migrateModernReplayOwnershipSchema(db) ||
         !migrateOpenKeyModeSchema(db) ||
         !migrateBadPointsSchema(db) ||
-        !migrateGaugeEvidenceSchema(db) ||
+        !ensurePendingGaugeEvidence(db) ||
         !setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion)) {
       return false;
     }
@@ -2372,8 +2303,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
   if (!migrateModernCourseScoreOutbox(db) ||
       !migrateModernReplayOwnershipSchema(db) ||
       !migrateOpenKeyModeSchema(db) ||
-      !migrateBadPointsSchema(db) ||
-      !migrateGaugeEvidenceSchema(db)) {
+      !migrateBadPointsSchema(db)) {
     return false;
   }
 
@@ -2397,6 +2327,7 @@ bool migrateReplayDatabaseSchema(sqlite3 *db) {
   }
   if (!execSql(db, kModernChartScoreMetricsTableSql,
                "creating modern chart score metrics") ||
+      !ensurePendingGaugeEvidence(db) ||
       !setDatabaseUserVersion(db, kReplayDatabaseSchemaVersion)) {
     return false;
   }
@@ -2514,6 +2445,7 @@ bool createCurrentReplaySchema(sqlite3 *database) {
       kModernReplayStemSequencesTableSql,
       kIrSubmissionSnapshotsTableSql,
       kModernPendingChartScoresTableSql,
+      pending_gauge_evidence::kTableSql,
       kModernPendingCourseScoresTableSql,
       kModernChartScoreMetricsTableSql,
       kModernChartShaIndexSql,
@@ -3011,7 +2943,7 @@ bool replay_repository_detail::PrepareReplayDatabaseOnConnection(
   if (*version == 0 && !hasSchema) {
     return CreateReplayTablesOnConnection(database);
   }
-  if (*version >= kReplayDatabaseSchemaVersion) {
+  if (*version >= 19) {
     return MigrateSchema(database);
   }
   return prepareReplayDatabaseWithCompaction(database, path);

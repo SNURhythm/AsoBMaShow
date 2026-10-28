@@ -6704,6 +6704,7 @@ void GamePlayScene::scheduleResultTransition(std::uint64_t delayMillis) {
           .averageJudgeMicros =
               timing ? std::optional<std::int64_t>(timing->averageJudgeMicros)
                      : std::nullopt,
+          .gaugeEvidence = state->gaugeEvidence,
       };
       auto attempt = replay::captureChartReplayPersistenceAttempt(
           capture, constructionDiagnostic);

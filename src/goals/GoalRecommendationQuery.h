@@ -29,7 +29,29 @@ inline std::string recommendationCandidatesSql() {
 }
 inline std::string recommendationPageSql() {
   return recommendationCandidatesSql() +
-      " SELECT sha256,ln_mode,target,score,max_score,remaining FROM candidates WHERE target=?"
-      " ORDER BY remaining, 1.0*remaining/max_score, sha256, ln_mode LIMIT 20 OFFSET ?";
+      " SELECT sha256,ln_mode,target,score,max_score,remaining FROM ("
+      "SELECT *,ROW_NUMBER() OVER(PARTITION BY sha256 ORDER BY remaining,1.0*remaining/max_score,ln_mode) AS mode_choice "
+      "FROM candidates WHERE target=?) WHERE mode_choice=1"
+      " ORDER BY remaining, 1.0*remaining/max_score, sha256 LIMIT 20 OFFSET ?";
 }
+inline std::string gaugeRecommendationCandidatesSql() {
+  return R"sql(WITH candidates AS (
+    SELECT g.* FROM score_db.goal_gauge_best g
+    WHERE g.gap <= CASE WHEN g.target<=300 THEN 5 ELSE 0.1 END
+      AND NOT EXISTS (SELECT 1 FROM score_db.score_sha256_clear_rank_cache b
+        WHERE b.chart_sha256=g.chart_sha256 AND b.ln_mode=g.ln_mode AND b.rank>=g.target)
+      AND EXISTS (SELECT 1 FROM chart_meta c WHERE c.sha256=g.chart_sha256
+        AND g.ln_mode=CASE WHEN COALESCE(c.total_long_notes,0)+COALESCE(c.total_backspin_notes,0)=0 THEN 0
+          WHEN c.ln_mode BETWEEN 1 AND 3 THEN c.ln_mode ELSE g.ln_mode END
+        AND (COALESCE(c.total_long_notes,0)+COALESCE(c.total_backspin_notes,0)=0 OR g.ln_mode BETWEEN 1 AND 3))
+  ))sql";
+}
+inline std::string gaugeRecommendationPageSql() {
+  return gaugeRecommendationCandidatesSql() +
+      " SELECT chart_sha256,ln_mode,target,gauge_value,border,death_notes,total_notes,gap FROM ("
+      "SELECT *,ROW_NUMBER() OVER(PARTITION BY chart_sha256 ORDER BY gap,death_notes,ln_mode) AS mode_choice "
+      "FROM candidates WHERE target=?) WHERE mode_choice=1"
+      " ORDER BY gap,death_notes,chart_sha256 LIMIT 20 OFFSET ?";
+}
+
 }

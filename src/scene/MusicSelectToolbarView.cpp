@@ -348,7 +348,7 @@ void MusicSelectToolbarView::placeGoalBubble() {
   if (!goalBubble_) return;
   for (const auto &control : controls_)
     if (control.control == MusicSelectToolbarControl::Goal && control.button) {
-      goalBubble_->placeFor(*control.button, *this, viewportWidth_, viewportHeight_, true);
+      goalBubble_->placeFor(*control.button, *this, viewportWidth_, viewportHeight_);
       return;
     }
 }

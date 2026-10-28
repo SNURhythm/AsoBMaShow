@@ -131,6 +131,23 @@
 #include <limits>
 #include <sstream>
 namespace {
+// Paint the selected row's bubble outside the recycler clip, beneath modals.
+class SelectedChartGoalOverlay final : public View {
+public:
+  explicit SelectedChartGoalOverlay(std::function<ChartListItemView *()> selected)
+      : selected_(std::move(selected)) {
+    setPositionType(YGPositionTypeAbsolute);
+    for (auto edge : {Edge::Left, Edge::Top, Edge::Right, Edge::Bottom}) setPosition(edge, 0);
+    setZIndex(500);
+  }
+protected:
+  void renderImpl(RenderContext &context) override {
+    if (auto *row = selected_()) row->renderGoalBubble(context);
+  }
+private:
+  std::function<ChartListItemView *()> selected_;
+};
+
 using modal_view::makeModalButton;
 using modal_view::modalPanelBorder;
 using modal_view::styleThemedActionButton;
@@ -1461,7 +1478,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   static constexpr int kChartListItemHeight = 100;
   recyclerView->onCreateView = [this](const ChartMetaRecord &item) {
     return new ChartListItemView(0, 0, rendering::window_width,
-                                 kChartListItemHeight, item);
+                                 kChartListItemHeight, item, true);
   };
   recyclerView->itemHeight = kChartListItemHeight;
   recyclerView->topMargin = 0;
@@ -2560,6 +2577,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
 #endif
   buildFindBmsModal();
   buildUnzipProgressModal();
+  rootLayout->addView(new SelectedChartGoalOverlay([this]() -> ChartListItemView * {
+    return activeTab_ == Tab::Play && !pendingTab_ && recyclerView && recyclerView->getVisible()
+        ? dynamic_cast<ChartListItemView *>(recyclerView->getViewByIndex(recyclerView->selectedIndex)) : nullptr;
+  }));
   rootLayout->addView(overlayPortal);
   reloadProfileSelectionsFromSettings();
   reloadScoreClearRanks();

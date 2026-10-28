@@ -1,4 +1,5 @@
 #include "ScoreRepository.h"
+#include "../goals/GaugeRecommendationStore.h"
 #include "ScoreRepositoryInternal.h"
 
 #include "../BmsMetadataText.h"
@@ -887,17 +888,6 @@ bool inspectScoreVersion14Completion(sqlite3 *db,
   return true;
 }
 
-bool scoreGaugeEvidenceSchemaIsExact(sqlite3 *db) {
-  SqliteStatementHandle columns;
-  if (prepareSqliteStatement(db, "PRAGMA table_info(scores)", columns) != SQLITE_OK) return false;
-  while (sqlite3_step(columns) == SQLITE_ROW) {
-    if (sqliteColumnString(columns, 1) == "gauge_evidence")
-      return sqliteColumnString(columns, 2) == "TEXT" && sqlite3_column_int(columns, 3) == 1 &&
-             sqliteColumnString(columns, 4) == "'{}'";
-  }
-  return false;
-}
-
 bool currentScoreSchemaIsValid(sqlite3 *db) {
   std::string versionError;
   const auto version = readSqliteUserVersion(db, versionError);
@@ -913,7 +903,8 @@ bool currentScoreSchemaIsValid(sqlite3 *db) {
          scoreAttemptIdentitySchemaIsExact(db) &&
          scoreImportedIrSchemaIsExact(db) &&
          courseScoreProjectionSchemaIsExact(db) &&
-         courseBadPointsSchemaIsExact(db) && scoreGaugeEvidenceSchemaIsExact(db);
+         courseBadPointsSchemaIsExact(db) &&
+         chart_goals::gaugeSummaryInstalled(db);
 }
 
 bool migrateScoreDatabaseToVersion9(sqlite3 *db) {
@@ -1401,7 +1392,6 @@ std::string createScoreTableSql(std::string_view tableName,
          "poor INTEGER NOT NULL,"
          "kpoor INTEGER NOT NULL,"
          "bad_points INTEGER,"
-         "gauge_evidence TEXT NOT NULL DEFAULT '{}',"
          "average_judge_micros INTEGER,"
          "fast INTEGER NOT NULL,"
          "slow INTEGER NOT NULL,"
@@ -1908,18 +1898,6 @@ bool migrateScoreDatabaseToVersion14(sqlite3 *db) {
   return setDatabaseUserVersion(db, 14);
 }
 
-bool migrateScoreGaugeEvidence(sqlite3 *db) {
-  std::string error;
-  const auto version = readSqliteUserVersion(db, error);
-  if (!version) return false;
-  if (*version >= 15) return scoreGaugeEvidenceSchemaIsExact(db);
-  if (!ensureSqliteTableColumnLogged(db, "scores", "gauge_evidence",
-      "ALTER TABLE scores ADD COLUMN gauge_evidence TEXT NOT NULL DEFAULT '{}'",
-      "reading score gauge schema", "adding score gauge evidence", logSqlErrorText) || !scoreGaugeEvidenceSchemaIsExact(db)) return false;
-  // Do not skip a pending chart-metadata-dependent duration migration.
-  return *version < 14 || setDatabaseUserVersion(db, kScoreDatabaseSchemaVersion);
-}
-
 std::string scoreMigrationHashHasValue(std::string_view columnName) {
   const std::string column(columnName);
   return "scores." + column + " IS NOT NULL AND trim(scores." + column +
@@ -2290,7 +2268,8 @@ bool createCurrentScoreSchema(sqlite3 *db) {
     logSqlErrorText("creating current score summaries", *error);
     return false;
   }
-  return ensureScorePlayDurationInvariant(db, false) &&
+  return chart_goals::ensureGaugeSummary(db) &&
+         ensureScorePlayDurationInvariant(db, false) &&
          recordScoreDataRepairs(db) &&
          setDatabaseUserVersion(db, kScoreDatabaseSchemaVersion) &&
          currentScoreSchemaIsValid(db);
@@ -2442,10 +2421,12 @@ bool score_repository_detail::EnsureSchemaOnConnection(
       !migrateScoreDatabaseToVersion11(db) ||
       !migrateScoreDatabaseToVersion12(db, chartDatabasePath) ||
       !migrateScoreDatabaseToVersion13(db, chartDatabasePath) ||
-      !migrateScoreDatabaseToVersion14(db) ||
-      !migrateScoreGaugeEvidence(db)) {
+      !migrateScoreDatabaseToVersion14(db)) {
     return false;
   }
+  const auto migratedVersion = readSqliteUserVersion(db, versionError);
+  if (!migratedVersion || !chart_goals::ensureGaugeSummary(db) ||
+      (*migratedVersion >= 14 && !setDatabaseUserVersion(db, kScoreDatabaseSchemaVersion))) return false;
   bool repairsComplete = false;
   if (!scoreDataRepairsComplete(db, repairsComplete) ||
       !ensureScorePlayDurationInvariant(db, !repairsComplete) ||

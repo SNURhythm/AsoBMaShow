@@ -97,6 +97,9 @@ int main() {
     require(p.x >= 20 && p.y >= 16 && p.x + p.width <= 302 && p.y + p.height <= 186,
             "goal bubble stays inside every safe-area edge");
   }
+  const auto aboveFlag = placeGoalBubble(160, 100, 40, 40, 400, 300, {});
+  require(aboveFlag.x + aboveFlag.width / 2 == 180 && aboveFlag.y + aboveFlag.height == 96,
+          "goal bubble is centered above the flag with a four-pixel gap");
   testFolderBindingOnlyMaterializesVisibleLabel();
 
   {
@@ -276,6 +279,11 @@ int main() {
     row.onSelected();
     require(bubble->getVisible() && bar->getVisible() && lampText->getText() == "HARD" &&
                 scoreText->getText() == "AAA", "selected unfinished goal shows lamp bar and targets");
+    row.applyYogaLayout();
+    const int lampCenter = (bar->getX() + lampText->getX() + lampText->getWidth()) / 2;
+    const int scoreCenter = scoreText->getX() + scoreText->getWidth() / 2;
+    require(std::abs(lampCenter - scoreCenter) <= 1,
+            "lamp bar and label are centered together above the centered score");
     row.setGoalTarget(-1, "", "99.99%");
     require(bubble->getVisible() && !bar->getVisible() && scoreText->getText() == "99.99%",
             "score-only goals omit the lamp bar and show the custom rate");

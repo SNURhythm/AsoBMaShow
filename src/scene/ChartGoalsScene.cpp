@@ -288,10 +288,24 @@ void ChartGoalsScene::recommendGoal(const ChartMetaRecord &record, int mode, int
   showGoal({.chart=record.meta, .longNoteMode=mode});
   if (loadFailed_) return;
   editing_ = true;
-  draft_.target.scoreNumerator = rank;
-  draft_.target.scoreDenominator = 27;
-  customScore_ = false;
+  if (rank >= 100) draft_.target.lamp = rank;
+  else {
+    draft_.target.scoreNumerator = rank;
+    draft_.target.scoreDenominator = 27;
+  }
+  customScore_ = draft_.target.scoreNumerator > 0 && draft_.target.scoreDenominator != 27;
   customRate_ = rateText(draft_.target);
+}
+void ChartGoalsScene::changeDraftMode(int mode) {
+  const auto target = draft_.target;
+  const auto custom = customScore_;
+  const auto rate = customRate_;
+  showGoal({.chart=draft_.chart, .longNoteMode=mode});
+  if (loadFailed_) return;
+  editing_ = true;
+  draft_.target = target;
+  customScore_ = custom;
+  customRate_ = rate;
 }
 void ChartGoalsScene::showGoal(chart_goals::Goal goal) {
   message_.clear(); confirmRemove_ = false;
@@ -404,7 +418,24 @@ void ChartGoalsScene::build() {
   } else if (selected_ || editing_) {
     auto *detail = card(body);
     goalIdentity(detail, draft_.chart, resolved_ ? &*resolved_ : nullptr, 28);
-    label(detail, scope(draft_), 18)->setThemedColor(app_theme::textSecondary);
+    const bool selectableMode = scoreLongNoteModeForClearLamp(draft_.chart, 1) == 1 &&
+        scoreLongNoteModeForClearLamp(draft_.chart, 2) == 2 &&
+        scoreLongNoteModeForClearLamp(draft_.chart, 3) == 3;
+    if (selectableMode) {
+      auto *modes = new View();
+      modes->setFlexDirection(FlexDirection::Row)->setGap(8)->setFlexShrink(0);
+      for (int mode : long_note_mode::kPlayableValues) {
+        auto *button = action(modes, long_note_mode::idFromValue(mode), [this, mode] {
+          later([this, mode] {
+            if (editing_) changeDraftMode(mode);
+            else showGoal({.chart=draft_.chart, .longNoteMode=mode});
+          });
+        });
+        button->setFlex(1);
+        button->setSelected(mode == draft_.longNoteMode);
+      }
+      detail->addView(modes);
+    } else label(detail, scope(draft_), 18)->setThemedColor(app_theme::textSecondary);
     if (editing_) {
       std::string error;
       const auto current = context.scoreRepository.PreviewChartGoal(draft_, error);
@@ -440,21 +471,6 @@ void ChartGoalsScene::build() {
       }
       action(detail, i18n::tr("goals.ui.save"), [this] { later([this] { saveGoal(); }); }, app_theme::ActionCategory::Primary);
     } else {
-      // Selectable long-note charts can have separate goals for each mode.
-      if (scoreLongNoteModeForClearLamp(draft_.chart, 1) == 1 &&
-          scoreLongNoteModeForClearLamp(draft_.chart, 2) == 2 &&
-          scoreLongNoteModeForClearLamp(draft_.chart, 3) == 3) {
-        auto *modes = new View();
-        modes->setFlexDirection(FlexDirection::Row)->setGap(8)->setFlexShrink(0);
-        for (int mode : long_note_mode::kPlayableValues) {
-          auto *button = action(modes, long_note_mode::idFromValue(mode), [this, mode] {
-            later([this, mode] { showGoal({.chart=draft_.chart, .longNoteMode=mode}); });
-          });
-          button->setFlex(1);
-          button->setSelected(mode == draft_.longNoteMode);
-        }
-        detail->addView(modes);
-      }
       targets(detail, draft_.target);
       const auto setDate = chart_goals::localDateTime(draft_.setAtUnixMillis);
       label(detail, i18n::format("goals.ui.set_date", {{"date", setDate.empty()
@@ -496,9 +512,10 @@ void ChartGoalsScene::build() {
     if (!recommendations_.empty()) {
       label(body, i18n::tr("goals.ui.recommendations"), 24);
       label(body, i18n::tr("goals.ui.near_help"), 18);
+      label(body, i18n::tr("goals.ui.gauge_near_help"), 18);
     }
     for (const auto &[rank, group] : recommendations_) {
-      action(body, i18n::format("goals.ui.near_rank", {{"rank", kombo::scoreRankLabel(rank)},
+      action(body, i18n::format("goals.ui.near_rank", {{"rank", rank>=100 ? kombo::lampLabel(rank) : kombo::scoreRankLabel(rank)},
           {"count", std::to_string(group.count)}}), [this, rank] { later([this, rank] {
         auto &group = recommendations_[rank];
         if (group.expanded) group.expanded = false;
@@ -508,10 +525,22 @@ void ChartGoalsScene::build() {
       for (const auto &[candidate, record] : group.rows) {
         auto *row = card(body);
         goalIdentity(row, record.meta, &record, 24);
-        label(row, scope({.chart=record.meta, .longNoteMode=candidate.longNoteMode}), 18);
-        label(row, std::to_string(candidate.score) + " / " + std::to_string(candidate.maxScore) + " EX", 18);
-        action(row, i18n::format("goals.ui.recommend_ex", {{"ex", std::to_string(candidate.remaining)},
-            {"rank", kombo::scoreRankLabel(rank)}}), [this, record, mode=candidate.longNoteMode, rank] {
+        if (rank>=100) {
+          std::ostringstream value;
+          value << std::fixed << std::setprecision(1);
+          if (rank<=300) {
+            value << candidate.gaugeValue;
+            std::ostringstream border; border << candidate.gaugeBorder;
+            label(row, i18n::format("goals.ui.gauge_value", {{"value",value.str()}, {"border",border.str()}}), 18);
+          } else if (candidate.deathNotes<0) label(row, i18n::tr("goals.ui.gauge_survived"), 18);
+          else {
+            value << 100.0*candidate.deathNotes/candidate.totalNotes;
+            label(row, i18n::format("goals.ui.gauge_death", {{"percent",value.str()}}), 18);
+          }
+        } else label(row, std::to_string(candidate.score) + " / " + std::to_string(candidate.maxScore) + " EX", 18);
+        const auto caption = rank>=100 ? i18n::format("goals.ui.recommend_lamp", {{"lamp",kombo::lampLabel(rank)}})
+            : i18n::format("goals.ui.recommend_ex", {{"ex",std::to_string(candidate.remaining)}, {"rank",kombo::scoreRankLabel(rank)}});
+        action(row, caption, [this, record, mode=candidate.longNoteMode, rank] {
           later([this, record, mode, rank] { recommendGoal(record, mode, rank); });
         });
       }

@@ -10,7 +10,10 @@ The Personal goals screen offers expandable **Near E** through **Near MAX**
 groups for best scores within 2 percentage points below their next rank. Empty
 groups are hidden. Candidates are ordered by EX points remaining, nearest first, with 20 per
 page. Tapping a recommendation opens the normal goal editor with that rank
-selected; saving remains explicit. Existing lamp targets are preserved.
+selected; saving remains explicit. Existing lamp targets are preserved. LN/CN/HCN
+evidence is combined into one chart card per target group. The editor provides
+a mode picker for selectable-mode charts, initially using the closest evidence;
+changing the mode keeps the draft targets without saving.
 
 Candidates come from the profile's best-score summary, with indexed chart-hash
 lookups to verify library membership and LN scope. Historical plays are not
@@ -19,23 +22,40 @@ is loaded only for the displayed page. Recommended, active, achieved, and detail
 cards show jacket artwork and a tinted difficulty-table label (or chart level
 when no table label is available).
 
-Gauge recommendations are not included: final gauge and best lamp alone do not
-measure proximity consistently across gauge types. A future implementation would
-need explicit gauge-specific rules and a compact summary of eligible attempts,
-rather than reading replay gauge histories while opening this screen.
+Lamp recommendation groups use the recorded evidence for Assisted Easy, Easy,
+Normal, Hard, EX Hard, and Full Combo (Hazard). Groove gauges qualify within
+**5 gauge points** below their ruleset/profile's clear border; full-chart
+background clears also qualify. Survival gauges qualify when they first died in
+the **final 10% of notes**, or survived the complete chart in the background.
+Incomplete plays cannot supply final groove values or claim complete survival.
 
-New plays now retain compact evidence for every gauge, including when Gauge Auto
+Each group hides lamps already earned and sorts by closeness: gauge points below
+the border for groove gauges, remaining chart proportion after death for survival
+gauges. Selecting a candidate prefills the lamp in the normal editor and preserves
+any score target. Background evidence is a recommendation, not an earned lamp.
+
+Only eligible, unmodified local chart plays with recorded evidence contribute;
+unknown historical evidence, practice/autoplay/assisted plays, altered playback,
+and course stages do not. A per-profile summary retains the best evidence for
+each chart/LN mode/lamp (at most six rows), updated atomically with score inserts.
+Existing profiles start with empty gauge summaries. Browsing uses these indexed
+summaries and the existing best-lamp cache, without scanning play history or replay
+files. Grade-family gauges are course evidence and do not create chart goals.
+
+New plays calculate every gauge, including when Gauge Auto
 Shift is off. Each survival gauge stores the passed-note count at its first
 death, or **-1** if it never died during the played portion. Each groove gauge
 stores its final calculated value. The evidence also retains how many notes
 were actually passed, so surviving an aborted portion is not mistaken for
 surviving the whole chart. Abort cleanup does not overwrite this evidence.
 
-Migrated records expose **0** death counts and values with evidence marked as
-unknown; they are not treated as observed failures or successful survival.
-Evidence is saved with durable chart/course-stage results and projected into
-profile scores, and is included in new-result integrity checks. No replay-history
-backfill is performed during migration.
+Historical records have unknown gauge evidence and cannot supply these recommendations.
+Only numeric bests remain in the score database. In-flight chart saves temporarily
+keep typed numeric evidence in the replay database's pending-save tables, with
+integrity validation, so recovery can finish the score and summary transaction.
+Acknowledging that save deletes the temporary evidence. Completed chart and course
+result history does not store a gauge-evidence payload, and migration performs no
+history backfill.
 
 ## Using goals
 
@@ -123,3 +143,7 @@ pages independently. Titles and subtitles share one heading.
 Goal lists, details, and the editor show the chart jacket (or banner), with a
 music-note placeholder while artwork is loading or unavailable. Artwork for
 visible goal pages is resolved from chart metadata and loaded asynchronously.
+
+Target bubbles center above the flag, with the lamp bar and label centered
+together and the score centered beneath them. The native
+selector draws its bubble above the list clip; safe-area edges remain respected.

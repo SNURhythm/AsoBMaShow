@@ -28,6 +28,7 @@ private:
   void reload();
   void loadRecommendations(int rank, int offset);
   void recommendGoal(const ChartMetaRecord &, int mode, int rank);
+  void changeDraftMode(int mode);
   struct RecommendationGroup {
     int count = 0, offset = 0;
     bool expanded = false;

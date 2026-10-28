@@ -1,5 +1,5 @@
 #include "ScoreRepository.h"
-#include "../GaugeEvidenceJson.h"
+#include "../goals/GaugeRecommendationStore.h"
 #include "../kombo/KomboStore.h"
 #include <random>
 #include "ScoreRepositoryInternal.h"
@@ -178,9 +178,6 @@ score_repository_detail::ScoreWriteOutcome insertScoreWriteOnConnectionImpl(
     std::abort();
   }
 
-  if (!score.gaugeEvidence.valid(score.maxScore / 2))
-    return {.diagnostic = "invalid score gauge evidence"};
-
   std::string query =
       "INSERT INTO scores ("
       "chart_path, chart_md5, chart_sha256, ln_mode, chart_title, "
@@ -189,12 +186,12 @@ score_repository_detail::ScoreWriteOutcome insertScoreWriteOnConnectionImpl(
       "play_duration_seconds, bad_points, average_judge_micros, "
       "ruleset_version, eligibility, provenance_json, attempt_id, "
       "score_source, source_provider_id, source_server_origin, "
-      "source_remote_score_id, source_sync_generation, gauge_evidence";
+      "source_remote_score_id, source_sync_generation";
   if (createdAt.has_value()) {
     query += ", created_at";
   }
   query += ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, "
-           "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?";
+           "?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?";
   if (createdAt.has_value()) {
     query += ", ?";
   }
@@ -284,11 +281,10 @@ score_repository_detail::ScoreWriteOutcome insertScoreWriteOnConnectionImpl(
   } else {
     bound = bound && sqlite3_bind_null(stmt.get(), bindIndex++) == SQLITE_OK;
   }
-  bindText(serializeGaugeEvidence(score.gaugeEvidence));
   if (createdAt.has_value()) {
     bindText(*createdAt);
   }
-  const int expectedBindIndex = createdAt.has_value() ? 35 : 34;
+  const int expectedBindIndex = createdAt.has_value() ? 34 : 33;
   if (!bound || bindIndex != expectedBindIndex) {
     logSqlError("binding score insert", db);
     return {.diagnostic = "could not bind the score insert"};
@@ -353,7 +349,7 @@ result_persistence::ProjectionOutcome classifyProjectedScoreCollision(
           "combo_break, pgreat, great, good, bad, poor, kpoor, fast, slow, "
           "final_gauge, clear_type, play_duration_seconds, ruleset_version, "
           "eligibility, "
-          "provenance_json, created_at, average_judge_micros, bad_points, gauge_evidence FROM scores "
+          "provenance_json, created_at, average_judge_micros, bad_points FROM scores "
           "WHERE attempt_id = ?",
           stmt, "preparing projected score collision lookup",
           logSqlErrorText) ||
@@ -423,10 +419,6 @@ result_persistence::ProjectionOutcome classifyProjectedScoreCollision(
             .diagnostic = "stored projected score BP differs from the attempted payload"};
   }
   stored.badPoints = pending.score.badPoints;
-  const auto evidence = deserializeGaugeEvidence(sqliteColumnString(stmt.get(), 28));
-  if (!evidence) return {.status = ProjectionStatus::IntegrityConflict,
-                         .diagnostic = "stored projected gauge evidence is invalid"};
-  stored.gaugeEvidence = *evidence;
 
   const double storedGauge = sqlite3_column_double(stmt.get(), 19);
   if (!std::isfinite(storedGauge) ||
@@ -1016,12 +1008,17 @@ bool ScoreRepository::SaveScore(const bms_parser::ChartMeta &chartMeta,
   }
   sqlite3 *db = impl_->sessionDatabase;
 
+  std::string transactionError;
+  SqliteTransactionHandle transaction(db, "BEGIN IMMEDIATE", transactionError);
+  if (!transaction.active()) return false;
   const bool result =
       score_repository_detail::InsertScoreWriteOnConnection(
           db, score, std::nullopt, std::nullopt, provenanceJson)
-          .status == score_repository_detail::ScoreWriteStatus::Inserted;
+          .status == score_repository_detail::ScoreWriteStatus::Inserted &&
+      chart_goals::updateGaugeSummary(db, score, state.gaugeEvidence);
   if (result) {
     score_repository_detail::RecordChartGoalAchievementsOnConnection(db, score.chartSha256);
+    if (!transaction.commit(transactionError)) return false;
     gScoreRevision.fetch_add(1, std::memory_order_relaxed);
   }
   return result;
@@ -1034,7 +1031,7 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
 
   profile_database_activity::WriteGuard writeGuard;
   if (!uuid::isCanonicalLowerV4(pending.attemptId) ||
-      !pending.hasExactlyOneOwner()) {
+      !pending.hasExactlyOneOwner() || !pending.gaugeEvidence.valid(pending.score.maxScore / 2)) {
     return {.status = ProjectionStatus::IntegrityConflict,
             .diagnostic =
                 "score projection attempt or owner identity is invalid"};
@@ -1075,6 +1072,8 @@ result_persistence::ProjectionOutcome ScoreRepository::SaveProjectedScore(
           *provenanceJson,
           {.averageJudgeMicros = pending.averageJudgeMicros});
   if (inserted.status == score_repository_detail::ScoreWriteStatus::Inserted) {
+    if (!chart_goals::updateGaugeSummary(db, pending.score, pending.gaugeEvidence))
+      return {.status = ProjectionStatus::StorageFailure, .diagnostic = "could not update gauge recommendations"};
     kombo::PlayProgress komboProgress;
     try {
       const auto &score = pending.score;

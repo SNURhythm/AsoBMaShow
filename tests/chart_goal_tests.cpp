@@ -75,6 +75,50 @@ int main() {
     }
     CHECK(sqlite3_step(query) == SQLITE_DONE);
     query.reset();
+    CHECK(sqlite3_exec(recommendations,
+        "CREATE TABLE score_db.goal_gauge_best(chart_sha256 TEXT,ln_mode INTEGER,target INTEGER,gauge_value REAL,border REAL,death_notes INTEGER,total_notes INTEGER,gap REAL);"
+        "CREATE INDEX score_db.goal_gauge_proximity ON goal_gauge_best(target,gap,death_notes,chart_sha256,ln_mode);"
+        "CREATE TABLE score_db.score_sha256_clear_rank_cache(chart_sha256 TEXT,ln_mode INTEGER,rank INTEGER,PRIMARY KEY(chart_sha256,ln_mode));"
+        "INSERT INTO chart_meta VALUES('closest','duplicate',0,0,0);"
+        "INSERT INTO score_db.goal_gauge_best VALUES('closest',0,400,0,0,90,100,0.1),"
+        "('smaller-percent',0,400,10,0,-1,100,0),('farther',0,400,0,0,89,100,0.11),"
+        "('missing',0,400,0,0,99,100,0.01),('closest',1,400,0,0,99,100,0.01),"
+        "('closest',0,300,75,80,0,100,5),('farther',0,300,74.9,80,0,100,5.1);",
+        nullptr,nullptr,nullptr)==SQLITE_OK);
+    CHECK(prepareSqliteStatement(recommendations, gaugeRecommendationPageSql(), query)==SQLITE_OK);
+    CHECK(sqlite3_bind_int(query,1,400)==SQLITE_OK && sqlite3_bind_int(query,2,0)==SQLITE_OK);
+    CHECK(sqlite3_step(query)==SQLITE_ROW && sqliteColumnString(query,0)=="smaller-percent");
+    CHECK(sqlite3_step(query)==SQLITE_ROW && sqliteColumnString(query,0)=="closest");
+    CHECK(sqlite3_step(query)==SQLITE_DONE);
+    query.reset();
+    CHECK(sqlite3_exec(recommendations,"INSERT INTO score_db.score_sha256_clear_rank_cache VALUES('closest',0,400)",nullptr,nullptr,nullptr)==SQLITE_OK);
+    CHECK(prepareSqliteStatement(recommendations,gaugeRecommendationCandidatesSql()+" SELECT COUNT(*) FROM candidates",query)==SQLITE_OK);
+    CHECK(sqlite3_step(query)==SQLITE_ROW && sqlite3_column_int(query,0)==1); // Reached lamps, including easier lamps, disappear.
+    query.reset();
+    // A selectable chart appears once per target, using its closest mode.
+    CHECK(sqlite3_exec(recommendations,
+        "UPDATE chart_meta SET total_long_notes=10 WHERE sha256='closest';"
+        "INSERT INTO score_db.score_sha256_best_score_cache VALUES('closest',1,1777,2000),('closest',2,1776,2000),('closest',3,1777,2000);"
+        "INSERT INTO score_db.goal_gauge_best VALUES('closest',2,400,0,0,95,100,0.05),('closest',3,400,0,0,99,100,0.01);",
+        nullptr,nullptr,nullptr)==SQLITE_OK);
+    CHECK(prepareSqliteStatement(recommendations,recommendationPageSql(),query)==SQLITE_OK);
+    CHECK(sqlite3_bind_int(query,1,24)==SQLITE_OK && sqlite3_bind_int(query,2,0)==SQLITE_OK);
+    int matchingChart = 0;
+    while (sqlite3_step(query)==SQLITE_ROW) if (sqliteColumnString(query,0)=="closest") {
+      ++matchingChart;
+      CHECK(sqlite3_column_int(query,1)==1);
+    }
+    CHECK(matchingChart==1);
+    query.reset();
+    CHECK(prepareSqliteStatement(recommendations,gaugeRecommendationPageSql(),query)==SQLITE_OK);
+    CHECK(sqlite3_bind_int(query,1,400)==SQLITE_OK && sqlite3_bind_int(query,2,0)==SQLITE_OK);
+    matchingChart = 0;
+    while (sqlite3_step(query)==SQLITE_ROW) if (sqliteColumnString(query,0)=="closest") {
+      ++matchingChart;
+      CHECK(sqlite3_column_int(query,1)==1);
+    }
+    CHECK(matchingChart==1);
+    query.reset();
     sqlite3_close(recommendations);
   }
   GoalResultPresentation celebration;

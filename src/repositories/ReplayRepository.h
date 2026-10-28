@@ -4,6 +4,7 @@
 
 #include "../CourseIdentity.h"
 #include "../ModernResult.h"
+#include "../scene/play/GaugeEvidence.h"
 #include "../ReplayData.h"
 #include "../ResultPersistenceModel.h"
 #include "../ir/IrOutboxModels.h"
@@ -110,6 +111,7 @@ struct PendingChartScoreWrite {
   std::string createdAt;
   ChartScoreWrite score;
   std::optional<std::int64_t> averageJudgeMicros;
+  GaugeEvidence gaugeEvidence; // Pending-save data only; deleted after projection.
 
   [[nodiscard]] bool hasExactlyOneOwner() const noexcept {
     return (replayId > 0) != (modernResultId > 0);
@@ -551,7 +553,8 @@ public:
       const std::optional<ir::IrSubmissionSnapshot> &snapshot,
       const std::optional<ModernReplayFileAttachment> &replayFile,
       std::span<const ir::IrOutboxDraft> irDrafts = {},
-      std::optional<std::int64_t> averageJudgeMicros = std::nullopt);
+      std::optional<std::int64_t> averageJudgeMicros = std::nullopt,
+      const GaugeEvidence &gaugeEvidence = {});
   ModernChartResultReadOutcome
   LoadModernChartResultByAttempt(std::string_view attemptId);
   ModernChartResultReadOutcome LoadModernChartResult(int resultId);

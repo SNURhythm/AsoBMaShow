@@ -50,6 +50,7 @@ struct ChartGoalsScene {
   void init();
   void showGoal(chart_goals::Goal);
   void recommendGoal(const ChartMetaRecord &, int, int);
+  void changeDraftMode(int);
   void resolveChart() {}
   bool checkProfile();
   void later(std::function<void()>);
@@ -81,6 +82,21 @@ int main() {
   existing.recommendGoal(Record{saved.chart}, 3, 24);
   assert(!existing.selected_ && existing.editing_ && existing.draft_.longNoteMode == 3);
   assert(existing.draft_.target.scoreNumerator == 24);
+  existing.recommendGoal(Record{saved.chart}, 2, 500);
+  assert(existing.editing_ && existing.draft_.target.lamp == 500);
+  assert(existing.draft_.target.scoreNumerator == 24 && existing.draft_.longNoteMode == 2);
+  assert(existing.context.scoreRepository.saves == 0);
+  existing.context.scoreRepository.stored->goal.target = {.lamp=400, .scoreNumerator=91, .scoreDenominator=100};
+  existing.recommendGoal(Record{saved.chart}, 2, 500);
+  assert(existing.customScore_ && existing.customRate_ == "91.00");
+  assert(existing.draft_.target.scoreNumerator == 91 && existing.draft_.target.scoreDenominator == 100);
+  existing.changeDraftMode(3);
+  assert(existing.editing_ && !existing.selected_ && existing.draft_.longNoteMode == 3);
+  assert(existing.draft_.target.lamp == 500 && existing.customRate_ == "91.00");
+  existing.changeDraftMode(2);
+  assert(existing.editing_ && existing.selected_ && existing.draft_.longNoteMode == 2);
+  assert(existing.draft_.target.lamp == 500 && existing.customScore_);
+  assert(existing.context.scoreRepository.saves == 0);
   ChartGoalsScene scene;
   scene.saveGoal();
   assert(scene.context.scoreRepository.saves == 0 && scene.editing_);

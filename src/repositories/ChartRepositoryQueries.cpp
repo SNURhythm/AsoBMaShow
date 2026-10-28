@@ -3938,10 +3938,17 @@ std::map<int, int> ChartRepository::Session::GoalRecommendationCounts() {
   auto *db = impl_->database();
   SqliteStatementHandle query;
   if (prepareSqliteStatement(db, chart_goals::recommendationCandidatesSql() +
-      " SELECT target, COUNT(*) FROM candidates GROUP BY target", query) != SQLITE_OK)
+      " SELECT target, COUNT(DISTINCT sha256) FROM candidates GROUP BY target", query) != SQLITE_OK)
     throw std::runtime_error(sqliteDatabaseError(db));
   std::map<int, int> counts;
   int rc;
+  while ((rc = sqlite3_step(query)) == SQLITE_ROW)
+    counts[sqlite3_column_int(query, 0)] = sqlite3_column_int(query, 1);
+  if (rc != SQLITE_DONE) throw std::runtime_error(sqliteDatabaseError(db));
+  query.reset();
+  if (prepareSqliteStatement(db, chart_goals::gaugeRecommendationCandidatesSql() +
+      " SELECT target,COUNT(DISTINCT chart_sha256) FROM candidates GROUP BY target", query) != SQLITE_OK)
+    throw std::runtime_error(sqliteDatabaseError(db));
   while ((rc = sqlite3_step(query)) == SQLITE_ROW)
     counts[sqlite3_column_int(query, 0)] = sqlite3_column_int(query, 1);
   if (rc != SQLITE_DONE) throw std::runtime_error(sqliteDatabaseError(db));
@@ -3952,14 +3959,20 @@ std::vector<GoalRecommendation> ChartRepository::Session::GoalRecommendations(in
   if (prepared.error()) throw std::runtime_error(*prepared.error());
   auto *db = impl_->database();
   SqliteStatementHandle query;
-  if (prepareSqliteStatement(db, chart_goals::recommendationPageSql(), query) != SQLITE_OK ||
+  if (prepareSqliteStatement(db, (target>=100 ? chart_goals::gaugeRecommendationPageSql() : chart_goals::recommendationPageSql()), query) != SQLITE_OK ||
       sqlite3_bind_int(query, 1, target) != SQLITE_OK || sqlite3_bind_int(query, 2, std::max(0, offset)) != SQLITE_OK)
     throw std::runtime_error(sqliteDatabaseError(db));
   std::vector<GoalRecommendation> rows;
   int rc;
-  while ((rc = sqlite3_step(query)) == SQLITE_ROW)
-    rows.push_back({sqliteColumnString(query, 0), sqlite3_column_int(query, 1), sqlite3_column_int(query, 2),
-                   sqlite3_column_int(query, 3), sqlite3_column_int(query, 4), sqlite3_column_int(query, 5)});
+  while ((rc = sqlite3_step(query)) == SQLITE_ROW) {
+    if (target>=100) {
+      rows.push_back({.sha256=sqliteColumnString(query, 0), .longNoteMode=sqlite3_column_int(query, 1),
+          .target=sqlite3_column_int(query, 2), .gaugeValue=static_cast<float>(sqlite3_column_double(query, 3)),
+          .gaugeBorder=static_cast<float>(sqlite3_column_double(query, 4)), .deathNotes=sqlite3_column_int(query, 5),
+          .totalNotes=sqlite3_column_int(query, 6)});
+    } else rows.push_back({sqliteColumnString(query, 0), sqlite3_column_int(query, 1), sqlite3_column_int(query, 2),
+                          sqlite3_column_int(query, 3), sqlite3_column_int(query, 4), sqlite3_column_int(query, 5)});
+  }
   if (rc != SQLITE_DONE) throw std::runtime_error(sqliteDatabaseError(db));
   return rows;
 }

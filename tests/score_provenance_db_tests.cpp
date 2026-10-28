@@ -1056,7 +1056,8 @@ void removeImportedIrFromCurrentSchema(sqlite3 *db) {
     execOrAbort(db, "DROP INDEX idx_scores_imported_ir_identity");
   }
   execOrAbort(db,
-              "DROP TRIGGER IF EXISTS score_sha256_summary_after_insert");
+              "DROP TRIGGER IF EXISTS score_sha256_summary_after_insert;"
+              "DROP TABLE IF EXISTS goal_gauge_best");
   for (const std::string column : {"source_sync_generation",
                                    "source_remote_score_id",
                                    "source_server_origin",

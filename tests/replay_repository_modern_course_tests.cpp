@@ -193,17 +193,7 @@ void testAtomicCourseStageExactRetryAndStrictRead() {
     assert(!tableExists(database.get(), table));
   }
 
-  auto completed = result(1);
-  for (auto &stage : completed.stages) {
-    auto &evidence = stage.score.gaugeEvidence;
-    evidence.recorded = true;
-    evidence.passedNotes = 5;
-    evidence.survivalMask = 1u << gaugeTypeIndex(GaugeType::Hard);
-    evidence.deathPassedNotes[gaugeTypeIndex(GaugeType::Hard)] = -1;
-    evidence.values[gaugeTypeIndex(GaugeType::Hard)] = stage.score.finalGauge;
-    evidence.values[gaugeTypeIndex(GaugeType::Normal)] = 73 + stage.stageIndex;
-  }
-  completed.resultFingerprint = result_persistence::modernResultFingerprint(completed);
+  const auto completed = result(1);
   const auto reservation = reserve(repository, completed);
   const auto file = attachment(reservation);
   const replay::ReplayFileOwnershipReceipt ownership{

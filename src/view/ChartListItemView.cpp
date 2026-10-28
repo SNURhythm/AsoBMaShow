@@ -83,8 +83,8 @@ std::string keyModeDescription(const bms_parser::ChartMeta &meta) {
 } // namespace
 
 ChartListItemView::ChartListItemView(int x, int y, int width, int height,
-                                     const ChartMetaRecord &record)
-    : View(x, y, width, height) {
+                                     const ChartMetaRecord &record, bool goalBubbleInOverlay)
+    : View(x, y, width, height), goalBubbleInOverlay_(goalBubbleInOverlay) {
   View::LayoutBatchScope layoutBatch;
   (void)record;
   setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignStretch);
@@ -201,9 +201,20 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
   });
   contentCard->addView(goalButton);
   goalBubble = new GoalTargetBubble();
-  addView(goalBubble);
+  if (!goalBubbleInOverlay_) addView(goalBubble);
   onUnselected();
   applyYogaLayout();
+}
+
+ChartListItemView::~ChartListItemView() {
+  if (goalBubbleInOverlay_) delete goalBubble;
+}
+
+void ChartListItemView::renderGoalBubble(RenderContext &context) {
+  if (!goalBubbleInOverlay_ || !selected || !getVisible()) return;
+  goalBubble->placeFor(*goalButton, *this, rendering::window_width, rendering::window_height, true);
+  goalBubble->applyYogaLayout();
+  goalBubble->render(context);
 }
 
 void ChartListItemView::onLayout() {
@@ -215,10 +226,10 @@ void ChartListItemView::onLayout() {
     scoreRankColumn->setWidth(compact ? kCompactBestWidth : kBestWidth);
   }
   refreshColumnWidths();
-  if (goalBubble) goalBubble->placeFor(*goalButton, *this, rendering::window_width, rendering::window_height);
+  if (goalBubble) goalBubble->placeFor(*goalButton, *this, rendering::window_width, rendering::window_height, goalBubbleInOverlay_);
 }
 void ChartListItemView::onMove(int, int) {
-  if (goalBubble) goalBubble->placeFor(*goalButton, *this, rendering::window_width, rendering::window_height);
+  if (goalBubble) goalBubble->placeFor(*goalButton, *this, rendering::window_width, rendering::window_height, goalBubbleInOverlay_);
 }
 
 void ChartListItemView::refreshColumnWidths() {

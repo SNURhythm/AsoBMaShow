@@ -34,7 +34,8 @@ captureChartReplayPersistenceAttempt(const ChartReplayCapture &capture,
 
     ChartReplayPersistenceAttempt attempt{
         .result = capture.result,
-        .averageJudgeMicros = capture.averageJudgeMicros};
+        .averageJudgeMicros = capture.averageJudgeMicros,
+        .gaugeEvidence = capture.gaugeEvidence};
     std::string snapshotDiagnostic;
     attempt.irSnapshot =
         ir::captureIrSubmissionSnapshot(attempt.result, snapshotDiagnostic);
