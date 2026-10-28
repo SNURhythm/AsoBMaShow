@@ -117,7 +117,10 @@ void field(View *parent, const std::string &caption, std::string &value,
   label(parent, caption, 18);
   auto *input = new TextInputBox(app_theme::font, 22);
   input->setHeight(rendering::compactMenuCanvasActive ? 66 : 52)->setFlexShrink(0)->setPadding(Edge::All, 10)->setCornerRadius(14);
-  input->setThemedBackgroundColor(app_theme::insetSurface);
+  input->setThemedBackgroundColor([] {
+    return app_theme::activeMode() == app_theme::ThemeMode::Light
+        ? Color(224, 232, 244, 255) : Color(43, 53, 72, 255);
+  });
   input->setThemedColor(app_theme::textPrimary);
   input->setEditingText(value);
   parent->addView(input);
