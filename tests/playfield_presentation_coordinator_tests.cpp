@@ -425,7 +425,9 @@ void testBuiltInDefaultWarmsAndReusesOneBgaFrame() {
   RenderContext render;
   const auto result = coordinator.render(render);
   const auto timings = cpu::endFrame(41);
-  expect(timings.stages[static_cast<unsigned>(cpu::Stage::BgaPrepare)].count == 1 &&
+  expect(timings.stages[static_cast<unsigned>(cpu::Stage::BuiltInPrepare)].count == 1 &&
+             timings.stages[static_cast<unsigned>(cpu::Stage::BuiltInRender)].count == 1 &&
+             timings.stages[static_cast<unsigned>(cpu::Stage::BgaPrepare)].count == 1 &&
              timings.stages[static_cast<unsigned>(cpu::Stage::SkinPrepare)].count == 0 &&
              timings.stages[static_cast<unsigned>(cpu::Stage::SkinSubmit)].count == 0,
          "timing follows the actual selected presentation and sole BGA preparation");
@@ -472,7 +474,9 @@ void testSkinSuccessSubmitsNoBuiltInWork() {
   RenderContext render;
   const auto result = coordinator.render(render);
   const auto timings = cpu::endFrame(42);
-  expect(timings.stages[static_cast<unsigned>(cpu::Stage::BgaPrepare)].count == 1 &&
+  expect(timings.stages[static_cast<unsigned>(cpu::Stage::BuiltInPrepare)].count == 0 &&
+             timings.stages[static_cast<unsigned>(cpu::Stage::BuiltInRender)].count == 0 &&
+             timings.stages[static_cast<unsigned>(cpu::Stage::BgaPrepare)].count == 1 &&
              timings.stages[static_cast<unsigned>(cpu::Stage::SkinPrepare)].count == 1 &&
              timings.stages[static_cast<unsigned>(cpu::Stage::SkinSubmit)].count == 1,
          "timing follows the actual selected presentation and sole BGA preparation");

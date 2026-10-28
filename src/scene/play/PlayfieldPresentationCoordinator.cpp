@@ -211,6 +211,8 @@ PresentationFrameOutcome PlayfieldPresentationCoordinator::prepareFrame(
 
   if (!pending.hadSkin) {
     try {
+      const video::frameCpuTiming::Scope cpuBuiltInPrepare(
+          video::frameCpuTiming::Stage::BuiltInPrepare);
       pending.builtInPrepare = builtIn_->prepareFrame(state, projection);
     } catch (...) {
       pending.builtInPrepare = PresentationFrameOutcome::CriticalFailure;
@@ -452,6 +454,8 @@ PlayfieldPresentationCoordinator::renderBuiltIn(RenderContext &context,
                                                 PendingFrame pending) {
   PresentationFrameResult result;
   try {
+    const video::frameCpuTiming::Scope cpuBuiltInRender(
+        video::frameCpuTiming::Stage::BuiltInRender);
     result = builtIn_->render(context);
   } catch (...) {
     result.outcome = PresentationFrameOutcome::CriticalFailure;

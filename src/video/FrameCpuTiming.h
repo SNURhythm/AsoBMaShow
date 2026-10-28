@@ -8,13 +8,13 @@ namespace video::frameCpuTiming {
 enum class Stage : unsigned {
   SceneUpdate, SceneRender, GameplayUpdate, Capture, Projection, SkinPrepare,
   SkinSubmit, BgaPrepare, FullscreenBga, FrameSubmit, DeferredWork,
-  ResultPersistence, RealtimeStop, Count
+  ResultPersistence, RealtimeStop, BuiltInPrepare, BuiltInRender, Count
 };
 inline constexpr std::array<const char *, static_cast<unsigned>(Stage::Count)>
     stageNames{"scene_update", "scene_render", "gameplay_update", "capture",
                "projection", "skin_prepare", "skin_submit", "bga_prepare",
                "fullscreen_bga", "frame_submit", "deferred_work",
-               "result_persistence", "realtime_stop"};
+               "result_persistence", "realtime_stop", "built_in_prepare", "built_in_render"};
 enum class GameplayPhase : unsigned { Unknown, Preparing, Active, Paused, Ending, PostNotes };
 enum class GameplayMode : unsigned { Unknown, Manual, Autoplay, Replay, Practice };
 inline constexpr std::array<const char *, 6> phaseNames{

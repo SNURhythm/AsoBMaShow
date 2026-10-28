@@ -33,6 +33,8 @@ Each stage exports `cpu_<name>_seconds` and `cpu_<name>_count`. The duration is 
 | `gameplay_update` | `GamePlayScene::update`, including all its early-return/terminal branches |
 | `capture` | Gameplay graph/authority/note-state construction and immutable frame capture |
 | `projection` | Visible playfield projection/traversal after capture |
+| `built_in_prepare` | Built-in presentation preparation, including snapshot consumption and HUD synchronization |
+| `built_in_render` | Built-in presentation drawing, including note traversal and HUD; excludes the surrounding scene UI |
 | `skin_prepare` | Selected skin frame preparation/evaluation |
 | `skin_submit` | Selected skin render, including preflight, drawing command preparation and its post-commit work |
 | `bga_prepare` | Coordinator's sole prepared BGA frame acquisition/update |
@@ -42,7 +44,7 @@ Each stage exports `cpu_<name>_seconds` and `cpu_<name>_count`. The duration is 
 | `result_persistence` | `scheduleResultTransition`, including synchronous result/replay preparation and persistence before scheduling |
 | `realtime_stop` | Stopping/transferring realtime gameplay authority |
 
-**Durations are inclusive elapsed wall time, not CPU busy time.** They can include I/O, locks or scheduling waits. `scene_update` contains `gameplay_update`; gameplay update can contain persistence/authority stop. `scene_render` contains capture, projection, skin and BGA preparation. Deferred work can contain gameplay cleanup/authority stop. Do not sum parents with children or subtract an entire stage from a parent unless that call actually occurred inside it. Built-in rendering and other work remain in the scene totals without a dedicated child stage. These intervals do not cover every main-loop operation.
+**Durations are inclusive elapsed wall time, not CPU busy time.** They can include I/O, locks or scheduling waits. `scene_update` contains `gameplay_update`; gameplay update can contain persistence/authority stop. `scene_render` contains capture, projection, skin and BGA preparation. Built-in preparation and rendering are inside `scene_render` and are only recorded when that path runs. Deferred work can contain gameplay cleanup/authority stop. Do not sum parents with children or subtract an entire stage from a parent unless that call actually occurred inside it. Built-in rendering and other work remain in the scene totals without a dedicated child stage. These intervals do not cover every main-loop operation.
 
 The existing GPU timestamps still measure whole command-buffer GPU work. `fullscreen_bga`, `skin_submit`, and `frame_submit` are CPU-side intervals, not GPU pass timers. The recorder does not measure input-to-sound or input-to-photon latency.
 

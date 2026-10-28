@@ -55,8 +55,8 @@ void testCpuStagesAndPhases() {
   std::string header, row;
   std::getline(csv, header);
   std::getline(csv, row);
-  assert(std::count(header.begin(), header.end(), ',') == 48);
-  assert(std::count(row.begin(), row.end(), ',') == 48);
+  assert(std::count(header.begin(), header.end(), ',') == 52);
+  assert(std::count(row.begin(), row.end(), ',') == 52);
   const auto next = recorder.begin(7, 8, 9, 2);
   recorder.recordCpuFrame(first, data, 999);
   rows = recorder.snapshot();
