@@ -1,0 +1,251 @@
+{
+  "method": "All gameplay-tagged displayed records; paired per-frame deltas in ms; linearly interpolated quantiles at (n-1)*p. No outlier filtering. Counts of submission misses include missing-display rows. Captures are not controlled matched frame pairs.",
+  "captures": {
+    "23": {
+      "source_name": "AsoBMaShow-performance-log 23.txt",
+      "source_sha256": "5007a4a61d44ec3d9ef7a21a87c07f1bf9897b7b43d297b8a120cc0dfcb3af4b",
+      "header": "Metal presentation timing v1; clock=CAMediaTime_seconds; capacity=8192; dropped_updates=0; rows=7764",
+      "first_frame": 1,
+      "last_frame": 7764,
+      "span_seconds": 66.65841379101039,
+      "counts": {
+        "callbacks": 7764,
+        "gameplay": 6939,
+        "submitted": 6761,
+        "displayed": 6754,
+        "missing_display": 7,
+        "late_request": 1,
+        "late_schedule": 1,
+        "display_more_than_1ms_late": 0,
+        "no_preparation_start": 0
+      },
+      "displayed_gameplay_metrics_ms": {
+        "preparation_delay": {
+          "n": 6754,
+          "mean": 0.00909,
+          "median": 0.006792,
+          "p95": 0.014875,
+          "p99": 0.027578,
+          "minimum": 0.001792,
+          "maximum": 4.034292
+        },
+        "preparation_to_request": {
+          "n": 6754,
+          "mean": 1.197723,
+          "median": 1.140313,
+          "p95": 1.840748,
+          "p99": 2.876502,
+          "minimum": 0.086541,
+          "maximum": 5.511
+        },
+        "gpu_duration": {
+          "n": 6754,
+          "mean": 1.12469,
+          "median": 1.121625,
+          "p95": 1.2678,
+          "p99": 1.322059,
+          "minimum": 0.852,
+          "maximum": 1.907167
+        },
+        "gpu_end_to_display": {
+          "n": 6754,
+          "mean": 14.048668,
+          "median": 14.139354,
+          "p95": 14.545617,
+          "p99": 14.819166,
+          "minimum": 8.84,
+          "maximum": 15.213583
+        },
+        "preparation_to_display": {
+          "n": 6754,
+          "mean": 16.604144,
+          "median": 16.614521,
+          "p95": 16.655973,
+          "p99": 16.66527,
+          "minimum": 12.476292,
+          "maximum": 16.675542
+        },
+        "request_deadline_margin": {
+          "n": 6754,
+          "mean": 7.067689,
+          "median": 7.140334,
+          "p95": 7.521752,
+          "p99": 7.85585,
+          "minimum": 2.108875,
+          "maximum": 8.084125
+        },
+        "display_minus_target": {
+          "n": 6754,
+          "mean": 0.005295,
+          "median": 0.008459,
+          "p95": 0.030348,
+          "p99": 0.03225,
+          "minimum": -0.187584,
+          "maximum": 0.032791
+        }
+      },
+      "display_gaps_above_12ms": [
+        {
+          "from_frame": 703,
+          "to_frame": 705,
+          "ms": 125.001916
+        },
+        {
+          "from_frame": 1359,
+          "to_frame": 1361,
+          "ms": 16.667
+        },
+        {
+          "from_frame": 7299,
+          "to_frame": 7479,
+          "ms": 1500.02275
+        }
+      ],
+      "late_frames": [
+        {
+          "frame": 704,
+          "wait_ms": 0.004875,
+          "cpu_ms": 116.737583,
+          "request_lateness_ms": 108.492708,
+          "display_minus_target_ms": null
+        }
+      ]
+    },
+    "24": {
+      "source_name": "AsoBMaShow-performance-log 24.txt",
+      "source_sha256": "203d3a8a2dc3ed8d20af31f0a5352791e038b734ca33b9e88a01a5c499dedfd3",
+      "header": "Metal presentation timing v1; clock=CAMediaTime_seconds; capacity=8192; dropped_updates=0; rows=8192",
+      "first_frame": 169,
+      "last_frame": 8360,
+      "span_seconds": 69.48437541699968,
+      "counts": {
+        "callbacks": 8192,
+        "gameplay": 6860,
+        "submitted": 6769,
+        "displayed": 6765,
+        "missing_display": 4,
+        "late_request": 3,
+        "late_schedule": 3,
+        "display_more_than_1ms_late": 2,
+        "no_preparation_start": 0
+      },
+      "displayed_gameplay_metrics_ms": {
+        "preparation_delay": {
+          "n": 6765,
+          "mean": 3.608804,
+          "median": 3.844833,
+          "p95": 3.887325,
+          "p99": 3.921571,
+          "minimum": 0.002042,
+          "maximum": 4.040541
+        },
+        "preparation_to_request": {
+          "n": 6765,
+          "mean": 1.187445,
+          "median": 1.141292,
+          "p95": 1.821458,
+          "p99": 2.374796,
+          "minimum": 0.095625,
+          "maximum": 18.417084
+        },
+        "gpu_duration": {
+          "n": 6765,
+          "mean": 1.109535,
+          "median": 1.109,
+          "p95": 1.253475,
+          "p99": 1.31014,
+          "minimum": 0.94625,
+          "maximum": 2.557
+        },
+        "gpu_end_to_display": {
+          "n": 6765,
+          "mean": 10.283843,
+          "median": 10.137375,
+          "p95": 12.394492,
+          "p99": 14.333616,
+          "minimum": 7.056125,
+          "maximum": 16.267625
+        },
+        "preparation_to_display": {
+          "n": 6765,
+          "mean": 13.009724,
+          "median": 12.789125,
+          "p95": 15.033267,
+          "p99": 16.530469,
+          "minimum": 8.329167,
+          "maximum": 30.528959
+        },
+        "request_deadline_margin": {
+          "n": 6765,
+          "mean": 3.478216,
+          "median": 3.3535,
+          "p95": 5.672216,
+          "p99": 7.341647,
+          "minimum": -12.891042,
+          "maximum": 8.140041
+        },
+        "display_minus_target": {
+          "n": 6765,
+          "mean": 0.010629,
+          "median": 0.011208,
+          "p95": 0.030709,
+          "p99": 0.032333,
+          "minimum": -8.302791,
+          "maximum": 16.6695
+        }
+      },
+      "display_gaps_above_12ms": [
+        {
+          "from_frame": 1298,
+          "to_frame": 1299,
+          "ms": 16.666958
+        },
+        {
+          "from_frame": 1377,
+          "to_frame": 1378,
+          "ms": 25.0005
+        },
+        {
+          "from_frame": 2035,
+          "to_frame": 2037,
+          "ms": 16.667
+        },
+        {
+          "from_frame": 7797,
+          "to_frame": 7799,
+          "ms": 16.667
+        },
+        {
+          "from_frame": 8063,
+          "to_frame": 8155,
+          "ms": 766.678125
+        }
+      ],
+      "late_frames": [
+        {
+          "frame": 1378,
+          "wait_ms": 2.680791,
+          "cpu_ms": 18.417084,
+          "request_lateness_ms": 12.891042,
+          "display_minus_target_ms": 16.6695
+        },
+        {
+          "frame": 2036,
+          "wait_ms": 3.8665,
+          "cpu_ms": 6.927458,
+          "request_lateness_ms": 2.486708,
+          "display_minus_target_ms": null
+        },
+        {
+          "frame": 7798,
+          "wait_ms": 3.421417,
+          "cpu_ms": 5.223667,
+          "request_lateness_ms": 0.345667,
+          "display_minus_target_ms": null
+        }
+      ]
+    }
+  },
+  "median_age_reduction_ms": 3.825396,
+  "median_age_reduction_percent": 23.024413
+}
