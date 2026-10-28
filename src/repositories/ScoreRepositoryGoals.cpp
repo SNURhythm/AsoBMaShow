@@ -67,6 +67,27 @@ std::optional<chart_goals::Index> ScoreRepository::LoadChartGoalIndex(std::strin
   try { return chart_goals::loadIndex(impl_->sessionDatabase); }
   catch (const std::exception &failure) { error = failure.what(); return {}; }
 }
+std::optional<chart_goals::GoalProgress> ScoreRepository::PreviewChartGoal(
+    const chart_goals::Goal &goal, std::string &error) {
+  profile_database_activity::WriteGuard guard;
+  std::lock_guard lock(impl_->sessionMutex);
+  error.clear();
+  if (!EnsureSessionDatabaseLocked()) { error = "Score storage is unavailable."; return {}; }
+  SqliteTransactionHandle tx(impl_->sessionDatabase, "BEGIN", error);
+  if (!tx.active()) return {};
+  try {
+    auto normalized = goal;
+    normalized.longNoteMode = goalMode(goal.chart, goal.longNoteMode);
+    // A new editor has no target yet; its current records are still useful.
+    chart_goals::GoalProgress result{.goal=std::move(normalized)};
+    result.progress.bestScore = score_repository_detail::LoadBestScoreOnConnection(
+        impl_->sessionDatabase, result.goal.chart, {}, {}, result.goal.longNoteMode);
+    result.progress.bestClear = score_repository_detail::LoadBestClearScoreOnConnection(
+        impl_->sessionDatabase, result.goal.chart, {}, {}, result.goal.longNoteMode, {}, true);
+    if (!tx.commit(error)) return {};
+    return result;
+  } catch (const std::exception &failure) { error = failure.what(); return {}; }
+}
 std::optional<chart_goals::ProgressPage> ScoreRepository::LoadChartGoals(int offset, std::string &error) {
   profile_database_activity::WriteGuard guard;
   std::lock_guard lock(impl_->sessionMutex);

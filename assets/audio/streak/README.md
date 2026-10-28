@@ -53,3 +53,13 @@ playing its chime. Successful freeze purchase plays the shimmer. Simultaneous
 promotions play one cue; dismissing the drawer or resuming after the animation
 has finished does not play a late cue. Rendering and layout rebuilds never
 trigger audio.
+
+## Goal achievement
+
+`goal-achieved.wav` is a separate trumpet-style major-triad fanfare for personal
+goals. Reproduce it with `scripts/generate_goal_sound.py` using the Earshot
+revision above. It combines deterministic harmonic brass synthesis, Earshot room
+DSP, and a quiet `swish/stick` bank layer. It is synthesized, not a recorded
+trumpet. The bundled mono PCM cue peaks at -12 dBFS and remains below the
+256 KiB loader limit. `goal-achieved-review.json` records Earshot artifact and
+semantic feedback. The multi-note tail-rise observation is intentional.

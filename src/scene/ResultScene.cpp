@@ -4695,7 +4695,7 @@ void ResultScene::updateGoalAchievement() {
   const auto now = SDL_GetTicks();
   if (goalPresentation_.start(now, streakPresentation_.active() || persistenceDecisionRequired())) {
     buildGoalAchievement();
-    streakSounds_.play(context.jukebox.audioRuntime(), streak::Sound::Complete);
+    streakSounds_.play(context.jukebox.audioRuntime(), streak::Sound::GoalAchieved);
   }
   if (goalPresentation_.finish(now)) {
     if (goalAchievementView_) goalAchievementView_->setVisible(false);

@@ -508,6 +508,11 @@ void testPersonalGoalsUseProfileAndIndependentBestRecords() {
                            remoteScore("goal-lamp", 'a', 160, 500)};
   assert(scores.ReplaceImportedIrScores(kProvider, kOrigin, 1, remote).status ==
          ImportedIrScoreProjectionStatus::Applied);
+  auto draft = goal;
+  draft.target = {}; // Best records must also work before choosing any target.
+  const auto preview = scores.PreviewChartGoal(draft, error);
+  assert(preview && error.empty() && preview->progress.bestScore->score == 190);
+  assert(preview->progress.bestClear->clearType == 500);
   saved = scores.LoadChartGoal(goal.chart, 3, error);
   assert(saved && saved->progress.achieved);
   assert(saved->goal.setAtUnixMillis == setAt && saved->goal.achievedAtUnixMillis >= setAt);

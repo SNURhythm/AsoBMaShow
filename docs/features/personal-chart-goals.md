@@ -71,3 +71,7 @@ Switching profiles discards unsaved goal edits and queued navigation.
 Behavioral coverage is in `chart_goal_tests`, `ir_score_import_projection_tests`,
 and `chart_goals_scene_tests`. The rationale and limitations of the motivation
 research are in [the ecosystem report](../research/rhythm-game-motivation-2026-10-28.md).
+
+The goal editor shows the current best lamp and EX score before saving, including eligible imported records for the selected LN scope.
+
+New achievements play a short trumpet-style fanfare when the result banner appears, using the existing system sound bus and master volume.

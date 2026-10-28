@@ -4,7 +4,7 @@
 #include <limits>
 
 namespace streak {
-enum class Sound { Progress, Complete, Freeze, RoundAdvance };
+enum class Sound { Progress, Complete, Freeze, RoundAdvance, GoalAchieved };
 
 // Short bundled cues use the existing system bus (and therefore master volume).
 // Scene ownership releases handles safely; rendering never triggers playback.
@@ -23,11 +23,11 @@ public:
     audio_ = &audio;
     const auto index = static_cast<std::size_t>(cue);
     if (!handles_[index]) {
-      constexpr std::array names{"progress.wav", "complete.wav", "freeze.wav", "round-advance.wav"};
+      constexpr std::array names{"progress.wav", "complete.wav", "freeze.wav", "round-advance.wav", "goal-achieved.wav"};
       std::atomic_bool cancelled{false};
       const auto loaded = audio.loadSkinSound(
           fspath_to_path_t(std::filesystem::path("assets/audio/streak") / names[index]),
-          // This limit covers the whole shared skin-sound cache. Our four
+          // This limit covers the whole shared skin-sound cache. Our five
           // trusted bundled files have a separate small encoded-file bound.
           cancelled, 256 * 1024, std::numeric_limits<std::size_t>::max());
       if (!loaded.handle) return;
@@ -37,6 +37,6 @@ public:
   }
 private:
   AudioWrapper *audio_ = nullptr;
-  std::array<std::optional<audio::SkinSoundHandle>, 4> handles_{};
+  std::array<std::optional<audio::SkinSoundHandle>, 5> handles_{};
 };
 } // namespace streak

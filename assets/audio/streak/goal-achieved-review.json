@@ -1,0 +1,219 @@
+{
+  "earshot_commit": "591fa3e028032e6dce56620a20e932e35667e8d8",
+  "sample_rate": 48000,
+  "duration": 1.5279791666666667,
+  "check": {
+    "ok": true,
+    "warnings": [],
+    "notes": [
+      {
+        "code": "tail",
+        "msg": "the tail rises again by 41 dB (a second event, a roll or a double member)"
+      }
+    ],
+    "summary": "goal-achieved: clean (the tail rises again by 41 dB (a second event, a roll or a double member))",
+    "measures": {
+      "clicks": 0,
+      "edge_db": -240.0,
+      "clip_runs": 0,
+      "overs": 0,
+      "dc_db": -85.3,
+      "ring_z": null,
+      "trunc_db": null,
+      "silence_ms": 0.0,
+      "bump_db": 41.3,
+      "attack_ms": 3.5,
+      "t40_ms": 160.0,
+      "crest_db": 5.2,
+      "res_db": 33.6,
+      "res_hz": 2105,
+      "peak_dbfs": -12.0,
+      "live_ms": 870.25
+    },
+    "glide": {
+      "tonal_share": 1.0,
+      "rise_st": 0.0,
+      "from_s": null,
+      "to_s": null
+    },
+    "layers": {
+      "attacks": [
+        0.022,
+        0.193,
+        0.362
+      ],
+      "count": 3,
+      "pre_swell_ms": 0.0
+    },
+    "context": {
+      "sound": "goal-achieved"
+    }
+  },
+  "feedback": {
+    "summary": "goal-achieved.wav: 'a short triumphant trumpet fanfare' -> strong (unvalidated: music / instrument / voice description) (z +3.8; would rank #1 among 322 vocabulary descriptions; cosine 0.35); 'a brass instrument playing a cheerful victory melody' -> plausible (unvalidated: music / instrument / voice description) (z +2.9; would rank #5 among 322 vocabulary descriptions; cosine 0.26). Forced choice vs your alternatives: 'a short triumphant trumpet fanfare' >99%, 'an electronic alarm buzzer' <1%, 'a bright bell chime' <1%, 'a harsh synthetic beep' <1%. It sounds most like: 'a success chime' (z +3.6), 'cheerful ukulele music' (z +2.9), 'celebratory and joyful music' (z +2.9), 'chiptune video game music' (z +2.5).",
+    "path": "assets/audio/streak/goal-achieved.wav",
+    "start": null,
+    "end": null,
+    "peak_dbfs": -12.0,
+    "query": "a short triumphant trumpet fanfare",
+    "cosine": 0.35,
+    "z": 3.85,
+    "percentile": 100.0,
+    "rank_in_vocab": 1,
+    "p_vs_alts": 1.0,
+    "verdict": "strong",
+    "validated": false,
+    "alts": [
+      {
+        "query": "an electronic alarm buzzer",
+        "p": 0.0,
+        "z": 0.93,
+        "cosine": 0.038
+      },
+      {
+        "query": "a bright bell chime",
+        "p": 0.0,
+        "z": -0.16,
+        "cosine": -0.023
+      },
+      {
+        "query": "a harsh synthetic beep",
+        "p": 0.0,
+        "z": 0.58,
+        "cosine": 0.013
+      }
+    ],
+    "results": [
+      {
+        "query": "a short triumphant trumpet fanfare",
+        "cosine": 0.35,
+        "z": 3.85,
+        "percentile": 100.0,
+        "rank_in_vocab": 1,
+        "vocab_size": 322,
+        "verdict": "strong",
+        "validated": false,
+        "p_vs_alts": 1.0,
+        "alts": [
+          {
+            "query": "an electronic alarm buzzer",
+            "p": 0.0,
+            "z": 0.93,
+            "cosine": 0.038
+          },
+          {
+            "query": "a bright bell chime",
+            "p": 0.0,
+            "z": -0.16,
+            "cosine": -0.023
+          },
+          {
+            "query": "a harsh synthetic beep",
+            "p": 0.0,
+            "z": 0.58,
+            "cosine": 0.013
+          }
+        ]
+      },
+      {
+        "query": "a brass instrument playing a cheerful victory melody",
+        "cosine": 0.258,
+        "z": 2.92,
+        "percentile": 98.8,
+        "rank_in_vocab": 5,
+        "vocab_size": 322,
+        "verdict": "plausible",
+        "validated": false,
+        "p_vs_alts": 1.0,
+        "alts": [
+          {
+            "query": "an electronic alarm buzzer",
+            "p": 0.0,
+            "z": 0.93,
+            "cosine": 0.038
+          },
+          {
+            "query": "a bright bell chime",
+            "p": 0.0,
+            "z": -0.16,
+            "cosine": -0.023
+          },
+          {
+            "query": "a harsh synthetic beep",
+            "p": 0.0,
+            "z": 0.58,
+            "cosine": 0.013
+          }
+        ]
+      }
+    ],
+    "closest_vocab": [
+      {
+        "term": "a success chime",
+        "category": "ui",
+        "z": 3.67,
+        "cosine": 0.403
+      },
+      {
+        "term": "cheerful ukulele music",
+        "category": "music_genre",
+        "z": 2.98,
+        "cosine": 0.306
+      },
+      {
+        "term": "celebratory and joyful music",
+        "category": "music_mood",
+        "z": 2.94,
+        "cosine": 0.289
+      },
+      {
+        "term": "chiptune video game music",
+        "category": "music_genre",
+        "z": 2.59,
+        "cosine": 0.28
+      }
+    ],
+    "verdict_thresholds_z": {
+      "strong": 3.0,
+      "plausible": 2.5,
+      "weak": 2.0
+    },
+    "verdict_evidence": {
+      "strong": {
+        "z": ">= 3",
+        "lr": 1289,
+        "precision_library": 0.98,
+        "precision_even_odds": 1.0,
+        "lr_strict": 51,
+        "precision_library_strict": 0.61,
+        "recall_at_or_above": 0.51
+      },
+      "plausible": {
+        "z": "2.5 - 3",
+        "lr": 21,
+        "precision_library": 0.41,
+        "precision_even_odds": 0.95,
+        "lr_strict": 9.1,
+        "precision_library_strict": 0.22,
+        "recall_at_or_above": 0.63
+      },
+      "weak": {
+        "z": "2 - 2.5",
+        "lr": 12,
+        "precision_library": 0.28,
+        "precision_even_odds": 0.92,
+        "lr_strict": 6.6,
+        "precision_library_strict": 0.17,
+        "recall_at_or_above": 0.76
+      },
+      "no match": {
+        "z": "< 2",
+        "lr": 0.25,
+        "precision_library": 0.008,
+        "precision_even_odds": 0.2,
+        "lr_strict": 0.25,
+        "precision_library_strict": 0.008
+      }
+    }
+  }
+}

@@ -34,6 +34,8 @@ int main() {
     assert(audio.loads == 2 && audio.plays == 3);
     cues.play(audio, streak::Sound::RoundAdvance);
     assert(audio.loads == 3 && audio.plays == 4);
+    cues.play(audio, streak::Sound::GoalAchieved);
+    assert(audio.loads == 4 && audio.plays == 5);
   }
-  assert(audio.disposed == 3);
+  assert(audio.disposed == 4);
 }

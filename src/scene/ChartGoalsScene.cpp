@@ -247,6 +247,20 @@ void ChartGoalsScene::build() {
     if (!draft_.chart.SubTitle.empty()) label(detail, draft_.chart.SubTitle, 21);
     label(detail, scope(draft_), 18)->setThemedColor(app_theme::textSecondary);
     if (editing_) {
+      std::string error;
+      const auto current = context.scoreRepository.PreviewChartGoal(draft_, error);
+      if (current) {
+        const auto &progress = current->progress;
+        lamp(detail, i18n::format("goals.ui.best_lamp", {{"value", streak::lampLabel(
+            progress.bestClear ? progress.bestClear->clearType : -1)}}),
+            progress.bestClear ? progress.bestClear->clearType : -1);
+        std::string best = i18n::tr("goals.ui.no_record");
+        if (progress.bestScore) {
+          best = std::to_string(progress.bestScore->score) + " EX";
+          if (progress.bestScore->maxScore > 0) best += " / " + std::to_string(progress.bestScore->maxScore);
+        }
+        label(detail, i18n::format("goals.ui.best_score", {{"value", best}}));
+      } else label(detail, i18n::tr("goals.ui.storage_error"));
       label(detail, i18n::tr("goals.ui.target_help"), 18);
       std::vector<DropdownView::Option> lamps{{"-1", i18n::tr("goals.ui.no_target")}};
       for (int rank : {100, 150, 200, 300, 400, 500, 600}) lamps.push_back({.id=std::to_string(rank), .label=streak::lampLabel(rank), .leadingColor=clearLampColorForRank(rank)});

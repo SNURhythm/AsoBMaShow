@@ -97,6 +97,8 @@ public:
   bool ResetStreakExtraChallenge(const std::string &assignmentId, streak::DayId expectedDay, std::string &error);
   bool ConfigureStreak(const streak::Config &, streak::DayId &effectiveDay, std::string &error);
   bool BuyStreakFreeze(std::string &error);
+  std::optional<chart_goals::GoalProgress> PreviewChartGoal(
+      const chart_goals::Goal &goal, std::string &error);
   std::optional<chart_goals::ProgressPage> LoadChartGoals(int offset, std::string &error);
   std::optional<chart_goals::Index> LoadChartGoalIndex(std::string &error);
   std::vector<chart_goals::Goal> TakeChartGoalAchievements(std::string_view attemptId);
