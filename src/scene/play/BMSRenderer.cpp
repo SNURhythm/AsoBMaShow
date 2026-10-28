@@ -752,37 +752,37 @@ BMSRenderer::BMSRenderer(
   titleText->setOverflow(TextView::TextOverflow::Marquee);
   titleText->setColor(app_theme::sdl(app_theme::textPrimary()));
 
-  // Keep layout metrics current, but upload only the final text/color when drawn.
+  // Changing HUD values share glyph textures; unsupported text stays deferred.
   judgeText = std::make_unique<TextView>(kHudFontPath, 38);
-  judgeText->setDeferredTextureMaterialization(true);
+  judgeText->setGlyphAtlasEnabled(true);
   judgeText->setAlign(TextView::CENTER);
   judgeText->setVAlign(TextView::MIDDLE);
   judgeText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   judgeText->setOverflow(TextView::TextOverflow::Hidden);
   judgeText->setVisible(false);
   judgementComboText = std::make_unique<TextView>(kHudFontPath, 38);
-  judgementComboText->setDeferredTextureMaterialization(true);
+  judgementComboText->setGlyphAtlasEnabled(true);
   judgementComboText->setAlign(TextView::CENTER);
   judgementComboText->setVAlign(TextView::MIDDLE);
   judgementComboText->setColor(ui_theme::sdl(ui_theme::textPrimary()));
   judgementComboText->setOverflow(TextView::TextOverflow::Hidden);
   judgementComboText->setVisible(false);
   pacemakerDeltaText = std::make_unique<TextView>(kHudFontPath, 32);
-  pacemakerDeltaText->setDeferredTextureMaterialization(true);
+  pacemakerDeltaText->setGlyphAtlasEnabled(true);
   pacemakerDeltaText->setAlign(TextView::CENTER);
   pacemakerDeltaText->setVAlign(TextView::MIDDLE);
   pacemakerDeltaText->setColor(ui_theme::sdl(ui_theme::textMuted()));
   pacemakerDeltaText->setOverflow(TextView::TextOverflow::Hidden);
   pacemakerDeltaText->setVisible(false);
   judgementTimingDirectionText = std::make_unique<TextView>(kHudFontPath, 21);
-  judgementTimingDirectionText->setDeferredTextureMaterialization(true);
+  judgementTimingDirectionText->setGlyphAtlasEnabled(true);
   judgementTimingDirectionText->setAlign(TextView::LEFT);
   judgementTimingDirectionText->setVAlign(TextView::MIDDLE);
   judgementTimingDirectionText->setColor(ui_theme::sdl(ui_theme::cyan()));
   judgementTimingDirectionText->setOverflow(TextView::TextOverflow::Hidden);
   judgementTimingDirectionText->setVisible(false);
   judgementTimingMsText = std::make_unique<TextView>(kHudFontPath, 21);
-  judgementTimingMsText->setDeferredTextureMaterialization(true);
+  judgementTimingMsText->setGlyphAtlasEnabled(true);
   judgementTimingMsText->setAlign(TextView::RIGHT);
   judgementTimingMsText->setVAlign(TextView::MIDDLE);
   judgementTimingMsText->setColor(ui_theme::sdl(ui_theme::textSecondary()));
@@ -791,20 +791,20 @@ BMSRenderer::BMSRenderer(
   refreshJudgementFeedbackTextStyle();
   layoutCenteredJudgementText();
   scoreText = std::make_unique<TextView>(app_theme::boldFont, 34);
-  scoreText->setDeferredTextureMaterialization(true);
+  scoreText->setGlyphAtlasEnabled(true);
   scoreText->setAlign(TextView::LEFT);
   scoreText->setVAlign(TextView::MIDDLE);
   scoreText->setText("SCORE 0");
   scoreText->setColor(app_theme::sdl(app_theme::textPrimary()));
   // This combo belongs to the score panel; judgementComboText stays in-lane.
   comboText = std::make_unique<TextView>(app_theme::font, 24);
-  comboText->setDeferredTextureMaterialization(true);
+  comboText->setGlyphAtlasEnabled(true);
   comboText->setAlign(TextView::RIGHT);
   comboText->setVAlign(TextView::MIDDLE);
   comboText->setText("COMBO 0");
   comboText->setColor(ui_theme::sdl(ui_theme::lime()));
   pacemakerText = std::make_unique<TextView>(app_theme::font, 18);
-  pacemakerText->setDeferredTextureMaterialization(true);
+  pacemakerText->setGlyphAtlasEnabled(true);
   pacemakerText->setAlign(TextView::CENTER);
   pacemakerText->setVAlign(TextView::MIDDLE);
   pacemakerText->setOverflow(TextView::TextOverflow::Hidden);
@@ -812,7 +812,7 @@ BMSRenderer::BMSRenderer(
   pacemakerText->setColor(app_theme::sdl(app_theme::textMuted()));
   pacemakerText->setVisible(false);
   gaugeText = std::make_unique<TextView>(kHudFontPath, 18);
-  gaugeText->setDeferredTextureMaterialization(true);
+  gaugeText->setGlyphAtlasEnabled(true);
   gaugeText->setAlign(TextView::CENTER);
   gaugeText->setVAlign(TextView::MIDDLE);
   gaugeTypeBadge = std::make_unique<View>();
@@ -844,7 +844,7 @@ BMSRenderer::BMSRenderer(
   autoPlayMarkText = createAutoPlayMarkText();
   autoPlayMarkText->setVisible(false);
   laneCoverWhiteNumberText = std::make_unique<TextView>(kHudFontPath, 24);
-  laneCoverWhiteNumberText->setDeferredTextureMaterialization(true);
+  laneCoverWhiteNumberText->setGlyphAtlasEnabled(true);
   laneCoverWhiteNumberText->setAlign(TextView::CENTER);
   laneCoverWhiteNumberText->setVAlign(TextView::MIDDLE);
   laneCoverWhiteNumberText->setOverflow(TextView::TextOverflow::Hidden);
@@ -852,7 +852,7 @@ BMSRenderer::BMSRenderer(
       ui_theme::sdl(Color(255, 255, 255, 255)));
   laneCoverWhiteNumberText->setVisible(false);
   laneCoverVisibleTimeText = std::make_unique<TextView>(kHudFontPath, 24);
-  laneCoverVisibleTimeText->setDeferredTextureMaterialization(true);
+  laneCoverVisibleTimeText->setGlyphAtlasEnabled(true);
   laneCoverVisibleTimeText->setAlign(TextView::CENTER);
   laneCoverVisibleTimeText->setVAlign(TextView::MIDDLE);
   laneCoverVisibleTimeText->setOverflow(TextView::TextOverflow::Hidden);
@@ -870,7 +870,7 @@ BMSRenderer::BMSRenderer(
 
     auto &value = judgementCounterValueTexts[i];
     value = std::make_unique<TextView>(app_theme::boldFont, 24);
-    value->setDeferredTextureMaterialization(true);
+    value->setGlyphAtlasEnabled(true);
     value->setText("0");
     value->setAlign(TextView::CENTER);
     value->setVAlign(TextView::MIDDLE);
@@ -4889,7 +4889,7 @@ void BMSRenderer::refreshJudgementFeedbackTextStyle() {
     const auto weight = bold ? TextView::FontWeight::Bold : TextView::FontWeight::Regular;
     if (view->pointSize() == size && view->fontWeight() == weight) return;
     auto replacement = std::make_unique<TextView>(kHudFontPath, size, weight);
-    replacement->setDeferredTextureMaterialization(true);
+    replacement->setGlyphAtlasEnabled(true);
     replacement->setAlign(align);
     replacement->setVAlign(TextView::MIDDLE);
     replacement->setOverflow(TextView::TextOverflow::Hidden);

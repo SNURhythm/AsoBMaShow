@@ -2,6 +2,7 @@
 #include "TextAnimationTiming.h"
 #include "SdlTtfRuntime.h"
 #include "FontCacheSession.h"
+#include "TextGlyphAtlas.h"
 #include "BundledFontFallbacks.h"
 #if defined(__ANDROID__)
 #include "SystemTextRasterizer.h"
@@ -422,6 +423,7 @@ TextView::~TextView() {
     rendering::UiBatchRenderer::notifyTextureChanged();
     bgfx::destroy(texture);
   }
+  glyphAtlas.reset();
   releaseFontResources();
 }
 
@@ -483,6 +485,18 @@ void TextView::setDeferredTextureMaterialization(bool deferred) {
   }
 }
 
+void TextView::setGlyphAtlasEnabled(bool enabled) {
+  if (enabled == bool(glyphAtlas)) return;
+  if (enabled) {
+    glyphAtlas = std::make_unique<TextGlyphAtlas>();
+    setDeferredTextureMaterialization(true);
+  } else {
+    glyphAtlas.reset();
+  }
+  invalidateTexture();
+  ui::invalidate();
+}
+
 void TextView::renderImpl(RenderContext &context) {
   // A flex row can give a label no space. Empty clip bounds must suppress
   // drawing, not turn a hidden/marquee label into unbounded visible text.
@@ -490,10 +504,11 @@ void TextView::renderImpl(RenderContext &context) {
       (getContentWidth() <= 0 || getContentHeight() <= 0)) {
     return;
   }
-  if (!bgfx::isValid(texture)) {
+  const bool useAtlas = glyphAtlas && !wrapEnabled && glyphAtlas->prepare(font, text);
+  if (!useAtlas && !bgfx::isValid(texture)) {
     createTexture();
   }
-  if (!bgfx::isValid(texture)) {
+  if (!useAtlas && !bgfx::isValid(texture)) {
     return;
   }
 
@@ -512,7 +527,11 @@ void TextView::renderImpl(RenderContext &context) {
                                    std::round(marqueeOffset(getContentWidth())));
   }
 
-  const auto submitText = [this, &context, &drawRect]() {
+  const auto submitText = [this, &context, &drawRect, useAtlas]() {
+    if (useAtlas) {
+      glyphAtlas->render(context, drawRect, color, s_texColor);
+      return;
+    }
     const float left = static_cast<float>(drawRect.x);
     const float top = static_cast<float>(drawRect.y);
     const float right = left + static_cast<float>(drawRect.w);

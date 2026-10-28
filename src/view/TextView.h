@@ -9,6 +9,8 @@
 #include <unordered_map>
 #include <vector>
 
+class TextGlyphAtlas;
+
 class TextView : public View {
 public:
   enum TextAlign { LEFT, CENTER, RIGHT };
@@ -23,6 +25,9 @@ public:
   void setLocalizedText(const i18n::Text &newText);
   [[nodiscard]] const std::string &getText() const { return text; }
   void setDeferredTextureMaterialization(bool deferred);
+  // Reuse glyph textures for supported single-line ASCII; other text uses the
+  // deferred surface renderer. textureHandle() still denotes only that surface.
+  void setGlyphAtlasEnabled(bool enabled);
   void setColor(SDL_Color newColor);
   void setThemedColor(ThemeColorProvider provider);
   void setAlign(TextAlign newAlign);
@@ -135,6 +140,7 @@ protected:
   void createTexture();
 
 private:
+  std::unique_ptr<TextGlyphAtlas> glyphAtlas;
   // One layout for the current text. Raster size and cached glyph selections
   // stay fixed for a view; alignment/color do not change its line breaks.
   std::vector<std::string> cachedWrappedLines;

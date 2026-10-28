@@ -4597,19 +4597,19 @@ void verifyDeferredGameplayHudTextures(const RenderTarget &target) {
                     .visualTimeMicros = kRenderMicros,
                     .bgaTimeMicros = kRenderMicros});
   draw();
-  const auto *before = renderer.judgementFeedbackTextViewsForTesting()[0];
+  const auto *before = renderer.judgementFeedbackTextViewsForTesting()[2];
   const auto text = before->getText();
-  expect(bgfx::isValid(before->textureHandle()) && !text.empty(),
-         "visible HUD text materializes when drawn");
+  expect(!bgfx::isValid(before->textureHandle()) && !text.empty(),
+         "visible HUD text reuses glyphs without a whole-string upload");
   renderer.setJudgementFeedbackStyle(75, true, 75, true);
-  const auto *replacement = renderer.judgementFeedbackTextViewsForTesting()[0];
+  const auto *replacement = renderer.judgementFeedbackTextViewsForTesting()[2];
   expect(!bgfx::isValid(replacement->textureHandle()) &&
              replacement->getText() == text && replacement->textureWidth() > 0 &&
              replacement->textureHeight() > 0,
          "style replacement preserves text and metrics while deferring upload");
   draw();
-  expect(bgfx::isValid(replacement->textureHandle()),
-         "restyled HUD text materializes on its next draw");
+  expect(!bgfx::isValid(replacement->textureHandle()),
+         "restyled HUD text retains glyph atlas rendering");
 }
 
 void verifyIndividualJudgementLabelVisibility(const RenderTarget &target) {

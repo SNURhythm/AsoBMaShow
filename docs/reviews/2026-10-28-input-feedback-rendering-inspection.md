@@ -179,5 +179,43 @@ All four focused suites pass: lane effects, built-in Metal characterization,
 button-enabled/preview behavior and UI batching. Desktop main and the unsigned
 iOS build pass. Independent read-only code review found no correctness issues.
 
-The numeric text atlas remains a separate follow-up. Device GPU-time savings
-have not been measured, and visible input feedback still adds rendering work.
+Device GPU-time savings have not been measured, and visible input feedback
+still adds rendering work.
+
+## Implemented numeric text follow-up
+
+Changing built-in HUD labels now opt into a shared glyph atlas. SDL_ttf still
+supplies glyph selection, kerning and positions; layout metrics and the existing
+alignment, shrinking, transforms and clipping remain in TextView. After warming
+the digits, changing a supported number or its color reuses coverage textures
+and submits glyph quads instead of rasterizing/uploading a new string. Views
+using the same live font and generation share pages. Style replacements opt in
+again and release their previous text/font resources in order.
+
+Each font atlas is limited to 128 glyphs and four 512×512 BGRA pages (4 MiB at
+the limit), allocated on demand and released when its last view goes away.
+Only the current layout is retained per view; there is no score/combo history
+cache. Append-only slots preserve queued draws. Atlas initialization uses
+mutable bgfx textures, since textures created with initial pixel data are
+immutable and cannot receive glyph updates.
+
+This is intentionally an opt-in fast path for single-line printable ASCII.
+Wrapped, fallback-font, unsupported image-type, edge-touching, overlapping or
+capacity-exceeding text uses the existing deferred surface renderer. In
+particular, some tightly kerned judgement words still rasterize as strings;
+the atlas does not eliminate all judgement texture uploads. Glyph quads also
+increase vertex count relative to a single string quad. This change establishes
+texture reuse, not a measured overall CPU/GPU or input-latency improvement.
+
+The missing-atlas and gameplay style-replacement regressions failed before
+implementation and pass afterward. The Metal fixture compares 120 combinations
+across the two HUD fonts, regular/bold weights, colors (including SDL_ttf's
+alpha-zero behavior), inherited opacity, rotation, shrinking, and unsupported
+text. Maximum permitted channel difference is one 8-bit step. A recording
+backend verifies a ten-digit label uses one shared texture submission with
+40 vertices, and reordering digits, changing color, a second view, and returning
+from wrapped text reuse that texture. Hidden text submits nothing.
+
+All five focused suites pass: text Metal rendering, font lifetime, text input,
+built-in renderer characterization, and UI batching. Desktop main and unsigned
+iOS builds pass. Independent code review found no actionable issues.
