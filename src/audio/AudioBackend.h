@@ -41,12 +41,6 @@ struct RuntimeState {
   std::uint32_t effectiveBufferFrames = 0;
   double effectiveLatencyMs = 0.0;
   std::uint32_t effectiveCallbackSampleRate = 0;
-  bool outputUnderflowKnown = false;
-  bool outputTimestampKnown = false;
-  std::uint64_t callbackCount = 0;
-  std::uint64_t outputUnderflowCount = 0;
-  std::uint32_t maxCallbackDurationMicros = 0;
-  std::uint32_t lastCallbackIntervalMicros = 0;
   bool operator==(const RuntimeState &) const = default;
 };
 

@@ -492,7 +492,6 @@ asobmashow_label_tests(area_rendering
     camera_inverse_cache_tests
     ios_metal_export_pacing_tests
     metal_drawable_provider_tests
-    metal_presentation_timing_tests
     android_display_refresh_rate_tests
     android_window_presentation_tests
     artwork_glow_tests
@@ -521,7 +520,6 @@ asobmashow_label_tests(area_rendering
     image_fade_tests
     image_file_decoder_tests
     image_view_fade_tests
-    latency_telemetry_tests
     numeric_glyph_atlas_tests
     numeric_glyph_model_validator_tests
     play_skin_touch_geometry_tests

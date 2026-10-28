@@ -1,9 +1,7 @@
-#include "video/FrameCpuTiming.h"
 #include "rendering/ResponsiveUi.h"
 #include "rendering/PortraitPlayfieldFraming.h"
 #include "rendering/UiSafeArea.h"
 #include "settings/PresentationOrientationState.h"
-#include "perf/LatencyTelemetry.h"
 #include "targets.h"
 #include "platform/SDLMainThread.h"
 #include "RAII.h"
@@ -107,13 +105,6 @@
 #include <system_error>
 #include <thread>
 #include <vector>
-
-// CMake defines this for desktop and Android targets. The iOS app is built by
-// its generated Xcode project, so keep telemetry opt-in when that build system
-// does not provide the definition.
-#ifndef ASOBMASHOW_ENABLE_PERF_TELEMETRY
-#define ASOBMASHOW_ENABLE_PERF_TELEMETRY 0
-#endif
 
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -362,63 +353,6 @@ void rendering::updateUIScale(int renderW, int renderH) {
 #include <deque>
 #include <algorithm>
 
-class FPSCounter {
-public:
-  void addFrame(float deltaTime) {
-    if (deltaTime <= 0.0f) {
-      return;
-    }
-    // Treat very large deltas as discontinuities (e.g. resize/app switch).
-    if (deltaTime > MAX_SAMPLE_DELTA) {
-      frameTimes.clear();
-      totalTime = 0.0f;
-      return;
-    }
-    frameTimes.push_back(deltaTime);
-    totalTime += deltaTime;
-
-    // Remove old frames outside the window
-    while (totalTime > WINDOW_SIZE && !frameTimes.empty()) {
-      totalTime -= frameTimes.front();
-      frameTimes.pop_front();
-    }
-  }
-
-  float getAverageFPS() const {
-    if (frameTimes.empty() || totalTime <= 0.0f)
-      return 0.0f;
-    return static_cast<float>(frameTimes.size()) / totalTime;
-  }
-
-  float get1PercentLowFPS() const {
-    if (frameTimes.empty()) {
-      return 0.0f;
-    }
-
-    std::vector<float> samples(frameTimes.begin(), frameTimes.end());
-    size_t worstCount = std::max<size_t>(1, samples.size() / 100);
-    worstCount = std::min(worstCount, samples.size());
-    std::nth_element(samples.begin(), samples.begin() + (worstCount - 1),
-                     samples.end(), std::greater<float>());
-
-    double worstFrameTimeSum = 0.0;
-    for (size_t i = 0; i < worstCount; ++i) {
-      worstFrameTimeSum += samples[i];
-    }
-    const double avgWorstFrameTime =
-        worstFrameTimeSum / static_cast<double>(worstCount);
-    if (avgWorstFrameTime <= 0.000001)
-      return 0.0f;
-
-    return static_cast<float>(1.0 / avgWorstFrameTime);
-  }
-
-private:
-  std::deque<float> frameTimes;
-  float totalTime = 0.0f;
-  static constexpr float WINDOW_SIZE = 5.0f;       // 5 second window
-  static constexpr float MAX_SAMPLE_DELTA = 0.25f; // drop discontinuities
-};
 
 #if TARGET_OS_ANDROID
 static std::string getAndroidSystemProperty(const char *name) {
@@ -954,11 +888,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   };
   context.restoreGameplayRenderViews();
 
-  uint64_t rawEventsInWindow = 0;
-  uint64_t processedEventsInWindow = 0;
-  uint64_t coalescedMouseMotionInWindow = 0;
-  uint64_t coalescedFingerMotionInWindow = 0;
-  uint64_t coalescedResizeInWindow = 0;
   // Pinned gdx-backend-lwjgl's LwjglGraphics.updateTime() starts with a
   // zero fps value, then publishes the prior whole-second frame count before
   // counting the current frame in the next window.
@@ -1061,11 +990,8 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
   platform::IOSPreparedFrame iosPreparedFrame;
   std::uint64_t lastUiPresentationGeneration = 0;
   bool iosViewportRestorePending = false;
-  const auto submitIOSFrame = [&iosDisplayLink](bool discard) {
+  const auto submitIOSFrame = [](bool discard) {
     if (discard) video::MetalDisplayLink::pauseCurrent();
-    iosDisplayLink.markPreparationEnd();
-    const video::frameCpuTiming::Scope cpuFrameSubmit(
-        video::frameCpuTiming::Stage::FrameSubmit);
     bgfx::frame(discard ? BGFX_FRAME_DISCARD : BGFX_FRAME_NONE);
   };
 #endif
@@ -1213,8 +1139,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     }
     // Includes idle frames, interruption, export, quit and every early continue.
     const auto releaseDisplayLinkFrame = makeScopeExit([&] { iosDisplayLink.endFrame(); });
-    iosDisplayLink.markPreparationStart(
-        context.profileGameplayActive.load(std::memory_order_acquire));
 #endif
 
     auto currentFrameTime = std::chrono::steady_clock::now();
@@ -1255,9 +1179,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     SDL_Event pendingMouseMotion{};
     std::vector<SDL_Event> pendingFingerMotions;
     SDL_Event pendingResizeEvent{};
-    uint32_t pendingMouseMotionCount = 0;
-    uint32_t pendingFingerMotionCount = 0;
-    uint32_t pendingResizeCount = 0;
+
+
+
     bool hasPendingMouseMotion = false;
     bool hasPendingResize = false;
 
@@ -1439,9 +1363,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #endif
 
     auto processEvent = [&](SDL_Event event) {
-      if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
-        ++processedEventsInWindow;
-      }
+
       if (event.type == SDL_EVENT_QUIT || event.type == SDL_EVENT_TERMINATING) {
         context.quitFlag = true;
       }
@@ -1515,13 +1437,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     auto flushPendingResize = [&]() {
       if (!hasPendingResize) return;
       processEvent(pendingResizeEvent);
-      if (pendingResizeCount > 1) {
-        if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
-          coalescedResizeInWindow += (pendingResizeCount - 1);
-        }
-      }
+
       hasPendingResize = false;
-      pendingResizeCount = 0;
+
     };
 
     auto waitForBackgroundEvent = [&]() {
@@ -1539,9 +1457,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #else
       if (platform::waitApplicationEvent(&waitEvent, timeoutMs)) {
 #endif
-        if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
-          ++rawEventsInWindow;
-        }
+
         context.inputDeviceRegistry.handleSdlEventAndDispatch(waitEvent);
         processEvent(waitEvent);
       }
@@ -1553,9 +1469,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     const auto pollApplicationEvent = platform::pollApplicationEvent;
 #endif
     while (pollApplicationEvent(&e)) {
-      if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
-        ++rawEventsInWindow;
-      }
+
       // A later Start/touch callback may enter gameplay and lock orientation.
       // Apply earlier viewport changes before either input dispatch path.
       const bool resizeEvent = (e.type >= SDL_EVENT_WINDOW_FIRST && e.type <= SDL_EVENT_WINDOW_LAST) &&
@@ -1567,7 +1481,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       if (e.type == SDL_EVENT_MOUSE_MOTION) {
         pendingMouseMotion = e;
         hasPendingMouseMotion = true;
-        ++pendingMouseMotionCount;
+
         continue;
       }
       if (e.type == SDL_EVENT_FINGER_MOTION) {
@@ -1582,7 +1496,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         } else {
           pendingFingerMotions.push_back(e);
         }
-        ++pendingFingerMotionCount;
+
         continue;
       }
       if ((e.type >= SDL_EVENT_WINDOW_FIRST && e.type <= SDL_EVENT_WINDOW_LAST) &&
@@ -1590,7 +1504,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
            e.type == SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED)) {
         pendingResizeEvent = e;
         hasPendingResize = true;
-        ++pendingResizeCount;
+
         continue;
       }
 
@@ -1635,20 +1549,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       for (const auto &pendingFingerMotion : pendingFingerMotions) {
         processEvent(pendingFingerMotion);
       }
-      if (pendingFingerMotionCount > pendingFingerMotions.size()) {
-        if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
-          coalescedFingerMotionInWindow +=
-              pendingFingerMotionCount - pendingFingerMotions.size();
-        }
-      }
+
     }
     if (hasPendingMouseMotion) {
       processEvent(pendingMouseMotion);
-      if (pendingMouseMotionCount > 1) {
-        if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
-          coalescedMouseMotionInWindow += (pendingMouseMotionCount - 1);
-        }
-      }
+
     }
 #if TARGET_OS_IPHONE || TARGET_OS_ANDROID
     // Gameplay-owned gestures bypass SDL on the native input thread. Their
@@ -1738,22 +1643,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
       continue;
     }
     context.inputDeviceRegistry.pump();
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-    const auto sceneUpdateStarted = perf::latency::nowMicros();
-#endif
-    {
-      const video::frameCpuTiming::Scope cpuSceneUpdate(
-          video::frameCpuTiming::Stage::SceneUpdate);
-      sceneManager.update(deltaTime);
-    }
+    sceneManager.update(deltaTime);
 #if TARGET_OS_IPHONE
     // An event/update may have performed a synchronous photo export and paused
     // the link. This iteration then uses the ordinary drawable/timer fallback.
     iosDisplayLinkFrame = iosDisplayLinkFrame && iosDisplayLink.hasFrame();
-#endif
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-    perf::latency::record(perf::latency::Stage::SceneUpdate,
-                          perf::latency::nowMicros() - sceneUpdateStarted);
 #endif
     context.jukebox.setBgaDisplayMode(context.settings.bgaDisplayMode);
     //    bgfx::reset(rendering::window_width, rendering::window_height);
@@ -1784,14 +1678,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         bgfx::touch(rendering::clear_view);
         bgfx::touch(rendering::ui_view);
         context.uiBatchRenderer.beginFrame();
-        {
-          const video::frameCpuTiming::Scope cpuSceneRender(
-              video::frameCpuTiming::Stage::SceneRender);
-          sceneManager.render();
-        }
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-        const auto submitStarted = perf::latency::nowMicros();
-#endif
+        sceneManager.render();
 #if TARGET_OS_IPHONE
         if (!iosPreparedFrame.finish(GetIOSPresentationState(), submitIOSFrame))
           continue;
@@ -1802,10 +1689,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         }
 #else
         bgfx::frame();
-#endif
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-        perf::latency::record(perf::latency::Stage::FrameSubmit,
-                              perf::latency::nowMicros() - submitStarted);
 #endif
         uiPresentationSchedule.invalidate();
         context.replayVideoExportUiFrameSerial.fetch_add(
@@ -1880,20 +1763,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
 #if TARGET_OS_IPHONE
           iosPreparedFrame.begin(uiPresentationState);
 #endif
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-          const auto uiRenderStarted = perf::latency::nowMicros();
-#endif
           {
             ui::FrameDemandScope demandScope(frameDemand);
             context.uiBatchRenderer.beginFrame();
-            const video::frameCpuTiming::Scope cpuSceneRender(
-                video::frameCpuTiming::Stage::SceneRender);
             sceneManager.render();
           }
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-          perf::latency::record(perf::latency::Stage::UiRender,
-                                perf::latency::nowMicros() - uiRenderStarted);
-#endif
           bgfx::touch(rendering::clear_view);
           bgfx::touch(rendering::ui_view);
 
@@ -1914,8 +1788,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           std::optional<rendering::FullscreenBgaOutputKey> bgaOutputKey;
           bool bgaOutputSubmitted = false;
           if (compositeFullscreenBga) {
-            const video::frameCpuTiming::Scope cpuFullscreenBga(
-                video::frameCpuTiming::Stage::FullscreenBga);
             const bool ignoreBgaPostOptions =
                 context.ignoreBgaPostOptions.load(std::memory_order_acquire);
             const float blurStrength =
@@ -1969,9 +1841,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           const bool drawsAccepted = frameSubmission.accepted();
           const bool frameComplete = fullscreenComplete && drawsAccepted &&
               context.uiBatchRenderer.frameComplete();
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-          const auto submitStarted = perf::latency::nowMicros();
-#endif
 #if TARGET_OS_IPHONE
           if (!iosPreparedFrame.finish(GetIOSPresentationState(), submitIOSFrame)) {
             s_fullscreenBgaCache.invalidate();
@@ -1989,10 +1858,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
           bgfx::frame();
 #endif
           s_fullscreenBgaCache.complete(bgaOutputKey, bgaOutputSubmitted, drawsAccepted);
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-          perf::latency::record(perf::latency::Stage::FrameSubmit,
-                                perf::latency::nowMicros() - submitStarted);
-#endif
           uiPresentationSchedule.didPresent(beforeDrawing, frameDemand, uiNow, frameComplete);
           renderedFrame = true;
         }
@@ -2024,53 +1889,6 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     }
 #endif
 
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-    {
-      constexpr float kTelemetryLogIntervalSec = 5.0f;
-      static FPSCounter fpsCounter;
-      static float telemetryLogInterval = 0.0f;
-      fpsCounter.addFrame(deltaTime);
-      telemetryLogInterval += deltaTime;
-      if (telemetryLogInterval >= kTelemetryLogIntervalSec) {
-        telemetryLogInterval = 0.0f;
-        const float currentFps = deltaTime > 0 ? 1.0f / deltaTime : 0.0f;
-        const float avgFps = fpsCounter.getAverageFPS();
-        const float low1Fps = fpsCounter.get1PercentLowFPS();
-
-        const double avgDeltaTime = context.jukebox.getAvgDeltaTime();
-        const double freq = avgDeltaTime > 0.0 ? 1000000.0 / avgDeltaTime : 0.0;
-        SDL_Log(
-            "FPS %.1f | Avg %.1f | 1%% Low %.1f | Scheduler %.2f us (%.2f Hz) | "
-            "Events raw %llu proc %llu coalesced M/F/R %llu/%llu/%llu",
-            currentFps, avgFps, low1Fps, avgDeltaTime, freq,
-            static_cast<unsigned long long>(rawEventsInWindow),
-            static_cast<unsigned long long>(processedEventsInWindow),
-            static_cast<unsigned long long>(coalescedMouseMotionInWindow),
-            static_cast<unsigned long long>(coalescedFingerMotionInWindow),
-            static_cast<unsigned long long>(coalescedResizeInWindow));
-        const auto audioState = context.jukebox.audioRuntime().runtimeState();
-        SDL_Log("Audio native callback %u frames at %u Hz | output timestamp %s | "
-                "underflow reporting %s (%llu) | physical display presentation unknown",
-                audioState.effectiveBufferFrames, audioState.effectiveCallbackSampleRate,
-                audioState.outputTimestampKnown ? "available" : "unknown",
-                audioState.outputUnderflowKnown ? "available" : "unknown",
-                static_cast<unsigned long long>(audioState.outputUnderflowCount));
-        for (unsigned stage = 0; stage < static_cast<unsigned>(perf::latency::Stage::Count); ++stage) {
-          const auto summary = perf::latency::snapshot(static_cast<perf::latency::Stage>(stage));
-          if (summary.count == 0) continue;
-          SDL_Log("Latency stage %s | n %llu | p50/p95/p99 <= %llu/%llu/%llu us | max %llu us",
-                  perf::latency::names[stage], static_cast<unsigned long long>(summary.count),
-                  static_cast<unsigned long long>(summary.p50), static_cast<unsigned long long>(summary.p95),
-                  static_cast<unsigned long long>(summary.p99), static_cast<unsigned long long>(summary.maximum));
-        }
-        rawEventsInWindow = 0;
-        processedEventsInWindow = 0;
-        coalescedMouseMotionInWindow = 0;
-        coalescedFingerMotionInWindow = 0;
-        coalescedResizeInWindow = 0;
-      }
-    }
-#endif
 
     // shift left by 1
     // float translate[16];
@@ -2155,9 +1973,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         while (!context.quitFlag &&
                !context.appInBackground.load(std::memory_order_acquire)) {
           while (platform::pollApplicationEvent(&e)) {
-            if constexpr (ASOBMASHOW_ENABLE_PERF_TELEMETRY) {
-              ++rawEventsInWindow;
-            }
+
             context.inputDeviceRegistry.handleSdlEventAndDispatch(e);
             processEvent(e);
           }
@@ -2175,11 +1991,7 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     } else {
       SDL_Delay(1);
     }
-    {
-      const video::frameCpuTiming::Scope cpuDeferred(
-          video::frameCpuTiming::Stage::DeferredWork);
-      sceneManager.handleDeferred();
-    }
+    sceneManager.handleDeferred();
     context.currentFrame++;
     //
   }

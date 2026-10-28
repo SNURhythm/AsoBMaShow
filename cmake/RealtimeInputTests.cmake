@@ -35,10 +35,6 @@ add_executable(native_keyboard_input_tests tests/native_keyboard_input_tests.cpp
 target_link_libraries(native_keyboard_input_tests PRIVATE input_registry_test_support)
 add_test(NAME native_keyboard_input_tests COMMAND native_keyboard_input_tests)
 
-add_executable(latency_telemetry_tests tests/latency_telemetry_tests.cpp)
-target_include_directories(latency_telemetry_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_link_libraries(latency_telemetry_tests PRIVATE Threads::Threads)
-add_test(NAME latency_telemetry_tests COMMAND latency_telemetry_tests)
 
 add_executable(lua_skin_legacy_input_tests
     tests/lua_skin_legacy_input_tests.cpp

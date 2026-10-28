@@ -5,7 +5,6 @@
 #include "DesktopRealtimeKeyboardBackend.h"
 #include "NativeKeyboardInputState.h"
 #include "InputTimestamp.h"
-#include "../perf/LatencyTelemetry.h"
 #include <SDL3/SDL_log.h>
 #include <SDL3/SDL_properties.h>
 #include <SDL3/SDL_video.h>
@@ -254,12 +253,6 @@ private:
                                       static_cast<std::uint64_t>(event.input_event_usec);
             const auto timestamp = mapping.toSteadyMicros(nativeMicros);
             if (timestamp < 0 || static_cast<std::uint64_t>(timestamp) < claimTimestampMicros_) continue;
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-            const auto receipt = perf::latency::nowMicros();
-            if (claimed_ && focused && receipt >= timestamp) {
-              perf::latency::record(perf::latency::Stage::InputDelivery, receipt - timestamp);
-            }
-#endif
             keys_.consume(device, linux_scancode_table[event.code], event.value != 0, timestamp);
           }
         }

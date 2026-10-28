@@ -1,6 +1,3 @@
-#include "video/FrameCpuTiming.h"
-#include "scene/play/PlayfieldPresentation.h"
-#include "RAII.h"
 #include "i18n/Localization.h"
 #include "GameplayKeyMode.h"
 #include "ir/tachi/TachiEligibility.h"
@@ -178,11 +175,6 @@ struct FixtureRealtimeSession {
   std::uint64_t appliedTransactionSequence = 0;
   std::atomic_bool acceptingNativeInput{false};
   std::unique_ptr<gameplay::RealtimeGameplayInputRegistration> inputRegistration;
-};
-
-struct FixtureTimingPresentation {
-  PresentationMode mode = PresentationMode::Skin;
-  PresentationMode activeMode() const { return mode; }
 };
 
 struct FixturePresentation {
@@ -371,9 +363,6 @@ public:
     state->isPlaying = true;
   }
 
-  void recordPresentationTimingPhase() const;
-  long long getStartPositionMicros() const;
-  FixtureTimingPresentation *presentation = nullptr;
   void update(float dt);
   void updateSkinIrTarget() {}
   void configureSkinIrTarget() {}
@@ -2601,51 +2590,7 @@ void testLegacyMineKeysoundOnlyOnDetonation() {
   }
 }
 
-void testFrameTimingGameplayPhases() {
-  namespace cpu = video::frameCpuTiming;
-  GamePlayScene scene;
-  FixtureTimingPresentation selectedSkin;
-  scene.presentation = &selectedSkin;
-  scene.chart->Meta.PlayLength = 10'000;
-  scene.chart->Meta.TotalLength = 20'000;
-  const auto observe = [&] {
-    cpu::beginFrame(1, +[]() noexcept { return 100.0; });
-    scene.recordPresentationTimingPhase();
-    return cpu::endFrame(1);
-  };
-  scene.context.jukebox.time = -1;
-  require(observe().phaseFirst == cpu::GameplayPhase::Preparing, "negative preroll is preparing");
-  scene.context.jukebox.time = 5'000;
-  auto data = observe();
-  require(data.phaseFirst == cpu::GameplayPhase::Active && data.mode == cpu::GameplayMode::Manual && data.skinSelected,
-          "manual skin gameplay is observed without changing state");
-  scene.context.jukebox.pause();
-  require(observe().phaseFirst == cpu::GameplayPhase::Paused, "paused playback is not active");
-  scene.context.jukebox.resume();
-  scene.context.jukebox.time = 10'001;
-  require(observe().phaseFirst == cpu::GameplayPhase::PostNotes, "last-note tail is separate from active play");
-  scene.options.autoPlay = true;
-  require(observe().mode == cpu::GameplayMode::Autoplay, "autoplay mode is retained");
-  scene.options.replayData = std::make_shared<ReplayData>();
-  require(observe().mode == cpu::GameplayMode::Replay, "replay takes precedence over autoplay metadata");
-  scene.options.replayData.reset();
-  scene.options.autoPlay = false;
-  scene.options.practiceMode = true;
-  require(observe().mode == cpu::GameplayMode::Practice, "practice mode is retained");
-  scene.options.practiceMode = false;
-  scene.context.jukebox.time = 11'000;
-  scene.sourcePlaytime = 10;
-  cpu::beginFrame(2, +[]() noexcept { return 100.0; });
-  scene.update(0);
-  data = cpu::endFrame(2);
-  require(data.phaseFirst == cpu::GameplayPhase::PostNotes && data.phaseLast == cpu::GameplayPhase::Ending,
-          "actual terminal update preserves both phases on its frame");
-  require(data.stages[static_cast<unsigned>(cpu::Stage::GameplayUpdate)].count == 1,
-          "actual terminal update publishes a completed update span");
-}
-
 int main(int argc, char **argv) {
-  testFrameTimingGameplayPhases();
   testLegacyMissedHcnPreview();
   testLegacyMineKeysoundOnlyOnDetonation();
   testLegacyLongNoteTimingSamples();

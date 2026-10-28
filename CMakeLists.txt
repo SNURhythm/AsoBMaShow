@@ -15,10 +15,10 @@ add_compile_definitions(
     ASOBMASHOW_APPLICATION_VERSION="${ASOBMASHOW_APPLICATION_VERSION}")
 include(CTest)
 option(ASOBMASHOW_BUILD_TESTS "Build unit and integration tests" ON)
+option(ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE
+       "Build developer-only skin acceptance capture infrastructure" OFF)
 option(ASOBMASHOW_TEST_FULL_DEBUG_INFO
        "Keep full variable/type debug information in Clang/GCC test objects" OFF)
-option(ASOBMASHOW_ENABLE_PERF_TELEMETRY
-       "Log periodic frame, audio, and input performance telemetry" OFF)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_CURRENT_SOURCE_DIR}/cmake)
 
 # Set C++ standard
@@ -435,8 +435,10 @@ if (ANDROID)
         _LIBCPP_ENABLE_EXPERIMENTAL
     )
 endif()
+if(ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE)
+    target_compile_definitions(main PRIVATE ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE=1)
+endif()
 target_compile_definitions(main PRIVATE
-    ASOBMASHOW_ENABLE_PERF_TELEMETRY=$<BOOL:${ASOBMASHOW_ENABLE_PERF_TELEMETRY}>
     ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=$<BOOL:${ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS}>
 )
 
@@ -7280,6 +7282,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             cxx_std_23
         )
         target_compile_definitions(skin_acceptance_recorder_tests PRIVATE
+            ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE=1
             ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
             ASOBMASHOW_BUILD_COMMIT="1111111111111111111111111111111111111111"
             ASOBMASHOW_BUILD_CONFIGURATION="Release"
@@ -7305,6 +7308,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             cxx_std_23
         )
         target_compile_definitions(skin_overlay_digest_provider_tests PRIVATE
+            ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE=1
             ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
             ASOBMASHOW_SKIN_OVERLAY_DIGEST_PROVIDER_TESTING=1
             ASOBMASHOW_SKIN_STORAGE_PATHS_NO_PLATFORM_DEFAULTS
@@ -7332,6 +7336,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
             cxx_std_23
         )
         target_compile_definitions(gameplay_skin_acceptance_controller_tests PRIVATE
+            ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE=1
             ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS=1
             ASOBMASHOW_BUILD_COMMIT="1111111111111111111111111111111111111111"
             ASOBMASHOW_BUILD_CONFIGURATION="Release"
@@ -7703,7 +7708,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_compile_features(realtime_gameplay_worker_tests PRIVATE cxx_std_23)
     target_compile_definitions(realtime_gameplay_worker_tests PRIVATE
         BX_CONFIG_DEBUG=1
-        ASOBMASHOW_ENABLE_PERF_TELEMETRY=1
     )
     if(TARGET SDL3::SDL3)
         target_link_libraries(realtime_gameplay_worker_tests PRIVATE SDL3::SDL3)
@@ -9523,12 +9527,6 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     target_link_libraries(ui_batch_renderer_tests PRIVATE
         ${COMMON_LIBS} bgfx yogacore
     )
-    add_executable(metal_presentation_timing_tests
-        tests/metal_presentation_timing_tests.cpp tests/support/AllocationFailure.cpp)
-    target_include_directories(metal_presentation_timing_tests PRIVATE ${CMAKE_SOURCE_DIR}/src)
-    target_compile_features(metal_presentation_timing_tests PRIVATE cxx_std_17)
-    target_link_libraries(metal_presentation_timing_tests PRIVATE Threads::Threads)
-    asobmashow_register_test(metal_presentation_timing_tests)
     if(APPLE)
         add_executable(metal_drawable_provider_tests tests/metal_drawable_provider_tests.mm)
         target_compile_options(metal_drawable_provider_tests PRIVATE -fobjc-arc)

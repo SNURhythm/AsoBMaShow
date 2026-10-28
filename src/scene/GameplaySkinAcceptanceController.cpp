@@ -1,3 +1,4 @@
+#if defined(ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE) && ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE
 #include "GameplaySkinAcceptanceController.h"
 
 #include <cstddef>
@@ -211,3 +212,5 @@ void GameplaySkinAcceptanceController::poll() {
 void GameplaySkinAcceptanceController::close() noexcept { closed_ = true; }
 
 } // namespace skin
+
+#endif // ASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE

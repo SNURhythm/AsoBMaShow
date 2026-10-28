@@ -1,5 +1,11 @@
 # Choosing focused tests
 
+The developer-only skin acceptance recorder and controller are excluded from
+normal app builds. Configure CMake with
+`-DASOBMASHOW_ENABLE_SKIN_ACCEPTANCE_CAPTURE=ON` to compile them; Lua gameplay
+skins must also be enabled. Their dedicated test targets enable the flag
+independently. This infrastructure has no app UI entry point.
+
 Start with the behavior and subsystem you changed. Build and run its group;
 add adjacent groups when a change crosses their boundary. A focused passing run
 is normally enough for a localized change. The full suite is useful for broad
@@ -163,8 +169,3 @@ signing credentials. The test covers highlighting before the first usable layout
 manual and animated scrolling, stable line positions across display frames,
 selection preservation, bounded syntax colors, resizing, and closing with queued
 viewport work. This is an explicit simulator check, outside the host CTest suite.
-
-## Gameplay frame profiling
-
-For the iOS performance-log v2 CPU stages, phase selection and capture procedure, see
-[frame-correlated gameplay timing](gameplay-frame-timing.md).

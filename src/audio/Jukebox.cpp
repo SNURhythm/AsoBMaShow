@@ -4122,8 +4122,6 @@ void Jukebox::runVisualScheduler() {
   }
   timeBeginPeriod(1);
 #endif
-  using Clock = std::chrono::steady_clock;
-  auto prevTimestamp = Clock::now();
   auto lifecycleState = makeLifecycleState();
   while (schedulerActive.load(std::memory_order_acquire)) {
     const auto wakeGeneration = schedulerWake.capture();
@@ -4139,7 +4137,6 @@ void Jukebox::runVisualScheduler() {
                    (isPlaying.load(std::memory_order_acquire) &&
                     stopwatch->isRunning());
           });
-      prevTimestamp = Clock::now();
       continue;
     }
 
@@ -4148,7 +4145,6 @@ void Jukebox::runVisualScheduler() {
       // Keep scheduling state consistent with seek/reset.
       std::lock_guard<std::mutex> lock(seekLock);
       if (!jukebox_lifecycle::CanAdvanceSchedulerLocked(lifecycleState)) {
-        prevTimestamp = Clock::now();
         continue;
       }
       const long long positionMicro = audio.getTimeMicros();
@@ -4198,20 +4194,6 @@ void Jukebox::runVisualScheduler() {
         }
       }
     }
-
-    auto currentTimestamp = Clock::now();
-    size_t idx =
-        performanceAnalytics.loopDeltaIndex.load(std::memory_order_relaxed);
-    const auto deltaMicros =
-        std::chrono::duration_cast<std::chrono::microseconds>(
-            currentTimestamp - prevTimestamp)
-            .count();
-    performanceAnalytics.loopDeltaTimes[idx].store(
-        static_cast<uint32_t>(deltaMicros), std::memory_order_relaxed);
-    size_t newIdx = (idx + 1) % Jukebox::PerformanceAnalytics::BUFFER_SIZE;
-    performanceAnalytics.loopDeltaIndex.store(newIdx,
-                                              std::memory_order_relaxed);
-    prevTimestamp = currentTimestamp;
 
     long long sleepMicros = kSchedulerMaxIdleSleepMicros;
     if (nextWakeMicros != std::numeric_limits<long long>::max()) {
@@ -4476,26 +4458,4 @@ audio::playback::BackendOperationResult Jukebox::seek(long long micro) {
     SDL_LogError(SDL_LOG_CATEGORY_AUDIO, "%s", transitioned.diagnostic.c_str());
   }
   return transitioned;
-}
-
-double Jukebox::getAvgDeltaTime() {
-  size_t currentWriteIndex =
-      performanceAnalytics.loopDeltaIndex.load(std::memory_order_acquire);
-  while (performanceAnalytics.cursor != currentWriteIndex) {
-    const auto loopRunTime = static_cast<double>(
-        performanceAnalytics.loopDeltaTimes[performanceAnalytics.cursor].load(
-            std::memory_order_relaxed));
-    performanceAnalytics.statsSum += loopRunTime;
-    performanceAnalytics.statsCount++;
-    if (performanceAnalytics.statsCount >= 100) {
-      performanceAnalytics.avgDeltaTime =
-          performanceAnalytics.statsSum / performanceAnalytics.statsCount;
-      performanceAnalytics.statsSum = 0;
-      performanceAnalytics.statsCount = 0;
-    }
-    performanceAnalytics.cursor =
-        (performanceAnalytics.cursor + 1) % PerformanceAnalytics::BUFFER_SIZE;
-  }
-
-  return performanceAnalytics.avgDeltaTime;
 }

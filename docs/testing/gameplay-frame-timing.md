@@ -1,3 +1,5 @@
+> Historical note: the timing capture described here was removed after the performance investigation; these instructions no longer apply to current builds.
+
 # Frame-correlated gameplay CPU timing
 
 The iOS performance-log export includes **Metal presentation timing v2**. It uses the same frame token and CAMediaTime clock as the display-link, GPU and presentation timestamps. No diagnostic setting is required. Collection is active only while a managed Metal display-link frame owns a token; fallback, background and export work without a token are not silently assigned to another frame.

@@ -85,7 +85,12 @@ scripts/android_firebase_deploy.sh --env-file /path/to/private.env
 
 Deployment requires `FIREBASE_ANDROID_APP_ID` plus Firebase CLI auth. Leave
 `ANDROID_VERSION_CODE` empty for automatic versioning. Build-only and deploy
-runs both use `GITHUB_RUN_NUMBER` in CI and default to `1` locally.
+runs both use `GITHUB_RUN_NUMBER` in CI and default to `1` locally. For a
+connected-device test, inspect the installed app's version code and use
+`scripts/android_firebase_deploy.sh --build-only --version-code N` with the same
+code for an in-place update; do not increment it. Do not uninstall the app to
+work around a downgrade; keep its data. This local testing override does not
+change CI or Play upload versioning.
 `restricted_file_accessRelease` and
 `all_file_accessRelease` builds also require release signing env values:
 `ANDROID_KEYSTORE_PATH`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, and

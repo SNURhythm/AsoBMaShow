@@ -633,6 +633,10 @@ struct RenderContext {};
 namespace bgfx { bool isValid(int value) { return value != 0; } }
 struct TextView {
   enum class TextOverflow { Visible, Hidden, Marquee };
+  struct Atlas { bool prepare(int, const char *) { return false; } };
+  Atlas *glyphAtlas = nullptr;
+  int font = 0;
+  const char *text = "";
   TextOverflow overflow = TextOverflow::Marquee;
   int texture=1, width=0, height=30, draws=0, unclippedDraws=0;
   bool wrapEnabled=false;
@@ -886,7 +890,6 @@ int main() {
 #include <cstdint>
 #include <functional>
 #include <vector>
-constexpr bool ASOBMASHOW_ENABLE_PERF_TELEMETRY=true;
 constexpr int SDL_EVENT_MOUSE_MOTION=1, SDL_EVENT_FINGER_MOTION=2, SDL_EVENT_WINDOW_FIRST=4, SDL_EVENT_WINDOW_LAST=5,
               SDL_EVENT_WINDOW_RESIZED=4, SDL_EVENT_WINDOW_PIXEL_SIZE_CHANGED=5, SDL_EVENT_KEY_DOWN=6;
 struct SDL_Event {
@@ -923,7 +926,6 @@ int main() {
   std::vector<SDL_Event> pendingFingerMotions;
   bool hasPendingResize=false, hasPendingMouseMotion=false;
   uint32_t pendingResizeCount=0, pendingMouseMotionCount=0, pendingFingerMotionCount=0;
-  uint64_t rawEventsInWindow=0, coalescedResizeInWindow=0;
   auto processEvent=[&](const SDL_Event &event) {
     if(event.type>=SDL_EVENT_WINDOW_FIRST && event.type<=SDL_EVENT_WINDOW_LAST)orientation.updateViewport(event.window.data1,event.window.data2);
   };
@@ -932,7 +934,6 @@ LOOP
   if(hasPendingResize)processEvent(pendingResizeEvent);
   assert(locked==PresentationOrientation::Portrait);
   assert(orientation.orientation()==PresentationOrientation::Portrait);
-  assert(coalescedResizeInWindow==1);
 }
 '''.replace("FLUSH", flush).replace("LOOP", loop)
         with tempfile.TemporaryDirectory(prefix="asobmashow-rotation-start-") as temp:

@@ -20,9 +20,9 @@ assert source.index("if (ranApplicationWork)") < source.index("while (pollApplic
 fixture = r'''
 #include <atomic>
 #include <cassert>
-constexpr bool ASOBMASHOW_ENABLE_PERF_TELEMETRY = true;
 constexpr int kBackgroundEventWaitTimeoutMs = 100;
 struct SDL_Event {};
+struct { void invalidate() {} } s_fullscreenBgaCache;
 int waited = 0;
 bool deliverEvent = false;
 bool WaitIOSApplicationEvent(SDL_Event *, int timeout) {
@@ -57,7 +57,7 @@ int main() {
     int currentFrame = 0;
   } context;
   struct { bool pending() const { return true; } } iosPreparedFrame;
-  int rawEventsInWindow = 0, processed = 0, foregroundUpdates = 0;
+  int processed = 0, foregroundUpdates = 0;
   const auto processEvent = [&](SDL_Event) { ++processed; };
   bool ranApplicationWork = false;
   const auto recoverExportInput = [&] { PRODUCTION_EXPORT_RECOVERY };
@@ -87,7 +87,7 @@ int main() {
   scene.playing = true;
   deliverEvent = true;
   waitForBackgroundEvent();
-  assert(scene.ticks == 2 && rawEventsInWindow == 1 && processed == 1);
+  assert(scene.ticks == 2 && processed == 1);
   assert(context.inputDeviceRegistry.events == 1);
 #if TARGET_OS_IPHONE
   for (int frame = 0; frame < 1; ++frame) {

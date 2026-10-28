@@ -20,8 +20,6 @@ public:
                   std::uint64_t generation, std::function<bool()> isCurrent);
   bool hasFrame() const;
   bool didSchedulePresent() const;
-  void markPreparationStart(bool gameplay);
-  void markPreparationEnd();
   void endFrame();
   void pause();
   static void pauseCurrent();

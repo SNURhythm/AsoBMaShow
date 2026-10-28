@@ -23,6 +23,7 @@ fixture = r'''
 #include <string>
 #include <type_traits>
 #include <vector>
+#include "rendering/UnitCircleSamples.h"
 #define BGFX_INVALID_HANDLE {UINT16_MAX}
 #define BGFX_STATE_MSAA 8
 #define SDL_LOG_CATEGORY_RENDER 0
@@ -193,7 +194,7 @@ with tempfile.TemporaryDirectory(prefix='rendering-transient-boundary-') as dire
     binary = Path(directory) / ('boundary' + compiler.executable_suffix)
     cpp.write_text(fixture)
     try:
-        compiler.build([cpp], binary, directory)
+        compiler.build([cpp], binary, directory, includes=[root / 'src'])
     except subprocess.CalledProcessError as error:
         print(error.stderr)
         raise

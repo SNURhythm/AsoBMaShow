@@ -121,7 +121,6 @@ struct AudioCommand {
   std::atomic_bool *acknowledgement = nullptr;
   std::uint64_t submissionSequence = 0;
   AudioCommandAdmission admission = AudioCommandAdmission::Ordinary;
-  std::int64_t submittedSteadyMicros = 0;
 };
 
 constexpr size_t kMaxActiveSounds = 512;

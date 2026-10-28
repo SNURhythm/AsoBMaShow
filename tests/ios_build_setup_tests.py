@@ -651,9 +651,6 @@ int main() { return 0; }
             self.assertIn("if (asobmashowMetalShouldPresent(", patched)
             self.assertIn("presentCommandBuffer->presentDrawable( (MTL::Drawable*)frameBuffer.m_swapChain->m_drawable);", patched)
             self.assertIn("BgfxMetalDrawableProvider.cpp", patched)
-            self.assertIn("BgfxMetalPresentationTiming.cpp", patched)
-            self.assertIn("asobmashowMetalRecordRenderTiming(m_commandBuffer)", patched)
-            self.assertIn("asobmashowMetalRecordPresentTiming(presentCommandBuffer)", patched)
             self.assertEqual(original, renderer.read_text(), "submodule must remain untouched")
             modified = compiled.stat().st_mtime_ns
             result = subprocess.run(command, capture_output=True, text=True)

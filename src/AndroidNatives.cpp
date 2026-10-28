@@ -24,7 +24,6 @@
 #include "platform/SDLApplicationRuntime.h"
 #include "input/AndroidInputTimestamp.h"
 #include "input/AndroidRawTouchInput.h"
-#include "perf/LatencyTelemetry.h"
 #include "input/InputTimestamp.h"
 
 #include <SDL3/SDL_events.h>
@@ -117,13 +116,6 @@ Java_com_snurhythm_asobmashow_AsoBMaShowSurface_nativeOnRawTouch(
   }();
   const auto timestampMicros =
       mapping.toSteadyMicros(static_cast<std::uint64_t>(uptimeNanos) / 1000);
-#if ASOBMASHOW_ENABLE_PERF_TELEMETRY
-  const auto receivedMicros = perf::latency::nowMicros();
-  if (receivedMicros >= timestampMicros) {
-    perf::latency::record(perf::latency::Stage::InputDelivery,
-                         receivedMicros - timestampMicros);
-  }
-#endif
   RawTouchRegistration::dispatch(static_cast<TouchEpoch>(epoch),
       {pointer, phase, x, y, timestampMicros});
 }

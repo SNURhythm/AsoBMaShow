@@ -180,18 +180,6 @@ public:
     std::uint64_t pinnedFrames = 0;
   };
 
-  struct PerformanceAnalytics {
-    static const int BUFFER_SIZE = 10000;
-    // ring buffer to store loop delta time
-    std::array<std::atomic<uint32_t>, BUFFER_SIZE> loopDeltaTimes{};
-    std::atomic<size_t> loopDeltaIndex{0};
-    size_t cursor = 0;
-    double avgDeltaTime = 0;
-    double statsSum = 0;
-    size_t statsCount = 0;
-  };
-  PerformanceAnalytics performanceAnalytics;
-
   Jukebox(Stopwatch *stopwatch);
   Jukebox(Stopwatch *stopwatch,
           std::unique_ptr<audio::IBackendFactory> backendFactory);
@@ -199,9 +187,6 @@ public:
   void setDecodedAssetCache(std::shared_ptr<audio::DecodedAssetCache> cache) {
     audio.setDecodedAssetCache(std::move(cache));
   }
-
-  // NOTE: Reading delta time is NOT THREAD SAFE, call this from render thread
-  double getAvgDeltaTime();
 
   audio::playback::BackendOperationResult
   loadChart(bms_parser::Chart &chart, bool scheduleNotes,
