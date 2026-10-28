@@ -52,7 +52,8 @@ MusicSelectToolbarCallbacks callbacks(std::vector<std::string> &actions,
       .openTasks = [&] { actions.emplace_back("tasks"); },
       .openPlayOptions = [&] { actions.emplace_back("play-options"); },
       .openIrUploads = [&] { actions.emplace_back("ir"); },
-      .openStreak = [&] { actions.emplace_back("streak"); },
+      .openKombo = [&] { actions.emplace_back("kombo"); },
+      .openGoal = [&] { actions.emplace_back("goal"); },
       .openSettings = [&] { actions.emplace_back("settings"); },
       .persist = [&](MusicSelectToolbarState state) { saved.push_back(state); },
   };
@@ -64,7 +65,7 @@ void testExpandedShowsLabeledMenuEntrypoints() {
   auto toolbar = MusicSelectToolbarView::Create(
       {}, callbacks(actions, saved), 800, 300);
   toolbar->applyYogaLayout();
-  expect(toolbar->controls().size() == 7,
+  expect(toolbar->controls().size() == 8,
          "expanded toolbar includes a direct rankings action");
   int labels = 0;
   for (const auto &control : toolbar->controls()) {
@@ -81,13 +82,19 @@ void testExpandedShowsLabeledMenuEntrypoints() {
     }
   }
   const auto &flame = toolbar->controls()[4];
-  expect(flame.control == MusicSelectToolbarControl::Streak && flame.codepoint == ui_icons::kFire,
-         "streak has a direct flame button");
-  toolbar->activateControl(MusicSelectToolbarControl::Streak);
-  expect(actions.back() == "streak", "the flame opens streaks");
+  expect(flame.control == MusicSelectToolbarControl::Kombo && flame.codepoint == ui_icons::kFire,
+         "kombo has a direct flame button");
+  toolbar->activateControl(MusicSelectToolbarControl::Kombo);
+  expect(actions.back() == "kombo", "the flame opens kombos");
   actions.pop_back();
-  toolbar->setControlEnabled(MusicSelectToolbarControl::Streak, false);
-  toolbar->activateControl(MusicSelectToolbarControl::Streak);
+  const auto &flag = toolbar->controls()[5];
+  expect(flag.control == MusicSelectToolbarControl::Goal && flag.codepoint == 0xf024,
+         "personal goals have a direct flag button");
+  toolbar->activateControl(MusicSelectToolbarControl::Goal);
+  expect(actions.back() == "goal", "the flag opens the selected chart goal");
+  actions.pop_back();
+  toolbar->setControlEnabled(MusicSelectToolbarControl::Kombo, false);
+  toolbar->activateControl(MusicSelectToolbarControl::Kombo);
   expect(actions.back() == "more-menu", "disabled flame cannot navigate");
   expect(labels == 4 && actions == std::vector<std::string>{
              "chart-menu", "play-options", "rankings", "more-menu"},
@@ -175,6 +182,7 @@ void testControlsFitInsideToolbar() {
       expect(toolbar->getWidth() <= width,
              "toolbar including its border fits within the viewport");
       for (const auto *child : toolbar->getChildren()) {
+        if (child->getName() == "chartGoalBubble") continue;
         expect(child->getX() >= toolbar->getX() + 9 &&
                    child->getY() >= toolbar->getY() + 9 &&
                    child->getX() + child->getWidth() <=
@@ -189,6 +197,32 @@ void testControlsFitInsideToolbar() {
       }
     }
   }
+}
+
+void testGoalBubbleStaysOnScreen() {
+  std::vector<std::string> actions;
+  std::vector<MusicSelectToolbarState> saved;
+  auto toolbar = MusicSelectToolbarView::Create({}, callbacks(actions, saved), 260, 300);
+  toolbar->setGoalState(true, false, 400, "HARD", "AAA");
+  for (const auto [x, y] : {std::pair{0, 0}, std::pair{250, 0},
+                            std::pair{0, 290}, std::pair{250, 290}}) {
+    toolbar->applyState({.mode=MusicSelectToolbarMode::Expanded,
+                         .hasPosition=true, .x=static_cast<float>(x), .y=static_cast<float>(y)});
+    toolbar->applyYogaLayout();
+    auto *bubble = toolbar->findViewByName("chartGoalBubble");
+    expect(bubble && bubble->getVisible(), "unfinished goal displays a bubble");
+    if (!bubble) continue;
+    expect(bubble->getX() >= 0 && bubble->getY() >= 0 &&
+               bubble->getX() + bubble->getWidth() <= 260 &&
+               bubble->getY() + bubble->getHeight() <= 300,
+           "goal bubble fits on screen at each toolbar edge");
+  }
+  toolbar->setGoalState(true, true, 400, "HARD", "AAA");
+  expect(!toolbar->findViewByName("chartGoalBubble")->getVisible(),
+         "achieved goals do not show the bubble");
+  toolbar->setGoalState(false, false, -1, {}, {});
+  expect(!toolbar->findViewByName("chartGoalBubble")->getVisible(),
+         "missing goals do not show the bubble");
 }
 
 void testActionsModesAndDragPersist() {
@@ -211,7 +245,7 @@ void testActionsModesAndDragPersist() {
          "toolbar exposes chart and application actions");
 
   toolbar->activateControl(MusicSelectToolbarControl::Collapse);
-  expect(toolbar->controls().size() == 7,
+  expect(toolbar->controls().size() == 8,
          "collapse keeps event targets alive until deferred callbacks run");
   View::dispatchDeferredEventCallbacks();
   expect(toolbar->state().mode == MusicSelectToolbarMode::Collapsed &&
@@ -222,7 +256,7 @@ void testActionsModesAndDragPersist() {
   toolbar->activateControl(MusicSelectToolbarControl::Expand);
   View::dispatchDeferredEventCallbacks();
   expect(toolbar->state().mode == MusicSelectToolbarMode::Expanded &&
-             toolbar->controls().size() == 7,
+             toolbar->controls().size() == 8,
          "expand persists and rebuilds the toolbar");
 
   toolbar->applyYogaLayout();
@@ -270,7 +304,7 @@ void testPersistedSettingsStateAppliesToAnExistingToolbar() {
                        .x = 80.0F,
                        .y = 60.0F,
                        .hasPosition = true});
-  expect(toolbar->getVisible() && toolbar->controls().size() == 7 &&
+  expect(toolbar->getVisible() && toolbar->controls().size() == 8 &&
              toolbar->getX() == 80 && toolbar->getY() == 60 && saved.empty(),
          "returning from Settings rebuilds and places the retained toolbar "
          "from persisted state");
@@ -372,6 +406,7 @@ int main() {
   testCollapsedAndHiddenShapes();
   testExpandedToolbarWrapsWithinANarrowViewport();
   testControlsFitInsideToolbar();
+  testGoalBubbleStaysOnScreen();
   testActionsModesAndDragPersist();
   testPersistedSettingsStateAppliesToAnExistingToolbar();
   testDisabledChildReleaseFinishesToolbarDrag();

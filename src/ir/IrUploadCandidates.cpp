@@ -23,9 +23,7 @@ bool sourceAgrees(const IrUploadCandidateSource &source,
     return false;
   }
 
-  const auto expectedSnapshot =
-      captureIrSubmissionSnapshot(source.result, diagnostic);
-  if (!expectedSnapshot || *expectedSnapshot != source.snapshot) {
+  if (!serializeIrSubmissionSnapshot(source.snapshot, source.result, diagnostic)) {
     if (diagnostic.empty()) {
       diagnostic = "IR upload snapshot disagrees with its modern result";
     }
@@ -252,9 +250,7 @@ submissionForIrUploadCandidate(const IrUploadCandidate &candidate,
       }
       return std::nullopt;
     }
-    const auto expected =
-        captureIrSubmissionSnapshot(candidate.result, diagnostic);
-    if (!expected || *expected != candidate.snapshot) {
+    if (!serializeIrSubmissionSnapshot(candidate.snapshot, candidate.result, diagnostic)) {
       if (diagnostic.empty()) {
         diagnostic = "IR upload candidate snapshot disagrees with its result";
       }

@@ -49,6 +49,37 @@ MusicSelectProjection fixture(std::uint64_t revision = 1) {
   return value;
 }
 
+void testRecommendedGoalActionFollowsCharts() {
+  auto projection = fixture();
+  projection.bars[0].children.push_back({"action:add-recommended-goals"});
+  projection.bars.push_back({.id={"action:add-recommended-goals"},
+      .kind=skin::MusicSelectBarKind::Container, .title="Add recommended goals", .selectable=true});
+  for (const auto *sort : {"TITLE", "CLEAR", "SCORE"}) {
+    MusicSelectBarManager manager(projection, {.sortId=sort});
+    require(manager.open({"folder:a"}), "goal folder opens");
+    const auto rows = manager.readView();
+    require(rows.rowCount() == 3 && rows.rowAt(2).id.value == "action:add-recommended-goals",
+            "recommended goals action stays after charts under sorting");
+  }
+}
+
+void testRivalLampComparisonUsesStrength() {
+  auto projection = fixture();
+  for (std::size_t i = 2; i < 4; ++i) {
+    auto &bar = projection.bars[i];
+    bar.chart.emplace();
+    bar.presentation.exists = true;
+    bar.score.emplace();
+    bar.rivalScore.emplace();
+    bar.presentation.lamp = i == 2 ? 2 : 3;
+    bar.presentation.rivalLamp = i == 2 ? 3 : 2;
+  }
+  MusicSelectBarManager manager(projection, {.sortId="RIVALCOMPARE_CLEAR"});
+  require(manager.open({"folder:a"}), "rival lamp fixture opens");
+  require(manager.readView().rowAt(0).id.value == "song:2",
+          "rival comparison sorts light-versus-assist below assist-versus-light");
+}
+
 void testRandomSelectUsesOnlyPlayableFilteredSongs() {
   auto projection = fixture();
   for (std::size_t i = 2; i < projection.bars.size(); ++i) {
@@ -1140,6 +1171,8 @@ void testOpeningProviderBackedIdSurvivesSelectedRowCacheEviction() {
 }
 
 int main(int argc, char **argv) {
+  testRecommendedGoalActionFollowsCharts();
+  testRivalLampComparisonUsesStrength();
   {
     auto table = fixture();
     table.bars[0].children = {{"table:1:sha256:first"}, {"table:1:md5:target"}};

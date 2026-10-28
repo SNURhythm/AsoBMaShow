@@ -152,6 +152,7 @@ GameplaySimulation::GameplaySimulation(const GameplayDefinition &definition,
     auto carriedGauge = *config_.attempt.carriedGauge;
     carriedGauge.gaugeProfile = scoreState_.gaugeProfile;
     scoreState_.restoreGaugeState(carriedGauge);
+    scoreState_.resetGaugeEvidence();
   }
   scoreState_.combo = config_.attempt.carriedCombo;
   scoreState_.maxCombo = config_.attempt.carriedMaxCombo;
@@ -521,6 +522,7 @@ GameplayInputResult GameplaySimulation::commitMiss(NoteId id,
     // PMS consumes the missed identity, but an earlier nonvanishing BAD or
     // empty POOR has already applied its one miss penalty.
     ++scoreState_.stagePassedNotes;
+    scoreState_.updateGaugeEvidence();
   }
   result.hasReplayEvent = true;
   result.replayEvent = {
@@ -1227,12 +1229,15 @@ GameplayAdvanceResult GameplaySimulation::finalizeAbortedAttempt(
       terminalReason_ != GameplayTerminalReason::SurvivalGaugeFailed) {
     return emptyAdvanceResult();
   }
+  const auto evidence = scoreState_.gaugeEvidence;
   terminalReason_ = GameplayTerminalReason::None;
   automaticResults_.clear();
-  return finalizePendingNotes(
+  auto result = finalizePendingNotes(
       {.startMicros = std::numeric_limits<std::int64_t>::min(),
        .endMicros = std::numeric_limits<std::int64_t>::max()},
       finalizationTimeMicros, true);
+  scoreState_.gaugeEvidence = evidence;
+  return result;
 }
 
 GameplayAdvanceResult GameplaySimulation::finalizePendingNotes(

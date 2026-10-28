@@ -2646,7 +2646,8 @@ void testSupportedOlderSchemasMigrateAndPreserveRows() {
         return;
       }
       expect(execute(database.get(), "DROP TRIGGER IF EXISTS "
-                                     "score_sha256_summary_after_insert"),
+                                     "score_sha256_summary_after_insert;"
+                                     "DROP TABLE IF EXISTS goal_gauge_best"),
              "legacy score fixture removes the current summary trigger");
       expect(execute(database.get(), "DROP INDEX IF EXISTS idx_scores_best_eligible_" +
                          std::to_string(RulesetDescriptor::For(GameplayRuleset::LR2).version) +

@@ -68,7 +68,7 @@ class DecideLoadingOverlay;
 class MainMenuPreviewController;
 class MusicPlayerScene;
 class IrUploadsScene;
-class StreakScene;
+class KomboScene;
 class PlayOptionsPanelView;
 class NewcomerTutorialView;
 class ScrollView;
@@ -105,12 +105,12 @@ public:
   void cleanupScene() override;
 
 private:
-  enum class Tab { Play, Course, Music, Ir, Streak };
+  enum class Tab { Play, Course, Music, Ir, Kombo };
   Tab activeTab_ = Tab::Play;
   Tab selectorTab_ = Tab::Play;
   std::unique_ptr<MusicPlayerScene> musicTab_;
   std::unique_ptr<IrUploadsScene> irTab_;
-  std::unique_ptr<StreakScene> streakTab_;
+  std::unique_ptr<KomboScene> komboTab_;
   bool restoringTabSelection_ = false;
   std::optional<Tab> pendingTab_;
   std::future<void> tabPreviewStop_;
@@ -118,7 +118,15 @@ private:
   bool selectorTabActive() const;
   Scene *activeUtilityTab() const;
   void selectTab(Tab tab);
-  void openStreakAssignment(const std::string &id);
+  void openKomboAssignment(const std::string &id);
+  void openChartGoals(std::optional<ChartMetaRecord> initial = {}, std::optional<int> mode = {}, bool recommendations = false);
+  void openChartGoal(const ChartMetaRecord &record);
+  chart_goals::Index chartGoalIndex;
+  std::vector<std::string> chartGoalHashes;
+  void resumeGoalNavigation();
+  void applyGoalSelection(const ChartMetaRecord &, int mode);
+  std::optional<std::pair<ChartMetaRecord, int>> pendingGoalSelection_;
+  std::string pendingGoalProfile_;
   void completeTabSwitch(Tab tab);
   bool applyPendingTabSwitch();
   void cancelPendingTabSwitch();
@@ -177,6 +185,7 @@ private:
       AllSongs,
       Assignments,
       Favorites,
+      Goals,
       SolidArchives,
       DifficultyTable,
       DifficultyLevel,
@@ -218,6 +227,7 @@ private:
   std::array<SelectorTabState, 2> selectorStates_;
 
   RecyclerView<ChartMetaRecord> *recyclerView = nullptr;
+  ChartMetaRecord recommendedGoalsRow_;
   RecyclerView<LibraryFolderItem> *folderRecyclerView = nullptr;
   struct LibraryFolderMetadataCache {
     bool valid = false;
@@ -392,8 +402,8 @@ private:
   CourseValidationCache courseValidationCache;
   std::unordered_set<std::string> expandedLibraryFolders;
   std::string searchText;
-  streak::Day assignmentDay;
-  streak::DayId assignmentDayId = 0;
+  kombo::Day assignmentDay;
+  kombo::DayId assignmentDayId = 0;
   std::optional<std::vector<MusicSelectAssignmentChart>> assignmentCharts;
   std::map<std::string, std::vector<std::string>> assignmentChartHashes;
   std::optional<std::filesystem::path> temporaryChartFolder;

@@ -89,7 +89,7 @@ describeChartScoreDifference(const ChartScoreWrite &expected,
         " expectedBits=" + std::to_string(expectedGaugeBits) +
         " actualBits=" + std::to_string(actualGaugeBits));
   }
-  scalar("clearType", expected.clearType, actual.clearType);
+  scalar("clearType", normalizeClearLamp(expected.clearType), normalizeClearLamp(actual.clearType));
   opaque("provenance", expected.provenance, actual.provenance);
   opaque("badPoints", expected.badPoints, actual.badPoints);
 

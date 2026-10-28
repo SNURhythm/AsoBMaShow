@@ -196,6 +196,7 @@ RhythmState resultStateFrom(
   }
   state.gaugeHistory = adoptedGaugeHistory;
   state.gaugeHistoryFor(adoptedGaugeType) = adoptedGaugeHistory;
+  state.gaugeEvidence = {}; // Historical display reconstruction is not measured evidence.
   return state;
 }
 

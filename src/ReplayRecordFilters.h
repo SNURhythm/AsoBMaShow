@@ -1,4 +1,5 @@
 #pragma once
+#include "ClearLampOrder.h"
 
 #include "PlayOptionUtils.h"
 #include "ReplayClearMarkUtils.h"
@@ -29,6 +30,7 @@ struct ReplayRecordFilters {
 namespace replay_record_filters {
 
 inline int clearMarkBucket(int clearTypeRank) {
+  clearTypeRank = normalizeClearLamp(clearTypeRank);
   if (clearTypeRank >= kClearTypeFullComboRank) {
     return kClearTypeFullComboRank;
   }
@@ -44,11 +46,11 @@ inline int clearMarkBucket(int clearTypeRank) {
   if (clearTypeRank >= kClearTypeEasyClearRank) {
     return kClearTypeEasyClearRank;
   }
-  if (clearTypeRank >= kClearTypeLightAssistedEasyClearRank) {
-    return kClearTypeLightAssistedEasyClearRank;
-  }
   if (clearTypeRank >= kClearTypeAssistedEasyClearRank) {
     return kClearTypeAssistedEasyClearRank;
+  }
+  if (clearTypeRank >= kClearTypeLightAssistedEasyClearRank) {
+    return kClearTypeLightAssistedEasyClearRank;
   }
   return kClearTypeFailedRank;
 }
@@ -125,8 +127,8 @@ apply(const std::vector<ReplaySummary> &summaries,
                          replay_clear_mark::effectiveClearRank(b);
                      switch (effectiveFilters.sort) {
                      case ReplayRecordSortCriterion::ClearMark:
-                       if (aClearRank != bClearRank) {
-                         return aClearRank > bClearRank;
+                       if (clearLampOrder(aClearRank) != clearLampOrder(bClearRank)) {
+                         return clearLampOrder(aClearRank) > clearLampOrder(bClearRank);
                        }
                        if (a.finalScore != b.finalScore) {
                          return a.finalScore > b.finalScore;
@@ -139,8 +141,8 @@ apply(const std::vector<ReplaySummary> &summaries,
                        if (a.finalScore != b.finalScore) {
                          return a.finalScore > b.finalScore;
                        }
-                       if (aClearRank != bClearRank) {
-                         return aClearRank > bClearRank;
+                       if (clearLampOrder(aClearRank) != clearLampOrder(bClearRank)) {
+                         return clearLampOrder(aClearRank) > clearLampOrder(bClearRank);
                        }
                        if (a.maxCombo != b.maxCombo) {
                          return a.maxCombo > b.maxCombo;
@@ -153,8 +155,8 @@ apply(const std::vector<ReplaySummary> &summaries,
                        if (a.finalScore != b.finalScore) {
                          return a.finalScore > b.finalScore;
                        }
-                       if (aClearRank != bClearRank) {
-                         return aClearRank > bClearRank;
+                       if (clearLampOrder(aClearRank) != clearLampOrder(bClearRank)) {
+                         return clearLampOrder(aClearRank) > clearLampOrder(bClearRank);
                        }
                        break;
                      case ReplayRecordSortCriterion::Newest:
@@ -196,7 +198,7 @@ inline bool matches(const ResultRecordSummary &summary,
                     const ReplayRecordFilters &filters) {
   if (filters.clearMarkRank.has_value() &&
       (!summary.clearRankAvailable ||
-       clearMarkBucket(summary.clearRank) != *filters.clearMarkRank)) {
+       clearMarkBucket(summary.clearRank) != normalizeClearLamp(*filters.clearMarkRank))) {
     return false;
   }
   if (filters.playOption.has_value() &&
@@ -250,8 +252,8 @@ apply(const std::vector<ResultRecordSummary> &summaries,
           if (a.clearRankAvailable != b.clearRankAvailable) {
             return a.clearRankAvailable;
           }
-          if (a.clearRankAvailable && a.clearRank != b.clearRank) {
-            return a.clearRank > b.clearRank;
+          if (a.clearRankAvailable && clearLampOrder(a.clearRank) != clearLampOrder(b.clearRank)) {
+            return clearLampOrder(a.clearRank) > clearLampOrder(b.clearRank);
           }
           if (a.scoreAvailable != b.scoreAvailable) {
             return a.scoreAvailable;
@@ -273,8 +275,8 @@ apply(const std::vector<ResultRecordSummary> &summaries,
           if (a.clearRankAvailable != b.clearRankAvailable) {
             return a.clearRankAvailable;
           }
-          if (a.clearRankAvailable && a.clearRank != b.clearRank) {
-            return a.clearRank > b.clearRank;
+          if (a.clearRankAvailable && clearLampOrder(a.clearRank) != clearLampOrder(b.clearRank)) {
+            return clearLampOrder(a.clearRank) > clearLampOrder(b.clearRank);
           }
           if (a.maxCombo != b.maxCombo) {
             return a.maxCombo > b.maxCombo;
@@ -293,8 +295,8 @@ apply(const std::vector<ResultRecordSummary> &summaries,
           if (a.clearRankAvailable != b.clearRankAvailable) {
             return a.clearRankAvailable;
           }
-          if (a.clearRankAvailable && a.clearRank != b.clearRank) {
-            return a.clearRank > b.clearRank;
+          if (a.clearRankAvailable && clearLampOrder(a.clearRank) != clearLampOrder(b.clearRank)) {
+            return clearLampOrder(a.clearRank) > clearLampOrder(b.clearRank);
           }
           break;
         case ReplayRecordSortCriterion::Newest:

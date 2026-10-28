@@ -14,7 +14,7 @@ MusicSelectBar folder(std::string id, std::string title) {
                          .title=std::move(title), .exists=true},
           .selectable=true, .sortable=true, .childrenLoaded=false};
 }
-bool contributes(const streak::Progress &progress, const MusicSelectAssignmentChart &source,
+bool contributes(const kombo::Progress &progress, const MusicSelectAssignmentChart &source,
                  const MusicSelectRepositoryProjectionInput &input) {
   const auto &record = source.record;
   if (record.unavailable || record.solidArchive || record.meta.BmsPath.empty() ||
@@ -22,7 +22,7 @@ bool contributes(const streak::Progress &progress, const MusicSelectAssignmentCh
   if (progress.chartProgress.contains(record.meta.SHA256)) return true;
   const auto score = progress.requirement.eligibleScoreRank != -2 && input.scoreFor
       ? input.scoreFor(record.meta, input.selectedLongNoteMode) : std::nullopt;
-  return streak::eligible(progress.requirement,
+  return kombo::eligible(progress.requirement,
       {.chart=record.meta.SHA256, .levels=source.levels,
        .previousLamp=input.clearFor
            ? input.clearFor(record.meta, input.selectedLongNoteMode) : -1,
@@ -39,20 +39,21 @@ MusicSelectBar musicSelectAssignmentsRoot(std::string title) {
   return folder(std::string(rootId), std::move(title));
 }
 std::vector<MusicSelectBar> musicSelectAssignmentChildren(
-    const streak::Day &day, const MusicSelectBar &directory,
+    const kombo::Day &day, const MusicSelectBar &directory,
     std::span<const MusicSelectAssignmentChart> charts,
     MusicSelectRepositoryProjectionInput input) {
   if (!musicSelectIsAssignmentDirectory(directory)) return {};
   const bool root = directory.id.value == rootId;
   std::vector<MusicSelectBar> result;
-  std::vector<const streak::Progress *> assignments;
+  std::vector<const kombo::Progress *> assignments;
   for (const auto &progress : day.assignments) {
+    if (kombo::isGoalsAssignment(progress.requirement)) continue;
     const auto id = std::string(assignmentPrefix) + progress.requirement.id;
     if (root) result.push_back(folder(id, progress.requirement.name));
     if (root || directory.id.value == id) assignments.push_back(&progress);
   }
   if (day.points >= day.config.dailyGoal &&
-      streak::bonusPoints(day) >= streak::bonusLimit(day)) return result;
+      kombo::bonusPoints(day) >= kombo::bonusLimit(day)) return result;
   std::set<std::string> included;
   for (const auto &source : charts) {
     const auto &record = source.record;
@@ -68,11 +69,12 @@ std::vector<MusicSelectBar> musicSelectAssignmentChildren(
 }
 
 bool musicSelectAssignmentNeedsAdjustment(
-    const streak::Day &day, const streak::Progress &progress,
+    const kombo::Day &day, const kombo::Progress &progress,
     std::span<const MusicSelectAssignmentChart> charts,
     MusicSelectRepositoryProjectionInput input) {
+  if (kombo::isGoalsAssignment(progress.requirement)) return false;
   const bool bonus = day.points >= day.config.dailyGoal;
-  if (bonus && streak::bonusPoints(day) >= streak::bonusLimit(day)) return false;
+  if (bonus && kombo::bonusPoints(day) >= kombo::bonusLimit(day)) return false;
   const int remaining = std::max(1, progress.requirement.chartCount - progress.charts);
   std::set<std::string> available;
   for (const auto &source : charts) {

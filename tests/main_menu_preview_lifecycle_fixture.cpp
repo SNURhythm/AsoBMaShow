@@ -21,12 +21,15 @@ void appendDebugLogLine(const std::string &) {}
 std::string formatFindBmsBytes(std::uint64_t) { return {}; }
 
 struct View {
+  virtual ~View() = default;
   void onSelected() {}
   void freeImage() {}
   void setImageAsync(const std::filesystem::path &, bool) {}
   void setText(const std::string &) {}
   void setLocalizedText(const i18n::Text &) {}
 };
+
+struct ChartListItemView : View {};
 
 struct RecyclerView {
   std::function<void(const ChartMetaRecord &, int)> onSelected;
@@ -63,6 +66,10 @@ struct MainMenuScene {
   std::atomic_bool cleanupOnSelectionThread = false;
   std::thread::id selectionThread;
 
+  void updateSelectedGoalBubble(ChartListItemView *, const ChartMetaRecord &) {}
+  bool recommendationsOpened = false;
+  void openChartGoals(std::optional<ChartMetaRecord>, std::optional<int>, bool recommended) { recommendationsOpened = recommended; }
+  void defer(std::function<bool()> fn, int, bool) { fn(); }
   void refreshRankingsButton() {}
   void refreshReplayAvailability(const ChartMetaRecord *) {}
   void refreshPlayOptionButtons() {}
@@ -192,6 +199,13 @@ void exerciseDirectSelectionTiming() {
 }
 
 int main() {
+  {
+    MainMenuScene scene;
+    ChartMetaRecord action; action.addRecommendedGoals = true;
+    scene.recycler.onSelectedByPointer(action, 0);
+    expect(scene.recommendationsOpened && !scene.selectedChartRecord,
+           "recommendation row opens goals without selecting a chart");
+  }
   exerciseDirectSelectionTiming();
   for (int kind = 0; kind <= 8; ++kind) {
     exerciseSelection(kind, false);

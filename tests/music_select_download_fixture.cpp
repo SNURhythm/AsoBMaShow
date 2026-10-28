@@ -69,6 +69,7 @@ struct MusicSelectScene {
   std::optional<int> selectedRankingRequest() const { return std::nullopt; }
   bool toolbarControlAvailable(MusicSelectToolbarControl control) const;
   void refreshToolbarAvailability();
+  void refreshToolbarGoal() {}
   bool canDownloadSelectedChart() const;
   void openDownload();
 };

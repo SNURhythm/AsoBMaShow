@@ -10,7 +10,7 @@ struct Repository {
   std::uint64_t GetLibraryRevision() const { return revision; }
 };
 
-namespace streak { inline int day=0; int today() { return day; } }
+namespace kombo { inline int day=0; int today() { return day; } }
 
 struct MusicSelectScene {
   struct Modal {
@@ -25,7 +25,7 @@ struct MusicSelectScene {
   } context;
   std::uint64_t libraryRevision_ = 0;
   std::uint64_t scoreRevision_ = 0;
-  int assignmentDayId_ = streak::today();
+  int assignmentDayId_ = kombo::today();
   std::uint64_t irRankingEvidenceRevision_ = 0;
   std::map<int, int> rankingCache_;
   std::optional<int> rankingRequest_ = 1;
@@ -38,7 +38,7 @@ struct MusicSelectScene {
     ++reloads;
     libraryRevision_ = context.chartRepository.GetLibraryRevision();
     scoreRevision_ = context.scoreRepository.GetRevision();
-    assignmentDayId_ = streak::today();
+    assignmentDayId_ = kombo::today();
   }
   void selectedBarMoved() { ++selectionRefreshes; rankingModalOpen = false; }
   void refreshRepositoryRevisions();
@@ -82,7 +82,7 @@ int main() {
   scene.rankingCache_[1] = 456;
   scene.refreshRepositoryRevisions();
   assert(scene.rankingCache_.at(1) == 456 && scene.selectionRefreshes == 3);
-  ++streak::day;
+  ++kombo::day;
   scene.refreshRepositoryRevisions();
   assert(scene.reloads == 4 && scene.selectionRefreshes == 4);
   scene.refreshRepositoryRevisions();

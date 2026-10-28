@@ -1109,6 +1109,85 @@ void testChartQueryBehaviorMatrix() {
   checkQuery(query, descending, 5, 0);
   query.sortDirection = ChartRecordSortDirection::Ascending;
   checkQuery(query, ascending, 5, 0);
+
+  // Exercise canonical and old lamp IDs through real library/table queries.
+  seedChartScore(scorePath, "alpha.bms", md5A, shaA, 1, 150, 100);
+  {
+    auto db = openDatabase(scorePath);
+    assert(execute(db.get(), R"sql(UPDATE scores SET eligibility=1,
+        provenance_json='{"autoPlay":false,"practice":false,"judgeWindowScalePercent":100}'
+        WHERE clear_type=150)sql"));
+    assert(execute(db.get(), "UPDATE score_summary_revisions SET revision=2 WHERE name='clear_lamp_order'"));
+    assert(!score_cache_queries::ensureScoreSummarySchema(db.get()).has_value());
+  }
+  seedChartScore(scorePath, "beta.bms", md5B, shaB, 1, 100, 300);
+  for (const bool tableScope : {false, true}) {
+    query = {};
+    query.selectedLongNoteMode = 1;
+    query.tableId = tableScope ? tables.front().id : 0;
+    query.tableLevel = tableScope ? "1" : "";
+    query.clearMarkFilter = true;
+    query.clearMarkRank = 100;
+    query.clearMarkOrAbove = true;
+    query.sortCriterion = ChartRecordSortCriterion::ClearMark;
+    query.sortDirection = ChartRecordSortDirection::Ascending;
+    checkQuery(query, {"beta.bms", "delta.bms"}, 2, 0);
+    query.clearMarkRank = 50;
+    checkQuery(query, {"alpha.bms", "beta.bms", "delta.bms"}, 3, 0);
+    query.clearMarkOrAbove = false;
+    checkQuery(query, {"alpha.bms"}, 1, 0);
+    query.clearMarkRank = 150;
+    checkQuery(query, {"alpha.bms"}, 1, 0);
+    query.clearMarkRank = 100;
+    query.clearMarkOrBelow = true;
+    query.keyword = "Artist";
+    // Title/artist rows include no-play Epsilon; exclude it by its empty artist.
+    checkQuery(query, {"gamma.bms", "alpha.bms", "beta.bms"}, 3, 0);
+  }
+  {
+    auto db = openDatabase(scorePath);
+    assert(execute(db.get(), "INSERT INTO goal_gauge_best VALUES('" + std::string(shaC) +
+        "',1,50,59,60,0,100,1)"));
+  }
+  assert(session->GoalRecommendationCounts().at(50) == 1);
+  assert(session->GoalRecommendationCounts(tables.front().id).at(50) == 1);
+  assert(session->GoalRecommendations(50, 0, tables.front().id, true).size() == 1);
+  assert(session->GoalRecommendationCounts(-999).empty());
+  for (int target : {50, 150}) {
+    const auto recommendations = session->GoalRecommendations(target, 0);
+    assert(recommendations.size() == 1 && recommendations[0].sha256 == shaC &&
+           recommendations[0].target == 50);
+  }
+  // Filtering and sorting occur before paging, including MD5-only table entries.
+  constexpr auto shaE = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+  {
+    auto db = openDatabase(scorePath);
+    assert(execute(db.get(), "INSERT INTO goal_gauge_best VALUES('" + std::string(shaE) + "',0,50,56,60,0,100,4)"));
+  }
+  {
+    auto db = openDatabase(chartPath);
+    assert(execute(db.get(), "UPDATE difficulty_table_entries SET sha256='',sort_order=-1 WHERE sha256='" + std::string(shaE) + "'"));
+  }
+  const auto nearest = session->GoalRecommendations(50, 0, tables.front().id, false);
+  const auto ordered = session->GoalRecommendations(50, 0, tables.front().id, true);
+  assert(session->GoalRecommendationCounts(tables.front().id).at(50) == 2);
+  assert(nearest.size() == 2 && nearest[0].sha256 == shaC && nearest[1].sha256 == shaE);
+  assert(ordered.size() == 2 && ordered[0].sha256 == shaE && ordered[1].sha256 == shaC);
+  {
+    auto db = openDatabase(chartPath);
+    assert(execute(db.get(), "DELETE FROM difficulty_table_entries WHERE md5='55555555555555555555555555555555'"));
+  }
+  assert(session->GoalRecommendationCounts(tables.front().id).at(50) == 1);
+  assert(session->GoalRecommendations(50, 0, tables.front().id, true).size() == 1);
+  {
+    auto db = openDatabase(scorePath);
+    assert(execute(db.get(), "CREATE TABLE IF NOT EXISTS chart_goals(sha256 TEXT,ln_mode INTEGER,body TEXT,PRIMARY KEY(sha256,ln_mode))"));
+    assert(execute(db.get(), "INSERT INTO chart_goals VALUES('" + std::string(shaC) +
+        "',1,'{\"lamp\":50,\"numerator\":0,\"denominator\":27}')"));
+  }
+  assert(!session->GoalRecommendationCounts(tables.front().id).contains(50));
+  assert(session->GoalRecommendations(50, 0, tables.front().id, true).empty());
+
 }
 
 void testDifficultyEntryDownloadUrlsFollowTheirSourceRows() {
@@ -4512,7 +4591,7 @@ void testAssignmentCandidateQueries() {
   assert(execute(database.get(), "UPDATE chart_meta SET subtitle='', artist='', sub_artist='', genre=''"));
   auto session = repository.OpenSession();
   assert(session);
-  streak::Day day;
+  kombo::Day day;
   day.assignments.push_back({.requirement={.id="one", .levels={{"table","0",""},{"table","1",""}}}});
   day.assignments[0].chartProgress["cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"] = {};
   const auto metadata = MusicSelectRepositoryProjection::loadMetadata(*session, 1);

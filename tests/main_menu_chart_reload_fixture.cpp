@@ -13,7 +13,7 @@ path_t fspath_to_path_t(const std::filesystem::path &path) { return path; }
 struct ChartMetaRecord {
   struct { std::filesystem::path BmsPath; std::string Title, Artist; } meta;
   std::string difficultyTableLabels;
-  bool unzipAll=false, courseStart=false, unavailable=false, solidArchive=false;
+  bool unzipAll=false, courseStart=false, unavailable=false, solidArchive=false, addRecommendedGoals=false;
   std::optional<int> randomSelect;
 };
 enum class ChartRecordSortCriterion { Default, ClearMark, Rate };
@@ -85,6 +85,7 @@ struct MainMenuScene {
   Tab selectorTab_=Tab::Play;
   // CACHE_TYPE
   ChartListPageCache chartListCache;
+  ChartMetaRecord recommendedGoalsRow_;
   main_menu_library::RandomAvailabilityCache randomAvailabilityCache;
   Recycler list;
   Recycler *recyclerView=&list;
@@ -93,7 +94,7 @@ struct MainMenuScene {
   std::optional<ChartMetaRecord> selectedChartRecord;
   std::optional<std::filesystem::path> temporaryChartFolder;
   struct LibraryFolderItem {
-    enum class Type { AllSongs, Course, CoursesRoot, SolidArchives, DifficultyClearMark };
+    enum class Type { AllSongs, Course, CoursesRoot, SolidArchives, DifficultyClearMark, Goals };
     Type type=Type::AllSongs;
     int courseId=0;
     std::string label, courseGroupName, key;
@@ -134,6 +135,9 @@ struct MainMenuScene {
   std::vector<int> replayIrObservedRevisions;
   void setReplayButtonVisible(bool) {}
   void startChartDirect(const ChartMetaRecord &record) { playedPath=record.meta.BmsPath; }
+  bool openedRecommendations = false;
+  void openChartGoals(std::optional<ChartMetaRecord>, std::optional<int>, bool recommended) { openedRecommendations = recommended; }
+  void defer(std::function<bool()> callback, int, bool) { callback(); }
   struct Details { std::filesystem::path path;
     void setChart(const ChartMetaRecord *record, const auto &, int, const std::string &) {
       path=record ? record->meta.BmsPath : std::filesystem::path{};
@@ -167,6 +171,23 @@ struct MainMenuScene {
 };
 // PRODUCTION_METHODS
 int main() {
+  {
+    MainMenuScene scene;
+    scene.activeFolder.type = MainMenuScene::LibraryFolderItem::Type::Goals;
+    scene.chartSession->rows = {{{"goal1.bms"}}, {{"goal2.bms"}}};
+    scene.reloadChartList();
+    assert(scene.list.size() == 3 && scene.list.get(2).addRecommendedGoals);
+    assert(scene.list.get(1).meta.BmsPath == "goal2.bms");
+    scene.list.selectedIndex = 2;
+    scene.startSelectedChart();
+    assert(scene.openedRecommendations);
+    scene.chartSession->rows.clear();
+    scene.reloadChartList();
+    assert(scene.list.size() == 1 && scene.list.get(0).addRecommendedGoals);
+    scene.activeFolder.type = MainMenuScene::LibraryFolderItem::Type::AllSongs;
+    scene.reloadChartList();
+    assert(scene.list.size() == 0);
+  }
   {
     MainMenuScene scene;
     scene.chartSession->rows = {{{"eligible.bms"}}};

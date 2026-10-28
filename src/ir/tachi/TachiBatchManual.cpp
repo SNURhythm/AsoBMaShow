@@ -20,7 +20,7 @@ namespace ir::tachi {
 namespace {
 
 std::optional<std::string_view> lampForClearRank(int clearType) {
-  switch (clearType) {
+  switch (normalizeClearLamp(clearType)) {
   case kClearTypeFailedRank:
     return "FAILED";
   case kClearTypeAssistedEasyClearRank:

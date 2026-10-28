@@ -3,6 +3,7 @@ target_sources(main PRIVATE
     ArchiveUnzipOperation.cpp
     ChartFilterSortPanelView.cpp
     ChartPreloadWorker.cpp
+    ChartGoalsScene.cpp
     ChartRecordsScene.cpp
     ChartViewerScene.cpp
     CourseGameplaySessionBuilder.cpp
@@ -71,4 +72,4 @@ target_sources(main PRIVATE SettingsSceneCalibration.cpp)
 
 target_sources(main PRIVATE ChartReadmeModal.cpp)
 
-target_sources(main PRIVATE StreakScene.cpp)
+target_sources(main PRIVATE KomboScene.cpp)

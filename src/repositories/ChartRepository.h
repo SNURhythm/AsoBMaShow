@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <map>
 #include <optional>
 #include <span>
 #include <string>
@@ -118,6 +119,7 @@ struct ChartMetaRecord {
   std::string difficultyTableLabels;
   bool courseStart = false;
   bool unzipAll = false;
+  bool addRecommendedGoals = false;
   bool unavailable = false;
   bool solidArchive = false;
   std::uint64_t archiveSize = 0;
@@ -274,6 +276,13 @@ struct DifficultyCourseInfo {
 /**
  *
  */
+struct GoalRecommendation {
+  std::string sha256;
+  int longNoteMode = 0, target = 0, score = 0, maxScore = 0, remaining = 0;
+  float gaugeValue = 0, gaugeBorder = 0;
+  int deathNotes = 0, totalNotes = 0;
+};
+
 class ChartRepository {
 public:
   class Session {
@@ -410,6 +419,8 @@ public:
     std::vector<bms_parser::ChartMeta>
     SelectChartMetaByHash(const std::string &sha256,
                           const std::string &md5, std::stop_token stop = {});
+    std::map<int, int> GoalRecommendationCounts(int tableId = 0);
+    std::vector<GoalRecommendation> GoalRecommendations(int target, int offset, int tableId = 0, bool sortTable = false);
     int CountChartMeta(const ChartMetaQuery &query);
     int FindChartMetaIndex(const ChartMetaQuery &query,
                            const std::filesystem::path &path);

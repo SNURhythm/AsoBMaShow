@@ -84,6 +84,14 @@ ResultRecordSummary makeRemoteResultRecordForFilter(
 } // namespace
 
 int main() {
+  for (const auto criterion : {ReplayRecordSortCriterion::ClearMark,
+                               ReplayRecordSortCriterion::Score,
+                               ReplayRecordSortCriterion::MaxCombo}) {
+    ReplayRecordFilters order; order.sort = criterion;
+    const auto sorted = replay_record_filters::apply(
+        std::vector<ReplaySummary>{makeSummary(2,150,100,200,50), makeSummary(1,100,100,200,50)}, order);
+    ASSERT_EQ(1, sorted.front().id, "Assist Easy outranks Light Assist, including ties");
+  }
   std::vector<ReplaySummary> summaries = {
       makeSummary(1, kClearTypeFailedRank, 600, 1000, 120, std::nullopt),
       makeSummary(2, kClearTypeFullComboRank, 900, 1000, 450, "MIRROR"),

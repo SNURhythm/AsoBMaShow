@@ -1,6 +1,7 @@
 #include "rendering/UniformCache.h"
 #include "rendering/ResponsiveUi.h"
 #include "view/ChartDetailsView.h"
+#include "view/Button.h"
 #include "view/ImageView.h"
 #include "view/ScrollView.h"
 #include "view/TextView.h"
@@ -419,6 +420,30 @@ int main() {
             "split details keep chart facts and personal best in separate columns");
     require(text(scoreColumn, "chartDetailsScore") == "1800 / 2000",
             "the external score card receives selection updates");
+    auto *favorite = dynamic_cast<Button *>(details.findViewByName("chartDetailsFavorite"));
+    const auto *title = details.findViewByName("chartDetailsTitle");
+    require(favorite && favorite->getVisible() &&
+                favorite->getX() + favorite->getWidth() <= title->getX(),
+            "the favorite action sits to the left of the chart title");
+    bool favoriteWriteSucceeds = false;
+    int favoriteWrites = 0;
+    details.setFavoriteToggleHandler([&](const ChartMetaRecord &clicked, bool next) {
+      require(clicked.meta.BmsPath == record.meta.BmsPath && next,
+              "the title favorite action targets the selected chart");
+      ++favoriteWrites;
+      return favoriteWriteSucceeds;
+    });
+    const auto clickFavorite = [&] {
+      SDL_Event event{}; event.button.button = SDL_BUTTON_LEFT;
+      event.button.x = favorite->getX() + favorite->getWidth() / 2;
+      event.button.y = favorite->getY() + favorite->getHeight() / 2;
+      event.type = SDL_EVENT_MOUSE_BUTTON_DOWN; details.handleEvents(event);
+      event.type = SDL_EVENT_MOUSE_BUTTON_UP; details.handleEvents(event);
+    };
+    clickFavorite();
+    require(favoriteWrites == 1 && !favorite->isSelected(), "failed favorite saves preserve the star state");
+    favoriteWriteSucceeds = true; clickFavorite();
+    require(favoriteWrites == 2 && favorite->isSelected(), "saved favorites fill the title star");
     const int naturalHeight = details.getHeight();
     details.setMinHeight(520);
     details.applyYogaLayout();

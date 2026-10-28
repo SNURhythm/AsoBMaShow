@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../../ClearLampOrder.h"
+
 #include "../../audio/PlaybackRate.h"
 #include "../../AssistOptionUtils.h"
 
@@ -114,15 +116,15 @@ enum class AssistClearMark {
   AssistedEasy,
 };
 
-inline constexpr int kNoClearTypeRank = -1;
-inline constexpr int kClearTypeFailedRank = 0;
-inline constexpr int kClearTypeAssistedEasyClearRank = 100;
-inline constexpr int kClearTypeLightAssistedEasyClearRank = 150;
-inline constexpr int kClearTypeEasyClearRank = 200;
-inline constexpr int kClearTypeNormalClearRank = 300;
-inline constexpr int kClearTypeHardClearRank = 400;
-inline constexpr int kClearTypeExHardClearRank = 500;
-inline constexpr int kClearTypeFullComboRank = 600;
+inline constexpr int kNoClearTypeRank = clearLampRank<-1>();
+inline constexpr int kClearTypeFailedRank = clearLampRank<0>();
+inline constexpr int kClearTypeAssistedEasyClearRank = clearLampRank<100>();
+inline constexpr int kClearTypeLightAssistedEasyClearRank = clearLampRank<50>();
+inline constexpr int kClearTypeEasyClearRank = clearLampRank<200>();
+inline constexpr int kClearTypeNormalClearRank = clearLampRank<300>();
+inline constexpr int kClearTypeHardClearRank = clearLampRank<400>();
+inline constexpr int kClearTypeExHardClearRank = clearLampRank<500>();
+inline constexpr int kClearTypeFullComboRank = clearLampRank<600>();
 inline constexpr std::size_t kGaugeTypeCount = 9;
 
 namespace clear_policy {
@@ -151,6 +153,7 @@ assistClearRequired(const audio::PlaybackRate &playback) noexcept {
 
 [[nodiscard]] inline int
 capRankForPlayback(int rank, const audio::PlaybackRate &playback) noexcept {
+  rank = normalizeClearLamp(rank);
   if (!assistClearRequired(playback) ||
       rank < kClearTypeAssistedEasyClearRank) {
     return rank;
@@ -161,6 +164,7 @@ capRankForPlayback(int rank, const audio::PlaybackRate &playback) noexcept {
 [[nodiscard]] inline int
 fullComboRankForPlayback(int rank, bool fullComboAchieved,
                          const audio::PlaybackRate &playback) noexcept {
+  rank = normalizeClearLamp(rank);
   // Light Assist Easy is a final BMSPlayer result class. Its rank is distinct
   // from a player-selected Assisted Easy gauge, which may still earn FC.
   if (fullComboAchieved && rank >= kClearTypeAssistedEasyClearRank &&
@@ -414,6 +418,7 @@ inline const char *clearTypeToLabel(ClearType clearType) {
 }
 
 inline const char *clearTypeRankToLabel(int rank) {
+  rank = normalizeClearLamp(rank);
   if (rank >= kClearTypeFullComboRank) {
     return "FULL COMBO";
   }
@@ -429,11 +434,11 @@ inline const char *clearTypeRankToLabel(int rank) {
   if (rank >= kClearTypeEasyClearRank) {
     return "EASY CLEAR";
   }
-  if (rank >= kClearTypeLightAssistedEasyClearRank) {
-    return "LIGHT ASSIST EASY CLEAR";
-  }
   if (rank >= kClearTypeAssistedEasyClearRank) {
     return "ASSIST EASY CLEAR";
+  }
+  if (rank >= kClearTypeLightAssistedEasyClearRank) {
+    return "LIGHT ASSIST EASY CLEAR";
   }
   if (rank == kNoClearTypeRank) {
     return "NO PLAY";

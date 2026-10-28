@@ -79,6 +79,34 @@ void refreshJsonFingerprint(nlohmann::ordered_json &root) {
   root["fingerprint"] = file_checksum::sha256(payload.dump());
 }
 
+void testLegacyLightAssistOwnerAgreement() {
+  auto owner = validResult();
+  owner.score.clearType = 150;
+  owner.resultFingerprint = result_persistence::modernResultFingerprint(owner);
+  std::string diagnostic;
+  auto wire = nlohmann::ordered_json::parse(*ir::serializeIrSubmissionSnapshot(capture(owner), diagnostic));
+  wire["submission"]["clearType"] = 150;
+  refreshJsonFingerprint(wire);
+  const auto historical = ir::deserializeIrSubmissionSnapshot(
+      wire.dump(), wire["fingerprint"].get<std::string>(), diagnostic);
+  expect(historical.has_value(), "historical Light Assist fingerprint validates");
+  if (!historical) return;
+  expect(ir::serializeIrSubmissionSnapshot(*historical, owner, diagnostic) == wire.dump(),
+         "legacy owner agreement preserves original wire payload and fingerprint");
+  owner.score.clearType = 50;
+  owner.resultFingerprint = result_persistence::modernResultFingerprint(owner);
+  expect(ir::serializeIrSubmissionSnapshot(*historical, owner, diagnostic).has_value(),
+         "canonical owner recognizes authenticated legacy Light Assist");
+  owner.score.clearType = 100;
+  owner.resultFingerprint = result_persistence::modernResultFingerprint(owner);
+  expect(!ir::serializeIrSubmissionSnapshot(*historical, owner, diagnostic),
+         "legacy Light Assist cannot impersonate Assist Easy");
+  auto tampered = *historical;
+  tampered.submission.clearType = 50;
+  expect(!ir::serializeIrSubmissionSnapshot(tampered, owner, diagnostic),
+         "normalization does not bypass original fingerprint validation");
+}
+
 void testCaptureAndReplayIndependence() {
   const auto result = validResult();
   const auto snapshot = capture(result);
@@ -298,6 +326,7 @@ void testStrictValidationAndBounds() {
 } // namespace
 
 int main() {
+  testLegacyLightAssistOwnerAgreement();
   testCaptureAndReplayIndependence();
   testCaptureUsesEffectiveFullComboClearRank();
   testCanonicalRoundTripAndTamperChecks();

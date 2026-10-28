@@ -158,8 +158,9 @@ struct ResultScene final : Scene {
   Observations &observations;
   bool course;
   bool persistenceBlocked = false;
-  streak::ResultPresentation streakPresentation_;
-  long long streakSkinResumeMillis_ = 0;
+  kombo::ResultPresentation komboPresentation_;
+  GoalResultPresentation goalPresentation_;
+  long long komboSkinResumeMillis_ = 0;
   LocalResult local;
   std::unique_ptr<FakeResultSkin> resultSkinSession;
   std::optional<UiLogicalPoint> resultSkinPointerUiPosition;
@@ -315,15 +316,25 @@ void testCourseReplayOwnsTransition() {
 int main() {
   {
     Fixture fixture;
-    fixture.result->streakPresentation_.arm(
+    fixture.result->goalPresentation_.arm(true);
+    fixture.renderAt(100000);
+    require(!fixture.result->resultSkinFadeoutStartedMillis, "pending goal celebration suppresses skin auto exit");
+    fixture.result->goalPresentation_.start(SDL_GetTicks(), false);
+    fixture.renderAt(101000);
+    require(!fixture.result->resultSkinFadeoutStartedMillis, "visible goal celebration suppresses skin auto exit");
+  }
+
+  {
+    Fixture fixture;
+    fixture.result->komboPresentation_.arm(
         {.saved=true, .manual=true, .currentDay=true, .activeRoutine=true}, SDL_GetTicks());
     fixture.renderAt(100000);
     require(!fixture.result->resultSkinFadeoutStartedMillis, "pending progress suppresses skin auto exit");
-    fixture.result->streakPresentation_.open(SDL_GetTicks());
+    fixture.result->komboPresentation_.open(SDL_GetTicks());
     fixture.renderAt(101000);
     require(!fixture.result->resultSkinFadeoutStartedMillis, "open progress suppresses skin auto exit");
-    fixture.result->streakPresentation_.dismiss();
-    fixture.result->streakSkinResumeMillis_ = 101000;
+    fixture.result->komboPresentation_.dismiss();
+    fixture.result->komboSkinResumeMillis_ = 101000;
     fixture.renderAt(101001);
     require(!fixture.result->resultSkinFadeoutStartedMillis, "dismissal gets a fresh result viewing interval");
   }

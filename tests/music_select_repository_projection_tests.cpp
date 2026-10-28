@@ -49,6 +49,23 @@ const MusicSelectBar *child(const MusicSelectProjection &projection,
   return projection.find(directory->children[index]);
 }
 
+void testFolderMinimumUsesLampStrength() {
+  for (int light : {50, 150}) {
+    MusicSelectFolderStatusAccumulator accumulator({}, {
+        .clearFor=[light](const bms_parser::ChartMeta &meta, int) {
+          return meta.Title == "Assist" ? 100 : light;
+        }}, {});
+    bms_parser::ChartMeta meta;
+    meta.Title = "Assist";
+    accumulator.add(meta, true);
+    meta.Title = "Light";
+    accumulator.add(meta, true);
+    const auto frame = accumulator.finish();
+    require(frame.lamp == 3 && frame.folderLampCounts[2] == 1 && frame.folderLampCounts[3] == 1,
+            "folder minimum is light assist and counts retain external lamp IDs");
+  }
+}
+
 void testProjectsFoldersSongsScoresAndSourceFlags() {
   std::vector<ChartMetaRecord> records{
       chart("/songs/a/a.bms", "aaa", "Alpha", "Another", "/songs/a"),
@@ -767,12 +784,15 @@ void testSingleSongProjectionDoesNotAggregateOrVisitOtherRows() {
 }
 
 void testAssignmentFoldersShowOnlyContributingCharts() {
-  streak::Day day;
-  streak::Assignment a{.id="one", .name="First", .levels={{"table", "0", ""}},
+  kombo::Day day;
+  kombo::Assignment a{.id="one", .name="First", .levels={{"table", "0", ""}},
                        .eligibleLamp=200, .targetLamp=400};
   day.assignments.push_back({.requirement=a});
   a.id = "two"; a.name = "Second";
   day.assignments.push_back({.requirement=a});
+  day.assignments.push_back({.requirement=kombo::goalsAssignment()});
+  require(!musicSelectAssignmentNeedsAdjustment(day, day.assignments.back(), {}, {}),
+          "Goals quota cannot be adjusted today even without library charts");
   auto root = musicSelectAssignmentsRoot("Assignments");
   require(musicSelectIsAssignmentDirectory(root) && !root.childrenLoaded,
           "assignment root is a lazy virtual directory");
@@ -852,7 +872,7 @@ void testAssignmentFoldersShowOnlyContributingCharts() {
   children = musicSelectAssignmentChildren(day, root, sources, input);
   require(children.size() == 3, "LN-mode eligibility changes without removing sticky charts");
   day.points = day.config.dailyGoal;
-  day.assignments[0].bonusRounds = streak::sharedDailyBonusLimit;
+  day.assignments[0].bonusRounds = kombo::sharedDailyBonusLimit;
   require(musicSelectAssignmentChildren(day, root, sources, input).size() == 2,
           "exhausted shared bonus budget keeps folders but no contributing charts");
   require(!musicSelectAssignmentNeedsAdjustment(day, progress, noCharts, input),
@@ -876,6 +896,7 @@ int main(int argc, char **argv) {
   testAssignmentFoldersShowOnlyContributingCharts();
   testLazyPhysicalProjectionDoesNotVisitDescendantSongs();
   testSingleSongProjectionDoesNotAggregateOrVisitOtherRows();
+  testFolderMinimumUsesLampStrength();
   testSongAndFolderLampsUseBestClearWithoutRewritingBestExAttempt();
   testClearProviderMissIsAuthoritativeAndClearDoesNotRequireBestEx();
   testFolderStatusCancellationDuringClearLookupPreservesPublishedCounts();

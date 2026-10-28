@@ -16,6 +16,7 @@ struct ChartReplayCapture {
   std::vector<ReplayLaneCoverEvent> laneCoverEvents;
   ReplayTimeBounds timeBounds;
   std::optional<std::int64_t> averageJudgeMicros;
+  GaugeEvidence gaugeEvidence;
 };
 
 [[nodiscard]] std::optional<ChartReplayPersistenceAttempt>

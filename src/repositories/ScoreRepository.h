@@ -6,7 +6,8 @@
 #include "../ir/IrRemoteScoreModels.h"
 #include "ChartRepository.h"
 #include "ScoreRepositoryModels.h"
-#include "../streak/StreakModel.h"
+#include "../kombo/KomboModel.h"
+#include "../goals/ChartGoal.h"
 
 #include <array>
 #include <cstdint>
@@ -49,7 +50,7 @@ struct ProjectionOutcome {
 
 class ScoreRepository {
 public:
-  static constexpr int kCurrentSchemaVersion = 14;
+  static constexpr int kCurrentSchemaVersion = 15;
 
   class [[nodiscard]] PreparedScoreQueryDatabase {
   public:
@@ -90,12 +91,21 @@ public:
   [[nodiscard]] static bool HasActiveReads();
   [[nodiscard]] static bool HasActiveWrites();
   bool EnsureSchema();
-  std::optional<streak::State> LoadStreak(std::string &error);
-  std::optional<streak::PlayProgress> TakeStreakProgress(std::string_view attemptId = {});
-  bool AdjustStreakAssignment(const streak::Assignment &, streak::DayId expectedDay, std::string &error);
-  bool ResetStreakExtraChallenge(const std::string &assignmentId, streak::DayId expectedDay, std::string &error);
-  bool ConfigureStreak(const streak::Config &, streak::DayId &effectiveDay, std::string &error);
-  bool BuyStreakFreeze(std::string &error);
+  std::optional<kombo::State> LoadKombo(std::string &error);
+  std::optional<kombo::PlayProgress> TakeKomboProgress(std::string_view attemptId = {});
+  bool AdjustKomboAssignment(const kombo::Assignment &, kombo::DayId expectedDay, std::string &error);
+  bool ResetKomboExtraChallenge(const std::string &assignmentId, kombo::DayId expectedDay, std::string &error);
+  bool ConfigureKombo(const kombo::Config &, kombo::DayId &effectiveDay, std::string &error);
+  bool BuyKomboFreeze(std::string &error);
+  std::optional<chart_goals::GoalProgress> PreviewChartGoal(
+      const chart_goals::Goal &goal, std::string &error);
+  std::optional<chart_goals::ProgressPage> LoadChartGoals(int offset, std::string &error);
+  std::optional<chart_goals::Index> LoadChartGoalIndex(std::string &error);
+  std::vector<chart_goals::Goal> TakeChartGoalAchievements(std::string_view attemptId);
+  std::optional<chart_goals::GoalProgress> LoadChartGoal(
+      const bms_parser::ChartMeta &, int selectedMode, std::string &error);
+  bool SaveChartGoal(const chart_goals::Goal &, std::string &error);
+  bool RemoveChartGoal(const bms_parser::ChartMeta &, int selectedMode, std::string &error);
   void Shutdown();
   bool SaveScore(const bms_parser::ChartMeta &chartMeta,
                  const RhythmState &state,

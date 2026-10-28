@@ -43,8 +43,8 @@ constexpr ClearMarkFilterDefinition kDifficultyClearMarkFilters[] = {
     {"H-CLEAR", kClearTypeHardClearRank},
     {"CLEAR", kClearTypeNormalClearRank},
     {"E-CLEAR", kClearTypeEasyClearRank},
-    {"LIGHT ASSIST", kClearTypeLightAssistedEasyClearRank},
     {"A-CLEAR", kClearTypeAssistedEasyClearRank},
+    {"LIGHT ASSIST", kClearTypeLightAssistedEasyClearRank},
     {"FAILED", kClearTypeFailedRank},
     {"NO PLAY", kNoClearTypeRank},
 };

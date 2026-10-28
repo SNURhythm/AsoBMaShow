@@ -643,7 +643,7 @@ void testFreshScoreInitializationSkipsHistoricalRewrites(
   assert(queryInt(db.get(), "PRAGMA user_version") == 0);
   SqliteInitializationTrace trace(db.get());
   assert(score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
-  assert(queryInt(db.get(), "PRAGMA user_version") == 14);
+  assert(queryInt(db.get(), "PRAGMA user_version") == ScoreRepository::kCurrentSchemaVersion);
   assert(score_repository_detail::CurrentSchemaIsValid(db.get()));
   assert(!trace.contains("ALTER TABLE"));
   assert(!trace.contains("DROP TABLE"));
@@ -925,6 +925,10 @@ void createVersion6StaleScoreSummaryFixture(const std::filesystem::path &path) {
   const auto summaryError =
       score_cache_queries::ensureScoreSummarySchema(db.get());
   assert(!summaryError.has_value());
+  // Schema setup now rebuilds summaries. Replace them with the stale v6
+  // contents this migration fixture deliberately exercises.
+  execOrAbort(db.get(), "DELETE FROM score_sha256_clear_rank_cache");
+  execOrAbort(db.get(), "DELETE FROM score_sha256_best_score_cache");
   execOrAbort(
       db.get(),
       "INSERT INTO score_sha256_clear_rank_cache(chart_sha256, ln_mode, rank) "
@@ -1056,7 +1060,8 @@ void removeImportedIrFromCurrentSchema(sqlite3 *db) {
     execOrAbort(db, "DROP INDEX idx_scores_imported_ir_identity");
   }
   execOrAbort(db,
-              "DROP TRIGGER IF EXISTS score_sha256_summary_after_insert");
+              "DROP TRIGGER IF EXISTS score_sha256_summary_after_insert;"
+              "DROP TABLE IF EXISTS goal_gauge_best");
   for (const std::string column : {"source_sync_generation",
                                    "source_remote_score_id",
                                    "source_server_origin",
@@ -3363,9 +3368,9 @@ void testModifiedPlaybackDoesNotUpdateBestScores(
   db.reset();
 
   const ScoreClearRankCache cache = helper.LoadBestClearRanks();
-  assert(cache.bestRankFor(meta) == kNoClearTypeRank);
+  assert(cache.bestRankFor(meta) == kClearTypeLightAssistedEasyClearRank);
   assert(cache.bestCourseRankFor(session.courseKey, session.courseId,
-                                 meta.LnMode) == kNoClearTypeRank);
+                                 meta.LnMode) == kClearTypeLightAssistedEasyClearRank);
   assert(!helper.LoadBestScore(meta).has_value());
   assert(!helper.LoadBestCourseScore(session).has_value());
 }
@@ -3398,7 +3403,7 @@ void testVersion14CourseBadPointsMigration(const std::filesystem::path &root) {
   assert(queryInt(db.get(), "PRAGMA user_version") == 13);
   assert(!columnExists(db.get(), "course_scores", "bad_points"));
   assert(score_repository_detail::EnsureSchemaOnConnection(db.get(), {}));
-  assert(queryInt(db.get(), "PRAGMA user_version") == 14);
+  assert(queryInt(db.get(), "PRAGMA user_version") == ScoreRepository::kCurrentSchemaVersion);
   assert(queryInt(db.get(), "SELECT COUNT(*) FROM course_scores "
                            "WHERE bad_points IS NULL") == 1);
   assert(courseOutcome(db.get()) == outcome);

@@ -14,7 +14,9 @@ struct ScoreRepository::Impl {
   std::filesystem::path databasePath;
   std::filesystem::path chartDatabasePath;
   sqlite3 *sessionDatabase = nullptr;
-  std::optional<streak::PlayProgress> streakProgress;
+  std::optional<kombo::PlayProgress> komboProgress;
+  std::string chartGoalAchievementAttempt;
+  std::vector<chart_goals::Goal> chartGoalAchievements;
 };
 
 struct ScoreRepository::PreparedScoreQueryDatabase::State {
@@ -58,6 +60,10 @@ bool EquivalentDatabasePaths(const std::filesystem::path &first,
                              const std::filesystem::path &second);
 bool CurrentSchemaIsValid(sqlite3 *database);
 void IncrementRevision();
+// Durable projections require atomic goal credit; legacy/import writes remain best effort.
+std::vector<chart_goals::Goal> RecordChartGoalAchievementsOnConnection(
+    sqlite3 *, std::string_view sha256, std::string_view createdAt = {},
+    std::string_view attemptId = {}, bool requireSuccess = false);
 ScoreWriteOutcome InsertScoreWriteOnConnection(
     sqlite3 *database, const result_persistence::ChartScoreWrite &score,
     std::optional<std::string_view> attemptId,
@@ -92,7 +98,8 @@ std::optional<ScoreBestSnapshot> LoadBestClearScoreOnConnection(
     const std::optional<std::string> &beforeCreatedAt,
     const std::optional<std::string> &excludeAttemptId,
     int selectedLongNoteMode = 0,
-    const std::optional<std::string> &beforeAttemptId = std::nullopt);
+    const std::optional<std::string> &beforeAttemptId = std::nullopt,
+    bool includeImported = false);
 std::optional<ScoreBestSnapshot>
 LoadBestCourseScoreOnConnection(sqlite3 *database,
                                 const CoursePlaySession &session,

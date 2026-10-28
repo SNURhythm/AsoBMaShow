@@ -74,7 +74,7 @@
             </intent-filter>
         </provider>
 
-        <receiver android:name=".ComboNotifications" android:exported="false">
+        <receiver android:name=".KomboNotifications" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.TIME_SET" />

@@ -305,6 +305,8 @@ RhythmState BuildResultState(bms_parser::Chart &chart,
   if (!replay.events.empty() && state.gaugeHistory.empty()) {
     state.currentGauge = replay.finalGauge;
   }
+  // Legacy event reconstruction does not retain per-event passed-note counts.
+  state.gaugeEvidence = {};
   return state;
 }
 

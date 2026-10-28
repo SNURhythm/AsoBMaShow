@@ -170,9 +170,9 @@ MusicSelectRepositoryProjection::loadTableMetadata(
 
 std::vector<MusicSelectAssignmentChart> loadMusicSelectAssignmentCharts(
     ChartRepository::Session &session, const MusicSelectRepositoryMetadata &metadata,
-    const streak::Day &day, int selectedLongNoteMode) {
+    const kombo::Day &day, int selectedLongNoteMode) {
   if (day.points >= day.config.dailyGoal &&
-      streak::bonusPoints(day) >= streak::bonusLimit(day)) return {};
+      kombo::bonusPoints(day) >= kombo::bonusLimit(day)) return {};
   std::map<std::string, MusicSelectAssignmentChart> candidates;
   std::set<std::pair<std::string, std::string>> levels;
   std::set<std::string> sticky;

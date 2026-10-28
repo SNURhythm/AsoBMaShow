@@ -27,6 +27,7 @@ struct ChartReplayPersistenceAttempt {
   std::optional<ir::IrSubmissionSnapshot> irSnapshot;
   std::optional<ReplayChartDocument> replay;
   std::optional<std::int64_t> averageJudgeMicros;
+  GaugeEvidence gaugeEvidence;
 };
 
 enum class ChartReplayPersistenceState {
@@ -86,7 +87,7 @@ struct ChartReplayPersistenceDependencies {
       const std::optional<ir::IrSubmissionSnapshot> &,
       const std::optional<ModernReplayFileAttachment> &,
       std::optional<std::int64_t>,
-      std::span<const ir::IrOutboxDraft>)>
+      std::span<const ir::IrOutboxDraft>, const GaugeEvidence &)>
       stage;
   std::function<result_persistence::PendingReadOutcome(std::string_view)>
       loadPending;

@@ -8,37 +8,42 @@
 #include "../repositories/ChartRepository.h"
 
 class Button;
+class GoalTargetBubble;
 
 class ChartListItemView : public View {
 public:
   ChartListItemView(int x, int y, int width, int height,
-                    const ChartMetaRecord &record);
+                    const ChartMetaRecord &record, bool goalBubbleInOverlay = false);
+  ~ChartListItemView() override;
+  void renderGoalBubble(RenderContext &context);
 
   void setMeta(const ChartMetaRecord &record,
                bool prioritizeArtwork = false);
   void setClearRank(int clearRank);
   void setBestScoreRank(int score, int maxScore);
-  void setFavoriteToggleHandler(
-      std::function<bool(const ChartMetaRecord &, bool)> handler);
+  void setGoalHandler(std::function<void(const ChartMetaRecord &)> handler);
+  void setGoalState(bool goal, bool achieved = false);
+  void setGoalTarget(int lampRank, std::string lamp, std::string score);
   void onSelected() override;
   void onUnselected() override;
 
 protected:
   void onLayout() override;
+  void onMove(int, int) override;
 
 private:
   void applyTextColors(bool selected);
-  void setFavoriteState(bool favorite);
-  void refreshFavoriteButton();
+  void refreshGoalButton();
   void refreshScoreRankColor();
   void refreshColumnWidths();
 
   ChartMetaRecord currentRecord;
   bool unavailable = false;
   bool solidArchive = false;
-  bool favorite = false;
+  bool goal = false;
+  bool goalAchieved = false;
   bool selected = false;
-  std::function<bool(const ChartMetaRecord &, bool)> favoriteToggleHandler;
+  std::function<void(const ChartMetaRecord &)> goalHandler;
   View *contentCard;
   bool compact_ = false;
   int desiredDifficultyWidth_ = 86;
@@ -61,7 +66,9 @@ private:
   TextView *scoreRankView;
   TextView *bestScoreView;
   std::string scoreRank;
-  Button *favoriteButton;
-  TextView *favoriteIconView;
-  TextView *favoriteOutlineView;
+  Button *goalButton;
+  TextView *goalIconView;
+  TextView *goalOutlineView;
+  GoalTargetBubble *goalBubble = nullptr;
+  bool goalBubbleInOverlay_ = false;
 };

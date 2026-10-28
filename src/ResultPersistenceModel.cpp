@@ -402,7 +402,7 @@ std::optional<ChartResultAttempt> makeChartResultAttempt(
       totalNotes > 0 && score.comboBreak == 0 && score.maxCombo >= totalNotes;
   const int expectedReplayClearType = clear_policy::fullComboRankForPlayback(
       score.clearType, fullCombo, provenance.playback);
-  if (replay.clearType != expectedReplayClearType) {
+  if (normalizeClearLamp(replay.clearType) != expectedReplayClearType) {
     return rejected("clear type mismatch", diagnostic);
   }
 

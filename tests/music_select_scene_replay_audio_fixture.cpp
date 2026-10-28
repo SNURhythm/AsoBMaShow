@@ -240,15 +240,15 @@ std::string uploadSavedResult(auto &, int) {
   return "queued";
 }
 }
-enum class MusicSelectToolbarControl { Streak };
+enum class MusicSelectToolbarControl { Kombo };
 struct MusicSelectScene {
-  // Replay cases have no pending streak notification.
+  // Replay cases have no pending kombo notification.
   bool toolbarControlAvailable(MusicSelectToolbarControl) const { assert(false); return false; }
-  void openStreak() { assert(false); }
+  void openKombo() { assert(false); }
 
   SceneManager manager;
   struct {
-    std::string pendingComboNotificationProfile;
+    std::string pendingKomboNotificationProfile;
     struct {
       struct Profile { std::string id; } profile;
       const Profile &activeProfile() const { return profile; }

@@ -15,7 +15,7 @@ std::string lastTap;
 // Center calls are asynchronous. Advance one add at a time, and apply any new
 // plan only after the in-flight add completes, so cancellation cannot race it.
 dispatch_queue_t notificationQueue() {
-  static dispatch_queue_t queue = dispatch_queue_create("com.snurhythm.combo-notifications", DISPATCH_QUEUE_SERIAL);
+  static dispatch_queue_t queue = dispatch_queue_create("com.snurhythm.kombo-notifications", DISPATCH_QUEUE_SERIAL);
   return queue;
 }
 NSArray<UNNotificationRequest *> *desiredPlan = @[];
@@ -23,7 +23,7 @@ NSUInteger nextRequest = 0;
 bool adding = false, replacePending = false;
 NSArray<NSString *> *ownedIds() {
   NSMutableArray *ids = [NSMutableArray array];
-  for (int i = 0; i < 56; ++i) [ids addObject:[NSString stringWithFormat:@"combo.%d", i]];
+  for (int i = 0; i < 56; ++i) [ids addObject:[NSString stringWithFormat:@"kombo.%d", i]];
   return ids;
 }
 void clearOwned() {
@@ -42,7 +42,7 @@ void pumpPlan() {
   adding = true;
   [UNUserNotificationCenter.currentNotificationCenter addNotificationRequest:desiredPlan[nextRequest++]
       withCompletionHandler:^(NSError *error) {
-    if (error) NSLog(@"Combo notification scheduling failed: %@", error.localizedDescription);
+    if (error) NSLog(@"Kombo notification scheduling failed: %@", error.localizedDescription);
     dispatch_async(notificationQueue(), ^{ adding = false; pumpPlan(); });
   }];
 }
@@ -52,7 +52,7 @@ void submitPlan(NSArray<UNNotificationRequest *> *plan) {
   pumpPlan();
 }
 void receiveTap(UNNotificationResponse *response) {
-  if (![response.notification.request.identifier hasPrefix:@"combo."] ||
+  if (![response.notification.request.identifier hasPrefix:@"kombo."] ||
       ![response.actionIdentifier isEqualToString:UNNotificationDefaultActionIdentifier]) return;
   id profile = response.notification.request.content.userInfo[@"profile"];
   if (![profile isKindOfClass:NSString.class]) return;
@@ -65,9 +65,9 @@ void receiveTap(UNNotificationResponse *response) {
 }
 }
 
-@interface ComboNotificationDelegate : NSObject <UNUserNotificationCenterDelegate>
+@interface KomboNotificationDelegate : NSObject <UNUserNotificationCenterDelegate>
 @end
-@implementation ComboNotificationDelegate
+@implementation KomboNotificationDelegate
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
       willPresentNotification:(UNNotification *)notification
         withCompletionHandler:(void (^)(UNNotificationPresentationOptions))completion {
@@ -83,10 +83,10 @@ void receiveTap(UNNotificationResponse *response) {
 
 namespace {
 void installDelegate() {
-  static ComboNotificationDelegate *delegate;
+  static KomboNotificationDelegate *delegate;
   static dispatch_once_t once;
   dispatch_once(&once, ^{
-    delegate = [ComboNotificationDelegate new];
+    delegate = [KomboNotificationDelegate new];
     UNUserNotificationCenter.currentNotificationCenter.delegate = delegate;
     dispatch_async(notificationQueue(), ^{ submitPlan(@[]); });
     for (NSNotificationName name in @[UIApplicationWillEnterForegroundNotification,
@@ -162,7 +162,7 @@ void replacePlan(const std::string &json) {
       content.body = entry[@"body"];
       content.sound = UNNotificationSound.defaultSound;
       content.userInfo = @{@"profile": entry[@"profile"]};
-      NSString *identifier = [NSString stringWithFormat:@"combo.%lu", (unsigned long)slot++];
+      NSString *identifier = [NSString stringWithFormat:@"kombo.%lu", (unsigned long)slot++];
       [plan addObject:[UNNotificationRequest requestWithIdentifier:identifier content:content trigger:trigger]];
     }
     submitPlan(plan);

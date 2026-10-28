@@ -168,6 +168,25 @@ MusicSelectProjection eagerProjection(const Fixture &fixture) {
        .metadata = &metadata});
 }
 
+void testAssistLampOrdering() {
+  Fixture fixture;
+  fixture.records = {chart("assist", "Assist"), chart("light", "Light")};
+  fixture.scores = {ScoreBestSnapshot{}, ScoreBestSnapshot{}};
+  fixture.clearRanks = {100, 50};
+  MusicSelectSongIndex index("folder:/songs");
+  for (std::size_t i = 0; i < fixture.records.size(); ++i)
+    index.add(fixture.records[i], fixture.scores[i], fixture.clearRanks[i]);
+  index.finish();
+  index.configure("ALL", "ALL", "CLEAR");
+  require(index.pathAt(0) == fixture.records[1].meta.BmsPath,
+          "compact CLEAR sorting puts light assist below assist");
+  MusicSelectBarManager eager(eagerProjection(fixture), {.sortId="CLEAR"});
+  require(eager.open({"folder:/songs"}), "assist ordering fixture opens");
+  require(eager.readView().rowAt(0).presentation.lamp == 3 &&
+              eager.readView().rowAt(1).presentation.lamp == 2,
+          "eager CLEAR sorting follows strength while retaining Beatoraja IDs");
+}
+
 void compareWithEager(MusicSelectSongIndex &index,
                       const MusicSelectProjection &projection,
                       std::string_view mode, std::string_view difficulty,
@@ -468,6 +487,7 @@ void testHundredThousandCompactEntries() {
 }
 
 int main() {
+  testAssistLampOrdering();
   testAvailabilityOrdering();
   testRepresentativeAndIdentitySemantics();
   testDedupBeforeHidingAndFallback();

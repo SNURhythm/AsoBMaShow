@@ -1,4 +1,5 @@
 #include "MusicSelectRanking.h"
+#include "../ClearLampOrder.h"
 #include "../ir/IrRankingWindow.h"
 
 #include <algorithm>
@@ -25,13 +26,14 @@ MusicSelectRankingState stateFor(ir::IrRankingSnapshotState state) {
 }
 
 int beatorajaClearType(int rank) {
+  rank = normalizeClearLamp(rank);
   if (rank >= kClearTypeFullComboRank) return 8;
   if (rank >= kClearTypeExHardClearRank) return 7;
   if (rank >= kClearTypeHardClearRank) return 6;
   if (rank >= kClearTypeNormalClearRank) return 5;
   if (rank >= kClearTypeEasyClearRank) return 4;
-  if (rank >= kClearTypeLightAssistedEasyClearRank) return 3;
   if (rank >= kClearTypeAssistedEasyClearRank) return 2;
+  if (rank >= kClearTypeLightAssistedEasyClearRank) return 3;
   return 1;
 }
 } // namespace

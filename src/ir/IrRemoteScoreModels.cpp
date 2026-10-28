@@ -65,7 +65,7 @@ bool isKnownLampRank(int value) noexcept {
       kClearTypeExHardClearRank,
       kClearTypeFullComboRank,
   };
-  return std::ranges::find(ranks, value) != ranks.end();
+  return std::ranges::find(ranks, normalizeClearLamp(value)) != ranks.end();
 }
 
 bool nonnegative(const std::optional<int> &value) noexcept {

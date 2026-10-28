@@ -157,7 +157,7 @@ struct Repository {
   std::uint64_t GetLibraryRevision() const { return revision; }
 };
 struct Context {
-  std::string pendingComboNotificationProfile;
+  std::string pendingKomboNotificationProfile;
   struct {
     struct Profile { std::string id; } profile;
     const Profile &activeProfile() const { return profile; }
@@ -349,15 +349,15 @@ struct Preview {
   void playDecide() {}
 };
 int previewSelection(const Bars &, const Settings &) { return 0; }
-namespace streak { inline int day=0; int today() { return day; } }
+namespace kombo { inline int day=0; int today() { return day; } }
 
-enum class MusicSelectToolbarControl { Streak };
+enum class MusicSelectToolbarControl { Kombo };
 struct MusicSelectScene {
-  // Export/preload cases have no pending streak assignment or notification.
-  std::string pendingStreakAssignment_;
-  void openStreakAssignment(const std::string &) { assert(false); }
+  // Export/preload cases have no pending kombo assignment or notification.
+  std::string pendingKomboAssignment_;
+  void openKomboAssignment(const std::string &) { assert(false); }
   bool toolbarControlAvailable(MusicSelectToolbarControl) const { assert(false); return false; }
-  void openStreak() { assert(false); }
+  void openKombo() { assert(false); }
   void defer(std::function<bool()>, int, bool) { assert(false); }
 
   void updateRankingsModal() {}
@@ -396,6 +396,7 @@ struct MusicSelectScene {
     std::lock_guard lock(postedMutex_);
     posted_.push_back(std::move(callback));
   }
+  void resumeGoalNavigation() {}
   void onResume();
   Context context;
   Bars bars_;
@@ -438,6 +439,7 @@ struct MusicSelectScene {
   void launchSelected(bool, bool) {}
   void cancelDirectoryLoad() { restoreDirectories_.clear(); }
   bool openSameFolder(bool) { return false; }
+  bool restoreGoalDirectory(const Bar &) { return false; }
   void requestDirectoryLoad(const Bar &) { assert(false); }
   bool loadDirectoryChildren(const Bar &bar) {
     assert(bar.kind == skin::MusicSelectBarKind::Hash);
@@ -464,7 +466,7 @@ struct MusicSelectScene {
   bool beginRecordsExport(const std::string &);
   std::uint64_t libraryRevision_ = 0;
   std::uint64_t scoreRevision_ = 0;
-  int assignmentDayId_ = streak::today();
+  int assignmentDayId_ = kombo::today();
   std::uint64_t irRankingEvidenceRevision_ = 0;
   std::optional<int> rankingRequest_;
   std::int64_t rankingLoadAtMicros_ = -1;
@@ -473,7 +475,7 @@ struct MusicSelectScene {
     assert(restoreSelection);
     libraryRevision_ = context.chartRepository.GetLibraryRevision();
     scoreRevision_ = context.scoreRepository.GetRevision();
-    assignmentDayId_ = streak::today();
+    assignmentDayId_ = kombo::today();
     if (hashDirectoryOpen) {
       restoreDirectories_ = {MusicSelectBarId{"hash"}};
       restoreSelection_ = MusicSelectBarId{"song"};

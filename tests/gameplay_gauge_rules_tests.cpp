@@ -63,6 +63,37 @@ double expectedTotalFactor(double total) {
   return 10.0 / denominator;
 }
 
+void testBackgroundGaugesWithoutAutoShift() {
+  const auto rules = compileGameplayGaugeRules(GameplayRuleset::LR2, meta(1000, 300), GaugeProfile::Standard);
+  GameplayScoreState state({.gaugeRules=rules, .keyMode=7});
+  state.configureGauge(GaugeType::Normal, GaugeAutoShiftMode::None);
+  state.commitJudge(JudgeResult(Bad, 0));
+  require(state.gaugeValues[gaugeTypeIndex(GaugeType::Hazard)] == 0,
+          "unselected survival gauges still calculate with auto shift off");
+  require(state.gaugeType == GaugeType::Normal && !state.activeGaugeFailed(),
+          "background death never changes the active gauge or stops play");
+  const auto hazard = gaugeTypeIndex(GaugeType::Hazard);
+  const auto hard = gaugeTypeIndex(GaugeType::Hard);
+  require(state.gaugeEvidence.recorded && state.gaugeEvidence.deathPassedNotes[hazard] == 1 &&
+              state.gaugeEvidence.deathPassedNotes[hard] == -1,
+          "first death captures passed notes and surviving gauges use minus one");
+  state.commitJudge(JudgeResult(PGreat, 0));
+  require(state.gaugeEvidence.deathPassedNotes[hazard] == 1,
+          "later judgements cannot overwrite the first death point");
+  require(state.gaugeEvidence.values[gaugeTypeIndex(GaugeType::Easy)] != 20 &&
+              state.gaugeHistoryFor(GaugeType::Easy).empty(),
+          "background groove evidence updates without collecting extra histories");
+  const auto saved = state.gaugeEvidence;
+  state.failUnfinishedAttempt();
+  require(state.gaugeEvidence == saved, "abort lamp cleanup preserves actual gauge evidence");
+  GameplayScoreState restored({.gaugeRules=rules, .keyMode=7});
+  restored.restoreGaugeState(state.gaugeSnapshot());
+  require(restored.gaugeEvidence == saved, "worker snapshots carry all gauge evidence");
+  restored.resetGaugeEvidence();
+  require(restored.gaugeEvidence.deathPassedNotes[hazard] == 0,
+          "already dead carried gauges start the new chart at zero passed notes");
+}
+
 void testLr2ReferenceRecoveryAndCourseConstraints() {
   const auto fractional = compileGameplayGaugeRules(
       GameplayRuleset::LR2, meta(1000, 239.9), GaugeProfile::Standard);
@@ -500,6 +531,7 @@ int main() {
     meta.Total = 0;
     require(resolveEffectiveGaugeTotal(GameplayRuleset::Beatoraja, meta) == 0, "bmson zero TOTAL has no gain");
   }
+  testBackgroundGaugesWithoutAutoShift();
   testLr2ReferenceRecoveryAndCourseConstraints();
   testNamedLr2GaugesAndDirectGradeUseReferenceDamage();
   testLr2DamageUsesJavaFloatArithmetic();

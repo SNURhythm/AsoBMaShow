@@ -1,4 +1,5 @@
 #include "MusicSelectBarManager.h"
+#include "MusicSelectLampOrder.h"
 
 #include "MusicSelectMode.h"
 
@@ -192,7 +193,7 @@ int sourceCompare(const MusicSelectBar &left, const MusicSelectBar &right,
     if (!left.score && !right.score) return 0;
     if (!left.score) return 1;
     if (!right.score) return -1;
-    return left.presentation.lamp - right.presentation.lamp;
+    return musicSelectLampOrder(left.presentation.lamp) - musicSelectLampOrder(right.presentation.lamp);
   }
   if (sortId == "SCORE") {
     const int leftNotes = left.score ? left.score->maxScore / 2 : 0;
@@ -239,8 +240,8 @@ int sourceCompare(const MusicSelectBar &left, const MusicSelectBar &right,
         (!right.score || !right.rivalScore)) return 0;
     if (!left.score || !left.rivalScore) return 1;
     if (!right.score || !right.rivalScore) return -1;
-    return (left.presentation.lamp - left.presentation.rivalLamp) -
-           (right.presentation.lamp - right.presentation.rivalLamp);
+    return (musicSelectLampOrder(left.presentation.lamp) - musicSelectLampOrder(left.presentation.rivalLamp)) -
+           (musicSelectLampOrder(right.presentation.lamp) - musicSelectLampOrder(right.presentation.rivalLamp));
   }
   if (sortId == "RIVALCOMPARE_SCORE") {
     const int leftNotes = left.score ? left.score->maxScore / 2 : 0;
@@ -437,6 +438,9 @@ void MusicSelectBarManager::rebuildRows(
     if (sortable) {
       std::stable_sort((*rows_).begin(), (*rows_).end(), [this](const auto &left,
                                                           const auto &right) {
+        const bool leftAction = left.id.value == "action:add-recommended-goals";
+        const bool rightAction = right.id.value == "action:add-recommended-goals";
+        if (leftAction != rightAction) return !leftAction;
         return sourceCompare(left, right, config_.sortId) < 0;
       });
     }

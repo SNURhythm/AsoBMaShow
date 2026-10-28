@@ -1,6 +1,7 @@
 #pragma once
 #include "GameplayGaugeRules.h"
 #include "GameplayGaugeTypes.h"
+#include "GaugeEvidence.h"
 #include "Judgement.h"
 #include <algorithm>
 #include <array>
@@ -562,6 +563,7 @@ struct GaugeStateSnapshot {
   float currentGauge = 0.0f;
   std::array<float, kGaugeTypeCount> gaugeValues{};
   std::array<bool, kGaugeTypeCount> gaugeSurvivalFailed{};
+  GaugeEvidence gaugeEvidence;
 
   bool operator==(const GaugeStateSnapshot &) const = default;
 };
@@ -674,6 +676,7 @@ public:
   bool lightAssistClearMark = false;
   std::array<float, kGaugeTypeCount> gaugeValues{};
   std::array<bool, kGaugeTypeCount> gaugeSurvivalFailed{};
+  GaugeEvidence gaugeEvidence;
   int fastCount = 0;
   int slowCount = 0;
 
@@ -745,6 +748,7 @@ public:
     currentGauge = gaugeValues[gaugeTypeIndex(gaugeType)];
     gaugeHistory.clear();
     clearGaugeHistories();
+    resetGaugeEvidence();
   }
 
   void setStartingGaugePercent(int percent) {
@@ -762,18 +766,9 @@ public:
           survivalGaugeDies(type, gaugeValues[index]);
       if (gaugeSurvivalFailed[index]) gaugeValues[index] = 0.0F;
     };
-    if (gaugeAutoShift == GaugeAutoShiftMode::BestClear ||
-        gaugeAutoShift == GaugeAutoShiftMode::SelectToUnder) {
-      for (int i = 0; i < static_cast<int>(kGaugeTypeCount); ++i) {
-        setStartingValue(gaugeTypeAtIndex(i));
-      }
-    } else {
-      setStartingValue(gaugeType);
-      if (gaugeAutoShift == GaugeAutoShiftMode::SurvivalToGroove &&
-          !gaugeProfileIsCourse(gaugeProfile)) {
-        setStartingValue(GaugeType::Normal);
-      }
-    }
+    for (int i = 0; i < static_cast<int>(kGaugeTypeCount); ++i)
+      setStartingValue(gaugeTypeAtIndex(i));
+    resetGaugeEvidence();
     updateAutoShiftGaugeType();
     currentGauge = gaugeValues[gaugeTypeIndex(gaugeType)];
   }
@@ -786,6 +781,7 @@ public:
     gaugeProfile = snapshot.gaugeProfile;
     gaugeValues = snapshot.gaugeValues;
     gaugeSurvivalFailed = snapshot.gaugeSurvivalFailed;
+    gaugeEvidence = snapshot.gaugeEvidence;
     const int index = gaugeTypeIndex(gaugeType);
     const auto &definition = gaugeDefinition(gaugeType);
     currentGauge = std::clamp(snapshot.currentGauge, definition.minimum,
@@ -807,7 +803,26 @@ public:
         .currentGauge = currentGauge,
         .gaugeValues = gaugeValues,
         .gaugeSurvivalFailed = gaugeSurvivalFailed,
+        .gaugeEvidence = gaugeEvidence,
     };
+  }
+
+  // Call at a new chart boundary after restoring a course's carried gauges.
+  void resetGaugeEvidence() {
+    gaugeEvidence = {};
+    gaugeEvidence.recorded = true;
+    for (std::size_t i = 0; i < kGaugeTypeCount; ++i) {
+      if (gaugeDefinition(gaugeTypeAtIndex(static_cast<int>(i))).survival) {
+        gaugeEvidence.survivalMask |= 1u << i;
+        gaugeEvidence.deathPassedNotes[i] = gaugeSurvivalFailed[i] ? 0 : -1;
+      }
+    }
+    updateGaugeEvidence();
+  }
+  void updateGaugeEvidence() {
+    if (!gaugeEvidence.recorded) return;
+    gaugeEvidence.passedNotes = stagePassedNotes;
+    gaugeEvidence.values = gaugeValues;
   }
 
   void setAssistClearMark(AssistClearMark mark) {
@@ -824,7 +839,7 @@ public:
   // reconstructed gauge snapshot. Keep that presentation fact separate from
   // the live gauge calculation used while playing.
   void restoreClearTypeRankForResult(int rank) {
-    recalledClearTypeRank_ = rank;
+    recalledClearTypeRank_ = normalizeClearLamp(rank);
   }
 
   void applyGaugeJudgement(Judgement judgement) {
@@ -834,9 +849,6 @@ public:
   void applyGaugeJudgementRate(Judgement judgement, float rate) {
     for (int i = 0; i < static_cast<int>(kGaugeTypeCount); i++) {
       const GaugeType type = gaugeTypeAtIndex(i);
-      if (!tracksAllGaugeTypes() && type != gaugeType) {
-        continue;
-      }
       const auto &definition = gaugeDefinition(type);
       const bool survival = definition.survival;
       if (survival && gaugeSurvivalFailed[i]) {
@@ -853,8 +865,11 @@ public:
       if (survival && survivalGaugeDies(type, gaugeValues[i])) {
         gaugeValues[i] = 0.0f;
         gaugeSurvivalFailed[i] = true;
+        if (gaugeEvidence.recorded && gaugeEvidence.deathPassedNotes[i] == -1)
+          gaugeEvidence.deathPassedNotes[i] = stagePassedNotes;
       }
     }
+    updateGaugeEvidence();
 
     updateAutoShiftGaugeType();
     currentGauge = gaugeValues[gaugeTypeIndex(gaugeType)];
@@ -864,9 +879,6 @@ public:
   void applyGaugeDelta(float delta) {
     for (int i = 0; i < static_cast<int>(kGaugeTypeCount); i++) {
       const GaugeType type = gaugeTypeAtIndex(i);
-      if (!tracksAllGaugeTypes() && type != gaugeType) {
-        continue;
-      }
       const auto &definition = gaugeDefinition(type);
       const bool survival = definition.survival;
       if (survival && gaugeSurvivalFailed[i]) {
@@ -881,8 +893,11 @@ public:
       if (survival && survivalGaugeDies(type, gaugeValues[i])) {
         gaugeValues[i] = 0.0f;
         gaugeSurvivalFailed[i] = true;
+        if (gaugeEvidence.recorded && gaugeEvidence.deathPassedNotes[i] == -1)
+          gaugeEvidence.deathPassedNotes[i] = stagePassedNotes;
       }
     }
+    updateGaugeEvidence();
 
     updateAutoShiftGaugeType();
     currentGauge = gaugeValues[gaugeTypeIndex(gaugeType)];

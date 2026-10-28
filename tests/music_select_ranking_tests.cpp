@@ -16,6 +16,21 @@ void expect(bool condition, std::string_view message) {
   }
 }
 
+void testCanonicalAndLegacyLightAssistIds() {
+  auto ranking = std::make_shared<ir::IrChartRanking>();
+  ranking->totalPlayers = 3;
+  ranking->entries = {{.score=300, .clearType=50},
+                      {.score=200, .clearType=150},
+                      {.score=100, .clearType=100}};
+  ir::IrRankingSnapshot service{
+      .state=ir::IrRankingSnapshotState::Succeeded, .ranking=ranking};
+  const auto projected = projectMusicSelectRanking(service, 0);
+  expect(projected.entries[0].clearType == 3 && projected.entries[1].clearType == 3 &&
+             projected.entries[2].clearType == 2 && projected.clearCounts[3] == 2 &&
+             projected.clearCounts[2] == 1,
+         "canonical and legacy light assist keep Beatoraja ID 3, assist keeps ID 2");
+}
+
 void testProjectsServiceStateIntoBeatorajaRankingData() {
   ir::IrRankingSnapshot service;
   service.state = ir::IrRankingSnapshotState::Loading;
@@ -168,6 +183,7 @@ void testCacheIdentityIncludesIrAccountEvidence() {
 } // namespace
 
 int main(int argc, char **argv) {
+  testCanonicalAndLegacyLightAssistIds();
   testProjectsServiceStateIntoBeatorajaRankingData();
   testShowsFirstPageWithoutWaitingForTheLeaderboard();
   testNearbyOwnRankIsAvailableWhilePagesArePending();

@@ -30,7 +30,7 @@ void testJudgeScaleLeavesBadWindowFixed() {
           std::pair<long long, long long>(-55000, 70000)));
 }
 
-void testStartingGaugeUpdatesSelectedGaugeAndClamps() {
+void testStartingGaugeUpdatesAllGaugeEvidenceAndClamps() {
   bms_parser::Chart chart;
   chart.Meta.TotalNotes = 100;
   RhythmState state(&chart, false);
@@ -39,7 +39,7 @@ void testStartingGaugeUpdatesSelectedGaugeAndClamps() {
   state.setStartingGaugePercent(37);
   assert(state.currentGauge == 37.0f);
   assert(state.gaugeValues[gaugeTypeIndex(GaugeType::Hard)] == 37.0f);
-  assert(state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] == 20.0f);
+  assert(state.gaugeValues[gaugeTypeIndex(GaugeType::Normal)] == 37.0f);
 
   state.setStartingGaugePercent(101);
   assert(state.currentGauge == 100.0f);
@@ -206,7 +206,7 @@ void testSavedPracticeReplayRestoresGaugeAndExactWindows() {
 int main() {
   testJudgeScaleRunsAfterCourseConstraint();
   testJudgeScaleLeavesBadWindowFixed();
-  testStartingGaugeUpdatesSelectedGaugeAndClamps();
+  testStartingGaugeUpdatesAllGaugeEvidenceAndClamps();
   testStartingGaugeUpdatesEveryAutoShiftCandidateAndSnapshot();
   testSurvivalToGrooveStartsBothGaugeCandidates();
   testZeroStartingGaugeResolvesAutoShiftImmediately();

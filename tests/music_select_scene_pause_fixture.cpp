@@ -30,9 +30,9 @@ struct Worker {
 };
 
 struct MusicSelectScene {
-  // This lifecycle case has no pending streak assignment.
-  std::string pendingStreakAssignment_;
-  void openStreakAssignment(const std::string &) { assert(false); }
+  // This lifecycle case has no pending kombo assignment.
+  std::string pendingKomboAssignment_;
+  void openKomboAssignment(const std::string &) { assert(false); }
 
   void closeRankings() {}
 
@@ -72,6 +72,7 @@ struct MusicSelectScene {
   void cancelDirectoryLoad() {}
   void stopPreloadWorker();
   void onPause();
+  void resumeGoalNavigation() {}
   void onResume();
   void hideDecideOverlay() {}
   void onApplicationBackgroundChanged(bool) {}

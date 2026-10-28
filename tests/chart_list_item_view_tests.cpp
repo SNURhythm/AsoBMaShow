@@ -1,9 +1,14 @@
 #include "rendering/UniformCache.h"
 #include "view/ChartListItemView.h"
+#include "view/GoalTargetBubble.h"
+#include "view/GoalLampTabAccent.h"
+#include "view/Button.h"
 #include "view/LibraryFolderItemView.h"
 #include "view/ImageView.h"
 #include "view/UiTheme.h"
 #include "view/MainMenuTheme.h"
+#include "view/IconText.h"
+#include "i18n/Localization.h"
 
 #include <bgfx/bgfx.h>
 
@@ -39,6 +44,38 @@ void require(bool condition, const char *message) {
 bool sameColor(const Color &actual, const Color &expected) {
   return actual.r == expected.r && actual.g == expected.g &&
          actual.b == expected.b && actual.a == expected.a;
+}
+
+void testGoalLampAccentDrawsAfterParentLayoutAndScroll() {
+  struct Backend final : rendering::UiBatchBackend {
+    std::vector<rendering::UiBatchState> draws;
+    bool submit(const rendering::UiBatchSubmission &submission) noexcept override {
+      draws.push_back(submission.state);
+      return true;
+    }
+  } backend;
+  rendering::UiBatchRenderer batch(backend);
+  RenderContext context(batch);
+  View root(30, 40, 300, 180);
+  auto *tab = new Button();
+  tab->setWidth(240)->setHeight(52)->setFlexShrink(0);
+  auto *accent = new GoalLampTabAccent(kClearTypeFullComboRank);
+  tab->addView(accent);
+  root.addView(tab);
+  for (int y : {40, 10, 70}) {
+    root.setPositionNoLayout(30, y);
+    root.applyYogaLayout();
+    backend.draws.clear();
+    batch.begin();
+    accent->render(context);
+    batch.flush();
+    require(backend.draws.size() == 1,
+            "Full Combo tab draws its lamp after parent layout and scrolling");
+    const auto &clip = backend.draws.front().scissor;
+    require(clip && clip->x == accent->getX() && clip->y == accent->getY() &&
+                clip->width == 7 && clip->height == 52,
+            "lamp clip follows the tab's current position and height");
+  }
 }
 
 void testFolderBindingOnlyMaterializesVisibleLabel() {
@@ -89,7 +126,17 @@ int main() {
   init.resolution.height = 64;
   require(bgfx::init(init), "headless bgfx initializes for chart list row");
 
+  for (const auto [x, y] : {std::pair{0, 0}, std::pair{310, 0}, std::pair{0, 190}, std::pair{310, 190}}) {
+    const auto p = placeGoalBubble(x, y, 36, 48, 320, 200,
+                                   {.top=12, .right=14, .bottom=10, .left=16});
+    require(p.x >= 20 && p.y >= 16 && p.x + p.width <= 302 && p.y + p.height <= 186,
+            "goal bubble stays inside every safe-area edge");
+  }
+  const auto aboveFlag = placeGoalBubble(160, 100, 40, 40, 400, 300, {});
+  require(aboveFlag.x + aboveFlag.width / 2 == 180 && aboveFlag.y + aboveFlag.height == 96,
+          "goal bubble is centered above the flag with a four-pixel gap");
   testFolderBindingOnlyMaterializesVisibleLabel();
+  testGoalLampAccentDrawsAfterParentLayoutAndScroll();
 
   {
     ui_theme::setActiveMode(ui_theme::ThemeMode::Dark);
@@ -253,16 +300,64 @@ int main() {
     row.setMeta(record);
     row.applyYogaLayout();
     const int wideDifficultyWidth = difficulty->getWidth();
-    auto *favorite = row.findViewByName("chartListFavorite");
-    require(favorite && favorite->getVisible(), "playable rows retain their favorite action");
+    auto *goal = row.findViewByName("chartListGoal");
+    require(goal && goal->getVisible(), "playable rows retain their goal action");
+    std::string openedPath;
+    row.setGoalHandler([&](const ChartMetaRecord &clicked) { openedPath = clicked.meta.BmsPath; });
+    row.setGoalState(true);
+    row.setGoalTarget(400, "HARD", "AAA");
+    auto *bubble = row.findViewByName("chartGoalBubble");
+    auto *bar = row.findViewByName("chartGoalBubbleLampBar");
+    auto *lampText = dynamic_cast<TextView *>(row.findViewByName("chartGoalBubbleLamp"));
+    auto *scoreText = dynamic_cast<TextView *>(row.findViewByName("chartGoalBubbleScore"));
+    require(bubble && bar && lampText && scoreText && !bubble->getVisible(),
+            "unselected goals do not show the target bubble");
+    row.onSelected();
+    require(bubble->getVisible() && bar->getVisible() && lampText->getText() == "HARD" &&
+                scoreText->getText() == "AAA", "selected unfinished goal shows lamp bar and targets");
+    row.applyYogaLayout();
+    const int lampCenter = (bar->getX() + lampText->getX() + lampText->getWidth()) / 2;
+    const int scoreCenter = scoreText->getX() + scoreText->getWidth() / 2;
+    require(std::abs(lampCenter - scoreCenter) <= 1,
+            "lamp bar and label are centered together above the centered score");
+    row.setGoalTarget(-1, "", "99.99%");
+    require(bubble->getVisible() && !bar->getVisible() && scoreText->getText() == "99.99%",
+            "score-only goals omit the lamp bar and show the custom rate");
+    row.setGoalTarget(400, "HARD", "AAA");
+    row.setGoalState(true, true);
+    require(!bubble->getVisible(), "achieved goals hide the bubble");
+    row.setGoalState(true);
+    require(bubble->getVisible(), "unfinished goal restores the bubble");
+    row.onUnselected();
+    require(!bubble->getVisible(), "leaving the chart hides the bubble");
+    row.setGoalState(true, true);
+    auto *flag = dynamic_cast<TextView *>(dynamic_cast<Button *>(goal)->getContentView()->findViewByName("chartListGoalFlag"));
+    require(flag != nullptr, "goal button contains its flag icon");
+    const auto achievedColor = flag->currentColor();
+    row.setGoalState(true);
+    const auto activeColor = flag->currentColor();
+    require(achievedColor.r != activeColor.r || achievedColor.g != activeColor.g ||
+                achievedColor.b != activeColor.b, "achieved flags use a distinct color");
+    require(dynamic_cast<Button *>(goal)->isSelected(), "configured goals highlight their flag");
+    SDL_Event click{};
+    click.button.button = SDL_BUTTON_LEFT;
+    click.button.x = goal->getX() + goal->getWidth() / 2;
+    click.button.y = goal->getY() + goal->getHeight() / 2;
+    click.type = SDL_EVENT_MOUSE_BUTTON_DOWN; row.handleEvents(click);
+    click.type = SDL_EVENT_MOUSE_BUTTON_UP; row.handleEvents(click);
+    require(openedPath == record.meta.BmsPath, "flag taps open the goal for that row's chart");
+    row.setMeta(record);
+    row.onSelected();
+    require(!bubble->getVisible(), "recycled rows clear the old goal bubble");
+    require(!dynamic_cast<Button *>(goal)->isSelected(), "recycled rows clear stale goal highlights");
     for (const int width : {620, 420, 780, 620}) {
       row.setWidth(width);
       row.applyYogaLayout();
       require(difficulty->getX() >= title->getX() + title->getWidth() && title->getWidth() >= 80 &&
                   rankBadge->getX() >= difficulty->getX() + difficulty->getWidth() &&
-                  favorite->getX() >= rankBadge->getX() + rankBadge->getWidth() &&
-                  favorite->getX() + favorite->getWidth() <= row.getX() + row.getWidth(),
-              "long multi-table labels preserve title space and keep score and favorite inside narrow rows");
+                  goal->getX() >= rankBadge->getX() + rankBadge->getWidth() &&
+                  goal->getX() + goal->getWidth() <= row.getX() + row.getWidth(),
+              "long multi-table labels preserve title space and keep score and goal inside narrow rows");
       require(difficulty->getWidth() < wideDifficultyWidth,
               "difficulty width adapts to resizing within the compact breakpoint");
       require(difficulty->getText() == record.difficultyTableLabels,
@@ -300,15 +395,29 @@ int main() {
     record.courseStart = false;
     record.randomSelect = ChartSelectorRandomFilter::Any;
     row.setMeta(record);
-    require(jacket->imagePath().empty() && !favorite->getVisible() &&
+    require(jacket->imagePath().empty() && !goal->getVisible() &&
                 !rankBadge->getVisible(),
-            "random rows do not borrow chart artwork, scores, or favorite actions");
+            "random rows do not borrow chart artwork, scores, or goal actions");
+    ChartMetaRecord action;
+    action.addRecommendedGoals = true;
+    row.setMeta(action);
+    row.applyYogaLayout();
+    require(!artist->getVisible() && std::abs((title->getY() + title->getHeight() / 2.0F) -
+                (card->getY() + card->getHeight() / 2.0F)) <= 1,
+            "recommendations title is vertically centered without an empty artist row");
+    auto *placeholder = dynamic_cast<TextView *>(row.findViewByName("chartListArtworkPlaceholder"));
+    auto *actionTitle = dynamic_cast<TextView *>(title);
+    require(placeholder && actionTitle && placeholder->getText() == ui_icons::textForCodepoint(ui_icons::kPlus) &&
+                actionTitle->getText() == i18n::tr("goals.ui.add_recommended") &&
+                actionTitle->fontWeight() == TextView::FontWeight::Bold && !goal->getVisible() && !rankBadge->getVisible(),
+            "recommendations row reuses the chart title and artwork slot without chart controls");
     record.randomSelect.reset();
     row.setMeta(record);
-    require(favorite->getVisible() && rankBadge->getVisible(),
+    require(goal->getVisible() && rankBadge->getVisible() && artist->getVisible(),
             "recycling a random row restores ordinary chart controls");
   }
 
+  rendering::ShaderManager::getInstance().release();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
   return 0;

@@ -31,6 +31,13 @@ captureIrSubmissionSnapshot(const result_persistence::ModernChartResult &result,
 serializeIrSubmissionSnapshot(const IrSubmissionSnapshot &snapshot,
                               std::string &diagnostic) noexcept;
 
+// Verify the original snapshot fingerprint, then compare its facts to the
+// authenticated owner using canonical lamp semantics. Preserve its wire bytes.
+[[nodiscard]] std::optional<std::string>
+serializeIrSubmissionSnapshot(const IrSubmissionSnapshot &snapshot,
+                              const result_persistence::ModernChartResult &owner,
+                              std::string &diagnostic) noexcept;
+
 [[nodiscard]] std::optional<IrSubmissionSnapshot>
 deserializeIrSubmissionSnapshot(std::string_view serialized,
                                 std::string_view expectedFingerprint,

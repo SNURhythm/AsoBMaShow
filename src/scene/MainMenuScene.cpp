@@ -70,7 +70,9 @@
 #include "RemoteResultRecallController.h"
 #include "ResultScene.h"
 #include "SettingsScene.h"
-#include "StreakScene.h"
+#include "KomboScene.h"
+#include "ChartGoalsScene.h"
+#include "../goals/GoalTargetPresentation.h"
 #include "MusicSelectScene.h"
 #include "MusicSelectSkinErrorScene.h"
 #include "../music_select/MusicSelectLaunchPolicy.h"
@@ -129,6 +131,23 @@
 #include <limits>
 #include <sstream>
 namespace {
+// Paint the selected row's bubble outside the recycler clip, beneath modals.
+class SelectedChartGoalOverlay final : public View {
+public:
+  explicit SelectedChartGoalOverlay(std::function<ChartListItemView *()> selected)
+      : selected_(std::move(selected)) {
+    setPositionType(YGPositionTypeAbsolute);
+    for (auto edge : {Edge::Left, Edge::Top, Edge::Right, Edge::Bottom}) setPosition(edge, 0);
+    setZIndex(500);
+  }
+protected:
+  void renderImpl(RenderContext &context) override {
+    if (auto *row = selected_()) row->renderGoalBubble(context);
+  }
+private:
+  std::function<ChartListItemView *()> selected_;
+};
+
 using modal_view::makeModalButton;
 using modal_view::modalPanelBorder;
 using modal_view::styleThemedActionButton;
@@ -235,8 +254,8 @@ constexpr ClearMarkFilterDefinition kDifficultyClearMarkFilters[] = {
     {"H-CLEAR", kClearTypeHardClearRank},
     {"CLEAR", kClearTypeNormalClearRank},
     {"E-CLEAR", kClearTypeEasyClearRank},
-    {"LIGHT ASSIST", kClearTypeLightAssistedEasyClearRank},
     {"A-CLEAR", kClearTypeAssistedEasyClearRank},
+    {"LIGHT ASSIST", kClearTypeLightAssistedEasyClearRank},
     {"FAILED", kClearTypeFailedRank},
     {"NO PLAY", kNoClearTypeRank},
 };
@@ -751,7 +770,7 @@ bool MainMenuScene::selectorTabActive() const {
 Scene *MainMenuScene::activeUtilityTab() const {
   if (activeTab_ == Tab::Music) return musicTab_.get();
   if (activeTab_ == Tab::Ir) return irTab_.get();
-  if (activeTab_ == Tab::Streak) return streakTab_.get();
+  if (activeTab_ == Tab::Kombo) return komboTab_.get();
   return nullptr;
 }
 
@@ -798,7 +817,7 @@ void MainMenuScene::cancelPendingTabSwitch() {
 
 void MainMenuScene::completeTabSwitch(Tab tab) {
   // Routine edits change assignment membership without changing chart/score revisions.
-  if (activeTab_ == Tab::Streak) requestLibraryReload(true);
+  if (activeTab_ == Tab::Kombo) requestLibraryReload(true);
   const bool resumeCurrentSelector = !selectorTabActive() && tab == selectorTab_;
   if (selectorTabActive()) {
     const auto endEditing = [](View *root, const auto &self) -> void {
@@ -838,13 +857,15 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
     irTab_->configureTab(inset, returnToPlay, this);
     irTab_->init();
     initializedUtilityTab = true;
-  } else if (tab == Tab::Streak && !streakTab_) {
-    streakTab_ = std::make_unique<StreakScene>(context);
-    streakTab_->prepareForUse();
-    streakTab_->configureTab(inset, returnToPlay, [this](const std::string &id) {
-      defer([this, id] { openStreakAssignment(id); return true; }, 0, true);
+  } else if (tab == Tab::Kombo && !komboTab_) {
+    komboTab_ = std::make_unique<KomboScene>(context);
+    komboTab_->prepareForUse();
+    komboTab_->configureTab(inset, returnToPlay, [this](const std::string &id) {
+      defer([this, id] { openKomboAssignment(id); return true; }, 0, true);
+    }, [this] {
+      defer([this] { openChartGoals(); return true; }, 0, true);
     });
-    streakTab_->init();
+    komboTab_->init();
     initializedUtilityTab = true;
   }
   if (selectorTabActive() && !resumeCurrentSelector) {
@@ -905,9 +926,10 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
   updatePanelLayout();
   refreshTabPresentation();
   rootLayout->applyYogaLayout();
+  if (tab == Tab::Play) resumeGoalNavigation();
 }
 
-void MainMenuScene::openStreakAssignment(const std::string &id) {
+void MainMenuScene::openKomboAssignment(const std::string &id) {
   selectTab(Tab::Play);
   temporaryChartFolder.reset();
   searchText.clear();
@@ -924,7 +946,7 @@ void MainMenuScene::openStreakAssignment(const std::string &id) {
   // Reload both membership and the sidebar before querying the requested assignment.
   reloadFolderItems();
   if (activeFolder.type != LibraryFolderItem::Type::Assignments) {
-    activeFolder = {.key="container:assignments", .label=i18n::tr("streak.ui.assignment_folder"),
+    activeFolder = {.key="container:assignments", .label=i18n::tr("kombo.ui.assignment_folder"),
                     .type=LibraryFolderItem::Type::Assignments};
     reloadFolderItems();
   }
@@ -948,7 +970,7 @@ void MainMenuScene::refreshTabPresentation() {
   const bool showDock = selector && rendering::window_width >= rendering::window_height;
   dock->setDisplay(showDock ? YGDisplayFlex : YGDisplayNone);
   dock->setVisible(showDock);
-  const std::array<const char *, 5> labels{"PLAY", "COURSE", "MUSIC", "IR", "STREAK"};
+  const std::array<const char *, 5> labels{"PLAY", "COURSE", "MUSIC", "IR", "KOMBO"};
   for (size_t index = 0; index < labels.size(); ++index) {
     auto *button = static_cast<Button *>(rootLayout->findViewByName(std::string("mainMenuTab:") + labels[index]));
     tab_button::style(button, index == static_cast<size_t>(activeTab_));
@@ -957,7 +979,7 @@ void MainMenuScene::refreshTabPresentation() {
       kMenuHeaderHeight * (rendering::window_width < 1000 ? 2 : 1);
   if (musicTab_) musicTab_->setTabTopInset(inset);
   if (irTab_) irTab_->setTabTopInset(inset);
-  if (streakTab_) streakTab_->setTabTopInset(inset);
+  if (komboTab_) komboTab_->setTabTopInset(inset);
 }
 
 MainMenuScene::MainMenuScene(ApplicationContext &context, bool showTutorial)
@@ -1105,6 +1127,7 @@ void MainMenuScene::onResume() {
   refreshLibraryIfNeeded();
   if (selectorTabActive()) reselectCurrentChart();
   if (auto *scene = activeUtilityTab()) scene->onResume();
+  resumeGoalNavigation();
   if (activeTab_ == Tab::Play) queueSelectedSkinHandoff();
 }
 
@@ -1163,7 +1186,7 @@ void MainMenuScene::onLanguageChanged() {
   Scene::onLanguageChanged();
   if (musicTab_) musicTab_->refreshLanguageIfNeeded();
   if (irTab_) irTab_->refreshLanguageIfNeeded();
-  if (streakTab_) streakTab_->refreshLanguageIfNeeded();
+  if (komboTab_) komboTab_->refreshLanguageIfNeeded();
   // Rebind presentation only: reinitializing the scene would cancel workers,
   // discard selection, and replace the user's filter and lane-order input.
   if (folderRecyclerView != nullptr) folderRecyclerView->rebindVisibleItems();
@@ -1202,7 +1225,7 @@ void MainMenuScene::applyThemeChange() {
   }
 
   appliedUiThemeMode = activeMode;
-  for (Scene *scene : std::array<Scene *, 3>{musicTab_.get(), irTab_.get(), streakTab_.get()})
+  for (Scene *scene : std::array<Scene *, 3>{musicTab_.get(), irTab_.get(), komboTab_.get()})
     if (scene) for (auto *view : scene->views) view->propagateThemeChange();
   for (auto *view : views) {
     if (view != nullptr) {
@@ -1432,6 +1455,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                a.difficultyTableLabels == b.difficultyTableLabels &&
                a.courseStart == b.courseStart &&
                a.unzipAll == b.unzipAll &&
+               a.addRecommendedGoals == b.addRecommendedGoals &&
                a.randomSelect == b.randomSelect &&
                a.unavailable == b.unavailable &&
                a.solidArchive == b.solidArchive &&
@@ -1455,12 +1479,29 @@ void MainMenuScene::initView(ApplicationContext &context) {
   static constexpr int kChartListItemHeight = 100;
   recyclerView->onCreateView = [this](const ChartMetaRecord &item) {
     return new ChartListItemView(0, 0, rendering::window_width,
-                                 kChartListItemHeight, item);
+                                 kChartListItemHeight, item, true);
   };
   recyclerView->itemHeight = kChartListItemHeight;
   recyclerView->topMargin = 0;
   recyclerView->bottomMargin = 0;
-  recyclerView->onBind = [this](View *view, const ChartMetaRecord &item,
+  const auto updateSelectedGoalBubble = [this](ChartListItemView *view, const ChartMetaRecord &record) {
+    if (!view) return;
+    view->setGoalTarget(-1, {}, {});
+    if (record.courseStart || record.randomSelect || record.unavailable ||
+        record.solidArchive || record.meta.BmsPath.empty()) return;
+    const auto goalMode = chartGoalIndex.modeFor(record.meta.SHA256,
+        scoreLongNoteModeForClearLamp(record.meta,
+            long_note_mode::valueFromId(profileSelections.longNoteMode)));
+    if (goalMode) {
+      std::string error;
+      const auto goal = this->context.scoreRepository.LoadChartGoal(record.meta, *goalMode, error);
+      if (goal && !goal->progress.achieved) {
+        const auto labels = chart_goals::targetLabels(goal->goal.target);
+        view->setGoalTarget(labels.lampRank, labels.lamp, labels.score);
+      } else if (!error.empty()) SDL_Log("Cannot load chart goal: %s", error.c_str());
+    }
+  };
+  recyclerView->onBind = [this, updateSelectedGoalBubble](View *view, const ChartMetaRecord &item,
                                 int idx, bool isSelected) {
     auto *chartListItemView = dynamic_cast<ChartListItemView *>(view);
     chartListItemView->setMeta(item, prioritizeVisibleArtworkBindings);
@@ -1483,10 +1524,20 @@ void MainMenuScene::initView(ApplicationContext &context) {
     } else {
       chartListItemView->setBestScoreRank(0, 0);
     }
-    chartListItemView->setFavoriteToggleHandler(
-        [this](const ChartMetaRecord &record, bool favorite) {
-          return toggleChartFavorite(record, favorite);
-        });
+    const auto goalMode = chartGoalIndex.modeFor(item.meta.SHA256,
+        scoreLongNoteModeForClearLamp(item.meta,
+            long_note_mode::valueFromId(profileSelections.longNoteMode)));
+    bool goalAchieved = false;
+    if (goalMode) {
+      const auto achieved = chartGoalIndex.achievedModes.find(chart_goals::normalizedHash(item.meta.SHA256));
+      goalAchieved = achieved != chartGoalIndex.achievedModes.end() &&
+          (achieved->second & (1u << *goalMode));
+    }
+    chartListItemView->setGoalState(goalMode.has_value(), goalAchieved);
+    if (isSelected && !goalAchieved) updateSelectedGoalBubble(chartListItemView, item);
+    chartListItemView->setGoalHandler([this](const ChartMetaRecord &record) {
+      openChartGoal(record);
+    });
     if (isSelected) {
       chartListItemView->onSelected();
     } else {
@@ -1495,7 +1546,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   };
 
   jacketView = new ImageView(0, 0, 0, 0);
-  const auto selectChart = [this, &context](const ChartMetaRecord &record,
+  const auto selectChart = [this, &context, updateSelectedGoalBubble](const ChartMetaRecord &record,
                                           int idx, bool bypassDebounce) {
     if (willStart.load() || pendingTab_)
       return;
@@ -1508,6 +1559,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     const auto &meta = item.meta;
     auto selectedView = recyclerView->getViewByIndex(idx);
     if (selectedView) {
+      updateSelectedGoalBubble(dynamic_cast<ChartListItemView *>(selectedView), item);
       selectedView->onSelected();
     }
     refreshReplayAvailability(&item);
@@ -1595,7 +1647,11 @@ void MainMenuScene::initView(ApplicationContext &context) {
   recyclerView->onSelected = [selectChart](const ChartMetaRecord &record, int idx) {
     selectChart(record, idx, false);
   };
-  recyclerView->onSelectedByPointer = [selectChart](const ChartMetaRecord &record, int idx) {
+  recyclerView->onSelectedByPointer = [this, selectChart](const ChartMetaRecord &record, int idx) {
+    if (record.addRecommendedGoals) {
+      defer([this] { openChartGoals({}, {}, true); return true; }, 0, true);
+      return;
+    }
     selectChart(record, idx, true);
   };
   recyclerView->onUnselected = [this](const ChartMetaRecord &item, int idx) {
@@ -1623,7 +1679,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
         label = i18n::tr("library.folders.all_songs.label");
         break;
       case LibraryFolderItem::Type::Assignments:
-        if (item.depth == 0) label = i18n::tr("streak.ui.assignment_folder");
+        if (item.depth == 0) label = i18n::tr("kombo.ui.assignment_folder");
+        break;
+      case LibraryFolderItem::Type::Goals:
+        label = i18n::tr("goals.ui.folder");
         break;
       case LibraryFolderItem::Type::Favorites:
         label = i18n::tr("library.folders.favorites.label");
@@ -1650,6 +1709,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
                           item.expanded,
                           item.type == LibraryFolderItem::Type::AllSongs && !item.sectionHeader ? ui_icons::kMusic :
                           item.type == LibraryFolderItem::Type::Assignments && item.depth == 0 ? ui_icons::kFire :
+                          item.type == LibraryFolderItem::Type::Goals ? 0xf024 :
                           item.type == LibraryFolderItem::Type::Favorites ? 0xf005 : 0,
                           item.sectionHeader);
     }
@@ -1973,9 +2033,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   auto *tabs = new View();
   tabs->setName("mainMenuTabs");
   tabs->setFlexDirection(FlexDirection::Row)->setHeight(kMenuHeaderHeight)->setGap(4);
-  const std::array<const char *, 5> tabLabels{"PLAY", "COURSE", "MUSIC", "IR", "STREAK"};
+  const std::array<const char *, 5> tabLabels{"PLAY", "COURSE", "MUSIC", "IR", "KOMBO"};
   const std::array<const char *, 5> tabMessages{
-      "menu.tabs.play", "menu.tabs.course", "menu.tabs.music", "menu.tabs.ir", "menu.tabs.streak"};
+      "menu.tabs.play", "menu.tabs.course", "menu.tabs.music", "menu.tabs.ir", "menu.tabs.kombo"};
   const std::array<uint32_t, 5> tabIcons{ui_icons::kPlay, ui_icons::kFlagCheckered,
                                          ui_icons::kMusic, ui_icons::kGlobe, ui_icons::kFire};
   for (size_t index = 0; index < tabLabels.size(); ++index) {
@@ -2235,6 +2295,9 @@ void MainMenuScene::initView(ApplicationContext &context) {
   rightContent->setGap(8);
 
   chartDetailsView_ = new ChartDetailsView(jacketView);
+  chartDetailsView_->setFavoriteToggleHandler([this](const ChartMetaRecord &record, bool favorite) {
+    return toggleChartFavorite(record, favorite);
+  });
   chartDetailsView_->setWidth(kDetailsContentWidth);
   rightContent->addView(chartDetailsView_);
 
@@ -2519,6 +2582,10 @@ void MainMenuScene::initView(ApplicationContext &context) {
 #endif
   buildFindBmsModal();
   buildUnzipProgressModal();
+  rootLayout->addView(new SelectedChartGoalOverlay([this]() -> ChartListItemView * {
+    return activeTab_ == Tab::Play && !pendingTab_ && recyclerView && recyclerView->getVisible()
+        ? dynamic_cast<ChartListItemView *>(recyclerView->getViewByIndex(recyclerView->selectedIndex)) : nullptr;
+  }));
   rootLayout->addView(overlayPortal);
   reloadProfileSelectionsFromSettings();
   reloadScoreClearRanks();
@@ -2831,16 +2898,21 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
         chartSession->SelectDifficultyCourseTables();
     folderMetadataCache.valid = true;
   }
-  assignmentDayId = streak::today();
+  std::string goalError;
+  const auto goals = context.scoreRepository.LoadChartGoalIndex(goalError);
+  chartGoalIndex = goals.value_or(chart_goals::Index{});
+  chartGoalHashes = chartGoalIndex.activeHashes();
+  if (!goals) SDL_Log("Unable to load goal folders: %s", goalError.c_str());
+  assignmentDayId = kombo::today();
   assignmentDay = {};
   assignmentCharts.reset();
   assignmentChartHashes.clear();
-  std::string streakError;
-  if (const auto state = context.scoreRepository.LoadStreak(streakError)) {
+  std::string komboError;
+  if (const auto state = context.scoreRepository.LoadKombo(komboError)) {
     const auto day = state->days.find(assignmentDayId);
     if (day != state->days.end()) assignmentDay = day->second;
   } else {
-    SDL_Log("Unable to load assignment folders: %s", streakError.c_str());
+    SDL_Log("Unable to load assignment folders: %s", komboError.c_str());
   }
   std::vector<LibraryFolderItem> folders;
 
@@ -2888,13 +2960,15 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
 
   folders.push_back({
       .key = "container:assignments",
-      .label = i18n::tr("streak.ui.assignment_folder"),
+      .label = i18n::tr("kombo.ui.assignment_folder"),
       .type = LibraryFolderItem::Type::Assignments,
-      .expandable = !assignmentDay.assignments.empty(),
+      .expandable = std::any_of(assignmentDay.assignments.begin(), assignmentDay.assignments.end(),
+          [](const auto &p) { return !kombo::isGoalsAssignment(p.requirement); }),
       .expanded = isExpanded("container:assignments"),
   });
   if (isExpanded("container:assignments")) {
     for (const auto &progress : assignmentDay.assignments) {
+      if (kombo::isGoalsAssignment(progress.requirement)) continue;
       folders.push_back({
           .key = "container:assignment:" + progress.requirement.id,
           .label = progress.requirement.name,
@@ -2910,6 +2984,15 @@ void MainMenuScene::reloadFolderItems(bool preserveViewState) {
       .type = LibraryFolderItem::Type::Favorites,
       .depth = 0,
       .count = favoriteCount,
+  });
+
+  ChartMetaQuery goalsQuery;
+  goalsQuery.allowedSha256 = chartGoalHashes;
+  folders.push_back({
+      .key = "goals",
+      .label = i18n::tr("goals.ui.folder"),
+      .type = LibraryFolderItem::Type::Goals,
+      .count = chartSession->CountChartMeta(goalsQuery),
   });
 
   const int solidArchiveCount = folderMetadataCache.solidArchiveCount;
@@ -3243,6 +3326,9 @@ ChartMetaQuery MainMenuScene::chartQueryForActiveFolder() const {
   }
   case LibraryFolderItem::Type::SolidArchives:
     query.solidArchivesOnly = true;
+    break;
+  case LibraryFolderItem::Type::Goals:
+    query.allowedSha256 = chartGoalHashes;
     break;
   case LibraryFolderItem::Type::Favorites:
     query.favoritesOnly = true;
@@ -3734,7 +3820,11 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
   chartListCache.reset(*chartSession, query, databaseCount,
                        std::move(leadingRecord), std::move(randomRecords));
   const int leadingOffset = chartListCache.leadingCount();
-  const int count = databaseCount + leadingOffset;
+  const bool hasRecommendationsRow = !temporaryChartFolder && activeFolder.type == LibraryFolderItem::Type::Goals;
+  recommendedGoalsRow_ = {};
+  recommendedGoalsRow_.addRecommendedGoals = true;
+  const int chartCount = databaseCount + leadingOffset;
+  const int count = chartCount + (hasRecommendationsRow ? 1 : 0);
   int randomSelectedIndex = -1;
   if (selectedChartRecord && selectedChartRecord->randomSelect) {
     randomSelectedIndex = chartListCache.randomRecordIndex(*selectedChartRecord);
@@ -3742,7 +3832,8 @@ void MainMenuScene::reloadChartList(bool preserveViewState) {
     else selectedChartRecord.reset();
   }
   recyclerView->setItemProvider(
-      count, [this](int index) -> const ChartMetaRecord & {
+      count, [this, chartCount](int index) -> const ChartMetaRecord & {
+        if (index == chartCount) return recommendedGoalsRow_;
         return chartListCache.get(index);
       });
   refreshPlayOptionButtons();
@@ -4022,7 +4113,7 @@ void MainMenuScene::applyPendingUiUpdates() {
   // Keep invalidations and selection handoffs together until the selector
   // returns. Applying a hidden handoff would lose it on tab restoration.
   if (!selectorTabActive()) return;
-  if (assignmentDayId != streak::today()) requestLibraryReload(true);
+  if (assignmentDayId != kombo::today()) requestLibraryReload(true);
   const bool shouldReloadFolders =
       context.chartLibraryFoldersReloadRequested.exchange(false);
   const bool shouldReloadCharts =
@@ -4195,6 +4286,8 @@ bool MainMenuScene::toggleChartFavorite(const ChartMetaRecord &record,
     return false;
   }
 
+  if (selectedChartRecord && selectedChartRecord->meta.BmsPath == record.meta.BmsPath)
+    selectedChartRecord->favorite = favorite;
   const auto favoriteRanks = chartSession->LoadFavoriteClearRanks(scoreClearRanks);
   for (int mode : long_note_mode::kPlayableValues) {
     folderClearData.clearRanks[mode]["favorites"] = favoriteRanks.ranks[mode];
@@ -4962,6 +5055,10 @@ void MainMenuScene::startSelectedChart() {
   if (!record.has_value()) {
     return;
   }
+  if (record->addRecommendedGoals) {
+    defer([this] { openChartGoals({}, {}, true); return true; }, 0, true);
+    return;
+  }
   if (record->randomSelect) {
     startRandomChart(*record);
     return;
@@ -5226,6 +5323,62 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
         return finishStart();
       },
       0, true);
+}
+
+void MainMenuScene::resumeGoalNavigation() {
+  if (!pendingGoalSelection_) return;
+  if (pendingGoalProfile_ != context.profileManager.activeProfile().id) {
+    pendingGoalSelection_.reset(); pendingGoalProfile_.clear(); return;
+  }
+  if (activeTab_ != Tab::Play) {
+    selectTab(Tab::Play);
+    return; // COURSE waits for preview shutdown before PLAY owns the selection.
+  }
+  if (pendingTab_) return;
+  if (auto goal = std::exchange(pendingGoalSelection_, {})) {
+    applyGoalSelection(goal->first, goal->second);
+    pendingGoalProfile_.clear();
+  }
+}
+
+void MainMenuScene::openChartGoal(const ChartMetaRecord &record) {
+  const auto mode = chartGoalIndex.modeFor(record.meta.SHA256,
+      scoreLongNoteModeForClearLamp(record.meta,
+          long_note_mode::valueFromId(profileSelections.longNoteMode)));
+  const auto profile = context.profileManager.activeProfile().id;
+  defer([this, record, mode, profile] {
+    if (profile == context.profileManager.activeProfile().id) openChartGoals(record, mode);
+    return true;
+  }, 0, true);
+}
+
+void MainMenuScene::openChartGoals(std::optional<ChartMetaRecord> initial, std::optional<int> mode, bool recommendations) {
+  if (context.storageMaintenanceActive || willStart.load() || replayExportJob_.inProgress()) return;
+  if (initial && (initial->unavailable || initial->solidArchive || initial->meta.BmsPath.empty())) return;
+  const auto profile = context.profileManager.activeProfile().id;
+  context.sceneManager->changeScene(std::make_unique<ChartGoalsScene>(context,
+      SceneReturnTarget::Retained(this), std::move(initial),
+      [this, profile](const ChartMetaRecord &record, int mode) {
+        pendingGoalSelection_ = std::pair{record, mode}; pendingGoalProfile_ = profile;
+      }, mode, recommendations), true);
+}
+
+void MainMenuScene::applyGoalSelection(const ChartMetaRecord &record, int mode) {
+  if (mode > 0) {
+    context.settings.selectedLnMode = long_note_mode::idFromValue(mode);
+    (void)context.saveSettings();
+    reloadProfileSelectionsFromSettings();
+  }
+  searchText.clear(); searchBox->setEditingText("");
+  if (auto *hint = rootLayout->findViewByName("mainMenuSearchHint")) hint->setVisible(true);
+  chartRecordFilters = {};
+  chartBpmMinText.clear(); chartBpmMaxText.clear(); chartDifficultyRangeTableId.reset();
+  chartKeyModeDropdownOpen = chartClearMarkDropdownOpen = chartScoreRankDropdownOpen = false;
+  chartDifficultyMinDropdownOpen = chartDifficultyMaxDropdownOpen = false;
+  temporaryChartFolder = main_menu_library::sameFolderForChart(record);
+  activeFolder = {.key="all", .label=i18n::tr("menu.all_songs.label"), .type=LibraryFolderItem::Type::AllSongs};
+  reloadFolderItems(); reloadChartList();
+  selectChartByPathAfterReload(record.meta.BmsPath, AutoSelectionPreview::Load);
 }
 
 void MainMenuScene::openChartViewerForSelection() {
@@ -8456,10 +8609,10 @@ bool MainMenuScene::needsContinuousPresentation() const {
 
 void MainMenuScene::update(float dt) {
   if (!applyPendingTabSwitch()) return;
-  if (!context.pendingComboNotificationProfile.empty()) {
-    const auto profile = std::exchange(context.pendingComboNotificationProfile, {});
+  if (!context.pendingKomboNotificationProfile.empty()) {
+    const auto profile = std::exchange(context.pendingKomboNotificationProfile, {});
     if (profile == context.profileManager.activeProfile().id) {
-      selectTab(Tab::Streak);
+      selectTab(Tab::Kombo);
       return;
     }
   }
@@ -8489,10 +8642,10 @@ void MainMenuScene::update(float dt) {
     irTab_->update(dt);
     irTab_->handleDeferred();
   }
-  if (activeTab_ == Tab::Streak && streakTab_) {
-    streakTab_->refreshLanguageIfNeeded();
-    streakTab_->update(dt);
-    streakTab_->handleDeferred();
+  if (activeTab_ == Tab::Kombo && komboTab_) {
+    komboTab_->refreshLanguageIfNeeded();
+    komboTab_->update(dt);
+    komboTab_->handleDeferred();
   }
   if (activeTab_ == Tab::Music && musicTab_) {
     musicTab_->refreshLanguageIfNeeded();
@@ -8649,10 +8802,10 @@ void MainMenuScene::cleanupScene() {
   cancelPendingTabSwitch();
   if (musicTab_) musicTab_->cleanup();
   if (irTab_) irTab_->cleanup();
-  if (streakTab_) streakTab_->cleanup();
+  if (komboTab_) komboTab_->cleanup();
   musicTab_.reset();
   irTab_.reset();
-  streakTab_.reset();
+  komboTab_.reset();
   activeTab_ = selectorTab_ = Tab::Play;
   selectorStates_ = {};
   tutorial_ = nullptr;

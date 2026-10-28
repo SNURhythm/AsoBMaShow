@@ -1619,7 +1619,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_executable(music_select_repository_projection_tests
             tests/music_select_repository_projection_tests.cpp
             src/music_select/MusicSelectAssignmentFolders.cpp
-            src/streak/StreakModel.cpp
+            src/kombo/KomboModel.cpp
             src/music_select/MusicSelectRepositoryProjection.cpp
             src/path.cpp
         )
@@ -3361,10 +3361,10 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ir/IrRemoteScoreModels.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryIrImport.cpp
-        src/repositories/ScoreRepositoryStreak.cpp
+        src/repositories/ScoreRepositoryKombo.cpp
         src/repositories/ScoreRepositoryQueries.cpp
-        src/streak/StreakModel.cpp
-        src/streak/StreakStore.cpp
+        src/kombo/KomboModel.cpp
+        src/kombo/KomboStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
@@ -3843,8 +3843,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
-        src/streak/StreakModel.cpp
-        src/streak/StreakStore.cpp
+        src/kombo/KomboModel.cpp
+        src/kombo/KomboStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
@@ -3922,8 +3922,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
-        src/streak/StreakModel.cpp
-        src/streak/StreakStore.cpp
+        src/kombo/KomboModel.cpp
+        src/kombo/KomboStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
@@ -4236,8 +4236,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryIrImport.cpp
         src/repositories/ScoreRepositoryQueries.cpp
-        src/streak/StreakModel.cpp
-        src/streak/StreakStore.cpp
+        src/kombo/KomboModel.cpp
+        src/kombo/KomboStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
         src/ModernResult.cpp
@@ -4404,8 +4404,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ChartStorageIdentity.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
-        src/streak/StreakModel.cpp
-        src/streak/StreakStore.cpp
+        src/kombo/KomboModel.cpp
+        src/kombo/KomboStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
         src/ModernResult.cpp
@@ -4496,8 +4496,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ChartStorageIdentity.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
-        src/streak/StreakModel.cpp
-        src/streak/StreakStore.cpp
+        src/kombo/KomboModel.cpp
+        src/kombo/KomboStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
         src/ModernResult.cpp
@@ -4665,8 +4665,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/ModernResult.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
-        src/streak/StreakModel.cpp
-        src/streak/StreakStore.cpp
+        src/kombo/KomboModel.cpp
+        src/kombo/KomboStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ScoreProvenance.cpp
         src/Uuid.cpp
@@ -4751,8 +4751,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ChartStorageIdentity.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
-        src/streak/StreakModel.cpp
-        src/streak/StreakStore.cpp
+        src/kombo/KomboModel.cpp
+        src/kombo/KomboStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ResultPersistenceModel.cpp
         src/ModernResult.cpp
@@ -6312,8 +6312,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/practice/PracticePresetStore.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
-        src/streak/StreakModel.cpp
-        src/streak/StreakStore.cpp
+        src/kombo/KomboModel.cpp
+        src/kombo/KomboStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
@@ -7415,8 +7415,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ReplayRepositoryLegacyMigration.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
-        src/streak/StreakModel.cpp
-        src/streak/StreakStore.cpp
+        src/kombo/KomboModel.cpp
+        src/kombo/KomboStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/ir/IrOutboxModels.cpp
         src/ir/IrProfileSettings.cpp
@@ -8043,8 +8043,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputProfileStore.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
-        src/streak/StreakModel.cpp
-        src/streak/StreakStore.cpp
+        src/kombo/KomboModel.cpp
+        src/kombo/KomboStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
@@ -8129,8 +8129,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/repositories/ChartStorageIdentity.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
-        src/streak/StreakModel.cpp
-        src/streak/StreakStore.cpp
+        src/kombo/KomboModel.cpp
+        src/kombo/KomboStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
@@ -8207,8 +8207,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         src/input/InputProfileStore.cpp
         src/repositories/ScoreRepository.cpp
         src/repositories/ScoreRepositoryQueries.cpp
-        src/streak/StreakModel.cpp
-        src/streak/StreakStore.cpp
+        src/kombo/KomboModel.cpp
+        src/kombo/KomboStore.cpp
         src/repositories/ScoreRepositorySchema.cpp
         src/repositories/ReplayRepository.cpp
         src/repositories/ReplayRepositoryIrOutbox.cpp
@@ -9294,7 +9294,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
         asobmashow_register_test(${test_target})
     endforeach()
-    set_tests_properties(text_input_box_tests difficulty_table_importer_tests button_enabled_tests chart_details_view_tests PROPERTIES
+    set_tests_properties(text_input_box_tests difficulty_table_importer_tests button_enabled_tests chart_details_view_tests chart_list_item_view_tests PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
     if (TARGET skin_resource_catalog_tests)
         asobmashow_register_test(skin_resource_catalog_tests)
@@ -9993,6 +9993,14 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         get_target_property(asobmashow_target_sources
             ${asobmashow_target} SOURCES)
         if(asobmashow_target_sources)
+            if("src/repositories/ScoreRepositoryQueries.cpp" IN_LIST asobmashow_target_sources)
+                foreach(goal_source src/repositories/ScoreRepositoryGoals.cpp
+                        src/goals/ChartGoal.cpp src/goals/ChartGoalStore.cpp)
+                    if(NOT goal_source IN_LIST asobmashow_target_sources)
+                        target_sources(${asobmashow_target} PRIVATE ${goal_source})
+                    endif()
+                endforeach()
+            endif()
             if("src/AppSettings.cpp" IN_LIST asobmashow_target_sources)
                 target_sources(${asobmashow_target} PRIVATE src/storage/StoragePolicy.cpp)
             endif()
@@ -10077,7 +10085,8 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
         add_test(NAME hardware_video_frame_threaded_tests COMMAND hardware_video_frame_tests --threaded)
     endif()
 
-    include("${CMAKE_SOURCE_DIR}/cmake/StreakTests.cmake")
+    include("${CMAKE_SOURCE_DIR}/cmake/KomboTests.cmake")
+    include("${CMAKE_SOURCE_DIR}/cmake/ChartGoalTests.cmake")
     include("${CMAKE_SOURCE_DIR}/cmake/TestGroupCatalog.cmake")
 endif()
 

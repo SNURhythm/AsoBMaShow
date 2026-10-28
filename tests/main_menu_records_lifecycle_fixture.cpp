@@ -218,7 +218,8 @@ struct MainMenuScene {
   struct Utility {
     int pauses = 0, resumes = 0, profileChanges = 0;
     void onPause() { ++pauses; }
-    void onResume() { ++resumes; }
+    void resumeGoalNavigation() {}
+  void onResume() { ++resumes; }
     void onProfileWillChange() { ++profileChanges; }
   };
   Utility *utility = nullptr, *irTab_ = nullptr;
@@ -328,6 +329,7 @@ struct MainMenuScene {
   bool beginReplayExport(const i18n::Text &, const i18n::Text &, const i18n::Text &);
   void applyReplayExportResult();
   void onPause();
+  void resumeGoalNavigation() {}
   void onResume();
   void queueSelectedSkinHandoff();
 };

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../ClearLampOrder.h"
 #include "../ProfileDatabaseActivity.h"
 #include "../ScoreProvenance.h"
 #include "../ScoreRulesetCompatibility.h"
@@ -49,21 +50,22 @@ fullComboClearRankExpr(std::string_view alias,
   if (playbackPercentExpression.empty()) {
     playbackPercentExpression = playbackPercentExpr(alias);
   }
+  const std::string clearType = clearLampOrderSql(prefix + ".clear_type");
   const std::string importedBranch =
       sourceAware
           ? " WHEN " + prefix + ".score_source = " +
                 std::to_string(
                     static_cast<int>(ScoreStorageSource::ImportedIr)) +
-                " THEN " + prefix + ".clear_type"
+                " THEN " + clearType
           : std::string{};
-  return "(CASE" + importedBranch + " WHEN " + prefix +
-         ".clear_type >= " + std::to_string(kClearTypeAssistedEasyClearRank) +
+  return "(CASE" + importedBranch + " WHEN " + clearType +
+         " >= " + std::to_string(kClearTypeLightAssistedEasyClearRank) +
          " AND " + playbackPercentExpression + " <> 100 THEN " +
          std::to_string(kClearTypeLightAssistedEasyClearRank) + " WHEN " + prefix +
-         ".combo_break = 0 AND " + prefix +
-         ".clear_type >= " + std::to_string(kClearTypeAssistedEasyClearRank) +
+         ".combo_break = 0 AND " + clearType +
+         " >= " + std::to_string(kClearTypeAssistedEasyClearRank) +
          " THEN " + std::to_string(kClearTypeFullComboRank) + " ELSE " +
-         prefix + ".clear_type END)";
+         clearType + " END)";
 }
 
 inline std::string playableLongNoteModesSql() {
@@ -105,7 +107,7 @@ inline BestScoreOrderKey
 bestScoreOrderKey(std::string_view alias, std::string clearRankExpression,
                   std::string_view idColumn) {
   const std::string prefix(alias);
-  return {prefix + ".score", clearRankExpression,
+  return {prefix + ".score", clearLampOrderSql(clearRankExpression),
           prefix + ".created_at", prefix + "." + std::string(idColumn)};
 }
 
@@ -135,7 +137,7 @@ inline std::string keyHasValueExpr(std::string_view keyExpr) {
   return "NULLIF(trim(" + std::string(keyExpr) + "), '') IS NOT NULL";
 }
 
-inline std::string scoreParticipatesInBestExpr(std::string_view alias) {
+inline std::string scoreParticipatesInBestExpr(std::string_view alias, bool lamp = false) {
   const std::string prefix(alias);
   const auto matches = [&](const RulesetDescriptor &rules) {
     const auto field = [&](std::string_view name) {
@@ -156,8 +158,21 @@ inline std::string scoreParticipatesInBestExpr(std::string_view alias) {
   // Historical and imported rows without a known policy retain their existing
   // treatment. Known policies allow only the explicit parity-update exception;
   // saved provenance remains immutable for replay and attempt fingerprints.
-  return "(" + prefix + ".eligibility <> " +
-         std::to_string(static_cast<int>(ScoreEligibility::Modified)) +
+  std::string eligible = prefix + ".eligibility <> " +
+      std::to_string(static_cast<int>(ScoreEligibility::Modified));
+  if (lamp) {
+    // A recorded assisted clear is useful lamp evidence even though its EX
+    // score is ineligible. Practice/autoplay and custom judge/gauge setups
+    // remain excluded; immutable provenance and score eligibility stay intact.
+    eligible = "(" + eligible + " OR (" + clearLampOrderSql(prefix + ".clear_type") +
+        "=50 AND CASE WHEN json_valid(" + prefix + ".provenance_json) THEN " +
+        "json_extract(" + prefix + ".provenance_json,'$.autoPlay')=0 AND " +
+        "json_extract(" + prefix + ".provenance_json,'$.practice')=0 AND " +
+        "json_extract(" + prefix + ".provenance_json,'$.judgeWindowScalePercent')=100 AND " +
+        "json_extract(" + prefix + ".provenance_json,'$.startingGaugePercent') IS NULL " +
+        "ELSE 0 END))";
+  }
+  return "(" + eligible +
          " AND (" + prefix + ".ruleset_version = 0 OR CASE WHEN json_valid(" +
          prefix + ".provenance_json) THEN (" + compatible(GameplayRuleset::LR2) +
          " OR " + compatible(GameplayRuleset::Beatoraja) + ") ELSE 0 END))";
@@ -179,6 +194,11 @@ inline std::string bestLookupForMode(const std::string &sha256Expr,
          " AND s.ln_mode = " + lnModeExpr + " LIMIT 1)";
 }
 
+// Normalize historical IDs at the source; summaries store canonical IDs.
+inline std::string bestClearRankExpr(std::string_view rankExpression) {
+  return "MAX(" + clearLampOrderSql(rankExpression) + ")";
+}
+
 inline std::string clearRankUpsertSql(bool sourceAware) {
   return "INSERT INTO score_sha256_clear_rank_cache(chart_sha256, ln_mode, "
          "rank) SELECT lower(trim(NEW.chart_sha256)), modes.ln_mode, " +
@@ -186,9 +206,9 @@ inline std::string clearRankUpsertSql(bool sourceAware) {
          playableLongNoteModesSql() + " modes WHERE (NEW.ln_mode = -1 OR "
          "NEW.ln_mode = modes.ln_mode) AND " +
          keyHasValueExpr("NEW.chart_sha256") + " AND " +
-         scoreParticipatesInBestExpr("NEW") +
+         scoreParticipatesInBestExpr("NEW", true) +
          " ON CONFLICT(chart_sha256, ln_mode) DO UPDATE SET rank = "
-         "max(score_sha256_clear_rank_cache.rank, excluded.rank);";
+         "MAX(score_sha256_clear_rank_cache.rank, excluded.rank);";
 }
 
 inline std::string bestScoreUpsertSql(bool sourceAware) {
@@ -202,7 +222,7 @@ inline std::string bestScoreUpsertSql(bool sourceAware) {
          "combo_break, final_gauge, clear_type, clear_rank, score_rank, "
          "created_at) SELECT lower(trim(NEW.chart_sha256)), modes.ln_mode, "
          "NEW.id, NEW.score, NEW.max_score, NEW.max_combo, NEW.combo_break, "
-         "NEW.final_gauge, NEW.clear_type, " +
+         "NEW.final_gauge, " + clearLampOrderSql("NEW.clear_type") + ", " +
          fullComboClearRankExpr("NEW", {}, sourceAware) + ", " +
          scoreRankLabelExpr("NEW") +
          ", NEW.created_at FROM " + playableLongNoteModesSql() +
@@ -221,12 +241,12 @@ inline std::string bestScoreUpsertSql(bool sourceAware) {
 
 inline std::string scoreIdentityCte(std::string_view schema,
                                     bool hasProvenance,
-                                    bool sourceAware) {
+                                    bool sourceAware, bool lamp = false) {
   const std::string scores = qualifiedName(schema, "scores");
   const std::string playbackPercent =
       hasProvenance ? playbackPercentExpr("s") : "100";
   const std::string eligibilityFilter =
-      hasProvenance ? " AND " + scoreParticipatesInBestExpr("s") : "";
+      hasProvenance ? " AND " + scoreParticipatesInBestExpr("s", lamp) : "";
   const std::string scoreSource =
       sourceAware ? "score_source" : "0 AS score_source";
   return "SELECT lower(trim(chart_sha256)) AS chart_sha256, modes.ln_mode, "
@@ -455,6 +475,28 @@ ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
     return error;
   }
 
+  // Revision 3 includes assisted lamps separately from EX bests and canonicalizes historical Light Assist IDs in denormalized
+  // columns. Immutable provenance, result fingerprints and links are untouched.
+  // Keep the marker separate from user_version so existing v15 profiles repair.
+  const std::string revisions =
+      detail::qualifiedName(schema, "score_summary_revisions");
+  const std::string createRevisions = "CREATE TABLE IF NOT EXISTS " + revisions +
+      " (name TEXT PRIMARY KEY, revision INTEGER NOT NULL) WITHOUT ROWID";
+  if (const auto error = executeSqlite(db, createRevisions.c_str())) return error;
+  SqliteStatementHandle revision;
+  const std::string revisionQuery = "SELECT revision FROM " + revisions +
+      " WHERE name='clear_lamp_order'";
+  if (prepareSqliteStatement(db, revisionQuery, revision) != SQLITE_OK) {
+    return sqliteDatabaseError(db);
+  }
+  const int revisionResult = sqlite3_step(revision.get());
+  if (revisionResult != SQLITE_ROW && revisionResult != SQLITE_DONE) {
+    return sqliteDatabaseError(db);
+  }
+  bool rebuildRequired = revisionResult == SQLITE_DONE ||
+                         sqlite3_column_int(revision.get(), 0) < 3;
+  revision.reset();
+
   // Empty summaries are valid for historical-only profiles. Index the same
   // policy used by summary construction so probing for repairable rows does
   // not repeatedly scan all historical provenance on menu refresh.
@@ -481,9 +523,7 @@ ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
     }
     oldIndex.reset();
     if (oldIndexResult == SQLITE_ROW) {
-      if (const auto error = rebuildScoreSummaryTables(db, schema)) {
-        return error;
-      }
+      rebuildRequired = true;
       const std::string dropIndex =
           "DROP INDEX " + detail::qualifiedName(schema, oldIndexName);
       if (const auto error = executeSqlite(db, dropIndex.c_str())) return error;
@@ -508,6 +548,64 @@ ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
       detail::bestScoreUpsertSql(sourceAware) + " END";
   if (const auto error = executeSqlite(db, createTrigger.c_str())) {
     return error;
+  }
+  if (rebuildRequired) {
+    bool hasScoreRows = false;
+    // The attached query path also opens older profiles. Normalize only tables
+    // already present; schema migrations create any missing tables empty.
+    for (const std::string_view table : {"scores", "course_scores", "goal_gauge_best"}) {
+      SqliteStatementHandle exists;
+      const std::string existsQuery = "SELECT 1 FROM " +
+          detail::qualifiedName(schema, "sqlite_master") +
+          " WHERE type='table' AND name='" + std::string(table) + "'";
+      if (prepareSqliteStatement(db, existsQuery, exists) != SQLITE_OK)
+        return sqliteDatabaseError(db);
+      const int existsResult = sqlite3_step(exists.get());
+      if (existsResult != SQLITE_ROW && existsResult != SQLITE_DONE)
+        return sqliteDatabaseError(db);
+      exists.reset();
+      if (existsResult == SQLITE_DONE) continue;
+      const std::string qualified = detail::qualifiedName(schema, table);
+      SqliteStatementHandle rows;
+      if (prepareSqliteStatement(db, "SELECT 1 FROM " + qualified + " LIMIT 1", rows) != SQLITE_OK)
+        return sqliteDatabaseError(db);
+      const int rowsResult = sqlite3_step(rows.get());
+      if (rowsResult != SQLITE_ROW && rowsResult != SQLITE_DONE)
+        return sqliteDatabaseError(db);
+      rows.reset();
+      if (rowsResult == SQLITE_DONE) continue;
+      if (table == "scores") hasScoreRows = true;
+      if (table == "goal_gauge_best") {
+        // Mixed old/new profiles can contain both targets. Keep the same best
+        // evidence as the normal gauge-summary upsert before deleting ID 150.
+        const std::string merge = "INSERT INTO " + qualified +
+            "(chart_sha256,ln_mode,target,gauge_value,border,death_notes,total_notes,gap) "
+            "SELECT chart_sha256,ln_mode,50,gauge_value,border,death_notes,total_notes,gap FROM " +
+            qualified + " WHERE target=150 ON CONFLICT(chart_sha256,ln_mode,target) DO UPDATE SET "
+            "gauge_value=excluded.gauge_value,border=excluded.border,death_notes=excluded.death_notes,"
+            "total_notes=excluded.total_notes,gap=excluded.gap "
+            "WHERE excluded.gap<goal_gauge_best.gap OR (excluded.gap=goal_gauge_best.gap "
+            "AND excluded.death_notes=-1 AND goal_gauge_best.death_notes>=0)";
+        if (const auto error = executeSqlite(db, merge.c_str())) return error;
+        const std::string removeLegacy = "DELETE FROM " + qualified + " WHERE target=150";
+        if (const auto error = executeSqlite(db, removeLegacy.c_str())) return error;
+      } else {
+        const std::string normalize = "UPDATE " + qualified +
+            " SET clear_type=50 WHERE clear_type=150";
+        if (const auto error = executeSqlite(db, normalize.c_str())) return error;
+      }
+    }
+    if (hasScoreRows) {
+      if (const auto error = rebuildScoreSummaryTables(db, schema)) return error;
+    } else {
+      // Fresh/empty score databases need no historical rewrite or score-column
+      // projection. Discard any orphaned derived rows without reading history.
+      const std::string clear = "DELETE FROM " + clearTable + "; DELETE FROM " + bestTable;
+      if (const auto error = executeSqlite(db, clear.c_str())) return error;
+    }
+    const std::string recordRevision = "INSERT OR REPLACE INTO " + revisions +
+        "(name, revision) VALUES('clear_lamp_order', 3)";
+    if (const auto error = executeSqlite(db, recordRevision.c_str())) return error;
   }
   if (!transaction.commit(transactionError)) {
     return transactionError;
@@ -534,10 +632,11 @@ rebuildScoreSummaryTables(sqlite3 *db, std::string_view schema) {
   }
 
   const std::string insertClear =
-      "WITH identities AS (" + identityCte + ") INSERT INTO " + clearTable +
-      "(chart_sha256, ln_mode, rank) SELECT i.chart_sha256, i.ln_mode, MAX(" +
-      detail::fullComboClearRankExpr("i", "i.playback_percent", sourceAware) +
-      ") FROM identities i GROUP BY i.chart_sha256, i.ln_mode";
+      "WITH identities AS (" + detail::scoreIdentityCte(schema, detail::scoreTableHasProvenance(db, schema), sourceAware, true) + ") INSERT INTO " + clearTable +
+      "(chart_sha256, ln_mode, rank) SELECT i.chart_sha256, i.ln_mode, " +
+      detail::bestClearRankExpr(detail::fullComboClearRankExpr(
+          "i", "i.playback_percent", sourceAware)) +
+      " FROM identities i GROUP BY i.chart_sha256, i.ln_mode";
   if (const auto error = executeSqlite(db, insertClear.c_str())) {
     return error;
   }
@@ -557,8 +656,8 @@ rebuildScoreSummaryTables(sqlite3 *db, std::string_view schema) {
       "(chart_sha256, ln_mode, score_id, score, max_score, max_combo, "
       "combo_break, final_gauge, clear_type, clear_rank, score_rank, "
       "created_at) SELECT r.chart_sha256, r.ln_mode, r.score_id, r.score, "
-      "r.max_score, r.max_combo, r.combo_break, r.final_gauge, "
-      "r.clear_type, " +
+      "r.max_score, r.max_combo, r.combo_break, r.final_gauge, " +
+      clearLampOrderSql("r.clear_type") + ", " +
       detail::fullComboClearRankExpr("r", "r.playback_percent", sourceAware) +
       ", " +
       detail::scoreRankLabelExpr("r") +
@@ -621,6 +720,7 @@ repairScoreSummaryTablesIfEmpty(sqlite3 *db, std::string_view schema = {}) {
 
 inline std::string scoreRankLookupExpr(const std::string &sha256Expr,
                                        const std::string &lnModeExpr) {
+  // Summary IDs are canonical, so indexed lookups need no ordering conversion.
   const std::string primary = detail::rankLookupForMode(sha256Expr, lnModeExpr);
   const std::string classicLongNote =
       detail::rankLookupForMode(sha256Expr, "1");

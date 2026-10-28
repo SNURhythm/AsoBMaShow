@@ -2,6 +2,7 @@
 #include "replay/ChartReplayCapture.h"
 #include "replay/ReplayCapabilities.h"
 #include "replay/ReplayFileActionService.h"
+#include "repositories/SqliteRAII.h"
 
 #include <chrono>
 #include <filesystem>
@@ -172,10 +173,14 @@ void testCompletionCaptureBuildsIndependentResultSnapshotAndReplay() {
                            .noteStartPositionPercent = 37}},
       .timeBounds = {.completionSongTimeMicros = 5'000'000},
   };
+  capture.gaugeEvidence.recorded = true;
+  capture.gaugeEvidence.passedNotes = 5;
+  capture.gaugeEvidence.values[2] = 78;
   std::string diagnostic;
   const auto captured =
       captureChartReplayPersistenceAttempt(capture, diagnostic);
-  expect(captured && captured->result == completed && captured->irSnapshot &&
+  expect(captured && captured->gaugeEvidence == capture.gaugeEvidence &&
+             captured->result == completed && captured->irSnapshot &&
              captured->replay &&
              captured->replay->playback.input == *capture.acceptedInput &&
              captured->replay->playback.touchSamples == capture.touchSamples &&
@@ -258,6 +263,7 @@ struct Harness {
   bool cleanupSucceeds = true;
   ModernChartStageOutcome staged;
   std::optional<std::int64_t> stagedAverageJudgeMicros;
+  GaugeEvidence stagedGaugeEvidence;
   result_persistence::PendingReadOutcome pending;
   result_persistence::ProjectionOutcome projected{
       .status = result_persistence::ProjectionStatus::Inserted};
@@ -424,9 +430,10 @@ struct Harness {
         },
         .stage =
             [this](const auto &, const auto &, const auto &attachment,
-                   const auto &averageJudgeMicros, auto) {
+                   const auto &averageJudgeMicros, auto, const auto &gaugeEvidence) {
               events.emplace_back(attachment ? "stage-file" : "stage-summary");
               stagedAverageJudgeMicros = averageJudgeMicros;
+              stagedGaugeEvidence = gaugeEvidence;
               return staged;
             },
         .loadPending =
@@ -479,6 +486,8 @@ struct Harness {
 void testFileFirstSuccessAndExactRetry() {
   Harness harness;
   harness.attempt.averageJudgeMicros = 12'345;
+  harness.attempt.gaugeEvidence.recorded = true;
+  harness.attempt.gaugeEvidence.values[2] = 78;
   ChartReplayPersistence persistence(harness.dependencies());
   const auto saved = persistence.persist(harness.attempt);
   expect(saved.state == ChartReplayPersistenceState::SavedWithReplay &&
@@ -491,6 +500,8 @@ void testFileFirstSuccessAndExactRetry() {
                                        "install", "stage-file",
                                        "load-pending", "project", "ack"}),
          "file bytes install before the result transaction and projection");
+  expect(harness.stagedGaugeEvidence == harness.attempt.gaugeEvidence,
+         "staging preserves live gauge evidence for crash recovery");
   expect(harness.stagedAverageJudgeMicros == 12'345,
          "average judge duration reaches durable score staging");
 
@@ -753,6 +764,15 @@ void testProjectionAcknowledgementAndRecoveryStates() {
 void testInvalidSummaryInputsHaveNoSideEffects() {
   {
     Harness harness;
+    harness.attempt.gaugeEvidence.recorded = true;
+    harness.attempt.gaugeEvidence.passedNotes = 6; // Fixture has five notes.
+    ChartReplayPersistence persistence(harness.dependencies());
+    const auto invalid = persistence.persist(harness.attempt);
+    expect(invalid.state == ChartReplayPersistenceState::InvalidAttempt && harness.events.empty(),
+           "invalid gauge evidence stops before file or database effects");
+  }
+  {
+    Harness harness;
     harness.attempt.result.resultFingerprint = repeated('0', 64);
     ChartReplayPersistence persistence(harness.dependencies());
     const auto invalid = persistence.persist(harness.attempt);
@@ -774,6 +794,46 @@ void testInvalidSummaryInputsHaveNoSideEffects() {
 void writeBytes(const std::filesystem::path &path, std::string_view bytes) {
   std::ofstream output(path, std::ios::binary | std::ios::trunc);
   output.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+}
+
+void testGaugeSummaryRecoversWithScoreAndDeletesTemporaryEvidence() {
+  TemporaryDirectory profile;
+  const auto replayPath = profile.path / "replays.db";
+  const auto scorePath = profile.path / "scores.db";
+  auto completed = result();
+  completed.score.provenance.startingGaugePercent.reset();
+  completed.score.provenance.eligibility = scoreEligibilityForProvenance(completed.score.provenance);
+  completed.resultFingerprint = result_persistence::modernResultFingerprint(completed);
+  GaugeEvidence evidence;
+  evidence.recorded = true;
+  evidence.passedNotes = 5;
+  evidence.survivalMask = 0x1f8;
+  evidence.deathPassedNotes = {0,0,0,-1,-1,4,-1,-1,-1};
+  evidence.values = {60,80,78,20,10,0,100,100,100};
+  {
+    ReplayRepository repository(replayPath);
+    expect(repository.StageModernChartResult(completed, {}, {}, {}, {}, evidence).status == ModernChartStageStatus::Staged,
+           "interrupted save durably stages numeric gauge evidence");
+  }
+  ReplayRepository recovered(replayPath);
+  ScoreRepository scores(scorePath);
+  ChartReplayPersistence persistence(scores, recovered);
+  persistence.recoverAll();
+  expect(recovered.LoadPendingModernChartScore(completed.attemptId).status == result_persistence::PendingReadStatus::NotFound,
+         "recovery acknowledges the score and gauge bests together");
+  sqlite3 *raw = nullptr;
+  expect(sqlite3_open(scorePath.string().c_str(), &raw) == SQLITE_OK, "recovered score database opens");
+  SqliteConnectionHandle database(raw);
+  SqliteStatementHandle query;
+  expect(prepareSqliteStatement(database.get(), "SELECT gauge_value FROM goal_gauge_best WHERE target=300", query) == SQLITE_OK &&
+         sqlite3_step(query) == SQLITE_ROW && sqlite3_column_double(query, 0) == 78,
+         "recovery retains the observed numeric gauge best");
+  query.reset(); database.reset();
+  expect(sqlite3_open(replayPath.string().c_str(), &raw) == SQLITE_OK, "recovered replay database opens");
+  database.reset(raw);
+  expect(prepareSqliteStatement(database.get(), "SELECT COUNT(*) FROM modern_pending_chart_gauge_evidence", query) == SQLITE_OK &&
+         sqlite3_step(query) == SQLITE_ROW && sqlite3_column_int(query, 0) == 0,
+         "successful recovery deletes temporary gauge evidence");
 }
 
 void testRealRepositoriesPersistBrdAndAdvanceOccupiedSlot() {
@@ -853,6 +913,7 @@ int main() {
   testAmbiguousInstallOccupiedSlotAndCleanupBoundaries();
   testProjectionAcknowledgementAndRecoveryStates();
   testInvalidSummaryInputsHaveNoSideEffects();
+  testGaugeSummaryRecoversWithScoreAndDeletesTemporaryEvidence();
   testRealRepositoriesPersistBrdAndAdvanceOccupiedSlot();
   if (failures != 0) {
     std::cerr << failures << " chart replay persistence test(s) failed\n";

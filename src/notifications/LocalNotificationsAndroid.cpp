@@ -12,12 +12,12 @@ std::string call(const char *operation, const std::string &argument = {}) {
   auto activity = static_cast<jobject>(SDL_GetAndroidActivity());
   if (!activity) return {};
   auto type = env->GetObjectClass(activity);
-  auto method = env->GetMethodID(type, "comboNotifications", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
+  auto method = env->GetMethodID(type, "komboNotifications", "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;");
   auto op = env->NewStringUTF(operation);
   auto arg = env->NewStringUTF(argument.c_str());
   auto value = method ? static_cast<jstring>(env->CallObjectMethod(activity, method, op, arg)) : nullptr;
   std::string result;
-  if (env->ExceptionCheck()) { env->ExceptionClear(); SDL_Log("Combo notification JNI call failed"); }
+  if (env->ExceptionCheck()) { env->ExceptionClear(); SDL_Log("Kombo notification JNI call failed"); }
   else if (value) {
     const char *text = env->GetStringUTFChars(value, nullptr);
     if (text) { result = text; env->ReleaseStringUTFChars(value, text); }

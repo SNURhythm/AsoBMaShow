@@ -1,10 +1,12 @@
 #pragma once
 
 #include "ResultPhotoExportPresentation.h"
-#include "../streak/StreakModel.h"
-#include "../streak/StreakSounds.h"
-#include "../streak/StreakResultPresentation.h"
-#include "../streak/StreakRoundMotion.h"
+#include "../kombo/KomboModel.h"
+#include "../goals/ChartGoal.h"
+#include "../goals/GoalResultPresentation.h"
+#include "../kombo/KomboSounds.h"
+#include "../kombo/KomboResultPresentation.h"
+#include "../kombo/KomboRoundMotion.h"
 #include "../CanonicalDigest.h"
 #include "../ReplayData.h"
 #include "../ResultPersistenceCoordinator.h"
@@ -317,7 +319,7 @@ public:
   void cleanupScene() override;
 
 private:
-  streak::Sounds streakSounds_;
+  kombo::Sounds komboSounds_;
   bool startSelectedResultSkin();
   void loadDifficultyLabel();
   void loadPreviousBest();
@@ -395,25 +397,34 @@ private:
   ScrollView *resultScroll = nullptr;
   std::array<int, 6> resultLayoutSignature{};
   void resizeResultLayout();
-  void prepareStreakProgress();
-  void buildStreakProgress(bool animate);
-  void updateStreakProgress();
-  void dismissStreakProgress(bool swallowRelease = false);
-  bool handleStreakProgressEvent(SDL_Event &);
-  bool streakOwnsInput() const;
-  streak::ResultPresentation streakPresentation_;
-  std::optional<streak::State> streakSnapshot_;
-  std::optional<streak::PlayProgress> streakProgress_;
-  std::uint64_t streakProgressStartedAt_ = 0;
-  streak::RoundPromotionCue streakRoundCue_;
-  View *streakOverlay_ = nullptr;
-  View *streakPanel_ = nullptr;
-  ScrollView *streakScroll_ = nullptr;
-  std::array<int, 4> streakLayoutSignature_{};
-  float streakOverlayUnit_ = 0;
-  bool streakDismissGesture_ = false;
-  std::optional<std::uint64_t> streakInputBlockedThroughFrame_;
-  long long streakSkinResumeMillis_ = 0;
+  void prepareGoalAchievement();
+  void buildGoalAchievement();
+  void updateGoalAchievement();
+  GoalResultPresentation goalPresentation_;
+  std::vector<chart_goals::Goal> goalAchievements_;
+  std::string goalProfileId_;
+  View *goalAchievementView_ = nullptr;
+  float goalAchievementUnit_ = 0;
+  std::array<int, 3> goalAchievementLayout_{};
+  void prepareKomboProgress();
+  void buildKomboProgress(bool animate);
+  void updateKomboProgress();
+  void dismissKomboProgress(bool swallowRelease = false);
+  bool handleKomboProgressEvent(SDL_Event &);
+  bool komboOwnsInput() const;
+  kombo::ResultPresentation komboPresentation_;
+  std::optional<kombo::State> komboSnapshot_;
+  std::optional<kombo::PlayProgress> komboProgress_;
+  std::uint64_t komboProgressStartedAt_ = 0;
+  kombo::RoundPromotionCue komboRoundCue_;
+  View *komboOverlay_ = nullptr;
+  View *komboPanel_ = nullptr;
+  ScrollView *komboScroll_ = nullptr;
+  std::array<int, 4> komboLayoutSignature_{};
+  float komboOverlayUnit_ = 0;
+  bool komboDismissGesture_ = false;
+  std::optional<std::uint64_t> komboInputBlockedThroughFrame_;
+  long long komboSkinResumeMillis_ = 0;
   View *graphPlaceHolder = nullptr;
   View *resultTouchControlsOverlay = nullptr;
   View *resultTouchControlsPanel = nullptr;

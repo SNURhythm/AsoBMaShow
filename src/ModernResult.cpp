@@ -283,7 +283,7 @@ bool sameScoreOutcome(const ChartScoreWrite &left,
          left.kPoor == right.kPoor && left.fast == right.fast &&
          left.slow == right.slow &&
          sameFloatBits(left.finalGauge, right.finalGauge) &&
-         left.clearType == right.clearType &&
+         normalizeClearLamp(left.clearType) == normalizeClearLamp(right.clearType) &&
          left.badPoints == right.badPoints;
 }
 
@@ -778,7 +778,7 @@ compareModernCourseResultFacts(const ModernCourseResult &expected,
         expected.maxScore != actual.maxScore ||
         expected.maxCombo != actual.maxCombo ||
         !sameFloatBits(expected.finalGauge, actual.finalGauge) ||
-        expected.clearType != actual.clearType) {
+        normalizeClearLamp(expected.clearType) != normalizeClearLamp(actual.clearType)) {
       return disagreement(ResultFactAgreementIssue::CourseAggregate,
                           "course aggregate facts differ");
     }

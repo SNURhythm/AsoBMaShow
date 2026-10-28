@@ -82,13 +82,13 @@ bool knownLampRank(int rank) {
       kClearTypeExHardClearRank,
       kClearTypeFullComboRank,
   };
-  return std::ranges::find(ranks, rank) != ranks.end();
+  return std::ranges::find(ranks, normalizeClearLamp(rank)) != ranks.end();
 }
 
 std::optional<int> rankForKnownGaugeLabel(std::string_view label) {
   if (label == "A-EASY" || label == "ASSISTED EASY" ||
       label == "ASSIST EASY") {
-    return kClearTypeLightAssistedEasyClearRank;
+    return kClearTypeAssistedEasyClearRank;
   }
   if (label == "EASY") {
     return kClearTypeEasyClearRank;
@@ -110,7 +110,7 @@ std::optional<int> rankForKnownGaugeLabel(std::string_view label) {
 
 std::optional<int> semanticRank(const ResultGaugeSeries &series) {
   if (series.clearRank.has_value() && knownLampRank(*series.clearRank)) {
-    return series.clearRank;
+    return normalizeClearLamp(*series.clearRank);
   }
   if (series.label.has_value()) {
     return rankForKnownGaugeLabel(*series.label);

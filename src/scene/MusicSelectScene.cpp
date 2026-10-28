@@ -7,7 +7,9 @@
 #include "../platform/SDLApplicationRuntime.h"
 #include "../i18n/Localization.h"
 #include "MusicSelectScene.h"
-#include "StreakScene.h"
+#include "KomboScene.h"
+#include "ChartGoalsScene.h"
+#include "../goals/GoalTargetPresentation.h"
 #include "../music_select/MusicSelectPhysicalDirectory.h"
 #include "MusicSelectDirectoryRestore.h"
 #include "MusicSelectRecords.h"
@@ -647,10 +649,11 @@ void MusicSelectScene::onResume() {
   }
 #endif
   syncToolbar();
-  const auto assignment = std::exchange(pendingStreakAssignment_, {});
+  const auto assignment = std::exchange(pendingKomboAssignment_, {});
   reloadLibrary(assignment.empty());
   if (!failed_) {
-    if (!assignment.empty()) openStreakAssignment(assignment);
+    if (!assignment.empty()) openKomboAssignment(assignment);
+    resumeGoalNavigation();
     // Resume the looping select BGM after pause silenced it.
     if (!background) configureSoundServices();
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
@@ -749,19 +752,26 @@ void MusicSelectScene::reloadLibrary(bool preserveDirectory) {
           long_note_mode::valueFromId(context.settings.selectedLnMode)));
   auto projection = MusicSelectRepositoryProjection{}.projectRoot(
       *repositoryMetadata_, searchHistory_.entries(), libraryRevision_);
-  assignmentDayId_ = streak::today();
+  assignmentDayId_ = kombo::today();
   assignmentDay_ = {};
   assignmentCharts_.reset();
-  std::string streakError;
-  if (const auto state = context.scoreRepository.LoadStreak(streakError)) {
+  std::string komboError;
+  if (const auto state = context.scoreRepository.LoadKombo(komboError)) {
     const auto day = state->days.find(assignmentDayId_);
     if (day != state->days.end()) assignmentDay_ = day->second;
-    auto assignments = musicSelectAssignmentsRoot(i18n::tr("streak.ui.assignment_folder"));
+    auto assignments = musicSelectAssignmentsRoot(i18n::tr("kombo.ui.assignment_folder"));
     projection.root.push_back(assignments.id);
     projection.bars.push_back(std::move(assignments));
   } else {
-    SDL_Log("Unable to load assignment folders: %s", streakError.c_str());
+    SDL_Log("Unable to load assignment folders: %s", komboError.c_str());
   }
+  MusicSelectBar goals{.id={"container:goals"}, .kind=skin::MusicSelectBarKind::Container,
+      .title=i18n::tr("goals.ui.folder"),
+      .presentation={.kind=skin::MusicSelectBarKind::Container,
+          .title=i18n::tr("goals.ui.folder"), .exists=true},
+      .selectable=true, .sortable=true, .childrenLoaded=false};
+  projection.root.push_back(goals.id);
+  projection.bars.push_back(std::move(goals));
   bars_.refresh(std::move(projection));
   bars_.configure({.modeFilter = context.settings.skinModeFilterName,
                    .difficultyFilter =
@@ -1633,6 +1643,10 @@ void MusicSelectScene::continueDirectoryRestore() {
       const auto transient = std::ranges::find(restoreDirectoryBars_, id,
                                                &MusicSelectBar::id);
       constexpr std::string_view prefix = "same-folder:";
+      if (transient != restoreDirectoryBars_.end() && restoreGoalDirectory(*transient)) {
+        restoreDirectories_.erase(restoreDirectories_.begin());
+        continue;
+      }
       if (transient != restoreDirectoryBars_.end() &&
           transient->kind == skin::MusicSelectBarKind::SameFolder &&
           id.value.starts_with(prefix) &&
@@ -1732,6 +1746,14 @@ void MusicSelectScene::applyDirectoryLoads() {
 }
 
 bool MusicSelectScene::openDirectory(const MusicSelectBar &directory) {
+  if (directory.id.value == "action:add-recommended-goals") {
+    const auto profile = context.profileManager.activeProfile().id;
+    defer([this, profile] {
+      if (profile == context.profileManager.activeProfile().id) openChartGoals({}, true);
+      return true;
+    }, 0, true);
+    return false;
+  }
   if (!skin::musicSelectIsDirectoryBarKind(directory.kind)) return false;
   if ((directory.kind == skin::MusicSelectBarKind::Folder ||
        directory.kind == skin::MusicSelectBarKind::SearchWord ||
@@ -1844,6 +1866,25 @@ bool MusicSelectScene::loadDirectoryChildren(
     break;
   }
   case skin::MusicSelectBarKind::Container: {
+    if (directory.id.value == "container:goals") {
+      std::string error;
+      const auto goals = context.scoreRepository.LoadChartGoalIndex(error);
+      if (!goals) { SDL_Log("Unable to load goal folder: %s", error.c_str()); return false; }
+      ChartMetaQuery query;
+      query.allowedSha256 = goals->activeHashes();
+      query.selectedLongNoteMode = selectedLongNoteMode;
+      std::vector<ChartMetaRecord> records;
+      chartSession_->QueryChartMeta(query, records);
+      for (const auto &record : records)
+        children.push_back(MusicSelectRepositoryProjection::projectSong(
+            record, directory.id.value, inputFor({})));
+      const auto title = i18n::tr("goals.ui.add_recommended");
+      children.push_back({.id={"action:add-recommended-goals"},
+          .kind=skin::MusicSelectBarKind::Container, .title=title,
+          .presentation={.kind=skin::MusicSelectBarKind::Container, .title=title, .exists=true},
+          .selectable=true, .childrenLoaded=true});
+      break;
+    }
     if (musicSelectIsAssignmentDirectory(directory)) {
       if (!assignmentCharts_)
         assignmentCharts_ = loadMusicSelectAssignmentCharts(
@@ -3344,7 +3385,7 @@ void MusicSelectScene::refreshRepositoryRevisions() {
   }
   if (context.chartRepository.GetLibraryRevision() != libraryRevision_ ||
       context.scoreRepository.GetRevision() != scoreRevision_ ||
-      streak::today() != assignmentDayId_) {
+      kombo::today() != assignmentDayId_) {
     reloadLibrary();
     selectedBarMoved();
   } else if (rankingChanged && rankingRequest_) {
@@ -3355,11 +3396,11 @@ void MusicSelectScene::refreshRepositoryRevisions() {
 }
 
 void MusicSelectScene::update(float) {
-  if (!context.pendingComboNotificationProfile.empty() &&
-      toolbarControlAvailable(MusicSelectToolbarControl::Streak)) {
-    const auto profile = std::exchange(context.pendingComboNotificationProfile, {});
+  if (!context.pendingKomboNotificationProfile.empty() &&
+      toolbarControlAvailable(MusicSelectToolbarControl::Kombo)) {
+    const auto profile = std::exchange(context.pendingKomboNotificationProfile, {});
     if (profile == context.profileManager.activeProfile().id) {
-      defer([this] { openStreak(); return false; }, 0, true);
+      defer([this] { openKombo(); return false; }, 0, true);
       return;
     }
   }
@@ -3619,6 +3660,94 @@ void MusicSelectScene::buildErrorView() {
 void MusicSelectScene::openMusicPlayer() {
   context.sceneManager->changeScene(std::make_unique<MusicPlayerScene>(
       context, SceneReturnTarget::Retained(this)), true);
+}
+
+void MusicSelectScene::resumeGoalNavigation() {
+  if (auto goal = std::exchange(pendingGoalSelection_, {})) {
+    if (pendingGoalProfile_ == context.profileManager.activeProfile().id)
+      applyGoalSelection(goal->first, goal->second);
+    pendingGoalProfile_.clear();
+  }
+  if (auto profile = std::exchange(pendingGoalsOverviewProfile_, {}); !profile.empty()) {
+    defer([this, profile] {
+      if (profile != context.profileManager.activeProfile().id) return true;
+      openChartGoals(); return true;
+    }, 0, true);
+  }
+}
+
+void MusicSelectScene::openChartGoalForSelection() {
+  const auto snapshot = bars_.readView();
+  if (snapshot.selectedIndex >= snapshot.rowCount()) return;
+  const auto record = snapshot.rowAt(snapshot.selectedIndex).chart;
+  if (!record) return;
+  const auto profile = context.profileManager.activeProfile().id;
+  defer([this, record, profile] {
+    if (profile == context.profileManager.activeProfile().id) openChartGoals(record);
+    return true;
+  }, 0, true);
+}
+
+void MusicSelectScene::openChartGoals(std::optional<ChartMetaRecord> initial, bool recommendations) {
+  if (context.storageMaintenanceActive || launching_ || failed_) return;
+  if (initial && (initial->unavailable || initial->solidArchive || initial->meta.BmsPath.empty())) return;
+  std::optional<int> goalMode;
+  if (initial) {
+    std::string error;
+    if (auto index = context.scoreRepository.LoadChartGoalIndex(error))
+      goalMode = index->modeFor(initial->meta.SHA256, scoreLongNoteModeForClearLamp(
+          initial->meta, long_note_mode::valueFromId(context.settings.selectedLnMode)));
+  }
+  const auto profile = context.profileManager.activeProfile().id;
+  context.sceneManager->changeScene(std::make_unique<ChartGoalsScene>(context,
+      SceneReturnTarget::Retained(this), std::move(initial),
+      [this, profile](const ChartMetaRecord &record, int mode) {
+        pendingGoalSelection_ = std::pair{record, mode}; pendingGoalProfile_ = profile;
+      }, goalMode, recommendations), true);
+}
+
+void MusicSelectScene::applyGoalSelection(const ChartMetaRecord &record, int mode) {
+  if (mode > 0) {
+    context.settings.selectedLnMode = long_note_mode::idFromValue(mode);
+    (void)context.saveSettings();
+  }
+  bars_.configure({.modeFilter="ALL", .difficultyFilter="ALL", .sortId=context.settings.skinSortId});
+  const std::array records{record};
+  auto projection = MusicSelectRepositoryProjection{}.project({
+      .records=records,
+      .scoreFor=[this](const bms_parser::ChartMeta &meta, int ln) { return scoreCache_->bestFor(meta, ln); },
+      .clearFor=[this](const bms_parser::ChartMeta &meta, int ln) { return clearRankCache_->bestRankFor(meta, ln); },
+      .replayExistsFor=[this](const ChartMetaRecord &chart, int ln) {
+        return musicSelectExistingChartReplaySlots(chart, ln, context.replayRepository.GetResolvedProfileRoot());
+      },
+      .selectedLongNoteMode=long_note_mode::valueFromId(context.settings.selectedLnMode),
+      .repositoryRevision=libraryRevision_});
+  std::vector<MusicSelectBar> children;
+  std::vector<MusicSelectBarId> ids;
+  for (auto &bar : projection.bars) if (bar.kind == skin::MusicSelectBarKind::Song) {
+    ids.push_back(bar.id); children.push_back(std::move(bar));
+  }
+  MusicSelectBar directory{.id={"personal-goal:" + record.meta.SHA256},
+      .kind=skin::MusicSelectBarKind::SameFolder, .title=i18n::tr("goals.ui.title"),
+      .children=std::move(ids), .presentation={.kind=skin::MusicSelectBarKind::SameFolder,
+          .title=i18n::tr("goals.ui.title"), .exists=true}};
+  if (bars_.openTransient(std::move(directory), std::move(children))) syncResolvedFilters();
+}
+
+bool MusicSelectScene::restoreGoalDirectory(const MusicSelectBar &directory) {
+  constexpr std::string_view prefix = "personal-goal:";
+  if (directory.kind != skin::MusicSelectBarKind::SameFolder ||
+      !directory.id.value.starts_with(prefix) || !chartSession_) return false;
+  ChartMetaQuery query;
+  query.allowedSha256 = std::vector{directory.id.value.substr(prefix.size())};
+  query.rawSongData = true; query.limit = 1;
+  std::vector<ChartMetaRecord> records;
+  chartSession_->QueryChartMeta(query, records);
+  if (records.empty() || records.front().unavailable || records.front().solidArchive ||
+      records.front().meta.BmsPath.empty()) return false;
+  applyGoalSelection(records.front(), 0);
+  const auto snapshot = bars_.readView();
+  return !snapshot.directory.empty() && snapshot.directory.back() == directory.id;
 }
 
 void MusicSelectScene::openChartViewer() {
@@ -3884,6 +4013,8 @@ bool MusicSelectScene::toolbarControlAvailable(MusicSelectToolbarControl control
     return modalOverlayPortal_ && (context.sceneManager || context.chartLibraryTasks);
   case MusicSelectToolbarControl::ChartViewer:
     return present && !chart->solidArchive;
+  case MusicSelectToolbarControl::Goal:
+    return present && !chart->solidArchive && context.sceneManager;
   case MusicSelectToolbarControl::ChartRecords:
     return modalLayer_ && selected && musicSelectRecordsTarget(*selected).has_value();
   case MusicSelectToolbarControl::Rankings:
@@ -3895,7 +4026,7 @@ bool MusicSelectScene::toolbarControlAvailable(MusicSelectToolbarControl control
   case MusicSelectToolbarControl::PlayOptions:
     return modalLayer_ != nullptr;
   case MusicSelectToolbarControl::MusicPlayer:
-  case MusicSelectToolbarControl::Streak:
+  case MusicSelectToolbarControl::Kombo:
   case MusicSelectToolbarControl::IrUploads:
   case MusicSelectToolbarControl::Settings:
     return context.sceneManager != nullptr;
@@ -3910,9 +4041,38 @@ void MusicSelectScene::refreshToolbarAvailability() {
   for (const auto control : {Control::ChartMenu, Control::MoreMenu,
        Control::ChartViewer, Control::ChartRecords, Control::Rankings, Control::RevealChart,
        Control::MusicPlayer, Control::Tasks, Control::PlayOptions,
-       Control::IrUploads, Control::Streak, Control::Settings}) {
+       Control::IrUploads, Control::Kombo, Control::Goal, Control::Settings}) {
     toolbar_->setControlEnabled(control, toolbarControlAvailable(control));
   }
+  refreshToolbarGoal();
+}
+
+void MusicSelectScene::refreshToolbarGoal() {
+  if (!toolbar_) return;
+  if (toolbar_->state().mode != MusicSelectToolbarMode::Expanded) { toolbarGoalKey_.clear(); return; }
+  const auto snapshot = bars_.readView();
+  const auto *row = snapshot.selectedIndex < snapshot.rowCount() ? &snapshot.rowAt(snapshot.selectedIndex) : nullptr;
+  const auto *chart = row && row->kind == skin::MusicSelectBarKind::Song && row->chart ? &*row->chart : nullptr;
+  if (!chart || chart->unavailable || chart->solidArchive || chart->meta.BmsPath.empty() || chart->meta.SHA256.empty()) {
+    toolbarGoalKey_.clear();
+    toolbar_->setGoalState(false, false, -1, {}, {});
+    return;
+  }
+  const int mode = scoreLongNoteModeForClearLamp(chart->meta, long_note_mode::valueFromId(context.settings.selectedLnMode));
+  const auto key = context.profileManager.activeProfile().id + ":" + chart->meta.SHA256 + ":" +
+      std::to_string(mode) + ":" + std::to_string(context.scoreRepository.GetRevision());
+  if (toolbarGoalKey_ == key) return;
+  toolbarGoalKey_ = key;
+  std::string error;
+  std::optional<chart_goals::GoalProgress> goal;
+  for (const int candidate : {mode, 0, 1, 2, 3}) {
+    goal = context.scoreRepository.LoadChartGoal(chart->meta, candidate, error);
+    if (goal || !error.empty()) break;
+  }
+  if (!error.empty()) SDL_Log("Cannot load toolbar goal: %s", error.c_str());
+  if (!goal) { toolbar_->setGoalState(false, false, -1, {}, {}); return; }
+  const auto labels = chart_goals::targetLabels(goal->goal.target);
+  toolbar_->setGoalState(true, goal->progress.achieved, labels.lampRank, labels.lamp, labels.score);
 }
 
 bool MusicSelectScene::canDownloadSelectedChart() const {
@@ -4293,9 +4453,9 @@ void MusicSelectScene::openPlayOptions() {
   playOptionsModal_->show();
 }
 
-void MusicSelectScene::openStreakAssignment(const std::string &id) {
+void MusicSelectScene::openKomboAssignment(const std::string &id) {
   bars_.configure({.modeFilter="ALL", .difficultyFilter="ALL", .sortId=context.settings.skinSortId});
-  const auto root = musicSelectAssignmentsRoot(i18n::tr("streak.ui.assignment_folder"));
+  const auto root = musicSelectAssignmentsRoot(i18n::tr("kombo.ui.assignment_folder"));
   if (bars_.select(root.id) && openDirectory(root)) {
     const auto children = bars_.childrenOf(root.id);
     const auto found = std::find_if(children.begin(), children.end(), [&](const auto &bar) {
@@ -4306,13 +4466,16 @@ void MusicSelectScene::openStreakAssignment(const std::string &id) {
   syncResolvedFilters();
 }
 
-void MusicSelectScene::openStreak() {
-  if (!toolbarControlAvailable(MusicSelectToolbarControl::Streak)) return;
-  context.sceneManager->changeScene(std::make_unique<StreakScene>(
+void MusicSelectScene::openKombo() {
+  if (!toolbarControlAvailable(MusicSelectToolbarControl::Kombo)) return;
+  context.sceneManager->changeScene(std::make_unique<KomboScene>(
       context, SceneReturnTarget::Retained(
           this, [this] { reactivateSkinOnResume_ = true; }),
       [this](const std::string &id) {
-        pendingStreakAssignment_ = id;
+        pendingKomboAssignment_ = id;
+        (void)returnToScene(*context.sceneManager, SceneReturnTarget::Retained(this));
+      }, [this] {
+        pendingGoalsOverviewProfile_ = context.profileManager.activeProfile().id;
         (void)returnToScene(*context.sceneManager, SceneReturnTarget::Retained(this));
       }), true);
 }
@@ -4361,7 +4524,10 @@ void MusicSelectScene::syncToolbar() {
        .openTasks = [this] { openTasks(); },
        .openPlayOptions = [this] { openPlayOptions(); },
        .openIrUploads = [this] { openIrUploads(); },
-       .openStreak = [this] { openStreak(); },
+       .openKombo = [this] { openKombo(); },
+       .openGoal = [this] {
+         if (toolbarControlAvailable(MusicSelectToolbarControl::Goal)) openChartGoalForSelection();
+       },
        .openSettings = [this] { openSettings(); },
        .persist = [this](MusicSelectToolbarState updated) {
          persistToolbar(updated);
@@ -4369,6 +4535,7 @@ void MusicSelectScene::syncToolbar() {
       rendering::window_width, rendering::window_height);
   if (toolbar) {
     toolbar_ = toolbar.get();
+    toolbarGoalKey_.clear();
     addView(toolbar.release());
     refreshToolbarAvailability();
   }

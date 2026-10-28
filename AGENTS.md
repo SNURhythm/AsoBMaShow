@@ -146,6 +146,23 @@ or a reason to spend extra time or tokens proving compliance.
 The [optimization report](docs/testing/cold-suite-optimization-2026-10-17.md)
 contains examples and timing context if needed.
 
+## Private Profile Test Fixture
+
+- A repaired real-device profile is available locally at
+  `/Users/xf/AsoBMaShow-test-fixtures/repaired-ipad-profile-2026-10-28/`.
+  Read its `README.md` and `manifest.json` for provenance, checksums, and counts.
+- It contains only consolidated `scores.db` (schema 15, 833 chart scores,
+  25 course scores) and `replays.db` (numeric schema 20, 326 chart results,
+  12 course results, 323 replay-file references). It predates combo-summary backfill.
+- Always copy the databases to a temporary directory before running tests or
+  migrations. Keep the baseline unchanged. This is private player data:
+  never commit or upload the databases or copies of their contents.
+- Settings, credentials, caches, and replay payload files are omitted. Use it
+  for schema, score, recommendation, and result-record tests; replay references
+  intentionally point to absent payloads, so it is not a playback fixture.
+- Keep automated CI tests self-contained with small synthetic fixtures; this
+  optional local fixture must not become a required dependency of the suite.
+
 ## Local Build Verification
 
 - Start with the relevant subsystem group in [docs/testing/README.md](docs/testing/README.md).
@@ -223,6 +240,20 @@ contains examples and timing context if needed.
   is ~7 GiB). Configure with `VCPKG_ROOT` exported (this machine:
   `/Users/xf/vcpkg`), then `cmake --preset=debug`; the worktree gets its own
   `cmake-build-debug`.
+
+## Clear Lamp IDs
+
+- Light Assist Easy is `50`; Assist Easy is `100`. Lamp ID `150` is permanently
+  reserved as a legacy alias for Light Assist Easy and must never be reused for
+  a new gauge or clear type. Define new lamp ranks through `clearLampRank<N>()`
+  so the reserved-ID compile-time guard applies.
+- Normalize legacy values with `normalizeClearLamp` at semantic boundaries.
+  Mutable score columns and caches migrate `150` to `50`; authenticated modern
+  result facts and IR snapshot payloads retain their original bytes for fingerprint
+  validation. Do not rewrite those payloads or their fingerprints just to change
+  a displayed/sorted lamp.
+- Beatoraja skin IDs are a separate external mapping: Assist is `2`, Light Assist
+  is `3`. Preserve those IDs and use logical ordering for comparisons.
 
 ## Settings Choice Controls
 

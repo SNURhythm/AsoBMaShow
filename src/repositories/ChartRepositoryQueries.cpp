@@ -1,6 +1,7 @@
 // Fill out your copyright notice in the Description page of Project Settings.
 
 #include "ChartRepository.h"
+#include "../goals/GoalRecommendationQuery.h"
 #include "../BeatorajaClearType.h"
 #include "ChartRepositoryInternal.h"
 #include "../BmsMetadataText.h"
@@ -466,7 +467,7 @@ std::string chartClearMarkPredicate(const std::string &alias,
     comparison = " <= ";
   }
   return chartClearMarkRankExpr(alias, chartQuery.selectedLongNoteMode) +
-         comparison + "@clear_mark_rank";
+         comparison + clearLampOrderSql("@clear_mark_rank");
 }
 
 std::string difficultyEntryClearMarkRankExpr(
@@ -494,7 +495,7 @@ std::string difficultyEntryClearMarkPredicate(const std::string &entryAlias,
   }
   return difficultyEntryClearMarkRankExpr(entryAlias, chartAlias,
                                           chartQuery.selectedLongNoteMode) +
-         comparison + "@clear_mark_rank";
+         comparison + clearLampOrderSql("@clear_mark_rank");
 }
 
 std::string chartBestScoreExpr(const std::string &alias,
@@ -3617,7 +3618,7 @@ struct FolderClearAggregate {
       hasUnclearedChart = true;
       return;
     }
-    minimumClearRank = std::min(minimumClearRank, clearRank);
+    minimumClearRank = worstClearLamp(minimumClearRank, clearRank);
   }
 
   [[nodiscard]] int clearRank() const {
@@ -3887,7 +3888,7 @@ LoadFolderClearDataByLongNoteMode(
         for (int selectedLongNoteMode : long_note_mode::kPlayableValues) {
           const int clearRank = localCourseRanks.bestCourseRankFor(
               courseKey, courseId, selectedLongNoteMode);
-          if (clearRank >= kClearTypeAssistedEasyClearRank) {
+          if (clearRank >= kClearTypeLightAssistedEasyClearRank) {
             data.clearRanks[static_cast<std::size_t>(selectedLongNoteMode)]
                            [folderKey] = clearRank;
           }
@@ -3930,3 +3931,62 @@ ChartRepository::Session::LoadFolderClearDataByLongNoteMode(
       impl_->database(), projectedChartRanks, localCourseRanks);
 }
 #endif
+
+namespace {
+bool recommendationGoalsExist(sqlite3 *db) {
+  SqliteStatementHandle query;
+  if (prepareSqliteStatement(db, "SELECT 1 FROM score_db.sqlite_master WHERE type='table' AND name='chart_goals'", query) != SQLITE_OK)
+    throw std::runtime_error(sqliteDatabaseError(db));
+  const int rc = sqlite3_step(query);
+  if (rc != SQLITE_ROW && rc != SQLITE_DONE) throw std::runtime_error(sqliteDatabaseError(db));
+  return rc == SQLITE_ROW;
+}
+}
+std::map<int, int> ChartRepository::Session::GoalRecommendationCounts(int tableId) {
+  ScoreRepository::PreparedScoreQueryDatabase prepared(impl_->scoreRepository(), *this);
+  if (prepared.error()) throw std::runtime_error(*prepared.error());
+  auto *db = impl_->database();
+  const bool hasGoals = recommendationGoalsExist(db);
+  SqliteStatementHandle query;
+  if (prepareSqliteStatement(db, chart_goals::recommendationCandidatesSql(hasGoals) +
+      " SELECT target, COUNT(DISTINCT sha256) FROM candidates AS candidate WHERE 1=1" + chart_goals::tableFilter("candidate.sha256", tableId) + " GROUP BY target", query) != SQLITE_OK)
+    throw std::runtime_error(sqliteDatabaseError(db));
+  std::map<int, int> counts;
+  int rc;
+  while ((rc = sqlite3_step(query)) == SQLITE_ROW)
+    counts[sqlite3_column_int(query, 0)] = sqlite3_column_int(query, 1);
+  if (rc != SQLITE_DONE) throw std::runtime_error(sqliteDatabaseError(db));
+  query.reset();
+  if (prepareSqliteStatement(db, chart_goals::gaugeRecommendationCandidatesSql(hasGoals) +
+      " SELECT target,COUNT(DISTINCT chart_sha256) FROM candidates AS candidate WHERE 1=1" + chart_goals::tableFilter("candidate.chart_sha256", tableId) + " GROUP BY target", query) != SQLITE_OK)
+    throw std::runtime_error(sqliteDatabaseError(db));
+  while ((rc = sqlite3_step(query)) == SQLITE_ROW)
+    counts[sqlite3_column_int(query, 0)] = sqlite3_column_int(query, 1);
+  if (rc != SQLITE_DONE) throw std::runtime_error(sqliteDatabaseError(db));
+  return counts;
+}
+std::vector<GoalRecommendation> ChartRepository::Session::GoalRecommendations(int target, int offset, int tableId, bool sortTable) {
+  target = normalizeClearLamp(target);
+  ScoreRepository::PreparedScoreQueryDatabase prepared(impl_->scoreRepository(), *this);
+  if (prepared.error()) throw std::runtime_error(*prepared.error());
+  auto *db = impl_->database();
+  const bool hasGoals = recommendationGoalsExist(db);
+  SqliteStatementHandle query;
+  if (prepareSqliteStatement(db, (target>=kClearTypeLightAssistedEasyClearRank ? chart_goals::gaugeRecommendationPageSql(tableId, sortTable, hasGoals) : chart_goals::recommendationPageSql(tableId, sortTable, hasGoals)), query) != SQLITE_OK ||
+      sqlite3_bind_int(query, 1, target) != SQLITE_OK || sqlite3_bind_int(query, 2, std::max(0, offset)) != SQLITE_OK)
+    throw std::runtime_error(sqliteDatabaseError(db));
+  std::vector<GoalRecommendation> rows;
+  int rc;
+  while ((rc = sqlite3_step(query)) == SQLITE_ROW) {
+    if (target>=kClearTypeLightAssistedEasyClearRank) {
+      rows.push_back({.sha256=sqliteColumnString(query, 0), .longNoteMode=sqlite3_column_int(query, 1),
+          .target=sqlite3_column_int(query, 2), .remaining=target==600 ? sqlite3_column_int(query, 8) : 0,
+          .gaugeValue=static_cast<float>(sqlite3_column_double(query, 3)),
+          .gaugeBorder=static_cast<float>(sqlite3_column_double(query, 4)), .deathNotes=sqlite3_column_int(query, 5),
+          .totalNotes=sqlite3_column_int(query, 6)});
+    } else rows.push_back({sqliteColumnString(query, 0), sqlite3_column_int(query, 1), sqlite3_column_int(query, 2),
+                          sqlite3_column_int(query, 3), sqlite3_column_int(query, 4), sqlite3_column_int(query, 5)});
+  }
+  if (rc != SQLITE_DONE) throw std::runtime_error(sqliteDatabaseError(db));
+  return rows;
+}

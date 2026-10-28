@@ -288,6 +288,9 @@ class MusicSelectSceneBehaviorTests(unittest.TestCase):
         fixture = (ROOT / "tests/music_select_scene_directory_metadata_fixture.cpp").read_text()
         self.compile_and_run(fixture.replace("SCENE_FOLDER_BRANCH", branch))
 
+    def test_recommended_goal_action_opens_recommendations(self):
+        self.run_directory_loading_fixture("testRecommendedGoalAction")
+
     def test_async_directory_autoplay_completes_without_reloading(self):
         self.run_directory_loading_fixture("testAutoplayCompletion")
 
@@ -410,6 +413,9 @@ int main() {
     def test_missing_chart_activation_offers_download(self):
         self.run_directory_loading_fixture("testMissingChartActivationOffersDownload")
 
+    def test_personal_goal_directory_restores_after_return(self):
+        self.run_directory_loading_fixture("testPersonalGoalDirectoryRestores")
+
     def run_directory_loading_fixture(self, test_name):
         source = read_music_select_scene()
         signatures = [
@@ -419,6 +425,7 @@ int main() {
             "void MusicSelectScene::applyDirectoryLoads()",
             "void MusicSelectScene::cancelDirectoryLoad()",
             "void MusicSelectScene::continueDirectoryRestore()",
+            "bool MusicSelectScene::restoreGoalDirectory(",
             "bool MusicSelectScene::openDirectory(",
             "void MusicSelectScene::launchSelectedDirectoryAutoplay()",
             "void MusicSelectScene::applySkinPointerResult(",

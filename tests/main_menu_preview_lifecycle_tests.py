@@ -76,7 +76,7 @@ class MainMenuPreviewLifecycleTests(unittest.TestCase):
             if "std::mutex preview" in line
         ))
         fixture = fixture.replace("SELECTION_CALLBACK", callback_body(
-            source, "const auto selectChart = [this, &context]"
+            source, "const auto selectChart = "
         ))
         wiring_start = source.index("  recyclerView->onSelected = [selectChart]")
         wiring_end = source.index("  recyclerView->onUnselected", wiring_start)

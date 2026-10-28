@@ -56,7 +56,7 @@ bool knownLampRank(int value) {
       kClearTypeExHardClearRank,
       kClearTypeFullComboRank,
   };
-  return std::ranges::find(ranks, value) != ranks.end();
+  return std::ranges::find(ranks, normalizeClearLamp(value)) != ranks.end();
 }
 
 bool validLocalCandidate(const IrLocalReceiptCandidate &candidate,
@@ -135,7 +135,7 @@ const IrRemoteScore *findUniqueProofMatch(const IrLocalReceiptCandidate &local,
       const auto found = sha256Index.find({.game = game,
                                            .hash = local.chartSha256,
                                            .score = local.score,
-                                           .lampRank = local.lampRank});
+                                           .lampRank = normalizeClearLamp(local.lampRank)});
       if (found != sha256Index.end()) {
         possible.insert(found->second.begin(), found->second.end());
       }
@@ -144,7 +144,7 @@ const IrRemoteScore *findUniqueProofMatch(const IrLocalReceiptCandidate &local,
       const auto found = md5Index.find({.game = game,
                                         .hash = local.chartMd5,
                                         .score = local.score,
-                                        .lampRank = local.lampRank});
+                                        .lampRank = normalizeClearLamp(local.lampRank)});
       if (found != md5Index.end()) {
         possible.insert(found->second.begin(), found->second.end());
       }
@@ -289,14 +289,14 @@ IrScoreReconciliationPlan planScoreReconciliation(
       sha256Index[{.game = score.game,
                    .hash = score.chartSha256,
                    .score = score.score,
-                   .lampRank = score.lampRank}]
+                   .lampRank = normalizeClearLamp(score.lampRank)}]
           .push_back(&score);
     }
     if (!score.chartMd5.empty()) {
       md5Index[{.game = score.game,
                 .hash = score.chartMd5,
                 .score = score.score,
-                .lampRank = score.lampRank}]
+                .lampRank = normalizeClearLamp(score.lampRank)}]
           .push_back(&score);
     }
   }

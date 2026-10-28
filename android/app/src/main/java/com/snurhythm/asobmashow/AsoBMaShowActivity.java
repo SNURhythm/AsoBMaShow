@@ -342,13 +342,13 @@ public class AsoBMaShowActivity extends SDLActivity {
         }
     }
 
-    public String comboNotifications(String operation, String argument) {
-        if (operation.equals("permission")) return ComboNotifications.permission(this);
-        if (operation.equals("tap")) return ComboNotifications.takeTap();
+    public String komboNotifications(String operation, String argument) {
+        if (operation.equals("permission")) return KomboNotifications.permission(this);
+        if (operation.equals("tap")) return KomboNotifications.takeTap();
         runOnUiThread(() -> {
-            if (operation.equals("replace")) ComboNotifications.replace(this, argument);
-            else if (operation.equals("request")) ComboNotifications.request(this);
-            else if (operation.equals("settings")) ComboNotifications.settings(this);
+            if (operation.equals("replace")) KomboNotifications.replace(this, argument);
+            else if (operation.equals("request")) KomboNotifications.request(this);
+            else if (operation.equals("settings")) KomboNotifications.settings(this);
         });
         return "";
     }
@@ -376,7 +376,7 @@ public class AsoBMaShowActivity extends SDLActivity {
                 @Override public void surfaceDestroyed(SurfaceHolder holder) {}
             });
         }
-        ComboNotifications.acceptTap(getIntent());
+        KomboNotifications.acceptTap(getIntent());
         handleArchiveImportIntent(getIntent());
     }
 
@@ -419,7 +419,7 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     @Override
     protected void onResume() {
-        ComboNotifications.returned(this, getIntent());
+        KomboNotifications.returned(this, getIntent());
         super.onResume();
         synchronized (gyroscopeTurntableLock) {
             gyroscopeActivityResumed = true;
@@ -434,7 +434,7 @@ public class AsoBMaShowActivity extends SDLActivity {
 
     @Override
     protected void onPause() {
-        ComboNotifications.paused();
+        KomboNotifications.paused();
         stopDocumentsLibraryRefresh();
         folderPickerRequests.onPause();
         synchronized (gyroscopeTurntableLock) {
@@ -451,7 +451,7 @@ public class AsoBMaShowActivity extends SDLActivity {
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
-        ComboNotifications.acceptTap(intent);
+        KomboNotifications.acceptTap(intent);
         handleArchiveImportIntent(intent);
     }
 

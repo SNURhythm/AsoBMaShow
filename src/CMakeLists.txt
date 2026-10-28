@@ -88,5 +88,8 @@ endif ()
 
 target_sources(main PRIVATE library/GroupedChartListModel.cpp)
 target_sources(main PRIVATE library/StorageArchiveList.cpp)
-target_sources(main PRIVATE repositories/ScoreRepositoryStreak.cpp
-    streak/StreakModel.cpp streak/StreakStore.cpp)
+target_sources(main PRIVATE repositories/ScoreRepositoryKombo.cpp
+    kombo/KomboModel.cpp kombo/KomboStore.cpp)
+
+target_sources(main PRIVATE goals/ChartGoal.cpp goals/ChartGoalStore.cpp
+    repositories/ScoreRepositoryGoals.cpp)

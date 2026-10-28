@@ -1,4 +1,5 @@
 #include "ReplayRepository.h"
+#include "PendingGaugeEvidence.h"
 #include "ReplayRepositoryInternal.h"
 #include "ReplayRepositoryIrRows.h"
 
@@ -1155,6 +1156,14 @@ readPendingModernScore(sqlite3 *database, std::string_view attemptId) {
                               ? "modern pending score owner is inconsistent"
                               : std::move(loaded.diagnostic)};
   }
+  GaugeEvidence gaugeEvidence;
+  const auto evidenceStatus = pending_gauge_evidence::read(
+      database, attemptId, loaded.record->result.score.maxScore / 2, gaugeEvidence);
+  if (evidenceStatus != pending_gauge_evidence::ReadStatus::Loaded) {
+    return {.status = evidenceStatus == pending_gauge_evidence::ReadStatus::Invalid
+                          ? PendingReadStatus::IntegrityConflict : PendingReadStatus::StorageFailure,
+            .diagnostic = "pending gauge evidence could not be validated"};
+  }
   return {
       .status = PendingReadStatus::Found,
       .value =
@@ -1164,6 +1173,7 @@ readPendingModernScore(sqlite3 *database, std::string_view attemptId) {
               .createdAt = std::move(pendingCreatedAt),
               .score = std::move(loaded.record->result.score),
               .averageJudgeMicros = averageJudgeMicros,
+              .gaugeEvidence = gaugeEvidence,
           },
   };
 }
@@ -2021,12 +2031,14 @@ ModernChartStageOutcome ReplayRepository::StageModernChartResult(
     const std::optional<ir::IrSubmissionSnapshot> &snapshot,
     const std::optional<ModernReplayFileAttachment> &replayFile,
     std::span<const ir::IrOutboxDraft> irDrafts,
-    std::optional<std::int64_t> averageJudgeMicros) {
+    std::optional<std::int64_t> averageJudgeMicros,
+    const GaugeEvidence &gaugeEvidence) {
   profile_database_activity::WriteGuard writeGuard;
   std::string diagnostic;
   if (result.resultId != 0 ||
       !result_persistence::validateModernChartResult(result, diagnostic) ||
-      (averageJudgeMicros && *averageJudgeMicros < 0)) {
+      (averageJudgeMicros && *averageJudgeMicros < 0) ||
+      !gaugeEvidence.valid(result.score.maxScore / 2)) {
     return {.status = ModernChartStageStatus::Invalid,
             .diagnostic = std::move(diagnostic)};
   }
@@ -2042,9 +2054,8 @@ ModernChartStageOutcome ReplayRepository::StageModernChartResult(
   }
   std::optional<std::string> snapshotJson;
   if (snapshot.has_value()) {
-    auto expected = ir::captureIrSubmissionSnapshot(result, diagnostic);
-    snapshotJson = ir::serializeIrSubmissionSnapshot(*snapshot, diagnostic);
-    if (!expected || !snapshotJson || *expected != *snapshot) {
+    snapshotJson = ir::serializeIrSubmissionSnapshot(*snapshot, result, diagnostic);
+    if (!snapshotJson) {
       return {.status = ModernChartStageStatus::Invalid,
               .diagnostic = diagnostic.empty()
                                 ? "IR snapshot disagrees with modern result"
@@ -2115,7 +2126,14 @@ ModernChartStageOutcome ReplayRepository::StageModernChartResult(
     const bool metricAgrees =
         metricFound == averageJudgeMicros.has_value() &&
         (!metricFound || storedAverageJudgeMicros == *averageJudgeMicros);
-    if (existing.record->result != expected || !snapshotAgrees ||
+    const auto pending = readPendingModernScore(impl_->sessionDatabase, result.attemptId);
+    if (pending.status == result_persistence::PendingReadStatus::StorageFailure) {
+      return {.status = ModernChartStageStatus::StorageFailure, .diagnostic = pending.diagnostic};
+    }
+    const bool evidenceAgrees = pending.status == result_persistence::PendingReadStatus::NotFound ||
+        (pending.status == result_persistence::PendingReadStatus::Found && pending.value &&
+         pending.value->gaugeEvidence == gaugeEvidence);
+    if (!evidenceAgrees || existing.record->result != expected || !snapshotAgrees ||
         !metricAgrees ||
         !verifyDrafts(impl_->sessionDatabase, result.attemptId, irDrafts,
                       diagnostic)) {
@@ -2234,6 +2252,7 @@ ModernChartStageOutcome ReplayRepository::StageModernChartResult(
       !bindText(pending.get(), 2, result.attemptId) ||
       sqlite3_step(pending.get()) != SQLITE_DONE ||
       sqlite3_changes(impl_->sessionDatabase) != 1 ||
+      !pending_gauge_evidence::insert(impl_->sessionDatabase, result.attemptId, gaugeEvidence) ||
       !insertReadyDrafts(impl_->sessionDatabase, irDrafts)) {
     return {.status = ModernChartStageStatus::StorageFailure,
             .diagnostic = "could not stage modern score or IR work"};

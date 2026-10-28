@@ -92,8 +92,16 @@ protected:
 private:
   void configureSoundServices();
   void reloadLibrary(bool preserveDirectory = true);
-  void openStreakAssignment(const std::string &id);
-  std::string pendingStreakAssignment_;
+  void openKomboAssignment(const std::string &id);
+  void openChartGoals(std::optional<ChartMetaRecord> initial = {}, bool recommendations = false);
+  void openChartGoalForSelection();
+  void resumeGoalNavigation();
+  void applyGoalSelection(const ChartMetaRecord &, int mode);
+  bool restoreGoalDirectory(const MusicSelectBar &);
+  std::optional<std::pair<ChartMetaRecord, int>> pendingGoalSelection_;
+  std::string pendingGoalProfile_;
+  std::string pendingGoalsOverviewProfile_;
+  std::string pendingKomboAssignment_;
   void syncResolvedFilters();
   [[nodiscard]] std::int64_t elapsedMicros() const;
   void selectedBarMoved();
@@ -165,9 +173,11 @@ private:
   bool canDownloadSelectedChart() const;
   bool toolbarControlAvailable(MusicSelectToolbarControl control) const;
   void refreshToolbarAvailability();
+  void refreshToolbarGoal();
+  std::string toolbarGoalKey_;
   void openPlayOptions();
   void openIrUploads();
-  void openStreak();
+  void openKombo();
   void openSettings();
   void syncToolbar();
   void persistToolbar(MusicSelectToolbarState);
@@ -238,8 +248,8 @@ private:
   RecentScoreImprovements recentScoreImprovements_;
   bool recentScoreImprovementsLoaded_ = false;
   std::shared_ptr<const MusicSelectRepositoryMetadata> repositoryMetadata_;
-  streak::Day assignmentDay_;
-  streak::DayId assignmentDayId_ = 0;
+  kombo::Day assignmentDay_;
+  kombo::DayId assignmentDayId_ = 0;
   std::optional<std::vector<MusicSelectAssignmentChart>> assignmentCharts_;
   MusicSelectBarManager bars_{{}, {}, true};
   MusicSelectInputProcessor inputProcessor_{{}};

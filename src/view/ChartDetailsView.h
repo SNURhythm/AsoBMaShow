@@ -8,6 +8,7 @@
 
 class ImageView;
 class TextView;
+class Button;
 
 // Presentation only: binding uses the selector's existing metadata and score
 // caches and never reads a database or parses a chart.
@@ -19,6 +20,7 @@ public:
            3 * kFactRowHeight + 2 * kFactGap + 2 * kFactPadding;
   }
   void setScoreContainer(View *container);
+  void setFavoriteToggleHandler(std::function<bool(const ChartMetaRecord &, bool)> handler);
   void setCompact(bool compact);
   void updatePreviewGlow(float level, const audio::Spectrum &spectrum, float dt);
   template <typename ReadSpectrum>
@@ -51,6 +53,12 @@ protected:
   void renderImpl(RenderContext &context) override;
 
 private:
+  void refreshFavoriteButton();
+  std::optional<ChartMetaRecord> currentRecord_;
+  std::function<bool(const ChartMetaRecord &, bool)> favoriteToggleHandler_;
+  Button *favoriteButton_ = nullptr;
+  TextView *favoriteIcon_ = nullptr;
+  TextView *favoriteOutline_ = nullptr;
   void refreshArtworkLayout();
   bool canShowPreviewGlow() const;
   static constexpr float kIdentityHeight = 132;
