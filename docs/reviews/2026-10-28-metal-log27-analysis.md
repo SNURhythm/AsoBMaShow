@@ -60,9 +60,11 @@ interval is not subdivided by this capture.
 For active rendering, instrument `BMSRenderer::renderFrame` in useful
 nonoverlapping sections (playfield traversal/submission, HUD, and remaining
 scene UI) before choosing a change. The preparation timer is already small.
-For `bgfx::frame`, source contains encoder and render-thread waits as well as
-frame swapping; current timestamps cannot split them. bgfx's reported wait
-statistics need verified frame ownership and units before being joined to these
-tokens. No application optimization or device-latency conclusion follows from
+Correction after tracing the application initialization: iOS calls
+`bgfx::renderFrame()` before initialization and uses single-threaded bgfx.
+The render-thread semaphore wait is bypassed; backend resource commands and
+render submission execute inside `bgfx::frame` on the application worker.
+Backend/driver waits can still occur. See the subsequent source inspection
+for concrete rendering candidates. No application optimization or device-latency conclusion follows from
 this capture alone. Different retained windows and conditions prevent causal
 comparison with capture 26.
