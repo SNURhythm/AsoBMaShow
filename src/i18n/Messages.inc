@@ -150,7 +150,7 @@
 {"goals.ui.shared_scope", "Shared across LN modes", "LN 모드 공통", "LNモード共通", "所有 LN 模式共用", "所有 LN 模式共用"},
 {"goals.ui.show_achieved", "Show achieved goals", "달성한 목표 보기", "達成した目標を表示", "显示已达成目标", "顯示已達成目標"},
 {"goals.ui.storage_error", "Could not read or save goals. Please try again.", "목표를 읽거나 저장하지 못했습니다. 다시 시도해 주세요.", "目標の読み込み、または保存ができませんでした。もう一度お試しください。", "无法读取或保存目标，请重试。", "無法讀取或儲存目標，請重試。"},
-{"goals.ui.target_help", "Choose a lamp, a score, or both. Both targets must be met when you choose both.", "램프, 점수 또는 둘 다 선택하세요. 둘 다 선택하면 두 목표를 모두 달성해야 합니다.", "ランプ、スコア、または両方を選べます。両方を選んだ場合は両方の達成が必要です。", "选择灯、分数或两者。选择两者时，需要同时达成两个目标。", "選擇燈、分數或兩者。選擇兩者時，需要達成兩個目標。"},
+{"goals.ui.target_help", "Choose a lamp, a score, or both. Targets can be met in separate plays.", "램프, 점수 또는 둘 다 선택하세요. 목표는 서로 다른 플레이에서 달성해도 됩니다.", "ランプ、スコア、または両方を選べます。目標は別々のプレイで達成できます。", "选择灯、分数或两者。各项目标可以在不同次游玩中达成。", "選擇燈、分數或兩者。各項目標可以在不同次遊玩中達成。"},
 {"goals.ui.title", "Personal goals", "개인 목표", "個人目標", "个人目标", "個人目標"},
 {"goals.ui.unknown_gap", "Score gap is unavailable until a best record includes a valid maximum score.", "유효한 만점 정보가 있는 최고 기록이 있어야 남은 점수를 계산할 수 있습니다.", "有効な満点情報を持つベスト記録がないため、残りEXを計算できません。", "最佳记录包含有效满分信息后，才能计算剩余分数。", "最佳紀錄包含有效滿分資訊後，才能計算剩餘分數。"},
 {"import.archive.cancel", "Cancel", "취소", "キャンセル", "取消", "取消"},
