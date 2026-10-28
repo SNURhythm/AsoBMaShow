@@ -493,6 +493,7 @@ asobmashow_label_tests(area_rendering
     metal_drawable_provider_tests
     metal_presentation_gate_tests
     metal_presentation_timing_tests
+    metal_preparation_pacer_tests
     metal_presentation_native_ios_tests
     metal_presentation_native_macos_tests
     android_display_refresh_rate_tests

@@ -144,7 +144,13 @@ int main() {
       state.frame.begin(7);
       require(state.frame.receive(10.0, 10.008), "synthetic fresh callback seeds lease");
       state.drawable = leased;
+      state.rate = 120;
+      state.callbackTime = CACurrentMediaTime();
+      state.deadline = state.callbackTime + .05;
+      require(link.markPreparationStart(true), "fresh gameplay lease starts preparation");
       render();
+      require(state.preparationCost > 0,
+              "native presentation feeds the CPU preparation budget");
       require(link.didSchedulePresent() && layer.acquisitions == attachedAcquisitions,
               "accepted lease presents normally without reacquiring");
       render();
@@ -160,6 +166,7 @@ int main() {
       state.frame.receive(11.0, 11.008);
       state.drawable = leased;
       active = false;
+      require(!link.markPreparationStart(true), "cancelled lease must not start preparation");
       render();
       require(layer.acquisitions == attachedAcquisitions && !link.didSchedulePresent(),
               "lifecycle rejection must not fall through to nextDrawable");

@@ -1223,8 +1223,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
     }
     // Includes idle frames, interruption, export, quit and every early continue.
     const auto releaseDisplayLinkFrame = makeScopeExit([&] { iosDisplayLink.endFrame(); });
-    iosDisplayLink.markPreparationStart(
+    const bool iosPreparationRejected = !iosDisplayLink.markPreparationStart(
         context.profileGameplayActive.load(std::memory_order_acquire));
+    if (iosPreparationRejected) iosDisplayLink.endFrame();
 #endif
 
     auto currentFrameTime = std::chrono::steady_clock::now();
@@ -1260,6 +1261,9 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         std::chrono::duration<float, std::chrono::seconds::period>(
             currentFrameTime - lastFrameTime)
             .count();
+#if TARGET_OS_IPHONE
+    if (!iosPreparationRejected)
+#endif
     lastFrameTime = currentFrameTime;
 
     SDL_Event pendingMouseMotion{};
@@ -1695,6 +1699,11 @@ runReadyApplicationAfterResultRecovery(ApplicationContext &context) {
         processEvent(touchEvent);
       }
     }
+#endif
+#if TARGET_OS_IPHONE
+    // A rejected lease still drains lifecycle and UI input. Keep legacy edges
+    // and elapsed scene time until a frame can actually update/render.
+    if (iosPreparationRejected) continue;
 #endif
     // Publish once per scene frame, including input collected during pacing
     // waits. Ordinary backend pumps and repeated skin captures do not expire edges.
