@@ -26,6 +26,43 @@ class ChartGoalsSceneTests(unittest.TestCase):
                 includes=(root / "src",))
             subprocess.run([str(binary)], check=True, timeout=5)
 
+    def test_compact_target_labels_and_maximums(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "src/scene/ChartGoalsScene.cpp").read_text()
+        method = extract(source, "void targets(")
+        fixture = r'''
+#include <cassert>
+#include <string>
+#include <vector>
+#include <initializer_list>
+#include <utility>
+struct View {};
+namespace chart_goals { struct Target { int lamp, scoreNumerator, scoreDenominator; }; }
+namespace kombo { std::string lampLabel(int n) { return n == 600 ? "FULL COMBO" : "HARD"; } }
+constexpr int kClearTypeFullComboRank = 600;
+std::vector<std::string> labels;
+void lamp(View *, const std::string &s, int) { labels.push_back(s); }
+void label(View *, const std::string &s) { labels.push_back(s); }
+std::string scoreTarget(const chart_goals::Target &t) { return t.scoreDenominator == 10000 ? "100.00% EX" : (t.scoreNumerator == t.scoreDenominator ? "MAX" : "AAA"); }
+namespace i18n { std::string format(const char *, std::initializer_list<std::pair<std::string,std::string>> values) { return values.begin()->second + " or above"; } }
+METHOD
+int main() {
+ View v;
+ targets(&v, {400,24,27});
+ assert((labels == std::vector<std::string>{"HARD or above", "AAA or above"}));
+ labels.clear(); targets(&v, {600,27,27});
+ assert((labels == std::vector<std::string>{"FULL COMBO", "MAX"}));
+ labels.clear(); targets(&v, {-1,10000,10000});
+ assert((labels == std::vector<std::string>{"100.00% EX"}));
+}
+'''.replace("METHOD", method)
+        with tempfile.TemporaryDirectory(prefix="goals-target-labels-") as directory:
+            path = Path(directory) / "labels.cpp"
+            binary = Path(directory) / "labels"
+            path.write_text(fixture)
+            FixtureCompiler.from_environment().build([path], binary, path.parent)
+            subprocess.run([str(binary)], check=True, timeout=5)
+
     def test_recommendations_use_active_profile_scores(self):
         root = Path(__file__).resolve().parents[1]
         source = (root / "src/scene/ChartGoalsScene.cpp").read_text()

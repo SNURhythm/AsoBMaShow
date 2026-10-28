@@ -177,10 +177,16 @@ std::string scope(const chart_goals::Goal &goal) {
   return goal.longNoteMode == 0 ? i18n::tr("goals.ui.shared_scope") : long_note_mode::idFromValue(goal.longNoteMode);
 }
 void targets(View *parent, const chart_goals::Target &target) {
-  if (target.lamp >= 0)
-    lamp(parent, i18n::format("goals.ui.lamp_target", {{"value", kombo::lampLabel(target.lamp)}}), target.lamp);
-  if (target.scoreNumerator > 0)
-    label(parent, i18n::format("goals.ui.score_target", {{"value", scoreTarget(target)}}));
+  if (target.lamp >= 0) {
+    const auto value = kombo::lampLabel(target.lamp);
+    lamp(parent, target.lamp >= kClearTypeFullComboRank ? value
+        : i18n::format("kombo.ui.at_least", {{"value", value}}), target.lamp);
+  }
+  if (target.scoreNumerator > 0) {
+    const auto value = scoreTarget(target);
+    label(parent, target.scoreNumerator >= target.scoreDenominator ? value
+        : i18n::format("kombo.ui.at_least", {{"value", value}}));
+  }
 }
 void select(View *parent, OverlayPortal *portal, const std::string &caption,
             std::vector<DropdownView::Option> options, std::string selected,
