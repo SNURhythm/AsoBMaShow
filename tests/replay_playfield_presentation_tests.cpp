@@ -442,6 +442,10 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
   settings.presentation().judgementIndicatorLineThicknessPercent = 75;
   settings.presentation().judgementIndicatorEventHeightPercent = 150;
   settings.presentation().judgementIndicatorEventThicknessPercent = 250;
+  settings.presentation().judgementIndicatorColorization.mode =
+      judgement_indicator::ColorizationMode::PerRange;
+  settings.presentation().judgementIndicatorColorization.ranges = {{-25, 70, {true, 0x123456U}}};
+  settings.presentation().judgementIndicatorColorization.outerRange = {true, 0x654321U};
   settings.presentation().judgementIndicatorRenderMode =
       AppSettings::JudgementIndicatorRenderMode::Hud2D;
   settings.presentation().judgementIndicatorRangeMilliseconds = 123;
@@ -528,6 +532,8 @@ void testReplayExportConfigPreservesGameplayPresentationSettings() {
              configuration.judgementIndicatorLineThicknessPercent == 75 &&
              configuration.judgementIndicatorEventHeightPercent == 150 &&
              configuration.judgementIndicatorEventThicknessPercent == 250 &&
+             configuration.judgementIndicatorColorization ==
+                 settings.presentation().judgementIndicatorColorization &&
              configuration.judgementIndicatorHudMode &&
              configuration.judgementIndicatorRangeMilliseconds == 123 &&
              configuration.scratchLaneOnRight &&

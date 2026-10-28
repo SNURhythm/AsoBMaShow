@@ -1482,6 +1482,180 @@ void SettingsScene::appendBuiltInNoteControls(
 
 }
 
+void SettingsScene::appendJudgementIndicatorColorizationSettings(
+    View *body, const LayoutMetrics &metrics) {
+  using namespace judgement_indicator;
+  const auto refresh = [this] {
+    persistSettings();
+    syncPreviewPresentationConfiguration();
+    lastLayoutWidth = -1;
+  };
+  const auto &settings = context.settings.presentation().judgementIndicatorColorization;
+  body->addView(makeWrappedText(i18n::message("settings.timing.colorization.label"),
+                               metrics.bodyTextSize, app_theme::textPrimary()));
+  const auto modeLabel = [](ColorizationMode mode) -> i18n::Text {
+    switch (mode) {
+    case ColorizationMode::PerJudgement:
+      return i18n::message("settings.timing.colorization.per_judgement");
+    case ColorizationMode::PerRange:
+      return i18n::message("settings.timing.colorization.per_range");
+    default:
+      return i18n::message("settings.timing.colorization.default");
+    }
+  };
+  body->addView(makeEnumChoice(metrics, overlayPortal, settings.mode,
+      {ColorizationMode::Default, ColorizationMode::PerJudgement, ColorizationMode::PerRange},
+      modeLabel, [this, refresh](ColorizationMode mode) {
+        context.settings.presentation().judgementIndicatorColorization.mode = mode;
+        refresh();
+      }));
+  if (settings.mode == ColorizationMode::Default) return;
+
+  body->addView(makeWrappedText(i18n::message("settings.timing.colorization.inherit_help"),
+                               metrics.smallTextSize, app_theme::textSecondary()));
+  const auto appendStyle = [this, body, &metrics, refresh](
+      EventStyle style, Judgement defaultJudgement, const std::string &id,
+      std::function<EventStyle *()> getStyle,
+      std::function<void(std::uint32_t)> preview, bool defaultVisible = true) {
+    auto *row = new View();
+    row->setFlexDirection(FlexDirection::Row);
+    row->setFlexWrap(YGWrapWrap);
+    row->setGap(8.0F);
+    row->setAlignItems(YGAlignCenter);
+    const auto setColor = [getStyle, refresh](std::optional<std::uint32_t> rgb) {
+      if (auto *target = getStyle()) target->color = rgb;
+      refresh();
+    };
+    auto *visibility = makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+        makeText(i18n::message(style.visible ? "records.show.label" : "records.hide.label"),
+                 metrics.smallTextSize, app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+    visibility->setOnClickListener([getStyle, refresh] {
+      if (auto *target = getStyle()) target->visible = !target->visible;
+      refresh();
+    });
+    row->addView(visibility);
+    auto *input = makeTextInput(metrics, 180);
+    input->setEditingText(style.color ? "#" + built_in_notes::colorHex(*style.color)
+        : i18n::message("settings.timing.colorization.default").resolve());
+    input->onEditingFinished([this, setColor](const std::string &text) {
+      if (const auto rgb = built_in_notes::parseColor(text)) setColor(*rgb);
+      else lastLayoutWidth = -1;
+    });
+    row->addView(input);
+    appendAppearanceColorPicker(row, metrics, id,
+        style.color.value_or(defaultEventColor(defaultJudgement)),
+        {{.label = "", .width = 8, .height = 48}}, setColor, preview);
+    auto *reset = makeResetButton(metrics);
+    reset->setOnClickListener([getStyle, refresh, defaultVisible] {
+      if (auto *target = getStyle()) *target = {defaultVisible, std::nullopt};
+      refresh();
+    });
+    row->addView(reset);
+    body->addView(row);
+  };
+
+  if (settings.mode == ColorizationMode::PerJudgement) {
+    for (const auto &option : player_settings::kJudgementTextVisibilityOptions) {
+      const auto judge = option.judgement;
+      body->addView(makeWrappedText(option.label, metrics.smallTextSize, app_theme::textSecondary()));
+      appendStyle(settings.judgements[judge], judge, "indicator-judge-" + std::to_string(judge),
+          [this, judge] {
+            return &context.settings.presentation().judgementIndicatorColorization.judgements[judge];
+          },
+          [this, judge](std::uint32_t rgb) {
+            appearanceColorPreview = [judge, rgb](auto &configuration) {
+              configuration.judgementIndicatorColorization.judgements[judge].color = rgb;
+            };
+          });
+    }
+    return;
+  }
+
+  body->addView(makeWrappedText(i18n::message("settings.timing.colorization.range_help"),
+                               metrics.smallTextSize, app_theme::textSecondary()));
+  for (std::size_t index = 0; index < settings.ranges.size(); ++index) {
+    const auto &range = settings.ranges[index];
+    auto *bounds = new View();
+    bounds->setFlexDirection(FlexDirection::Row);
+    bounds->setFlexWrap(YGWrapWrap);
+    bounds->setGap(8.0F);
+    bounds->setAlignItems(YGAlignCenter);
+    for (const bool start : {true, false}) {
+      bounds->addView(makeText(i18n::message(start
+          ? "settings.timing.colorization.range_from" : "settings.timing.colorization.range_to"),
+          metrics.smallTextSize, app_theme::textSecondary()));
+      auto *input = makeTextInput(metrics, 110);
+      input->setEditingText(std::to_string(start ? range.fromMilliseconds : range.toMilliseconds));
+      input->onEditingFinished([this, index, start, refresh](const std::string &text) {
+        auto &ranges = context.settings.presentation().judgementIndicatorColorization.ranges;
+        if (index >= ranges.size()) return;
+        auto &range = ranges[index];
+        if (start) {
+          const int minimum = index == 0 ? kMinColorRangeMilliseconds : ranges[index - 1].toMilliseconds;
+          range.fromMilliseconds = std::clamp(
+              sanitizeOffsetComponent(text, range.fromMilliseconds), minimum, range.toMilliseconds - 1);
+        } else {
+          const int maximum = index + 1 == ranges.size() ? kMaxColorRangeMilliseconds
+                                                        : ranges[index + 1].fromMilliseconds;
+          range.toMilliseconds = std::clamp(
+              sanitizeOffsetComponent(text, range.toMilliseconds), range.fromMilliseconds + 1, maximum);
+        }
+        refresh();
+      });
+      bounds->addView(input);
+    }
+    auto *remove = makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+        makeText(i18n::message("settings.timing.colorization.remove_range"), metrics.smallTextSize,
+                 app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+    remove->setOnClickListener([this, index, refresh] {
+      auto &ranges = context.settings.presentation().judgementIndicatorColorization.ranges;
+      if (index < ranges.size()) ranges.erase(ranges.begin() + index);
+      refresh();
+    });
+    bounds->addView(remove);
+    body->addView(bounds);
+    appendStyle(range.style, PGreat, "indicator-range-" + std::to_string(index),
+        [this, index]() -> EventStyle * {
+          auto &ranges = context.settings.presentation().judgementIndicatorColorization.ranges;
+          return index < ranges.size() ? &ranges[index].style : nullptr;
+        },
+        [this, index](std::uint32_t rgb) {
+          appearanceColorPreview = [index, rgb](auto &configuration) {
+            auto &ranges = configuration.judgementIndicatorColorization.ranges;
+            if (index < ranges.size()) ranges[index].style.color = rgb;
+          };
+        });
+  }
+  body->addView(makeWrappedText(i18n::message("settings.timing.colorization.outer_range"),
+                               metrics.smallTextSize, app_theme::textSecondary()));
+  appendStyle(settings.outerRange, Poor, "indicator-outer-range",
+      [this] { return &context.settings.presentation().judgementIndicatorColorization.outerRange; },
+      [this](std::uint32_t rgb) {
+        appearanceColorPreview = [rgb](auto &configuration) {
+          configuration.judgementIndicatorColorization.outerRange.color = rgb;
+        };
+      }, false);
+  auto *add = makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+      makeText(i18n::message("settings.timing.colorization.add_range"), metrics.smallTextSize,
+               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+  add->setOnClickListener([this, refresh] {
+    addColorRange(context.settings.presentation().judgementIndicatorColorization);
+    refresh();
+  });
+  add->setEnabled(settings.ranges.size() < kMaxColorRanges);
+  body->addView(add);
+  auto *resetRanges = makeControlButton(metrics.actionButtonWidth, metrics.actionButtonHeight,
+      makeText(i18n::message("settings.timing.colorization.reset_ranges"), metrics.smallTextSize,
+               app_theme::textPrimary(), TextView::CENTER, TextView::MIDDLE));
+  resetRanges->setOnClickListener([this, refresh] {
+    auto &colorization = context.settings.presentation().judgementIndicatorColorization;
+    colorization.ranges = Colorization{}.ranges;
+    colorization.outerRange = {false, std::nullopt};
+    refresh();
+  });
+  body->addView(resetRanges);
+}
+
 void SettingsScene::appendKeybombColorControls(
     View *body, const LayoutMetrics &metrics, int keyMode, Judgement judgement) {
   const auto style = context.settings.keybombsForKeyMode(keyMode)[judgement];

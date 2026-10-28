@@ -268,7 +268,39 @@ language. See [Legal information](legal-information.md) for sources and maintena
 
 The judgement indicator provides independent horizontal line thickness, timing
 event bar height, and timing event bar thickness controls. Each accepts 25–400%
-in 5% steps or by numeric entry; Reset restores 100%, the original dimensions.
+in 1% or 5% steps or by framed numeric entry; Reset restores 100%, the original dimensions.
 These presentation settings are saved independently for landscape and portrait
 and apply to the built-in and selected-skin HUDs, settings preview, and replay
 video. Timing event bars use their judgement color and retain the existing fade.
+
+
+### Judgement indicator event colors
+
+Event Bar Colorization has three modes. Switching modes preserves the edits in
+the other modes. Settings are independent for portrait and landscape and also
+apply to preview and replay video.
+
+- **Default:** uses the existing judgement colors and visibility.
+- **Per Judgement:** provides a Show/Hide toggle, hex RGB input, color picker, and
+  Reset for each judgement (including empty POOR). Reset restores the inherited
+  judgement color and visible state.
+- **Per Range:** uses editable signed millisecond intervals. Negative values are
+  early and positive values late; each interval includes its start and excludes
+  its end. Bounds cannot overlap neighboring ranges. Colors inherit the event's
+  actual judgement until overridden, and each interval has its own visibility.
+  Internal gaps use the default judgement color and visibility.
+- The fixed **Outer Range** row covers both ends outside the configured
+  intervals, or all timings if the list is empty. It defaults to hidden, but its
+  color and visibility are editable. It has no editable endpoints or Remove
+  button.
+
+Default range boundaries use LR2 NORMAL (rank 2): PGREAT ±18 ms, GREAT ±40 ms,
+GOOD ±100 ms, BAD ±200 ms, and early empty POOR down to −1000 ms. These are
+starting boundaries, not a change to gameplay judgement rules. Reset LR2 Ranges
+restores these boundaries and the hidden Outer Range.
+
+Add Range fills an uncovered interval, or splits the widest interval when there
+is no gap. New intervals inherit default appearance. Remove Range deletes just
+that interval; the fixed Outer Range remains. Up to 32 intervals may be edited
+within −1000 to +1000 ms. Hiding event bars does not exclude inputs from the
+timing average or change its pointer.

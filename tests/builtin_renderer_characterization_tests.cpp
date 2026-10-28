@@ -1349,10 +1349,12 @@ void verifyJudgementIndicatorContinuousAverage(const RenderTarget &target) {
   indicator.clear();
   indicator.record(JudgeResult(Great, 60'000), 2'000'000);
   const auto fresh = render(2'000'000);
-  const auto eventPixelCount = [](const std::vector<std::uint8_t> &pixels) {
+  const auto eventPixelCount = [](const std::vector<std::uint8_t> &pixels,
+                                  std::uint32_t rgb = 0xC8FFC8U) {
     size_t count = 0;
     for (size_t i = 0; i + 3 < pixels.size(); i += 4) {
-      if (pixels[i] == 200 && pixels[i + 1] == 255 && pixels[i + 2] == 200) {
+      if (pixels[i] == ((rgb >> 16) & 0xFF) &&
+          pixels[i + 1] == ((rgb >> 8) & 0xFF) && pixels[i + 2] == (rgb & 0xFF)) {
         ++count;
       }
     }
@@ -1374,6 +1376,33 @@ void verifyJudgementIndicatorContinuousAverage(const RenderTarget &target) {
              eventPixelCount(render(2'000'000)) == normalCount,
          "horizontal line thickness changes without resizing timing events");
   indicator.configure(true, 0.5F, 1.0F, true, 180);
+
+  judgement_indicator::Colorization colors;
+  colors.mode = judgement_indicator::ColorizationMode::PerJudgement;
+  colors.judgements[Great] = {false, 0x113355U};
+  indicator.setColorization(colors);
+  const auto hidden = render(2'000'000);
+  expect(eventPixelCount(hidden) == 0 && hidden != empty,
+         "hidden timing events retain the average pointer");
+  colors.judgements[Great].visible = true;
+  indicator.setColorization(colors);
+  expect(eventPixelCount(render(2'000'000), 0x113355U) == normalCount,
+         "per-judgement event colors reach renderer pixels");
+  colors.mode = judgement_indicator::ColorizationMode::PerRange;
+  colors.ranges = {{-30, 10, {true, 0xABCDEFU}}};
+  indicator.setColorization(colors);
+  expect(eventPixelCount(render(2'000'000)) == 0,
+         "outer range hides event pixels by default");
+  colors.outerRange = {true, 0x224466U};
+  indicator.setColorization(colors);
+  expect(eventPixelCount(render(2'000'000), 0x224466U) == normalCount,
+         "fixed outer range supports custom visible event pixels");
+  colors.ranges.front().toMilliseconds = 70;
+  indicator.setColorization(colors);
+  expect(eventPixelCount(render(2'000'000), 0xABCDEFU) == normalCount,
+         "asymmetric range colors override the outer range");
+  indicator.setColorization({});
+  expect(render(2'000'000) == fresh, "default mode restores original pixels");
 
   expect(withOldSample != fresh,
          "faded samples remain in the retained bucket average");

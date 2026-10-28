@@ -1,3 +1,4 @@
+#include "../src/settings/JudgementIndicatorColorization.h"
 #include "scene/play/CompiledGameplayJudge.h"
 #include "scene/play/GameplayJudgeRules.h"
 #include "scene/play/Judge.h"
@@ -100,6 +101,15 @@ void testLr2RankTablesAndSemantics() {
   assert(rules.multiBad);
   assert(rules.rejectsLateBadForLongNoteHead);
 
+  const judgement_indicator::Colorization indicator;
+  const auto &ranges = indicator.ranges;
+  const auto &windows = rules.contexts[0].windows;
+  assert(ranges.front().fromMilliseconds * 1000LL == windows[4].earlyMicros);
+  assert(ranges.back().toMilliseconds * 1000LL == windows[3].lateMicros);
+  for (int tier = 0; tier < 4; ++tier) {
+    assert(ranges[4 - tier].fromMilliseconds * 1000LL == windows[tier].earlyMicros);
+    assert(ranges[4 + tier].toMilliseconds * 1000LL == windows[tier].lateMicros);
+  }
   const auto judge = CompiledGameplayJudge::from(rules);
   assert(judge.automaticPoorLateMicros() == 200000);
   assert(judge.judgeAt(NoteJudgeRole::LongNoteHead, 0, -150000).judgement ==

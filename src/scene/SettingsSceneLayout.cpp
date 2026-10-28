@@ -1575,6 +1575,7 @@ View *SettingsScene::buildHudTab(const LayoutMetrics &metrics) {
   judgementIndicatorControls->addView(judgementIndicatorRangeControls);
 
   appendJudgementIndicatorDimensionSettings(judgementIndicatorControls, metrics);
+  appendJudgementIndicatorColorizationSettings(judgementIndicatorControls, metrics);
 
   cardsColumn->addView(makeCard(
       metrics, i18n::message("settings.timing.judgement_indicator.label"),
@@ -3014,10 +3015,23 @@ void SettingsScene::appendJudgementIndicatorDimensionSettings(
     input->onEditingFinished(apply);
     auto *reset = makeResetButton(metrics);
     reset->setOnClickListener([apply] { apply("100"); });
-    body->addView(makeSteppedValueRow(metrics, input, "5",
-        [apply, read](int direction) {
-          apply(std::to_string(sanitizeOffsetComponent(read(), 100) + direction * 5));
-        }, reset));
+    auto *row = new View();
+    row->setFlexDirection(FlexDirection::Row);
+    row->setFlexWrap(YGWrapWrap);
+    row->setGap(metrics.compact ? 8.0f : 12.0f);
+    row->setAlignItems(YGAlignFlexStart);
+    for (const int delta : {-5, -1, 1, 5}) {
+      if (delta == 1) row->addView(makeInputFrame(metrics, input));
+      auto *step = makeStepButton(metrics,
+          std::abs(delta) == 5 ? metrics.offsetButtonWidthLarge : metrics.offsetButtonWidthSmall,
+          (delta > 0 ? "+" : "") + std::to_string(delta) + "%");
+      step->setOnClickListener([apply, read, delta] {
+        apply(std::to_string(sanitizeOffsetComponent(read(), 100) + delta));
+      });
+      row->addView(step);
+    }
+    row->addView(reset);
+    body->addView(row);
   };
   append(i18n::message("settings.timing.indicator_line_thickness.percent_label"),
          &AppSettings::PresentationSettings::judgementIndicatorLineThicknessPercent);
@@ -3158,6 +3172,7 @@ void SettingsScene::appendSelectedSkinHudSettings(
                   persistSettings();
                 });
   appendJudgementIndicatorDimensionSettings(body, metrics);
+  appendJudgementIndicatorColorizationSettings(body, metrics);
   appendNumeric(
       i18n::message("settings.skins.indicator_range_ms.label"),
       [this] { return std::to_string(context.settings.presentation().judgementIndicatorRangeMilliseconds); },

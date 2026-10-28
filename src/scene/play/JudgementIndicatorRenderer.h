@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../../JudgementIndicatorRange.h"
+#include "../../settings/JudgementIndicatorColorization.h"
 #include "../../rendering/Color.h"
 #include "Judge.h"
 #include <array>
@@ -41,6 +42,7 @@ public:
                  int rangeMilliseconds,
                  int lineThicknessPercent = 100, int eventHeightPercent = 100,
                  int eventThicknessPercent = 100);
+  void setColorization(const judgement_indicator::Colorization &settings);
   void updateTimingWindows(
       const std::map<Judgement, std::pair<long long, long long>> &windows);
   void record(const JudgeResult &judgeResult, long long displayTimeMicros);
@@ -99,6 +101,7 @@ private:
       judgement_indicator::kDefaultRangeMilliseconds)};
   // Snapshot the evicted prefix and retained input history coherently.
   std::mutex recordMutex;
+  judgement_indicator::Colorization colorization;
   judgement_indicator::TimingAverageHistory averageBeforeSamples;
   std::array<AtomicSample, kMaxVisibleSamples> samples;
   std::atomic<uint64_t> writeSequence{0};

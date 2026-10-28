@@ -49,24 +49,8 @@ float fadeOpacity(long long sampleTimeMicros, long long currentTimeMicros) {
 }
 
 Color judgementColor(Judgement judgement, uint8_t alpha) {
-  switch (judgement) {
-  case PGreat:
-    return Color(200, 255, 255, alpha);
-  case Great:
-    return Color(200, 255, 200, alpha);
-  case Good:
-    return Color(200, 200, 255, alpha);
-  case Bad:
-    return Color(255, 200, 200, alpha);
-  case Kpoor:
-    return Color(255, 50, 50, alpha);
-  case Poor:
-    return Color(255, 100, 100, alpha);
-  case None:
-  case JudgementCount:
-    break;
-  }
-  return Color(255, 255, 255, alpha);
+  const auto rgb = judgement_indicator::defaultEventColor(judgement);
+  return Color((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, alpha);
 }
 
 void addRect(rendering::SimpleBatchRenderer &batch, float width, float height,
@@ -78,6 +62,14 @@ void addRect(rendering::SimpleBatchRenderer &batch, float width, float height,
 JudgementIndicatorRenderer::JudgementIndicatorRenderer(
     const std::map<Judgement, std::pair<long long, long long>> &timingWindows)
     : timingWindows(timingWindows) {}
+
+void JudgementIndicatorRenderer::setColorization(
+    const judgement_indicator::Colorization &settings) {
+  const std::lock_guard lock(recordMutex);
+  if (colorization == settings) return;
+  colorization = settings;
+  judgement_indicator::sanitizeColorization(colorization);
+}
 
 void JudgementIndicatorRenderer::updateTimingWindows(
     const std::map<Judgement, std::pair<long long, long long>> &windows) {
@@ -159,6 +151,7 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
   }
 
   std::array<Sample, kMaxVisibleSamples> visibleSamples{};
+  std::array<judgement_indicator::EventStyle, kMaxVisibleSamples> visibleStyles{};
   size_t visibleSampleCount = 0;
   judgement_indicator::ExponentialAverageAccumulator average;
   {
@@ -171,6 +164,8 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
       Sample sample;
       if (readSample(sequence, sample) &&
           sample.createdTimeMicros <= currentTimeMicros) {
+        visibleStyles[visibleSampleCount] = judgement_indicator::resolveEventStyle(
+            colorization, sample.judgement, sample.diffMicros);
         visibleSamples[visibleSampleCount++] = sample;
       }
     }
@@ -235,6 +230,8 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
 
   for (size_t i = 0; i < visibleSampleCount; ++i) {
     const auto &sample = visibleSamples[i];
+    const auto &style = visibleStyles[i];
+    if (!style.visible) continue;
     const uint8_t alpha = alphaByte(
         fadeOpacity(sample.createdTimeMicros, currentTimeMicros));
     if (alpha == 0) {
@@ -242,9 +239,11 @@ void JudgementIndicatorRenderer::render(rendering::SimpleBatchRenderer &batch,
     }
     const float x =
         offsetToX(sample.diffMicros, currentRangeMicros, indicatorLayout);
+    const auto rgb = style.color.value_or(
+        judgement_indicator::defaultEventColor(sample.judgement));
     addRect(batch, indicatorLayout.markerWidth, indicatorLayout.markerHeight,
             x - indicatorLayout.markerWidth * 0.5f, markerY,
-            judgementColor(sample.judgement, alpha));
+            Color((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF, alpha));
   }
 
   if (alphaByte(averageAlpha) > 0) {

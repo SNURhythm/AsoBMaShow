@@ -605,6 +605,8 @@ private:
   void refreshSettingsText(bool syncInputs = true);
   void refreshIrSettingsPresentation();
   void ensureProfileController();
+  void appendJudgementIndicatorColorizationSettings(
+      View *body, const settings_scene::LayoutMetrics &metrics);
   void appendJudgementIndicatorDimensionSettings(
       View *body, const settings_scene::LayoutMetrics &metrics);
   void appendSelectedSkinHudSettings(View *body,

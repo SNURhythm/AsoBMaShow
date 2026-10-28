@@ -4334,6 +4334,7 @@ void BMSRenderer::configure(
       configuration.judgementIndicatorLineThicknessPercent,
       configuration.judgementIndicatorEventHeightPercent,
       configuration.judgementIndicatorEventThicknessPercent);
+  judgementIndicator.setColorization(configuration.judgementIndicatorColorization);
   keybombs = configuration.keybombs;
   if (judgementTextVisibility != configuration.judgementTextVisibility) {
     judgementTextVisibility = configuration.judgementTextVisibility;

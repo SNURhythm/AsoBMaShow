@@ -3552,6 +3552,7 @@ void GamePlayScene::init() {
       .judgementIndicatorLineThicknessPercent = context.settings.presentation().judgementIndicatorLineThicknessPercent,
       .judgementIndicatorEventHeightPercent = context.settings.presentation().judgementIndicatorEventHeightPercent,
       .judgementIndicatorEventThicknessPercent = context.settings.presentation().judgementIndicatorEventThicknessPercent,
+      .judgementIndicatorColorization = context.settings.presentation().judgementIndicatorColorization,
       .judgementIndicatorHudMode =
           context.settings.presentation().judgementIndicatorRenderMode ==
           AppSettings::JudgementIndicatorRenderMode::Hud2D,
