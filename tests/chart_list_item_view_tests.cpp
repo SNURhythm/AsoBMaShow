@@ -1,6 +1,7 @@
 #include "rendering/UniformCache.h"
 #include "view/ChartListItemView.h"
 #include "view/GoalTargetBubble.h"
+#include "view/GoalLampTabAccent.h"
 #include "view/Button.h"
 #include "view/LibraryFolderItemView.h"
 #include "view/ImageView.h"
@@ -43,6 +44,38 @@ void require(bool condition, const char *message) {
 bool sameColor(const Color &actual, const Color &expected) {
   return actual.r == expected.r && actual.g == expected.g &&
          actual.b == expected.b && actual.a == expected.a;
+}
+
+void testGoalLampAccentDrawsAfterParentLayoutAndScroll() {
+  struct Backend final : rendering::UiBatchBackend {
+    std::vector<rendering::UiBatchState> draws;
+    bool submit(const rendering::UiBatchSubmission &submission) noexcept override {
+      draws.push_back(submission.state);
+      return true;
+    }
+  } backend;
+  rendering::UiBatchRenderer batch(backend);
+  RenderContext context(batch);
+  View root(30, 40, 300, 180);
+  auto *tab = new Button();
+  tab->setWidth(240)->setHeight(52)->setFlexShrink(0);
+  auto *accent = new GoalLampTabAccent(kClearTypeFullComboRank);
+  tab->addView(accent);
+  root.addView(tab);
+  for (int y : {40, 10, 70}) {
+    root.setPositionNoLayout(30, y);
+    root.applyYogaLayout();
+    backend.draws.clear();
+    batch.begin();
+    accent->render(context);
+    batch.flush();
+    require(backend.draws.size() == 1,
+            "Full Combo tab draws its lamp after parent layout and scrolling");
+    const auto &clip = backend.draws.front().scissor;
+    require(clip && clip->x == accent->getX() && clip->y == accent->getY() &&
+                clip->width == 7 && clip->height == 52,
+            "lamp clip follows the tab's current position and height");
+  }
 }
 
 void testFolderBindingOnlyMaterializesVisibleLabel() {
@@ -103,6 +136,7 @@ int main() {
   require(aboveFlag.x + aboveFlag.width / 2 == 180 && aboveFlag.y + aboveFlag.height == 96,
           "goal bubble is centered above the flag with a four-pixel gap");
   testFolderBindingOnlyMaterializesVisibleLabel();
+  testGoalLampAccentDrawsAfterParentLayoutAndScroll();
 
   {
     ui_theme::setActiveMode(ui_theme::ThemeMode::Dark);
@@ -383,6 +417,7 @@ int main() {
             "recycling a random row restores ordinary chart controls");
   }
 
+  rendering::ShaderManager::getInstance().release();
   rendering::UniformCache::getInstance().destroyAll();
   bgfx::shutdown();
   return 0;

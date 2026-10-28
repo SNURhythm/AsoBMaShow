@@ -33,3 +33,11 @@ Historical points must not be recomputed. Both score-save failures and achieveme
   label finding was fixed by retaining the existing no-reward-label behavior in
   Adjust today; the dashboard shows the current phase reward.
 - Live gameplay, mobile builds and physical-device interaction were not run.
+
+## Follow-up: missing Near lamp decorations
+
+The shared accent depended on a resize callback that parent-driven layout can
+skip, leaving its internal rounded view zero-sized. Moved it to a reusable view
+header and synchronized its geometry on layout. A native rendering regression
+failed with no draw before the fix, then passed for initial layout and movement.
+Desktop main rebuilt and both chart-list rendering and goal-scene tests passed.

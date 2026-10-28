@@ -12,6 +12,7 @@
 #include "../view/ClearLampColors.h"
 #include "../ClearLampOrder.h"
 #include "../view/DropdownView.h"
+#include "../view/GoalLampTabAccent.h"
 #include "../view/IconText.h"
 #include "../view/ImageView.h"
 #include "../view/OverlayPortal.h"
@@ -58,30 +59,6 @@ Button *action(View *parent, const std::string &value, std::function<void()> cli
   button->setOnClickListener(std::move(click)); parent->addView(button);
   return button;
 }
-// Draw the same rounded shape as the tab, clipped to a narrow left strip.
-class GoalLampTabAccent final : public View {
-public:
-  explicit GoalLampTabAccent(int rank) {
-    rounded_.setBackgroundColor(clearLampColorForRank(rank));
-    rounded_.setCornerRadius(16);
-    setPositionType(YGPositionTypeAbsolute);
-    setPosition(Edge::Left, 0)->setPosition(Edge::Right, 0)
-        ->setPosition(Edge::Top, 0)->setPosition(Edge::Bottom, 0);
-  }
-  void onResize(int width, int height) override {
-    rounded_.setSize(width, height);
-    rounded_.applyYogaLayout();
-    rounded_.setPositionNoLayout(getX(), getY());
-  }
-  void onMove(int, int) override { rounded_.setPositionNoLayout(getX(), getY()); }
-protected:
-  void renderImpl(RenderContext &context) override {
-    ScissorScope clip(context, getX(), getY(), 7, getHeight());
-    rounded_.render(context);
-  }
-private:
-  View rounded_;
-};
 class GoalArtworkPlaceholder final : public TextView {
 public:
   explicit GoalArtworkPlaceholder(ImageView &image)
