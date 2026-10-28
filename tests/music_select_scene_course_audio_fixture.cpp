@@ -266,6 +266,7 @@ struct MusicSelectScene {
   void selectedBarMoved() { assertUi(); }
   void onApplicationBackgroundChanged(bool) {}
   void onPause();
+  void resumeGoalNavigation() {}
   void onResume();
   void cleanupScene() { CLEANUP_LAUNCH }
   void postDeferred(std::function<bool()> callback) {

@@ -72,6 +72,7 @@ struct MusicSelectScene {
   void cancelDirectoryLoad() {}
   void stopPreloadWorker();
   void onPause();
+  void resumeGoalNavigation() {}
   void onResume();
   void hideDecideOverlay() {}
   void onApplicationBackgroundChanged(bool) {}

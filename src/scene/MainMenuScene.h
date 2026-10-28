@@ -119,6 +119,12 @@ private:
   Scene *activeUtilityTab() const;
   void selectTab(Tab tab);
   void openStreakAssignment(const std::string &id);
+  void openChartGoals(std::optional<ChartMetaRecord> initial = {});
+  void openChartGoalForSelection();
+  void resumeGoalNavigation();
+  void applyGoalSelection(const ChartMetaRecord &, int mode);
+  std::optional<std::pair<ChartMetaRecord, int>> pendingGoalSelection_;
+  std::string pendingGoalProfile_;
   void completeTabSwitch(Tab tab);
   bool applyPendingTabSwitch();
   void cancelPendingTabSwitch();

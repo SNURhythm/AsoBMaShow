@@ -377,6 +377,7 @@ asobmashow_label_tests(area_settings
 )
 
 asobmashow_label_tests(area_music_select
+    chart_goals_scene_tests
     beatoraja_music_select_skin_ledger
     beatoraja_music_select_skin_ledger_evidence_contract
     chart_details_view_tests
@@ -552,6 +553,7 @@ asobmashow_label_tests(area_rendering
 )
 
 asobmashow_label_tests(area_ui
+    chart_goals_scene_tests
     streak_scene_tests
     android_locale_tests
     button_disabled_metal_tests

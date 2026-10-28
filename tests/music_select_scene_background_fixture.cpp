@@ -100,6 +100,7 @@ struct MusicSelectScene {
   bool reactivateSkinAfterSettings() { return true; }
   void buildSkinLoadingView() {}
   void onPause();
+  void resumeGoalNavigation() {}
   void onResume();
   void onApplicationBackgroundChanged(bool background);
 };

@@ -201,6 +201,7 @@ struct MusicSelectScene {
   bool activateSkin(skin::GameplaySkinActivationRequest);
   bool reactivateSkinAfterSettings();
   void openSettings();
+  void resumeGoalNavigation() {}
   void onResume();
   void update(float);
 };

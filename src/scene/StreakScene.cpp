@@ -252,13 +252,17 @@ void assignmentConditions(View *parent, const streak::Assignment &a, int size = 
 } // namespace
 
 StreakScene::StreakScene(ApplicationContext &context, SceneReturnTarget target,
-                         std::function<void(const std::string &)> openAssignment)
-    : Scene(context), returnTarget_(std::move(target)), openAssignment_(std::move(openAssignment)) {}
+                         std::function<void(const std::string &)> openAssignment,
+                         std::function<void()> openGoals)
+    : Scene(context), returnTarget_(std::move(target)), openAssignment_(std::move(openAssignment)),
+      openGoals_(std::move(openGoals)) {}
 void StreakScene::configureTab(float topInset, std::function<void()> onClose,
-                               std::function<void(const std::string &)> openAssignment) {
+                               std::function<void(const std::string &)> openAssignment,
+                               std::function<void()> openGoals) {
   embeddedTab_ = true;
   tabClose_ = std::move(onClose);
   openAssignment_ = std::move(openAssignment);
+  openGoals_ = std::move(openGoals);
   setTabTopInset(topInset);
 }
 void StreakScene::setTabTopInset(float topInset) {
@@ -388,6 +392,13 @@ void StreakScene::build() {
     scroll_->setScrollOffset(std::max(0.0F, scroll_->getScrollOffset() + invalid->getY() - scroll_->getY() - 48));
 }
 void StreakScene::dashboard(View *body) {
+  if (openGoals_) action(body, i18n::tr("goals.ui.title"), [this] {
+    defer([open = openGoals_, embedded = embeddedTab_] {
+      const auto navigate = open;
+      const bool keepAlive = embedded;
+      navigate(); return keepAlive;
+    }, 0, true);
+  });
   if constexpr (reminders::supported)
     action(body, i18n::tr("streak.reminders.settings"), [this] {
       later([this] { reminders::refreshPermission(); page_ = Page::Reminders; });

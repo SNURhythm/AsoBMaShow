@@ -71,6 +71,7 @@
 #include "ResultScene.h"
 #include "SettingsScene.h"
 #include "StreakScene.h"
+#include "ChartGoalsScene.h"
 #include "MusicSelectScene.h"
 #include "MusicSelectSkinErrorScene.h"
 #include "../music_select/MusicSelectLaunchPolicy.h"
@@ -843,6 +844,8 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
     streakTab_->prepareForUse();
     streakTab_->configureTab(inset, returnToPlay, [this](const std::string &id) {
       defer([this, id] { openStreakAssignment(id); return true; }, 0, true);
+    }, [this] {
+      defer([this] { openChartGoals(); return true; }, 0, true);
     });
     streakTab_->init();
     initializedUtilityTab = true;
@@ -905,6 +908,7 @@ void MainMenuScene::completeTabSwitch(Tab tab) {
   updatePanelLayout();
   refreshTabPresentation();
   rootLayout->applyYogaLayout();
+  if (tab == Tab::Play) resumeGoalNavigation();
 }
 
 void MainMenuScene::openStreakAssignment(const std::string &id) {
@@ -1105,6 +1109,7 @@ void MainMenuScene::onResume() {
   refreshLibraryIfNeeded();
   if (selectorTabActive()) reselectCurrentChart();
   if (auto *scene = activeUtilityTab()) scene->onResume();
+  resumeGoalNavigation();
   if (activeTab_ == Tab::Play) queueSelectedSkinHandoff();
 }
 
@@ -2434,6 +2439,8 @@ void MainMenuScene::initView(ApplicationContext &context) {
   revealMenuCallbacks.onActionSelected = [this](const std::string &actionId) {
     if (actionId == "show-same-folder") {
       showSelectedChartFolder();
+    } else if (actionId == "personal-goal") {
+      openChartGoalForSelection();
     } else if (actionId == "readme") {
       openSelectedReadme();
     } else if (actionId == "reveal-file") {
@@ -5228,6 +5235,61 @@ void MainMenuScene::startChartDirect(const ChartMetaRecord &record) {
       0, true);
 }
 
+void MainMenuScene::resumeGoalNavigation() {
+  if (!pendingGoalSelection_) return;
+  if (pendingGoalProfile_ != context.profileManager.activeProfile().id) {
+    pendingGoalSelection_.reset(); pendingGoalProfile_.clear(); return;
+  }
+  if (activeTab_ != Tab::Play) {
+    selectTab(Tab::Play);
+    return; // COURSE waits for preview shutdown before PLAY owns the selection.
+  }
+  if (pendingTab_) return;
+  if (auto goal = std::exchange(pendingGoalSelection_, {})) {
+    applyGoalSelection(goal->first, goal->second);
+    pendingGoalProfile_.clear();
+  }
+}
+
+void MainMenuScene::openChartGoalForSelection() {
+  const auto record = selectedRecordSnapshot();
+  if (!record) return;
+  const auto profile = context.profileManager.activeProfile().id;
+  defer([this, record, profile] {
+    if (profile == context.profileManager.activeProfile().id) openChartGoals(record);
+    return true;
+  }, 0, true);
+}
+
+void MainMenuScene::openChartGoals(std::optional<ChartMetaRecord> initial) {
+  if (context.storageMaintenanceActive || willStart.load() || replayExportJob_.inProgress()) return;
+  if (initial && (initial->unavailable || initial->solidArchive || initial->meta.BmsPath.empty())) return;
+  const auto profile = context.profileManager.activeProfile().id;
+  context.sceneManager->changeScene(std::make_unique<ChartGoalsScene>(context,
+      SceneReturnTarget::Retained(this), std::move(initial),
+      [this, profile](const ChartMetaRecord &record, int mode) {
+        pendingGoalSelection_ = std::pair{record, mode}; pendingGoalProfile_ = profile;
+      }), true);
+}
+
+void MainMenuScene::applyGoalSelection(const ChartMetaRecord &record, int mode) {
+  if (mode > 0) {
+    context.settings.selectedLnMode = long_note_mode::idFromValue(mode);
+    (void)context.saveSettings();
+    reloadProfileSelectionsFromSettings();
+  }
+  searchText.clear(); searchBox->setEditingText("");
+  if (auto *hint = rootLayout->findViewByName("mainMenuSearchHint")) hint->setVisible(true);
+  chartRecordFilters = {};
+  chartBpmMinText.clear(); chartBpmMaxText.clear(); chartDifficultyRangeTableId.reset();
+  chartKeyModeDropdownOpen = chartClearMarkDropdownOpen = chartScoreRankDropdownOpen = false;
+  chartDifficultyMinDropdownOpen = chartDifficultyMaxDropdownOpen = false;
+  temporaryChartFolder = main_menu_library::sameFolderForChart(record);
+  activeFolder = {.key="all", .label=i18n::tr("menu.all_songs.label"), .type=LibraryFolderItem::Type::AllSongs};
+  reloadFolderItems(); reloadChartList();
+  selectChartByPathAfterReload(record.meta.BmsPath, AutoSelectionPreview::Load);
+}
+
 void MainMenuScene::openChartViewerForSelection() {
   if (willStart.load() || replayExportJob_.inProgress() ||
       archiveUnzipInProgress() || pendingSelectChartPath.has_value() ||
@@ -5306,7 +5368,8 @@ void MainMenuScene::toggleRevealContextMenu(View *anchor) {
         .label = i18n::message("menu.show_same_folder.label"),
         .enabled = canShowSameFolder},
        {.id = "reveal-file", .label = i18n::message("menu.reveal_file.label")},
-       {.id = "readme", .label = i18n::message("readme.reader.label")}},
+       {.id = "readme", .label = i18n::message("readme.reader.label")},
+       {.id = "personal-goal", .label = i18n::message("goals.ui.personal_goal")}},
       220);
 }
 

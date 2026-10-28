@@ -396,6 +396,7 @@ struct MusicSelectScene {
     std::lock_guard lock(postedMutex_);
     posted_.push_back(std::move(callback));
   }
+  void resumeGoalNavigation() {}
   void onResume();
   Context context;
   Bars bars_;
@@ -438,6 +439,7 @@ struct MusicSelectScene {
   void launchSelected(bool, bool) {}
   void cancelDirectoryLoad() { restoreDirectories_.clear(); }
   bool openSameFolder(bool) { return false; }
+  bool restoreGoalDirectory(const Bar &) { return false; }
   void requestDirectoryLoad(const Bar &) { assert(false); }
   bool loadDirectoryChildren(const Bar &bar) {
     assert(bar.kind == skin::MusicSelectBarKind::Hash);

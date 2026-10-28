@@ -12,6 +12,7 @@ which data/lifecycle rules matter, and where to start testing it.
 | [Gameplay skins](gameplay-skins.md) | `src/skin/`, `src/skin/beatoraja/`, playfield presentation |
 | [Replays and video export](replays-and-video-export.md) | `src/replay/`, replay exporters and repositories |
 | [Practice and analysis](practice-and-analysis.md) | `src/practice/`, gameplay and result/practice scenes |
+| [Personal chart goals](personal-chart-goals.md) | `src/goals/`, `ChartGoalsScene`, score repository |
 | [Results, records, and persistence](results-records-and-persistence.md) | result models, scenes, and repositories |
 | [Internet Ranking](internet-ranking.md) | `src/ir/` |
 | [Profiles and data transfer](profiles-and-data-transfer.md) | profile services, settings, and document handoff |

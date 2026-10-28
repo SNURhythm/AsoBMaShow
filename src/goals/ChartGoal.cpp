@@ -4,6 +4,26 @@
 #include <stdexcept>
 
 namespace chart_goals {
+std::optional<int> parseRate(std::string_view text) {
+  int whole = 0, fraction = 0, decimals = -1;
+  bool digit = false;
+  for (char c : text) {
+    if (c == '.' && decimals == -1 && digit) { decimals = 0; continue; }
+    if (c < '0' || c > '9') return {};
+    digit = true;
+    if (decimals < 0) {
+      whole = whole * 10 + c - '0';
+      if (whole > 100) return {};
+    } else {
+      if (++decimals > 2) return {};
+      fraction = fraction * 10 + c - '0';
+    }
+  }
+  if (!digit || decimals == 0) return {};
+  if (decimals == 1) fraction *= 10;
+  const int value = whole * 100 + fraction;
+  return value > 0 && value <= 10000 ? std::optional<int>(value) : std::nullopt;
+}
 void validate(const Target &target) {
   constexpr std::array lamps{-1, 100, 150, 200, 300, 400, 500, 600};
   if (std::find(lamps.begin(), lamps.end(), target.lamp) == lamps.end() ||

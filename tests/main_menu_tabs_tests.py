@@ -30,6 +30,7 @@ class MainMenuTabsTests(unittest.TestCase):
             "Scene *MainMenuScene::activeUtilityTab() const",
             "void MainMenuScene::selectTab(Tab tab)",
             "void MainMenuScene::completeTabSwitch(Tab tab)",
+            "void MainMenuScene::resumeGoalNavigation()",
             "bool MainMenuScene::applyPendingTabSwitch()",
             "void MainMenuScene::cancelPendingTabSwitch()",
             "void MainMenuScene::reselectCurrentChart()",
@@ -143,6 +144,7 @@ struct Tasks {
   }
 };
 struct Context {
+  struct { std::string id="one"; const auto &activeProfile() const { return *this; } } profileManager;
   std::atomic_bool chartLibraryFoldersReloadRequested=false, chartLibraryListReloadRequested=false;
   Tasks *chartLibraryTasks=nullptr;
   struct { std::uint64_t revision=1; std::uint64_t GetLibraryRevision() { return revision; } } chartRepository;
@@ -177,6 +179,15 @@ struct Session {
 };
 struct MainMenuScene : Scene {
   void openStreakAssignment(const std::string &) {}
+  void openChartGoals() {}
+  void resumeGoalNavigation();
+  std::optional<std::pair<ChartMetaRecord,int>> pendingGoalSelection_;
+  std::string pendingGoalProfile_;
+  int appliedGoals=0;
+  void applyGoalSelection(const ChartMetaRecord &record, int) {
+    assert(activeTab_==Tab::Play && !pendingTab_);
+    ++appliedGoals; selectedChartRecord=record;
+  }
   TAB_TYPE;
   enum class AutoSelectionPreview { Suppress, Load };
   FOLDER_TYPE;
@@ -346,7 +357,24 @@ int main(int argc,char **argv) {
     }
     return 0;
   }
-  if(scenario=="hidden-library-revision") {
+  if(scenario=="goal-from-course") {
+    scene.switchTabAndWait(Tab::Course);
+    const auto previous=scene.selectedChartRecord;
+    ChartMetaRecord target; target.meta.BmsPath="goal.bms";
+    scene.pendingGoalSelection_=std::pair{target,2};
+    scene.pendingGoalProfile_="one";
+    scene.resumeGoalNavigation();
+    assert(scene.appliedGoals==0 && scene.pendingGoalSelection_);
+    scene.settleTab();
+    assert(scene.appliedGoals==1 && !scene.pendingGoalSelection_);
+    assert(scene.activeTab_==Tab::Play && scene.selectedChartRecord->meta.BmsPath=="goal.bms");
+    scene.resumeGoalNavigation(); assert(scene.appliedGoals==1);
+    scene.pendingGoalSelection_=std::pair{target,2};
+    scene.pendingGoalProfile_="one";
+    scene.context.profileManager.id="two";
+    scene.resumeGoalNavigation();
+    assert(scene.appliedGoals==1 && !scene.pendingGoalSelection_);
+  } else if(scenario=="hidden-library-revision") {
     for(bool queuedHandoff : {false,true}) {
       MainMenuScene resume; Tasks tasks; resume.context.chartLibraryTasks=&tasks;
       resume.reloadFolderItems(); resume.reloadChartList();
@@ -732,6 +760,9 @@ int main(int argc,char **argv) {
             FixtureCompiler.from_environment(shared_headers=True).build(
                 [source], binary, source.parent, includes=[root / "src"])
             subprocess.run([str(binary)], check=True)
+
+    def test_goal_return_waits_for_play_tab_and_checks_profile(self):
+        subprocess.run([str(self.binary), "goal-from-course"], check=True, timeout=5)
 
     def test_filtered_out_selection_survives_tab_restoration(self):
         subprocess.run([str(self.binary), "filtered-tab-selection"], check=True)

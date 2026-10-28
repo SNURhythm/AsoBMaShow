@@ -55,9 +55,22 @@
 
 **Interfaces:** `ChartGoalsScene(context, returnTarget, optional<ChartMetaRecord>, onSelectChart)`; callback receives exact current ChartMetaRecord and goal LN scope. Selectors expose no automatic play; they queue selection then resume their normal UI. Streak receives an optional open-goals callback. Native embedded Combo defers to its parent; standalone Combo returns to its retained selector before opening Goals, avoiding orphan retained scenes.
 
-- [ ] Add behavioral navigation/form tests for valid and empty goals, failed saves preserving edits, page/delete behavior, profile-change reset, and safe deferred navigation. Observe missing behavior before implementation.
-- [ ] Implement shared responsive goal list/detail/editor with rational score presets and custom rate, colored lamp targets, exact progress, edit/remove confirmation, missing-chart state, and Practice using the existing chart viewer.
-- [ ] Add Personal goal to both chart menus and Personal goals to Combo before its empty-routine early return. Resolve current charts by metadata hash, and hand Open in PLAY back to the originating selector with the correct LN mode.
-- [ ] Add translations and feature documentation; update plan checkboxes after verification.
-- [ ] Build `main` and the affected test groups in one invocation at `-j 6`, then run focused results/profile/music-select/UI tests; broaden only for unresolved boundary coverage. Check responsive UI if a local app surface is available. Record limits if not.
-- [ ] Request one fresh whole-branch review, fix important findings with regression coverage, then commit and push the existing branch to origin (set upstream if absent). Do not deploy.
+- [x] Add behavioral navigation/form tests for valid and empty goals, failed saves preserving edits, page/delete behavior, profile-change reset, and safe deferred navigation. Observe missing behavior before implementation.
+- [x] Implement shared responsive goal list/detail/editor with rational score presets and custom rate, colored lamp targets, exact progress, edit/remove confirmation, missing-chart state, and Practice using the existing chart viewer.
+- [x] Add Personal goal to both chart menus and Personal goals to Combo before its empty-routine early return. Resolve current charts by metadata hash, and hand Open in PLAY back to the originating selector with the correct LN mode.
+- [x] Add translations and feature documentation; update plan checkboxes after verification.
+- [x] Build `main` and the affected test groups in one invocation at `-j 6`, then run focused results/profile/music-select/UI tests; broaden only for unresolved boundary coverage. Check responsive UI if a local app surface is available. Record limits if not.
+- [x] Request one fresh whole-branch review, fix important findings with regression coverage, then commit and push the existing branch to origin (set upstream if absent). Do not deploy.
+
+
+## Verification completed
+
+- Desktop `main` plus affected results/profile/music-select/UI targets built.
+- All 131 selected CTest cases passed. Subsequent navigation changes passed the
+  affected selector, tab, and goal scene tests, then desktop `main` rebuilt.
+- Independent whole-feature review found two return-navigation defects. Added
+  failing behavioral checks, then fixed COURSE-to-PLAY ordering and custom
+  selector goal-directory restoration with fresh bounded metadata lookup.
+- Desktop UI checked: Combo entry without a routine, empty and populated lists,
+  chart editor/dropdown, saved detail, and Open in PLAY selecting without launch.
+  Mobile builds and physical-device interaction were not run for this change.

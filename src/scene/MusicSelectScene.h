@@ -93,6 +93,14 @@ private:
   void configureSoundServices();
   void reloadLibrary(bool preserveDirectory = true);
   void openStreakAssignment(const std::string &id);
+  void openChartGoals(std::optional<ChartMetaRecord> initial = {});
+  void openChartGoalForSelection();
+  void resumeGoalNavigation();
+  void applyGoalSelection(const ChartMetaRecord &, int mode);
+  bool restoreGoalDirectory(const MusicSelectBar &);
+  std::optional<std::pair<ChartMetaRecord, int>> pendingGoalSelection_;
+  std::string pendingGoalProfile_;
+  std::string pendingGoalsOverviewProfile_;
   std::string pendingStreakAssignment_;
   void syncResolvedFilters();
   [[nodiscard]] std::int64_t elapsedMicros() const;

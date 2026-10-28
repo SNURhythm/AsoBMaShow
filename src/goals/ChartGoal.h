@@ -23,6 +23,8 @@ struct Progress {
 struct GoalProgress { Goal goal; Progress progress; };
 struct ProgressPage { std::vector<GoalProgress> goals; bool hasMore = false; };
 inline constexpr int pageSize = 20;
+// Percentage input to exact hundredths: 99.99 -> 9999/10000.
+std::optional<int> parseRate(std::string_view);
 void validate(const Target &);
 std::string normalizedHash(std::string_view);
 Progress evaluate(const Target &, std::optional<ScoreBestSnapshot> bestScore,

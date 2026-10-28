@@ -65,6 +65,16 @@ MusicSelectBar song() {
 
 struct MusicSelectRepositoryMetadata {};
 
+struct GoalSession {
+  std::vector<ChartMetaRecord> records;
+  void QueryChartMeta(const ChartMetaQuery &query, std::vector<ChartMetaRecord> &result) {
+    expect(query.limit==1 && query.rawSongData && query.allowedSha256 &&
+               *query.allowedSha256==std::vector<std::string>{std::string(64,'a')},
+           "restoring a goal uses a bounded hash metadata query");
+    result=records;
+  }
+};
+
 struct FixtureRepository {
   int normalLoads = 0;
   int autoplayLoads = 0;
@@ -201,7 +211,7 @@ struct MusicSelectScene {
   } context;
 
   MusicSelectBarManager bars_{rootProjection()};
-  bool chartSession_ = true;
+  std::optional<GoalSession> chartSession_=GoalSession{};
   bool launching_ = false;
   bool failed_ = false;
   bool sceneActive_ = true;
@@ -258,6 +268,14 @@ struct MusicSelectScene {
   void openDownload() { ++downloadPrompts; }
   void launchSelected(bool autoplay = false, bool practice = false);
   bool openSameFolder(bool) { return false; }
+  bool restoreGoalDirectory(const MusicSelectBar &);
+  void applyGoalSelection(const ChartMetaRecord &record, int mode) {
+    expect(mode==0, "restoration preserves the current LN setting");
+    auto directory=folder("personal-goal:"+record.meta.SHA256, "Personal goals");
+    directory.kind=skin::MusicSelectBarKind::SameFolder;
+    auto child=song(); child.chart=record; directory.children={child.id};
+    bars_.openTransient(std::move(directory),{child});
+  }
   bool loadDirectoryChildren(const MusicSelectBar &directory) {
     return bars_.installChildren(directory.id, {song()});
   }
@@ -430,6 +448,28 @@ void testFailedPageRecovery() {
   expect(scene.directoryStatusMessage_.empty(), "leaving clears stale failure diagnosis");
   scene.openSelected();
   expect(scene.directoryRequest_.has_value(), "reopening requests a fresh snapshot");
+}
+
+void testPersonalGoalDirectoryRestores() {
+  MusicSelectScene scene;
+  scene.bars_.refresh(rootProjection());
+  auto directory=folder("personal-goal:" + std::string(64,'a'), "Personal goals");
+  directory.kind=skin::MusicSelectBarKind::SameFolder;
+  directory.childrenLoaded=true;
+  auto child=song(); child.chart->meta.SHA256=std::string(64,'a'); directory.children={child.id};
+  scene.chartSession_->records={*child.chart};
+  scene.chartSession_->records.front().meta.Title="Fresh metadata";
+  expect(scene.bars_.openTransient(directory,{child}), "open goal chart before leaving selector");
+  scene.reloadLibrary(true);
+  const auto restored=scene.bars_.readView();
+  expect(restored.directory==std::vector<MusicSelectBarId>{directory.id} &&
+             restored.selectedIndex<restored.rowCount() && restored.rowAt(restored.selectedIndex).id==child.id,
+         "selector resume must restore personal goal directory and selected chart");
+  expect(restored.rowAt(restored.selectedIndex).chart->meta.Title=="Fresh metadata",
+         "restored goal must use current library metadata");
+  scene.chartSession_->records.front().unavailable=true;
+  scene.reloadLibrary(true);
+  expect(scene.bars_.readView().directory.empty(), "missing goal chart must not restore a playable stale record");
 }
 
 void testSearchOpensAsynchronouslyAndRestores() {
@@ -620,6 +660,7 @@ int main(int argc, char **argv) {
   else if (test == "testSolidArchiveDirectory") testSolidArchiveDirectory();
   else if (test == "testUnzipAllConfirmation") testUnzipAllConfirmation();
   else if (test == "testFailedPageRecovery") testFailedPageRecovery();
+  else if (test == "testPersonalGoalDirectoryRestores") testPersonalGoalDirectoryRestores();
   else if (test == "testSearchOpensAsynchronouslyAndRestores") testSearchOpensAsynchronouslyAndRestores();
   else if (test == "testAutoplayCompletion") testAutoplayCompletion();
   else if (test == "testPointerTargetsClickedFolder") testPointerTargetsClickedFolder();

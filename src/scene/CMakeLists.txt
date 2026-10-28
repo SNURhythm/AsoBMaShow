@@ -3,6 +3,7 @@ target_sources(main PRIVATE
     ArchiveUnzipOperation.cpp
     ChartFilterSortPanelView.cpp
     ChartPreloadWorker.cpp
+    ChartGoalsScene.cpp
     ChartRecordsScene.cpp
     ChartViewerScene.cpp
     CourseGameplaySessionBuilder.cpp

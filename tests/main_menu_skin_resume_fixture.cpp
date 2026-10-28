@@ -75,7 +75,8 @@ struct MainMenuScene : Scene {
   struct Utility {
     int pauses = 0, resumes = 0, profileChanges = 0;
     void onPause() { ++pauses; }
-    void onResume() { ++resumes; }
+    void resumeGoalNavigation() {}
+  void onResume() { ++resumes; }
     void onProfileWillChange() { ++profileChanges; }
   };
   Utility *utility = nullptr, *irTab_ = nullptr;
@@ -118,6 +119,7 @@ struct MainMenuScene : Scene {
   void refreshLongNoteModeClearRankViews() {}
   void refreshLibraryIfNeeded() { ++refreshed; }
   void reselectCurrentChart() { ++reselections; }
+  void resumeGoalNavigation() {}
   void onResume() RESUME_BODY
   void queueSelectedSkinHandoff() HANDOFF_BODY
 };

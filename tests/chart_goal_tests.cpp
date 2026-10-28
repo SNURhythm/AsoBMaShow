@@ -9,6 +9,12 @@
 using namespace chart_goals;
 template<class F> bool rejects(F f) { try { f(); return false; } catch (const std::exception &) { return true; } }
 int main() {
+  CHECK(parseRate("99.99") == 9999);
+  CHECK(parseRate("100") == 10000);
+  CHECK(parseRate("0.01") == 1);
+  CHECK(parseRate("88.8") == 8880);
+  for (const auto *value : {"", "0", "100.01", "1.001", "nan", "1e2", "-2", "5%"})
+    CHECK(!parseRate(value));
   Target aaa{.scoreNumerator=24};
   ScoreBestSnapshot score{.score=1777, .maxScore=2000};
   auto p = evaluate(aaa, score, {});
