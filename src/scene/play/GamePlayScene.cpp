@@ -559,10 +559,11 @@ std::uint64_t effectiveRealtimeTouchLayoutRevision(
   return presentationRevision;
 }
 
-gameplay::VirtualControllerLayout currentVirtualControllerLayout(
+const gameplay::VirtualControllerLayout &currentVirtualControllerLayout(
+    gameplay::VirtualControllerLayoutCache &cache,
     const input::VirtualControllerConfig &config, int keyMode,
     const gameplay::RealtimeTouchUiTransform &transform) {
-  return gameplay::makeVirtualControllerLayout(
+  return cache.get(
       config, keyMode,
       {.x = 0.0F,
        .y = 0.0F,
@@ -597,7 +598,8 @@ void appendVirtualControllerHitRegions(
   }
 }
 
-void renderVirtualControllerOverlay(const gameplay::VirtualControllerLayout &layout,
+void renderVirtualControllerOverlay(rendering::SimpleBatchRenderer &batch,
+                                  const gameplay::VirtualControllerLayout &layout,
                                   float spinScratchRotationDegrees,
                                   const std::unordered_map<int, bool> &lanePressed,
                                   bool startButtonPressed,
@@ -621,7 +623,6 @@ void renderVirtualControllerOverlay(const gameplay::VirtualControllerLayout &lay
       ui_theme::withAlpha(ui_theme::lime(), 198).toABGR();
   const uint32_t selectPressedFill =
       ui_theme::withAlpha(ui_theme::lime(), 72).toABGR();
-  rendering::SimpleBatchRenderer batch;
   batch.setSubmitView(rendering::ui_view);
   batch.begin();
   for (const auto &element : layout.elements) {
@@ -1025,6 +1026,7 @@ buildRealtimeGameplayNoteLookup(const bms_parser::Chart &chart) {
 
 std::optional<gameplay::RealtimeTouchLayout>
 buildRealtimeTouchLayout(const PlayfieldPresentation &presentation,
+                         gameplay::VirtualControllerLayoutCache &controllerCache,
                          bool dragMode, const bms_parser::ChartMeta &chartMeta,
                          const input::VirtualControllerConfig &virtualController,
                          input::PlayfieldTouchConfig touchConfig,
@@ -1032,8 +1034,8 @@ buildRealtimeTouchLayout(const PlayfieldPresentation &presentation,
   auto layout = presentation.touchLayout();
   layout.dragMode = dragMode;
   layout.touchConfig = touchConfig;
-  const auto controller = currentVirtualControllerLayout(
-      virtualController, chartMeta.KeyMode, transform);
+  const auto &controller = currentVirtualControllerLayout(
+      controllerCache, virtualController, chartMeta.KeyMode, transform);
   auto controllerRegions =
       gameplay::makeVirtualControllerTouchRegions(controller, transform);
   if (!controllerRegions.empty()) {
@@ -2187,7 +2189,16 @@ void GamePlayScene::refreshGameplayPresentationGeometry() {
   if (inputHandler != nullptr && presentation != nullptr &&
       presentation->activeMode() == PresentationMode::BuiltIn) {
     inputHandler->setPlayAreaWidth(playfieldPresentationConfiguration.playAreaWidth);
-    inputHandler->setTouchLaneOrder(presentation->touchLayout().lanes);
+    const auto revision = presentation->touchLayoutRevision();
+    if (inputLaneOrderRevision != revision) {
+      const auto layout = presentation->touchLayout();
+      if (!layout.lanes.empty()) {
+        inputHandler->setTouchLaneOrder(layout.lanes);
+        inputLaneOrderRevision = revision;
+      }
+    }
+  } else {
+    inputLaneOrderRevision.reset();
   }
 #if ASOBMASHOW_ENABLE_LUA_GAMEPLAY_SKINS
   auto *coordinator =
@@ -2279,7 +2290,8 @@ bool GamePlayScene::startRealtimeGameplayAuthority() {
   if (!options.autoPlay) {
     presentation->refreshGeometry();
     touchLayout = buildRealtimeTouchLayout(
-        *presentation, assist_options::isDragMode(options.assistOption),
+        *presentation, virtualControllerLayoutCache,
+        assist_options::isDragMode(options.assistOption),
         chart->Meta, virtualControllerConfig,
         context.inputProfile.playfieldTouchForKeyMode(presentationKeyMode()),
         realtimeTouchUiTransform());
@@ -2664,7 +2676,8 @@ bool GamePlayScene::publishRealtimeTouchHitSnapshot() {
     if (chart != nullptr) {
       appendVirtualControllerHitRegions(
           snapshot.regionsTopmostFirst,
-          currentVirtualControllerLayout(virtualControllerConfig,
+          currentVirtualControllerLayout(virtualControllerLayoutCache,
+                                         virtualControllerConfig,
                                          chart->Meta.KeyMode,
                                          session.layoutRefreshKey.uiTransform),
           session.layoutRefreshKey.layoutRevision);
@@ -2929,7 +2942,8 @@ void GamePlayScene::refreshRealtimeTouchLayout() {
   const auto switchMicros = nowMicros();
   presentation->refreshGeometry();
   const auto layout = buildRealtimeTouchLayout(
-      *presentation, assist_options::isDragMode(options.assistOption),
+      *presentation, virtualControllerLayoutCache,
+      assist_options::isDragMode(options.assistOption),
       chart->Meta, virtualControllerConfig,
       context.inputProfile.playfieldTouchForKeyMode(presentationKeyMode()),
       currentKey.uiTransform);
@@ -3638,6 +3652,7 @@ void GamePlayScene::init() {
           }
         });
     inputHandler = ownedInputHandler.get();
+    inputLaneOrderRevision.reset();
     inputHandler->setDragModeEnabled(
         assist_options::isDragMode(options.assistOption));
     inputHandler->setLongNoteHeldCallback([this](int lane) -> std::optional<bool> {
@@ -6437,7 +6452,9 @@ void GamePlayScene::capturePlayfieldVisualState(
         }
         return options.courseSession->beatorajaSkinStageTitles();
       }(),
-      .startLaneIndicators = preparationPlan.laneIndicator.lanes,
+      .startLaneIndicators = startLaneIndicatorsVisible
+                                 ? preparationPlan.laneIndicator.lanes
+                                 : std::vector<int>{},
       .startLaneIndicatorsVisible = startLaneIndicatorsVisible,
       .laneCoverPercent = laneCover.percent,
       .laneCoverEnabled = laneCover.enabled,
@@ -7272,12 +7289,14 @@ void GamePlayScene::renderScene() {
       }
     }
     if (virtualControllerReady) {
-      renderVirtualControllerOverlay(currentVirtualControllerLayout(
-          virtualControllerConfig, chart->Meta.KeyMode,
-          realtimeTouchUiTransform()),
-                                     spinScratchRotationDegrees, lanePressed,
-                                     startButtonPressed, selectButtonPressed,
-                                     commandScratchPressed);
+      renderVirtualControllerOverlay(
+          virtualControllerBatch,
+          currentVirtualControllerLayout(virtualControllerLayoutCache,
+                                         virtualControllerConfig,
+                                         chart->Meta.KeyMode,
+                                         realtimeTouchUiTransform()),
+          spinScratchRotationDegrees, lanePressed, startButtonPressed,
+          selectButtonPressed, commandScratchPressed);
     }
   }
 #if TARGET_OS_IPHONE || TARGET_IPHONE_SIMULATOR || TARGET_OS_ANDROID
@@ -7617,7 +7636,7 @@ void GamePlayScene::renderCoursePauseHoldRing() {
   const uint32_t baseColor = app_theme::withAlpha(app_theme::textPrimary(), 72).toABGR();
   const uint32_t progressColor = app_theme::amber().toABGR();
 
-  rendering::SimpleBatchRenderer batch;
+  auto &batch = coursePauseRingBatch;
   batch.setSubmitView(rendering::ui_view);
   batch.begin();
   addRingArc(batch, cx, cy, radius, -kPi * 0.5f, kPi * 2.0f, thickness,

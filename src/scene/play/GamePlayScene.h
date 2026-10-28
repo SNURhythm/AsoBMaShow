@@ -19,6 +19,8 @@
 #include "PlayfieldChartVisualModel.h"
 #include "PlayfieldProjection.h"
 #include "PlayfieldVisualState.h"
+#include "VirtualControllerLayout.h"
+#include "../../rendering/SimpleBatchRenderer.h"
 #include "StartSelectControl.h"
 #include "GuidedAccessReminder.h"
 #include "GuidedAccessInstructionView.h"
@@ -60,6 +62,10 @@ private:
   bms_parser::Chart *chart = nullptr;
   bool scratchlessAllowed = false;
   input::VirtualControllerConfig virtualControllerConfig;
+  gameplay::VirtualControllerLayoutCache virtualControllerLayoutCache;
+  rendering::SimpleBatchRenderer virtualControllerBatch;
+  rendering::SimpleBatchRenderer coursePauseRingBatch;
+  std::optional<std::uint64_t> inputLaneOrderRevision;
   [[nodiscard]] int presentationKeyMode() const;
   bool isGamePaused = false;
   bool pauseHandledByInputPipeline = false;

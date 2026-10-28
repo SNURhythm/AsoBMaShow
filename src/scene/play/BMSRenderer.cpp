@@ -635,6 +635,7 @@ BMSRenderer::BMSRenderer(
   }
   state.orphanLongNotes.reserve(laneOrder.size() * 2);
   longNoteLookaheadScratch.reserve(laneOrder.size() * 2);
+  longNoteLookaheadFreeNodes.reserve(laneOrder.size() * 2);
   // flatten timeline
   size_t timelineCount = 0;
   for (const auto &measure : chart->Measures) {
@@ -2181,17 +2182,21 @@ double BMSRenderer::visibleTimeReferenceBpm() const {
   return referenceBpm;
 }
 
+float BMSRenderer::configuredHiSpeed() const {
+  if (configuredHispeedOverride.has_value()) {
+    return *configuredHispeedOverride;
+  }
+  const float visibleTimeMs = std::max(
+      1.0F, static_cast<float>(visibleTimeDurationMilliseconds));
+  return 240000.0F / static_cast<float>(visibleTimeReferenceBpm()) /
+         visibleTimeMs * hispeedMultiplier * laneCoverHispeedFactor;
+}
+
 BuiltInRendererTraversal BMSRenderer::builtInProjectionTraversal() const {
   // This is intentionally the single source for the capture-time projection
   // geometry and render-time forward walk.  GamePlayScene can freeze it in
   // PlayfieldProjectionRequest without reimplementing green-number math.
-  const float visibleTimeMs = std::max(
-      1.0F, static_cast<float>(visibleTimeDurationMilliseconds));
-  const float configuredHispeed =
-      configuredHispeedOverride.has_value()
-          ? *configuredHispeedOverride
-          : 240000.0F / static_cast<float>(visibleTimeReferenceBpm()) /
-                visibleTimeMs * hispeedMultiplier * laneCoverHispeedFactor;
+  const float configuredHispeed = configuredHiSpeed();
   const float hispeed =
       configuredHispeed *
       static_cast<float>(gameplay_timing::playbackTravelScale(playbackRate));
@@ -2245,7 +2250,7 @@ int BMSRenderer::effectiveVisibleTimeGreenNumber() const {
           ? currentBpm
           : visibleTimeReferenceBpm();
   const auto duration = gameplay_visible_time::currentDurationMilliseconds(
-      bpm, builtInProjectionTraversal().configuredHispeed,
+      bpm, configuredHiSpeed(),
       noteStartPositionPercent, laneCoverEnabled, currentScrollRate,
       currentSpeedMultiplier);
   return duration ? gameplay_visible_time::durationToGreenNumber(*duration)
@@ -2254,20 +2259,19 @@ int BMSRenderer::effectiveVisibleTimeGreenNumber() const {
 }
 
 std::string BMSRenderer::laneCoverVisibleTimeLabel() const {
-  const int greenNumber = effectiveVisibleTimeGreenNumber();
   if (visibleTimeUseMilliseconds) {
     const double bpm = currentBpm > 0.0 && std::isfinite(currentBpm)
                            ? currentBpm
                            : visibleTimeReferenceBpm();
     const auto duration = gameplay_visible_time::currentDurationMilliseconds(
-        bpm, builtInProjectionTraversal().configuredHispeed,
+        bpm, configuredHiSpeed(),
         noteStartPositionPercent, laneCoverEnabled, currentScrollRate,
         currentSpeedMultiplier);
     const int milliseconds = duration.value_or(
         std::max(1, visibleTimeDurationMilliseconds));
     return std::to_string(milliseconds) + " ms";
   }
-  return std::to_string(greenNumber);
+  return std::to_string(effectiveVisibleTimeGreenNumber());
 }
 
 double BMSRenderer::scrollPositionAtTime(long long timeMicros) const {
@@ -3451,11 +3455,34 @@ void BMSRenderer::renderFrame(
   gameplay_note_submission_order::Allocator submissionOrder;
   const auto pastLongNoteOrder = submissionOrder.captureLongNote();
   auto &longNoteLookahead = longNoteLookaheadScratch;
-  longNoteLookahead.clear();
+  // Recycle nodes as well as buckets. clear()/erase() would free every
+  // visible head each frame, despite the map's retained bucket capacity.
+  while (!longNoteLookahead.empty()) {
+    longNoteLookaheadFreeNodes.push_back(
+        longNoteLookahead.extract(longNoteLookahead.begin()));
+  }
+  const auto forgetLongNoteHead = [&](bms_parser::LongNote *head) {
+    auto node = longNoteLookahead.extract(head);
+    if (node) {
+      longNoteLookaheadFreeNodes.push_back(std::move(node));
+    }
+  };
   const auto rememberLongNoteHead =
       [&](bms_parser::LongNote *longNote, float headY,
           const auto &orderProvider) {
-        auto [it, inserted] = longNoteLookahead.try_emplace(longNote);
+        auto it = longNoteLookahead.find(longNote);
+        const bool inserted = it == longNoteLookahead.end();
+        if (inserted) {
+          if (longNoteLookaheadFreeNodes.empty()) {
+            it = longNoteLookahead.try_emplace(longNote).first;
+          } else {
+            auto node = std::move(longNoteLookaheadFreeNodes.back());
+            longNoteLookaheadFreeNodes.pop_back();
+            node.key() = longNote;
+            node.mapped() = {};
+            it = longNoteLookahead.insert(std::move(node)).position;
+          }
+        }
         it->second.headY = headY;
         if (!inserted) {
           return;
@@ -3622,7 +3649,7 @@ void BMSRenderer::renderFrame(
                            it->second.order,
                            it->second.renderBudgetReserved);
               // remove from lookahead
-              longNoteLookahead.erase(longNote->Head);
+              forgetLongNoteHead(longNote->Head);
             } else {
               const bool renderBudgetReserved =
                   chartEntityRenderBudget.tryConsume(
@@ -3658,7 +3685,7 @@ void BMSRenderer::renderFrame(
             // remove from orphan long note
             state.orphanLongNotes.erase(longNote->Head);
             // and from long note lookahead
-            longNoteLookahead.erase(longNote->Head);
+            forgetLongNoteHead(longNote->Head);
           } else {
             // add to orphan long note
             state.orphanLongNotes.insert(longNote);
@@ -5048,10 +5075,16 @@ void BMSRenderer::setReplayGhostRenderingEnabled(bool enabled) {
   replayGhostRenderingEnabled = enabled;
 }
 
-void BMSRenderer::setStartLaneIndicators(std::vector<int> lanes) {
-  std::ranges::sort(lanes);
-  lanes.erase(std::unique(lanes.begin(), lanes.end()), lanes.end());
-  startLaneIndicatorLanes = std::move(lanes);
+void BMSRenderer::setStartLaneIndicators(const std::vector<int> &lanes) {
+  if (startLaneIndicatorSourceLanes == lanes) {
+    return;
+  }
+  auto normalized = lanes;
+  std::ranges::sort(normalized);
+  normalized.erase(std::unique(normalized.begin(), normalized.end()),
+                   normalized.end());
+  startLaneIndicatorSourceLanes = lanes;
+  startLaneIndicatorLanes = std::move(normalized);
 }
 
 void BMSRenderer::setStartLaneIndicatorsVisible(bool visible) {

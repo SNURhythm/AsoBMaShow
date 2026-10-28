@@ -283,6 +283,21 @@ VirtualControllerLayout makeVirtualControllerLayout(
   return layout;
 }
 
+const VirtualControllerLayout &VirtualControllerLayoutCache::get(
+    const input::VirtualControllerConfig &config, int keyMode,
+    VirtualControllerCanvas canvas) {
+  if (initialized_ && config_ == config && keyMode_ == keyMode &&
+      canvas_ == canvas) {
+    return layout_;
+  }
+  layout_ = makeVirtualControllerLayout(config, keyMode, canvas);
+  config_ = config;
+  keyMode_ = keyMode;
+  canvas_ = canvas;
+  initialized_ = true;
+  return layout_;
+}
+
 std::vector<RealtimeTouchLaneRegion>
 makeVirtualControllerTouchRegions(const VirtualControllerLayout &layout,
                                   const RealtimeTouchUiTransform &transform) {

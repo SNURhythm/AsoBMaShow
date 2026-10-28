@@ -256,6 +256,7 @@ private:
   std::vector<size_t> blueKeyLaneIndices;
   std::vector<size_t> scratchLaneIndices;
   std::vector<int> startLaneIndicatorLanes;
+  std::vector<int> startLaneIndicatorSourceLanes;
   std::unordered_map<int, start_lane_indicator::ColorRole>
       startLaneIndicatorColorRoles;
 
@@ -288,6 +289,8 @@ private:
   };
   std::unordered_map<bms_parser::LongNote *, LongNoteLookahead>
       longNoteLookaheadScratch;
+  std::vector<decltype(longNoteLookaheadScratch)::node_type>
+      longNoteLookaheadFreeNodes;
   gameplay_chart_entity_render_budget::Budget chartEntityRenderBudget;
   BMSRendererState state;
   int scratchLaneCount = 0;
@@ -483,6 +486,7 @@ private:
                                                          float renderY) const;
   std::optional<std::pair<float, float>> projectLanePointToUi(
       float worldX, float worldY) const;
+  float configuredHiSpeed() const;
   std::string laneCoverVisibleTimeLabel() const;
   float computeLaneX(int lane) const;
   void rebuildPlayAreaGeometry();
@@ -651,7 +655,7 @@ public:
   void setAutoPlayMarkVisible(bool visible);
   void setTouchVisualizationEnabled(bool enabled);
   void setReplayGhostRenderingEnabled(bool enabled);
-  void setStartLaneIndicators(std::vector<int> lanes);
+  void setStartLaneIndicators(const std::vector<int> &lanes);
   void setStartLaneIndicatorsVisible(bool visible);
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
   [[nodiscard]] bool lanePressedForTesting(int lane) const {

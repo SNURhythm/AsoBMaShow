@@ -7720,6 +7720,7 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
 
     add_executable(realtime_touch_input_router_tests
         tests/realtime_touch_input_router_tests.cpp
+        tests/support/AllocationFailure.cpp
         src/scene/play/RealtimeTouchInputRouter.cpp
         src/scene/play/VirtualControllerLayout.cpp
     )

@@ -197,3 +197,71 @@ A suspected full-chart BPM summary was excluded from normal-play priorities:
 the scene supplies `configuredHispeedOverride`, bypassing the fallback that
 would call it. Verification for this documentation-only pass was call-site and
 guard inspection plus diff review; no build or device measurement was needed.
+
+## Implemented allocation cleanup
+
+The five further findings and the earlier long-note scratch finding are now
+addressed:
+
+- Gameplay owns retained batch renderers for the controller and course ring.
+- Controller layout is retained by configuration, key mode and canvas; render
+  and input geometry consume it by reference. Resize, deck, scratch mode,
+  supported mode and enable/disable changes invalidate it.
+- The built-in lane-order request runs on presentation revision changes and
+  retries when layout is unavailable. New input handlers and transitions away
+  from built-in mode invalidate the applied revision.
+- Scalar Hi-Speed queries no longer construct traversal lane vectors, and the
+  milliseconds label no longer computes an unused green number.
+- Unchanged indicator input skips copying/sorting; hidden frame captures omit
+  lane lists. Reappearing count-in indicators are recaptured from preparation.
+  The coordinator copies indicator lanes only for a visible skin overlay.
+- Long-note scratch recycles unordered-map node handles in retained storage.
+  Lookup, multiple heads per lane, budgets, head/tail pairing and iteration
+  behavior are preserved. Storage tracks peak concurrent scratch use rather
+  than accumulating chart history. No PMR dependency or deployment-floor
+  change is introduced.
+
+Regression checks reproduced the old scalar/indicator allocations and the
+uncached controller-layout allocations. The final live-play allocation test
+uses the configured Hi-Speed override supplied by gameplay; the legacy BPM
+summary fallback remains outside that test's zero-allocation contract.
+Controller tests also compare fresh versus cached routing/geometry after
+invalidation. All five selected native suites pass: built-in Metal renderer
+characterization, realtime touch routing, presentation coordination, visual
+state and projection. Desktop main and the unsigned iOS 15-targeted build
+pass. Independent review found no actionable correctness issue. These checks
+do not establish device frame-time savings or directly measure warm long-note
+node allocation counts.
+
+## Additional parallel inspection: remaining opportunities
+
+These findings are separate from the implemented cleanup:
+
+1. **Repeated camera inverses.** `Camera::deproject` (Camera.cpp:116) inverts
+   projection and view matrices for every point. Both configure and lane-cover
+   application refresh built-in geometry during preparation; each refresh
+   deprojects near/far points at four viewport corners. With a valid viewport
+   that is 32 matrix inversions even for an unchanged camera. Cache inverse
+   matrices at matrix-update boundaries, with dirty state independent of the
+   upload flags cleared by `render()`.
+2. **Hidden touch reconstruction.** Built-in preparation clears and reconstructs
+   live touch collections from the captured snapshot even when visualization
+   is disabled. Drawing is separately gated. Avoid hidden reconstruction or
+   consume the resolved snapshot directly; preserve release linger, rewind and
+   hide/show behavior. Snapshot Move samples must not be mistaken for standalone
+   events after clearing the active map.
+3. **Static metadata formatting/copying.** Frame capture formats play options
+   and reconstructs course stage-title vectors, then copies them through
+   authority/captured/prepared state. Share immutable metadata with explicit
+   practice/replay/course invalidation. Mutable IR account data is not safe to
+   cache under the same assumption.
+4. **Repeated round-shape trigonometry.** SimpleBatchRenderer recomputes the
+   same corner angles for segment counts 4 through 12. Reusable unit-corner
+   samples could remove sine/cosine work for visible rounded shapes, retaining
+   vertex order and rounding. Zero-radius rectangles already bypass this.
+
+The independent pass excluded replay-ghost event copying (the payload is a
+span), full-chart note copying during built-in capture (that path opts out),
+and unconditional graph-history rebuilding (updates are guarded). Coordinator
+failure payloads deliberately allocate before the no-submission boundary and
+must not be removed without preserving those failure guarantees.

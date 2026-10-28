@@ -4234,6 +4234,36 @@ void verifyPreviewPacemakerDiff(const RenderTarget &target) {
   rendering::updateUIScale(kDrawableWidth, kDrawableHeight);
 }
 
+void verifyStableHudQueriesAvoidAllocations(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  SyntheticChartFixture fixture;
+  Judge judge(fixture.chart->Meta.Rank);
+  BMSRenderer renderer(fixture.chart.get(), judge.timingWindows, 500, true);
+  auto config = presentationConfig(0);
+  // Live gameplay supplies this override; the legacy fallback intentionally
+  // computes a chart BPM summary and is outside this allocation contract.
+  config.configuredHispeed = renderer.projectionTraversal().configuredHispeed;
+  renderer.configure(config);
+  const auto expectedGreen = renderer.effectiveVisibleTimeGreenNumber();
+  const std::vector<int> indicators{3, 1, 3, 2};
+  renderer.setStartLaneIndicators(indicators);
+  std::size_t allocations = 0;
+  int actualGreen = 0;
+  {
+    test_support::AllocationSizeObserver observer;
+    for (int frame = 0; frame < 4; ++frame) {
+      actualGreen = renderer.effectiveVisibleTimeGreenNumber();
+      renderer.setStartLaneIndicatorsVisible(frame % 2 == 0);
+      renderer.setStartLaneIndicators(indicators);
+    }
+    allocations = observer.count();
+  }
+  expect(actualGreen == expectedGreen,
+         "allocation-free scalar queries preserve the green number");
+  expect(allocations == 0,
+         "stable scalar HUD queries and indicator updates allocate nothing");
+}
+
 void verifyDeferredGameplayHudTextures(const RenderTarget &target) {
   configureGeometryAndViews(target.framebuffer);
   SyntheticChartFixture fixture;
@@ -4780,6 +4810,7 @@ int main() {
       verifyPreparedFrameRetainsRecentJudgementIndicatorSamples();
       verifyTimingOnlySampleDoesNotBecomeAHudJudgement();
       verifyPreparedFrameKeepsTheLatestNonSampledJudgementForHudText();
+      verifyStableHudQueriesAvoidAllocations(target);
       verifyDeferredGameplayHudTextures(target);
       verifyPreparedFrameUsesSavedBestGhostForBuiltInBestPacemaker();
       verifyPreparedFrameKeepsLinearBestPacemakerWithoutSavedGhost();
