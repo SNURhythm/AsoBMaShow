@@ -206,7 +206,7 @@ bool ChartGoalsScene::checkProfile() {
   if (profileId_ == context.profileManager.activeProfile().id) return true;
   profileId_ = context.profileManager.activeProfile().id;
   initial_.reset(); initialMode_.reset(); resolved_.reset(); selected_.reset();
-  draft_ = {}; page_ = {}; offset_ = achievedOffset_ = 0; showAchieved_ = false;
+  draft_ = {}; page_ = {}; offset_ = achievedOffset_ = 0;
   editing_ = customScore_ = confirmRemove_ = loadFailed_ = false;
   message_.clear(); customRate_.clear();
   return false;
@@ -233,12 +233,19 @@ void ChartGoalsScene::reload() {
   try {
     auto session = context.chartRepository.OpenSession(&context.scoreRepository);
     if (!session) throw std::runtime_error("Chart storage is unavailable.");
-    for (const auto &[rank, count] : session->GoalRecommendationCounts())
+    recommendationTables_ = session->SelectDifficultyTables();
+    if (recommendationTable_ && std::ranges::none_of(recommendationTables_, [this](const auto &table) {
+          return table.id == recommendationTable_;
+        })) recommendationTable_ = 0;
+    for (const auto &[rank, count] : session->GoalRecommendationCounts(recommendationTable_))
       recommendations_[rank].count = count;
   } catch (const std::exception &failure) {
     SDL_Log("Cannot load goal recommendations: %s", failure.what());
     message_ = i18n::tr("goals.ui.storage_error");
   }
+  if (recommendationRank_ && !recommendations_.contains(*recommendationRank_))
+    recommendationRank_ = recommendations_.empty() ? std::optional<int>{} : recommendations_.begin()->first;
+  if (recommendationRank_) loadRecommendations(*recommendationRank_, 0);
   std::string error;
   page_ = {};
   loadFailed_ = false;
@@ -266,7 +273,7 @@ void ChartGoalsScene::loadRecommendations(int rank, int offset) {
   try {
     auto session = context.chartRepository.OpenSession(&context.scoreRepository);
     if (!session) throw std::runtime_error("Chart storage is unavailable.");
-    const auto candidates = session->GoalRecommendations(rank, offset);
+    const auto candidates = session->GoalRecommendations(rank, offset, recommendationTable_, recommendationSortTable_);
     ChartMetaQuery query;
     query.allowedSha256 = std::vector<std::string>{};
     for (const auto &entry : candidates) query.allowedSha256->push_back(entry.sha256);
@@ -399,6 +406,7 @@ void ChartGoalsScene::navigate(bool practice) {
   }, 0, true);
 }
 void ChartGoalsScene::build() {
+  if (navigationScroll_) navigationOffset_ = navigationScroll_->getScrollOffset();
   for (auto *view : views) delete view;
   views.clear();
   root_ = new View(0, 0, rendering::window_width, rendering::window_height);
@@ -406,7 +414,42 @@ void ChartGoalsScene::build() {
       ->setThemedBackgroundColor(app_theme::mainMenuBackdrop);
   addView(root_);
   action(root_, i18n::tr("kombo.ui.back"), [this] { back(); })->setWidth(140);
-  scroll_ = new ScrollView(); scroll_->setFlex(1)->setMinHeight(0); root_->addView(scroll_);
+  auto *content = new View();
+  content->setFlexDirection(FlexDirection::Row)->setGap(12)->setFlex(1)->setMinHeight(0);
+  root_->addView(content);
+  navigationScroll_ = nullptr;
+  if (!editing_ && !selected_) {
+    navigationScroll_ = new ScrollView();
+    navigationScroll_->setWidthPercent(30)->setMinHeight(0);
+    content->addView(navigationScroll_);
+    auto *navigation = new View();
+    navigation->setFlexDirection(FlexDirection::Column)->setGap(6);
+    const auto tab = [this, navigation](const std::string &title, OverviewTab value) {
+      action(navigation, title, [this, value] { later([this, value] {
+        overviewTab_ = value;
+        if (value == OverviewTab::Recommendations && !recommendationRank_ && !recommendations_.empty()) {
+          recommendationRank_ = recommendations_.begin()->first;
+          loadRecommendations(*recommendationRank_, 0);
+        }
+      }); },
+          overviewTab_ == value ? app_theme::ActionCategory::Primary : app_theme::ActionCategory::Neutral);
+    };
+    tab(i18n::tr("goals.ui.in_progress"), OverviewTab::Ongoing);
+    tab(i18n::tr("goals.ui.recommendations"), OverviewTab::Recommendations);
+    if (overviewTab_ == OverviewTab::Recommendations) {
+      for (const auto &[rank, group] : recommendations_) {
+        auto *sub = action(navigation, i18n::format("goals.ui.near_rank", {
+            {"rank", rank >= 50 ? kombo::lampLabel(rank) : kombo::scoreRankLabel(rank)},
+            {"count", std::to_string(group.count)}}), [this, rank] { later([this, rank] {
+              recommendationRank_ = rank; loadRecommendations(rank, 0);
+            }); }, recommendationRank_ == rank ? app_theme::ActionCategory::Primary : app_theme::ActionCategory::Neutral);
+        sub->setMargin(Edge::Left, 16);
+      }
+    }
+    tab(i18n::tr("goals.ui.achieved"), OverviewTab::Achieved);
+    navigationScroll_->setContentView(navigation);
+  }
+  scroll_ = new ScrollView(); scroll_->setFlex(1)->setMinWidth(0)->setMinHeight(0); content->addView(scroll_);
   auto *outer = new View(); outer->setFlexDirection(FlexDirection::Column)->setAlignItems(YGAlignCenter);
   auto *body = new View();
   body->setWidthPercent(100)->setFlexDirection(FlexDirection::Column)->setGap(16)->setPadding(Edge::Bottom, 24);
@@ -508,27 +551,32 @@ void ChartGoalsScene::build() {
       } else action(detail, i18n::tr("goals.ui.remove"), [this] { later([this] { confirmRemove_ = true; }); });
     }
   } else {
-    label(body, i18n::tr("goals.ui.intro"), 19);
-    if (page_.goals.empty()) label(body, i18n::format("goals.ui.empty", {{"flag", "⚑"}}));
-    if (!recommendations_.empty()) {
+    if (overviewTab_ == OverviewTab::Recommendations) {
       label(body, i18n::tr("goals.ui.recommendations"), 24);
       label(body, i18n::tr("goals.ui.near_help"), 18);
       label(body, i18n::tr("goals.ui.gauge_near_help"), 18);
-    }
-    std::vector<int> recommendationRanks;
-    for (const auto &[rank, group] : recommendations_) recommendationRanks.push_back(rank);
-    std::sort(recommendationRanks.begin(), recommendationRanks.end(), [](int left, int right) {
-      return clearLampOrder(left) < clearLampOrder(right);
-    });
-    for (int rank : recommendationRanks) {
+      std::vector<DropdownView::Option> tables{{"0", i18n::tr("goals.ui.all_tables")}};
+      for (const auto &table : recommendationTables_)
+        tables.push_back({std::to_string(table.id), table.name});
+      select(body, portal_, i18n::tr("goals.ui.table_filter"), std::move(tables),
+          std::to_string(recommendationTable_), [this](const std::string &id) { later([this, id] {
+            recommendationTable_ = std::stoi(id); reload();
+          }); });
+      if (recommendationTable_ != 0) {
+        auto *sorting = new View();
+        sorting->setFlexDirection(FlexDirection::Row)->setGap(8)->setFlexShrink(0);
+        body->addView(sorting);
+        for (const bool byTable : {false, true}) {
+          auto *button = action(sorting, i18n::tr(byTable ? "goals.ui.sort_table" : "goals.ui.sort_nearness"),
+              [this, byTable] { later([this, byTable] { recommendationSortTable_ = byTable;
+                if (recommendationRank_ && recommendations_.contains(*recommendationRank_)) loadRecommendations(*recommendationRank_, 0);
+              }); }, recommendationSortTable_ == byTable ? app_theme::ActionCategory::Primary : app_theme::ActionCategory::Neutral);
+          button->setFlex(1);
+        }
+      }
+      if (recommendationRank_ && recommendations_.contains(*recommendationRank_)) {
+      const int rank = *recommendationRank_;
       const auto &group = recommendations_.at(rank);
-      action(body, i18n::format("goals.ui.near_rank", {{"rank", rank>=50 ? kombo::lampLabel(rank) : kombo::scoreRankLabel(rank)},
-          {"count", std::to_string(group.count)}}), [this, rank] { later([this, rank] {
-        auto &group = recommendations_[rank];
-        if (group.expanded) group.expanded = false;
-        else loadRecommendations(rank, group.offset);
-      }); }, app_theme::ActionCategory::Neutral, group.expanded ? ui_icons::kHide : ui_icons::kPlus);
-      if (!group.expanded) continue;
       for (const auto &[candidate, record] : group.rows) {
         auto *row = card(body);
         goalIdentity(row, record.meta, &record, 24);
@@ -561,6 +609,7 @@ void ChartGoalsScene::build() {
           later([this, rank, offset] { loadRecommendations(rank, offset+chart_goals::pageSize); });
         });
     }
+    }
     const auto renderGroup = [this, body](bool achieved, int &offset) {
       std::vector<const chart_goals::GoalProgress *> entries;
       for (const auto &entry : page_.goals)
@@ -585,13 +634,11 @@ void ChartGoalsScene::build() {
         (achieved ? achievedOffset_ : offset_) += chart_goals::pageSize;
       }); });
     };
-    renderGroup(false, offset_);
-    if (std::ranges::any_of(page_.goals, [](const auto &entry) { return entry.progress.achieved; })) {
-      action(body, i18n::tr(showAchieved_ ? "goals.ui.hide_achieved" : "goals.ui.show_achieved"),
-          [this] { later([this] { showAchieved_ = !showAchieved_; }); },
-          app_theme::ActionCategory::Neutral, showAchieved_ ? ui_icons::kHide : ui_icons::kPlus);
-      if (showAchieved_) renderGroup(true, achievedOffset_);
-    }
+    if (overviewTab_ == OverviewTab::Ongoing) {
+      label(body, i18n::tr("goals.ui.intro"), 19);
+      if (page_.goals.empty()) label(body, i18n::format("goals.ui.empty", {{"flag", "⚑"}}));
+      renderGroup(false, offset_);
+    } else if (overviewTab_ == OverviewTab::Achieved) renderGroup(true, achievedOffset_);
   }
   if (!message_.empty()) label(body, message_, 19)->setThemedColor(app_theme::coral);
   addView(portal_); layout();
@@ -608,6 +655,10 @@ void ChartGoalsScene::layout() {
       ->setPadding(Edge::Right, 18 + safe.right * rendering::window_width);
 #endif
   root_->applyYogaLayout(); scroll_->refreshContentLayout();
+  if (navigationScroll_) {
+    navigationScroll_->refreshContentLayout();
+    navigationScroll_->setScrollOffset(navigationOffset_);
+  }
 }
 void ChartGoalsScene::back() {
   if (confirmRemove_) { later([this] { confirmRemove_ = false; }); return; }
@@ -637,4 +688,4 @@ EventHandleResult ChartGoalsScene::handleEvents(SDL_Event &event) {
   if (event.type == SDL_EVENT_KEY_DOWN && event.key.key == SDLK_ESCAPE) back();
   return {};
 }
-void ChartGoalsScene::cleanupScene() { root_ = nullptr; scroll_ = nullptr; portal_ = nullptr; }
+void ChartGoalsScene::cleanupScene() { root_ = nullptr; scroll_ = nullptr; navigationScroll_ = nullptr; portal_ = nullptr; }

@@ -45,7 +45,7 @@ struct ChartMetaQuery { std::optional<std::vector<std::string>> allowedSha256; b
 struct Charts {
   ScoreRepository *active=nullptr;
   struct Session {
-    std::vector<GoalRecommendation> GoalRecommendations(int,int) { return {{"active-chart"}}; }
+    std::vector<GoalRecommendation> GoalRecommendations(int,int,int,bool) { return {{"active-chart"}}; }
     void QueryChartMeta(const ChartMetaQuery &, std::vector<ChartMetaRecord> &rows) { rows.push_back({{"active-chart"}}); }
   };
   std::optional<Session> OpenSession(ScoreRepository *scores=nullptr) {
@@ -59,6 +59,7 @@ struct ChartGoalsScene {
   struct { Charts chartRepository; ScoreRepository scoreRepository; } context;
   struct Group { int offset=0; bool expanded=false; std::vector<std::pair<GoalRecommendation,ChartMetaRecord>> rows; };
   std::map<int,Group> recommendations_;
+  int recommendationTable_=0; bool recommendationSortTable_=false;
   std::string message_;
   void loadRecommendations(int,int);
 };
@@ -202,11 +203,11 @@ struct GoalProgress { Goal goal; struct { bool achieved = false; } progress; };
 }
 namespace app_theme { constexpr int textSecondary=0; enum class ActionCategory { Neutral }; }
 namespace ui_icons { constexpr int kHide=1, kPlus=2; }
-namespace i18n { std::string tr(const char *s) { return s; } }
+namespace i18n { std::string tr(const char *s) { return s; } std::string format(const char *s, std::initializer_list<std::pair<std::string,std::string>>) { return s; } }
 std::vector<std::string> titles, actions;
 View view;
 View *card(View *) { return &view; }
-View *label(View *, const std::string &s, int size) { if (size==24) titles.push_back(s); return &view; }
+View *label(View *, const std::string &s, int size=21) { if (size==24) titles.push_back(s); return &view; }
 std::string scope(const chart_goals::Goal &) { return "LN"; }
 void targets(View *, int) {}
 struct ChartMetaRecord {};
@@ -221,7 +222,8 @@ struct Scene {
   struct { std::vector<chart_goals::GoalProgress> goals; } page_;
   Context context;
   int offset_=0, achievedOffset_=0;
-  bool showAchieved_=false;
+  enum class OverviewTab { Ongoing, Recommendations, Achieved };
+  OverviewTab overviewTab_=OverviewTab::Ongoing;
   void later(std::function<void()> f) { f(); }
   void showGoal(chart_goals::Goal) {}
   void build() { titles.clear(); actions.clear(); View *body=&view; GROUPS }
@@ -234,11 +236,10 @@ int main() {
   }
   scene.build();
   assert(titles.size()==20 && titles.front()=="Active 0" && titles.back()=="Active 19");
-  assert(actions.back()=="goals.ui.show_achieved");
-  scene.showAchieved_=true; scene.achievedOffset_=20; scene.build();
-  assert(titles.size()==25 && titles[20]=="Done 20" && titles.back()=="Done 24");
-  scene.offset_=20; scene.build();
-  assert(titles.size()==10 && titles.front()=="Active 20" && titles[5]=="Done 20");
+  scene.overviewTab_=Scene::OverviewTab::Achieved; scene.achievedOffset_=20; scene.build();
+  assert(titles.size()==5 && titles.front()=="Done 20" && titles.back()=="Done 24");
+  scene.overviewTab_=Scene::OverviewTab::Ongoing; scene.offset_=20; scene.build();
+  assert(titles.size()==5 && titles.front()=="Active 20");
   scene.page_.goals.clear(); scene.build();
   assert(titles.empty() && actions.empty() && scene.offset_==0);
 }

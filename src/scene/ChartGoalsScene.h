@@ -35,6 +35,14 @@ private:
     std::vector<std::pair<GoalRecommendation, ChartMetaRecord>> rows;
   };
   std::map<int, RecommendationGroup> recommendations_;
+  std::vector<DifficultyTableInfo> recommendationTables_;
+  int recommendationTable_ = 0;
+  bool recommendationSortTable_ = false;
+  enum class OverviewTab { Ongoing, Recommendations, Achieved };
+  OverviewTab overviewTab_ = OverviewTab::Ongoing;
+  std::optional<int> recommendationRank_;
+  ScrollView *navigationScroll_ = nullptr;
+  float navigationOffset_ = 0;
   void showGoal(chart_goals::Goal);
   void saveGoal();
   void removeGoal();
@@ -53,7 +61,6 @@ private:
   chart_goals::Goal draft_;
   bool editing_ = false, customScore_ = false, confirmRemove_ = false, loadFailed_ = false;
   int offset_ = 0, achievedOffset_ = 0;
-  bool showAchieved_ = false;
   View *root_ = nullptr;
   ScrollView *scroll_ = nullptr;
   OverlayPortal *portal_ = nullptr;

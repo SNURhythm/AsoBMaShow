@@ -28,12 +28,24 @@ inline std::string recommendationCandidatesSql() {
         AND (COALESCE(c.total_long_notes,0)+COALESCE(c.total_backspin_notes,0)=0 OR r.ln_mode BETWEEN 1 AND 3))
   ))sql";
 }
-inline std::string recommendationPageSql() {
+inline std::string tableOrder(std::string_view hash, int tableId) {
+  const auto id = std::to_string(tableId);
+  const std::string value(hash);
+  return "(SELECT MIN(entry_order) FROM (SELECT e.sort_order AS entry_order FROM difficulty_table_entries e "
+      "WHERE e.table_id=" + id + " AND e.sha256=" + value +
+      " UNION ALL SELECT e.sort_order FROM difficulty_table_entries e WHERE e.table_id=" + id +
+      " AND e.md5<>'' AND e.md5 IN (SELECT c.md5 FROM chart_meta c WHERE c.sha256=" + value + ")))";
+}
+inline std::string tableFilter(std::string_view hash, int tableId) {
+  return tableId == 0 ? "" : " AND " + tableOrder(hash, tableId) + " IS NOT NULL";
+}
+inline std::string recommendationPageSql(int tableId = 0, bool sortTable = false) {
   return recommendationCandidatesSql() +
       " SELECT sha256,ln_mode,target,score,max_score,remaining FROM ("
       "SELECT *,ROW_NUMBER() OVER(PARTITION BY sha256 ORDER BY remaining,1.0*remaining/max_score,ln_mode) AS mode_choice "
-      "FROM candidates WHERE target=?) WHERE mode_choice=1"
-      " ORDER BY remaining, 1.0*remaining/max_score, sha256 LIMIT 20 OFFSET ?";
+      "FROM candidates AS candidate WHERE target=?" + tableFilter("candidate.sha256", tableId) + ") AS ranked WHERE mode_choice=1"
+      " ORDER BY " + (sortTable && tableId ? tableOrder("ranked.sha256", tableId) + ", " : "") +
+      "remaining, 1.0*remaining/max_score, sha256 LIMIT 20 OFFSET ?";
 }
 inline std::string gaugeRecommendationCandidatesSql() {
   return R"sql(WITH lamp_bests AS (
@@ -52,12 +64,13 @@ inline std::string gaugeRecommendationCandidatesSql() {
         AND (COALESCE(c.total_long_notes,0)+COALESCE(c.total_backspin_notes,0)=0 OR g.ln_mode BETWEEN 1 AND 3))
   ))sql";
 }
-inline std::string gaugeRecommendationPageSql() {
+inline std::string gaugeRecommendationPageSql(int tableId = 0, bool sortTable = false) {
   return gaugeRecommendationCandidatesSql() +
       " SELECT chart_sha256,ln_mode,target,gauge_value,border,death_notes,total_notes,gap,combo_break FROM ("
       "SELECT *,ROW_NUMBER() OVER(PARTITION BY chart_sha256 ORDER BY gap,death_notes,ln_mode) AS mode_choice "
-      "FROM candidates WHERE target=?) WHERE mode_choice=1"
-      " ORDER BY gap,death_notes,chart_sha256 LIMIT 20 OFFSET ?";
+      "FROM candidates AS candidate WHERE target=?" + tableFilter("candidate.chart_sha256", tableId) + ") AS ranked WHERE mode_choice=1"
+      " ORDER BY " + (sortTable && tableId ? tableOrder("ranked.chart_sha256", tableId) + ", " : "") +
+      "gap,death_notes,chart_sha256 LIMIT 20 OFFSET ?";
 }
 
 }

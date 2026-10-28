@@ -1142,11 +1142,36 @@ void testChartQueryBehaviorMatrix() {
         "',1,50,59,60,0,100,1)"));
   }
   assert(session->GoalRecommendationCounts().at(50) == 1);
+  assert(session->GoalRecommendationCounts(tables.front().id).at(50) == 1);
+  assert(session->GoalRecommendations(50, 0, tables.front().id, true).size() == 1);
+  assert(session->GoalRecommendationCounts(-999).empty());
   for (int target : {50, 150}) {
     const auto recommendations = session->GoalRecommendations(target, 0);
     assert(recommendations.size() == 1 && recommendations[0].sha256 == shaC &&
            recommendations[0].target == 50);
   }
+  // Filtering and sorting occur before paging, including MD5-only table entries.
+  constexpr auto shaE = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+  {
+    auto db = openDatabase(scorePath);
+    assert(execute(db.get(), "INSERT INTO goal_gauge_best VALUES('" + std::string(shaE) + "',0,50,56,60,0,100,4)"));
+  }
+  {
+    auto db = openDatabase(chartPath);
+    assert(execute(db.get(), "UPDATE difficulty_table_entries SET sha256='',sort_order=-1 WHERE sha256='" + std::string(shaE) + "'"));
+  }
+  const auto nearest = session->GoalRecommendations(50, 0, tables.front().id, false);
+  const auto ordered = session->GoalRecommendations(50, 0, tables.front().id, true);
+  assert(session->GoalRecommendationCounts(tables.front().id).at(50) == 2);
+  assert(nearest.size() == 2 && nearest[0].sha256 == shaC && nearest[1].sha256 == shaE);
+  assert(ordered.size() == 2 && ordered[0].sha256 == shaE && ordered[1].sha256 == shaC);
+  {
+    auto db = openDatabase(chartPath);
+    assert(execute(db.get(), "DELETE FROM difficulty_table_entries WHERE md5='55555555555555555555555555555555'"));
+  }
+  assert(session->GoalRecommendationCounts(tables.front().id).at(50) == 1);
+  assert(session->GoalRecommendations(50, 0, tables.front().id, true).size() == 1);
+
 }
 
 void testDifficultyEntryDownloadUrlsFollowTheirSourceRows() {

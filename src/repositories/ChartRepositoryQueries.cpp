@@ -3932,13 +3932,13 @@ ChartRepository::Session::LoadFolderClearDataByLongNoteMode(
 }
 #endif
 
-std::map<int, int> ChartRepository::Session::GoalRecommendationCounts() {
+std::map<int, int> ChartRepository::Session::GoalRecommendationCounts(int tableId) {
   ScoreRepository::PreparedScoreQueryDatabase prepared(impl_->scoreRepository(), *this);
   if (prepared.error()) throw std::runtime_error(*prepared.error());
   auto *db = impl_->database();
   SqliteStatementHandle query;
   if (prepareSqliteStatement(db, chart_goals::recommendationCandidatesSql() +
-      " SELECT target, COUNT(DISTINCT sha256) FROM candidates GROUP BY target", query) != SQLITE_OK)
+      " SELECT target, COUNT(DISTINCT sha256) FROM candidates AS candidate WHERE 1=1" + chart_goals::tableFilter("candidate.sha256", tableId) + " GROUP BY target", query) != SQLITE_OK)
     throw std::runtime_error(sqliteDatabaseError(db));
   std::map<int, int> counts;
   int rc;
@@ -3947,20 +3947,20 @@ std::map<int, int> ChartRepository::Session::GoalRecommendationCounts() {
   if (rc != SQLITE_DONE) throw std::runtime_error(sqliteDatabaseError(db));
   query.reset();
   if (prepareSqliteStatement(db, chart_goals::gaugeRecommendationCandidatesSql() +
-      " SELECT target,COUNT(DISTINCT chart_sha256) FROM candidates GROUP BY target", query) != SQLITE_OK)
+      " SELECT target,COUNT(DISTINCT chart_sha256) FROM candidates AS candidate WHERE 1=1" + chart_goals::tableFilter("candidate.chart_sha256", tableId) + " GROUP BY target", query) != SQLITE_OK)
     throw std::runtime_error(sqliteDatabaseError(db));
   while ((rc = sqlite3_step(query)) == SQLITE_ROW)
     counts[sqlite3_column_int(query, 0)] = sqlite3_column_int(query, 1);
   if (rc != SQLITE_DONE) throw std::runtime_error(sqliteDatabaseError(db));
   return counts;
 }
-std::vector<GoalRecommendation> ChartRepository::Session::GoalRecommendations(int target, int offset) {
+std::vector<GoalRecommendation> ChartRepository::Session::GoalRecommendations(int target, int offset, int tableId, bool sortTable) {
   target = normalizeClearLamp(target);
   ScoreRepository::PreparedScoreQueryDatabase prepared(impl_->scoreRepository(), *this);
   if (prepared.error()) throw std::runtime_error(*prepared.error());
   auto *db = impl_->database();
   SqliteStatementHandle query;
-  if (prepareSqliteStatement(db, (target>=kClearTypeLightAssistedEasyClearRank ? chart_goals::gaugeRecommendationPageSql() : chart_goals::recommendationPageSql()), query) != SQLITE_OK ||
+  if (prepareSqliteStatement(db, (target>=kClearTypeLightAssistedEasyClearRank ? chart_goals::gaugeRecommendationPageSql(tableId, sortTable) : chart_goals::recommendationPageSql(tableId, sortTable)), query) != SQLITE_OK ||
       sqlite3_bind_int(query, 1, target) != SQLITE_OK || sqlite3_bind_int(query, 2, std::max(0, offset)) != SQLITE_OK)
     throw std::runtime_error(sqliteDatabaseError(db));
   std::vector<GoalRecommendation> rows;
