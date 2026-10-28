@@ -254,8 +254,13 @@ void ChartGoalsScene::saveGoal() {
   catch (const std::exception &) { message_ = i18n::tr("kombo.ui.target_required"); return; }
   std::string error;
   if (!context.scoreRepository.SaveChartGoal(candidate, error)) {
-    SDL_Log("Cannot save personal goal: %s", error.c_str());
-    message_ = i18n::tr("goals.ui.storage_error"); return;
+    if (error == "goal_already_achieved") {
+      message_ = i18n::tr("goals.ui.already_achieved");
+    } else {
+      SDL_Log("Cannot save personal goal: %s", error.c_str());
+      message_ = i18n::tr("goals.ui.storage_error");
+    }
+    return;
   }
   draft_ = std::move(candidate);
   selected_ = chart_goals::GoalProgress{draft_, {}};

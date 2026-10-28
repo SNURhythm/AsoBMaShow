@@ -27,8 +27,8 @@ unchanged and are not required to use goals.
 - Goal details display **Set** and **First achieved** dates in local time.
   Saving an unchanged target preserves its dates; changing the target starts a
   new timeline. Goals created before date tracking show “Not recorded” for an
-  unknown set date. A target already met by existing records is achieved when
-  it is set; imported records are dated when their achievement is recognized.
+  unknown set date. New or changed targets must not already be achieved by
+  eligible records; imported records count when evaluating targets.
 - A newly achieved goal shows a short flag-burst celebration on the result
   screen after the score is saved. It waits for the Kombo panel to close and
   does not replay for later clears, view rebuilds, replay, practice, or autoplay.

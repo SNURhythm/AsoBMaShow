@@ -20,10 +20,10 @@ struct Scores {
     if (fail) { error = "storage failure"; return {}; }
     return stored && stored->goal.chart.SHA256 == meta.SHA256 && stored->goal.longNoteMode == mode ? stored : std::nullopt;
   }
-  bool fail = false;
+  bool fail = false, achieved = false;
   int saves = 0, removals = 0;
   bool SaveChartGoal(const chart_goals::Goal &, std::string &error) {
-    ++saves; if (fail) error = "storage failure"; return !fail;
+    ++saves; if (fail) error = "storage failure"; else if (achieved) error = "goal_already_achieved"; return !fail && !achieved;
   }
   bool RemoveChartGoal(const bms_parser::ChartMeta &, int, std::string &error) {
     ++removals; if (fail) error = "storage failure"; return !fail;
@@ -81,6 +81,10 @@ int main() {
   assert(scene.draft_.target.lamp == 400 && !scene.message_.empty());
   scene.customScore_ = true; scene.customRate_ = "99.99";
   scene.context.scoreRepository.fail = false;
+  scene.context.scoreRepository.achieved = true;
+  scene.saveGoal();
+  assert(scene.editing_ && scene.message_ == "goals.ui.already_achieved");
+  scene.context.scoreRepository.achieved = false;
   scene.saveGoal();
   assert(!scene.editing_ && scene.draft_.target.scoreNumerator == 9999);
   scene.selected_ = chart_goals::GoalProgress{scene.draft_, {}};

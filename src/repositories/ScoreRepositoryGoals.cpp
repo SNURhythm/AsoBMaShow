@@ -152,8 +152,10 @@ bool ScoreRepository::SaveChartGoal(const chart_goals::Goal &goal, std::string &
     const bool unchanged = previous && previous->target == normalized.target;
     normalized.setAtUnixMillis = unchanged ? previous->setAtUnixMillis : chart_goals::nowUnixMillis();
     normalized.achievedAtUnixMillis = unchanged ? previous->achievedAtUnixMillis : 0;
-    if (!unchanged && project(impl_->sessionDatabase, normalized).progress.achieved)
-      normalized.achievedAtUnixMillis = std::max(normalized.setAtUnixMillis, chart_goals::nowUnixMillis());
+    if (!unchanged && project(impl_->sessionDatabase, normalized).progress.achieved) {
+      error = "goal_already_achieved";
+      return false;
+    }
     chart_goals::save(impl_->sessionDatabase, normalized);
     if (!tx.commit(error)) return false;
     score_repository_detail::IncrementRevision();

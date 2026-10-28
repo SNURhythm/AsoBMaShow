@@ -560,6 +560,37 @@ void testPersonalGoalsUseProfileAndIndependentBestRecords() {
   sqlite3_close(db);
 }
 
+void testCannotSetAlreadyAchievedGoal() {
+  const auto root = testRoot("goal-already-achieved");
+  ScoreRepository scores(root / "score.db");
+  assert(scores.EnsureSchema());
+  const std::vector remote{remoteScore("best-score", 'd', 190, 200),
+                           remoteScore("best-lamp", 'd', 160, 500)};
+  assert(scores.ReplaceImportedIrScores(kProvider, kOrigin, 1, remote).status ==
+         ImportedIrScoreProjectionStatus::Applied);
+  chart_goals::Goal goal;
+  goal.chart.SHA256 = std::string(64, 'd'); goal.chart.MD5 = std::string(32, 'd');
+  std::string error;
+  goal.target = {.lamp=500};
+  assert(!scores.SaveChartGoal(goal, error) && error == "goal_already_achieved");
+  goal.target = {.scoreNumerator=24};
+  assert(!scores.SaveChartGoal(goal, error) && error == "goal_already_achieved");
+  goal.target = {.lamp=500, .scoreNumerator=24};
+  assert(!scores.SaveChartGoal(goal, error) && error == "goal_already_achieved");
+  assert(!scores.LoadChartGoal(goal.chart, 1, error) && error.empty());
+  goal.target = {.lamp=600, .scoreNumerator=24}; // Only score is met.
+  assert(scores.SaveChartGoal(goal, error));
+  auto existing = scores.LoadChartGoal(goal.chart, 1, error);
+  assert(existing && !existing->progress.achieved);
+  goal.target = {.lamp=500, .scoreNumerator=24};
+  assert(!scores.SaveChartGoal(goal, error) && error == "goal_already_achieved");
+  const auto preserved = scores.LoadChartGoal(goal.chart, 1, error);
+  assert(preserved && preserved->goal.target.lamp == 600);
+  goal.target = {.lamp=500, .scoreNumerator=27}; // Only lamp is met.
+  assert(scores.SaveChartGoal(goal, error));
+  assert(!scores.LoadChartGoal(goal.chart, 1, error)->progress.achieved);
+}
+
 void testGoalIgnoresReplacedChartAtSamePath() {
   const auto root = testRoot("goal-replaced-chart");
   ScoreRepository scores(root / "score.db");
@@ -663,6 +694,7 @@ void testGoalAchievementIsSavedOnceAndCelebrationIsProfileScoped() {
 }
 
 int main() {
+  testCannotSetAlreadyAchievedGoal();
   testGoalIgnoresReplacedChartAtSamePath();
   testGoalAchievementIsSavedOnceAndCelebrationIsProfileScoped();
   testPersonalGoalsUseProfileAndIndependentBestRecords();
