@@ -11,6 +11,7 @@
 #include "../view/ClearLampColors.h"
 #include "../view/DropdownView.h"
 #include "../view/IconText.h"
+#include "../view/ImageView.h"
 #include "../view/OverlayPortal.h"
 #include "../view/ScrollView.h"
 #include "../view/TextInputBox.h"
@@ -54,6 +55,66 @@ Button *action(View *parent, const std::string &value, std::function<void()> cli
   if (glyph) action_button::setIconColor(button, [category] { return app_theme::actionPalette(category).label; });
   button->setOnClickListener(std::move(click)); parent->addView(button);
   return button;
+}
+class GoalArtworkPlaceholder final : public TextView {
+public:
+  explicit GoalArtworkPlaceholder(ImageView &image)
+      : TextView(ui_icons::kFontAwesomeSolidPath, 24), image_(image) {}
+protected:
+  void renderImpl(RenderContext &context) override {
+    if (image_.imageWidth() <= 0 || image_.imageHeight() <= 0)
+      TextView::renderImpl(context);
+  }
+private:
+  ImageView &image_;
+};
+std::optional<std::filesystem::path> goalArtworkPath(const ChartMetaRecord *record) {
+  if (!record || record->unavailable || record->solidArchive) return {};
+  const auto &meta = record->meta;
+  const auto path = !meta.StageFile.empty() ? meta.StageFile : meta.Banner;
+  if (path.empty()) return {};
+  return meta.Folder / path;
+}
+void goalArtwork(View *parent, const ChartMetaRecord *record) {
+  constexpr int size = 72;
+  auto *frame = new View();
+  frame->setName("goalArtwork");
+  frame->setWidth(size)->setHeight(size)->setFlexShrink(0)
+      ->setThemedBackgroundColor(app_theme::insetSurface);
+  auto *image = new ImageView(0, 0, size, size);
+  image->setName("goalArtworkImage");
+  image->setPositionType(YGPositionTypeAbsolute);
+  image->setPosition(Edge::Left, 0)->setPosition(Edge::Top, 0);
+  image->setContentMode(ImageView::ContentMode::Contain);
+  frame->addView(image);
+  auto *placeholder = new GoalArtworkPlaceholder(*image);
+  placeholder->setName("goalArtworkPlaceholder");
+  placeholder->setText(ui_icons::textForCodepoint(ui_icons::kMusic));
+  placeholder->setWidth(size)->setHeight(size);
+  placeholder->setAlign(TextView::CENTER); placeholder->setVAlign(TextView::MIDDLE);
+  placeholder->setThemedColor(app_theme::textSecondary);
+  frame->addView(placeholder);
+  if (const auto path = goalArtworkPath(record)) image->setImageAsync(fspath_to_path_t(*path));
+  parent->addView(frame);
+}
+std::map<std::string, ChartMetaRecord> loadGoalArtwork(
+    ApplicationContext &context, const std::vector<const chart_goals::GoalProgress *> &entries, int offset) {
+  std::map<std::string, ChartMetaRecord> result;
+  ChartMetaQuery query;
+  query.allowedSha256.emplace();
+  for (int i = offset; i < std::min(static_cast<int>(entries.size()), offset + chart_goals::pageSize); ++i)
+    query.allowedSha256->push_back(chart_goals::normalizedHash(entries[i]->goal.chart.SHA256));
+  if (query.allowedSha256->empty()) return result;
+  auto session = context.chartRepository.OpenSession();
+  if (!session) return result;
+  query.rawSongData = true;
+  std::vector<ChartMetaRecord> records;
+  session->QueryChartMeta(query, records);
+  for (auto &record : records) {
+    const auto hash = chart_goals::normalizedHash(record.meta.SHA256);
+    if (!record.unavailable && !record.solidArchive) result.try_emplace(hash, std::move(record));
+  }
+  return result;
 }
 void lamp(View *parent, const std::string &text, int rank) {
   auto *row = new View();
@@ -259,7 +320,11 @@ void ChartGoalsScene::build() {
     action(body, i18n::tr("streak.ui.retry"), [this] { later([this] { message_.clear(); reload(); }); });
   } else if (selected_ || editing_) {
     auto *detail = card(body);
-    label(detail, draft_.chart.Title + (draft_.chart.SubTitle.empty() ? "" : " " + draft_.chart.SubTitle), 28);
+    auto *identity = new View();
+    identity->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(12)->setFlexShrink(0);
+    goalArtwork(identity, resolved_ ? &*resolved_ : nullptr);
+    label(identity, draft_.chart.Title + (draft_.chart.SubTitle.empty() ? "" : " " + draft_.chart.SubTitle), 28)->setFlex(1)->setMinWidth(0);
+    detail->addView(identity);
     label(detail, scope(draft_), 18)->setThemedColor(app_theme::textSecondary);
     if (editing_) {
       std::string error;
@@ -365,10 +430,16 @@ void ChartGoalsScene::build() {
         if (entry.progress.achieved == achieved) entries.push_back(&entry);
       const int count = static_cast<int>(entries.size());
       offset = std::min(offset, count == 0 ? 0 : (count - 1) / chart_goals::pageSize * chart_goals::pageSize);
+      const auto artwork = loadGoalArtwork(context, entries, offset);
       for (int i = offset; i < std::min(count, offset + chart_goals::pageSize); ++i) {
         const auto &entry = *entries[i];
         auto *row = card(body);
-        label(row, entry.goal.chart.Title + (entry.goal.chart.SubTitle.empty() ? "" : " " + entry.goal.chart.SubTitle), 24);
+        auto *identity = new View();
+        identity->setFlexDirection(FlexDirection::Row)->setAlignItems(YGAlignCenter)->setGap(12)->setFlexShrink(0);
+        const auto found = artwork.find(chart_goals::normalizedHash(entry.goal.chart.SHA256));
+        goalArtwork(identity, found == artwork.end() ? nullptr : &found->second);
+        label(identity, entry.goal.chart.Title + (entry.goal.chart.SubTitle.empty() ? "" : " " + entry.goal.chart.SubTitle), 24)->setFlex(1)->setMinWidth(0);
+        row->addView(identity);
         label(row, scope(entry.goal), 18)->setThemedColor(app_theme::textSecondary);
         targets(row, entry.goal.target);
         action(row, i18n::tr(achieved ? "goals.ui.achieved" : "goals.ui.in_progress"),

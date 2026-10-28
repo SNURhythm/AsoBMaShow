@@ -84,3 +84,7 @@ chart remains in that folder while any LN-mode goal is unfinished. In Personal
 goals, unfinished goals appear first; achieved goals are collapsed at the bottom
 behind the same plus/hide control used by Combo optional challenges. Each group
 pages independently. Titles and subtitles share one heading.
+
+Goal lists, details, and the editor show the chart jacket (or banner), with a
+music-note placeholder while artwork is loading or unavailable. Artwork for
+visible goal pages is resolved from chart metadata and loaded asynchronously.

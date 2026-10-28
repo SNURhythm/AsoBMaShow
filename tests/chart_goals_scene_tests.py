@@ -42,6 +42,38 @@ class ChartGoalsSceneTests(unittest.TestCase):
                 [source], binary, source.parent, includes=(root / "src",))
             subprocess.run([str(binary)], check=True, timeout=5)
 
+    def test_goal_artwork_path_prefers_jacket_and_falls_back_safely(self):
+        root = Path(__file__).resolve().parents[1]
+        scene = (root / "src/scene/ChartGoalsScene.cpp").read_text()
+        method = extract(scene, "std::optional<std::filesystem::path> goalArtworkPath(")
+        fixture = r'''
+#include <cassert>
+#include <filesystem>
+#include <optional>
+using path_t = std::filesystem::path;
+struct ChartMetaRecord {
+  struct { path_t Folder, StageFile, Banner; } meta;
+  bool unavailable=false, solidArchive=false;
+};
+METHOD
+int main() {
+  ChartMetaRecord record; record.meta.Folder="charts/song";
+  assert(!goalArtworkPath(nullptr) && !goalArtworkPath(&record));
+  record.meta.Banner="banner.png";
+  assert(*goalArtworkPath(&record)==path_t("charts/song/banner.png"));
+  record.meta.StageFile="jacket.png";
+  assert(*goalArtworkPath(&record)==path_t("charts/song/jacket.png"));
+  record.unavailable=true; assert(!goalArtworkPath(&record));
+  record.unavailable=false; record.solidArchive=true; assert(!goalArtworkPath(&record));
+}
+'''.replace("METHOD", method)
+        with tempfile.TemporaryDirectory(prefix="goal-artwork-") as directory:
+            path = Path(directory) / "artwork.cpp"
+            binary = Path(directory) / "artwork"
+            path.write_text(fixture)
+            FixtureCompiler.from_environment().build([path], binary, path.parent)
+            subprocess.run([str(binary)], check=True, timeout=5)
+
     def test_same_orientation_resize_refreshes_layout(self):
         root = Path(__file__).resolve().parents[1]
         scene = (root / "src/scene/ChartGoalsScene.cpp").read_text()
@@ -78,12 +110,15 @@ int main() { ChartGoalsScene scene; scene.update(0); assert(scene.layouts==0);
 #include <algorithm>
 #include <cassert>
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
-struct View { View *setThemedColor(int) { return this; } };
+enum class FlexDirection { Row }; constexpr int YGAlignCenter=0;
+struct View { View *setThemedColor(int) { return this; } View *setFlexDirection(FlexDirection) { return this; } View *setAlignItems(int) { return this; } View *setGap(int) { return this; } View *setFlexShrink(int) { return this; } View *setFlex(int) { return this; } View *setMinWidth(int) { return this; } void addView(View *) {} };
 namespace chart_goals {
 constexpr int pageSize = 20;
-struct Goal { struct { std::string Title, SubTitle; } chart; int target = 0; };
+struct Goal { struct { std::string Title, SubTitle, SHA256; } chart; int target = 0; };
+std::string normalizedHash(const std::string &s) { return s; }
 struct GoalProgress { Goal goal; struct { bool achieved = false; } progress; };
 }
 namespace app_theme { constexpr int textSecondary=0; enum class ActionCategory { Neutral }; }
@@ -95,10 +130,15 @@ View *card(View *) { return &view; }
 View *label(View *, const std::string &s, int size) { if (size==24) titles.push_back(s); return &view; }
 std::string scope(const chart_goals::Goal &) { return "LN"; }
 void targets(View *, int) {}
+struct ChartMetaRecord {};
+struct Context {};
+std::map<std::string, ChartMetaRecord> loadGoalArtwork(Context &, const std::vector<const chart_goals::GoalProgress *> &, int) { return {}; }
+void goalArtwork(View *, const ChartMetaRecord *) {}
 void action(View *, const std::string &s, std::function<void()>,
     app_theme::ActionCategory = app_theme::ActionCategory::Neutral, int = 0) { actions.push_back(s); }
 struct Scene {
   struct { std::vector<chart_goals::GoalProgress> goals; } page_;
+  Context context;
   int offset_=0, achievedOffset_=0;
   bool showAchieved_=false;
   void later(std::function<void()> f) { f(); }
