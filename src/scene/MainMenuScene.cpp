@@ -72,6 +72,7 @@
 #include "SettingsScene.h"
 #include "KomboScene.h"
 #include "ChartGoalsScene.h"
+#include "../goals/GoalTargetPresentation.h"
 #include "MusicSelectScene.h"
 #include "MusicSelectSkinErrorScene.h"
 #include "../music_select/MusicSelectLaunchPolicy.h"
@@ -1465,7 +1466,24 @@ void MainMenuScene::initView(ApplicationContext &context) {
   recyclerView->itemHeight = kChartListItemHeight;
   recyclerView->topMargin = 0;
   recyclerView->bottomMargin = 0;
-  recyclerView->onBind = [this](View *view, const ChartMetaRecord &item,
+  const auto updateSelectedGoalBubble = [this](ChartListItemView *view, const ChartMetaRecord &record) {
+    if (!view) return;
+    view->setGoalTarget(-1, {}, {});
+    if (record.courseStart || record.randomSelect || record.unavailable ||
+        record.solidArchive || record.meta.BmsPath.empty()) return;
+    const auto goalMode = chartGoalIndex.modeFor(record.meta.SHA256,
+        scoreLongNoteModeForClearLamp(record.meta,
+            long_note_mode::valueFromId(profileSelections.longNoteMode)));
+    if (goalMode) {
+      std::string error;
+      const auto goal = this->context.scoreRepository.LoadChartGoal(record.meta, *goalMode, error);
+      if (goal && !goal->progress.achieved) {
+        const auto labels = chart_goals::targetLabels(goal->goal.target);
+        view->setGoalTarget(labels.lampRank, labels.lamp, labels.score);
+      } else if (!error.empty()) SDL_Log("Cannot load chart goal: %s", error.c_str());
+    }
+  };
+  recyclerView->onBind = [this, updateSelectedGoalBubble](View *view, const ChartMetaRecord &item,
                                 int idx, bool isSelected) {
     auto *chartListItemView = dynamic_cast<ChartListItemView *>(view);
     chartListItemView->setMeta(item, prioritizeVisibleArtworkBindings);
@@ -1498,6 +1516,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
           (achieved->second & (1u << *goalMode));
     }
     chartListItemView->setGoalState(goalMode.has_value(), goalAchieved);
+    if (isSelected && !goalAchieved) updateSelectedGoalBubble(chartListItemView, item);
     chartListItemView->setGoalHandler([this](const ChartMetaRecord &record) {
       openChartGoal(record);
     });
@@ -1509,7 +1528,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
   };
 
   jacketView = new ImageView(0, 0, 0, 0);
-  const auto selectChart = [this, &context](const ChartMetaRecord &record,
+  const auto selectChart = [this, &context, updateSelectedGoalBubble](const ChartMetaRecord &record,
                                           int idx, bool bypassDebounce) {
     if (willStart.load() || pendingTab_)
       return;
@@ -1522,6 +1541,7 @@ void MainMenuScene::initView(ApplicationContext &context) {
     const auto &meta = item.meta;
     auto selectedView = recyclerView->getViewByIndex(idx);
     if (selectedView) {
+      updateSelectedGoalBubble(dynamic_cast<ChartListItemView *>(selectedView), item);
       selectedView->onSelected();
     }
     refreshReplayAvailability(&item);

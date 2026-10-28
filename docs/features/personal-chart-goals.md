@@ -6,13 +6,15 @@ unchanged and are not required to use goals.
 
 ## Using goals
 
-- In PLAY, tap the small flag on a chart row in the built-in selector, or choose
-  **Personal goal** from the custom selector’s chart-actions menu. The row flag
-  is filled when that chart has a goal. It opens the existing goal for the
+- In PLAY, tap the small flag on a chart row in the built-in selector, the flag
+  in the custom selector toolbar, or **Personal goal** in its chart-actions
+  menu. The row flag is filled when that chart has a goal. It opens the existing goal for the
   current LN mode, or another configured mode if none exists for the current
-  mode. An empty flag opens a new goal editor. For charts with selectable long
-  notes, the LN, CN and HCN buttons on goal details open or create each mode’s
-  separate goal.
+  mode. An empty flag opens a new goal editor. When a selected chart has an
+  unfinished goal, a brief animated bubble beside its flag shows the lamp
+  target with its clear-lamp color and the score target. For charts with
+  selectable long notes, the LN, CN and HCN buttons on goal details open or
+  create each mode’s separate goal.
 - The favorite star is beside the chart title in the detail panel.
 - The **Goals** folder in either selector gathers indexed charts with goals
   across LN modes with at least one unfinished goal. Normal search and filters apply.

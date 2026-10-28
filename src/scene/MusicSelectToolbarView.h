@@ -11,6 +11,7 @@
 
 class TextView;
 class Button;
+class GoalTargetBubble;
 
 enum class MusicSelectToolbarControl {
   Drag,
@@ -25,6 +26,7 @@ enum class MusicSelectToolbarControl {
   PlayOptions,
   IrUploads,
   Kombo,
+  Goal,
   Settings,
   Collapse,
   Expand,
@@ -42,6 +44,7 @@ struct MusicSelectToolbarCallbacks {
   std::function<void()> openPlayOptions;
   std::function<void()> openIrUploads;
   std::function<void()> openKombo;
+  std::function<void()> openGoal;
   std::function<void()> openSettings;
   std::function<void(MusicSelectToolbarState)> persist;
 };
@@ -72,6 +75,7 @@ public:
   void setControlEnabled(MusicSelectToolbarControl control, bool enabled);
   [[nodiscard]] bool isControlEnabled(MusicSelectToolbarControl control) const;
   void setViewportSize(int width, int height);
+  void setGoalState(bool present, bool achieved, int lampRank, std::string lamp, std::string score);
 
 private:
   MusicSelectToolbarView(MusicSelectToolbarState state,
@@ -82,6 +86,10 @@ private:
   void onPointerEventConsumed(const SDL_Event &event) override;
   void rebuild();
   void onLanguageChanged() override;
+  void onLayout() override;
+  void onMove(int, int) override;
+  void refreshGoalAppearance();
+  void placeGoalBubble();
   void requestMode(MusicSelectToolbarMode mode);
   void persist();
   void place(float x, float y);
@@ -91,6 +99,10 @@ private:
   MusicSelectToolbarCallbacks callbacks_;
   std::vector<MusicSelectToolbarRenderedControl> controls_;
   std::set<MusicSelectToolbarControl> disabledControls_;
+  GoalTargetBubble *goalBubble_ = nullptr;
+  bool goalPresent_ = false, goalAchieved_ = false;
+  int goalLampRank_ = -1;
+  std::string goalLamp_, goalScore_;
   int viewportWidth_ = 0;
   int viewportHeight_ = 0;
   bool mouseDragging_ = false;

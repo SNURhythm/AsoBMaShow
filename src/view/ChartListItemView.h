@@ -8,6 +8,7 @@
 #include "../repositories/ChartRepository.h"
 
 class Button;
+class GoalTargetBubble;
 
 class ChartListItemView : public View {
 public:
@@ -20,11 +21,13 @@ public:
   void setBestScoreRank(int score, int maxScore);
   void setGoalHandler(std::function<void(const ChartMetaRecord &)> handler);
   void setGoalState(bool goal, bool achieved = false);
+  void setGoalTarget(int lampRank, std::string lamp, std::string score);
   void onSelected() override;
   void onUnselected() override;
 
 protected:
   void onLayout() override;
+  void onMove(int, int) override;
 
 private:
   void applyTextColors(bool selected);
@@ -64,4 +67,5 @@ private:
   Button *goalButton;
   TextView *goalIconView;
   TextView *goalOutlineView;
+  GoalTargetBubble *goalBubble = nullptr;
 };

@@ -2,6 +2,7 @@
 #include "ChartListItemView.h"
 #include "Button.h"
 #include "ClearLampColors.h"
+#include "GoalTargetBubble.h"
 #include "IconText.h"
 #include "UiTheme.h"
 #include "AppTheme.h"
@@ -199,6 +200,8 @@ ChartListItemView::ChartListItemView(int x, int y, int width, int height,
     if (goalHandler) goalHandler(currentRecord);
   });
   contentCard->addView(goalButton);
+  goalBubble = new GoalTargetBubble();
+  addView(goalBubble);
   onUnselected();
   applyYogaLayout();
 }
@@ -212,6 +215,10 @@ void ChartListItemView::onLayout() {
     scoreRankColumn->setWidth(compact ? kCompactBestWidth : kBestWidth);
   }
   refreshColumnWidths();
+  if (goalBubble) goalBubble->placeFor(*goalButton, *this, rendering::window_width, rendering::window_height);
+}
+void ChartListItemView::onMove(int, int) {
+  if (goalBubble) goalBubble->placeFor(*goalButton, *this, rendering::window_width, rendering::window_height);
 }
 
 void ChartListItemView::refreshColumnWidths() {
@@ -240,6 +247,8 @@ void ChartListItemView::setMeta(const ChartMetaRecord &record,
   solidArchive = record.solidArchive;
   goal = false;
   goalAchieved = false;
+  goalBubble->setTarget(-1, {}, {});
+  goalBubble->showFor(false);
   const bool random = record.randomSelect.has_value();
   artworkPlaceholder->setText(ui_icons::textForCodepoint(random ? 0xf074 : ui_icons::kMusic));
   detailsLayout->setVisible(!random);
@@ -341,8 +350,14 @@ void ChartListItemView::setGoalState(bool nextGoal, bool achieved) {
   refreshGoalButton();
 }
 
+void ChartListItemView::setGoalTarget(int lampRank, std::string lamp, std::string score) {
+  goalBubble->setTarget(lampRank, lamp, score);
+  goalBubble->showFor(selected && goal && !goalAchieved);
+}
+
 void ChartListItemView::refreshGoalButton() {
   if (!goalIconView) return;
+  goalBubble->showFor(selected && goal && !goalAchieved);
   goalButton->setSelected(goal);
   goalButton->propagateThemeChange();
   goalIconView->setVisible(goal);

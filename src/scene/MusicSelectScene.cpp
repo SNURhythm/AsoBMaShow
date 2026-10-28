@@ -9,6 +9,7 @@
 #include "MusicSelectScene.h"
 #include "KomboScene.h"
 #include "ChartGoalsScene.h"
+#include "../goals/GoalTargetPresentation.h"
 #include "../music_select/MusicSelectPhysicalDirectory.h"
 #include "MusicSelectDirectoryRestore.h"
 #include "MusicSelectRecords.h"
@@ -4003,6 +4004,8 @@ bool MusicSelectScene::toolbarControlAvailable(MusicSelectToolbarControl control
     return modalOverlayPortal_ && (context.sceneManager || context.chartLibraryTasks);
   case MusicSelectToolbarControl::ChartViewer:
     return present && !chart->solidArchive;
+  case MusicSelectToolbarControl::Goal:
+    return present && !chart->solidArchive && context.sceneManager;
   case MusicSelectToolbarControl::ChartRecords:
     return modalLayer_ && selected && musicSelectRecordsTarget(*selected).has_value();
   case MusicSelectToolbarControl::Rankings:
@@ -4029,9 +4032,38 @@ void MusicSelectScene::refreshToolbarAvailability() {
   for (const auto control : {Control::ChartMenu, Control::MoreMenu,
        Control::ChartViewer, Control::ChartRecords, Control::Rankings, Control::RevealChart,
        Control::MusicPlayer, Control::Tasks, Control::PlayOptions,
-       Control::IrUploads, Control::Kombo, Control::Settings}) {
+       Control::IrUploads, Control::Kombo, Control::Goal, Control::Settings}) {
     toolbar_->setControlEnabled(control, toolbarControlAvailable(control));
   }
+  refreshToolbarGoal();
+}
+
+void MusicSelectScene::refreshToolbarGoal() {
+  if (!toolbar_) return;
+  if (toolbar_->state().mode != MusicSelectToolbarMode::Expanded) { toolbarGoalKey_.clear(); return; }
+  const auto snapshot = bars_.readView();
+  const auto *row = snapshot.selectedIndex < snapshot.rowCount() ? &snapshot.rowAt(snapshot.selectedIndex) : nullptr;
+  const auto *chart = row && row->kind == skin::MusicSelectBarKind::Song && row->chart ? &*row->chart : nullptr;
+  if (!chart || chart->unavailable || chart->solidArchive || chart->meta.BmsPath.empty() || chart->meta.SHA256.empty()) {
+    toolbarGoalKey_.clear();
+    toolbar_->setGoalState(false, false, -1, {}, {});
+    return;
+  }
+  const int mode = scoreLongNoteModeForClearLamp(chart->meta, long_note_mode::valueFromId(context.settings.selectedLnMode));
+  const auto key = context.profileManager.activeProfile().id + ":" + chart->meta.SHA256 + ":" +
+      std::to_string(mode) + ":" + std::to_string(context.scoreRepository.GetRevision());
+  if (toolbarGoalKey_ == key) return;
+  toolbarGoalKey_ = key;
+  std::string error;
+  std::optional<chart_goals::GoalProgress> goal;
+  for (const int candidate : {mode, 0, 1, 2, 3}) {
+    goal = context.scoreRepository.LoadChartGoal(chart->meta, candidate, error);
+    if (goal || !error.empty()) break;
+  }
+  if (!error.empty()) SDL_Log("Cannot load toolbar goal: %s", error.c_str());
+  if (!goal) { toolbar_->setGoalState(false, false, -1, {}, {}); return; }
+  const auto labels = chart_goals::targetLabels(goal->goal.target);
+  toolbar_->setGoalState(true, goal->progress.achieved, labels.lampRank, labels.lamp, labels.score);
 }
 
 bool MusicSelectScene::canDownloadSelectedChart() const {
@@ -4484,6 +4516,9 @@ void MusicSelectScene::syncToolbar() {
        .openPlayOptions = [this] { openPlayOptions(); },
        .openIrUploads = [this] { openIrUploads(); },
        .openKombo = [this] { openKombo(); },
+       .openGoal = [this] {
+         if (toolbarControlAvailable(MusicSelectToolbarControl::Goal)) openChartGoalForSelection();
+       },
        .openSettings = [this] { openSettings(); },
        .persist = [this](MusicSelectToolbarState updated) {
          persistToolbar(updated);
@@ -4491,6 +4526,7 @@ void MusicSelectScene::syncToolbar() {
       rendering::window_width, rendering::window_height);
   if (toolbar) {
     toolbar_ = toolbar.get();
+    toolbarGoalKey_.clear();
     addView(toolbar.release());
     refreshToolbarAvailability();
   }

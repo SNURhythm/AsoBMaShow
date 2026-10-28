@@ -1,5 +1,6 @@
 #include "rendering/UniformCache.h"
 #include "view/ChartListItemView.h"
+#include "view/GoalTargetBubble.h"
 #include "view/Button.h"
 #include "view/LibraryFolderItemView.h"
 #include "view/ImageView.h"
@@ -90,6 +91,12 @@ int main() {
   init.resolution.height = 64;
   require(bgfx::init(init), "headless bgfx initializes for chart list row");
 
+  for (const auto [x, y] : {std::pair{0, 0}, std::pair{310, 0}, std::pair{0, 190}, std::pair{310, 190}}) {
+    const auto p = placeGoalBubble(x, y, 36, 48, 320, 200,
+                                   {.top=12, .right=14, .bottom=10, .left=16});
+    require(p.x >= 20 && p.y >= 16 && p.x + p.width <= 302 && p.y + p.height <= 186,
+            "goal bubble stays inside every safe-area edge");
+  }
   testFolderBindingOnlyMaterializesVisibleLabel();
 
   {
@@ -258,6 +265,27 @@ int main() {
     require(goal && goal->getVisible(), "playable rows retain their goal action");
     std::string openedPath;
     row.setGoalHandler([&](const ChartMetaRecord &clicked) { openedPath = clicked.meta.BmsPath; });
+    row.setGoalState(true);
+    row.setGoalTarget(400, "HARD", "AAA");
+    auto *bubble = row.findViewByName("chartGoalBubble");
+    auto *bar = row.findViewByName("chartGoalBubbleLampBar");
+    auto *lampText = dynamic_cast<TextView *>(row.findViewByName("chartGoalBubbleLamp"));
+    auto *scoreText = dynamic_cast<TextView *>(row.findViewByName("chartGoalBubbleScore"));
+    require(bubble && bar && lampText && scoreText && !bubble->getVisible(),
+            "unselected goals do not show the target bubble");
+    row.onSelected();
+    require(bubble->getVisible() && bar->getVisible() && lampText->getText() == "HARD" &&
+                scoreText->getText() == "AAA", "selected unfinished goal shows lamp bar and targets");
+    row.setGoalTarget(-1, "", "99.99%");
+    require(bubble->getVisible() && !bar->getVisible() && scoreText->getText() == "99.99%",
+            "score-only goals omit the lamp bar and show the custom rate");
+    row.setGoalTarget(400, "HARD", "AAA");
+    row.setGoalState(true, true);
+    require(!bubble->getVisible(), "achieved goals hide the bubble");
+    row.setGoalState(true);
+    require(bubble->getVisible(), "unfinished goal restores the bubble");
+    row.onUnselected();
+    require(!bubble->getVisible(), "leaving the chart hides the bubble");
     row.setGoalState(true, true);
     auto *flag = dynamic_cast<TextView *>(dynamic_cast<Button *>(goal)->getContentView()->findViewByName("chartListGoalFlag"));
     require(flag != nullptr, "goal button contains its flag icon");
@@ -275,6 +303,8 @@ int main() {
     click.type = SDL_EVENT_MOUSE_BUTTON_UP; row.handleEvents(click);
     require(openedPath == record.meta.BmsPath, "flag taps open the goal for that row's chart");
     row.setMeta(record);
+    row.onSelected();
+    require(!bubble->getVisible(), "recycled rows clear the old goal bubble");
     require(!dynamic_cast<Button *>(goal)->isSelected(), "recycled rows clear stale goal highlights");
     for (const int width : {620, 420, 780, 620}) {
       row.setWidth(width);

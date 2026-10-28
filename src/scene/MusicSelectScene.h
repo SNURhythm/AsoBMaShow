@@ -173,6 +173,8 @@ private:
   bool canDownloadSelectedChart() const;
   bool toolbarControlAvailable(MusicSelectToolbarControl control) const;
   void refreshToolbarAvailability();
+  void refreshToolbarGoal();
+  std::string toolbarGoalKey_;
   void openPlayOptions();
   void openIrUploads();
   void openKombo();

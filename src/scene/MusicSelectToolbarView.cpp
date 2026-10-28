@@ -4,6 +4,7 @@
 #include "../rendering/common.h"
 #include "../view/Button.h"
 #include "../view/IconText.h"
+#include "../view/GoalTargetBubble.h"
 #include "../view/TextView.h"
 #include "../view/AppTheme.h"
 
@@ -21,6 +22,8 @@ std::uint32_t codepointFor(MusicSelectToolbarControl control) {
   switch (control) {
   case MusicSelectToolbarControl::Kombo:
     return ui_icons::kFire;
+  case MusicSelectToolbarControl::Goal:
+    return 0xf024;
   case MusicSelectToolbarControl::Drag:
     return ui_icons::kDrag;
   case MusicSelectToolbarControl::Collapse:
@@ -90,6 +93,7 @@ void MusicSelectToolbarView::applyState(MusicSelectToolbarState state) {
 }
 
 void MusicSelectToolbarView::rebuild() {
+  goalBubble_ = nullptr;
   clearChildren();
   controls_.clear();
   if (state_.mode == MusicSelectToolbarMode::Hidden) {
@@ -108,6 +112,7 @@ void MusicSelectToolbarView::rebuild() {
                 MusicSelectToolbarControl::PlayOptions,
                 MusicSelectToolbarControl::Rankings,
                 MusicSelectToolbarControl::Kombo,
+                MusicSelectToolbarControl::Goal,
                 MusicSelectToolbarControl::MoreMenu,
                 MusicSelectToolbarControl::Collapse};
 
@@ -191,6 +196,9 @@ void MusicSelectToolbarView::rebuild() {
     button->setOnClickListener([this, control] { activateControl(control); });
     addView(button);
   }
+  goalBubble_ = new GoalTargetBubble();
+  addView(goalBubble_);
+  refreshGoalAppearance();
   float rowWidth = 0;
   float widestRow = 0;
   int rows = 1;
@@ -265,6 +273,9 @@ void MusicSelectToolbarView::activateControl(
   case MusicSelectToolbarControl::Kombo:
     if (callbacks_.openKombo) callbacks_.openKombo();
     break;
+  case MusicSelectToolbarControl::Goal:
+    if (callbacks_.openGoal) callbacks_.openGoal();
+    break;
   case MusicSelectToolbarControl::Settings:
     if (callbacks_.openSettings) {
       callbacks_.openSettings();
@@ -293,6 +304,7 @@ bool MusicSelectToolbarView::isControlEnabled(MusicSelectToolbarControl control)
   case MusicSelectToolbarControl::PlayOptions: return bool(callbacks_.openPlayOptions);
   case MusicSelectToolbarControl::IrUploads: return bool(callbacks_.openIrUploads);
   case MusicSelectToolbarControl::Kombo: return bool(callbacks_.openKombo);
+  case MusicSelectToolbarControl::Goal: return bool(callbacks_.openGoal);
   case MusicSelectToolbarControl::Settings: return bool(callbacks_.openSettings);
   default: return true;
   }
@@ -300,6 +312,7 @@ bool MusicSelectToolbarView::isControlEnabled(MusicSelectToolbarControl control)
 
 void MusicSelectToolbarView::setControlEnabled(MusicSelectToolbarControl control,
                                                bool enabled) {
+  if (disabledControls_.contains(control) == !enabled) return;
   if (enabled) disabledControls_.erase(control);
   else disabledControls_.insert(control);
   for (const auto &rendered : controls_) {
@@ -307,7 +320,40 @@ void MusicSelectToolbarView::setControlEnabled(MusicSelectToolbarControl control
       rendered.button->setEnabled(isControlEnabled(control));
     }
   }
+  if (control == MusicSelectToolbarControl::Goal) refreshGoalAppearance();
 }
+
+void MusicSelectToolbarView::setGoalState(bool present, bool achieved, int lampRank,
+                                          std::string lamp, std::string score) {
+  if (goalPresent_ == present && goalAchieved_ == achieved && goalLampRank_ == lampRank &&
+      goalLamp_ == lamp && goalScore_ == score) return;
+  goalPresent_ = present; goalAchieved_ = achieved; goalLampRank_ = lampRank;
+  goalLamp_ = std::move(lamp); goalScore_ = std::move(score);
+  refreshGoalAppearance();
+}
+void MusicSelectToolbarView::refreshGoalAppearance() {
+  if (!goalBubble_) return;
+  for (const auto &control : controls_) {
+    if (control.control != MusicSelectToolbarControl::Goal || !control.icon) continue;
+    control.icon->setThemedColor(goalPresent_ ? (goalAchieved_ ? app_theme::lime : app_theme::cyan)
+                                              : app_theme::textMuted);
+    goalBubble_->setTarget(goalLampRank_, goalLamp_, goalScore_);
+    goalBubble_->showFor(goalPresent_ && !goalAchieved_ && isControlEnabled(MusicSelectToolbarControl::Goal));
+    placeGoalBubble();
+    return;
+  }
+  goalBubble_->showFor(false);
+}
+void MusicSelectToolbarView::placeGoalBubble() {
+  if (!goalBubble_) return;
+  for (const auto &control : controls_)
+    if (control.control == MusicSelectToolbarControl::Goal && control.button) {
+      goalBubble_->placeFor(*control.button, *this, viewportWidth_, viewportHeight_, true);
+      return;
+    }
+}
+void MusicSelectToolbarView::onLayout() { placeGoalBubble(); }
+void MusicSelectToolbarView::onMove(int, int) { placeGoalBubble(); }
 
 void MusicSelectToolbarView::requestMode(MusicSelectToolbarMode mode) {
   state_.mode = mode;
