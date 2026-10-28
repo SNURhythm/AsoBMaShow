@@ -639,7 +639,9 @@ void KomboScene::routine(View *body) {
     if (!kombo::isGoalsAssignment(a)) action(row, i18n::tr("kombo.ui.remove"), [this, i] { later([this, i] { draft_.assignments.erase(draft_.assignments.begin() + i); }); }, app_theme::ActionCategory::Destructive, ui_icons::kTrash)->setFlex(1);
     assignments->addView(row);
   }
-  action(assignments, i18n::tr("kombo.ui.add"), [this] { later([this] { editAssignment(-1); }); }, app_theme::ActionCategory::Neutral, ui_icons::kPlus)->setEnabled(draft_.assignments.size() < 101);
+  auto *addAssignment = action(assignments, i18n::tr("kombo.ui.add"), [this] { later([this] { editAssignment(-1); }); }, app_theme::ActionCategory::Neutral, ui_icons::kPlus);
+  addAssignment->setMargin(Edge::Top, 16);
+  addAssignment->setEnabled(draft_.assignments.size() < 101);
   fieldError(body, assignments, fieldErrors_["assignments"]);
   action(body, i18n::tr("kombo.ui.save"), [this] { later([this] { saveRoutine(); }); }, app_theme::ActionCategory::Primary, ui_icons::kSave);
 }
