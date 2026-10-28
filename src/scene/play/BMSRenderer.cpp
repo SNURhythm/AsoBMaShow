@@ -2609,8 +2609,30 @@ void BMSRenderer::drawTouchSample(const TouchPointVisual &sample,
   }
 }
 
-void BMSRenderer::drawTouchPoints(long long replayTouchTimeMicros) {
+void BMSRenderer::drawTouchPoints(
+    long long replayTouchTimeMicros,
+    const std::vector<PresentationTouchPoint> *capturedTouches) {
   if (!touchVisualizationEnabled) {
+    return;
+  }
+
+  if (capturedTouches != nullptr) {
+    // Capture already resolves live/replay lifecycle and rewind. In particular,
+    // a held Move is a complete visible point, not an event needing a Down in
+    // a freshly rebuilt map. Keep fading releases beneath active markers.
+    for (bool releasedPass : {true, false}) {
+      for (const auto &touch : *capturedTouches) {
+        const bool released = touch.action == ReplayTouchAction::Up ||
+                              touch.action == ReplayTouchAction::Cancel;
+        if (released != releasedPass) continue;
+        drawTouchSample({.x = touch.normalizedX,
+                         .y = touch.normalizedY,
+                         .eventTimeMicros = touch.songTimeMicros,
+                         .releaseTimeMicros = released ? touch.songTimeMicros : 0,
+                         .released = released},
+                        replayTouchTimeMicros);
+      }
+    }
     return;
   }
 
@@ -2727,7 +2749,7 @@ PresentationFrameOutcome BMSRenderer::prepareFrame(
     setPacemakerStatus(pacemaker::snapshotForBuiltInPresentation(
         authority.pacemakerTarget, authority.pacemakerStatus,
         authority.bestScoreTarget));
-    setPlayOptionStatus(authority.playOptionLabel);
+    setPlayOptionStatus(authority.resolvedPlayOptionLabel());
     setAutoPlayMarkVisible(authority.autoPlayMarkVisible);
     setStartLaneIndicators(authority.startLaneIndicators);
     setStartLaneIndicatorsVisible(authority.startLaneIndicatorsVisible);
@@ -2762,12 +2784,6 @@ PresentationFrameOutcome BMSRenderer::prepareFrame(
       destination.lastStateTime.store(
           lastStateTime == kPlayfieldTimestampOff ? -1 : lastStateTime,
           std::memory_order_release);
-    }
-
-    clearLiveTouchPoints();
-    for (const auto &touch : capturedState.touches) {
-      setLiveTouchPoint(touch.fingerId, touch.action, touch.normalizedX,
-                        touch.normalizedY, touch.songTimeMicros);
     }
 
     // Beatoraja's retained position moves forward during its draw traversal
@@ -2827,7 +2843,8 @@ PresentationFrameResult BMSRenderer::render(RenderContext &context) {
               prepared->state->clock.replayTouchTimeMicros,
               prepared->projection->useParserBackedBuiltInTraversal
                   ? nullptr
-                  : &*prepared->projection);
+                  : &*prepared->projection,
+              &prepared->state->touches);
 
   presentationFailure.reset();
   return {.frameSerial = frameSerial,
@@ -2965,12 +2982,13 @@ void BMSRenderer::renderSelectedSkinHud(
 
 void BMSRenderer::render(RenderContext &context, long long micro,
                          long long replayTouchTimeMicros) {
-  renderFrame(context, micro, replayTouchTimeMicros, nullptr);
+  renderFrame(context, micro, replayTouchTimeMicros, nullptr, nullptr);
 }
 
 void BMSRenderer::renderFrame(
     RenderContext &context, long long micro, long long replayTouchTimeMicros,
-    const PlayfieldProjectionResult *projection) {
+    const PlayfieldProjectionResult *projection,
+    const std::vector<PresentationTouchPoint> *capturedTouches) {
   const long long chartTimeMicros =
       gameplay_scroll_geometry::chartRenderTimeMicros(micro);
   currentRenderMicros = micro;
@@ -3985,7 +4003,7 @@ void BMSRenderer::renderFrame(
     simpleBatchRenderer.setSubmitView(rendering::ui_view);
     simpleBatchRenderer.setSubmitDepth(1);
     simpleBatchRenderer.begin();
-    drawTouchPoints(replayTouchTimeMicros);
+    drawTouchPoints(replayTouchTimeMicros, capturedTouches);
 #if defined(ASOBMASHOW_BMS_RENDERER_CHARACTERIZATION)
     recordCharacterizationSubmission(
         bms_renderer_characterization::SubmissionKind::TouchPass,

@@ -63,6 +63,7 @@ private:
   bool scratchlessAllowed = false;
   input::VirtualControllerConfig virtualControllerConfig;
   gameplay::VirtualControllerLayoutCache virtualControllerLayoutCache;
+  PlayfieldPresentationMetadataCache presentationMetadataCache;
   rendering::SimpleBatchRenderer virtualControllerBatch;
   rendering::SimpleBatchRenderer coursePauseRingBatch;
   std::optional<std::uint64_t> inputLaneOrderRevision;

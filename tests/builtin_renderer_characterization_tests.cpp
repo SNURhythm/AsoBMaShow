@@ -964,6 +964,139 @@ public:
   }
 };
 
+void verifyRoundedRectangleSamples(const RenderTarget &target) {
+  const auto render = [&](bool reference) {
+    configureGeometryAndViews(target.framebuffer);
+    bgfx::touch(rendering::clear_view);
+    rendering::SimpleBatchRenderer batch;
+    batch.setSubmitView(rendering::ui_view);
+    batch.begin();
+    constexpr std::array<float, 21> radii{
+        0, 0.5F, 1, 16, 17, 20, 21, 24, 25, 28, 29,
+        32, 33, 36, 37, 40, 41, 44, 45, 48, 60};
+    constexpr float pi = 3.14159265358979323846F;
+    constexpr float width = 112, height = 104;
+    const auto color = Color(51, 190, 255, 160).toABGR();
+    for (std::size_t shape = 0; shape < radii.size(); ++shape) {
+      const float x = 80 + static_cast<float>(shape % 7) * 145;
+      const float y = 80 + static_cast<float>(shape / 7) * 145;
+      const float radius = std::min(radii[shape], std::min(width, height) * 0.5F);
+      if (!reference) {
+        batch.addRoundedRect(x, y, width, height, radii[shape], color);
+      } else if (radius <= 0.5F) {
+        batch.addRect(x, y, width, height, color);
+      } else {
+        // Independent reference to the former per-call tessellation: all
+        // segment-count boundaries, clamping and corner endpoints are covered.
+        const int segments = std::clamp(static_cast<int>(std::ceil(radius / 4.0F)), 4, 12);
+        std::array<std::pair<float, float>, 52> ring;
+        std::size_t count = 0;
+        const auto corner = [&](float cx, float cy, float start) {
+          for (int i = 0; i <= segments; ++i) {
+            const float t = static_cast<float>(i) / static_cast<float>(segments);
+            const float angle = start + t * (pi * 0.5F);
+            ring[count++] = {cx + std::cos(angle) * radius,
+                             cy + std::sin(angle) * radius};
+          }
+        };
+        corner(x + width - radius, y + radius, -pi * 0.5F);
+        corner(x + width - radius, y + height - radius, 0);
+        corner(x + radius, y + height - radius, pi * 0.5F);
+        corner(x + radius, y + radius, pi);
+        for (std::size_t i = 0; i < count; ++i) {
+          const auto &a = ring[i];
+          const auto &b = ring[(i + 1) % count];
+          batch.addTriangle(x + width * 0.5F, y + height * 0.5F,
+                            a.first, a.second, b.first, b.second, color);
+        }
+      }
+    }
+    batch.end();
+    return readPixels(target);
+  };
+  expect(render(false) == render(true),
+         "cached rounded-rectangle samples match original tessellation pixels");
+}
+
+void verifyCapturedTouchesAvoidReconstruction() {
+  PresentationStateFixture fixture;
+  fixture.renderer.setCharacterizationRecorder(nullptr);
+  auto frame = fixture.input(1);
+  std::uint64_t serial = 1;
+  const auto prepare = [&] {
+    frame.state.clock.serial = ++serial;
+    frame.projection.frameSerial = serial;
+    return fixture.renderer.prepareFrame(frame.state, frame.projection);
+  };
+  const auto allocationsFor = [&](int count, bool visible) {
+    frame.state.configuration.touchVisualizationEnabled = visible;
+    frame.state.touches.clear();
+    for (int i = 0; i < count; ++i) {
+      frame.state.touches.push_back({.fingerId = i,
+                                    .action = ReplayTouchAction::Down,
+                                    .normalizedX = 0.25F,
+                                    .normalizedY = 0.75F,
+                                    .songTimeMicros = kRenderMicros});
+    }
+    expect(prepare() == PresentationFrameOutcome::Ready,
+           "touch allocation fixture prepares its warm frame");
+    std::size_t countAllocations = 0;
+    PresentationFrameOutcome outcome;
+    {
+      test_support::AllocationSizeObserver observer;
+      outcome = prepare();
+      countAllocations = observer.count();
+    }
+    expect(outcome == PresentationFrameOutcome::Ready,
+           "touch allocation fixture prepares its measured frame");
+    return countAllocations;
+  };
+  for (bool visible : {false, true}) {
+    const auto one = allocationsFor(1, visible);
+    const auto many = allocationsFor(32, visible);
+    expect(many <= one,
+           "captured touches add no per-touch reconstruction allocations");
+  }
+}
+
+void verifyCapturedTouchSnapshotRendering(const RenderTarget &target) {
+  configureGeometryAndViews(target.framebuffer);
+  PresentationStateFixture fixture;
+  fixture.renderer.setCharacterizationRecorder(nullptr);
+  auto frame = fixture.input(1);
+  frame.state.configuration.touchVisualizationEnabled = true;
+  const auto render = [&](ReplayTouchAction action, bool visible,
+                          long long eventMicros) {
+    ++frame.state.clock.serial;
+    frame.projection.frameSerial = frame.state.clock.serial;
+    frame.state.configuration.touchVisualizationEnabled = visible;
+    frame.state.touches = {{.fingerId = 42,
+                           .action = action,
+                           .normalizedX = 0.2F,
+                           .normalizedY = 0.7F,
+                           .songTimeMicros = eventMicros}};
+    configureGeometryAndViews(target.framebuffer);
+    bgfx::touch(rendering::clear_view);
+    RenderContext context;
+    fixture.renderer.render(context, frame.state, frame.projection);
+    return readPixels(target);
+  };
+  const auto time = frame.state.clock.replayTouchTimeMicros;
+  (void)render(ReplayTouchAction::Down, true, time);
+  const auto down = render(ReplayTouchAction::Down, true, time);
+  const auto move = render(ReplayTouchAction::Move, true, time);
+  const auto hidden = render(ReplayTouchAction::Move, false, time);
+  const auto shown = render(ReplayTouchAction::Move, true, time);
+  expect(down == move && move == shown && move != hidden,
+         "held Move snapshots stay visible across hide/show without a new Down");
+  const auto released = render(ReplayTouchAction::Up, true, time - 90'000);
+  const auto cancelled = render(ReplayTouchAction::Cancel, true, time - 90'000);
+  const auto expired = render(ReplayTouchAction::Up, true, time - 180'001);
+  expect(released == cancelled && released != hidden && released != down &&
+             expired == hidden,
+         "captured release/cancel markers preserve fading and expiration");
+}
+
 void verifyTimelineMembershipDoesNotAllocatePerRow(const RenderTarget &target) {
   PresentationStateFixture fixture;
   fixture.renderer.setCharacterizationRecorder(nullptr);
@@ -4811,6 +4944,9 @@ int main() {
       verifyTimingOnlySampleDoesNotBecomeAHudJudgement();
       verifyPreparedFrameKeepsTheLatestNonSampledJudgementForHudText();
       verifyStableHudQueriesAvoidAllocations(target);
+      verifyRoundedRectangleSamples(target);
+      verifyCapturedTouchesAvoidReconstruction();
+      verifyCapturedTouchSnapshotRendering(target);
       verifyDeferredGameplayHudTextures(target);
       verifyPreparedFrameUsesSavedBestGhostForBuiltInBestPacemaker();
       verifyPreparedFrameKeepsLinearBestPacemakerWithoutSavedGhost();

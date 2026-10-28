@@ -265,3 +265,41 @@ span), full-chart note copying during built-in capture (that path opts out),
 and unconditional graph-history rebuilding (updates are guarded). Coordinator
 failure payloads deliberately allocate before the no-submission boundary and
 must not be removed without preserving those failure guarantees.
+
+## Four-finding parallel implementation
+
+The four additional findings above are now implemented:
+
+- Camera computes inverse matrices when their source view/projection matrices
+  are updated. Deprojection is now a const read, including after render clears
+  upload flags. Eager updates keep cache writes at existing matrix-write
+  boundaries rather than introducing writes in input-side read operations.
+- Captured touch rendering reads the prepared frame's resolved touch vector
+  directly. Hidden markers do not build renderer-side maps; visible markers do
+  not reinterpret snapshots as event streams. This also fixes held `Move`
+  snapshots disappearing without a new `Down`. Released/cancelled points fade
+  beneath active markers, and the legacy event-based preview/export path is
+  retained. Replay lifecycle/rewind remains owned by the snapshot store.
+- Live gameplay shares immutable option labels and the observable course-title
+  prefix across authority/captured/prepared copies. Effective option, seed and
+  title-content changes replace the shared value without changing older
+  snapshots. Preview/export owning fields retain their fallback getters.
+  Async mutable identity/IR fields are unchanged.
+- Rounded rectangles share an immutable unit-corner sample table, initialized
+  during batch-renderer construction. Drawing scales/translates those samples
+  without recomputing sine/cosine. Original float-angle expressions, segment
+  limits, vertex order, fan indices and rectangle fallback are retained.
+
+The touch regression reproduced both per-touch allocation growth and dropped
+held Move markers before the fix. Focused checks cover camera matrix setters,
+edit/commit, upload-before-deprojection, viewport/depth conventions, exact
+rounded-shape raster equivalence at every segment-count boundary, touch
+hide/show/release fade, and immutable metadata allocation reuse/invalidation/
+snapshot lifetime. No frame-pacing or drawable-pool changes are included.
+
+All eight selected native suites pass: camera inverse caching, built-in Metal
+characterization, touch routing, presentation coordination, visual state,
+projection, skin state bridging and replay presentation. Desktop main and the
+unsigned iOS build pass. Independent review found no blocking correctness
+issues; option-field invalidation assertions were tightened individually.
+Device frame-time and event-to-photon improvements have not been measured.

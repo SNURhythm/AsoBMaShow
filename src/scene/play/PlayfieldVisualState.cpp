@@ -67,7 +67,8 @@ bool PlayfieldAuthorityUpdate::operator==(
          playerName == other.playerName &&
          irProviderName == other.irProviderName &&
          irAccountName == other.irAccountName &&
-         playOptionLabel == other.playOptionLabel &&
+         ((presentationMetadata && presentationMetadata == other.presentationMetadata) ||
+          resolvedPlayOptionLabel() == other.resolvedPlayOptionLabel()) &&
          tableName == other.tableName && tableLevel == other.tableLevel &&
          tableFullName == other.tableFullName &&
          currentFramesPerSecond == other.currentFramesPerSecond &&
@@ -83,7 +84,8 @@ bool PlayfieldAuthorityUpdate::operator==(
          courseMode == other.courseMode &&
          courseStageIndex == other.courseStageIndex &&
          courseStageCount == other.courseStageCount &&
-         courseStageTitles == other.courseStageTitles &&
+         ((presentationMetadata && presentationMetadata == other.presentationMetadata) ||
+          resolvedCourseStageTitles() == other.resolvedCourseStageTitles()) &&
          startLaneIndicators == other.startLaneIndicators &&
          startLaneIndicatorsVisible == other.startLaneIndicatorsVisible &&
          laneCoverPercent == other.laneCoverPercent &&

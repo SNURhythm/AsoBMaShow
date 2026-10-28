@@ -828,12 +828,7 @@ void markReplayMissedNote(bms_parser::Note *note, long long judgedTime) {
   }
 }
 
-struct GameplayPlayOptionSelection {
-  std::optional<std::string> option;
-  std::optional<long long> seed;
-  std::optional<std::string> option2;
-  std::optional<long long> seed2;
-};
+using GameplayPlayOptionSelection = PlayfieldPlayOptionSelection;
 
 GameplayPlayOptionSelection
 gameplayPlayOptionSelection(const StartOptions &options) {
@@ -880,9 +875,7 @@ int gameplayRandomOptionIndex(const std::optional<std::string> &option) {
       .value_or(0);
 }
 
-std::string gameplayPlayOptionLabel(const StartOptions &options) {
-  const GameplayPlayOptionSelection selection =
-      gameplayPlayOptionSelection(options);
+std::string gameplayPlayOptionLabel(const GameplayPlayOptionSelection &selection) {
   const std::string label =
       play_options::formatPlayOptionLabel(selection.option, selection.seed,
                                           selection.option2, selection.seed2);
@@ -6345,6 +6338,19 @@ void GamePlayScene::capturePlayfieldVisualState(
       playfieldLaneCoverPercent, playfieldLaneCoverEnabled);
   const GameplayPlayOptionSelection playOptions =
       gameplayPlayOptionSelection(options);
+  std::array<std::string_view, CoursePlaySession::kBeatorajaSkinCourseTitleCount>
+      courseTitleViews;
+  std::size_t courseTitleCount = 0;
+  if (isCoursePlayback()) {
+    courseTitleCount =
+        std::min(courseTitleViews.size(), options.courseSession->entries.size());
+    for (std::size_t index = 0; index < courseTitleCount; ++index) {
+      courseTitleViews[index] = options.courseSession->entries[index].meta.Title;
+    }
+  }
+  const auto presentationMetadata = presentationMetadataCache.get(
+      playOptions, std::span(courseTitleViews).first(courseTitleCount),
+      gameplayPlayOptionLabel);
   const PlayfieldGameplayMode gameplayMode =
       isReplayPlayback()
           ? PlayfieldGameplayMode::Replay
@@ -6426,7 +6432,6 @@ void GamePlayScene::capturePlayfieldVisualState(
       .chartReplicationMode = context.settings.skinChartReplicationMode,
       .skinTargetId = context.settings.skinTargetId,
       .skinTargetList = context.settings.skinTargetList,
-      .playOptionLabel = gameplayPlayOptionLabel(options),
       .tableName = options.tableName,
       .tableLevel = options.tableLevel,
       .tableFullName = options.tableLevel + options.tableName,
@@ -6446,12 +6451,6 @@ void GamePlayScene::capturePlayfieldVisualState(
       .courseStageCount = isCoursePlayback()
                               ? static_cast<int>(options.courseSession->entries.size())
                               : 0,
-      .courseStageTitles = [&] {
-        if (!isCoursePlayback()) {
-          return std::vector<std::string>{};
-        }
-        return options.courseSession->beatorajaSkinStageTitles();
-      }(),
       .startLaneIndicators = startLaneIndicatorsVisible
                                  ? preparationPlan.laneIndicator.lanes
                                  : std::vector<int>{},
@@ -6495,6 +6494,7 @@ void GamePlayScene::capturePlayfieldVisualState(
                                    .second})};
       }(),
   };
+  authority.presentationMetadata = presentationMetadata;
   playfieldVisualStateStore->applyAuthorityUpdate(authority);
 
   if (selectedSkinActive && !realtimeGameplayAuthorityActive()) {

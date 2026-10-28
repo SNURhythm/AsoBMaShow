@@ -6264,6 +6264,15 @@ if (ASOBMASHOW_BUILD_TESTS AND BUILD_TESTING)
     )
     target_compile_features(scene_return_target_tests PRIVATE cxx_std_23)
 
+    add_executable(camera_inverse_cache_tests
+        tests/camera_inverse_cache_tests.cpp
+        src/rendering/Camera.cpp)
+    target_include_directories(camera_inverse_cache_tests PRIVATE
+        ${CMAKE_SOURCE_DIR}/src ${CMAKE_SOURCE_DIR}/bgfx/bgfx/include)
+    target_compile_features(camera_inverse_cache_tests PRIVATE cxx_std_23)
+    target_link_libraries(camera_inverse_cache_tests PRIVATE bx SDL3::SDL3)
+    add_test(NAME camera_inverse_cache_tests COMMAND camera_inverse_cache_tests)
+
     add_executable(portrait_playfield_framing_tests tests/portrait_playfield_framing_tests.cpp)
     target_compile_features(portrait_playfield_framing_tests PRIVATE cxx_std_23)
     add_test(NAME portrait_playfield_framing_tests COMMAND portrait_playfield_framing_tests)

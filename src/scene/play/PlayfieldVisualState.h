@@ -11,6 +11,7 @@
 #include "Pacemaker.h"
 #include "PlayfieldChartVisualModel.h"
 #include "PlayfieldPresentationEvents.h"
+#include "PlayfieldPresentationMetadata.h"
 #include "LaneEffects.h"
 #include "../../practice/PracticeConfiguration.h"
 
@@ -359,6 +360,19 @@ struct PlayfieldAuthorityUpdate {
   // true only while the source-shaped settings menu owns the session.
   bool practiceMenuActive = false;
   std::optional<practice::SkinMenuState> practiceMenu;
+  // Live gameplay shares static strings across frame copies. Preview/export
+  // callers may continue supplying the owning legacy fields above instead.
+  std::shared_ptr<const PlayfieldPresentationMetadata> presentationMetadata;
+
+  [[nodiscard]] const std::string &resolvedPlayOptionLabel() const noexcept {
+    return presentationMetadata ? presentationMetadata->playOptionLabel
+                                : playOptionLabel;
+  }
+  [[nodiscard]] const std::vector<std::string> &
+  resolvedCourseStageTitles() const noexcept {
+    return presentationMetadata ? presentationMetadata->courseStageTitles
+                                : courseStageTitles;
+  }
 
   [[nodiscard]] lane_cover::State laneCoverState() const noexcept {
     return {.laneCoverPercent = laneCoverPercent,

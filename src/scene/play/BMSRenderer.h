@@ -439,13 +439,15 @@ private:
   // preview/export callers.
   void renderFrame(RenderContext &context, long long micro,
                    long long replayTouchTimeMicros,
-                   const PlayfieldProjectionResult *projection);
+                   const PlayfieldProjectionResult *projection,
+                   const std::vector<PresentationTouchPoint> *capturedTouches);
   void drawReplayGhosts(float rxhs, long long currentTimeMicros,
                         double currentScrollPosition);
   void drawGhostNoteOutline(float y, const ReplayGhostEvent &event);
   void drawReplayMissMarkers(float rxhs, double currentScrollPosition);
   void drawMissMarkerX(float y, const ReplayMissMarker &marker);
-  void drawTouchPoints(long long replayTouchTimeMicros);
+  void drawTouchPoints(long long replayTouchTimeMicros,
+                      const std::vector<PresentationTouchPoint> *capturedTouches);
   void advanceReplayTouches(long long replayTouchTimeMicros);
   void applyTouchSample(
       std::unordered_map<long long, TouchPointVisual> &activeTouches,

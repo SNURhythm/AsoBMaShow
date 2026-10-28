@@ -19,6 +19,94 @@ void require(bool condition, const char *message) {
   }
 }
 
+void testPresentationMetadataCacheAndSnapshotLifetime() {
+  PlayfieldPresentationMetadataCache cache;
+  PlayfieldPlayOptionSelection options{.option = "RANDOM", .seed = 123};
+  std::array<std::string_view, 2> titles{
+      "First course title long enough to allocate",
+      "Second course title long enough to allocate"};
+  int formatCalls = 0;
+  const auto format = [&](const PlayfieldPlayOptionSelection &selection) {
+    ++formatCalls;
+    return selection.option.value_or("NORMAL") + " #" +
+           std::to_string(selection.seed.value_or(0)) + " / " +
+           selection.option2.value_or("NORMAL") + " #" +
+           std::to_string(selection.seed2.value_or(0));
+  };
+  const auto original = cache.get(options, titles, format);
+  std::size_t allocations = 0;
+  bool reused = true;
+  {
+    test_support::AllocationSizeObserver observer;
+    for (int frame = 0; frame < 4; ++frame) {
+      reused = reused && cache.get(options, titles, format) == original;
+      PlayfieldAuthorityUpdate authority;
+      authority.presentationMetadata = original;
+      const auto copied = authority;
+      reused = reused && copied.presentationMetadata == original;
+    }
+    allocations = observer.count();
+  }
+  require(reused && allocations == 0 && formatCalls == 1,
+          "unchanged metadata shares storage without formatting or allocations");
+  const auto originalLabel = original->playOptionLabel;
+  options.seed = 456;
+  auto changed = cache.get(options, titles, format);
+  require(changed != original && changed->playOptionLabel != originalLabel &&
+              original->playOptionLabel == originalLabel,
+          "seed changes replace metadata while preserving retained labels");
+  options.option = "MIRROR";
+  auto previous = changed;
+  changed = cache.get(options, titles, format);
+  require(changed != previous && changed->playOptionLabel == "MIRROR #456 / NORMAL #0",
+          "first-player option alone invalidates metadata");
+  options.option2 = "S-RANDOM";
+  previous = changed;
+  changed = cache.get(options, titles, format);
+  require(changed != previous && changed->playOptionLabel == "MIRROR #456 / S-RANDOM #0",
+          "second-player option alone invalidates metadata");
+  options.seed2 = 789;
+  previous = changed;
+  changed = cache.get(options, titles, format);
+  require(changed != previous && changed->playOptionLabel == "MIRROR #456 / S-RANDOM #789",
+          "second-player seed alone invalidates metadata");
+  titles[1] = "Replacement course stage";
+  const auto nextCourse = cache.get(options, titles, format);
+  require(nextCourse->courseStageTitles[1] == titles[1] &&
+              original->courseStageTitles[1] != titles[1],
+          "title changes replace metadata without mutating old course frames");
+  const auto singleChart = cache.get(options, {}, format);
+  require(singleChart->courseStageTitles.empty() &&
+              nextCourse->courseStageTitles.size() == 2,
+          "leaving a course clears current titles but retains old course data");
+
+  PlayfieldAuthorityUpdate shared;
+  shared.presentationMetadata = original;
+  PlayfieldAuthorityUpdate legacy;
+  legacy.playOptionLabel = original->playOptionLabel;
+  legacy.courseStageTitles = original->courseStageTitles;
+  require(shared == legacy, "authority equality compares effective metadata values");
+  PlayfieldChartVisualModel model;
+  PlayfieldVisualStateStore store(model);
+  store.applyAuthorityUpdate(shared);
+  const auto retained = store.capture({.serial = 1});
+  shared.presentationMetadata = singleChart;
+  require(!(shared == legacy), "new metadata content changes authority equality");
+  store.applyAuthorityUpdate(shared);
+  const auto nextFrame = store.capture({.serial = 2});
+  require(retained.authority.presentationMetadata == original &&
+              nextFrame.authority.presentationMetadata == singleChart &&
+              retained.authority.resolvedCourseStageTitles().size() == 2 &&
+              nextFrame.authority.resolvedCourseStageTitles().empty(),
+          "store captures retain immutable metadata across authority updates");
+  shared.presentationMetadata.reset();
+  shared.playOptionLabel = "Legacy preview";
+  shared.courseStageTitles = {"Legacy stage"};
+  require(shared.resolvedPlayOptionLabel() == "Legacy preview" &&
+              shared.resolvedCourseStageTitles() == std::vector<std::string>{"Legacy stage"},
+          "clearing shared metadata restores preview/export owning-field fallback");
+}
+
 bms_parser::TimeLine *addTimeline(bms_parser::Measure &measure,
                                   long long timingMicros, double beat,
                                   double bpm, double scroll = 1.0) {
@@ -1304,6 +1392,7 @@ void testLargeRealtimePresentationReusesStorageAfterFrameRelease() {
 } // namespace
 
 int main() {
+  testPresentationMetadataCacheAndSnapshotLifetime();
   testReplayProgressionsShareAcrossAuthorityCaptureWithoutAllocations();
   testReplayProgressionValueEqualityAndFallbacks();
   testCustomizedPresentationConfigurationCopiesWithoutAllocations();
