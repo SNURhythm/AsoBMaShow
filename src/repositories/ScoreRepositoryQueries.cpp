@@ -643,7 +643,7 @@ void loadLocalBestChartRanks(sqlite3 *db, ScoreClearRankCache &cache,
   const std::string query =
       "SELECT c.chart_sha256, c.ln_mode, " + bestClearMarkRankExpr("c") +
       " FROM " + qualifiedScoreTable(schema, "scores") + " c WHERE " +
-      score_cache_queries::detail::scoreParticipatesInBestExpr("c") +
+      score_cache_queries::detail::scoreParticipatesInBestExpr("c", true) +
       " AND c.score_source=" +
       std::to_string(static_cast<int>(ScoreStorageSource::LocalGameplay)) +
       " GROUP BY c.chart_sha256, c.ln_mode";
@@ -741,7 +741,7 @@ void loadBestChartScores(sqlite3 *db, ScoreBestCache &cache,
 void loadBestCourseRanks(sqlite3 *db, ScoreClearRankCache &cache,
                          std::string_view schema = {}) {
   const std::string eligible =
-      score_cache_queries::detail::scoreParticipatesInBestExpr("c");
+      score_cache_queries::detail::scoreParticipatesInBestExpr("c", true);
   const std::string query =
       "SELECT COALESCE(course_key, ''), COALESCE(course_id, 0), ln_mode, " +
       bestClearMarkRankExpr("c") + " FROM " +
@@ -1943,7 +1943,7 @@ score_repository_detail::LoadBestClearScoreOnConnection(
            ", created_at, score_source, attempt_id "
            "FROM scores s WHERE ";
   query += scoreChartMatchPredicate();
-  query += " AND " + score_cache_queries::detail::scoreParticipatesInBestExpr("s");
+  query += " AND " + score_cache_queries::detail::scoreParticipatesInBestExpr("s", true);
   // Replay/result consumers require a local attempt; personal goals also admit
   // the imported lamp evidence already shown by the selector's clear cache.
   if (!includeImported)

@@ -418,6 +418,26 @@ int main() {
   insertScore(db, "assisted", "md5-assisted", "", 0, 200, 200, 100, 0,
               kClearTypeHardClearRank, "2026-01-03 00:00:00",
               R"({"playback":{"percent":75}})");
+  insertScore(db, "modified-light", "md5-light", "", 0, 200, 200, 100, 0,
+              50, "2026-01-03 00:00:00",
+              R"({"autoPlay":false,"practice":false,"assistOption":"AUTO-SCRATCH","judgeWindowScalePercent":100,"playback":{"percent":100}})",
+              static_cast<int>(ScoreEligibility::Modified));
+  ASSERT_EQ(50, queryInt(db, "SELECT " + score_cache_queries::scoreRankLookupExpr("'modified-light'", "0")),
+            "assisted play contributes Light Assist lamp");
+  ASSERT_EQ(0, queryInt(db, "SELECT COUNT(*) FROM score_db.score_sha256_best_score_cache WHERE chart_sha256='modified-light'"),
+            "assisted EX score remains excluded");
+  for (const std::string flag : {"autoPlay", "practice"}) {
+    const auto json = "{\"autoPlay\":" + std::string(flag == "autoPlay" ? "true" : "false") + ",\"practice\":" + (flag == "practice" ? "true" : "false") + ",\"judgeWindowScalePercent\":100}";
+    insertScore(db, "excluded-"+flag, "", "", 0, 200, 200, 100, 0, 50,
+                "2026-01-03 00:00:00", json, static_cast<int>(ScoreEligibility::Modified));
+  }
+  ASSERT_EQ(0, queryInt(db, "SELECT COUNT(*) FROM score_db.score_sha256_clear_rank_cache WHERE chart_sha256 LIKE 'excluded-%'"),
+            "practice and autoplay do not contribute assisted lamps");
+  execOrAbort(db, "DELETE FROM score_db.score_sha256_clear_rank_cache WHERE chart_sha256='modified-light'");
+  execOrAbort(db, "UPDATE score_db.score_summary_revisions SET revision=2 WHERE name='clear_lamp_order'");
+  ASSERT_FALSE(score_cache_queries::ensureScoreSummarySchema(db, "score_db").has_value(), "upgrade lamp eligibility cache");
+  ASSERT_EQ(50, queryInt(db, "SELECT " + score_cache_queries::scoreRankLookupExpr("'modified-light'", "0")),
+            "existing assisted lamp is restored by the one-time rebuild");
   insertScore(db, "effective-tie", "md5-effective-tie", "", 0, 180, 200,
               90, 1, kClearTypeEasyClearRank, "2026-01-01 00:00:00");
   insertScore(db, "effective-tie", "md5-effective-tie", "", 0, 180, 200,

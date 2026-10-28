@@ -3368,9 +3368,9 @@ void testModifiedPlaybackDoesNotUpdateBestScores(
   db.reset();
 
   const ScoreClearRankCache cache = helper.LoadBestClearRanks();
-  assert(cache.bestRankFor(meta) == kNoClearTypeRank);
+  assert(cache.bestRankFor(meta) == kClearTypeLightAssistedEasyClearRank);
   assert(cache.bestCourseRankFor(session.courseKey, session.courseId,
-                                 meta.LnMode) == kNoClearTypeRank);
+                                 meta.LnMode) == kClearTypeLightAssistedEasyClearRank);
   assert(!helper.LoadBestScore(meta).has_value());
   assert(!helper.LoadBestCourseScore(session).has_value());
 }

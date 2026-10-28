@@ -1112,6 +1112,14 @@ void testChartQueryBehaviorMatrix() {
 
   // Exercise canonical and old lamp IDs through real library/table queries.
   seedChartScore(scorePath, "alpha.bms", md5A, shaA, 1, 150, 100);
+  {
+    auto db = openDatabase(scorePath);
+    assert(execute(db.get(), R"sql(UPDATE scores SET eligibility=1,
+        provenance_json='{"autoPlay":false,"practice":false,"judgeWindowScalePercent":100}'
+        WHERE clear_type=150)sql"));
+    assert(execute(db.get(), "UPDATE score_summary_revisions SET revision=2 WHERE name='clear_lamp_order'"));
+    assert(!score_cache_queries::ensureScoreSummarySchema(db.get()).has_value());
+  }
   seedChartScore(scorePath, "beta.bms", md5B, shaB, 1, 100, 300);
   for (const bool tableScope : {false, true}) {
     query = {};

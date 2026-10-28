@@ -902,7 +902,7 @@ bool currentScoreSchemaIsValid(sqlite3 *db) {
   if (prepareSqliteStatement(db,
       "SELECT revision FROM score_summary_revisions WHERE name='clear_lamp_order'",
       lampRevision) != SQLITE_OK || sqlite3_step(lampRevision) != SQLITE_ROW ||
-      sqlite3_column_int(lampRevision, 0) < 2) {
+      sqlite3_column_int(lampRevision, 0) < 3) {
     return false;
   }
   ScoreVersion14Completion completion{};

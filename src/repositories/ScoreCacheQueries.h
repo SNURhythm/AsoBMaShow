@@ -137,7 +137,7 @@ inline std::string keyHasValueExpr(std::string_view keyExpr) {
   return "NULLIF(trim(" + std::string(keyExpr) + "), '') IS NOT NULL";
 }
 
-inline std::string scoreParticipatesInBestExpr(std::string_view alias) {
+inline std::string scoreParticipatesInBestExpr(std::string_view alias, bool lamp = false) {
   const std::string prefix(alias);
   const auto matches = [&](const RulesetDescriptor &rules) {
     const auto field = [&](std::string_view name) {
@@ -158,8 +158,21 @@ inline std::string scoreParticipatesInBestExpr(std::string_view alias) {
   // Historical and imported rows without a known policy retain their existing
   // treatment. Known policies allow only the explicit parity-update exception;
   // saved provenance remains immutable for replay and attempt fingerprints.
-  return "(" + prefix + ".eligibility <> " +
-         std::to_string(static_cast<int>(ScoreEligibility::Modified)) +
+  std::string eligible = prefix + ".eligibility <> " +
+      std::to_string(static_cast<int>(ScoreEligibility::Modified));
+  if (lamp) {
+    // A recorded assisted clear is useful lamp evidence even though its EX
+    // score is ineligible. Practice/autoplay and custom judge/gauge setups
+    // remain excluded; immutable provenance and score eligibility stay intact.
+    eligible = "(" + eligible + " OR (" + clearLampOrderSql(prefix + ".clear_type") +
+        "=50 AND CASE WHEN json_valid(" + prefix + ".provenance_json) THEN " +
+        "json_extract(" + prefix + ".provenance_json,'$.autoPlay')=0 AND " +
+        "json_extract(" + prefix + ".provenance_json,'$.practice')=0 AND " +
+        "json_extract(" + prefix + ".provenance_json,'$.judgeWindowScalePercent')=100 AND " +
+        "json_extract(" + prefix + ".provenance_json,'$.startingGaugePercent') IS NULL " +
+        "ELSE 0 END))";
+  }
+  return "(" + eligible +
          " AND (" + prefix + ".ruleset_version = 0 OR CASE WHEN json_valid(" +
          prefix + ".provenance_json) THEN (" + compatible(GameplayRuleset::LR2) +
          " OR " + compatible(GameplayRuleset::Beatoraja) + ") ELSE 0 END))";
@@ -193,7 +206,7 @@ inline std::string clearRankUpsertSql(bool sourceAware) {
          playableLongNoteModesSql() + " modes WHERE (NEW.ln_mode = -1 OR "
          "NEW.ln_mode = modes.ln_mode) AND " +
          keyHasValueExpr("NEW.chart_sha256") + " AND " +
-         scoreParticipatesInBestExpr("NEW") +
+         scoreParticipatesInBestExpr("NEW", true) +
          " ON CONFLICT(chart_sha256, ln_mode) DO UPDATE SET rank = "
          "MAX(score_sha256_clear_rank_cache.rank, excluded.rank);";
 }
@@ -228,12 +241,12 @@ inline std::string bestScoreUpsertSql(bool sourceAware) {
 
 inline std::string scoreIdentityCte(std::string_view schema,
                                     bool hasProvenance,
-                                    bool sourceAware) {
+                                    bool sourceAware, bool lamp = false) {
   const std::string scores = qualifiedName(schema, "scores");
   const std::string playbackPercent =
       hasProvenance ? playbackPercentExpr("s") : "100";
   const std::string eligibilityFilter =
-      hasProvenance ? " AND " + scoreParticipatesInBestExpr("s") : "";
+      hasProvenance ? " AND " + scoreParticipatesInBestExpr("s", lamp) : "";
   const std::string scoreSource =
       sourceAware ? "score_source" : "0 AS score_source";
   return "SELECT lower(trim(chart_sha256)) AS chart_sha256, modes.ln_mode, "
@@ -462,7 +475,7 @@ ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
     return error;
   }
 
-  // Revision 2 canonicalizes historical Light Assist IDs in denormalized
+  // Revision 3 includes assisted lamps separately from EX bests and canonicalizes historical Light Assist IDs in denormalized
   // columns. Immutable provenance, result fingerprints and links are untouched.
   // Keep the marker separate from user_version so existing v15 profiles repair.
   const std::string revisions =
@@ -481,7 +494,7 @@ ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
     return sqliteDatabaseError(db);
   }
   bool rebuildRequired = revisionResult == SQLITE_DONE ||
-                         sqlite3_column_int(revision.get(), 0) < 2;
+                         sqlite3_column_int(revision.get(), 0) < 3;
   revision.reset();
 
   // Empty summaries are valid for historical-only profiles. Index the same
@@ -591,7 +604,7 @@ ensureScoreSummarySchema(sqlite3 *db, std::string_view schema) {
       if (const auto error = executeSqlite(db, clear.c_str())) return error;
     }
     const std::string recordRevision = "INSERT OR REPLACE INTO " + revisions +
-        "(name, revision) VALUES('clear_lamp_order', 2)";
+        "(name, revision) VALUES('clear_lamp_order', 3)";
     if (const auto error = executeSqlite(db, recordRevision.c_str())) return error;
   }
   if (!transaction.commit(transactionError)) {
@@ -619,7 +632,7 @@ rebuildScoreSummaryTables(sqlite3 *db, std::string_view schema) {
   }
 
   const std::string insertClear =
-      "WITH identities AS (" + identityCte + ") INSERT INTO " + clearTable +
+      "WITH identities AS (" + detail::scoreIdentityCte(schema, detail::scoreTableHasProvenance(db, schema), sourceAware, true) + ") INSERT INTO " + clearTable +
       "(chart_sha256, ln_mode, rank) SELECT i.chart_sha256, i.ln_mode, " +
       detail::bestClearRankExpr(detail::fullComboClearRankExpr(
           "i", "i.playback_percent", sourceAware)) +
